@@ -94,7 +94,7 @@ In any Claude Code session, run:
 /claude-workflow
 ```
 
-The command scans the project root for existing `claude-workflow/` projects and offers to resume or start a new one.
+The command first checks local/remote Git state, safely fast-forwards clean behind-only branches, and asks before any risky synchronization such as diverged history, dirty worktrees with upstream changes, rebases, merges, stashes, resets, or conflicts. It then scans the project root for existing `claude-workflow/` projects and offers to resume or start a new one.
 
 ## GitHub Roadmap Cycle
 

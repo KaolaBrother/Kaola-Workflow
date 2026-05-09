@@ -36,29 +36,71 @@ When invoking ECC agents, use the agent names exactly as Claude Code lists them.
 
 ## Startup — Detect Mode
 
-### Step 1 — Sync Roadmap From GitHub Issues
+### Step 1 — Check Local/Remote Git State
+
+Before selecting or resuming work, determine whether the local codebase is synchronized with the remote codebase.
+
+1. Detect whether the current directory is a Git repository:
+   ```bash
+   git rev-parse --is-inside-work-tree
+   ```
+2. Inspect local state:
+   ```bash
+   git status --short --branch
+   ```
+3. Detect the configured remote and upstream branch:
+   ```bash
+   git remote -v
+   git rev-parse --abbrev-ref --symbolic-full-name @{u}
+   ```
+4. If a remote/upstream exists, update remote-tracking refs without changing local files:
+   ```bash
+   git fetch --prune
+   ```
+5. Re-check status and compare local `HEAD` with upstream:
+   ```bash
+   git status --short --branch
+   git rev-list --left-right --count @{u}...HEAD
+   ```
+
+Classify the result before proceeding:
+
+- `0 0` from `rev-list`: local and upstream are synchronized. Continue.
+- `N 0` with a clean worktree: local is behind only. Run `git pull --ff-only`, then re-check status before continuing.
+- `0 N`: local has commits not yet pushed. Continue, but tell the user before starting work.
+- No Git repo, no remote, no upstream, or fetch unavailable: continue from local files, but tell the user that remote code synchronization was skipped and why.
+
+Synchronization is risky when any of these are true:
+
+- The worktree has uncommitted changes and upstream has new commits.
+- Local and upstream have diverged (`N M` where both values are non-zero).
+- `git pull --ff-only` fails.
+- A rebase, merge, stash, reset, or conflict resolution would be required.
+
+When synchronization is risky, stop before selecting or resuming workflow work and ask the user how to proceed. Do not rebase, merge, stash, reset, or discard changes without explicit user direction.
+
+### Step 2 — Sync Roadmap From GitHub Issues
 
 GitHub issues are the source-of-truth roadmap when a GitHub remote is configured. A separate roadmap/research session may create and refine those issues. This workflow consumes that roadmap and advances one implementation item per cycle.
 
 Before selecting work:
 
-1. Detect whether the current directory is a Git repository.
-2. Detect the GitHub remote (`origin` preferred).
-3. If `gh` is available and authenticated, fetch open issues:
+1. Use the GitHub remote detected during the Git state check (`origin` preferred).
+2. If `gh` is available and authenticated, fetch open issues:
    ```bash
    gh issue list --limit 100 --json number,title,state,labels,assignees,updatedAt,url
    ```
-4. Ensure `claude-workflow/ROADMAP.md` exists. If it does not, create it with active work rows from open GitHub issues or a note that GitHub sync is unavailable.
-5. Update `claude-workflow/ROADMAP.md` as a compact local mirror of active unfinished work:
+3. Ensure `claude-workflow/ROADMAP.md` exists. If it does not, create it with active work rows from open GitHub issues or a note that GitHub sync is unavailable.
+4. Update `claude-workflow/ROADMAP.md` as a compact local mirror of active unfinished work:
    - include open GitHub issues relevant to implementation
    - keep only active unfinished work
    - preserve only short manual local notes under a clearly marked `Local Notes` section
    - avoid copying old closed issue history into the roadmap
-6. If GitHub issues cannot be fetched, continue from the existing local roadmap and tell the user why GitHub sync was skipped.
+5. If GitHub issues cannot be fetched, continue from the existing local roadmap and tell the user why GitHub sync was skipped.
 
 When starting new work, prefer selecting from open GitHub issues. If the user provides a free-form task, ask whether to create/link a GitHub issue before Phase 1 when a GitHub remote is available.
 
-### Step 2 — Scan for existing workflow projects
+### Step 3 — Scan for existing workflow projects
 
 Check if `claude-workflow/` exists in the project root. If it does, list all subdirectories that contain at least one phase file (`phase*.md`). Skip subdirectories with no phase files — these are incomplete Phase 1 attempts; treat them as if they don't exist.
 
@@ -810,10 +852,11 @@ To resume: run `/claude-workflow` with no argument — the startup scan will lis
 4. **Implementation and fixes are subagent-executed** — `tdd-guide` owns per-task TDD execution and behavior fixes; `build-error-resolver` owns build/type/lint repair; the main session owns orchestration, review, validation, and phase files
 5. **Two advisor gates** — Phase 2 and Phase 3 only; conditional at Phase 5
 6. **Security reviewer is conditional** — only when security-sensitive files are touched
-7. **GitHub issues drive roadmap** — fetch issues at startup and update them at finalization
-8. **Local roadmap mirrors active work** — keep only active unfinished work in `claude-workflow/ROADMAP.md`
-9. **Completed work is archived** — move complete workflow folders under `claude-workflow/archive/`
-10. **Compliance ledger is mandatory** — required agents must be `invoked`, `skipped`, or `N/A` with evidence
-11. **No silent deviations** — every skipped agent gate needs an explicit reason before proceeding
-12. **Never accumulate broken state** — route validation failures to the correct agent immediately before the next task
-13. **Scope discipline** — surface plan deviations to user; never silently expand scope
+7. **Check codebase freshness first** — fetch remote-tracking refs, classify local/upstream sync state, and ask before risky synchronization
+8. **GitHub issues drive roadmap** — fetch issues at startup and update them at finalization
+9. **Local roadmap mirrors active work** — keep only active unfinished work in `claude-workflow/ROADMAP.md`
+10. **Completed work is archived** — move complete workflow folders under `claude-workflow/archive/`
+11. **Compliance ledger is mandatory** — required agents must be `invoked`, `skipped`, or `N/A` with evidence
+12. **No silent deviations** — every skipped agent gate needs an explicit reason before proceeding
+13. **Never accumulate broken state** — route validation failures to the correct agent immediately before the next task
+14. **Scope discipline** — surface plan deviations to user; never silently expand scope
