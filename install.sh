@@ -28,7 +28,7 @@ echo ""
 
 # Check ECC is installed
 ECC_AGENTS_DIR="$HOME/.claude/agents"
-REQUIRED_AGENTS=("planner" "code-architect" "tdd-guide" "code-reviewer" "security-reviewer" "doc-updater")
+REQUIRED_AGENTS=("code-explorer" "docs-lookup" "planner" "code-architect" "tdd-guide" "build-error-resolver" "code-reviewer" "security-reviewer" "doc-updater")
 MISSING=()
 FILE_MISSING=()
 AGENTS_LIST=""

@@ -10,9 +10,12 @@ A 6-phase, Claude-native development workflow with per-phase file artifacts, mul
 >
 > | Agent | Phase | Model |
 > |-------|-------|-------|
+> | `code-explorer` | 1 — Research/Discovery (code facts) | Sonnet |
+> | `docs-lookup` | 1 — Research/Discovery (external docs, when needed) | Sonnet |
 > | `planner` | 2 — Ideation | Opus |
 > | `code-architect` | 3 — Plan | Sonnet |
-> | `tdd-guide` | 4 — Execute (per task) | Sonnet |
+> | `tdd-guide` | 4 — Execute (per-task TDD executor) | Sonnet |
+> | `build-error-resolver` | 4–6 — Validation repair when needed | Sonnet |
 > | `code-reviewer` | 5 — Review | Sonnet |
 > | `security-reviewer` | 5 — Review (conditional) | Sonnet |
 > | `doc-updater` | 6 — Finalize | Haiku |
@@ -33,6 +36,9 @@ A 6-phase, Claude-native development workflow with per-phase file artifacts, mul
 >
 > If ECC is installed only as a Claude Code plugin, agents may appear with the
 > `everything-claude-code:` prefix. The workflow supports either form.
+>
+> In ECC terms, `tdd-guide` is the spawnable agent. `tdd-workflow` is the
+> maintained TDD playbook that the agent follows for RED → GREEN → REFACTOR.
 
 ## Installation
 
@@ -104,12 +110,12 @@ Each phase records a required-agent compliance ledger. After resume or compactio
 
 | # | Phase | What happens | Output file |
 |---|-------|-------------|-------------|
-| 1 | Research | Codebase exploration, requirement parsing, completeness gate | `phase1-research.md` |
-| 2 | Ideation | Planner (Opus) generates 2–3 approaches → advisor gate → user selects | `phase2-ideation.md` |
-| 3 | Plan | code-architect produces implementation blueprint → advisor gate | `phase3-plan.md` |
-| 4 | Execute | Per-task TDD loop: tdd-guide writes tests → implement → validate → checkpoint | `phase4-progress.md` |
-| 5 | Review | code-reviewer always; security-reviewer conditional; advisor if CRITICAL | `phase5-review.md` |
-| 6 | Finalize | Full validation, doc update, commit, optional GitHub issue close | `phase6-summary.md` |
+| 1 | Research/Discovery | Facts only: requirement parsing → code-explorer maps affected code/patterns/tests/config → docs-lookup checks external docs when needed → completeness gate | `phase1-research.md` |
+| 2 | Ideation | Strategy only: planner generates 2–3 grounded approaches → advisor gate → user selects | `phase2-ideation.md` |
+| 3 | Plan | Blueprint only: code-architect turns selected approach into files, tasks, write sets, dependencies, parallel groups, and validation | `phase3-plan.md` |
+| 4 | Execute | Per-task TDD loop: tdd-guide executes RED → GREEN → REFACTOR; main session reviews, validates, and checkpoints | `phase4-progress.md` |
+| 5 | Review | code-reviewer always; security-reviewer conditional; review fixes delegated to tdd-guide/build-error-resolver | `phase5-review.md` |
+| 6 | Finalize | Full validation with delegated repair if needed, doc update, commit, optional GitHub issue close | `phase6-summary.md` |
 
 All phase files are written to `{project-root}/claude-workflow/{project-name}/` while active. Completed workflow folders are archived to `{project-root}/claude-workflow/archive/`. Active unfinished work is tracked in `{project-root}/claude-workflow/ROADMAP.md`.
 

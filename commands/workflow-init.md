@@ -108,7 +108,11 @@ Append equivalent missing sections only. Treat headings with the same meaning as
 
 - The main session is the orchestrator for `/claude-workflow`.
 - Keep phase work scoped, resumable, and recorded under `claude-workflow/`.
-- Delegate phase-specific work to ECC agents only when required or useful; the main session owns integration and final decisions.
+- Delegate phase-specific work to ECC agents by default; the main session owns orchestration, review, validation, integration, and final decisions.
+- Phase boundaries: Phase 1 discovers facts, Phase 2 chooses strategy, Phase 3 creates the executable blueprint.
+- In Phase 1, spawn `code-explorer` for codebase research and `docs-lookup` when external/library/API documentation is needed.
+- In Phase 4, spawn `tdd-guide` per task as the executor. `tdd-guide` is the ECC agent; `tdd-workflow` is the RED -> GREEN -> REFACTOR playbook it follows.
+- Route build/type/lint validation failures to `build-error-resolver`; route behavior or coverage failures back to `tdd-guide`.
 - Use the ECC agent names exactly as Claude Code lists them; prefer short names like `planner` when available, otherwise use the `everything-claude-code:` prefix.
 - GitHub issues are the roadmap source of truth when available; `claude-workflow/ROADMAP.md` is the local active-work mirror.
 - Roadmap/research sessions create or refine issues; `/claude-workflow` sessions implement one selected item and refresh the mirror.

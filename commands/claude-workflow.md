@@ -5,17 +5,20 @@ argument-hint: (no argument needed)
 
 # Claude Workflow — Native Multi-Model Orchestration
 
-6-phase workflow: Research → Ideation → Plan → Execute → Review → Finalize.
+6-phase workflow: Research/Discovery → Ideation → Plan → Execute → Review → Finalize.
 
 All phase outputs are written to `claude-workflow/{project-name}/` in the **project root**. Every phase begins by reading the previous phase's file. If that file is missing, the previous phase did not complete — stop and finish it first.
 
 The project name is auto-generated from Phase 1 findings and confirmed with the user before any files are written.
 
 **Model strategy:**
-- **Main session (Sonnet)** — orchestrator and implementer
+- **Main session (Sonnet)** — orchestrator, reviewer, validator, and phase-file owner; not the implementation or fix writer
+- **`code-explorer` (Sonnet)** — codebase exploration and pattern discovery in Phase 1
+- **`docs-lookup` (Sonnet)** — external/library/API documentation lookup in Phase 1 when needed
 - **`planner` (Opus)** — approach analysis in Phase 2
 - **`code-architect` (Sonnet)** — blueprint in Phase 3
-- **`tdd-guide` (Sonnet)** — test-first enforcement per task in Phase 4
+- **`tdd-guide` (Sonnet)** — per-task Phase 4 executor using ECC's `tdd-workflow` playbook
+- **`build-error-resolver` (Sonnet)** — build, type, lint, and validation failure repair when needed
 - **`code-reviewer` (Sonnet)** — quality review in Phase 5
 - **`security-reviewer` (Sonnet)** — conditional on security-sensitive files in Phase 5
 - **Claude Code advisor (Opus)** — Phase 2 gate and Phase 3 gate only; conditional in Phase 5
@@ -111,11 +114,13 @@ The project name is determined at the END of Phase 1 — not before.
 
 ---
 
-## Phase 1 — RESEARCH
+## Phase 1 — RESEARCH / DISCOVERY
 
 **Prerequisite:** none
 
 `[Mode: Research]`
+
+Phase 1 is fact discovery only. It answers: what is requested, what code exists, what patterns and constraints are real, what tests/config matter, and whether external documentation is needed. Do not choose an implementation approach in Phase 1.
 
 ### 1.1 Requirement Parsing
 
@@ -131,21 +136,33 @@ If any of the above are unclear, stop and ask before continuing.
 
 ### 1.2 Codebase Exploration
 
-Using Read, Grep, Glob:
+Invoke the **`code-explorer` (Sonnet)** ECC subagent:
+
+Provide the parsed requirement, any linked GitHub issue summary, and suspected affected area. Ask it to inspect only the relevant code paths and return:
 1. Similar existing implementations to mirror
 2. Naming and file organization conventions
 3. Error handling patterns in the affected area
 4. Test file locations, framework, and structure
 5. Relevant config, env vars, feature flags
 
-### 1.3 Completeness Gate
+After `code-explorer` returns, write its raw output to `claude-workflow/{project-name}/.cache/code-explorer.md` once the project name is confirmed. If the project name is not known yet, keep the output concise in working context and persist it immediately after creating the project directory.
+
+### 1.3 External Documentation Lookup
+
+Invoke the **`docs-lookup` (Sonnet)** ECC subagent only when the work depends on external library/API/framework behavior, version-sensitive guidance, unfamiliar dependencies, or integration details not already known from the repository.
+
+Task: Find the minimal official or primary-source documentation needed to ground the work. Return stable links, relevant constraints, version assumptions, and short excerpts or summaries. Do not propose implementation approaches.
+
+After `docs-lookup` returns, write its raw output to `claude-workflow/{project-name}/.cache/docs-lookup.md` once the project name is confirmed. If no external docs are needed, record `docs-lookup` as `N/A` with reason `internal patterns sufficient`.
+
+### 1.4 Completeness Gate
 
 Score 0–10:
 - Goal clarity (0–3) · Expected outcome (0–3) · Scope boundaries (0–2) · Constraints (0–2)
 
 **≥ 7** → continue. **< 7** → stop, ask clarifying questions, do not proceed.
 
-### 1.4 Name the Project
+### 1.5 Name the Project
 
 From the deliverable and affected area discovered in Phase 1, generate a short kebab-case project name:
 
@@ -168,14 +185,15 @@ Confirm? (yes / rename to: ...)
 Wait for confirmation. If user renames, use their name. Once confirmed, create the directory:
 ```
 claude-workflow/{project-name}/
+claude-workflow/{project-name}/.cache/
 ```
 
-### 1.5 Write Phase File
+### 1.6 Write Phase File
 
 Create `claude-workflow/{project-name}/phase1-research.md`:
 
 ```markdown
-# Phase 1 — Research: {project-name}
+# Phase 1 — Research / Discovery: {project-name}
 
 ## Deliverable
 [what]
@@ -199,11 +217,20 @@ Create `claude-workflow/{project-name}/phase1-research.md`:
 ## Config & Env
 [relevant env vars, flags, config files]
 
+## External Docs
+[docs used with links/version assumptions — or "none; internal patterns sufficient"]
+
 ## GitHub Issue
 [owner/repo#number — or "none"]
 
 ## Completeness Score
 [X/10]
+
+## Required Agent Compliance
+| Requirement | Status | Evidence | Skip Reason |
+|-------------|--------|----------|-------------|
+| code-explorer | invoked | .cache/code-explorer.md | |
+| docs-lookup | invoked/N/A | .cache/docs-lookup.md | [reason if N/A] |
 
 ## Notes / Future Considerations
 [deferred questions or observations — empty if none]
@@ -221,13 +248,15 @@ Read `phase1-research.md` fully before proceeding.
 
 `[Mode: Ideation]`
 
+Phase 2 is strategy selection. It compares possible approaches using Phase 1 facts. Do not redo broad code exploration here. If required facts are missing, stop and return to Phase 1 by invoking `code-explorer` or `docs-lookup` for the missing facts.
+
 ### 2.1 Deep Approach Analysis
 
 Invoke the **`planner` (Opus)** ECC subagent:
 
 Provide only the relevant contents of `phase1-research.md` as context. Include deliverable, affected area, constraints, and key patterns; omit unrelated notes.
 
-Task: Produce 2–3 implementation approaches. For each: summary, pros, cons, risks, complexity (Small/Medium/Large/XL), and architectural fit. Recommend one with justification. Flag anything that should explicitly NOT be built.
+Task: Produce 2–3 implementation approaches using only grounded Phase 1 facts. For each: summary, pros, cons, risks, complexity (Small/Medium/Large/XL), and architectural fit. Recommend one with justification. Flag anything that should explicitly NOT be built. If facts are missing, say exactly what must be researched instead of inventing assumptions.
 
 After planner returns, write its raw output to `claude-workflow/{project-name}/.cache/planner.md` before proceeding. This preserves planner output across context resets.
 
@@ -274,6 +303,12 @@ Create `claude-workflow/{project-name}/phase2-ideation.md`:
 
 ## Out of Scope (explicit)
 [what will NOT be built]
+
+## Required Agent Compliance
+| Requirement | Status | Evidence | Skip Reason |
+|-------------|--------|----------|-------------|
+| planner | invoked | .cache/planner.md | |
+| advisor ideation gate | invoked | Advisor Findings | |
 ```
 
 ---
@@ -286,16 +321,20 @@ Read `phase1-research.md` and `phase2-ideation.md` fully before proceeding.
 
 `[Mode: Plan]`
 
+Phase 3 is executable blueprinting. It turns the selected Phase 2 approach into files, tasks, dependencies, write sets, parallel groups, and validation commands. Do not reopen strategy selection unless Phase 2 is contradicted by a concrete missing fact; in that case return to Phase 2.
+
 ### 3.1 Blueprint Generation
 
 Invoke the **`code-architect` (Sonnet)** ECC subagent:
 
 Provide relevant excerpts of both phase files as context. Include the selected approach, affected files, constraints, patterns, and test expectations; omit unrelated notes.
 
-Task: Produce a complete implementation blueprint:
+Task: Produce a complete implementation blueprint for the selected Phase 2 approach:
 - Files to create: path, purpose, key interfaces
 - Files to modify: path, specific changes, why
 - Build sequence ordered by dependency
+- Task ownership/write set for each task
+- Parallelization groups: which tasks may run concurrently because their write sets do not overlap
 - Required imports and external dependencies
 - Test file locations following Phase 1 patterns
 - Explicit out-of-scope items
@@ -335,6 +374,12 @@ Create `claude-workflow/{project-name}/phase3-plan.md`:
 1. [step — dependency reason]
 2. ...
 
+### Parallelization Plan
+| Group | Tasks | Why Safe In Parallel |
+|-------|-------|----------------------|
+| A | 1, 2 | disjoint files |
+| B | 3 | depends on A |
+
 ### External Dependencies
 [packages/imports needed]
 
@@ -343,6 +388,9 @@ Create `claude-workflow/{project-name}/phase3-plan.md`:
 ### Task 1: [Name]
 - File: path/to/file
 - Test File: path/to/test-file
+- Write Set: path/to/file, path/to/test-file
+- Depends On: none | Task N
+- Parallel Group: A | B | serial
 - Action: CREATE | MODIFY
 - Implement: [specific logic]
 - Mirror: [pattern from phase1-research.md]
@@ -353,6 +401,12 @@ Create `claude-workflow/{project-name}/phase3-plan.md`:
 
 ## Advisor Notes
 [key points raised]
+
+## Required Agent Compliance
+| Requirement | Status | Evidence | Skip Reason |
+|-------------|--------|----------|-------------|
+| code-architect | invoked | .cache/architect.md | |
+| advisor plan gate | invoked | Advisor Notes | |
 ```
 
 Confirm with user before Phase 4.
@@ -366,6 +420,10 @@ Confirm with user before Phase 4.
 Read `phase1-research.md` and `phase3-plan.md` fully before proceeding.
 
 `[Mode: Execute]`
+
+Phase 4 is subagent-executed by default. The main session supervises scope, starts task agents, verifies results, resolves coordination, and updates `phase4-progress.md`; it does not directly write implementation or test code unless the user explicitly authorizes an emergency fallback.
+
+Use `tdd-guide` as the Phase 4 executor. `tdd-guide` is the spawnable ECC agent; `tdd-workflow` is the maintained TDD playbook the agent must follow: RED -> GREEN -> REFACTOR, with evidence for each gate.
 
 ### Progress Tracking
 
@@ -387,8 +445,8 @@ clean
 ## Required Agent Compliance
 | Requirement | Status | Evidence | Skip Reason |
 |-------------|--------|----------|-------------|
-| tdd-guide task 1 | pending | | |
-| tdd-guide task 2 | pending | | |
+| tdd-guide executor task 1 | pending | | |
+| tdd-guide executor task 2 | pending | | |
 
 ## Last Updated
 [ISO-8601 UTC — e.g. 2026-05-09T10:00:00Z]
@@ -398,27 +456,42 @@ clean
 
 ### Per-Task Loop
 
-For each task in `phase3-plan.md`:
+For each task or safe parallel task group in `phase3-plan.md`:
 
-**1 — Write failing tests**
+**1 — Delegate execution**
 
-Exemption: for tasks ≤ 10 lines of change or pure config/constant changes, main session may write tests inline without spawning tdd-guide.
+Mark the task `in_progress` in `phase4-progress.md` before starting.
 
-Otherwise, invoke the **`tdd-guide` (Sonnet)** ECC subagent:
-Provide the task definition from `phase3-plan.md` (including `Test File`) and the relevant test patterns from `phase1-research.md`.
-Task: Write failing tests for this task. Tests must fail before implementation begins.
+Invoke the **`tdd-guide` (Sonnet)** ECC subagent for each task:
+Provide the task definition from `phase3-plan.md` (including `Test File`, `Write Set`, dependencies, and validation command) plus the relevant test patterns from `phase1-research.md`.
 
-Before implementation begins, update the `Required Agent Compliance` row for this task:
-- `invoked` with evidence path, such as `.cache/tdd-task-1.md`, if `tdd-guide` was used
-- `skipped` only when the exemption applies: `task <=10 lines`, `pure config/constant`, or a Phase 3 plan entry explicitly marks the task as no-behavior/no-testable-change
+Task for the agent:
+- Execute this task using ECC `tdd-workflow`.
+- Write or update tests first and verify RED before production changes.
+- Implement only the minimum code needed for GREEN.
+- Refactor only while tests stay green.
+- Keep edits inside the task write set unless a blocker requires escalation.
+- Return modified files, commands run, RED evidence, GREEN evidence, and any deviations.
 
-Never silently bypass `tdd-guide`. If the main session writes tests directly under an exemption, record that exemption before continuing.
+If a task is pure documentation, pure config, or explicitly no-testable-change, still delegate it to `tdd-guide`; the agent must return why RED is `N/A` and what validation replaced it.
 
-Verify tests fail. If they pass immediately, the test is wrong — fix it before continuing.
+Before validation begins, update the `Required Agent Compliance` row for this task:
+- `invoked` with evidence path, such as `.cache/tdd-task-1.md`, when the agent was used
+- `skipped` only if the subagent system is unavailable or the user explicitly requested inline execution
 
-**2 — Implement**
+Never silently bypass `tdd-guide`. A skipped executor row needs an explicit user-approved reason before continuing.
 
-Mark the task `in_progress` in `phase4-progress.md` before starting. Main session implements the task to make the failing tests pass. Follow `phase3-plan.md` exactly. Mirror the patterns from `phase1-research.md`. Do not add scope.
+Write the agent's returned summary and evidence to `claude-workflow/{project-name}/.cache/tdd-task-{n}.md` before marking validation complete.
+
+**2 — Verify agent result**
+
+The main session reviews the returned diff and validates:
+- changed files stay within the task write set or the deviation is justified
+- RED evidence exists, or RED is explicitly `N/A` for a no-testable-change task
+- GREEN evidence exists for the same test target
+- implementation follows `phase3-plan.md` and mirrors Phase 1 patterns
+
+If validation fails, send the task back to `tdd-guide` with the specific failure. Do not repair implementation inline unless the user explicitly authorizes an emergency fallback.
 
 **3 — Validate immediately**
 
@@ -426,7 +499,12 @@ Mark the task `in_progress` in `phase4-progress.md` before starting. Main sessio
 # type check + lint + unit tests for affected files
 ```
 
-Fix any failure before moving to the next task. Never accumulate broken state. If a fix worsens the state, use `git stash` to restore the pre-task baseline and retry.
+Route validation failures before moving to the next task:
+- build, type, lint, dependency, or tooling failures → invoke **`build-error-resolver`** with the command output and changed-file list
+- failing behavior tests or missing acceptance behavior → send the task back to **`tdd-guide`**
+- scope drift or write-set violations → stop and ask the user unless the fix is an obvious revert of the agent's own deviation
+
+Do not fix validation failures inline unless the user explicitly authorizes an emergency fallback. If a fix worsens the state, use `git stash` to restore the pre-task baseline and retry through the appropriate agent.
 
 **4 — Update progress file**
 
@@ -436,7 +514,7 @@ Mark the task `complete` in `phase4-progress.md`. Record modified files in the `
 
 If Phase 4 is resumed, read `phase4-progress.md` to find the first task with status `pending` or `in_progress`. For `in_progress` tasks, re-validate the current file state before continuing — the prior session may have partially written the implementation.
 
-Also read the `Required Agent Compliance` table. If any completed or in-progress task has a pending `tdd-guide` row, stop and either invoke `tdd-guide` or record an explicit skip reason before continuing.
+Also read the `Required Agent Compliance` table. If any completed or in-progress task has a pending `tdd-guide executor` row, stop and either invoke `tdd-guide` or record an explicit user-approved skip reason before continuing.
 
 ---
 
@@ -455,6 +533,8 @@ Invoke the **`code-reviewer` (Sonnet)** ECC subagent:
 Provide the list of modified files from the `Files Modified` column in `phase4-progress.md`.
 Task: Review all modified files. Check: naming, error handling, immutability, function size (<50 lines), file size (<800 lines), test coverage, no debug statements.
 
+After `code-reviewer` returns, write its raw output to `claude-workflow/{project-name}/.cache/code-reviewer.md`.
+
 ### 5.2 Security Review (conditional)
 
 Only if Phase 4 modified files touching auth, payments, user data, file system, or external API calls:
@@ -462,13 +542,22 @@ Only if Phase 4 modified files touching auth, payments, user data, file system, 
 Invoke the **`security-reviewer` (Sonnet)** ECC subagent:
 Task: Check for hardcoded secrets, injection vulnerabilities, unvalidated input, unsafe operations, OWASP Top 10.
 
+After `security-reviewer` returns, write its raw output to `claude-workflow/{project-name}/.cache/security-reviewer.md`.
+
 ### 5.3 Fix Loop
 
-- **CRITICAL** → fix immediately, re-run the relevant reviewer. After 3 fix-and-re-review iterations without convergence, stop and escalate to the user.
-- **HIGH** → fix before Phase 6
+- **CRITICAL** → delegate the fix immediately, re-run the relevant reviewer. After 3 fix-and-re-review iterations without convergence, stop and escalate to the user.
+- **HIGH** → delegate the fix before Phase 6
 - **MEDIUM/LOW** → log as follow-up, do not block
 
 If CRITICAL issues are found, consult the configured Claude Code advisor to confirm severity and check for anything missed.
+
+Review fixes are subagent-executed:
+- behavior, test coverage, or implementation corrections → invoke **`tdd-guide`** with the review finding, affected files, and relevant Phase 3 task context
+- build, type, lint, dependency, or tooling corrections → invoke **`build-error-resolver`** with the failing command output and changed-file list
+- security-sensitive corrections → invoke **`security-reviewer`** after the fix to re-review the affected files
+
+Write every fix-agent summary to `claude-workflow/{project-name}/.cache/review-fix-{n}.md`. Do not apply review fixes inline unless the user explicitly authorizes an emergency fallback.
 
 ### 5.4 Write Phase File
 
@@ -495,6 +584,7 @@ Create `claude-workflow/{project-name}/phase5-review.md`:
 |-------------|--------|----------|-------------|
 | code-reviewer | invoked | .cache/code-reviewer.md | |
 | security-reviewer | invoked/skipped/N/A | .cache/security-reviewer.md or file-risk scan | [reason if skipped/N/A] |
+| review-fix executors | invoked/N/A | .cache/review-fix-*.md | [reason if N/A] |
 | advisor critical gate | invoked/skipped/N/A | advisor notes or review findings | [reason if skipped/N/A] |
 
 ## Fixes Applied
@@ -525,6 +615,11 @@ Read `phase1-research.md`, `phase3-plan.md`, and `phase5-review.md` before proce
 ```
 
 All must pass before continuing.
+
+If final validation fails, do not repair inline. Route failures as follows, record the agent summary in `.cache/final-validation-fix-{n}.md`, then rerun the full failed command:
+- build, type, lint, dependency, or tooling failures → invoke **`build-error-resolver`**
+- behavior, regression, or coverage failures → invoke **`tdd-guide`** with the failing test output and relevant Phase 3/4 context
+- review/security regressions → return to Phase 5 and re-run the relevant reviewer after the fix
 
 ### 6.2 Acceptance Criteria
 
@@ -595,6 +690,7 @@ Create `claude-workflow/{project-name}/phase6-summary.md`:
 | Requirement | Status | Evidence | Skip Reason |
 |-------------|--------|----------|-------------|
 | doc-updater | invoked/skipped | .cache/doc-updater.md or docs-impact check | [reason if skipped] |
+| final-validation fix executors | invoked/N/A | .cache/final-validation-fix-*.md | [reason if N/A] |
 | roadmap refresh | invoked | claude-workflow/ROADMAP.md | |
 | archive completed folder | pending | | |
 
@@ -680,8 +776,15 @@ Before declaring the workflow complete, verify every `Required Agent Compliance`
 └── claude-workflow/
     └── {project-name}/               ← named + confirmed at end of Phase 1
         ├── .cache/
+        │   ├── code-explorer.md      raw explorer output (Phase 1)
+        │   ├── docs-lookup.md        raw external docs output (Phase 1, conditional)
         │   ├── planner.md            raw planner output (Phase 2, before advisor)
-        │   └── architect.md          raw architect output (Phase 3, before advisor)
+        │   ├── architect.md          raw architect output (Phase 3, before advisor)
+        │   ├── tdd-task-*.md         raw executor output (Phase 4)
+        │   ├── code-reviewer.md      raw review output (Phase 5)
+        │   ├── security-reviewer.md  raw security output (Phase 5, conditional)
+        │   ├── review-fix-*.md       raw review-fix executor output (Phase 5)
+        │   └── final-validation-fix-*.md raw final validation fix output (Phase 6)
         ├── phase1-research.md        written end of Phase 1
         ├── phase2-ideation.md        written end of Phase 2
         ├── phase3-plan.md            written end of Phase 3
@@ -704,7 +807,7 @@ To resume: run `/claude-workflow` with no argument — the startup scan will lis
 1. **Every phase writes a file** — no phase completes without its artifact on disk
 2. **Every phase reads its prerequisites** — context comes from files, not conversation history
 3. **Phase 4 updates progress after each task** — mid-phase resumption is always possible
-4. **Main session owns Phase 4 implementation** — `tdd-guide` may write tests; extra helper agents require explicit justification
+4. **Implementation and fixes are subagent-executed** — `tdd-guide` owns per-task TDD execution and behavior fixes; `build-error-resolver` owns build/type/lint repair; the main session owns orchestration, review, validation, and phase files
 5. **Two advisor gates** — Phase 2 and Phase 3 only; conditional at Phase 5
 6. **Security reviewer is conditional** — only when security-sensitive files are touched
 7. **GitHub issues drive roadmap** — fetch issues at startup and update them at finalization
@@ -712,5 +815,5 @@ To resume: run `/claude-workflow` with no argument — the startup scan will lis
 9. **Completed work is archived** — move complete workflow folders under `claude-workflow/archive/`
 10. **Compliance ledger is mandatory** — required agents must be `invoked`, `skipped`, or `N/A` with evidence
 11. **No silent deviations** — every skipped agent gate needs an explicit reason before proceeding
-12. **Never accumulate broken state** — fix validation failures immediately before next task
+12. **Never accumulate broken state** — route validation failures to the correct agent immediately before the next task
 13. **Scope discipline** — surface plan deviations to user; never silently expand scope
