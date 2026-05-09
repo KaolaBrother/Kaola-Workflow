@@ -54,7 +54,7 @@ If there is no GitHub remote, or if `gh` is unavailable or unauthenticated, skip
 
 Create `CLAUDE.md` if missing. If it exists, preserve user-authored content and add only missing durable guidance. Do not paste full source files, roadmaps, changelogs, API docs, or long skill text into `CLAUDE.md`.
 
-Target size: under 120 lines. Hard limit: if the result would exceed 150 lines, stop and summarize what should move to docs, `.claude/rules/`, skills, or `CLAUDE.local.md`.
+Target size: under 150 lines. Hard limit: if the result would exceed 180 lines, stop and summarize what should move to docs, `.claude/rules/`, skills, or `CLAUDE.local.md`.
 
 Use this policy:
 
@@ -140,7 +140,7 @@ Append equivalent missing sections only. Treat headings with the same meaning as
 
 ## Maintenance
 
-- Keep this file under 120 lines; move detail to docs or skills.
+- Keep this file under 150 lines; move detail to docs or skills.
 - Add rules only after repeated mistakes, review feedback, or stable project conventions.
 - Do not use `@path` imports for optional reference material.
 ```
@@ -245,7 +245,7 @@ Document coding style, testing rules, Git practices, naming, and review expectat
 After edits:
 
 1. Run `git status --short --branch`.
-2. Run `wc -l CLAUDE.md` and report whether it is under the 120-line target.
+2. Run `wc -l CLAUDE.md` and report whether it is under the 150-line target.
 3. Summarize:
    - whether Git is initialized
    - whether a GitHub remote exists

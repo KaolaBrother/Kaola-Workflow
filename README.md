@@ -102,7 +102,7 @@ Use a separate research or roadmap session to discover future work and create or
 
 The local roadmap is a working mirror, not the source of truth. Keep only active unfinished work there; completed workflow folders move to `claude-workflow/archive/`.
 
-The workflow also enforces context discipline: `CLAUDE.md` targets under 120 lines, the local roadmap should not become history storage, and agent prompts should include only the relevant phase excerpts needed for the delegated task.
+The workflow also enforces context discipline: `CLAUDE.md` targets under 150 lines, the local roadmap should not become history storage, and agent prompts should include only the relevant phase excerpts needed for the delegated task.
 
 Each phase records a required-agent compliance ledger. After resume or compaction, the main session must read that ledger and finish or explicitly skip any pending gates before crossing a phase boundary.
 
