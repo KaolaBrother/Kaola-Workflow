@@ -52,15 +52,16 @@ From Claude Code:
 /reload-plugins
 ```
 
-If you previously used the manual installer, remove or update the old
-`~/.claude/commands/claude-workflow.md`; user-level commands can take precedence
-over plugin commands.
+If you previously used the manual installer, remove or update user-level command
+files such as `~/.claude/commands/workflow-next.md` or the legacy
+`~/.claude/commands/claude-workflow.md`; user-level commands can take
+precedence over plugin commands.
 
 Then run:
 
 ```text
 /workflow-init
-/claude-workflow
+/workflow-next
 ```
 
 ### Manual command install
@@ -96,7 +97,7 @@ This creates or updates a compact `CLAUDE.md`, `claude-workflow/ROADMAP.md`, and
 In any Claude Code session, run:
 
 ```
-/claude-workflow
+/workflow-next
 ```
 
 The command is a thin router. It first checks local/remote Git state, safely fast-forwards clean behind-only branches, and asks before risky synchronization such as diverged history, dirty worktrees with upstream changes, rebases, merges, stashes, resets, or conflicts. It then scans `claude-workflow/`, reads `workflow-state.md` when present, and routes to the right phase command:
@@ -112,7 +113,7 @@ The command is a thin router. It first checks local/remote Git state, safely fas
 
 ## GitHub Roadmap Cycle
 
-Use a separate research or roadmap session to discover future work and create or refine GitHub issues. `/claude-workflow` is the implementation cycle: it fetches open GitHub issues, mirrors active unfinished work into `claude-workflow/ROADMAP.md`, advances one selected item, then comments on or closes linked issues after validation.
+Use a separate research or roadmap session to discover future work and create or refine GitHub issues. `/workflow-next` is the implementation cycle: it fetches open GitHub issues, mirrors active unfinished work into `claude-workflow/ROADMAP.md`, advances one selected item, then comments on or closes linked issues after validation.
 
 The local roadmap is a working mirror, not the source of truth. Keep only active unfinished work there; completed workflow folders move to `claude-workflow/archive/`.
 
@@ -125,7 +126,7 @@ Avoid redundant validation runs: Phase 4 uses targeted affected checks, Phase 5 
 ## ECC Hook Policy
 
 ECC hooks are background hygiene, not workflow validation. They may format,
-lint, or typecheck edited files automatically, but `/claude-workflow` should not
+lint, or typecheck edited files automatically, but `/workflow-next` should not
 rerun the same check unless the phase requires broader validation or relevant
 files changed after the hook ran. Hook output counts as workflow evidence only
 when recorded with command, scope, result, and evidence path.
@@ -137,7 +138,10 @@ profile:
 ECC_HOOK_PROFILE=minimal claude
 ```
 
-Phase 6 still owns the final full relevant validation gate.
+Phase 6 still owns the final full relevant validation gate. It also performs
+documentation docking to match code changes with docs and issue/roadmap state,
+uses an advisor-backed closure decision gate when deferred or conflict items
+remain, and leaves commit and push as the final clean/synced workspace step.
 
 ## Phases
 
@@ -148,7 +152,7 @@ Phase 6 still owns the final full relevant validation gate.
 | 3 | Plan | Blueprint only: code-architect turns selected approach into files, tasks, write sets, dependencies, parallel groups, and validation | `phase3-plan.md` |
 | 4 | Execute | Per-task TDD loop: tdd-guide executes RED → GREEN → REFACTOR; main session reviews, validates, and checkpoints | `phase4-progress.md` |
 | 5 | Review | code-reviewer always; security-reviewer conditional; review fixes delegated to tdd-guide/build-error-resolver | `phase5-review.md` |
-| 6 | Finalize | Full validation with delegated repair if needed, doc update, commit, optional GitHub issue close | `phase6-summary.md` |
+| 6 | Finalize | Full validation with delegated repair if needed, documentation docking, closure decisions, issue/roadmap/archive updates, final commit and push | `phase6-summary.md` |
 
 All phase files are written to `{project-root}/claude-workflow/{project-name}/` while active. Completed workflow folders are archived to `{project-root}/claude-workflow/archive/`. Active unfinished work is tracked in `{project-root}/claude-workflow/ROADMAP.md`.
 
@@ -158,7 +162,7 @@ Any interrupted session resumes from `workflow-state.md` first, then reconstruct
 
 ### State Bootstrap And Repair
 
-When `/claude-workflow` can reconstruct one safe next command from phase
+When `/workflow-next` can reconstruct one safe next command from phase
 artifacts, it repairs or creates `claude-workflow/{project}/workflow-state.md`
 before routing by running `scripts/claude-workflow-repair-state.js` when the
 helper is available. It does not create state for brand-new work, ambiguous

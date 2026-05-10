@@ -35,11 +35,14 @@ claude-workflow/{project}/phase5-review.md
 - final validation fixed but not re-run -> `final-validation`
 - acceptance checklist incomplete -> `acceptance-check`
 - documentation gate incomplete -> `doc-update`
+- documentation docking incomplete -> `doc-docking`
 - phase summary missing -> `write-summary`
-- roadmap/archive incomplete -> `roadmap-archive`
-- commit missing -> `commit`
+- closure decision gate incomplete -> `closure-decision`
 - linked issue not updated -> `issue-update`
+- roadmap/archive incomplete -> `roadmap-archive`
 - final metadata pending -> `final-metadata`
+- commit and push missing -> `commit-push`
+- final workspace sync missing -> `verify-sync`
 
 If ambiguous, stop and ask.
 
@@ -51,8 +54,14 @@ If ambiguous, stop and ask.
 - Do not close a GitHub issue until acceptance criteria pass.
 - Do not archive incomplete workflow folders.
 - Do not stage unrelated user changes.
+- Do not create tracked file edits after the final commit.
+- Commit and push only after documentation, issue updates, roadmap refresh,
+  archive movement, and final metadata are complete.
 - If `/prp-commit` is unavailable, stage the approved implementation, docs, and
   workflow artifacts for this project only.
+- If push cannot complete because no upstream exists, authentication fails, or
+  the remote rejects the update, stop with exact remediation steps. Do not
+  create a second cleanup commit unless the user explicitly approves it.
 
 ## Validation Delegation Policy
 
@@ -115,6 +124,57 @@ when all conditions are true:
 
 Anything else is routed to `tdd-guide`, `build-error-resolver`, or back to Phase
 5 when review/security behavior is implicated.
+
+## Documentation Docking
+
+Documentation docking is the closure check that matches documents with the
+actual code and workflow changes before Git metadata is finalized.
+
+Compare:
+
+- changed implementation, test, config, and workflow files from `git diff`
+- Phase 1 success criteria and linked issue acceptance criteria
+- Phase 3 task blueprint
+- Phase 4 implementation evidence
+- Phase 5 review findings and follow-ups
+- docs touched or skipped by `doc-updater`
+- `README.md`, API docs, architecture docs, changelog, `.env.example`, roadmap,
+  and issue comments when relevant
+
+Every public behavior, API, setup, architecture, environment, validation, or
+roadmap-impacting change must be reflected in the appropriate document or have
+an explicit no-impact reason. Save the docking record to:
+
+```text
+claude-workflow/{project}/.cache/doc-docking.md
+```
+
+If docking finds gaps, update the docs through `doc-updater` or the Trivial
+Inline Edit Exception, then rerun docking before continuing.
+
+## Closure Decision Gate
+
+Before updating issues or reorganizing the roadmap, scan all phase artifacts for
+deferred items, unresolved conflicts, partial implementation notes, open review
+follow-ups, or decisions that need the user.
+
+If none exist, record the scan in `phase6-summary.md` and continue.
+
+If any exist:
+
+1. Consult the configured Claude Code advisor.
+2. Ask the advisor for the safest next step, whether the current item can close,
+   and how follow-up issues or roadmap entries should be organized.
+3. Save the response to:
+
+```text
+claude-workflow/{project}/.cache/advisor-closure.md
+```
+
+4. Ask the user for permission before creating, closing, splitting, merging, or
+   reorganizing roadmap entries or GitHub issues.
+
+Do not treat advisor output as user approval.
 
 ## Step 1 - Final Validation
 
@@ -205,7 +265,26 @@ Write agent output to:
 claude-workflow/{project}/.cache/doc-updater.md
 ```
 
-## Step 4 - Write Summary
+## Step 4 - Documentation Docking
+
+Run the Documentation Docking check described above after `doc-updater` finishes.
+Write the result to:
+
+```text
+claude-workflow/{project}/.cache/doc-docking.md
+```
+
+The docking record must list:
+
+- changed code/config/test/workflow files reviewed
+- documents checked
+- gaps found and fixed
+- explicit no-impact reasons for skipped document classes
+- final verdict: `DOCKED` or `BLOCKED`
+
+Only continue when the final verdict is `DOCKED`.
+
+## Step 5 - Write Summary
 
 Create `claude-workflow/{project}/phase6-summary.md`:
 
@@ -224,15 +303,21 @@ Create `claude-workflow/{project}/phase6-summary.md`:
 ## Final Validation Evidence
 [commands run/delegated/cited, result, evidence path]
 
+## Documentation Docking
+[DOCKED/BLOCKED, evidence path]
+
 ## Final Validation Failure Ledger
 | Failing Command | Classification | Routed To | Evidence | Status |
 |-----------------|----------------|-----------|----------|--------|
 
 ## Follow-Up Items
-[from Phase 5]
+[from Phase 5 and closure scan]
 
-## Commit
-[hash/message or pending]
+## Closure Decision
+[none needed/advisor consulted/user approved next steps]
+
+## Commit And Push
+[pending final Git gate; final hash is reported after push and is not written back here]
 
 ## GitHub Issue
 [closed/open/none]
@@ -247,18 +332,44 @@ Create `claude-workflow/{project}/phase6-summary.md`:
 | Requirement | Status | Evidence | Skip Reason |
 |-------------|--------|----------|-------------|
 | doc-updater | invoked/skipped | .cache/doc-updater.md or docs-impact check | [reason if skipped] |
+| documentation docking | invoked | .cache/doc-docking.md | |
+| closure advisor gate | invoked/N/A | .cache/advisor-closure.md or closure scan | [reason if N/A] |
 | final-validation fix executors | invoked/N/A | .cache/final-validation-fix-*.md | [reason if N/A] |
 | roadmap refresh | invoked | claude-workflow/ROADMAP.md | |
 | archive completed folder | pending | | |
+| final commit and push | ready | git status/git diff/upstream check | final gate runs after this file is committed |
 
 ## Status
-COMPLETE
+READY FOR FINAL GIT GATE
 ```
 
-## Step 5 - Roadmap And Archive
+## Step 6 - Closure Decision Gate
+
+Run the Closure Decision Gate described above.
+
+If deferred items, conflicts, partial work, or user-decision items exist, stop
+after saving `.cache/advisor-closure.md` and ask the user for permission before
+changing roadmap or issue organization.
+
+If the user approves issue or roadmap reorganization, make those changes before
+the final Git gate.
+
+## Step 7 - GitHub Issue, Roadmap, Archive, And Metadata
+
+If `phase1-research.md` links a GitHub issue:
+
+- close it only after acceptance criteria pass and the Closure Decision Gate says
+  the implementation is complete
+- keep it open if follow-ups, partial implementation, or unresolved user
+  decisions remain
+- create/update follow-up issues only after user permission when the Closure
+  Decision Gate found decision items
+- comment with validation evidence and the planned commit message; add the final
+  commit hash only after push if doing so does not dirty the local worktree
 
 Refresh `claude-workflow/ROADMAP.md` from open GitHub issues when available.
-Keep only unfinished work.
+Keep only unfinished work. Do not reorganize roadmap entries that came from
+closure decision items until the user has approved the advisor-backed next step.
 
 Archive only after summary exists:
 
@@ -266,10 +377,23 @@ Archive only after summary exists:
 claude-workflow/{project}/ -> claude-workflow/archive/{project}/
 ```
 
-If destination exists, append a timestamp suffix. Update `phase6-summary.md`
-with the final archive path before final metadata.
+If destination exists, append a timestamp suffix.
 
-## Step 6 - Commit
+Update `phase6-summary.md` with:
+
+- final GitHub issue state
+- final roadmap state
+- final archive path
+- documentation docking result
+- closure decision result
+- compliance table with no `pending` rows, except `final commit and push` may be
+  `ready` because it runs after this tracked file is finalized
+
+Before the final Git gate, verify every other `Required Agent Compliance` row
+across phase files is `invoked`, `skipped`, or `N/A` with evidence or skip
+reason.
+
+## Step 8 - Commit And Push
 
 If `/prp-commit` is available, use it.
 
@@ -280,28 +404,16 @@ Otherwise:
   project
 - do not stage unrelated user changes
 - create a conventional commit
-- record the commit hash
+- record the commit hash in the final response and in the GitHub issue comment
+  only when that comment does not require another tracked file edit
+- run `git push` to the configured upstream
+- run `git status --short --branch`
+- confirm the worktree is clean and synced with upstream
 
-## Step 7 - GitHub Issue Update
+If the branch has no upstream, use `git push -u origin HEAD` when `origin`
+exists and policy allows creating/updating that remote branch. Otherwise stop
+and ask the user which remote/branch to use.
 
-If `phase1-research.md` links a GitHub issue:
-
-- close it only after acceptance criteria pass
-- comment with commit hash
-- keep it open if follow-ups or partial implementation remain
-- create/update follow-up issues when needed
-
-Refresh the roadmap after issue updates.
-
-## Step 8 - Final Metadata
-
-Update `phase6-summary.md` with:
-
-- final commit hash
-- final GitHub issue state
-- final roadmap state
-- final archive path
-- compliance table with no pending rows
-
-Before declaring complete, verify every `Required Agent Compliance` row across
-phase files is `invoked`, `skipped`, or `N/A` with evidence or skip reason.
+If push is rejected or the branch is not clean and synced after push, stop with
+the exact Git status and next safe command. Do not amend, rebase, merge, stash,
+reset, or create a second cleanup commit unless the user explicitly approves it.

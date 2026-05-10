@@ -1,13 +1,13 @@
 ---
-description: Thin router for Claude Workflow. Detects active work, reconstructs resume state, and routes to the correct phase command.
+description: Workflow Next. Thin router for Claude Workflow. Detects active work, reconstructs resume state, and routes to the correct phase command.
 argument-hint: (optional project name or task description)
 ---
 
-# Claude Workflow - thin router
+# Workflow Next - thin router
 
-This command is the thin router for the six phase commands. It owns startup,
-Git/roadmap freshness, project selection, resume detection, and phase routing.
-It does not perform phase work directly.
+`/workflow-next` is the thin router for the six phase commands. It owns
+startup, Git/roadmap freshness, project selection, resume detection, and phase
+routing. It does not perform phase work directly.
 
 ## Inputs
 

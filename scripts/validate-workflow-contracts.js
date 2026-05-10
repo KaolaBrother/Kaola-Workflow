@@ -40,13 +40,15 @@ for (const file of phaseCommands) {
   assertIncludes(file, 'Required Agent Compliance');
 }
 
-assertIncludes('commands/claude-workflow.md', 'thin router');
-assertIncludes('commands/claude-workflow.md', 'next_command');
-assertIncludes('commands/claude-workflow.md', '/claude-workflow-phase4');
-assertIncludes('commands/claude-workflow.md', '## State Bootstrap And Repair');
-assertIncludes('commands/claude-workflow.md', 'write repaired `workflow-state.md`');
-assertIncludes('commands/claude-workflow.md', 'claude-workflow-repair-state.js');
-assertIncludes('commands/claude-workflow.md', 'Do not create `workflow-state.md` for brand-new work');
+assert(exists('commands/workflow-next.md'), 'commands/workflow-next.md is missing');
+assert(!exists('commands/claude-workflow.md'), 'commands/claude-workflow.md must be renamed to workflow-next.md');
+assertIncludes('commands/workflow-next.md', 'thin router');
+assertIncludes('commands/workflow-next.md', 'next_command');
+assertIncludes('commands/workflow-next.md', '/claude-workflow-phase4');
+assertIncludes('commands/workflow-next.md', '## State Bootstrap And Repair');
+assertIncludes('commands/workflow-next.md', 'write repaired `workflow-state.md`');
+assertIncludes('commands/workflow-next.md', 'claude-workflow-repair-state.js');
+assertIncludes('commands/workflow-next.md', 'Do not create `workflow-state.md` for brand-new work');
 assertIncludes('README.md', 'State Bootstrap And Repair');
 assertIncludes('README.md', 'claude-workflow-repair-state.js');
 assertIncludes('commands/workflow-init.md', 'State Bootstrap And Repair');
@@ -77,9 +79,21 @@ assertIncludes('commands/claude-workflow-phase6.md', 'delegate expensive or nois
 assertIncludes('commands/claude-workflow-phase6.md', '## Validation De-Duplication');
 assertIncludes('commands/claude-workflow-phase6.md', '## Trivial Inline Edit Exception');
 assertIncludes('commands/claude-workflow-phase6.md', 'one line or mechanically obvious');
+assertIncludes('commands/claude-workflow-phase6.md', '## Documentation Docking');
+assertIncludes('commands/claude-workflow-phase6.md', '.cache/doc-docking.md');
+assertIncludes('commands/claude-workflow-phase6.md', '## Closure Decision Gate');
+assertIncludes('commands/claude-workflow-phase6.md', '.cache/advisor-closure.md');
+assertIncludes('commands/claude-workflow-phase6.md', '## Step 8 - Commit And Push');
+assertIncludes('commands/claude-workflow-phase6.md', 'git push');
+assertIncludes('commands/claude-workflow-phase6.md', 'clean and synced');
 assertIncludes('README.md', 'Avoid redundant validation runs');
+assertIncludes('README.md', '/workflow-next');
+assertIncludes('README.md', 'documentation docking');
+assertIncludes('README.md', 'commit and push');
 assertIncludes('README.md', '## ECC Hook Policy');
 assertIncludes('README.md', 'ECC_HOOK_PROFILE=minimal');
+assertIncludes('commands/workflow-init.md', 'Use `/workflow-next` as the workflow entrypoint and router.');
+assertIncludes('commands/workflow-init.md', 'commit and push');
 assertIncludes('commands/workflow-init.md', '## ECC Hook Policy');
 assertIncludes('commands/workflow-init.md', 'ECC_HOOK_PROFILE=minimal');
 assertIncludes('install.sh', 'claude-workflow-repair-state.js');
@@ -108,8 +122,8 @@ assert(packageJson.version === pluginJson.version, 'package.json and plugin.json
 assert(Array.isArray(packageJson.files) && packageJson.files.includes('hooks/'), 'package.json files must include hooks/');
 assert(Array.isArray(packageJson.files) && packageJson.files.includes('scripts/'), 'package.json files must include scripts/');
 
-const routerLines = read('commands/claude-workflow.md').split(/\r?\n/).length;
-assert(routerLines <= 220, `commands/claude-workflow.md must remain a thin router; found ${routerLines} lines`);
+const routerLines = read('commands/workflow-next.md').split(/\r?\n/).length;
+assert(routerLines <= 220, `commands/workflow-next.md must remain a thin router; found ${routerLines} lines`);
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-workflow-contract-'));
 try {

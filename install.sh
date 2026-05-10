@@ -118,7 +118,7 @@ done
 
 echo ""
 echo "Open any Claude Code session and run:  /workflow-init"
-echo "Then run implementation cycles with:  /claude-workflow"
+echo "Then run implementation cycles with:  /workflow-next"
 echo ""
 echo "Note: plugin installs load hooks/hooks.json automatically in Claude Code v2.1+."
 echo "Manual command install copies slash commands only; use plugin install for the compaction resume hook."

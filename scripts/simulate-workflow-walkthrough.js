@@ -287,11 +287,16 @@ function main() {
     write(path.join(cache, 'doc-updater.md'), 'docs updated\n');
     write(path.join(projectRoot, 'phase6-summary.md'), phaseFile('Phase 6 - Summary', [
       '| doc-updater | invoked | .cache/doc-updater.md | |',
+      '| documentation docking | invoked | .cache/doc-docking.md | |',
+      '| closure advisor gate | N/A | closure scan | no deferred/conflict/user-decision items |',
       '| final-validation fix executors | N/A | final validation output | no failures |',
       '| roadmap refresh | invoked | claude-workflow/ROADMAP.md | |',
-      '| archive completed folder | invoked | claude-workflow/archive/simulated-feature | |'
+      '| archive completed folder | invoked | claude-workflow/archive/simulated-feature | |',
+      '| final commit and push | invoked | git status --short --branch | clean and synced |'
     ]));
     assertFileIncludes(path.join(projectRoot, 'phase6-summary.md'), '| doc-updater | invoked | .cache/doc-updater.md | |');
+    assertFileIncludes(path.join(projectRoot, 'phase6-summary.md'), '| documentation docking | invoked | .cache/doc-docking.md | |');
+    assertFileIncludes(path.join(projectRoot, 'phase6-summary.md'), '| closure advisor gate | N/A | closure scan | no deferred/conflict/user-decision items |');
     assertFileIncludes(path.join(projectRoot, 'phase6-summary.md'), '| final-validation fix executors | N/A | final validation output | no failures |');
     write(stateFile, stateContent({
       phase: 6,

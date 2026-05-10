@@ -5,6 +5,8 @@ removed=0
 
 shopt -s nullglob
 COMMANDS=(
+  "$HOME/.claude/commands/workflow-next.md"
+  "$HOME/.claude/commands/claude-workflow.md"
   "$HOME/.claude/commands/claude-workflow"*.md
   "$HOME/.claude/commands/workflow-init.md"
 )

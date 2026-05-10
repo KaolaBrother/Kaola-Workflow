@@ -5,7 +5,7 @@ argument-hint: (optional project context)
 
 # Workflow Init
 
-Prepare the current project for repeated `/claude-workflow` implementation cycles.
+Prepare the current project for repeated `/workflow-next` implementation cycles.
 
 This command is a bootstrapper. It should preserve existing project instructions and docs, add only missing workflow guidance, and avoid replacing user-authored content.
 
@@ -114,7 +114,7 @@ Append equivalent missing sections only. Treat headings with the same meaning as
 
 ## Claude Workflow
 
-- Use `/claude-workflow` as the workflow entrypoint and router.
+- Use `/workflow-next` as the workflow entrypoint and router.
 - Keep phase work scoped, resumable, and recorded under `claude-workflow/`.
 - Maintain `workflow-state.md` for active work; it records current phase, step, pending gates, and next command.
 - Delegate phase-specific work to ECC agents by default; the main session owns orchestration, review, validation, integration, and final decisions.
@@ -123,12 +123,12 @@ Append equivalent missing sections only. Treat headings with the same meaning as
 - In Phase 4, spawn `tdd-guide` per task as the executor. `tdd-guide` is the ECC agent; `tdd-workflow` is the RED -> GREEN -> REFACTOR playbook it follows.
 - Route build/type/lint validation failures to `build-error-resolver`; route behavior or coverage failures back to `tdd-guide`.
 - Use the ECC agent names exactly as Claude Code lists them; prefer short names like `planner` when available, otherwise use the `everything-claude-code:` prefix.
-- At `/claude-workflow` startup, fetch remote-tracking refs, classify local/upstream sync state, and ask before any risky synchronization.
+- At `/workflow-next` startup, fetch remote-tracking refs, classify local/upstream sync state, and ask before any risky synchronization.
 - GitHub issues are the roadmap source of truth when available; `claude-workflow/ROADMAP.md` is the local active-work mirror.
-- Roadmap/research sessions create or refine issues; `/claude-workflow` sessions implement one selected item and refresh the mirror.
+- Roadmap/research sessions create or refine issues; `/workflow-next` sessions implement one selected item and refresh the mirror.
 - After resume or compaction, read `workflow-state.md`, the current phase file, and the compliance ledger before continuing.
-- State Bootstrap And Repair: if `/claude-workflow` safely reconstructs one next command from phase artifacts, run the state repair helper and repair `workflow-state.md` before routing.
-- End each cycle by updating issues, refreshing the roadmap, archiving completed workflow folders, and clearing pending compliance rows.
+- State Bootstrap And Repair: if `/workflow-next` safely reconstructs one next command from phase artifacts, run the state repair helper and repair `workflow-state.md` before routing.
+- End each cycle by docking docs against code changes, resolving closure decisions, updating issues, refreshing the roadmap, archiving completed workflow folders, and clearing pending compliance rows before the final commit and push.
 
 ## Project Conventions
 
@@ -199,10 +199,12 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 ## Rules
 
 - A separate roadmap/research session owns discovering and adding future work to GitHub issues.
-- `/claude-workflow` fetches GitHub issues, mirrors active implementation work here, and advances one item per cycle.
-- After each `/claude-workflow` cycle, refresh this file from issue state.
+- `/workflow-next` fetches GitHub issues, mirrors active implementation work here, and advances one item per cycle.
+- After each `/workflow-next` cycle, refresh this file from issue state.
 - Move completed workflow project folders to `claude-workflow/archive/`.
 - Close linked GitHub issues only after acceptance criteria pass.
+- Keep commit and push as the final Phase 6 step after docs, issues, roadmap,
+  archive, and metadata are complete.
 ```
 
 ### `docs/README.md`
@@ -269,5 +271,5 @@ After edits:
 End with the next useful command:
 
 ```text
-/claude-workflow
+/workflow-next
 ```
