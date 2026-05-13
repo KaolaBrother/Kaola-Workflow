@@ -23,7 +23,8 @@ DOCKED, `.cache/doc-docking.md`
 ## GitHub Issue
 
 - Issue: KaolaBrother/Kaola-Workflow#1
-- Closure state: ready to close after commit and push
+- Closure state: closed after push
+- Closure comment: https://github.com/KaolaBrother/Kaola-Workflow/issues/1#issuecomment-4440221714
 
 ## Required Agent Compliance
 
