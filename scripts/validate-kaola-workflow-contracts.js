@@ -135,6 +135,18 @@ const codexAgentRoles = [
   'doc-updater',
 ];
 
+const codexAgentReasoningEfforts = {
+  'code-explorer': 'medium',
+  'docs-lookup': 'medium',
+  'planner': 'xhigh',
+  'code-architect': 'high',
+  'tdd-guide': 'medium',
+  'build-error-resolver': 'medium',
+  'code-reviewer': 'high',
+  'security-reviewer': 'high',
+  'doc-updater': 'low',
+};
+
 const agentConfigTemplate = `${pluginRoot}/config/agents.toml`;
 assert(exists(agentConfigTemplate), `${agentConfigTemplate} is missing`);
 assertIncludes(agentConfigTemplate, '[features]');
@@ -143,6 +155,8 @@ assertIncludes(agentConfigTemplate, 'multi_agent = true');
 for (const role of codexAgentRoles) {
   const file = `${pluginRoot}/agents/${role}.toml`;
   assert(exists(file), `${file} is missing`);
+  assert(!/^model\s*=/m.test(read(file)), `${file} must not pin a model name`);
+  assertIncludes(file, `model_reasoning_effort = "${codexAgentReasoningEfforts[role]}"`);
   assertIncludes(file, 'developer_instructions');
   assertIncludes(file, 'Kaola-Workflow for Codex');
   assertIncludes(agentConfigTemplate, `[agents.${role}]`);

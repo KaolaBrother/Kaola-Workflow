@@ -198,12 +198,31 @@ those roles for detached research, planning, execution, repair, review, and
 documentation work; otherwise the current Codex session follows the same role
 contracts locally.
 
+Codex profiles intentionally do not pin model names, so model upgrades can flow
+through the user's active Codex configuration. They only set reasoning effort:
+
+| Role | Reasoning effort |
+| --- | --- |
+| `code-explorer` | `medium` |
+| `docs-lookup` | `medium` |
+| `planner` | `xhigh` |
+| `code-architect` | `high` |
+| `tdd-guide` | `medium` |
+| `build-error-resolver` | `medium` |
+| `code-reviewer` | `high` |
+| `security-reviewer` | `high` |
+| `doc-updater` | `low` |
+
+There is no separate Codex advisor role. Codex advisor gates use the strongest
+available expert model/profile for the current session, or the current session
+performs the same review locally when no detached advisor profile is available.
+
 ## Release Versioning
 
 Current official release versions:
 
 - Claude Code `kaola-workflow` package/plugin: `3.1.0`
-- Codex `kaola-workflow` plugin manifest: `1.1.0`
+- Codex `kaola-workflow` plugin manifest: `1.1.1`
 
 The root `package.json` version is the official repository and Claude Code
 release version. The Codex plugin has its own manifest version in

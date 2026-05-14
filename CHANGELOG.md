@@ -4,6 +4,15 @@
 
 No unreleased changes.
 
+## Codex plugin 1.1.1 - 2026-05-14
+
+### Changed
+
+- Raised the Codex `planner` role to `xhigh` reasoning effort to match the
+  Claude Code Opus-backed planner role.
+- Documented that Codex role profiles do not pin model names and added contract
+  validation for the managed reasoning-effort map.
+
 ## 3.1.0 - 2026-05-13
 
 ### Changed
