@@ -1059,7 +1059,7 @@ exit 0
         const claimScript = path.join(root, 'scripts/kaola-workflow-claim.js');
 
         function runClaim(workdir, sessionId, issue, claimProject) {
-          execFileSync(process.execPath, [
+          const r = spawnSync(process.execPath, [
             claimScript, 'claim',
             '--session', sessionId,
             '--project', claimProject,
@@ -1067,9 +1067,9 @@ exit 0
           ], {
             cwd: workdir,
             encoding: 'utf8',
-            stdio: ['ignore', 'pipe', 'pipe'],
             env: { ...process.env, HOME: workdir, KAOLA_WORKFLOW_OFFLINE: '1' }
           });
+          if (r.status !== 0) throw new Error('runClaim failed (status ' + r.status + ')\nstdout: ' + r.stdout + '\nstderr: ' + r.stderr);
           return {
             lockPath: path.join(workdir, 'kaola-workflow', '.locks', claimProject + '.lock'),
             statePath: path.join(workdir, 'kaola-workflow', claimProject, 'workflow-state.md')
@@ -1109,10 +1109,8 @@ exit 0
             assert(r8d.status === 0, '8D: status exits 0 even with unsafe session_id in lock');
             const results8d = JSON.parse(r8d.stdout);
             const entry8d = results8d.find(e => e.lock && e.lock.project === 'epic8d');
-            assert(
-              entry8d == null || (entry8d.drift && entry8d.drift.includes('session_id unsafe')),
-              '8D: unsafe session_id entry must be absent or have drift ["session_id unsafe"]'
-            );
+            assert(entry8d != null, '8D: status must include entry for epic8d lock');
+            assert(entry8d.drift && entry8d.drift.includes('session_id unsafe'), '8D: unsafe session_id entry must have drift ["session_id unsafe"]');
           } finally {
             fs.rmSync(epic8dTmp, { recursive: true, force: true });
           }
@@ -1177,7 +1175,7 @@ exit 0
           }
         }
 
-        // 8E: re-claim must refresh issue_number and claimed_at (M1 probe)
+        // 8E: claim-after-release — second claim must refresh issue_number and claimed_at (M1 probe)
         {
           const epic8eTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-workflow-epic8e-'));
           try {

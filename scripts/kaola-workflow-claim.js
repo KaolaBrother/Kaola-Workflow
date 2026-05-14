@@ -132,9 +132,9 @@ function updateSinkLease(stateFile, lockData) {
   // Replace entire ## Sink block through end of ## Lease block
   let updated = content.replace(
     /\n## Sink[\s\S]*?(?=\n## [^SL]|\n## L|$)/,
-    sinkBlock
+    () => sinkBlock
   );
-  updated = updated.replace(/(?:^|\n)(## Lease[\s\S]*?)(?=\n##|[\s]*$)/, '\n' + leaseBlock.slice(1));
+  updated = updated.replace(/(?:^|\n)(## Lease[\s\S]*?)(?=\n##|[\s]*$)/, () => '\n' + leaseBlock.slice(1));
   fs.writeFileSync(stateFile, updated);
 }
 
