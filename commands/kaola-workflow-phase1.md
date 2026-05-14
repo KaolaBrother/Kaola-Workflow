@@ -202,6 +202,37 @@ next_command: /kaola-workflow-phase2 {project-name}
 
 Continue to Phase 2 when Phase 1 evidence and compliance rows are complete.
 
+## Step 5b - Per-Issue Roadmap File (Conditional)
+
+If a GitHub issue number N was extracted in Step 1:
+
+1. Resolve the title:
+   - ONLINE: `gh issue view N --json title -q .title`
+   - OFFLINE: use the title from `phase1-research.md`, or `—` if absent
+
+2. Resolve the workflow-project: the current `kaola-workflow/{project}` folder name.
+
+3. Run:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/kaola-workflow}/scripts/kaola-workflow-roadmap.js" init-issue \
+  --issue N \
+  --title "TITLE" \
+  --status open \
+  --workflow-project "WORKFLOW_PROJECT" \
+  --next-step "ready"
+```
+
+4. Stage the new file (skip if `init-issue` printed `skip:`):
+
+```bash
+git add kaola-workflow/.roadmap/issue-N.md
+```
+
+Note: Phases 4 and 5 do NOT update this file. Phase 6 Step 7 deletes it.
+
+If no GitHub issue is linked (`phase1-research.md` records `GitHub Issue: none`), skip this step.
+
 ## Step 6 - Cut Feature Branch
 
 If a claim session is active (`KAOLA_SESSION_ID` is set) and `workflow-state.md`

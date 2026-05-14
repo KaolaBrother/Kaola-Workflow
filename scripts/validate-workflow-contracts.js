@@ -205,4 +205,12 @@ for (const file of phaseCommands) {
   assertIncludes(file, 'Session Heartbeat');
 }
 
+// roadmap-per-issue-regenerator
+assert(exists('scripts/kaola-workflow-roadmap.js'), 'scripts/kaola-workflow-roadmap.js is missing');
+assertIncludes('install.sh', 'kaola-workflow-roadmap.js');
+assertIncludes('hooks/kaola-workflow-pre-commit.sh', '\\.roadmap/');
+assertIncludes('commands/kaola-workflow-phase6.md', 'kaola-workflow-roadmap.js');
+assertIncludes('commands/kaola-workflow-phase1.md', 'init-issue');
+assertIncludes('commands/workflow-next.md', 'kaola-workflow-roadmap.js');
+
 console.log('Workflow contract validation passed');

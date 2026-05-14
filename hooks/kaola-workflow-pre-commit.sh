@@ -28,6 +28,7 @@ KW_PATHS="$(printf '%s\n' "$STAGED" \
   | grep -v '^kaola-workflow/\.locks/' \
   | grep -v '^kaola-workflow/\.sessions/' \
   | grep -v '^kaola-workflow/archive/' \
+  | grep -v '^kaola-workflow/\.roadmap/' \
   | grep -v '^kaola-workflow/ROADMAP\.md$')" || true
 
 [ -z "$KW_PATHS" ] && exit 0

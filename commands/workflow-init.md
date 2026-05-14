@@ -211,6 +211,15 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
   archive, and metadata are complete.
 ```
 
+After creating or confirming `kaola-workflow/ROADMAP.md`, bootstrap the per-issue directory and regenerate:
+
+```bash
+mkdir -p kaola-workflow/.roadmap
+node "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/kaola-workflow}/scripts/kaola-workflow-roadmap.js" generate
+```
+
+If `kaola-workflow-roadmap.js` is unavailable (not yet installed), skip this step.
+
 ### `docs/README.md`
 
 ```markdown

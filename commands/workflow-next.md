@@ -86,9 +86,25 @@ If a GitHub remote and authenticated `gh` are available, fetch open issues:
 gh issue list --limit 100 --json number,title,state,labels,assignees,updatedAt,url
 ```
 
-Ensure `kaola-workflow/ROADMAP.md` exists. Keep it as a compact mirror of
-active unfinished work only. If GitHub is unavailable, continue from the local
+Ensure `kaola-workflow/ROADMAP.md` exists. If GitHub is unavailable, continue from the local
 roadmap and say why sync was skipped.
+
+Validate that `ROADMAP.md` is current with the per-issue source files:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/kaola-workflow}/scripts/kaola-workflow-roadmap.js" validate
+```
+
+If `validate` exits non-zero, print a warning and continue:
+
+```text
+WARNING: kaola-workflow/ROADMAP.md is stale. Per-issue files have changed since the last generate.
+To refresh: node .../kaola-workflow-roadmap.js generate && git add kaola-workflow/ROADMAP.md && git commit -m "chore: refresh ROADMAP.md"
+Continuing with stale ROADMAP.md — roadmap state may not reflect current per-issue files.
+```
+
+Do NOT run `generate` automatically. Do NOT stage or commit `ROADMAP.md` in this step.
+Commits stay phase-owned (Phase 6 Step 7). If `kaola-workflow-roadmap.js` is unavailable, skip validation.
 
 ## Startup Step 3 - Select Project
 

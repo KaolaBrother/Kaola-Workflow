@@ -277,6 +277,7 @@ The workflow includes automation scripts installed to `~/.claude/kaola-workflow/
 | `kaola-workflow-repair-state.js` | Reconstruct workflow state from phase artifacts | Init / Resume |
 | `kaola-workflow-claim.js` | Multi-session lease management (claim, release, heartbeat, sweep, status) | All phases |
 | `kaola-workflow-sink-merge.js` | Branch-per-issue auto-merge sink — rebase-then-ff-merge sequence | Phase 6 |
+| `kaola-workflow-roadmap.js` | ROADMAP.md regenerator — generate/migrate/validate/init-issue subcommands; reads `kaola-workflow/.roadmap/issue-{N}.md` per-issue files | Phase 1, Phase 6 |
 
 The sink-merge script is invoked by Phase 6 Step 8 to automate the final merge sequence. It performs: git fetch, merge-base skip-check, rebase onto origin/main, post-rebase validation, FF-only merge with race-condition retry loop (MAX_AUTOMERGE_RETRIES=3), push, issue close, and branch cleanup. Exit codes: 0 (success), 1 (error), 2 (FF race exhausted).
 
