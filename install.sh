@@ -114,7 +114,8 @@ for script_file in \
   "$SOURCE_SCRIPTS_DIR"/kaola-workflow-repair-state.js \
   "$SOURCE_SCRIPTS_DIR"/kaola-workflow-claim.js \
   "$SOURCE_SCRIPTS_DIR"/kaola-workflow-sink-merge.js \
-  "$SOURCE_SCRIPTS_DIR"/kaola-workflow-roadmap.js; do
+  "$SOURCE_SCRIPTS_DIR"/kaola-workflow-roadmap.js \
+  "$SOURCE_SCRIPTS_DIR"/kaola-workflow-classifier.js; do
   if [[ -f "$script_file" ]]; then
     cp "$script_file" "$SUPPORT_SCRIPTS_DIR/$(basename "$script_file")"
     chmod +x "$SUPPORT_SCRIPTS_DIR/$(basename "$script_file")"

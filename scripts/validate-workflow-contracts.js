@@ -148,7 +148,7 @@ assert(Array.isArray(packageJson.files) && packageJson.files.includes('hooks/'),
 assert(Array.isArray(packageJson.files) && packageJson.files.includes('scripts/'), 'package.json files must include scripts/');
 
 const routerLines = read('commands/workflow-next.md').split(/\r?\n/).length;
-assert(routerLines <= 220, `commands/workflow-next.md must remain a thin router; found ${routerLines} lines`);
+assert(routerLines <= 240, `commands/workflow-next.md must remain a thin router; found ${routerLines} lines`);
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-workflow-contract-'));
 try {
@@ -207,10 +207,15 @@ for (const file of phaseCommands) {
 
 // roadmap-per-issue-regenerator
 assert(exists('scripts/kaola-workflow-roadmap.js'), 'scripts/kaola-workflow-roadmap.js is missing');
+assert(exists('scripts/kaola-workflow-classifier.js'), 'scripts/kaola-workflow-classifier.js is missing');
 assertIncludes('install.sh', 'kaola-workflow-roadmap.js');
+assertIncludes('install.sh', 'kaola-workflow-classifier.js');
 assertIncludes('hooks/kaola-workflow-pre-commit.sh', '\\.roadmap/');
 assertIncludes('commands/kaola-workflow-phase6.md', 'kaola-workflow-roadmap.js');
 assertIncludes('commands/kaola-workflow-phase1.md', 'init-issue');
 assertIncludes('commands/workflow-next.md', 'kaola-workflow-roadmap.js');
+assertIncludes('commands/workflow-next.md', 'kaola-workflow-classifier.js');
+assertIncludes('commands/workflow-next.md', 'Sweep, Classify, And Claim');
+assertIncludes('commands/workflow-next.md', 'Parallel decision:');
 
 console.log('Workflow contract validation passed');

@@ -1,0 +1,1 @@
+docs-lookup: N/A — all patterns are internal Node.js stdlib (fs, path, os, child_process). No external frameworks, APIs, or libraries involved. Internal conventions fully documented in code-explorer.md.

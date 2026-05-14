@@ -278,6 +278,24 @@ The workflow includes automation scripts installed to `~/.claude/kaola-workflow/
 | `kaola-workflow-claim.js` | Multi-session lease management (claim, release, heartbeat, sweep, status) | All phases |
 | `kaola-workflow-sink-merge.js` | Branch-per-issue auto-merge sink — rebase-then-ff-merge sequence | Phase 6 |
 | `kaola-workflow-roadmap.js` | ROADMAP.md regenerator — generate/migrate/validate/init-issue subcommands; reads `kaola-workflow/.roadmap/issue-{N}.md` per-issue files | Phase 1, Phase 6 |
+| `kaola-workflow-classifier.js` | Parallel-work classifier — classifies open issues as green/yellow/red/blocked before claim; reads lock files and issue file sets | Startup (Step 0) |
+
+### Classifier Configuration
+
+The `kaola-workflow-classifier.js` script uses `~/.config/kaola-workflow/config.json` for parallel-work settings:
+
+```json
+{
+  "parallel_mode": "auto"
+}
+```
+
+Valid `parallel_mode` values:
+
+- `auto` (default): Classify each issue as green/yellow/red/blocked before claiming, based on dependency graphs, file-area overlaps, and lock files.
+- Other values: Bypass classification; treat all issues as green for fast claiming.
+
+When an issue receives a `yellow` verdict (shared infrastructure warning), a cache file is written to `kaola-workflow/{project}/.cache/parallel-classifier.md` to flag the caution for the phase team.
 
 The sink-merge script is invoked by Phase 6 Step 8 to automate the final merge sequence. It performs: git fetch, merge-base skip-check, rebase onto origin/main, post-rebase validation, FF-only merge with race-condition retry loop (MAX_AUTOMERGE_RETRIES=3), push, issue close, and branch cleanup. Exit codes: 0 (success), 1 (error), 2 (FF race exhausted).
 

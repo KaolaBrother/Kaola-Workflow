@@ -674,6 +674,134 @@ function main() {
       }
     }
 
+    // Epic Case 6: parallel-classifier — sub-tests 6A–6F + 6E'
+    {
+      const classifierScript = path.join(root, 'scripts', 'kaola-workflow-classifier.js');
+      assert(fs.existsSync(classifierScript), 'Epic Case 6: kaola-workflow-classifier.js must exist');
+
+      const epic6Tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-workflow-epic6-'));
+      try {
+        const locksDir = path.join(epic6Tmp, 'kaola-workflow', '.locks');
+        fs.mkdirSync(locksDir, { recursive: true });
+        const roadmapDir = path.join(epic6Tmp, 'kaola-workflow', '.roadmap');
+        fs.mkdirSync(roadmapDir, { recursive: true });
+
+        // 6A: green — no locks, no claimed projects → disjoint → green
+        fs.writeFileSync(path.join(roadmapDir, 'issue-10.md'),
+          'issue: #10\ntitle: add logging\nstatus: open\nworkflow_project: —\nnext_step: ready\nbody: \n');
+        const out6A = execFileSync(process.execPath, [classifierScript, 'classify', '--issue', '10'],
+          { cwd: epic6Tmp, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
+        const r6A = JSON.parse(out6A.trim());
+        assert(r6A.verdict === 'green', 'Epic Case 6A: green issue must yield green verdict, got ' + r6A.verdict);
+
+        // Setup: add a claimed project with phase3-plan.md referencing commands/ (non-infra)
+        const claimedDir = path.join(epic6Tmp, 'kaola-workflow', 'claimed-project');
+        fs.mkdirSync(claimedDir, { recursive: true });
+        const lockFile6B = JSON.stringify({
+          project: 'claimed-project', session_id: 'sess-6b', issue_number: 20,
+          claimed_at: new Date().toISOString(),
+          expires: new Date(Date.now() + 3600000).toISOString(),
+          last_heartbeat: new Date().toISOString()
+        }, null, 2);
+        fs.writeFileSync(path.join(locksDir, 'claimed-project.lock'), lockFile6B);
+        fs.writeFileSync(path.join(claimedDir, 'phase3-plan.md'),
+          '# Phase 3\nFiles: commands/workflow-next.md, commands/kaola-workflow-phase1.md\n');
+
+        // 6B: red — candidate body mentions commands/ (same non-infra area as claimed)
+        fs.writeFileSync(path.join(roadmapDir, 'issue-11.md'),
+          'issue: #11\ntitle: update commands\nstatus: open\nworkflow_project: —\nnext_step: ready\nbody: commands/workflow-next.md changes\n');
+        const out6B = execFileSync(process.execPath, [classifierScript, 'classify', '--issue', '11'],
+          { cwd: epic6Tmp, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
+        const r6B = JSON.parse(out6B.trim());
+        assert(r6B.verdict === 'red', 'Epic Case 6B: file overlap must yield red verdict, got ' + r6B.verdict);
+
+        // Update claimed to reference scripts/ (shared infra)
+        fs.writeFileSync(path.join(claimedDir, 'phase3-plan.md'),
+          '# Phase 3\nFiles: scripts/kaola-workflow-claim.js\n');
+
+        // 6C: yellow — candidate body mentions scripts/ (shared infra area)
+        fs.writeFileSync(path.join(roadmapDir, 'issue-12.md'),
+          'issue: #12\ntitle: add script\nstatus: open\nworkflow_project: —\nnext_step: ready\nbody: scripts/new-helper.js changes\n');
+        const out6C = execFileSync(process.execPath, [classifierScript, 'classify', '--issue', '12'],
+          { cwd: epic6Tmp, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
+        const r6C = JSON.parse(out6C.trim());
+        assert(r6C.verdict === 'yellow', 'Epic Case 6C: shared-infra overlap must yield yellow verdict, got ' + r6C.verdict);
+        // Simulate router writing the yellow warning cache file
+        const proj6C = 'issue-12';
+        fs.mkdirSync(path.join(epic6Tmp, 'kaola-workflow', proj6C, '.cache'), { recursive: true });
+        const warningFile6C = path.join(epic6Tmp, 'kaola-workflow', proj6C, '.cache', 'parallel-classifier.md');
+        fs.appendFileSync(warningFile6C, 'parallel-classifier: shared-infra warning for issue #12\n');
+        const cacheContent6C = fs.readFileSync(warningFile6C, 'utf8');
+        assert(cacheContent6C.includes('shared-infra warning'), 'Epic Case 6C: cache file must contain shared-infra warning');
+
+        // 6D: OFFLINE + roadmap depends-on → blocked (conservative)
+        fs.writeFileSync(path.join(roadmapDir, 'issue-13.md'),
+          'issue: #13\ntitle: blocked feature\nstatus: open\nworkflow_project: —\nnext_step: blocked by #20\n');
+        const out6D = execFileSync(process.execPath, [classifierScript, 'classify', '--issue', '13'],
+          { cwd: epic6Tmp, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
+        const r6D = JSON.parse(out6D.trim());
+        assert(r6D.verdict === 'blocked', 'Epic Case 6D: OFFLINE + depends-on must yield blocked, got ' + r6D.verdict);
+        assert(r6D.reasoning.includes('OFFLINE'), 'Epic Case 6D: reasoning must mention OFFLINE');
+
+        // 6E: online depends-on with dep OPEN → blocked
+        // Create gh shim: "issue view 15" returns issue with depends-on:#30; "issue view 30" returns open state
+        const ghShimDir = path.join(epic6Tmp, 'bin');
+        fs.mkdirSync(ghShimDir, { recursive: true });
+        const ghShimPath = path.join(ghShimDir, 'gh');
+        const ghShimScript = [
+          '#!/bin/sh',
+          'ARGS="$@"',
+          'case "$ARGS" in',
+          '  *"issue view 15"*)',
+          '    echo \'{"number":15,"title":"needs open dep","body":"","labels":[{"name":"depends-on:#30"}],"state":"open"}\'',
+          '    ;;',
+          '  *"issue view 30"*)',
+          '    echo \'{"state":"open","closedAt":null}\'',
+          '    ;;',
+          '  *)',
+          '    echo \'[]\' ;;',
+          'esac',
+        ].join('\n');
+        fs.writeFileSync(ghShimPath, ghShimScript);
+        fs.chmodSync(ghShimPath, 0o755);
+        fs.writeFileSync(path.join(roadmapDir, 'issue-15.md'),
+          'issue: #15\ntitle: needs open dep\nstatus: open\nworkflow_project: —\nnext_step: ready\n');
+        const out6E = execFileSync(process.execPath, [classifierScript, 'classify', '--issue', '15'],
+          { cwd: epic6Tmp, encoding: 'utf8',
+            env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', PATH: ghShimDir + ':' + (process.env.PATH || '') } });
+        const r6E = JSON.parse(out6E.trim());
+        assert(r6E.verdict === 'blocked', 'Epic Case 6E: online depends-on open must yield blocked, got ' + r6E.verdict);
+
+        // 6E': online depends-on with dep CLOSED → not blocked
+        const ghShimScript2 = ghShimScript
+          .replace('"state":"open","closedAt":null', '"state":"closed","closedAt":"2026-01-01T00:00:00Z"');
+        fs.writeFileSync(ghShimPath, ghShimScript2);
+        const out6E2 = execFileSync(process.execPath, [classifierScript, 'classify', '--issue', '15'],
+          { cwd: epic6Tmp, encoding: 'utf8',
+            env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', PATH: ghShimDir + ':' + (process.env.PATH || '') } });
+        const r6E2 = JSON.parse(out6E2.trim());
+        assert(r6E2.verdict !== 'blocked', 'Epic Case 6E\': dep closed must not yield blocked, got ' + r6E2.verdict);
+
+        // 6F: claimed-set filtering — issue already in lock file → exit code 2
+        const lockFile6F = JSON.stringify({
+          project: 'another-project', session_id: 'sess-6f', issue_number: 10,
+          claimed_at: new Date().toISOString(),
+          expires: new Date(Date.now() + 3600000).toISOString(),
+          last_heartbeat: new Date().toISOString()
+        }, null, 2);
+        fs.writeFileSync(path.join(locksDir, 'another-project.lock'), lockFile6F);
+        let exit6F = 0;
+        try {
+          execFileSync(process.execPath, [classifierScript, 'classify', '--issue', '10'],
+            { cwd: epic6Tmp, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
+        } catch (e) { exit6F = e.status || 1; }
+        assert(exit6F === 2, 'Epic Case 6F: already-claimed issue must cause exit code 2, got ' + exit6F);
+
+      } finally {
+        fs.rmSync(epic6Tmp, { recursive: true, force: true });
+      }
+    }
+
     console.log('Workflow walkthrough simulation passed');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
