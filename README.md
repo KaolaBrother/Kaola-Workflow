@@ -415,6 +415,7 @@ Multiple concurrent Kaola-Workflow sessions can safely coexist when each targets
 - Explicit recovery/handoff: `kaola-workflow-claim.js handoff --project <name> --session <id>` transfers an unfinished project to a new session when the user intentionally wants to pick it up
 - Background ticker (`ticker` subcommand) keeps leases active across machines with 15-min heartbeat intervals
 - Claim race tiebreaker: lowest GitHub comment ID wins; losers yield cleanly and release the lease
+- Simultaneous startup race retry: if a session classifies an issue as claimable but loses the local claim race before writing its lock, bootstrap continues scanning the open issue list and claims the next green/yellow issue automatically
 - Remote sweeper (`sweep` subcommand) checks GitHub comment `updated_at` — skips active sessions (< 24h), clears stale ones (≥ 24h)
 - Pre-commit hook blocks commits that stage files from a project owned by a different session
 

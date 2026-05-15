@@ -161,6 +161,8 @@ assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'function e
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'plugins\\/kaola-workflow');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, 'CODEX_THREAD_ID');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, 'function cmdHandoff');
+assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, 'function runBootstrapClaimFirstAvailable');
+assertIncludes(simulateScript, 'real parallel bootstrap coordination and claim-race retry');
 assertIncludes(simulateScript, 'Kaola-Workflow walkthrough simulation passed');
 assertNotIncludes(simulateScript, '../../../scripts/kaola-workflow-claim.js');
 assertIncludes(installAgentsScript, 'BEGIN kaola-workflow agents');

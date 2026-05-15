@@ -2,7 +2,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { execFileSync, spawn } = require('child_process');
 
 const pluginRoot = path.resolve(__dirname, '..');
 const repairScript = path.join(pluginRoot, 'scripts', 'kaola-workflow-repair-state.js');
@@ -12,6 +12,11 @@ const project = 'simulated-feature';
 function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
+
+const waitExit = (child, timeoutMs) => new Promise((resolve, reject) => {
+  const t = setTimeout(() => reject(new Error('exit timeout')), timeoutMs);
+  child.on('exit', (code, signal) => { clearTimeout(t); resolve({ code, signal }); });
+});
 
 function write(file, content) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -68,7 +73,7 @@ function assertRepair(workdir, expectedSkill, expectedPhase) {
   assert(read(stateFile).includes('last_result: state_repaired_from_artifacts'), 'state must record repair provenance');
 }
 
-function main() {
+async function main() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-workflow-walkthrough-'));
   try {
     const installRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-workflow-agents-'));
@@ -704,17 +709,146 @@ exit 0
           'Case 5h: completed workflow-state must not block fresh claim, got ' + completedClaimCode);
       }
 
-      // Case 5i: locks are isolated by project — all claimed projects must still exist independently
+      // Case 5i: real parallel bootstrap coordination and claim-race retry.
+      {
+        const retryDir = path.join(case5Dir, 'retry-race');
+        const retryBin = path.join(retryDir, 'bin');
+        const retryLocks = path.join(retryDir, 'kaola-workflow', '.locks');
+        fs.mkdirSync(retryBin, { recursive: true });
+        fs.mkdirSync(retryLocks, { recursive: true });
+        execFileSync('git', ['init', retryDir], { encoding: 'utf8' });
+        const retryGh = path.join(retryBin, 'gh');
+        write(retryGh, `#!/bin/sh
+if [ "$1" = "issue" ] && [ "$2" = "list" ]; then
+  printf '[{"number":931},{"number":932}]'
+  exit 0
+fi
+if [ "$1" = "issue" ] && [ "$2" = "view" ]; then
+  num="$3"
+  if [ "$num" = "931" ]; then
+    cat > "${retryLocks}/issue-931.lock" <<'JSON'
+{
+  "project": "issue-931",
+  "session_id": "sess-plugin-race-winner",
+  "machine_id": "plugin-race-machine",
+  "claimed_at": "2026-05-15T00:00:00.000Z",
+  "expires": "2099-01-01T00:00:00.000Z",
+  "last_heartbeat": "2026-05-15T00:00:00.000Z",
+  "issue_number": 931,
+  "claim_comment_id": null,
+  "sink": "merge",
+  "runtime": "codex"
+}
+JSON
+  fi
+  printf '{"number":%s,"title":"Plugin Race %s","body":"commands/plugin-race-%s.md","labels":[],"state":"OPEN"}' "$num" "$num" "$num"
+  exit 0
+fi
+if [ "$1" = "label" ] && [ "$2" = "create" ]; then exit 0; fi
+if [ "$1" = "issue" ] && [ "$2" = "edit" ]; then exit 0; fi
+if [ "$1" = "issue" ] && [ "$2" = "comment" ]; then
+  echo "https://github.com/test/repo/issues/$3#issuecomment-$3"
+  exit 0
+fi
+if [ "$1" = "repo" ] && [ "$2" = "view" ]; then
+  printf '{"owner":{"login":"test"},"name":"repo"}'
+  exit 0
+fi
+if [ "$1" = "api" ]; then printf '[]'; exit 0; fi
+exit 0
+`);
+        fs.chmodSync(retryGh, 0o755);
+        const retryPick = JSON.parse(execFileSync(process.execPath, [
+          claimScript, 'bootstrap',
+          '--session', 'sess-plugin-race-retry',
+          '--runtime', 'codex'
+        ], {
+          cwd: retryDir,
+          encoding: 'utf8',
+          env: { ...process.env, PATH: retryBin + path.delimiter + (process.env.PATH || ''), HOME: retryDir }
+        }).trim());
+        assert(retryPick.issue === 932,
+          'Case 5i-a: plugin bootstrap must retry after issue 931 race and claim 932, got #' + retryPick.issue);
+        assert(fs.existsSync(path.join(retryLocks, 'issue-931.lock')), 'Case 5i-a: injected race winner lock must remain');
+        assert(fs.existsSync(path.join(retryLocks, 'issue-932.lock')), 'Case 5i-a: retry lock for issue 932 must exist');
+
+        const parallelDir = path.join(case5Dir, 'parallel-bootstrap');
+        const parallelBin = path.join(parallelDir, 'bin');
+        const parallelLocks = path.join(parallelDir, 'kaola-workflow', '.locks');
+        fs.mkdirSync(parallelBin, { recursive: true });
+        fs.mkdirSync(parallelLocks, { recursive: true });
+        execFileSync('git', ['init', parallelDir], { encoding: 'utf8' });
+        const parallelGh = path.join(parallelBin, 'gh');
+        write(parallelGh, `#!/bin/sh
+if [ "$1" = "issue" ] && [ "$2" = "list" ]; then
+  printf '[{"number":941},{"number":942}]'
+  exit 0
+fi
+if [ "$1" = "issue" ] && [ "$2" = "view" ]; then
+  sleep 0.05
+  num="$3"
+  printf '{"number":%s,"title":"Plugin Parallel %s","body":"commands/plugin-parallel-%s.md","labels":[],"state":"OPEN"}' "$num" "$num" "$num"
+  exit 0
+fi
+if [ "$1" = "label" ] && [ "$2" = "create" ]; then exit 0; fi
+if [ "$1" = "issue" ] && [ "$2" = "edit" ]; then exit 0; fi
+if [ "$1" = "issue" ] && [ "$2" = "comment" ]; then
+  echo "https://github.com/test/repo/issues/$3#issuecomment-$3"
+  exit 0
+fi
+if [ "$1" = "repo" ] && [ "$2" = "view" ]; then
+  printf '{"owner":{"login":"test"},"name":"repo"}'
+  exit 0
+fi
+if [ "$1" = "api" ]; then printf '[]'; exit 0; fi
+exit 0
+`);
+        fs.chmodSync(parallelGh, 0o755);
+
+        function spawnBootstrap(session) {
+          const child = spawn(process.execPath, [
+            claimScript, 'bootstrap',
+            '--session', session,
+            '--runtime', 'codex'
+          ], {
+            cwd: parallelDir,
+            env: { ...process.env, PATH: parallelBin + path.delimiter + (process.env.PATH || ''), HOME: parallelDir },
+            stdio: ['ignore', 'pipe', 'pipe']
+          });
+          let stdout = '';
+          let stderr = '';
+          child.stdout.on('data', chunk => { stdout += chunk.toString(); });
+          child.stderr.on('data', chunk => { stderr += chunk.toString(); });
+          return { child, session, get stdout() { return stdout; }, get stderr() { return stderr; } };
+        }
+
+        const a = spawnBootstrap('sess-plugin-parallel-a');
+        const b = spawnBootstrap('sess-plugin-parallel-b');
+        const [ra, rb] = await Promise.all([waitExit(a.child, 5000), waitExit(b.child, 5000)]);
+        assert(ra.code === 0, 'Case 5i-b: plugin session A failed: stdout=' + a.stdout + ' stderr=' + a.stderr);
+        assert(rb.code === 0, 'Case 5i-b: plugin session B failed: stdout=' + b.stdout + ' stderr=' + b.stderr);
+        const picks = [JSON.parse(a.stdout.trim()), JSON.parse(b.stdout.trim())];
+        const issues = new Set(picks.map(p => p.issue));
+        const sessions = new Set(picks.map(p => p.session));
+        assert(issues.has(941) && issues.has(942) && issues.size === 2,
+          'Case 5i-b: plugin parallel sessions must split issues 941 and 942, got: ' + JSON.stringify(picks));
+        assert(sessions.has('sess-plugin-parallel-a') && sessions.has('sess-plugin-parallel-b'),
+          'Case 5i-b: plugin parallel output must preserve session ids, got: ' + JSON.stringify(picks));
+        assert(fs.existsSync(path.join(parallelLocks, 'issue-941.lock')), 'Case 5i-b: issue 941 lock missing');
+        assert(fs.existsSync(path.join(parallelLocks, 'issue-942.lock')), 'Case 5i-b: issue 942 lock missing');
+      }
+
+      // Case 5j: locks are isolated by project — all claimed projects must still exist independently
       assert(fs.existsSync(path.join(case5Dir, 'kaola-workflow', '.locks', 'project-alpha.lock')),
-        'Case 5i: project-alpha lock must still exist');
+        'Case 5j: project-alpha lock must still exist');
       assert(fs.existsSync(path.join(case5Dir, 'kaola-workflow', '.locks', 'project-beta.lock')),
-        'Case 5i: project-beta lock must still exist');
+        'Case 5j: project-beta lock must still exist');
       assert(fs.existsSync(path.join(case5Dir, 'kaola-workflow', '.locks', 'issue-11.lock')),
-        'Case 5i: issue-11 lock must still exist');
+        'Case 5j: issue-11 lock must still exist');
       assert(fs.existsSync(path.join(case5Dir, 'kaola-workflow', '.locks', 'issue-12.lock')),
-        'Case 5i: issue-12 lock must still exist');
+        'Case 5j: issue-12 lock must still exist');
       assert(fs.existsSync(path.join(case5Dir, 'kaola-workflow', '.locks', 'project-label.lock')),
-        'Case 5i: project-label lock must still exist');
+        'Case 5j: project-label lock must still exist');
 
       const finalAlpha = JSON.parse(fs.readFileSync(
         path.join(case5Dir, 'kaola-workflow', '.locks', 'project-alpha.lock'), 'utf8'
@@ -722,7 +856,7 @@ exit 0
       const finalBeta = JSON.parse(fs.readFileSync(
         path.join(case5Dir, 'kaola-workflow', '.locks', 'project-beta.lock'), 'utf8'
       ));
-      assert(finalAlpha.runtime !== finalBeta.runtime, 'Case 5i: locks must have different runtime fields');
+      assert(finalAlpha.runtime !== finalBeta.runtime, 'Case 5j: locks must have different runtime fields');
     } finally {
       fs.rmSync(case5Dir, { recursive: true, force: true });
     }
@@ -733,4 +867,4 @@ exit 0
   }
 }
 
-main();
+main().catch(e => { console.error(e); process.exitCode = 1; });

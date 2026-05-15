@@ -2710,6 +2710,150 @@ exit 0
       }
     }
 
+    // Epic Case 13: true parallel bootstrap coordination.
+    // One test injects a lock after classification but before claim to emulate
+    // a lost startup race. The second test starts two sessions at once and
+    // requires them to split across the two available issues automatically.
+    {
+      const claimScript = path.join(root, 'scripts', 'kaola-workflow-claim.js');
+
+      const retryTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-workflow-epic13-retry-'));
+      try {
+        execFileSync('git', ['init', '-q', '-b', 'main', retryTmp]);
+        const retryBin = path.join(retryTmp, 'bin');
+        const retryLocks = path.join(retryTmp, 'kaola-workflow', '.locks');
+        fs.mkdirSync(retryBin, { recursive: true });
+        fs.mkdirSync(retryLocks, { recursive: true });
+        const retryGh = path.join(retryBin, 'gh');
+        fs.writeFileSync(retryGh, `#!/bin/sh
+if [ "$1" = "issue" ] && [ "$2" = "list" ]; then
+  printf '[{"number":901},{"number":902}]'
+  exit 0
+fi
+if [ "$1" = "issue" ] && [ "$2" = "view" ]; then
+  num="$3"
+  if [ "$num" = "901" ]; then
+    cat > "${retryLocks}/issue-901.lock" <<'JSON'
+{
+  "project": "issue-901",
+  "session_id": "sess-race-winner",
+  "machine_id": "race-machine",
+  "claimed_at": "2026-05-15T00:00:00.000Z",
+  "expires": "2099-01-01T00:00:00.000Z",
+  "last_heartbeat": "2026-05-15T00:00:00.000Z",
+  "issue_number": 901,
+  "claim_comment_id": null,
+  "sink": "merge",
+  "runtime": "codex"
+}
+JSON
+  fi
+  printf '{"number":%s,"title":"Race %s","body":"commands/race-%s.md","labels":[],"state":"OPEN"}' "$num" "$num" "$num"
+  exit 0
+fi
+if [ "$1" = "label" ] && [ "$2" = "create" ]; then exit 0; fi
+if [ "$1" = "issue" ] && [ "$2" = "edit" ]; then exit 0; fi
+if [ "$1" = "issue" ] && [ "$2" = "comment" ]; then
+  echo "https://github.com/test/repo/issues/$3#issuecomment-$3"
+  exit 0
+fi
+if [ "$1" = "repo" ] && [ "$2" = "view" ]; then
+  printf '{"owner":{"login":"test"},"name":"repo"}'
+  exit 0
+fi
+if [ "$1" = "api" ]; then printf '[]'; exit 0; fi
+exit 0
+`);
+        fs.chmodSync(retryGh, 0o755);
+
+        const retryOut = execFileSync(process.execPath, [
+          claimScript, 'bootstrap',
+          '--session', 'sess-race-retry',
+          '--runtime', 'codex'
+        ], {
+          cwd: retryTmp,
+          encoding: 'utf8',
+          env: { ...process.env, PATH: retryBin + path.delimiter + (process.env.PATH || ''), HOME: retryTmp }
+        });
+        const retryPick = JSON.parse(retryOut.trim());
+        assert(retryPick.issue === 902,
+          '13A: bootstrap must retry after losing issue 901 race and claim issue 902, got: ' + retryOut);
+        assert(fs.existsSync(path.join(retryLocks, 'issue-901.lock')), '13A: injected race winner lock must remain');
+        assert(fs.existsSync(path.join(retryLocks, 'issue-902.lock')), '13A: retry session lock for issue 902 must exist');
+      } finally {
+        fs.rmSync(retryTmp, { recursive: true, force: true });
+      }
+
+      const parallelTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-workflow-epic13-parallel-'));
+      try {
+        execFileSync('git', ['init', '-q', '-b', 'main', parallelTmp]);
+        const parallelBin = path.join(parallelTmp, 'bin');
+        const parallelLocks = path.join(parallelTmp, 'kaola-workflow', '.locks');
+        fs.mkdirSync(parallelBin, { recursive: true });
+        fs.mkdirSync(parallelLocks, { recursive: true });
+        const parallelGh = path.join(parallelBin, 'gh');
+        fs.writeFileSync(parallelGh, `#!/bin/sh
+if [ "$1" = "issue" ] && [ "$2" = "list" ]; then
+  printf '[{"number":911},{"number":912}]'
+  exit 0
+fi
+if [ "$1" = "issue" ] && [ "$2" = "view" ]; then
+  sleep 0.05
+  num="$3"
+  printf '{"number":%s,"title":"Parallel %s","body":"commands/parallel-%s.md","labels":[],"state":"OPEN"}' "$num" "$num" "$num"
+  exit 0
+fi
+if [ "$1" = "label" ] && [ "$2" = "create" ]; then exit 0; fi
+if [ "$1" = "issue" ] && [ "$2" = "edit" ]; then exit 0; fi
+if [ "$1" = "issue" ] && [ "$2" = "comment" ]; then
+  echo "https://github.com/test/repo/issues/$3#issuecomment-$3"
+  exit 0
+fi
+if [ "$1" = "repo" ] && [ "$2" = "view" ]; then
+  printf '{"owner":{"login":"test"},"name":"repo"}'
+  exit 0
+fi
+if [ "$1" = "api" ]; then printf '[]'; exit 0; fi
+exit 0
+`);
+        fs.chmodSync(parallelGh, 0o755);
+
+        function spawnBootstrap(session) {
+          const child = spawn(process.execPath, [
+            claimScript, 'bootstrap',
+            '--session', session,
+            '--runtime', 'codex'
+          ], {
+            cwd: parallelTmp,
+            env: { ...process.env, PATH: parallelBin + path.delimiter + (process.env.PATH || ''), HOME: parallelTmp },
+            stdio: ['ignore', 'pipe', 'pipe']
+          });
+          let stdout = '';
+          let stderr = '';
+          child.stdout.on('data', chunk => { stdout += chunk.toString(); });
+          child.stderr.on('data', chunk => { stderr += chunk.toString(); });
+          return { child, session, get stdout() { return stdout; }, get stderr() { return stderr; } };
+        }
+
+        const a = spawnBootstrap('sess-parallel-a');
+        const b = spawnBootstrap('sess-parallel-b');
+        const [ra, rb] = await Promise.all([waitExit(a.child, 5000), waitExit(b.child, 5000)]);
+        assert(ra.code === 0, '13B: session A bootstrap failed: stdout=' + a.stdout + ' stderr=' + a.stderr);
+        assert(rb.code === 0, '13B: session B bootstrap failed: stdout=' + b.stdout + ' stderr=' + b.stderr);
+        const picks = [JSON.parse(a.stdout.trim()), JSON.parse(b.stdout.trim())];
+        const issueSet = new Set(picks.map(p => p.issue));
+        const sessionSet = new Set(picks.map(p => p.session));
+        assert(issueSet.has(911) && issueSet.has(912) && issueSet.size === 2,
+          '13B: parallel sessions must split across issues 911 and 912, got: ' + JSON.stringify(picks));
+        assert(sessionSet.has('sess-parallel-a') && sessionSet.has('sess-parallel-b'),
+          '13B: bootstrap output must preserve both session ids, got: ' + JSON.stringify(picks));
+        assert(fs.existsSync(path.join(parallelLocks, 'issue-911.lock')), '13B: issue 911 lock missing');
+        assert(fs.existsSync(path.join(parallelLocks, 'issue-912.lock')), '13B: issue 912 lock missing');
+      } finally {
+        fs.rmSync(parallelTmp, { recursive: true, force: true });
+      }
+    }
+
     // LOW-3: corpus-grep — every phase shim must contain liveness and session rehydration checks
     {
       const shimPaths = [

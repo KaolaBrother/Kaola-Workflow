@@ -208,6 +208,8 @@ assertIncludes('install.sh', 'kaola-workflow-sink-merge.js');
 assertIncludes('scripts/kaola-workflow-claim.js', 'workflow/issue-');
 assertIncludes('scripts/kaola-workflow-claim.js', 'CODEX_THREAD_ID');
 assertIncludes('scripts/kaola-workflow-claim.js', 'function cmdHandoff');
+assertIncludes('scripts/kaola-workflow-claim.js', 'function runBootstrapClaimFirstAvailable');
+assertIncludes('scripts/simulate-workflow-walkthrough.js', 'Epic Case 13: true parallel bootstrap coordination');
 assertIncludes('commands/kaola-workflow-phase6.md', 'kaola-workflow-sink-merge.js');
 assertIncludes('commands/workflow-next.md', 'Branch:');
 assertIncludes('scripts/kaola-workflow-sink-merge.js', 'MAX_AUTOMERGE_RETRIES');

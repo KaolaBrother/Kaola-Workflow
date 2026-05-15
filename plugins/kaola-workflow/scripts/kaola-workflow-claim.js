@@ -537,13 +537,29 @@ function runBootstrapClaim(claimScript, args, pick) {
   assert(isSafeName(pick.project), 'classifier returned unsafe project name: ' + pick.project);
   const claimArgs = ['claim', '--session', args.session, '--project', pick.project, '--issue', String(pick.pick), '--runtime', args.runtime || 'claude'];
   if (args.sink) claimArgs.push('--sink', args.sink);
-  execFileSync(process.execPath, [claimScript, ...claimArgs], { encoding: 'utf8' });
+  try {
+    execFileSync(process.execPath, [claimScript, ...claimArgs], { encoding: 'utf8' });
+  } catch (e) {
+    if (e.status === 2) return false;
+    throw e;
+  }
   if (pick.verdict === 'yellow') {
     const cacheDir = path.join(getRoot(), 'kaola-workflow', pick.project, '.cache');
     fs.mkdirSync(cacheDir, { recursive: true });
     fs.appendFileSync(path.join(cacheDir, 'parallel-classifier.md'), 'parallel-classifier: shared-infra warning for issue #' + pick.pick + '\n');
   }
-  return pick;
+  return true;
+}
+
+function runBootstrapClaimFirstAvailable(claimScript, classifierScript, args) {
+  if (OFFLINE || !fs.existsSync(classifierScript)) return { pick: null };
+  const issues = listOpenIssues(getRoot());
+  for (let i = 0; i < issues.length; i++) {
+    const pick = pickFirstActionableIssue(classifierScript, issues.slice(i, i + 1));
+    if (!pick.pick) continue;
+    if (runBootstrapClaim(claimScript, args, pick)) return pick;
+  }
+  return { pick: null };
 }
 
 function cmdBootstrap() {
@@ -565,13 +581,12 @@ function cmdBootstrap() {
     }) + '\n');
     return;
   }
-  const pick = runBootstrapClassify(classifierScript, args);
+  const pick = runBootstrapClaimFirstAvailable(__filename, classifierScript, args);
   if (!pick.pick) {
     process.stderr.write('bootstrap: no unclaimed work available for session ' + args.session + '\n');
     process.exitCode = 1;
     return;
   }
-  runBootstrapClaim(__filename, args, pick);
   process.stdout.write(JSON.stringify({ project: pick.project, issue: pick.pick, verdict: pick.verdict, session: args.session }) + '\n');
 }
 
