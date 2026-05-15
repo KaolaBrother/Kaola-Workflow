@@ -1,5 +1,5 @@
 issue: #10
 title: multi-session substrate: hardening pass
-status: open
+status: closed
 workflow_project: —
 next_step: ready (unblocked)
