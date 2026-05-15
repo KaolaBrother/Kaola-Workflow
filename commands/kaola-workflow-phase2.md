@@ -27,11 +27,17 @@ kaola-workflow/{project}/.cache/docs-lookup.md
 
 ## Session Heartbeat
 
-If a claim session is active, update the heartbeat before proceeding:
+If a claim session is active, ensure the background heartbeat ticker is running:
 
 ```bash
-[ -n "${KAOLA_SESSION_ID:-}" ] && \
-  node "${CLAUDE_PLUGIN_ROOT:-./}/scripts/kaola-workflow-claim.js" heartbeat --session "$KAOLA_SESSION_ID"
+[ -n "${KAOLA_SESSION_ID:-}" ] && {
+  _TICKER_PID_FILE="$(git rev-parse --show-toplevel)/kaola-workflow/.tickers/${KAOLA_SESSION_ID}.pid"
+  if [ ! -f "$_TICKER_PID_FILE" ]; then
+    nohup node "${CLAUDE_PLUGIN_ROOT:-./}/scripts/kaola-workflow-claim.js" ticker \
+      --session "$KAOLA_SESSION_ID" >/dev/null 2>&1 &
+    disown
+  fi
+}
 ```
 
 ## Resume Detection

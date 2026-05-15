@@ -28,6 +28,41 @@ function ghExec(args) {
   return execFileSync('gh', args, { encoding: 'utf8' }).trim();
 }
 
+function getRepoOwnerName() {
+  const raw = ghExec(['repo', 'view', '--json', 'owner,name']);
+  if (!raw) return null;
+  try {
+    const d = JSON.parse(raw);
+    return { owner: d.owner.login, name: d.name };
+  } catch (_) { return null; }
+}
+
+function runTiebreakerCheck(issueNum, sessionId, commentId) {
+  const repo = getRepoOwnerName();
+  if (!repo) return 'stay';
+  const claimMarker = '<!-- kw:claim sess=';
+  const delays = [0, 250, 750];
+  for (let i = 0; i < delays.length; i++) {
+    if (delays[i]) sleepMs(delays[i]);
+    const raw = ghExec(['api', 'repos/' + repo.owner + '/' + repo.name + '/issues/' + issueNum + '/comments']);
+    if (!raw) continue;
+    let comments;
+    try { comments = JSON.parse(raw); } catch (_) { continue; }
+    const candidates = comments.filter(function(c) { return c.body && c.body.includes(claimMarker); });
+    if (candidates.length === 0) continue;
+    candidates.sort(function(a, b) { return a.id - b.id; });
+    const winner = candidates[0];
+    if (String(winner.id) === String(commentId)) return 'stay';
+    return { yield: true, winnerId: winner.id, winnerBody: winner.body };
+  }
+  return 'stay';
+}
+
+function postReleaseComment(issueNum, sessionId, reason) {
+  if (!issueNum || OFFLINE) return;
+  try { ghExec(['issue', 'comment', String(issueNum), '--body', reason + ' (session: ' + sessionId + ')']); } catch (_) {}
+}
+
 function getRoot() {
   try {
     return execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
@@ -175,13 +210,29 @@ function writeSessionFile(root, sessionId, machineId) {
 function postGitHubClaim(issueNum, sessionId) {
   if (!issueNum) return null;
   ghExec(['issue', 'edit', String(issueNum), '--add-label', 'workflow:in-progress', '--add-assignee', '@me']);
-  const out = ghExec(['issue', 'comment', String(issueNum), '--body', '🔒 Session claimed by ' + sessionId]);
-  const m = out.match(/comments\/(\d+)/);
+  const out = ghExec(['issue', 'comment', String(issueNum), '--body', '🔒 Session claimed by ' + sessionId + '\n<!-- kw:claim sess=' + sessionId + ' -->']);
+  const m = out.match(/issuecomment-(\d+)/);
   return m ? m[1] : null;
 }
 
-function cmdClaim() {
-  const args = parseArgs(process.argv.slice(3));
+function handleTiebreakerYield(root, args, tbResult) {
+  releaseSession(root, args.session, 'tiebreaker-yield');
+  const winnerSid = (tbResult.winnerBody.match(/kw:claim sess=([^\s>]+)/) || [])[1] || 'unknown';
+  postReleaseComment(args.issue, args.session, ':yielded → ' + winnerSid);
+  // Adoption stub: push existing branch if one was already cut
+  try {
+    const branches = execFileSync('git', ['branch', '--list', 'workflow/issue-' + args.issue + '-*'], { encoding: 'utf8' }).trim();
+    if (branches) {
+      const branch = branches.split('\n')[0].trim().replace(/^\*\s*/, '');
+      execFileSync('git', ['push', 'origin', branch], { encoding: 'utf8' });
+      postReleaseComment(args.issue, args.session, ':branch pushed → ' + branch);
+    }
+  } catch (_) {}
+  process.exitCode = 1;
+  return true;
+}
+
+function validateClaimArgs(args) {
   assert(args.session, '--session <id> required for claim');
   assert(args.project, '--project <name> required for claim');
   assert(isSafeName(args.project), '--project must be a simple folder name with no path separators');
@@ -190,15 +241,10 @@ function cmdClaim() {
     assert(Number.isFinite(args.issue) && args.issue > 0, '--issue must be a positive integer');
   }
   assert(!args.sink || args.sink === 'merge' || args.sink === 'pr', '--sink must be "merge" or "pr"');
+}
 
-  const root = getRoot();
-  const machineId = getMachineId();
-  const now = new Date();
-
-  fs.mkdirSync(locksDir(root), { recursive: true });
-
-  const lp = lockPath(root, args.project);
-  const lockData = {
+function buildLockData(args, machineId, now) {
+  return {
     project: args.project,
     session_id: args.session,
     machine_id: machineId,
@@ -211,6 +257,20 @@ function cmdClaim() {
     pr_url: null,
     pr_number: null,
   };
+}
+
+function cmdClaim() {
+  const args = parseArgs(process.argv.slice(3));
+  validateClaimArgs(args);
+
+  const root = getRoot();
+  const machineId = getMachineId();
+  const now = new Date();
+
+  fs.mkdirSync(locksDir(root), { recursive: true });
+
+  const lp = lockPath(root, args.project);
+  const lockData = buildLockData(args, machineId, now);
 
   for (let i = 0; i < 3; i++) {
     try { writeLockFile(lp, lockData); break; }
@@ -222,6 +282,15 @@ function cmdClaim() {
   let commentId = null;
   if (!OFFLINE && args.issue != null) {
     try { commentId = postGitHubClaim(args.issue, args.session); } catch (_) {}
+  }
+
+  // Tiebreaker: if another session claimed first (lower comment ID), yield
+  if (!OFFLINE && args.issue != null && commentId) {
+    const tbResult = runTiebreakerCheck(args.issue, args.session, commentId);
+    if (tbResult !== 'stay' && tbResult.yield) {
+      handleTiebreakerYield(root, args, tbResult);
+      return;
+    }
   }
 
   const finalLock = commentId !== null
@@ -250,7 +319,7 @@ function releaseSession(root, sessionId, reason) {
 
   if (!OFFLINE && match.issue_number != null) {
     try {
-      ghExec(['issue', 'edit', String(match.issue_number), '--remove-label', 'workflow:in-progress']);
+      ghExec(['issue', 'edit', String(match.issue_number), '--remove-label', 'workflow:in-progress', '--remove-assignee', '@me']);
     } catch (_) {}
   }
 
@@ -294,6 +363,107 @@ function cmdHeartbeat() {
   updateLeaseInPlace(stateFile, updated);
 }
 
+function acquirePidFile(pidPath) {
+  if (fs.existsSync(pidPath)) {
+    const existingPid = parseInt(fs.readFileSync(pidPath, 'utf8').trim(), 10);
+    if (!isNaN(existingPid)) {
+      try { process.kill(existingPid, 0); return null; } catch (e) {
+        if (e.code === 'ESRCH') { try { fs.unlinkSync(pidPath); } catch (_) {} }
+      }
+    }
+  }
+  let fd;
+  try { fd = fs.openSync(pidPath, 'wx', 0o600); }
+  catch (e) {
+    if (e.code !== 'EEXIST') process.stderr.write('ticker: failed to create PID file: ' + e.message + '\n');
+    return null;
+  }
+  fs.writeSync(fd, String(process.pid) + '\n');
+  fs.closeSync(fd);
+  return fd;
+}
+
+function runTick(tickCtx) {
+  tickCtx.tickCountRef.value++;
+  const tickCount = tickCtx.tickCountRef.value;
+  const locks = readLockFiles(tickCtx.root);
+  const match = locks.find(function(l) { return l.session_id === tickCtx.session; });
+  if (!match || match.session_id !== tickCtx.session) {
+    try { fs.unlinkSync(tickCtx.pidPath); } catch (_) {}
+    process.exit(0);
+    return;
+  }
+
+  const now = new Date();
+  const updated = Object.assign({}, match, {
+    last_heartbeat: now.toISOString(),
+    expires: new Date(now.getTime() + 2 * 60 * 60 * 1000).toISOString()
+  });
+  const lp = lockPath(tickCtx.root, match.project);
+  fs.writeFileSync(lp, JSON.stringify(updated, null, 2) + '\n');
+  const stateFile = path.join(tickCtx.root, 'kaola-workflow', match.project, 'workflow-state.md');
+  if (fs.existsSync(stateFile)) updateLeaseInPlace(stateFile, updated);
+
+  if (tickCount % 4 === 0 && match.claim_comment_id && /^\d+$/.test(String(match.claim_comment_id))) {
+    const repo = getRepoOwnerName();
+    if (repo) {
+      try {
+        ghExec(['api', '--method', 'PATCH',
+          'repos/' + repo.owner + '/' + repo.name + '/issues/comments/' + match.claim_comment_id,
+          '-f', 'body=<!-- kw:hb ts=' + now.toISOString() + ' -->']);
+      } catch (_) {}
+    }
+  }
+
+  if (tickCount === 1 && match.claim_comment_id && match.issue_number) {
+    const tbResult = runTiebreakerCheck(match.issue_number, tickCtx.session, match.claim_comment_id);
+    if (tbResult !== 'stay' && tbResult.yield) {
+      releaseSession(tickCtx.root, tickCtx.session, 'ticker-late-yield');
+      try { fs.unlinkSync(tickCtx.pidPath); } catch (_) {}
+      process.exit(0);
+      return;
+    }
+  }
+
+  setTimeout(runTick, tickCtx.intervalMs, tickCtx);
+}
+
+function cmdTicker() {
+  if (OFFLINE) return;
+  const args = parseArgs(process.argv.slice(3));
+  if (!args.session) { process.stderr.write('ticker: --session required\n'); process.exitCode = 1; return; }
+  if (!isSafeName(args.session)) { process.stderr.write('ticker: --session must be a simple UUID with no path separators\n'); process.exitCode = 1; return; }
+  const intervalMs = (function() {
+    for (let i = 3; i < process.argv.length - 1; i++) {
+      if (process.argv[i] === '--interval') return parseInt(process.argv[i + 1], 10) || (15 * 60 * 1000);
+    }
+    return 15 * 60 * 1000;
+  })();
+  const root = getRoot();
+  const tickersDir = path.join(root, 'kaola-workflow', '.tickers');
+  fs.mkdirSync(tickersDir, { recursive: true });
+  const pidPath = path.join(tickersDir, args.session + '.pid');
+  if (acquirePidFile(pidPath) === null) return;
+  process.on('SIGTERM', function() {
+    try { fs.unlinkSync(pidPath); } catch (_) {}
+    process.exit(0);
+  });
+  const tickCtx = { root, session: args.session, pidPath, intervalMs, tickCountRef: { value: 0 } };
+  runTick(tickCtx);
+}
+
+function isRemoteStale(lock) {
+  if (OFFLINE || !lock.claim_comment_id || !/^\d+$/.test(String(lock.claim_comment_id))) return false;
+  const repo = getRepoOwnerName();
+  if (!repo) return false;
+  const raw = ghExec(['api', 'repos/' + repo.owner + '/' + repo.name + '/issues/comments/' + lock.claim_comment_id]);
+  if (!raw) return false;
+  try {
+    const data = JSON.parse(raw);
+    return Date.now() - new Date(data.updated_at).getTime() >= 24 * 60 * 60 * 1000;
+  } catch (_) { return false; }
+}
+
 function cmdSweep() {
   const root = getRoot();
   const dir = locksDir(root);
@@ -308,11 +478,16 @@ function cmdSweep() {
     } catch (_) { continue; }
 
     if (!shouldSweep(lock)) continue;
+    if (!isRemoteStale(lock)) continue;
 
     if (!OFFLINE && lock.issue_number != null) {
       try {
         ghExec(['issue', 'edit', String(lock.issue_number), '--remove-label', 'workflow:in-progress']);
       } catch (_) {}
+      try {
+        ghExec(['issue', 'edit', String(lock.issue_number), '--remove-assignee', '@me']);
+      } catch (_) {}
+      postReleaseComment(lock.issue_number, lock.session_id, ':released-stale');
     }
     try { fs.unlinkSync(fp); } catch (_) {}
   }
@@ -455,10 +630,11 @@ function cmdWatchPr() {
 
 function main() {
   const sub = process.argv[2];
-  assert(sub, 'usage: kaola-workflow-claim.js <claim|release|heartbeat|sweep|status|patch-branch|watch-pr>');
+  assert(sub, 'usage: kaola-workflow-claim.js <claim|release|heartbeat|ticker|sweep|status|patch-branch|watch-pr>');
   if (sub === 'claim') return cmdClaim();
   if (sub === 'release') return cmdRelease();
   if (sub === 'heartbeat') return cmdHeartbeat();
+  if (sub === 'ticker') return cmdTicker();
   if (sub === 'sweep') return cmdSweep();
   if (sub === 'status') return cmdStatus();
   if (sub === 'patch-branch') return cmdPatchBranch();

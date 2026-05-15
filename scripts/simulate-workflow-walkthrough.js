@@ -1260,6 +1260,378 @@ exit 0
       }
     }
 
+    // Epic Case 9: cross-machine hardening (9A1, 9A2, 9B1, 9B2, 9C1, 9C2, 9D)
+    {
+      const claimScript9 = path.join(root, 'scripts', 'kaola-workflow-claim.js');
+      const epic9Tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-workflow-epic9-'));
+      try {
+        const PATH = process.env.PATH || '';
+
+        function makeKwDirs(dir) {
+          fs.mkdirSync(path.join(dir, 'kaola-workflow', '.locks'), { recursive: true });
+          fs.mkdirSync(path.join(dir, 'kaola-workflow', '.sessions'), { recursive: true });
+        }
+
+        function makeGhShim(binDir, script) {
+          fs.mkdirSync(binDir, { recursive: true });
+          const p = path.join(binDir, 'gh');
+          fs.writeFileSync(p, script);
+          fs.chmodSync(p, 0o755);
+          return p;
+        }
+
+        function writeLock(dir, project, sessionId, overrides) {
+          const now = Date.now();
+          const lock = Object.assign({
+            project: project,
+            session_id: sessionId,
+            machine_id: 'test-machine',
+            claimed_at: new Date(now).toISOString(),
+            expires: new Date(now + 2 * 3600 * 1000).toISOString(),
+            last_heartbeat: new Date(now).toISOString(),
+            issue_number: null,
+            claim_comment_id: null,
+            sink: 'merge',
+            pr_url: null,
+            pr_number: null
+          }, overrides);
+          const lockPath = path.join(dir, 'kaola-workflow', '.locks', project + '.lock');
+          fs.writeFileSync(lockPath, JSON.stringify(lock, null, 2) + '\n');
+          return lock;
+        }
+
+        // ── Test 9A1: tiebreaker — smaller comment ID wins, larger yields ──
+        {
+          const subTmp = path.join(epic9Tmp, '9a1');
+          const binDir = path.join(subTmp, 'bin');
+          makeKwDirs(subTmp);
+
+          const callLog = path.join(subTmp, 'gh-calls.log');
+          makeGhShim(binDir, `#!/bin/sh
+echo "$@" >> "${callLog}"
+# issue edit → succeed
+if [ "$1" = "issue" ] && [ "$2" = "edit" ]; then
+  exit 0
+fi
+# issue comment (posting the initial claim) → return loser URL (ID 200)
+if [ "$1" = "issue" ] && [ "$2" = "comment" ]; then
+  case "$*" in
+    *yielded*) exit 0 ;;
+    *) echo "https://github.com/test/repo/issues/5#issuecomment-200"; exit 0 ;;
+  esac
+fi
+# repo view → owner/name
+if [ "$1" = "repo" ] && [ "$2" = "view" ]; then
+  printf '{"owner":{"login":"test"},"name":"repo"}'
+  exit 0
+fi
+# api repos/test/repo/issues/5/comments → both comments (winner ID 100, loser ID 200)
+if [ "$1" = "api" ]; then
+  printf '[{"id":100,"body":"Session claimed by sess-9a1-winner <!-- kw:claim sess=sess-9a1-winner -->"},{"id":200,"body":"Session claimed by sess-9a1-loser <!-- kw:claim sess=sess-9a1-loser -->"}]'
+  exit 0
+fi
+exit 0
+`);
+
+          const r9a1 = spawnSync(process.execPath, [
+            claimScript9, 'claim',
+            '--session', 'sess-9a1-loser',
+            '--project', 'proj9a1',
+            '--issue', '5'
+          ], {
+            cwd: subTmp,
+            encoding: 'utf8',
+            env: { ...process.env, PATH: binDir + path.delimiter + PATH, HOME: subTmp }
+          });
+
+          assert(r9a1.status === 1, '9A1: loser claim must exit 1 (yield), got ' + r9a1.status + '\nstdout:' + r9a1.stdout + '\nstderr:' + r9a1.stderr);
+          const lockExists9a1 = fs.existsSync(path.join(subTmp, 'kaola-workflow', '.locks', 'proj9a1.lock'));
+          assert(!lockExists9a1, '9A1: lock file must not exist after yield');
+          const callLogContent9a1 = fs.existsSync(callLog) ? fs.readFileSync(callLog, 'utf8') : '';
+          assert(callLogContent9a1.includes(':yielded'), '9A1: gh call log must contain :yielded comment, got: ' + callLogContent9a1);
+        }
+
+        // ── Test 9A2: tiebreaker — only our own comment present, stay claimed ──
+        {
+          const subTmp = path.join(epic9Tmp, '9a2');
+          const binDir = path.join(subTmp, 'bin');
+          makeKwDirs(subTmp);
+
+          makeGhShim(binDir, `#!/bin/sh
+# issue edit → succeed
+if [ "$1" = "issue" ] && [ "$2" = "edit" ]; then
+  exit 0
+fi
+# issue comment → return our own comment ID 300
+if [ "$1" = "issue" ] && [ "$2" = "comment" ]; then
+  echo "https://github.com/test/repo/issues/6#issuecomment-300"
+  exit 0
+fi
+# repo view → owner/name
+if [ "$1" = "repo" ] && [ "$2" = "view" ]; then
+  printf '{"owner":{"login":"test"},"name":"repo"}'
+  exit 0
+fi
+# api → only our own comment
+if [ "$1" = "api" ]; then
+  printf '[{"id":300,"body":"Session claimed by sess-9a2 <!-- kw:claim sess=sess-9a2 -->"}]'
+  exit 0
+fi
+exit 0
+`);
+
+          const r9a2 = spawnSync(process.execPath, [
+            claimScript9, 'claim',
+            '--session', 'sess-9a2',
+            '--project', 'proj9a2',
+            '--issue', '6'
+          ], {
+            cwd: subTmp,
+            encoding: 'utf8',
+            env: { ...process.env, PATH: binDir + path.delimiter + PATH, HOME: subTmp }
+          });
+
+          assert(r9a2.status === 0, '9A2: sole-claimer must exit 0, got ' + r9a2.status + '\nstderr:' + r9a2.stderr);
+          const lockPath9a2 = path.join(subTmp, 'kaola-workflow', '.locks', 'proj9a2.lock');
+          assert(fs.existsSync(lockPath9a2), '9A2: lock file must exist after successful claim');
+          const lock9a2 = JSON.parse(fs.readFileSync(lockPath9a2, 'utf8'));
+          assert(lock9a2.claim_comment_id === '300', '9A2: claim_comment_id must be 300, got ' + lock9a2.claim_comment_id);
+        }
+
+        // ── Test 9A3: ticker late-tiebreaker — ticker yields when another session has lower comment ID ──
+        {
+          const subTmp = path.join(epic9Tmp, '9a3');
+          const binDir = path.join(subTmp, 'bin');
+          makeKwDirs(subTmp);
+          fs.mkdirSync(path.join(subTmp, 'kaola-workflow', '.tickers'), { recursive: true });
+
+          makeGhShim(binDir, `#!/bin/sh
+# repo view → owner/name
+if [ "$1" = "repo" ] && [ "$2" = "view" ]; then
+  printf '{"owner":{"login":"test"},"name":"repo"}'
+  exit 0
+fi
+# api repos/.../comments → winner has lower ID 400, loser has ID 500
+if [ "$1" = "api" ] && [ "$2" != "--method" ]; then
+  printf '[{"id":400,"body":"<!-- kw:claim sess=sess-9a3-winner -->"},{"id":500,"body":"<!-- kw:claim sess=sess-9a3-loser -->"}]'
+  exit 0
+fi
+# issue edit --remove-label and all others → exit 0
+exit 0
+`);
+
+          // Write lock file for the loser session with a valid claim_comment_id
+          writeLock(subTmp, 'proj9a3', 'sess-9a3-loser', {
+            issue_number: 10,
+            claim_comment_id: '500'
+          });
+
+          const lockPath9a3 = path.join(subTmp, 'kaola-workflow', '.locks', 'proj9a3.lock');
+          const pidFile9a3 = path.join(subTmp, 'kaola-workflow', '.tickers', 'sess-9a3-loser.pid');
+
+          // Spawn ticker with fast interval so tick 1 fires quickly
+          const r9a3 = spawnSync(process.execPath, [
+            claimScript9, 'ticker',
+            '--session', 'sess-9a3-loser',
+            '--interval', '50'
+          ], {
+            cwd: subTmp,
+            encoding: 'utf8',
+            timeout: 3000,
+            env: { ...process.env, PATH: binDir + path.delimiter + PATH, HOME: subTmp }
+          });
+
+          assert(r9a3.status === 0, '9A3: ticker late-yield must self-terminate with exit 0, got status=' + r9a3.status + ' signal=' + r9a3.signal + '\nstderr:' + r9a3.stderr);
+          assert(!fs.existsSync(lockPath9a3), '9A3: lock file must be released by ticker late-yield');
+          assert(!fs.existsSync(pidFile9a3), '9A3: PID file must be cleaned up by ticker late-yield');
+        }
+
+        // ── Test 9B1: ticker idempotency — live PID file → second spawn exits 0 without writing ──
+        {
+          const subTmp = path.join(epic9Tmp, '9b1');
+          const binDir = path.join(subTmp, 'bin');
+          makeKwDirs(subTmp);
+          fs.mkdirSync(path.join(subTmp, 'kaola-workflow', '.tickers'), { recursive: true });
+
+          makeGhShim(binDir, `#!/bin/sh
+exit 0
+`);
+
+          // Write lock file (no issue/comment to keep ticker's tick() fast)
+          writeLock(subTmp, 'proj9b1', 'sess-9b1', { issue_number: null, claim_comment_id: null });
+
+          // Write a PID file with our own (live) PID
+          const pidFile9b1 = path.join(subTmp, 'kaola-workflow', '.tickers', 'sess-9b1.pid');
+          fs.writeFileSync(pidFile9b1, String(process.pid) + '\n');
+
+          // Spawn ticker — should detect live PID and exit early (idempotency)
+          const r9b1 = spawnSync(process.execPath, [
+            claimScript9, 'ticker',
+            '--session', 'sess-9b1',
+            '--interval', '999999999'
+          ], {
+            cwd: subTmp,
+            encoding: 'utf8',
+            timeout: 3000,
+            env: { ...process.env, PATH: binDir + path.delimiter + PATH, HOME: subTmp }
+          });
+
+          assert(r9b1.status === 0 || r9b1.signal === 'SIGTERM', '9B1: ticker must exit cleanly when live PID found, got status=' + r9b1.status + ' signal=' + r9b1.signal);
+          // PID file must still contain our PID (not overwritten)
+          const pidContent9b1 = fs.readFileSync(pidFile9b1, 'utf8').trim();
+          assert(pidContent9b1 === String(process.pid), '9B1: PID file must not be overwritten, expected ' + process.pid + ' got ' + pidContent9b1);
+        }
+
+        // ── Test 9B2: ticker reaps stale PID file and creates new one ──
+        {
+          const subTmp = path.join(epic9Tmp, '9b2');
+          const binDir = path.join(subTmp, 'bin');
+          makeKwDirs(subTmp);
+          fs.mkdirSync(path.join(subTmp, 'kaola-workflow', '.tickers'), { recursive: true });
+
+          makeGhShim(binDir, `#!/bin/sh
+exit 0
+`);
+
+          // Write lock file (no issue/comment so tick() exits fast)
+          writeLock(subTmp, 'proj9b2', 'sess-9b2', { issue_number: null, claim_comment_id: null });
+
+          // Write stale PID file with nonexistent PID
+          const pidFile9b2 = path.join(subTmp, 'kaola-workflow', '.tickers', 'sess-9b2.pid');
+          fs.writeFileSync(pidFile9b2, '99999999\n');
+
+          // Spawn ticker — should reap stale PID, write its own PID, then find no matching lock
+          // (or tick once and exit). Use short timeout.
+          const r9b2 = spawnSync(process.execPath, [
+            claimScript9, 'ticker',
+            '--session', 'sess-9b2',
+            '--interval', '999999999'
+          ], {
+            cwd: subTmp,
+            encoding: 'utf8',
+            timeout: 3000,
+            env: { ...process.env, PATH: binDir + path.delimiter + PATH, HOME: subTmp }
+          });
+
+          // Ticker either exits naturally (no lock match → exits 0) or is killed by timeout
+          // Either way, the stale PID must have been reaped (overwritten or deleted)
+          const pidContentAfter9b2 = fs.existsSync(pidFile9b2) ? fs.readFileSync(pidFile9b2, 'utf8').trim() : '';
+          assert(pidContentAfter9b2 !== '99999999', '9B2: stale PID file must be reaped (overwritten or deleted), still contains 99999999');
+        }
+
+        // ── Test 9C1: sweep skips lock with fresh remote comment ──
+        {
+          const subTmp = path.join(epic9Tmp, '9c1');
+          const binDir = path.join(subTmp, 'bin');
+          makeKwDirs(subTmp);
+
+          makeGhShim(binDir, `#!/bin/sh
+if [ "$1" = "repo" ] && [ "$2" = "view" ]; then
+  printf '{"owner":{"login":"test"},"name":"repo"}'
+  exit 0
+fi
+if [ "$1" = "api" ]; then
+  printf '{"updated_at":"${new Date().toISOString()}"}'
+  exit 0
+fi
+exit 0
+`);
+
+          const stale25h = new Date(Date.now() - 25 * 3600 * 1000).toISOString();
+          writeLock(subTmp, 'proj9c1', 'sess-9c1', {
+            issue_number: 8,
+            claim_comment_id: '555',
+            expires: stale25h,
+            last_heartbeat: stale25h
+          });
+
+          const lockPath9c1 = path.join(subTmp, 'kaola-workflow', '.locks', 'proj9c1.lock');
+          spawnSync(process.execPath, [claimScript9, 'sweep'], {
+            cwd: subTmp,
+            encoding: 'utf8',
+            env: { ...process.env, PATH: binDir + path.delimiter + PATH, HOME: subTmp }
+          });
+
+          assert(fs.existsSync(lockPath9c1), '9C1: lock must NOT be swept when remote comment is fresh');
+        }
+
+        // ── Test 9C2: sweep releases stale lease (remote comment > 24h old) ──
+        {
+          const subTmp = path.join(epic9Tmp, '9c2');
+          const binDir = path.join(subTmp, 'bin');
+          makeKwDirs(subTmp);
+
+          const callLog9c2 = path.join(subTmp, 'gh-calls.log');
+          const staleTs = new Date(Date.now() - 25 * 3600 * 1000).toISOString();
+          makeGhShim(binDir, `#!/bin/sh
+echo "$@" >> "${callLog9c2}"
+if [ "$1" = "repo" ] && [ "$2" = "view" ]; then
+  printf '{"owner":{"login":"test"},"name":"repo"}'
+  exit 0
+fi
+if [ "$1" = "api" ] && [ "$2" != "--method" ]; then
+  printf '{"updated_at":"${staleTs}"}'
+  exit 0
+fi
+exit 0
+`);
+
+          const stale25h = new Date(Date.now() - 25 * 3600 * 1000).toISOString();
+          writeLock(subTmp, 'proj9c2', 'sess-9c2', {
+            issue_number: 9,
+            claim_comment_id: '666',
+            expires: stale25h,
+            last_heartbeat: stale25h
+          });
+
+          const lockPath9c2 = path.join(subTmp, 'kaola-workflow', '.locks', 'proj9c2.lock');
+          spawnSync(process.execPath, [claimScript9, 'sweep'], {
+            cwd: subTmp,
+            encoding: 'utf8',
+            env: { ...process.env, PATH: binDir + path.delimiter + PATH, HOME: subTmp }
+          });
+
+          assert(!fs.existsSync(lockPath9c2), '9C2: lock must be swept when remote comment is stale');
+          const callLog9c2Content = fs.existsSync(callLog9c2) ? fs.readFileSync(callLog9c2, 'utf8') : '';
+          assert(callLog9c2Content.includes('--remove-assignee'), '9C2: sweep must call --remove-assignee @me');
+          assert(callLog9c2Content.includes(':released-stale'), '9C2: sweep must post :released-stale comment');
+        }
+
+        // ── Test 9D: release calls --remove-assignee @me ──
+        {
+          const subTmp = path.join(epic9Tmp, '9d');
+          const binDir = path.join(subTmp, 'bin');
+          makeKwDirs(subTmp);
+
+          const callLog9d = path.join(subTmp, 'gh-calls.log');
+          makeGhShim(binDir, `#!/bin/sh
+echo "$@" >> "${callLog9d}"
+exit 0
+`);
+
+          writeLock(subTmp, 'proj9d', 'sess-9d', {
+            issue_number: 10,
+            claim_comment_id: '777'
+          });
+
+          spawnSync(process.execPath, [
+            claimScript9, 'release',
+            '--session', 'sess-9d'
+          ], {
+            cwd: subTmp,
+            encoding: 'utf8',
+            env: { ...process.env, PATH: binDir + path.delimiter + PATH, HOME: subTmp }
+          });
+
+          const callLog9dContent = fs.existsSync(callLog9d) ? fs.readFileSync(callLog9d, 'utf8') : '';
+          assert(callLog9dContent.includes('--remove-assignee'), '9D: release must call --remove-assignee @me, got: ' + callLog9dContent);
+        }
+
+      } finally {
+        fs.rmSync(epic9Tmp, { recursive: true, force: true });
+      }
+    }
+
     console.log('Workflow walkthrough simulation passed');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });

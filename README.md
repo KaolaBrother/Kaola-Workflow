@@ -275,7 +275,7 @@ The workflow includes automation scripts installed to `~/.claude/kaola-workflow/
 | Script | Purpose | Phase |
 |--------|---------|-------|
 | `kaola-workflow-repair-state.js` | Reconstruct workflow state from phase artifacts | Init / Resume |
-| `kaola-workflow-claim.js` | Multi-session lease management (claim, release, heartbeat, sweep, status) | All phases |
+| `kaola-workflow-claim.js` | Multi-session lease management (claim, release, heartbeat, ticker, sweep, status) | All phases |
 | `kaola-workflow-sink-merge.js` | Branch-per-issue auto-merge sink — rebase-then-ff-merge sequence | Phase 6 |
 | `kaola-workflow-roadmap.js` | ROADMAP.md regenerator — generate/migrate/validate/init-issue subcommands; reads `kaola-workflow/.roadmap/issue-{N}.md` per-issue files | Phase 1, Phase 6 |
 | `kaola-workflow-classifier.js` | Parallel-work classifier — classifies open issues as green/yellow/red/blocked before claim; reads lock files and issue file sets | Startup (Step 0) |
@@ -401,10 +401,12 @@ Multiple concurrent Kaola-Workflow sessions can safely coexist when each targets
 
 - Automatic on startup via `/workflow-next` when `KAOLA_SESSION_ID` is set
 - Manual claim/release: `kaola-workflow-claim.js claim --session <id> --project <name> --issue <N>`
-- Heartbeat renewal at each phase to keep the lease active
+- Background ticker (`ticker` subcommand) keeps leases active across machines with 15-min heartbeat intervals
+- Claim race tiebreaker: lowest GitHub comment ID wins; losers yield cleanly and release the lease
+- Remote sweeper (`sweep` subcommand) checks GitHub comment `updated_at` — skips active sessions (< 24h), clears stale ones (≥ 24h)
 - Pre-commit hook blocks commits that stage files from a project owned by a different session
 
-For full details, see `commands/workflow-next.md` "Startup Step 0" and "Co-active Leases".
+Cross-machine hardening ensures that only one session can hold an issue lease at a time, with automatic cleanup if a session becomes inactive. For full details, see `commands/workflow-next.md` "Startup Step 0" and "Co-active Leases".
 
 ## Updating
 

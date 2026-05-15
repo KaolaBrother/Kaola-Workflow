@@ -2,3 +2,4 @@
 node_modules/
 kaola-workflow/.locks/
 kaola-workflow/.sessions/
+kaola-workflow/.tickers/
