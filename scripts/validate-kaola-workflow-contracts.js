@@ -150,6 +150,8 @@ assert(exists(simulateScript), `${simulateScript} is missing`);
 assert(exists(installAgentsScript), `${installAgentsScript} is missing`);
 for (const script of pluginLocalSharedScripts) {
   assert(exists(script), `${script} is missing`);
+  const rootScript = script.replace(`${pluginRoot}/scripts/`, 'scripts/');
+  assert(read(script) === read(rootScript), `${script} must match ${rootScript}`);
 }
 assertIncludes(repairScript, 'kaola-workflow');
 assertIncludes(repairScript, 'next_skill');

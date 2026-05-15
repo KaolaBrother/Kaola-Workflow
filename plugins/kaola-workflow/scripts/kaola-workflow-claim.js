@@ -710,8 +710,12 @@ function cmdPatchBranch() {
   const safeCommentId = /^\d+$/.test(lock.claim_comment_id) ? lock.claim_comment_id : null;
   if (!OFFLINE && safeCommentId) {
     try {
-      ghExec(['issue', 'comment', '--edit', safeCommentId,
-        '--body', 'Branch: ' + args.branch]);
+      const repo = getRepoOwnerName();
+      if (repo) {
+        ghExec(['api', '--method', 'PATCH',
+          'repos/' + repo.owner + '/' + repo.name + '/issues/comments/' + safeCommentId,
+          '-f', 'body=' + buildClaimCommentBody(lock.session_id) + '\nBranch: ' + args.branch]);
+      }
     } catch (_) {}
   }
 }

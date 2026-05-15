@@ -1951,6 +1951,67 @@ exit 0
           }
         })();
 
+        // -- Test 9F: patch-branch updates the claim comment through GitHub API and keeps the claim marker --
+        {
+          const subTmp = path.join(epic9Tmp, '9f');
+          const binDir = path.join(subTmp, 'bin');
+          makeKwDirs(subTmp);
+
+          const callLog9f = path.join(subTmp, 'gh-calls.log');
+          makeGhShim(binDir, `#!/bin/sh
+echo "$@" >> "${callLog9f}"
+if [ "$1" = "repo" ] && [ "$2" = "view" ]; then
+  printf '{"owner":{"login":"test"},"name":"repo"}'
+  exit 0
+fi
+exit 0
+`);
+
+          writeLock(subTmp, 'proj9f', 'sess-9f', {
+            issue_number: 18,
+            claim_comment_id: '999',
+            branch: 'workflow/issue-18-proj9f-old'
+          });
+
+          const state9fDir = path.join(subTmp, 'kaola-workflow', 'proj9f');
+          fs.mkdirSync(state9fDir, { recursive: true });
+          const state9fPath = path.join(state9fDir, 'workflow-state.md');
+          fs.writeFileSync(state9fPath, [
+            '# Kaola-Workflow State',
+            '',
+            '## Sink',
+            'branch: workflow/issue-18-proj9f-old',
+            'issue_number: 18',
+            'claimed_at: 2026-01-01T00:00:00.000Z',
+            'sink: merge',
+            ''
+          ].join('\n'));
+
+          const nextBranch9f = 'workflow/issue-18-proj9f';
+          const r9f = spawnSync(process.execPath, [
+            claimScript9, 'patch-branch',
+            '--session', 'sess-9f',
+            '--project', 'proj9f',
+            '--branch', nextBranch9f
+          ], {
+            cwd: subTmp,
+            encoding: 'utf8',
+            env: { ...process.env, PATH: binDir + path.delimiter + PATH, HOME: subTmp }
+          });
+
+          assert(r9f.status === 0, '9F: patch-branch must succeed, got ' + r9f.status + '\nstderr:' + r9f.stderr);
+          const lock9f = JSON.parse(fs.readFileSync(path.join(subTmp, 'kaola-workflow', '.locks', 'proj9f.lock'), 'utf8'));
+          assert(lock9f.branch === nextBranch9f, '9F: lock branch must be patched');
+          const state9f = fs.readFileSync(state9fPath, 'utf8');
+          assert(state9f.includes('branch: ' + nextBranch9f), '9F: state branch must be patched');
+          const callLog9fContent = fs.existsSync(callLog9f) ? fs.readFileSync(callLog9f, 'utf8') : '';
+          assert(callLog9fContent.includes('--method PATCH'), '9F: patch-branch must PATCH claim comment, got: ' + callLog9fContent);
+          assert(callLog9fContent.includes('issues/comments/999'), '9F: patch-branch must target claim comment ID, got: ' + callLog9fContent);
+          assert(callLog9fContent.includes('kw:claim sess=sess-9f'), '9F: patched comment must preserve kw:claim marker, got: ' + callLog9fContent);
+          assert(callLog9fContent.includes('Branch: ' + nextBranch9f), '9F: patched comment must include branch, got: ' + callLog9fContent);
+          assert(!callLog9fContent.includes('issue comment --edit'), '9F: patch-branch must not use unsupported gh issue comment --edit, got: ' + callLog9fContent);
+        }
+
         // ── Test LOW-2 SIGINT: ticker removes PID file on SIGINT ──
         await (async function test9B_SIGINT() {
           const subTmpSIGINT = fs.mkdtempSync(path.join(epic9Tmp, 'sigint-'));
