@@ -1892,6 +1892,29 @@ exit 0
       }
     }
 
+    // Epic Case 11: prompt-level cross-session staging guard must appear in
+    // both the Claude Code phase6 command and the Codex finalize skill.
+    // Regulators live in prompts; the bash hook is defense-in-depth.
+    {
+      const guardSources = [
+        path.join(__dirname, '..', 'commands', 'kaola-workflow-phase6.md'),
+        path.join(__dirname, '..', 'plugins', 'kaola-workflow', 'skills',
+          'kaola-workflow-finalize', 'SKILL.md'),
+      ];
+      const required = [
+        'Cross-Session Staging Guard',
+        'BLOCKED: cross-session staging',
+        'BLOCKED: split your commit',
+      ];
+      for (const src of guardSources) {
+        const text = fs.readFileSync(src, 'utf8');
+        for (const needle of required) {
+          assert(text.includes(needle),
+            'Epic Case 11: ' + path.basename(src) + ' missing guard marker "' + needle + '"');
+        }
+      }
+    }
+
     // LOW-3: corpus-grep — every phase shim must contain liveness check
     {
       const shimPaths = [

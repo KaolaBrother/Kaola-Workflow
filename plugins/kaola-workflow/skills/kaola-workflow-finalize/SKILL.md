@@ -53,6 +53,57 @@ fi
 7. Archive `kaola-workflow/{project}/` to `kaola-workflow/archive/{project}/`.
 8. Commit and push only approved files.
 
+   ### Cross-Session Staging Guard
+
+   Before any `git add` of files under `kaola-workflow/${KAOLA_PROJECT}/`,
+   verify this session owns the project's lease. Codex relies on this
+   prompt-level check (no PreToolUse hook); run it unconditionally when
+   `KAOLA_SESSION_ID` is set:
+
+   ```bash
+   if [ -n "${KAOLA_SESSION_ID:-}" ]; then
+     LOCK_FILE="kaola-workflow/.locks/${KAOLA_PROJECT}.lock"
+     OWNER=""
+     if [ -f "$LOCK_FILE" ]; then
+       OWNER="$(node -e "
+         try {
+           const d = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
+           process.stdout.write(d.session_id || '');
+         } catch(e) { process.stdout.write(''); }
+       " "$LOCK_FILE" 2>/dev/null)" || true
+     fi
+     if [ -z "$OWNER" ]; then
+       STATE_FILE="kaola-workflow/${KAOLA_PROJECT}/workflow-state.md"
+       [ -f "$STATE_FILE" ] && OWNER="$(grep -m1 '^session_id:' "$STATE_FILE" | sed 's/^session_id:[[:space:]]*//')" || true
+     fi
+     if [ -n "$OWNER" ] && [ "$OWNER" != "$KAOLA_SESSION_ID" ]; then
+       echo "BLOCKED: cross-session staging on project '${KAOLA_PROJECT}'. Lock held by ${OWNER}; current session is ${KAOLA_SESSION_ID}." >&2
+       exit 1
+     fi
+   fi
+   ```
+
+   Also enforce the single-project rule — if more than one
+   `kaola-workflow/*/` project is staged at once, split the commit:
+
+   ```bash
+   PROJECT_COUNT=$(git diff --cached --name-only \
+     | grep '^kaola-workflow/' \
+     | grep -v '^kaola-workflow/\.locks/' \
+     | grep -v '^kaola-workflow/\.sessions/' \
+     | grep -v '^kaola-workflow/archive/' \
+     | grep -v '^kaola-workflow/\.roadmap/' \
+     | grep -v '^kaola-workflow/ROADMAP\.md$' \
+     | awk -F'/' 'NF>=3 {print $2}' | sort -u | grep -c . || true)
+   if [ "${PROJECT_COUNT:-0}" -gt 1 ]; then
+     echo "BLOCKED: split your commit — multiple kaola-workflow projects staged." >&2
+     exit 1
+   fi
+   ```
+
+   If either check fails, do not stage; release the project under another
+   lease, or coordinate manually. Do not attempt to bypass this guard.
+
    Before committing, dispatch to the correct sink script based on the `sink` field in `workflow-state.md`:
 
    ```bash

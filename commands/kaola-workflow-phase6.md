@@ -430,6 +430,57 @@ Before the final Git gate, verify every other `Required Agent Compliance` row
 across phase files is `invoked`, `skipped`, or `N/A` with evidence or skip
 reason.
 
+## Cross-Session Staging Guard
+
+Before any `git add` of files under `kaola-workflow/{project}/`, verify this
+session owns the project's lease. The Claude Code `PreToolUse:Bash` hook
+performs the same check automatically when `KAOLA_SESSION_ID` is set, but the
+prompt-level check here is the primary regulator and must run regardless:
+
+```bash
+if [ -n "${KAOLA_SESSION_ID:-}" ]; then
+  LOCK_FILE="kaola-workflow/.locks/{project}.lock"
+  OWNER=""
+  if [ -f "$LOCK_FILE" ]; then
+    OWNER="$(node -e "
+      try {
+        const d = JSON.parse(require('fs').readFileSync(process.argv[1], 'utf8'));
+        process.stdout.write(d.session_id || '');
+      } catch(e) { process.stdout.write(''); }
+    " "$LOCK_FILE" 2>/dev/null)" || true
+  fi
+  if [ -z "$OWNER" ]; then
+    STATE_FILE="kaola-workflow/{project}/workflow-state.md"
+    [ -f "$STATE_FILE" ] && OWNER="$(grep -m1 '^session_id:' "$STATE_FILE" | sed 's/^session_id:[[:space:]]*//')" || true
+  fi
+  if [ -n "$OWNER" ] && [ "$OWNER" != "$KAOLA_SESSION_ID" ]; then
+    echo "BLOCKED: cross-session staging on project '{project}'. Lock held by ${OWNER}; current session is ${KAOLA_SESSION_ID}." >&2
+    exit 1
+  fi
+fi
+```
+
+Also enforce the single-project rule before committing — if more than one
+`kaola-workflow/*/` project is staged at once, split the commit:
+
+```bash
+PROJECT_COUNT=$(git diff --cached --name-only \
+  | grep '^kaola-workflow/' \
+  | grep -v '^kaola-workflow/\.locks/' \
+  | grep -v '^kaola-workflow/\.sessions/' \
+  | grep -v '^kaola-workflow/archive/' \
+  | grep -v '^kaola-workflow/\.roadmap/' \
+  | grep -v '^kaola-workflow/ROADMAP\.md$' \
+  | awk -F'/' 'NF>=3 {print $2}' | sort -u | grep -c . || true)
+if [ "${PROJECT_COUNT:-0}" -gt 1 ]; then
+  echo "BLOCKED: split your commit — multiple kaola-workflow projects staged." >&2
+  exit 1
+fi
+```
+
+If either check fails, do not stage; release the project under another lease,
+or coordinate manually. Do not attempt to bypass this guard.
+
 ## Step 8 - Sink
 
 Read the `## Sink` block from `kaola-workflow/{project}/workflow-state.md`:
