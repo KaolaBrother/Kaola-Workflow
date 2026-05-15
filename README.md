@@ -229,8 +229,8 @@ performs the same review locally when no detached advisor profile is available.
 
 Current official release versions:
 
-- Claude Code `kaola-workflow` package/plugin: `3.1.4`
-- Codex `kaola-workflow` plugin manifest: `1.1.4`
+- Claude Code `kaola-workflow` package/plugin: `3.1.5`
+- Codex `kaola-workflow` plugin manifest: `1.1.5`
 
 The root `package.json` version is the official repository and Claude Code
 release version. The Codex plugin has its own manifest version in

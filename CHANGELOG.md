@@ -1,6 +1,6 @@
 # Changelog
 
-## 3.1.4 - 2026-05-15 (Claude Code) / Codex 1.1.4 - 2026-05-15
+## 3.1.5 - 2026-05-15 (Claude Code) / Codex 1.1.5 - 2026-05-15
 
 ### Fixed
 
