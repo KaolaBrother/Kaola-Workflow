@@ -9,6 +9,18 @@ SOURCE_COMMANDS_DIR="$SCRIPT_DIR/commands"
 SOURCE_SCRIPTS_DIR="$SCRIPT_DIR/scripts"
 SUPPORT_HOOKS_DIR="$SUPPORT_DIR/hooks"
 SOURCE_HOOKS_DIR="$SCRIPT_DIR/hooks"
+SUPPORT_SCRIPT_NAMES=(
+  kaola-workflow-repair-state.js
+  kaola-workflow-claim.js
+  kaola-workflow-session-env.js
+  kaola-workflow-sink-merge.js
+  kaola-workflow-sink-pr.js
+  kaola-workflow-roadmap.js
+  kaola-workflow-classifier.js
+)
+SUPPORT_HOOK_NAMES=(
+  kaola-workflow-pre-commit.sh
+)
 YES=0
 
 for arg in "$@"; do
@@ -110,29 +122,63 @@ if [[ "$installed" -eq 0 ]]; then
 fi
 
 mkdir -p "$SUPPORT_SCRIPTS_DIR"
-for script_file in \
-  "$SOURCE_SCRIPTS_DIR"/kaola-workflow-repair-state.js \
-	  "$SOURCE_SCRIPTS_DIR"/kaola-workflow-claim.js \
-	  "$SOURCE_SCRIPTS_DIR"/kaola-workflow-session-env.js \
-	  "$SOURCE_SCRIPTS_DIR"/kaola-workflow-sink-merge.js \
-  "$SOURCE_SCRIPTS_DIR"/kaola-workflow-sink-pr.js \
-  "$SOURCE_SCRIPTS_DIR"/kaola-workflow-roadmap.js \
-  "$SOURCE_SCRIPTS_DIR"/kaola-workflow-classifier.js; do
+for script_name in "${SUPPORT_SCRIPT_NAMES[@]}"; do
+  script_file="$SOURCE_SCRIPTS_DIR/$script_name"
   if [[ -f "$script_file" ]]; then
-    cp "$script_file" "$SUPPORT_SCRIPTS_DIR/$(basename "$script_file")"
-    chmod +x "$SUPPORT_SCRIPTS_DIR/$(basename "$script_file")"
-    echo "Installed support script: $SUPPORT_SCRIPTS_DIR/$(basename "$script_file")"
+    cp "$script_file" "$SUPPORT_SCRIPTS_DIR/$script_name"
+    chmod +x "$SUPPORT_SCRIPTS_DIR/$script_name"
+    echo "Installed support script: $SUPPORT_SCRIPTS_DIR/$script_name"
   fi
 done
 
 mkdir -p "$SUPPORT_HOOKS_DIR"
-for hook_file in "$SOURCE_HOOKS_DIR"/kaola-workflow-pre-commit.sh; do
+for hook_name in "${SUPPORT_HOOK_NAMES[@]}"; do
+  hook_file="$SOURCE_HOOKS_DIR/$hook_name"
   if [[ -f "$hook_file" ]]; then
-    cp "$hook_file" "$SUPPORT_HOOKS_DIR/$(basename "$hook_file")"
-    chmod +x "$SUPPORT_HOOKS_DIR/$(basename "$hook_file")"
-    echo "Installed support hook: $SUPPORT_HOOKS_DIR/$(basename "$hook_file")"
+    cp "$hook_file" "$SUPPORT_HOOKS_DIR/$hook_name"
+    chmod +x "$SUPPORT_HOOKS_DIR/$hook_name"
+    echo "Installed support hook: $SUPPORT_HOOKS_DIR/$hook_name"
   fi
 done
+
+verify_installed_file() {
+  local path="$1"
+  local label="$2"
+  if [[ ! -f "$path" ]]; then
+    echo "Install verification failed: missing $label: $path" >&2
+    return 1
+  fi
+}
+
+verify_executable_file() {
+  local path="$1"
+  local label="$2"
+  verify_installed_file "$path" "$label" || return 1
+  if [[ ! -x "$path" ]]; then
+    echo "Install verification failed: not executable $label: $path" >&2
+    return 1
+  fi
+}
+
+verification_failed=0
+for command_file in "$SOURCE_COMMANDS_DIR"/*.md; do
+  [[ -f "$command_file" ]] || continue
+  verify_installed_file "$COMMANDS_DIR/$(basename "$command_file")" "command" || verification_failed=1
+done
+
+for script_name in "${SUPPORT_SCRIPT_NAMES[@]}"; do
+  verify_executable_file "$SUPPORT_SCRIPTS_DIR/$script_name" "support script" || verification_failed=1
+done
+
+for hook_name in "${SUPPORT_HOOK_NAMES[@]}"; do
+  verify_executable_file "$SUPPORT_HOOKS_DIR/$hook_name" "support hook" || verification_failed=1
+done
+
+if [[ "$verification_failed" -ne 0 ]]; then
+  exit 1
+fi
+
+echo "Verified Kaola-Workflow install files."
 
 echo ""
 echo "Open any Claude Code session and run:  /workflow-init"

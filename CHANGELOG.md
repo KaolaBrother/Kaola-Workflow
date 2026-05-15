@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.1.6 - 2026-05-15 (Claude Code) / Codex 1.1.6 - 2026-05-15
+
+### Fixed
+
+- **Claude Code marketplace script resolution**: command snippets now resolve support scripts from `CLAUDE_PLUGIN_ROOT`, the manual support directory, the repo checkout, Claude plugin cache, or the marketplace checkout. This prevents marketplace installs from falling back only to `~/.claude/kaola-workflow/scripts/`.
+- **Manual install verification**: `install.sh` now verifies copied slash commands, support scripts, and hooks after installation and fails with a concrete missing-file message when any required file is absent.
+
 ## 3.1.5 - 2026-05-15 (Claude Code) / Codex 1.1.5 - 2026-05-15
 
 ### Fixed

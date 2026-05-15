@@ -26,7 +26,8 @@ architecture, or write implementation code.
 If a claim session is active or recoverable, ensure the background heartbeat ticker is running:
 
 ```bash
-_CLAIM_JS="${CLAUDE_PLUGIN_ROOT:-./}/scripts/kaola-workflow-claim.js"
+kaola_script(){ _n="$1"; for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; find "$HOME/.claude/plugins/cache" "$HOME/.claude/plugins/marketplaces" -path "*/scripts/$_n" -print 2>/dev/null | sort | tail -n 1; }
+_CLAIM_JS="$(kaola_script kaola-workflow-claim.js)"
 if [ -f "$_CLAIM_JS" ] && [ -z "${KAOLA_SESSION_ID:-}" ]; then
   KAOLA_SESSION_ID="$(node "$_CLAIM_JS" session 2>/dev/null || true)"
   [ -n "$KAOLA_SESSION_ID" ] && export KAOLA_SESSION_ID
@@ -37,14 +38,14 @@ if [ -f "$_CLAIM_JS" ] && [ -n "${KAOLA_SESSION_ID:-}" ]; then
     exit 1
   }
 fi
-[ -n "${KAOLA_SESSION_ID:-}" ] && {
+if [ -n "${KAOLA_SESSION_ID:-}" ] && [ -f "$_CLAIM_JS" ]; then
   _TICKER_PID_FILE="$(git rev-parse --show-toplevel)/kaola-workflow/.tickers/${KAOLA_SESSION_ID}.pid"
   if [ ! -f "$_TICKER_PID_FILE" ] || ! kill -0 "$(cat "$_TICKER_PID_FILE" 2>/dev/null)" 2>/dev/null; then
     nohup node "$_CLAIM_JS" ticker \
       --session "$KAOLA_SESSION_ID" >/dev/null 2>&1 &
     disown
   fi
-}
+fi
 ```
 
 ## Resume Detection
@@ -242,12 +243,16 @@ If a GitHub issue number N was extracted in Step 1:
 3. Run:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/kaola-workflow}/scripts/kaola-workflow-roadmap.js" init-issue \
-  --issue N \
-  --title "TITLE" \
-  --status open \
-  --workflow-project "WORKFLOW_PROJECT" \
-  --next-step "ready"
+kaola_script(){ _n="$1"; for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; find "$HOME/.claude/plugins/cache" "$HOME/.claude/plugins/marketplaces" -path "*/scripts/$_n" -print 2>/dev/null | sort | tail -n 1; }
+ROADMAP_JS="$(kaola_script kaola-workflow-roadmap.js)"
+if [ -f "$ROADMAP_JS" ]; then
+  node "$ROADMAP_JS" init-issue \
+    --issue N \
+    --title "TITLE" \
+    --status open \
+    --workflow-project "WORKFLOW_PROJECT" \
+    --next-step "ready"
+fi
 ```
 
 4. Stage the new file (skip if `init-issue` printed `skip:`):
@@ -307,7 +312,9 @@ block, and GitHub claim comment:
 ```bash
 # Only if the stored branch was TBD (legacy lease)
 if [ "$(grep '^branch:' kaola-workflow/{project}/workflow-state.md | awk '{print $2}')" = "TBD" ]; then
-  node "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/kaola-workflow}/scripts/kaola-workflow-claim.js" \
+  kaola_script(){ _n="$1"; for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; find "$HOME/.claude/plugins/cache" "$HOME/.claude/plugins/marketplaces" -path "*/scripts/$_n" -print 2>/dev/null | sort | tail -n 1; }
+  CLAIM_JS="$(kaola_script kaola-workflow-claim.js)"
+  [ -f "$CLAIM_JS" ] && node "$CLAIM_JS" \
     patch-branch \
     --project {project} \
     --session "$KAOLA_SESSION_ID" \

@@ -132,7 +132,14 @@ assertIncludes('commands/workflow-init.md', 'Use `/workflow-next` as the workflo
 assertIncludes('commands/workflow-init.md', 'commit and push');
 assertIncludes('commands/workflow-init.md', '## ECC Hook Policy');
 assertIncludes('commands/workflow-init.md', 'ECC_HOOK_PROFILE=minimal');
+assertIncludes('commands/workflow-init.md', 'kaola_script(){ _n="$1"');
+assertIncludes('commands/workflow-init.md', '$HOME/.claude/plugins/cache');
+assertNotIncludes('commands/workflow-init.md', 'CLAUDE_PLUGIN_ROOT:-./');
+assertNotIncludes('commands/workflow-init.md', 'CLAUDE_PLUGIN_ROOT:-$HOME/.claude/kaola-workflow');
 assertIncludes('install.sh', 'kaola-workflow-repair-state.js');
+assertIncludes('install.sh', 'verify_installed_file');
+assertIncludes('install.sh', 'verify_executable_file');
+assertIncludes('install.sh', 'Verified Kaola-Workflow install files.');
 assertIncludes('uninstall.sh', '.claude/kaola-workflow');
 
 assert(exists('hooks/hooks.json'), 'hooks/hooks.json is missing');
@@ -220,8 +227,16 @@ assertIncludes('commands/kaola-workflow-phase1.md', 'git checkout -b');
 assertIncludes('commands/kaola-workflow-phase1.md', 'patch-branch');
 assertIncludes('install.sh', 'kaola-workflow-pre-commit.sh');
 assertIncludes('commands/workflow-next.md', 'Startup Step 0');
+assertIncludes('commands/workflow-next.md', 'kaola_script(){ _n="$1"');
+assertIncludes('commands/workflow-next.md', '$HOME/.claude/plugins/cache');
+assertNotIncludes('commands/workflow-next.md', 'CLAUDE_PLUGIN_ROOT:-./');
+assertNotIncludes('commands/workflow-next.md', 'CLAUDE_PLUGIN_ROOT:-$HOME/.claude/kaola-workflow');
 for (const file of phaseCommands) {
   assertIncludes(file, 'Session Heartbeat');
+  assertIncludes(file, 'kaola_script(){ _n="$1"');
+  assertIncludes(file, '$HOME/.claude/plugins/cache');
+  assertNotIncludes(file, 'CLAUDE_PLUGIN_ROOT:-./');
+  assertNotIncludes(file, 'CLAUDE_PLUGIN_ROOT:-$HOME/.claude/kaola-workflow');
 }
 
 // roadmap-per-issue-regenerator

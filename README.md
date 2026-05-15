@@ -229,8 +229,8 @@ performs the same review locally when no detached advisor profile is available.
 
 Current official release versions:
 
-- Claude Code `kaola-workflow` package/plugin: `3.1.5`
-- Codex `kaola-workflow` plugin manifest: `1.1.5`
+- Claude Code `kaola-workflow` package/plugin: `3.1.6`
+- Codex `kaola-workflow` plugin manifest: `1.1.6`
 
 The root `package.json` version is the official repository and Claude Code
 release version. The Codex plugin has its own manifest version in
@@ -278,7 +278,10 @@ The command is a thin router. It first checks local/remote Git state, safely fas
 
 ## Automation Scripts
 
-The workflow includes automation scripts installed to `~/.claude/kaola-workflow/scripts/`:
+The workflow includes automation scripts packaged with the Claude Code plugin
+and copied to `~/.claude/kaola-workflow/scripts/` by `install.sh`. Marketplace
+commands resolve scripts from the plugin cache or marketplace checkout, then
+fall back to the manual support directory.
 
 | Script | Purpose | Phase |
 |--------|---------|-------|

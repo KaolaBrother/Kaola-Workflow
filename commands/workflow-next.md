@@ -55,7 +55,8 @@ steps so stale leases, merged PR leases, and remotely claimed issues are handled
 before selecting the next candidate.
 
 ```bash
-CLAIM_JS="${CLAUDE_PLUGIN_ROOT:-./}/scripts/kaola-workflow-claim.js"
+kaola_script(){ _n="$1"; for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; find "$HOME/.claude/plugins/cache" "$HOME/.claude/plugins/marketplaces" -path "*/scripts/$_n" -print 2>/dev/null | sort | tail -n 1; }
+CLAIM_JS="$(kaola_script kaola-workflow-claim.js)"
 if [ -f "$CLAIM_JS" ]; then
   KAOLA_BOOTSTRAP_SESSION="$(node "$CLAIM_JS" session 2>/dev/null || true)"
   [ -n "$KAOLA_BOOTSTRAP_SESSION" ] && export KAOLA_SESSION_ID="$KAOLA_BOOTSTRAP_SESSION"
@@ -113,7 +114,9 @@ roadmap and say why sync was skipped.
 Validate that `ROADMAP.md` is current with the per-issue source files:
 
 ```bash
-node "${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/kaola-workflow}/scripts/kaola-workflow-roadmap.js" validate
+kaola_script(){ _n="$1"; for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; find "$HOME/.claude/plugins/cache" "$HOME/.claude/plugins/marketplaces" -path "*/scripts/$_n" -print 2>/dev/null | sort | tail -n 1; }
+ROADMAP_JS="$(kaola_script kaola-workflow-roadmap.js)"
+[ -f "$ROADMAP_JS" ] && node "$ROADMAP_JS" validate
 ```
 
 If `validate` exits non-zero, print a warning and continue:
@@ -171,12 +174,9 @@ Before manual reconstruction, run the state repair helper if available, then
 read `workflow-state.md` again:
 
 ```bash
-for helper in \
-  "${CLAUDE_PLUGIN_ROOT:-}/scripts/kaola-workflow-repair-state.js" \
-  "$HOME/.claude/kaola-workflow/scripts/kaola-workflow-repair-state.js" \
-  "./scripts/kaola-workflow-repair-state.js"; do
-  [ -f "$helper" ] && { node "$helper" "$ARGUMENTS"; break; }
-done
+kaola_script(){ _n="$1"; for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; find "$HOME/.claude/plugins/cache" "$HOME/.claude/plugins/marketplaces" -path "*/scripts/$_n" -print 2>/dev/null | sort | tail -n 1; }
+REPAIR_JS="$(kaola_script kaola-workflow-repair-state.js)"
+[ -f "$REPAIR_JS" ] && node "$REPAIR_JS" "$ARGUMENTS"
 ```
 
 If the helper writes or validates `workflow-state.md`, route from that state.
