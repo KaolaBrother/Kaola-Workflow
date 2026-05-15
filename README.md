@@ -301,8 +301,10 @@ The `kaola-workflow-classifier.js` script uses `~/.config/kaola-workflow/config.
 
 Valid `parallel_mode` values:
 
-- `auto` (default): Classify each issue as green/yellow/red/blocked before claiming, based on dependency graphs, file-area overlaps, and lock files.
+- `auto` (default): Classify each issue as green/yellow/red/blocked before claiming, based on dependency graphs, exact file-path overlaps, file-area overlaps, and lock files.
 - Other values: Bypass classification; treat all issues as green for fast claiming.
+
+Exact file-path overlap returns `red`, including shared-infrastructure files such as `scripts/kaola-workflow-claim.js` and packaged plugin files under `plugins/kaola-workflow/`. Different files in the same shared-infrastructure directory can still return `yellow`. Offline roadmap classification reads explicit paths and `touches:` metadata from `kaola-workflow/.roadmap/issue-{N}.md`.
 
 When an issue receives a `yellow` verdict (shared infrastructure warning), a cache file is written to `kaola-workflow/{project}/.cache/parallel-classifier.md` to flag the caution for the phase team.
 

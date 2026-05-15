@@ -845,6 +845,52 @@ async function main() {
         const cacheContent6C = fs.readFileSync(warningFile6C, 'utf8');
         assert(cacheContent6C.includes('shared-infra warning'), 'Epic Case 6C: cache file must contain shared-infra warning');
 
+        // 6C2: red — exact shared-infra file overlap must override scripts/ yellow fallback
+        fs.writeFileSync(path.join(roadmapDir, 'issue-16.md'),
+          'issue: #16\ntitle: exact shared script\nstatus: open\nworkflow_project: —\nnext_step: ready\ntouches:scripts/kaola-workflow-claim.js\n');
+        const out6C2 = execFileSync(process.execPath, [classifierScript, 'classify', '--issue', '16'],
+          { cwd: epic6Tmp, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
+        const r6C2 = JSON.parse(out6C2.trim());
+        assert(r6C2.verdict === 'red', 'Epic Case 6C2: exact shared-infra path overlap must yield red, got ' + r6C2.verdict);
+        assert(r6C2.reasoning.includes('exact file path'), 'Epic Case 6C2: reasoning must mention exact file path');
+
+        // 6C3: red — plugin copy paths are exact repository paths too
+        fs.writeFileSync(path.join(claimedDir, 'phase3-plan.md'),
+          '# Phase 3\nFiles: plugins/kaola-workflow/scripts/kaola-workflow-claim.js\n');
+        fs.writeFileSync(path.join(roadmapDir, 'issue-17.md'),
+          'issue: #17\ntitle: exact plugin script\nstatus: open\nworkflow_project: —\nnext_step: ready\nbody: plugins/kaola-workflow/scripts/kaola-workflow-claim.js\n');
+        const out6C3 = execFileSync(process.execPath, [classifierScript, 'classify', '--issue', '17'],
+          { cwd: epic6Tmp, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
+        const r6C3 = JSON.parse(out6C3.trim());
+        assert(r6C3.verdict === 'red', 'Epic Case 6C3: exact plugin path overlap must yield red, got ' + r6C3.verdict);
+
+        // 6C4: yellow — area-label-only overlap remains a caution, not red
+        fs.writeFileSync(path.join(claimedDir, 'phase3-plan.md'), '# Phase 3\nNo exact paths\n');
+        fs.writeFileSync(path.join(claimedDir, 'phase1-research.md'), 'area:codex-plugin\n');
+        fs.writeFileSync(path.join(roadmapDir, 'issue-18.md'),
+          'issue: #18\ntitle: area label only\nstatus: open\nworkflow_project: —\nnext_step: ready\narea:codex-plugin\n');
+        const out6C4 = execFileSync(process.execPath, [classifierScript, 'classify', '--issue', '18'],
+          { cwd: epic6Tmp, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
+        const r6C4 = JSON.parse(out6C4.trim());
+        assert(r6C4.verdict === 'yellow', 'Epic Case 6C4: area-label-only overlap must yield yellow, got ' + r6C4.verdict);
+
+        // 6C5: red — unknown candidate scope remains conservative while another claim is Phase <= 2
+        const earlyDir = path.join(epic6Tmp, 'kaola-workflow', 'early-project');
+        fs.mkdirSync(earlyDir, { recursive: true });
+        fs.writeFileSync(path.join(locksDir, 'early-project.lock'), JSON.stringify({
+          project: 'early-project', session_id: 'sess-6c5', issue_number: 25,
+          claimed_at: new Date().toISOString(),
+          expires: new Date(Date.now() + 3600000).toISOString(),
+          last_heartbeat: new Date().toISOString()
+        }, null, 2));
+        fs.writeFileSync(path.join(earlyDir, 'phase1-research.md'), '# Phase 1\nNo files known yet\n');
+        fs.writeFileSync(path.join(roadmapDir, 'issue-22.md'),
+          'issue: #22\ntitle: no metadata\nstatus: open\nworkflow_project: —\nnext_step: ready\n');
+        const out6C5 = execFileSync(process.execPath, [classifierScript, 'classify', '--issue', '22'],
+          { cwd: epic6Tmp, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
+        const r6C5 = JSON.parse(out6C5.trim());
+        assert(r6C5.verdict === 'red', 'Epic Case 6C5: unknown scope with Phase <= 2 claim must yield red, got ' + r6C5.verdict);
+
         // 6D: OFFLINE + roadmap depends-on → blocked (conservative)
         fs.writeFileSync(path.join(roadmapDir, 'issue-13.md'),
           'issue: #13\ntitle: blocked feature\nstatus: open\nworkflow_project: —\nnext_step: blocked by #20\n');

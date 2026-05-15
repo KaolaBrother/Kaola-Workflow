@@ -7,7 +7,7 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 
 | Issue | Title | Status | Workflow Project | Next Step |
 |-------|-------|--------|------------------|-----------|
-| #23 | Harden parallel issue conflict classification with exact paths | open | TBD | queued |
+| none | No active work | — | — | — |
 
 ## Rules
 

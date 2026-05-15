@@ -157,6 +157,8 @@ for (const script of pluginLocalSharedScripts) {
 }
 assertIncludes(repairScript, 'kaola-workflow');
 assertIncludes(repairScript, 'next_skill');
+assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'function extractFilePaths');
+assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'plugins\\/kaola-workflow');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, 'CODEX_THREAD_ID');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, 'function cmdHandoff');
 assertIncludes(simulateScript, 'Kaola-Workflow walkthrough simulation passed');

@@ -225,6 +225,8 @@ for (const file of phaseCommands) {
 // roadmap-per-issue-regenerator
 assert(exists('scripts/kaola-workflow-roadmap.js'), 'scripts/kaola-workflow-roadmap.js is missing');
 assert(exists('scripts/kaola-workflow-classifier.js'), 'scripts/kaola-workflow-classifier.js is missing');
+assertIncludes('scripts/kaola-workflow-classifier.js', 'function extractFilePaths');
+assertIncludes('scripts/kaola-workflow-classifier.js', 'plugins\\/kaola-workflow');
 assertIncludes('install.sh', 'kaola-workflow-roadmap.js');
 assertIncludes('install.sh', 'kaola-workflow-classifier.js');
 assertIncludes('hooks/kaola-workflow-pre-commit.sh', '\\.roadmap/');

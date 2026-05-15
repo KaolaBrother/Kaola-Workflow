@@ -101,15 +101,61 @@ function readActiveStateIssueNumbers(root) {
 // File-path extraction
 // ---------------------------------------------------------------------------
 
-const FILE_PATH_REGEX = /(scripts|commands|hooks|kaola-workflow)\/[A-Za-z0-9_./-]+/g;
-const COARSE_AREAS = new Set(['scripts', 'commands', 'hooks', 'kaola-workflow']);
+const FILE_PATH_REGEX = /(?:^|[^A-Za-z0-9_./-])((?:plugins\/kaola-workflow|scripts|commands|hooks|kaola-workflow)(?:\/[A-Za-z0-9_.-]+)*\/[A-Za-z0-9_.-]*[A-Za-z0-9_-])/g;
+const AREA_PATH_REGEX = /(?:^|[^A-Za-z0-9_./-])((?:plugins\/kaola-workflow(?:\/(?:scripts|skills|agents|config))?|scripts|commands|hooks|kaola-workflow))\/(?=$|[^A-Za-z0-9_./-])/g;
+const COARSE_AREAS = new Set([
+  'scripts',
+  'commands',
+  'hooks',
+  'kaola-workflow',
+  'plugins/kaola-workflow',
+  'plugins/kaola-workflow/scripts',
+  'plugins/kaola-workflow/skills',
+  'plugins/kaola-workflow/agents',
+  'plugins/kaola-workflow/config'
+]);
+
+function normalizeRepoPath(raw) {
+  return String(raw || '')
+    .replace(/^touches:/, '')
+    .replace(/^[`'"]+/, '')
+    .replace(/[`'",.;:)\]}]+$/, '')
+    .trim();
+}
+
+function areaForPath(filePath) {
+  if (filePath.startsWith('plugins/kaola-workflow/')) {
+    const parts = filePath.split('/');
+    if (parts.length >= 3) return parts.slice(0, 3).join('/');
+    return 'plugins/kaola-workflow';
+  }
+  return filePath.split('/')[0];
+}
+
+function extractFilePaths(text) {
+  const paths = new Set();
+  const source = String(text || '');
+  let match;
+  FILE_PATH_REGEX.lastIndex = 0;
+  while ((match = FILE_PATH_REGEX.exec(source)) !== null) {
+    const filePath = normalizeRepoPath(match[1]);
+    if (filePath.includes('/')) paths.add(filePath);
+  }
+  return paths;
+}
 
 function extractCoarseAreas(text) {
-  const matches = text.match(FILE_PATH_REGEX) || [];
   const areas = new Set();
-  for (const m of matches) {
-    const top = m.split('/')[0];
-    if (COARSE_AREAS.has(top)) areas.add(top);
+  for (const filePath of extractFilePaths(text)) {
+    const area = areaForPath(filePath);
+    if (COARSE_AREAS.has(area)) areas.add(area);
+  }
+  const source = String(text || '');
+  let match;
+  AREA_PATH_REGEX.lastIndex = 0;
+  while ((match = AREA_PATH_REGEX.exec(source)) !== null) {
+    const area = normalizeRepoPath(match[1]);
+    if (COARSE_AREAS.has(area)) areas.add(area);
   }
   return areas;
 }
@@ -135,6 +181,10 @@ function parseAreaLabels(labels) {
     if (name.startsWith('area:')) areas.add(name.slice(5).trim());
   }
   return areas;
+}
+
+function parseAreaLabelsFromText(text) {
+  return parseAreaLabels((String(text || '').match(/area:[A-Za-z0-9_-]+/g) || []).map(s => ({ name: s })));
 }
 
 function labelName(label) {
@@ -181,9 +231,11 @@ function parseArgs(argv) {
 // Core classify function
 // ---------------------------------------------------------------------------
 
-const SHARED_INFRA = new Set(['scripts', 'hooks']);
+const SHARED_INFRA = new Set(['scripts', 'hooks', 'plugins/kaola-workflow/scripts']);
 
-function scanClaimedOverlap(candidateAreas, candidateAreaLabels, claimedLocks, root) {
+function scanClaimedOverlap(candidatePaths, candidateAreas, candidateAreaLabels, claimedLocks, root) {
+  let hasExactOverlap = false;
+  let exactOverlapPath = '';
   let hasDirectOverlap = false;
   let directOverlapArea = '';
   let hasSharedInfraOverlap = false;
@@ -201,12 +253,18 @@ function scanClaimedOverlap(candidateAreas, candidateAreaLabels, claimedLocks, r
     try { phase1Content = fs.readFileSync(path.join(projectDir, 'phase1-research.md'), 'utf8'); } catch (_) {}
 
     const combined = phase3Content + phase1Content;
+    const claimedPaths = extractFilePaths(combined);
     const claimedAreas = extractCoarseAreas(combined);
-    const claimedAreaLabels = parseAreaLabels(
-      (combined.match(/area:[A-Za-z0-9_-]+/g) || []).map(s => ({ name: s }))
-    );
+    const claimedAreaLabels = parseAreaLabelsFromText(combined);
 
     if (!fs.existsSync(path.join(projectDir, 'phase3-plan.md'))) anyClaimedAtPhaseLeTwo = true;
+
+    for (const filePath of candidatePaths) {
+      if (claimedPaths.has(filePath)) {
+        if (!hasExactOverlap) exactOverlapPath = filePath;
+        hasExactOverlap = true;
+      }
+    }
 
     for (const area of candidateAreas) {
       if (claimedAreas.has(area)) {
@@ -225,7 +283,7 @@ function scanClaimedOverlap(candidateAreas, candidateAreaLabels, claimedLocks, r
     }
   }
 
-  return { hasDirectOverlap, directOverlapArea, hasSharedInfraOverlap, sharedOverlapArea, hasAreaLabelOverlap, anyClaimedAtPhaseLeTwo };
+  return { hasExactOverlap, exactOverlapPath, hasDirectOverlap, directOverlapArea, hasSharedInfraOverlap, sharedOverlapArea, hasAreaLabelOverlap, anyClaimedAtPhaseLeTwo };
 }
 
 function checkDependsOn(depN) {
@@ -250,14 +308,21 @@ function classify(issue, claimedLocks, root) {
     if (blocked) return blocked;
   }
 
+  const candidatePaths = extractFilePaths(issue.body || '');
   const candidateAreas = extractCoarseAreas(issue.body || '');
   const candidateAreaLabels = parseAreaLabels(issue.labels || []);
+  for (const area of parseAreaLabelsFromText(issue.body || '')) candidateAreaLabels.add(area);
 
   const {
+    hasExactOverlap, exactOverlapPath,
     hasDirectOverlap, directOverlapArea,
     hasSharedInfraOverlap, sharedOverlapArea,
     hasAreaLabelOverlap, anyClaimedAtPhaseLeTwo,
-  } = scanClaimedOverlap(candidateAreas, candidateAreaLabels, claimedLocks, root);
+  } = scanClaimedOverlap(candidatePaths, candidateAreas, candidateAreaLabels, claimedLocks, root);
+
+  if (hasExactOverlap) {
+    return { verdict: 'red', reasoning: 'exact file path overlap at "' + exactOverlapPath + '" with a claimed project' };
+  }
 
   if (hasDirectOverlap) {
     return { verdict: 'red', reasoning: 'file-set overlap at coarse area "' + directOverlapArea + '" with a claimed project' };
@@ -315,7 +380,8 @@ function cmdClassify() {
         const m = nextStep.match(/#(\d+)/);
         if (m) labels = [{ name: 'depends-on:#' + m[1] }];
       }
-      try { body = field(content, 'body'); } catch (_) {}
+      for (const area of parseAreaLabelsFromText(content)) labels.push({ name: 'area:' + area });
+      body = content;
     }
     const result = classify({ number: args.issue, labels, body }, locks, root);
     process.stdout.write(JSON.stringify(result) + '\n');

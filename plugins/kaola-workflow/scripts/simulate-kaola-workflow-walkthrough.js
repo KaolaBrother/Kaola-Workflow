@@ -361,6 +361,57 @@ exit 0
         assert(out5e2.session && out5e2.session !== out5e1.session, 'Case 5e-b: second bootstrap must generate an independent session');
       }
 
+      // Case 5e2: packaged classifier exact-path behavior.
+      {
+        const classifierDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-workflow-case5e2-'));
+        try {
+          const locksDir = path.join(classifierDir, 'kaola-workflow', '.locks');
+          const roadmapDir = path.join(classifierDir, 'kaola-workflow', '.roadmap');
+          const claimedDir = path.join(classifierDir, 'kaola-workflow', 'claimed-plugin');
+          fs.mkdirSync(locksDir, { recursive: true });
+          fs.mkdirSync(roadmapDir, { recursive: true });
+          fs.mkdirSync(claimedDir, { recursive: true });
+          fs.writeFileSync(path.join(locksDir, 'claimed-plugin.lock'), JSON.stringify({
+            project: 'claimed-plugin',
+            session_id: 'sess-plugin-classifier',
+            issue_number: 30,
+            claimed_at: new Date().toISOString(),
+            expires: new Date(Date.now() + 3600000).toISOString(),
+            last_heartbeat: new Date().toISOString()
+          }, null, 2));
+
+          fs.writeFileSync(path.join(claimedDir, 'phase3-plan.md'),
+            '# Phase 3\nFiles: scripts/kaola-workflow-claim.js\n');
+          fs.writeFileSync(path.join(roadmapDir, 'issue-31.md'),
+            'issue: #31\ntitle: exact script touch\nstatus: open\nworkflow_project: —\nnext_step: ready\ntouches:scripts/kaola-workflow-claim.js\n');
+          const exactScript = JSON.parse(execFileSync(process.execPath, [
+            classifierScript, 'classify', '--issue', '31'
+          ], { cwd: classifierDir, encoding: 'utf8', env: { ...process.env, HOME: classifierDir, KAOLA_WORKFLOW_OFFLINE: '1' } }).trim());
+          assert(exactScript.verdict === 'red',
+            'Case 5e2-a: exact shared script path must yield red, got: ' + exactScript.verdict);
+
+          fs.writeFileSync(path.join(roadmapDir, 'issue-32.md'),
+            'issue: #32\ntitle: different script touch\nstatus: open\nworkflow_project: —\nnext_step: ready\nbody: scripts/new-helper.js\n');
+          const differentScript = JSON.parse(execFileSync(process.execPath, [
+            classifierScript, 'classify', '--issue', '32'
+          ], { cwd: classifierDir, encoding: 'utf8', env: { ...process.env, HOME: classifierDir, KAOLA_WORKFLOW_OFFLINE: '1' } }).trim());
+          assert(differentScript.verdict === 'yellow',
+            'Case 5e2-b: different shared script path must remain yellow, got: ' + differentScript.verdict);
+
+          fs.writeFileSync(path.join(claimedDir, 'phase3-plan.md'),
+            '# Phase 3\nFiles: plugins/kaola-workflow/scripts/kaola-workflow-claim.js\n');
+          fs.writeFileSync(path.join(roadmapDir, 'issue-33.md'),
+            'issue: #33\ntitle: exact plugin touch\nstatus: open\nworkflow_project: —\nnext_step: ready\nbody: plugins/kaola-workflow/scripts/kaola-workflow-claim.js\n');
+          const exactPlugin = JSON.parse(execFileSync(process.execPath, [
+            classifierScript, 'classify', '--issue', '33'
+          ], { cwd: classifierDir, encoding: 'utf8', env: { ...process.env, HOME: classifierDir, KAOLA_WORKFLOW_OFFLINE: '1' } }).trim());
+          assert(exactPlugin.verdict === 'red',
+            'Case 5e2-c: exact plugin path must yield red, got: ' + exactPlugin.verdict);
+        } finally {
+          fs.rmSync(classifierDir, { recursive: true, force: true });
+        }
+      }
+
       // Case 5f: remote claim creates/applies workflow:in-progress label and
       // still posts the sentinel comment when assignment fails.
       {
