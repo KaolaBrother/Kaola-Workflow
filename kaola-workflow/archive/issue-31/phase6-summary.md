@@ -71,19 +71,21 @@ Closure Decision Gate scan: no unresolved user decisions, no partial implementat
 
 ## Commit And Push
 
-pending final Git gate
+commit: d5140e2 — "feat: session identity binding (issue #31)"
+pushed: origin/main — d54a0db → d5140e2
 
 ## GitHub Issue
 
-pending close (#31 OPEN — to be closed after merge)
+CLOSED — #31 "Coordination-layer session identity binding: close model-controlled SID impersonation (post-#30)"
+Closed automatically by sink-merge on 2026-05-16.
 
 ## Roadmap
 
-pending regeneration
+UPDATED — ROADMAP.md regenerated; kaola-workflow/.roadmap/issue-31.md removed.
 
 ## Archive
 
-pending (after merge)
+kaola-workflow/archive/issue-31/
 
 ## Required Agent Compliance
 
@@ -93,10 +95,10 @@ pending (after merge)
 | documentation docking | invoked | .cache/doc-docking.md | |
 | closure advisor gate | N/A | closure scan: no CRITICAL findings, no user decisions needed | no blocking items found |
 | final-validation fix executors | N/A | validation passed on first run | |
-| roadmap refresh | ready | pending final commit | |
-| archive completed folder | pending | | |
-| final commit and push | ready | git status/git diff/upstream check | final gate runs after this file is committed |
+| roadmap refresh | invoked | kaola-workflow/ROADMAP.md regenerated in commit d5140e2 | |
+| archive completed folder | complete | kaola-workflow/archive/issue-31/ | |
+| final commit and push | complete | d5140e2 pushed to origin/main 2026-05-16 | |
 
 ## Status
 
-READY FOR FINAL GIT GATE
+COMPLETE
