@@ -31,6 +31,10 @@ function getRoot() {
   }
 }
 
+function mainRootFromCoord(coordRoot) {
+  return path.basename(coordRoot) === '.git' ? path.dirname(coordRoot) : coordRoot;
+}
+
 function parseArgs(argv) {
   const args = {};
   for (let i = 0; i < argv.length; i++) {
@@ -156,8 +160,23 @@ function main() {
   }
 
   // Step 0 — Remove worktree (if any) so the branch can be checked out below
+  const coordRoot = getCoordRoot();
+  process.on('exit', () => {
+    try { process.chdir(mainRootFromCoord(coordRoot)); } catch (_) {}
+    if (process.env.KAOLA_WORKFLOW_DEBUG_CWD) {
+      try {
+        const _p = process.env.KAOLA_WORKFLOW_DEBUG_CWD;
+        if (fs.existsSync(path.dirname(_p))) fs.writeFileSync(_p, process.cwd());
+      } catch (_) {}
+    }
+  });
   {
-    const coordRoot = getCoordRoot();
+    // Pre-chdir BEFORE removeWorktree: removeWorktree defers if process.cwd() is
+    // inside the worktree (claim.js:638). Escape first so removal can proceed (issue #33).
+    try { process.chdir(mainRootFromCoord(coordRoot)); } catch (e) {
+      process.stderr.write('sink-merge: could not chdir to main root before worktree removal: ' + e.message + '\n');
+    }
+
     const lockFilePath = path.join(coordRoot, 'kaola-workflow', '.locks', args.project + '.lock');
     let lock = null;
     try { lock = JSON.parse(fs.readFileSync(lockFilePath, 'utf8')); } catch (_) {}

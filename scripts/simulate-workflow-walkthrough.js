@@ -3762,6 +3762,43 @@ exit 0
         assert(!fs.existsSync(lock605.worktree_path),
           '16G (AC13): worktree for issue-605 must be gone after sink-merge');
 
+        // 16G-CWD (AC13-ext): sink-merge from inside worktree exits 0 and restores CWD
+        {
+          execFileSync(process.execPath, [
+            path.join(root, 'scripts/kaola-workflow-claim.js'),
+            'claim', '--session', 'sess-16g-cwd', '--project', 'issue-606', '--issue', '606', '--runtime', 'claude'
+          ], { cwd: epic16Tmp, encoding: 'utf8', env: env16 });
+          const lock606 = JSON.parse(fs.readFileSync(path.join(locksDirFor(epic16Tmp), 'issue-606.lock'), 'utf8'));
+          assert(lock606.worktree_path && fs.existsSync(lock606.worktree_path),
+            '16G-CWD setup: worktree for issue-606 must exist');
+
+          const cwdProbeFile = path.join(os.tmpdir(), 'kaola-workflow-16g-cwd-probe-' + Date.now() + '.txt');
+
+          const r16gCwd = spawnSync(process.execPath, [
+            path.join(root, 'scripts/kaola-workflow-sink-merge.js'),
+            '--branch', lock606.branch, '--project', 'issue-606', '--issue', '606'
+          ], {
+            cwd: lock606.worktree_path,
+            encoding: 'utf8',
+            env: { ...env16Off, KAOLA_WORKFLOW_DEBUG_CWD: cwdProbeFile }
+          });
+
+          assert(r16gCwd.status === 0,
+            '16G-CWD (AC13-ext): sink-merge from inside worktree must exit 0, got ' + r16gCwd.status +
+            '\nstderr: ' + r16gCwd.stderr);
+          assert(!fs.existsSync(lock606.worktree_path),
+            '16G-CWD (AC13-ext): worktree for issue-606 must be gone after sink-merge');
+
+          let probedCwd = '';
+          try { probedCwd = fs.readFileSync(cwdProbeFile, 'utf8').trim(); } catch (_) {}
+          try { fs.unlinkSync(cwdProbeFile); } catch (_) {}
+          let expectedRoot = epic16Tmp;
+          try { expectedRoot = fs.realpathSync(epic16Tmp); } catch (_) {}
+          assert(probedCwd === expectedRoot,
+            '16G-CWD (AC13-ext): CWD probe must equal main repo root; got "' +
+            probedCwd + '", expected "' + expectedRoot + '"');
+        }
+
         // 16H (AC9 — pre-commit hook blocks cross-worktree commit):
         {
           const tmpRepo16h = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-workflow-16h-'));

@@ -5,12 +5,16 @@ name: issue-33
 status: active
 
 ## Current Position
-phase: 1
-phase_name: Research
-step: complete
-next_command: /kaola-workflow-phase2 issue-33
+phase: 6
+phase_name: Finalize
+step: final-validation
+next_command: /kaola-workflow-phase6 issue-33
 main_session_role: orchestrator
 implementation_owner: N/A
+fix_owner: tdd-guide or build-error-resolver
+inline_emergency_fallback_authorized: no
+main_session_role: orchestrator
+implementation_owner: tdd-guide
 fix_owner: N/A
 inline_emergency_fallback_authorized: no
 
@@ -18,9 +22,9 @@ inline_emergency_fallback_authorized: no
 none
 
 ## Last Evidence
-phase_file: kaola-workflow/issue-33/phase1-research.md
-cache_file: kaola-workflow/issue-33/.cache/code-explorer.md
-last_command: /kaola-workflow-phase1 issue-33
+phase_file: kaola-workflow/issue-33/phase5-review.md
+cache_file: kaola-workflow/issue-33/.cache/code-reviewer.md
+last_command: /kaola-workflow-phase5 issue-33
 last_result: complete
 
 ## Last Updated
@@ -33,7 +37,7 @@ claimed_at: 2026-05-16T13:09:09.739Z
 sink: merge
 ## Lease
 session_id: ea7cc9aa-a9dc-4cda-891a-0b9d49f7e71c
-expires: 2026-05-16T15:10:07.523Z
-last_heartbeat: 2026-05-16T13:10:07.523Z
+expires: 2026-05-16T16:10:13.750Z
+last_heartbeat: 2026-05-16T14:10:13.750Z
 claim_comment_id: 4466941567
 owner_session_id: unverified

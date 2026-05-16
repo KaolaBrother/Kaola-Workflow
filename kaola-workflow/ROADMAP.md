@@ -7,7 +7,7 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 
 | Issue | Title | Status | Workflow Project | Next Step |
 |-------|-------|--------|------------------|-----------|
-| #33 | Phase 6 sink does not restore CWD after worktree removal | open | — | ready |
+| none | No active work | — | — | — |
 
 ## Rules
 

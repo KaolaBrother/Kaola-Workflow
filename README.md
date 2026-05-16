@@ -309,6 +309,7 @@ Session identity is derived from the Claude ancestor process rather than self-as
 | `KAOLA_KERNEL_SESSION_SKIP` | (unset) | Set to `1` to skip kernel derivation and use `KAOLA_SESSION_ID` directly (backward compatibility, direct git usage) |
 | `KAOLA_KERNEL_SESSION_FAKE_PID` | (unset) | TEST ONLY — override `walkToClaudePid()` return value for testing without running inside Claude |
 | `KAOLA_COORD_ROOT` | (auto) | Override the coordination root path; normally discovered via `git rev-parse --git-common-dir` |
+| `KAOLA_WORKFLOW_DEBUG_CWD` | (unset) | DEV/TEST ONLY — when set, `sink-merge.js` writes the final `process.cwd()` to the named file on exit. Used by test suite to verify CWD restoration after worktree removal. Not for production use. |
 
 **`derive-session` Subcommand:**
 

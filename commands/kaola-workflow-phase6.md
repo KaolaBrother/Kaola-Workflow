@@ -585,6 +585,12 @@ sink with uncommitted final changes.
 Read the `## Sink` block from `kaola-workflow/{project}/workflow-state.md`:
 
 ```bash
+# Capture main repo root before sink dispatch.
+# --git-common-dir always resolves to the shared .git dir (mirrors lines 305-306, 533-534, 565-566).
+# --show-toplevel returns the worktree root sink-merge is about to delete (issue #33).
+_COORD_ROOT_RAW_SINK="$(git rev-parse --git-common-dir 2>/dev/null || echo ".git")"
+if [[ "$_COORD_ROOT_RAW_SINK" != /* ]]; then _COORD_ROOT_RAW_SINK="$(pwd)/$_COORD_ROOT_RAW_SINK"; fi
+_MAIN_ROOT="$(dirname "$_COORD_ROOT_RAW_SINK")"
 SINK_BRANCH=$(grep '^branch:' kaola-workflow/{project}/workflow-state.md | awk '{print $2}')
 SINK_ISSUE=$(grep '^issue_number:' kaola-workflow/{project}/workflow-state.md | awk '{print $2}')
 SINK_KIND=$(awk '/^## Sink/,0' kaola-workflow/{project}/workflow-state.md | grep '^sink:' | awk '{print $2}')
@@ -619,6 +625,8 @@ case "$SINK_KIND" in
       --project {project}
     ;;
 esac
+# Restore CWD: sink-merge may have removed the worktree this shell was in (issue #33).
+cd "$_MAIN_ROOT" 2>/dev/null || true
 ```
 
 `sink-merge.js` exit codes:
