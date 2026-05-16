@@ -7,7 +7,6 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 
 | Issue | Title | Status | Workflow Project | Next Step |
 |-------|-------|--------|------------------|-----------|
-| #34 | Phase 6 archive step is non-atomic — active dirs survive finalize; status never set to closed; no GC for expired claims | open | — | ready |
 | #35 | Startup classifier picks next work by issue ordering, ignores P0/P1/P2/P3 priority labels and Engine Showcase Gap tier | open | — | ready |
 
 ## Rules

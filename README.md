@@ -286,7 +286,7 @@ fall back to the manual support directory.
 | Script | Purpose | Phase |
 |--------|---------|-------|
 | `kaola-workflow-repair-state.js` | Reconstruct workflow state from phase artifacts | Init / Resume |
-| `kaola-workflow-claim.js` | Multi-session lease management (claim, release, heartbeat, ticker, sweep, status, patch-branch, watch-pr, bootstrap, derive-session); `--runtime claude\|codex` flag on claim and bootstrap | All phases |
+| `kaola-workflow-claim.js` | Multi-session lease management (claim, release, heartbeat, ticker, sweep, status, patch-branch, watch-pr, bootstrap, derive-session, finalize); `--runtime claude\|codex` flag on claim and bootstrap | All phases |
 | `kaola-workflow-sink-merge.js` | Branch-per-issue auto-merge sink — rebase-then-ff-merge sequence | Phase 6 |
 | `kaola-workflow-roadmap.js` | ROADMAP.md regenerator — generate/migrate/validate/init-issue/project-name subcommands; reads `kaola-workflow/.roadmap/issue-{N}.md` per-issue files | Phase 1, Phase 6 |
 | `kaola-workflow-classifier.js` | Parallel-work classifier — classifies open issues as green/yellow/red/blocked before claim; reads lock files, issue file sets, and active remote claim markers | Startup (Step 0) |
@@ -449,7 +449,7 @@ Multiple concurrent Kaola-Workflow sessions can safely coexist when each targets
 - Background ticker (`ticker` subcommand) keeps leases active across machines with 15-min heartbeat intervals
 - Claim race tiebreaker: lowest GitHub comment ID wins; losers yield cleanly and release the lease
 - Simultaneous startup race retry: if a session classifies an issue as claimable but loses the local claim race before writing its lock, bootstrap continues scanning the open issue list and claims the next green/yellow issue automatically
-- Remote sweeper (`sweep` subcommand) checks GitHub comment `updated_at` — skips active sessions (< 24h), clears stale ones (≥ 24h)
+- Remote sweeper (`sweep` subcommand) checks GitHub comment `updated_at` — skips active sessions (< 24h), clears stale ones (≥ 24h); second pass garbage-collects orphaned active directories (no lock file + expired >30 minutes + no phase artifacts) as `status: abandoned`
 - Pre-commit hook blocks commits that stage files from a project owned by a different session
 
 **Shared coordination state (coordRoot)**: All linked worktrees of the same repository share lock, session, and ticker state via the canonical git common directory (`<repo>/.git/kaola-workflow/`). Discovered via `git rev-parse --git-common-dir`. This ensures that a session is uniquely bound to an issue across all worktrees on the same machine or across different machines accessing the same repository.
