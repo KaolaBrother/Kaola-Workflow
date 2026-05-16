@@ -15,7 +15,9 @@ function assert(cond, msg) { if (!cond) throw new Error(msg); }
 function isSafeName(name) {
   return typeof name === 'string' && name.length > 0 &&
     !name.includes('/') && !name.includes('\\') &&
-    !name.includes('\0') && name !== '.' && name !== '..';
+    !name.includes('\0') && !name.includes('\n') &&
+    !name.includes('\r') && !name.includes('\t') &&
+    name !== '.' && name !== '..';
 }
 
 function field(content, name) {
@@ -89,6 +91,7 @@ function getRoot() {
 }
 
 function getCoordRoot() {
+  if (process.env.KAOLA_COORD_ROOT) return process.env.KAOLA_COORD_ROOT;
   // Returns the canonical git common directory (shared by all worktrees).
   // On macOS /var is a symlink to /private/var; we intentionally do NOT call
   // fs.realpathSync here because coordRoot is only used for filesystem I/O
@@ -146,6 +149,7 @@ function parseArgs(argv) {
   const args = {};
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--json') { args.json = true; continue; }
+    if (argv[i] === '--platform-override') { args.platformOverride = true; continue; }
     if (argv[i] === '--force-live-takeover') { args.forceLiveTakeover = true; continue; }
     if (argv[i] === '--session' && argv[i + 1]) { args.session = argv[++i]; continue; }
     if (argv[i] === '--project' && argv[i + 1]) { args.project = argv[++i]; continue; }
@@ -169,6 +173,114 @@ function currentSessionId(args, options) {
   if (existing) return existing;
   if (options && options.fallback === false) return '';
   return crypto.randomUUID();
+}
+
+function walkToClaudePid() {
+  let pid = process.ppid;
+  for (let i = 0; i < 5; i++) {
+    try {
+      const out = execFileSync('ps', ['-o', 'ppid=,comm=', '-p', String(pid)], { encoding: 'utf8' }).trim();
+      const parts = out.split(/\s+/);
+      const ppidStr = parts[0];
+      const comm = parts.slice(1).join(' ');
+      if (/claude/i.test(comm)) return pid;
+      const next = parseInt(ppidStr, 10);
+      if (!next || next <= 1) return null;
+      pid = next;
+    } catch (_) { return null; }
+  }
+  return null;
+}
+
+function readClaudeStartTimeStr(pid) {
+  try {
+    return execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], { encoding: 'utf8' }).trim();
+  } catch (_) { return ''; }
+}
+
+function writeIdentityFile(identityPath, data) {
+  try {
+    fs.mkdirSync(path.dirname(identityPath), { recursive: true });
+    const content = JSON.stringify(data) + '\n';
+    const fd = fs.openSync(identityPath, 'wx', 0o600);
+    fs.writeSync(fd, content);
+    fs.closeSync(fd);
+  } catch (_) { /* silently skip race conditions */ }
+}
+
+function derivePlatformSessionId(coordRoot, options = {}) {
+  if (process.env.KAOLA_KERNEL_SESSION_SKIP === '1') {
+    return { sid: envSessionId() || null, source: 'skip' };
+  }
+  // KAOLA_KERNEL_SESSION_FAKE_PID: test-only override of walkToClaudePid return value
+  const fakePid = process.env.KAOLA_KERNEL_SESSION_FAKE_PID
+    ? parseInt(process.env.KAOLA_KERNEL_SESSION_FAKE_PID, 10)
+    : null;
+  const claudePid = fakePid || walkToClaudePid();
+  if (!claudePid) return { sid: null, source: null };
+  const identityPath = path.join(coordRoot, 'kaola-workflow', '.runtime', claudePid + '.identity');
+  try {
+    const raw = fs.readFileSync(identityPath, 'utf8');
+    const data = JSON.parse(raw);
+    if (!isPidAlive(claudePid)) {
+      try { fs.unlinkSync(identityPath); } catch (_) {}
+      return { sid: null, source: null };
+    }
+    const currentStart = readClaudeStartTimeStr(claudePid);
+    if (!currentStart || data.claude_start_time_str !== currentStart) {
+      try { fs.unlinkSync(identityPath); } catch (_) {}
+      return { sid: null, source: null };
+    }
+    if (!isSafeName(data.sid)) {
+      return { sid: null, source: 'invalid_sid' };
+    }
+    return { sid: data.sid, source: 'file' };
+  } catch (e) {
+    if (e.code !== 'ENOENT') { /* parse/ps error — treat as missing */ }
+    return { sid: null, source: null };
+  }
+}
+
+function writeAuditLog(coordRoot, sessionId, cmdName) {
+  const auditDir = path.join(coordRoot, 'kaola-workflow', '.audit');
+  const auditPath = path.join(auditDir, 'identity-override.log');
+  try {
+    fs.mkdirSync(auditDir, { recursive: true });
+    const entry = JSON.stringify({ ts: new Date().toISOString(), invoker_sid: sessionId, cmd: cmdName, platform_override: true }) + '\n';
+    fs.appendFileSync(auditPath, entry, { mode: 0o600 });
+  } catch (_) {}
+}
+
+function enforcePlatformSessionOrExit(sessionId, coordRoot, args) {
+  if (process.env.KAOLA_ENFORCE_PLATFORM_SESSION !== '1') return;
+  if (args.platformOverride) {
+    writeAuditLog(coordRoot, sessionId, process.argv[2]);
+    return;
+  }
+  const derived = derivePlatformSessionId(coordRoot);
+  if (derived.sid === null) {
+    process.stderr.write('identity: no Claude ancestor; use --platform-override for non-Claude callers\n');
+    process.exit(3);
+  }
+  if (derived.sid !== sessionId) {
+    process.stderr.write('identity: SID mismatch: lock.session_id=' + sessionId + ' derived=' + derived.sid + '\n');
+    process.exit(3);
+  }
+}
+
+function cmdDeriveSession() {
+  const args = parseArgs(process.argv.slice(3));
+  const coordRoot = getCoordRoot();
+  const result = derivePlatformSessionId(coordRoot);
+  if (result.sid === null) {
+    if (args.json) process.stdout.write(JSON.stringify({ sid: null, source: result.source }) + '\n');
+    process.exit(4);
+  }
+  if (args.json) {
+    process.stdout.write(JSON.stringify(result) + '\n');
+  } else {
+    process.stdout.write(result.sid + '\n');
+  }
 }
 
 function assertSafeSession(sessionId, label) {
@@ -386,6 +498,21 @@ function cmdVerifyStartup() {
 
   const root = getRoot();
   const coordRoot = getCoordRoot();
+
+  // Identity check — only active under enforcement
+  if (process.env.KAOLA_ENFORCE_PLATFORM_SESSION === '1') {
+    const derived = derivePlatformSessionId(coordRoot);
+    if (derived.sid === null) {
+      process.stdout.write(JSON.stringify({ authorized: false, session: args.session, project: args.project, reason: 'no Claude ancestor' }) + '\n');
+      process.exit(4);
+    }
+    if (derived.sid !== args.session) {
+      process.stdout.write(JSON.stringify({ authorized: false, session: args.session, caller_sid: derived.sid, project: args.project, reason: 'caller platform session does not match claimed session' }) + '\n');
+      process.exit(2);
+    }
+  }
+
+  // Existing receipt-authorization logic:
   const receipt = readStartupReceipt(coordRoot, root, args.session);
   const authorized = startupReceiptAuthorizesProject(receipt, args.session, args.project);
   const result = {
@@ -413,7 +540,22 @@ function cmdSession() {
   const args = parseArgs(process.argv.slice(3));
   const root = getRoot();
   const coordRoot = getCoordRoot();
-  const sessionId = currentSessionId(args);
+
+  let sessionId;
+  if (args.session) {
+    // Explicit --session provided: use it directly (project ownership check path)
+    sessionId = args.session;
+  } else {
+    // No --session: derive from kernel (new behavior for issue #31)
+    const derived = derivePlatformSessionId(coordRoot);
+    if (derived.sid === null && process.env.KAOLA_KERNEL_SESSION_SKIP !== '1') {
+      process.stderr.write('session: no Claude ancestor found (exit 4)\n');
+      process.exit(4);
+    }
+    sessionId = derived.sid || envSessionId();
+    if (!sessionId) { process.exit(4); }
+  }
+
   assertSafeSession(sessionId, '--session/current platform session id');
 
   if (args.project) {
@@ -629,7 +771,8 @@ function updateSinkLease(stateFile, lockData) {
     'session_id: ' + lockData.session_id,
     'expires: ' + lockData.expires,
     'last_heartbeat: ' + lockData.last_heartbeat,
-    'claim_comment_id: ' + safeCommentId
+    'claim_comment_id: ' + safeCommentId,
+    'owner_session_id: ' + (lockData.owner_session_id || 'unverified')
   ].join('\n');
 
   if (!/^## Sink\s*$/m.test(content)) {
@@ -728,7 +871,7 @@ function validateClaimArgs(args) {
     '--runtime must be "claude" or "codex"');
 }
 
-function buildLockData(args, machineId, now) {
+function buildLockData(args, machineId, now, ownerSessionId) {
   return {
     project: args.project,
     session_id: args.session,
@@ -744,6 +887,7 @@ function buildLockData(args, machineId, now) {
     runtime: args.runtime || 'claude',
     worktree_path: null,
     branch: null,
+    owner_session_id: ownerSessionId || 'unverified',
   };
 }
 
@@ -975,6 +1119,7 @@ function cmdBootstrap() {
   const classifierScript = path.join(path.dirname(__filename), 'kaola-workflow-classifier.js');
   const root = getRoot();
   const coordRoot = getCoordRoot();
+  if (process.env.KAOLA_KERNEL_SESSION_SKIP !== '1') enforcePlatformSessionOrExit(args.session, coordRoot, args);
   runBootstrapSweep(__filename, root);
   runBootstrapWatchPr(__filename, root);
   const owned = ownedActiveProject(coordRoot, root, args.session);
@@ -1028,6 +1173,7 @@ function cmdStartup() {
 
   const root = getRoot();
   const coordRoot = getCoordRoot();
+  if (process.env.KAOLA_KERNEL_SESSION_SKIP !== '1') enforcePlatformSessionOrExit(args.session, coordRoot, args);
   const classifierScript = path.join(path.dirname(__filename), 'kaola-workflow-classifier.js');
   const issueFetch = fetchOpenIssueRecords(root);
   const sync = issueFetch.status === 'ok'
@@ -1106,6 +1252,9 @@ function cmdClaim() {
 
   const root = getRoot();
   const coordRoot = getCoordRoot();
+  // Derive owner_session_id BEFORE enforcement check so it's always available
+  const ownerSid = derivePlatformSessionId(coordRoot).sid || 'unverified';
+  enforcePlatformSessionOrExit(args.session, coordRoot, args);
   const machineId = getMachineId();
   const now = new Date();
 
@@ -1175,7 +1324,7 @@ function cmdClaim() {
     return;
   }
 
-  const lockData = buildLockData(args, machineId, now);
+  const lockData = buildLockData(args, machineId, now, ownerSid);
 
   // Single O_EXCL attempt — NO retry (retrying changes semantics)
   try { writeLockFile(lp, lockData); }
@@ -1377,6 +1526,7 @@ function cmdHandoff() {
 
   const root = getRoot();
   const coordRoot = getCoordRoot();
+  enforcePlatformSessionOrExit(args.session, coordRoot, args);
   const machineId = getMachineId();
   const now = new Date();
   fs.mkdirSync(locksDir(coordRoot), { recursive: true });
@@ -1497,6 +1647,7 @@ function cmdRelease() {
   assert(args.session, '--session <id> required for release');
   const root = getRoot();
   const coordRoot = getCoordRoot();
+  enforcePlatformSessionOrExit(args.session, coordRoot, args);
   releaseSession(root, coordRoot, args.session);
 }
 
@@ -1506,6 +1657,7 @@ function cmdHeartbeat() {
 
   const root = getRoot();
   const coordRoot = getCoordRoot();
+  enforcePlatformSessionOrExit(args.session, coordRoot, args);
   const locks = readLockFiles(coordRoot, root);
   const match = locks.find(l => l.session_id === args.session);
 
@@ -1551,6 +1703,11 @@ function acquirePidFile(pidPath) {
 }
 
 function runTick(tickCtx) {
+  if (tickCtx.claudePid && !isPidAlive(tickCtx.claudePid)) {
+    process.stderr.write('ticker: Claude ancestor PID ' + tickCtx.claudePid + ' gone; exiting gracefully\n');
+    try { fs.unlinkSync(tickCtx.pidPath); } catch (_) {}
+    process.exit(0);
+  }
   tickCtx.tickCountRef.value++;
   const tickCount = tickCtx.tickCountRef.value;
   const locks = readLockFiles(tickCtx.coordRoot, tickCtx.root);
@@ -1612,10 +1769,12 @@ function cmdTicker() {
   fs.mkdirSync(tickersDir, { recursive: true });
   const pidPath = tickerPidPath(coordRoot, args.session);
   if (acquirePidFile(pidPath) === null) return;
+  enforcePlatformSessionOrExit(args.session, coordRoot, args);
   function gracefulShutdown() { try { fs.unlinkSync(pidPath); } catch (_) {} process.exit(0); }
   process.on('SIGTERM', gracefulShutdown);
   process.on('SIGINT',  gracefulShutdown);
   const tickCtx = { root, coordRoot, session: args.session, pidPath, intervalMs, tickCountRef: { value: 0 } };
+  tickCtx.claudePid = walkToClaudePid();  // null if not under Claude
   runTick(tickCtx);
 }
 
@@ -1632,8 +1791,10 @@ function isRemoteStale(lock) {
 }
 
 function cmdSweep() {
+  const args = parseArgs(process.argv.slice(3));
   const root = getRoot();
   const coordRoot = getCoordRoot();
+  enforcePlatformSessionOrExit(args.session || '', coordRoot, args);
   const dir = locksDir(coordRoot);
   if (!fs.existsSync(dir)) return;
 
@@ -1659,6 +1820,16 @@ function cmdSweep() {
     }
     try { fs.unlinkSync(fp); } catch (_) {}
   }
+
+  const runtimeDir = path.join(coordRoot, 'kaola-workflow', '.runtime');
+  try {
+    for (const f of fs.readdirSync(runtimeDir).filter(x => x.endsWith('.identity'))) {
+      const pid = parseInt(f, 10);
+      if (!isPidAlive(pid)) {
+        try { fs.unlinkSync(path.join(runtimeDir, f)); } catch (_) {}
+      }
+    }
+  } catch (e) { if (e.code !== 'ENOENT') process.stderr.write('sweep: runtime dir error: ' + e.message + '\n'); }
 
   try {
     execFileSync('git', ['worktree', 'prune'],
@@ -1724,6 +1895,7 @@ function cmdPatchBranch() {
 
   const root = getRoot();
   const coordRoot = getCoordRoot();
+  enforcePlatformSessionOrExit(args.session, coordRoot, args);
   const lp = lockPath(coordRoot, args.project);
   assert(fs.existsSync(lp), 'no lock file for project: ' + args.project);
   const lock = JSON.parse(fs.readFileSync(lp, 'utf8'));
@@ -1757,6 +1929,7 @@ function cmdWatchPr() {
   const args = parseArgs(process.argv.slice(3));
   const root = getRoot();
   const coordRoot = getCoordRoot();
+  enforcePlatformSessionOrExit(args.session || '', coordRoot, args);
   const dir = locksDir(coordRoot);
   if (!fs.existsSync(dir)) return;
 
@@ -1813,7 +1986,7 @@ function cmdWatchPr() {
 
 function main() {
   const sub = process.argv[2];
-  assert(sub, 'usage: kaola-workflow-claim.js <claim|release|heartbeat|ticker|sweep|status|session|can-handoff|handoff|verify-startup|patch-branch|watch-pr|bootstrap|startup>');
+  assert(sub, 'usage: kaola-workflow-claim.js <claim|release|heartbeat|ticker|sweep|status|session|derive-session|can-handoff|handoff|verify-startup|patch-branch|watch-pr|bootstrap|startup>');
   if (sub === 'claim') return cmdClaim();
   if (sub === 'can-handoff') return cmdCanHandoff();
   if (sub === 'handoff') return cmdHandoff();
@@ -1823,6 +1996,7 @@ function main() {
   if (sub === 'sweep') return cmdSweep();
   if (sub === 'status') return cmdStatus();
   if (sub === 'session') return cmdSession();
+  if (sub === 'derive-session') return cmdDeriveSession();
   if (sub === 'patch-branch') return cmdPatchBranch();
   if (sub === 'watch-pr') return cmdWatchPr();
   if (sub === 'bootstrap') return cmdBootstrap();

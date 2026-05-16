@@ -1,5 +1,28 @@
 # Changelog
 
+## [Unreleased]
+
+### Added — Session Identity Binding (issue #31)
+
+- **Kernel-derived session identity**: Replaces self-asserted `KAOLA_SESSION_ID` with kernel-derived identity using process-tree walking to find Claude ancestor PID
+- **O_EXCL identity files**: Session start (`SessionStart` hook) writes identity file at `<coordRoot>/kaola-workflow/.runtime/<claude_pid>.identity` containing session ID, Claude PID, and start time
+- **`derive-session` subcommand**: New subcommand on `kaola-workflow-claim.js` walks process tree, reads identity file, validates ancestor is alive with matching start time, and returns derived session ID. Exits code 4 if no Claude ancestor found. Supports `--json` output format.
+- **Enforcement mode**: New `KAOLA_ENFORCE_PLATFORM_SESSION=1` environment variable enables enforcement; mutating commands (claim, release, heartbeat, ticker, sweep, bootstrap, can-handoff, handoff, verify-startup, patch-branch, watch-pr) exit code 3 on session mismatch
+- **Environment variables**: 
+  - `KAOLA_ENFORCE_PLATFORM_SESSION` — Enable enforcement mode
+  - `KAOLA_KERNEL_SESSION_SKIP` — Skip kernel derivation and use `KAOLA_SESSION_ID` directly (backward compatibility)
+  - `KAOLA_KERNEL_SESSION_FAKE_PID` — TEST ONLY; override walkToClaudePid() return value
+  - `KAOLA_COORD_ROOT` — Override coordination root path
+- **Pre-commit hook enhancement**: Hook now calls `derive-session` instead of comparing env vars. Under `KAOLA_ENFORCE_PLATFORM_SESSION=1`, blocks commits when `derive-session` returns empty (no Claude ancestor)
+
+### Tests
+
+- **Epic Case 8N**: Session identity binding test suite covering:
+  - AC1: Identity file creation and validation via `SessionStart` hook
+  - AC2: `derive-session` exits 4 without Claude ancestor
+  - AC3: Enforcement exits 3 on SID mismatch
+  - AC4-AC15: Process tree walking, start-time validation, file cleanup, audit logging, and command enforcement
+
 ## 3.2.0 - 2026-05-16 (Claude Code) / Codex 1.2.0 - 2026-05-16
 
 ### Added — Multi-session Worktree-Per-Session Isolation

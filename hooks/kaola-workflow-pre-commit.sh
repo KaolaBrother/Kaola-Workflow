@@ -82,9 +82,18 @@ fi
 
 [ -z "$OWNER" ] && exit 0
 
-if [ "$OWNER" != "$KAOLA_SESSION_ID" ]; then
-  printf 'BLOCKED: cross-session commit on project "%s". Lock held by %s; current session is %s.\n' \
-    "$PROJECT" "$OWNER" "$KAOLA_SESSION_ID" >&2
+DERIVED_SID="$(node "$GIT_ROOT/scripts/kaola-workflow-claim.js" derive-session 2>/dev/null)" || DERIVED_SID=""
+if [ -z "$DERIVED_SID" ]; then
+  if [ "${KAOLA_ENFORCE_PLATFORM_SESSION:-}" = "1" ]; then
+    printf 'BLOCKED: derive-session returned no identity under enforcement for project "%s". Cannot verify session ownership.\n' \
+      "$PROJECT" >&2
+    exit 2
+  fi
+  DERIVED_SID="${KAOLA_SESSION_ID:-}"
+fi
+if [ -n "$DERIVED_SID" ] && [ "$OWNER" != "$DERIVED_SID" ]; then
+  printf 'BLOCKED: cross-session commit on project "%s". Lock held by %s; current session is %s (derived).\n' \
+    "$PROJECT" "$OWNER" "$DERIVED_SID" >&2
   exit 2
 fi
 

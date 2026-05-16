@@ -3859,6 +3859,486 @@ exit 0
       }
     }
 
+    // 8N-task1.1: session-env identity file write (issue #31)
+    {
+      const tmpRepo11 = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-task11-'));
+      try {
+        // Set up a real git repo so git rev-parse --git-common-dir works
+        execFileSync('git', ['init', tmpRepo11], { encoding: 'utf8' });
+        execFileSync('git', ['-C', tmpRepo11, 'config', 'user.email', 'test@example.com'], { encoding: 'utf8' });
+        execFileSync('git', ['-C', tmpRepo11, 'config', 'user.name', 'Test'], { encoding: 'utf8' });
+
+        // Prepare the env file that session-env.js will append to
+        const envFile11 = path.join(tmpRepo11, 'test.env');
+        fs.writeFileSync(envFile11, '');
+
+        const sessionEnvScript = path.join(__dirname, 'kaola-workflow-session-env.js');
+
+        // Invoke the script with stdin JSON and required env vars
+        const result11 = spawnSync('node', [sessionEnvScript], {
+          input: '{"session_id":"test-sid-1.1"}',
+          env: {
+            ...process.env,
+            CLAUDE_ENV_FILE: envFile11,
+            GIT_ROOT: tmpRepo11,
+            KAOLA_WORKFLOW_OFFLINE: '1'
+          },
+          encoding: 'utf8'
+        });
+
+        assert(result11.status === 0,
+          '8N-task1.1: session-env.js must exit 0, got ' + result11.status + ' stderr: ' + result11.stderr);
+
+        // Baseline: the env file must contain the export line
+        const envContents11 = fs.readFileSync(envFile11, 'utf8');
+        assert(envContents11.includes("export KAOLA_SESSION_ID='test-sid-1.1'"),
+          '8N-task1.1: env file must contain KAOLA_SESSION_ID export, got: ' + envContents11);
+
+        // Identity runtime dir must be created (dir exists even if identity file write fails)
+        const gitCommonDir11 = execFileSync('git', ['rev-parse', '--git-common-dir'],
+          { cwd: tmpRepo11, encoding: 'utf8' }).trim();
+        const coordRoot11 = path.resolve(tmpRepo11, gitCommonDir11);
+        const runtimeDir11 = path.join(coordRoot11, 'kaola-workflow', '.runtime');
+        assert(fs.existsSync(runtimeDir11),
+          '8N-task1.1: runtime dir must exist after session-env runs: ' + runtimeDir11);
+      } finally {
+        fs.rmSync(tmpRepo11, { recursive: true, force: true });
+      }
+    }
+
+    // 8N-task1.2: derivePlatformSessionId via derive-session --json subcommand
+    {
+      const claimScript = path.join(root, 'scripts/kaola-workflow-claim.js');
+
+      // Test A — SKIP path (uses KAOLA_KERNEL_SESSION_SKIP=1)
+      const rA = spawnSync(process.execPath, [claimScript, 'derive-session', '--json'], {
+        encoding: 'utf8',
+        env: { ...process.env, HOME: tmp, KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_KERNEL_SESSION_SKIP: '1', KAOLA_SESSION_ID: 'sid-test-skip' }
+      });
+      assert(rA.status === 0, '8N-task1.2-A: SKIP path exits 0, got ' + rA.status);
+      const outA = JSON.parse(rA.stdout.trim());
+      assert(outA.sid === 'sid-test-skip', '8N-task1.2-A: SID matches env');
+      assert(outA.source === 'skip', '8N-task1.2-A: source is skip');
+
+      // Test B — FAKE_PID + valid identity file (file read succeeds)
+      const fakePid = process.pid; // alive PID
+      const runtimeDir = path.join(tmp, 'kaola-workflow', '.runtime');
+      fs.mkdirSync(runtimeDir, { recursive: true });
+      const identPath = path.join(runtimeDir, fakePid + '.identity');
+      const startStr = execFileSync('ps', ['-o', 'lstart=', '-p', String(fakePid)], { encoding: 'utf8' }).trim();
+      fs.writeFileSync(identPath, JSON.stringify({ sid: 'sid-from-file', claude_pid: fakePid, claude_start_time_str: startStr, runtime: 'claude', written_at: Date.now() }) + '\n', { mode: 0o600 });
+      const rB = spawnSync(process.execPath, [claimScript, 'derive-session', '--json'], {
+        encoding: 'utf8',
+        env: { ...process.env, HOME: tmp, KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_KERNEL_SESSION_FAKE_PID: String(fakePid), KAOLA_COORD_ROOT: tmp }
+      });
+      assert(rB.status === 0, '8N-task1.2-B: file read exits 0, got ' + rB.status + ' stderr:' + rB.stderr);
+      const outB = JSON.parse(rB.stdout.trim());
+      assert(outB.sid === 'sid-from-file', '8N-task1.2-B: SID from file');
+      assert(outB.source === 'file', '8N-task1.2-B: source is file');
+
+      // Test C — start_time mismatch deletes file (AC11)
+      const recycledPath = path.join(runtimeDir, fakePid + '.identity');
+      fs.writeFileSync(recycledPath, JSON.stringify({ sid: 'sid-stale', claude_pid: fakePid, claude_start_time_str: 'epoch-1970-mismatch', runtime: 'claude', written_at: Date.now() }) + '\n', { mode: 0o600 });
+      const rC = spawnSync(process.execPath, [claimScript, 'derive-session', '--json'], {
+        encoding: 'utf8',
+        env: { ...process.env, HOME: tmp, KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_KERNEL_SESSION_FAKE_PID: String(fakePid), KAOLA_COORD_ROOT: tmp }
+      });
+      assert(!fs.existsSync(recycledPath), '8N-task1.2-C: start_time mismatch deletes identity file');
+
+      // Test D — dead PID deletes file (AC10)
+      const deadPid = 99999999;
+      const deadPath = path.join(runtimeDir, deadPid + '.identity');
+      fs.writeFileSync(deadPath, JSON.stringify({ sid: 'sid-dead', claude_pid: deadPid, claude_start_time_str: 'irrelevant', written_at: Date.now() }) + '\n', { mode: 0o600 });
+      const rD = spawnSync(process.execPath, [claimScript, 'derive-session', '--json'], {
+        encoding: 'utf8',
+        env: { ...process.env, HOME: tmp, KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_KERNEL_SESSION_FAKE_PID: String(deadPid), KAOLA_COORD_ROOT: tmp }
+      });
+      assert(!fs.existsSync(deadPath), '8N-task1.2-D: dead PID deletes identity file');
+    }
+
+    // 8N-task2: cmdSession and cmdVerifyStartup use kernel-derived session identity
+    {
+      const claimScript = path.join(root, 'scripts/kaola-workflow-claim.js');
+
+      // AC2 — cmdSession exits 4 without Claude ancestor (no --session, no SKIP, no FAKE_PID)
+      const r2 = spawnSync(process.execPath, [claimScript, 'session'], {
+        encoding: 'utf8',
+        env: { ...process.env, HOME: tmp, KAOLA_WORKFLOW_OFFLINE: '1' }
+      });
+      assert(r2.status === 4, 'AC2: cmdSession exits 4 without Claude ancestor, got ' + r2.status);
+
+      // AC4 — cmdVerifyStartup blocks cross-session caller (enforcement active)
+      // KAOLA_SESSION_ID=sess-impostor, --session sess-true-owner: derived SID (sess-impostor) != --session -> exit 2
+      const r4 = spawnSync(process.execPath, [claimScript, 'verify-startup', '--session', 'sess-true-owner', '--project', 'proj-ac4'], {
+        encoding: 'utf8',
+        env: { ...process.env, HOME: tmp, KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_KERNEL_SESSION_SKIP: '1', KAOLA_SESSION_ID: 'sess-impostor', KAOLA_ENFORCE_PLATFORM_SESSION: '1' }
+      });
+      assert(r4.status === 2, 'AC4: verify-startup blocks cross-session caller, got ' + r4.status);
+      assert(r4.stdout.includes('caller platform session does not match claimed session'),
+        'AC4: must block via identity check (not receipt fallback); got: ' + r4.stdout);
+
+      // AC5 — cmdSession returns derived SID under SKIP
+      const r5 = spawnSync(process.execPath, [claimScript, 'session'], {
+        encoding: 'utf8',
+        env: { ...process.env, HOME: tmp, KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_KERNEL_SESSION_SKIP: '1', KAOLA_SESSION_ID: 'sid-ac5' }
+      });
+      assert(r5.status === 0, 'AC5: cmdSession exits 0, got ' + r5.status);
+      assert(r5.stdout.trim() === 'sid-ac5', 'AC5: cmdSession returns derived SID, got ' + r5.stdout.trim());
+    }
+
+    // 8N-task3: enforcePlatformSessionOrExit wired into mutating commands
+    {
+      const claimScript = path.join(root, 'scripts/kaola-workflow-claim.js');
+
+      // AC3 — enforcement exits 3 on SID mismatch
+      const r3 = spawnSync(process.execPath, [claimScript, 'claim', '--session', 'sess-claimed', '--project', 'proj-ac3'], {
+        encoding: 'utf8',
+        env: { ...process.env, HOME: tmp, KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_ENFORCE_PLATFORM_SESSION: '1', KAOLA_KERNEL_SESSION_SKIP: '1', KAOLA_SESSION_ID: 'sid-derived' }
+      });
+      assert(r3.status === 3, 'AC3: enforcement exits 3 on SID mismatch, got ' + r3.status);
+
+      // AC6 — spot-check 3 mutating commands exit 3 on mismatch
+      for (const [sub, extra] of [['heartbeat', ['--session', 'sess-other']], ['release', ['--session', 'sess-other']]]) {
+        const r6 = spawnSync(process.execPath, [claimScript, sub, ...extra], {
+          encoding: 'utf8',
+          env: { ...process.env, HOME: tmp, KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_ENFORCE_PLATFORM_SESSION: '1', KAOLA_KERNEL_SESSION_SKIP: '1', KAOLA_SESSION_ID: 'sid-derived' }
+        });
+        assert(r6.status === 3, 'AC6: ' + sub + ' exits 3 on SID mismatch, got ' + r6.status);
+      }
+
+      // AC7 — enforcement off: commands succeed (backward compat)
+      const r7 = spawnSync(process.execPath, [claimScript, 'claim', '--session', 'sess-ac7', '--project', 'proj-ac7'], {
+        encoding: 'utf8',
+        env: { ...process.env, HOME: tmp, KAOLA_WORKFLOW_OFFLINE: '1' }  // no enforcement
+      });
+      assert(r7.status === 0, 'AC7: claim succeeds with enforcement off, got ' + r7.status);
+
+      // AC8 — --platform-override bypasses enforcement, writes audit log
+      const coordRootAc8 = tmp;  // use tmp as coordRoot via KAOLA_COORD_ROOT
+      const r8 = spawnSync(process.execPath, [claimScript, 'claim', '--session', 'sess-ac8', '--project', 'proj-ac8', '--platform-override'], {
+        encoding: 'utf8',
+        env: { ...process.env, HOME: tmp, KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_ENFORCE_PLATFORM_SESSION: '1', KAOLA_KERNEL_SESSION_SKIP: '1', KAOLA_SESSION_ID: 'sid-different', KAOLA_COORD_ROOT: coordRootAc8 }
+      });
+      assert(r8.status === 0, 'AC8: --platform-override bypasses enforcement, got ' + r8.status);
+      const auditPath = path.join(coordRootAc8, 'kaola-workflow', '.audit', 'identity-override.log');
+      assert(fs.existsSync(auditPath), 'AC8: audit log created');
+      const entry = JSON.parse(fs.readFileSync(auditPath, 'utf8').trim().split('\n')[0]);
+      assert(entry.platform_override === true, 'AC8: audit marks platform_override=true');
+      assert(entry.cmd === 'claim', 'AC8: audit records cmd=claim');
+    }
+
+    // 8N-task4.1 — AC15: pre-commit hook uses kernel-derived session ID (replace env-var comparison)
+    {
+      const hookPath = path.join(root, 'hooks', 'kaola-workflow-pre-commit.sh');
+      assert(fs.existsSync(hookPath), 'AC15: pre-commit hook must exist');
+
+      const ac15Tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-workflow-ac15-'));
+      try {
+        execFileSync('git', ['init', '-q', '-b', 'main', ac15Tmp]);
+        execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: ac15Tmp });
+        execFileSync('git', ['config', 'user.name', 'Test'], { cwd: ac15Tmp });
+        fs.writeFileSync(path.join(ac15Tmp, 'README.md'), 'init\n');
+        execFileSync('git', ['add', 'README.md'], { cwd: ac15Tmp });
+        execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: ac15Tmp });
+
+        // Set up lock file for proj-ac15 owned by sess-real-owner
+        const locksDir = locksDirFor(ac15Tmp);
+        fs.mkdirSync(locksDir, { recursive: true });
+        fs.writeFileSync(path.join(locksDir, 'proj-ac15.lock'), JSON.stringify({
+          project: 'proj-ac15',
+          session_id: 'sess-real-owner',
+          machine_id: 'm1',
+          claimed_at: '2026-05-16T10:00:00Z',
+          expires: '2026-05-16T12:00:00Z',
+          last_heartbeat: '2026-05-16T10:00:00Z',
+          issue_number: 605,
+          claim_comment_id: null,
+          sink: 'merge'
+        }, null, 2) + '\n');
+
+        // Stage a file under proj-ac15
+        fs.mkdirSync(path.join(ac15Tmp, 'kaola-workflow', 'proj-ac15'), { recursive: true });
+        fs.writeFileSync(path.join(ac15Tmp, 'kaola-workflow', 'proj-ac15', 'workflow-state.md'),
+          '# Kaola-Workflow State\nsession_id: sess-real-owner\n');
+        execFileSync('git', ['add', 'kaola-workflow/proj-ac15/workflow-state.md'], { cwd: ac15Tmp });
+
+        // AC15-block: wrong session must be blocked with exit 2, stderr must include "(derived)"
+        const rBlock = spawnSync('bash', [hookPath], {
+          cwd: ac15Tmp,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            HOME: ac15Tmp,
+            KAOLA_WORKFLOW_OFFLINE: '1',
+            KAOLA_KERNEL_SESSION_SKIP: '1',
+            KAOLA_SESSION_ID: 'sess-impostor'
+          }
+        });
+        assert(rBlock.status === 2,
+          'AC15-block: hook must exit 2 when impostor session commits proj-ac15 files, got ' + rBlock.status +
+          '\nstderr: ' + rBlock.stderr);
+        assert(rBlock.stderr.includes('BLOCKED'),
+          'AC15-block: stderr must contain BLOCKED marker, got: ' + rBlock.stderr);
+        assert(rBlock.stderr.includes('(derived)'),
+          'AC15-block: stderr must include "(derived)" to confirm kernel-derived path, got: ' + rBlock.stderr);
+
+        // AC15-pass: owning session must pass through (exit 0)
+        const rPass = spawnSync('bash', [hookPath], {
+          cwd: ac15Tmp,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            HOME: ac15Tmp,
+            KAOLA_WORKFLOW_OFFLINE: '1',
+            KAOLA_KERNEL_SESSION_SKIP: '1',
+            KAOLA_SESSION_ID: 'sess-real-owner'
+          }
+        });
+        assert(rPass.status === 0,
+          'AC15-pass: hook must exit 0 when owning session commits proj-ac15 files, got ' + rPass.status +
+          '\nstderr: ' + rPass.stderr);
+      } finally {
+        fs.rmSync(ac15Tmp, { recursive: true, force: true });
+      }
+    }
+
+    // 8N-task4.2: owner_session_id in Lease Block
+    {
+      const claimScript = path.join(root, 'scripts/kaola-workflow-claim.js');
+      const proj42 = 'proj-task42';
+      const sid42 = 'sid-task42';
+
+      // Claim with SKIP so derived SID = sid42, no enforcement
+      const r42 = spawnSync(process.execPath, [claimScript, 'claim', '--session', sid42, '--project', proj42], {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          HOME: tmp,
+          KAOLA_WORKFLOW_OFFLINE: '1',
+          KAOLA_COORD_ROOT: tmp,
+          KAOLA_KERNEL_SESSION_SKIP: '1',
+          KAOLA_SESSION_ID: sid42
+        },
+        cwd: tmp
+      });
+      assert(r42.status === 0, '8N-task4.2: claim must succeed, got ' + r42.status + ' stderr: ' + r42.stderr);
+
+      const stateFile42 = path.join(tmp, 'kaola-workflow', proj42, 'workflow-state.md');
+      assert(fs.existsSync(stateFile42), '8N-task4.2: workflow-state.md must exist');
+      const stateContent42 = fs.readFileSync(stateFile42, 'utf8');
+      assert(stateContent42.includes('owner_session_id:'), 'AC12: workflow-state.md Lease block must contain owner_session_id');
+      assert(stateContent42.includes('owner_session_id: ' + sid42), 'AC12: owner_session_id must equal derived session id');
+    }
+
+    // 8N-task5.1: Ticker Parent-Alive Guard (structural test)
+    {
+      const claimContent = fs.readFileSync(path.join(root, 'scripts', 'kaola-workflow-claim.js'), 'utf8');
+      assert(
+        claimContent.includes('tickCtx.claudePid') && claimContent.includes('isPidAlive(tickCtx.claudePid)'),
+        'AC13: runTick must contain isPidAlive(tickCtx.claudePid) guard'
+      );
+    }
+
+    // 8N-task5.2: Sweep Stale Identity Pruning
+    {
+      const claimScript = path.join(root, 'scripts/kaola-workflow-claim.js');
+      const runtimeDir52 = path.join(tmp, 'kaola-workflow', '.runtime');
+      fs.mkdirSync(runtimeDir52, { recursive: true });
+      // Create .locks dir so cmdSweep doesn't return early before reaching identity pruning
+      fs.mkdirSync(path.join(tmp, 'kaola-workflow', '.locks'), { recursive: true });
+      const deadFile52 = path.join(runtimeDir52, '99999999.identity');
+      fs.writeFileSync(deadFile52, JSON.stringify({ sid: 'sid-dead', claude_pid: 99999999, written_at: Date.now() }) + '\n');
+      spawnSync(process.execPath, [claimScript, 'sweep'], {
+        encoding: 'utf8',
+        env: { ...process.env, HOME: tmp, KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_COORD_ROOT: tmp },
+        cwd: tmp
+      });
+      assert(!fs.existsSync(deadFile52), 'AC14: sweep removes dead-PID identity file');
+    }
+
+    // 8N-task-review-fix-1: structural test — session-env.js must document 2-hop assumption and stderr warn
+    {
+      const sessionEnvContent = fs.readFileSync(path.join(root, 'scripts', 'kaola-workflow-session-env.js'), 'utf8');
+      assert(
+        sessionEnvContent.includes('empirically verified') || sessionEnvContent.includes('2-hop'),
+        'review-fix-1: session-env.js must document the 2-hop assumption (grep for "empirically verified" or "2-hop")'
+      );
+      assert(
+        sessionEnvContent.includes('could not locate Claude ancestor PID'),
+        'review-fix-1: session-env.js must contain stderr warning path with "could not locate Claude ancestor PID"'
+      );
+    }
+
+    // 8N-task-review-fix-2: AC9 — heartbeat exits 3 when derive-session returns null under enforcement
+    {
+      const claimScript = path.join(root, 'scripts/kaola-workflow-claim.js');
+      const rf2Tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-workflow-rf2-'));
+      try {
+        const deadPid = 99999999;
+        // Create a lock so heartbeat finds a match for 'fake-sid'
+        const locksDir2 = path.join(rf2Tmp, 'kaola-workflow', '.locks');
+        fs.mkdirSync(locksDir2, { recursive: true });
+        fs.writeFileSync(path.join(locksDir2, 'some-project.lock'), JSON.stringify({
+          project: 'some-project',
+          session_id: 'fake-sid',
+          machine_id: 'm1',
+          claimed_at: '2026-05-16T10:00:00Z',
+          expires: '2026-05-16T12:00:00Z',
+          last_heartbeat: '2026-05-16T10:00:00Z'
+        }) + '\n');
+        // Create identity file for the dead PID so ENOENT path doesn't fire before isPidAlive check
+        const runtimeDir2 = path.join(rf2Tmp, 'kaola-workflow', '.runtime');
+        fs.mkdirSync(runtimeDir2, { recursive: true });
+        fs.writeFileSync(path.join(runtimeDir2, deadPid + '.identity'), JSON.stringify({
+          sid: 'fake-sid',
+          claude_pid: deadPid,
+          claude_start_time_str: 'Mon Jan  1 00:00:00 2024',
+          runtime: 'claude',
+          written_at: Date.now()
+        }) + '\n');
+
+        const rRf2 = spawnSync(process.execPath, [claimScript, 'heartbeat', '--project', 'some-project', '--session', 'fake-sid'], {
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            HOME: rf2Tmp,
+            KAOLA_WORKFLOW_OFFLINE: '1',
+            KAOLA_COORD_ROOT: rf2Tmp,
+            KAOLA_ENFORCE_PLATFORM_SESSION: '1',
+            KAOLA_KERNEL_SESSION_FAKE_PID: String(deadPid)
+          },
+          cwd: rf2Tmp
+        });
+        assert(rRf2.status === 3,
+          'review-fix-2 (AC9): heartbeat must exit 3 when derived SID is null under enforcement, got ' + rRf2.status +
+          '\nstderr: ' + rRf2.stderr);
+      } finally {
+        fs.rmSync(rf2Tmp, { recursive: true, force: true });
+      }
+    }
+
+    // 8N-task-review-fix-3: pre-commit hook blocked when derive-session returns empty under enforcement
+    {
+      const hookPath = path.join(root, 'hooks', 'kaola-workflow-pre-commit.sh');
+      const rf3Tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-workflow-rf3-'));
+      try {
+        execFileSync('git', ['init', '-q', '-b', 'main', rf3Tmp]);
+        execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: rf3Tmp });
+        execFileSync('git', ['config', 'user.name', 'Test'], { cwd: rf3Tmp });
+        fs.writeFileSync(path.join(rf3Tmp, 'README.md'), 'init\n');
+        execFileSync('git', ['add', 'README.md'], { cwd: rf3Tmp });
+        execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: rf3Tmp });
+
+        // Set up lock file for test-project owned by owner-session
+        const locksDir3 = locksDirFor(rf3Tmp);
+        fs.mkdirSync(locksDir3, { recursive: true });
+        fs.writeFileSync(path.join(locksDir3, 'test-project.lock'), JSON.stringify({
+          project: 'test-project',
+          session_id: 'owner-session',
+          machine_id: 'm1',
+          claimed_at: '2026-05-16T10:00:00Z',
+          expires: '2026-05-16T12:00:00Z',
+          last_heartbeat: '2026-05-16T10:00:00Z',
+          issue_number: 31,
+          claim_comment_id: null,
+          sink: 'merge'
+        }) + '\n');
+
+        // Stage a file under test-project so KW_PATHS is non-empty
+        fs.mkdirSync(path.join(rf3Tmp, 'kaola-workflow', 'test-project'), { recursive: true });
+        fs.writeFileSync(path.join(rf3Tmp, 'kaola-workflow', 'test-project', 'workflow-state.md'),
+          '# Kaola-Workflow State\nsession_id: owner-session\n');
+        execFileSync('git', ['add', 'kaola-workflow/test-project/workflow-state.md'], { cwd: rf3Tmp });
+
+        // Run hook: no KAOLA_KERNEL_SESSION_SKIP so derive-session returns empty (no Claude ancestor in test subprocess)
+        // With KAOLA_ENFORCE_PLATFORM_SESSION=1 and empty derive-session, must exit 2 (blocked)
+        const rRf3 = spawnSync('bash', [hookPath], {
+          cwd: rf3Tmp,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            HOME: rf3Tmp,
+            KAOLA_WORKFLOW_OFFLINE: '1',
+            KAOLA_ENFORCE_PLATFORM_SESSION: '1',
+            KAOLA_SESSION_ID: 'some-session'
+          }
+        });
+        assert(rRf3.status === 2,
+          'review-fix-3: pre-commit hook must exit 2 (blocked) when derive-session empty under enforcement, got ' + rRf3.status +
+          '\nstderr: ' + rRf3.stderr);
+        assert(rRf3.stderr.includes('BLOCKED'),
+          'review-fix-3: stderr must contain BLOCKED, got: ' + rRf3.stderr);
+        assert(rRf3.stderr.includes('derive-session returned no identity'),
+          'review-fix-3: stderr must include enforcement-specific message "derive-session returned no identity", got: ' + rRf3.stderr);
+      } finally {
+        fs.rmSync(rf3Tmp, { recursive: true, force: true });
+      }
+    }
+
+    // 8N-task-security-fix-1: structural test — every KAOLA_KERNEL_SESSION_SKIP check must use strict '1' form
+    {
+      const claimContent = fs.readFileSync(path.join(root, 'scripts', 'kaola-workflow-claim.js'), 'utf8');
+      const lines = claimContent.split('\n');
+      const badLines = lines.filter(line => {
+        if (!line.includes('KAOLA_KERNEL_SESSION_SKIP')) return false;
+        // Reject lines using truthy check: !process.env.KAOLA_KERNEL_SESSION_SKIP (without === '1')
+        // or process.env.KAOLA_KERNEL_SESSION_SKIP without strict comparison
+        if (line.includes('!process.env.KAOLA_KERNEL_SESSION_SKIP')) return true;
+        // Must contain === '1' or !== '1' (strict comparison)
+        if (!line.includes("=== '1'") && !line.includes("!== '1'")) return true;
+        return false;
+      });
+      assert(badLines.length === 0,
+        'security-fix-1: all KAOLA_KERNEL_SESSION_SKIP checks must use strict === \'1\' or !== \'1\' comparison. Bad lines:\n' +
+        badLines.map(l => '  ' + l.trim()).join('\n'));
+    }
+
+    // 8N-task-security-fix-2: isSafeName validation rejects malformed SID containing newline
+    {
+      const claimScript = path.join(root, 'scripts/kaola-workflow-claim.js');
+      const sf2Tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-workflow-sf2-'));
+      try {
+        const fakePid = process.pid;
+        const startStr = execFileSync('ps', ['-o', 'lstart=', '-p', String(fakePid)], { encoding: 'utf8' }).trim();
+        const runtimeDir = path.join(sf2Tmp, 'kaola-workflow', '.runtime');
+        fs.mkdirSync(runtimeDir, { recursive: true });
+        const identPath = path.join(runtimeDir, fakePid + '.identity');
+        // SID contains a newline — must fail isSafeName validation
+        const malformedSid = 'bad\ninjection';
+        fs.writeFileSync(identPath, JSON.stringify({
+          sid: malformedSid,
+          claude_pid: fakePid,
+          claude_start_time_str: startStr,
+          runtime: 'claude',
+          written_at: Date.now()
+        }) + '\n', { mode: 0o600 });
+
+        const rSf2 = spawnSync(process.execPath, [claimScript, 'derive-session'], {
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            KAOLA_COORD_ROOT: sf2Tmp,
+            KAOLA_KERNEL_SESSION_FAKE_PID: String(fakePid),
+            KAOLA_WORKFLOW_OFFLINE: '1'
+          }
+        });
+        // Invalid SID must be rejected: either empty stdout or non-zero exit
+        const stdoutTrimmed = rSf2.stdout.trim();
+        assert(
+          rSf2.status !== 0 || stdoutTrimmed === '' || !stdoutTrimmed.includes('bad'),
+          'security-fix-2: derive-session must reject malformed SID containing newline, got status=' +
+          rSf2.status + ' stdout=' + JSON.stringify(rSf2.stdout)
+        );
+        // Specifically: must NOT output the newline-containing SID
+        assert(
+          !stdoutTrimmed.includes('bad\ninjection') && !stdoutTrimmed.includes('bad'),
+          'security-fix-2: output must not contain the malformed SID, got: ' + JSON.stringify(rSf2.stdout)
+        );
+      } finally {
+        fs.rmSync(sf2Tmp, { recursive: true, force: true });
+      }
+    }
+
     console.log('Workflow walkthrough simulation passed');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });

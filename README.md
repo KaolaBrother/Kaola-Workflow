@@ -286,11 +286,41 @@ fall back to the manual support directory.
 | Script | Purpose | Phase |
 |--------|---------|-------|
 | `kaola-workflow-repair-state.js` | Reconstruct workflow state from phase artifacts | Init / Resume |
-| `kaola-workflow-claim.js` | Multi-session lease management (claim, release, heartbeat, ticker, sweep, status, patch-branch, watch-pr, bootstrap); `--runtime claude\|codex` flag on claim and bootstrap | All phases |
+| `kaola-workflow-claim.js` | Multi-session lease management (claim, release, heartbeat, ticker, sweep, status, patch-branch, watch-pr, bootstrap, derive-session); `--runtime claude\|codex` flag on claim and bootstrap | All phases |
 | `kaola-workflow-sink-merge.js` | Branch-per-issue auto-merge sink — rebase-then-ff-merge sequence | Phase 6 |
 | `kaola-workflow-roadmap.js` | ROADMAP.md regenerator — generate/migrate/validate/init-issue/project-name subcommands; reads `kaola-workflow/.roadmap/issue-{N}.md` per-issue files | Phase 1, Phase 6 |
 | `kaola-workflow-classifier.js` | Parallel-work classifier — classifies open issues as green/yellow/red/blocked before claim; reads lock files, issue file sets, and active remote claim markers | Startup (Step 0) |
 | `kaola-workflow-sink-pr.js` | PR-based sink — pushes branch, opens GitHub PR via `gh pr create`, records PR URL; optionally enables auto-merge | Phase 6 |
+
+### Session Identity Binding
+
+Session identity is derived from the Claude ancestor process rather than self-asserted via `KAOLA_SESSION_ID`. This prevents accidental cross-session conflicts and enforces true session isolation.
+
+**Kernel-Derived Identity Model:**
+- Session start (`SessionStart` hook) writes an O_EXCL identity file at `<coordRoot>/kaola-workflow/.runtime/<claude_pid>.identity` containing the session ID, Claude PID, and start time
+- `derive-session` subcommand walks the process tree to locate a Claude ancestor, reads its identity file, validates the ancestor is still alive with matching start time, and returns the derived session ID
+- `kaola-workflow-pre-commit.sh` hook uses `derive-session` to block cross-session commits
+
+**Environment Variables:**
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `KAOLA_ENFORCE_PLATFORM_SESSION` | (unset) | Set to `1` to enable kernel-derived session identity enforcement; mutating commands (claim, release, heartbeat, etc.) exit 3 on session mismatch |
+| `KAOLA_KERNEL_SESSION_SKIP` | (unset) | Set to `1` to skip kernel derivation and use `KAOLA_SESSION_ID` directly (backward compatibility, direct git usage) |
+| `KAOLA_KERNEL_SESSION_FAKE_PID` | (unset) | TEST ONLY — override `walkToClaudePid()` return value for testing without running inside Claude |
+| `KAOLA_COORD_ROOT` | (auto) | Override the coordination root path; normally discovered via `git rev-parse --git-common-dir` |
+
+**`derive-session` Subcommand:**
+
+```bash
+node scripts/kaola-workflow-claim.js derive-session [--json]
+```
+
+Walks the process tree to find the Claude ancestor PID, reads its identity file, validates the ancestor is alive and has a matching start time, and returns the derived session ID. Exits with code 4 if no valid Claude ancestor is found.
+
+- Output (plain): session ID to stdout
+- Output (`--json`): `{ "sid": "<session-id>", "source": "file|skip|invalid_sid|null" }` to stdout
+- Exit codes: 0 (success), 4 (no Claude ancestor found)
 
 ### Classifier Configuration
 
