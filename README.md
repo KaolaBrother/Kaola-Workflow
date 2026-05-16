@@ -47,7 +47,7 @@ credential or deployment actions, or issue/roadmap reorganization.
 >
 > **Minimal Kaola-Workflow ECC configuration**
 >
-> - **Hooks:** use `ECC_HOOK_PROFILE=minimal` (see [ECC Hook Policy](#ecc-hook-policy) below)
+> - **Hooks:** do not enable ECC hooks (see [ECC Hook Policy](#ecc-hook-policy) below)
 > - **Subagents:** install only the ECC subagents listed in the table above
 > - **Language rules:** do not install ECC language rules as part of Kaola-Workflow setup
 > - **Common rules:** user choice based on your own project preferences
@@ -368,13 +368,10 @@ rerun the same check unless the phase requires broader validation or relevant
 files changed after the hook ran. Hook output counts as workflow evidence only
 when recorded with command, scope, result, and evidence path.
 
-Kaola-Workflow recommends the minimal hook profile by default; it is particularly
-useful for heavy Phase 4 implementation bursts or many subagents. Use it by
-running:
-
-```bash
-ECC_HOOK_PROFILE=minimal claude
-```
+Kaola-Workflow recommends **not enabling ECC hooks**. Most ECC hook functionality
+is now covered by native Claude Code features (Session Memory, `/cost`, status-line
+cost display), and the remaining hooks add friction without meaningful workflow
+benefit. Run Claude Code without any `ECC_HOOK_PROFILE` setting.
 
 Phase 6 still owns the final full relevant validation gate. It also performs
 documentation docking to match code changes with docs and issue/roadmap state,
