@@ -5,14 +5,14 @@ name: issue-45
 status: active
 
 ## Current Position
-phase: 4
-phase_name: Execute
-step: delegate-task
-task: 1
-next_command: /kaola-workflow-phase4 issue-45
-next_skill: kaola-workflow-execute issue-45
+phase: 5
+phase_name: Review
+step: code-review
+task: N/A
+next_command: /kaola-workflow-phase5 issue-45
+next_skill: kaola-workflow-phase5 issue-45
 main_session_role: orchestrator
-implementation_owner: tdd-guide
+implementation_owner: tdd-guide for behavior fixes
 fix_owner: tdd-guide or build-error-resolver
 inline_emergency_fallback_authorized: no
 
