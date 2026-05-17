@@ -8,6 +8,7 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 | Issue | Title | Status | Workflow Project | Next Step |
 |-------|-------|--------|------------------|-----------|
 | #35 | Startup classifier picks next work by issue ordering, ignores P0/P1/P2/P3 priority labels and Engine Showcase Gap tier | open | — | ready |
+| #39 | Bug: classifier overrides P1 priority ranking → wrong issue claimed in host projects | open | — | ready |
 
 ## Rules
 
