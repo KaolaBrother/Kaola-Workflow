@@ -179,7 +179,7 @@ assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, 'function cmdVer
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, 'claudeSessionPathForRoot');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, 'RECENT_CLAUDE_SESSION_MS');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, '--force-live-takeover');
-assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, 'function runBootstrapClaimFirstAvailable');
+assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, 'bootstrap: --target-issue <N> is required');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, 'function cmdStartup');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, 'startupReceiptPath');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, 'syncIssuesToRoadmap');
@@ -191,7 +191,7 @@ assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, "claim: 'acquire
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, 'writeStartupReceipt');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, 'archiveProjectDir');
 assertIncludes(simulateScript, 'real parallel bootstrap coordination and claim-race retry');
-assertIncludes(simulateScript, 'startup transaction syncs issue roadmap');
+assertIncludes(simulateScript, 'parallel explicit-target bootstrap splits across independent issues');
 assertIncludes(simulateScript, 'can-handoff must reject live owner');
 assertIncludes(simulateScript, 'claim:none receipt must not authorize phase work');
 assertIncludes(simulateScript, '--target-issue');

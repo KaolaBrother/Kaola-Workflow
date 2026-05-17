@@ -1220,22 +1220,11 @@ function runBootstrapClaim(claimScript, args, pick) {
   return true;
 }
 
-function runBootstrapClaimFirstAvailable(claimScript, classifierScript, args) {
-  if (OFFLINE || !fs.existsSync(classifierScript)) return { pick: null };
-  const issues = listOpenIssues(getRoot());
-  for (let i = 0; i < issues.length; i++) {
-    const pick = pickFirstActionableIssue(classifierScript, issues.slice(i, i + 1));
-    if (!pick.pick) continue;
-    if (runBootstrapClaim(claimScript, args, pick)) return pick;
-  }
-  return { pick: null };
-}
-
 function cmdBootstrap() {
   const args = parseArgs(process.argv.slice(3));
   args.session = currentSessionId(args);
   assertSafeSession(args.session, '--session/current platform session id');
-  const classifierScript = path.join(path.dirname(__filename), 'kaola-workflow-classifier.js');
+  assert(!args.targetIssue || (Number.isFinite(args.targetIssue) && args.targetIssue > 0), '--target-issue must be a positive integer');
   const root = getRoot();
   const coordRoot = getCoordRoot();
   if (process.env.KAOLA_KERNEL_SESSION_SKIP !== '1') enforcePlatformSessionOrExit(args.session, coordRoot, args);
@@ -1247,18 +1236,46 @@ function cmdBootstrap() {
       project: owned.project,
       issue: owned.issue_number,
       verdict: 'owned',
+      claim: 'owned',
       session: args.session,
       resumed: true
     }) + '\n');
     return;
   }
-  const pick = runBootstrapClaimFirstAvailable(__filename, classifierScript, args);
-  if (!pick.pick) {
-    process.stderr.write('bootstrap: no unclaimed work available for session ' + args.session + '\n');
+  if (!args.targetIssue) {
+    process.stdout.write(JSON.stringify({
+      project: null,
+      issue: null,
+      verdict: 'no_target',
+      claim: 'none',
+      session: args.session
+    }) + '\n');
+    process.stderr.write('bootstrap: --target-issue <N> is required; agent must select an issue explicitly\n');
     process.exitCode = 1;
     return;
   }
-  process.stdout.write(JSON.stringify({ project: pick.project, issue: pick.pick, verdict: pick.verdict, session: args.session }) + '\n');
+  const classifierScript = path.join(path.dirname(__filename), 'kaola-workflow-classifier.js');
+  const result = claimExplicitTarget(__filename, classifierScript, args, args.targetIssue, coordRoot, root);
+  if (result.status !== 'acquired') {
+    process.stdout.write(JSON.stringify({
+      project: result.project || null,
+      issue: result.issue || null,
+      verdict: result.status,
+      claim: 'none',
+      session: args.session,
+      reasoning: result.reasoning || ''
+    }) + '\n');
+    process.exitCode = 1;
+    return;
+  }
+  process.stdout.write(JSON.stringify({
+    project: result.project,
+    issue: result.issue,
+    verdict: result.verdict,
+    claim: 'acquired',
+    target_source: 'user_directed',
+    session: args.session
+  }) + '\n');
 }
 
 function selectFirstClaimable(classifierScript, issues, claimer, sinks) {

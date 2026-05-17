@@ -11,7 +11,7 @@ Issue selection is an agent decision, not a hidden script decision.
 
 - **When user names an issue**: use that exact issue. Scripts validate and claim but must not fall back to another.
 - **When user asks for "next issue"**: agent inspects local roadmap, GitHub issues, recent completed work, active locks, and user goal, then states the selected issue before claiming via `KAOLA_TARGET_ISSUE=N`.
-- **Startup scripts validate, not select**: `cmdStartup` and `cmdPickNext` now require explicit `--target-issue N` flag. They validate the target is unclaimed and green/yellow, then claim. They refuse auto-pick with typed refusals.
+- **Startup scripts validate, not select**: `cmdStartup`, `cmdPickNext`, and `cmdBootstrap` now require explicit `--target-issue N` flag. They validate the target is unclaimed and green/yellow, then claim. They refuse auto-pick with typed refusals.
 - **Ambiguity handling**: When next issue is ambiguous or conflicts with active state, ask or stop. Do not let a script silently choose.
 
 ## Key Scripts

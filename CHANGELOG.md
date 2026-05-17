@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added — Bootstrap Explicit-Target Enforcement (issue #47)
+
+- `bootstrap` subcommand now requires explicit `--target-issue N`, matching the issue-44 contract for `startup` and `pick-next`. The `runBootstrapClaimFirstAvailable` auto-picker is removed. Agents must select the issue before invoking bootstrap.
+
 ### Fixed — Stale-State Flaws and Lifecycle Gaps (issue #45)
 
 - **P1-A: `cmdStatus` closed-issue drift**: `state` field now fetched in `--json` fields; adds `'issue closed'` drift entry when remote issue is `CLOSED`.

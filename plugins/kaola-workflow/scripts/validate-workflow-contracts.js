@@ -223,7 +223,7 @@ assertIncludes('scripts/kaola-workflow-claim.js', 'function cmdVerifyStartup');
 assertIncludes('scripts/kaola-workflow-claim.js', 'claudeSessionPathForRoot');
 assertIncludes('scripts/kaola-workflow-claim.js', 'RECENT_CLAUDE_SESSION_MS');
 assertIncludes('scripts/kaola-workflow-claim.js', '--force-live-takeover');
-assertIncludes('scripts/kaola-workflow-claim.js', 'function runBootstrapClaimFirstAvailable');
+assertIncludes('scripts/kaola-workflow-claim.js', 'bootstrap: --target-issue <N> is required');
 assertIncludes('scripts/kaola-workflow-claim.js', 'function cmdStartup');
 assertIncludes('scripts/kaola-workflow-claim.js', 'startupReceiptPath');
 assertIncludes('scripts/kaola-workflow-claim.js', 'syncIssuesToRoadmap');

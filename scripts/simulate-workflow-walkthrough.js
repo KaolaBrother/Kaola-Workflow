@@ -1086,25 +1086,16 @@ async function main() {
         } catch (e) { exit6F2 = e.status || 1; }
         assert(exit6F2 === 2, 'Epic Case 6F2: active state issue_number must cause exit code 2, got ' + exit6F2);
 
-        // 6G: bootstrap skips a remotely claimed issue and selects the next free issue
+        // 6G: bootstrap with explicit --target-issue 21 claims that issue
         const ghShimBootstrap = [
           '#!/bin/sh',
           'ARGS="$@"',
           'case "$ARGS" in',
-          '  *"issue list"*)',
-          '    echo \'[{"number":19},{"number":21}]\'',
-          '    ;;',
-          '  *"issue view 19"*)',
-          '    echo \'{"number":19,"title":"remote claimed","body":"scripts/remote.js","labels":[{"name":"workflow:in-progress"}],"state":"open"}\'',
-          '    ;;',
           '  *"issue view 21"*)',
           '    echo \'{"number":21,"title":"free issue","body":"commands/free.md","labels":[],"state":"open"}\'',
           '    ;;',
           '  *"repo view"*)',
           '    echo \'{"owner":{"login":"test"},"name":"repo"}\'',
-          '    ;;',
-          '  *"repos/test/repo/issues/19/comments"*)',
-          '    echo \'[{"id":190,"body":"Session claimed by remote <!-- kw:claim sess=remote -->"}]\'',
           '    ;;',
           '  *"repos/test/repo/issues/21/comments"*)',
           '    echo \'[]\'',
@@ -1121,6 +1112,7 @@ async function main() {
         const claimScript6G = path.join(root, 'scripts', 'kaola-workflow-claim.js');
         const out6G = execFileSync(process.execPath, [
           claimScript6G, 'bootstrap',
+          '--target-issue', '21',
           '--session', 'sess-6g',
           '--runtime', 'codex'
         ], {
@@ -1129,9 +1121,10 @@ async function main() {
           env: { ...process.env, PATH: ghShimDir + path.delimiter + (process.env.PATH || ''), HOME: epic6Tmp }
         });
         const r6G = JSON.parse(out6G.trim());
-        assert(r6G.issue === 21, 'Epic Case 6G: bootstrap must select free issue #21, got #' + r6G.issue);
+        assert(r6G.claim === 'acquired', 'Epic Case 6G: bootstrap must return claim=acquired, got ' + r6G.claim);
+        assert(r6G.target_source === 'user_directed', 'Epic Case 6G: bootstrap must return target_source=user_directed, got ' + r6G.target_source);
+        assert(r6G.issue === 21, 'Epic Case 6G: bootstrap must claim issue #21, got #' + r6G.issue);
         assert(fs.existsSync(path.join(locksDir, 'issue-21.lock')), 'Epic Case 6G: issue-21 lock must exist after bootstrap');
-        assert(!fs.existsSync(path.join(locksDir, 'issue-19.lock')), 'Epic Case 6G: issue-19 lock must not be created');
 
         // 6H: red — host-project path src/foo.ts in both candidate and claimed lock → exact overlap
         {
@@ -2084,11 +2077,13 @@ exit 0
             delete env8i.CLAUDE_SESSION_ID;
 
             const r8i1 = spawnSync(process.execPath, [
-              claimScript, 'bootstrap', '--runtime', 'codex'
+              claimScript, 'bootstrap', '--target-issue', '11', '--runtime', 'codex'
             ], { cwd: epic8iTmp, encoding: 'utf8', env: env8i });
-            assert(r8i1.status === 0, '8I-a: bootstrap without --session must claim issue 11, got ' + r8i1.status + '\nstderr: ' + r8i1.stderr);
+            assert(r8i1.status === 0, '8I-a: bootstrap with --target-issue 11 must claim issue 11, got ' + r8i1.status + '\nstderr: ' + r8i1.stderr);
             const out8i1 = JSON.parse(r8i1.stdout.trim());
-            assert(out8i1.issue === 11, '8I-a: first bootstrap must pick issue 11, got ' + out8i1.issue);
+            assert(out8i1.claim === 'acquired', '8I-a: first bootstrap must return claim=acquired, got ' + out8i1.claim);
+            assert(out8i1.issue === 11, '8I-a: first bootstrap must claim issue 11, got ' + out8i1.issue);
+            assert(out8i1.target_source === 'user_directed', '8I-a: bootstrap must return target_source=user_directed, got ' + out8i1.target_source);
             assert(out8i1.session, '8I-a: bootstrap output must include generated session');
 
             const r8iOwned = spawnSync(process.execPath, [
@@ -2100,19 +2095,52 @@ exit 0
               '8I-owned: same session must return owned issue 11, got ' + r8iOwned.stdout);
 
             const r8i2 = spawnSync(process.execPath, [
-              claimScript, 'bootstrap', '--runtime', 'codex'
+              claimScript, 'bootstrap', '--target-issue', '11', '--runtime', 'codex'
             ], { cwd: epic8iTmp, encoding: 'utf8', env: env8i });
-            assert(r8i2.status === 0, '8I-b: second bootstrap must claim issue 12, got ' + r8i2.status + '\nstderr: ' + r8i2.stderr);
+            assert(r8i2.status === 1, '8I-b: second bootstrap targeting locked issue 11 must exit 1, got ' + r8i2.status + '\nstderr: ' + r8i2.stderr);
             const out8i2 = JSON.parse(r8i2.stdout.trim());
-            assert(out8i2.issue === 12, '8I-b: second bootstrap must skip locked issue 11 and pick 12, got ' + out8i2.issue);
-            assert(out8i2.session && out8i2.session !== out8i1.session, '8I-b: second bootstrap must generate an independent session');
+            assert(out8i2.verdict === 'target_occupied', '8I-b: second bootstrap must return verdict=target_occupied, got ' + out8i2.verdict);
+            assert(out8i2.claim === 'none', '8I-b: second bootstrap must return claim=none, got ' + out8i2.claim);
 
             const lock11 = JSON.parse(fs.readFileSync(path.join(locksDirFor(epic8iTmp), 'issue-11.lock'), 'utf8'));
-            const lock12 = JSON.parse(fs.readFileSync(path.join(locksDirFor(epic8iTmp), 'issue-12.lock'), 'utf8'));
             assert(lock11.issue_number === 11 && lock11.session_id === out8i1.session, '8I: issue 11 lock must belong to first generated session');
-            assert(lock12.issue_number === 12 && lock12.session_id === out8i2.session, '8I: issue 12 lock must belong to second generated session');
           } finally {
             fs.rmSync(epic8iTmp, { recursive: true, force: true });
+          }
+        }
+
+        // 8I-c: bootstrap with no --target-issue must exit 1 with verdict no_target
+        {
+          const epic8icTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-epic8ic-'));
+          try {
+            execFileSync('git', ['init', '-q', '-b', 'main', epic8icTmp]);
+            const bin8ic = path.join(epic8icTmp, 'bin');
+            fs.mkdirSync(bin8ic, { recursive: true });
+            const gh8ic = path.join(bin8ic, 'gh');
+            fs.writeFileSync(gh8ic, `#!/bin/sh
+if [ "$1" = "repo" ] && [ "$2" = "view" ]; then
+  printf '{"owner":{"login":"test"},"name":"repo"}'
+  exit 0
+fi
+exit 0
+`);
+            fs.chmodSync(gh8ic, 0o755);
+            const r8ic = spawnSync(process.execPath, [
+              claimScript, 'bootstrap', '--runtime', 'codex'
+            ], {
+              cwd: epic8icTmp,
+              encoding: 'utf8',
+              env: { ...process.env, PATH: bin8ic + path.delimiter + (process.env.PATH || ''), HOME: epic8icTmp, KAOLA_WORKFLOW_OFFLINE: '' }
+            });
+            assert(r8ic.status === 1, '8I-c: bootstrap with no --target-issue must exit 1, got ' + r8ic.status);
+            const out8ic = JSON.parse(r8ic.stdout.trim());
+            assert(out8ic.verdict === 'no_target', '8I-c: verdict must be no_target, got ' + out8ic.verdict);
+            assert(out8ic.claim === 'none', '8I-c: claim must be none, got ' + out8ic.claim);
+            assert(out8ic.project === null, '8I-c: project must be null, got ' + out8ic.project);
+            assert(out8ic.issue === null, '8I-c: issue must be null, got ' + out8ic.issue);
+            assert(r8ic.stderr.includes('bootstrap: --target-issue <N> is required'), '8I-c: stderr must include the required message, got ' + r8ic.stderr);
+          } finally {
+            fs.rmSync(epic8icTmp, { recursive: true, force: true });
           }
         }
 
@@ -3002,6 +3030,7 @@ exit 0
           writeBootstrapGhShim(issue, freeIssue);
           const bootstrap = spawnSync(process.execPath, [
             claimScript, 'bootstrap',
+            '--target-issue', String(freeIssue),
             '--session', 'sess-stage-' + spec.phase + '-secondary',
             '--runtime', 'codex'
           ], {
@@ -3013,8 +3042,10 @@ exit 0
             '12D phase ' + spec.phase + ': secondary bootstrap must claim free issue, got ' + bootstrap.status +
             '\nstdout: ' + bootstrap.stdout + '\nstderr: ' + bootstrap.stderr);
           const picked = JSON.parse(bootstrap.stdout.trim());
+          assert(picked.claim === 'acquired',
+            '12D phase ' + spec.phase + ': secondary bootstrap must return claim=acquired, got ' + picked.claim);
           assert(picked.issue === freeIssue,
-            '12D phase ' + spec.phase + ': secondary bootstrap must skip #' + issue + ' and pick #' + freeIssue + ', got #' + picked.issue);
+            '12D phase ' + spec.phase + ': secondary bootstrap must claim #' + freeIssue + ', got #' + picked.issue);
           assert(fs.existsSync(path.join(locksDir12, projectName + '.lock')),
             '12D phase ' + spec.phase + ': primary lock must remain after secondary bootstrap');
           assert(fs.existsSync(path.join(locksDir12, 'issue-' + freeIssue + '.lock')),
@@ -3084,43 +3115,25 @@ exit 0
     }
 
     // Epic Case 13: true parallel bootstrap coordination.
-    // One test injects a lock after classification but before claim to emulate
-    // a lost startup race. The second test starts two sessions at once and
-    // requires them to split across the two available issues automatically.
+    // 13A: real parallel race — two bootstraps target issue 901 concurrently; one wins acquired, one gets target_occupied.
+    // 13B: parallel explicit-target bootstrap splits across independent issues.
     {
       const claimScript = path.join(root, 'scripts', 'kaola-workflow-claim.js');
 
-      const retryTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-workflow-epic13-retry-'));
-      try {
-        execFileSync('git', ['init', '-q', '-b', 'main', retryTmp]);
-        const retryBin = path.join(retryTmp, 'bin');
-        const retryLocks = locksDirFor(retryTmp);
-        fs.mkdirSync(retryBin, { recursive: true });
-        fs.mkdirSync(retryLocks, { recursive: true });
-        const retryGh = path.join(retryBin, 'gh');
-        fs.writeFileSync(retryGh, `#!/bin/sh
-if [ "$1" = "issue" ] && [ "$2" = "list" ]; then
-  printf '[{"number":901},{"number":902}]'
-  exit 0
-fi
+      // 13A: real parallel bootstrap coordination and claim-race retry — two bootstraps target issue 901 concurrently; one wins acquired, one gets target_occupied
+      {
+        const race13Tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-workflow-epic13-race-'));
+        try {
+          execFileSync('git', ['init', '-q', '-b', 'main', race13Tmp]);
+          const race13Bin = path.join(race13Tmp, 'bin');
+          const race13Locks = locksDirFor(race13Tmp);
+          fs.mkdirSync(race13Bin, { recursive: true });
+          fs.mkdirSync(race13Locks, { recursive: true });
+          const race13Gh = path.join(race13Bin, 'gh');
+          fs.writeFileSync(race13Gh, `#!/bin/sh
 if [ "$1" = "issue" ] && [ "$2" = "view" ]; then
+  sleep 0.05
   num="$3"
-  if [ "$num" = "901" ]; then
-    cat > "${retryLocks}/issue-901.lock" <<'JSON'
-{
-  "project": "issue-901",
-  "session_id": "sess-race-winner",
-  "machine_id": "race-machine",
-  "claimed_at": "2026-05-15T00:00:00.000Z",
-  "expires": "2099-01-01T00:00:00.000Z",
-  "last_heartbeat": "2026-05-15T00:00:00.000Z",
-  "issue_number": 901,
-  "claim_comment_id": null,
-  "sink": "merge",
-  "runtime": "codex"
-}
-JSON
-  fi
   printf '{"number":%s,"title":"Race %s","body":"commands/race-%s.md","labels":[],"state":"OPEN"}' "$num" "$num" "$num"
   exit 0
 fi
@@ -3137,26 +3150,51 @@ fi
 if [ "$1" = "api" ]; then printf '[]'; exit 0; fi
 exit 0
 `);
-        fs.chmodSync(retryGh, 0o755);
+          fs.chmodSync(race13Gh, 0o755);
 
-        const retryOut = execFileSync(process.execPath, [
-          claimScript, 'bootstrap',
-          '--session', 'sess-race-retry',
-          '--runtime', 'codex'
-        ], {
-          cwd: retryTmp,
-          encoding: 'utf8',
-          env: { ...process.env, PATH: retryBin + path.delimiter + (process.env.PATH || ''), HOME: retryTmp }
-        });
-        const retryPick = JSON.parse(retryOut.trim());
-        assert(retryPick.issue === 902,
-          '13A: bootstrap must retry after losing issue 901 race and claim issue 902, got: ' + retryOut);
-        assert(fs.existsSync(path.join(retryLocks, 'issue-901.lock')), '13A: injected race winner lock must remain');
-        assert(fs.existsSync(path.join(retryLocks, 'issue-902.lock')), '13A: retry session lock for issue 902 must exist');
-      } finally {
-        fs.rmSync(retryTmp, { recursive: true, force: true });
+          function spawnRace(session) {
+            const child = spawn(process.execPath, [
+              claimScript, 'bootstrap',
+              '--target-issue', '901',
+              '--session', session,
+              '--runtime', 'codex'
+            ], {
+              cwd: race13Tmp,
+              env: { ...process.env, PATH: race13Bin + path.delimiter + (process.env.PATH || ''), HOME: race13Tmp },
+              stdio: ['ignore', 'pipe', 'pipe']
+            });
+            let stdout = '';
+            let stderr = '';
+            child.stdout.on('data', chunk => { stdout += chunk.toString(); });
+            child.stderr.on('data', chunk => { stderr += chunk.toString(); });
+            return { child, session, get stdout() { return stdout; }, get stderr() { return stderr; } };
+          }
+
+          const ra = spawnRace('sess-race-a');
+          const rb = spawnRace('sess-race-b');
+          const [exitA, exitB] = await Promise.all([waitExit(ra.child, 5000), waitExit(rb.child, 5000)]);
+
+          const codes = [exitA.code, exitB.code].sort();
+          assert(codes[0] === 0 && codes[1] === 1,
+            '13A: one process must exit 0 (acquired) and one must exit 1 (target_occupied), got codes: ' + JSON.stringify(codes));
+
+          const outA = JSON.parse(ra.stdout.trim());
+          const outB = JSON.parse(rb.stdout.trim());
+          const winner = exitA.code === 0 ? outA : outB;
+          const loser = exitA.code === 0 ? outB : outA;
+
+          assert(winner.claim === 'acquired' && winner.issue === 901,
+            '13A: winner must have claim=acquired and issue=901, got: ' + JSON.stringify(winner));
+          assert(loser.verdict === 'target_occupied' && loser.claim === 'none',
+            '13A: loser must have verdict=target_occupied and claim=none, got: ' + JSON.stringify(loser));
+          assert(fs.existsSync(path.join(race13Locks, 'issue-901.lock')),
+            '13A: issue-901.lock must exist after race');
+        } finally {
+          fs.rmSync(race13Tmp, { recursive: true, force: true });
+        }
       }
 
+      // 13B: parallel explicit-target bootstrap splits across independent issues
       const parallelTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-workflow-epic13-parallel-'));
       try {
         execFileSync('git', ['init', '-q', '-b', 'main', parallelTmp]);
@@ -3166,12 +3204,7 @@ exit 0
         fs.mkdirSync(parallelLocks, { recursive: true });
         const parallelGh = path.join(parallelBin, 'gh');
         fs.writeFileSync(parallelGh, `#!/bin/sh
-if [ "$1" = "issue" ] && [ "$2" = "list" ]; then
-  printf '[{"number":911},{"number":912}]'
-  exit 0
-fi
 if [ "$1" = "issue" ] && [ "$2" = "view" ]; then
-  sleep 0.05
   num="$3"
   printf '{"number":%s,"title":"Parallel %s","body":"commands/parallel-%s.md","labels":[],"state":"OPEN"}' "$num" "$num" "$num"
   exit 0
@@ -3191,9 +3224,10 @@ exit 0
 `);
         fs.chmodSync(parallelGh, 0o755);
 
-        function spawnBootstrap(session) {
+        function spawnBootstrap(targetIssue, session) {
           const child = spawn(process.execPath, [
             claimScript, 'bootstrap',
+            '--target-issue', String(targetIssue),
             '--session', session,
             '--runtime', 'codex'
           ], {
@@ -3208,14 +3242,16 @@ exit 0
           return { child, session, get stdout() { return stdout; }, get stderr() { return stderr; } };
         }
 
-        const a = spawnBootstrap('sess-parallel-a');
-        const b = spawnBootstrap('sess-parallel-b');
+        const a = spawnBootstrap(911, 'sess-parallel-a');
+        const b = spawnBootstrap(912, 'sess-parallel-b');
         const [ra, rb] = await Promise.all([waitExit(a.child, 5000), waitExit(b.child, 5000)]);
         assert(ra.code === 0, '13B: session A bootstrap failed: stdout=' + a.stdout + ' stderr=' + a.stderr);
         assert(rb.code === 0, '13B: session B bootstrap failed: stdout=' + b.stdout + ' stderr=' + b.stderr);
         const picks = [JSON.parse(a.stdout.trim()), JSON.parse(b.stdout.trim())];
         const issueSet = new Set(picks.map(p => p.issue));
         const sessionSet = new Set(picks.map(p => p.session));
+        assert(picks[0].claim === 'acquired' && picks[1].claim === 'acquired',
+          '13B: both sessions must return claim=acquired, got: ' + JSON.stringify(picks));
         assert(issueSet.has(911) && issueSet.has(912) && issueSet.size === 2,
           '13B: parallel sessions must split across issues 911 and 912, got: ' + JSON.stringify(picks));
         assert(sessionSet.has('sess-parallel-a') && sessionSet.has('sess-parallel-b'),
