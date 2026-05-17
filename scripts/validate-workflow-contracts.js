@@ -320,9 +320,20 @@ assertIncludes('scripts/kaola-workflow-claim.js', 'cmdPickNext');
 assertIncludes('scripts/kaola-workflow-claim.js', 'cmdResume');
 assertIncludes('scripts/kaola-workflow-claim.js', 'cmdWorktreeStatus');
 assertIncludes('scripts/kaola-workflow-claim.js', 'cmdWorktreeFinalize');
-assertIncludes('scripts/kaola-workflow-claim.js', 'pick-next');
-assertIncludes('scripts/kaola-workflow-claim.js', 'worktree-status');
-assertIncludes('scripts/kaola-workflow-claim.js', 'worktree-finalize');
+assertIncludes('scripts/kaola-workflow-claim.js', "if (sub === 'pick-next')");
+assertIncludes('scripts/kaola-workflow-claim.js', "if (sub === 'worktree-status')");
+assertIncludes('scripts/kaola-workflow-claim.js', "if (sub === 'worktree-finalize')");
+// Plugin mirror parity
+const claimContent = read('scripts/kaola-workflow-claim.js');
+const pluginContent = read('plugins/kaola-workflow/scripts/kaola-workflow-claim.js');
+['cmdPickNext', 'cmdResume', 'cmdWorktreeStatus', 'cmdWorktreeFinalize',
+ "if (sub === 'pick-next')", "if (sub === 'worktree-status')", "if (sub === 'worktree-finalize')",
+].forEach(needle => {
+  assert(pluginContent.includes(needle),
+    'plugins/kaola-workflow/scripts/kaola-workflow-claim.js must include: ' + needle);
+  assert(claimContent.includes(needle),
+    'scripts/kaola-workflow-claim.js must include: ' + needle);
+});
 assertIncludes('scripts/simulate-workflow-walkthrough.js', 'Epic Case 17');
 assertIncludes('commands/workflow-next.md', 'KAOLA_WORKTREE_NATIVE');
 assertIncludes('commands/kaola-workflow-phase4.md', 'ACTIVE_WORKTREE_PATH');
