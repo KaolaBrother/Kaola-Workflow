@@ -1,4 +1,18 @@
 #!/usr/bin/env bash
+# Kaola-Workflow manual installer.
+#
+# NOTE (issue #36): This script is for users who install Kaola-Workflow WITHOUT
+# the Claude Code plugin marketplace. Marketplace users do NOT need to run it —
+# the plugin runtime exposes ${CLAUDE_PLUGIN_ROOT} and command/script resolution
+# happens automatically. This installer remains supported for:
+#   - manual / source-checkout installs
+#   - air-gapped environments
+#   - users who prefer ~/.claude/commands/ over plugin-managed commands
+#
+# The 3-step script resolver in commands/*.md prefers ${CLAUDE_PLUGIN_ROOT}/scripts/
+# first, then falls back to $HOME/.claude/kaola-workflow/scripts/ (this installer's
+# target), then ./scripts/ (dev checkout).
+
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"

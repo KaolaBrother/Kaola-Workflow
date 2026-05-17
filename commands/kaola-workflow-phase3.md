@@ -28,7 +28,7 @@ kaola-workflow/{project}/.cache/advisor-ideation.md
 If a claim session is active or recoverable, ensure the background heartbeat ticker is running:
 
 ```bash
-kaola_script(){ _n="$1"; for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; find "$HOME/.claude/plugins/cache" "$HOME/.claude/plugins/marketplaces" -path "*/scripts/$_n" -print 2>/dev/null | sort | tail -n 1; }
+kaola_script(){ _n="$1"; for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; return 1; }
 _CLAIM_JS="$(kaola_script kaola-workflow-claim.js)"
 if [ -f "$_CLAIM_JS" ] && [ -z "${KAOLA_SESSION_ID:-}" ]; then
   KAOLA_SESSION_ID="$(node "$_CLAIM_JS" session 2>/dev/null || true)"

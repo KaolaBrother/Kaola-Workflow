@@ -91,6 +91,12 @@ Then run:
 
 ### Manual command install
 
+Marketplace install (above) is the recommended path and requires no `install.sh` run —
+the plugin runtime exposes `${CLAUDE_PLUGIN_ROOT}` and command/script resolution
+happens automatically. Use the manual installer below only when you cannot use
+the marketplace (air-gapped environments, source checkouts, or `~/.claude/commands/`
+preference):
+
 ```bash
 git clone https://github.com/KaolaBrother/Kaola-Workflow.git
 cd Kaola-Workflow
@@ -278,10 +284,13 @@ The command is a thin router. It first checks local/remote Git state, safely fas
 
 ## Automation Scripts
 
-The workflow includes automation scripts packaged with the Claude Code plugin
-and copied to `~/.claude/kaola-workflow/scripts/` by `install.sh`. Marketplace
-commands resolve scripts from the plugin cache or marketplace checkout, then
-fall back to the manual support directory.
+The workflow includes automation scripts packaged with the Claude Code plugin.
+Marketplace installs expose them via `${CLAUDE_PLUGIN_ROOT}/scripts/` and need
+no extra setup. Manual `install.sh` users get them copied to
+`~/.claude/kaola-workflow/scripts/`. Commands resolve scripts in this order:
+`${CLAUDE_PLUGIN_ROOT}/scripts/` → `~/.claude/kaola-workflow/scripts/` → `./scripts/`
+(dev checkout). Drift between `scripts/` and `plugins/kaola-workflow/scripts/`
+is detected at test time by `scripts/validate-script-sync.js`.
 
 | Script | Purpose | Phase |
 |--------|---------|-------|

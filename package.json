@@ -1,6 +1,6 @@
 {
   "name": "kaola-workflow",
-  "version": "3.3.2",
+  "version": "3.3.3",
   "description": "6-phase Kaola-Workflow for Claude Code and Codex — Research, Ideation, Plan, Execute, Review, Finalize. Multi-model orchestration with resumable phase artifacts.",
   "repository": {
     "type": "git",
@@ -33,8 +33,8 @@
   ],
   "scripts": {
     "test": "npm run test:kaola-workflow:claude && npm run test:kaola-workflow:codex",
-    "test:kaola-workflow:claude": "bash -n install.sh uninstall.sh && node -e \"JSON.parse(require('fs').readFileSync('package.json', 'utf8')); JSON.parse(require('fs').readFileSync('.claude-plugin/plugin.json', 'utf8'))\" && node scripts/validate-workflow-contracts.js && node scripts/simulate-workflow-walkthrough.js && claude plugin validate .",
-    "test:kaola-workflow:codex": "node scripts/validate-kaola-workflow-contracts.js && node plugins/kaola-workflow/scripts/simulate-kaola-workflow-walkthrough.js"
+    "test:kaola-workflow:claude": "node scripts/validate-script-sync.js && bash -n install.sh uninstall.sh && node -e \"JSON.parse(require('fs').readFileSync('package.json', 'utf8')); JSON.parse(require('fs').readFileSync('.claude-plugin/plugin.json', 'utf8'))\" && node scripts/validate-workflow-contracts.js && node scripts/simulate-workflow-walkthrough.js && claude plugin validate .",
+    "test:kaola-workflow:codex": "node scripts/validate-script-sync.js && node scripts/validate-kaola-workflow-contracts.js && node plugins/kaola-workflow/scripts/simulate-kaola-workflow-walkthrough.js"
   },
   "peerDependencies": {
     "ecc-universal": ">=1.10.0 || >=2.0.0-rc.0"

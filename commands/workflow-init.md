@@ -215,7 +215,7 @@ After creating or confirming `kaola-workflow/ROADMAP.md`, bootstrap the per-issu
 
 ```bash
 mkdir -p kaola-workflow/.roadmap
-kaola_script(){ _n="$1"; for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; find "$HOME/.claude/plugins/cache" "$HOME/.claude/plugins/marketplaces" -path "*/scripts/$_n" -print 2>/dev/null | sort | tail -n 1; }
+kaola_script(){ _n="$1"; for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; return 1; }
 ROADMAP_JS="$(kaola_script kaola-workflow-roadmap.js)"
 [ -f "$ROADMAP_JS" ] && node "$ROADMAP_JS" generate
 ```
@@ -274,7 +274,7 @@ If `KAOLA_SESSION_ID` is not already set, generate a UUID and claim the issue be
 
 ```bash
 export KAOLA_SESSION_ID="$(node -e "process.stdout.write(require('crypto').randomUUID())")"
-kaola_script(){ _n="$1"; for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; find "$HOME/.claude/plugins/cache" "$HOME/.claude/plugins/marketplaces" -path "*/scripts/$_n" -print 2>/dev/null | sort | tail -n 1; }
+kaola_script(){ _n="$1"; for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; return 1; }
 CLAIM_JS="$(kaola_script kaola-workflow-claim.js)"
 [ -f "$CLAIM_JS" ] && node "$CLAIM_JS" claim \
   --session "$KAOLA_SESSION_ID" --project "{project}" --issue {N}
