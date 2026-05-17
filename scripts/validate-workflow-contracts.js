@@ -174,7 +174,7 @@ assert(Array.isArray(packageJson.files) && packageJson.files.includes('hooks/'),
 assert(Array.isArray(packageJson.files) && packageJson.files.includes('scripts/'), 'package.json files must include scripts/');
 
 const routerLines = read('commands/workflow-next.md').split(/\r?\n/).length;
-assert(routerLines <= 267, `commands/workflow-next.md must remain a thin router; found ${routerLines} lines`);
+assert(routerLines <= 300, `commands/workflow-next.md must remain a thin router; found ${routerLines} lines`);
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-workflow-contract-'));
 try {

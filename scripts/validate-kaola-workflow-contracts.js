@@ -194,6 +194,12 @@ assertIncludes(simulateScript, 'real parallel bootstrap coordination and claim-r
 assertIncludes(simulateScript, 'startup transaction syncs issue roadmap');
 assertIncludes(simulateScript, 'can-handoff must reject live owner');
 assertIncludes(simulateScript, 'claim:none receipt must not authorize phase work');
+assertIncludes(simulateScript, '--target-issue');
+assertIncludes('scripts/kaola-workflow-claim.js', 'claimExplicitTarget');
+assertIncludes('scripts/kaola-workflow-claim.js', "'no_target'");
+assertIncludes('scripts/kaola-workflow-claim.js', "'target_occupied'");
+assertIncludes('scripts/kaola-workflow-claim.js', "'user_target_blocked'");
+assertIncludes('scripts/kaola-workflow-claim.js', "'target_mismatch'");
 assertIncludes(simulateScript, 'Kaola-Workflow walkthrough simulation passed');
 assertNotIncludes(simulateScript, '../../../scripts/kaola-workflow-claim.js');
 assertIncludes(installAgentsScript, 'BEGIN kaola-workflow agents');

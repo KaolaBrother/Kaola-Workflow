@@ -11,7 +11,6 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 | #41 | workflow-next robustness: priority-label discovery, claim:none fallback, phantom-advisor gate, fast-path workflow | open | — | ready |
 | #42 | Remove /workflow-next-pr; drive sink from prompt intent + merge fallback | open | — | ready |
 | #43 | Investigation: does /workflow-init need to change given current architecture vision (#40, #41, #42)? | open | — | ready |
-| #44 | Bug: startup ignores user-named target issue; forces release + reclaim + receipt repair | open | — | ready |
 
 ## Rules
 

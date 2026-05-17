@@ -42,17 +42,31 @@ advisor internally for essential technical decisions, apply the chosen answer,
 and record it under `.cache/` or the phase artifact. Ask only for true external
 authorization or materially user-owned choices.
 
-## Startup Step 0 - Startup Transaction
+## Startup Step 0 - Agent Issue Selection (Required Before Startup)
+
+Before calling the startup script, the agent must select a target issue. Scripts
+do not auto-pick; the agent owns this decision.
+
+1. Read `kaola-workflow/ROADMAP.md` for open unfinished issues.
+2. Fetch GitHub issue list if available (`gh issue list --limit 100 --json number,title,state,labels`).
+3. Check active locks: `node "$CLAIM_JS" status 2>/dev/null` to find already-claimed issues.
+4. Apply sequencing judgment: prefer foundational or dependency-unblocked issues; avoid issues
+   blocked by open dependencies or already active in another session.
+5. If the session already owns a project (startup will return `verdict: owned`), skip steps 1-4
+   and route to that owned project.
+6. If `$ARGUMENTS` names a specific issue number or project, use that as the explicit target.
+7. State the selected issue number aloud before calling startup.
+
+If no actionable issue is found (all blocked, red, or occupied), stop and explain.
+
+Set `KAOLA_TARGET_ISSUE` to the chosen issue number before calling startup.
+
+## Startup Step 0b - Startup Transaction
 
 If `kaola-workflow-claim.js` and `kaola-workflow-classifier.js` are available,
-run the startup transaction before selecting work. Resolve the current session id from
-`KAOLA_SESSION_ID`, then the host platform id, then a generated fallback. Normal
-startup must continue only projects owned by that id; foreign active projects
-are occupied and skipped.
-
-Startup synchronizes GitHub issues into the local roadmap mirror, runs `sweep`,
-`watch-pr`, classifier, and claim, writes a session startup receipt, and emits
-structured JSON before selecting the next candidate.
+run the startup transaction with the agent-selected target. Resolve the current
+session id from `KAOLA_SESSION_ID`, then the host platform id, then a generated
+fallback. The startup script validates, claims, and receipts the explicit target.
 
 ```bash
 kaola_script(){ _n="$1"; for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; return 1; }
@@ -61,7 +75,7 @@ if [ -f "$CLAIM_JS" ]; then
   KAOLA_STARTUP_SESSION="$(node "$CLAIM_JS" session 2>/dev/null || true)"
   [ -n "$KAOLA_STARTUP_SESSION" ] && export KAOLA_SESSION_ID="$KAOLA_STARTUP_SESSION"
   if [ "${KAOLA_WORKTREE_NATIVE:-0}" = "1" ]; then
-    PICK_NEXT_OUT="$(node "$CLAIM_JS" pick-next --session "$KAOLA_STARTUP_SESSION" --runtime claude ${KAOLA_SINK:+--sink $KAOLA_SINK} 2>/dev/null)" || true
+    PICK_NEXT_OUT="$(node "$CLAIM_JS" pick-next --session "$KAOLA_STARTUP_SESSION" --runtime claude ${KAOLA_SINK:+--sink $KAOLA_SINK} ${KAOLA_TARGET_ISSUE:+--target-issue $KAOLA_TARGET_ISSUE} 2>/dev/null)" || true
     PICK_NEXT_VERDICT="$(node -e "try{process.stdout.write(JSON.parse(process.argv[1]).verdict||'')}catch(e){}" "$PICK_NEXT_OUT" 2>/dev/null)" || true
     PICK_NEXT_PROJECT="$(node -e "try{process.stdout.write(JSON.parse(process.argv[1]).project||'')}catch(e){}" "$PICK_NEXT_OUT" 2>/dev/null)" || true
     if [ "$PICK_NEXT_VERDICT" = "acquired" ] && [ -n "$PICK_NEXT_PROJECT" ]; then
@@ -76,10 +90,13 @@ if [ -f "$CLAIM_JS" ]; then
   if [ -z "${STARTUP_OUT:-}" ]; then
     KAOLA_SINK_FLAG=""
     [ -n "${KAOLA_SINK:-}" ] && KAOLA_SINK_FLAG="--sink $KAOLA_SINK"
+    KAOLA_TARGET_FLAG=""
+    [ -n "${KAOLA_TARGET_ISSUE:-}" ] && KAOLA_TARGET_FLAG="--target-issue $KAOLA_TARGET_ISSUE"
     STARTUP_OUT=$(node "$CLAIM_JS" startup \
       --session "$KAOLA_STARTUP_SESSION" \
       --runtime claude \
-      $KAOLA_SINK_FLAG 2>/dev/null) || true
+      $KAOLA_SINK_FLAG \
+      $KAOLA_TARGET_FLAG 2>/dev/null) || true
   fi
 else
   echo "BLOCKED: kaola-workflow startup unavailable; cannot select issue-backed work without a startup receipt." >&2
@@ -88,12 +105,12 @@ fi
 ```
 
 If `STARTUP_OUT` is JSON, its `session` field is the active session id. A
-verdict of `owned` routes that owned project. If startup is unavailable or the
-startup receipt is missing/malformed, stop for repair. If startup returns
-`claim: "none"`, normal routing must stop; do not inspect active project folders
-and recover/handoff them from a skipped `already claimed` entry unless the user
-explicitly requested recovery for a specific unfinished project.
-Agent reads `recovery` field and asks, stops, or selects explicit new target before next claim.
+verdict of `owned` routes that owned project. If startup returns `verdict: no_target`,
+the agent must select a target issue per Step 0 and re-run. If startup returns a
+typed refusal (`target_occupied`, `user_target_blocked`, `user_target_red`,
+`target_mismatch`, `target_unavailable`), read the `reasoning` field and either
+stop, select a different issue, or escalate to the user. If startup is unavailable
+or the startup receipt is missing/malformed, stop for repair.
 If `KAOLA_PATH=fast` is set, startup records `workflow_path: fast`.
 Agent sets this env var after reading `analyzeIssue` advisory output from the startup receipt.
 

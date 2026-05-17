@@ -155,6 +155,7 @@ function parseArgs(argv) {
     if (argv[i] === '--session' && argv[i + 1]) { args.session = argv[++i]; continue; }
     if (argv[i] === '--project' && argv[i + 1]) { args.project = argv[++i]; continue; }
     if (argv[i] === '--issue' && argv[i + 1]) { args.issue = parseInt(argv[++i], 10); continue; }
+    if (argv[i] === '--target-issue' && argv[i + 1]) { args.targetIssue = parseInt(argv[++i], 10); continue; }
     if (argv[i] === '--branch' && argv[i + 1]) { args.branch = argv[++i]; continue; }
     if (argv[i] === '--sink' && argv[i + 1]) { args.sink = argv[++i]; continue; }
     if (argv[i] === '--runtime' && argv[i + 1]) { args.runtime = argv[++i]; continue; }
@@ -1280,11 +1281,29 @@ function selectFirstClaimable(classifierScript, issues, claimer, sinks) {
   return { pick: null };
 }
 
-function runStartupClaimFirstAvailable(claimScript, classifierScript, args, issues, skipped, blocked) {
-  if (!fs.existsSync(classifierScript)) return { pick: null };
-  return selectFirstClaimable(classifierScript, issues,
-    (pick) => runBootstrapClaim(claimScript, args, pick),
-    { skipped, blocked });
+function claimExplicitTarget(claimScript, classifierScript, args, targetIssue, coordRoot, root) {
+  if (issueAlreadyClaimed(coordRoot, root, targetIssue)) {
+    return { status: 'target_occupied', issue: targetIssue, project: 'issue-' + targetIssue };
+  }
+  if (!fs.existsSync(classifierScript)) {
+    return { status: 'target_unavailable', issue: targetIssue, project: 'issue-' + targetIssue, reasoning: 'classifier unavailable' };
+  }
+  const candidate = classifyIssueCandidate(classifierScript, targetIssue);
+  if (candidate.verdict === 'blocked') {
+    return { status: 'user_target_blocked', issue: targetIssue, project: candidate.project, reasoning: candidate.reasoning };
+  }
+  if (candidate.verdict === 'red') {
+    return { status: 'user_target_red', issue: targetIssue, project: candidate.project, reasoning: candidate.reasoning };
+  }
+  if (candidate.verdict !== 'green' && candidate.verdict !== 'yellow') {
+    return { status: 'target_unavailable', issue: targetIssue, project: candidate.project, reasoning: candidate.reasoning };
+  }
+  const claimCandidate = { pick: targetIssue, project: candidate.project, verdict: candidate.verdict };
+  const claimed = runBootstrapClaim(claimScript, args, claimCandidate);
+  if (!claimed) {
+    return { status: 'target_occupied', issue: targetIssue, project: candidate.project, reasoning: 'claim race' };
+  }
+  return { status: 'acquired', issue: targetIssue, project: candidate.project, verdict: candidate.verdict };
 }
 
 function cmdStartup() {
@@ -1294,6 +1313,8 @@ function cmdStartup() {
   assert(!args.sink || args.sink === 'merge' || args.sink === 'pr', '--sink must be "merge" or "pr"');
   assert(!args.runtime || args.runtime === 'claude' || args.runtime === 'codex',
     '--runtime must be "claude" or "codex"');
+  assert(!args.targetIssue || (Number.isFinite(args.targetIssue) && args.targetIssue > 0),
+    '--target-issue must be a positive integer');
 
   const root = getRoot();
   const topTierLabels = readPriorityConfig(root);
@@ -1321,6 +1342,31 @@ function cmdStartup() {
 
   const owned = ownedActiveProject(coordRoot, root, args.session);
   if (owned) {
+    if (args.targetIssue && owned.issue_number !== args.targetIssue) {
+      // Do NOT overwrite the startup receipt — the session still owns the existing project.
+      // Emit the refusal only to stdout; the persisted receipt remains valid for the owned project.
+      const refusal = {
+        startup_completed: true,
+        session: args.session,
+        runtime: args.runtime || 'claude',
+        issue_sync: sync.issue_sync,
+        roadmap_sync: sync.roadmap_sync,
+        issue_source: issueFetch.status,
+        project: owned.project,
+        issue: owned.issue_number,
+        selected_issue: null,
+        selected_project: null,
+        verdict: 'target_mismatch',
+        claim: 'none',
+        skipped: skipped,
+        blocked: blocked,
+        ranking: ranking
+      };
+      process.stderr.write('startup: session already owns issue #' + owned.issue_number + '; cannot acquire target #' + args.targetIssue + '\n');
+      process.stdout.write(JSON.stringify(refusal) + '\n');
+      process.exitCode = 1;
+      return;
+    }
     const ownedStatePath = path.join(root, 'kaola-workflow', owned.project, 'workflow-state.md');
     const ownedWorkflowPath = (function() {
       try {
@@ -1349,8 +1395,7 @@ function cmdStartup() {
     return;
   }
 
-  const pick = runStartupClaimFirstAvailable(__filename, classifierScript, args, sortedIssues, skipped, blocked);
-  if (!pick.pick) {
+  if (!args.targetIssue) {
     const receipt = writeStartupReceipt(coordRoot, args.session, {
       runtime: args.runtime || 'claude',
       issue_sync: sync.issue_sync,
@@ -1360,14 +1405,37 @@ function cmdStartup() {
       issue: null,
       selected_issue: null,
       selected_project: null,
-      verdict: 'none',
+      verdict: 'no_target',
+      claim: 'none',
+      skipped: skipped,
+      blocked: blocked,
+      ranking: ranking
+    });
+    process.stderr.write('startup: no --target-issue provided; agent must select an issue explicitly\n');
+    process.stdout.write(JSON.stringify(receipt) + '\n');
+    process.exitCode = 1;
+    return;
+  }
+
+  const targetResult = claimExplicitTarget(__filename, classifierScript, args, args.targetIssue, coordRoot, root);
+  if (targetResult.status !== 'acquired') {
+    const receipt = writeStartupReceipt(coordRoot, args.session, {
+      runtime: args.runtime || 'claude',
+      issue_sync: sync.issue_sync,
+      roadmap_sync: sync.roadmap_sync,
+      issue_source: issueFetch.status,
+      project: targetResult.project || null,
+      issue: targetResult.issue || null,
+      selected_issue: null,
+      selected_project: null,
+      verdict: targetResult.status,
       claim: 'none',
       skipped: skipped,
       blocked: blocked,
       ranking: ranking,
-      recovery: computeRecovery(skipped, blocked)
+      reasoning: targetResult.reasoning || ''
     });
-    process.stderr.write('startup: no unclaimed work available for session ' + args.session + '\n');
+    process.stderr.write('startup: target issue #' + args.targetIssue + ' refused: ' + targetResult.status + '\n');
     process.stdout.write(JSON.stringify(receipt) + '\n');
     process.exitCode = 1;
     return;
@@ -1378,15 +1446,16 @@ function cmdStartup() {
     issue_sync: sync.issue_sync,
     roadmap_sync: sync.roadmap_sync,
     issue_source: issueFetch.status,
-    project: pick.project,
-    issue: pick.pick,
-    selected_issue: pick.pick,
-    selected_project: pick.project,
-    verdict: pick.verdict,
+    project: targetResult.project,
+    issue: targetResult.issue,
+    selected_issue: targetResult.issue,
+    selected_project: targetResult.project,
+    verdict: targetResult.verdict,
     claim: 'acquired',
     skipped: skipped,
     blocked: blocked,
     ranking: ranking,
+    target_source: 'user_directed',
     workflow_path: process.env.KAOLA_PATH === 'fast' ? 'fast' : 'full'
   });
   process.stdout.write(JSON.stringify(receipt) + '\n');
@@ -2277,6 +2346,8 @@ function cmdPickNext() {
   assert(!args.sink || args.sink === 'merge' || args.sink === 'pr', '--sink must be "merge" or "pr"');
   assert(!args.runtime || args.runtime === 'claude' || args.runtime === 'codex',
     '--runtime must be "claude" or "codex"');
+  assert(!args.targetIssue || (Number.isFinite(args.targetIssue) && args.targetIssue > 0),
+    '--target-issue must be a positive integer');
 
   const root = getRoot();
   const coordRoot = getCoordRoot();
@@ -2285,6 +2356,17 @@ function cmdPickNext() {
   // Early-return: check if this session already owns a project (fixes Flaw 5 dedup)
   const owned = ownedActiveProject(coordRoot, root, args.session);
   if (owned) {
+    if (args.targetIssue && owned.issue_number !== args.targetIssue) {
+      process.stdout.write(JSON.stringify({
+        verdict: 'target_mismatch',
+        project: owned.project,
+        issue: owned.issue_number,
+        target_issue: args.targetIssue,
+        session: args.session
+      }) + '\n');
+      process.exitCode = 1;
+      return;
+    }
     process.stdout.write(JSON.stringify({
       verdict: 'owned',
       project: owned.project,
@@ -2297,49 +2379,50 @@ function cmdPickNext() {
   // Sweep for orphans (mirrors startup; OFFLINE guard inside sweep)
   runBootstrapSweep(__filename, root);
 
-  // Proper issue selection using classifier (fixes Flaw 5 — replaces fetchOpenIssues + buildClaimedBranchSet)
-  const topTierLabels = readPriorityConfig(root);
-  const issueFetch = fetchOpenIssueRecords(root);
-  const sortedIssues = issueFetch.issues.length > 0
-    ? sortIssueRecords(issueFetch.issues, { topTierLabels })
-    : issueFetch.issues;
-
-  const classifierScript = path.join(path.dirname(__filename), 'kaola-workflow-classifier.js');
-  const skipped = [];
-  const blocked = [];
-
-  const pick = selectFirstClaimable(classifierScript, sortedIssues,
-    (candidate) => runBootstrapClaim(__filename, args, candidate),
-    { skipped, blocked });
-
-  if (!pick.pick) {
+  if (!args.targetIssue) {
     process.stdout.write(JSON.stringify({
       verdict: 'none',
-      reason: 'no-actionable-issues',
-      skipped,
-      blocked,
-      recovery: computeRecovery(skipped, blocked)
+      reason: 'no_target',
+      recovery: 'Agent must select an issue explicitly and pass --target-issue N'
     }) + '\n');
+    process.exitCode = 1;
     return;
   }
 
-  // Flaw 4: Write startup receipt with claim: 'acquired'
+  const classifierScript = path.join(path.dirname(__filename), 'kaola-workflow-classifier.js');
+
+  const targetResult = claimExplicitTarget(__filename, classifierScript, args, args.targetIssue, coordRoot, root);
+  if (targetResult.status !== 'acquired') {
+    process.stdout.write(JSON.stringify({
+      verdict: targetResult.status,
+      issue: targetResult.issue,
+      project: targetResult.project,
+      reasoning: targetResult.reasoning || ''
+    }) + '\n');
+    process.exitCode = 1;
+    return;
+  }
+
+  const pick = { pick: targetResult.issue, project: targetResult.project, verdict: targetResult.verdict };
+
+  // Write startup receipt with claim: 'acquired'
   const receipt = writeStartupReceipt(coordRoot, args.session, {
     runtime: args.runtime || 'claude',
-    issue_sync: issueFetch.status,
+    issue_sync: 'skipped',
     roadmap_sync: 'skipped',
-    issue_source: issueFetch.status,
+    issue_source: 'skipped',
     project: pick.project,
     issue: pick.pick,
     selected_project: pick.project,
     selected_issue: pick.pick,
     verdict: pick.verdict,
     claim: 'acquired',
-    skipped,
-    blocked
+    target_source: 'user_directed',
+    skipped: [],
+    blocked: []
   });
 
-  // Flaws 8+9: Update state file with 24h expiry (cmdClaim wrote 30min) and patch lock file
+  // Update state file with 24h expiry and patch lock file
   const now = new Date();
   const lp = lockPath(coordRoot, pick.project);
   const existingLock = readJsonFile(lp) || {};

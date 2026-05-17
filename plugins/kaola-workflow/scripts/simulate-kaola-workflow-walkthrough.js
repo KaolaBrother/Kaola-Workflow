@@ -1078,10 +1078,11 @@ exit 0
         const first = JSON.parse(execFileSync(process.execPath, [
           claimScript, 'startup',
           '--session', 'sess-plugin-startup-a',
-          '--runtime', 'codex'
+          '--runtime', 'codex',
+          '--target-issue', '951'
         ], { cwd: startupDir, encoding: 'utf8', env: startupEnv }).trim());
         assert(first.startup_completed === true && first.issue === 951 && first.claim === 'acquired',
-          'Case 5k-a: startup must claim queued issue 951 and report receipt fields, got: ' + JSON.stringify(first));
+          'Case 5k-a: startup must claim explicitly targeted issue 951 and report receipt fields, got: ' + JSON.stringify(first));
         assert(first.issue_sync === 'ok' && first.roadmap_sync === 'ok',
           'Case 5k-a: startup must sync plugin roadmap, got: ' + JSON.stringify(first));
         assert(fs.existsSync(path.join(startupDir, '.git', 'kaola-workflow', '.sessions', 'sess-plugin-startup-a.startup.json')),
@@ -1108,12 +1109,13 @@ exit 0
         const second = JSON.parse(execFileSync(process.execPath, [
           claimScript, 'startup',
           '--session', 'sess-plugin-startup-b',
-          '--runtime', 'codex'
+          '--runtime', 'codex',
+          '--target-issue', '953'
         ], { cwd: startupDir, encoding: 'utf8', env: startupEnv }).trim());
-        assert(second.issue === 953,
-          'Case 5k-b: second startup must skip 951, block 952, and claim 953, got: ' + JSON.stringify(second));
-        assert(second.skipped.some(item => item.issue === 951), 'Case 5k-b: skipped receipt must include 951');
-        assert(second.blocked.some(item => item.issue === 952), 'Case 5k-b: blocked receipt must include 952');
+        assert(second.issue === 953 && second.claim === 'acquired',
+          'Case 5k-b: second startup must claim explicitly targeted issue 953, got: ' + JSON.stringify(second));
+        assert(second.target_source === 'user_directed',
+          'Case 5k-b: receipt must record target_source: user_directed, got: ' + JSON.stringify(second));
         let verifySecondForFirstCode = 0;
         try {
           execFileSync(process.execPath, [
@@ -1144,10 +1146,12 @@ exit 0
           thirdCode = e.status || 1;
           thirdStdout = e.stdout || '';
         }
-        assert(thirdCode === 1, 'Case 5k-c: no-work startup must exit 1, got: ' + thirdCode);
+        assert(thirdCode === 1, 'Case 5k-c: no-target startup must exit 1, got: ' + thirdCode);
         const thirdReceipt = JSON.parse(thirdStdout.trim());
         assert(thirdReceipt.claim === 'none' && thirdReceipt.startup_completed === true,
-          'Case 5k-c: no-work startup must write a claim:none receipt, got: ' + JSON.stringify(thirdReceipt));
+          'Case 5k-c: no-target startup must write a claim:none receipt, got: ' + JSON.stringify(thirdReceipt));
+        assert(thirdReceipt.verdict === 'no_target',
+          'Case 5k-c: no-target startup must return verdict: no_target, got: ' + JSON.stringify(thirdReceipt));
         let verifyThirdCode = 0;
         let verifyThirdOut = '';
         try {

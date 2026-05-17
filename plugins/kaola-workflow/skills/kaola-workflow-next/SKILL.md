@@ -24,11 +24,25 @@ decisions, consult the strongest available expert model/profile for the session,
 apply the chosen answer directly, and record it under `.cache/` or the phase
 artifact.
 
+## Agent Issue Selection (Required Before Startup)
+
+Before calling the startup script, the agent must select a target issue. Scripts
+do not auto-pick; the agent owns this decision.
+
+1. Read `kaola-workflow/ROADMAP.md` for open unfinished issues.
+2. Fetch GitHub issue list if available (`gh issue list --limit 100 --json number,title,state,labels`).
+3. Check active locks via `node "$claim_script" status 2>/dev/null`.
+4. Apply sequencing judgment: prefer foundational or dependency-unblocked issues.
+5. If the session already owns a project (startup returns `verdict: owned`), skip steps 1-4.
+6. State the selected issue number before calling startup.
+
+Set `KAOLA_TARGET_ISSUE` to the chosen issue number before calling startup.
+
 ## Startup
 
-Run the startup transaction for this session. Use `KAOLA_SESSION_ID` if it is
-already set; otherwise prefer `CODEX_THREAD_ID`, then generate a fallback.
-Normal startup resumes only active work owned by the current session id.
+Run the startup transaction for this session with the agent-selected target.
+Use `KAOLA_SESSION_ID` if it is already set; otherwise prefer `CODEX_THREAD_ID`,
+then generate a fallback.
 
 ```bash
 claim_script="plugins/kaola-workflow/scripts/kaola-workflow-claim.js"
@@ -40,7 +54,7 @@ if [ -f "$claim_script" ]; then
   KAOLA_STARTUP_SESSION="$(node "$claim_script" session 2>/dev/null || true)"
   [ -n "$KAOLA_STARTUP_SESSION" ] && export KAOLA_SESSION_ID="$KAOLA_STARTUP_SESSION"
   if [ "${KAOLA_WORKTREE_NATIVE:-0}" = "1" ]; then
-    PICK_NEXT_OUT="$(node "$claim_script" pick-next --session "$KAOLA_STARTUP_SESSION" --runtime codex ${KAOLA_SINK:+--sink $KAOLA_SINK} 2>/dev/null)" || true
+    PICK_NEXT_OUT="$(node "$claim_script" pick-next --session "$KAOLA_STARTUP_SESSION" --runtime codex ${KAOLA_SINK:+--sink $KAOLA_SINK} ${KAOLA_TARGET_ISSUE:+--target-issue $KAOLA_TARGET_ISSUE} 2>/dev/null)" || true
     PICK_NEXT_VERDICT="$(node -e "try{process.stdout.write(JSON.parse(process.argv[1]).verdict||'')}catch(e){}" "$PICK_NEXT_OUT" 2>/dev/null)" || true
     PICK_NEXT_PROJECT="$(node -e "try{process.stdout.write(JSON.parse(process.argv[1]).project||'')}catch(e){}" "$PICK_NEXT_OUT" 2>/dev/null)" || true
     if [ "$PICK_NEXT_VERDICT" = "acquired" ] && [ -n "$PICK_NEXT_PROJECT" ]; then
@@ -55,10 +69,13 @@ if [ -f "$claim_script" ]; then
   if [ -z "${STARTUP_OUT:-}" ]; then
     KAOLA_SINK_FLAG=""
     [ -n "${KAOLA_SINK:-}" ] && KAOLA_SINK_FLAG="--sink $KAOLA_SINK"
+    KAOLA_TARGET_FLAG=""
+    [ -n "${KAOLA_TARGET_ISSUE:-}" ] && KAOLA_TARGET_FLAG="--target-issue $KAOLA_TARGET_ISSUE"
     STARTUP_OUT=$(node "$claim_script" startup \
       --session "$KAOLA_STARTUP_SESSION" \
       --runtime codex \
-      $KAOLA_SINK_FLAG 2>/dev/null) || true
+      $KAOLA_SINK_FLAG \
+      $KAOLA_TARGET_FLAG 2>/dev/null) || true
   fi
 else
   echo "BLOCKED: kaola-workflow startup unavailable; cannot select issue-backed work without a startup receipt." >&2
@@ -66,10 +83,11 @@ else
 fi
 ```
 
-If `STARTUP_OUT` has `verdict: "owned"`, route that project. If another
-session owns the only active project, skip it and claim the next free issue.
-If no free issue exists, stop with the startup no-unclaimed-work message.
-If the startup script is unavailable, stop for repair.
+If `STARTUP_OUT` has `verdict: "owned"`, route that project. If startup returns
+`verdict: no_target`, the agent must select a target and re-run. If startup returns
+a typed refusal (`target_occupied`, `user_target_blocked`, `user_target_red`,
+`target_mismatch`, `target_unavailable`), read the `reasoning` field and stop or
+select a different issue. If the startup script is unavailable, stop for repair.
 Do not proceed to project selection when the startup receipt is missing or
 malformed.
 If startup returns `claim: "none"`, stop normal routing. Do not inspect active

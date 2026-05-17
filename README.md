@@ -374,15 +374,28 @@ Exact file-path overlap returns `red`, including shared-infrastructure files suc
 
 When an issue receives a `yellow` verdict (shared infrastructure warning), a cache file is written to `kaola-workflow/{project}/.cache/parallel-classifier.md` to flag the caution for the phase team.
 
-### Startup Issue Priority Ranking
+### Agent-Directed Issue Selection
 
-When `startup` selects the next issue to claim, it sorts candidates by the following keys in order:
+Issue selection is an agent decision, not a hidden script decision. Agents must:
+
+1. Inspect the local roadmap (`kaola-workflow/ROADMAP.md`)
+2. Fetch open GitHub issues
+3. Classify candidates as green/yellow/red/blocked (using parallel-work guidance if multi-session)
+4. Select the best match based on priority, dependencies, and phase completion
+5. Pass the chosen issue number via `KAOLA_TARGET_ISSUE=N` before calling `/workflow-next`
+
+The startup script validates the agent's choice:
+- Issue must be unclaimed (no active lock)
+- Issue must be green or yellow (not blocked or red)
+- No duplicate claims across sessions
+
+If the agent does not provide an explicit target issue, startup refuses and emits a structured error with the `recovery` field indicating the next action.
+
+**Startup Receipt Priority Information** — The startup receipt includes a `ranking` array listing `{ issue, tier, priority_label, override_label }` for all candidate issues. This helps agents make informed decisions. Ranking sorts by:
 
 1. **`workflow:queued` label** — queued issues always win, regardless of priority tier.
 2. **Priority tier** — P0 (highest) → P1 → P2 → P3 → unlabeled (lowest). Determined by GitHub label names.
 3. **Issue number** — ascending (lowest number wins among equal-priority issues).
-
-A `ranking` array is included in every startup receipt, listing `{ issue, tier, priority_label, override_label }` for all candidate issues.
 
 **Top-tier override labels** — any label listed in `priority_top_tier_labels` is forced to tier 0, overriding P-label ranking. When an override label fires, `priority_label` is `null` and `override_label` is the matched label name.
 

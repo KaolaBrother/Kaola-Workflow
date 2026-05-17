@@ -3268,14 +3268,18 @@ exit 0
         fs.chmodSync(startupGh, 0o755);
         const env = { ...process.env, PATH: startupBin + path.delimiter + (process.env.PATH || ''), HOME: startupTmp };
 
+        // 14A: agent directs startup to claim issue 201 explicitly
         const first = JSON.parse(execFileSync(process.execPath, [
           claimScript, 'startup',
           '--session', 'sess-startup-a',
-          '--runtime', 'codex'
+          '--runtime', 'codex',
+          '--target-issue', '201'
         ], { cwd: startupTmp, encoding: 'utf8', env }).trim());
         assert(first.startup_completed === true, '14A: startup output must mark startup_completed');
         assert(first.issue === 201 && first.claim === 'acquired',
-          '14A: queued issue 201 must be selected first, got: ' + JSON.stringify(first));
+          '14A: queued issue 201 must be claimed when explicitly targeted, got: ' + JSON.stringify(first));
+        assert(first.target_source === 'user_directed',
+          '14A: receipt must record target_source: user_directed, got: ' + JSON.stringify(first));
         assert(first.issue_sync === 'ok' && first.roadmap_sync === 'ok',
           '14A: startup must sync issues and roadmap before selection');
         assert(fs.existsSync(path.join(sessionsDirFor(startupTmp), 'sess-startup-a.startup.json')),
@@ -3301,17 +3305,17 @@ exit 0
         assert(verifyFirstWrongProject.status === 2,
           '14A: verify-startup must reject a different project for the same receipt, got ' + verifyFirstWrongProject.status);
 
+        // 14B: second session explicitly targets issue 203 (agent skipped 201=claimed, 202=blocked)
         const second = JSON.parse(execFileSync(process.execPath, [
           claimScript, 'startup',
           '--session', 'sess-startup-b',
-          '--runtime', 'codex'
+          '--runtime', 'codex',
+          '--target-issue', '203'
         ], { cwd: startupTmp, encoding: 'utf8', env }).trim());
-        assert(second.issue === 203,
-          '14B: second startup must skip claimed 201, block 202, and claim 203, got: ' + JSON.stringify(second));
-        assert(second.skipped.some(item => item.issue === 201),
-          '14B: receipt must record claimed issue 201 as skipped');
-        assert(second.blocked.some(item => item.issue === 202),
-          '14B: receipt must record dependency-blocked issue 202');
+        assert(second.issue === 203 && second.claim === 'acquired',
+          '14B: second startup must claim explicitly targeted issue 203, got: ' + JSON.stringify(second));
+        assert(second.target_source === 'user_directed',
+          '14B: receipt must record target_source: user_directed, got: ' + JSON.stringify(second));
         assert(fs.existsSync(path.join(sessionsDirFor(startupTmp), 'sess-startup-b.startup.json')),
           '14B: second startup receipt must be written');
         const verifySecondForFirst = spawnSync(process.execPath, [
@@ -3329,15 +3333,18 @@ exit 0
         assert(verifySecond.status === 0,
           '14B: second startup receipt must authorize issue 203, got ' + verifySecond.status + '\nstderr: ' + verifySecond.stderr);
 
+        // 14C: startup without --target-issue must refuse auto-pick and return no_target
         const third = spawnSync(process.execPath, [
           claimScript, 'startup',
           '--session', 'sess-startup-c',
           '--runtime', 'codex'
         ], { cwd: startupTmp, encoding: 'utf8', env });
-        assert(third.status === 1, '14C: no-work startup must exit 1, got ' + third.status + '\nstderr: ' + third.stderr);
+        assert(third.status === 1, '14C: no-target startup must exit 1, got ' + third.status + '\nstderr: ' + third.stderr);
         const thirdReceipt = JSON.parse(third.stdout.trim());
         assert(thirdReceipt.claim === 'none' && thirdReceipt.startup_completed === true,
-          '14C: no-work startup must still write a claim:none receipt, got: ' + JSON.stringify(thirdReceipt));
+          '14C: no-target startup must still write a claim:none receipt, got: ' + JSON.stringify(thirdReceipt));
+        assert(thirdReceipt.verdict === 'no_target',
+          '14C: no-target startup must return verdict: no_target, got: ' + JSON.stringify(thirdReceipt));
         const verifyThird = spawnSync(process.execPath, [
           claimScript, 'verify-startup',
           '--session', 'sess-startup-c',
@@ -3347,6 +3354,30 @@ exit 0
           '14C: claim:none receipt must not authorize phase work, got ' + verifyThird.status);
         assert(verifyThird.stdout.includes('did not acquire or own any project'),
           '14C: claim:none verifier must explain the startup receipt gap, got: ' + verifyThird.stdout);
+
+        // 14D: targeting an already-claimed issue returns target_occupied refusal
+        const fourthD = spawnSync(process.execPath, [
+          claimScript, 'startup',
+          '--session', 'sess-startup-d',
+          '--runtime', 'codex',
+          '--target-issue', '201'
+        ], { cwd: startupTmp, encoding: 'utf8', env });
+        assert(fourthD.status === 1, '14D: occupied-target startup must exit 1, got ' + fourthD.status);
+        const fourthDReceipt = JSON.parse(fourthD.stdout.trim());
+        assert(fourthDReceipt.verdict === 'target_occupied' && fourthDReceipt.claim === 'none',
+          '14D: occupied-target must return verdict: target_occupied, got: ' + JSON.stringify(fourthDReceipt));
+
+        // 14E: targeting a dependency-blocked issue returns user_target_blocked refusal
+        const fourthE = spawnSync(process.execPath, [
+          claimScript, 'startup',
+          '--session', 'sess-startup-e',
+          '--runtime', 'codex',
+          '--target-issue', '202'
+        ], { cwd: startupTmp, encoding: 'utf8', env });
+        assert(fourthE.status === 1, '14E: blocked-target startup must exit 1, got ' + fourthE.status);
+        const fourthEReceipt = JSON.parse(fourthE.stdout.trim());
+        assert(fourthEReceipt.verdict === 'user_target_blocked' && fourthEReceipt.claim === 'none',
+          '14E: blocked-target must return verdict: user_target_blocked, got: ' + JSON.stringify(fourthEReceipt));
       } finally {
         fs.rmSync(startupTmp, { recursive: true, force: true });
       }
@@ -3390,11 +3421,12 @@ exit 0
         const first14a = JSON.parse(execFileSync(process.execPath, [
           claimScript14a, 'startup',
           '--session', 'sess-14a',
-          '--runtime', 'codex'
+          '--runtime', 'codex',
+          '--target-issue', '305'
         ], { cwd: tmp14a, encoding: 'utf8', env: env14a }).trim());
 
-        assert(first14a.issue === 305,
-          '14a: workflow:queued issue 305 must beat P0 issue 304, got: ' + JSON.stringify(first14a));
+        assert(first14a.issue === 305 && first14a.claim === 'acquired',
+          '14a: workflow:queued issue 305 must be claimed when explicitly targeted, got: ' + JSON.stringify(first14a));
         assert(Array.isArray(first14a.ranking) && first14a.ranking.length === 5,
           '14a: ranking must contain all 5 issues, got: ' + JSON.stringify(first14a.ranking));
         const r304 = first14a.ranking.find(function(r) { return r.issue === 304; });
@@ -3453,11 +3485,12 @@ exit 0
         const first14b = JSON.parse(execFileSync(process.execPath, [
           claimScript14b, 'startup',
           '--session', 'sess-14b',
-          '--runtime', 'codex'
+          '--runtime', 'codex',
+          '--target-issue', '401'
         ], { cwd: tmp14b, encoding: 'utf8', env: env14b }).trim());
 
-        assert(first14b.issue === 401,
-          '14b: hotfix issue 401 must beat P0 issue 402, got: ' + JSON.stringify(first14b));
+        assert(first14b.issue === 401 && first14b.claim === 'acquired',
+          '14b: hotfix issue 401 must be claimed when explicitly targeted, got: ' + JSON.stringify(first14b));
         const r401 = first14b.ranking.find(function(r) { return r.issue === 401; });
         assert(r401 && r401.override_label === 'hotfix' && r401.priority_label === null,
           '14b: ranking entry for issue 401 must have override_label=hotfix, priority_label=null, got: ' + JSON.stringify(r401));
@@ -4847,9 +4880,9 @@ exit 0
         const env17Offline = { ...env17, KAOLA_WORKFLOW_OFFLINE: '1' };
         const claimJS = path.join(root, 'scripts/kaola-workflow-claim.js');
 
-        // 17A: pick-next acquires issue 701
+        // 17A: pick-next acquires issue 701 when explicitly targeted by agent
         const pickOut17a = execFileSync(process.execPath, [claimJS, 'pick-next',
-          '--session', 'sess-epic17', '--runtime', 'claude'],
+          '--session', 'sess-epic17', '--runtime', 'claude', '--target-issue', '701'],
           { cwd: epic17Tmp, encoding: 'utf8', env: env17 });
         const pick17a = JSON.parse(pickOut17a.trim());
         assert(pick17a.verdict === 'acquired', '17A: verdict must be acquired, got ' + JSON.stringify(pick17a));
@@ -5193,17 +5226,11 @@ exit 0
           '--runtime', 'claude'
         ], { cwd: tmp8m, encoding: 'utf8', env: env8m });
 
-        assert(r8m.status === 1, '8M: startup with no claimable issues must exit 1, got ' + r8m.status);
+        assert(r8m.status === 1, '8M: startup without --target-issue must exit 1, got ' + r8m.status);
         const receipt8m = JSON.parse(r8m.stdout.trim());
         assert(receipt8m.claim === 'none', '8M: claim must be none, got ' + receipt8m.claim);
-        assert('recovery' in receipt8m,
-          '8M: claim:none receipt must have recovery field, got: ' + JSON.stringify(receipt8m));
-        assert(
-          receipt8m.recovery === 'advance_project' ||
-          receipt8m.recovery === 'consult_advisor' ||
-          receipt8m.recovery === 'prompt_user',
-          '8M: recovery must be one of the three enum values, got ' + receipt8m.recovery
-        );
+        assert(receipt8m.verdict === 'no_target',
+          '8M: startup without --target-issue must return verdict: no_target, got: ' + JSON.stringify(receipt8m));
         assert(!('analysis' in receipt8m),
           '8M: claim:none receipt must NOT have analysis field, got: ' + JSON.stringify(receipt8m));
         // Negative: no subsequent auto-claim — the receipt exit code is 1 and stdout is claim:none;
@@ -5255,7 +5282,7 @@ exit 0
       const ctx1 = make15aRepo('a');
       try {
         const r15a1 = JSON.parse(execFileSync(process.execPath, [
-          claimScript15a, 'startup', '--session', 'sess-15a-1', '--runtime', 'claude'
+          claimScript15a, 'startup', '--session', 'sess-15a-1', '--runtime', 'claude', '--target-issue', '601'
         ], { cwd: ctx1.tmpDir, encoding: 'utf8', env: { ...ctx1.env, KAOLA_PATH: 'fast' } }).trim());
         assert(r15a1.claim === 'acquired', '15a-1: must acquire an issue, got ' + r15a1.claim);
         assert(r15a1.workflow_path === 'fast',
@@ -5270,7 +5297,7 @@ exit 0
         const env2 = { ...ctx2.env };
         delete env2.KAOLA_PATH;
         const r15a2 = JSON.parse(execFileSync(process.execPath, [
-          claimScript15a, 'startup', '--session', 'sess-15a-2', '--runtime', 'claude'
+          claimScript15a, 'startup', '--session', 'sess-15a-2', '--runtime', 'claude', '--target-issue', '601'
         ], { cwd: ctx2.tmpDir, encoding: 'utf8', env: env2 }).trim());
         assert(r15a2.claim === 'acquired', '15a-2: must acquire an issue, got ' + r15a2.claim);
         assert(r15a2.workflow_path === 'full',
@@ -5283,7 +5310,7 @@ exit 0
       const ctx3 = make15aRepo('c');
       try {
         const r15a3 = JSON.parse(execFileSync(process.execPath, [
-          claimScript15a, 'startup', '--session', 'sess-15a-3', '--runtime', 'claude'
+          claimScript15a, 'startup', '--session', 'sess-15a-3', '--runtime', 'claude', '--target-issue', '601'
         ], { cwd: ctx3.tmpDir, encoding: 'utf8', env: { ...ctx3.env, KAOLA_PATH: 'invalid' } }).trim());
         assert(r15a3.claim === 'acquired', '15a-3: must acquire an issue, got ' + r15a3.claim);
         assert(r15a3.workflow_path === 'full',
@@ -5295,9 +5322,9 @@ exit 0
       // Sub-case 4: claim:owned resume preserves workflow_path from workflow-state.md
       const ctx4 = make15aRepo('d');
       try {
-        // First startup: acquire with KAOLA_PATH=fast
+        // First startup: acquire with KAOLA_PATH=fast (agent selects target issue)
         const r15a4acq = JSON.parse(execFileSync(process.execPath, [
-          claimScript15a, 'startup', '--session', 'sess-15a-4', '--runtime', 'claude'
+          claimScript15a, 'startup', '--session', 'sess-15a-4', '--runtime', 'claude', '--target-issue', '601'
         ], { cwd: ctx4.tmpDir, encoding: 'utf8', env: { ...ctx4.env, KAOLA_PATH: 'fast' } }).trim());
         assert(r15a4acq.claim === 'acquired', '15a-4: first startup must acquire, got ' + r15a4acq.claim);
         assert(r15a4acq.workflow_path === 'fast', '15a-4: first receipt must have workflow_path=fast, got ' + r15a4acq.workflow_path);
