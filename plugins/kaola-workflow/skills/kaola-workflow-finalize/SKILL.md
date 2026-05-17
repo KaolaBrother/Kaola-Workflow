@@ -173,6 +173,9 @@ node "$claim_script" verify-startup --session "$KAOLA_SESSION_ID" --project "$KA
    Run `cmdFinalize` from the linked worktree after the artifact mirror and before the commit gate:
 
    ```bash
+   SINK_KIND=$(awk '/^## Sink/,0' "kaola-workflow/${KAOLA_PROJECT}/workflow-state.md" | grep '^sink:' | awk '{print $2}')
+   SINK_KIND="${SINK_KIND:-merge}"
+   SINK_BRANCH=$(grep '^branch:' "kaola-workflow/${KAOLA_PROJECT}/workflow-state.md" | awk '{print $2}')
    (cd "$ACTIVE_WORKTREE_PATH" && node "$CLAIM_JS" finalize \
      --project "$KAOLA_PROJECT" \
      --session "$KAOLA_SESSION_ID")
@@ -214,9 +217,6 @@ node "$claim_script" verify-startup --session "$KAOLA_SESSION_ID" --project "$KA
      claim_script="$(find "$HOME/.codex/plugins/cache" -path '*/kaola-workflow/*/scripts/kaola-workflow-claim.js' -print -quit 2>/dev/null)"
    fi
    scripts_dir="$(dirname "$claim_script")"
-   SINK_KIND=$(awk '/^## Sink/,0' "kaola-workflow/${KAOLA_PROJECT}/workflow-state.md" | grep '^sink:' | awk '{print $2}')
-   SINK_KIND="${SINK_KIND:-merge}"
-   SINK_BRANCH=$(grep '^branch:' "kaola-workflow/${KAOLA_PROJECT}/workflow-state.md" | awk '{print $2}')
    case "$SINK_KIND" in
      pr)
        node "$scripts_dir/kaola-workflow-sink-pr.js" --branch "$SINK_BRANCH" --project "$KAOLA_PROJECT"

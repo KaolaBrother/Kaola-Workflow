@@ -657,6 +657,7 @@ function removeWorktree(coordRoot, project, lock) {
     try {
       execFileSync('git', ['worktree', 'remove', '--force', '--', wtPath],
         { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      try { fs.rmdirSync(path.dirname(wtPath)); } catch (_) {}
     } catch (_) {
       // Worktree may already be gone
     }
@@ -2167,14 +2168,15 @@ function cmdStatus() {
     let remote = { assignee: null, has_label: null, sentinel_comment_id: null };
     if (!OFFLINE && lock.issue_number != null) {
       try {
-        const raw = ghExec(['issue', 'view', String(lock.issue_number), '--json', 'assignees,labels']);
+        const raw = ghExec(['issue', 'view', String(lock.issue_number), '--json', 'assignees,labels,state']);
         const data = JSON.parse(raw);
         const assignees = (data.assignees || []).map(a => a.login);
         const labels = (data.labels || []).map(l => l.name);
         remote = {
           assignee: assignees.join(',') || null,
           has_label: labels.includes(CLAIM_LABEL),
-          sentinel_comment_id: lock.claim_comment_id || null
+          sentinel_comment_id: lock.claim_comment_id || null,
+          state: (data.state || '').toUpperCase()
         };
       } catch (_) {}
     }
@@ -2185,6 +2187,7 @@ function cmdStatus() {
     if (session != null && session.session_id !== lock.session_id) {
       drift.push('session_id mismatch: session=' + session.session_id + ' lock=' + lock.session_id);
     }
+    if (remote.state === 'CLOSED') drift.push('issue closed');
 
     return { session, lock, remote, consistent, drift };
   });
@@ -2581,7 +2584,7 @@ function cmdWorktreeStatus() {
       } catch (_) {}
     }
 
-    entries.push({ worktree_path, branch, head, issue: issueNum, issue_data });
+    entries.push({ worktree_path, branch, head, issue: issueNum, closed: issue_data?.state === 'CLOSED', issue_data });
   }
 
   process.stdout.write(JSON.stringify(entries) + '\n');
