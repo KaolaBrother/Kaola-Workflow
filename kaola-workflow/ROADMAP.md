@@ -8,7 +8,6 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 | Issue | Title | Status | Workflow Project | Next Step |
 |-------|-------|--------|------------------|-----------|
 | #35 | Startup classifier picks next work by issue ordering, ignores P0/P1/P2/P3 priority labels and Engine Showcase Gap tier | open | — | ready |
-| #38 | Worktree-native (issue #37) follow-ups: fix --show-toplevel from inside worktree + quality polish | open | — | ready |
 
 ## Rules
 
