@@ -2,11 +2,11 @@
 
 ## Project
 name: issue-41
-status: active
+status: closed
 
 ## Current Position
-phase: 5
-phase_name: Review
+phase: 6
+phase_name: Finalize
 step: complete
 next_command: /kaola-workflow-phase6 issue-41
 main_session_role: orchestrator
@@ -18,13 +18,13 @@ inline_emergency_fallback_authorized: no
 (none)
 
 ## Last Evidence
-phase_file: kaola-workflow/issue-41/phase5-review.md
-cache_file: kaola-workflow/issue-41/.cache/security-reviewer.md
-last_command: /kaola-workflow-phase5 issue-41
-last_result: complete
+phase_file: kaola-workflow/issue-41/phase6-summary.md
+cache_file: kaola-workflow/issue-41/.cache/doc-docking.md
+last_command: /kaola-workflow-phase6 issue-41
+last_result: docked — ready for finalize
 
 ## Last Updated
-2026-05-17T23:30:00.000Z
+2026-05-18T00:00:00.000Z
 
 ## Sink
 branch: workflow/issue-41
