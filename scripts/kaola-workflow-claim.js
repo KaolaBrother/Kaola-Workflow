@@ -2147,6 +2147,30 @@ function cmdSweep() {
     if (isNaN(expiresMs) || expiresMs >= cutoff) continue;
     try { archiveProjectDir(root, entry.name, 'abandoned'); } catch (_) {}
   }
+
+  // Third pass: GC .abandoned-* dirs inside the *.kw/ worktree parent
+  const ABANDONED_MARKER = '.abandoned-';
+  const kwParent = path.join(path.dirname(root), path.basename(root) + '.kw');
+  try {
+    const kwParentEntries = fs.readdirSync(kwParent, { withFileTypes: true });
+    for (const kwEntry of kwParentEntries) {
+      if (!kwEntry.isDirectory()) continue;
+      const idx = kwEntry.name.indexOf(ABANDONED_MARKER);
+      if (idx === -1) continue;
+      const fullPath = path.join(kwParent, kwEntry.name);
+      const suffix = kwEntry.name.slice(idx + ABANDONED_MARKER.length);
+      const isoStr = suffix.replace(/-(\d{2})-(\d{2})-(\d{3})Z$/, ':$1:$2.$3Z');
+      let abandonedAt = new Date(isoStr).getTime();
+      if (!abandonedAt || isNaN(abandonedAt)) {
+        try { abandonedAt = fs.statSync(fullPath).mtimeMs; } catch (_) { continue; }
+      }
+      if (Date.now() - abandonedAt > GC_CUTOFF_MS) {
+        try { fs.rmSync(fullPath, { recursive: true, force: true }); } catch (_) {}
+      }
+    }
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw e;
+  }
 }
 
 function cmdStatus() {
@@ -2503,9 +2527,22 @@ function scanPhaseArtifacts(projectDir) {
   ];
   const found = PHASE_ARTIFACTS.find(e => fs.existsSync(path.join(projectDir, e.file)));
   const currentPhase = found ? found.phase : 0;
-  const nextCommand = found
+  let nextCommand = found
     ? (found.phase === 6 ? 'complete' : found.next)
     : '/kaola-workflow-phase1 ' + project;
+
+  if (found && found.file === 'phase4-progress.md') {
+    try {
+      const content = fs.readFileSync(path.join(projectDir, 'phase4-progress.md'), 'utf8');
+      const hasIncomplete = /\|\s*(pending|in[_-]progress)\s*\|/i.test(content);
+      if (hasIncomplete) {
+        nextCommand = '/kaola-workflow-phase4 ' + project;
+      }
+    } catch (e) {
+      if (e.code !== 'ENOENT') throw e;
+    }
+  }
+
   return { currentPhase, nextCommand };
 }
 
@@ -2585,6 +2622,29 @@ function cmdWorktreeStatus() {
     }
 
     entries.push({ worktree_path, branch, head, issue: issueNum, closed: issue_data?.state === 'CLOSED', issue_data });
+  }
+
+  // Second pass: surface unregistered dirs in *.kw/ parent
+  const root = getRoot();
+  const kwParent2 = path.join(path.dirname(root), path.basename(root) + '.kw');
+  try {
+    const kwDirs = fs.readdirSync(kwParent2, { withFileTypes: true });
+    const registeredPaths = new Set(entries.map(e => {
+      try { return fs.realpathSync(e.worktree_path); } catch (_) { return e.worktree_path; }
+    }));
+    for (const d of kwDirs) {
+      if (!d.isDirectory()) continue;
+      const isIssueDir = /^issue-\d+$/.test(d.name);
+      const isAbandoned = d.name.indexOf('.abandoned-') !== -1;
+      if (!isIssueDir && !isAbandoned) continue;
+      const candidateFull = path.join(kwParent2, d.name);
+      let canonical;
+      try { canonical = fs.realpathSync(candidateFull); } catch (_) { canonical = candidateFull; }
+      if (registeredPaths.has(canonical)) continue;
+      entries.push({ worktree_path: candidateFull, branch: null, head: null, issue: null, closed: false, registered: false, abandoned: isAbandoned, issue_data: null });
+    }
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw e;
   }
 
   process.stdout.write(JSON.stringify(entries) + '\n');
