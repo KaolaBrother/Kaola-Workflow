@@ -4810,12 +4810,73 @@ exit 0
           '17K: COORD_ROOT from inside worktree should be main repo root, got ' + coordRootFromWT +
           ' expected ' + fs.realpathSync(epic17Tmp));
 
+        // 17G: resume without --project on main branch returns resumed:false
+        {
+          const resumeOut17g = execFileSync(process.execPath, [claimJS, 'resume'],
+            { cwd: epic17Tmp, encoding: 'utf8', env: env17Offline });
+          const resume17g = JSON.parse(resumeOut17g.trim());
+          assert(resume17g.resumed === false,
+            '17G: resume with no workflow branch must return resumed:false, got ' + JSON.stringify(resume17g));
+          assert(resume17g.reason === 'cannot determine project',
+            '17G: reason must be cannot determine project, got ' + resume17g.reason);
+        }
+
+        // 17H: worktree-finalize with no provisioned worktree exits non-zero
+        {
+          let threw17h = false;
+          try {
+            execFileSync(process.execPath,
+              [claimJS, 'worktree-finalize', '--project', 'issue-999'],
+              { cwd: epic17Tmp, encoding: 'utf8', env: env17Offline, stdio: ['ignore', 'pipe', 'pipe'] });
+          } catch (_) {
+            threw17h = true;
+          }
+          assert(threw17h, '17H: worktree-finalize with no provisioned worktree must throw');
+        }
+
+        // 17I: worktree-finalize with staged uncommitted file in kaola-workflow/{project}/ errors
+        {
+          const dirtyFile = path.join(pick17a.worktree_path, 'kaola-workflow', pick17a.project, 'dirty-staged.md');
+          fs.mkdirSync(path.dirname(dirtyFile), { recursive: true });
+          fs.writeFileSync(dirtyFile, '# dirty\n');
+          execFileSync('git', ['-C', pick17a.worktree_path, 'add',
+            'kaola-workflow/' + pick17a.project + '/dirty-staged.md'], { encoding: 'utf8' });
+          let threw17i = false;
+          try {
+            execFileSync(process.execPath,
+              [claimJS, 'worktree-finalize', '--project', pick17a.project],
+              { cwd: epic17Tmp, encoding: 'utf8', env: env17Offline, stdio: ['ignore', 'pipe', 'pipe'] });
+          } catch (_) {
+            threw17i = true;
+          }
+          assert(threw17i, '17I: worktree-finalize with staged changes must throw');
+          // Restore clean state for 17J
+          execFileSync('git', ['-C', pick17a.worktree_path, 'restore', '--staged',
+            'kaola-workflow/' + pick17a.project + '/dirty-staged.md'], { encoding: 'utf8' });
+          fs.rmSync(dirtyFile, { force: true });
+        }
+
+        // 17J: worktree-finalize with new main-worktree artifact changes HEAD SHA
+        {
+          const headBefore17j = execFileSync('git', ['-C', pick17a.worktree_path, 'rev-parse', 'HEAD'],
+            { encoding: 'utf8' }).trim();
+          fs.writeFileSync(path.join(projDir17e, 'phase4-progress.md'), '# Phase 4\n');
+          const finalizeOut17j = execFileSync(process.execPath,
+            [claimJS, 'worktree-finalize', '--project', pick17a.project],
+            { cwd: epic17Tmp, encoding: 'utf8', env: env17Offline });
+          JSON.parse(finalizeOut17j.trim()); // must be valid JSON
+          const headAfter17j = execFileSync('git', ['-C', pick17a.worktree_path, 'rev-parse', 'HEAD'],
+            { encoding: 'utf8' }).trim();
+          assert(headBefore17j !== headAfter17j,
+            '17J: HEAD must change after finalize with new artifact');
+        }
+
       } finally {
         // Prune worktrees before rm to avoid git lock issues
         try { execFileSync('git', ['-C', epic17Tmp, 'worktree', 'prune'], { encoding: 'utf8' }); } catch (_) {}
         // Also clean up the sibling .kw directory created by worktreePathFor
         try {
-          const kwDir = epic17Tmp + '.kw';
+          const kwDir = path.dirname(pick17a.worktree_path);
           if (fs.existsSync(kwDir)) fs.rmSync(kwDir, { recursive: true, force: true });
         } catch (_) {}
         fs.rmSync(epic17Tmp, { recursive: true, force: true });
