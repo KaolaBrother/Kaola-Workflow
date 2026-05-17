@@ -11,12 +11,18 @@ Exception below.
 
 ## Prerequisite
 
-`phase5-review.md` must exist with status `PASSED` or `PASSED WITH FOLLOW-UPS`.
-If missing, stop:
+Read `workflow_path` from `kaola-workflow/{project}/workflow-state.md` (defaults to `full` when absent).
 
-```text
-Phase 5 is not complete. Run /kaola-workflow-phase5 first.
-```
+If `workflow_path: fast`:
+- `fast-summary.md` must exist with status `PASSED`. If missing, stop:
+  ```text
+  Fast-path summary is not complete. Run /kaola-workflow-fast first.
+  ```
+If `workflow_path: full` (or absent):
+- `phase5-review.md` must exist with status `PASSED` or `PASSED WITH FOLLOW-UPS`. If missing, stop:
+  ```text
+  Phase 5 is not complete. Run /kaola-workflow-phase5 first.
+  ```
 
 Read:
 
@@ -25,6 +31,17 @@ kaola-workflow/{project}/workflow-state.md
 kaola-workflow/{project}/phase1-research.md
 kaola-workflow/{project}/phase3-plan.md
 kaola-workflow/{project}/phase4-progress.md
+```
+
+If `workflow_path: fast`, also read:
+
+```text
+kaola-workflow/{project}/fast-summary.md
+```
+
+If `workflow_path: full` (or absent), also read:
+
+```text
 kaola-workflow/{project}/phase5-review.md
 ```
 

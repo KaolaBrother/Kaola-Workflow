@@ -40,6 +40,20 @@
         "description": "Block cross-session AI-initiated git commits on kaola-workflow projects",
         "id": "kaola-workflow:pre-commit-guard"
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/kaola-workflow-phantom-advisor.sh\"",
+            "timeout": 10
+          }
+        ],
+        "description": "Block advisor citations in workflow files without a backing .cache/advisor-*.md",
+        "id": "kaola-workflow:phantom-advisor"
+      }
     ]
   }
 }

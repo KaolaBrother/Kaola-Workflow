@@ -282,6 +282,16 @@ In any Claude Code session, run:
 
 The command is a thin router. It first checks local/remote Git state, safely fast-forwards clean behind-only branches, and asks before risky synchronization such as diverged history, dirty worktrees with upstream changes, rebases, merges, stashes, resets, or conflicts. It then scans `kaola-workflow/`, reads `workflow-state.md` when present, and routes to the right phase command.
 
+### Fast Path (Optional)
+
+For small, well-scoped issues (≤2 closely related files), request the fast-path workflow:
+
+```
+KAOLA_PATH=fast /workflow-next
+```
+
+Fast path executes Plan, Implement, and Review in a single pass, writing `fast-summary.md` instead of the full 6-phase artifacts. If scope expands during execution (multiple file groups, security concerns, dependencies, new packages), fast path escalates automatically to the full workflow. Otherwise, it routes directly to Phase 6.
+
 ## Automation Scripts
 
 The workflow includes automation scripts packaged with the Claude Code plugin.
@@ -320,6 +330,7 @@ Session identity is derived from the Claude ancestor process rather than self-as
 | `KAOLA_COORD_ROOT` | (auto) | Override the coordination root path; normally discovered via `git rev-parse --git-common-dir` |
 | `KAOLA_WORKFLOW_DEBUG_CWD` | (unset) | DEV/TEST ONLY — when set, `sink-merge.js` writes the final `process.cwd()` to the named file on exit. Used by test suite to verify CWD restoration after worktree removal. Not for production use. |
 | `KAOLA_WORKTREE_NATIVE` | `0` | Set to `1` to enable worktree-as-primary-signal mode. `workflow-next.md` routes to `pick-next` instead of `startup`; Phase 4 resolves `ACTIVE_WORKTREE_PATH` from the issue worktree path instead of `$(pwd)`. Legacy session-lease path remains active when this flag is unset. |
+| `KAOLA_PATH` | (unset) | Set to `fast` to request fast-path workflow execution (Plan+Execute+Review single-pass for small, well-scoped issues); defaults to `full` (standard 6-phase workflow). Fast path requires ≤2 closely related files and mandates escalation to full workflow on scope growth. |
 
 **Worktree-Native Subcommands (`KAOLA_WORKTREE_NATIVE=1`):**
 

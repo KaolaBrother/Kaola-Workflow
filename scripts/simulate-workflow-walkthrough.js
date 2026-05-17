@@ -5100,6 +5100,228 @@ exit 0
       }
     }
 
+    // Epic Case 14c — analyzeIssue() returns advisory struct; no auto-pick triggered
+    {
+      const { analyzeIssue } = require(path.join(root, 'scripts', 'kaola-workflow-claim.js'));
+
+      // Basic issue: short body, no anti labels
+      const simpleIssue = { number: 501, title: 'Fix typo in README', body: 'Line 42 has a typo.', labels: [{ name: 'typo' }] };
+      const simpleResult = analyzeIssue(simpleIssue, null);
+      assert(simpleResult !== null, '14c: analyzeIssue must not return null for a valid issue');
+      assert(typeof simpleResult.priority_tier === 'number', '14c: priority_tier must be a number, got ' + JSON.stringify(simpleResult));
+      assert('priority_label' in simpleResult, '14c: priority_label field must be present');
+      assert('override_label' in simpleResult, '14c: override_label field must be present');
+      assert(simpleResult.recommended_path === 'fast' || simpleResult.recommended_path === 'full',
+        '14c: recommended_path must be fast or full, got ' + simpleResult.recommended_path);
+      assert(Array.isArray(simpleResult.path_signals), '14c: path_signals must be an array');
+      assert(simpleResult.path_confidence === 'high' || simpleResult.path_confidence === 'medium',
+        '14c: path_confidence must be high or medium, got ' + simpleResult.path_confidence);
+      // Typo label is a pro-fast signal; short body also scores; should recommend fast
+      assert(simpleResult.recommended_path === 'fast',
+        '14c: short typo issue must recommend fast path, got ' + simpleResult.recommended_path);
+      assert(simpleResult.path_signals.includes('label:docs/chore'),
+        '14c: typo label must appear in path_signals, got ' + JSON.stringify(simpleResult.path_signals));
+
+      // Top-tier label: priority:critical overrides parsePriorityTier
+      const criticalIssue = { number: 502, title: 'Critical outage', body: '', labels: [{ name: 'priority:critical' }] };
+      const criticalResult = analyzeIssue(criticalIssue, null);
+      assert(criticalResult.priority_tier === 0, '14c: priority:critical must set priority_tier=0, got ' + criticalResult.priority_tier);
+      assert(criticalResult.override_label === 'priority:critical', '14c: override_label must be the matched top-tier label');
+
+      // Anti-veto: architecture label forces full path
+      const archIssue = { number: 503, title: 'Redesign auth layer', body: 'Major changes needed.', labels: [{ name: 'architecture' }] };
+      const archResult = analyzeIssue(archIssue, null);
+      assert(archResult.recommended_path === 'full', '14c: architecture label must veto fast path');
+      assert(archResult.path_signals.includes('anti:veto'), '14c: anti:veto must appear in path_signals for architecture label');
+
+      // Null-guard: analyzeIssue(null) must return null
+      const nullResult = analyzeIssue(null, null);
+      assert(nullResult === null, '14c: analyzeIssue(null) must return null, got ' + JSON.stringify(nullResult));
+
+      // Negative: analyzeIssue has no side effects; require it twice without claim side effects
+      const a1 = analyzeIssue(simpleIssue, null);
+      const a2 = analyzeIssue(simpleIssue, null);
+      assert(JSON.stringify(a1) === JSON.stringify(a2), '14c: analyzeIssue must be pure/deterministic');
+    }
+
+    // Epic Case 14d — computeRecovery() returns correct enum; no auto-claim follows
+    {
+      const { computeRecovery } = require(path.join(root, 'scripts', 'kaola-workflow-claim.js'));
+
+      // skipped non-empty, blocked empty → advance_project
+      const r1 = computeRecovery([{ issue: 99 }], []);
+      assert(r1 === 'advance_project',
+        '14d: skipped=[x], blocked=[] must return advance_project, got ' + r1);
+
+      // blocked non-empty → consult_advisor
+      const r2 = computeRecovery([], [{ issue: 100 }]);
+      assert(r2 === 'consult_advisor',
+        '14d: skipped=[], blocked=[y] must return consult_advisor, got ' + r2);
+
+      // both empty → prompt_user
+      const r3 = computeRecovery([], []);
+      assert(r3 === 'prompt_user',
+        '14d: skipped=[], blocked=[] must return prompt_user, got ' + r3);
+
+      // undefined guards: computeRecovery(undefined, undefined) must not throw
+      const r4 = computeRecovery(undefined, undefined);
+      assert(r4 === 'prompt_user',
+        '14d: undefined args must default to empty arrays → prompt_user, got ' + r4);
+
+      // skipped+blocked both non-empty → consult_advisor (blocked takes priority)
+      const r5 = computeRecovery([{ issue: 99 }], [{ issue: 100 }]);
+      assert(r5 === 'consult_advisor',
+        '14d: skipped=[x], blocked=[y] must return consult_advisor, got ' + r5);
+    }
+
+    // Case 8M — claim:none startup receipt has recovery field; no subsequent auto-claim
+    {
+      const claimScript8m = path.join(root, 'scripts', 'kaola-workflow-claim.js');
+      const tmp8m = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-workflow-epic8m-'));
+      try {
+        execFileSync('git', ['init', '-q', '-b', 'main', tmp8m]);
+        // Offline mode with empty roadmap → startup has no issues to claim → claim:none
+        const env8m = {
+          ...process.env,
+          HOME: tmp8m,
+          KAOLA_WORKFLOW_OFFLINE: '1',
+          KAOLA_KERNEL_SESSION_SKIP: '1'
+        };
+        const r8m = spawnSync(process.execPath, [
+          claimScript8m, 'startup',
+          '--session', 'sess-8m',
+          '--runtime', 'claude'
+        ], { cwd: tmp8m, encoding: 'utf8', env: env8m });
+
+        assert(r8m.status === 1, '8M: startup with no claimable issues must exit 1, got ' + r8m.status);
+        const receipt8m = JSON.parse(r8m.stdout.trim());
+        assert(receipt8m.claim === 'none', '8M: claim must be none, got ' + receipt8m.claim);
+        assert('recovery' in receipt8m,
+          '8M: claim:none receipt must have recovery field, got: ' + JSON.stringify(receipt8m));
+        assert(
+          receipt8m.recovery === 'advance_project' ||
+          receipt8m.recovery === 'consult_advisor' ||
+          receipt8m.recovery === 'prompt_user',
+          '8M: recovery must be one of the three enum values, got ' + receipt8m.recovery
+        );
+        assert(!('analysis' in receipt8m),
+          '8M: claim:none receipt must NOT have analysis field, got: ' + JSON.stringify(receipt8m));
+        // Negative: no subsequent auto-claim — the receipt exit code is 1 and stdout is claim:none;
+        // cmdStartup returns immediately after writing the receipt (verified by absence of lock file)
+        const lockDir8m = locksDirFor(tmp8m);
+        const lockFiles8m = fs.existsSync(lockDir8m) ? fs.readdirSync(lockDir8m) : [];
+        assert(lockFiles8m.length === 0,
+          '8M: no lock file must exist after claim:none startup, got: ' + JSON.stringify(lockFiles8m));
+      } finally {
+        fs.rmSync(tmp8m, { recursive: true, force: true });
+      }
+    }
+
+    // Case 15a — KAOLA_PATH env var controls workflow_path in acquired startup receipt
+    // Each sub-case uses its own fresh repo so the classifier sees no interference
+    {
+      const claimScript15a = path.join(root, 'scripts', 'kaola-workflow-claim.js');
+
+      function make15aRepo(suffix) {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-workflow-case15a' + suffix + '-'));
+        execFileSync('git', ['init', '-q', '-b', 'main', tmpDir]);
+        const binDir = path.join(tmpDir, 'bin');
+        fs.mkdirSync(binDir, { recursive: true });
+        const ghScript = path.join(binDir, 'gh');
+        fs.writeFileSync(ghScript, `#!/bin/sh
+if [ "$1" = "issue" ] && [ "$2" = "list" ]; then
+  printf '[{"number":601,"title":"workflow path test","state":"OPEN","labels":[{"name":"workflow:queued"}],"updatedAt":"2026-05-15T00:00:00Z","url":"https://github.com/test/repo/issues/601"}]'
+  exit 0
+fi
+if [ "$1" = "issue" ] && [ "$2" = "view" ]; then
+  printf '{"number":601,"title":"workflow path test","body":"Fix typo in README.md line 42","labels":[{"name":"workflow:queued"}],"state":"OPEN"}'
+  exit 0
+fi
+if [ "$1" = "label" ] && [ "$2" = "create" ]; then exit 0; fi
+if [ "$1" = "issue" ] && [ "$2" = "edit" ]; then exit 0; fi
+if [ "$1" = "issue" ] && [ "$2" = "comment" ]; then
+  echo "https://github.com/test/repo/issues/$3#issuecomment-$3"
+  exit 0
+fi
+if [ "$1" = "repo" ] && [ "$2" = "view" ]; then printf '{"owner":{"login":"test"},"name":"repo"}'; exit 0; fi
+if [ "$1" = "api" ]; then printf '[]'; exit 0; fi
+exit 0
+`);
+        fs.chmodSync(ghScript, 0o755);
+        return { tmpDir, env: { ...process.env, PATH: binDir + path.delimiter + (process.env.PATH || ''), HOME: tmpDir, KAOLA_KERNEL_SESSION_SKIP: '1' } };
+      }
+
+      // Sub-case 1: KAOLA_PATH=fast → workflow_path must be 'fast'
+      const ctx1 = make15aRepo('a');
+      try {
+        const r15a1 = JSON.parse(execFileSync(process.execPath, [
+          claimScript15a, 'startup', '--session', 'sess-15a-1', '--runtime', 'claude'
+        ], { cwd: ctx1.tmpDir, encoding: 'utf8', env: { ...ctx1.env, KAOLA_PATH: 'fast' } }).trim());
+        assert(r15a1.claim === 'acquired', '15a-1: must acquire an issue, got ' + r15a1.claim);
+        assert(r15a1.workflow_path === 'fast',
+          '15a-1: KAOLA_PATH=fast must produce workflow_path=fast in receipt, got ' + r15a1.workflow_path);
+      } finally {
+        fs.rmSync(ctx1.tmpDir, { recursive: true, force: true });
+      }
+
+      // Sub-case 2: no KAOLA_PATH → workflow_path must be 'full'
+      const ctx2 = make15aRepo('b');
+      try {
+        const env2 = { ...ctx2.env };
+        delete env2.KAOLA_PATH;
+        const r15a2 = JSON.parse(execFileSync(process.execPath, [
+          claimScript15a, 'startup', '--session', 'sess-15a-2', '--runtime', 'claude'
+        ], { cwd: ctx2.tmpDir, encoding: 'utf8', env: env2 }).trim());
+        assert(r15a2.claim === 'acquired', '15a-2: must acquire an issue, got ' + r15a2.claim);
+        assert(r15a2.workflow_path === 'full',
+          '15a-2: absent KAOLA_PATH must produce workflow_path=full in receipt, got ' + r15a2.workflow_path);
+      } finally {
+        fs.rmSync(ctx2.tmpDir, { recursive: true, force: true });
+      }
+
+      // Sub-case 3: KAOLA_PATH=invalid → workflow_path must be 'full' (strict equality; only 'fast' maps)
+      const ctx3 = make15aRepo('c');
+      try {
+        const r15a3 = JSON.parse(execFileSync(process.execPath, [
+          claimScript15a, 'startup', '--session', 'sess-15a-3', '--runtime', 'claude'
+        ], { cwd: ctx3.tmpDir, encoding: 'utf8', env: { ...ctx3.env, KAOLA_PATH: 'invalid' } }).trim());
+        assert(r15a3.claim === 'acquired', '15a-3: must acquire an issue, got ' + r15a3.claim);
+        assert(r15a3.workflow_path === 'full',
+          '15a-3: invalid KAOLA_PATH must produce workflow_path=full in receipt, got ' + r15a3.workflow_path);
+      } finally {
+        fs.rmSync(ctx3.tmpDir, { recursive: true, force: true });
+      }
+
+      // Sub-case 4: claim:owned resume preserves workflow_path from workflow-state.md
+      const ctx4 = make15aRepo('d');
+      try {
+        // First startup: acquire with KAOLA_PATH=fast
+        const r15a4acq = JSON.parse(execFileSync(process.execPath, [
+          claimScript15a, 'startup', '--session', 'sess-15a-4', '--runtime', 'claude'
+        ], { cwd: ctx4.tmpDir, encoding: 'utf8', env: { ...ctx4.env, KAOLA_PATH: 'fast' } }).trim());
+        assert(r15a4acq.claim === 'acquired', '15a-4: first startup must acquire, got ' + r15a4acq.claim);
+        assert(r15a4acq.workflow_path === 'fast', '15a-4: first receipt must have workflow_path=fast, got ' + r15a4acq.workflow_path);
+        // Simulate fast path writing workflow_path to workflow-state.md
+        const project4 = r15a4acq.selected_project;
+        const stateDir4 = path.join(ctx4.tmpDir, 'kaola-workflow', project4);
+        fs.mkdirSync(stateDir4, { recursive: true });
+        fs.writeFileSync(path.join(stateDir4, 'workflow-state.md'),
+          'status: active\nphase: fast\nworkflow_path: fast\n\n## Lease\nsession_id: sess-15a-4\n');
+        // Second startup (same session, same project): must return claim:owned with workflow_path preserved
+        const r15a4own = JSON.parse(execFileSync(process.execPath, [
+          claimScript15a, 'startup', '--session', 'sess-15a-4', '--runtime', 'claude'
+        ], {
+          cwd: ctx4.tmpDir, encoding: 'utf8',
+          env: (function() { const e = { ...ctx4.env }; delete e.KAOLA_PATH; return e; })()
+        }).trim());
+        assert(r15a4own.claim === 'owned', '15a-4: resume startup must return claim:owned, got ' + r15a4own.claim);
+        assert(r15a4own.workflow_path === 'fast',
+          '15a-4: claim:owned resume must preserve workflow_path=fast from state file, got ' + r15a4own.workflow_path);
+      } finally {
+        fs.rmSync(ctx4.tmpDir, { recursive: true, force: true });
+      }
+    }
+
     console.log('Workflow walkthrough simulation passed');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });

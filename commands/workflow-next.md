@@ -93,6 +93,9 @@ startup receipt is missing/malformed, stop for repair. If startup returns
 `claim: "none"`, normal routing must stop; do not inspect active project folders
 and recover/handoff them from a skipped `already claimed` entry unless the user
 explicitly requested recovery for a specific unfinished project.
+Agent reads `recovery` field and asks, stops, or selects explicit new target before next claim.
+If `KAOLA_PATH=fast` is set, startup records `workflow_path: fast`.
+Agent sets this env var after reading `analyzeIssue` advisory output from the startup receipt.
 
 ## Startup Step 1 - Git Freshness
 

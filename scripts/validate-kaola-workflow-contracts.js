@@ -77,6 +77,7 @@ const skills = [
   'kaola-workflow-execute',
   'kaola-workflow-review',
   'kaola-workflow-finalize',
+  'kaola-workflow-fast',
 ];
 
 for (const skill of skills) {
@@ -129,6 +130,7 @@ for (const phaseSkill of [
   'kaola-workflow-execute',
   'kaola-workflow-review',
   'kaola-workflow-finalize',
+  'kaola-workflow-fast',
 ]) {
   assertIncludes(`${pluginRoot}/skills/${phaseSkill}/SKILL.md`, '## Goal Contract');
   assertIncludes(`${pluginRoot}/skills/${phaseSkill}/SKILL.md`, 'Startup Receipt Guard');
