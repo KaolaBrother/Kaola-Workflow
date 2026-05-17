@@ -5121,6 +5121,312 @@ exit 0
             '17N: sweep must GC the expired synthetic lock, but lock file still exists at ' + lockPath17n);
         }
 
+        // 17P: cmdStatus CLOSED issue → drift has 'issue closed'
+        {
+          const tmp17p = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-workflow-17p-'));
+          try {
+            execFileSync('git', ['init', '-b', 'main'], { cwd: tmp17p, encoding: 'utf8' });
+            execFileSync('git', ['-C', tmp17p, 'commit', '--allow-empty', '-m', 'init'], { encoding: 'utf8' });
+            const bin17p = path.join(tmp17p, 'bin');
+            fs.mkdirSync(bin17p);
+            fs.writeFileSync(path.join(bin17p, 'gh'), [
+              '#!/usr/bin/env node',
+              'const a = process.argv.slice(2);',
+              'if (a[0]==="issue"&&a[1]==="view") { process.stdout.write(JSON.stringify({state:"CLOSED",number:811,labels:[],assignees:[],title:"closed-test",url:""})+"\\n"); process.exit(0); }',
+              'process.exit(0);'
+            ].join('\n'), { mode: 0o755 });
+            const pathSep17p = process.platform === 'win32' ? ';' : ':';
+            const env17p = { ...process.env, PATH: bin17p + pathSep17p + process.env.PATH };
+            const gcd17p = execFileSync('git', ['rev-parse', '--git-common-dir'], { cwd: tmp17p, encoding: 'utf8' }).trim();
+            const coordRoot17p = path.resolve(tmp17p, gcd17p);
+            const locksDir17p = path.join(coordRoot17p, 'kaola-workflow', '.locks');
+            fs.mkdirSync(locksDir17p, { recursive: true });
+            const lock17p = { project: 'issue-811', issue_number: 811, session_id: 'sess-17p', branch: 'workflow/issue-811', expires: new Date(Date.now() + 86400000).toISOString(), worktree_path: null };
+            fs.writeFileSync(path.join(locksDir17p, 'issue-811.lock'), JSON.stringify(lock17p, null, 2) + '\n', { mode: 0o600 });
+            const statusOut17p = execFileSync(process.execPath, [claimJS, 'status', '--session', 'sess-17p'],
+              { cwd: tmp17p, encoding: 'utf8', env: env17p });
+            const status17p = JSON.parse(statusOut17p.trim());
+            assert(Array.isArray(status17p) && status17p.length >= 1, '17P: status must return array with entries');
+            const entry17p = status17p.find(e => e.lock && e.lock.project === 'issue-811');
+            assert(entry17p, '17P: must have entry for issue-811');
+            assert(Array.isArray(entry17p.drift) && entry17p.drift.includes('issue closed'),
+              '17P: drift must contain "issue closed" for CLOSED issue, got ' + JSON.stringify(entry17p.drift));
+          } finally {
+            try { fs.rmSync(tmp17p, { recursive: true, force: true }); } catch (_) {}
+          }
+        }
+
+        // 17Q1: cmdWorktreeStatus CLOSED issue → entry has closed: true
+        {
+          const tmp17q1 = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-workflow-17q1-'));
+          try {
+            execFileSync('git', ['init', '-b', 'main'], { cwd: tmp17q1, encoding: 'utf8' });
+            execFileSync('git', ['-C', tmp17q1, 'commit', '--allow-empty', '-m', 'init'], { encoding: 'utf8' });
+            const bin17q1Open = path.join(tmp17q1, 'bin-open');
+            const bin17q1Closed = path.join(tmp17q1, 'bin-closed');
+            fs.mkdirSync(bin17q1Open);
+            fs.mkdirSync(bin17q1Closed);
+            const pathSep17q1 = process.platform === 'win32' ? ';' : ':';
+            // gh shim: issue 812 is OPEN (for pick-next)
+            fs.writeFileSync(path.join(bin17q1Open, 'gh'), [
+              '#!/usr/bin/env node',
+              'const a = process.argv.slice(2);',
+              'if (a[0]==="issue"&&a[1]==="list") { process.stdout.write(JSON.stringify([{number:812,title:"open-wt",state:"open",labels:[],assignees:[],updatedAt:"2026-01-01",url:""}])+"\\n"); process.exit(0); }',
+              'if (a[0]==="issue"&&a[1]==="view") { process.stdout.write(JSON.stringify({state:"open",number:812,labels:[],assignees:[],title:"open-wt",url:""})+"\\n"); process.exit(0); }',
+              'if (a[0]==="issue"&&a[1]==="edit") { process.exit(0); }',
+              'process.exit(0);'
+            ].join('\n'), { mode: 0o755 });
+            // gh shim: issue 812 is CLOSED (for worktree-status)
+            fs.writeFileSync(path.join(bin17q1Closed, 'gh'), [
+              '#!/usr/bin/env node',
+              'const a = process.argv.slice(2);',
+              'if (a[0]==="issue"&&a[1]==="view") { process.stdout.write(JSON.stringify({state:"CLOSED",number:812,labels:[],assignees:[],title:"closed-wt",url:""})+"\\n"); process.exit(0); }',
+              'process.exit(0);'
+            ].join('\n'), { mode: 0o755 });
+            const envOpen17q1 = { ...process.env, PATH: bin17q1Open + pathSep17q1 + process.env.PATH };
+            const envClosed17q1 = { ...process.env, PATH: bin17q1Closed + pathSep17q1 + process.env.PATH };
+            // First claim while issue is OPEN
+            const pickOut17q1 = execFileSync(process.execPath, [claimJS, 'pick-next',
+              '--session', 'sess-17q1', '--runtime', 'claude', '--target-issue', '812'],
+              { cwd: tmp17q1, encoding: 'utf8', env: envOpen17q1 });
+            const pick17q1 = JSON.parse(pickOut17q1.trim());
+            assert(pick17q1.verdict === 'acquired', '17Q1: pick-next must acquire issue 812, got ' + JSON.stringify(pick17q1));
+            // Now run worktree-status with CLOSED gh shim
+            const wsOut17q1 = execFileSync(process.execPath, [claimJS, 'worktree-status'],
+              { cwd: tmp17q1, encoding: 'utf8', env: envClosed17q1 });
+            const ws17q1 = JSON.parse(wsOut17q1.trim());
+            assert(Array.isArray(ws17q1), '17Q1: worktree-status must return array');
+            const wt17q1 = ws17q1.find(e => e.branch && e.branch.includes('812'));
+            assert(wt17q1, '17Q1: must have entry for issue-812 worktree');
+            assert(wt17q1.closed === true, '17Q1: entry must have closed:true for CLOSED issue, got closed=' + wt17q1.closed);
+          } finally {
+            try {
+              execFileSync('git', ['-C', tmp17q1, 'worktree', 'prune'], { encoding: 'utf8', stdio: 'ignore' });
+            } catch (_) {}
+            try { fs.rmSync(path.join(path.dirname(tmp17q1), path.basename(tmp17q1) + '.kw'), { recursive: true, force: true }); } catch (_) {}
+            try { fs.rmSync(tmp17q1, { recursive: true, force: true }); } catch (_) {}
+          }
+        }
+
+        // 17Q2: cmdWorktreeStatus unregistered dir in *.kw/ → entry with registered:false
+        {
+          const tmp17q2 = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-workflow-17q2-'));
+          try {
+            execFileSync('git', ['init', '-b', 'main'], { cwd: tmp17q2, encoding: 'utf8' });
+            execFileSync('git', ['-C', tmp17q2, 'commit', '--allow-empty', '-m', 'init'], { encoding: 'utf8' });
+            // Manually create an unregistered dir in the *.kw/ parent
+            const kwParent17q2 = path.join(path.dirname(tmp17q2), path.basename(tmp17q2) + '.kw');
+            const unregDir17q2 = path.join(kwParent17q2, 'issue-999');
+            fs.mkdirSync(unregDir17q2, { recursive: true });
+            const wsOut17q2 = execFileSync(process.execPath, [claimJS, 'worktree-status'],
+              { cwd: tmp17q2, encoding: 'utf8', env: env17Offline });
+            const ws17q2 = JSON.parse(wsOut17q2.trim());
+            assert(Array.isArray(ws17q2), '17Q2: worktree-status must return array');
+            const unreg17q2 = ws17q2.find(e => e.registered === false && e.worktree_path && e.worktree_path.includes('issue-999'));
+            assert(unreg17q2, '17Q2: must surface unregistered issue-999 dir with registered:false, got ' + JSON.stringify(ws17q2));
+          } finally {
+            const kwParent17q2c = path.join(path.dirname(tmp17q2), path.basename(tmp17q2) + '.kw');
+            try { fs.rmSync(kwParent17q2c, { recursive: true, force: true }); } catch (_) {}
+            try { fs.rmSync(tmp17q2, { recursive: true, force: true }); } catch (_) {}
+          }
+        }
+
+        // 17R+: resume with pending phase4-progress.md → routes to phase4
+        // 17R-: resume with all-done phase4-progress.md → routes to phase5
+        {
+          const tmp17r = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-workflow-17r-'));
+          try {
+            execFileSync('git', ['init', '-b', 'main'], { cwd: tmp17r, encoding: 'utf8' });
+            execFileSync('git', ['-C', tmp17r, 'commit', '--allow-empty', '-m', 'init'], { encoding: 'utf8' });
+            const projDir17r = path.join(tmp17r, 'kaola-workflow', 'issue-713');
+            fs.mkdirSync(projDir17r, { recursive: true });
+            // Write phase4-progress.md with a pending row
+            fs.writeFileSync(path.join(projDir17r, 'phase4-progress.md'),
+              '# Phase 4\n## Tasks\n| # | Name | Status |\n|---|------|--------|\n| 1 | task1 | pending |\n');
+            const resumeOut17rPlus = execFileSync(process.execPath, [claimJS, 'resume', '--project', 'issue-713'],
+              { cwd: tmp17r, encoding: 'utf8', env: env17Offline });
+            const resume17rPlus = JSON.parse(resumeOut17rPlus.trim());
+            assert(resume17rPlus.resumed === true, '17R+: resume must return resumed:true');
+            assert(resume17rPlus.next_command && resume17rPlus.next_command.includes('phase4'),
+              '17R+: next_command must route to phase4 when tasks pending, got ' + resume17rPlus.next_command);
+            // Now rewrite with all-done rows
+            fs.writeFileSync(path.join(projDir17r, 'phase4-progress.md'),
+              '# Phase 4\n## Tasks\n| # | Name | Status |\n|---|------|--------|\n| 1 | task1 | complete |\n');
+            const resumeOut17rMinus = execFileSync(process.execPath, [claimJS, 'resume', '--project', 'issue-713'],
+              { cwd: tmp17r, encoding: 'utf8', env: env17Offline });
+            const resume17rMinus = JSON.parse(resumeOut17rMinus.trim());
+            assert(resume17rMinus.resumed === true, '17R-: resume must return resumed:true');
+            assert(resume17rMinus.next_command && resume17rMinus.next_command.includes('phase5'),
+              '17R-: next_command must route to phase5 when all tasks done, got ' + resume17rMinus.next_command);
+          } finally {
+            try { fs.rmSync(tmp17r, { recursive: true, force: true }); } catch (_) {}
+          }
+        }
+
+        // 17S: SKILL.md static assertion — SINK_KIND= line appears before cmdFinalize node call
+        {
+          const skillMd17s = path.join(root, 'plugins', 'kaola-workflow', 'skills', 'kaola-workflow-finalize', 'SKILL.md');
+          const skillContent17s = fs.readFileSync(skillMd17s, 'utf8');
+          const lines17s = skillContent17s.split('\n');
+          const sinkKindIdx = lines17s.findIndex(l => l.includes('SINK_KIND='));
+          const finalizeCallIdx = lines17s.findIndex(l => l.includes('node "$CLAIM_JS" finalize') || l.includes('node "$claim_script" finalize') || (l.includes('node ') && l.includes('finalize')));
+          assert(sinkKindIdx !== -1, '17S: SINK_KIND= must be found in finalize SKILL.md');
+          assert(finalizeCallIdx !== -1, '17S: cmdFinalize node call must be found in finalize SKILL.md');
+          assert(sinkKindIdx < finalizeCallIdx,
+            '17S: SINK_KIND= (line ' + sinkKindIdx + ') must appear before cmdFinalize call (line ' + finalizeCallIdx + ')');
+        }
+
+        // 17T+: removeWorktree last sibling → parent *.kw/ removed
+        // 17T-: removeWorktree with sibling → parent *.kw/ retained
+        {
+          const tmp17t = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-workflow-17t-'));
+          try {
+            execFileSync('git', ['init', '-b', 'main'], { cwd: tmp17t, encoding: 'utf8' });
+            execFileSync('git', ['-C', tmp17t, 'commit', '--allow-empty', '-m', 'init'], { encoding: 'utf8' });
+            execFileSync('git', ['-C', tmp17t, 'config', 'user.email', 'test@test.com'], { encoding: 'utf8' });
+            execFileSync('git', ['-C', tmp17t, 'config', 'user.name', 'Test'], { encoding: 'utf8' });
+            const bin17t = path.join(tmp17t, 'bin');
+            fs.mkdirSync(bin17t);
+            const pathSep17t = process.platform === 'win32' ? ';' : ':';
+            const makeGhShim = (issues) => [
+              '#!/usr/bin/env node',
+              'const a = process.argv.slice(2);',
+              'if (a[0]==="issue"&&a[1]==="list") { process.stdout.write(' + JSON.stringify(JSON.stringify(issues)) + '+"\\n"); process.exit(0); }',
+              'if (a[0]==="issue"&&a[1]==="edit") { process.exit(0); }',
+              'if (a[0]==="issue"&&a[1]==="view") { const n=parseInt(a[2]||a[a.indexOf("--json")-1]||"0"); const f=' + JSON.stringify(issues) + '.find(i=>i.number===n)||{state:"open",number:n,labels:[],assignees:[],title:"t",url:""}; process.stdout.write(JSON.stringify(f)+"\\n"); process.exit(0); }',
+              'process.exit(0);'
+            ].join('\n');
+            const issues17t = [{number:821,title:"t1",state:"open",labels:[{name:"area:frontend"}],assignees:[],updatedAt:"2026-01-01",url:""},{number:822,title:"t2",state:"open",labels:[{name:"area:backend"}],assignees:[],updatedAt:"2026-01-01",url:""}];
+            fs.writeFileSync(path.join(bin17t, 'gh'), makeGhShim(issues17t), { mode: 0o755 });
+            const env17t = { ...process.env, PATH: bin17t + pathSep17t + process.env.PATH };
+            // Provision two worktrees
+            const pickOut17t1 = execFileSync(process.execPath, [claimJS, 'pick-next',
+              '--session', 'sess-17t1', '--runtime', 'claude', '--target-issue', '821'],
+              { cwd: tmp17t, encoding: 'utf8', env: env17t });
+            const pick17t1 = JSON.parse(pickOut17t1.trim());
+            assert(pick17t1.verdict === 'acquired', '17T setup: must acquire issue 821');
+            const pickOut17t2 = execFileSync(process.execPath, [claimJS, 'pick-next',
+              '--session', 'sess-17t2', '--runtime', 'claude', '--target-issue', '822'],
+              { cwd: tmp17t, encoding: 'utf8', env: env17t });
+            const pick17t2 = JSON.parse(pickOut17t2.trim());
+            assert(pick17t2.verdict === 'acquired', '17T setup: must acquire issue 822');
+            const kwParent17t = path.dirname(pick17t1.worktree_path);
+            assert(kwParent17t === path.dirname(pick17t2.worktree_path), '17T: both worktrees must share same *.kw/ parent');
+            // 17T-: release first worktree — sibling still exists → parent retained
+            execFileSync(process.execPath, [claimJS, 'worktree-finalize', '--project', pick17t1.project],
+              { cwd: tmp17t, encoding: 'utf8', env: { ...env17t, KAOLA_WORKFLOW_OFFLINE: '1' } });
+            assert(fs.existsSync(kwParent17t),
+              '17T-: parent *.kw/ must be retained when sibling worktree remains, kwParent=' + kwParent17t);
+            // 17T+: release second (last) worktree → parent should be removed
+            execFileSync(process.execPath, [claimJS, 'worktree-finalize', '--project', pick17t2.project],
+              { cwd: tmp17t, encoding: 'utf8', env: { ...env17t, KAOLA_WORKFLOW_OFFLINE: '1' } });
+            assert(!fs.existsSync(kwParent17t),
+              '17T+: parent *.kw/ must be removed after last worktree removed, kwParent=' + kwParent17t);
+          } finally {
+            const kwParent17tc = path.join(path.dirname(tmp17t), path.basename(tmp17t) + '.kw');
+            try {
+              execFileSync('git', ['-C', tmp17t, 'worktree', 'prune'], { encoding: 'utf8', stdio: 'ignore' });
+            } catch (_) {}
+            try { fs.rmSync(kwParent17tc, { recursive: true, force: true }); } catch (_) {}
+            try { fs.rmSync(tmp17t, { recursive: true, force: true }); } catch (_) {}
+          }
+        }
+
+        // 17U: cmdSweep removes .abandoned-<old-ISO> dir but retains .abandoned-<fresh-ISO> dir
+        {
+          const tmp17u = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-workflow-17u-'));
+          try {
+            execFileSync('git', ['init', '-b', 'main'], { cwd: tmp17u, encoding: 'utf8' });
+            execFileSync('git', ['-C', tmp17u, 'commit', '--allow-empty', '-m', 'init'], { encoding: 'utf8' });
+            // Use git rev-parse --show-toplevel to get the resolved root (macOS /var→/private/var)
+            const resolvedRoot17u = execFileSync('git', ['rev-parse', '--show-toplevel'],
+              { cwd: tmp17u, encoding: 'utf8' }).trim();
+            const kwParent17u = path.join(path.dirname(resolvedRoot17u), path.basename(resolvedRoot17u) + '.kw');
+            fs.mkdirSync(kwParent17u, { recursive: true });
+            // Create .locks dir so cmdSweep doesn't early-exit at !fs.existsSync(dir)
+            const gcd17u = execFileSync('git', ['rev-parse', '--git-common-dir'],
+              { cwd: tmp17u, encoding: 'utf8' }).trim();
+            const coordRoot17u = path.resolve(resolvedRoot17u, gcd17u);
+            fs.mkdirSync(path.join(coordRoot17u, 'kaola-workflow', '.locks'), { recursive: true });
+            // Old abandoned dir — suffix > 30min ago
+            const oldTime = new Date(Date.now() - 35 * 60 * 1000);
+            const oldSuffix = oldTime.toISOString().replace(/[:.]/g, '-');
+            const oldAbandonedDir = path.join(kwParent17u, 'issue-831.' + 'abandoned-' + oldSuffix);
+            fs.mkdirSync(oldAbandonedDir);
+            // Assert parse round-trip works: parse old suffix and verify age > 30min
+            const parsedOld = new Date(oldSuffix.replace(/-(\d{2})-(\d{2})-(\d{3})Z$/, ':$1:$2.$3Z')).getTime();
+            assert(!isNaN(parsedOld), '17U: old suffix must parse to valid timestamp');
+            assert(Date.now() - parsedOld > 30 * 60 * 1000, '17U: old suffix age must be > 30min');
+            // Fresh abandoned dir — suffix < 30min ago
+            const freshTime = new Date(Date.now() - 2 * 60 * 1000);
+            const freshSuffix = freshTime.toISOString().replace(/[:.]/g, '-');
+            const freshAbandonedDir = path.join(kwParent17u, 'issue-831.' + 'abandoned-' + freshSuffix);
+            fs.mkdirSync(freshAbandonedDir);
+            // Run sweep
+            const bin17u = path.join(tmp17u, 'bin');
+            fs.mkdirSync(bin17u);
+            fs.writeFileSync(path.join(bin17u, 'gh'), '#!/usr/bin/env node\nprocess.exit(0);', { mode: 0o755 });
+            const pathSep17u = process.platform === 'win32' ? ';' : ':';
+            const env17u = { ...process.env, PATH: bin17u + pathSep17u + process.env.PATH };
+            execFileSync(process.execPath, [claimJS, 'sweep'],
+              { cwd: tmp17u, encoding: 'utf8', env: env17u });
+            assert(!fs.existsSync(oldAbandonedDir),
+              '17U: old abandoned dir (>30min) must be removed by sweep, path=' + oldAbandonedDir);
+            assert(fs.existsSync(freshAbandonedDir),
+              '17U: fresh abandoned dir (<30min) must be retained, path=' + freshAbandonedDir);
+          } finally {
+            // Clean up both the symlink-resolved path and the original tmp path
+            try {
+              const resolvedTmp17u = execFileSync('git', ['rev-parse', '--show-toplevel'],
+                { cwd: tmp17u, encoding: 'utf8' }).trim();
+              const kwParent17uc = path.join(path.dirname(resolvedTmp17u), path.basename(resolvedTmp17u) + '.kw');
+              try { fs.rmSync(kwParent17uc, { recursive: true, force: true }); } catch (_) {}
+            } catch (_) {
+              const kwParent17uc = path.join(path.dirname(tmp17u), path.basename(tmp17u) + '.kw');
+              try { fs.rmSync(kwParent17uc, { recursive: true, force: true }); } catch (_) {}
+            }
+            try { fs.rmSync(tmp17u, { recursive: true, force: true }); } catch (_) {}
+          }
+        }
+
+        // 17V: startup acquired receipt includes non-null worktree_path
+        {
+          const tmp17v = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-workflow-17v-'));
+          try {
+            execFileSync('git', ['init', '-b', 'main'], { cwd: tmp17v, encoding: 'utf8' });
+            execFileSync('git', ['-C', tmp17v, 'commit', '--allow-empty', '-m', 'init'], { encoding: 'utf8' });
+            const bin17v = path.join(tmp17v, 'bin');
+            fs.mkdirSync(bin17v);
+            const pathSep17v = process.platform === 'win32' ? ';' : ':';
+            fs.writeFileSync(path.join(bin17v, 'gh'), [
+              '#!/usr/bin/env node',
+              'const a = process.argv.slice(2);',
+              'if (a[0]==="issue"&&a[1]==="list") { process.stdout.write(JSON.stringify([{number:841,title:"startup-wt",state:"open",labels:[],assignees:[],updatedAt:"2026-01-01",url:""}])+"\\n"); process.exit(0); }',
+              'if (a[0]==="issue"&&a[1]==="edit") { process.exit(0); }',
+              'if (a[0]==="issue"&&a[1]==="view") { process.stdout.write(JSON.stringify({state:"open",number:841,title:"startup-wt",labels:[],assignees:[],url:""})+"\\n"); process.exit(0); }',
+              'process.exit(0);'
+            ].join('\n'), { mode: 0o755 });
+            const env17v = { ...process.env, PATH: bin17v + pathSep17v + process.env.PATH };
+            // Use pick-next (which writes startup receipt and augments stdout with worktree_path)
+            const pickOut17v = execFileSync(process.execPath, [claimJS, 'pick-next',
+              '--session', 'sess-17v', '--runtime', 'claude', '--target-issue', '841'],
+              { cwd: tmp17v, encoding: 'utf8', env: env17v });
+            const receipt17v = JSON.parse(pickOut17v.trim());
+            assert(receipt17v.verdict === 'acquired', '17V: pick-next must acquire issue 841');
+            assert(typeof receipt17v.worktree_path === 'string' && receipt17v.worktree_path.length > 0,
+              '17V: receipt must include non-empty worktree_path, got ' + receipt17v.worktree_path);
+            assert(fs.existsSync(receipt17v.worktree_path),
+              '17V: receipt.worktree_path must exist on disk: ' + receipt17v.worktree_path);
+          } finally {
+            const kwParent17vc = path.join(path.dirname(tmp17v), path.basename(tmp17v) + '.kw');
+            try {
+              execFileSync('git', ['-C', tmp17v, 'worktree', 'prune'], { encoding: 'utf8', stdio: 'ignore' });
+            } catch (_) {}
+            try { fs.rmSync(kwParent17vc, { recursive: true, force: true }); } catch (_) {}
+            try { fs.rmSync(tmp17v, { recursive: true, force: true }); } catch (_) {}
+          }
+        }
+
       } finally {
         // Prune worktrees before rm to avoid git lock issues
         try { execFileSync('git', ['-C', epic17Tmp, 'worktree', 'prune'], { encoding: 'utf8' }); } catch (_) {}
