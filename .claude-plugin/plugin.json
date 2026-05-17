@@ -1,6 +1,6 @@
 {
   "name": "kaola-workflow",
-  "version": "3.4.0",
+  "version": "3.5.0",
   "description": "A 6-phase Claude Code workflow with resumable phase artifacts and ECC agent orchestration.",
   "author": {
     "name": "KaolaBrother",

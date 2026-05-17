@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.5.0] — 2026-05-18
+
 ### Added — Fast-Path Workflow + Phantom Advisor Hook (issue #41)
 
 - **`kaola-workflow-fast.md` command**: NEW single-pass workflow for small, well-scoped issues. Executes Plan+Execute+Review in one phase, writing `fast-summary.md` instead of full 6-phase artifacts. Requires ≤2 closely related files; escalates to full workflow automatically on scope growth (multi-file groups, security concerns, dependencies, new packages). Enable with `KAOLA_PATH=fast /workflow-next`.
