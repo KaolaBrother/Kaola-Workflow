@@ -5427,6 +5427,131 @@ exit 0
           }
         }
 
+        // 17W: startup owned receipt includes worktree_path read from lock file (direct startup, not pick-next)
+        {
+          // Positive case: lock has non-null worktree_path → receipt.worktree_path equals lock value
+          const tmp17w = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-workflow-17w-'));
+          try {
+            execFileSync('git', ['init', '-b', 'main'], { cwd: tmp17w, encoding: 'utf8' });
+            execFileSync('git', ['-C', tmp17w, 'commit', '--allow-empty', '-m', 'init'], { encoding: 'utf8' });
+            const bin17w = path.join(tmp17w, 'bin');
+            fs.mkdirSync(bin17w);
+            const pathSep17w = process.platform === 'win32' ? ';' : ':';
+            // gh shim: fetchOpenIssueRecords runs before ownership check; return empty list to avoid classifier overhead
+            fs.writeFileSync(path.join(bin17w, 'gh'), [
+              '#!/usr/bin/env node',
+              'const a = process.argv.slice(2);',
+              'if (a[0]==="issue"&&a[1]==="list") { process.stdout.write("[]\\n"); process.exit(0); }',
+              'if (a[0]==="issue"&&a[1]==="edit") { process.exit(0); }',
+              'if (a[0]==="issue"&&a[1]==="view") { process.stdout.write(JSON.stringify({state:"open",number:99,title:"owned-wt",labels:[],assignees:[],url:""})+"\\n"); process.exit(0); }',
+              'process.exit(0);'
+            ].join('\n'), { mode: 0o755 });
+            const env17w = {
+              ...process.env,
+              PATH: bin17w + pathSep17w + process.env.PATH,
+              KAOLA_KERNEL_SESSION_SKIP: '1'
+            };
+            // Compute coordRoot for this repo and write the lock file directly
+            const coordRoot17w = coordRootFor(tmp17w);
+            const locksDir17w = path.join(coordRoot17w, 'kaola-workflow', '.locks');
+            fs.mkdirSync(locksDir17w, { recursive: true });
+            const sessionsDir17w = path.join(coordRoot17w, 'kaola-workflow', '.sessions');
+            fs.mkdirSync(sessionsDir17w, { recursive: true });
+            const expectedWtPath17w = '/tmp/test-wt-path/issue-99';
+            const now17w = new Date();
+            const lockData17w = {
+              project: 'issue-99',
+              session_id: 'sess-17w',
+              machine_id: 'test-machine',
+              claimed_at: now17w.toISOString(),
+              expires: new Date(now17w.getTime() + 30 * 60 * 1000).toISOString(),
+              last_heartbeat: now17w.toISOString(),
+              issue_number: 99,
+              claim_comment_id: null,
+              sink: 'merge',
+              pr_url: null,
+              pr_number: null,
+              runtime: 'claude',
+              worktree_path: expectedWtPath17w,
+              branch: 'workflow/issue-99',
+              owner_session_id: 'sess-17w'
+            };
+            fs.writeFileSync(path.join(locksDir17w, 'issue-99.lock'), JSON.stringify(lockData17w));
+            // Call startup directly — must reach owned branch because session already owns issue-99
+            const startupOut17w = execFileSync(process.execPath, [
+              claimJS, 'startup', '--session', 'sess-17w', '--runtime', 'claude', '--target-issue', '99'
+            ], { cwd: tmp17w, encoding: 'utf8', env: env17w });
+            const receipt17w = JSON.parse(startupOut17w.trim());
+            assert(receipt17w.verdict === 'owned',
+              '17W: startup must return verdict=owned for pre-existing lock, got ' + receipt17w.verdict);
+            assert(receipt17w.claim === 'owned',
+              '17W: startup receipt claim must be owned, got ' + receipt17w.claim);
+            assert(receipt17w.worktree_path === expectedWtPath17w,
+              '17W: startup owned receipt must include worktree_path from lock file, got ' + receipt17w.worktree_path);
+          } finally {
+            try { fs.rmSync(tmp17w, { recursive: true, force: true }); } catch (_) {}
+          }
+
+          // Negative case: lock has worktree_path:null → receipt.worktree_path is null
+          const tmp17wn = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-workflow-17wn-'));
+          try {
+            execFileSync('git', ['init', '-b', 'main'], { cwd: tmp17wn, encoding: 'utf8' });
+            execFileSync('git', ['-C', tmp17wn, 'commit', '--allow-empty', '-m', 'init'], { encoding: 'utf8' });
+            const bin17wn = path.join(tmp17wn, 'bin');
+            fs.mkdirSync(bin17wn);
+            const pathSep17wn = process.platform === 'win32' ? ';' : ':';
+            fs.writeFileSync(path.join(bin17wn, 'gh'), [
+              '#!/usr/bin/env node',
+              'const a = process.argv.slice(2);',
+              'if (a[0]==="issue"&&a[1]==="list") { process.stdout.write("[]\\n"); process.exit(0); }',
+              'if (a[0]==="issue"&&a[1]==="edit") { process.exit(0); }',
+              'if (a[0]==="issue"&&a[1]==="view") { process.stdout.write(JSON.stringify({state:"open",number:99,title:"owned-wt-null",labels:[],assignees:[],url:""})+"\\n"); process.exit(0); }',
+              'process.exit(0);'
+            ].join('\n'), { mode: 0o755 });
+            const env17wn = {
+              ...process.env,
+              PATH: bin17wn + pathSep17wn + process.env.PATH,
+              KAOLA_KERNEL_SESSION_SKIP: '1'
+            };
+            const coordRoot17wn = coordRootFor(tmp17wn);
+            const locksDir17wn = path.join(coordRoot17wn, 'kaola-workflow', '.locks');
+            fs.mkdirSync(locksDir17wn, { recursive: true });
+            const sessionsDir17wn = path.join(coordRoot17wn, 'kaola-workflow', '.sessions');
+            fs.mkdirSync(sessionsDir17wn, { recursive: true });
+            const now17wn = new Date();
+            const lockData17wn = {
+              project: 'issue-99',
+              session_id: 'sess-17wn',
+              machine_id: 'test-machine',
+              claimed_at: now17wn.toISOString(),
+              expires: new Date(now17wn.getTime() + 30 * 60 * 1000).toISOString(),
+              last_heartbeat: now17wn.toISOString(),
+              issue_number: 99,
+              claim_comment_id: null,
+              sink: 'merge',
+              pr_url: null,
+              pr_number: null,
+              runtime: 'claude',
+              worktree_path: null,
+              branch: null,
+              owner_session_id: 'sess-17wn'
+            };
+            fs.writeFileSync(path.join(locksDir17wn, 'issue-99.lock'), JSON.stringify(lockData17wn));
+            const startupOut17wn = execFileSync(process.execPath, [
+              claimJS, 'startup', '--session', 'sess-17wn', '--runtime', 'claude', '--target-issue', '99'
+            ], { cwd: tmp17wn, encoding: 'utf8', env: env17wn });
+            const receipt17wn = JSON.parse(startupOut17wn.trim());
+            assert(receipt17wn.verdict === 'owned',
+              '17W-neg: startup must return verdict=owned for pre-existing lock with null worktree_path, got ' + receipt17wn.verdict);
+            assert(receipt17wn.claim === 'owned',
+              '17W-neg: startup receipt claim must be owned, got ' + receipt17wn.claim);
+            assert(receipt17wn.worktree_path === null,
+              '17W-neg: startup owned receipt must have worktree_path=null when lock has null, got ' + receipt17wn.worktree_path);
+          } finally {
+            try { fs.rmSync(tmp17wn, { recursive: true, force: true }); } catch (_) {}
+          }
+        }
+
       } finally {
         // Prune worktrees before rm to avoid git lock issues
         try { execFileSync('git', ['-C', epic17Tmp, 'worktree', 'prune'], { encoding: 'utf8' }); } catch (_) {}
