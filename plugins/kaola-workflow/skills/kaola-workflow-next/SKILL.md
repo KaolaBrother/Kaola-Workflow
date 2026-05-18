@@ -96,6 +96,20 @@ select a different issue. If the startup script is unavailable, stop for repair.
 If startup returns `claim: "none"`, stop normal routing. Do not inspect active
 project folders unless the user explicitly names the project to resume.
 
+### Git Freshness Block Recovery
+
+If startup succeeds (folder claimed, worktree provisioned) but the subsequent Git freshness check blocks (local is behind remote, dirty worktree, or merge/rebase required), run:
+
+```bash
+node "$claim_script" release --project "$KAOLA_PROJECT" --reason git-freshness-block
+```
+
+This releases the just-claimed folder and removes the worktree before stopping. Do not leave a claimed folder orphaned when the startup sequence cannot complete.
+
+### Co-active Folders Advisory
+
+If a second active folder already exists from a prior session, the two folders have disjoint write sets by design. Do not merge, interleave, or batch their commits. Each folder follows its own Phase 4 → Phase 6 sequence independently. If the same file appears in both write sets, stop and resolve the conflict before continuing.
+
 Classify local and remote Git state:
 
 ```bash

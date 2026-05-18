@@ -482,6 +482,148 @@ function testClassifierCurrentClaimMarkerBlocks() {
   }
 }
 
+function testWatchPrArchivesClosedIssuePrFolder() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-watchpr-archive-'));
+  const kwRoot = fs.realpathSync(tmp) + '.kw';
+  try {
+    initGitRepo(tmp);
+    const binDir = path.join(tmp, 'bin');
+    fs.mkdirSync(binDir, { recursive: true });
+    fs.writeFileSync(path.join(binDir, 'gh'), [
+      '#!/bin/sh',
+      'ARGS="$@"',
+      'case "$ARGS" in',
+      '  *"issue view 200"*) echo \'{"state":"closed"}\' ;;',
+      '  *"pr view"*) echo \'{"state":"MERGED","number":1}\' ;;',
+      '  *"repo view"*) echo \'{"owner":{"login":"test"},"name":"repo"}\' ;;',
+      '  *) echo \'[]\' ;;',
+      'esac',
+      ''
+    ].join('\n'));
+    fs.chmodSync(path.join(binDir, 'gh'), 0o755);
+    const projDir = path.join(tmp, 'kaola-workflow', 'watch-pr-test');
+    fs.mkdirSync(projDir, { recursive: true });
+    fs.writeFileSync(path.join(projDir, 'workflow-state.md'), [
+      '# Kaola-Workflow State', '',
+      '## Project',
+      'name: watch-pr-test',
+      'status: active',
+      '',
+      '## Sink',
+      'branch: workflow/issue-200',
+      'issue_number: 200',
+      'sink: pr',
+      'pr_url: https://github.com/test/repo/pull/1',
+      ''
+    ].join('\n'));
+    const result = runClaimOnline(['watch-pr'], tmp, binDir);
+    assert(result.watched === 1, 'watch-pr should watch the pr-sink folder, got: ' + JSON.stringify(result));
+    assert(!fs.existsSync(projDir), 'watch-pr should archive the folder after PR merges');
+    assert(fs.existsSync(path.join(tmp, 'kaola-workflow', 'archive')), 'archive dir should exist after watch-pr');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(kwRoot, { recursive: true, force: true });
+  }
+}
+
+function testSinkFallbackSkipsArchivedProject() {
+  const tmp1 = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sinkfb-guard-'));
+  try {
+    const r1 = json(runNode(claimScript, ['sink-fallback', '--project', 'already-archived'], tmp1));
+    assert(r1.updated === false, 'sink-fallback should skip when project is archived, got: ' + JSON.stringify(r1));
+    assert(r1.reason === 'project archived', 'sink-fallback should report project archived, got: ' + r1.reason);
+    assert(!fs.existsSync(path.join(tmp1, 'kaola-workflow', 'already-archived')), 'sink-fallback must not recreate the archived directory');
+  } finally {
+    fs.rmSync(tmp1, { recursive: true, force: true });
+  }
+  const tmp2 = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sinkfb-positive-'));
+  try {
+    const projDir = path.join(tmp2, 'kaola-workflow', 'active-project');
+    fs.mkdirSync(projDir, { recursive: true });
+    fs.writeFileSync(path.join(projDir, 'workflow-state.md'), [
+      '# Kaola-Workflow State', '',
+      '## Project',
+      'name: active-project',
+      'status: active',
+      '',
+      '## Sink',
+      'branch: workflow/issue-300',
+      'issue_number: 300',
+      'sink: merge',
+      ''
+    ].join('\n'));
+    const r2 = json(runNode(claimScript, ['sink-fallback', '--project', 'active-project'], tmp2));
+    assert(r2.updated === true, 'sink-fallback should succeed for active folder, got: ' + JSON.stringify(r2));
+    assert(r2.sink === 'pr', 'sink-fallback should set sink to pr, got: ' + r2.sink);
+  } finally {
+    fs.rmSync(tmp2, { recursive: true, force: true });
+  }
+  const tmp3 = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sinkfb-unsafe-'));
+  try {
+    const r3 = runNode(claimScript, ['sink-fallback', '--project', '../escape'], tmp3);
+    assert(r3.status === 1, 'sink-fallback should reject unsafe project name, got exit ' + r3.status);
+    assert(r3.stderr.includes('unsafe project name'), 'error should mention unsafe project name, got: ' + r3.stderr);
+  } finally {
+    fs.rmSync(tmp3, { recursive: true, force: true });
+  }
+}
+
+function testFinalizeReleaseCleansWorktree() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-finalize-worktree-'));
+  const kwRoot = fs.realpathSync(tmp) + '.kw';
+  try {
+    initGitRepo(tmp);
+    const binDir = path.join(tmp, 'bin');
+    writeGhShimForStartup(binDir);
+    const s601 = runClaimOnline(['startup', '--target-issue', '601'], tmp, binDir);
+    assert(s601.claim === 'acquired', 'startup 601 should acquire');
+    const wt601 = s601.worktree_path;
+    assert(fs.existsSync(wt601), 'worktree 601 should exist after startup');
+    runClaimOnline(['finalize', '--project', 'issue-601'], tmp, binDir);
+    assert(!fs.existsSync(wt601), 'worktree 601 should be gone after finalize');
+    const s602 = runClaimOnline(['startup', '--target-issue', '602'], tmp, binDir);
+    assert(s602.claim === 'acquired', 'startup 602 should acquire');
+    const wt602 = s602.worktree_path;
+    assert(fs.existsSync(wt602), 'worktree 602 should exist after startup');
+    runClaimOnline(['release', '--project', 'issue-602', '--reason', 'test'], tmp, binDir);
+    assert(!fs.existsSync(wt602), 'worktree 602 should be gone after release');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(kwRoot, { recursive: true, force: true });
+  }
+}
+
+function testStatusShowsClosedIssueDrift() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-status-drift-'));
+  try {
+    plantActiveFolder(tmp, 'open-project', 100, null);
+    plantActiveFolder(tmp, 'closed-project', 200, null);
+    const binDir = path.join(tmp, 'bin');
+    fs.mkdirSync(binDir, { recursive: true });
+    fs.writeFileSync(path.join(binDir, 'gh'), [
+      '#!/bin/sh',
+      'ARGS="$@"',
+      'case "$ARGS" in',
+      '  *"issue view 100"*) echo \'{"state":"open"}\' ;;',
+      '  *"issue view 200"*) echo \'{"state":"closed"}\' ;;',
+      '  *) echo \'[]\' ;;',
+      'esac',
+      ''
+    ].join('\n'));
+    fs.chmodSync(path.join(binDir, 'gh'), 0o755);
+    const online = runClaimOnline(['status'], tmp, binDir);
+    assert(online.active.length === 1, 'online status: active should have 1 folder, got ' + online.active.length);
+    assert(online.drift.length === 1, 'online status: drift should have 1 folder, got ' + online.drift.length);
+    assert(online.count === 1, 'online status: count should be 1, got ' + online.count);
+    const offline = json(runNode(claimScript, ['status'], tmp));
+    assert(offline.active.length === 2, 'offline status: all 2 folders in active, got ' + offline.active.length);
+    assert(offline.drift.length === 0, 'offline status: drift should be empty, got ' + offline.drift.length);
+    assert(offline.count === 2, 'offline status: count should be 2, got ' + offline.count);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 async function main() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-active-folders-'));
   try {
@@ -499,6 +641,10 @@ async function main() {
     testStartupJsonAndSiblingWorktrees();
     testFastStartupState();
     testClassifierCurrentClaimMarkerBlocks();
+    testWatchPrArchivesClosedIssuePrFolder();
+    testSinkFallbackSkipsArchivedProject();
+    testFinalizeReleaseCleansWorktree();
+    testStatusShowsClosedIssueDrift();
     console.log('Workflow walkthrough simulation passed');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });

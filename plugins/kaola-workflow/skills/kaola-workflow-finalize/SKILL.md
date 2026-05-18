@@ -86,19 +86,29 @@ choices, or ambiguity that blocks correctness.
 
    ### Step 8b - Finalize (Archive + Status Close)
 
-   Run `cmdFinalize` from the linked worktree after the artifact mirror and before the commit gate:
+   This step runs **only when `sink: merge`**. For `sink: pr`, skip to Step 8 — the active folder must remain open so `sink-pr.js` can write `pr_url` and `watch-pr` can archive the folder when the PR merges or closes.
+
+   Read the sink kind from the main repo **before** entering any worktree subshell:
 
    ```bash
    SINK_KIND=$(awk '/^## Sink/,0' "kaola-workflow/${KAOLA_PROJECT}/workflow-state.md" | grep '^sink:' | awk '{print $2}')
    SINK_KIND="${SINK_KIND:-merge}"
-   SINK_BRANCH=$(grep '^branch:' "kaola-workflow/${KAOLA_PROJECT}/workflow-state.md" | awk '{print $2}')
-   (cd "$ACTIVE_WORKTREE_PATH" && node "$CLAIM_JS" finalize \
-     --project "$KAOLA_PROJECT")
    ```
 
-   This atomically writes `status: closed` + `step: complete` to `workflow-state.md` and
+   If `SINK_KIND` is `merge`, run `cmdFinalize` from the linked worktree after the artifact mirror and before the commit gate:
+
+   ```bash
+   if [ "$SINK_KIND" = "merge" ]; then
+     (cd "$ACTIVE_WORKTREE_PATH" && node "$CLAIM_JS" finalize \
+       --project "$KAOLA_PROJECT")
+   fi
+   ```
+
+   When it runs, `cmdFinalize` atomically writes `status: closed` + `step: complete` to `workflow-state.md` and
    renames `kaola-workflow/${KAOLA_PROJECT}/` → `kaola-workflow/archive/${KAOLA_PROJECT}/`
    in the linked worktree. The rename is staged and committed in the commit gate below.
+
+   If `SINK_KIND` is `pr`: skip this step. Proceed to Step 8 (commit). The active folder remains open. `sink-pr.js` (Step 9) writes the PR URL into the active folder. `watch-pr` (on the next `/workflow-next` startup) detects the merged or closed PR and archives the folder automatically.
 
    Before sink dispatch, stage only approved implementation, docs, roadmap,
    archive, and workflow artifacts for this project, then create the final

@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Fixed — Lifecycle Cleanup Gaps: Closed-Issue Remnants, PR Backlog, Worktree Leftovers (issue #75)
+
+- **Closed-issue folder drift detection**: `cmdStatus` now returns `{ active, drift, count }` instead of `{ active, count }`. The new `drift` array contains folders whose linked GitHub issue is closed. `count` reflects only active folders (excluding drift). Enables agents to detect and clean stale folders when issues are closed externally.
+- **Archived-folder recreation guard**: `cmdSinkFallback` now validates project directory exists before updating sink state. Returns `{ updated: false, reason: 'project archived' }` when project dir doesn't exist, preventing accidental recreation of archived folders.
+- **Safe project-name validation**: `cmdSinkFallback` and related cleanup functions now call `isSafeName(args.project)` before filesystem operations, preventing path-traversal attacks on archived folders.
+- **Worktree cleanup on lifecycle events**: `cmdFinalize`, `cmdRelease`, and `cmdWatchPr` now call `removeWorktree()` after archiving projects, ensuring linked git worktrees are properly cleaned up when issues are released or closed.
+- **Worktree removal path safety**: `removeWorktree()` now uses `--` separator before path in `git worktree remove` call, preventing branch names starting with `--` from being interpreted as git options.
+- **Closed-issue PR discovery**: `cmdWatchPr` now includes closed-issue PR-backed folders in its scan (`excludeClosedIssues: false`), ensuring PRs are watched through completion even when GitHub issues are closed externally.
+
 ### Added — GitLab Edition Launch Gate (issues #65, #66, #72, #67, #68, #69, #70, #71)
 
 - Documented GitHub vs GitLab edition selection for Claude Code and Codex installs, including GitLab prerequisites, manual `--forge` install/uninstall choices, and both marketplace plugin entries.

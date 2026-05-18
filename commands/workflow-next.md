@@ -133,6 +133,18 @@ If local is behind only and the worktree is clean, run `git pull --ff-only`,
 then re-check. Stop and ask before any merge, rebase, stash, reset, conflict
 resolution, or dirty-worktree sync.
 
+### Git Freshness Block Recovery
+
+If startup succeeds (folder claimed, worktree provisioned) but the subsequent Git freshness check in Startup Step 1 blocks (local is behind remote, dirty worktree, or merge/rebase required), run:
+
+```bash
+git fetch --prune
+git pull --ff-only
+git status --short --branch
+```
+
+If the freshness check now passes, continue to Startup Step 2. If the block persists (merge/rebase required, dirty worktree), resolve manually before retrying `/workflow-next`.
+
 ## Startup Step 2 - Roadmap
 
 If a GitHub remote and authenticated `gh` are available, fetch open issues:
@@ -178,6 +190,12 @@ ask the user what to implement. New work starts with:
 ```text
 /kaola-workflow-phase1 <task description or issue>
 ```
+
+### Co-active Folders Advisory
+
+If multiple active folders exist from prior sessions (e.g., `issue-63` and `issue-65` in different states), they operate independently. Each folder has its own `workflow-state.md`, branch, and worktree metadata. The pre-commit hook prevents commits that stage multiple workflow project folders together.
+
+**Important**: Do NOT merge, interleave, or batch commits from different active folders. Each folder must complete its own Phase 4 → Phase 6 sequence independently. If the same file appears in multiple active write sets, stop and resolve the conflict before continuing — do not proceed with overlapping modifications.
 
 ## Co-active Folders
 

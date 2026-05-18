@@ -120,7 +120,7 @@ function removeWorktree(root, project, folder) {
   const wtPath = (folder && folder.worktree_path) || worktreePathFor(root, project);
   if (!wtPath || !fs.existsSync(wtPath)) return { removed: false, reason: 'missing' };
   try {
-    execFileSync('git', ['worktree', 'remove', '--force', wtPath], {
+    execFileSync('git', ['worktree', 'remove', '--force', '--', wtPath], {
       cwd: root,
       stdio: ['ignore', 'ignore', 'ignore']
     });
@@ -438,6 +438,7 @@ function cmdFinalize() {
   assert(args.project, '--project required');
   const folder = activeByProject(root, args.project);
   const result = archiveProjectDir(root, args.project, 'closed');
+  try { removeWorktree(root, args.project, folder); } catch (_) {}
   clearAdvisoryClaim(folder && folder.issue_number, 'finalized');
   output(Object.assign({ status: 'closed' }, result));
 }
@@ -455,13 +456,24 @@ function cmdRelease() {
   if (!folder) { output({ released: false, reason: '--project or --issue must name an active folder' }, 1); return; }
   if (cwdInside(folder.project_dir)) { output({ released: false, reason: 'refusing to discard current working directory' }, 1); return; }
   const result = archiveProjectDir(root, folder.project, 'abandoned', '.discarded-' + new Date().toISOString().replace(/[:.]/g, '-'));
+  try { removeWorktree(root, folder.project, folder); } catch (_) {}
   clearAdvisoryClaim(folder.issue_number, args.reason || 'discarded');
   output(Object.assign({ released: true, project: folder.project }, result));
 }
 
 function cmdStatus() {
   const root = getRoot();
-  output({ active: readActiveFolders(root), count: readActiveFolders(root).length });
+  const all = readActiveFolders(root, { excludeClosedIssues: false });
+  const active = [];
+  const drift = [];
+  for (const folder of all) {
+    if (folder.issue_number != null && issueIsClosed(folder.issue_number)) {
+      drift.push(folder);
+    } else {
+      active.push(folder);
+    }
+  }
+  output({ active, drift, count: active.length });
 }
 
 function cmdPatchBranch() {
@@ -528,6 +540,11 @@ function cmdSinkFallback() {
   const root = getRoot();
   const args = parseArgs(process.argv.slice(3));
   assert(args.project, '--project required');
+  assert(isSafeName(args.project), 'unsafe project name');
+  if (!fs.existsSync(projectDir(root, args.project))) {
+    output({ updated: false, project: args.project, reason: 'project archived' });
+    return;
+  }
   const reason = args.reason || 'merge fallback';
   updateState(root, args.project, content => content
     .replace(/^sink:.*$/m, 'sink: pr')
@@ -540,7 +557,7 @@ function cmdWatchPr() {
   const args = parseArgs(process.argv.slice(3));
   if (OFFLINE) { output({ watched: 0, offline: true }); return; }
   let watched = 0;
-  for (const folder of readActiveFolders(root)) {
+  for (const folder of readActiveFolders(root, { excludeClosedIssues: false })) {
     if (args.issue && folder.issue_number !== args.issue) continue;
     if (folder.sink !== 'pr' || !folder.pr_url) continue;
     watched++;
@@ -551,9 +568,11 @@ function cmdWatchPr() {
     } catch (_) { continue; }
     if (state === 'MERGED') {
       archiveProjectDir(root, folder.project, 'closed');
+      try { removeWorktree(root, folder.project, folder); } catch (_) {}
       clearAdvisoryClaim(folder.issue_number, 'pr merged');
     } else if (state === 'CLOSED') {
       archiveProjectDir(root, folder.project, 'abandoned', '.discarded-' + new Date().toISOString().replace(/[:.]/g, '-'));
+      try { removeWorktree(root, folder.project, folder); } catch (_) {}
       clearAdvisoryClaim(folder.issue_number, 'pr closed');
     }
   }

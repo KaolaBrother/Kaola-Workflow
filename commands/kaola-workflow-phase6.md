@@ -486,14 +486,20 @@ fi
 
 ## Step 8b - Finalize (Archive + Status Close)
 
-Run `cmdFinalize` from the linked worktree context. This must run AFTER Step 8a (artifact mirror) and BEFORE Step 8 (git add/commit), because the rename needs to be detected by `git add`:
+This step runs **only when `sink: merge`**. For `sink: pr`, skip to Step 8 — the active folder must remain open so `sink-pr.js` can write `pr_url` and `watch-pr` can archive the folder when the PR merges or closes.
+
+If `SINK_KIND` is `merge`, run `cmdFinalize` from the linked worktree context. This must run AFTER Step 8a (artifact mirror) and BEFORE Step 8 (git add/commit), because the rename needs to be detected by `git add`:
 
 ```bash
-(cd "$ACTIVE_WORKTREE_PATH" && node "$CLAIM_JS" finalize \
-  --project "$KAOLA_PROJECT")
+if [ "$SINK_KIND" = "merge" ]; then
+  (cd "$ACTIVE_WORKTREE_PATH" && node "$CLAIM_JS" finalize \
+    --project "$KAOLA_PROJECT")
+fi
 ```
 
-This atomically writes `status: closed` + `step: complete` to `workflow-state.md` and renames `kaola-workflow/{project}/` → `kaola-workflow/archive/{project}/` in the linked worktree. The rename is included in the Step 8 commit via git rename detection.
+When it runs, `cmdFinalize` atomically writes `status: closed` + `step: complete` to `workflow-state.md` and renames `kaola-workflow/{project}/` → `kaola-workflow/archive/{project}/` in the linked worktree. The rename is included in the Step 8 commit via git rename detection.
+
+If `SINK_KIND` is `pr`: skip this step. Proceed to Step 8 (commit). The active folder remains open. `sink-pr.js` (Step 9) writes the PR URL into the active folder. `watch-pr` (on the next `/workflow-next` startup) detects the merged or closed PR and archives the folder automatically.
 
 ## Step 8 - Commit Gate
 
