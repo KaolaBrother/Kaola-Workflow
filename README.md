@@ -115,11 +115,14 @@ Prerequisites:
 - The target computer can access this GitHub repository.
 - Restart Codex after adding or updating the plugin.
 
-Clone the repository and register it as a local Codex plugin source:
+Clone the repository, then register it with Codex from the local path. The
+Codex CLI exposes `codex plugin marketplace add` as its only plugin
+registration command — pointing it at a local clone keeps the install local
+and does not rely on any remote/public marketplace:
 
 ```bash
 git clone https://github.com/KaolaBrother/Kaola-Workflow.git ~/kaola-workflow
-codex plugin add ~/kaola-workflow/plugins/kaola-workflow
+codex plugin marketplace add ~/kaola-workflow
 ```
 
 For direct config enablement, add to your Codex configuration:
@@ -211,8 +214,8 @@ performs the same review locally when no detached advisor profile is available.
 
 Current official release versions:
 
-- Claude Code `kaola-workflow` package/plugin: `3.1.8`
-- Codex `kaola-workflow` plugin manifest: `1.1.8`
+- Claude Code `kaola-workflow` package/plugin: `3.8.0`
+- Codex `kaola-workflow` plugin manifest: `1.4.0`
 
 The root `package.json` version is the official repository and Claude Code
 release version. The Codex plugin has its own manifest version in

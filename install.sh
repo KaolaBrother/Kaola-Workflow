@@ -79,6 +79,7 @@ case "$FORGE" in
       kaola-workflow-repair-state.js
       kaola-workflow-claim.js
       kaola-workflow-active-folders.js
+      kaola-workflow-compact-context.js
       kaola-workflow-sink-merge.js
       kaola-workflow-sink-pr.js
       kaola-workflow-roadmap.js
@@ -86,6 +87,7 @@ case "$FORGE" in
     )
     SUPPORT_HOOK_NAMES=(
       kaola-workflow-pre-commit.sh
+      kaola-workflow-phantom-advisor.sh
     )
     ;;
   gitlab)
@@ -251,6 +253,32 @@ for hook_name in "${SUPPORT_HOOK_NAMES[@]}"; do
   fi
 done
 
+# Install hooks.json with $CLAUDE_PLUGIN_ROOT rewritten to absolute install path.
+# Manual install does not set CLAUDE_PLUGIN_ROOT, so the placeholder is replaced
+# with $SUPPORT_DIR (e.g. ~/.claude/kaola-workflow) at install time.
+if [[ -f "$SOURCE_HOOKS_DIR/hooks.json" ]]; then
+  python3 - "$SOURCE_HOOKS_DIR/hooks.json" "$SUPPORT_HOOKS_DIR/hooks.json" "$SUPPORT_DIR" <<'PY' 2>/dev/null || \
+    sed -e "s|\${CLAUDE_PLUGIN_ROOT}|$SUPPORT_DIR|g" \
+        -e "s|\$CLAUDE_PLUGIN_ROOT|$SUPPORT_DIR|g" \
+        "$SOURCE_HOOKS_DIR/hooks.json" > "$SUPPORT_HOOKS_DIR/hooks.json"
+import json, sys
+src, dst, root = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(src) as f:
+    data = json.load(f)
+def rewrite(obj):
+    if isinstance(obj, dict):
+        return {k: rewrite(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [rewrite(x) for x in obj]
+    if isinstance(obj, str):
+        return obj.replace("${CLAUDE_PLUGIN_ROOT}", root).replace("$CLAUDE_PLUGIN_ROOT", root)
+    return obj
+with open(dst, "w") as f:
+    json.dump(rewrite(data), f, indent=2)
+PY
+  echo "Installed hooks config: $SUPPORT_HOOKS_DIR/hooks.json"
+fi
+
 verify_installed_file() {
   local path="$1"
   local label="$2"
@@ -303,8 +331,12 @@ echo ""
 echo "Open any Claude Code session and run:  /workflow-init"
 echo "Then run implementation cycles with:  /workflow-next"
 echo ""
-echo "Hook files installed to: $SUPPORT_HOOKS_DIR/"
-echo "To enable the compaction resume hook, add hooks/hooks.json to your Claude Code hooks config."
-echo ""
+if [[ -f "$SUPPORT_HOOKS_DIR/hooks.json" ]]; then
+  echo "Hooks installed to: $SUPPORT_HOOKS_DIR/hooks.json"
+  echo "To enable Kaola-Workflow hooks (compaction resume, pre-commit, phantom-advisor),"
+  echo "merge the hooks block into your ~/.claude/settings.json. Quick view:"
+  echo "  cat $SUPPORT_HOOKS_DIR/hooks.json"
+  echo ""
+fi
 echo "For advisor gates, ensure your ~/.claude/settings.json includes:"
 echo '  "advisorModel": "opus"'
