@@ -65,14 +65,14 @@ versions — enable it by setting `goals = true` under `[features]` in
 `complete` or `budget_limited`. Examples:
 
 ```text
-/goal use the kaola-workflow-next skill to finish issue #42.
-/goal use the kaola-workflow skills to finish all remaining open issues.
+/goal use the workflow-next skill to finish issue #42.
+/goal use the workflow-next skill to finish all remaining open issues.
 ```
 
 Each Kaola-Workflow Codex skill also embeds a `## Goal Contract` section
 that holds a phase-level continuation rule. That contract is independent
 of the platform `/goal` and applies even when `/goal` is not active —
-invoking a skill alone (for example, `Use the kaola-workflow-next skill
+invoking a skill alone (for example, `Use the workflow-next skill
 to finish issue #42.`) is enough to keep it working until its phase
 objective, evidence, and `workflow-state.md` next pointer are complete.
 
@@ -638,11 +638,11 @@ the skill's embedded `## Goal Contract` still drives continuation):
 ```text
 # Terminal A
 cd ~/Workspace/Kaola-Workflow
-/goal use the kaola-workflow-next skill to finish issue #42.
+/goal use the workflow-next skill to finish issue #42.
 
 # Terminal B
 cd ~/Workspace/Kaola-Workflow
-/goal use the kaola-workflow-next skill to finish issue #43.
+/goal use the workflow-next skill to finish issue #43.
 ```
 
 When `KAOLA_WORKTREE_NATIVE=1`, each active issue runs in a sibling
