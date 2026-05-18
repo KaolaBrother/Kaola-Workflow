@@ -7,7 +7,7 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 
 | Issue | Title | Status | Workflow Project | Next Step |
 |-------|-------|--------|------------------|-----------|
-| #77 | Bug: Codex workflow skills silently fall back instead of enforcing subagent delegation | open | issue-77 | ready |
+| none | No active work | — | — | — |
 
 ## Rules
 
