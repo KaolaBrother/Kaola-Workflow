@@ -368,11 +368,6 @@ function cmdStartup() {
   const args = parseArgs(process.argv.slice(3));
   const target = args.targetIssue || args.issue;
   if (!target) {
-    const active = readActiveFolders(root);
-    if (active.length === 1) {
-      output({ verdict: 'owned', claim: 'owned', project: active[0].project, issue: active[0].issue_number, selected_project: active[0].project, selected_issue: active[0].issue_number, worktree_path: active[0].worktree_path || '' });
-      return;
-    }
     output({ verdict: 'no_target', claim: 'none', project: null, issue: null }, 1);
     return;
   }
@@ -382,7 +377,8 @@ function cmdStartup() {
     claim: result.status === 'acquired' ? 'acquired' : (result.status === 'owned' ? 'owned' : 'none'),
     selected_project: result.project || null,
     selected_issue: result.issue || null,
-    target_source: 'user_directed'
+    target_source: 'user_directed',
+    worktree_path: result.folder ? (result.folder.worktree_path || '') : (result.worktree_path || '')
   }, result), result.status === 'acquired' || result.status === 'owned' ? 0 : 1);
 }
 

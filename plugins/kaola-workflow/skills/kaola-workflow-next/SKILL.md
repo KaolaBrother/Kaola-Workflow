@@ -63,7 +63,12 @@ do not auto-pick; the agent owns this decision.
 2. Fetch GitHub issue list if available (`gh issue list --limit 100 --json number,title,state,labels`).
 3. Check active folders via `node "$claim_script" status 2>/dev/null`.
 4. Apply sequencing judgment: prefer foundational or dependency-unblocked issues.
-5. If exactly one active folder is already present (startup returns `verdict: owned`), skip steps 1-4.
+5. If exactly one active folder is already present, read its issue number from `node "$claim_script" status` (`active[0].issue_number`) and set `KAOLA_TARGET_ISSUE` to that value before calling startup. The script will return `verdict: owned`; proceed to routing. Do not skip the startup call.
+
+   ```bash
+   STATUS_OUT="$(node "$claim_script" status 2>/dev/null)"
+   KAOLA_TARGET_ISSUE="$(node -e "try{const j=JSON.parse(process.argv[1]);process.stdout.write(j.count===1?String(j.active[0].issue_number):'')}catch(e){}" "$STATUS_OUT")"
+   ```
 6. State the selected issue number before calling startup.
 
 Set `KAOLA_TARGET_ISSUE` to the chosen issue number before calling startup.

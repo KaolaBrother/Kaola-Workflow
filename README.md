@@ -481,7 +481,14 @@ The startup script validates the agent's choice:
 - Issue must be green or yellow (not blocked or red)
 - No duplicate active folder for the same issue
 
-If the agent does not provide an explicit target issue, startup refuses with `verdict: no_target`.
+If the agent does not provide an explicit target issue, startup refuses with `verdict: no_target` — even when exactly one active folder is present. When resuming a sole active folder, the agent must:
+
+```bash
+STATUS_OUT="$(node "$CLAIM_JS" status 2>/dev/null)"
+KAOLA_TARGET_ISSUE="$(node -e "try{const j=JSON.parse(process.argv[1]);process.stdout.write(j.count===1?String(j.active[0].issue_number):'')}catch(e){}" "$STATUS_OUT")"
+```
+
+Then call `/workflow-next` with `KAOLA_TARGET_ISSUE` set. Startup will return `verdict: owned`.
 
 
 ### PR sink

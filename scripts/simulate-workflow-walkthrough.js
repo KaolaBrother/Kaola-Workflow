@@ -813,6 +813,71 @@ function testSinkMergeFromLinkedWorktree() {
   }
 }
 
+function testNoTargetZeroActive() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-no-target-zero-'));
+  try {
+    const result = runNode(claimScript, ['startup'], tmp);
+    assert(result.status === 1, 'no-target + zero active should exit 1, got ' + result.status);
+    const out = JSON.parse(result.stdout);
+    assert(out.verdict === 'no_target', 'expected verdict: no_target, got ' + out.verdict);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testNoTargetOneActive() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-no-target-one-'));
+  try {
+    plantActiveFolder(tmp, 'issue-600', 600, null);
+    const result = runNode(claimScript, ['startup'], tmp);
+    assert(result.status === 1, 'no-target + one active should exit 1, got ' + result.status);
+    const out = JSON.parse(result.stdout);
+    assert(out.verdict === 'no_target', 'expected verdict: no_target, got ' + out.verdict);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testNoTargetMultipleActive() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-no-target-multi-'));
+  try {
+    plantActiveFolder(tmp, 'issue-601', 601, null);
+    plantActiveFolder(tmp, 'issue-602', 602, null);
+    const result = runNode(claimScript, ['startup'], tmp);
+    assert(result.status === 1, 'no-target + multiple active should exit 1, got ' + result.status);
+    const out = JSON.parse(result.stdout);
+    assert(out.verdict === 'no_target', 'expected verdict: no_target, got ' + out.verdict);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testSoleActiveRoundTrip() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sole-active-roundtrip-'));
+  try {
+    plantActiveFolder(tmp, 'issue-603', 603, null);
+    // Add worktree_path to the workflow-state.md Sink block
+    const stateFile = path.join(tmp, 'kaola-workflow', 'issue-603', 'workflow-state.md');
+    const stateContent = fs.readFileSync(stateFile, 'utf8');
+    fs.writeFileSync(stateFile, stateContent + 'worktree_path: ' + path.join(tmp, 'issue-603') + '\n');
+
+    // Step 1: read status → derive issue number
+    const statusOut = json(runNode(claimScript, ['status'], tmp));
+    assert(statusOut.count === 1, 'status should show count 1, got ' + statusOut.count);
+    assert(statusOut.active.length === 1, 'status should have 1 active folder');
+    const issueNumber = statusOut.active[0].issue_number;
+    assert(issueNumber === 603, 'active issue_number should be 603, got ' + issueNumber);
+
+    // Step 2: startup --target-issue N → owned + worktree_path non-empty
+    const startupOut = json(runNode(claimScript, ['startup', '--target-issue', String(issueNumber)], tmp));
+    assert(startupOut.verdict === 'owned', 'startup should return verdict: owned, got ' + startupOut.verdict);
+    assert(typeof startupOut.worktree_path === 'string' && startupOut.worktree_path.length > 0,
+      'startup owned result must have non-empty worktree_path, got: ' + JSON.stringify(startupOut.worktree_path));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 function testStatusShowsClosedIssueDrift() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-status-drift-'));
   try {
@@ -869,6 +934,10 @@ async function main() {
     testReleaseFromLinkedWorktreeCleansMainCopy();
     testSinkMergeFromLinkedWorktree();
     testStatusShowsClosedIssueDrift();
+    testNoTargetZeroActive();
+    testNoTargetOneActive();
+    testNoTargetMultipleActive();
+    testSoleActiveRoundTrip();
     console.log('Workflow walkthrough simulation passed');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });

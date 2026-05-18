@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Fixed — Startup Contract: Remove Sole-Active Auto-Select (issue #81)
+
+- **`scripts/kaola-workflow-claim.js` `cmdStartup`**: removed auto-select branch that returned `verdict: owned` when exactly one active folder existed and no `--target-issue` was supplied. All no-target calls now return `verdict: no_target` (exit 1), forcing agents to read status, derive the issue number, and supply it explicitly.
+- **Agents now own startup issue selection**: `commands/workflow-next.md` Step 0 and equivalent command/skill docs expanded with bash one-liner to extract issue number from `node CLAIM_JS status` and set `KAOLA_TARGET_ISSUE` before the startup call. The one-liner uses `jq`-style JSON processing in node to find issue number when exactly one active folder exists.
+- **Four regression tests added** (`scripts/simulate-workflow-walkthrough.js`): 
+  - No target, zero active folders → exit 1
+  - No target, one active folder → exit 1 (was: auto-select, exit 0)
+  - No target, multiple active folders → exit 1
+  - Sole-active round-trip: agent reads status, derives issue, re-runs startup with target → exit 0, verdict acquired/owned
+- **GitHub and GitLab editions**: same changes applied to both `plugins/kaola-workflow-gitlab/` variant; agent-side sole-active resume bash one-liner works in both skill contexts.
+- **Why**: Startup is a script-level transaction that must not silently guess; the agent decides which issue to work on. This contract aligns with issue #44 (explicit-target validation) and prevents silent misrouting when multiple active folders exist from prior parallel sessions.
+
 ### Fixed — workflow-next orphan on Git freshness block (issue #80)
 
 - **`commands/workflow-next.md`**: the `### Git Freshness Block Recovery` section now extracts `KAOLA_PROJECT` and `KAOLA_CLAIM` from `$STARTUP_OUT` and runs `node "$CLAIM_JS" release --project "$KAOLA_PROJECT" --reason git-freshness-block` when the block cannot be resolved by fast-forward. Guard is `[ "$KAOLA_CLAIM" = "acquired" ]` so prior-session (`owned`) folders are never released.
