@@ -230,6 +230,136 @@ async function testRoadmapInitIssueConcurrentExclusive(tmp) {
   assert(read(path.join(workflowDir, '.roadmap', 'issue-997.md')).includes('workflow_project: exclusive-init-fixture'), 'exclusive source file should contain the requested content');
 }
 
+// ---------------------------------------------------------------------------
+// Issue #64 classifier behavior — folder-based overlap, closed-issue residue,
+// status:released exclusion. Each scenario uses its own mkdtempSync to keep
+// state isolated from the other tests in this file.
+// ---------------------------------------------------------------------------
+
+const classifierScript = path.join(repoRoot, 'scripts', 'kaola-workflow-classifier.js');
+
+function plantActiveFolder(root, project, issueNumber, phase3Body, status) {
+  const dir = path.join(root, 'kaola-workflow', project);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'workflow-state.md'), [
+    '# Kaola-Workflow State', '',
+    '## Project',
+    'name: ' + project,
+    'status: ' + (status || 'active'),
+    '',
+    '## Sink',
+    'branch: workflow/issue-' + issueNumber,
+    'issue_number: ' + issueNumber,
+    'sink: merge',
+    ''
+  ].join('\n'));
+  if (phase3Body != null) {
+    fs.writeFileSync(path.join(dir, 'phase3-plan.md'), phase3Body);
+  }
+}
+
+function plantRoadmapIssue(root, issueNumber, body) {
+  const dir = path.join(root, 'kaola-workflow', '.roadmap');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'issue-' + issueNumber + '.md'), [
+    'issue: #' + issueNumber,
+    'title: classifier test issue ' + issueNumber,
+    'status: open',
+    'workflow_project: —',
+    'next_step: ready',
+    body,
+    ''
+  ].join('\n'));
+}
+
+function runClassifierOffline(tmp, issueNumber) {
+  const result = spawnSync(process.execPath, [classifierScript, 'classify', '--issue', String(issueNumber)], {
+    cwd: tmp, encoding: 'utf8',
+    env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }
+  });
+  assert(result.status === 0, 'classifier exit 0 expected, got ' + result.status + '\nstderr: ' + result.stderr);
+  return JSON.parse(result.stdout.trim());
+}
+
+function testClassifierFolderOverlapRed() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-classifier-red-'));
+  try {
+    plantActiveFolder(tmp, 'active-project-k', 70, '# Phase 3\nFiles: scripts/kaola-workflow-claim.js\n');
+    plantRoadmapIssue(tmp, 71, 'body: also touches scripts/kaola-workflow-claim.js');
+    const result = runClassifierOffline(tmp, 71);
+    assert(result.verdict === 'red',
+      'folder-based exact-file overlap must yield red, got ' + result.verdict);
+    assert(result.reasoning && result.reasoning.includes('exact file path'),
+      'red reasoning must mention exact file path; got: ' + result.reasoning);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testClassifierFolderOverlapYellow() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-classifier-yellow-'));
+  try {
+    plantActiveFolder(tmp, 'active-project-l', 72, '# Phase 3\nFiles: scripts/kaola-workflow-claim.js\n');
+    plantRoadmapIssue(tmp, 73, 'body: candidate touches scripts/new-helper.js');
+    const result = runClassifierOffline(tmp, 73);
+    assert(result.verdict === 'yellow',
+      'shared-infra area overlap must yield yellow, got ' + result.verdict);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testClassifierClosedIssueResidueIgnored() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-classifier-closed-'));
+  try {
+    plantActiveFolder(tmp, 'closed-residue', 80, '# Phase 3\nFiles: commands/something.md\n');
+    plantRoadmapIssue(tmp, 81, 'body: candidate touches commands/something.md');
+    // gh shim: issue 80 is CLOSED → readActiveFolders must skip its folder.
+    const binDir = path.join(tmp, 'bin');
+    fs.mkdirSync(binDir, { recursive: true });
+    const ghShim = path.join(binDir, 'gh');
+    fs.writeFileSync(ghShim, [
+      '#!/bin/sh',
+      'ARGS="$@"',
+      'case "$ARGS" in',
+      '  *"issue view 80"*)',
+      '    echo \'{"state":"closed"}\' ;;',
+      '  *"issue view 81"*)',
+      '    echo \'{"number":81,"title":"unrelated","body":"commands/something.md","labels":[],"state":"open"}\' ;;',
+      '  *"repo view"*)',
+      '    echo \'{"owner":{"login":"test"},"name":"repo"}\' ;;',
+      '  *)',
+      '    echo \'[]\' ;;',
+      'esac',
+      ''
+    ].join('\n'));
+    fs.chmodSync(ghShim, 0o755);
+    const result = spawnSync(process.execPath, [classifierScript, 'classify', '--issue', '81'], {
+      cwd: tmp, encoding: 'utf8',
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', PATH: binDir + path.delimiter + (process.env.PATH || '') }
+    });
+    assert(result.status === 0, 'classifier exit 0 expected, got ' + result.status + '\nstderr: ' + result.stderr);
+    const parsed = JSON.parse(result.stdout.trim());
+    assert(parsed.verdict === 'green',
+      'closed-issue folder must be ignored as overlap source; expected green, got ' + parsed.verdict);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testClassifierReleasedFolderExcluded() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-classifier-released-'));
+  try {
+    plantActiveFolder(tmp, 'released-project', 92, '# Phase 3\nFiles: commands/something.md\n', 'released');
+    plantRoadmapIssue(tmp, 93, 'body: candidate touches commands/something.md');
+    const result = runClassifierOffline(tmp, 93);
+    assert(result.verdict === 'green',
+      'released-status folder must be excluded from overlap; expected green, got ' + result.verdict);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 async function main() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-active-folders-'));
   try {
@@ -240,6 +370,10 @@ async function main() {
     testRoadmapGenerateMissingSourceGuard(tmp);
     testRoadmapGenerateAtomicReplace(tmp);
     await testRoadmapInitIssueConcurrentExclusive(tmp);
+    testClassifierFolderOverlapRed();
+    testClassifierFolderOverlapYellow();
+    testClassifierClosedIssueResidueIgnored();
+    testClassifierReleasedFolderExcluded();
     console.log('Workflow walkthrough simulation passed');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
