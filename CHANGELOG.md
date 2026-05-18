@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Fixed — Sink-PR Metadata Commit + Clean Worktree (issue #82)
+
+- **`scripts/kaola-workflow-sink-pr.js` + GitLab mirror**: PR sink now creates a deliberate metadata follow-up commit (`chore: record PR metadata for {project}`) after PR creation. This writes `pr_url` and `pr_number` to the workflow-state.md `## Sink` block and leaves the worktree clean. The pattern applies to both ONLINE and OFFLINE paths (OFFLINE writes `OFFLINE_PLACEHOLDER` commit instead). No user interaction or branch manipulation required — sink-pr handles the metadata internally.
+- **`plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-sink-mr.js`**: Same metadata commit pattern applied to GitLab MR sink. New `opts.skipMetadataCommit` flag for testing/advanced scenarios. Added branch validation before metadata write to catch missing branches early.
+- **Dead try/catch in OFFLINE path**: Fixed exception handling in sink-pr OFFLINE code path where success returns were missing, improving reliability during offline operation.
+- **Phase 6 guardrail update** (`commands/kaola-workflow-phase6.md` line 76): Amended "Do not create tracked file edits after the final commit" rule to explicitly permit the sanctioned PR/MR metadata follow-up commit produced automatically by `sink-pr.js` or `sink-mr.js`. No other post-final commits are permitted.
+- **Phase 6 Step 8b clarity** (`commands/kaola-workflow-phase6.md`): Documented that `sink-pr` writes PR metadata via automatic metadata follow-up commit, and the worktree remains clean. `watch-pr` archives the folder when the PR merges or closes (on the next `/workflow-next` startup).
+- **Exit code descriptions**: Updated phase6.md exit-code documentation to reflect the new metadata commit behavior and timing.
+- **Regression test**: Added `testSinkPrLeavesCleanWorktree` to `scripts/simulate-workflow-walkthrough.js` to validate worktree cleanliness after PR sink metadata commit.
+- **Applied to GitHub and GitLab editions**: Fix included in `scripts/kaola-workflow-sink-pr.js`, `plugins/kaola-workflow/scripts/kaola-workflow-sink-pr.js` (byte-identical mirror), and `plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-sink-mr.js` (ported with helpers).
+
 ### Fixed — Startup Contract: Remove Sole-Active Auto-Select (issue #81)
 
 - **`scripts/kaola-workflow-claim.js` `cmdStartup`**: removed auto-select branch that returned `verdict: owned` when exactly one active folder existed and no `--target-issue` was supplied. All no-target calls now return `verdict: no_target` (exit 1), forcing agents to read status, derive the issue number, and supply it explicitly.

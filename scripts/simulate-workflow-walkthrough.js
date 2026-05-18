@@ -11,6 +11,7 @@ const claimScript = path.join(repoRoot, 'scripts', 'kaola-workflow-claim.js');
 const repairScript = path.join(repoRoot, 'scripts', 'kaola-workflow-repair-state.js');
 const roadmapScript = path.join(repoRoot, 'scripts', 'kaola-workflow-roadmap.js');
 const sinkMergeScript = path.join(repoRoot, 'scripts', 'kaola-workflow-sink-merge.js');
+const sinkPrScript = path.join(repoRoot, 'scripts', 'kaola-workflow-sink-pr.js');
 const hookScript = path.join(repoRoot, 'hooks', 'kaola-workflow-pre-commit.sh');
 
 function assert(condition, message) {
@@ -909,6 +910,60 @@ function testStatusShowsClosedIssueDrift() {
   }
 }
 
+async function testSinkPrLeavesCleanWorktree() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-pr-clean-'));
+  try {
+    // Init git repo with user config
+    spawnSync('git', ['init'], { cwd: tmp, stdio: 'pipe' });
+    spawnSync('git', ['-C', tmp, 'config', 'user.email', 'test@example.com'], { stdio: 'pipe' });
+    spawnSync('git', ['-C', tmp, 'config', 'user.name', 'Test User'], { stdio: 'pipe' });
+    // Write workflow state and summary
+    const kwDir = path.join(tmp, 'kaola-workflow', 'issue-82');
+    fs.mkdirSync(kwDir, { recursive: true });
+    fs.writeFileSync(path.join(kwDir, 'workflow-state.md'), [
+      '# Kaola-Workflow State',
+      '## Project',
+      'name: issue-82',
+      'status: active',
+      '## Sink',
+      'branch: workflow/issue-82',
+      'issue_number: 82',
+      'sink: pr',
+    ].join('\n') + '\n');
+    fs.writeFileSync(path.join(kwDir, 'phase6-summary.md'), '# Phase 6 Summary\n');
+    // Initial commit so HEAD exists and worktree is clean
+    spawnSync('git', ['-C', tmp, 'add', '-A'], { stdio: 'pipe' });
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'initial'], { stdio: 'pipe' });
+    // Run sink-pr in OFFLINE mode
+    const result = spawnSync(process.execPath, [
+      sinkPrScript,
+      '--branch', 'workflow/issue-82',
+      '--project', 'issue-82',
+      '--issue', '82',
+    ], {
+      cwd: tmp,
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' },
+      stdio: 'pipe',
+    });
+    assert(result.status === 0,
+      'sink-pr offline should exit 0, got ' + result.status + '. stderr: ' + result.stderr);
+    // Worktree must be clean (no tracked modifications)
+    const status = spawnSync('git', ['-C', tmp, 'status', '--porcelain', '--untracked-files=no'],
+      { stdio: 'pipe' });
+    assert(status.stdout.toString().trim() === '',
+      'worktree must be clean after sink-pr. got: ' + JSON.stringify(status.stdout.toString()));
+    // workflow-state.md must contain pr_url
+    const stateContents = fs.readFileSync(path.join(kwDir, 'workflow-state.md'), 'utf8');
+    assert(stateContents.includes('pr_url:'), 'workflow-state.md must record pr_url');
+    // Exactly 2 commits: initial + metadata follow-up
+    const revCount = spawnSync('git', ['-C', tmp, 'rev-list', '--count', 'HEAD'], { stdio: 'pipe' });
+    assert(revCount.stdout.toString().trim() === '2',
+      'expected 2 commits (initial + metadata), got: ' + revCount.stdout.toString().trim());
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 async function main() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-active-folders-'));
   try {
@@ -938,6 +993,7 @@ async function main() {
     testNoTargetOneActive();
     testNoTargetMultipleActive();
     testSoleActiveRoundTrip();
+    await testSinkPrLeavesCleanWorktree();
     console.log('Workflow walkthrough simulation passed');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });

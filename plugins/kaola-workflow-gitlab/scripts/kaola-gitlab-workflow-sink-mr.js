@@ -3,7 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execFileSync } = require('child_process');
+const { execFileSync, spawnSync } = require('child_process');
 const forge = require('./kaola-gitlab-forge');
 
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
@@ -88,7 +88,16 @@ function findMergeRequestForBranch(branch) {
 
 function ensureMergeRequest(args, opts) {
   const options = opts || {};
-  assert(args.branch && args.branch !== 'TBD', '--branch is invalid or TBD');
+  // Default true when gitExec stub or skipPush — both indicate test context without real git repo.
+  const skipMetadataCommit = options.skipMetadataCommit !== undefined
+    ? options.skipMetadataCommit
+    : !!(options.gitExec || options.skipPush);
+  assert(
+    args.branch && args.branch !== 'TBD' &&
+    !args.branch.startsWith('-') && !args.branch.includes('\0') &&
+    args.branch !== '.' && args.branch !== '..',
+    '--branch is invalid or TBD'
+  );
   assert(args.project && isSafeName(args.project), '--project must be a safe folder name');
   if (args.issue != null) assert(Number.isFinite(args.issue) && args.issue > 0, '--issue must be a positive integer');
 
@@ -111,6 +120,34 @@ function ensureMergeRequest(args, opts) {
   const summaryFile = path.join(root, 'kaola-workflow', args.project, 'phase6-summary.md');
   updateStateSinkBlock(stateFile, mr.mr_url || mr.web_url, mr.mr_iid);
   appendSummary(summaryFile, mr.mr_url || mr.web_url, mr.mr_iid);
+  if (!skipMetadataCommit) {
+    const relState = path.relative(root, stateFile);
+    const relSummary = path.relative(root, summaryFile);
+    spawnSync('git', ['-C', root, 'add', relState, relSummary], { stdio: 'pipe' });
+    const diffResult = spawnSync('git', ['-C', root, 'diff', '--cached', '--quiet'], { stdio: 'pipe' });
+    if (diffResult.status !== 0) {
+      const commitResult = spawnSync('git', ['-C', root, 'commit', '-m',
+        'chore: record MR metadata for ' + args.project], { stdio: 'pipe' });
+      if (commitResult.status !== 0) {
+        const mrUrl = mr.mr_url || mr.web_url;
+        throw new Error(
+          'MR created at ' + mrUrl + ' but metadata commit failed.\n' +
+          'Manual recovery: git add ' + relState + ' ' + relSummary +
+          " && git commit -m 'chore: record MR metadata for " + args.project + "'" +
+          ' && git push origin ' + args.branch
+        );
+      }
+      if (!options.skipPush) {
+        const pushResult = spawnSync('git', ['-C', root, 'push', 'origin', args.branch], { stdio: 'pipe' });
+        if (pushResult.status !== 0) {
+          throw new Error(
+            'MR created at ' + (mr.mr_url || mr.web_url) + ' but metadata push failed.\n' +
+            'Manual recovery: git push origin ' + args.branch
+          );
+        }
+      }
+    }
+  }
   return mr;
 }
 

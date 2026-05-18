@@ -2,7 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { execFileSync } = require('child_process');
+const { execFileSync, spawnSync } = require('child_process');
 
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
 const CONFIG_PATH = path.join(os.homedir(), '.config', 'kaola-workflow', 'config.json');
@@ -117,6 +117,19 @@ function main() {
     const prNumber = 0;
     updateStateSinkBlock(stateFile, prUrl, prNumber);
     appendSummary(summaryFile, prUrl, prNumber);
+    // Metadata commit in OFFLINE mode (no push — no remote)
+    const relState = path.relative(root, stateFile);
+    const relSummary = path.relative(root, summaryFile);
+    spawnSync('git', ['-C', root, 'add', relState, relSummary], { stdio: 'pipe' });
+    const diffResult = spawnSync('git', ['-C', root, 'diff', '--cached', '--quiet'], { stdio: 'pipe' });
+    if (diffResult.status !== 0) {
+      const commitResult = spawnSync('git', ['-C', root, 'commit', '-m',
+        'chore: record PR metadata for ' + args.project], { stdio: 'pipe' });
+      if (commitResult.status !== 0) {
+        process.stderr.write('[offline] metadata commit skipped: ' +
+          (commitResult.stderr ? commitResult.stderr.toString().trim() : 'unknown error') + '\n');
+      }
+    }
     return;
   }
 
@@ -148,6 +161,31 @@ function main() {
 
   // Step 8 — append to phase6-summary.md
   appendSummary(summaryFile, prUrl, prNumber);
+
+  // Metadata commit — deliberate follow-up commit for clean worktree
+  const relState = path.relative(root, stateFile);
+  const relSummary = path.relative(root, summaryFile);
+  spawnSync('git', ['-C', root, 'add', relState, relSummary], { stdio: 'pipe' });
+  const diffResult = spawnSync('git', ['-C', root, 'diff', '--cached', '--quiet'], { stdio: 'pipe' });
+  if (diffResult.status !== 0) {
+    const commitResult = spawnSync('git', ['-C', root, 'commit', '-m',
+      'chore: record PR metadata for ' + args.project], { stdio: 'pipe' });
+    if (commitResult.status !== 0) {
+      throw new Error(
+        'PR created at ' + prUrl + ' but metadata commit failed.\n' +
+        'Manual recovery: git add ' + relState + ' ' + relSummary +
+        " && git commit -m 'chore: record PR metadata for " + args.project + "'" +
+        ' && git push origin ' + args.branch
+      );
+    }
+    const pushResult = spawnSync('git', ['-C', root, 'push', 'origin', args.branch], { stdio: 'pipe' });
+    if (pushResult.status !== 0) {
+      throw new Error(
+        'PR created at ' + prUrl + ' but metadata push failed.\n' +
+        'Manual recovery: git push origin ' + args.branch
+      );
+    }
+  }
 
   // Step 9 — optional auto-merge
   if (config.pr_auto_merge === true) {

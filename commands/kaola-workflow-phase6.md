@@ -73,7 +73,9 @@ If ambiguous, stop and ask.
 - Do not close a GitHub issue until acceptance criteria pass.
 - Do not archive incomplete workflow folders.
 - Do not stage unrelated user changes.
-- Do not create tracked file edits after the final commit.
+- Do not create tracked file edits after the final commit, except the sanctioned
+  PR/MR metadata follow-up commit produced automatically by `sink-pr.js` or
+  `sink-mr.js`. No other post-final commits are permitted.
 - Commit and push only after documentation, issue updates, roadmap refresh,
   archive movement, and final metadata are complete.
 - If `/prp-commit` is unavailable, stage the approved implementation, docs, and
@@ -486,7 +488,7 @@ fi
 
 ## Step 8b - Finalize (Archive + Status Close)
 
-This step runs **only when `sink: merge`**. For `sink: pr`, skip to Step 8 — the active folder must remain open so `sink-pr.js` can write `pr_url` and `watch-pr` can archive the folder when the PR merges or closes.
+This step runs **only when `sink: merge`**. For `sink: pr`, skip to Step 8 — the active folder must remain open. `sink-pr.js` (Step 9) writes `pr_url` into the active folder and creates a deliberate metadata follow-up commit so the worktree is clean. `watch-pr` archives the folder when the PR merges or closes.
 
 Before archive, capture sink metadata from the active `workflow-state.md`. Do
 not read `kaola-workflow/{project}/workflow-state.md` again after this point on
@@ -518,7 +520,7 @@ fi
 
 When it runs, `cmdFinalize` atomically writes `status: closed` + `step: complete` to `workflow-state.md` and renames `kaola-workflow/{project}/` → `kaola-workflow/archive/{project}/` in the linked worktree. The rename is included in the Step 8 commit via git rename detection.
 
-If `SINK_KIND` is `pr`: skip this step. Proceed to Step 8 (commit). The active folder remains open. `sink-pr.js` (Step 9) writes the PR URL into the active folder. `watch-pr` (on the next `/workflow-next` startup) detects the merged or closed PR and archives the folder automatically.
+If `SINK_KIND` is `pr`: skip this step. Proceed to Step 8 (commit). The active folder remains open. `sink-pr.js` (Step 9) writes the PR URL into the active folder and then immediately creates a deliberate metadata follow-up commit (`chore: record PR metadata for {project}`) so the worktree is clean after sink. `watch-pr` (on the next `/workflow-next` startup) detects the merged or closed PR and archives the folder automatically.
 
 ## Step 8 - Commit Gate
 
@@ -604,8 +606,8 @@ cd "$_MAIN_ROOT" 2>/dev/null || true
 - Exit 3: merge-impossible (branch protection, non-fast-forward, permission denied). Receipt written to `.cache/sink-fallback.json`. Phase 6 pivots to PR creation automatically.
 
 `sink-pr.js` exit codes:
-- Exit 0: branch pushed, PR opened, URL recorded in the `## Sink` block. If `pr_auto_merge: true` in config, auto-merge was requested.
-- Exit 1: fatal error (push failed or `gh pr create` failed). Error printed to stderr.
+- Exit 0: branch pushed, PR opened, URL recorded in the `## Sink` block and committed in a metadata follow-up commit. If `pr_auto_merge: true` in config, auto-merge was requested.
+- Exit 1: fatal error (push failed, `gh pr create` failed, or metadata commit/push failed). PR URL and manual recovery instructions printed to stderr when PR was already created.
 
 After `sink-pr.js` exits 0, the active folder remains open. It is archived automatically when `watch-pr` detects the PR is MERGED or CLOSED on the next `/workflow-next` startup.
 

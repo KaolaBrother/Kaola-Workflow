@@ -73,7 +73,9 @@ If ambiguous, stop and ask.
 - Do not close a GitLab issue until acceptance criteria pass.
 - Do not archive incomplete workflow folders.
 - Do not stage unrelated user changes.
-- Do not create tracked file edits after the final commit.
+- Do not create tracked file edits after the final commit, except the sanctioned
+  PR/MR metadata follow-up commit produced automatically by `sink-pr.js` or
+  `sink-mr.js`. No other post-final commits are permitted.
 - Commit and push only after documentation, issue updates, roadmap refresh,
   archive movement, and final metadata are complete.
 - If `/prp-commit` is unavailable, stage the approved implementation, docs, and
@@ -487,8 +489,10 @@ fi
 ## Step 8b - Finalize (Archive + Status Close)
 
 This step runs **only when `sink: merge`**. For `sink: mr` or `sink: pr`, skip
-to Step 8 — the active folder must remain open so `sink-mr.js` can write
-`mr_url` and `watch-mr` can archive the folder when the MR merges or closes.
+to Step 8 — the active folder must remain open. `sink-mr.js` (Step 9) writes
+`mr_url` into the active folder and creates a deliberate metadata follow-up
+commit so the worktree is clean. `watch-mr` archives the folder when the MR
+merges or closes.
 
 Before archive, capture sink metadata from the active `workflow-state.md`. Do
 not read `kaola-workflow/{project}/workflow-state.md` again after this point on
@@ -520,8 +524,10 @@ included in the Step 8 commit via git rename detection.
 
 If `SINK_KIND` is `mr` or `pr`: skip this archive step. Proceed to Step 8
 (commit). The active folder remains open. `sink-mr.js` (Step 9) writes the MR
-URL into the active folder. `watch-mr` (on the next `/workflow-next` startup)
-detects the merged or closed MR and archives the folder automatically.
+URL into the active folder and then immediately creates a deliberate metadata
+follow-up commit (`chore: record MR metadata for {project}`) so the worktree
+is clean after sink. `watch-mr` (on the next `/workflow-next` startup) detects
+the merged or closed MR and archives the folder automatically.
 
 ## Step 8 - Commit Gate
 
@@ -607,8 +613,8 @@ cd "$_MAIN_ROOT" 2>/dev/null || true
 - Exit 3: merge-impossible (branch protection, non-fast-forward, permission denied). Receipt written to `.cache/sink-fallback.json`. Phase 6 pivots to MR creation automatically.
 
 `sink-mr.js` exit codes:
-- Exit 0: branch pushed, MR opened, URL recorded in the `## Sink` block. If `mr_auto_merge: true` in config, auto-merge was requested.
-- Exit 1: fatal error (push failed or `glab mr create` failed). Error printed to stderr.
+- Exit 0: branch pushed, MR opened, URL recorded in the `## Sink` block and committed in a metadata follow-up commit. If `mr_auto_merge: true` in config, auto-merge was requested.
+- Exit 1: fatal error (push failed, `glab mr create` failed, or metadata commit/push failed). MR URL and manual recovery instructions printed to stderr when MR was already created.
 
 After `sink-mr.js` exits 0, the active folder remains open. It is archived automatically when `watch-mr` detects the MR is MERGED or CLOSED on the next `/workflow-next` startup.
 
