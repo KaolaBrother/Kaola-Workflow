@@ -26,6 +26,12 @@ function assertNotIncludes(file, needle) {
   assert(!read(file).includes(needle), file + ' must not include: ' + needle);
 }
 
+function assertConcept(file, concept, terms) {
+  const content = read(file).toLowerCase();
+  const missing = terms.filter(term => !content.includes(term.toLowerCase()));
+  assert(missing.length === 0, file + ' must document ' + concept + '; missing: ' + missing.join(', '));
+}
+
 function assertBefore(file, first, second) {
   const content = read(file);
   assert(content.indexOf(first) >= 0, file + ' must include: ' + first);
@@ -114,9 +120,55 @@ assertIncludes('hooks/kaola-workflow-pre-commit.sh', 'multiple kaola-workflow pr
 assertIncludes('install.sh', 'kaola-workflow-active-folders.js');
 assertNotIncludes('install.sh', 'kaola-workflow-session-env.js');
 
+assert(exists('docs/workflow-state-contract.md'), 'detailed workflow state contract doc is missing');
+assert(read('CLAUDE.md').split(/\r?\n/).length < 200, 'CLAUDE.md must stay below the 200-line target');
+assertConcept('CLAUDE.md', 'compact durable state contract', [
+  'kaola-workflow/.roadmap/issue-*.md',
+  'do not purge',
+  'kaola-workflow/{project}/',
+  'workflow-state.md',
+  'fast-summary.md',
+  '.cache/'
+]);
+assertConcept('commands/workflow-init.md', 'generated CLAUDE durable state contract', [
+  'kaola-workflow/.roadmap/issue-*.md',
+  'do not purge',
+  'kaola-workflow/{project}/',
+  'workflow-state.md',
+  'fast-summary.md',
+  '.cache/'
+]);
+assertConcept('docs/workflow-state-contract.md', 'durable sources and generated mirrors', [
+  'durable sources',
+  'kaola-workflow/.roadmap/issue-*.md',
+  'workflow-state.md',
+  'generated mirrors',
+  'fast-summary.md'
+]);
+assertConcept('docs/workflow-state-contract.md', 'legacy coordination as transitional only', [
+  'legacy or transitional',
+  '.locks/',
+  '.sessions/',
+  '.tickers/',
+  'not document legacy coordination folders as permanent'
+]);
+assertConcept('scripts/kaola-workflow-roadmap.js', 'missing roadmap source safeguard', [
+  'guardAgainstMissingRoadmapSource',
+  'non-empty generated ROADMAP.md',
+  'kaola-workflow/.roadmap is missing'
+]);
+assertConcept('scripts/simulate-workflow-walkthrough.js', 'roadmap safeguard behavior', [
+  'testRoadmapGenerateMissingSourceGuard',
+  'preserve existing active roadmap rows'
+]);
 assertIncludes('README.md', 'Active Folder Coordination');
 assertIncludes('README.md', 'Parallel Active Work');
 assertIncludes('README.md', 'No lease/session layer remains.');
+assertConcept('README.md', 'pointer to detailed state contract', [
+  'docs/workflow-state-contract.md',
+  'durable-state map',
+  'active artifacts include'
+]);
 assertIncludes('CLAUDE.md', 'active folders');
 
 assertIncludes('commands/kaola-workflow-phase6.md', 'kaola-workflow-sink-merge.js');

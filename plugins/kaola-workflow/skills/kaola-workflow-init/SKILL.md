@@ -64,6 +64,10 @@ Add a concise `## Kaola-Workflow` section if none exists:
 - Store active workflow artifacts under `kaola-workflow/{project}/`.
 - Keep `workflow-state.md` current during active work.
 - Use GitHub issues as source of truth when available; keep `kaola-workflow/ROADMAP.md` as the local active-work mirror.
+- Treat `kaola-workflow/.roadmap/issue-*.md` as the durable local roadmap source; `kaola-workflow/ROADMAP.md` is generated from it and should not be hand-edited.
+- Do not purge `kaola-workflow/.roadmap/`; closure removes only the closed issue source file.
+- Active work lives in `kaola-workflow/{project}/` until archived or safely discarded.
+- Active artifacts include `workflow-state.md`, phase files, optional `fast-summary.md`, and `.cache/` evidence.
 - Preserve user changes and avoid destructive Git operations without explicit approval.
 - Verify relevant tests before claiming completion.
 - Kaola-Workflow agent profiles live in `.codex/agents/kaola-workflow/` and are

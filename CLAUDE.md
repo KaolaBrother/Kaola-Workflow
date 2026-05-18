@@ -3,6 +3,13 @@
 ## Project Overview
 Kaola-Workflow is a 6-phase workflow system built on top of GitHub issues and Claude Code. The core scripts live in `scripts/`. Workflow state is tracked per-project under `kaola-workflow/{project}/`.
 
+## Durable State Contract
+
+- `kaola-workflow/ROADMAP.md` is generated from `kaola-workflow/.roadmap/issue-*.md`; do not hand-edit the mirror.
+- Do not purge `kaola-workflow/.roadmap/`; closure removes only the closed issue source file.
+- Active work lives in `kaola-workflow/{project}/` until archived or safely discarded.
+- Active artifacts include `workflow-state.md`, phase files, optional `fast-summary.md`, and `.cache/` evidence.
+
 ## Workflow Design Principles
 
 ### Agent Owns Reasoning; Scripts Own Atomicity (issue #44)

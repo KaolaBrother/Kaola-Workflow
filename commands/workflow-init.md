@@ -130,6 +130,10 @@ Append equivalent missing sections only. Treat headings with the same meaning as
 - For essential technical decisions, consult the configured advisor internally, apply the selected answer, and record the evidence under `.cache/` or the phase artifact.
 - Prompt the user only for true external authorization or materially user-owned choices, including risky Git synchronization, destructive rewrites, deployment/credential actions, and issue or roadmap reorganization.
 - GitHub issues are the roadmap source of truth when available; `kaola-workflow/ROADMAP.md` is the local active-work mirror.
+- `kaola-workflow/ROADMAP.md` is generated from `kaola-workflow/.roadmap/issue-*.md`; do not hand-edit the mirror.
+- Do not purge `kaola-workflow/.roadmap/`; closure removes only the closed issue source file.
+- Active work lives in `kaola-workflow/{project}/` until archived or safely discarded.
+- Active artifacts include `workflow-state.md`, phase files, optional `fast-summary.md`, and `.cache/` evidence.
 - Roadmap/research sessions create or refine issues; `/workflow-next` sessions implement one selected item and refresh the mirror.
 - After resume or compaction, read `workflow-state.md`, the current phase file, and the compliance ledger before continuing.
 - State Bootstrap And Repair: if `/workflow-next` safely reconstructs one next command from phase artifacts, run the state repair helper and repair `workflow-state.md` before routing.
@@ -153,6 +157,7 @@ Append equivalent missing sections only. Treat headings with the same meaning as
 - `docs/architecture.md` — system structure and data flow.
 - `docs/api.md` — APIs, schemas, events, and external contracts.
 - `docs/conventions.md` — coding, testing, Git, and review rules.
+- `docs/workflow-state-contract.md` — detailed durable state and generated mirror contract.
 - `docs/decisions/` — architecture decision records.
 - `kaola-workflow/ROADMAP.md` — active implementation roadmap.
 
