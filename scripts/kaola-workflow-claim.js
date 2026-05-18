@@ -720,6 +720,7 @@ function buildSinkBlock(lockData) {
   ];
   if (lockData.pr_url) lines.push('pr_url: ' + lockData.pr_url);
   if (lockData.pr_number != null && lockData.pr_number !== 0) lines.push('pr_number: ' + lockData.pr_number);
+  if (lockData.sink_fallback_reason != null) lines.push('sink_fallback_reason: ' + lockData.sink_fallback_reason);
   return lines.join('\n');
 }
 
@@ -891,6 +892,7 @@ function buildLockData(args, machineId, now, ownerSessionId) {
     issue_number: args.issue != null ? args.issue : null,
     claim_comment_id: null,
     sink: (args.sink === 'pr') ? 'pr' : 'merge',
+    sink_fallback_reason: null,
     pr_url: null,
     pr_number: null,
     runtime: args.runtime || 'claude',
@@ -2772,9 +2774,30 @@ function cmdWorktreeFinalize() {
   }) + '\n');
 }
 
+function cmdSinkFallback() {
+  const args = parseArgs(process.argv.slice(3));
+  assert(args.project && isSafeName(args.project), '--project is required');
+  const root = getRoot();
+  const coordRoot = getCoordRoot();
+  const mainWorktree = findMainWorktree() || root;
+  const receiptPath = path.join(mainWorktree, 'kaola-workflow', args.project, '.cache', 'sink-fallback.json');
+  assert(fs.existsSync(receiptPath), 'sink-fallback receipt not found: ' + receiptPath);
+  const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
+  const _VALID_REASONS = ['branch_protected', 'non_fast_forward', 'permission_denied'];
+  assert(_VALID_REASONS.includes(receipt.reason), 'receipt.reason must be one of: ' + _VALID_REASONS.join(', ') + '; got: ' + receipt.reason);
+  const lp = lockPath(coordRoot, args.project);
+  assert(fs.existsSync(lp), 'lock file not found for project: ' + args.project);
+  const existing = JSON.parse(fs.readFileSync(lp, 'utf8'));
+  const updated = Object.assign({}, existing, { sink: 'pr', sink_fallback_reason: receipt.reason });
+  fs.writeFileSync(lp, JSON.stringify(updated, null, 2) + '\n');
+  const stateFile = path.join(root, 'kaola-workflow', args.project, 'workflow-state.md');
+  updateSinkLease(stateFile, updated);
+  process.stdout.write(JSON.stringify({ ok: true, reason: receipt.reason, project: args.project }) + '\n');
+}
+
 function main() {
   const sub = process.argv[2];
-  assert(sub, 'usage: kaola-workflow-claim.js <claim|release|heartbeat|ticker|sweep|status|session|derive-session|can-handoff|handoff|verify-startup|patch-branch|watch-pr|bootstrap|startup|finalize|pick-next|resume|worktree-status|worktree-finalize>');
+  assert(sub, 'usage: kaola-workflow-claim.js <claim|release|heartbeat|ticker|sweep|status|session|derive-session|can-handoff|handoff|verify-startup|patch-branch|watch-pr|bootstrap|startup|finalize|pick-next|resume|worktree-status|worktree-finalize|sink-fallback>');
   if (sub === 'claim') return cmdClaim();
   if (sub === 'can-handoff') return cmdCanHandoff();
   if (sub === 'handoff') return cmdHandoff();
@@ -2795,6 +2818,7 @@ function main() {
   if (sub === 'resume') return cmdResume();
   if (sub === 'worktree-status') return cmdWorktreeStatus();
   if (sub === 'worktree-finalize') return cmdWorktreeFinalize();
+  if (sub === 'sink-fallback') return cmdSinkFallback();
   throw new Error('unknown subcommand: ' + sub);
 }
 

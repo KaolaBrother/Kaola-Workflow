@@ -646,6 +646,21 @@ case "$SINK_KIND" in
       --branch "$SINK_BRANCH" \
       $SINK_ISSUE_FLAG \
       --project {project}
+    _SINK_MERGE_EXIT=$?
+    if [ "$_SINK_MERGE_EXIT" -eq 3 ]; then
+      cd "$_MAIN_ROOT"
+      CLAIM_JS="$(kaola_script kaola-workflow-claim.js)"
+      node "$CLAIM_JS" sink-fallback \
+        --project {project} \
+        --session "${KAOLA_SESSION_ID:-}"
+      SINK_PR_JS="$(kaola_script kaola-workflow-sink-pr.js)"
+      node "$SINK_PR_JS" \
+        --branch "$SINK_BRANCH" \
+        $SINK_ISSUE_FLAG \
+        --project {project}
+      exit $?
+    fi
+    [ "$_SINK_MERGE_EXIT" -ne 0 ] && exit "$_SINK_MERGE_EXIT"
     ;;
 esac
 # Restore CWD: sink-merge may have removed the worktree this shell was in (issue #33).
@@ -656,6 +671,7 @@ cd "$_MAIN_ROOT" 2>/dev/null || true
 - Exit 0: branch merged onto main, issue closed (online), local branch deleted. Confirm worktree is on main with `git status --short --branch`.
 - Exit 1: conflict or fatal error. Rebase conflict remediation printed to stderr. Re-run after resolving.
 - Exit 2: FF race exhausted after MAX_AUTOMERGE_RETRIES retries. Follow printed remediation instructions.
+- Exit 3: merge-impossible (branch protection, non-fast-forward, permission denied). Receipt written to `.cache/sink-fallback.json`. Phase 6 pivots to PR creation automatically.
 
 `sink-pr.js` exit codes:
 - Exit 0: branch pushed, PR opened, URL recorded in lock file and `## Sink` block. If `pr_auto_merge: true` in config, auto-merge was requested.

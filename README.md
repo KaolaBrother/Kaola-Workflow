@@ -183,7 +183,6 @@ The primary skills are:
 ```text
 kaola-workflow-init
 kaola-workflow-next
-kaola-workflow-next-pr
 kaola-workflow-research
 kaola-workflow-ideation
 kaola-workflow-plan
@@ -418,9 +417,11 @@ Both config files are read-only on startup; missing or malformed files silently 
 
 ### PR Sink
 
-Use `/workflow-next-pr` instead of `/workflow-next` when Phase 6 should open a GitHub PR and wait for merge rather than performing a local fast-forward merge.
+The sink mode is set at claim time and determines how Phase 6 delivers the completed work. Two paths are available:
 
-`/workflow-next-pr` sets `KAOLA_SINK=pr` in the environment and delegates to `/workflow-next`. Startup Step 0 passes `--sink pr` to `claim`, which writes `sink: pr` to the `## Sink` block of `workflow-state.md`. Phase 6 runs the final commit gate first, then reads this field in the sink step and dispatches to `kaola-workflow-sink-pr.js`.
+**Intent detection** (recommended): If the user's initial prompt contains PR intent keywords ("open a PR", "create a PR", "pull request", "sink=pr", "KAOLA_SINK=pr", "PR sink"), the agent exports `KAOLA_SINK=pr` before the startup call. Startup Step 0 passes `--sink pr` to `claim`, which writes `sink: pr` to the `## Sink` block of `workflow-state.md`. Phase 6 dispatches to `kaola-workflow-sink-pr.js`.
+
+**Auto-fallback**: When `sink: merge` is configured and the push to main fails with a merge-impossible error (branch protection, non-fast-forward, or permission denied), Phase 6 automatically pivots to PR creation. `sink-merge.js` writes a `.cache/sink-fallback.json` receipt and exits 3. Phase 6 calls `claim.js sink-fallback` to update the Sink block (`sink: pr`, `sink_fallback_reason: <reason>`), then dispatches to `kaola-workflow-sink-pr.js`.
 
 **`pr_auto_merge` config key** (`~/.config/kaola-workflow/config.json`):
 

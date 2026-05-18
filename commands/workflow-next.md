@@ -52,16 +52,22 @@ do not auto-pick; the agent owns this decision.
 1. Read `kaola-workflow/ROADMAP.md` for open unfinished issues.
 2. Fetch GitHub issue list if available (`gh issue list --limit 100 --json number,title,state,labels`).
 3. Check active locks: `node "$CLAIM_JS" status 2>/dev/null` to find already-claimed issues.
-4. Apply sequencing judgment: prefer foundational or dependency-unblocked issues; avoid issues
-   blocked by open dependencies or already active in another session.
-5. If the session already owns a project (startup will return `verdict: owned`), skip steps 1-4
-   and route to that owned project.
+4. Apply sequencing judgment: prefer foundational or dependency-unblocked issues; avoid issues blocked by open dependencies or already active in another session.
+5. If the session already owns a project (startup will return `verdict: owned`), skip steps 1-4 and route to that owned project.
 6. If `$ARGUMENTS` names a specific issue number or project, use that as the explicit target.
 7. State the selected issue number aloud before calling startup.
 
 If no actionable issue is found (all blocked, red, or occupied), stop and explain.
 
 Set `KAOLA_TARGET_ISSUE` to the chosen issue number before calling startup.
+
+## Startup Step 0a — PR Intent Capture
+
+Before the startup transaction, check the user's initial prompt for PR sink intent.
+If it contains "open a PR", "create a PR", "pull request", "sink=pr", "KAOLA_SINK=pr",
+or "PR sink" (case-insensitive), export `KAOLA_SINK=pr` before the startup call.
+The `${KAOLA_SINK:+--sink $KAOLA_SINK}` pass-through in Startup Step 0 propagates it.
+Keyword matching is agent-level prose detection, not a bash conditional.
 
 ## Startup Step 0b - Startup Transaction
 
@@ -116,8 +122,8 @@ typed refusal (`target_occupied`, `user_target_blocked`, `user_target_red`,
 `target_mismatch`, `target_unavailable`), read the `reasoning` field and either
 stop, select a different issue, or escalate to the user. If startup is unavailable
 or the startup receipt is missing/malformed, stop for repair.
-If `KAOLA_PATH=fast` is set, startup records `workflow_path: fast`.
-Agent sets this env var after reading `analyzeIssue` advisory output from the startup receipt.
+If startup returns `claim: "none"`, stop normal routing; do not inspect active project folders for recovery. On startup, also run `watch-pr` to release PR leases for merged or closed PRs before selecting new work.
+If `KAOLA_PATH=fast` is set, startup records `workflow_path: fast`. Agent sets this env var after reading `analyzeIssue` advisory output from the startup receipt.
 
 ## Startup Step 1 - Git Freshness
 
@@ -193,10 +199,7 @@ ask the user what to implement. New work starts with:
 
 Multiple sessions may hold leases simultaneously when each targets a distinct project. Session A on `issue-3` and Session B on `issue-4` are coexistent. The pre-commit guard blocks only commits that stage files from a project owned by a different session.
 
-Use explicit recovery/handoff only when a user intentionally switches a new
-session to an unfinished project. Check handoff eligibility first; live local
-Claude sessions, unexpired locks, recent heartbeats, and receipts for a
-different project block normal handoff:
+Use explicit recovery/handoff only when a user intentionally switches a new session to an unfinished project. Check handoff eligibility first; live local Claude sessions, unexpired locks, recent heartbeats, and receipts for a different project block normal handoff:
 
 ```bash
 node "$CLAIM_JS" can-handoff --project <project> --session "$KAOLA_SESSION_ID"

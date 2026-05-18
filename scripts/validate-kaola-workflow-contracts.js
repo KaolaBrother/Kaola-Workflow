@@ -70,7 +70,6 @@ assert(entry.policy && entry.policy.installation === 'AVAILABLE', 'kaola-workflo
 const skills = [
   'kaola-workflow-init',
   'kaola-workflow-next',
-  'kaola-workflow-next-pr',
   'kaola-workflow-research',
   'kaola-workflow-ideation',
   'kaola-workflow-plan',
@@ -200,7 +199,7 @@ assertIncludes('scripts/kaola-workflow-claim.js', "'no_target'");
 assertIncludes('scripts/kaola-workflow-claim.js', "'target_occupied'");
 assertIncludes('scripts/kaola-workflow-claim.js', "'user_target_blocked'");
 assertIncludes('scripts/kaola-workflow-claim.js', "'target_mismatch'");
-assertIncludes(simulateScript, 'Kaola-Workflow walkthrough simulation passed');
+assertIncludes(simulateScript, 'Workflow walkthrough simulation passed');
 assertNotIncludes(simulateScript, '../../../scripts/kaola-workflow-claim.js');
 assertIncludes(installAgentsScript, 'BEGIN kaola-workflow agents');
 

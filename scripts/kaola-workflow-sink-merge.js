@@ -6,6 +6,7 @@ const { getCoordRoot, removeWorktree } = require('./kaola-workflow-claim.js');
 
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
 const FORCE_FF_FAIL = parseInt(process.env.KAOLA_WORKFLOW_FORCE_FF_FAIL || '0', 10);
+const FORCE_MERGE_IMPOSSIBLE = process.env.KAOLA_WORKFLOW_FORCE_MERGE_IMPOSSIBLE || '';
 
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
 
@@ -33,6 +34,18 @@ function getRoot() {
 
 function mainRootFromCoord(coordRoot) {
   return path.basename(coordRoot) === '.git' ? path.dirname(coordRoot) : coordRoot;
+}
+
+function classifyMergeError(stderr) {
+  if (FORCE_MERGE_IMPOSSIBLE) {
+    process.stderr.write('[TEST ONLY] KAOLA_WORKFLOW_FORCE_MERGE_IMPOSSIBLE=' + FORCE_MERGE_IMPOSSIBLE + ' — push bypassed\n');
+    return FORCE_MERGE_IMPOSSIBLE;
+  }
+  if (/protected branch|GH006/i.test(stderr)) return 'branch_protected';
+  if (/rejected/.test(stderr) && /non-fast-forward/.test(stderr)) return 'non_fast_forward';
+  if (/permission denied|403|not authorized/i.test(stderr)) return 'permission_denied';
+  if (/conflicts with target/i.test(stderr)) return 'non_fast_forward';
+  return null;
 }
 
 function parseArgs(argv) {
@@ -129,9 +142,40 @@ function ffMergeLoop(args) {
 }
 
 function postMergeCleanup(args) {
-  // Step 7 — Push
-  if (!OFFLINE) {
-    execFileSync('git', ['push', 'origin', 'main'], { encoding: 'utf8' });
+  // Step 7 — Push (with merge-impossible auto-fallback)
+  try {
+    if (FORCE_MERGE_IMPOSSIBLE) {
+      throw new Error('synthetic merge-impossible: ' + FORCE_MERGE_IMPOSSIBLE);
+    }
+    if (!OFFLINE) {
+      execFileSync('git', ['push', 'origin', 'main'], { encoding: 'utf8' });
+    }
+  } catch (e) {
+    const token = classifyMergeError(e.stderr || e.message || '');
+    if (token === null) {
+      // Transient / unclassified error — re-throw, caller exits 1
+      throw e;
+    }
+    // Classified merge-impossible: reset local main, write receipt, signal exit 3
+    try {
+      execFileSync('git', ['reset', '--hard', 'origin/main'], { encoding: 'utf8' });
+    } catch (_) {}
+    const receiptPath = path.join(
+      mainRootFromCoord(getCoordRoot()),
+      'kaola-workflow', args.project, '.cache', 'sink-fallback.json'
+    );
+    fs.mkdirSync(path.dirname(receiptPath), { recursive: true });
+    fs.writeFileSync(
+      receiptPath,
+      JSON.stringify({
+        project: args.project,
+        branch: args.branch,
+        issue_number: args.issue || null,
+        reason: token,
+        timestamp: new Date().toISOString()
+      }, null, 2) + '\n'
+    );
+    return { exitCode: 3 };
   }
   // Step 8 — Close issue
   if (!OFFLINE && args.issue != null) {
@@ -213,7 +257,12 @@ function main() {
     return;
   }
 
-  postMergeCleanup(args);
+  const cleanupResult = postMergeCleanup(args);
+  if (cleanupResult && cleanupResult.exitCode === 3) { process.exitCode = 3; return; }
 }
 
-try { main(); } catch (err) { process.stderr.write(err.message + '\n'); process.exitCode = 1; }
+if (require.main === module) {
+  try { main(); } catch (err) { process.stderr.write(err.message + '\n'); process.exitCode = 1; }
+}
+
+module.exports = { classifyMergeError };

@@ -38,6 +38,25 @@ do not auto-pick; the agent owns this decision.
 
 Set `KAOLA_TARGET_ISSUE` to the chosen issue number before calling startup.
 
+## Startup Step 0a — PR Intent Capture
+
+Before the startup transaction, check the user's initial prompt for PR sink intent.
+
+If the prompt contains any of the following (case-insensitive):
+- "open a PR"
+- "create a PR"
+- "pull request"
+- "sink=pr"
+- "KAOLA_SINK=pr"
+- "PR sink"
+
+Then export `KAOLA_SINK=pr` before the startup call. The existing
+`${KAOLA_SINK:+--sink $KAOLA_SINK}` pass-through in Startup Step 0 propagates
+this value without modification.
+
+Do not set `KAOLA_SINK` if none of the keywords match. Keyword matching is
+agent-level prose detection, not a bash conditional.
+
 ## Startup
 
 Run the startup transaction for this session with the agent-selected target.

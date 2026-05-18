@@ -13,6 +13,17 @@
 - **Codex skill mirrors**: `plugins/kaola-workflow/skills/kaola-workflow-next/SKILL.md` and `kaola-workflow-finalize/SKILL.md` — appended `## Completion Contract` sections.
 - **Validators**: `scripts/validate-workflow-contracts.js` and `scripts/validate-kaola-workflow-contracts.js` — added 16 `assertIncludes` checks for completion contract prose surfaces.
 
+### Changed — Remove /workflow-next-pr; Drive Sink from Prompt Intent + Merge Fallback (issue #42)
+
+- **Deleted** `commands/workflow-next-pr.md` and `plugins/kaola-workflow/skills/kaola-workflow-next-pr/SKILL.md`. The separate command is no longer needed.
+- **Added** Startup Step 0a — PR Intent Capture to `workflow-next.md` and `kaola-workflow-next/SKILL.md`: if the user's prompt contains PR-intent keywords ("open a PR", "create a PR", "pull request", "sink=pr", "KAOLA_SINK=pr", "PR sink"), the agent exports `KAOLA_SINK=pr` before the startup call.
+- **Added** `classifyMergeError()` to `kaola-workflow-sink-merge.js`: classifies push exceptions into `branch_protected`, `non_fast_forward`, or `permission_denied` tokens. On a classified failure, resets local main (`git reset --hard origin/main`), writes `.cache/sink-fallback.json`, and exits 3.
+- **Added** `cmdSinkFallback` subcommand to `kaola-workflow-claim.js`: reads the fallback receipt, updates the lock file and workflow-state.md `## Sink` block to `sink: pr` + `sink_fallback_reason: <reason>`.
+- **Added** `buildSinkBlock` now emits `sink_fallback_reason:` when present in lock data.
+- **Added** exit-3 pivot block to Phase 6 dispatch (`commands/kaola-workflow-phase6.md` and `kaola-workflow-finalize/SKILL.md`): on `sink-merge.js` exit 3, calls `claim.js sink-fallback` and dispatches to `sink-pr.js`.
+- **Added** Epic Cases 18A–18D to `simulate-workflow-walkthrough.js` covering the full auto-fallback chain.
+- **Added** `KAOLA_WORKFLOW_FORCE_MERGE_IMPOSSIBLE` env var for deterministic simulation of merge-impossible scenarios.
+
 ### Added — Bootstrap Explicit-Target Enforcement (issue #47)
 
 - `bootstrap` subcommand now requires explicit `--target-issue N`, matching the issue-44 contract for `startup` and `pick-next`. The `runBootstrapClaimFirstAvailable` auto-picker is removed. Agents must select the issue before invoking bootstrap.

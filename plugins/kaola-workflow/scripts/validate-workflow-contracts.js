@@ -296,9 +296,7 @@ assert(exists('scripts/kaola-workflow-sink-pr.js'), 'scripts/kaola-workflow-sink
 assertIncludes('install.sh', 'kaola-workflow-sink-pr.js');
 assertIncludes('commands/kaola-workflow-phase6.md', 'kaola-workflow-sink-pr.js');
 assertIncludes('commands/kaola-workflow-phase6.md', 'SINK_KIND');
-assert(exists('commands/workflow-next-pr.md'), 'commands/workflow-next-pr.md is missing');
-const routerPrLines = read('commands/workflow-next-pr.md').split(/\r?\n/).length;
-assert(routerPrLines <= 40, `commands/workflow-next-pr.md must be ≤40 lines; found ${routerPrLines}`);
+assert(!exists('commands/workflow-next-pr.md'), 'commands/workflow-next-pr.md must be deleted (issue-42: replaced by intent detection in workflow-next.md)');
 assertIncludes('scripts/kaola-workflow-claim.js', 'watch-pr');
 assertIncludes('scripts/kaola-workflow-claim.js', 'releaseSession');
 assertIncludes('scripts/kaola-workflow-claim.js', 'sink:');
@@ -328,11 +326,20 @@ const claimContent = read('scripts/kaola-workflow-claim.js');
 const pluginContent = read('plugins/kaola-workflow/scripts/kaola-workflow-claim.js');
 ['cmdPickNext', 'cmdResume', 'cmdWorktreeStatus', 'cmdWorktreeFinalize',
  "if (sub === 'pick-next')", "if (sub === 'worktree-status')", "if (sub === 'worktree-finalize')",
+ 'cmdSinkFallback', "if (sub === 'sink-fallback')",
 ].forEach(needle => {
   assert(pluginContent.includes(needle),
     'plugins/kaola-workflow/scripts/kaola-workflow-claim.js must include: ' + needle);
   assert(claimContent.includes(needle),
     'scripts/kaola-workflow-claim.js must include: ' + needle);
+});
+const sinkMergeContent = read('scripts/kaola-workflow-sink-merge.js');
+const pluginSinkMergeContent = read('plugins/kaola-workflow/scripts/kaola-workflow-sink-merge.js');
+['classifyMergeError'].forEach(needle => {
+  assert(sinkMergeContent.includes(needle),
+    'scripts/kaola-workflow-sink-merge.js must include: ' + needle);
+  assert(pluginSinkMergeContent.includes(needle),
+    'plugins/kaola-workflow/scripts/kaola-workflow-sink-merge.js must include: ' + needle);
 });
 assertIncludes('scripts/simulate-workflow-walkthrough.js', 'Epic Case 17');
 assertIncludes('commands/workflow-next.md', 'KAOLA_WORKTREE_NATIVE');

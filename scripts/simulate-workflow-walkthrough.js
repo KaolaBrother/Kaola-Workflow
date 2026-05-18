@@ -5816,6 +5816,265 @@ exit 0
       }
     }
 
+    // Epic Case 18A — cmdSinkFallback: updates lock + workflow-state.md when receipt exists
+    {
+      const claimScript18a = path.join(root, 'scripts', 'kaola-workflow-claim.js');
+      const tmpDir18a = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-workflow-case18a-'));
+      try {
+        execFileSync('git', ['init', '-q', '-b', 'main', tmpDir18a]);
+
+        const proj18a = 'test-sink-fallback';
+        const coordRoot18a = path.join(tmpDir18a, '.git');
+        const locksDir18a = path.join(coordRoot18a, 'kaola-workflow', '.locks');
+        const stateDir18a = path.join(tmpDir18a, 'kaola-workflow', proj18a);
+        const cacheDir18a = path.join(stateDir18a, '.cache');
+
+        fs.mkdirSync(locksDir18a, { recursive: true });
+        fs.mkdirSync(stateDir18a, { recursive: true });
+        fs.mkdirSync(cacheDir18a, { recursive: true });
+
+        // Write initial lock file with sink: merge
+        const initialLock18a = {
+          project: proj18a,
+          session_id: 'sess-18a',
+          machine_id: 'machine-18a',
+          claimed_at: '2026-05-18T00:00:00.000Z',
+          expires: '2026-05-18T00:30:00.000Z',
+          last_heartbeat: '2026-05-18T00:00:00.000Z',
+          issue_number: 42,
+          claim_comment_id: null,
+          sink: 'merge',
+          sink_fallback_reason: null,
+          pr_url: null,
+          pr_number: null,
+          runtime: 'claude',
+          worktree_path: null,
+          branch: null,
+          owner_session_id: 'sess-18a',
+        };
+        fs.writeFileSync(
+          path.join(locksDir18a, proj18a + '.lock'),
+          JSON.stringify(initialLock18a, null, 2) + '\n'
+        );
+
+        // Write initial workflow-state.md with Sink + Lease blocks
+        const initialState18a = [
+          '# Kaola-Workflow State',
+          '',
+          '## Project',
+          'name: ' + proj18a,
+          'status: active',
+          '',
+          '## Current Position',
+          'phase: 6',
+          'phase_name: Sink',
+          'step: sink-pending',
+          '',
+          '## Sink',
+          'branch: workflow/issue-42',
+          'issue_number: 42',
+          'claimed_at: 2026-05-18T00:00:00.000Z',
+          'sink: merge',
+          '',
+          '## Lease',
+          'session_id: sess-18a',
+          'expires: 2026-05-18T00:30:00.000Z',
+          'last_heartbeat: 2026-05-18T00:00:00.000Z',
+          'claim_comment_id: N/A',
+          'owner_session_id: sess-18a',
+          '',
+        ].join('\n');
+        fs.writeFileSync(path.join(stateDir18a, 'workflow-state.md'), initialState18a);
+
+        // Write sink-fallback receipt
+        const receipt18a = { reason: 'branch_protected', branch: 'workflow/issue-42', ts: '2026-05-18T00:05:00.000Z' };
+        fs.writeFileSync(
+          path.join(cacheDir18a, 'sink-fallback.json'),
+          JSON.stringify(receipt18a, null, 2) + '\n'
+        );
+
+        const env18a = {
+          ...process.env,
+          KAOLA_COORD_ROOT: coordRoot18a,
+          HOME: tmpDir18a,
+        };
+
+        // Invoke cmdSinkFallback
+        const out18a = execFileSync(process.execPath, [
+          claimScript18a, 'sink-fallback', '--project', proj18a
+        ], { cwd: tmpDir18a, encoding: 'utf8', env: env18a }).trim();
+
+        const result18a = JSON.parse(out18a);
+        assert(result18a.ok === true, '18A: result.ok must be true, got ' + JSON.stringify(result18a));
+        assert(result18a.reason === 'branch_protected', '18A: result.reason must be branch_protected, got ' + result18a.reason);
+        assert(result18a.project === proj18a, '18A: result.project mismatch');
+
+        // Assert lock file updated
+        const updatedLock18a = JSON.parse(fs.readFileSync(path.join(locksDir18a, proj18a + '.lock'), 'utf8'));
+        assert(updatedLock18a.sink === 'pr', '18A: lock sink must be "pr", got ' + updatedLock18a.sink);
+        assert(updatedLock18a.sink_fallback_reason === 'branch_protected',
+          '18A: lock sink_fallback_reason must be branch_protected, got ' + updatedLock18a.sink_fallback_reason);
+
+        // Assert workflow-state.md updated
+        const updatedState18a = fs.readFileSync(path.join(stateDir18a, 'workflow-state.md'), 'utf8');
+        assert(updatedState18a.includes('sink: pr'),
+          '18A: workflow-state.md must contain "sink: pr"');
+        assert(updatedState18a.includes('sink_fallback_reason: branch_protected'),
+          '18A: workflow-state.md must contain "sink_fallback_reason: branch_protected"');
+      } finally {
+        fs.rmSync(tmpDir18a, { recursive: true, force: true });
+      }
+
+      // Epic Case 18A — validation: missing --project prints error and exits non-zero
+      {
+        let threw18aVal = false;
+        try {
+          execFileSync(process.execPath, [claimScript18a, 'sink-fallback'],
+            { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+        } catch (e) {
+          threw18aVal = true;
+          const stderr = e.stderr || '';
+          const stdout = e.stdout || '';
+          const combined = stderr + stdout;
+          assert(combined.includes('--project is required'),
+            '18A-val: error output must contain "--project is required", got: ' + combined);
+        }
+        assert(threw18aVal, '18A-val: sink-fallback with no --project must exit non-zero');
+      }
+    }
+
+    // Epic Case 18B: sink-merge branch-protected auto-fallback
+    // When KAOLA_WORKFLOW_FORCE_MERGE_IMPOSSIBLE=branch_protected, push block triggers fallback:
+    // exit code 3, .cache/sink-fallback.json written with reason=branch_protected
+    {
+      const epic18bTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-workflow-epic18b-'));
+      try {
+        const remoteDir = path.join(epic18bTmp, 'remote.git');
+        const workDir = path.join(epic18bTmp, 'work');
+        execFileSync('git', ['init', '--bare', remoteDir], { encoding: 'utf8' });
+        execFileSync('git', ['init', workDir], { encoding: 'utf8' });
+        execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: workDir, encoding: 'utf8' });
+        execFileSync('git', ['config', 'user.name', 'Test'], { cwd: workDir, encoding: 'utf8' });
+        execFileSync('git', ['remote', 'add', 'origin', remoteDir], { cwd: workDir, encoding: 'utf8' });
+        fs.writeFileSync(path.join(workDir, 'README.md'), 'init\n');
+        execFileSync('git', ['add', 'README.md'], { cwd: workDir, encoding: 'utf8' });
+        execFileSync('git', ['commit', '-m', 'init'], { cwd: workDir, encoding: 'utf8' });
+        execFileSync('git', ['push', 'origin', 'HEAD:main'], { cwd: workDir, encoding: 'utf8' });
+        execFileSync('git', ['--git-dir', remoteDir, 'symbolic-ref', 'HEAD', 'refs/heads/main'],
+          { encoding: 'utf8' });
+        // Cut feature branch at same HEAD as origin/main
+        execFileSync('git', ['checkout', '-b', 'workflow/issue-42-epic18b'], { cwd: workDir, encoding: 'utf8' });
+        fs.writeFileSync(path.join(workDir, 'feature18b.txt'), 'feature\n');
+        execFileSync('git', ['add', 'feature18b.txt'], { cwd: workDir, encoding: 'utf8' });
+        execFileSync('git', ['commit', '-m', 'feature 18b'], { cwd: workDir, encoding: 'utf8' });
+
+        let epic18bExitCode = 0;
+        try {
+          execFileSync(process.execPath, [
+            path.join(root, 'scripts/kaola-workflow-sink-merge.js'),
+            '--branch', 'workflow/issue-42-epic18b', '--issue', '42', '--project', 'epic18b'
+          ], {
+            cwd: workDir,
+            encoding: 'utf8',
+            env: {
+              ...process.env,
+              KAOLA_WORKFLOW_OFFLINE: '1',
+              KAOLA_WORKFLOW_FORCE_MERGE_IMPOSSIBLE: 'branch_protected'
+            }
+          });
+        } catch (e) {
+          epic18bExitCode = e.status != null ? e.status : 1;
+        }
+
+        assert(epic18bExitCode === 3,
+          'Epic Case 18B: sink-merge must exit 3 on merge-impossible, got ' + epic18bExitCode);
+
+        // Compute receipt path: kaola-workflow/{project}/.cache/sink-fallback.json in main worktree
+        // getCoordRoot() in workDir returns workDir/.git, mainRootFromCoord strips to workDir
+        const receiptPath18b = path.join(workDir, 'kaola-workflow', 'epic18b', '.cache', 'sink-fallback.json');
+        assert(fs.existsSync(receiptPath18b),
+          'Epic Case 18B: sink-fallback.json must exist at ' + receiptPath18b);
+
+        const receipt18b = JSON.parse(fs.readFileSync(receiptPath18b, 'utf8'));
+        assert(receipt18b.reason === 'branch_protected',
+          'Epic Case 18B: receipt.reason must be branch_protected, got ' + receipt18b.reason);
+        assert(receipt18b.branch === 'workflow/issue-42-epic18b',
+          'Epic Case 18B: receipt.branch must match, got ' + receipt18b.branch);
+        assert(receipt18b.project === 'epic18b',
+          'Epic Case 18B: receipt.project must be epic18b, got ' + receipt18b.project);
+        assert(typeof receipt18b.timestamp === 'string' && receipt18b.timestamp.length > 0,
+          'Epic Case 18B: receipt.timestamp must be a non-empty string');
+      } finally {
+        fs.rmSync(epic18bTmp, { recursive: true, force: true });
+      }
+    }
+
+    // Epic Case 18C: sink-merge OFFLINE normal path — no merge-impossible, no receipt written
+    // OFFLINE skips push entirely; no FORCE env var; exit 0, no sink-fallback.json
+    {
+      const epic18cTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-workflow-epic18c-'));
+      try {
+        const remoteDir = path.join(epic18cTmp, 'remote.git');
+        const workDir = path.join(epic18cTmp, 'work');
+        execFileSync('git', ['init', '--bare', remoteDir], { encoding: 'utf8' });
+        execFileSync('git', ['init', workDir], { encoding: 'utf8' });
+        execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: workDir, encoding: 'utf8' });
+        execFileSync('git', ['config', 'user.name', 'Test'], { cwd: workDir, encoding: 'utf8' });
+        execFileSync('git', ['remote', 'add', 'origin', remoteDir], { cwd: workDir, encoding: 'utf8' });
+        fs.writeFileSync(path.join(workDir, 'README.md'), 'init\n');
+        execFileSync('git', ['add', 'README.md'], { cwd: workDir, encoding: 'utf8' });
+        execFileSync('git', ['commit', '-m', 'init'], { cwd: workDir, encoding: 'utf8' });
+        execFileSync('git', ['push', 'origin', 'HEAD:main'], { cwd: workDir, encoding: 'utf8' });
+        execFileSync('git', ['--git-dir', remoteDir, 'symbolic-ref', 'HEAD', 'refs/heads/main'],
+          { encoding: 'utf8' });
+        // Cut feature branch at same HEAD as origin/main (alreadyUpToDate = true, no rebase needed)
+        execFileSync('git', ['checkout', '-b', 'workflow/issue-43-epic18c'], { cwd: workDir, encoding: 'utf8' });
+
+        let epic18cExitCode = 0;
+        try {
+          execFileSync(process.execPath, [
+            path.join(root, 'scripts/kaola-workflow-sink-merge.js'),
+            '--branch', 'workflow/issue-43-epic18c', '--issue', '43', '--project', 'epic18c'
+          ], {
+            cwd: workDir,
+            encoding: 'utf8',
+            env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }
+          });
+        } catch (e) {
+          epic18cExitCode = e.status != null ? e.status : 1;
+        }
+
+        assert(epic18cExitCode === 0,
+          'Epic Case 18C: OFFLINE normal path must exit 0, got ' + epic18cExitCode);
+
+        const receiptPath18c = path.join(workDir, 'kaola-workflow', 'epic18c', '.cache', 'sink-fallback.json');
+        assert(!fs.existsSync(receiptPath18c),
+          'Epic Case 18C: sink-fallback.json must NOT exist on normal OFFLINE path');
+      } finally {
+        fs.rmSync(epic18cTmp, { recursive: true, force: true });
+      }
+    }
+
+    // Epic Case 18D: classifyMergeError returns null for unrecognized stderr
+    // Unit-tests the classification function directly (validates the "no pivot" contract)
+    {
+      const { classifyMergeError: cmeFn18d } = require(
+        path.join(root, 'scripts/kaola-workflow-sink-merge.js')
+      );
+      assert(typeof cmeFn18d === 'function',
+        'Epic Case 18D: classifyMergeError must be exported from sink-merge.js');
+      assert(cmeFn18d('connection reset by peer') === null,
+        'Epic Case 18D: unrecognized stderr must return null, got: ' + cmeFn18d('connection reset by peer'));
+      assert(cmeFn18d('protected branch') === 'branch_protected',
+        'Epic Case 18D: "protected branch" must classify as branch_protected');
+      assert(cmeFn18d('rejected (non-fast-forward)') === 'non_fast_forward',
+        'Epic Case 18D: "rejected...non-fast-forward" must classify as non_fast_forward');
+      assert(cmeFn18d('permission denied (publickey)') === 'permission_denied',
+        'Epic Case 18D: "permission denied" must classify as permission_denied');
+      assert(cmeFn18d('') === null,
+        'Epic Case 18D: empty stderr must return null');
+    }
+
     console.log('Workflow walkthrough simulation passed');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });

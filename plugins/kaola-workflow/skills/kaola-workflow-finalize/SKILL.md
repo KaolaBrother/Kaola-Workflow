@@ -223,6 +223,15 @@ node "$claim_script" verify-startup --session "$KAOLA_SESSION_ID" --project "$KA
        ;;
      merge|*)
        node "$scripts_dir/kaola-workflow-sink-merge.js" --branch "$SINK_BRANCH" --project "$KAOLA_PROJECT"
+       _SINK_MERGE_EXIT=$?
+       if [ "$_SINK_MERGE_EXIT" -eq 3 ]; then
+         node "$scripts_dir/kaola-workflow-claim.js" sink-fallback \
+           --project "$KAOLA_PROJECT" \
+           --session "${KAOLA_SESSION_ID:-}"
+         node "$scripts_dir/kaola-workflow-sink-pr.js" --branch "$SINK_BRANCH" --project "$KAOLA_PROJECT"
+         exit $?
+       fi
+       [ "$_SINK_MERGE_EXIT" -ne 0 ] && exit "$_SINK_MERGE_EXIT"
        ;;
    esac
    ```
