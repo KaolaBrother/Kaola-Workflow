@@ -370,6 +370,23 @@ function cmdResume() {
   });
 }
 
+function getCoordRoot(root) {
+  try {
+    const raw = execFileSync('git', ['rev-parse', '--git-common-dir'], {
+      cwd: root || getRoot(),
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore']
+    }).trim();
+    return path.resolve(root || getRoot(), raw);
+  } catch (_) {
+    return path.join(root || getRoot(), '.git');
+  }
+}
+
+function mainRootFromCoord(coordRoot) {
+  return path.basename(coordRoot) === '.git' ? path.dirname(coordRoot) : coordRoot;
+}
+
 function archiveProjectDir(root, project, statusValue, suffix) {
   assert(isSafeName(project), 'unsafe project name');
   const src = projectDir(root, project);
@@ -388,6 +405,15 @@ function archiveProjectDir(root, project, statusValue, suffix) {
   let dest = path.join(archiveBase, project + (suffix || ''));
   if (fs.existsSync(dest)) dest += '.archived-' + new Date().toISOString().replace(/[:.]/g, '-');
   fs.renameSync(src, dest);
+  let mainRoot, linkedRoot;
+  try {
+    mainRoot = fs.realpathSync(mainRootFromCoord(getCoordRoot(root)));
+    linkedRoot = fs.realpathSync(root);
+  } catch (_) { mainRoot = null; }
+  if (mainRoot && mainRoot !== linkedRoot) {
+    const mainLive = path.join(mainRoot, 'kaola-workflow', project);
+    if (fs.existsSync(mainLive)) fs.rmSync(mainLive, { recursive: true, force: true });
+  }
   return { archived: true, dest };
 }
 

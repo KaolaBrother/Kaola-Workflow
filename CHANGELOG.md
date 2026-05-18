@@ -24,6 +24,13 @@
 - **Four-token compliance vocabulary**: Updated compliance ledger status values in all phase skills to use typed tokens: `subagent-invoked`, `local-fallback-explicit`, `local-fallback-tool-unavailable`, or `N/A`. Replaces vague fallback language with clear audit trail of delegation decisions.
 - **Validator assertions**: `scripts/validate-kaola-workflow-contracts.js` and `plugins/kaola-workflow-gitlab/scripts/validate-kaola-workflow-gitlab-contracts.js` now assert presence of new vocabulary tokens and absence of ungated fallback language in all delegation-gated phase skills.
 
+### Fixed — Main-Worktree Live Folder Duplication on Phase 6 Archive (issue #62)
+
+- **Main-worktree cleanup is now atomic** (`archiveProjectDir` in `kaola-workflow-claim.js`): When `cmdFinalize`, `cmdRelease`, or `cmdWatchPr` archives a linked-worktree project directory, the function now compares the main repo root with the caller's root (both resolved via `fs.realpathSync`). If they differ, the duplicated `kaola-workflow/{project}/` copy in the main repo is atomically removed. This prevents orphaned live folders in the main checkout when a workflow is finalized from the linked worktree context.
+- **Applied to GitHub and GitLab editions**: Fix included in `scripts/kaola-workflow-claim.js`, `plugins/kaola-workflow/scripts/kaola-workflow-claim.js` (byte-identical mirror), and `plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js` (ported with helpers).
+- **Covered by 3 new regression tests**: `simulate-workflow-walkthrough.js` added Epic Cases for main-repo cleanup, archive path verification, and post-finalize folder state validation.
+- **Phase 6 documentation updated**: `commands/kaola-workflow-phase6.md` Section 8b now explains the main-worktree cleanup mechanism and when it applies (merge sink finalization from linked-worktree context).
+
 ### Fixed — Finalization Sink Metadata And Worktree Cleanup
 
 - Captured Phase 6 sink metadata before archive in Claude and Codex finalization guidance so merge sinks no longer read `kaola-workflow/{project}/workflow-state.md` after it has moved to `archive/`.

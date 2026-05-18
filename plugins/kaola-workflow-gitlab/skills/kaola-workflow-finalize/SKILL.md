@@ -114,6 +114,8 @@ choices, or ambiguity that blocks correctness.
    fi
    ```
 
+   **Main-worktree cleanup is atomic.** `cmdFinalize` now cleans up both the linked worktree's `kaola-workflow/${KAOLA_PROJECT}/` AND the main repo's copy. After `fs.renameSync` archives the linked-worktree copy, `archiveProjectDir` compares `mainRootFromCoord(getCoordRoot(root))` with `root` (both passed through `fs.realpathSync` to resolve symlinked tmpdirs). If they differ, the main repo's `kaola-workflow/${KAOLA_PROJECT}/` is removed. When `cwd` resolves to the same directory as the git common-dir's parent (typically when `KAOLA_WORKTREE_NATIVE=0`, or when `cmdFinalize` is invoked manually from the main repo), the cleanup is a no-op because main root === caller root.
+
    When it runs, this atomically writes `status: closed` + `step: complete` to
    `workflow-state.md` and renames `kaola-workflow/${KAOLA_PROJECT}/` →
    `kaola-workflow/archive/${KAOLA_PROJECT}/` in the linked worktree. The rename

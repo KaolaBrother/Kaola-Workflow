@@ -430,6 +430,15 @@ function archiveProjectDir(root, project, statusValue, suffix) {
   let dest = path.join(archiveBase, project + (suffix || ''));
   if (fs.existsSync(dest)) dest += '.archived-' + new Date().toISOString().replace(/[:.]/g, '-');
   fs.renameSync(src, dest);
+  let mainRoot, linkedRoot;
+  try {
+    mainRoot = fs.realpathSync(mainRootFromCoord(getCoordRoot(root)));
+    linkedRoot = fs.realpathSync(root);
+  } catch (_) { mainRoot = null; }
+  if (mainRoot && mainRoot !== linkedRoot) {
+    const mainLive = path.join(mainRoot, 'kaola-workflow', project);
+    if (fs.existsSync(mainLive)) fs.rmSync(mainLive, { recursive: true, force: true });
+  }
   return { archived: true, dest };
 }
 

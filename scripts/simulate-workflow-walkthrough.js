@@ -600,6 +600,143 @@ function testFinalizeReleaseCleansWorktree() {
   }
 }
 
+function testFinalizeFromLinkedWorktreeCleansMainCopy() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-finalize-linked-main-')));
+  const kwRoot = tmp + '.kw';
+  try {
+    initGitRepo(tmp);
+    const binDir = path.join(tmp, 'bin');
+    writeGhShimForStartup(binDir);
+
+    // Plant active folder in main worktree
+    plantActiveFolder(tmp, 'issue-701', 701, null);
+
+    // Create linked worktree
+    const wtPath = path.join(kwRoot, 'issue-701');
+    fs.mkdirSync(kwRoot, { recursive: true });
+    spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-701', '--', wtPath, 'HEAD'], {
+      cwd: tmp,
+      encoding: 'utf8'
+    });
+
+    // Plant active folder inside the linked worktree (mirrors main copy)
+    plantActiveFolder(wtPath, 'issue-701', 701, null);
+
+    // Use --keep-worktree so the linked worktree directory is not removed after archiving;
+    // this lets us assert that the archive exists inside the linked worktree.
+    // archiveProjectDir runs (and performs cleanup) regardless of --keep-worktree.
+    const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', 'issue-701', '--keep-worktree'], {
+      cwd: wtPath,
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' },
+      encoding: 'utf8'
+    });
+
+    assert(
+      result.status === 0,
+      'finalize from linked worktree should exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr
+    );
+    assert(
+      !fs.existsSync(path.join(tmp, 'kaola-workflow', 'issue-701')),
+      'main worktree copy of issue-701 must be cleaned up after finalize from linked worktree'
+    );
+    assert(
+      fs.existsSync(path.join(wtPath, 'kaola-workflow', 'archive', 'issue-701')),
+      'archive must exist in linked worktree after finalize'
+    );
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(kwRoot, { recursive: true, force: true });
+  }
+}
+
+function testFinalizeFromMainRootNoSpuriousRemoval() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-finalize-main-noop-')));
+  try {
+    // No git repo — getCoordRoot falls back to tmp/.git (fake path),
+    // mainRootFromCoord returns tmp, realpathSync(tmp) === realpathSync(root),
+    // so the cleanup block is a no-op. Archive rename still happens normally.
+    plantActiveFolder(tmp, 'issue-702', 702, null);
+
+    const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', 'issue-702'], {
+      cwd: tmp,
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' },
+      encoding: 'utf8'
+    });
+
+    assert(
+      result.status === 0,
+      'finalize from main root should exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr
+    );
+    assert(
+      !fs.existsSync(path.join(tmp, 'kaola-workflow', 'issue-702')),
+      'active folder for issue-702 must be renamed away after finalize'
+    );
+    assert(
+      fs.existsSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-702')),
+      'archive must exist and must not be spuriously erased after finalize from main root'
+    );
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testReleaseFromLinkedWorktreeCleansMainCopy() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-release-linked-main-')));
+  const kwRoot = tmp + '.kw';
+  try {
+    initGitRepo(tmp);
+    const binDir = path.join(tmp, 'bin');
+    writeGhShimForStartup(binDir);
+
+    // Plant active folder in main worktree
+    plantActiveFolder(tmp, 'issue-703', 703, null);
+
+    // Create linked worktree
+    const wtPath = path.join(kwRoot, 'issue-703');
+    fs.mkdirSync(kwRoot, { recursive: true });
+    spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-703', '--', wtPath, 'HEAD'], {
+      cwd: tmp,
+      encoding: 'utf8'
+    });
+
+    // Plant active folder inside the linked worktree
+    plantActiveFolder(wtPath, 'issue-703', 703, null);
+
+    // cwd is the linked worktree ROOT, not the project subdir inside it,
+    // so cwdInside(folder.project_dir) guard in cmdRelease does not fire.
+    // Note: release always calls removeWorktree, which removes the linked worktree directory
+    // after archiving. We therefore verify archive creation via the JSON result rather than
+    // post-call filesystem inspection of the now-removed wtPath.
+    const result = spawnSync(process.execPath, [claimScript, 'release', '--project', 'issue-703', '--reason', 'test'], {
+      cwd: wtPath,
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' },
+      encoding: 'utf8'
+    });
+
+    assert(
+      result.status === 0,
+      'release from linked worktree should exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr
+    );
+    assert(
+      !fs.existsSync(path.join(tmp, 'kaola-workflow', 'issue-703')),
+      'main worktree copy of issue-703 must be cleaned up after release from linked worktree; ' +
+      'this proves cleanup lives in archiveProjectDir, not cmdFinalize-only'
+    );
+    const releaseJson = JSON.parse(result.stdout);
+    assert(
+      releaseJson.released === true,
+      'release must report released:true, got: ' + JSON.stringify(releaseJson)
+    );
+    assert(
+      releaseJson.archived === true && typeof releaseJson.dest === 'string' && releaseJson.dest.includes('issue-703.discarded-'),
+      'release must report archived:true and dest path containing issue-703.discarded-, got: ' + JSON.stringify(releaseJson)
+    );
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(kwRoot, { recursive: true, force: true });
+  }
+}
+
 function testStatusShowsClosedIssueDrift() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-status-drift-'));
   try {
@@ -651,6 +788,9 @@ async function main() {
     testWatchPrArchivesClosedIssuePrFolder();
     testSinkFallbackSkipsArchivedProject();
     testFinalizeReleaseCleansWorktree();
+    testFinalizeFromLinkedWorktreeCleansMainCopy();
+    testFinalizeFromMainRootNoSpuriousRemoval();
+    testReleaseFromLinkedWorktreeCleansMainCopy();
     testStatusShowsClosedIssueDrift();
     console.log('Workflow walkthrough simulation passed');
   } finally {

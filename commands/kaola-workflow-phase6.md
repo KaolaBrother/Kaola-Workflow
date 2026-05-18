@@ -506,6 +506,8 @@ SINK_ISSUE_FLAG=""
 
 If `SINK_KIND` is `merge`, run `cmdFinalize` from the linked worktree context. This must run AFTER Step 8a (artifact mirror) and BEFORE Step 8 (git add/commit), because the rename needs to be detected by `git add`:
 
+**Main-worktree cleanup is atomic.** `cmdFinalize` now cleans up both the linked worktree's `kaola-workflow/{project}/` AND the main repo's copy. After `fs.renameSync` archives the linked-worktree copy, `archiveProjectDir` compares `mainRootFromCoord(getCoordRoot(root))` with `root` (both passed through `fs.realpathSync` to resolve symlinked tmpdirs). If they differ, the main repo's `kaola-workflow/{project}/` is removed. When `cwd` resolves to the same directory as the git common-dir's parent (typically when `KAOLA_WORKTREE_NATIVE=0`, or when `cmdFinalize` is invoked manually from the main repo), the cleanup is a no-op because main root === caller root.
+
 ```bash
 if [ "$SINK_KIND" = "merge" ]; then
   (cd "$ACTIVE_WORKTREE_PATH" && node "$CLAIM_JS" finalize \
