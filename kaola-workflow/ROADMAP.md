@@ -7,8 +7,7 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 
 | Issue | Title | Status | Workflow Project | Next Step |
 |-------|-------|--------|------------------|-----------|
-| #43 | Investigation: does /workflow-init need to change given current architecture vision (#40, #41, #42)? | open | — | ready |
-| #46 | Design: /goal and Phase 6 completion contract — single-issue stop is the default; cross-issue continuation requires explicit re-direction | open | — | ready |
+| none | No active work | — | — | — |
 
 ## Rules
 
