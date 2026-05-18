@@ -80,7 +80,7 @@ X/10
 ```bash
 claim_script="plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js"
 if [ ! -f "$claim_script" ]; then
-  claim_script="$(find "$HOME/.codex/plugins/cache" -path '*/kaola-workflow/*/scripts/kaola-gitlab-workflow-claim.js' -print -quit 2>/dev/null)"
+  claim_script="$(find "$HOME/.codex/plugins/cache" -path '*/kaola-workflow-gitlab/*/scripts/kaola-gitlab-workflow-claim.js' -print -quit 2>/dev/null)"
 fi
 roadmap_script="$(dirname "$claim_script")/kaola-gitlab-workflow-roadmap.js"
 node "$roadmap_script" init-issue \
@@ -96,7 +96,7 @@ node "$roadmap_script" init-issue \
 ```bash
 claim_script="plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js"
 if [ ! -f "$claim_script" ]; then
-  claim_script="$(find "$HOME/.codex/plugins/cache" -path '*/kaola-workflow/*/scripts/kaola-gitlab-workflow-claim.js' -print -quit 2>/dev/null)"
+  claim_script="$(find "$HOME/.codex/plugins/cache" -path '*/kaola-workflow-gitlab/*/scripts/kaola-gitlab-workflow-claim.js' -print -quit 2>/dev/null)"
 fi
 node "$claim_script" patch-branch \
   --project "$KAOLA_PROJECT" \

@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Fixed — Finalization Sink Metadata And Worktree Cleanup
+
+- Captured Phase 6 sink metadata before archive in Claude and Codex finalization guidance so merge sinks no longer read `kaola-workflow/{project}/workflow-state.md` after it has moved to `archive/`.
+- Added `--keep-worktree` to `kaola-workflow-claim.js finalize` for the final commit gate: archive is still atomic, but the linked worktree remains available until the sink removes it after the branch is committed.
+- Brought GitLab lifecycle cleanup to parity by removing linked worktrees on release/finalize/watch-mr, with the same `--keep-worktree` preservation path for final commits.
+- Corrected GitLab Codex skill cache fallbacks to search the `kaola-workflow-gitlab` plugin cache instead of the GitHub plugin path.
+
 ### Fixed — Lifecycle Cleanup Gaps: Closed-Issue Remnants, PR Backlog, Worktree Leftovers (issue #75)
 
 - **Closed-issue folder drift detection**: `cmdStatus` now returns `{ active, drift, count }` instead of `{ active, count }`. The new `drift` array contains folders whose linked GitHub issue is closed. `count` reflects only active folders (excluding drift). Enables agents to detect and clean stale folders when issues are closed externally.

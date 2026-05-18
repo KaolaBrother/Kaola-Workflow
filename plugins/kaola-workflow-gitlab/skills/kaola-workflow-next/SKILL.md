@@ -69,7 +69,7 @@ creates or reuses `kaola-workflow/{project}/workflow-state.md`.
 ```bash
 claim_script="plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js"
 if [ ! -f "$claim_script" ]; then
-  claim_script="$(find "$HOME/.codex/plugins/cache" -path '*/kaola-workflow/*/scripts/kaola-gitlab-workflow-claim.js' -print -quit 2>/dev/null)"
+  claim_script="$(find "$HOME/.codex/plugins/cache" -path '*/kaola-workflow-gitlab/*/scripts/kaola-gitlab-workflow-claim.js' -print -quit 2>/dev/null)"
 fi
 
 if [ -f "$claim_script" ]; then
@@ -128,7 +128,7 @@ Read `kaola-workflow/{project}/workflow-state.md` first. If missing or stale, ru
 ```bash
 repair_script="plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-repair-state.js"
 if [ ! -f "$repair_script" ]; then
-  repair_script="$(find "$HOME/.codex/plugins/cache" -path '*/kaola-workflow/*/scripts/kaola-gitlab-workflow-repair-state.js' -print -quit 2>/dev/null)"
+  repair_script="$(find "$HOME/.codex/plugins/cache" -path '*/kaola-workflow-gitlab/*/scripts/kaola-gitlab-workflow-repair-state.js' -print -quit 2>/dev/null)"
 fi
 test -f "$repair_script"
 node "$repair_script" {project-or-empty}

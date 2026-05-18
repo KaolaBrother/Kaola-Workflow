@@ -25,6 +25,7 @@ function parseArgs(argv) {
     const val = argv[i + 1];
     if (key === '--json') { args.json = true; continue; }
     if (key === '--force') { args.force = true; continue; }
+    if (key === '--keep-worktree') { args.keepWorktree = true; continue; }
     if (key.startsWith('--') && val !== undefined && !val.startsWith('--')) {
       const name = key.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
       args[name] = val;
@@ -92,6 +93,20 @@ function provisionWorktree(root, project, branch) {
     execFileSync('git', ['worktree', 'add', '-b', branch, '--', wtPath, 'HEAD'], { cwd: root, stdio: 'inherit' });
   }
   return { path: wtPath, branch };
+}
+
+function removeWorktree(root, project, folder) {
+  const wtPath = (folder && folder.worktree_path) || worktreePathFor(root, project);
+  if (!wtPath || !fs.existsSync(wtPath)) return { removed: false, reason: 'missing' };
+  try {
+    execFileSync('git', ['worktree', 'remove', '--force', '--', wtPath], {
+      cwd: root,
+      stdio: ['ignore', 'ignore', 'ignore']
+    });
+    return { removed: true, path: wtPath };
+  } catch (_) {
+    return { removed: false, path: wtPath };
+  }
 }
 
 function projectDir(root, project) {
@@ -383,6 +398,9 @@ function cmdFinalize() {
   const folder = activeByProject(root, args.project);
   const projectInfo = folder ? { project_id: folder.project_id, path_with_namespace: folder.path_with_namespace } : discoverProjectSafe();
   const result = archiveProjectDir(root, args.project, 'closed');
+  if (!args.keepWorktree) {
+    try { removeWorktree(root, args.project, folder); } catch (_) {}
+  }
   clearAdvisoryClaim(folder && folder.issue_iid, 'finalized', projectInfo);
   output(Object.assign({ status: 'closed' }, result));
 }
@@ -393,6 +411,7 @@ function cmdRelease() {
   const folder = args.project ? activeByProject(root, args.project) : (args.issue ? activeByIssue(root, args.issue) : null);
   if (!folder) { output({ released: false, reason: '--project or --issue must name an active folder' }, 1); return; }
   const result = archiveProjectDir(root, folder.project, 'abandoned', '.discarded-' + new Date().toISOString().replace(/[:.]/g, '-'));
+  try { removeWorktree(root, folder.project, folder); } catch (_) {}
   clearAdvisoryClaim(folder.issue_iid, args.reason || 'discarded', { project_id: folder.project_id, path_with_namespace: folder.path_with_namespace });
   output(Object.assign({ released: true, project: folder.project }, result));
 }
@@ -454,9 +473,11 @@ function watchMergeRequests(root, args) {
     try { state = forge.viewMergeRequest(mrIid).state || ''; } catch (_) { continue; }
     if (state === 'merged') {
       archiveProjectDir(root, folder.project, 'closed');
+      try { removeWorktree(root, folder.project, folder); } catch (_) {}
       clearAdvisoryClaim(folder.issue_iid, 'mr merged', { project_id: folder.project_id, path_with_namespace: folder.path_with_namespace });
     } else if (state === 'closed') {
       archiveProjectDir(root, folder.project, 'abandoned', '.discarded-' + new Date().toISOString().replace(/[:.]/g, '-'));
+      try { removeWorktree(root, folder.project, folder); } catch (_) {}
       clearAdvisoryClaim(folder.issue_iid, 'mr closed', { project_id: folder.project_id, path_with_namespace: folder.path_with_namespace });
     }
   }
@@ -539,6 +560,7 @@ module.exports = {
   projectNameForIssue,
   provisionWorktree,
   readActiveFolders,
+  removeWorktree,
   watchMergeRequests,
   worktreePathFor
 };

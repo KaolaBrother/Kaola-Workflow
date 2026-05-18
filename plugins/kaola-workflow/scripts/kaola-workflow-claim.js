@@ -24,6 +24,7 @@ function parseArgs(argv) {
     const val = argv[i + 1];
     if (key === '--json') { args.json = true; continue; }
     if (key === '--force') { args.force = true; continue; }
+    if (key === '--keep-worktree') { args.keepWorktree = true; continue; }
     if (key.startsWith('--') && val !== undefined && !val.startsWith('--')) {
       const name = key.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
       args[name] = val;
@@ -438,7 +439,9 @@ function cmdFinalize() {
   assert(args.project, '--project required');
   const folder = activeByProject(root, args.project);
   const result = archiveProjectDir(root, args.project, 'closed');
-  try { removeWorktree(root, args.project, folder); } catch (_) {}
+  if (!args.keepWorktree) {
+    try { removeWorktree(root, args.project, folder); } catch (_) {}
+  }
   clearAdvisoryClaim(folder && folder.issue_number, 'finalized');
   output(Object.assign({ status: 'closed' }, result));
 }

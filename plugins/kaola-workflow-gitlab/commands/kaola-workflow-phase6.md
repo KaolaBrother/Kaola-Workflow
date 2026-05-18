@@ -486,14 +486,42 @@ fi
 
 ## Step 8b - Finalize (Archive + Status Close)
 
-Run `cmdFinalize` from the linked worktree context. This must run AFTER Step 8a (artifact mirror) and BEFORE Step 8 (git add/commit), because the rename needs to be detected by `git add`:
+This step runs **only when `sink: merge`**. For `sink: mr` or `sink: pr`, skip
+to Step 8 — the active folder must remain open so `sink-mr.js` can write
+`mr_url` and `watch-mr` can archive the folder when the MR merges or closes.
+
+Before archive, capture sink metadata from the active `workflow-state.md`. Do
+not read `kaola-workflow/{project}/workflow-state.md` again after this point on
+the merge path, because `cmdFinalize` renames it into `archive/`.
 
 ```bash
-(cd "$ACTIVE_WORKTREE_PATH" && node "$CLAIM_JS" finalize \
-  --project "$KAOLA_PROJECT")
+kaola_script(){ _n="$1"; for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n" "./plugins/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; return 1; }
+CLAIM_JS="$(kaola_script kaola-gitlab-workflow-claim.js)"
+SINK_STATE_FILE="kaola-workflow/{project}/workflow-state.md"
+SINK_BRANCH=$(grep '^branch:' "$SINK_STATE_FILE" | awk '{print $2}')
+SINK_ISSUE=$(grep '^issue_iid:' "$SINK_STATE_FILE" | awk '{print $2}')
+[ -z "$SINK_ISSUE" ] && SINK_ISSUE=$(grep '^issue_number:' "$SINK_STATE_FILE" | awk '{print $2}')
+SINK_KIND=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | grep '^sink:' | awk '{print $2}')
+SINK_KIND=${SINK_KIND:-merge}
+SINK_ISSUE_FLAG=""
+[ -n "$SINK_ISSUE" ] && [ "$SINK_ISSUE" != "unset" ] && SINK_ISSUE_FLAG="--issue $SINK_ISSUE"
+
+if [ "$SINK_KIND" = "merge" ]; then
+  (cd "$ACTIVE_WORKTREE_PATH" && node "$CLAIM_JS" finalize \
+    --project "$KAOLA_PROJECT" \
+    --keep-worktree)
+fi
 ```
 
-This atomically writes `status: closed` + `step: complete` to `workflow-state.md` and renames `kaola-workflow/{project}/` → `kaola-workflow/archive/{project}/` in the linked worktree. The rename is included in the Step 8 commit via git rename detection.
+When it runs, `cmdFinalize` atomically writes `status: closed` + `step:
+complete` to `workflow-state.md` and renames `kaola-workflow/{project}/` →
+`kaola-workflow/archive/{project}/` in the linked worktree. The rename is
+included in the Step 8 commit via git rename detection.
+
+If `SINK_KIND` is `mr` or `pr`: skip this archive step. Proceed to Step 8
+(commit). The active folder remains open. `sink-mr.js` (Step 9) writes the MR
+URL into the active folder. `watch-mr` (on the next `/workflow-next` startup)
+detects the merged or closed MR and archives the folder automatically.
 
 ## Step 8 - Commit Gate
 
@@ -505,11 +533,7 @@ conventional commit on the workflow branch.
 Minimum gate:
 
 ```bash
-_COORD_ROOT_RAW="$(git rev-parse --git-common-dir 2>/dev/null || echo ".git")"
-if [[ "$_COORD_ROOT_RAW" != /* ]]; then _COORD_ROOT_RAW="$(pwd)/$_COORD_ROOT_RAW"; fi
-ACTIVE_WORKTREE_PATH="$(pwd)"
-_WT="$(node -e "try{const fs=require('fs');const s=fs.readFileSync('kaola-workflow/{project}/workflow-state.md','utf8');const m=s.match(/^worktree_path:\\s*(.+)$/m);process.stdout.write(m?m[1].trim():'');}catch(e){}" 2>/dev/null)" || true
-[ -n "$_WT" ] && [ -d "$_WT" ] && ACTIVE_WORKTREE_PATH="$_WT"
+: "${ACTIVE_WORKTREE_PATH:=$(pwd)}"
 git -C "$ACTIVE_WORKTREE_PATH" status --short
 git -C "$ACTIVE_WORKTREE_PATH" add <approved-files-only>
 git -C "$ACTIVE_WORKTREE_PATH" commit -m "chore: finalize {project}"
@@ -522,7 +546,8 @@ sink with uncommitted final changes.
 
 ## Step 9 - Sink
 
-Read the `## Sink` block from `kaola-workflow/{project}/workflow-state.md`:
+Use the sink metadata captured before Step 8b. Do not read the active
+`workflow-state.md` here on the merge path; it may already be archived.
 
 ```bash
 # Capture main repo root before sink dispatch.
@@ -531,17 +556,9 @@ Read the `## Sink` block from `kaola-workflow/{project}/workflow-state.md`:
 _COORD_ROOT_RAW_SINK="$(git rev-parse --git-common-dir 2>/dev/null || echo ".git")"
 if [[ "$_COORD_ROOT_RAW_SINK" != /* ]]; then _COORD_ROOT_RAW_SINK="$(pwd)/$_COORD_ROOT_RAW_SINK"; fi
 _MAIN_ROOT="$(dirname "$_COORD_ROOT_RAW_SINK")"
-SINK_BRANCH=$(grep '^branch:' kaola-workflow/{project}/workflow-state.md | awk '{print $2}')
-SINK_ISSUE=$(grep '^issue_number:' kaola-workflow/{project}/workflow-state.md | awk '{print $2}')
-SINK_KIND=$(awk '/^## Sink/,0' kaola-workflow/{project}/workflow-state.md | grep '^sink:' | awk '{print $2}')
-SINK_KIND=${SINK_KIND:-merge}
-```
-
-If `SINK_ISSUE` is `unset`, omit `--issue`. Build the issue flag conditionally:
-
-```bash
-SINK_ISSUE_FLAG=""
-[ "$SINK_ISSUE" != "unset" ] && SINK_ISSUE_FLAG="--issue $SINK_ISSUE"
+: "${SINK_BRANCH:?SINK_BRANCH must be captured before Step 8b}"
+: "${SINK_KIND:=merge}"
+: "${SINK_ISSUE_FLAG:=}"
 ```
 
 Dispatch based on `SINK_KIND`:

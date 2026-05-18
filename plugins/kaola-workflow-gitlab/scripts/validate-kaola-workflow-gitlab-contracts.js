@@ -124,9 +124,24 @@ assert(
   'GitLab Phase 6 command must dispatch canonical mr sink plus pr compatibility alias'
 );
 assert(
+  read(pluginRoot + '/commands/kaola-workflow-phase6.md').includes('SINK_STATE_FILE="kaola-workflow/{project}/workflow-state.md"') &&
+  read(pluginRoot + '/commands/kaola-workflow-phase6.md').includes('--keep-worktree') &&
+  read(pluginRoot + '/commands/kaola-workflow-phase6.md').includes('Use the sink metadata captured before Step 8b'),
+  'GitLab Phase 6 command must capture sink metadata before archive and preserve worktree for the final commit'
+);
+assert(
   read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('mr|pr)'),
   'GitLab finalize skill must dispatch canonical mr sink plus pr compatibility alias'
 );
+assert(
+  read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('SINK_STATE_FILE="kaola-workflow/${KAOLA_PROJECT}/workflow-state.md"') &&
+  read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('--keep-worktree') &&
+  read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('metadata captured before archive'),
+  'GitLab finalize skill must capture sink metadata before archive and preserve worktree for the final commit'
+);
+for (const skill of listFiles(pluginRoot + '/skills', file => file.endsWith('SKILL.md'))) {
+  assert(!read(skill).includes("*/kaola-workflow/*/scripts/kaola-gitlab"), skill + ' must use the GitLab Codex plugin cache path');
+}
 
 for (const file of listFiles(pluginRoot + '/scripts', file =>
   file.endsWith('.js') && !file.endsWith('validate-kaola-workflow-gitlab-contracts.js')

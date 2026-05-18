@@ -86,30 +86,45 @@ choices, or ambiguity that blocks correctness.
 
    ### Step 8b - Finalize (Archive + Status Close)
 
-   Run `cmdFinalize` from the linked worktree after the artifact mirror and before the commit gate:
+   This step runs **only when `sink: merge`**. For `sink: mr` or `sink: pr`, skip
+   to the commit gate so `sink-mr.js` can write MR metadata into the active
+   folder and `watch-mr` can archive it when the MR merges or closes.
+
+   Capture sink metadata from the active state before archive. Do not read
+   `kaola-workflow/${KAOLA_PROJECT}/workflow-state.md` again after this point
+   on the merge path, because `cmdFinalize` renames it into `archive/`.
 
    ```bash
-   SINK_KIND=$(awk '/^## Sink/,0' "kaola-workflow/${KAOLA_PROJECT}/workflow-state.md" | grep '^sink:' | awk '{print $2}')
+   claim_script="plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js"
+   if [ ! -f "$claim_script" ]; then
+     claim_script="$(find "$HOME/.codex/plugins/cache" -path '*/kaola-workflow-gitlab/*/scripts/kaola-gitlab-workflow-claim.js' -print -quit 2>/dev/null)"
+   fi
+   SINK_STATE_FILE="kaola-workflow/${KAOLA_PROJECT}/workflow-state.md"
+   SINK_KIND=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | grep '^sink:' | awk '{print $2}')
    SINK_KIND="${SINK_KIND:-merge}"
-   SINK_BRANCH=$(grep '^branch:' "kaola-workflow/${KAOLA_PROJECT}/workflow-state.md" | awk '{print $2}')
-   (cd "$ACTIVE_WORKTREE_PATH" && node "$CLAIM_JS" finalize \
-     --project "$KAOLA_PROJECT")
+   SINK_BRANCH=$(grep '^branch:' "$SINK_STATE_FILE" | awk '{print $2}')
+   SINK_ISSUE=$(grep '^issue_iid:' "$SINK_STATE_FILE" | awk '{print $2}')
+   [ -z "$SINK_ISSUE" ] && SINK_ISSUE=$(grep '^issue_number:' "$SINK_STATE_FILE" | awk '{print $2}')
+   SINK_ISSUE_FLAG=""
+   [ -n "$SINK_ISSUE" ] && [ "$SINK_ISSUE" != "unset" ] && SINK_ISSUE_FLAG="--issue $SINK_ISSUE"
+   if [ "$SINK_KIND" = "merge" ]; then
+     (cd "$ACTIVE_WORKTREE_PATH" && node "$claim_script" finalize \
+       --project "$KAOLA_PROJECT" \
+       --keep-worktree)
+   fi
    ```
 
-   This atomically writes `status: closed` + `step: complete` to `workflow-state.md` and
-   renames `kaola-workflow/${KAOLA_PROJECT}/` → `kaola-workflow/archive/${KAOLA_PROJECT}/`
-   in the linked worktree. The rename is staged and committed in the commit gate below.
+   When it runs, this atomically writes `status: closed` + `step: complete` to
+   `workflow-state.md` and renames `kaola-workflow/${KAOLA_PROJECT}/` →
+   `kaola-workflow/archive/${KAOLA_PROJECT}/` in the linked worktree. The rename
+   is staged and committed in the commit gate below.
 
    Before sink dispatch, stage only approved implementation, docs, roadmap,
    archive, and workflow artifacts for this project, then create the final
    conventional commit on the workflow branch:
 
    ```bash
-   _COORD_ROOT_RAW="$(git rev-parse --git-common-dir 2>/dev/null || echo ".git")"
-   if [[ "$_COORD_ROOT_RAW" != /* ]]; then _COORD_ROOT_RAW="$(pwd)/$_COORD_ROOT_RAW"; fi
-   ACTIVE_WORKTREE_PATH="$(pwd)"
-   _WT="$(node -e "try{const fs=require('fs');const s=fs.readFileSync('kaola-workflow/' + process.env.KAOLA_PROJECT + '/workflow-state.md','utf8');const m=s.match(/^worktree_path:\\s*(.+)$/m);process.stdout.write(m?m[1].trim():'');}catch(e){}" 2>/dev/null)" || true
-   [ -n "$_WT" ] && [ -d "$_WT" ] && ACTIVE_WORKTREE_PATH="$_WT"
+   : "${ACTIVE_WORKTREE_PATH:=$(pwd)}"
    git -C "$ACTIVE_WORKTREE_PATH" status --short
    git -C "$ACTIVE_WORKTREE_PATH" add <approved-files-only>
    git -C "$ACTIVE_WORKTREE_PATH" commit -m "chore: finalize ${KAOLA_PROJECT}"
@@ -120,26 +135,25 @@ choices, or ambiguity that blocks correctness.
    contains the final candidate commit. Do not run a sink with uncommitted final
    changes.
 
-   After the commit gate, dispatch to the correct sink script based on the
-   `sink` field in `workflow-state.md`:
+   After the commit gate, dispatch to the correct sink script using the sink
+   metadata captured before archive:
 
    ```bash
-   claim_script="plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js"
-   if [ ! -f "$claim_script" ]; then
-     claim_script="$(find "$HOME/.codex/plugins/cache" -path '*/kaola-workflow/*/scripts/kaola-gitlab-workflow-claim.js' -print -quit 2>/dev/null)"
-   fi
    scripts_dir="$(dirname "$claim_script")"
+   : "${SINK_BRANCH:?SINK_BRANCH must be captured before archive}"
+   : "${SINK_KIND:=merge}"
+   : "${SINK_ISSUE_FLAG:=}"
    case "$SINK_KIND" in
      mr|pr)
-       node "$scripts_dir/kaola-gitlab-workflow-sink-mr.js" --branch "$SINK_BRANCH" --project "$KAOLA_PROJECT"
+       node "$scripts_dir/kaola-gitlab-workflow-sink-mr.js" --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG --project "$KAOLA_PROJECT"
        ;;
      merge|*)
-       node "$scripts_dir/kaola-gitlab-workflow-sink-merge.js" --branch "$SINK_BRANCH" --project "$KAOLA_PROJECT"
+       node "$scripts_dir/kaola-gitlab-workflow-sink-merge.js" --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG --project "$KAOLA_PROJECT"
        _SINK_MERGE_EXIT=$?
        if [ "$_SINK_MERGE_EXIT" -eq 3 ]; then
          node "$scripts_dir/kaola-gitlab-workflow-claim.js" sink-fallback \
            --project "$KAOLA_PROJECT"
-         node "$scripts_dir/kaola-gitlab-workflow-sink-mr.js" --branch "$SINK_BRANCH" --project "$KAOLA_PROJECT"
+         node "$scripts_dir/kaola-gitlab-workflow-sink-mr.js" --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG --project "$KAOLA_PROJECT"
          exit $?
        fi
        [ "$_SINK_MERGE_EXIT" -ne 0 ] && exit "$_SINK_MERGE_EXIT"

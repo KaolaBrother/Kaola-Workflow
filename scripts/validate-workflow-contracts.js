@@ -199,7 +199,11 @@ assertIncludes('CLAUDE.md', 'active folders');
 
 assertIncludes('commands/kaola-workflow-phase6.md', 'kaola-workflow-sink-merge.js');
 assertIncludes('commands/kaola-workflow-phase6.md', 'kaola-workflow-sink-pr.js');
+assertIncludes('commands/kaola-workflow-phase6.md', 'SINK_STATE_FILE="kaola-workflow/{project}/workflow-state.md"');
+assertIncludes('commands/kaola-workflow-phase6.md', '--keep-worktree');
+assertIncludes('commands/kaola-workflow-phase6.md', 'Use the sink metadata captured before Step 8b');
 assertBefore('commands/kaola-workflow-phase6.md', 'commit -m "chore: finalize {project}"', 'kaola-workflow-sink-merge.js');
+assertBefore('commands/kaola-workflow-phase6.md', 'SINK_STATE_FILE="kaola-workflow/{project}/workflow-state.md"', 'node "$CLAIM_JS" finalize');
 
 const packageJson = JSON.parse(read('package.json'));
 assert(Array.isArray(packageJson.files) && packageJson.files.includes('hooks/'), 'package files must include hooks/');

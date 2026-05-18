@@ -361,7 +361,7 @@ The detailed durable-state map lives in `docs/workflow-state-contract.md`. Keep 
 | `startup` / `bootstrap` | `node scripts/kaola-workflow-claim.js startup --target-issue <N> [--runtime claude|codex] [--sink merge|pr]` | Validates and atomically creates or reuses the active folder for issue N |
 | `status` | `node scripts/kaola-workflow-claim.js status` | Lists active folders and their issue, branch, phase, sink, and worktree metadata |
 | `release` / `discard` | `node scripts/kaola-workflow-claim.js release --project <name>` | Archives an active folder as abandoned and clears advisory GitHub labels when online |
-| `finalize` | `node scripts/kaola-workflow-claim.js finalize --project <name>` | Marks the folder closed and moves it to `kaola-workflow/archive/` |
+| `finalize` | `node scripts/kaola-workflow-claim.js finalize --project <name> [--keep-worktree]` | Marks the folder closed and moves it to `kaola-workflow/archive/`; by default removes the linked worktree, while `--keep-worktree` preserves it for the final commit gate |
 | `watch-pr` | `node scripts/kaola-workflow-claim.js watch-pr` | Archives PR-backed folders when GitHub reports MERGED or CLOSED |
 | `worktree-status` / `worktree-finalize` | see `--help` usage errors | Lists workflow worktrees and mirrors final artifacts into the linked worktree |
 
@@ -430,7 +430,7 @@ Called automatically at `/workflow-next` startup. Scans active folders with `sin
 
 **OFFLINE behavior**: `kaola-workflow-sink-pr.js` writes `OFFLINE_PLACEHOLDER` and `0` to the workflow-state.md Sink block and phase6-summary.md, then exits 0.
 
-The sink-merge script is invoked after the Phase 6 final commit gate to automate the final merge sequence. It performs: git fetch, clean-worktree guard, checkout of the requested workflow branch, merge-base skip-check, rebase onto origin/main, post-rebase validation, FF-only merge with race-condition retry loop (MAX_AUTOMERGE_RETRIES=3), push, issue close, and branch cleanup. Exit codes: 0 (success), 1 (error), 2 (FF race exhausted).
+The sink-merge script is invoked after the Phase 6 final commit gate to automate the final merge sequence. It performs: git fetch, clean-worktree guard, checkout of the requested workflow branch, merge-base skip-check, rebase onto origin/main, post-rebase validation, FF-only merge with race-condition retry loop (MAX_AUTOMERGE_RETRIES=3), push, issue close, and branch cleanup. Exit codes: 0 (success), 1 (error), 2 (FF race exhausted), 3 (merge-impossible fallback to PR).
 
 ```text
 /kaola-workflow-phase1

@@ -72,6 +72,18 @@ function runNode(args, cwd) {
   return result.stdout.trim();
 }
 
+function initGitRepo(root) {
+  let result = spawnSync('git', ['init'], { cwd: root, encoding: 'utf8' });
+  assert.strictEqual(result.status, 0, result.stderr);
+  spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: root, encoding: 'utf8' });
+  spawnSync('git', ['config', 'user.name', 'Test User'], { cwd: root, encoding: 'utf8' });
+  fs.writeFileSync(path.join(root, 'README.md'), '# fixture\n');
+  result = spawnSync('git', ['add', 'README.md'], { cwd: root, encoding: 'utf8' });
+  assert.strictEqual(result.status, 0, result.stderr);
+  result = spawnSync('git', ['commit', '-m', 'init'], { cwd: root, encoding: 'utf8' });
+  assert.strictEqual(result.status, 0, result.stderr);
+}
+
 withForge({
   viewIssue(issueIid) {
     return { issue_iid: issueIid, number: issueIid, state: issueIid === 11 ? 'closed' : 'open', labels: [] };
@@ -187,6 +199,32 @@ withForge({
   runNode([claimScript, 'sink-fallback', '--project', 'sink-project', '--reason', 'test'], root);
   const state = fs.readFileSync(path.join(root, 'kaola-workflow', 'sink-project', 'workflow-state.md'), 'utf8');
   assert(state.includes('sink: mr'));
+}
+
+{
+  const root = tempRoot('kw-gl-worktree-cleanup-');
+  const kwRoot = fs.realpathSync(root) + '.kw';
+  try {
+    initGitRepo(root);
+    const wtRelease = path.join(kwRoot, 'release-project');
+    fs.mkdirSync(path.dirname(wtRelease), { recursive: true });
+    let result = spawnSync('git', ['worktree', 'add', '-b', 'workflow/gitlab-issue-70', '--', wtRelease, 'HEAD'], { cwd: root, encoding: 'utf8' });
+    assert.strictEqual(result.status, 0, result.stderr);
+    writeState(root, 'release-project', 70, 'worktree_path: ' + wtRelease);
+    runNode([claimScript, 'release', '--project', 'release-project', '--reason', 'test'], root);
+    assert(!fs.existsSync(wtRelease), 'GitLab release should remove linked worktree');
+
+    const wtFinalize = path.join(kwRoot, 'finalize-project');
+    result = spawnSync('git', ['worktree', 'add', '-b', 'workflow/gitlab-issue-71', '--', wtFinalize, 'HEAD'], { cwd: root, encoding: 'utf8' });
+    assert.strictEqual(result.status, 0, result.stderr);
+    writeState(root, 'finalize-project', 71, 'worktree_path: ' + wtFinalize);
+    runNode([claimScript, 'finalize', '--project', 'finalize-project', '--keep-worktree'], root);
+    assert(fs.existsSync(wtFinalize), 'GitLab keep-worktree finalize should preserve worktree for final commit');
+    assert(fs.existsSync(path.join(root, 'kaola-workflow', 'archive', 'finalize-project')), 'GitLab keep-worktree finalize should archive active folder');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(kwRoot, { recursive: true, force: true });
+  }
 }
 
 withForge({
