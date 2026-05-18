@@ -20,6 +20,23 @@ const SKILLS = {
 };
 const WORKFLOW_DIR = 'kaola-workflow';
 const LEGACY_WORKFLOW_DIRS = ['claude-workflow'];
+const DELEGATION_POLICIES = new Set(['delegate', 'local-authorized', 'tool-unavailable']);
+const DELEGATION_STATUSES = new Set([
+  'subagent-invoked',
+  'local-fallback-explicit',
+  'local-fallback-tool-unavailable'
+]);
+const INACTIVE_STATUSES = new Set(['n/a', 'na', 'skipped']);
+const DELEGATION_CONTROLLED_REQUIREMENTS = [
+  /^(code-explorer|planner|code-architect|doc-updater)$/i,
+  /^tdd-guide\b/i,
+  /executor/i,
+  /^quality review$/i,
+  /^security review$/i,
+  /^review-fix executors$/i,
+  /^code-reviewer$/i,
+  /^security-reviewer$/i
+];
 
 function readFile(file) {
   return fs.readFileSync(file, 'utf8');
@@ -146,19 +163,126 @@ function complianceRows(content) {
     }));
 }
 
-function unresolvedCompliance(content) {
+function isDelegationControlledRequirement(requirement) {
+  return DELEGATION_CONTROLLED_REQUIREMENTS.some(pattern => pattern.test(requirement || ''));
+}
+
+function hasEvidenceOrSkip(row) {
+  return Boolean((row.evidence || '').trim() || (row.skipReason || '').trim());
+}
+
+function delegationPolicyCompliance(phaseContent, stateContent = '') {
+  const policy = field(stateContent, 'delegation_policy');
+  if (!policy) return { ok: true, reason: 'delegation_policy absent' };
+  if (!DELEGATION_POLICIES.has(policy)) {
+    return { ok: false, reason: `unknown delegation_policy: ${policy}` };
+  }
+
+  const controlledRows = complianceRows(phaseContent)
+    .filter(row => isDelegationControlledRequirement(row.requirement));
+  if (controlledRows.length === 0) {
+    return { ok: true, reason: 'no delegation-controlled rows' };
+  }
+
+  const activeRows = [];
+  for (const row of controlledRows) {
+    const status = row.status.toLowerCase();
+    if (INACTIVE_STATUSES.has(status)) {
+      if (!hasEvidenceOrSkip(row)) {
+        return {
+          ok: false,
+          reason: `${row.requirement} is ${row.status} without evidence or skip reason`
+        };
+      }
+      continue;
+    }
+    if (!DELEGATION_STATUSES.has(status)) {
+      return {
+        ok: false,
+        reason: `${row.requirement} uses ${row.status || 'missing'} instead of delegation vocabulary`
+      };
+    }
+    activeRows.push({ ...row, status });
+  }
+
+  if (activeRows.length === 0) {
+    return { ok: true, reason: 'all delegation-controlled rows are inactive with evidence' };
+  }
+
+  if (policy === 'delegate') {
+    if (activeRows.some(row => row.status === 'local-fallback-explicit')) {
+      return {
+        ok: false,
+        reason: 'delegate policy does not allow local-fallback-explicit rows'
+      };
+    }
+    if (activeRows.some(row => row.status === 'subagent-invoked')) {
+      if (activeRows.every(row =>
+        row.status === 'subagent-invoked' ||
+        (row.status === 'local-fallback-tool-unavailable' && hasEvidenceOrSkip(row))
+      )) {
+        return { ok: true, reason: 'delegate policy has subagent-invoked evidence' };
+      }
+      return {
+        ok: false,
+        reason: 'delegate policy allows only subagent-invoked or evidenced local-fallback-tool-unavailable rows'
+      };
+    }
+    if (activeRows.every(row =>
+      row.status === 'local-fallback-tool-unavailable' && hasEvidenceOrSkip(row)
+    )) {
+      return { ok: true, reason: 'delegate policy has only tool-unavailable fallbacks with evidence' };
+    }
+    return {
+      ok: false,
+      reason: 'delegate policy requires subagent-invoked or only evidenced local-fallback-tool-unavailable rows'
+    };
+  }
+
+  if (policy === 'local-authorized') {
+    if (activeRows.every(row => row.status === 'local-fallback-explicit')) {
+      return { ok: true, reason: 'local-authorized policy has explicit local fallback rows' };
+    }
+    return {
+      ok: false,
+      reason: 'local-authorized policy requires local-fallback-explicit rows'
+    };
+  }
+
+  if (activeRows.every(row =>
+    row.status === 'local-fallback-tool-unavailable' && hasEvidenceOrSkip(row)
+  )) {
+    return { ok: true, reason: 'tool-unavailable policy has evidenced tool-unavailable rows' };
+  }
+  return {
+    ok: false,
+    reason: 'tool-unavailable policy requires local-fallback-tool-unavailable rows with evidence'
+  };
+}
+
+function unresolvedCompliance(content, stateContent = '') {
   const rows = complianceRows(content);
   if (rows.length === 0) {
     return [{ requirement: 'Required Agent Compliance table', status: 'missing', evidence: '', skipReason: '' }];
   }
 
-  return rows.filter(row => {
+  const unresolved = rows.filter(row => {
     const status = row.status.toLowerCase();
     if (!status || ['pending', 'missing', 'todo', 'unknown'].includes(status)) return true;
     if (status === 'invoked' && !row.evidence) return true;
     if (['n/a', 'na', 'skipped'].includes(status) && !row.evidence && !row.skipReason) return true;
     return false;
   });
+  const policyCheck = delegationPolicyCompliance(content, stateContent);
+  if (!policyCheck.ok) {
+    unresolved.push({
+      requirement: 'delegation_policy cross-check',
+      status: field(stateContent, 'delegation_policy') || 'missing',
+      evidence: 'workflow-state.md',
+      skipReason: policyCheck.reason
+    });
+  }
+  return unresolved;
 }
 
 function taskRows(content) {
@@ -230,7 +354,9 @@ function route(root, workflowDir, project, phase, phaseFileName, crossesBoundary
   const projectDir = path.join(workflowDir, project);
   const phaseFile = path.join(projectDir, phaseFileName);
   const content = readFile(phaseFile);
-  const unresolved = unresolvedCompliance(content);
+  const stateFile = path.join(projectDir, 'workflow-state.md');
+  const stateContent = exists(stateFile) ? readFile(stateFile) : '';
+  const unresolved = unresolvedCompliance(content, stateContent);
 
   if (crossesBoundary && unresolved.length > 0) {
     return {
@@ -289,6 +415,7 @@ function preservedStateBlocks(existingContent) {
 
 function stateContent(routeResult, existingContent = '') {
   const relativePhaseFile = path.relative(routeResult.root, routeResult.phaseFile);
+  const delegationPolicy = field(existingContent, 'delegation_policy');
   const fixOwner = routeResult.phase >= 4 && routeResult.phase <= 6
     ? 'tdd-guide or build-error-resolver'
     : 'N/A';
@@ -307,6 +434,7 @@ function stateContent(routeResult, existingContent = '') {
     `task: ${routeResult.task}`,
     `next_command: ${routeResult.nextCommand}`,
     `next_skill: ${routeResult.nextSkill}`,
+    ...(delegationPolicy ? [`delegation_policy: ${delegationPolicy}`] : []),
     '',
     '## Pending Gates',
     ...pendingGateLines(routeResult.pendingGates),
@@ -410,9 +538,20 @@ function main() {
   printRoute(`Workflow state repair: wrote ${path.relative(root, stateFile)}`, routeResult);
 }
 
-try {
-  main();
-} catch (error) {
-  process.stderr.write(`[kaola-workflow state repair failed] ${error.message}\n`);
-  process.exitCode = 1;
+if (require.main === module) {
+  try {
+    main();
+  } catch (error) {
+    process.stderr.write(`[kaola-workflow state repair failed] ${error.message}\n`);
+    process.exitCode = 1;
+  }
 }
+
+module.exports = {
+  complianceRows,
+  delegationPolicyCompliance,
+  reconstruct,
+  repairStateContent: stateContent,
+  stateContent,
+  unresolvedCompliance
+};

@@ -163,6 +163,10 @@ choices, or ambiguity that blocks correctness.
 
 ## Summary File
 
+Plain `invoked` is intentional for non-Codex-role workflow gates such as final
+validation, documentation docking, roadmap refresh, archive, and final commit;
+delegation vocabulary applies only to Codex role rows like `doc-updater`.
+
 ```markdown
 # Phase 6 - Summary: {project}
 

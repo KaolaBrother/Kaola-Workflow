@@ -40,6 +40,15 @@ using the same four-token vocabulary: `subagent-invoked`, `local-fallback-explic
 `local-fallback-tool-unavailable`, or `N/A`. This audit trail documents what authority
 was invoked for each delegated task.
 
+When `delegation_policy:` is present, Codex repair-state checks phase compliance
+ledgers before crossing a phase boundary. Codex role rows must match the policy:
+`delegate` requires `subagent-invoked` unless every role row is an evidenced
+`local-fallback-tool-unavailable`; `local-authorized` requires
+`local-fallback-explicit`; `tool-unavailable` requires evidenced
+`local-fallback-tool-unavailable`. Plain `invoked` remains reserved for
+non-Codex-role workflow gates such as advisor review, final validation,
+documentation docking, roadmap refresh, archive, and final commit.
+
 ## Generated Mirrors
 
 - `kaola-workflow/ROADMAP.md` is generated from

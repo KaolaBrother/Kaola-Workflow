@@ -53,6 +53,10 @@ Use the `code-architect` Codex agent role for the blueprint step. Record status 
 
 ## Required Agent Compliance
 
+Plain `invoked` is intentional for non-Codex-role workflow gates such as
+advisor plan review; delegation vocabulary applies only to Codex role rows like
+`code-architect`.
+
 ```markdown
 | Requirement | Status | Evidence | Skip Reason |
 |-------------|--------|----------|-------------|

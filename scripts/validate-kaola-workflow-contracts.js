@@ -86,6 +86,7 @@ for (const skill of skills) {
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'active folders');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, '--target-issue');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'watch-pr');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'extract and reassign `delegation_policy:` alongside `phase` and `next_skill`');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`, 'Active folder lifecycle');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-execute/SKILL.md`, 'Required Agent Compliance');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-review/SKILL.md`, 'codex review');
@@ -119,6 +120,69 @@ for (const skill of delegationSkills) {
   assertIncludes(`${pluginRoot}/skills/${skill}/SKILL.md`, 'local-fallback-explicit');
   assertIncludes(`${pluginRoot}/skills/${skill}/SKILL.md`, 'local-fallback-tool-unavailable');
 }
+for (const skill of ['kaola-workflow-ideation', 'kaola-workflow-plan', 'kaola-workflow-finalize']) {
+  assertIncludes(
+    `${pluginRoot}/skills/${skill}/SKILL.md`,
+    'Plain `invoked` is intentional for non-Codex-role workflow gates'
+  );
+}
+
+// Issue #91: delegation_policy must be checked against phase compliance ledgers.
+const repairState = require('./kaola-workflow-repair-state.js');
+assert(
+  typeof repairState.delegationPolicyCompliance === 'function',
+  'kaola-workflow-repair-state.js must export delegationPolicyCompliance'
+);
+
+function complianceFixture(rows) {
+  return [
+    '# Phase Fixture',
+    '',
+    '## Required Agent Compliance',
+    '| Requirement | Status | Evidence | Skip Reason |',
+    '|-------------|--------|----------|-------------|',
+    ...rows.map(row => `| ${row[0]} | ${row[1]} | ${row[2] || ''} | ${row[3] || ''} |`)
+  ].join('\n');
+}
+
+function policyState(policy) {
+  return `# Kaola-Workflow State\n\ndelegation_policy: ${policy}\n`;
+}
+
+function assertPolicyAllowed(policy, rows, label) {
+  const result = repairState.delegationPolicyCompliance(complianceFixture(rows), policyState(policy));
+  assert(result.ok, `${label} should satisfy delegation_policy ${policy}: ${result.reason || 'blocked'}`);
+}
+
+function assertPolicyBlocked(policy, rows, label) {
+  const result = repairState.delegationPolicyCompliance(complianceFixture(rows), policyState(policy));
+  assert(!result.ok, `${label} should violate delegation_policy ${policy}`);
+}
+
+assertPolicyAllowed('delegate', [
+  ['code-explorer', 'subagent-invoked', '.cache/code-explorer.md', ''],
+  ['advisor ideation gate', 'invoked', '.cache/advisor-ideation.md', '']
+], 'delegated Codex role row with advisor gate');
+assertPolicyAllowed('delegate', [
+  ['code-explorer', 'local-fallback-tool-unavailable', '.cache/code-explorer.md', '']
+], 'delegate policy with all role rows unavailable and evidenced');
+assertPolicyAllowed('local-authorized', [
+  ['planner', 'local-fallback-explicit', '.cache/planner.md', '']
+], 'explicit local authorization');
+assertPolicyAllowed('tool-unavailable', [
+  ['doc-updater', 'N/A', '.cache/doc-updater.md', 'No documentation changes needed.'],
+  ['final validation', 'invoked', '.cache/final-validation.md', '']
+], 'finalize non-role invoked rows with N/A doc-updater');
+assertPolicyBlocked('delegate', [
+  ['planner', 'local-fallback-explicit', '.cache/planner.md', '']
+], 'local fallback under delegate policy');
+assertPolicyBlocked('delegate', [
+  ['code-explorer', 'subagent-invoked', '.cache/code-explorer.md', ''],
+  ['planner', 'local-fallback-explicit', '.cache/planner.md', '']
+], 'mixed local fallback under delegate policy');
+assertPolicyBlocked('tool-unavailable', [
+  ['code-reviewer', 'subagent-invoked', '.cache/code-reviewer.md', '']
+], 'subagent row under tool-unavailable policy');
 
 const sharedScripts = [
   'kaola-workflow-active-folders.js',

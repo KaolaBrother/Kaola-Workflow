@@ -166,6 +166,9 @@ Keep `kaola-workflow/ROADMAP.md` as a compact mirror of active unfinished work.
 
 Read `kaola-workflow/{project}/workflow-state.md` first. If missing or stale, run:
 
+On resume, extract and reassign `delegation_policy:` alongside `phase` and `next_skill`;
+if it is absent, return to the Delegation Contract before phase work continues.
+
 ```bash
 repair_script="plugins/kaola-workflow/scripts/kaola-workflow-repair-state.js"
 if [ ! -f "$repair_script" ]; then

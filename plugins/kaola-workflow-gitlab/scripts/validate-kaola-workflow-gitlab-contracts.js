@@ -173,6 +173,74 @@ for (const skill of gitlabDelegationSkills) {
   assert(read(skillFile).includes('local-fallback-explicit'), skillFile + ' must include: local-fallback-explicit');
   assert(read(skillFile).includes('local-fallback-tool-unavailable'), skillFile + ' must include: local-fallback-tool-unavailable');
 }
+assert(
+  read(`${gitlabSkillsBase}/kaola-workflow-next/SKILL.md`).includes('extract and reassign `delegation_policy:` alongside `phase` and `next_skill`'),
+  'GitLab next skill must explicitly resume delegation_policy alongside phase and next_skill'
+);
+for (const skill of ['kaola-workflow-ideation', 'kaola-workflow-plan', 'kaola-workflow-finalize']) {
+  const skillFile = `${gitlabSkillsBase}/${skill}/SKILL.md`;
+  assert(
+    read(skillFile).includes('Plain `invoked` is intentional for non-Codex-role workflow gates'),
+    skillFile + ' must explain intentional non-Codex-role invoked rows'
+  );
+}
+
+// Issue #91: delegation_policy must be checked against GitLab phase compliance ledgers.
+const gitlabRepairState = require('./kaola-gitlab-workflow-repair-state.js');
+assert(
+  typeof gitlabRepairState.delegationPolicyCompliance === 'function',
+  'kaola-gitlab-workflow-repair-state.js must export delegationPolicyCompliance'
+);
+
+function complianceFixture(rows) {
+  return [
+    '# Phase Fixture',
+    '',
+    '## Required Agent Compliance',
+    '| Requirement | Status | Evidence | Skip Reason |',
+    '|-------------|--------|----------|-------------|',
+    ...rows.map(row => `| ${row[0]} | ${row[1]} | ${row[2] || ''} | ${row[3] || ''} |`)
+  ].join('\n');
+}
+
+function policyState(policy) {
+  return `# Kaola-Workflow State\n\ndelegation_policy: ${policy}\n`;
+}
+
+function assertPolicyAllowed(policy, rows, label) {
+  const result = gitlabRepairState.delegationPolicyCompliance(complianceFixture(rows), policyState(policy));
+  assert(result.ok, `${label} should satisfy delegation_policy ${policy}: ${result.reason || 'blocked'}`);
+}
+
+function assertPolicyBlocked(policy, rows, label) {
+  const result = gitlabRepairState.delegationPolicyCompliance(complianceFixture(rows), policyState(policy));
+  assert(!result.ok, `${label} should violate delegation_policy ${policy}`);
+}
+
+assertPolicyAllowed('delegate', [
+  ['code-explorer', 'subagent-invoked', '.cache/code-explorer.md', ''],
+  ['advisor ideation gate', 'invoked', '.cache/advisor-ideation.md', '']
+], 'delegated GitLab Codex role row with advisor gate');
+assertPolicyAllowed('delegate', [
+  ['code-explorer', 'local-fallback-tool-unavailable', '.cache/code-explorer.md', '']
+], 'delegate policy with all role rows unavailable and evidenced');
+assertPolicyAllowed('local-authorized', [
+  ['planner', 'local-fallback-explicit', '.cache/planner.md', '']
+], 'explicit local authorization');
+assertPolicyAllowed('tool-unavailable', [
+  ['doc-updater', 'N/A', '.cache/doc-updater.md', 'No documentation changes needed.'],
+  ['final validation', 'invoked', '.cache/final-validation.md', '']
+], 'finalize non-role invoked rows with N/A doc-updater');
+assertPolicyBlocked('delegate', [
+  ['planner', 'local-fallback-explicit', '.cache/planner.md', '']
+], 'local fallback under delegate policy');
+assertPolicyBlocked('delegate', [
+  ['code-explorer', 'subagent-invoked', '.cache/code-explorer.md', ''],
+  ['planner', 'local-fallback-explicit', '.cache/planner.md', '']
+], 'mixed local fallback under delegate policy');
+assertPolicyBlocked('tool-unavailable', [
+  ['code-reviewer', 'subagent-invoked', '.cache/code-reviewer.md', '']
+], 'subagent row under tool-unavailable policy');
 
 for (const file of listFiles(pluginRoot + '/scripts', file =>
   file.endsWith('.js') && !file.endsWith('validate-kaola-workflow-gitlab-contracts.js')

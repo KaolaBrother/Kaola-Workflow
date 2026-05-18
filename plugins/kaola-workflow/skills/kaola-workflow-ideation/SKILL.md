@@ -54,6 +54,10 @@ summary of .cache/advisor-ideation.md
 ...
 
 ## Required Agent Compliance
+Plain `invoked` is intentional for non-Codex-role workflow gates such as
+advisor review; delegation vocabulary applies only to Codex role rows like
+`planner`.
+
 | Requirement | Status | Evidence | Skip Reason |
 |-------------|--------|----------|-------------|
 | planner | subagent-invoked/local-fallback-explicit/local-fallback-tool-unavailable | .cache/planner.md | |
