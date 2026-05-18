@@ -125,6 +125,7 @@ Append equivalent missing sections only. Treat headings with the same meaning as
 - Use the ECC agent names exactly as Claude Code lists them; prefer short names like `planner` when available, otherwise use the `everything-claude-code:` prefix.
 - At `/workflow-next` startup, fetch remote-tracking refs, classify local/upstream sync state, and ask before any risky synchronization.
 - Use `/goal` or equivalent prompt-based Stop-hook wording so each phase continues until its objective and completion audit are satisfied.
+- The `/goal` template must not use "next issue in line" or any phrasing that implies automatic cross-issue continuation. Each `/workflow-next` run targets one issue; finishing it is the terminal event. The single-issue completion contract requires explicit re-direction for the next issue.
 - Treat nonessential workflow bookkeeping as autonomous: generated project names, collision suffixes like `-2`, cache/artifact paths, and harmless ordering choices are selected automatically and recorded.
 - For essential technical decisions, consult the configured advisor internally, apply the selected answer, and record the evidence under `.cache/` or the phase artifact.
 - Prompt the user only for true external authorization or materially user-owned choices, including risky Git synchronization, destructive rewrites, deployment/credential actions, and issue or roadmap reorganization.

@@ -256,4 +256,12 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'doc-upd
 
 assertIncludes('package.json', 'test:kaola-workflow:codex');
 
+// Issue #46: single-issue completion contract — Codex skill surfaces
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, '## Completion Contract');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'single-issue completion contract');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'await explicit re-direction');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, '## Completion Contract');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'single-issue completion contract');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'await explicit re-direction');
+
 console.log('Kaola-Workflow contract validation passed');

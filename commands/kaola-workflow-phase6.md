@@ -662,3 +662,9 @@ cd "$_MAIN_ROOT" 2>/dev/null || true
 - Exit 1: fatal error (push failed or `gh pr create` failed). Error printed to stderr.
 
 After `sink-pr.js` exits 0, the lease remains active. The PR lease releases automatically when `watch-pr` detects the PR is MERGED or CLOSED on the next `/workflow-next` startup.
+
+## Completion Contract
+
+This phase closes exactly one issue. After issue #N is closed and the lease is
+released, the single-issue completion contract is satisfied. Do not auto-route
+into the next issue in line. Stop and await explicit re-direction from the user.

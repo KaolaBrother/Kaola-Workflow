@@ -339,4 +339,16 @@ assertIncludes('commands/workflow-next.md', 'KAOLA_WORKTREE_NATIVE');
 assertIncludes('commands/kaola-workflow-phase4.md', 'ACTIVE_WORKTREE_PATH');
 assertIncludes('commands/kaola-workflow-phase4.md', "git worktree list --porcelain");
 
+// Issue #46: single-issue completion contract
+assertIncludes('commands/workflow-next.md', '## Completion Contract');
+assertIncludes('commands/workflow-next.md', 'single-issue completion contract');
+assertIncludes('commands/workflow-next.md', 'await explicit re-direction');
+assertIncludes('commands/workflow-next.md', 'next issue in line');
+assertIncludes('commands/kaola-workflow-phase6.md', '## Completion Contract');
+assertIncludes('commands/kaola-workflow-phase6.md', 'single-issue completion contract');
+assertIncludes('commands/workflow-init.md', 'single-issue completion contract');
+assertIncludes('commands/workflow-init.md', 'next issue in line');
+assertIncludes('README.md', 'single-issue completion contract');
+assertIncludes('README.md', 'next issue in line');
+
 console.log('Workflow contract validation passed');

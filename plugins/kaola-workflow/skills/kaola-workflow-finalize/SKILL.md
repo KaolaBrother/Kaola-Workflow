@@ -252,3 +252,9 @@ DOCKED, .cache/doc-docking.md
 ```
 
 State remains in `workflow-state.md` until archive is complete.
+
+## Completion Contract
+
+This skill closes exactly one issue. After issue #N is closed and the lease is released,
+the single-issue completion contract is satisfied. Stop and await explicit re-direction
+from the user. Do not auto-route into the next issue in line.

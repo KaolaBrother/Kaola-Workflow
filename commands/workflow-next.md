@@ -35,12 +35,14 @@ Use `$ARGUMENTS` as either:
 
 Use `/goal` or equivalent prompt-based Stop-hook wording so the router and each
 phase keep going until the active phase objective and completion audit pass.
-Treat nonessential workflow bookkeeping as autonomous: issue selection when
-there is one unambiguous open issue, generated project names, collision suffixes
-like `-2`, cache paths, and harmless ordering choices. Consult the configured
-advisor internally for essential technical decisions, apply the chosen answer,
-and record it under `.cache/` or the phase artifact. Ask only for true external
-authorization or materially user-owned choices.
+Treat nonessential workflow bookkeeping as autonomous: generated project names,
+collision suffixes like `-2`, cache paths, and harmless ordering choices.
+Consult the configured advisor internally for essential technical decisions,
+apply the chosen answer, and record it under `.cache/` or the phase artifact.
+Ask only for true external authorization or materially user-owned choices.
+
+The `/goal` template must NOT use "next issue in line" or similar phrasing that
+implies cross-issue continuation. Each run targets exactly one issue.
 
 ## Startup Step 0 - Agent Issue Selection (Required Before Startup)
 
@@ -106,8 +108,10 @@ fi
 ```
 
 If `STARTUP_OUT` is JSON, its `session` field is the active session id. A
-verdict of `owned` routes that owned project. If startup returns `verdict: no_target`,
-the agent must select a target issue per Step 0 and re-run. If startup returns a
+verdict of `owned` routes that owned project. If startup returns `claim: "none"`,
+normal routing must stop; do not inspect active project folders and recover/handoff
+them from a skipped `already claimed` entry unless the user explicitly requested
+recovery for a specific unfinished project. If startup returns a
 typed refusal (`target_occupied`, `user_target_blocked`, `user_target_red`,
 `target_mismatch`, `target_unavailable`), read the `reasoning` field and either
 stop, select a different issue, or escalate to the user. If startup is unavailable
@@ -181,9 +185,8 @@ Otherwise list active workflow folders under `kaola-workflow/` that contain at
 least one `phase*.md` file or a `workflow-state.md` with `status: active`.
 Skip `archive/`.
 
-If no active project is selected, choose one unambiguous open GitHub issue or
-provided task automatically. If there are multiple plausible issues/tasks or no
-task is available, ask the user what to implement. New work starts with:
+If no active project is selected and no target was named in Startup Step 0,
+ask the user what to implement. New work starts with:
 
 ```text
 /kaola-workflow-phase1 <task description or issue>
@@ -285,3 +288,11 @@ Next command: {next_command}
 If nested slash-command execution is supported in the current Claude Code
 environment, continue by applying the matching command. Otherwise stop after
 printing the next command.
+
+## Completion Contract
+
+Each `/workflow-next` run implements exactly one issue. After Phase 6 closes issue #N
+and releases the lease, the agent must stop and await explicit re-direction from the user.
+Do not auto-route into the next issue in line. The single-issue completion contract means
+finishing issue #N is the terminal event of the run. To start issue #N+1, the user must
+invoke `/workflow-next` again.

@@ -171,3 +171,9 @@ Current step: {step}
 Pending gates: {list or none}
 Next skill: {next_skill}
 ```
+
+## Completion Contract
+
+Each kaola-workflow-next run implements exactly one issue. After kaola-workflow-finalize
+closes issue #N and releases the lease, the single-issue completion contract is satisfied.
+Stop and await explicit re-direction. Do not auto-route into the next issue in line.

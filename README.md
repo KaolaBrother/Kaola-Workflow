@@ -20,6 +20,11 @@ session. Prompt the user only for true external authorization or materially
 user-owned choices, such as risky Git synchronization, destructive rewrites,
 credential or deployment actions, or issue/roadmap reorganization.
 
+The single-issue completion contract applies at the end of every run: after
+Phase 6 closes issue #N and releases the lease, the agent stops and awaits
+explicit re-direction. Do not use "next issue in line" phrasing in `/goal`
+templates — cross-issue continuation is never automatic.
+
 ## Dependency — Everything Claude Code (ECC)
 
 > **This plugin requires ECC to be installed.**
