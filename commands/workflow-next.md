@@ -66,7 +66,8 @@ Set `KAOLA_TARGET_ISSUE` to the chosen issue number before calling startup.
 If `kaola-workflow-claim.js` and `kaola-workflow-classifier.js` are available,
 run the startup transaction with the agent-selected target. Resolve the current
 session id from `KAOLA_SESSION_ID`, then the host platform id, then a generated
-fallback. The startup script validates, claims, and receipts the explicit target.
+fallback. The startup script validates, runs `watch-pr` for PR lease monitoring,
+claims, and receipts the explicit target.
 
 ```bash
 kaola_script(){ _n="$1"; for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; return 1; }
@@ -111,6 +112,9 @@ typed refusal (`target_occupied`, `user_target_blocked`, `user_target_red`,
 `target_mismatch`, `target_unavailable`), read the `reasoning` field and either
 stop, select a different issue, or escalate to the user. If startup is unavailable
 or the startup receipt is missing/malformed, stop for repair.
+If startup returns `claim: "none"`, normal routing must stop; do not inspect active project folders
+and recover/handoff them from a skipped `already claimed` entry unless the user explicitly requested
+recovery for a specific unfinished project.
 If `KAOLA_PATH=fast` is set, startup records `workflow_path: fast`.
 Agent sets this env var after reading `analyzeIssue` advisory output from the startup receipt.
 

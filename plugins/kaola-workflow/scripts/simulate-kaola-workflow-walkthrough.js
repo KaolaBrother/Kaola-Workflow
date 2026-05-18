@@ -5816,7 +5816,7 @@ exit 0
       }
     }
 
-    console.log('Workflow walkthrough simulation passed');
+    console.log('Kaola-Workflow walkthrough simulation passed');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
     try {

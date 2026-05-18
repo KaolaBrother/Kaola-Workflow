@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.6.0] — 2026-05-18
+
 ### Added — Bootstrap Explicit-Target Enforcement (issue #47)
 
 - `bootstrap` subcommand now requires explicit `--target-issue N`, matching the issue-44 contract for `startup` and `pick-next`. The `runBootstrapClaimFirstAvailable` auto-picker is removed. Agents must select the issue before invoking bootstrap.
