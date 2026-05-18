@@ -111,6 +111,72 @@ if [[ "$FORGE" = "gitlab" || "$FORGE" = "all" ]]; then
   remove_dir "$HOME/.claude/kaola-workflow-gitlab"
 fi
 
+# Strip Kaola-Workflow-managed hook entries from ~/.claude/settings.json. Uses
+# the same identification rules as install.sh (id prefix "kaola-workflow:" or
+# inner-hook command path containing "kaola-workflow") so we only touch entries
+# we own.
+SETTINGS_FILE="$HOME/.claude/settings.json"
+if [[ -f "$SETTINGS_FILE" ]] && command -v python3 >/dev/null 2>&1; then
+  SETTINGS_BACKUP_DIR="$HOME/.claude/backups"
+  if python3 - "$SETTINGS_FILE" "$SETTINGS_BACKUP_DIR" <<'PY'; then
+import json, os, sys, time
+settings_path, backup_dir = sys.argv[1], sys.argv[2]
+
+try:
+    with open(settings_path) as f:
+        settings = json.load(f)
+except json.JSONDecodeError:
+    print(f"warning: {settings_path} is not valid JSON; leaving hooks in place.", file=sys.stderr)
+    sys.exit(0)
+
+hooks = settings.get("hooks")
+if not isinstance(hooks, dict):
+    sys.exit(0)
+
+def is_managed(entry):
+    if not isinstance(entry, dict):
+        return False
+    eid = entry.get("id", "")
+    if isinstance(eid, str) and eid.startswith("kaola-workflow:"):
+        return True
+    for inner in entry.get("hooks", []) or []:
+        if isinstance(inner, dict):
+            cmd = inner.get("command", "")
+            if isinstance(cmd, str) and "kaola-workflow" in cmd:
+                return True
+    return False
+
+changed = False
+for event, entries in list(hooks.items()):
+    if not isinstance(entries, list):
+        continue
+    cleaned = [e for e in entries if not is_managed(e)]
+    if len(cleaned) != len(entries):
+        changed = True
+        if cleaned:
+            hooks[event] = cleaned
+        else:
+            del hooks[event]
+
+if not hooks:
+    settings.pop("hooks", None)
+
+if changed:
+    os.makedirs(backup_dir, exist_ok=True)
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    backup_path = os.path.join(backup_dir, f"settings.json.kaola-workflow.{ts}.bak")
+    with open(settings_path, "rb") as src, open(backup_path, "wb") as dst:
+        dst.write(src.read())
+    with open(settings_path, "w") as f:
+        json.dump(settings, f, indent=2)
+        f.write("\n")
+    print(f"Removed Kaola-Workflow hook entries from {settings_path}")
+    print(f"Backup: {backup_path}", file=sys.stderr)
+PY
+    :
+  fi
+fi
+
 if [[ "$removed" -eq 0 ]]; then
   echo "Not installed — nothing to remove."
 fi

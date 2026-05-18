@@ -494,7 +494,30 @@ helper is available. It does not create state for brand-new work, ambiguous
 active projects, contradictory phase files, or unresolved compliance gates that
 make the next command unsafe.
 
-`install.sh` copies hooks to `~/.claude/kaola-workflow/hooks/`. To enable the compaction resume hook (`hooks/hooks.json`), add it to your `~/.claude/settings.json` hooks configuration.
+Hook installation is handled by `install.sh` — agents must not hand-merge or
+duplicate the hooks block.
+
+- `install.sh` copies hook files to `~/.claude/kaola-workflow/hooks/` and
+  auto-merges three managed entries into `~/.claude/settings.json`:
+  `kaola-workflow:compact-context` (SessionStart),
+  `kaola-workflow:pre-commit-guard` (PreToolUse Bash),
+  `kaola-workflow:phantom-advisor` (PostToolUse Write|Edit). The merge is
+  idempotent and identifies managed entries by `id` prefix `kaola-workflow:`
+  or a command path containing `kaola-workflow`. Prior settings are backed up
+  under `~/.claude/backups/settings.json.kaola-workflow.<ts>.bak`.
+- Verify with `jq '.hooks' ~/.claude/settings.json` — expect those three ids
+  present, each pointing at a script under `~/.claude/kaola-workflow/hooks/`
+  or `~/.claude/kaola-workflow/scripts/`.
+- If hooks are missing, re-run `./install.sh --forge=github` (or `--forge=gitlab`).
+  Do not edit `~/.claude/settings.json` directly to add them — re-running the
+  installer is the supported path.
+- Fallback when `python3` is unavailable or `--no-settings-merge` was passed:
+  `install.sh` prints a manual hint and the source of truth is
+  `~/.claude/kaola-workflow/hooks/hooks.json`. Merge its `hooks` block into
+  the user's `~/.claude/settings.json` `hooks` object, preserving any
+  non-`kaola-workflow:` entries.
+- `uninstall.sh` strips only entries matching the same managed-id rule; it
+  does not touch other hooks.
 
 ## Parallel Active Work
 

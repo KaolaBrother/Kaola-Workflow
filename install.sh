@@ -38,9 +38,10 @@ MANAGED_AGENT_MARKER="kaola-workflow-managed-agent: true"
 REQUIRED_AGENTS=("code-explorer" "docs-lookup" "planner" "code-architect" "tdd-guide" "build-error-resolver" "code-reviewer" "security-reviewer" "doc-updater")
 YES=0
 FORGE=github
+MERGE_SETTINGS=1
 
 usage() {
-  echo "Usage: ./install.sh [--yes] [--forge=github|gitlab]"
+  echo "Usage: ./install.sh [--yes] [--forge=github|gitlab] [--no-settings-merge]"
 }
 
 while [[ "$#" -gt 0 ]]; do
@@ -61,6 +62,10 @@ while [[ "$#" -gt 0 ]]; do
       fi
       FORGE="$2"
       shift 2
+      ;;
+    --no-settings-merge)
+      MERGE_SETTINGS=0
+      shift
       ;;
     -h|--help)
       usage
@@ -346,6 +351,87 @@ PY
   echo "Installed hooks config: $SUPPORT_HOOKS_DIR/hooks.json"
 fi
 
+# Auto-merge Kaola-Workflow hook entries into ~/.claude/settings.json so the
+# user does not have to hand-edit settings. Identifies managed entries by id
+# prefix ("kaola-workflow:") or by inner-hook command path containing
+# "kaola-workflow", so re-runs replace cleanly and hand-merged entries from
+# earlier installs get upgraded with proper id/description metadata.
+SETTINGS_MERGE_RESULT=skipped
+if [[ "$MERGE_SETTINGS" -eq 1 && -f "$SUPPORT_HOOKS_DIR/hooks.json" ]]; then
+  SETTINGS_FILE="$HOME/.claude/settings.json"
+  SETTINGS_BACKUP_DIR="$HOME/.claude/backups"
+  if command -v python3 >/dev/null 2>&1; then
+    mkdir -p "$HOME/.claude"
+    if python3 - "$SETTINGS_FILE" "$SUPPORT_HOOKS_DIR/hooks.json" "$SETTINGS_BACKUP_DIR" <<'PY'; then
+import json, os, sys, time
+settings_path, hooks_src, backup_dir = sys.argv[1], sys.argv[2], sys.argv[3]
+
+with open(hooks_src) as f:
+    incoming = json.load(f).get("hooks", {})
+if not isinstance(incoming, dict) or not incoming:
+    print("No hooks block found in source; skipping settings merge.", file=sys.stderr)
+    sys.exit(0)
+
+if os.path.exists(settings_path):
+    try:
+        with open(settings_path) as f:
+            settings = json.load(f)
+    except json.JSONDecodeError as e:
+        print(f"warning: {settings_path} is not valid JSON ({e}); skipping auto-merge.", file=sys.stderr)
+        print("Fix the file and re-run install.sh, or merge the hooks block by hand.", file=sys.stderr)
+        sys.exit(2)
+    os.makedirs(backup_dir, exist_ok=True)
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    backup_path = os.path.join(backup_dir, f"settings.json.kaola-workflow.{ts}.bak")
+    with open(settings_path, "rb") as src, open(backup_path, "wb") as dst:
+        dst.write(src.read())
+    print(f"Backed up existing settings to: {backup_path}", file=sys.stderr)
+else:
+    settings = {}
+
+def is_managed(entry):
+    if not isinstance(entry, dict):
+        return False
+    eid = entry.get("id", "")
+    if isinstance(eid, str) and eid.startswith("kaola-workflow:"):
+        return True
+    for inner in entry.get("hooks", []) or []:
+        if isinstance(inner, dict):
+            cmd = inner.get("command", "")
+            if isinstance(cmd, str) and "kaola-workflow" in cmd:
+                return True
+    return False
+
+hooks = settings.setdefault("hooks", {})
+if not isinstance(hooks, dict):
+    print("warning: settings.json 'hooks' field is not an object; skipping auto-merge.", file=sys.stderr)
+    sys.exit(2)
+
+for event, new_entries in incoming.items():
+    if not isinstance(new_entries, list):
+        continue
+    existing = hooks.get(event, [])
+    if not isinstance(existing, list):
+        existing = []
+    cleaned = [e for e in existing if not is_managed(e)]
+    cleaned.extend(new_entries)
+    hooks[event] = cleaned
+
+with open(settings_path, "w") as f:
+    json.dump(settings, f, indent=2)
+    f.write("\n")
+print(f"Merged Kaola-Workflow hooks into: {settings_path}")
+PY
+      SETTINGS_MERGE_RESULT=merged
+    else
+      SETTINGS_MERGE_RESULT=failed
+    fi
+  else
+    echo "warning: python3 not found; skipping ~/.claude/settings.json auto-merge." >&2
+    SETTINGS_MERGE_RESULT=no_python
+  fi
+fi
+
 verify_installed_file() {
   local path="$1"
   local label="$2"
@@ -404,9 +490,27 @@ echo "Then run implementation cycles with:  /workflow-next"
 echo ""
 if [[ -f "$SUPPORT_HOOKS_DIR/hooks.json" ]]; then
   echo "Hooks installed to: $SUPPORT_HOOKS_DIR/hooks.json"
-  echo "To enable Kaola-Workflow hooks (compaction resume, pre-commit, phantom-advisor),"
-  echo "merge the hooks block into your ~/.claude/settings.json. Quick view:"
-  echo "  cat $SUPPORT_HOOKS_DIR/hooks.json"
+  case "$SETTINGS_MERGE_RESULT" in
+    merged)
+      echo "Kaola-Workflow hooks (compaction resume, pre-commit, phantom-advisor)"
+      echo "are now enabled in ~/.claude/settings.json."
+      ;;
+    skipped)
+      echo "Auto-merge skipped (--no-settings-merge). To enable the hooks, merge the"
+      echo "block into your ~/.claude/settings.json by hand. Quick view:"
+      echo "  cat $SUPPORT_HOOKS_DIR/hooks.json"
+      ;;
+    no_python)
+      echo "python3 was not found, so the hooks were not auto-merged. To enable them,"
+      echo "install python3 and re-run install.sh, or merge the block by hand:"
+      echo "  cat $SUPPORT_HOOKS_DIR/hooks.json"
+      ;;
+    failed)
+      echo "Auto-merge failed (see warning above). The hooks were not added to"
+      echo "~/.claude/settings.json. Fix the issue and re-run, or merge by hand:"
+      echo "  cat $SUPPORT_HOOKS_DIR/hooks.json"
+      ;;
+  esac
   echo ""
 fi
 echo "For advisor gates, ensure your ~/.claude/settings.json includes:"
