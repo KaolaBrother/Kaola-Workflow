@@ -10,6 +10,7 @@ const repoRoot = path.resolve(__dirname, '..');
 const claimScript = path.join(repoRoot, 'scripts', 'kaola-workflow-claim.js');
 const repairScript = path.join(repoRoot, 'scripts', 'kaola-workflow-repair-state.js');
 const roadmapScript = path.join(repoRoot, 'scripts', 'kaola-workflow-roadmap.js');
+const sinkMergeScript = path.join(repoRoot, 'scripts', 'kaola-workflow-sink-merge.js');
 const hookScript = path.join(repoRoot, 'hooks', 'kaola-workflow-pre-commit.sh');
 
 function assert(condition, message) {
@@ -737,6 +738,75 @@ function testReleaseFromLinkedWorktreeCleansMainCopy() {
   }
 }
 
+function testSinkMergeFromLinkedWorktree() {
+  // Regression for issue #94: sink-merge invoked from inside a linked worktree
+  // must not collide with the worktree registry's lock on the feature branch.
+  // The fix uses `git -C mainRoot` for every git call so the script never
+  // relies on its inherited cwd. We deliberately chdir to tmpdir before
+  // worktree removal, which makes any missing `-C mainRoot` fail fast.
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-merge-linked-')));
+  const kwRoot = tmp + '.kw';
+  try {
+    initGitRepo(tmp);
+    const wtPath = path.join(kwRoot, 'issue-941');
+    fs.mkdirSync(kwRoot, { recursive: true });
+    spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-941', '--', wtPath, 'HEAD'], {
+      cwd: tmp,
+      encoding: 'utf8'
+    });
+
+    // Add a real commit on the feature branch so the merge fast-forwards main.
+    fs.writeFileSync(path.join(wtPath, 'feature.txt'), 'feature\n');
+    spawnSync('git', ['add', 'feature.txt'], { cwd: wtPath, encoding: 'utf8' });
+    spawnSync('git', ['commit', '-m', 'feature commit'], { cwd: wtPath, encoding: 'utf8' });
+
+    // Plant active folder in main worktree so Step 0 sees the worktree to remove.
+    plantActiveFolder(tmp, 'issue-941', 941, null);
+
+    const mainBefore = spawnSync('git', ['rev-parse', 'main'], { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+    const featureHead = spawnSync('git', ['rev-parse', 'workflow/issue-941'], { cwd: wtPath, encoding: 'utf8' }).stdout.trim();
+    assert(mainBefore !== featureHead, 'precondition: main should lag the feature branch');
+
+    const result = spawnSync(process.execPath, [
+      sinkMergeScript,
+      '--project', 'issue-941',
+      '--branch', 'workflow/issue-941',
+      '--issue', '941'
+    ], {
+      cwd: wtPath,
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' },
+      encoding: 'utf8'
+    });
+
+    assert(
+      result.status === 0,
+      'sink-merge from linked worktree should exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr
+    );
+    assert(
+      !/is already used by worktree/.test(result.stderr || ''),
+      'sink-merge from linked worktree must not hit branch-locked error\nstderr: ' + result.stderr
+    );
+
+    const mainAfter = spawnSync('git', ['rev-parse', 'main'], { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+    assert(
+      mainAfter === featureHead,
+      'main should advance to feature branch HEAD after sink-merge from linked worktree\n' +
+      'before: ' + mainBefore + '\nfeature: ' + featureHead + '\nafter: ' + mainAfter
+    );
+
+    const branchList = spawnSync('git', ['branch', '--list', 'workflow/issue-941'], {
+      cwd: tmp, encoding: 'utf8'
+    }).stdout.trim();
+    assert(
+      branchList === '',
+      'feature branch should be deleted after sink-merge (Step 9), got: ' + JSON.stringify(branchList)
+    );
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(kwRoot, { recursive: true, force: true });
+  }
+}
+
 function testStatusShowsClosedIssueDrift() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-status-drift-'));
   try {
@@ -791,6 +861,7 @@ async function main() {
     testFinalizeFromLinkedWorktreeCleansMainCopy();
     testFinalizeFromMainRootNoSpuriousRemoval();
     testReleaseFromLinkedWorktreeCleansMainCopy();
+    testSinkMergeFromLinkedWorktree();
     testStatusShowsClosedIssueDrift();
     console.log('Workflow walkthrough simulation passed');
   } finally {

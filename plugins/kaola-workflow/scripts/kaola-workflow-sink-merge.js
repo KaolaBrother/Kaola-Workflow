@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { getCoordRoot, readActiveFolders, removeWorktree } = require('./kaola-workflow-claim.js');
@@ -60,19 +61,19 @@ function parseArgs(argv) {
 
 const MAX_AUTOMERGE_RETRIES = 3;
 
-function assertCleanWorktree() {
+function assertCleanWorktree(mainRoot) {
   // Use --untracked-files=no to ignore untracked files (e.g. kaola-workflow/ state dirs)
   // Only staged and unstaged changes to tracked files block the checkout.
-  const status = execFileSync('git', ['status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' }).trim();
+  const status = execFileSync('git', ['-C', mainRoot, 'status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' }).trim();
   assert(!status, 'Worktree must be clean before sink-merge checks out the requested branch');
 }
 
 // Steps 3–4: rebase onto origin/main and run post-rebase tests.
-function doRebase(args, alreadyUpToDate) {
+function doRebase(args, alreadyUpToDate, mainRoot) {
   // Step 3 — Rebase (inline error message; no external file needed)
   if (!alreadyUpToDate) {
     try {
-      execFileSync('git', ['rebase', 'origin/main'], { encoding: 'utf8' });
+      execFileSync('git', ['-C', mainRoot, 'rebase', 'origin/main'], { encoding: 'utf8' });
     } catch (e) {
       throw new Error(
         'Rebase failed: ' + e.message + '\n' +
@@ -90,30 +91,30 @@ function doRebase(args, alreadyUpToDate) {
   // Step 4 — Post-rebase validation
   // Skip when OFFLINE (mirrors Steps 1/5/7/8/9 — C-refined-A). Callers in OFFLINE mode own their own validation.
   if (!alreadyUpToDate && !OFFLINE) {
-    execFileSync('npm', ['test'], { encoding: 'utf8', stdio: 'inherit' });
+    execFileSync('npm', ['test'], { cwd: mainRoot, encoding: 'utf8', stdio: 'inherit' });
   }
 }
 
 // Steps 5–6: FF-only merge loop with retry on race. Returns false when retries exhausted.
-function ffMergeLoop(args) {
+function ffMergeLoop(args, mainRoot) {
   let retries = 0;
   let forcedFailCount = 0;
   while (true) {
     // Step 5 — Pull latest main (skip if OFFLINE)
     if (!OFFLINE) {
-      execFileSync('git', ['checkout', 'main'], { encoding: 'utf8' });
-      execFileSync('git', ['pull', '--ff-only'], { encoding: 'utf8' });
-      execFileSync('git', ['checkout', args.branch], { encoding: 'utf8' });
+      execFileSync('git', ['-C', mainRoot, 'checkout', 'main'], { encoding: 'utf8' });
+      execFileSync('git', ['-C', mainRoot, 'pull', '--ff-only'], { encoding: 'utf8' });
+      execFileSync('git', ['-C', mainRoot, 'checkout', args.branch], { encoding: 'utf8' });
     }
 
     // Step 6 — FF-only merge onto main
-    execFileSync('git', ['checkout', 'main'], { encoding: 'utf8' });
+    execFileSync('git', ['-C', mainRoot, 'checkout', 'main'], { encoding: 'utf8' });
 
     // FORCE_FF_FAIL: test-only — make first FORCE_FF_FAIL attempts fail without calling git merge
     if (forcedFailCount < FORCE_FF_FAIL) {
       forcedFailCount++;
       retries++;
-      execFileSync('git', ['checkout', args.branch], { encoding: 'utf8' });
+      execFileSync('git', ['-C', mainRoot, 'checkout', args.branch], { encoding: 'utf8' });
       if (retries >= MAX_AUTOMERGE_RETRIES) {
         process.stderr.write('FF race: exhausted ' + MAX_AUTOMERGE_RETRIES + ' retries. Aborting.\n');
         process.stderr.write('Manual resolution: ensure no concurrent pushes to main and re-run sink-merge.\n');
@@ -124,11 +125,11 @@ function ffMergeLoop(args) {
 
     let mergeSuccess = false;
     try {
-      execFileSync('git', ['merge', '--ff-only', '--', args.branch], { encoding: 'utf8' });
+      execFileSync('git', ['-C', mainRoot, 'merge', '--ff-only', '--', args.branch], { encoding: 'utf8' });
       mergeSuccess = true;
     } catch (_) {
       retries++;
-      execFileSync('git', ['checkout', args.branch], { encoding: 'utf8' });
+      execFileSync('git', ['-C', mainRoot, 'checkout', args.branch], { encoding: 'utf8' });
       if (retries >= MAX_AUTOMERGE_RETRIES) {
         process.stderr.write('FF race: exhausted ' + MAX_AUTOMERGE_RETRIES + ' retries. Aborting.\n');
         process.stderr.write('Manual resolution: ensure no concurrent pushes to main and re-run sink-merge.\n');
@@ -141,14 +142,14 @@ function ffMergeLoop(args) {
   }
 }
 
-function postMergeCleanup(args) {
+function postMergeCleanup(args, mainRoot) {
   // Step 7 — Push (with merge-impossible auto-fallback)
   try {
     if (FORCE_MERGE_IMPOSSIBLE) {
       throw new Error('synthetic merge-impossible: ' + FORCE_MERGE_IMPOSSIBLE);
     }
     if (!OFFLINE) {
-      execFileSync('git', ['push', 'origin', 'main'], { encoding: 'utf8' });
+      execFileSync('git', ['-C', mainRoot, 'push', 'origin', 'main'], { encoding: 'utf8' });
     }
   } catch (e) {
     const token = classifyMergeError(e.stderr || e.message || '');
@@ -158,10 +159,10 @@ function postMergeCleanup(args) {
     }
     // Classified merge-impossible: reset local main, write receipt, signal exit 3
     try {
-      execFileSync('git', ['reset', '--hard', 'origin/main'], { encoding: 'utf8' });
+      execFileSync('git', ['-C', mainRoot, 'reset', '--hard', 'origin/main'], { encoding: 'utf8' });
     } catch (_) {}
     const receiptPath = path.join(
-      mainRootFromCoord(getCoordRoot()),
+      mainRoot,
       'kaola-workflow', args.project, '.cache', 'sink-fallback.json'
     );
     fs.mkdirSync(path.dirname(receiptPath), { recursive: true });
@@ -183,9 +184,9 @@ function postMergeCleanup(args) {
     catch (_) {}
   }
   // Step 9 — Delete branch (worktree was removed in step 0)
-  try { execFileSync('git', ['branch', '-d', '--', args.branch], { encoding: 'utf8' }); } catch (_) {}
+  try { execFileSync('git', ['-C', mainRoot, 'branch', '-d', '--', args.branch], { encoding: 'utf8' }); } catch (_) {}
   if (!OFFLINE) {
-    try { execFileSync('git', ['push', 'origin', '--delete', '--', args.branch], { encoding: 'utf8' }); }
+    try { execFileSync('git', ['-C', mainRoot, 'push', 'origin', '--delete', '--', args.branch], { encoding: 'utf8' }); }
     catch (_) {}
   }
 }
@@ -205,8 +206,9 @@ function main() {
 
   // Step 0 — Remove worktree (if any) so the branch can be checked out below
   const coordRoot = getCoordRoot();
+  const mainRoot = mainRootFromCoord(coordRoot);
   process.on('exit', () => {
-    try { process.chdir(mainRootFromCoord(coordRoot)); } catch (_) {}
+    try { process.chdir(mainRoot); } catch (_) {}
     if (process.env.KAOLA_WORKFLOW_DEBUG_CWD) {
       try {
         const _p = process.env.KAOLA_WORKFLOW_DEBUG_CWD;
@@ -215,34 +217,36 @@ function main() {
     }
   });
   {
-    // Pre-chdir BEFORE removeWorktree: removeWorktree defers if process.cwd() is
-    // inside the worktree (claim.js:638). Escape first so removal can proceed (issue #33).
-    try { process.chdir(mainRootFromCoord(coordRoot)); } catch (e) {
-      process.stderr.write('sink-merge: could not chdir to main root before worktree removal: ' + e.message + '\n');
+    // Pre-chdir to a path OUTSIDE any worktree before removeWorktree:
+    // `git worktree remove` refuses when cwd is inside the worktree being removed.
+    // We chdir to tmpdir (not mainRoot) so that every subsequent git call must
+    // pass `-C mainRoot` explicitly — otherwise it operates on a non-repo cwd
+    // and fails fast. Keeps the script's cwd-independence under test.
+    try { process.chdir(os.tmpdir()); } catch (e) {
+      process.stderr.write('sink-merge: could not chdir before worktree removal: ' + e.message + '\n');
     }
 
-    const root = mainRootFromCoord(coordRoot);
-    const folder = readActiveFolders(root, { excludeClosedIssues: false })
+    const folder = readActiveFolders(mainRoot, { excludeClosedIssues: false })
       .find(item => item.project === args.project);
-    if (folder) { try { removeWorktree(root, args.project, folder); } catch (_) {} }
+    if (folder) { try { removeWorktree(mainRoot, args.project, folder); } catch (_) {} }
   }
 
   // Step 1 — git fetch (skip if OFFLINE; fatal throw on error)
   if (!OFFLINE) {
-    execFileSync('git', ['fetch', 'origin'], { encoding: 'utf8' });
+    execFileSync('git', ['-C', mainRoot, 'fetch', 'origin'], { encoding: 'utf8' });
   }
 
-  assertCleanWorktree();
-  execFileSync('git', ['checkout', args.branch], { encoding: 'utf8' });
+  assertCleanWorktree(mainRoot);
+  execFileSync('git', ['-C', mainRoot, 'checkout', args.branch], { encoding: 'utf8' });
 
   // Step 2 — Merge-base skip-check
   // If origin/main doesn't exist (e.g. no remote, or OFFLINE with no cached ref),
   // treat as already up-to-date so the rebase is skipped.
   let alreadyUpToDate = false;
   try {
-    const mergeBase = execFileSync('git', ['merge-base', 'HEAD', 'origin/main'],
+    const mergeBase = execFileSync('git', ['-C', mainRoot, 'merge-base', 'HEAD', 'origin/main'],
       { encoding: 'utf8' }).trim();
-    const originMain = execFileSync('git', ['rev-parse', 'origin/main'],
+    const originMain = execFileSync('git', ['-C', mainRoot, 'rev-parse', 'origin/main'],
       { encoding: 'utf8' }).trim();
     alreadyUpToDate = (mergeBase === originMain);
   } catch (_) {
@@ -250,14 +254,14 @@ function main() {
     alreadyUpToDate = true;
   }
 
-  doRebase(args, alreadyUpToDate);
+  doRebase(args, alreadyUpToDate, mainRoot);
 
-  if (!ffMergeLoop(args)) {
+  if (!ffMergeLoop(args, mainRoot)) {
     process.exitCode = 2;
     return;
   }
 
-  const cleanupResult = postMergeCleanup(args);
+  const cleanupResult = postMergeCleanup(args, mainRoot);
   if (cleanupResult && cleanupResult.exitCode === 3) { process.exitCode = 3; return; }
 }
 
