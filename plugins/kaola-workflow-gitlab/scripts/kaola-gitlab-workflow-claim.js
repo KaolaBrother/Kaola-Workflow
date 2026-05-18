@@ -435,6 +435,42 @@ function cmdWorktreeStatus() {
   output({ worktrees: listWorkflowWorktrees(getRoot()) });
 }
 
+function mrIidFromFolder(folder) {
+  const direct = parseInt(folder.mr_iid, 10);
+  if (Number.isFinite(direct) && direct > 0) return direct;
+  const match = String(folder.mr_url || '').match(/merge_requests\/(\d+)/);
+  return match ? parseInt(match[1], 10) : null;
+}
+
+function watchMergeRequests(root, args) {
+  let watched = 0;
+  for (const folder of readActiveFolders(root, { excludeClosedIssues: false })) {
+    if (args.issue && folder.issue_iid !== args.issue) continue;
+    if (folder.sink !== 'mr') continue;
+    const mrIid = mrIidFromFolder(folder);
+    if (!mrIid) continue;
+    watched++;
+    let state = '';
+    try { state = forge.viewMergeRequest(mrIid).state || ''; } catch (_) { continue; }
+    if (state === 'merged') {
+      archiveProjectDir(root, folder.project, 'closed');
+      clearAdvisoryClaim(folder.issue_iid, 'mr merged', { project_id: folder.project_id, path_with_namespace: folder.path_with_namespace });
+    } else if (state === 'closed') {
+      archiveProjectDir(root, folder.project, 'abandoned', '.discarded-' + new Date().toISOString().replace(/[:.]/g, '-'));
+      clearAdvisoryClaim(folder.issue_iid, 'mr closed', { project_id: folder.project_id, path_with_namespace: folder.path_with_namespace });
+    }
+  }
+  return { watched };
+}
+
+function cmdWatchMr() {
+  const root = getRoot();
+  const args = parseArgs(process.argv.slice(3));
+  const result = watchMergeRequests(root, args);
+  const watched = result.watched;
+  output({ watched });
+}
+
 function copyDir(src, dest) {
   fs.mkdirSync(dest, { recursive: true });
   for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
@@ -479,6 +515,7 @@ function main() {
   if (sub === 'release' || sub === 'discard') return cmdRelease();
   if (sub === 'status') return cmdStatus();
   if (sub === 'patch-branch') return cmdPatchBranch();
+  if (sub === 'watch-mr') return cmdWatchMr();
   if (sub === 'startup') return cmdStartup();
   if (sub === 'finalize') return cmdFinalize();
   if (sub === 'pick-next') return cmdPickNext();
@@ -502,5 +539,6 @@ module.exports = {
   projectNameForIssue,
   provisionWorktree,
   readActiveFolders,
+  watchMergeRequests,
   worktreePathFor
 };

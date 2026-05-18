@@ -189,6 +189,23 @@ withForge({
   assert(state.includes('sink: mr'));
 }
 
+withForge({
+  viewMergeRequest(mrIid) {
+    assert.strictEqual(mrIid, 44);
+    return { mr_iid: 44, state: 'merged' };
+  },
+  updateIssue() { return null; },
+  createIssueNote() { return { id: 9002 }; }
+}, () => {
+  const root = tempRoot('kw-gl-watch-mr-');
+  writeState(root, 'mr-project', 44, 'mr_iid: 44');
+  const stateFile = path.join(root, 'kaola-workflow', 'mr-project', 'workflow-state.md');
+  fs.writeFileSync(stateFile, fs.readFileSync(stateFile, 'utf8').replace('sink: merge', 'sink: mr'));
+  const result = claim.watchMergeRequests(root, {});
+  assert.strictEqual(result.watched, 1);
+  assert(fs.existsSync(path.join(root, 'kaola-workflow', 'archive', 'mr-project', 'workflow-state.md')));
+});
+
 {
   const root = tempRoot('kw-gl-repair-');
   const dir = writeState(root, 'repair-project', 50);
