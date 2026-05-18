@@ -35,13 +35,13 @@ No deferred conflicts or partial work blocking closure. Follow-up items are logg
 pending final Git gate
 
 ## GitHub Issue
-pending close (after final commit)
+Closed — KaolaBrother/Kaola-Workflow#80
 
 ## Roadmap
-pending regeneration
+Regenerated — issue-80 entry removed; ROADMAP.md updated.
 
 ## Archive
-pending finalize
+kaola-workflow/archive/issue-80/
 
 ## Required Agent Compliance
 | Requirement | Status | Evidence | Skip Reason |
@@ -50,9 +50,9 @@ pending finalize
 | documentation docking | invoked | .cache/doc-docking.md | |
 | closure advisor gate | N/A | | closure scan found no blocking items; no user-decision items |
 | final-validation fix executors | N/A | | all validation passed on first run |
-| roadmap refresh | pending | | |
-| archive completed folder | pending | | |
-| final commit and push | ready | git status/diff confirm clean candidate | |
+| roadmap refresh | complete | kaola-workflow/ROADMAP.md | |
+| archive completed folder | complete | kaola-workflow/archive/issue-80/ | |
+| final commit and push | complete | ab3cf70 pushed to origin/main | |
 
 ## Status
-READY FOR FINAL GIT GATE
+COMPLETE
