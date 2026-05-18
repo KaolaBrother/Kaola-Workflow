@@ -164,7 +164,7 @@ function issueHasRemoteClaimComment(issueNum) {
     const raw = ghExec(['api', 'repos/' + repo.owner + '/' + repo.name + '/issues/' + issueNum + '/comments']);
     const comments = JSON.parse(raw || '[]');
     return comments.some(function(comment) {
-      if (!comment || !comment.body || !comment.body.includes('<!-- kw:claim sess=')) return false;
+      if (!comment || !comment.body || !/<!--\s*kw:claim\s+(project|sess)=/.test(comment.body)) return false;
       if (!comment.updated_at) return true;
       return Date.now() - new Date(comment.updated_at).getTime() < 24 * 60 * 60 * 1000;
     });

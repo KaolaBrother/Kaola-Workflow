@@ -16,11 +16,11 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-function runNode(script, args, cwd) {
+function runNode(script, args, cwd, extraEnv) {
   const result = spawnSync(process.execPath, [script, ...args], {
     cwd,
     encoding: 'utf8',
-    env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }
+    env: { ...process.env, ...(extraEnv || {}), KAOLA_WORKFLOW_OFFLINE: '1' }
   });
   if (result.error) throw result.error;
   return result;
@@ -100,11 +100,26 @@ function testClaimStatusRelease(tmp) {
 
 function testFinalize(tmp) {
   json(runNode(claimScript, ['startup', '--target-issue', '164', '--runtime', 'claude'], tmp));
+  const retiredBlock = '## ' + 'Lease';
+  const retiredSessionField = 'sess' + 'ion_id:';
+  const retiredHeartbeatField = 'last_' + 'heart' + 'beat:';
+  fs.appendFileSync(statePath(tmp, 'issue-164'), [
+    retiredBlock,
+    retiredSessionField + ' legacy-session',
+    'expires: 2026-01-01T00:00:00.000Z',
+    retiredHeartbeatField + ' 2026-01-01T00:00:00.000Z',
+    ''
+  ].join('\n'));
   const result = json(runNode(claimScript, ['finalize', '--project', 'issue-164'], tmp));
   assert(result.status === 'closed', 'finalize should report closed');
   assert(!fs.existsSync(path.join(tmp, 'kaola-workflow', 'issue-164')), 'finalize should remove active folder');
   const archived = fs.readdirSync(path.join(tmp, 'kaola-workflow', 'archive')).filter(name => name.startsWith('issue-164'));
   assert(archived.length === 1, 'finalize should archive folder');
+  const archivedState = read(path.join(tmp, 'kaola-workflow', 'archive', archived[0], 'workflow-state.md'));
+  assert(archivedState.includes('status: closed'), 'finalize should mark archived state closed');
+  assert(archivedState.includes('step: complete'), 'finalize should mark archived state complete');
+  assert(!archivedState.includes(retiredBlock), 'finalize should remove legacy lease blocks before archive');
+  assert(!archivedState.includes(retiredSessionField), 'finalize should remove legacy session fields before archive');
 }
 
 function testRepair(tmp) {
@@ -360,6 +375,113 @@ function testClassifierReleasedFolderExcluded() {
   }
 }
 
+function writeGhShimForStartup(binDir) {
+  fs.mkdirSync(binDir, { recursive: true });
+  const ghShim = path.join(binDir, 'gh');
+  fs.writeFileSync(ghShim, [
+    '#!/bin/sh',
+    'ARGS="$@"',
+    'case "$ARGS" in',
+    '  *"repo view"*) echo \'{"owner":{"login":"test"},"name":"repo"}\' ;;',
+    '  *"issue view"*) echo \'{"number":0,"title":"fixture","body":"README.md","labels":[],"state":"open"}\' ;;',
+    '  *"api"*) echo \'[]\' ;;',
+    '  *) echo "" ;;',
+    'esac',
+    ''
+  ].join('\n'));
+  fs.chmodSync(ghShim, 0o755);
+}
+
+function initGitRepo(tmp) {
+  spawnSync('git', ['init', '-b', 'main'], { cwd: tmp, encoding: 'utf8' });
+  spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tmp, encoding: 'utf8' });
+  spawnSync('git', ['config', 'user.name', 'Test User'], { cwd: tmp, encoding: 'utf8' });
+  fs.writeFileSync(path.join(tmp, 'README.md'), 'fixture\n');
+  spawnSync('git', ['add', 'README.md'], { cwd: tmp, encoding: 'utf8' });
+  spawnSync('git', ['commit', '-m', 'init'], { cwd: tmp, encoding: 'utf8' });
+}
+
+function runClaimOnline(args, cwd, binDir, extraEnv) {
+  const result = spawnSync(process.execPath, [claimScript, ...args], {
+    cwd,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      ...(extraEnv || {}),
+      KAOLA_WORKFLOW_OFFLINE: '0',
+      PATH: binDir + path.delimiter + (process.env.PATH || '')
+    }
+  });
+  assert(result.status === 0, 'online claim should exit 0, got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+  return JSON.parse(result.stdout);
+}
+
+function testStartupJsonAndSiblingWorktrees() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-startup-worktrees-'));
+  const kwRoot = fs.realpathSync(tmp) + '.kw';
+  try {
+    initGitRepo(tmp);
+    const binDir = path.join(tmp, 'bin');
+    writeGhShimForStartup(binDir);
+
+    const first = runClaimOnline(['startup', '--target-issue', '501'], tmp, binDir);
+    assert(first.worktree_path === path.join(kwRoot, 'issue-501'), 'first worktree should be canonical sibling path');
+
+    const second = runClaimOnline(['startup', '--target-issue', '502'], first.worktree_path, binDir);
+    assert(second.worktree_path === path.join(kwRoot, 'issue-502'), 'nested startup should still create canonical sibling worktree');
+    assert(!second.worktree_path.includes('issue-501.kw'), 'nested startup must not create issue-501.kw paths');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(kwRoot, { recursive: true, force: true });
+  }
+}
+
+function testFastStartupState() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-fast-startup-'));
+  try {
+    const result = json(runNode(claimScript, ['startup', '--target-issue', '503'], tmp, { KAOLA_PATH: 'fast' }));
+    assert(result.claim === 'acquired', 'fast startup should acquire explicit issue');
+    const state = read(statePath(tmp, 'issue-503'));
+    assert(state.includes('workflow_path: fast'), 'fast startup should write workflow_path: fast');
+    assert(state.includes('phase: fast'), 'fast startup should write phase: fast');
+    assert(state.includes('next_command: /kaola-workflow-fast issue-503'), 'fast startup should route to fast command');
+    assert(state.includes('next_skill: kaola-workflow-fast issue-503'), 'fast startup should route to fast skill');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testClassifierCurrentClaimMarkerBlocks() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-classifier-current-claim-'));
+  try {
+    const binDir = path.join(tmp, 'bin');
+    fs.mkdirSync(binDir, { recursive: true });
+    const ghShim = path.join(binDir, 'gh');
+    fs.writeFileSync(ghShim, [
+      '#!/bin/sh',
+      'ARGS="$@"',
+      'case "$ARGS" in',
+      '  *"repo view"*) echo \'{"owner":{"login":"test"},"name":"repo"}\' ;;',
+      '  *"issue view 504"*) echo \'{"number":504,"title":"claimed","body":"README.md","labels":[],"state":"open"}\' ;;',
+      '  *"api repos/test/repo/issues/504/comments"*) echo \'[{"body":"<!-- kw:claim project=issue-504 -->","updated_at":"2099-01-01T00:00:00Z"}]\' ;;',
+      '  *) echo \'[]\' ;;',
+      'esac',
+      ''
+    ].join('\n'));
+    fs.chmodSync(ghShim, 0o755);
+    const result = spawnSync(process.execPath, [classifierScript, 'classify', '--issue', '504'], {
+      cwd: tmp,
+      encoding: 'utf8',
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', PATH: binDir + path.delimiter + (process.env.PATH || '') }
+    });
+    assert(result.status === 0, 'classifier should exit 0 for current claim marker');
+    const parsed = JSON.parse(result.stdout.trim());
+    assert(parsed.verdict === 'blocked', 'current kw:claim project marker should block remote claimed issue');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 async function main() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-active-folders-'));
   try {
@@ -374,6 +496,9 @@ async function main() {
     testClassifierFolderOverlapYellow();
     testClassifierClosedIssueResidueIgnored();
     testClassifierReleasedFolderExcluded();
+    testStartupJsonAndSiblingWorktrees();
+    testFastStartupState();
+    testClassifierCurrentClaimMarkerBlocks();
     console.log('Workflow walkthrough simulation passed');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });

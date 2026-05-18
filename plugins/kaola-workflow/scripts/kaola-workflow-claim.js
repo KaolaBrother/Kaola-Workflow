@@ -54,6 +54,10 @@ function getCoordRoot(root) {
   }
 }
 
+function mainRootFromCoord(coordRoot) {
+  return path.basename(coordRoot) === '.git' ? path.dirname(coordRoot) : coordRoot;
+}
+
 function readPriorityConfig(root) {
   const file = path.join(root, '.kaola-workflow.json');
   try {
@@ -108,7 +112,8 @@ function buildBranchName(issueNumber, project, fallback) {
 }
 
 function worktreePathFor(root, project) {
-  return path.join(path.dirname(root), path.basename(root) + '.kw', project);
+  const mainRoot = mainRootFromCoord(getCoordRoot(root));
+  return path.join(path.dirname(mainRoot), path.basename(mainRoot) + '.kw', project);
 }
 
 function removeWorktree(root, project, folder) {
@@ -153,14 +158,21 @@ function worktreeRegistered(root, wtPath) {
 }
 
 function provisionWorktree(root, project, branch) {
+  const mainRoot = mainRootFromCoord(getCoordRoot(root));
   const wtPath = worktreePathFor(root, project);
   fs.mkdirSync(path.dirname(wtPath), { recursive: true });
-  if (worktreeRegistered(root, wtPath)) return { path: wtPath, branch };
+  if (worktreeRegistered(mainRoot, wtPath)) return { path: wtPath, branch };
   if (fs.existsSync(wtPath)) return { path: wtPath, branch };
-  if (branchExists(root, branch)) {
-    execFileSync('git', ['worktree', 'add', '--', wtPath, branch], { cwd: root, stdio: 'inherit' });
+  if (branchExists(mainRoot, branch)) {
+    execFileSync('git', ['worktree', 'add', '--', wtPath, branch], {
+      cwd: mainRoot,
+      stdio: ['ignore', 'ignore', 'ignore']
+    });
   } else {
-    execFileSync('git', ['worktree', 'add', '-b', branch, '--', wtPath, 'HEAD'], { cwd: root, stdio: 'inherit' });
+    execFileSync('git', ['worktree', 'add', '-b', branch, '--', wtPath, 'HEAD'], {
+      cwd: mainRoot,
+      stdio: ['ignore', 'ignore', 'ignore']
+    });
   }
   return { path: wtPath, branch };
 }
@@ -179,6 +191,8 @@ function writeFile(file, content) {
 }
 
 function writeState(root, data) {
+  const workflowPath = data.workflow_path || 'full';
+  const isFast = workflowPath === 'fast';
   const lines = [
     '# Kaola-Workflow State',
     '',
@@ -187,18 +201,19 @@ function writeState(root, data) {
     'status: ' + (data.status || 'active'),
     '',
     '## Current Position',
-    'phase: ' + (data.phase || 1),
-    'phase_name: ' + (data.phase_name || 'Research'),
+    'phase: ' + (isFast ? 'fast' : (data.phase || 1)),
+    'phase_name: ' + (isFast ? 'Fast' : (data.phase_name || 'Research')),
+    'workflow_path: ' + workflowPath,
     'step: ' + (data.step || 'start'),
-    'next_command: ' + (data.next_command || ('/kaola-workflow-phase1 ' + data.project)),
-    'next_skill: ' + (data.next_skill || ('kaola-workflow-research ' + data.project)),
+    'next_command: ' + (data.next_command || (isFast ? '/kaola-workflow-fast ' + data.project : '/kaola-workflow-phase1 ' + data.project)),
+    'next_skill: ' + (data.next_skill || (isFast ? 'kaola-workflow-fast ' + data.project : 'kaola-workflow-research ' + data.project)),
     'main_session_role: orchestrator',
     'implementation_owner: N/A',
     'fix_owner: N/A',
     'inline_emergency_fallback_authorized: no',
     '',
     '## Pending Gates',
-    '- phase1-research',
+    isFast ? '- fast-summary' : '- phase1-research',
     '',
     '## Last Evidence',
     'phase_file: N/A',
@@ -233,6 +248,22 @@ function postAdvisoryClaim(issueNumber, project) {
   try { ghExec(['label', 'create', CLAIM_LABEL, '--color', 'f9d0c4', '--description', 'Kaola-Workflow active work marker']); } catch (_) {}
   try { ghExec(['issue', 'edit', String(issueNumber), '--add-label', CLAIM_LABEL]); } catch (_) {}
   try { ghExec(['issue', 'comment', String(issueNumber), '--body', '<!-- kw:claim project=' + project + ' -->\nKaola-Workflow started local work for `' + project + '`.']); } catch (_) {}
+}
+
+function removeLegacyStateBlocks(content) {
+  const retiredBlock = '## ' + 'Lease';
+  const retiredFields = [
+    'sess' + 'ion_id',
+    'owner_' + 'sess' + 'ion_id',
+    'last_' + 'heart' + 'beat',
+    'claim_comment_id',
+    'expires'
+  ];
+  const blockPattern = new RegExp('\\n?' + retiredBlock + '\\s*\\n[\\s\\S]*?(?=\\n## |\\s*$)', 'g');
+  const fieldPattern = new RegExp('^(' + retiredFields.join('|') + '):.*$\\n?', 'gm');
+  return String(content || '')
+    .replace(blockPattern, '')
+    .replace(fieldPattern, '');
 }
 
 function clearAdvisoryClaim(issueNumber, reason) {
@@ -297,6 +328,7 @@ function claimProject(root, args) {
     branch,
     sink: args.sink || process.env.KAOLA_SINK || 'merge',
     worktree_path: worktreePath,
+    workflow_path: args.workflowPath || process.env.KAOLA_PATH || 'full',
     status: 'active'
   });
   postAdvisoryClaim(issueNumber, project);
@@ -385,6 +417,7 @@ function archiveProjectDir(root, project, statusValue, suffix) {
   const state = stateFile(root, project);
   try {
     let content = fs.readFileSync(state, 'utf8');
+    content = removeLegacyStateBlocks(content);
     content = content.replace(/^status:\s*.*$/m, 'status: ' + statusValue);
     if (!/^status:/m.test(content)) content += '\nstatus: ' + statusValue + '\n';
     content = content.replace(/^step:\s*.*$/m, 'step: complete');

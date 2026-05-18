@@ -92,8 +92,14 @@ assertIncludes('scripts/kaola-workflow-claim.js', 'archiveProjectDir');
 assertIncludes('scripts/kaola-workflow-claim.js', 'claimExplicitTarget');
 assertIncludes('scripts/kaola-workflow-claim.js', 'if (require.main === module)');
 assertIncludes('scripts/kaola-workflow-claim.js', 'worktree_path');
+assertIncludes('scripts/kaola-workflow-claim.js', 'mainRootFromCoord');
+assertIncludes('scripts/kaola-workflow-claim.js', "stdio: ['ignore', 'ignore', 'ignore']");
+assertIncludes('scripts/kaola-workflow-claim.js', "'workflow_path: ' + workflowPath");
+assertIncludes('scripts/kaola-workflow-claim.js', '/kaola-workflow-fast ');
+assertIncludes('scripts/kaola-workflow-claim.js', 'removeLegacyStateBlocks');
 assertIncludes('scripts/kaola-workflow-active-folders.js', 'excludeClosedIssues');
 assertIncludes('scripts/kaola-workflow-classifier.js', 'readActiveFolders');
+assertIncludes('scripts/kaola-workflow-classifier.js', 'kw:claim\\s+(project|sess)=');
 assertIncludes('scripts/kaola-workflow-sink-merge.js', 'readActiveFolders');
 assertIncludes('scripts/kaola-workflow-sink-pr.js', 'updateStateSinkBlock');
 assertNotIncludes('scripts/kaola-workflow-sink-pr.js', 'patchLockFile');
@@ -174,6 +180,12 @@ assertConcept('scripts/simulate-workflow-walkthrough.js', 'roadmap concurrency r
   'testRoadmapInitIssueConcurrentExclusive',
   'concurrent init-issue should create exactly one source file',
   'final-path exclusivity'
+]);
+assertConcept('scripts/simulate-workflow-walkthrough.js', 'startup and cleanup hardening regressions', [
+  'testStartupJsonAndSiblingWorktrees',
+  'testFastStartupState',
+  'testClassifierCurrentClaimMarkerBlocks',
+  'finalize should remove legacy lease blocks before archive'
 ]);
 assertIncludes('README.md', 'Active Folder Coordination');
 assertIncludes('README.md', 'Parallel Active Work');
