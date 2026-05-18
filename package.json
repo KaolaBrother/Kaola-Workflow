@@ -35,7 +35,7 @@
     "test": "npm run test:kaola-workflow:claude && npm run test:kaola-workflow:codex",
     "test:kaola-workflow:claude": "node scripts/validate-script-sync.js && bash -n install.sh uninstall.sh && node -e \"JSON.parse(require('fs').readFileSync('package.json', 'utf8')); JSON.parse(require('fs').readFileSync('.claude-plugin/plugin.json', 'utf8'))\" && node scripts/validate-workflow-contracts.js && node scripts/simulate-workflow-walkthrough.js && claude plugin validate .",
     "test:kaola-workflow:codex": "node scripts/validate-script-sync.js && node scripts/validate-kaola-workflow-contracts.js && node plugins/kaola-workflow/scripts/simulate-kaola-workflow-walkthrough.js",
-    "test:kaola-workflow:gitlab": "node -e \"const fs=require('fs'); ['package.json','plugins/kaola-workflow-gitlab/.claude-plugin/plugin.json','plugins/kaola-workflow-gitlab/.codex-plugin/plugin.json'].forEach(f=>JSON.parse(fs.readFileSync(f,'utf8'))); console.log('gitlab tests pending #58')\""
+    "test:kaola-workflow:gitlab": "node plugins/kaola-workflow-gitlab/scripts/validate-kaola-workflow-gitlab-contracts.js && node plugins/kaola-workflow-gitlab/scripts/simulate-gitlab-workflow-walkthrough.js && node plugins/kaola-workflow-gitlab/scripts/simulate-gitlab-codex-workflow-walkthrough.js"
   },
   "peerDependencies": {
     "ecc-universal": ">=1.10.0 || >=2.0.0-rc.0"
