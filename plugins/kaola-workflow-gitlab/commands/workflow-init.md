@@ -287,7 +287,24 @@ If `kaola-gitlab-workflow-claim.js` is unavailable (manual install without the s
 
 ---
 
-## Step 4 — Git And Roadmap Summary
+## Step 4 — Ignore Local-Only Agent Files
+
+Treat `CLAUDE.md` and `AGENTS.md` as local-only agent guidance, not tracked source. `/workflow-init` and per-session work may create or edit them, but they should not be committed.
+
+Ensure both paths are listed in the project's `.gitignore`. Create `.gitignore` if missing. Append entries idempotently — do not duplicate.
+
+```bash
+touch .gitignore
+for path in CLAUDE.md AGENTS.md; do
+  grep -qxF "$path" .gitignore || printf '%s\n' "$path" >> .gitignore
+done
+```
+
+If `git ls-files --error-unmatch CLAUDE.md` (or the same for `AGENTS.md`) succeeds, the file is already tracked. Warn the user and stop — do not auto-untrack. The user can untrack manually with `git rm --cached <path>` when ready.
+
+---
+
+## Step 5 — Git And Roadmap Summary
 
 After edits:
 

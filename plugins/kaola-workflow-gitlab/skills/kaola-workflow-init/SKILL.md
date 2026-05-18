@@ -54,7 +54,18 @@ docs/
 CHANGELOG.md
 ```
 
-7. Do not create `kaola-workflow/{project}/workflow-state.md` during init. State belongs to an active workflow project.
+7. Ignore local-only agent files. Treat `CLAUDE.md` and `AGENTS.md` as local-only agent guidance, not tracked source. Ensure both paths are listed in `.gitignore` (create `.gitignore` if missing); append idempotently:
+
+```bash
+touch .gitignore
+for path in CLAUDE.md AGENTS.md; do
+  grep -qxF "$path" .gitignore || printf '%s\n' "$path" >> .gitignore
+done
+```
+
+If either file is already tracked (`git ls-files --error-unmatch <path>` succeeds), warn the user and stop — do not auto-untrack.
+
+8. Do not create `kaola-workflow/{project}/workflow-state.md` during init. State belongs to an active workflow project.
 
 ## `AGENTS.md` Addendum
 
