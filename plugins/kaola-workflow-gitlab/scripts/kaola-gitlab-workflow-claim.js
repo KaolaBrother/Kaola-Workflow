@@ -303,11 +303,6 @@ function cmdStartup() {
   const args = parseArgs(process.argv.slice(3));
   const target = args.targetIssue || args.issue;
   if (!target) {
-    const folders = readActiveFolders(root);
-    if (folders.length === 1) {
-      output({ verdict: 'owned', claim: 'owned', project: folders[0].project, issue: folders[0].issue_iid, selected_project: folders[0].project, selected_issue: folders[0].issue_iid, worktree_path: folders[0].worktree_path || '' });
-      return;
-    }
     output({ verdict: 'no_target', claim: 'none', project: null, issue: null }, 1);
     return;
   }
@@ -317,7 +312,8 @@ function cmdStartup() {
     claim: result.status === 'acquired' ? 'acquired' : (result.status === 'owned' ? 'owned' : 'none'),
     selected_project: result.project || null,
     selected_issue: result.issue || null,
-    target_source: 'user_directed'
+    target_source: 'user_directed',
+    worktree_path: result.folder ? (result.folder.worktree_path || '') : (result.worktree_path || '')
   }, result), result.status === 'acquired' || result.status === 'owned' ? 0 : 1);
 }
 
@@ -336,24 +332,7 @@ function cmdPickNext() {
     }, result), result.status === 'acquired' || result.status === 'owned' ? 0 : 1);
     return;
   }
-  const folders = readActiveFolders(root);
-  if (folders.length === 1) {
-    output({ verdict: 'owned', claim: 'owned', project: folders[0].project, issue: folders[0].issue_iid, selected_project: folders[0].project, selected_issue: folders[0].issue_iid, worktree_path: folders[0].worktree_path || '' });
-    return;
-  }
-  const issue = listOpenIssues()[0];
-  if (!issue) {
-    output({ verdict: 'no_target', claim: 'none', project: null, issue: null }, 1);
-    return;
-  }
-  const result = claimExplicitTarget(root, Object.assign({}, args, { targetIssue: issue.issue_iid || issue.number }));
-  output(Object.assign({
-    verdict: result.status === 'acquired' ? (result.verdict || 'green') : result.status,
-    claim: result.status === 'acquired' ? 'acquired' : (result.status === 'owned' ? 'owned' : 'none'),
-    selected_project: result.project || null,
-    selected_issue: result.issue || null,
-    target_source: 'gitlab_open_issues'
-  }, result), result.status === 'acquired' || result.status === 'owned' ? 0 : 1);
+  output({ verdict: 'no_target', claim: 'none', project: null, issue: null }, 1);
 }
 
 function cmdResume() {

@@ -7,7 +7,7 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 
 | Issue | Title | Status | Workflow Project | Next Step |
 |-------|-------|--------|------------------|-----------|
-| #102 | Bug: install-codex-agent-profiles.js injects duplicate [features] into existing config.toml | open | issue-102 | ready |
+| none | No active work | — | — | — |
 
 ## Rules
 

@@ -786,6 +786,59 @@ withForge({
   assert(/remote workflow claim/.test(result.reasoning));
 });
 
+// Issue #99: startup/pick-next explicit-target parity
+{
+  // startup without --target-issue must return no_target even when one active folder exists
+  const root = tempRoot('kw-gl-startup-notarget-');
+  try {
+    writeState(root, 'sole-project', 99);
+    const result = spawnSync(process.execPath, [claimScript, 'startup', '--runtime', 'test'], {
+      cwd: root, encoding: 'utf8', env: process.env
+    });
+    assert.strictEqual(result.status, 1, 'startup without --target-issue must exit 1');
+    const out = JSON.parse(result.stdout.trim());
+    assert.strictEqual(out.verdict, 'no_target', 'startup without --target-issue must return no_target');
+    assert.strictEqual(out.claim, 'none');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+{
+  // pick-next without --target-issue must return no_target
+  const root = tempRoot('kw-gl-picknext-notarget-');
+  try {
+    writeState(root, 'sole-project', 99);
+    const result = spawnSync(process.execPath, [claimScript, 'pick-next'], {
+      cwd: root, encoding: 'utf8', env: process.env
+    });
+    assert.strictEqual(result.status, 1, 'pick-next without --target-issue must exit 1');
+    const out = JSON.parse(result.stdout.trim());
+    assert.strictEqual(out.verdict, 'no_target', 'pick-next without --target-issue must return no_target');
+    assert.strictEqual(out.claim, 'none');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+{
+  // explicit-target startup with owned folder must include top-level worktree_path
+  const root = tempRoot('kw-gl-startup-worktree-');
+  try {
+    writeState(root, 'issue-99', 99, 'worktree_path: /tmp/kw-wt-99');
+    const result = spawnSync(process.execPath, [claimScript, 'startup', '--runtime', 'test', '--target-issue', '99'], {
+      cwd: root, encoding: 'utf8', env: process.env
+    });
+    assert.strictEqual(result.status, 0, 'explicit-target startup must exit 0');
+    const out = JSON.parse(result.stdout.trim());
+    assert.strictEqual(out.verdict, 'owned');
+    assert.strictEqual(out.claim, 'owned');
+    assert.ok(typeof out.worktree_path === 'string', 'explicit owned startup must emit top-level worktree_path');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
 testGitLabRoadmapInitIssueExclusiveAndUpdate()
   .then(() => {
     console.log('GitLab workflow script tests passed');

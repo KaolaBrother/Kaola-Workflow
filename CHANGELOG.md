@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Fixed — GitLab Startup/Pick-Next Explicit-Target Parity (issue #99)
+
+- **`cmdStartup()` no-target guard**: GitLab startup now always returns `no_target` (exit 1) when called without `--target-issue`, even when exactly one active folder exists. Aligns with GitHub behavior.
+- **`cmdPickNext()` no-target guard**: GitLab pick-next now always returns `no_target` when called without `--target-issue`, removing the auto-pick-first-open-issue path.
+- **`worktree_path` in owned startup response**: Explicit-target startup now emits top-level `worktree_path` for owned folders, matching the GitHub response shape.
+- **Regression tests**: Three tests added covering no-target startup, no-target pick-next, and explicit-owned worktree_path.
+
 ### Fixed — Codex Agent Profile Installer Features Table (issue #102)
 
 - **`install-codex-agent-profiles.js`**: Avoids injecting a duplicate `[features]` table when the target `.codex/config.toml` already defines one. Fresh installs still receive the managed `[features]` stanza; existing configs keep their user-owned features table untouched.
