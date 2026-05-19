@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Fixed — GitLab Worktree Path Nesting (issue #100)
+
+- **`worktreePathFor` uses git common-dir**: Added `getCoordRoot`/`mainRootFromCoord` helpers to derive the main repo root via `git rev-parse --git-common-dir`, matching the GitHub implementation. Worktree sibling paths under `<repo>.kw/` are now computed relative to the main repo root regardless of which worktree the command runs from.
+- **`provisionWorktree` runs git operations on main root**: All `git worktree add`, `worktreeRegistered`, and `branchExists` calls now use `mainRoot` so branch and registration state is always looked up against the authoritative git index.
+- **stdio suppressed in `provisionWorktree`**: Changed `stdio: 'inherit'` to `['ignore', 'ignore', 'ignore']` for `git worktree add`, preventing git messages from bleeding into startup's JSON stdout.
+- **Sibling-worktree regression test**: Added test that runs startup from within a linked worktree and asserts the resulting `worktree_path` is a sibling (not nested) under the main repo's `.kw` directory.
+
 ### Fixed — GitLab Startup/Pick-Next Explicit-Target Parity (issue #99)
 
 - **`cmdStartup()` no-target guard**: GitLab startup now always returns `no_target` (exit 1) when called without `--target-issue`, even when exactly one active folder exists. Aligns with GitHub behavior.

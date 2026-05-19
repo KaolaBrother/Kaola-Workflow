@@ -839,6 +839,36 @@ withForge({
   }
 }
 
+// Issue #100: sibling worktree path - startup from a linked worktree must produce sibling paths
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-sibling-'));
+  const kwRoot = fs.realpathSync(tmp) + '.kw';
+  try {
+    initGitRepo(tmp);
+    // Simulate a linked worktree by running startup from within a hypothetical linked path.
+    // We do this by creating a sibling dir that shares the same git common-dir.
+    const linkedWt = path.join(kwRoot, 'issue-5');
+    fs.mkdirSync(linkedWt, { recursive: true });
+    // Create a worktree so git knows about it
+    spawnSync('git', ['worktree', 'add', '--detach', linkedWt], { cwd: tmp, encoding: 'utf8' });
+
+    // Run startup from the linked worktree cwd — should produce sibling, not nested path
+    const result = spawnSync(process.execPath, [claimScript, 'startup', '--runtime', 'test', '--target-issue', '6'], {
+      cwd: linkedWt, encoding: 'utf8', env: process.env
+    });
+    assert.strictEqual(result.status, 0, 'sibling startup must exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    const out = JSON.parse(result.stdout.trim());
+    const expectedSibling = path.join(kwRoot, 'issue-6');
+    assert.strictEqual(out.worktree_path, expectedSibling,
+      'startup from linked worktree must produce sibling path, not nested: got ' + out.worktree_path);
+    assert.ok(!out.worktree_path.includes('issue-5.kw'),
+      'worktree path must not contain issue-5.kw nesting: ' + out.worktree_path);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(kwRoot, { recursive: true, force: true });
+  }
+}
+
 testGitLabRoadmapInitIssueExclusiveAndUpdate()
   .then(() => {
     console.log('GitLab workflow script tests passed');

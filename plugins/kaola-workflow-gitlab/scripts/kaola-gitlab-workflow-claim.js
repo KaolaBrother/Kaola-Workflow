@@ -52,8 +52,26 @@ function buildBranchName(issueIid, project, fallback) {
   return Number.isFinite(issueIid) && issueIid > 0 ? 'workflow/gitlab-issue-' + issueIid : 'workflow/gitlab-' + project;
 }
 
+function getCoordRoot(root) {
+  try {
+    const raw = execFileSync('git', ['rev-parse', '--git-common-dir'], {
+      cwd: root,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore']
+    }).trim();
+    return path.resolve(root, raw);
+  } catch (_) {
+    return path.join(root, '.git');
+  }
+}
+
+function mainRootFromCoord(coordRoot) {
+  return path.basename(coordRoot) === '.git' ? path.dirname(coordRoot) : coordRoot;
+}
+
 function worktreePathFor(root, project) {
-  return path.join(path.dirname(root), path.basename(root) + '.kw', project);
+  const mainRoot = mainRootFromCoord(getCoordRoot(root));
+  return path.join(path.dirname(mainRoot), path.basename(mainRoot) + '.kw', project);
 }
 
 function hasGitHistory(root) {
@@ -83,14 +101,15 @@ function worktreeRegistered(root, wtPath) {
 }
 
 function provisionWorktree(root, project, branch) {
+  const mainRoot = mainRootFromCoord(getCoordRoot(root));
   const wtPath = worktreePathFor(root, project);
   fs.mkdirSync(path.dirname(wtPath), { recursive: true });
-  if (worktreeRegistered(root, wtPath)) return { path: wtPath, branch };
+  if (worktreeRegistered(mainRoot, wtPath)) return { path: wtPath, branch };
   if (fs.existsSync(wtPath)) return { path: wtPath, branch };
-  if (branchExists(root, branch)) {
-    execFileSync('git', ['worktree', 'add', '--', wtPath, branch], { cwd: root, stdio: 'inherit' });
+  if (branchExists(mainRoot, branch)) {
+    execFileSync('git', ['worktree', 'add', '--', wtPath, branch], { cwd: mainRoot, stdio: ['ignore', 'ignore', 'ignore'] });
   } else {
-    execFileSync('git', ['worktree', 'add', '-b', branch, '--', wtPath, 'HEAD'], { cwd: root, stdio: 'inherit' });
+    execFileSync('git', ['worktree', 'add', '-b', branch, '--', wtPath, 'HEAD'], { cwd: mainRoot, stdio: ['ignore', 'ignore', 'ignore'] });
   }
   return { path: wtPath, branch };
 }
