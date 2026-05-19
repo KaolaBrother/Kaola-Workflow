@@ -1,0 +1,45 @@
+{
+  "name": "kaola-workflow-gitea",
+  "version": "1.5.0",
+  "description": "Gitea edition of Kaola-Workflow for Codex, using Gitea issues, pull requests, tea, and repo-backed workflow artifacts.",
+  "author": {
+    "name": "KaolaBrother",
+    "url": "https://github.com/KaolaBrother"
+  },
+  "homepage": "https://github.com/KaolaBrother/Kaola-Workflow",
+  "repository": "https://github.com/KaolaBrother/Kaola-Workflow",
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "kaola-workflow",
+    "workflow",
+    "gitea",
+    "tea",
+    "pull-requests",
+    "skills",
+    "agents",
+    "tdd",
+    "review"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Kaola-Workflow Gitea for Codex",
+    "shortDescription": "Six-phase Kaola-Workflow for Gitea projects",
+    "longDescription": "Kaola-Workflow Gitea for Codex exposes repo-backed skills and Codex-native agent profiles for project initialization, workflow routing, research, ideation, planning, TDD execution, review, documentation docking, and finalization against Gitea issues and pull requests.",
+    "developerName": "KaolaBrother",
+    "category": "Coding",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/KaolaBrother/Kaola-Workflow",
+    "defaultPrompt": [
+      "Use Kaola-Workflow Gitea for Codex in this repo.",
+      "Resume the current Kaola-Workflow Gitea project.",
+      "Run workflow-init for Kaola-Workflow Gitea for Codex."
+    ],
+    "brandColor": "#609926",
+    "screenshots": []
+  }
+}

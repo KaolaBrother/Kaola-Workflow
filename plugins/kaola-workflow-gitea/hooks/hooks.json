@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"$CLAUDE_PLUGIN_ROOT/scripts/kaola-gitea-workflow-compact-context.js\"",
+            "timeout": 5
+          }
+        ],
+        "description": "Inject Kaola-Workflow resume state after context compaction",
+        "id": "kaola-workflow:compact-context"
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/kaola-workflow-pre-commit.sh\"",
+            "timeout": 5
+          }
+        ],
+        "description": "Block commits that mix multiple kaola-workflow project folders",
+        "id": "kaola-workflow:pre-commit-guard"
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/kaola-workflow-phantom-advisor.sh\"",
+            "timeout": 10
+          }
+        ],
+        "description": "Block advisor citations in workflow files without a backing .cache/advisor-*.md",
+        "id": "kaola-workflow:phantom-advisor"
+      }
+    ]
+  }
+}

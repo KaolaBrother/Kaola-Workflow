@@ -205,11 +205,13 @@ commands and `CLAUDE.md`.
 
 - GitHub edition: `plugins/kaola-workflow/`
 - GitLab edition: `plugins/kaola-workflow-gitlab/`
+- Gitea edition: `plugins/kaola-workflow-gitea/`
 
 `.agents/plugins/marketplace.json` is the Codex registration manifest. Codex's
 CLI requires this file (its only registration command is `plugin marketplace
-add <path>`) — it contains both `kaola-workflow` and `kaola-workflow-gitlab`
-entries so a single local-path registration exposes either edition.
+add <path>`) — it contains `kaola-workflow`, `kaola-workflow-gitlab`, and
+`kaola-workflow-gitea` entries so a single local-path registration exposes all
+three editions.
 
 ### Install
 
@@ -226,8 +228,8 @@ git clone https://github.com/KaolaBrother/Kaola-Workflow.git ~/kaola-workflow
 codex plugin marketplace add ~/kaola-workflow
 ```
 
-The local marketplace exposes both entries: `kaola-workflow` for GitHub and
-`kaola-workflow-gitlab` for GitLab.
+The local marketplace exposes all three entries: `kaola-workflow` for GitHub,
+`kaola-workflow-gitlab` for GitLab, and `kaola-workflow-gitea` for Gitea.
 
 For direct config enablement, add the desired entry to your Codex configuration:
 
@@ -236,6 +238,9 @@ For direct config enablement, add the desired entry to your Codex configuration:
 enabled = true
 
 [plugins."kaola-workflow-gitlab@kaolabrother-kaola-workflow"]
+enabled = true
+
+[plugins."kaola-workflow-gitea@kaolabrother-kaola-workflow"]
 enabled = true
 ```
 
@@ -248,6 +253,9 @@ Run workflow-init for Kaola-Workflow for Codex.
 
 Use Kaola-Workflow GitLab for Codex in this repo.
 Run workflow-init for Kaola-Workflow GitLab for Codex.
+
+Use Kaola-Workflow Gitea for Codex in this repo.
+Run workflow-init for Kaola-Workflow Gitea for Codex.
 ```
 
 Update an existing Codex install:
@@ -331,6 +339,7 @@ Current official release versions:
 - Claude Code command install, GitLab edition: `3.8.1`
 - Codex `kaola-workflow` plugin manifest: `1.4.1`
 - Codex `kaola-workflow-gitlab` plugin manifest: `1.4.1`
+- Codex `kaola-workflow-gitea` plugin manifest: `1.5.0`
 
 The root `package.json` version is the official repository and Claude Code
 command-install release version. The GitLab Claude command pack follows that
@@ -339,9 +348,9 @@ versions in `plugins/*/.codex-plugin/plugin.json`; bump the affected Codex
 manifest whenever that plugin's install surface, skills, agent profiles, or
 workflow behavior changes.
 
-The npm package includes `"plugins/"` in `package.json#files`, so both Codex
-packs and the GitLab Claude command sources are part of the packaged release
-surface.
+The npm package includes `"plugins/"` in `package.json#files`, so all three
+Codex packs and the GitLab Claude command sources are part of the packaged
+release surface.
 
 Use SemVer for both versions:
 

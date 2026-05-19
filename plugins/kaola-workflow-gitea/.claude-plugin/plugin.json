@@ -1,0 +1,24 @@
+{
+  "name": "kaola-workflow-gitea",
+  "version": "3.8.1",
+  "description": "Gitea edition of the 6-phase Kaola-Workflow Claude Code plugin, using Gitea issues, pull requests, and tea.",
+  "author": {
+    "name": "KaolaBrother",
+    "url": "https://github.com/KaolaBrother"
+  },
+  "homepage": "https://github.com/KaolaBrother/Kaola-Workflow",
+  "repository": "https://github.com/KaolaBrother/Kaola-Workflow",
+  "license": "MIT",
+  "keywords": [
+    "claude-code",
+    "workflow",
+    "gitea",
+    "tea",
+    "pull-requests",
+    "agents",
+    "tdd"
+  ],
+  "commands": [
+    "./commands/"
+  ]
+}

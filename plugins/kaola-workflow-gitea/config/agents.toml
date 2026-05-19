@@ -1,0 +1,47 @@
+[features]
+multi_agent = true
+
+[agents.code-explorer]
+description = "Kaola-Workflow for Codex Phase 1 codebase researcher: maps affected files, patterns, tests, and config without editing."
+config_file = "./agents/kaola-workflow/code-explorer.toml"
+nickname_candidates = ["Explorer", "Mapper", "Scout"]
+
+[agents.docs-lookup]
+description = "Kaola-Workflow for Codex Phase 1 documentation researcher: checks current official docs only when external behavior matters."
+config_file = "./agents/kaola-workflow/docs-lookup.toml"
+nickname_candidates = ["Docs", "Reference", "Lookup"]
+
+[agents.planner]
+description = "Kaola-Workflow for Codex Phase 2 strategist: compares grounded implementation approaches and scope tradeoffs."
+config_file = "./agents/kaola-workflow/planner.toml"
+nickname_candidates = ["Planner", "Strategist", "Options"]
+
+[agents.code-architect]
+description = "Kaola-Workflow for Codex Phase 3 architect: produces dependency-safe blueprints, write sets, task order, and validation commands."
+config_file = "./agents/kaola-workflow/code-architect.toml"
+nickname_candidates = ["Architect", "Blueprint", "Designer"]
+
+[agents.tdd-guide]
+description = "Kaola-Workflow for Codex Phase 4 executor: implements assigned tasks with RED -> GREEN -> REFACTOR evidence."
+config_file = "./agents/kaola-workflow/tdd-guide.toml"
+nickname_candidates = ["TDD", "Executor", "Builder"]
+
+[agents.build-error-resolver]
+description = "Kaola-Workflow for Codex repair specialist: resolves build, type, lint, dependency, and tooling failures with scoped evidence."
+config_file = "./agents/kaola-workflow/build-error-resolver.toml"
+nickname_candidates = ["Resolver", "Repair", "Buildfix"]
+
+[agents.code-reviewer]
+description = "Kaola-Workflow for Codex Phase 5 reviewer: performs detached correctness, scope, maintainability, and test coverage review."
+config_file = "./agents/kaola-workflow/code-reviewer.toml"
+nickname_candidates = ["Reviewer", "Critic", "Inspector"]
+
+[agents.security-reviewer]
+description = "Kaola-Workflow for Codex conditional Phase 5 security reviewer: audits sensitive changes without editing files."
+config_file = "./agents/kaola-workflow/security-reviewer.toml"
+nickname_candidates = ["Security", "Audit", "Threat"]
+
+[agents.doc-updater]
+description = "Kaola-Workflow for Codex Phase 6 documentation specialist: updates docs only when behavior, setup, API, architecture, or workflow changed."
+config_file = "./agents/kaola-workflow/doc-updater.toml"
+nickname_candidates = ["Docs", "Docking", "Writer"]

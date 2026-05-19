@@ -4,7 +4,14 @@
 
 ### Added
 
-- **Gitea forge adapter** (`plugins/kaola-workflow-gitea/scripts/kaola-gitea-forge.js`): New greenfield plugin providing Gitea-compatible forge operations including issue/PR management, labels, comments, and project discovery via `tea` CLI. Supports `KAOLA_WORKFLOW_OFFLINE=1` for offline operation. Mirrors the GitLab adapter API surface (issue #111).
+- **Kaola-Workflow Gitea plugin** (`plugins/kaola-workflow-gitea/`): New fully functional forge-specific plugin for Gitea edition, providing complete Claude Code and Codex integration. Includes:
+  - **Forge adapter** (`scripts/kaola-gitea-forge.js`): Gitea-compatible forge operations for issue/PR management, labels, comments, and project discovery via `tea` CLI. Supports `KAOLA_WORKFLOW_OFFLINE=1`. Mirrors the GitLab adapter API surface.
+  - **Commands** (`commands/`): 9 markdown command definitions for phases 1–6, fast path, workflow-init, and workflow-next — Gitea-adapted from GitHub/GitLab editions.
+  - **Skills** (`skills/`): 9 Codex skill definitions (research, ideation, plan, execute, review, finalize, fast, init, next) with Gitea-specific forge calls.
+  - **Agent profiles** (`agents/`): 9 TOML agent configurations (code-explorer, docs-lookup, planner, code-architect, tdd-guide, build-error-resolver, code-reviewer, security-reviewer, doc-updater).
+  - **Hooks** (`hooks/`): Pre-commit and phantom-advisor guards plus hook registration manifest, mirroring GitHub/GitLab safeguards.
+  - **Config** (`config/agents.toml`): Codex agent registry for managed installation.
+  - **Plugin manifests** (`.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`): Claude Code and Codex registration with version tracking (issue #114).
 
 ### Fixed
 
