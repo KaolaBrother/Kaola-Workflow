@@ -98,6 +98,21 @@ function selectProject(workflowDir, argument) {
   return { reason: 'no active workflow projects' };
 }
 
+function stateLooksValid(root, project, content) {
+  const phase = Number(field(content, 'phase'));
+  const nextCommand = field(content, 'next_command');
+  const nextSkill = field(content, 'next_skill');
+  const phaseFile = field(content, 'phase_file');
+
+  if (!PHASES[phase]) return false;
+  const safeProject = project.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const commandOk = new RegExp('^/kaola-workflow-phase' + phase + '\\s+' + safeProject + '$').test(nextCommand);
+  const skillOk = new RegExp('^' + SKILLS[phase] + '\\s+' + safeProject + '$').test(nextSkill);
+  if (!commandOk && !skillOk) return false;
+  if (phaseFile && phaseFile !== 'N/A' && !exists(path.join(root, phaseFile))) return false;
+  return /^status:\s*active\s*$/m.test(content);
+}
+
 function taskRows(content) {
   const start = content.search(/^## Tasks\s*$/m);
   if (start === -1) return [];
@@ -326,11 +341,17 @@ function stateContent(routeResult, existingContent) {
         : ['- none']
     ),
     '',
+    '## Ownership Rules',
+    'main_session_role: orchestrator',
+    'implementation_owner: ' + (routeResult.phase === 4 ? 'tdd-guide' : 'N/A'),
+    'fix_owner: ' + (routeResult.phase >= 4 ? 'tdd-guide or build-error-resolver' : 'N/A'),
+    'inline_emergency_fallback_authorized: no',
+    '',
     '## Last Evidence',
     'phase_file: ' + relativePhaseFile,
     'cache_file: N/A',
     'last_command: repair-state',
-    'last_result: reconstructed',
+    'last_result: state_repaired_from_artifacts',
     '',
     '## Last Updated',
     new Date().toISOString()
@@ -343,19 +364,45 @@ function repair(projectArg, startDir) {
   if (!location) return { repaired: false, reason: 'workflow directory not found' };
   const selected = selectProject(location.workflowDir, projectArg);
   if (!selected.project) return { repaired: false, reason: selected.reason };
+
+  const stateFilePath = path.join(location.workflowDir, selected.project, 'workflow-state.md');
+  let existingContent = '';
+  try { existingContent = readFile(stateFilePath); } catch (_) {}
+
+  if (existingContent && stateLooksValid(location.root, selected.project, existingContent)) {
+    const routeResult = reconstruct(location.root, location.workflowDir, selected.project);
+
+    if (routeResult.complete) {
+      return { repaired: false, complete: true };
+    }
+
+    if (routeResult.project && routeResult.nextCommand &&
+        routeResult.nextCommand !== field(existingContent, 'next_command')) {
+      routeResult.root = location.root;
+      fs.writeFileSync(stateFilePath, stateContent(routeResult, existingContent), 'utf8');
+      return { repaired: true, stale: true, project: selected.project, phase: routeResult.phase, next_skill: routeResult.nextSkill };
+    }
+
+    return {
+      repaired: false,
+      valid: true,
+      project: selected.project,
+      phase: Number(field(existingContent, 'phase')),
+      next_skill: field(existingContent, 'next_skill')
+    };
+  }
+
   const result = reconstruct(location.root, location.workflowDir, selected.project);
   if (!result.project) return Object.assign({ repaired: false, project: selected.project }, result);
-  const stateFile = path.join(location.workflowDir, selected.project, 'workflow-state.md');
-  let existing = '';
-  try { existing = readFile(stateFile); } catch (_) {}
-  fs.writeFileSync(stateFile, stateContent(result, existing), 'utf8');
+  result.root = location.root;
+  fs.writeFileSync(stateFilePath, stateContent(result, existingContent), 'utf8');
   return { repaired: true, project: selected.project, phase: result.phase, next_skill: result.nextSkill };
 }
 
 function main() {
   const result = repair(process.argv[2], process.cwd());
   process.stdout.write(JSON.stringify(result) + '\n');
-  if (!result.repaired && !result.complete) process.exitCode = 1;
+  if (!result.repaired && !result.complete && !result.valid) process.exitCode = 1;
 }
 
 if (require.main === module) {
@@ -367,6 +414,7 @@ module.exports = {
   delegationPolicyCompliance,
   repair,
   reconstruct,
+  stateLooksValid,
   stateContent,
   unresolvedCompliance
 };

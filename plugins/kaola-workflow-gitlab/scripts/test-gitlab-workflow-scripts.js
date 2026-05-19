@@ -16,6 +16,7 @@ const repair = require('./kaola-gitlab-workflow-repair-state');
 
 const claimScript = path.join(__dirname, 'kaola-gitlab-workflow-claim.js');
 const roadmapScript = path.join(__dirname, 'kaola-gitlab-workflow-roadmap.js');
+const classifierScript = path.join(__dirname, 'kaola-gitlab-workflow-classifier.js');
 
 function withForge(stubs, fn) {
   const originals = {};
@@ -268,7 +269,7 @@ withForge({
 }, () => {
   const root = tempRoot('kw-gl-classify-');
   const result = classifier.classifyIssue(20, root);
-  assert.strictEqual(result.verdict, 'green');
+  assert.strictEqual(result.verdict, 'blocked');
 });
 
 withForge({
@@ -303,7 +304,7 @@ withForge({
 
 withForge({
   viewIssue(issueIid) {
-    return { issue_iid: issueIid, number: issueIid, state: 'open', labels: [forge.CLAIM_LABEL], body: '' };
+    return { issue_iid: issueIid, number: issueIid, state: 'open', labels: [], body: '' };
   },
   discoverProject() {
     return { project_id: 77, path_with_namespace: 'group/project', web_url: 'https://gitlab.example/group/project' };
@@ -446,6 +447,343 @@ withForge({
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+// --- Task A: Gap 1 — readOrCreateConfig creates defaults ---
+{
+  const tempHome = tempRoot('kw-gl-config-home-');
+  try {
+    const result = spawnSync(process.execPath, [classifierScript, 'classify', '--issue', '55'], {
+      cwd: __dirname,
+      encoding: 'utf8',
+      env: Object.assign({}, process.env, {
+        KAOLA_WORKFLOW_OFFLINE: '1',
+        HOME: tempHome,
+        USERPROFILE: tempHome
+      })
+    });
+    const configPath = path.join(tempHome, '.config', 'kaola-workflow', 'config.json');
+    assert(fs.existsSync(configPath), 'readOrCreateConfig should create config.json on first run');
+    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    assert.strictEqual(config.parallel_mode, 'auto', 'readOrCreateConfig should write parallel_mode: auto as default');
+  } finally {
+    fs.rmSync(tempHome, { recursive: true, force: true });
+  }
+}
+
+// --- Task A: Gap 1 — parallel_mode bypass ---
+{
+  const tempHome = tempRoot('kw-gl-config-bypass-');
+  try {
+    const configDir = path.join(tempHome, '.config', 'kaola-workflow');
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(path.join(configDir, 'config.json'), JSON.stringify({ parallel_mode: 'off' }) + '\n');
+    const result = spawnSync(process.execPath, [classifierScript, 'classify', '--issue', '56'], {
+      cwd: __dirname,
+      encoding: 'utf8',
+      env: Object.assign({}, process.env, {
+        KAOLA_WORKFLOW_OFFLINE: '1',
+        HOME: tempHome,
+        USERPROFILE: tempHome
+      })
+    });
+    assert.strictEqual(result.status, 0);
+    const out = JSON.parse(result.stdout.trim());
+    assert.strictEqual(out.verdict, 'green');
+    assert(/parallel_mode=off/.test(out.reasoning));
+  } finally {
+    fs.rmSync(tempHome, { recursive: true, force: true });
+  }
+}
+
+// --- Task A: Gap 2/3 — issueHasWorkflowInProgressLabel and issueHasRemoteClaimNotes ---
+withForge({
+  viewIssue(issueIid) {
+    return { issue_iid: issueIid, number: issueIid, state: 'open', labels: [forge.CLAIM_LABEL], body: '' };
+  },
+  discoverProject() {
+    return { project_id: 77, path_with_namespace: 'group/project', web_url: 'https://gitlab.example/group/project' };
+  },
+  listIssueNotes(project, issueIid) {
+    return [{ body: '<!-- kw:claim project=issue-' + issueIid + ' -->', updated_at: new Date().toISOString() }];
+  }
+}, () => {
+  assert(classifier.issueHasWorkflowInProgressLabel([forge.CLAIM_LABEL]));
+  assert(!classifier.issueHasWorkflowInProgressLabel([]));
+  assert(classifier.issueHasRemoteClaimNotes(33), 'recent kw:claim note should return true');
+});
+
+withForge({
+  discoverProject() {
+    return { project_id: 77, path_with_namespace: 'group/project', web_url: 'https://gitlab.example/group/project' };
+  },
+  listIssueNotes() { return [{ body: '<!-- kw:claim sess=abc -->' }]; }
+}, () => {
+  assert(classifier.issueHasRemoteClaimNotes(34), 'missing updated_at should return true');
+});
+
+withForge({
+  discoverProject() {
+    return { project_id: 77, path_with_namespace: 'group/project', web_url: 'https://gitlab.example/group/project' };
+  },
+  listIssueNotes() {
+    return [{ body: '<!-- kw:claim project=old -->', updated_at: new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString() }];
+  }
+}, () => {
+  assert(!classifier.issueHasRemoteClaimNotes(35), 'stale note (>24h) should return false');
+});
+
+// --- Task A: Gap 2 — OFFLINE branch with depends-on in roadmap ---
+{
+  const tempHome = tempRoot('kw-gl-offline-classify-');
+  const root = tempRoot('kw-gl-offline-root-');
+  try {
+    const roadmapDir = path.join(root, 'kaola-workflow', '.roadmap');
+    fs.mkdirSync(roadmapDir, { recursive: true });
+    fs.writeFileSync(path.join(roadmapDir, 'issue-57.md'),
+      'issue: #57\ntitle: Offline fixture\nstatus: open\nnext_step: blocked by #3\n');
+    const result = spawnSync(process.execPath, [classifierScript, 'classify', '--issue', '57'], {
+      cwd: root, encoding: 'utf8',
+      env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1', HOME: tempHome, USERPROFILE: tempHome })
+    });
+    assert.strictEqual(result.status, 0);
+    const out = JSON.parse(result.stdout.trim());
+    assert.strictEqual(out.verdict, 'blocked');
+    assert(/depends-on:#3/.test(out.reasoning));
+  } finally {
+    fs.rmSync(tempHome, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+{
+  const tempHome = tempRoot('kw-gl-offline-nofile-');
+  const root = tempRoot('kw-gl-offline-nofile-root-');
+  try {
+    fs.mkdirSync(path.join(root, 'kaola-workflow', '.roadmap'), { recursive: true });
+    const result = spawnSync(process.execPath, [classifierScript, 'classify', '--issue', '58'], {
+      cwd: root, encoding: 'utf8',
+      env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1', HOME: tempHome, USERPROFILE: tempHome })
+    });
+    assert.strictEqual(result.status, 0);
+    const out = JSON.parse(result.stdout.trim());
+    assert.strictEqual(out.verdict, 'green');
+  } finally {
+    fs.rmSync(tempHome, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+// --- Task B: Gap 4 — stateLooksValid ---
+{
+  const root = tempRoot('kw-gl-slv-');
+  try {
+    const dir = writeState(root, 'slv-project', 80);
+    fs.writeFileSync(path.join(dir, 'phase3-plan.md'), '# Phase 3\n');
+    const stateText = fs.readFileSync(path.join(dir, 'workflow-state.md'), 'utf8');
+    assert(repair.stateLooksValid(root, 'slv-project', stateText), 'stateLooksValid should return true for valid state');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+{
+  const root = tempRoot('kw-gl-slv-bad-');
+  try {
+    const dir = writeState(root, 'slv-bad-project', 81);
+    const badState = fs.readFileSync(path.join(dir, 'workflow-state.md'), 'utf8')
+      .replace('next_command: /kaola-workflow-phase1 slv-bad-project', 'next_command: /kaola-workflow-phase9 slv-bad-project')
+      .replace('next_skill: kaola-workflow-research slv-bad-project', 'next_skill: kaola-workflow-phase9 slv-bad-project');
+    assert(!repair.stateLooksValid(root, 'slv-bad-project', badState), 'stateLooksValid should return false for unknown phase');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+// --- Task B: Gap 5 — three-way branch in repair() ---
+{
+  // valid + current (no write)
+  const root = tempRoot('kw-gl-repair-valid-');
+  try {
+    const dir = writeState(root, 'valid-project', 82);
+    fs.writeFileSync(path.join(dir, 'phase3-plan.md'), '# Phase 3\n');
+    const stateText = fs.readFileSync(path.join(dir, 'workflow-state.md'), 'utf8')
+      .replace(/phase: \d+/, 'phase: 4')
+      .replace('phase_name: Research', 'phase_name: Execute')
+      .replace('next_command: /kaola-workflow-phase1 valid-project', 'next_command: /kaola-workflow-phase4 valid-project')
+      .replace('next_skill: kaola-workflow-research valid-project', 'next_skill: kaola-workflow-execute valid-project');
+    fs.writeFileSync(path.join(dir, 'workflow-state.md'), stateText);
+    fs.writeFileSync(path.join(dir, 'phase4-progress.md'), '# Phase 4\n\n## Tasks\n| # | Task | Status |\n|---|------|--------|\n| A | Task A | open |\n');
+    const statMtime = fs.statSync(path.join(dir, 'workflow-state.md')).mtimeMs;
+    const result = repair.repair('valid-project', root);
+    assert.strictEqual(result.repaired, false);
+    assert.strictEqual(result.valid, true);
+    const newMtime = fs.statSync(path.join(dir, 'workflow-state.md')).mtimeMs;
+    assert.strictEqual(newMtime, statMtime, 'valid+current repair must not rewrite state file');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+{
+  // valid + complete
+  const root = tempRoot('kw-gl-repair-complete-');
+  try {
+    const dir = writeState(root, 'complete-project', 83);
+    fs.writeFileSync(path.join(dir, 'phase6-summary.md'), '# Phase 6\n');
+    const result = repair.repair('complete-project', root);
+    assert.strictEqual(result.repaired, false);
+    assert.strictEqual(result.complete, true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+{
+  // valid + stale (state says phase1, phase3-plan.md exists so reconstruct routes to phase4)
+  const root = tempRoot('kw-gl-repair-stale-');
+  try {
+    const dir = writeState(root, 'stale-project', 84);
+    fs.writeFileSync(path.join(dir, 'phase3-plan.md'), '# Phase 3\n');
+    const result = repair.repair('stale-project', root);
+    assert.strictEqual(result.repaired, true);
+    assert.strictEqual(result.stale, true);
+    const state = fs.readFileSync(path.join(dir, 'workflow-state.md'), 'utf8');
+    assert(state.includes('## GitLab'), 'stale repair should preserve ## GitLab section');
+    assert(state.includes('## Sink'), 'stale repair should preserve ## Sink section');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+// --- Task B: Gap 5 — stateContent ownership block + last_result rename ---
+{
+  const route4 = {
+    root: '/tmp',
+    phaseFile: '/tmp/phase4-tdd.md',
+    project: 'gap5-project',
+    phase: 4,
+    phaseName: 'TDD',
+    step: 'implement',
+    task: 'write tests',
+    nextCommand: '/kaola-workflow-phase4 gap5-project',
+    nextSkill: 'kaola-workflow-execute gap5-project',
+    pendingGates: []
+  };
+  const out4 = repair.stateContent(route4, '');
+  assert(out4.includes('## Ownership Rules'), 'Gap5/phase4: output should include ## Ownership Rules section');
+  assert(out4.includes('implementation_owner: tdd-guide'), 'Gap5/phase4: implementation_owner should be tdd-guide');
+  assert(out4.includes('fix_owner: tdd-guide or build-error-resolver'), 'Gap5/phase4: fix_owner should be tdd-guide or build-error-resolver');
+  assert(out4.includes('inline_emergency_fallback_authorized: no'), 'Gap5/phase4: inline_emergency_fallback_authorized should be no');
+  assert(out4.includes('last_result: state_repaired_from_artifacts'), 'Gap5/phase4: last_result should be state_repaired_from_artifacts');
+}
+
+{
+  const route2 = {
+    root: '/tmp',
+    phaseFile: '/tmp/phase2-research.md',
+    project: 'gap5-project',
+    phase: 2,
+    phaseName: 'Research',
+    step: 'gather',
+    task: 'read docs',
+    nextCommand: '/kaola-workflow-phase2 gap5-project',
+    nextSkill: 'kaola-workflow-research gap5-project',
+    pendingGates: []
+  };
+  const out2 = repair.stateContent(route2, '');
+  assert(out2.includes('implementation_owner: N/A'), 'Gap5/phase2: implementation_owner should be N/A');
+  assert(out2.includes('fix_owner: N/A'), 'Gap5/phase2: fix_owner should be N/A');
+}
+
+{
+  const routePos = {
+    root: '/tmp',
+    phaseFile: '/tmp/phase3-plan.md',
+    project: 'gap5-project',
+    phase: 3,
+    phaseName: 'Plan',
+    step: 'plan',
+    task: 'write plan',
+    nextCommand: '/kaola-workflow-phase3 gap5-project',
+    nextSkill: 'kaola-workflow-plan gap5-project',
+    pendingGates: []
+  };
+  const outPos = repair.stateContent(routePos, '');
+  const idxPending = outPos.indexOf('## Pending Gates');
+  const idxOwnership = outPos.indexOf('## Ownership Rules');
+  const idxEvidence = outPos.indexOf('## Last Evidence');
+  assert(idxOwnership >= 0, 'Gap5/position: ## Ownership Rules must be present');
+  assert(idxPending >= 0, 'Gap5/position: ## Pending Gates must be present');
+  assert(idxEvidence >= 0, 'Gap5/position: ## Last Evidence must be present');
+  assert(idxOwnership > idxPending, 'Gap5/position: ## Ownership Rules must appear after ## Pending Gates');
+  assert(idxOwnership < idxEvidence, 'Gap5/position: ## Ownership Rules must appear before ## Last Evidence');
+}
+
+// Fix 1: repair-state CLI exit code — valid+current must not exit 1
+{
+  const root = tempRoot('kw-gl-repair-exitcode-');
+  try {
+    const dir = writeState(root, 'exitcode-project', 90);
+    fs.writeFileSync(path.join(dir, 'phase3-plan.md'), '# Phase 3\n');
+    // Set state to phase 4 so reconstruct and state agree (valid+current)
+    const stateText = fs.readFileSync(path.join(dir, 'workflow-state.md'), 'utf8')
+      .replace(/phase: \d+/, 'phase: 4')
+      .replace('phase_name: Research', 'phase_name: Execute')
+      .replace('next_command: /kaola-workflow-phase1 exitcode-project', 'next_command: /kaola-workflow-phase4 exitcode-project')
+      .replace('next_skill: kaola-workflow-research exitcode-project', 'next_skill: kaola-workflow-execute exitcode-project');
+    fs.writeFileSync(path.join(dir, 'workflow-state.md'), stateText);
+    fs.writeFileSync(path.join(dir, 'phase4-progress.md'), '# Phase 4\n\n## Tasks\n| # | Task | Status |\n|---|------|--------|\n| A | Task A | open |\n');
+    const repairScript = path.join(__dirname, 'kaola-gitlab-workflow-repair-state.js');
+    const result = spawnSync(process.execPath, [repairScript, 'exitcode-project'], {
+      cwd: root, encoding: 'utf8', env: process.env
+    });
+    assert.strictEqual(result.status, 0, 'valid+current repair must exit 0, got: ' + result.stdout + result.stderr);
+    const out = JSON.parse(result.stdout.trim());
+    assert.strictEqual(out.repaired, false);
+    assert.strictEqual(out.valid, true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+// Fix 2a: classifyIssue parallel_mode bypass
+{
+  const tempHome = tempRoot('kw-gl-ciy-bypass-');
+  try {
+    const configDir = path.join(tempHome, '.config', 'kaola-workflow');
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(path.join(configDir, 'config.json'), JSON.stringify({ parallel_mode: 'manual' }) + '\n');
+    // Run via subprocess so HOME override is effective
+    const root = tempRoot('kw-gl-ciy-bypass-root-');
+    try {
+      const result = spawnSync(process.execPath, [classifierScript, 'classify', '--issue', '91'], {
+        cwd: root, encoding: 'utf8',
+        env: Object.assign({}, process.env, { HOME: tempHome, USERPROFILE: tempHome })
+      });
+      assert.strictEqual(result.status, 0);
+      const out = JSON.parse(result.stdout.trim());
+      assert.strictEqual(out.verdict, 'green');
+      assert(/parallel_mode=manual/.test(out.reasoning));
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  } finally {
+    fs.rmSync(tempHome, { recursive: true, force: true });
+  }
+}
+
+// Fix 2b: classifyIssue remote-claim guard via label
+withForge({
+  viewIssue(issueIid) {
+    return { issue_iid: issueIid, state: 'open', labels: [forge.CLAIM_LABEL], body: '' };
+  },
+  discoverProject() { return { project_id: 77, path_with_namespace: 'g/p' }; },
+  listIssueNotes() { return []; }
+}, () => {
+  const result = classifier.classifyIssue(92, '/tmp');
+  assert.strictEqual(result.verdict, 'blocked', 'classifyIssue must block on CLAIM_LABEL');
+  assert(/remote workflow claim/.test(result.reasoning));
 });
 
 testGitLabRoadmapInitIssueExclusiveAndUpdate()

@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Fixed — GitLab Classifier and Repair-State Parity (issue #88)
+
+- **GitLab Classifier**: Added `parallel_mode` config bypass (when mode is not `auto`), OFFLINE roadmap fallback using `touches:` metadata, and remote claim detection via `issueHasWorkflowInProgressLabel` and `issueHasRemoteClaimNotes` helpers. Achieves feature parity with the GitHub edition classifier for offline operation and parallel-work classification.
+- **GitLab Repair-State**: Added `stateLooksValid` three-way validation branch (returns `true` for valid+current state, `false` for invalid/stale), integrated into `repair()` decision tree for safer state reconstruction. Added `## Ownership Rules` section in repaired state output documenting main-session role, implementation owner, fix owner, and emergency fallback authorization. Renamed `last_result: reconstructed` field to `last_result: state_repaired_from_artifacts` to align with issue #62 session-aware finalization semantics.
+- **Test coverage**: New unit tests in `plugins/kaola-workflow-gitlab/scripts/test-gitlab-workflow-scripts.js` covering classifier config bypass, offline fallback paths, remote claim detection, and repair-state ownership rules generation.
+
 ### Added — GitLab Active-Folder Safeguards Parity (issue #86)
 
 - **`cmdRelease` CWD guard** (`plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js`): GitLab release now refuses to discard the current working directory, returning `{released: false, reason: 'refusing to discard current working directory'}` with exit code 1. Mirrors the existing GitHub safeguard.

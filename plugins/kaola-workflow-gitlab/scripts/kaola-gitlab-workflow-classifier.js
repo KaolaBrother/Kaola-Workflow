@@ -2,9 +2,12 @@
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const forge = require('./kaola-gitlab-forge');
 const active = require('./kaola-gitlab-workflow-active-folders');
+
+const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
 
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
 
@@ -19,6 +22,25 @@ function parseArgs(argv) {
     if (argv[i] === '--json') { args.json = true; continue; }
   }
   return args;
+}
+
+function field(content, name) {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = content.match(new RegExp('^' + escaped + ':\\s*(.+)$', 'm'));
+  return match ? match[1].trim() : '';
+}
+
+function readOrCreateConfig() {
+  const CONFIG_PATH = path.join(os.homedir(), '.config', 'kaola-workflow', 'config.json');
+  try {
+    return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+  } catch (err) {
+    if (err.code !== 'ENOENT') throw err;
+    const defaults = { parallel_mode: 'auto' };
+    fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(defaults, null, 2) + '\n');
+    return defaults;
+  }
 }
 
 const FILE_PATH_REGEX = /(?:^|[^A-Za-z0-9_./-])([A-Za-z0-9_-]+(?:\/[A-Za-z0-9_.-]+)+)/g;
@@ -90,12 +112,42 @@ function parseAreaLabelsFromText(text) {
 }
 
 function checkDependsOn(depIid) {
+  if (OFFLINE) {
+    return { verdict: 'blocked', reasoning: 'OFFLINE and depends-on:#' + depIid + ' label present; conservative block' };
+  }
   let state = 'open';
   try {
     state = forge.viewIssue(depIid).state || 'open';
   } catch (_) {}
   if (state !== 'closed') return { verdict: 'blocked', reasoning: 'depends-on:#' + depIid + ' is still open' };
   return null;
+}
+
+function issueHasWorkflowInProgressLabel(labels) {
+  return (labels || []).some(function(label) {
+    return labelName(label) === forge.CLAIM_LABEL;
+  });
+}
+
+function issueHasRemoteClaimNotes(issueIid) {
+  if (OFFLINE) return false;
+  let project;
+  try {
+    project = forge.discoverProject();
+  } catch (_) {
+    return false;
+  }
+  if (!project || !project.project_id) return false;
+  try {
+    const notes = forge.listIssueNotes(project, issueIid) || [];
+    return notes.some(function(note) {
+      if (!note || !note.body || !/<!--\s*kw:claim\s+(project|sess)=/.test(note.body)) return false;
+      if (!note.updated_at) return true;
+      return Date.now() - new Date(note.updated_at).getTime() < 24 * 60 * 60 * 1000;
+    });
+  } catch (_) {
+    return false;
+  }
 }
 
 function scanClaimedOverlap(candidatePaths, candidateAreas, candidateAreaLabels, activeFolders) {
@@ -165,6 +217,11 @@ function classify(issue, activeFolders) {
 }
 
 function classifyIssue(issueIid, root) {
+  const config = readOrCreateConfig();
+  if (config.parallel_mode !== 'auto') {
+    return { verdict: 'green', reasoning: 'parallel_mode=' + config.parallel_mode + '; bypassing classifier' };
+  }
+
   const repoRoot = root || active.getRoot();
   const activeFolders = active.readActiveFolders(repoRoot);
   if (activeFolders.some(folder => folder.issue_iid === issueIid)) {
@@ -182,13 +239,70 @@ function classifyIssue(issueIid, root) {
     return { verdict: 'red', reasoning: 'issue #' + issueIid + ' is already closed' };
   }
 
+  if (issueHasWorkflowInProgressLabel(issue.labels || []) || issueHasRemoteClaimNotes(issueIid)) {
+    return { verdict: 'blocked', reasoning: 'issue #' + issueIid + ' has a remote workflow claim' };
+  }
+
   return classify(issue, activeFolders);
 }
 
 function cmdClassify() {
   const args = parseArgs(process.argv.slice(3));
   assert(Number.isFinite(args.issue) && args.issue > 0, '--issue <N> required for classify');
-  process.stdout.write(JSON.stringify(classifyIssue(args.issue, active.getRoot())) + '\n');
+
+  const config = readOrCreateConfig();
+  if (config.parallel_mode !== 'auto') {
+    process.stdout.write(JSON.stringify({ verdict: 'green', reasoning: 'parallel_mode=' + config.parallel_mode + '; bypassing classifier' }) + '\n');
+    return;
+  }
+
+  const repoRoot = active.getRoot();
+  const activeFolders = active.readActiveFolders(repoRoot);
+
+  if (activeFolders.some(function(folder) { return folder.issue_iid === args.issue; })) {
+    process.stdout.write(JSON.stringify({ verdict: 'owned', reasoning: 'active local folder already exists' }) + '\n');
+    return;
+  }
+
+  if (OFFLINE) {
+    const roadmapFile = path.join(repoRoot, 'kaola-workflow', '.roadmap', 'issue-' + args.issue + '.md');
+    let labels = [];
+    let body = '';
+    if (fs.existsSync(roadmapFile)) {
+      const content = fs.readFileSync(roadmapFile, 'utf8');
+      const nextStep = field(content, 'next_step');
+      if (/blocked by #\d+/i.test(nextStep)) {
+        const m = nextStep.match(/#(\d+)/);
+        if (m) labels = [{ name: 'depends-on:#' + m[1] }];
+      }
+      for (const area of parseAreaLabelsFromText(content)) labels.push({ name: 'area:' + area });
+      body = content;
+    }
+    const result = classify({ issue_iid: args.issue, labels: labels, body: body }, activeFolders);
+    process.stdout.write(JSON.stringify(result) + '\n');
+    return;
+  }
+
+  let issue;
+  try {
+    issue = forge.viewIssue(args.issue);
+  } catch (_) {
+    process.stdout.write(JSON.stringify({ verdict: 'green', reasoning: 'issue fetch failed; defaulting to green' }) + '\n');
+    return;
+  }
+
+  if ((issue.state || '').toLowerCase() === 'closed') {
+    process.stdout.write(JSON.stringify({ verdict: 'red', reasoning: 'issue #' + args.issue + ' is already closed' }) + '\n');
+    return;
+  }
+
+  if (issueHasWorkflowInProgressLabel(issue.labels || []) || issueHasRemoteClaimNotes(args.issue)) {
+    process.stdout.write(JSON.stringify({ verdict: 'blocked', reasoning: 'issue #' + args.issue + ' has a remote workflow claim' }) + '\n');
+    return;
+  }
+
+  const result = classify(issue, activeFolders);
+  process.stdout.write(JSON.stringify(result) + '\n');
 }
 
 function main() {
@@ -207,6 +321,8 @@ module.exports = {
   classifyIssue,
   extractCoarseAreas,
   extractFilePaths,
-  parseDependsOn
+  issueHasRemoteClaimNotes,
+  issueHasWorkflowInProgressLabel,
+  parseDependsOn,
+  readOrCreateConfig
 };
-
