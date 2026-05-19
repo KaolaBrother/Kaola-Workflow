@@ -342,7 +342,7 @@ withForge({
 {
   // Task 2 — block 1: classifyMergeError unit tests
   let classify;
-  try { classify = require('../scripts/kaola-gitlab-workflow-sink-merge').classifyMergeError; } catch (_) {}
+  try { classify = require('./kaola-gitlab-workflow-sink-merge').classifyMergeError; } catch (_) {}
   if (!classify) classify = () => null; // fallback so other assertions can run
 
   const assert_cls = (msg, expected, label) => {

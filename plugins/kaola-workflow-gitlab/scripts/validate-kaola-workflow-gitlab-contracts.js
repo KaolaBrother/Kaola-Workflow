@@ -52,7 +52,8 @@ function assertNoForbidden(file) {
     /GitHub/,
     /PR URL/,
     /PR number/,
-    /pull request/i
+    /pull request/i,
+    /\b[a-z]+glab\b/i
   ];
   for (const re of forbidden) assert(!re.test(text), file + ' contains forbidden reference: ' + re);
 }

@@ -7,6 +7,12 @@
 - **`install-codex-agent-profiles.js`**: Avoids injecting a duplicate `[features]` table when the target `.codex/config.toml` already defines one. Fresh installs still receive the managed `[features]` stanza; existing configs keep their user-owned features table untouched.
 - **Regression test**: Codex walkthrough simulation now covers fresh installs, existing `[features]` configs, and reinstall idempotency.
 
+### Fixed — GitLab Term-Replacement Artifacts and Test Import Path (issues #90, #98)
+
+- **GitLab agent profile typo**: Fixed spelling error in `plugins/kaola-workflow-gitlab/agents/code-architect.toml` (`enouglab` → `enough`).
+- **Validator forbidden-pattern addition**: Added `/\b[a-z]+glab\b/i` to `assertNoForbidden` in the GitLab contract validator to catch accidental `gh`→`gitlab` replacement artifacts.
+- **Test import path correction**: Fixed `require('../scripts/kaola-gitlab-workflow-sink-merge')` → `require('./kaola-gitlab-workflow-sink-merge')` in `test-gitlab-sinks.js`, unblocking `npm run test:kaola-workflow:gitlab`.
+
 ### Documentation — GitLab Sink-Merge Parity + Test Hooks (issue #89)
 
 - **`docs/api.md` Sink API expansion**: Documented `classifyMergeError` function exported from both GitHub and GitLab sink-merge modules; clarified exit codes 2 (FF race) and 3 (merge-impossible) apply to both editions; added failure classification contract.

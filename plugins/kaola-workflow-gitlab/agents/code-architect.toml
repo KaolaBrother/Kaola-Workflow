@@ -9,7 +9,7 @@ Purpose:
 - Do not edit product code.
 
 Output contract:
-- Produce tasks small enouglab for reliable TDD execution.
+- Produce tasks small enough for reliable TDD execution.
 - Identify safe parallel groups only when write sets are disjoint.
 - Include tests to add or update for each task.
 - Include rollback or failure routing notes where risk is nontrivial.
