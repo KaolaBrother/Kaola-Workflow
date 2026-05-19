@@ -43,7 +43,7 @@ Must exit 0 with "Workflow walkthrough simulation passed".
 
 ## Commands
 
-- Install: `./install.sh --forge=github` (Claude Code) or `--forge=gitlab` (GitLab edition).
+- Install: `./install.sh --forge=github` (Claude Code), `--forge=gitlab` (GitLab edition), or `--forge=gitea` (Gitea edition).
 - Test: `node scripts/simulate-workflow-walkthrough.js` and `npm test`.
 - Lint/typecheck/build: unknown (Node scripts only, no formal pipeline).
 - Dev server: not applicable.

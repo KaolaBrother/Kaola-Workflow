@@ -119,19 +119,15 @@ Code advisor configuration.
 
 ### Choose an edition
 
-Kaola-Workflow has two sibling editions:
+Kaola-Workflow has three sibling editions:
 
 - **GitHub edition**: default. Uses GitHub issues, pull requests, and `gh`.
 - **GitLab edition**: opt-in. Uses GitLab issues, merge requests, and `glab`.
+- **Gitea edition**: opt-in. Uses Gitea issues, pull requests, and `tea`. Requires `tea` ≥ 0.9.2 and Gitea server ≥ 1.17. **Forgejo note:** Forgejo ≥ 1.18 is expected to work via shared API surface but is not explicitly tested.
 
-Both editions share the same command names, so a manual Claude Code install
+All editions share the same command names, so a manual Claude Code install
 picks one forge at a time. Use the `--forge` flag on `install.sh` to select
 the edition.
-
-**Gitea support:** A Gitea forge adapter plugin is available under `plugins/kaola-workflow-gitea/`
-for users who prefer Gitea as their Git platform. The Gitea edition includes a complete sink layer
-(merge and PR) for Phase 6, with squash-merge gating support. See the plugin's documentation for
-setup and usage.
 
 ### Claude Code
 
@@ -159,6 +155,12 @@ GitLab edition:
 curl -fsSL https://raw.githubusercontent.com/KaolaBrother/Kaola-Workflow/main/install.sh | bash -s -- --forge=gitlab
 ```
 
+Gitea edition:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/KaolaBrother/Kaola-Workflow/main/install.sh | bash -s -- --forge=gitea
+```
+
 From a local clone:
 
 ```bash
@@ -167,6 +169,8 @@ cd Kaola-Workflow
 ./install.sh --forge=github  # default GitHub edition
 # or
 ./install.sh --forge=gitlab  # GitLab edition
+# or
+./install.sh --forge=gitea   # Gitea edition
 ```
 
 Then in Claude Code:
@@ -197,6 +201,17 @@ Before using the GitLab edition in a target project:
 - Enable GitLab issues and merge requests for the project.
 - Keep the workflow labels available: `workflow:queued` and
   `workflow:in-progress`.
+
+### Gitea prerequisites
+
+Before using the Gitea edition in a target project:
+
+- Install `tea` ≥ 0.9.2 and authenticate: `tea login add`.
+- Set `GITEA_SERVER_URL` and `GITEA_TOKEN` environment variables (or configure `tea` with `tea login add`).
+- Use a Gitea-hosted project remote.
+- Enable Gitea issues and pull requests for the project.
+- Keep the workflow labels available: `workflow:queued` and `workflow:in-progress`.
+- Gitea server ≥ 1.17 is required. Forgejo ≥ 1.18 is expected to work but is not explicitly tested.
 
 ## Codex packs
 

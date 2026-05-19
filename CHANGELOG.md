@@ -4,6 +4,8 @@
 
 ### Added
 
+- **Gitea forge edition** (`kaola-workflow-gitea`): Full functional parity with the GitHub edition. Install with `./install.sh --forge=gitea`. Requires `tea` CLI ≥ 0.9.2 and Gitea server ≥ 1.17. Forgejo ≥ 1.18 is expected to work via shared API surface but is not explicitly tested. Set `GITEA_SERVER_URL` and `GITEA_TOKEN` environment variables before first use.
+
 - **Gitea sink layer** (`plugins/kaola-workflow-gitea/scripts/`): Completes the Phase 6 sink implementation for the Gitea edition (issue #112). Three new/modified scripts:
   - **`kaola-gitea-workflow-sink-pr.js`**: Creates or finds a Gitea PR for the feature branch, writes `pr_url`, `pr_number`, `full_name`, and `project_html_url` to the workflow state Sink block.
   - **`kaola-gitea-workflow-sink-merge.js`**: Fetches, rebases, FF-merges, pushes, closes the linked issue, and removes the worktree. Reads `full_name` from state with fallback to `discoverProject()`. Exit codes: 0=merged, 2=FF exhausted, 3=merge-impossible (writes `sink-fallback.json`).
