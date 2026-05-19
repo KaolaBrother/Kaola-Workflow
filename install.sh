@@ -6,9 +6,10 @@
 # Usage (one-liner):
 #   curl -fsSL https://raw.githubusercontent.com/KaolaBrother/Kaola-Workflow/main/install.sh | bash
 #   curl -fsSL https://raw.githubusercontent.com/KaolaBrother/Kaola-Workflow/main/install.sh | bash -s -- --forge=gitlab
+#   curl -fsSL https://raw.githubusercontent.com/KaolaBrother/Kaola-Workflow/main/install.sh | bash -s -- --forge=gitea
 #
 # Usage (local clone):
-#   git clone https://github.com/KaolaBrother/Kaola-Workflow.git && cd Kaola-Workflow && ./install.sh [--yes] [--forge=github|gitlab]
+#   git clone https://github.com/KaolaBrother/Kaola-Workflow.git && cd Kaola-Workflow && ./install.sh [--yes] [--forge=github|gitlab|gitea]
 
 set -euo pipefail
 
@@ -41,7 +42,7 @@ FORGE=github
 MERGE_SETTINGS=1
 
 usage() {
-  echo "Usage: ./install.sh [--yes] [--forge=github|gitlab] [--no-settings-merge]"
+  echo "Usage: ./install.sh [--yes] [--forge=github|gitlab|gitea] [--no-settings-merge]"
 }
 
 while [[ "$#" -gt 0 ]]; do
@@ -56,7 +57,7 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --forge)
       if [[ -z "${2:-}" ]]; then
-        echo "--forge requires github or gitlab" >&2
+        echo "--forge requires github, gitlab, or gitea" >&2
         usage >&2
         exit 2
       fi
@@ -121,6 +122,27 @@ case "$FORGE" in
       kaola-workflow-phantom-advisor.sh
     )
     ;;
+  gitea)
+    SUPPORT_DIR="$HOME/.claude/kaola-workflow-gitea"
+    SOURCE_COMMANDS_DIR="$SCRIPT_DIR/plugins/kaola-workflow-gitea/commands"
+    SOURCE_SCRIPTS_DIR="$SCRIPT_DIR/plugins/kaola-workflow-gitea/scripts"
+    SOURCE_HOOKS_DIR="$SCRIPT_DIR/plugins/kaola-workflow-gitea/hooks"
+    SUPPORT_SCRIPT_NAMES=(
+      kaola-gitea-forge.js
+      kaola-gitea-workflow-active-folders.js
+      kaola-gitea-workflow-claim.js
+      kaola-gitea-workflow-classifier.js
+      kaola-gitea-workflow-compact-context.js
+      kaola-gitea-workflow-repair-state.js
+      kaola-gitea-workflow-roadmap.js
+      kaola-gitea-workflow-sink-merge.js
+      kaola-gitea-workflow-sink-pr.js
+    )
+    SUPPORT_HOOK_NAMES=(
+      kaola-workflow-pre-commit.sh
+      kaola-workflow-phantom-advisor.sh
+    )
+    ;;
   *)
     echo "Unknown forge: $FORGE" >&2
     usage >&2
@@ -141,7 +163,7 @@ echo ""
 # commands. The user must uninstall the plugin first.
 if command -v claude >/dev/null 2>&1; then
   PLUGIN_LIST="$(claude plugin list 2>/dev/null || true)"
-  if printf '%s\n' "$PLUGIN_LIST" | grep -qE 'kaola-workflow(-gitlab)?@'; then
+  if printf '%s\n' "$PLUGIN_LIST" | grep -qE 'kaola-workflow(-gitlab|-gitea)?@'; then
     echo "error: kaola-workflow is currently installed via the Claude Code plugin runtime." >&2
     echo "" >&2
     echo "Running install.sh on top of a plugin install creates a parallel installation:" >&2
@@ -297,8 +319,8 @@ for command_file in "$SOURCE_COMMANDS_DIR"/*.md; do
 done
 
 if [[ "$installed" -eq 0 ]]; then
-  if [[ "$FORGE" = "gitlab" ]]; then
-    echo "GitLab edition skeleton: no command files found yet in $SOURCE_COMMANDS_DIR."
+  if [[ "$FORGE" = "gitlab" || "$FORGE" = "gitea" ]]; then
+    echo "${FORGE^} edition skeleton: no command files found yet in $SOURCE_COMMANDS_DIR."
   else
     echo "No command files found in: $SOURCE_COMMANDS_DIR" >&2
     exit 1
@@ -462,14 +484,14 @@ for agent in "${REQUIRED_AGENTS[@]}"; do
 done
 
 for script_name in "${SUPPORT_SCRIPT_NAMES[@]}"; do
-  if [[ "$FORGE" = "gitlab" && ! -f "$SOURCE_SCRIPTS_DIR/$script_name" ]]; then
+  if [[ ( "$FORGE" = "gitlab" || "$FORGE" = "gitea" ) && ! -f "$SOURCE_SCRIPTS_DIR/$script_name" ]]; then
     continue
   fi
   verify_executable_file "$SUPPORT_SCRIPTS_DIR/$script_name" "support script" || verification_failed=1
 done
 
 for hook_name in "${SUPPORT_HOOK_NAMES[@]}"; do
-  if [[ "$FORGE" = "gitlab" && ! -f "$SOURCE_HOOKS_DIR/$hook_name" ]]; then
+  if [[ ( "$FORGE" = "gitlab" || "$FORGE" = "gitea" ) && ! -f "$SOURCE_HOOKS_DIR/$hook_name" ]]; then
     continue
   fi
   verify_executable_file "$SUPPORT_HOOKS_DIR/$hook_name" "support hook" || verification_failed=1
@@ -480,8 +502,8 @@ if [[ "$verification_failed" -ne 0 ]]; then
 fi
 
 echo "Verified Kaola-Workflow install files."
-if [[ "$FORGE" = "gitlab" && "$installed" -eq 0 ]]; then
-  echo "GitLab edition skeleton installed; runtime commands arrive in follow-up issues #56 and #57."
+if [[ ( "$FORGE" = "gitlab" || "$FORGE" = "gitea" ) && "$installed" -eq 0 ]]; then
+  echo "${FORGE^} edition skeleton installed; runtime commands arrive in follow-up issues."
 fi
 
 echo ""
