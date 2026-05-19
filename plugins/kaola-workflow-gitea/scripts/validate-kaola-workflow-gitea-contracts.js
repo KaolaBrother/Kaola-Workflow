@@ -1,0 +1,309 @@
+#!/usr/bin/env node
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+
+const root = path.resolve(__dirname, '..', '..', '..');
+const pluginRoot = 'plugins/kaola-workflow-gitea';
+
+function read(relativePath) {
+  return fs.readFileSync(path.join(root, relativePath), 'utf8');
+}
+
+function exists(relativePath) {
+  return fs.existsSync(path.join(root, relativePath));
+}
+
+function assert(condition, message) {
+  if (!condition) throw new Error(message);
+}
+
+function parseJson(relativePath) {
+  return JSON.parse(read(relativePath));
+}
+
+function listFiles(relativeDir, predicate) {
+  const full = path.join(root, relativeDir);
+  if (!fs.existsSync(full)) return [];
+  return fs.readdirSync(full, { withFileTypes: true })
+    .filter(entry => entry.isFile())
+    .map(entry => path.join(relativeDir, entry.name))
+    .filter(file => !predicate || predicate(file));
+}
+
+function listSkillFiles() {
+  const dir = path.join(root, pluginRoot, 'skills');
+  return fs.readdirSync(dir, { withFileTypes: true })
+    .filter(entry => entry.isDirectory())
+    .map(entry => path.join(pluginRoot, 'skills', entry.name, 'SKILL.md'))
+    .filter(file => exists(file));
+}
+
+function assertNoForbidden(file) {
+  const text = read(file);
+  const forbidden = [
+    /\$HOME\/\.claude\/kaola-workflow\/scripts/,
+    /(^|[^A-Za-z0-9_-])\.\/scripts([^A-Za-z0-9_-]|$)/,
+    /plugins\/kaola-workflow\/scripts/,
+    /\bglab\b/,
+    /gitlab\.com/i,
+    /api\.gitlab\.com/i,
+    /GitLab/,
+    /MR URL/,
+    /MR number/,
+    /merge request/i
+  ];
+  for (const re of forbidden) assert(!re.test(text), file + ' contains forbidden reference: ' + re);
+}
+
+function assertIncludes(file, needle) {
+  assert(read(file).includes(needle), file + ' must include: ' + needle);
+}
+
+function assertNotIncludes(file, needle) {
+  assert(!read(file).includes(needle), file + ' must not include: ' + needle);
+}
+
+function assertConcept(file, concept, terms) {
+  const content = read(file).toLowerCase();
+  const missing = terms.filter(term => !content.includes(term.toLowerCase()));
+  assert(missing.length === 0,
+    file + ' must document ' + concept + '; missing: ' + missing.join(', '));
+}
+
+function extractClaudeTemplate(file) {
+  const text = read(file);
+  const START = '<!-- KW-CLAUDE-TEMPLATE-START -->';
+  const END = '<!-- KW-CLAUDE-TEMPLATE-END -->';
+  const startIdx = text.indexOf(START);
+  const endIdx = text.indexOf(END);
+  if (startIdx === -1 || endIdx === -1 || endIdx <= startIdx) {
+    throw new Error(file + ': missing KW-CLAUDE-TEMPLATE-START/END markers');
+  }
+  return text.slice(startIdx + START.length, endIdx).trim();
+}
+
+const pluginJson = parseJson(pluginRoot + '/.codex-plugin/plugin.json');
+assert(pluginJson.name === 'kaola-workflow-gitea', 'Gitea Codex plugin name mismatch');
+assert(pluginJson.skills === './skills/', 'Gitea Codex plugin must expose ./skills/');
+
+const claudePluginJson = parseJson(pluginRoot + '/.claude-plugin/plugin.json');
+assert(String(claudePluginJson.name || '').includes('gitea'), 'Gitea Claude plugin name must identify Gitea');
+assert(claudePluginJson.version === require(path.join(root, 'package.json')).version,
+  'Gitea Claude plugin version must match package.json');
+
+const marketplace = parseJson('.agents/plugins/marketplace.json');
+assert(marketplace.plugins.some(plugin =>
+  plugin.name === 'kaola-workflow-gitea' &&
+  plugin.source &&
+  plugin.source.path === './plugins/kaola-workflow-gitea'
+), 'marketplace must include kaola-workflow-gitea');
+
+const commandFiles = listFiles(pluginRoot + '/commands', file => file.endsWith('.md'));
+const skillFiles = listSkillFiles();
+const hookFiles = listFiles(pluginRoot + '/hooks');
+const agentFiles = listFiles(pluginRoot + '/agents', file => file.endsWith('.toml'));
+
+assert(commandFiles.length === 9, 'expected 9 Gitea command files, got ' + commandFiles.length);
+assert(skillFiles.length === 9, 'expected 9 Gitea skill files, got ' + skillFiles.length);
+assert(exists(pluginRoot + '/hooks/hooks.json'), 'Gitea hooks.json missing');
+assert(hookFiles.some(file => file.endsWith('kaola-workflow-pre-commit.sh')), 'Gitea pre-commit hook missing');
+assert(hookFiles.some(file => file.endsWith('kaola-workflow-phantom-advisor.sh')), 'Gitea advisor hook missing');
+assert(agentFiles.length === 9, 'expected 9 Gitea agent profiles, got ' + agentFiles.length);
+assert(exists(pluginRoot + '/config/agents.toml'), 'Gitea agents config missing');
+
+for (const file of [...commandFiles, ...skillFiles, ...hookFiles, ...agentFiles, pluginRoot + '/config/agents.toml']) {
+  assertNoForbidden(file);
+}
+
+const scriptFiles = [
+  'kaola-gitea-forge.js',
+  'kaola-gitea-workflow-active-folders.js',
+  'kaola-gitea-workflow-claim.js',
+  'kaola-gitea-workflow-classifier.js',
+  'kaola-gitea-workflow-compact-context.js',
+  'kaola-gitea-workflow-repair-state.js',
+  'kaola-gitea-workflow-roadmap.js',
+  'kaola-gitea-workflow-sink-merge.js',
+  'kaola-gitea-workflow-sink-pr.js',
+  'simulate-gitea-workflow-walkthrough.js'
+];
+for (const script of scriptFiles) assert(exists(pluginRoot + '/scripts/' + script), script + ' missing');
+
+const installScript = read('install.sh');
+const installSupportScripts = [
+  'kaola-gitea-forge.js',
+  'kaola-gitea-workflow-active-folders.js',
+  'kaola-gitea-workflow-claim.js',
+  'kaola-gitea-workflow-classifier.js',
+  'kaola-gitea-workflow-compact-context.js',
+  'kaola-gitea-workflow-repair-state.js',
+  'kaola-gitea-workflow-roadmap.js',
+  'kaola-gitea-workflow-sink-merge.js',
+  'kaola-gitea-workflow-sink-pr.js'
+];
+for (const script of installSupportScripts) {
+  assert(installScript.includes(script), 'install.sh must install Gitea support script: ' + script);
+}
+
+assert(
+  read(pluginRoot + '/commands/kaola-workflow-phase6.md').includes('mr|pr)'),
+  'Gitea Phase 6 command must dispatch canonical pr sink (mr|pr) case)'
+);
+assert(
+  read(pluginRoot + '/commands/kaola-workflow-phase6.md').includes('SINK_STATE_FILE="kaola-workflow/{project}/workflow-state.md"') &&
+  read(pluginRoot + '/commands/kaola-workflow-phase6.md').includes('--keep-worktree') &&
+  read(pluginRoot + '/commands/kaola-workflow-phase6.md').includes('Use the sink metadata captured before Step 8b'),
+  'Gitea Phase 6 command must capture sink metadata before archive and preserve worktree for the final commit'
+);
+assert(
+  read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('mr|pr)'),
+  'Gitea finalize skill must dispatch canonical pr sink (mr|pr) case)'
+);
+assert(
+  read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('SINK_STATE_FILE="kaola-workflow/${KAOLA_PROJECT}/workflow-state.md"') &&
+  read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('--keep-worktree') &&
+  read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('metadata captured before archive'),
+  'Gitea finalize skill must capture sink metadata before archive and preserve worktree for the final commit'
+);
+for (const skill of listFiles(pluginRoot + '/skills', file => file.endsWith('SKILL.md'))) {
+  assert(!read(skill).includes('*/kaola-workflow/*/scripts/kaola-gitea'), skill + ' must use the Gitea Codex plugin cache path');
+}
+
+// Delegation policy checks
+const giteaSkillsBase = `${pluginRoot}/skills`;
+const delegationNegativeChecks = [
+  [`${giteaSkillsBase}/kaola-workflow-research/SKILL.md`, 'when subagents are available; otherwise perform the same read-only research'],
+  [`${giteaSkillsBase}/kaola-workflow-ideation/SKILL.md`, 'when subagents are available; otherwise perform the same strategy analysis'],
+  [`${giteaSkillsBase}/kaola-workflow-plan/SKILL.md`, 'when subagents are available; otherwise produce the same blueprint'],
+  [`${giteaSkillsBase}/kaola-workflow-execute/SKILL.md`, 'when subagents are available'],
+  [`${giteaSkillsBase}/kaola-workflow-execute/SKILL.md`, 'Use the current Codex session as the fallback executor'],
+  [`${giteaSkillsBase}/kaola-workflow-review/SKILL.md`, 'otherwise perform a review stance locally'],
+  [`${giteaSkillsBase}/kaola-workflow-review/SKILL.md`, 'or perform the same security review locally'],
+  [`${giteaSkillsBase}/kaola-workflow-finalize/SKILL.md`, 'subagents are available; otherwise update docs'],
+];
+for (const [file, needle] of delegationNegativeChecks) {
+  assert(!read(file).includes(needle), file + ' must not include: ' + needle);
+}
+const giteaDelegationSkills = [
+  'kaola-workflow-research',
+  'kaola-workflow-ideation',
+  'kaola-workflow-plan',
+  'kaola-workflow-execute',
+  'kaola-workflow-review',
+  'kaola-workflow-finalize',
+  'kaola-workflow-next',
+];
+for (const skill of giteaDelegationSkills) {
+  const skillFile = `${giteaSkillsBase}/${skill}/SKILL.md`;
+  assert(read(skillFile).includes('subagent-invoked'), skillFile + ' must include: subagent-invoked');
+  assert(read(skillFile).includes('local-fallback-explicit'), skillFile + ' must include: local-fallback-explicit');
+  assert(read(skillFile).includes('local-fallback-tool-unavailable'), skillFile + ' must include: local-fallback-tool-unavailable');
+}
+assert(
+  read(`${giteaSkillsBase}/kaola-workflow-next/SKILL.md`).includes('extract and reassign `delegation_policy:` alongside `phase` and `next_skill`'),
+  'Gitea next skill must explicitly resume delegation_policy alongside phase and next_skill'
+);
+for (const skill of ['kaola-workflow-ideation', 'kaola-workflow-plan', 'kaola-workflow-finalize']) {
+  const skillFile = `${giteaSkillsBase}/${skill}/SKILL.md`;
+  assert(
+    read(skillFile).includes('Plain `invoked` is intentional for non-Codex-role workflow gates'),
+    skillFile + ' must explain intentional non-Codex-role invoked rows'
+  );
+}
+
+// delegationPolicyCompliance must be exported from repair-state
+const giteaRepairState = require('./kaola-gitea-workflow-repair-state.js');
+assert(
+  typeof giteaRepairState.delegationPolicyCompliance === 'function',
+  'kaola-gitea-workflow-repair-state.js must export delegationPolicyCompliance'
+);
+
+function complianceFixture(rows) {
+  return [
+    '# Phase Fixture',
+    '',
+    '## Required Agent Compliance',
+    '| Requirement | Status | Evidence | Skip Reason |',
+    '|-------------|--------|----------|-------------|',
+    ...rows.map(row => `| ${row[0]} | ${row[1]} | ${row[2] || ''} | ${row[3] || ''} |`)
+  ].join('\n');
+}
+
+function policyState(policy) {
+  return `# Kaola-Workflow State\n\ndelegation_policy: ${policy}\n`;
+}
+
+function assertPolicyAllowed(policy, rows, label) {
+  const result = giteaRepairState.delegationPolicyCompliance(complianceFixture(rows), policyState(policy));
+  assert(result.ok, `${label} should satisfy delegation_policy ${policy}: ${result.reason || 'blocked'}`);
+}
+
+function assertPolicyBlocked(policy, rows, label) {
+  const result = giteaRepairState.delegationPolicyCompliance(complianceFixture(rows), policyState(policy));
+  assert(!result.ok, `${label} should violate delegation_policy ${policy}`);
+}
+
+assertPolicyAllowed('delegate', [
+  ['code-explorer', 'subagent-invoked', '.cache/code-explorer.md', ''],
+  ['advisor ideation gate', 'invoked', '.cache/advisor-ideation.md', '']
+], 'delegated Gitea Codex role row with advisor gate');
+assertPolicyAllowed('delegate', [
+  ['code-explorer', 'local-fallback-tool-unavailable', '.cache/code-explorer.md', '']
+], 'delegate policy with all role rows unavailable and evidenced');
+assertPolicyAllowed('local-authorized', [
+  ['planner', 'local-fallback-explicit', '.cache/planner.md', '']
+], 'explicit local authorization');
+assertPolicyAllowed('tool-unavailable', [
+  ['doc-updater', 'N/A', '.cache/doc-updater.md', 'No documentation changes needed.'],
+  ['final validation', 'invoked', '.cache/final-validation.md', '']
+], 'finalize non-role invoked rows with N/A doc-updater');
+assertPolicyBlocked('delegate', [
+  ['planner', 'local-fallback-explicit', '.cache/planner.md', '']
+], 'local fallback under delegate policy');
+assertPolicyBlocked('delegate', [
+  ['code-explorer', 'subagent-invoked', '.cache/code-explorer.md', ''],
+  ['planner', 'local-fallback-explicit', '.cache/planner.md', '']
+], 'mixed local fallback under delegate policy');
+assertPolicyBlocked('tool-unavailable', [
+  ['code-reviewer', 'subagent-invoked', '.cache/code-reviewer.md', '']
+], 'subagent row under tool-unavailable policy');
+
+const giteaInitSkill = `${giteaSkillsBase}/kaola-workflow-init/SKILL.md`;
+assertNotIncludes(giteaInitSkill, 'Do not create or edit CLAUDE.md');
+assertIncludes(giteaInitSkill, '> **MANDATORY — READ CLAUDE.md BEFORE ANY ACTION THIS SESSION.**');
+assertConcept(giteaInitSkill, 'Gitea init durable state contract', [
+  'kaola-workflow/.roadmap/issue-*.md',
+  'do not purge',
+  'kaola-workflow/{project}/',
+  'workflow-state.md',
+  'fast-summary.md',
+  '.cache/'
+]);
+assertConcept(`${pluginRoot}/scripts/kaola-gitea-workflow-roadmap.js`, 'Gitea missing roadmap source safeguard', [
+  'guardAgainstMissingRoadmapSource',
+  'non-empty generated ROADMAP.md',
+  'kaola-workflow/.roadmap is missing'
+]);
+assertConcept(`${pluginRoot}/scripts/kaola-gitea-workflow-roadmap.js`, 'Gitea atomic roadmap writes and exclusive issue source creation', [
+  'writeFileAtomicReplace',
+  'createFileExclusive',
+  'updated: issue-'
+]);
+
+// Gitea forge pair CLAUDE.md template must be byte-identical
+const giteaCmdTemplate = extractClaudeTemplate(`${pluginRoot}/commands/workflow-init.md`);
+const giteaSkillTemplate = extractClaudeTemplate(giteaInitSkill);
+assert(giteaCmdTemplate === giteaSkillTemplate,
+  'CLAUDE.md template must be byte-identical within Gitea forge pair');
+
+for (const file of listFiles(pluginRoot + '/scripts', file =>
+  file.endsWith('.js') && !file.endsWith('validate-kaola-workflow-gitea-contracts.js')
+)) {
+  const text = read(file);
+  assert(!/\bglab\b/.test(text), file + ' must not execute or mention glab');
+  assert(!/plugins\/kaola-workflow\/scripts|require\(['"]\.\.\//.test(text), file + ' must not fall back to root or GitHub plugin scripts');
+}
+
+console.log('Kaola-Workflow Gitea contract validation passed');
