@@ -5,7 +5,7 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const { spawnSync, execFileSync } = require('child_process');
 const claimScript = path.join(__dirname, 'kaola-gitlab-workflow-claim.js');
 
 const forge = require('./kaola-gitlab-forge');
@@ -27,6 +27,25 @@ function withForge(stubs, fn) {
 
 function tempRoot(name) {
   return fs.mkdtempSync(path.join(os.tmpdir(), name));
+}
+
+function setupRealRepo(name, project) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), name + '-'));
+  const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' });
+  git('init', '-b', 'main');
+  git('config', 'user.email', 'test@test.com');
+  git('config', 'user.name', 'Test');
+  fs.writeFileSync(path.join(root, 'README.md'), 'init');
+  git('add', '.');
+  git('commit', '-m', 'init');
+  const branch = 'workflow/' + project;
+  git('checkout', '-b', branch);
+  fs.writeFileSync(path.join(root, 'feature.md'), 'feature');
+  git('add', '.');
+  git('commit', '-m', 'feature commit');
+  git('checkout', 'main');
+  writeWorkflow(root, project, 1);
+  return { root, branch };
 }
 
 function writeWorkflow(root, project, issueIid, summary) {
@@ -308,6 +327,107 @@ withForge({
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+}
+
+// Security: branch name leading-hyphen rejection
+{
+  const { runDirectMerge } = require('./kaola-gitlab-workflow-sink-merge');
+  let err;
+  try { runDirectMerge({ branch: '--orphan', project: 'test' }); } catch (e) { err = e; }
+  assert(err && /--branch is invalid or TBD/.test(err.message),
+    'runDirectMerge should reject branch names starting with - (got: ' + (err && err.message) + ')');
+  console.log('branch name security validation test passed');
+}
+
+{
+  // Task 2 — block 1: classifyMergeError unit tests
+  let classify;
+  try { classify = require('../scripts/kaola-gitlab-workflow-sink-merge').classifyMergeError; } catch (_) {}
+  if (!classify) classify = () => null; // fallback so other assertions can run
+
+  const assert_cls = (msg, expected, label) => {
+    const err = new Error(msg);
+    err.stderr = msg;
+    const got = classify(err);
+    assert(got === expected, `classifyMergeError: expected '${expected}' for ${label}, got '${got}'`);
+  };
+
+  assert_cls('protected branch push rejected', 'branch_protected', 'protected branch');
+  assert_cls('pre-receive hook declined', 'branch_protected', 'pre-receive hook');
+  assert_cls('rejected non-fast-forward push', 'non_fast_forward', 'rejected non-ff');
+  assert_cls('conflicts with target branch', 'non_fast_forward', 'conflicts with target');
+  assert_cls('Permission denied 403 not authorized', 'permission_denied', 'permission denied');
+  assert_cls('not allowed to push to protected branch', 'permission_denied', 'not allowed to push');
+  assert_cls('not allowed to merge this MR', 'permission_denied', 'not allowed to merge');
+  const nullErr = new Error('some random unclassified error');
+  assert(classify(nullErr) === null, 'classifyMergeError: expected null for unclassified error');
+
+  // FORCE_MERGE_IMPOSSIBLE override: env var must be read at call time
+  const prev = process.env.KAOLA_WORKFLOW_FORCE_MERGE_IMPOSSIBLE;
+  process.env.KAOLA_WORKFLOW_FORCE_MERGE_IMPOSSIBLE = 'my_token';
+  try {
+    const forced = classify(new Error('any random message'));
+    assert(forced === 'my_token', `classifyMergeError: expected 'my_token' when FORCE_MERGE_IMPOSSIBLE set, got '${forced}'`);
+  } finally {
+    delete process.env.KAOLA_WORKFLOW_FORCE_MERGE_IMPOSSIBLE;
+    if (prev !== undefined) process.env.KAOLA_WORKFLOW_FORCE_MERGE_IMPOSSIBLE = prev;
+  }
+
+  console.log('classifyMergeError unit tests passed');
+}
+
+{
+  // Task 2 — block 2: exit-2 subprocess test (FORCE_FF_FAIL=3)
+  const sinkScript = path.join(__dirname, 'kaola-gitlab-workflow-sink-merge.js');
+  const { root, branch } = setupRealRepo('exit2-test', 'test-exit2');
+  const result = spawnSync(process.execPath, [sinkScript, '--branch', branch, '--project', 'test-exit2', '--root', root], {
+    cwd: root,
+    env: { ...process.env, KAOLA_WORKFLOW_FORCE_FF_FAIL: '3', KAOLA_WORKFLOW_OFFLINE: '1' },
+    encoding: 'utf8'
+  });
+  assert(result.status === 2, `exit-2 test: expected exit code 2, got ${result.status}. stderr: ${result.stderr}`);
+  console.log('exit-2 subprocess test passed');
+}
+
+{
+  // Task 2 — block 3: exit-3 subprocess test (FORCE_MERGE_IMPOSSIBLE=branch_protected)
+  const sinkScript = path.join(__dirname, 'kaola-gitlab-workflow-sink-merge.js');
+  const { root, branch } = setupRealRepo('exit3-test', 'test-exit3');
+  const result = spawnSync(process.execPath, [sinkScript, '--branch', branch, '--project', 'test-exit3', '--root', root], {
+    cwd: root,
+    env: { ...process.env, KAOLA_WORKFLOW_FORCE_MERGE_IMPOSSIBLE: 'branch_protected', KAOLA_WORKFLOW_OFFLINE: '1' },
+    encoding: 'utf8'
+  });
+  assert(result.status === 3, `exit-3 test: expected exit code 3, got ${result.status}. stderr: ${result.stderr}`);
+  const receiptPath = path.join(root, 'kaola-workflow', 'test-exit3', '.cache', 'sink-fallback.json');
+  assert(fs.existsSync(receiptPath), 'exit-3 test: sink-fallback.json receipt not found');
+  const receipt = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
+  assert(receipt.reason === 'branch_protected', `exit-3 test: receipt.reason expected 'branch_protected', got '${receipt.reason}'`);
+  assert(receipt.project === 'test-exit3', `exit-3 test: receipt.project expected 'test-exit3', got '${receipt.project}'`);
+  assert(typeof receipt.branch === 'string' && receipt.branch.length > 0, 'exit-3 test: receipt.branch must be set');
+  assert(typeof receipt.timestamp === 'string' && receipt.timestamp.length > 0, 'exit-3 test: receipt.timestamp must be set');
+  console.log('exit-3 subprocess test passed');
+}
+
+{
+  // Task 2 — block 4: success-path subprocess test (OFFLINE=1 only)
+  const sinkScript = path.join(__dirname, 'kaola-gitlab-workflow-sink-merge.js');
+  const { root, branch } = setupRealRepo('success-test', 'test-success');
+  const cwdFile = path.join(root, 'debug-cwd.txt');
+  const result = spawnSync(process.execPath, [sinkScript, '--branch', branch, '--project', 'test-success', '--root', root], {
+    cwd: root,
+    env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_WORKFLOW_DEBUG_CWD: cwdFile },
+    encoding: 'utf8'
+  });
+  assert(result.status === 0, `success-path test: expected exit code 0, got ${result.status}. stderr: ${result.stderr}`);
+  // Feature branch should be deleted after successful merge
+  const branchList = execFileSync('git', ['branch', '--list', branch], { cwd: root, encoding: 'utf8' });
+  assert(branchList.trim() === '', `success-path test: expected feature branch '${branch}' to be deleted, got: '${branchList}'`);
+  // DEBUG_CWD file should exist and contain a path
+  assert(fs.existsSync(cwdFile), 'success-path test: KAOLA_WORKFLOW_DEBUG_CWD file not written');
+  const cwdContents = fs.readFileSync(cwdFile, 'utf8').trim();
+  assert(cwdContents.length > 0, 'success-path test: KAOLA_WORKFLOW_DEBUG_CWD file is empty');
+  console.log('success-path subprocess test passed');
 }
 
 console.log('GitLab sink tests passed');

@@ -432,8 +432,10 @@ The detailed durable-state map lives in `docs/workflow-state-contract.md`. Keep 
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `KAOLA_WORKFLOW_OFFLINE` | `0` | Skip GitHub calls for local tests or air-gapped usage |
+| `KAOLA_WORKFLOW_OFFLINE` | `0` | Skip GitHub/GitLab calls for local tests or air-gapped usage |
 | `KAOLA_WORKFLOW_DEBUG_CWD` | (unset) | DEV/TEST ONLY — when set, `sink-merge.js` writes its final cwd to this file |
+| `KAOLA_WORKFLOW_FORCE_FF_FAIL` | (unset) | DEV/TEST ONLY — fail first N fast-forward merge attempts (GitHub and GitLab) |
+| `KAOLA_WORKFLOW_FORCE_MERGE_IMPOSSIBLE` | (unset) | DEV/TEST ONLY — force merge-impossible error in sink-merge fallback tests (GitHub and GitLab) |
 | `KAOLA_PATH` | (unset) | Set to `fast` to request fast-path workflow execution; defaults to the full six-phase flow |
 
 **Active-folder subcommands:**

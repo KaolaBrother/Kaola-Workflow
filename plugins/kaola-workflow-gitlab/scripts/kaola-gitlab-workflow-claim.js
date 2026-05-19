@@ -609,6 +609,7 @@ module.exports = {
   buildBranchName,
   claimExplicitTarget,
   claimProject,
+  getCoordRoot,
   listOpenIssues,
   partitionActiveAndDrift,
   projectNameForIssue,

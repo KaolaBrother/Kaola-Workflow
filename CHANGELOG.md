@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Documentation — GitLab Sink-Merge Parity + Test Hooks (issue #89)
+
+- **`docs/api.md` Sink API expansion**: Documented `classifyMergeError` function exported from both GitHub and GitLab sink-merge modules; clarified exit codes 2 (FF race) and 3 (merge-impossible) apply to both editions; added failure classification contract.
+- **Test environment variables documented**: Added `KAOLA_WORKFLOW_FORCE_FF_FAIL=N` and `KAOLA_WORKFLOW_FORCE_MERGE_IMPOSSIBLE=token` to `.env.example` and `docs/api.md` with clear test-only scope.
+- **Module exports documentation**: New "Module Exports — Public API Functions" section in `docs/api.md` documenting `classifyMergeError`, `getCoordRoot`, and GitLab-specific functions (`closeLinkedIssue`, `finalValidationPassed`, `runDirectMerge`) exported for test and integration use.
+- **README.md environment variable table**: Added `KAOLA_WORKFLOW_FORCE_FF_FAIL` and `KAOLA_WORKFLOW_FORCE_MERGE_IMPOSSIBLE` entries with test-only scope annotation.
+- **GitLab edition parity**: Phase 6 exit-code documentation already synchronized in both `commands/kaola-workflow-phase6.md` (GitHub) and `plugins/kaola-workflow-gitlab/commands/kaola-workflow-phase6.md` (GitLab).
+
 ### Fixed — GitLab Classifier and Repair-State Parity (issue #88)
 
 - **GitLab Classifier**: Added `parallel_mode` config bypass (when mode is not `auto`), OFFLINE roadmap fallback using `touches:` metadata, and remote claim detection via `issueHasWorkflowInProgressLabel` and `issueHasRemoteClaimNotes` helpers. Achieves feature parity with the GitHub edition classifier for offline operation and parallel-work classification.
