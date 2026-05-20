@@ -32,16 +32,18 @@ DOCKED — `.cache/doc-docking.md`
 Closure scan found one deferred LOW item (diagnostic clarity hardening). No user-owned decisions, no partial implementation, no blocking follow-ups. Closure proceeds.
 
 ## Commit And Push
-pending final Git gate
+Implementation: `8aa60dc feat: include GitLab and Gitea parity tests in npm test (issue #124)`
+Archive: `a74f10f chore: archive issue-124`
+Pushed to origin/main.
 
 ## GitHub Issue
-pending close (after final commit)
+CLOSED — issue #124 closed with merge hash 8aa60dc
 
 ## Roadmap
-pending refresh
+UPDATED — `kaola-workflow/.roadmap/issue-124.md` deleted, ROADMAP.md regenerated (no active work)
 
 ## Archive
-pending
+`kaola-workflow/archive/issue-124/`
 
 ## Required Agent Compliance
 | Requirement | Status | Evidence | Skip Reason |
@@ -50,9 +52,9 @@ pending
 | documentation docking | invoked | .cache/doc-docking.md | |
 | closure advisor gate | N/A | closure scan: one LOW deferred item, no user-owned decisions, no blocking follow-ups | |
 | final-validation fix executors | N/A | — | final validation passed on first run |
-| roadmap refresh | pending | kaola-workflow/ROADMAP.md | |
-| archive completed folder | pending | | |
-| final commit and push | ready | git status/git diff/upstream check | final gate runs after this file is committed |
+| roadmap refresh | complete | kaola-workflow/ROADMAP.md | |
+| archive completed folder | complete | kaola-workflow/archive/issue-124/ | |
+| final commit and push | complete | commits 8aa60dc, a74f10f pushed to origin/main | |
 
 ## Status
-READY FOR FINAL GIT GATE
+COMPLETE
