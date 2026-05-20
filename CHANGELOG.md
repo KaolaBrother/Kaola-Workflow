@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- **`bootstrap` alias added to GitLab and Gitea claim scripts** (issue #130): Both `kaola-gitlab-workflow-claim.js` and `kaola-gitea-workflow-claim.js` now accept `bootstrap` as an alias for `startup`, matching the GitHub baseline. Validator guards added to both forge contract validators to prevent future alias drift.
+
 - **GitLab claim script `watch-mr` listed in usage string** (issue #131): Added `watch-mr` to the usage assertion in `kaola-gitlab-workflow-claim.js` so CLI help/error output matches the implemented subcommands. Added a `assertIncludes` contract validator guard to prevent future drift between implemented subcommands and the usage string.
 
 - **macOS `npm test` hang eliminated** (issue #129): All 7 temporary `gh` shell shims in `scripts/simulate-workflow-walkthrough.js` converted from `#!/bin/sh` scripts to `#!/usr/bin/env node` Node.js scripts. On macOS, direct execution of a shell script via shebang from a Node.js child process could hang indefinitely; Node.js shims are not affected. Also prepends `path.dirname(process.execPath)` to the PATH in 4 `spawnSync` call sites (`runClaimOnline`, `runClaimOnlineLastJson`, and 2 inline calls) so `node` is discoverable by the new shebang on all platforms.
