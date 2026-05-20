@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- **GitLab and Gitea `finalize --keep-worktree` now commits archive rename** (issue #132): Both `kaola-gitlab-workflow-claim.js` and `kaola-gitea-workflow-claim.js` `cmdFinalize` now include the `else` block (matching the GitHub baseline) that, when `--keep-worktree` is set and running inside a linked worktree, stages and commits the `kaola-workflow/archive/{project}/` rename so the feature branch HEAD reflects the archived state. Regression tests added to `test-gitlab-sinks.js` and `test-gitea-sinks.js`.
+
 - **`bootstrap` alias added to GitLab and Gitea claim scripts** (issue #130): Both `kaola-gitlab-workflow-claim.js` and `kaola-gitea-workflow-claim.js` now accept `bootstrap` as an alias for `startup`, matching the GitHub baseline. Validator guards added to both forge contract validators to prevent future alias drift.
 
 - **GitLab claim script `watch-mr` listed in usage string** (issue #131): Added `watch-mr` to the usage assertion in `kaola-gitlab-workflow-claim.js` so CLI help/error output matches the implemented subcommands. Added a `assertIncludes` contract validator guard to prevent future drift between implemented subcommands and the usage string.
