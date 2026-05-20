@@ -40,7 +40,7 @@ The Phase 6 sink is responsible for delivering completed work to the repository 
   - `1`: branch push or PR/MR creation failed
 - **Metadata commit**: Automatic follow-up commit written by sink script after PR creation; not a user action
 - **Offline support**: `KAOLA_WORKFLOW_OFFLINE=1` writes `OFFLINE_PLACEHOLDER` commit instead of real PR/MR metadata; applies to GitHub, GitLab, and Gitea editions
-- **Config**: `pr_auto_merge` key in `~/.config/kaola-workflow/config.json` enables `gh pr merge --auto --squash --delete-branch` (GitHub only, non-fatal if disabled by branch protection rules)
+- **Config**: `pr_auto_merge` key in `~/.config/kaola-workflow/config.json` enables auto-merge after PR creation (GitHub + Gitea editions; non-fatal if merge fails). `mr_auto_merge` key enables the same for GitLab edition. Reads config internally; no dispatch changes required.
 
 ## Environment Variables — Test Hooks
 
@@ -68,12 +68,14 @@ Configuration files control workflow behavior and issue sorting.
 ```json
 {
   "parallel_mode": "auto",
-  "pr_auto_merge": false
+  "pr_auto_merge": false,
+  "mr_auto_merge": false
 }
 ```
 
 - `parallel_mode` — Parallel-work classification strategy (`auto` or other); see README § Classifier configuration
-- `pr_auto_merge` — Enable automatic PR merge after creation (GitHub only, requires branch protection rules)
+- `pr_auto_merge` — Enable automatic PR merge after creation (GitHub + Gitea editions; squash merge with source branch deletion; non-fatal if merge fails)
+- `mr_auto_merge` — Enable automatic MR merge after creation (GitLab edition; equivalent to `glab mr merge --auto-merge`; non-fatal if merge fails)
 
 ### Project-local config
 
