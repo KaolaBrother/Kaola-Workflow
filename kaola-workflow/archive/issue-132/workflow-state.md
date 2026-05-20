@@ -2,7 +2,7 @@
 
 ## Project
 name: issue-132
-status: active
+status: closed
 
 ## Current Position
 phase: 6
