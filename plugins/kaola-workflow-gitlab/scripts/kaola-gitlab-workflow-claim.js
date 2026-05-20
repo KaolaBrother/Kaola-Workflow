@@ -587,7 +587,7 @@ function cmdSinkFallback() {
 
 function main() {
   const sub = process.argv[2];
-  assert(sub, 'usage: kaola-gitlab-workflow-claim.js <claim|release|status|patch-branch|startup|finalize|pick-next|resume|worktree-status|worktree-finalize|sink-fallback>');
+  assert(sub, 'usage: kaola-gitlab-workflow-claim.js <claim|release|status|patch-branch|startup|finalize|pick-next|resume|worktree-status|worktree-finalize|sink-fallback|watch-mr>');
   if (sub === 'claim') return cmdClaim();
   if (sub === 'release' || sub === 'discard') return cmdRelease();
   if (sub === 'status') return cmdStatus();
