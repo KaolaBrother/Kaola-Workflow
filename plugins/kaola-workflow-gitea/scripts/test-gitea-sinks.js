@@ -7,6 +7,7 @@ const os = require('os');
 const path = require('path');
 const { spawnSync, execFileSync } = require('child_process');
 
+const claimScript = path.join(__dirname, 'kaola-gitea-workflow-claim.js');
 const forge = require('./kaola-gitea-forge');
 const sinkPr = require('./kaola-gitea-workflow-sink-pr');
 const sinkMerge = require('./kaola-gitea-workflow-sink-merge');
@@ -594,6 +595,62 @@ const sinkScript = path.join(__dirname, 'kaola-gitea-workflow-sink-merge.js');
   } finally {
     process.env.HOME = origHome;
     fs.rmSync(tmpHome, { recursive: true });
+  }
+}
+
+{
+  // finalize --keep-worktree commits archive rename on feature branch (issue #132)
+  const mainRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gt-kw-finalize-')));
+  const kwRoot = mainRoot + '.kw';
+  const wtPath = path.join(kwRoot, 'test-kw-proj');
+  const git = (...args) => execFileSync('git', args, { cwd: mainRoot, encoding: 'utf8' });
+  try {
+    git('init', '-b', 'main');
+    git('config', 'user.email', 'test@test.com');
+    git('config', 'user.name', 'Test');
+    fs.writeFileSync(path.join(mainRoot, 'README.md'), 'init');
+    git('add', '.');
+    git('commit', '-m', 'init');
+    // Create linked worktree with new branch directly (branch must not be checked out in mainRoot first)
+    fs.mkdirSync(kwRoot, { recursive: true });
+    execFileSync('git', ['worktree', 'add', '-b', 'workflow/test-kw-proj', wtPath, 'main'], { cwd: mainRoot, encoding: 'utf8' });
+    // Commit workflow state in linked worktree (simulates worktree-finalize)
+    const projDir = path.join(wtPath, 'kaola-workflow', 'test-kw-proj');
+    fs.mkdirSync(projDir, { recursive: true });
+    fs.writeFileSync(path.join(projDir, 'workflow-state.md'), [
+      '# Kaola-Workflow State', '', '## Project',
+      'name: test-kw-proj', 'status: active', '',
+      '## Gitea', 'issue_iid: 1', 'full_name: group/proj', 'project_html_url: https://gitea.example/group/proj', '',
+      '## Sink', 'branch: workflow/test-kw-proj', 'issue_number: 1', 'sink: merge',
+      'worktree_path: ' + wtPath, ''
+    ].join('\n'));
+    execFileSync('git', ['add', 'kaola-workflow/'], { cwd: wtPath, encoding: 'utf8' });
+    execFileSync('git', ['commit', '-m', 'chore: finalize test-kw-proj'], { cwd: wtPath, encoding: 'utf8' });
+    // Also set up main worktree with the live folder
+    const mainProjDir = path.join(mainRoot, 'kaola-workflow', 'test-kw-proj');
+    fs.mkdirSync(mainProjDir, { recursive: true });
+    fs.writeFileSync(path.join(mainProjDir, 'workflow-state.md'), fs.readFileSync(path.join(projDir, 'workflow-state.md'), 'utf8'));
+    git('add', 'kaola-workflow/');
+    git('commit', '-m', 'mirror: test-kw-proj live folder on main');
+    // Run finalize --keep-worktree from linked worktree
+    const finResult = spawnSync(process.execPath, [claimScript, 'finalize', '--project', 'test-kw-proj', '--keep-worktree'], {
+      cwd: wtPath,
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' },
+      encoding: 'utf8'
+    });
+    assert(finResult.status === 0,
+      'finalize --keep-worktree should exit 0\nstdout: ' + finResult.stdout + '\nstderr: ' + finResult.stderr);
+    // Feature branch HEAD must have archive path, not live path
+    const lsTree = execFileSync('git', ['ls-tree', '--name-only', '-r', 'workflow/test-kw-proj'], { cwd: mainRoot, encoding: 'utf8' });
+    assert(!lsTree.includes('kaola-workflow/test-kw-proj/'),
+      'feature branch HEAD must not have live folder after finalize --keep-worktree, got:\n' + lsTree);
+    assert(lsTree.includes('kaola-workflow/archive/test-kw-proj/'),
+      'feature branch HEAD must have archive folder after finalize --keep-worktree, got:\n' + lsTree);
+    console.log('finalize --keep-worktree commits archive rename (Gitea): PASSED');
+  } finally {
+    try { execFileSync('git', ['worktree', 'remove', '--force', wtPath], { cwd: mainRoot, encoding: 'utf8' }); } catch (_) {}
+    fs.rmSync(mainRoot, { recursive: true, force: true });
+    fs.rmSync(kwRoot, { recursive: true, force: true });
   }
 }
 
