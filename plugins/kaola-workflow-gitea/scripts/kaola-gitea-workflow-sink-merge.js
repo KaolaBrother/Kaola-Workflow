@@ -298,6 +298,9 @@ function runDirectMerge(args, opts) {
     execFileSync('git', ['-C', mainRoot, 'fetch', 'origin'], { encoding: 'utf8' });
   }
 
+  const status = execFileSync('git', ['-C', mainRoot, 'status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' }).trim();
+  assert(!status, 'Worktree must be clean before direct merge sink runs');
+
   // Checkout branch
   execFileSync('git', ['-C', mainRoot, 'checkout', args.branch], { encoding: 'utf8' });
   assertNoLiveWorkflowFolder(mainRoot, args.project);

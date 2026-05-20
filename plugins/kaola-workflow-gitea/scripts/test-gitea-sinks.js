@@ -534,6 +534,22 @@ const sinkScript = path.join(__dirname, 'kaola-gitea-workflow-sink-merge.js');
   console.log('live-folder guard subprocess test passed');
 }
 
+// Test 21: assertCleanWorktree guard — exits 1 with 'Worktree must be clean'
+{
+  const sinkScript = path.join(__dirname, 'kaola-gitea-workflow-sink-merge.js');
+  const { root, branch } = setupRealRepo('dirty-worktree-gt-test', 'test-gt-dirty');
+  fs.writeFileSync(path.join(root, 'README.md'), 'dirty content');
+  const result = spawnSync(process.execPath, [sinkScript, '--project', 'test-gt-dirty', '--branch', branch], {
+    cwd: root,
+    env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' },
+    encoding: 'utf8'
+  });
+  assert(result.status === 1, `dirty-worktree guard test: expected exit 1, got ${result.status}. stderr: ${result.stderr}`);
+  assert((result.stderr || '').includes('Worktree must be clean'),
+    `dirty-worktree guard test: expected 'Worktree must be clean' in stderr, got: ${result.stderr}`);
+  console.log('dirty-worktree guard subprocess test passed');
+}
+
 // maybeAutoMergeFromConfig tests
 {
   let forgeArgs = null;
