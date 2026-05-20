@@ -313,4 +313,6 @@ for (const file of listFiles(pluginRoot + '/scripts', file =>
   assert(!/plugins\/kaola-workflow\/scripts|require\(['"]\.\.\//.test(text), file + ' must not fall back to root or GitHub plugin scripts');
 }
 
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'bootstrap');
+
 console.log('Kaola-Workflow Gitea contract validation passed');

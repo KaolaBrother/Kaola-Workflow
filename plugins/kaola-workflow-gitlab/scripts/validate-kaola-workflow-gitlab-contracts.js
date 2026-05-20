@@ -312,5 +312,6 @@ const pkg = parseJson('package.json');
 assert(!String(pkg.scripts['test:kaola-workflow:gitlab']).includes('pending #58'), 'GitLab test script must not be placeholder');
 
 assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js', 'watch-mr');
+assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js', 'bootstrap');
 
 console.log('Kaola-Workflow GitLab contract validation passed');
