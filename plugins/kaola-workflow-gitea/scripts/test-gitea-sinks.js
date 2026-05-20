@@ -443,4 +443,49 @@ const sinkScript = path.join(__dirname, 'kaola-gitea-workflow-sink-merge.js');
   console.log('exit-3-archived subprocess test passed');
 }
 
+// Test 19: OFFLINE=1 — sink-pr records placeholder, commits locally, no forge calls
+{
+  const sinkPrScript = path.join(__dirname, 'kaola-gitea-workflow-sink-pr.js');
+  const { root, branch } = setupRealRepo('offline-gt-pr-test', 'test-gt-offline-pr');
+
+  const branchBefore = execFileSync('git', ['branch', '--list', branch], { cwd: root, encoding: 'utf8' });
+  assert(branchBefore.trim() !== '', `offline-pr test: branch '${branch}' must exist before test`);
+
+  const result = spawnSync(process.execPath, [
+    sinkPrScript,
+    '--branch', branch,
+    '--project', 'test-gt-offline-pr',
+    '--issue', '119'
+  ], {
+    cwd: root,
+    env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' },
+    encoding: 'utf8'
+  });
+
+  assert(result.status === 0,
+    `offline-pr test: expected exit 0, got ${result.status}. stderr: ${result.stderr}`);
+  assert((result.stdout || '').includes('PR URL: OFFLINE_PLACEHOLDER'),
+    `offline-pr test: stdout must include 'PR URL: OFFLINE_PLACEHOLDER'. got: ${result.stdout}`);
+  assert((result.stdout || '').includes('PR Number: 0'),
+    `offline-pr test: stdout must include 'PR Number: 0'. got: ${result.stdout}`);
+
+  const stateFile = path.join(root, 'kaola-workflow', 'test-gt-offline-pr', 'workflow-state.md');
+  const state = fs.readFileSync(stateFile, 'utf8');
+  assert(state.includes('pr_url: OFFLINE_PLACEHOLDER'), `offline-pr test: state must include 'pr_url: OFFLINE_PLACEHOLDER'`);
+  assert(state.includes('pr_number: 0'), `offline-pr test: state must include 'pr_number: 0'`);
+  assert(state.includes('full_name: OFFLINE_PLACEHOLDER'), `offline-pr test: state must include 'full_name: OFFLINE_PLACEHOLDER'`);
+  assert(state.includes('project_html_url: OFFLINE_PLACEHOLDER'), `offline-pr test: state must include 'project_html_url: OFFLINE_PLACEHOLDER'`);
+
+  const summaryFile = path.join(root, 'kaola-workflow', 'test-gt-offline-pr', 'phase6-summary.md');
+  const summary = fs.readFileSync(summaryFile, 'utf8');
+  assert(summary.includes('PR URL: OFFLINE_PLACEHOLDER'), `offline-pr test: summary must include 'PR URL: OFFLINE_PLACEHOLDER'`);
+  assert(summary.includes('PR Number: 0'), `offline-pr test: summary must include 'PR Number: 0'`);
+
+  const log = execFileSync('git', ['log', '--oneline', '-1'], { cwd: root, encoding: 'utf8' }).trim();
+  assert(log.includes('chore: record PR metadata for test-gt-offline-pr'),
+    `offline-pr test: expected metadata commit in git log, got: ${log}`);
+
+  console.log('offline-pr subprocess test passed');
+}
+
 console.log('Gitea sink tests passed');

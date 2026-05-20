@@ -6,6 +6,8 @@ const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
 const forge = require('./kaola-gitlab-forge');
 
+const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
+
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
 
 function isSafeName(name) {
@@ -103,6 +105,29 @@ function ensureMergeRequest(args, opts) {
   if (args.issue != null) assert(Number.isFinite(args.issue) && args.issue > 0, '--issue must be a positive integer');
 
   const root = options.root || getRoot();
+
+  if (OFFLINE) {
+    const mrUrl = 'OFFLINE_PLACEHOLDER';
+    const mrIid = 0;
+    const stateFile = path.join(root, 'kaola-workflow', args.project, 'workflow-state.md');
+    const summaryFile = path.join(root, 'kaola-workflow', args.project, 'phase6-summary.md');
+    updateStateSinkBlock(stateFile, mrUrl, mrIid);
+    appendSummary(summaryFile, mrUrl, mrIid);
+    const relState = path.relative(root, stateFile);
+    const relSummary = path.relative(root, summaryFile);
+    spawnSync('git', ['-C', root, 'add', relState, relSummary], { stdio: 'pipe' });
+    const diffResult = spawnSync('git', ['-C', root, 'diff', '--cached', '--quiet'], { stdio: 'pipe' });
+    if (diffResult.status !== 0) {
+      const commitResult = spawnSync('git', ['-C', root, 'commit', '-m',
+        'chore: record MR metadata for ' + args.project], { stdio: 'pipe' });
+      if (commitResult.status !== 0) {
+        process.stderr.write('[offline] metadata commit skipped: ' +
+          (commitResult.stderr ? commitResult.stderr.toString().trim() : 'unknown error') + '\n');
+      }
+    }
+    return { mr_url: mrUrl, mr_iid: mrIid };
+  }
+
   const gitExec = options.gitExec || execFileSync;
   if (!options.skipPush) gitExec('git', ['push', 'origin', args.branch], { encoding: 'utf8' });
 
@@ -165,7 +190,7 @@ function mergeMergeRequest(mrIid, args) {
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const mr = ensureMergeRequest(args);
-  if (args.merge) mergeMergeRequest(mr.mr_iid, args);
+  if (args.merge && !OFFLINE) mergeMergeRequest(mr.mr_iid, args);
   process.stdout.write('MR URL: ' + (mr.mr_url || mr.web_url) + '\nMR IID: ' + mr.mr_iid + '\n');
 }
 

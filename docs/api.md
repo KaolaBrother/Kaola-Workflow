@@ -26,14 +26,14 @@ The Phase 6 sink is responsible for delivering completed work to the repository 
 
 ### PR Sink
 
-- **Script**: `kaola-workflow-sink-pr.js` (GitHub) / `kaola-gitlab-workflow-sink-mr.js` (GitLab)
+- **Script**: `kaola-workflow-sink-pr.js` (GitHub) / `kaola-gitlab-workflow-sink-mr.js` (GitLab) / `kaola-gitea-workflow-sink-pr.js` (Gitea)
 - **Invocation**: Called from Phase 6 Step 9 when `sink: pr` is configured, or auto-fallback from merge sink exit 3
 - **Contract**: Push branch, create PR/MR via `gh pr create` or `glab mr create`, record PR URL and number in workflow-state.md `## Sink` block, then create deliberate metadata follow-up commit (`chore: record PR metadata for {project}`) to leave worktree clean
 - **Exit codes**:
   - `0`: PR/MR created successfully, metadata commit written, worktree clean
   - `1`: branch push or PR/MR creation failed
 - **Metadata commit**: Automatic follow-up commit written by sink script after PR creation; not a user action
-- **Offline support**: `KAOLA_WORKFLOW_OFFLINE=1` writes `OFFLINE_PLACEHOLDER` commit instead of real PR metadata
+- **Offline support**: `KAOLA_WORKFLOW_OFFLINE=1` writes `OFFLINE_PLACEHOLDER` commit instead of real PR/MR metadata; applies to GitHub, GitLab, and Gitea editions
 - **Config**: `pr_auto_merge` key in `~/.config/kaola-workflow/config.json` enables `gh pr merge --auto --squash --delete-branch` (GitHub only, non-fatal if disabled by branch protection rules)
 
 ## Environment Variables — Test Hooks
@@ -48,7 +48,7 @@ The following environment variables are **test-only hooks** used by the test sui
 
 ### Offline and Derivation Test Hooks
 
-- **`KAOLA_WORKFLOW_OFFLINE=1`** — Skip all network calls (GitHub/GitLab API, git fetch, git push). Used for local testing without network access. Applies to both editions.
+- **`KAOLA_WORKFLOW_OFFLINE=1`** — Skip all network calls (GitHub/GitLab/Gitea API, git fetch, git push). Used for local testing without network access. Applies to all three editions (GitHub, GitLab, Gitea).
 - **`KAOLA_KERNEL_SESSION_FAKE_PID=<pid>`** — Override process-tree walk for kernel-derived session identity testing. Used to test session derivation without Claude Code context.
 
 ## Configuration

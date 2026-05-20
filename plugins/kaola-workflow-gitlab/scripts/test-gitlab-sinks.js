@@ -478,5 +478,48 @@ withForge({
   console.log('exit-3-archived subprocess test passed');
 }
 
+{
+  // Offline MR sink: KAOLA_WORKFLOW_OFFLINE=1 records placeholder, commits locally, no forge calls
+  const sinkMrScript = path.join(__dirname, 'kaola-gitlab-workflow-sink-mr.js');
+  const { root, branch } = setupRealRepo('offline-gl-mr-test', 'test-gl-offline-mr');
+
+  const branchBefore = execFileSync('git', ['branch', '--list', branch], { cwd: root, encoding: 'utf8' });
+  assert(branchBefore.trim() !== '', `offline-mr test: branch '${branch}' must exist before test`);
+
+  const result = spawnSync(process.execPath, [
+    sinkMrScript,
+    '--branch', branch,
+    '--project', 'test-gl-offline-mr',
+    '--issue', '119'
+  ], {
+    cwd: root,
+    env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' },
+    encoding: 'utf8'
+  });
+
+  assert(result.status === 0,
+    `offline-mr test: expected exit 0, got ${result.status}. stderr: ${result.stderr}`);
+  assert((result.stdout || '').includes('MR URL: OFFLINE_PLACEHOLDER'),
+    `offline-mr test: stdout must include 'MR URL: OFFLINE_PLACEHOLDER'. got: ${result.stdout}`);
+  assert((result.stdout || '').includes('MR IID: 0'),
+    `offline-mr test: stdout must include 'MR IID: 0'. got: ${result.stdout}`);
+
+  const stateFile = path.join(root, 'kaola-workflow', 'test-gl-offline-mr', 'workflow-state.md');
+  const state = fs.readFileSync(stateFile, 'utf8');
+  assert(state.includes('mr_url: OFFLINE_PLACEHOLDER'), `offline-mr test: state must include 'mr_url: OFFLINE_PLACEHOLDER'`);
+  assert(state.includes('mr_iid: 0'), `offline-mr test: state must include 'mr_iid: 0'`);
+
+  const summaryFile = path.join(root, 'kaola-workflow', 'test-gl-offline-mr', 'phase6-summary.md');
+  const summary = fs.readFileSync(summaryFile, 'utf8');
+  assert(summary.includes('MR URL: OFFLINE_PLACEHOLDER'), `offline-mr test: summary must include 'MR URL: OFFLINE_PLACEHOLDER'`);
+  assert(summary.includes('MR IID: 0'), `offline-mr test: summary must include 'MR IID: 0'`);
+
+  const log = execFileSync('git', ['log', '--oneline', '-1'], { cwd: root, encoding: 'utf8' }).trim();
+  assert(log.includes('chore: record MR metadata for test-gl-offline-mr'),
+    `offline-mr test: expected metadata commit in git log, got: ${log}`);
+
+  console.log('offline-mr subprocess test passed');
+}
+
 console.log('GitLab sink tests passed');
 
