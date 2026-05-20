@@ -240,8 +240,10 @@ assertIncludes(simulate, 'Kaola-Workflow walkthrough simulation passed');
 for (const token of retired) assertNotIncludes(simulate, token);
 
 const pkg = parseJson('package.json');
+const testScript = pkg && pkg.scripts && pkg.scripts.test;
+assert(typeof testScript === 'string', 'package.json must have a scripts.test string');
 for (const edition of ['claude', 'codex', 'gitlab', 'gitea']) {
-  assert(pkg.scripts.test.includes(`npm run test:kaola-workflow:${edition}`), `package.json scripts.test must chain test:kaola-workflow:${edition}`);
+  assert(testScript.includes(`npm run test:kaola-workflow:${edition}`), `package.json scripts.test must chain test:kaola-workflow:${edition}`);
 }
 assert(exists('docs/workflow-state-contract.md'), 'detailed workflow state contract doc is missing');
 assert(read('CLAUDE.md').split(/\r?\n/).length < 200, 'CLAUDE.md must stay below the 200-line target');
