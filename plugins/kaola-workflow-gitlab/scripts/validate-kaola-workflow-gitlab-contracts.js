@@ -324,5 +324,6 @@ assert(!String(pkg.scripts['test:kaola-workflow:gitlab']).includes('pending #58'
 
 assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js', 'watch-mr');
 assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js', 'bootstrap');
+assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js', 'if (OFFLINE) { output({ watched: 0, offline: true }); return; }');
 
 console.log('Kaola-Workflow GitLab contract validation passed');

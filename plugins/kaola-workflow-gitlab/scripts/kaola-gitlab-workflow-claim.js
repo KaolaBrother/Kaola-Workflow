@@ -15,6 +15,7 @@ const {
 } = require('./kaola-gitlab-workflow-active-folders');
 
 const CLAIM_LABEL = forge.CLAIM_LABEL || 'workflow:in-progress';
+const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
 
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
 
@@ -547,6 +548,7 @@ function watchMergeRequests(root, args) {
 }
 
 function cmdWatchMr() {
+  if (OFFLINE) { output({ watched: 0, offline: true }); return; }
   const root = getRoot();
   const args = parseArgs(process.argv.slice(3));
   const result = watchMergeRequests(root, args);

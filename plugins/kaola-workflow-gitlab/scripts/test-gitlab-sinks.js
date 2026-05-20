@@ -685,5 +685,18 @@ withForge({
   }
 }
 
+// Offline watch-mr: must return {watched:0,offline:true} without calling forge APIs
+{
+  const result = spawnSync(process.execPath, [claimScript, 'watch-mr'], {
+    env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' },
+    encoding: 'utf8'
+  });
+  assert(result.status === 0, 'offline watch-mr should exit 0, got: ' + result.status + '\n' + result.stderr);
+  const out = JSON.parse(result.stdout.trim());
+  assert(out.watched === 0, 'offline watch-mr: watched must be 0, got: ' + out.watched);
+  assert(out.offline === true, 'offline watch-mr: offline must be true, got: ' + out.offline);
+  console.log('offline watch-mr returns {watched:0,offline:true}: PASSED');
+}
+
 console.log('GitLab sink tests passed');
 
