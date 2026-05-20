@@ -134,7 +134,8 @@ The following functions are exported from sink and claim modules for use by test
 - `createPullRequest(opts)` — Create a pull request with optional source/target branch, title, and description.
 - `viewPullRequest(prNumber, opts)` — Fetch a single PR by number.
 - `listPullRequests(opts)` — List all pull requests.
-- `mergePullRequest(project, prNumber, opts)` — Merge a PR with optional squash and branch removal.
+- `mergePullRequest(project, prNumber, opts)` — Merge a PR with optional squash and branch removal. When `opts.sha` is set, passes it as `head_commit_id` in the merge request body (Gitea API field; issue #121).
+- `checkServerVersion(opts)` — Verify Gitea server version is ≥ 1.17 by reading the `version` field from `/api/v1/version`. Throws if server is too old. Called automatically by `mergePullRequest` when `opts.autoMerge` is set.
 - `checkRepoSquashEnabled(project, opts)` — Validate that the Gitea repository supports squash merges before attempting a squash merge. Throws an error if squash is not enabled.
 - `ensureLabel(project, labelDef, opts)` — Create a label if it does not exist; return existing label if found.
 

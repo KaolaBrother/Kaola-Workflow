@@ -84,7 +84,7 @@ const execFileSync = runner(calls, {
   }),
   'pr view 8 --output json': JSON.stringify({ number: 8, state: 'open' }),
   'pr list --output json': JSON.stringify([{ number: 8, state: 'open' }]),
-  'api -X POST /api/v1/repos/group/project/pulls/9/merge -d {"Do":"squash","delete_branch_after_merge":true,"merge_message_field":"abc123"}': '{}',
+  'api -X POST /api/v1/repos/group/project/pulls/9/merge -d {"Do":"squash","delete_branch_after_merge":true,"head_commit_id":"abc123"}': '{}',
   'api /api/v1/repos/group/project': JSON.stringify({
     full_name: 'group/project',
     allow_squash_merge: true
@@ -159,6 +159,44 @@ assert.strictEqual(newLabel.name, 'workflow:in-progress');
 
 for (const call of calls) {
   assert.strictEqual(call[0], 'tea');
+}
+
+// checkServerVersion: version field present and sufficient → no throw
+forge.checkServerVersion({ offline: true, offlineStdout: JSON.stringify({ version: '1.21.0' }) });
+
+// checkServerVersion: server_version fallback field → no throw
+forge.checkServerVersion({ offline: true, offlineStdout: JSON.stringify({ server_version: '1.21.0' }) });
+
+// checkServerVersion: version present but too old → throws
+assert.throws(
+  () => forge.checkServerVersion({ offline: true, offlineStdout: JSON.stringify({ version: '1.16.0' }) }),
+  /Gitea server >= 1\.17 required/
+);
+
+// checkServerVersion: absent version fields → permissive, no throw
+forge.checkServerVersion({ offline: true, offlineStdout: JSON.stringify({}) });
+
+// mergePullRequest: basic merge (no sha) → exact body string
+{
+  const mergeCalls = [];
+  const mergeExec = runner(mergeCalls, {
+    'api -X POST /api/v1/repos/group/project/pulls/7/merge -d {"Do":"merge","delete_branch_after_merge":false}': '{}'
+  });
+  forge.mergePullRequest(project, 7, { execFileSync: mergeExec });
+  const bodyArg = mergeCalls[mergeCalls.length - 1][1].slice(-1)[0];
+  assert.strictEqual(bodyArg, '{"Do":"merge","delete_branch_after_merge":false}');
+}
+
+// mergePullRequest: squash + sha → exact body string including head_commit_id
+{
+  const squashCalls = [];
+  const squashExec = runner(squashCalls, {
+    'api /api/v1/repos/group/project': JSON.stringify({ allow_squash_merge: true }),
+    'api -X POST /api/v1/repos/group/project/pulls/7/merge -d {"Do":"squash","delete_branch_after_merge":false,"head_commit_id":"abc123"}': '{}'
+  });
+  forge.mergePullRequest(project, 7, { execFileSync: squashExec, squash: true, sha: 'abc123' });
+  const bodyArg = squashCalls[squashCalls.length - 1][1].slice(-1)[0];
+  assert.strictEqual(bodyArg, '{"Do":"squash","delete_branch_after_merge":false,"head_commit_id":"abc123"}');
 }
 
 console.log('Gitea forge helper tests passed');

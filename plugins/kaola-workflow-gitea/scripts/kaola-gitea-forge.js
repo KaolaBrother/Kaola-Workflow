@@ -229,7 +229,7 @@ function listPullRequests(opts) {
 function checkServerVersion(opts) {
   const raw = teaExec(['api', '/api/v1/version'], opts || {});
   const data = parseJson(raw, {});
-  const versionStr = data.server_version || '';
+  const versionStr = data.version || data.server_version || '';
   const match = versionStr.match(/(\d+)\.(\d+)/);
   if (match) {
     const minor = Number(match[2]);
@@ -254,7 +254,7 @@ function mergePullRequest(project, prNumber, opts) {
   const mergeBody = {};
   mergeBody.Do = options.squash ? 'squash' : 'merge';
   mergeBody.delete_branch_after_merge = !!options.removeSourceBranch;
-  if (options.sha) mergeBody.merge_message_field = options.sha;
+  if (options.sha) mergeBody.head_commit_id = options.sha;
   const raw = teaExec([
     'api', '-X', 'POST',
     '/api/v1/repos/' + project.full_name + '/pulls/' + String(prNumber) + '/merge',
@@ -286,6 +286,6 @@ module.exports = {
   discoverProject,
   listIssues, viewIssue, updateIssueLabels, closeIssue,
   createIssueComment, listIssueComments, updateIssueComment,
-  createPullRequest, viewPullRequest, listPullRequests, checkRepoSquashEnabled, mergePullRequest,
+  createPullRequest, viewPullRequest, listPullRequests, checkServerVersion, checkRepoSquashEnabled, mergePullRequest,
   ensureLabel
 };

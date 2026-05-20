@@ -25,6 +25,7 @@
 
 ### Fixed
 
+- Fix `checkServerVersion` to read `version` field (not `server_version`) from Gitea API `/api/v1/version`; fix `mergePullRequest` to pass SHA as `head_commit_id` (not `merge_message_field`) in merge request body; export `checkServerVersion` for direct testability; add 6 explicit body-assertion tests (issue #121)
 - Port `assertNoLiveWorkflowFolder` guard to Gitea and GitLab direct-merge sinks; both sinks now refuse to merge a branch whose HEAD still contains the live workflow-state.md (issue #120)
 - **Gitea and GitLab PR/MR sink offline parity** (`plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-sink-pr.js`, `plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-sink-mr.js`): Both sinks now honor `KAOLA_WORKFLOW_OFFLINE=1`. In offline mode, each sink writes `OFFLINE_PLACEHOLDER` values to `workflow-state.md` and `phase6-summary.md`, creates a local metadata commit, and skips git push and forge API calls. The `--merge` flag is also a no-op when offline. Matches existing behavior in `kaola-workflow-sink-pr.js` (GitHub) (issue #119).
 - GitLab repair-state no longer advances to Phase 6 when `phase5-review.md` exists but `phase4-progress.md` still has open tasks (parity with GitHub behavior, issue #107)
