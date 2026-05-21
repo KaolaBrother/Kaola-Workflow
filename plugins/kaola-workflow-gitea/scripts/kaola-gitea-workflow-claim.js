@@ -17,6 +17,7 @@ const roadmapModule = require('./kaola-gitea-workflow-roadmap');
 
 const CLAIM_LABEL = forge.CLAIM_LABEL || 'workflow:in-progress';
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
+const WORKTREE_NATIVE = process.env.KAOLA_WORKTREE_NATIVE === '1';
 
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
 
@@ -295,7 +296,7 @@ function claimProject(root, args) {
 
   const branch = buildBranchName(issueIid, project, args.branch);
   let worktreePath = '';
-  if (hasGitHistory(root)) {
+  if (!OFFLINE && WORKTREE_NATIVE && hasGitHistory(root)) {
     try { worktreePath = provisionWorktree(root, project, branch).path; } catch (_) { worktreePath = ''; }
   }
   const projectInfo = discoverProjectSafe();

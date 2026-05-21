@@ -102,6 +102,7 @@ function runClaimOnline(args, cwd, binDir) {
     cwd, encoding: 'utf8', timeout: 60000,
     env: {
       ...process.env,
+      KAOLA_WORKTREE_NATIVE: '1',
       KAOLA_WORKFLOW_OFFLINE: '0',
       PATH: binDir + path.delimiter + path.dirname(process.execPath) + path.delimiter + (process.env.PATH || '')
     }
@@ -914,7 +915,7 @@ assert.strictEqual(classifier.issueHasRemoteClaimNotes(35), false,
 
     // Run startup from the linked worktree cwd — should produce sibling, not nested path
     const result = spawnSync(process.execPath, [claimScript, 'startup', '--runtime', 'test', '--target-issue', '6'], {
-      cwd: linkedWt, encoding: 'utf8', env: process.env
+      cwd: linkedWt, encoding: 'utf8', env: { ...process.env, KAOLA_WORKTREE_NATIVE: '1' }
     });
     assert.strictEqual(result.status, 0, 'sibling startup must exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
     const out = JSON.parse(result.stdout.trim());
@@ -926,6 +927,40 @@ assert.strictEqual(classifier.issueHasRemoteClaimNotes(35), false,
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
     fs.rmSync(kwRoot, { recursive: true, force: true });
+  }
+}
+
+// Issue #149 Test 1: KAOLA_WORKTREE_NATIVE default-OFF — worktree_path must be empty when NATIVE=0
+{
+  const root = tempRoot('kw-gt-native-off-');
+  try {
+    initGitRepo(root);
+    const result = spawnSync(process.execPath, [claimScript, 'startup', '--runtime', 'test', '--target-issue', '8'], {
+      cwd: root, encoding: 'utf8',
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_WORKTREE_NATIVE: '0' }
+    });
+    assert.strictEqual(result.status, 0, 'NATIVE=0 startup must exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    const out = JSON.parse(result.stdout.trim());
+    assert.strictEqual(out.worktree_path, '', 'NATIVE=0 must produce empty worktree_path, got: ' + out.worktree_path);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+// Issue #149 Test 2: OFFLINE wins over NATIVE — worktree_path must be empty when OFFLINE=1 even if NATIVE=1
+{
+  const root = tempRoot('kw-gt-offline-wins-');
+  try {
+    initGitRepo(root);
+    const result = spawnSync(process.execPath, [claimScript, 'startup', '--runtime', 'test', '--target-issue', '9'], {
+      cwd: root, encoding: 'utf8',
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_WORKTREE_NATIVE: '1' }
+    });
+    assert.strictEqual(result.status, 0, 'OFFLINE=1 startup must exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    const out = JSON.parse(result.stdout.trim());
+    assert.strictEqual(out.worktree_path, '', 'OFFLINE=1 must produce empty worktree_path even with NATIVE=1, got: ' + out.worktree_path);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 }
 

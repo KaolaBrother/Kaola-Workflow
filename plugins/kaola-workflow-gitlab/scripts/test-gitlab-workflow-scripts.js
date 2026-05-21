@@ -92,11 +92,13 @@ function runNodeAsync(args, cwd) {
   });
 }
 
-function runClaimOnline(args, cwd, binDir) {
+function runClaimOnline(args, cwd, binDir, extraEnv) {
   const result = spawnSync(process.execPath, [claimScript, ...args], {
     cwd, encoding: 'utf8', timeout: 60000,
     env: {
       ...process.env,
+      KAOLA_WORKTREE_NATIVE: '1',
+      ...(extraEnv || {}),
       KAOLA_WORKFLOW_OFFLINE: '0',
       PATH: binDir + path.delimiter + path.dirname(process.execPath) + path.delimiter + (process.env.PATH || '')
     }
@@ -917,7 +919,7 @@ withForge({
 
     // Run startup from the linked worktree cwd — should produce sibling, not nested path
     const result = spawnSync(process.execPath, [claimScript, 'startup', '--runtime', 'test', '--target-issue', '6'], {
-      cwd: linkedWt, encoding: 'utf8', env: process.env
+      cwd: linkedWt, encoding: 'utf8', env: { ...process.env, KAOLA_WORKTREE_NATIVE: '1' }
     });
     assert.strictEqual(result.status, 0, 'sibling startup must exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
     const out = JSON.parse(result.stdout.trim());
@@ -1189,6 +1191,44 @@ function testInstallProfilesFeaturesTableHandling() {
   } finally {
     fs.rmSync(fresh, { recursive: true, force: true });
     fs.rmSync(existing, { recursive: true, force: true });
+  }
+}
+
+// Issue #149: Test 1 — default-OFF (KAOLA_WORKTREE_NATIVE=0 must not provision worktree)
+{
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-native-off-')));
+  try {
+    initGitRepo(root);
+    const r = spawnSync(process.execPath, [claimScript, 'startup', '--runtime', 'test', '--target-issue', '601'], {
+      cwd: root, encoding: 'utf8',
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_WORKTREE_NATIVE: '0' }
+    });
+    assert.strictEqual(r.status, 0, 'exit 0 when KAOLA_WORKTREE_NATIVE=0\nstdout: ' + r.stdout + '\nstderr: ' + r.stderr);
+    const out = JSON.parse(r.stdout.trim().split('\n').pop());
+    assert.strictEqual(out.worktree_path, '', 'worktree_path empty when KAOLA_WORKTREE_NATIVE=0');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    const kwRoot = root + '.kw';
+    if (fs.existsSync(kwRoot)) fs.rmSync(kwRoot, { recursive: true, force: true });
+  }
+}
+
+// Issue #149: Test 2 — OFFLINE wins over NATIVE (OFFLINE=1 must suppress worktree even when NATIVE=1)
+{
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-offline-wins-')));
+  try {
+    initGitRepo(root);
+    const r = spawnSync(process.execPath, [claimScript, 'startup', '--runtime', 'test', '--target-issue', '602'], {
+      cwd: root, encoding: 'utf8',
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_WORKTREE_NATIVE: '1' }
+    });
+    assert.strictEqual(r.status, 0, 'exit 0 when OFFLINE=1 even with NATIVE=1\nstdout: ' + r.stdout + '\nstderr: ' + r.stderr);
+    const out = JSON.parse(r.stdout.trim().split('\n').pop());
+    assert.strictEqual(out.worktree_path, '', 'worktree_path empty when OFFLINE=1 even with NATIVE=1');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    const kwRoot = root + '.kw';
+    if (fs.existsSync(kwRoot)) fs.rmSync(kwRoot, { recursive: true, force: true });
   }
 }
 

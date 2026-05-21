@@ -15,6 +15,7 @@ const {
 const roadmapModule = require('./kaola-workflow-roadmap');
 
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
+const WORKTREE_NATIVE = process.env.KAOLA_WORKTREE_NATIVE === '1';
 const CLAIM_LABEL = 'workflow:in-progress';
 
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
@@ -339,7 +340,7 @@ function claimProject(root, args) {
 
   const branch = buildBranchName(issueNumber, project, args.branch);
   let worktreePath = '';
-  if (!OFFLINE && hasGitHistory(root)) {
+  if (!OFFLINE && WORKTREE_NATIVE && hasGitHistory(root)) {
     try { worktreePath = provisionWorktree(root, project, branch).path; } catch (e) { worktreePath = ''; }
   }
   writeState(root, {

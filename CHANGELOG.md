@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking / Upgrade Notes
+
+- **Worktree provisioning is now opt-in.** All three forge editions (GitHub, GitLab, Gitea) previously provisioned a sibling worktree unconditionally when online with a git history. This matched the buggy implementation but not the documented contract. The claim scripts now respect `KAOLA_WORKTREE_NATIVE` as documented: provisioning is gated on `KAOLA_WORKTREE_NATIVE=1`. **Set `KAOLA_WORKTREE_NATIVE=1` in your environment to preserve prior sibling-worktree behavior.**
+
 ### Added
 
 - **GitLab and Gitea `stale-worktree-check` parity** (issue #148): Added `stale-worktree-check` subcommand to both `plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js` and `plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js`. Both versions detect stale worktrees and branches using forge-specific branch prefixes (`workflow/gitlab-issue-*` / `workflow/gitea-issue-*`). Includes 6 test cases per edition in `test-gitlab-workflow-scripts.js` and `test-gitea-workflow-scripts.js` covering clean worktrees, dirty worktrees, missing worktrees, branches without worktrees, active filtering, and offline mode. This brings GitLab and Gitea editions to parity with the GitHub `stale-worktree-check` from issue #138.

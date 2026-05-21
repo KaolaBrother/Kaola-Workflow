@@ -409,6 +409,7 @@ function runClaimOnline(args, cwd, binDir, extraEnv) {
     timeout: 60000,
     env: {
       ...process.env,
+      KAOLA_WORKTREE_NATIVE: '1',
       ...(extraEnv || {}),
       KAOLA_WORKFLOW_OFFLINE: '0',
       PATH: binDir + path.delimiter + path.dirname(process.execPath) + path.delimiter + (process.env.PATH || '')
@@ -429,6 +430,7 @@ function runClaimOnlineLastJson(args, cwd, binDir, extraEnv) {
     timeout: 60000,
     env: {
       ...process.env,
+      KAOLA_WORKTREE_NATIVE: '1',
       ...(extraEnv || {}),
       KAOLA_WORKFLOW_OFFLINE: '0',
       PATH: binDir + path.delimiter + path.dirname(process.execPath) + path.delimiter + (process.env.PATH || '')
@@ -455,6 +457,52 @@ function testStartupJsonAndSiblingWorktrees() {
     const second = runClaimOnline(['startup', '--target-issue', '502'], first.worktree_path, binDir);
     assert(second.worktree_path === path.join(kwRoot, 'issue-502'), 'nested startup should still create canonical sibling worktree');
     assert(!second.worktree_path.includes('issue-501.kw'), 'nested startup must not create issue-501.kw paths');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(kwRoot, { recursive: true, force: true });
+  }
+}
+
+function testWorktreeNativeDefaultOff() {
+  // Test: KAOLA_WORKTREE_NATIVE=0 must suppress worktree provisioning
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-wt-native-off-'));
+  const kwRoot = fs.realpathSync(tmp) + '.kw';
+  try {
+    initGitRepo(tmp);
+    const binDir = path.join(tmp, 'bin');
+    writeGhShimForStartup(binDir);
+    const result = runClaimOnlineLastJson(['startup', '--target-issue', '505'], tmp, binDir, { KAOLA_WORKTREE_NATIVE: '0' });
+    assert(result.claim === 'acquired', 'startup 505 should acquire');
+    assert(result.worktree_path === '', 'worktree_path must be empty when KAOLA_WORKTREE_NATIVE=0, got: ' + JSON.stringify(result.worktree_path));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(kwRoot, { recursive: true, force: true });
+  }
+}
+
+function testWorktreeNativeOfflineWins() {
+  // Test: OFFLINE wins over NATIVE — worktree must not be provisioned when offline even if KAOLA_WORKTREE_NATIVE=1
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-wt-offline-wins-'));
+  const kwRoot = fs.realpathSync(tmp) + '.kw';
+  try {
+    initGitRepo(tmp);
+    const binDir = path.join(tmp, 'bin');
+    writeGhShimForStartup(binDir);
+    const spawnResult = spawnSync(process.execPath, [claimScript, 'startup', '--target-issue', '506'], {
+      cwd: tmp,
+      encoding: 'utf8',
+      timeout: 60000,
+      env: {
+        ...process.env,
+        KAOLA_WORKTREE_NATIVE: '1',
+        KAOLA_WORKFLOW_OFFLINE: '1',
+        PATH: binDir + path.delimiter + path.dirname(process.execPath) + path.delimiter + (process.env.PATH || '')
+      }
+    });
+    assert(!spawnResult.signal, 'offline startup timed out or was killed: ' + spawnResult.signal);
+    assert(spawnResult.status === 0, 'offline startup should exit 0, got ' + spawnResult.status + '\nstdout: ' + spawnResult.stdout + '\nstderr: ' + spawnResult.stderr);
+    const parsed = JSON.parse(spawnResult.stdout.trim());
+    assert(parsed.worktree_path === '', 'worktree_path must be empty when KAOLA_WORKFLOW_OFFLINE=1 even if KAOLA_WORKTREE_NATIVE=1, got: ' + JSON.stringify(parsed.worktree_path));
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
     fs.rmSync(kwRoot, { recursive: true, force: true });
@@ -1714,6 +1762,8 @@ async function main() {
     testClassifierClosedIssueResidueIgnored();
     testClassifierReleasedFolderExcluded();
     testStartupJsonAndSiblingWorktrees();
+    testWorktreeNativeDefaultOff();
+    testWorktreeNativeOfflineWins();
     testFastStartupState();
     testClassifierCurrentClaimMarkerBlocks();
     testWatchPrArchivesClosedIssuePrFolder();
