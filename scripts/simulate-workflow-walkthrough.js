@@ -393,6 +393,15 @@ function initGitRepo(tmp) {
   spawnSync('git', ['commit', '-m', 'init'], { cwd: tmp, encoding: 'utf8' });
 }
 
+function initGitRepoWithBareRemote(tmp) {
+  initGitRepo(tmp);
+  const remotePath = tmp + '-remote';
+  spawnSync('git', ['init', '--bare', remotePath]);
+  spawnSync('git', ['-C', tmp, 'remote', 'add', 'origin', remotePath]);
+  spawnSync('git', ['-C', tmp, 'push', '-u', 'origin', 'main']);
+  return remotePath;
+}
+
 function runClaimOnline(args, cwd, binDir, extraEnv) {
   const result = spawnSync(process.execPath, [claimScript, ...args], {
     cwd,
@@ -1112,6 +1121,56 @@ function testSinkMergeRefusesLiveFolder() {
   }
 }
 
+function testSinkMergeBlocksUnpushedCommits() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-merge-block-')));
+  const remotePath = initGitRepoWithBareRemote(tmp);
+  try {
+    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-911']);
+    spawnSync('git', ['-C', tmp, 'push', '-u', 'origin', 'workflow/issue-911']);
+    fs.writeFileSync(path.join(tmp, 'unpushed.txt'), 'test');
+    spawnSync('git', ['-C', tmp, 'add', 'unpushed.txt']);
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'unpushed commit', '--allow-empty-message', '--no-edit'], { env: { ...process.env, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@test.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@test.com' } });
+    const mainBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+    const result = spawnSync(process.execPath, [sinkMergeScript, '--project', 'issue-911', '--branch', 'workflow/issue-911'], {
+      cwd: tmp,
+      encoding: 'utf8',
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0' }
+    });
+    assert(result.status !== 0, 'sink-merge must refuse when branch has unpushed commits, got status: ' + result.status);
+    assert((result.stderr || '').includes('workflow/issue-911'), 'stderr must include branch name, got: ' + result.stderr);
+    assert((result.stderr || '').includes('unpushed'), 'stderr must include "unpushed", got: ' + result.stderr);
+    const mainAfter = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+    assert(mainBefore === mainAfter, 'main must not advance when guard blocks, got: ' + mainAfter);
+    console.log('testSinkMergeBlocksUnpushedCommits: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(remotePath, { recursive: true, force: true });
+  }
+}
+
+function testSinkMergeOfflineSkipsPublishGuard() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-merge-offline-')));
+  try {
+    initGitRepo(tmp);
+    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-912']);
+    fs.writeFileSync(path.join(tmp, 'local.txt'), 'test');
+    spawnSync('git', ['-C', tmp, 'add', 'local.txt']);
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'local commit'], { env: { ...process.env, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@test.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@test.com' } });
+    const featureHead = spawnSync('git', ['-C', tmp, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    const result = spawnSync(process.execPath, [sinkMergeScript, '--project', 'issue-912', '--branch', 'workflow/issue-912'], {
+      cwd: tmp,
+      encoding: 'utf8',
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }
+    });
+    assert(result.status === 0, 'sink-merge must succeed when OFFLINE=1 even with no upstream, got: ' + result.status + '\nstderr: ' + result.stderr);
+    const mainAfter = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+    assert(mainAfter === featureHead, 'main must advance to feature HEAD after offline sink-merge, got: ' + mainAfter);
+    console.log('testSinkMergeOfflineSkipsPublishGuard: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 function testFastE2EMergeFullChain() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-e2e-fast-')));
   const kwRoot = tmp + '.kw';
@@ -1510,6 +1569,8 @@ async function main() {
     testReadPriorityConfig();
     testE2EGitHubMergeFullChain();
     testSinkMergeRefusesLiveFolder();
+    testSinkMergeBlocksUnpushedCommits();
+    testSinkMergeOfflineSkipsPublishGuard();
     testFastE2EMergeFullChain();
     testE2EGitHubPrFullChain();
     testParallelIssueIndependence();

@@ -98,6 +98,31 @@ function assertNoLiveWorkflowFolder(mainRoot, project) {
   }
 }
 
+function assertBranchPushedToUpstream(mainRoot, branch) {
+  let upstream;
+  try {
+    upstream = execFileSync('git', ['-C', mainRoot, 'rev-parse', '--abbrev-ref', '--symbolic-full-name', branch + '@{u}'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch (_) {
+    throw new Error(
+      "Branch '" + branch + "' has no upstream tracking ref.\n" +
+      'Push and set upstream before merging: git push -u origin ' + branch
+    );
+  }
+  const ahead = parseInt(
+    execFileSync('git', ['-C', mainRoot, 'rev-list', '--count', upstream + '..' + branch], { encoding: 'utf8' }).trim(),
+    10
+  );
+  if (!ahead) return;
+  const commits = execFileSync('git', ['-C', mainRoot, 'log', '--format=%h %s', '-n', '5', upstream + '..' + branch],
+    { encoding: 'utf8' }).trim();
+  throw new Error(
+    "Branch '" + branch + "' has " + ahead + " unpushed commit(s) ahead of '" + upstream + "'.\n" +
+    'Push before merging: git push origin ' + branch + '\n\n' +
+    'Unpushed commits:\n  ' + commits.split('\n').join('\n  ')
+  );
+}
+
 function fastForwardMain(args, opts) {
   const options = opts || {};
   const gitExec = options.gitExec || execFileSync;
@@ -305,6 +330,7 @@ function runDirectMerge(args, opts) {
   // Checkout branch
   execFileSync('git', ['-C', mainRoot, 'checkout', args.branch], { encoding: 'utf8' });
   assertNoLiveWorkflowFolder(mainRoot, args.project);
+  if (!OFFLINE) assertBranchPushedToUpstream(mainRoot, args.branch);
 
   // Step 2 — Merge-base skip-check (try-catch: if origin/main absent, treat as up-to-date)
   let alreadyUpToDate = false;

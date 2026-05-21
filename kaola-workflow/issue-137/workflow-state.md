@@ -5,11 +5,15 @@ name: issue-137
 status: active
 
 ## Current Position
-phase: 1
-phase_name: Research
+phase: 6
+phase_name: Finalize
 workflow_path: full
-step: code-explorer
-next_command: /kaola-workflow-phase1 issue-137
+step: final-validation
+next_command: /kaola-workflow-phase6 issue-137
+main_session_role: orchestrator
+implementation_owner: tdd-guide for behavior fixes
+fix_owner: tdd-guide or build-error-resolver
+inline_emergency_fallback_authorized: no
 main_session_role: orchestrator
 implementation_owner: N/A
 fix_owner: N/A

@@ -14,14 +14,22 @@ The Phase 6 sink is responsible for delivering completed work to the repository 
   - GitHub: uses `gh` CLI
   - GitLab: uses `glab` CLI and GitLab forge API
   - Gitea: uses `tea` CLI
-- **Live workflow-state guard** (`assertNoLiveWorkflowFolder`):
-  - All three editions (GitHub, GitLab, Gitea) refuse to merge a branch whose HEAD still contains `kaola-workflow/{project}/workflow-state.md`
-  - Uses `git cat-file -e HEAD:{path}` to inspect committed tree state (not just filesystem)
-  - Exits 1 with detailed remediation instructions when live folder detected
-  - Guards against accidentally merging incomplete workflows that skip finalization
+- **Pre-merge guards** (validated before fetch and rebase):
+  - **Live workflow-state guard** (`assertNoLiveWorkflowFolder`):
+    - All three editions (GitHub, GitLab, Gitea) refuse to merge a branch whose HEAD still contains `kaola-workflow/{project}/workflow-state.md`
+    - Uses `git cat-file -e HEAD:{path}` to inspect committed tree state (not just filesystem)
+    - Exits 1 with detailed remediation instructions when live folder detected
+    - Guards against accidentally merging incomplete workflows that skip finalization
+  - **Unpushed-commits guard** (`assertBranchPushedToUpstream`, issue #137):
+    - All three editions (GitHub, GitLab, Gitea) block merge if feature branch has unpushed commits ahead of its upstream tracking ref
+    - Also blocks when no upstream tracking ref is set (branch not pushed yet)
+    - Reports branch name, upstream ref, ahead count, and up to 5 representative commit titles in error message
+    - Exits 1 with remediation hint (`git push -u origin <branch>`)
+    - Prevents accidental merge of incomplete or out-of-sync branches
+    - Skipped when `KAOLA_WORKFLOW_OFFLINE=1`
 - **Exit codes**:
   - `0`: merge succeeded, branch pushed, issue closed
-  - `1`: merge failed (non-recoverable; includes live workflow-state guard failures)
+  - `1`: merge failed (non-recoverable; includes pre-merge guard failures: live workflow-state, unpushed commits, or no upstream tracking ref)
   - `2`: fast-forward race condition exhausted after MAX_AUTOMERGE_RETRIES attempts
   - `3`: merge-impossible error (branch protected, non-fast-forward, permission denied); also returned if project archive dir exists during receipt write (GitLab/Gitea guard); auto-fallback to PR sink
 - **Failure classification** (`classifyMergeError` function):
