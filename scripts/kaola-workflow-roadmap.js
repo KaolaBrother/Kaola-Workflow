@@ -3,6 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const { issueIsClosed } = require('./kaola-workflow-active-folders');
 
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
 
@@ -184,15 +185,19 @@ function parseRoadmapTable(text) {
   return rows;
 }
 
-function cmdGenerate() {
-  const root = getRoot();
-  const dir = roadmapDir(root);
-  const outFile = roadmapFile(root);
+function regenerateRoadmap(root) {
+  const repoRoot = root || getRoot();
+  const dir = roadmapDir(repoRoot);
+  const outFile = roadmapFile(repoRoot);
   guardAgainstMissingRoadmapSource(dir, outFile);
   const issues = readRoadmapIssues(dir);
   const content = buildRoadmapContent(issues);
   const wrote = writeFileAtomicReplace(outFile, content);
-  process.stdout.write(wrote ? 'generated\n' : 'up-to-date\n');
+  return wrote ? 'generated' : 'up-to-date';
+}
+
+function cmdGenerate() {
+  process.stdout.write(regenerateRoadmap(getRoot()) + '\n');
 }
 
 function cmdMigrate() {
@@ -236,6 +241,37 @@ function cmdValidate() {
   } else {
     process.stdout.write('ok\n');
   }
+}
+
+function validateRemote(root) {
+  const repoRoot = root || getRoot();
+  const dir = roadmapDir(repoRoot);
+  const issues = readRoadmapIssues(dir);
+  const drift = [];
+  for (const it of issues) {
+    if (String(it.status || '').toLowerCase() !== 'open') continue;
+    const n = parseInt(String(it.issue).replace('#', ''), 10);
+    if (!Number.isInteger(n) || n <= 0) continue;
+    if (issueIsClosed(n)) drift.push(n);
+  }
+  return drift;
+}
+
+function cmdValidateRemote() {
+  if (process.env.KAOLA_WORKFLOW_OFFLINE === '1') {
+    process.stdout.write('skipped: offline\n');
+    return;
+  }
+  const drift = validateRemote(getRoot());
+  if (drift.length > 0) {
+    process.stderr.write(
+      'roadmap drift: ' + drift.map(n => 'issue-' + n + '.md').join(', ') +
+      ' marked open but closed on remote; run finalize or remove stale .roadmap files\n'
+    );
+    process.exitCode = 1;
+    return;
+  }
+  process.stdout.write('ok\n');
 }
 
 function cmdInitIssue(argv) {
@@ -295,10 +331,21 @@ function main() {
   if (!sub || sub === 'generate') { cmdGenerate(); return; }
   if (sub === 'migrate') { cmdMigrate(); return; }
   if (sub === 'validate') { cmdValidate(); return; }
+  if (sub === 'validate-remote') { cmdValidateRemote(); return; }
   if (sub === 'init-issue') { cmdInitIssue(process.argv.slice(3)); return; }
   if (sub === 'project-name') { cmdProjectName(process.argv.slice(3)); return; }
-  throw new Error('Unknown subcommand: ' + sub + '. Use generate, migrate, validate, init-issue, or project-name.');
+  throw new Error('Unknown subcommand: ' + sub + '. Use generate, migrate, validate, validate-remote, init-issue, or project-name.');
 }
+
+module.exports = {
+  cmdGenerate,
+  regenerateRoadmap,
+  validateRemote,
+  cmdValidateRemote,
+  readRoadmapIssues,
+  roadmapDir,
+  buildRoadmapContent,
+};
 
 if (require.main === module) {
   try {

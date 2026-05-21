@@ -22,6 +22,8 @@ GitHub issue closure
 Branch cleanup
     ↓
 Archive active folder to kaola-workflow/archive/{project}/
+    ↓
+Clean up .roadmap/issue-N.md and regenerate ROADMAP.md
 ```
 
 **Success condition**: Branch merges without conflicts, push succeeds.
@@ -46,6 +48,8 @@ Worktree is clean, folder remains active
 Next /workflow-next startup: watch-pr detects MERGED/CLOSED
     ↓
 Archive folder to kaola-workflow/archive/{project}/
+    ↓
+Clean up .roadmap/issue-N.md and regenerate ROADMAP.md (MERGED only)
 ```
 
 **Success condition**: Branch pushed, PR created, metadata recorded, follow-up commit written.

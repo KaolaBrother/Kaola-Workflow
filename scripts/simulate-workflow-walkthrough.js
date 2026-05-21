@@ -1377,6 +1377,103 @@ function testParallelIssueIndependence() {
   }
 }
 
+function testFinalizeCleansRoadmapEntry() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-finalize-roadmap-clean-'));
+  try {
+    initGitRepo(tmp);
+    plantActiveFolder(tmp, 'issue-910', 910, null);
+    plantRoadmapIssue(tmp, 910, '');
+    // Generate ROADMAP.md so we can assert it lists #910 before finalize
+    const genResult = runNode(roadmapScript, ['generate'], tmp);
+    assert(genResult.status === 0, 'roadmap generate should exit 0\nstderr: ' + genResult.stderr);
+    const roadmapPath = path.join(tmp, 'kaola-workflow', 'ROADMAP.md');
+    assert(
+      read(roadmapPath).includes('#910'),
+      'ROADMAP.md must list #910 before finalize'
+    );
+    // Finalize archives the project and must clean .roadmap source + regenerate ROADMAP.md
+    const finalizeResult = json(runNode(claimScript, ['finalize', '--project', 'issue-910'], tmp));
+    assert(finalizeResult.status === 'closed', 'finalize must return status:closed');
+    assert(
+      !fs.existsSync(path.join(tmp, 'kaola-workflow', '.roadmap', 'issue-910.md')),
+      'finalize must delete stale .roadmap source: kaola-workflow/.roadmap/issue-910.md'
+    );
+    assert(
+      !read(roadmapPath).includes('#910'),
+      'ROADMAP.md must not list closed issue #910 after finalize'
+    );
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testFinalizeFromLinkedWorktreeCleansRoadmapEntry() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-finalize-linked-roadmap-')));
+  const kwRoot = tmp + '.kw';
+  try {
+    initGitRepo(tmp);
+    // Plant active folder and roadmap issue in main worktree
+    plantActiveFolder(tmp, 'issue-911', 911, null);
+    plantRoadmapIssue(tmp, 911, '');
+    // Commit so .roadmap/ is on HEAD (required for worktree checkout)
+    spawnSync('git', ['-C', tmp, 'add', '-A'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'plant'], { encoding: 'utf8' });
+    // Create linked worktree on a feature branch
+    const wtPath = path.join(kwRoot, 'issue-911');
+    fs.mkdirSync(kwRoot, { recursive: true });
+    spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-911', '--', wtPath, 'HEAD'], {
+      cwd: tmp,
+      encoding: 'utf8'
+    });
+    // Mirror active folder in linked worktree
+    plantActiveFolder(wtPath, 'issue-911', 911, null);
+    // Finalize from linked worktree with --keep-worktree (so archive commit is made on feature branch)
+    const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', 'issue-911', '--keep-worktree'], {
+      cwd: wtPath,
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' },
+      encoding: 'utf8'
+    });
+    assert(
+      result.status === 0,
+      'finalize from linked worktree should exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr
+    );
+    // .roadmap source must be deleted in the linked worktree (archiveProjectDir runs from wtPath)
+    assert(
+      !fs.existsSync(path.join(wtPath, 'kaola-workflow', '.roadmap', 'issue-911.md')),
+      'linked-worktree finalize must delete .roadmap source in linked tree'
+    );
+    // --keep-worktree causes an archive commit on the feature branch; deletion must be staged there
+    const showResult = spawnSync('git', ['show', 'HEAD', '--name-status'], {
+      cwd: wtPath,
+      encoding: 'utf8'
+    });
+    assert(
+      /^D\s+kaola-workflow\/\.roadmap\/issue-911\.md$/m.test(showResult.stdout),
+      'deletion of kaola-workflow/.roadmap/issue-911.md must appear in archive commit\ngit show output:\n' + showResult.stdout
+    );
+  } finally {
+    try { spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', kwRoot + '/issue-911'], { encoding: 'utf8' }); } catch (_) {}
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(kwRoot, { recursive: true, force: true });
+  }
+}
+
+function testValidateRemoteOffline() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-validate-remote-offline-'));
+  try {
+    initGitRepo(tmp);
+    // runNode already sets KAOLA_WORKFLOW_OFFLINE=1
+    const result = runNode(roadmapScript, ['validate-remote'], tmp);
+    assert(result.status === 0, 'validate-remote should exit 0 when offline\nstderr: ' + result.stderr);
+    assert(
+      result.stdout.trim() === 'skipped: offline',
+      'validate-remote must print "skipped: offline" when offline, got: ' + JSON.stringify(result.stdout.trim())
+    );
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 async function main() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-active-folders-'));
   try {
@@ -1399,6 +1496,9 @@ async function main() {
     testFinalizeReleaseCleansWorktree();
     testFinalizeFromLinkedWorktreeCleansMainCopy();
     testFinalizeFromMainRootNoSpuriousRemoval();
+    testFinalizeCleansRoadmapEntry();
+    testFinalizeFromLinkedWorktreeCleansRoadmapEntry();
+    testValidateRemoteOffline();
     testReleaseFromLinkedWorktreeCleansMainCopy();
     testSinkMergeFromLinkedWorktree();
     testStatusShowsClosedIssueDrift();

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`validate-remote` subcommand for roadmap script** (issue #136): `node scripts/kaola-workflow-roadmap.js validate-remote` checks each `.roadmap/issue-N.md` with `status: open` against GitHub and reports any that are already closed. Exits 1 on drift; prints `skipped: offline` when `KAOLA_WORKFLOW_OFFLINE=1`.
+
+### Fixed
+
+- **Roadmap closure drift** (issue #136): `archiveProjectDir` now deletes `.roadmap/issue-N.md` and regenerates `ROADMAP.md` whenever a project is archived as `closed` (finalize, watch-pr merged). Released/discarded projects (`abandoned` status) are intentionally excluded — the issue remains open and represents future work.
+
 ## [3.11.0] — 2026-05-21
 
 ### Added
