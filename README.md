@@ -239,9 +239,10 @@ Before using the Gitea edition in a target project:
 ## Codex packs
 
 This repository also includes Codex packs under `plugins/`. They expose the same
-Kaola-Workflow identity through Codex-native skills, using `kaola-workflow/`
-project artifacts and `AGENTS.md` guidance rather than Claude Code slash
-commands and `CLAUDE.md`.
+Kaola-Workflow identity through Codex-native skills and `kaola-workflow/` project
+artifacts rather than Claude Code slash commands. Codex uses `AGENTS.md` as its
+entrypoint, which redirects to `CLAUDE.md` as the single canonical source of repo
+guidance — the same `CLAUDE.md` contract applies to Codex and Claude Code alike.
 
 - GitHub edition: `plugins/kaola-workflow/`
 - GitLab edition: `plugins/kaola-workflow-gitlab/`
