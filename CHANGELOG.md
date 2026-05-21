@@ -14,6 +14,8 @@
 
 ### Fixed
 
+- **Reliable inline subagent model badge** (issue #142, follow-up to #141): Phase and fast slash commands now present each subagent dispatch with the installer-rendered `model="..."` literal plus a per-spawn imperative directive (`You MUST pass model="..."; never omit it`). The `## Agent Model Badge Contract` bash-resolution helper (`kaola_agent_model`) and the "if the resolved value is empty, omit `model=`" escape hatch were removed — that escape hatch was the failure mode: the orchestrator would resolve an empty value and drop `model=`, silently losing the badge. Empirically, Claude Code's inline model badge renders only when the `Agent` call passes an explicit `model=` (agent frontmatter alone does not render it, and `subagentStatusLine` is a separate UI surface). Install-time literal rendering from agent frontmatter is unchanged, so a subagent still runs on its correct model even if a badge is ever missed. Contract validators updated to assert the new shape across the GitHub, GitLab, and Gitea editions. Note: if `CLAUDE_CODE_SUBAGENT_MODEL` is set in the environment it takes precedence over the per-call `model=`, so the rendered badge reflects that value instead — this is expected behavior, not a regression.
+
 - **Roadmap closure drift** (issue #136): `archiveProjectDir` now deletes `.roadmap/issue-N.md` and regenerates `ROADMAP.md` whenever a project is archived as `closed` (finalize, watch-pr merged). Released/discarded projects (`abandoned` status) are intentionally excluded — the issue remains open and represents future work.
 
 ## [3.11.0] — 2026-05-21

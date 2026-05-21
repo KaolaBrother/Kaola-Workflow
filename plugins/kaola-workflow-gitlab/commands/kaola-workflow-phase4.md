@@ -13,8 +13,6 @@ state, starts task agents, verifies results, classifies validation failures,
 runs small targeted validation when useful, delegates noisy validation, and
 routes fixes. It does not own implementation or test code.
 
-
-
 ## Worktree Discovery
 
 Resolve the active worktree path before running any git commands in this phase:
@@ -87,19 +85,12 @@ fix_owner: tdd-guide or build-error-resolver
 inline_emergency_fallback_authorized: no
 ```
 
-## Agent Model Badge Contract
+## Agent Model Badge
 
-Before every Kaola subagent invocation, resolve the installed agent model and
-pass it explicitly to Claude Code's `Agent` tool. This is what makes Claude Code
-show the model badge on the subagent row/card.
-
-```bash
-kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./plugins/kaola-workflow-gitlab/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n" "./plugins/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
-KAOLA_AGENT_MODEL_JS="$(kaola_script kaola-workflow-resolve-agent-model.js)"
-kaola_agent_model(){ node "$KAOLA_AGENT_MODEL_JS" "$1" --raw 2>/dev/null || true; }
-```
-
-The installer renders the placeholder model lines below into concrete literals such as `model="sonnet"`. When running from source, resolve the agent model manually and pass a literal `model=` value. If the resolved value is empty, omit `model=` so Claude Code inherits the orchestrator model.
+Every subagent dispatch below includes an explicit `model=` line. Always pass it
+exactly as written — it is what makes Claude Code show the model badge on the
+subagent card. The installer fills each `model="{...}"` placeholder with the
+agent's frontmatter model (for example `model="sonnet"`); never omit the `model=` line.
 
 ## Validation Delegation Policy
 
@@ -244,11 +235,10 @@ next_command: /kaola-workflow-phase4 {project}
 inline_emergency_fallback_authorized: no
 ```
 
-Resolve the model, then invoke the Claude Code agent `tdd-guide` for the task:
+Invoke the Claude Code agent `tdd-guide` for the task:
 
-```bash
-TDD_GUIDE_MODEL="$(kaola_agent_model tdd-guide)"
-```
+You MUST pass `model="{TDD_GUIDE_MODEL}"` in this Agent call exactly as shown —
+do not omit the `model=` line.
 
 ```text
 Agent(
@@ -258,8 +248,6 @@ Agent(
   prompt="..."
 )
 ```
-
-If `TDD_GUIDE_MODEL` is empty, omit the `model=` line.
 
 Provide:
 - the full task definition from `phase3-plan.md`
@@ -315,9 +303,9 @@ Routing:
 - behavior/regression/coverage/acceptance -> `tdd-guide`
 - scope/write-set -> stop and ask, unless reverting the agent's own deviation
 
-For every routed fix or delegated validation agent, resolve that agent's model
-with `kaola_agent_model` and include the explicit `model=` parameter in the
-`Agent(...)` call. Omit `model=` only when the resolved value is empty.
+For every routed fix or delegated validation agent, include the explicit
+`model=` parameter in the `Agent(...)` call exactly as documented above — never
+omit it.
 
 Record each routed fix in:
 

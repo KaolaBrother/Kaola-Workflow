@@ -21,23 +21,14 @@ architecture, or write implementation code.
 - Do not ask the user to confirm generated project/folder names. Routine naming
   is nonessential workflow bookkeeping and is chosen autonomously.
 
-## Agent Model Badge Contract
+## Agent Model Badge
 
-Before every Kaola subagent invocation, resolve the installed agent model and
-pass it explicitly to Claude Code's `Agent` tool. This is what makes Claude Code
-show the model badge on the subagent row/card.
-
-```bash
-kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./plugins/kaola-workflow-gitlab/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n" "./plugins/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
-KAOLA_AGENT_MODEL_JS="$(kaola_script kaola-workflow-resolve-agent-model.js)"
-kaola_agent_model(){ node "$KAOLA_AGENT_MODEL_JS" "$1" --raw 2>/dev/null || true; }
-```
-
-The installer renders the placeholder model lines below into concrete literals such as `model="sonnet"`. When running from source, resolve the agent model manually and pass a literal `model=` value. If the resolved value is empty, omit `model=` so Claude Code inherits the orchestrator model.
-
+Every subagent dispatch below includes an explicit `model=` line. Always pass it
+exactly as written — it is what makes Claude Code show the model badge on the
+subagent card. The installer fills each `model="{...}"` placeholder with the
+agent's frontmatter model (for example `model="sonnet"`); never omit the `model=` line.
 
 ## Resume Detection
-
 
 If `$ARGUMENTS` is an existing project, read:
 
@@ -108,12 +99,10 @@ inline_emergency_fallback_authorized: no
 
 ## Step 2 - Codebase Exploration
 
-Resolve the model, then invoke the Claude Code agent `code-explorer` with an
-explicit model parameter:
+Invoke the Claude Code agent `code-explorer`:
 
-```bash
-CODE_EXPLORER_MODEL="$(kaola_agent_model code-explorer)"
-```
+You MUST pass `model="{CODE_EXPLORER_MODEL}"` in this Agent call exactly as shown —
+do not omit the `model=` line.
 
 ```text
 Agent(
@@ -123,8 +112,6 @@ Agent(
   prompt="..."
 )
 ```
-
-If `CODE_EXPLORER_MODEL` is empty, omit the `model=` line.
 
 Provide only the parsed requirement, linked issue summary when present, and
 suspected affected area. Ask it to return:
@@ -145,12 +132,10 @@ Update `workflow-state.md` before invoking and after writing the cache file.
 
 ## Step 3 - External Docs Lookup
 
-Invoke `docs-lookup` only when current external behavior matters. Resolve the
-model and pass it explicitly:
+Invoke `docs-lookup` only when current external behavior matters. Pass its model explicitly:
 
-```bash
-DOCS_LOOKUP_MODEL="$(kaola_agent_model docs-lookup)"
-```
+You MUST pass `model="{DOCS_LOOKUP_MODEL}"` in this Agent call exactly as shown —
+do not omit the `model=` line.
 
 ```text
 Agent(
@@ -160,8 +145,6 @@ Agent(
   prompt="..."
 )
 ```
-
-If `DOCS_LOOKUP_MODEL` is empty, omit the `model=` line.
 
 The agent must use official or primary-source docs where possible and return
 stable links, version assumptions, and concise constraints. It must not propose

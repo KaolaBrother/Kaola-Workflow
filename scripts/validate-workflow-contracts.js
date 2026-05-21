@@ -67,9 +67,11 @@ const phaseCommands = [
 for (const file of phaseCommands) {
   assert(exists(file), file + ' is missing');
   assertIncludes(file, 'workflow-state.md');
-  assertIncludes(file, 'Agent Model Badge Contract');
-  assertIncludes(file, 'kaola-workflow-resolve-agent-model.js');
+  assertIncludes(file, '## Agent Model Badge');
+  assertIncludes(file, 'You MUST pass `model=');
   assertIncludes(file, 'model="{');
+  assertNotIncludes(file, 'Agent Model Badge Contract');
+  assertNotIncludes(file, 'kaola_agent_model');
   for (const token of retired) assertNotIncludes(file, token);
 }
 
