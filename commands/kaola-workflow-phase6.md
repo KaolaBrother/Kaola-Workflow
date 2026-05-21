@@ -87,7 +87,7 @@ If ambiguous, stop and ask.
 Every subagent dispatch below includes an explicit `model=` line. Always pass it
 exactly as written — it is what makes Claude Code show the model badge on the
 subagent card. The installer fills each `model="{...}"` placeholder with the
-agent's frontmatter model (for example `model="sonnet"`); never drop the `model=` line.
+agent's frontmatter model (for example `model="sonnet"`); never omit the `model=` line.
 
 ## Validation Delegation Policy
 
@@ -272,7 +272,8 @@ If checklist exists, invoke the Claude Code agent
 
 If missing, create or append the checklist, then invoke `doc-updater`:
 
-You MUST pass `model="{DOC_UPDATER_MODEL}"` in this Agent call exactly as shown — do not omit the `model=` line.
+You MUST pass `model="{DOC_UPDATER_MODEL}"` in this Agent call exactly as shown —
+do not omit the `model=` line.
 
 ```text
 Agent(

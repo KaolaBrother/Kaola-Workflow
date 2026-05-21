@@ -90,7 +90,7 @@ inline_emergency_fallback_authorized: no
 Every subagent dispatch below includes an explicit `model=` line. Always pass it
 exactly as written — it is what makes Claude Code show the model badge on the
 subagent card. The installer fills each `model="{...}"` placeholder with the
-agent's frontmatter model (for example `model="sonnet"`); never drop the `model=` line.
+agent's frontmatter model (for example `model="sonnet"`); never omit the `model=` line.
 
 ## Validation Delegation Policy
 
@@ -237,7 +237,8 @@ inline_emergency_fallback_authorized: no
 
 Invoke the Claude Code agent `tdd-guide` for the task:
 
-You MUST pass `model="{TDD_GUIDE_MODEL}"` in this Agent call exactly as shown — do not omit the `model=` line.
+You MUST pass `model="{TDD_GUIDE_MODEL}"` in this Agent call exactly as shown —
+do not omit the `model=` line.
 
 ```text
 Agent(

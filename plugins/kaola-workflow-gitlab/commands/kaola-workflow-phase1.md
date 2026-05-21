@@ -26,7 +26,7 @@ architecture, or write implementation code.
 Every subagent dispatch below includes an explicit `model=` line. Always pass it
 exactly as written — it is what makes Claude Code show the model badge on the
 subagent card. The installer fills each `model="{...}"` placeholder with the
-agent's frontmatter model (for example `model="sonnet"`); never drop the `model=` line.
+agent's frontmatter model (for example `model="sonnet"`); never omit the `model=` line.
 
 ## Resume Detection
 
@@ -101,7 +101,8 @@ inline_emergency_fallback_authorized: no
 
 Invoke the Claude Code agent `code-explorer`:
 
-You MUST pass `model="{CODE_EXPLORER_MODEL}"` in this Agent call exactly as shown — do not omit the `model=` line.
+You MUST pass `model="{CODE_EXPLORER_MODEL}"` in this Agent call exactly as shown —
+do not omit the `model=` line.
 
 ```text
 Agent(
@@ -133,7 +134,8 @@ Update `workflow-state.md` before invoking and after writing the cache file.
 
 Invoke `docs-lookup` only when current external behavior matters. Pass its model explicitly:
 
-You MUST pass `model="{DOCS_LOOKUP_MODEL}"` in this Agent call exactly as shown — do not omit the `model=` line.
+You MUST pass `model="{DOCS_LOOKUP_MODEL}"` in this Agent call exactly as shown —
+do not omit the `model=` line.
 
 ```text
 Agent(
