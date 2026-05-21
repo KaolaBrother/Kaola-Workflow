@@ -13,6 +13,7 @@ const {
   issueIsClosed,
   readActiveFolders
 } = require('./kaola-gitea-workflow-active-folders');
+const roadmapModule = require('./kaola-gitea-workflow-roadmap');
 
 const CLAIM_LABEL = forge.CLAIM_LABEL || 'workflow:in-progress';
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
@@ -380,8 +381,10 @@ function archiveProjectDir(root, project, statusValue, suffix) {
   const src = projectDir(root, project);
   if (!fs.existsSync(src)) return { skipped: 'source-missing' };
   const state = stateFile(root, project);
+  let archiveIssueNumber = null;
   try {
     let content = fs.readFileSync(state, 'utf8');
+    archiveIssueNumber = parseInt(field(content, 'issue_number'), 10);
     content = content.replace(/^status:\s*.*$/m, 'status: ' + statusValue);
     if (!/^status:/m.test(content)) content += '\nstatus: ' + statusValue + '\n';
     content = content.replace(/^step:\s*.*$/m, 'step: complete');
@@ -401,6 +404,16 @@ function archiveProjectDir(root, project, statusValue, suffix) {
   if (mainRoot && mainRoot !== linkedRoot) {
     const mainLive = path.join(mainRoot, 'kaola-workflow', project);
     if (fs.existsSync(mainLive)) fs.rmSync(mainLive, { recursive: true, force: true });
+  }
+  if (statusValue === 'closed') {
+    try {
+      if (Number.isInteger(archiveIssueNumber) && archiveIssueNumber > 0) {
+        const roadmapFilePath = path.join(root, 'kaola-workflow', '.roadmap', 'issue-' + archiveIssueNumber + '.md');
+        try { fs.unlinkSync(roadmapFilePath); }
+        catch (e) { if (e.code !== 'ENOENT') throw e; }
+      }
+      roadmapModule.regenerateRoadmap(root);
+    } catch (_) { /* roadmap mirror cleanup is non-fatal; archive already completed */ }
   }
   return { archived: true, dest };
 }

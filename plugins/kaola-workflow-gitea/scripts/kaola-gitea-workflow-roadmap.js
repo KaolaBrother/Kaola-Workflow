@@ -224,13 +224,18 @@ function refreshFromGitea(root, options) {
   return { issues: issues.length, wrote, generated };
 }
 
-function cmdGenerate() {
-  const root = getRoot();
-  const dir = roadmapDir(root);
-  const outFile = roadmapFile(root);
+function regenerateRoadmap(root) {
+  const repoRoot = root || getRoot();
+  const dir = roadmapDir(repoRoot);
+  const outFile = roadmapFile(repoRoot);
   guardAgainstMissingRoadmapSource(dir, outFile);
-  const wrote = writeFileAtomicReplace(outFile, buildRoadmapContent(readRoadmapIssues(dir)));
-  process.stdout.write(wrote ? 'generated\n' : 'up-to-date\n');
+  const issues = readRoadmapIssues(dir);
+  const content = buildRoadmapContent(issues);
+  const wrote = writeFileAtomicReplace(outFile, content);
+  return wrote ? 'generated' : 'up-to-date';
+}
+function cmdGenerate() {
+  process.stdout.write(regenerateRoadmap(getRoot()) + '\n');
 }
 
 function cmdValidate() {
@@ -311,6 +316,7 @@ module.exports = {
   guardAgainstMissingRoadmapSource,
   readRoadmapIssues,
   refreshFromGitea,
+  regenerateRoadmap,
   writeFileAtomicReplace,
   writeIssueRecord
 };

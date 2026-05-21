@@ -396,11 +396,19 @@ withForge({
 }, () => {
   const root = tempRoot('kw-gl-watch-mr-');
   writeState(root, 'mr-project', 44, 'mr_iid: 44');
+  roadmap.writeIssueRecord(root, { issue_iid: 44, title: 'mr test' }, 'open', 'mr-project', 'ready');
+  roadmap.regenerateRoadmap(root);
+  const roadmapSrc = path.join(root, 'kaola-workflow', '.roadmap', 'issue-44.md');
+  const roadmapMirror = path.join(root, 'kaola-workflow', 'ROADMAP.md');
+  assert(fs.existsSync(roadmapSrc));
+  assert(fs.readFileSync(roadmapMirror, 'utf8').includes('#44'));
   const stateFile = path.join(root, 'kaola-workflow', 'mr-project', 'workflow-state.md');
   fs.writeFileSync(stateFile, fs.readFileSync(stateFile, 'utf8').replace('sink: merge', 'sink: mr'));
   const result = claim.watchMergeRequests(root, {});
   assert.strictEqual(result.watched, 1);
   assert(fs.existsSync(path.join(root, 'kaola-workflow', 'archive', 'mr-project', 'workflow-state.md')));
+  assert(!fs.existsSync(roadmapSrc));
+  assert(!fs.readFileSync(roadmapMirror, 'utf8').includes('#44'));
 });
 
 {

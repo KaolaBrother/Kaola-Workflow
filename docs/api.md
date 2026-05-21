@@ -148,6 +148,9 @@ The following functions are exported from sink and claim modules for use by test
 - `getCoordRoot(root)` — Same contract as GitHub edition. Derives the coordination root for shared state storage.
 - `cmdSinkFallback()` — Fallback sink implementation invoked when merge sink fails. Checks both live folder and archive folder before updating state; returns `{updated: false, reason: 'project archived'}` if either path does not exist (live) or archive path exists, preventing recreation of archived projects. Otherwise updates sink state to `mr` and returns `{updated: true, sink: 'mr', reason}`. This is called after merge sink exits 3 during auto-fallback.
 
+**`plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-roadmap.js`:**
+- `regenerateRoadmap(root)` — Silently regenerates `ROADMAP.md` from `.roadmap/issue-*.md` sources. Returns `'generated'` if content changed, `'up-to-date'` if no change. Used by claim scripts during finalization to clean up roadmap entries. Does not print to stdout.
+
 ### Gitea Edition
 
 **`plugins/kaola-workflow-gitea/scripts/kaola-gitea-forge.js`:**
@@ -188,6 +191,9 @@ The following functions are exported from sink and claim modules for use by test
   - `0`: merge succeeded, branch pushed, issue closed, worktree cleaned
   - `2`: fast-forward race condition exhausted after MAX_AUTOMERGE_RETRIES attempts
   - `3`: merge-impossible error (branch protected, non-fast-forward, permission denied); auto-fallback to PR sink
+
+**`plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-roadmap.js`:**
+- `regenerateRoadmap(root)` — Silently regenerates `ROADMAP.md` from `.roadmap/issue-*.md` sources. Returns `'generated'` if content changed, `'up-to-date'` if no change. Used by claim scripts during finalization to clean up roadmap entries. Does not print to stdout.
 
 ## Stale Worktree Detection
 

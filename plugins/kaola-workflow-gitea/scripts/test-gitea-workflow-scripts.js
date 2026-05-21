@@ -409,11 +409,19 @@ withForge({
 }, () => {
   const root = tempRoot('kw-gt-watch-pr-');
   writeState(root, 'pr-project', 44, 'pr_url: https://gitea.example/group/repo/pulls/44');
+  roadmap.writeIssueRecord(root, { issue_iid: 44, title: 'pr test' }, 'open', 'pr-project', 'ready');
+  roadmap.regenerateRoadmap(root);
+  const roadmapSrc = path.join(root, 'kaola-workflow', '.roadmap', 'issue-44.md');
+  const roadmapMirror = path.join(root, 'kaola-workflow', 'ROADMAP.md');
+  assert(fs.existsSync(roadmapSrc));
+  assert(fs.readFileSync(roadmapMirror, 'utf8').includes('#44'));
   const stateFile = path.join(root, 'kaola-workflow', 'pr-project', 'workflow-state.md');
   fs.writeFileSync(stateFile, fs.readFileSync(stateFile, 'utf8').replace('sink: merge', 'sink: pr'));
   const result = claim.watchMergeRequests(root, {});
   assert.strictEqual(result.watched, 1);
   assert(fs.existsSync(path.join(root, 'kaola-workflow', 'archive', 'pr-project', 'workflow-state.md')));
+  assert(!fs.existsSync(roadmapSrc));
+  assert(!fs.readFileSync(roadmapMirror, 'utf8').includes('#44'));
 });
 
 {
