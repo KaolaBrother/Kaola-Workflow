@@ -120,9 +120,11 @@ for (const file of [...commandFiles, ...skillFiles, ...hookFiles, ...agentFiles,
 }
 
 for (const file of commandFiles.filter(file => path.basename(file).startsWith('kaola-workflow-'))) {
-  assertIncludes(file, 'Agent Model Badge Contract');
-  assertIncludes(file, 'kaola-workflow-resolve-agent-model.js');
+  assertIncludes(file, '## Agent Model Badge');
+  assertIncludes(file, 'You MUST pass `model=');
   assertIncludes(file, 'model="{');
+  assertNotIncludes(file, 'Agent Model Badge Contract');
+  assertNotIncludes(file, 'kaola_agent_model');
 }
 
 const scriptFiles = [

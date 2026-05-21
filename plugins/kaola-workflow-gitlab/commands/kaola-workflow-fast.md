@@ -17,21 +17,12 @@ Complete a single-pass Plan+Execute+Review cycle for the named project and
 write a `PASSED` `fast-summary.md` that Phase 6 accepts as a full-workflow
 substitute. Stop if scope exceeds fast-path bounds.
 
-## Agent Model Badge Contract
+## Agent Model Badge
 
-Before every Kaola subagent invocation, resolve the installed agent model and
-pass it explicitly to Claude Code's `Agent` tool. This is what makes Claude Code
-show the model badge on the subagent row/card.
-
-```bash
-kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./plugins/kaola-workflow-gitlab/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n" "./plugins/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
-KAOLA_AGENT_MODEL_JS="$(kaola_script kaola-workflow-resolve-agent-model.js)"
-kaola_agent_model(){ node "$KAOLA_AGENT_MODEL_JS" "$1" --raw 2>/dev/null || true; }
-```
-
-The installer renders the placeholder model lines below into concrete literals such as `model="sonnet"`. When running from source, resolve the agent model manually and pass a literal `model=` value. If the resolved value is empty, omit `model=` so Claude Code inherits the orchestrator model.
-
-
+Every subagent dispatch below includes an explicit `model=` line. Always pass it
+exactly as written — it is what makes Claude Code show the model badge on the
+subagent card. The installer fills each `model="{...}"` placeholder with the
+agent's frontmatter model (for example `model="sonnet"`); never drop the `model=` line.
 
 ## Resume Detection
 
@@ -88,13 +79,11 @@ implementation_owner: planner
 inline_emergency_fallback_authorized: no
 ```
 
-Resolve the model, then invoke the Claude Code agent `planner` with the linked
+Invoke the Claude Code agent `planner` with the linked
 GitLab issue body and `phase1-research.md` / `phase2-ideation.md` excerpts if
 they exist (otherwise issue body alone):
 
-```bash
-PLANNER_MODEL="$(kaola_agent_model planner)"
-```
+You MUST pass `model="{PLANNER_MODEL}"` in this Agent call exactly as shown — do not omit the `model=` line.
 
 ```text
 Agent(
@@ -105,7 +94,7 @@ Agent(
 )
 ```
 
-If `PLANNER_MODEL` is empty, omit the `model=` line. Ask for:
+Ask for:
 
 - files to touch (must be ≤ 2 closely related files for fast path to apply)
 - exact change per file
@@ -140,12 +129,10 @@ implementation_owner: tdd-guide
 inline_emergency_fallback_authorized: no
 ```
 
-Resolve the model, then invoke the Claude Code agent `tdd-guide` with the
+Invoke the Claude Code agent `tdd-guide` with the
 planner-produced plan and explicit constraints:
 
-```bash
-TDD_GUIDE_MODEL="$(kaola_agent_model tdd-guide)"
-```
+You MUST pass `model="{TDD_GUIDE_MODEL}"` in this Agent call exactly as shown — do not omit the `model=` line.
 
 ```text
 Agent(
@@ -155,8 +142,6 @@ Agent(
   prompt="..."
 )
 ```
-
-If `TDD_GUIDE_MODEL` is empty, omit the `model=` line.
 
 - no new external package dependencies
 - no changes to public APIs, schemas, or shared infrastructure
@@ -194,12 +179,10 @@ implementation_owner: code-reviewer
 inline_emergency_fallback_authorized: no
 ```
 
-Resolve the model, then invoke the Claude Code agent `code-reviewer` on the
+Invoke the Claude Code agent `code-reviewer` on the
 modified files from Step 2:
 
-```bash
-CODE_REVIEWER_MODEL="$(kaola_agent_model code-reviewer)"
-```
+You MUST pass `model="{CODE_REVIEWER_MODEL}"` in this Agent call exactly as shown — do not omit the `model=` line.
 
 ```text
 Agent(
@@ -210,7 +193,7 @@ Agent(
 )
 ```
 
-If `CODE_REVIEWER_MODEL` is empty, omit the `model=` line. Ask it to check:
+Ask it to check:
 
 - all acceptance check commands pass
 - no new CRITICAL or HIGH security concerns
