@@ -49,19 +49,19 @@ No deferred items, conflicts, partial implementation, or open review follow-ups 
 
 ## Commit And Push
 
-pending final Git gate
+DONE — implementation commit 9859329 on main, pushed to origin. Archive commit 94cb015. Branch workflow/issue-149 deleted from origin.
 
 ## GitHub Issue
 
-Comment posted at https://github.com/KaolaBrother/Kaola-Workflow/issues/149#issuecomment-4509594091 with validation evidence and planned commit message. Issue closure delegated to sink-merge script via --issue 149 flag.
+CLOSED — https://github.com/KaolaBrother/Kaola-Workflow/issues/149. Closed after sink-merge at commit 9859329.
 
 ## Roadmap
 
-Regenerated — `kaola-workflow/.roadmap/issue-149.md` deleted, `kaola-workflow/ROADMAP.md` regenerated from remaining per-issue files. Output: "up-to-date".
+Regenerated — `kaola-workflow/.roadmap/issue-149.md` deleted, `kaola-workflow/ROADMAP.md` regenerated from remaining per-issue files.
 
 ## Archive
 
-pending cmdFinalize (sink: merge path)
+DONE — `kaola-workflow/archive/issue-149/` archived by cmdFinalize commit 94cb015.
 
 ## Required Agent Compliance
 | Requirement | Status | Evidence | Skip Reason |
@@ -71,8 +71,8 @@ pending cmdFinalize (sink: merge path)
 | closure advisor gate | N/A | closure scan in this summary | No deferred items, conflicts, or user decisions found |
 | final-validation fix executors | N/A | | No final validation failures |
 | roadmap refresh | invoked | kaola-workflow/ROADMAP.md regenerated; issue-149.md deleted | |
-| archive completed folder | pending | | cmdFinalize runs next |
-| final commit and push | ready | git status / sink: merge path | runs after this file is committed |
+| archive completed folder | complete | kaola-workflow/archive/issue-149/ | |
+| final commit and push | complete | commit 9859329; origin/main updated | |
 
 ## Status
-READY FOR FINAL GIT GATE
+COMPLETE
