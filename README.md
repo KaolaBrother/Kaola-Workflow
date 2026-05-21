@@ -134,9 +134,9 @@ the edition.
 Claude Code installs use `install.sh` only. Do not install Kaola-Workflow through
 the Claude Code plugin marketplace; `install.sh` copies the slash commands,
 support scripts, optional hook config, and vendored agents into `~/.claude/`.
-Slash commands resolve each installed Kaola agent's frontmatter model and pass
-it explicitly to Claude Code's `Agent` tool so spawned subagents can show the
-built-in model badge.
+During install, slash commands render each installed Kaola agent's frontmatter
+model into concrete `Agent(..., model="...")` examples so spawned subagents can
+show Claude Code's built-in model badge.
 If an older Claude Code plugin install is present, the installer refuses to run
 until the plugin is removed:
 
@@ -649,8 +649,8 @@ evidence path.
   above, with scripts under `~/.claude/kaola-workflow/hooks/` or
   `~/.claude/kaola-workflow/scripts/`.
 - Model badges are enforced by slash-command dispatch, not by a status-line
-  override: commands call `kaola-workflow-resolve-agent-model.js` and pass the
-  resolved value as `model=` to each `Agent(...)` invocation.
+  override: the installer renders each installed agent's resolved model into
+  concrete `model="..."` lines in the slash commands.
 - If hooks are missing, re-run `./install.sh --forge=github` (or
   `--forge=gitlab` or `--forge=gitea`). Do not edit `~/.claude/settings.json` directly —
   re-running the installer is the supported path.

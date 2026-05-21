@@ -327,6 +327,101 @@ install_agent_files() {
 
 install_agent_files
 
+default_agent_model() {
+  case "$1" in
+    code-explorer|docs-lookup|code-architect|tdd-guide|build-error-resolver|code-reviewer|security-reviewer)
+      printf '%s\n' "sonnet"
+      ;;
+    planner)
+      printf '%s\n' "opus"
+      ;;
+    doc-updater)
+      printf '%s\n' "haiku"
+      ;;
+  esac
+}
+
+extract_agent_model() {
+  local agent_file="$1"
+  [[ -f "$agent_file" ]] || return 0
+  awk '
+    NR == 1 && $0 == "---" { in_frontmatter = 1; next }
+    in_frontmatter && $0 == "---" { exit }
+    in_frontmatter && $0 ~ /^[[:space:]]*model[[:space:]]*:/ {
+      sub(/^[[:space:]]*model[[:space:]]*:[[:space:]]*/, "", $0)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", $0)
+      if (substr($0, 1, 1) == "\"" && substr($0, length($0), 1) == "\"") {
+        $0 = substr($0, 2, length($0) - 2)
+      }
+      print
+      exit
+    }
+  ' "$agent_file"
+}
+
+resolve_agent_model_for_install() {
+  local agent="$1"
+  local model
+  model="$(extract_agent_model "$AGENTS_DIR/$agent.md")"
+  if [[ -z "$model" ]]; then
+    model="$(default_agent_model "$agent")"
+  fi
+  if [[ "$(printf '%s' "$model" | tr '[:upper:]' '[:lower:]')" == "inherit" ]]; then
+    return 0
+  fi
+  printf '%s\n' "$model"
+}
+
+model_for_placeholder() {
+  case "$1" in
+    CODE_EXPLORER_MODEL) resolve_agent_model_for_install code-explorer ;;
+    DOCS_LOOKUP_MODEL) resolve_agent_model_for_install docs-lookup ;;
+    PLANNER_MODEL) resolve_agent_model_for_install planner ;;
+    CODE_ARCHITECT_MODEL) resolve_agent_model_for_install code-architect ;;
+    TDD_GUIDE_MODEL) resolve_agent_model_for_install tdd-guide ;;
+    BUILD_ERROR_RESOLVER_MODEL) resolve_agent_model_for_install build-error-resolver ;;
+    CODE_REVIEWER_MODEL) resolve_agent_model_for_install code-reviewer ;;
+    SECURITY_REVIEWER_MODEL) resolve_agent_model_for_install security-reviewer ;;
+    DOC_UPDATER_MODEL) resolve_agent_model_for_install doc-updater ;;
+  esac
+}
+
+render_command_file() {
+  local source_file="$1"
+  local dest_file="$2"
+  local line rendered placeholder model skip_line
+  local placeholders=(
+    CODE_EXPLORER_MODEL
+    DOCS_LOOKUP_MODEL
+    PLANNER_MODEL
+    CODE_ARCHITECT_MODEL
+    TDD_GUIDE_MODEL
+    BUILD_ERROR_RESOLVER_MODEL
+    CODE_REVIEWER_MODEL
+    SECURITY_REVIEWER_MODEL
+    DOC_UPDATER_MODEL
+  )
+
+  : > "$dest_file"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    rendered="$line"
+    skip_line=0
+    for placeholder in "${placeholders[@]}"; do
+      if [[ "$rendered" == *"{$placeholder}"* ]]; then
+        model="$(model_for_placeholder "$placeholder")"
+        if [[ -z "$model" && "$rendered" == *"model=\"{$placeholder}\""* ]]; then
+          skip_line=1
+          break
+        fi
+        rendered="${rendered//\{$placeholder\}/$model}"
+      fi
+    done
+    if [[ "$skip_line" -eq 0 ]]; then
+      printf '%s\n' "$rendered" >> "$dest_file"
+    fi
+  done < "$source_file"
+}
+
 # Install commands
 if [[ ! -d "$SOURCE_COMMANDS_DIR" ]]; then
   echo "Commands directory not found: $SOURCE_COMMANDS_DIR" >&2
@@ -342,7 +437,7 @@ for command_file in "$SOURCE_COMMANDS_DIR"/*.md; do
   fi
 
   dest="$COMMANDS_DIR/$(basename "$command_file")"
-  cp "$command_file" "$dest"
+  render_command_file "$command_file" "$dest"
   echo "Installed: $dest"
   installed=$((installed + 1))
 done

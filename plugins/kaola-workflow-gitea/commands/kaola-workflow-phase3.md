@@ -35,9 +35,7 @@ KAOLA_AGENT_MODEL_JS="$(kaola_script kaola-workflow-resolve-agent-model.js)"
 kaola_agent_model(){ node "$KAOLA_AGENT_MODEL_JS" "$1" --raw 2>/dev/null || true; }
 ```
 
-For each `Agent(...)` call below, set `AGENT_MODEL="$(kaola_agent_model
-AGENT_NAME)"` and include `model="{AGENT_MODEL}"` when non-empty. If the value
-is empty, omit `model=` so Claude Code inherits the orchestrator model.
+The installer renders the placeholder model lines below into concrete literals such as `model="sonnet"`. When running from source, resolve the agent model manually and pass a literal `model=` value. If the resolved value is empty, omit `model=` so Claude Code inherits the orchestrator model.
 
 
 
