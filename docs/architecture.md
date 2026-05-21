@@ -37,7 +37,7 @@ Final commit on feature branch
     ↓
 Push branch to origin
     ↓
-Create PR via gh pr create / glab mr create
+Create PR via gh pr create / glab mr create / tea pr create
     ↓
 Record PR metadata (URL, number) in workflow-state.md
     ↓

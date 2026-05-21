@@ -34,7 +34,7 @@ The Phase 6 sink is responsible for delivering completed work to the repository 
 
 - **Script**: `kaola-workflow-sink-pr.js` (GitHub) / `kaola-gitlab-workflow-sink-mr.js` (GitLab) / `kaola-gitea-workflow-sink-pr.js` (Gitea)
 - **Invocation**: Called from Phase 6 Step 9 when `sink: pr` is configured, or auto-fallback from merge sink exit 3
-- **Contract**: Push branch, create PR/MR via `gh pr create` or `glab mr create`, record PR URL and number in workflow-state.md `## Sink` block, then create deliberate metadata follow-up commit (`chore: record PR metadata for {project}`) to leave worktree clean
+- **Contract**: Push branch, create PR/MR via `gh pr create` (GitHub), `glab mr create` (GitLab), or `tea pr create` (Gitea), record PR URL and number in workflow-state.md `## Sink` block, then create deliberate metadata follow-up commit (`chore: record PR metadata for {project}`) to leave worktree clean
 - **Exit codes**:
   - `0`: PR/MR created successfully, metadata commit written, worktree clean
   - `1`: branch push or PR/MR creation failed
