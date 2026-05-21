@@ -198,6 +198,7 @@ if command -v claude >/dev/null 2>&1; then
     echo "" >&2
     echo "  claude plugin uninstall kaola-workflow@kaolabrother-kaola-workflow" >&2
     echo "  claude plugin uninstall kaola-workflow-gitlab@kaolabrother-kaola-workflow  # if installed" >&2
+    echo "  claude plugin uninstall kaola-workflow-gitea@kaolabrother-kaola-workflow  # if installed" >&2
     echo "  claude plugin marketplace remove kaolabrother-kaola-workflow" >&2
     echo "" >&2
     echo "Then re-run install.sh." >&2

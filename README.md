@@ -143,6 +143,7 @@ until the plugin is removed:
 ```bash
 claude plugin uninstall kaola-workflow@kaolabrother-kaola-workflow
 claude plugin uninstall kaola-workflow-gitlab@kaolabrother-kaola-workflow  # if installed
+claude plugin uninstall kaola-workflow-gitea@kaolabrother-kaola-workflow  # if installed
 claude plugin marketplace remove kaolabrother-kaola-workflow
 ```
 

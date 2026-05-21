@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Gitea plugin uninstall guidance in Claude install conflict messaging** (issue #144): Updated `install.sh` conflict remediation block and `README.md` Claude Code installation section to include `claude plugin uninstall kaola-workflow-gitea@kaolabrother-kaola-workflow` command alongside existing GitHub and GitLab edition uninstall guidance. Users encountering plugin conflicts now have clear instructions for all three forge editions.
+
 ## [3.12.0] — 2026-05-21
 
 ### Added
