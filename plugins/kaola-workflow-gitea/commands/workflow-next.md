@@ -151,7 +151,7 @@ typed refusal (`target_occupied`, `user_target_blocked`, `user_target_red`,
 `target_mismatch`, `target_unavailable`), read the `reasoning` field and either
 stop, select a different issue, or escalate to the user. If startup is unavailable
 or malformed, stop for repair. On startup, also run `watch-pr` to archive PR
-folders for merged or closed MRs before selecting new work.
+folders for merged or closed PRs before selecting new work.
 If `KAOLA_PATH=fast` is set, startup records `workflow_path: fast`.
 
 ## Startup Step 1 - Git Freshness

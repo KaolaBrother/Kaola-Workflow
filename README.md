@@ -458,13 +458,13 @@ when developing locally. Drift between `scripts/` and
 
 | Script | What it does | When it runs |
 |--------|--------------|--------------|
-| `kaola-workflow-claim.js` | Active-folder coordination: claim, release/discard, status, watch-pr, bootstrap/startup, finalize, pick-next, resume, worktree-status, worktree-finalize, stale-worktree-check. Provisions a per-issue Git worktree when `KAOLA_WORKTREE_NATIVE=1`. | All phases |
+| `kaola-workflow-claim.js` (GitHub) / `kaola-gitlab-workflow-claim.js` (GitLab) / `kaola-gitea-workflow-claim.js` (Gitea) | Active-folder coordination: claim, release/discard, status, watch-pr (watch-mr on GitLab), bootstrap/startup, finalize, pick-next, resume, worktree-status, worktree-finalize, stale-worktree-check. Provisions a per-issue Git worktree when `KAOLA_WORKTREE_NATIVE=1`. | All phases |
 | `kaola-workflow-active-folders.js` | Shared library: reads the active-folder table from `kaola-workflow/{project}/workflow-state.md`. Imported by claim, classifier, and sink scripts. | Library |
 | `kaola-workflow-classifier.js` | Parallel-work classifier: marks each open issue green/yellow/red/blocked based on dependency graph, exact file-path overlaps, shared-infra directories, and active folders. | Startup |
 | `kaola-workflow-roadmap.js` | Regenerates `kaola-workflow/ROADMAP.md` from `kaola-workflow/.roadmap/issue-{N}.md`. Subcommands: `generate`, `migrate`, `validate`, `validate-remote`, `init-issue`, `project-name`. | Phase 1, Phase 6 |
 | `kaola-workflow-repair-state.js` | Reconstructs `workflow-state.md` from existing phase artifacts when state is missing or stale, so a resumed session has a single safe next command. | Init / Resume |
-| `kaola-workflow-sink-merge.js` | Phase 6 merge sink: fetch, rebase onto `origin/main`, FF-only merge with retry on race conditions, push, close the issue, and clean up the branch. Falls back to the PR sink when the merge is impossible. | Phase 6 |
-| `kaola-workflow-sink-pr.js` | Phase 6 PR sink: push the branch, open a GitHub PR via `gh pr create`, record the PR URL, and optionally enable auto-merge. | Phase 6 |
+| `kaola-workflow-sink-merge.js` (GitHub) / `kaola-gitlab-workflow-sink-merge.js` (GitLab) / `kaola-gitea-workflow-sink-merge.js` (Gitea) | Phase 6 merge sink: fetch, rebase onto `origin/main`, FF-only merge with retry on race conditions, push, close the issue, and clean up the branch. Falls back to the PR sink when the merge is impossible. | Phase 6 |
+| `kaola-workflow-sink-pr.js` (GitHub) / `kaola-gitlab-workflow-sink-mr.js` (GitLab) / `kaola-gitea-workflow-sink-pr.js` (Gitea) | Phase 6 PR/MR sink: push the branch, open a PR via `gh pr create` (GitHub), `glab mr create` (GitLab), or `tea pr create` (Gitea), record the PR/MR URL, and optionally enable auto-merge. | Phase 6 |
 | `kaola-workflow-compact-context.js` | Wired to the `SessionStart` (`compact`) hook. Reads the most recent `workflow-state.md` and injects a resume hint into the post-`/compact` session. | Hook |
 
 ### Validation and test scripts
@@ -479,7 +479,7 @@ when developing locally. Drift between `scripts/` and
 
 ### Active folder coordination
 
-Kaola-Workflow treats `kaola-workflow/{project}/workflow-state.md` plus GitHub issue/PR state as the durable coordination contract. No lease/session layer remains.
+Kaola-Workflow treats `kaola-workflow/{project}/workflow-state.md` plus the configured forge's issue and PR/MR state as the durable coordination contract. No lease/session layer remains.
 
 The detailed durable-state map lives in `docs/workflow-state-contract.md`. Keep generated root-memory files to compact invariants: `ROADMAP.md` is generated from `kaola-workflow/.roadmap/issue-*.md`, `.roadmap/` is not purged wholesale, active work stays under `kaola-workflow/{project}/` until archive or discard, and active artifacts include `workflow-state.md`, phase files, optional `fast-summary.md`, and `.cache/` evidence.
 
@@ -499,9 +499,9 @@ The detailed durable-state map lives in `docs/workflow-state-contract.md`. Keep 
 |------------|-------|-------------|
 | `startup` / `bootstrap` | `node scripts/kaola-workflow-claim.js startup --target-issue <N> [--runtime claude|codex] [--sink merge|pr]` | Validates and atomically creates or reuses the active folder for issue N |
 | `status` | `node scripts/kaola-workflow-claim.js status` | Lists active folders and their issue, branch, phase, sink, and worktree metadata |
-| `release` / `discard` | `node scripts/kaola-workflow-claim.js release --project <name>` | Archives an active folder as abandoned and clears advisory GitHub labels when online |
+| `release` / `discard` | `node scripts/kaola-workflow-claim.js release --project <name>` | Archives an active folder as abandoned and clears advisory forge labels when online |
 | `finalize` | `node scripts/kaola-workflow-claim.js finalize --project <name> [--keep-worktree]` | Marks the folder closed and moves it to `kaola-workflow/archive/`; by default removes the linked worktree, while `--keep-worktree` preserves it for the final commit gate |
-| `watch-pr` | `node scripts/kaola-workflow-claim.js watch-pr` | Archives PR-backed folders when GitHub reports MERGED or CLOSED |
+| `watch-pr` | `node scripts/kaola-workflow-claim.js watch-pr` | Archives PR-backed folders when the forge reports MERGED or CLOSED. GitLab edition uses `watch-mr` (`kaola-gitlab-workflow-claim.js watch-mr`) instead. |
 | `stale-worktree-check` | `node scripts/kaola-workflow-claim.js stale-worktree-check` | Detects and reports worktrees and branches for closed or archived issues that are not currently active |
 | `worktree-status` / `worktree-finalize` | see `--help` usage errors | Lists workflow worktrees and mirrors final artifacts into the linked worktree |
 
@@ -556,7 +556,7 @@ Any issue with a label matching `priority_top_tier_labels` will be sorted as tie
 Issue selection is an agent decision, not a hidden script decision. Agents must:
 
 1. Inspect the local roadmap (`kaola-workflow/ROADMAP.md`)
-2. Fetch open GitHub issues
+2. Fetch open forge issues
 3. Classify candidates as green/yellow/red/blocked (using parallel-work guidance if multi-session)
 4. Select the best match based on priority, dependencies, and phase completion
 5. Pass the chosen issue number via `KAOLA_TARGET_ISSUE=N` before calling `/workflow-next`
@@ -580,7 +580,7 @@ Then call `/workflow-next` with `KAOLA_TARGET_ISSUE` set. Startup will return `v
 
 The sink mode is set at claim time and determines how Phase 6 delivers the completed work. Two paths are available:
 
-**Intent detection** (recommended): If the user's initial prompt contains PR intent keywords ("open a PR", "create a PR", "pull request", "sink=pr", "KAOLA_SINK=pr", "PR sink"), the agent exports `KAOLA_SINK=pr` before the startup call. Startup Step 0 passes `--sink pr` to `claim`, which writes `sink: pr` to the `## Sink` block of `workflow-state.md`. Phase 6 dispatches to `kaola-workflow-sink-pr.js`.
+**Intent detection** (recommended): If the user's initial prompt contains PR intent keywords ("open a PR", "create a PR", "pull request", "sink=pr", "KAOLA_SINK=pr", "PR sink"), the agent exports `KAOLA_SINK=pr` before the startup call. Startup Step 0 passes `--sink pr` to `claim`, which writes `sink: pr` to the `## Sink` block of `workflow-state.md`. Phase 6 dispatches to `kaola-workflow-sink-pr.js` (GitHub), `kaola-gitlab-workflow-sink-mr.js` (GitLab), or `kaola-gitea-workflow-sink-pr.js` (Gitea).
 
 **Auto-fallback**: When `sink: merge` is configured and the push to main fails with a merge-impossible error (branch protection, non-fast-forward, or permission denied), Phase 6 automatically pivots to PR creation. `sink-merge.js` writes a `.cache/sink-fallback.json` receipt and exits 3. Phase 6 calls `claim.js sink-fallback` to update the Sink block (`sink: pr`, `sink_fallback_reason: <reason>`), then dispatches to `kaola-workflow-sink-pr.js`.
 
@@ -595,11 +595,11 @@ The sink mode is set at claim time and determines how Phase 6 delivers the compl
 - `false` (default): open PR and watch for manual merge; `watch-pr` detects MERGED/CLOSED and archives the active folder automatically
 - `true`: open PR and also call `gh pr merge --auto --squash --delete-branch` (requires branch protection rules to be enabled on the repo; failure is non-fatal)
 
-**`watch-pr` subcommand** (`kaola-workflow-claim.js watch-pr`):
+**`watch-pr` subcommand** (`kaola-workflow-claim.js watch-pr`) (GitHub: `kaola-workflow-claim.js`; GitLab: `kaola-gitlab-workflow-claim.js watch-mr`; Gitea: `kaola-gitea-workflow-claim.js`):
 
 Called automatically at `/workflow-next` startup. Scans active folders with `sink: pr` and `pr_url`. For each:
-- `MERGED`: archives the folder as closed and clears advisory GitHub labels
-- `CLOSED` (no merge): archives the folder as abandoned and clears advisory GitHub labels
+- `MERGED`: archives the folder as closed and clears advisory forge labels
+- `CLOSED` (no merge): archives the folder as abandoned and clears advisory forge labels
 - `OPEN`: leaves the folder active
 
 The sink-merge script automates the final merge sequence after Phase 6's
@@ -608,9 +608,9 @@ retry on race conditions, push, close the issue, and clean up the branch.
 When offline, the PR sink writes a placeholder receipt so the workflow can
 resume online later.
 
-## GitHub roadmap cycle
+## Roadmap cycle
 
-Use a separate research or roadmap session to discover future work and create or refine GitHub issues. `/workflow-next` is the implementation cycle: it fetches open GitHub issues, mirrors active unfinished work into `kaola-workflow/ROADMAP.md`, advances one selected item, then comments on or closes linked issues after validation.
+Use a separate research or roadmap session to discover future work and create or refine forge issues. `/workflow-next` is the implementation cycle: it fetches open forge issues, mirrors active unfinished work into `kaola-workflow/ROADMAP.md`, advances one selected item, then comments on or closes linked issues after validation.
 
 The local roadmap is a working mirror, not the source of truth. Keep only active unfinished work there; completed workflow folders move to `kaola-workflow/archive/`.
 
@@ -701,7 +701,7 @@ do not hand-merge entries into `~/.claude/settings.json`.
 
 ## Parallel active work
 
-Multiple Kaola-Workflow runs can coexist when each targets a distinct active folder. The source of truth is `kaola-workflow/{project}/workflow-state.md`, with GitHub issue state used to reject closed issues and PR state used by `watch-pr`.
+Multiple Kaola-Workflow runs can coexist when each targets a distinct active folder. The source of truth is `kaola-workflow/{project}/workflow-state.md`, with the configured forge's issue state used to reject closed issues and PR/MR state used by `watch-pr` (or `watch-mr` on GitLab).
 
 - Startup requires an explicit `--target-issue N`; the agent chooses the issue and scripts validate it.
 - Claiming uses atomic folder creation, so two agents cannot create the same `kaola-workflow/{project}/` folder.
