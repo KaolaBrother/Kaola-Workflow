@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **GitLab and Gitea `stale-worktree-check` parity** (issue #148): Added `stale-worktree-check` subcommand to both `plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js` and `plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js`. Both versions detect stale worktrees and branches using forge-specific branch prefixes (`workflow/gitlab-issue-*` / `workflow/gitea-issue-*`). Includes 6 test cases per edition in `test-gitlab-workflow-scripts.js` and `test-gitea-workflow-scripts.js` covering clean worktrees, dirty worktrees, missing worktrees, branches without worktrees, active filtering, and offline mode. This brings GitLab and Gitea editions to parity with the GitHub `stale-worktree-check` from issue #138.
+
 ### Fixed
 
 - **GitLab and Gitea roadmap closure drift (follow-up to issue #136)** (issue #147): Added `regenerateRoadmap(root)` export to both `plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-roadmap.js` and `plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-roadmap.js`. Updated `archiveProjectDir()` in both forge claim scripts to delete `.roadmap/issue-N.md` and call `regenerateRoadmap()` whenever a project is archived as `closed` (finalize, watch-pr merged). This brings GitLab and Gitea editions to parity with the GitHub fix from issue #136. Updated tests in `test-gitlab-workflow-scripts.js` and `test-gitea-workflow-scripts.js` to cover roadmap cleanup on archive.

@@ -97,6 +97,37 @@ function runNodeAsync(args, cwd) {
   });
 }
 
+function runClaimOnline(args, cwd, binDir) {
+  const result = spawnSync(process.execPath, [claimScript, ...args], {
+    cwd, encoding: 'utf8', timeout: 60000,
+    env: {
+      ...process.env,
+      KAOLA_WORKFLOW_OFFLINE: '0',
+      PATH: binDir + path.delimiter + path.dirname(process.execPath) + path.delimiter + (process.env.PATH || '')
+    }
+  });
+  assert(!result.signal, 'online claim killed: ' + result.signal + '\n' + result.stderr);
+  assert.strictEqual(result.status, 0, result.stderr || result.stdout);
+  return JSON.parse(result.stdout.trim());
+}
+
+function writeTeaShimForStale(binDir) {
+  fs.mkdirSync(binDir, { recursive: true });
+  const shim = path.join(binDir, 'tea');
+  fs.writeFileSync(shim, [
+    '#!/usr/bin/env node',
+    "const a = process.argv.slice(2).join(' ');",
+    "if (a.includes('--version')) { process.stdout.write('tea version 0.9.2\\n'); process.exit(0); }",
+    "if (a.includes('issues view 100')) process.stdout.write('{\"state\":\"open\"}\\n');",
+    "else if (a.includes('issues view 200')) process.stdout.write('{\"state\":\"closed\"}\\n');",
+    "else if (a.includes('issues view 300')) process.stdout.write('{\"state\":\"open\"}\\n');",
+    "else if (a.includes('issues view 400')) process.stdout.write('{\"state\":\"closed\"}\\n');",
+    "else if (a.includes('repo view')) process.stdout.write('{\"id\":77}\\n');",
+    "else process.stdout.write('[]\\n');"
+  ].join('\n'));
+  fs.chmodSync(shim, 0o755);
+}
+
 function initGitRepo(root) {
   let result = spawnSync('git', ['init'], { cwd: root, encoding: 'utf8' });
   assert.strictEqual(result.status, 0, result.stderr);
@@ -959,6 +990,149 @@ assert.strictEqual(classifier.issueHasRemoteClaimNotes(35), false,
   }
 }
 
+function testStaleWorktreeCheck() {
+  function setupRepo() {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-stale-gt-')));
+    initGitRepo(tmp);
+    return tmp;
+  }
+
+  function addWorktree(repoRoot, branch, wtPath) {
+    const r = spawnSync('git', ['worktree', 'add', '-b', branch, '--', wtPath, 'HEAD'], { cwd: repoRoot, encoding: 'utf8' });
+    assert.strictEqual(r.status, 0, 'git worktree add failed: ' + r.stderr);
+  }
+
+  // Sub-case 1: closed worktree -> stale
+  {
+    const tmp = setupRepo();
+    const kwRoot = tmp + '.kw';
+    const binDir = path.join(tmp, 'bin');
+    writeTeaShimForStale(binDir);
+    const wtPath = path.join(kwRoot, 'issue-200');
+    addWorktree(tmp, 'workflow/gitea-issue-200', wtPath);
+    try {
+      const result = runClaimOnline(['stale-worktree-check'], tmp, binDir);
+      assert(result.stale_worktrees.some(x => x.issue_number === 200),
+        'expected issue 200 in stale_worktrees, got: ' + JSON.stringify(result));
+      assert(!result.stale_branches.some(x => x.issue_number === 200),
+        'issue 200 should not be in stale_branches');
+      assert(result.count >= 1, 'count should be >= 1');
+    } finally {
+      spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', wtPath], { encoding: 'utf8' });
+      fs.rmSync(tmp, { recursive: true, force: true });
+      fs.rmSync(kwRoot, { recursive: true, force: true });
+    }
+  }
+
+  // Sub-case 2: archived-open worktree -> stale
+  {
+    const tmp = setupRepo();
+    const kwRoot = tmp + '.kw';
+    const binDir = path.join(tmp, 'bin');
+    writeTeaShimForStale(binDir);
+    const wtPath = path.join(kwRoot, 'issue-300');
+    addWorktree(tmp, 'workflow/gitea-issue-300', wtPath);
+    fs.mkdirSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-300'), { recursive: true });
+    try {
+      const result = runClaimOnline(['stale-worktree-check'], tmp, binDir);
+      assert(result.stale_worktrees.some(x => x.issue_number === 300),
+        'expected issue 300 in stale_worktrees (archived), got: ' + JSON.stringify(result));
+    } finally {
+      spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', wtPath], { encoding: 'utf8' });
+      fs.rmSync(tmp, { recursive: true, force: true });
+      fs.rmSync(kwRoot, { recursive: true, force: true });
+    }
+  }
+
+  // Sub-case 3: open + active worktree -> not stale
+  {
+    const tmp = setupRepo();
+    const kwRoot = tmp + '.kw';
+    const binDir = path.join(tmp, 'bin');
+    writeTeaShimForStale(binDir);
+    const wtPath = path.join(kwRoot, 'issue-100');
+    addWorktree(tmp, 'workflow/gitea-issue-100', wtPath);
+    writeState(tmp, 'issue-100', 100);
+    try {
+      const result = runClaimOnline(['stale-worktree-check'], tmp, binDir);
+      assert(result.active_worktrees.some(x => x.issue_number === 100),
+        'expected issue 100 in active_worktrees, got: ' + JSON.stringify(result));
+      assert(!result.stale_worktrees.some(x => x.issue_number === 100),
+        'issue 100 should not be in stale_worktrees');
+    } finally {
+      spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', wtPath], { encoding: 'utf8' });
+      fs.rmSync(tmp, { recursive: true, force: true });
+      fs.rmSync(kwRoot, { recursive: true, force: true });
+    }
+  }
+
+  // Sub-case 4: deleted-dir worktree -> state:'missing'
+  // IMPORTANT: use fs.rmSync NOT git worktree remove -- registration must survive
+  {
+    const tmp = setupRepo();
+    const kwRoot = tmp + '.kw';
+    const binDir = path.join(tmp, 'bin');
+    writeTeaShimForStale(binDir);
+    const wtPath = path.join(kwRoot, 'issue-200');
+    addWorktree(tmp, 'workflow/gitea-issue-200', wtPath);
+    // Delete dir without removing git worktree metadata
+    fs.rmSync(wtPath, { recursive: true, force: true });
+    try {
+      const result = runClaimOnline(['stale-worktree-check'], tmp, binDir);
+      const entry = result.stale_worktrees.find(x => x.issue_number === 200);
+      assert(entry, 'expected issue 200 in stale_worktrees after dir deletion, got: ' + JSON.stringify(result));
+      assert.strictEqual(entry.state, 'missing', 'expected state:missing, got: ' + entry.state);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      fs.rmSync(kwRoot, { recursive: true, force: true });
+    }
+  }
+
+  // Sub-case 5: loose branch (no worktree) -> stale_branches
+  {
+    const tmp = setupRepo();
+    const kwRoot = tmp + '.kw';
+    const binDir = path.join(tmp, 'bin');
+    writeTeaShimForStale(binDir);
+    spawnSync('git', ['branch', 'workflow/gitea-issue-400'], { cwd: tmp, encoding: 'utf8' });
+    try {
+      const result = runClaimOnline(['stale-worktree-check'], tmp, binDir);
+      assert(result.stale_branches.some(x => x.issue_number === 400),
+        'expected issue 400 in stale_branches, got: ' + JSON.stringify(result));
+      assert(!result.stale_worktrees.some(x => x.issue_number === 400),
+        'issue 400 should not be in stale_worktrees');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      fs.rmSync(kwRoot, { recursive: true, force: true });
+    }
+  }
+
+  // Sub-case 6: OFFLINE + archived worktree -> stale (archive-only path, no API call)
+  {
+    const tmp = setupRepo();
+    const kwRoot = tmp + '.kw';
+    const wtPath = path.join(kwRoot, 'issue-300');
+    addWorktree(tmp, 'workflow/gitea-issue-300', wtPath);
+    fs.mkdirSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-300'), { recursive: true });
+    try {
+      const result = spawnSync(process.execPath, [claimScript, 'stale-worktree-check'], {
+        cwd: tmp, encoding: 'utf8', timeout: 30000,
+        env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }
+      });
+      assert.strictEqual(result.status, 0, result.stderr || result.stdout);
+      const out = JSON.parse(result.stdout.trim());
+      assert(out.stale_worktrees.some(x => x.issue_number === 300),
+        'expected issue 300 stale in OFFLINE+archive mode, got: ' + JSON.stringify(out));
+    } finally {
+      spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', wtPath], { encoding: 'utf8' });
+      fs.rmSync(tmp, { recursive: true, force: true });
+      fs.rmSync(kwRoot, { recursive: true, force: true });
+    }
+  }
+
+  console.log('testStaleWorktreeCheck: PASSED');
+}
+
 const giteaPluginRoot = path.resolve(__dirname, '..');
 const installProfilesScript = path.join(giteaPluginRoot, 'scripts', 'install-codex-agent-profiles.js');
 
@@ -1014,6 +1188,7 @@ function testInstallProfilesFeaturesTableHandling() {
 }
 
 testInstallProfilesFeaturesTableHandling();
+testStaleWorktreeCheck();
 
 testGiteaRoadmapInitIssueExclusiveAndUpdate()
   .then(() => {

@@ -207,6 +207,20 @@ Detects Git worktrees and branches for issues that are no longer active. A workt
 node scripts/kaola-workflow-claim.js stale-worktree-check
 ```
 
+**GitLab edition:**
+
+```bash
+node plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js stale-worktree-check
+```
+
+**Gitea edition:**
+
+```bash
+node plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js stale-worktree-check
+```
+
+The JSON return shape is identical across all three forges. GL/GT editions match branches on their forge-specific prefix (`workflow/gitlab-issue-*` / `workflow/gitea-issue-*`) instead of the GitHub `workflow/issue-*` prefix.
+
 **Output schema (JSON):**
 
 ```json

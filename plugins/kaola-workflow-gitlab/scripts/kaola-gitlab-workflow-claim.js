@@ -130,6 +130,22 @@ function removeWorktree(root, project, folder) {
   }
 }
 
+function extractIssueNumber(branch) {
+  const m = String(branch || '').match(/^workflow\/gitlab-issue-(\d+)$/);
+  return m ? Number(m[1]) : null;
+}
+
+function worktreeDirtyState(wtPath) {
+  try {
+    if (!fs.existsSync(wtPath)) return 'missing';
+    const out = execFileSync('git', ['-C', wtPath, 'status', '--porcelain'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    return out.trim().length > 0 ? 'dirty' : 'clean';
+  } catch (_) {
+    return 'missing';
+  }
+}
+
 function projectDir(root, project) {
   return path.join(root, 'kaola-workflow', project);
 }
@@ -530,6 +546,68 @@ function cmdWorktreeStatus() {
   output({ worktrees: listWorkflowWorktrees(getRoot()) });
 }
 
+function cmdStaleWorktreeCheck() {
+  const root = getRoot();
+  const activeFolders = readActiveFolders(root);
+  const activeSet = new Set(activeFolders.map(f => f.issue_number).filter(n => n != null));
+
+  const registeredWorktrees = listWorkflowWorktrees(root);
+  const staleWorktrees = [];
+  const activeWorktrees = [];
+  const branchesWithWorktree = new Set();
+
+  for (const wt of registeredWorktrees) {
+    // listWorkflowWorktrees returns branch as refs/heads/... — strip for regex matching
+    const shortBranch = String(wt.branch || '').replace(/^refs\/heads\//, '');
+    const issueNumber = extractIssueNumber(shortBranch);
+    if (issueNumber == null) continue;
+    branchesWithWorktree.add(shortBranch);
+
+    const projectName = 'issue-' + issueNumber;
+    const isArchived = fs.existsSync(path.join(root, 'kaola-workflow', 'archive', projectName));
+    const isClosed = OFFLINE ? false : issueIsClosed(issueNumber);
+    const inActiveSet = activeSet.has(issueNumber);
+
+    if ((isClosed || isArchived) && !inActiveSet) {
+      staleWorktrees.push({
+        path: wt.worktree,
+        branch: wt.branch,
+        head: wt.HEAD,
+        issue_number: issueNumber,
+        state: worktreeDirtyState(wt.worktree)
+      });
+    } else {
+      activeWorktrees.push({ path: wt.worktree, branch: wt.branch, issue_number: issueNumber });
+    }
+  }
+
+  let localBranches = [];
+  try {
+    const raw = execFileSync('git', ['-C', root, 'for-each-ref', '--format=%(refname:short)',
+      'refs/heads/workflow/gitlab-issue-*'], { encoding: 'utf8' }).trim();
+    localBranches = raw ? raw.split('\n') : [];
+  } catch (_) {}
+
+  const staleBranches = [];
+  for (const branch of localBranches) {
+    if (branchesWithWorktree.has(branch)) continue;
+    const issueNumber = extractIssueNumber(branch);
+    if (issueNumber == null) continue;
+
+    const projectName = 'issue-' + issueNumber;
+    const isArchived = fs.existsSync(path.join(root, 'kaola-workflow', 'archive', projectName));
+    const isClosed = OFFLINE ? false : issueIsClosed(issueNumber);
+    const inActiveSet = activeSet.has(issueNumber);
+
+    if ((isClosed || isArchived) && !inActiveSet) {
+      staleBranches.push({ branch, issue_number: issueNumber });
+    }
+  }
+
+  output({ stale_worktrees: staleWorktrees, stale_branches: staleBranches,
+    active_worktrees: activeWorktrees, count: staleWorktrees.length + staleBranches.length });
+}
+
 function mrIidFromFolder(folder) {
   const direct = parseInt(folder.mr_iid, 10);
   if (Number.isFinite(direct) && direct > 0) return direct;
@@ -614,7 +692,7 @@ function cmdSinkFallback() {
 
 function main() {
   const sub = process.argv[2];
-  assert(sub, 'usage: kaola-gitlab-workflow-claim.js <claim|release|status|patch-branch|bootstrap|startup|finalize|pick-next|resume|worktree-status|worktree-finalize|sink-fallback|watch-mr>');
+  assert(sub, 'usage: kaola-gitlab-workflow-claim.js <claim|release|status|patch-branch|bootstrap|startup|finalize|pick-next|resume|worktree-status|worktree-finalize|sink-fallback|watch-mr|stale-worktree-check>');
   if (sub === 'claim') return cmdClaim();
   if (sub === 'release' || sub === 'discard') return cmdRelease();
   if (sub === 'status') return cmdStatus();
@@ -627,6 +705,7 @@ function main() {
   if (sub === 'worktree-status') return cmdWorktreeStatus();
   if (sub === 'worktree-finalize') return cmdWorktreeFinalize();
   if (sub === 'sink-fallback') return cmdSinkFallback();
+  if (sub === 'stale-worktree-check') return cmdStaleWorktreeCheck();
   throw new Error('unknown subcommand: ' + sub);
 }
 
