@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.12.0] — 2026-05-21
+
 ### Added
 
 - **`stale-worktree-check` subcommand** (issue #138): `node scripts/kaola-workflow-claim.js stale-worktree-check` reports stale workflow worktrees and local `workflow/issue-*` branches. A worktree or branch is stale when its issue is closed (GitHub API) or its project folder is locally archived, and it is not in the active folder set. Reports per-worktree dirty/clean/missing state. When `KAOLA_WORKFLOW_OFFLINE=1`, GitHub API calls are skipped but archive-detected stale entries are still reported.
