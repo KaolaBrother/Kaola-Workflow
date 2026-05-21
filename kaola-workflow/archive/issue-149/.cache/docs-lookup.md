@@ -1,0 +1,1 @@
+docs-lookup: N/A - internal patterns sufficient. All behavior is determined by the existing module-level const pattern in the three claim scripts and the README documentation already present in the repo.
