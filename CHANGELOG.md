@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- **README release version table drift guard** (issue #145): Added drift-detection assertions in `scripts/validate-workflow-contracts.js` to verify that README.md "Release versioning" table version strings match `package.json` version for all three editions (GitHub, GitLab, Gitea). The validator now fails fast if version strings fall out of sync. Updated 3 stale version entries from `3.10.0` to `3.12.0` in the release versioning table.
+
 - **Gitea plugin uninstall guidance in Claude install conflict messaging** (issue #144): Updated `install.sh` conflict remediation block and `README.md` Claude Code installation section to include `claude plugin uninstall kaola-workflow-gitea@kaolabrother-kaola-workflow` command alongside existing GitHub and GitLab edition uninstall guidance. Users encountering plugin conflicts now have clear instructions for all three forge editions.
 
 ## [3.12.0] — 2026-05-21

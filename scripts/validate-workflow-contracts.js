@@ -228,6 +228,22 @@ const packageJson = JSON.parse(read('package.json'));
 assert(Array.isArray(packageJson.files) && packageJson.files.includes('hooks/'), 'package files must include hooks/');
 assert(Array.isArray(packageJson.files) && packageJson.files.includes('scripts/'), 'package files must include scripts/');
 
+const rootVersion = packageJson.version;
+for (const edition of ['GitHub', 'GitLab', 'Gitea']) {
+  assertIncludes(
+    'README.md',
+    'Claude Code command install, ' + edition + ' edition: `' + rootVersion + '`'
+  );
+}
+for (const forge of ['gitlab', 'gitea']) {
+  const manifest = JSON.parse(read('plugins/kaola-workflow-' + forge + '/.claude-plugin/plugin.json'));
+  assert(
+    manifest.version === rootVersion,
+    'plugins/kaola-workflow-' + forge + '/.claude-plugin/plugin.json version (' +
+      manifest.version + ') must match package.json version (' + rootVersion + ')'
+  );
+}
+
 assertIncludes('scripts/simulate-workflow-walkthrough.js', 'Workflow walkthrough simulation passed');
 
 console.log('Workflow contract validation passed');

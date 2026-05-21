@@ -375,9 +375,9 @@ performs the same review locally when no detached advisor profile is available.
 
 Current official release versions:
 
-- Claude Code command install, GitHub edition: `3.10.0`
-- Claude Code command install, GitLab edition: `3.10.0`
-- Claude Code command install, Gitea edition: `3.10.0`
+- Claude Code command install, GitHub edition: `3.12.0`
+- Claude Code command install, GitLab edition: `3.12.0`
+- Claude Code command install, Gitea edition: `3.12.0`
 - Codex `kaola-workflow` plugin manifest: `1.5.0`
 - Codex `kaola-workflow-gitlab` plugin manifest: `1.5.0`
 - Codex `kaola-workflow-gitea` plugin manifest: `1.5.0`
