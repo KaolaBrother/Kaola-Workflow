@@ -455,7 +455,7 @@ when developing locally. Drift between `scripts/` and
 
 | Script | What it does | When it runs |
 |--------|--------------|--------------|
-| `kaola-workflow-claim.js` | Active-folder coordination: claim, release/discard, status, watch-pr, bootstrap/startup, finalize, pick-next, resume, worktree-status, worktree-finalize. Provisions a per-issue Git worktree when `KAOLA_WORKTREE_NATIVE=1`. | All phases |
+| `kaola-workflow-claim.js` | Active-folder coordination: claim, release/discard, status, watch-pr, bootstrap/startup, finalize, pick-next, resume, worktree-status, worktree-finalize, stale-worktree-check. Provisions a per-issue Git worktree when `KAOLA_WORKTREE_NATIVE=1`. | All phases |
 | `kaola-workflow-active-folders.js` | Shared library: reads the active-folder table from `kaola-workflow/{project}/workflow-state.md`. Imported by claim, classifier, and sink scripts. | Library |
 | `kaola-workflow-classifier.js` | Parallel-work classifier: marks each open issue green/yellow/red/blocked based on dependency graph, exact file-path overlaps, shared-infra directories, and active folders. | Startup |
 | `kaola-workflow-roadmap.js` | Regenerates `kaola-workflow/ROADMAP.md` from `kaola-workflow/.roadmap/issue-{N}.md`. Subcommands: `generate`, `migrate`, `validate`, `validate-remote`, `init-issue`, `project-name`. | Phase 1, Phase 6 |
@@ -499,6 +499,7 @@ The detailed durable-state map lives in `docs/workflow-state-contract.md`. Keep 
 | `release` / `discard` | `node scripts/kaola-workflow-claim.js release --project <name>` | Archives an active folder as abandoned and clears advisory GitHub labels when online |
 | `finalize` | `node scripts/kaola-workflow-claim.js finalize --project <name> [--keep-worktree]` | Marks the folder closed and moves it to `kaola-workflow/archive/`; by default removes the linked worktree, while `--keep-worktree` preserves it for the final commit gate |
 | `watch-pr` | `node scripts/kaola-workflow-claim.js watch-pr` | Archives PR-backed folders when GitHub reports MERGED or CLOSED |
+| `stale-worktree-check` | `node scripts/kaola-workflow-claim.js stale-worktree-check` | Detects and reports worktrees and branches for closed or archived issues that are not currently active |
 | `worktree-status` / `worktree-finalize` | see `--help` usage errors | Lists workflow worktrees and mirrors final artifacts into the linked worktree |
 
 ### Classifier configuration

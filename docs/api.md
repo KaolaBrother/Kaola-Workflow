@@ -188,3 +188,83 @@ The following functions are exported from sink and claim modules for use by test
   - `0`: merge succeeded, branch pushed, issue closed, worktree cleaned
   - `2`: fast-forward race condition exhausted after MAX_AUTOMERGE_RETRIES attempts
   - `3`: merge-impossible error (branch protected, non-fast-forward, permission denied); auto-fallback to PR sink
+
+## Stale Worktree Detection
+
+### Script: `kaola-workflow-claim.js stale-worktree-check`
+
+Detects Git worktrees and branches for issues that are no longer active. A worktree or branch is considered "stale" when its linked issue is closed (as reported by GitHub/GitLab/Gitea API) OR its project folder is archived locally (exists in `kaola-workflow/archive/{project}`), AND the issue is not currently in the active folder set.
+
+**Invocation:**
+
+```bash
+node scripts/kaola-workflow-claim.js stale-worktree-check
+```
+
+**Output schema (JSON):**
+
+```json
+{
+  "stale_worktrees": [
+    {
+      "path": "/path/to/worktree",
+      "branch": "workflow/issue-42",
+      "head": "abc123def456",
+      "issue_number": 42,
+      "state": "clean|dirty|missing"
+    }
+  ],
+  "stale_branches": [
+    {
+      "branch": "workflow/issue-43",
+      "issue_number": 43
+    }
+  ],
+  "active_worktrees": [
+    {
+      "path": "/path/to/active/worktree",
+      "branch": "workflow/issue-44",
+      "issue_number": 44
+    }
+  ],
+  "count": 2
+}
+```
+
+**Output fields:**
+
+- **`stale_worktrees`** — Registered Git worktrees (from `git worktree list --porcelain`) whose linked issue is closed or archived, and not in the active folder set.
+  - `path` — Filesystem path to the worktree
+  - `branch` — Branch name (e.g., `workflow/issue-42`)
+  - `head` — Current HEAD commit hash from worktree metadata
+  - `issue_number` — Issue number extracted from branch name (via regex `workflow/issue-(\d+)`)
+  - `state` — Worktree filesystem state: `clean` (no modifications), `dirty` (uncommitted changes), or `missing` (registered but directory deleted)
+
+- **`stale_branches`** — Local Git branches named `workflow/issue-*` (detected via `git for-each-ref refs/heads/workflow/`) that have no corresponding registered worktree AND whose linked issue is closed or archived, and not in the active folder set.
+  - `branch` — Branch name
+  - `issue_number` — Issue number extracted from branch name
+
+- **`active_worktrees`** — Registered worktrees whose linked issue is still open and active (appears in the active folder set).
+  - `path`, `branch`, `issue_number` — Same as stale worktrees
+
+- **`count`** — Total number of stale items (sum of `stale_worktrees.length + stale_branches.length`)
+
+**Stale detection logic:**
+
+For each worktree or branch:
+
+1. Extract the issue number from the branch name using regex `workflow/issue-(\d+)`.
+2. Check if the issue is active (in the set of active folder issue numbers from `workflow-state.md`).
+3. If active: skip (not stale).
+4. Otherwise, check if the issue is closed OR archived:
+   - **Closed**: Call GitHub/GitLab/Gitea API to check issue state (skipped when `KAOLA_WORKFLOW_OFFLINE=1`).
+   - **Archived**: Check if `kaola-workflow/archive/issue-<N>` exists locally.
+5. If either condition is true, mark the worktree/branch as stale.
+
+**Offline mode** (`KAOLA_WORKFLOW_OFFLINE=1`):
+
+When offline, GitHub/GitLab/Gitea API calls are skipped. Stale detection uses only the archive-existence check. Worktrees/branches for archived issues are still reported as stale, but worktrees/branches for closed (but not archived) issues are not reported.
+
+**Exit code:**
+
+- `0` — Execution succeeded; JSON output written to stdout

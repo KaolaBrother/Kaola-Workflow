@@ -194,6 +194,11 @@ assertConcept('scripts/simulate-workflow-walkthrough.js', 'startup and cleanup h
   'testClassifierCurrentClaimMarkerBlocks',
   'finalize should remove legacy lease blocks before archive'
 ]);
+assertConcept('scripts/simulate-workflow-walkthrough.js', 'stale worktree validation', [
+  'testStaleWorktreeCheck',
+  'stale_worktrees',
+  'stale_branches'
+]);
 assertIncludes('README.md', 'Active folder coordination');
 assertIncludes('README.md', 'Parallel active work');
 assertIncludes('README.md', 'No lease/session layer remains.');

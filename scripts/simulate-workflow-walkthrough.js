@@ -924,6 +924,172 @@ function testStatusShowsClosedIssueDrift() {
   }
 }
 
+function testStaleWorktreeCheck() {
+  // Helper: write gh shim that handles all issue numbers used across sub-cases
+  function writeGhShimForStale(binDir) {
+    fs.mkdirSync(binDir, { recursive: true });
+    const ghShim = path.join(binDir, 'gh');
+    fs.writeFileSync(ghShim, [
+      '#!/usr/bin/env node',
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issue view 100')) { process.stdout.write('{\"state\":\"open\"}\\n'); }",
+      "else if (a.includes('issue view 200')) { process.stdout.write('{\"state\":\"closed\"}\\n'); }",
+      "else if (a.includes('issue view 300')) { process.stdout.write('{\"state\":\"open\"}\\n'); }",
+      "else if (a.includes('issue view 400')) { process.stdout.write('{\"state\":\"closed\"}\\n'); }",
+      "else if (a.includes('issue view 500')) { process.stdout.write('{\"state\":\"open\"}\\n'); }",
+      "else if (a.includes('repo view')) { process.stdout.write('{\"owner\":{\"login\":\"test\"},\"name\":\"repo\"}\\n'); }",
+      "else { process.stdout.write('[\\n'); }"
+    ].join('\n'));
+    fs.chmodSync(ghShim, 0o755);
+  }
+
+  // Sub-case 1: closed worktree → stale_worktrees
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-stale-wt-sc1-')));
+    const kwRoot = tmp + '.kw';
+    const binDir = path.join(tmp, 'bin');
+    try {
+      initGitRepo(tmp);
+      writeGhShimForStale(binDir);
+      // Create branch and linked worktree for issue 200 (closed)
+      const wtPath = path.join(kwRoot, 'issue-200');
+      fs.mkdirSync(kwRoot, { recursive: true });
+      spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-200', '--', wtPath, 'HEAD'], {
+        cwd: tmp, encoding: 'utf8'
+      });
+      const result = runClaimOnline(['stale-worktree-check'], tmp, binDir);
+      const entry = result.stale_worktrees.find(x => x.issue_number === 200);
+      assert(entry != null, 'sc1: issue 200 must appear in stale_worktrees, got: ' + JSON.stringify(result.stale_worktrees));
+      assert(result.stale_branches.find(x => x.issue_number === 200) == null, 'sc1: issue 200 must NOT appear in stale_branches when it has a registered worktree, got: ' + JSON.stringify(result.stale_branches));
+      assert(result.count >= 1, 'sc1: count must be >= 1, got: ' + result.count);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  // Sub-case 2: archived-open worktree → stale_worktrees (isArchived=true even though issue open)
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-stale-wt-sc2-')));
+    const kwRoot = tmp + '.kw';
+    const binDir = path.join(tmp, 'bin');
+    try {
+      initGitRepo(tmp);
+      writeGhShimForStale(binDir);
+      // Create branch and linked worktree for issue 300 (open, but archived)
+      const wtPath = path.join(kwRoot, 'issue-300');
+      fs.mkdirSync(kwRoot, { recursive: true });
+      spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-300', '--', wtPath, 'HEAD'], {
+        cwd: tmp, encoding: 'utf8'
+      });
+      // Create archive directory to trigger isArchived=true
+      fs.mkdirSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-300'), { recursive: true });
+      const result = runClaimOnline(['stale-worktree-check'], tmp, binDir);
+      const entry = result.stale_worktrees.find(x => x.issue_number === 300);
+      assert(entry != null, 'sc2: issue 300 must appear in stale_worktrees (archived), got: ' + JSON.stringify(result.stale_worktrees));
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  // Sub-case 3: open worktree with active folder → active_worktrees, NOT stale
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-stale-wt-sc3-')));
+    const kwRoot = tmp + '.kw';
+    const binDir = path.join(tmp, 'bin');
+    try {
+      initGitRepo(tmp);
+      writeGhShimForStale(binDir);
+      // Create branch and linked worktree for issue 100 (open)
+      const wtPath = path.join(kwRoot, 'issue-100');
+      fs.mkdirSync(kwRoot, { recursive: true });
+      spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-100', '--', wtPath, 'HEAD'], {
+        cwd: tmp, encoding: 'utf8'
+      });
+      // Plant active folder so issue 100 appears in activeSet
+      plantActiveFolder(tmp, 'issue-100', 100, null);
+      const result = runClaimOnline(['stale-worktree-check'], tmp, binDir);
+      const inActive = result.active_worktrees.find(x => x.issue_number === 100);
+      const inStale = result.stale_worktrees.find(x => x.issue_number === 100);
+      assert(inActive != null, 'sc3: issue 100 must appear in active_worktrees, got: ' + JSON.stringify(result.active_worktrees));
+      assert(inStale == null, 'sc3: issue 100 must NOT appear in stale_worktrees, got: ' + JSON.stringify(result.stale_worktrees));
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  // Sub-case 4: worktree path deleted (not via git) → state: 'missing'
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-stale-wt-sc4-')));
+    const kwRoot = tmp + '.kw';
+    const binDir = path.join(tmp, 'bin');
+    try {
+      initGitRepo(tmp);
+      writeGhShimForStale(binDir);
+      // Register worktree for issue 200 (closed), then delete the directory without git
+      const wtPath = path.join(kwRoot, 'issue-200');
+      fs.mkdirSync(kwRoot, { recursive: true });
+      spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-200', '--', wtPath, 'HEAD'], {
+        cwd: tmp, encoding: 'utf8'
+      });
+      // Delete directory without using git worktree remove — git metadata survives
+      fs.rmSync(wtPath, { recursive: true, force: true });
+      const result = runClaimOnline(['stale-worktree-check'], tmp, binDir);
+      const entry = result.stale_worktrees.find(x => x.issue_number === 200);
+      assert(entry != null, 'sc4: issue 200 must appear in stale_worktrees after dir deletion, got: ' + JSON.stringify(result.stale_worktrees));
+      assert(entry.state === 'missing', 'sc4: state must be "missing" when worktree dir deleted, got: ' + entry.state);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  // Sub-case 5: loose branch (no registered worktree) for closed issue → stale_branches
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-stale-wt-sc5-')));
+    const binDir = path.join(tmp, 'bin');
+    try {
+      initGitRepo(tmp);
+      writeGhShimForStale(binDir);
+      // Create local branch for issue 400 (closed) without adding a worktree
+      spawnSync('git', ['branch', 'workflow/issue-400'], { cwd: tmp, encoding: 'utf8' });
+      const result = runClaimOnline(['stale-worktree-check'], tmp, binDir);
+      const entry = result.stale_branches.find(x => x.issue_number === 400);
+      assert(entry != null, 'sc5: issue 400 must appear in stale_branches, got: ' + JSON.stringify(result.stale_branches));
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+
+  // Sub-case 6: OFFLINE=1 + archived worktree → still reported in stale_worktrees
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-stale-wt-sc6-')));
+    const kwRoot = tmp + '.kw';
+    try {
+      initGitRepo(tmp);
+      // Register worktree for issue 500
+      const wtPath = path.join(kwRoot, 'issue-500');
+      fs.mkdirSync(kwRoot, { recursive: true });
+      spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-500', '--', wtPath, 'HEAD'], {
+        cwd: tmp, encoding: 'utf8'
+      });
+      // Create archive directory to trigger isArchived=true
+      fs.mkdirSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-500'), { recursive: true });
+      // Use runNode which sets KAOLA_WORKFLOW_OFFLINE=1; no gh shim needed
+      const result = json(runNode(claimScript, ['stale-worktree-check'], tmp));
+      const entry = result.stale_worktrees.find(x => x.issue_number === 500);
+      assert(entry != null, 'sc6: issue 500 must appear in stale_worktrees when OFFLINE+archived, got: ' + JSON.stringify(result.stale_worktrees));
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  console.log('testStaleWorktreeCheck: PASSED');
+}
+
 async function testSinkPrLeavesCleanWorktree() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-pr-clean-'));
   try {
@@ -1561,6 +1727,7 @@ async function main() {
     testReleaseFromLinkedWorktreeCleansMainCopy();
     testSinkMergeFromLinkedWorktree();
     testStatusShowsClosedIssueDrift();
+    testStaleWorktreeCheck();
     testNoTargetZeroActive();
     testNoTargetOneActive();
     testNoTargetMultipleActive();

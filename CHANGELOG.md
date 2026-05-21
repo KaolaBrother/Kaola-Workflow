@@ -4,6 +4,8 @@
 
 ### Added
 
+- **`stale-worktree-check` subcommand** (issue #138): `node scripts/kaola-workflow-claim.js stale-worktree-check` reports stale workflow worktrees and local `workflow/issue-*` branches. A worktree or branch is stale when its issue is closed (GitHub API) or its project folder is locally archived, and it is not in the active folder set. Reports per-worktree dirty/clean/missing state. When `KAOLA_WORKFLOW_OFFLINE=1`, GitHub API calls are skipped but archive-detected stale entries are still reported.
+
 - **Unpushed-commits guard for merge sink** (issue #137): `kaola-workflow-sink-merge.js` (GitHub, GitLab, Gitea editions) now blocks the merge sink when the feature branch has unpushed commits ahead of its upstream tracking ref. Reports branch name, upstream ref, ahead count, and up to 5 representative commit titles. Also blocks when no upstream tracking ref is set, with a `git push -u origin <branch>` remediation hint. Skipped when `KAOLA_WORKFLOW_OFFLINE=1`.
 
 - **Claude Code subagent status line auto-install** (issue #141): `install.sh` now installs `kaola-workflow-subagent-statusline.js` and auto-merges a managed `subagentStatusLine` into `~/.claude/settings.json`, so the Claude Code agent panel can show each Kaola subagent with status, expected model family, and token count. Existing user-owned `subagentStatusLine` settings are preserved.
