@@ -8,7 +8,7 @@
 
 - **Unpushed-commits guard for merge sink** (issue #137): `kaola-workflow-sink-merge.js` (GitHub, GitLab, Gitea editions) now blocks the merge sink when the feature branch has unpushed commits ahead of its upstream tracking ref. Reports branch name, upstream ref, ahead count, and up to 5 representative commit titles. Also blocks when no upstream tracking ref is set, with a `git push -u origin <branch>` remediation hint. Skipped when `KAOLA_WORKFLOW_OFFLINE=1`.
 
-- **Claude Code subagent status line auto-install** (issue #141): `install.sh` now installs `kaola-workflow-subagent-statusline.js` and auto-merges a managed `subagentStatusLine` into `~/.claude/settings.json`, so the Claude Code agent panel can show each Kaola subagent with status, expected model family, and token count. Existing user-owned `subagentStatusLine` settings are preserved.
+- **Claude Code subagent model badge dispatch** (issue #141): slash commands now resolve each installed Kaola agent's frontmatter model with `kaola-workflow-resolve-agent-model.js` and pass it explicitly as `model=` on `Agent(...)` calls, so Claude Code can show the built-in model badge for spawned subagents. The earlier managed `subagentStatusLine` path was removed because it targeted the wrong UI surface; installers clean up legacy managed status-line settings while preserving user-owned ones.
 
 - **`validate-remote` subcommand for roadmap script** (issue #136): `node scripts/kaola-workflow-roadmap.js validate-remote` checks each `.roadmap/issue-N.md` with `status: open` against GitHub and reports any that are already closed. Exits 1 on drift; prints `skipped: offline` when `KAOLA_WORKFLOW_OFFLINE=1`.
 

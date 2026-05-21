@@ -67,6 +67,9 @@ const phaseCommands = [
 for (const file of phaseCommands) {
   assert(exists(file), file + ' is missing');
   assertIncludes(file, 'workflow-state.md');
+  assertIncludes(file, 'Agent Model Badge Contract');
+  assertIncludes(file, 'kaola-workflow-resolve-agent-model.js');
+  assertIncludes(file, 'model="{');
   for (const token of retired) assertNotIncludes(file, token);
 }
 
@@ -121,17 +124,16 @@ for (const file of [
 }
 
 assertIncludes('hooks/hooks.json', 'compact-context');
-assertIncludes('hooks/hooks.json', 'subagentStatusLine');
-assertIncludes('hooks/hooks.json', 'kaola-workflow-subagent-statusline.js');
+assertNotIncludes('hooks/hooks.json', 'subagentStatusLine');
+assertNotIncludes('hooks/hooks.json', 'kaola-workflow-subagent-statusline.js');
 assertNotIncludes('hooks/hooks.json', 'session-env');
 assertIncludes('hooks/kaola-workflow-pre-commit.sh', 'multiple kaola-workflow projects staged');
 assertIncludes('install.sh', 'kaola-workflow-active-folders.js');
-assertIncludes('install.sh', 'kaola-workflow-subagent-statusline.js');
-assertIncludes('install.sh', 'subagentStatusLine');
-assertIncludes('uninstall.sh', 'kaola-workflow-subagent-statusline.js');
+assertIncludes('install.sh', 'kaola-workflow-resolve-agent-model.js');
 assertIncludes('uninstall.sh', 'subagentStatusLine');
 assertNotIncludes('install.sh', 'kaola-workflow-session-env.js');
-assert(exists('scripts/kaola-workflow-subagent-statusline.js'), 'subagent status line helper is missing');
+assert(exists('scripts/kaola-workflow-resolve-agent-model.js'), 'agent model resolver is missing');
+assert(!exists('scripts/kaola-workflow-subagent-statusline.js'), 'subagent status line helper must not exist');
 
 assert(exists('docs/workflow-state-contract.md'), 'detailed workflow state contract doc is missing');
 assert(read('CLAUDE.md').split(/\r?\n/).length < 200, 'CLAUDE.md must stay below the 200-line target');

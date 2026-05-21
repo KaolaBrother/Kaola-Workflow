@@ -17,6 +17,22 @@ Complete a single-pass Plan+Execute+Review cycle for the named project and
 write a `PASSED` `fast-summary.md` that Phase 6 accepts as a full-workflow
 substitute. Stop if scope exceeds fast-path bounds.
 
+## Agent Model Badge Contract
+
+Before every Kaola subagent invocation, resolve the installed agent model and
+pass it explicitly to Claude Code's `Agent` tool. This is what makes Claude Code
+show the model badge on the subagent row/card.
+
+```bash
+kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./plugins/kaola-workflow-gitlab/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n" "./plugins/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
+KAOLA_AGENT_MODEL_JS="$(kaola_script kaola-workflow-resolve-agent-model.js)"
+kaola_agent_model(){ node "$KAOLA_AGENT_MODEL_JS" "$1" --raw 2>/dev/null || true; }
+```
+
+For each `Agent(...)` call below, set `AGENT_MODEL="$(kaola_agent_model
+AGENT_NAME)"` and include `model="{AGENT_MODEL}"` when non-empty. If the value
+is empty, omit `model=` so Claude Code inherits the orchestrator model.
+
 
 
 ## Resume Detection
@@ -74,9 +90,24 @@ implementation_owner: planner
 inline_emergency_fallback_authorized: no
 ```
 
-Invoke the Claude Code agent `planner` with the linked GitLab issue body
-and `phase1-research.md` / `phase2-ideation.md` excerpts if they exist
-(otherwise issue body alone). Ask for:
+Resolve the model, then invoke the Claude Code agent `planner` with the linked
+GitLab issue body and `phase1-research.md` / `phase2-ideation.md` excerpts if
+they exist (otherwise issue body alone):
+
+```bash
+PLANNER_MODEL="$(kaola_agent_model planner)"
+```
+
+```text
+Agent(
+  subagent_type="planner",
+  model="{PLANNER_MODEL}",
+  description="Fast plan {project}",
+  prompt="..."
+)
+```
+
+If `PLANNER_MODEL` is empty, omit the `model=` line. Ask for:
 
 - files to touch (must be ≤ 2 closely related files for fast path to apply)
 - exact change per file
@@ -111,8 +142,23 @@ implementation_owner: tdd-guide
 inline_emergency_fallback_authorized: no
 ```
 
-Invoke the Claude Code agent `tdd-guide` with the planner-produced plan
-and explicit constraints:
+Resolve the model, then invoke the Claude Code agent `tdd-guide` with the
+planner-produced plan and explicit constraints:
+
+```bash
+TDD_GUIDE_MODEL="$(kaola_agent_model tdd-guide)"
+```
+
+```text
+Agent(
+  subagent_type="tdd-guide",
+  model="{TDD_GUIDE_MODEL}",
+  description="Fast execute {project}",
+  prompt="..."
+)
+```
+
+If `TDD_GUIDE_MODEL` is empty, omit the `model=` line.
 
 - no new external package dependencies
 - no changes to public APIs, schemas, or shared infrastructure
@@ -150,8 +196,23 @@ implementation_owner: code-reviewer
 inline_emergency_fallback_authorized: no
 ```
 
-Invoke the Claude Code agent `code-reviewer` on the modified files from
-Step 2. Ask it to check:
+Resolve the model, then invoke the Claude Code agent `code-reviewer` on the
+modified files from Step 2:
+
+```bash
+CODE_REVIEWER_MODEL="$(kaola_agent_model code-reviewer)"
+```
+
+```text
+Agent(
+  subagent_type="code-reviewer",
+  model="{CODE_REVIEWER_MODEL}",
+  description="Fast review {project}",
+  prompt="..."
+)
+```
+
+If `CODE_REVIEWER_MODEL` is empty, omit the `model=` line. Ask it to check:
 
 - all acceptance check commands pass
 - no new CRITICAL or HIGH security concerns

@@ -25,6 +25,22 @@ kaola-workflow/{project}/.cache/code-explorer.md
 kaola-workflow/{project}/.cache/docs-lookup.md
 ```
 
+## Agent Model Badge Contract
+
+Before every Kaola subagent invocation, resolve the installed agent model and
+pass it explicitly to Claude Code's `Agent` tool. This is what makes Claude Code
+show the model badge on the subagent row/card.
+
+```bash
+kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./plugins/kaola-workflow-gitea/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitea/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitea/scripts/$_n" "./plugins/kaola-workflow-gitea/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
+KAOLA_AGENT_MODEL_JS="$(kaola_script kaola-workflow-resolve-agent-model.js)"
+kaola_agent_model(){ node "$KAOLA_AGENT_MODEL_JS" "$1" --raw 2>/dev/null || true; }
+```
+
+For each `Agent(...)` call below, set `AGENT_MODEL="$(kaola_agent_model
+AGENT_NAME)"` and include `model="{AGENT_MODEL}"` when non-empty. If the value
+is empty, omit `model=` so Claude Code inherits the orchestrator model.
+
 
 
 ## Resume Detection
@@ -73,7 +89,23 @@ fix_owner: planner for missing strategy analysis
 inline_emergency_fallback_authorized: no
 ```
 
-Invoke the Claude Code agent `planner` with relevant Phase 1 excerpts only. Ask for:
+Resolve the model, then invoke the Claude Code agent `planner` with relevant
+Phase 1 excerpts only:
+
+```bash
+PLANNER_MODEL="$(kaola_agent_model planner)"
+```
+
+```text
+Agent(
+  subagent_type="planner",
+  model="{PLANNER_MODEL}",
+  description="Ideate {project}",
+  prompt="..."
+)
+```
+
+If `PLANNER_MODEL` is empty, omit the `model=` line. Ask for:
 
 - 2-3 implementation approaches
 - pros, cons, risks, complexity

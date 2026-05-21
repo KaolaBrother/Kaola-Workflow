@@ -115,7 +115,8 @@ if [[ "$FORGE" = "gitea" || "$FORGE" = "all" ]]; then
   remove_dir "$HOME/.claude/kaola-workflow-gitea"
 fi
 
-# Strip Kaola-Workflow-managed hook and subagent status line entries from
+# Strip Kaola-Workflow-managed hook entries and the legacy managed subagent
+# status line entry from
 # ~/.claude/settings.json. Uses the same identification rules as install.sh
 # (id prefix "kaola-workflow:" or command path containing "kaola-workflow") so
 # we only touch entries we own.

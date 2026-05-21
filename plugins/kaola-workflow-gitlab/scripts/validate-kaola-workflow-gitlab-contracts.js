@@ -109,8 +109,8 @@ const agentFiles = listFiles(pluginRoot + '/agents', file => file.endsWith('.tom
 assert(commandFiles.length === 9, 'expected 9 GitLab command files');
 assert(skillFiles.length === 9, 'expected 9 GitLab skill files');
 assert(exists(pluginRoot + '/hooks/hooks.json'), 'GitLab hooks.json missing');
-assertIncludes(pluginRoot + '/hooks/hooks.json', 'subagentStatusLine');
-assertIncludes(pluginRoot + '/hooks/hooks.json', 'kaola-workflow-subagent-statusline.js');
+assertNotIncludes(pluginRoot + '/hooks/hooks.json', 'subagentStatusLine');
+assertNotIncludes(pluginRoot + '/hooks/hooks.json', 'kaola-workflow-subagent-statusline.js');
 assert(hookFiles.some(file => file.endsWith('kaola-workflow-pre-commit.sh')), 'GitLab pre-commit hook missing');
 assert(hookFiles.some(file => file.endsWith('kaola-workflow-phantom-advisor.sh')), 'GitLab advisor hook missing');
 assert(agentFiles.length === 9, 'expected 9 GitLab agent profiles');
@@ -118,6 +118,12 @@ assert(exists(pluginRoot + '/config/agents.toml'), 'GitLab agents config missing
 
 for (const file of [...commandFiles, ...skillFiles, ...hookFiles, ...agentFiles, pluginRoot + '/config/agents.toml']) {
   assertNoForbidden(file);
+}
+
+for (const file of commandFiles.filter(file => path.basename(file).startsWith('kaola-workflow-'))) {
+  assertIncludes(file, 'Agent Model Badge Contract');
+  assertIncludes(file, 'kaola-workflow-resolve-agent-model.js');
+  assertIncludes(file, 'model="{');
 }
 
 const scriptFiles = [
@@ -130,7 +136,7 @@ const scriptFiles = [
   'kaola-gitlab-workflow-roadmap.js',
   'kaola-gitlab-workflow-sink-merge.js',
   'kaola-gitlab-workflow-sink-mr.js',
-  'kaola-workflow-subagent-statusline.js',
+  'kaola-workflow-resolve-agent-model.js',
   'simulate-gitlab-workflow-walkthrough.js',
   'simulate-gitlab-codex-workflow-walkthrough.js',
   'install-codex-agent-profiles.js'
@@ -148,7 +154,7 @@ const installSupportScripts = [
   'kaola-gitlab-workflow-roadmap.js',
   'kaola-gitlab-workflow-sink-merge.js',
   'kaola-gitlab-workflow-sink-mr.js',
-  'kaola-workflow-subagent-statusline.js'
+  'kaola-workflow-resolve-agent-model.js'
 ];
 for (const script of installSupportScripts) {
   assert(installScript.includes(script), 'install.sh must install GitLab support script: ' + script);

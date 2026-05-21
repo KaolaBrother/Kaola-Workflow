@@ -23,6 +23,22 @@ kaola-workflow/{project}/.cache/planner.md
 kaola-workflow/{project}/.cache/advisor-ideation.md
 ```
 
+## Agent Model Badge Contract
+
+Before every Kaola subagent invocation, resolve the installed agent model and
+pass it explicitly to Claude Code's `Agent` tool. This is what makes Claude Code
+show the model badge on the subagent row/card.
+
+```bash
+kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./plugins/kaola-workflow-gitlab/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n" "./plugins/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
+KAOLA_AGENT_MODEL_JS="$(kaola_script kaola-workflow-resolve-agent-model.js)"
+kaola_agent_model(){ node "$KAOLA_AGENT_MODEL_JS" "$1" --raw 2>/dev/null || true; }
+```
+
+For each `Agent(...)` call below, set `AGENT_MODEL="$(kaola_agent_model
+AGENT_NAME)"` and include `model="{AGENT_MODEL}"` when non-empty. If the value
+is empty, omit `model=` so Claude Code inherits the orchestrator model.
+
 
 
 ## Resume Detection
@@ -67,8 +83,23 @@ fix_owner: code-architect for blueprint revisions
 inline_emergency_fallback_authorized: no
 ```
 
-Invoke the Claude Code agent `code-architect` with relevant excerpts from Phase 1 and Phase 2.
-Ask for:
+Resolve the model, then invoke the Claude Code agent `code-architect` with
+relevant excerpts from Phase 1 and Phase 2:
+
+```bash
+CODE_ARCHITECT_MODEL="$(kaola_agent_model code-architect)"
+```
+
+```text
+Agent(
+  subagent_type="code-architect",
+  model="{CODE_ARCHITECT_MODEL}",
+  description="Plan {project}",
+  prompt="..."
+)
+```
+
+If `CODE_ARCHITECT_MODEL` is empty, omit the `model=` line. Ask for:
 
 - files to create: path, purpose, key interfaces
 - files to modify: path, specific changes, why
@@ -102,7 +133,8 @@ kaola-workflow/{project}/.cache/advisor-plan.md
 
 ## Step 3 - Architect Revision Loop
 
-If the advisor finds gaps, invoke `code-architect` again with:
+If the advisor finds gaps, invoke `code-architect` again with the same
+`CODE_ARCHITECT_MODEL` explicit model dispatch and:
 
 - original `.cache/architect.md`
 - `.cache/advisor-plan.md`

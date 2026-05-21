@@ -53,6 +53,22 @@ If ambiguous, stop and ask.
   authorization is recorded.
 - CRITICAL and HIGH findings block Phase 6.
 
+## Agent Model Badge Contract
+
+Before every Kaola subagent invocation, resolve the installed agent model and
+pass it explicitly to Claude Code's `Agent` tool. This is what makes Claude Code
+show the model badge on the subagent row/card.
+
+```bash
+kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./plugins/kaola-workflow-gitea/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitea/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitea/scripts/$_n" "./plugins/kaola-workflow-gitea/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
+KAOLA_AGENT_MODEL_JS="$(kaola_script kaola-workflow-resolve-agent-model.js)"
+kaola_agent_model(){ node "$KAOLA_AGENT_MODEL_JS" "$1" --raw 2>/dev/null || true; }
+```
+
+For each `Agent(...)` call below, set `AGENT_MODEL="$(kaola_agent_model
+AGENT_NAME)"` and include `model="{AGENT_MODEL}"` when non-empty. If the value
+is empty, omit `model=` so Claude Code inherits the orchestrator model.
+
 ## Validation Delegation Policy
 
 The main session may run small targeted commands by default when they help
@@ -127,7 +143,22 @@ fix_owner: tdd-guide or build-error-resolver
 inline_emergency_fallback_authorized: no
 ```
 
-Invoke the Claude Code agent `code-reviewer`.
+Resolve the model, then invoke the Claude Code agent `code-reviewer`:
+
+```bash
+CODE_REVIEWER_MODEL="$(kaola_agent_model code-reviewer)"
+```
+
+```text
+Agent(
+  subagent_type="code-reviewer",
+  model="{CODE_REVIEWER_MODEL}",
+  description="Review {project}",
+  prompt="..."
+)
+```
+
+If `CODE_REVIEWER_MODEL` is empty, omit the `model=` line.
 
 Provide modified files from `phase4-progress.md` and instruct:
 
@@ -147,7 +178,23 @@ kaola-workflow/{project}/.cache/code-reviewer.md
 
 Perform a file-risk scan from Phase 4 modified files.
 
-If security-sensitive files were touched, invoke the Claude Code agent `security-reviewer` with:
+If security-sensitive files were touched, resolve the model and invoke the
+Claude Code agent `security-reviewer` with:
+
+```bash
+SECURITY_REVIEWER_MODEL="$(kaola_agent_model security-reviewer)"
+```
+
+```text
+Agent(
+  subagent_type="security-reviewer",
+  model="{SECURITY_REVIEWER_MODEL}",
+  description="Security review {project}",
+  prompt="..."
+)
+```
+
+If `SECURITY_REVIEWER_MODEL` is empty, omit the `model=` line.
 
 ```text
 Review only; do not edit files.
@@ -189,6 +236,10 @@ Write each fix-agent output to:
 ```text
 kaola-workflow/{project}/.cache/review-fix-{n}.md
 ```
+
+For every review-fix dispatch, resolve the selected fix agent's model with
+`kaola_agent_model` and include the explicit `model=` parameter in the
+`Agent(...)` call. Omit `model=` only when the resolved value is empty.
 
 Run, delegate, or cite the narrow validation needed for each fix under the
 Validation Delegation Policy and Validation De-Duplication rules.

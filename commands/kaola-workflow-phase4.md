@@ -87,6 +87,22 @@ fix_owner: tdd-guide or build-error-resolver
 inline_emergency_fallback_authorized: no
 ```
 
+## Agent Model Badge Contract
+
+Before every Kaola subagent invocation, resolve the installed agent model and
+pass it explicitly to Claude Code's `Agent` tool. This is what makes Claude Code
+show the model badge on the subagent row/card.
+
+```bash
+kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./scripts/$_n" "./plugins/kaola-workflow/scripts/$_n" "./plugins/kaola-workflow-gitlab/scripts/$_n" "./plugins/kaola-workflow-gitea/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n" "$HOME/.claude/kaola-workflow-gitea/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n" "$HOME/.claude/kaola-workflow-gitea/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
+KAOLA_AGENT_MODEL_JS="$(kaola_script kaola-workflow-resolve-agent-model.js)"
+kaola_agent_model(){ node "$KAOLA_AGENT_MODEL_JS" "$1" --raw 2>/dev/null || true; }
+```
+
+For each `Agent(...)` call below, set `AGENT_MODEL="$(kaola_agent_model
+AGENT_NAME)"` and include `model="{AGENT_MODEL}"` when non-empty. If the value
+is empty, omit `model=` so Claude Code inherits the orchestrator model.
+
 ## Validation Delegation Policy
 
 The main session is the validation/classification owner, not the long-output
@@ -230,7 +246,22 @@ next_command: /kaola-workflow-phase4 {project}
 inline_emergency_fallback_authorized: no
 ```
 
-Invoke the Claude Code agent `tdd-guide` for the task.
+Resolve the model, then invoke the Claude Code agent `tdd-guide` for the task:
+
+```bash
+TDD_GUIDE_MODEL="$(kaola_agent_model tdd-guide)"
+```
+
+```text
+Agent(
+  subagent_type="tdd-guide",
+  model="{TDD_GUIDE_MODEL}",
+  description="Task {n}: {name}",
+  prompt="..."
+)
+```
+
+If `TDD_GUIDE_MODEL` is empty, omit the `model=` line.
 
 Provide:
 - the full task definition from `phase3-plan.md`
@@ -285,6 +316,10 @@ Routing:
 - build/type/lint/dependency/tooling -> `build-error-resolver`
 - behavior/regression/coverage/acceptance -> `tdd-guide`
 - scope/write-set -> stop and ask, unless reverting the agent's own deviation
+
+For every routed fix or delegated validation agent, resolve that agent's model
+with `kaola_agent_model` and include the explicit `model=` parameter in the
+`Agent(...)` call. Omit `model=` only when the resolved value is empty.
 
 Record each routed fix in:
 

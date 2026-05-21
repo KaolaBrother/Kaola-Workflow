@@ -134,8 +134,9 @@ the edition.
 Claude Code installs use `install.sh` only. Do not install Kaola-Workflow through
 the Claude Code plugin marketplace; `install.sh` copies the slash commands,
 support scripts, optional hook config, and vendored agents into `~/.claude/`.
-By default it also enables a managed Claude Code `subagentStatusLine` so the
-agent panel shows each Kaola subagent row with its expected model family.
+Slash commands resolve each installed Kaola agent's frontmatter model and pass
+it explicitly to Claude Code's `Agent` tool so spawned subagents can show the
+built-in model badge.
 If an older Claude Code plugin install is present, the installer refuses to run
 until the plugin is removed:
 
@@ -639,17 +640,17 @@ evidence path.
 
 - `install.sh` copies hook files to `~/.claude/kaola-workflow/hooks/`, support
   scripts to `~/.claude/kaola-workflow/scripts/`, and auto-merges the three
-  managed hook entries plus the managed `subagentStatusLine` into
-  `~/.claude/settings.json`.
+  managed hook entries into `~/.claude/settings.json`.
   The merge is idempotent and identifies managed entries by `id` prefix
   `kaola-workflow:` or a command path containing `kaola-workflow`. Prior
   settings are backed up under
   `~/.claude/backups/settings.json.kaola-workflow.<ts>.bak`.
-- Verify with `jq '.hooks, .subagentStatusLine' ~/.claude/settings.json` —
-  expect the three ids above and a `subagentStatusLine` command pointing at
-  `kaola-workflow-subagent-statusline.js`, with scripts under
-  `~/.claude/kaola-workflow/hooks/` or
+- Verify with `jq '.hooks' ~/.claude/settings.json` — expect the three ids
+  above, with scripts under `~/.claude/kaola-workflow/hooks/` or
   `~/.claude/kaola-workflow/scripts/`.
+- Model badges are enforced by slash-command dispatch, not by a status-line
+  override: commands call `kaola-workflow-resolve-agent-model.js` and pass the
+  resolved value as `model=` to each `Agent(...)` invocation.
 - If hooks are missing, re-run `./install.sh --forge=github` (or
   `--forge=gitlab` or `--forge=gitea`). Do not edit `~/.claude/settings.json` directly —
   re-running the installer is the supported path.
@@ -657,11 +658,10 @@ evidence path.
   passed: `install.sh` prints a manual hint and the source of truth is
   `~/.claude/kaola-workflow/hooks/hooks.json`. Merge its `hooks` block
   into the user's `~/.claude/settings.json` `hooks` object, preserving
-  any non-`kaola-workflow:` entries, and copy its `subagentStatusLine`
-  entry if no user-owned subagent status line exists.
-- `uninstall.sh` strips only entries matching the same managed-id rule and the
-  managed Kaola subagent status line; it does not touch other hooks or
-  user-owned status lines.
+  any non-`kaola-workflow:` entries.
+- `install.sh` and `uninstall.sh` remove the legacy managed Kaola
+  `subagentStatusLine` entry from earlier issue #141 installs when it is still
+  present. User-owned status lines are preserved.
 
 Phase 6 still owns the final full validation gate. It also reconciles
 documentation with code changes and issue/roadmap state, consults the

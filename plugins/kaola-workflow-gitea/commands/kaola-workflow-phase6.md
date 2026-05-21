@@ -83,6 +83,22 @@ If ambiguous, stop and ask.
   the remote rejects the update, stop with exact remediation steps. Do not
   create a second cleanup commit unless the user explicitly approves it.
 
+## Agent Model Badge Contract
+
+Before every Kaola subagent invocation, resolve the installed agent model and
+pass it explicitly to Claude Code's `Agent` tool. This is what makes Claude Code
+show the model badge on the subagent row/card.
+
+```bash
+kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./plugins/kaola-workflow-gitea/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitea/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitea/scripts/$_n" "./plugins/kaola-workflow-gitea/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
+KAOLA_AGENT_MODEL_JS="$(kaola_script kaola-workflow-resolve-agent-model.js)"
+kaola_agent_model(){ node "$KAOLA_AGENT_MODEL_JS" "$1" --raw 2>/dev/null || true; }
+```
+
+For each `Agent(...)` call below, set `AGENT_MODEL="$(kaola_agent_model
+AGENT_NAME)"` and include `model="{AGENT_MODEL}"` when non-empty. If the value
+is empty, omit `model=` so Claude Code inherits the orchestrator model.
+
 ## Validation Delegation Policy
 
 Phase 6 is the final validation gate. The required full relevant project
@@ -240,6 +256,11 @@ kaola-workflow/{project}/.cache/final-validation-fix-{n}.md
 
 Re-run the failed command after each routed fix.
 
+For every delegated validation or routed final-validation fix, resolve the
+selected agent's model with `kaola_agent_model` and include the explicit
+`model=` parameter in the `Agent(...)` call. Omit `model=` only when the
+resolved value is empty.
+
 ## Step 2 - Acceptance Check
 
 Verify:
@@ -257,9 +278,25 @@ Read project root `CLAUDE.md`. Look for `Documentation Update Checklist`.
 
 This is a required documentation gate.
 
-If checklist exists, invoke the Claude Code agent `doc-updater` with changed files and checklist.
+If checklist exists, resolve the model and invoke the Claude Code agent
+`doc-updater` with changed files and checklist.
 
 If missing, create or append the checklist, then invoke `doc-updater`:
+
+```bash
+DOC_UPDATER_MODEL="$(kaola_agent_model doc-updater)"
+```
+
+```text
+Agent(
+  subagent_type="doc-updater",
+  model="{DOC_UPDATER_MODEL}",
+  description="Update docs for {project}",
+  prompt="..."
+)
+```
+
+If `DOC_UPDATER_MODEL` is empty, omit the `model=` line.
 
 ```markdown
 ## Documentation Update Checklist
