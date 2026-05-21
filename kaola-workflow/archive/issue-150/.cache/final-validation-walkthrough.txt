@@ -1,0 +1,7 @@
+Error: online claim timed out or was killed: SIGTERM
+stdout: 
+stderr: 
+    at assert (/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/scripts/simulate-workflow-walkthrough.js:18:25)
+    at runClaimOnline (/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/scripts/simulate-workflow-walkthrough.js:418:3)
+    at testStartupJsonAndSiblingWorktrees (/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/scripts/simulate-workflow-walkthrough.js:454:19)
+    at main (/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/scripts/simulate-workflow-walkthrough.js:1764:5)

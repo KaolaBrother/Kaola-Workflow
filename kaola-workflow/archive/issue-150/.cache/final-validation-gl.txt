@@ -1,0 +1,36 @@
+          
+   ERROR  
+          
+  None of the git remotes configured for this repository point to a known GitLab host. Please use `glab auth login` to
+  authenticate and configure a new host for glab. Configured remotes: github.com.                                     
+
+readPriorityConfig missing config: PASS
+readPriorityConfig valid array: PASS
+readPriorityConfig non-array → default: PASS
+listOpenIssues priority sort: PASS
+glab: 401 Unauthorized (HTTP 401)
+node:internal/assert/utils:77
+    throw err;
+    ^
+
+AssertionError [ERR_ASSERTION]: online claim killed: SIGTERM
+
+    at runClaimOnline (/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/plugins/kaola-workflow-gitlab/scripts/test-gitlab-workflow-scripts.js:106:3)
+    at testStaleWorktreeCheck (/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/plugins/kaola-workflow-gitlab/scripts/test-gitlab-workflow-scripts.js:1092:22)
+    at Object.<anonymous> (/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/plugins/kaola-workflow-gitlab/scripts/test-gitlab-workflow-scripts.js:1308:1)
+    at Module._compile (node:internal/modules/cjs/loader:1803:14)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1934:10)
+    at Module.load (node:internal/modules/cjs/loader:1524:32)
+    at Module._load (node:internal/modules/cjs/loader:1326:12)
+    at TracingChannel.traceSync (node:diagnostics_channel:328:14)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:245:24)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5) {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: false,
+  expected: true,
+  operator: '==',
+  diff: 'simple'
+}
+
+Node.js v25.5.0

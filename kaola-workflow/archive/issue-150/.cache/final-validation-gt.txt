@@ -1,0 +1,29 @@
+readPriorityConfig missing config: PASS
+readPriorityConfig valid array: PASS
+readPriorityConfig non-array → default: PASS
+listOpenIssues priority sort: PASS
+node:internal/assert/utils:77
+    throw err;
+    ^
+
+AssertionError [ERR_ASSERTION]: online claim killed: SIGTERM
+
+    at runClaimOnline (/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/plugins/kaola-workflow-gitea/scripts/test-gitea-workflow-scripts.js:110:3)
+    at testStaleWorktreeCheck (/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/plugins/kaola-workflow-gitea/scripts/test-gitea-workflow-scripts.js:1121:22)
+    at Object.<anonymous> (/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/plugins/kaola-workflow-gitea/scripts/test-gitea-workflow-scripts.js:1298:1)
+    at Module._compile (node:internal/modules/cjs/loader:1803:14)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1934:10)
+    at Module.load (node:internal/modules/cjs/loader:1524:32)
+    at Module._load (node:internal/modules/cjs/loader:1326:12)
+    at TracingChannel.traceSync (node:diagnostics_channel:328:14)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:245:24)
+    at Module.executeUserEntryPoint [as runMain] (node:internal/modules/run_main:154:5) {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: false,
+  expected: true,
+  operator: '==',
+  diff: 'simple'
+}
+
+Node.js v25.5.0

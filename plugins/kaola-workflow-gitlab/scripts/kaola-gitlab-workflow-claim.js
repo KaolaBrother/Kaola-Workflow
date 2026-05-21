@@ -262,14 +262,34 @@ function activeByProject(root, project) {
   return readActiveFolders(root).find(folder => folder.project === project) || null;
 }
 
-function listOpenIssues() {
+function readPriorityConfig(root) {
+  const file = path.join(root, 'kaola-workflow', 'config.json');
   try {
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return Array.isArray(parsed.priority_top_tier_labels) ? parsed.priority_top_tier_labels : ['P0', 'P1'];
+  } catch (_) { return ['P0', 'P1']; }
+}
+
+function priorityTier(issue, topTierLabels) {
+  const labels = issue.labels || [];
+  for (const label of labels) {
+    if (/^P\d+$/i.test(label)) return { tier: parseInt(label.slice(1), 10), priority_label: label };
+  }
+  if (labels.some(label => topTierLabels.includes(label))) return { tier: 1, priority_label: labels.find(label => topTierLabels.includes(label)) };
+  return { tier: 99, priority_label: '' };
+}
+
+function listOpenIssues(root) {
+  try {
+    const topTierLabels = readPriorityConfig(root);
     return forge.listIssues({ state: 'opened', perPage: 100 })
       .filter(issue => issue.state === 'open')
-      .sort((a, b) => Number(a.issue_iid || a.number) - Number(b.issue_iid || b.number));
-  } catch (_) {
-    return [];
-  }
+      .sort((a, b) => {
+        const at = priorityTier(a, topTierLabels).tier;
+        const bt = priorityTier(b, topTierLabels).tier;
+        return at - bt || Number(a.issue_iid || a.number) - Number(b.issue_iid || b.number);
+      });
+  } catch (_) { return []; }
 }
 
 function claimProject(root, args) {
@@ -725,6 +745,7 @@ module.exports = {
   projectNameForIssue,
   provisionWorktree,
   readActiveFolders,
+  readPriorityConfig,
   removeWorktree,
   watchMergeRequests,
   worktreePathFor

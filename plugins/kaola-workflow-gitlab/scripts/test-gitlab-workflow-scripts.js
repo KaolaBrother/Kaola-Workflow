@@ -331,8 +331,80 @@ withForge({
     ];
   }
 }, () => {
-  assert.deepStrictEqual(claim.listOpenIssues().map(issue => issue.issue_iid), [7, 9]);
+  const root = tempRoot('kw-gl-list-');
+  try {
+    assert.deepStrictEqual(claim.listOpenIssues(root).map(issue => issue.issue_iid), [7, 9]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
+
+// readPriorityConfig tests
+{
+  // Case a: missing config → default
+  const root = tempRoot('kw-gl-rpc-');
+  try {
+    assert.deepStrictEqual(claim.readPriorityConfig(root), ['P0', 'P1']);
+    console.log('readPriorityConfig missing config: PASS');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+{
+  // Case b: valid array config → custom
+  const root = tempRoot('kw-gl-rpc-');
+  try {
+    fs.mkdirSync(path.join(root, 'kaola-workflow'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'kaola-workflow', 'config.json'), JSON.stringify({ priority_top_tier_labels: ['critical', 'hotfix'] }));
+    assert.deepStrictEqual(claim.readPriorityConfig(root), ['critical', 'hotfix']);
+    console.log('readPriorityConfig valid array: PASS');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+{
+  // Case c: non-array value → default
+  const root = tempRoot('kw-gl-rpc-');
+  try {
+    fs.mkdirSync(path.join(root, 'kaola-workflow'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'kaola-workflow', 'config.json'), JSON.stringify({ priority_top_tier_labels: 'not-an-array' }));
+    assert.deepStrictEqual(claim.readPriorityConfig(root), ['P0', 'P1']);
+    console.log('readPriorityConfig non-array → default: PASS');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+// Discriminating priority-sort test for listOpenIssues
+{
+  const root = tempRoot('kw-gl-sort-');
+  try {
+    fs.mkdirSync(path.join(root, 'kaola-workflow'), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, 'kaola-workflow', 'config.json'),
+      JSON.stringify({ priority_top_tier_labels: ['critical'] })
+    );
+    withForge({
+      listIssues() {
+        return [
+          { issue_iid: 5, number: 5, state: 'open', labels: ['critical'] },
+          { issue_iid: 3, number: 3, state: 'open', labels: ['P0'] },
+          { issue_iid: 9, number: 9, state: 'open', labels: [] },
+          { issue_iid: 1, number: 1, state: 'open', labels: ['P2'] }
+        ];
+      }
+    }, () => {
+      const result = claim.listOpenIssues(root);
+      assert.deepStrictEqual(
+        result.map(i => i.issue_iid || i.number),
+        [3, 5, 1, 9]
+      );
+      console.log('listOpenIssues priority sort: PASS');
+    });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
 
 withForge({
   viewIssue(issueIid) {
