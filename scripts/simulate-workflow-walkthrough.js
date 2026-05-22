@@ -2154,6 +2154,7 @@ function testClaimProjectOwnedFolderFailingRemote() {
       timeout: 30000,
       env: Object.assign({}, process.env, {
         KAOLA_WORKFLOW_OFFLINE: '0',
+        ...ghMockEnv(binDir),
         PATH: binDir + path.delimiter + path.dirname(process.execPath) + path.delimiter + (process.env.PATH || '')
       })
     });
