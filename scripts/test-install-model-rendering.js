@@ -63,6 +63,16 @@ try {
     .map(name => readInstalledCommand(name))
     .join('\n');
   assert(!/model="\{[A-Z_]+_MODEL\}"/.test(allCommands), 'installed commands must not keep model placeholders');
+
+  const requiredAgents = ['code-explorer','docs-lookup','planner','code-architect','tdd-guide',
+    'build-error-resolver','code-reviewer','security-reviewer','doc-updater'];
+  for (const agent of requiredAgents) {
+    const installed = fs.readFileSync(path.join(tmp,'.claude','agents',agent+'.md'),'utf8');
+    const fmEnd = installed.indexOf('\n---', 3);
+    const frontmatter = installed.slice(0, fmEnd === -1 ? installed.length : fmEnd);
+    assert(/\bmodel:\s*inherit\b/.test(frontmatter), agent+' installed frontmatter must be model: inherit');
+    assert(installed.includes('kaola-workflow-managed-agent: true'), agent+' installed file must keep managed marker');
+  }
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
 }

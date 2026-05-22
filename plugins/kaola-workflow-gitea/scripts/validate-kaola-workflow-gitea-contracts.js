@@ -72,6 +72,21 @@ function assertConcept(file, concept, terms) {
     file + ' must document ' + concept + '; missing: ' + missing.join(', '));
 }
 
+function assertEveryDispatchHasModel(file) {
+  const lines = read(file).split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^Agent\(\s*$/.test(lines[i])) continue;
+    let hasSubagent = false, hasModel = false;
+    for (let j = i + 1; j < lines.length; j++) {
+      if (/^\)\s*$/.test(lines[j])) break;
+      if (/subagent_type="[^"]+"/.test(lines[j])) hasSubagent = true;
+      if (/model="\{[A-Z_]+_MODEL\}"/.test(lines[j])) hasModel = true;
+    }
+    assert(!hasSubagent || hasModel,
+      file + ' has an Agent( dispatch block at line ' + (i+1) + ' missing a model="{..._MODEL}" line');
+  }
+}
+
 function extractClaudeTemplate(file) {
   const text = read(file);
   const START = '<!-- KW-CLAUDE-TEMPLATE-START -->';
@@ -123,6 +138,7 @@ for (const file of commandFiles.filter(file => path.basename(file).startsWith('k
   assertIncludes(file, '## Agent Model Badge');
   assertIncludes(file, 'You MUST pass `model=');
   assertIncludes(file, 'model="{');
+  assertEveryDispatchHasModel(file);
   assertNotIncludes(file, 'Agent Model Badge Contract');
   assertNotIncludes(file, 'kaola_agent_model');
 }

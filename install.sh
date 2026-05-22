@@ -250,6 +250,31 @@ manifest_lookup() {
   awk -F '\t' -v name="$file_name" '$1 == name { value = $2 } END { if (value) print value }' "$AGENT_MANIFEST_FILE"
 }
 
+agent_source_file() {
+  local agent="$1"; local file_name="$agent.md"
+  local source_file="$SOURCE_AGENTS_DIR/$file_name"
+  if [[ "$PROFILE" == "higher" && -f "$SOURCE_AGENTS_DIR/profiles/higher/$file_name" ]]; then
+    source_file="$SOURCE_AGENTS_DIR/profiles/higher/$file_name"
+  fi
+  printf '%s\n' "$source_file"
+}
+
+install_managed_agent() {
+  local source="$1"; local dest="$2"
+  cp "$source" "$dest"
+  local tmp; tmp="$(mktemp)"
+  awk '
+    BEGIN { in_fm=0; closed=0; replaced=0 }
+    NR==1 && $0=="---" { in_fm=1; print; next }
+    in_fm && !closed && $0=="---" { closed=1; in_fm=0; print; next }
+    in_fm && !closed && !replaced && $0 ~ /^[[:space:]]*model[[:space:]]*:/ {
+      match($0, /^[[:space:]]*model[[:space:]]*:[[:space:]]*/)
+      print substr($0,1,RLENGTH) "inherit"; replaced=1; next
+    }
+    { print }
+  ' "$dest" > "$tmp" && mv "$tmp" "$dest" || { rm -f "$tmp"; echo "Failed to rewrite frontmatter: $dest" >&2; exit 1; }
+}
+
 install_agent_files() {
   if [[ ! -d "$SOURCE_AGENTS_DIR" ]]; then
     echo "Agents directory not found: $SOURCE_AGENTS_DIR" >&2
@@ -289,7 +314,7 @@ install_agent_files() {
         if [[ -n "$recorded_hash" ]] &&
            [[ "$current_hash" == "$recorded_hash" ]] &&
            grep -Fq "$MANAGED_AGENT_MARKER" "$dest"; then
-          cp "$source_file" "$dest"
+          install_managed_agent "$source_file" "$dest"
           echo "Updated managed agent: $dest"
         else
           echo "Skipped agent with existing user-owned or modified file: $dest"
@@ -298,7 +323,7 @@ install_agent_files() {
         fi
       fi
     else
-      cp "$source_file" "$dest"
+      install_managed_agent "$source_file" "$dest"
       echo "Installed agent: $dest"
     fi
 
@@ -363,7 +388,7 @@ extract_agent_model() {
 resolve_agent_model_for_install() {
   local agent="$1"
   local model
-  model="$(extract_agent_model "$AGENTS_DIR/$agent.md")"
+  model="$(extract_agent_model "$(agent_source_file "$agent")")"
   if [[ -z "$model" ]]; then
     model="$(default_agent_model "$agent")"
   fi

@@ -39,6 +39,21 @@ function assertBefore(file, first, second) {
   assert(content.indexOf(first) < content.indexOf(second), file + ' must put ' + first + ' before ' + second);
 }
 
+function assertEveryDispatchHasModel(file) {
+  const lines = read(file).split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^Agent\(\s*$/.test(lines[i])) continue;
+    let hasSubagent = false, hasModel = false;
+    for (let j = i + 1; j < lines.length; j++) {
+      if (/^\)\s*$/.test(lines[j])) break;
+      if (/subagent_type="[^"]+"/.test(lines[j])) hasSubagent = true;
+      if (/model="\{[A-Z_]+_MODEL\}"/.test(lines[j])) hasModel = true;
+    }
+    assert(!hasSubagent || hasModel,
+      file + ' has an Agent( dispatch block at line ' + (i+1) + ' missing a model="{..._MODEL}" line');
+  }
+}
+
 const retired = [
   ...['lo' + 'cks', 'sess' + 'ions', 'tick' + 'ers'].map(name => '.' + name),
   ['heart', 'beat'].join(''),
@@ -70,6 +85,7 @@ for (const file of phaseCommands) {
   assertIncludes(file, '## Agent Model Badge');
   assertIncludes(file, 'You MUST pass `model=');
   assertIncludes(file, 'model="{');
+  assertEveryDispatchHasModel(file);
   assertNotIncludes(file, 'Agent Model Badge Contract');
   assertNotIncludes(file, 'kaola_agent_model');
   for (const token of retired) assertNotIncludes(file, token);

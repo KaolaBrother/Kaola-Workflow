@@ -111,6 +111,14 @@ for the pinned upstream commit, attribution, and refresh procedure.
 | `security-reviewer` | 5 — Review (conditional) | Sonnet | yes |
 | `doc-updater` | 6 — Finalize | Haiku | |
 
+When agents are installed, their frontmatter `model:` field is rewritten to
+`inherit`. Command files render each agent's concrete assigned model (e.g.,
+`model="sonnet"`) into the dispatched `Agent(...)` call via install-time
+substitution. This makes Claude Code's built-in model badge render on every
+subagent dispatch (the badge renders only when a concrete `model=` literal
+differs from the agent's frontmatter). **After installing or re-running
+`install.sh`, restart Claude Code for the model badges to take effect.**
+
 The Opus advisor gates in Phases 2, 3, and conditional Phase 5 require
 `"advisorModel": "opus"` in `~/.claude/settings.json` or an equivalent Claude
 Code advisor configuration.
