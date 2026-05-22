@@ -119,6 +119,17 @@ subagent dispatch (the badge renders only when a concrete `model=` literal
 differs from the agent's frontmatter). **After installing or re-running
 `install.sh`, restart Claude Code for the model badges to take effect.**
 
+> **Badge visibility by session model (Claude Code platform behaviour):**
+> - **Session on Sonnet** — only Opus subagents show a badge. Sonnet-dispatched
+>   agents (`code-explorer`, `tdd-guide`, `build-error-resolver`, `docs-lookup`,
+>   `doc-updater`) run silently. Opus-dispatched agents (`planner`,
+>   `code-architect`, `code-reviewer`, `security-reviewer` with
+>   `--profile=higher`) badge as expected.
+> - **Session on Opus** — all subagents show a badge, regardless of their model.
+>
+> The badge is a model-switch indicator: it renders when the subagent's model
+> differs from the session's default. This is by design in Claude Code.
+
 The Opus advisor gates in Phases 2, 3, and conditional Phase 5 require
 `"advisorModel": "opus"` in `~/.claude/settings.json` or an equivalent Claude
 Code advisor configuration.
@@ -661,6 +672,9 @@ evidence path.
 - Model badges are enforced by slash-command dispatch, not by a status-line
   override: the installer renders each installed agent's resolved model into
   concrete `model="..."` lines in the slash commands.
+- **Badge not showing for some subagents?** By design: on a Sonnet session,
+  only Opus subagents show a badge. On an Opus session, all subagents badge.
+  See the vendored-agents note above for details.
 - If hooks are missing, re-run `./install.sh --forge=github` (or
   `--forge=gitlab` or `--forge=gitea`). Do not edit `~/.claude/settings.json` directly —
   re-running the installer is the supported path.
