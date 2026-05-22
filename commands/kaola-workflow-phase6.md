@@ -112,6 +112,35 @@ Delegated validation should use a fresh validation subagent when available, or
 the relevant fix agent (`tdd-guide` for behavior/regression/coverage checks,
 `build-error-resolver` for build/type/lint/tooling checks). Raw output goes to:
 
+Route behavior/test fixes to the Claude Code agent `tdd-guide`:
+
+You MUST pass `model="{TDD_GUIDE_MODEL}"` in this Agent call exactly as shown —
+do not omit the `model=` line.
+
+```text
+Agent(
+  subagent_type="tdd-guide",
+  model="{TDD_GUIDE_MODEL}",
+  description="Routed fix: task {n}",
+  prompt="..."
+)
+```
+
+Route build/type/lint/tooling fixes to the Claude Code agent
+`build-error-resolver`:
+
+You MUST pass `model="{BUILD_ERROR_RESOLVER_MODEL}"` in this Agent call exactly
+as shown — do not omit the `model=` line.
+
+```text
+Agent(
+  subagent_type="build-error-resolver",
+  model="{BUILD_ERROR_RESOLVER_MODEL}",
+  description="Routed fix: task {n}",
+  prompt="..."
+)
+```
+
 ```text
 kaola-workflow/{project}/.cache/final-validation.md
 ```

@@ -75,6 +75,26 @@ for (const file of phaseCommands) {
   for (const token of retired) assertNotIncludes(file, token);
 }
 
+// issue-152: routed-fix Agent blocks must carry explicit model placeholders
+const routedFixFiles = [
+  'commands/kaola-workflow-phase4.md',
+  'commands/kaola-workflow-phase5.md',
+  'commands/kaola-workflow-phase6.md',
+  'plugins/kaola-workflow-gitlab/commands/kaola-workflow-phase4.md',
+  'plugins/kaola-workflow-gitlab/commands/kaola-workflow-phase5.md',
+  'plugins/kaola-workflow-gitlab/commands/kaola-workflow-phase6.md',
+  'plugins/kaola-workflow-gitea/commands/kaola-workflow-phase4.md',
+  'plugins/kaola-workflow-gitea/commands/kaola-workflow-phase5.md',
+  'plugins/kaola-workflow-gitea/commands/kaola-workflow-phase6.md',
+];
+for (const file of routedFixFiles) {
+  assertIncludes(file, 'model="{BUILD_ERROR_RESOLVER_MODEL}"');
+  assertIncludes(file, 'subagent_type="build-error-resolver"');
+}
+for (const file of routedFixFiles.filter(f => /phase[56]/.test(f))) {
+  assertIncludes(file, 'model="{TDD_GUIDE_MODEL}"');
+}
+
 assert(exists('commands/workflow-next.md'), 'workflow-next command is missing');
 assert(!exists('commands/kaola-workflow.md'), 'legacy kaola-workflow command must not exist');
 assertIncludes('commands/workflow-next.md', 'thin router');

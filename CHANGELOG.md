@@ -8,6 +8,8 @@
 
 ### Added
 
+- **Routed-fix model badge dispatch** (issue #152): Phase 4, 5, and 6 command files now include explicit Agent spawn blocks with `model="{BUILD_ERROR_RESOLVER_MODEL}"` and `model="{TDD_GUIDE_MODEL}"` literals for all routed-fix delegations (`build-error-resolver` in Phases 4–6; `tdd-guide` in Phases 5–6). The installer renders frontmatter model placeholders into concrete `model="sonnet"` (or equivalent) values during install, so spawned agents display the built-in model badge in Claude Code. Updated all 9 phase command files (3 forge editions × 3 phases) and added 24 regression assertions in `scripts/validate-workflow-contracts.js` plus 4 render assertions in `scripts/test-install-model-rendering.js`.
+
 - **GitLab and Gitea `stale-worktree-check` parity** (issue #148): Added `stale-worktree-check` subcommand to both `plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js` and `plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js`. Both versions detect stale worktrees and branches using forge-specific branch prefixes (`workflow/gitlab-issue-*` / `workflow/gitea-issue-*`). Includes 6 test cases per edition in `test-gitlab-workflow-scripts.js` and `test-gitea-workflow-scripts.js` covering clean worktrees, dirty worktrees, missing worktrees, branches without worktrees, active filtering, and offline mode. This brings GitLab and Gitea editions to parity with the GitHub `stale-worktree-check` from issue #138.
 
 ### Fixed

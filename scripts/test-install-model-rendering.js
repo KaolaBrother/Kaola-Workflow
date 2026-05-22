@@ -40,6 +40,22 @@ try {
   );
   assert(phase5.includes('model="opus",'), 'higher profile should render reviewers as opus');
   assert(phase6.includes('model="haiku",'), 'doc-updater should render as haiku');
+  assert(
+    phase5.includes('subagent_type="build-error-resolver",\n  model="sonnet",'),
+    'phase5 routed-fix build-error-resolver block should render as sonnet'
+  );
+  assert(
+    phase6.includes('subagent_type="build-error-resolver",\n  model="sonnet",'),
+    'phase6 routed-fix build-error-resolver block should render as sonnet'
+  );
+  assert(
+    phase5.includes('subagent_type="tdd-guide",\n  model="sonnet",'),
+    'phase5 routed-fix tdd-guide block should render as sonnet'
+  );
+  assert(
+    phase6.includes('subagent_type="tdd-guide",\n  model="sonnet",'),
+    'phase6 routed-fix tdd-guide block should render as sonnet'
+  );
   assert(fast.includes('model="opus",'), 'fast command should render higher-profile reviewer/planner models');
 
   const allCommands = fs.readdirSync(path.join(tmp, '.claude', 'commands'))
