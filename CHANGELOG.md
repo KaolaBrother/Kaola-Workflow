@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- **Publish release tag and validate CHANGELOG presence** (issue #156): Added CHANGELOG drift guard (`assert(read('CHANGELOG.md').includes('## [' + rootVersion + ']')...)`) to `scripts/validate-workflow-contracts.js` and mirrored copy at `plugins/kaola-workflow/scripts/validate-workflow-contracts.js`. The validator now fails at startup if CHANGELOG.md lacks a heading matching the current `package.json` version, preventing accidental releases with missing or stale CHANGELOG sections. Updated README.md release checklist with precise tag format (`kaola-workflow--v<X.Y.Z>` double-dash), single-tag push guidance (`git push origin kaola-workflow--v<X.Y.Z>`), and edition policy (GitHub required, GitLab optional, Gitea none). Published `kaola-workflow--v3.13.0` tag to origin/main.
+
 - **Fail-closed when remote issue validation is unavailable** (issue #155): Startup and classifier now return a typed `target_unavailable` refusal when `gh`/`glab`/`tea` issue fetch fails outside `KAOLA_WORKFLOW_OFFLINE=1`, instead of silently returning `green` and claiming potentially closed or blocked issues. All three forge editions (GitHub, GitLab, Gitea) get the same behavior. A new `probeIssueState` helper in each forge's active-folders module distinguishes "remote unavailable" from "not closed" in the `claimProject` path. Existing `KAOLA_WORKFLOW_OFFLINE=1` behavior is unchanged. Regression tests added for all three forges.
 
 ## [3.13.0] — 2026-05-22

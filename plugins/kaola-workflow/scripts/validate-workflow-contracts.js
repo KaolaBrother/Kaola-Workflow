@@ -280,6 +280,11 @@ for (const forge of ['gitlab', 'gitea']) {
   );
 }
 
+assert(
+  read('CHANGELOG.md').includes('## [' + rootVersion + ']'),
+  'CHANGELOG.md must contain "## [' + rootVersion + ']" heading matching package.json version (' + rootVersion + ')'
+);
+
 assertIncludes('scripts/simulate-workflow-walkthrough.js', 'Workflow walkthrough simulation passed');
 
 console.log('Workflow contract validation passed');

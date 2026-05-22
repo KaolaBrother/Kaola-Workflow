@@ -426,9 +426,18 @@ Official release checklist:
 ```bash
 npm test
 git diff --check
-git tag kaola-workflow-v<X.Y.Z>
-git push origin main --tags
+git tag kaola-workflow--v<X.Y.Z> <release-commit>
+git push origin kaola-workflow--v<X.Y.Z>
 ```
+
+Tag rules:
+- Tag the specific release commit (the commit that bumped `package.json`
+  version and added the CHANGELOG section), not HEAD.
+- GitHub/main tag (`kaola-workflow--v<X.Y.Z>`) is required. GitLab tag
+  (`kaola-workflow-gitlab--v<X.Y.Z>`) is optional (no 3.12.0 GitLab tag
+  was published — intentional). Gitea has no separate release tag.
+- Never use `--tags` or `git push origin main --tags`; push only the
+  single new tag by name.
 
 Create a tag only when publishing a tagged release. For normal development
 pushes, update the versions and changelog, run validation, commit, and push the
