@@ -325,7 +325,7 @@ node plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js stale-wo
 
 - **`--execute`** — Perform actual removal. Without this flag, the command runs in dry-run mode, scanning for stale items and reporting what would be removed without making changes.
 - **`--archive`** — For dirty worktrees, stash uncommitted changes before removal. Changes are recoverable via `git stash list`. Mutually exclusive with `--export` and `--force`.
-- **`--export`** — For dirty worktrees, write a patch file to `kaola-workflow/archive/exports/` before removal. Patch can be applied later to recover changes. Mutually exclusive with `--archive` and `--force`.
+- **`--export`** — For dirty worktrees, write a patch file to `kaola-workflow/archive/exports/` before removal. Tracked changes are captured in a `.patch` file (recoverable via `git apply`). Untracked files (which `git diff` does not capture) are copied verbatim into a sibling `issue-N-{timestamp}-untracked/` sidecar directory, preserving their relative paths. Mutually exclusive with `--archive` and `--force`.
 - **`--force`** — For dirty worktrees, discard all uncommitted changes without recovery. Mutually exclusive with `--archive` and `--export`.
 - **`--keep-branch`** — Remove the git worktree but preserve the local branch. Useful for open PRs that should remain available. When omitted, both worktree and branch are deleted.
 
@@ -337,7 +337,7 @@ node plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js stale-wo
 
 3. **Dirty worktrees** (uncommitted changes):
    - With `--archive` (default if no other strategy specified): Changes are stashed; worktree is removed. User can recover via `git stash list` and `git stash pop`.
-   - With `--export`: Patch written to `kaola-workflow/archive/exports/{worktree-name}.patch`. Worktree is removed. User can apply patch later via `git apply`.
+   - With `--export`: Tracked changes written to `kaola-workflow/archive/exports/issue-N-{timestamp}.patch` (recoverable via `git apply`). Untracked files copied to a sibling `issue-N-{timestamp}-untracked/` directory. Worktree is removed. Both artifacts are reported in the `exported` field of JSON output.
    - With `--force`: Changes are discarded immediately. Worktree is removed. No recovery path.
 
 4. **Missing worktrees**: Registered in git but filesystem deleted. Branch cleanup still proceeds.

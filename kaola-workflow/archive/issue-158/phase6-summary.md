@@ -36,16 +36,16 @@ No deferred items, conflicts, or partial work. Issue #158 AC fully met.
 Closure scan: clean.
 
 ## Commit And Push
-Pending final Git gate.
+Committed 31acb76 on main, pushed to origin/main.
 
 ## GitHub Issue
-Will close #158 after sink.
+Closed #158.
 
 ## Roadmap
-Will update after sink.
+Regenerated (no per-issue file for 158 existed).
 
 ## Archive
-Pending finalize + sink.
+kaola-workflow/archive/issue-158
 
 ## Required Agent Compliance
 | Requirement | Status | Evidence | Skip Reason |
@@ -54,9 +54,9 @@ Pending finalize + sink.
 | documentation docking | invoked | .cache/doc-docking.md | |
 | closure advisor gate | N/A | closure scan — no deferred items | clean scan |
 | final-validation fix executors | N/A | .cache/final-validation.md | no failures |
-| roadmap refresh | pending | kaola-workflow/ROADMAP.md | after sink |
-| archive completed folder | pending | | after finalize |
-| final commit and push | ready | git status clean | final gate runs after this file is committed |
+| roadmap refresh | invoked | kaola-workflow/ROADMAP.md | |
+| archive completed folder | complete | kaola-workflow/archive/issue-158 | |
+| final commit and push | complete | 31acb76 pushed to origin/main | |
 
 ## Status
-READY FOR FINAL GIT GATE
+COMPLETE

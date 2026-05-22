@@ -1447,6 +1447,69 @@ function testStaleWorktreeCleanup() {
     }
   }
 
+  // Sub-case 9: untracked-only export — worktree dirty ONLY from untracked file
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-stale-cleanup-sc9-')));
+    const kwRoot = tmp + '.kw';
+    const binDir = path.join(tmp, 'bin');
+    try {
+      initGitRepo(tmp);
+      writeGhShim(binDir);
+      const wtPath = path.join(kwRoot, 'wt-cleanup-200');
+      fs.mkdirSync(kwRoot, { recursive: true });
+      spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-200', '--', wtPath, 'HEAD'], {
+        cwd: tmp, encoding: 'utf8'
+      });
+      // No tracked changes — only an untracked file. git diff HEAD is empty.
+      fs.writeFileSync(path.join(wtPath, 'untracked.txt'), 'hello untracked\n');
+      const out = runClaimOnline(['stale-worktree-cleanup', '--execute', '--export'], tmp, binDir);
+      assert(Array.isArray(out.exported) && out.exported.length >= 2,
+        'sc9: exported must include patch + sidecar dir (length >= 2), got: ' + JSON.stringify(out.exported));
+      const sidecars = out.exported.filter(p => p.endsWith('-untracked'));
+      assert(sidecars.length === 1, 'sc9: exactly one sidecar dir ending in -untracked, got: ' + JSON.stringify(out.exported));
+      assert(fs.existsSync(path.join(sidecars[0], 'untracked.txt')),
+        'sc9: untracked.txt must be preserved in sidecar dir');
+      assert(!out.failed_preserve || !out.failed_preserve.some(p => p === wtPath),
+        'sc9: wtPath must NOT be in failed_preserve, got: ' + JSON.stringify(out.failed_preserve));
+      assert(!fs.existsSync(wtPath), 'sc9: worktree dir must be removed after export+execute');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  // Sub-case 10: mixed export — tracked modification + untracked file
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-stale-cleanup-sc10-')));
+    const kwRoot = tmp + '.kw';
+    const binDir = path.join(tmp, 'bin');
+    try {
+      initGitRepo(tmp);
+      writeGhShim(binDir);
+      const wtPath = path.join(kwRoot, 'wt-cleanup-200');
+      fs.mkdirSync(kwRoot, { recursive: true });
+      spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-200', '--', wtPath, 'HEAD'], {
+        cwd: tmp, encoding: 'utf8'
+      });
+      fs.writeFileSync(path.join(wtPath, 'README.md'), 'modified tracked content\n'); // tracked change
+      fs.writeFileSync(path.join(wtPath, 'new-untracked.txt'), 'new file\n');          // untracked
+      const out = runClaimOnline(['stale-worktree-cleanup', '--execute', '--export'], tmp, binDir);
+      assert(Array.isArray(out.exported) && out.exported.length >= 2,
+        'sc10: exported must include patch + sidecar dir (length >= 2), got: ' + JSON.stringify(out.exported));
+      const patches = out.exported.filter(p => p.endsWith('.patch'));
+      assert(patches.length === 1, 'sc10: exactly one .patch file, got: ' + JSON.stringify(out.exported));
+      assert(fs.statSync(patches[0]).size > 0, 'sc10: patch must be non-empty (tracked change present)');
+      const sidecars = out.exported.filter(p => p.endsWith('-untracked'));
+      assert(sidecars.length === 1, 'sc10: exactly one sidecar dir ending in -untracked, got: ' + JSON.stringify(out.exported));
+      assert(fs.existsSync(path.join(sidecars[0], 'new-untracked.txt')),
+        'sc10: new-untracked.txt must be preserved in sidecar dir');
+      assert(!fs.existsSync(wtPath), 'sc10: worktree dir must be removed after export+execute');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
   console.log('testStaleWorktreeCleanup: PASSED');
 }
 

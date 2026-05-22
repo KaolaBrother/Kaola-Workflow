@@ -147,11 +147,26 @@ function exportWorktreeDiff(root, wtPath, issueNumber) {
     const exportsDir = path.join(root, 'kaola-workflow', 'archive', 'exports');
     fs.mkdirSync(exportsDir, { recursive: true });
     const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    const untrackedOut = execFileSync('git', ['-C', wtPath, 'ls-files', '-z', '--others', '--exclude-standard'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    const untrackedFiles = untrackedOut.split('\x00').filter(Boolean);
     const patchPath = path.join(exportsDir, 'issue-' + issueNumber + '-' + ts + '.patch');
     const diff = execFileSync('git', ['-C', wtPath, 'diff', 'HEAD'],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
     fs.writeFileSync(patchPath, diff);
-    return patchPath;
+    const artifacts = [patchPath];
+    if (untrackedFiles.length > 0) {
+      const untrackedDir = path.join(exportsDir, 'issue-' + issueNumber + '-' + ts + '-untracked');
+      for (const file of untrackedFiles) {
+        const src = path.join(wtPath, file);
+        if (fs.lstatSync(src).isSymbolicLink()) continue;
+        const dest = path.join(untrackedDir, file);
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.copyFileSync(src, dest);
+      }
+      artifacts.push(untrackedDir);
+    }
+    return artifacts;
   } catch (_) {
     return null;
   }
@@ -724,7 +739,7 @@ function cmdStaleWorktreeCleanup() {
       } else if (args.export) {
         const p = exportWorktreeDiff(root, wt.path, wt.issue_number);
         if (p) {
-          buckets.exported.push(p);
+          buckets.exported.push(...p);
         } else {
           buckets.failed_preserve.push(wt.path);
           continue;
