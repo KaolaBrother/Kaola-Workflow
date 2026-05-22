@@ -303,24 +303,25 @@ install_agent_files() {
     fi
 
     if [[ -f "$dest" ]]; then
-      if cmp -s "$source_file" "$dest"; then
-        echo "Agent already installed: $dest"
-      else
-        local recorded_hash
-        local current_hash
-        recorded_hash="$(manifest_lookup "$file_name")"
-        current_hash="$(sha256_file "$dest")"
+      local recorded_hash
+      local current_hash
+      recorded_hash="$(manifest_lookup "$file_name")"
+      current_hash="$(sha256_file "$dest")"
 
-        if [[ -n "$recorded_hash" ]] &&
+      # Safe to (re)write when dest is provably pristine (byte-identical to the
+      # current source) or recorded as an unmodified managed file. cmp against the
+      # source alone is not "already in desired state": the installed form is the
+      # inherit-rewritten frontmatter, so byte-equal-to-source must still rewrite.
+      if cmp -s "$source_file" "$dest" ||
+         { [[ -n "$recorded_hash" ]] &&
            [[ "$current_hash" == "$recorded_hash" ]] &&
-           grep -Fq "$MANAGED_AGENT_MARKER" "$dest"; then
-          install_managed_agent "$source_file" "$dest"
-          echo "Updated managed agent: $dest"
-        else
-          echo "Skipped agent with existing user-owned or modified file: $dest"
-          skipped=$((skipped + 1))
-          continue
-        fi
+           grep -Fq "$MANAGED_AGENT_MARKER" "$dest"; }; then
+        install_managed_agent "$source_file" "$dest"
+        echo "Updated managed agent: $dest"
+      else
+        echo "Skipped agent with existing user-owned or modified file: $dest"
+        skipped=$((skipped + 1))
+        continue
       fi
     else
       install_managed_agent "$source_file" "$dest"

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.13.0] — 2026-05-22
+
 ### Breaking / Upgrade Notes
 
 - **Worktree provisioning is now opt-in.** All three forge editions (GitHub, GitLab, Gitea) previously provisioned a sibling worktree unconditionally when online with a git history. This matched the buggy implementation but not the documented contract. The claim scripts now respect `KAOLA_WORKTREE_NATIVE` as documented: provisioning is gated on `KAOLA_WORKTREE_NATIVE=1`. **Set `KAOLA_WORKTREE_NATIVE=1` in your environment to preserve prior sibling-worktree behavior.**
@@ -15,6 +17,8 @@
 - **GitLab and Gitea `stale-worktree-check` parity** (issue #148): Added `stale-worktree-check` subcommand to both `plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js` and `plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js`. Both versions detect stale worktrees and branches using forge-specific branch prefixes (`workflow/gitlab-issue-*` / `workflow/gitea-issue-*`). Includes 6 test cases per edition in `test-gitlab-workflow-scripts.js` and `test-gitea-workflow-scripts.js` covering clean worktrees, dirty worktrees, missing worktrees, branches without worktrees, active filtering, and offline mode. This brings GitLab and Gitea editions to parity with the GitHub `stale-worktree-check` from issue #138.
 
 ### Fixed
+
+- **Installer upgrade path now applies the inherit-rewrite to existing installs** (issue #154): Re-running `install.sh` over a pre-#153 install was a silent no-op — the `cmp -s "$source_file" "$dest"` fast path in `install_agent_files()` matched (a pre-#153 `dest` is a verbatim copy of the still-unchanged concrete source) and short-circuited before the `model: inherit` rewrite, so the #153 badge fix never reached anyone who already had agents installed. The byte-equal-to-source check is now treated as "safe to rewrite" rather than "already in desired state": a pristine or recorded-managed agent is rewritten to `inherit`, while a genuinely user-modified agent is still skipped. Added `scripts/test-install-upgrade-rewrite.js`, which seeds a pre-#153 install (concrete frontmatter + concrete-hash manifest) and asserts the upgrade rewrites to `inherit`, preserves user-modified files, and is idempotent.
 
 - **Forge-neutral documentation: README operational scripts table, active-folder coordination, subcommand table, PR sink section, and roadmap section** (issue #151): Updated README.md to use forge-neutral prose where behavior is shared across GitHub, GitLab, and Gitea editions, and added script triads listing all three forge-specific command equivalents (e.g., `kaola-workflow-claim.js` / `kaola-gitlab-workflow-claim.js` / `kaola-gitea-workflow-claim.js`). Corrected Gitea plugin command wording in `plugins/kaola-workflow-gitea/commands/workflow-next.md` line 154 from "MRs" to "PRs". This makes the documentation more accessible to new users working with any forge edition.
 
