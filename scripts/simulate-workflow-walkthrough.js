@@ -4,7 +4,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawn, spawnSync } = require('child_process');
+const { spawn, spawnSync, execFileSync } = require('child_process');
 
 const repoRoot = path.resolve(__dirname, '..');
 const claimScript = path.join(repoRoot, 'scripts', 'kaola-workflow-claim.js');
@@ -335,19 +335,16 @@ function testClassifierClosedIssueResidueIgnored() {
     // gh shim: issue 80 is CLOSED → readActiveFolders must skip its folder.
     const binDir = path.join(tmp, 'bin');
     fs.mkdirSync(binDir, { recursive: true });
-    const ghShim = path.join(binDir, 'gh');
-    fs.writeFileSync(ghShim, [
-      '#!/usr/bin/env node',
+    writeShimFiles(path.join(binDir, 'gh'), [
       "const a = process.argv.slice(2).join(' ');",
       "if (a.includes('issue view 80')) { process.stdout.write('{\"state\":\"closed\"}\\n'); }",
       "else if (a.includes('issue view 81')) { process.stdout.write('{\"number\":81,\"title\":\"unrelated\",\"body\":\"commands/something.md\",\"labels\":[],\"state\":\"open\"}\\n'); }",
       "else if (a.includes('repo view')) { process.stdout.write('{\"owner\":{\"login\":\"test\"},\"name\":\"repo\"}\\n'); }",
       "else { process.stdout.write('[\\n'); }"
-    ].join('\n'));
-    fs.chmodSync(ghShim, 0o755);
+    ]);
     const result = spawnSync(process.execPath, [classifierScript, 'classify', '--issue', '81'], {
       cwd: tmp, encoding: 'utf8',
-      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', PATH: binDir + path.delimiter + path.dirname(process.execPath) + path.delimiter + (process.env.PATH || '') }
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', ...ghMockEnv(binDir), PATH: binDir + path.delimiter + path.dirname(process.execPath) + path.delimiter + (process.env.PATH || '') }
     });
     assert(result.status === 0, 'classifier exit 0 expected, got ' + result.status + '\nstderr: ' + result.stderr);
     const parsed = JSON.parse(result.stdout.trim());
@@ -382,9 +379,10 @@ function callProbeIssueState(argExpr, env, binDir) {
     "const m = require(" + JSON.stringify(activeFoldersScript) + ");",
     "process.stdout.write(JSON.stringify(m.probeIssueState(" + argExpr + ")));"
   ].join('\n');
+  const mockEnv = binDir ? ghMockEnv(binDir) : {};
   const r = spawnSync(process.execPath, ['-e', driver], {
     encoding: 'utf8',
-    env: Object.assign({}, process.env, env || {}, {
+    env: Object.assign({}, process.env, env || {}, mockEnv, {
       PATH: (binDir ? binDir + path.delimiter : '') + (process.env.PATH || '')
     })
   });
@@ -409,14 +407,11 @@ function testProbeIssueStateEmptyGhResponse() {
   try {
     const binDir = path.join(tmp, 'bin');
     fs.mkdirSync(binDir, { recursive: true });
-    const ghShim = path.join(binDir, 'gh');
-    fs.writeFileSync(ghShim, [
-      '#!/usr/bin/env node',
+    writeShimFiles(path.join(binDir, 'gh'), [
       '// outputs nothing, exits 0 → ghExec trims to empty string',
       'process.stdout.write("");',
       'process.exit(0);'
-    ].join('\n'));
-    fs.chmodSync(ghShim, 0o755);
+    ]);
     const result = callProbeIssueState('99', { KAOLA_WORKFLOW_OFFLINE: '0' }, binDir);
     assert(result.state === 'unavailable', 'empty gh response must return state unavailable, got: ' + result.state);
     assert(result.reason === 'empty gh response', 'empty gh response must return reason "empty gh response", got: ' + result.reason);
@@ -430,13 +425,10 @@ function testProbeIssueStateGhThrows() {
   try {
     const binDir = path.join(tmp, 'bin');
     fs.mkdirSync(binDir, { recursive: true });
-    const ghShim = path.join(binDir, 'gh');
-    fs.writeFileSync(ghShim, [
-      '#!/usr/bin/env node',
+    writeShimFiles(path.join(binDir, 'gh'), [
       '// exits 1 → execFileSync throws',
       'process.exit(1);'
-    ].join('\n'));
-    fs.chmodSync(ghShim, 0o755);
+    ]);
     const result = callProbeIssueState('99', { KAOLA_WORKFLOW_OFFLINE: '0' }, binDir);
     assert(result.state === 'unavailable', 'gh exit 1 must return state unavailable, got: ' + result.state);
     assert(result.reason === 'gh issue fetch failed', 'gh exit 1 must return reason "gh issue fetch failed", got: ' + result.reason);
@@ -445,18 +437,23 @@ function testProbeIssueStateGhThrows() {
   }
 }
 
+// On macOS 15 (Darwin 25.4.0), execFileSync(scriptPath, args) hangs when
+// scriptPath has ANY shebang (node or shell). Only execFileSync(process.execPath,
+// [jsPath, ...args]) works. Solution: write only the .js logic file; callers set
+// KAOLA_GH_MOCK_SCRIPT in the subprocess env so ghExec routes through process.execPath.
+function writeShimFiles(shimPath, jsLines) {
+  fs.writeFileSync(shimPath + '.js', jsLines.join('\n'));
+}
+
 function writeGhShimForStartup(binDir) {
   fs.mkdirSync(binDir, { recursive: true });
-  const ghShim = path.join(binDir, 'gh');
-  fs.writeFileSync(ghShim, [
-    '#!/usr/bin/env node',
+  writeShimFiles(path.join(binDir, 'gh'), [
     "const a = process.argv.slice(2).join(' ');",
     "if (a.includes('repo view')) { process.stdout.write('{\"owner\":{\"login\":\"test\"},\"name\":\"repo\"}\\n'); }",
     "else if (a.includes('issue view')) { process.stdout.write('{\"number\":0,\"title\":\"fixture\",\"body\":\"README.md\",\"labels\":[],\"state\":\"open\"}\\n'); }",
     "else if (a.includes('api')) { process.stdout.write('[\\n'); }",
     "else { process.stdout.write('\\n'); }"
-  ].join('\n'));
-  fs.chmodSync(ghShim, 0o755);
+  ]);
 }
 
 function initGitRepo(tmp) {
@@ -477,6 +474,11 @@ function initGitRepoWithBareRemote(tmp) {
   return remotePath;
 }
 
+function ghMockEnv(binDir) {
+  const jsPath = path.join(binDir, 'gh.js');
+  return fs.existsSync(jsPath) ? { KAOLA_GH_MOCK_SCRIPT: jsPath } : {};
+}
+
 function runClaimOnline(args, cwd, binDir, extraEnv) {
   const result = spawnSync(process.execPath, [claimScript, ...args], {
     cwd,
@@ -487,6 +489,7 @@ function runClaimOnline(args, cwd, binDir, extraEnv) {
       KAOLA_WORKTREE_NATIVE: '1',
       ...(extraEnv || {}),
       KAOLA_WORKFLOW_OFFLINE: '0',
+      ...ghMockEnv(binDir),
       PATH: binDir + path.delimiter + path.dirname(process.execPath) + path.delimiter + (process.env.PATH || '')
     }
   });
@@ -508,6 +511,7 @@ function runClaimOnlineLastJson(args, cwd, binDir, extraEnv) {
       KAOLA_WORKTREE_NATIVE: '1',
       ...(extraEnv || {}),
       KAOLA_WORKFLOW_OFFLINE: '0',
+      ...ghMockEnv(binDir),
       PATH: binDir + path.delimiter + path.dirname(process.execPath) + path.delimiter + (process.env.PATH || '')
     }
   });
@@ -604,20 +608,17 @@ function testClassifierCurrentClaimMarkerBlocks() {
   try {
     const binDir = path.join(tmp, 'bin');
     fs.mkdirSync(binDir, { recursive: true });
-    const ghShim = path.join(binDir, 'gh');
-    fs.writeFileSync(ghShim, [
-      '#!/usr/bin/env node',
+    writeShimFiles(path.join(binDir, 'gh'), [
       "const a = process.argv.slice(2).join(' ');",
       "if (a.includes('repo view')) { process.stdout.write('{\"owner\":{\"login\":\"test\"},\"name\":\"repo\"}\\n'); }",
       "else if (a.includes('issue view 504')) { process.stdout.write('{\"number\":504,\"title\":\"claimed\",\"body\":\"README.md\",\"labels\":[],\"state\":\"open\"}\\n'); }",
       "else if (a.includes('api repos/test/repo/issues/504/comments')) { process.stdout.write('[{\"body\":\"<!-- kw:claim project=issue-504 -->\",\"updated_at\":\"2099-01-01T00:00:00Z\"}]\\n'); }",
       "else { process.stdout.write('[\\n'); }"
-    ].join('\n'));
-    fs.chmodSync(ghShim, 0o755);
+    ]);
     const result = spawnSync(process.execPath, [classifierScript, 'classify', '--issue', '504'], {
       cwd: tmp,
       encoding: 'utf8',
-      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', PATH: binDir + path.delimiter + path.dirname(process.execPath) + path.delimiter + (process.env.PATH || '') }
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', ...ghMockEnv(binDir), PATH: binDir + path.delimiter + path.dirname(process.execPath) + path.delimiter + (process.env.PATH || '') }
     });
     assert(result.status === 0, 'classifier should exit 0 for current claim marker');
     const parsed = JSON.parse(result.stdout.trim());
@@ -634,15 +635,13 @@ function testWatchPrArchivesClosedIssuePrFolder() {
     initGitRepo(tmp);
     const binDir = path.join(tmp, 'bin');
     fs.mkdirSync(binDir, { recursive: true });
-    fs.writeFileSync(path.join(binDir, 'gh'), [
-      '#!/usr/bin/env node',
+    writeShimFiles(path.join(binDir, 'gh'), [
       "const a = process.argv.slice(2).join(' ');",
       "if (a.includes('issue view 200')) { process.stdout.write('{\"state\":\"closed\"}\\n'); }",
       "else if (a.includes('pr view')) { process.stdout.write('{\"state\":\"MERGED\",\"number\":1}\\n'); }",
       "else if (a.includes('repo view')) { process.stdout.write('{\"owner\":{\"login\":\"test\"},\"name\":\"repo\"}\\n'); }",
       "else { process.stdout.write('[\\n'); }"
-    ].join('\n'));
-    fs.chmodSync(path.join(binDir, 'gh'), 0o755);
+    ]);
     const projDir = path.join(tmp, 'kaola-workflow', 'watch-pr-test');
     fs.mkdirSync(projDir, { recursive: true });
     fs.writeFileSync(path.join(projDir, 'workflow-state.md'), [
@@ -1026,14 +1025,12 @@ function testStatusShowsClosedIssueDrift() {
     plantActiveFolder(tmp, 'closed-project', 200, null);
     const binDir = path.join(tmp, 'bin');
     fs.mkdirSync(binDir, { recursive: true });
-    fs.writeFileSync(path.join(binDir, 'gh'), [
-      '#!/usr/bin/env node',
+    writeShimFiles(path.join(binDir, 'gh'), [
       "const a = process.argv.slice(2).join(' ');",
       "if (a.includes('issue view 100')) { process.stdout.write('{\"state\":\"open\"}\\n'); }",
       "else if (a.includes('issue view 200')) { process.stdout.write('{\"state\":\"closed\"}\\n'); }",
       "else { process.stdout.write('[\\n'); }"
-    ].join('\n'));
-    fs.chmodSync(path.join(binDir, 'gh'), 0o755);
+    ]);
     const online = runClaimOnline(['status'], tmp, binDir);
     assert(online.active.length === 1, 'online status: active should have 1 folder, got ' + online.active.length);
     assert(online.drift.length === 1, 'online status: drift should have 1 folder, got ' + online.drift.length);
@@ -1051,9 +1048,7 @@ function testStaleWorktreeCheck() {
   // Helper: write gh shim that handles all issue numbers used across sub-cases
   function writeGhShimForStale(binDir) {
     fs.mkdirSync(binDir, { recursive: true });
-    const ghShim = path.join(binDir, 'gh');
-    fs.writeFileSync(ghShim, [
-      '#!/usr/bin/env node',
+    writeShimFiles(path.join(binDir, 'gh'), [
       "const a = process.argv.slice(2).join(' ');",
       "if (a.includes('issue view 100')) { process.stdout.write('{\"state\":\"open\"}\\n'); }",
       "else if (a.includes('issue view 200')) { process.stdout.write('{\"state\":\"closed\"}\\n'); }",
@@ -1062,8 +1057,7 @@ function testStaleWorktreeCheck() {
       "else if (a.includes('issue view 500')) { process.stdout.write('{\"state\":\"open\"}\\n'); }",
       "else if (a.includes('repo view')) { process.stdout.write('{\"owner\":{\"login\":\"test\"},\"name\":\"repo\"}\\n'); }",
       "else { process.stdout.write('[\\n'); }"
-    ].join('\n'));
-    fs.chmodSync(ghShim, 0o755);
+    ]);
   }
 
   // Sub-case 1: closed worktree → stale_worktrees
@@ -1211,6 +1205,249 @@ function testStaleWorktreeCheck() {
   }
 
   console.log('testStaleWorktreeCheck: PASSED');
+}
+
+function testStaleWorktreeCleanup() {
+  // Helper: write gh shim that reports issue 200 as closed
+  function writeGhShim(binDir) {
+    fs.mkdirSync(binDir, { recursive: true });
+    writeShimFiles(path.join(binDir, 'gh'), [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issue view 200')) { process.stdout.write('{\"state\":\"closed\"}\\n'); }",
+      "else if (a.includes('repo view')) { process.stdout.write('{\"owner\":{\"login\":\"test\"},\"name\":\"repo\"}\\n'); }",
+      "else { process.stdout.write('[\\n'); }"
+    ]);
+  }
+
+  // Sub-case 1: dry-run — clean worktree, no --execute
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-stale-cleanup-sc1-')));
+    const kwRoot = tmp + '.kw';
+    const binDir = path.join(tmp, 'bin');
+    try {
+      initGitRepo(tmp);
+      writeGhShim(binDir);
+      const wtPath = path.join(kwRoot, 'wt-cleanup-200');
+      fs.mkdirSync(kwRoot, { recursive: true });
+      spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-200', '--', wtPath, 'HEAD'], {
+        cwd: tmp, encoding: 'utf8'
+      });
+      const out = runClaimOnline(['stale-worktree-cleanup'], tmp, binDir);
+      assert(out.dry_run === true, 'sc1: dry_run must be true, got: ' + JSON.stringify(out));
+      assert(Array.isArray(out.would_remove) && out.would_remove.some(p => p === wtPath),
+        'sc1: would_remove must contain wtPath, got: ' + JSON.stringify(out.would_remove));
+      assert(Array.isArray(out.would_delete_branch) && out.would_delete_branch.includes('workflow/issue-200'),
+        'sc1: would_delete_branch must contain workflow/issue-200, got: ' + JSON.stringify(out.would_delete_branch));
+      assert(fs.existsSync(wtPath), 'sc1: worktree dir must still exist after dry-run');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  // Sub-case 2: execute-clean — clean worktree + --execute
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-stale-cleanup-sc2-')));
+    const kwRoot = tmp + '.kw';
+    const binDir = path.join(tmp, 'bin');
+    try {
+      initGitRepo(tmp);
+      writeGhShim(binDir);
+      const wtPath = path.join(kwRoot, 'wt-cleanup-200');
+      fs.mkdirSync(kwRoot, { recursive: true });
+      spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-200', '--', wtPath, 'HEAD'], {
+        cwd: tmp, encoding: 'utf8'
+      });
+      const out = runClaimOnline(['stale-worktree-cleanup', '--execute'], tmp, binDir);
+      assert(out.dry_run === false, 'sc2: dry_run must be false, got: ' + JSON.stringify(out));
+      assert(Array.isArray(out.removed) && out.removed.some(p => p === wtPath),
+        'sc2: removed must contain wtPath, got: ' + JSON.stringify(out.removed));
+      assert(Array.isArray(out.deleted_branch) && out.deleted_branch.includes('workflow/issue-200'),
+        'sc2: deleted_branch must contain workflow/issue-200, got: ' + JSON.stringify(out.deleted_branch));
+      assert(!fs.existsSync(wtPath), 'sc2: worktree dir must be removed after execute');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  // Sub-case 3: execute-dirty-no-flag — dirty worktree + --execute (no archive/export/force)
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-stale-cleanup-sc3-')));
+    const kwRoot = tmp + '.kw';
+    const binDir = path.join(tmp, 'bin');
+    try {
+      initGitRepo(tmp);
+      writeGhShim(binDir);
+      const wtPath = path.join(kwRoot, 'wt-cleanup-200');
+      fs.mkdirSync(kwRoot, { recursive: true });
+      spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-200', '--', wtPath, 'HEAD'], {
+        cwd: tmp, encoding: 'utf8'
+      });
+      fs.writeFileSync(path.join(wtPath, 'dirty.txt'), 'x');
+      const out = runClaimOnline(['stale-worktree-cleanup', '--execute'], tmp, binDir);
+      assert(Array.isArray(out.skipped_dirty) && out.skipped_dirty.some(p => p === wtPath),
+        'sc3: skipped_dirty must contain wtPath, got: ' + JSON.stringify(out.skipped_dirty));
+      assert(!out.removed || !out.removed.some(p => p === wtPath),
+        'sc3: removed must not contain wtPath, got: ' + JSON.stringify(out.removed));
+      assert(fs.existsSync(wtPath), 'sc3: worktree dir must still exist when skipped_dirty');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  // Sub-case 4: execute-dirty-archive — dirty worktree + --execute --archive
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-stale-cleanup-sc4-')));
+    const kwRoot = tmp + '.kw';
+    const binDir = path.join(tmp, 'bin');
+    try {
+      initGitRepo(tmp);
+      writeGhShim(binDir);
+      const wtPath = path.join(kwRoot, 'wt-cleanup-200');
+      fs.mkdirSync(kwRoot, { recursive: true });
+      spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-200', '--', wtPath, 'HEAD'], {
+        cwd: tmp, encoding: 'utf8'
+      });
+      fs.writeFileSync(path.join(wtPath, 'dirty.txt'), 'x');
+      const out = runClaimOnline(['stale-worktree-cleanup', '--execute', '--archive'], tmp, binDir);
+      assert(Array.isArray(out.stashed) && out.stashed.some(p => p === wtPath),
+        'sc4: stashed must contain wtPath, got: ' + JSON.stringify(out.stashed));
+      assert(Array.isArray(out.removed) && out.removed.some(p => p === wtPath),
+        'sc4: removed must contain wtPath, got: ' + JSON.stringify(out.removed));
+      assert(!fs.existsSync(wtPath), 'sc4: worktree dir must be removed after archive+execute');
+      const stashList = execFileSync('git', ['-C', tmp, 'stash', 'list'], { encoding: 'utf8' });
+      assert(stashList.includes('kaola-cleanup-issue-200'),
+        'sc4: stash list must contain kaola-cleanup-issue-200, got: ' + stashList);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  // Sub-case 5: execute-dirty-export — dirty worktree + --execute --export
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-stale-cleanup-sc5-')));
+    const kwRoot = tmp + '.kw';
+    const binDir = path.join(tmp, 'bin');
+    try {
+      initGitRepo(tmp);
+      writeGhShim(binDir);
+      const wtPath = path.join(kwRoot, 'wt-cleanup-200');
+      fs.mkdirSync(kwRoot, { recursive: true });
+      spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-200', '--', wtPath, 'HEAD'], {
+        cwd: tmp, encoding: 'utf8'
+      });
+      // Modify a tracked file so git diff HEAD is non-empty
+      fs.writeFileSync(path.join(wtPath, 'README.md'), 'modified-for-export\n');
+      const out = runClaimOnline(['stale-worktree-cleanup', '--execute', '--export'], tmp, binDir);
+      assert(Array.isArray(out.exported) && out.exported.length > 0,
+        'sc5: exported must have at least one entry, got: ' + JSON.stringify(out.exported));
+      const patchPath = out.exported[0];
+      assert(path.basename(patchPath).includes('issue-200-'),
+        'sc5: exported patch filename must contain issue-200-, got: ' + patchPath);
+      assert(fs.existsSync(patchPath), 'sc5: exported patch file must exist on disk');
+      assert(fs.statSync(patchPath).size > 0, 'sc5: exported patch file must be non-empty');
+      assert(!fs.existsSync(wtPath), 'sc5: worktree dir must be removed after export+execute');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  // Sub-case 6: execute-dirty-force — dirty worktree + --execute --force
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-stale-cleanup-sc6-')));
+    const kwRoot = tmp + '.kw';
+    const binDir = path.join(tmp, 'bin');
+    try {
+      initGitRepo(tmp);
+      writeGhShim(binDir);
+      const wtPath = path.join(kwRoot, 'wt-cleanup-200');
+      fs.mkdirSync(kwRoot, { recursive: true });
+      spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-200', '--', wtPath, 'HEAD'], {
+        cwd: tmp, encoding: 'utf8'
+      });
+      fs.writeFileSync(path.join(wtPath, 'dirty.txt'), 'x');
+      const out = runClaimOnline(['stale-worktree-cleanup', '--execute', '--force'], tmp, binDir);
+      assert(Array.isArray(out.removed) && out.removed.some(p => p === wtPath),
+        'sc6: removed must contain wtPath, got: ' + JSON.stringify(out.removed));
+      assert(!out.stashed || out.stashed.length === 0,
+        'sc6: stashed must be empty with --force, got: ' + JSON.stringify(out.stashed));
+      assert(!out.exported || out.exported.length === 0,
+        'sc6: exported must be empty with --force, got: ' + JSON.stringify(out.exported));
+      assert(!fs.existsSync(wtPath), 'sc6: worktree dir must be removed after force+execute');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  // Sub-case 7: keep-branch — clean worktree + --execute --keep-branch
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-stale-cleanup-sc7-')));
+    const kwRoot = tmp + '.kw';
+    const binDir = path.join(tmp, 'bin');
+    try {
+      initGitRepo(tmp);
+      writeGhShim(binDir);
+      const wtPath = path.join(kwRoot, 'wt-cleanup-200');
+      fs.mkdirSync(kwRoot, { recursive: true });
+      spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-200', '--', wtPath, 'HEAD'], {
+        cwd: tmp, encoding: 'utf8'
+      });
+      const out = runClaimOnline(['stale-worktree-cleanup', '--execute', '--keep-branch'], tmp, binDir);
+      assert(Array.isArray(out.removed) && out.removed.some(p => p === wtPath),
+        'sc7: removed must contain wtPath, got: ' + JSON.stringify(out.removed));
+      assert(!out.deleted_branch || out.deleted_branch.length === 0,
+        'sc7: deleted_branch must be empty with --keep-branch, got: ' + JSON.stringify(out.deleted_branch));
+      assert(!fs.existsSync(wtPath), 'sc7: worktree dir must be removed');
+      // Branch must still exist
+      execFileSync('git', ['-C', tmp, 'rev-parse', '--verify', 'refs/heads/workflow/issue-200'],
+        { stdio: 'pipe' });
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  // Sub-case 8: execute-archive-fail — stash fails → failed_preserve, no removal
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-stale-cleanup-sc8-')));
+    const kwRoot = tmp + '.kw';
+    const binDir = path.join(tmp, 'bin');
+    let lockFile = null;
+    try {
+      initGitRepo(tmp);
+      writeGhShim(binDir);
+      const wtPath = path.join(kwRoot, 'wt-cleanup-200');
+      fs.mkdirSync(kwRoot, { recursive: true });
+      spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-200', '--', wtPath, 'HEAD'], {
+        cwd: tmp, encoding: 'utf8'
+      });
+      fs.writeFileSync(path.join(wtPath, 'dirty.txt'), 'x');
+      // Make stashWorktree fail: read the real gitdir from the worktree's .git file
+      // and place an index.lock there so git stash push fails
+      const gitFileContent = fs.readFileSync(path.join(wtPath, '.git'), 'utf8').trim();
+      const gitdirLine = gitFileContent.match(/^gitdir:\s*(.+)$/m);
+      assert(gitdirLine, 'sc8: could not parse gitdir from worktree .git file');
+      lockFile = path.join(gitdirLine[1].trim(), 'index.lock');
+      fs.writeFileSync(lockFile, '');
+      const out = runClaimOnline(['stale-worktree-cleanup', '--execute', '--archive'], tmp, binDir);
+      assert(Array.isArray(out.failed_preserve) && out.failed_preserve.some(p => p === wtPath),
+        'sc8: failed_preserve must contain wtPath, got: ' + JSON.stringify(out));
+      assert(!out.removed || !out.removed.some(p => p === wtPath),
+        'sc8: removed must NOT contain wtPath when preserve failed, got: ' + JSON.stringify(out.removed));
+      assert(fs.existsSync(wtPath), 'sc8: worktree dir must still exist when preserve failed');
+    } finally {
+      if (lockFile) { try { fs.unlinkSync(lockFile); } catch (_) {} }
+      fs.rmSync(tmp, { recursive: true, force: true });
+      try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  console.log('testStaleWorktreeCleanup: PASSED');
 }
 
 async function testSinkPrLeavesCleanWorktree() {
@@ -1565,16 +1802,14 @@ function testE2EGitHubPrFullChain() {
     const binDir = path.join(tmp, 'bin');
     // Custom gh shim: handles startup calls + watch-pr pr view
     fs.mkdirSync(binDir, { recursive: true });
-    fs.writeFileSync(path.join(binDir, 'gh'), [
-      '#!/usr/bin/env node',
+    writeShimFiles(path.join(binDir, 'gh'), [
       "const a = process.argv.slice(2).join(' ');",
       "if (a.includes('repo view')) { process.stdout.write('{\"owner\":{\"login\":\"test\"},\"name\":\"repo\"}\\n'); }",
       "else if (a.includes('issue view')) { process.stdout.write('{\"number\":860,\"title\":\"pr-chain-fixture\",\"body\":\"README.md\",\"labels\":[],\"state\":\"open\"}\\n'); }",
       "else if (a.includes('pr view')) { process.stdout.write('{\"state\":\"MERGED\",\"number\":1}\\n'); }",
       "else if (a.includes('api')) { process.stdout.write('[\\n'); }",
       "else { process.stdout.write('\\n'); }"
-    ].join('\n'));
-    fs.chmodSync(path.join(binDir, 'gh'), 0o755);
+    ]);
 
     // Step 1: startup with sink=pr
     const s860 = runClaimOnline(['startup', '--target-issue', '860'], tmp, binDir, { KAOLA_SINK: 'pr' });
@@ -1644,16 +1879,14 @@ function testParallelIssueIndependence() {
     // classifier can compute non-empty candidatePaths and avoid the noPathInfo
     // conservative-red path that blocks the second startup when both are in phase <= 2.
     fs.mkdirSync(binDir, { recursive: true });
-    fs.writeFileSync(path.join(binDir, 'gh'), [
-      '#!/usr/bin/env node',
+    writeShimFiles(path.join(binDir, 'gh'), [
       "const a = process.argv.slice(2).join(' ');",
       "if (a.includes('repo view')) { process.stdout.write('{\"owner\":{\"login\":\"test\"},\"name\":\"repo\"}\\n'); }",
       "else if (a.includes('issue view 870')) { process.stdout.write('{\"number\":870,\"title\":\"feature-870\",\"body\":\"scripts/feature-870.js\",\"labels\":[],\"state\":\"open\"}\\n'); }",
       "else if (a.includes('issue view 871')) { process.stdout.write('{\"number\":871,\"title\":\"feature-871\",\"body\":\"scripts/feature-871.js\",\"labels\":[],\"state\":\"open\"}\\n'); }",
       "else if (a.includes('api')) { process.stdout.write('[\\n'); }",
       "else { process.stdout.write('\\n'); }"
-    ].join('\n'));
-    fs.chmodSync(path.join(binDir, 'gh'), 0o755);
+    ]);
 
     // Step 1: startup both issues from main worktree
     const s870 = runClaimOnline(['startup', '--target-issue', '870'], tmp, binDir);
@@ -1812,16 +2045,13 @@ function testFinalizeFromLinkedWorktreeCleansRoadmapEntry() {
 
 function writeGhShimFailingIssueView(binDir) {
   fs.mkdirSync(binDir, { recursive: true });
-  const ghShim = path.join(binDir, 'gh');
-  fs.writeFileSync(ghShim, [
-    '#!/usr/bin/env node',
+  writeShimFiles(path.join(binDir, 'gh'), [
     "const a = process.argv.slice(2).join(' ');",
     "if (a.includes('repo view')) { process.stdout.write('{\"owner\":{\"login\":\"test\"},\"name\":\"repo\"}\\n'); }",
     "else if (a.includes('issue view')) { process.stderr.write('gh: error: could not connect\\n'); process.exit(1); }",
     "else if (a.includes('api')) { process.stdout.write('[\\n'); }",
     "else { process.stdout.write('\\n'); }"
-  ].join('\n'));
-  fs.chmodSync(ghShim, 0o755);
+  ]);
 }
 
 function runClaimOnlineExpectFail(args, cwd, binDir, extraEnv) {
@@ -1834,6 +2064,7 @@ function runClaimOnlineExpectFail(args, cwd, binDir, extraEnv) {
       KAOLA_WORKTREE_NATIVE: '0',
       ...(extraEnv || {}),
       KAOLA_WORKFLOW_OFFLINE: '0',
+      ...ghMockEnv(binDir),
       PATH: binDir + path.delimiter + path.dirname(process.execPath) + path.delimiter + (process.env.PATH || '')
     }
   });
@@ -1990,6 +2221,7 @@ async function main() {
     testSinkMergeFromLinkedWorktree();
     testStatusShowsClosedIssueDrift();
     testStaleWorktreeCheck();
+    testStaleWorktreeCleanup();
     testNoTargetZeroActive();
     testNoTargetOneActive();
     testNoTargetMultipleActive();

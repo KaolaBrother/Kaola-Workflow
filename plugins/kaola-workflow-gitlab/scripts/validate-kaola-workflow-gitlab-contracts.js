@@ -354,4 +354,12 @@ assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js', 'watch-mr
 assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js', 'bootstrap');
 assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js', 'if (OFFLINE) { output({ watched: 0, offline: true }); return; }');
 
+assertConcept(pluginRoot + '/scripts/test-gitlab-workflow-scripts.js', 'GitLab stale worktree validation', [
+  'testStaleWorktreeCheck',
+  'testStaleWorktreeCleanup',
+  'stale_worktrees',
+  'stale_branches',
+  'dry_run'
+]);
+
 console.log('Kaola-Workflow GitLab contract validation passed');

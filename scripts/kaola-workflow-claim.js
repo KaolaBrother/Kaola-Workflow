@@ -29,6 +29,10 @@ function parseArgs(argv) {
     if (key === '--json') { args.json = true; continue; }
     if (key === '--force') { args.force = true; continue; }
     if (key === '--keep-worktree') { args.keepWorktree = true; continue; }
+    if (key === '--execute') { args.execute = true; continue; }
+    if (key === '--archive') { args.archive = true; continue; }
+    if (key === '--export')  { args.export = true; continue; }
+    if (key === '--keep-branch') { args.keepBranch = true; continue; }
     if (key.startsWith('--') && val !== undefined && !val.startsWith('--')) {
       const name = key.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
       args[name] = val;
@@ -43,6 +47,8 @@ function parseArgs(argv) {
 
 function ghExec(args, opts) {
   if (OFFLINE) return '';
+  const mock = process.env.KAOLA_GH_MOCK_SCRIPT;
+  if (mock) return execFileSync(process.execPath, [mock, ...args], Object.assign({ encoding: 'utf8' }, opts || {})).trim();
   return execFileSync('gh', args, Object.assign({ encoding: 'utf8' }, opts || {})).trim();
 }
 
@@ -124,6 +130,41 @@ function worktreePathFor(root, project) {
 function extractIssueNumber(branch) {
   const m = branch.match(/workflow\/issue-(\d+)/);
   return m ? Number(m[1]) : null;
+}
+
+function stashWorktree(wtPath, issueNumber) {
+  try {
+    execFileSync('git', ['-C', wtPath, 'stash', 'push', '-u', '-m', 'kaola-cleanup-issue-' + issueNumber],
+      { stdio: ['ignore', 'ignore', 'ignore'] });
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function exportWorktreeDiff(root, wtPath, issueNumber) {
+  try {
+    const exportsDir = path.join(root, 'kaola-workflow', 'archive', 'exports');
+    fs.mkdirSync(exportsDir, { recursive: true });
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    const patchPath = path.join(exportsDir, 'issue-' + issueNumber + '-' + ts + '.patch');
+    const diff = execFileSync('git', ['-C', wtPath, 'diff', 'HEAD'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    fs.writeFileSync(patchPath, diff);
+    return patchPath;
+  } catch (_) {
+    return null;
+  }
+}
+
+function removeBranch(root, branch) {
+  try {
+    execFileSync('git', ['-C', root, 'branch', '-D', branch],
+      { stdio: ['ignore', 'ignore', 'ignore'] });
+    return true;
+  } catch (_) {
+    return false;
+  }
 }
 
 function worktreeDirtyState(wtPath) {
@@ -574,14 +615,13 @@ function cmdWorktreeStatus() {
   output({ worktrees: listWorkflowWorktrees(root) });
 }
 
-function cmdStaleWorktreeCheck() {
-  const root = getRoot();
+function collectStale(root) {
   const activeFolders = readActiveFolders(root);
   const activeSet = new Set(activeFolders.map(f => f.issue_number).filter(n => n != null));
 
   const registeredWorktrees = listWorkflowWorktrees(root);
-  const staleWorktrees = [];
-  const activeWorktrees = [];
+  const stale_worktrees = [];
+  const active_worktrees = [];
   const branchesWithWorktree = new Set();
 
   for (const wt of registeredWorktrees) {
@@ -595,7 +635,7 @@ function cmdStaleWorktreeCheck() {
     const inActiveSet = activeSet.has(issueNumber);
 
     if ((isClosed || isArchived) && !inActiveSet) {
-      staleWorktrees.push({
+      stale_worktrees.push({
         path: wt.worktree,
         branch: wt.branch,
         head: wt.HEAD,
@@ -603,7 +643,7 @@ function cmdStaleWorktreeCheck() {
         state: worktreeDirtyState(wt.worktree)
       });
     } else {
-      activeWorktrees.push({ path: wt.worktree, branch: wt.branch, issue_number: issueNumber });
+      active_worktrees.push({ path: wt.worktree, branch: wt.branch, issue_number: issueNumber });
     }
   }
 
@@ -614,7 +654,7 @@ function cmdStaleWorktreeCheck() {
     localBranches = raw ? raw.split('\n') : [];
   } catch (_) {}
 
-  const staleBranches = [];
+  const stale_branches = [];
   for (const branch of localBranches) {
     if (branchesWithWorktree.has(branch)) continue;
     const issueNumber = extractIssueNumber(branch);
@@ -626,11 +666,111 @@ function cmdStaleWorktreeCheck() {
     const inActiveSet = activeSet.has(issueNumber);
 
     if ((isClosed || isArchived) && !inActiveSet) {
-      staleBranches.push({ branch, issue_number: issueNumber });
+      stale_branches.push({ branch, issue_number: issueNumber });
     }
   }
 
-  output({ stale_worktrees: staleWorktrees, stale_branches: staleBranches, active_worktrees: activeWorktrees, count: staleWorktrees.length + staleBranches.length });
+  return { stale_worktrees, stale_branches, active_worktrees };
+}
+
+function cmdStaleWorktreeCheck() {
+  const root = getRoot();
+  const r = collectStale(root);
+  output({ ...r, count: r.stale_worktrees.length + r.stale_branches.length });
+}
+
+function cmdStaleWorktreeCleanup() {
+  const root = getRoot();
+  const args = parseArgs(process.argv.slice(3));
+  const { stale_worktrees, stale_branches } = collectStale(root);
+
+  // Refuse entire run if cwd is inside any candidate worktree
+  for (const wt of stale_worktrees) {
+    if (fs.existsSync(wt.path) && cwdInside(wt.path)) {
+      output({ cleanup: false, reason: 'refusing to operate from inside a target worktree: ' + wt.path }, 1);
+      return;
+    }
+  }
+
+  const dryRun = !args.execute;
+  const buckets = { removed: [], deleted_branch: [], skipped_dirty: [], stashed: [], exported: [], failed_preserve: [] };
+  const dryBuckets = { would_remove: [], would_delete_branch: [], skipped_dirty: [] };
+  const removedBranches = new Set();
+
+  for (const wt of stale_worktrees) {
+    const branch = wt.branch.replace(/^refs\/heads\//, '');
+    const state = wt.state; // 'clean' | 'dirty' | 'missing'
+
+    if (state === 'dirty' && !(args.archive || args.export || args.force)) {
+      (dryRun ? dryBuckets : buckets).skipped_dirty.push(wt.path);
+      continue;
+    }
+
+    if (dryRun) {
+      dryBuckets.would_remove.push(wt.path);
+      if (!args.keepBranch) dryBuckets.would_delete_branch.push(branch);
+      continue;
+    }
+
+    // EXECUTE path
+    if (state === 'dirty') {
+      if (args.archive) {
+        if (stashWorktree(wt.path, wt.issue_number)) {
+          buckets.stashed.push(wt.path);
+        } else {
+          buckets.failed_preserve.push(wt.path);
+          continue;
+        }
+      } else if (args.export) {
+        const p = exportWorktreeDiff(root, wt.path, wt.issue_number);
+        if (p) {
+          buckets.exported.push(p);
+        } else {
+          buckets.failed_preserve.push(wt.path);
+          continue;
+        }
+      }
+      // --force: no pre-step; removeWorktree passes --force to git
+    }
+
+    // For missing-path worktrees, prune the stale registration instead of remove
+    if (state === 'missing') {
+      try {
+        execFileSync('git', ['-C', root, 'worktree', 'prune'], { stdio: ['ignore', 'ignore', 'ignore'] });
+      } catch (_) {}
+      buckets.removed.push(wt.path);
+      removedBranches.add(branch);
+    } else {
+      const rmResult = removeWorktree(root, 'issue-' + wt.issue_number, { worktree_path: wt.path });
+      if (rmResult.removed) {
+        buckets.removed.push(wt.path);
+        removedBranches.add(branch);
+      }
+    }
+  }
+
+  // Branch deletion: worktree-removed branches + loose stale_branches
+  const candidateBranches = [...new Set([...removedBranches, ...stale_branches.map(b => b.branch)])];
+  for (const branch of candidateBranches) {
+    if (args.keepBranch) continue;
+    if (dryRun) {
+      if (!dryBuckets.would_delete_branch.includes(branch)) dryBuckets.would_delete_branch.push(branch);
+      continue;
+    }
+    // Guard: re-scan; refuse if worktree still references this branch
+    const stillRegistered = listWorkflowWorktrees(root).some(
+      w => w.branch.replace(/^refs\/heads\//, '') === branch
+    );
+    if (stillRegistered) continue;
+    if (!branchExists(root, branch)) continue;
+    if (removeBranch(root, branch)) buckets.deleted_branch.push(branch);
+  }
+
+  if (dryRun) {
+    output({ dry_run: true, ...dryBuckets });
+  } else {
+    output({ dry_run: false, ...buckets });
+  }
 }
 
 function copyDir(src, dest) {
@@ -704,7 +844,7 @@ function cmdWatchPr() {
 
 function main() {
   const sub = process.argv[2];
-  assert(sub, 'usage: kaola-workflow-claim.js <claim|release|status|patch-branch|watch-pr|bootstrap|startup|finalize|pick-next|resume|worktree-status|worktree-finalize|sink-fallback|stale-worktree-check>');
+  assert(sub, 'usage: kaola-workflow-claim.js <claim|release|status|patch-branch|watch-pr|bootstrap|startup|finalize|pick-next|resume|worktree-status|worktree-finalize|sink-fallback|stale-worktree-check|stale-worktree-cleanup>');
   if (sub === 'claim') return cmdClaim();
   if (sub === 'release' || sub === 'discard') return cmdRelease();
   if (sub === 'status') return cmdStatus();
@@ -716,6 +856,7 @@ function main() {
   if (sub === 'resume') return cmdResume();
   if (sub === 'worktree-status') return cmdWorktreeStatus();
   if (sub === 'stale-worktree-check') return cmdStaleWorktreeCheck();
+  if (sub === 'stale-worktree-cleanup') return cmdStaleWorktreeCleanup();
   if (sub === 'worktree-finalize') return cmdWorktreeFinalize();
   if (sub === 'sink-fallback') return cmdSinkFallback();
   throw new Error('unknown subcommand: ' + sub);
@@ -730,6 +871,8 @@ module.exports = {
   buildBranchName,
   claimExplicitTarget,
   claimProject,
+  collectStale,
+  cmdStaleWorktreeCleanup,
   getCoordRoot,
   projectNameForIssue,
   provisionWorktree,

@@ -236,8 +236,10 @@ assertConcept('scripts/simulate-workflow-walkthrough.js', 'startup and cleanup h
 ]);
 assertConcept('scripts/simulate-workflow-walkthrough.js', 'stale worktree validation', [
   'testStaleWorktreeCheck',
+  'testStaleWorktreeCleanup',
   'stale_worktrees',
-  'stale_branches'
+  'stale_branches',
+  'dry_run'
 ]);
 assertIncludes('README.md', 'Active folder coordination');
 assertIncludes('README.md', 'Parallel active work');

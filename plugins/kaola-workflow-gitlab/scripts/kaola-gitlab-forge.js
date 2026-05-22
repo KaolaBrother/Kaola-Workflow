@@ -11,8 +11,10 @@ function glabExec(args, opts) {
   if (!Array.isArray(args)) throw new Error('glabExec args must be an array');
   const options = opts || {};
   if (OFFLINE || options.offline) return options.offlineStdout || '';
-  const runner = options.execFileSync || execFileSync;
-  return runner('glab', args, Object.assign({ encoding: 'utf8' }, options.execOptions || {})).trim();
+  if (options.execFileSync) return options.execFileSync('glab', args, Object.assign({ encoding: 'utf8' }, options.execOptions || {})).trim();
+  const mock = process.env.KAOLA_GLAB_MOCK_SCRIPT;
+  if (mock) return execFileSync(process.execPath, [mock, ...args], Object.assign({ encoding: 'utf8' }, options.execOptions || {})).trim();
+  return execFileSync('glab', args, Object.assign({ encoding: 'utf8' }, options.execOptions || {})).trim();
 }
 
 function parseJson(raw, fallback) {

@@ -100,6 +100,7 @@ function runClaimOnline(args, cwd, binDir, extraEnv) {
       KAOLA_WORKTREE_NATIVE: '1',
       ...(extraEnv || {}),
       KAOLA_WORKFLOW_OFFLINE: '0',
+      ...glabMockEnv(binDir),
       PATH: binDir + path.delimiter + path.dirname(process.execPath) + path.delimiter + (process.env.PATH || '')
     }
   });
@@ -108,11 +109,21 @@ function runClaimOnline(args, cwd, binDir, extraEnv) {
   return JSON.parse(result.stdout.trim());
 }
 
+// On macOS 15 (Darwin 25.4.0), execFileSync(scriptPath, args) hangs when
+// scriptPath has ANY shebang. Solution: write only the .js logic file; callers
+// set KAOLA_GLAB_MOCK_SCRIPT so glabExec routes through process.execPath.
+function writeShimFiles(shimPath, jsLines) {
+  fs.writeFileSync(shimPath + '.js', jsLines.join('\n'));
+}
+
+function glabMockEnv(binDir) {
+  const jsPath = path.join(binDir, 'glab.js');
+  return fs.existsSync(jsPath) ? { KAOLA_GLAB_MOCK_SCRIPT: jsPath } : {};
+}
+
 function writeGlabShimForStale(binDir) {
   fs.mkdirSync(binDir, { recursive: true });
-  const shim = path.join(binDir, 'glab');
-  fs.writeFileSync(shim, [
-    '#!/usr/bin/env node',
+  writeShimFiles(path.join(binDir, 'glab'), [
     "const a = process.argv.slice(2).join(' ');",
     "if (a.includes('issue view 100')) process.stdout.write('{\"state\":\"open\"}\\n');",
     "else if (a.includes('issue view 200')) process.stdout.write('{\"state\":\"closed\"}\\n');",
@@ -120,8 +131,7 @@ function writeGlabShimForStale(binDir) {
     "else if (a.includes('issue view 400')) process.stdout.write('{\"state\":\"closed\"}\\n');",
     "else if (a.includes('repo view')) process.stdout.write('{\"id\":77}\\n');",
     "else process.stdout.write('[]\\n');"
-  ].join('\n'));
-  fs.chmodSync(shim, 0o755);
+  ]);
 }
 
 function initGitRepo(root) {
@@ -1023,20 +1033,18 @@ withForge({
     // Provide a glab shim so the classifier doesn't fail-close on forge error
     const binDir100 = path.join(tmp, 'bin100');
     fs.mkdirSync(binDir100, { recursive: true });
-    const shim100 = path.join(binDir100, 'glab');
-    fs.writeFileSync(shim100, [
-      '#!/usr/bin/env node',
+    writeShimFiles(path.join(binDir100, 'glab'), [
       "const a = process.argv.slice(2).join(' ');",
       "if (a.includes('issue view')) process.stdout.write('{\"state\":\"open\"}\\n');",
       "else if (a.includes('repo view')) process.stdout.write('{\"id\":77}\\n');",
       "else process.stdout.write('[]\\n');"
-    ].join('\n'));
-    fs.chmodSync(shim100, 0o755);
+    ]);
 
     // Run startup from the linked worktree cwd — should produce sibling, not nested path
     const result = spawnSync(process.execPath, [claimScript, 'startup', '--runtime', 'test', '--target-issue', '6'], {
       cwd: linkedWt, encoding: 'utf8',
       env: { ...process.env, KAOLA_WORKTREE_NATIVE: '1',
+             ...glabMockEnv(binDir100),
              PATH: binDir100 + path.delimiter + path.dirname(process.execPath) + path.delimiter + (process.env.PATH || '') }
     });
     assert.strictEqual(result.status, 0, 'sibling startup must exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
@@ -1319,18 +1327,16 @@ function testInstallProfilesFeaturesTableHandling() {
     initGitRepo(root);
     const binDir149 = path.join(root, 'bin149');
     fs.mkdirSync(binDir149, { recursive: true });
-    const shim149 = path.join(binDir149, 'glab');
-    fs.writeFileSync(shim149, [
-      '#!/usr/bin/env node',
+    writeShimFiles(path.join(binDir149, 'glab'), [
       "const a = process.argv.slice(2).join(' ');",
       "if (a.includes('issue view')) process.stdout.write('{\"state\":\"open\"}\\n');",
       "else if (a.includes('repo view')) process.stdout.write('{\"id\":77}\\n');",
       "else process.stdout.write('[]\\n');"
-    ].join('\n'));
-    fs.chmodSync(shim149, 0o755);
+    ]);
     const r = spawnSync(process.execPath, [claimScript, 'startup', '--runtime', 'test', '--target-issue', '601'], {
       cwd: root, encoding: 'utf8',
       env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_WORKTREE_NATIVE: '0',
+             ...glabMockEnv(binDir149),
              PATH: binDir149 + path.delimiter + path.dirname(process.execPath) + path.delimiter + (process.env.PATH || '') }
     });
     assert.strictEqual(r.status, 0, 'exit 0 when KAOLA_WORKTREE_NATIVE=0\nstdout: ' + r.stdout + '\nstderr: ' + r.stderr);
@@ -1422,8 +1428,222 @@ withForge({
   }
 }
 
+function testStaleWorktreeCleanup() {
+  function addWorktree(repoRoot, branch, wtPath) {
+    const r = spawnSync('git', ['worktree', 'add', '-b', branch, '--', wtPath, 'HEAD'], { cwd: repoRoot, encoding: 'utf8' });
+    assert.strictEqual(r.status, 0, 'git worktree add failed: ' + r.stderr);
+  }
+
+  // Sub-case 1: dry-run — clean worktree, no --execute
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-stale-cleanup-sc1-')));
+    const kwRoot = tmp + '.kw';
+    const binDir = path.join(tmp, 'bin');
+    try {
+      initGitRepo(tmp);
+      writeGlabShimForStale(binDir);
+      const wtPath = path.join(kwRoot, 'issue-200');
+      addWorktree(tmp, 'workflow/gitlab-issue-200', wtPath);
+      const out = runClaimOnline(['stale-worktree-cleanup'], tmp, binDir);
+      assert(out.dry_run === true, 'sc1: dry_run must be true, got: ' + JSON.stringify(out));
+      assert(Array.isArray(out.would_remove) && out.would_remove.some(p => p === wtPath),
+        'sc1: would_remove must contain wtPath, got: ' + JSON.stringify(out.would_remove));
+      assert(Array.isArray(out.would_delete_branch) && out.would_delete_branch.includes('workflow/gitlab-issue-200'),
+        'sc1: would_delete_branch must contain workflow/gitlab-issue-200, got: ' + JSON.stringify(out.would_delete_branch));
+      assert(fs.existsSync(wtPath), 'sc1: worktree dir must still exist after dry-run');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  // Sub-case 2: execute-clean — clean worktree + --execute
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-stale-cleanup-sc2-')));
+    const kwRoot = tmp + '.kw';
+    const binDir = path.join(tmp, 'bin');
+    try {
+      initGitRepo(tmp);
+      writeGlabShimForStale(binDir);
+      const wtPath = path.join(kwRoot, 'issue-200');
+      addWorktree(tmp, 'workflow/gitlab-issue-200', wtPath);
+      const out = runClaimOnline(['stale-worktree-cleanup', '--execute'], tmp, binDir);
+      assert(out.dry_run === false, 'sc2: dry_run must be false, got: ' + JSON.stringify(out));
+      assert(Array.isArray(out.removed) && out.removed.some(p => p === wtPath),
+        'sc2: removed must contain wtPath, got: ' + JSON.stringify(out.removed));
+      assert(Array.isArray(out.deleted_branch) && out.deleted_branch.includes('workflow/gitlab-issue-200'),
+        'sc2: deleted_branch must contain workflow/gitlab-issue-200, got: ' + JSON.stringify(out.deleted_branch));
+      assert(!fs.existsSync(wtPath), 'sc2: worktree dir must be removed after execute');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  // Sub-case 3: execute-dirty-no-flag — dirty worktree + --execute (no archive/export/force)
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-stale-cleanup-sc3-')));
+    const kwRoot = tmp + '.kw';
+    const binDir = path.join(tmp, 'bin');
+    try {
+      initGitRepo(tmp);
+      writeGlabShimForStale(binDir);
+      const wtPath = path.join(kwRoot, 'issue-200');
+      addWorktree(tmp, 'workflow/gitlab-issue-200', wtPath);
+      fs.writeFileSync(path.join(wtPath, 'dirty.txt'), 'x');
+      const out = runClaimOnline(['stale-worktree-cleanup', '--execute'], tmp, binDir);
+      assert(Array.isArray(out.skipped_dirty) && out.skipped_dirty.some(p => p === wtPath),
+        'sc3: skipped_dirty must contain wtPath, got: ' + JSON.stringify(out.skipped_dirty));
+      assert(!out.removed || !out.removed.some(p => p === wtPath),
+        'sc3: removed must not contain wtPath, got: ' + JSON.stringify(out.removed));
+      assert(fs.existsSync(wtPath), 'sc3: worktree dir must still exist when skipped_dirty');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  // Sub-case 4: execute-dirty-archive — dirty worktree + --execute --archive
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-stale-cleanup-sc4-')));
+    const kwRoot = tmp + '.kw';
+    const binDir = path.join(tmp, 'bin');
+    try {
+      initGitRepo(tmp);
+      writeGlabShimForStale(binDir);
+      const wtPath = path.join(kwRoot, 'issue-200');
+      addWorktree(tmp, 'workflow/gitlab-issue-200', wtPath);
+      fs.writeFileSync(path.join(wtPath, 'dirty.txt'), 'x');
+      const out = runClaimOnline(['stale-worktree-cleanup', '--execute', '--archive'], tmp, binDir);
+      assert(Array.isArray(out.stashed) && out.stashed.some(p => p === wtPath),
+        'sc4: stashed must contain wtPath, got: ' + JSON.stringify(out.stashed));
+      assert(Array.isArray(out.removed) && out.removed.some(p => p === wtPath),
+        'sc4: removed must contain wtPath, got: ' + JSON.stringify(out.removed));
+      assert(!fs.existsSync(wtPath), 'sc4: worktree dir must be removed after archive+execute');
+      const stashResult = spawnSync('git', ['-C', tmp, 'stash', 'list'], { encoding: 'utf8' });
+      assert(stashResult.stdout.includes('kaola-cleanup-issue-200'),
+        'sc4: stash list must contain kaola-cleanup-issue-200, got: ' + stashResult.stdout);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  // Sub-case 5: execute-dirty-export — dirty (tracked file) + --execute --export
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-stale-cleanup-sc5-')));
+    const kwRoot = tmp + '.kw';
+    const binDir = path.join(tmp, 'bin');
+    try {
+      initGitRepo(tmp);
+      writeGlabShimForStale(binDir);
+      const wtPath = path.join(kwRoot, 'issue-200');
+      addWorktree(tmp, 'workflow/gitlab-issue-200', wtPath);
+      // Modify a tracked file so git diff HEAD is non-empty
+      fs.writeFileSync(path.join(wtPath, 'README.md'), 'modified-for-export\n');
+      const out = runClaimOnline(['stale-worktree-cleanup', '--execute', '--export'], tmp, binDir);
+      assert(Array.isArray(out.exported) && out.exported.length > 0,
+        'sc5: exported must have at least one entry, got: ' + JSON.stringify(out.exported));
+      const patchPath = out.exported[0];
+      assert(path.basename(patchPath).includes('issue-200-'),
+        'sc5: exported patch filename must contain issue-200-, got: ' + patchPath);
+      assert(fs.existsSync(patchPath), 'sc5: exported patch file must exist on disk');
+      assert(fs.statSync(patchPath).size > 0, 'sc5: exported patch file must be non-empty');
+      assert(!fs.existsSync(wtPath), 'sc5: worktree dir must be removed after export+execute');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  // Sub-case 6: execute-dirty-force — dirty worktree + --execute --force
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-stale-cleanup-sc6-')));
+    const kwRoot = tmp + '.kw';
+    const binDir = path.join(tmp, 'bin');
+    try {
+      initGitRepo(tmp);
+      writeGlabShimForStale(binDir);
+      const wtPath = path.join(kwRoot, 'issue-200');
+      addWorktree(tmp, 'workflow/gitlab-issue-200', wtPath);
+      fs.writeFileSync(path.join(wtPath, 'dirty.txt'), 'x');
+      const out = runClaimOnline(['stale-worktree-cleanup', '--execute', '--force'], tmp, binDir);
+      assert(Array.isArray(out.removed) && out.removed.some(p => p === wtPath),
+        'sc6: removed must contain wtPath, got: ' + JSON.stringify(out.removed));
+      assert(!out.stashed || out.stashed.length === 0,
+        'sc6: stashed must be empty with --force, got: ' + JSON.stringify(out.stashed));
+      assert(!out.exported || out.exported.length === 0,
+        'sc6: exported must be empty with --force, got: ' + JSON.stringify(out.exported));
+      assert(!fs.existsSync(wtPath), 'sc6: worktree dir must be removed after force+execute');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  // Sub-case 7: keep-branch — clean worktree + --execute --keep-branch
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-stale-cleanup-sc7-')));
+    const kwRoot = tmp + '.kw';
+    const binDir = path.join(tmp, 'bin');
+    try {
+      initGitRepo(tmp);
+      writeGlabShimForStale(binDir);
+      const wtPath = path.join(kwRoot, 'issue-200');
+      addWorktree(tmp, 'workflow/gitlab-issue-200', wtPath);
+      const out = runClaimOnline(['stale-worktree-cleanup', '--execute', '--keep-branch'], tmp, binDir);
+      assert(Array.isArray(out.removed) && out.removed.some(p => p === wtPath),
+        'sc7: removed must contain wtPath, got: ' + JSON.stringify(out.removed));
+      assert(!out.deleted_branch || out.deleted_branch.length === 0,
+        'sc7: deleted_branch must be empty with --keep-branch, got: ' + JSON.stringify(out.deleted_branch));
+      assert(!fs.existsSync(wtPath), 'sc7: worktree dir must be removed');
+      // Branch must still exist
+      const branchCheck = spawnSync('git', ['-C', tmp, 'rev-parse', '--verify', 'refs/heads/workflow/gitlab-issue-200'], { encoding: 'utf8' });
+      assert.strictEqual(branchCheck.status, 0, 'sc7: branch workflow/gitlab-issue-200 must still exist, got: ' + branchCheck.stderr);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  // Sub-case 8: execute-archive-fail — stash fails → failed_preserve, no removal
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-stale-cleanup-sc8-')));
+    const kwRoot = tmp + '.kw';
+    const binDir = path.join(tmp, 'bin');
+    let lockFile = null;
+    try {
+      initGitRepo(tmp);
+      writeGlabShimForStale(binDir);
+      const wtPath = path.join(kwRoot, 'issue-200');
+      addWorktree(tmp, 'workflow/gitlab-issue-200', wtPath);
+      fs.writeFileSync(path.join(wtPath, 'dirty.txt'), 'x');
+      // Make stashWorktree fail: read the real gitdir from the worktree's .git file
+      // and place an index.lock there so git stash push fails
+      const gitFileContent = fs.readFileSync(path.join(wtPath, '.git'), 'utf8').trim();
+      const gitdirLine = gitFileContent.match(/^gitdir:\s*(.+)$/m);
+      assert(gitdirLine, 'sc8: could not parse gitdir from worktree .git file');
+      lockFile = path.join(gitdirLine[1].trim(), 'index.lock');
+      fs.writeFileSync(lockFile, '');
+      const out = runClaimOnline(['stale-worktree-cleanup', '--execute', '--archive'], tmp, binDir);
+      assert(Array.isArray(out.failed_preserve) && out.failed_preserve.some(p => p === wtPath),
+        'sc8: failed_preserve must contain wtPath, got: ' + JSON.stringify(out));
+      assert(!out.removed || !out.removed.some(p => p === wtPath),
+        'sc8: removed must NOT contain wtPath when preserve failed, got: ' + JSON.stringify(out.removed));
+      assert(fs.existsSync(wtPath), 'sc8: worktree dir must still exist when preserve failed');
+    } finally {
+      if (lockFile) { try { fs.unlinkSync(lockFile); } catch (_) {} }
+      fs.rmSync(tmp, { recursive: true, force: true });
+      try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  console.log('testStaleWorktreeCleanup: PASSED');
+}
+
 testInstallProfilesFeaturesTableHandling();
 testStaleWorktreeCheck();
+testStaleWorktreeCleanup();
 
 testGitLabRoadmapInitIssueExclusiveAndUpdate()
   .then(() => {

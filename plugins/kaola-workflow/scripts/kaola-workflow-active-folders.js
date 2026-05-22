@@ -32,6 +32,8 @@ function getRoot() {
 
 function ghExec(args, opts) {
   if (OFFLINE) return '';
+  const mock = process.env.KAOLA_GH_MOCK_SCRIPT;
+  if (mock) return execFileSync(process.execPath, [mock, ...args], Object.assign({ encoding: 'utf8' }, opts || {})).trim();
   return execFileSync('gh', args, Object.assign({ encoding: 'utf8' }, opts || {})).trim();
 }
 

@@ -354,4 +354,12 @@ for (const file of listFiles(pluginRoot + '/scripts', file =>
 
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'bootstrap');
 
+assertConcept(pluginRoot + '/scripts/test-gitea-workflow-scripts.js', 'Gitea stale worktree validation', [
+  'testStaleWorktreeCheck',
+  'testStaleWorktreeCleanup',
+  'stale_worktrees',
+  'stale_branches',
+  'dry_run'
+]);
+
 console.log('Kaola-Workflow Gitea contract validation passed');

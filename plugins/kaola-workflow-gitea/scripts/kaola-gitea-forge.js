@@ -17,6 +17,9 @@ function teaExec(args, opts) {
   if (options.execFileSync) {
     return options.execFileSync('tea', args, Object.assign({ encoding: 'utf8' }, options.execOptions || {})).trim();
   }
+  // Env-var mock for subprocess tests (macOS shebang execution hang workaround)
+  const mock = process.env.KAOLA_TEA_MOCK_SCRIPT;
+  if (mock) return execFileSync(process.execPath, [mock, ...args], Object.assign({ encoding: 'utf8' }, options.execOptions || {})).trim();
   // First live call: validate tea version >= 0.9.2
   if (!_versionChecked) {
     const versionOut = execFileSync('tea', ['--version'], { encoding: 'utf8' });

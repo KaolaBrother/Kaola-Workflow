@@ -300,3 +300,109 @@ When offline, GitHub/GitLab/Gitea API calls are skipped. Stale detection uses on
 **Exit code:**
 
 - `0` — Execution succeeded; JSON output written to stdout
+
+### Script: `kaola-workflow-claim.js stale-worktree-cleanup`
+
+Removes stale Git worktrees and branches identified by `stale-worktree-check`. Provides safe, reversible cleanup strategies for both clean and dirty worktrees.
+
+**Invocation:**
+
+```bash
+# Dry-run (no changes)
+node scripts/kaola-workflow-claim.js stale-worktree-cleanup
+
+# GitHub edition with all options
+node scripts/kaola-workflow-claim.js stale-worktree-cleanup --execute --archive --keep-branch
+
+# GitLab edition
+node plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js stale-worktree-cleanup --execute
+
+# Gitea edition
+node plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js stale-worktree-cleanup --execute
+```
+
+**Flags:**
+
+- **`--execute`** — Perform actual removal. Without this flag, the command runs in dry-run mode, scanning for stale items and reporting what would be removed without making changes.
+- **`--archive`** — For dirty worktrees, stash uncommitted changes before removal. Changes are recoverable via `git stash list`. Mutually exclusive with `--export` and `--force`.
+- **`--export`** — For dirty worktrees, write a patch file to `kaola-workflow/archive/exports/` before removal. Patch can be applied later to recover changes. Mutually exclusive with `--archive` and `--force`.
+- **`--force`** — For dirty worktrees, discard all uncommitted changes without recovery. Mutually exclusive with `--archive` and `--export`.
+- **`--keep-branch`** — Remove the git worktree but preserve the local branch. Useful for open PRs that should remain available. When omitted, both worktree and branch are deleted.
+
+**Behavior:**
+
+1. **Dry-run mode** (default, no `--execute`): Scans for stale worktrees and branches using the same logic as `stale-worktree-check`, prints report of what would be removed, exits without making changes.
+
+2. **Clean worktrees**: Removed via `git worktree remove`. Branches deleted (unless `--keep-branch` is set).
+
+3. **Dirty worktrees** (uncommitted changes):
+   - With `--archive` (default if no other strategy specified): Changes are stashed; worktree is removed. User can recover via `git stash list` and `git stash pop`.
+   - With `--export`: Patch written to `kaola-workflow/archive/exports/{worktree-name}.patch`. Worktree is removed. User can apply patch later via `git apply`.
+   - With `--force`: Changes are discarded immediately. Worktree is removed. No recovery path.
+
+4. **Missing worktrees**: Registered in git but filesystem deleted. Branch cleanup still proceeds.
+
+5. **Branch cleanup**: Local branches matching `workflow/issue-*` (GitHub), `workflow/gitlab-issue-*` (GitLab), or `workflow/gitea-issue-*` (Gitea) are deleted unless `--keep-branch` is set.
+
+**Exit codes:**
+
+- `0` — Dry-run completed successfully, or removals executed successfully
+- `1` — Error during execution (invalid flags, git error, filesystem error)
+
+**JSON output** (when `--json` is appended to flags):
+
+```json
+{
+  "dry_run": true,
+  "execute": false,
+  "strategy": "archive|export|force",
+  "keep_branch": false,
+  "summary": {
+    "worktrees_removed": 2,
+    "worktrees_pending": 3,
+    "branches_deleted": 5,
+    "branches_pending": 2,
+    "patches_exported": 1,
+    "changes_stashed": 2
+  },
+  "details": [
+    {
+      "type": "worktree",
+      "path": "/path/to/worktree",
+      "branch": "workflow/issue-42",
+      "state": "dirty",
+      "action": "would_remove",
+      "strategy_applied": "stashed"
+    }
+  ]
+}
+```
+
+**Typical cleanup workflow:**
+
+```bash
+# 1. Check what's stale
+node scripts/kaola-workflow-claim.js stale-worktree-check
+
+# 2. Dry-run cleanup to see what would be removed
+node scripts/kaola-workflow-claim.js stale-worktree-cleanup
+
+# 3. Review the report and decide on strategy
+
+# 4. Execute with chosen strategy
+# For worktrees with uncommitted work:
+node scripts/kaola-workflow-claim.js stale-worktree-cleanup --execute --archive
+
+# Or for worktrees with no work:
+node scripts/kaola-workflow-claim.js stale-worktree-cleanup --execute --force
+
+# 5. For open PRs, preserve branch while removing worktree:
+node scripts/kaola-workflow-claim.js stale-worktree-cleanup --execute --archive --keep-branch
+
+# 6. Verify cleanup completed
+node scripts/kaola-workflow-claim.js stale-worktree-check
+```
+
+**Offline mode** (`KAOLA_WORKFLOW_OFFLINE=1`):
+
+The command still removes local worktrees and branches. Archive/export strategies work normally. The detection of which worktrees/branches are "stale" uses only the local archive-existence check (no remote API calls to verify if issues are closed).

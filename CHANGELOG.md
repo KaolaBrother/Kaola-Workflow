@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Safe cleanup guidance and command for stale workflow worktrees and branches** (issue #157): New `stale-worktree-cleanup` subcommand in `scripts/kaola-workflow-claim.js` (GitHub), `plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js` (GitLab), and `plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js` (Gitea) provides safe, reversible removal of worktrees and branches detected by `stale-worktree-check`. Subcommand runs in dry-run mode by default; `--execute` performs actual removal. For dirty worktrees, offers three strategies: `--archive` (stash changes, recoverable via `git stash list`), `--export` (write patch to `kaola-workflow/archive/exports/`), `--force` (discard). `--keep-branch` removes the worktree while preserving the branch (for open PRs). Includes full test coverage with 8 sub-cases per forge edition (test-gitlab/gitea-workflow-scripts.js). Documentation added to README.md subcommands table and docs/api.md stale-worktree detection section.
+
 ### Fixed
 
 - **Publish release tag and validate CHANGELOG presence** (issue #156): Added CHANGELOG drift guard (`assert(read('CHANGELOG.md').includes('## [' + rootVersion + ']')...)`) to `scripts/validate-workflow-contracts.js` and mirrored copy at `plugins/kaola-workflow/scripts/validate-workflow-contracts.js`. The validator now fails at startup if CHANGELOG.md lacks a heading matching the current `package.json` version, preventing accidental releases with missing or stale CHANGELOG sections. Updated README.md release checklist with precise tag format (`kaola-workflow--v<X.Y.Z>` double-dash), single-tag push guidance (`git push origin kaola-workflow--v<X.Y.Z>`), and edition policy (GitHub required, GitLab optional, Gitea none). Published `kaola-workflow--v3.13.0` tag to origin/main.
