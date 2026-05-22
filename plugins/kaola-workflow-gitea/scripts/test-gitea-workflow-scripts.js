@@ -1618,6 +1618,33 @@ function testStaleWorktreeCleanup() {
     }
   }
 
+  // Sub-case 11: multi-flag precedence — dirty worktree + --execute --archive --export (archive wins)
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-stale-cleanup-sc11-')));
+    const kwRoot = tmp + '.kw';
+    const binDir = path.join(tmp, 'bin');
+    try {
+      initGitRepo(tmp);
+      writeTeaShimForStale(binDir);
+      const wtPath = path.join(kwRoot, 'issue-200');
+      addWorktree(tmp, 'workflow/gitea-issue-200', wtPath);
+      fs.writeFileSync(path.join(wtPath, 'dirty.txt'), 'x');
+      const out = runClaimOnline(['stale-worktree-cleanup', '--execute', '--archive', '--export'], tmp, binDir);
+      assert(Array.isArray(out.stashed) && out.stashed.some(p => p === wtPath),
+        'sc11: archive must win — stashed must contain wtPath, got: ' + JSON.stringify(out.stashed));
+      assert(Array.isArray(out.exported) && out.exported.length === 0,
+        'sc11: export must not fire when archive present, got: ' + JSON.stringify(out.exported));
+      assert(!out.failed_preserve || out.failed_preserve.length === 0,
+        'sc11: failed_preserve must be empty, got: ' + JSON.stringify(out.failed_preserve));
+      assert(Array.isArray(out.removed) && out.removed.some(p => p === wtPath),
+        'sc11: removed must contain wtPath, got: ' + JSON.stringify(out.removed));
+      assert(!fs.existsSync(wtPath), 'sc11: worktree dir must be removed after archive+execute');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+      try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
   console.log('testStaleWorktreeCleanup: PASSED');
 }
 

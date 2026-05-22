@@ -14,6 +14,12 @@
 
 - **Preserve untracked files in `stale-worktree-cleanup --export`** (issue #159): `exportWorktreeDiff()` previously used `git diff HEAD` (tracked changes only), silently losing untracked files when a worktree was dirty solely from untracked files. The function now enumerates untracked files via `git ls-files -z --others --exclude-standard` and copies them to a sibling `issue-N-{timestamp}-untracked/` sidecar directory alongside the patch file. Symlinks are skipped to prevent secret leakage into the tracked exports directory. Return type changed from `string` to `string[]` (array of artifact paths — patch file always first, sidecar directory appended when untracked files exist); callers spread with `push(...p)`. Applied to all four editions: GitHub (`scripts/kaola-workflow-claim.js`), Codex plugin (`plugins/kaola-workflow/scripts/kaola-workflow-claim.js`), GitLab (`plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js`), and Gitea (`plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js`). Regression tests (sc9: untracked-only, sc10: mixed) added to all three forge test suites.
 
+- Fix `stale-worktree-cleanup` API docs: describe actual skip behavior when no strategy flag is given (dirty worktrees are skipped, not archived by default), correct silent-precedence behavior (archive > export > force when multiple flags given), and replace fabricated JSON schema with accurate dry-run and execute output shapes (#160)
+
+### Tests
+
+- Add sc11 multi-flag precedence test for `stale-worktree-cleanup`: `--archive --export` verifies archive strategy wins over export (#160)
+
 ## [3.13.0] — 2026-05-22
 
 ### Breaking / Upgrade Notes

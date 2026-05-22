@@ -324,10 +324,12 @@ node plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js stale-wo
 **Flags:**
 
 - **`--execute`** — Perform actual removal. Without this flag, the command runs in dry-run mode, scanning for stale items and reporting what would be removed without making changes.
-- **`--archive`** — For dirty worktrees, stash uncommitted changes before removal. Changes are recoverable via `git stash list`. Mutually exclusive with `--export` and `--force`.
-- **`--export`** — For dirty worktrees, write a patch file to `kaola-workflow/archive/exports/` before removal. Tracked changes are captured in a `.patch` file (recoverable via `git apply`). Untracked files (which `git diff` does not capture) are copied verbatim into a sibling `issue-N-{timestamp}-untracked/` sidecar directory, preserving their relative paths. Mutually exclusive with `--archive` and `--force`.
-- **`--force`** — For dirty worktrees, discard all uncommitted changes without recovery. Mutually exclusive with `--archive` and `--export`.
+- **`--archive`** — For dirty worktrees, stash uncommitted changes before removal. Changes are recoverable via `git stash list`.
+- **`--export`** — For dirty worktrees, write a patch file to `kaola-workflow/archive/exports/` before removal. Tracked changes are captured in a `.patch` file (recoverable via `git apply`). Untracked files (which `git diff` does not capture) are copied verbatim into a sibling `issue-N-{timestamp}-untracked/` sidecar directory, preserving their relative paths.
+- **`--force`** — For dirty worktrees, discard all uncommitted changes without recovery.
 - **`--keep-branch`** — Remove the git worktree but preserve the local branch. Useful for open PRs that should remain available. When omitted, both worktree and branch are deleted.
+
+When no strategy flag (`--archive`, `--export`, or `--force`) is given, dirty worktrees are skipped and reported in the `skipped_dirty` field; no changes are made to them. When more than one strategy flag is given, they are not mutually exclusive and no error is raised — a silent precedence applies: `--archive` takes effect first, then `--export`, then `--force` (`archive > export > force`).
 
 **Behavior:**
 
@@ -336,7 +338,8 @@ node plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js stale-wo
 2. **Clean worktrees**: Removed via `git worktree remove`. Branches deleted (unless `--keep-branch` is set).
 
 3. **Dirty worktrees** (uncommitted changes):
-   - With `--archive` (default if no other strategy specified): Changes are stashed; worktree is removed. User can recover via `git stash list` and `git stash pop`.
+   - No strategy flag: dirty worktrees are skipped and reported in `skipped_dirty`. No changes are made to them.
+   - With `--archive`: Changes are stashed; worktree is removed. User can recover via `git stash list` and `git stash pop`.
    - With `--export`: Tracked changes written to `kaola-workflow/archive/exports/issue-N-{timestamp}.patch` (recoverable via `git apply`). Untracked files copied to a sibling `issue-N-{timestamp}-untracked/` directory. Worktree is removed. Both artifacts are reported in the `exported` field of JSON output.
    - With `--force`: Changes are discarded immediately. Worktree is removed. No recovery path.
 
@@ -349,32 +352,30 @@ node plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js stale-wo
 - `0` — Dry-run completed successfully, or removals executed successfully
 - `1` — Error during execution (invalid flags, git error, filesystem error)
 
-**JSON output** (when `--json` is appended to flags):
+**JSON output:**
+
+**Dry-run** (no `--execute`):
 
 ```json
 {
   "dry_run": true,
-  "execute": false,
-  "strategy": "archive|export|force",
-  "keep_branch": false,
-  "summary": {
-    "worktrees_removed": 2,
-    "worktrees_pending": 3,
-    "branches_deleted": 5,
-    "branches_pending": 2,
-    "patches_exported": 1,
-    "changes_stashed": 2
-  },
-  "details": [
-    {
-      "type": "worktree",
-      "path": "/path/to/worktree",
-      "branch": "workflow/issue-42",
-      "state": "dirty",
-      "action": "would_remove",
-      "strategy_applied": "stashed"
-    }
-  ]
+  "would_remove": [],
+  "would_delete_branch": [],
+  "skipped_dirty": []
+}
+```
+
+**Execute** (`--execute`):
+
+```json
+{
+  "dry_run": false,
+  "removed": [],
+  "deleted_branch": [],
+  "skipped_dirty": [],
+  "stashed": [],
+  "exported": [],
+  "failed_preserve": []
 }
 ```
 
