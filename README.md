@@ -395,9 +395,9 @@ performs the same review locally when no detached advisor profile is available.
 
 Current official release versions:
 
-- Claude Code command install, GitHub edition: `3.13.0`
-- Claude Code command install, GitLab edition: `3.13.0`
-- Claude Code command install, Gitea edition: `3.13.0`
+- Claude Code command install, GitHub edition: `3.14.0`
+- Claude Code command install, GitLab edition: `3.14.0`
+- Claude Code command install, Gitea edition: `3.14.0`
 - Codex `kaola-workflow` plugin manifest: `1.5.0`
 - Codex `kaola-workflow-gitlab` plugin manifest: `1.5.0`
 - Codex `kaola-workflow-gitea` plugin manifest: `1.5.0`
@@ -489,7 +489,7 @@ when developing locally. Drift between `scripts/` and
 | `kaola-workflow-claim.js` (GitHub) / `kaola-gitlab-workflow-claim.js` (GitLab) / `kaola-gitea-workflow-claim.js` (Gitea) | Active-folder coordination: claim, release/discard, status, watch-pr (watch-mr on GitLab), bootstrap/startup, finalize, pick-next, resume, worktree-status, worktree-finalize, stale-worktree-check, stale-worktree-cleanup. Provisions a per-issue Git worktree when `KAOLA_WORKTREE_NATIVE=1`. | All phases |
 | `kaola-workflow-active-folders.js` | Shared library: reads the active-folder table from `kaola-workflow/{project}/workflow-state.md`. Imported by claim, classifier, and sink scripts. | Library |
 | `kaola-workflow-classifier.js` | Parallel-work classifier: marks each open issue green/yellow/red/blocked based on dependency graph, exact file-path overlaps, shared-infra directories, and active folders. | Startup |
-| `kaola-workflow-roadmap.js` | Regenerates `kaola-workflow/ROADMAP.md` from `kaola-workflow/.roadmap/issue-{N}.md`. Subcommands: `generate`, `migrate`, `validate`, `validate-remote`, `init-issue`, `project-name`. | Phase 1, Phase 6 |
+| `kaola-workflow-roadmap.js` (GitHub) / `kaola-gitlab-workflow-roadmap.js` (GitLab) / `kaola-gitea-workflow-roadmap.js` (Gitea) | Regenerates `kaola-workflow/ROADMAP.md` from `kaola-workflow/.roadmap/issue-{N}.md`. Shared subcommands: `generate`, `validate`, `validate-remote`, `init-issue`, `project-name`; GitHub also supports `migrate`, while GitLab/Gitea support `refresh`. | Phase 1, Phase 6 |
 | `kaola-workflow-repair-state.js` | Reconstructs `workflow-state.md` from existing phase artifacts when state is missing or stale, so a resumed session has a single safe next command. | Init / Resume |
 | `kaola-workflow-sink-merge.js` (GitHub) / `kaola-gitlab-workflow-sink-merge.js` (GitLab) / `kaola-gitea-workflow-sink-merge.js` (Gitea) | Phase 6 merge sink: fetch, rebase onto `origin/main`, FF-only merge with retry on race conditions, push, close the issue, and clean up the branch. Falls back to the PR sink when the merge is impossible. | Phase 6 |
 | `kaola-workflow-sink-pr.js` (GitHub) / `kaola-gitlab-workflow-sink-mr.js` (GitLab) / `kaola-gitea-workflow-sink-pr.js` (Gitea) | Phase 6 PR/MR sink: push the branch, open a PR via `gh pr create` (GitHub), `glab mr create` (GitLab), or `tea pr create` (Gitea), record the PR/MR URL, and optionally enable auto-merge. | Phase 6 |

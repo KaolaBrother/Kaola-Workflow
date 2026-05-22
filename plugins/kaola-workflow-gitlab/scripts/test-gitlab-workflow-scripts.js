@@ -222,6 +222,50 @@ function testGitLabRoadmapGenerateAtomicReplace() {
   }
 }
 
+function writeRoadmapIssue(root, issueIid, status) {
+  const sourceDir = path.join(root, 'kaola-workflow', '.roadmap');
+  fs.mkdirSync(sourceDir, { recursive: true });
+  fs.writeFileSync(path.join(sourceDir, 'issue-' + issueIid + '.md'), [
+    'issue: #' + issueIid,
+    'title: GitLab remote validation fixture ' + issueIid,
+    'status: ' + status,
+    'workflow_project: gitlab-remote-validation-' + issueIid,
+    'next_step: validate',
+    ''
+  ].join('\n'), 'utf8');
+}
+
+function testGitLabRoadmapValidateRemote() {
+  const root = tempRoot('kw-gl-roadmap-validate-remote-');
+  try {
+    writeRoadmapIssue(root, 996, 'open');
+    writeRoadmapIssue(root, 995, 'open');
+    writeRoadmapIssue(root, 994, 'closed');
+    withForge({
+      viewIssue(issueIid) {
+        if (issueIid === 996) return { state: 'closed' };
+        if (issueIid === 995) return { state: 'opened' };
+        if (issueIid === 994) return { state: 'closed' };
+        throw new Error('unexpected issue ' + issueIid);
+      }
+    }, () => {
+      assert.deepStrictEqual(roadmap.validateRemote(root), [996],
+        'GitLab validateRemote should report only open local entries closed on remote');
+    });
+
+    const result = spawnSync(process.execPath, [roadmapScript, 'validate-remote'], {
+      cwd: root,
+      encoding: 'utf8',
+      env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
+    });
+    assert.strictEqual(result.status, 0, 'GitLab validate-remote offline should exit 0: ' + result.stderr);
+    assert.strictEqual(result.stdout.trim(), 'skipped: offline',
+      'GitLab validate-remote offline should print skipped: offline');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
 async function testGitLabRoadmapInitIssueExclusiveAndUpdate() {
   const root = tempRoot('kw-gl-roadmap-init-');
   try {
@@ -1726,6 +1770,7 @@ function testStaleWorktreeCleanup() {
 }
 
 testInstallProfilesFeaturesTableHandling();
+testGitLabRoadmapValidateRemote();
 testStaleWorktreeCheck();
 testStaleWorktreeCleanup();
 

@@ -238,6 +238,50 @@ function testGiteaRoadmapGenerateAtomicReplace() {
   }
 }
 
+function writeRoadmapIssue(root, issueNum, status) {
+  const sourceDir = path.join(root, 'kaola-workflow', '.roadmap');
+  fs.mkdirSync(sourceDir, { recursive: true });
+  fs.writeFileSync(path.join(sourceDir, 'issue-' + issueNum + '.md'), [
+    'issue: #' + issueNum,
+    'title: Gitea remote validation fixture ' + issueNum,
+    'status: ' + status,
+    'workflow_project: gitea-remote-validation-' + issueNum,
+    'next_step: validate',
+    ''
+  ].join('\n'), 'utf8');
+}
+
+function testGiteaRoadmapValidateRemote() {
+  const root = tempRoot('kw-gt-roadmap-validate-remote-');
+  try {
+    writeRoadmapIssue(root, 9960, 'open');
+    writeRoadmapIssue(root, 9950, 'open');
+    writeRoadmapIssue(root, 9940, 'closed');
+    withForge({
+      viewIssue(issueNum) {
+        if (issueNum === 9960) return { state: 'closed' };
+        if (issueNum === 9950) return { state: 'open' };
+        if (issueNum === 9940) return { state: 'closed' };
+        throw new Error('unexpected issue ' + issueNum);
+      }
+    }, () => {
+      assert.deepStrictEqual(roadmap.validateRemote(root), [9960],
+        'Gitea validateRemote should report only open local entries closed on remote');
+    });
+
+    const result = spawnSync(process.execPath, [roadmapScript, 'validate-remote'], {
+      cwd: root,
+      encoding: 'utf8',
+      env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
+    });
+    assert.strictEqual(result.status, 0, 'Gitea validate-remote offline should exit 0: ' + result.stderr);
+    assert.strictEqual(result.stdout.trim(), 'skipped: offline',
+      'Gitea validate-remote offline should print skipped: offline');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
 async function testGiteaRoadmapInitIssueExclusiveAndUpdate() {
   const root = tempRoot('kw-gt-roadmap-init-');
   try {
@@ -1649,6 +1693,7 @@ function testStaleWorktreeCleanup() {
 }
 
 testInstallProfilesFeaturesTableHandling();
+testGiteaRoadmapValidateRemote();
 testStaleWorktreeCheck();
 testStaleWorktreeCleanup();
 

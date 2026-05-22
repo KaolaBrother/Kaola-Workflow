@@ -251,6 +251,44 @@ function cmdValidate() {
   }
 }
 
+function issueIsClosed(issueIid) {
+  try {
+    return forge.viewIssue(issueIid).state === 'closed';
+  } catch (_) {
+    return false;
+  }
+}
+
+function validateRemote(root) {
+  const repoRoot = root || getRoot();
+  const issues = readRoadmapIssues(roadmapDir(repoRoot));
+  const drift = [];
+  for (const it of issues) {
+    if (String(it.status || '').toLowerCase() !== 'open') continue;
+    const issueIid = parseInt(String(it.issue).replace('#', ''), 10);
+    if (!Number.isInteger(issueIid) || issueIid <= 0) continue;
+    if (issueIsClosed(issueIid)) drift.push(issueIid);
+  }
+  return drift;
+}
+
+function cmdValidateRemote() {
+  if (process.env.KAOLA_WORKFLOW_OFFLINE === '1') {
+    process.stdout.write('skipped: offline\n');
+    return;
+  }
+  const drift = validateRemote(getRoot());
+  if (drift.length > 0) {
+    process.stderr.write(
+      'roadmap drift: ' + drift.map(n => 'issue-' + n + '.md').join(', ') +
+      ' marked open but closed on remote; run finalize or remove stale .roadmap files\n'
+    );
+    process.exitCode = 1;
+    return;
+  }
+  process.stdout.write('ok\n');
+}
+
 function cmdInitIssue(argv) {
   const args = parseArgs(argv);
   const issueIid = Number(args.issue);
@@ -301,9 +339,10 @@ function main() {
   if (!sub || sub === 'generate') { cmdGenerate(); return; }
   if (sub === 'refresh') { cmdRefresh(process.argv.slice(3)); return; }
   if (sub === 'validate') { cmdValidate(); return; }
+  if (sub === 'validate-remote') { cmdValidateRemote(); return; }
   if (sub === 'init-issue') { cmdInitIssue(process.argv.slice(3)); return; }
   if (sub === 'project-name') { cmdProjectName(process.argv.slice(3)); return; }
-  throw new Error('Unknown subcommand: ' + sub + '. Use generate, refresh, validate, init-issue, or project-name.');
+  throw new Error('Unknown subcommand: ' + sub + '. Use generate, refresh, validate, validate-remote, init-issue, or project-name.');
 }
 
 if (require.main === module) {
@@ -317,6 +356,8 @@ module.exports = {
   readRoadmapIssues,
   refreshFromGitLab,
   regenerateRoadmap,
+  validateRemote,
+  cmdValidateRemote,
   writeFileAtomicReplace,
   writeIssueRecord
 };
