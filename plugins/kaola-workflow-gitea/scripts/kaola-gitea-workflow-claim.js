@@ -11,6 +11,7 @@ const {
   getRoot,
   isSafeName,
   issueIsClosed,
+  probeIssueState,
   readActiveFolders
 } = require('./kaola-gitea-workflow-active-folders');
 const roadmapModule = require('./kaola-gitea-workflow-roadmap');
@@ -253,7 +254,7 @@ function classifyIssue(root, issueIid) {
   try {
     return classifier.classifyIssue(issueIid, root);
   } catch (_) {
-    return { verdict: 'green', reasoning: 'classifier failed open' };
+    return { verdict: 'target_unavailable', reasoning: 'classifier failed (Gitea)' };
   }
 }
 
@@ -299,11 +300,17 @@ function claimProject(root, args) {
   const issueIid = args.issue || args.targetIssue || null;
   const project = args.project || projectNameForIssue(root, issueIid);
   assert(isSafeName(project), 'unsafe project name');
-  if (issueIid != null && issueIsClosed(issueIid)) {
-    return { status: 'user_target_closed', issue: issueIid, project, reasoning: 'Gitea issue #' + issueIid + ' is closed' };
-  }
   const existing = issueIid != null ? activeByIssue(root, issueIid) : activeByProject(root, project);
   if (existing) return { status: 'owned', issue: existing.issue_iid, project: existing.project, folder: existing };
+  if (issueIid != null) {
+    const probe = probeIssueState(issueIid);
+    if (probe.state === 'closed') {
+      return { status: 'user_target_closed', issue: issueIid, project, reasoning: 'Gitea issue #' + issueIid + ' is closed' };
+    }
+    if (!OFFLINE && probe.state === 'unavailable') {
+      return { status: 'target_unavailable', claim: 'none', issue: issueIid, project, reasoning: 'tea issue #' + issueIid + ' state probe failed; refusing to claim outside KAOLA_WORKFLOW_OFFLINE=1' };
+    }
+  }
 
   const dir = projectDir(root, project);
   fs.mkdirSync(path.dirname(dir), { recursive: true });
@@ -346,6 +353,9 @@ function claimExplicitTarget(root, args) {
   }
   if (classified.verdict === 'red') {
     return { status: 'user_target_red', claim: 'none', issue: targetIssue, project: projectNameForIssue(root, targetIssue), reasoning: classified.reasoning };
+  }
+  if (classified.verdict === 'target_unavailable') {
+    return { status: 'target_unavailable', claim: 'none', issue: targetIssue, project: projectNameForIssue(root, targetIssue), reasoning: classified.reasoning };
   }
   return claimProject(root, Object.assign({}, args, { issue: targetIssue, project: args.project || projectNameForIssue(root, targetIssue) }));
 }

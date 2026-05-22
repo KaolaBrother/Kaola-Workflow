@@ -6,6 +6,8 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const forge = require('./kaola-gitea-forge');
 
+const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
+
 function isSafeName(name) {
   return typeof name === 'string' && name.length > 0 &&
     !name.includes('/') && !name.includes('\\') &&
@@ -43,6 +45,19 @@ function issueIsClosed(issueIid) {
     return forge.viewIssue(issueIid).state === 'closed';
   } catch (_) {
     return false;
+  }
+}
+
+function probeIssueState(issueNumber) {
+  if (OFFLINE || issueNumber == null) {
+    return { state: 'open', reason: 'offline-or-null' };
+  }
+  try {
+    const issue = forge.viewIssue(issueNumber);
+    const state = issue.state === 'closed' ? 'closed' : 'open';
+    return { state, reason: 'ok' };
+  } catch (_) {
+    return { state: 'unavailable', reason: 'tea issue fetch failed' };
   }
 }
 
@@ -121,6 +136,7 @@ module.exports = {
   getRoot,
   isSafeName,
   issueIsClosed,
+  probeIssueState,
   parseStateFile,
   readActiveFolders
 };

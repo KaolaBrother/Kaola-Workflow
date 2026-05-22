@@ -253,7 +253,7 @@ function classifyIssue(issueIid, root) {
   try {
     issue = forge.viewIssue(issueIid);
   } catch (_) {
-    return { verdict: 'green', reasoning: 'issue fetch failed; defaulting to green' };
+    return { verdict: 'target_unavailable', reasoning: 'glab issue fetch failed; refusing to claim outside KAOLA_WORKFLOW_OFFLINE=1' };
   }
 
   if ((issue.state || '').toLowerCase() === 'closed') {
@@ -295,7 +295,7 @@ function cmdClassify() {
   try {
     issue = forge.viewIssue(args.issue);
   } catch (_) {
-    process.stdout.write(JSON.stringify({ verdict: 'green', reasoning: 'issue fetch failed; defaulting to green' }) + '\n');
+    process.stdout.write(JSON.stringify({ verdict: 'target_unavailable', reasoning: 'glab issue fetch failed; refusing to claim outside KAOLA_WORKFLOW_OFFLINE=1' }) + '\n');
     return;
   }
 

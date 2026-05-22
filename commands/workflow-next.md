@@ -331,7 +331,7 @@ Current step: {step from workflow-state.md or reconstructed}
 Pending gates: {list or none}
 Branch: {branch from Sink block in workflow-state.md, or TBD if not yet claimed}
 Workflow path: {fast|full — from KAOLA_PATH or Step 0a-1 judgment}
-Parallel decision: {green|yellow|red|blocked|skipped — classifier verdict or "skipped" if offline/unavailable}
+Parallel decision: {green|yellow|red|blocked|target_unavailable|skipped — classifier verdict or "skipped" if offline/unavailable}
 Next command: {next_command}
 ```
 

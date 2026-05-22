@@ -129,6 +129,20 @@ function writeTeaShimForStale(binDir) {
   fs.chmodSync(shim, 0o755);
 }
 
+function writeTeaShimOpen(binDir) {
+  fs.mkdirSync(binDir, { recursive: true });
+  const shim = path.join(binDir, 'tea');
+  fs.writeFileSync(shim, [
+    '#!/usr/bin/env node',
+    "const a = process.argv.slice(2).join(' ');",
+    "if (a.includes('--version')) { process.stdout.write('tea version 0.9.2\\n'); process.exit(0); }",
+    "if (a.includes('issues view')) process.stdout.write('{\"state\":\"open\",\"labels\":[]}\\n');",
+    "else if (a.includes('repo view')) process.stdout.write('{\"id\":1}\\n');",
+    "else process.stdout.write('[]\\n');"
+  ].join('\n'));
+  fs.chmodSync(shim, 0o755);
+}
+
 function initGitRepo(root) {
   let result = spawnSync('git', ['init'], { cwd: root, encoding: 'utf8' });
   assert.strictEqual(result.status, 0, result.stderr);
@@ -291,6 +305,31 @@ withForge({
   const folders = active.readActiveFolders(root);
   assert.deepStrictEqual(folders.map(folder => folder.project), ['open-project']);
   assert.strictEqual(folders[0].issue_iid, 10);
+});
+
+// probeIssueState: null issueNumber -> { state: 'open', reason: 'offline-or-null' }
+{
+  const result = active.probeIssueState(null);
+  assert.strictEqual(result.state, 'open', 'probeIssueState(null) should return state open');
+  assert.strictEqual(result.reason, 'offline-or-null', 'probeIssueState(null) should return reason offline-or-null');
+}
+
+// probeIssueState: forge.viewIssue throws -> { state: 'unavailable', reason: 'tea issue fetch failed' }
+withForge({
+  viewIssue() { throw new Error('network error'); }
+}, () => {
+  const result = active.probeIssueState(42);
+  assert.strictEqual(result.state, 'unavailable', 'probeIssueState on throw should return state unavailable');
+  assert.strictEqual(result.reason, 'tea issue fetch failed', 'probeIssueState on throw should return reason tea issue fetch failed');
+});
+
+// probeIssueState: forge.viewIssue returns { state: 'closed' } -> { state: 'closed', reason: 'ok' }
+withForge({
+  viewIssue() { return { state: 'closed' }; }
+}, () => {
+  const result = active.probeIssueState(77);
+  assert.strictEqual(result.state, 'closed', 'probeIssueState on closed issue should return state closed');
+  assert.strictEqual(result.reason, 'ok', 'probeIssueState on closed issue should return reason ok');
 });
 
 // classify blocked: stub viewIssue to return a claimed issue (has CLAIM_LABEL) with a touches path
@@ -901,16 +940,18 @@ assert.strictEqual(classifier.issueHasRemoteClaimNotes(35), false,
 }
 
 // Fix 2b: classifyIssue remote-claim guard via label
-// In OFFLINE mode, classifyIssue takes the offline path (no remote calls).
-// Verify that issueHasWorkflowInProgressLabel correctly detects CLAIM_LABEL
-// and that the offline path returns green (no roadmap entry = no block).
+// classifyIssue with a reachable open issue (no roadmap entry, no overlap) → green (no block).
 {
   const root = tempRoot('kw-gt-ciy-label-');
   try {
     fs.mkdirSync(path.join(root, 'kaola-workflow', '.roadmap'), { recursive: true });
-    const result = classifier.classifyIssue(92, root);
-    // OFFLINE mode with no roadmap file for issue 92 → green (no block)
-    assert.strictEqual(result.verdict, 'green', 'classifyIssue in OFFLINE mode with no roadmap entry should be green');
+    withForge({
+      viewIssue(iid) { return { issue_iid: iid, number: iid, state: 'open', labels: [], body: '' }; }
+    }, () => {
+      const result = classifier.classifyIssue(92, root);
+      // Online mode with open reachable issue and no roadmap entry → green (no block)
+      assert.strictEqual(result.verdict, 'green', 'classifyIssue with reachable open issue and no roadmap entry should be green');
+    });
     // Pure label check
     assert(classifier.issueHasWorkflowInProgressLabel([forge.CLAIM_LABEL]), 'CLAIM_LABEL must trigger issueHasWorkflowInProgressLabel');
     assert(!classifier.issueHasWorkflowInProgressLabel([]), 'empty labels must not trigger issueHasWorkflowInProgressLabel');
@@ -976,6 +1017,8 @@ assert.strictEqual(classifier.issueHasRemoteClaimNotes(35), false,
 {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-sibling-'));
   const kwRoot = fs.realpathSync(tmp) + '.kw';
+  const binDir = path.join(tmp, 'bin');
+  writeTeaShimOpen(binDir);
   try {
     initGitRepo(tmp);
     // Simulate a linked worktree by running startup from within a hypothetical linked path.
@@ -987,7 +1030,8 @@ assert.strictEqual(classifier.issueHasRemoteClaimNotes(35), false,
 
     // Run startup from the linked worktree cwd — should produce sibling, not nested path
     const result = spawnSync(process.execPath, [claimScript, 'startup', '--runtime', 'test', '--target-issue', '6'], {
-      cwd: linkedWt, encoding: 'utf8', env: { ...process.env, KAOLA_WORKTREE_NATIVE: '1' }
+      cwd: linkedWt, encoding: 'utf8',
+      env: { ...process.env, KAOLA_WORKTREE_NATIVE: '1', PATH: binDir + path.delimiter + (process.env.PATH || '') }
     });
     assert.strictEqual(result.status, 0, 'sibling startup must exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
     const out = JSON.parse(result.stdout.trim());
@@ -1005,11 +1049,14 @@ assert.strictEqual(classifier.issueHasRemoteClaimNotes(35), false,
 // Issue #149 Test 1: KAOLA_WORKTREE_NATIVE default-OFF — worktree_path must be empty when NATIVE=0
 {
   const root = tempRoot('kw-gt-native-off-');
+  const binDir = path.join(root, 'bin');
+  writeTeaShimOpen(binDir);
   try {
     initGitRepo(root);
     const result = spawnSync(process.execPath, [claimScript, 'startup', '--runtime', 'test', '--target-issue', '8'], {
       cwd: root, encoding: 'utf8',
-      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_WORKTREE_NATIVE: '0' }
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_WORKTREE_NATIVE: '0',
+        PATH: binDir + path.delimiter + (process.env.PATH || '') }
     });
     assert.strictEqual(result.status, 0, 'NATIVE=0 startup must exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
     const out = JSON.parse(result.stdout.trim());
@@ -1039,10 +1086,13 @@ assert.strictEqual(classifier.issueHasRemoteClaimNotes(35), false,
 // Issue #101: KAOLA_PATH=fast startup must write fast-path state
 {
   const root = tempRoot('kw-gt-fast-startup-');
+  const binDir = path.join(root, 'bin');
+  writeTeaShimOpen(binDir);
   try {
     initGitRepo(root);
     const result = spawnSync(process.execPath, [claimScript, 'startup', '--runtime', 'test', '--target-issue', '7'], {
-      cwd: root, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_PATH: 'fast' })
+      cwd: root, encoding: 'utf8',
+      env: Object.assign({}, process.env, { KAOLA_PATH: 'fast', PATH: binDir + path.delimiter + (process.env.PATH || '') })
     });
     assert.strictEqual(result.status, 0, 'fast startup must exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
     const out = JSON.parse(result.stdout.trim());
@@ -1296,6 +1346,55 @@ function testInstallProfilesFeaturesTableHandling() {
 
 testInstallProfilesFeaturesTableHandling();
 testStaleWorktreeCheck();
+
+// --- Task 6: fail-open fix — forge.viewIssue throws outside OFFLINE must return target_unavailable ---
+
+// testGiteaClassifierFailClosed: when viewIssue throws (network error) and OFFLINE is not set,
+// classifyIssue must return { verdict: 'target_unavailable' } instead of { verdict: 'green' }
+function testGiteaClassifierFailClosed() {
+  const root = tempRoot('kw-gt-classifier-fail-');
+  try {
+    withForge({
+      viewIssue() { throw new Error('network error'); }
+    }, () => {
+      const result = classifier.classifyIssue(500, root);
+      assert.strictEqual(result.verdict, 'target_unavailable',
+        'classifyIssue: viewIssue throw outside OFFLINE must return target_unavailable, got: ' + result.verdict);
+      assert(/tea issue fetch failed/.test(result.reasoning),
+        'classifyIssue: reasoning must mention tea issue fetch failed, got: ' + result.reasoning);
+    });
+    console.log('testGiteaClassifierFailClosed: PASS');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+// testGiteaOfflineBypassesFailClosed: when KAOLA_WORKFLOW_OFFLINE=1, a failing forge must not
+// block classification — the offline code path must proceed normally (no network calls expected)
+function testGiteaOfflineBypassesFailClosed() {
+  const root = tempRoot('kw-gt-offline-bypass-fail-');
+  try {
+    fs.mkdirSync(path.join(root, 'kaola-workflow', '.roadmap'), { recursive: true });
+    // In OFFLINE mode classifyIssue uses localRoadmapIssue, not forge — so even a throwing forge
+    // must not affect the result. We verify by running the subprocess with OFFLINE=1.
+    const result = spawnSync(process.execPath, [classifierScript, 'classify', '--issue', '501'], {
+      cwd: root, encoding: 'utf8',
+      env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
+    });
+    assert.strictEqual(result.status, 0, 'OFFLINE classify must exit 0: ' + result.stderr);
+    const out = JSON.parse(result.stdout.trim());
+    assert.notStrictEqual(out.verdict, 'target_unavailable',
+      'OFFLINE classify with no roadmap entry must not return target_unavailable, got: ' + out.verdict);
+    assert.strictEqual(out.verdict, 'green',
+      'OFFLINE classify with no roadmap entry must return green, got: ' + out.verdict);
+    console.log('testGiteaOfflineBypassesFailClosed: PASS');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+testGiteaClassifierFailClosed();
+testGiteaOfflineBypassesFailClosed();
 
 testGiteaRoadmapInitIssueExclusiveAndUpdate()
   .then(() => {

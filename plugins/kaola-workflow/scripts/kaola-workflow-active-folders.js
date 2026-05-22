@@ -47,6 +47,19 @@ function issueIsClosed(issueNumber) {
   }
 }
 
+function probeIssueState(issueNumber) {
+  if (OFFLINE || issueNumber == null) return { state: 'open', reason: 'offline-or-null' };
+  try {
+    const raw = ghExec(['issue', 'view', String(issueNumber), '--json', 'state']);
+    if (!raw) return { state: 'unavailable', reason: 'empty gh response' };
+    const data = JSON.parse(raw);
+    const state = String(data.state || '').toLowerCase() === 'closed' ? 'closed' : 'open';
+    return { state, reason: 'ok' };
+  } catch (_) {
+    return { state: 'unavailable', reason: 'gh issue fetch failed' };
+  }
+}
+
 function parseStateFile(stateFile) {
   const content = fs.readFileSync(stateFile, 'utf8');
   const issue = parseInt(field(content, 'issue_number'), 10);
@@ -116,6 +129,7 @@ module.exports = {
   getRoot,
   isSafeName,
   issueIsClosed,
+  probeIssueState,
   readActiveFolders
 };
 

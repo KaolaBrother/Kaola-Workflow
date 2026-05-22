@@ -9,6 +9,7 @@ const {
   getRoot,
   isSafeName,
   issueIsClosed,
+  probeIssueState,
   readActiveFolders
 } = require('./kaola-workflow-active-folders');
 
@@ -296,7 +297,7 @@ function clearAdvisoryClaim(issueNumber, reason) {
 
 function classifyIssue(root, issueNumber) {
   const classifier = path.join(__dirname, 'kaola-workflow-classifier.js');
-  if (!fs.existsSync(classifier)) return { verdict: 'green', reasoning: 'classifier unavailable' };
+  if (!fs.existsSync(classifier)) return { verdict: 'target_unavailable', reasoning: 'classifier unavailable (packaging error)' };
   try {
     const raw = execFileSync(process.execPath, [classifier, 'classify', '--issue', String(issueNumber), '--json'], {
       cwd: root,
@@ -304,10 +305,10 @@ function classifyIssue(root, issueNumber) {
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: 30000
     }).trim();
-    return raw ? JSON.parse(raw) : { verdict: 'green', reasoning: 'classifier empty' };
+    return raw ? JSON.parse(raw) : { verdict: 'target_unavailable', reasoning: 'classifier returned empty output (contract bug)' };
   } catch (e) {
     if (e.status === 2) return { verdict: 'owned', reasoning: 'active local folder already exists' };
-    return { verdict: 'green', reasoning: 'classifier failed open' };
+    return { verdict: 'target_unavailable', reasoning: 'classifier failed (subprocess error)' };
   }
 }
 
@@ -323,11 +324,17 @@ function claimProject(root, args) {
   const issueNumber = args.issue || args.targetIssue || null;
   const project = args.project || projectNameForIssue(root, issueNumber);
   assert(isSafeName(project), 'unsafe project name');
-  if (issueNumber != null && issueIsClosed(issueNumber)) {
-    return { status: 'user_target_closed', issue: issueNumber, project, reasoning: 'GitHub issue #' + issueNumber + ' is closed' };
-  }
   const existing = issueNumber != null ? activeByIssue(root, issueNumber) : activeByProject(root, project);
   if (existing) return { status: 'owned', issue: existing.issue_number, project: existing.project, folder: existing };
+  if (issueNumber != null) {
+    const probe = probeIssueState(issueNumber);
+    if (probe.state === 'closed') {
+      return { status: 'user_target_closed', issue: issueNumber, project, reasoning: 'GitHub issue #' + issueNumber + ' is closed' };
+    }
+    if (!OFFLINE && probe.state === 'unavailable') {
+      return { status: 'target_unavailable', claim: 'none', issue: issueNumber, project, reasoning: 'gh issue #' + issueNumber + ' state probe failed; refusing to claim outside KAOLA_WORKFLOW_OFFLINE=1' };
+    }
+  }
 
   const dir = projectDir(root, project);
   fs.mkdirSync(path.dirname(dir), { recursive: true });
@@ -367,6 +374,9 @@ function claimExplicitTarget(root, args) {
   }
   if (classified.verdict === 'red') {
     return { status: 'user_target_red', claim: 'none', issue: targetIssue, project: projectNameForIssue(root, targetIssue), reasoning: classified.reasoning };
+  }
+  if (classified.verdict === 'target_unavailable') {
+    return { status: 'target_unavailable', claim: 'none', issue: targetIssue, project: projectNameForIssue(root, targetIssue), reasoning: classified.reasoning };
   }
   return claimProject(root, Object.assign({}, args, { issue: targetIssue, project: args.project || projectNameForIssue(root, targetIssue) }));
 }

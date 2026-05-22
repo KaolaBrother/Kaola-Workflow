@@ -12,6 +12,7 @@ const repairScript = path.join(repoRoot, 'scripts', 'kaola-workflow-repair-state
 const roadmapScript = path.join(repoRoot, 'scripts', 'kaola-workflow-roadmap.js');
 const sinkMergeScript = path.join(repoRoot, 'scripts', 'kaola-workflow-sink-merge.js');
 const sinkPrScript = path.join(repoRoot, 'scripts', 'kaola-workflow-sink-pr.js');
+const activeFoldersScript = path.join(repoRoot, 'scripts', 'kaola-workflow-active-folders.js');
 const hookScript = path.join(repoRoot, 'hooks', 'kaola-workflow-pre-commit.sh');
 
 function assert(condition, message) {
@@ -365,6 +366,80 @@ function testClassifierReleasedFolderExcluded() {
     const result = runClassifierOffline(tmp, 93);
     assert(result.verdict === 'green',
       'released-status folder must be excluded from overlap; expected green, got ' + result.verdict);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Issue #155 — probeIssueState unit tests
+// Each test spawns a subprocess driver to avoid OFFLINE/env freeze from module
+// load at the top of this file.
+// ---------------------------------------------------------------------------
+
+function callProbeIssueState(argExpr, env, binDir) {
+  const driver = [
+    "const m = require(" + JSON.stringify(activeFoldersScript) + ");",
+    "process.stdout.write(JSON.stringify(m.probeIssueState(" + argExpr + ")));"
+  ].join('\n');
+  const r = spawnSync(process.execPath, ['-e', driver], {
+    encoding: 'utf8',
+    env: Object.assign({}, process.env, env || {}, {
+      PATH: (binDir ? binDir + path.delimiter : '') + (process.env.PATH || '')
+    })
+  });
+  if (r.status !== 0) throw new Error('probeIssueState driver failed: ' + r.stderr);
+  return JSON.parse(r.stdout);
+}
+
+function testProbeIssueStateOffline() {
+  const result = callProbeIssueState('42', { KAOLA_WORKFLOW_OFFLINE: '1' });
+  assert(result.state === 'open', 'OFFLINE=1 must return state open, got: ' + result.state);
+  assert(result.reason === 'offline-or-null', 'OFFLINE=1 must return reason offline-or-null, got: ' + result.reason);
+}
+
+function testProbeIssueStateNullIssue() {
+  const result = callProbeIssueState('null', { KAOLA_WORKFLOW_OFFLINE: '0' });
+  assert(result.state === 'open', 'null issueNumber must return state open, got: ' + result.state);
+  assert(result.reason === 'offline-or-null', 'null issueNumber must return reason offline-or-null, got: ' + result.reason);
+}
+
+function testProbeIssueStateEmptyGhResponse() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-probe-empty-'));
+  try {
+    const binDir = path.join(tmp, 'bin');
+    fs.mkdirSync(binDir, { recursive: true });
+    const ghShim = path.join(binDir, 'gh');
+    fs.writeFileSync(ghShim, [
+      '#!/usr/bin/env node',
+      '// outputs nothing, exits 0 → ghExec trims to empty string',
+      'process.stdout.write("");',
+      'process.exit(0);'
+    ].join('\n'));
+    fs.chmodSync(ghShim, 0o755);
+    const result = callProbeIssueState('99', { KAOLA_WORKFLOW_OFFLINE: '0' }, binDir);
+    assert(result.state === 'unavailable', 'empty gh response must return state unavailable, got: ' + result.state);
+    assert(result.reason === 'empty gh response', 'empty gh response must return reason "empty gh response", got: ' + result.reason);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testProbeIssueStateGhThrows() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-probe-throws-'));
+  try {
+    const binDir = path.join(tmp, 'bin');
+    fs.mkdirSync(binDir, { recursive: true });
+    const ghShim = path.join(binDir, 'gh');
+    fs.writeFileSync(ghShim, [
+      '#!/usr/bin/env node',
+      '// exits 1 → execFileSync throws',
+      'process.exit(1);'
+    ].join('\n'));
+    fs.chmodSync(ghShim, 0o755);
+    const result = callProbeIssueState('99', { KAOLA_WORKFLOW_OFFLINE: '0' }, binDir);
+    assert(result.state === 'unavailable', 'gh exit 1 must return state unavailable, got: ' + result.state);
+    assert(result.reason === 'gh issue fetch failed', 'gh exit 1 must return reason "gh issue fetch failed", got: ' + result.reason);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -1731,6 +1806,139 @@ function testFinalizeFromLinkedWorktreeCleansRoadmapEntry() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Issue #155 Task 4 — fail-closed behavior on gh fetch error (ONLINE mode)
+// ---------------------------------------------------------------------------
+
+function writeGhShimFailingIssueView(binDir) {
+  fs.mkdirSync(binDir, { recursive: true });
+  const ghShim = path.join(binDir, 'gh');
+  fs.writeFileSync(ghShim, [
+    '#!/usr/bin/env node',
+    "const a = process.argv.slice(2).join(' ');",
+    "if (a.includes('repo view')) { process.stdout.write('{\"owner\":{\"login\":\"test\"},\"name\":\"repo\"}\\n'); }",
+    "else if (a.includes('issue view')) { process.stderr.write('gh: error: could not connect\\n'); process.exit(1); }",
+    "else if (a.includes('api')) { process.stdout.write('[\\n'); }",
+    "else { process.stdout.write('\\n'); }"
+  ].join('\n'));
+  fs.chmodSync(ghShim, 0o755);
+}
+
+function runClaimOnlineExpectFail(args, cwd, binDir, extraEnv) {
+  return spawnSync(process.execPath, [claimScript, ...args], {
+    cwd,
+    encoding: 'utf8',
+    timeout: 60000,
+    env: {
+      ...process.env,
+      KAOLA_WORKTREE_NATIVE: '0',
+      ...(extraEnv || {}),
+      KAOLA_WORKFLOW_OFFLINE: '0',
+      PATH: binDir + path.delimiter + path.dirname(process.execPath) + path.delimiter + (process.env.PATH || '')
+    }
+  });
+}
+
+function testClassifierFailClosedOnRemoteError() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-fail-closed-'));
+  try {
+    const binDir = path.join(tmp, 'bin');
+    writeGhShimFailingIssueView(binDir);
+
+    const result = runClaimOnlineExpectFail(['startup', '--target-issue', '155'], tmp, binDir);
+    assert(!result.signal, 'startup must not be killed/timed out: ' + result.signal);
+
+    // Must exit 1 (non-zero) — refusing to claim when gh fetch fails in ONLINE mode
+    assert(result.status === 1,
+      'startup must exit 1 when gh issue view fails in ONLINE mode, got ' + result.status +
+      '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+
+    const parsed = JSON.parse(result.stdout.trim().split('\n').filter(l => l.trim().startsWith('{')).pop());
+    assert(parsed.verdict === 'target_unavailable',
+      'startup must return verdict:target_unavailable when gh fetch fails, got: ' + parsed.verdict +
+      '\nfull output: ' + result.stdout);
+    assert(parsed.claim === 'none',
+      'startup must return claim:none when gh fetch fails, got: ' + parsed.claim);
+
+    // No folder must be created
+    assert(!fs.existsSync(path.join(tmp, 'kaola-workflow', 'issue-155')),
+      'kaola-workflow/issue-155 must NOT be created when gh fetch fails');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log('testClassifierFailClosedOnRemoteError: PASSED');
+}
+
+function testClassifierOfflineBypassesFailClosed() {
+  // Regression: same failing gh shim + OFFLINE=1 must still succeed (the offline early-return
+  // in cmdClassify must remain untouched so offline workflows are not broken).
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-fail-closed-offline-'));
+  try {
+    const binDir = path.join(tmp, 'bin');
+    writeGhShimFailingIssueView(binDir);
+
+    // Use runNode which sets KAOLA_WORKFLOW_OFFLINE=1
+    const result = runNode(claimScript, ['startup', '--target-issue', '156'], tmp);
+    assert(!result.signal, 'offline startup must not be killed/timed out: ' + result.signal);
+    assert(result.status === 0,
+      'offline startup must exit 0 even when gh shim would fail, got ' + result.status +
+      '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+
+    const parsed = JSON.parse(result.stdout.trim());
+    assert(parsed.claim === 'acquired' || parsed.claim === 'owned',
+      'offline startup must acquire or own (not target_unavailable), got: ' + parsed.claim +
+      '\nfull output: ' + result.stdout);
+
+    // Folder must be created
+    assert(fs.existsSync(path.join(tmp, 'kaola-workflow', 'issue-156')),
+      'kaola-workflow/issue-156 must be created in OFFLINE mode');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log('testClassifierOfflineBypassesFailClosed: PASSED');
+}
+
+function testClaimProjectOwnedFolderFailingRemote() {
+  // Issue #155: claimProject must return { status: 'owned' } when an active local folder
+  // already exists, even if the remote gh probe fails (ONLINE mode, gh exits 1).
+  // Previously, GitHub ordering ran probeIssueState FIRST, returning target_unavailable
+  // instead of the correct owned result.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-owned-failing-remote-'));
+  try {
+    // Plant an active folder for issue 157 so activeByIssue finds it
+    plantActiveFolder(tmp, 'issue-157', 157, null);
+
+    const binDir = path.join(tmp, 'bin');
+    writeGhShimFailingIssueView(binDir);
+
+    // Call claimProject directly via node -e driver to bypass the classifier gate
+    // in claimExplicitTarget (which also checks ownership, but via subprocess exit 2)
+    const driver = [
+      'const m = require(' + JSON.stringify(claimScript) + ');',
+      'const result = m.claimProject(' + JSON.stringify(tmp) + ', { issue: 157, project: "issue-157" });',
+      'process.stdout.write(JSON.stringify(result));'
+    ].join('\n');
+    const r = spawnSync(process.execPath, ['-e', driver], {
+      encoding: 'utf8',
+      timeout: 30000,
+      env: Object.assign({}, process.env, {
+        KAOLA_WORKFLOW_OFFLINE: '0',
+        PATH: binDir + path.delimiter + path.dirname(process.execPath) + path.delimiter + (process.env.PATH || '')
+      })
+    });
+    assert(!r.signal, 'claimProject driver must not be killed: ' + r.signal);
+    assert(r.status === 0,
+      'claimProject driver must exit 0, got ' + r.status + '\nstderr: ' + r.stderr);
+    const result = JSON.parse(r.stdout);
+    assert(result.status === 'owned',
+      'claimProject must return status:owned when local folder exists, even with failing gh; got: ' +
+      JSON.stringify(result));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log('testClaimProjectOwnedFolderFailingRemote: PASSED');
+}
+
 function testValidateRemoteOffline() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-validate-remote-offline-'));
   try {
@@ -1761,6 +1969,10 @@ async function main() {
     testClassifierFolderOverlapYellow();
     testClassifierClosedIssueResidueIgnored();
     testClassifierReleasedFolderExcluded();
+    testProbeIssueStateOffline();
+    testProbeIssueStateNullIssue();
+    testProbeIssueStateEmptyGhResponse();
+    testProbeIssueStateGhThrows();
     testStartupJsonAndSiblingWorktrees();
     testWorktreeNativeDefaultOff();
     testWorktreeNativeOfflineWins();
@@ -1791,6 +2003,9 @@ async function main() {
     testFastE2EMergeFullChain();
     testE2EGitHubPrFullChain();
     testParallelIssueIndependence();
+    testClassifierFailClosedOnRemoteError();
+    testClassifierOfflineBypassesFailClosed();
+    testClaimProjectOwnedFolderFailingRemote();
     console.log('Workflow walkthrough simulation passed');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });

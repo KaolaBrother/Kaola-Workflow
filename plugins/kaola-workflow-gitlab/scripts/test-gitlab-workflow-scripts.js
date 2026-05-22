@@ -288,6 +288,37 @@ withForge({
   assert.strictEqual(folders[0].issue_iid, 10);
 });
 
+// --- Task 2: probeIssueState ---
+// Case 1: issueIid null → { state: 'open', reason: 'offline-or-null' }
+{
+  const result = active.probeIssueState(null);
+  assert.strictEqual(result.state, 'open', 'probeIssueState(null) must return state: open');
+  assert.strictEqual(result.reason, 'offline-or-null', 'probeIssueState(null) must return reason: offline-or-null');
+  console.log('probeIssueState null: PASS');
+}
+
+// Case 2: forge.viewIssue throws → { state: 'unavailable', reason: 'glab issue fetch failed' }
+withForge({
+  viewIssue() { throw new Error('network error'); }
+}, () => {
+  const result = active.probeIssueState(42);
+  assert.strictEqual(result.state, 'unavailable', 'probeIssueState throw must return state: unavailable');
+  assert.strictEqual(result.reason, 'glab issue fetch failed', 'probeIssueState throw must return expected reason');
+  console.log('probeIssueState throws: PASS');
+});
+
+// Case 3: forge.viewIssue returns { state: 'closed' } → { state: 'closed', reason: 'ok' }
+withForge({
+  viewIssue(issueIid) {
+    return { issue_iid: issueIid, state: 'closed' };
+  }
+}, () => {
+  const result = active.probeIssueState(43);
+  assert.strictEqual(result.state, 'closed', 'probeIssueState closed issue must return state: closed');
+  assert.strictEqual(result.reason, 'ok', 'probeIssueState closed issue must return reason: ok');
+  console.log('probeIssueState closed: PASS');
+});
+
 withForge({
   viewIssue(issueIid) {
     return {
@@ -989,9 +1020,24 @@ withForge({
     // Create a worktree so git knows about it
     spawnSync('git', ['worktree', 'add', '--detach', linkedWt], { cwd: tmp, encoding: 'utf8' });
 
+    // Provide a glab shim so the classifier doesn't fail-close on forge error
+    const binDir100 = path.join(tmp, 'bin100');
+    fs.mkdirSync(binDir100, { recursive: true });
+    const shim100 = path.join(binDir100, 'glab');
+    fs.writeFileSync(shim100, [
+      '#!/usr/bin/env node',
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issue view')) process.stdout.write('{\"state\":\"open\"}\\n');",
+      "else if (a.includes('repo view')) process.stdout.write('{\"id\":77}\\n');",
+      "else process.stdout.write('[]\\n');"
+    ].join('\n'));
+    fs.chmodSync(shim100, 0o755);
+
     // Run startup from the linked worktree cwd — should produce sibling, not nested path
     const result = spawnSync(process.execPath, [claimScript, 'startup', '--runtime', 'test', '--target-issue', '6'], {
-      cwd: linkedWt, encoding: 'utf8', env: { ...process.env, KAOLA_WORKTREE_NATIVE: '1' }
+      cwd: linkedWt, encoding: 'utf8',
+      env: { ...process.env, KAOLA_WORKTREE_NATIVE: '1',
+             PATH: binDir100 + path.delimiter + path.dirname(process.execPath) + path.delimiter + (process.env.PATH || '') }
     });
     assert.strictEqual(result.status, 0, 'sibling startup must exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
     const out = JSON.parse(result.stdout.trim());
@@ -1012,7 +1058,7 @@ withForge({
   try {
     initGitRepo(root);
     const result = spawnSync(process.execPath, [claimScript, 'startup', '--runtime', 'test', '--target-issue', '7'], {
-      cwd: root, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_PATH: 'fast' })
+      cwd: root, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_PATH: 'fast', KAOLA_WORKFLOW_OFFLINE: '1' })
     });
     assert.strictEqual(result.status, 0, 'fast startup must exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
     const out = JSON.parse(result.stdout.trim());
@@ -1271,9 +1317,21 @@ function testInstallProfilesFeaturesTableHandling() {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-native-off-')));
   try {
     initGitRepo(root);
+    const binDir149 = path.join(root, 'bin149');
+    fs.mkdirSync(binDir149, { recursive: true });
+    const shim149 = path.join(binDir149, 'glab');
+    fs.writeFileSync(shim149, [
+      '#!/usr/bin/env node',
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issue view')) process.stdout.write('{\"state\":\"open\"}\\n');",
+      "else if (a.includes('repo view')) process.stdout.write('{\"id\":77}\\n');",
+      "else process.stdout.write('[]\\n');"
+    ].join('\n'));
+    fs.chmodSync(shim149, 0o755);
     const r = spawnSync(process.execPath, [claimScript, 'startup', '--runtime', 'test', '--target-issue', '601'], {
       cwd: root, encoding: 'utf8',
-      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_WORKTREE_NATIVE: '0' }
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_WORKTREE_NATIVE: '0',
+             PATH: binDir149 + path.delimiter + path.dirname(process.execPath) + path.delimiter + (process.env.PATH || '') }
     });
     assert.strictEqual(r.status, 0, 'exit 0 when KAOLA_WORKTREE_NATIVE=0\nstdout: ' + r.stdout + '\nstderr: ' + r.stderr);
     const out = JSON.parse(r.stdout.trim().split('\n').pop());
@@ -1301,6 +1359,66 @@ function testInstallProfilesFeaturesTableHandling() {
     fs.rmSync(root, { recursive: true, force: true });
     const kwRoot = root + '.kw';
     if (fs.existsSync(kwRoot)) fs.rmSync(kwRoot, { recursive: true, force: true });
+  }
+}
+
+// --- Task 5: fail-open fix — classifier must return target_unavailable on forge failure ---
+
+// testGitLabClassifierFailClosed: in-process classifyIssue returns target_unavailable when forge throws
+withForge({
+  viewIssue() { throw new Error('network error'); }
+}, () => {
+  const root = tempRoot('kw-gl-t5-classify-fail-');
+  try {
+    const result = classifier.classifyIssue(200, root);
+    assert.strictEqual(result.verdict, 'target_unavailable',
+      'classifyIssue must return target_unavailable when forge.viewIssue throws, got: ' + result.verdict);
+    assert(/refusing to claim outside KAOLA_WORKFLOW_OFFLINE/.test(result.reasoning),
+      'classifyIssue reasoning must mention KAOLA_WORKFLOW_OFFLINE, got: ' + result.reasoning);
+    console.log('testGitLabClassifierFailClosed: PASS');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// testGitLabStartupFailClosed: claimExplicitTarget returns target_unavailable when forge throws
+withForge({
+  viewIssue() { throw new Error('network error'); }
+}, () => {
+  const root = tempRoot('kw-gl-t5-startup-fail-');
+  try {
+    const result = claim.claimExplicitTarget(root, { targetIssue: 201 });
+    assert.strictEqual(result.status, 'target_unavailable',
+      'claimExplicitTarget must return status:target_unavailable when forge throws, got: ' + result.status);
+    assert.strictEqual(result.claim, 'none',
+      'claimExplicitTarget must return claim:none on target_unavailable, got: ' + result.claim);
+    assert(!fs.existsSync(path.join(root, 'kaola-workflow', 'issue-201')),
+      'claimExplicitTarget must not create an active folder when target_unavailable');
+    console.log('testGitLabStartupFailClosed: PASS');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// testGitLabOfflineBypassesFailClosed: OFFLINE=1 + failing forge still proceeds (regression guard)
+{
+  const root = tempRoot('kw-gl-t5-offline-bypass-');
+  try {
+    const roadmapDir = path.join(root, 'kaola-workflow', '.roadmap');
+    fs.mkdirSync(roadmapDir, { recursive: true });
+    // No roadmap file for issue 202 => green (no overlap, no dependency)
+    const result = spawnSync(process.execPath, [claimScript, 'startup', '--runtime', 'test', '--target-issue', '202'], {
+      cwd: root, encoding: 'utf8',
+      env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
+    });
+    assert.strictEqual(result.status, 0, 'OFFLINE startup must exit 0 even with no forge\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    const out = JSON.parse(result.stdout.trim());
+    assert.notStrictEqual(out.verdict, 'target_unavailable',
+      'OFFLINE startup must NOT return target_unavailable, got: ' + out.verdict);
+    assert.strictEqual(out.claim, 'acquired', 'OFFLINE startup must acquire normally');
+    console.log('testGitLabOfflineBypassesFailClosed: PASS');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 }
 

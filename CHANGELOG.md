@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Fail-closed when remote issue validation is unavailable** (issue #155): Startup and classifier now return a typed `target_unavailable` refusal when `gh`/`glab`/`tea` issue fetch fails outside `KAOLA_WORKFLOW_OFFLINE=1`, instead of silently returning `green` and claiming potentially closed or blocked issues. All three forge editions (GitHub, GitLab, Gitea) get the same behavior. A new `probeIssueState` helper in each forge's active-folders module distinguishes "remote unavailable" from "not closed" in the `claimProject` path. Existing `KAOLA_WORKFLOW_OFFLINE=1` behavior is unchanged. Regression tests added for all three forges.
+
 ## [3.13.0] — 2026-05-22
 
 ### Breaking / Upgrade Notes

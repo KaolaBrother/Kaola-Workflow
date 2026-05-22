@@ -354,7 +354,7 @@ function cmdClassify() {
     const raw = ghExec(['issue', 'view', String(args.issue), '--json', 'number,title,body,labels,state']);
     issue = JSON.parse(raw);
   } catch (_) {
-    process.stdout.write(JSON.stringify({ verdict: 'green', reasoning: 'gh issue fetch failed; defaulting to green' }) + '\n');
+    process.stdout.write(JSON.stringify({ verdict: 'target_unavailable', reasoning: 'gh issue fetch failed; refusing to claim outside KAOLA_WORKFLOW_OFFLINE=1' }) + '\n');
     return;
   }
 

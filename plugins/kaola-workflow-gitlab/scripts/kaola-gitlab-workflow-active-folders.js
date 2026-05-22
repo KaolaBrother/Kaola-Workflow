@@ -46,6 +46,16 @@ function issueIsClosed(issueIid) {
   }
 }
 
+function probeIssueState(issueIid) {
+  if (issueIid == null) return { state: 'open', reason: 'offline-or-null' };
+  try {
+    const issue = forge.viewIssue(issueIid);
+    return { state: issue.state === 'closed' ? 'closed' : 'open', reason: 'ok' };
+  } catch (_) {
+    return { state: 'unavailable', reason: 'glab issue fetch failed' };
+  }
+}
+
 function parseStateFile(stateFile) {
   const content = fs.readFileSync(stateFile, 'utf8');
   const issueIid = firstPositiveInteger(field(content, 'issue_iid'), field(content, 'issue_number'));
@@ -124,6 +134,7 @@ module.exports = {
   getRoot,
   isSafeName,
   issueIsClosed,
+  probeIssueState,
   parseStateFile,
   readActiveFolders
 };
