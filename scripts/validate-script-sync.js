@@ -33,12 +33,9 @@ const codexDir = path.join(repoRoot, 'plugins', 'kaola-workflow', 'scripts');
 //   install-codex-agent-profiles.js (Codex-only) — installs .codex/agents/ TOML
 //     profiles; not used by the Claude pack.
 //
-// HOOK PARITY NOTE:
-//   `hooks/kaola-workflow-pre-commit.sh` and `plugins/kaola-workflow/hooks/kaola-workflow-pre-commit.sh`
-//   are byte-identical copies of the cross-session staging guard. They are NOT
-//   enforced by this validator; future edits MUST be applied to both copies
-//   manually until a hook-sync check is added. Drift here means cross-runtime
-//   security divergence — keep both files in sync.
+// Hook files that must stay byte-identical across every install surface are
+// checked below. `hooks/hooks.json` is intentionally excluded because each forge
+// points at its own compact-context script name.
 const COMMON_SCRIPTS = [
   'kaola-workflow-claim.js',
   'kaola-workflow-active-folders.js',
@@ -49,6 +46,18 @@ const COMMON_SCRIPTS = [
   'kaola-workflow-sink-merge.js',
   'kaola-workflow-sink-pr.js',
   'validate-workflow-contracts.js',
+];
+
+const BYTE_IDENTICAL_GROUPS = [
+  {
+    label: 'pre-commit hook copies',
+    files: [
+      'hooks/kaola-workflow-pre-commit.sh',
+      'plugins/kaola-workflow/hooks/kaola-workflow-pre-commit.sh',
+      'plugins/kaola-workflow-gitlab/hooks/kaola-workflow-pre-commit.sh',
+      'plugins/kaola-workflow-gitea/hooks/kaola-workflow-pre-commit.sh',
+    ],
+  },
 ];
 
 function readOrNull(p) {
@@ -68,8 +77,25 @@ for (const name of COMMON_SCRIPTS) {
   }
 }
 
+for (const group of BYTE_IDENTICAL_GROUPS) {
+  const [reference, ...copies] = group.files;
+  const referenceBytes = readOrNull(path.join(repoRoot, reference));
+  if (referenceBytes === null) {
+    missing.push(reference);
+    continue;
+  }
+  for (const copy of copies) {
+    const copyBytes = readOrNull(path.join(repoRoot, copy));
+    if (copyBytes === null) {
+      missing.push(copy);
+    } else if (!referenceBytes.equals(copyBytes)) {
+      drift.push(`${group.label}: ${copy} differs from ${reference}`);
+    }
+  }
+}
+
 if (missing.length === 0 && drift.length === 0) {
-  console.log(`OK: ${COMMON_SCRIPTS.length} common scripts in sync.`);
+  console.log(`OK: ${COMMON_SCRIPTS.length} common scripts and ${BYTE_IDENTICAL_GROUPS.length} byte-identical file group in sync.`);
   process.exit(0);
 }
 

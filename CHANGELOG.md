@@ -10,6 +10,8 @@
 
 ### Fixed
 
+- Tighten cross-forge drift guards: `validate-script-sync.js` now enforces byte-identical pre-commit hook copies across GitHub, GitLab, and Gitea install surfaces; contract validation now asserts Codex plugin manifest versions stay aligned across the GitHub, GitLab, and Gitea plugins and extends init-template parity checks to the Gitea Codex skill.
+
 - Restore GitLab and Gitea roadmap `validate-remote` parity with the GitHub roadmap script, including contract/test coverage and corrected API docs for the `probeIssueState` return shape.
 
 - **Publish release tag and validate CHANGELOG presence** (issue #156): Added CHANGELOG drift guard (`assert(read('CHANGELOG.md').includes('## [' + rootVersion + ']')...)`) to `scripts/validate-workflow-contracts.js` and mirrored copy at `plugins/kaola-workflow/scripts/validate-workflow-contracts.js`. The validator now fails at startup if CHANGELOG.md lacks a heading matching the current `package.json` version, preventing accidental releases with missing or stale CHANGELOG sections. Updated README.md release checklist with precise tag format (`kaola-workflow--v<X.Y.Z>` double-dash), single-tag push guidance (`git push origin kaola-workflow--v<X.Y.Z>`), and edition policy (GitHub required, GitLab optional, Gitea none). Published `kaola-workflow--v3.13.0` tag to origin/main.

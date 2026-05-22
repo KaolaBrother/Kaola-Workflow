@@ -323,12 +323,14 @@ function extractClaudeTemplate(file) {
   return text.slice(startIdx + START.length, endIdx).trim();
 }
 
-// AGENTS.md redirect block must be byte-identical across all four init files
+// AGENTS.md redirect block must be byte-identical across all forge init files
 const initFiles = [
   'commands/workflow-init.md',
   'plugins/kaola-workflow-gitlab/commands/workflow-init.md',
+  'plugins/kaola-workflow-gitea/commands/workflow-init.md',
   `${pluginRoot}/skills/kaola-workflow-init/SKILL.md`,
-  'plugins/kaola-workflow-gitlab/skills/kaola-workflow-init/SKILL.md'
+  'plugins/kaola-workflow-gitlab/skills/kaola-workflow-init/SKILL.md',
+  'plugins/kaola-workflow-gitea/skills/kaola-workflow-init/SKILL.md'
 ];
 const redirectBlocks = initFiles.map(f => ({ file: f, block: extractRedirectBlock(f) }));
 const referenceBlock = redirectBlocks[0].block;
@@ -347,5 +349,10 @@ const gitlabCmdTemplate = extractClaudeTemplate('plugins/kaola-workflow-gitlab/c
 const gitlabSkillTemplate = extractClaudeTemplate('plugins/kaola-workflow-gitlab/skills/kaola-workflow-init/SKILL.md');
 assert(gitlabCmdTemplate === gitlabSkillTemplate,
   'CLAUDE.md template must be byte-identical within GitLab forge pair');
+
+const giteaCmdTemplate = extractClaudeTemplate('plugins/kaola-workflow-gitea/commands/workflow-init.md');
+const giteaSkillTemplate = extractClaudeTemplate('plugins/kaola-workflow-gitea/skills/kaola-workflow-init/SKILL.md');
+assert(giteaCmdTemplate === giteaSkillTemplate,
+  'CLAUDE.md template must be byte-identical within Gitea forge pair');
 
 console.log('Kaola-Workflow Codex contract validation passed');

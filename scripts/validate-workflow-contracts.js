@@ -282,6 +282,26 @@ for (const forge of ['gitlab', 'gitea']) {
   );
 }
 
+const codexManifests = [
+  ['kaola-workflow', 'plugins/kaola-workflow/.codex-plugin/plugin.json'],
+  ['kaola-workflow-gitlab', 'plugins/kaola-workflow-gitlab/.codex-plugin/plugin.json'],
+  ['kaola-workflow-gitea', 'plugins/kaola-workflow-gitea/.codex-plugin/plugin.json'],
+].map(([name, file]) => {
+  const manifest = JSON.parse(read(file));
+  assert(manifest.name === name, file + ' must declare name ' + name);
+  assertIncludes('README.md', 'Codex `' + name + '` plugin manifest: `' + manifest.version + '`');
+  return { name, file, version: manifest.version };
+});
+const codexBaselineVersion = codexManifests[0].version;
+for (const manifest of codexManifests.slice(1)) {
+  assert(
+    manifest.version === codexBaselineVersion,
+    manifest.file + ' version (' + manifest.version +
+      ') must match plugins/kaola-workflow/.codex-plugin/plugin.json version (' +
+      codexBaselineVersion + ')'
+  );
+}
+
 assert(
   read('CHANGELOG.md').includes('## [' + rootVersion + ']'),
   'CHANGELOG.md must contain "## [' + rootVersion + ']" heading matching package.json version (' + rootVersion + ')'
