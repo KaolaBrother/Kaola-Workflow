@@ -277,6 +277,21 @@ assertConcept('docs/workflow-state-contract.md', 'legacy coordination as transit
   '.tickers/',
   'not document legacy coordination folders as permanent'
 ]);
+assertConcept('docs/api.md', 'closure contract invariants and receipt schema', [
+  '## Closure Contract',
+  'closure invariants',
+  'roadmap_source_removed',
+  'remote_issue_closed',
+  'claim_label_removed',
+  'kaola-workflow-closure-contract.js',
+  '#162',
+  '#163',
+  '#164',
+  '#165'
+]);
+assertConcept('docs/workflow-state-contract.md', 'closure contract cross-reference', [
+  'closure contract'
+]);
 assertConcept(`${pluginRoot}/scripts/kaola-workflow-roadmap.js`, 'missing roadmap source safeguard', [
   'guardAgainstMissingRoadmapSource',
   'non-empty generated ROADMAP.md',

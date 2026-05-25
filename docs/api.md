@@ -409,3 +409,75 @@ node scripts/kaola-workflow-claim.js stale-worktree-check
 **Offline mode** (`KAOLA_WORKFLOW_OFFLINE=1`):
 
 The command still removes local worktrees and branches. Archive/export strategies work normally. The detection of which worktrees/branches are "stale" uses only the local archive-existence check (no remote API calls to verify if issues are closed).
+
+## Closure Contract
+
+This section defines the closure-system invariants for a completed linked issue
+N. It is the human-readable counterpart to the machine-readable schema in
+`scripts/kaola-workflow-closure-contract.js`. No runtime path emits a receipt
+yet; emission and enforcement land in the follow-up issues mapped below.
+
+### Closure invariants
+
+For a completed linked issue N:
+
+1. `kaola-workflow/.roadmap/issue-N.md` is absent.
+2. Generated `kaola-workflow/ROADMAP.md` does not list `#N` as active work.
+3. `kaola-workflow/{project}/` is absent from active folders.
+4. `kaola-workflow/archive/{project}/workflow-state.md` exists with `status: closed` and `step: complete` when local archive is available.
+5. The remote issue is closed only after acceptance criteria pass and implementation is published.
+6. The remote issue does not have `workflow:in-progress` after closure.
+7. Any branch/worktree cleanup is either complete or explicitly reported by stale-worktree tooling.
+
+### Closure receipt schema
+
+The closure receipt is an auditable record of every closure step. Field names
+and enum values are exported from `scripts/kaola-workflow-closure-contract.js`
+as `CLOSURE_RECEIPT_FIELDS`; `emptyReceipt(project, issueNumber)` returns a
+receipt with every status field defaulted to `failed` (fail-loud: an
+unpopulated receipt reads as total failure, never silent success) and
+`warnings` empty.
+
+```json
+{
+  "project": "issue-N",
+  "issue_number": "N",
+  "archive": "closed|abandoned|skipped|failed",
+  "roadmap_source_removed": "removed|absent|failed",
+  "roadmap_regenerated": "regenerated|skipped|failed",
+  "remote_issue_closed": "closed|already_closed|skipped_offline|failed",
+  "claim_label_removed": "removed|already_absent|skipped_offline|failed",
+  "worktree_removed": "removed|missing|kept|failed",
+  "branch_removed": "removed|kept|failed",
+  "warnings": []
+}
+```
+
+Offline behavior is explicit: local invariants (1-4) are always checked; remote
+actions (`remote_issue_closed`, `claim_label_removed`) record `skipped_offline`
+under `KAOLA_WORKFLOW_OFFLINE=1` rather than `failed`.
+
+### Flow mapping
+
+Existing closure code is mapped to the contract below. This issue documents the
+mapping; it does not change any runtime path. Cross-forge parity gaps are named
+here and deferred to the listed follow-up issues.
+
+| Closure surface | Invariants covered | Current behavior | Follow-up |
+|-----------------|--------------------|------------------|-----------|
+| `cmdFinalize` / `archiveProjectDir` | 1, 2, 3, 4 | Roadmap source removal + regen are best-effort/non-fatal; `removeLegacyStateBlocks` runs on GitHub but is missing from GitLab/Gitea `archiveProjectDir`. | #162 |
+| `sink-merge` (all forges) | 5, 6, 7 | Closes remote issue and deletes branch on success; does not assert `workflow:in-progress` removal. | #163, #164 |
+| `sink-pr` / PR-MR fallback | 3, 5 | Leaves active folder open until `watch-pr`/`watch-mr`; `cmdSinkFallback` live-folder guard checks archive on GitLab/Gitea but GitHub misses that archive check. | #164 |
+| `watch-pr` / `watch-mr` | 1, 2, 3, 4, 6, 7 | Archives + roadmap cleanup on MERGED; closure can be delayed or skipped if the watcher never runs. | #164, #165 |
+| `clearAdvisoryClaim` (label cleanup) | 6 | Removes the advisory claim label; Gitea silently skips when `projectInfo.full_name` is absent. | #163 |
+| `stale-worktree-check` / `stale-worktree-cleanup` | 7 | Reports/removes stale worktrees and branches; relied on for invariant 7's "explicitly reported" clause. | #165 |
+
+### Follow-up scope
+
+This issue ships the contract and the machine-readable schema only. Enforcement
+and repair are decomposed into:
+
+- #162 — Make roadmap source cleanup mandatory after issue closure (invariants 1, 2).
+- #163 — Guarantee `workflow:in-progress` label cleanup for closed issues (invariant 6).
+- #164 — Unify closure execution behind a shared closure receipt (all invariants).
+- #165 — Add closure audit and repair command for stale completed work (drift detection + repair).

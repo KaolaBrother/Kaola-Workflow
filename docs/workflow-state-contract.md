@@ -23,6 +23,9 @@ here for the full contract.
   phase artifacts or summaries.
 - `kaola-workflow/archive/{project}/` keeps completed, abandoned, or stale
   project folders after finalize or discard.
+- Closure of a completed linked issue is governed by explicit invariants and an
+  auditable receipt schema. See `docs/api.md` § Closure Contract for the seven
+  closure invariants, the receipt field/enum schema, and the flow mapping.
 
 ## Workflow State Fields
 

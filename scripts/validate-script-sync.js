@@ -58,6 +58,15 @@ const BYTE_IDENTICAL_GROUPS = [
       'plugins/kaola-workflow-gitea/hooks/kaola-workflow-pre-commit.sh',
     ],
   },
+  {
+    label: 'closure-contract module copies',
+    files: [
+      'scripts/kaola-workflow-closure-contract.js',
+      'plugins/kaola-workflow/scripts/kaola-workflow-closure-contract.js',
+      'plugins/kaola-workflow-gitlab/scripts/kaola-workflow-closure-contract.js',
+      'plugins/kaola-workflow-gitea/scripts/kaola-workflow-closure-contract.js',
+    ],
+  },
 ];
 
 function readOrNull(p) {
