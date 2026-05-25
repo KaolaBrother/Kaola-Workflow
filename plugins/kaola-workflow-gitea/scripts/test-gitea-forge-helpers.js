@@ -71,6 +71,7 @@ const execFileSync = runner(calls, {
   }),
   'issues list --output json --limit 100': JSON.stringify([{ number: 4, state: 'open' }]),
   'issues list --output json --limit 50 --state open': JSON.stringify([{ number: 5, state: 'open' }]),
+  'issues list --output json --limit 100 --state closed --labels=workflow:in-progress': JSON.stringify([{ number: 7, state: 'closed' }]),
   'issues view 4 --output json': JSON.stringify({ number: 4, state: 'open', title: 'View me' }),
   'issues edit 4 --add-labels=workflow:in-progress --remove-labels=workflow:queued': '',
   'issues close 4': JSON.stringify({ number: 4, state: 'closed' }),
@@ -96,6 +97,7 @@ const execFileSync = runner(calls, {
 assert.strictEqual(forge.discoverProject({ execFileSync }).full_name, 'group/project');
 assert.strictEqual(forge.listIssues({ execFileSync })[0].issue_iid, 4);
 assert.strictEqual(forge.listIssues({ execFileSync, perPage: 50, state: 'open' })[0].issue_iid, 5);
+assert.strictEqual(forge.listIssues({ execFileSync, state: 'closed', labels: [forge.CLAIM_LABEL] })[0].issue_iid, 7);
 assert.strictEqual(forge.viewIssue(4, { execFileSync }).title, 'View me');
 // updateIssueLabels returns {} (tea issues edit may not emit JSON)
 forge.updateIssueLabels(project, 4, {

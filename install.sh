@@ -162,6 +162,7 @@ case "$FORGE" in
       kaola-gitea-workflow-claim.js
       kaola-workflow-closure-contract.js
       kaola-gitea-workflow-classifier.js
+      kaola-gitea-workflow-closure-audit.js
       kaola-gitea-workflow-compact-context.js
       kaola-gitea-workflow-repair-state.js
       kaola-gitea-workflow-roadmap.js

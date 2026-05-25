@@ -23,6 +23,7 @@ const repair = require('./kaola-gitea-workflow-repair-state');
 const claimScript = path.join(__dirname, 'kaola-gitea-workflow-claim.js');
 const roadmapScript = path.join(__dirname, 'kaola-gitea-workflow-roadmap.js');
 const classifierScript = path.join(__dirname, 'kaola-gitea-workflow-classifier.js');
+const closureAuditScript = path.join(__dirname, 'kaola-gitea-workflow-closure-audit.js');
 
 function withForge(stubs, fn) {
   const originals = {};
@@ -123,6 +124,63 @@ function writeShimFiles(shimPath, jsLines) {
 function teaMockEnv(binDir) {
   const jsPath = path.join(binDir, 'tea.js');
   return fs.existsSync(jsPath) ? { KAOLA_TEA_MOCK_SCRIPT: jsPath } : {};
+}
+
+// Run closure-audit online (mock tea via KAOLA_TEA_MOCK_SCRIPT). Mirrors runClaimOnline.
+function runClosureAudit(args, cwd, binDir) {
+  const result = spawnSync(process.execPath, [closureAuditScript, ...args], {
+    cwd,
+    encoding: 'utf8',
+    timeout: 60000,
+    env: {
+      ...process.env,
+      KAOLA_WORKFLOW_OFFLINE: '0',
+      ...teaMockEnv(binDir),
+      PATH: binDir + path.delimiter + path.dirname(process.execPath) + path.delimiter + (process.env.PATH || '')
+    }
+  });
+  assert(!result.signal, 'closure-audit timed out or was killed: ' + result.signal + '\nstderr: ' + result.stderr);
+  assert.strictEqual(result.status, 0, 'closure-audit should exit 0, got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+  return JSON.parse(result.stdout);
+}
+
+// Run closure-audit offline (no tea shim; remote classes must report skipped_offline).
+function runClosureAuditOffline(args, cwd) {
+  const result = spawnSync(process.execPath, [closureAuditScript, ...args], {
+    cwd,
+    encoding: 'utf8',
+    timeout: 60000,
+    env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }
+  });
+  assert.strictEqual(result.status, 0, 'offline closure-audit should exit 0, got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+  return JSON.parse(result.stdout);
+}
+
+// Write a `tea` shim (Gitea CLI) whose body is matched on the joined process.argv.
+function closureAuditShim(binDir, lines) {
+  fs.mkdirSync(binDir, { recursive: true });
+  writeShimFiles(path.join(binDir, 'tea'), lines);
+}
+
+// Plant kaola-workflow/.roadmap/issue-N.md with `issue: #N` (the field readRoadmapIssues requires).
+function plantClosureRoadmapSource(root, issueNumber) {
+  const dir = path.join(root, 'kaola-workflow', '.roadmap');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, 'issue-' + issueNumber + '.md'),
+    'issue: #' + issueNumber + '\ntitle: stale source\nstatus: open\n'
+  );
+}
+
+// Convert an existing active folder's state file into a sink=pr folder with pr_url/pr_number.
+// Mirrors the inline mutation; does NOT add a sink param to writeState.
+function makePrSinkFolder(root, project, issueNumber) {
+  const stateFile = path.join(root, 'kaola-workflow', project, 'workflow-state.md');
+  let content = fs.readFileSync(stateFile, 'utf8');
+  content = content.replace(/^sink:\s*.*$/m, 'sink: pr');
+  content += 'pr_url: https://gitea.example/group/project/pulls/' + issueNumber + '\n';
+  content += 'pr_number: ' + issueNumber + '\n';
+  fs.writeFileSync(stateFile, content);
 }
 
 function writeTeaShimForStale(binDir) {
@@ -1697,6 +1755,298 @@ testGiteaRoadmapValidateRemote();
 testStaleWorktreeCheck();
 testStaleWorktreeCleanup();
 
+// --- Issue #167: closure-audit (Gitea port of GitLab issue #166 / GitHub #165) ---
+
+function testClosureAuditOfflineRemoteClassesSkipped() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-ca-offline-')));
+  try {
+    initGitRepo(tmp);
+    const result = runClosureAuditOffline([], tmp);
+    assert.strictEqual(result.dry_run, true, 'offline audit dry_run must be true, got: ' + result.dry_run);
+    assert.strictEqual(result.offline, true, 'offline audit offline must be true, got: ' + result.offline);
+    assert.strictEqual(
+      result.drift.stale_in_progress_labels, 'skipped_offline',
+      'offline: stale_in_progress_labels must be "skipped_offline", got: ' + JSON.stringify(result.drift.stale_in_progress_labels)
+    );
+    assert.strictEqual(
+      result.drift.unarchived_pr_folders, 'skipped_offline',
+      'offline: unarchived_pr_folders must be "skipped_offline", got: ' + JSON.stringify(result.drift.unarchived_pr_folders)
+    );
+    console.log('testClosureAuditOfflineRemoteClassesSkipped: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testClosureAuditClosedRemoteRoadmapSource() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-ca-closed-remote-')));
+  const binDir = path.join(tmp, 'bin');
+  try {
+    initGitRepo(tmp);
+    plantClosureRoadmapSource(tmp, 900);
+    closureAuditShim(binDir, [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issues view')) { process.stdout.write('{\"state\":\"closed\"}\\n'); }",
+      "else if (a.includes('issues list')) { process.stdout.write('[]\\n'); }",
+      "else { process.stdout.write('{}\\n'); }"
+    ]);
+    const result = runClosureAudit([], tmp, binDir);
+    const sources = result.drift.stale_roadmap_sources;
+    assert(
+      sources.length === 1 && sources[0].issue_number === 900 && sources[0].reason === 'closed_remote',
+      'expected one closed_remote source for 900, got: ' + JSON.stringify(sources)
+    );
+    assert.strictEqual(result.counts.stale_roadmap_sources, 1, 'counts.stale_roadmap_sources must be 1, got: ' + result.counts.stale_roadmap_sources);
+    console.log('testClosureAuditClosedRemoteRoadmapSource: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testClosureAuditArchiveClosedDrift() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-ca-archive-closed-')));
+  const binDir = path.join(tmp, 'bin');
+  try {
+    initGitRepo(tmp);
+    plantClosureRoadmapSource(tmp, 901);
+    const archiveDir = path.join(tmp, 'kaola-workflow', 'archive', 'issue-901');
+    fs.mkdirSync(archiveDir, { recursive: true });
+    // D4: archive carries issue_iid (NOT issue_number). Iid-first read is the guard.
+    fs.writeFileSync(path.join(archiveDir, 'workflow-state.md'), 'status: closed\nstep: complete\nissue_iid: 901\n');
+    closureAuditShim(binDir, [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issues view')) { process.stdout.write('{\"state\":\"open\"}\\n'); }",
+      "else if (a.includes('issues list')) { process.stdout.write('[]\\n'); }",
+      "else { process.stdout.write('{}\\n'); }"
+    ]);
+    const result = runClosureAudit([], tmp, binDir);
+    const sources = result.drift.stale_roadmap_sources;
+    assert(
+      sources.length === 1 && sources[0].issue_number === 901 && sources[0].reason === 'archive_closed',
+      'expected one archive_closed source for 901 (remote open), got: ' + JSON.stringify(sources)
+    );
+    console.log('testClosureAuditArchiveClosedDrift: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testClosureAuditDedupRoadmapAndArchive() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-ca-dedup-')));
+  const binDir = path.join(tmp, 'bin');
+  try {
+    initGitRepo(tmp);
+    plantClosureRoadmapSource(tmp, 902);
+    const archiveDir = path.join(tmp, 'kaola-workflow', 'archive', 'issue-902');
+    fs.mkdirSync(archiveDir, { recursive: true });
+    fs.writeFileSync(path.join(archiveDir, 'workflow-state.md'), 'status: closed\nstep: complete\nissue_iid: 902\n');
+    closureAuditShim(binDir, [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issues view')) { process.stdout.write('{\"state\":\"closed\"}\\n'); }",
+      "else if (a.includes('issues list')) { process.stdout.write('[]\\n'); }",
+      "else { process.stdout.write('{}\\n'); }"
+    ]);
+    const result = runClosureAudit([], tmp, binDir);
+    const sources = result.drift.stale_roadmap_sources;
+    assert(
+      sources.length === 1 && sources[0].issue_number === 902 && sources[0].reason === 'closed_remote',
+      'closed_remote must win over archive_closed and dedupe to one entry, got: ' + JSON.stringify(sources)
+    );
+    console.log('testClosureAuditDedupRoadmapAndArchive: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testClosureAuditMirrorListsClosedIssues() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-ca-mirror-')));
+  const binDir = path.join(tmp, 'bin');
+  try {
+    initGitRepo(tmp);
+    plantClosureRoadmapSource(tmp, 903);
+    closureAuditShim(binDir, [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issues view')) { process.stdout.write('{\"state\":\"closed\"}\\n'); }",
+      "else if (a.includes('issues list')) { process.stdout.write('[]\\n'); }",
+      "else { process.stdout.write('{}\\n'); }"
+    ]);
+    const result = runClosureAudit([], tmp, binDir);
+    assert(
+      Array.isArray(result.drift.mirror_lists_closed_issues) && result.drift.mirror_lists_closed_issues.includes(903),
+      'mirror_lists_closed_issues must include 903, got: ' + JSON.stringify(result.drift.mirror_lists_closed_issues)
+    );
+    assert.strictEqual(
+      result.counts.mirror_lists_closed_issues, 1,
+      'counts.mirror_lists_closed_issues must be 1, got: ' + result.counts.mirror_lists_closed_issues
+    );
+    console.log('testClosureAuditMirrorListsClosedIssues: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testClosureAuditStaleInProgressLabels() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-ca-labels-')));
+  const binDir = path.join(tmp, 'bin');
+  try {
+    initGitRepo(tmp);
+    closureAuditShim(binDir, [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issues list')) { process.stdout.write('[{\"number\":99,\"iid\":99,\"title\":\"stale\",\"url\":\"http://x\",\"web_url\":\"http://x\"}]\\n'); }",
+      "else { process.stdout.write('{}\\n'); }"
+    ]);
+    const result = runClosureAudit([], tmp, binDir);
+    const labels = result.drift.stale_in_progress_labels;
+    assert(
+      Array.isArray(labels) && labels.length === 1 && labels[0].number === 99,
+      'stale_in_progress_labels must list issue 99, got: ' + JSON.stringify(labels)
+    );
+    assert.strictEqual(result.counts.stale_in_progress_labels, 1, 'counts.stale_in_progress_labels must be 1, got: ' + result.counts.stale_in_progress_labels);
+    console.log('testClosureAuditStaleInProgressLabels: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testClosureAuditActiveFolderForClosedIssueReportsDirty() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-ca-active-closed-')));
+  const binDir = path.join(tmp, 'bin');
+  try {
+    initGitRepo(tmp);
+    writeState(tmp, 'issue-904', 904);
+    closureAuditShim(binDir, [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issues view')) { process.stdout.write('{\"state\":\"closed\"}\\n'); }",
+      "else if (a.includes('issues list')) { process.stdout.write('[]\\n'); }",
+      "else { process.stdout.write('{}\\n'); }"
+    ]);
+    const result = runClosureAudit([], tmp, binDir);
+    const folders = result.drift.active_folder_for_closed_issue;
+    assert(
+      folders.length === 1 && folders[0].project === 'issue-904' && folders[0].issue_number === 904,
+      'active_folder_for_closed_issue must report issue-904, got: ' + JSON.stringify(folders)
+    );
+    assert.strictEqual(folders[0].dirty, true, 'planted (uncommitted) active folder must be reported dirty:true, got: ' + folders[0].dirty);
+    console.log('testClosureAuditActiveFolderForClosedIssueReportsDirty: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testClosureAuditUnarchivedPrFolderMergedLowercase() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-ca-unarchived-pr-')));
+  const binDir = path.join(tmp, 'bin');
+  try {
+    initGitRepo(tmp);
+    writeState(tmp, 'issue-905', 905);
+    makePrSinkFolder(tmp, 'issue-905', 905);
+    closureAuditShim(binDir, [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('pr view')) { process.stdout.write('{\"state\":\"merged\"}\\n'); }",
+      "else if (a.includes('issues view')) { process.stdout.write('{\"state\":\"open\"}\\n'); }",
+      "else if (a.includes('issues list')) { process.stdout.write('[]\\n'); }",
+      "else { process.stdout.write('{}\\n'); }"
+    ]);
+    const result = runClosureAudit([], tmp, binDir);
+    const prFolders = result.drift.unarchived_pr_folders;
+    assert(
+      Array.isArray(prFolders) && prFolders.length === 1 && prFolders[0].project === 'issue-905' && prFolders[0].pr_state === 'merged',
+      'unarchived_pr_folders must report merged PR folder issue-905 with lowercase pr_state "merged", got: ' + JSON.stringify(prFolders)
+    );
+    assert(prFolders[0].pr_url, 'unarchived_pr_folders entry must carry pr_url, got: ' + JSON.stringify(prFolders[0]));
+    console.log('testClosureAuditUnarchivedPrFolderMergedLowercase: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testClosureAuditExecuteRepairsRoadmapAndLabels() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-ca-exec-repair-')));
+  const binDir = path.join(tmp, 'bin');
+  const marker = path.join(tmp, 'label-removed.marker');
+  try {
+    initGitRepo(tmp);
+    plantClosureRoadmapSource(tmp, 906);
+    closureAuditShim(binDir, [
+      "const fs = require('fs');",
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issues edit') && a.includes('--remove-labels')) { fs.writeFileSync(" + JSON.stringify(marker) + ", 'x'); process.stdout.write('{}\\n'); }",
+      "else if (a.includes('issues view')) { process.stdout.write('{\"state\":\"closed\"}\\n'); }",
+      "else if (a.includes('issues list')) { process.stdout.write('[{\"number\":906,\"iid\":906,\"title\":\"stale\",\"url\":\"http://x\",\"web_url\":\"http://x\"}]\\n'); }",
+      "else { process.stdout.write('{}\\n'); }"
+    ]);
+    const roadmapSource = path.join(tmp, 'kaola-workflow', '.roadmap', 'issue-906.md');
+    assert(fs.existsSync(roadmapSource), 'precondition: roadmap source must exist before --execute');
+    const result = runClosureAudit(['--execute'], tmp, binDir);
+    assert.strictEqual(result.dry_run, false, '--execute must return dry_run:false, got: ' + result.dry_run);
+    assert(
+      result.repaired.roadmap_sources_removed.includes(906),
+      'roadmap_sources_removed must include 906, got: ' + JSON.stringify(result.repaired.roadmap_sources_removed)
+    );
+    assert.strictEqual(result.repaired.roadmap_regenerated, true, 'roadmap_regenerated must be true, got: ' + result.repaired.roadmap_regenerated);
+    assert(
+      result.repaired.labels_removed.includes(906),
+      'labels_removed must include 906, got: ' + JSON.stringify(result.repaired.labels_removed)
+    );
+    assert(!fs.existsSync(roadmapSource), '--execute must delete the stale roadmap source file');
+    assert(fs.existsSync(marker), '--execute must call tea issues edit --remove-labels (marker missing)');
+    assert(fs.existsSync(path.join(tmp, 'kaola-workflow', 'ROADMAP.md')), '--execute must regenerate ROADMAP.md');
+    console.log('testClosureAuditExecuteRepairsRoadmapAndLabels: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testClosureAuditExecuteNeverTouchesActiveFolders() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-ca-exec-safe-')));
+  const binDir = path.join(tmp, 'bin');
+  try {
+    initGitRepo(tmp);
+    writeState(tmp, 'issue-907', 907);
+    const folderDir = path.join(tmp, 'kaola-workflow', 'issue-907');
+    assert(fs.existsSync(folderDir), 'precondition: active folder must exist');
+    closureAuditShim(binDir, [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issues view')) { process.stdout.write('{\"state\":\"closed\"}\\n'); }",
+      "else if (a.includes('issues list')) { process.stdout.write('[]\\n'); }",
+      "else { process.stdout.write('{}\\n'); }"
+    ]);
+    const result = runClosureAudit(['--execute'], tmp, binDir);
+    assert.strictEqual(result.dry_run, false, '--execute must return dry_run:false');
+    assert(fs.existsSync(folderDir), '--execute must NEVER delete an active folder, even for a closed issue');
+    const reported = result.reported_not_repaired.active_folder_for_closed_issue;
+    assert(
+      Array.isArray(reported) && reported.some(e => e.issue_number === 907),
+      'closed-issue active folder must appear in reported_not_repaired, got: ' + JSON.stringify(reported)
+    );
+    console.log('testClosureAuditExecuteNeverTouchesActiveFolders: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testClosureAuditDryRunNeverCallsRemoveLabel() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-ca-dryrun-safe-')));
+  const binDir = path.join(tmp, 'bin');
+  const marker = path.join(tmp, 'label-removed.marker');
+  try {
+    initGitRepo(tmp);
+    closureAuditShim(binDir, [
+      "const fs = require('fs');",
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issues edit') && a.includes('--remove-labels')) { fs.writeFileSync(" + JSON.stringify(marker) + ", 'x'); process.stdout.write('{}\\n'); }",
+      "else if (a.includes('issues list')) { process.stdout.write('[{\"number\":99,\"iid\":99,\"title\":\"stale\",\"url\":\"http://x\",\"web_url\":\"http://x\"}]\\n'); }",
+      "else { process.stdout.write('{}\\n'); }"
+    ]);
+    const result = runClosureAudit([], tmp, binDir);
+    assert.strictEqual(result.dry_run, true, 'no --execute must return dry_run:true, got: ' + result.dry_run);
+    assert(!fs.existsSync(marker), 'dry-run must NOT call tea issues edit --remove-labels (marker must not exist)');
+    console.log('testClosureAuditDryRunNeverCallsRemoveLabel: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 // --- Task 6: fail-open fix — forge.viewIssue throws outside OFFLINE must return target_unavailable ---
 
 // testGiteaClassifierFailClosed: when viewIssue throws (network error) and OFFLINE is not set,
@@ -1745,6 +2095,18 @@ function testGiteaOfflineBypassesFailClosed() {
 
 testGiteaClassifierFailClosed();
 testGiteaOfflineBypassesFailClosed();
+
+testClosureAuditOfflineRemoteClassesSkipped();
+testClosureAuditClosedRemoteRoadmapSource();
+testClosureAuditArchiveClosedDrift();
+testClosureAuditDedupRoadmapAndArchive();
+testClosureAuditMirrorListsClosedIssues();
+testClosureAuditStaleInProgressLabels();
+testClosureAuditActiveFolderForClosedIssueReportsDirty();
+testClosureAuditUnarchivedPrFolderMergedLowercase();
+testClosureAuditExecuteRepairsRoadmapAndLabels();
+testClosureAuditExecuteNeverTouchesActiveFolders();
+testClosureAuditDryRunNeverCallsRemoveLabel();
 
 testGiteaRoadmapInitIssueExclusiveAndUpdate()
   .then(() => {

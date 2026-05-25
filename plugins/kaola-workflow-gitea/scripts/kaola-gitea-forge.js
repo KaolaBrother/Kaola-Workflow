@@ -152,6 +152,9 @@ function listIssues(opts) {
   const options = opts || {};
   const args = ['issues', 'list', '--output', 'json', '--limit', String(options.perPage || 100)];
   if (options.state) args.push('--state', options.state);
+  // Pass --labels=<csv> matching the forge's existing --remove-labels=/--add-labels= idiom.
+  const csv = (options.labels || []).join(',');
+  if (csv) args.push('--labels=' + csv);
   const raw = teaExec(args, options);
   return parseJson(raw, []).map(normalizeIssue);
 }

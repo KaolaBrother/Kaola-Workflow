@@ -356,6 +356,7 @@ module.exports = {
   readRoadmapIssues,
   refreshFromGitea,
   regenerateRoadmap,
+  roadmapDir,
   validateRemote,
   cmdValidateRemote,
   writeFileAtomicReplace,
