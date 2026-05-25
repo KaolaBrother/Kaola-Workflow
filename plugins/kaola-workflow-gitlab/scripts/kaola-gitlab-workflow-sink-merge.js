@@ -6,7 +6,7 @@ const path = require('path');
 const os = require('os');
 const { execFileSync } = require('child_process');
 const forge = require('./kaola-gitlab-forge');
-const { getCoordRoot, readActiveFolders, removeWorktree } = require('./kaola-gitlab-workflow-claim');
+const { getCoordRoot, readActiveFolders, removeWorktree, buildClosureReceipt, checkClosureInvariants } = require('./kaola-gitlab-workflow-claim');
 
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
 
@@ -221,7 +221,7 @@ function ffMergeLoop(args, mainRoot) {
   }
 }
 
-function postMergeCleanup(args, mainRoot) {
+function postMergeCleanup(args, mainRoot, wtRemovedStatus) {
   // Step 7 — Push (with merge-impossible fallback)
   try {
     if (process.env.KAOLA_WORKFLOW_FORCE_MERGE_IMPOSSIBLE) {
@@ -255,18 +255,42 @@ function postMergeCleanup(args, mainRoot) {
     }, null, 2) + '\n');
     return { exitCode: 3 };
   }
+  // Success path — track cleanup outcomes for closure receipt
+  let remoteIssueClosed = OFFLINE ? 'skipped_offline' : 'failed';
+  let claimLabelRemoved = OFFLINE ? 'skipped_offline' : 'failed';
+  let branchRemoved = 'failed';
+  const worktreeRemoved = wtRemovedStatus || 'failed';
+
   // Step 8 — Close issue (GitLab-specific: forge API)
   if (!OFFLINE && args.issue != null) {
     const root = mainRoot; // mainRoot is used as root context
     try { forge.createIssueNote(readProjectInfo(root, args.project), args.issue, 'Merged via GitLab direct merge sink.'); } catch (_) {}
-    try { forge.closeIssue(args.issue); } catch (_) {}
-    try { forge.updateIssue(args.issue, { unlabels: [forge.CLAIM_LABEL] }); } catch (_) {}
+    try { forge.closeIssue(args.issue); remoteIssueClosed = 'closed'; } catch (_) { remoteIssueClosed = 'failed'; }
+    try { forge.updateIssue(args.issue, { unlabels: [forge.CLAIM_LABEL] }); claimLabelRemoved = 'removed'; } catch (_) { claimLabelRemoved = 'failed'; }
   }
   // Step 9 — Delete branch
-  try { execFileSync('git', ['-C', mainRoot, 'branch', '-d', '--', args.branch], { encoding: 'utf8' }); } catch (_) {}
+  try { execFileSync('git', ['-C', mainRoot, 'branch', '-d', '--', args.branch], { encoding: 'utf8' }); branchRemoved = 'removed'; } catch (_) { branchRemoved = 'failed'; }
   if (!OFFLINE) {
     try { execFileSync('git', ['-C', mainRoot, 'push', 'origin', '--delete', '--', args.branch], { encoding: 'utf8' }); } catch (_) {}
   }
+
+  // Emit closure receipt
+  const archiveDest = path.join(mainRoot, 'kaola-workflow', 'archive', args.project);
+  const archiveField = fs.existsSync(archiveDest) ? 'closed' : 'failed';
+  const roadmapSourceFile = path.join(mainRoot, 'kaola-workflow', '.roadmap', 'issue-' + args.issue + '.md');
+  const roadmapSourceField = !fs.existsSync(roadmapSourceFile) ? 'absent' : 'failed';
+
+  const receipt = buildClosureReceipt(args.project, args.issue, {
+    archive: archiveField,
+    roadmap_source_removed: roadmapSourceField,
+    roadmap_regenerated: 'skipped',
+    remote_issue_closed: remoteIssueClosed,
+    claim_label_removed: claimLabelRemoved,
+    worktree_removed: worktreeRemoved,
+    branch_removed: branchRemoved
+  });
+  const invariants = checkClosureInvariants(mainRoot, receipt, archiveDest);
+  process.stdout.write(JSON.stringify({ status: 'merged', closure_receipt: receipt, closure_invariants: invariants }) + '\n');
 }
 
 function runDirectMerge(args, opts) {
@@ -317,7 +341,14 @@ function runDirectMerge(args, opts) {
   }
   let folder;
   try { folder = readActiveFolders(mainRoot, { excludeClosedIssues: false }).find(item => item.project === args.project); } catch (_) {}
-  try { removeWorktree(mainRoot, args.project, folder); } catch (_) {}
+  let wtRemovedStatus = 'failed';
+  let wtResult;
+  try { wtResult = removeWorktree(mainRoot, args.project, folder); } catch (_) {}
+  if (wtResult) {
+    if (wtResult.removed === true) wtRemovedStatus = 'removed';
+    else if (wtResult.removed === false && wtResult.reason === 'missing') wtRemovedStatus = 'missing';
+    else wtRemovedStatus = 'failed';
+  }
 
   // Step 1 — Fetch
   if (!OFFLINE) {
@@ -348,7 +379,7 @@ function runDirectMerge(args, opts) {
     return { exitCode: 2 };
   }
 
-  const cleanupResult = postMergeCleanup(args, mainRoot);
+  const cleanupResult = postMergeCleanup(args, mainRoot, wtRemovedStatus);
   if (cleanupResult && cleanupResult.exitCode === 3) {
     return { exitCode: 3 };
   }

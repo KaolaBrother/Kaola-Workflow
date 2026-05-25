@@ -3,7 +3,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { getCoordRoot, readActiveFolders, removeWorktree } = require('./kaola-workflow-claim.js');
+const { getCoordRoot, readActiveFolders, removeWorktree, buildClosureReceipt, checkClosureInvariants } = require('./kaola-workflow-claim.js');
 
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
 const FORCE_FF_FAIL = parseInt(process.env.KAOLA_WORKFLOW_FORCE_FF_FAIL || '0', 10);
@@ -17,9 +17,11 @@ function isSafeName(name) {
     !name.includes('\0') && name !== '.' && name !== '..';
 }
 
-function ghExec(args) {
+function ghExec(args, opts) {
   if (OFFLINE) return '';
-  return execFileSync('gh', args, { encoding: 'utf8' }).trim();
+  const mock = process.env.KAOLA_GH_MOCK_SCRIPT;
+  if (mock) return execFileSync(process.execPath, [mock, ...args], Object.assign({ encoding: 'utf8' }, opts || {})).trim();
+  return execFileSync('gh', args, Object.assign({ encoding: 'utf8' }, opts || {})).trim();
 }
 
 function getRoot() {
@@ -188,7 +190,7 @@ function ffMergeLoop(args, mainRoot) {
   }
 }
 
-function postMergeCleanup(args, mainRoot) {
+function postMergeCleanup(args, mainRoot, wtRemovedStatus) {
   // Step 7 — Push (with merge-impossible auto-fallback)
   try {
     if (FORCE_MERGE_IMPOSSIBLE) {
@@ -224,18 +226,42 @@ function postMergeCleanup(args, mainRoot) {
     );
     return { exitCode: 3 };
   }
+  // Success path — track cleanup outcomes for closure receipt
+  let remoteIssueClosed = OFFLINE ? 'skipped_offline' : 'failed';
+  let claimLabelRemoved = OFFLINE ? 'skipped_offline' : 'failed';
+  let branchRemoved = 'failed';
+  const worktreeRemoved = wtRemovedStatus || 'failed';
+
   // Step 8 — Close issue
   if (!OFFLINE && args.issue != null) {
-    try { ghExec(['issue', 'close', String(args.issue), '--comment', 'Merged via sink-merge.']); }
-    catch (_) {}
-    try { ghExec(['issue', 'edit', String(args.issue), '--remove-label', 'workflow:in-progress']); } catch (_) {}
+    try { ghExec(['issue', 'close', String(args.issue), '--comment', 'Merged via sink-merge.']); remoteIssueClosed = 'closed'; }
+    catch (_) { remoteIssueClosed = 'failed'; }
+    try { ghExec(['issue', 'edit', String(args.issue), '--remove-label', 'workflow:in-progress']); claimLabelRemoved = 'removed'; } catch (_) { claimLabelRemoved = 'failed'; }
   }
   // Step 9 — Delete branch (worktree was removed in step 0)
-  try { execFileSync('git', ['-C', mainRoot, 'branch', '-d', '--', args.branch], { encoding: 'utf8' }); } catch (_) {}
+  try { execFileSync('git', ['-C', mainRoot, 'branch', '-d', '--', args.branch], { encoding: 'utf8' }); branchRemoved = 'removed'; } catch (_) { branchRemoved = 'failed'; }
   if (!OFFLINE) {
     try { execFileSync('git', ['-C', mainRoot, 'push', 'origin', '--delete', '--', args.branch], { encoding: 'utf8' }); }
     catch (_) {}
   }
+
+  // Emit closure receipt
+  const archiveDest = path.join(mainRoot, 'kaola-workflow', 'archive', args.project);
+  const archiveField = fs.existsSync(archiveDest) ? 'closed' : 'failed';
+  const roadmapSourceFile = path.join(mainRoot, 'kaola-workflow', '.roadmap', 'issue-' + args.issue + '.md');
+  const roadmapSourceField = !fs.existsSync(roadmapSourceFile) ? 'absent' : 'failed';
+
+  const receipt = buildClosureReceipt(args.project, args.issue, {
+    archive: archiveField,
+    roadmap_source_removed: roadmapSourceField,
+    roadmap_regenerated: 'skipped',
+    remote_issue_closed: remoteIssueClosed,
+    claim_label_removed: claimLabelRemoved,
+    worktree_removed: worktreeRemoved,
+    branch_removed: branchRemoved
+  });
+  const invariants = checkClosureInvariants(mainRoot, receipt, archiveDest);
+  process.stdout.write(JSON.stringify({ status: 'merged', closure_receipt: receipt, closure_invariants: invariants }) + '\n');
 }
 
 function main() {
@@ -254,6 +280,7 @@ function main() {
   // Step 0 — Remove worktree (if any) so the branch can be checked out below
   const coordRoot = getCoordRoot();
   const mainRoot = mainRootFromCoord(coordRoot);
+  let wtRemovedStatus = 'failed';
   process.on('exit', () => {
     try { process.chdir(mainRoot); } catch (_) {}
     if (process.env.KAOLA_WORKFLOW_DEBUG_CWD) {
@@ -278,7 +305,13 @@ function main() {
     // Always attempt removeWorktree — even when folder is archived (not found in active folders),
     // the worktree may still be registered. removeWorktree falls back to worktreePathFor when
     // folder is undefined, which computes the canonical sibling .kw path and removes it.
-    try { removeWorktree(mainRoot, args.project, folder); } catch (_) {}
+    let wtResult;
+    try { wtResult = removeWorktree(mainRoot, args.project, folder); } catch (_) {}
+    if (wtResult) {
+      if (wtResult.removed === true) wtRemovedStatus = 'removed';
+      else if (wtResult.removed === false && wtResult.reason === 'missing') wtRemovedStatus = 'missing';
+      else wtRemovedStatus = 'failed';
+    }
   }
 
   // Step 1 — git fetch (skip if OFFLINE; fatal throw on error)
@@ -313,7 +346,7 @@ function main() {
     return;
   }
 
-  const cleanupResult = postMergeCleanup(args, mainRoot);
+  const cleanupResult = postMergeCleanup(args, mainRoot, wtRemovedStatus);
   if (cleanupResult && cleanupResult.exitCode === 3) { process.exitCode = 3; return; }
 }
 

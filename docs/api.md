@@ -414,10 +414,10 @@ The command still removes local worktrees and branches. Archive/export strategie
 
 This section defines the closure-system invariants for a completed linked issue
 N. It is the human-readable counterpart to the machine-readable schema in
-`scripts/kaola-workflow-closure-contract.js`. `cmdFinalize` now populates
-`roadmap_source_removed`, `roadmap_regenerated`, and `closure_invariants` in
-its JSON output (issue #162); emission for remaining fields lands in the
-follow-up issues mapped below.
+`scripts/kaola-workflow-closure-contract.js`. As of issue #164, all closure
+paths (`cmdFinalize`, `cmdWatchPr`/`cmdWatchMr`, and `sink-merge`) seed a full
+receipt from `emptyReceipt()` via the shared `buildClosureReceipt()` helper and
+emit `closure_receipt` plus `closure_invariants` in their JSON output.
 
 ### Closure invariants
 
@@ -459,6 +459,24 @@ Offline behavior is explicit: local invariants (1-4) are always checked; remote
 actions (`remote_issue_closed`, `claim_label_removed`) record `skipped_offline`
 under `KAOLA_WORKFLOW_OFFLINE=1` rather than `failed`.
 
+### `buildClosureReceipt()` helper (issue #164)
+
+`buildClosureReceipt(project, issueNumber, steps)` is the single mapping point
+that every closure path uses to produce a receipt. It is exported from each
+forge's claim module (`kaola-workflow-claim.js`, `kaola-gitlab-workflow-claim.js`,
+`kaola-gitea-workflow-claim.js`).
+
+1. Seeds the receipt with `emptyReceipt(project, issueNumber)` (every status
+   field defaults to `failed`).
+2. Overwrites only fields present in `steps` that are valid
+   `CLOSURE_RECEIPT_FIELDS`.
+3. Appends any `steps.warnings` entries to `receipt.warnings`.
+
+Because seeding is fail-loud, a step the caller never reports stays `failed` —
+the receipt can never read as silent success. `sink-merge` reaches the helper
+through its existing `require('./kaola-workflow-claim.js')` (no circular
+dependency), and the byte-identical Codex copy carries the same export.
+
 ### `cmdFinalize` output (issue #162)
 
 `cmdFinalize` emits a JSON result that includes receipt fields populated by
@@ -476,11 +494,20 @@ record is never silent on partial runs:
 }
 ```
 
-`closure_invariants` checks three invariants at finalize time (issue #163 adds the third):
+`closure_invariants` checks six invariants at closure time (issue #164 adds the
+last three local checks; the signature is now `checkClosureInvariants(root,
+receipt, archiveDest)`):
 
 - `roadmap-source-absent` — `kaola-workflow/.roadmap/issue-N.md` is gone after cleanup.
 - `roadmap-mirror-clean` — generated `kaola-workflow/ROADMAP.md` no longer lists `#N` as active work.
 - `in-progress-label-removed` — `workflow:in-progress` label was removed from the remote issue. Skipped (not violated) when `KAOLA_WORKFLOW_OFFLINE=1` or when `claim_label_removed` is `'skipped_offline'`.
+- `active-folder-absent` — no live `kaola-workflow/{project}/` folder remains in active folders after archive (issue #164).
+- `archive-state-closed` — when `archiveDest` is provided, the archived `workflow-state.md` shows `status: closed` or `abandoned`; skipped (not violated) when `archiveDest` is absent (issue #164).
+- `branch-worktree-resolved` — neither `worktree_removed` nor `branch_removed` is `failed` (issue #164).
+
+The `remote-closed-after-publish` invariant (closure invariant 5) is intentionally
+deferred to issue #165, where the `remote_issue_closed` field is unified across
+all paths.
 
 `ok` is `true` only when `violations` is empty. When `archiveProjectDir()` cannot
 complete a receipt step, `cmdWatchPr`/`cmdWatchMr` surface the failure via a
@@ -500,14 +527,72 @@ complete a receipt step, `cmdWatchPr`/`cmdWatchMr` surface the failure via a
 }
 ```
 
-`cmdWatchPr`/`cmdWatchMr` emit a `cleanups` array with per-folder `claim_label_removed` status when label cleanup is attempted:
+`cmdWatchPr`/`cmdWatchMr` emit a `cleanups` array with per-folder `claim_label_removed` status when label cleanup is attempted. As of issue #164 each entry also carries the full per-folder `receipt` (built via `buildClosureReceipt`) and its `closure_invariants`:
 
 ```json
 {
   "watched": 1,
-  "cleanups": [{ "folder": "issue-N", "claim_label_removed": "removed" }]
+  "cleanups": [{
+    "folder": "issue-N",
+    "claim_label_removed": "removed",
+    "receipt": {
+      "project": "issue-N",
+      "issue_number": "N",
+      "archive": "closed",
+      "roadmap_source_removed": "removed",
+      "roadmap_regenerated": "regenerated",
+      "remote_issue_closed": "skipped_offline",
+      "claim_label_removed": "removed",
+      "worktree_removed": "removed",
+      "branch_removed": "kept",
+      "warnings": []
+    },
+    "closure_invariants": { "ok": true, "violations": [] }
+  }]
 }
 ```
+
+The `cleanups[]` and `warnings[]` keys are preserved for backward compatibility;
+the `receipt` and `closure_invariants` fields are additive.
+
+### `sink-merge` closure receipt (issue #164)
+
+On a successful direct merge, `sink-merge` (all forges) emits a closure receipt
+to stdout after branch cleanup. `sink-merge` is the only path that sets
+`remote_issue_closed: 'closed'` and `branch_removed: 'removed'` — it owns the
+remote-issue-close and branch-delete steps. `cmdFinalize` and the watchers set
+`branch_removed: 'kept'`. The emitted JSON:
+
+```json
+{
+  "status": "merged",
+  "closure_receipt": {
+    "project": "issue-N",
+    "issue_number": "N",
+    "archive": "closed",
+    "roadmap_source_removed": "absent",
+    "roadmap_regenerated": "skipped",
+    "remote_issue_closed": "closed",
+    "claim_label_removed": "removed",
+    "worktree_removed": "removed",
+    "branch_removed": "removed",
+    "warnings": []
+  },
+  "closure_invariants": { "ok": true, "violations": [] }
+}
+```
+
+`sink-merge` derives `archive`/`roadmap_source_removed` by probing
+post-conditions (finalize already archived); `roadmap_regenerated` is `skipped`
+because `sink-merge` does not regenerate the mirror. The exit-3
+merge-impossible fallback returns before any receipt is emitted and is
+unchanged. `sink-merge`'s `ghExec` now honors `KAOLA_GH_MOCK_SCRIPT`, matching
+`claim.js`, so the receipt path is testable without a live `gh` CLI.
+
+**`sink:pr` deferral**: `cmdSinkPr` does not emit a closure receipt — it leaves
+the active folder open. The authoritative closure receipt for a `sink:pr`
+project is emitted by `cmdWatchPr`/`cmdWatchMr` when the PR/MR merges. This is
+documented behavior, not a gap; no schema change is needed.
 
 ### `audit-labels` and `repair-labels` (GitHub only, issue #163)
 
@@ -547,10 +632,10 @@ here and deferred to the listed follow-up issues.
 
 | Closure surface | Invariants covered | Current behavior | Follow-up |
 |-----------------|--------------------|------------------|-----------|
-| `cmdFinalize` / `archiveProjectDir` | 1, 2, 3, 4 | Roadmap cleanup is receipt-tracked: `roadmap_source_removed` and `roadmap_regenerated` fields are populated before any potential failure; `cmdFinalize` output includes these fields plus `closure_invariants`; `cmdWatchPr`/`cmdWatchMr` emit a `warnings` array when receipt failures occur. `removeLegacyStateBlocks` runs on GitHub but is missing from GitLab/Gitea `archiveProjectDir`. | ~~#162~~ |
-| `sink-merge` (all forges) | 5, 6, 7 | Closes remote issue and deletes branch on success; does not assert `workflow:in-progress` removal. | #163, #164 |
-| `sink-pr` / PR-MR fallback | 3, 5 | Leaves active folder open until `watch-pr`/`watch-mr`; `cmdSinkFallback` live-folder guard checks archive on GitLab/Gitea but GitHub misses that archive check. | #164 |
-| `watch-pr` / `watch-mr` | 1, 2, 3, 4, 6, 7 | Archives + roadmap cleanup on MERGED; closure can be delayed or skipped if the watcher never runs. | #164, #165 |
+| `cmdFinalize` / `archiveProjectDir` | 1, 2, 3, 4 | **Shipped (#164)**: Seeds full receipt via `buildClosureReceipt`; output includes `closure_receipt` plus `closure_invariants` (6 checks); `worktree_removed` captured, `branch_removed: 'kept'`. `removeLegacyStateBlocks` runs on GitHub but is missing from GitLab/Gitea `archiveProjectDir`. | ~~#162~~ ~~#164~~ |
+| `sink-merge` (all forges) | 1, 2, 3, 4, 6, 7 | **Shipped (#164)**: Runs `checkClosureInvariants` and emits `closure_receipt` + `closure_invariants` on successful merge; the only path that sets `remote_issue_closed: 'closed'` and `branch_removed: 'removed'`; `ghExec` honors `KAOLA_GH_MOCK_SCRIPT`. Remote-close *assertion* (invariant 5) deferred to #165. | ~~#163~~ ~~#164~~, #165 |
+| `sink-pr` / PR-MR fallback | 3, 5 | `cmdSinkPr` leaves the active folder open until `watch-pr`/`watch-mr`; closure receipt is emitted by the watcher at merge (documented deferral, #164). `cmdSinkFallback` live-folder guard checks archive on GitLab/Gitea but GitHub misses that archive check. | ~~#164~~ |
+| `watch-pr` / `watch-mr` | 1, 2, 3, 4, 6, 7 | **Shipped (#164)**: Per-folder `receipt` + `closure_invariants` attached to each `cleanups[]` entry on MERGED; `cleanups[]`/`warnings[]` preserved. Closure can still be delayed if the watcher never runs (drift detection → #165). | ~~#164~~, #165 |
 | `clearAdvisoryClaim` (label cleanup) | 6 | **Shipped (#163)**: Returns `'removed'`/`'skipped_offline'`/`'failed'`; callers capture result into `claim_label_removed` receipt field. `cmdFinalize` has null-folder fallback reading issue number from archive path. `cmdWatchPr`/`cmdWatchMr` emit `cleanups[]`. GitHub: `audit-labels`/`repair-labels` subcommands for stale-label repair. | |
 | `stale-worktree-check` / `stale-worktree-cleanup` | 7 | Reports/removes stale worktrees and branches; relied on for invariant 7's "explicitly reported" clause. | #165 |
 
@@ -561,5 +646,5 @@ and repair are decomposed into:
 
 - #162 — Make roadmap source cleanup mandatory after issue closure (invariants 1, 2). **Shipped**: `archiveProjectDir()` now populates explicit receipt fields (`roadmap_source_removed`, `roadmap_regenerated`); `cmdFinalize` output includes these fields plus `closure_invariants`; `cmdWatchPr`/`cmdWatchMr` emit `warnings` on receipt failures.
 - #163 — Guarantee `workflow:in-progress` label cleanup for closed issues (invariant 6). **Shipped**: `clearAdvisoryClaim()` now returns `'removed'`/`'skipped_offline'`/`'failed'`; `cmdFinalize` and watch commands emit `claim_label_removed`; `checkClosureInvariants` checks the `in-progress-label-removed` invariant (skips when offline); `audit-labels`/`repair-labels` GitHub subcommands for stale-label repair.
-- #164 — Unify closure execution behind a shared closure receipt (all invariants).
-- #165 — Add closure audit and repair command for stale completed work (drift detection + repair).
+- #164 — Unify closure execution behind a shared closure receipt (invariants 1-4, 6, 7). **Shipped**: `buildClosureReceipt()` helper seeds `emptyReceipt()` across all four forge trees; `cmdFinalize`, `cmdWatchPr`/`cmdWatchMr`, and `sink-merge` all emit `closure_receipt` + `closure_invariants`; `checkClosureInvariants` extended with `active-folder-absent`, `archive-state-closed`, `branch-worktree-resolved`; `sink-merge` `ghExec` honors `KAOLA_GH_MOCK_SCRIPT`. Invariant 5 (`remote-closed-after-publish`) and `sink:pr` deferral remain documented-only, deferred to #165.
+- #165 — Add closure audit and repair command for stale completed work (drift detection + repair); unify `remote_issue_closed` and add invariant 5 (`remote-closed-after-publish`).

@@ -2714,6 +2714,263 @@ function testFinalizeClaimLabelFailedTriggersInvariant() {
   }
 }
 
+// issue-164 Task 5: tests for closure receipt shape and mockability
+
+function testSinkMergeEmitsClosureReceipt() {
+  // Exercise sink-merge (OFFLINE=1) and verify it emits a well-formed closure receipt JSON.
+  // Uses the same linked-worktree setup as testSinkMergeFromLinkedWorktree so that
+  // the branch can be deleted (Step 9) and the FF merge succeeds.
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sm-receipt-')));
+  const kwRoot = tmp + '.kw';
+  try {
+    initGitRepo(tmp);
+    const wtPath = path.join(kwRoot, 'issue-164r');
+    fs.mkdirSync(kwRoot, { recursive: true });
+    spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-164r', '--', wtPath, 'HEAD'], {
+      cwd: tmp, encoding: 'utf8'
+    });
+    // Feature commit so the merge is a real FF.
+    fs.writeFileSync(path.join(wtPath, 'feature-164r.txt'), 'feature\n');
+    spawnSync('git', ['add', 'feature-164r.txt'], { cwd: wtPath, encoding: 'utf8' });
+    spawnSync('git', ['commit', '-m', 'feat: issue 164r'], { cwd: wtPath, encoding: 'utf8' });
+    // No plantActiveFolder: without a live active folder, active-folder-absent is satisfied.
+    // Plant the archive that cmdFinalize would have created in production (finalize runs
+    // BEFORE sink-merge). mainRoot resolves to tmp for this linked worktree, so sink-merge
+    // probes archiveDest = tmp/kaola-workflow/archive/issue-164r — this is the path it reads.
+    const archiveStateDir = path.join(tmp, 'kaola-workflow', 'archive', 'issue-164r');
+    fs.mkdirSync(archiveStateDir, { recursive: true });
+    fs.writeFileSync(path.join(archiveStateDir, 'workflow-state.md'), '# Kaola-Workflow State\n\nstatus: closed\nstep: complete\n');
+
+    const result = spawnSync(process.execPath, [
+      sinkMergeScript,
+      '--project', 'issue-164r',
+      '--branch', 'workflow/issue-164r',
+      '--issue', '164'
+    ], {
+      cwd: wtPath,
+      encoding: 'utf8',
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }
+    });
+
+    assert(
+      result.status === 0,
+      'sink-merge should exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr
+    );
+
+    // Parse the last non-empty line as JSON (sink-merge may emit progress on earlier lines)
+    const lines = result.stdout.trim().split('\n').filter(l => l.trim());
+    const parsed = JSON.parse(lines[lines.length - 1]);
+
+    assert(parsed.status === 'merged', 'closure JSON must have status:merged, got: ' + JSON.stringify(parsed));
+    assert(parsed.closure_receipt, 'closure JSON must have closure_receipt field');
+    const receipt = parsed.closure_receipt;
+    assert(typeof receipt.branch_removed === 'string', 'receipt must have branch_removed field, got: ' + JSON.stringify(receipt));
+    assert(typeof receipt.worktree_removed === 'string', 'receipt must have worktree_removed field, got: ' + JSON.stringify(receipt));
+    assert(
+      receipt.remote_issue_closed === 'skipped_offline',
+      'OFFLINE=1: receipt.remote_issue_closed must be skipped_offline, got: ' + receipt.remote_issue_closed
+    );
+    assert(
+      receipt.claim_label_removed === 'skipped_offline',
+      'OFFLINE=1: receipt.claim_label_removed must be skipped_offline, got: ' + receipt.claim_label_removed
+    );
+    assert(
+      receipt.archive === 'closed',
+      'production happy path: receipt.archive must be closed when the archive dir exists, got: ' + receipt.archive
+    );
+    assert(
+      parsed.closure_invariants && parsed.closure_invariants.ok === true,
+      'closure_invariants.ok must be true for offline receipt, got: ' + JSON.stringify(parsed.closure_invariants)
+    );
+    console.log('testSinkMergeEmitsClosureReceipt: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
+function testWatchPrMergedClosureReceipt() {
+  // Verify that cmdWatchPr attaches a receipt sub-object to cleanups[0] when a PR is MERGED.
+  // The receipt must have the fields defined by buildClosureReceipt.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-watchpr-receipt-'));
+  const binDir = path.join(tmp, 'bin');
+  try {
+    initGitRepo(tmp);
+    plantActiveFolder(tmp, 'issue-164w', 164, null);
+    // Patch state to sink:pr with a pr_url.
+    const stateFile = path.join(tmp, 'kaola-workflow', 'issue-164w', 'workflow-state.md');
+    let state = fs.readFileSync(stateFile, 'utf8');
+    state = state.replace(/^sink:\s*.*$/m, 'sink: pr');
+    if (!state.match(/^pr_url:/m)) state += 'pr_url: https://github.com/test/repo/pull/164\n';
+    fs.writeFileSync(stateFile, state);
+    fs.mkdirSync(binDir, { recursive: true });
+    writeShimFiles(path.join(binDir, 'gh'), [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issue edit') && a.includes('--remove-label')) {",
+      "  process.stdout.write('{}\\n');",
+      "} else if (a.includes('pr view')) {",
+      "  process.stdout.write('{\"state\":\"MERGED\",\"number\":164}\\n');",
+      "} else if (a.includes('issue comment')) {",
+      "  process.stdout.write('{}\\n');",
+      "} else {",
+      "  process.stdout.write('{}\\n');",
+      "}"
+    ]);
+    const result = runClaimOnline(['watch-pr'], tmp, binDir);
+    assert(
+      Array.isArray(result.cleanups) && result.cleanups.length > 0,
+      'watch-pr must emit cleanups array with at least one entry, got: ' + JSON.stringify(result)
+    );
+    const cleanup = result.cleanups[0];
+    assert(cleanup.receipt, 'cleanups[0] must have a receipt field, got: ' + JSON.stringify(cleanup));
+    const receipt = cleanup.receipt;
+    assert(
+      receipt.branch_removed === 'kept',
+      'watch-pr receipt.branch_removed must be kept, got: ' + receipt.branch_removed
+    );
+    assert(
+      receipt.remote_issue_closed === 'skipped_offline',
+      'watch-pr receipt.remote_issue_closed must be skipped_offline, got: ' + receipt.remote_issue_closed
+    );
+    assert(
+      typeof receipt.worktree_removed === 'string',
+      'watch-pr receipt must have worktree_removed field, got: ' + JSON.stringify(receipt)
+    );
+    assert(
+      typeof receipt.archive === 'string',
+      'watch-pr receipt must have archive field, got: ' + JSON.stringify(receipt)
+    );
+    assert(
+      typeof receipt.roadmap_source_removed === 'string',
+      'watch-pr receipt must have roadmap_source_removed field, got: ' + JSON.stringify(receipt)
+    );
+    assert(
+      result.cleanups[0].closure_invariants,
+      'cleanups[0] must have closure_invariants, got: ' + JSON.stringify(cleanup)
+    );
+    console.log('testWatchPrMergedClosureReceipt: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testFinalizeOfflineClosureReceiptSkipped() {
+  // Run cmdFinalize with KAOLA_WORKFLOW_OFFLINE=1 and verify the closure_receipt
+  // shows skipped_offline for remote operations while closure_invariants.ok is true.
+  // Uses direct spawnSync because runClaimOnline hardcodes OFFLINE=0.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-finalize-offline-receipt-'));
+  try {
+    initGitRepo(tmp);
+    // Do NOT plant a roadmap issue — avoids roadmap-source-absent violation.
+    plantActiveFolder(tmp, 'issue-164f', 164, null);
+    const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', 'issue-164f'], {
+      cwd: tmp,
+      encoding: 'utf8',
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }
+    });
+    assert(
+      result.status === 0,
+      'offline finalize should exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr
+    );
+    const parsed = JSON.parse(result.stdout);
+    assert(parsed.closure_receipt, 'finalize must emit closure_receipt, got: ' + JSON.stringify(parsed));
+    assert(
+      parsed.closure_receipt.remote_issue_closed === 'skipped_offline',
+      'OFFLINE=1: closure_receipt.remote_issue_closed must be skipped_offline, got: ' + parsed.closure_receipt.remote_issue_closed
+    );
+    assert(
+      parsed.closure_receipt.claim_label_removed === 'skipped_offline',
+      'OFFLINE=1: closure_receipt.claim_label_removed must be skipped_offline, got: ' + parsed.closure_receipt.claim_label_removed
+    );
+    assert(
+      parsed.closure_invariants && parsed.closure_invariants.ok === true,
+      'OFFLINE=1: closure_invariants.ok must be true (skipped_offline is allowed), got: ' + JSON.stringify(parsed.closure_invariants)
+    );
+    console.log('testFinalizeOfflineClosureReceiptSkipped: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testSinkMergeMockabilityAndReceipt() {
+  // Verify that KAOLA_GH_MOCK_SCRIPT is consulted by sink-merge's ghExec when OFFLINE=0.
+  // Uses a bare remote so assertBranchPushedToUpstream passes, and sets up the feature
+  // branch as already merged (no live workflow folder on branch HEAD) so all guards pass.
+  // A marker file written by the shim proves the mock was invoked (not the real `gh`).
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sm-mock-')));
+  const remotePath = initGitRepoWithBareRemote(tmp);
+  const marker = path.join(tmp, 'gh-mock-called.marker');
+  try {
+    const binDir = path.join(tmp, 'bin');
+    fs.mkdirSync(binDir, { recursive: true });
+    writeShimFiles(path.join(binDir, 'gh'), [
+      "const fs = require('fs');",
+      "const a = process.argv.slice(2).join(' ');",
+      "fs.writeFileSync(" + JSON.stringify(marker) + ", a + '\\n', { flag: 'a' });",
+      "process.stdout.write('{}\\n');"
+    ]);
+
+    // Create a feature branch, push it upstream.
+    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-164m'], { encoding: 'utf8' });
+    fs.writeFileSync(path.join(tmp, 'feature-164m.txt'), 'feature\n');
+    spawnSync('git', ['-C', tmp, 'add', 'feature-164m.txt'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'feat: issue 164m'], {
+      encoding: 'utf8',
+      env: { ...process.env, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@test.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@test.com' }
+    });
+    spawnSync('git', ['-C', tmp, 'push', '-u', 'origin', 'workflow/issue-164m'], { encoding: 'utf8' });
+    // Return to main so checkout in sink-merge works.
+    spawnSync('git', ['-C', tmp, 'checkout', 'main'], { encoding: 'utf8' });
+
+    const mockJs = path.join(binDir, 'gh.js');
+    const result = spawnSync(process.execPath, [
+      sinkMergeScript,
+      '--project', 'issue-164m',
+      '--branch', 'workflow/issue-164m',
+      '--issue', '164'
+    ], {
+      cwd: tmp,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        KAOLA_WORKFLOW_OFFLINE: '0',
+        KAOLA_GH_MOCK_SCRIPT: mockJs
+      }
+    });
+
+    assert(
+      result.status === 0,
+      'sink-merge with mock should exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr
+    );
+    assert(
+      fs.existsSync(marker),
+      'KAOLA_GH_MOCK_SCRIPT shim must be invoked by sink-merge ghExec (marker file not written)'
+    );
+    const markerContent = fs.readFileSync(marker, 'utf8');
+    assert(
+      markerContent.includes('issue close') || markerContent.includes('issue edit'),
+      'mock shim must be called with gh issue close or issue edit, got: ' + markerContent
+    );
+
+    // Also verify the receipt is emitted.
+    const lines = result.stdout.trim().split('\n').filter(l => l.trim());
+    const parsed = JSON.parse(lines[lines.length - 1]);
+    assert(parsed.status === 'merged', 'online mock sink-merge receipt must have status:merged, got: ' + JSON.stringify(parsed));
+    assert(
+      parsed.closure_receipt.remote_issue_closed === 'closed',
+      'mock issue close must yield remote_issue_closed:closed, got: ' + parsed.closure_receipt.remote_issue_closed
+    );
+    assert(
+      parsed.closure_receipt.claim_label_removed === 'removed',
+      'mock issue edit --remove-label must yield claim_label_removed:removed, got: ' + parsed.closure_receipt.claim_label_removed
+    );
+    console.log('testSinkMergeMockabilityAndReceipt: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    try { fs.rmSync(remotePath, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
 async function main() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-active-folders-'));
   try {
@@ -2774,6 +3031,10 @@ async function main() {
     testWatchPrEmitsClaimLabelReceipt();
     testAuditAndRepairLabels();
     testFinalizeClaimLabelFailedTriggersInvariant();
+    testSinkMergeEmitsClosureReceipt();
+    testWatchPrMergedClosureReceipt();
+    testFinalizeOfflineClosureReceiptSkipped();
+    testSinkMergeMockabilityAndReceipt();
     console.log('Workflow walkthrough simulation passed');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });

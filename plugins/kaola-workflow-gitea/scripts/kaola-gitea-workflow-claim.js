@@ -532,7 +532,7 @@ function archiveProjectDir(root, project, statusValue, suffix) {
   return { archived: true, dest, roadmap_source_removed: roadmapSourceRemoved, roadmap_regenerated: roadmapRegenerated };
 }
 
-function checkClosureInvariants(root, receipt) {
+function checkClosureInvariants(root, receipt, archiveDest) {
   const violations = [];
   const issueNumber = receipt.issue_number;
   if (Number.isInteger(issueNumber) && issueNumber > 0) {
@@ -556,7 +556,53 @@ function checkClosureInvariants(root, receipt) {
     const invLabel = closureContract.CLOSURE_INVARIANTS.find(i => i.id === 'in-progress-label-removed');
     violations.push({ id: 'in-progress-label-removed', description: invLabel ? invLabel.description : 'workflow:in-progress label was not removed after closure' });
   }
+  // active-folder-absent: no live folder for this project should exist after archive
+  if (receipt.project) {
+    try {
+      const active = readActiveFolders(root);
+      if (active.some(function(f) { return f.project === receipt.project; })) {
+        const invAf = closureContract.CLOSURE_INVARIANTS.find(function(i) { return i.id === 'active-folder-absent'; });
+        violations.push({ id: 'active-folder-absent', description: invAf ? invAf.description : 'active workflow folder still exists after closure' });
+      }
+    } catch (_) {}
+  }
+  // archive-state-closed: skip when archiveDest absent (mirrors offline-skip pattern)
+  if (archiveDest) {
+    try {
+      const stateFilePath = path.join(archiveDest, 'workflow-state.md');
+      if (fs.existsSync(stateFilePath)) {
+        const stateContent = fs.readFileSync(stateFilePath, 'utf8');
+        const status = field(stateContent, 'status');
+        if (status !== 'closed' && status !== 'abandoned') {
+          const invAs = closureContract.CLOSURE_INVARIANTS.find(function(i) { return i.id === 'archive-state-closed'; });
+          violations.push({ id: 'archive-state-closed', description: invAs ? invAs.description : 'archived workflow-state.md does not show closed or abandoned status' });
+        }
+      }
+    } catch (_) {}
+  }
+  // branch-worktree-resolved: neither worktree nor branch removal should have failed
+  if (receipt.worktree_removed === 'failed' || receipt.branch_removed === 'failed') {
+    const invBw = closureContract.CLOSURE_INVARIANTS.find(function(i) { return i.id === 'branch-worktree-resolved'; });
+    violations.push({ id: 'branch-worktree-resolved', description: invBw ? invBw.description : 'worktree or branch removal failed during closure' });
+  }
   return { ok: violations.length === 0, violations };
+}
+
+function buildClosureReceipt(project, issueNumber, steps) {
+  const receipt = closureContract.emptyReceipt(project, issueNumber);
+  const fields = closureContract.CLOSURE_RECEIPT_FIELDS;
+  if (steps && typeof steps === 'object') {
+    for (const key of Object.keys(steps)) {
+      if (key === 'warnings') continue;
+      if (Object.prototype.hasOwnProperty.call(fields, key)) {
+        receipt[key] = steps[key];
+      }
+    }
+    if (Array.isArray(steps.warnings)) {
+      for (const w of steps.warnings) receipt.warnings.push(w);
+    }
+  }
+  return receipt;
 }
 
 function cmdFinalize() {
@@ -566,9 +612,16 @@ function cmdFinalize() {
   const folder = activeByProject(root, args.project);
   const projectInfo = folder ? { full_name: folder.full_name, html_url: folder.project_html_url } : discoverProjectSafe();
   const result = archiveProjectDir(root, args.project, 'closed');
+  let worktreeRemoved = 'failed';
   if (!args.keepWorktree) {
-    try { removeWorktree(root, args.project, folder); } catch (_) {}
+    try {
+      const wtResult = removeWorktree(root, args.project, folder);
+      if (wtResult && wtResult.removed === true) worktreeRemoved = 'removed';
+      else if (wtResult && wtResult.removed === false && wtResult.reason === 'missing') worktreeRemoved = 'missing';
+      else if (wtResult && wtResult.removed === false) worktreeRemoved = 'failed';
+    } catch (_) { worktreeRemoved = 'failed'; }
   } else {
+    worktreeRemoved = 'kept';
     let mainRoot2, linkedRoot2;
     try {
       mainRoot2 = fs.realpathSync(mainRootFromCoord(getCoordRoot(root)));
@@ -593,9 +646,28 @@ function cmdFinalize() {
     } catch (_) {}
   }
   const claimLabelRemoved = clearAdvisoryClaim(issueNumber, 'finalized', projectInfo);
-  const closureReceipt = Object.assign({ issue_number: issueNumber }, result, { claim_label_removed: claimLabelRemoved });
-  const invariantResult = checkClosureInvariants(root, closureReceipt);
-  output(Object.assign({ status: 'closed' }, result, { claim_label_removed: claimLabelRemoved, closure_invariants: invariantResult }));
+  let remoteIssueClosed = 'skipped_offline';
+  if (!OFFLINE && issueNumber) {
+    try {
+      const probe = probeIssueState(issueNumber);
+      remoteIssueClosed = (probe.state === 'closed') ? 'already_closed' : 'skipped_offline';
+    } catch (_) { remoteIssueClosed = 'skipped_offline'; }
+  }
+  const closureReceipt = buildClosureReceipt(args.project, issueNumber, {
+    archive: result.skipped ? 'skipped' : (result.archived ? 'closed' : 'failed'),
+    roadmap_source_removed: result.roadmap_source_removed,
+    roadmap_regenerated: result.roadmap_regenerated,
+    remote_issue_closed: remoteIssueClosed,
+    claim_label_removed: claimLabelRemoved,
+    worktree_removed: worktreeRemoved,
+    branch_removed: 'kept'
+  });
+  const invariantResult = checkClosureInvariants(root, closureReceipt, result.dest);
+  output(Object.assign({ status: 'closed' }, result, {
+    claim_label_removed: claimLabelRemoved,
+    closure_receipt: closureReceipt,
+    closure_invariants: invariantResult
+  }));
 }
 
 function cwdInside(target) {
@@ -853,12 +925,46 @@ function watchMergeRequests(root, args) {
       if (archiveResult && (archiveResult.roadmap_source_removed === 'failed' || archiveResult.roadmap_regenerated === 'failed')) {
         warnings.push({ folder: folder.project, roadmap_source_removed: archiveResult.roadmap_source_removed, roadmap_regenerated: archiveResult.roadmap_regenerated });
       }
-      try { removeWorktree(root, folder.project, folder); } catch (_) {}
-      const claimLabelRemoved = clearAdvisoryClaim(folder.issue_iid, 'pr merged', { full_name: folder.full_name, html_url: folder.project_html_url }); cleanups.push({ folder: folder.project, claim_label_removed: claimLabelRemoved });
+      let worktreeRemoved = 'failed';
+      try {
+        const wtResult = removeWorktree(root, folder.project, folder);
+        if (wtResult && wtResult.removed === true) worktreeRemoved = 'removed';
+        else if (wtResult && wtResult.removed === false && wtResult.reason === 'missing') worktreeRemoved = 'missing';
+        else if (wtResult && wtResult.removed === false) worktreeRemoved = 'failed';
+      } catch (_) { worktreeRemoved = 'failed'; }
+      const claimLabelStatus = clearAdvisoryClaim(folder.issue_iid, 'pr merged', { full_name: folder.full_name, html_url: folder.project_html_url });
+      const folderReceipt = buildClosureReceipt(folder.project, folder.issue_iid, {
+        archive: archiveResult.skipped ? 'skipped' : (archiveResult.archived ? 'closed' : 'failed'),
+        roadmap_source_removed: archiveResult ? archiveResult.roadmap_source_removed : 'failed',
+        roadmap_regenerated: archiveResult ? archiveResult.roadmap_regenerated : 'failed',
+        remote_issue_closed: 'skipped_offline',
+        claim_label_removed: claimLabelStatus,
+        worktree_removed: worktreeRemoved,
+        branch_removed: 'kept'
+      });
+      const folderInvariants = checkClosureInvariants(root, folderReceipt, archiveResult ? archiveResult.dest : undefined);
+      cleanups.push({ folder: folder.project, claim_label_removed: claimLabelStatus, receipt: folderReceipt, closure_invariants: folderInvariants });
     } else if (state === 'closed') {
-      archiveProjectDir(root, folder.project, 'abandoned', '.discarded-' + new Date().toISOString().replace(/[:.]/g, '-'));
-      try { removeWorktree(root, folder.project, folder); } catch (_) {}
-      const claimLabelRemoved = clearAdvisoryClaim(folder.issue_iid, 'pr closed', { full_name: folder.full_name, html_url: folder.project_html_url }); cleanups.push({ folder: folder.project, claim_label_removed: claimLabelRemoved });
+      const archiveResult = archiveProjectDir(root, folder.project, 'abandoned', '.discarded-' + new Date().toISOString().replace(/[:.]/g, '-'));
+      let worktreeRemoved = 'failed';
+      try {
+        const wtResult = removeWorktree(root, folder.project, folder);
+        if (wtResult && wtResult.removed === true) worktreeRemoved = 'removed';
+        else if (wtResult && wtResult.removed === false && wtResult.reason === 'missing') worktreeRemoved = 'missing';
+        else if (wtResult && wtResult.removed === false) worktreeRemoved = 'failed';
+      } catch (_) { worktreeRemoved = 'failed'; }
+      const claimLabelStatus = clearAdvisoryClaim(folder.issue_iid, 'pr closed', { full_name: folder.full_name, html_url: folder.project_html_url });
+      const folderReceipt = buildClosureReceipt(folder.project, folder.issue_iid, {
+        archive: archiveResult.skipped ? 'skipped' : (archiveResult.archived ? 'abandoned' : 'failed'),
+        roadmap_source_removed: archiveResult ? archiveResult.roadmap_source_removed : 'failed',
+        roadmap_regenerated: archiveResult ? archiveResult.roadmap_regenerated : 'failed',
+        remote_issue_closed: 'skipped_offline',
+        claim_label_removed: claimLabelStatus,
+        worktree_removed: worktreeRemoved,
+        branch_removed: 'kept'
+      });
+      const folderInvariants = checkClosureInvariants(root, folderReceipt, archiveResult ? archiveResult.dest : undefined);
+      cleanups.push({ folder: folder.project, claim_label_removed: claimLabelStatus, receipt: folderReceipt, closure_invariants: folderInvariants });
     }
   }
   return { watched, warnings, cleanups };
@@ -945,6 +1051,8 @@ if (require.main === module) {
 module.exports = {
   archiveProjectDir,
   buildBranchName,
+  buildClosureReceipt,
+  checkClosureInvariants,
   claimExplicitTarget,
   claimProject,
   collectStale,
