@@ -624,7 +624,7 @@ Execute output:
 
 GitLab and Gitea receive receipt wiring only (`clearAdvisoryClaim` returns the status enum; `cmdFinalize`/watch commands emit `claim_label_removed`). The `audit-labels`/`repair-labels` subcommands are GitHub-only in this release.
 
-### Closure audit and repair (GitHub only, issue #165)
+### Closure audit and repair (issue #165; GitLab port #166)
 
 #### Script: `kaola-workflow-closure-audit.js`
 
@@ -710,6 +710,26 @@ deliberately **reports but never removes** active folders and unarchived PR fold
 delegating worktree/branch teardown to `stale-worktree-cleanup` and folder teardown
 to `finalize`/`release`/`watch-pr`.
 
+#### GitLab edition (issue #166)
+
+The GitLab edition ships `kaola-gitlab-workflow-closure-audit.js` with the same
+contract and JSON shape, routing all remote calls through `kaola-gitlab-forge.js`
+instead of raw `gh`:
+
+```bash
+node ~/.claude/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-closure-audit.js
+node ~/.claude/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-closure-audit.js --execute
+```
+
+MR substitutions: the `unarchived_pr_folders` class becomes `unarchived_mr_folders`
+with item fields `mr_url`/`mr_state`, gated on `sink: mr` folders. MR state is
+matched against the **lowercase** `merged`/`closed` values returned by
+`forge.viewMergeRequest` (GitLab normalizes state to lowercase, unlike GitHub's
+uppercase `gh pr view`). `--execute` removes `workflow:in-progress` via
+`forge.updateIssue(iid, { unlabels })`. Offline behavior, the safe-repair
+boundary, and report-only classes are identical to the GitHub edition. The
+`audit-labels`/`repair-labels` subcommands remain GitHub-only.
+
 ### Flow mapping
 
 Existing closure code is mapped to the contract below. This issue documents the
@@ -724,7 +744,7 @@ here and deferred to the listed follow-up issues.
 | `watch-pr` / `watch-mr` | 1, 2, 3, 4, 6, 7 | **Shipped (#164)**: Per-folder `receipt` + `closure_invariants` attached to each `cleanups[]` entry on MERGED; `cleanups[]`/`warnings[]` preserved. Closure can still be delayed if the watcher never runs (drift detection → #165). | ~~#164~~, #165 |
 | `clearAdvisoryClaim` (label cleanup) | 6 | **Shipped (#163)**: Returns `'removed'`/`'skipped_offline'`/`'failed'`; callers capture result into `claim_label_removed` receipt field. `cmdFinalize` has null-folder fallback reading issue number from archive path. `cmdWatchPr`/`cmdWatchMr` emit `cleanups[]`. GitHub: `audit-labels`/`repair-labels` subcommands for stale-label repair. | |
 | `stale-worktree-check` / `stale-worktree-cleanup` | 7 | Reports/removes stale worktrees and branches; relied on for invariant 7's "explicitly reported" clause. Complemented by `closure-audit` (#165), which covers the roadmap/label/folder drift surface (invariants 1, 2, 3, 5, 6) and explicitly defers worktree/branch teardown here. | ~~#165~~ |
-| `closure-audit` (GitHub, #165) | 1, 2, 3, 5, 6 | **Shipped (#165)**: dedicated `kaola-workflow-closure-audit.js` reports stale roadmap sources, mirror-listed closed issues, stale in-progress labels, active folders for closed issues, and unarchived PR folders; `--execute` repairs the safe local roadmap/label classes only. Report-only for folders/PR drift. GitLab/Gitea ports deferred to follow-ups. | |
+| `closure-audit` (GitHub, #165) | 1, 2, 3, 5, 6 | **Shipped (#165)**: dedicated `kaola-workflow-closure-audit.js` reports stale roadmap sources, mirror-listed closed issues, stale in-progress labels, active folders for closed issues, and unarchived PR folders; `--execute` repairs the safe local roadmap/label classes only. Report-only for folders/PR drift. GitLab port shipped (#166, `unarchived_mr_folders`); Gitea deferred (#167). | #166 |
 
 ### Follow-up scope
 
@@ -734,4 +754,4 @@ and repair are decomposed into:
 - #162 — Make roadmap source cleanup mandatory after issue closure (invariants 1, 2). **Shipped**: `archiveProjectDir()` now populates explicit receipt fields (`roadmap_source_removed`, `roadmap_regenerated`); `cmdFinalize` output includes these fields plus `closure_invariants`; `cmdWatchPr`/`cmdWatchMr` emit `warnings` on receipt failures.
 - #163 — Guarantee `workflow:in-progress` label cleanup for closed issues (invariant 6). **Shipped**: `clearAdvisoryClaim()` now returns `'removed'`/`'skipped_offline'`/`'failed'`; `cmdFinalize` and watch commands emit `claim_label_removed`; `checkClosureInvariants` checks the `in-progress-label-removed` invariant (skips when offline); `audit-labels`/`repair-labels` GitHub subcommands for stale-label repair.
 - #164 — Unify closure execution behind a shared closure receipt (invariants 1-4, 6, 7). **Shipped**: `buildClosureReceipt()` helper seeds `emptyReceipt()` across all four forge trees; `cmdFinalize`, `cmdWatchPr`/`cmdWatchMr`, and `sink-merge` all emit `closure_receipt` + `closure_invariants`; `checkClosureInvariants` extended with `active-folder-absent`, `archive-state-closed`, `branch-worktree-resolved`; `sink-merge` `ghExec` honors `KAOLA_GH_MOCK_SCRIPT`. Invariant 5 (`remote-closed-after-publish`) and `sink:pr` deferral remain documented-only, deferred to #165.
-- #165 — Add closure audit and repair command for stale completed work (drift detection + repair). **Shipped (GitHub edition)**: new dedicated script `kaola-workflow-closure-audit.js` reports six closure-drift classes (invariants 1, 2, 3, 5, 6) and, with `--execute`, removes stale `.roadmap` sources + regenerates `ROADMAP.md` + removes stale `workflow:in-progress` labels. Report-only for active folders and unarchived PR folders. GitLab/Gitea ports filed as follow-up issues.
+- #165 — Add closure audit and repair command for stale completed work (drift detection + repair). **Shipped (GitHub edition)**: new dedicated script `kaola-workflow-closure-audit.js` reports six closure-drift classes (invariants 1, 2, 3, 5, 6) and, with `--execute`, removes stale `.roadmap` sources + regenerates `ROADMAP.md` + removes stale `workflow:in-progress` labels. Report-only for active folders and unarchived PR folders. GitLab port shipped (#166) as `kaola-gitlab-workflow-closure-audit.js` (`unarchived_mr_folders`, lowercase MR state, forge-routed); Gitea port remains as follow-up #167.

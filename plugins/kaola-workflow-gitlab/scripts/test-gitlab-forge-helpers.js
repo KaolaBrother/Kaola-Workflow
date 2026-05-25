@@ -67,6 +67,8 @@ const execFileSync = runner(calls, {
   }),
   'issue list --output json --per-page 100': JSON.stringify([{ iid: 4, state: 'opened' }]),
   'issue list --output json --per-page 50 --state opened': JSON.stringify([{ iid: 5, state: 'opened' }]),
+  'issue list --output json --per-page 100 --state closed --label workflow:in-progress': JSON.stringify([{ iid: 7, state: 'closed' }]),
+  'issue list --output json --per-page 100 --state closed --label workflow:in-progress --label workflow:queued': JSON.stringify([{ iid: 8, state: 'closed' }]),
   'issue view 4 --output json': JSON.stringify({ iid: 4, state: 'opened', title: 'View me' }),
   'issue update 4 --label workflow:in-progress --unlabel workflow:queued': JSON.stringify({
     iid: 4,
@@ -90,6 +92,8 @@ const execFileSync = runner(calls, {
 assert.strictEqual(forge.discoverProject({ execFileSync }).path_with_namespace, 'group/project');
 assert.strictEqual(forge.listIssues({ execFileSync })[0].issue_iid, 4);
 assert.strictEqual(forge.listIssues({ execFileSync, perPage: 50, state: 'opened' })[0].issue_iid, 5);
+assert.strictEqual(forge.listIssues({ execFileSync, state: 'closed', labels: [forge.CLAIM_LABEL] })[0].issue_iid, 7);
+assert.strictEqual(forge.listIssues({ execFileSync, state: 'closed', labels: [forge.CLAIM_LABEL, forge.QUEUED_LABEL] })[0].issue_iid, 8);
 assert.strictEqual(forge.viewIssue(4, { execFileSync }).title, 'View me');
 assert.deepStrictEqual(
   forge.updateIssue(4, {

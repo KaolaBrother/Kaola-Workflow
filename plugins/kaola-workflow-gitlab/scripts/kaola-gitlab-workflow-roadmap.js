@@ -354,6 +354,7 @@ module.exports = {
   createFileExclusive,
   guardAgainstMissingRoadmapSource,
   readRoadmapIssues,
+  roadmapDir,
   refreshFromGitLab,
   regenerateRoadmap,
   validateRemote,

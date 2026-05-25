@@ -136,6 +136,7 @@ case "$FORGE" in
       kaola-gitlab-workflow-active-folders.js
       kaola-gitlab-workflow-claim.js
       kaola-gitlab-workflow-classifier.js
+      kaola-gitlab-workflow-closure-audit.js
       kaola-gitlab-workflow-compact-context.js
       kaola-gitlab-workflow-repair-state.js
       kaola-gitlab-workflow-roadmap.js

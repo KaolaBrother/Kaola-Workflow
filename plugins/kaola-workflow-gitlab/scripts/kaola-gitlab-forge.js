@@ -124,6 +124,7 @@ function listIssues(opts) {
   const options = opts || {};
   const args = ['issue', 'list', '--output', 'json', '--per-page', String(options.perPage || 100)];
   if (options.state) args.push('--state', options.state);
+  for (const label of options.labels || []) args.push('--label', label);
   const raw = glabExec(args, options);
   return parseJson(raw, []).map(normalizeIssue);
 }
