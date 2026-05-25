@@ -114,6 +114,7 @@ case "$FORGE" in
       kaola-workflow-claim.js
       kaola-workflow-active-folders.js
       kaola-workflow-closure-audit.js
+      kaola-workflow-closure-contract.js
       kaola-workflow-compact-context.js
       kaola-workflow-sink-merge.js
       kaola-workflow-sink-pr.js
@@ -135,6 +136,7 @@ case "$FORGE" in
       kaola-gitlab-forge.js
       kaola-gitlab-workflow-active-folders.js
       kaola-gitlab-workflow-claim.js
+      kaola-workflow-closure-contract.js
       kaola-gitlab-workflow-classifier.js
       kaola-gitlab-workflow-closure-audit.js
       kaola-gitlab-workflow-compact-context.js
@@ -158,6 +160,7 @@ case "$FORGE" in
       kaola-gitea-forge.js
       kaola-gitea-workflow-active-folders.js
       kaola-gitea-workflow-claim.js
+      kaola-workflow-closure-contract.js
       kaola-gitea-workflow-classifier.js
       kaola-gitea-workflow-compact-context.js
       kaola-gitea-workflow-repair-state.js
