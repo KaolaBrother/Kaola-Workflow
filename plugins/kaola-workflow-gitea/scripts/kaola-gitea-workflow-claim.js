@@ -292,10 +292,12 @@ function postAdvisoryClaim(issueIid, project, projectInfo) {
 }
 
 function clearAdvisoryClaim(issueIid, reason, projectInfo) {
-  if (issueIid == null) return;
+  if (OFFLINE || issueIid == null) return 'skipped_offline';
+  let status = 'failed';
   try {
     if (projectInfo && projectInfo.full_name) {
       forge.updateIssueLabels(projectInfo, issueIid, { remove: [CLAIM_LABEL] });
+      status = 'removed';
     }
   } catch (_) {}
   try {
@@ -303,6 +305,7 @@ function clearAdvisoryClaim(issueIid, reason, projectInfo) {
       forge.createIssueComment(projectInfo, issueIid, 'Kaola-Workflow advisory claim cleared: ' + reason);
     }
   } catch (_) {}
+  return status;
 }
 
 function classifyIssue(root, issueIid) {
@@ -547,6 +550,12 @@ function checkClosureInvariants(root, receipt) {
       }
     } catch (_) {}
   }
+  // outside issueNumber guard: 'skipped_offline' must not violate even when issueNumber is null
+  const labelStatus = receipt.claim_label_removed;
+  if (labelStatus !== 'skipped_offline' && labelStatus !== 'removed' && labelStatus !== 'already_absent') {
+    const invLabel = closureContract.CLOSURE_INVARIANTS.find(i => i.id === 'in-progress-label-removed');
+    violations.push({ id: 'in-progress-label-removed', description: invLabel ? invLabel.description : 'workflow:in-progress label was not removed after closure' });
+  }
   return { ok: violations.length === 0, violations };
 }
 
@@ -572,10 +581,21 @@ function cmdFinalize() {
         { encoding: 'utf8', stdio: 'inherit' });
     }
   }
-  clearAdvisoryClaim(folder && folder.issue_iid, 'finalized', projectInfo);
-  const issueNumber = folder && folder.issue_iid;
-  const invariantResult = checkClosureInvariants(root, { issue_number: issueNumber, ...result });
-  output(Object.assign({ status: 'closed' }, result, { closure_invariants: invariantResult }));
+  let issueNumber = folder && folder.issue_iid;
+  // null-folder fallback: archiveProjectDir ran first, so dest is the archive path
+  if (issueNumber == null && result.dest) {
+    try {
+      const statePath = path.join(result.dest, 'workflow-state.md');
+      if (fs.existsSync(statePath)) {
+        const n = parseInt(field(fs.readFileSync(statePath, 'utf8'), 'issue_number'), 10);
+        issueNumber = Number.isFinite(n) ? n : null;
+      }
+    } catch (_) {}
+  }
+  const claimLabelRemoved = clearAdvisoryClaim(issueNumber, 'finalized', projectInfo);
+  const closureReceipt = Object.assign({ issue_number: issueNumber }, result, { claim_label_removed: claimLabelRemoved });
+  const invariantResult = checkClosureInvariants(root, closureReceipt);
+  output(Object.assign({ status: 'closed' }, result, { claim_label_removed: claimLabelRemoved, closure_invariants: invariantResult }));
 }
 
 function cwdInside(target) {
@@ -819,6 +839,7 @@ function prNumberFromFolder(folder) {
 function watchMergeRequests(root, args) {
   let watched = 0;
   const warnings = [];
+  const cleanups = [];
   for (const folder of readActiveFolders(root, { excludeClosedIssues: false })) {
     if (args.issue && folder.issue_iid !== args.issue) continue;
     if (folder.sink !== 'pr') continue;
@@ -833,23 +854,25 @@ function watchMergeRequests(root, args) {
         warnings.push({ folder: folder.project, roadmap_source_removed: archiveResult.roadmap_source_removed, roadmap_regenerated: archiveResult.roadmap_regenerated });
       }
       try { removeWorktree(root, folder.project, folder); } catch (_) {}
-      clearAdvisoryClaim(folder.issue_iid, 'pr merged', { full_name: folder.full_name, html_url: folder.project_html_url });
+      const claimLabelRemoved = clearAdvisoryClaim(folder.issue_iid, 'pr merged', { full_name: folder.full_name, html_url: folder.project_html_url }); cleanups.push({ folder: folder.project, claim_label_removed: claimLabelRemoved });
     } else if (state === 'closed') {
       archiveProjectDir(root, folder.project, 'abandoned', '.discarded-' + new Date().toISOString().replace(/[:.]/g, '-'));
       try { removeWorktree(root, folder.project, folder); } catch (_) {}
-      clearAdvisoryClaim(folder.issue_iid, 'pr closed', { full_name: folder.full_name, html_url: folder.project_html_url });
+      const claimLabelRemoved = clearAdvisoryClaim(folder.issue_iid, 'pr closed', { full_name: folder.full_name, html_url: folder.project_html_url }); cleanups.push({ folder: folder.project, claim_label_removed: claimLabelRemoved });
     }
   }
-  return { watched, warnings };
+  return { watched, warnings, cleanups };
 }
 
 function cmdWatchPr() {
   if (OFFLINE) { output({ watched: 0, offline: true }); return; }
   const root = getRoot();
   const args = parseArgs(process.argv.slice(3));
-  const result = watchMergeRequests(root, args);
-  const { watched, warnings } = result;
-  output(warnings && warnings.length > 0 ? { watched, warnings } : { watched });
+  const { watched, warnings, cleanups } = watchMergeRequests(root, args);
+  const emit = { watched };
+  if (warnings && warnings.length > 0) emit.warnings = warnings;
+  if (cleanups && cleanups.length > 0) emit.cleanups = cleanups;
+  output(emit);
 }
 
 function copyDir(src, dest) {

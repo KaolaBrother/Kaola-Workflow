@@ -10,6 +10,8 @@
 
 - `archiveProjectDir()` roadmap cleanup now populates explicit receipt fields (`roadmap_source_removed`, `roadmap_regenerated`) instead of silently swallowing errors via `catch (_) {}`. `cmdFinalize` output includes these fields plus `closure_invariants` (checks `roadmap-source-absent` and `roadmap-mirror-clean`). `cmdWatchPr`/`cmdWatchMr` emit a `warnings` array when receipt failures occur. Fixes #162.
 
+- `clearAdvisoryClaim()` now returns `'removed' | 'skipped_offline' | 'failed'` instead of nothing. `cmdFinalize` captures the result into `claim_label_removed` in its JSON output, with a null-folder fallback that reads the issue number from the archive path when the linked issue was already closed before finalize ran. `checkClosureInvariants` now checks the `in-progress-label-removed` invariant (skips rather than violates when `KAOLA_WORKFLOW_OFFLINE=1`). `cmdWatchPr`/`cmdWatchMr` emit a `cleanups[]` array with per-folder `claim_label_removed` status. New GitHub-only `audit-labels` (dry-run scan) and `repair-labels` (dry-run default, `--execute` for removal) subcommands find and fix closed issues still carrying `workflow:in-progress`. GitLab and Gitea receive receipt wiring only. Fixes #163.
+
 ## [3.14.0] — 2026-05-22
 
 ### Added

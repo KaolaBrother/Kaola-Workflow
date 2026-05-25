@@ -345,11 +345,16 @@ function removeLegacyStateBlocks(content) {
 }
 
 function clearAdvisoryClaim(issueNumber, reason) {
-  if (OFFLINE || issueNumber == null) return;
-  try { ghExec(['issue', 'edit', String(issueNumber), '--remove-label', CLAIM_LABEL]); } catch (_) {}
+  if (OFFLINE || issueNumber == null) return 'skipped_offline';
+  let status = 'failed';
+  try {
+    ghExec(['issue', 'edit', String(issueNumber), '--remove-label', CLAIM_LABEL]);
+    status = 'removed';
+  } catch (_) {}
   if (reason) {
     try { ghExec(['issue', 'comment', String(issueNumber), '--body', 'Kaola-Workflow advisory claim cleared: ' + reason]); } catch (_) {}
   }
+  return status;
 }
 
 function classifyIssue(root, issueNumber) {
@@ -564,6 +569,12 @@ function checkClosureInvariants(root, receipt) {
       }
     } catch (_) {}
   }
+  // outside issueNumber guard: 'skipped_offline' must not violate even when issueNumber is null
+  const labelStatus = receipt.claim_label_removed;
+  if (labelStatus !== 'skipped_offline' && labelStatus !== 'removed' && labelStatus !== 'already_absent') {
+    const invLabel = closureContract.CLOSURE_INVARIANTS.find(i => i.id === 'in-progress-label-removed');
+    violations.push({ id: 'in-progress-label-removed', description: invLabel ? invLabel.description : 'workflow:in-progress label was not removed after closure' });
+  }
   return { ok: violations.length === 0, violations };
 }
 
@@ -590,10 +601,21 @@ function cmdFinalize() {
         { encoding: 'utf8', stdio: 'inherit' });
     }
   }
-  clearAdvisoryClaim(folder && folder.issue_number, 'finalized');
-  const issueNumber = folder && folder.issue_number;
-  const invariantResult = checkClosureInvariants(root, { issue_number: issueNumber, ...result });
-  output(Object.assign({ status: 'closed' }, result, { closure_invariants: invariantResult }));
+  let issueNumber = folder && folder.issue_number;
+  // null-folder fallback: archiveProjectDir ran first, so dest is the archive path
+  if (issueNumber == null && result.dest) {
+    try {
+      const statePath = path.join(result.dest, 'workflow-state.md');
+      if (fs.existsSync(statePath)) {
+        const n = parseInt(field(fs.readFileSync(statePath, 'utf8'), 'issue_number'), 10);
+        issueNumber = Number.isFinite(n) ? n : null;
+      }
+    } catch (_) {}
+  }
+  const claimLabelRemoved = clearAdvisoryClaim(issueNumber, 'finalized');
+  const closureReceipt = Object.assign({ issue_number: issueNumber }, result, { claim_label_removed: claimLabelRemoved });
+  const invariantResult = checkClosureInvariants(root, closureReceipt);
+  output(Object.assign({ status: 'closed' }, result, { claim_label_removed: claimLabelRemoved, closure_invariants: invariantResult }));
 }
 
 function cwdInside(target) {
@@ -821,6 +843,30 @@ function cmdStaleWorktreeCleanup() {
   }
 }
 
+function cmdAuditLabels() {
+  if (OFFLINE) { output({ stale: [], offline: true }); return; }
+  const raw = ghExec(['issue', 'list', '--state', 'closed', '--label', CLAIM_LABEL, '--json', 'number,title,url']);
+  const stale = raw ? JSON.parse(raw) : [];
+  output({ stale, count: stale.length });
+}
+
+function cmdRepairLabels() {
+  const args = parseArgs(process.argv.slice(3));
+  if (OFFLINE) { output({ dry_run: false, offline: true, removed: [], failed: [] }); return; }
+  const raw = ghExec(['issue', 'list', '--state', 'closed', '--label', CLAIM_LABEL, '--json', 'number,title,url']);
+  const stale = raw ? JSON.parse(raw) : [];
+  const dryRun = !args.execute;
+  if (dryRun) { output({ dry_run: true, would_remove: stale }); return; }
+  const removed = [], failed = [];
+  for (const it of stale) {
+    try {
+      ghExec(['issue', 'edit', String(it.number), '--remove-label', CLAIM_LABEL]);
+      removed.push(it.number);
+    } catch (_) { failed.push(it.number); }
+  }
+  output({ dry_run: false, removed, failed });
+}
+
 function copyDir(src, dest) {
   fs.mkdirSync(dest, { recursive: true });
   for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
@@ -869,6 +915,7 @@ function cmdWatchPr() {
   if (OFFLINE) { output({ watched: 0, offline: true }); return; }
   let watched = 0;
   const warnings = [];
+  const cleanups = [];
   for (const folder of readActiveFolders(root, { excludeClosedIssues: false })) {
     if (args.issue && folder.issue_number !== args.issue) continue;
     if (folder.sink !== 'pr' || !folder.pr_url) continue;
@@ -884,19 +931,22 @@ function cmdWatchPr() {
         warnings.push({ folder: folder.project, roadmap_source_removed: archiveResult.roadmap_source_removed, roadmap_regenerated: archiveResult.roadmap_regenerated });
       }
       try { removeWorktree(root, folder.project, folder); } catch (_) {}
-      clearAdvisoryClaim(folder.issue_number, 'pr merged');
+      const claimLabelRemoved = clearAdvisoryClaim(folder.issue_number, 'pr merged'); cleanups.push({ folder: folder.project, claim_label_removed: claimLabelRemoved });
     } else if (state === 'CLOSED') {
       archiveProjectDir(root, folder.project, 'abandoned', '.discarded-' + new Date().toISOString().replace(/[:.]/g, '-'));
       try { removeWorktree(root, folder.project, folder); } catch (_) {}
-      clearAdvisoryClaim(folder.issue_number, 'pr closed');
+      const claimLabelRemoved = clearAdvisoryClaim(folder.issue_number, 'pr closed'); cleanups.push({ folder: folder.project, claim_label_removed: claimLabelRemoved });
     }
   }
-  output(warnings.length > 0 ? { watched, warnings } : { watched });
+  const emit = { watched };
+  if (warnings.length > 0) emit.warnings = warnings;
+  if (cleanups.length > 0) emit.cleanups = cleanups;
+  output(emit);
 }
 
 function main() {
   const sub = process.argv[2];
-  assert(sub, 'usage: kaola-workflow-claim.js <claim|release|status|patch-branch|watch-pr|bootstrap|startup|finalize|pick-next|resume|worktree-status|worktree-finalize|sink-fallback|stale-worktree-check|stale-worktree-cleanup>');
+  assert(sub, 'usage: kaola-workflow-claim.js <claim|release|status|patch-branch|watch-pr|bootstrap|startup|finalize|pick-next|resume|worktree-status|worktree-finalize|sink-fallback|stale-worktree-check|stale-worktree-cleanup|audit-labels|repair-labels>');
   if (sub === 'claim') return cmdClaim();
   if (sub === 'release' || sub === 'discard') return cmdRelease();
   if (sub === 'status') return cmdStatus();
@@ -911,6 +961,8 @@ function main() {
   if (sub === 'stale-worktree-cleanup') return cmdStaleWorktreeCleanup();
   if (sub === 'worktree-finalize') return cmdWorktreeFinalize();
   if (sub === 'sink-fallback') return cmdSinkFallback();
+  if (sub === 'audit-labels') return cmdAuditLabels();
+  if (sub === 'repair-labels') return cmdRepairLabels();
   throw new Error('unknown subcommand: ' + sub);
 }
 
@@ -924,6 +976,8 @@ module.exports = {
   claimExplicitTarget,
   claimProject,
   collectStale,
+  cmdAuditLabels,
+  cmdRepairLabels,
   cmdStaleWorktreeCleanup,
   getCoordRoot,
   projectNameForIssue,

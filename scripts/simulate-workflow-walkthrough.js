@@ -2389,6 +2389,331 @@ function testValidateRemoteOffline() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Issue #163 — clearAdvisoryClaim receipt, null-folder fallback, offline skip,
+//              watch-pr cleanups[], audit-labels and repair-labels
+// ---------------------------------------------------------------------------
+
+function testFinalizeRemovesClaimLabel() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-finalize-removes-label-'));
+  const binDir = path.join(tmp, 'bin');
+  const marker = path.join(tmp, 'label-removed.marker');
+  try {
+    initGitRepo(tmp);
+    plantActiveFolder(tmp, 'issue-914', 914, null);
+    plantRoadmapIssue(tmp, 914, '');
+    fs.mkdirSync(binDir, { recursive: true });
+    writeShimFiles(path.join(binDir, 'gh'), [
+      "const fs = require('fs');",
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issue edit') && a.includes('--remove-label')) {",
+      "  fs.writeFileSync(" + JSON.stringify(marker) + ", 'x');",
+      "  process.stdout.write('{}\\n');",
+      "} else if (a.includes('issue view')) {",
+      "  process.stdout.write('{\"state\":\"open\"}\\n');",
+      "} else if (a.includes('issue comment')) {",
+      "  process.stdout.write('{}\\n');",
+      "} else {",
+      "  process.stdout.write('{}\\n');",
+      "}"
+    ]);
+    const result = runClaimOnline(['finalize', '--project', 'issue-914'], tmp, binDir);
+    assert(
+      result.claim_label_removed === 'removed',
+      'finalize must return claim_label_removed:removed, got: ' + result.claim_label_removed
+    );
+    assert(
+      result.closure_invariants && result.closure_invariants.ok === true,
+      'finalize closure_invariants.ok must be true, got: ' + JSON.stringify(result.closure_invariants)
+    );
+    assert(
+      fs.existsSync(marker),
+      'gh shim marker file must exist (--remove-label was called)'
+    );
+    console.log('testFinalizeRemovesClaimLabel: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testFinalizeNullFolderFallbackReadsArchive() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-finalize-null-folder-'));
+  const binDir = path.join(tmp, 'bin');
+  const marker = path.join(tmp, 'label-removed.marker');
+  try {
+    initGitRepo(tmp);
+    // Plant active folder (sink: merge default) — issue-915 will appear closed to shim
+    plantActiveFolder(tmp, 'issue-915', 915, null);
+    plantRoadmapIssue(tmp, 915, '');
+    fs.mkdirSync(binDir, { recursive: true });
+    writeShimFiles(path.join(binDir, 'gh'), [
+      "const fs = require('fs');",
+      "const a = process.argv.slice(2).join(' ');",
+      // issue view returns closed so issueIsClosed=true and activeByProject returns null
+      "if (a.includes('issue edit') && a.includes('--remove-label')) {",
+      "  fs.writeFileSync(" + JSON.stringify(marker) + ", 'x');",
+      "  process.stdout.write('{}\\n');",
+      "} else if (a.includes('issue view')) {",
+      "  process.stdout.write('{\"state\":\"closed\"}\\n');",
+      "} else if (a.includes('issue comment')) {",
+      "  process.stdout.write('{}\\n');",
+      "} else {",
+      "  process.stdout.write('{}\\n');",
+      "}"
+    ]);
+    const result = runClaimOnline(['finalize', '--project', 'issue-915'], tmp, binDir);
+    // null-folder fallback reads issue_number from archive workflow-state.md
+    assert(
+      result.claim_label_removed === 'removed',
+      'null-folder fallback must still call clearAdvisoryClaim and get removed, got: ' + result.claim_label_removed
+    );
+    assert(
+      fs.existsSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-915')),
+      'archive folder must exist after finalize with null active folder'
+    );
+    assert(
+      result.closure_invariants && result.closure_invariants.ok === true,
+      'closure_invariants.ok must be true after null-folder fallback, got: ' + JSON.stringify(result.closure_invariants)
+    );
+    console.log('testFinalizeNullFolderFallbackReadsArchive: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testFinalizeOfflineSkipsLabelInvariant() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-finalize-offline-skip-'));
+  try {
+    initGitRepo(tmp);
+    // No roadmap entry — avoids roadmap-source-absent and roadmap-mirror-clean violations
+    plantActiveFolder(tmp, 'issue-916', 916, null);
+    // Run spawnSync directly — runClaimOnline overrides OFFLINE to '0'
+    const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', 'issue-916'], {
+      cwd: tmp,
+      encoding: 'utf8',
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }
+    });
+    assert(result.status === 0, 'offline finalize should exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert(
+      parsed.claim_label_removed === 'skipped_offline',
+      'offline finalize must return claim_label_removed:skipped_offline, got: ' + parsed.claim_label_removed
+    );
+    assert(
+      parsed.closure_invariants && parsed.closure_invariants.ok === true,
+      'offline finalize closure_invariants.ok must be true (skipped_offline is allowed), got: ' + JSON.stringify(parsed.closure_invariants)
+    );
+    console.log('testFinalizeOfflineSkipsLabelInvariant: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testWatchPrEmitsClaimLabelReceipt() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-watchpr-label-receipt-'));
+  const binDir = path.join(tmp, 'bin');
+  const marker = path.join(tmp, 'label-removed.marker');
+  try {
+    initGitRepo(tmp);
+    plantActiveFolder(tmp, 'issue-917', 917, null);
+    plantRoadmapIssue(tmp, 917, '');
+    // Patch state to sink:pr with a pr_url
+    const stateFile = path.join(tmp, 'kaola-workflow', 'issue-917', 'workflow-state.md');
+    let state = fs.readFileSync(stateFile, 'utf8');
+    state = state.replace(/^sink:\s*.*$/m, 'sink: pr');
+    if (!state.match(/^pr_url:/m)) state += 'pr_url: https://github.com/test/repo/pull/917\n';
+    fs.writeFileSync(stateFile, state);
+    fs.mkdirSync(binDir, { recursive: true });
+    writeShimFiles(path.join(binDir, 'gh'), [
+      "const fs = require('fs');",
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issue edit') && a.includes('--remove-label')) {",
+      "  fs.writeFileSync(" + JSON.stringify(marker) + ", 'x');",
+      "  process.stdout.write('{}\\n');",
+      "} else if (a.includes('pr view')) {",
+      "  process.stdout.write('{\"state\":\"MERGED\",\"number\":917}\\n');",
+      "} else if (a.includes('issue comment')) {",
+      "  process.stdout.write('{}\\n');",
+      "} else {",
+      "  process.stdout.write('{}\\n');",
+      "}"
+    ]);
+    const result = runClaimOnline(['watch-pr'], tmp, binDir);
+    assert(
+      Array.isArray(result.cleanups) && result.cleanups.length > 0,
+      'watch-pr must emit cleanups array with at least one entry, got: ' + JSON.stringify(result)
+    );
+    assert(
+      result.cleanups[0].claim_label_removed === 'removed',
+      'watch-pr cleanups[0].claim_label_removed must be removed, got: ' + JSON.stringify(result.cleanups[0])
+    );
+    assert(
+      fs.existsSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-917')),
+      'archive folder must exist after watch-pr archives merged PR folder'
+    );
+    console.log('testWatchPrEmitsClaimLabelReceipt: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testAuditAndRepairLabels() {
+  // (a) audit-labels: lists stale issues without removing
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-audit-labels-'));
+    const binDir = path.join(tmp, 'bin');
+    const marker = path.join(tmp, 'label-removed.marker');
+    try {
+      initGitRepo(tmp);
+      fs.mkdirSync(binDir, { recursive: true });
+      writeShimFiles(path.join(binDir, 'gh'), [
+        "const fs = require('fs');",
+        "const a = process.argv.slice(2).join(' ');",
+        "if (a.includes('issue edit') && a.includes('--remove-label')) {",
+        "  fs.writeFileSync(" + JSON.stringify(marker) + ", 'x');",
+        "  process.stdout.write('{}\\n');",
+        "} else if (a.includes('issue list')) {",
+        "  process.stdout.write('[{\"number\":99,\"title\":\"stale\",\"url\":\"http://x\"}]\\n');",
+        "} else {",
+        "  process.stdout.write('{}\\n');",
+        "}"
+      ]);
+      const result = runClaimOnline(['audit-labels'], tmp, binDir);
+      assert(
+        Array.isArray(result.stale) && result.stale.length === 1,
+        'audit-labels must return stale array of length 1, got: ' + JSON.stringify(result.stale)
+      );
+      assert(
+        result.count === 1,
+        'audit-labels must return count:1, got: ' + result.count
+      );
+      assert(
+        !fs.existsSync(marker),
+        'audit-labels must NOT call --remove-label (marker must not exist)'
+      );
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+
+  // (b) repair-labels dry-run (no --execute): reports would_remove without removing
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-repair-labels-dry-'));
+    const binDir = path.join(tmp, 'bin');
+    const marker = path.join(tmp, 'label-removed.marker');
+    try {
+      initGitRepo(tmp);
+      fs.mkdirSync(binDir, { recursive: true });
+      writeShimFiles(path.join(binDir, 'gh'), [
+        "const fs = require('fs');",
+        "const a = process.argv.slice(2).join(' ');",
+        "if (a.includes('issue edit') && a.includes('--remove-label')) {",
+        "  fs.writeFileSync(" + JSON.stringify(marker) + ", 'x');",
+        "  process.stdout.write('{}\\n');",
+        "} else if (a.includes('issue list')) {",
+        "  process.stdout.write('[{\"number\":99,\"title\":\"stale\",\"url\":\"http://x\"}]\\n');",
+        "} else {",
+        "  process.stdout.write('{}\\n');",
+        "}"
+      ]);
+      const result = runClaimOnline(['repair-labels'], tmp, binDir);
+      assert(
+        result.dry_run === true,
+        'repair-labels without --execute must return dry_run:true, got: ' + result.dry_run
+      );
+      assert(
+        Array.isArray(result.would_remove) && result.would_remove.length === 1,
+        'repair-labels dry-run must return would_remove with 1 entry, got: ' + JSON.stringify(result.would_remove)
+      );
+      assert(
+        !fs.existsSync(marker),
+        'repair-labels dry-run must NOT call --remove-label (marker must not exist)'
+      );
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+
+  // (c) repair-labels --execute: removes the label and returns removed list
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-repair-labels-exec-'));
+    const binDir = path.join(tmp, 'bin');
+    const marker = path.join(tmp, 'label-removed.marker');
+    try {
+      initGitRepo(tmp);
+      fs.mkdirSync(binDir, { recursive: true });
+      writeShimFiles(path.join(binDir, 'gh'), [
+        "const fs = require('fs');",
+        "const a = process.argv.slice(2).join(' ');",
+        "if (a.includes('issue edit') && a.includes('--remove-label')) {",
+        "  fs.writeFileSync(" + JSON.stringify(marker) + ", 'x');",
+        "  process.stdout.write('{}\\n');",
+        "} else if (a.includes('issue list')) {",
+        "  process.stdout.write('[{\"number\":99,\"title\":\"stale\",\"url\":\"http://x\"}]\\n');",
+        "} else {",
+        "  process.stdout.write('{}\\n');",
+        "}"
+      ]);
+      const result = runClaimOnline(['repair-labels', '--execute'], tmp, binDir);
+      assert(
+        result.dry_run === false,
+        'repair-labels --execute must return dry_run:false, got: ' + result.dry_run
+      );
+      assert(
+        Array.isArray(result.removed) && result.removed.includes(99),
+        'repair-labels --execute must return removed containing 99, got: ' + JSON.stringify(result.removed)
+      );
+      assert(
+        fs.existsSync(marker),
+        'repair-labels --execute must call --remove-label (marker must exist)'
+      );
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+
+  console.log('testAuditAndRepairLabels: PASSED');
+}
+
+function testFinalizeClaimLabelFailedTriggersInvariant() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-finalize-label-fail-inv-'));
+  const binDir = path.join(tmp, 'bin');
+  try {
+    initGitRepo(tmp);
+    plantActiveFolder(tmp, 'issue-918', 918, null);
+    plantRoadmapIssue(tmp, 918, '');
+    fs.mkdirSync(binDir, { recursive: true });
+    writeShimFiles(path.join(binDir, 'gh'), [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issue edit') && a.includes('--remove-label')) {",
+      "  process.stderr.write('gh: error: could not remove label\\n');",
+      "  process.exit(1);",
+      "} else if (a.includes('issue view')) {",
+      "  process.stdout.write('{\"state\":\"open\",\"number\":918}\\n');",
+      "} else {",
+      "  process.stdout.write('{}\\n');",
+      "}"
+    ]);
+    const result = runClaimOnline(['finalize', '--project', 'issue-918'], tmp, binDir);
+    assert(
+      result.claim_label_removed === 'failed',
+      'finalize must return claim_label_removed:failed when gh --remove-label exits non-zero, got: ' + result.claim_label_removed
+    );
+    assert(
+      result.closure_invariants && result.closure_invariants.ok === false,
+      'closure_invariants.ok must be false when claim label removal failed, got: ' + JSON.stringify(result.closure_invariants)
+    );
+    assert(
+      Array.isArray(result.closure_invariants.violations) &&
+        result.closure_invariants.violations.some(v => v.id === 'in-progress-label-removed'),
+      'closure_invariants.violations must contain in-progress-label-removed, got: ' + JSON.stringify(result.closure_invariants.violations)
+    );
+    console.log('testFinalizeClaimLabelFailedTriggersInvariant: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 async function main() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-active-folders-'));
   try {
@@ -2443,6 +2768,12 @@ async function main() {
     testClassifierFailClosedOnRemoteError();
     testClassifierOfflineBypassesFailClosed();
     testClaimProjectOwnedFolderFailingRemote();
+    testFinalizeRemovesClaimLabel();
+    testFinalizeNullFolderFallbackReadsArchive();
+    testFinalizeOfflineSkipsLabelInvariant();
+    testWatchPrEmitsClaimLabelReceipt();
+    testAuditAndRepairLabels();
+    testFinalizeClaimLabelFailedTriggersInvariant();
     console.log('Workflow walkthrough simulation passed');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });

@@ -476,14 +476,68 @@ record is never silent on partial runs:
 }
 ```
 
-`closure_invariants` checks two invariants at finalize time:
+`closure_invariants` checks three invariants at finalize time (issue #163 adds the third):
 
 - `roadmap-source-absent` — `kaola-workflow/.roadmap/issue-N.md` is gone after cleanup.
 - `roadmap-mirror-clean` — generated `kaola-workflow/ROADMAP.md` no longer lists `#N` as active work.
+- `in-progress-label-removed` — `workflow:in-progress` label was removed from the remote issue. Skipped (not violated) when `KAOLA_WORKFLOW_OFFLINE=1` or when `claim_label_removed` is `'skipped_offline'`.
 
 `ok` is `true` only when `violations` is empty. When `archiveProjectDir()` cannot
 complete a receipt step, `cmdWatchPr`/`cmdWatchMr` surface the failure via a
 `warnings` array in their JSON output rather than swallowing the error silently.
+
+`cmdFinalize` output now includes `claim_label_removed` (issue #163):
+
+```json
+{
+  "roadmap_source_removed": "removed|absent|failed",
+  "roadmap_regenerated": "regenerated|skipped|failed",
+  "claim_label_removed": "removed|skipped_offline|failed",
+  "closure_invariants": {
+    "ok": true,
+    "violations": []
+  }
+}
+```
+
+`cmdWatchPr`/`cmdWatchMr` emit a `cleanups` array with per-folder `claim_label_removed` status when label cleanup is attempted:
+
+```json
+{
+  "watched": 1,
+  "cleanups": [{ "folder": "issue-N", "claim_label_removed": "removed" }]
+}
+```
+
+### `audit-labels` and `repair-labels` (GitHub only, issue #163)
+
+Two subcommands find and fix closed issues that still carry `workflow:in-progress`.
+
+**`audit-labels`** — scan-only, emits JSON:
+```json
+{ "stale": [{ "number": 127, "title": "...", "url": "..." }], "count": 1 }
+```
+
+**`repair-labels`** — dry-run by default, `--execute` performs removal:
+```bash
+# dry-run (default): shows what would be removed
+node scripts/kaola-workflow-claim.js repair-labels
+
+# execute: removes stale labels from all matching closed issues
+node scripts/kaola-workflow-claim.js repair-labels --execute
+```
+
+Dry-run output:
+```json
+{ "dry_run": true, "would_remove": [{ "number": 127, "title": "...", "url": "..." }] }
+```
+
+Execute output:
+```json
+{ "dry_run": false, "removed": [127], "failed": [] }
+```
+
+GitLab and Gitea receive receipt wiring only (`clearAdvisoryClaim` returns the status enum; `cmdFinalize`/watch commands emit `claim_label_removed`). The `audit-labels`/`repair-labels` subcommands are GitHub-only in this release.
 
 ### Flow mapping
 
@@ -497,7 +551,7 @@ here and deferred to the listed follow-up issues.
 | `sink-merge` (all forges) | 5, 6, 7 | Closes remote issue and deletes branch on success; does not assert `workflow:in-progress` removal. | #163, #164 |
 | `sink-pr` / PR-MR fallback | 3, 5 | Leaves active folder open until `watch-pr`/`watch-mr`; `cmdSinkFallback` live-folder guard checks archive on GitLab/Gitea but GitHub misses that archive check. | #164 |
 | `watch-pr` / `watch-mr` | 1, 2, 3, 4, 6, 7 | Archives + roadmap cleanup on MERGED; closure can be delayed or skipped if the watcher never runs. | #164, #165 |
-| `clearAdvisoryClaim` (label cleanup) | 6 | Removes the advisory claim label; Gitea silently skips when `projectInfo.full_name` is absent. | #163 |
+| `clearAdvisoryClaim` (label cleanup) | 6 | **Shipped (#163)**: Returns `'removed'`/`'skipped_offline'`/`'failed'`; callers capture result into `claim_label_removed` receipt field. `cmdFinalize` has null-folder fallback reading issue number from archive path. `cmdWatchPr`/`cmdWatchMr` emit `cleanups[]`. GitHub: `audit-labels`/`repair-labels` subcommands for stale-label repair. | |
 | `stale-worktree-check` / `stale-worktree-cleanup` | 7 | Reports/removes stale worktrees and branches; relied on for invariant 7's "explicitly reported" clause. | #165 |
 
 ### Follow-up scope
@@ -506,6 +560,6 @@ This issue ships the contract and the machine-readable schema only. Enforcement
 and repair are decomposed into:
 
 - #162 — Make roadmap source cleanup mandatory after issue closure (invariants 1, 2). **Shipped**: `archiveProjectDir()` now populates explicit receipt fields (`roadmap_source_removed`, `roadmap_regenerated`); `cmdFinalize` output includes these fields plus `closure_invariants`; `cmdWatchPr`/`cmdWatchMr` emit `warnings` on receipt failures.
-- #163 — Guarantee `workflow:in-progress` label cleanup for closed issues (invariant 6).
+- #163 — Guarantee `workflow:in-progress` label cleanup for closed issues (invariant 6). **Shipped**: `clearAdvisoryClaim()` now returns `'removed'`/`'skipped_offline'`/`'failed'`; `cmdFinalize` and watch commands emit `claim_label_removed`; `checkClosureInvariants` checks the `in-progress-label-removed` invariant (skips when offline); `audit-labels`/`repair-labels` GitHub subcommands for stale-label repair.
 - #164 — Unify closure execution behind a shared closure receipt (all invariants).
 - #165 — Add closure audit and repair command for stale completed work (drift detection + repair).
