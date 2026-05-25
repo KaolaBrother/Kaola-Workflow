@@ -2076,6 +2076,18 @@ function testFinalizeCleansRoadmapEntry() {
       !read(roadmapPath).includes('#910'),
       'ROADMAP.md must not list closed issue #910 after finalize'
     );
+    assert(
+      finalizeResult.roadmap_source_removed === 'removed' || finalizeResult.roadmap_source_removed === 'absent',
+      'receipt: roadmap_source_removed must be removed or absent, got ' + finalizeResult.roadmap_source_removed
+    );
+    assert(
+      finalizeResult.roadmap_regenerated === 'regenerated',
+      'receipt: roadmap_regenerated must be regenerated, got ' + finalizeResult.roadmap_regenerated
+    );
+    assert(
+      finalizeResult.closure_invariants && finalizeResult.closure_invariants.ok === true,
+      'receipt: closure_invariants.ok must be true, got ' + JSON.stringify(finalizeResult.closure_invariants)
+    );
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -2111,6 +2123,23 @@ function testFinalizeFromLinkedWorktreeCleansRoadmapEntry() {
       result.status === 0,
       'finalize from linked worktree should exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr
     );
+    let finalizeJson = {};
+    try {
+      const lastLine = result.stdout.trim().split('\n').filter(l => l.trim().startsWith('{')).pop() || '';
+      finalizeJson = JSON.parse(lastLine);
+    } catch (_) {}
+    assert(
+      finalizeJson.roadmap_source_removed === 'removed' || finalizeJson.roadmap_source_removed === 'absent',
+      'linked-worktree finalize: roadmap_source_removed must be removed or absent, got ' + finalizeJson.roadmap_source_removed
+    );
+    assert(
+      finalizeJson.roadmap_regenerated === 'regenerated',
+      'linked-worktree finalize: roadmap_regenerated must be regenerated, got ' + finalizeJson.roadmap_regenerated
+    );
+    assert(
+      finalizeJson.closure_invariants && finalizeJson.closure_invariants.ok === true,
+      'linked-worktree finalize: closure_invariants.ok must be true'
+    );
     // .roadmap source must be deleted in the linked worktree (archiveProjectDir runs from wtPath)
     assert(
       !fs.existsSync(path.join(wtPath, 'kaola-workflow', '.roadmap', 'issue-911.md')),
@@ -2129,6 +2158,86 @@ function testFinalizeFromLinkedWorktreeCleansRoadmapEntry() {
     try { spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', kwRoot + '/issue-911'], { encoding: 'utf8' }); } catch (_) {}
     fs.rmSync(tmp, { recursive: true, force: true });
     fs.rmSync(kwRoot, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Issue #162 Task 5 — receipt tracking regression tests
+// ---------------------------------------------------------------------------
+
+function testFinalizeRoadmapCleanupFailureReceipt() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-finalize-receipt-fail-'));
+  try {
+    initGitRepo(tmp);
+    plantActiveFolder(tmp, 'issue-912', 912, null);
+    plantRoadmapIssue(tmp, 912, '');
+    // Replace .roadmap/issue-912.md with a directory of the same name
+    // so fs.unlinkSync throws EISDIR/EPERM (not ENOENT = absent; it's a real failure)
+    const roadmapFile = path.join(tmp, 'kaola-workflow', '.roadmap', 'issue-912.md');
+    fs.rmSync(roadmapFile);
+    fs.mkdirSync(roadmapFile);
+
+    const finalizeResult = json(runNode(claimScript, ['finalize', '--project', 'issue-912'], tmp));
+    // Cleanup failure must NOT abort finalize — exit 0
+    assert(finalizeResult.status === 'closed', 'finalize must still return status:closed on cleanup failure');
+    assert(finalizeResult.archived === true, 'finalize must archive the folder even on cleanup failure');
+    assert(
+      finalizeResult.roadmap_source_removed === 'failed',
+      'receipt: roadmap_source_removed must be "failed" when unlink throws non-ENOENT, got ' + finalizeResult.roadmap_source_removed
+    );
+    assert(
+      finalizeResult.closure_invariants && finalizeResult.closure_invariants.ok === false,
+      'receipt: closure_invariants.ok must be false when source file still present'
+    );
+    assert(
+      finalizeResult.closure_invariants.violations.some(v => v.id === 'roadmap-source-absent'),
+      'receipt: violations must include roadmap-source-absent'
+    );
+    console.log('testFinalizeRoadmapCleanupFailureReceipt: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testWatchPrRoadmapCleanupWarning() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-watchpr-receipt-warn-'));
+  const binDir = path.join(tmp, 'bin');
+  try {
+    initGitRepo(tmp);
+    // Plant a sink:pr folder with issue 913
+    plantActiveFolder(tmp, 'issue-913', 913, null);
+    plantRoadmapIssue(tmp, 913, '');
+    // Update workflow-state to sink:pr with a fake pr_url
+    const stateFile = path.join(tmp, 'kaola-workflow', 'issue-913', 'workflow-state.md');
+    let state = fs.readFileSync(stateFile, 'utf8');
+    state = state.replace(/^sink:\s*.*$/m, 'sink: pr');
+    if (!state.match(/^sink:/m)) state += '\nsink: pr\n';
+    if (!state.match(/^pr_url:/m)) state += 'pr_url: https://github.com/test/repo/pull/913\n';
+    fs.writeFileSync(stateFile, state);
+    // Corrupt .roadmap/issue-913.md by replacing it with a directory
+    const roadmapFile = path.join(tmp, 'kaola-workflow', '.roadmap', 'issue-913.md');
+    fs.rmSync(roadmapFile);
+    fs.mkdirSync(roadmapFile);
+    // Write gh shim that returns MERGED for the PR
+    fs.mkdirSync(binDir, { recursive: true });
+    writeShimFiles(path.join(binDir, 'gh'), [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('repo view')) { process.stdout.write('{\"owner\":{\"login\":\"test\"},\"name\":\"repo\"}\\n'); }",
+      "else if (a.includes('pr view')) { process.stdout.write('{\"state\":\"MERGED\",\"number\":913}\\n'); }",
+      "else { process.stdout.write('{}\\n'); }"
+    ]);
+    const watchResult = runClaimOnline(['watch-pr'], tmp, binDir, {});
+    assert(
+      Array.isArray(watchResult.warnings) && watchResult.warnings.length > 0,
+      'watch-pr must emit warnings on roadmap cleanup failure, got: ' + JSON.stringify(watchResult)
+    );
+    assert(
+      watchResult.warnings[0].roadmap_source_removed === 'failed',
+      'warning must include roadmap_source_removed:failed, got ' + JSON.stringify(watchResult.warnings[0])
+    );
+    console.log('testWatchPrRoadmapCleanupWarning: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
   }
 }
 
@@ -2310,6 +2419,8 @@ async function main() {
     testFinalizeFromMainRootNoSpuriousRemoval();
     testFinalizeCleansRoadmapEntry();
     testFinalizeFromLinkedWorktreeCleansRoadmapEntry();
+    testFinalizeRoadmapCleanupFailureReceipt();
+    testWatchPrRoadmapCleanupWarning();
     testValidateRemoteOffline();
     testReleaseFromLinkedWorktreeCleansMainCopy();
     testSinkMergeFromLinkedWorktree();

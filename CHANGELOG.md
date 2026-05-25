@@ -6,6 +6,10 @@
 
 - **Closure System Contract** (issue #161): Defines the seven closure invariants and the auditable closure receipt schema. New pure-data module `scripts/kaola-workflow-closure-contract.js` (+ byte-identical copies across all four forge trees) exports `CLOSURE_RECEIPT_FIELDS`, `CLOSURE_INVARIANTS`, and `emptyReceipt(project, issueNumber)`. All status fields default to `'failed'` (fail-loud: an unpopulated receipt reads as total failure). `docs/api.md` gains a `## Closure Contract` section with the invariant list, receipt schema, cross-forge flow-mapping table, and follow-up scope for issues #162–#165. `validate-script-sync.js` and both contract validators gain guards that keep the schema and docs in sync.
 
+### Changed
+
+- `archiveProjectDir()` roadmap cleanup now populates explicit receipt fields (`roadmap_source_removed`, `roadmap_regenerated`) instead of silently swallowing errors via `catch (_) {}`. `cmdFinalize` output includes these fields plus `closure_invariants` (checks `roadmap-source-absent` and `roadmap-mirror-clean`). `cmdWatchPr`/`cmdWatchMr` emit a `warnings` array when receipt failures occur. Fixes #162.
+
 ## [3.14.0] — 2026-05-22
 
 ### Added

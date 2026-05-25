@@ -14,6 +14,7 @@ const {
 } = require('./kaola-workflow-active-folders');
 
 const roadmapModule = require('./kaola-workflow-roadmap');
+const closureContract = require('./kaola-workflow-closure-contract');
 
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
 const WORKTREE_NATIVE = process.env.KAOLA_WORKTREE_NATIVE === '1';
@@ -523,17 +524,47 @@ function archiveProjectDir(root, project, statusValue, suffix) {
     const mainLive = path.join(mainRoot, 'kaola-workflow', project);
     if (fs.existsSync(mainLive)) fs.rmSync(mainLive, { recursive: true, force: true });
   }
+  let roadmapSourceRemoved = 'absent';
+  let roadmapRegenerated = 'skipped';
   if (statusValue === 'closed') {
-    try {
-      if (Number.isInteger(archiveIssueNumber) && archiveIssueNumber > 0) {
-        const roadmapFilePath = path.join(root, 'kaola-workflow', '.roadmap', 'issue-' + archiveIssueNumber + '.md');
-        try { fs.unlinkSync(roadmapFilePath); }
-        catch (e) { if (e.code !== 'ENOENT') throw e; }
+    if (Number.isInteger(archiveIssueNumber) && archiveIssueNumber > 0) {
+      const roadmapFilePath = path.join(root, 'kaola-workflow', '.roadmap', 'issue-' + archiveIssueNumber + '.md');
+      try {
+        fs.unlinkSync(roadmapFilePath);
+        roadmapSourceRemoved = 'removed';
+      } catch (e) {
+        roadmapSourceRemoved = (e.code === 'ENOENT') ? 'absent' : 'failed';
       }
+    }
+    try {
       roadmapModule.regenerateRoadmap(root);
-    } catch (_) { /* roadmap mirror cleanup is non-fatal; archive already completed */ }
+      roadmapRegenerated = 'regenerated';
+    } catch (_) {
+      roadmapRegenerated = 'failed';
+    }
   }
-  return { archived: true, dest };
+  return { archived: true, dest, roadmap_source_removed: roadmapSourceRemoved, roadmap_regenerated: roadmapRegenerated };
+}
+
+function checkClosureInvariants(root, receipt) {
+  const violations = [];
+  const issueNumber = receipt.issue_number;
+  if (Number.isInteger(issueNumber) && issueNumber > 0) {
+    const roadmapFile = path.join(root, 'kaola-workflow', '.roadmap', 'issue-' + issueNumber + '.md');
+    if (fs.existsSync(roadmapFile)) {
+      const inv = closureContract.CLOSURE_INVARIANTS.find(i => i.id === 'roadmap-source-absent');
+      violations.push({ id: 'roadmap-source-absent', description: inv ? inv.description : 'roadmap source file still present' });
+    }
+    const roadmapMirror = path.join(root, 'kaola-workflow', 'ROADMAP.md');
+    try {
+      const content = fs.readFileSync(roadmapMirror, 'utf8');
+      if (content.includes('#' + issueNumber + ' ') || content.includes('#' + issueNumber + '\n') || content.includes('#' + issueNumber + ')')) {
+        const inv = closureContract.CLOSURE_INVARIANTS.find(i => i.id === 'roadmap-mirror-clean');
+        violations.push({ id: 'roadmap-mirror-clean', description: inv ? inv.description : 'ROADMAP.md still lists issue as active' });
+      }
+    } catch (_) {}
+  }
+  return { ok: violations.length === 0, violations };
 }
 
 function cmdFinalize() {
@@ -560,7 +591,9 @@ function cmdFinalize() {
     }
   }
   clearAdvisoryClaim(folder && folder.issue_number, 'finalized');
-  output(Object.assign({ status: 'closed' }, result));
+  const issueNumber = folder && folder.issue_number;
+  const invariantResult = checkClosureInvariants(root, { issue_number: issueNumber, ...result });
+  output(Object.assign({ status: 'closed' }, result, { closure_invariants: invariantResult }));
 }
 
 function cwdInside(target) {
@@ -835,6 +868,7 @@ function cmdWatchPr() {
   const args = parseArgs(process.argv.slice(3));
   if (OFFLINE) { output({ watched: 0, offline: true }); return; }
   let watched = 0;
+  const warnings = [];
   for (const folder of readActiveFolders(root, { excludeClosedIssues: false })) {
     if (args.issue && folder.issue_number !== args.issue) continue;
     if (folder.sink !== 'pr' || !folder.pr_url) continue;
@@ -845,7 +879,10 @@ function cmdWatchPr() {
       state = String(JSON.parse(raw).state || '').toUpperCase();
     } catch (_) { continue; }
     if (state === 'MERGED') {
-      archiveProjectDir(root, folder.project, 'closed');
+      const archiveResult = archiveProjectDir(root, folder.project, 'closed');
+      if (archiveResult && (archiveResult.roadmap_source_removed === 'failed' || archiveResult.roadmap_regenerated === 'failed')) {
+        warnings.push({ folder: folder.project, roadmap_source_removed: archiveResult.roadmap_source_removed, roadmap_regenerated: archiveResult.roadmap_regenerated });
+      }
       try { removeWorktree(root, folder.project, folder); } catch (_) {}
       clearAdvisoryClaim(folder.issue_number, 'pr merged');
     } else if (state === 'CLOSED') {
@@ -854,7 +891,7 @@ function cmdWatchPr() {
       clearAdvisoryClaim(folder.issue_number, 'pr closed');
     }
   }
-  output({ watched });
+  output(warnings.length > 0 ? { watched, warnings } : { watched });
 }
 
 function main() {

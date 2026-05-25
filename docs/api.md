@@ -414,8 +414,10 @@ The command still removes local worktrees and branches. Archive/export strategie
 
 This section defines the closure-system invariants for a completed linked issue
 N. It is the human-readable counterpart to the machine-readable schema in
-`scripts/kaola-workflow-closure-contract.js`. No runtime path emits a receipt
-yet; emission and enforcement land in the follow-up issues mapped below.
+`scripts/kaola-workflow-closure-contract.js`. `cmdFinalize` now populates
+`roadmap_source_removed`, `roadmap_regenerated`, and `closure_invariants` in
+its JSON output (issue #162); emission for remaining fields lands in the
+follow-up issues mapped below.
 
 ### Closure invariants
 
@@ -457,6 +459,32 @@ Offline behavior is explicit: local invariants (1-4) are always checked; remote
 actions (`remote_issue_closed`, `claim_label_removed`) record `skipped_offline`
 under `KAOLA_WORKFLOW_OFFLINE=1` rather than `failed`.
 
+### `cmdFinalize` output (issue #162)
+
+`cmdFinalize` emits a JSON result that includes receipt fields populated by
+`archiveProjectDir()`. Fields are written before any potential failure so the
+record is never silent on partial runs:
+
+```json
+{
+  "roadmap_source_removed": "removed|absent|failed",
+  "roadmap_regenerated": "regenerated|skipped|failed",
+  "closure_invariants": {
+    "ok": true,
+    "violations": []
+  }
+}
+```
+
+`closure_invariants` checks two invariants at finalize time:
+
+- `roadmap-source-absent` — `kaola-workflow/.roadmap/issue-N.md` is gone after cleanup.
+- `roadmap-mirror-clean` — generated `kaola-workflow/ROADMAP.md` no longer lists `#N` as active work.
+
+`ok` is `true` only when `violations` is empty. When `archiveProjectDir()` cannot
+complete a receipt step, `cmdWatchPr`/`cmdWatchMr` surface the failure via a
+`warnings` array in their JSON output rather than swallowing the error silently.
+
 ### Flow mapping
 
 Existing closure code is mapped to the contract below. This issue documents the
@@ -465,7 +493,7 @@ here and deferred to the listed follow-up issues.
 
 | Closure surface | Invariants covered | Current behavior | Follow-up |
 |-----------------|--------------------|------------------|-----------|
-| `cmdFinalize` / `archiveProjectDir` | 1, 2, 3, 4 | Roadmap source removal + regen are best-effort/non-fatal; `removeLegacyStateBlocks` runs on GitHub but is missing from GitLab/Gitea `archiveProjectDir`. | #162 |
+| `cmdFinalize` / `archiveProjectDir` | 1, 2, 3, 4 | Roadmap cleanup is receipt-tracked: `roadmap_source_removed` and `roadmap_regenerated` fields are populated before any potential failure; `cmdFinalize` output includes these fields plus `closure_invariants`; `cmdWatchPr`/`cmdWatchMr` emit a `warnings` array when receipt failures occur. `removeLegacyStateBlocks` runs on GitHub but is missing from GitLab/Gitea `archiveProjectDir`. | ~~#162~~ |
 | `sink-merge` (all forges) | 5, 6, 7 | Closes remote issue and deletes branch on success; does not assert `workflow:in-progress` removal. | #163, #164 |
 | `sink-pr` / PR-MR fallback | 3, 5 | Leaves active folder open until `watch-pr`/`watch-mr`; `cmdSinkFallback` live-folder guard checks archive on GitLab/Gitea but GitHub misses that archive check. | #164 |
 | `watch-pr` / `watch-mr` | 1, 2, 3, 4, 6, 7 | Archives + roadmap cleanup on MERGED; closure can be delayed or skipped if the watcher never runs. | #164, #165 |
@@ -477,7 +505,7 @@ here and deferred to the listed follow-up issues.
 This issue ships the contract and the machine-readable schema only. Enforcement
 and repair are decomposed into:
 
-- #162 — Make roadmap source cleanup mandatory after issue closure (invariants 1, 2).
+- #162 — Make roadmap source cleanup mandatory after issue closure (invariants 1, 2). **Shipped**: `archiveProjectDir()` now populates explicit receipt fields (`roadmap_source_removed`, `roadmap_regenerated`); `cmdFinalize` output includes these fields plus `closure_invariants`; `cmdWatchPr`/`cmdWatchMr` emit `warnings` on receipt failures.
 - #163 — Guarantee `workflow:in-progress` label cleanup for closed issues (invariant 6).
 - #164 — Unify closure execution behind a shared closure receipt (all invariants).
 - #165 — Add closure audit and repair command for stale completed work (drift detection + repair).
