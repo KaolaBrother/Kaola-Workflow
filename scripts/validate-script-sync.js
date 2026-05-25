@@ -40,6 +40,7 @@ const COMMON_SCRIPTS = [
   'kaola-workflow-claim.js',
   'kaola-workflow-active-folders.js',
   'kaola-workflow-classifier.js',
+  'kaola-workflow-closure-audit.js',
   'kaola-workflow-repair-state.js',
   'kaola-workflow-resolve-agent-model.js',
   'kaola-workflow-roadmap.js',

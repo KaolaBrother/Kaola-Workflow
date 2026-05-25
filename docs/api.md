@@ -624,6 +624,92 @@ Execute output:
 
 GitLab and Gitea receive receipt wiring only (`clearAdvisoryClaim` returns the status enum; `cmdFinalize`/watch commands emit `claim_label_removed`). The `audit-labels`/`repair-labels` subcommands are GitHub-only in this release.
 
+### Closure audit and repair (GitHub only, issue #165)
+
+#### Script: `kaola-workflow-closure-audit.js`
+
+A single command that reports **closure drift** — completed work that still
+shows as active — across local roadmap sources, the generated `ROADMAP.md`,
+active folders, archive state, remote issue state, and the
+`workflow:in-progress` label. It is a dedicated script (invoked directly, like
+`sink-merge`), not a `claim.js` subcommand:
+
+```bash
+# dry-run (default): report drift as JSON, change nothing
+node scripts/kaola-workflow-closure-audit.js
+
+# execute: repair safe local drift + remove stale labels on closed issues
+node scripts/kaola-workflow-closure-audit.js --execute
+```
+
+**Drift classes reported:**
+
+| Key | Meaning |
+|-----|---------|
+| `stale_roadmap_sources` | `.roadmap/issue-N.md` exists for a closed issue. `reason` is `closed_remote` (issue N is closed on the forge) or `archive_closed` (an archive `workflow-state.md` says `status: closed` but the source survives). `closed_remote` wins when both apply. |
+| `mirror_lists_closed_issues` | Generated `ROADMAP.md` still lists a closed issue (derived from the same closed set). |
+| `stale_in_progress_labels` | Closed remote issues that still carry `workflow:in-progress`. |
+| `active_folder_for_closed_issue` | An active `kaola-workflow/{project}/` folder whose linked issue is closed. `dirty` flags uncommitted content. **Report-only.** |
+| `unarchived_pr_folders` | An active `sink: pr` folder whose PR is `MERGED`/`CLOSED` but was never archived (the watcher never ran). **Report-only.** |
+
+**Dry-run output** (default):
+```json
+{
+  "dry_run": true,
+  "offline": false,
+  "drift": {
+    "stale_roadmap_sources": [{ "issue_number": 127, "file": "kaola-workflow/.roadmap/issue-127.md", "reason": "closed_remote" }],
+    "mirror_lists_closed_issues": [127],
+    "stale_in_progress_labels": [{ "number": 127, "title": "...", "url": "..." }],
+    "active_folder_for_closed_issue": [{ "project": "issue-150", "issue_number": 150, "dirty": false }],
+    "unarchived_pr_folders": [{ "project": "issue-152", "issue_number": 152, "pr_url": "...", "pr_state": "MERGED" }]
+  },
+  "counts": { "stale_roadmap_sources": 1, "mirror_lists_closed_issues": 1, "stale_in_progress_labels": 1, "active_folder_for_closed_issue": 1, "unarchived_pr_folders": 1 }
+}
+```
+
+**Execute output** (`--execute`):
+```json
+{
+  "dry_run": false,
+  "offline": false,
+  "repaired": { "roadmap_sources_removed": [127], "roadmap_regenerated": true, "labels_removed": [127], "labels_failed": [] },
+  "reported_not_repaired": { "active_folder_for_closed_issue": [...], "unarchived_pr_folders": [...] }
+}
+```
+
+**Safe-repair boundary.** `--execute` only ever (1) deletes stale
+`.roadmap/issue-N.md` sources, (2) regenerates `ROADMAP.md`, and (3) removes
+`workflow:in-progress` from closed issues when online. It **never** deletes
+active folders or worktrees. Classes `active_folder_for_closed_issue` and
+`unarchived_pr_folders` are carried verbatim into `reported_not_repaired` in
+both modes — they may hold un-finalized work, so they are surfaced for a human
+(use `finalize`/`release`, or run `watch-pr` for the PR case).
+
+**Offline behavior** (`KAOLA_WORKFLOW_OFFLINE=1`). Local-only classes still run
+(`stale_roadmap_sources` via `archive_closed`, `active_folder_for_closed_issue`).
+Remote-dependent classes (`stale_in_progress_labels`, `unarchived_pr_folders`)
+report the string `"skipped_offline"` rather than an array, and `--execute`
+performs no remote label removal. A non-offline `gh` failure reports an empty
+array plus a stderr warning — it is never silently downgraded to `skipped_offline`.
+
+#### How this differs from `stale-worktree-check` / `stale-worktree-cleanup`
+
+These cover **disjoint** drift surfaces and are intentionally separate commands:
+
+| | `closure-audit` | `stale-worktree-check` / `-cleanup` |
+|---|---|---|
+| **Surface** | Roadmap sources, `ROADMAP.md`, active folders, archive state, remote issue state, advisory labels (closure invariants 1, 2, 3, 5, 6) | Git worktrees and branches (closure invariant 7) |
+| **Question answered** | "Is finished work still showing as active in local roadmap/folders or as advisory remote state?" | "Are there leftover Git worktrees/branches for closed/archived issues?" |
+| **`--execute` repairs** | Stale `.roadmap` sources + regenerate `ROADMAP.md` + remove stale `workflow:in-progress` labels | Removes Git worktrees and deletes local branches (with `--archive`/`--export`/`--force` for dirty worktrees) |
+| **Never touches** | Worktrees, branches, **active folders** | Roadmap sources, `ROADMAP.md`, labels, archive folders |
+
+Run both for full closure-drift coverage: `closure-audit` owns roadmap/label/folder
+drift; `stale-worktree-check`/`-cleanup` owns worktree/branch drift. `closure-audit`
+deliberately **reports but never removes** active folders and unarchived PR folders,
+delegating worktree/branch teardown to `stale-worktree-cleanup` and folder teardown
+to `finalize`/`release`/`watch-pr`.
+
 ### Flow mapping
 
 Existing closure code is mapped to the contract below. This issue documents the
@@ -637,7 +723,8 @@ here and deferred to the listed follow-up issues.
 | `sink-pr` / PR-MR fallback | 3, 5 | `cmdSinkPr` leaves the active folder open until `watch-pr`/`watch-mr`; closure receipt is emitted by the watcher at merge (documented deferral, #164). `cmdSinkFallback` live-folder guard checks archive on GitLab/Gitea but GitHub misses that archive check. | ~~#164~~ |
 | `watch-pr` / `watch-mr` | 1, 2, 3, 4, 6, 7 | **Shipped (#164)**: Per-folder `receipt` + `closure_invariants` attached to each `cleanups[]` entry on MERGED; `cleanups[]`/`warnings[]` preserved. Closure can still be delayed if the watcher never runs (drift detection → #165). | ~~#164~~, #165 |
 | `clearAdvisoryClaim` (label cleanup) | 6 | **Shipped (#163)**: Returns `'removed'`/`'skipped_offline'`/`'failed'`; callers capture result into `claim_label_removed` receipt field. `cmdFinalize` has null-folder fallback reading issue number from archive path. `cmdWatchPr`/`cmdWatchMr` emit `cleanups[]`. GitHub: `audit-labels`/`repair-labels` subcommands for stale-label repair. | |
-| `stale-worktree-check` / `stale-worktree-cleanup` | 7 | Reports/removes stale worktrees and branches; relied on for invariant 7's "explicitly reported" clause. | #165 |
+| `stale-worktree-check` / `stale-worktree-cleanup` | 7 | Reports/removes stale worktrees and branches; relied on for invariant 7's "explicitly reported" clause. Complemented by `closure-audit` (#165), which covers the roadmap/label/folder drift surface (invariants 1, 2, 3, 5, 6) and explicitly defers worktree/branch teardown here. | ~~#165~~ |
+| `closure-audit` (GitHub, #165) | 1, 2, 3, 5, 6 | **Shipped (#165)**: dedicated `kaola-workflow-closure-audit.js` reports stale roadmap sources, mirror-listed closed issues, stale in-progress labels, active folders for closed issues, and unarchived PR folders; `--execute` repairs the safe local roadmap/label classes only. Report-only for folders/PR drift. GitLab/Gitea ports deferred to follow-ups. | |
 
 ### Follow-up scope
 
@@ -647,4 +734,4 @@ and repair are decomposed into:
 - #162 — Make roadmap source cleanup mandatory after issue closure (invariants 1, 2). **Shipped**: `archiveProjectDir()` now populates explicit receipt fields (`roadmap_source_removed`, `roadmap_regenerated`); `cmdFinalize` output includes these fields plus `closure_invariants`; `cmdWatchPr`/`cmdWatchMr` emit `warnings` on receipt failures.
 - #163 — Guarantee `workflow:in-progress` label cleanup for closed issues (invariant 6). **Shipped**: `clearAdvisoryClaim()` now returns `'removed'`/`'skipped_offline'`/`'failed'`; `cmdFinalize` and watch commands emit `claim_label_removed`; `checkClosureInvariants` checks the `in-progress-label-removed` invariant (skips when offline); `audit-labels`/`repair-labels` GitHub subcommands for stale-label repair.
 - #164 — Unify closure execution behind a shared closure receipt (invariants 1-4, 6, 7). **Shipped**: `buildClosureReceipt()` helper seeds `emptyReceipt()` across all four forge trees; `cmdFinalize`, `cmdWatchPr`/`cmdWatchMr`, and `sink-merge` all emit `closure_receipt` + `closure_invariants`; `checkClosureInvariants` extended with `active-folder-absent`, `archive-state-closed`, `branch-worktree-resolved`; `sink-merge` `ghExec` honors `KAOLA_GH_MOCK_SCRIPT`. Invariant 5 (`remote-closed-after-publish`) and `sink:pr` deferral remain documented-only, deferred to #165.
-- #165 — Add closure audit and repair command for stale completed work (drift detection + repair); unify `remote_issue_closed` and add invariant 5 (`remote-closed-after-publish`).
+- #165 — Add closure audit and repair command for stale completed work (drift detection + repair). **Shipped (GitHub edition)**: new dedicated script `kaola-workflow-closure-audit.js` reports six closure-drift classes (invariants 1, 2, 3, 5, 6) and, with `--execute`, removes stale `.roadmap` sources + regenerates `ROADMAP.md` + removes stale `workflow:in-progress` labels. Report-only for active folders and unarchived PR folders. GitLab/Gitea ports filed as follow-up issues.
