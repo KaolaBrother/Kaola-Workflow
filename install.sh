@@ -113,6 +113,7 @@ case "$FORGE" in
       kaola-workflow-repair-state.js
       kaola-workflow-claim.js
       kaola-workflow-active-folders.js
+      kaola-workflow-closure-audit.js
       kaola-workflow-compact-context.js
       kaola-workflow-sink-merge.js
       kaola-workflow-sink-pr.js
