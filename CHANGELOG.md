@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.15.0] — 2026-05-25
+
 ### Added
 
 - **Closure audit and repair command** (issue #165, GitHub edition): New dedicated script `scripts/kaola-workflow-closure-audit.js` (+ byte-identical copy in `plugins/kaola-workflow/scripts/`, pinned by `validate-script-sync.js` `COMMON_SCRIPTS`). Reports six closure-drift classes — stale `.roadmap` sources for closed issues (`reason: closed_remote | archive_closed`), `ROADMAP.md` still listing closed issues, closed issues still carrying `workflow:in-progress`, active folders for closed issues, and unarchived `sink: pr` folders whose PR is merged/closed. Dry-run JSON is the default; `--execute` repairs only the safe local classes (removes stale `.roadmap` sources, regenerates `ROADMAP.md`, removes stale `workflow:in-progress` labels when online) and **never** deletes active folders or worktrees — those are carried into `reported_not_repaired`. Remote-dependent classes report `"skipped_offline"` under `KAOLA_WORKFLOW_OFFLINE=1`. Satisfies closure invariants 1, 2, 3, 5, 6 of the #161 contract (worktree/branch invariant 7 remains owned by `stale-worktree-check`/`-cleanup`). `docs/api.md` § Closure Contract gains a "Closure audit and repair" subsection with the drift-class table, JSON shapes, and an explicit comparison to `stale-worktree-check`/`-cleanup`. GitLab/Gitea ports filed as follow-up issues. Closes #165; satisfies #161 AC5.
