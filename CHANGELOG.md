@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.16.0] — 2026-05-26
+
 ### Added
 
 - **Closure audit and repair command, GitLab edition** (issue #166): New dedicated script `plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-closure-audit.js`, a faithful parity port of the GitHub `kaola-workflow-closure-audit.js` from issue #165. Same dry-run-JSON-default / `--execute` contract and drift-class reporting as GitHub, with forge routing through `kaola-gitlab-forge.js` instead of raw `gh`. The `unarchived_pr_folders` class is renamed `unarchived_mr_folders` (item fields `mr_url`/`mr_state`) with MR state matched against GitLab's lowercase `merged`/`closed`. `--execute` removes `workflow:in-progress` via `forge.updateIssue(iid, {unlabels})`. Supporting changes: `forge.listIssues` gained a `labels` option; `kaola-gitlab-workflow-roadmap.js` now exports `roadmapDir`. Registered in `install.sh` GitLab `SUPPORT_SCRIPT_NAMES`. 11 behavior tests added to `plugins/kaola-workflow-gitlab/scripts/test-gitlab-workflow-scripts.js` plus forge-API test in `test-gitlab-forge-helpers.js`. `docs/api.md` gained GitLab subsection documenting parity. Gitea port filed as follow-up issue #167. Closes #166; satisfies #161 AC5.
