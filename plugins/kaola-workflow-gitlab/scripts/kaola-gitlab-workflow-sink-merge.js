@@ -264,9 +264,10 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus) {
   // Step 8 — Close issue (GitLab-specific: forge API)
   if (!OFFLINE && args.issue != null) {
     const root = mainRoot; // mainRoot is used as root context
-    try { forge.createIssueNote(readProjectInfo(root, args.project), args.issue, 'Merged via GitLab direct merge sink.'); } catch (_) {}
-    try { forge.closeIssue(args.issue); remoteIssueClosed = 'closed'; } catch (_) { remoteIssueClosed = 'failed'; }
-    try { forge.updateIssue(args.issue, { unlabels: [forge.CLAIM_LABEL] }); claimLabelRemoved = 'removed'; } catch (_) { claimLabelRemoved = 'failed'; }
+    const forgeOpts = { execOptions: { cwd: mainRoot } };
+    try { forge.createIssueNote(readProjectInfo(root, args.project), args.issue, 'Merged via GitLab direct merge sink.', forgeOpts); } catch (_) {}
+    try { forge.closeIssue(args.issue, forgeOpts); remoteIssueClosed = 'closed'; } catch (e) { remoteIssueClosed = 'failed'; process.stderr.write('sink-merge: WARNING: issue close failed for ' + args.issue + '; receipt.remote_issue_closed=failed. Manually run: glab issue close ' + args.issue + '\n'); }
+    try { forge.updateIssue(args.issue, Object.assign({ unlabels: [forge.CLAIM_LABEL] }, forgeOpts)); claimLabelRemoved = 'removed'; } catch (_) { claimLabelRemoved = 'failed'; }
   }
   // Step 9 — Delete branch
   try { execFileSync('git', ['-C', mainRoot, 'branch', '-d', '--', args.branch], { encoding: 'utf8' }); branchRemoved = 'removed'; } catch (_) { branchRemoved = 'failed'; }

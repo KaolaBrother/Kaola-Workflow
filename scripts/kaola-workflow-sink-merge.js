@@ -234,9 +234,10 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus) {
 
   // Step 8 — Close issue
   if (!OFFLINE && args.issue != null) {
-    try { ghExec(['issue', 'close', String(args.issue), '--comment', 'Merged via sink-merge.']); remoteIssueClosed = 'closed'; }
-    catch (_) { remoteIssueClosed = 'failed'; }
-    try { ghExec(['issue', 'edit', String(args.issue), '--remove-label', 'workflow:in-progress']); claimLabelRemoved = 'removed'; } catch (_) { claimLabelRemoved = 'failed'; }
+    const forgeOpts = { cwd: mainRoot };
+    try { ghExec(['issue', 'close', String(args.issue), '--comment', 'Merged via sink-merge.'], forgeOpts); remoteIssueClosed = 'closed'; }
+    catch (e) { remoteIssueClosed = 'failed'; process.stderr.write('sink-merge: WARNING: issue close failed for ' + args.issue + '; receipt.remote_issue_closed=failed. Manually run: gh issue close ' + args.issue + '\n'); }
+    try { ghExec(['issue', 'edit', String(args.issue), '--remove-label', 'workflow:in-progress'], forgeOpts); claimLabelRemoved = 'removed'; } catch (_) { claimLabelRemoved = 'failed'; }
   }
   // Step 9 — Delete branch (worktree was removed in step 0)
   try { execFileSync('git', ['-C', mainRoot, 'branch', '-d', '--', args.branch], { encoding: 'utf8' }); branchRemoved = 'removed'; } catch (_) { branchRemoved = 'failed'; }

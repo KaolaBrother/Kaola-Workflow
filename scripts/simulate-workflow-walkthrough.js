@@ -2932,13 +2932,18 @@ function testSinkMergeMockabilityAndReceipt() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sm-mock-')));
   const remotePath = initGitRepoWithBareRemote(tmp);
   const marker = path.join(tmp, 'gh-mock-called.marker');
+  const cwdMarker = path.join(tmp, 'gh-mock-cwd.marker');
   try {
     const binDir = path.join(tmp, 'bin');
     fs.mkdirSync(binDir, { recursive: true });
     writeShimFiles(path.join(binDir, 'gh'), [
       "const fs = require('fs');",
+      "const cp = require('child_process');",
       "const a = process.argv.slice(2).join(' ');",
       "fs.writeFileSync(" + JSON.stringify(marker) + ", a + '\\n', { flag: 'a' });",
+      "let top = '';",
+      "try { top = cp.execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch (_) { top = 'NOT_A_REPO:' + process.cwd(); }",
+      "fs.writeFileSync(" + JSON.stringify(cwdMarker) + ", a + '\\t' + top + '\\n', { flag: 'a' });",
       "process.stdout.write('{}\\n');"
     ]);
 
@@ -2983,6 +2988,11 @@ function testSinkMergeMockabilityAndReceipt() {
       markerContent.includes('issue close') || markerContent.includes('issue edit'),
       'mock shim must be called with gh issue close or issue edit, got: ' + markerContent
     );
+    const cwdContent = fs.readFileSync(cwdMarker, 'utf8');
+    assert(
+      cwdContent.split('\n').filter(Boolean).every(line => line.endsWith('\t' + tmp)),
+      'mock shim must run from repo cwd ' + tmp + ', got: ' + cwdContent
+    );
 
     // Also verify the receipt is emitted.
     const lines = result.stdout.trim().split('\n').filter(l => l.trim());
@@ -2997,6 +3007,72 @@ function testSinkMergeMockabilityAndReceipt() {
       'mock issue edit --remove-label must yield claim_label_removed:removed, got: ' + parsed.closure_receipt.claim_label_removed
     );
     console.log('testSinkMergeMockabilityAndReceipt: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    try { fs.rmSync(remotePath, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
+function testSinkMergeCloseFailureWarning() {
+  // Verify AC#3: when closeIssue fails, sink-merge emits a stderr warning but still exits 0,
+  // and the receipt reflects remote_issue_closed:failed while label removal succeeds.
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sm-closefail-')));
+  const remotePath = initGitRepoWithBareRemote(tmp);
+  try {
+    const binDir = path.join(tmp, 'bin');
+    fs.mkdirSync(binDir, { recursive: true });
+    // Shim: exit 1 for `issue close`, exit 0 for everything else.
+    writeShimFiles(path.join(binDir, 'gh'), [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issue close')) { process.stderr.write('gh: simulated close failure\\n'); process.exit(1); }",
+      "process.stdout.write('{}\\n');"
+    ]);
+
+    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-168f'], { encoding: 'utf8' });
+    fs.writeFileSync(path.join(tmp, 'feature-168f.txt'), 'feature\n');
+    spawnSync('git', ['-C', tmp, 'add', 'feature-168f.txt'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'feat: issue 168f'], {
+      encoding: 'utf8',
+      env: { ...process.env, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@test.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@test.com' }
+    });
+    spawnSync('git', ['-C', tmp, 'push', '-u', 'origin', 'workflow/issue-168f'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmp, 'checkout', 'main'], { encoding: 'utf8' });
+
+    const mockJs = path.join(binDir, 'gh.js');
+    const result = spawnSync(process.execPath, [
+      sinkMergeScript,
+      '--project', 'issue-168f',
+      '--branch', 'workflow/issue-168f',
+      '--issue', '168'
+    ], {
+      cwd: tmp,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        KAOLA_WORKFLOW_OFFLINE: '0',
+        KAOLA_GH_MOCK_SCRIPT: mockJs
+      }
+    });
+
+    assert(
+      result.status === 0,
+      'sink-merge must exit 0 even when issue close fails\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr
+    );
+    assert(
+      result.stderr.includes('sink-merge: WARNING: issue close failed for 168'),
+      'sink-merge must emit warning to stderr on close failure, got stderr: ' + result.stderr
+    );
+    const lines = result.stdout.trim().split('\n').filter(l => l.trim());
+    const parsed = JSON.parse(lines[lines.length - 1]);
+    assert(
+      parsed.closure_receipt.remote_issue_closed === 'failed',
+      'receipt.remote_issue_closed must be "failed" when close fails, got: ' + parsed.closure_receipt.remote_issue_closed
+    );
+    assert(
+      parsed.closure_receipt.claim_label_removed === 'removed',
+      'receipt.claim_label_removed must be "removed" (negative control), got: ' + parsed.closure_receipt.claim_label_removed
+    );
+    console.log('testSinkMergeCloseFailureWarning: PASSED');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
     try { fs.rmSync(remotePath, { recursive: true, force: true }); } catch (_) {}
@@ -3366,6 +3442,7 @@ async function main() {
     testWatchPrMergedClosureReceipt();
     testFinalizeOfflineClosureReceiptSkipped();
     testSinkMergeMockabilityAndReceipt();
+    testSinkMergeCloseFailureWarning();
     testClosureAuditOfflineRemoteClassesSkipped();
     testClosureAuditClosedRemoteRoadmapSource();
     testClosureAuditArchiveClosedDrift();

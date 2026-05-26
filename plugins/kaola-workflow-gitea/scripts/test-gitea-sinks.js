@@ -48,6 +48,17 @@ function setupRealRepo(name, project) {
   return { root, branch };
 }
 
+function setupRealRepoWithBareRemote(name, project) {
+  const { root, branch } = setupRealRepo(name, project);
+  const remotePath = root + '-remote';
+  execFileSync('git', ['init', '--bare', remotePath], { encoding: 'utf8' });
+  execFileSync('git', ['remote', 'add', 'origin', remotePath], { cwd: root, encoding: 'utf8' });
+  execFileSync('git', ['push', '-u', 'origin', 'main'], { cwd: root, encoding: 'utf8' });
+  execFileSync('git', ['push', '-u', 'origin', branch], { cwd: root, encoding: 'utf8' });
+  execFileSync('git', ['branch', '--set-upstream-to=origin/' + branch, branch], { cwd: root, encoding: 'utf8' });
+  return { root, branch, remotePath };
+}
+
 function setupRepoWithLiveFolderOnBranch(name, project) {
   const { root, branch } = setupRealRepo(name, project);
   const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' });
@@ -453,6 +464,53 @@ const sinkScript = path.join(__dirname, 'kaola-gitea-workflow-sink-merge.js');
   const cwdContents = fs.readFileSync(cwdFile, 'utf8').trim();
   assert(cwdContents.length > 0, 'success-path test: KAOLA_WORKFLOW_DEBUG_CWD file is empty');
   console.log('success-path subprocess test passed');
+}
+
+// Test 17b: online close/update forge calls run from repo cwd after worktree removal
+{
+  const project = 'test-gt-online-close-cwd';
+  const { root, branch, remotePath } = setupRealRepoWithBareRemote('online-close-cwd-gt', project);
+  const expectedRoot = fs.realpathSync(root);
+  const cwdLog = path.join(root, 'tea-cwd.log');
+  const mockScript = path.join(root, 'tea-mock.js');
+  fs.writeFileSync(mockScript, [
+    "const fs = require('fs');",
+    "const cp = require('child_process');",
+    "const args = process.argv.slice(2);",
+    "const joined = args.join(' ');",
+    "let top = '';",
+    "try { top = cp.execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch (_) { top = 'NOT_A_REPO:' + process.cwd(); }",
+    "fs.writeFileSync(" + JSON.stringify(cwdLog) + ", joined + '\\t' + top + '\\n', { flag: 'a' });",
+    "if (joined.startsWith('issues close')) process.stdout.write('{\"number\":168,\"state\":\"closed\"}\\n');",
+    "else if (joined.startsWith('issues edit')) process.stdout.write('{\"number\":168,\"state\":\"closed\",\"labels\":[]}\\n');",
+    "else if (joined.startsWith('api')) process.stdout.write('{\"id\":9005}\\n');",
+    "else process.stdout.write('{}\\n');"
+  ].join('\n'));
+  try {
+    const result = spawnSync(process.execPath, [
+      sinkScript,
+      '--branch', branch,
+      '--project', project,
+      '--issue', '168'
+    ], {
+      cwd: root,
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_TEA_MOCK_SCRIPT: mockScript },
+      encoding: 'utf8'
+    });
+    assert.strictEqual(result.status, 0, `online close cwd test: expected exit 0, got ${result.status}. stdout: ${result.stdout} stderr: ${result.stderr}`);
+    const parsed = JSON.parse(result.stdout.trim().split('\n').filter(Boolean).pop());
+    assert.strictEqual(parsed.closure_receipt.remote_issue_closed, 'closed');
+    assert.strictEqual(parsed.closure_receipt.claim_label_removed, 'removed');
+    const cwdLines = fs.readFileSync(cwdLog, 'utf8').trim().split('\n')
+      .filter(line => line.startsWith('issues close') || line.startsWith('issues edit'));
+    assert(cwdLines.length >= 2, 'online close cwd test: expected close and edit calls, got: ' + fs.readFileSync(cwdLog, 'utf8'));
+    assert(cwdLines.every(line => line.endsWith('\t' + expectedRoot)),
+      'online close cwd test: forge calls must run from repo cwd ' + expectedRoot + ', got: ' + cwdLines.join('\n'));
+    console.log('online close cwd regression test passed');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(remotePath, { recursive: true, force: true });
+  }
 }
 
 // Test 18: exit-3-archived: no live dir, no receipt written

@@ -48,6 +48,17 @@ function setupRealRepo(name, project) {
   return { root, branch };
 }
 
+function setupRealRepoWithBareRemote(name, project) {
+  const { root, branch } = setupRealRepo(name, project);
+  const remotePath = root + '-remote';
+  execFileSync('git', ['init', '--bare', remotePath], { encoding: 'utf8' });
+  execFileSync('git', ['remote', 'add', 'origin', remotePath], { cwd: root, encoding: 'utf8' });
+  execFileSync('git', ['push', '-u', 'origin', 'main'], { cwd: root, encoding: 'utf8' });
+  execFileSync('git', ['push', '-u', 'origin', branch], { cwd: root, encoding: 'utf8' });
+  execFileSync('git', ['branch', '--set-upstream-to=origin/' + branch, branch], { cwd: root, encoding: 'utf8' });
+  return { root, branch, remotePath };
+}
+
 function setupRepoWithLiveFolderOnBranch(name, project) {
   const { root, branch } = setupRealRepo(name, project);
   const git = (...args) => execFileSync('git', args, { cwd: root, encoding: 'utf8' });
@@ -489,6 +500,55 @@ withForge({
 }
 
 {
+  // Regression: post-merge forge issue close/update must run from the repo CWD,
+  // not from os.tmpdir() after worktree removal.
+  const sinkScript = path.join(__dirname, 'kaola-gitlab-workflow-sink-merge.js');
+  const project = 'test-gl-online-close-cwd';
+  const { root, branch, remotePath } = setupRealRepoWithBareRemote('online-close-cwd-gl', project);
+  const expectedRoot = fs.realpathSync(root);
+  const cwdLog = path.join(root, 'glab-cwd.log');
+  const mockScript = path.join(root, 'glab-mock.js');
+  fs.writeFileSync(mockScript, [
+    "const fs = require('fs');",
+    "const cp = require('child_process');",
+    "const args = process.argv.slice(2);",
+    "const joined = args.join(' ');",
+    "let top = '';",
+    "try { top = cp.execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch (_) { top = 'NOT_A_REPO:' + process.cwd(); }",
+    "fs.writeFileSync(" + JSON.stringify(cwdLog) + ", joined + '\\t' + top + '\\n', { flag: 'a' });",
+    "if (joined.startsWith('issue close')) process.stdout.write('{\"iid\":168,\"state\":\"closed\"}\\n');",
+    "else if (joined.startsWith('issue update')) process.stdout.write('{\"iid\":168,\"state\":\"closed\",\"labels\":[]}\\n');",
+    "else if (joined.startsWith('api')) process.stdout.write('{\"id\":9005}\\n');",
+    "else process.stdout.write('{}\\n');"
+  ].join('\n'));
+  try {
+    const result = spawnSync(process.execPath, [
+      sinkScript,
+      '--branch', branch,
+      '--project', project,
+      '--issue', '168'
+    ], {
+      cwd: root,
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_GLAB_MOCK_SCRIPT: mockScript },
+      encoding: 'utf8'
+    });
+    assert.strictEqual(result.status, 0, `online close cwd test: expected exit 0, got ${result.status}. stdout: ${result.stdout} stderr: ${result.stderr}`);
+    const parsed = JSON.parse(result.stdout.trim().split('\n').filter(Boolean).pop());
+    assert.strictEqual(parsed.closure_receipt.remote_issue_closed, 'closed');
+    assert.strictEqual(parsed.closure_receipt.claim_label_removed, 'removed');
+    const cwdLines = fs.readFileSync(cwdLog, 'utf8').trim().split('\n')
+      .filter(line => line.startsWith('issue close') || line.startsWith('issue update'));
+    assert(cwdLines.length >= 2, 'online close cwd test: expected close and update calls, got: ' + fs.readFileSync(cwdLog, 'utf8'));
+    assert(cwdLines.every(line => line.endsWith('\t' + expectedRoot)),
+      'online close cwd test: forge calls must run from repo cwd ' + expectedRoot + ', got: ' + cwdLines.join('\n'));
+    console.log('online close cwd regression test passed');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(remotePath, { recursive: true, force: true });
+  }
+}
+
+{
   // Block 5: exit-3 with archived project — no live dir, no receipt written
   const sinkScript = path.join(__dirname, 'kaola-gitlab-workflow-sink-merge.js');
   const { root, branch } = setupRealRepo('exit3-archived-test', 'test-exit3-archived');
@@ -699,4 +759,3 @@ withForge({
 }
 
 console.log('GitLab sink tests passed');
-

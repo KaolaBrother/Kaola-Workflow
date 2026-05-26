@@ -40,10 +40,14 @@ The Phase 6 sink is responsible for delivering completed work to the repository 
     - Prevents accidental merge of incomplete or out-of-sync branches
     - Skipped when `KAOLA_WORKFLOW_OFFLINE=1`
 - **Exit codes**:
-  - `0`: merge succeeded, branch pushed, issue closed
+  - `0`: merge succeeded, branch pushed, issue closed (or close failure emits warning but exit code stays 0)
   - `1`: merge failed (non-recoverable; includes pre-merge guard failures: live workflow-state, unpushed commits, or no upstream tracking ref)
   - `2`: fast-forward race condition exhausted after MAX_AUTOMERGE_RETRIES attempts
   - `3`: merge-impossible error (branch protected, non-fast-forward, permission denied); also returned if project archive dir exists during receipt write (GitLab/Gitea guard); auto-fallback to PR sink
+- **Failure handling** (issue #168):
+  - When issue close fails, a stderr warning is emitted (e.g., `sink-merge: WARNING: issue close failed for N; receipt.remote_issue_closed=failed. Manually run: gh issue close N`) instead of silently swallowing the error
+  - Exit code remains 0 because the merge itself succeeded; the receipt records `remote_issue_closed: 'failed'` for audit purposes
+  - Label removal attempts to proceed even if issue close fails
 - **Failure classification** (`classifyMergeError` function):
   - Exported from all three sink-merge modules (GitHub, GitLab, Gitea)
   - Classifies push/merge errors into: `permission_denied`, `branch_protected`, `non_fast_forward`, or `null` (unclassifiable)
