@@ -7,7 +7,7 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 
 | Issue | Title | Status | Workflow Project | Next Step |
 |-------|-------|--------|------------------|-----------|
-| #104 | feat(workflow): agent-judged path selection + fast-mode subagent enforcement | open | issue-104 | phase 2 ideation |
+| none | No active work | — | — | — |
 
 ## Rules
 
