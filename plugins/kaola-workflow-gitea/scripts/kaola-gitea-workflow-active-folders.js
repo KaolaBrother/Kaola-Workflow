@@ -56,7 +56,10 @@ function probeIssueState(issueNumber) {
     const issue = forge.viewIssue(issueNumber);
     const state = issue.state === 'closed' ? 'closed' : 'open';
     return { state, reason: 'ok' };
-  } catch (_) {
+  } catch (err) {
+    if (err.killed === true || err.signal === 'SIGTERM' || err.code === 'ETIMEDOUT') {
+      return { state: 'unavailable', reason: 'timeout' };
+    }
     return { state: 'unavailable', reason: 'tea issue fetch failed' };
   }
 }

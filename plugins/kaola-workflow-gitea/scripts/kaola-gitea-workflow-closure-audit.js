@@ -29,6 +29,7 @@ const {
   field,
   getRoot,
   issueIsClosed,
+  probeIssueState,
   readActiveFolders
 } = require('./kaola-gitea-workflow-active-folders');
 const {
@@ -51,18 +52,21 @@ function parseArgs(argv) {
   return args;
 }
 
-// The ONLY caller of issueIsClosed. One remote probe per distinct issue number
+// The ONLY caller of probeIssueState. One remote probe per distinct issue number
 // (dedupe), so the remote-call count is O(distinct N), not O(detectors x N).
-// issueIsClosed self-guards OFFLINE (returns false), so this is empty offline.
+// probeIssueState self-guards OFFLINE (returns {state:'open'}), so closed is empty offline.
 function collectClosedSet(candidateNumbers) {
   const closed = new Set();
+  const unresolved = [];
   const seen = new Set();
   for (const n of candidateNumbers) {
     if (!Number.isInteger(n) || n <= 0 || seen.has(n)) continue;
     seen.add(n);
-    if (issueIsClosed(n)) closed.add(n);
+    const probe = probeIssueState(n);
+    if (probe.state === 'closed') closed.add(n);
+    else if (probe.reason === 'timeout') unresolved.push(n);
   }
-  return closed;
+  return { closed, unresolved };
 }
 
 function roadmapSourceFiles(root) {
@@ -128,7 +132,10 @@ function detectStaleLabels() {
   try {
     const issues = forge.listIssues({ state: 'closed', labels: [CLAIM_LABEL] });
     return issues.map(i => ({ number: i.number, title: i.title, url: i.url }));
-  } catch (_) {
+  } catch (err) {
+    if (err.killed === true || err.signal === 'SIGTERM' || err.code === 'ETIMEDOUT') {
+      return 'skipped_timeout';
+    }
     process.stderr.write('closure-audit: tea issues list failed; reporting empty stale_in_progress_labels\n');
     return [];
   }
@@ -185,7 +192,10 @@ function detectUnarchivedPrFolders(folders) {
     let state = '';
     try {
       state = String(forge.viewPullRequest(prNumber).state || '');
-    } catch (_) { continue; }
+    } catch (err) {
+      if (err.killed === true || err.signal === 'SIGTERM' || err.code === 'ETIMEDOUT') return 'skipped_timeout';
+      continue;
+    }
     if (state === 'merged' || state === 'closed') {
       out.push({ project: f.project, issue_number: f.issue_number, pr_url: f.pr_url, pr_state: state });
     }
@@ -202,7 +212,7 @@ function buildAuditReport(root) {
   const candidates = srcFiles.map(s => s.issue_number)
     .concat(Array.from(archiveClosed))
     .concat(folders.map(f => f.issue_number).filter(n => n != null));
-  const closedSet = collectClosedSet(candidates);
+  const { closed: closedSet, unresolved } = collectClosedSet(candidates);
 
   const staleRoadmap = detectStaleRoadmapSources(srcFiles, closedSet, archiveClosed);
   const mirrorClosed = detectMirrorClosed(root, closedSet);
@@ -224,6 +234,10 @@ function buildAuditReport(root) {
     active_folder_for_closed_issue: activeClosed.length,
     unarchived_pr_folders: Array.isArray(unarchivedPr) ? unarchivedPr.length : 0
   };
+  if (unresolved.length > 0) {
+    drift.unresolved_closed_state = unresolved;
+    counts.unresolved_closed_state = unresolved.length;
+  }
   return { offline: OFFLINE, drift, counts };
 }
 
@@ -246,22 +260,32 @@ function executeRepairs(root, report) {
 
   const labelsRemoved = [];
   const labelsFailed = [];
+  let labelsSkippedReason = null;
   const labels = report.drift.stale_in_progress_labels;
   if (Array.isArray(labels)) {
     for (const it of labels) {
       // project ignored by forge.updateIssueLabels body today (forge:164-172); revisit if it starts consuming the arg.
       try { forge.updateIssueLabels(null, it.number, { remove: [CLAIM_LABEL] }); labelsRemoved.push(it.number); }
-      catch (_) { labelsFailed.push(it.number); }
+      catch (err) {
+        labelsFailed.push(it.number);
+        if (err.killed === true || err.signal === 'SIGTERM' || err.code === 'ETIMEDOUT') {
+          labelsSkippedReason = 'timeout';
+          break;
+        }
+      }
     }
   }
 
+  const repairedObj = {
+    roadmap_sources_removed: roadmapSourcesRemoved,
+    roadmap_regenerated: roadmapRegenerated,
+    labels_removed: labelsRemoved,
+    labels_failed: labelsFailed
+  };
+  if (labelsSkippedReason) repairedObj.labels_skipped_reason = labelsSkippedReason;
+
   return {
-    repaired: {
-      roadmap_sources_removed: roadmapSourcesRemoved,
-      roadmap_regenerated: roadmapRegenerated,
-      labels_removed: labelsRemoved,
-      labels_failed: labelsFailed
-    },
+    repaired: repairedObj,
     reported_not_repaired: {
       active_folder_for_closed_issue: report.drift.active_folder_for_closed_issue,
       unarchived_pr_folders: report.drift.unarchived_pr_folders

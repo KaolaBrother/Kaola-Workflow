@@ -127,13 +127,14 @@ function teaMockEnv(binDir) {
 }
 
 // Run closure-audit online (mock tea via KAOLA_TEA_MOCK_SCRIPT). Mirrors runClaimOnline.
-function runClosureAudit(args, cwd, binDir) {
+function runClosureAudit(args, cwd, binDir, extraEnv) {
   const result = spawnSync(process.execPath, [closureAuditScript, ...args], {
     cwd,
     encoding: 'utf8',
     timeout: 60000,
     env: {
       ...process.env,
+      ...(extraEnv || {}),
       KAOLA_WORKFLOW_OFFLINE: '0',
       ...teaMockEnv(binDir),
       PATH: binDir + path.delimiter + path.dirname(process.execPath) + path.delimiter + (process.env.PATH || '')
@@ -1868,6 +1869,10 @@ function testClosureAuditOfflineRemoteClassesSkipped() {
       result.drift.unarchived_pr_folders, 'skipped_offline',
       'offline: unarchived_pr_folders must be "skipped_offline", got: ' + JSON.stringify(result.drift.unarchived_pr_folders)
     );
+    assert(
+      !('unresolved_closed_state' in result.drift),
+      'offline: unresolved_closed_state must be absent when offline (omit-when-empty), got: ' + JSON.stringify(result.drift.unresolved_closed_state)
+    );
     console.log('testClosureAuditOfflineRemoteClassesSkipped: PASSED');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -2143,6 +2148,69 @@ function testClosureAuditDryRunNeverCallsRemoveLabel() {
   }
 }
 
+function testClosureAuditStaleLabelsTimeout() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-ca-stale-labels-timeout-')));
+  const binDir = path.join(tmp, 'bin');
+  try {
+    initGitRepo(tmp);
+    closureAuditShim(binDir, ['setInterval(() => {}, 1 << 30);']);
+    const result = runClosureAudit([], tmp, binDir, { KAOLA_GH_REMOTE_TIMEOUT_MS: '300' });
+    assert.strictEqual(
+      result.drift.stale_in_progress_labels, 'skipped_timeout',
+      'stale-labels hang must return "skipped_timeout", got: ' + JSON.stringify(result.drift.stale_in_progress_labels)
+    );
+    assert(
+      !('unresolved_closed_state' in result.drift),
+      'empty candidates must not produce unresolved_closed_state, got: ' + JSON.stringify(result.drift.unresolved_closed_state)
+    );
+    console.log('testClosureAuditStaleLabelsTimeout: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testClosureAuditUnresolvedClosedState() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-ca-unresolved-closed-')));
+  const binDir = path.join(tmp, 'bin');
+  try {
+    initGitRepo(tmp);
+    plantClosureRoadmapSource(tmp, 930);
+    closureAuditShim(binDir, ['setInterval(() => {}, 1 << 30);']);
+    const result = runClosureAudit([], tmp, binDir, { KAOLA_GH_REMOTE_TIMEOUT_MS: '300' });
+    const unresolved = result.drift.unresolved_closed_state;
+    assert(
+      Array.isArray(unresolved) && unresolved.includes(930),
+      'unresolved_closed_state must include 930 when issue probe times out, got: ' + JSON.stringify(unresolved)
+    );
+    assert.strictEqual(
+      result.counts.unresolved_closed_state, 1,
+      'counts.unresolved_closed_state must be 1, got: ' + result.counts.unresolved_closed_state
+    );
+    console.log('testClosureAuditUnresolvedClosedState: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testClosureAuditPrFolderTimeout() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-ca-pr-folder-timeout-')));
+  const binDir = path.join(tmp, 'bin');
+  try {
+    initGitRepo(tmp);
+    writeState(tmp, 'issue-931', 931);
+    makePrSinkFolder(tmp, 'issue-931', 931);
+    closureAuditShim(binDir, ['setInterval(() => {}, 1 << 30);']);
+    const result = runClosureAudit([], tmp, binDir, { KAOLA_GH_REMOTE_TIMEOUT_MS: '300' });
+    assert.strictEqual(
+      result.drift.unarchived_pr_folders, 'skipped_timeout',
+      'PR-folder hang must return "skipped_timeout", got: ' + JSON.stringify(result.drift.unarchived_pr_folders)
+    );
+    console.log('testClosureAuditPrFolderTimeout: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 // --- Task 6: fail-open fix — forge.viewIssue throws outside OFFLINE must return target_unavailable ---
 
 // testGiteaClassifierFailClosed: when viewIssue throws (network error) and OFFLINE is not set,
@@ -2207,6 +2275,9 @@ testClosureAuditUnarchivedPrFolderMergedLowercase();
 testClosureAuditExecuteRepairsRoadmapAndLabels();
 testClosureAuditExecuteNeverTouchesActiveFolders();
 testClosureAuditDryRunNeverCallsRemoveLabel();
+testClosureAuditStaleLabelsTimeout();
+testClosureAuditUnresolvedClosedState();
+testClosureAuditPrFolderTimeout();
 
 testGiteaRoadmapInitIssueExclusiveAndUpdate()
   .then(() => {

@@ -13,8 +13,8 @@ function glabExec(args, opts) {
   if (OFFLINE || options.offline) return options.offlineStdout || '';
   if (options.execFileSync) return options.execFileSync('glab', args, Object.assign({ encoding: 'utf8' }, options.execOptions || {})).trim();
   const mock = process.env.KAOLA_GLAB_MOCK_SCRIPT;
-  if (mock) return execFileSync(process.execPath, [mock, ...args], Object.assign({ encoding: 'utf8' }, options.execOptions || {})).trim();
-  return execFileSync('glab', args, Object.assign({ encoding: 'utf8' }, options.execOptions || {})).trim();
+  if (mock) return execFileSync(process.execPath, [mock, ...args], Object.assign({ encoding: 'utf8', timeout: parseInt(process.env.KAOLA_GH_REMOTE_TIMEOUT_MS || '30000', 10) }, options.execOptions || {})).trim();
+  return execFileSync('glab', args, Object.assign({ encoding: 'utf8', timeout: parseInt(process.env.KAOLA_GH_REMOTE_TIMEOUT_MS || '30000', 10) }, options.execOptions || {})).trim();
 }
 
 function parseJson(raw, fallback) {

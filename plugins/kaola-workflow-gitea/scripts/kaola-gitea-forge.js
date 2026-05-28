@@ -15,14 +15,14 @@ function teaExec(args, opts) {
   if (OFFLINE || options.offline) return options.offlineStdout || '';
   // Injected runner for tests — skip version check entirely
   if (options.execFileSync) {
-    return options.execFileSync('tea', args, Object.assign({ encoding: 'utf8' }, options.execOptions || {})).trim();
+    return options.execFileSync('tea', args, Object.assign({ encoding: 'utf8', timeout: parseInt(process.env.KAOLA_GH_REMOTE_TIMEOUT_MS || '30000', 10) }, options.execOptions || {})).trim();
   }
   // Env-var mock for subprocess tests (macOS shebang execution hang workaround)
   const mock = process.env.KAOLA_TEA_MOCK_SCRIPT;
-  if (mock) return execFileSync(process.execPath, [mock, ...args], Object.assign({ encoding: 'utf8' }, options.execOptions || {})).trim();
+  if (mock) return execFileSync(process.execPath, [mock, ...args], Object.assign({ encoding: 'utf8', timeout: parseInt(process.env.KAOLA_GH_REMOTE_TIMEOUT_MS || '30000', 10) }, options.execOptions || {})).trim();
   // First live call: validate tea version >= 0.9.2
   if (!_versionChecked) {
-    const versionOut = execFileSync('tea', ['--version'], { encoding: 'utf8' });
+    const versionOut = execFileSync('tea', ['--version'], { encoding: 'utf8', timeout: parseInt(process.env.KAOLA_GH_REMOTE_TIMEOUT_MS || '30000', 10) });
     const match = versionOut.match(/(\d+)\.(\d+)\.(\d+)/);
     if (match) {
       const [, major, minor, patch] = match.map(Number);
@@ -32,7 +32,7 @@ function teaExec(args, opts) {
     }
     _versionChecked = true;
   }
-  return execFileSync('tea', args, Object.assign({ encoding: 'utf8' }, options.execOptions || {})).trim();
+  return execFileSync('tea', args, Object.assign({ encoding: 'utf8', timeout: parseInt(process.env.KAOLA_GH_REMOTE_TIMEOUT_MS || '30000', 10) }, options.execOptions || {})).trim();
 }
 
 function parseJson(raw, fallback) {
