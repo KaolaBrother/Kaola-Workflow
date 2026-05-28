@@ -8,6 +8,8 @@
 
 - **Classifier CLI ergonomics** (issue #169): `kaola-workflow-classifier.js` now accepts top-level `--issue N` syntax (in addition to `classify --issue N`); both forms invoke the same classify logic. New `--help` flag prints usage to stdout and exits 0. This simplifies one-liners and inline classify calls.
 
+- **GitLab `workflow-next.md` parity port** (issue #170): `plugins/kaola-workflow-gitlab/commands/workflow-next.md` now extracts `KAOLA_VERDICT` and `KAOLA_REASONING` from startup output (Startup Step 0b, lines 143–144), prints refusal diagnostics with both fields when startup returns `claim: "none"` (lines 159–161), and includes `target_unverified` in the typed-refusal enum (line 164). Target-existence check (Step 0, item 7) now uses `glab issue view` against the active consumer repository with explicit offline fallback to local `.roadmap/issue-N.md` or active folder validation, matching the GitHub edition parity from issue #169. Behavior unchanged; documentation-only alignment of the GitLab skill prose.
+
 ### Changed
 
 - **Variable rename: `PICK_NEXT_PROJECT` → `KAOLA_PROJECT`** (issue #172): `plugins/kaola-workflow/skills/kaola-workflow-next/SKILL.md` now uses consistent `KAOLA_PROJECT` naming convention across both Startup and Git Freshness Block Recovery sections (lines 50, 120, 152). Companion validator assertions in `scripts/validate-kaola-workflow-contracts.js` updated to enforce the new name. This aligns the Codex-edition SKILL.md with the `KAOLA_*` namespace pattern used in other extracted variables (e.g., `KAOLA_CLAIM`, `KAOLA_VERDICT`, `KAOLA_WORKTREE_PATH`). No behavior change; local variable rename only. GitLab and Gitea editions remain at `PICK_NEXT_PROJECT` (tracked separately in issues #170 and #171).
