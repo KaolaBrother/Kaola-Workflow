@@ -440,6 +440,15 @@ function claimExplicitTarget(root, args) {
   if (classified.verdict === 'target_unavailable') {
     return { status: 'target_unavailable', claim: 'none', issue: targetIssue, project: projectNameForIssue(root, targetIssue), reasoning: classified.reasoning };
   }
+  if (classified.verdict === 'target_unverified') {
+    return {
+      status: 'target_unverified',
+      claim: 'none',
+      issue: targetIssue,
+      project: projectNameForIssue(root, targetIssue),
+      reasoning: classified.reasoning
+    };
+  }
   return claimProject(root, Object.assign({}, args, { issue: targetIssue, project: args.project || projectNameForIssue(root, targetIssue) }));
 }
 

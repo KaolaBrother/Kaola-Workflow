@@ -75,6 +75,7 @@ function writeProject(root, project, files) {
 }
 
 function testClaimStatusRelease(tmp) {
+  plantRoadmapIssue(tmp, 63, '');
   const first = json(runNode(claimScript, ['startup', '--target-issue', '63', '--runtime', 'claude', '--sink', 'pr'], tmp));
   assert(first.claim === 'acquired', 'startup should acquire explicit issue');
   assert(first.project === 'issue-63', 'project should default from issue number');
@@ -103,6 +104,7 @@ function testClaimStatusRelease(tmp) {
 }
 
 function testFinalize(tmp) {
+  plantRoadmapIssue(tmp, 164, '');
   json(runNode(claimScript, ['startup', '--target-issue', '164', '--runtime', 'claude'], tmp));
   const retiredBlock = '## ' + 'Lease';
   const retiredSessionField = 'sess' + 'ion_id:';
@@ -597,6 +599,7 @@ function testWorktreeNativeOfflineWins() {
   const kwRoot = fs.realpathSync(tmp) + '.kw';
   try {
     initGitRepo(tmp);
+    plantRoadmapIssue(tmp, 506, '');
     const binDir = path.join(tmp, 'bin');
     writeGhShimForStartup(binDir);
     const spawnResult = spawnSync(process.execPath, [claimScript, 'startup', '--target-issue', '506'], {
@@ -623,6 +626,7 @@ function testWorktreeNativeOfflineWins() {
 function testFastStartupState() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-fast-startup-'));
   try {
+    plantRoadmapIssue(tmp, 503, '');
     const result = json(runNode(claimScript, ['startup', '--target-issue', '503'], tmp, { KAOLA_PATH: 'fast' }));
     assert(result.claim === 'acquired', 'fast startup should acquire explicit issue');
     const state = read(statePath(tmp, 'issue-503'));
@@ -2334,33 +2338,148 @@ function testClassifierFailClosedOnRemoteError() {
   console.log('testClassifierFailClosedOnRemoteError: PASSED');
 }
 
-function testClassifierOfflineBypassesFailClosed() {
-  // Regression: same failing gh shim + OFFLINE=1 must still succeed (the offline early-return
-  // in cmdClassify must remain untouched so offline workflows are not broken).
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-fail-closed-offline-'));
+function testClassifierOfflineUnverifiedNoLocalEvidence() {
+  // No roadmap entry for issue 156 + OFFLINE=1 + failing gh shim → unverified verdict
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-unverified-no-evidence-'));
   try {
     const binDir = path.join(tmp, 'bin');
     writeGhShimFailingIssueView(binDir);
 
-    // Use runNode which sets KAOLA_WORKFLOW_OFFLINE=1
     const result = runNode(claimScript, ['startup', '--target-issue', '156'], tmp);
-    assert(!result.signal, 'offline startup must not be killed/timed out: ' + result.signal);
-    assert(result.status === 0,
-      'offline startup must exit 0 even when gh shim would fail, got ' + result.status +
+    assert(!result.signal, 'unverified startup must not be killed/timed out: ' + result.signal);
+    assert(result.status === 1,
+      'startup must exit 1 when target unverified, got ' + result.status +
       '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
 
-    const parsed = JSON.parse(result.stdout.trim());
-    assert(parsed.claim === 'acquired' || parsed.claim === 'owned',
-      'offline startup must acquire or own (not target_unavailable), got: ' + parsed.claim +
+    const parsed = JSON.parse(result.stdout.trim().split('\n').filter(l => l.trim().startsWith('{')).pop());
+    assert(parsed.verdict === 'target_unverified',
+      'verdict must be target_unverified, got: ' + parsed.verdict +
       '\nfull output: ' + result.stdout);
+    assert(parsed.claim === 'none',
+      'claim must be none, got: ' + parsed.claim);
+    assert((parsed.reasoning || '').includes('no local evidence'),
+      'reasoning must mention no local evidence, got: ' + parsed.reasoning);
 
-    // Folder must be created
-    assert(fs.existsSync(path.join(tmp, 'kaola-workflow', 'issue-156')),
-      'kaola-workflow/issue-156 must be created in OFFLINE mode');
+    assert(!fs.existsSync(path.join(tmp, 'kaola-workflow', 'issue-156')),
+      'kaola-workflow/issue-156 must NOT be created when target is unverified');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
-  console.log('testClassifierOfflineBypassesFailClosed: PASSED');
+  console.log('testClassifierOfflineUnverifiedNoLocalEvidence: PASSED');
+}
+
+function testClassifierOfflineVerifiedRoadmapAcquires() {
+  // Non-regression: valid offline roadmap entry still acquires
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-unverified-roadmap-'));
+  try {
+    fs.mkdirSync(path.join(tmp, 'kaola-workflow', '.roadmap'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmp, 'kaola-workflow', '.roadmap', 'issue-200.md'),
+      'issue: #200\ntitle: test\nstatus: open\nworkflow_project: issue-200\nnext_step: ready\n'
+    );
+
+    const result = runNode(claimScript, ['startup', '--target-issue', '200'], tmp);
+    assert(!result.signal, 'verified-roadmap startup must not be killed: ' + result.signal);
+    assert(result.status === 0,
+      'startup must exit 0 when roadmap entry present, got ' + result.status +
+      '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+
+    const parsed = JSON.parse(result.stdout.trim());
+    assert(parsed.claim === 'acquired',
+      'claim must be acquired when roadmap entry present, got: ' + parsed.claim);
+    assert(fs.existsSync(path.join(tmp, 'kaola-workflow', 'issue-200')),
+      'kaola-workflow/issue-200 must be created');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log('testClassifierOfflineVerifiedRoadmapAcquires: PASSED');
+}
+
+function testClassifierOfflineVerifiedOwnedFolderRoutes() {
+  // Non-regression: already-active folder still routes 'owned' (via line 328 early-return)
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-unverified-owned-'));
+  try {
+    plantActiveFolder(tmp, 'issue-201', 201, null);
+
+    const result = runNode(claimScript, ['startup', '--target-issue', '201'], tmp);
+    assert(!result.signal, 'owned-folder startup must not be killed: ' + result.signal);
+    assert(result.status === 0,
+      'startup must exit 0 when active folder exists for target, got ' + result.status +
+      '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+
+    const parsed = JSON.parse(result.stdout.trim());
+    assert(parsed.claim === 'owned',
+      'claim must be owned when active folder exists for target, got: ' + parsed.claim);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log('testClassifierOfflineVerifiedOwnedFolderRoutes: PASSED');
+}
+
+function testClassifierOfflineUnverifiedWithUnrelatedActiveFolder() {
+  // Critical case from issue #169: unrelated active folder must NOT cause user_target_red
+  // Consumer-repo isolation: getRoot() resolves to tmp via git rev-parse; existing shim returns name:repo (non-Kaola).
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-unverified-unrelated-'));
+  try {
+    // Plant active folder for unrelated issue 300
+    plantActiveFolder(tmp, 'issue-300', 300, null);
+
+    // Target M=301: no roadmap, no active folder for 301
+    const result = runNode(claimScript, ['startup', '--target-issue', '301'], tmp);
+    assert(!result.signal, 'unrelated-active startup must not be killed: ' + result.signal);
+    assert(result.status === 1,
+      'startup must exit 1 for unverified target with unrelated active folder, got ' + result.status +
+      '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+
+    const parsed = JSON.parse(result.stdout.trim().split('\n').filter(l => l.trim().startsWith('{')).pop());
+    assert(parsed.verdict === 'target_unverified',
+      'verdict must be target_unverified (NOT user_target_red) when unrelated active folder exists, got: ' + parsed.verdict +
+      '\nfull output: ' + result.stdout);
+    assert(parsed.claim === 'none',
+      'claim must be none, got: ' + parsed.claim);
+    // Consumer-repo isolation assertion: reasoning references the requested target #301 from cwd's context
+    assert((parsed.reasoning || '').includes('#301'),
+      'reasoning must reference the requested target #301 (proves cwd-resolved target), got: ' + parsed.reasoning);
+
+    assert(!fs.existsSync(path.join(tmp, 'kaola-workflow', 'issue-301')),
+      'kaola-workflow/issue-301 must NOT be created');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log('testClassifierOfflineUnverifiedWithUnrelatedActiveFolder: PASSED');
+}
+
+function testClassifierTopLevelIssueFlag() {
+  // AC #10: classifier accepts top-level --issue N; --help works
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-cli-toplevel-'));
+  try {
+    // Top-level --issue (no 'classify' subcommand) + OFFLINE + no roadmap → target_unverified
+    const topLevel = spawnSync(process.execPath, [classifierScript, '--issue', '999'], {
+      cwd: tmp,
+      encoding: 'utf8',
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }
+    });
+    assert(topLevel.status === 0,
+      'top-level --issue must exit 0, got ' + topLevel.status +
+      '\nstdout: ' + topLevel.stdout + '\nstderr: ' + topLevel.stderr);
+    const topParsed = JSON.parse(topLevel.stdout.trim());
+    assert(topParsed.verdict === 'target_unverified',
+      'top-level --issue must return target_unverified for no-evidence offline, got: ' + topParsed.verdict);
+
+    // --help
+    const help = spawnSync(process.execPath, [classifierScript, '--help'], {
+      cwd: tmp,
+      encoding: 'utf8'
+    });
+    assert(help.status === 0,
+      '--help must exit 0, got ' + help.status +
+      '\nstderr: ' + help.stderr);
+    assert(help.stdout.includes('usage:'),
+      '--help must print usage to stdout, got: ' + help.stdout);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log('testClassifierTopLevelIssueFlag: PASSED');
 }
 
 function testClaimProjectOwnedFolderFailingRemote() {
@@ -3430,7 +3549,11 @@ async function main() {
     testE2EGitHubPrFullChain();
     testParallelIssueIndependence();
     testClassifierFailClosedOnRemoteError();
-    testClassifierOfflineBypassesFailClosed();
+    testClassifierOfflineUnverifiedNoLocalEvidence();
+    testClassifierOfflineVerifiedRoadmapAcquires();
+    testClassifierOfflineVerifiedOwnedFolderRoutes();
+    testClassifierOfflineUnverifiedWithUnrelatedActiveFolder();
+    testClassifierTopLevelIssueFlag();
     testClaimProjectOwnedFolderFailingRemote();
     testFinalizeRemovesClaimLabel();
     testFinalizeNullFolderFallbackReadsArchive();

@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- **New classifier verdict: `target_unverified`** (issue #169): `kaola-workflow-classifier.js` now emits a typed `target_unverified` refusal when `KAOLA_WORKFLOW_OFFLINE=1` AND the target issue N has no local evidence (no `kaola-workflow/.roadmap/issue-N.md` file AND no active folder in the cwd repo). Distinct from `target_unavailable` (which signals a network failure online) and `user_target_red` (which signals overlap/risk). This verdict is routed through `claimExplicitTarget()` in `kaola-workflow-claim.js`, returning `{status: 'target_unverified', claim: 'none', ...}` with exit code 1 and no active folder created. When offline with no roadmap evidence and no active folder, startup now refuses the claim with this distinct diagnostic.
+
+- **Classifier CLI ergonomics** (issue #169): `kaola-workflow-classifier.js` now accepts top-level `--issue N` syntax (in addition to `classify --issue N`); both forms invoke the same classify logic. New `--help` flag prints usage to stdout and exits 0. This simplifies one-liners and inline classify calls.
+
+### Changed
+
+- **`commands/workflow-next.md` and `plugins/kaola-workflow/skills/kaola-workflow-next/SKILL.md`** (issue #169): Step 0b (Startup Transaction) now extracts `KAOLA_VERDICT` and `KAOLA_REASONING` from startup output and passes them through to Step 0 target-existence check. New target-existence check validates the target issue exists in the active consumer repository (cwd's git context), not in the Kaola-Workflow package repo. Online: `gh issue view N` against cwd context; if fetch fails, stop and ask (no fallback). Offline (`KAOLA_WORKFLOW_OFFLINE=1`): require local `.roadmap/issue-N.md` OR active folder matching the target; if neither, stop and ask. Required Output block now lists `target_unverified` as a possible classifier verdict.
+
 ## [3.16.0] — 2026-05-26
 
 ### Added

@@ -4,7 +4,7 @@ Document public APIs, endpoints, schemas, events, and integration contracts.
 
 ## Startup Classifier and Remote Validation
 
-When the startup (`/workflow-next` → Startup Step 0) or explicit-target claim (`cmdStartup`, `cmdPickNext`) attempts to validate an issue against the remote forge, a network call is made to check issue state and openness. If the forge API call fails outside `KAOLA_WORKFLOW_OFFLINE=1`, the classifier now returns a **typed `target_unavailable` verdict** instead of silently returning `green`.
+When the startup (`/workflow-next` → Startup Step 0) or explicit-target claim (`cmdStartup`, `cmdPickNext`) attempts to validate an issue against the remote forge, a network call is made to check issue state and openness. If the forge API call fails outside `KAOLA_WORKFLOW_OFFLINE=1`, the classifier now returns a **typed `target_unavailable` verdict** instead of silently returning `green`. Additionally, when offline with no local evidence for a target, the classifier returns a **typed `target_unverified` verdict**.
 
 ### Verdict: `target_unavailable`
 
@@ -13,6 +13,15 @@ When the startup (`/workflow-next` → Startup Step 0) or explicit-target claim 
 - **Impact**: Startup refuses to claim the target issue, agent must diagnose the network problem, and retry when the forge is reachable
 - **Offline fallback**: When `KAOLA_WORKFLOW_OFFLINE=1`, classification proceeds without remote validation and uses local `.roadmap/issue-N.md` evidence only
 - **Helper function**: New `probeIssueState(issueNum, opts)` in `scripts/kaola-workflow-active-folders.js` (all three forge editions) returns `{state, reason}`. `state` is `open`, `closed`, or `unavailable`; claim scripts treat `unavailable` as the typed refusal path outside explicit offline mode.
+
+### Verdict: `target_unverified`
+
+- **Returned when**: `KAOLA_WORKFLOW_OFFLINE=1` AND no local `.roadmap/issue-N.md` exists AND no active folder in the cwd repo for the target issue
+- **Applies to**: `cmdStartup --target-issue N` and parallel-work classifier verdict logic
+- **Distinct from**: `target_unavailable` (network failure online); `user_target_red` (overlap/risk)
+- **Impact**: Startup refuses to claim with this distinct diagnostic; no active folder created; exit code 1
+- **Root cause**: Offline operation requires local roadmap evidence or an active folder. When neither exists, the target cannot be verified.
+- **Agent remedy**: Run online to validate the target exists on the forge, or create a `.roadmap/issue-N.md` entry offline with explicit scope.
 
 ## Sink API
 

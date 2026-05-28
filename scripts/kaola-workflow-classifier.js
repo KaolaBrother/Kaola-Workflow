@@ -310,8 +310,8 @@ function classify(issue, activeFolders, root) {
 // cmdClassify
 // ---------------------------------------------------------------------------
 
-function cmdClassify() {
-  const args = parseArgs(process.argv.slice(3));
+function cmdClassify(argv) {
+  const args = parseArgs(argv || process.argv.slice(3));
   assert(Number.isFinite(args.issue) && args.issue > 0, '--issue <N> required for classify');
 
   const config = readOrCreateConfig();
@@ -333,6 +333,13 @@ function cmdClassify() {
   // OFFLINE path — read from local roadmap file
   if (OFFLINE) {
     const roadmapFile = path.join(root, 'kaola-workflow', '.roadmap', 'issue-' + args.issue + '.md');
+    if (!fs.existsSync(roadmapFile) && !activeFolders.some(f => f.issue_number === args.issue)) {
+      process.stdout.write(JSON.stringify({
+        verdict: 'target_unverified',
+        reasoning: 'OFFLINE and no local evidence for issue #' + args.issue + ' (no kaola-workflow/.roadmap/issue-' + args.issue + '.md and no active folder in this repository)'
+      }) + '\n');
+      return;
+    }
     let labels = [];
     let body = '';
     if (fs.existsSync(roadmapFile)) {
@@ -378,10 +385,20 @@ function cmdClassify() {
 // Main dispatcher
 // ---------------------------------------------------------------------------
 
+function printHelp() {
+  process.stdout.write(
+    'usage: kaola-workflow-classifier.js [classify] --issue <N> [--json]\n' +
+    '       kaola-workflow-classifier.js --issue <N> [--json]   (top-level form)\n' +
+    '       kaola-workflow-classifier.js --help\n'
+  );
+}
+
 function main() {
   const sub = process.argv[2];
-  assert(sub, 'usage: kaola-workflow-classifier.js <classify>');
-  if (sub === 'classify') return cmdClassify();
+  assert(sub, 'usage: kaola-workflow-classifier.js [classify] --issue <N>');
+  if (sub === '--help' || sub === '-h') { printHelp(); return; }
+  if (sub === '--issue') return cmdClassify(process.argv.slice(2));
+  if (sub === 'classify') return cmdClassify(process.argv.slice(3));
   throw new Error('unknown subcommand: ' + sub);
 }
 

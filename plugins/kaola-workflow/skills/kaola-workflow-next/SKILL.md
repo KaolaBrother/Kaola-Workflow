@@ -69,7 +69,10 @@ do not auto-pick; the agent owns this decision.
    STATUS_OUT="$(node "$claim_script" status 2>/dev/null)"
    KAOLA_TARGET_ISSUE="$(node -e "try{const j=JSON.parse(process.argv[1]);process.stdout.write(j.count===1?String(j.active[0].issue_number):'')}catch(e){}" "$STATUS_OUT")"
    ```
-6. State the selected issue number before calling startup.
+6. Validate the target exists in the active consumer repository before calling startup. The validation context is the cwd's git repo (the project consuming Kaola-Workflow), not `KaolaBrother/Kaola-Workflow` unless that is the active project.
+   - Online: `gh issue view "$KAOLA_TARGET_ISSUE" --json number,state` against cwd's `gh` context. If the fetch fails, stop and ask — do not fall back to a different issue.
+   - Offline (`KAOLA_WORKFLOW_OFFLINE=1`): require `kaola-workflow/.roadmap/issue-$KAOLA_TARGET_ISSUE.md` to exist in the cwd's repo, OR an active folder whose `issue_number` matches the target. If neither is present, stop and ask the user to confirm the issue or run online.
+7. State the selected issue number before calling startup.
 
 Set `KAOLA_TARGET_ISSUE` to the chosen issue number before calling startup.
 
@@ -117,6 +120,8 @@ if [ -f "$claim_script" ]; then
   PICK_NEXT_PROJECT="$(node -e "try{process.stdout.write(JSON.parse(process.argv[1]).project||'')}catch(e){}" "$STARTUP_OUT" 2>/dev/null)" || true
   KAOLA_CLAIM="$(node -e "try{process.stdout.write(JSON.parse(process.argv[1]).claim||'')}catch(e){}" "$STARTUP_OUT" 2>/dev/null)" || true
   KAOLA_WORKTREE_PATH="$(node -e "try{process.stdout.write(JSON.parse(process.argv[1]).worktree_path||'')}catch(e){}" "$STARTUP_OUT" 2>/dev/null)" || true
+  KAOLA_VERDICT="$(node -e "try{process.stdout.write(JSON.parse(process.argv[1]).verdict||'')}catch(e){}" "$STARTUP_OUT" 2>/dev/null)" || true
+  KAOLA_REASONING="$(node -e "try{process.stdout.write(JSON.parse(process.argv[1]).reasoning||'')}catch(e){}" "$STARTUP_OUT" 2>/dev/null)" || true
   [ -n "$KAOLA_WORKTREE_PATH" ] && [ -d "$KAOLA_WORKTREE_PATH" ] && export KAOLA_WORKTREE_PATH
 else
   echo "BLOCKED: kaola-workflow startup unavailable; cannot select issue-backed work." >&2
@@ -127,10 +132,17 @@ fi
 If `STARTUP_OUT` has `verdict: "owned"`, route that project. If startup returns
 `verdict: no_target`, the agent must select a target and re-run. If startup returns
 a typed refusal (`target_occupied`, `user_target_blocked`, `user_target_red`,
-`target_mismatch`, `target_unavailable`), read the `reasoning` field and stop or
-select a different issue. If the startup script is unavailable, stop for repair.
-If startup returns `claim: "none"`, stop normal routing. Do not inspect active
-project folders unless the user explicitly names the project to resume.
+`target_mismatch`, `target_unavailable`, `target_unverified`), read the `reasoning`
+field and stop or select a different issue. If the startup script is unavailable,
+stop for repair. If startup returns `claim: "none"`, stop normal routing. Before
+stopping, print the refusal diagnostics:
+
+```text
+Startup refusal: verdict=$KAOLA_VERDICT reasoning=$KAOLA_REASONING
+```
+
+Do not inspect active project folders unless the user explicitly names the
+project to resume.
 
 ### Git Freshness Block Recovery
 
