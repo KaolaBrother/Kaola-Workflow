@@ -29,6 +29,8 @@ last_result: folder_claimed
 2026-05-28T14:48:44.405Z
 
 ## Sink
+pr_url: https://github.com/KaolaBrother/Kaola-Workflow/pull/179
+pr_number: 179
 branch: workflow/issue-176
 issue_number: 176
 sink: pr
