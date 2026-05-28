@@ -29,6 +29,8 @@ last_result: phase5_complete
 2026-05-29T00:00:00.000Z
 
 ## Sink
+pr_url: https://github.com/KaolaBrother/Kaola-Workflow/pull/181
+pr_number: 181
 branch: workflow/issue-178
 issue_number: 178
 sink: pr
