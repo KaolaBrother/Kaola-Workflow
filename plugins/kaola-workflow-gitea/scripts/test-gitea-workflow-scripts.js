@@ -806,6 +806,7 @@ assert.strictEqual(classifier.issueHasRemoteClaimNotes(35), false,
   }
 }
 
+// Issue #175: OFFLINE + no roadmap + no active folder → target_unverified
 {
   const tempHome = tempRoot('kw-gt-offline-nofile-');
   const root = tempRoot('kw-gt-offline-nofile-root-');
@@ -817,7 +818,97 @@ assert.strictEqual(classifier.issueHasRemoteClaimNotes(35), false,
     });
     assert.strictEqual(result.status, 0);
     const out = JSON.parse(result.stdout.trim());
-    assert.strictEqual(out.verdict, 'green');
+    assert.strictEqual(out.verdict, 'target_unverified',
+      'OFFLINE with no local evidence must return target_unverified, got: ' + out.verdict);
+    assert(/no local evidence/.test(out.reasoning),
+      'reasoning must mention no local evidence, got: ' + out.reasoning);
+  } finally {
+    fs.rmSync(tempHome, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+// Issue #175: non-regression — OFFLINE with roadmap entry still acquires (NOT target_unverified)
+{
+  const tempHome = tempRoot('kw-gt-offline-roadmap-acquires-');
+  const root = tempRoot('kw-gt-offline-roadmap-acquires-root-');
+  try {
+    const roadmapDir = path.join(root, 'kaola-workflow', '.roadmap');
+    fs.mkdirSync(roadmapDir, { recursive: true });
+    fs.writeFileSync(path.join(roadmapDir, 'issue-200.md'),
+      'issue: #200\ntitle: roadmap-present\nstatus: open\nworkflow_project: issue-200\nnext_step: ready\n');
+    const result = spawnSync(process.execPath, [classifierScript, 'classify', '--issue', '200'], {
+      cwd: root, encoding: 'utf8',
+      env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1', HOME: tempHome, USERPROFILE: tempHome })
+    });
+    assert.strictEqual(result.status, 0);
+    const out = JSON.parse(result.stdout.trim());
+    assert.notStrictEqual(out.verdict, 'target_unverified',
+      'roadmap-present OFFLINE must NOT return target_unverified, got: ' + out.verdict);
+  } finally {
+    fs.rmSync(tempHome, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+// Issue #175: non-regression — OFFLINE with active folder for the target routes as 'owned' (NOT target_unverified)
+{
+  const tempHome = tempRoot('kw-gt-offline-owned-routes-');
+  const root = tempRoot('kw-gt-offline-owned-routes-root-');
+  try {
+    writeState(root, 'issue-201', 201);
+    const result = spawnSync(process.execPath, [classifierScript, 'classify', '--issue', '201'], {
+      cwd: root, encoding: 'utf8',
+      env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1', HOME: tempHome, USERPROFILE: tempHome })
+    });
+    assert.strictEqual(result.status, 0);
+    const out = JSON.parse(result.stdout.trim());
+    assert.strictEqual(out.verdict, 'owned',
+      'active folder for target must produce owned (NOT target_unverified), got: ' + out.verdict);
+  } finally {
+    fs.rmSync(tempHome, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+// Issue #175: OFFLINE with an UNRELATED active folder must still produce target_unverified
+{
+  const tempHome = tempRoot('kw-gt-offline-unrelated-active-');
+  const root = tempRoot('kw-gt-offline-unrelated-active-root-');
+  try {
+    writeState(root, 'issue-300', 300);
+    const result = spawnSync(process.execPath, [classifierScript, 'classify', '--issue', '301'], {
+      cwd: root, encoding: 'utf8',
+      env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1', HOME: tempHome, USERPROFILE: tempHome })
+    });
+    assert.strictEqual(result.status, 0);
+    const out = JSON.parse(result.stdout.trim());
+    assert.strictEqual(out.verdict, 'target_unverified',
+      'unrelated active folder must NOT mask target_unverified for requested target, got: ' + out.verdict);
+    assert(out.reasoning && out.reasoning.includes('#301'),
+      'reasoning must reference requested target #301, got: ' + out.reasoning);
+  } finally {
+    fs.rmSync(tempHome, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+// Issue #175: end-to-end startup with no evidence → target_unverified (covers classifyIssue production path)
+{
+  const tempHome = tempRoot('kw-gt-offline-startup-unverified-');
+  const root = tempRoot('kw-gt-offline-startup-unverified-root-');
+  try {
+    fs.mkdirSync(path.join(root, 'kaola-workflow', '.roadmap'), { recursive: true });
+    const result = spawnSync(process.execPath, [claimScript, 'startup', '--runtime', 'test', '--target-issue', '302'], {
+      cwd: root, encoding: 'utf8',
+      env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1', HOME: tempHome, USERPROFILE: tempHome })
+    });
+    assert.strictEqual(result.status, 1, 'offline unverified startup must exit 1');
+    const out = JSON.parse(result.stdout.trim());
+    assert.strictEqual(out.verdict, 'target_unverified');
+    assert.strictEqual(out.claim, 'none');
+    assert(!fs.existsSync(path.join(root, 'kaola-workflow', 'issue-302')),
+      'offline unverified startup must not create an active folder');
   } finally {
     fs.rmSync(tempHome, { recursive: true, force: true });
     fs.rmSync(root, { recursive: true, force: true });
@@ -1180,6 +1271,11 @@ assert.strictEqual(classifier.issueHasRemoteClaimNotes(35), false,
   const root = tempRoot('kw-gt-offline-wins-');
   try {
     initGitRepo(root);
+    // Provide roadmap evidence so the classifier can acquire (not target_unverified) — required since #175
+    const roadmapDir = path.join(root, 'kaola-workflow', '.roadmap');
+    fs.mkdirSync(roadmapDir, { recursive: true });
+    fs.writeFileSync(path.join(roadmapDir, 'issue-9.md'),
+      'issue: #9\ntitle: offline-wins-fixture\nstatus: open\nworkflow_project: issue-9\nnext_step: ready\n');
     const result = spawnSync(process.execPath, [claimScript, 'startup', '--runtime', 'test', '--target-issue', '9'], {
       cwd: root, encoding: 'utf8',
       env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_WORKTREE_NATIVE: '1' }
@@ -2074,7 +2170,11 @@ function testGiteaClassifierFailClosed() {
 function testGiteaOfflineBypassesFailClosed() {
   const root = tempRoot('kw-gt-offline-bypass-fail-');
   try {
-    fs.mkdirSync(path.join(root, 'kaola-workflow', '.roadmap'), { recursive: true });
+    const roadmapDir = path.join(root, 'kaola-workflow', '.roadmap');
+    fs.mkdirSync(roadmapDir, { recursive: true });
+    // Provide roadmap evidence so the classifier can acquire — required since #175 (no evidence → target_unverified)
+    fs.writeFileSync(path.join(roadmapDir, 'issue-501.md'),
+      'issue: #501\ntitle: offline-bypass-fixture\nstatus: open\nworkflow_project: issue-501\nnext_step: ready\n');
     // In OFFLINE mode classifyIssue uses localRoadmapIssue, not forge — so even a throwing forge
     // must not affect the result. We verify by running the subprocess with OFFLINE=1.
     const result = spawnSync(process.execPath, [classifierScript, 'classify', '--issue', '501'], {
@@ -2084,9 +2184,9 @@ function testGiteaOfflineBypassesFailClosed() {
     assert.strictEqual(result.status, 0, 'OFFLINE classify must exit 0: ' + result.stderr);
     const out = JSON.parse(result.stdout.trim());
     assert.notStrictEqual(out.verdict, 'target_unavailable',
-      'OFFLINE classify with no roadmap entry must not return target_unavailable, got: ' + out.verdict);
+      'OFFLINE classify with roadmap entry must not return target_unavailable, got: ' + out.verdict);
     assert.strictEqual(out.verdict, 'green',
-      'OFFLINE classify with no roadmap entry must return green, got: ' + out.verdict);
+      'OFFLINE classify with roadmap entry must return green, got: ' + out.verdict);
     console.log('testGiteaOfflineBypassesFailClosed: PASS');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

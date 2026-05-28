@@ -20,6 +20,10 @@
 
 - **`commands/workflow-next.md` and `plugins/kaola-workflow/skills/kaola-workflow-next/SKILL.md`** (issue #169): Step 0b (Startup Transaction) now extracts `KAOLA_VERDICT` and `KAOLA_REASONING` from startup output and passes them through to Step 0 target-existence check. New target-existence check validates the target issue exists in the active consumer repository (cwd's git context), not in the Kaola-Workflow package repo. Online: `gh issue view N` against cwd context; if fetch fails, stop and ask (no fallback). Offline (`KAOLA_WORKFLOW_OFFLINE=1`): require local `.roadmap/issue-N.md` OR active folder matching the target; if neither, stop and ask. Required Output block now lists `target_unverified` as a possible classifier verdict.
 
+### Fixed
+
+- **Port `target_unverified` OFFLINE no-evidence behavior to GitLab and Gitea editions** (issue #175): GitLab and Gitea startup and classifier scripts now return `target_unverified` when `KAOLA_WORKFLOW_OFFLINE=1` and the target issue has no local evidence (no `.roadmap/issue-N.md` and no active folder), matching the GitHub edition behavior from issue #169. `kaola-gitlab-workflow-classifier.js` and `kaola-gitea-workflow-classifier.js` now check for offline evidence before attempting forge API calls. `kaola-gitlab-workflow-claim.js` and `kaola-gitea-workflow-claim.js` route the `target_unverified` verdict through their claim logic, returning `{status: 'target_unverified', claim: 'none', ...}` with exit code 1 and no active folder created. Regression tests added to `test-gitlab-workflow-scripts.js` and `test-gitea-workflow-scripts.js` verifying offline OFFLINE no-evidence refusal behavior. `simulate-kaola-workflow-walkthrough.js` test alignment updated to cover all three forge editions.
+
 ## [3.16.0] — 2026-05-26
 
 ### Added
