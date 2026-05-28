@@ -322,6 +322,24 @@ assert(
   'CHANGELOG.md must contain "## [' + rootVersion + ']" heading matching package.json version (' + rootVersion + ')'
 );
 
+if (process.env.KAOLA_WORKFLOW_OFFLINE !== '1' && exists('.git')) {
+  const tagName = 'kaola-workflow--v' + rootVersion;
+  let tagPresent = false;
+  try {
+    const { execFileSync } = require('child_process');
+    execFileSync('git', ['rev-parse', '--verify', '--quiet', 'refs/tags/' + tagName],
+      { cwd: root, stdio: ['ignore', 'ignore', 'ignore'] });
+    tagPresent = true;
+  } catch (_) {
+    tagPresent = false;
+  }
+  assert(
+    tagPresent,
+    'Git tag "' + tagName + '" must exist for package.json version (' + rootVersion +
+      '). Create it locally with: git tag ' + tagName + ' <release-commit-sha>'
+  );
+}
+
 assertIncludes('scripts/simulate-workflow-walkthrough.js', 'Workflow walkthrough simulation passed');
 
 console.log('Workflow contract validation passed');

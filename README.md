@@ -430,6 +430,8 @@ git tag kaola-workflow--v<X.Y.Z> <release-commit>
 git push origin kaola-workflow--v<X.Y.Z>
 ```
 
+**Note:** `npm test` now enforces that the local git tag exists (unless `KAOLA_WORKFLOW_OFFLINE=1` is set). The tag must be created before running the test suite. If the tag does not exist, `npm test` will fail with a validation error.
+
 Tag rules:
 - Tag the specific release commit (the commit that bumped `package.json`
   version and added the CHANGELOG section), not HEAD.
@@ -501,7 +503,7 @@ when developing locally. Drift between `scripts/` and
 | Script | What it asserts |
 |--------|-----------------|
 | `simulate-workflow-walkthrough.js` | End-to-end integration test of the claim, repair, roadmap, and hook surfaces. Must exit 0 with `Workflow walkthrough simulation passed`. Run before claiming any workflow-related change complete. |
-| `validate-workflow-contracts.js` | Contractual assertions on the Claude Code surface — command files, agent installs, and documented invariants. |
+| `validate-workflow-contracts.js` | Contractual assertions on the Claude Code surface — command files, agent installs, and documented invariants. **Tag-existence check (issue #177)**: Verifies local git tag `kaola-workflow--v<version>` matches `package.json` version; uses `git rev-parse --verify refs/tags/<tag>` to validate. Skipped when `KAOLA_WORKFLOW_OFFLINE=1` or `.git` absent. |
 | `validate-kaola-workflow-contracts.js` | Same contractual assertions on the Codex plugin surface under `plugins/kaola-workflow/`. |
 | `validate-script-sync.js` | Byte-identical drift guard between `scripts/` (Claude Code) and `plugins/kaola-workflow/scripts/` (Codex), plus shared hook copies that must stay in sync across GitHub, GitLab, and Gitea surfaces. |
 | `validate-vendored-agents.js` | Asserts the vendored Claude Code agent prompts match the pinned upstream Everything Claude Code commit. |
