@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [3.16.2] — 2026-05-29
+
 ### Fixed
 
 - **Close low-severity review findings from cross-workspace audit** (issue #191): Six fix groups addressing labeling parity, regex robustness, workflow-state persistence, uninstall safety, and documentation completeness:
