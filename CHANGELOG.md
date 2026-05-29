@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Codex walkthrough test parity with target_unverified** (issue #176): `plugins/kaola-workflow/scripts/simulate-kaola-workflow-walkthrough.js` now asserts `target_unverified` verdict for the no-evidence OFFLINE case before seeding the roadmap and attempting successful acquisition, matching the contract introduced in issue #169.
+
 ### Added
 
 - **New classifier verdict: `target_unverified`** (issue #169): `kaola-workflow-classifier.js` now emits a typed `target_unverified` refusal when `KAOLA_WORKFLOW_OFFLINE=1` AND the target issue N has no local evidence (no `kaola-workflow/.roadmap/issue-N.md` file AND no active folder in the cwd repo). Distinct from `target_unavailable` (which signals a network failure online) and `user_target_red` (which signals overlap/risk). This verdict is routed through `claimExplicitTarget()` in `kaola-workflow-claim.js`, returning `{status: 'target_unverified', claim: 'none', ...}` with exit code 1 and no active folder created. When offline with no roadmap evidence and no active folder, startup now refuses the claim with this distinct diagnostic.
