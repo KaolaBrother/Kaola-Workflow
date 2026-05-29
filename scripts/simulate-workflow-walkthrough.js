@@ -3598,6 +3598,35 @@ function testClosureAuditTimeoutEnvInvalidFallsBack() {
   }
 }
 
+function testClosureAuditTimeoutEnvOverCapFallsBack() {
+  // Huge integer like '999999999999999999999' parses to 1e21 via parseInt, passes
+  // Number.isInteger guard (pre-fix), and causes execFileSync to throw ERR_OUT_OF_RANGE.
+  // A success-returning shim lets us discriminate: with over-cap env (no clamp),
+  // the probe throws and routes to unresolved — NOT to closed_remote.
+  // With the fix (Math.min(n, 600000)), the timeout is bounded and the probe succeeds.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ca-timeout-overcap-'));
+  const binDir = path.join(tmp, 'bin');
+  try {
+    initGitRepo(tmp);
+    plantRoadmapIssue(tmp, 941, '');
+    closureAuditShim(binDir, [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issue view')) { process.stdout.write('{\"state\":\"closed\"}\\n'); }",
+      "else if (a.includes('issue list')) { process.stdout.write('[]\\n'); }",
+      "else { process.stdout.write('{}\\n'); }"
+    ]);
+    const result = runClosureAudit([], tmp, binDir, { KAOLA_GH_REMOTE_TIMEOUT_MS: '999999999999999999999' });
+    const sources = result.drift.stale_roadmap_sources;
+    assert(
+      Array.isArray(sources) && sources.some(s => s.issue_number === 941 && s.reason === 'closed_remote'),
+      'over-cap KAOLA_GH_REMOTE_TIMEOUT_MS must be clamped and detect closed issue as closed_remote, got: ' + JSON.stringify(sources)
+    );
+    console.log('testClosureAuditTimeoutEnvOverCapFallsBack: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 function testClosureAuditExecuteDetectionTimeoutPropagates() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ca-exec-det-timeout-'));
   const binDir = path.join(tmp, 'bin');
@@ -3771,6 +3800,7 @@ async function main() {
     testClosureAuditUnresolvedClosedState();
     testClosureAuditProbeFailureUnresolved();
     testClosureAuditTimeoutEnvInvalidFallsBack();
+    testClosureAuditTimeoutEnvOverCapFallsBack();
     testClosureAuditExecuteDetectionTimeoutPropagates();
     testClosureAuditPrFolderTimeout();
     testContractValidatorOfflineSkip();

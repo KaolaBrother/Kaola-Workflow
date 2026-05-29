@@ -2243,6 +2243,33 @@ function testClosureAuditTimeoutEnvInvalidFallsBack() {
   }
 }
 
+function testClosureAuditTimeoutEnvOverCapFallsBack() {
+  // Over-cap timeout (999999999999999999999) exceeds Number.MAX_SAFE_INTEGER.
+  // Without the fix, Math.min is skipped and execFileSync receives timeout: 1e21,
+  // which throws ERR_OUT_OF_RANGE. With clamping to 600000, probe succeeds.
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-ca-timeout-overcap-')));
+  const binDir = path.join(tmp, 'bin');
+  try {
+    initGitRepo(tmp);
+    plantClosureRoadmapSource(tmp, 941);
+    closureAuditShim(binDir, [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issues view')) { process.stdout.write('{\"state\":\"closed\"}\\n'); }",
+      "else if (a.includes('issues list')) { process.stdout.write('[]\\n'); }",
+      "else { process.stdout.write('{}\\n'); }"
+    ]);
+    const result = runClosureAudit([], tmp, binDir, { KAOLA_GH_REMOTE_TIMEOUT_MS: '999999999999999999999' });
+    const sources = result.drift.stale_roadmap_sources;
+    assert(
+      Array.isArray(sources) && sources.some(s => s.issue_number === 941 && s.reason === 'closed_remote'),
+      'over-cap KAOLA_GH_REMOTE_TIMEOUT_MS must be clamped and detect closed issue as closed_remote, got: ' + JSON.stringify(sources)
+    );
+    console.log('testClosureAuditTimeoutEnvOverCapFallsBack: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 function testClosureAuditExecuteDetectionTimeoutPropagates() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-ca-exec-det-timeout-')));
   const binDir = path.join(tmp, 'bin');
@@ -2351,6 +2378,7 @@ testClosureAuditStaleLabelsTimeout();
 testClosureAuditUnresolvedClosedState();
 testClosureAuditProbeFailureUnresolved();
 testClosureAuditTimeoutEnvInvalidFallsBack();
+testClosureAuditTimeoutEnvOverCapFallsBack();
 testClosureAuditExecuteDetectionTimeoutPropagates();
 testClosureAuditPrFolderTimeout();
 

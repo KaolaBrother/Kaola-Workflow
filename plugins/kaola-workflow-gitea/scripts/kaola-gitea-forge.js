@@ -11,7 +11,7 @@ let _versionChecked = false;
 
 function remoteTimeoutMs() {
   const n = parseInt(process.env.KAOLA_GH_REMOTE_TIMEOUT_MS || '30000', 10);
-  return Number.isInteger(n) && n > 0 ? n : 30000;
+  return Number.isInteger(n) && n > 0 ? Math.min(n, 600000) : 30000;
 }
 
 function teaExec(args, opts) {
