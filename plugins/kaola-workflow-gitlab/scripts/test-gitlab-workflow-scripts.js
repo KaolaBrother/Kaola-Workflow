@@ -7,6 +7,12 @@ const os = require('os');
 const path = require('path');
 const { spawn, spawnSync } = require('child_process');
 
+// OFFLINE is captured as a module-level constant in the classifier. Remove it from the
+// environment before requiring any workflow module so that withForge stubs are reachable
+// during the classify-blocked and classify-red tests. Subprocesses that need OFFLINE set
+// do so explicitly via their own env option.
+delete process.env.KAOLA_WORKFLOW_OFFLINE;
+
 const forge = require('./kaola-gitlab-forge');
 const active = require('./kaola-gitlab-workflow-active-folders');
 const classifier = require('./kaola-gitlab-workflow-classifier');

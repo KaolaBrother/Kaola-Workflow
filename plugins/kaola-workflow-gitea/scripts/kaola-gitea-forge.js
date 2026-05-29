@@ -17,11 +17,12 @@ function remoteTimeoutMs() {
 function teaExec(args, opts) {
   if (!Array.isArray(args)) throw new Error('teaExec args must be an array');
   const options = opts || {};
-  if (OFFLINE || options.offline) return options.offlineStdout || '';
+  if (options.offline) return options.offlineStdout || '';
   // Injected runner for tests — skip version check entirely
   if (options.execFileSync) {
     return options.execFileSync('tea', args, Object.assign({ encoding: 'utf8', timeout: remoteTimeoutMs() }, options.execOptions || {})).trim();
   }
+  if (OFFLINE) return options.offlineStdout || '';
   // Env-var mock for subprocess tests (macOS shebang execution hang workaround)
   const mock = process.env.KAOLA_TEA_MOCK_SCRIPT;
   if (mock) return execFileSync(process.execPath, [mock, ...args], Object.assign({ encoding: 'utf8', timeout: remoteTimeoutMs() }, options.execOptions || {})).trim();

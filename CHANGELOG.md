@@ -2,7 +2,11 @@
 
 ## [Unreleased]
 
+## [3.16.1] — 2026-05-29
+
 ### Fixed
+
+- **Release metadata parity** (issue #186): Align README release version rows and Claude/Codex plugin manifest versions with the published `3.16.1` / `1.7.1` release surfaces so contract validation passes across GitHub, GitLab, and Gitea editions.
 
 - **Align GitLab/Gitea Codex `kaola-workflow-next` SKILL.md with GitHub router parity** (issue #174): `plugins/kaola-workflow-gitlab/skills/kaola-workflow-next/SKILL.md` and `plugins/kaola-workflow-gitea/skills/kaola-workflow-next/SKILL.md` now extract `KAOLA_VERDICT` and `KAOLA_REASONING` from startup output, print refusal diagnostics with both fields when startup returns `claim: "none"` (matching GitHub output format), include `target_unverified` in the typed-refusal enum, and use forge-specific issue-view commands (`glab issue view` / `tea issues view`) in the target-existence check with explicit offline fallback. Target-existence check Step 0 now validates the target against the active consumer repository with online `glab`/`tea` lookups or offline `.roadmap/issue-N.md`/active-folder fallback, aligning both forge editions with GitHub router parity from issue #169. Added `assertBefore` helper to both `validate-kaola-workflow-gitlab-contracts.js` and `validate-kaola-workflow-gitea-contracts.js`; 7 new contract assertions catch the parity gaps (variable rename, verdict/reasoning extraction, target_unverified handling, refusal diagnostics, target-existence validation, advisory positioning). Behavior unchanged; documentation-only alignment of the SKILL.md prose.
 

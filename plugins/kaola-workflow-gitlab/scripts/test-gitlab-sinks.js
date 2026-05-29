@@ -8,6 +8,10 @@ const path = require('path');
 const { spawnSync, execFileSync } = require('child_process');
 const claimScript = path.join(__dirname, 'kaola-gitlab-workflow-claim.js');
 
+// OFFLINE is captured by sink modules at require time. Keep in-process forge
+// stubs online; subprocess cases that exercise offline mode set their own env.
+delete process.env.KAOLA_WORKFLOW_OFFLINE;
+
 const forge = require('./kaola-gitlab-forge');
 const sinkMr = require('./kaola-gitlab-workflow-sink-mr');
 const sinkMerge = require('./kaola-gitlab-workflow-sink-merge');
