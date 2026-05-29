@@ -31,8 +31,8 @@ All forge API calls made by `ghExec`, `glabExec`, and `teaExec` subprocess wrapp
 - **Default**: 30 seconds (30000ms). Set lower in tests (e.g., 300ms) to simulate hangs
 - **Timeout behavior**: When a subprocess call times out (exceeds the configured duration), the calling code receives a timeout error. `probeIssueState` returns `{state: 'unavailable', reason: 'timeout'}`, treated as a transient failure distinct from offline mode
 - **Audit operations**: `detectStaleLabels` and `detectUnarchivedPrFolders` / `detectUnarchivedMrFolders` return the sentinel string `'skipped_timeout'` when a remote call times out (parallel to existing `'skipped_offline'` for offline mode)
-- **Audit JSON field `unresolved_closed_state`**: When a closure-audit drift check times out while determining whether an issue is closed, the issue number is added to `unresolved_closed_state` array in both `drift` and `counts` sections. This field is omitted when empty
-- **Label repair**: In `closure-audit --execute`, if a label edit times out mid-loop, the repair loop breaks immediately and sets `labels_skipped_reason: 'timeout'` on the repair record (distinct from `labels_skipped_reason: 'offline'` when `KAOLA_WORKFLOW_OFFLINE=1`)
+- **Audit JSON field `unresolved_closed_state`**: When a closure-audit drift check cannot verify whether an issue is closed (remote call times out OR fails — e.g. auth/rate-limit/network error), the issue number is added to `unresolved_closed_state` array in both `drift` and `counts` sections. This field is omitted when empty
+- **Label repair**: In `closure-audit --execute`, if a label edit times out mid-loop, the repair loop breaks immediately and sets `labels_skipped_reason: 'timeout'` on the repair record (distinct from `labels_skipped_reason: 'offline'` when `KAOLA_WORKFLOW_OFFLINE=1`). A DETECTION-phase timeout (stale-label detection, not repair) yields `labels_skipped_reason: 'detection_timeout'` (issue #184)
 - **Applies to all three forge editions**: GitHub (`gh`), GitLab (`glab`), and Gitea (`tea`)
 
 ## Sink API
@@ -91,7 +91,7 @@ The Phase 6 sink is responsible for delivering completed work to the repository 
 
 ### Timeout Control
 
-- **`KAOLA_GH_REMOTE_TIMEOUT_MS`** (default 30000) — Timeout in milliseconds for all forge API calls made by `ghExec`, `glabExec`, and `teaExec`. Controls how long to wait for GitHub, GitLab, or Gitea API responses during issue state checks, closure audits, and label operations. When a call times out, affected operations return `unavailable` or `skipped_timeout` sentinels instead of failing hard. Set lower in tests to simulate API hangs (e.g., `KAOLA_GH_REMOTE_TIMEOUT_MS=300` to timeout after 300ms). Applies to all three forge editions (GitHub, GitLab, Gitea).
+- **`KAOLA_GH_REMOTE_TIMEOUT_MS`** (default 30000) — Timeout in milliseconds for all forge API calls made by `ghExec`, `glabExec`, and `teaExec`. Controls how long to wait for GitHub, GitLab, or Gitea API responses during issue state checks, closure audits, and label operations. When a call times out, affected operations return `unavailable` or `skipped_timeout` sentinels instead of failing hard. Set lower in tests to simulate API hangs (e.g., `KAOLA_GH_REMOTE_TIMEOUT_MS=300` to timeout after 300ms). Applies to all three forge editions (GitHub, GitLab, Gitea). Non-numeric, zero, or negative values fall back to the 30000ms default (issue #184).
 
 ### Test Hooks
 
@@ -682,7 +682,7 @@ node scripts/kaola-workflow-closure-audit.js --execute
 | `stale_in_progress_labels` | Closed remote issues that still carry `workflow:in-progress`. |
 | `active_folder_for_closed_issue` | An active `kaola-workflow/{project}/` folder whose linked issue is closed. `dirty` flags uncommitted content. **Report-only.** |
 | `unarchived_pr_folders` | An active `sink: pr` folder whose PR is `MERGED`/`CLOSED` but was never archived (the watcher never ran). **Report-only.** |
-| `unresolved_closed_state` | (omitted when empty) Issue numbers for which the closed state could not be determined due to timeout. Present in both `drift` and `counts` sections when remote calls time out (issue #178). |
+| `unresolved_closed_state` | (omitted when empty) Issue numbers for which the closed state could not be determined because the remote state check timed out or failed (e.g. auth/rate-limit/network error) (issue #178, broadened in #184). Present in both `drift` and `counts` sections. |
 
 **Dry-run output** (default):
 ```json
@@ -712,7 +712,7 @@ node scripts/kaola-workflow-closure-audit.js --execute
 ```
 
 Field notes:
-- `labels_skipped_reason` is present when label removal does not complete: `"timeout"` (API call times out, issue #178), `"offline"` (KAOLA_WORKFLOW_OFFLINE=1), or other reasons. Omitted when `labels_removed` array contains all attempted removals.
+- `labels_skipped_reason` is present when label removal does not complete: `"timeout"` (repair-phase API call times out, issue #178), `"detection_timeout"` (stale-label DETECTION phase timed out, so the repair loop never ran; issue #184), `"offline"` (KAOLA_WORKFLOW_OFFLINE=1), or other reasons. Omitted when `labels_removed` array contains all attempted removals.
 
 **Safe-repair boundary.** `--execute` only ever (1) deletes stale
 `.roadmap/issue-N.md` sources, (2) regenerates `ROADMAP.md`, and (3) removes
@@ -734,8 +734,11 @@ a remote call times out, `detectStaleLabels` and `detectUnarchivedPrFolders`/
 `detectUnarchivedMrFolders` return the string `"skipped_timeout"` rather than an
 array. In `--execute`, if a label removal times out mid-loop, the repair loop
 breaks immediately and `labels_skipped_reason: "timeout"` is set on the repair
-record. `unresolved_closed_state` is populated with issue numbers whose closed
-state could not be determined due to timeout.
+record; a DETECTION-phase timeout instead yields `labels_skipped_reason:
+"detection_timeout"` (issue #184). `unresolved_closed_state` is populated with
+issue numbers whose closed state could not be determined because the remote
+check timed out or failed (e.g. auth/rate-limit/network error; broadened in
+issue #184).
 
 #### How this differs from `stale-worktree-check` / `stale-worktree-cleanup`
 

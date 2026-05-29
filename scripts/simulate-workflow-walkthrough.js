@@ -3545,6 +3545,80 @@ function testClosureAuditUnresolvedClosedState() {
   }
 }
 
+function testClosureAuditProbeFailureUnresolved() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ca-probe-fail-'));
+  const binDir = path.join(tmp, 'bin');
+  try {
+    initGitRepo(tmp);
+    plantRoadmapIssue(tmp, 940, '');
+    closureAuditShim(binDir, [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issue view')) { process.exitCode = 1; process.stdout.write('not found\\n'); }",
+      "else if (a.includes('issue list')) { process.stdout.write('[]\\n'); }",
+      "else { process.stdout.write('{}\\n'); }"
+    ]);
+    const result = runClosureAudit([], tmp, binDir);
+    const unresolved = result.drift.unresolved_closed_state;
+    assert(
+      Array.isArray(unresolved) && unresolved.includes(940),
+      'unresolved_closed_state must include 940 when issue view exits non-zero, got: ' + JSON.stringify(unresolved)
+    );
+    assert(result.counts.unresolved_closed_state === 1, 'counts.unresolved_closed_state must be 1, got: ' + result.counts.unresolved_closed_state);
+    console.log('testClosureAuditProbeFailureUnresolved: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testClosureAuditTimeoutEnvInvalidFallsBack() {
+  // NaN timeout from invalid env causes execFileSync to throw BEFORE the shim can answer.
+  // A success-returning shim lets us discriminate: with invalid env (no fallback),
+  // the probe would throw and route to unresolved — NOT to closed_remote.
+  // With fix #2 (fallback=30000), the probe succeeds and the issue routes to closed_remote.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ca-timeout-invalid-'));
+  const binDir = path.join(tmp, 'bin');
+  try {
+    initGitRepo(tmp);
+    plantRoadmapIssue(tmp, 941, '');
+    closureAuditShim(binDir, [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issue view')) { process.stdout.write('{\"state\":\"closed\"}\\n'); }",
+      "else if (a.includes('issue list')) { process.stdout.write('[]\\n'); }",
+      "else { process.stdout.write('{}\\n'); }"
+    ]);
+    const result = runClosureAudit([], tmp, binDir, { KAOLA_GH_REMOTE_TIMEOUT_MS: 'not-a-number' });
+    const sources = result.drift.stale_roadmap_sources;
+    assert(
+      Array.isArray(sources) && sources.some(s => s.issue_number === 941 && s.reason === 'closed_remote'),
+      'invalid KAOLA_GH_REMOTE_TIMEOUT_MS must fall back to 30000 and detect closed issue as closed_remote, got: ' + JSON.stringify(sources)
+    );
+    console.log('testClosureAuditTimeoutEnvInvalidFallsBack: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testClosureAuditExecuteDetectionTimeoutPropagates() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ca-exec-det-timeout-'));
+  const binDir = path.join(tmp, 'bin');
+  try {
+    initGitRepo(tmp);
+    closureAuditShim(binDir, ['setInterval(() => {}, 1 << 30);']);
+    const result = runClosureAudit(['--execute'], tmp, binDir, { KAOLA_GH_REMOTE_TIMEOUT_MS: '300' });
+    assert(
+      result.repaired.labels_skipped_reason === 'detection_timeout',
+      '--execute with detection timeout must set labels_skipped_reason="detection_timeout", got: ' + JSON.stringify(result.repaired.labels_skipped_reason)
+    );
+    assert(
+      Array.isArray(result.repaired.labels_removed) && result.repaired.labels_removed.length === 0,
+      'labels_removed must be empty when detection timed out, got: ' + JSON.stringify(result.repaired.labels_removed)
+    );
+    console.log('testClosureAuditExecuteDetectionTimeoutPropagates: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 function testClosureAuditPrFolderTimeout() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ca-pr-folder-timeout-'));
   const binDir = path.join(tmp, 'bin');
@@ -3695,6 +3769,9 @@ async function main() {
     testClosureAuditDryRunNeverCallsRemoveLabel();
     testClosureAuditStaleLabelsTimeout();
     testClosureAuditUnresolvedClosedState();
+    testClosureAuditProbeFailureUnresolved();
+    testClosureAuditTimeoutEnvInvalidFallsBack();
+    testClosureAuditExecuteDetectionTimeoutPropagates();
     testClosureAuditPrFolderTimeout();
     testContractValidatorOfflineSkip();
     testContractValidatorMissingTag();

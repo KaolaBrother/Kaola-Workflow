@@ -7,14 +7,19 @@ const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
 const CLAIM_LABEL = 'workflow:in-progress';
 const QUEUED_LABEL = 'workflow:queued';
 
+function remoteTimeoutMs() {
+  const n = parseInt(process.env.KAOLA_GH_REMOTE_TIMEOUT_MS || '30000', 10);
+  return Number.isInteger(n) && n > 0 ? n : 30000;
+}
+
 function glabExec(args, opts) {
   if (!Array.isArray(args)) throw new Error('glabExec args must be an array');
   const options = opts || {};
   if (OFFLINE || options.offline) return options.offlineStdout || '';
   if (options.execFileSync) return options.execFileSync('glab', args, Object.assign({ encoding: 'utf8' }, options.execOptions || {})).trim();
   const mock = process.env.KAOLA_GLAB_MOCK_SCRIPT;
-  if (mock) return execFileSync(process.execPath, [mock, ...args], Object.assign({ encoding: 'utf8', timeout: parseInt(process.env.KAOLA_GH_REMOTE_TIMEOUT_MS || '30000', 10) }, options.execOptions || {})).trim();
-  return execFileSync('glab', args, Object.assign({ encoding: 'utf8', timeout: parseInt(process.env.KAOLA_GH_REMOTE_TIMEOUT_MS || '30000', 10) }, options.execOptions || {})).trim();
+  if (mock) return execFileSync(process.execPath, [mock, ...args], Object.assign({ encoding: 'utf8', timeout: remoteTimeoutMs() }, options.execOptions || {})).trim();
+  return execFileSync('glab', args, Object.assign({ encoding: 'utf8', timeout: remoteTimeoutMs() }, options.execOptions || {})).trim();
 }
 
 function parseJson(raw, fallback) {

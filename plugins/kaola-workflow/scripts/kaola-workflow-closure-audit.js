@@ -39,7 +39,10 @@ const {
 
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
 const CLAIM_LABEL = 'workflow:in-progress';
-const REMOTE_TIMEOUT_MS = parseInt(process.env.KAOLA_GH_REMOTE_TIMEOUT_MS || '30000', 10);
+const REMOTE_TIMEOUT_MS = (() => {
+  const n = parseInt(process.env.KAOLA_GH_REMOTE_TIMEOUT_MS || '30000', 10);
+  return Number.isInteger(n) && n > 0 ? n : 30000;
+})();
 
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
 
@@ -71,7 +74,7 @@ function collectClosedSet(candidateNumbers) {
     seen.add(n);
     const probe = probeIssueState(n);
     if (probe.state === 'closed') closed.add(n);
-    else if (probe.reason === 'timeout') unresolved.push(n);
+    else if (probe.state === 'unavailable') unresolved.push(n);
   }
   return { closed, unresolved };
 }
@@ -258,7 +261,9 @@ function executeRepairs(root, report) {
   const labelsFailed = [];
   let labelsSkippedReason = null;
   const labels = report.drift.stale_in_progress_labels;
-  if (Array.isArray(labels)) {
+  if (labels === 'skipped_timeout') {
+    labelsSkippedReason = 'detection_timeout';
+  } else if (Array.isArray(labels)) {
     for (const it of labels) {
       try { ghExec(['issue', 'edit', String(it.number), '--remove-label', CLAIM_LABEL]); labelsRemoved.push(it.number); }
       catch (err) {

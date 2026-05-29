@@ -6,7 +6,10 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
-const REMOTE_TIMEOUT_MS = parseInt(process.env.KAOLA_GH_REMOTE_TIMEOUT_MS || '30000', 10);
+const REMOTE_TIMEOUT_MS = (() => {
+  const n = parseInt(process.env.KAOLA_GH_REMOTE_TIMEOUT_MS || '30000', 10);
+  return Number.isInteger(n) && n > 0 ? n : 30000;
+})();
 
 function isSafeName(name) {
   return typeof name === 'string' && name.length > 0 &&

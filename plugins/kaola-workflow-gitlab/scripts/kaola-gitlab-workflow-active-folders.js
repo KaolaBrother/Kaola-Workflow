@@ -6,6 +6,8 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const forge = require('./kaola-gitlab-forge');
 
+const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
+
 function isSafeName(name) {
   return typeof name === 'string' && name.length > 0 &&
     !name.includes('/') && !name.includes('\\') &&
@@ -47,7 +49,7 @@ function issueIsClosed(issueIid) {
 }
 
 function probeIssueState(issueIid) {
-  if (issueIid == null) return { state: 'open', reason: 'offline-or-null' };
+  if (OFFLINE || issueIid == null) return { state: 'open', reason: 'offline-or-null' };
   try {
     const issue = forge.viewIssue(issueIid);
     return { state: issue.state === 'closed' ? 'closed' : 'open', reason: 'ok' };

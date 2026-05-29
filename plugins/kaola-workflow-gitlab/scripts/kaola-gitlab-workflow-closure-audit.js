@@ -65,7 +65,7 @@ function collectClosedSet(candidateNumbers) {
     seen.add(n);
     const probe = probeIssueState(n);
     if (probe.state === 'closed') closed.add(n);
-    else if (probe.reason === 'timeout') unresolved.push(n);
+    else if (probe.state === 'unavailable') unresolved.push(n);
   }
   return { closed, unresolved };
 }
@@ -263,7 +263,9 @@ function executeRepairs(root, report) {
   const labelsFailed = [];
   let labelsSkippedReason = null;
   const labels = report.drift.stale_in_progress_labels;
-  if (Array.isArray(labels)) {
+  if (labels === 'skipped_timeout') {
+    labelsSkippedReason = 'detection_timeout';
+  } else if (Array.isArray(labels)) {
     for (const it of labels) {
       try { forge.updateIssue(it.number, { unlabels: [CLAIM_LABEL] }); labelsRemoved.push(it.number); }
       catch (err) {
