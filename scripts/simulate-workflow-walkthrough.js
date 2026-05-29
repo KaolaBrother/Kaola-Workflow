@@ -3568,6 +3568,51 @@ function testClosureAuditPrFolderTimeout() {
   }
 }
 
+function testContractValidatorOfflineSkip() {
+  const contractsScript = path.join(__dirname, 'validate-workflow-contracts.js');
+  const result = spawnSync(process.execPath, [contractsScript], {
+    encoding: 'utf8',
+    env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }
+  });
+  assert(
+    result.status === 0,
+    'contracts script must exit 0 when KAOLA_WORKFLOW_OFFLINE=1, got: ' + result.status + '\nstderr: ' + result.stderr
+  );
+  console.log('testContractValidatorOfflineSkip: PASSED');
+}
+
+function testContractValidatorMissingTag() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-contracts-missing-tag-'));
+  try {
+    const binDir = path.join(tmp, 'bin');
+    fs.mkdirSync(binDir, { recursive: true });
+    // Mock git as a real executable shell script that always exits 1 (tag not found)
+    const gitMock = path.join(binDir, 'git');
+    fs.writeFileSync(gitMock, '#!/bin/sh\nexit 1\n');
+    fs.chmodSync(gitMock, 0o755);
+    const contractsScript = path.join(__dirname, 'validate-workflow-contracts.js');
+    const result = spawnSync(process.execPath, [contractsScript], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        KAOLA_WORKFLOW_OFFLINE: '0',
+        PATH: binDir + path.delimiter + (process.env.PATH || '')
+      }
+    });
+    assert(
+      result.status !== 0,
+      'contracts script must exit non-zero when git tag is absent, got: ' + result.status
+    );
+    assert(
+      (result.stderr || '').includes('kaola-workflow--v'),
+      'error message must include "kaola-workflow--v", got: ' + JSON.stringify(result.stderr)
+    );
+    console.log('testContractValidatorMissingTag: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 async function main() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-active-folders-'));
   try {
@@ -3651,6 +3696,8 @@ async function main() {
     testClosureAuditStaleLabelsTimeout();
     testClosureAuditUnresolvedClosedState();
     testClosureAuditPrFolderTimeout();
+    testContractValidatorOfflineSkip();
+    testContractValidatorMissingTag();
     console.log('Workflow walkthrough simulation passed');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });

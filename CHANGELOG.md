@@ -22,6 +22,8 @@
 
 ### Changed
 
+- **Tag-existence contract check** (issue #177): `validate-workflow-contracts.js` now asserts that a local git tag `kaola-workflow--v<version>` exists matching `package.json` version; check is skipped when `KAOLA_WORKFLOW_OFFLINE=1` or outside a git repository
+
 - **Variable rename: `PICK_NEXT_PROJECT` → `KAOLA_PROJECT`** (issue #172): `plugins/kaola-workflow/skills/kaola-workflow-next/SKILL.md` now uses consistent `KAOLA_PROJECT` naming convention across both Startup and Git Freshness Block Recovery sections (lines 50, 120, 152). Companion validator assertions in `scripts/validate-kaola-workflow-contracts.js` updated to enforce the new name. This aligns the Codex-edition SKILL.md with the `KAOLA_*` namespace pattern used in other extracted variables (e.g., `KAOLA_CLAIM`, `KAOLA_VERDICT`, `KAOLA_WORKTREE_PATH`). No behavior change; local variable rename only. GitLab and Gitea editions remain at `PICK_NEXT_PROJECT` (tracked separately in issues #170 and #171).
 
 - **`commands/workflow-next.md` and `plugins/kaola-workflow/skills/kaola-workflow-next/SKILL.md`** (issue #169): Step 0b (Startup Transaction) now extracts `KAOLA_VERDICT` and `KAOLA_REASONING` from startup output and passes them through to Step 0 target-existence check. New target-existence check validates the target issue exists in the active consumer repository (cwd's git context), not in the Kaola-Workflow package repo. Online: `gh issue view N` against cwd context; if fetch fails, stop and ask (no fallback). Offline (`KAOLA_WORKFLOW_OFFLINE=1`): require local `.roadmap/issue-N.md` OR active folder matching the target; if neither, stop and ask. Required Output block now lists `target_unverified` as a possible classifier verdict.
