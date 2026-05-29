@@ -1959,6 +1959,40 @@ function testClosureAuditDedupRoadmapAndArchive() {
   }
 }
 
+function testClosureAuditArchiveOnlyNotProbed() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-ca-arch-only-')));
+  const binDir = path.join(tmp, 'bin');
+  const viewCountFile = path.join(binDir, 'view-count');
+  try {
+    initGitRepo(tmp);
+    plantClosureRoadmapSource(tmp, 920);
+    // Archive-only entry for issue 950 — no roadmap source, no active folder
+    const archiveDir = path.join(tmp, 'kaola-workflow', 'archive', 'issue-950');
+    fs.mkdirSync(archiveDir, { recursive: true });
+    fs.writeFileSync(path.join(archiveDir, 'workflow-state.md'),
+      'status: closed\nstep: complete\nissue_iid: 950\n');
+    closureAuditShim(binDir, [
+      "const fs = require('fs');",
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issues view')) {",
+      "  const f = " + JSON.stringify(viewCountFile) + ";",
+      "  const prev = fs.existsSync(f) ? parseInt(fs.readFileSync(f, 'utf8'), 10) : 0;",
+      "  fs.writeFileSync(f, String(prev + 1));",
+      "  process.stdout.write('{\"state\":\"open\"}\\n');",
+      "} else if (a.includes('issues list')) { process.stdout.write('[]\\n'); }",
+      "else { process.stdout.write('{}\\n'); }"
+    ]);
+    runClosureAudit([], tmp, binDir);
+    const viewCount = fs.existsSync(viewCountFile)
+      ? parseInt(fs.readFileSync(viewCountFile, 'utf8'), 10) : 0;
+    assert(viewCount === 1,
+      'archive-only 950 must not be probed; expected exactly 1 issues-view (roadmap 920 only), got ' + viewCount);
+    console.log('testClosureAuditArchiveOnlyNotProbed: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 function testClosureAuditMirrorListsClosedIssues() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-ca-mirror-')));
   const binDir = path.join(tmp, 'bin');
@@ -2367,6 +2401,7 @@ testClosureAuditOfflineRemoteClassesSkipped();
 testClosureAuditClosedRemoteRoadmapSource();
 testClosureAuditArchiveClosedDrift();
 testClosureAuditDedupRoadmapAndArchive();
+testClosureAuditArchiveOnlyNotProbed();
 testClosureAuditMirrorListsClosedIssues();
 testClosureAuditStaleInProgressLabels();
 testClosureAuditActiveFolderForClosedIssueReportsDirty();

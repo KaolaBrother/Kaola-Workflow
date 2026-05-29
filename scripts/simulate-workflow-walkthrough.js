@@ -3361,6 +3361,44 @@ function testClosureAuditDedupRoadmapAndArchive() {
   }
 }
 
+function testClosureAuditArchiveOnlyNotProbed() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ca-archive-only-probe-'));
+  const binDir = path.join(tmp, 'bin');
+  try {
+    initGitRepo(tmp);
+    // 920: roadmap source — must be probed (one gh issue view call expected)
+    plantRoadmapIssue(tmp, 920, '');
+    // 950: archive-only — NO .roadmap/issue-950.md, NO active folder — must NOT be probed
+    const archiveDir = path.join(tmp, 'kaola-workflow', 'archive', 'issue-950');
+    fs.mkdirSync(archiveDir, { recursive: true });
+    fs.writeFileSync(path.join(archiveDir, 'workflow-state.md'),
+      'status: closed\nstep: complete\nissue_number: 950\n');
+    // Counting shim: increments a file counter on each 'gh issue view' call
+    const viewCountFile = path.join(binDir, 'view-count');
+    closureAuditShim(binDir, [
+      "const fs = require('fs');",
+      "const cf = " + JSON.stringify(viewCountFile) + ";",
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issue view')) {",
+      "  let n = 0; try { n = parseInt(fs.readFileSync(cf, 'utf8'), 10) || 0; } catch (_) {}",
+      "  fs.writeFileSync(cf, String(n + 1));",
+      "  process.stdout.write('{\"state\":\"open\"}\\n');",
+      "} else if (a.includes('issue list')) { process.stdout.write('[]\\n'); }",
+      "else { process.stdout.write('{}\\n'); }"
+    ]);
+    const result = runClosureAudit([], tmp, binDir);
+    const viewCount = fs.existsSync(viewCountFile)
+      ? parseInt(fs.readFileSync(viewCountFile, 'utf8'), 10) : 0;
+    assert(viewCount === 1,
+      'archive-only 950 must not be probed; expected exactly 1 issue-view (roadmap 920 only), got ' + viewCount);
+    assert(!JSON.stringify(result.drift).includes('950'),
+      'issue 950 must not appear in any drift field, got: ' + JSON.stringify(result.drift));
+    console.log('testClosureAuditArchiveOnlyNotProbed: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 function testClosureAuditMirrorListsClosedIssues() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ca-mirror-'));
   const binDir = path.join(tmp, 'bin');
@@ -3842,6 +3880,7 @@ async function main() {
     testClosureAuditClosedRemoteRoadmapSource();
     testClosureAuditArchiveClosedDrift();
     testClosureAuditDedupRoadmapAndArchive();
+    testClosureAuditArchiveOnlyNotProbed();
     testClosureAuditMirrorListsClosedIssues();
     testClosureAuditStaleInProgressLabels();
     testClosureAuditActiveFolderForClosedIssueReportsDirty();

@@ -211,7 +211,6 @@ function buildAuditReport(root) {
   const archiveClosed = archiveClosedIssues(root);
 
   const candidates = srcFiles.map(s => s.issue_number)
-    .concat(Array.from(archiveClosed))
     .concat(folders.map(f => f.issue_number).filter(n => n != null));
   const { closed: closedSet, unresolved } = collectClosedSet(candidates);
 

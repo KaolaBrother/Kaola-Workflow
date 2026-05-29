@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Closure-audit online mode hang on large archive sets** (issue #192): `buildAuditReport()` was including all archived-closed issue numbers in the probe candidates passed to `collectClosedSet()`, causing one serial `gh issue view` / `glab issue view` / `tea issues view` call per archived issue (111 calls, 30s timeout each = worst-case 55-minute hang). Archive-only candidates (no surviving roadmap source, no active folder) had their probe results discarded by every detector — the remote probe was pure waste. Fixed by removing archived-closed issue numbers from the `collectClosedSet` input while keeping the `archiveClosed` set computed and passed to `detectStaleRoadmapSources` unchanged. Online audits on repos with large archive histories now complete in bounded time. Regression test (`testClosureAuditArchiveOnlyNotProbed`) added to GitHub, GitLab, and Gitea editions; asserts exactly 1 remote probe for 1 roadmap-source candidate regardless of archive size. GitHub, GitLab, and Gitea editions aligned.
+
 ## [3.16.3] — 2026-05-29
 
 ### Fixed
