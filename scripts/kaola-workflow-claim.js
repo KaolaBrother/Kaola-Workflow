@@ -282,6 +282,7 @@ function writeState(root, data) {
     'phase: ' + (isFast ? 'fast' : (data.phase || 1)),
     'phase_name: ' + (isFast ? 'Fast' : (data.phase_name || 'Research')),
     'workflow_path: ' + workflowPath,
+    'runtime: ' + (data.runtime || 'claude'),
     'step: ' + (data.step || 'start'),
     'next_command: ' + (data.next_command || (isFast ? '/kaola-workflow-fast ' + data.project : '/kaola-workflow-phase1 ' + data.project)),
     'next_skill: ' + (data.next_skill || (isFast ? 'kaola-workflow-fast ' + data.project : 'kaola-workflow-research ' + data.project)),
@@ -419,6 +420,7 @@ function claimProject(root, args) {
     sink: args.sink || process.env.KAOLA_SINK || 'merge',
     worktree_path: worktreePath,
     workflow_path: args.workflowPath || process.env.KAOLA_PATH || 'full',
+    runtime: args.runtime || 'claude',
     status: 'active'
   });
   postAdvisoryClaim(issueNumber, project);

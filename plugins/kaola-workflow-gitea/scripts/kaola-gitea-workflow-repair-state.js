@@ -48,7 +48,7 @@ function readFile(file) {
 
 function field(content, name) {
   const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const match = content.match(new RegExp('^' + escaped + ':\\s*(.+)$', 'm'));
+  const match = content.match(new RegExp('^' + escaped + ':[ \\t]*(.+)$', 'm'));
   return match ? match[1].trim() : '';
 }
 

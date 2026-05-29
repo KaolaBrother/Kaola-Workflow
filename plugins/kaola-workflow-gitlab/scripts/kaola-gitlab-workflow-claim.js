@@ -238,6 +238,7 @@ function writeState(root, data) {
     'phase: ' + (isFast ? 'fast' : (data.phase || 1)),
     'phase_name: ' + (isFast ? 'Fast' : (data.phase_name || 'Research')),
     'workflow_path: ' + workflowPath,
+    'runtime: ' + (data.runtime || 'claude'),
     'step: ' + (data.step || 'start'),
     'next_command: ' + (data.next_command || (isFast ? '/kaola-workflow-fast ' + data.project : '/kaola-workflow-phase1 ' + data.project)),
     'next_skill: ' + (data.next_skill || (isFast ? 'kaola-workflow-fast ' + data.project : 'kaola-workflow-research ' + data.project)),
@@ -388,6 +389,7 @@ function claimProject(root, args) {
     sink: args.sink || process.env.KAOLA_SINK || 'merge',
     worktree_path: worktreePath,
     workflow_path: args.workflowPath || process.env.KAOLA_PATH || 'full',
+    runtime: args.runtime || 'claude',
     status: 'active',
     project_id: projectInfo.project_id,
     path_with_namespace: projectInfo.path_with_namespace,
@@ -1047,9 +1049,31 @@ function cmdSinkFallback() {
   output({ updated: true, project: args.project, sink: 'mr', reason });
 }
 
+function cmdAuditLabels() {
+  if (OFFLINE) { output({ stale: [], offline: true }); return; }
+  const stale = forge.listIssues({ state: 'closed', labels: [CLAIM_LABEL] })
+    .map(it => ({ number: it.issue_iid, title: it.title, url: it.web_url }));
+  output({ stale, count: stale.length });
+}
+
+function cmdRepairLabels() {
+  const args = parseArgs(process.argv.slice(3));
+  if (OFFLINE) { output({ dry_run: false, offline: true, removed: [], failed: [] }); return; }
+  const stale = forge.listIssues({ state: 'closed', labels: [CLAIM_LABEL] })
+    .map(it => ({ number: it.issue_iid, title: it.title, url: it.web_url }));
+  const dryRun = !args.execute;
+  if (dryRun) { output({ dry_run: true, would_remove: stale }); return; }
+  const removed = [], failed = [];
+  for (const it of stale) {
+    try { forge.updateIssue(it.number, { unlabels: [CLAIM_LABEL] }); removed.push(it.number); }
+    catch (_) { failed.push(it.number); }
+  }
+  output({ dry_run: false, removed, failed });
+}
+
 function main() {
   const sub = process.argv[2];
-  assert(sub, 'usage: kaola-gitlab-workflow-claim.js <claim|release|status|patch-branch|bootstrap|startup|finalize|pick-next|resume|worktree-status|worktree-finalize|sink-fallback|watch-mr|stale-worktree-check|stale-worktree-cleanup>');
+  assert(sub, 'usage: kaola-gitlab-workflow-claim.js <claim|release|status|patch-branch|bootstrap|startup|finalize|pick-next|resume|worktree-status|worktree-finalize|sink-fallback|watch-mr|stale-worktree-check|stale-worktree-cleanup|audit-labels|repair-labels>');
   if (sub === 'claim') return cmdClaim();
   if (sub === 'release' || sub === 'discard') return cmdRelease();
   if (sub === 'status') return cmdStatus();
@@ -1064,6 +1088,8 @@ function main() {
   if (sub === 'sink-fallback') return cmdSinkFallback();
   if (sub === 'stale-worktree-check') return cmdStaleWorktreeCheck();
   if (sub === 'stale-worktree-cleanup') return cmdStaleWorktreeCleanup();
+  if (sub === 'audit-labels') return cmdAuditLabels();
+  if (sub === 'repair-labels') return cmdRepairLabels();
   throw new Error('unknown subcommand: ' + sub);
 }
 
@@ -1078,6 +1104,8 @@ module.exports = {
   checkClosureInvariants,
   claimExplicitTarget,
   claimProject,
+  cmdAuditLabels,
+  cmdRepairLabels,
   collectStale,
   cmdStaleWorktreeCleanup,
   getCoordRoot,

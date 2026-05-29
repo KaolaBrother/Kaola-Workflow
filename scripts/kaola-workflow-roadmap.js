@@ -171,7 +171,7 @@ function parseRoadmapTable(text) {
   const m = text.match(/## Active Work\n[\s\S]*?(?=\n## |\n$|$)/);
   if (!m) return [];
   const rows = [];
-  const re = /^\| #(\d+) \| ([^|]+?) \| ([^|]+?) \| ([^|]+?) \| ([^|]+?) \|$/gm;
+  const re = /^\| #(\d+) \| ((?:[^|\\]|\\.)+?) \| ((?:[^|\\]|\\.)+?) \| ((?:[^|\\]|\\.)+?) \| ((?:[^|\\]|\\.)+?) \|$/gm;
   let match;
   while ((match = re.exec(m[0])) !== null) {
     rows.push({

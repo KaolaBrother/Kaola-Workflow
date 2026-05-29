@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-FORGE=github
+FORGE=""
 AGENTS_DIR="$HOME/.claude/agents"
 AGENT_MANIFEST_FILE="$AGENTS_DIR/.kaola-workflow-agent-manifest"
 MANAGED_AGENT_MARKER="kaola-workflow-managed-agent: true"
@@ -37,6 +37,11 @@ while [[ "$#" -gt 0 ]]; do
       ;;
   esac
 done
+
+# Bare uninstall with no --forge removes every installed edition.
+if [[ -z "$FORGE" ]]; then
+  FORGE=all
+fi
 
 case "$FORGE" in
   github|gitlab|gitea|all) ;;

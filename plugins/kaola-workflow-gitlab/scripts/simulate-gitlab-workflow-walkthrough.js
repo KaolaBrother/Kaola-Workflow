@@ -81,7 +81,77 @@ function testFallbackGuardsAfterArchive() {
   }
 }
 
+function testAuditAndRepairLabels() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-audit-labels-'));
+  const mockScript = path.join(tmp, 'glab-mock.js');
+  const marker = path.join(tmp, 'label-removed.marker');
+
+  try {
+    // Mock script: handles glab issue list and glab issue update (unlabel)
+    fs.writeFileSync(mockScript, [
+      "'use strict';",
+      "const fs = require('fs');",
+      "const args = process.argv.slice(2);",
+      "const joined = args.join(' ');",
+      "if (joined.includes('issue update') && joined.includes('--unlabel')) {",
+      "  fs.writeFileSync(" + JSON.stringify(marker) + ", 'x');",
+      "  process.stdout.write('{}\\n');",
+      "} else if (joined.includes('issue list')) {",
+      "  process.stdout.write('[{\"iid\":99,\"title\":\"stale\",\"web_url\":\"http://x\",\"state\":\"closed\",\"labels\":[\"workflow:in-progress\"]}]\\n');",
+      "} else {",
+      "  process.stdout.write('{}\\n');",
+      "}",
+      ""
+    ].join('\n'));
+
+    // Sub-case A: audit-labels — lists stale issues without removing
+    {
+      const r = spawnSync(process.execPath, [claimScript, 'audit-labels'], {
+        encoding: 'utf8',
+        env: Object.assign({}, process.env, { KAOLA_GLAB_MOCK_SCRIPT: mockScript })
+      });
+      assert.strictEqual(r.status, 0, 'audit-labels must exit 0, got: ' + r.status + ' stderr: ' + r.stderr);
+      const result = JSON.parse(r.stdout);
+      assert.strictEqual(result.stale.length, 1, 'audit-labels must return stale.length===1, got: ' + JSON.stringify(result.stale));
+      assert(!fs.existsSync(marker), 'audit-labels must NOT write label-removed marker');
+    }
+
+    // Sub-case B: repair-labels without --execute — dry run
+    {
+      const r = spawnSync(process.execPath, [claimScript, 'repair-labels'], {
+        encoding: 'utf8',
+        env: Object.assign({}, process.env, { KAOLA_GLAB_MOCK_SCRIPT: mockScript })
+      });
+      assert.strictEqual(r.status, 0, 'repair-labels dry-run must exit 0, got: ' + r.status + ' stderr: ' + r.stderr);
+      const result = JSON.parse(r.stdout);
+      assert.strictEqual(result.dry_run, true, 'repair-labels without --execute must return dry_run:true, got: ' + result.dry_run);
+      assert(Array.isArray(result.would_remove) && result.would_remove.length === 1,
+        'repair-labels dry-run must return would_remove with 1 entry, got: ' + JSON.stringify(result.would_remove));
+      assert(!fs.existsSync(marker), 'repair-labels dry-run must NOT write label-removed marker');
+    }
+
+    // Sub-case C: repair-labels --execute — removes the label
+    {
+      const r = spawnSync(process.execPath, [claimScript, 'repair-labels', '--execute'], {
+        encoding: 'utf8',
+        env: Object.assign({}, process.env, { KAOLA_GLAB_MOCK_SCRIPT: mockScript })
+      });
+      assert.strictEqual(r.status, 0, 'repair-labels --execute must exit 0, got: ' + r.status + ' stderr: ' + r.stderr);
+      const result = JSON.parse(r.stdout);
+      assert.strictEqual(result.dry_run, false, 'repair-labels --execute must return dry_run:false, got: ' + result.dry_run);
+      assert(Array.isArray(result.removed) && result.removed.length === 1,
+        'repair-labels --execute must return removed with 1 entry, got: ' + JSON.stringify(result.removed));
+      assert(fs.existsSync(marker), 'repair-labels --execute must write label-removed marker');
+    }
+
+    console.log('testAuditAndRepairLabels: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 testFallbackGuardsAfterArchive();
+testAuditAndRepairLabels();
 
 run('test-gitlab-forge-helpers.js');
 run('test-gitlab-workflow-scripts.js');

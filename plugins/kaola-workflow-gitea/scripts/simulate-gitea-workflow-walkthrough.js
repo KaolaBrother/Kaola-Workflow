@@ -83,6 +83,164 @@ function testFallbackGuardsAfterArchive() {
 
 testFallbackGuardsAfterArchive();
 
+function _initGitRepo(root) {
+  let r = spawnSync('git', ['init'], { cwd: root, encoding: 'utf8' });
+  assert.strictEqual(r.status, 0, r.stderr);
+  spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: root, encoding: 'utf8' });
+  spawnSync('git', ['config', 'user.name', 'Test User'], { cwd: root, encoding: 'utf8' });
+  fs.writeFileSync(path.join(root, 'README.md'), '# fixture\n');
+  r = spawnSync('git', ['add', 'README.md'], { cwd: root, encoding: 'utf8' });
+  assert.strictEqual(r.status, 0, r.stderr);
+  r = spawnSync('git', ['commit', '-m', 'init'], { cwd: root, encoding: 'utf8' });
+  assert.strictEqual(r.status, 0, r.stderr);
+}
+
+function _writeShimFiles(shimPath, jsLines) {
+  fs.writeFileSync(shimPath + '.js', jsLines.join('\n'));
+}
+
+function _teaMockEnv(binDir) {
+  const jsPath = path.join(binDir, 'tea.js');
+  return fs.existsSync(jsPath) ? { KAOLA_TEA_MOCK_SCRIPT: jsPath } : {};
+}
+
+function _runClaimOnline(args, cwd, binDir) {
+  const result = spawnSync(process.execPath, [claimScript, ...args], {
+    cwd, encoding: 'utf8', timeout: 60000,
+    env: {
+      ...process.env,
+      KAOLA_WORKFLOW_OFFLINE: '0',
+      ..._teaMockEnv(binDir),
+      PATH: binDir + path.delimiter + path.dirname(process.execPath) + path.delimiter + (process.env.PATH || '')
+    }
+  });
+  assert(!result.signal, 'online claim killed: ' + result.signal + '\n' + result.stderr);
+  assert.strictEqual(result.status, 0, result.stderr || result.stdout);
+  return JSON.parse(result.stdout.trim());
+}
+
+function testAuditAndRepairLabels() {
+  // (a) audit-labels: lists stale issues without removing
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-audit-labels-'));
+    const binDir = path.join(tmp, 'bin');
+    const marker = path.join(tmp, 'label-removed.marker');
+    try {
+      _initGitRepo(tmp);
+      fs.mkdirSync(binDir, { recursive: true });
+      _writeShimFiles(path.join(binDir, 'tea'), [
+        "const fs = require('fs');",
+        "const a = process.argv.slice(2).join(' ');",
+        "if (a.includes('issues edit') && a.includes('--remove-labels')) {",
+        "  fs.writeFileSync(" + JSON.stringify(marker) + ", 'x');",
+        "  process.stdout.write('{}\\n');",
+        "} else if (a.includes('issues list')) {",
+        "  process.stdout.write('[{\"number\":99,\"iid\":99,\"title\":\"stale\",\"web_url\":\"http://x\",\"url\":\"http://x\"}]\\n');",
+        "} else {",
+        "  process.stdout.write('{}\\n');",
+        "}"
+      ]);
+      const result = _runClaimOnline(['audit-labels'], tmp, binDir);
+      assert(
+        Array.isArray(result.stale) && result.stale.length === 1,
+        'audit-labels must return stale array of length 1, got: ' + JSON.stringify(result.stale)
+      );
+      assert(
+        result.count === 1,
+        'audit-labels must return count:1, got: ' + result.count
+      );
+      assert(
+        !fs.existsSync(marker),
+        'audit-labels must NOT call --remove-labels (marker must not exist)'
+      );
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+
+  // (b) repair-labels dry-run (no --execute): reports would_remove without removing
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-repair-labels-dry-'));
+    const binDir = path.join(tmp, 'bin');
+    const marker = path.join(tmp, 'label-removed.marker');
+    try {
+      _initGitRepo(tmp);
+      fs.mkdirSync(binDir, { recursive: true });
+      _writeShimFiles(path.join(binDir, 'tea'), [
+        "const fs = require('fs');",
+        "const a = process.argv.slice(2).join(' ');",
+        "if (a.includes('issues edit') && a.includes('--remove-labels')) {",
+        "  fs.writeFileSync(" + JSON.stringify(marker) + ", 'x');",
+        "  process.stdout.write('{}\\n');",
+        "} else if (a.includes('issues list')) {",
+        "  process.stdout.write('[{\"number\":99,\"iid\":99,\"title\":\"stale\",\"web_url\":\"http://x\",\"url\":\"http://x\"}]\\n');",
+        "} else {",
+        "  process.stdout.write('{}\\n');",
+        "}"
+      ]);
+      const result = _runClaimOnline(['repair-labels'], tmp, binDir);
+      assert(
+        result.dry_run === true,
+        'repair-labels without --execute must return dry_run:true, got: ' + result.dry_run
+      );
+      assert(
+        Array.isArray(result.would_remove) && result.would_remove.length === 1,
+        'repair-labels dry-run must return would_remove with 1 entry, got: ' + JSON.stringify(result.would_remove)
+      );
+      assert(
+        !fs.existsSync(marker),
+        'repair-labels dry-run must NOT call --remove-labels (marker must not exist)'
+      );
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+
+  // (c) repair-labels --execute: removes the label and returns removed list
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-repair-labels-exec-'));
+    const binDir = path.join(tmp, 'bin');
+    const marker = path.join(tmp, 'label-removed.marker');
+    try {
+      _initGitRepo(tmp);
+      fs.mkdirSync(binDir, { recursive: true });
+      _writeShimFiles(path.join(binDir, 'tea'), [
+        "const fs = require('fs');",
+        "const a = process.argv.slice(2).join(' ');",
+        "if (a.includes('issues edit') && a.includes('--remove-labels')) {",
+        "  fs.writeFileSync(" + JSON.stringify(marker) + ", 'x');",
+        "  process.stdout.write('{}\\n');",
+        "} else if (a.includes('issues list')) {",
+        "  process.stdout.write('[{\"number\":99,\"iid\":99,\"title\":\"stale\",\"web_url\":\"http://x\",\"url\":\"http://x\"}]\\n');",
+        "} else if (a.includes('repo view')) {",
+        "  process.stdout.write('{\"full_name\":\"owner/repo\",\"html_url\":\"http://x\"}\\n');",
+        "} else {",
+        "  process.stdout.write('{}\\n');",
+        "}"
+      ]);
+      const result = _runClaimOnline(['repair-labels', '--execute'], tmp, binDir);
+      assert(
+        result.dry_run === false,
+        'repair-labels --execute must return dry_run:false, got: ' + result.dry_run
+      );
+      assert(
+        Array.isArray(result.removed) && result.removed.includes(99),
+        'repair-labels --execute must return removed containing 99, got: ' + JSON.stringify(result.removed)
+      );
+      assert(
+        fs.existsSync(marker),
+        'repair-labels --execute must call --remove-labels (marker must exist)'
+      );
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+
+  console.log('testAuditAndRepairLabels: PASSED');
+}
+
+testAuditAndRepairLabels();
+
 run('test-gitea-forge-helpers.js');
 run('test-gitea-workflow-scripts.js');
 run('test-gitea-sinks.js');

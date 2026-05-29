@@ -103,7 +103,7 @@ function parseRoadmapTable(text) {
   const match = text.match(/## Active Work\n[\s\S]*?(?=\n## |\n$|$)/);
   if (!match) return [];
   const rows = [];
-  const rowPattern = /^\| #(\d+) \| ([^|]+?) \| ([^|]+?) \| ([^|]+?) \| ([^|]+?) \|$/gm;
+  const rowPattern = /^\| #(\d+) \| ((?:[^|\\]|\\.)+?) \| ((?:[^|\\]|\\.)+?) \| ((?:[^|\\]|\\.)+?) \| ((?:[^|\\]|\\.)+?) \|$/gm;
   let row;
   while ((row = rowPattern.exec(match[0])) !== null) {
     rows.push({
