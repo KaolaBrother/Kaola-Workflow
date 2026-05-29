@@ -66,6 +66,14 @@ function assertNotIncludes(file, needle) {
   assert(!read(file).includes(needle), file + ' must not include: ' + needle);
 }
 
+function assertBefore(file, earlier, later) {
+  const text = read(file);
+  const ei = text.indexOf(earlier), li = text.indexOf(later);
+  assert(ei !== -1, file + ' must include: ' + earlier);
+  assert(li !== -1, file + ' must include: ' + later);
+  assert(ei < li, file + ': "' + earlier + '" must appear before "' + later + '"');
+}
+
 function assertConcept(file, concept, terms) {
   const content = read(file).toLowerCase();
   const missing = terms.filter(term => !content.includes(term.toLowerCase()));
@@ -236,6 +244,15 @@ assert(
   read(`${gitlabSkillsBase}/kaola-workflow-next/SKILL.md`).includes('extract and reassign `delegation_policy:` alongside `phase` and `next_skill`'),
   'GitLab next skill must explicitly resume delegation_policy alongside phase and next_skill'
 );
+// Issue #174: GitLab next skill parity gaps
+const gitlabNextSkill = `${gitlabSkillsBase}/kaola-workflow-next/SKILL.md`;
+assertNotIncludes(gitlabNextSkill, 'PICK_NEXT_PROJECT');
+assertIncludes(gitlabNextSkill, 'KAOLA_VERDICT=');
+assertIncludes(gitlabNextSkill, 'KAOLA_REASONING=');
+assertIncludes(gitlabNextSkill, 'target_unverified');
+assertIncludes(gitlabNextSkill, 'Startup refusal: verdict=$KAOLA_VERDICT reasoning=$KAOLA_REASONING');
+assertIncludes(gitlabNextSkill, 'kaola-workflow/.roadmap/issue-$KAOLA_TARGET_ISSUE.md');
+assertBefore(gitlabNextSkill, '### Co-active Folders Advisory', '## Routing');
 for (const skill of ['kaola-workflow-ideation', 'kaola-workflow-plan', 'kaola-workflow-finalize']) {
   const skillFile = `${gitlabSkillsBase}/${skill}/SKILL.md`;
   assert(
