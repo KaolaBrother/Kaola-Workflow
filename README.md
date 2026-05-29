@@ -398,9 +398,9 @@ Current official release versions:
 - Claude Code command install, GitHub edition: `3.16.2`
 - Claude Code command install, GitLab edition: `3.16.2`
 - Claude Code command install, Gitea edition: `3.16.2`
-- Codex `kaola-workflow` plugin manifest: `1.7.1`
-- Codex `kaola-workflow-gitlab` plugin manifest: `1.7.1`
-- Codex `kaola-workflow-gitea` plugin manifest: `1.7.1`
+- Codex `kaola-workflow` plugin manifest: `1.7.2`
+- Codex `kaola-workflow-gitlab` plugin manifest: `1.7.2`
+- Codex `kaola-workflow-gitea` plugin manifest: `1.7.2`
 
 The root `package.json` version is the official repository and Claude Code
 command-install release version. The GitLab Claude command pack follows that
