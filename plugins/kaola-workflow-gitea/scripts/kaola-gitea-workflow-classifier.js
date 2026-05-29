@@ -251,6 +251,13 @@ function classifyIssue(issueIid, root) {
   }
 
   if (OFFLINE) {
+    const roadmapFile = path.join(repoRoot, 'kaola-workflow', '.roadmap', 'issue-' + issueIid + '.md');
+    if (!fs.existsSync(roadmapFile) && !activeFolders.some(f => f.issue_iid === issueIid)) {
+      return {
+        verdict: 'target_unverified',
+        reasoning: 'OFFLINE and no local evidence for issue #' + issueIid + ' (no kaola-workflow/.roadmap/issue-' + issueIid + '.md and no active folder in this repository)'
+      };
+    }
     return classify(localRoadmapIssue(issueIid, repoRoot), activeFolders);
   }
 
@@ -291,6 +298,14 @@ function cmdClassify() {
   }
 
   if (OFFLINE) {
+    const roadmapFile = path.join(repoRoot, 'kaola-workflow', '.roadmap', 'issue-' + args.issue + '.md');
+    if (!fs.existsSync(roadmapFile) && !activeFolders.some(f => f.issue_iid === args.issue)) {
+      process.stdout.write(JSON.stringify({
+        verdict: 'target_unverified',
+        reasoning: 'OFFLINE and no local evidence for issue #' + args.issue + ' (no kaola-workflow/.roadmap/issue-' + args.issue + '.md and no active folder in this repository)'
+      }) + '\n');
+      return;
+    }
     const result = classify(localRoadmapIssue(args.issue, repoRoot), activeFolders);
     process.stdout.write(JSON.stringify(result) + '\n');
     return;

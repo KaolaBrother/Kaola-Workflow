@@ -27,6 +27,16 @@ function runClaim(args, cwd) {
   return JSON.parse(result.stdout);
 }
 
+function runClaimRaw(args, cwd) {
+  const result = spawnSync(process.execPath, [claimScript, ...args], {
+    cwd,
+    encoding: 'utf8',
+    env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }
+  });
+  if (result.error) throw result.error;
+  return { parsed: JSON.parse(result.stdout), exitStatus: result.status, stderr: result.stderr };
+}
+
 function assertNoLegacyCoordDirs(root) {
   for (const name of ['lo' + 'cks', 'sess' + 'ions', 'tick' + 'ers']) {
     assert(!fs.existsSync(path.join(root, 'kaola-workflow', '.' + name)), 'legacy coordination dir must not exist: .' + name);
@@ -83,6 +93,25 @@ function testInstallProfilesFeaturesTableHandling() {
 function main() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-codex-active-folders-'));
   try {
+    // No-evidence offline case must return target_unverified (post-#169 contract).
+    const unverified = runClaimRaw(['startup', '--target-issue', '163', '--runtime', 'codex', '--sink', 'pr'], tmp);
+    assert(unverified.exitStatus === 1,
+      'startup with no local evidence must exit 1, got ' + unverified.exitStatus);
+    assert(unverified.parsed.verdict === 'target_unverified',
+      'no-evidence startup must return target_unverified, got: ' + unverified.parsed.verdict);
+    assert(unverified.parsed.claim === 'none',
+      'no-evidence startup must report claim=none, got: ' + unverified.parsed.claim);
+    assert(!fs.existsSync(path.join(tmp, 'kaola-workflow', 'issue-163')),
+      'kaola-workflow/issue-163 must NOT be created when target is unverified');
+
+    // Seed local roadmap evidence so the offline classifier can verify the target.
+    const roadmapDir = path.join(tmp, 'kaola-workflow', '.roadmap');
+    fs.mkdirSync(roadmapDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(roadmapDir, 'issue-163.md'),
+      'issue: #163\ntitle: —\nstatus: open\nworkflow_project: issue-163\nnext_step: ready\n'
+    );
+
     const acquired = runClaim(['startup', '--target-issue', '163', '--runtime', 'codex', '--sink', 'pr'], tmp);
     assert(acquired.claim === 'acquired', 'Codex startup should acquire explicit issue');
     assert(acquired.project === 'issue-163', 'Codex startup should derive project from issue');
