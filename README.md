@@ -395,9 +395,9 @@ performs the same review locally when no detached advisor profile is available.
 
 Current official release versions:
 
-- Claude Code command install, GitHub edition: `3.16.2`
-- Claude Code command install, GitLab edition: `3.16.2`
-- Claude Code command install, Gitea edition: `3.16.2`
+- Claude Code command install, GitHub edition: `3.16.3`
+- Claude Code command install, GitLab edition: `3.16.3`
+- Claude Code command install, Gitea edition: `3.16.3`
 - Codex `kaola-workflow` plugin manifest: `1.7.2`
 - Codex `kaola-workflow-gitlab` plugin manifest: `1.7.2`
 - Codex `kaola-workflow-gitea` plugin manifest: `1.7.2`
@@ -408,6 +408,14 @@ same version through the root release. Codex plugins have their own manifest
 versions in `plugins/*/.codex-plugin/plugin.json`; bump the affected Codex
 manifest whenever that plugin's install surface, skills, agent profiles, or
 workflow behavior changes.
+
+The root `kaola-workflow--v<X.Y.Z>` tag is the single source of truth for the
+entire release surface, **including** these Codex manifest versions. A Codex
+manifest bump is a release-surface change: it must ride a new root version + tag,
+not land on the default branch after the tag for the current root version. The
+full `npm test` enforces this — it fails when a Codex manifest version differs
+from the value recorded at the `kaola-workflow--v<package.json version>` tag
+(unless `KAOLA_WORKFLOW_OFFLINE=1` is set).
 
 The npm package includes `"plugins/"` in `package.json#files`, so all three
 Codex packs and the GitLab Claude command sources are part of the packaged
@@ -421,16 +429,30 @@ Use SemVer for both versions:
 - `PATCH`: compatible bug fixes, validation fixes, documentation-only updates,
   or small install clarifications.
 
-Official release checklist:
+Official release checklist (run the steps in order). `npm test` requires the
+release tag to exist, so the tag is created **before** the test run:
 
 ```bash
-npm test
+# 1. Sanity-check the working tree (no whitespace errors / conflict markers).
 git diff --check
+
+# 2. Create the tag on the release commit (the commit that bumped package.json
+#    and the release surface), not HEAD.
 git tag kaola-workflow--v<X.Y.Z> <release-commit>
+
+# 3. Validate. The full run verifies the tag exists and that the release surface
+#    (including Codex manifest versions) matches the tag.
+npm test
+
+# 4. Push only the new tag by name.
 git push origin kaola-workflow--v<X.Y.Z>
 ```
 
-**Note:** `npm test` now enforces that the local git tag exists (unless `KAOLA_WORKFLOW_OFFLINE=1` is set). The tag must be created before running the test suite. If the tag does not exist, `npm test` will fail with a validation error.
+**Note:** the full `npm test` requires the release tag to exist **and** to match
+the current release surface, which is why the tag is created before the test run.
+`KAOLA_WORKFLOW_OFFLINE=1` skips the tag-existence and release-surface checks (and
+remote calls) for quick local iteration before the tag exists; it is not the
+canonical release gate — the full online `npm test` after tagging is.
 
 Tag rules:
 - Tag the specific release commit (the commit that bumped `package.json`

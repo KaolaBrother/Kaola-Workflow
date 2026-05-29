@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [3.16.3] — 2026-05-29
+
+### Fixed
+
+- **Release-surface drift detection** (issue #193): `validate-workflow-contracts.js` now fails when a Codex plugin manifest version differs from the value recorded at the `kaola-workflow--v<version>` tag. The root tag is the single source of truth for the entire release surface (Branch A policy); a Codex manifest bump must ride a new root version + tag rather than landing after the tag for the current version. New `scripts/release-surface-drift.js` helper (byte-identical Codex mirror, added to the `validate-script-sync.js` allowlist) and `scripts/test-release-surface-drift.js` regression test cover the tag-exists-but-release-surface-moved-after-tag case. README release versioning documents the policy. This release cuts `3.16.3` so the tag captures the previously-untracked Codex `1.7.2` manifest bump from `fa92ed2` (the drift that motivated the check).
+
+- **Document `audit-labels`/`repair-labels` forge parity** (issue #194): `docs/api.md` still described `audit-labels`/`repair-labels` as GitHub-only after the GitLab/Gitea ports shipped in #191 (the #191 README cleanup missed `docs/api.md`). Removed the stale "GitHub-only" wording in all six locations, documented the cross-forge parity — routed through `kaola-gitlab-workflow-claim.js` / `kaola-gitea-workflow-claim.js`, identical JSON shape, the only difference being the issue `url` sourced from each forge's `web_url` — and added contract assertions to `validate-workflow-contracts.js` so the wording cannot regress.
+
+- **Fix release checklist ordering** (issue #195): The README release checklist ran `npm test` before creating the release tag, but `npm test` requires the tag to exist (and now, per #193, to match the release surface). Reordered the checklist so the tag is created before validation, and clarified that `KAOLA_WORKFLOW_OFFLINE=1 npm test` is for local pre-tag iteration only — the canonical release gate is the full online `npm test` after tagging.
+
 ## [3.16.2] — 2026-05-29
 
 ### Fixed

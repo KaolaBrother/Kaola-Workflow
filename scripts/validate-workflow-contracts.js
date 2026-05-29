@@ -217,6 +217,18 @@ assertConcept('docs/api.md', 'closure contract invariants and receipt schema', [
   '#164',
   '#165'
 ]);
+// issue #194: audit-labels/repair-labels reached GitLab/Gitea parity; the docs
+// must not re-assert the stale GitHub-only claim, and must describe parity.
+assertNotIncludes('docs/api.md', '(GitHub only, issue #163)');
+assertNotIncludes('docs/api.md', 'subcommands are GitHub-only');
+assertNotIncludes('docs/api.md', 'subcommands remain GitHub-only');
+assertConcept('docs/api.md', 'audit-labels/repair-labels forge parity', [
+  'audit-labels',
+  'repair-labels',
+  'parity',
+  'kaola-gitlab-workflow-claim.js',
+  'kaola-gitea-workflow-claim.js'
+]);
 assertConcept('docs/workflow-state-contract.md', 'closure contract cross-reference', [
   'closure contract'
 ]);
@@ -337,6 +349,19 @@ if (process.env.KAOLA_WORKFLOW_OFFLINE !== '1' && exists('.git')) {
     tagPresent,
     'Git tag "' + tagName + '" must exist for package.json version (' + rootVersion +
       '). Create it locally with: git tag ' + tagName + ' <release-commit-sha>'
+  );
+
+  // issue #193 (Branch A): the root tag owns the entire release surface, including
+  // the independently-numbered Codex manifest versions. Fail when a Codex manifest
+  // version moved after the tag — that surface must ride a new root version + tag.
+  const { detectCodexReleaseSurfaceDrift } = require('./release-surface-drift');
+  const surfaceDrift = detectCodexReleaseSurfaceDrift(root, tagName, codexManifests.map(m => m.file));
+  assert(
+    surfaceDrift.length === 0,
+    'Release-surface drift: Codex manifest version(s) changed after tag "' + tagName + '" — ' +
+      surfaceDrift.map(d => d.file + ' (tag=' + d.tagged + ', tree=' + d.tree + ')').join('; ') +
+      '. The root tag owns the entire release surface (issue #193); a Codex manifest bump must ' +
+      'ride a new root version + tag. Cut a new version + tag on the current commit, or revert the bump.'
   );
 }
 

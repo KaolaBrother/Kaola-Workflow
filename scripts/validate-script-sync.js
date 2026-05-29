@@ -46,6 +46,7 @@ const COMMON_SCRIPTS = [
   'kaola-workflow-roadmap.js',
   'kaola-workflow-sink-merge.js',
   'kaola-workflow-sink-pr.js',
+  'release-surface-drift.js',
   'validate-workflow-contracts.js',
 ];
 
