@@ -1,0 +1,1 @@
+docs-lookup: N/A - internal patterns sufficient. All three gaps involve porting existing prose, removing documented-but-dead vars, and a version field bump — no external library or API behavior needed.

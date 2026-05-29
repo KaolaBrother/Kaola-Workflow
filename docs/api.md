@@ -106,7 +106,6 @@ The following environment variables are **test-only hooks** used by the test sui
 ### Offline and Derivation Test Hooks
 
 - **`KAOLA_WORKFLOW_OFFLINE=1`** — Skip all network calls (GitHub/GitLab/Gitea API, git fetch, git push). Used for local testing without network access. Applies to all three editions (GitHub, GitLab, Gitea).
-- **`KAOLA_KERNEL_SESSION_FAKE_PID=<pid>`** — Override process-tree walk for kernel-derived session identity testing. Used to test session derivation without Claude Code context.
 
 ## Configuration
 

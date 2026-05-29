@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- **Codex router fast-path parity and validation drift detection** (issue #190): All three Codex SKILL.md routers (GitHub, GitLab, Gitea) now include Step 0a-1 (Path Intent) and have been aligned with the GitHub baseline from issue #104. `plugins/kaola-workflow/skills/kaola-workflow-next/SKILL.md`, `plugins/kaola-workflow-gitlab/skills/kaola-workflow-next/SKILL.md`, and `plugins/kaola-workflow-gitea/skills/kaola-workflow-next/SKILL.md` now document the `Branch`, `Workflow path`, and `Parallel decision` lines in their Required Output blocks, matching the command-file equivalents. Contract assertions added to `scripts/validate-kaola-workflow-contracts.js`, `plugins/kaola-workflow-gitlab/scripts/validate-kaola-workflow-gitlab-contracts.js`, and `plugins/kaola-workflow-gitea/scripts/validate-kaola-workflow-gitea-contracts.js` (4 `assertIncludes` per validator) to detect future drift in Codex skill output formatting. Behavior unchanged; skill prose alignment only.
+
+- **Removed stale session-subsystem environment variables from documentation** (issue #190): Deleted 5 obsolete session-var blocks from `.env.example` (all `KAOLA_KERNEL_SESSION_*` and related session-system entries). Removed `KAOLA_KERNEL_SESSION_FAKE_PID` bullet from `docs/api.md` Environment Variables section, aligning documentation with the session subsystem deprecation completed in prior releases.
+
 - **Classifier depends-on gate case normalization** (issue #189): The `checkDependsOn` helper in `kaola-workflow-classifier.js` now correctly unblocks when the dependency issue is closed. The GitHub CLI returns uppercase state (`"CLOSED"` / `"OPEN"`), but the comparison was performing lowercase matching only after the state had already been parsed; the case normalization now applies correctly so closed dependencies properly ungate classification. Added regression test `testClassifierDependsOnGate` to `scripts/simulate-workflow-walkthrough.js` with sub-cases for closed and open dependencies, plus 5 mock casing fixes to other test case issue states (uppercase "CLOSED"/"OPEN" matching real gh CLI output).
 
 ## [3.16.1] — 2026-05-29

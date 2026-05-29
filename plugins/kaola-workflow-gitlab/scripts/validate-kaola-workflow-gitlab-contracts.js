@@ -253,6 +253,11 @@ assertIncludes(gitlabNextSkill, 'target_unverified');
 assertIncludes(gitlabNextSkill, 'Startup refusal: verdict=$KAOLA_VERDICT reasoning=$KAOLA_REASONING');
 assertIncludes(gitlabNextSkill, 'kaola-workflow/.roadmap/issue-$KAOLA_TARGET_ISSUE.md');
 assertBefore(gitlabNextSkill, '### Co-active Folders Advisory', '## Routing');
+// Issue #190: M1 — Codex fast-path routing parity (RED guard)
+assertIncludes(gitlabNextSkill, 'Startup Step 0a-1');
+assertIncludes(gitlabNextSkill, 'Branch: {branch from Sink block');
+assertIncludes(gitlabNextSkill, 'Workflow path: {fast|full');
+assertIncludes(gitlabNextSkill, 'Parallel decision: {green|yellow|red');
 for (const skill of ['kaola-workflow-ideation', 'kaola-workflow-plan', 'kaola-workflow-finalize']) {
   const skillFile = `${gitlabSkillsBase}/${skill}/SKILL.md`;
   assert(

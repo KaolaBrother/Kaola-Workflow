@@ -91,6 +91,11 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'KAOLA_CLAIM
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, '[ "$KAOLA_CLAIM" = "acquired" ] && [ -n "$KAOLA_PROJECT" ]');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, '--project "$KAOLA_PROJECT" --reason git-freshness-block');
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, '--project "$PICK_NEXT_PROJECT" --reason git-freshness-block');
+// Issue #190: M1 — Codex fast-path routing parity (RED guard)
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'Startup Step 0a-1');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'Branch: {branch from Sink block');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'Workflow path: {fast|full');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'Parallel decision: {green|yellow|red');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`, 'Active folder lifecycle');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`, '> **MANDATORY — READ CLAUDE.md BEFORE ANY ACTION THIS SESSION.**');
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`, 'Do not create or edit CLAUDE.md');
