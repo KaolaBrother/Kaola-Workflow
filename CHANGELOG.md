@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Classifier depends-on gate case normalization** (issue #189): The `checkDependsOn` helper in `kaola-workflow-classifier.js` now correctly unblocks when the dependency issue is closed. The GitHub CLI returns uppercase state (`"CLOSED"` / `"OPEN"`), but the comparison was performing lowercase matching only after the state had already been parsed; the case normalization now applies correctly so closed dependencies properly ungate classification. Added regression test `testClassifierDependsOnGate` to `scripts/simulate-workflow-walkthrough.js` with sub-cases for closed and open dependencies, plus 5 mock casing fixes to other test case issue states (uppercase "CLOSED"/"OPEN" matching real gh CLI output).
+
 ## [3.16.1] — 2026-05-29
 
 ### Fixed

@@ -340,8 +340,8 @@ function testClassifierClosedIssueResidueIgnored() {
     fs.mkdirSync(binDir, { recursive: true });
     writeShimFiles(path.join(binDir, 'gh'), [
       "const a = process.argv.slice(2).join(' ');",
-      "if (a.includes('issue view 80')) { process.stdout.write('{\"state\":\"closed\"}\\n'); }",
-      "else if (a.includes('issue view 81')) { process.stdout.write('{\"number\":81,\"title\":\"unrelated\",\"body\":\"commands/something.md\",\"labels\":[],\"state\":\"open\"}\\n'); }",
+      "if (a.includes('issue view 80')) { process.stdout.write('{\"state\":\"CLOSED\"}\\n'); }",
+      "else if (a.includes('issue view 81')) { process.stdout.write('{\"number\":81,\"title\":\"unrelated\",\"body\":\"commands/something.md\",\"labels\":[],\"state\":\"OPEN\"}\\n'); }",
       "else if (a.includes('repo view')) { process.stdout.write('{\"owner\":{\"login\":\"test\"},\"name\":\"repo\"}\\n'); }",
       "else { process.stdout.write('[\\n'); }"
     ]);
@@ -366,6 +366,58 @@ function testClassifierReleasedFolderExcluded() {
     const result = runClassifierOffline(tmp, 93);
     assert(result.verdict === 'green',
       'released-status folder must be excluded from overlap; expected green, got ' + result.verdict);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testClassifierDependsOnGate() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-classifier-depson-'));
+  try {
+    const binDir = path.join(tmp, 'bin');
+    fs.mkdirSync(binDir, { recursive: true });
+
+    // Sub-case A: dependency is CLOSED → should yield green (regression test for the bug)
+    writeShimFiles(path.join(binDir, 'gh'), [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('repo view')) { process.stdout.write('{\"owner\":{\"login\":\"test\"},\"name\":\"repo\"}\\n'); }",
+      "else if (a.includes('issue view 91')) { process.stdout.write('{\"number\":91,\"title\":\"dependent\",\"body\":\"README docs\",\"labels\":[{\"name\":\"depends-on:#90\"}],\"state\":\"OPEN\"}\\n'); }",
+      "else if (a.includes('issue view 90')) { process.stdout.write('{\"state\":\"CLOSED\",\"closedAt\":\"2026-01-01T00:00:00Z\"}\\n'); }",
+      "else if (a.includes('issue list')) { process.stdout.write('[\\n'); }",
+      "else { process.stdout.write('[\\n'); }"
+    ]);
+    const resultA = spawnSync(process.execPath, [classifierScript, 'classify', '--issue', '91'], {
+      cwd: tmp, encoding: 'utf8',
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', ...ghMockEnv(binDir), PATH: binDir + path.delimiter + path.dirname(process.execPath) + path.delimiter + (process.env.PATH || '') }
+    });
+    assert(resultA.status === 0, 'classifier exit 0 expected for dep-closed case, got ' + resultA.status + '\nstderr: ' + resultA.stderr);
+    const parsedA = JSON.parse(resultA.stdout.trim());
+    assert(parsedA.verdict !== 'blocked',
+      'dep CLOSED: expected verdict not blocked (regression for #189), got ' + parsedA.verdict);
+    assert(parsedA.verdict === 'green',
+      'dep CLOSED: expected green, got ' + parsedA.verdict + ' reasoning: ' + parsedA.reasoning);
+
+    // Sub-case B: dependency is OPEN → should yield blocked
+    writeShimFiles(path.join(binDir, 'gh'), [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('repo view')) { process.stdout.write('{\"owner\":{\"login\":\"test\"},\"name\":\"repo\"}\\n'); }",
+      "else if (a.includes('issue view 91')) { process.stdout.write('{\"number\":91,\"title\":\"dependent\",\"body\":\"README docs\",\"labels\":[{\"name\":\"depends-on:#90\"}],\"state\":\"OPEN\"}\\n'); }",
+      "else if (a.includes('issue view 90')) { process.stdout.write('{\"state\":\"OPEN\"}\\n'); }",
+      "else if (a.includes('issue list')) { process.stdout.write('[\\n'); }",
+      "else { process.stdout.write('[\\n'); }"
+    ]);
+    const resultB = spawnSync(process.execPath, [classifierScript, 'classify', '--issue', '91'], {
+      cwd: tmp, encoding: 'utf8',
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', ...ghMockEnv(binDir), PATH: binDir + path.delimiter + path.dirname(process.execPath) + path.delimiter + (process.env.PATH || '') }
+    });
+    assert(resultB.status === 0, 'classifier exit 0 expected for dep-open case, got ' + resultB.status + '\nstderr: ' + resultB.stderr);
+    const parsedB = JSON.parse(resultB.stdout.trim());
+    assert(parsedB.verdict === 'blocked',
+      'dep OPEN: expected blocked, got ' + parsedB.verdict);
+    assert(parsedB.reasoning && parsedB.reasoning.includes('depends-on:#90'),
+      'dep OPEN: reasoning should mention depends-on:#90, got: ' + parsedB.reasoning);
+
+    console.log('testClassifierDependsOnGate: PASSED');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -673,7 +725,7 @@ function testWatchPrArchivesClosedIssuePrFolder() {
     fs.mkdirSync(binDir, { recursive: true });
     writeShimFiles(path.join(binDir, 'gh'), [
       "const a = process.argv.slice(2).join(' ');",
-      "if (a.includes('issue view 200')) { process.stdout.write('{\"state\":\"closed\"}\\n'); }",
+      "if (a.includes('issue view 200')) { process.stdout.write('{\"state\":\"CLOSED\"}\\n'); }",
       "else if (a.includes('pr view')) { process.stdout.write('{\"state\":\"MERGED\",\"number\":1}\\n'); }",
       "else if (a.includes('repo view')) { process.stdout.write('{\"owner\":{\"login\":\"test\"},\"name\":\"repo\"}\\n'); }",
       "else { process.stdout.write('[\\n'); }"
@@ -1063,8 +1115,8 @@ function testStatusShowsClosedIssueDrift() {
     fs.mkdirSync(binDir, { recursive: true });
     writeShimFiles(path.join(binDir, 'gh'), [
       "const a = process.argv.slice(2).join(' ');",
-      "if (a.includes('issue view 100')) { process.stdout.write('{\"state\":\"open\"}\\n'); }",
-      "else if (a.includes('issue view 200')) { process.stdout.write('{\"state\":\"closed\"}\\n'); }",
+      "if (a.includes('issue view 100')) { process.stdout.write('{\"state\":\"OPEN\"}\\n'); }",
+      "else if (a.includes('issue view 200')) { process.stdout.write('{\"state\":\"CLOSED\"}\\n'); }",
       "else { process.stdout.write('[\\n'); }"
     ]);
     const online = runClaimOnline(['status'], tmp, binDir);
@@ -3730,6 +3782,7 @@ async function main() {
     testClassifierFolderOverlapYellow();
     testClassifierClosedIssueResidueIgnored();
     testClassifierReleasedFolderExcluded();
+    testClassifierDependsOnGate();
     testProbeIssueStateOffline();
     testProbeIssueStateNullIssue();
     testProbeIssueStateEmptyGhResponse();

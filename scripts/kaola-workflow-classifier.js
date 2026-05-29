@@ -255,7 +255,7 @@ function checkDependsOn(depN) {
   let depState = 'open';
   try {
     const raw = ghExec(['issue', 'view', String(depN), '--json', 'state,closedAt']);
-    depState = JSON.parse(raw).state || 'open';
+    depState = String(JSON.parse(raw).state || 'open').toLowerCase();
   } catch (_) {}
   if (depState !== 'closed') {
     return { verdict: 'blocked', reasoning: 'depends-on:#' + depN + ' is still open' };
