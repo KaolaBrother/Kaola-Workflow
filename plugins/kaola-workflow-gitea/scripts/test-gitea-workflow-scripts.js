@@ -1982,11 +1982,13 @@ function testClosureAuditArchiveOnlyNotProbed() {
       "} else if (a.includes('issues list')) { process.stdout.write('[]\\n'); }",
       "else { process.stdout.write('{}\\n'); }"
     ]);
-    runClosureAudit([], tmp, binDir);
+    const result = runClosureAudit([], tmp, binDir);
     const viewCount = fs.existsSync(viewCountFile)
       ? parseInt(fs.readFileSync(viewCountFile, 'utf8'), 10) : 0;
     assert(viewCount === 1,
       'archive-only 950 must not be probed; expected exactly 1 issues-view (roadmap 920 only), got ' + viewCount);
+    assert(!JSON.stringify(result.drift).includes('950'),
+      'issue 950 must not appear in any drift field, got: ' + JSON.stringify(result.drift));
     console.log('testClosureAuditArchiveOnlyNotProbed: PASSED');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });

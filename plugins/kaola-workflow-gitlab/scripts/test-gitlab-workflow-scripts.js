@@ -2065,6 +2065,8 @@ function testClosureAuditArchiveOnlyNotProbed() {
       ? parseInt(fs.readFileSync(viewCountFile, 'utf8'), 10) : 0;
     assert(viewCount === 1,
       'archive-only 950 must not be probed; expected exactly 1 issue-view (roadmap 920 only), got ' + viewCount);
+    assert(!JSON.stringify(result.drift).includes('950'),
+      'issue 950 must not appear in any drift field, got: ' + JSON.stringify(result.drift));
     console.log('testClosureAuditArchiveOnlyNotProbed: PASSED');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
