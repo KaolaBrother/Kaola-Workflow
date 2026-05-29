@@ -65,6 +65,14 @@ function assertNotIncludes(file, needle) {
   assert(!read(file).includes(needle), file + ' must not include: ' + needle);
 }
 
+function assertBefore(file, earlier, later) {
+  const text = read(file);
+  const ei = text.indexOf(earlier), li = text.indexOf(later);
+  assert(ei !== -1, file + ' must include: ' + earlier);
+  assert(li !== -1, file + ' must include: ' + later);
+  assert(ei < li, file + ': "' + earlier + '" must appear before "' + later + '"');
+}
+
 function assertConcept(file, concept, terms) {
   const content = read(file).toLowerCase();
   const missing = terms.filter(term => !content.includes(term.toLowerCase()));
@@ -243,6 +251,15 @@ assert(
   read(`${giteaSkillsBase}/kaola-workflow-next/SKILL.md`).includes('extract and reassign `delegation_policy:` alongside `phase` and `next_skill`'),
   'Gitea next skill must explicitly resume delegation_policy alongside phase and next_skill'
 );
+// Issue #174: Gitea next skill parity gaps
+const giteaNextSkill = `${giteaSkillsBase}/kaola-workflow-next/SKILL.md`;
+assertNotIncludes(giteaNextSkill, 'PICK_NEXT_PROJECT');
+assertIncludes(giteaNextSkill, 'KAOLA_VERDICT=');
+assertIncludes(giteaNextSkill, 'KAOLA_REASONING=');
+assertIncludes(giteaNextSkill, 'target_unverified');
+assertIncludes(giteaNextSkill, 'Startup refusal: verdict=$KAOLA_VERDICT reasoning=$KAOLA_REASONING');
+assertIncludes(giteaNextSkill, 'kaola-workflow/.roadmap/issue-$KAOLA_TARGET_ISSUE.md');
+assertBefore(giteaNextSkill, '### Co-active Folders Advisory', '## Routing');
 for (const skill of ['kaola-workflow-ideation', 'kaola-workflow-plan', 'kaola-workflow-finalize']) {
   const skillFile = `${giteaSkillsBase}/${skill}/SKILL.md`;
   assert(

@@ -47,7 +47,7 @@ Ask the user once at startup:
 3. After startup succeeds and `workflow-state.md` exists, patch the delegation policy into the file:
 
 ```bash
-printf '\ndelegation_policy: %s\n' "$KAOLA_DELEGATION_POLICY" >> "kaola-workflow/${PICK_NEXT_PROJECT}/workflow-state.md"
+printf '\ndelegation_policy: %s\n' "$KAOLA_DELEGATION_POLICY" >> "kaola-workflow/${KAOLA_PROJECT}/workflow-state.md"
 ```
 
 Where `KAOLA_DELEGATION_POLICY` is `delegate`, `local-authorized`, or `tool-unavailable` based on the user's response.
@@ -69,7 +69,10 @@ do not auto-pick; the agent owns this decision.
    STATUS_OUT="$(node "$claim_script" status 2>/dev/null)"
    KAOLA_TARGET_ISSUE="$(node -e "try{const j=JSON.parse(process.argv[1]);process.stdout.write(j.count===1?String(j.active[0].issue_number):'')}catch(e){}" "$STATUS_OUT")"
    ```
-6. State the selected issue number before calling startup.
+6. Validate the target exists before calling startup. Validate against the active consumer repository, not against the Kaola-Workflow package repository unless that is the active project.
+   - Online: `tea issues view "$KAOLA_TARGET_ISSUE" --output json` against the active project. If the fetch fails, stop and ask — do not fall back to a different issue.
+   - Offline (`KAOLA_WORKFLOW_OFFLINE=1`): require `kaola-workflow/.roadmap/issue-$KAOLA_TARGET_ISSUE.md` to exist in the cwd's repo, OR an active folder whose `issue_number` matches the target. If neither is present, stop and ask the user to confirm the issue or run online.
+7. State the selected issue number before calling startup.
 
 Set `KAOLA_TARGET_ISSUE` to the chosen issue number before calling startup.
 
@@ -115,9 +118,11 @@ if [ -f "$claim_script" ]; then
     --runtime codex \
     $KAOLA_SINK_FLAG \
     $KAOLA_TARGET_FLAG 2>/dev/null) || true
-  PICK_NEXT_PROJECT="$(node -e "try{process.stdout.write(JSON.parse(process.argv[1]).project||'')}catch(e){}" "$STARTUP_OUT" 2>/dev/null)" || true
+  KAOLA_PROJECT="$(node -e "try{process.stdout.write(JSON.parse(process.argv[1]).project||'')}catch(e){}" "$STARTUP_OUT" 2>/dev/null)" || true
   KAOLA_CLAIM="$(node -e "try{process.stdout.write(JSON.parse(process.argv[1]).claim||'')}catch(e){}" "$STARTUP_OUT" 2>/dev/null)" || true
   KAOLA_WORKTREE_PATH="$(node -e "try{process.stdout.write(JSON.parse(process.argv[1]).worktree_path||'')}catch(e){}" "$STARTUP_OUT" 2>/dev/null)" || true
+  KAOLA_VERDICT="$(node -e "try{process.stdout.write(JSON.parse(process.argv[1]).verdict||'')}catch(e){}" "$STARTUP_OUT" 2>/dev/null)" || true
+  KAOLA_REASONING="$(node -e "try{process.stdout.write(JSON.parse(process.argv[1]).reasoning||'')}catch(e){}" "$STARTUP_OUT" 2>/dev/null)" || true
   [ -n "$KAOLA_WORKTREE_PATH" ] && [ -d "$KAOLA_WORKTREE_PATH" ] && export KAOLA_WORKTREE_PATH
 else
   echo "BLOCKED: kaola-workflow startup unavailable; cannot select issue-backed work." >&2
@@ -128,8 +133,16 @@ fi
 If `STARTUP_OUT` has `verdict: "owned"`, route that project. If startup returns
 `verdict: no_target`, the agent must select a target and re-run. If startup returns
 a typed refusal (`target_occupied`, `user_target_blocked`, `user_target_red`,
-`target_mismatch`, `target_unavailable`), read the `reasoning` field and stop or
-select a different issue. If the startup script is unavailable, stop for repair.
+`target_mismatch`, `target_unavailable`, `target_unverified`), read the `reasoning` field and stop or
+select a different issue.
+
+Before stopping, print the refusal diagnostics:
+
+```text
+Startup refusal: verdict=$KAOLA_VERDICT reasoning=$KAOLA_REASONING
+```
+
+If the startup script is unavailable, stop for repair.
 If startup returns `claim: "none"`, stop normal routing. Do not inspect active
 project folders unless the user explicitly names the project to resume.
 
@@ -160,10 +173,16 @@ git status --short --branch
 If the block passes, continue to routing. If the block persists (merge/rebase required, dirty worktree), release the claimed folder before stopping:
 
 ```bash
-[ "$KAOLA_CLAIM" = "acquired" ] && [ -n "$PICK_NEXT_PROJECT" ] && node "$claim_script" release --project "$PICK_NEXT_PROJECT" --reason git-freshness-block
+[ "$KAOLA_CLAIM" = "acquired" ] && [ -n "$KAOLA_PROJECT" ] && node "$claim_script" release --project "$KAOLA_PROJECT" --reason git-freshness-block
 ```
 
 Stop and ask the user to resolve the Git state manually before retrying `/workflow-next`. Do not proceed to routing or adopt any active folder after this release.
+
+### Co-active Folders Advisory
+
+If multiple active folders exist from prior sessions (e.g., `issue-63` and `issue-65` in different states), they operate independently. Each folder has its own `workflow-state.md`, branch, and worktree metadata. The pre-commit hook prevents commits that stage multiple workflow project folders together.
+
+**Important**: Do NOT merge, interleave, or batch commits from different active folders. Each folder must complete its own Phase 4 → Phase 6 sequence independently. If the same file appears in multiple active write sets, stop and resolve the conflict before continuing — do not proceed with overlapping modifications.
 
 If Gitea is available, refresh open issues:
 
@@ -208,12 +227,6 @@ phase2-ideation.md exists -> kaola-workflow-plan
 phase1-research.md exists -> kaola-workflow-ideation
 no phase file -> kaola-workflow-research
 ```
-
-### Co-active Folders Advisory
-
-If multiple active folders exist from prior sessions (e.g., `issue-63` and `issue-65` in different states), they operate independently. Each folder has its own `workflow-state.md`, branch, and worktree metadata. The pre-commit hook prevents commits that stage multiple workflow project folders together.
-
-**Important**: Do NOT merge, interleave, or batch commits from different active folders. Each folder must complete its own Phase 4 → Phase 6 sequence independently. If the same file appears in multiple active write sets, stop and resolve the conflict before continuing — do not proceed with overlapping modifications.
 
 ## Required Output
 
