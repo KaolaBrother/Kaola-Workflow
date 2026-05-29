@@ -6,6 +6,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
+const REMOTE_TIMEOUT_MS = parseInt(process.env.KAOLA_GH_REMOTE_TIMEOUT_MS || '30000', 10);
 
 function isSafeName(name) {
   return typeof name === 'string' && name.length > 0 &&
@@ -33,8 +34,8 @@ function getRoot() {
 function ghExec(args, opts) {
   if (OFFLINE) return '';
   const mock = process.env.KAOLA_GH_MOCK_SCRIPT;
-  if (mock) return execFileSync(process.execPath, [mock, ...args], Object.assign({ encoding: 'utf8' }, opts || {})).trim();
-  return execFileSync('gh', args, Object.assign({ encoding: 'utf8' }, opts || {})).trim();
+  if (mock) return execFileSync(process.execPath, [mock, ...args], Object.assign({ encoding: 'utf8', timeout: REMOTE_TIMEOUT_MS }, opts || {})).trim();
+  return execFileSync('gh', args, Object.assign({ encoding: 'utf8', timeout: REMOTE_TIMEOUT_MS }, opts || {})).trim();
 }
 
 function issueIsClosed(issueNumber) {
@@ -57,7 +58,10 @@ function probeIssueState(issueNumber) {
     const data = JSON.parse(raw);
     const state = String(data.state || '').toLowerCase() === 'closed' ? 'closed' : 'open';
     return { state, reason: 'ok' };
-  } catch (_) {
+  } catch (err) {
+    if (err.killed === true || err.signal === 'SIGTERM' || err.code === 'ETIMEDOUT') {
+      return { state: 'unavailable', reason: 'timeout' };
+    }
     return { state: 'unavailable', reason: 'gh issue fetch failed' };
   }
 }

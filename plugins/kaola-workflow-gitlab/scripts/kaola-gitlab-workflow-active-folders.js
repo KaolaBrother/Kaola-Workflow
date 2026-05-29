@@ -51,7 +51,10 @@ function probeIssueState(issueIid) {
   try {
     const issue = forge.viewIssue(issueIid);
     return { state: issue.state === 'closed' ? 'closed' : 'open', reason: 'ok' };
-  } catch (_) {
+  } catch (err) {
+    if (err.killed === true || err.signal === 'SIGTERM' || err.code === 'ETIMEDOUT') {
+      return { state: 'unavailable', reason: 'timeout' };
+    }
     return { state: 'unavailable', reason: 'glab issue fetch failed' };
   }
 }

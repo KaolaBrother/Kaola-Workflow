@@ -123,13 +123,14 @@ function glabMockEnv(binDir) {
 }
 
 // Run closure-audit online (mock glab via KAOLA_GLAB_MOCK_SCRIPT). Mirrors GitHub runClosureAudit.
-function runClosureAudit(args, cwd, binDir) {
+function runClosureAudit(args, cwd, binDir, extraEnv) {
   const result = spawnSync(process.execPath, [closureAuditScript, ...args], {
     cwd,
     encoding: 'utf8',
     timeout: 60000,
     env: {
       ...process.env,
+      ...(extraEnv || {}),
       KAOLA_WORKFLOW_OFFLINE: '0',
       ...glabMockEnv(binDir),
       PATH: binDir + path.delimiter + path.dirname(process.execPath) + path.delimiter + (process.env.PATH || '')
@@ -1941,6 +1942,10 @@ function testClosureAuditOfflineRemoteClassesSkipped() {
       result.drift.unarchived_mr_folders, 'skipped_offline',
       'offline: unarchived_mr_folders must be "skipped_offline", got: ' + JSON.stringify(result.drift.unarchived_mr_folders)
     );
+    assert(
+      !('unresolved_closed_state' in result.drift),
+      'offline: unresolved_closed_state must be absent when offline (omit-when-empty), got: ' + JSON.stringify(result.drift.unresolved_closed_state)
+    );
     console.log('testClosureAuditOfflineRemoteClassesSkipped: PASSED');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -2216,6 +2221,69 @@ function testClosureAuditDryRunNeverCallsRemoveLabel() {
   }
 }
 
+function testClosureAuditStaleLabelsTimeout() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-ca-stale-labels-timeout-')));
+  const binDir = path.join(tmp, 'bin');
+  try {
+    initGitRepo(tmp);
+    closureAuditShim(binDir, ['setInterval(() => {}, 1 << 30);']);
+    const result = runClosureAudit([], tmp, binDir, { KAOLA_GH_REMOTE_TIMEOUT_MS: '300' });
+    assert.strictEqual(
+      result.drift.stale_in_progress_labels, 'skipped_timeout',
+      'stale-labels hang must return "skipped_timeout", got: ' + JSON.stringify(result.drift.stale_in_progress_labels)
+    );
+    assert(
+      !('unresolved_closed_state' in result.drift),
+      'empty candidates must not produce unresolved_closed_state, got: ' + JSON.stringify(result.drift.unresolved_closed_state)
+    );
+    console.log('testClosureAuditStaleLabelsTimeout: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testClosureAuditUnresolvedClosedState() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-ca-unresolved-closed-')));
+  const binDir = path.join(tmp, 'bin');
+  try {
+    initGitRepo(tmp);
+    plantClosureRoadmapSource(tmp, 920);
+    closureAuditShim(binDir, ['setInterval(() => {}, 1 << 30);']);
+    const result = runClosureAudit([], tmp, binDir, { KAOLA_GH_REMOTE_TIMEOUT_MS: '300' });
+    const unresolved = result.drift.unresolved_closed_state;
+    assert(
+      Array.isArray(unresolved) && unresolved.includes(920),
+      'unresolved_closed_state must include 920 when issue probe times out, got: ' + JSON.stringify(unresolved)
+    );
+    assert.strictEqual(
+      result.counts.unresolved_closed_state, 1,
+      'counts.unresolved_closed_state must be 1, got: ' + result.counts.unresolved_closed_state
+    );
+    console.log('testClosureAuditUnresolvedClosedState: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testClosureAuditMrFolderTimeout() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-ca-mr-folder-timeout-')));
+  const binDir = path.join(tmp, 'bin');
+  try {
+    initGitRepo(tmp);
+    writeState(tmp, 'issue-921', 921);
+    makeMrSinkFolder(tmp, 'issue-921', 921);
+    closureAuditShim(binDir, ['setInterval(() => {}, 1 << 30);']);
+    const result = runClosureAudit([], tmp, binDir, { KAOLA_GH_REMOTE_TIMEOUT_MS: '300' });
+    assert.strictEqual(
+      result.drift.unarchived_mr_folders, 'skipped_timeout',
+      'MR-folder hang must return "skipped_timeout", got: ' + JSON.stringify(result.drift.unarchived_mr_folders)
+    );
+    console.log('testClosureAuditMrFolderTimeout: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 testInstallProfilesFeaturesTableHandling();
 testGitLabRoadmapValidateRemote();
 testStaleWorktreeCheck();
@@ -2231,6 +2299,9 @@ testClosureAuditUnarchivedMrFolderMergedLowercase();
 testClosureAuditExecuteRepairsRoadmapAndLabels();
 testClosureAuditExecuteNeverTouchesActiveFolders();
 testClosureAuditDryRunNeverCallsRemoveLabel();
+testClosureAuditStaleLabelsTimeout();
+testClosureAuditUnresolvedClosedState();
+testClosureAuditMrFolderTimeout();
 
 testGitLabRoadmapInitIssueExclusiveAndUpdate()
   .then(() => {

@@ -28,6 +28,7 @@ const {
   field,
   getRoot,
   issueIsClosed,
+  probeIssueState,
   readActiveFolders
 } = require('./kaola-workflow-active-folders');
 const {
@@ -38,14 +39,15 @@ const {
 
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
 const CLAIM_LABEL = 'workflow:in-progress';
+const REMOTE_TIMEOUT_MS = parseInt(process.env.KAOLA_GH_REMOTE_TIMEOUT_MS || '30000', 10);
 
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
 
 function ghExec(args, opts) {
   if (OFFLINE) return '';
   const mock = process.env.KAOLA_GH_MOCK_SCRIPT;
-  if (mock) return execFileSync(process.execPath, [mock, ...args], Object.assign({ encoding: 'utf8' }, opts || {})).trim();
-  return execFileSync('gh', args, Object.assign({ encoding: 'utf8' }, opts || {})).trim();
+  if (mock) return execFileSync(process.execPath, [mock, ...args], Object.assign({ encoding: 'utf8', timeout: REMOTE_TIMEOUT_MS }, opts || {})).trim();
+  return execFileSync('gh', args, Object.assign({ encoding: 'utf8', timeout: REMOTE_TIMEOUT_MS }, opts || {})).trim();
 }
 
 function parseArgs(argv) {
@@ -56,18 +58,22 @@ function parseArgs(argv) {
   return args;
 }
 
-// The ONLY caller of issueIsClosed. One remote probe per distinct issue number
+// The ONLY caller of probeIssueState. One remote probe per distinct issue number
 // (dedupe), so the gh-call count is O(distinct N), not O(detectors x N).
-// issueIsClosed self-guards OFFLINE (returns false), so this is empty offline.
+// probeIssueState self-guards OFFLINE (returns {state:'open', reason:'offline-or-null'}),
+// so closed is empty offline. Timed-out probes go to unresolved.
 function collectClosedSet(candidateNumbers) {
   const closed = new Set();
+  const unresolved = [];
   const seen = new Set();
   for (const n of candidateNumbers) {
     if (!Number.isInteger(n) || n <= 0 || seen.has(n)) continue;
     seen.add(n);
-    if (issueIsClosed(n)) closed.add(n);
+    const probe = probeIssueState(n);
+    if (probe.state === 'closed') closed.add(n);
+    else if (probe.reason === 'timeout') unresolved.push(n);
   }
-  return closed;
+  return { closed, unresolved };
 }
 
 function roadmapSourceFiles(root) {
@@ -132,7 +138,10 @@ function detectStaleLabels() {
   try {
     const raw = ghExec(['issue', 'list', '--state', 'closed', '--label', CLAIM_LABEL, '--json', 'number,title,url']);
     return raw ? JSON.parse(raw) : [];
-  } catch (_) {
+  } catch (err) {
+    if (err.killed === true || err.signal === 'SIGTERM' || err.code === 'ETIMEDOUT') {
+      return 'skipped_timeout';
+    }
     process.stderr.write('closure-audit: gh issue list failed; reporting empty stale_in_progress_labels\n');
     return [];
   }
@@ -179,7 +188,10 @@ function detectUnarchivedPrFolders(folders) {
     try {
       const raw = ghExec(['pr', 'view', f.pr_url, '--json', 'state']);
       state = raw ? String(JSON.parse(raw).state || '').toUpperCase() : '';
-    } catch (_) { continue; }
+    } catch (err) {
+      if (err.killed === true || err.signal === 'SIGTERM' || err.code === 'ETIMEDOUT') return 'skipped_timeout';
+      continue;
+    }
     if (state === 'MERGED' || state === 'CLOSED') {
       out.push({ project: f.project, issue_number: f.issue_number, pr_url: f.pr_url, pr_state: state });
     }
@@ -196,7 +208,7 @@ function buildAuditReport(root) {
   const candidates = srcFiles.map(s => s.issue_number)
     .concat(Array.from(archiveClosed))
     .concat(folders.map(f => f.issue_number).filter(n => n != null));
-  const closedSet = collectClosedSet(candidates);
+  const { closed: closedSet, unresolved } = collectClosedSet(candidates);
 
   const staleRoadmap = detectStaleRoadmapSources(srcFiles, closedSet, archiveClosed);
   const mirrorClosed = detectMirrorClosed(root, closedSet);
@@ -218,6 +230,10 @@ function buildAuditReport(root) {
     active_folder_for_closed_issue: activeClosed.length,
     unarchived_pr_folders: Array.isArray(unarchivedPr) ? unarchivedPr.length : 0
   };
+  if (unresolved.length > 0) {
+    drift.unresolved_closed_state = unresolved;
+    counts.unresolved_closed_state = unresolved.length;
+  }
   return { offline: OFFLINE, drift, counts };
 }
 
@@ -240,21 +256,31 @@ function executeRepairs(root, report) {
 
   const labelsRemoved = [];
   const labelsFailed = [];
+  let labelsSkippedReason = null;
   const labels = report.drift.stale_in_progress_labels;
   if (Array.isArray(labels)) {
     for (const it of labels) {
       try { ghExec(['issue', 'edit', String(it.number), '--remove-label', CLAIM_LABEL]); labelsRemoved.push(it.number); }
-      catch (_) { labelsFailed.push(it.number); }
+      catch (err) {
+        labelsFailed.push(it.number);
+        if (err.killed === true || err.signal === 'SIGTERM' || err.code === 'ETIMEDOUT') {
+          labelsSkippedReason = 'timeout';
+          break;
+        }
+      }
     }
   }
 
+  const repairedObj = {
+    roadmap_sources_removed: roadmapSourcesRemoved,
+    roadmap_regenerated: roadmapRegenerated,
+    labels_removed: labelsRemoved,
+    labels_failed: labelsFailed
+  };
+  if (labelsSkippedReason) repairedObj.labels_skipped_reason = labelsSkippedReason;
+
   return {
-    repaired: {
-      roadmap_sources_removed: roadmapSourcesRemoved,
-      roadmap_regenerated: roadmapRegenerated,
-      labels_removed: labelsRemoved,
-      labels_failed: labelsFailed
-    },
+    repaired: repairedObj,
     reported_not_repaired: {
       active_folder_for_closed_issue: report.drift.active_folder_for_closed_issue,
       unarchived_pr_folders: report.drift.unarchived_pr_folders

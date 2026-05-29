@@ -23,6 +23,18 @@ When the startup (`/workflow-next` → Startup Step 0) or explicit-target claim 
 - **Root cause**: Offline operation requires local roadmap evidence or an active folder. When neither exists, the target cannot be verified.
 - **Agent remedy**: Run online to validate the target exists on the forge, or create a `.roadmap/issue-N.md` entry offline with explicit scope.
 
+### Timeout-Bounded Remote Calls (issue #178)
+
+All forge API calls made by `ghExec`, `glabExec`, and `teaExec` subprocess wrappers now respect the `KAOLA_GH_REMOTE_TIMEOUT_MS` environment variable (default 30000ms).
+
+- **Scope**: Issue and PR/MR state checks during `probeIssueState` (active-folder startup validation), closure audit drift detection, and label repairs
+- **Default**: 30 seconds (30000ms). Set lower in tests (e.g., 300ms) to simulate hangs
+- **Timeout behavior**: When a subprocess call times out (exceeds the configured duration), the calling code receives a timeout error. `probeIssueState` returns `{state: 'unavailable', reason: 'timeout'}`, treated as a transient failure distinct from offline mode
+- **Audit operations**: `detectStaleLabels` and `detectUnarchivedPrFolders` / `detectUnarchivedMrFolders` return the sentinel string `'skipped_timeout'` when a remote call times out (parallel to existing `'skipped_offline'` for offline mode)
+- **Audit JSON field `unresolved_closed_state`**: When a closure-audit drift check times out while determining whether an issue is closed, the issue number is added to `unresolved_closed_state` array in both `drift` and `counts` sections. This field is omitted when empty
+- **Label repair**: In `closure-audit --execute`, if a label edit times out mid-loop, the repair loop breaks immediately and sets `labels_skipped_reason: 'timeout'` on the repair record (distinct from `labels_skipped_reason: 'offline'` when `KAOLA_WORKFLOW_OFFLINE=1`)
+- **Applies to all three forge editions**: GitHub (`gh`), GitLab (`glab`), and Gitea (`tea`)
+
 ## Sink API
 
 The Phase 6 sink is responsible for delivering completed work to the repository and updating GitHub, GitLab, or Gitea metadata.
@@ -75,7 +87,13 @@ The Phase 6 sink is responsible for delivering completed work to the repository 
 - **Offline support**: `KAOLA_WORKFLOW_OFFLINE=1` writes `OFFLINE_PLACEHOLDER` commit instead of real PR/MR metadata; applies to GitHub, GitLab, and Gitea editions
 - **Config**: `pr_auto_merge` key in `~/.config/kaola-workflow/config.json` enables auto-merge after PR creation (GitHub + Gitea editions; non-fatal if merge fails). `mr_auto_merge` key enables the same for GitLab edition. Reads config internally; no dispatch changes required.
 
-## Environment Variables — Test Hooks
+## Environment Variables
+
+### Timeout Control
+
+- **`KAOLA_GH_REMOTE_TIMEOUT_MS`** (default 30000) — Timeout in milliseconds for all forge API calls made by `ghExec`, `glabExec`, and `teaExec`. Controls how long to wait for GitHub, GitLab, or Gitea API responses during issue state checks, closure audits, and label operations. When a call times out, affected operations return `unavailable` or `skipped_timeout` sentinels instead of failing hard. Set lower in tests to simulate API hangs (e.g., `KAOLA_GH_REMOTE_TIMEOUT_MS=300` to timeout after 300ms). Applies to all three forge editions (GitHub, GitLab, Gitea).
+
+### Test Hooks
 
 The following environment variables are **test-only hooks** used by the test suite to simulate failure scenarios. Do not use in production.
 
@@ -664,6 +682,7 @@ node scripts/kaola-workflow-closure-audit.js --execute
 | `stale_in_progress_labels` | Closed remote issues that still carry `workflow:in-progress`. |
 | `active_folder_for_closed_issue` | An active `kaola-workflow/{project}/` folder whose linked issue is closed. `dirty` flags uncommitted content. **Report-only.** |
 | `unarchived_pr_folders` | An active `sink: pr` folder whose PR is `MERGED`/`CLOSED` but was never archived (the watcher never ran). **Report-only.** |
+| `unresolved_closed_state` | (omitted when empty) Issue numbers for which the closed state could not be determined due to timeout. Present in both `drift` and `counts` sections when remote calls time out (issue #178). |
 
 **Dry-run output** (default):
 ```json
@@ -675,9 +694,10 @@ node scripts/kaola-workflow-closure-audit.js --execute
     "mirror_lists_closed_issues": [127],
     "stale_in_progress_labels": [{ "number": 127, "title": "...", "url": "..." }],
     "active_folder_for_closed_issue": [{ "project": "issue-150", "issue_number": 150, "dirty": false }],
-    "unarchived_pr_folders": [{ "project": "issue-152", "issue_number": 152, "pr_url": "...", "pr_state": "MERGED" }]
+    "unarchived_pr_folders": [{ "project": "issue-152", "issue_number": 152, "pr_url": "...", "pr_state": "MERGED" }],
+    "unresolved_closed_state": [128, 129]
   },
-  "counts": { "stale_roadmap_sources": 1, "mirror_lists_closed_issues": 1, "stale_in_progress_labels": 1, "active_folder_for_closed_issue": 1, "unarchived_pr_folders": 1 }
+  "counts": { "stale_roadmap_sources": 1, "mirror_lists_closed_issues": 1, "stale_in_progress_labels": 1, "active_folder_for_closed_issue": 1, "unarchived_pr_folders": 1, "unresolved_closed_state": 2 }
 }
 ```
 
@@ -686,10 +706,13 @@ node scripts/kaola-workflow-closure-audit.js --execute
 {
   "dry_run": false,
   "offline": false,
-  "repaired": { "roadmap_sources_removed": [127], "roadmap_regenerated": true, "labels_removed": [127], "labels_failed": [] },
+  "repaired": { "roadmap_sources_removed": [127], "roadmap_regenerated": true, "labels_removed": [127], "labels_failed": [], "labels_skipped_reason": "timeout" },
   "reported_not_repaired": { "active_folder_for_closed_issue": [...], "unarchived_pr_folders": [...] }
 }
 ```
+
+Field notes:
+- `labels_skipped_reason` is present when label removal does not complete: `"timeout"` (API call times out, issue #178), `"offline"` (KAOLA_WORKFLOW_OFFLINE=1), or other reasons. Omitted when `labels_removed` array contains all attempted removals.
 
 **Safe-repair boundary.** `--execute` only ever (1) deletes stale
 `.roadmap/issue-N.md` sources, (2) regenerates `ROADMAP.md`, and (3) removes
@@ -705,6 +728,14 @@ Remote-dependent classes (`stale_in_progress_labels`, `unarchived_pr_folders`)
 report the string `"skipped_offline"` rather than an array, and `--execute`
 performs no remote label removal. A non-offline `gh` failure reports an empty
 array plus a stderr warning — it is never silently downgraded to `skipped_offline`.
+
+**Timeout behavior** (issue #178). When `KAOLA_GH_REMOTE_TIMEOUT_MS` is set and
+a remote call times out, `detectStaleLabels` and `detectUnarchivedPrFolders`/
+`detectUnarchivedMrFolders` return the string `"skipped_timeout"` rather than an
+array. In `--execute`, if a label removal times out mid-loop, the repair loop
+breaks immediately and `labels_skipped_reason: "timeout"` is set on the repair
+record. `unresolved_closed_state` is populated with issue numbers whose closed
+state could not be determined due to timeout.
 
 #### How this differs from `stale-worktree-check` / `stale-worktree-cleanup`
 

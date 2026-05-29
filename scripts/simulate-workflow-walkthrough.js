@@ -3220,6 +3220,10 @@ function testClosureAuditOfflineRemoteClassesSkipped() {
       result.drift.unarchived_pr_folders === 'skipped_offline',
       'offline: unarchived_pr_folders must be "skipped_offline", got: ' + JSON.stringify(result.drift.unarchived_pr_folders)
     );
+    assert(
+      !('unresolved_closed_state' in result.drift),
+      'offline: unresolved_closed_state must be absent when offline (omit-when-empty), got: ' + JSON.stringify(result.drift.unresolved_closed_state)
+    );
     console.log('testClosureAuditOfflineRemoteClassesSkipped: PASSED');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -3497,6 +3501,73 @@ function testClosureAuditDryRunNeverCallsRemoveLabel() {
   }
 }
 
+function testClosureAuditStaleLabelsTimeout() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ca-stale-labels-timeout-'));
+  const binDir = path.join(tmp, 'bin');
+  try {
+    initGitRepo(tmp);
+    closureAuditShim(binDir, ['setInterval(() => {}, 1 << 30);']);
+    const result = runClosureAudit([], tmp, binDir, { KAOLA_GH_REMOTE_TIMEOUT_MS: '300' });
+    assert(
+      result.drift.stale_in_progress_labels === 'skipped_timeout',
+      'stale-labels hang must return "skipped_timeout", got: ' + JSON.stringify(result.drift.stale_in_progress_labels)
+    );
+    assert(
+      !('unresolved_closed_state' in result.drift),
+      'empty candidates must not produce unresolved_closed_state, got: ' + JSON.stringify(result.drift.unresolved_closed_state)
+    );
+    console.log('testClosureAuditStaleLabelsTimeout: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testClosureAuditUnresolvedClosedState() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ca-unresolved-closed-'));
+  const binDir = path.join(tmp, 'bin');
+  try {
+    initGitRepo(tmp);
+    plantRoadmapIssue(tmp, 910, '');
+    closureAuditShim(binDir, ['setInterval(() => {}, 1 << 30);']);
+    const result = runClosureAudit([], tmp, binDir, { KAOLA_GH_REMOTE_TIMEOUT_MS: '300' });
+    const unresolved = result.drift.unresolved_closed_state;
+    assert(
+      Array.isArray(unresolved) && unresolved.includes(910),
+      'unresolved_closed_state must include 910 when issue probe times out, got: ' + JSON.stringify(unresolved)
+    );
+    assert(
+      result.counts.unresolved_closed_state === 1,
+      'counts.unresolved_closed_state must be 1, got: ' + result.counts.unresolved_closed_state
+    );
+    console.log('testClosureAuditUnresolvedClosedState: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testClosureAuditPrFolderTimeout() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ca-pr-folder-timeout-'));
+  const binDir = path.join(tmp, 'bin');
+  try {
+    initGitRepo(tmp);
+    plantActiveFolder(tmp, 'issue-911', 911, null);
+    const stateFile = path.join(tmp, 'kaola-workflow', 'issue-911', 'workflow-state.md');
+    let state = fs.readFileSync(stateFile, 'utf8');
+    state = state.replace(/^sink:\s*.*$/m, 'sink: pr');
+    if (!/^pr_url:/m.test(state)) state += 'pr_url: https://github.com/test/repo/pull/911\n';
+    fs.writeFileSync(stateFile, state);
+    closureAuditShim(binDir, ['setInterval(() => {}, 1 << 30);']);
+    const result = runClosureAudit([], tmp, binDir, { KAOLA_GH_REMOTE_TIMEOUT_MS: '300' });
+    assert(
+      result.drift.unarchived_pr_folders === 'skipped_timeout',
+      'PR-folder hang must return "skipped_timeout", got: ' + JSON.stringify(result.drift.unarchived_pr_folders)
+    );
+    console.log('testClosureAuditPrFolderTimeout: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 async function main() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-active-folders-'));
   try {
@@ -3577,6 +3648,9 @@ async function main() {
     testClosureAuditExecuteRepairsRoadmapAndLabels();
     testClosureAuditExecuteNeverTouchesActiveFolders();
     testClosureAuditDryRunNeverCallsRemoveLabel();
+    testClosureAuditStaleLabelsTimeout();
+    testClosureAuditUnresolvedClosedState();
+    testClosureAuditPrFolderTimeout();
     console.log('Workflow walkthrough simulation passed');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
