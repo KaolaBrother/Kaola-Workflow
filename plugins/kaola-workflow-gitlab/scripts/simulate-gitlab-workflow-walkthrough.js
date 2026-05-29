@@ -108,7 +108,7 @@ function testAuditAndRepairLabels() {
     {
       const r = spawnSync(process.execPath, [claimScript, 'audit-labels'], {
         encoding: 'utf8',
-        env: Object.assign({}, process.env, { KAOLA_GLAB_MOCK_SCRIPT: mockScript })
+        env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_GLAB_MOCK_SCRIPT: mockScript })
       });
       assert.strictEqual(r.status, 0, 'audit-labels must exit 0, got: ' + r.status + ' stderr: ' + r.stderr);
       const result = JSON.parse(r.stdout);
@@ -120,7 +120,7 @@ function testAuditAndRepairLabels() {
     {
       const r = spawnSync(process.execPath, [claimScript, 'repair-labels'], {
         encoding: 'utf8',
-        env: Object.assign({}, process.env, { KAOLA_GLAB_MOCK_SCRIPT: mockScript })
+        env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_GLAB_MOCK_SCRIPT: mockScript })
       });
       assert.strictEqual(r.status, 0, 'repair-labels dry-run must exit 0, got: ' + r.status + ' stderr: ' + r.stderr);
       const result = JSON.parse(r.stdout);
@@ -134,7 +134,7 @@ function testAuditAndRepairLabels() {
     {
       const r = spawnSync(process.execPath, [claimScript, 'repair-labels', '--execute'], {
         encoding: 'utf8',
-        env: Object.assign({}, process.env, { KAOLA_GLAB_MOCK_SCRIPT: mockScript })
+        env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_GLAB_MOCK_SCRIPT: mockScript })
       });
       assert.strictEqual(r.status, 0, 'repair-labels --execute must exit 0, got: ' + r.status + ' stderr: ' + r.stderr);
       const result = JSON.parse(r.stdout);
