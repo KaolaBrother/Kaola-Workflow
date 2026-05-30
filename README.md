@@ -519,6 +519,7 @@ when developing locally. Drift between `scripts/` and
 | `kaola-workflow-sink-merge.js` (GitHub) / `kaola-gitlab-workflow-sink-merge.js` (GitLab) / `kaola-gitea-workflow-sink-merge.js` (Gitea) | Phase 6 merge sink: fetch, rebase onto `origin/main`, FF-only merge with retry on race conditions, push, close the issue, and clean up the branch. Falls back to the PR sink when the merge is impossible. | Phase 6 |
 | `kaola-workflow-sink-pr.js` (GitHub) / `kaola-gitlab-workflow-sink-mr.js` (GitLab) / `kaola-gitea-workflow-sink-pr.js` (Gitea) | Phase 6 PR/MR sink: push the branch, open a PR via `gh pr create` (GitHub), `glab mr create` (GitLab), or `tea pr create` (Gitea), record the PR/MR URL, and optionally enable auto-merge. | Phase 6 |
 | `kaola-workflow-compact-context.js` | Wired to the `SessionStart` (`compact`) hook. Reads the most recent `workflow-state.md` and injects a resume hint into the post-`/compact` session. | Hook |
+| `kaola-workflow-fast-audit.js` | Read-only fast-path calibration audit: scans archived and active `fast-summary.md` files and reports status counts, escalation-reason histogram, file-count distribution, and review mode (delegated `code-reviewer` vs self-review). Human table by default; `--json` for machine-readable output. Always exits 0. | On demand / audit |
 
 ### Validation and test scripts
 
@@ -529,6 +530,7 @@ when developing locally. Drift between `scripts/` and
 | `validate-kaola-workflow-contracts.js` | Same contractual assertions on the Codex plugin surface under `plugins/kaola-workflow/`. |
 | `validate-script-sync.js` | Byte-identical drift guard between `scripts/` (Claude Code) and `plugins/kaola-workflow/scripts/` (Codex), plus shared hook copies that must stay in sync across GitHub, GitLab, and Gitea surfaces. |
 | `validate-vendored-agents.js` | Asserts the vendored Claude Code agent prompts match the pinned upstream Everything Claude Code commit. |
+| `test-fast-audit.js` | Regression test for `kaola-workflow-fast-audit.js` — 38 assertions over synthetic fast-summary fixtures (status/escalation/file-count/review-mode parsing, empty-corpus and malformed-input robustness). Uses temp-dir fixtures only, never the real archive. |
 
 ### Active folder coordination
 
