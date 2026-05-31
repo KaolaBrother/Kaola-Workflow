@@ -400,12 +400,12 @@ performs the same review locally when no detached advisor profile is available.
 
 Current official release versions:
 
-- Claude Code command install, GitHub edition: `3.17.1`
-- Claude Code command install, GitLab edition: `3.17.1`
-- Claude Code command install, Gitea edition: `3.17.1`
-- Codex `kaola-workflow` plugin manifest: `1.8.1`
-- Codex `kaola-workflow-gitlab` plugin manifest: `1.8.1`
-- Codex `kaola-workflow-gitea` plugin manifest: `1.8.1`
+- Claude Code command install, GitHub edition: `3.17.2`
+- Claude Code command install, GitLab edition: `3.17.2`
+- Claude Code command install, Gitea edition: `3.17.2`
+- Codex `kaola-workflow` plugin manifest: `1.8.2`
+- Codex `kaola-workflow-gitlab` plugin manifest: `1.8.2`
+- Codex `kaola-workflow-gitea` plugin manifest: `1.8.2`
 
 The root `package.json` version is the official repository and Claude Code
 command-install release version. The GitLab Claude command pack follows that
@@ -585,7 +585,7 @@ Valid `parallel_mode` values:
 - `auto` (default): Classify each issue as green/yellow/red/blocked before claiming, based on dependency graphs, exact file-path overlaps, file-area overlaps, and active folders.
 - Other values: Bypass classification; treat all issues as green for fast claiming.
 
-Exact file-path overlap returns `red`, including shared-infrastructure files such as `scripts/kaola-workflow-claim.js` and packaged plugin files under `plugins/kaola-workflow/`. Different files in the same shared-infrastructure directory can still return `yellow`. Offline roadmap classification reads explicit paths and `touches:` metadata from `kaola-workflow/.roadmap/issue-{N}.md`.
+Exact file-path overlap returns `red`, including shared-infrastructure files such as `scripts/kaola-workflow-claim.js` and packaged plugin files under `plugins/kaola-workflow/`. Different files in the same shared-infrastructure directory can still return `yellow`. Offline roadmap classification reads explicit paths and `touches:` metadata from `kaola-workflow/.roadmap/issue-{N}.md`. A claimed project's in-flight file-set is read from its `phase3-plan.md`/`phase1-research.md` or, for a fast-path project, from the `- Write Set:` declaration in its `fast-summary.md` `## Scope` section — so fast projects participate in overlap detection at parity with full projects.
 
 When an issue receives a `yellow` verdict (shared infrastructure warning), a cache file is written to `kaola-workflow/{project}/.cache/parallel-classifier.md` to flag the caution for the phase team.
 

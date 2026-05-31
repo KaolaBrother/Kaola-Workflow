@@ -121,6 +121,24 @@ function extractCoarseAreas(text) {
   return areas;
 }
 
+// Return the body of a `## {heading}` markdown section, up to the next h1/h2
+// heading (or EOF). Used to read only a fast-summary.md's `## Scope` block,
+// excluding later evidence/review sections that carry incidental path tokens.
+function sectionBody(content, heading) {
+  const lines = String(content || '').split('\n');
+  const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const headRe = new RegExp('^##\\s+' + escaped + '\\s*$');
+  let i = 0;
+  for (; i < lines.length; i++) { if (headRe.test(lines[i])) { i++; break; } }
+  if (i >= lines.length) return '';
+  const out = [];
+  for (; i < lines.length; i++) {
+    if (/^#{1,2}\s/.test(lines[i])) break;
+    out.push(lines[i]);
+  }
+  return out.join('\n');
+}
+
 // ---------------------------------------------------------------------------
 // Label parsers
 // ---------------------------------------------------------------------------
@@ -211,10 +229,17 @@ function scanClaimedOverlap(candidatePaths, candidateAreas, candidateAreaLabels,
 
     let phase3Content = '';
     let phase1Content = '';
+    let fastScope = '';
     try { phase3Content = fs.readFileSync(path.join(projectDir, 'phase3-plan.md'), 'utf8'); } catch (_) {}
     try { phase1Content = fs.readFileSync(path.join(projectDir, 'phase1-research.md'), 'utf8'); } catch (_) {}
+    // issue #207: a fast project produces no phase files; its only file-set-bearing
+    // artifact is fast-summary.md. Read its declared write set from the `## Scope`
+    // section only, so its in-flight files are visible to overlap detection (parity
+    // with full projects). Scope-only avoids false overlaps from command/test-output
+    // path tokens in the Implementation Evidence / Review sections.
+    try { fastScope = sectionBody(fs.readFileSync(path.join(projectDir, 'fast-summary.md'), 'utf8'), 'Scope'); } catch (_) {}
 
-    const combined = phase3Content + phase1Content;
+    const combined = phase3Content + '\n' + phase1Content + '\n' + fastScope;
     const claimedPaths = extractFilePaths(combined);
     const claimedAreas = extractCoarseAreas(combined);
     const claimedAreaLabels = parseAreaLabelsFromText(combined);

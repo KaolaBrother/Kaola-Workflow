@@ -1,6 +1,6 @@
 {
   "name": "kaola-workflow-gitea",
-  "version": "3.17.1",
+  "version": "3.17.2",
   "description": "Gitea edition of the 6-phase Kaola-Workflow Claude Code plugin, using Gitea issues, pull requests, and tea.",
   "author": {
     "name": "KaolaBrother",

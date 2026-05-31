@@ -405,6 +405,13 @@ assertNotIncludes(fastCmd198, 'two closely related files');
 assertNotIncludes(fastCmd198, '≤ 2');
 assertNotIncludes(fastSkill198, '(≤ 2)');
 assertNotIncludes(fastSkill198, '> 2 files');
+// issue #207: fast-overlap parity (GitLab) — Scope declares a `- Write Set:` line
+// and the classifier reads that fast-summary.md Scope section.
+for (const fastFile207 of [fastCmd198, fastSkill198]) assertIncludes(fastFile207, '- Write Set:');
+const classifier207 = pluginRoot + '/scripts/kaola-gitlab-workflow-classifier.js';
+assertIncludes(classifier207, 'fast-summary.md');
+assertIncludes(classifier207, 'sectionBody(');
+assertIncludes(classifier207, "'Scope'");
 const nextCmd198 = pluginRoot + '/commands/workflow-next.md';
 const nextSkill198 = pluginRoot + '/skills/kaola-workflow-next/SKILL.md';
 for (const nextFile198 of [nextCmd198, nextSkill198]) {

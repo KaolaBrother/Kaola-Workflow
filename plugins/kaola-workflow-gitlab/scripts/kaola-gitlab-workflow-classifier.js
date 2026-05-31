@@ -90,6 +90,23 @@ function extractCoarseAreas(text) {
   return areas;
 }
 
+// Return the body of a `## {heading}` markdown section, up to the next h1/h2
+// heading (or EOF). Used to read only a fast-summary.md's `## Scope` block.
+function sectionBody(content, heading) {
+  const lines = String(content || '').split('\n');
+  const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const headRe = new RegExp('^##\\s+' + escaped + '\\s*$');
+  let i = 0;
+  for (; i < lines.length; i++) { if (headRe.test(lines[i])) { i++; break; } }
+  if (i >= lines.length) return '';
+  const out = [];
+  for (; i < lines.length; i++) {
+    if (/^#{1,2}\s/.test(lines[i])) break;
+    out.push(lines[i]);
+  }
+  return out.join('\n');
+}
+
 function parseDependsOn(labels) {
   for (const label of labels || []) {
     const match = labelName(label).match(DEPENDS_ON_REGEX);
@@ -178,9 +195,13 @@ function scanClaimedOverlap(candidatePaths, candidateAreas, candidateAreaLabels,
     if (!active.isSafeName(folder.project)) continue;
     const phase3 = path.join(folder.project_dir, 'phase3-plan.md');
     const phase1 = path.join(folder.project_dir, 'phase1-research.md');
+    const fastSummary = path.join(folder.project_dir, 'fast-summary.md');
     let combined = '';
     try { combined += fs.readFileSync(phase3, 'utf8'); } catch (_) {}
     try { combined += fs.readFileSync(phase1, 'utf8'); } catch (_) {}
+    // issue #207: read a fast project's declared write set from fast-summary.md's
+    // `## Scope` section only, so its in-flight files are visible to overlap detection.
+    try { combined += '\n' + sectionBody(fs.readFileSync(fastSummary, 'utf8'), 'Scope'); } catch (_) {}
 
     const claimedPaths = extractFilePaths(combined);
     const claimedAreas = extractCoarseAreas(combined);

@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [3.17.2] — 2026-05-31
+
+### Fixed
+
+- **Parallel classifier ignored fast projects' in-flight files → wrong-GREEN overlap** (issue #207): `scanClaimedOverlap` built a claimed project's in-flight file-set from `phase3-plan.md` + `phase1-research.md` only. A fast-path project produces neither — its only file-set-bearing artifact is `fast-summary.md` — so it contributed an empty set and its files were invisible to overlap detection. A candidate issue overlapping a claimed fast project was therefore mis-classified `green` (the signal that suppresses an agent's manual overlap check), whereas the byte-equivalent overlap with a full project was correctly `red`. The classifier now also reads the declared write set from `fast-summary.md`'s `## Scope` section (a new `sectionBody()` helper restricts extraction to that section, so command/test-output path tokens in the later `## Implementation Evidence` / `## Review` sections cannot manufacture false overlaps / over-RED). Applied across all four editions: GitHub root `scripts/kaola-workflow-classifier.js` and its byte-identical Codex mirror `plugins/kaola-workflow/scripts/kaola-workflow-classifier.js`, plus `plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-classifier.js` and `plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-classifier.js`. To guarantee real repository paths land in the section the classifier reads, the fast-summary `## Scope` template now declares a machine-readable `- Write Set:` line (reusing the existing phase3 write-set convention) instead of the freeform `[files changed, …]` placeholder, written at `IN_PROGRESS` creation; updated in the command + skill across all editions (`commands/kaola-workflow-fast.md` ×3 and `skills/kaola-workflow-fast/SKILL.md` ×3). Regression coverage added to `scripts/simulate-workflow-walkthrough.js` (overlap→red, disjoint→green, and a Scope-section-isolation→green guard proving an evidence-only path does not over-block), `plugins/kaola-workflow-gitlab/scripts/test-gitlab-workflow-scripts.js`, and `plugins/kaola-workflow-gitea/scripts/test-gitea-workflow-scripts.js`. Contract validators lock the template↔classifier coupling against drift in all four editions (`- Write Set:` present in the fast Scope, and the classifier reads the `fast-summary.md` `## Scope` section). Reference `docs/investigations/classifier-fast-overlap-2026-05-31.md`. Codex packs bumped to 1.8.2.
+
 ## [3.17.1] — 2026-05-31
 
 ### Fixed

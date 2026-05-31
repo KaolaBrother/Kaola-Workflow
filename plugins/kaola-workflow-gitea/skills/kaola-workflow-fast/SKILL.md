@@ -28,7 +28,7 @@ Invoke the `planner` Codex agent role with the linked Gitea issue body and phase
 
 Write raw output to `kaola-workflow/{project}/.cache/planner.md`.
 
-If planner reports > 5 files or ≥ 2 materially-different viable approaches (`approach_ambiguity`), escalate. The orchestrator captures the returned plan into `fast-summary.md` with status `IN_PROGRESS` (planner has Read-only tools).
+If planner reports > 5 files or ≥ 2 materially-different viable approaches (`approach_ambiguity`), escalate. The orchestrator captures the returned plan into `fast-summary.md` with status `IN_PROGRESS`, recording the declared write set as the `## Scope` `- Write Set:` line with real repository paths so the parallel-overlap classifier can see this fast project's in-flight files (planner has Read-only tools).
 
 ## Step 2 - Execute (tdd-guide)
 
@@ -75,7 +75,8 @@ Update `fast-summary.md` status to `PASSED`.
 PASSED | IN_PROGRESS | REVIEW | ESCALATED
 
 ## Scope
-[files changed, acceptance criteria]
+- Write Set: path/to/file, path/to/test-file
+- Acceptance: <acceptance check command>
 
 ## Plan
 [brief description]

@@ -109,6 +109,12 @@ assertIncludes(fastSkill198, 'absolute backstop of 6');
 assertIncludes(fastSkill198, '`code-reviewer` is mandatory');
 assertNotIncludes(fastSkill198, '(≤ 2)');
 assertNotIncludes(fastSkill198, '> 2 files');
+// issue #207: fast-overlap parity (Codex) — Scope declares a `- Write Set:` line
+// and the classifier reads that fast-summary.md Scope section.
+assertIncludes(fastSkill198, '- Write Set:');
+assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'fast-summary.md');
+assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'sectionBody(');
+assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, "'Scope'");
 const nextSkill198 = `${pluginRoot}/skills/kaola-workflow-next/SKILL.md`;
 assertIncludes(nextSkill198, 'mechanical');
 assertIncludes(nextSkill198, '≤ 5');

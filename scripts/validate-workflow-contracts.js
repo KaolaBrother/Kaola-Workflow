@@ -141,6 +141,16 @@ assertIncludes(nextFile198, '≤ 5');
 assertIncludes(nextFile198, 'design choice');
 assertNotIncludes(nextFile198, '≤ 2 closely related files');
 
+// issue #207: fast-overlap parity. The fast-summary.md `## Scope` must declare a
+// machine-readable `- Write Set:` line, and the classifier must read that
+// fast-summary.md Scope section, so a claimed fast project's in-flight files
+// participate in parallel-overlap detection at parity with full projects. Both
+// sides are locked so the template↔classifier coupling cannot silently drift.
+assertIncludes(fastFile198, '- Write Set:');
+assertIncludes('scripts/kaola-workflow-classifier.js', 'fast-summary.md');
+assertIncludes('scripts/kaola-workflow-classifier.js', 'sectionBody(');
+assertIncludes('scripts/kaola-workflow-classifier.js', "'Scope'");
+
 assert(exists('scripts/kaola-workflow-active-folders.js'), 'active folder reader is missing');
 assert(exists('scripts/kaola-workflow-claim.js'), 'claim script is missing');
 assert(exists('scripts/kaola-workflow-classifier.js'), 'classifier script is missing');

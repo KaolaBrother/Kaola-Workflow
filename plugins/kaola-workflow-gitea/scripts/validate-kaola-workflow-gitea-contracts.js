@@ -407,6 +407,13 @@ assertNotIncludes(giteaFastCmd198, 'two closely related files');
 assertNotIncludes(giteaFastCmd198, '≤ 2');
 assertNotIncludes(giteaFastSkill198, '(≤ 2)');
 assertNotIncludes(giteaFastSkill198, '> 2 files');
+// issue #207: fast-overlap parity (Gitea) — Scope declares a `- Write Set:` line
+// and the classifier reads that fast-summary.md Scope section.
+for (const fastFile207 of [giteaFastCmd198, giteaFastSkill198]) assertIncludes(fastFile207, '- Write Set:');
+const giteaClassifier207 = pluginRoot + '/scripts/kaola-gitea-workflow-classifier.js';
+assertIncludes(giteaClassifier207, 'fast-summary.md');
+assertIncludes(giteaClassifier207, 'sectionBody(');
+assertIncludes(giteaClassifier207, "'Scope'");
 const giteaNextCmd198 = pluginRoot + '/commands/workflow-next.md';
 const giteaNextSkill198 = pluginRoot + '/skills/kaola-workflow-next/SKILL.md';
 for (const nextFile of [giteaNextCmd198, giteaNextSkill198]) {

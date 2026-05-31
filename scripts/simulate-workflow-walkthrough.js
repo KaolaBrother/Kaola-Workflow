@@ -456,6 +456,76 @@ function testClassifierReleasedFolderExcluded() {
   }
 }
 
+// issue #207: a fast project's only file-set-bearing artifact is fast-summary.md.
+// Its declared write set (the `## Scope` `- Write Set:` line) must participate in
+// overlap detection at parity with full projects' phase files.
+function testClassifierFastScopeOverlapRed() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-classifier-fast-red-'));
+  try {
+    // Fast project: workflow-state.md (so it is an active folder) + fast-summary.md,
+    // no phase3-plan.md/phase1-research.md.
+    plantActiveFolder(tmp, 'fast-active-a', 200, null, 'active');
+    fs.writeFileSync(
+      path.join(tmp, 'kaola-workflow', 'fast-active-a', 'fast-summary.md'),
+      '# Fast Summary: fast-active-a\n\n## Status\nIN_PROGRESS\n\n## Scope\n- Write Set: scripts/kaola-workflow-claim.js\n- Acceptance: node x\n\n## Plan\nstuff\n'
+    );
+    plantRoadmapIssue(tmp, 201, 'body: candidate also touches scripts/kaola-workflow-claim.js');
+    const result = runClassifierOffline(tmp, 201);
+    assert(result.verdict === 'red',
+      'issue #207: candidate overlapping a fast project Write Set must yield red, got ' + result.verdict);
+    assert(result.reasoning && result.reasoning.includes('exact file path'),
+      'fast-overlap red reasoning must mention exact file path; got: ' + result.reasoning);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log('testClassifierFastScopeOverlapRed: PASSED');
+}
+
+function testClassifierFastScopeDisjointGreen() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-classifier-fast-green-'));
+  try {
+    plantActiveFolder(tmp, 'fast-active-b', 202, null, 'active');
+    fs.writeFileSync(
+      path.join(tmp, 'kaola-workflow', 'fast-active-b', 'fast-summary.md'),
+      '# Fast Summary: fast-active-b\n\n## Status\nPASSED\n\n## Scope\n- Write Set: docs/api.md\n- Acceptance: node x\n\n## Plan\nstuff\n'
+    );
+    plantRoadmapIssue(tmp, 203, 'body: candidate touches commands/kaola-workflow-fast.md');
+    const result = runClassifierOffline(tmp, 203);
+    assert(result.verdict === 'green',
+      'issue #207: candidate disjoint from a fast project Write Set must stay green, got ' + result.verdict);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log('testClassifierFastScopeDisjointGreen: PASSED');
+}
+
+// Guards the Scope-section-only read: a path that appears ONLY in the later
+// Implementation Evidence / Review sections (command + test-output noise) must
+// NOT manufacture an overlap (would be a false RED / over-block regression).
+function testClassifierFastScopeSectionIsolationGreen() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-classifier-fast-iso-'));
+  try {
+    plantActiveFolder(tmp, 'fast-active-c', 204, null, 'active');
+    fs.writeFileSync(
+      path.join(tmp, 'kaola-workflow', 'fast-active-c', 'fast-summary.md'),
+      [
+        '# Fast Summary: fast-active-c', '',
+        '## Status', 'PASSED', '',
+        '## Scope', '- Write Set: docs/api.md', '- Acceptance: node x', '',
+        '## Implementation Evidence', 'ran node scripts/kaola-workflow-claim.js; tests passed', '',
+        '## Review', 'reviewed scripts/kaola-workflow-claim.js', ''
+      ].join('\n')
+    );
+    plantRoadmapIssue(tmp, 205, 'body: candidate touches scripts/kaola-workflow-claim.js');
+    const result = runClassifierOffline(tmp, 205);
+    assert(result.verdict === 'green',
+      'issue #207: a path only in Implementation Evidence/Review (not ## Scope) must NOT trigger overlap; expected green, got ' + result.verdict);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log('testClassifierFastScopeSectionIsolationGreen: PASSED');
+}
+
 function testClassifierDependsOnGate() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-classifier-depson-'));
   try {
@@ -3935,6 +4005,9 @@ async function main() {
     testClassifierFolderOverlapYellow();
     testClassifierClosedIssueResidueIgnored();
     testClassifierReleasedFolderExcluded();
+    testClassifierFastScopeOverlapRed();
+    testClassifierFastScopeDisjointGreen();
+    testClassifierFastScopeSectionIsolationGreen();
     testClassifierDependsOnGate();
     testProbeIssueStateOffline();
     testProbeIssueStateNullIssue();

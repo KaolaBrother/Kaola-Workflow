@@ -478,6 +478,48 @@ withForge({
   assert.strictEqual(result.verdict, 'red');
 });
 
+// issue #207: a fast project's declared write set (fast-summary.md ## Scope) must
+// participate in overlap detection at parity with phase files.
+withForge({
+  viewIssue(issueIid) {
+    return {
+      issue_iid: issueIid,
+      number: issueIid,
+      state: 'open',
+      labels: [],
+      body: 'touches: plugins/kaola-workflow-gitea/scripts/claimed.js'
+    };
+  }
+}, () => {
+  const root = tempRoot('kw-gt-fast-overlap-');
+  const dir = writeState(root, 'fast-claimed-project', 24);
+  fs.writeFileSync(path.join(dir, 'fast-summary.md'),
+    '# Fast Summary: fast-claimed-project\n\n## Status\nIN_PROGRESS\n\n## Scope\n- Write Set: plugins/kaola-workflow-gitea/scripts/claimed.js\n- Acceptance: node x\n');
+  const result = classifier.classifyIssue(25, root);
+  assert.strictEqual(result.verdict, 'red');
+});
+
+// issue #207: a path only in the Implementation Evidence section (not ## Scope)
+// must NOT manufacture an overlap (guards the Scope-only read against over-RED).
+withForge({
+  viewIssue(issueIid) {
+    return {
+      issue_iid: issueIid,
+      number: issueIid,
+      state: 'open',
+      labels: [],
+      body: 'touches: plugins/kaola-workflow-gitea/scripts/claimed.js'
+    };
+  }
+}, () => {
+  const root = tempRoot('kw-gt-fast-iso-');
+  const dir = writeState(root, 'fast-iso-project', 26);
+  fs.writeFileSync(path.join(dir, 'fast-summary.md'),
+    '# Fast Summary: fast-iso-project\n\n## Status\nPASSED\n\n## Scope\n- Write Set: docs/api.md\n- Acceptance: node x\n\n## Implementation Evidence\nran plugins/kaola-workflow-gitea/scripts/claimed.js\n');
+  const result = classifier.classifyIssue(27, root);
+  assert.strictEqual(result.verdict, 'green');
+});
+
 withForge({
   listIssues() {
     return [
