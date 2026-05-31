@@ -95,6 +95,9 @@ function activeProjects(workflowDir) {
       const projectDir = path.join(workflowDir, entry.name);
       const stateFile = path.join(projectDir, 'workflow-state.md');
       if (projectHasPhaseArtifacts(projectDir)) return true;
+      // A fast-path project produces fast-summary.md instead of numbered phase
+      // artifacts; recognize it as active so no-arg discovery reaches routeFast().
+      if (exists(path.join(projectDir, 'fast-summary.md'))) return true;
       if (!exists(stateFile)) return false;
       const content = readFile(stateFile);
       return /^status:\s*active\s*$/m.test(content);

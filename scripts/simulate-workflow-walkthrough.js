@@ -190,6 +190,48 @@ function testRepairFastPath(tmp) {
   assert(reconState.includes('next_skill: kaola-workflow-fast fast-recon'), 'reconstructed fast state must route to the fast skill');
 }
 
+function testRepairFastNoArgSingle() {
+  // issue #201: no-argument repair-state must DISCOVER a project whose only active
+  // artifact is fast-summary.md (no workflow-state.md, no numbered phase files) —
+  // symmetric with numbered phase-artifact discovery. Uses its own temp root so the
+  // single-project invariant holds (shared roots already contain other projects).
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-repair-fast-noarg-one-'));
+  try {
+    writeProject(tmp, 'oneproj', {
+      'fast-summary.md': '# Fast Summary: oneproj\n\n## Status\nPASSED\n'
+    });
+    const result = runNode(repairScript, [], tmp);
+    assert(result.status === 0, 'no-arg repair should exit 0 with one fast-summary-only project, got ' + result.status);
+    assert(result.stdout.includes('/kaola-workflow-fast oneproj'),
+      'no-arg repair must discover the fast-summary-only project and route to the fast skill, got: ' + result.stdout);
+    const state = read(statePath(tmp, 'oneproj'));
+    assert(state.includes('phase: fast'), 'discovered fast state must record phase: fast');
+    assert(state.includes('workflow_path: fast'), 'discovered fast state must record workflow_path: fast');
+    assert(state.includes('next_command: /kaola-workflow-fast oneproj'), 'discovered fast state must set the fast next_command');
+    assert(state.includes('next_skill: kaola-workflow-fast oneproj'), 'discovered fast state must route to the fast skill');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testRepairFastNoArgAmbiguous() {
+  // issue #201: two fast-summary-only projects in one root with NO argument must
+  // stay a safe ambiguity refusal — never a silent pick — and write no state.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-repair-fast-noarg-multi-'));
+  try {
+    writeProject(tmp, 'alpha', { 'fast-summary.md': '# Fast Summary: alpha\n\n## Status\nPASSED\n' });
+    writeProject(tmp, 'beta', { 'fast-summary.md': '# Fast Summary: beta\n\n## Status\nPASSED\n' });
+    const result = runNode(repairScript, [], tmp);
+    assert(result.status === 0, 'no-arg repair should exit 0 on ambiguity, got ' + result.status);
+    assert(/ambiguous/i.test(result.stdout),
+      'two fast-summary-only projects with no argument must refuse with an ambiguity reason, got: ' + result.stdout);
+    assert(!fs.existsSync(statePath(tmp, 'alpha')), 'ambiguous no-arg repair must not write state for alpha');
+    assert(!fs.existsSync(statePath(tmp, 'beta')), 'ambiguous no-arg repair must not write state for beta');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 function testHookSingleProjectGuard(tmp) {
   spawnSync('git', ['init'], { cwd: tmp, encoding: 'utf8' });
   writeProject(tmp, 'a', { 'workflow-state.md': 'status: active\n' });
@@ -3856,6 +3898,8 @@ async function main() {
     testFinalize(tmp);
     testRepair(tmp);
     testRepairFastPath(tmp);
+    testRepairFastNoArgSingle();
+    testRepairFastNoArgAmbiguous();
     testHookSingleProjectGuard(tmp);
     testRoadmapGenerateMissingSourceGuard(tmp);
     testRoadmapGenerateAtomicReplace(tmp);
