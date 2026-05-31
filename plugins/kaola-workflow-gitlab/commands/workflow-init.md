@@ -130,7 +130,7 @@ Append equivalent missing sections only. Treat headings with the same meaning as
 - Active artifacts include `workflow-state.md`, phase files, optional `fast-summary.md`, and `.cache/` evidence.
 - Roadmap/research sessions create or refine issues; `/workflow-next` sessions implement one selected item and refresh the mirror.
 - After resume or compaction, read `workflow-state.md`, the current phase file, and the compliance ledger before continuing.
-- State Bootstrap And Repair: if `/workflow-next` safely reconstructs one next command from phase artifacts, run the state repair helper and repair `workflow-state.md` before routing.
+- State Bootstrap And Repair: if `/workflow-next` safely reconstructs one next command from phase artifacts or `fast-summary.md`, run the state repair helper and repair `workflow-state.md` before routing.
 - End each cycle by docking docs against code changes, resolving closure decisions, updating issues, refreshing the roadmap, archiving completed workflow folders, and clearing pending compliance rows before the final commit and push.
 - Active issue work runs in a sibling worktree at `<repo>.kw/<project>/` when `KAOLA_WORKTREE_NATIVE=1`; see README for the full contract.
 - Top-priority labels: declare in `kaola-workflow/config.json` (`priority_top_tier_labels`) when the repo uses something other than P0–P3 naming.
