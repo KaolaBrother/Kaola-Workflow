@@ -400,12 +400,12 @@ performs the same review locally when no detached advisor profile is available.
 
 Current official release versions:
 
-- Claude Code command install, GitHub edition: `3.17.0`
-- Claude Code command install, GitLab edition: `3.17.0`
-- Claude Code command install, Gitea edition: `3.17.0`
-- Codex `kaola-workflow` plugin manifest: `1.8.0`
-- Codex `kaola-workflow-gitlab` plugin manifest: `1.8.0`
-- Codex `kaola-workflow-gitea` plugin manifest: `1.8.0`
+- Claude Code command install, GitHub edition: `3.17.1`
+- Claude Code command install, GitLab edition: `3.17.1`
+- Claude Code command install, Gitea edition: `3.17.1`
+- Codex `kaola-workflow` plugin manifest: `1.8.1`
+- Codex `kaola-workflow-gitlab` plugin manifest: `1.8.1`
+- Codex `kaola-workflow-gitea` plugin manifest: `1.8.1`
 
 The root `package.json` version is the official repository and Claude Code
 command-install release version. The GitLab Claude command pack follows that
