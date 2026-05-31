@@ -105,6 +105,14 @@ function projectHasPhaseArtifacts(projectDir) {
   return fs.readdirSync(projectDir).some(file => /^phase\d.+\.md$/.test(file));
 }
 
+// Fast-path discovery: a fast project's only durable artifact is fast-summary.md
+// (no numbered phase files). Recognized here so no-argument repair-state finds it,
+// symmetric with numbered phase-artifact discovery (issue #201). reconstruct()
+// already routes fast-summary.md -> routeFast().
+function projectHasFastSummary(projectDir) {
+  return exists(path.join(projectDir, 'fast-summary.md'));
+}
+
 function projectHasActiveState(projectDir) {
   const stateFile = path.join(projectDir, 'workflow-state.md');
   if (!exists(stateFile)) return false;
@@ -129,7 +137,7 @@ function activeProjects(workflowDir) {
     .filter(entry => entry.name !== 'archive')
     .filter(entry => {
       const projectDir = path.join(workflowDir, entry.name);
-      return projectHasPhaseArtifacts(projectDir) || projectHasActiveState(projectDir);
+      return projectHasPhaseArtifacts(projectDir) || projectHasActiveState(projectDir) || projectHasFastSummary(projectDir);
     })
     .map(entry => entry.name)
     .sort();

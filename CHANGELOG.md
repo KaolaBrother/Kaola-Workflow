@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Fast-path project discovery in no-argument repair-state and `/workflow-next` reconstruction** (issue #201): A fast-path project's only durable artifact is `fast-summary.md` (no numbered `phase*.md` files), so no-argument `repair-state` discovery — which keys off `projectHasPhaseArtifacts` / `projectHasActiveState` — silently missed an active fast-path project. `activeProjects()` now also recognizes `fast-summary.md` as an active marker across GitHub (`scripts/kaola-workflow-repair-state.js` and its byte-identical Codex mirror `plugins/kaola-workflow/scripts/kaola-workflow-repair-state.js`), GitLab (`plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-repair-state.js`), and Gitea (`plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-repair-state.js`), with the existing multi-active-project ambiguity refusal preserved (discovery is widened, not the selection logic). Symmetrically, the Claude Code `/workflow-next` manual reconstruction ladders now include the `fast-summary.md exists -> /kaola-workflow-fast {project}` branch in `commands/workflow-next.md`, `plugins/kaola-workflow-gitlab/commands/workflow-next.md`, and `plugins/kaola-workflow-gitea/commands/workflow-next.md`. Regression coverage added to `scripts/simulate-workflow-walkthrough.js`, `plugins/kaola-workflow-gitlab/scripts/test-gitlab-workflow-scripts.js`, and `plugins/kaola-workflow-gitea/scripts/test-gitea-workflow-scripts.js`.
+
 ## [3.17.0] — 2026-05-31
 
 ### Added

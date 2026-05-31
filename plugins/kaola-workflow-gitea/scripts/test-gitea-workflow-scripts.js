@@ -1056,6 +1056,49 @@ assert.strictEqual(classifier.issueHasRemoteClaimNotes(35), false,
   }
 }
 
+{
+  // issue #201: no-arg repair-state must DISCOVER a project whose only active
+  // artifact is fast-summary.md (no workflow-state.md, no numbered phase files),
+  // exactly as numbered phase artifacts are already discovered.
+  const root = tempRoot('kw-gt-repair-fast-noarg-');
+  try {
+    const dir = path.join(root, 'kaola-workflow', 'fast-only');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'fast-summary.md'), '# Fast Summary\n\n## Status\nPASSED\n');
+    const recon = repair.repair(undefined, root);
+    assert.strictEqual(recon.repaired, true, 'no-arg repair must discover a fast-summary-only project');
+    assert.strictEqual(recon.phase, 'fast', 'discovered fast project must report phase fast');
+    const reconState = fs.readFileSync(path.join(dir, 'workflow-state.md'), 'utf8');
+    assert(/^phase: fast$/m.test(reconState), 'no-arg discovered state must record phase: fast');
+    assert(/^workflow_path: fast$/m.test(reconState), 'no-arg discovered state must record workflow_path: fast');
+    assert(/^next_command: \/kaola-workflow-fast fast-only$/m.test(reconState), 'no-arg discovered state must record next_command for the fast skill');
+    assert(/^next_skill: kaola-workflow-fast fast-only$/m.test(reconState), 'no-arg discovered state must route to the fast skill');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+{
+  // issue #201: multiple fast-summary-only projects must stay a safe ambiguity
+  // refusal under no-arg repair, never a silent pick or a written state file.
+  const root = tempRoot('kw-gt-repair-fast-ambiguous-');
+  try {
+    const dirA = path.join(root, 'kaola-workflow', 'fast-a');
+    const dirB = path.join(root, 'kaola-workflow', 'fast-b');
+    fs.mkdirSync(dirA, { recursive: true });
+    fs.mkdirSync(dirB, { recursive: true });
+    fs.writeFileSync(path.join(dirA, 'fast-summary.md'), '# Fast Summary\n\n## Status\nPASSED\n');
+    fs.writeFileSync(path.join(dirB, 'fast-summary.md'), '# Fast Summary\n\n## Status\nPASSED\n');
+    const recon = repair.repair(undefined, root);
+    assert.strictEqual(recon.repaired, false, 'two fast-summary-only projects must not be silently picked');
+    assert(/ambiguous/.test(recon.reason || ''), 'no-arg refusal must mention ambiguity, got: ' + recon.reason);
+    assert(!fs.existsSync(path.join(dirA, 'workflow-state.md')), 'ambiguous refusal must not write state for fast-a');
+    assert(!fs.existsSync(path.join(dirB, 'workflow-state.md')), 'ambiguous refusal must not write state for fast-b');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
 // --- Task B: Gap 5 — stateContent ownership block + last_result rename ---
 {
   const route4 = {
