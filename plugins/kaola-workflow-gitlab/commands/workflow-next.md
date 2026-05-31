@@ -24,7 +24,7 @@ Use `$ARGUMENTS` as either:
   `pending`, missing, or lacks evidence/skip reason.
 - Prefer `workflow-state.md` for exact resume position.
 - If `workflow-state.md` is missing or stale, reconstruct conservatively from
-  phase artifacts and cache files.
+  phase artifacts, `fast-summary.md`, and cache files.
 - If exact intra-phase position is ambiguous, stop and ask the user instead of
   guessing.
 - When a next phase is identified, either continue by following the matching

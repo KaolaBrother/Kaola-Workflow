@@ -1099,6 +1099,35 @@ assert.strictEqual(classifier.issueHasRemoteClaimNotes(35), false,
   }
 }
 
+{
+  // issue #208: cmdResume fast fallback — a fast project with workflow_path: fast
+  // and an EMPTY/absent next_command must resume to /kaola-workflow-fast, not
+  // /kaola-workflow-phase1 (folder.phase parses to null for the literal "fast").
+  const root = tempRoot('kw-gt-resume-fast-');
+  try {
+    const dir = path.join(root, 'kaola-workflow', 'fast-resume');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'workflow-state.md'), [
+      '# Kaola-Workflow State', '', '## Project', 'name: fast-resume', 'status: active', '',
+      '## Current Position', 'phase: fast', 'phase_name: Fast', 'workflow_path: fast', ''
+    ].join('\n') + '\n');
+    const result = spawnSync(process.execPath, [claimScript, 'resume', '--project', 'fast-resume'], {
+      cwd: root,
+      encoding: 'utf8',
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }
+    });
+    assert.strictEqual(result.status, 0, result.stderr || result.stdout);
+    const lines = result.stdout.trim().split('\n').filter(Boolean);
+    const out = JSON.parse(lines[lines.length - 1]);
+    assert.strictEqual(out.resumed, true, 'fast resume should report resumed: true');
+    assert.strictEqual(out.next_command, '/kaola-workflow-fast fast-resume',
+      'fast project with empty next_command must resume to /kaola-workflow-fast, got: ' + out.next_command);
+    console.log('testGiteaResumeFastFallback: PASS');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
 // --- Task B: Gap 5 — stateContent ownership block + last_result rename ---
 {
   const route4 = {

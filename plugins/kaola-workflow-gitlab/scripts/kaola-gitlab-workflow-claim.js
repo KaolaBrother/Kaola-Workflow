@@ -475,6 +475,15 @@ function cmdPickNext() {
   output({ verdict: 'no_target', claim: 'none', project: null, issue: null }, 1);
 }
 
+function resumeFallbackCommand(root, folder) {
+  let isFast = false;
+  try {
+    const sf = path.join(root, 'kaola-workflow', folder.project, 'workflow-state.md');
+    isFast = /^(?:workflow_path|phase):\s*fast\s*$/m.test(fs.readFileSync(sf, 'utf8'));
+  } catch (_) {}
+  return (isFast ? '/kaola-workflow-fast ' : '/kaola-workflow-phase' + (folder.phase || 1) + ' ') + folder.project;
+}
+
 function cmdResume() {
   const root = getRoot();
   const args = parseArgs(process.argv.slice(3));
@@ -485,7 +494,7 @@ function cmdResume() {
     project: folder.project,
     issue: folder.issue_iid,
     phase: folder.phase,
-    next_command: folder.next_command || ('/kaola-workflow-phase' + (folder.phase || 1) + ' ' + folder.project)
+    next_command: folder.next_command || resumeFallbackCommand(root, folder)
   });
 }
 
