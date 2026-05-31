@@ -244,7 +244,7 @@ If `$ARGUMENTS` names an existing `kaola-workflow/{project}/` directory, use
 that project.
 
 Otherwise list active workflow folders under `kaola-workflow/` that contain at
-least one `phase*.md` file or a `workflow-state.md` with `status: active`.
+least one `phase*.md` file, a `fast-summary.md` file, or a `workflow-state.md` with `status: active`.
 Skip `archive/`.
 
 If no active project is selected and no target was named in Startup Step 0,

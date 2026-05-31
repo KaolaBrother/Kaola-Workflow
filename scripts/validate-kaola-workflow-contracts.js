@@ -96,6 +96,8 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'Startup Ste
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'Branch: {branch from Sink block');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'Workflow path: {fast|full');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'Parallel decision: {green|yellow|red');
+// issue #203 (#201 regression lock): Codex reconstruction ladder fast-summary rung (drift-guard)
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'fast-summary.md exists -> kaola-workflow-fast');
 // issue #198: fast-path widening — Codex skill parity
 const fastSkill198 = `${pluginRoot}/skills/kaola-workflow-fast/SKILL.md`;
 assertIncludes(fastSkill198, 'mechanical');
