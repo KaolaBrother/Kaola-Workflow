@@ -416,4 +416,14 @@ for (const nextFile of [giteaNextCmd198, giteaNextSkill198]) {
   assertNotIncludes(nextFile, '≤ 2 closely related files');
 }
 
+// #203: Select Project active-folder definition must include fast-summary.md (follow-up to #201).
+const giteaNextCmd203 = pluginRoot + '/commands/workflow-next.md';
+// Assertion A (Select Project drift-guard): the Startup Step 3 active-folder
+// list must include fast-summary.md. Use the Select-Project-specific substring
+// — a bare "fast-summary" already appears in the #201 reconstruction ladder.
+assertIncludes(giteaNextCmd203, '`fast-summary.md` file, or a `workflow-state.md`');
+// Assertion B (ladder drift-guard, regression lock for #201): keep the
+// reconstruction-ladder fast-path entry present.
+assertIncludes(giteaNextCmd203, 'fast-summary.md exists -> /kaola-workflow-fast');
+
 console.log('Kaola-Workflow Gitea contract validation passed');

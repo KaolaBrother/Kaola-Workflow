@@ -414,4 +414,11 @@ for (const nextFile198 of [nextCmd198, nextSkill198]) {
   assertNotIncludes(nextFile198, '≤ 2 closely related files');
 }
 
+// issue #203: Select-Project active-folder definition must list fast-summary.md
+// (follow-up to #201). Assertion A is the Select-Project drift-guard; Assertion B
+// is a regression lock for the #201 reconstruction ladder (already present).
+const nextCmd203 = pluginRoot + '/commands/workflow-next.md';
+assertIncludes(nextCmd203, '`fast-summary.md` file, or a `workflow-state.md`');
+assertIncludes(nextCmd203, 'fast-summary.md exists -> /kaola-workflow-fast');
+
 console.log('Kaola-Workflow GitLab contract validation passed');

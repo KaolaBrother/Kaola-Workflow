@@ -118,6 +118,10 @@ assertIncludes('commands/workflow-next.md', 'active folders');
 assertIncludes('commands/workflow-next.md', 'watch-pr');
 assertIncludes('commands/workflow-next.md', '--target-issue');
 assertIncludes('commands/workflow-next.md', '## Co-active Folders');
+// issue #203: Select Project active-folder definition must include fast-summary.md (drift-guard A)
+assertIncludes('commands/workflow-next.md', '`fast-summary.md` file, or a `workflow-state.md`');
+// issue #203 (#201 regression lock): reconstruction ladder fast-summary rung (drift-guard B)
+assertIncludes('commands/workflow-next.md', 'fast-summary.md exists -> /kaola-workflow-fast');
 for (const token of retired) assertNotIncludes('commands/workflow-next.md', token);
 
 // issue #198: fast-path widening — eligibility/hatch/review contract
