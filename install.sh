@@ -40,10 +40,13 @@ REQUIRED_AGENTS=("code-explorer" "docs-lookup" "planner" "code-architect" "tdd-g
 YES=0
 FORGE=github
 MERGE_SETTINGS=1
-PROFILE=common
+# Default profile is `higher` (Opus for code-architect/code-reviewer/security-reviewer).
+# Pass --profile=common to install the Sonnet assignments for those three agents.
+PROFILE=higher
 
 usage() {
-  echo "Usage: ./install.sh [--yes] [--forge=github|gitlab|gitea] [--no-settings-merge] [--profile=common|higher]"
+  echo "Usage: ./install.sh [--yes] [--forge=github|gitlab|gitea] [--no-settings-merge] [--profile=higher|common]"
+  echo "  --profile defaults to 'higher' (Opus reviewers); use --profile=common for Sonnet."
 }
 
 while [[ "$#" -gt 0 ]]; do

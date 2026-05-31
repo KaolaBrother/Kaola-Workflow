@@ -2,12 +2,15 @@
 
 ## [Unreleased]
 
+## [3.17.0] — 2026-05-31
+
 ### Added
 
 - **Fast-path calibration audit script** (issue #197): New read-only `scripts/kaola-workflow-fast-audit.js` scans archived and active `fast-summary.md` files and reports fast-path run statistics — status counts (PASSED/IN_PROGRESS/REVIEW/ESCALATED), escalation-reason histogram, file-count distribution, and review mode (delegated `code-reviewer` vs self-review). Human table by default, `--json` for machine-readable output; always exits 0 (a report, not a gate). This is the measure-first calibration step that informs the fast-path file-count ceiling in the follow-up widening work (#198). Standalone `scripts/test-fast-audit.js` (40 assertions over synthetic fixtures) added to the `test:kaola-workflow:claude` chain.
 
 ### Changed
 
+- **Default install profile is now `higher`** (Claude Code): `./install.sh` installs the `higher` agent profile by default — `code-architect`, `code-reviewer`, and `security-reviewer` render as Opus. Pass `--profile=common` to restore the previous Sonnet assignments for those three agents. Other agents and the Codex install surface are unaffected. The `--profile` flag and `common` profile remain fully supported; only the default changed.
 - **Fast-path widening — mechanical-vs-design eligibility** (issue #198): Fast path now selects on mechanical-vs-design uncertainty with a ≤ 5 file ceiling (raised from ≤ 2; all v1 vetoes retained), a new `approach_ambiguity` escalation trigger, file-overflow relative to the declared write set plus an absolute backstop of 6, and delegated `code-reviewer` mandatory above the trivial band; mirrored across Claude/Codex/GitLab/Gitea command+skill contracts with contract-validator assertions. Reference `docs/investigations/fast-path-widening-2026-05-30.md`.
 - **doc-updater subagent model haiku → sonnet** (follow-up to #197): The Phase 6 `doc-updater` agent is comprehension-heavy code-to-doc reconciliation (reads diffs, maps exports/routes/schemas, reconciles README/API/CHANGELOG against real code) — squarely Sonnet's lane per the project model-usage rules, not Haiku's simple-transform tier. Motivated by a #197 fabrication where haiku invented a docs/api.md schema section contradicting the code. Implemented as a documented local override of the vendored agent's frontmatter (upstream provenance pointers retained). Paired with Phase 6 anti-fabrication prompt hardening.
 

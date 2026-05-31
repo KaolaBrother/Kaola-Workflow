@@ -111,6 +111,10 @@ for the pinned upstream commit, attribution, and refresh procedure.
 | `security-reviewer` | 5 — Review (conditional) | Sonnet | yes |
 | `doc-updater` | 6 — Finalize | Sonnet | |
 
+The **Model** column is the `common` profile. The **default** install profile is
+`higher`, so the three agents marked _yes_ (`code-architect`, `code-reviewer`,
+`security-reviewer`) install on **Opus** unless you pass `--profile=common`.
+
 When agents are installed, their frontmatter `model:` field is rewritten to
 `inherit`. Command files render each agent's concrete assigned model (e.g.,
 `model="sonnet"`) into the dispatched `Agent(...)` call via install-time
@@ -123,8 +127,8 @@ differs from the agent's frontmatter). **After installing or re-running
 > - **Session on Sonnet** — only Opus subagents show a badge. Sonnet-dispatched
 >   agents (`code-explorer`, `tdd-guide`, `build-error-resolver`, `docs-lookup`,
 >   `doc-updater`) run silently. Opus-dispatched agents (`planner`,
->   `code-architect`, `code-reviewer`, `security-reviewer` with
->   `--profile=higher`) badge as expected.
+>   `code-architect`, `code-reviewer`, `security-reviewer` on the default
+>   `higher` profile) badge as expected.
 > - **Session on Opus** — all subagents show a badge, regardless of their model.
 >
 > The badge is a model-switch indicator: it renders when the subagent's model
@@ -198,20 +202,21 @@ cd Kaola-Workflow
 
 #### Agent profiles
 
-Pass `--profile=higher` to install `code-architect`, `code-reviewer`, and
-`security-reviewer` on Opus instead of Sonnet (roughly 3× cost for those three
-agents; deeper threat modeling and architecture analysis). All other agents are
-unaffected. Omit the flag (or pass `--profile=common`) for default Sonnet assignments.
+The default profile is `higher`: `code-architect`, `code-reviewer`, and
+`security-reviewer` install on Opus (deeper threat modeling and architecture
+analysis; roughly 3× cost for those three agents). All other agents are
+unaffected. The `common` profile (those three on Sonnet) must be requested
+explicitly with `--profile=common`.
 
 ```bash
-./install.sh --profile=higher             # GitHub edition, Opus overrides
-./install.sh --forge=gitlab --profile=higher
+./install.sh                              # GitHub edition, higher profile (Opus reviewers) by default
+./install.sh --forge=gitlab               # GitLab edition, higher profile by default
 ```
 
-To revert to Sonnet, re-run without the flag:
+To install the three reviewer agents on Sonnet, request the `common` profile:
 
 ```bash
-./install.sh                              # resets overridden agents to Sonnet
+./install.sh --profile=common             # Sonnet assignments for the three reviewer agents
 ```
 
 Then in Claude Code:
@@ -395,12 +400,12 @@ performs the same review locally when no detached advisor profile is available.
 
 Current official release versions:
 
-- Claude Code command install, GitHub edition: `3.16.3`
-- Claude Code command install, GitLab edition: `3.16.3`
-- Claude Code command install, Gitea edition: `3.16.3`
-- Codex `kaola-workflow` plugin manifest: `1.7.2`
-- Codex `kaola-workflow-gitlab` plugin manifest: `1.7.2`
-- Codex `kaola-workflow-gitea` plugin manifest: `1.7.2`
+- Claude Code command install, GitHub edition: `3.17.0`
+- Claude Code command install, GitLab edition: `3.17.0`
+- Claude Code command install, Gitea edition: `3.17.0`
+- Codex `kaola-workflow` plugin manifest: `1.8.0`
+- Codex `kaola-workflow-gitlab` plugin manifest: `1.8.0`
+- Codex `kaola-workflow-gitea` plugin manifest: `1.8.0`
 
 The root `package.json` version is the official repository and Claude Code
 command-install release version. The GitLab Claude command pack follows that

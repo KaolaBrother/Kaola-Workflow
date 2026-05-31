@@ -73,6 +73,35 @@ try {
     assert(/\bmodel:\s*inherit\b/.test(frontmatter), agent+' installed frontmatter must be model: inherit');
     assert(installed.includes('kaola-workflow-managed-agent: true'), agent+' installed file must keep managed marker');
   }
+
+  // Default profile is `higher`: a no-flag install renders the three reviewer
+  // agents on Opus (this is what locks the default — not an explicit --profile).
+  {
+    const dtmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-default-'));
+    try {
+      execFileSync('bash', ['install.sh', '--yes', '--forge=github', '--no-settings-merge'],
+        { cwd: root, env: { ...process.env, HOME: dtmp }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      const rd = n => fs.readFileSync(path.join(dtmp, '.claude', 'commands', n), 'utf8');
+      assert(rd('kaola-workflow-phase3.md').includes('subagent_type="code-architect",\n  model="opus",'),
+        'no-flag install must render code-architect as opus (higher is the default profile)');
+      assert(rd('kaola-workflow-phase5.md').includes('subagent_type="code-reviewer",\n  model="opus",'),
+        'no-flag install must render code-reviewer as opus (higher is the default profile)');
+    } finally { fs.rmSync(dtmp, { recursive: true, force: true }); }
+  }
+
+  // `--profile=common` must be requested explicitly to get the Sonnet assignments.
+  {
+    const ctmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-common-'));
+    try {
+      execFileSync('bash', ['install.sh', '--yes', '--forge=github', '--profile=common', '--no-settings-merge'],
+        { cwd: root, env: { ...process.env, HOME: ctmp }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      const rd = n => fs.readFileSync(path.join(ctmp, '.claude', 'commands', n), 'utf8');
+      assert(rd('kaola-workflow-phase3.md').includes('subagent_type="code-architect",\n  model="sonnet",'),
+        '--profile=common must render code-architect as sonnet');
+      assert(rd('kaola-workflow-phase5.md').includes('subagent_type="code-reviewer",\n  model="sonnet",'),
+        '--profile=common must render code-reviewer as sonnet');
+    } finally { fs.rmSync(ctmp, { recursive: true, force: true }); }
+  }
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
 }
