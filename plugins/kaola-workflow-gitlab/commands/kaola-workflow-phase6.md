@@ -345,6 +345,8 @@ Write agent output to:
 kaola-workflow/{project}/.cache/doc-updater.md
 ```
 
+**Anti-fabrication constraint (required).** Instruct `doc-updater` to NOT invent or free-form any API/schema/CLI-output/config section. For any such section, it must transcribe verified ground truth — e.g. the actual output of `node <script> --json` / `--help`, real function signatures, or existing schema definitions read from the code — or, if the ground truth is not available to it, emit a `BLOCK: <what it needs>` line instead of guessing. Plausible-looking invented field names, keys, enum values, or example numbers are a docking failure, not a doc. The orchestrator must reject (treat as a docking gap) any doc-updater output whose structured sections are not traceable to real code or command output.
+
 ## Step 4 - Documentation Docking
 
 Run the Documentation Docking check described above after `doc-updater` finishes.

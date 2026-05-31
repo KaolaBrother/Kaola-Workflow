@@ -369,7 +369,7 @@ default_agent_model() {
       printf '%s\n' "opus"
       ;;
     doc-updater)
-      printf '%s\n' "haiku"
+      printf '%s\n' "sonnet"
       ;;
   esac
 }

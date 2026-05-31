@@ -109,7 +109,7 @@ for the pinned upstream commit, attribution, and refresh procedure.
 | `build-error-resolver` | 4–6 — Validation repair when needed | Sonnet | |
 | `code-reviewer` | 5 — Review | Sonnet | yes |
 | `security-reviewer` | 5 — Review (conditional) | Sonnet | yes |
-| `doc-updater` | 6 — Finalize | Haiku | |
+| `doc-updater` | 6 — Finalize | Sonnet | |
 
 When agents are installed, their frontmatter `model:` field is rewritten to
 `inherit`. Command files render each agent's concrete assigned model (e.g.,

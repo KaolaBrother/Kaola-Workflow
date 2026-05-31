@@ -24,6 +24,17 @@ have to install Everything Claude Code (ECC) separately.
 | `agents/security-reviewer.md` | `agents/security-reviewer.md` | `c444a61988937bb50812451ccb192cfac7368ad0` |
 | `agents/tdd-guide.md` | `agents/tdd-guide.md` | `1d0849840f0f5ed76541a48b2b4b0912b8926024` |
 
+## Local Overrides
+
+- `agents/doc-updater.md`'s frontmatter `model` field is deliberately
+  overridden from `haiku` to `sonnet` (issue #197). Doc reconciliation is
+  comprehension-heavy code-to-doc work that belongs on Sonnet per the project
+  model-usage rules. The recorded upstream `source-blob-sha` / `source-sha256`
+  still point at the true upstream blob — the vendored file is already
+  non-byte-identical to upstream by design (the Kaola attribution comment and
+  the Prompt Defense Baseline additions diverge it), so the provenance pointers
+  remain accurate upstream-identity references, not byte-equality claims.
+
 ## Refresh Procedure
 
 1. Choose the upstream commit to vendor and update the pinned commit above.
@@ -38,3 +49,8 @@ have to install Everything Claude Code (ECC) separately.
    node scripts/validate-vendored-agents.js
    npm test
    ```
+
+7. Re-apply the Local Overrides above after any re-vendor — in particular the
+   `agents/doc-updater.md` `model: sonnet` override (issue #197). `validate-vendored-agents.js`
+   checks provenance format only, not file content, so it will NOT flag a silent
+   revert of the model back to `haiku`.

@@ -6,6 +6,10 @@
 
 - **Fast-path calibration audit script** (issue #197): New read-only `scripts/kaola-workflow-fast-audit.js` scans archived and active `fast-summary.md` files and reports fast-path run statistics — status counts (PASSED/IN_PROGRESS/REVIEW/ESCALATED), escalation-reason histogram, file-count distribution, and review mode (delegated `code-reviewer` vs self-review). Human table by default, `--json` for machine-readable output; always exits 0 (a report, not a gate). This is the measure-first calibration step that informs the fast-path file-count ceiling in the follow-up widening work (#198). Standalone `scripts/test-fast-audit.js` (38 assertions over synthetic fixtures) added to the `test:kaola-workflow:claude` chain.
 
+### Changed
+
+- **doc-updater subagent model haiku → sonnet** (follow-up to #197): The Phase 6 `doc-updater` agent is comprehension-heavy code-to-doc reconciliation (reads diffs, maps exports/routes/schemas, reconciles README/API/CHANGELOG against real code) — squarely Sonnet's lane per the project model-usage rules, not Haiku's simple-transform tier. Motivated by a #197 fabrication where haiku invented a docs/api.md schema section contradicting the code. Implemented as a documented local override of the vendored agent's frontmatter (upstream provenance pointers retained). Paired with Phase 6 anti-fabrication prompt hardening.
+
 ### Fixed
 
 - **GitLab offline test isolation for audit-labels/repair-labels subprocess** (issue #196): `testAuditAndRepairLabels` in `plugins/kaola-workflow-gitlab/scripts/simulate-gitlab-workflow-walkthrough.js` was running subprocesses without explicitly setting `KAOLA_WORKFLOW_OFFLINE: '0'`, causing them to inherit the parent process's `KAOLA_WORKFLOW_OFFLINE=1` when running under `KAOLA_WORKFLOW_OFFLINE=1 npm test`. This forced the mock-script path offline, breaking subprocess assertion of the glab CLI mock affordance. Fixed by adding `KAOLA_WORKFLOW_OFFLINE: '0'` to all three subprocess env objects (audit-labels, repair-labels dry-run, repair-labels --execute), forcing them into online/mock mode regardless of parent offline state. Test now passes under `KAOLA_WORKFLOW_OFFLINE=1 npm test`.
