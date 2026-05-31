@@ -7,6 +7,13 @@ description: Use when reviewed Kaola-Workflow for Codex work, also called kaola-
 
 Phase 6 proves the work is complete and records closure metadata.
 
+Read `workflow_path` from `kaola-workflow/{project}/workflow-state.md` (defaults
+to `full` when absent). If `workflow_path: fast`, the fast path replaces Phase
+1-5: require `fast-summary.md` with status `PASSED` (stop if it is missing or not
+`PASSED`), and read it as the Phase 1-5 substitute (`## Scope`, `## Plan`,
+`## Implementation Evidence`, `## Review`) wherever the steps below reference
+Phase 1/3/5 artifacts.
+
 ## Goal Contract
 
 Continue until final validation, acceptance audit, documentation docking,
@@ -28,7 +35,7 @@ choices, or ambiguity that blocks correctness.
 ## Required Steps
 
 1. Final validation: run the full relevant project commands once against the final candidate state. Save output to `.cache/final-validation.md`.
-2. Acceptance check: verify Phase 1 success criteria, Phase 3 tasks, tests, review status, and absence of debug artifacts.
+2. Acceptance check: verify Phase 1 success criteria, Phase 3 tasks, tests, review status, and absence of debug artifacts. On the fast path (`workflow_path: fast`), source these from `fast-summary.md` and verify fast-path review compliance: the `## Required Agent Compliance` `code-reviewer` row must record a delegation status (`subagent-invoked`, `local-fallback-explicit`, or `local-fallback-tool-unavailable`), not `N/A`, whenever `## Scope` lists more than one changed file or any production-path file (outside `docs/`, `*.md`, `tests/`); `N/A` self-review is allowed only for the trivial band (a single docs/comment/markdown edit).
    ```bash
    ACTIVE_WORKTREE_PATH="$(node -e "try{const fs=require('fs');const s=fs.readFileSync('kaola-workflow/' + process.env.KAOLA_PROJECT + '/workflow-state.md','utf8');const m=s.match(/^worktree_path:\\s*(.+)$/m);process.stdout.write(m?m[1].trim():'');}catch(e){}" 2>/dev/null)" || true
    [ -z "$ACTIVE_WORKTREE_PATH" ] && ACTIVE_WORKTREE_PATH="$(pwd)"

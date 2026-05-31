@@ -32,7 +32,7 @@ here for the full contract.
 The `workflow-state.md` file contains several key blocks:
 
 - `## Current Position` — Active phase, step, workflow path, runtime, and next command or skill. Key fields:
-  - **workflow_path** — Workflow execution path (`full` or `fast`). Persisted from the `--path` startup flag.
+  - **workflow_path** — Workflow execution path (`full` or `fast`). Persisted from the `KAOLA_PATH` environment variable (set `KAOLA_PATH=fast` to request the fast path), or the `--workflow-path` startup flag when supplied; defaults to `full`.
   - **runtime** — The runtime that claimed the folder (`claude` or `codex`). Persisted from the `--runtime` startup flag; defaults to `claude`.
 - `## Sink` — Issue number, sink mode (merge or pr), branch name, and worktree path
 - `## Lease` — (Legacy, deprecated) Coordination metadata; preserved for backward compatibility

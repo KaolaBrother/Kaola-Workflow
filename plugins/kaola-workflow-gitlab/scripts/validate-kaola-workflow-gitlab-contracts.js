@@ -233,6 +233,7 @@ const gitlabDelegationSkills = [
   'kaola-workflow-review',
   'kaola-workflow-finalize',
   'kaola-workflow-next',
+  'kaola-workflow-fast',
 ];
 for (const skill of gitlabDelegationSkills) {
   const skillFile = `${gitlabSkillsBase}/${skill}/SKILL.md`;

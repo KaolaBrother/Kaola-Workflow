@@ -147,6 +147,49 @@ function testRepair(tmp) {
   assert(!state.includes('## ' + 'Lease'), 'repair should not preserve or write retired ownership blocks');
 }
 
+function testRepairFastPath(tmp) {
+  // issue #199: repair-state must understand `phase: fast` / `workflow_path: fast`.
+  // Preserve: an intact fast workflow-state must be recognized as valid and kept,
+  // not discarded as an invalid numbered phase and rebuilt.
+  writeProject(tmp, 'fast-preserve', {
+    'workflow-state.md': [
+      '# Kaola-Workflow State',
+      '',
+      '## Project',
+      'name: fast-preserve',
+      'status: active',
+      '',
+      '## Current Position',
+      'phase: fast',
+      'phase_name: Fast',
+      'workflow_path: fast',
+      'next_command: /kaola-workflow-fast fast-preserve',
+      'next_skill: kaola-workflow-fast fast-preserve',
+      ''
+    ].join('\n'),
+    'fast-summary.md': '# Fast Summary: fast-preserve\n\n## Status\nPASSED\n'
+  });
+  const preserve = runNode(repairScript, ['fast-preserve'], tmp);
+  assert(preserve.status === 0, 'repair should exit 0 for valid fast state');
+  assert(preserve.stdout.includes('existing state valid'), 'intact fast state should be reported valid, not reconstructed');
+  const preserved = read(statePath(tmp, 'fast-preserve'));
+  assert(preserved.includes('phase: fast'), 'repair must not clobber intact fast state');
+  assert(preserved.includes('next_skill: kaola-workflow-fast fast-preserve'), 'fast next_skill must be preserved');
+
+  // Reconstruct: when workflow-state.md is lost but fast-summary.md survives, the
+  // fast project must be rebuilt (phase: fast, workflow_path: fast) and routed to
+  // the fast skill — not restarted at research.
+  writeProject(tmp, 'fast-recon', {
+    'fast-summary.md': '# Fast Summary: fast-recon\n\n## Status\nPASSED\n'
+  });
+  const recon = runNode(repairScript, ['fast-recon'], tmp);
+  assert(recon.status === 0, 'repair should exit 0 when reconstructing from fast-summary.md');
+  const reconState = read(statePath(tmp, 'fast-recon'));
+  assert(reconState.includes('phase: fast'), 'reconstructed fast state must record phase: fast');
+  assert(reconState.includes('workflow_path: fast'), 'reconstructed fast state must record workflow_path: fast so Phase 6 stays on the fast path');
+  assert(reconState.includes('next_skill: kaola-workflow-fast fast-recon'), 'reconstructed fast state must route to the fast skill');
+}
+
 function testHookSingleProjectGuard(tmp) {
   spawnSync('git', ['init'], { cwd: tmp, encoding: 'utf8' });
   writeProject(tmp, 'a', { 'workflow-state.md': 'status: active\n' });
@@ -3812,6 +3855,7 @@ async function main() {
     testClaimStatusRelease(tmp);
     testFinalize(tmp);
     testRepair(tmp);
+    testRepairFastPath(tmp);
     testHookSingleProjectGuard(tmp);
     testRoadmapGenerateMissingSourceGuard(tmp);
     testRoadmapGenerateAtomicReplace(tmp);

@@ -141,6 +141,7 @@ const delegationSkills = [
   'kaola-workflow-review',
   'kaola-workflow-finalize',
   'kaola-workflow-next',
+  'kaola-workflow-fast',
 ];
 for (const skill of delegationSkills) {
   assertIncludes(`${pluginRoot}/skills/${skill}/SKILL.md`, 'subagent-invoked');
