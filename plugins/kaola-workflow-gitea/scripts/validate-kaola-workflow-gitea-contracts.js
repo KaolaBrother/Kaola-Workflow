@@ -240,6 +240,7 @@ const giteaDelegationSkills = [
   'kaola-workflow-review',
   'kaola-workflow-finalize',
   'kaola-workflow-next',
+  'kaola-workflow-fast',
 ];
 for (const skill of giteaDelegationSkills) {
   const skillFile = `${giteaSkillsBase}/${skill}/SKILL.md`;

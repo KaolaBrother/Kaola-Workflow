@@ -28,12 +28,9 @@ Read:
 
 ```text
 kaola-workflow/{project}/workflow-state.md
-kaola-workflow/{project}/phase1-research.md
-kaola-workflow/{project}/phase3-plan.md
-kaola-workflow/{project}/phase4-progress.md
 ```
 
-If `workflow_path: fast`, also read:
+If `workflow_path: fast`, also read (`fast-summary.md` is the Phase 1-5 substitute):
 
 ```text
 kaola-workflow/{project}/fast-summary.md
@@ -42,6 +39,9 @@ kaola-workflow/{project}/fast-summary.md
 If `workflow_path: full` (or absent), also read:
 
 ```text
+kaola-workflow/{project}/phase1-research.md
+kaola-workflow/{project}/phase3-plan.md
+kaola-workflow/{project}/phase4-progress.md
 kaola-workflow/{project}/phase5-review.md
 ```
 
@@ -192,6 +192,9 @@ Compare:
 - Phase 3 task blueprint
 - Phase 4 implementation evidence
 - Phase 5 review findings and follow-ups
+- on the fast path (`workflow_path: fast`), substitute `fast-summary.md`
+  (`## Scope`, `## Plan`, `## Implementation Evidence`, `## Review`) for the
+  Phase 1/3/4/5 bullets above
 - docs touched or skipped by `doc-updater`
 - `README.md`, API docs, architecture docs, changelog, `.env.example`, roadmap,
   and issue comments when relevant
@@ -289,6 +292,17 @@ Verify:
 - no type errors or lint errors
 - no CRITICAL or HIGH review findings remain
 - no debug statements remain
+
+On the fast path (`workflow_path: fast`), the Phase 1/3 artifacts do not exist —
+source the acceptance evidence from `fast-summary.md` instead: the deliverable and
+acceptance criteria from `## Scope`, the plan from `## Plan`, implementation
+evidence from `## Implementation Evidence`, and the review result from `## Review`.
+Also verify fast-path review compliance: in `## Required Agent Compliance`, the
+`code-reviewer` row status must be a delegation status (`subagent-invoked`,
+`local-fallback-explicit`, or `local-fallback-tool-unavailable`) — not `N/A` —
+whenever `## Scope` lists more than one changed file or any production-path file
+(outside `docs/`, `*.md`, `tests/`). `N/A` self-review is acceptable only for the
+trivial band (a single docs/comment/markdown edit).
 
 ## Step 3 - Documentation Update
 
@@ -438,7 +452,8 @@ the final Git gate.
 
 ## Step 7 - GitHub Issue, Roadmap, Archive, And Metadata
 
-If `phase1-research.md` links a GitHub issue:
+If the project links a GitHub issue (from `phase1-research.md` on the full path,
+or `issue_number` in `workflow-state.md` on the fast path):
 
 - close it only after acceptance criteria pass and the Closure Decision Gate says
   the implementation is complete

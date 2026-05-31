@@ -1034,6 +1034,39 @@ withForge({
   }
 }
 
+{
+  // issue #199: fast-path repair — preserve intact `phase: fast` state, and
+  // reconstruct from fast-summary.md when the state file is lost.
+  const root = tempRoot('kw-gl-repair-fast-');
+  try {
+    const keepDir = path.join(root, 'kaola-workflow', 'fast-keep');
+    fs.mkdirSync(keepDir, { recursive: true });
+    fs.writeFileSync(path.join(keepDir, 'workflow-state.md'), [
+      '# Kaola-Workflow State', '', '## Project', 'name: fast-keep', 'status: active', '',
+      '## Current Position', 'phase: fast', 'phase_name: Fast', 'workflow_path: fast',
+      'next_command: /kaola-workflow-fast fast-keep', 'next_skill: kaola-workflow-fast fast-keep', ''
+    ].join('\n'));
+    fs.writeFileSync(path.join(keepDir, 'fast-summary.md'), '# Fast Summary\n\n## Status\nPASSED\n');
+    const keep = repair.repair('fast-keep', root);
+    assert.strictEqual(keep.repaired, false, 'intact fast state must not be rewritten');
+    assert.strictEqual(keep.valid, true, 'intact fast state must be reported valid');
+    assert.strictEqual(keep.phase, 'fast', 'valid fast repair must report phase fast (not NaN)');
+
+    const reconDir = path.join(root, 'kaola-workflow', 'fast-recon');
+    fs.mkdirSync(reconDir, { recursive: true });
+    fs.writeFileSync(path.join(reconDir, 'fast-summary.md'), '# Fast Summary\n\n## Status\nPASSED\n');
+    const recon = repair.repair('fast-recon', root);
+    assert.strictEqual(recon.repaired, true, 'lost fast state must be reconstructed from fast-summary.md');
+    assert.strictEqual(recon.phase, 'fast', 'reconstructed fast repair must report phase fast');
+    const reconState = fs.readFileSync(path.join(reconDir, 'workflow-state.md'), 'utf8');
+    assert(/^phase: fast$/m.test(reconState), 'reconstructed state must record phase: fast');
+    assert(/^workflow_path: fast$/m.test(reconState), 'reconstructed state must record workflow_path: fast');
+    assert(/^next_skill: kaola-workflow-fast fast-recon$/m.test(reconState), 'reconstructed state must route to the fast skill');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
 // --- Task B: Gap 5 — stateContent ownership block + last_result rename ---
 {
   const route4 = {

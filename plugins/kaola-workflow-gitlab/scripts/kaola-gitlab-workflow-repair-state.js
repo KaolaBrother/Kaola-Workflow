@@ -52,6 +52,20 @@ function field(content, name) {
   return match ? match[1].trim() : '';
 }
 
+// Fast-path state is keyed on `phase: fast` / `workflow_path: fast` instead of a
+// numbered phase. Recognized here so intact fast state is preserved (not treated
+// as invalid and discarded by the numbered-phase logic below).
+function isFastWorkflowState(content) {
+  return field(content, 'phase') === 'fast' || field(content, 'workflow_path') === 'fast';
+}
+
+function fastStateValid(project, content) {
+  if (!/^status:\s*active\s*$/m.test(content)) return false;
+  const safeProject = project.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp('^/kaola-workflow-fast\\s+' + safeProject + '$').test(field(content, 'next_command')) ||
+    new RegExp('^kaola-workflow-fast\\s+' + safeProject + '$').test(field(content, 'next_skill'));
+}
+
 function isSafeName(name) {
   return Boolean(name) && !name.includes('/') && !name.includes('\\') && name !== '.' && name !== '..';
 }
@@ -99,6 +113,7 @@ function selectProject(workflowDir, argument) {
 }
 
 function stateLooksValid(root, project, content) {
+  if (isFastWorkflowState(content)) return fastStateValid(project, content);
   const phase = Number(field(content, 'phase'));
   const nextCommand = field(content, 'next_command');
   const nextSkill = field(content, 'next_skill');
@@ -288,6 +303,26 @@ function route(root, workflowDir, project, phase, phaseFile, task, crossesBounda
   };
 }
 
+// Fast-path reconstruction: a fast project produces fast-summary.md, not numbered
+// phase artifacts. Recover it to the fast continuation without routing through the
+// numbered route() pipeline. The fast skill itself re-reads fast-summary.md and
+// routes onward (to kaola-workflow-finalize once PASSED).
+function routeFast(root, workflowDir, project) {
+  return {
+    root,
+    project,
+    phase: 'fast',
+    phaseName: 'Fast',
+    workflowPath: 'fast',
+    step: 'router-reconstructed',
+    task: 'N/A',
+    nextCommand: '/kaola-workflow-fast ' + project,
+    nextSkill: 'kaola-workflow-fast ' + project,
+    phaseFile: path.join(workflowDir, project, 'fast-summary.md'),
+    pendingGates: []
+  };
+}
+
 function reconstruct(root, workflowDir, project) {
   const projectDir = path.join(workflowDir, project);
   const phase4 = artifact(projectDir, 'phase4-progress.md');
@@ -307,6 +342,7 @@ function reconstruct(root, workflowDir, project) {
   if (artifact(projectDir, 'phase3-plan.md')) return route(root, workflowDir, project, 4, artifact(projectDir, 'phase3-plan.md'), undefined, true);
   if (artifact(projectDir, 'phase2-ideation.md')) return route(root, workflowDir, project, 3, artifact(projectDir, 'phase2-ideation.md'), undefined, true);
   if (artifact(projectDir, 'phase1-research.md')) return route(root, workflowDir, project, 2, artifact(projectDir, 'phase1-research.md'), undefined, true);
+  if (artifact(projectDir, 'fast-summary.md')) return routeFast(root, workflowDir, project);
   return { reason: 'no phase artifacts available for repair' };
 }
 
@@ -333,6 +369,7 @@ function stateContent(routeResult, existingContent) {
     '## Current Position',
     'phase: ' + routeResult.phase,
     'phase_name: ' + routeResult.phaseName,
+    ...(routeResult.workflowPath ? ['workflow_path: ' + routeResult.workflowPath] : []),
     'step: ' + routeResult.step,
     'task: ' + routeResult.task,
     'next_command: ' + routeResult.nextCommand,
@@ -392,7 +429,7 @@ function repair(projectArg, startDir) {
       repaired: false,
       valid: true,
       project: selected.project,
-      phase: Number(field(existingContent, 'phase')),
+      phase: isFastWorkflowState(existingContent) ? 'fast' : Number(field(existingContent, 'phase')),
       next_skill: field(existingContent, 'next_skill')
     };
   }

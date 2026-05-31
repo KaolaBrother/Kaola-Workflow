@@ -24,7 +24,7 @@ Ensure `kaola-workflow/{project}/.cache/` exists before invoking agents.
 
 Update `workflow-state.md` with `step: plan`, `main_session_role: orchestrator`, `implementation_owner: planner`, `inline_emergency_fallback_authorized: no`.
 
-Invoke the Claude Code agent `planner` with the linked Gitea issue body and phase1/phase2 excerpts if they exist. Ask for: files to touch (the declared write set — ≤ 5 files in a single area), whether the approach is mechanical with exactly one sensible way or has ≥ 2 materially-different viable approaches, exact change per file, acceptance check command, out-of-scope items.
+Invoke the `planner` Codex agent role with the linked Gitea issue body and phase1/phase2 excerpts if they exist. Ask for: files to touch (the declared write set — ≤ 5 files in a single area), whether the approach is mechanical with exactly one sensible way or has ≥ 2 materially-different viable approaches, exact change per file, acceptance check command, out-of-scope items.
 
 Write raw output to `kaola-workflow/{project}/.cache/planner.md`.
 
@@ -34,7 +34,7 @@ If planner reports > 5 files or ≥ 2 materially-different viable approaches (`a
 
 Update `workflow-state.md` with `step: execute`, `main_session_role: orchestrator`, `implementation_owner: tdd-guide`, `inline_emergency_fallback_authorized: no`.
 
-Invoke the Claude Code agent `tdd-guide` with the planner plan and constraints:
+Invoke the `tdd-guide` Codex agent role with the planner plan and constraints:
 
 - no new external package dependencies
 - no changes to public APIs, schemas, or shared infrastructure
@@ -53,7 +53,7 @@ Update `workflow-state.md` with `step: review`, `main_session_role: orchestrator
 
 Delegated `code-reviewer` is mandatory for any change touching > 1 file or any production-path file (outside `docs/`, `*.md`, `tests/`); self-review only for the trivial band (single docs/comment/markdown edit).
 
-Invoke the Claude Code agent `code-reviewer` on modified files. Ask it to check:
+Invoke the `code-reviewer` Codex agent role on modified files. Ask it to check:
 
 - all acceptance check commands pass
 - no new CRITICAL or HIGH security concerns
@@ -89,14 +89,18 @@ PASSED | IN_PROGRESS | REVIEW | ESCALATED
 ## Required Agent Compliance
 | Requirement | Status | Evidence | Skip Reason |
 |-------------|--------|----------|-------------|
-| planner | invoked | .cache/planner.md | |
-| tdd-guide | invoked | .cache/tdd-guide.md | |
-| code-reviewer | invoked | .cache/code-reviewer.md | |
+| planner | subagent-invoked/local-fallback-explicit/local-fallback-tool-unavailable | .cache/planner.md | |
+| tdd-guide | subagent-invoked/local-fallback-explicit/local-fallback-tool-unavailable | .cache/tdd-guide.md | |
+| code-reviewer | subagent-invoked/local-fallback-explicit/local-fallback-tool-unavailable/N/A | .cache/code-reviewer.md | N/A only for trivial band (single docs/comment/markdown edit) self-review |
 
 ## Escalation
 [escalated_to_full: <trigger> or N/A]
 ```
 
+## Delegation Vocabulary
+
+The `planner`, `tdd-guide`, and `code-reviewer` rows are Codex role rows: record their Status with the delegation vocabulary — `subagent-invoked` when the role was delegated to the Codex subagent, `local-fallback-explicit` when you executed locally with explicit user authorization, or `local-fallback-tool-unavailable` when subagent tooling was unavailable. `code-reviewer` may be `N/A` (with a skip reason) only in the trivial band (a single docs/comment/markdown edit) where self-review applies; any change touching more than one file or a production-path file (outside `docs/`, `*.md`, `tests/`) requires a delegated review status.
+
 ## Continue
 
-After `PASSED`, route to `/kaola-workflow-phase6 {project}`.
+After `PASSED`, route to `kaola-workflow-finalize {project}`.

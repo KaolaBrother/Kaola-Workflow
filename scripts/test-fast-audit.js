@@ -276,6 +276,38 @@ try {
   );
 
   // -------------------------------------------------------------------------
+  // 6b. parseReviewMode recognizes the typed Codex delegation vocabulary
+  //     (issue #199): a code-reviewer row with subagent-invoked /
+  //     local-fallback-explicit / local-fallback-tool-unavailable is
+  //     'delegated'; legacy `invoked` stays 'delegated'; trivial-band N/A is
+  //     'self-review'.
+  // -------------------------------------------------------------------------
+  for (const status of ['subagent-invoked', 'local-fallback-explicit', 'local-fallback-tool-unavailable', 'invoked']) {
+    const racSections = {
+      'Status': 'PASSED',
+      'Required Agent Compliance':
+        '| Requirement | Status | Evidence | Skip Reason |\n' +
+        '|---|---|---|---|\n' +
+        '| code-reviewer | ' + status + ' | .cache/code-reviewer.md | |\n',
+    };
+    assert(
+      parseReviewMode(racSections, 'PASSED') === 'delegated',
+      'code-reviewer | ' + status + ' should yield delegated, got ' + parseReviewMode(racSections, 'PASSED')
+    );
+  }
+  const naRacSections = {
+    'Status': 'PASSED',
+    'Required Agent Compliance':
+      '| Requirement | Status | Evidence | Skip Reason |\n' +
+      '|---|---|---|---|\n' +
+      '| code-reviewer | N/A | .cache/code-reviewer.md | trivial band self-review |\n',
+  };
+  assert(
+    parseReviewMode(naRacSections, 'PASSED') === 'self-review',
+    'code-reviewer | N/A should yield self-review, got ' + parseReviewMode(naRacSections, 'PASSED')
+  );
+
+  // -------------------------------------------------------------------------
   // 7. audit on fresh empty temp dir → totalRuns 0, all status buckets present
   // -------------------------------------------------------------------------
   const emptyTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-fast-audit-empty-'));

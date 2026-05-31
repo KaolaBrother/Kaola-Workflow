@@ -113,14 +113,17 @@ function parseFileCount(sections) {
 // parseReviewMode(sections, status) -> 'delegated'|'self-review'|'escalated'
 // Precedence:
 //   1. status === 'ESCALATED' -> 'escalated'
-//   2. sections['Required Agent Compliance'] body matches /\bcode-reviewer\s*\|\s*invoked\b/i -> 'delegated'
-//   3. else -> 'self-review'
+//   2. Required Agent Compliance code-reviewer row records a performed review —
+//      the legacy `invoked` token OR any typed Codex delegation status
+//      (subagent-invoked / local-fallback-explicit / local-fallback-tool-unavailable)
+//      -> 'delegated'
+//   3. else (N/A, or no code-reviewer row) -> 'self-review'
 // Section-scoped: only checks Required Agent Compliance, not Review prose.
 // ---------------------------------------------------------------------------
 function parseReviewMode(sections, status) {
   if (status === 'ESCALATED') return 'escalated';
   const racBody = sections['Required Agent Compliance'] || '';
-  if (/\bcode-reviewer\s*\|\s*invoked\b/i.test(racBody)) return 'delegated';
+  if (/\bcode-reviewer\s*\|\s*(?:subagent-invoked|local-fallback-explicit|local-fallback-tool-unavailable|invoked)\b/i.test(racBody)) return 'delegated';
   return 'self-review';
 }
 
