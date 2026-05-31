@@ -310,7 +310,7 @@ no phase file -> /kaola-workflow-phase1 <task>
 If `workflow-state.md` is valid, use it as authoritative.
 
 If `workflow-state.md` is missing, stale, or invalid, and reconstruction from
-phase artifacts identifies exactly one safe next command, write repaired `workflow-state.md`
+phase artifacts or `fast-summary.md` identifies exactly one safe next command, write repaired `workflow-state.md`
 before routing.
 
 The repaired state must be conservative:
