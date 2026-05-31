@@ -758,7 +758,7 @@ Any interrupted session resumes from `workflow-state.md` first, then reconstruct
 ### State bootstrap and repair
 
 When `/workflow-next` can reconstruct one safe next command from phase
-artifacts, it repairs or creates `kaola-workflow/{project}/workflow-state.md`
+artifacts or `fast-summary.md`, it repairs or creates `kaola-workflow/{project}/workflow-state.md`
 before routing by running `scripts/kaola-workflow-repair-state.js` when the
 helper is available. It does not create state for brand-new work, ambiguous
 active projects, contradictory phase files, or unresolved compliance gates that

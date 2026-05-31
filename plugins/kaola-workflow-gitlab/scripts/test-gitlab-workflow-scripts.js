@@ -697,6 +697,41 @@ withForge({
   }
 }
 
+// issue #208: cmdResume empty-next_command fallback must route a fast project to
+// /kaola-workflow-fast, not /kaola-workflow-phase1. A fast project parses phase
+// as null (parseInt("fast")=NaN), so the legacy phase-numbered fallback emitted
+// /kaola-workflow-phase1; the resumeFallbackCommand helper now reads
+// workflow-state.md to detect fast and route to /kaola-workflow-fast instead.
+{
+  const root = tempRoot('kw-gl-resume-fast-');
+  try {
+    initGitRepo(root);
+    const project = 'fast-resume';
+    const dir = writeState(root, project, 88);
+    const stateText = fs.readFileSync(path.join(dir, 'workflow-state.md'), 'utf8')
+      .replace('phase: 1', 'phase: fast')
+      .replace('phase_name: Research', 'phase_name: Fast\nworkflow_path: fast')
+      .replace('next_command: /kaola-workflow-phase1 ' + project + '\n', '');
+    fs.writeFileSync(path.join(dir, 'workflow-state.md'), stateText);
+    assert(!/^next_command:/m.test(stateText), 'fixture must leave next_command empty/absent so the fallback fires');
+    const result = spawnSync(process.execPath, [claimScript, 'resume', '--project', project], {
+      cwd: root,
+      encoding: 'utf8',
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_WORKFLOW_ROOT: root }
+    });
+    assert.strictEqual(result.status, 0, result.stderr || result.stdout);
+    const out = JSON.parse(result.stdout.trim());
+    assert.strictEqual(out.resumed, true, 'cmdResume should resume the fast project');
+    assert.strictEqual(
+      out.next_command,
+      '/kaola-workflow-fast ' + project,
+      'cmdResume empty-next_command fallback should route a fast project to /kaola-workflow-fast'
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
 withForge({
   viewIssue(iid) { return { issue_iid: iid, number: iid, state: 'closed', labels: [] }; }
 }, () => {

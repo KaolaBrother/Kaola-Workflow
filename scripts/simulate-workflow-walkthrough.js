@@ -776,6 +776,33 @@ function testFastStartupState() {
   }
 }
 
+// issue #208: a fast project with workflow_path:fast and an EMPTY next_command
+// must resume to /kaola-workflow-fast, not /kaola-workflow-phase1. Pre-fix the
+// fallback hard-codes /kaola-workflow-phase + (folder.phase||1); folder.phase is
+// null for a fast project (parseInt('fast')=NaN), so it wrongly emits phase1.
+function testResumeFastEmptyNextCommand() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-resume-fast-empty-'));
+  try {
+    writeProject(tmp, 'issue-208', {
+      'workflow-state.md': [
+        'name: issue-208',
+        'issue_number: 208',
+        'status: active',
+        'phase: fast',
+        'workflow_path: fast',
+        'next_command:',
+        ''
+      ].join('\n')
+    });
+    const result = json(runNode(claimScript, ['resume'], tmp));
+    assert(result.resumed === true, 'fast resume should succeed');
+    assert(result.next_command === '/kaola-workflow-fast issue-208',
+      'fast project with empty next_command must resume to the fast skill, got: ' + result.next_command);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 function testClassifierCurrentClaimMarkerBlocks() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-classifier-current-claim-'));
   try {
@@ -3917,6 +3944,7 @@ async function main() {
     testWorktreeNativeDefaultOff();
     testWorktreeNativeOfflineWins();
     testFastStartupState();
+    testResumeFastEmptyNextCommand();
     testClassifierCurrentClaimMarkerBlocks();
     testWatchPrArchivesClosedIssuePrFolder();
     testSinkFallbackSkipsArchivedProject();
