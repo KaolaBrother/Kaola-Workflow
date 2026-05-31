@@ -98,9 +98,7 @@ The agent owns this judgment; scripts do not auto-pick. Precedence top-down — 
    ```
    Judge against the fast-path eligibility contract in the Mid-Flight
    Escalation section of `plugins/kaola-workflow-gitlab/commands/kaola-workflow-fast.md`. Export
-   `KAOLA_PATH=fast` ONLY if all hold: ≤ 2 closely related files, no new
-   external deps, no public API/schema/migration change, no
-   security/auth/encryption concern, no `depends-on:#N` label, single area.
+   `KAOLA_PATH=fast` ONLY if all hold: the approach is unambiguous and mechanical (exactly one sensible way — not ≥ 2 materially-different viable approaches), ≤ 5 files in a single area, no new external deps, no public API/schema/migration change, no security/auth/encryption concern, no `depends-on:#N` label. ≥ 2 viable approaches is a design choice → stay on full.
 4. If the issue fetch fails for any reason (KAOLA_WORKFLOW_OFFLINE=1,
    missing CLI, auth failure, network error), default to full.
 5. Default `full`. When in doubt, full.
@@ -108,13 +106,13 @@ The agent owns this judgment; scripts do not auto-pick. Precedence top-down — 
 State the chosen path and one-line reason aloud before Step 0b:
 
 ```text
-Path: fast (rubric — scope: 1 file, no risk markers)
-Path: full (rubric — disqualifier: schema migration)
+Path: fast (mechanical, single-area, 4 files)
+Path: full (≥2 viable approaches — design choice)
 Path: full (default — rubric ambiguous; prefer safety)
 ```
 
 Bias toward full when in doubt. Fast false positives escalate cleanly via the
-Mid-Flight Escalation section of `plugins/kaola-workflow-gitlab/commands/kaola-workflow-fast.md`; false
+Fast Eligibility and Mid-Flight Escalation sections of `plugins/kaola-workflow-gitlab/commands/kaola-workflow-fast.md`; false
 negatives only cost ceremony.
 
 ## Startup Step 0b - Startup Transaction

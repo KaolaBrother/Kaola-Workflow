@@ -390,4 +390,29 @@ assertConcept(pluginRoot + '/scripts/test-gitea-workflow-scripts.js', 'Gitea sta
   'dry_run'
 ]);
 
+// issue #198: fast-path widening — eligibility/hatch/review contract parity
+const giteaFastCmd198 = pluginRoot + '/commands/kaola-workflow-fast.md';
+const giteaFastSkill198 = pluginRoot + '/skills/kaola-workflow-fast/SKILL.md';
+for (const fastFile of [giteaFastCmd198, giteaFastSkill198]) {
+  assertIncludes(fastFile, 'mechanical');
+  assertIncludes(fastFile, '≤ 5');
+  assertIncludes(fastFile, 'design choice');
+  assertIncludes(fastFile, 'approach_ambiguity');
+  assertIncludes(fastFile, 'declared write set');
+  assertIncludes(fastFile, 'absolute backstop of 6');
+  assertIncludes(fastFile, '`code-reviewer` is mandatory');
+}
+assertNotIncludes(giteaFastCmd198, 'two closely related files');
+assertNotIncludes(giteaFastCmd198, '≤ 2');
+assertNotIncludes(giteaFastSkill198, '(≤ 2)');
+assertNotIncludes(giteaFastSkill198, '> 2 files');
+const giteaNextCmd198 = pluginRoot + '/commands/workflow-next.md';
+const giteaNextSkill198 = pluginRoot + '/skills/kaola-workflow-next/SKILL.md';
+for (const nextFile of [giteaNextCmd198, giteaNextSkill198]) {
+  assertIncludes(nextFile, 'mechanical');
+  assertIncludes(nextFile, '≤ 5');
+  assertIncludes(nextFile, 'design choice');
+  assertNotIncludes(nextFile, '≤ 2 closely related files');
+}
+
 console.log('Kaola-Workflow Gitea contract validation passed');

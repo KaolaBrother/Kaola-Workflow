@@ -39,12 +39,28 @@ Otherwise detect step:
 - `fast-summary.md` has status `REVIEW` → `review`
 - `fast-summary.md` has `escalated_to_full` → escalation already triggered; do not resume fast path
 
+## Fast Eligibility
+
+Fast path applies only when the approach is **unambiguous and mechanical** —
+exactly one sensible way to do it. Mechanical examples: rename or move a symbol
+across files; thread an existing field or param through a known call path; a
+behavior-preserving refactor; repetitive parallel edits; a bug fix whose root
+cause is already located. All of these must also hold: single area; no new
+external deps; no public API/schema/migration change; no security/auth/encryption
+concern; no `depends-on:#N`; no breaking-change or architecture concern; and the
+write set is **≤ 5** files within that single area.
+
+Anything with **≥ 2 materially-different viable approaches** stays on full,
+regardless of size — that is a design choice, where full-workflow ideation earns
+its keep. File count alone no longer disqualifies; ambiguity does.
+
 ## Mid-Flight Escalation
 
 Escalate to the full workflow immediately when any of the following is detected
 during Plan, Execute, or Review:
 
-- scope is larger than a single file change or two closely related files
+- the planner reports ≥ 2 materially-different viable approaches (`approach_ambiguity`) — exactly one sensible approach is required for fast path
+- scope exceeds the planner's declared write set by more than 1 file (`file_overflow`), or exceeds the absolute backstop of 6 files (whichever comes first)
 - more than 3 consecutive failing test cycles on the same test (`test_thrash` threshold)
 - a security, architecture, or breaking-change concern surfaces
 - a dependency on another in-flight issue is discovered
@@ -52,7 +68,7 @@ during Plan, Execute, or Review:
 
 On escalation:
 
-1. Write `escalated_to_full: <trigger>` to `workflow-state.md`.
+1. Write `escalated_to_full: <trigger> — <detail>` to `workflow-state.md`, where `<trigger>` is one of `approach_ambiguity`, `file_overflow`, `test_thrash`, `security`, `architecture`, `breaking_change`, `dependency`, `new_package`. Use the literal " — " (em-dash with spaces) before the detail so the fast-path audit parses the trigger cleanly.
 2. Write a brief escalation note to `fast-summary.md` with status `ESCALATED`.
 3. Stop and tell the user to re-run `/workflow-next {project}` without `KAOLA_PATH=fast`.
 
@@ -97,7 +113,8 @@ Agent(
 
 Ask for:
 
-- files to touch (must be ≤ 2 closely related files for fast path to apply)
+- files to touch (the declared write set — must be ≤ 5 files in a single area for fast path to apply)
+- explicitly: is there exactly one sensible approach, or ≥ 2 materially-different ones?
 - exact change per file
 - acceptance check command
 - explicit out-of-scope items
@@ -108,8 +125,8 @@ Write raw output to:
 kaola-workflow/{project}/.cache/planner.md
 ```
 
-If the planner reports the change exceeds ≤ 2 files, escalate per Mid-Flight
-Escalation above.
+If the planner reports the change exceeds ≤ 5 files, or reports ≥ 2
+materially-different viable approaches, escalate per Mid-Flight Escalation above.
 
 The orchestrator (main session) captures the planner's plan into the
 `fast-summary.md` stub with status `IN_PROGRESS`. The `planner` agent does
@@ -167,6 +184,12 @@ write workflow-state.md itself).
 Update `fast-summary.md` status to `REVIEW`.
 
 ## Step 3 - Review (code-reviewer)
+
+Delegated `code-reviewer` is mandatory whenever the change touches **> 1 file**
+or any production-path file (anything outside `docs/`, `*.md`, `tests/`).
+Self-review is allowed ONLY for the trivial band — a single docs, comment, or
+markdown edit. The Trivial Inline Edit exemption below (applying a one-line
+reviewer fix) is unchanged.
 
 Update `workflow-state.md`:
 
@@ -236,7 +259,7 @@ PASSED | IN_PROGRESS | REVIEW | ESCALATED
 [commands run, test output summary]
 
 ## Review
-[self-review result]
+[review result]
 
 ## Required Agent Compliance
 | Requirement | Status | Evidence | Skip Reason |

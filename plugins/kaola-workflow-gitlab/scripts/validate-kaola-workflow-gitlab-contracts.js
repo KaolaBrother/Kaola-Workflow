@@ -388,4 +388,29 @@ assertConcept(pluginRoot + '/scripts/test-gitlab-workflow-scripts.js', 'GitLab s
   'dry_run'
 ]);
 
+// issue #198: fast-path widening — eligibility/hatch/review contract (GitLab parity)
+const fastCmd198 = pluginRoot + '/commands/kaola-workflow-fast.md';
+const fastSkill198 = pluginRoot + '/skills/kaola-workflow-fast/SKILL.md';
+for (const fastFile198 of [fastCmd198, fastSkill198]) {
+  assertIncludes(fastFile198, 'mechanical');
+  assertIncludes(fastFile198, '≤ 5');
+  assertIncludes(fastFile198, 'design choice');
+  assertIncludes(fastFile198, 'approach_ambiguity');
+  assertIncludes(fastFile198, 'declared write set');
+  assertIncludes(fastFile198, 'absolute backstop of 6');
+  assertIncludes(fastFile198, '`code-reviewer` is mandatory');
+}
+assertNotIncludes(fastCmd198, 'two closely related files');
+assertNotIncludes(fastCmd198, '≤ 2');
+assertNotIncludes(fastSkill198, '(≤ 2)');
+assertNotIncludes(fastSkill198, '> 2 files');
+const nextCmd198 = pluginRoot + '/commands/workflow-next.md';
+const nextSkill198 = pluginRoot + '/skills/kaola-workflow-next/SKILL.md';
+for (const nextFile198 of [nextCmd198, nextSkill198]) {
+  assertIncludes(nextFile198, 'mechanical');
+  assertIncludes(nextFile198, '≤ 5');
+  assertIncludes(nextFile198, 'design choice');
+  assertNotIncludes(nextFile198, '≤ 2 closely related files');
+}
+
 console.log('Kaola-Workflow GitLab contract validation passed');

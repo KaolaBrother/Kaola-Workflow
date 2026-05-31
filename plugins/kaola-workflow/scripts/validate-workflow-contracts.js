@@ -120,6 +120,23 @@ assertIncludes('commands/workflow-next.md', '--target-issue');
 assertIncludes('commands/workflow-next.md', '## Co-active Folders');
 for (const token of retired) assertNotIncludes('commands/workflow-next.md', token);
 
+// issue #198: fast-path widening — eligibility/hatch/review contract
+const fastFile198 = 'commands/kaola-workflow-fast.md';
+assertIncludes(fastFile198, 'mechanical');
+assertIncludes(fastFile198, '≤ 5');
+assertIncludes(fastFile198, 'design choice');
+assertIncludes(fastFile198, 'approach_ambiguity');
+assertIncludes(fastFile198, 'declared write set');
+assertIncludes(fastFile198, 'absolute backstop of 6');
+assertIncludes(fastFile198, '`code-reviewer` is mandatory');
+assertNotIncludes(fastFile198, 'two closely related files');
+assertNotIncludes(fastFile198, '≤ 2');
+const nextFile198 = 'commands/workflow-next.md';
+assertIncludes(nextFile198, 'mechanical');
+assertIncludes(nextFile198, '≤ 5');
+assertIncludes(nextFile198, 'design choice');
+assertNotIncludes(nextFile198, '≤ 2 closely related files');
+
 assert(exists('scripts/kaola-workflow-active-folders.js'), 'active folder reader is missing');
 assert(exists('scripts/kaola-workflow-claim.js'), 'claim script is missing');
 assert(exists('scripts/kaola-workflow-classifier.js'), 'classifier script is missing');

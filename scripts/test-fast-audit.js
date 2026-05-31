@@ -147,6 +147,19 @@ Some more lines here.
 Nothing structured.
 `;
 
+// F_AA: ISOLATED-UNIT fixture (issue #198) — never written to the shared temp
+// dir and never passed to audit(tmp), so aggregate counts stay unchanged.
+// ESCALATED with an approach_ambiguity trigger and literal U+2014 em-dash
+// separator before the detail.
+const F_AA = `# Fast Summary: issue-aa
+
+## Status
+ESCALATED
+
+## Escalation
+escalated_to_full: approach_ambiguity — planner reported 2 materially-different viable approaches
+`;
+
 // ---------------------------------------------------------------------------
 // Helper: write a fixture fast-summary.md
 // active=true  -> kaola-workflow/issue-N/fast-summary.md
@@ -237,6 +250,16 @@ try {
   assert(ehKeys.length === 1, 'escalationHistogram should have exactly 1 key, got ' + ehKeys.length + ': ' + JSON.stringify(ehKeys));
   assert(eh['scope exceeds fast-path'] === 1,
     'escalationHistogram["scope exceeds fast-path"] should be 1, got ' + eh['scope exceeds fast-path']);
+
+  // -------------------------------------------------------------------------
+  // 5b. parseEscalationReason isolated unit (issue #198, F_AA — not in audit set)
+  // ESCALATED body → trigger parsed up to ' — '; status gate returns null
+  // for a non-ESCALATED status (a PASSED body contributes nothing).
+  // -------------------------------------------------------------------------
+  assert(parseEscalationReason(splitSections(F_AA), 'ESCALATED') === 'approach_ambiguity',
+    'F_AA ESCALATED should parse to approach_ambiguity, got ' + parseEscalationReason(splitSections(F_AA), 'ESCALATED'));
+  assert(parseEscalationReason(splitSections(F_AA), 'PASSED') === null,
+    'F_AA with PASSED status should return null, got ' + parseEscalationReason(splitSections(F_AA), 'PASSED'));
 
   // -------------------------------------------------------------------------
   // 6. parseReviewMode unit test: code-reviewer mention ONLY in ## Review prose

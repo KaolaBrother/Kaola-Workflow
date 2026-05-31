@@ -487,13 +487,13 @@ The command is a thin router. It first checks local/remote Git state, safely fas
 
 ### Fast path (optional)
 
-For small, well-scoped issues (≤2 closely related files), request the fast-path workflow:
+For small, well-scoped issues where the approach is unambiguous and mechanical — exactly one sensible way to do it (a rename or move, threading an existing field through a known call path, a behavior-preserving refactor, repetitive parallel edits, or a bug fix whose root cause is already located), confined to a single area of ≤ 5 files with no new external deps, no public API/schema/migration change, no security/auth/encryption concern, and no `depends-on:#N` — request the fast-path workflow. Anything with ≥ 2 materially-different viable approaches stays on full regardless of size, because that is a design choice where full-workflow ideation earns its keep:
 
 ```
 KAOLA_PATH=fast /workflow-next
 ```
 
-Fast path executes Plan, Implement, and Review in a single pass, writing `fast-summary.md` instead of the full 6-phase artifacts. If scope expands during execution (multiple file groups, security concerns, dependencies, new packages), fast path escalates automatically to the full workflow. Otherwise, it routes directly to Phase 6.
+Fast path executes Plan, Implement, and Review in a single pass, writing `fast-summary.md` instead of the full 6-phase artifacts. If the planner surfaces ≥ 2 materially-different viable approaches (`approach_ambiguity`), or scope expands during execution (beyond the declared write set by more than 1 file or past the absolute backstop of 6 files, security concerns, dependencies, new packages), fast path escalates automatically to the full workflow. Otherwise, it routes directly to Phase 6.
 
 ## Automation scripts
 
@@ -530,7 +530,7 @@ when developing locally. Drift between `scripts/` and
 | `validate-kaola-workflow-contracts.js` | Same contractual assertions on the Codex plugin surface under `plugins/kaola-workflow/`. |
 | `validate-script-sync.js` | Byte-identical drift guard between `scripts/` (Claude Code) and `plugins/kaola-workflow/scripts/` (Codex), plus shared hook copies that must stay in sync across GitHub, GitLab, and Gitea surfaces. |
 | `validate-vendored-agents.js` | Asserts the vendored Claude Code agent prompts match the pinned upstream Everything Claude Code commit. |
-| `test-fast-audit.js` | Regression test for `kaola-workflow-fast-audit.js` — 38 assertions over synthetic fast-summary fixtures (status/escalation/file-count/review-mode parsing, empty-corpus and malformed-input robustness). Uses temp-dir fixtures only, never the real archive. |
+| `test-fast-audit.js` | Regression test for `kaola-workflow-fast-audit.js` — 40 assertions over synthetic fast-summary fixtures (status/escalation/file-count/review-mode parsing, empty-corpus and malformed-input robustness). Uses temp-dir fixtures only, never the real archive. |
 
 ### Active folder coordination
 

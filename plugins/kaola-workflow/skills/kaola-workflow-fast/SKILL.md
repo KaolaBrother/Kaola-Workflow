@@ -16,17 +16,19 @@ Complete a single-pass Plan+Execute+Review cycle for the named project and
 write a `PASSED` `fast-summary.md` that Phase 6 accepts as a full-workflow
 substitute. Stop if scope exceeds fast-path bounds.
 
+Fast applies only to mechanical, single-area changes of ≤ 5 files with exactly one sensible approach; ≥ 2 materially-different viable approaches is a design choice that stays on full. Escalate (`escalated_to_full: <trigger> — <detail>`) on `approach_ambiguity`, scope past the declared write set by >1 file or the absolute backstop of 6, `test_thrash` (≥3), security/architecture/breaking-change, discovered dependency, or new external package.
+
 ## Step 1 - Plan (planner)
 
 Ensure `kaola-workflow/{project}/.cache/` exists before invoking agents.
 
 Update `workflow-state.md` with `step: plan`, `main_session_role: orchestrator`, `implementation_owner: planner`, `inline_emergency_fallback_authorized: no`.
 
-Invoke the Claude Code agent `planner` with the linked GitHub issue body and phase1/phase2 excerpts if they exist. Ask for: files to touch (≤ 2), exact change per file, acceptance check command, out-of-scope items.
+Invoke the Claude Code agent `planner` with the linked GitHub issue body and phase1/phase2 excerpts if they exist. Ask for: files to touch (the declared write set — ≤ 5 files in a single area), whether the approach is mechanical with exactly one sensible way or has ≥ 2 materially-different viable approaches, exact change per file, acceptance check command, out-of-scope items.
 
 Write raw output to `kaola-workflow/{project}/.cache/planner.md`.
 
-If planner reports > 2 files, escalate. The orchestrator captures the returned plan into `fast-summary.md` with status `IN_PROGRESS` (planner has Read-only tools).
+If planner reports > 5 files or ≥ 2 materially-different viable approaches (`approach_ambiguity`), escalate. The orchestrator captures the returned plan into `fast-summary.md` with status `IN_PROGRESS` (planner has Read-only tools).
 
 ## Step 2 - Execute (tdd-guide)
 
@@ -48,6 +50,8 @@ Update `fast-summary.md` status to `REVIEW`.
 ## Step 3 - Review (code-reviewer)
 
 Update `workflow-state.md` with `step: review`, `main_session_role: orchestrator`, `implementation_owner: code-reviewer`, `inline_emergency_fallback_authorized: no`.
+
+Delegated `code-reviewer` is mandatory for any change touching > 1 file or any production-path file (outside `docs/`, `*.md`, `tests/`); self-review only for the trivial band (single docs/comment/markdown edit).
 
 Invoke the Claude Code agent `code-reviewer` on modified files. Ask it to check:
 
@@ -80,7 +84,7 @@ PASSED | IN_PROGRESS | REVIEW | ESCALATED
 [commands run, test output summary]
 
 ## Review
-[self-review result]
+[review result]
 
 ## Required Agent Compliance
 | Requirement | Status | Evidence | Skip Reason |
