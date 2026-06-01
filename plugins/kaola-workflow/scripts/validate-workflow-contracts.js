@@ -54,6 +54,35 @@ function assertEveryDispatchHasModel(file) {
   }
 }
 
+// issue #211: inline section slicer (copied verbatim from
+// scripts/kaola-workflow-classifier.js so the validator carries no classifier
+// dependency). Returns the body of a `## {heading}` section, up to the next
+// h1/h2 heading (or EOF).
+function sectionBody(content, heading) {
+  const lines = String(content || '').split('\n');
+  const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const headRe = new RegExp('^##\\s+' + escaped + '\\s*$');
+  let i = 0;
+  for (; i < lines.length; i++) { if (headRe.test(lines[i])) { i++; break; } }
+  if (i >= lines.length) return '';
+  const out = [];
+  for (; i < lines.length; i++) {
+    if (/^#{1,2}\s/.test(lines[i])) break;
+    out.push(lines[i]);
+  }
+  return out.join('\n');
+}
+
+// issue #211: extract the resume clause as an isolated 2-line unit — the line
+// carrying the marker plus exactly the next line. The enclosing `## Routing`
+// section is NOT compared because a forge-specific `repair_script=`/```bash line
+// sits ~2 lines below and would false-flag cross-forge parity.
+function resumeClausePair(content) {
+  const lines = String(content || '').split('\n');
+  const idx = lines.findIndex(line => line.includes('On resume, extract and reassign'));
+  return idx < 0 ? '' : lines[idx] + '\n' + (lines[idx + 1] || '');
+}
+
 const retired = [
   ...['lo' + 'cks', 'sess' + 'ions', 'tick' + 'ers'].map(name => '.' + name),
   ['heart', 'beat'].join(''),
@@ -357,6 +386,39 @@ for (const manifest of codexManifests.slice(1)) {
     manifest.file + ' version (' + manifest.version +
       ') must match plugins/kaola-workflow/.codex-plugin/plugin.json version (' +
       codexBaselineVersion + ')'
+  );
+}
+
+// issue #211: cross-forge parity for the kaola-workflow-next skill. The
+// `## Delegation Contract` section body and the resume clause must byte-match
+// across all three editions. github is the baseline; gitlab and gitea must
+// match it exactly. This guards against a forge edition silently drifting in
+// delegation policy or resume-reassignment semantics.
+const nextSkillEditions = [
+  ['github', 'plugins/kaola-workflow/skills/kaola-workflow-next/SKILL.md'],
+  ['gitlab', 'plugins/kaola-workflow-gitlab/skills/kaola-workflow-next/SKILL.md'],
+  ['gitea', 'plugins/kaola-workflow-gitea/skills/kaola-workflow-next/SKILL.md'],
+];
+const [, nextSkillBaselineFile] = nextSkillEditions[0];
+const nextSkillBaseline = read(nextSkillBaselineFile);
+const baselineDelegationContract = sectionBody(nextSkillBaseline, 'Delegation Contract');
+const baselineResumeClause = resumeClausePair(nextSkillBaseline);
+assert(
+  baselineDelegationContract.length > 0 && baselineResumeClause.includes('On resume'),
+  nextSkillBaselineFile + ' must define a "## Delegation Contract" section and an ' +
+    '"On resume, extract and reassign" clause to anchor the issue #211 cross-forge parity baseline'
+);
+for (const [, file] of nextSkillEditions.slice(1)) {
+  const content = read(file);
+  assert(
+    sectionBody(content, 'Delegation Contract') === baselineDelegationContract,
+    file + ' "## Delegation Contract" section must byte-match the github baseline ' +
+      nextSkillBaselineFile + ' (issue #211 cross-forge parity)'
+  );
+  assert(
+    resumeClausePair(content) === baselineResumeClause,
+    file + ' resume clause ("On resume, extract and reassign" line + next line) must byte-match the ' +
+      'github baseline ' + nextSkillBaselineFile + ' (issue #211 cross-forge parity)'
   );
 }
 
