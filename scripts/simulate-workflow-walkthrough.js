@@ -15,6 +15,7 @@ const sinkPrScript = path.join(repoRoot, 'scripts', 'kaola-workflow-sink-pr.js')
 const activeFoldersScript = path.join(repoRoot, 'scripts', 'kaola-workflow-active-folders.js');
 const closureAuditScript = path.join(repoRoot, 'scripts', 'kaola-workflow-closure-audit.js');
 const hookScript = path.join(repoRoot, 'hooks', 'kaola-workflow-pre-commit.sh');
+const phantomAdvisorHook = path.join(repoRoot, 'hooks', 'kaola-workflow-phantom-advisor.sh');
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -239,6 +240,61 @@ function testHookSingleProjectGuard(tmp) {
   spawnSync('git', ['add', 'kaola-workflow/a/workflow-state.md', 'kaola-workflow/b/workflow-state.md'], { cwd: tmp, encoding: 'utf8' });
   const result = spawnSync('bash', [hookScript], { cwd: tmp, input: '', encoding: 'utf8' });
   assert(result.status === 2, 'pre-commit hook should block mixed project commits');
+}
+
+function testPhantomAdvisorHookGuard() {
+  // Behavioral coverage for the phantom-advisor PostToolUse hook. Regression guard
+  // for the bugs that left it inert: it must read the payload on STDIN (not an env
+  // var), parse tool_input.{file_path,content,new_string} (Write carries `content`,
+  // Edit carries `new_string`), fail OPEN outside a git repo (never a false block),
+  // and resolve the kaola-workflow/<project> segment from the LAST occurrence so a
+  // repo directory itself named 'kaola-workflow' does not shadow it.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-phantom-advisor-'));
+  try {
+    // Repo dir literally named 'kaola-workflow' exercises the double-segment path.
+    const repo = path.join(tmp, 'kaola-workflow');
+    const projectDir = path.join(repo, 'kaola-workflow', 'issue-1');
+    fs.mkdirSync(projectDir, { recursive: true });
+    spawnSync('git', ['init'], { cwd: repo, encoding: 'utf8' });
+    const filePath = path.join(projectDir, 'phase5-review.md');
+    const run = (payload, cwd) => spawnSync('bash', [phantomAdvisorHook],
+      { cwd: cwd || repo, input: typeof payload === 'string' ? payload : JSON.stringify(payload), encoding: 'utf8' });
+
+    // (a) Write citation, no backing advisor cache -> BLOCK (exit 2).
+    let r = run({ tool_input: { file_path: filePath, content: 'the advisor says proceed' } });
+    assert(r.status === 2, 'phantom-advisor must block an unbacked Write advisor citation, got ' + r.status);
+
+    // (b) Same citation with a backing artifact -> ALLOW. Also proves the segment
+    // resolves correctly under a repo dir named 'kaola-workflow'.
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.writeFileSync(path.join(cacheDir, 'advisor-plan.md'), '# advisor\n');
+    r = run({ tool_input: { file_path: filePath, content: 'the advisor says proceed' } });
+    assert(r.status === 0, 'phantom-advisor must allow a citation backed by .cache/advisor-*.md, got ' + r.status);
+    fs.rmSync(path.join(cacheDir, 'advisor-plan.md'));
+
+    // (c) No citation -> ALLOW.
+    r = run({ tool_input: { file_path: filePath, content: 'ordinary phase notes' } });
+    assert(r.status === 0, 'phantom-advisor must allow non-citing content, got ' + r.status);
+
+    // (d) Edit citation in new_string (no `content` field) -> BLOCK.
+    r = run({ tool_input: { file_path: filePath, old_string: 'x', new_string: 'per the advisor we proceed' } });
+    assert(r.status === 2, 'phantom-advisor must scan Edit new_string and block an unbacked citation, got ' + r.status);
+
+    // (e) Empty stdin -> ALLOW (no payload).
+    r = run('');
+    assert(r.status === 0, 'phantom-advisor must no-op on empty stdin, got ' + r.status);
+
+    // (f) Non-workflow path with a citation -> ignore.
+    r = run({ tool_input: { file_path: path.join(repo, 'README.md'), content: 'the advisor says hi' } });
+    assert(r.status === 0, 'phantom-advisor must ignore non-workflow paths, got ' + r.status);
+
+    // (g) Outside any git repo -> fail OPEN (cwd is the un-init'd mkdtemp root).
+    r = run({ tool_input: { file_path: path.join(tmp, 'no-such', 'kaola-workflow', 'issue-9', 'phase5-review.md'), content: 'the advisor says proceed' } }, tmp);
+    assert(r.status === 0, 'phantom-advisor must fail open outside a git repo, got ' + r.status);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 }
 
 function testRoadmapGenerateMissingSourceGuard(tmp) {
@@ -4026,6 +4082,7 @@ async function main() {
     testRepairFastNoArgSingle();
     testRepairFastNoArgAmbiguous();
     testHookSingleProjectGuard(tmp);
+    testPhantomAdvisorHookGuard();
     testRoadmapGenerateMissingSourceGuard(tmp);
     testRoadmapGenerateAtomicReplace(tmp);
     await testRoadmapInitIssueConcurrentExclusive(tmp);

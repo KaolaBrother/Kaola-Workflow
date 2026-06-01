@@ -744,7 +744,15 @@ withForge({
 {
   const root = tempRoot('kw-gt-repair-');
   const dir = writeState(root, 'repair-project', 50);
-  fs.writeFileSync(path.join(dir, 'phase3-plan.md'), '# Phase 3 - Plan\n');
+  // A real phase3-plan carries a resolved Required Agent Compliance table; the
+  // boundary-crossing reconstruction is only allowed when compliance is resolved.
+  fs.writeFileSync(path.join(dir, 'phase3-plan.md'), [
+    '# Phase 3 - Plan', '',
+    '## Required Agent Compliance',
+    '| Requirement | Status | Evidence | Skip Reason |',
+    '|-------------|--------|----------|-------------|',
+    '| code-architect | invoked | .cache/architect.md | |', ''
+  ].join('\n'));
   const result = repair.repair('repair-project', root);
   assert.strictEqual(result.repaired, true);
   const state = fs.readFileSync(path.join(dir, 'workflow-state.md'), 'utf8');
@@ -1075,13 +1083,44 @@ assert.strictEqual(classifier.issueHasRemoteClaimNotes(35), false,
   const root = tempRoot('kw-gt-repair-stale-');
   try {
     const dir = writeState(root, 'stale-project', 84);
-    fs.writeFileSync(path.join(dir, 'phase3-plan.md'), '# Phase 3\n');
+    fs.writeFileSync(path.join(dir, 'phase3-plan.md'), [
+      '# Phase 3 - Plan', '',
+      '## Required Agent Compliance',
+      '| Requirement | Status | Evidence | Skip Reason |',
+      '|-------------|--------|----------|-------------|',
+      '| code-architect | invoked | .cache/architect.md | |', ''
+    ].join('\n'));
     const result = repair.repair('stale-project', root);
     assert.strictEqual(result.repaired, true);
     assert.strictEqual(result.stale, true);
     const state = fs.readFileSync(path.join(dir, 'workflow-state.md'), 'utf8');
     assert(state.includes('## Gitea'), 'stale repair should preserve ## Gitea section');
     assert(state.includes('## Sink'), 'stale repair should preserve ## Sink section');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+{
+  // audit #4: a phase artifact that crosses a boundary with an UNRESOLVED
+  // compliance row must refuse forward reconstruction even when the state has no
+  // delegation_policy (the no-policy / corruption-recovery path the old
+  // delegation_policy-gated check silently advanced). Mirrors the GitHub edition.
+  const root = tempRoot('kw-gt-repair-compliance-gate-');
+  try {
+    const dir = path.join(root, 'kaola-workflow', 'gate-project');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'phase3-plan.md'), [
+      '# Phase 3 - Plan', '',
+      '## Required Agent Compliance',
+      '| Requirement | Status | Evidence | Skip Reason |',
+      '|-------------|--------|----------|-------------|',
+      '| code-architect | pending | | |', ''
+    ].join('\n'));
+    const result = repair.repair('gate-project', root);
+    assert.strictEqual(result.repaired, false, 'unresolved compliance must refuse forward reconstruction with no delegation_policy');
+    assert(/unresolved compliance gates/.test(result.reason || ''), 'refusal reason must name unresolved compliance gates, got: ' + result.reason);
+    assert(!fs.existsSync(path.join(dir, 'workflow-state.md')), 'compliance refusal must not write a forward-advanced state file');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -1513,7 +1552,15 @@ assert.strictEqual(classifier.issueHasRemoteClaimNotes(35), false,
     const dir = writeState(root, 'issue107-allow', 108);
     fs.writeFileSync(path.join(dir, 'phase4-progress.md'),
       '# Phase 4\n\n## Tasks\n| # | Task | Status |\n|---|------|--------|\n| A | Task A | complete |\n');
-    fs.writeFileSync(path.join(dir, 'phase5-review.md'), '# Phase 5\n');
+    // phase5-review carries a resolved compliance table so the phase6 boundary
+    // crossing is allowed (the gate-project test above covers the refusal).
+    fs.writeFileSync(path.join(dir, 'phase5-review.md'), [
+      '# Phase 5 - Review', '',
+      '## Required Agent Compliance',
+      '| Requirement | Status | Evidence | Skip Reason |',
+      '|-------------|--------|----------|-------------|',
+      '| code-reviewer | invoked | .cache/code-reviewer.md | |', ''
+    ].join('\n'));
     const result = repair.reconstruct(root, path.join(root, 'kaola-workflow'), 'issue107-allow');
     assert.strictEqual(result.phase, 6, 'happy path must still route to Phase 6');
     assert(/kaola-workflow-phase6/.test(result.nextCommand), 'nextCommand must be phase 6');
