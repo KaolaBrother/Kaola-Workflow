@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- **Codex workflow defaults to delegated compliance (no startup prompt)** (issue #210): The Codex `kaola-workflow-next` Delegation Contract no longer asks the user to choose `delegate` / `local-authorized` / `tool-unavailable` at startup. It now defaults to `delegation_policy: delegate` without prompting, auto-detects absent Codex role profiles (`.codex/agents/kaola-workflow/`) and records them per-row as evidenced `local-fallback-tool-unavailable` under `delegate`, and uses `local-authorized` only on an explicit user request to disable delegation. Repair-state enforcement and the four-token compliance vocabulary (`subagent-invoked`, `local-fallback-explicit`, `local-fallback-tool-unavailable`, `N/A`) are unchanged. Applied across all three Codex editions (`plugins/kaola-workflow{,-gitlab,-gitea}/skills/kaola-workflow-next/SKILL.md`); additive contract tests in the three Codex validators cover the no-prompt default path and the explicit local-fallback path. Docs updated (`README.md` Codex agent-profile section, `docs/workflow-state-contract.md` `delegation_policy` field). Ships at the current Codex manifest version — no version bump; the Codex version axis rides the next root release per the Branch-A release-surface policy (issue #193).
+
 ## [3.17.2] — 2026-05-31
 
 ### Fixed

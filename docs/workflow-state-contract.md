@@ -36,10 +36,12 @@ The `workflow-state.md` file contains several key blocks:
   - **runtime** — The runtime that claimed the folder (`claude` or `codex`). Persisted from the `--runtime` startup flag; defaults to `claude`.
 - `## Sink` — Issue number, sink mode (merge or pr), branch name, and worktree path
 - `## Lease` — (Legacy, deprecated) Coordination metadata; preserved for backward compatibility
-- `delegation_policy:` — User-authorized delegation mode for Codex workflows:
-  - `delegate` — Invoke subagent roles when available (records `subagent-invoked` in compliance ledgers)
-  - `local-authorized` — Execute locally with explicit user authorization (records `local-fallback-explicit`)
-  - `tool-unavailable` — Subagent tooling unavailable; execute locally (records `local-fallback-tool-unavailable`)
+- `delegation_policy:` — Delegation mode for Codex workflows. Defaults to
+  `delegate`, established without prompting the user; `local-authorized` is an
+  explicit opt-out and `tool-unavailable` is auto-detected, not a user choice:
+  - `delegate` — Default. Invoke subagent roles when available (records `subagent-invoked` in compliance ledgers); when role profiles are absent, keep `delegate` and record evidenced `local-fallback-tool-unavailable` rows
+  - `local-authorized` — Execute locally; set only when the user explicitly disables delegation (records `local-fallback-explicit`)
+  - `tool-unavailable` — Legacy/explicit value for locally-executed runs when subagent tooling is unavailable (records `local-fallback-tool-unavailable`); new runs detect this per-row under `delegate` rather than selecting it at startup
 
 Phase artifacts record delegation decisions in their **Required Agent Compliance** ledgers
 using the same four-token vocabulary: `subagent-invoked`, `local-fallback-explicit`,

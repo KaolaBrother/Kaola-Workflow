@@ -252,6 +252,17 @@ assert(
   read(`${giteaSkillsBase}/kaola-workflow-next/SKILL.md`).includes('extract and reassign `delegation_policy:` alongside `phase` and `next_skill`'),
   'Gitea next skill must explicitly resume delegation_policy alongside phase and next_skill'
 );
+// Issue #210: Codex defaults to delegated compliance — the startup delegate-vs-inline prompt is retired.
+const giteaNext210 = `${giteaSkillsBase}/kaola-workflow-next/SKILL.md`;
+assert(!read(giteaNext210).includes('Ask the user once at startup'), giteaNext210 + ' must not prompt for a delegation policy at startup');
+assert(!read(giteaNext210).includes('How should delegation be handled'), giteaNext210 + ' must not present a delegation menu');
+assert(read(giteaNext210).includes('Codex subagent delegation is the default.'), giteaNext210 + ' must declare delegation the default');
+assert(read(giteaNext210).includes('The default `delegation_policy` is `delegate`'), giteaNext210 + ' must default delegation_policy to delegate');
+assert(read(giteaNext210).includes('KAOLA_DELEGATION_POLICY=delegate'), giteaNext210 + ' must set KAOLA_DELEGATION_POLICY=delegate');
+assert(read(giteaNext210).includes('.codex/agents/kaola-workflow/'), giteaNext210 + ' must name the role-profile detection path');
+assert(read(giteaNext210).includes('record `local-fallback-tool-unavailable` with a non-empty Evidence value'), giteaNext210 + ' must record auto-detected tool-unavailable as evidence');
+assert(read(giteaNext210).includes('only when the user explicitly'), giteaNext210 + ' must gate local-authorized behind explicit user request');
+assert(read(giteaNext210).includes('default `delegation_policy` to `delegate` without prompting'), giteaNext210 + ' must default delegate on resume without prompting');
 // Issue #174: Gitea next skill parity gaps
 const giteaNextSkill = `${giteaSkillsBase}/kaola-workflow-next/SKILL.md`;
 assertNotIncludes(giteaNextSkill, 'PICK_NEXT_PROJECT');
@@ -330,6 +341,13 @@ assertPolicyBlocked('delegate', [
 assertPolicyBlocked('tool-unavailable', [
   ['code-reviewer', 'subagent-invoked', '.cache/code-reviewer.md', '']
 ], 'subagent row under tool-unavailable policy');
+// Issue #210: contract tests for the no-prompt default path and the explicit local fallback path.
+assertPolicyAllowed('delegate', [
+  ['code-explorer', 'local-fallback-tool-unavailable', '.codex/agents/kaola-workflow/ absent', '']
+], 'issue #210 no-prompt default: delegate auto-detects evidenced tool-unavailable (regression lock)');
+assertPolicyAllowed('local-authorized', [
+  ['code-explorer', 'local-fallback-explicit', 'user disabled delegation', '']
+], 'issue #210 explicit local fallback: local-authorized only on explicit user request');
 
 const giteaInitSkill = `${giteaSkillsBase}/kaola-workflow-init/SKILL.md`;
 assertNotIncludes(giteaInitSkill, 'Do not create or edit CLAUDE.md');

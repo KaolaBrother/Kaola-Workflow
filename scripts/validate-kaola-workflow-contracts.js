@@ -87,6 +87,17 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'active fold
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, '--target-issue');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'watch-pr');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'extract and reassign `delegation_policy:` alongside `phase` and `next_skill`');
+// Issue #210: Codex defaults to delegated compliance — the startup delegate-vs-inline prompt is retired.
+const nextSkill210 = `${pluginRoot}/skills/kaola-workflow-next/SKILL.md`;
+assertNotIncludes(nextSkill210, 'Ask the user once at startup');
+assertNotIncludes(nextSkill210, 'How should delegation be handled');
+assertIncludes(nextSkill210, 'Codex subagent delegation is the default.');
+assertIncludes(nextSkill210, 'The default `delegation_policy` is `delegate`');
+assertIncludes(nextSkill210, 'KAOLA_DELEGATION_POLICY=delegate');
+assertIncludes(nextSkill210, '.codex/agents/kaola-workflow/');
+assertIncludes(nextSkill210, 'record `local-fallback-tool-unavailable` with a non-empty Evidence value');
+assertIncludes(nextSkill210, 'only when the user explicitly');
+assertIncludes(nextSkill210, 'default `delegation_policy` to `delegate` without prompting');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'KAOLA_CLAIM="$(node -e');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, '[ "$KAOLA_CLAIM" = "acquired" ] && [ -n "$KAOLA_PROJECT" ]');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, '--project "$KAOLA_PROJECT" --reason git-freshness-block');
@@ -219,6 +230,13 @@ assertPolicyBlocked('delegate', [
 assertPolicyBlocked('tool-unavailable', [
   ['code-reviewer', 'subagent-invoked', '.cache/code-reviewer.md', '']
 ], 'subagent row under tool-unavailable policy');
+// Issue #210: contract tests for the no-prompt default path and the explicit local fallback path.
+assertPolicyAllowed('delegate', [
+  ['code-explorer', 'local-fallback-tool-unavailable', '.codex/agents/kaola-workflow/ absent', '']
+], 'issue #210 no-prompt default: delegate auto-detects evidenced tool-unavailable (regression lock)');
+assertPolicyAllowed('local-authorized', [
+  ['code-explorer', 'local-fallback-explicit', 'user disabled delegation', '']
+], 'issue #210 explicit local fallback: local-authorized only on explicit user request');
 
 const sharedScripts = [
   'kaola-workflow-active-folders.js',

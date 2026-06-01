@@ -245,6 +245,17 @@ assert(
   read(`${gitlabSkillsBase}/kaola-workflow-next/SKILL.md`).includes('extract and reassign `delegation_policy:` alongside `phase` and `next_skill`'),
   'GitLab next skill must explicitly resume delegation_policy alongside phase and next_skill'
 );
+// Issue #210: Codex defaults to delegated compliance — the startup delegate-vs-inline prompt is retired.
+const gitlabNext210 = `${gitlabSkillsBase}/kaola-workflow-next/SKILL.md`;
+assert(!read(gitlabNext210).includes('Ask the user once at startup'), gitlabNext210 + ' must not prompt for a delegation policy at startup');
+assert(!read(gitlabNext210).includes('How should delegation be handled'), gitlabNext210 + ' must not present a delegation menu');
+assert(read(gitlabNext210).includes('Codex subagent delegation is the default.'), gitlabNext210 + ' must declare delegation the default');
+assert(read(gitlabNext210).includes('The default `delegation_policy` is `delegate`'), gitlabNext210 + ' must default delegation_policy to delegate');
+assert(read(gitlabNext210).includes('KAOLA_DELEGATION_POLICY=delegate'), gitlabNext210 + ' must set KAOLA_DELEGATION_POLICY=delegate');
+assert(read(gitlabNext210).includes('.codex/agents/kaola-workflow/'), gitlabNext210 + ' must name the role-profile detection path');
+assert(read(gitlabNext210).includes('record `local-fallback-tool-unavailable` with a non-empty Evidence value'), gitlabNext210 + ' must record auto-detected tool-unavailable as evidence');
+assert(read(gitlabNext210).includes('only when the user explicitly'), gitlabNext210 + ' must gate local-authorized behind explicit user request');
+assert(read(gitlabNext210).includes('default `delegation_policy` to `delegate` without prompting'), gitlabNext210 + ' must default delegate on resume without prompting');
 // Issue #174: GitLab next skill parity gaps
 const gitlabNextSkill = `${gitlabSkillsBase}/kaola-workflow-next/SKILL.md`;
 assertNotIncludes(gitlabNextSkill, 'PICK_NEXT_PROJECT');
@@ -323,6 +334,13 @@ assertPolicyBlocked('delegate', [
 assertPolicyBlocked('tool-unavailable', [
   ['code-reviewer', 'subagent-invoked', '.cache/code-reviewer.md', '']
 ], 'subagent row under tool-unavailable policy');
+// Issue #210: contract tests for the no-prompt default path and the explicit local fallback path.
+assertPolicyAllowed('delegate', [
+  ['code-explorer', 'local-fallback-tool-unavailable', '.codex/agents/kaola-workflow/ absent', '']
+], 'issue #210 no-prompt default: delegate auto-detects evidenced tool-unavailable (regression lock)');
+assertPolicyAllowed('local-authorized', [
+  ['code-explorer', 'local-fallback-explicit', 'user disabled delegation', '']
+], 'issue #210 explicit local fallback: local-authorized only on explicit user request');
 
 const gitlabInitSkill = `${gitlabSkillsBase}/kaola-workflow-init/SKILL.md`;
 assertNotIncludes(gitlabInitSkill, 'Do not create or edit CLAUDE.md');

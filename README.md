@@ -370,12 +370,13 @@ doc-updater
 
 The managed setup copies role configs into `.codex/agents/kaola-workflow/` and
 maintains a `# BEGIN kaola-workflow agents` block in `.codex/config.toml` while
-preserving unrelated config. At startup, Codex workflows ask the user to authorize
-a delegation policy (`delegate`, `local-authorized`, or `tool-unavailable`).
-When policy permits and subagents are available, phases invoke those roles for
+preserving unrelated config. Codex workflows default to delegation
+(`delegation_policy: delegate`) without prompting: phases invoke those roles for
 delegated research, planning, execution, repair, review, and documentation work.
-Otherwise, the current Codex session performs the work locally under explicit
-user authorization.
+When the role profiles are absent the workflow auto-detects this, keeps the
+`delegate` policy, and records the affected rows as evidenced
+`local-fallback-tool-unavailable`. The current Codex session performs the work
+locally under `local-authorized` only when you explicitly disable delegation.
 
 Codex profiles intentionally do not pin model names, so model upgrades can flow
 through the user's active Codex configuration. They only set reasoning effort:

@@ -26,23 +26,19 @@ artifact.
 
 ## Delegation Contract
 
-Before proceeding with any phase work, the agent must establish a session delegation policy with the user. Subagent delegation is not assumed; it requires explicit authorization.
+Codex subagent delegation is the default. The session delegation policy defaults to `delegate` and is established without prompting the user; the workflow complies with its delegated-role contract automatically rather than asking the user to choose.
 
 **Skip this step if `delegation_policy:` is already set in `workflow-state.md`.**
 
-Ask the user once at startup:
+The default `delegation_policy` is `delegate`: invoke the Codex subagent roles (code-explorer, planner, code-architect, tdd-guide, code-reviewer, security-reviewer, doc-updater) for delegated work and record `subagent-invoked` in each compliance ledger. Do not ask the user to choose a delegation policy.
 
-> "This workflow uses Codex subagent roles (code-explorer, planner, code-architect, tdd-guide, code-reviewer, security-reviewer, doc-updater) for delegated work. How should delegation be handled?
->
-> - **delegate** — invoke subagent roles when available (records `subagent-invoked` in each compliance ledger)
-> - **local-authorized** — execute locally with your explicit authorization (records `local-fallback-explicit`)
-> - **tool-unavailable** — subagent tooling is unavailable; execute locally (records `local-fallback-tool-unavailable`)
->
-> Please confirm your delegation policy."
+Tool availability is auto-detected, not a user choice. Before phase work, check whether the Codex role profiles are installed at `.codex/agents/kaola-workflow/`. If that directory has no `*.toml` role profiles the subagent tooling is unavailable: keep `delegation_policy: delegate` and, for each Codex role row, record `local-fallback-tool-unavailable` with a non-empty Evidence value naming the absent path (for example `.codex/agents/kaola-workflow/ absent`). An empty Evidence cell fails the repair-state cross-check, so always write the evidence. Never present tool-unavailability as a question.
+
+Set `delegation_policy: local-authorized` (recording `local-fallback-explicit` in each Codex role row) only when the user explicitly asks to disable delegation or authorizes an inline local fallback. Do not select `local-authorized` on your own initiative.
 
 **Write order** — three steps, in sequence:
 
-1. Ask the user and receive their confirmation (hold policy in-session).
+1. Set `KAOLA_DELEGATION_POLICY=delegate` without asking; use `local-authorized` only on the user's explicit request to disable delegation.
 2. Call the startup script (this creates `workflow-state.md`).
 3. After startup succeeds and `workflow-state.md` exists, patch the delegation policy into the file:
 
@@ -50,9 +46,9 @@ Ask the user once at startup:
 printf '\ndelegation_policy: %s\n' "$KAOLA_DELEGATION_POLICY" >> "kaola-workflow/${KAOLA_PROJECT}/workflow-state.md"
 ```
 
-Where `KAOLA_DELEGATION_POLICY` is `delegate`, `local-authorized`, or `tool-unavailable` based on the user's response.
+Where `KAOLA_DELEGATION_POLICY` is `delegate` by default and `local-authorized` only on the user's explicit request to disable delegation. `tool-unavailable` remains a valid `delegation_policy:` value for legacy state, but new runs detect tool absence as per-row `local-fallback-tool-unavailable` evidence under `delegate` rather than choosing it at startup.
 
-Do not re-ask during the session unless the user explicitly changes policy or `workflow-state.md` is absent.
+Do not re-ask during the session. Re-establish the default only if `workflow-state.md` is absent.
 
 ## Agent Issue Selection (Required Before Startup)
 
@@ -222,7 +218,7 @@ Keep `kaola-workflow/ROADMAP.md` as a compact mirror of active unfinished work.
 Read `kaola-workflow/{project}/workflow-state.md` first. If missing or stale, run:
 
 On resume, extract and reassign `delegation_policy:` alongside `phase` and `next_skill`;
-if it is absent, return to the Delegation Contract before phase work continues.
+if it is absent, default `delegation_policy` to `delegate` without prompting and continue.
 
 ```bash
 repair_script="plugins/kaola-workflow/scripts/kaola-workflow-repair-state.js"
