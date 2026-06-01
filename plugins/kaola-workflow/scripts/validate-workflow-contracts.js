@@ -54,10 +54,20 @@ function assertEveryDispatchHasModel(file) {
   }
 }
 
-// issue #211: inline section slicer (copied verbatim from
+// issue #211: inline section slicer derived from
 // scripts/kaola-workflow-classifier.js so the validator carries no classifier
-// dependency). Returns the body of a `## {heading}` section, up to the next
-// h1/h2 heading (or EOF).
+// dependency. Returns the body of a `## {heading}` section, up to the next
+// h2 heading (or EOF).
+//
+// issue #212: the boundary test is intentionally tightened to h2-only
+// (`^##\s`), unlike the classifier's copy which still uses `^#{1,2}\s`. A
+// `#`-prefixed line (e.g. a shell comment) inside a fenced code block in the
+// section body must NOT truncate the slice — an h1 (`# `) line cannot legally
+// open a sibling section inside a `## ` body, but it can appear inside a
+// ```bash fence as a comment. Stopping only at h2 keeps the whole section body
+// (including any fenced `#` comments) in the compared slice, so a cross-edition
+// divergence below such a comment is not masked. This intentionally diverges
+// from the classifier's verbatim copy (it is no longer byte-identical).
 function sectionBody(content, heading) {
   const lines = String(content || '').split('\n');
   const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -67,7 +77,7 @@ function sectionBody(content, heading) {
   if (i >= lines.length) return '';
   const out = [];
   for (; i < lines.length; i++) {
-    if (/^#{1,2}\s/.test(lines[i])) break;
+    if (/^##\s/.test(lines[i])) break;
     out.push(lines[i]);
   }
   return out.join('\n');
@@ -399,6 +409,25 @@ const nextSkillEditions = [
   ['gitlab', 'plugins/kaola-workflow-gitlab/skills/kaola-workflow-next/SKILL.md'],
   ['gitea', 'plugins/kaola-workflow-gitea/skills/kaola-workflow-next/SKILL.md'],
 ];
+// issue #212: pre-loop over EVERY edition (including the github baseline)
+// before any byte-match comparison. (a) A missing edition file must surface an
+// actionable contract message instead of a raw ENOENT stack trace. (b) Each
+// edition must carry exactly one `## Delegation Contract` heading — a second,
+// divergent section would otherwise be silently ignored because the slicer only
+// compares the first occurrence.
+for (const [name, file] of nextSkillEditions) {
+  assert(
+    exists(file),
+    file + ' (kaola-workflow-next ' + name + ' edition) is required for the issue #211/#212 ' +
+      'cross-forge parity check but is missing'
+  );
+  const editionContent = read(file);
+  assert(
+    (editionContent.match(/^##\s+Delegation Contract\s*$/gm) || []).length === 1,
+    file + ' must contain exactly one "## Delegation Contract" heading (issue #212); a ' +
+      'duplicated or divergent second section would defeat the cross-forge parity slice'
+  );
+}
 const [, nextSkillBaselineFile] = nextSkillEditions[0];
 const nextSkillBaseline = read(nextSkillBaselineFile);
 const baselineDelegationContract = sectionBody(nextSkillBaseline, 'Delegation Contract');
