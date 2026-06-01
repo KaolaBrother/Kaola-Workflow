@@ -520,6 +520,28 @@ withForge({
   assert.strictEqual(result.verdict, 'green');
 });
 
+// issue #213: a `#`-prefixed line inside a fenced code block within ## Scope must
+// NOT truncate the slice (boundary is h2-only). A `- Write Set:` path BELOW the
+// fenced `# comment` must still be counted; a candidate overlapping it must RED.
+withForge({
+  viewIssue(issueIid) {
+    return {
+      issue_iid: issueIid,
+      number: issueIid,
+      state: 'open',
+      labels: [],
+      body: 'touches: plugins/kaola-workflow-gitea/scripts/claimed.js'
+    };
+  }
+}, () => {
+  const root = tempRoot('kw-gt-fast-fence-');
+  const dir = writeState(root, 'fast-fence-project', 28);
+  fs.writeFileSync(path.join(dir, 'fast-summary.md'),
+    '# Fast Summary: fast-fence-project\n\n## Status\nIN_PROGRESS\n\n## Scope\n```sh\n# set up before writing\n```\n- Write Set: plugins/kaola-workflow-gitea/scripts/claimed.js\n- Acceptance: node x\n');
+  const result = classifier.classifyIssue(29, root);
+  assert.strictEqual(result.verdict, 'red');
+});
+
 withForge({
   listIssues() {
     return [

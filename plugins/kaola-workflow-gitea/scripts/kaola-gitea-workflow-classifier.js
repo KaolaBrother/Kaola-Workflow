@@ -95,8 +95,10 @@ function extractCoarseAreas(text) {
   return areas;
 }
 
-// Return the body of a `## {heading}` markdown section, up to the next h1/h2
+// Return the body of a `## {heading}` markdown section, up to the next h2
 // heading (or EOF). Used to read only a fast-summary.md's `## Scope` block.
+// issue #213: h2-only so a `#`-prefixed line inside a fenced code block in the
+// section body does not truncate the slice.
 function sectionBody(content, heading) {
   const lines = String(content || '').split('\n');
   const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -106,7 +108,7 @@ function sectionBody(content, heading) {
   if (i >= lines.length) return '';
   const out = [];
   for (; i < lines.length; i++) {
-    if (/^#{1,2}\s/.test(lines[i])) break;
+    if (/^##\s/.test(lines[i])) break;
     out.push(lines[i]);
   }
   return out.join('\n');

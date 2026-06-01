@@ -526,6 +526,34 @@ function testClassifierFastScopeSectionIsolationGreen() {
   console.log('testClassifierFastScopeSectionIsolationGreen: PASSED');
 }
 
+// issue #213: a `#`-prefixed line inside a fenced code block within ## Scope must
+// NOT truncate the section slice. The boundary is h2-only (^##\s), so a fenced
+// `# comment` line above a `- Write Set:` path no longer drops that path from the
+// claimed write set. The candidate overlapping the below-the-fence path must RED.
+function testClassifierFastScopeFenceCommentRed() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-classifier-fence-'));
+  try {
+    plantActiveFolder(tmp, 'fast-fence-a', 206, null, 'active');
+    fs.writeFileSync(
+      path.join(tmp, 'kaola-workflow', 'fast-fence-a', 'fast-summary.md'),
+      ['# Fast Summary: fast-fence-a', '',
+        '## Status', 'IN_PROGRESS', '',
+        '## Scope', '```sh', '# set up the harness before writing', '```',
+        '- Write Set: scripts/kaola-workflow-claim.js', '- Acceptance: node x', '',
+        '## Plan', 'stuff'].join('\n')
+    );
+    plantRoadmapIssue(tmp, 207, 'body: candidate also touches scripts/kaola-workflow-claim.js');
+    const result = runClassifierOffline(tmp, 207);
+    assert(result.verdict === 'red',
+      'issue #213: a # comment inside a fenced block must not truncate ## Scope; Write Set below it must still be counted, got ' + result.verdict);
+    assert(result.reasoning && result.reasoning.includes('exact file path'),
+      'fence-bug red reasoning must mention exact file path; got: ' + result.reasoning);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log('testClassifierFastScopeFenceCommentRed: PASSED');
+}
+
 function testClassifierDependsOnGate() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-classifier-depson-'));
   try {
@@ -4008,6 +4036,7 @@ async function main() {
     testClassifierFastScopeOverlapRed();
     testClassifierFastScopeDisjointGreen();
     testClassifierFastScopeSectionIsolationGreen();
+    testClassifierFastScopeFenceCommentRed();
     testClassifierDependsOnGate();
     testProbeIssueStateOffline();
     testProbeIssueStateNullIssue();

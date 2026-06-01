@@ -59,15 +59,15 @@ function assertEveryDispatchHasModel(file) {
 // dependency. Returns the body of a `## {heading}` section, up to the next
 // h2 heading (or EOF).
 //
-// issue #212: the boundary test is intentionally tightened to h2-only
-// (`^##\s`), unlike the classifier's copy which still uses `^#{1,2}\s`. A
-// `#`-prefixed line (e.g. a shell comment) inside a fenced code block in the
-// section body must NOT truncate the slice — an h1 (`# `) line cannot legally
-// open a sibling section inside a `## ` body, but it can appear inside a
-// ```bash fence as a comment. Stopping only at h2 keeps the whole section body
+// issue #212/#213: the boundary test is h2-only (`^##\s`) so a `#`-prefixed
+// line (e.g. a shell comment) inside a fenced code block in the section body
+// must NOT truncate the slice — an h1 (`# `) line cannot legally open a
+// sibling section inside a `## ` body, but it can appear inside a ```bash
+// fence as a comment. Stopping only at h2 keeps the whole section body
 // (including any fenced `#` comments) in the compared slice, so a cross-edition
-// divergence below such a comment is not masked. This intentionally diverges
-// from the classifier's verbatim copy (it is no longer byte-identical).
+// divergence below such a comment is not masked. The classifier's sectionBody
+// (scripts/kaola-workflow-classifier.js) was aligned to the same h2-only
+// boundary in #213.
 function sectionBody(content, heading) {
   const lines = String(content || '').split('\n');
   const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
