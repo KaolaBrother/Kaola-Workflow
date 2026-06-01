@@ -286,9 +286,13 @@ function artifact(projectDir, file) {
 function route(root, workflowDir, project, phase, phaseFile, task, crossesBoundary) {
   const stateFile = path.join(workflowDir, project, 'workflow-state.md');
   const state = exists(stateFile) ? readFile(stateFile) : '';
-  const pendingGates = field(state, 'delegation_policy')
-    ? unresolvedCompliance(readFile(phaseFile), state)
-    : [];
+  // Compliance gates are policy-independent: the row-status filter and the
+  // missing-table row fire regardless of delegation_policy (and
+  // delegationPolicyCompliance self-no-ops when no policy is set). Computing this
+  // unconditionally matches the GitHub/Codex edition; gating it behind a
+  // delegation_policy field let legacy/reconstructed/no-policy state silently
+  // advance across a phase boundary with unresolved compliance. See audit #4.
+  const pendingGates = unresolvedCompliance(readFile(phaseFile), state);
   if (crossesBoundary !== false && pendingGates.length > 0) {
     return { reason: 'unresolved compliance gates in ' + path.basename(phaseFile) + ': ' + pendingGates.map(row => row.requirement).join(', ') };
   }
