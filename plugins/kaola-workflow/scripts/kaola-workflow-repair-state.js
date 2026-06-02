@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 const fs = require('fs');
 const path = require('path');
+// issue #227 (adaptive path): resume traversal of a frozen workflow-plan.md + Node
+// Ledger replaces the phaseN ladder for adaptive projects. This module is
+// TOGGLE-AGNOSTIC — it never reads the adaptive install switch (or its env mirror):
+// an already-frozen plan always resumes to completion even after the switch is
+// flipped off. The switch gates SELECTION only (claimProject + the router prose).
+const planValidator = require('./kaola-workflow-plan-validator');
 
 const PHASES = {
   1: 'Research',
@@ -97,6 +103,20 @@ function fastStateValid(project, content) {
     new RegExp('^kaola-workflow-fast\\s+' + safeProject + '$').test(field(content, 'next_skill'));
 }
 
+// Adaptive-path state is keyed on `workflow_path: adaptive` (symmetric to
+// isFastWorkflowState). Toggle-agnostic: recognized regardless of the switch so an
+// in-flight frozen plan resumes after the switch is flipped OFF.
+function isAdaptiveWorkflowState(content) {
+  return field(content, 'workflow_path') === 'adaptive';
+}
+
+function adaptiveStateValid(project, content) {
+  if (!/^status:\s*active\s*$/m.test(content)) return false;
+  const safeProject = project.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp('^/kaola-workflow-plan-run\\s+' + safeProject + '$').test(field(content, 'next_command')) ||
+    new RegExp('^kaola-workflow-plan-run\\s+' + safeProject + '$').test(field(content, 'next_skill'));
+}
+
 function isSafeName(name) {
   return Boolean(name) && !name.includes('/') && !name.includes('\\') && name !== '.' && name !== '..';
 }
@@ -113,10 +133,18 @@ function projectHasFastSummary(projectDir) {
   return exists(path.join(projectDir, 'fast-summary.md'));
 }
 
+// Adaptive-path discovery: an adaptive project's spine is a frozen workflow-plan.md
+// (no numbered phase files, no fast-summary.md). reconstruct() routes it via
+// routeAdaptive() ahead of the numbered ladder.
+function projectHasAdaptivePlan(projectDir) {
+  return exists(path.join(projectDir, 'workflow-plan.md'));
+}
+
 function projectHasActiveState(projectDir) {
   const stateFile = path.join(projectDir, 'workflow-state.md');
   if (!exists(stateFile)) return false;
   const content = readFile(stateFile);
+  if (isAdaptiveWorkflowState(content)) return adaptiveStateValid(path.basename(projectDir), content);
   if (isFastWorkflowState(content)) return fastStateValid(path.basename(projectDir), content);
   const phase = Number(field(content, 'phase'));
   const nextCommand = field(content, 'next_command');
@@ -137,7 +165,7 @@ function activeProjects(workflowDir) {
     .filter(entry => entry.name !== 'archive')
     .filter(entry => {
       const projectDir = path.join(workflowDir, entry.name);
-      return projectHasPhaseArtifacts(projectDir) || projectHasActiveState(projectDir) || projectHasFastSummary(projectDir);
+      return projectHasPhaseArtifacts(projectDir) || projectHasActiveState(projectDir) || projectHasFastSummary(projectDir) || projectHasAdaptivePlan(projectDir);
     })
     .map(entry => entry.name)
     .sort();
@@ -351,6 +379,13 @@ function reconstruct(root, workflowDir, project) {
     return { complete: true, reason: 'phase6-summary.md exists; workflow is complete' };
   }
 
+  // issue #227: an adaptive project's spine is a frozen workflow-plan.md, not the
+  // phaseN ladder. Caught AHEAD of the numbered logic (the ladder must not run for
+  // an adaptive project). Toggle-agnostic.
+  if (artifact(projectDir, 'workflow-plan.md')) {
+    return routeAdaptive(root, workflowDir, project);
+  }
+
   if (artifact(projectDir, 'phase5-review.md')) {
     if (phase4 && !allPhase4TasksComplete(readFile(phase4))) {
       return { reason: 'phase5-review.md exists but phase4-progress.md still has open tasks' };
@@ -459,7 +494,51 @@ function routeFast(root, workflowDir, project) {
   };
 }
 
+// Adaptive-path reconstruction (issue #227): the spine is a frozen workflow-plan.md
+// + inner Node Ledger, traversed by the kaola-workflow-plan-run executor — NOT the
+// numbered route() pipeline. Resume re-checks ONLY plan_hash integrity + structural
+// grammar + closed-library membership (NOT the full gate rubric — re-running it would
+// brick an in-flight plan if the rubric tightened after freeze). A corrupt / tampered
+// plan returns a typed reason and stops for repair (#44: never silently fall back to
+// the phaseN ladder). A consent-halted plan (escalated_to_full: consent) is surfaced
+// for approval, not blindly re-dispatched. Toggle-agnostic.
+function routeAdaptive(root, workflowDir, project) {
+  const projectDir = path.join(workflowDir, project);
+  const planFile = path.join(projectDir, 'workflow-plan.md');
+  const content = readFile(planFile);
+
+  const stored = planValidator.readStoredHash(content);
+  if (stored) {
+    const check = planValidator.revalidateForResume(content, { root });
+    if (!check.ok) {
+      return { reason: `adaptive plan unresumable (typed refusal): ${check.reason}` };
+    }
+  } else if (planValidator.parseNodes(content).length === 0) {
+    return { reason: 'adaptive plan unparseable (typed refusal): workflow-plan.md has no ## Nodes table' };
+  }
+
+  const stateFile = path.join(projectDir, 'workflow-state.md');
+  const stateContent = exists(stateFile) ? readFile(stateFile) : '';
+  const consentHalt = field(stateContent, 'escalated_to_full') === 'consent';
+
+  return {
+    root,
+    project,
+    phase: 'adaptive',
+    phaseName: 'Adaptive',
+    workflowPath: 'adaptive',
+    step: consentHalt ? 'consent-halt-surface' : 'router-reconstructed',
+    task: 'N/A',
+    consentHalt,
+    nextCommand: `/kaola-workflow-plan-run ${project}`,
+    nextSkill: `kaola-workflow-plan-run ${project}`,
+    phaseFile: planFile,
+    pendingGates: []
+  };
+}
+
 function stateLooksValid(root, project, content) {
+  if (isAdaptiveWorkflowState(content)) return adaptiveStateValid(project, content);
   if (isFastWorkflowState(content)) return fastStateValid(project, content);
   const phase = Number(field(content, 'phase'));
   const nextCommand = field(content, 'next_command');
@@ -637,5 +716,9 @@ module.exports = {
   reconstruct,
   repairStateContent: stateContent,
   stateContent,
-  unresolvedCompliance
+  unresolvedCompliance,
+  isAdaptiveWorkflowState,
+  adaptiveStateValid,
+  projectHasAdaptivePlan,
+  routeAdaptive
 };

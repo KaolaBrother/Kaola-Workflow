@@ -63,7 +63,7 @@ function readOrCreateConfig() {
   try {
     return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
   } catch (_) {
-    const defaults = { parallel_mode: 'auto' };
+    const defaults = { parallel_mode: 'auto', enable_adaptive: false };
     fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(defaults, null, 2) + '\n');
     return defaults;
@@ -232,6 +232,73 @@ function parseArgs(argv) {
 
 const SHARED_INFRA = new Set(['scripts', 'hooks', 'plugins/kaola-workflow/scripts']);
 
+function isSharedInfra(area) {
+  return SHARED_INFRA.has(area);
+}
+
+// issue #227 (adaptive path): parse the `## Nodes` table of a frozen workflow-plan.md
+// into node objects. Tolerant to column reorder (maps by header name). The
+// declared_write_set cell is parsed with the existing extractFilePaths() so the
+// established `touches:`/path-token convention and the empty/role-namespaced
+// read-only carve-out both apply. depends_on splits on comma.
+function readPlanNodes(planPath) {
+  let content = '';
+  try { content = fs.readFileSync(planPath, 'utf8'); } catch (_) { return []; }
+  const body = sectionBody(content, 'Nodes');
+  const rows = body.split('\n').map(l => l.trim()).filter(l => l.startsWith('|'));
+  if (rows.length < 2) return [];
+  const header = rows[0].split('|').slice(1, -1).map(c => c.trim().toLowerCase());
+  const idx = name => header.indexOf(name);
+  const nodes = [];
+  for (let r = 1; r < rows.length; r++) {
+    const cells = rows[r].split('|').slice(1, -1).map(c => c.trim());
+    if (/^[-:\s]+$/.test(cells.join(''))) continue; // separator row
+    const get = n => (idx(n) >= 0 ? cells[idx(n)] : '') || '';
+    const id = get('id');
+    if (!id) continue;
+    nodes.push({
+      id,
+      role: get('role'),
+      dependsOn: get('depends_on').split(',').map(s => s.replace(/[#\s]/g, '')).filter(s => s && s !== '—' && s !== '-'),
+      writeSet: extractFilePaths(get('declared_write_set')),
+      cardinality: get('cardinality'),
+      shape: get('shape'),
+    });
+  }
+  return nodes;
+}
+
+// issue #227 (adaptive path): N-way pairwise disjointness verdict over declared
+// node write sets, applied WITHIN one issue (the cross-folder scanClaimedOverlap
+// is candidate-vs-active only). Mirrors classify()'s direct verdict and reuses
+// areaForPath + SHARED_INFRA: exact-path RED > non-shared coarse-area RED >
+// shared-infra YELLOW > GREEN. Empty / role-namespaced sets are trivially
+// disjoint by construction (read-only fan-out carve-out → GREEN/PASS).
+function disjointWriteSets(nodeWriteSets) {
+  const sets = (nodeWriteSets || []).map(s => (s instanceof Set ? s : new Set(s || [])));
+  for (let i = 0; i < sets.length; i++) {
+    for (let j = i + 1; j < sets.length; j++) {
+      const a = sets[i], b = sets[j];
+      if (a.size === 0 || b.size === 0) continue; // read-only carve-out: PASS on empty
+      for (const p of a) {
+        if (b.has(p)) return { verdict: 'red', reasoning: 'exact file path overlap at "' + p + '" between nodes ' + i + ' and ' + j };
+      }
+      const areasB = new Set();
+      for (const p of b) areasB.add(areaForPath(p));
+      let sharedHit = '';
+      for (const p of a) {
+        const area = areaForPath(p);
+        if (areasB.has(area)) {
+          if (!SHARED_INFRA.has(area)) return { verdict: 'red', reasoning: 'coarse-area overlap at "' + area + '" between nodes ' + i + ' and ' + j };
+          if (!sharedHit) sharedHit = area;
+        }
+      }
+      if (sharedHit) return { verdict: 'yellow', reasoning: 'shared-infra area "' + sharedHit + '" overlap between nodes ' + i + ' and ' + j };
+    }
+  }
+  return { verdict: 'green', reasoning: 'node write sets are pairwise disjoint' };
+}
+
 function scanClaimedOverlap(candidatePaths, candidateAreas, candidateAreaLabels, activeFolders, root) {
   let hasExactOverlap = false;
   let exactOverlapPath = '';
@@ -258,8 +325,17 @@ function scanClaimedOverlap(candidatePaths, candidateAreas, candidateAreaLabels,
     // with full projects). Scope-only avoids false overlaps from command/test-output
     // path tokens in the Implementation Evidence / Review sections.
     try { fastScope = sectionBody(fs.readFileSync(path.join(projectDir, 'fast-summary.md'), 'utf8'), 'Scope'); } catch (_) {}
+    // issue #227: an adaptive project declares its write set in workflow-plan.md's
+    // `## Nodes` table, not in phaseN/fast-summary artifacts. Fold each node's declared
+    // write set into `combined` so cross-issue overlap detection sees its footprint
+    // (an adaptive project is NOT an empty write set to other projects' checks).
+    let planScope = '';
+    try {
+      planScope = readPlanNodes(path.join(projectDir, 'workflow-plan.md'))
+        .map(n => Array.from(n.writeSet).join(' ')).join('\n');
+    } catch (_) {}
 
-    const combined = phase3Content + '\n' + phase1Content + '\n' + fastScope;
+    const combined = phase3Content + '\n' + phase1Content + '\n' + fastScope + '\n' + planScope;
     const claimedPaths = extractFilePaths(combined);
     const claimedAreas = extractCoarseAreas(combined);
     const claimedAreaLabels = parseAreaLabelsFromText(combined);
@@ -447,4 +523,16 @@ function main() {
   throw new Error('unknown subcommand: ' + sub);
 }
 
-try { main(); } catch (err) { process.stderr.write(err.message + '\n'); process.exitCode = 1; }
+if (require.main === module) {
+  try { main(); } catch (err) { process.stderr.write(err.message + '\n'); process.exitCode = 1; }
+}
+
+module.exports = {
+  extractFilePaths,
+  extractCoarseAreas,
+  areaForPath,
+  SHARED_INFRA,
+  isSharedInfra,
+  readPlanNodes,
+  disjointWriteSets,
+};

@@ -47,6 +47,9 @@ const COMMON_SCRIPTS = [
   'kaola-workflow-sink-pr.js',
   'release-surface-drift.js',
   'validate-workflow-contracts.js',
+  // issue #227: the adaptive-path plan validator. Byte-identical Claude<->Codex
+  // (it require()s the forge-specific classifier, so GitLab/Gitea carry renamed ports).
+  'kaola-workflow-plan-validator.js',
 ];
 
 const BYTE_IDENTICAL_GROUPS = [
@@ -83,6 +86,20 @@ const BYTE_IDENTICAL_GROUPS = [
       'hooks/kaola-workflow-phantom-advisor.sh',
       'plugins/kaola-workflow-gitlab/hooks/kaola-workflow-phantom-advisor.sh',
       'plugins/kaola-workflow-gitea/hooks/kaola-workflow-phantom-advisor.sh',
+    ],
+  },
+  {
+    // issue #227: the adaptive-path cross-fork DRIFT ANCHOR. Forge-neutral constants
+    // (path whitelist, plan-run command, caps, ledger enum, escalation markers, config
+    // path) shared by claim/repair-state/plan-validator across all four trees. Because
+    // it is byte-identical and the forks require it, a fork that hand-ports routeAdaptive
+    // but forgets to mirror a constant edit fails here — catching silent fork drift.
+    label: 'adaptive-schema constant copies',
+    files: [
+      'scripts/kaola-workflow-adaptive-schema.js',
+      'plugins/kaola-workflow/scripts/kaola-workflow-adaptive-schema.js',
+      'plugins/kaola-workflow-gitlab/scripts/kaola-workflow-adaptive-schema.js',
+      'plugins/kaola-workflow-gitea/scripts/kaola-workflow-adaptive-schema.js',
     ],
   },
 ];
