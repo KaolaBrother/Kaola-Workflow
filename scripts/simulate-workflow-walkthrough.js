@@ -2200,6 +2200,17 @@ function testE2EGitHubMergeFullChain() {
       'workflow-state.md must exist in linked worktree after worktree-finalize'
     );
 
+    // #29: second worktree-finalize on a clean index must not create a commit (no-diff branch).
+    // The copied files are identical — git add stages nothing, diff --cached --quiet exits 0,
+    // so the commit is skipped. HEAD count must be unchanged.
+    const headCountBefore = spawnSync('git', ['rev-list', '--count', 'HEAD'], { cwd: wt850, encoding: 'utf8' }).stdout.trim();
+    const wfResult2 = runClaimOnlineLastJson(['worktree-finalize', '--project', 'issue-850'], tmp, binDir);
+    assert(wfResult2.finalized === true, 'second worktree-finalize (no-diff path) must return finalized:true');
+    const headCountAfter = spawnSync('git', ['rev-list', '--count', 'HEAD'], { cwd: wt850, encoding: 'utf8' }).stdout.trim();
+    assert(headCountAfter === headCountBefore,
+      'second worktree-finalize must not create a commit (no-diff branch); HEAD count was ' +
+      headCountBefore + ', now ' + headCountAfter);
+
     // Step 4: finalize --keep-worktree (cwd=wt850, cleans main worktree copy, preserves linked worktree)
     const finResult = spawnSync(process.execPath, [
       claimScript, 'finalize', '--project', 'issue-850', '--keep-worktree'
@@ -2969,6 +2980,37 @@ function testClassifierOfflineUnverifiedWithUnrelatedActiveFolder() {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
   console.log('testClassifierOfflineUnverifiedWithUnrelatedActiveFolder: PASSED');
+}
+
+function testStartupExplicitTargetRedRefuses() {
+  // #27: claimExplicitTarget maps classifier red → user_target_red (claim.js:443-444).
+  // cmdStartup routes through claimExplicitTarget; no active folder must be created.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-startup-red-'));
+  try {
+    // Plant active folder for a different issue with a known file
+    plantActiveFolder(tmp, 'active-project-k', 70, '# Phase 3\nFiles: scripts/kaola-workflow-claim.js\n');
+    // Plant roadmap for target issue 71 whose body overlaps the SAME file → classifier returns red
+    plantRoadmapIssue(tmp, 71, 'body: also touches scripts/kaola-workflow-claim.js');
+    const result = runNode(claimScript, ['startup', '--target-issue', '71'], tmp);
+    assert(!result.signal, 'startup red must not be killed: ' + result.signal);
+    assert(result.status === 1,
+      'startup must exit 1 for red target, got ' + result.status +
+      '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    // Parse last JSON object line (output may have git lines prepended)
+    const lastLine = result.stdout.trim().split('\n').filter(l => l.trim().startsWith('{')).pop();
+    assert(lastLine, 'expected at least one JSON object line in stdout, got: ' + result.stdout);
+    const parsed = JSON.parse(lastLine);
+    assert(parsed.verdict === 'user_target_red',
+      'verdict must be user_target_red, got: ' + parsed.verdict +
+      '\nfull output: ' + result.stdout);
+    assert(parsed.claim === 'none',
+      'claim must be none for red target, got: ' + parsed.claim);
+    assert(!fs.existsSync(path.join(tmp, 'kaola-workflow', 'issue-71')),
+      'kaola-workflow/issue-71 folder must NOT be created for red target');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log('testStartupExplicitTargetRedRefuses: PASSED');
 }
 
 function testClassifierTopLevelIssueFlag() {
@@ -4313,6 +4355,73 @@ function testClosureAuditExecuteDetectionTimeoutPropagates() {
   }
 }
 
+function testClosureAuditExecuteLabelRemovalTimeoutBreaks() {
+  // #28a: label-removal SIGTERM mid-loop → labels_skipped_reason='timeout' + loop BREAKS.
+  // Shim returns 2 stale issues but HANGS on the first issue edit --remove-label.
+  // Result: labels_failed.length===1 (proves loop broke before processing 2nd issue).
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ca-exec-label-timeout-'));
+  const binDir = path.join(tmp, 'bin');
+  try {
+    initGitRepo(tmp);
+    closureAuditShim(binDir, [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issue edit') && a.includes('--remove-label')) { setInterval(() => {}, 1 << 30); }",
+      "else if (a.includes('issue list')) { process.stdout.write('[{\"number\":91,\"title\":\"stale\",\"url\":\"http://x\"},{\"number\":92,\"title\":\"stale2\",\"url\":\"http://y\"}]\\n'); }",
+      "else { process.stdout.write('{}\\n'); }"
+    ]);
+    const result = runClosureAudit(['--execute'], tmp, binDir, { KAOLA_GH_REMOTE_TIMEOUT_MS: '300' });
+    assert(
+      result.repaired.labels_skipped_reason === 'timeout',
+      'label-removal timeout must set labels_skipped_reason="timeout", got: ' + JSON.stringify(result.repaired.labels_skipped_reason)
+    );
+    assert(
+      Array.isArray(result.repaired.labels_failed) && result.repaired.labels_failed.length === 1,
+      'labels_failed must have exactly 1 entry (loop broke after first), got: ' + JSON.stringify(result.repaired.labels_failed)
+    );
+    assert(
+      Array.isArray(result.repaired.labels_removed) && result.repaired.labels_removed.length === 0,
+      'labels_removed must be empty when removal timed out, got: ' + JSON.stringify(result.repaired.labels_removed)
+    );
+    console.log('testClosureAuditExecuteLabelRemovalTimeoutBreaks: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testClosureAuditExecuteLabelRemovalNonTimeoutFails() {
+  // #28b: label-removal exits 1 fast (no timeout) → labelsFailed accumulates ALL issues.
+  // Loop does NOT break; labels_skipped_reason must be absent (omitted for non-timeout).
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ca-exec-label-fail-'));
+  const binDir = path.join(tmp, 'bin');
+  try {
+    initGitRepo(tmp);
+    closureAuditShim(binDir, [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('issue edit') && a.includes('--remove-label')) { process.exit(1); }",
+      "else if (a.includes('issue list')) { process.stdout.write('[{\"number\":93,\"title\":\"stale\",\"url\":\"http://x\"},{\"number\":94,\"title\":\"stale2\",\"url\":\"http://y\"}]\\n'); }",
+      "else { process.stdout.write('{}\\n'); }"
+    ]);
+    const result = runClosureAudit(['--execute'], tmp, binDir);
+    assert(
+      Array.isArray(result.repaired.labels_failed) &&
+      result.repaired.labels_failed.includes(93) &&
+      result.repaired.labels_failed.includes(94),
+      'labels_failed must include both 93 and 94 (loop did not break), got: ' + JSON.stringify(result.repaired.labels_failed)
+    );
+    assert(
+      !('labels_skipped_reason' in result.repaired),
+      'labels_skipped_reason must be absent for non-timeout failure, got: ' + JSON.stringify(result.repaired.labels_skipped_reason)
+    );
+    assert(
+      Array.isArray(result.repaired.labels_removed) && result.repaired.labels_removed.length === 0,
+      'labels_removed must be empty when all removals failed, got: ' + JSON.stringify(result.repaired.labels_removed)
+    );
+    console.log('testClosureAuditExecuteLabelRemovalNonTimeoutFails: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 function testClosureAuditPrFolderTimeout() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ca-pr-folder-timeout-'));
   const binDir = path.join(tmp, 'bin');
@@ -4615,6 +4724,7 @@ async function main() {
     testClassifierOfflineVerifiedRoadmapAcquires();
     testClassifierOfflineVerifiedOwnedFolderRoutes();
     testClassifierOfflineUnverifiedWithUnrelatedActiveFolder();
+    testStartupExplicitTargetRedRefuses();
     testClassifierTopLevelIssueFlag();
     testClaimProjectOwnedFolderFailingRemote();
     testFinalizeRemovesClaimLabel();
@@ -4647,6 +4757,8 @@ async function main() {
     testClosureAuditTimeoutEnvInvalidFallsBack();
     testClosureAuditTimeoutEnvOverCapFallsBack();
     testClosureAuditExecuteDetectionTimeoutPropagates();
+    testClosureAuditExecuteLabelRemovalTimeoutBreaks();
+    testClosureAuditExecuteLabelRemovalNonTimeoutFails();
     testClosureAuditPrFolderTimeout();
     testContractValidatorOfflineSkip();
     testContractValidatorMissingTag();
