@@ -662,10 +662,15 @@ function cmdFinalize() {
       linkedRoot2 = fs.realpathSync(root);
     } catch (_) { mainRoot2 = null; }
     if (mainRoot2 && mainRoot2 !== linkedRoot2) {
-      execFileSync('git', ['-C', root, 'add', '-A', 'kaola-workflow/'],
-        { encoding: 'utf8', stdio: 'inherit' });
-      execFileSync('git', ['-C', root, 'commit', '-m', 'chore: archive ' + args.project],
-        { encoding: 'utf8', stdio: 'inherit' });
+      try {
+        execFileSync('git', ['-C', root, 'add', '-A', 'kaola-workflow/'],
+          { encoding: 'utf8', stdio: 'inherit' });
+        execFileSync('git', ['-C', root, 'diff', '--cached', '--quiet'],
+          { stdio: 'ignore' });
+      } catch (_) {
+        execFileSync('git', ['-C', root, 'commit', '-m', 'chore: archive ' + args.project],
+          { encoding: 'utf8', stdio: 'inherit' });
+      }
     }
   }
   let issueIid = folder && folder.issue_iid;

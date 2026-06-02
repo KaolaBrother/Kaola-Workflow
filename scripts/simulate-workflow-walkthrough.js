@@ -2144,6 +2144,15 @@ function testE2EGitHubMergeFullChain() {
     assert(archiveInTree.status === 0,
       'kaola-workflow/archive/issue-850 must exist in feature branch HEAD after finalize --keep-worktree');
 
+    // issue #217: a second finalize --keep-worktree on a clean index must be a no-op (not crash)
+    const headBefore2nd = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: wt850, encoding: 'utf8' }).stdout.trim();
+    const finResult2 = spawnSync(process.execPath, [
+      claimScript, 'finalize', '--project', 'issue-850', '--keep-worktree'
+    ], { cwd: wt850, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
+    assert(finResult2.status === 0, 'second finalize --keep-worktree must exit 0 (idempotent)\nstderr: ' + finResult2.stderr);
+    const headAfter2nd = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: wt850, encoding: 'utf8' }).stdout.trim();
+    assert(headAfter2nd === headBefore2nd, 'second finalize --keep-worktree must not create a commit, HEAD changed: ' + headBefore2nd + ' -> ' + headAfter2nd);
+
     // Capture feature HEAD before sink-merge removes the worktree
     const featureHead = spawnSync('git', ['rev-parse', 'workflow/issue-850'],
       { cwd: tmp, encoding: 'utf8' }).stdout.trim();
