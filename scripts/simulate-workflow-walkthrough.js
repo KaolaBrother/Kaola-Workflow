@@ -828,6 +828,88 @@ function testAdaptiveValidatorGovernance() {
   console.log('testAdaptiveValidatorGovernance: PASSED');
 }
 
+// issue #228 (Tier 2): broadened sequence/branch composition + governance edge cases on
+// top of the Tier-1 substrate. Exercises multi-role DAG branching (distinct from a
+// heterogeneous fan-out), read-only multi-modal sweep, bounded-loop governance, and the
+// fail-closed-on-uncertain path.
+function testAdaptiveTier2Composition() {
+  const tmp = adaptiveTmp('tier2');
+  try {
+    // perspective-diverse-verify, done correctly: distinct gate roles SEQUENCED so BOTH
+    // post-dominate the implement node (impl -> code-reviewer -> security-reviewer -> sink).
+    // Sensitive label => security-reviewer required + ask.
+    let v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| impl | tdd-guide | explore | auth/login.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| sec | security-reviewer | review | — | 1 | sequence |',
+      '| done | finalize | sec | — | 1 | sequence |',
+    ], ['security']);
+    assert(v.result === 'in-grammar' && v.decision === 'ask',
+      'tier2: sequenced multi-gate composition (sensitive) must be in-grammar + ask, got: ' + JSON.stringify(v));
+
+    // Governance edge case: the SAME two gates as PARALLEL sibling branches (each reaching
+    // the sink independently) is a post-dominance LEAK — neither gate post-dominates impl
+    // (each path crosses only one). The validator must refuse it. This is the multi-gate
+    // analogue of the doc-updater side-branch leak.
+    v = validatePlanFixture(tmp, [
+      '| impl | tdd-guide | — | auth/login.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| sec | security-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review,sec | — | 1 | sequence |',
+    ], ['security']);
+    assert(v.result === 'refuse',
+      'tier2: parallel reviewer branches are a post-dominance leak and must refuse, got: ' + JSON.stringify(v));
+
+    // multi-modal-sweep: read-only fan-out of code-explorer (3 modalities) -> planner merge
+    // -> sequential impl -> review -> sink. Read-only fan-out is zero blast radius => auto-run.
+    v = validatePlanFixture(tmp, [
+      '| m1 | code-explorer | — | — | 1 | fanout(sweep) |',
+      '| m2 | code-explorer | — | — | 1 | fanout(sweep) |',
+      '| m3 | code-explorer | — | — | 1 | fanout(sweep) |',
+      '| merge | planner | m1,m2,m3 | — | 1 | sequence |',
+      '| impl | tdd-guide | merge | lib/foo.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'in-grammar' && v.decision === 'auto-run',
+      'tier2: read-only multi-modal sweep must be in-grammar + auto-run (zero blast radius), got: ' + JSON.stringify(v));
+
+    // bounded-loop governance: a loop within LOOP_CAP is in-grammar + ask (loop present);
+    // a loop over LOOP_CAP is a typed refusal.
+    v = validatePlanFixture(tmp, [
+      '| impl | tdd-guide | — | lib/foo.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | loop(3) |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'in-grammar' && v.decision === 'ask', 'tier2: bounded loop must be in-grammar + ask, got: ' + JSON.stringify(v));
+    v = validatePlanFixture(tmp, [
+      '| impl | tdd-guide | — | lib/foo.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | loop(9) |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse', 'tier2: loop over LOOP_CAP must be a typed refusal, got: ' + JSON.stringify(v));
+
+    // fail-closed-on-uncertain: no ## Meta labels block => sensitivity undetermined => ask.
+    v = validatePlanFixture(tmp, [
+      '| impl | tdd-guide | — | lib/foo.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], undefined);
+    assert(v.result === 'in-grammar' && v.decision === 'ask', 'tier2: missing labels must fail closed to ask, got: ' + JSON.stringify(v));
+
+    // heterogeneous fan-out (distinct roles in ONE fan-out group) is out-of-grammar — the
+    // distinction from legal multi-role branching above.
+    v = validatePlanFixture(tmp, [
+      '| a | code-explorer | — | — | 1 | fanout(g) |',
+      '| b | docs-lookup | — | — | 1 | fanout(g) |',
+      '| done | finalize | a,b | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse', 'tier2: heterogeneous fan-out must be a typed refusal, got: ' + JSON.stringify(v));
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptiveTier2Composition: PASSED');
+}
+
 function runClassifierOffline(tmp, issueNumber) {
   const result = spawnSync(process.execPath, [classifierScript, 'classify', '--issue', String(issueNumber)], {
     cwd: tmp, encoding: 'utf8',
@@ -5090,6 +5172,7 @@ async function main() {
     testAdaptiveResumeAfterFlipOff();
     testAdaptiveConsentHaltSurfaces();
     testAdaptiveValidatorGovernance();
+    testAdaptiveTier2Composition();
     console.log('Workflow walkthrough simulation passed');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
