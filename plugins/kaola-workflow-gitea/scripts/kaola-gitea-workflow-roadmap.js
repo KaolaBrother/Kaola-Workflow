@@ -69,14 +69,15 @@ function readRoadmapIssues(dir) {
     .sort((a, b) => parseInt(a.match(/\d+/)[0], 10) - parseInt(b.match(/\d+/)[0], 10));
   return files.map(file => {
     const content = fs.readFileSync(path.join(dir, file), 'utf8');
+    const n = parseInt(file.match(/\d+/)[0], 10);   // filename is authority
     return {
-      issue: field(content, 'issue'),
+      issue: '#' + n,
       title: field(content, 'title') || '—',
       status: field(content, 'status') || 'open',
       workflow_project: field(content, 'workflow_project') || '—',
       next_step: field(content, 'next_step') || '—'
     };
-  }).filter(data => data.issue && /^#\d+$/.test(data.issue));
+  });
 }
 
 function buildTableRow(data) {

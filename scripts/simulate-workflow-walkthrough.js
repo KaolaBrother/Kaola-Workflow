@@ -393,6 +393,87 @@ async function testRoadmapInitIssueConcurrentExclusive(tmp) {
 }
 
 // ---------------------------------------------------------------------------
+// Issue #16+#17+#18 roadmap filename-authority and escape round-trip fixes
+// ---------------------------------------------------------------------------
+
+function testRoadmapFilenameAuthorityMissingIssueField(tmp) {
+  const workflowDir = path.join(tmp, 'kaola-workflow');
+  fs.rmSync(workflowDir, { recursive: true, force: true });
+  const sourceDir = path.join(workflowDir, '.roadmap');
+  fs.mkdirSync(sourceDir, { recursive: true });
+  // NO 'issue:' line — issue number must come from filename
+  fs.writeFileSync(path.join(sourceDir, 'issue-42.md'), [
+    'title: Filename authority test',
+    'status: open',
+    'workflow_project: filename-authority-project',
+    'next_step: verify',
+    ''
+  ].join('\n'), 'utf8');
+
+  const result = runNode(roadmapScript, ['generate'], tmp);
+  assert(result.status === 0, 'generate should succeed even with no issue: field; got: ' + result.stderr);
+  const roadmap = read(path.join(workflowDir, 'ROADMAP.md'));
+  assert(roadmap.includes('| #42 |'), 'roadmap should contain | #42 | derived from filename; got:\n' + roadmap);
+  assert(!roadmap.includes('No active work'), 'roadmap should NOT fall back to "No active work"; got:\n' + roadmap);
+  assert(roadmap.includes('filename-authority-project'), 'roadmap should include project name; got:\n' + roadmap);
+}
+
+function testRoadmapFilenameAuthorityMismatch(tmp) {
+  const workflowDir = path.join(tmp, 'kaola-workflow');
+  fs.rmSync(workflowDir, { recursive: true, force: true });
+  const sourceDir = path.join(workflowDir, '.roadmap');
+  fs.mkdirSync(sourceDir, { recursive: true });
+  // issue: field says #999, but filename says issue-43.md — filename must win
+  fs.writeFileSync(path.join(sourceDir, 'issue-43.md'), [
+    'issue: #999',
+    'title: Filename authority mismatch test',
+    'status: open',
+    'workflow_project: mismatch-project',
+    'next_step: verify',
+    ''
+  ].join('\n'), 'utf8');
+
+  const result = runNode(roadmapScript, ['generate'], tmp);
+  assert(result.status === 0, 'generate should succeed; got: ' + result.stderr);
+  const roadmap = read(path.join(workflowDir, 'ROADMAP.md'));
+  assert(roadmap.includes('| #43 |'), 'roadmap should contain | #43 | (filename wins), not #999; got:\n' + roadmap);
+  assert(!roadmap.includes('| #999 |'), 'roadmap must NOT contain | #999 | (content field loses); got:\n' + roadmap);
+}
+
+function testRoadmapMigrateRoundTripNoDoubleEscape(tmp) {
+  const workflowDir = path.join(tmp, 'kaola-workflow');
+  fs.rmSync(workflowDir, { recursive: true, force: true });
+  const sourceDir = path.join(workflowDir, '.roadmap');
+  fs.mkdirSync(sourceDir, { recursive: true });
+  // title contains a raw pipe — generate should escape it once to \|
+  fs.writeFileSync(path.join(sourceDir, 'issue-55.md'), [
+    'issue: #55',
+    'title: Fix a|b parser',
+    'status: open',
+    'workflow_project: pipe-escape-project',
+    'next_step: verify',
+    ''
+  ].join('\n'), 'utf8');
+
+  // Step 1: generate — title should be escaped to "Fix a\|b parser"
+  const gen1 = runNode(roadmapScript, ['generate'], tmp);
+  assert(gen1.status === 0, 'first generate should succeed; got: ' + gen1.stderr);
+
+  // Step 2: delete source, then migrate (regenerates source from ROADMAP.md)
+  fs.rmSync(sourceDir, { recursive: true, force: true });
+  const migrate = runNode(roadmapScript, ['migrate'], tmp);
+  assert(migrate.status === 0, 'migrate should succeed; got: ' + migrate.stderr);
+
+  // Step 3: generate again from migrated source
+  const gen2 = runNode(roadmapScript, ['generate'], tmp);
+  assert(gen2.status === 0, 'second generate should succeed; got: ' + gen2.stderr);
+
+  const roadmap = read(path.join(workflowDir, 'ROADMAP.md'));
+  assert(roadmap.includes('Fix a\\|b parser'), 'final roadmap should contain "Fix a\\|b parser" (single escape); got:\n' + roadmap);
+  assert(!roadmap.includes('a\\\\|b'), 'final roadmap must NOT contain double-escaped "a\\\\|b"; got:\n' + roadmap);
+}
+
+// ---------------------------------------------------------------------------
 // Issue #64 classifier behavior — folder-based overlap, closed-issue residue,
 // status:released exclusion. Each scenario uses its own mkdtempSync to keep
 // state isolated from the other tests in this file.
@@ -4475,6 +4556,9 @@ async function main() {
     testRoadmapGenerateMissingSourceGuard(tmp);
     testRoadmapGenerateAtomicReplace(tmp);
     await testRoadmapInitIssueConcurrentExclusive(tmp);
+    testRoadmapFilenameAuthorityMissingIssueField(tmp);
+    testRoadmapFilenameAuthorityMismatch(tmp);
+    testRoadmapMigrateRoundTripNoDoubleEscape(tmp);
     testClassifierFolderOverlapRed();
     testClassifierFolderOverlapYellow();
     testClassifierClosedIssueResidueIgnored();

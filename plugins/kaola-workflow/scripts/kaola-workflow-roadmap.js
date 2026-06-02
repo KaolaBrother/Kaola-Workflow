@@ -69,14 +69,15 @@ function readRoadmapIssues(dir) {
     });
   return files.map(f => {
     const content = fs.readFileSync(path.join(dir, f), 'utf8');
+    const n = parseInt(f.match(/\d+/)[0], 10);   // filename is authority
     return {
-      issue: field(content, 'issue'),
+      issue: '#' + n,
       title: field(content, 'title') || '—',
       status: field(content, 'status') || 'open',
       workflow_project: field(content, 'workflow_project') || '—',
       next_step: field(content, 'next_step') || '—',
     };
-  }).filter(d => d.issue && /^#\d+$/.test(d.issue));
+  });
 }
 
 function buildTableRow(data) {
@@ -176,10 +177,10 @@ function parseRoadmapTable(text) {
   while ((match = re.exec(m[0])) !== null) {
     rows.push({
       issue: '#' + match[1].trim(),
-      title: match[2].trim(),
+      title: match[2].trim().replace(/\\\|/g, '|'),
       status: match[3].trim(),
-      workflow_project: match[4].trim(),
-      next_step: match[5].trim(),
+      workflow_project: match[4].trim().replace(/\\\|/g, '|'),
+      next_step: match[5].trim().replace(/\\\|/g, '|'),
     });
   }
   return rows;

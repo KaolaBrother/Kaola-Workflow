@@ -297,6 +297,60 @@ function testGiteaRoadmapGenerateAtomicReplace() {
   }
 }
 
+function testGiteaRoadmapFilenameAuthorityMissingIssueField() {
+  const root = tempRoot('kw-gt-roadmap-fname-missing-');
+  try {
+    const workflowDir = path.join(root, 'kaola-workflow');
+    const sourceDir = path.join(workflowDir, '.roadmap');
+    fs.mkdirSync(sourceDir, { recursive: true });
+    // NO 'issue:' line — issue number must come from filename
+    fs.writeFileSync(path.join(sourceDir, 'issue-42.md'), [
+      'title: Gitea filename authority test',
+      'status: open',
+      'workflow_project: gt-filename-authority-project',
+      'next_step: verify',
+      ''
+    ].join('\n'), 'utf8');
+
+    const result = runNodeRaw([roadmapScript, 'generate'], root);
+    assert.strictEqual(result.status, 0, 'Gitea generate should succeed even with no issue: field');
+    const rendered = read(path.join(workflowDir, 'ROADMAP.md'));
+    assert(rendered.includes('| #42 |'), 'Gitea roadmap should contain | #42 | derived from filename; got:\n' + rendered);
+    assert(!rendered.includes('No active work'), 'Gitea roadmap should NOT fall back to "No active work"; got:\n' + rendered);
+    assert(rendered.includes('gt-filename-authority-project'), 'Gitea roadmap should include project name; got:\n' + rendered);
+    console.log('testGiteaRoadmapFilenameAuthorityMissingIssueField: PASSED');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+function testGiteaRoadmapFilenameAuthorityMismatch() {
+  const root = tempRoot('kw-gt-roadmap-fname-mismatch-');
+  try {
+    const workflowDir = path.join(root, 'kaola-workflow');
+    const sourceDir = path.join(workflowDir, '.roadmap');
+    fs.mkdirSync(sourceDir, { recursive: true });
+    // issue: field says #999, but filename says issue-43.md — filename must win
+    fs.writeFileSync(path.join(sourceDir, 'issue-43.md'), [
+      'issue: #999',
+      'title: Gitea filename authority mismatch test',
+      'status: open',
+      'workflow_project: gt-mismatch-project',
+      'next_step: verify',
+      ''
+    ].join('\n'), 'utf8');
+
+    const result = runNodeRaw([roadmapScript, 'generate'], root);
+    assert.strictEqual(result.status, 0, 'Gitea generate should succeed; got: ' + result.stderr);
+    const rendered = read(path.join(workflowDir, 'ROADMAP.md'));
+    assert(rendered.includes('| #43 |'), 'Gitea roadmap should contain | #43 | (filename wins); got:\n' + rendered);
+    assert(!rendered.includes('| #999 |'), 'Gitea roadmap must NOT contain | #999 | (content field loses); got:\n' + rendered);
+    console.log('testGiteaRoadmapFilenameAuthorityMismatch: PASSED');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
 function writeRoadmapIssue(root, issueNum, status) {
   const sourceDir = path.join(root, 'kaola-workflow', '.roadmap');
   fs.mkdirSync(sourceDir, { recursive: true });
@@ -524,6 +578,8 @@ async function testGiteaRoadmapInitIssueExclusiveAndUpdate() {
 
 testGiteaRoadmapGenerateMissingSourceGuard();
 testGiteaRoadmapGenerateAtomicReplace();
+testGiteaRoadmapFilenameAuthorityMissingIssueField();
+testGiteaRoadmapFilenameAuthorityMismatch();
 
 withForge({
   viewIssue(issueIid) {

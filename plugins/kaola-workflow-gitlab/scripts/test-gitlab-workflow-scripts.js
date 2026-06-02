@@ -287,6 +287,60 @@ function testGitLabRoadmapGenerateAtomicReplace() {
   }
 }
 
+function testGitLabRoadmapFilenameAuthorityMissingIssueField() {
+  const root = tempRoot('kw-gl-roadmap-fname-missing-');
+  try {
+    const workflowDir = path.join(root, 'kaola-workflow');
+    const sourceDir = path.join(workflowDir, '.roadmap');
+    fs.mkdirSync(sourceDir, { recursive: true });
+    // NO 'issue:' line — issue number must come from filename
+    fs.writeFileSync(path.join(sourceDir, 'issue-42.md'), [
+      'title: GitLab filename authority test',
+      'status: open',
+      'workflow_project: gl-filename-authority-project',
+      'next_step: verify',
+      ''
+    ].join('\n'), 'utf8');
+
+    const result = runNodeRaw([roadmapScript, 'generate'], root);
+    assert.strictEqual(result.status, 0, 'GitLab generate should succeed even with no issue: field');
+    const rendered = read(path.join(workflowDir, 'ROADMAP.md'));
+    assert(rendered.includes('| #42 |'), 'GitLab roadmap should contain | #42 | derived from filename; got:\n' + rendered);
+    assert(!rendered.includes('No active work'), 'GitLab roadmap should NOT fall back to "No active work"; got:\n' + rendered);
+    assert(rendered.includes('gl-filename-authority-project'), 'GitLab roadmap should include project name; got:\n' + rendered);
+    console.log('testGitLabRoadmapFilenameAuthorityMissingIssueField: PASSED');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+function testGitLabRoadmapFilenameAuthorityMismatch() {
+  const root = tempRoot('kw-gl-roadmap-fname-mismatch-');
+  try {
+    const workflowDir = path.join(root, 'kaola-workflow');
+    const sourceDir = path.join(workflowDir, '.roadmap');
+    fs.mkdirSync(sourceDir, { recursive: true });
+    // issue: field says #999, but filename says issue-43.md — filename must win
+    fs.writeFileSync(path.join(sourceDir, 'issue-43.md'), [
+      'issue: #999',
+      'title: GitLab filename authority mismatch test',
+      'status: open',
+      'workflow_project: gl-mismatch-project',
+      'next_step: verify',
+      ''
+    ].join('\n'), 'utf8');
+
+    const result = runNodeRaw([roadmapScript, 'generate'], root);
+    assert.strictEqual(result.status, 0, 'GitLab generate should succeed; got: ' + result.stderr);
+    const rendered = read(path.join(workflowDir, 'ROADMAP.md'));
+    assert(rendered.includes('| #43 |'), 'GitLab roadmap should contain | #43 | (filename wins); got:\n' + rendered);
+    assert(!rendered.includes('| #999 |'), 'GitLab roadmap must NOT contain | #999 | (content field loses); got:\n' + rendered);
+    console.log('testGitLabRoadmapFilenameAuthorityMismatch: PASSED');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
 function writeRoadmapIssue(root, issueIid, status) {
   const sourceDir = path.join(root, 'kaola-workflow', '.roadmap');
   fs.mkdirSync(sourceDir, { recursive: true });
@@ -514,6 +568,8 @@ async function testGitLabRoadmapInitIssueExclusiveAndUpdate() {
 
 testGitLabRoadmapGenerateMissingSourceGuard();
 testGitLabRoadmapGenerateAtomicReplace();
+testGitLabRoadmapFilenameAuthorityMissingIssueField();
+testGitLabRoadmapFilenameAuthorityMismatch();
 
 withForge({
   viewIssue(issueIid) {
