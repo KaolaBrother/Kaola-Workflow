@@ -518,6 +518,46 @@ const sinkScript = path.join(__dirname, 'kaola-gitea-workflow-sink-merge.js');
   }
 }
 
+// Test 17c: close-mid-merge FAILURE: mock CLI exits 1 on 'issues close'; process exits 0,
+// receipt.remote_issue_closed==='failed', receipt.claim_label_removed==='removed'.
+{
+  const project = 'test-gt-close-fail';
+  const { root, branch, remotePath } = setupRealRepoWithBareRemote('close-fail-gt', project);
+  const mockScript = path.join(root, 'tea-closefail-mock.js');
+  fs.writeFileSync(mockScript, [
+    "const args = process.argv.slice(2);",
+    "const joined = args.join(' ');",
+    "if (joined.startsWith('issues close')) process.exit(1);",
+    "else if (joined.startsWith('issues edit')) process.stdout.write('{\"number\":168,\"state\":\"closed\",\"labels\":[]}\\n');",
+    "else if (joined.startsWith('api')) process.stdout.write('{\"id\":9005}\\n');",
+    "else process.stdout.write('{}\\n');"
+  ].join('\n'));
+  try {
+    const result = spawnSync(process.execPath, [
+      sinkScript,
+      '--branch', branch,
+      '--project', project,
+      '--issue', '168'
+    ], {
+      cwd: root,
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_TEA_MOCK_SCRIPT: mockScript },
+      encoding: 'utf8'
+    });
+    assert.strictEqual(result.status, 0, `close-fail test: expected exit 0, got ${result.status}. stdout: ${result.stdout} stderr: ${result.stderr}`);
+    assert((result.stderr || '').includes('Manually run: tea issues close 168'),
+      `close-fail test: expected WARNING in stderr, got: ${result.stderr}`);
+    const parsed = JSON.parse(result.stdout.trim().split('\n').filter(Boolean).pop());
+    assert.strictEqual(parsed.closure_receipt.remote_issue_closed, 'failed',
+      `close-fail test: expected remote_issue_closed=failed, got: ${parsed.closure_receipt.remote_issue_closed}`);
+    assert.strictEqual(parsed.closure_receipt.claim_label_removed, 'removed',
+      `close-fail test: expected claim_label_removed=removed, got: ${parsed.closure_receipt.claim_label_removed}`);
+    console.log('close-fail warning regression test passed');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(remotePath, { recursive: true, force: true });
+  }
+}
+
 // Test 18: exit-3-archived: no live dir, no receipt written
 {
   const { root, branch } = setupRealRepo('exit3-gt-archived-test', 'test-gt-exit3-archived');
