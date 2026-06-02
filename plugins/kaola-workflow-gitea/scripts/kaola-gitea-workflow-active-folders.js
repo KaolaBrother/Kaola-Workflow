@@ -54,8 +54,9 @@ function probeIssueState(issueNumber) {
   }
   try {
     const issue = forge.viewIssue(issueNumber);
-    const state = issue.state === 'closed' ? 'closed' : 'open';
-    return { state, reason: 'ok' };
+    if (issue.state === 'closed') return { state: 'closed', reason: 'ok' };
+    if (issue.state === 'open') return { state: 'open', reason: 'ok' };
+    return { state: 'unavailable', reason: 'tea issue state unverified' };
   } catch (err) {
     if (err.killed === true || err.signal === 'SIGTERM' || err.code === 'ETIMEDOUT') {
       return { state: 'unavailable', reason: 'timeout' };

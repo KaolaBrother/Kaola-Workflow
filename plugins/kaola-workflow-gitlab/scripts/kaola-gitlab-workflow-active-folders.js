@@ -52,7 +52,9 @@ function probeIssueState(issueIid) {
   if (OFFLINE || issueIid == null) return { state: 'open', reason: 'offline-or-null' };
   try {
     const issue = forge.viewIssue(issueIid);
-    return { state: issue.state === 'closed' ? 'closed' : 'open', reason: 'ok' };
+    if (issue.state === 'closed') return { state: 'closed', reason: 'ok' };
+    if (issue.state === 'open') return { state: 'open', reason: 'ok' };
+    return { state: 'unavailable', reason: 'glab issue state unverified' };
   } catch (err) {
     if (err.killed === true || err.signal === 'SIGTERM' || err.code === 'ETIMEDOUT') {
       return { state: 'unavailable', reason: 'timeout' };

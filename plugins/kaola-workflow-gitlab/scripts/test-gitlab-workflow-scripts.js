@@ -438,6 +438,13 @@ withForge({
   console.log('probeIssueState closed: PASS');
 });
 
+// Case 4: forge.viewIssue returns residual/unknown state → { state: 'unavailable', reason: 'glab issue state unverified' }
+withForge({ viewIssue() { return { state: 'unknown' }; } }, () => {
+  const result = active.probeIssueState(44);
+  assert.strictEqual(result.state, 'unavailable', 'residual state must map to unavailable');
+  assert.strictEqual(result.reason, 'glab issue state unverified', 'residual reason');
+});
+
 withForge({
   viewIssue(issueIid) {
     return {
@@ -2673,6 +2680,48 @@ function testGitlabProbeIssueStateOfflineGuard() {
   console.log('testGitlabProbeIssueStateOfflineGuard: PASSED');
 }
 
+function testGitlabProbeResidualEmptyExit0() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-probe-empty-')));
+  const binDir = path.join(tmp, 'bin');
+  fs.mkdirSync(binDir, { recursive: true });
+  writeShimFiles(path.join(binDir, 'glab'), ["process.exit(0);"]); // empty stdout, exit 0
+  const prevMock = process.env.KAOLA_GLAB_MOCK_SCRIPT;
+  process.env.KAOLA_GLAB_MOCK_SCRIPT = path.join(binDir, 'glab.js');
+  try {
+    const r = active.probeIssueState(42);
+    assert.strictEqual(r.state, 'unavailable',
+      'empty exit-0 must fail-closed to unavailable, got: ' + r.state + ' (' + r.reason + ')');
+    assert.strictEqual(r.reason, 'glab issue state unverified',
+      'empty exit-0 reason mismatch, got: ' + r.reason);
+    console.log('testGitlabProbeResidualEmptyExit0: PASSED');
+  } finally {
+    if (prevMock === undefined) delete process.env.KAOLA_GLAB_MOCK_SCRIPT;
+    else process.env.KAOLA_GLAB_MOCK_SCRIPT = prevMock;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testGitlabProbeResidualNonJsonExit0() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-probe-nonjson-')));
+  const binDir = path.join(tmp, 'bin');
+  fs.mkdirSync(binDir, { recursive: true });
+  writeShimFiles(path.join(binDir, 'glab'), ["process.stdout.write('rate limit exceeded\\n');"]); // non-JSON, exit 0
+  const prevMock = process.env.KAOLA_GLAB_MOCK_SCRIPT;
+  process.env.KAOLA_GLAB_MOCK_SCRIPT = path.join(binDir, 'glab.js');
+  try {
+    const r = active.probeIssueState(43);
+    assert.strictEqual(r.state, 'unavailable',
+      'non-JSON exit-0 must fail-closed to unavailable, got: ' + r.state + ' (' + r.reason + ')');
+    assert.strictEqual(r.reason, 'glab issue state unverified',
+      'non-JSON exit-0 reason mismatch, got: ' + r.reason);
+    console.log('testGitlabProbeResidualNonJsonExit0: PASSED');
+  } finally {
+    if (prevMock === undefined) delete process.env.KAOLA_GLAB_MOCK_SCRIPT;
+    else process.env.KAOLA_GLAB_MOCK_SCRIPT = prevMock;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 function testClosureAuditExecuteDetectionTimeoutPropagates() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-ca-exec-det-timeout-')));
   const binDir = path.join(tmp, 'bin');
@@ -2735,6 +2784,8 @@ testClosureAuditProbeFailureUnresolved();
 testClosureAuditTimeoutEnvInvalidFallsBack();
 testClosureAuditTimeoutEnvOverCapFallsBack();
 testGitlabProbeIssueStateOfflineGuard();
+testGitlabProbeResidualEmptyExit0();
+testGitlabProbeResidualNonJsonExit0();
 testClosureAuditExecuteDetectionTimeoutPropagates();
 testClosureAuditMrFolderTimeout();
 

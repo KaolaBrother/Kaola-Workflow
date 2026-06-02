@@ -442,6 +442,13 @@ withForge({
   assert.strictEqual(result.reason, 'ok', 'probeIssueState on closed issue should return reason ok');
 });
 
+// probeIssueState: forge.viewIssue returns residual state 'unknown' -> { state: 'unavailable', reason: 'tea issue state unverified' }
+withForge({ viewIssue() { return { state: 'unknown' }; } }, () => {
+  const result = active.probeIssueState(44);
+  assert.strictEqual(result.state, 'unavailable', 'residual state must map to unavailable');
+  assert.strictEqual(result.reason, 'tea issue state unverified', 'residual reason');
+});
+
 // classify blocked: stub viewIssue to return a claimed issue (has CLAIM_LABEL) with a touches path
 withForge({
   viewIssue(issueIid) {
@@ -2702,6 +2709,51 @@ testClosureAuditTimeoutEnvInvalidFallsBack();
 testClosureAuditTimeoutEnvOverCapFallsBack();
 testClosureAuditExecuteDetectionTimeoutPropagates();
 testClosureAuditPrFolderTimeout();
+
+function testGiteaProbeResidualEmptyExit0() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-probe-empty-')));
+  const binDir = path.join(tmp, 'bin');
+  fs.mkdirSync(binDir, { recursive: true });
+  writeShimFiles(path.join(binDir, 'tea'), ["process.exit(0);"]); // empty stdout, exit 0
+  const prevMock = process.env.KAOLA_TEA_MOCK_SCRIPT;
+  process.env.KAOLA_TEA_MOCK_SCRIPT = path.join(binDir, 'tea.js');
+  try {
+    const r = active.probeIssueState(42);
+    assert.strictEqual(r.state, 'unavailable',
+      'empty exit-0 must fail-closed to unavailable, got: ' + r.state + ' (' + r.reason + ')');
+    assert.strictEqual(r.reason, 'tea issue state unverified',
+      'empty exit-0 reason mismatch, got: ' + r.reason);
+    console.log('testGiteaProbeResidualEmptyExit0: PASSED');
+  } finally {
+    if (prevMock === undefined) delete process.env.KAOLA_TEA_MOCK_SCRIPT;
+    else process.env.KAOLA_TEA_MOCK_SCRIPT = prevMock;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testGiteaProbeResidualNonJsonExit0() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-probe-nonjson-')));
+  const binDir = path.join(tmp, 'bin');
+  fs.mkdirSync(binDir, { recursive: true });
+  writeShimFiles(path.join(binDir, 'tea'), ["process.stdout.write('rate limit exceeded\\n');"]); // non-JSON, exit 0
+  const prevMock = process.env.KAOLA_TEA_MOCK_SCRIPT;
+  process.env.KAOLA_TEA_MOCK_SCRIPT = path.join(binDir, 'tea.js');
+  try {
+    const r = active.probeIssueState(43);
+    assert.strictEqual(r.state, 'unavailable',
+      'non-JSON exit-0 must fail-closed to unavailable, got: ' + r.state + ' (' + r.reason + ')');
+    assert.strictEqual(r.reason, 'tea issue state unverified',
+      'non-JSON exit-0 reason mismatch, got: ' + r.reason);
+    console.log('testGiteaProbeResidualNonJsonExit0: PASSED');
+  } finally {
+    if (prevMock === undefined) delete process.env.KAOLA_TEA_MOCK_SCRIPT;
+    else process.env.KAOLA_TEA_MOCK_SCRIPT = prevMock;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+testGiteaProbeResidualEmptyExit0();
+testGiteaProbeResidualNonJsonExit0();
 
 testGiteaRoadmapInitIssueExclusiveAndUpdate()
   .then(() => {
