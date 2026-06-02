@@ -8,6 +8,10 @@ const { getCoordRoot, readActiveFolders, removeWorktree, buildClosureReceipt, ch
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
 const FORCE_FF_FAIL = parseInt(process.env.KAOLA_WORKFLOW_FORCE_FF_FAIL || '0', 10);
 const FORCE_MERGE_IMPOSSIBLE = process.env.KAOLA_WORKFLOW_FORCE_MERGE_IMPOSSIBLE || '';
+const REMOTE_TIMEOUT_MS = (() => {
+  const n = parseInt(process.env.KAOLA_GH_REMOTE_TIMEOUT_MS || '30000', 10);
+  return Number.isInteger(n) && n > 0 ? Math.min(n, 600000) : 30000;
+})();
 
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
 
@@ -20,8 +24,8 @@ function isSafeName(name) {
 function ghExec(args, opts) {
   if (OFFLINE) return '';
   const mock = process.env.KAOLA_GH_MOCK_SCRIPT;
-  if (mock) return execFileSync(process.execPath, [mock, ...args], Object.assign({ encoding: 'utf8' }, opts || {})).trim();
-  return execFileSync('gh', args, Object.assign({ encoding: 'utf8' }, opts || {})).trim();
+  if (mock) return execFileSync(process.execPath, [mock, ...args], Object.assign({ encoding: 'utf8', timeout: REMOTE_TIMEOUT_MS }, opts || {})).trim();
+  return execFileSync('gh', args, Object.assign({ encoding: 'utf8', timeout: REMOTE_TIMEOUT_MS }, opts || {})).trim();
 }
 
 function getRoot() {

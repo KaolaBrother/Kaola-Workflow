@@ -6,6 +6,10 @@ const { execFileSync, spawnSync } = require('child_process');
 
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
 const CONFIG_PATH = path.join(os.homedir(), '.config', 'kaola-workflow', 'config.json');
+const REMOTE_TIMEOUT_MS = (() => {
+  const n = parseInt(process.env.KAOLA_GH_REMOTE_TIMEOUT_MS || '30000', 10);
+  return Number.isInteger(n) && n > 0 ? Math.min(n, 600000) : 30000;
+})();
 
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
 
@@ -17,7 +21,7 @@ function isSafeName(name) {
 
 function ghExec(args) {
   if (OFFLINE) return '';
-  return execFileSync('gh', args, { encoding: 'utf8' }).trim();
+  return execFileSync('gh', args, { encoding: 'utf8', timeout: REMOTE_TIMEOUT_MS }).trim();
 }
 
 function getRoot() {
