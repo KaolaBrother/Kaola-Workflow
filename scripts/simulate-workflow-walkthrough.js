@@ -3639,6 +3639,111 @@ function testSinkMergeCloseFailureWarning() {
   }
 }
 
+function testSinkMergeSkipsArchivedProjectPhantom() {
+  // Regression test for issue #216: postMergeCleanup in sink-merge unconditionally calls
+  // fs.mkdirSync(kaola-workflow/{project}/.cache) and writes sink-fallback.json when a
+  // classified merge-impossible error occurs, even when the project was already archived.
+  // This resurrects the live folder (a "phantom active folder").
+  //
+  // RED discriminator: fs.existsSync(liveDir) is TRUE in buggy code because mkdirSync
+  // creates kaola-workflow/issue-850/.cache/, making liveDir exist.
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sm-phantom-')));
+  const remotePath = initGitRepoWithBareRemote(tmp);
+  try {
+    const binDir = path.join(tmp, 'bin');
+    fs.mkdirSync(binDir, { recursive: true });
+    // GH mock: return OK for all calls (they are not reached on the merge-impossible path,
+    // but the mock is wired so sink-merge doesn't try the real `gh` binary).
+    writeShimFiles(path.join(binDir, 'gh'), [
+      "process.stdout.write('{}\\n');"
+    ]);
+
+    // Construct archived state directly on the feature branch — do NOT create a live
+    // folder on disk (untracked files survive git reset --hard and would corrupt the test).
+    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-850'], { encoding: 'utf8' });
+    const archiveDir = path.join(tmp, 'kaola-workflow', 'archive', 'issue-850');
+    fs.mkdirSync(archiveDir, { recursive: true });
+    fs.writeFileSync(path.join(archiveDir, 'workflow-state.md'), '# archived\n');
+    fs.writeFileSync(path.join(archiveDir, 'phase6-summary.md'), '# summary\n');
+    spawnSync('git', ['-C', tmp, 'add', '-A', 'kaola-workflow/'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'chore: archive issue-850'], {
+      encoding: 'utf8',
+      env: { ...process.env, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@test.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@test.com' }
+    });
+    spawnSync('git', ['-C', tmp, 'push', '-u', 'origin', 'workflow/issue-850'], { encoding: 'utf8' });
+    // Return to main — origin/main must NOT have the archive (so reset --hard origin/main wipes it)
+    spawnSync('git', ['-C', tmp, 'checkout', 'main'], { encoding: 'utf8' });
+
+    // Hard gate: verify git state is correct before invoking sink-merge
+    const catArchive = spawnSync('git', ['-C', tmp, 'cat-file', '-e', 'workflow/issue-850:kaola-workflow/archive/issue-850/workflow-state.md'], { encoding: 'utf8' });
+    const catLive = spawnSync('git', ['-C', tmp, 'cat-file', '-e', 'workflow/issue-850:kaola-workflow/issue-850/workflow-state.md'], { encoding: 'utf8' });
+    assert(catArchive.status === 0, 'SETUP ERROR: git state not correct for phantom-folder test — archive not committed on feature branch');
+    assert(catLive.status !== 0, 'SETUP ERROR: git state not correct for phantom-folder test — live path still on feature branch');
+
+    const liveDir = path.join(tmp, 'kaola-workflow', 'issue-850');
+    // Pre-invocation gate: confirm live dir does not exist before running sink-merge
+    assert(!fs.existsSync(liveDir), 'SETUP ERROR: live folder exists before sink-merge — untracked leftover would corrupt the test');
+
+    const mockJs = path.join(binDir, 'gh.js');
+    const result = spawnSync(process.execPath, [
+      sinkMergeScript,
+      '--project', 'issue-850',
+      '--branch', 'workflow/issue-850',
+      '--issue', '850'
+    ], {
+      cwd: tmp,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        KAOLA_WORKFLOW_OFFLINE: '0',
+        KAOLA_WORKFLOW_FORCE_MERGE_IMPOSSIBLE: 'branch_protected',
+        KAOLA_GH_MOCK_SCRIPT: mockJs
+      }
+    });
+
+    // exit 3 expected in both buggy and fixed worlds (not the discriminator, but verify it)
+    assert(
+      result.status === 3,
+      'sink-merge must exit 3 on merge-impossible, got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr
+    );
+
+    // PRIMARY RED/GREEN discriminator: buggy code recreates liveDir via mkdirSync; fixed code skips it
+    assert(
+      !fs.existsSync(liveDir),
+      'phantom folder must NOT exist after merge-impossible on archived project, but got: ' + liveDir + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr
+    );
+
+    // No receipt file written inside phantom dir
+    assert(
+      !fs.existsSync(path.join(liveDir, '.cache', 'sink-fallback.json')),
+      'sink-fallback.json must NOT be written for an archived project'
+    );
+
+    // main must be clean — reset --hard must have run, not been skipped
+    const aheadCount = spawnSync('git', ['-C', tmp, 'rev-list', '--count', 'origin/main..main'], { encoding: 'utf8' }).stdout.trim();
+    assert(aheadCount === '0', 'local main must be at origin/main after archived exit-3, got ahead=' + aheadCount);
+
+    // Repo must be restored to main branch
+    const headBranch = spawnSync('git', ['-C', tmp, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    assert(
+      headBranch === 'main',
+      'repo must be restored to main after merge-impossible, got: ' + headBranch
+    );
+
+    // stderr must mention project archived (GREEN-only: this assertion is expected to fail in RED
+    // because the current code writes the receipt without checking archive status)
+    assert(
+      result.stderr.includes('project archived'),
+      'sink-merge stderr must mention "project archived" for archived project, got stderr: ' + result.stderr
+    );
+
+    console.log('testSinkMergeSkipsArchivedProjectPhantom: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    try { fs.rmSync(remotePath, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
 // ===== issue-165: closure-audit (kaola-workflow-closure-audit.js) =====
 
 function closureAuditShim(binDir, lines) {
@@ -4278,6 +4383,7 @@ async function main() {
     testFinalizeOfflineClosureReceiptSkipped();
     testSinkMergeMockabilityAndReceipt();
     testSinkMergeCloseFailureWarning();
+    testSinkMergeSkipsArchivedProjectPhantom();
     testClosureAuditOfflineRemoteClassesSkipped();
     testClosureAuditClosedRemoteRoadmapSource();
     testClosureAuditArchiveClosedDrift();

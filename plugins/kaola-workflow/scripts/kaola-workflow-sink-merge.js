@@ -209,10 +209,17 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus) {
       // Transient / unclassified error — re-throw, caller exits 1
       throw e;
     }
-    // Classified merge-impossible: reset local main, write receipt, signal exit 3
+    // Classified merge-impossible: reset local main, write receipt (skipped when project was already archived), signal exit 3
+    const liveProjectDir = path.join(mainRoot, 'kaola-workflow', args.project);
+    const archiveProjectDir = path.join(mainRoot, 'kaola-workflow', 'archive', args.project);
+    const wasArchived = !fs.existsSync(liveProjectDir) && fs.existsSync(archiveProjectDir);
     try {
       execFileSync('git', ['-C', mainRoot, 'reset', '--hard', 'origin/main'], { encoding: 'utf8' });
     } catch (_) {}
+    if (wasArchived) {
+      process.stderr.write('sink-merge: project archived (' + args.project + '), skipping receipt write\n');
+      return { exitCode: 3 };
+    }
     const receiptPath = path.join(
       mainRoot,
       'kaola-workflow', args.project, '.cache', 'sink-fallback.json'

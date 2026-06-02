@@ -64,7 +64,7 @@ The Phase 6 sink is responsible for delivering completed work to the repository 
   - `0`: merge succeeded, branch pushed, issue closed (or close failure emits warning but exit code stays 0)
   - `1`: merge failed (non-recoverable; includes pre-merge guard failures: live workflow-state, unpushed commits, or no upstream tracking ref)
   - `2`: fast-forward race condition exhausted after MAX_AUTOMERGE_RETRIES attempts
-  - `3`: merge-impossible error (branch protected, non-fast-forward, permission denied); also returned if project archive dir exists during receipt write (GitLab/Gitea guard); auto-fallback to PR sink
+  - `3`: merge-impossible error (branch protected, non-fast-forward, permission denied); also returned if project archive dir exists during receipt write (root/Codex/GitLab/Gitea guard, issue #216); auto-fallback to PR sink
 - **Failure handling** (issue #168):
   - When issue close fails, a stderr warning is emitted (e.g., `sink-merge: WARNING: issue close failed for N; receipt.remote_issue_closed=failed. Manually run: gh issue close N`) instead of silently swallowing the error
   - Exit code remains 0 because the merge itself succeeded; the receipt records `remote_issue_closed: 'failed'` for audit purposes
@@ -615,8 +615,9 @@ remote-issue-close and branch-delete steps. `cmdFinalize` and the watchers set
 `sink-merge` derives `archive`/`roadmap_source_removed` by probing
 post-conditions (finalize already archived); `roadmap_regenerated` is `skipped`
 because `sink-merge` does not regenerate the mirror. The exit-3
-merge-impossible fallback returns before any receipt is emitted and is
-unchanged. `sink-merge`'s `ghExec` now honors `KAOLA_GH_MOCK_SCRIPT`, matching
+merge-impossible fallback returns before any receipt is emitted; when the
+project was already archived before the failed push, `postMergeCleanup` skips
+the `.cache/sink-fallback.json` receipt write entirely (issue #216 guard). `sink-merge`'s `ghExec` now honors `KAOLA_GH_MOCK_SCRIPT`, matching
 `claim.js`, so the receipt path is testable without a live `gh` CLI.
 
 **`sink:pr` deferral**: `cmdSinkPr` does not emit a closure receipt — it leaves
