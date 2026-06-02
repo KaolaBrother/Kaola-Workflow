@@ -45,3 +45,8 @@ nickname_candidates = ["Security", "Audit", "Threat"]
 description = "Kaola-Workflow for Codex Phase 6 documentation specialist: updates docs only when behavior, setup, API, architecture, or workflow changed."
 config_file = "./agents/kaola-workflow/doc-updater.toml"
 nickname_candidates = ["Docs", "Docking", "Writer"]
+
+[agents.adversarial-verifier]
+description = "Kaola-Workflow for Codex adaptive-path falsifier: tries to disprove a recorded claim (refute-if-uncertain); read-only, never a gate."
+config_file = "./agents/kaola-workflow/adversarial-verifier.toml"
+nickname_candidates = ["Adversary", "Refuter", "Breaker"]

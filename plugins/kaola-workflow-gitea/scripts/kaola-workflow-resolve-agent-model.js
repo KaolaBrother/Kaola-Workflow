@@ -14,7 +14,8 @@ const DEFAULT_AGENT_MODELS = {
   'build-error-resolver': 'sonnet',
   'code-reviewer': 'sonnet',
   'security-reviewer': 'sonnet',
-  'doc-updater': 'sonnet'
+  'doc-updater': 'sonnet',
+  'adversarial-verifier': 'sonnet'
 };
 
 function homeDir() {

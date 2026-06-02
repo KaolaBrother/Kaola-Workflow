@@ -6,7 +6,8 @@ const path = require('path');
 
 const root = path.resolve(__dirname, '..');
 const pinnedCommit = '922d2d8f8b64f4e50936e24465cb3bcac81ac0e1';
-const requiredAgents = [
+// Vendored agents carry full upstream provenance (URL + blob-sha + sha256 + license).
+const vendoredAgents = [
   'build-error-resolver',
   'code-architect',
   'code-explorer',
@@ -17,6 +18,14 @@ const requiredAgents = [
   'security-reviewer',
   'tdd-guide',
 ];
+// issue #227: locally-authored agents (the adaptive-path roles) are name-pinned but
+// PROVENANCE-EXEMPT — they have no upstream blob, so the upstream/blob-sha/sha256/
+// license/copyright asserts and the agents-source.md vendored-table row do NOT apply.
+// They still must be valid managed agents (front matter at byte 0, name, model, marker).
+const localAgents = [
+  'adversarial-verifier',
+];
+const allAgents = [...vendoredAgents, ...localAgents];
 
 function read(relativePath) {
   return fs.readFileSync(path.join(root, relativePath), 'utf8');
@@ -39,15 +48,16 @@ assert(exists('agents'), 'agents directory is missing');
 const actualAgents = fs.readdirSync(path.join(root, 'agents'))
   .filter(name => name.endsWith('.md'))
   .sort();
-const expectedAgents = requiredAgents.map(name => `${name}.md`).sort();
+const expectedAgents = allAgents.map(name => `${name}.md`).sort();
 
 assert(
   JSON.stringify(actualAgents) === JSON.stringify(expectedAgents),
   `agents directory must contain exactly: ${expectedAgents.join(', ')}`
 );
 
-for (const fileName of expectedAgents) {
-  const agentName = fileName.replace(/\.md$/, '');
+// Vendored agents: full provenance + agents-source.md table row.
+for (const agentName of vendoredAgents) {
+  const fileName = `${agentName}.md`;
   const relativePath = `agents/${fileName}`;
   const content = read(relativePath);
 
@@ -66,9 +76,23 @@ for (const fileName of expectedAgents) {
   assert(content.includes(`name: ${agentName}`), `${relativePath} front matter must name the agent`);
 }
 
+// Local agents (issue #227): provenance-exempt — assert only that they are valid
+// managed agents (front matter at byte 0, name, model, the managed marker). No
+// upstream/blob/sha256/license asserts and no agents-source.md vendored-table row.
+for (const agentName of localAgents) {
+  const relativePath = `agents/${agentName}.md`;
+  const content = read(relativePath);
+  assert(content.startsWith('---\n'), `${relativePath} must preserve YAML front matter at byte 0`);
+  const frontMatterEnd = content.indexOf('\n---\n', 4);
+  assert(frontMatterEnd > 0, `${relativePath} must close YAML front matter`);
+  assert(content.includes(`name: ${agentName}`), `${relativePath} front matter must name the agent`);
+  assert(/^model:\s*\S+/m.test(content), `${relativePath} front matter must set a model`);
+  assert(content.includes('kaola-workflow-managed-agent: true'), `${relativePath} must carry the managed marker`);
+}
+
 assertIncludes('docs/agents-source.md', pinnedCommit);
-for (const fileName of expectedAgents) {
-  assertIncludes('docs/agents-source.md', `agents/${fileName}`);
+for (const agentName of vendoredAgents) {
+  assertIncludes('docs/agents-source.md', `agents/${agentName}.md`);
 }
 
 const readme = read('README.md');
