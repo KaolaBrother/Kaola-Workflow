@@ -150,6 +150,8 @@ case "$FORGE" in
       kaola-workflow-sink-pr.js
       kaola-workflow-roadmap.js
       kaola-workflow-classifier.js
+      kaola-workflow-plan-validator.js
+      kaola-workflow-adaptive-schema.js
       kaola-workflow-resolve-agent-model.js
     )
     SUPPORT_HOOK_NAMES=(

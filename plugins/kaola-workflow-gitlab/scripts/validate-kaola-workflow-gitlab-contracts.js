@@ -460,4 +460,26 @@ for (const fastFile222 of [fastCmd198, fastSkill198]) {
 assertBefore(nextCmd203, 'fast-summary.md status ESCALATED -> /kaola-workflow-phase1', 'fast-summary.md exists -> /kaola-workflow-fast');
 assertIncludes(nextSkill198, 'fast-summary.md status ESCALATED -> kaola-workflow-research');
 
+// issue #227: adaptive-path contract (GitLab fork command prose + renamed scripts).
+assert(exists(pluginRoot + '/scripts/kaola-gitlab-workflow-plan-validator.js'), 'GitLab adaptive plan validator missing');
+assert(exists(pluginRoot + '/scripts/kaola-workflow-adaptive-schema.js'), 'GitLab adaptive schema module missing');
+assertConcept(pluginRoot + '/commands/workflow-next.md', 'adaptive path selection', [
+  'KAOLA_ENABLE_ADAPTIVE', 'adaptive', 'fast|full|adaptive', 'flag-only', 'typed refusal'
+]);
+assertIncludes(pluginRoot + '/commands/workflow-next.md', 'workflow-plan.md exists -> /kaola-workflow-plan-run');
+assertConcept(pluginRoot + '/commands/kaola-workflow-adapt.md', 'adaptive authoring', [
+  'workflow-plan.md', '## Nodes', 'post-dominate', 'finalize', 'FANOUT_CAP', 'plan_hash', 'typed refusal'
+]);
+assertConcept(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'adaptive execution + governance', [
+  '## Node Ledger', 'plan_hash', 'post-dominate', 'auto-run', 'provisional', 'halt for consent',
+  'escalated_to_full: consent', 'typed refusal', 'quorum', 'tally-fn', 'validateNodeOutput', 'test_thrash'
+]);
+assertIncludes(pluginRoot + '/commands/kaola-workflow-phase6.md', 'workflow_path: adaptive');
+assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-classifier.js', 'disjointWriteSets');
+assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-classifier.js', 'readPlanNodes');
+assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js', 'workflow_path_refused');
+assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-repair-state.js', 'routeAdaptive');
+assertNotIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-repair-state.js', 'enable_adaptive');
+assertNotIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-plan-validator.js', 'enable_adaptive');
+
 console.log('Kaola-Workflow GitLab contract validation passed');

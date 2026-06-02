@@ -60,8 +60,11 @@ node needs RED then GREEN; count `test_thrash` ≥ 3 same-test cycles → escala
 At the barrier, re-scan the files the node actually wrote. If a write turns out
 sensitive (a Phase-5 category) or overflows into a sensitive / `SHARED_INFRA` area on a
 plan that auto-ran, the provisional authorization was granted on a now-false premise:
-**revoke and halt for consent** — write `escalated_to_full: consent` AND force
-`security-reviewer` post-dominance (`escalated_to_full: security`). These co-occur.
+**revoke and halt for consent** — write `escalated_to_full: consent` AND force a
+`security-reviewer` to post-dominate every remaining sensitive node
+(`escalated_to_full: security`). These co-occur. (A `code-reviewer` must already
+post-dominate every implement node, and `security-reviewer` every sensitive node — the
+validator computes these from the topology; the executor never drops them.)
 
 **Gate compliance rows for `code-reviewer`/`security-reviewer` use the bare role string**
 (the anchored delegation matcher); per-instance disambiguation goes in the Evidence

@@ -116,7 +116,9 @@ const phaseCommands = [
   'commands/kaola-workflow-phase4.md',
   'commands/kaola-workflow-phase5.md',
   'commands/kaola-workflow-phase6.md',
-  'commands/kaola-workflow-fast.md'
+  'commands/kaola-workflow-fast.md',
+  'commands/kaola-workflow-adapt.md',
+  'commands/kaola-workflow-plan-run.md'
 ];
 
 for (const file of phaseCommands) {
@@ -498,5 +500,46 @@ if (process.env.KAOLA_WORKFLOW_OFFLINE !== '1' && exists('.git')) {
 }
 
 assertIncludes('scripts/simulate-workflow-walkthrough.js', 'Workflow walkthrough simulation passed');
+
+// issue #227: adaptive-path contract. Locks the selection/execution prose + the spine.
+assert(exists('scripts/kaola-workflow-plan-validator.js'), 'adaptive plan validator is missing');
+assert(exists('scripts/kaola-workflow-adaptive-schema.js'), 'adaptive schema module is missing');
+assertIncludes('install.sh', 'kaola-workflow-plan-validator.js');
+assertIncludes('install.sh', '--enable-adaptive');
+// router 3-way selection: switch first, adaptive keyword flag-only, OFF preserves 2-way
+assertConcept('commands/workflow-next.md', 'adaptive path selection', [
+  'KAOLA_ENABLE_ADAPTIVE', 'adaptive', 'fast|full|adaptive', 'flag-only', 'typed refusal'
+]);
+assertIncludes('commands/workflow-next.md', 'workflow-plan.md exists -> /kaola-workflow-plan-run');
+// adapt (authoring) + plan-run (executor) prose: artifacts, gates, caps, governance
+assertConcept('commands/kaola-workflow-adapt.md', 'adaptive authoring', [
+  'workflow-plan.md', '## Nodes', 'post-dominate', 'finalize', 'FANOUT_CAP', 'plan_hash', 'typed refusal'
+]);
+assertConcept('commands/kaola-workflow-plan-run.md', 'adaptive execution + governance', [
+  '## Node Ledger', 'plan_hash', 'post-dominate', 'auto-run', 'provisional', 'halt for consent',
+  'escalated_to_full: consent', 'typed refusal', 'quorum', 'tally-fn', 'validateNodeOutput',
+  'read-only', 'test_thrash', 'FANOUT_CAP'
+]);
+// classifier exports the adaptive primitives
+assertIncludes('scripts/kaola-workflow-classifier.js', 'module.exports');
+assertIncludes('scripts/kaola-workflow-classifier.js', 'disjointWriteSets');
+assertIncludes('scripts/kaola-workflow-classifier.js', 'readPlanNodes');
+// claim toggle guard (via the schema module) + both resume surfaces emit the adaptive executor
+assertIncludes('scripts/kaola-workflow-claim.js', 'resolveEnableAdaptive');
+assertIncludes('scripts/kaola-workflow-claim.js', 'workflow_path_refused');
+assertIncludes('scripts/kaola-workflow-claim.js', 'PLAN_RUN_COMMAND');
+// the adaptive executor command literal + path whitelist live in the shared schema anchor
+assertIncludes('scripts/kaola-workflow-adaptive-schema.js', '/kaola-workflow-plan-run');
+assertIncludes('scripts/kaola-workflow-adaptive-schema.js', 'resolveEnableAdaptive');
+// repair-state recognizes + routes adaptive ahead of the phaseN ladder
+assertIncludes('scripts/kaola-workflow-repair-state.js', 'routeAdaptive');
+assertIncludes('scripts/kaola-workflow-repair-state.js', 'isAdaptiveWorkflowState');
+// the switch gates SELECTION only — it must be ABSENT from resume + well-formedness
+assertNotIncludes('scripts/kaola-workflow-repair-state.js', 'enable_adaptive');
+assertNotIncludes('scripts/kaola-workflow-repair-state.js', 'KAOLA_ENABLE_ADAPTIVE');
+assertNotIncludes('scripts/kaola-workflow-plan-validator.js', 'enable_adaptive');
+assertNotIncludes('scripts/kaola-workflow-plan-validator.js', 'KAOLA_ENABLE_ADAPTIVE');
+// phase6 adaptive prerequisite
+assertIncludes('commands/kaola-workflow-phase6.md', 'workflow_path: adaptive');
 
 console.log('Workflow contract validation passed');

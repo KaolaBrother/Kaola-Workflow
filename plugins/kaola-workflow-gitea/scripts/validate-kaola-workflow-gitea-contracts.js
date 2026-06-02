@@ -465,4 +465,26 @@ for (const fastFile222 of [giteaFastCmd198, giteaFastSkill198]) {
 assertBefore(giteaNextCmd203, 'fast-summary.md status ESCALATED -> /kaola-workflow-phase1', 'fast-summary.md exists -> /kaola-workflow-fast');
 assertIncludes(giteaNextSkill198, 'fast-summary.md status ESCALATED -> kaola-workflow-research');
 
+// issue #227: adaptive-path contract (Gitea fork command prose + renamed scripts).
+assert(exists(pluginRoot + '/scripts/kaola-gitea-workflow-plan-validator.js'), 'Gitea adaptive plan validator missing');
+assert(exists(pluginRoot + '/scripts/kaola-workflow-adaptive-schema.js'), 'Gitea adaptive schema module missing');
+assertConcept(pluginRoot + '/commands/workflow-next.md', 'adaptive path selection', [
+  'KAOLA_ENABLE_ADAPTIVE', 'adaptive', 'fast|full|adaptive', 'flag-only', 'typed refusal'
+]);
+assertIncludes(pluginRoot + '/commands/workflow-next.md', 'workflow-plan.md exists -> /kaola-workflow-plan-run');
+assertConcept(pluginRoot + '/commands/kaola-workflow-adapt.md', 'adaptive authoring', [
+  'workflow-plan.md', '## Nodes', 'post-dominate', 'finalize', 'FANOUT_CAP', 'plan_hash', 'typed refusal'
+]);
+assertConcept(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'adaptive execution + governance', [
+  '## Node Ledger', 'plan_hash', 'post-dominate', 'auto-run', 'provisional', 'halt for consent',
+  'escalated_to_full: consent', 'typed refusal', 'quorum', 'tally-fn', 'validateNodeOutput', 'test_thrash'
+]);
+assertIncludes(pluginRoot + '/commands/kaola-workflow-phase6.md', 'workflow_path: adaptive');
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-classifier.js', 'disjointWriteSets');
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-classifier.js', 'readPlanNodes');
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'workflow_path_refused');
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-repair-state.js', 'routeAdaptive');
+assertNotIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-repair-state.js', 'enable_adaptive');
+assertNotIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-plan-validator.js', 'enable_adaptive');
+
 console.log('Kaola-Workflow Gitea contract validation passed');
