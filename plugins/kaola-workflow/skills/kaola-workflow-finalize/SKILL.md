@@ -12,7 +12,12 @@ to `full` when absent). If `workflow_path: fast`, the fast path replaces Phase
 1-5: require `fast-summary.md` with status `PASSED` (stop if it is missing or not
 `PASSED`), and read it as the Phase 1-5 substitute (`## Scope`, `## Plan`,
 `## Implementation Evidence`, `## Review`) wherever the steps below reference
-Phase 1/3/5 artifacts.
+Phase 1/3/5 artifacts. If `workflow_path: adaptive` (issue #227), the adaptive path
+replaces Phase 1-5: require a frozen `workflow-plan.md` (re-check `plan_hash`) whose
+`## Node Ledger` rows are all `complete` or `n/a`; on corruption or an incomplete
+ledger, stop with a **typed refusal** (`Adaptive plan is not complete or its plan_hash
+failed. Run /kaola-workflow-plan-run first.`). Read the plan + Node Ledger as the Phase
+1-5 substitute.
 
 ## Goal Contract
 

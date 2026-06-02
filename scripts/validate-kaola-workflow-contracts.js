@@ -71,7 +71,9 @@ const skills = [
   'kaola-workflow-execute',
   'kaola-workflow-review',
   'kaola-workflow-finalize',
-  'kaola-workflow-fast'
+  'kaola-workflow-fast',
+  'kaola-workflow-adapt',
+  'kaola-workflow-plan-run'
 ];
 
 for (const skill of skills) {
