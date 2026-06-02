@@ -48,6 +48,68 @@ const AREA_PATH_REGEX = /(?:^|[^A-Za-z0-9_./-])([A-Za-z0-9_-]+)\/(?=$|[^A-Za-z0-
 const DEPENDS_ON_REGEX = /^depends-on:#(\d+)$/;
 const SHARED_INFRA = new Set(['scripts', 'hooks', 'plugins/kaola-workflow-gitlab/scripts']);
 
+function isSharedInfra(area) {
+  return SHARED_INFRA.has(area);
+}
+
+// issue #227 (adaptive path): parse the `## Nodes` table of a frozen workflow-plan.md
+// into node objects (tolerant to column reorder; write set via extractFilePaths so the
+// touches:/path convention + the read-only empty-set carve-out both apply).
+function readPlanNodes(planPath) {
+  let content = '';
+  try { content = fs.readFileSync(planPath, 'utf8'); } catch (_) { return []; }
+  const body = sectionBody(content, 'Nodes');
+  const rows = body.split('\n').map(l => l.trim()).filter(l => l.startsWith('|'));
+  if (rows.length < 2) return [];
+  const header = rows[0].split('|').slice(1, -1).map(c => c.trim().toLowerCase());
+  const idx = name => header.indexOf(name);
+  const nodes = [];
+  for (let r = 1; r < rows.length; r++) {
+    const cells = rows[r].split('|').slice(1, -1).map(c => c.trim());
+    if (/^[-:\s]+$/.test(cells.join(''))) continue;
+    const get = n => (idx(n) >= 0 ? cells[idx(n)] : '') || '';
+    const id = get('id');
+    if (!id) continue;
+    nodes.push({
+      id,
+      role: get('role'),
+      dependsOn: get('depends_on').split(',').map(s => s.replace(/[#\s]/g, '')).filter(s => s && s !== '—' && s !== '-'),
+      writeSet: extractFilePaths(get('declared_write_set')),
+      cardinality: get('cardinality'),
+      shape: get('shape'),
+    });
+  }
+  return nodes;
+}
+
+// issue #227 (adaptive path): N-way pairwise disjointness verdict over declared node
+// write sets, applied WITHIN one issue. Mirrors classify()'s direct verdict: exact-path
+// RED > non-shared coarse-area RED > shared-infra YELLOW > GREEN. PASS on empty sets.
+function disjointWriteSets(nodeWriteSets) {
+  const sets = (nodeWriteSets || []).map(s => (s instanceof Set ? s : new Set(s || [])));
+  for (let i = 0; i < sets.length; i++) {
+    for (let j = i + 1; j < sets.length; j++) {
+      const a = sets[i], b = sets[j];
+      if (a.size === 0 || b.size === 0) continue;
+      for (const p of a) {
+        if (b.has(p)) return { verdict: 'red', reasoning: 'exact file path overlap at "' + p + '" between nodes ' + i + ' and ' + j };
+      }
+      const areasB = new Set();
+      for (const p of b) areasB.add(areaForPath(p));
+      let sharedHit = '';
+      for (const p of a) {
+        const area = areaForPath(p);
+        if (areasB.has(area)) {
+          if (!SHARED_INFRA.has(area)) return { verdict: 'red', reasoning: 'coarse-area overlap at "' + area + '" between nodes ' + i + ' and ' + j };
+          if (!sharedHit) sharedHit = area;
+        }
+      }
+      if (sharedHit) return { verdict: 'yellow', reasoning: 'shared-infra area "' + sharedHit + '" overlap between nodes ' + i + ' and ' + j };
+    }
+  }
+  return { verdict: 'green', reasoning: 'node write sets are pairwise disjoint' };
+}
+
 function normalizeRepoPath(raw) {
   return String(raw || '')
     .replace(/^touches:/, '')
@@ -222,6 +284,12 @@ function scanClaimedOverlap(candidatePaths, candidateAreas, candidateAreaLabels,
     // issue #207: read a fast project's declared write set from fast-summary.md's
     // `## Scope` section only, so its in-flight files are visible to overlap detection.
     try { combined += '\n' + sectionBody(fs.readFileSync(fastSummary, 'utf8'), 'Scope'); } catch (_) {}
+    // issue #227: an adaptive project declares its write set in workflow-plan.md's
+    // `## Nodes` table; fold it in so its footprint is visible to cross-issue overlap.
+    try {
+      combined += '\n' + readPlanNodes(path.join(folder.project_dir, 'workflow-plan.md'))
+        .map(n => Array.from(n.writeSet).join(' ')).join('\n');
+    } catch (_) {}
 
     const claimedPaths = extractFilePaths(combined);
     const claimedAreas = extractCoarseAreas(combined);
@@ -396,6 +464,11 @@ module.exports = {
   classifyIssue,
   extractCoarseAreas,
   extractFilePaths,
+  areaForPath,
+  SHARED_INFRA,
+  isSharedInfra,
+  readPlanNodes,
+  disjointWriteSets,
   issueHasRemoteClaimNotes,
   issueHasWorkflowInProgressLabel,
   parseDependsOn,

@@ -170,10 +170,12 @@ case "$FORGE" in
       kaola-gitlab-workflow-classifier.js
       kaola-gitlab-workflow-closure-audit.js
       kaola-gitlab-workflow-compact-context.js
+      kaola-gitlab-workflow-plan-validator.js
       kaola-gitlab-workflow-repair-state.js
       kaola-gitlab-workflow-roadmap.js
       kaola-gitlab-workflow-sink-merge.js
       kaola-gitlab-workflow-sink-mr.js
+      kaola-workflow-adaptive-schema.js
       kaola-workflow-resolve-agent-model.js
     )
     SUPPORT_HOOK_NAMES=(

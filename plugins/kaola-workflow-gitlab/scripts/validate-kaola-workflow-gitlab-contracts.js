@@ -129,7 +129,7 @@ const skillFiles = listSkillFiles();
 const hookFiles = listFiles(pluginRoot + '/hooks');
 const agentFiles = listFiles(pluginRoot + '/agents', file => file.endsWith('.toml'));
 
-assert(commandFiles.length === 9, 'expected 9 GitLab command files');
+assert(commandFiles.length === 11, 'expected 11 GitLab command files');
 assert(skillFiles.length === 9, 'expected 9 GitLab skill files');
 assert(exists(pluginRoot + '/hooks/hooks.json'), 'GitLab hooks.json missing');
 assertNotIncludes(pluginRoot + '/hooks/hooks.json', 'subagentStatusLine');
@@ -158,10 +158,12 @@ const scriptFiles = [
   'kaola-gitlab-workflow-claim.js',
   'kaola-gitlab-workflow-classifier.js',
   'kaola-gitlab-workflow-compact-context.js',
+  'kaola-gitlab-workflow-plan-validator.js',
   'kaola-gitlab-workflow-repair-state.js',
   'kaola-gitlab-workflow-roadmap.js',
   'kaola-gitlab-workflow-sink-merge.js',
   'kaola-gitlab-workflow-sink-mr.js',
+  'kaola-workflow-adaptive-schema.js',
   'kaola-workflow-resolve-agent-model.js',
   'simulate-gitlab-workflow-walkthrough.js',
   'simulate-gitlab-codex-workflow-walkthrough.js',
@@ -176,10 +178,12 @@ const installSupportScripts = [
   'kaola-gitlab-workflow-claim.js',
   'kaola-gitlab-workflow-classifier.js',
   'kaola-gitlab-workflow-compact-context.js',
+  'kaola-gitlab-workflow-plan-validator.js',
   'kaola-gitlab-workflow-repair-state.js',
   'kaola-gitlab-workflow-roadmap.js',
   'kaola-gitlab-workflow-sink-merge.js',
   'kaola-gitlab-workflow-sink-mr.js',
+  'kaola-workflow-adaptive-schema.js',
   'kaola-workflow-resolve-agent-model.js'
 ];
 for (const script of installSupportScripts) {

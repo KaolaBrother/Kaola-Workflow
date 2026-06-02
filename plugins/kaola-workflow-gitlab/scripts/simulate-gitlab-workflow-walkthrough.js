@@ -208,9 +208,68 @@ function testRepairFastEscalation() {
   console.log('testRepairFastEscalation: PASSED');
 }
 
+// issue #227: adaptive-path port — toggle guard + routeAdaptive resume on the GitLab fork.
+function testGitlabAdaptive() {
+  const repairScript = path.join(root, 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-repair-state.js');
+  const valScript = path.join(root, 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-plan-validator.js');
+  const PLAN = [
+    '# Workflow Plan', '', '## Meta', 'labels: enhancement', '', '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+    '| e | code-explorer | — | — | 1 | sequence |',
+    '| i | tdd-guide | e | lib/x.js | 1 | sequence |',
+    '| r | code-reviewer | i | — | 1 | sequence |',
+    '| d | finalize | r | — | 1 | sequence |', ''
+  ].join('\n');
+  function spawnNode(script, args, cwd, env) {
+    return spawnSync(process.execPath, [script, ...args], {
+      cwd, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }, env || {})
+    });
+  }
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-adaptive-'));
+  try {
+    // claim toggle guard: OFF + adaptive -> refusal; ON -> acquired
+    fs.mkdirSync(path.join(tmp, 'kaola-workflow'), { recursive: true });
+    let r = JSON.parse(spawnNode(claimScript, ['claim', '--project', 'issue-901', '--workflowPath', 'adaptive'], tmp, { KAOLA_ENABLE_ADAPTIVE: '0' }).stdout);
+    assert.strictEqual(r.status, 'workflow_path_refused', 'gitlab: OFF + adaptive claim must be a typed refusal');
+    r = JSON.parse(spawnNode(claimScript, ['claim', '--project', 'issue-902', '--workflowPath', 'adaptive'], tmp, { KAOLA_ENABLE_ADAPTIVE: '1' }).stdout);
+    assert.strictEqual(r.status, 'acquired', 'gitlab: ON + adaptive claim must acquire');
+    const claimedState = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'issue-902', 'workflow-state.md'), 'utf8');
+    assert.ok(/workflow_path: adaptive/.test(claimedState) && /next_command: \/kaola-workflow-plan-run issue-902/.test(claimedState),
+      'gitlab: adaptive claim state must route to plan-run');
+
+    // routeAdaptive: a frozen plan resumes to plan-run, ahead of the phaseN ladder
+    const pdir = path.join(tmp, 'kaola-workflow', 'issue-903');
+    fs.mkdirSync(pdir, { recursive: true });
+    const planPath = path.join(pdir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, PLAN);
+    assert.strictEqual(spawnNode(valScript, [planPath, '--freeze'], tmp).status, 0, 'gitlab: plan freeze must exit 0');
+    const repaired = spawnNode(repairScript, ['issue-903'], tmp);
+    assert.strictEqual(repaired.status, 0, 'gitlab: adaptive repair must exit 0');
+    const st = fs.readFileSync(planPath, 'utf8');
+    assert.ok(st.includes('plan_hash:'), 'gitlab: freeze must stamp plan_hash');
+    const repairedState = fs.readFileSync(path.join(pdir, 'workflow-state.md'), 'utf8');
+    assert.ok(/next_command: \/kaola-workflow-plan-run issue-903/.test(repairedState), 'gitlab: frozen plan must resume to plan-run');
+
+    // tampered plan -> typed refusal (clean dir, no prior state)
+    const tdir = path.join(tmp, 'kaola-workflow', 'issue-904');
+    fs.mkdirSync(tdir, { recursive: true });
+    const tplan = path.join(tdir, 'workflow-plan.md');
+    fs.writeFileSync(tplan, PLAN);
+    spawnNode(valScript, [tplan, '--freeze'], tmp);
+    fs.writeFileSync(tplan, fs.readFileSync(tplan, 'utf8').replace('lib/x.js', 'lib/y.js'));
+    const tampered = spawnNode(repairScript, ['issue-904'], tmp);
+    assert.ok(/typed refusal/.test(tampered.stdout), 'gitlab: tampered plan must be a typed refusal, got: ' + tampered.stdout);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log('testGitlabAdaptive: PASSED');
+}
+
 testFallbackGuardsAfterArchive();
 testAuditAndRepairLabels();
 testRepairFastEscalation();
+testGitlabAdaptive();
 
 run('test-gitlab-forge-helpers.js');
 run('test-gitlab-workflow-scripts.js');
