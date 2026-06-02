@@ -44,10 +44,14 @@ MERGE_SETTINGS=1
 # Default profile is `higher` (Opus for code-architect/code-reviewer/security-reviewer).
 # Pass --profile=common to install the Sonnet assignments for those three agents.
 PROFILE=higher
+# Adaptive workflow path is OFF by default (opt-in). --enable-adaptive=yes writes
+# enable_adaptive:true into ~/.config/kaola-workflow/config.json (issue #227).
+ENABLE_ADAPTIVE=no
 
 usage() {
-  echo "Usage: ./install.sh [--yes] [--forge=github|gitlab|gitea] [--no-settings-merge] [--profile=higher|common]"
+  echo "Usage: ./install.sh [--yes] [--forge=github|gitlab|gitea] [--no-settings-merge] [--profile=higher|common] [--enable-adaptive=yes|no]"
   echo "  --profile defaults to 'higher' (Opus reviewers); use --profile=common for Sonnet."
+  echo "  --enable-adaptive=yes writes enable_adaptive:true into ~/.config/kaola-workflow/config.json (default no; preserves parallel_mode)."
 }
 
 while [[ "$#" -gt 0 ]]; do
@@ -90,6 +94,19 @@ while [[ "$#" -gt 0 ]]; do
       PROFILE="$2"
       shift 2
       ;;
+    --enable-adaptive=*)
+      ENABLE_ADAPTIVE="${1#--enable-adaptive=}"
+      shift
+      ;;
+    --enable-adaptive)
+      if [[ -z "${2:-}" ]]; then
+        echo "--enable-adaptive requires yes or no" >&2
+        usage >&2
+        exit 2
+      fi
+      ENABLE_ADAPTIVE="$2"
+      shift 2
+      ;;
     *)
       echo "Unknown argument: $1" >&2
       usage >&2
@@ -102,6 +119,15 @@ case "$PROFILE" in
   common|higher) ;;
   *)
     echo "Unknown profile: $PROFILE (must be common or higher)" >&2
+    usage >&2
+    exit 2
+    ;;
+esac
+
+case "$ENABLE_ADAPTIVE" in
+  yes|no) ;;
+  *)
+    echo "Unknown --enable-adaptive value: $ENABLE_ADAPTIVE (must be yes or no)" >&2
     usage >&2
     exit 2
     ;;
@@ -623,6 +649,46 @@ PY
   else
     echo "warning: python3 not found; skipping ~/.claude/settings.json auto-merge." >&2
     SETTINGS_MERGE_RESULT=no_python
+  fi
+fi
+
+# issue #227: enable the adaptive workflow path by writing enable_adaptive:true into
+# ~/.config/kaola-workflow/config.json — the SAME single file the classifiers read (no
+# per-forge namespace). Read-modify-write so an existing parallel_mode (and any other
+# keys) are preserved; runs ONLY on --enable-adaptive=yes. The default path writes
+# nothing, so the field stays absent and the adaptive path stays OFF.
+if [[ "$ENABLE_ADAPTIVE" == "yes" ]]; then
+  KAOLA_CONFIG_DIR="$HOME/.config/kaola-workflow"
+  KAOLA_CONFIG_FILE="$KAOLA_CONFIG_DIR/config.json"
+  if command -v python3 >/dev/null 2>&1; then
+    mkdir -p "$KAOLA_CONFIG_DIR"
+    if python3 - "$KAOLA_CONFIG_FILE" <<'PY'; then
+import json, os, sys
+path = sys.argv[1]
+config = {}
+if os.path.exists(path):
+    try:
+        with open(path) as f:
+            config = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"warning: {path} is not valid JSON ({e}); leaving it untouched.", file=sys.stderr)
+        sys.exit(2)
+    if not isinstance(config, dict):
+        print(f"warning: {path} is not a JSON object; leaving it untouched.", file=sys.stderr)
+        sys.exit(2)
+config.setdefault("parallel_mode", "auto")
+config["enable_adaptive"] = True
+with open(path, "w") as f:
+    json.dump(config, f, indent=2)
+    f.write("\n")
+print(f"Enabled adaptive path (enable_adaptive:true) in: {path}")
+PY
+      :
+    else
+      echo "warning: failed to write $KAOLA_CONFIG_FILE; enable it by hand: {\"parallel_mode\":\"auto\",\"enable_adaptive\":true}" >&2
+    fi
+  else
+    echo "warning: python3 not found; cannot write $KAOLA_CONFIG_FILE. Add enable_adaptive:true by hand." >&2
   fi
 fi
 
