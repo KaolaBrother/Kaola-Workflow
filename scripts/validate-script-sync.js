@@ -77,6 +77,14 @@ const BYTE_IDENTICAL_GROUPS = [
       'plugins/kaola-workflow-gitea/scripts/kaola-workflow-resolve-agent-model.js',
     ],
   },
+  {
+    label: 'phantom-advisor hook copies',
+    files: [
+      'hooks/kaola-workflow-phantom-advisor.sh',
+      'plugins/kaola-workflow-gitlab/hooks/kaola-workflow-phantom-advisor.sh',
+      'plugins/kaola-workflow-gitea/hooks/kaola-workflow-phantom-advisor.sh',
+    ],
+  },
 ];
 
 function readOrNull(p) {

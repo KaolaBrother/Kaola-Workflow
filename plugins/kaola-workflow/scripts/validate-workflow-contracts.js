@@ -105,7 +105,8 @@ const retired = [
   ['session', 'id'].join('_'),
   ['last', 'heart' + 'beat'].join('_'),
   '## ' + 'Lease',
-  ['KAOLA', 'SESSION', 'ID'].join('_')
+  ['KAOLA', 'SESSION', 'ID'].join('_'),
+  ['target', 'mismatch'].join('_')
 ];
 
 const phaseCommands = [

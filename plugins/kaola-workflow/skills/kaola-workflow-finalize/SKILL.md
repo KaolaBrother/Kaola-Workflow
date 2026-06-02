@@ -129,6 +129,8 @@ choices, or ambiguity that blocks correctness.
    renames `kaola-workflow/${KAOLA_PROJECT}/` → `kaola-workflow/archive/${KAOLA_PROJECT}/`
    in the linked worktree. The rename is staged and committed in the commit gate below.
 
+   `sink-merge` will refuse with exit 1 if `kaola-workflow/${KAOLA_PROJECT}/workflow-state.md` is still present on the branch HEAD when it runs; this is a safety guard that ensures finalize always precedes the merge.
+
    If `SINK_KIND` is `pr`: skip this step. Proceed to Step 8 (commit). The active folder remains open. `sink-pr.js` (Step 9) writes the PR URL into the active folder. `watch-pr` (on the next `/workflow-next` startup) detects the merged or closed PR and archives the folder automatically.
 
    Before sink dispatch, stage only approved implementation, docs, roadmap,

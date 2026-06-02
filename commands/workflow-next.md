@@ -158,7 +158,7 @@ Startup refusal: verdict=$KAOLA_VERDICT reasoning=$KAOLA_REASONING
 ```
 
 If startup returns a typed refusal (`target_occupied`, `user_target_blocked`,
-`user_target_red`, `target_mismatch`, `target_unavailable`, `target_unverified`),
+`user_target_red`, `target_unavailable`, `target_unverified`),
 read the `reasoning` field and either stop, select a different issue, or
 escalate to the user. If startup is unavailable or malformed, stop for repair.
 On startup, also run `watch-pr` to archive PR folders for merged or closed PRs

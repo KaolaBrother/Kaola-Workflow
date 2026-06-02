@@ -585,10 +585,14 @@ if [ "$SINK_KIND" = "merge" ]; then
 fi
 ```
 
+**Main-worktree cleanup is atomic.** `cmdFinalize` cleans up both the linked worktree's `kaola-workflow/{project}/` and the main repo's copy; when the main root equals the caller root (e.g. `KAOLA_WORKTREE_NATIVE=0` or a manual main-repo invocation) the cleanup is a no-op.
+
 When it runs, `cmdFinalize` atomically writes `status: closed` + `step:
 complete` to `workflow-state.md` and renames `kaola-workflow/{project}/` →
 `kaola-workflow/archive/{project}/` in the linked worktree. The rename is
 included in the Step 8 commit via git rename detection.
+
+`sink-merge` will refuse with exit 1 if `kaola-workflow/{project}/workflow-state.md` is still present on the branch HEAD when it runs; this is a safety guard that ensures finalize always precedes the merge.
 
 If `SINK_KIND` is `mr` or `pr`: skip this archive step. Proceed to Step 8
 (commit). The active folder remains open. `sink-mr.js` (Step 9) writes the MR

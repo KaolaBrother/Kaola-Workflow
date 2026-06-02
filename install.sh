@@ -22,6 +22,7 @@ if [[ -z "$_SELF" || "$_SELF" == "-" || ! -f "$_SELF" ]]; then
     exit 1
   fi
   _TMPDIR="$(mktemp -d)"
+  trap 'rm -rf "$_TMPDIR"' EXIT
   echo "Kaola-Workflow — cloning repository..."
   git clone --depth=1 https://github.com/KaolaBrother/Kaola-Workflow.git "$_TMPDIR/kaola-workflow" >/dev/null 2>&1
   bash "$_TMPDIR/kaola-workflow/install.sh" "$@"

@@ -82,7 +82,7 @@ if [[ -f "$AGENT_MANIFEST_FILE" ]]; then
 fi
 
 COMMANDS=(
-  "$HOME/.claude/commands/workflow-next.md"
+  "$HOME/.claude/commands/workflow-next"*.md
   "$HOME/.claude/commands/kaola-workflow.md"
   "$HOME/.claude/commands/kaola-workflow"*.md
   "$HOME/.claude/commands/claude-workflow.md"

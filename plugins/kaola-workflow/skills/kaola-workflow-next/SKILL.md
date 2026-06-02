@@ -110,7 +110,7 @@ The agent owns this judgment; scripts do not auto-pick. Precedence top-down — 
    gh issue view "$KAOLA_TARGET_ISSUE" --json number,title,body,labels
    ```
    Judge against the fast-path eligibility contract in the Mid-Flight
-   Escalation section of `commands/kaola-workflow-fast.md`. Export
+   Escalation section of the `kaola-workflow-fast` skill. Export
    `KAOLA_PATH=fast` ONLY if all hold: the approach is unambiguous and mechanical (exactly one sensible way — not ≥ 2 materially-different viable approaches), ≤ 5 files in a single area, no new external deps, no public API/schema/migration change, no security/auth/encryption concern, no `depends-on:#N` label. ≥ 2 viable approaches is a design choice → stay on full.
 4. If the issue fetch fails for any reason (KAOLA_WORKFLOW_OFFLINE=1,
    missing CLI, auth failure, network error), default to full.
@@ -125,7 +125,7 @@ Path: full (default — rubric ambiguous; prefer safety)
 ```
 
 Bias toward full when in doubt. Fast false positives escalate cleanly via the
-Fast Eligibility and Mid-Flight Escalation sections of `commands/kaola-workflow-fast.md`; false
+Mid-Flight Escalation section of the `kaola-workflow-fast` skill; false
 negatives only cost ceremony.
 
 ## Startup
@@ -165,7 +165,7 @@ fi
 If `STARTUP_OUT` has `verdict: "owned"`, route that project. If startup returns
 `verdict: no_target`, the agent must select a target and re-run. If startup returns
 a typed refusal (`target_occupied`, `user_target_blocked`, `user_target_red`,
-`target_mismatch`, `target_unavailable`, `target_unverified`), read the `reasoning`
+`target_unavailable`, `target_unverified`), read the `reasoning`
 field and stop or select a different issue. If the startup script is unavailable,
 stop for repair. If startup returns `claim: "none"`, stop normal routing. Before
 stopping, print the refusal diagnostics:

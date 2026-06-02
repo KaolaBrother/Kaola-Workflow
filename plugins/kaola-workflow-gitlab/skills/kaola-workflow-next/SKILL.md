@@ -168,7 +168,7 @@ fi
 If `STARTUP_OUT` has `verdict: "owned"`, route that project. If startup returns
 `verdict: no_target`, the agent must select a target and re-run. If startup returns
 a typed refusal (`target_occupied`, `user_target_blocked`, `user_target_red`,
-`target_mismatch`, `target_unavailable`, `target_unverified`), read the `reasoning` field and stop or
+`target_unavailable`, `target_unverified`), read the `reasoning` field and stop or
 select a different issue. If the startup script is unavailable, stop for repair.
 If startup returns `claim: "none"`, stop normal routing. Do not inspect active
 project folders unless the user explicitly names the project to resume.

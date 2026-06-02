@@ -46,7 +46,7 @@ function readOrCreateConfig() {
 const FILE_PATH_REGEX = /(?:^|[^A-Za-z0-9_./-])([A-Za-z0-9_-]+(?:\/[A-Za-z0-9_.-]+)+)/g;
 const AREA_PATH_REGEX = /(?:^|[^A-Za-z0-9_./-])([A-Za-z0-9_-]+)\/(?=$|[^A-Za-z0-9_./-])/g;
 const DEPENDS_ON_REGEX = /^depends-on:#(\d+)$/;
-const SHARED_INFRA = new Set(['scripts', 'hooks', 'plugins/kaola-workflow-gitlab/scripts', 'plugins/kaola-workflow-gitea/scripts']);
+const SHARED_INFRA = new Set(['scripts', 'hooks', 'plugins/kaola-workflow-gitea/scripts']);
 
 function normalizeRepoPath(raw) {
   return String(raw || '')
@@ -61,11 +61,6 @@ function areaForPath(filePath) {
     const parts = filePath.split('/');
     if (parts.length >= 3) return parts.slice(0, 3).join('/');
     return 'plugins/kaola-workflow-gitea';
-  }
-  if (filePath.startsWith('plugins/kaola-workflow-gitlab/')) {
-    const parts = filePath.split('/');
-    if (parts.length >= 3) return parts.slice(0, 3).join('/');
-    return 'plugins/kaola-workflow-gitlab';
   }
   return filePath.split('/')[0];
 }

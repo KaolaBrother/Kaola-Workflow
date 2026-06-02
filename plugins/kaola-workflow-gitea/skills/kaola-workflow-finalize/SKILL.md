@@ -128,6 +128,8 @@ choices, or ambiguity that blocks correctness.
    `kaola-workflow/archive/${KAOLA_PROJECT}/` in the linked worktree. The rename
    is staged and committed in the commit gate below.
 
+   `sink-merge` will refuse with exit 1 if `kaola-workflow/${KAOLA_PROJECT}/workflow-state.md` is still present on the branch HEAD when it runs; this is a safety guard that ensures finalize always precedes the merge.
+
    Before sink dispatch, stage only approved implementation, docs, roadmap,
    archive, and workflow artifacts for this project, then create the final
    conventional commit on the workflow branch:
