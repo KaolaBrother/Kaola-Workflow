@@ -42,7 +42,6 @@ const COMMON_SCRIPTS = [
   'kaola-workflow-classifier.js',
   'kaola-workflow-closure-audit.js',
   'kaola-workflow-repair-state.js',
-  'kaola-workflow-resolve-agent-model.js',
   'kaola-workflow-roadmap.js',
   'kaola-workflow-sink-merge.js',
   'kaola-workflow-sink-pr.js',
@@ -67,6 +66,15 @@ const BYTE_IDENTICAL_GROUPS = [
       'plugins/kaola-workflow/scripts/kaola-workflow-closure-contract.js',
       'plugins/kaola-workflow-gitlab/scripts/kaola-workflow-closure-contract.js',
       'plugins/kaola-workflow-gitea/scripts/kaola-workflow-closure-contract.js',
+    ],
+  },
+  {
+    label: 'resolve-agent-model module copies',
+    files: [
+      'scripts/kaola-workflow-resolve-agent-model.js',
+      'plugins/kaola-workflow/scripts/kaola-workflow-resolve-agent-model.js',
+      'plugins/kaola-workflow-gitlab/scripts/kaola-workflow-resolve-agent-model.js',
+      'plugins/kaola-workflow-gitea/scripts/kaola-workflow-resolve-agent-model.js',
     ],
   },
 ];
