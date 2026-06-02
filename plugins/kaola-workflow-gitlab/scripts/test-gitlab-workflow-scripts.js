@@ -536,6 +536,55 @@ withForge({
   assert.strictEqual(result.verdict, 'red');
 });
 
+// issue #215 Block 1: a `## Some Heading` line inside a fenced code block within ## Scope must
+// NOT truncate the slice (boundary is h2-only). A `- Write Set:` path BELOW the
+// fenced `## Some Heading` must still be counted; a candidate overlapping it must RED.
+withForge({
+  viewIssue(issueIid) {
+    return { issue_iid: issueIid, number: issueIid, state: 'open', labels: [], body: 'touches: plugins/kaola-workflow-gitlab/scripts/claimed.js' };
+  }
+}, () => {
+  const root = tempRoot('kw-gl-fast-fence-heading-');
+  const dir = writeState(root, 'fast-fence-heading-project', 30);
+  fs.writeFileSync(path.join(dir, 'fast-summary.md'),
+    '# Fast Summary: fast-fence-heading-project\n\n## Status\nIN_PROGRESS\n\n## Scope\n```sh\n## Some Heading\n```\n- Write Set: plugins/kaola-workflow-gitlab/scripts/claimed.js\n- Acceptance: node x\n');
+  const result = classifier.classifyIssue(31, root);
+  assert.strictEqual(result.verdict, 'red');
+});
+
+// issue #215 Block 2: a `~~~` mixed-marker fence nested inside a backtick fence within ## Scope
+// must NOT truncate the slice. A `- Write Set:` path BELOW the nested markers must still be
+// counted; a candidate overlapping it must RED.
+withForge({
+  viewIssue(issueIid) {
+    return { issue_iid: issueIid, number: issueIid, state: 'open', labels: [], body: 'touches: plugins/kaola-workflow-gitlab/scripts/claimed.js' };
+  }
+}, () => {
+  const root = tempRoot('kw-gl-fast-fence-mixed-');
+  const dir = writeState(root, 'fast-fence-mixed-project', 32);
+  fs.writeFileSync(path.join(dir, 'fast-summary.md'),
+    '# Fast Summary: fast-fence-mixed-project\n\n## Status\nIN_PROGRESS\n\n## Scope\n```sh\n~~~\n## Heading\n```\n- Write Set: plugins/kaola-workflow-gitlab/scripts/claimed.js\n- Acceptance: node x\n');
+  const result = classifier.classifyIssue(33, root);
+  assert.strictEqual(result.verdict, 'red');
+});
+
+// issue #215 regression: an unterminated fence in a section BEFORE ## Scope must NOT
+// prevent sectionBody from finding ## Scope. The buggy locator stayed inFence=true after
+// an unclosed fence in ## Status, skipped ## Scope, returned '' → no Write Set → green.
+// FAILING-FIRST against the buggy locator.
+withForge({
+  viewIssue(issueIid) {
+    return { issue_iid: issueIid, number: issueIid, state: 'open', labels: [], body: 'touches: plugins/kaola-workflow-gitlab/scripts/claimed.js' };
+  }
+}, () => {
+  const root = tempRoot('kw-gl-fast-fence-pre-');
+  const dir = writeState(root, 'fast-fence-pre-project', 34);
+  fs.writeFileSync(path.join(dir, 'fast-summary.md'),
+    '# Fast Summary: fast-fence-pre-project\n\n## Status\n```sh\nIN_PROGRESS\n## Scope\n- Write Set: plugins/kaola-workflow-gitlab/scripts/claimed.js\n- Acceptance: node x\n');
+  const result = classifier.classifyIssue(35, root);
+  assert.strictEqual(result.verdict, 'red');
+});
+
 withForge({
   listIssues() {
     return [

@@ -103,12 +103,30 @@ function sectionBody(content, heading) {
   const lines = String(content || '').split('\n');
   const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const headRe = new RegExp('^##\\s+' + escaped + '\\s*$');
+  // issue #215: fence-aware body collector — a fenced `## ` heading inside ## Scope must not
+  // trigger the h2 boundary. Family-only tracking: close only on a same-family delimiter
+  // (backtick closes backtick, tilde closes tilde). Run-length not tracked — workflow output
+  // never emits 4+ backtick fences (input-contract assumption, not a universal guarantee).
+  // The heading-locator loop below has no fence tracking: ## Scope is never inside a fenced
+  // block in well-formed fast-summary.md output, so tracking there would only introduce a
+  // false-GREEN regression if a pre-Scope section left an unclosed fence.
+  const fenceRe = /^(`{3,}|~{3,})/;
+  let inFence = false;
+  let fenceFamily = '';
   let i = 0;
-  for (; i < lines.length; i++) { if (headRe.test(lines[i])) { i++; break; } }
+  for (; i < lines.length; i++) {
+    if (headRe.test(lines[i])) { i++; break; }
+  }
   if (i >= lines.length) return '';
   const out = [];
   for (; i < lines.length; i++) {
-    if (/^##\s/.test(lines[i])) break;
+    const fm = lines[i].trim().match(fenceRe);
+    if (fm) {
+      const fam = fm[1][0];
+      if (!inFence) { inFence = true; fenceFamily = fam; }
+      else if (fam === fenceFamily) { inFence = false; fenceFamily = ''; }
+    }
+    if (!inFence && /^##\s/.test(lines[i])) break;
     out.push(lines[i]);
   }
   return out.join('\n');

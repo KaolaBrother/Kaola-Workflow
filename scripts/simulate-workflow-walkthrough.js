@@ -610,6 +610,120 @@ function testClassifierFastScopeFenceCommentRed() {
   console.log('testClassifierFastScopeFenceCommentRed: PASSED');
 }
 
+// issue #215 T1a: a `## Heading` line inside a fenced code block within ## Scope must
+// NOT truncate the section slice. The boundary is h2-only (^##\s), so a fenced
+// `## Some Heading` line above a `- Write Set:` path no longer drops that path.
+// The candidate overlapping the write-set path must RED.
+// FAILING-FIRST: before the fence-aware fix, ## Some Heading closes the Scope slice
+// prematurely, dropping the Write Set path → verdict green (wrong).
+function testClassifierFastScopeFenceHeadingRed() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-classifier-fence-h-'));
+  try {
+    plantActiveFolder(tmp, 'fast-fence-heading', 208, null, 'active');
+    fs.writeFileSync(
+      path.join(tmp, 'kaola-workflow', 'fast-fence-heading', 'fast-summary.md'),
+      ['# Fast Summary: fast-fence-heading', '',
+        '## Status', 'IN_PROGRESS', '',
+        '## Scope', '```sh', '## Some Heading', '```',
+        '- Write Set: scripts/kaola-workflow-claim.js', '- Acceptance: node x', '',
+        '## Plan', 'stuff'].join('\n')
+    );
+    plantRoadmapIssue(tmp, 209, 'body: candidate also touches scripts/kaola-workflow-claim.js');
+    const result = runClassifierOffline(tmp, 209);
+    assert(result.verdict === 'red',
+      'issue #215 T1a: a ## heading inside a fenced block must not truncate ## Scope; Write Set below it must still be counted, got ' + result.verdict);
+    assert(result.reasoning && result.reasoning.includes('exact file path'),
+      'fence-heading red reasoning must mention exact file path; got: ' + result.reasoning);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log('testClassifierFastScopeFenceHeadingRed: PASSED');
+}
+
+// issue #215 T1b: a `~~~` line NESTED INSIDE a backtick fence (content, not opener),
+// followed by `## Heading` also inside the fence. Family-tracking keeps the fence open
+// on `~~~`; a naive toggle would close it and then see `## Heading` outside → truncate.
+// FAILING-FIRST: before the fence-aware fix, ## Heading (currently "outside" due to
+// naive toggle or plain-regex boundary) closes the Scope slice → verdict green (wrong).
+function testClassifierFastScopeFenceMixedMarkerRed() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-classifier-fence-m-'));
+  try {
+    plantActiveFolder(tmp, 'fast-fence-mixed', 210, null, 'active');
+    fs.writeFileSync(
+      path.join(tmp, 'kaola-workflow', 'fast-fence-mixed', 'fast-summary.md'),
+      ['# Fast Summary: fast-fence-mixed', '',
+        '## Status', 'IN_PROGRESS', '',
+        '## Scope', '```sh', '~~~', '## Heading', '```',
+        '- Write Set: scripts/kaola-workflow-claim.js', '- Acceptance: node x', '',
+        '## Plan', 'stuff'].join('\n')
+    );
+    plantRoadmapIssue(tmp, 211, 'body: candidate also touches scripts/kaola-workflow-claim.js');
+    const result = runClassifierOffline(tmp, 211);
+    assert(result.verdict === 'red',
+      'issue #215 T1b: a ## heading inside backtick fence (with nested ~~~) must not truncate ## Scope; Write Set below it must still be counted, got ' + result.verdict);
+    assert(result.reasoning && result.reasoning.includes('exact file path'),
+      'fence-mixed red reasoning must mention exact file path; got: ' + result.reasoning);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log('testClassifierFastScopeFenceMixedMarkerRed: PASSED');
+}
+
+// issue #215 T1c: the Write Set path lives INSIDE the fence. This is a discriminator
+// guard — in-fence paths must still be counted (pre-strip regression guard).
+// This test should PASS even before the source fix.
+function testClassifierFastScopeFenceInFencePathRed() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-classifier-fence-p-'));
+  try {
+    plantActiveFolder(tmp, 'fast-fence-inpath', 212, null, 'active');
+    fs.writeFileSync(
+      path.join(tmp, 'kaola-workflow', 'fast-fence-inpath', 'fast-summary.md'),
+      ['# Fast Summary: fast-fence-inpath', '',
+        '## Status', 'IN_PROGRESS', '',
+        '## Scope', '```sh', '- Write Set: scripts/kaola-workflow-claim.js', '```',
+        '- Acceptance: node x', '',
+        '## Plan', 'stuff'].join('\n')
+    );
+    plantRoadmapIssue(tmp, 213, 'body: candidate also touches scripts/kaola-workflow-claim.js');
+    const result = runClassifierOffline(tmp, 213);
+    assert(result.verdict === 'red',
+      'issue #215 T1c: a Write Set path inside a fenced block must still be counted; expected red, got ' + result.verdict);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log('testClassifierFastScopeFenceInFencePathRed: PASSED');
+}
+
+// issue #215 regression: an unterminated fence in a section BEFORE ## Scope must NOT
+// prevent sectionBody from finding ## Scope. The buggy locator (with fence-tracking)
+// stayed inFence=true after an unclosed fence in ## Status, skipped ## Scope, returned
+// '' → no Write Set → verdict green (wrong). The fix removes fence-tracking from the
+// locator loop so ## Scope is always found regardless of prior fence state.
+// FAILING-FIRST: against the buggy #215 locator this test returns green, not red.
+function testClassifierFastScopePreSectionUnclosedFenceRed() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-classifier-fence-pre-'));
+  try {
+    plantActiveFolder(tmp, 'fast-fence-pre', 214, null, 'active');
+    fs.writeFileSync(
+      path.join(tmp, 'kaola-workflow', 'fast-fence-pre', 'fast-summary.md'),
+      ['# Fast Summary: fast-fence-pre', '',
+        '## Status', '```sh', 'IN_PROGRESS',
+        '## Scope',
+        '- Write Set: scripts/kaola-workflow-claim.js', '- Acceptance: node x', '',
+        '## Plan', 'stuff'].join('\n')
+    );
+    plantRoadmapIssue(tmp, 215, 'body: candidate also touches scripts/kaola-workflow-claim.js');
+    const result = runClassifierOffline(tmp, 215);
+    assert(result.verdict === 'red',
+      'issue #215 regression: unclosed fence before ## Scope must not hide the section; expected red, got ' + result.verdict);
+    assert(result.reasoning && result.reasoning.includes('exact file path'),
+      'pre-section unclosed fence red reasoning must mention exact file path; got: ' + result.reasoning);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log('testClassifierFastScopePreSectionUnclosedFenceRed: PASSED');
+}
+
 function testClassifierDependsOnGate() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-classifier-depson-'));
   try {
@@ -4094,6 +4208,10 @@ async function main() {
     testClassifierFastScopeDisjointGreen();
     testClassifierFastScopeSectionIsolationGreen();
     testClassifierFastScopeFenceCommentRed();
+    testClassifierFastScopeFenceHeadingRed();
+    testClassifierFastScopeFenceMixedMarkerRed();
+    testClassifierFastScopeFenceInFencePathRed();
+    testClassifierFastScopePreSectionUnclosedFenceRed();
     testClassifierDependsOnGate();
     testProbeIssueStateOffline();
     testProbeIssueStateNullIssue();
