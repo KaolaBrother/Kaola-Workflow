@@ -14,6 +14,7 @@ const sinkMergeScript = path.join(repoRoot, 'scripts', 'kaola-workflow-sink-merg
 const sinkPrScript = path.join(repoRoot, 'scripts', 'kaola-workflow-sink-pr.js');
 const activeFoldersScript = path.join(repoRoot, 'scripts', 'kaola-workflow-active-folders.js');
 const closureAuditScript = path.join(repoRoot, 'scripts', 'kaola-workflow-closure-audit.js');
+const planValidatorScript = path.join(repoRoot, 'scripts', 'kaola-workflow-plan-validator.js'); // issue #227
 const hookScript = path.join(repoRoot, 'hooks', 'kaola-workflow-pre-commit.sh');
 const phantomAdvisorHook = path.join(repoRoot, 'hooks', 'kaola-workflow-phantom-advisor.sh');
 
@@ -580,6 +581,251 @@ function plantRoadmapIssue(root, issueNumber, body) {
     body,
     ''
   ].join('\n'));
+}
+
+// ===========================================================================
+// issue #227: adaptive-path cases. Each uses its own temp root and sets
+// KAOLA_ENABLE_ADAPTIVE explicitly so the toggle is deterministic regardless of
+// any local ~/.config/kaola-workflow/config.json. They exercise the committed
+// spine: claim toggle-guard, routeAdaptive resume, validator governance.
+// ===========================================================================
+
+function adaptiveTmp(slug) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-adaptive-' + slug + '-'));
+  fs.mkdirSync(path.join(tmp, 'kaola-workflow'), { recursive: true });
+  return tmp;
+}
+const ADAPTIVE_PLAN = [
+  '# Workflow Plan — issue #901', '',
+  '## Meta', 'labels: enhancement', '',
+  '## Nodes', '',
+  '| id | role | depends_on | declared_write_set | cardinality | shape |',
+  '|---|---|---|---|---|---|',
+  '| explore | code-explorer | — | — | 1 | sequence |',
+  '| impl | tdd-guide | explore | lib/foo.js | 1 | sequence |',
+  '| review | code-reviewer | impl | — | 1 | sequence |',
+  '| done | finalize | review | — | 1 | sequence |',
+  ''
+].join('\n');
+
+function plantFrozenPlan(root, project, planText) {
+  const dir = path.join(root, 'kaola-workflow', project);
+  fs.mkdirSync(dir, { recursive: true });
+  const planPath = path.join(dir, 'workflow-plan.md');
+  fs.writeFileSync(planPath, planText);
+  // freeze in place via the validator (stamps plan_hash)
+  const r = runNode(planValidatorScript, [planPath, '--freeze'], root);
+  assert(r.status === 0, 'plantFrozenPlan: freeze should exit 0, got ' + r.status + ' ' + r.stderr);
+  return planPath;
+}
+
+// (a) OFF + KAOLA_PATH=adaptive startup -> typed refusal in claimProject, no state.
+function testAdaptiveOffStartupRefusal() {
+  const tmp = adaptiveTmp('off-startup');
+  try {
+    plantRoadmapIssue(tmp, 901, '');
+    const result = runNode(claimScript, ['startup', '--target-issue', '901'], tmp,
+      { KAOLA_PATH: 'adaptive', KAOLA_ENABLE_ADAPTIVE: '0' });
+    const out = JSON.parse(result.stdout);
+    assert(out.verdict === 'workflow_path_refused',
+      'OFF + KAOLA_PATH=adaptive startup must be a typed refusal, got: ' + result.stdout);
+    assert(out.claim === 'none', 'refusal must not claim');
+    assert(!fs.existsSync(statePath(tmp, 'issue-901')), 'refusal must write no state');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptiveOffStartupRefusal: PASSED');
+}
+
+// (b) OFF + claim --workflowPath adaptive -> typed refusal (never silent downgrade).
+function testAdaptiveOffClaimRefusal() {
+  const tmp = adaptiveTmp('off-claim');
+  try {
+    const result = runNode(claimScript, ['claim', '--project', 'issue-902', '--workflowPath', 'adaptive'], tmp,
+      { KAOLA_ENABLE_ADAPTIVE: '0' });
+    const out = JSON.parse(result.stdout);
+    assert(out.status === 'workflow_path_refused',
+      'OFF + claim adaptive must refuse, got: ' + result.stdout);
+    assert(!fs.existsSync(statePath(tmp, 'issue-902')), 'refusal must write no state');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptiveOffClaimRefusal: PASSED');
+}
+
+// (c) OFF preserves the 2-way: fast still claims; a bogus path is also refused.
+function testAdaptiveOffPreservesTwoWay() {
+  const tmp = adaptiveTmp('off-twoway');
+  try {
+    const ok = JSON.parse(runNode(claimScript, ['claim', '--project', 'issue-903', '--workflowPath', 'fast'], tmp,
+      { KAOLA_ENABLE_ADAPTIVE: '0' }).stdout);
+    assert(ok.status === 'acquired', 'OFF must still allow fast, got: ' + JSON.stringify(ok));
+    const bogus = JSON.parse(runNode(claimScript, ['claim', '--project', 'issue-904', '--workflowPath', 'wizard'], tmp,
+      { KAOLA_ENABLE_ADAPTIVE: '0' }).stdout);
+    assert(bogus.status === 'workflow_path_refused', 'bogus workflow_path must be refused (whitelist), got: ' + JSON.stringify(bogus));
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptiveOffPreservesTwoWay: PASSED');
+}
+
+// (d) ON + KAOLA_PATH=adaptive startup -> acquired, state routes to plan-run.
+function testAdaptiveOnStartupAcquires() {
+  const tmp = adaptiveTmp('on-startup');
+  try {
+    plantRoadmapIssue(tmp, 905, '');
+    const out = JSON.parse(runNode(claimScript, ['startup', '--target-issue', '905'], tmp,
+      { KAOLA_PATH: 'adaptive', KAOLA_ENABLE_ADAPTIVE: '1' }).stdout);
+    assert(out.claim === 'acquired', 'ON + adaptive startup must acquire, got: ' + JSON.stringify(out));
+    const state = read(statePath(tmp, 'issue-905'));
+    assert(state.includes('workflow_path: adaptive'), 'state must record workflow_path: adaptive');
+    assert(state.includes('next_command: /kaola-workflow-plan-run issue-905'), 'state must route to plan-run, got:\n' + state);
+    assert(state.includes('next_skill: kaola-workflow-plan-run issue-905'), 'state must route to plan-run skill');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptiveOnStartupAcquires: PASSED');
+}
+
+// (e) routeAdaptive: a frozen plan resumes to plan-run, ahead of the phaseN ladder.
+function testAdaptiveResumeFromFrozenPlan() {
+  const tmp = adaptiveTmp('resume-frozen');
+  try {
+    plantFrozenPlan(tmp, 'issue-906', ADAPTIVE_PLAN);
+    const result = runNode(repairScript, ['issue-906'], tmp);
+    assert(result.status === 0, 'repair should exit 0, got ' + result.status + ' ' + result.stderr);
+    assert(result.stdout.includes('/kaola-workflow-plan-run issue-906'),
+      'frozen plan must resume to plan-run, got:\n' + result.stdout);
+    const state = read(statePath(tmp, 'issue-906'));
+    assert(state.includes('workflow_path: adaptive'), 'repaired state must be adaptive');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptiveResumeFromFrozenPlan: PASSED');
+}
+
+// (f) routeAdaptive: a tampered plan is a typed refusal — never a phaseN fallback.
+function testAdaptiveResumeTamperedTypedRefusal() {
+  const tmp = adaptiveTmp('resume-tampered');
+  try {
+    const planPath = plantFrozenPlan(tmp, 'issue-907', ADAPTIVE_PLAN);
+    fs.writeFileSync(planPath, read(planPath).replace('lib/foo.js', 'lib/bar.js')); // mutate after freeze
+    const result = runNode(repairScript, ['issue-907'], tmp);
+    assert(/typed refusal/i.test(result.stdout), 'tampered plan must be a typed refusal, got:\n' + result.stdout);
+    assert(!/kaola-workflow-phase\d/.test(result.stdout), 'tampered plan must NOT fall back to a phaseN command');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptiveResumeTamperedTypedRefusal: PASSED');
+}
+
+// (g) routeAdaptive: an unparseable plan is a typed refusal.
+function testAdaptiveResumeUnparseableTypedRefusal() {
+  const tmp = adaptiveTmp('resume-unparseable');
+  try {
+    writeProject(tmp, 'issue-908', { 'workflow-plan.md': '# garbage\nno nodes table\n' });
+    const result = runNode(repairScript, ['issue-908'], tmp);
+    assert(/typed refusal/i.test(result.stdout), 'unparseable plan must be a typed refusal, got:\n' + result.stdout);
+    assert(!/kaola-workflow-phase\d/.test(result.stdout), 'unparseable plan must NOT fall back to phaseN');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptiveResumeUnparseableTypedRefusal: PASSED');
+}
+
+// (h) toggle gates SELECTION only: an in-flight adaptive project resumes via
+// `claim resume` to plan-run even after the switch is flipped OFF (toggle-agnostic).
+function testAdaptiveResumeAfterFlipOff() {
+  const tmp = adaptiveTmp('resume-flipoff');
+  try {
+    writeProject(tmp, 'issue-909', {
+      'workflow-state.md': [
+        'name: issue-909', 'issue_number: 909', 'status: active',
+        'phase: adaptive', 'workflow_path: adaptive', 'next_command:', ''
+      ].join('\n')
+    });
+    const out = JSON.parse(runNode(claimScript, ['resume'], tmp, { KAOLA_ENABLE_ADAPTIVE: '0' }).stdout);
+    assert(out.resumed === true, 'in-flight adaptive must resume after flip OFF');
+    assert(out.next_command === '/kaola-workflow-plan-run issue-909',
+      'adaptive resume must emit plan-run (not phaseN) even with switch OFF, got: ' + out.next_command);
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptiveResumeAfterFlipOff: PASSED');
+}
+
+// (i) consent-halt surfaces on resume rather than re-dispatching.
+function testAdaptiveConsentHaltSurfaces() {
+  const tmp = adaptiveTmp('consent-halt');
+  try {
+    plantFrozenPlan(tmp, 'issue-910', ADAPTIVE_PLAN);
+    fs.writeFileSync(statePath(tmp, 'issue-910'), [
+      'name: issue-910', 'status: active', 'workflow_path: adaptive',
+      'escalated_to_full: consent', ''
+    ].join('\n'));
+    const result = runNode(repairScript, ['issue-910'], tmp);
+    assert(result.stdout.includes('/kaola-workflow-plan-run issue-910'), 'consent-halt still routes to plan-run');
+    const state = read(statePath(tmp, 'issue-910'));
+    assert(state.includes('consent-halt-surface'), 'consent-halt must be surfaced in the step, got:\n' + state);
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptiveConsentHaltSurfaces: PASSED');
+}
+
+// (j) validator governance: auto-run / ask / typed-refusal over real plan fixtures.
+function validatePlanFixture(tmp, nodesRows, labels) {
+  const planPath = path.join(tmp, 'plan.md');
+  const meta = labels !== undefined ? ['## Meta', 'labels: ' + labels.join(', '), ''] : [];
+  fs.writeFileSync(planPath, ['# Plan', ''].concat(meta).concat([
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+  ]).concat(nodesRows).concat(['']).join('\n'));
+  return JSON.parse(runNode(planValidatorScript, [planPath, '--json'], tmp).stdout);
+}
+function testAdaptiveValidatorGovernance() {
+  const tmp = adaptiveTmp('validator-gov');
+  try {
+    // sequential low-risk -> auto-run
+    let v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| impl | tdd-guide | explore | lib/foo.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'in-grammar' && v.decision === 'auto-run', 'sequential low-risk must auto-run, got: ' + JSON.stringify(v));
+
+    // write-role fan-out (disjoint) -> in-grammar but ASK (blast radius)
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| api | tdd-guide | explore | api/x.js | 1 | fanout(impl) |',
+      '| cli | tdd-guide | explore | cli/y.js | 1 | fanout(impl) |',
+      '| review | code-reviewer | api,cli | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'in-grammar' && v.decision === 'ask', 'write-role fan-out must ask, got: ' + JSON.stringify(v));
+
+    // post-dominance leak (doc-updater side branch) -> typed refusal
+    v = validatePlanFixture(tmp, [
+      '| impl | tdd-guide | — | lib/foo.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| doc | doc-updater | impl | — | 1 | sequence |',
+      '| done | finalize | review,doc | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse', 'post-dominance leak must refuse, got: ' + JSON.stringify(v));
+
+    // non-disjoint write-role fan-out -> typed refusal (demotion)
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| a | tdd-guide | explore | api/x.js | 1 | fanout(impl) |',
+      '| b | tdd-guide | explore | api/y.js | 1 | fanout(impl) |',
+      '| review | code-reviewer | a,b | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse', 'non-disjoint fan-out must refuse, got: ' + JSON.stringify(v));
+
+    // sensitive label without security-reviewer -> typed refusal (G2)
+    v = validatePlanFixture(tmp, [
+      '| impl | tdd-guide | — | lib/foo.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], ['security']);
+    assert(v.result === 'refuse', 'sensitive plan without security-reviewer must refuse (G2), got: ' + JSON.stringify(v));
+
+    // read-only fan-out (adversarial-verifier skeptics) -> auto-run (not clamped to 1, zero blast radius)
+    v = validatePlanFixture(tmp, [
+      '| claim | planner | — | — | 1 | sequence |',
+      '| s1 | adversarial-verifier | claim | — | 1 | fanout(sk) |',
+      '| s2 | adversarial-verifier | claim | — | 1 | fanout(sk) |',
+      '| s3 | adversarial-verifier | claim | — | 1 | fanout(sk) |',
+      '| done | finalize | s1,s2,s3 | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'in-grammar' && v.decision === 'auto-run', 'read-only fan-out must auto-run (zero blast radius), got: ' + JSON.stringify(v));
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptiveValidatorGovernance: PASSED');
 }
 
 function runClassifierOffline(tmp, issueNumber) {
@@ -4833,6 +5079,17 @@ async function main() {
     testWatchPrAbandonedClosureInvariantsClean();
     testClaimReclaimsStatelessOrphanDir();
     testPatchBranchGuards();
+    // issue #227 — adaptive path
+    testAdaptiveOffStartupRefusal();
+    testAdaptiveOffClaimRefusal();
+    testAdaptiveOffPreservesTwoWay();
+    testAdaptiveOnStartupAcquires();
+    testAdaptiveResumeFromFrozenPlan();
+    testAdaptiveResumeTamperedTypedRefusal();
+    testAdaptiveResumeUnparseableTypedRefusal();
+    testAdaptiveResumeAfterFlipOff();
+    testAdaptiveConsentHaltSurfaces();
+    testAdaptiveValidatorGovernance();
     console.log('Workflow walkthrough simulation passed');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
