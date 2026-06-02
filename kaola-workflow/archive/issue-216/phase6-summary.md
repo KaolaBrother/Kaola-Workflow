@@ -46,13 +46,13 @@ DOCKED — see `.cache/doc-docking.md`
 #216 can close. LOW follow-up is pre-existing and out of scope. No follow-up issues needed unless user requests. Advisor consulted (`.cache/advisor-closure.md`).
 
 ## Commit And Push
-pending final Git gate
+Committed 4c20669 on workflow/issue-216, merged to main (now at 4c20669), pushed to origin. Branch deleted.
 
 ## GitHub Issue
-pending close
+Closed — KaolaBrother/Kaola-Workflow#216.
 
 ## Roadmap
-updated (issue-216.md deleted, ROADMAP.md regenerated)
+Updated — issue-216 per-issue file removed, ROADMAP.md regenerated (no active work).
 
 ## Archive
 kaola-workflow/archive/issue-216/
@@ -65,8 +65,8 @@ kaola-workflow/archive/issue-216/
 | closure advisor gate | invoked | .cache/advisor-closure.md | |
 | final-validation fix executors | N/A | | No final validation failures |
 | roadmap refresh | invoked | kaola-workflow/ROADMAP.md | |
-| archive completed folder | pending | | runs in Step 8b |
-| final commit and push | ready | git status/git diff/upstream check | final gate runs after this file is committed |
+| archive completed folder | invoked | kaola-workflow/archive/issue-216/ | cmdFinalize archived on feature branch |
+| final commit and push | invoked | commit 4c20669, merged to main, pushed, branch deleted | |
 
 ## Status
 READY FOR FINAL GIT GATE
