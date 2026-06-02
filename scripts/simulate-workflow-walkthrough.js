@@ -4300,6 +4300,167 @@ function testContractValidatorMissingTag() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Issue #223 — three lifecycle fixes (tests written first, RED before fixes)
+// ---------------------------------------------------------------------------
+
+// Test 1: watch-pr CLOSED path must NOT fire roadmap invariants when archive=abandoned
+function testWatchPrAbandonedClosureInvariantsClean() {
+  // #13 regression: checkClosureInvariants fires roadmap-source-absent +
+  // roadmap-mirror-clean even when the PR was CLOSED (archive=abandoned), because
+  // archiveProjectDir skips roadmap cleanup for 'abandoned'. Fix: skip the roadmap
+  // invariant block when receipt.archive === 'abandoned'.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-watchpr-abandoned-inv-'));
+  const binDir = path.join(tmp, 'bin');
+  try {
+    initGitRepo(tmp);
+    // Plant a sink:pr folder for issue 920 with roadmap source + mirror line present
+    plantActiveFolder(tmp, 'issue-920', 920, null);
+    plantRoadmapIssue(tmp, 920, '');
+    // Generate ROADMAP.md so it contains #920
+    const genResult = spawnSync(process.execPath, [roadmapScript, 'generate'], {
+      cwd: tmp, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }
+    });
+    assert(genResult.status === 0, 'roadmap generate must exit 0\nstderr: ' + genResult.stderr);
+    const roadmapMirrorPath = path.join(tmp, 'kaola-workflow', 'ROADMAP.md');
+    assert(
+      fs.readFileSync(roadmapMirrorPath, 'utf8').includes('#920'),
+      'ROADMAP.md must contain #920 before watch-pr'
+    );
+    // Patch workflow-state.md to sink:pr with a fake pr_url
+    const stateFilePath = path.join(tmp, 'kaola-workflow', 'issue-920', 'workflow-state.md');
+    let state = fs.readFileSync(stateFilePath, 'utf8');
+    state = state.replace(/^sink:\s*.*$/m, 'sink: pr');
+    if (!state.match(/^pr_url:/m)) state += 'pr_url: https://github.com/test/repo/pull/920\n';
+    fs.writeFileSync(stateFilePath, state);
+    // gh shim: PR state is CLOSED; label edit succeeds (so claim_label_removed = removed)
+    fs.mkdirSync(binDir, { recursive: true });
+    writeShimFiles(path.join(binDir, 'gh'), [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('pr view')) { process.stdout.write('{\"state\":\"CLOSED\",\"number\":920}\\n'); }",
+      "else if (a.includes('issue edit') && a.includes('--remove-label')) { process.stdout.write('{}\\n'); }",
+      "else if (a.includes('issue comment')) { process.stdout.write('{}\\n'); }",
+      "else { process.stdout.write('{}\\n'); }"
+    ]);
+    const result = runClaimOnline(['watch-pr'], tmp, binDir);
+    assert(
+      Array.isArray(result.cleanups) && result.cleanups.length > 0,
+      'watch-pr must emit cleanups for CLOSED PR, got: ' + JSON.stringify(result)
+    );
+    const cleanup = result.cleanups[0];
+    assert(
+      cleanup.receipt && cleanup.receipt.archive === 'abandoned',
+      'cleanups[0].receipt.archive must be abandoned, got: ' + JSON.stringify(cleanup.receipt)
+    );
+    assert(
+      cleanup.closure_invariants && cleanup.closure_invariants.ok === true,
+      'cleanups[0].closure_invariants.ok must be true for abandoned PR (pre-fix: false with roadmap violations), got: ' + JSON.stringify(cleanup.closure_invariants)
+    );
+    console.log('testWatchPrAbandonedClosureInvariantsClean: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// Test 2: claimProject must reclaim a stateless orphan dir (no workflow-state.md)
+// and still refuse a dir that has an active workflow-state.md.
+function testClaimReclaimsStatelessOrphanDir() {
+  // #14 regression: EEXIST always returns target_occupied even when the dir has
+  // no workflow-state.md (crash between mkdir and writeState). Fix: check for
+  // stateFile existence in the EEXIST branch; fall through if absent.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-claim-orphan-'));
+  try {
+    // Positive: orphan dir (mkdir succeeded, writeState never ran)
+    const orphanDir = path.join(tmp, 'kaola-workflow', 'issue-888');
+    fs.mkdirSync(orphanDir, { recursive: true });
+    assert(!fs.existsSync(path.join(orphanDir, 'workflow-state.md')), 'fixture: no state file should exist');
+    const result = json(runNode(claimScript, ['claim', '--project', 'issue-888'], tmp));
+    assert(
+      result.status === 'acquired',
+      '#14 POSITIVE: orphan dir must be reclaimed (status acquired), got: ' + JSON.stringify(result)
+    );
+    assert(
+      fs.existsSync(path.join(tmp, 'kaola-workflow', 'issue-888', 'workflow-state.md')),
+      '#14 POSITIVE: workflow-state.md must be written after reclaim'
+    );
+    // Negative boundary: dir with a non-active (status: closed) state file must return
+    // target_occupied. readActiveFolders skips inactive status, so claimProject reaches
+    // the EEXIST guard added by fix #14 and checks existsSync(stateFile).
+    const occupied = path.join(tmp, 'kaola-workflow', 'issue-889');
+    fs.mkdirSync(occupied, { recursive: true });
+    fs.writeFileSync(path.join(occupied, 'workflow-state.md'),
+      ['# Kaola-Workflow State', '', '## Project', 'name: issue-889', 'status: closed', ''].join('\n'));
+    const result2 = json(runNode(claimScript, ['claim', '--project', 'issue-889'], tmp));
+    assert(
+      result2.status === 'target_occupied',
+      '#14 NEGATIVE: dir with non-active state file must return target_occupied, got: ' + JSON.stringify(result2)
+    );
+    console.log('testClaimReclaimsStatelessOrphanDir: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// Test 3: cmdPatchBranch must guard against non-existent projects and unsafe names
+function testPatchBranchGuards() {
+  // #15 regression: patch-branch writes state for any project name including
+  // non-existent and path-traversal names, creating arbitrary dirs. Fix: assert
+  // isSafeName and activeByProject before updateState.
+
+  // (a) ghost project: non-existent project → exit non-zero, dir not created
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-patchbranch-ghost-'));
+    try {
+      const before = json(runNode(claimScript, ['status'], tmp));
+      const countBefore = before.count;
+      const raw = spawnSync(process.execPath, [claimScript, 'patch-branch', '--project', 'ghost-proj', '--branch', 'workflow/ghost'], {
+        cwd: tmp, encoding: 'utf8',
+        env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }
+      });
+      assert(raw.status !== 0, '#15(a): patch-branch ghost-proj must exit non-zero, got exit ' + raw.status);
+      assert(!fs.existsSync(path.join(tmp, 'kaola-workflow', 'ghost-proj')), '#15(a): ghost-proj dir must not be created');
+      const after = json(runNode(claimScript, ['status'], tmp));
+      assert(after.count === countBefore, '#15(a): active count must not change');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+
+  // (b) unsafe name: path-traversal project → exit 1 with 'unsafe project name'
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-patchbranch-escape-'));
+    try {
+      const raw = spawnSync(process.execPath, [claimScript, 'patch-branch', '--project', '../escape-poc', '--branch', 'workflow/escape'], {
+        cwd: tmp, encoding: 'utf8',
+        env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }
+      });
+      assert(raw.status === 1, '#15(b): patch-branch ../escape-poc must exit 1, got exit ' + raw.status);
+      assert(
+        raw.stderr.includes('unsafe project name'),
+        '#15(b): stderr must contain "unsafe project name", got: ' + raw.stderr
+      );
+      assert(!fs.existsSync(path.join(path.dirname(tmp), 'escape-poc')), '#15(b): escape-poc must not be created outside kaola-workflow/');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+
+  // (c) positive: active project → patch-branch succeeds
+  {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-patchbranch-active-'));
+    try {
+      plantActiveFolder(tmp, 'issue-63', 63, null);
+      const result = json(runNode(claimScript, ['patch-branch', '--project', 'issue-63', '--branch', 'workflow/issue-63'], tmp));
+      assert(result.patched === true, '#15(c): patch-branch on active project must return patched:true');
+      assert(result.branch === 'workflow/issue-63', '#15(c): branch must match');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+
+  console.log('testPatchBranchGuards: PASSED');
+}
+
 async function main() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-active-folders-'));
   try {
@@ -4405,6 +4566,9 @@ async function main() {
     testClosureAuditPrFolderTimeout();
     testContractValidatorOfflineSkip();
     testContractValidatorMissingTag();
+    testWatchPrAbandonedClosureInvariantsClean();
+    testClaimReclaimsStatelessOrphanDir();
+    testPatchBranchGuards();
     console.log('Workflow walkthrough simulation passed');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });

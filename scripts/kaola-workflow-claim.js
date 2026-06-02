@@ -404,8 +404,12 @@ function claimProject(root, args) {
   try {
     fs.mkdirSync(dir);
   } catch (e) {
-    if (e.code === 'EEXIST') return { status: 'target_occupied', issue: issueNumber, project, reasoning: 'local project folder exists' };
-    throw e;
+    if (e.code === 'EEXIST') {
+      if (fs.existsSync(stateFile(root, project))) {
+        return { status: 'target_occupied', issue: issueNumber, project, reasoning: 'local project folder exists' };
+      }
+      // orphaned stateless dir (crash between mkdir and writeState) — fall through and reclaim
+    } else { throw e; }
   }
 
   const branch = buildBranchName(issueNumber, project, args.branch);
@@ -574,7 +578,8 @@ function archiveProjectDir(root, project, statusValue, suffix) {
 function checkClosureInvariants(root, receipt, archiveDest) {
   const violations = [];
   const issueNumber = receipt.issue_number;
-  if (Number.isInteger(issueNumber) && issueNumber > 0) {
+  const abandoned = receipt && receipt.archive === 'abandoned';
+  if (!abandoned && Number.isInteger(issueNumber) && issueNumber > 0) {
     const roadmapFile = path.join(root, 'kaola-workflow', '.roadmap', 'issue-' + issueNumber + '.md');
     if (fs.existsSync(roadmapFile)) {
       const inv = closureContract.CLOSURE_INVARIANTS.find(i => i.id === 'roadmap-source-absent');
@@ -736,6 +741,8 @@ function cmdPatchBranch() {
   const args = parseArgs(process.argv.slice(3));
   assert(args.project, '--project required');
   assert(args.branch, '--branch required');
+  assert(isSafeName(args.project), 'unsafe project name');
+  assert(activeByProject(root, args.project), 'patch-branch requires an existing active folder');
   updateState(root, args.project, content => {
     if (/^branch:/m.test(content)) return content.replace(/^branch:.*$/m, 'branch: ' + args.branch);
     return content + '\n## Sink\nbranch: ' + args.branch + '\n';

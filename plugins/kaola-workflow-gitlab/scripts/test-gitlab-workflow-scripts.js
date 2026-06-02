@@ -331,6 +331,127 @@ function testGitLabRoadmapValidateRemote() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Issue #223 — three lifecycle fixes, gitlab edition
+// ---------------------------------------------------------------------------
+
+// Test 1: watch-mr CLOSED path must NOT fire roadmap invariants when archive=abandoned
+function testWatchMrAbandonedClosureInvariantsClean() {
+  const root = tempRoot('kw-gl-watchmr-abandoned-inv-');
+  try {
+    initGitRepo(root);
+    writeState(root, 'issue-920', 920, 'mr_iid: 920');
+    makeMrSinkFolder(root, 'issue-920', 920);
+    plantClosureRoadmapSource(root, 920);
+    // Generate ROADMAP.md so it contains #920
+    roadmap.regenerateRoadmap(root);
+    assert(fs.readFileSync(path.join(root, 'kaola-workflow', 'ROADMAP.md'), 'utf8').includes('#920'),
+      'ROADMAP.md must contain #920 before watch-mr');
+    const result = withForge({
+      viewMergeRequest(mrIid) {
+        assert.strictEqual(mrIid, 920);
+        return { mr_iid: 920, state: 'closed' };
+      },
+      updateIssue() { return null; },
+      createIssueNote() { return { id: 9003 }; }
+    }, () => claim.watchMergeRequests(root, {}));
+    assert.strictEqual(result.watched, 1, 'watched must be 1');
+    assert(Array.isArray(result.cleanups) && result.cleanups.length > 0,
+      'cleanups must have an entry for CLOSED MR, got: ' + JSON.stringify(result));
+    const cleanup = result.cleanups[0];
+    assert(cleanup.receipt && cleanup.receipt.archive === 'abandoned',
+      'receipt.archive must be abandoned, got: ' + JSON.stringify(cleanup.receipt));
+    assert(cleanup.closure_invariants && cleanup.closure_invariants.ok === true,
+      'closure_invariants.ok must be true for abandoned MR, got: ' + JSON.stringify(cleanup.closure_invariants));
+    console.log('testWatchMrAbandonedClosureInvariantsClean: PASSED');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+// Test 2: claimProject must reclaim a stateless orphan dir (no workflow-state.md)
+function testGitlabClaimReclaimsStatelessOrphanDir() {
+  const root = tempRoot('kw-gl-claim-orphan-');
+  try {
+    // Positive: orphan dir with no state file
+    const orphanDir = path.join(root, 'kaola-workflow', 'issue-888');
+    fs.mkdirSync(orphanDir, { recursive: true });
+    assert(!fs.existsSync(path.join(orphanDir, 'workflow-state.md')), 'fixture: no state file should exist');
+    const result = withForge({
+      discoverProject() { return { project_id: null, path_with_namespace: null, web_url: null }; }
+    }, () => claim.claimProject(root, { project: 'issue-888' }));
+    assert.strictEqual(result.status, 'acquired',
+      '#14 POSITIVE: orphan dir must be reclaimed, got: ' + JSON.stringify(result));
+    assert(fs.existsSync(path.join(root, 'kaola-workflow', 'issue-888', 'workflow-state.md')),
+      '#14 POSITIVE: workflow-state.md must be written after reclaim');
+    // Negative boundary: dir with non-active (status: closed) state file must return
+    // target_occupied. readActiveFolders skips inactive status, so claimProject reaches
+    // the EEXIST guard added by fix #14 and checks existsSync(stateFile).
+    const occupied = path.join(root, 'kaola-workflow', 'issue-889');
+    fs.mkdirSync(occupied, { recursive: true });
+    fs.writeFileSync(path.join(occupied, 'workflow-state.md'),
+      ['# Kaola-Workflow State', '', '## Project', 'name: issue-889', 'status: closed', ''].join('\n'));
+    const result2 = withForge({
+      discoverProject() { return { project_id: null, path_with_namespace: null, web_url: null }; }
+    }, () => claim.claimProject(root, { project: 'issue-889' }));
+    assert.strictEqual(result2.status, 'target_occupied',
+      '#14 NEGATIVE: dir with non-active state file must return target_occupied, got: ' + JSON.stringify(result2));
+    console.log('testGitlabClaimReclaimsStatelessOrphanDir: PASSED');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+// Test 3: cmdPatchBranch must guard against non-existent projects and unsafe names
+function testGitlabPatchBranchGuards() {
+  // (a) ghost project: non-existent project → exit non-zero, dir not created
+  {
+    const root = tempRoot('kw-gl-patchbranch-ghost-');
+    try {
+      const r = spawnSync(process.execPath, [claimScript, 'patch-branch', '--project', 'ghost-proj', '--branch', 'workflow/ghost'], {
+        cwd: root, encoding: 'utf8',
+        env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }
+      });
+      assert(r.status !== 0, '#15(a): patch-branch ghost-proj must exit non-zero, got exit ' + r.status);
+      assert(!fs.existsSync(path.join(root, 'kaola-workflow', 'ghost-proj')), '#15(a): ghost-proj dir must not be created');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+  // (b) unsafe name → exit 1 with 'unsafe project name'
+  {
+    const root = tempRoot('kw-gl-patchbranch-escape-');
+    try {
+      const r = spawnSync(process.execPath, [claimScript, 'patch-branch', '--project', '../escape-poc', '--branch', 'workflow/escape'], {
+        cwd: root, encoding: 'utf8',
+        env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }
+      });
+      assert(r.status === 1, '#15(b): patch-branch ../escape-poc must exit 1, got exit ' + r.status);
+      assert(r.stderr.includes('unsafe project name'),
+        '#15(b): stderr must contain "unsafe project name", got: ' + r.stderr);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+  // (c) positive: active project → patch-branch succeeds
+  {
+    const root = tempRoot('kw-gl-patchbranch-active-');
+    try {
+      writeState(root, 'issue-63', 63, '');
+      const r = spawnSync(process.execPath, [claimScript, 'patch-branch', '--project', 'issue-63', '--branch', 'workflow/gitlab-issue-63'], {
+        cwd: root, encoding: 'utf8',
+        env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }
+      });
+      assert.strictEqual(r.status, 0, '#15(c): patch-branch on active project must exit 0, stderr: ' + r.stderr);
+      const out = JSON.parse(r.stdout.trim());
+      assert.strictEqual(out.patched, true, '#15(c): must return patched:true');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+  console.log('testGitlabPatchBranchGuards: PASSED');
+}
+
 async function testGitLabRoadmapInitIssueExclusiveAndUpdate() {
   const root = tempRoot('kw-gl-roadmap-init-');
   try {
@@ -2919,6 +3040,9 @@ testGitlabClassifyIssueResidualEmptyExit0();
 testGitlabClassifyIssueResidualNonJsonExit0();
 testGitlabCmdClassifyResidualEmptyExit0();
 testGitlabCmdClassifyResidualNonJsonExit0();
+testWatchMrAbandonedClosureInvariantsClean();
+testGitlabClaimReclaimsStatelessOrphanDir();
+testGitlabPatchBranchGuards();
 
 testGitLabRoadmapInitIssueExclusiveAndUpdate()
   .then(() => {
