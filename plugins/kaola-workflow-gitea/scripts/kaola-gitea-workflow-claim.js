@@ -2,10 +2,23 @@
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const forge = require('./kaola-gitea-forge');
 const classifier = require('./kaola-gitea-workflow-classifier');
+// issue #227 (adaptive path): forge-neutral constants + toggle resolution.
+const adaptiveSchema = require('./kaola-workflow-adaptive-schema');
+
+// Read the shared global config (read-only; never creates the file). Returns {} on any
+// error so the strict `=== true` on-test in resolveEnableAdaptive falls to OFF.
+function readAdaptiveConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(os.homedir(), ...adaptiveSchema.CONFIG_REL_PATH), 'utf8'));
+  } catch (_) {
+    return {};
+  }
+}
 const {
   field,
   getRoot,
@@ -227,6 +240,11 @@ function discoverProjectSafe() {
 function writeState(root, data) {
   const workflowPath = data.workflow_path || 'full';
   const isFast = workflowPath === 'fast';
+  // issue #227: adaptive runs resume via the plan-run executor, not the phaseN ladder.
+  // Toggle-agnostic — an already-frozen plan must emit plan-run regardless of the switch.
+  const isAdaptive = workflowPath === adaptiveSchema.ADAPTIVE_PATH;
+  const adaptiveCommand = adaptiveSchema.PLAN_RUN_COMMAND + ' ' + data.project;
+  const adaptiveSkill = adaptiveSchema.PLAN_RUN_SKILL + ' ' + data.project;
   const lines = [
     '# Kaola-Workflow State',
     '',
@@ -235,20 +253,20 @@ function writeState(root, data) {
     'status: ' + (data.status || 'active'),
     '',
     '## Current Position',
-    'phase: ' + (isFast ? 'fast' : (data.phase || 1)),
-    'phase_name: ' + (isFast ? 'Fast' : (data.phase_name || 'Research')),
+    'phase: ' + (isFast ? 'fast' : isAdaptive ? 'adaptive' : (data.phase || 1)),
+    'phase_name: ' + (isFast ? 'Fast' : isAdaptive ? 'Adaptive' : (data.phase_name || 'Research')),
     'workflow_path: ' + workflowPath,
     'runtime: ' + (data.runtime || 'claude'),
     'step: ' + (data.step || 'start'),
-    'next_command: ' + (data.next_command || (isFast ? '/kaola-workflow-fast ' + data.project : '/kaola-workflow-phase1 ' + data.project)),
-    'next_skill: ' + (data.next_skill || (isFast ? 'kaola-workflow-fast ' + data.project : 'kaola-workflow-research ' + data.project)),
+    'next_command: ' + (data.next_command || (isFast ? '/kaola-workflow-fast ' + data.project : isAdaptive ? adaptiveCommand : '/kaola-workflow-phase1 ' + data.project)),
+    'next_skill: ' + (data.next_skill || (isFast ? 'kaola-workflow-fast ' + data.project : isAdaptive ? adaptiveSkill : 'kaola-workflow-research ' + data.project)),
     'main_session_role: orchestrator',
     'implementation_owner: N/A',
     'fix_owner: N/A',
     'inline_emergency_fallback_authorized: no',
     '',
     '## Pending Gates',
-    isFast ? '- fast-summary' : '- phase1-research',
+    isFast ? '- fast-summary' : isAdaptive ? '- workflow-plan' : '- phase1-research',
     '',
     '## Last Evidence',
     'phase_file: N/A',
@@ -361,6 +379,27 @@ function claimProject(root, args) {
   assert(isSafeName(project), 'unsafe project name');
   const existing = issueIid != null ? activeByIssue(root, issueIid) : activeByProject(root, project);
   if (existing) return { status: 'owned', issue: existing.issue_iid, project: existing.project, folder: existing };
+
+  // issue #227: the single shared toggle guard for NEW claims (covers cmdClaim and
+  // cmdStartup -> claimExplicitTarget). Whitelist {fast, full} when the adaptive switch
+  // is OFF, {fast, full, adaptive} when ON. An adaptive claim under an OFF switch is a
+  // TYPED REFUSAL (#44) — never a silent downgrade. Resume of a frozen plan does not
+  // pass here (the `existing` early-return handles re-claims), so this gates SELECTION only.
+  const requestedPath = args.workflowPath || process.env.KAOLA_PATH || 'full';
+  const adaptiveEnabled = adaptiveSchema.resolveEnableAdaptive(readAdaptiveConfig(), process.env);
+  if (!adaptiveSchema.isLegalWorkflowPath(requestedPath, adaptiveEnabled)) {
+    const legal = (adaptiveEnabled ? adaptiveSchema.WORKFLOW_PATHS : adaptiveSchema.WORKFLOW_PATHS_NO_ADAPTIVE).join(', ');
+    return {
+      status: 'workflow_path_refused',
+      claim: 'none',
+      issue: issueIid,
+      project,
+      reasoning: 'workflow_path "' + requestedPath + '" is not permitted (adaptive switch is ' +
+        (adaptiveEnabled ? 'ON' : 'OFF') + '); legal values: ' + legal +
+        '. Refusing to silently downgrade (#44).'
+    };
+  }
+
   if (issueIid != null) {
     const probe = probeIssueState(issueIid);
     if (probe.state === 'closed') {
@@ -484,10 +523,15 @@ function cmdPickNext() {
 
 function resumeFallbackCommand(root, folder) {
   let isFast = false;
+  let isAdaptive = false;
   try {
     const sf = path.join(root, 'kaola-workflow', folder.project, 'workflow-state.md');
-    isFast = /^(?:workflow_path|phase):\s*fast\s*$/m.test(fs.readFileSync(sf, 'utf8'));
+    const content = fs.readFileSync(sf, 'utf8');
+    isFast = /^(?:workflow_path|phase):\s*fast\s*$/m.test(content);
+    // issue #227: adaptive resumes via the plan-run executor, never the phaseN ladder. Toggle-agnostic.
+    isAdaptive = /^(?:workflow_path|phase):\s*adaptive\s*$/m.test(content);
   } catch (_) {}
+  if (isAdaptive) return adaptiveSchema.PLAN_RUN_COMMAND + ' ' + folder.project;
   return (isFast ? '/kaola-workflow-fast ' : '/kaola-workflow-phase' + (folder.phase || 1) + ' ') + folder.project;
 }
 

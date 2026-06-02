@@ -196,10 +196,12 @@ case "$FORGE" in
       kaola-gitea-workflow-classifier.js
       kaola-gitea-workflow-closure-audit.js
       kaola-gitea-workflow-compact-context.js
+      kaola-gitea-workflow-plan-validator.js
       kaola-gitea-workflow-repair-state.js
       kaola-gitea-workflow-roadmap.js
       kaola-gitea-workflow-sink-merge.js
       kaola-gitea-workflow-sink-pr.js
+      kaola-workflow-adaptive-schema.js
       kaola-workflow-resolve-agent-model.js
     )
     SUPPORT_HOOK_NAMES=(

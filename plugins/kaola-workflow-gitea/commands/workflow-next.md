@@ -80,38 +80,58 @@ Keyword matching is agent-level prose detection, not a bash conditional.
 
 ## Startup Step 0a-1 — Path Intent
 
-Before Step 0b, pick fast or full and export `KAOLA_PATH` if fast.
-The agent owns this judgment; scripts do not auto-pick. Precedence top-down — first match wins.
+Before Step 0b, pick the workflow path and export `KAOLA_PATH` if it is not full.
+The agent owns this judgment; scripts do not auto-pick. Precedence top-down — first
+match wins. These are exactly the five levels of the decision tree below.
 
-1. If `KAOLA_PATH` is already exported, honor it.
-   (Rationale: KAOLA_PATH is an explicit shell override; inferred intent
-   from prompt prose should not silently overrule it.)
-2. Else sniff the user's initial prompt (case-insensitive):
+1. **Adaptive switch gate (FIRST).** Read the switch: env `KAOLA_ENABLE_ADAPTIVE`
+   (`1`/`0`) overrides config `enable_adaptive` in
+   `~/.config/kaola-workflow/config.json`, default OFF. **If the switch is OFF,
+   `adaptive` is removed from the menu entirely** — evaluate only fast vs full,
+   exactly as today. `adaptive` can never fire when the switch is off.
+2. **Explicit `KAOLA_PATH`.** If already exported, honor it (`fast` | `full` |
+   `adaptive`). An explicit `KAOLA_PATH=full`/`=fast` is honored verbatim. A
+   `KAOLA_PATH=adaptive` under an OFF switch is a **typed refusal** in
+   `claimProject`, never a silent downgrade to full.
+3. **Prompt keywords** (case-insensitive):
    - fast triggers: "quick fix", "trivial", "one-line", "one line",
      "rename", "typo", "small change", "fast path", "fast mode"
    - full triggers: "thorough", "full review", "full path",
      "carefully", "all phases", "deep dive"
-   Tie or both match → prefer full.
-3. Else fetch the selected issue once:
+   - adaptive triggers: "fan out", "in parallel", "orchestrate", "compose",
+     "multiple subsystems" — **flag-only** (necessary-but-not-sufficient): an
+     adaptive keyword only *flags* `adaptive` as a candidate; the level-4 structure
+     rubric must then confirm. Keyword-only with no structure → full.
+   Tie, both match, or keyword-only adaptive without structure → prefer full.
+4. **Issue rubric.** Fetch the selected issue once:
    ```bash
    tea issues view "$KAOLA_TARGET_ISSUE" --output json
    ```
-   Judge against the fast-path eligibility contract in the Mid-Flight
-   Escalation section of `plugins/kaola-workflow-gitea/commands/kaola-workflow-fast.md`. Export
-   `KAOLA_PATH=fast` ONLY if all hold: the approach is unambiguous and mechanical (exactly one sensible way — not ≥ 2 materially-different viable approaches), ≤ 5 files in a single area, no new external deps, no public API/schema/migration change, no security/auth/encryption concern, no `depends-on:#N` label. ≥ 2 viable approaches is a design choice → stay on full.
-4. If the issue fetch fails for any reason (KAOLA_WORKFLOW_OFFLINE=1,
-   missing CLI, auth failure, network error), default to full.
-5. Default `full`. When in doubt, full.
+   Apply the fast rubric first: export `KAOLA_PATH=fast` ONLY if all hold — the
+   approach is unambiguous and mechanical (exactly one sensible way — not ≥ 2
+   materially-different viable approaches), ≤ 5 files in a single area, no new
+   external deps, no public API/schema/migration change, no security/auth/encryption
+   concern, no `depends-on:#N` label. If not fast, ask the **structure question**:
+   does a custom topology serve this task materially better than the linear path —
+   (a) multiple disjoint sub-areas that fan out, (b) several subsystems to research
+   in parallel, or (c) a non-standard verification shape the phase ladder cannot
+   express? Structure confirmed (≥ 1 holds) **and** switch ON → export
+   `KAOLA_PATH=adaptive`. Otherwise — including a flagged-but-unconfirmed adaptive
+   candidate, or a single coherent linear change however large → `full`.
+5. **Default `full`.** On fetch failure, offline, or any ambiguity — including
+   adaptive-vs-full unclear — choose full. When in doubt, full.
 
 State the chosen path and one-line reason aloud before Step 0b:
 
 ```text
 Path: fast (mechanical, single-area, 4 files)
 Path: full (≥2 viable approaches — design choice)
-Path: full (default — rubric ambiguous; prefer safety)
+Path: adaptive (3 disjoint sub-areas fan out — switch ON, structure confirmed)
+Path: full (adaptive keyword only, no structure — default)
 ```
 
-Bias toward full when in doubt. Fast false positives escalate cleanly via the
+Bias toward full when in doubt. A linear job in a DAG is just full with overhead;
+a custom graph must earn itself. Fast false positives escalate cleanly via the
 Fast Eligibility and Mid-Flight Escalation sections of `plugins/kaola-workflow-gitea/commands/kaola-workflow-fast.md`; false
 negatives only cost ceremony.
 
@@ -295,6 +315,7 @@ If missing or invalid, reconstruct:
 
 ```text
 phase6-summary.md exists -> workflow complete; show summary and stop
+workflow-plan.md exists -> /kaola-workflow-plan-run {project}   (adaptive; ahead of the phaseN ladder, toggle-agnostic — a tampered/unparseable plan is a typed refusal, never a phaseN fallback)
 phase5-review.md exists -> /kaola-workflow-phase6 {project}
 fast-summary.md status ESCALATED -> /kaola-workflow-phase1 {project}
 fast-summary.md exists -> /kaola-workflow-fast {project}
@@ -343,7 +364,7 @@ Current phase: {phase or unknown}
 Current step: {step from workflow-state.md or reconstructed}
 Pending gates: {list or none}
 Branch: {branch from Sink block in workflow-state.md, or TBD if not yet claimed}
-Workflow path: {fast|full — from KAOLA_PATH or Step 0a-1 judgment}
+Workflow path: {fast|full when the adaptive switch is OFF; fast|full|adaptive when ON — from KAOLA_PATH or Step 0a-1 judgment}
 Parallel decision: {green|yellow|red|blocked|target_unavailable|target_unverified|skipped — classifier verdict or "skipped" if offline/unavailable}
 Next command: {next_command}
 ```

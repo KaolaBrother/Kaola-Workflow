@@ -300,6 +300,58 @@ function testRepairFastEscalation() {
 testAuditAndRepairLabels();
 testRepairFastEscalation();
 
+// issue #227: adaptive-path port — toggle guard + routeAdaptive resume on the Gitea fork.
+function testGiteaAdaptive() {
+  const repairScript = path.join(root, 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-repair-state.js');
+  const valScript = path.join(root, 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-plan-validator.js');
+  const PLAN = [
+    '# Workflow Plan', '', '## Meta', 'labels: enhancement', '', '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+    '| e | code-explorer | — | — | 1 | sequence |',
+    '| i | tdd-guide | e | lib/x.js | 1 | sequence |',
+    '| r | code-reviewer | i | — | 1 | sequence |',
+    '| d | finalize | r | — | 1 | sequence |', ''
+  ].join('\n');
+  function spawnNode(script, args, cwd, env) {
+    return spawnSync(process.execPath, [script, ...args], {
+      cwd, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }, env || {})
+    });
+  }
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-adaptive-'));
+  try {
+    fs.mkdirSync(path.join(tmp, 'kaola-workflow'), { recursive: true });
+    let r = JSON.parse(spawnNode(claimScript, ['claim', '--project', 'issue-901', '--workflowPath', 'adaptive'], tmp, { KAOLA_ENABLE_ADAPTIVE: '0' }).stdout);
+    assert.strictEqual(r.status, 'workflow_path_refused', 'gitea: OFF + adaptive claim must be a typed refusal');
+    r = JSON.parse(spawnNode(claimScript, ['claim', '--project', 'issue-902', '--workflowPath', 'adaptive'], tmp, { KAOLA_ENABLE_ADAPTIVE: '1' }).stdout);
+    assert.strictEqual(r.status, 'acquired', 'gitea: ON + adaptive claim must acquire');
+    const claimedState = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'issue-902', 'workflow-state.md'), 'utf8');
+    assert.ok(/workflow_path: adaptive/.test(claimedState) && /next_command: \/kaola-workflow-plan-run issue-902/.test(claimedState),
+      'gitea: adaptive claim state must route to plan-run');
+
+    const pdir = path.join(tmp, 'kaola-workflow', 'issue-903');
+    fs.mkdirSync(pdir, { recursive: true });
+    const planPath = path.join(pdir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, PLAN);
+    assert.strictEqual(spawnNode(valScript, [planPath, '--freeze'], tmp).status, 0, 'gitea: plan freeze must exit 0');
+    assert.strictEqual(spawnNode(repairScript, ['issue-903'], tmp).status, 0, 'gitea: adaptive repair must exit 0');
+    const repairedState = fs.readFileSync(path.join(pdir, 'workflow-state.md'), 'utf8');
+    assert.ok(/next_command: \/kaola-workflow-plan-run issue-903/.test(repairedState), 'gitea: frozen plan must resume to plan-run');
+
+    const tdir = path.join(tmp, 'kaola-workflow', 'issue-904');
+    fs.mkdirSync(tdir, { recursive: true });
+    const tplan = path.join(tdir, 'workflow-plan.md');
+    fs.writeFileSync(tplan, PLAN);
+    spawnNode(valScript, [tplan, '--freeze'], tmp);
+    fs.writeFileSync(tplan, fs.readFileSync(tplan, 'utf8').replace('lib/x.js', 'lib/y.js'));
+    assert.ok(/typed refusal/.test(spawnNode(repairScript, ['issue-904'], tmp).stdout), 'gitea: tampered plan must be a typed refusal');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log('testGiteaAdaptive: PASSED');
+}
+testGiteaAdaptive();
+
 run('test-gitea-forge-helpers.js');
 run('test-gitea-workflow-scripts.js');
 run('test-gitea-sinks.js');
