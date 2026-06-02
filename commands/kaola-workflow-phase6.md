@@ -18,6 +18,18 @@ If `workflow_path: fast`:
   ```text
   Fast-path summary is not complete. Run /kaola-workflow-fast first.
   ```
+If `workflow_path: adaptive`:
+- `workflow-plan.md` must exist, be frozen (re-check `plan_hash`), and every
+  `## Node Ledger` row must be `complete` or `n/a`. Adaptive runs have no
+  `phase5-review.md`; Phase 6 anchors on the plan's completion state. Verify with:
+  ```text
+  node scripts/kaola-workflow-plan-validator.js kaola-workflow/{project}/workflow-plan.md --resume-check --json
+  ```
+  On corruption or an incomplete ledger, stop with a **typed refusal** (do not
+  proceed):
+  ```text
+  Adaptive plan is not complete or its plan_hash failed. Run /kaola-workflow-plan-run first.
+  ```
 If `workflow_path: full` (or absent):
 - `phase5-review.md` must exist with status `PASSED` or `PASSED WITH FOLLOW-UPS`. If missing, stop:
   ```text
