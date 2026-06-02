@@ -25,6 +25,8 @@ Issue selection is an agent decision, not a hidden script decision.
 - `scripts/kaola-workflow-claim.js` — claim, release/discard, status, patch-branch, watch-pr, bootstrap/startup, pick-next, resume, finalize, worktree-status, worktree-finalize subcommands; explicit-target validation via `claimExplicitTarget()` helper
 - `scripts/simulate-workflow-walkthrough.js` — integration test suite (hand-rolled assert, no framework)
 - `scripts/kaola-workflow-roadmap.js` — roadmap generation from GitHub issues
+- `scripts/kaola-workflow-plan-validator.js` — adaptive-path (#227) plan validator: closed-library + three-shape grammar + unique sink + post-dominance gates + caps + disjointness + risk-assessment governance (`--json`/`--freeze`/`--resume-check`); `plan_hash` lives inside `workflow-plan.md`. Toggle-agnostic.
+- `scripts/kaola-workflow-adaptive-schema.js` — adaptive-path forge-neutral constants + toggle resolution; byte-identical across all four editions (cross-edition drift anchor).
 
 ## Running Tests
 ```bash

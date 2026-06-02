@@ -2,6 +2,45 @@
 
 Document system boundaries, major components, data flow, and deployment shape.
 
+## Workflow Paths (fast / full / adaptive)
+
+Kaola-Workflow runs an issue through one of three macro-shapes, selected by agent
+judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — #44):
+
+- **fast** — single-pass Plan+Execute+Review (`fast-summary.md`); one fixed shape.
+- **full** — the fixed 6-phase ladder (P1→P6); the default and the answer to every doubt.
+- **adaptive** (issue #227, opt-in via the `enable_adaptive` switch) — the agent
+  **freely composes a task-shaped DAG** of role nodes inside a fixed lifecycle frame:
+
+  ```text
+  claim ──► branch / worktree ──► [ FREE DESIGN ] ──► Phase-6 sink
+  (atomic, classifier-checked)     agent composes      (close, archive,
+                                   the orchestration    roadmap regen)
+  ```
+
+  The agent owns the *middle* (how many explorers, whether to fan out `tdd-guide`
+  over disjoint sub-areas, extra review passes, ordering, bounded loops). The
+  **harness owns the frame and the computed gates**: the runtime-closed role
+  library + fixed models (`resolve-agent-model`), the three shapes
+  (sequence / fan-out / bounded loop), a unique `finalize` sink, **post-dominance**
+  gates (`code-reviewer` over every implement node; `security-reviewer` over every
+  sensitive node — computed as reachability-after-gate-removal, so they hold over
+  *any* topology), the caps, intra-issue write-set disjointness, and the durable
+  `workflow-plan.md` + `## Node Ledger` + `plan_hash` resume contract.
+
+  **Components.** `kaola-workflow-adapt` authors `workflow-plan.md`;
+  `kaola-workflow-plan-validator.js` proves it in-grammar + computes the governance
+  decision (low-risk → provisional auto-run; risky/uncertain → ask, fail-closed;
+  out-of-grammar → typed refusal) + freezes `plan_hash`; `kaola-workflow-plan-run`
+  executes the DAG node-by-node with a per-node checkpoint barrier
+  (`.cache → ledger → state-pointer`), a runtime risk re-scan that revokes a
+  provisional auto-run (halt for consent) when a write turns out sensitive, and a
+  quorum/decision step over read-only fan-out (e.g. `adversarial-verifier`
+  skeptics). `repair-state.js` `routeAdaptive` resumes by traversing the frozen plan
+  ahead of the phaseN ladder. The Phase-6 sink, claim/branch/worktree lifecycle, and
+  the nine canonical roles are **inherited unchanged** — only small adaptive-aware
+  touches are added. The switch gates selection only; resume is toggle-agnostic.
+
 ## Phase 6 Finalization and Sink Flow
 
 Phase 6 delivers completed work through one of two sink paths:
