@@ -451,4 +451,14 @@ assertIncludes(giteaNextCmd203, '`fast-summary.md` file, or a `workflow-state.md
 // reconstruction-ladder fast-path entry present.
 assertIncludes(giteaNextCmd203, 'fast-summary.md exists -> /kaola-workflow-fast');
 
+// issue #222: fast-path mid-flight escalation routing fix — Gitea parity
+for (const fastFile222 of [giteaFastCmd198, giteaFastSkill198]) {
+  assertIncludes(fastFile222, 'workflow_path: full');
+  assertIncludes(fastFile222, 'next_command: /kaola-workflow-phase1 {project}');
+  assertIncludes(fastFile222, 'next_skill: kaola-workflow-research {project}');
+  assertIncludes(fastFile222, 'status `ESCALATED` → escalation already committed');
+}
+assertBefore(giteaNextCmd203, 'fast-summary.md status ESCALATED -> /kaola-workflow-phase1', 'fast-summary.md exists -> /kaola-workflow-fast');
+assertIncludes(giteaNextSkill198, 'fast-summary.md status ESCALATED -> kaola-workflow-research');
+
 console.log('Kaola-Workflow Gitea contract validation passed');

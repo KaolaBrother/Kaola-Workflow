@@ -191,6 +191,73 @@ function testRepairFastPath(tmp) {
   assert(reconState.includes('next_skill: kaola-workflow-fast fast-recon'), 'reconstructed fast state must route to the fast skill');
 }
 
+function testRepairFastEscalation(tmp) {
+  // issue #222: repair-state must route an ESCALATED fast project to Phase 1 (full
+  // workflow), not back to the fast skill which would ENOENT on phase1-research.md.
+
+  // --- Assertion 1: ESCALATED fast → full/Phase1 ---
+  writeProject(tmp, 'fast-escalated', {
+    'workflow-state.md': [
+      '# Kaola-Workflow State',
+      '',
+      '## Project',
+      'name: fast-escalated',
+      'status: active',
+      '',
+      '## Current Position',
+      'phase: fast',
+      'phase_name: Fast',
+      'workflow_path: fast',
+      'next_command: /kaola-workflow-fast fast-escalated',
+      'next_skill: kaola-workflow-fast fast-escalated',
+      '',
+      '## Sink',
+      'branch: workflow/fast-escalated',
+      'sink: pr',
+      ''
+    ].join('\n'),
+    'fast-summary.md': '# Fast Summary: fast-escalated\n\n## Status\nESCALATED\n\n## Escalation\nescalated_to_full: approach_ambiguity — multiple viable approaches\n'
+  });
+  const escalated = runNode(repairScript, ['fast-escalated'], tmp);
+  assert(escalated.status === 0, 'repair should exit 0 for ESCALATED fast project, got: ' + escalated.status + ' stderr: ' + escalated.stderr);
+  const escalatedState = read(statePath(tmp, 'fast-escalated'));
+  assert(escalatedState.includes('workflow_path: full'), 'ESCALATED fast project must be rewritten to workflow_path: full');
+  assert(escalatedState.includes('next_command: /kaola-workflow-phase1 fast-escalated'), 'ESCALATED fast project must route to /kaola-workflow-phase1');
+  assert(escalatedState.includes('next_skill: kaola-workflow-research fast-escalated'), 'ESCALATED fast project must set next_skill to kaola-workflow-research');
+  assert(!escalatedState.includes('workflow_path: fast'), 'rewritten state must not retain workflow_path: fast');
+  assert(!escalatedState.includes('next_command: /kaola-workflow-fast'), 'rewritten state must not retain /kaola-workflow-fast command');
+
+  // --- Assertion 2 (negative control): non-ESCALATED fast → stays on /kaola-workflow-fast ---
+  writeProject(tmp, 'fast-inprogress', {
+    'fast-summary.md': '# Fast Summary: fast-inprogress\n\n## Status\nIN_PROGRESS\n'
+  });
+  const inProgress = runNode(repairScript, ['fast-inprogress'], tmp);
+  assert(inProgress.status === 0, 'repair should exit 0 for IN_PROGRESS fast project');
+  const inProgressState = read(statePath(tmp, 'fast-inprogress'));
+  assert(inProgressState.includes('next_command: /kaola-workflow-fast fast-inprogress'), 'IN_PROGRESS fast project must still route to /kaola-workflow-fast');
+  assert(!inProgressState.includes('workflow_path: full'), 'IN_PROGRESS fast project must not be redirected to full');
+
+  // --- Assertion 3 (precedence): phase1-research.md + ESCALATED fast-summary → phase2 wins ---
+  // phase1-research.md has priority over fast-summary.md in reconstruct() ordering.
+  // Provide a satisfied compliance table so route() crosses the phase boundary cleanly.
+  writeProject(tmp, 'fast-escalated-with-p1', {
+    'phase1-research.md': [
+      '# Phase 1 Research',
+      '',
+      '## Required Agent Compliance',
+      '| Requirement | Status | Evidence | Skip Reason |',
+      '|-------------|--------|----------|-------------|',
+      '| code-explorer | invoked | .cache/code-explorer.md | |',
+      ''
+    ].join('\n'),
+    'fast-summary.md': '# Fast Summary: fast-escalated-with-p1\n\n## Status\nESCALATED\n'
+  });
+  const withP1 = runNode(repairScript, ['fast-escalated-with-p1'], tmp);
+  assert(withP1.status === 0, 'repair should exit 0 when phase1-research.md and ESCALATED fast-summary coexist');
+  const withP1State = read(statePath(tmp, 'fast-escalated-with-p1'));
+  assert(withP1State.includes('next_command: /kaola-workflow-phase2 fast-escalated-with-p1'), 'phase1-research.md must take priority over ESCALATED fast-summary (monotonic recovery)');
+}
+
 function testRepairFastNoArgSingle() {
   // issue #201: no-argument repair-state must DISCOVER a project whose only active
   // artifact is fast-summary.md (no workflow-state.md, no numbered phase files) —
@@ -4658,6 +4725,7 @@ async function main() {
     testFinalize(tmp);
     testRepair(tmp);
     testRepairFastPath(tmp);
+    testRepairFastEscalation(tmp);
     testRepairFastNoArgSingle();
     testRepairFastNoArgAmbiguous();
     testHookSingleProjectGuard(tmp);

@@ -295,6 +295,7 @@ If missing or invalid, reconstruct:
 ```text
 phase6-summary.md exists -> workflow complete; show summary and stop
 phase5-review.md exists -> /kaola-workflow-phase6 {project}
+fast-summary.md status ESCALATED -> /kaola-workflow-phase1 {project}
 fast-summary.md exists -> /kaola-workflow-fast {project}
 phase4-progress.md exists:
   tasks pending/in_progress -> /kaola-workflow-phase4 {project}

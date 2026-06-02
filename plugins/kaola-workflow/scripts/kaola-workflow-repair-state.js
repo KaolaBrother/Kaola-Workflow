@@ -369,7 +369,13 @@ function reconstruct(root, workflowDir, project) {
   if (artifact(projectDir, 'phase3-plan.md')) return route(root, workflowDir, project, 4, 'phase3-plan.md', true);
   if (artifact(projectDir, 'phase2-ideation.md')) return route(root, workflowDir, project, 3, 'phase2-ideation.md', true);
   if (artifact(projectDir, 'phase1-research.md')) return route(root, workflowDir, project, 2, 'phase1-research.md', true);
-  if (artifact(projectDir, 'fast-summary.md')) return routeFast(root, workflowDir, project);
+  const fastSummaryPath = artifact(projectDir, 'fast-summary.md');
+  if (fastSummaryPath) {
+    if (fastSummaryStatus(readFile(fastSummaryPath)) === 'ESCALATED') {
+      return routeEscalatedToFull(root, workflowDir, project);
+    }
+    return routeFast(root, workflowDir, project);
+  }
 
   return { reason: 'no phase artifacts available for repair' };
 }
@@ -398,6 +404,38 @@ function route(root, workflowDir, project, phase, phaseFileName, crossesBoundary
     nextSkill: `${SKILLS[phase]} ${project}`,
     phaseFile,
     pendingGates: unresolved
+  };
+}
+
+// Escalated-fast reconstruction: fast-summary.md exists with status ESCALATED.
+// The fast skill already stopped and the project must resume on the full workflow
+// at Phase 1, not re-enter the fast skill (which would ENOENT on phase1-research.md
+// when crossing phase boundaries). Status is read from the ## Status section body
+// (first non-blank line), matching how kaola-workflow-fast-audit.js parses it.
+function fastSummaryStatus(content) {
+  const match = content.match(/^##\s+Status\s*$\n+([\s\S]*?)(?=\n##\s|$)/m);
+  if (!match) return '';
+  const lines = match[1].split('\n');
+  for (const line of lines) {
+    const t = line.trim();
+    if (t) return t.toUpperCase();
+  }
+  return '';
+}
+
+function routeEscalatedToFull(root, workflowDir, project) {
+  return {
+    root,
+    project,
+    phase: 1,
+    phaseName: PHASES[1],
+    workflowPath: 'full',
+    step: 'router-reconstructed',
+    task: 'N/A',
+    nextCommand: `/kaola-workflow-phase1 ${project}`,
+    nextSkill: `kaola-workflow-research ${project}`,
+    phaseFile: path.join(workflowDir, project, 'fast-summary.md'),
+    pendingGates: []
   };
 }
 

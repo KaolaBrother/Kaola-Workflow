@@ -18,6 +18,28 @@ substitute. Stop if scope exceeds fast-path bounds.
 
 Fast applies only to mechanical, single-area changes of ≤ 5 files with exactly one sensible approach; ≥ 2 materially-different viable approaches is a design choice that stays on full. Escalate (`escalated_to_full: <trigger> — <detail>`) on `approach_ambiguity`, scope past the declared write set by >1 file or the absolute backstop of 6, `test_thrash` (≥3), security/architecture/breaking-change, discovered dependency, or new external package.
 
+## Resume Detection
+
+If `fast-summary.md` exists with status `PASSED`, fast path is complete. Route to `kaola-workflow-finalize {project}`.
+
+Otherwise detect step:
+
+- `fast-summary.md` absent → `plan`
+- `fast-summary.md` has status `IN_PROGRESS` → `execute`
+- `fast-summary.md` has status `REVIEW` → `review`
+- `fast-summary.md` has status `ESCALATED` → escalation already committed; route to full workflow: `kaola-workflow-research {project}`
+
+## Mid-Flight Escalation
+
+On escalation:
+
+1. Rewrite `workflow-state.md` with `workflow_path: full`, `next_command: /kaola-workflow-phase1 {project}`, `next_skill: kaola-workflow-research {project}` so `/workflow-next` routes correctly on resume.
+2. Write `escalated_to_full: <trigger> — <detail>` to `workflow-state.md`.
+3. Write a brief escalation note to `fast-summary.md` with status `ESCALATED`.
+4. Stop and tell the user to re-run `kaola-workflow-next {project}`.
+
+Do not continue fast-path execution after writing the escalation field.
+
 ## Step 1 - Plan (planner)
 
 Ensure `kaola-workflow/{project}/.cache/` exists before invoking agents.

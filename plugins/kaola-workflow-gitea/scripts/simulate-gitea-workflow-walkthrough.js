@@ -239,7 +239,66 @@ function testAuditAndRepairLabels() {
   console.log('testAuditAndRepairLabels: PASSED');
 }
 
+function testRepairFastEscalation() {
+  const repairScript = path.join(root, 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-repair-state.js');
+
+  // --- Assertion 1: ESCALATED fast → full/Phase1 ---
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-repair-fast-esc-'));
+  try {
+    const projectDir = path.join(tmp, 'kaola-workflow', 'fast-esc');
+    fs.mkdirSync(projectDir, { recursive: true });
+    fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), [
+      '# Kaola-Workflow State',
+      '## Project',
+      'name: fast-esc',
+      'status: active',
+      '## Current Position',
+      'phase: fast',
+      'phase_name: Fast',
+      'workflow_path: fast',
+      'next_command: /kaola-workflow-fast fast-esc',
+      'next_skill: kaola-workflow-fast fast-esc',
+      ''
+    ].join('\n'));
+    fs.writeFileSync(path.join(projectDir, 'fast-summary.md'),
+      '# Fast Summary: fast-esc\n\n## Status\nESCALATED\n');
+
+    const result = spawnSync(process.execPath, [repairScript, 'fast-esc'], {
+      cwd: tmp,
+      encoding: 'utf8',
+      env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
+    });
+    assert.strictEqual(result.status, 0, 'gitea repair should exit 0 for ESCALATED fast, got: ' + result.status + ' stderr: ' + result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert.strictEqual(parsed.repaired, true, 'gitea repair must mark repaired:true for ESCALATED fast');
+    const state = fs.readFileSync(path.join(projectDir, 'workflow-state.md'), 'utf8');
+    assert.ok(state.includes('workflow_path: full'), 'gitea: ESCALATED fast must rewrite to workflow_path: full');
+    assert.ok(state.includes('next_command: /kaola-workflow-phase1 fast-esc'), 'gitea: ESCALATED fast must route to /kaola-workflow-phase1');
+    assert.ok(!state.includes('next_command: /kaola-workflow-fast'), 'gitea: rewritten state must not retain /kaola-workflow-fast');
+
+    // --- Assertion 2 (negative control): non-ESCALATED fast → stays on /kaola-workflow-fast ---
+    const project2Dir = path.join(tmp, 'kaola-workflow', 'fast-ok');
+    fs.mkdirSync(project2Dir, { recursive: true });
+    fs.writeFileSync(path.join(project2Dir, 'fast-summary.md'),
+      '# Fast Summary: fast-ok\n\n## Status\nIN_PROGRESS\n');
+
+    const result2 = spawnSync(process.execPath, [repairScript, 'fast-ok'], {
+      cwd: tmp,
+      encoding: 'utf8',
+      env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
+    });
+    assert.strictEqual(result2.status, 0, 'gitea repair should exit 0 for IN_PROGRESS fast');
+    const state2 = fs.readFileSync(path.join(project2Dir, 'workflow-state.md'), 'utf8');
+    assert.ok(state2.includes('next_command: /kaola-workflow-fast fast-ok'), 'gitea: IN_PROGRESS fast must still route to /kaola-workflow-fast');
+    assert.ok(!state2.includes('workflow_path: full'), 'gitea: IN_PROGRESS fast must not redirect to full');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log('testRepairFastEscalation: PASSED');
+}
+
 testAuditAndRepairLabels();
+testRepairFastEscalation();
 
 run('test-gitea-forge-helpers.js');
 run('test-gitea-workflow-scripts.js');

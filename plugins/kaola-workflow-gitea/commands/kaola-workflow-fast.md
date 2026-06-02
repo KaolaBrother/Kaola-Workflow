@@ -37,7 +37,11 @@ Otherwise detect step:
 - `fast-summary.md` absent → `plan`
 - `fast-summary.md` has status `IN_PROGRESS` → `execute`
 - `fast-summary.md` has status `REVIEW` → `review`
-- `fast-summary.md` has `escalated_to_full` → escalation already triggered; do not resume fast path
+- `fast-summary.md` has status `ESCALATED` → escalation already committed; route to full workflow:
+
+```text
+/kaola-workflow-phase1 {project}
+```
 
 ## Fast Eligibility
 
@@ -68,9 +72,10 @@ during Plan, Execute, or Review:
 
 On escalation:
 
-1. Write `escalated_to_full: <trigger> — <detail>` to `workflow-state.md`, where `<trigger>` is one of `approach_ambiguity`, `file_overflow`, `test_thrash`, `security`, `architecture`, `breaking_change`, `dependency`, `new_package`. Use the literal " — " (em-dash with spaces) before the detail so the fast-path audit parses the trigger cleanly.
-2. Write a brief escalation note to `fast-summary.md` with status `ESCALATED`.
-3. Stop and tell the user to re-run `/workflow-next {project}` without `KAOLA_PATH=fast`.
+1. Rewrite `workflow-state.md` with `workflow_path: full`, `next_command: /kaola-workflow-phase1 {project}`, `next_skill: kaola-workflow-research {project}` so `/workflow-next` routes correctly on resume.
+2. Write `escalated_to_full: <trigger> — <detail>` to `workflow-state.md`, where `<trigger>` is one of `approach_ambiguity`, `file_overflow`, `test_thrash`, `security`, `architecture`, `breaking_change`, `dependency`, `new_package`. Use the literal " — " (em-dash with spaces) before the detail so the fast-path audit parses the trigger cleanly.
+3. Write a brief escalation note to `fast-summary.md` with status `ESCALATED`.
+4. Stop and tell the user to re-run `/workflow-next {project}`.
 
 Do not continue fast-path execution after writing the escalation field.
 

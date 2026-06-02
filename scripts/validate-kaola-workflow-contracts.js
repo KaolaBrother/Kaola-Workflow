@@ -126,6 +126,12 @@ assertIncludes(fastSkill198, '- Write Set:');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'fast-summary.md');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'sectionBody(');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, "'Scope'");
+// issue #222: fast-path mid-flight escalation routing fix — Codex skill parity
+assertIncludes(fastSkill198, 'workflow_path: full');
+assertIncludes(fastSkill198, 'next_command: /kaola-workflow-phase1 {project}');
+assertIncludes(fastSkill198, 'next_skill: kaola-workflow-research {project}');
+assertIncludes(fastSkill198, 'status `ESCALATED` → escalation already committed');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'fast-summary.md status ESCALATED -> kaola-workflow-research');
 const nextSkill198 = `${pluginRoot}/skills/kaola-workflow-next/SKILL.md`;
 assertIncludes(nextSkill198, 'mechanical');
 assertIncludes(nextSkill198, '≤ 5');

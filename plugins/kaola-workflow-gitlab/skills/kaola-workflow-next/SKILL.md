@@ -252,6 +252,7 @@ Manual reconstruction order:
 ```text
 phase6-summary.md exists -> workflow complete
 phase5-review.md exists -> kaola-workflow-finalize
+fast-summary.md status ESCALATED -> kaola-workflow-research
 fast-summary.md exists -> kaola-workflow-fast
 phase4-progress.md exists:
   open tasks -> kaola-workflow-execute

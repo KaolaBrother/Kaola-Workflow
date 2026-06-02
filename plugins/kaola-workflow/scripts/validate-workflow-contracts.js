@@ -190,6 +190,15 @@ assertIncludes('scripts/kaola-workflow-classifier.js', 'fast-summary.md');
 assertIncludes('scripts/kaola-workflow-classifier.js', 'sectionBody(');
 assertIncludes('scripts/kaola-workflow-classifier.js', "'Scope'");
 
+// issue #222: fast-path mid-flight escalation routing fix
+// Fast command must rewrite state on escalation and provide a forward route from Resume Detection.
+assertIncludes(fastFile198, 'workflow_path: full');
+assertIncludes(fastFile198, 'next_command: /kaola-workflow-phase1 {project}');
+assertIncludes(fastFile198, 'next_skill: kaola-workflow-research {project}');
+assertIncludes(fastFile198, 'status `ESCALATED` → escalation already committed');
+// workflow-next reconstruction ladder must have escalation rung above the fast rung.
+assertBefore(nextFile198, 'fast-summary.md status ESCALATED -> /kaola-workflow-phase1', 'fast-summary.md exists -> /kaola-workflow-fast');
+
 assert(exists('scripts/kaola-workflow-active-folders.js'), 'active folder reader is missing');
 assert(exists('scripts/kaola-workflow-claim.js'), 'claim script is missing');
 assert(exists('scripts/kaola-workflow-classifier.js'), 'classifier script is missing');

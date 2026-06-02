@@ -446,4 +446,14 @@ const nextCmd203 = pluginRoot + '/commands/workflow-next.md';
 assertIncludes(nextCmd203, '`fast-summary.md` file, or a `workflow-state.md`');
 assertIncludes(nextCmd203, 'fast-summary.md exists -> /kaola-workflow-fast');
 
+// issue #222: fast-path mid-flight escalation routing fix — GitLab parity
+for (const fastFile222 of [fastCmd198, fastSkill198]) {
+  assertIncludes(fastFile222, 'workflow_path: full');
+  assertIncludes(fastFile222, 'next_command: /kaola-workflow-phase1 {project}');
+  assertIncludes(fastFile222, 'next_skill: kaola-workflow-research {project}');
+  assertIncludes(fastFile222, 'status `ESCALATED` → escalation already committed');
+}
+assertBefore(nextCmd203, 'fast-summary.md status ESCALATED -> /kaola-workflow-phase1', 'fast-summary.md exists -> /kaola-workflow-fast');
+assertIncludes(nextSkill198, 'fast-summary.md status ESCALATED -> kaola-workflow-research');
+
 console.log('Kaola-Workflow GitLab contract validation passed');
