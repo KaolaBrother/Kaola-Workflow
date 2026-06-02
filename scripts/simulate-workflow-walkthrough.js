@@ -906,6 +906,46 @@ function testAdaptiveTier2Composition() {
       '| done | finalize | a,b | — | 1 | sequence |',
     ], []);
     assert(v.result === 'refuse', 'tier2: heterogeneous fan-out must be a typed refusal, got: ' + JSON.stringify(v));
+
+    // REGRESSION (adversarial review): code routed through doc-updater must NOT dodge G1.
+    // A non-implement write role writing a non-docs file is a code-producing node and needs
+    // code-reviewer post-dominance.
+    v = validatePlanFixture(tmp, [
+      '| n1 | doc-updater | — | src/server.js | 1 | sequence |',
+      '| done | finalize | n1 | — | 1 | sequence |',
+    ], ['chore']);
+    assert(v.result === 'refuse', 'tier2 regression: doc-updater writing code must require code-reviewer (G1), got: ' + JSON.stringify(v));
+    // ...but a docs-only doc-updater stays in the trivial band (no code review required).
+    v = validatePlanFixture(tmp, [
+      '| n1 | doc-updater | — | docs/guide.md | 1 | sequence |',
+      '| done | finalize | n1 | — | 1 | sequence |',
+    ], ['chore']);
+    assert(v.result === 'in-grammar', 'tier2 regression: docs-only doc-updater stays trivial, got: ' + JSON.stringify(v));
+    // REGRESSION: a sensitive LABEL must not LOOSEN G2 — a sensitive non-implement node must
+    // still require security-reviewer (the target set is a union, not a replacement).
+    v = validatePlanFixture(tmp, [
+      '| n1 | doc-updater | — | auth/handler.js | 1 | sequence |',
+      '| done | finalize | n1 | — | 1 | sequence |',
+    ], ['auth']);
+    assert(v.result === 'refuse', 'tier2 regression: sensitive doc-updater must require security-reviewer even under a sensitive label (G2 union), got: ' + JSON.stringify(v));
+
+    // REGRESSION: plan_hash covers ## Meta labels — tampering labels after freeze must fail resume-check.
+    const planValidator = require(planValidatorScript);
+    const frozen = planValidator.freezePlan([
+      '# Plan', '', '## Meta', 'labels: security', '', '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '|---|---|---|---|---|---|',
+      '| i | tdd-guide | — | lib/foo.js | 1 | sequence |',
+      '| s | security-reviewer | i | — | 1 | sequence |',
+      '| rv | code-reviewer | s | — | 1 | sequence |',
+      '| d | finalize | rv | — | 1 | sequence |', ''
+    ].join('\n'));
+    assert(frozen.frozen, 'tier2 regression: sensitive plan should freeze');
+    const tampered = frozen.content.replace('labels: security', 'labels: chore');
+    assert(planValidator.revalidateForResume(tampered).ok === false,
+      'tier2 regression: tampering ## Meta labels after freeze must fail resume-check (plan_hash covers Meta)');
+    assert(planValidator.revalidateForResume(frozen.content).ok === true,
+      'tier2 regression: untampered frozen plan must pass resume-check');
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   console.log('testAdaptiveTier2Composition: PASSED');
 }

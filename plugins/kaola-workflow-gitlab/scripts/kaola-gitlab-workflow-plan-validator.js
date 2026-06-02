@@ -196,13 +196,31 @@ function nodeIsSensitive(node) {
 function labelsAreSensitive(labels) {
   return Array.isArray(labels) && labels.some(l => SENSITIVE_LABELS.has(String(l).toLowerCase()));
 }
+// A docs-only path (markdown / docs/ tree) is the trivial band that may skip review.
+function isDocsPath(p) { return /\.md$/i.test(p) || /(^|\/)docs\//.test(p); }
+// A node "produces code" — and therefore needs the review gate — if it is an implement
+// role, OR a non-implement WRITE role (e.g. doc-updater) whose declared write set touches
+// a non-docs file. This closes the evasion where code is routed through doc-updater to
+// skip G1: G1 is not implement-role-only, it is "produces non-trivial code changes".
+function producesCode(node) {
+  if (IMPLEMENT_ROLES.has(node.role)) return true;
+  if (!WRITE_ROLES.has(node.role)) return false;
+  for (const p of node.writeSet) if (!isDocsPath(p)) return true;
+  return false;
+}
 
 // --- plan hash --------------------------------------------------------------
-// Hash the canonical `## Nodes` section (the immutable structure), normalized so
-// whitespace churn does not change it. Stored inside the plan as an HTML comment.
+// Hash the AUTHOR-IMMUTABLE content — both `## Meta` (frozen labels, which feed the
+// G2/risk sensitivity decision) and `## Nodes` (the DAG) — normalized so whitespace
+// churn does not change it. The mutable `## Node Ledger` (statuses update during the
+// run) and the plan_hash comment itself are excluded. Stored inside the plan as an HTML
+// comment. Covering `## Meta` closes the integrity hole where tampering the labels after
+// freeze (e.g. security -> chore) would otherwise be invisible to --resume-check and
+// silently drop the G2 security requirement on resume.
 function computePlanHash(content) {
-  const body = sliceSection(content, schema.NODES_HEADING)
+  const norm = section => sliceSection(content, section)
     .split('\n').map(l => l.trim()).filter(Boolean).join('\n');
+  const body = norm('Meta') + '\n---NODES---\n' + norm(schema.NODES_HEADING);
   return crypto.createHash('sha256').update(body).digest('hex');
 }
 function readStoredHash(content) {
@@ -281,15 +299,21 @@ function validatePlan(content, opts) {
 
   // gates (need a unique sink to be decidable)
   if (sink) {
-    const g1 = gateUncovered(nodes, n => IMPLEMENT_ROLES.has(n.role), 'code-reviewer', sink);
-    if (g1.length) errors.push(`G1: code-reviewer does not post-dominate implement node(s): ${g1.join(', ')}`);
+    // G1: code-reviewer post-dominates every code-producing node (implement roles, plus a
+    // doc-updater/other write role that writes non-docs — so code can't dodge review by
+    // routing through doc-updater).
+    const g1 = gateUncovered(nodes, producesCode, 'code-reviewer', sink);
+    if (g1.length) errors.push(`G1: code-reviewer does not post-dominate code-producing node(s): ${g1.join(', ')}`);
 
+    // G2: security-reviewer post-dominates every sensitive node. The target set is the
+    // UNION (never a replacement): any node whose declared write set touches a Phase-5
+    // category, AND — when the frozen labels are sensitive — every code-producing node.
+    // (Replacing with implement-only previously let a sensitive label DROP a sensitive
+    // non-implement node from G2 — a soundness hole.)
     const sensitiveByLabel = labelsAreSensitive(labels);
     const sensitiveNodes = nodes.filter(nodeIsSensitive);
     if (sensitiveByLabel || sensitiveNodes.length) {
-      const isTarget = sensitiveByLabel
-        ? n => IMPLEMENT_ROLES.has(n.role)
-        : n => sensitiveNodes.includes(n);
+      const isTarget = n => (sensitiveByLabel && producesCode(n)) || sensitiveNodes.includes(n);
       const g2 = gateUncovered(nodes, isTarget, 'security-reviewer', sink);
       if (g2.length) errors.push(`G2: security-reviewer does not post-dominate sensitive node(s): ${g2.join(', ')}`);
     }
@@ -360,7 +384,7 @@ function injectHash(content, hash) {
 // --- CLI --------------------------------------------------------------------
 function printHelp() {
   process.stdout.write(
-    'usage: kaola-workflow-plan-validator.js <workflow-plan.md> [--json] [--freeze] [--resume-check]\n' +
+    'usage: kaola-gitlab-workflow-plan-validator.js <workflow-plan.md> [--json] [--freeze] [--resume-check]\n' +
     '  default       validate + print the governance verdict; exit 1 on typed refusal\n' +
     '  --freeze      validate, then write the computed plan_hash into the plan file\n' +
     '  --resume-check  re-validate library + structure + hash only (not the gate rubric)\n'
