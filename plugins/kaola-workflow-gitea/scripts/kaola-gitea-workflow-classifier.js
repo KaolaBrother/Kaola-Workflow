@@ -309,6 +309,11 @@ function classifyIssue(issueIid, root) {
     return { verdict: 'target_unavailable', reasoning: 'tea issue fetch failed; refusing to claim outside KAOLA_WORKFLOW_OFFLINE=1' };
   }
 
+  const _st = (issue.state || '').toLowerCase();
+  if (_st !== 'open' && _st !== 'closed') {
+    return { verdict: 'target_unavailable', reasoning: 'tea issue fetch failed; refusing to claim outside KAOLA_WORKFLOW_OFFLINE=1' };
+  }
+
   if ((issue.state || '').toLowerCase() === 'closed') {
     return { verdict: 'red', reasoning: 'issue #' + issueIid + ' is already closed' };
   }
@@ -356,6 +361,12 @@ function cmdClassify() {
   try {
     issue = forge.viewIssue(args.issue);
   } catch (_) {
+    process.stdout.write(JSON.stringify({ verdict: 'target_unavailable', reasoning: 'tea issue fetch failed; refusing to claim outside KAOLA_WORKFLOW_OFFLINE=1' }) + '\n');
+    return;
+  }
+
+  const _st2 = (issue.state || '').toLowerCase();
+  if (_st2 !== 'open' && _st2 !== 'closed') {
     process.stdout.write(JSON.stringify({ verdict: 'target_unavailable', reasoning: 'tea issue fetch failed; refusing to claim outside KAOLA_WORKFLOW_OFFLINE=1' }) + '\n');
     return;
   }

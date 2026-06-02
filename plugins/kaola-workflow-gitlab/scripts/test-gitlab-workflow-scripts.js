@@ -2789,6 +2789,137 @@ testGitlabProbeResidualNonJsonExit0();
 testClosureAuditExecuteDetectionTimeoutPropagates();
 testClosureAuditMrFolderTimeout();
 
+// issue #230: classifyIssue / cmdClassify must fail-closed on degraded exit-0 forge response.
+// Empty stdout exit-0 and non-JSON exit-0 both produce state:'unknown' from normalizeIssue(parseJson(raw,{})),
+// which the existing catch arm never fires for. The guard inserted after the try/catch must return
+// target_unavailable before classify() can return 'green'.
+
+function testGitlabClassifyIssueResidualEmptyExit0() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-classify-empty-')));
+  const binDir = path.join(tmp, 'bin');
+  fs.mkdirSync(binDir, { recursive: true });
+  writeShimFiles(path.join(binDir, 'glab'), ['process.exit(0);']);
+  const prevMock = process.env.KAOLA_GLAB_MOCK_SCRIPT;
+  const prevHome = process.env.HOME;
+  const prevUserProfile = process.env.USERPROFILE;
+  // Fresh temp HOME so readOrCreateConfig writes 'auto' default and does not bypass classifier.
+  const tempHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-classify-empty-home-')));
+  process.env.KAOLA_GLAB_MOCK_SCRIPT = path.join(binDir, 'glab.js');
+  process.env.HOME = tempHome;
+  process.env.USERPROFILE = tempHome;
+  try {
+    const result = classifier.classifyIssue(230, tmp);
+    assert.strictEqual(result.verdict, 'target_unavailable',
+      'empty exit-0 classifyIssue must return target_unavailable, got: ' + result.verdict + ' (' + result.reasoning + ')');
+    assert(/refusing to claim outside KAOLA_WORKFLOW_OFFLINE/.test(result.reasoning),
+      'empty exit-0 classifyIssue reasoning must mention refusing to claim outside KAOLA_WORKFLOW_OFFLINE, got: ' + result.reasoning);
+    console.log('testGitlabClassifyIssueResidualEmptyExit0: PASSED');
+  } finally {
+    if (prevMock === undefined) delete process.env.KAOLA_GLAB_MOCK_SCRIPT;
+    else process.env.KAOLA_GLAB_MOCK_SCRIPT = prevMock;
+    if (prevHome === undefined) delete process.env.HOME;
+    else process.env.HOME = prevHome;
+    if (prevUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = prevUserProfile;
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(tempHome, { recursive: true, force: true });
+  }
+}
+
+function testGitlabClassifyIssueResidualNonJsonExit0() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-classify-nonjson-')));
+  const binDir = path.join(tmp, 'bin');
+  fs.mkdirSync(binDir, { recursive: true });
+  writeShimFiles(path.join(binDir, 'glab'), ["process.stdout.write('rate limit exceeded\\n');"]);
+  const prevMock = process.env.KAOLA_GLAB_MOCK_SCRIPT;
+  const prevHome = process.env.HOME;
+  const prevUserProfile = process.env.USERPROFILE;
+  const tempHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-classify-nonjson-home-')));
+  process.env.KAOLA_GLAB_MOCK_SCRIPT = path.join(binDir, 'glab.js');
+  process.env.HOME = tempHome;
+  process.env.USERPROFILE = tempHome;
+  try {
+    const result = classifier.classifyIssue(230, tmp);
+    assert.strictEqual(result.verdict, 'target_unavailable',
+      'non-JSON exit-0 classifyIssue must return target_unavailable, got: ' + result.verdict + ' (' + result.reasoning + ')');
+    assert(/refusing to claim outside KAOLA_WORKFLOW_OFFLINE/.test(result.reasoning),
+      'non-JSON exit-0 classifyIssue reasoning must mention refusing to claim outside KAOLA_WORKFLOW_OFFLINE, got: ' + result.reasoning);
+    console.log('testGitlabClassifyIssueResidualNonJsonExit0: PASSED');
+  } finally {
+    if (prevMock === undefined) delete process.env.KAOLA_GLAB_MOCK_SCRIPT;
+    else process.env.KAOLA_GLAB_MOCK_SCRIPT = prevMock;
+    if (prevHome === undefined) delete process.env.HOME;
+    else process.env.HOME = prevHome;
+    if (prevUserProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = prevUserProfile;
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(tempHome, { recursive: true, force: true });
+  }
+}
+
+function testGitlabCmdClassifyResidualEmptyExit0() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-cmdclassify-empty-')));
+  const binDir = path.join(tmp, 'bin');
+  fs.mkdirSync(binDir, { recursive: true });
+  writeShimFiles(path.join(binDir, 'glab'), ['process.exit(0);']);
+  const tempHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-cmdclassify-empty-home-')));
+  try {
+    const result = spawnSync(process.execPath, [classifierScript, 'classify', '--issue', '230'], {
+      cwd: tmp,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        HOME: tempHome,
+        USERPROFILE: tempHome,
+        KAOLA_GLAB_MOCK_SCRIPT: path.join(binDir, 'glab.js')
+      }
+    });
+    assert.strictEqual(result.status, 0,
+      'cmdClassify empty exit-0 must exit 0, got: ' + result.status + ' stderr: ' + result.stderr);
+    const out = JSON.parse(result.stdout.trim());
+    assert.strictEqual(out.verdict, 'target_unavailable',
+      'cmdClassify empty exit-0 must return target_unavailable, got: ' + out.verdict + ' (' + out.reasoning + ')');
+    console.log('testGitlabCmdClassifyResidualEmptyExit0: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(tempHome, { recursive: true, force: true });
+  }
+}
+
+function testGitlabCmdClassifyResidualNonJsonExit0() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-cmdclassify-nonjson-')));
+  const binDir = path.join(tmp, 'bin');
+  fs.mkdirSync(binDir, { recursive: true });
+  writeShimFiles(path.join(binDir, 'glab'), ["process.stdout.write('rate limit exceeded\\n');"]);
+  const tempHome = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-cmdclassify-nonjson-home-')));
+  try {
+    const result = spawnSync(process.execPath, [classifierScript, 'classify', '--issue', '230'], {
+      cwd: tmp,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        HOME: tempHome,
+        USERPROFILE: tempHome,
+        KAOLA_GLAB_MOCK_SCRIPT: path.join(binDir, 'glab.js')
+      }
+    });
+    assert.strictEqual(result.status, 0,
+      'cmdClassify non-JSON exit-0 must exit 0, got: ' + result.status + ' stderr: ' + result.stderr);
+    const out = JSON.parse(result.stdout.trim());
+    assert.strictEqual(out.verdict, 'target_unavailable',
+      'cmdClassify non-JSON exit-0 must return target_unavailable, got: ' + out.verdict + ' (' + out.reasoning + ')');
+    console.log('testGitlabCmdClassifyResidualNonJsonExit0: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(tempHome, { recursive: true, force: true });
+  }
+}
+
+testGitlabClassifyIssueResidualEmptyExit0();
+testGitlabClassifyIssueResidualNonJsonExit0();
+testGitlabCmdClassifyResidualEmptyExit0();
+testGitlabCmdClassifyResidualNonJsonExit0();
+
 testGitLabRoadmapInitIssueExclusiveAndUpdate()
   .then(() => {
     console.log('GitLab workflow script tests passed');
