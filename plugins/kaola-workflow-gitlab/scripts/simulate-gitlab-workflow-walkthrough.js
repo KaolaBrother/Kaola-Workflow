@@ -397,6 +397,11 @@ function testGitlabAdaptive() {
       '| r | code-reviewer | a,b | — | 1 | sequence |',
       '| d | finalize | r | — | 1 | sequence |',
     ], 'enhancement').result, 'refuse', 'gitlab v3.21.0: ./lib/foo.js vs lib//foo.js is the same file and must refuse as a clobber');
+
+    // v3.21.0 #239: per-instance own-lane barrier on the FORK validator.
+    const perInst = mkL(['| a | tdd-guide | — | aaa/x.js | 1 | fanout(impl) |', '| b | tdd-guide | — | bbb/y.js | 1 | fanout(impl) |', '| rv | code-reviewer | a,b | — | 1 | sequence |', '| done | finalize | rv | — | 1 | sequence |'], ['| a | complete |', '| b | complete |', '| done | complete |'], 'enhancement');
+    assert.strictEqual(fv.barrierCheck(perInst, ['aaa/x.js', 'bbb/y.js'], { nodeId: 'a' }).result, 'refuse', 'gitlab #239: per-node overflow into sibling lane must refuse');
+    assert.strictEqual(fv.barrierCheck(perInst, ['aaa/x.js'], { nodeId: 'a' }).result, 'pass', 'gitlab #239: per-node own-lane must pass');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

@@ -60,7 +60,17 @@ node needs RED then GREEN; count `test_thrash` ≥ 3 same-test cycles → escala
 **barrier (commit order `.cache` → Node Ledger row → `workflow-state.md` pointer LAST)**
 → update-ledger (`complete`/`n/a`, emit one `## Required Agent Compliance` row).
 
-At the barrier, re-scan the files the node actually wrote — **script-enforced** (#231):
+At node START (with the `in_progress` mark) record this node's per-instance write baseline (#239),
+so the barrier diffs exactly THIS node's writes (nodes run one at a time):
+
+```bash
+node "$KAOLA_SCRIPTS/kaola-workflow-plan-validator.js" kaola-workflow/{project}/workflow-plan.md --record-base --node-id {node-id}
+```
+
+At the barrier, re-scan the files the node actually wrote — **script-enforced** (#231/#239). With
+`--node-id` this is the PER-INSTANCE barrier: it diffs against the recorded base and checks the node's
+OWN declared lane, so a fan-out instance overflowing into a SIBLING's lane is refused (Phase 6's
+whole-plan barrier stays the union-level floor):
 
 ```bash
 node "$KAOLA_SCRIPTS/kaola-workflow-plan-validator.js" kaola-workflow/{project}/workflow-plan.md --barrier-check --node-id {node-id} --json; BC=$?

@@ -85,7 +85,12 @@ The validator classifies the frozen plan once. Re-read its verdict
 For each ready node, run the Phase-4-style loop, generalized from a phase ladder
 to a plan DAG:
 
-1. **update-ledger** — mark the node `in_progress`.
+1. **update-ledger** — mark the node `in_progress`, and record its per-instance write
+   baseline (#239) so the step-4 barrier can diff exactly THIS node's writes (nodes run
+   one at a time):
+   ```bash
+   node scripts/kaola-workflow-plan-validator.js kaola-workflow/{project}/workflow-plan.md --record-base --node-id {node-id}
+   ```
 2. **dispatch** the node's role. An implement node:
 
 You MUST pass `model="{TDD_GUIDE_MODEL}"` in this Agent call exactly as shown —
@@ -137,12 +142,16 @@ Agent(
    RED→RED cycles writes `escalated_to_full: test_thrash` and stops.
 4. **barrier (commit order: `.cache` evidence → Node Ledger row → `workflow-state.md`
    pointer LAST).** Re-scan the files this node actually wrote — **script-enforced**
-   (#231), not prose:
+   (#231), not prose. With `--node-id` this is the PER-INSTANCE barrier (#239): it
+   diffs against the node's step-1 recorded base (exactly this node's writes) and
+   checks them against the node's OWN declared write set, so a fan-out instance that
+   overflows into a SIBLING's lane is refused (the whole-plan barrier in Phase 6
+   remains the union-level floor):
    ```bash
    node scripts/kaola-workflow-plan-validator.js kaola-workflow/{project}/workflow-plan.md --barrier-check --node-id {node-id} --json; BC=$?
    ```
    On exit 1 (a write turned out sensitive — a Phase-5 category — on a plan with no
-   `security-reviewer` node, or overflowed outside the declared allowlist) the
+   `security-reviewer` node, or overflowed outside this node's own declared allowlist) the
    provisional authorization was granted on a now-false premise:
    **revoke and halt for consent** — write `escalated_to_full: consent` AND force
    `security-reviewer` post-dominance (`escalated_to_full: security`) into

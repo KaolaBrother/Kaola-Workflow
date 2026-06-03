@@ -1134,6 +1134,70 @@ function testAdaptiveGateBarrierEnforcement() {
   console.log('testAdaptiveGateBarrierEnforcement: PASSED');
 }
 
+// issue #239: per-instance fan-out barrier. The per-node barrier checks the node's ACTUAL writes
+// (diffed vs its step-1 recorded baseline) against the node's OWN declared lane, so a fan-out
+// instance overflowing into a sibling's lane refuses — which the union (whole-plan) check could not
+// see. The whole-plan barrier remains the union-level floor.
+function testAdaptivePerInstanceBarrier() {
+  const tmp = adaptiveTmp('per-instance');
+  const planValidator = require(planValidatorScript);
+  const mkPlan = () => ['# Workflow Plan — issue #970', '', '## Meta', 'labels: enhancement', '', '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
+    '| ex | code-explorer | — | — | 1 | sequence |',
+    '| a | tdd-guide | ex | aaa/x.js | 1 | fanout(impl) |',
+    '| b | tdd-guide | ex | bbb/y.js | 1 | fanout(impl) |',
+    '| rv | code-reviewer | a,b | — | 1 | sequence |',
+    '| done | finalize | rv | — | 1 | sequence |', '',
+    '## Node Ledger', '', '| id | status |', '|---|---|',
+    '| ex | complete |', '| a | complete |', '| b | complete |', '| rv | complete |', '| done | complete |', ''].join('\n');
+  try {
+    // --- PURE: per-node allowlist = the node's OWN declared write set (vs union for whole-plan).
+    const plan = mkPlan();
+    assert(planValidator.barrierCheck(plan, ['aaa/x.js', 'bbb/y.js'], { nodeId: 'a' }).result === 'refuse',
+      '#239: node a writing into sibling b lane (bbb/y.js) must refuse (own-lane allowlist)');
+    assert(planValidator.barrierCheck(plan, ['aaa/x.js'], { nodeId: 'a' }).result === 'pass',
+      '#239 control: node a writing only its own lane must pass');
+    assert(planValidator.barrierCheck(plan, ['aaa/x.js', 'bbb/y.js'], {}).result === 'pass',
+      '#239 control: whole-plan union still accepts both declared lanes');
+
+    // --- CLI integration over a real git repo: --record-base then per-node --barrier-check.
+    const grepo = adaptiveTmp('per-instance-git');
+    try {
+      initGitRepoWithBareRemote(grepo);
+      const proj = path.join(grepo, 'kaola-workflow', 'issue-970');
+      fs.mkdirSync(proj, { recursive: true });
+      const planPath = path.join(proj, 'workflow-plan.md');
+      fs.writeFileSync(planPath, mkPlan());
+      runNode(planValidatorScript, [planPath, '--freeze'], grepo);
+      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'plan'], { cwd: grepo, encoding: 'utf8' });
+      // node a starts -> record its baseline (resume-safe, persisted in .cache).
+      const rb = runNode(planValidatorScript, [planPath, '--record-base', '--node-id', 'a'], grepo);
+      assert(rb.status === 0, '--record-base must exit 0, got ' + rb.status + ' ' + rb.stderr);
+      assert(fs.existsSync(path.join(proj, '.cache', 'barrier-base-a')), '--record-base must persist a .cache base');
+      // node a OVERFLOWS: writes its own lane AND sibling b's lane (untracked new files).
+      fs.mkdirSync(path.join(grepo, 'aaa'), { recursive: true }); fs.writeFileSync(path.join(grepo, 'aaa', 'x.js'), 'x\n');
+      fs.mkdirSync(path.join(grepo, 'bbb'), { recursive: true }); fs.writeFileSync(path.join(grepo, 'bbb', 'y.js'), 'y\n');
+      let r = runNode(planValidatorScript, [planPath, '--barrier-check', '--node-id', 'a', '--json'], grepo);
+      assert(r.status === 1 && JSON.parse(r.stdout).result === 'refuse',
+        '#239 CLI: node a overflowing into b lane must refuse, got status ' + r.status + ' ' + r.stdout);
+      assert(/bbb\/y\.js/.test(r.stdout), '#239: the refusal must name the out-of-lane write, got ' + r.stdout);
+      // control: drop the overflow; only the own-lane write remains -> pass.
+      fs.rmSync(path.join(grepo, 'bbb', 'y.js'));
+      r = runNode(planValidatorScript, [planPath, '--barrier-check', '--node-id', 'a', '--json'], grepo);
+      assert(r.status === 0 && JSON.parse(r.stdout).result === 'pass',
+        '#239 CLI control: node a in its own lane must pass, got status ' + r.status + ' ' + r.stdout);
+      // missing recorded base -> fail closed (no silent pass).
+      assert(runNode(planValidatorScript, [planPath, '--barrier-check', '--node-id', 'b', '--json'], grepo).status === 1,
+        '#239: per-node barrier with no recorded base must fail closed');
+      // robustness: a present-but-empty --node-id is rejected, not silently degraded to whole-plan.
+      assert(runNode(planValidatorScript, [planPath, '--barrier-check', '--node-id', '', '--json'], grepo).status === 1,
+        '#239: empty --node-id must be rejected');
+    } finally { fs.rmSync(grepo, { recursive: true, force: true }); fs.rmSync(grepo + '-remote', { recursive: true, force: true }); }
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptivePerInstanceBarrier: PASSED');
+}
+
 // issue #234 E1: resume must reconcile a persisted next_command against the project's true path
 // before trusting it. A stale phaseN on an adaptive project must resolve to plan-run; a consistent
 // full next_command is preserved; a stale full next_command falls back to phase-derived reconstruction.
@@ -6069,6 +6133,7 @@ async function main() {
     testAdaptiveFanoutGroupScoping();
     testAdaptiveReadySetDisjointness();
     testAdaptiveGateBarrierEnforcement();
+    testAdaptivePerInstanceBarrier();
     testAdaptiveResumeReconcilesNextCommand();
     testAdaptiveDurableConsentHalt();
     testAdaptiveAuthoringEntryGuard();

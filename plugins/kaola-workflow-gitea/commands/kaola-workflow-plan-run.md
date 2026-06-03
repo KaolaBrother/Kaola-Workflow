@@ -85,7 +85,11 @@ The validator classifies the frozen plan once. Re-read its verdict
 For each ready node, run the Phase-4-style loop, generalized from a phase ladder
 to a plan DAG:
 
-1. **update-ledger** — mark the node `in_progress`.
+1. **update-ledger** — mark the node `in_progress`, and record its per-instance write
+   baseline (#239) so the step-4 barrier can diff exactly THIS node's writes:
+   ```bash
+   node scripts/kaola-gitea-workflow-plan-validator.js kaola-workflow/{project}/workflow-plan.md --record-base --node-id {node-id}
+   ```
 2. **dispatch** the node's role. An implement node:
 
 You MUST pass `model="{TDD_GUIDE_MODEL}"` in this Agent call exactly as shown —

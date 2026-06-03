@@ -340,11 +340,16 @@ function barrierCheck(content, actualPaths, opts) {
   const errors = [];
   const nodes = parseNodes(content);
   if (!nodes.length) return { result: 'refuse', errors: ['plan has no parseable ## Nodes table'] };
-  if (opts.nodeId && !nodes.some(n => n.id === opts.nodeId)) {
+  const ownNode = opts.nodeId ? nodes.find(n => n.id === opts.nodeId) : null;
+  if (opts.nodeId && !ownNode) {
     return { result: 'refuse', errors: [`--node-id "${opts.nodeId}" not found in the frozen plan`] };
   }
+  // #239: per-instance allowlist. In PER-NODE mode the allowlist is the node's OWN declared write set
+  // (so a fan-out instance writing into a SIBLING's declared lane refuses — the per-instance overflow
+  // the union check could not see); in WHOLE-PLAN mode it is the union over all nodes (the floor).
   const declared = new Set();
-  for (const n of nodes) for (const p of n.writeSet) declared.add(p);
+  if (ownNode) { for (const p of ownNode.writeSet) declared.add(p); }
+  else { for (const n of nodes) for (const p of n.writeSet) declared.add(p); }
   const real = (actualPaths || []).map(p => String(p || '').trim()).filter(Boolean);
   const isWorkflowArtifact = p => /^kaola-workflow\//.test(p);
   const isTestPath = p => /(^|\/)(tests?|__tests__|spec)\//i.test(p) || /\.(test|spec)\.[A-Za-z0-9]+$/i.test(p);
@@ -656,8 +661,10 @@ function printHelp() {
     '  --freeze       validate, then write the computed plan_hash into the plan file\n' +
     '  --resume-check re-validate library + structure + hash only (not the gate rubric)\n' +
     '  --gate-verify  verify gate EXECUTION over the ## Node Ledger (G1/G2 ran); exit 1 if a completed node is uncovered\n' +
-    '  --barrier-check re-scan ACTUAL writes (git diff vs merge-base of HEAD and --base, default origin/main): refuse a\n' +
-    '                 sensitive write with no security-reviewer, or an out-of-allowlist production write; exit 1 on refusal\n'
+    '  --record-base --node-id ID  snapshot the working tree as node ID\'s per-instance baseline (.cache); run at node start\n' +
+    '  --barrier-check re-scan ACTUAL writes and refuse a sensitive write with no security-reviewer, or an out-of-allowlist\n' +
+    '                 write; exit 1 on refusal. Whole-plan (no --node-id): union allowlist, diff vs merge-base of HEAD and\n' +
+    '                 --base (default origin/main). Per-node (--node-id ID): the node\'s OWN allowlist, diff vs its recorded base\n'
   );
 }
 function main() {
@@ -694,18 +701,61 @@ function main() {
     if (!r.ok) process.exitCode = 1;
     return;
   }
+  const cacheBaseFile = nid => path.join(path.dirname(path.resolve(planPath)), '.cache', 'barrier-base-' + String(nid).replace(/[^A-Za-z0-9_-]/g, '_'));
+  if (args.includes('--record-base')) {
+    // #239: snapshot the current working-tree state as a per-node baseline at NODE START. `git stash
+    // create` makes a dangling commit of working+index WITHOUT modifying the tree (falls back to HEAD
+    // when clean). Stored in .cache keyed by node-id so the step-4 barrier diffs exactly THIS node's
+    // writes — script-owned + explicit + resume-safe (survives a crash between node start and barrier).
+    const flagVal = name => { const i = args.indexOf(name); return i >= 0 && i + 1 < args.length ? args[i + 1] : null; };
+    const nodeId = flagVal('--node-id');
+    if (!nodeId) {
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', errors: ['--record-base requires --node-id <id>'] }) : 'typed refusal: --record-base requires --node-id') + '\n');
+      process.exitCode = 1; return;
+    }
+    let baseRef = '';
+    try { baseRef = execFileSync('git', ['-C', root, 'stash', 'create'], { encoding: 'utf8' }).trim(); } catch (_) {}
+    if (!baseRef) { try { baseRef = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(); } catch (_) {} }
+    fs.mkdirSync(path.dirname(cacheBaseFile(nodeId)), { recursive: true });
+    fs.writeFileSync(cacheBaseFile(nodeId), baseRef);
+    process.stdout.write((json ? JSON.stringify({ result: 'ok', nodeId, base: baseRef }) : 'recorded base ' + baseRef + ' for node ' + nodeId) + '\n');
+    return;
+  }
   if (args.includes('--barrier-check')) {
     const flagVal = name => { const i = args.indexOf(name); return i >= 0 && i + 1 < args.length ? args[i + 1] : null; };
-    const nodeId = flagVal('--node-id') || undefined;
-    const base = flagVal('--base') || 'origin/main';
-    // Cumulative diff vs the merge-base of HEAD and the integration branch (mirrors sink-merge):
-    // captures committed + staged + unstaged writes together, so a committed sensitive write is NOT
-    // invisible (a bare `git diff` would miss it). A git failure throws -> the top-level catch
-    // converts it to a typed (fail-closed) refusal.
-    const mergeBase = execFileSync('git', ['-C', root, 'merge-base', 'HEAD', base], { encoding: 'utf8' }).trim();
-    const diffOut = execFileSync('git', ['-C', root, 'diff', '--name-only', mergeBase], { encoding: 'utf8' });
-    const actualPaths = diffOut.split('\n').map(s => s.trim()).filter(Boolean);
-    const r = barrierCheck(content, actualPaths, { nodeId, root });
+    const nodeId = flagVal('--node-id');
+    // Robustness: a PRESENT but empty `--node-id` is a malformed per-node invocation, not whole-plan.
+    if (args.includes('--node-id') && !nodeId) {
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', errors: ['--node-id requires a value'] }) : 'typed refusal: --node-id requires a value') + '\n');
+      process.exitCode = 1; return;
+    }
+    let actualPaths;
+    if (nodeId) {
+      // PER-NODE (#239): diff vs THIS node's recorded baseline (or an explicit --base override) =
+      // exactly this node's writes (nodes run one at a time), checked against its OWN declared set.
+      let base = flagVal('--base');
+      if (!base) { try { base = fs.readFileSync(cacheBaseFile(nodeId), 'utf8').trim(); } catch (_) { base = ''; } }
+      if (!base) {
+        process.stdout.write((json ? JSON.stringify({ result: 'refuse', errors: ['no recorded per-node base for "' + nodeId + '" (run --record-base --node-id at node start)'] }) : 'typed refusal: no recorded per-node base for ' + nodeId) + '\n');
+        process.exitCode = 1; return;
+      }
+      const diffOut = execFileSync('git', ['-C', root, 'diff', '--name-only', base], { encoding: 'utf8' });
+      // Include currently-untracked NEW files: the per-node barrier runs mid-run BEFORE this node's
+      // writes are committed, and `git diff <base>` omits untracked paths. Nodes run one at a time and
+      // commit per node, so untracked-now == this node's new files (the whole-plan barrier is the floor).
+      const untracked = execFileSync('git', ['-C', root, 'ls-files', '--others', '--exclude-standard'], { encoding: 'utf8' });
+      actualPaths = (diffOut + '\n' + untracked).split('\n').map(s => s.trim()).filter(Boolean);
+    } else {
+      // WHOLE-PLAN (phase6 merge gate): cumulative diff vs the merge-base of HEAD and the integration
+      // branch (default origin/main) — committed + staged + unstaged together, so a committed sensitive
+      // write is not invisible. Union allowlist + the ledger-consistency floor. A git failure throws ->
+      // the top-level catch converts it to a typed (fail-closed) refusal.
+      const base = flagVal('--base') || 'origin/main';
+      const mergeBase = execFileSync('git', ['-C', root, 'merge-base', 'HEAD', base], { encoding: 'utf8' }).trim();
+      const diffOut = execFileSync('git', ['-C', root, 'diff', '--name-only', mergeBase], { encoding: 'utf8' });
+      actualPaths = diffOut.split('\n').map(s => s.trim()).filter(Boolean);
+    }
+    const r = barrierCheck(content, actualPaths, { nodeId: nodeId || undefined, root });
     process.stdout.write((json ? JSON.stringify(r) : (r.result === 'pass' ? 'barrier ok' : 'typed refusal: ' + r.errors.join('; '))) + '\n');
     if (r.result !== 'pass') process.exitCode = 1;
     return;
