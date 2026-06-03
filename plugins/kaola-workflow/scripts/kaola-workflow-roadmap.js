@@ -91,11 +91,19 @@ function buildTableRow(data) {
   return '| ' + cols.join(' | ') + ' |';
 }
 
-function buildRoadmapContent(issues) {
+function buildRoadmapContent(issues, dir) {
   const rows = issues.length > 0
     ? issues.map(buildTableRow)
     : ['| none | No active work | — | — | — |'];
-  return HEADER + '\n' + rows.join('\n') + '\n' + RULES_BLOCK + '\n';
+  let rules = RULES_BLOCK;
+  if (dir) {
+    const projRules = path.join(dir, '_rules.md');
+    if (fs.existsSync(projRules)) {
+      const extra = fs.readFileSync(projRules, 'utf8').trim();
+      if (extra) rules += '\n\n### Project rules\n' + extra;
+    }
+  }
+  return HEADER + '\n' + rows.join('\n') + '\n' + rules + '\n';
 }
 
 function isGeneratedRoadmap(content) {
@@ -192,7 +200,7 @@ function regenerateRoadmap(root) {
   const outFile = roadmapFile(repoRoot);
   guardAgainstMissingRoadmapSource(dir, outFile);
   const issues = readRoadmapIssues(dir);
-  const content = buildRoadmapContent(issues);
+  const content = buildRoadmapContent(issues, dir);
   const wrote = writeFileAtomicReplace(outFile, content);
   return wrote ? 'generated' : 'up-to-date';
 }
@@ -233,7 +241,7 @@ function cmdValidate() {
   const dir = roadmapDir(root);
   const outFile = roadmapFile(root);
   const issues = readRoadmapIssues(dir);
-  const expected = buildRoadmapContent(issues);
+  const expected = buildRoadmapContent(issues, dir);
   let actual = '';
   try { actual = fs.readFileSync(outFile, 'utf8'); } catch (_) {}
   if (actual !== expected) {

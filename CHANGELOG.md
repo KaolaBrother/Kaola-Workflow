@@ -2,6 +2,27 @@
 
 ## [Unreleased]
 
+### Roadmap generator — optional project-local `.roadmap/_rules.md` (#240)
+
+The roadmap generator can now append an **optional** project-local rules file to the
+generated `ROADMAP.md` `## Rules` section. Drop `kaola-workflow/.roadmap/_rules.md` in a
+project and `generate` (plus `validate`, and the GitLab/Gitea `refresh`) appends its
+contents under a `### Project rules` sub-heading — giving a project a durable, read-at-pickup
+home for its own standing workflow conventions that survives both regeneration and plugin
+updates (a hand-edit of the mirror is wiped on regen; an edit of the shared `RULES_BLOCK`
+leaks into every project). The `_` prefix keeps the file out of the `^issue-\d+\.md$`
+issue-row matcher, so it is never read as a roadmap row.
+
+- **No-op when absent.** With no `_rules.md` present (or an empty one), generated output is
+  **byte-identical** to before — zero behavior change for every existing project.
+- **`validate` stays honest.** Both `generate` and `validate` recompute through the same
+  builder (`buildRoadmapContent(issues, dir)`), so the round-trip check passes for both the
+  with- and without-`_rules.md` cases (no false "stale").
+- Ships across **all four editions** (Claude / Codex / GitLab / Gitea); the GitLab/Gitea
+  `refresh` command threads the directory through its inline builder call so project rules are
+  preserved there too. Locked by a new mutation-checked regression test in the Claude
+  walkthrough (absent no-op + present append + validate-not-stale). No version bump.
+
 ## [3.21.0] — 2026-06-03
 
 ### Adaptive path — closes the two v3.20.0 deferred items (#238 / #239), hardened by a pre-release adversarial gate

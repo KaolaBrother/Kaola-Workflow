@@ -429,6 +429,43 @@ function testRoadmapGenerateAtomicReplace(tmp) {
   assert(tempFiles.length === 0, 'atomic generate should not leave temp files after success');
 }
 
+function testRoadmapProjectRulesAppend(tmp) {
+  const workflowDir = path.join(tmp, 'kaola-workflow');
+  fs.rmSync(workflowDir, { recursive: true, force: true });
+  const sourceDir = path.join(workflowDir, '.roadmap');
+  fs.mkdirSync(sourceDir, { recursive: true });
+  fs.writeFileSync(path.join(sourceDir, 'issue-996.md'), [
+    'issue: #996',
+    'title: Rules append fixture',
+    'status: open',
+    'workflow_project: rules-append-fixture',
+    'next_step: generate',
+    ''
+  ].join('\n'), 'utf8');
+
+  // PHASE 1: absent _rules.md → no-op (no ### Project rules)
+  const phase1 = runNode(roadmapScript, ['generate'], tmp);
+  assert(phase1.status === 0, 'PHASE 1: generate should succeed without _rules.md');
+  const roadmap1 = read(path.join(workflowDir, 'ROADMAP.md'));
+  assert(!roadmap1.includes('### Project rules'), 'PHASE 1: ROADMAP.md must NOT include ### Project rules when _rules.md is absent');
+
+  // PHASE 2: present _rules.md → appended under ### Project rules
+  fs.writeFileSync(path.join(sourceDir, '_rules.md'),
+    '- Project-local rule: track residuals as checkboxes on the parent epic.\n- Second project rule line.\n', 'utf8');
+  const phase2 = runNode(roadmapScript, ['generate'], tmp);
+  assert(phase2.status === 0, 'PHASE 2: generate should succeed with _rules.md present');
+  const roadmap2 = read(path.join(workflowDir, 'ROADMAP.md'));
+  assert(roadmap2.includes('### Project rules'), 'PHASE 2: ROADMAP.md must include ### Project rules when _rules.md is present');
+  assert(roadmap2.includes('track residuals as checkboxes on the parent epic.'), 'PHASE 2: ROADMAP.md must include first project rule line');
+  assert(roadmap2.includes('Second project rule line.'), 'PHASE 2: ROADMAP.md must include second project rule line');
+  assert(roadmap2.includes('Close linked GitHub issues only after acceptance criteria pass.'), 'PHASE 2: built-in rules must still be present (project rules appended, not replacing)');
+
+  // PHASE 3: validate must pass with _rules.md present (no false-stale)
+  const phase3 = runNode(roadmapScript, ['validate'], tmp);
+  assert(phase3.status === 0, 'PHASE 3: validate must exit 0 when ROADMAP.md is current with _rules.md');
+  assert(phase3.stdout.includes('ok'), 'PHASE 3: validate must print ok');
+}
+
 async function testRoadmapInitIssueConcurrentExclusive(tmp) {
   const workflowDir = path.join(tmp, 'kaola-workflow');
   fs.rmSync(workflowDir, { recursive: true, force: true });
@@ -6257,6 +6294,7 @@ async function main() {
     testPhantomAdvisorHookGuard();
     testRoadmapGenerateMissingSourceGuard(tmp);
     testRoadmapGenerateAtomicReplace(tmp);
+    testRoadmapProjectRulesAppend(tmp);
     await testRoadmapInitIssueConcurrentExclusive(tmp);
     testRoadmapFilenameAuthorityMissingIssueField(tmp);
     testRoadmapFilenameAuthorityMismatch(tmp);

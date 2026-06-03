@@ -91,9 +91,17 @@ function buildTableRow(data) {
   return '| ' + cols.join(' | ') + ' |';
 }
 
-function buildRoadmapContent(issues) {
+function buildRoadmapContent(issues, dir) {
   const rows = issues.length > 0 ? issues.map(buildTableRow) : ['| none | No active work | — | — | — |'];
-  return HEADER + '\n' + rows.join('\n') + '\n' + RULES_BLOCK + '\n';
+  let rules = RULES_BLOCK;
+  if (dir) {
+    const projRules = path.join(dir, '_rules.md');
+    if (fs.existsSync(projRules)) {
+      const extra = fs.readFileSync(projRules, 'utf8').trim();
+      if (extra) rules += '\n\n### Project rules\n' + extra;
+    }
+  }
+  return HEADER + '\n' + rows.join('\n') + '\n' + rules + '\n';
 }
 
 function isGeneratedRoadmap(content) {
@@ -221,7 +229,7 @@ function refreshFromGitea(root, options) {
     if (issue.state === 'closed') continue;
     if (writeIssueRecord(root, issue, issue.state || 'open', opts.workflowProject, issue.web_url || issue.url || 'ready')) wrote++;
   }
-  const generated = writeFileAtomicReplace(roadmapFile(root), buildRoadmapContent(readRoadmapIssues(roadmapDir(root))));
+  const generated = writeFileAtomicReplace(roadmapFile(root), buildRoadmapContent(readRoadmapIssues(roadmapDir(root)), roadmapDir(root)));
   return { issues: issues.length, wrote, generated };
 }
 
@@ -231,7 +239,7 @@ function regenerateRoadmap(root) {
   const outFile = roadmapFile(repoRoot);
   guardAgainstMissingRoadmapSource(dir, outFile);
   const issues = readRoadmapIssues(dir);
-  const content = buildRoadmapContent(issues);
+  const content = buildRoadmapContent(issues, dir);
   const wrote = writeFileAtomicReplace(outFile, content);
   return wrote ? 'generated' : 'up-to-date';
 }
@@ -241,7 +249,7 @@ function cmdGenerate() {
 
 function cmdValidate() {
   const root = getRoot();
-  const expected = buildRoadmapContent(readRoadmapIssues(roadmapDir(root)));
+  const expected = buildRoadmapContent(readRoadmapIssues(roadmapDir(root)), roadmapDir(root));
   let actual = '';
   try { actual = fs.readFileSync(roadmapFile(root), 'utf8'); } catch (_) {}
   if (actual !== expected) {

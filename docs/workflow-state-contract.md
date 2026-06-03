@@ -109,6 +109,16 @@ shared switch.
   for a closed issue, or after creating a new per-issue source file.
 - `kaola-workflow-roadmap.js generate` must not replace a generated roadmap that
   still lists active issues with `none` solely because `.roadmap/` is missing.
+- An **optional** project-local file `kaola-workflow/.roadmap/_rules.md` may carry
+  standing project-specific workflow rules. When present and non-empty, `generate`
+  (and `validate`, and the GitLab/Gitea `refresh`) appends its contents to the
+  `ROADMAP.md` `## Rules` section under a `### Project rules` sub-heading. The `_`
+  prefix keeps it out of the `^issue-\d+\.md$` issue-row matcher, so it is never
+  read as a roadmap row. When the file is absent or empty the generated output is
+  byte-identical to the built-in Rules block (zero behavior change). Because the
+  content lives in the project's own committed repo, it survives both regeneration
+  and plugin updates — unlike a hand-edit of the generated mirror (wiped on regen)
+  or an edit of the shared `RULES_BLOCK` (leaks into every project).
 
 ## Legacy Or Transitional State
 
