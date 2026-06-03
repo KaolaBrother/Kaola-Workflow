@@ -160,6 +160,51 @@ Manages the local roadmap mirror (`kaola-workflow/ROADMAP.md`) and per-issue met
 
 When an active workflow folder is finalized (`cmdFinalize`) or archived after a PR merge (`watch-pr` on MERGED status), the closure process automatically removes the corresponding `.roadmap/issue-{N}.md` file and regenerates `ROADMAP.md`. This ensures the local roadmap never contains stale entries for closed issues. The cleanup is scoped to closed-status archives only; abandoned folders leave the roadmap entry untouched (so the issue can be reopened if needed).
 
+## Adaptive Plan Validation
+
+### Script: `kaola-workflow-plan-validator.js`
+
+Validates a frozen adaptive `workflow-plan.md` against the closed grammar and computes the auto-run / ask / typed-refusal governance decision (issue #227; see README § Adaptive path). The agent freely authors any in-grammar DAG of role nodes; this script proves the result is in-grammar and classifies its risk. It is **toggle-agnostic** — it never reads the `enable_adaptive` install switch or its `KAOLA_ENABLE_ADAPTIVE` env mirror (the switch gates path *selection* only, never well-formedness or resume). Root and its byte-identical Codex copy share the contract; the GitLab and Gitea editions carry the same contract in a forge-adapted copy.
+
+**Usage:**
+
+```bash
+kaola-workflow-plan-validator.js <workflow-plan.md> [--json] [--freeze] [--resume-check]
+```
+
+**Modes** (mutually exclusive; default when no mode flag is given):
+
+- **default** — Validate and print the governance verdict. In-grammar prints `in-grammar: auto-run` or `in-grammar: ask — <reasons>`; out of grammar prints `typed refusal (out of grammar): <errors>`.
+- **`--freeze`** — Validate, and if in-grammar, compute the `plan_hash` and write it into the plan file as an HTML comment. Prints `frozen (<decision>) plan_hash=<sha256>` on success. After freeze the plan's `## Meta` + `## Nodes` are author-immutable.
+- **`--resume-check`** — Re-validate **only** closed-library membership, structural grammar, and `plan_hash` integrity — **not** the full gate rubric (re-running it would brick an in-flight plan if the rubric tightened after freeze). Prints `resume ok` or `typed refusal: <reason>`.
+- **`--json`** — Emit the machine-readable result object (below) instead of the human line; composes with any mode.
+- **`--help` / `-h` / no args** — Print usage and exit 0.
+
+**Exit codes:** `0` on success (in-grammar auto-run/ask, frozen, resume ok); `1` on any typed refusal (out-of-grammar plan, unreadable plan path, `--freeze` of an out-of-grammar plan, failed `--resume-check`) and on an uncaught error.
+
+**JSON result shapes** (`--json`):
+
+- Default validate, in-grammar:
+  ```json
+  {
+    "result": "in-grammar",
+    "decision": "auto-run",
+    "planHash": "<sha256>",
+    "sink": "<node-id>",
+    "risk": { "sensitivity": false, "blastRadius": false, "uncertain": false, "reasons": [] },
+    "nodeCount": 4
+  }
+  ```
+- Default validate, refusal: `{ "result": "refuse", "errors": ["..."], "planHash": "<sha256>", "sink": "<node-id>|null" }`
+- `--freeze`: `{ "result", "decision", "planHash", "frozen": true|false, "risk", "errors" }`
+- `--resume-check`: `{ "ok": true, "planHash": "<sha256>" }` or `{ "ok": false, "reason": "..." }`
+
+**Grammar (out of grammar ⇒ typed refusal):** every role drawn from the runtime-closed installed library (the ten canonical roles unioned with any maintainer-added `agents/*.md`); a single unique `finalize` sink; an acyclic DAG; exactly three node shapes — `sequence`, `fanout(<group>)` (homogeneous role, width ≤ `FANOUT_CAP` (default 4, env `KAOLA_FANOUT_CAP`), write-role members pairwise-disjoint), and `loop(<cap>)` (cap ≤ `LOOP_CAP` = 5); read-only roles declare no write set; ≤ `FILE_CEILING` (6) files per node; and the two computed **post-dominance** gates — **G1** `code-reviewer` post-dominates every code-producing node (implement roles, plus any write role writing a non-docs file), **G2** `security-reviewer` post-dominates every sensitive node. Post-dominance is computed as reachability-after-gate-removal over the unique sink.
+
+**Governance (in-grammar plans only):** `decision = ask` when risky, else `auto-run` — over-approximated and fail-closed (uncertain ⇒ risky). Risk is any **sensitivity** (frozen `## Meta` labels in a Phase-5 category, or a declared write set matching the auth / payments / user-data / filesystem / external-API / secrets patterns), any **blast-radius** (write-role fan-out N ≥ 2, a `SHARED_INFRA` touch, or a bounded loop), or **uncertainty** (frozen labels absent). An `auto-run` authorization is provisional and revocable at the per-node barrier (a `.cache` re-scan of the files actually written).
+
+**`plan_hash`:** SHA-256 over the whitespace-normalized author-immutable `## Meta` (frozen `labels:`) + `## Nodes` sections; the mutable `## Node Ledger` and the hash comment itself are excluded. Stored inside `workflow-plan.md` as `<!-- plan_hash: <64-hex> -->` and re-checked on every load — a mismatch is tampering and yields a typed refusal on `--resume-check`. The full `workflow-plan.md` artifact contract (`## Meta`, the `## Nodes` table schema, and the `## Node Ledger`) is documented in `docs/workflow-state-contract.md`.
+
 ## Module Exports — Public API Functions
 
 The following functions are exported from sink and claim modules for use by test suites and advanced integrations:

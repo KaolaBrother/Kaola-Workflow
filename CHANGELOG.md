@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- **Document the `kaola-workflow-plan-validator.js` CLI in `docs/api.md`** — a new "Adaptive Plan Validation" section gives the adaptive plan validator the same contract-altitude treatment as the other operational scripts (roadmap, sink, stale-worktree): the usage line, the three mutually-exclusive modes (default verdict / `--freeze` / `--resume-check`) plus `--json`, exit codes, the `--json` result shapes, and the grammar + governance + `plan_hash` contract — all read directly from the script. Documentation-only; the validator and CLAUDE.md's Key Scripts one-liner are unchanged. No version bump.
+
 ## [3.19.0] — 2026-06-03
 
 ### Added
