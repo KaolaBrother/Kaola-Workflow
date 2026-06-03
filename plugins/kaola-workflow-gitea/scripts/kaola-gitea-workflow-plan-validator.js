@@ -2,7 +2,7 @@
 'use strict';
 
 // ---------------------------------------------------------------------------
-// kaola-gitea-workflow-plan-validator.js (issue #227 — adaptive path)
+// kaola-workflow-plan-validator.js (issue #227 — adaptive path)
 //
 // Validates a frozen `workflow-plan.md` against the closed grammar and computes
 // the auto-run / ask / typed-refusal governance decision. The agent freely
@@ -58,7 +58,10 @@ const IMPLEMENT_ROLES = new Set(['tdd-guide', 'build-error-resolver']);
 const SENSITIVE_PATTERNS = [
   /auth/i, /login/i, /password/i, /secret/i, /token/i, /credential/i,
   /payment/i, /billing/i, /checkout/i, /user-?data/i, /\bpii\b/i,
-  /filesystem/i, /external-?api/i, /api-?key/i, /oauth/i, /session/i,
+  // `filesystem` spelled out AND the bare `fs/` path-segment shorthand. Anchored on a
+  // path-segment boundary ((^|/) ... /) so it matches fs/x.js, src/fs/x.js, ./fs/x.js
+  // but NOT refs/, prefs/, dfs/, fsutil/, configs/fs.js, or a root file named fs.js.
+  /filesystem/i, /(^|\/)fs\//i, /external-?api/i, /api-?key/i, /oauth/i, /session/i,
 ];
 const SENSITIVE_LABELS = new Set(['security', 'auth', 'payments', 'secrets', 'user-data']);
 
@@ -99,12 +102,15 @@ function parseLabels(content) {
   if (!m) return null;
   return m[1].split(',').map(s => s.trim()).filter(Boolean);
 }
-// Parse the plan into validator-shaped nodes (reusing classifier's table reader
-// via a temp-free in-memory path is not possible — classifier.readPlanNodes reads
-// a file — so we re-read here from the same `## Nodes` section but keep parity by
-// delegating write-set extraction to classifier.extractFilePaths).
+// Parse the plan into validator-shaped nodes. Parity with the executor's reader is
+// load-bearing: section slicing is delegated to classifier.sectionBody (FENCE-AWARE) and
+// write-set parsing to classifier.parseWriteSetCell, so the validator, the plan_hash, and
+// classifier.readPlanNodes (which the executor uses) all see the SAME nodes — closing the
+// divergence where a fenced `## ` line inside `## Nodes` hid appended nodes from the
+// validator+hash but not the executor (audit B2/B3) — and the SAME write sets, so root-level
+// and dot-leading paths can no longer be silently dropped from the gates (audit A2/A2′).
 function parseNodes(content) {
-  const body = sliceSection(content, schema.NODES_HEADING);
+  const body = classifier.sectionBody(content, schema.NODES_HEADING);
   const rows = body.split('\n').map(l => l.trim()).filter(l => l.startsWith('|'));
   if (rows.length < 2) return [];
   const header = rows[0].split('|').slice(1, -1).map(c => c.trim().toLowerCase());
@@ -120,25 +126,18 @@ function parseNodes(content) {
       id,
       role: get('role'),
       dependsOn: get('depends_on').split(',').map(s => s.replace(/[#\s]/g, '')).filter(s => s && s !== '—' && s !== '-'),
-      writeSet: classifier.extractFilePaths(get('declared_write_set')),
+      writeSetRaw: get('declared_write_set'),
+      writeSet: classifier.parseWriteSetCell(get('declared_write_set')),
       cardinality: get('cardinality'),
       shape: parseShape(get('shape')),
     });
   }
   return nodes;
 }
-// h2 section slicer (mirrors classifier.sectionBody semantics, kept local so the
-// validator needs no extra classifier export).
-function sliceSection(content, heading) {
-  const lines = String(content || '').split('\n');
-  const re = new RegExp('^##\\s+' + heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$');
-  let start = -1;
-  for (let i = 0; i < lines.length; i++) { if (re.test(lines[i])) { start = i + 1; break; } }
-  if (start < 0) return '';
-  const out = [];
-  for (let i = start; i < lines.length; i++) { if (/^##\s+/.test(lines[i])) break; out.push(lines[i]); }
-  return out.join('\n');
-}
+// Section slicing is delegated to classifier.sectionBody (fence-aware) so the validator,
+// the plan_hash, and the executor's classifier.readPlanNodes share ONE reader and cannot
+// diverge on the section boundary (audit B2/B3). The previous local, non-fence-aware
+// sliceSection was removed for exactly that reason.
 
 // --- graph helpers ----------------------------------------------------------
 function adjacency(nodes) {
@@ -153,20 +152,34 @@ function uniqueSink(nodes) {
   const terminals = nodes.filter(n => !hasOut.has(n.id));
   return terminals.length === 1 ? terminals[0].id : null;
 }
+// Iterative (explicit-stack) DFS so a deep depends_on chain cannot stack-overflow.
+// White(0)/gray(1)/black(2): a forward edge to a GRAY node is a back edge => cycle.
+// Each frame carries its own neighbor cursor `i`; a node is blackened only after all
+// its neighbors are exhausted, preserving the recursive version's exact verdict. The
+// MAX_NODES cap in validatePlan/revalidateForResume already bounds the input; this
+// removes the recursion as a second, defense-in-depth backstop.
 function hasCycle(nodes) {
   const adj = adjacency(nodes);
-  const color = new Map(nodes.map(n => [n.id, 0]));
-  let cyc = false;
-  const dfs = u => {
-    color.set(u, 1);
-    for (const v of adj.get(u) || []) {
-      if (color.get(v) === 1) { cyc = true; return; }
-      if (color.get(v) === 0) dfs(v);
+  const color = new Map(nodes.map(n => [n.id, 0])); // 0=white, 1=gray, 2=black
+  for (const start of nodes) {
+    if (color.get(start.id) !== 0) continue;
+    color.set(start.id, 1);
+    const stack = [{ id: start.id, i: 0 }];
+    while (stack.length) {
+      const frame = stack[stack.length - 1];
+      const nbrs = adj.get(frame.id) || [];
+      if (frame.i < nbrs.length) {
+        const v = nbrs[frame.i++];
+        const c = color.get(v);
+        if (c === 1) return true;            // back edge to a gray ancestor => cycle
+        if (c === 0) { color.set(v, 1); stack.push({ id: v, i: 0 }); }
+      } else {
+        color.set(frame.id, 2);              // all neighbors done => blacken, pop
+        stack.pop();
+      }
     }
-    color.set(u, 2);
-  };
-  for (const n of nodes) if (color.get(n.id) === 0) dfs(n.id);
-  return cyc;
+  }
+  return false;
 }
 // gate coverage via reachability-after-removal (== post-dominance over unique sink)
 function gateUncovered(nodes, isTarget, gateRole, sink) {
@@ -204,6 +217,15 @@ function isDocsPath(p) { return /\.md$/i.test(p) || /(^|\/)docs\//.test(p); }
 // skip G1: G1 is not implement-role-only, it is "produces non-trivial code changes".
 function producesCode(node) {
   if (IMPLEMENT_ROLES.has(node.role)) return true;
+  // audit A1: the finalize SINK may only do docs/state bookkeeping (CHANGELOG.md, ROADMAP.md,
+  // workflow-state.md). ANY non-docs write declared on the sink is unreviewed code reaching the
+  // terminal node — and no gate can post-dominate the sink itself — so treat it as code-producing
+  // and let G1 fire. (Previously finalize was in neither IMPLEMENT_ROLES nor WRITE_ROLES, so code
+  // declared on the sink escaped G1 entirely.)
+  if (node.role === TERMINAL_ROLE) {
+    for (const p of node.writeSet) if (!isDocsPath(p)) return true;
+    return false;
+  }
   if (!WRITE_ROLES.has(node.role)) return false;
   for (const p of node.writeSet) if (!isDocsPath(p)) return true;
   return false;
@@ -218,7 +240,7 @@ function producesCode(node) {
 // freeze (e.g. security -> chore) would otherwise be invisible to --resume-check and
 // silently drop the G2 security requirement on resume.
 function computePlanHash(content) {
-  const norm = section => sliceSection(content, section)
+  const norm = section => classifier.sectionBody(content, section)
     .split('\n').map(l => l.trim()).filter(Boolean).join('\n');
   const body = norm('Meta') + '\n---NODES---\n' + norm(schema.NODES_HEADING);
   return crypto.createHash('sha256').update(body).digest('hex');
@@ -233,13 +255,23 @@ function readStoredHash(content) {
 function validatePlan(content, opts) {
   opts = opts || {};
   const nodes = parseNodes(content);
-  const labels = parseLabels(content);
+  // audit B1: read labels ONLY from the hash-covered `## Meta` section. parseLabels used to
+  // scan the whole document, so a decoy `labels:` line placed OUTSIDE `## Meta` (which the
+  // plan_hash does not cover) could override the real labels and silently drop the G2 gate,
+  // undetectable to --resume-check. Reader and hash now agree on where labels live.
+  const labels = parseLabels(classifier.sectionBody(content, 'Meta'));
   const roles = opts.installedRoles || installedRoles(opts.root || process.cwd());
   const fanoutCap = Number.isInteger(opts.fanoutCap) ? opts.fanoutCap : schema.resolveFanoutCap(process.env);
   const errors = [];
 
   if (!nodes.length) {
     return { result: 'refuse', errors: ['plan has no parseable ## Nodes table'], planHash: computePlanHash(content) };
+  }
+  // Input-size backstop: refuse an oversized plan as OUT OF GRAMMAR before any graph
+  // algorithm runs (a multi-thousand-node depends_on chain would otherwise blow the DFS
+  // stack — a crash, not a typed refusal). 200 is ~28x the largest realistic plan.
+  if (nodes.length > schema.MAX_NODES) {
+    return { result: 'refuse', errors: [`plan has ${nodes.length} nodes > MAX_NODES ${schema.MAX_NODES} (out of grammar)`], planHash: computePlanHash(content) };
   }
   const ids = new Set(nodes.map(n => n.id));
 
@@ -257,6 +289,13 @@ function validatePlan(content, opts) {
   if (!sink) errors.push('no unique finalize sink (need exactly one terminal node)');
   // read-only roles must not declare a write set; file ceiling per node
   for (const n of nodes) {
+    // audit A2: fail closed if a non-empty declared_write_set parses to no recognizable path.
+    // With structural cell parsing this should not happen for real paths; this backstops any
+    // future drop so a write can never silently vanish from the gates.
+    const rawWS = (n.writeSetRaw || '').trim();
+    if (rawWS && rawWS !== '—' && rawWS !== '-' && n.writeSet.size === 0) {
+      errors.push(`node ${n.id} declared_write_set "${rawWS}" yields no recognizable path (fail-closed refusal)`);
+    }
     if (n.role !== TERMINAL_ROLE && !WRITE_ROLES.has(n.role) && n.writeSet.size) {
       errors.push(`read-only role ${n.role} (node ${n.id}) declares a write set`);
     }
@@ -278,6 +317,10 @@ function validatePlan(content, opts) {
     }
     if (n.shape.kind === 'loop') {
       loopPresent = true;
+      // B7: a loop cap < 1 is out-of-grammar. parseShape matches loop((\d+)), so loop(0)
+      // parses as a structurally-valid loop with cap 0 — a zero-iteration loop whose body
+      // (e.g. a code-reviewer or build-error-resolver node) silently never runs.
+      if (n.shape.cap < 1) errors.push(`node ${n.id} loop cap ${n.shape.cap} < 1 (a loop must run at least once)`);
       if (n.shape.cap > schema.LOOP_CAP) errors.push(`node ${n.id} loop cap ${n.shape.cap} > LOOP_CAP ${schema.LOOP_CAP}`);
     }
     for (const p of n.writeSet) if (classifier.isSharedInfra(classifier.areaForPath(p))) sharedInfraTouch = true;
@@ -351,6 +394,9 @@ function revalidateForResume(content, opts) {
   if (stored !== computed) return { ok: false, reason: 'plan_hash mismatch — workflow-plan.md tampered after freeze' };
   const nodes = parseNodes(content);
   if (!nodes.length) return { ok: false, reason: 'workflow-plan.md ## Nodes unparseable' };
+  // Same input-size backstop as validatePlan: the resume path also calls hasCycle, so an
+  // oversized frozen plan must be refused before the DFS rather than overflow the stack.
+  if (nodes.length > schema.MAX_NODES) return { ok: false, reason: `plan has ${nodes.length} nodes > MAX_NODES ${schema.MAX_NODES} (out of grammar)` };
   const roles = opts.installedRoles || installedRoles(opts.root || process.cwd());
   const ids = new Set(nodes.map(n => n.id));
   for (const n of nodes) {
@@ -384,7 +430,7 @@ function injectHash(content, hash) {
 // --- CLI --------------------------------------------------------------------
 function printHelp() {
   process.stdout.write(
-    'usage: kaola-gitea-workflow-plan-validator.js <workflow-plan.md> [--json] [--freeze] [--resume-check]\n' +
+    'usage: kaola-workflow-plan-validator.js <workflow-plan.md> [--json] [--freeze] [--resume-check]\n' +
     '  default       validate + print the governance verdict; exit 1 on typed refusal\n' +
     '  --freeze      validate, then write the computed plan_hash into the plan file\n' +
     '  --resume-check  re-validate library + structure + hash only (not the gate rubric)\n'
@@ -427,7 +473,18 @@ function main() {
 }
 
 if (require.main === module) {
-  try { main(); } catch (err) { process.stderr.write(err.message + '\n'); process.exitCode = 1; }
+  try { main(); }
+  catch (err) {
+    // Fail closed: ANY uncaught internal error becomes a TYPED REFUSAL on STDOUT (not a
+    // bare stderr dump). main() is the only writer of the result, so on a throw stdout is
+    // empty — a --json consumer (executor / --freeze / --resume-check, and the walkthrough's
+    // validatePlanFixture which JSON.parses stdout) would otherwise crash on the empty parse.
+    // Detect --json from argv here since we are outside main().
+    const json = process.argv.includes('--json');
+    const out = { result: 'refuse', errors: ['validator internal error: ' + err.message] };
+    process.stdout.write((json ? JSON.stringify(out) : 'typed refusal (out of grammar): ' + out.errors[0]) + '\n');
+    process.exitCode = 1;
+  }
 }
 
 module.exports = {

@@ -46,6 +46,15 @@ const LOOP_CAP = 5;
 const FILE_CEILING = 6;
 const TEST_THRASH_LIMIT = 3;
 
+// Absolute node-count backstop for the plan grammar (DoS / stack-overflow guard).
+// Real plans are tiny (the walkthrough's largest fixture is 7 nodes; FANOUT_CAP=4,
+// LOOP_CAP=5 bound any single shape). 200 is ~28x the largest realistic plan, so it
+// NEVER false-refuses a real plan, while it bounds the validator's DFS depth far below
+// the recursion-overflow point: a multi-thousand-node depends_on chain is refused as
+// out-of-grammar BEFORE any graph algorithm runs. Lives here (the cap anchor) so all
+// four editions share one byte-identical value via the sync check.
+const MAX_NODES = 200;
+
 // Barrier escalation markers written durably to workflow-state.md. `security` forces
 // security-reviewer post-dominance; `consent` halts a provisional auto-run for the
 // user's explicit yes (surfaced on resume, never blindly re-dispatched); `test_thrash`
@@ -102,6 +111,7 @@ module.exports = {
   LOOP_CAP,
   FILE_CEILING,
   TEST_THRASH_LIMIT,
+  MAX_NODES,
   ESCALATION_MARKERS,
   CONFIG_REL_PATH,
   ENABLE_ADAPTIVE_FIELD,

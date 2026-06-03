@@ -2,7 +2,37 @@
 
 ## [Unreleased]
 
-- **Document the `kaola-workflow-plan-validator.js` CLI in `docs/api.md`** — a new "Adaptive Plan Validation" section gives the adaptive plan validator the same contract-altitude treatment as the other operational scripts (roadmap, sink, stale-worktree): the usage line, the three mutually-exclusive modes (default verdict / `--freeze` / `--resume-check`) plus `--json`, exit codes, the `--json` result shapes, and the grammar + governance + `plan_hash` contract — all read directly from the script. Documentation-only; the validator and CLAUDE.md's Key Scripts one-liner are unchanged. No version bump.
+## [3.19.1] — 2026-06-03
+
+### Fixed — adaptive path validator soundness (security)
+
+A full audit of the v3.19.0 adaptive path (opt-in, **OFF by default**) found that the plan validator — the gate that authorizes a plan to `auto-run` without human review — could be bypassed in several independent ways. All are fixed and locked with behavioral regression tests across all four editions; **default (non-adaptive) installs were never affected**. See `docs/investigations/adaptive-path-audit-2026-06-03.md`.
+
+- **Declared write sets are now parsed structurally** (`parseWriteSetCell`). The previous prose-oriented path extractor silently dropped root-level files (`Dockerfile`, `.env`, `secrets.yaml`) and dot-leading paths (`.`-prefixed CI/config directories) from a node's declared write set, letting code / secret / CI writes evade the `code-reviewer` (G1) and `security-reviewer` (G2) post-dominance gates and the per-node file ceiling. The validator and the executor's `readPlanNodes` now share this structural parser and fail closed when a non-empty cell yields no recognizable path.
+- **Code declared on the `finalize` sink is now gated.** Non-docs writes on the terminal node count as code-producing, so G1 fires (the sink can never be post-dominated) instead of letting code reach the sink unreviewed. Docs/state bookkeeping writes on `finalize` (e.g. `CHANGELOG.md`) remain allowed.
+- **Issue labels are read only from the hashed `## Meta` section.** A decoy `labels:` line placed outside `## Meta` (which `plan_hash` does not cover) can no longer override the real labels to silently drop the G2 security gate undetected by `--resume-check`.
+- **The validator and `plan_hash` now use the classifier's single fence-aware section reader.** A fenced `##` heading inside `## Nodes` previously truncated the validator's and the hash's view of the table while the executor saw the full table, hiding appended ungated nodes from validation and integrity checking.
+- **Resume requires a frozen plan.** `routeAdaptive` no longer falls through to a valid resume when the `plan_hash` comment is *deleted* (only a mismatch was caught before) — deleting the hash, appending an ungated node, and resuming is now a typed refusal.
+- **Validator input-size backstop + iterative cycle check.** A `MAX_NODES` cap (200, ~28× any real plan) refuses an oversized plan as out-of-grammar before any graph algorithm runs, and the cycle check is now iterative — a pathological multi-thousand-node plan can no longer stack-overflow the validator. Any uncaught validator error now emits a typed refusal as JSON, so `--json` consumers fail closed instead of crashing on empty output.
+- **`loop(0)` is out of grammar** (a zero-iteration loop silently skips its body), and a bare `fs/` path segment now counts as a Phase-5 filesystem-sensitive write (driving the G2 gate) without over-matching `refs/`, `prefs/`, or a root `fs.js`.
+
+### Changed
+
+- **Documented the adaptive path's static-vs-runtime enforcement boundary** as an accepted limitation in `docs/architecture.md` and the `kaola-workflow-plan-run` executor prose (all editions): the validator enforces gate *presence* statically at freeze, while gate *execution* at runtime is agent discipline, not script-enforced (`routeAdaptive` does not run the delegation matcher; Phase 6 re-checks only structure + `plan_hash`). Corrected the executor prose that implied a script cross-checks the gate compliance rows on the adaptive path.
+
+### Documentation
+
+- **Documented the `kaola-workflow-plan-validator.js` CLI in `docs/api.md`** — a new "Adaptive Plan Validation" section gives the adaptive plan validator the same contract-altitude treatment as the other operational scripts (roadmap, sink, stale-worktree): the usage line, the three modes (default verdict / `--freeze` / `--resume-check`) plus `--json`, exit codes, the `--json` result shapes, and the grammar + governance + `plan_hash` contract — all read directly from the script.
+- **Authoring guidance for the adaptive path** — `kaola-workflow-adapt` (all editions + the Codex skill) now ships a complete, copyable example `workflow-plan.md`, documents the caps (`FANOUT_CAP` 4, `LOOP_CAP` 5, `FILE_CEILING` 6) and the unique `finalize` sink, and marks `cardinality` as a reserved/advisory column.
+- **Doc-accuracy fixes** — `docs/api.md` now documents the three distinct `--json` refusal shapes and the real (non-mutually-exclusive) mode precedence; `docs/architecture.md` describes G1 as gating every *code-producing* node (not just implement nodes); and the GitLab edition's plan-run prose says "merge/MR".
+
+### Tests
+
+- Behavioral regression coverage for the above: hash-deleted resume refusal, the `MAX_NODES` cap, `loop(0)`/`fs/`, and the toggle-resolution / `--resume-check` CLI / structural-refusal / cap-boundary surfaces — added to the walkthrough across all four editions where applicable.
+
+### Deferred (tracked as follow-up issues)
+
+- Tier 2 script-level runtime barrier enforcement (`--barrier-check`), structurally-parallel-sibling disjointness (A3), per-origin fan-out group keying (B6), resume-edge hardening (E1/E2), a hard authoring-entry toggle guard (D8), an operator kill-switch for in-flight frozen plans, and two-sided root/dot path overlap detection in cross-project claim checks — all opt-in / off-by-default surface, filed for a later release.
 
 ## [3.19.0] — 2026-06-03
 

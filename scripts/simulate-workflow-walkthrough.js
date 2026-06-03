@@ -950,6 +950,310 @@ function testAdaptiveTier2Composition() {
   console.log('testAdaptiveTier2Composition: PASSED');
 }
 
+// 2026-06-03 audit fixes: lock the five validator/classifier soundness fixes so they cannot
+// regress — A1 (code on the finalize sink), A2 (slashless root path), A2′ (dot-leading path),
+// B1 (decoy labels line outside ## Meta dropping G2), B2/B3 (fenced ## heading hiding a node
+// from the validator + plan_hash). Each was empirically reproduced as a gate bypass before fix.
+function testAdaptiveAuditFixes() {
+  const tmp = adaptiveTmp('audit-fixes');
+  const planValidator = require(planValidatorScript);
+  try {
+    // A1: code declared on the finalize SINK must not bypass G1 (the sink can't be post-dominated).
+    let v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| done | finalize | explore | src/app.js | 1 | sequence |',
+    ], ['feature']);
+    assert(v.result === 'refuse' && /G1/.test((v.errors || []).join(';')),
+      'A1: code on the finalize sink must refuse (G1), got: ' + JSON.stringify(v));
+    // A1 control: a finalize node doing docs/state bookkeeping (CHANGELOG.md) stays in-grammar.
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| impl | tdd-guide | explore | lib/foo.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | CHANGELOG.md | 1 | sequence |',
+    ], ['feature']);
+    assert(v.result === 'in-grammar', 'A1 control: finalize docs write must stay in-grammar, got: ' + JSON.stringify(v));
+
+    // A2: a slashless root-level file (Dockerfile) on a write role is code and must require G1.
+    v = validatePlanFixture(tmp, [
+      '| n1 | doc-updater | — | Dockerfile | 1 | sequence |',
+      '| done | finalize | n1 | — | 1 | sequence |',
+    ], ['chore']);
+    assert(v.result === 'refuse' && /G1/.test((v.errors || []).join(';')),
+      'A2: slashless root file must be captured and require code-reviewer (G1), got: ' + JSON.stringify(v));
+
+    // A2′: a dot-leading path with slashes (.github/workflows/deploy.yml) must also be captured.
+    v = validatePlanFixture(tmp, [
+      '| n1 | doc-updater | — | .github/workflows/deploy.yml | 1 | sequence |',
+      '| done | finalize | n1 | — | 1 | sequence |',
+    ], ['chore']);
+    assert(v.result === 'refuse' && /G1/.test((v.errors || []).join(';')),
+      'A2′: dot-leading path must be captured and require code-reviewer (G1), got: ' + JSON.stringify(v));
+
+    // A2 (FILE_CEILING): root-level files now count toward the per-node ceiling.
+    v = validatePlanFixture(tmp, [
+      '| impl | tdd-guide | — | Dockerfile, Makefile, build.env, a.txt, b.txt, c.txt, d.txt | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], ['chore']);
+    assert(v.result === 'refuse' && /FILE_CEILING/.test((v.errors || []).join(';')),
+      'A2: root files must count toward FILE_CEILING, got: ' + JSON.stringify(v));
+
+    // B1: a decoy `labels:` line OUTSIDE ## Meta (not covered by plan_hash) must not override the
+    // real labels and drop G2. Label-only-sensitive plan with no security-reviewer must refuse.
+    const decoyPlan = [
+      '# Plan', '', 'labels: chore', '', '## Meta', '', 'labels: security', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '|---|---|---|---|---|---|',
+      '| n1 | tdd-guide | — | src/handler.js | 1 | sequence |',
+      '| rv | code-reviewer | n1 | — | 1 | sequence |',
+      '| done | finalize | rv | — | 1 | sequence |', ''
+    ].join('\n');
+    const dv = planValidator.validatePlan(decoyPlan, { root: tmp });
+    assert(dv.result === 'refuse' && /G2/.test((dv.errors || []).join(';')),
+      'B1: decoy labels line outside ## Meta must not drop G2, got: ' + JSON.stringify(dv));
+
+    // B2/B3: a fenced `## ` line inside ## Nodes must not hide an appended node from the validator
+    // (it shares the fence-aware reader with the executor) — the hidden node makes a second sink.
+    const fencedPlan = [
+      '# Plan', '', '## Meta', '', 'labels: chore', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '|---|---|---|---|---|---|',
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| done | finalize | explore | — | 1 | sequence |',
+      '', '```', '## x', '```', '',
+      '| inj | tdd-guide | explore | src/evil.js | 1 | sequence |', ''
+    ].join('\n');
+    const fv = planValidator.validatePlan(fencedPlan, { root: tmp });
+    assert(fv.result === 'refuse',
+      'B2/B3: a node after a fenced ## inside ## Nodes must be visible to the validator (refuse), got: ' + JSON.stringify(fv));
+
+    // B3: and the plan_hash must cover post-fence content — appending such a node after freeze
+    // must fail --resume-check (hash mismatch), not pass silently.
+    const clean = planValidator.freezePlan([
+      '# Plan', '', '## Meta', '', 'labels: chore', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '|---|---|---|---|---|---|',
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| done | finalize | explore | — | 1 | sequence |', ''
+    ].join('\n'));
+    assert(clean.frozen, 'B3: clean plan should freeze');
+    const injected = clean.content + '\n\n```\n## x\n```\n\n| inj | tdd-guide | explore | src/evil.js | 1 | sequence |\n';
+    assert(planValidator.revalidateForResume(injected).ok === false,
+      'B3: a node appended after a fenced ## must fail resume-check (plan_hash covers it)');
+    assert(planValidator.revalidateForResume(clean.content).ok === true,
+      'B3 control: the untampered frozen plan must pass resume-check');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptiveAuditFixes: PASSED');
+}
+
+// routeAdaptive: a frozen plan whose plan_hash comment is DELETED + an ungated node appended
+// must be a typed refusal — never a plan-run/phaseN resume (a B3 cousin; resume requires a
+// frozen plan, so a missing hash fails closed).
+function testAdaptiveResumeHashDeletedTypedRefusal() {
+  const tmp = adaptiveTmp('resume-hash-deleted');
+  try {
+    const planPath = plantFrozenPlan(tmp, 'issue-912', ADAPTIVE_PLAN);
+    let plan = read(planPath).replace(/<!--\s*plan_hash:\s*[0-9a-f]{64}\s*-->\s*\n?/, '');
+    plan = plan.trimEnd() + '\n| evil | tdd-guide | explore | src/auth/login.js | 1 | sequence |\n';
+    fs.writeFileSync(planPath, plan);
+    const result = runNode(repairScript, ['issue-912'], tmp);
+    assert(/typed refusal/i.test(result.stdout), 'hash-deleted plan must be a typed refusal, got:\n' + result.stdout);
+    assert(/plan_hash missing/i.test(result.stdout), 'refusal must cite missing plan_hash, got:\n' + result.stdout);
+    assert(!/kaola-workflow-plan-run/.test(result.stdout), 'hash-deleted plan must NOT resume to plan-run');
+    assert(!/kaola-workflow-phase\d/.test(result.stdout), 'hash-deleted plan must NOT fall back to phaseN');
+    assert(!fs.existsSync(statePath(tmp, 'issue-912')), 'refusal must write no workflow-state.md');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptiveResumeHashDeletedTypedRefusal: PASSED');
+}
+
+// SOUNDNESS: a plan above MAX_NODES is refused as OUT OF GRAMMAR (a typed refusal), not crashed.
+// Pre-fix a deep depends_on chain overflowed hasCycle's recursive DFS and the CLI emitted EMPTY
+// stdout under --json; this test passing proves both the typed refuse AND that stdout is valid JSON.
+function testAdaptiveValidatorNodeCap() {
+  const tmp = adaptiveTmp('validator-cap');
+  try {
+    const schema = require(path.join(repoRoot, 'scripts', 'kaola-workflow-adaptive-schema.js'));
+    const overCap = schema.MAX_NODES + 50;
+    const rows = ['| n1 | code-explorer | — | — | 1 | sequence |'];
+    for (let i = 2; i <= overCap; i++) rows.push(`| n${i} | code-explorer | n${i - 1} | — | 1 | sequence |`);
+    rows.push(`| done | finalize | n${overCap} | — | 1 | sequence |`);
+    const v = validatePlanFixture(tmp, rows, []); // does JSON.parse(stdout) — proves stdout is valid JSON
+    assert(v.result === 'refuse', 'over-cap plan must be a typed refusal, got: ' + JSON.stringify(v));
+    assert(v.errors.some(e => /MAX_NODES/.test(e)), 'over-cap refusal must cite MAX_NODES, got: ' + JSON.stringify(v.errors));
+    const atCap = ['| n1 | tdd-guide | — | lib/foo.js | 1 | sequence |',
+                   '| review | code-reviewer | n1 | — | 1 | sequence |',
+                   '| done | finalize | review | — | 1 | sequence |'];
+    const ok = validatePlanFixture(tmp, atCap, []);
+    assert(ok.result === 'in-grammar', 'a normal small plan must remain in-grammar after the cap, got: ' + JSON.stringify(ok));
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptiveValidatorNodeCap: PASSED');
+}
+
+// Cheap-win micro-fixes: B7 — loop(0) is out-of-grammar (a zero-iteration loop silently skips
+// its body); B5 — a bare `fs/` path segment is a Phase-5 (filesystem) sensitive write that drives
+// G2 + the sensitivity band, without over-matching refs/ / prefs/ / fs.js.
+function testAdaptiveCheapWinFixes() {
+  const tmp = adaptiveTmp('cheap-win-fixes');
+  try {
+    let v = validatePlanFixture(tmp, [
+      '| impl | tdd-guide | — | lib/foo.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | loop(0) |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], ['chore']);
+    assert(v.result === 'refuse' && /loop cap 0 < 1/.test((v.errors || []).join(';')),
+      'B7: loop(0) must be a typed refusal (cap < 1), got: ' + JSON.stringify(v));
+    v = validatePlanFixture(tmp, [
+      '| impl | tdd-guide | — | lib/foo.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | loop(1) |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], ['chore']);
+    assert(v.result === 'in-grammar' && v.decision === 'ask',
+      'B7 control: loop(1) must stay in-grammar + ask (loop present), got: ' + JSON.stringify(v));
+    v = validatePlanFixture(tmp, [
+      '| impl | tdd-guide | — | fs/handler.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], ['chore']);
+    assert(v.result === 'refuse' && /G2/.test((v.errors || []).join(';')),
+      'B5: fs/ write without security-reviewer must refuse (G2 sensitivity), got: ' + JSON.stringify(v));
+    v = validatePlanFixture(tmp, [
+      '| impl | tdd-guide | — | fs/handler.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| sec | security-reviewer | review | — | 1 | sequence |',
+      '| done | finalize | sec | — | 1 | sequence |',
+    ], ['chore']);
+    assert(v.result === 'in-grammar' && v.decision === 'ask' && v.risk && v.risk.sensitivity === true,
+      'B5: fs/ write with security-reviewer must be in-grammar + ask (sensitivity), got: ' + JSON.stringify(v));
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| impl | tdd-guide | explore | src/refs/x.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], ['chore']);
+    assert(v.result === 'in-grammar' && v.decision === 'auto-run' && v.risk && v.risk.sensitivity === false,
+      'B5 control: src/refs/ must not over-match fs/ and must stay auto-run, got: ' + JSON.stringify(v));
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptiveCheapWinFixes: PASSED');
+}
+
+// Follow-up coverage (I4/I5/I6/I7): lock the toggle-resolution contract, the --resume-check CLI
+// surface, and the structural-refusal + cap boundaries the audit fixes rest on. Every verdict
+// here was confirmed against the live validator; do not relax.
+function testAdaptiveAuditCoverage() {
+  const tmp = adaptiveTmp('audit-coverage');
+  try {
+    // I4: resolveEnableAdaptive toggle precedence (pure-function calls; OFF-by-default + strict).
+    const schema = require(path.join(repoRoot, 'scripts', 'kaola-workflow-adaptive-schema.js'));
+    assert(schema.resolveEnableAdaptive({ enable_adaptive: true }, {}) === true, 'I4: config true (no env) => true');
+    assert(schema.resolveEnableAdaptive({ enable_adaptive: 'true' }, {}) === false, 'I4: STRICT === true — string "true" must NOT enable');
+    assert(schema.resolveEnableAdaptive({ enable_adaptive: 1 }, {}) === false, 'I4: STRICT === true — number 1 must NOT enable');
+    assert(schema.resolveEnableAdaptive({}, {}) === false, 'I4: absent => OFF');
+    assert(schema.resolveEnableAdaptive(null, {}) === false, 'I4: null config => OFF');
+    assert(schema.resolveEnableAdaptive({ enable_adaptive: false }, { KAOLA_ENABLE_ADAPTIVE: '1' }) === true, 'I4: env "1" overrides config false');
+    assert(schema.resolveEnableAdaptive({ enable_adaptive: true }, { KAOLA_ENABLE_ADAPTIVE: '0' }) === false, 'I4: env "0" overrides config true');
+    assert(schema.resolveEnableAdaptive({}, { KAOLA_ENABLE_ADAPTIVE: 'true' }) === true, 'I4: env "true" enables');
+    assert(schema.resolveEnableAdaptive({ enable_adaptive: true }, { KAOLA_ENABLE_ADAPTIVE: 'maybe' }) === true, 'I4: unrecognized env falls through to config');
+
+    // I5: the --resume-check CLI flag end-to-end (not just the library).
+    const resumePlan = path.join(tmp, 'resume-plan.md');
+    fs.writeFileSync(resumePlan, [
+      '# Plan', '', '## Meta', 'labels: chore', '', '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '|---|---|---|---|---|---|',
+      '| impl | tdd-guide | — | lib/foo.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |', ''
+    ].join('\n'));
+    const froze = runNode(planValidatorScript, [resumePlan, '--freeze'], tmp);
+    assert(froze.status === 0, 'I5: --freeze must exit 0, got ' + froze.status + ' ' + froze.stderr);
+    const okRun = runNode(planValidatorScript, [resumePlan, '--resume-check', '--json'], tmp);
+    const okJson = JSON.parse(okRun.stdout);
+    assert(okRun.status === 0 && okJson.ok === true, 'I5: --resume-check clean => ok:true exit 0, got ' + okRun.status + ' ' + okRun.stdout);
+    fs.writeFileSync(resumePlan, read(resumePlan).replace('lib/foo.js', 'lib/bar.js'));
+    const badRun = runNode(planValidatorScript, [resumePlan, '--resume-check', '--json'], tmp);
+    const badJson = JSON.parse(badRun.stdout);
+    assert(badRun.status === 1 && badJson.ok === false && /plan_hash mismatch/.test(badJson.reason),
+      'I5: --resume-check tampered => ok:false exit 1 (mismatch), got ' + badRun.status + ' ' + badRun.stdout);
+
+    // I6: structural refusals (each must be result:'refuse').
+    let v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| d1 | finalize | explore | — | 1 | sequence |',
+      '| d2 | finalize | explore | — | 1 | sequence |',
+    ], ['chore']);
+    assert(v.result === 'refuse' && /unique finalize sink/.test((v.errors || []).join(';')), 'I6: two finalize sinks must refuse, got: ' + JSON.stringify(v));
+    v = validatePlanFixture(tmp, [
+      '| explore | wizard | — | — | 1 | sequence |',
+      '| done | finalize | explore | — | 1 | sequence |',
+    ], ['chore']);
+    assert(v.result === 'refuse' && /unknown role/.test((v.errors || []).join(';')), 'I6: unknown role must refuse, got: ' + JSON.stringify(v));
+    v = validatePlanFixture(tmp, [
+      '| a | code-explorer | b | — | 1 | sequence |',
+      '| b | tdd-guide | a | lib/x.js | 1 | sequence |',
+      '| review | code-reviewer | b | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], ['chore']);
+    assert(v.result === 'refuse' && /cycle detected/.test((v.errors || []).join(';')), 'I6: a cycle must refuse, got: ' + JSON.stringify(v));
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | ghost | — | 1 | sequence |',
+      '| done | finalize | explore | — | 1 | sequence |',
+    ], ['chore']);
+    assert(v.result === 'refuse' && /depends_on unknown node/.test((v.errors || []).join(';')), 'I6: dangling depends_on must refuse, got: ' + JSON.stringify(v));
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | lib/x.js | 1 | sequence |',
+      '| done | finalize | explore | — | 1 | sequence |',
+    ], ['chore']);
+    assert(v.result === 'refuse' && /read-only role/.test((v.errors || []).join(';')), 'I6: read-only role with write set must refuse, got: ' + JSON.stringify(v));
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| f1 | tdd-guide | explore | a/1.js | 1 | fanout(g) |',
+      '| f2 | tdd-guide | explore | b/2.js | 1 | fanout(g) |',
+      '| f3 | tdd-guide | explore | c/3.js | 1 | fanout(g) |',
+      '| f4 | tdd-guide | explore | d/4.js | 1 | fanout(g) |',
+      '| f5 | tdd-guide | explore | e/5.js | 1 | fanout(g) |',
+      '| review | code-reviewer | f1,f2,f3,f4,f5 | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], ['chore']);
+    assert(v.result === 'refuse' && /FANOUT_CAP/.test((v.errors || []).join(';')), 'I6: fan-out of 5 > FANOUT_CAP must refuse, got: ' + JSON.stringify(v));
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| f1 | tdd-guide | explore | scripts/a.js | 1 | fanout(g) |',
+      '| f2 | tdd-guide | explore | scripts/b.js | 1 | fanout(g) |',
+      '| review | code-reviewer | f1,f2 | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], ['chore']);
+    assert(v.result === 'refuse' && /shared infra/.test((v.errors || []).join(';')), 'I6: YELLOW shared-infra fan-out must refuse, got: ' + JSON.stringify(v));
+
+    // I7: LOOP_CAP boundary + read-only width cap.
+    v = validatePlanFixture(tmp, [
+      '| impl | tdd-guide | — | lib/foo.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | loop(5) |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], ['chore']);
+    assert(v.result === 'in-grammar' && v.decision === 'ask', 'I7: loop(5) == LOOP_CAP must be in-grammar + ask, got: ' + JSON.stringify(v));
+    v = validatePlanFixture(tmp, [
+      '| impl | tdd-guide | — | lib/foo.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | loop(6) |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], ['chore']);
+    assert(v.result === 'refuse' && /LOOP_CAP/.test((v.errors || []).join(';')), 'I7: loop(6) > LOOP_CAP must refuse, got: ' + JSON.stringify(v));
+    v = validatePlanFixture(tmp, [
+      '| f1 | code-explorer | — | — | 1 | fanout(g) |',
+      '| f2 | code-explorer | — | — | 1 | fanout(g) |',
+      '| f3 | code-explorer | — | — | 1 | fanout(g) |',
+      '| f4 | code-explorer | — | — | 1 | fanout(g) |',
+      '| f5 | code-explorer | — | — | 1 | fanout(g) |',
+      '| done | finalize | f1,f2,f3,f4,f5 | — | 1 | sequence |',
+    ], ['chore']);
+    assert(v.result === 'refuse' && /FANOUT_CAP/.test((v.errors || []).join(';')), 'I7: read-only fan-out of 5 > FANOUT_CAP must refuse, got: ' + JSON.stringify(v));
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptiveAuditCoverage: PASSED');
+}
+
 function runClassifierOffline(tmp, issueNumber) {
   const result = spawnSync(process.execPath, [classifierScript, 'classify', '--issue', String(issueNumber)], {
     cwd: tmp, encoding: 'utf8',
@@ -5213,6 +5517,11 @@ async function main() {
     testAdaptiveConsentHaltSurfaces();
     testAdaptiveValidatorGovernance();
     testAdaptiveTier2Composition();
+    testAdaptiveAuditFixes();
+    testAdaptiveResumeHashDeletedTypedRefusal();
+    testAdaptiveValidatorNodeCap();
+    testAdaptiveCheapWinFixes();
+    testAdaptiveAuditCoverage();
     console.log('Workflow walkthrough simulation passed');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });

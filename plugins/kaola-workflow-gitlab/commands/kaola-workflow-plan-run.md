@@ -141,9 +141,20 @@ Agent(
 5. **update-ledger** — mark `complete` (or `n/a`), emit the node's one
    `## Required Agent Compliance` row. For a `code-reviewer` / `security-reviewer`
    gate or skeptic row, key it with the **bare role string** (`code-reviewer`,
-   `security-reviewer`); per-instance disambiguation goes in the Evidence column
-   only — otherwise `delegationPolicyCompliance()`'s anchored matcher silently
-   skips it.
+   `security-reviewer`); per-instance disambiguation goes in the Evidence column only
+   (the canonical compliance-row format the full-path `delegationPolicyCompliance()`
+   matcher expects). Never mark a gate row `n/a` while a node it post-dominates reached
+   `complete` — a gate row must record a node that actually ran and produced a passing
+   verdict.
+
+> **Enforcement boundary (accepted limitation).** The validator enforces gate
+> *presence* statically at freeze (post-dominance over the unique sink). Gate
+> *execution* at runtime — the review actually running, the barrier re-scan +
+> consent/security escalation, the actual-writes-vs-declared-allowlist diff, and the
+> quorum tally — is **agent discipline on the adaptive path, not script-enforced**:
+> `routeAdaptive` resumes without running the delegation matcher, and Phase 6 re-checks
+> only structure + `plan_hash`. The steps above are therefore obligations, not
+> guarantees — perform them. (Documented as a known limitation in the architecture docs.)
 
 ## Quorum / decision nodes (read-only fan-out)
 
@@ -174,5 +185,5 @@ When every ledger row is `complete` or `n/a`, route to Phase 6:
 ```
 
 Phase 6 anchors on the frozen plan + all-complete ledger (adaptive projects have
-no `phase5-review.md`), then runs the unchanged sink (merge/PR, archive, close,
+no `phase5-review.md`), then runs the unchanged sink (merge/MR, archive, close,
 roadmap regen).

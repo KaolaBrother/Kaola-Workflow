@@ -106,6 +106,26 @@ function extractFilePaths(text) {
   return paths;
 }
 
+// issue #227 audit fix (A2/A2′): parse a frozen plan's declared_write_set CELL structurally.
+// The cell is an author-declared, comma/space-separated path list — NOT free prose — so it must
+// be parsed structurally, not with the prose-oriented extractFilePaths() path-finder. That
+// finder requires a "/" AND a non-dot first segment, which SILENTLY DROPS root-level files
+// (Dockerfile, .env, secrets.yaml) and dot-leading paths (.github/workflows/deploy.yml,
+// .gitlab-ci.yml). Those drops let code / secret / CI writes evade the G1/G2 gates and the
+// FILE_CEILING. Here every non-empty normalized token counts (fail-closed: an author who
+// declares a write is taken at their word). The empty / dash markers preserve the read-only
+// carve-out (no declared writes => trivially disjoint).
+function parseWriteSetCell(cell) {
+  const set = new Set();
+  const raw = String(cell || '').trim();
+  if (!raw || raw === '—' || raw === '-') return set;
+  for (const tok of raw.split(/[\s,]+/)) {
+    const p = normalizeRepoPath(tok);
+    if (p && p !== '—' && p !== '-') set.add(p);
+  }
+  return set;
+}
+
 function extractCoarseAreas(text) {
   const areas = new Set();
   for (const filePath of extractFilePaths(text)) {
@@ -238,9 +258,9 @@ function isSharedInfra(area) {
 
 // issue #227 (adaptive path): parse the `## Nodes` table of a frozen workflow-plan.md
 // into node objects. Tolerant to column reorder (maps by header name). The
-// declared_write_set cell is parsed with the existing extractFilePaths() so the
-// established `touches:`/path-token convention and the empty/role-namespaced
-// read-only carve-out both apply. depends_on splits on comma.
+// declared_write_set cell is parsed structurally with parseWriteSetCell() so root-level
+// and dot-leading paths are not silently dropped (audit A2/A2′); the empty/dash read-only
+// carve-out still applies. depends_on splits on comma.
 function readPlanNodes(planPath) {
   let content = '';
   try { content = fs.readFileSync(planPath, 'utf8'); } catch (_) { return []; }
@@ -260,7 +280,7 @@ function readPlanNodes(planPath) {
       id,
       role: get('role'),
       dependsOn: get('depends_on').split(',').map(s => s.replace(/[#\s]/g, '')).filter(s => s && s !== '—' && s !== '-'),
-      writeSet: extractFilePaths(get('declared_write_set')),
+      writeSet: parseWriteSetCell(get('declared_write_set')),
       cardinality: get('cardinality'),
       shape: get('shape'),
     });
@@ -530,6 +550,8 @@ if (require.main === module) {
 module.exports = {
   extractFilePaths,
   extractCoarseAreas,
+  parseWriteSetCell,
+  sectionBody,
   areaForPath,
   SHARED_INFRA,
   isSharedInfra,

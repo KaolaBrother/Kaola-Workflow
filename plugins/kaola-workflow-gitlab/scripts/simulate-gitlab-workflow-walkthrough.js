@@ -260,6 +260,32 @@ function testGitlabAdaptive() {
     fs.writeFileSync(tplan, fs.readFileSync(tplan, 'utf8').replace('lib/x.js', 'lib/y.js'));
     const tampered = spawnNode(repairScript, ['issue-904'], tmp);
     assert.ok(/typed refusal/.test(tampered.stdout), 'gitlab: tampered plan must be a typed refusal, got: ' + tampered.stdout);
+
+    // 2026-06-03 audit fixes (I1): the gate-refusal behavior must hold on the FORK validator too,
+    // since its classifier is a manual port. A1 finalize-sink code, A2 slashless root file, B1
+    // decoy labels line outside ## Meta dropping G2.
+    function gateVal(rows, label, rawDoc) {
+      const p = path.join(tmp, 'gate-plan.md');
+      const content = rawDoc !== undefined ? rawDoc : [
+        '# Plan', '', '## Meta', 'labels: ' + label, '', '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape |',
+        '|---|---|---|---|---|---|',
+      ].concat(rows).concat(['']).join('\n');
+      fs.writeFileSync(p, content);
+      return JSON.parse(spawnNode(valScript, [p, '--json'], tmp).stdout);
+    }
+    assert.strictEqual(gateVal(['| e | code-explorer | — | — | 1 | sequence |', '| d | finalize | e | src/app.js | 1 | sequence |'], 'feature').result,
+      'refuse', 'gitlab A1: code on the finalize sink must refuse (G1)');
+    assert.strictEqual(gateVal(['| n1 | doc-updater | — | Dockerfile | 1 | sequence |', '| d | finalize | n1 | — | 1 | sequence |'], 'chore').result,
+      'refuse', 'gitlab A2: slashless root file must require code-reviewer (G1)');
+    assert.strictEqual(gateVal(null, null, [
+      '# Plan', '', 'labels: chore', '', '## Meta', 'labels: security', '', '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '|---|---|---|---|---|---|',
+      '| n1 | tdd-guide | — | src/h.js | 1 | sequence |',
+      '| rv | code-reviewer | n1 | — | 1 | sequence |',
+      '| d | finalize | rv | — | 1 | sequence |', ''
+    ].join('\n')).result, 'refuse', 'gitlab B1: decoy labels line outside ## Meta must not drop G2');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

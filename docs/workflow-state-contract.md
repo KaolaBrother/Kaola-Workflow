@@ -24,7 +24,9 @@ here for the full contract.
   spine. It contains a `## Meta` block (frozen issue `labels:`), a machine-readable
   `## Nodes` table (`| id | role | depends_on | declared_write_set | cardinality | shape |`;
   `shape` ∈ `sequence` / `fanout(<group>)` / `loop(<cap>)`; a single unique
-  `finalize` sink), a `## Node Ledger` (`status` ∈ `pending`/`in_progress`/`complete`/`n/a`),
+  `finalize` sink; `cardinality` is a reserved/advisory column — parsed but not
+  validated or used by the grammar or gates, though its text still feeds `plan_hash`
+  as part of `## Nodes`, so keep it present and stable), a `## Node Ledger` (`status` ∈ `pending`/`in_progress`/`complete`/`n/a`),
   and a script-computed `plan_hash` (an HTML comment `<!-- plan_hash: <sha256> -->`)
   that **lives inside `workflow-plan.md`** — never in `workflow-state.md`, because
   repair-state runs precisely when `workflow-state.md` is missing. The validator/claim

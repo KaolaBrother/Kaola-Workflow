@@ -507,14 +507,17 @@ function routeAdaptive(root, workflowDir, project) {
   const planFile = path.join(projectDir, 'workflow-plan.md');
   const content = readFile(planFile);
 
-  const stored = planValidator.readStoredHash(content);
-  if (stored) {
-    const check = planValidator.revalidateForResume(content, { root });
-    if (!check.ok) {
-      return { reason: `adaptive plan unresumable (typed refusal): ${check.reason}` };
-    }
-  } else if (planValidator.parseNodes(content).length === 0) {
+  // Resume requires a frozen plan. revalidateForResume() fails closed on a MISSING
+  // plan_hash ('plan_hash missing — plan is not frozen'), so it must run UNCONDITIONALLY:
+  // an earlier `if (stored)` guard let an attacker delete the <!-- plan_hash --> comment,
+  // append an ungated node, and fall through to a valid resume route (a B3 cousin). The
+  // unparseable-Nodes check stays FIRST only for a clearer diagnostic; it is not the gate.
+  if (planValidator.parseNodes(content).length === 0) {
     return { reason: 'adaptive plan unparseable (typed refusal): workflow-plan.md has no ## Nodes table' };
+  }
+  const check = planValidator.revalidateForResume(content, { root });
+  if (!check.ok) {
+    return { reason: `adaptive plan unresumable (typed refusal): ${check.reason}` };
   }
 
   const stateFile = path.join(projectDir, 'workflow-state.md');

@@ -53,8 +53,8 @@ function isSharedInfra(area) {
 }
 
 // issue #227 (adaptive path): parse the `## Nodes` table of a frozen workflow-plan.md
-// into node objects (tolerant to column reorder; write set via extractFilePaths so the
-// touches:/path convention + the read-only empty-set carve-out both apply).
+// into node objects (tolerant to column reorder; write set via parseWriteSetCell so root-level
+// and dot-leading paths are not silently dropped (audit A2/A2′); read-only carve-out applies).
 function readPlanNodes(planPath) {
   let content = '';
   try { content = fs.readFileSync(planPath, 'utf8'); } catch (_) { return []; }
@@ -74,7 +74,7 @@ function readPlanNodes(planPath) {
       id,
       role: get('role'),
       dependsOn: get('depends_on').split(',').map(s => s.replace(/[#\s]/g, '')).filter(s => s && s !== '—' && s !== '-'),
-      writeSet: extractFilePaths(get('declared_write_set')),
+      writeSet: parseWriteSetCell(get('declared_write_set')),
       cardinality: get('cardinality'),
       shape: get('shape'),
     });
@@ -137,6 +137,26 @@ function extractFilePaths(text) {
     if (filePath.includes('/')) paths.add(filePath);
   }
   return paths;
+}
+
+// issue #227 audit fix (A2/A2′): parse a frozen plan's declared_write_set CELL structurally.
+// The cell is an author-declared, comma/space-separated path list — NOT free prose — so it must
+// be parsed structurally, not with the prose-oriented extractFilePaths() path-finder. That
+// finder requires a "/" AND a non-dot first segment, which SILENTLY DROPS root-level files
+// (Dockerfile, Makefile, secrets.yaml, build.env) and any dot-leading path (a "."-prefixed
+// CI or config directory). Those drops let code / secret / CI writes evade the G1/G2 gates and the
+// FILE_CEILING. Here every non-empty normalized token counts (fail-closed: an author who
+// declares a write is taken at their word). The empty / dash markers preserve the read-only
+// carve-out (no declared writes => trivially disjoint).
+function parseWriteSetCell(cell) {
+  const set = new Set();
+  const raw = String(cell || '').trim();
+  if (!raw || raw === '—' || raw === '-') return set;
+  for (const tok of raw.split(/[\s,]+/)) {
+    const p = normalizeRepoPath(tok);
+    if (p && p !== '—' && p !== '-') set.add(p);
+  }
+  return set;
 }
 
 function extractCoarseAreas(text) {
@@ -464,6 +484,8 @@ module.exports = {
   classifyIssue,
   extractCoarseAreas,
   extractFilePaths,
+  parseWriteSetCell,
+  sectionBody,
   areaForPath,
   SHARED_INFRA,
   isSharedInfra,

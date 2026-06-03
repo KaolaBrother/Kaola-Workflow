@@ -48,6 +48,10 @@ written as one row of the `## Nodes` markdown table:
   `fanout(<group>)` (N instances of one role over pairwise-disjoint declared
   write sets, N ≤ `FANOUT_CAP`), or `loop(<cap>)` (one role re-invoked up to a
   static cap; loops do not fan out).
+- **cardinality** is a **reserved / advisory** column: the validator parses it but
+  does not validate or use it (fan-out width is the row count in a `fanout(<group>)`,
+  not this column). Keep a plain count (e.g. `1`); its text still feeds `plan_hash`
+  as part of `## Nodes`, so keep the column present and stable.
 - A single unique `finalize` sink is mandatory — it makes the gate checks
   decidable.
 
@@ -63,6 +67,57 @@ not a flag the author can set.
 
 Capture the **frozen issue labels** into a `## Meta` `labels:` line (a non-author
 field) so the validator can derive sensitivity.
+
+## Caps and the sink (fixed by the harness)
+
+- **`FANOUT_CAP`** — max instances in one `fanout(<group>)`; default **4** (env
+  `KAOLA_FANOUT_CAP`). Width is the number of rows sharing the group token.
+- **`LOOP_CAP`** — max `loop(<cap>)` bound: **5**. A loop must run at least once —
+  `loop(0)` is a typed refusal.
+- **`FILE_CEILING`** — max paths in any one node's `declared_write_set`: **6**.
+  Root-level (`Dockerfile`) and dot-leading (`.config/ci.yml`) paths count too.
+- **Unique `finalize` sink** — exactly one terminal node, role **`finalize`**. It
+  may only write docs/state bookkeeping (e.g. `CHANGELOG.md`); any non-docs write
+  declared on the sink is treated as unreviewed code and trips the `code-reviewer` gate.
+
+## A complete example (`workflow-plan.md`)
+
+A minimal in-grammar plan to copy and adapt: `code-explorer` explores, two `tdd-guide`
+nodes implement in parallel over **disjoint top-level directories** (`exporter/` vs
+`renderer/`), `code-reviewer` post-dominates both, and the unique `finalize` sink closes
+the DAG. It validates in-grammar and freezes; because it is a write-role fan-out it routes
+to **ask** (surface for approval) — expected, not an error.
+
+```markdown
+# Workflow Plan — issue #142
+
+## Meta
+labels: enhancement
+
+## Nodes
+
+| id        | role          | depends_on          | declared_write_set | cardinality | shape        |
+|-----------|---------------|---------------------|--------------------|-------------|--------------|
+| explore   | code-explorer | —                   | —                  | 1           | sequence     |
+| impl-csv  | tdd-guide     | explore             | exporter/csv.js    | 1           | fanout(impl) |
+| impl-html | tdd-guide     | explore             | renderer/html.js   | 1           | fanout(impl) |
+| review    | code-reviewer | impl-csv, impl-html | —                  | 1           | sequence     |
+| finalize  | finalize      | review              | CHANGELOG.md       | 1           | sequence     |
+
+## Node Ledger
+
+| id        | status  |
+|-----------|---------|
+| explore   | pending |
+| impl-csv  | pending |
+| impl-html | pending |
+| review    | pending |
+| finalize  | pending |
+```
+
+Disjointness is checked at **top-level-directory** granularity (`exporter/` vs `renderer/`,
+not exact path), so fan-out siblings must live under different top-level directories. To turn
+a refusal into a fix, read the typed refusal and correct the plan — never clamp around the gate.
 
 ## Authoring
 

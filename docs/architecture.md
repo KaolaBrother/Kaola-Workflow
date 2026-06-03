@@ -23,9 +23,11 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   **harness owns the frame and the computed gates**: the runtime-closed role
   library + fixed models (`resolve-agent-model`), the three shapes
   (sequence / fan-out / bounded loop), a unique `finalize` sink, **post-dominance**
-  gates (`code-reviewer` over every implement node; `security-reviewer` over every
-  sensitive node — computed as reachability-after-gate-removal, so they hold over
-  *any* topology), the caps, intra-issue write-set disjointness, and the durable
+  gates (`code-reviewer` over every code-producing node — implement roles, plus any
+  write role writing a non-docs file, plus non-docs writes declared on the `finalize`
+  sink; `security-reviewer` over every sensitive node — computed as
+  reachability-after-gate-removal, so they hold over *any* topology), the caps,
+  intra-issue write-set disjointness, and the durable
   `workflow-plan.md` + `## Node Ledger` + `plan_hash` resume contract.
 
   **Components.** `kaola-workflow-adapt` authors `workflow-plan.md`;
@@ -40,6 +42,24 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   ahead of the phaseN ladder. The Phase-6 sink, claim/branch/worktree lifecycle, and
   the nine canonical roles are **inherited unchanged** — only small adaptive-aware
   touches are added. The switch gates selection only; resume is toggle-agnostic.
+
+  **Enforcement boundary (accepted limitation).** The validator enforces gate
+  *presence* statically at freeze: post-dominance proves a `code-reviewer` sits on
+  every path from each code-producing node to the unique sink, and a `security-reviewer`
+  on every path from each sensitive node. Gate *execution* at runtime — the review
+  actually running, the barrier re-scan + consent/security escalation, the
+  actual-writes-vs-declared-allowlist diff, and the quorum tally — is **agent
+  discipline on the adaptive path, not script-enforced**: `routeAdaptive` resumes
+  without running the `delegationPolicyCompliance` matcher, and Phase 6 re-checks only
+  structure + `plan_hash`. This is a deliberate, documented limitation of the Tier-1
+  substrate ("gate presence is plan-checked; gate execution is agent discipline"); the
+  executor-skill prose carries the runtime obligations, and a future tier may add
+  script-level barrier enforcement (a `--barrier-check` subcommand + wiring the
+  delegation matcher into `routeAdaptive`/Phase 6). The 2026-06-03 audit
+  (`docs/investigations/adaptive-path-audit-2026-06-03.md`) hardened the *static* floor
+  — write-set extraction (root-level + dot-leading paths), `finalize`-sink writes,
+  `## Meta`-scoped label reading, and fence-aware hashing — so the `auto-run` verdict is
+  no longer computed over a write set that under-counts sensitive files.
 
 ## Phase 6 Finalization and Sink Flow
 

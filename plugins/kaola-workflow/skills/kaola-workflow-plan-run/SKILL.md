@@ -67,8 +67,16 @@ post-dominate every implement node, and `security-reviewer` every sensitive node
 validator computes these from the topology; the executor never drops them.)
 
 **Gate compliance rows for `code-reviewer`/`security-reviewer` use the bare role string**
-(the anchored delegation matcher); per-instance disambiguation goes in the Evidence
-column only.
+(the canonical compliance-row format the full-path anchored delegation matcher expects);
+per-instance disambiguation goes in the Evidence column only. Never mark a gate row `n/a`
+while a node it post-dominates reached `complete`.
+
+> **Enforcement boundary (accepted limitation).** The validator enforces gate *presence*
+> statically at freeze (post-dominance over the unique sink). Gate *execution* at runtime —
+> the review running, the barrier re-scan + escalation, the actual-writes-vs-declared-allowlist
+> diff, the quorum tally — is **agent discipline on the adaptive path, not script-enforced**
+> (`routeAdaptive` does not run the delegation matcher; finalize re-checks only structure +
+> `plan_hash`). The steps above are obligations, not guarantees — perform them.
 
 ## Quorum / decision nodes (read-only fan-out)
 
