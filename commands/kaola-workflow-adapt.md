@@ -11,9 +11,11 @@ There is no template library and no knob-binding ceremony: the agent writes the
 `## Nodes` table directly, and the validator proves the result is in-grammar.
 
 Reachable only when the adaptive switch is ON *and* the structure question in
-`workflow-next.md` Step 0a-1 was affirmatively confirmed. The middle of the run
-is free; the lifecycle frame around it (claim → branch/worktree → [this plan] →
-Phase-6 sink) is fixed.
+`workflow-next.md` Step 0a-1 was affirmatively confirmed. This is now
+**script-enforced** at the authoring entry by `kaola-workflow-claim.js
+authoring-allowed` (#235), not prose alone. The middle of the run is free; the
+lifecycle frame around it (claim → branch/worktree → [this plan] → Phase-6 sink)
+is fixed.
 
 ## Goal Contract
 
@@ -141,6 +143,18 @@ table, and an empty `## Node Ledger` (one row per node, `status: pending`). Then
 record the planning evidence in `workflow-state.md`.
 
 ## Validate + freeze
+
+First confirm the adaptive switch is ON — the **hard authoring guard** (#235). If it
+refuses, STOP: do not author or freeze a plan. This mirrors the `claimProject` selection
+guard and closes the prose-only gate (audit D8). The validator itself stays
+toggle-agnostic; the switch is read only here, at the authoring entry.
+
+```bash
+node scripts/kaola-workflow-claim.js authoring-allowed --project {project}
+```
+
+If the JSON `status` is `authoring_refused`, surface the typed refusal and STOP — fix the
+switch or the path selection, never clamp around the gate. If `authoring_allowed`, proceed:
 
 ```text
 node scripts/kaola-workflow-plan-validator.js kaola-workflow/{project}/workflow-plan.md --json

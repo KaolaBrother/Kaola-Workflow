@@ -513,6 +513,29 @@ function cmdClaim() {
   output(claimProject(root, args));
 }
 
+// issue #235 (audit D8): a HARD guard at the /kaola-workflow-adapt AUTHORING entry. The adapt
+// command calls this BEFORE authoring/freezing a workflow-plan.md, so authoring can no longer
+// proceed via a prose-only gate. It reads the SAME switch as claimProject (the only other
+// switch-reader) and emits a TYPED refusal when OFF, mirroring the claimProject refusal family.
+// Forge-neutral + stateless (no gh/glab, no issue field, no folder requirement) so the body is
+// byte-identical across all four editions. The VALIDATOR stays toggle-agnostic — the switch is
+// read HERE, never in validatePlan / freezePlan / revalidateForResume.
+function cmdAuthoringAllowed() {
+  const args = parseArgs(process.argv.slice(3));
+  const adaptiveEnabled = adaptiveSchema.resolveEnableAdaptive(readAdaptiveConfig(), process.env);
+  if (!adaptiveEnabled) {
+    output({
+      status: 'authoring_refused',
+      allowed: false,
+      project: args.project || null,
+      reasoning: 'adaptive switch is OFF; refusing to author/freeze a workflow-plan.md. ' +
+        'Refusing to silently author an adaptive plan under an OFF switch (#44).'
+    });
+    return;
+  }
+  output({ status: 'authoring_allowed', allowed: true, project: args.project || null });
+}
+
 function cmdStartup() {
   const root = getRoot();
   const args = parseArgs(process.argv.slice(3));
@@ -1153,8 +1176,9 @@ function buildClosureReceipt(project, issueNumber, steps) {
 
 function main() {
   const sub = process.argv[2];
-  assert(sub, 'usage: kaola-workflow-claim.js <claim|release|status|patch-branch|watch-pr|bootstrap|startup|finalize|pick-next|resume|worktree-status|worktree-finalize|sink-fallback|stale-worktree-check|stale-worktree-cleanup|audit-labels|repair-labels>');
+  assert(sub, 'usage: kaola-workflow-claim.js <claim|authoring-allowed|release|status|patch-branch|watch-pr|bootstrap|startup|finalize|pick-next|resume|worktree-status|worktree-finalize|sink-fallback|stale-worktree-check|stale-worktree-cleanup|audit-labels|repair-labels>');
   if (sub === 'claim') return cmdClaim();
+  if (sub === 'authoring-allowed') return cmdAuthoringAllowed();
   if (sub === 'release' || sub === 'discard') return cmdRelease();
   if (sub === 'status') return cmdStatus();
   if (sub === 'patch-branch') return cmdPatchBranch();

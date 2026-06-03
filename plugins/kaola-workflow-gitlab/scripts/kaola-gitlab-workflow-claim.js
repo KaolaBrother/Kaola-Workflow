@@ -481,6 +481,25 @@ function cmdClaim() {
   output(claimProject(root, args));
 }
 
+// issue #235 (audit D8): HARD guard at the /kaola-workflow-adapt authoring entry. Reads the SAME
+// switch as claimProject and emits a TYPED refusal when OFF. Forge-neutral + stateless so the body
+// is byte-identical across all four editions. The validator stays toggle-agnostic — switch read HERE.
+function cmdAuthoringAllowed() {
+  const args = parseArgs(process.argv.slice(3));
+  const adaptiveEnabled = adaptiveSchema.resolveEnableAdaptive(readAdaptiveConfig(), process.env);
+  if (!adaptiveEnabled) {
+    output({
+      status: 'authoring_refused',
+      allowed: false,
+      project: args.project || null,
+      reasoning: 'adaptive switch is OFF; refusing to author/freeze a workflow-plan.md. ' +
+        'Refusing to silently author an adaptive plan under an OFF switch (#44).'
+    });
+    return;
+  }
+  output({ status: 'authoring_allowed', allowed: true, project: args.project || null });
+}
+
 function cmdStartup() {
   const root = getRoot();
   const args = parseArgs(process.argv.slice(3));
@@ -1155,8 +1174,9 @@ function cmdRepairLabels() {
 
 function main() {
   const sub = process.argv[2];
-  assert(sub, 'usage: kaola-gitlab-workflow-claim.js <claim|release|status|patch-branch|bootstrap|startup|finalize|pick-next|resume|worktree-status|worktree-finalize|sink-fallback|watch-mr|stale-worktree-check|stale-worktree-cleanup|audit-labels|repair-labels>');
+  assert(sub, 'usage: kaola-gitlab-workflow-claim.js <claim|authoring-allowed|release|status|patch-branch|bootstrap|startup|finalize|pick-next|resume|worktree-status|worktree-finalize|sink-fallback|watch-mr|stale-worktree-check|stale-worktree-cleanup|audit-labels|repair-labels>');
   if (sub === 'claim') return cmdClaim();
+  if (sub === 'authoring-allowed') return cmdAuthoringAllowed();
   if (sub === 'release' || sub === 'discard') return cmdRelease();
   if (sub === 'status') return cmdStatus();
   if (sub === 'patch-branch') return cmdPatchBranch();

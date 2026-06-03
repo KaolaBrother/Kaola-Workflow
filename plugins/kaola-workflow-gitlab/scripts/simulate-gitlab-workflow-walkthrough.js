@@ -347,6 +347,12 @@ function testGitlabAdaptive() {
     spawnNode(repairScript, ['issue-941'], tmp);
     assert.ok(/consent-halt-surface/.test(fs.readFileSync(path.join(e2dir, 'workflow-state.md'), 'utf8')),
       'gitlab E2: durable Node-Ledger consent must surface on resume with no prior workflow-state.md');
+
+    // issue #235 D8: hard authoring guard — OFF refuses, ON allows (toggle read at the authoring entry).
+    let ar = JSON.parse(spawnNode(claimScript, ['authoring-allowed', '--project', 'issue-960'], tmp, { KAOLA_ENABLE_ADAPTIVE: '0' }).stdout);
+    assert.strictEqual(ar.status, 'authoring_refused', 'gitlab D8: authoring under an OFF switch must refuse');
+    ar = JSON.parse(spawnNode(claimScript, ['authoring-allowed', '--project', 'issue-960'], tmp, { KAOLA_ENABLE_ADAPTIVE: '1' }).stdout);
+    assert.strictEqual(ar.status, 'authoring_allowed', 'gitlab D8: authoring under an ON switch must be allowed');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

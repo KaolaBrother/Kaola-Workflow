@@ -1120,6 +1120,33 @@ function testAdaptiveDurableConsentHalt() {
   console.log('testAdaptiveDurableConsentHalt: PASSED');
 }
 
+// issue #235 (audit D8): a HARD script guard at the /kaola-workflow-adapt authoring entry. OFF ->
+// typed refusal; ON -> allowed. The validator stays toggle-agnostic: --freeze must still work under
+// OFF (the guard lives at the authoring entry in claim.js, never in the validator).
+function testAdaptiveAuthoringEntryGuard() {
+  const tmp = adaptiveTmp('authoring-guard');
+  try {
+    let out = JSON.parse(runNode(claimScript, ['authoring-allowed', '--project', 'issue-960'], tmp, { KAOLA_ENABLE_ADAPTIVE: '0' }).stdout);
+    assert(out.status === 'authoring_refused' && out.allowed === false,
+      'D8: authoring under an OFF switch must be a typed refusal, got: ' + JSON.stringify(out));
+    assert(/OFF/.test(out.reasoning) && /#44/.test(out.reasoning),
+      'D8: the refusal must mirror the claim-guard family message (OFF, #44)');
+    out = JSON.parse(runNode(claimScript, ['authoring-allowed', '--project', 'issue-960'], tmp, { KAOLA_ENABLE_ADAPTIVE: '1' }).stdout);
+    assert(out.status === 'authoring_allowed' && out.allowed === true,
+      'D8: authoring under an ON switch must be allowed, got: ' + JSON.stringify(out));
+    // toggle-agnostic: the validator --freeze must STILL work under OFF — the guard is the authoring
+    // entry, NOT the validator (putting it in the validator would break the resume/well-formedness contract).
+    const planPath = path.join(tmp, 'p.md');
+    fs.writeFileSync(planPath, ['# Plan', '', '## Meta', 'labels: chore', '', '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
+      '| done | finalize | — | — | 1 | sequence |', ''].join('\n'));
+    const fr = runNode(planValidatorScript, [planPath, '--freeze', '--json'], tmp, { KAOLA_ENABLE_ADAPTIVE: '0' });
+    assert(fr.status === 0 && JSON.parse(fr.stdout).frozen === true,
+      'D8: validator --freeze must stay toggle-agnostic (work under OFF), got status ' + fr.status + ' ' + fr.stdout);
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptiveAuthoringEntryGuard: PASSED');
+}
+
 // issue #228 (Tier 2): broadened sequence/branch composition + governance edge cases on
 // top of the Tier-1 substrate. Exercises multi-role DAG branching (distinct from a
 // heterogeneous fan-out), read-only multi-modal sweep, bounded-loop governance, and the
@@ -5898,6 +5925,7 @@ async function main() {
     testAdaptiveGateBarrierEnforcement();
     testAdaptiveResumeReconcilesNextCommand();
     testAdaptiveDurableConsentHalt();
+    testAdaptiveAuthoringEntryGuard();
     testAdaptiveTier2Composition();
     testAdaptiveAuditFixes();
     testAdaptiveResumeHashDeletedTypedRefusal();

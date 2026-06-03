@@ -142,6 +142,17 @@ record the planning evidence in `workflow-state.md`.
 
 ## Validate + freeze
 
+First confirm the adaptive switch is ON — the **hard authoring guard** (#235). If it
+refuses, STOP: do not author or freeze a plan (mirrors the `claimProject` selection guard;
+closes audit D8). The validator stays toggle-agnostic; the switch is read only here.
+
+```bash
+node scripts/kaola-gitea-workflow-claim.js authoring-allowed --project {project}
+```
+
+If the JSON `status` is `authoring_refused`, surface the typed refusal and STOP. If
+`authoring_allowed`, proceed:
+
 ```text
 node scripts/kaola-gitea-workflow-plan-validator.js kaola-workflow/{project}/workflow-plan.md --json
 ```
