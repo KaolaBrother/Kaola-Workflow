@@ -1,6 +1,6 @@
 {
   "name": "kaola-workflow-gitlab",
-  "version": "1.11.0",
+  "version": "1.11.1",
   "description": "GitLab edition of Kaola-Workflow for Codex, using GitLab issues, merge requests, glab, and repo-backed workflow artifacts.",
   "author": {
     "name": "KaolaBrother",

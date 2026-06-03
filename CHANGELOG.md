@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+## [3.20.1] — 2026-06-03
+
+### Adversarial-review follow-ups to the v3.20.0 adaptive barrier (#231 / #232 / #233)
+
+A post-release adversarial verification pass (six independent skeptics + a completeness critic, each running the real scripts against crafted exploit/edge fixtures) found three confirmed-real defects in the v3.20.0 barrier code. Adaptive remains **opt-in, default OFF**; default installs unaffected. All four editions; `npm test` GREEN on all four lanes; every repro is locked as a regression test.
+
+- **CRITICAL — n/a/pending-TARGET gate-execution bypass (#231).** A code/sensitive node that **actually wrote** code could be marked `n/a` (or left `pending`) in the runtime `## Node Ledger` and pass all three phase6 gates, merging unreviewed code. The v3.20.0 relabel fix closed the n/a-*gate* (reviewer) but not the n/a-*target* (producer); the barrier did not backstop it (a declared non-sensitive write is in the allowlist; the sensitivity check is security-reviewer-*presence*-only) and the ledger is outside `plan_hash` so a post-freeze flip is undetected by `--resume-check`. `barrierCheck` now runs a **whole-plan-only** (`if (!opts.nodeId)`) ledger-consistency check: a production write declared **only** by non-complete nodes refuses — forcing every actually-written producer to `complete`, so `--gate-verify` (run alongside `--barrier-check` at phase6) then enforces review. The two checks compose. Per-node mode is exempt (the triggering node is still `in_progress`); a genuinely-skipped `n/a` node that wrote nothing still passes.
+- **FALSE-REFUSAL — barrier sensitivity scan (#231).** The sensitivity scan lacked the docs/test/workflow-artifact exemption the allowlist scan has, so a docs-only / tests-only / workflow-artifact path whose **name** matched a Phase-5 pattern (`test/login.test.js`, `docs/auth.md`) was wrongly refused at the merge gate with no in-grammar escape. Those bands are now exempt from the sensitivity teeth too.
+- **REGRESSION — independent-branch exact-file overlap (#233 / #232).** Origin-scoping (#233) split same-label fan-out members on topologically independent branches into separate groups, dropping the disjointness coverage the old merged-label group incidentally provided; #232's shared-ancestor scoping excluded them as well. An **exact-file** overlap now refuses for **any** antichain pair regardless of a common ancestor (an unordered pair writing the same file is a guaranteed shared-worktree clobber — the safe fix is a dependency edge serializing them); coarse-area / shared-infra overlap keeps the shared-ancestor scoping to avoid false refusals. The earlier #232 control (independent branches, identical writes → in-grammar) is corrected to refuse, with a new control proving different-files-same-area still passes.
+
+Also: corrected the #237 regex comment (a dot-leading **slash-bearing** prose token like `.NET/Core` CAN over-match — accepted as the safe over-block direction, consistent with the pre-existing `word/word` prose over-match), and added a #234 intact-state durable-consent test (the suite previously covered only the deleted-state path). **Codex packs → 1.11.1**; the GitLab/Gitea Claude command packs and the root install ride **3.20.1**.
+
 ## [3.20.0] — 2026-06-03
 
 ### Adaptive path — Tier 2 hardening + audit-sweep follow-ups (#231–#237)
