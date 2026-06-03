@@ -6,6 +6,7 @@ const path = require('path');
 // issue #227: adaptive resume traverses a frozen workflow-plan.md. Toggle-agnostic —
 // never reads the adaptive install switch or its env mirror (selection-only gate).
 const planValidator = require('./kaola-gitea-workflow-plan-validator');
+const adaptiveSchema = require('./kaola-workflow-adaptive-schema'); // #234: durable consent-halt reader (un-renamed; toggle-agnostic)
 
 const PHASES = {
   1: 'Research',
@@ -399,7 +400,9 @@ function routeAdaptive(root, workflowDir, project) {
   if (!check.ok) return { reason: 'adaptive plan unresumable (typed refusal): ' + check.reason };
   const stateFile = path.join(projectDir, 'workflow-state.md');
   const stateContent = exists(stateFile) ? readFile(stateFile) : '';
-  const consentHalt = field(stateContent, 'escalated_to_full') === 'consent';
+  // #234 E2: consent-halt durable in BOTH workflow-state.md AND the plan's non-hashed ## Node Ledger.
+  const consentHalt = field(stateContent, 'escalated_to_full') === 'consent'
+    || adaptiveSchema.readDurableConsentHalt(content);
   // #231: compute gate-execution status from the ledger, surfaced NON-blocking (data only); the
   // hard block is the phase6 merge gate. verifyGateExecution never reads the install switch.
   const gate = planValidator.verifyGateExecution(content, { root });

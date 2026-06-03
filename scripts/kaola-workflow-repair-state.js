@@ -7,6 +7,7 @@ const path = require('path');
 // an already-frozen plan always resumes to completion even after the switch is
 // flipped off. The switch gates SELECTION only (claimProject + the router prose).
 const planValidator = require('./kaola-workflow-plan-validator');
+const adaptiveSchema = require('./kaola-workflow-adaptive-schema'); // #234: durable consent-halt reader (toggle-agnostic; never reads the switch)
 
 const PHASES = {
   1: 'Research',
@@ -530,7 +531,11 @@ function routeAdaptive(root, workflowDir, project) {
 
   const stateFile = path.join(projectDir, 'workflow-state.md');
   const stateContent = exists(stateFile) ? readFile(stateFile) : '';
-  const consentHalt = field(stateContent, 'escalated_to_full') === 'consent';
+  // #234 E2: consent-halt is durable in BOTH workflow-state.md (primary) AND the plan's non-hashed
+  // `## Node Ledger` (survives a lost/regenerated workflow-state.md). OR-combined so EITHER source
+  // surfaces the halt; `content` (the plan) is already read above — no second file read. Toggle-agnostic.
+  const consentHalt = field(stateContent, 'escalated_to_full') === 'consent'
+    || adaptiveSchema.readDurableConsentHalt(content);
 
   // #231: compute gate-execution status from the ledger, surfaced NON-blocking (data only).
   const gate = planValidator.verifyGateExecution(content, { root });

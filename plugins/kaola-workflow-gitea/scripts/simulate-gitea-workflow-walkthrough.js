@@ -415,6 +415,23 @@ function testGiteaAdaptive() {
       '| r | code-reviewer | a,b | — | 1 | sequence |',
       '| d | finalize | r | — | 1 | sequence |',
     ], 'enhancement').result, 'in-grammar', 'gitea A3 control: independent branches must not be flagged (no false refusal)');
+
+    // issue #234 E1: a stale phaseN next_command on an adaptive project must reconcile to plan-run.
+    const e1dir = path.join(tmp, 'kaola-workflow', 'issue-940');
+    fs.mkdirSync(e1dir, { recursive: true });
+    fs.writeFileSync(path.join(e1dir, 'workflow-state.md'), ['name: issue-940', 'issue_iid: 940', 'status: active', 'phase: adaptive', 'workflow_path: adaptive', 'next_command: /kaola-workflow-phase4 issue-940', ''].join('\n'));
+    const e1 = JSON.parse(spawnNode(claimScript, ['resume', '--project', 'issue-940'], tmp, { KAOLA_ENABLE_ADAPTIVE: '0' }).stdout);
+    assert.strictEqual(e1.next_command, '/kaola-workflow-plan-run issue-940', 'gitea E1: stale phaseN on an adaptive project must reconcile to plan-run');
+
+    // issue #234 E2: a durable consent_halt in the Node Ledger surfaces on resume even with no state file.
+    const e2dir = path.join(tmp, 'kaola-workflow', 'issue-941');
+    fs.mkdirSync(e2dir, { recursive: true });
+    const e2plan = path.join(e2dir, 'workflow-plan.md');
+    fs.writeFileSync(e2plan, ['# Plan', '', '## Meta', 'labels: chore', '', '## Nodes', '', '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|', '| done | finalize | — | — | 1 | sequence |', '', '## Node Ledger', '', '| id | status |', '|---|---|', '| done | pending |', 'consent_halt: pending', ''].join('\n'));
+    spawnNode(valScript, [e2plan, '--freeze'], tmp);
+    spawnNode(repairScript, ['issue-941'], tmp);
+    assert.ok(/consent-halt-surface/.test(fs.readFileSync(path.join(e2dir, 'workflow-state.md'), 'utf8')),
+      'gitea E2: durable Node-Ledger consent must surface on resume with no prior workflow-state.md');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

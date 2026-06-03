@@ -1046,6 +1046,80 @@ function testAdaptiveGateBarrierEnforcement() {
   console.log('testAdaptiveGateBarrierEnforcement: PASSED');
 }
 
+// issue #234 E1: resume must reconcile a persisted next_command against the project's true path
+// before trusting it. A stale phaseN on an adaptive project must resolve to plan-run; a consistent
+// full next_command is preserved; a stale full next_command falls back to phase-derived reconstruction.
+function testAdaptiveResumeReconcilesNextCommand() {
+  const tmp = adaptiveTmp('resume-reconcile');
+  try {
+    // GAP: adaptive project carrying a STALE `/kaola-workflow-phase4` next_command. Toggle OFF to
+    // prove reconciliation is toggle-agnostic (resume must work even when the switch is later OFF).
+    writeProject(tmp, 'issue-940', { 'workflow-state.md': [
+      'name: issue-940', 'issue_number: 940', 'status: active',
+      'phase: adaptive', 'workflow_path: adaptive',
+      'next_command: /kaola-workflow-phase4 issue-940', ''].join('\n') });
+    let out = JSON.parse(runNode(claimScript, ['resume', '--project', 'issue-940'], tmp, { KAOLA_ENABLE_ADAPTIVE: '0' }).stdout);
+    assert(out.next_command === '/kaola-workflow-plan-run issue-940',
+      'E1: stale phaseN on an adaptive project must reconcile to plan-run, got: ' + out.next_command);
+
+    // CONTROL: a full project whose persisted next_command matches its phase is PRESERVED.
+    writeProject(tmp, 'issue-941', { 'workflow-state.md': [
+      'name: issue-941', 'issue_number: 941', 'status: active',
+      'phase: 3', 'workflow_path: full', 'next_command: /kaola-workflow-phase3 issue-941', ''].join('\n') });
+    out = JSON.parse(runNode(claimScript, ['resume', '--project', 'issue-941'], tmp).stdout);
+    assert(out.next_command === '/kaola-workflow-phase3 issue-941',
+      'E1 control: a consistent full next_command must be preserved, got: ' + out.next_command);
+
+    // CONTROL: a full project with a STALE next_command (phase mismatch) falls back to reconstruction.
+    writeProject(tmp, 'issue-942', { 'workflow-state.md': [
+      'name: issue-942', 'issue_number: 942', 'status: active',
+      'phase: 3', 'workflow_path: full', 'next_command: /kaola-workflow-phase5 issue-942', ''].join('\n') });
+    out = JSON.parse(runNode(claimScript, ['resume', '--project', 'issue-942'], tmp).stdout);
+    assert(out.next_command === '/kaola-workflow-phase3 issue-942',
+      'E1: a stale full next_command must fall back to phase-derived reconstruction, got: ' + out.next_command);
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptiveResumeReconcilesNextCommand: PASSED');
+}
+
+// issue #234 E2: a barrier consent-halt is durable in the plan's NON-hashed `## Node Ledger`, so a
+// lost/regenerated workflow-state.md cannot silently drop it. Heading-scoped (a decoy elsewhere is
+// inert) and outside the plan_hash region (appending it never breaks resume-check).
+function testAdaptiveDurableConsentHalt() {
+  const tmp = adaptiveTmp('durable-consent');
+  const planValidator = require(planValidatorScript);
+  const adaptiveSchema = require(path.join(repoRoot, 'scripts', 'kaola-workflow-adaptive-schema.js'));
+  try {
+    // unit: the reader is heading-scoped.
+    const base = ['# Plan', '', '## Meta', 'labels: chore', '', '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
+      '| done | finalize | — | — | 1 | sequence |', '',
+      '## Node Ledger', '', '| id | status |', '|---|---|', '| done | pending |', ''];
+    assert(adaptiveSchema.readDurableConsentHalt(['# Plan', 'consent_halt: pending', ''].concat(base.slice(1)).join('\n')) === false,
+      'E2: a decoy consent_halt OUTSIDE the Node Ledger must NOT trigger');
+    assert(adaptiveSchema.readDurableConsentHalt(base.join('\n') + 'consent_halt: pending\n') === true,
+      'E2: consent_halt INSIDE the Node Ledger must trigger');
+
+    // constraint-3: appending the marker to the Node Ledger after freeze must NOT break resume-check
+    // (computePlanHash covers ## Meta + ## Nodes only).
+    const frozen = planValidator.freezePlan(base.join('\n'));
+    assert(frozen.frozen, 'E2: base plan should freeze');
+    assert(planValidator.revalidateForResume(frozen.content.trimEnd() + '\nconsent_halt: pending\n').ok === true,
+      'E2 constraint-3: appending consent_halt to the Node Ledger must NOT break resume-check');
+
+    // integration: a frozen plan with the durable marker and NO workflow-state.md still surfaces the
+    // consent-halt on resume (the lost-state scenario the primary signal cannot cover).
+    plantFrozenPlan(tmp, 'issue-943', base.join('\n').replace('| done | pending |', '| done | pending |\nconsent_halt: pending'));
+    const sp = statePath(tmp, 'issue-943');
+    if (fs.existsSync(sp)) fs.rmSync(sp);
+    const result = runNode(repairScript, ['issue-943'], tmp);
+    assert(result.status === 0, 'E2: repair must exit 0, got ' + result.status + ' ' + result.stderr);
+    assert(result.stdout.includes('/kaola-workflow-plan-run issue-943'), 'E2: must still route to plan-run');
+    assert(read(statePath(tmp, 'issue-943')).includes('consent-halt-surface'),
+      'E2: durable Node-Ledger consent must surface even with no prior workflow-state.md');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptiveDurableConsentHalt: PASSED');
+}
+
 // issue #228 (Tier 2): broadened sequence/branch composition + governance edge cases on
 // top of the Tier-1 substrate. Exercises multi-role DAG branching (distinct from a
 // heterogeneous fan-out), read-only multi-modal sweep, bounded-loop governance, and the
@@ -5822,6 +5896,8 @@ async function main() {
     testAdaptiveFanoutGroupScoping();
     testAdaptiveReadySetDisjointness();
     testAdaptiveGateBarrierEnforcement();
+    testAdaptiveResumeReconcilesNextCommand();
+    testAdaptiveDurableConsentHalt();
     testAdaptiveTier2Composition();
     testAdaptiveAuditFixes();
     testAdaptiveResumeHashDeletedTypedRefusal();

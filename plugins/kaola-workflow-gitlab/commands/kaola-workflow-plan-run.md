@@ -48,9 +48,15 @@ node scripts/kaola-gitlab-workflow-plan-validator.js kaola-workflow/{project}/wo
 
 Then parse the `## Node Ledger` and `workflow-state.md`:
 
-- `escalated_to_full: consent` present → a provisional auto-run was **revoked at
-  the barrier**; surface the pending approval for the user's explicit yes. Do not
-  re-dispatch the `in_progress` node.
+- a consent-halt — signalled by EITHER `escalated_to_full: consent` in
+  `workflow-state.md` OR `consent_halt: pending` in the plan's `## Node Ledger`
+  (#234; the Ledger marker is non-hashed and survives a lost/regenerated state
+  file) — means a provisional auto-run was **revoked at the barrier**; surface the
+  pending approval for the user's explicit yes and do NOT re-dispatch the
+  `in_progress` node. On the user's explicit approval, REMOVE the
+  `consent_halt: pending` line from the `## Node Ledger` AND clear
+  `escalated_to_full: consent` from `workflow-state.md` in lockstep, then resume the
+  ready set — never re-ask an authorization already granted.
 - A node `in_progress` with absent/partial `.cache/{node-id}.md` → crash mid-node;
   re-dispatch exactly that node (mirrors phase4 `in_progress → delegate`).
 - Otherwise compute the **ready set**: every node whose `status != complete` and
@@ -140,9 +146,11 @@ Agent(
    provisional authorization was granted on a now-false premise:
    **revoke and halt for consent** — write `escalated_to_full: consent` AND force
    `security-reviewer` post-dominance (`escalated_to_full: security`) into
-   `workflow-state.md` (a non-hashed region — never `## Meta` / `## Nodes`). These
-   co-occur — one barrier moment, two consequences. Do not mark the node `complete`
-   until the barrier exits 0.
+   `workflow-state.md`, AND write the durable line `consent_halt: pending` into the
+   plan's `## Node Ledger` (#234: a non-hashed section, so the halt survives a
+   lost/regenerated `workflow-state.md`). Never write into `## Meta` / `## Nodes`.
+   These co-occur — one barrier moment, multiple consequences. Do not mark the node
+   `complete` until the barrier exits 0.
 5. **update-ledger** — mark `complete` (or `n/a`), emit the node's one
    `## Required Agent Compliance` row. For a `code-reviewer` / `security-reviewer`
    gate or skeptic row, key it with the **bare role string** (`code-reviewer`,

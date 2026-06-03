@@ -555,6 +555,26 @@ function resumeFallbackCommand(root, folder) {
   return (isFast ? '/kaola-workflow-fast ' : '/kaola-workflow-phase' + (folder.phase || 1) + ' ') + folder.project;
 }
 
+// #234 E1: reconcile the PERSISTED next_command against the project's true path before trusting it.
+// A present-but-stale value (e.g. a residual `/kaola-workflow-phase4` on a project that is actually
+// adaptive) must NOT bypass the fallback. Artifact-first, matching routeAdaptive's stance (#44: never
+// silently ride the phaseN ladder): when the project is adaptive (workflow_path/phase says so, or a
+// workflow-plan.md exists), FORCE plan-run and ignore a stale phaseN; otherwise trust the persisted
+// command only if it matches what the artifacts imply, else fall back to reconstruction.
+// Toggle-agnostic: never reads resolveEnableAdaptive (resume must work even when the switch is OFF).
+function reconcileNextCommand(root, folder) {
+  const persisted = folder.next_command;
+  let content = '';
+  try {
+    content = fs.readFileSync(path.join(root, 'kaola-workflow', folder.project, 'workflow-state.md'), 'utf8');
+  } catch (_) {}
+  const planExists = fs.existsSync(path.join(root, 'kaola-workflow', folder.project, adaptiveSchema.PLAN_FILE));
+  const isAdaptive = /^(?:workflow_path|phase):\s*adaptive\s*$/m.test(content) || planExists;
+  if (isAdaptive) return adaptiveSchema.PLAN_RUN_COMMAND + ' ' + folder.project;
+  const reconstructed = resumeFallbackCommand(root, folder);
+  return (persisted && persisted === reconstructed) ? persisted : reconstructed;
+}
+
 function cmdResume() {
   const root = getRoot();
   const args = parseArgs(process.argv.slice(3));
@@ -568,7 +588,7 @@ function cmdResume() {
     project: folder.project,
     issue: folder.issue_number,
     phase: folder.phase,
-    next_command: folder.next_command || resumeFallbackCommand(root, folder)
+    next_command: reconcileNextCommand(root, folder)
   });
 }
 

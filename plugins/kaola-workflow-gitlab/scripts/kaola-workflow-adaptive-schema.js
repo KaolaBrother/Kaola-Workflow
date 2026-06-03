@@ -65,6 +65,28 @@ const ESCALATION_MARKERS = Object.freeze({
   test_thrash: 'test_thrash',
 });
 
+// E2 (#234): a SECOND, durable source of truth for a barrier consent-halt, written into the plan's
+// `## Node Ledger` — a section EXCLUDED from computePlanHash (which covers ## Meta + ## Nodes only),
+// so it never trips the resume hash check. workflow-state.md's `escalated_to_full: consent` is the
+// primary signal; if that file is lost/regenerated (state-downgrade) the halt would silently drop,
+// re-running an authorization the user explicitly halted for approval. This plan-local marker
+// survives a lost workflow-state.md. PRESENT = pending halt; ABSENT = no pending halt.
+const CONSENT_HALT_MARKER = 'consent_halt: pending';
+// PURE (no fs): scan ONLY the `## Node Ledger` section for the marker, so a decoy line elsewhere
+// cannot force a phantom halt and the read mirrors where the writer puts it. The ledger is
+// fence-free by contract, so a self-contained section slice suffices (NOT classifier.sectionBody —
+// the classifier is renamed in the forks, which would break this file's cross-edition byte-identity).
+function readDurableConsentHalt(planContent) {
+  const text = String(planContent || '');
+  const headRe = new RegExp('^##\\s+' + LEDGER_HEADING.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$', 'm');
+  const m = text.match(headRe);
+  if (!m) return false;
+  const after = text.slice(m.index + m[0].length);
+  const nextH2 = after.search(/^##\s/m);
+  const body = nextH2 < 0 ? after : after.slice(0, nextH2);
+  return /^consent_halt:[ \t]*pending[ \t]*$/m.test(body);
+}
+
 // The single shared global config file (one path, no per-edition namespace) + the
 // switch field and its env mirror. Precedence: env KAOLA_ENABLE_ADAPTIVE > config
 // enable_adaptive > default OFF.
@@ -113,6 +135,8 @@ module.exports = {
   TEST_THRASH_LIMIT,
   MAX_NODES,
   ESCALATION_MARKERS,
+  CONSENT_HALT_MARKER,
+  readDurableConsentHalt,
   CONFIG_REL_PATH,
   ENABLE_ADAPTIVE_FIELD,
   ENABLE_ADAPTIVE_ENV,

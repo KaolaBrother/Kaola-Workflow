@@ -26,8 +26,11 @@ node "$KAOLA_SCRIPTS/kaola-workflow-plan-validator.js" kaola-workflow/{project}/
 ```
 
 Then parse the `## Node Ledger` and `workflow-state.md`:
-- `escalated_to_full: consent` → a provisional auto-run was **revoked at the barrier**;
-  surface the pending approval for the user's explicit yes. Do not re-dispatch.
+- a consent-halt — EITHER `escalated_to_full: consent` in `workflow-state.md` OR
+  `consent_halt: pending` in the plan's `## Node Ledger` (#234; non-hashed, survives a
+  lost state file) → a provisional auto-run was **revoked at the barrier**; surface the
+  pending approval for the user's explicit yes, do NOT re-dispatch. On approval, REMOVE
+  the Ledger marker AND clear `escalated_to_full: consent` in lockstep, then resume.
 - a node `in_progress` with absent/partial `.cache/{node-id}.md` → crash mid-node;
   re-dispatch exactly that node.
 - otherwise compute the **ready set**: nodes whose `status != complete` and all of whose
@@ -67,10 +70,12 @@ On exit 1 (a write turned out sensitive — a Phase-5 category — on a plan wit
 `security-reviewer` node, or overflowed outside the declared allowlist) the provisional
 authorization was granted on a now-false premise: **revoke and halt for consent** — write
 `escalated_to_full: consent` AND force a `security-reviewer` to post-dominate every
-remaining sensitive node (`escalated_to_full: security`), into `workflow-state.md` (a
-non-hashed region). These co-occur. (A `code-reviewer` must already post-dominate every
-implement node, and `security-reviewer` every sensitive node — the validator computes
-these from the topology; the executor never drops them.)
+remaining sensitive node (`escalated_to_full: security`), into `workflow-state.md`, AND
+write the durable line `consent_halt: pending` into the plan's `## Node Ledger` (#234: a
+non-hashed section, so the halt survives a lost/regenerated `workflow-state.md`). These
+co-occur. (A `code-reviewer` must already post-dominate every implement node, and
+`security-reviewer` every sensitive node — the validator computes these from the topology;
+the executor never drops them.)
 
 **Gate compliance rows for `code-reviewer`/`security-reviewer` use the bare role string**
 (the canonical compliance-row format the full-path anchored delegation matcher expects);
