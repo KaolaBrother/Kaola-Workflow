@@ -14,6 +14,9 @@ A 6-phase development workflow for Claude Code and Codex with per-phase file art
         ├──► Fast path (KAOLA_PATH=fast)
         │      plan + implement + review in one pass ──► Phase 6
         │
+        ├──► Adaptive path (KAOLA_PATH=adaptive, opt-in)
+        │      freely composed task-shaped DAG of roles ──► Phase 6
+        │
         └──► Full 6-phase flow:
                                                               output file
             Phase 1  Research    code-explorer, docs-lookup    phase1-research.md
@@ -110,10 +113,17 @@ for the pinned upstream commit, attribution, and refresh procedure.
 | `code-reviewer` | 5 — Review | Sonnet | yes |
 | `security-reviewer` | 5 — Review (conditional) | Sonnet | yes |
 | `doc-updater` | 6 — Finalize | Sonnet | |
+| `adversarial-verifier` | Adaptive path — read-only skeptic (never a gate) | Sonnet | |
 
 The **Model** column is the `common` profile. The **default** install profile is
 `higher`, so the three agents marked _yes_ (`code-architect`, `code-reviewer`,
 `security-reviewer`) install on **Opus** unless you pass `--profile=common`.
+
+`adversarial-verifier` is locally authored for the [adaptive path](#adaptive-path-optional)
+(issue #227) rather than derived from ECC — a dedicated refute-by-default skeptic that
+reuses no vendored profile. It is read-only (touches zero repository files), is exercised
+only on the adaptive path, and is never a review gate. It installs on every edition
+regardless of whether the adaptive path is enabled.
 
 When agents are installed, their frontmatter `model:` field is rewritten to
 `inherit`. Command files render each agent's concrete assigned model (e.g.,
@@ -126,7 +136,7 @@ differs from the agent's frontmatter). **After installing or re-running
 > **Badge visibility by session model (Claude Code platform behaviour):**
 > - **Session on Sonnet** — only Opus subagents show a badge. Sonnet-dispatched
 >   agents (`code-explorer`, `tdd-guide`, `build-error-resolver`, `docs-lookup`,
->   `doc-updater`) run silently. Opus-dispatched agents (`planner`,
+>   `doc-updater`, `adversarial-verifier`) run silently. Opus-dispatched agents (`planner`,
 >   `code-architect`, `code-reviewer`, `security-reviewer` on the default
 >   `higher` profile) badge as expected.
 > - **Session on Opus** — all subagents show a badge, regardless of their model.
@@ -218,6 +228,22 @@ To install the three reviewer agents on Sonnet, request the `common` profile:
 ```bash
 ./install.sh --profile=common             # Sonnet assignments for the three reviewer agents
 ```
+
+#### Adaptive workflow path (opt-in)
+
+The [adaptive workflow path](#adaptive-path-optional) — a third path beside fast and
+full — is **OFF by default**. Enable it at install time:
+
+```bash
+./install.sh --enable-adaptive=yes        # writes enable_adaptive:true to ~/.config/kaola-workflow/config.json
+```
+
+The flag only flips the `enable_adaptive` switch that lets the path be *selected*; the
+`/kaola-workflow-adapt` and `/kaola-workflow-plan-run` commands and the
+`adversarial-verifier` agent install on every run regardless. The default
+(`--enable-adaptive=no`) writes nothing, so the switch stays absent and the path stays
+off. You can also enable it per session with `KAOLA_ENABLE_ADAPTIVE=1` (environment
+overrides config).
 
 Then in Claude Code:
 
@@ -366,7 +392,11 @@ build-error-resolver
 code-reviewer
 security-reviewer
 doc-updater
+adversarial-verifier
 ```
+
+(`adversarial-verifier` is the read-only skeptic for the opt-in adaptive path; it is
+mirrored into the Codex editions for parity and is never a review gate.)
 
 The managed setup copies role configs into `.codex/agents/kaola-workflow/` and
 maintains a `# BEGIN kaola-workflow agents` block in `.codex/config.toml` while
@@ -392,6 +422,7 @@ through the user's active Codex configuration. They only set reasoning effort:
 | `code-reviewer` | `high` |
 | `security-reviewer` | `high` |
 | `doc-updater` | `low` |
+| `adversarial-verifier` | `high` |
 
 There is no separate Codex advisor role. Codex advisor gates use the strongest
 available expert model/profile for the current session, or the current session
@@ -401,12 +432,12 @@ performs the same review locally when no detached advisor profile is available.
 
 Current official release versions:
 
-- Claude Code command install, GitHub edition: `3.18.0`
-- Claude Code command install, GitLab edition: `3.18.0`
-- Claude Code command install, Gitea edition: `3.18.0`
-- Codex `kaola-workflow` plugin manifest: `1.9.0`
-- Codex `kaola-workflow-gitlab` plugin manifest: `1.9.0`
-- Codex `kaola-workflow-gitea` plugin manifest: `1.9.0`
+- Claude Code command install, GitHub edition: `3.19.0`
+- Claude Code command install, GitLab edition: `3.19.0`
+- Claude Code command install, Gitea edition: `3.19.0`
+- Codex `kaola-workflow` plugin manifest: `1.10.0`
+- Codex `kaola-workflow-gitlab` plugin manifest: `1.10.0`
+- Codex `kaola-workflow-gitea` plugin manifest: `1.10.0`
 
 The root `package.json` version is the official repository and Claude Code
 command-install release version. The GitLab Claude command pack follows that
@@ -501,6 +532,18 @@ KAOLA_PATH=fast /workflow-next
 
 Fast path executes Plan, Implement, and Review in a single pass, writing `fast-summary.md` instead of the full 6-phase artifacts. If the planner surfaces ≥ 2 materially-different viable approaches (`approach_ambiguity`), or scope expands during execution (beyond the declared write set by more than 1 file or past the absolute backstop of 6 files, security concerns, dependencies, new packages), fast path escalates automatically to the full workflow. Otherwise, it routes directly to Phase 6.
 
+### Adaptive path (optional)
+
+For larger, **structurally non-linear** issues — work that naturally fans out into disjoint sub-areas, needs parallel research across several subsystems, or calls for a non-standard verification shape — the adaptive path lets the agent **freely compose a task-shaped DAG of role nodes** inside Kaola's locked lifecycle frame (claim → branch/worktree → *free design* → Phase-6 sink), instead of following the fixed fast or full sequence. It is **opt-in and OFF by default**: enable it at install time with `./install.sh --enable-adaptive=yes` (writes `enable_adaptive: true` to `~/.config/kaola-workflow/config.json`) or per session with `KAOLA_ENABLE_ADAPTIVE=1` (precedence: env > config > OFF). With the switch off, behavior is exactly as before — `adaptive` is absent from path selection and `KAOLA_PATH=adaptive` is a typed refusal, never a silent downgrade.
+
+```
+KAOLA_PATH=adaptive /workflow-next
+```
+
+`/kaola-workflow-adapt` authors the plan as a `workflow-plan.md` (a `## Nodes` DAG plus a `## Node Ledger`) and validates it. The plan must be **in-grammar**: roles drawn from the closed role library, one of three shapes (`sequence`, bounded fan-out over pairwise-disjoint write sets up to `KAOLA_FANOUT_CAP`, or a bounded loop), a single unique `finalize` sink, and computed **post-dominance gates** (`code-reviewer` over every code-producing node, `security-reviewer` over every sensitive node). The validator then makes one fail-closed governance decision: in-grammar **and** provably low-risk → provisional auto-run; any sensitivity, write-role fan-out, shared-infrastructure touch, over-ceiling, loop, or uncertainty → **ask the user first**; out-of-grammar → typed refusal. On approval the plan is frozen — a `plan_hash` is stamped inside `workflow-plan.md` and re-checked on every load, so post-freeze tampering is refused. `/kaola-workflow-plan-run` then executes the DAG node by node with per-node checkpoints; it is resume-safe and toggle-agnostic (a frozen plan finishes even if the switch is later turned off) and hands off to Phase 6 on an all-complete ledger.
+
+The adaptive path adds one role — `adversarial-verifier`, a read-only, refute-by-default skeptic used in read-only verification fan-outs. It is never a review gate and touches zero repository files.
+
 ## Automation scripts
 
 The workflow includes automation scripts installed by `install.sh` to
@@ -553,7 +596,9 @@ The detailed durable-state map lives in `docs/workflow-state-contract.md`. Keep 
 | `KAOLA_WORKFLOW_DEBUG_CWD` | (unset) | DEV/TEST ONLY — when set, `sink-merge.js` writes its final cwd to this file |
 | `KAOLA_WORKFLOW_FORCE_FF_FAIL` | (unset) | DEV/TEST ONLY — fail first N fast-forward merge attempts (GitHub, GitLab, and Gitea) |
 | `KAOLA_WORKFLOW_FORCE_MERGE_IMPOSSIBLE` | (unset) | DEV/TEST ONLY — force merge-impossible error in sink-merge fallback tests (GitHub, GitLab, and Gitea) |
-| `KAOLA_PATH` | (unset) | Set to `fast` to request fast-path workflow execution; defaults to the full six-phase flow |
+| `KAOLA_PATH` | (unset) | Set to `fast` to request fast-path execution, or `adaptive` to request the adaptive (dynamic-composition) path when `enable_adaptive` is on; defaults to the full six-phase flow |
+| `KAOLA_ENABLE_ADAPTIVE` | (unset) | Per-session override of the `enable_adaptive` install switch (`1`/`true`/`yes` on, `0`/`false`/`no` off). Precedence: env > `~/.config/kaola-workflow/config.json` > OFF |
+| `KAOLA_FANOUT_CAP` | `4` | Maximum width of an adaptive fan-out group (governance bound) |
 
 **Active-folder subcommands:**
 
@@ -751,6 +796,8 @@ leaves commit-and-push as the final step on a clean, synced workspace.
 | 6 | Finalize | Full validation with delegated repair if needed, documentation docking, closure decisions, issue/roadmap/archive updates, final commit and push | `phase6-summary.md` |
 
 All phase files are written to `{project-root}/kaola-workflow/{project-name}/` while active. Completed workflow folders are archived to `{project-root}/kaola-workflow/archive/`. Active unfinished work is tracked in `{project-root}/kaola-workflow/ROADMAP.md`.
+
+The optional [adaptive path](#adaptive-path-optional) does not follow this fixed numbered sequence: it composes role nodes into a `workflow-plan.md` DAG (with a frozen `plan_hash` and a `## Node Ledger`) and runs them dynamically, still landing in the same Phase-6 sink. The fast and adaptive paths are opt-in; the full six phases above are the default.
 
 ## Resuming
 
