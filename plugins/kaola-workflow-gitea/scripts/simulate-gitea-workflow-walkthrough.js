@@ -467,6 +467,21 @@ function testGiteaAdaptive() {
     assert.strictEqual(fv.barrierCheck(naT, ['src/auth/session.js'], {}).result, 'refuse', 'gitea v3.20.1 #1: n/a-target sensitive write must refuse');
     const cleanL = mkL(['| imp | tdd-guide | — | lib/foo.js | 1 | sequence |', '| rv | code-reviewer | imp | — | 1 | sequence |', '| done | finalize | rv | — | 1 | sequence |'], ['| imp | complete |', '| rv | complete |', '| done | complete |'], 'refactor');
     assert.strictEqual(fv.barrierCheck(cleanL, ['test/login.test.js'], {}).result, 'pass', 'gitea v3.20.1 #2: tests-only sensitive-named path must NOT refuse');
+
+    // v3.21.0 #238: the FORK classifier carries the curated-root claim-overlap (yellow) + ./ canon.
+    const fcl = require(path.join(root, 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-classifier.js'));
+    const cdir = path.join(tmp, 'kaola-workflow', 'curated-claimed-238');
+    fs.mkdirSync(cdir, { recursive: true });
+    fs.writeFileSync(path.join(cdir, 'workflow-plan.md'), ['# Plan', '', '## Meta', 'labels: chore', '', '## Nodes', '', '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|', '| ci | doc-updater | — | Dockerfile | 1 | sequence |', '| review | code-reviewer | ci | — | 1 | sequence |', '| done | finalize | review | — | 1 | sequence |', ''].join('\n'));
+    const fr238 = fcl.classify({ body: 'this change also edits the Dockerfile build stage' }, [{ project: 'curated-claimed-238', project_dir: cdir }]);
+    assert.strictEqual(fr238.verdict, 'yellow', 'gitea #238: curated root (Dockerfile) overlap must be yellow, got ' + JSON.stringify(fr238));
+    assert.strictEqual(gateVal([
+      '| e | code-explorer | — | — | 1 | sequence |',
+      '| a | tdd-guide | e | ./lib/foo.js | 1 | sequence |',
+      '| b | tdd-guide | e | lib//foo.js | 1 | sequence |',
+      '| r | code-reviewer | a,b | — | 1 | sequence |',
+      '| d | finalize | r | — | 1 | sequence |',
+    ], 'enhancement').result, 'refuse', 'gitea v3.21.0: ./lib/foo.js vs lib//foo.js is the same file and must refuse as a clobber');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

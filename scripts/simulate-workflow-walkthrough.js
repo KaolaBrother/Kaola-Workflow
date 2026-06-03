@@ -972,6 +972,19 @@ function testAdaptiveReadySetDisjointness() {
     ], []);
     assert(v.result === 'in-grammar' && v.decision === 'auto-run',
       'A3 control: disjoint concurrent siblings must still auto-run, got: ' + JSON.stringify(v));
+
+    // v3.21.0 (path canonicalization): `./lib/foo.js` and `lib/foo.js` are the SAME physical file —
+    // a concurrent pair declaring them in those two spellings is still a clobber and must refuse
+    // (normalizeRepoPath now strips leading `./` and collapses `//`). Adversarial finding vs v3.20.1.
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| a | tdd-guide | explore | ./lib/foo.js | 1 | sequence |',
+      '| b | tdd-guide | explore | lib//foo.js | 1 | sequence |',
+      '| review | code-reviewer | a,b | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /both write/.test((v.errors || []).join(';')),
+      'path-canon: ./lib/foo.js vs lib//foo.js is the same file and must refuse as a clobber, got: ' + JSON.stringify(v));
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   console.log('testAdaptiveReadySetDisjointness: PASSED');
 }
@@ -1864,6 +1877,47 @@ function testClassifierDotAreaOverlapRed() {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
   console.log('testClassifierDotAreaOverlapRed: PASSED');
+}
+
+// issue #238: a claimed project's structured plan write set declares a slashless ROOT file
+// (Dockerfile); a candidate issue body that also names it must collide-detect — but as YELLOW
+// (ask), never RED, since the candidate side is prose. The claimed side gets the root file from the
+// structured plan write set folded DIRECTLY (not re-extracted from a stringified blob).
+function testClassifierCuratedRootOverlapYellow() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-classifier-curated-yellow-'));
+  try {
+    plantActiveFolder(tmp, 'curated-claimed', 330, null, 'active');
+    plantFrozenPlan(tmp, 'curated-claimed', [
+      '# Workflow Plan — issue #330', '',
+      '## Meta', 'labels: chore', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '|---|---|---|---|---|---|',
+      '| ci | doc-updater | — | Dockerfile | 1 | sequence |',
+      '| review | code-reviewer | ci | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+      ''
+    ].join('\n'));
+    plantRoadmapIssue(tmp, 331, 'body: this change also edits the Dockerfile to add a build stage');
+    const result = runClassifierOffline(tmp, 331);
+    assert(result.verdict === 'yellow' && /Dockerfile/.test(result.reasoning),
+      'issue #238: curated root-file overlap must be yellow/ask (not red, not green), got ' + result.verdict + ' (' + result.reasoning + ')');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testClassifierCuratedRootOverlapYellow: PASSED');
+}
+
+// issue #238 CONTROL (no over-block): a candidate naming a curated root file must NOT be blocked
+// when no claimed project actually touches it — stays green (the safe-over-ask, not over-block).
+function testClassifierCuratedRootProseNoOverlapGreen() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-classifier-curated-green-'));
+  try {
+    plantActiveFolder(tmp, 'unrelated-claimed', 340, '# Phase 3\nFiles: scripts/some-file.js\n', 'active');
+    plantRoadmapIssue(tmp, 341, 'body: this change edits the Dockerfile only, nothing else');
+    const result = runClassifierOffline(tmp, 341);
+    assert(result.verdict === 'green',
+      'issue #238 control: a curated root file named by the candidate but untouched by any claimed project must stay green, got ' + result.verdict + ' (' + result.reasoning + ')');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testClassifierCuratedRootProseNoOverlapGreen: PASSED');
 }
 
 // Guards the Scope-section-only read: a path that appears ONLY in the later
@@ -5908,6 +5962,8 @@ async function main() {
     testClassifierDotPathOverlapRed();
     testClassifierRootPathProseNoOverlap();
     testClassifierDotAreaOverlapRed();
+    testClassifierCuratedRootOverlapYellow();
+    testClassifierCuratedRootProseNoOverlapGreen();
     testClassifierFastScopeSectionIsolationGreen();
     testClassifierFastScopeFenceCommentRed();
     testClassifierFastScopeFenceHeadingRed();

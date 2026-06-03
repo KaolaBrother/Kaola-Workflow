@@ -5,6 +5,7 @@ const path = require('path');
 const os = require('os');
 const { execFileSync } = require('child_process');
 const { readActiveFolders } = require('./kaola-workflow-active-folders');
+const adaptiveSchema = require('./kaola-workflow-adaptive-schema'); // #238: curated root-path vocabulary (byte-identical anchor)
 
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
 
@@ -93,7 +94,15 @@ function normalizeRepoPath(raw) {
     .replace(/^touches:/, '')
     .replace(/^[`'"]+/, '')
     .replace(/[`'",.;:)\]}]+$/, '')
-    .trim();
+    .trim()
+    // v3.21.0: canonicalize so the SAME physical file compares equal everywhere — strip leading
+    // `./` segments and collapse repeated slashes. Without this, a declared `./lib/foo.js` vs
+    // `lib/foo.js` (or `lib//foo.js`) are distinct strings, which defeated the exact-file
+    // clobber refusal + disjointness check and skewed areaForPath (`.` vs `lib`). (Adversarial
+    // finding against the v3.20.1 #232/#233 exact-file fix.) `../` is left untouched on purpose
+    // (resolving it changes meaning and is out of scope).
+    .replace(/^(?:\.\/)+/, '')
+    .replace(/\/{2,}/g, '/');
 }
 
 function areaForPath(filePath) {
@@ -330,7 +339,7 @@ function disjointWriteSets(nodeWriteSets) {
   return { verdict: 'green', reasoning: 'node write sets are pairwise disjoint' };
 }
 
-function scanClaimedOverlap(candidatePaths, candidateAreas, candidateAreaLabels, activeFolders, root) {
+function scanClaimedOverlap(candidatePaths, candidateAreas, candidateAreaLabels, candidateCuratedRoot, activeFolders, root) {
   let hasExactOverlap = false;
   let exactOverlapPath = '';
   let hasDirectOverlap = false;
@@ -338,6 +347,8 @@ function scanClaimedOverlap(candidatePaths, candidateAreas, candidateAreaLabels,
   let hasSharedInfraOverlap = false;
   let sharedOverlapArea = '';
   let hasAreaLabelOverlap = false;
+  let hasCuratedRootOverlap = false;
+  let curatedRootOverlapName = '';
   let anyClaimedAtPhaseLeTwo = false;
 
   for (const folder of activeFolders) {
@@ -356,20 +367,31 @@ function scanClaimedOverlap(candidatePaths, candidateAreas, candidateAreaLabels,
     // with full projects). Scope-only avoids false overlaps from command/test-output
     // path tokens in the Implementation Evidence / Review sections.
     try { fastScope = sectionBody(fs.readFileSync(path.join(projectDir, 'fast-summary.md'), 'utf8'), 'Scope'); } catch (_) {}
-    // issue #227: an adaptive project declares its write set in workflow-plan.md's
-    // `## Nodes` table, not in phaseN/fast-summary artifacts. Fold each node's declared
-    // write set into `combined` so cross-issue overlap detection sees its footprint
-    // (an adaptive project is NOT an empty write set to other projects' checks).
-    let planScope = '';
+    // issue #227 / #238: an adaptive project declares its write set STRUCTURALLY in
+    // workflow-plan.md's `## Nodes` table. Fold those parsed paths in DIRECTLY (they
+    // natively carry root-level + dot-leading + slash paths) instead of stringifying
+    // them and re-extracting via the prose path-finder, which silently re-drops the
+    // root-level ones (the v3.20.x #237 partial-fix gap). The prose artifacts
+    // (phase1/phase3/fast Scope) still go through the prose extractors.
+    const structuredClaimed = new Set();
     try {
-      planScope = readPlanNodes(path.join(projectDir, 'workflow-plan.md'))
-        .map(n => Array.from(n.writeSet).join(' ')).join('\n');
+      for (const n of readPlanNodes(path.join(projectDir, 'workflow-plan.md'))) {
+        for (const p of n.writeSet) structuredClaimed.add(p);
+      }
     } catch (_) {}
 
-    const combined = phase3Content + '\n' + phase1Content + '\n' + fastScope + '\n' + planScope;
+    const combined = phase3Content + '\n' + phase1Content + '\n' + fastScope;
     const claimedPaths = extractFilePaths(combined);
     const claimedAreas = extractCoarseAreas(combined);
     const claimedAreaLabels = parseAreaLabelsFromText(combined);
+    // #238: curated root (slashless) files on the claimed side — prose artifacts via the matcher,
+    // structured plan write sets folded directly (exact membership, no lossy re-tokenize).
+    const claimedCuratedRoot = adaptiveSchema.extractCuratedRootPaths(combined);
+    for (const p of structuredClaimed) {
+      claimedPaths.add(p);                                   // exact-overlap (slash/dot paths)
+      claimedAreas.add(areaForPath(p));                       // coarse-area overlap
+      if (adaptiveSchema.isCuratedRoot(p)) claimedCuratedRoot.add(p);  // curated-root overlap
+    }
 
     if (!fs.existsSync(path.join(projectDir, 'phase3-plan.md'))) anyClaimedAtPhaseLeTwo = true;
 
@@ -395,9 +417,16 @@ function scanClaimedOverlap(candidatePaths, candidateAreas, candidateAreaLabels,
     for (const label of candidateAreaLabels) {
       if (claimedAreaLabels.has(label)) { hasAreaLabelOverlap = true; break; }
     }
+
+    // #238: candidate (issue-body prose) curated root file ∩ claimed curated root file. Routed to
+    // ASK (yellow), never RED — both sides can name a curated file in prose, so over-ask is the safe
+    // direction (vs the prose-allowlist over-block that #237 deliberately avoided).
+    for (const p of candidateCuratedRoot) {
+      if (claimedCuratedRoot.has(p)) { if (!hasCuratedRootOverlap) curatedRootOverlapName = p; hasCuratedRootOverlap = true; }
+    }
   }
 
-  return { hasExactOverlap, exactOverlapPath, hasDirectOverlap, directOverlapArea, hasSharedInfraOverlap, sharedOverlapArea, hasAreaLabelOverlap, anyClaimedAtPhaseLeTwo };
+  return { hasExactOverlap, exactOverlapPath, hasDirectOverlap, directOverlapArea, hasSharedInfraOverlap, sharedOverlapArea, hasAreaLabelOverlap, hasCuratedRootOverlap, curatedRootOverlapName, anyClaimedAtPhaseLeTwo };
 }
 
 function checkDependsOn(depN) {
@@ -426,13 +455,15 @@ function classify(issue, activeFolders, root) {
   const candidateAreas = extractCoarseAreas(issue.body || '');
   const candidateAreaLabels = parseAreaLabels(issue.labels || []);
   for (const area of parseAreaLabelsFromText(issue.body || '')) candidateAreaLabels.add(area);
+  // #238: curated root (slashless) filenames named in the issue-body prose (Dockerfile, .env, …).
+  const candidateCuratedRoot = adaptiveSchema.extractCuratedRootPaths(issue.body || '');
 
   const {
     hasExactOverlap, exactOverlapPath,
     hasDirectOverlap, directOverlapArea,
     hasSharedInfraOverlap, sharedOverlapArea,
-    hasAreaLabelOverlap, anyClaimedAtPhaseLeTwo,
-  } = scanClaimedOverlap(candidatePaths, candidateAreas, candidateAreaLabels, activeFolders, root);
+    hasAreaLabelOverlap, hasCuratedRootOverlap, curatedRootOverlapName, anyClaimedAtPhaseLeTwo,
+  } = scanClaimedOverlap(candidatePaths, candidateAreas, candidateAreaLabels, candidateCuratedRoot, activeFolders, root);
 
   if (hasExactOverlap) {
     return { verdict: 'red', reasoning: 'exact file path overlap at "' + exactOverlapPath + '" with a claimed project' };
@@ -442,13 +473,20 @@ function classify(issue, activeFolders, root) {
     return { verdict: 'red', reasoning: 'file-set overlap at coarse area "' + directOverlapArea + '" with a claimed project' };
   }
 
-  const noPathInfo = candidateAreas.size === 0 && candidateAreaLabels.size === 0;
+  // #238: a named curated root file IS footprint info — don't treat a curated-only candidate as
+  // "no path info" and conservatively red it.
+  const noPathInfo = candidateAreas.size === 0 && candidateAreaLabels.size === 0 && candidateCuratedRoot.size === 0;
   if (noPathInfo && activeFolders.length > 0 && anyClaimedAtPhaseLeTwo) {
     return { verdict: 'red', reasoning: 'no extractable file paths or area labels; claimed project in phase <= 2; conservative red' };
   }
 
   if (hasSharedInfraOverlap) {
     return { verdict: 'yellow', reasoning: 'shared-infra area "' + sharedOverlapArea + '" overlap; proceed with caution' };
+  }
+
+  // #238: curated root-file overlap → ASK (never RED): both sides can name a curated file in prose.
+  if (hasCuratedRootOverlap) {
+    return { verdict: 'yellow', reasoning: 'curated root file "' + curatedRootOverlapName + '" overlap (CI/secrets/lockfile/manifest) with a claimed project; proceed with caution' };
   }
 
   if (hasAreaLabelOverlap) {

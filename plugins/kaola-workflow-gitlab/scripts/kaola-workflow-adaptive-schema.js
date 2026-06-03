@@ -87,6 +87,40 @@ function readDurableConsentHalt(planContent) {
   return /^consent_halt:[ \t]*pending[ \t]*$/m.test(body);
 }
 
+// #238: curated, high-collision-risk ROOT (slashless) filenames — CI/CD, container, secrets,
+// dependency-lock, and build manifests where two concurrent projects editing the same one clobber.
+// This is a FOURTH, DISTINCT path vocabulary, kept here on purpose so it cannot drift across the four
+// editions and so its meaning stays separate from its neighbours: SENSITIVE_PATTERNS = *security*
+// (plan-validator), SHARED_INFRA = *shared dirs* (classifier), area logic = *top-level dir*. Membership
+// here means only "collision-prone if co-edited". Slash-bearing CI paths (`.github/workflows/*`) are
+// handled by the classifier's FILE_PATH_REGEX, NOT this set. Cross-project overlap on a curated root
+// name is routed to ASK (yellow), never RED — the candidate side is free issue-body prose where even a
+// curated name can be mentioned casually, so the safe direction is over-ask, not over-block.
+const CURATED_ROOT_PATHS = Object.freeze([
+  'Dockerfile', 'Containerfile', 'docker-compose.yml', 'docker-compose.yaml', '.dockerignore',
+  'Makefile', 'Jenkinsfile', 'Procfile', 'Vagrantfile',
+  '.env', '.env.example', '.env.local', '.npmrc', '.nvmrc', '.gitlab-ci.yml', '.travis.yml',
+  'package.json', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml',
+  'go.mod', 'go.sum', 'Cargo.toml', 'Cargo.lock', 'requirements.txt', 'pyproject.toml',
+  'Gemfile', 'Gemfile.lock', 'pom.xml', 'build.gradle', 'composer.json', 'composer.lock',
+  'secrets.yaml', 'secrets.yml', 'tsconfig.json',
+]);
+const CURATED_ROOT_SET = new Set(CURATED_ROOT_PATHS);
+// Pure (no fs): tokenize free text and return the curated root filenames present, by EXACT token
+// membership (a curated name buried inside a larger word never matches). The tokenizer keeps `/`, so a
+// slash-bearing path tokenizes WITH its slashes and therefore can never collide with a slashless
+// curated name — slash paths stay the classifier's FILE_PATH_REGEX job, curated roots stay this one.
+function extractCuratedRootPaths(text) {
+  const found = new Set();
+  for (const tok of String(text || '').split(/[^A-Za-z0-9_.\/-]+/)) {
+    if (CURATED_ROOT_SET.has(tok)) found.add(tok);
+  }
+  return found;
+}
+// Exact membership test, so the claimed side can fold STRUCTURED declared paths directly (no lossy
+// re-tokenize of a stringified write-set blob) while reusing the one curated vocabulary.
+function isCuratedRoot(p) { return CURATED_ROOT_SET.has(String(p || '')); }
+
 // The single shared global config file (one path, no per-edition namespace) + the
 // switch field and its env mirror. Precedence: env KAOLA_ENABLE_ADAPTIVE > config
 // enable_adaptive > default OFF.
@@ -137,6 +171,9 @@ module.exports = {
   ESCALATION_MARKERS,
   CONSENT_HALT_MARKER,
   readDurableConsentHalt,
+  CURATED_ROOT_PATHS,
+  extractCuratedRootPaths,
+  isCuratedRoot,
   CONFIG_REL_PATH,
   ENABLE_ADAPTIVE_FIELD,
   ENABLE_ADAPTIVE_ENV,
