@@ -884,6 +884,65 @@ function testAdaptiveFanoutGroupScoping() {
   console.log('testAdaptiveFanoutGroupScoping: PASSED');
 }
 
+// issue #232 (audit A3): write-disjointness extends from declared fanout() groups to any
+// structurally-parallel write nodes that are CONCURRENT (antichain sharing a common ancestor).
+// Verdict is deliberately weaker than the declared path: exact-file overlap refuses; coarse/shared
+// overlap only demotes to ask. The binding false-refusal guard: independent branches (no common
+// ancestor, sharing only the sink) are NOT flagged even with identical writes.
+function testAdaptiveReadySetDisjointness() {
+  const tmp = adaptiveTmp('readyset-disjoint');
+  try {
+    // GAP 1: two non-fanout tdd-guide siblings (same parent `explore`) writing the EXACT same file
+    // must refuse — pre-#232 this passed because disjointness only ran on declared fanout() groups.
+    let v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| a | tdd-guide | explore | lib/foo.js | 1 | sequence |',
+      '| b | tdd-guide | explore | lib/foo.js | 1 | sequence |',
+      '| review | code-reviewer | a,b | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /concurrent siblings/.test((v.errors || []).join(';')),
+      'A3 gap: concurrent non-fanout siblings writing the same file must refuse, got: ' + JSON.stringify(v));
+
+    // GAP 2: concurrent siblings with COARSE-AREA (not exact) overlap demote to ask, not refuse.
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| a | tdd-guide | explore | api/x.js | 1 | sequence |',
+      '| b | tdd-guide | explore | api/y.js | 1 | sequence |',
+      '| review | code-reviewer | a,b | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'in-grammar' && v.decision === 'ask',
+      'A3 gap: concurrent siblings with coarse-area overlap must ask (not refuse), got: ' + JSON.stringify(v));
+
+    // CONTROL 1 (the binding no-false-refusal guard): two INDEPENDENT branches (roots r1, r2 — no
+    // common ancestor, sharing only the finalize sink) writing the EXACT same file must stay
+    // in-grammar. The shared-ancestor requirement is what prevents this false refusal.
+    v = validatePlanFixture(tmp, [
+      '| r1 | code-explorer | — | — | 1 | sequence |',
+      '| r2 | code-explorer | — | — | 1 | sequence |',
+      '| a | tdd-guide | r1 | lib/foo.js | 1 | sequence |',
+      '| b | tdd-guide | r2 | lib/foo.js | 1 | sequence |',
+      '| review | code-reviewer | a,b | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'in-grammar',
+      'A3 control: independent branches (no common ancestor) must NOT be flagged even with identical writes, got: ' + JSON.stringify(v));
+
+    // CONTROL 2: disjoint concurrent siblings (different top-level areas) must still auto-run.
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| a | tdd-guide | explore | aaa/x.js | 1 | sequence |',
+      '| b | tdd-guide | explore | bbb/y.js | 1 | sequence |',
+      '| review | code-reviewer | a,b | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'in-grammar' && v.decision === 'auto-run',
+      'A3 control: disjoint concurrent siblings must still auto-run, got: ' + JSON.stringify(v));
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptiveReadySetDisjointness: PASSED');
+}
+
 // issue #228 (Tier 2): broadened sequence/branch composition + governance edge cases on
 // top of the Tier-1 substrate. Exercises multi-role DAG branching (distinct from a
 // heterogeneous fan-out), read-only multi-modal sweep, bounded-loop governance, and the
@@ -5658,6 +5717,7 @@ async function main() {
     testAdaptiveConsentHaltSurfaces();
     testAdaptiveValidatorGovernance();
     testAdaptiveFanoutGroupScoping();
+    testAdaptiveReadySetDisjointness();
     testAdaptiveTier2Composition();
     testAdaptiveAuditFixes();
     testAdaptiveResumeHashDeletedTypedRefusal();

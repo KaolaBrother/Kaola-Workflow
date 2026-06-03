@@ -397,6 +397,24 @@ function testGiteaAdaptive() {
       '| r | code-reviewer | i1,i2,i3,i4,i5 | — | 1 | sequence |',
       '| d | finalize | r | — | 1 | sequence |',
     ], 'enhancement').result, 'refuse', 'gitea B6 control: single-origin over-cap fan-out must still refuse');
+
+    // issue #232 (audit A3): concurrent non-fanout siblings (same parent) writing the EXACT same
+    // file must refuse; independent branches (no common ancestor) with identical writes must NOT.
+    assert.strictEqual(gateVal([
+      '| e | code-explorer | — | — | 1 | sequence |',
+      '| a | tdd-guide | e | lib/foo.js | 1 | sequence |',
+      '| b | tdd-guide | e | lib/foo.js | 1 | sequence |',
+      '| r | code-reviewer | a,b | — | 1 | sequence |',
+      '| d | finalize | r | — | 1 | sequence |',
+    ], 'enhancement').result, 'refuse', 'gitea A3: concurrent siblings writing the same file must refuse');
+    assert.strictEqual(gateVal([
+      '| r1 | code-explorer | — | — | 1 | sequence |',
+      '| r2 | code-explorer | — | — | 1 | sequence |',
+      '| a | tdd-guide | r1 | lib/foo.js | 1 | sequence |',
+      '| b | tdd-guide | r2 | lib/foo.js | 1 | sequence |',
+      '| r | code-reviewer | a,b | — | 1 | sequence |',
+      '| d | finalize | r | — | 1 | sequence |',
+    ], 'enhancement').result, 'in-grammar', 'gitea A3 control: independent branches must not be flagged (no false refusal)');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

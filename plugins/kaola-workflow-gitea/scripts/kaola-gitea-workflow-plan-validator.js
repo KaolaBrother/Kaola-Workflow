@@ -156,6 +156,27 @@ function fanoutOriginKey(node, ids) {
   const parents = node.dependsOn.filter(d => ids.has(d));
   return parents.length === 1 ? parents[0] : '*';
 }
+// audit A3 (#232): reverse adjacency (child.id -> [parent ids]) + a forward-reachable-set walk,
+// used by the inferred concurrent-sibling disjointness check below. Iterative-stack DFS mirroring
+// hasCycle/gateUncovered so a deep chain cannot stack-overflow (MAX_NODES already bounds input).
+function reverseAdjacency(nodes) {
+  const radj = new Map(nodes.map(n => [n.id, []]));
+  // edge "n depends_on d" => d is a PARENT of n. Map n.id -> [its real parents] (skip dangling
+  // deps via radj.has(d)) so reachableSet(radj, x) walks ANCESTORS of x (not descendants).
+  for (const n of nodes) for (const d of n.dependsOn) if (radj.has(d)) radj.get(n.id).push(d);
+  return radj;
+}
+function reachableSet(adj, start) {
+  const seen = new Set();
+  const stack = [...(adj.get(start) || [])];
+  while (stack.length) {
+    const cur = stack.pop();
+    if (seen.has(cur)) continue;
+    seen.add(cur);
+    for (const nx of adj.get(cur) || []) if (!seen.has(nx)) stack.push(nx);
+  }
+  return seen;
+}
 function uniqueSink(nodes) {
   const ids = new Set(nodes.map(n => n.id));
   const hasOut = new Set();
@@ -320,6 +341,7 @@ function validatePlan(content, opts) {
   let loopPresent = false;
   let writeRoleFanout = false;
   let sharedInfraTouch = false;
+  let concurrentAmbiguousOverlap = false; // #232: inferred concurrent siblings with coarse/shared (non-exact) write overlap => ask
   for (const n of nodes) {
     if (n.shape.kind === 'invalid') errors.push(`node ${n.id} has invalid shape "${n.shape.raw}"`);
     if (n.shape.kind === 'fanout') {
@@ -358,6 +380,50 @@ function validatePlan(content, opts) {
     // read-only fan-out: width bounded by FANOUT_CAP alone (no clamp to #disjoint groups)
   }
 
+  // --- #232 (audit A3): inferred concurrent-sibling write disjointness ------------------------
+  // The declared fan-out groups loop above only checks nodes carrying a fanout(...) tag. Two
+  // structurally-parallel WRITE nodes (same depends_on, concurrently reachable, e.g. two tdd-guide
+  // with shape:sequence) could declare identical/overlapping write sets and pass. Check every PAIR
+  // of write-bearing nodes that are CONCURRENT:
+  //   concurrent(A,B) := neither reaches the other (antichain) AND they share a common ANCESTOR
+  //   (some node that reaches BOTH). Independent branches share only the finalize sink (a common
+  //   DESCENDANT, never an ancestor), so they are NOT flagged — that asymmetry is the
+  //   false-refusal guard. Concurrency is non-transitive, so it is computed per-PAIR.
+  // Verdict policy (deliberately WEAKER than the declared-fanout path, since concurrency is here
+  // INFERRED, not author-declared): EXACT same file => RED/refuse (unambiguous clobber);
+  // coarse-area / shared-infra overlap => ASK (inference + weak signal compound = ambiguous).
+  {
+    const fwdAdj = adjacency(nodes);
+    const revAdj = reverseAdjacency(nodes);
+    const descOf = new Map(nodes.map(n => [n.id, reachableSet(fwdAdj, n.id)]));
+    const ancOf = new Map(nodes.map(n => [n.id, reachableSet(revAdj, n.id)]));
+    // Co-members of the SAME declared fan-out group (#233 origin-scoped key) are already checked by
+    // the groups loop above; skip them here so a pair is not double-reported.
+    const groupKeyOf = new Map();
+    for (const [key, grp] of groups) for (const m of grp.members) groupKeyOf.set(m.id, key);
+    const writeBearing = nodes.filter(n => n.writeSet && n.writeSet.size > 0);
+    for (let i = 0; i < writeBearing.length; i++) {
+      for (let j = i + 1; j < writeBearing.length; j++) {
+        const A = writeBearing[i], B = writeBearing[j];
+        if (groupKeyOf.has(A.id) && groupKeyOf.get(A.id) === groupKeyOf.get(B.id)) continue; // same declared group
+        if (descOf.get(A.id).has(B.id) || descOf.get(B.id).has(A.id)) continue;              // not an antichain
+        let sharedAncestor = false;
+        for (const a of ancOf.get(A.id)) if (ancOf.get(B.id).has(a)) { sharedAncestor = true; break; }
+        if (!sharedAncestor) continue; // independent branches share only the sink (a descendant) => skip
+        let exact = null;
+        for (const p of A.writeSet) if (B.writeSet.has(p)) { exact = p; break; }
+        if (exact) {
+          errors.push(`concurrent siblings ${A.id} and ${B.id} both write "${exact}" (parallel non-fanout write overlap)`);
+          continue;
+        }
+        // coarse-area / shared-infra overlap => ASK (read only the verdict; the 2-element-array
+        // index reasoning of disjointWriteSets is never surfaced).
+        const dj = classifier.disjointWriteSets([A.writeSet, B.writeSet]);
+        if (dj.verdict !== 'green') concurrentAmbiguousOverlap = true;
+      }
+    }
+  }
+
   // gates (need a unique sink to be decidable)
   if (sink) {
     // G1: code-reviewer post-dominates every code-producing node (implement roles, plus a
@@ -392,6 +458,7 @@ function validatePlan(content, opts) {
   if (writeRoleFanout) { blastRadius = true; reasons.push('write-role fan-out (N>=2)'); }
   if (sharedInfraTouch) { blastRadius = true; reasons.push('declared write set touches SHARED_INFRA'); }
   if (loopPresent) { blastRadius = true; reasons.push('bounded loop present'); }
+  if (concurrentAmbiguousOverlap) { blastRadius = true; reasons.push('concurrent non-fanout siblings touch overlapping coarse/shared-infra areas — ambiguous concurrency (#232)'); }
 
   const decision = (sensitivity || blastRadius || uncertain) ? 'ask' : 'auto-run';
   return {
