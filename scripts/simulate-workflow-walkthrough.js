@@ -1341,10 +1341,43 @@ function testAdaptivePerInstanceBarrierHardening() {
       spawnSync('git', ['commit', '-m', 'gitignore'], { cwd: grepo, encoding: 'utf8' });
       assert(rec(planPath, 'a', grepo).status === 0, '(8) record-base a');
       w(grepo, 'aaa/x.js', 'x\n');                // own lane (landable)
-      w(grepo, 'dist/bundle.js', 'gen\n');        // gitignored generated artifact (never lands)
+      w(grepo, 'dist/bundle.js', 'gen\n');        // UNTRACKED gitignored generated artifact (never lands)
       const r = bc(planPath, 'a', grepo);
       assert(r.status === 0 && JSON.parse(r.stdout).result === 'pass',
-        'v3.21.0 (8): a write under a .gitignored path is out of scope and must NOT be attributed (landable-scope parity with the merge gate), got ' + r.stdout);
+        'v3.21.0 (8): an UNTRACKED write under a .gitignored path is out of scope and must NOT be attributed (landable-scope parity with the merge gate), got ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // (9) TRACKED-but-gitignored landable write (re-gate #3): a file committed THEN added to .gitignore
+  // STAYS tracked and WILL merge, so a node modifying it out-of-lane must be caught. The read-tree-HEAD
+  // seed in snapshotWorktree includes it; the old bare empty-index `add -A` dropped it (fail-open).
+  { const { grepo, planPath } = mkRepo(PLAN, true);
+    try {
+      w(grepo, 'bbb/y.js', 'orig\n');                          // node b's declared lane
+      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'track bbb'], { cwd: grepo, encoding: 'utf8' }); // now TRACKED
+      w(grepo, '.gitignore', 'bbb/\n');
+      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'ignore bbb'], { cwd: grepo, encoding: 'utf8' }); // gitignored but still tracked
+      assert(rec(planPath, 'a', grepo).status === 0, '(9) record-base a');
+      w(grepo, 'aaa/x.js', 'x\n');                             // own lane
+      w(grepo, 'bbb/y.js', 'orig\noverflow\n');                // modify tracked-but-gitignored SIBLING lane
+      const r = bc(planPath, 'a', grepo);
+      assert(r.status === 1 && /bbb\/y\.js/.test(r.stdout),
+        'v3.21.0 (9): a tracked-but-gitignored out-of-lane modification (landable) must refuse, got ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // (10) gc-survival (re-gate #3): the recorded base is ref-anchored (refs/kaola-workflow/barrier/...),
+  // so `git gc --prune=now` between node start and the barrier does NOT prune it and brick the node.
+  // The prior uncommitted file makes the base tree genuinely unreachable except via the ref.
+  { const { grepo, planPath } = mkRepo(PLAN, true);
+    try {
+      w(grepo, 'prior/uncommitted.js', 'leftover\n');          // prior node's uncommitted source
+      assert(rec(planPath, 'a', grepo).status === 0, '(10) record-base a');
+      w(grepo, 'aaa/x.js', 'x\n');                             // own lane only
+      spawnSync('git', ['gc', '--prune=now'], { cwd: grepo, encoding: 'utf8' });
+      const r = bc(planPath, 'a', grepo);
+      assert(r.status === 0 && JSON.parse(r.stdout).result === 'pass',
+        'v3.21.0 (10): the ref-anchored base must survive `git gc --prune=now` (no brick), got status ' + r.status + ' ' + r.stdout);
     } finally { cleanup(grepo); } }
 
   console.log('testAdaptivePerInstanceBarrierHardening: PASSED');
@@ -2168,6 +2201,31 @@ function testClassifierCuratedRootProseNoOverlapGreen() {
       'issue #238 control (F10): a curated root file named only by the candidate, untouched by a phase<=2 claimed project, must stay green (no over-block), got ' + result.verdict + ' (' + result.reasoning + ')');
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   console.log('testClassifierCuratedRootProseNoOverlapGreen: PASSED');
+}
+
+// v3.21.0 (re-gate round 3): the STRUCTURED-claimed fold must store the CANONICAL curated name, so a
+// plan declaring a NON-canonical case (`dockerfile`) still intersects a canonical candidate
+// (`Dockerfile`) on case-insensitive filesystems. This is the OPPOSITE asymmetry from the lowercase-
+// candidate case (334): here the lowercase is on the CLAIMED structured side, with NO prose mention
+// anywhere (else the prose path rescues it and the test is vacuous). Mutation-covers classifier:393's
+// canonicalCuratedRoot (revert it to a raw add -> green -> this fails).
+function testClassifierCuratedRootStructuredLowercaseYellow() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-classifier-curated-struct-lc-'));
+  try {
+    plantActiveFolder(tmp, 'lc-claimed', 370, null, 'active');
+    plantFrozenPlan(tmp, 'lc-claimed', [
+      '# Workflow Plan — issue #370', '', '## Meta', 'labels: chore', '', '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
+      '| ci | doc-updater | — | dockerfile | 1 | sequence |',
+      '| review | code-reviewer | ci | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |', ''
+    ].join('\n'));
+    plantRoadmapIssue(tmp, 371, 'body: this change also edits the Dockerfile to add a build stage');
+    const result = runClassifierOffline(tmp, 371);
+    assert(result.verdict === 'yellow' && /curated root file "Dockerfile"/.test(result.reasoning),
+      'v3.21.0: a lowercase STRUCTURED declaration (dockerfile) must intersect a canonical candidate (Dockerfile) — curated case-fold, got ' + result.verdict + ' (' + result.reasoning + ')');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testClassifierCuratedRootStructuredLowercaseYellow: PASSED');
 }
 
 // Guards the Scope-section-only read: a path that appears ONLY in the later
@@ -6215,6 +6273,7 @@ async function main() {
     testClassifierCuratedRootOverlapYellow();
     testClassifierCuratedRootProseClaimedYellow();
     testClassifierCuratedRootProseNoOverlapGreen();
+    testClassifierCuratedRootStructuredLowercaseYellow();
     testClassifierFastScopeSectionIsolationGreen();
     testClassifierFastScopeFenceCommentRed();
     testClassifierFastScopeFenceHeadingRed();

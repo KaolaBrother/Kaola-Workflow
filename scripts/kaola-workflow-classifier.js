@@ -388,9 +388,12 @@ function scanClaimedOverlap(candidatePaths, candidateAreas, candidateAreaLabels,
     // structured plan write sets folded directly (exact membership, no lossy re-tokenize).
     const claimedCuratedRoot = adaptiveSchema.extractCuratedRootPaths(combined);
     for (const p of structuredClaimed) {
-      claimedPaths.add(p);                                   // exact-overlap (slash/dot paths)
-      claimedAreas.add(areaForPath(p));                       // coarse-area overlap
-      if (adaptiveSchema.isCuratedRoot(p)) claimedCuratedRoot.add(p);  // curated-root overlap
+      claimedPaths.add(p);                                   // exact-overlap (slash/dot paths) — case-sensitive (distinct files on Linux)
+      claimedAreas.add(areaForPath(p));                       // coarse-area overlap — also case-sensitive
+      // curated-root overlap: store the CANONICAL name (case-folded) so it intersects the canonical
+      // candidate/prose sets — a raw add would fail open for a non-canonical-case declaration (#238 v3.21.0).
+      const canon = adaptiveSchema.canonicalCuratedRoot(p);
+      if (canon) claimedCuratedRoot.add(canon);
     }
 
     if (!fs.existsSync(path.join(projectDir, 'phase3-plan.md'))) anyClaimedAtPhaseLeTwo = true;

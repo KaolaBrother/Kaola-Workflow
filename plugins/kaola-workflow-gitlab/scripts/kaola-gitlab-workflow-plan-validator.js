@@ -655,33 +655,55 @@ function injectHash(content, hash) {
 }
 
 // --- CLI --------------------------------------------------------------------
-// #239 (v3.21.0): snapshot the LANDABLE worktree into a throwaway index and return the tree SHA. `git
-// add -A` stages tracked changes + untracked-NON-ignored files — i.e. exactly the set that will be
-// committed and merged. .gitignored paths are deliberately OUT OF SCOPE: the sink only ever stages
-// approved/explicit paths (never `git add -f`), so a gitignored write never lands, and the whole-plan
-// Phase-6 merge gate (`git diff <merge-base>`, committed-only) cannot see it either — the per-node
-// barrier scopes to the same landable set, by design (parity with the gate it pre-checks; using
-// `-Af` would make it stricter than the merge gate and brick normal runs by attributing test-run
-// artifacts like coverage/ and __pycache__/). Diffing two such snapshots (node-start vs barrier)
-// yields EXACTLY this node's own LANDABLE changes — new / modified / deleted, tracked or
-// untracked-non-ignored — and natively excludes prior nodes' still-uncommitted source writes and
-// pre-existing strays (the over-attribution false-refusal a bare `git ls-files --others` caused),
-// needs no HEAD (zero-commit safe), and never folds a dirty tree into the base. The index lives
-// OUTSIDE the repo (os.tmpdir) and is keyed by pid+tag so concurrent fan-out barriers never collide,
-// and so its own path can never leak into the snapshot. Shells out to git like the other CLI handlers;
-// the pure cores stay IO-free.
+// #239 (v3.21.0): snapshot the LANDABLE worktree into a throwaway index and return the tree SHA. The
+// index is first seeded from HEAD (`read-tree HEAD`), then `git add -A` layers the working state on
+// top. This captures exactly the set that will be committed and merged: tracked changes (INCLUDING a
+// modification to a tracked-but-gitignored file — committed then later gitignored, but still tracked,
+// so still landable) + untracked-NON-ignored files. Genuinely-untracked .gitignored paths stay OUT
+// OF SCOPE: the sink only ever stages approved/explicit paths (never `git add -f`), so such a write
+// never lands, and the whole-plan Phase-6 merge gate (`git diff <merge-base>`, committed-only) cannot
+// see it either — the per-node barrier scopes to the same landable set, by design (parity with the
+// gate it pre-checks; `-Af` would make it stricter than the merge gate and brick normal runs by
+// attributing test-run artifacts like coverage/ and __pycache__/). A zero-commit repo has no HEAD →
+// the read-tree is skipped (the bare empty-index `add -A` still records a valid base). Diffing two
+// such snapshots (node-start vs barrier) yields EXACTLY this node's own LANDABLE changes — new /
+// modified / deleted — and natively excludes prior nodes' still-uncommitted source writes and
+// pre-existing strays (the over-attribution false-refusal a bare `git ls-files --others` caused), and
+// never folds a dirty tree into the base. The index lives OUTSIDE the repo (os.tmpdir) and is keyed by
+// pid+tag so concurrent fan-out barriers never collide, and so its own path can never leak into the
+// snapshot. Shells out to git like the other CLI handlers; the pure cores stay IO-free.
 function snapshotWorktree(root, tag) {
   const idx = path.join(os.tmpdir(), 'kw-barrier-idx-' + process.pid + '-' + String(tag).replace(/[^A-Za-z0-9_-]/g, '_'));
   try { fs.unlinkSync(idx); } catch (_) {}
   try { fs.unlinkSync(idx + '.lock'); } catch (_) {}
   const env = Object.assign({}, process.env, { GIT_INDEX_FILE: idx });
   try {
+    // Seed tracked state from HEAD so a tracked-but-gitignored modification is captured (it is
+    // landable). Fails closed-harmlessly in a zero-commit repo (no HEAD) → empty index, bare add -A.
+    try { execFileSync('git', ['-C', root, 'read-tree', 'HEAD'], { env, stdio: ['ignore', 'ignore', 'ignore'] }); } catch (_) {}
     execFileSync('git', ['-C', root, 'add', '-A'], { env, stdio: ['ignore', 'ignore', 'ignore'] });
     return execFileSync('git', ['-C', root, 'write-tree'], { env, encoding: 'utf8' }).trim();
   } finally {
     try { fs.unlinkSync(idx); } catch (_) {}
     try { fs.unlinkSync(idx + '.lock'); } catch (_) {}
   }
+}
+// #239 (v3.21.0): a per-node baseline must SURVIVE `git gc` between node-start and the barrier (an
+// explicit `gc --prune=now`, or default gc on a >2-week-paused resume — the exact resume case this
+// targets). A bare `write-tree` object is unreachable and therefore prunable, which bricked the node.
+// We wrap the base tree in a commit (`commit-tree`) and anchor it under a ref keyed by (project,
+// node-id) so concurrent projects (which reuse node-ids like "a") never clobber each other's base.
+// commit-tree gets an explicit identity so it works even where git user.* is unset (CI). The refs are
+// intentionally left in place — bounded by node count, negligible — so an idempotent re-record / a
+// crash re-dispatch resolves the same base. Returns the commit SHA stored in .cache.
+function anchorBase(root, refName, tree) {
+  const env = Object.assign({}, process.env, {
+    GIT_AUTHOR_NAME: 'kaola-workflow', GIT_AUTHOR_EMAIL: 'kaola-workflow@localhost',
+    GIT_COMMITTER_NAME: 'kaola-workflow', GIT_COMMITTER_EMAIL: 'kaola-workflow@localhost',
+  });
+  const commit = execFileSync('git', ['-C', root, 'commit-tree', tree, '-m', 'kaola-workflow barrier base'], { env, encoding: 'utf8' }).trim();
+  execFileSync('git', ['-C', root, 'update-ref', refName, commit], { stdio: ['ignore', 'ignore', 'ignore'] });
+  return commit;
 }
 function printHelp() {
   process.stdout.write(
@@ -733,10 +755,16 @@ function main() {
     return;
   }
   const cacheBaseFile = nid => path.join(path.dirname(path.resolve(planPath)), '.cache', 'barrier-base-' + String(nid).replace(/[^A-Za-z0-9_-]/g, '_'));
+  // Anchor ref keyed by (project, node-id): concurrent projects reuse node-ids like "a", so a node-id-
+  // only ref would let project B clobber project A's base and let gc prune it. The project token is the
+  // project folder name (parent of the plan file).
+  const projTag = path.basename(path.dirname(path.resolve(planPath))).replace(/[^A-Za-z0-9_-]/g, '_') || 'plan';
+  const barrierRef = nid => 'refs/kaola-workflow/barrier/' + projTag + '/' + String(nid).replace(/[^A-Za-z0-9_-]/g, '_');
   if (args.includes('--record-base')) {
-    // #239 (v3.21.0): snapshot the full worktree as a per-node baseline at NODE START — a tree SHA via
-    // snapshotWorktree(), stored in .cache keyed by node-id so the step-4 barrier tree-diffs exactly
-    // THIS node's writes. Script-owned, explicit, resume-safe (the tree object persists in .git/objects).
+    // #239 (v3.21.0): snapshot the full landable worktree as a per-node baseline at NODE START via
+    // snapshotWorktree(), anchor it under a ref (anchorBase) so `git gc` cannot prune it before the
+    // barrier, and store the anchoring commit SHA in .cache keyed by node-id so the step-4 barrier
+    // tree-diffs exactly THIS node's writes. Script-owned, explicit, resume-safe (ref-reachable).
     const flagVal = name => { const i = args.indexOf(name); return i >= 0 && i + 1 < args.length ? args[i + 1] : null; };
     const nodeId = flagVal('--node-id');
     if (!nodeId) {
@@ -753,9 +781,10 @@ function main() {
       return;
     }
     const baseTree = snapshotWorktree(root, nodeId);
+    const baseCommit = anchorBase(root, barrierRef(nodeId), baseTree);
     fs.mkdirSync(path.dirname(cacheBaseFile(nodeId)), { recursive: true });
-    fs.writeFileSync(cacheBaseFile(nodeId), baseTree);
-    process.stdout.write((json ? JSON.stringify({ result: 'ok', nodeId, base: baseTree }) : 'recorded base ' + baseTree + ' for node ' + nodeId) + '\n');
+    fs.writeFileSync(cacheBaseFile(nodeId), baseCommit);
+    process.stdout.write((json ? JSON.stringify({ result: 'ok', nodeId, base: baseCommit }) : 'recorded base ' + baseCommit + ' for node ' + nodeId) + '\n');
     return;
   }
   if (args.includes('--barrier-check')) {
@@ -784,7 +813,8 @@ function main() {
         process.exitCode = 1; return;
       }
       const now = snapshotWorktree(root, nodeId + '-now');
-      // diff-tree between two explicit trees prints only the changed paths (no leading object header).
+      // base is the ref-anchored commit (resolves to the node-start tree); now is the barrier tree.
+      // diff-tree prints only the changed paths (no leading object header for explicit tree-ishes).
       const diffOut = execFileSync('git', ['-C', root, 'diff-tree', '-r', '--name-only', base, now], { encoding: 'utf8' });
       actualPaths = diffOut.split('\n').map(s => s.trim()).filter(Boolean);
     } else {

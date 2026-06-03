@@ -334,7 +334,10 @@ function scanClaimedOverlap(candidatePaths, candidateAreas, candidateAreaLabels,
     for (const p of structuredClaimed) {
       claimedPaths.add(p);
       claimedAreas.add(areaForPath(p));
-      if (adaptiveSchema.isCuratedRoot(p)) claimedCuratedRoot.add(p);
+      // curated-root overlap: store the CANONICAL name (case-folded) so it intersects the canonical
+      // candidate/prose sets — a raw add would fail open for a non-canonical-case declaration (#238 v3.21.0).
+      const canon = adaptiveSchema.canonicalCuratedRoot(p);
+      if (canon) claimedCuratedRoot.add(canon);
     }
 
     if (!fs.existsSync(phase3)) anyClaimedAtPhaseLeTwo = true;

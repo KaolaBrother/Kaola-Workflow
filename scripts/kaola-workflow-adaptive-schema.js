@@ -142,6 +142,11 @@ function extractCuratedRootPaths(text) {
 // Case-insensitive membership test, so the claimed side can fold STRUCTURED declared paths directly (no
 // lossy re-tokenize of a stringified write-set blob) while reusing the one curated vocabulary.
 function isCuratedRoot(p) { return CURATED_ROOT_LC.has(String(p || '').toLowerCase()); }
+// Canonical curated name for a path (case-folded), or null. The structured-claimed fold MUST store the
+// CANONICAL name (not the raw declared token) so it intersects the canonical candidate/prose sets —
+// otherwise a non-canonical-case declaration (e.g. a plan writing `dockerfile`) never matches a
+// canonical candidate `Dockerfile` and the curated overlap fails open. Mirrors extractCuratedRootPaths.
+function canonicalCuratedRoot(p) { return CURATED_ROOT_LC.get(String(p || '').toLowerCase()) || null; }
 
 // The single shared global config file (one path, no per-edition namespace) + the
 // switch field and its env mirror. Precedence: env KAOLA_ENABLE_ADAPTIVE > config
@@ -196,6 +201,7 @@ module.exports = {
   CURATED_ROOT_PATHS,
   extractCuratedRootPaths,
   isCuratedRoot,
+  canonicalCuratedRoot,
   CONFIG_REL_PATH,
   ENABLE_ADAPTIVE_FIELD,
   ENABLE_ADAPTIVE_ENV,

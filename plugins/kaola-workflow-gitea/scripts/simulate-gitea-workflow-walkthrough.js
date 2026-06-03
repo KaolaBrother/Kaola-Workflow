@@ -490,6 +490,13 @@ function testGiteaAdaptive() {
     fs.writeFileSync(path.join(pdir238, 'phase3-plan.md'), '# Phase 3\nWe will edit the Dockerfile.\n');
     const frProse = fcl.classify({ body: 'this change also edits the Dockerfile and src/app.js' }, [{ project: 'prose-curated-238', project_dir: pdir238 }]);
     assert.strictEqual(frProse.verdict, 'yellow', 'gitea F9: claimed-PROSE curated overlap must be yellow, got ' + JSON.stringify(frProse));
+    // v3.21.0 re-gate#3: the structured-claimed fold must CANONICALIZE — a lowercase `dockerfile`
+    // declaration must intersect a canonical `Dockerfile` candidate (mutation-covers fork classifier:337).
+    const lcdir = path.join(tmp, 'kaola-workflow', 'lc-curated-238');
+    fs.mkdirSync(lcdir, { recursive: true });
+    fs.writeFileSync(path.join(lcdir, 'workflow-plan.md'), ['# Plan', '', '## Meta', 'labels: chore', '', '## Nodes', '', '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|', '| ci | doc-updater | — | dockerfile | 1 | sequence |', '| review | code-reviewer | ci | — | 1 | sequence |', '| done | finalize | review | — | 1 | sequence |', ''].join('\n'));
+    const frLc = fcl.classify({ body: 'this change also edits the Dockerfile build stage' }, [{ project: 'lc-curated-238', project_dir: lcdir }]);
+    assert.strictEqual(frLc.verdict, 'yellow', 'gitea v3.21.0: lowercase structured curated declaration must intersect canonical candidate, got ' + JSON.stringify(frLc));
     assert.strictEqual(gateVal([
       '| e | code-explorer | — | — | 1 | sequence |',
       '| a | tdd-guide | e | ./lib/foo.js | 1 | sequence |',
