@@ -32,7 +32,8 @@ Then parse the `## Node Ledger` and `workflow-state.md`:
   pending approval for the user's explicit yes, do NOT re-dispatch. On approval, REMOVE
   the Ledger marker AND clear `escalated_to_full: consent` in lockstep, then resume.
 - a node `in_progress` with absent/partial `.cache/{node-id}.md` → crash mid-node;
-  re-dispatch exactly that node.
+  re-dispatch exactly that node. Re-running its node-start `--record-base` is **idempotent**
+  (#239) — the original baseline is reused, so a crashed attempt's writes stay visible to the barrier.
 - otherwise compute the **ready set**: nodes whose `status != complete` and all of whose
   `depends_on` are `complete` with resolved compliance.
 

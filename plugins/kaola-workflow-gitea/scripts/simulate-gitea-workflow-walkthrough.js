@@ -481,6 +481,15 @@ function testGiteaAdaptive() {
       const fr = fcl.classify({ body }, [{ project: 'curated-claimed-238', project_dir: cdir }]);
       assert.strictEqual(fr.verdict, 'yellow', 'gitea #238/v3.21.0: punctuated curated overlap must be yellow ("' + body + '"), got ' + JSON.stringify(fr));
     }
+    // F9 (v3.21.0): the CLAIMED-PROSE side (extractCuratedRootPaths over phase3 prose, NOT the
+    // structured fold) must also detect a curated overlap. The fork classifier is a hand-port
+    // (non-identical to root), so this is NOT transitively covered — guard it directly. The prose is
+    // punctuated ("Dockerfile.") so it also covers the claimed-side normalization.
+    const pdir238 = path.join(tmp, 'kaola-workflow', 'prose-curated-238');
+    fs.mkdirSync(pdir238, { recursive: true });
+    fs.writeFileSync(path.join(pdir238, 'phase3-plan.md'), '# Phase 3\nWe will edit the Dockerfile.\n');
+    const frProse = fcl.classify({ body: 'this change also edits the Dockerfile and src/app.js' }, [{ project: 'prose-curated-238', project_dir: pdir238 }]);
+    assert.strictEqual(frProse.verdict, 'yellow', 'gitea F9: claimed-PROSE curated overlap must be yellow, got ' + JSON.stringify(frProse));
     assert.strictEqual(gateVal([
       '| e | code-explorer | — | — | 1 | sequence |',
       '| a | tdd-guide | e | ./lib/foo.js | 1 | sequence |',

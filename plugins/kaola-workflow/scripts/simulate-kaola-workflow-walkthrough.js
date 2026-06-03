@@ -136,10 +136,11 @@ function testCodexAdaptiveCuratedAndBarrier() {
       const planPath = path.join(tmp, 'kaola-workflow', 'curated-claimed', 'workflow-plan.md');
       fs.writeFileSync(planPath, ['# Plan', '', '## Meta', 'labels: chore', '', '## Nodes', '', '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|', '| ci | doc-updater | — | Dockerfile | 1 | sequence |', '| review | code-reviewer | ci | — | 1 | sequence |', '| done | finalize | review | — | 1 | sequence |', ''].join('\n'));
       assert(runVal([planPath, '--freeze'], tmp).status === 0, 'codex: freeze curated plan');
-      for (const [num, body] of [[331, 'body: edits the Dockerfile. also src/server.js'], [332, 'body: tweak ./Dockerfile and src/server.js']]) {
+      for (const [num, body] of [[331, 'body: edits the Dockerfile. also src/server.js'], [332, 'body: tweak ./Dockerfile and src/server.js'], [333, 'body: edits the dockerfile. also src/server.js']]) {
         plantRoadmap(tmp, num, body);
         const r = classifyOffline(tmp, num);
-        assert(r.verdict === 'yellow' && /curated root file "Dockerfile"/.test(r.reasoning), 'codex #238: punctuated curated overlap must be yellow, got ' + JSON.stringify(r));
+        // 333 is lowercase "dockerfile." — case-insensitive curated match (v3.21.0).
+        assert(r.verdict === 'yellow' && /curated root file "Dockerfile"/.test(r.reasoning), 'codex #238: punctuated/case-insensitive curated overlap must be yellow ("' + body + '"), got ' + JSON.stringify(r));
       }
       // claimed-PROSE side (no frozen plan): a curated overlap declared only in prose is still yellow.
       plantFolder(tmp, 'prose-claimed', 360, '# Phase 3\nWe will edit the Dockerfile.\n');

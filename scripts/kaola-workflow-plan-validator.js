@@ -655,15 +655,21 @@ function injectHash(content, hash) {
 }
 
 // --- CLI --------------------------------------------------------------------
-// #239 (v3.21.0): snapshot the FULL worktree (tracked + untracked, honoring .gitignore) into a
-// throwaway index and return the resulting tree SHA. Diffing two such snapshots (node-start vs
-// barrier) yields EXACTLY this node's own changes — new / modified / deleted, tracked or untracked
-// — and natively excludes prior nodes' still-uncommitted source writes and pre-existing strays
-// (the over-attribution false-refusal a bare `git ls-files --others` caused), needs no HEAD
-// (zero-commit safe), and never folds a dirty tree into the base. The index lives OUTSIDE the repo
-// (os.tmpdir) and is keyed by pid+tag so concurrent fan-out barriers never collide, and so its own
-// path can never leak into the snapshot. Shells out to git like the other CLI handlers; the pure
-// cores stay IO-free.
+// #239 (v3.21.0): snapshot the LANDABLE worktree into a throwaway index and return the tree SHA. `git
+// add -A` stages tracked changes + untracked-NON-ignored files — i.e. exactly the set that will be
+// committed and merged. .gitignored paths are deliberately OUT OF SCOPE: the sink only ever stages
+// approved/explicit paths (never `git add -f`), so a gitignored write never lands, and the whole-plan
+// Phase-6 merge gate (`git diff <merge-base>`, committed-only) cannot see it either — the per-node
+// barrier scopes to the same landable set, by design (parity with the gate it pre-checks; using
+// `-Af` would make it stricter than the merge gate and brick normal runs by attributing test-run
+// artifacts like coverage/ and __pycache__/). Diffing two such snapshots (node-start vs barrier)
+// yields EXACTLY this node's own LANDABLE changes — new / modified / deleted, tracked or
+// untracked-non-ignored — and natively excludes prior nodes' still-uncommitted source writes and
+// pre-existing strays (the over-attribution false-refusal a bare `git ls-files --others` caused),
+// needs no HEAD (zero-commit safe), and never folds a dirty tree into the base. The index lives
+// OUTSIDE the repo (os.tmpdir) and is keyed by pid+tag so concurrent fan-out barriers never collide,
+// and so its own path can never leak into the snapshot. Shells out to git like the other CLI handlers;
+// the pure cores stay IO-free.
 function snapshotWorktree(root, tag) {
   const idx = path.join(os.tmpdir(), 'kw-barrier-idx-' + process.pid + '-' + String(tag).replace(/[^A-Za-z0-9_-]/g, '_'));
   try { fs.unlinkSync(idx); } catch (_) {}

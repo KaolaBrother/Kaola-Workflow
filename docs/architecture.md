@@ -52,10 +52,15 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   required reviewer is marked `n/a` at runtime (audit G1/H5) — wired into `routeAdaptive`
   (surfaced as `pendingGates`, non-blocking on resume so a mid-run pending gate never
   bricks an in-flight plan) and enforced as a hard merge gate in Phase 6. `--barrier-check`
-  re-scans the files actually written (git diff vs the merge-base of HEAD and `origin/main`,
-  so a committed sensitive write is not invisible) and refuses a sensitive write with no
-  `security-reviewer` node (audit H1) or an out-of-allowlist production write (audit H3).
-  Both checks are PURE + toggle-agnostic (they never read the install switch). Only the
+  re-scans the files actually written and refuses a sensitive write with no `security-reviewer`
+  node (audit H1) or an out-of-allowlist production write (audit H3). It runs in two modes: the
+  **whole-plan** Phase-6 merge gate diffs vs the merge-base of HEAD and `origin/main` (so a
+  committed sensitive write is not invisible) against the **union** of declared write sets; the
+  **per-node** barrier (#239) tree-diffs the current full-worktree snapshot against the node's
+  recorded node-start snapshot (`--record-base`, idempotent for resume-safety) against the node's
+  **own** declared set — attributing exactly that node's writes (new/modified/deleted, tracked or
+  untracked) without over-attributing prior nodes' still-uncommitted source or pre-existing strays,
+  and needing no committed baseline. Both checks are PURE + toggle-agnostic (they never read the install switch). Only the
   quorum tally and the `validateNodeOutput` schema checkpoints remain agent-discipline
   prose. The 2026-06-03 audit (`docs/investigations/adaptive-path-audit-2026-06-03.md`)
   hardened the *static* floor — write-set extraction (root-level + dot-leading paths),

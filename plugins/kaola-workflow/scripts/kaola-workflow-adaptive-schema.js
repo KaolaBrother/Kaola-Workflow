@@ -106,17 +106,25 @@ const CURATED_ROOT_PATHS = Object.freeze([
   'secrets.yaml', 'secrets.yml', 'tsconfig.json',
 ]);
 const CURATED_ROOT_SET = new Set(CURATED_ROOT_PATHS);
-// Pure (no fs): tokenize free text and return the curated root filenames present, by EXACT token
-// membership (a curated name buried inside a larger word never matches). The tokenizer keeps `/`, so a
-// slash-bearing path tokenizes WITH its slashes and therefore can never collide with a slashless
-// curated name — slash paths stay the classifier's FILE_PATH_REGEX job, curated roots stay this one.
-// v3.21.0: each token is canonicalized before membership so the SAME physical file compares equal on
-// both the candidate and claimed sides — the tokenizer leaves sentence punctuation glued to a path
-// (a leading "./", a collapsed "//", a trailing "/" or a sentence-ending "."), none of which a
-// curated ROOT basename ever legitimately carries. Without this, prose like "edit the Dockerfile."
-// or "./Dockerfile" tokenized to "Dockerfile." / "./Dockerfile" and missed exact membership — a
-// fail-open, since the candidate side is the ONLY detector for slashless root files. Nested paths
-// keep their inner slashes (e.g. "config/Dockerfile"), so they still never match a root basename.
+// Case-insensitive lookup: lowercased name -> canonical name. On case-insensitive filesystems
+// (macOS/Windows) `makefile`/`Makefile`, `dockerfile`/`Dockerfile`, `gemfile`/`Gemfile` are the SAME
+// physical file (v3.21.0). Matching folds case and maps back to the canonical name so the candidate
+// and claimed sides intersect (and the reasoning string reads `Makefile`, not `makefile`). On
+// case-sensitive Linux this can over-ASK on a `makefile`-vs-`Makefile` pair — the safe direction, and
+// a curated overlap is only a yellow caution, never a block. (No two curated names share a lowercase
+// form, so the map has no key collisions.)
+const CURATED_ROOT_LC = new Map(CURATED_ROOT_PATHS.map(p => [p.toLowerCase(), p]));
+// Pure (no fs): tokenize free text and return the curated root filenames present (canonical-cased), by
+// EXACT token membership (a curated name buried inside a larger word never matches). The tokenizer
+// keeps `/`, so a slash-bearing path tokenizes WITH its slashes and therefore can never collide with a
+// slashless curated name — slash paths stay the classifier's FILE_PATH_REGEX job, curated roots stay
+// this one. v3.21.0: each token is canonicalized before membership so the SAME physical file compares
+// equal on both the candidate and claimed sides — the tokenizer leaves sentence punctuation glued to a
+// path (a leading "./", a collapsed "//", a trailing "/" or a sentence-ending "."), none of which a
+// curated ROOT basename ever legitimately carries, and case is folded (see CURATED_ROOT_LC). Without
+// this, prose like "edit the Dockerfile." / "./Dockerfile" / "makefile" missed exact membership — a
+// fail-open, since the candidate side is the ONLY detector for slashless root files. Nested paths keep
+// their inner slashes (e.g. "config/Dockerfile"), so they still never match a root basename.
 function extractCuratedRootPaths(text) {
   const found = new Set();
   for (const raw of String(text || '').split(/[^A-Za-z0-9_.\/-]+/)) {
@@ -126,13 +134,14 @@ function extractCuratedRootPaths(text) {
       .replace(/\/{2,}/g, '/')     // collapsed //
       .replace(/\/+$/, '')         // trailing /
       .replace(/\.+$/, '');        // trailing sentence "." (no curated name ends in a dot)
-    if (CURATED_ROOT_SET.has(tok)) found.add(tok);
+    const canon = CURATED_ROOT_LC.get(tok.toLowerCase());
+    if (canon) found.add(canon);
   }
   return found;
 }
-// Exact membership test, so the claimed side can fold STRUCTURED declared paths directly (no lossy
-// re-tokenize of a stringified write-set blob) while reusing the one curated vocabulary.
-function isCuratedRoot(p) { return CURATED_ROOT_SET.has(String(p || '')); }
+// Case-insensitive membership test, so the claimed side can fold STRUCTURED declared paths directly (no
+// lossy re-tokenize of a stringified write-set blob) while reusing the one curated vocabulary.
+function isCuratedRoot(p) { return CURATED_ROOT_LC.has(String(p || '').toLowerCase()); }
 
 // The single shared global config file (one path, no per-edition namespace) + the
 // switch field and its env mirror. Precedence: env KAOLA_ENABLE_ADAPTIVE > config

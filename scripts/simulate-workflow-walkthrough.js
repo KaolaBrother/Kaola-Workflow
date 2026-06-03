@@ -1328,6 +1328,25 @@ function testAdaptivePerInstanceBarrierHardening() {
         'v3.21.0 (7): --record-base without --node-id must refuse');
     } finally { cleanup(grepo); } }
 
+  // (8) LANDABLE SCOPE (re-gate #2): a write under a .gitignored path is OUT OF SCOPE and must NOT be
+  // attributed to the node — it never lands (the sink stages explicit/approved paths, never `git add
+  // -f`) and the whole-plan Phase-6 gate (committed-only `git diff`) cannot see it either, so the
+  // per-node barrier scopes to the same landable set (parity with the merge gate). This pins the
+  // boundary: snapshot uses `git add -A` (honors .gitignore), NOT `-Af` (which would attribute
+  // test-run artifacts like coverage/ and brick normal runs).
+  { const { grepo, planPath } = mkRepo(PLAN, true);
+    try {
+      w(grepo, '.gitignore', 'dist/\n');
+      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'gitignore'], { cwd: grepo, encoding: 'utf8' });
+      assert(rec(planPath, 'a', grepo).status === 0, '(8) record-base a');
+      w(grepo, 'aaa/x.js', 'x\n');                // own lane (landable)
+      w(grepo, 'dist/bundle.js', 'gen\n');        // gitignored generated artifact (never lands)
+      const r = bc(planPath, 'a', grepo);
+      assert(r.status === 0 && JSON.parse(r.stdout).result === 'pass',
+        'v3.21.0 (8): a write under a .gitignored path is out of scope and must NOT be attributed (landable-scope parity with the merge gate), got ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
   console.log('testAdaptivePerInstanceBarrierHardening: PASSED');
 }
 
@@ -2104,6 +2123,9 @@ function testClassifierCuratedRootOverlapYellow() {
       [331, 'body: this change also edits the Dockerfile to add a build stage'],
       [332, 'body: add a healthcheck to the Dockerfile. also update src/server.js'],
       [333, 'body: tweak ./Dockerfile and refresh src/server.js'],
+      // v3.21.0: case-insensitive — a lowercase "dockerfile" is the SAME physical file on
+      // macOS/Windows, so it must still route to the curated overlap (mutation-covers CURATED_ROOT_LC).
+      [334, 'body: also update the dockerfile. and src/server.js'],
     ]) {
       plantRoadmapIssue(tmp, num, body);
       const result = runClassifierOffline(tmp, num);

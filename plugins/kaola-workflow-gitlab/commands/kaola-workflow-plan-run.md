@@ -58,7 +58,9 @@ Then parse the `## Node Ledger` and `workflow-state.md`:
   `escalated_to_full: consent` from `workflow-state.md` in lockstep, then resume the
   ready set — never re-ask an authorization already granted.
 - A node `in_progress` with absent/partial `.cache/{node-id}.md` → crash mid-node;
-  re-dispatch exactly that node (mirrors phase4 `in_progress → delegate`).
+  re-dispatch exactly that node (mirrors phase4 `in_progress → delegate`). Re-running its
+  step-1 `--record-base` is **idempotent** (#239) — the original node-start baseline is reused,
+  not re-snapshotted, so a crashed attempt's writes stay visible to the step-4 barrier.
 - Otherwise compute the **ready set**: every node whose `status != complete` and
   all of whose `depends_on` are `complete` **with resolved compliance**.
 
