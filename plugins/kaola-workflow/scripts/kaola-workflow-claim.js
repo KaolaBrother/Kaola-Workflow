@@ -580,13 +580,14 @@ function resumeFallbackCommand(root, folder) {
 
 // #234 E1: reconcile the PERSISTED next_command against the project's true path before trusting it.
 // A present-but-stale value (e.g. a residual `/kaola-workflow-phase4` on a project that is actually
-// adaptive) must NOT bypass the fallback. Artifact-first, matching routeAdaptive's stance (#44: never
-// silently ride the phaseN ladder): when the project is adaptive (workflow_path/phase says so, or a
-// workflow-plan.md exists), FORCE plan-run and ignore a stale phaseN; otherwise trust the persisted
-// command only if it matches what the artifacts imply, else fall back to reconstruction.
+// adaptive) must NOT bypass the fallback: when the project is adaptive (workflow_path/phase says so,
+// or a workflow-plan.md exists) FORCE plan-run and ignore the stale phaseN, matching routeAdaptive's
+// artifact-first stance (#44: never silently ride the phaseN ladder). The NON-adaptive path keeps its
+// pre-existing contract (trust the persisted command, else reconstruct) — a full/fast next_command
+// legitimately points FORWARD of the `phase:` field (e.g. phase5 complete writes phase: 5 +
+// next_command: /kaola-workflow-phase6), so it must NOT be overridden by phase-derived reconstruction.
 // Toggle-agnostic: never reads resolveEnableAdaptive (resume must work even when the switch is OFF).
 function reconcileNextCommand(root, folder) {
-  const persisted = folder.next_command;
   let content = '';
   try {
     content = fs.readFileSync(path.join(root, 'kaola-workflow', folder.project, 'workflow-state.md'), 'utf8');
@@ -594,8 +595,7 @@ function reconcileNextCommand(root, folder) {
   const planExists = fs.existsSync(path.join(root, 'kaola-workflow', folder.project, adaptiveSchema.PLAN_FILE));
   const isAdaptive = /^(?:workflow_path|phase):\s*adaptive\s*$/m.test(content) || planExists;
   if (isAdaptive) return adaptiveSchema.PLAN_RUN_COMMAND + ' ' + folder.project;
-  const reconstructed = resumeFallbackCommand(root, folder);
-  return (persisted && persisted === reconstructed) ? persisted : reconstructed;
+  return folder.next_command || resumeFallbackCommand(root, folder);
 }
 
 function cmdResume() {

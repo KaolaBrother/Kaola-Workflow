@@ -552,11 +552,11 @@ function resumeFallbackCommand(root, folder) {
 }
 
 // #234 E1: reconcile the persisted next_command against the project's true path before trusting it.
-// Adaptive (state field or a workflow-plan.md) -> FORCE plan-run, ignore a stale phaseN; else trust
-// the persisted command only if it matches the artifact-implied phase, else reconstruct.
-// Toggle-agnostic: never reads resolveEnableAdaptive.
+// Adaptive (state field or a workflow-plan.md) -> FORCE plan-run, ignore a stale phaseN. The
+// NON-adaptive path keeps its pre-existing contract (trust persisted, else reconstruct): a full/fast
+// next_command legitimately points FORWARD of `phase:` (phase5 complete -> next_command /phase6), so
+// it must NOT be overridden by phase-derived reconstruction. Toggle-agnostic.
 function reconcileNextCommand(root, folder) {
-  const persisted = folder.next_command;
   let content = '';
   try {
     content = fs.readFileSync(path.join(root, 'kaola-workflow', folder.project, 'workflow-state.md'), 'utf8');
@@ -564,8 +564,7 @@ function reconcileNextCommand(root, folder) {
   const planExists = fs.existsSync(path.join(root, 'kaola-workflow', folder.project, adaptiveSchema.PLAN_FILE));
   const isAdaptive = /^(?:workflow_path|phase):\s*adaptive\s*$/m.test(content) || planExists;
   if (isAdaptive) return adaptiveSchema.PLAN_RUN_COMMAND + ' ' + folder.project;
-  const reconstructed = resumeFallbackCommand(root, folder);
-  return (persisted && persisted === reconstructed) ? persisted : reconstructed;
+  return folder.next_command || resumeFallbackCommand(root, folder);
 }
 
 function cmdResume() {
