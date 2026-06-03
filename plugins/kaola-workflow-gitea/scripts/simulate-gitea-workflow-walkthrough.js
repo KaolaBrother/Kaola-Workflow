@@ -371,6 +371,32 @@ function testGiteaAdaptive() {
       '| rv | code-reviewer | n1 | — | 1 | sequence |',
       '| d | finalize | rv | — | 1 | sequence |', ''
     ].join('\n')).result, 'refuse', 'gitea B1: decoy labels line outside ## Meta must not drop G2');
+
+    // issue #233 (audit B6): fan-out groups are scoped by (label, origin). Independent branches
+    // reusing label `impl` (3+3) must NOT sum against FANOUT_CAP; a genuine single-origin over-cap
+    // fan-out (5 under one parent) must still refuse.
+    assert.strictEqual(gateVal([
+      '| root1 | code-explorer | — | — | 1 | sequence |',
+      '| root2 | code-explorer | — | — | 1 | sequence |',
+      '| a1 | tdd-guide | root1 | aaa/1.js | 1 | fanout(impl) |',
+      '| a2 | tdd-guide | root1 | bbb/1.js | 1 | fanout(impl) |',
+      '| a3 | tdd-guide | root1 | ccc/1.js | 1 | fanout(impl) |',
+      '| b1 | tdd-guide | root2 | ddd/1.js | 1 | fanout(impl) |',
+      '| b2 | tdd-guide | root2 | eee/1.js | 1 | fanout(impl) |',
+      '| b3 | tdd-guide | root2 | fff/1.js | 1 | fanout(impl) |',
+      '| r | code-reviewer | a1,a2,a3,b1,b2,b3 | — | 1 | sequence |',
+      '| d | finalize | r | — | 1 | sequence |',
+    ], 'enhancement').result, 'in-grammar', 'gitea B6: independent branches reusing a label must not sum against FANOUT_CAP');
+    assert.strictEqual(gateVal([
+      '| root | code-explorer | — | — | 1 | sequence |',
+      '| i1 | tdd-guide | root | aaa/1.js | 1 | fanout(impl) |',
+      '| i2 | tdd-guide | root | bbb/1.js | 1 | fanout(impl) |',
+      '| i3 | tdd-guide | root | ccc/1.js | 1 | fanout(impl) |',
+      '| i4 | tdd-guide | root | ddd/1.js | 1 | fanout(impl) |',
+      '| i5 | tdd-guide | root | eee/1.js | 1 | fanout(impl) |',
+      '| r | code-reviewer | i1,i2,i3,i4,i5 | — | 1 | sequence |',
+      '| d | finalize | r | — | 1 | sequence |',
+    ], 'enhancement').result, 'refuse', 'gitea B6 control: single-origin over-cap fan-out must still refuse');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

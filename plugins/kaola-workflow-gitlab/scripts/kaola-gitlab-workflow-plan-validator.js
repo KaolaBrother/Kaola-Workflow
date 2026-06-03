@@ -145,6 +145,17 @@ function adjacency(nodes) {
   for (const n of nodes) for (const d of n.dependsOn) if (adj.has(d)) adj.get(d).push(n.id);
   return adj;
 }
+// audit B6 (#233): the fan-out ORIGIN of a fanout member is the single in-graph parent it fans
+// out from (its sole declared depends_on that exists in the graph). When a member has zero
+// in-graph parents (a root fan-out) or two-plus (a diamond — the origin is ambiguous), there is
+// no single shared origin, so return '*' and fall back to the label-only (global) bucket —
+// matching pre-#233 behavior so a plan that passes today is never newly refused. Scoping fan-out
+// groups by (label, origin) stops two topologically-independent branches that reuse the same
+// label from being summed against FANOUT_CAP and cross-checked for disjointness as one fan-out.
+function fanoutOriginKey(node, ids) {
+  const parents = node.dependsOn.filter(d => ids.has(d));
+  return parents.length === 1 ? parents[0] : '*';
+}
 function uniqueSink(nodes) {
   const ids = new Set(nodes.map(n => n.id));
   const hasOut = new Set();
@@ -312,8 +323,12 @@ function validatePlan(content, opts) {
   for (const n of nodes) {
     if (n.shape.kind === 'invalid') errors.push(`node ${n.id} has invalid shape "${n.shape.raw}"`);
     if (n.shape.kind === 'fanout') {
-      if (!groups.has(n.shape.group)) groups.set(n.shape.group, []);
-      groups.get(n.shape.group).push(n);
+      // audit B6 (#233): key by (label, fan-out origin), not label alone, so the same label in
+      // two independent branches forms two separate groups. NUL separator can never collide with
+      // a real label (labels come from fanout(...) cell text, which cannot contain NUL).
+      const key = n.shape.group + ' ' + fanoutOriginKey(n, ids);
+      if (!groups.has(key)) groups.set(key, { label: n.shape.group, origin: fanoutOriginKey(n, ids), members: [] });
+      groups.get(key).members.push(n);
     }
     if (n.shape.kind === 'loop') {
       loopPresent = true;
@@ -325,7 +340,10 @@ function validatePlan(content, opts) {
     }
     for (const p of n.writeSet) if (classifier.isSharedInfra(classifier.areaForPath(p))) sharedInfraTouch = true;
   }
-  for (const [g, members] of groups) {
+  for (const [, grp] of groups) {
+    const members = grp.members;
+    // display name: bare label for the global-fallback bucket (origin '*'), else label@origin
+    const g = grp.origin === '*' ? grp.label : `${grp.label}@${grp.origin}`;
     const memberRoles = new Set(members.map(m => m.role));
     if (memberRoles.size > 1) errors.push(`fan-out group "${g}" is heterogeneous (roles: ${[...memberRoles].join(', ')})`);
     if (members.length > fanoutCap) errors.push(`fan-out group "${g}" width ${members.length} > FANOUT_CAP ${fanoutCap}`);

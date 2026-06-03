@@ -828,6 +828,62 @@ function testAdaptiveValidatorGovernance() {
   console.log('testAdaptiveValidatorGovernance: PASSED');
 }
 
+// issue #233 (audit B6): fan-out groups are scoped by (label, fan-out origin), not label alone.
+// GAP: two topologically-independent branches that reuse the same label `impl` must NOT be summed
+// against FANOUT_CAP nor cross-checked for disjointness as one merged fan-out. CONTROL: a genuine
+// single-origin fan-out over the cap must still refuse, and a root fan-out (no single origin) must
+// fall back to the global bucket (pre-#233 behavior) so nothing that passes today is newly refused.
+function testAdaptiveFanoutGroupScoping() {
+  const tmp = adaptiveTmp('fanout-scope');
+  try {
+    // GAP: label `impl` reused across two independent branches (origins root1 vs root2), 3 each.
+    // Pre-#233 the merged group had width 6 > FANOUT_CAP(4) -> refuse. Post-#233 two groups of 3,
+    // each under the cap and internally disjoint -> in-grammar (write-role fan-out => ask).
+    let v = validatePlanFixture(tmp, [
+      '| root1 | code-explorer | — | — | 1 | sequence |',
+      '| root2 | code-explorer | — | — | 1 | sequence |',
+      '| a1 | tdd-guide | root1 | aaa/1.js | 1 | fanout(impl) |',
+      '| a2 | tdd-guide | root1 | bbb/1.js | 1 | fanout(impl) |',
+      '| a3 | tdd-guide | root1 | ccc/1.js | 1 | fanout(impl) |',
+      '| b1 | tdd-guide | root2 | ddd/1.js | 1 | fanout(impl) |',
+      '| b2 | tdd-guide | root2 | eee/1.js | 1 | fanout(impl) |',
+      '| b3 | tdd-guide | root2 | fff/1.js | 1 | fanout(impl) |',
+      '| review | code-reviewer | a1,a2,a3,b1,b2,b3 | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'in-grammar',
+      'B6 gap: independent branches reusing a label must NOT sum against FANOUT_CAP, got: ' + JSON.stringify(v));
+
+    // CONTROL 1: a genuine single-origin fan-out (5 members, all depends_on root) over FANOUT_CAP=4
+    // must STILL refuse — the scoping must not let a real over-cap fan-out through.
+    v = validatePlanFixture(tmp, [
+      '| root | code-explorer | — | — | 1 | sequence |',
+      '| i1 | tdd-guide | root | aaa/1.js | 1 | fanout(impl) |',
+      '| i2 | tdd-guide | root | bbb/1.js | 1 | fanout(impl) |',
+      '| i3 | tdd-guide | root | ccc/1.js | 1 | fanout(impl) |',
+      '| i4 | tdd-guide | root | ddd/1.js | 1 | fanout(impl) |',
+      '| i5 | tdd-guide | root | eee/1.js | 1 | fanout(impl) |',
+      '| review | code-reviewer | i1,i2,i3,i4,i5 | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /FANOUT_CAP/.test((v.errors || []).join(';')),
+      'B6 control: genuine single-origin fan-out over the cap must still refuse, got: ' + JSON.stringify(v));
+
+    // CONTROL 2: a genuine single-origin fan-out whose members overlap (same coarse area) must
+    // STILL refuse on disjointness — scoping must not drop the within-group disjointness check.
+    v = validatePlanFixture(tmp, [
+      '| root | code-explorer | — | — | 1 | sequence |',
+      '| i1 | tdd-guide | root | api/x.js | 1 | fanout(impl) |',
+      '| i2 | tdd-guide | root | api/y.js | 1 | fanout(impl) |',
+      '| review | code-reviewer | i1,i2 | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse',
+      'B6 control: within-group non-disjoint single-origin fan-out must still refuse, got: ' + JSON.stringify(v));
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptiveFanoutGroupScoping: PASSED');
+}
+
 // issue #228 (Tier 2): broadened sequence/branch composition + governance edge cases on
 // top of the Tier-1 substrate. Exercises multi-role DAG branching (distinct from a
 // heterogeneous fan-out), read-only multi-modal sweep, bounded-loop governance, and the
@@ -5601,6 +5657,7 @@ async function main() {
     testAdaptiveResumeAfterFlipOff();
     testAdaptiveConsentHaltSurfaces();
     testAdaptiveValidatorGovernance();
+    testAdaptiveFanoutGroupScoping();
     testAdaptiveTier2Composition();
     testAdaptiveAuditFixes();
     testAdaptiveResumeHashDeletedTypedRefusal();
