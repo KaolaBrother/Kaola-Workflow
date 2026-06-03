@@ -943,6 +943,109 @@ function testAdaptiveReadySetDisjointness() {
   console.log('testAdaptiveReadySetDisjointness: PASSED');
 }
 
+// issue #231 (audit H1/H3/H5/G1): the runtime gate barrier is now SCRIPT-enforced. Covers the two
+// pure cores (verifyGateExecution over the ## Node Ledger; barrierCheck over actual writes), both
+// CLI surfaces (--gate-verify, --barrier-check via a real git repo, fail-closed on git error), and
+// the routeAdaptive NON-blocking wiring (pendingGates surfaced as data; resume still routes to plan-run).
+function testAdaptiveGateBarrierEnforcement() {
+  const tmp = adaptiveTmp('gate-barrier');
+  const planValidator = require(planValidatorScript);
+  const mkLedgerPlan = (nodes, ledger, labels) => ['# Plan', '', '## Meta', 'labels: ' + (labels || 'chore'), '', '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|']
+    .concat(nodes).concat(['', '## Node Ledger', '', '| id | status |', '|---|---|']).concat(ledger).join('\n');
+  try {
+    // --- verifyGateExecution (G1/H5): a code-reviewer marked n/a while the impl it covers is
+    // complete is an unsatisfied gate (the n/a-gate evasion). All-complete is ok.
+    let gp = mkLedgerPlan(
+      ['| impl | tdd-guide | — | lib/foo.js | 1 | sequence |', '| rv | code-reviewer | impl | — | 1 | sequence |', '| done | finalize | rv | — | 1 | sequence |'],
+      ['| impl | complete |', '| rv | n/a |', '| done | complete |']);
+    let g = planValidator.verifyGateExecution(gp, {});
+    assert(g.ok === false && /G1/.test(g.unsatisfied.map(u => u.requirement).join(';')),
+      'H5/G1: n/a code-reviewer over a complete impl must be unsatisfied, got: ' + JSON.stringify(g));
+    g = planValidator.verifyGateExecution(mkLedgerPlan(
+      ['| impl | tdd-guide | — | lib/foo.js | 1 | sequence |', '| rv | code-reviewer | impl | — | 1 | sequence |', '| done | finalize | rv | — | 1 | sequence |'],
+      ['| impl | complete |', '| rv | complete |', '| done | complete |']), {});
+    assert(g.ok === true, 'control: all-complete gates must verify ok, got: ' + JSON.stringify(g));
+
+    // --- barrierCheck (H1/H3) pure cases over actual writes.
+    const noSec = mkLedgerPlan(['| impl | tdd-guide | — | lib/foo.js | 1 | sequence |', '| rv | code-reviewer | impl | — | 1 | sequence |', '| done | finalize | rv | — | 1 | sequence |'], ['| done | complete |'], 'refactor');
+    assert(planValidator.barrierCheck(noSec, ['src/auth/session.js'], {}).result === 'refuse',
+      'H1: sensitive actual write on a plan with no security-reviewer must refuse');
+    const withSec = mkLedgerPlan(['| impl | tdd-guide | — | src/auth/session.js | 1 | sequence |', '| sec | security-reviewer | impl | — | 1 | sequence |', '| rv | code-reviewer | sec | — | 1 | sequence |', '| done | finalize | rv | — | 1 | sequence |'], ['| done | complete |'], 'security');
+    assert(planValidator.barrierCheck(withSec, ['src/auth/session.js'], {}).result === 'pass',
+      'control: declared sensitive write WITH a security-reviewer must pass');
+    assert(planValidator.barrierCheck(noSec, ['src/surprise.js'], {}).result === 'refuse',
+      'H3: out-of-allowlist production write must refuse');
+    assert(planValidator.barrierCheck(noSec, ['lib/foo.js', 'docs/x.md', 'CHANGELOG.md', 'test/foo.test.js', 'kaola-workflow/p/workflow-plan.md'], {}).result === 'pass',
+      'control: declared + docs + tests + workflow-artifact writes must pass');
+
+    // --- --gate-verify CLI exit codes.
+    const gvPlan = path.join(tmp, 'gv.md');
+    fs.writeFileSync(gvPlan, mkLedgerPlan(['| impl | tdd-guide | — | lib/foo.js | 1 | sequence |', '| rv | code-reviewer | impl | — | 1 | sequence |', '| done | finalize | rv | — | 1 | sequence |'], ['| impl | complete |', '| rv | n/a |', '| done | complete |']));
+    assert(runNode(planValidatorScript, [gvPlan, '--gate-verify', '--json'], tmp).status === 1, '--gate-verify must exit 1 on an unsatisfied gate');
+    fs.writeFileSync(gvPlan, mkLedgerPlan(['| impl | tdd-guide | — | lib/foo.js | 1 | sequence |', '| rv | code-reviewer | impl | — | 1 | sequence |', '| done | finalize | rv | — | 1 | sequence |'], ['| impl | complete |', '| rv | complete |', '| done | complete |']));
+    assert(runNode(planValidatorScript, [gvPlan, '--gate-verify', '--json'], tmp).status === 0, '--gate-verify must exit 0 when gates executed');
+
+    // --- --barrier-check CLI over a REAL git repo (verifies the merge-base git plumbing).
+    const grepo = adaptiveTmp('barrier-git');
+    try {
+      initGitRepoWithBareRemote(grepo); // origin/main at the README commit
+      const proj = path.join(grepo, 'kaola-workflow', 'issue-950');
+      fs.mkdirSync(proj, { recursive: true });
+      const planPath = path.join(proj, 'workflow-plan.md');
+      fs.writeFileSync(planPath, [
+        '# Workflow Plan — issue #950', '', '## Meta', 'labels: refactor', '', '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
+        '| impl | tdd-guide | — | lib/foo.js | 1 | sequence |',
+        '| rv | code-reviewer | impl | — | 1 | sequence |',
+        '| done | finalize | rv | — | 1 | sequence |', ''].join('\n'));
+      runNode(planValidatorScript, [planPath, '--freeze'], grepo);
+      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'plan'], { cwd: grepo, encoding: 'utf8' });
+      // Surprise sensitive write + a declared write, committed (cumulative diff vs origin/main base).
+      fs.mkdirSync(path.join(grepo, 'src', 'auth'), { recursive: true });
+      fs.writeFileSync(path.join(grepo, 'src', 'auth', 'session.js'), 'x\n');
+      fs.mkdirSync(path.join(grepo, 'lib'), { recursive: true });
+      fs.writeFileSync(path.join(grepo, 'lib', 'foo.js'), 'x\n');
+      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'impl'], { cwd: grepo, encoding: 'utf8' });
+      let r = runNode(planValidatorScript, [planPath, '--barrier-check', '--json'], grepo);
+      assert(r.status === 1 && JSON.parse(r.stdout).result === 'refuse',
+        '--barrier-check must refuse (exit 1) a surprise sensitive write, got status ' + r.status + ' ' + r.stdout);
+      // Clean control: revert the surprise file; only the declared write remains.
+      spawnSync('git', ['rm', '-q', 'src/auth/session.js'], { cwd: grepo, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'drop surprise'], { cwd: grepo, encoding: 'utf8' });
+      r = runNode(planValidatorScript, [planPath, '--barrier-check', '--json'], grepo);
+      assert(r.status === 0 && JSON.parse(r.stdout).result === 'pass',
+        '--barrier-check must pass (exit 0) a clean run, got status ' + r.status + ' ' + r.stdout);
+    } finally { fs.rmSync(grepo, { recursive: true, force: true }); fs.rmSync(grepo + '-remote', { recursive: true, force: true }); }
+
+    // --- fail-closed: --barrier-check with no resolvable base (no origin/main) must NOT crash —
+    // the git error becomes a typed refusal (exit 1).
+    const norepo = adaptiveTmp('barrier-nogit');
+    try {
+      initGitRepo(norepo); // local repo, NO origin remote
+      const np = path.join(norepo, 'workflow-plan.md');
+      fs.writeFileSync(np, noSec);
+      const r = runNode(planValidatorScript, [np, '--barrier-check', '--json'], norepo);
+      assert(r.status === 1, 'fail-closed: --barrier-check with no origin/main must exit 1 (typed refusal), got ' + r.status);
+    } finally { fs.rmSync(norepo, { recursive: true, force: true }); }
+
+    // --- routeAdaptive NON-blocking: a frozen plan whose ledger leaves a gate n/a surfaces
+    // pendingGates as DATA but STILL resumes to plan-run (mid-run a gate is legitimately pending —
+    // blocking here would brick every in-flight resume; the hard block is phase6).
+    plantFrozenPlan(tmp, 'issue-951', mkLedgerPlan(
+      ['| impl | tdd-guide | — | lib/foo.js | 1 | sequence |', '| rv | code-reviewer | impl | — | 1 | sequence |', '| done | finalize | rv | — | 1 | sequence |'],
+      ['| impl | complete |', '| rv | n/a |', '| done | complete |']));
+    const repaired = runNode(repairScript, ['issue-951'], tmp);
+    assert(repaired.status === 0, 'routeAdaptive: pending gate must NOT block resume (exit 0), got ' + repaired.status + ' ' + repaired.stderr);
+    assert(repaired.stdout.includes('/kaola-workflow-plan-run issue-951'), 'routeAdaptive: must still route to plan-run with a pending gate');
+    const st = read(statePath(tmp, 'issue-951'));
+    assert(/## Pending Gates[\s\S]*G1 gate execution/.test(st), 'routeAdaptive: must SURFACE the pending gate as data, got:\n' + st);
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptiveGateBarrierEnforcement: PASSED');
+}
+
 // issue #228 (Tier 2): broadened sequence/branch composition + governance edge cases on
 // top of the Tier-1 substrate. Exercises multi-role DAG branching (distinct from a
 // heterogeneous fan-out), read-only multi-modal sweep, bounded-loop governance, and the
@@ -5718,6 +5821,7 @@ async function main() {
     testAdaptiveValidatorGovernance();
     testAdaptiveFanoutGroupScoping();
     testAdaptiveReadySetDisjointness();
+    testAdaptiveGateBarrierEnforcement();
     testAdaptiveTier2Composition();
     testAdaptiveAuditFixes();
     testAdaptiveResumeHashDeletedTypedRefusal();

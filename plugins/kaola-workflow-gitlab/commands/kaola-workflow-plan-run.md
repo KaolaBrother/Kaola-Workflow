@@ -130,14 +130,19 @@ Agent(
    explicit `n/a` skip reason). Count `test_thrash`: ≥ 3 consecutive same-test
    RED→RED cycles writes `escalated_to_full: test_thrash` and stops.
 4. **barrier (commit order: `.cache` evidence → Node Ledger row → `workflow-state.md`
-   pointer LAST).** Re-scan the files this node actually wrote. If a write turns
-   out sensitive (a Phase-5 category) or overflows into a sensitive / `SHARED_INFRA`
-   area on a plan that auto-ran, the provisional authorization was granted on a
-   now-false premise: **revoke and halt for consent** — write `escalated_to_full:
-   consent` AND force `security-reviewer` post-dominance (`escalated_to_full:
-   security`). These co-occur — one barrier moment, two consequences. Diff each
-   write-role fan-out instance's actual writes against its declared allowlist on
-   the single shared worktree; an overflow outside the declared set fails the node.
+   pointer LAST).** Re-scan the files this node actually wrote — **script-enforced**
+   (#231), not prose:
+   ```bash
+   node scripts/kaola-gitlab-workflow-plan-validator.js kaola-workflow/{project}/workflow-plan.md --barrier-check --node-id {node-id} --json; BC=$?
+   ```
+   On exit 1 (a write turned out sensitive — a Phase-5 category — on a plan with no
+   `security-reviewer` node, or overflowed outside the declared allowlist) the
+   provisional authorization was granted on a now-false premise:
+   **revoke and halt for consent** — write `escalated_to_full: consent` AND force
+   `security-reviewer` post-dominance (`escalated_to_full: security`) into
+   `workflow-state.md` (a non-hashed region — never `## Meta` / `## Nodes`). These
+   co-occur — one barrier moment, two consequences. Do not mark the node `complete`
+   until the barrier exits 0.
 5. **update-ledger** — mark `complete` (or `n/a`), emit the node's one
    `## Required Agent Compliance` row. For a `code-reviewer` / `security-reviewer`
    gate or skeptic row, key it with the **bare role string** (`code-reviewer`,
@@ -147,14 +152,16 @@ Agent(
    `complete` — a gate row must record a node that actually ran and produced a passing
    verdict.
 
-> **Enforcement boundary (accepted limitation).** The validator enforces gate
-> *presence* statically at freeze (post-dominance over the unique sink). Gate
-> *execution* at runtime — the review actually running, the barrier re-scan +
-> consent/security escalation, the actual-writes-vs-declared-allowlist diff, and the
-> quorum tally — is **agent discipline on the adaptive path, not script-enforced**:
-> `routeAdaptive` resumes without running the delegation matcher, and Phase 6 re-checks
-> only structure + `plan_hash`. The steps above are therefore obligations, not
-> guarantees — perform them. (Documented as a known limitation in the architecture docs.)
+> **Enforcement boundary (#231 — now script-enforced).** Gate *presence* is proven
+> statically at freeze (post-dominance over the unique sink). Gate *execution* is now
+> proven by `--gate-verify`: a **completed** reviewer must post-dominate every
+> completed code/sensitive node in the `## Node Ledger` (closes the G1/H5 leak where a
+> reviewer is marked `n/a` at runtime). It is wired into `routeAdaptive` (surfaced as
+> `pendingGates`, non-blocking on resume) and enforced as a **hard merge gate** in
+> Phase 6. The actual-writes re-scan + sensitive/allowlist refusal is `--barrier-check`
+> (per-node in step 4 above, and whole-plan in Phase 6). Only the quorum tally and the
+> `validateNodeOutput` schema checkpoints remain agent-discipline prose — perform those;
+> the gate execution and the write barrier are guaranteed by the validator scripts.
 
 ## Quorum / decision nodes (read-only fan-out)
 

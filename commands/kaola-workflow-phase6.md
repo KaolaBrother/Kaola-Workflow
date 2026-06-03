@@ -21,14 +21,31 @@ If `workflow_path: fast`:
 If `workflow_path: adaptive`:
 - `workflow-plan.md` must exist, be frozen (re-check `plan_hash`), and every
   `## Node Ledger` row must be `complete` or `n/a`. Adaptive runs have no
-  `phase5-review.md`; Phase 6 anchors on the plan's completion state. Verify with:
-  ```text
-  node scripts/kaola-workflow-plan-validator.js kaola-workflow/{project}/workflow-plan.md --resume-check --json
+  `phase5-review.md`; Phase 6 anchors on the plan's completion state. The barrier
+  is **script-enforced** (#231) by three gates — run all three and capture each
+  exit code DIRECTLY (never gate on a piped `| tail`, which reports the tail's
+  exit and masks failure):
+  ```bash
+  PLAN=kaola-workflow/{project}/workflow-plan.md
+  node scripts/kaola-workflow-plan-validator.js "$PLAN" --resume-check --json; RC=$?
+  node scripts/kaola-workflow-plan-validator.js "$PLAN" --gate-verify --json; GV=$?
+  node scripts/kaola-workflow-plan-validator.js "$PLAN" --barrier-check --json; BC=$?
+  if [ "$RC" -ne 0 ] || [ "$GV" -ne 0 ] || [ "$BC" -ne 0 ]; then
+    echo "BLOCKED: adaptive barrier failed (resume=$RC gate=$GV barrier=$BC) — run /kaola-workflow-plan-run first"; exit 1
+  fi
   ```
-  On corruption or an incomplete ledger, stop with a **typed refusal** (do not
-  proceed):
+  - `--resume-check` proves `plan_hash` integrity + structure + closed library.
+  - `--gate-verify` proves every completed code/sensitive node is post-dominated
+    by a **completed** reviewer in the `## Node Ledger` — closing the G1/H5 leak
+    where a required reviewer node is silently marked `n/a` at runtime.
+  - `--barrier-check` re-scans the files actually written (git diff vs the
+    merge-base of HEAD and `origin/main`) and refuses a sensitive write with no
+    `security-reviewer` node, or an out-of-allowlist production write — closing
+    H1/H3. Any nonzero exit **blocks the merge**: the script is the enforcement,
+    not a prose obligation.
+  On any failure stop with a **typed refusal** (do not proceed):
   ```text
-  Adaptive plan is not complete or its plan_hash failed. Run /kaola-workflow-plan-run first.
+  Adaptive plan failed the script-enforced barrier. Run /kaola-workflow-plan-run first.
   ```
 If `workflow_path: full` (or absent):
 - `phase5-review.md` must exist with status `PASSED` or `PASSED WITH FOLLOW-UPS`. If missing, stop:

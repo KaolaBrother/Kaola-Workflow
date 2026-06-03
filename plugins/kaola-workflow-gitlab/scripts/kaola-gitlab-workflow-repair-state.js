@@ -400,12 +400,18 @@ function routeAdaptive(root, workflowDir, project) {
   const stateFile = path.join(projectDir, 'workflow-state.md');
   const stateContent = exists(stateFile) ? readFile(stateFile) : '';
   const consentHalt = field(stateContent, 'escalated_to_full') === 'consent';
+  // #231: compute gate-execution status from the ledger, surfaced NON-blocking (data only); the
+  // hard block is the phase6 merge gate. verifyGateExecution never reads the install switch.
+  const gate = planValidator.verifyGateExecution(content, { root });
+  const pendingGates = gate.ok ? [] : gate.unsatisfied.map(u => ({
+    requirement: u.requirement, status: 'unsatisfied', evidence: '', skipReason: u.reason
+  }));
   return {
     root, project, phase: 'adaptive', phaseName: 'Adaptive', workflowPath: 'adaptive',
     step: consentHalt ? 'consent-halt-surface' : 'router-reconstructed', task: 'N/A', consentHalt,
     nextCommand: '/kaola-workflow-plan-run ' + project,
     nextSkill: 'kaola-workflow-plan-run ' + project,
-    phaseFile: planFile, pendingGates: []
+    phaseFile: planFile, pendingGates
   };
 }
 

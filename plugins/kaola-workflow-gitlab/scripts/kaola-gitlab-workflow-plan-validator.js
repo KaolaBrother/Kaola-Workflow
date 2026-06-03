@@ -33,6 +33,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { execFileSync } = require('child_process'); // #231: ONLY the --barrier-check / --gate-verify CLI handlers shell out to git; the core functions stay IO-free.
 const classifier = require('./kaola-gitlab-workflow-classifier');
 const schema = require('./kaola-workflow-adaptive-schema');
 
@@ -138,6 +139,28 @@ function parseNodes(content) {
 // the plan_hash, and the executor's classifier.readPlanNodes share ONE reader and cannot
 // diverge on the section boundary (audit B2/B3). The previous local, non-fence-aware
 // sliceSection was removed for exactly that reason.
+
+// #231: parse the mutable `## Node Ledger` (| id | status | ...) into id -> status. The ledger is
+// OUTSIDE the plan_hash region (the hash covers ## Meta + ## Nodes only), so reading it does not
+// couple to integrity — it reflects runtime progress. Fence-aware via classifier.sectionBody, the
+// same reader the validator/hash/executor share. Returns an empty Map when absent/unparseable.
+function parseLedger(content) {
+  const body = classifier.sectionBody(content, schema.LEDGER_HEADING);
+  const rows = body.split('\n').map(l => l.trim()).filter(l => l.startsWith('|'));
+  if (rows.length < 2) return new Map();
+  const header = rows[0].split('|').slice(1, -1).map(c => c.trim().toLowerCase());
+  const idIdx = header.indexOf('id');
+  const stIdx = header.indexOf('status');
+  const ledger = new Map();
+  if (idIdx < 0 || stIdx < 0) return ledger;
+  for (let r = 1; r < rows.length; r++) {
+    const cells = rows[r].split('|').slice(1, -1).map(c => c.trim());
+    if (/^[-:\s]+$/.test(cells.join(''))) continue;
+    const id = cells[idIdx];
+    if (id) ledger.set(id, (cells[stIdx] || '').toLowerCase());
+  }
+  return ledger;
+}
 
 // --- graph helpers ----------------------------------------------------------
 function adjacency(nodes) {
@@ -261,6 +284,82 @@ function producesCode(node) {
   if (!WRITE_ROLES.has(node.role)) return false;
   for (const p of node.writeSet) if (!isDocsPath(p)) return true;
   return false;
+}
+
+// --- #231 runtime gate enforcement ------------------------------------------
+// verify gate EXECUTION over the runtime `## Node Ledger` — a static-presence gate (post-dominance
+// proven at freeze) does not prove the reviewer actually RAN. A target node that reached `complete`
+// must be post-dominated by a gate node that ALSO reached `complete`; a gate left pending or marked
+// `n/a` while a node it covers is complete is an unsatisfied gate (audit G1: "a post-dominating
+// reviewer can be marked n/a at runtime"; audit H5: the only script-backed cross-check was dead on
+// the adaptive path). PURE: reads parsed nodes + ledger only — never git/IO, never the install
+// switch (toggle-agnostic). Surfaced NON-blocking on resume (routeAdaptive) and a HARD merge gate
+// in phase6 (where every row is already complete/n-a, so any unsatisfied row is a real leak).
+function verifyGateExecution(content, opts) {
+  opts = opts || {};
+  const unsatisfied = [];
+  const nodes = parseNodes(content);
+  if (!nodes.length) return { ok: false, unsatisfied: [{ requirement: '## Nodes', reason: 'unparseable' }] };
+  const sink = uniqueSink(nodes);
+  if (!sink) return { ok: false, unsatisfied: [{ requirement: 'unique sink', reason: 'no unique finalize sink' }] };
+  const ledger = parseLedger(content);
+  const labels = parseLabels(classifier.sectionBody(content, 'Meta'));
+  const done = id => ledger.get(id) === 'complete';
+  function checkGate(isTarget, gateRole, gid) {
+    // RELABEL (not remove) non-complete gate nodes so the topology stays intact: gateUncovered
+    // removes only nodes whose role === gateRole, i.e. only the COMPLETE gates. A pending/n-a gate
+    // stays a pass-through, so a complete target that can still reach the sink through it (without
+    // crossing a COMPLETE gate) is an uncovered leak. (Filtering the node out instead would
+    // disconnect the target from the sink and silently MASK the leak — the n/a-gate evasion.)
+    const relabeled = nodes.map(n => (n.role === gateRole && !done(n.id))
+      ? Object.assign({}, n, { role: gateRole + ' pending' })
+      : n);
+    const leak = gateUncovered(relabeled, n => isTarget(n) && done(n.id), gateRole, sink);
+    for (const id of leak) unsatisfied.push({ requirement: gid + ' gate execution', reason: `node ${id} reached complete but no completed ${gateRole} post-dominates it` });
+  }
+  checkGate(producesCode, 'code-reviewer', 'G1');
+  const sensitiveByLabel = labelsAreSensitive(labels);
+  const sensitiveNodes = nodes.filter(nodeIsSensitive);
+  if (sensitiveByLabel || sensitiveNodes.length) {
+    checkGate(n => (sensitiveByLabel && producesCode(n)) || sensitiveNodes.includes(n), 'security-reviewer', 'G2');
+  }
+  return { ok: unsatisfied.length === 0, unsatisfied };
+}
+
+// The runtime BARRIER (audit H1/H3). Given the files a node (or the whole plan) ACTUALLY wrote
+// (the CLI supplies them from `git diff`; this function is PURE), refuse on:
+//   (a) a SENSITIVITY hit — an actual write matches a Phase-5 SENSITIVE_PATTERN — when the frozen
+//       plan has NO security-reviewer node at all (H1: a `labels: refactor` plan that auto-ran with
+//       no security gate must not silently merge a write into src/auth/session.js); and
+//   (b) an out-of-ALLOWLIST production write — an actual non-docs, non-test, non-workflow-artifact
+//       write not in the union of the frozen declared write sets (H3 overflow).
+// declared is the UNION over ALL nodes (prefer-fewer-false-refusals; the sensitivity scan is the
+// teeth). Toggle-agnostic; never reads the install switch.
+function barrierCheck(content, actualPaths, opts) {
+  opts = opts || {};
+  const errors = [];
+  const nodes = parseNodes(content);
+  if (!nodes.length) return { result: 'refuse', errors: ['plan has no parseable ## Nodes table'] };
+  if (opts.nodeId && !nodes.some(n => n.id === opts.nodeId)) {
+    return { result: 'refuse', errors: [`--node-id "${opts.nodeId}" not found in the frozen plan`] };
+  }
+  const declared = new Set();
+  for (const n of nodes) for (const p of n.writeSet) declared.add(p);
+  const real = (actualPaths || []).map(p => String(p || '').trim()).filter(Boolean);
+  const isWorkflowArtifact = p => /^kaola-workflow\//.test(p);
+  const isTestPath = p => /(^|\/)(tests?|__tests__|spec)\//i.test(p) || /\.(test|spec)\.[A-Za-z0-9]+$/i.test(p);
+  // (a) sensitivity teeth (H1)
+  const hasSecReviewer = nodes.some(n => n.role === 'security-reviewer');
+  const sensitiveHits = real.filter(p => SENSITIVE_PATTERNS.some(re => re.test(p)));
+  if (sensitiveHits.length && !hasSecReviewer) {
+    errors.push(`actual writes touch a Phase-5 sensitive area (${sensitiveHits.join(', ')}) but the plan has no security-reviewer node — revoke and escalate (G2)`);
+  }
+  // (b) allowlist (H3) — production writes only; docs / tests / workflow artifacts / declared exempt
+  const outOfAllow = real.filter(p => !isWorkflowArtifact(p) && !isDocsPath(p) && !isTestPath(p) && !declared.has(p));
+  if (outOfAllow.length) {
+    errors.push(`actual writes outside the declared allowlist (${outOfAllow.join(', ')}) — overflow beyond the frozen write set`);
+  }
+  return { result: errors.length ? 'refuse' : 'pass', errors, sensitiveHits, outOfAllow };
 }
 
 // --- plan hash --------------------------------------------------------------
@@ -515,10 +614,13 @@ function injectHash(content, hash) {
 // --- CLI --------------------------------------------------------------------
 function printHelp() {
   process.stdout.write(
-    'usage: kaola-workflow-plan-validator.js <workflow-plan.md> [--json] [--freeze] [--resume-check]\n' +
-    '  default       validate + print the governance verdict; exit 1 on typed refusal\n' +
-    '  --freeze      validate, then write the computed plan_hash into the plan file\n' +
-    '  --resume-check  re-validate library + structure + hash only (not the gate rubric)\n'
+    'usage: kaola-workflow-plan-validator.js <workflow-plan.md> [--json] [--freeze] [--resume-check] [--gate-verify] [--barrier-check [--node-id ID] [--base REF]]\n' +
+    '  default        validate + print the governance verdict; exit 1 on typed refusal\n' +
+    '  --freeze       validate, then write the computed plan_hash into the plan file\n' +
+    '  --resume-check re-validate library + structure + hash only (not the gate rubric)\n' +
+    '  --gate-verify  verify gate EXECUTION over the ## Node Ledger (G1/G2 ran); exit 1 if a completed node is uncovered\n' +
+    '  --barrier-check re-scan ACTUAL writes (git diff vs merge-base of HEAD and --base, default origin/main): refuse a\n' +
+    '                 sensitive write with no security-reviewer, or an out-of-allowlist production write; exit 1 on refusal\n'
   );
 }
 function main() {
@@ -547,6 +649,28 @@ function main() {
     if (r.frozen) fs.writeFileSync(planPath, r.content);
     process.stdout.write((json ? JSON.stringify({ result: r.result, decision: r.decision, planHash: r.planHash, frozen: r.frozen, risk: r.risk, errors: r.errors }) : (r.frozen ? `frozen (${r.decision}) plan_hash=${r.planHash}` : 'typed refusal: ' + (r.errors || []).join('; '))) + '\n');
     if (!r.frozen) process.exitCode = 1;
+    return;
+  }
+  if (args.includes('--gate-verify')) {
+    const r = verifyGateExecution(content, { root });
+    process.stdout.write((json ? JSON.stringify(r) : (r.ok ? 'gate execution verified' : 'typed refusal: ' + r.unsatisfied.map(u => `${u.requirement}: ${u.reason}`).join('; '))) + '\n');
+    if (!r.ok) process.exitCode = 1;
+    return;
+  }
+  if (args.includes('--barrier-check')) {
+    const flagVal = name => { const i = args.indexOf(name); return i >= 0 && i + 1 < args.length ? args[i + 1] : null; };
+    const nodeId = flagVal('--node-id') || undefined;
+    const base = flagVal('--base') || 'origin/main';
+    // Cumulative diff vs the merge-base of HEAD and the integration branch (mirrors sink-merge):
+    // captures committed + staged + unstaged writes together, so a committed sensitive write is NOT
+    // invisible (a bare `git diff` would miss it). A git failure throws -> the top-level catch
+    // converts it to a typed (fail-closed) refusal.
+    const mergeBase = execFileSync('git', ['-C', root, 'merge-base', 'HEAD', base], { encoding: 'utf8' }).trim();
+    const diffOut = execFileSync('git', ['-C', root, 'diff', '--name-only', mergeBase], { encoding: 'utf8' });
+    const actualPaths = diffOut.split('\n').map(s => s.trim()).filter(Boolean);
+    const r = barrierCheck(content, actualPaths, { nodeId, root });
+    process.stdout.write((json ? JSON.stringify(r) : (r.result === 'pass' ? 'barrier ok' : 'typed refusal: ' + r.errors.join('; '))) + '\n');
+    if (r.result !== 'pass') process.exitCode = 1;
     return;
   }
 
@@ -580,7 +704,10 @@ module.exports = {
   readStoredHash,
   parseNodes,
   parseLabels,
+  parseLedger,
   uniqueSink,
   gateUncovered,
+  verifyGateExecution,
+  barrierCheck,
   installedRoles,
 };

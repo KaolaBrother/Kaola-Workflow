@@ -502,6 +502,14 @@ function routeFast(root, workflowDir, project) {
 // plan returns a typed reason and stops for repair (#44: never silently fall back to
 // the phaseN ladder). A consent-halted plan (escalated_to_full: consent) is surfaced
 // for approval, not blindly re-dispatched. Toggle-agnostic.
+//
+// #231 (audit H5/G1): pendingGates is no longer unconditionally []. It is now computed from the
+// `## Node Ledger` via planValidator.verifyGateExecution (a G1/G2 EXECUTION probe — a completed
+// code/sensitive node with no completed reviewer post-dominating it). It is surfaced NON-blocking:
+// routeAdaptive ALWAYS returns nextCommand=/kaola-workflow-plan-run (mid-run a gate is legitimately
+// pending — blocking here would brick every in-flight resume). The HARD block is the phase6 merge
+// gate (--gate-verify + --barrier-check), where every ledger row is already complete/n-a so any
+// unsatisfied row is a real leak. verifyGateExecution never reads the install switch (toggle-agnostic).
 function routeAdaptive(root, workflowDir, project) {
   const projectDir = path.join(workflowDir, project);
   const planFile = path.join(projectDir, 'workflow-plan.md');
@@ -524,6 +532,12 @@ function routeAdaptive(root, workflowDir, project) {
   const stateContent = exists(stateFile) ? readFile(stateFile) : '';
   const consentHalt = field(stateContent, 'escalated_to_full') === 'consent';
 
+  // #231: compute gate-execution status from the ledger, surfaced NON-blocking (data only).
+  const gate = planValidator.verifyGateExecution(content, { root });
+  const pendingGates = gate.ok ? [] : gate.unsatisfied.map(u => ({
+    requirement: u.requirement, status: 'unsatisfied', evidence: '', skipReason: u.reason
+  }));
+
   return {
     root,
     project,
@@ -536,7 +550,7 @@ function routeAdaptive(root, workflowDir, project) {
     nextCommand: `/kaola-workflow-plan-run ${project}`,
     nextSkill: `kaola-workflow-plan-run ${project}`,
     phaseFile: planFile,
-    pendingGates: []
+    pendingGates
   };
 }
 
