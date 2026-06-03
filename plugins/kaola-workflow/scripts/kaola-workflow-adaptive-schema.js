@@ -110,9 +110,22 @@ const CURATED_ROOT_SET = new Set(CURATED_ROOT_PATHS);
 // membership (a curated name buried inside a larger word never matches). The tokenizer keeps `/`, so a
 // slash-bearing path tokenizes WITH its slashes and therefore can never collide with a slashless
 // curated name — slash paths stay the classifier's FILE_PATH_REGEX job, curated roots stay this one.
+// v3.21.0: each token is canonicalized before membership so the SAME physical file compares equal on
+// both the candidate and claimed sides — the tokenizer leaves sentence punctuation glued to a path
+// (a leading "./", a collapsed "//", a trailing "/" or a sentence-ending "."), none of which a
+// curated ROOT basename ever legitimately carries. Without this, prose like "edit the Dockerfile."
+// or "./Dockerfile" tokenized to "Dockerfile." / "./Dockerfile" and missed exact membership — a
+// fail-open, since the candidate side is the ONLY detector for slashless root files. Nested paths
+// keep their inner slashes (e.g. "config/Dockerfile"), so they still never match a root basename.
 function extractCuratedRootPaths(text) {
   const found = new Set();
-  for (const tok of String(text || '').split(/[^A-Za-z0-9_.\/-]+/)) {
+  for (const raw of String(text || '').split(/[^A-Za-z0-9_.\/-]+/)) {
+    if (!raw) continue;
+    const tok = raw
+      .replace(/^(?:\.\/)+/, '')   // leading ./ (repeated)
+      .replace(/\/{2,}/g, '/')     // collapsed //
+      .replace(/\/+$/, '')         // trailing /
+      .replace(/\.+$/, '');        // trailing sentence "." (no curated name ends in a dot)
     if (CURATED_ROOT_SET.has(tok)) found.add(tok);
   }
   return found;

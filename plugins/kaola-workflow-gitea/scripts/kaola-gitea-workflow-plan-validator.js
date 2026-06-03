@@ -32,6 +32,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const crypto = require('crypto');
 const { execFileSync } = require('child_process'); // #231: ONLY the --barrier-check / --gate-verify CLI handlers shell out to git; the core functions stay IO-free.
 const classifier = require('./kaola-gitea-workflow-classifier');
@@ -654,6 +655,28 @@ function injectHash(content, hash) {
 }
 
 // --- CLI --------------------------------------------------------------------
+// #239 (v3.21.0): snapshot the FULL worktree (tracked + untracked, honoring .gitignore) into a
+// throwaway index and return the resulting tree SHA. Diffing two such snapshots (node-start vs
+// barrier) yields EXACTLY this node's own changes — new / modified / deleted, tracked or untracked
+// — and natively excludes prior nodes' still-uncommitted source writes and pre-existing strays
+// (the over-attribution false-refusal a bare `git ls-files --others` caused), needs no HEAD
+// (zero-commit safe), and never folds a dirty tree into the base. The index lives OUTSIDE the repo
+// (os.tmpdir) and is keyed by pid+tag so concurrent fan-out barriers never collide, and so its own
+// path can never leak into the snapshot. Shells out to git like the other CLI handlers; the pure
+// cores stay IO-free.
+function snapshotWorktree(root, tag) {
+  const idx = path.join(os.tmpdir(), 'kw-barrier-idx-' + process.pid + '-' + String(tag).replace(/[^A-Za-z0-9_-]/g, '_'));
+  try { fs.unlinkSync(idx); } catch (_) {}
+  try { fs.unlinkSync(idx + '.lock'); } catch (_) {}
+  const env = Object.assign({}, process.env, { GIT_INDEX_FILE: idx });
+  try {
+    execFileSync('git', ['-C', root, 'add', '-A'], { env, stdio: ['ignore', 'ignore', 'ignore'] });
+    return execFileSync('git', ['-C', root, 'write-tree'], { env, encoding: 'utf8' }).trim();
+  } finally {
+    try { fs.unlinkSync(idx); } catch (_) {}
+    try { fs.unlinkSync(idx + '.lock'); } catch (_) {}
+  }
+}
 function printHelp() {
   process.stdout.write(
     'usage: kaola-workflow-plan-validator.js <workflow-plan.md> [--json] [--freeze] [--resume-check] [--gate-verify] [--barrier-check [--node-id ID] [--base REF]]\n' +
@@ -661,10 +684,12 @@ function printHelp() {
     '  --freeze       validate, then write the computed plan_hash into the plan file\n' +
     '  --resume-check re-validate library + structure + hash only (not the gate rubric)\n' +
     '  --gate-verify  verify gate EXECUTION over the ## Node Ledger (G1/G2 ran); exit 1 if a completed node is uncovered\n' +
-    '  --record-base --node-id ID  snapshot the working tree as node ID\'s per-instance baseline (.cache); run at node start\n' +
+    '  --record-base --node-id ID  snapshot the full worktree as node ID\'s per-instance baseline (.cache); run at node start.\n' +
+    '                 Idempotent: reuses an existing baseline (resume-safe — a re-dispatch never launders a crashed attempt)\n' +
     '  --barrier-check re-scan ACTUAL writes and refuse a sensitive write with no security-reviewer, or an out-of-allowlist\n' +
     '                 write; exit 1 on refusal. Whole-plan (no --node-id): union allowlist, diff vs merge-base of HEAD and\n' +
-    '                 --base (default origin/main). Per-node (--node-id ID): the node\'s OWN allowlist, diff vs its recorded base\n'
+    '                 --base (default origin/main). Per-node (--node-id ID): the node\'s OWN allowlist, tree-diff vs its recorded\n' +
+    '                 node-start snapshot (--base is rejected per-node — the baseline is the recorded snapshot)\n'
   );
 }
 function main() {
@@ -703,22 +728,28 @@ function main() {
   }
   const cacheBaseFile = nid => path.join(path.dirname(path.resolve(planPath)), '.cache', 'barrier-base-' + String(nid).replace(/[^A-Za-z0-9_-]/g, '_'));
   if (args.includes('--record-base')) {
-    // #239: snapshot the current working-tree state as a per-node baseline at NODE START. `git stash
-    // create` makes a dangling commit of working+index WITHOUT modifying the tree (falls back to HEAD
-    // when clean). Stored in .cache keyed by node-id so the step-4 barrier diffs exactly THIS node's
-    // writes — script-owned + explicit + resume-safe (survives a crash between node start and barrier).
+    // #239 (v3.21.0): snapshot the full worktree as a per-node baseline at NODE START — a tree SHA via
+    // snapshotWorktree(), stored in .cache keyed by node-id so the step-4 barrier tree-diffs exactly
+    // THIS node's writes. Script-owned, explicit, resume-safe (the tree object persists in .git/objects).
     const flagVal = name => { const i = args.indexOf(name); return i >= 0 && i + 1 < args.length ? args[i + 1] : null; };
     const nodeId = flagVal('--node-id');
     if (!nodeId) {
       process.stdout.write((json ? JSON.stringify({ result: 'refuse', errors: ['--record-base requires --node-id <id>'] }) : 'typed refusal: --record-base requires --node-id') + '\n');
       process.exitCode = 1; return;
     }
-    let baseRef = '';
-    try { baseRef = execFileSync('git', ['-C', root, 'stash', 'create'], { encoding: 'utf8' }).trim(); } catch (_) {}
-    if (!baseRef) { try { baseRef = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(); } catch (_) {} }
+    // Idempotent (critic-2): if a baseline already exists for this node (a crash + re-dispatch, or a
+    // consent-halt re-entry), REUSE it. Re-snapshotting a now-dirty tree would fold the crashed
+    // attempt's writes into a fresh baseline and launder them past the only check that can see them.
+    let existing = '';
+    try { existing = fs.readFileSync(cacheBaseFile(nodeId), 'utf8').trim(); } catch (_) {}
+    if (existing) {
+      process.stdout.write((json ? JSON.stringify({ result: 'ok', nodeId, base: existing, reused: true }) : 'reused base ' + existing + ' for node ' + nodeId) + '\n');
+      return;
+    }
+    const baseTree = snapshotWorktree(root, nodeId);
     fs.mkdirSync(path.dirname(cacheBaseFile(nodeId)), { recursive: true });
-    fs.writeFileSync(cacheBaseFile(nodeId), baseRef);
-    process.stdout.write((json ? JSON.stringify({ result: 'ok', nodeId, base: baseRef }) : 'recorded base ' + baseRef + ' for node ' + nodeId) + '\n');
+    fs.writeFileSync(cacheBaseFile(nodeId), baseTree);
+    process.stdout.write((json ? JSON.stringify({ result: 'ok', nodeId, base: baseTree }) : 'recorded base ' + baseTree + ' for node ' + nodeId) + '\n');
     return;
   }
   if (args.includes('--barrier-check')) {
@@ -731,20 +762,25 @@ function main() {
     }
     let actualPaths;
     if (nodeId) {
-      // PER-NODE (#239): diff vs THIS node's recorded baseline (or an explicit --base override) =
-      // exactly this node's writes (nodes run one at a time), checked against its OWN declared set.
-      let base = flagVal('--base');
-      if (!base) { try { base = fs.readFileSync(cacheBaseFile(nodeId), 'utf8').trim(); } catch (_) { base = ''; } }
+      // PER-NODE (#239, v3.21.0): tree-diff the CURRENT full-worktree snapshot against THIS node's
+      // recorded node-start snapshot — exactly this node's own changes, checked against its OWN
+      // declared set. --base is REJECTED here: the baseline is the recorded snapshot, and honoring a
+      // caller --base (e.g. `--base HEAD` after the node committed) would empty the diff and neuter
+      // the gate. The whole-plan / phase-6 branch keeps --base.
+      if (args.includes('--base')) {
+        process.stdout.write((json ? JSON.stringify({ result: 'refuse', errors: ['--base is not allowed with --node-id (per-node diffs vs the recorded node-start snapshot)'] }) : 'typed refusal: --base is not allowed with --node-id') + '\n');
+        process.exitCode = 1; return;
+      }
+      let base = '';
+      try { base = fs.readFileSync(cacheBaseFile(nodeId), 'utf8').trim(); } catch (_) { base = ''; }
       if (!base) {
         process.stdout.write((json ? JSON.stringify({ result: 'refuse', errors: ['no recorded per-node base for "' + nodeId + '" (run --record-base --node-id at node start)'] }) : 'typed refusal: no recorded per-node base for ' + nodeId) + '\n');
         process.exitCode = 1; return;
       }
-      const diffOut = execFileSync('git', ['-C', root, 'diff', '--name-only', base], { encoding: 'utf8' });
-      // Include currently-untracked NEW files: the per-node barrier runs mid-run BEFORE this node's
-      // writes are committed, and `git diff <base>` omits untracked paths. Nodes run one at a time and
-      // commit per node, so untracked-now == this node's new files (the whole-plan barrier is the floor).
-      const untracked = execFileSync('git', ['-C', root, 'ls-files', '--others', '--exclude-standard'], { encoding: 'utf8' });
-      actualPaths = (diffOut + '\n' + untracked).split('\n').map(s => s.trim()).filter(Boolean);
+      const now = snapshotWorktree(root, nodeId + '-now');
+      // diff-tree between two explicit trees prints only the changed paths (no leading object header).
+      const diffOut = execFileSync('git', ['-C', root, 'diff-tree', '-r', '--name-only', base, now], { encoding: 'utf8' });
+      actualPaths = diffOut.split('\n').map(s => s.trim()).filter(Boolean);
     } else {
       // WHOLE-PLAN (phase6 merge gate): cumulative diff vs the merge-base of HEAD and the integration
       // branch (default origin/main) — committed + staged + unstaged together, so a committed sensitive

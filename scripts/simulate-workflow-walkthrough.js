@@ -1198,6 +1198,139 @@ function testAdaptivePerInstanceBarrier() {
   console.log('testAdaptivePerInstanceBarrier: PASSED');
 }
 
+// v3.21.0 (pre-release adversarial-gate fixes): the per-node barrier must attribute EXACTLY this
+// node's own writes via a worktree TREE-DIFF — not `git ls-files --others`, which over-attributed
+// every stray / prior-node still-untracked file and bricked real multi-node runs (the executor
+// commits only workflow artifacts, so source stays untracked all run). It must also reject a --base
+// override, keep the sensitivity teeth in per-node mode, and REUSE a recorded base on re-dispatch
+// (resume-safe). Each scenario starts from a fresh real git repo so the prod logic — not a fixture
+// artifact — decides the verdict; every assertion flips if the corresponding prod line is reverted.
+function testAdaptivePerInstanceBarrierHardening() {
+  const PLAN = ['# Workflow Plan — issue #971', '', '## Meta', 'labels: enhancement', '', '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
+    '| ex | code-explorer | — | — | 1 | sequence |',
+    '| a | tdd-guide | ex | aaa/x.js | 1 | fanout(impl) |',
+    '| b | tdd-guide | ex | bbb/y.js | 1 | fanout(impl) |',
+    '| rv | code-reviewer | a,b | — | 1 | sequence |',
+    '| done | finalize | rv | — | 1 | sequence |', '',
+    '## Node Ledger', '', '| id | status |', '|---|---|',
+    '| ex | complete |', '| a | complete |', '| b | complete |', '| rv | complete |', '| done | complete |', ''].join('\n');
+  // a sensitive file declared IN node a's own lane (no security-reviewer) — left UNFROZEN on purpose
+  // (the validator would refuse to freeze a sensitive lane with no security-reviewer; the barrier only
+  // needs a parseable ## Nodes table, so the sensitivity teeth can be exercised in isolation).
+  const SENS_PLAN = ['# Workflow Plan — issue #972', '', '## Meta', 'labels: enhancement', '', '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
+    '| ex | code-explorer | — | — | 1 | sequence |',
+    '| a | tdd-guide | ex | src/auth/session.js | 1 | sequence |',
+    '| rv | code-reviewer | a | — | 1 | sequence |',
+    '| done | finalize | rv | — | 1 | sequence |', '',
+    '## Node Ledger', '', '| id | status |', '|---|---|',
+    '| ex | complete |', '| a | complete |', '| rv | complete |', '| done | complete |', ''].join('\n');
+  const mkRepo = (plan, freeze) => {
+    const grepo = adaptiveTmp('barrier-hardening-git');
+    initGitRepoWithBareRemote(grepo);
+    const proj = path.join(grepo, 'kaola-workflow', 'issue-971');
+    fs.mkdirSync(proj, { recursive: true });
+    const planPath = path.join(proj, 'workflow-plan.md');
+    fs.writeFileSync(planPath, plan);
+    if (freeze) {
+      const fr = runNode(planValidatorScript, [planPath, '--freeze'], grepo);
+      assert(fr.status === 0, 'mkRepo --freeze should exit 0, got ' + fr.status + ' ' + fr.stderr);
+    }
+    spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
+    spawnSync('git', ['commit', '-m', 'plan'], { cwd: grepo, encoding: 'utf8' });
+    return { grepo, planPath };
+  };
+  const cleanup = g => { fs.rmSync(g, { recursive: true, force: true }); fs.rmSync(g + '-remote', { recursive: true, force: true }); };
+  const w = (g, rel, content) => { const p = path.join(g, rel); fs.mkdirSync(path.dirname(p), { recursive: true }); fs.writeFileSync(p, content); };
+  const bc = (planPath, id, grepo, extra) => runNode(planValidatorScript, [planPath, '--barrier-check', '--node-id', id, ...(extra || []), '--json'], grepo);
+  const rec = (planPath, id, grepo) => runNode(planValidatorScript, [planPath, '--record-base', '--node-id', id, '--json'], grepo);
+
+  // (1) OVER-ATTRIBUTION, Trigger B (finding 6): a pre-existing stray untracked file present at base
+  // must NOT be attributed to the node. Old `git ls-files --others` refused; the tree-diff passes.
+  { const { grepo, planPath } = mkRepo(PLAN, true);
+    try {
+      w(grepo, 'stray/leftover.js', 'stray\n');
+      assert(rec(planPath, 'a', grepo).status === 0, '(1) record-base a');
+      w(grepo, 'aaa/x.js', 'x\n');
+      const r = bc(planPath, 'a', grepo);
+      assert(r.status === 0 && JSON.parse(r.stdout).result === 'pass',
+        'v3.21.0 (1): a pre-existing stray untracked file must NOT be attributed to the node, got ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // (2) OVER-ATTRIBUTION, Trigger A (finding 6): node b must NOT be refused for node a's still-
+  // untracked source (the executor commits only workflow artifacts, so a's source stays untracked).
+  { const { grepo, planPath } = mkRepo(PLAN, true);
+    try {
+      assert(rec(planPath, 'a', grepo).status === 0, '(2) record-base a');
+      w(grepo, 'aaa/x.js', 'x\n');
+      assert(JSON.parse(bc(planPath, 'a', grepo).stdout).result === 'pass', '(2) node a own lane passes');
+      assert(rec(planPath, 'b', grepo).status === 0, '(2) record-base b');
+      w(grepo, 'bbb/y.js', 'y\n');
+      const r = bc(planPath, 'b', grepo);
+      assert(r.status === 0 && JSON.parse(r.stdout).result === 'pass',
+        'v3.21.0 (2): node b must NOT be refused for node a\'s still-untracked source, got ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // (3) a COMMITTED out-of-lane write is still caught (tree-diff sees tracked changes too).
+  { const { grepo, planPath } = mkRepo(PLAN, true);
+    try {
+      assert(rec(planPath, 'a', grepo).status === 0, '(3) record-base a');
+      w(grepo, 'ccc/z.js', 'z\n');
+      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'oops'], { cwd: grepo, encoding: 'utf8' });
+      const r = bc(planPath, 'a', grepo);
+      assert(r.status === 1 && /ccc\/z\.js/.test(r.stdout),
+        'v3.21.0 (3): a COMMITTED out-of-lane write must still refuse, got ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // (4) per-node SENSITIVITY teeth (finding 5): an actual sensitive write on a plan with no
+  // security-reviewer must surface the G2/security-reviewer refusal in per-node mode.
+  { const { grepo, planPath } = mkRepo(SENS_PLAN, false);
+    try {
+      assert(rec(planPath, 'a', grepo).status === 0, '(4) record-base a');
+      w(grepo, 'src/auth/session.js', 'token\n');
+      const r = bc(planPath, 'a', grepo);
+      assert(r.status === 1 && /security-reviewer/.test(r.stdout),
+        'v3.21.0 (4): the sensitivity teeth must fire in per-node mode (no security-reviewer), got ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // (5) --base is REJECTED per-node (finding 3): otherwise `--base HEAD` after a commit empties the
+  // diff and neuters the gate. The overflow into bbb is real; --base must still refuse on the flag.
+  { const { grepo, planPath } = mkRepo(PLAN, true);
+    try {
+      assert(rec(planPath, 'a', grepo).status === 0, '(5) record-base a');
+      w(grepo, 'bbb/y.js', 'y\n');
+      const r = bc(planPath, 'a', grepo, ['--base', 'HEAD']);
+      assert(r.status === 1 && /--base/.test(r.stdout),
+        'v3.21.0 (5): --base must be rejected with --node-id (cannot neuter the per-node gate), got ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // (6) record-base is IDEMPOTENT (critic-2): a re-dispatch must REUSE the original baseline, so a
+  // crashed attempt's overflow stays visible instead of being laundered into a fresh base.
+  { const { grepo, planPath } = mkRepo(PLAN, true);
+    try {
+      assert(rec(planPath, 'a', grepo).status === 0, '(6) record-base a (first)');
+      w(grepo, 'bbb/y.js', 'y\n');                     // a "crashed attempt" overflow before re-record
+      const rb2 = rec(planPath, 'a', grepo);
+      assert(rb2.status === 0 && JSON.parse(rb2.stdout).reused === true,
+        'v3.21.0 (6): a second --record-base must REUSE the baseline (resume-safe), got ' + rb2.stdout);
+      w(grepo, 'aaa/x.js', 'x\n');
+      const r = bc(planPath, 'a', grepo);
+      assert(r.status === 1 && /bbb\/y\.js/.test(r.stdout),
+        'v3.21.0 (6): re-record must NOT launder a crashed attempt\'s overflow, got ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // (7) --record-base requires --node-id (finding 11).
+  { const { grepo, planPath } = mkRepo(PLAN, true);
+    try {
+      assert(runNode(planValidatorScript, [planPath, '--record-base', '--json'], grepo).status === 1,
+        'v3.21.0 (7): --record-base without --node-id must refuse');
+    } finally { cleanup(grepo); } }
+
+  console.log('testAdaptivePerInstanceBarrierHardening: PASSED');
+}
+
 // issue #234 E1: resume must reconcile a persisted next_command against the project's true path
 // before trusting it. A stale phaseN on an adaptive project must resolve to plan-run; a consistent
 // full next_command is preserved; a stale full next_command falls back to phase-derived reconstruction.
@@ -1962,24 +2095,55 @@ function testClassifierCuratedRootOverlapYellow() {
       '| done | finalize | review | — | 1 | sequence |',
       ''
     ].join('\n'));
-    plantRoadmapIssue(tmp, 331, 'body: this change also edits the Dockerfile to add a build stage');
-    const result = runClassifierOffline(tmp, 331);
-    assert(result.verdict === 'yellow' && /Dockerfile/.test(result.reasoning),
-      'issue #238: curated root-file overlap must be yellow/ask (not red, not green), got ' + result.verdict + ' (' + result.reasoning + ')');
+    // The candidate side is the ONLY detector for slashless ROOT files, so it must catch the same
+    // physical file regardless of the sentence punctuation prose glues on (v3.21.0 normalization):
+    // a clean token, a sentence-ending '.', and a leading './' all route to YELLOW for the curated
+    // reason. Pre-fix the punctuated forms tokenized to "Dockerfile."/"./Dockerfile", missed exact
+    // membership, and fell open to GREEN — so the punctuated rows mutation-cover the normalization.
+    for (const [num, body] of [
+      [331, 'body: this change also edits the Dockerfile to add a build stage'],
+      [332, 'body: add a healthcheck to the Dockerfile. also update src/server.js'],
+      [333, 'body: tweak ./Dockerfile and refresh src/server.js'],
+    ]) {
+      plantRoadmapIssue(tmp, num, body);
+      const result = runClassifierOffline(tmp, num);
+      assert(result.verdict === 'yellow' && /curated root file "Dockerfile"/.test(result.reasoning),
+        'issue #238 / v3.21.0: curated root-file overlap must be yellow for the curated reason (candidate "' + body + '"), got ' + result.verdict + ' (' + result.reasoning + ')');
+    }
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   console.log('testClassifierCuratedRootOverlapYellow: PASSED');
 }
 
-// issue #238 CONTROL (no over-block): a candidate naming a curated root file must NOT be blocked
-// when no claimed project actually touches it — stays green (the safe-over-ask, not over-block).
+// F9 (v3.21.0): the CLAIMED-prose side must also detect a curated overlap — the "two-sided" #238
+// promise. A non-adaptive claimed project naming a curated file in phase3 PROSE (no frozen plan) plus
+// a candidate naming the same file must be YELLOW. The claimed prose is punctuated ("Dockerfile.") so
+// the row mutation-covers BOTH the prose matcher (classifier extractCuratedRootPaths(combined)) and
+// the v3.21.0 normalization on the claimed side; disabling either fails open to GREEN.
+function testClassifierCuratedRootProseClaimedYellow() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-classifier-curated-prose-yellow-'));
+  try {
+    plantActiveFolder(tmp, 'prose-curated-claimed', 360, '# Phase 3\nWe will edit the Dockerfile.\n', 'active');
+    plantRoadmapIssue(tmp, 361, 'body: this change also edits the Dockerfile and src/app.js');
+    const result = runClassifierOffline(tmp, 361);
+    assert(result.verdict === 'yellow' && /curated root file "Dockerfile"/.test(result.reasoning),
+      'F9: a curated-root overlap declared in CLAIMED prose (no frozen plan) must be yellow, got ' + result.verdict + ' (' + result.reasoning + ')');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testClassifierCuratedRootProseClaimedYellow: PASSED');
+}
+
+// issue #238 CONTROL, strengthened (F10): a candidate naming ONLY a curated root file, against a
+// claimed project AT phase<=2 that does not touch it, must stay GREEN (the safe over-ask, not an
+// over-block). With phase3Body=null the claimed project is phase<=2, so WITHOUT the #238 noPathInfo
+// curated-size guard the candidate would conservative-RED; asserting GREEN therefore mutation-covers
+// that guard (pre-#238 / guard-reverted code returns RED for this exact scenario).
 function testClassifierCuratedRootProseNoOverlapGreen() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-classifier-curated-green-'));
   try {
-    plantActiveFolder(tmp, 'unrelated-claimed', 340, '# Phase 3\nFiles: scripts/some-file.js\n', 'active');
-    plantRoadmapIssue(tmp, 341, 'body: this change edits the Dockerfile only, nothing else');
-    const result = runClassifierOffline(tmp, 341);
+    plantActiveFolder(tmp, 'overblock-claimed', 350, null, 'active');
+    plantRoadmapIssue(tmp, 351, 'body: this change edits the Dockerfile only, nothing else');
+    const result = runClassifierOffline(tmp, 351);
     assert(result.verdict === 'green',
-      'issue #238 control: a curated root file named by the candidate but untouched by any claimed project must stay green, got ' + result.verdict + ' (' + result.reasoning + ')');
+      'issue #238 control (F10): a curated root file named only by the candidate, untouched by a phase<=2 claimed project, must stay green (no over-block), got ' + result.verdict + ' (' + result.reasoning + ')');
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   console.log('testClassifierCuratedRootProseNoOverlapGreen: PASSED');
 }
@@ -6027,6 +6191,7 @@ async function main() {
     testClassifierRootPathProseNoOverlap();
     testClassifierDotAreaOverlapRed();
     testClassifierCuratedRootOverlapYellow();
+    testClassifierCuratedRootProseClaimedYellow();
     testClassifierCuratedRootProseNoOverlapGreen();
     testClassifierFastScopeSectionIsolationGreen();
     testClassifierFastScopeFenceCommentRed();
@@ -6134,6 +6299,7 @@ async function main() {
     testAdaptiveReadySetDisjointness();
     testAdaptiveGateBarrierEnforcement();
     testAdaptivePerInstanceBarrier();
+    testAdaptivePerInstanceBarrierHardening();
     testAdaptiveResumeReconcilesNextCommand();
     testAdaptiveDurableConsentHalt();
     testAdaptiveAuthoringEntryGuard();

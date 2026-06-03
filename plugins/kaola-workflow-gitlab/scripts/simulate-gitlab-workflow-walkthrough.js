@@ -390,6 +390,12 @@ function testGitlabAdaptive() {
     fs.writeFileSync(path.join(cdir, 'workflow-plan.md'), ['# Plan', '', '## Meta', 'labels: chore', '', '## Nodes', '', '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|', '| ci | doc-updater | — | Dockerfile | 1 | sequence |', '| review | code-reviewer | ci | — | 1 | sequence |', '| done | finalize | review | — | 1 | sequence |', ''].join('\n'));
     const fr238 = fcl.classify({ body: 'this change also edits the Dockerfile build stage' }, [{ project: 'curated-claimed-238', project_dir: cdir }]);
     assert.strictEqual(fr238.verdict, 'yellow', 'gitlab #238: curated root (Dockerfile) overlap must be yellow, got ' + JSON.stringify(fr238));
+    // v3.21.0: the candidate-side detector must normalize sentence punctuation (trailing '.', leading
+    // './') before exact membership, else the fork classifier+schema chain fails open to green.
+    for (const body of ['this change also edits the Dockerfile. plus src/server.js', 'tweak ./Dockerfile and src/server.js']) {
+      const fr = fcl.classify({ body }, [{ project: 'curated-claimed-238', project_dir: cdir }]);
+      assert.strictEqual(fr.verdict, 'yellow', 'gitlab #238/v3.21.0: punctuated curated overlap must be yellow ("' + body + '"), got ' + JSON.stringify(fr));
+    }
     assert.strictEqual(gateVal([
       '| e | code-explorer | — | — | 1 | sequence |',
       '| a | tdd-guide | e | ./lib/foo.js | 1 | sequence |',
