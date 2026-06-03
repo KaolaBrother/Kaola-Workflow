@@ -721,6 +721,9 @@ function testAdaptiveResumeUnparseableTypedRefusal() {
 
 // (h) toggle gates SELECTION only: an in-flight adaptive project resumes via
 // `claim resume` to plan-run even after the switch is flipped OFF (toggle-agnostic).
+// #236 (document-as-designed): this locks the no-kill-switch-once-frozen contract — flipping
+// OFF must NOT brick a frozen plan; pairs with testAdaptiveOffClaimRefusal (selection gated). A
+// future regression that adds a toggle read to a resume surface fails here.
 function testAdaptiveResumeAfterFlipOff() {
   const tmp = adaptiveTmp('resume-flipoff');
   try {

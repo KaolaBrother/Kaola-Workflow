@@ -43,23 +43,37 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   the nine canonical roles are **inherited unchanged** — only small adaptive-aware
   touches are added. The switch gates selection only; resume is toggle-agnostic.
 
-  **Enforcement boundary (accepted limitation).** The validator enforces gate
+  **Enforcement boundary (script-enforced, #231).** The validator enforces gate
   *presence* statically at freeze: post-dominance proves a `code-reviewer` sits on
   every path from each code-producing node to the unique sink, and a `security-reviewer`
-  on every path from each sensitive node. Gate *execution* at runtime — the review
-  actually running, the barrier re-scan + consent/security escalation, the
-  actual-writes-vs-declared-allowlist diff, and the quorum tally — is **agent
-  discipline on the adaptive path, not script-enforced**: `routeAdaptive` resumes
-  without running the `delegationPolicyCompliance` matcher, and Phase 6 re-checks only
-  structure + `plan_hash`. This is a deliberate, documented limitation of the Tier-1
-  substrate ("gate presence is plan-checked; gate execution is agent discipline"); the
-  executor-skill prose carries the runtime obligations, and a future tier may add
-  script-level barrier enforcement (a `--barrier-check` subcommand + wiring the
-  delegation matcher into `routeAdaptive`/Phase 6). The 2026-06-03 audit
-  (`docs/investigations/adaptive-path-audit-2026-06-03.md`) hardened the *static* floor
-  — write-set extraction (root-level + dot-leading paths), `finalize`-sink writes,
-  `## Meta`-scoped label reading, and fence-aware hashing — so the `auto-run` verdict is
-  no longer computed over a write set that under-counts sensitive files.
+  on every path from each sensitive node. Gate *execution* at runtime is now
+  **script-enforced** too. `--gate-verify` proves a *completed* reviewer post-dominates
+  every completed code/sensitive node in the `## Node Ledger` — closing the leak where a
+  required reviewer is marked `n/a` at runtime (audit G1/H5) — wired into `routeAdaptive`
+  (surfaced as `pendingGates`, non-blocking on resume so a mid-run pending gate never
+  bricks an in-flight plan) and enforced as a hard merge gate in Phase 6. `--barrier-check`
+  re-scans the files actually written (git diff vs the merge-base of HEAD and `origin/main`,
+  so a committed sensitive write is not invisible) and refuses a sensitive write with no
+  `security-reviewer` node (audit H1) or an out-of-allowlist production write (audit H3).
+  Both checks are PURE + toggle-agnostic (they never read the install switch). Only the
+  quorum tally and the `validateNodeOutput` schema checkpoints remain agent-discipline
+  prose. The 2026-06-03 audit (`docs/investigations/adaptive-path-audit-2026-06-03.md`)
+  hardened the *static* floor — write-set extraction (root-level + dot-leading paths),
+  `finalize`-sink writes, `## Meta`-scoped label reading, and fence-aware hashing — so the
+  `auto-run` verdict is no longer computed over a write set that under-counts sensitive files.
+
+  **No mid-run kill-switch once a plan is frozen (accepted, #236).** Flipping the
+  `enable_adaptive` switch OFF stops *new* adaptive selection but does **not** halt an
+  already-frozen, in-flight plan: the switch gates `claimProject` SELECTION (and the
+  `/kaola-workflow-adapt` authoring entry, #235) only, while both resume surfaces —
+  `routeAdaptive` and `resumeFallbackCommand` — and the resume re-validation
+  (`revalidateForResume`, library + structure + `plan_hash` only) are deliberately
+  **toggle-agnostic**. This is correct-by-design: a mid-run path-yank would brick an
+  in-flight plan and break the `plan_hash` author-immutability contract. An explicit
+  opt-in operator halt (`KAOLA_ADAPTIVE_HALT`, distinct from the selection switch) was
+  considered and **deferred** — it adds a new resume-surface read and a brick vector for
+  marginal benefit; the principled containment for a bad frozen plan is the per-tier
+  runtime `--barrier-check` (#231), not a binary kill-switch.
 
 ## Phase 6 Finalization and Sink Flow
 
