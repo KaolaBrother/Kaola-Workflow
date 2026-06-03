@@ -78,10 +78,13 @@ function readOrCreateConfig() {
 // CI/CD + supply-chain paths (`.github/workflows/*`, `.circleci/config.yml`, `.gitlab-ci.yml`
 // when slash-bearing) are captured on BOTH sides of the cross-project claim-overlap check
 // (candidate issue.body prose AND the claimed-side combined blob, which already stringifies
-// the plan/fast write sets). A slash is STILL required, so free prose cannot over-match a
-// bare word (`Node.js`, `package.json`, `config.json` stay empty — the preceding-char guard
-// `[^A-Za-z0-9_./-]` rejects a `.` before the token, so `..`/`x.` cannot start a match and
-// `\.?` admits at most one leading dot). Closes the audit A2′ blind spot in scanClaimedOverlap.
+// the plan/fast write sets). A slash is STILL required, so a BARE word never matches (`Node.js`,
+// `package.json`, `config.json` stay empty — the preceding-char guard `[^A-Za-z0-9_./-]` rejects
+// a `.` before the token, so `..`/`x.` cannot start a match and `\.?` admits at most one leading
+// dot). NOTE (v3.20.1): a dot-leading SLASH-BEARING prose token (e.g. `.NET/Core`, `.config/x`)
+// CAN still over-match — accepted as the safe OVER-block direction (it conservatively blocks a
+// claim the user resolves by editing the issue body, identical in kind to the pre-existing
+// `word/word` prose over-match like `read/write`). Closes the audit A2′ blind spot.
 const FILE_PATH_REGEX = /(?:^|[^A-Za-z0-9_./-])(\.?[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_.-]+)+)/g;
 const AREA_PATH_REGEX = /(?:^|[^A-Za-z0-9_./-])([A-Za-z0-9_-]+)\/(?=$|[^A-Za-z0-9_./-])/g;
 

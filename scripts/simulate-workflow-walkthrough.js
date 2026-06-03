@@ -918,9 +918,11 @@ function testAdaptiveReadySetDisjointness() {
     assert(v.result === 'in-grammar' && v.decision === 'ask',
       'A3 gap: concurrent siblings with coarse-area overlap must ask (not refuse), got: ' + JSON.stringify(v));
 
-    // CONTROL 1 (the binding no-false-refusal guard): two INDEPENDENT branches (roots r1, r2 — no
-    // common ancestor, sharing only the finalize sink) writing the EXACT same file must stay
-    // in-grammar. The shared-ancestor requirement is what prevents this false refusal.
+    // GAP 3 (v3.20.1, adversarial finding — was wrongly a "control" pre-3.20.1): two INDEPENDENT
+    // branches (roots r1, r2 — NO common ancestor) writing the EXACT same file is a guaranteed
+    // shared-worktree clobber (both are unordered, both land in the ready-set) and MUST refuse. The
+    // exact-file check now fires for ANY antichain pair regardless of a common ancestor; this also
+    // closes the #233-introduced regression (same-label fan-out members on independent branches).
     v = validatePlanFixture(tmp, [
       '| r1 | code-explorer | — | — | 1 | sequence |',
       '| r2 | code-explorer | — | — | 1 | sequence |',
@@ -929,8 +931,36 @@ function testAdaptiveReadySetDisjointness() {
       '| review | code-reviewer | a,b | — | 1 | sequence |',
       '| done | finalize | review | — | 1 | sequence |',
     ], []);
+    assert(v.result === 'refuse' && /both write/.test((v.errors || []).join(';')),
+      'A3: independent-branch EXACT-file overlap is a clobber and must refuse, got: ' + JSON.stringify(v));
+
+    // GAP 3b (same regression via the actual #233 vector): two same-label fan-out members on
+    // independent branches writing the same exact file must also refuse (origin-scoping split them
+    // into separate groups, so only the inferred-concurrency exact check catches this now).
+    v = validatePlanFixture(tmp, [
+      '| r1 | code-explorer | — | — | 1 | sequence |',
+      '| r2 | code-explorer | — | — | 1 | sequence |',
+      '| a | tdd-guide | r1 | src/foo.js | 1 | fanout(impl) |',
+      '| b | tdd-guide | r2 | src/foo.js | 1 | fanout(impl) |',
+      '| review | code-reviewer | a,b | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /both write/.test((v.errors || []).join(';')),
+      'A3/#233: same-label fan-out members on independent branches writing the same file must refuse, got: ' + JSON.stringify(v));
+
+    // CONTROL 1 (no-over-rotation guard): independent branches (no common ancestor) writing DIFFERENT
+    // files in the same coarse area must STAY in-grammar — coarse-area overlap only asks when truly
+    // concurrent (a shared ancestor); independent branches are NOT flagged on a mere area touch.
+    v = validatePlanFixture(tmp, [
+      '| r1 | code-explorer | — | — | 1 | sequence |',
+      '| r2 | code-explorer | — | — | 1 | sequence |',
+      '| a | tdd-guide | r1 | src/aaa.js | 1 | sequence |',
+      '| b | tdd-guide | r2 | src/bbb.js | 1 | sequence |',
+      '| review | code-reviewer | a,b | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
     assert(v.result === 'in-grammar',
-      'A3 control: independent branches (no common ancestor) must NOT be flagged even with identical writes, got: ' + JSON.stringify(v));
+      'A3 control: independent branches with different files in the same coarse area must stay in-grammar, got: ' + JSON.stringify(v));
 
     // CONTROL 2: disjoint concurrent siblings (different top-level areas) must still auto-run.
     v = validatePlanFixture(tmp, [
@@ -971,16 +1001,47 @@ function testAdaptiveGateBarrierEnforcement() {
     assert(g.ok === true, 'control: all-complete gates must verify ok, got: ' + JSON.stringify(g));
 
     // --- barrierCheck (H1/H3) pure cases over actual writes.
-    const noSec = mkLedgerPlan(['| impl | tdd-guide | — | lib/foo.js | 1 | sequence |', '| rv | code-reviewer | impl | — | 1 | sequence |', '| done | finalize | rv | — | 1 | sequence |'], ['| done | complete |'], 'refactor');
+    // Realistic phase6 ledgers (every producing node complete) so these sensitivity/allowlist
+    // assertions exercise (a)/(b) in isolation, not the v3.20.1 (c) ledger-consistency check.
+    const noSec = mkLedgerPlan(['| impl | tdd-guide | — | lib/foo.js | 1 | sequence |', '| rv | code-reviewer | impl | — | 1 | sequence |', '| done | finalize | rv | — | 1 | sequence |'], ['| impl | complete |', '| rv | complete |', '| done | complete |'], 'refactor');
     assert(planValidator.barrierCheck(noSec, ['src/auth/session.js'], {}).result === 'refuse',
       'H1: sensitive actual write on a plan with no security-reviewer must refuse');
-    const withSec = mkLedgerPlan(['| impl | tdd-guide | — | src/auth/session.js | 1 | sequence |', '| sec | security-reviewer | impl | — | 1 | sequence |', '| rv | code-reviewer | sec | — | 1 | sequence |', '| done | finalize | rv | — | 1 | sequence |'], ['| done | complete |'], 'security');
+    const withSec = mkLedgerPlan(['| impl | tdd-guide | — | src/auth/session.js | 1 | sequence |', '| sec | security-reviewer | impl | — | 1 | sequence |', '| rv | code-reviewer | sec | — | 1 | sequence |', '| done | finalize | rv | — | 1 | sequence |'], ['| impl | complete |', '| sec | complete |', '| rv | complete |', '| done | complete |'], 'security');
     assert(planValidator.barrierCheck(withSec, ['src/auth/session.js'], {}).result === 'pass',
       'control: declared sensitive write WITH a security-reviewer must pass');
     assert(planValidator.barrierCheck(noSec, ['src/surprise.js'], {}).result === 'refuse',
       'H3: out-of-allowlist production write must refuse');
     assert(planValidator.barrierCheck(noSec, ['lib/foo.js', 'docs/x.md', 'CHANGELOG.md', 'test/foo.test.js', 'kaola-workflow/p/workflow-plan.md'], {}).result === 'pass',
       'control: declared + docs + tests + workflow-artifact writes must pass');
+
+    // --- v3.20.1 Fix #2 (false-refusal): the sensitivity scan must EXEMPT docs / tests /
+    // workflow-artifacts — a docs/test path whose NAME matches a Phase-5 pattern is not production
+    // code and must NOT refuse even with no security-reviewer node.
+    assert(planValidator.barrierCheck(noSec, ['test/login.test.js'], {}).result === 'pass',
+      'Fix#2: a tests-only path matching a sensitive pattern must NOT refuse');
+    assert(planValidator.barrierCheck(noSec, ['docs/auth.md'], {}).result === 'pass',
+      'Fix#2: a docs-only path matching a sensitive pattern must NOT refuse');
+    // control: a real PRODUCTION sensitive write with no security-reviewer still refuses.
+    assert(planValidator.barrierCheck(noSec, ['src/auth/login.js'], {}).result === 'refuse',
+      'Fix#2 control: a production sensitive write with no security-reviewer must still refuse');
+
+    // --- v3.20.1 Fix #1 (CRITICAL — n/a/pending-TARGET gate bypass): whole-plan barrier-check must
+    // refuse a production write declared ONLY by a non-complete node (the producer claims n/a while
+    // its file was actually written -> unreviewed). Closes the symmetric hole the n/a-GATE fix missed.
+    const naTargetSens = mkLedgerPlan(['| imp | tdd-guide | — | src/auth/session.js | 1 | sequence |', '| sec | security-reviewer | imp | — | 1 | sequence |', '| done | finalize | sec | — | 1 | sequence |'], ['| imp | n/a |', '| sec | n/a |', '| done | complete |'], 'security');
+    assert(planValidator.barrierCheck(naTargetSens, ['src/auth/session.js'], {}).result === 'refuse',
+      'Fix#1: a SENSITIVE write by an n/a producer (whole-plan) must refuse — the n/a-target bypass');
+    const naTargetCode = mkLedgerPlan(['| imp | tdd-guide | — | src/feature.js | 1 | sequence |', '| rv | code-reviewer | imp | — | 1 | sequence |', '| done | finalize | rv | — | 1 | sequence |'], ['| imp | n/a |', '| rv | n/a |', '| done | complete |']);
+    assert(planValidator.barrierCheck(naTargetCode, ['src/feature.js'], {}).result === 'refuse',
+      'Fix#1: a code write by an n/a producer (whole-plan) must refuse');
+    // no-false-refusal control: a genuinely-skipped n/a node that wrote NOTHING must pass (its file
+    // is absent from the diff); the actually-written file is owned by a COMPLETE node.
+    const naSkipClean = mkLedgerPlan(['| imp | tdd-guide | — | lib/foo.js | 1 | sequence |', '| extra | tdd-guide | — | src/optional.js | 1 | sequence |', '| rv | code-reviewer | imp,extra | — | 1 | sequence |', '| done | finalize | rv | — | 1 | sequence |'], ['| imp | complete |', '| extra | n/a |', '| rv | complete |', '| done | complete |']);
+    assert(planValidator.barrierCheck(naSkipClean, ['lib/foo.js'], {}).result === 'pass',
+      'Fix#1 control: a genuinely-skipped n/a node that wrote nothing must pass');
+    // per-node mode must NOT trip the consistency check (the triggering node is still in_progress).
+    assert(planValidator.barrierCheck(naTargetCode, ['src/feature.js'], { nodeId: 'imp' }).result === 'pass',
+      'Fix#1 control: per-node barrier (nodeId) must not run the whole-plan ledger-consistency check');
 
     // --- --gate-verify CLI exit codes.
     const gvPlan = path.join(tmp, 'gv.md');
@@ -1001,7 +1062,9 @@ function testAdaptiveGateBarrierEnforcement() {
         '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
         '| impl | tdd-guide | — | lib/foo.js | 1 | sequence |',
         '| rv | code-reviewer | impl | — | 1 | sequence |',
-        '| done | finalize | rv | — | 1 | sequence |', ''].join('\n'));
+        '| done | finalize | rv | — | 1 | sequence |', '',
+        '## Node Ledger', '', '| id | status |', '|---|---|',
+        '| impl | complete |', '| rv | complete |', '| done | complete |', ''].join('\n'));
       runNode(planValidatorScript, [planPath, '--freeze'], grepo);
       spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
       spawnSync('git', ['commit', '-m', 'plan'], { cwd: grepo, encoding: 'utf8' });
@@ -1021,6 +1084,15 @@ function testAdaptiveGateBarrierEnforcement() {
       r = runNode(planValidatorScript, [planPath, '--barrier-check', '--json'], grepo);
       assert(r.status === 0 && JSON.parse(r.stdout).result === 'pass',
         '--barrier-check must pass (exit 0) a clean run, got status ' + r.status + ' ' + r.stdout);
+      // v3.20.1 Fix #1 END-TO-END (the exact adversarial repro): flip the producer `impl` to n/a in
+      // the ledger while its declared file (lib/foo.js, committed) is in the diff -> whole-plan barrier
+      // refuses. Pre-fix all three phase6 gates returned 0 and unreviewed code would merge.
+      fs.writeFileSync(planPath, fs.readFileSync(planPath, 'utf8').replace('| impl | complete |', '| impl | n/a |'));
+      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'ledger'], { cwd: grepo, encoding: 'utf8' });
+      r = runNode(planValidatorScript, [planPath, '--barrier-check', '--json'], grepo);
+      assert(r.status === 1 && JSON.parse(r.stdout).result === 'refuse',
+        'Fix#1 end-to-end: an n/a producer whose declared file is in the git diff must refuse, got status ' + r.status + ' ' + r.stdout);
     } finally { fs.rmSync(grepo, { recursive: true, force: true }); fs.rmSync(grepo + '-remote', { recursive: true, force: true }); }
 
     // --- fail-closed: --barrier-check with no resolvable base (no origin/main) must NOT crash —
@@ -1122,6 +1194,18 @@ function testAdaptiveDurableConsentHalt() {
     assert(result.stdout.includes('/kaola-workflow-plan-run issue-943'), 'E2: must still route to plan-run');
     assert(read(statePath(tmp, 'issue-943')).includes('consent-halt-surface'),
       'E2: durable Node-Ledger consent must surface even with no prior workflow-state.md');
+
+    // E2 INTACT-STATE durability (v3.20.1 — the suite previously only covered the deleted-state
+    // path): a `claim resume` on an intact adaptive project must NOT clobber the durable Node-Ledger
+    // marker, so the plan-run executor can re-read it (the steady-state backstop for the surfacing
+    // that repair-state's intact-state early-return does not itself re-emit).
+    plantFrozenPlan(tmp, 'issue-944', base.join('\n').replace('| done | pending |', '| done | pending |\nconsent_halt: pending'));
+    fs.writeFileSync(statePath(tmp, 'issue-944'), ['name: issue-944', 'issue_number: 944', 'status: active',
+      'phase: adaptive', 'workflow_path: adaptive', 'next_command: /kaola-workflow-plan-run issue-944',
+      'escalated_to_full: consent', ''].join('\n'));
+    runNode(claimScript, ['resume', '--project', 'issue-944'], tmp);
+    assert(adaptiveSchema.readDurableConsentHalt(read(path.join(tmp, 'kaola-workflow', 'issue-944', 'workflow-plan.md'))) === true,
+      'E2: an intact-state resume must NOT clobber the durable consent marker (executor re-reads it)');
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   console.log('testAdaptiveDurableConsentHalt: PASSED');
 }

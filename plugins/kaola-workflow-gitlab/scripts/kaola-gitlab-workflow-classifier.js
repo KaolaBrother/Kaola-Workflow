@@ -45,7 +45,9 @@ function readOrCreateConfig() {
 
 // issue #237: leading-dot first segment captures dot-leading CI/CD + supply-chain paths
 // (.github/workflows/*, .gitlab-ci.yml when slash-bearing) on both sides of the claim-overlap
-// check; a slash is still required so free prose cannot over-match a bare word.
+// check; a slash is still required so a BARE word never matches. NOTE (v3.20.1): a dot-leading
+// slash-bearing prose token (.NET/Core, .config/x) CAN over-match — accepted as the safe
+// over-block direction (consistent with the pre-existing word/word prose over-match).
 const FILE_PATH_REGEX = /(?:^|[^A-Za-z0-9_./-])(\.?[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_.-]+)+)/g;
 const AREA_PATH_REGEX = /(?:^|[^A-Za-z0-9_./-])([A-Za-z0-9_-]+)\/(?=$|[^A-Za-z0-9_./-])/g;
 const DEPENDS_ON_REGEX = /^depends-on:#(\d+)$/;

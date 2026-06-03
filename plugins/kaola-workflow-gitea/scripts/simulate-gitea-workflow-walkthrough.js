@@ -414,7 +414,16 @@ function testGiteaAdaptive() {
       '| b | tdd-guide | r2 | lib/foo.js | 1 | sequence |',
       '| r | code-reviewer | a,b | — | 1 | sequence |',
       '| d | finalize | r | — | 1 | sequence |',
-    ], 'enhancement').result, 'in-grammar', 'gitea A3 control: independent branches must not be flagged (no false refusal)');
+    ], 'enhancement').result, 'refuse', 'gitea A3 (v3.20.1): independent-branch EXACT-file overlap is a clobber and must refuse');
+    // CONTROL (no over-rotation): independent branches, DIFFERENT files same coarse area -> in-grammar.
+    assert.strictEqual(gateVal([
+      '| r1 | code-explorer | — | — | 1 | sequence |',
+      '| r2 | code-explorer | — | — | 1 | sequence |',
+      '| a | tdd-guide | r1 | src/aaa.js | 1 | sequence |',
+      '| b | tdd-guide | r2 | src/bbb.js | 1 | sequence |',
+      '| r | code-reviewer | a,b | — | 1 | sequence |',
+      '| d | finalize | r | — | 1 | sequence |',
+    ], 'enhancement').result, 'in-grammar', 'gitea A3 control: independent branches with different files in the same area stay in-grammar');
 
     // issue #234 E1: a stale phaseN next_command on an adaptive project must reconcile to plan-run.
     const e1dir = path.join(tmp, 'kaola-workflow', 'issue-940');
@@ -438,6 +447,26 @@ function testGiteaAdaptive() {
     assert.strictEqual(ar.status, 'authoring_refused', 'gitea D8: authoring under an OFF switch must refuse');
     ar = JSON.parse(spawnNode(claimScript, ['authoring-allowed', '--project', 'issue-960'], tmp, { KAOLA_ENABLE_ADAPTIVE: '1' }).stdout);
     assert.strictEqual(ar.status, 'authoring_allowed', 'gitea D8: authoring under an ON switch must be allowed');
+
+    // v3.20.1 (adversarial-review follow-ups): the fork validator must carry the same fixes.
+    // Fix #3 — independent-branch exact-file overlap must refuse (was a #233 regression).
+    assert.strictEqual(gateVal([
+      '| r1 | code-explorer | — | — | 1 | sequence |',
+      '| r2 | code-explorer | — | — | 1 | sequence |',
+      '| a | tdd-guide | r1 | src/foo.js | 1 | fanout(impl) |',
+      '| b | tdd-guide | r2 | src/foo.js | 1 | fanout(impl) |',
+      '| rv | code-reviewer | a,b | — | 1 | sequence |',
+      '| d | finalize | rv | — | 1 | sequence |',
+    ], 'enhancement').result, 'refuse', 'gitea v3.20.1 #3: independent-branch exact-file overlap must refuse');
+    // Fix #1 + #2 — pure barrierCheck on the fork validator.
+    const fv = require(valScript);
+    const mkL = (nodes, ledger, lbl) => ['# Plan', '', '## Meta', 'labels: ' + (lbl || 'chore'), '', '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|']
+      .concat(nodes).concat(['', '## Node Ledger', '', '| id | status |', '|---|---|']).concat(ledger).join('\n');
+    const naT = mkL(['| imp | tdd-guide | — | src/auth/session.js | 1 | sequence |', '| sec | security-reviewer | imp | — | 1 | sequence |', '| done | finalize | sec | — | 1 | sequence |'], ['| imp | n/a |', '| sec | n/a |', '| done | complete |'], 'security');
+    assert.strictEqual(fv.barrierCheck(naT, ['src/auth/session.js'], {}).result, 'refuse', 'gitea v3.20.1 #1: n/a-target sensitive write must refuse');
+    const cleanL = mkL(['| imp | tdd-guide | — | lib/foo.js | 1 | sequence |', '| rv | code-reviewer | imp | — | 1 | sequence |', '| done | finalize | rv | — | 1 | sequence |'], ['| imp | complete |', '| rv | complete |', '| done | complete |'], 'refactor');
+    assert.strictEqual(fv.barrierCheck(cleanL, ['test/login.test.js'], {}).result, 'pass', 'gitea v3.20.1 #2: tests-only sensitive-named path must NOT refuse');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

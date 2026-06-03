@@ -348,16 +348,45 @@ function barrierCheck(content, actualPaths, opts) {
   const real = (actualPaths || []).map(p => String(p || '').trim()).filter(Boolean);
   const isWorkflowArtifact = p => /^kaola-workflow\//.test(p);
   const isTestPath = p => /(^|\/)(tests?|__tests__|spec)\//i.test(p) || /\.(test|spec)\.[A-Za-z0-9]+$/i.test(p);
-  // (a) sensitivity teeth (H1)
+  // A "production" actual write is one that is NOT docs / tests / a workflow artifact — those bands
+  // never need the code/security gate. They are exempt from BOTH the sensitivity teeth and the
+  // allowlist (v3.20.1: the sensitivity scan previously lacked this exemption, so a docs/test path
+  // whose NAME matched a Phase-5 pattern — e.g. `test/login.test.js`, `docs/auth.md` — was wrongly
+  // refused at the merge gate, with no in-grammar escape).
+  const isExempt = p => isWorkflowArtifact(p) || isDocsPath(p) || isTestPath(p);
+  const production = real.filter(p => !isExempt(p));
+  // (a) sensitivity teeth (H1): a sensitive PRODUCTION write on a plan with no security-reviewer node.
   const hasSecReviewer = nodes.some(n => n.role === 'security-reviewer');
-  const sensitiveHits = real.filter(p => SENSITIVE_PATTERNS.some(re => re.test(p)));
+  const sensitiveHits = production.filter(p => SENSITIVE_PATTERNS.some(re => re.test(p)));
   if (sensitiveHits.length && !hasSecReviewer) {
     errors.push(`actual writes touch a Phase-5 sensitive area (${sensitiveHits.join(', ')}) but the plan has no security-reviewer node — revoke and escalate (G2)`);
   }
-  // (b) allowlist (H3) — production writes only; docs / tests / workflow artifacts / declared exempt
-  const outOfAllow = real.filter(p => !isWorkflowArtifact(p) && !isDocsPath(p) && !isTestPath(p) && !declared.has(p));
+  // (b) allowlist (H3): a production write not in the union of declared write sets.
+  const outOfAllow = production.filter(p => !declared.has(p));
   if (outOfAllow.length) {
     errors.push(`actual writes outside the declared allowlist (${outOfAllow.join(', ')}) — overflow beyond the frozen write set`);
+  }
+  // (c) v3.20.1 — ledger consistency, closing the n/a/pending-TARGET gate bypass (the symmetric hole
+  // the #231 n/a-GATE relabel missed). WHOLE-PLAN / merge mode ONLY (no nodeId): at the per-node
+  // barrier the triggering node is still `in_progress` (step 4 runs before step 5 marks it complete),
+  // so this would false-refuse its own writes. At phase6 every ledger row is complete/n-a, so a
+  // production write whose declaring node(s) are ALL non-complete means the file WAS written but the
+  // producer claims it did not run — unattributed + unreviewed (and the ledger, outside `plan_hash`,
+  // can be flipped to n/a post-freeze undetected by --resume-check). Forcing the producer to
+  // `complete` puts it back into verifyGateExecution's G1/G2 target set, so --gate-verify (run
+  // alongside --barrier-check at phase6) then enforces review — the two checks compose. A genuinely
+  // skipped n/a node that wrote NOTHING is never flagged: its declared file is absent from the diff.
+  if (!opts.nodeId) {
+    const ledger = parseLedger(content);
+    const anyCompleteOwner = new Map();
+    for (const n of nodes) for (const p of n.writeSet) {
+      if (!anyCompleteOwner.has(p)) anyCompleteOwner.set(p, false);
+      if (ledger.get(n.id) === 'complete') anyCompleteOwner.set(p, true);
+    }
+    const unattributed = production.filter(p => declared.has(p) && anyCompleteOwner.get(p) === false);
+    if (unattributed.length) {
+      errors.push(`actual writes (${unattributed.join(', ')}) are declared only by non-complete (n/a/pending) node(s) — the producing node claims it did not run, so the write is unreviewed`);
+    }
   }
   return { result: errors.length ? 'refuse' : 'pass', errors, sensitiveHits, outOfAllow };
 }
@@ -482,15 +511,14 @@ function validatePlan(content, opts) {
   // --- #232 (audit A3): inferred concurrent-sibling write disjointness ------------------------
   // The declared fan-out groups loop above only checks nodes carrying a fanout(...) tag. Two
   // structurally-parallel WRITE nodes (same depends_on, concurrently reachable, e.g. two tdd-guide
-  // with shape:sequence) could declare identical/overlapping write sets and pass. Check every PAIR
-  // of write-bearing nodes that are CONCURRENT:
-  //   concurrent(A,B) := neither reaches the other (antichain) AND they share a common ANCESTOR
-  //   (some node that reaches BOTH). Independent branches share only the finalize sink (a common
-  //   DESCENDANT, never an ancestor), so they are NOT flagged — that asymmetry is the
-  //   false-refusal guard. Concurrency is non-transitive, so it is computed per-PAIR.
-  // Verdict policy (deliberately WEAKER than the declared-fanout path, since concurrency is here
-  // INFERRED, not author-declared): EXACT same file => RED/refuse (unambiguous clobber);
-  // coarse-area / shared-infra overlap => ASK (inference + weak signal compound = ambiguous).
+  // with shape:sequence) could declare identical/overlapping write sets and pass. Check every
+  // ANTICHAIN pair (neither reaches the other) of write-bearing nodes, per-PAIR (concurrency is
+  // non-transitive). Verdict policy splits by certainty (v3.20.1):
+  //   - EXACT same file => RED/refuse for ANY antichain pair, regardless of a common ancestor — an
+  //     unordered pair writing the same file is a guaranteed shared-worktree clobber.
+  //   - COARSE-area / shared-infra (non-exact) overlap => ASK, but ONLY when truly concurrent (a
+  //     shared common ANCESTOR). Independent branches share only the finalize sink (a descendant,
+  //     never an ancestor); flagging them on a mere coarse-area touch would be a false refusal.
   {
     const fwdAdj = adjacency(nodes);
     const revAdj = reverseAdjacency(nodes);
@@ -506,17 +534,26 @@ function validatePlan(content, opts) {
         const A = writeBearing[i], B = writeBearing[j];
         if (groupKeyOf.has(A.id) && groupKeyOf.get(A.id) === groupKeyOf.get(B.id)) continue; // same declared group
         if (descOf.get(A.id).has(B.id) || descOf.get(B.id).has(A.id)) continue;              // not an antichain
-        let sharedAncestor = false;
-        for (const a of ancOf.get(A.id)) if (ancOf.get(B.id).has(a)) { sharedAncestor = true; break; }
-        if (!sharedAncestor) continue; // independent branches share only the sink (a descendant) => skip
+        // EXACT-file overlap => RED/refuse for ANY antichain pair, REGARDLESS of a common ancestor
+        // (v3.20.1): two unordered nodes writing the same exact file both land in the ready-set and
+        // both write the shared worktree — a guaranteed clobber. There is no safe authoring of it
+        // (the fix is a dep edge serializing them), so refusing is not a false refusal. This also
+        // closes the #233-introduced regression where two same-label fan-out members on independent
+        // branches (split into separate origin-scoped groups) lost the disjointness coverage the
+        // old merged-label group used to provide.
         let exact = null;
         for (const p of A.writeSet) if (B.writeSet.has(p)) { exact = p; break; }
         if (exact) {
           errors.push(`concurrent siblings ${A.id} and ${B.id} both write "${exact}" (parallel non-fanout write overlap)`);
           continue;
         }
-        // coarse-area / shared-infra overlap => ASK (read only the verdict; the 2-element-array
-        // index reasoning of disjointWriteSets is never surfaced).
+        // COARSE-area / shared-infra overlap (NON-exact) => ASK, and ONLY when truly concurrent
+        // (a shared common ANCESTOR). Independent branches share only the finalize sink (a
+        // descendant, never an ancestor); flagging them on a mere coarse-area touch (e.g. two
+        // features both under src/) would be a false refusal, so they are skipped here.
+        let sharedAncestor = false;
+        for (const a of ancOf.get(A.id)) if (ancOf.get(B.id).has(a)) { sharedAncestor = true; break; }
+        if (!sharedAncestor) continue;
         const dj = classifier.disjointWriteSets([A.writeSet, B.writeSet]);
         if (dj.verdict !== 'green') concurrentAmbiguousOverlap = true;
       }
