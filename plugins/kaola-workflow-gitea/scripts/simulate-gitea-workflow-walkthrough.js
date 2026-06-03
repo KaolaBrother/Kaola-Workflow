@@ -376,7 +376,22 @@ function testGiteaAdaptive() {
   }
   console.log('testGiteaAdaptive: PASSED');
 }
+
+// issue #237: the leading-dot FILE_PATH_REGEX widening must hold on the FORK classifier too —
+// a dot-leading CI/supply-chain path is captured (so cross-project claim-overlap can see it on
+// both the candidate and claimed sides) while bare-word prose still does not over-match.
+function testGitea237DotPathExtraction() {
+  const classifier = require(path.join(root, 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-classifier.js'));
+  const got = classifier.extractFilePaths('this issue rewrites .github/workflows/deploy.yml for CI');
+  assert.ok(got.has('.github/workflows/deploy.yml'),
+    'gitea #237: dot-leading CI path must be extracted, got: ' + JSON.stringify([...got]));
+  const prose = classifier.extractFilePaths('use Node.js version 3.19.1 with package.json and config.json');
+  assert.strictEqual(prose.size, 0,
+    'gitea #237: bare-word prose must NOT over-match into paths, got: ' + JSON.stringify([...prose]));
+  console.log('testGitea237DotPathExtraction: PASSED');
+}
 testGiteaAdaptive();
+testGitea237DotPathExtraction();
 
 run('test-gitea-forge-helpers.js');
 run('test-gitea-workflow-scripts.js');

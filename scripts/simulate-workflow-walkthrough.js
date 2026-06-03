@@ -1375,6 +1375,88 @@ function testClassifierFastScopeDisjointGreen() {
   console.log('testClassifierFastScopeDisjointGreen: PASSED');
 }
 
+// issue #237: a claimed adaptive project declares its write set in workflow-plan.md's
+// `## Nodes` table. A dot-leading CI/supply-chain path (.github/workflows/deploy.yml) there
+// was silently dropped from BOTH the claimed-side combined blob and the candidate issue body
+// by the old FILE_PATH_REGEX (no leading dot), so two projects touching the same CI file did
+// not collide-detect (a silent clobber on the shared worktree). The leading-dot widening makes
+// the path visible on both sides.
+function testClassifierDotPathOverlapRed() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-classifier-dotpath-red-'));
+  try {
+    plantActiveFolder(tmp, 'adaptive-ci-active', 300, null, 'active');
+    plantFrozenPlan(tmp, 'adaptive-ci-active', [
+      '# Workflow Plan — issue #300', '',
+      '## Meta', 'labels: chore', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '|---|---|---|---|---|---|',
+      '| ci | doc-updater | — | .github/workflows/deploy.yml | 1 | sequence |',
+      '| review | code-reviewer | ci | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+      ''
+    ].join('\n'));
+    plantRoadmapIssue(tmp, 301, 'body: this issue also rewrites .github/workflows/deploy.yml for CI');
+    const result = runClassifierOffline(tmp, 301);
+    assert(result.verdict === 'red',
+      'issue #237: dot-leading CI path overlap must yield red, got ' + result.verdict + ' (' + result.reasoning + ')');
+    assert(result.reasoning && result.reasoning.includes('exact file path'),
+      'issue #237: red reasoning must mention exact file path; got: ' + result.reasoning);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log('testClassifierDotPathOverlapRed: PASSED');
+}
+
+// issue #237 CONTROL (the binding no-false-refusal test): the leading-dot widening must NOT
+// make free issue-body prose over-match bare words into a false overlap. Bare-word filenames
+// (config.json, package.json) are slashless and Node.js / 3.19.1 are not paths, so a candidate
+// whose body only mentions them in passing must stay green against a disjoint claimed project.
+function testClassifierRootPathProseNoOverlap() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-classifier-prose-green-'));
+  try {
+    plantActiveFolder(tmp, 'prose-active', 310, '# Phase 3\nFiles: scripts/some-real-file.js\n', 'active');
+    plantRoadmapIssue(tmp, 311, 'body: use Node.js for this; bump version 3.19.1; touches config.json and package.json in passing prose, nothing shared');
+    const result = runClassifierOffline(tmp, 311);
+    assert(result.verdict === 'green',
+      'issue #237 control: bare-word prose must NOT over-match into a false overlap, got ' + result.verdict + ' (' + result.reasoning + ')');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log('testClassifierRootPathProseNoOverlap: PASSED');
+}
+
+// issue #237: `.github` is now an extractable coarse area (and is NOT in SHARED_INFRA), so two
+// projects editing different files under the same CI directory collide at area granularity —
+// a deliberate, consistent tightening (parity with `src/`) that prefers detecting a real CI
+// clobber over silently overwriting it.
+function testClassifierDotAreaOverlapRed() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-classifier-dotarea-red-'));
+  try {
+    plantActiveFolder(tmp, 'ci-area-active', 320, null, 'active');
+    plantFrozenPlan(tmp, 'ci-area-active', [
+      '# Workflow Plan — issue #320', '',
+      '## Meta', 'labels: chore', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '|---|---|---|---|---|---|',
+      '| ci | doc-updater | — | .github/workflows/deploy.yml | 1 | sequence |',
+      '| review | code-reviewer | ci | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+      ''
+    ].join('\n'));
+    plantRoadmapIssue(tmp, 321, 'body: this issue edits a different CI workflow .github/workflows/release.yml');
+    const result = runClassifierOffline(tmp, 321);
+    assert(result.verdict === 'red',
+      'issue #237: two projects sharing the .github coarse area must collide (red), got ' + result.verdict + ' (' + result.reasoning + ')');
+    assert(result.reasoning && result.reasoning.includes('coarse area'),
+      'issue #237: dot-area red reasoning must mention coarse area; got: ' + result.reasoning);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log('testClassifierDotAreaOverlapRed: PASSED');
+}
+
 // Guards the Scope-section-only read: a path that appears ONLY in the later
 // Implementation Evidence / Review sections (command + test-output noise) must
 // NOT manufacture an overlap (would be a false RED / over-block regression).
@@ -5414,6 +5496,9 @@ async function main() {
     testClassifierReleasedFolderExcluded();
     testClassifierFastScopeOverlapRed();
     testClassifierFastScopeDisjointGreen();
+    testClassifierDotPathOverlapRed();
+    testClassifierRootPathProseNoOverlap();
+    testClassifierDotAreaOverlapRed();
     testClassifierFastScopeSectionIsolationGreen();
     testClassifierFastScopeFenceCommentRed();
     testClassifierFastScopeFenceHeadingRed();

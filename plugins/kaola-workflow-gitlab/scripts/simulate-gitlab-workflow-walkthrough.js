@@ -292,10 +292,25 @@ function testGitlabAdaptive() {
   console.log('testGitlabAdaptive: PASSED');
 }
 
+// issue #237: the leading-dot FILE_PATH_REGEX widening must hold on the FORK classifier too —
+// a dot-leading CI/supply-chain path is captured (so cross-project claim-overlap can see it on
+// both the candidate and claimed sides) while bare-word prose still does not over-match.
+function testGitlab237DotPathExtraction() {
+  const classifier = require(path.join(root, 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-classifier.js'));
+  const got = classifier.extractFilePaths('this issue rewrites .github/workflows/deploy.yml for CI');
+  assert.ok(got.has('.github/workflows/deploy.yml'),
+    'gitlab #237: dot-leading CI path must be extracted, got: ' + JSON.stringify([...got]));
+  const prose = classifier.extractFilePaths('use Node.js version 3.19.1 with package.json and config.json');
+  assert.strictEqual(prose.size, 0,
+    'gitlab #237: bare-word prose must NOT over-match into paths, got: ' + JSON.stringify([...prose]));
+  console.log('testGitlab237DotPathExtraction: PASSED');
+}
+
 testFallbackGuardsAfterArchive();
 testAuditAndRepairLabels();
 testRepairFastEscalation();
 testGitlabAdaptive();
+testGitlab237DotPathExtraction();
 
 run('test-gitlab-forge-helpers.js');
 run('test-gitlab-workflow-scripts.js');

@@ -43,7 +43,10 @@ function readOrCreateConfig() {
   }
 }
 
-const FILE_PATH_REGEX = /(?:^|[^A-Za-z0-9_./-])([A-Za-z0-9_-]+(?:\/[A-Za-z0-9_.-]+)+)/g;
+// issue #237: leading-dot first segment captures dot-leading CI/CD + supply-chain paths
+// (.github/workflows/*, .gitea/* when slash-bearing) on both sides of the claim-overlap
+// check; a slash is still required so free prose cannot over-match a bare word.
+const FILE_PATH_REGEX = /(?:^|[^A-Za-z0-9_./-])(\.?[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_.-]+)+)/g;
 const AREA_PATH_REGEX = /(?:^|[^A-Za-z0-9_./-])([A-Za-z0-9_-]+)\/(?=$|[^A-Za-z0-9_./-])/g;
 const DEPENDS_ON_REGEX = /^depends-on:#(\d+)$/;
 const SHARED_INFRA = new Set(['scripts', 'hooks', 'plugins/kaola-workflow-gitea/scripts']);

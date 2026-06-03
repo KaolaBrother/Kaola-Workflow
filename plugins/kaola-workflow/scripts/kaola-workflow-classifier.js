@@ -74,7 +74,15 @@ function readOrCreateConfig() {
 // File-path extraction
 // ---------------------------------------------------------------------------
 
-const FILE_PATH_REGEX = /(?:^|[^A-Za-z0-9_./-])([A-Za-z0-9_-]+(?:\/[A-Za-z0-9_.-]+)+)/g;
+// issue #237: the FIRST path segment admits an optional leading dot (`\.?`) so dot-leading
+// CI/CD + supply-chain paths (`.github/workflows/*`, `.circleci/config.yml`, `.gitlab-ci.yml`
+// when slash-bearing) are captured on BOTH sides of the cross-project claim-overlap check
+// (candidate issue.body prose AND the claimed-side combined blob, which already stringifies
+// the plan/fast write sets). A slash is STILL required, so free prose cannot over-match a
+// bare word (`Node.js`, `package.json`, `config.json` stay empty — the preceding-char guard
+// `[^A-Za-z0-9_./-]` rejects a `.` before the token, so `..`/`x.` cannot start a match and
+// `\.?` admits at most one leading dot). Closes the audit A2′ blind spot in scanClaimedOverlap.
+const FILE_PATH_REGEX = /(?:^|[^A-Za-z0-9_./-])(\.?[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_.-]+)+)/g;
 const AREA_PATH_REGEX = /(?:^|[^A-Za-z0-9_./-])([A-Za-z0-9_-]+)\/(?=$|[^A-Za-z0-9_./-])/g;
 
 function normalizeRepoPath(raw) {
