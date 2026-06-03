@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [3.22.0] — 2026-06-04
 
 ### Roadmap generator — optional project-local `.roadmap/_rules.md` (#240)
 
@@ -21,7 +21,8 @@ issue-row matcher, so it is never read as a roadmap row.
 - Ships across **all four editions** (Claude / Codex / GitLab / Gitea); the GitLab/Gitea
   `refresh` command threads the directory through its inline builder call so project rules are
   preserved there too. Locked by a new mutation-checked regression test in the Claude
-  walkthrough (absent no-op + present append + validate-not-stale). No version bump.
+  walkthrough (absent no-op + present append + validate-not-stale). All three Codex packs
+  bump to `1.13.0`; root + the GitLab/Gitea Claude command packs ride `3.22.0`.
 
 ## [3.21.0] — 2026-06-03
 
