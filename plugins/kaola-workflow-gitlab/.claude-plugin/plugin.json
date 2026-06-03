@@ -1,6 +1,6 @@
 {
   "name": "kaola-workflow-gitlab",
-  "version": "3.20.1",
+  "version": "3.21.0",
   "description": "GitLab edition of the 6-phase Kaola-Workflow Claude Code plugin, using GitLab issues, merge requests, and glab.",
   "author": {
     "name": "KaolaBrother",
