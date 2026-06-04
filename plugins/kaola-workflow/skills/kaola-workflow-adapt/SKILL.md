@@ -44,9 +44,10 @@ sink may only write docs/state (e.g. `CHANGELOG.md`); a non-docs write on the si
 
 ## A complete example (`workflow-plan.md`)
 
-Minimal in-grammar plan to copy and adapt — explore, two parallel `tdd-guide` implements over
-**disjoint top-level directories**, a `code-reviewer` that post-dominates both, and the unique
-`finalize` sink. Being a write-role fan-out it routes to **ask**.
+Minimal in-grammar plan to copy and adapt — explore, a `planner` node that shapes and
+dominates the implements, two parallel `tdd-guide` implements over **disjoint top-level
+directories**, a `code-reviewer` that post-dominates both, a `doc-updater` for the changed
+docs, and the unique `finalize` sink. Being a write-role fan-out it routes to **ask**.
 
 ```markdown
 # Workflow Plan — issue #142
@@ -59,14 +60,31 @@ labels: enhancement
 | id        | role          | depends_on          | declared_write_set | cardinality | shape        |
 |-----------|---------------|---------------------|--------------------|-------------|--------------|
 | explore   | code-explorer | —                   | —                  | 1           | sequence     |
-| impl-csv  | tdd-guide     | explore             | exporter/csv.js    | 1           | fanout(impl) |
-| impl-html | tdd-guide     | explore             | renderer/html.js   | 1           | fanout(impl) |
+| plan      | planner       | explore             | —                  | 1           | sequence     |
+| impl-csv  | tdd-guide     | plan                | exporter/csv.js    | 1           | fanout(impl) |
+| impl-html | tdd-guide     | plan                | renderer/html.js   | 1           | fanout(impl) |
 | review    | code-reviewer | impl-csv, impl-html | —                  | 1           | sequence     |
-| finalize  | finalize      | review              | CHANGELOG.md       | 1           | sequence     |
+| docs      | doc-updater   | review              | docs/api.md        | 1           | sequence     |
+| finalize  | finalize      | review, docs        | CHANGELOG.md       | 1           | sequence     |
 ```
 
 Disjointness is checked at **top-level-directory** granularity, so fan-out siblings must live
 under different top-level directories.
+
+## Shaping guidance (recommendations, not gates)
+
+The validator enforces only the **walls** — the unique `finalize` sink, G1
+(`code-reviewer` post-dominates code-producing nodes), G2 (`security-reviewer` post-dominates
+sensitive nodes). Everything below is author judgment the grammar will **not** refuse;
+the example above models both.
+
+- **Plan before you build.** For a non-trivial implement, consider a `planner` (or
+  `code-architect`) **node** that precedes — and so dominates — the implement nodes (the
+  forward-reasoning roles). One `planner` above a fan-out's shared parent covers every leg
+  (not one per leg). Trivial or mechanical work can skip it, or use the fast path.
+- **Update the docs you changed.** When the change touches README / API docs /
+  architecture / a public interface, consider a `doc-updater` node before `finalize` — the
+  sink only does CHANGELOG / state bookkeeping.
 
 ## Validate + freeze
 

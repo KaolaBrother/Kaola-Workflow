@@ -82,11 +82,12 @@ field) so the validator can derive sensitivity.
 
 ## A complete example (`workflow-plan.md`)
 
-A minimal in-grammar plan to copy and adapt: `code-explorer` explores, two `tdd-guide`
-nodes implement in parallel over **disjoint top-level directories** (`exporter/` vs
-`renderer/`), `code-reviewer` post-dominates both, and the unique `finalize` sink closes
-the DAG. It validates in-grammar and freezes; because it is a write-role fan-out it routes
-to **ask** (surface for approval) — expected, not an error.
+A minimal in-grammar plan to copy and adapt: `code-explorer` explores, a `planner` node
+shapes and dominates the implements, two `tdd-guide` nodes implement in parallel over
+**disjoint top-level directories** (`exporter/` vs `renderer/`), `code-reviewer`
+post-dominates both, a `doc-updater` node updates the changed docs, and the unique
+`finalize` sink closes the DAG. It validates in-grammar and freezes; because it is a
+write-role fan-out it routes to **ask** (surface for approval) — expected, not an error.
 
 ```markdown
 # Workflow Plan — issue #142
@@ -99,25 +100,45 @@ labels: enhancement
 | id        | role          | depends_on          | declared_write_set | cardinality | shape        |
 |-----------|---------------|---------------------|--------------------|-------------|--------------|
 | explore   | code-explorer | —                   | —                  | 1           | sequence     |
-| impl-csv  | tdd-guide     | explore             | exporter/csv.js    | 1           | fanout(impl) |
-| impl-html | tdd-guide     | explore             | renderer/html.js   | 1           | fanout(impl) |
+| plan      | planner       | explore             | —                  | 1           | sequence     |
+| impl-csv  | tdd-guide     | plan                | exporter/csv.js    | 1           | fanout(impl) |
+| impl-html | tdd-guide     | plan                | renderer/html.js   | 1           | fanout(impl) |
 | review    | code-reviewer | impl-csv, impl-html | —                  | 1           | sequence     |
-| finalize  | finalize      | review              | CHANGELOG.md       | 1           | sequence     |
+| docs      | doc-updater   | review              | docs/api.md        | 1           | sequence     |
+| finalize  | finalize      | review, docs        | CHANGELOG.md       | 1           | sequence     |
 
 ## Node Ledger
 
 | id        | status  |
 |-----------|---------|
 | explore   | pending |
+| plan      | pending |
 | impl-csv  | pending |
 | impl-html | pending |
 | review    | pending |
+| docs      | pending |
 | finalize  | pending |
 ```
 
 Disjointness is checked at **top-level-directory** granularity (`exporter/` vs `renderer/`,
 not exact path), so fan-out siblings must live under different top-level directories. To turn
 a refusal into a fix, read the typed refusal and correct the plan — never clamp around the gate.
+
+## Shaping guidance (recommendations, not gates)
+
+The validator enforces only the **walls** — the unique `finalize` sink, G1
+(`code-reviewer` post-dominates every code-producing node), and G2 (`security-reviewer`
+post-dominates every sensitive node). Everything below is an author judgment call the
+grammar will **not** refuse; the example above models both.
+
+- **Plan before you build.** For a non-trivial implement, consider a `planner` (or
+  `code-architect`) **node** that precedes — and so dominates — the implement nodes:
+  these are the forward-reasoning roles. One `planner` upstream of a fan-out's shared
+  parent covers every leg (not one per leg). Trivial or mechanical work can skip it, or
+  use the fast path.
+- **Update the docs you changed.** When the change touches README / API docs /
+  architecture / a public interface, consider a `doc-updater` node before `finalize` —
+  the sink only does CHANGELOG / state bookkeeping, not the docs themselves.
 
 ## Authoring
 
