@@ -1,0 +1,195 @@
+#!/usr/bin/env node
+'use strict';
+
+// ---------------------------------------------------------------------------
+// kaola-workflow-commit-node.js (issue #242)
+//
+// Aggregator: per-node / whole-plan barrier entry point.
+// Composes the plan-validator subcommands into one auditable call — it SHELLS
+// the validator; it does NOT reimplement it.
+//
+// argv: node kaola-workflow-commit-node.js <plan-path> [--node-id <id>] [--start] --json
+//
+// Modes:
+//   --node-id ID --start   per-node-start: record-base only (idempotent)
+//   --node-id ID           per-node end:   barrier-check + gate-verify (informational)
+//   (no --node-id)         whole-plan:     barrier-check + gate-verify (both blocking)
+//
+// JSON output schema:
+//   { result:'ok'|'refuse', mode, nodeId:string|null,
+//     recordBase:object|null, barrierCheck:object|null, gateVerify:object|null,
+//     overallOk:boolean }
+//
+// Early-refuse (result:'refuse', exit 1, no shelling):
+//   --start without --node-id   → errors:['--start requires --node-id']
+//   --node-id present but empty → errors:['--node-id requires a value']
+// ---------------------------------------------------------------------------
+
+const path = require('path');
+const { execFileSync } = require('child_process');
+
+// The validator filename constant — the ONLY token that differs across forge ports.
+// Keep on its own clearly-named line so the port is a one-line edit.
+const VALIDATOR = 'kaola-workflow-plan-validator.js';
+
+// Resolve validator path relative to this script's own directory (so forge ports
+// under plugins/…/scripts/ find their forge-named sibling correctly).
+const validatorPath = path.join(__dirname, VALIDATOR);
+
+// ---------------------------------------------------------------------------
+// safeJsonParse — returns {} on any parse failure (fail-closed).
+// ---------------------------------------------------------------------------
+function safeJsonParse(str) {
+  try { return JSON.parse(str || ''); } catch (_) { return {}; }
+}
+
+// ---------------------------------------------------------------------------
+// shellValidator — thin seam that executes the validator via execFileSync and
+// returns { exitCode, ...parsedJson }. Exported so tests can point a stub validator.
+//
+// @param {string} vPath     absolute path to the validator script to shell
+// @param {string} planPath  path to the workflow-plan.md
+// @param {string[]} flags   extra CLI flags (e.g. ['--barrier-check', '--json'])
+// @returns {{ exitCode:number, [key:string]: any }}
+// ---------------------------------------------------------------------------
+function shellValidator(vPath, planPath, flags) {
+  let stdout;
+  try {
+    stdout = execFileSync('node', [vPath, planPath, ...flags], { encoding: 'utf8' });
+    return { exitCode: 0, ...safeJsonParse(stdout) };
+  } catch (err) {
+    // The validator writes valid JSON to stdout even on exit 1; read err.stdout.
+    const status = (err.status == null) ? 1 : err.status; // fail-closed on signal kill
+    return { exitCode: status, ...safeJsonParse(err.stdout) };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// combineResults — pure IO-free core.
+//
+// Inputs:
+//   steps: { recordBase, barrierCheck, gateVerify }
+//     each is { exitCode, ...parsedJson } | null
+//   opts:  { mode: 'per-node-start'|'per-node'|'whole-plan', nodeId?: string }
+//
+// Returns the complete JSON output object (caller writes it to stdout).
+// ---------------------------------------------------------------------------
+function combineResults(steps, opts) {
+  const mode = opts.mode;
+  const nodeId = opts.nodeId || null;
+  const { recordBase, barrierCheck, gateVerify } = steps;
+
+  let overallOk;
+  let gvOut = gateVerify;
+
+  if (mode === 'per-node-start') {
+    // Only record-base ran. overallOk = recordBase ok.
+    overallOk = !!(recordBase && recordBase.exitCode === 0 && recordBase.result === 'ok');
+    gvOut = null;
+  } else if (mode === 'per-node') {
+    // Barrier-check is blocking; gate-verify is INFORMATIONAL only (prevents deadlock:
+    // downstream reviewer is still pending when this node commits).
+    const barrierPass = !!(barrierCheck && barrierCheck.exitCode === 0 && barrierCheck.result === 'pass');
+    overallOk = barrierPass;
+    // Tag gate-verify as informational — do NOT include it in overallOk.
+    if (gateVerify != null) {
+      gvOut = { ...gateVerify, informational: true };
+    }
+  } else {
+    // whole-plan: both barrier-check AND gate-verify are blocking.
+    const barrierPass = !!(barrierCheck && barrierCheck.exitCode === 0 && barrierCheck.result === 'pass');
+    const gatePass = !!(gateVerify && gateVerify.exitCode === 0 && gateVerify.ok === true);
+    overallOk = barrierPass && gatePass;
+    // whole-plan gateVerify must NOT carry informational.
+    gvOut = gateVerify;
+  }
+
+  return {
+    result: overallOk ? 'ok' : 'refuse',
+    mode,
+    nodeId,
+    recordBase: mode === 'per-node-start' ? recordBase : null,
+    barrierCheck: mode !== 'per-node-start' ? barrierCheck : null,
+    gateVerify: gvOut,
+    overallOk,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// CLI — thin wrapper; all process I/O lives here.
+// ---------------------------------------------------------------------------
+function main() {
+  const args = process.argv.slice(2);
+  if (!args.length || args[0] === '--help' || args[0] === '-h') {
+    process.stdout.write(
+      'usage: kaola-workflow-commit-node.js <plan-path> [--node-id <id>] [--start] --json\n' +
+      '  --node-id ID --start  per-node-start: record-base only (idempotent)\n' +
+      '  --node-id ID          per-node end:   barrier-check + gate-verify (informational)\n' +
+      '  (no --node-id)        whole-plan:     barrier-check + gate-verify (both blocking)\n'
+    );
+    return;
+  }
+
+  const planPath = args[0];
+
+  // Parse --node-id value.
+  const nodeIdIdx = args.indexOf('--node-id');
+  const hasNodeIdFlag = nodeIdIdx >= 0;
+  const nodeIdValue = (hasNodeIdFlag && nodeIdIdx + 1 < args.length) ? args[nodeIdIdx + 1] : null;
+
+  const hasStart = args.includes('--start');
+
+  // Early-refuse: --start without --node-id
+  if (hasStart && !hasNodeIdFlag) {
+    const out = { result: 'refuse', mode: null, nodeId: null, recordBase: null, barrierCheck: null, gateVerify: null, overallOk: false, errors: ['--start requires --node-id'] };
+    process.stdout.write(JSON.stringify(out) + '\n');
+    process.exitCode = 1;
+    return;
+  }
+
+  // Early-refuse: --node-id flag present but value is missing or starts with '--'
+  if (hasNodeIdFlag && (!nodeIdValue || nodeIdValue.startsWith('--'))) {
+    const out = { result: 'refuse', mode: null, nodeId: null, recordBase: null, barrierCheck: null, gateVerify: null, overallOk: false, errors: ['--node-id requires a value'] };
+    process.stdout.write(JSON.stringify(out) + '\n');
+    process.exitCode = 1;
+    return;
+  }
+
+  // Determine mode.
+  let mode;
+  if (hasNodeIdFlag && hasStart) {
+    mode = 'per-node-start';
+  } else if (hasNodeIdFlag) {
+    mode = 'per-node';
+  } else {
+    mode = 'whole-plan';
+  }
+
+  let recordBase = null;
+  let barrierCheck = null;
+  let gateVerify = null;
+
+  if (mode === 'per-node-start') {
+    // Shell: --record-base --node-id ID --json
+    recordBase = shellValidator(validatorPath, planPath, ['--record-base', '--node-id', nodeIdValue, '--json']);
+  } else if (mode === 'per-node') {
+    // Shell: --barrier-check --node-id ID --json
+    barrierCheck = shellValidator(validatorPath, planPath, ['--barrier-check', '--node-id', nodeIdValue, '--json']);
+    // Shell: --gate-verify --json (informational only — do not short-circuit on failure)
+    gateVerify = shellValidator(validatorPath, planPath, ['--gate-verify', '--json']);
+  } else {
+    // whole-plan: shell --barrier-check --json then --gate-verify --json
+    barrierCheck = shellValidator(validatorPath, planPath, ['--barrier-check', '--json']);
+    gateVerify = shellValidator(validatorPath, planPath, ['--gate-verify', '--json']);
+  }
+
+  const out = combineResults({ recordBase, barrierCheck, gateVerify }, { mode, nodeId: nodeIdValue });
+  process.stdout.write(JSON.stringify(out) + '\n');
+  process.exitCode = out.overallOk ? 0 : 1;
+}
+
+if (require.main === module) {
+  main();
+}
+
+module.exports = { combineResults, shellValidator };

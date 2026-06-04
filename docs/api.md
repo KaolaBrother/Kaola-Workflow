@@ -238,6 +238,140 @@ kaola-workflow-plan-validator.js <workflow-plan.md> [--json] [--freeze] [--resum
 
 **Authoring-entry guard (`kaola-workflow-claim.js authoring-allowed`, issue #235):** the only switch-reading guard besides `claimProject` selection. `/kaola-workflow-adapt` runs `node kaola-workflow-claim.js authoring-allowed --project <p>` BEFORE authoring/freezing a plan; it returns `{ "status": "authoring_allowed", "allowed": true }` when the `enable_adaptive` switch is ON, else a typed `{ "status": "authoring_refused", "allowed": false, "reasoning": "...OFF...#44" }` (exit 0; the caller branches on `status`). The validator stays toggle-agnostic — the switch is read only here and in `claimProject`.
 
+## Adaptive Executor Aggregators (issue #242 Part B Stage A)
+
+These two scripts form the atomicity interface for the adaptive executor. They are additive (Stage A) — not yet wired into any command or skill. Both ship in all four editions (canonical `scripts/`, Codex copy, and forge-named GitLab/Gitea ports); all are registered in `validate-script-sync.js` and the three `install.sh` SUPPORT_SCRIPT_NAMES blocks.
+
+### Script: `kaola-workflow-next-action.js`
+
+Computes the ready-set, next node, and resolved model for the adaptive executor from a frozen `workflow-plan.md`. Implemented over the plan-validator's exported `parseNodes`/`parseLedger` (no reimplementation); model resolution via `resolveAgentModel`.
+
+**Usage:**
+
+```bash
+node scripts/kaola-workflow-next-action.js <plan-path> --json
+```
+
+**Behavior:**
+
+- Parses `## Nodes` and `## Node Ledger` from the plan file.
+- Validates every ledger status present is in the `LEDGER_STATUSES` enum; absent nodes default to `pending`.
+- Computes the ready-set in document order: a node is ready iff its own status is not in `{complete, n/a}` and every `depends_on` entry has status in `{complete, n/a}` (n/a-aware predicate).
+- `allDone:true` (empty ready-set, all nodes terminal) is the Phase-6 handoff signal — `result:'ok'`, exit 0.
+- Empty ready-set while at least one node is non-terminal = stalled DAG — `result:'refuse'`, exit 1.
+- Always emits JSON to stdout. The `--json` flag is conventional (matches usage text) but output is always JSON.
+
+**Exit codes:**
+
+- `0` — `result:'ok'` (ready-set computed, or `allDone:true`).
+- `1` — `result:'refuse'` (unreadable plan, no parseable `## Nodes`, out-of-enum ledger status, or stalled DAG).
+
+**JSON result shapes:**
+
+- Success:
+  ```json
+  {
+    "result": "ok",
+    "readySet": [
+      {
+        "id": "node-id",
+        "role": "code-writer",
+        "dependsOn": ["prev-node"],
+        "model": "claude-sonnet-4-5",
+        "declared_write_set": "scripts/foo.js",
+        "shape": "sequence"
+      }
+    ],
+    "nextNode": { "id": "node-id", "role": "code-writer", "dependsOn": [...], "model": "...", "declared_write_set": "...", "shape": "..." },
+    "allDone": false
+  }
+  ```
+  When all nodes are terminal: `readySet:[]`, `nextNode:null`, `allDone:true`.
+
+- Refuse:
+  ```json
+  { "result": "refuse", "errors": ["cannot read plan: <path>"] }
+  ```
+  Other refuse messages: `"plan has no parseable ## Nodes table"`, `"node <id> has out-of-enum ledger status \"<st>\""`, `"plan is stalled: no ready nodes and not all nodes are terminal (deadlock or corrupt ledger)"`.
+
+**`readySet` item fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Node ID from `## Nodes` table |
+| `role` | string | Role name (e.g. `code-writer`) |
+| `dependsOn` | string[] | Upstream node IDs |
+| `model` | string | Resolved model string via `resolveAgentModel` |
+| `declared_write_set` | string | Raw write-set text from the node row |
+| `shape` | string | Node shape kind (`sequence`, `fanout`, or `loop`) |
+
+---
+
+### Script: `kaola-workflow-commit-node.js`
+
+Composes per-node and whole-plan barrier choreography into one auditable call by shelling the plan-validator subcommands. Does **not** mutate the ledger or `workflow-state.md`.
+
+**Usage:**
+
+```bash
+# Per-node start — record baseline (idempotent)
+node scripts/kaola-workflow-commit-node.js <plan-path> --node-id <id> --start --json
+
+# Per-node end — barrier-check (blocking) + gate-verify (informational)
+node scripts/kaola-workflow-commit-node.js <plan-path> --node-id <id> --json
+
+# Whole-plan — barrier-check + gate-verify (both blocking, Phase-6 merge gate)
+node scripts/kaola-workflow-commit-node.js <plan-path> --json
+```
+
+**Modes:**
+
+| Flags | Mode | What runs | `overallOk` depends on |
+|-------|------|-----------|------------------------|
+| `--node-id ID --start` | `per-node-start` | `--record-base` only (idempotent) | record-base `result:'ok'` |
+| `--node-id ID` | `per-node` | `--barrier-check --node-id ID` (blocking) + `--gate-verify` (informational) | barrier pass only |
+| *(no `--node-id`)* | `whole-plan` | `--barrier-check` (blocking) + `--gate-verify` (blocking) | barrier pass AND gate-verify ok |
+
+**Safety invariants:**
+
+- Record-base runs only at node START. Running it at end-time would equal the post-write tree and neuter the barrier.
+- Fails closed: a missing per-node baseline causes the validator to refuse, never a fabricated pass.
+- Per-node gate-verify is informational (`informational:true` on the field), excluded from `overallOk`, because the downstream reviewer is still pending when a node commits. Whole-plan gate-verify is blocking.
+
+**Exit codes:**
+
+- `0` — `overallOk:true`.
+- `1` — `overallOk:false`, or early-refuse on invalid flags.
+
+**JSON output schema:**
+
+```json
+{
+  "result": "ok" | "refuse",
+  "mode": "per-node-start" | "per-node" | "whole-plan" | null,
+  "nodeId": "string" | null,
+  "recordBase": { "exitCode": 0, "result": "ok", "nodeId": "...", "base": "<tree-sha>" } | null,
+  "barrierCheck": { "exitCode": 0, "result": "pass", "errors": [], "sensitiveHits": [], "outOfAllow": [] } | null,
+  "gateVerify": { "exitCode": 0, "ok": true, "unsatisfied": [] } | null,
+  "overallOk": true | false
+}
+```
+
+- `recordBase` is populated only in `per-node-start` mode; `null` otherwise.
+- `barrierCheck` is populated in `per-node` and `whole-plan` modes; `null` in `per-node-start`.
+- `gateVerify` is populated in `per-node` mode (tagged `informational:true`) and `whole-plan` mode; `null` in `per-node-start`.
+- In per-node mode, `gateVerify` carries `"informational": true` — this field signals the caller not to gate on the result.
+- Early-refuse shapes (invalid flags, no shelling occurs):
+  ```json
+  {
+    "result": "refuse", "mode": null, "nodeId": null,
+    "recordBase": null, "barrierCheck": null, "gateVerify": null,
+    "overallOk": false,
+    "errors": ["--start requires --node-id"]
+  }
+  ```
+  Also: `"errors": ["--node-id requires a value"]` when `--node-id` flag is present but value is missing or starts with `--`.
+
 ## Module Exports — Public API Functions
 
 The following functions are exported from sink and claim modules for use by test suites and advanced integrations:

@@ -43,6 +43,28 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   the nine canonical roles are **inherited unchanged** — only small adaptive-aware
   touches are added. The switch gates selection only; resume is toggle-agnostic.
 
+  **Atomicity layer (issue #242 Part B Stage A — additive, not yet wired into any command).**
+  Two aggregator scripts form the atomicity interface the executor and Phase-6 will call:
+  `kaola-workflow-next-action.js` reads a frozen `workflow-plan.md` and computes the
+  ready-set (nodes whose dependencies are all `complete`/`n/a` and whose own status is
+  non-terminal), the `nextNode` (first ready node), and the resolved model for each
+  candidate, via the validator's exported `parseNodes`/`parseLedger` (no reimplementation);
+  model resolution delegates to `resolveAgentModel` (a separate module). An empty ready-set with all nodes terminal is the Phase-6
+  handoff signal (`allDone:true`); an empty ready-set with non-terminal nodes remaining
+  is a stalled DAG, and results in a typed refusal.
+  `kaola-workflow-commit-node.js` composes the plan-validator barrier subcommands into
+  one auditable call by shelling the validator: at node START it runs `--record-base`
+  (idempotent, capturing the full-worktree snapshot so the barrier has a clean baseline);
+  at node END it runs `--barrier-check` (blocking) and `--gate-verify` (informational
+  only at the per-node level, because the downstream reviewer is still pending); at
+  whole-plan (Phase-6 merge gate) both checks are blocking. The split between next-action
+  and commit-node mirrors the executor's own dispatch/commit cycle: next-action resolves
+  *what* to run next; commit-node proves *what was written* was in bounds.
+  Both scripts ship in all four editions (canonical `scripts/` + Codex copy in
+  `plugins/kaola-workflow/scripts/`, plus GitLab and Gitea forge-named ports); all are
+  registered in `validate-script-sync.js` COMMON_SCRIPTS and the three `install.sh`
+  SUPPORT_SCRIPT_NAMES blocks.
+
   **Enforcement boundary (script-enforced, #231).** The validator enforces gate
   *presence* statically at freeze: post-dominance proves a `code-reviewer` sits on
   every path from each code-producing node to the unique sink, and a `security-reviewer`

@@ -1,5 +1,31 @@
 # Changelog
 
+## [Unreleased]
+
+### Part B Stage A — adaptive-executor aggregator scripts (#242)
+
+Two new aggregator scripts for the adaptive executor (atomicity layer; **additive** — not yet
+wired into any command/skill, that lands in a later stage):
+
+- **`kaola-workflow-next-action.js`** (`--json`): computes the ready-set / next node / resolved
+  model from a frozen `workflow-plan.md`. Readiness is **n/a-aware** (a skipped `n/a` dependency
+  satisfies its descendants); `allDone` is the Phase-6 handoff signal; a stalled/corrupt DAG or
+  out-of-enum ledger status is a typed refusal. Built over the validator's exported
+  `parseNodes`/`parseLedger` (no reimplementation); model via `resolveAgentModel`.
+- **`kaola-workflow-commit-node.js`** (`--json`): composes the per-node / whole-plan barrier
+  choreography (`--record-base` → `--barrier-check` + `--gate-verify`) into one auditable call.
+  Record-base runs **only at node START** (an end-time baseline would neuter the barrier);
+  per-node `--gate-verify` is **informational** (excluded from `overallOk`, since a node's
+  downstream reviewer is still pending at its own commit); whole-plan gate-verify is **blocking**;
+  fails closed on a missing baseline. Never mutates the ledger or `workflow-state.md`.
+- Ships in all four editions — canonical + byte-identical github-Codex copy + gitlab/gitea
+  one-line-divergence (forge-named plan-validator) ports; registered in `validate-script-sync.js`
+  `COMMON_SCRIPTS` and the three `install.sh` `SUPPORT_SCRIPT_NAMES` blocks; covered by
+  `test-next-action.js` / `test-commit-node.js` (added to the test chain).
+- Follow-up (Stage C): a git-backed integration test pinning the live validator's success tokens.
+- Authored + executed via the adaptive workflow path (frozen 8-node `workflow-plan.md`). **No
+  version bump** — Part B accumulates toward a single release.
+
 ## [4.0.0] — 2026-06-04
 
 ### Install-time, profile-aware subagent model resolution + lean-orchestrator Part B plan (#242)

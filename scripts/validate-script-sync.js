@@ -50,6 +50,9 @@ const COMMON_SCRIPTS = [
   // issue #227: the adaptive-path plan validator. Byte-identical Claude<->Codex
   // (it require()s the forge-specific classifier, so GitLab/Gitea carry renamed ports).
   'kaola-workflow-plan-validator.js',
+  // #242 Part B Stage A: adaptive aggregator scripts (next-action, commit-node)
+  'kaola-workflow-next-action.js',
+  'kaola-workflow-commit-node.js',
 ];
 
 const BYTE_IDENTICAL_GROUPS = [
