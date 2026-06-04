@@ -75,6 +75,8 @@ X/10
 | docs-lookup | invoked/N/A | .cache/docs-lookup.md or docs-impact check | reason if N/A |
 ```
 
+The deterministic bookkeeping below — the `workflow-state.md` checkpoint write (preserving the `## Sink` block) and the per-issue roadmap `init-issue` creation/staging — is delegated to the mechanical `contractor` Codex agent role when that subagent is available; it runs the scripts and authors the durable bookkeeping but never authors the `phase1-research.md` synthesis, never invokes code-explorer/docs-lookup, and never judges. The current session keeps requirement parsing, the research dispatches, the completeness gate, the `phase1-research.md` synthesis, and the branch decision.
+
 8. If a Gitea issue is linked, run `init-issue` to create the roadmap tracking file:
 
 ```bash

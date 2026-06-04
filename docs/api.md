@@ -374,7 +374,12 @@ node scripts/kaola-workflow-commit-node.js <plan-path> --json
 
 ## Contractor Agent (issue #242 Part B, wired in Stage C)
 
-The `contractor` is a mechanical Sonnet agent registered across all four editions. It is the bookkeeper half of the lean-orchestrator design. As of Stage C it is dispatched by `kaola-workflow-phase6`: Opus delegates the mechanical finalization block (Step 8a artifact mirror, `cmdFinalize` archive, roadmap regen, the `chore: finalize` commit gate) to the contractor, then resumes at Step 9 (the sink: merge/PR), the issue-close decision, and all governance. The per-node executor loop does **not** go through the contractor — see § Adaptive Executor Aggregators above.
+The `contractor` is a mechanical Sonnet agent registered across all four editions. It is the bookkeeper half of the lean-orchestrator design. As of Stage D (issue #242 Part B complete) the contractor is dispatched at **both** fuzzy/bulky seams:
+
+- **Phase 6** (Stage C): Opus delegates the mechanical finalization block (Step 8a artifact mirror, `cmdFinalize` archive, roadmap regen, the `chore: finalize` commit gate) to the contractor, then resumes at Step 9 (the sink: merge/PR), the issue-close decision, and all governance.
+- **Phase 1 / research** (Stage D): `kaola-workflow-phase1` (the research/scout phase) delegates its deterministic mechanical bookkeeping — the `workflow-state.md` checkpoint write (preserving the `## Sink` block byte-for-byte) and the per-issue roadmap `init-issue` staging — to the contractor. Opus retains the research dispatches (code-explorer/docs-lookup), the completeness gate, the **`phase1-research.md` synthesis** (interpretation of findings — the contractor never authors this), and the Step 6 branch cut (git mutation).
+
+The per-node executor loop does **not** go through the contractor — see § Adaptive Executor Aggregators above.
 
 ### Role
 

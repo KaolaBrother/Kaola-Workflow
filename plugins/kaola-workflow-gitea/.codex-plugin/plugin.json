@@ -1,6 +1,6 @@
 {
   "name": "kaola-workflow-gitea",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Gitea edition of Kaola-Workflow for Codex, using Gitea issues, pull requests, tea, and repo-backed workflow artifacts.",
   "author": {
     "name": "KaolaBrother",

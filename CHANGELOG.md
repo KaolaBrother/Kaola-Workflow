@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [4.1.0] — 2026-06-04
 
 ### Part B Stage A — adaptive-executor aggregator scripts (#242)
 
@@ -71,6 +71,39 @@ reinstall):
   choreography.** All contract-pinned sink strings preserved; 4-edition contract validators + walkthrough
   green. Authored + executed via the adaptive path (frozen 6-node plan, G1 code-reviewed). **No version
   bump** — accumulates toward the single Part B release.
+
+### Part B Stage C3 — phase1 contractor offload (#242)
+
+The lean-orchestrator wiring is **complete** — the contractor is now dispatched at **both** fuzzy/bulky
+seams (phase1 + phase6):
+
+- **`kaola-workflow-phase1` (research/scout) offloads its mechanical bookkeeping to the contractor** —
+  the `workflow-state.md` checkpoint write (preserving the `## Sink` block byte-for-byte) + the per-issue
+  roadmap `init-issue` staging — mirroring the phase6 offload. The main session (Opus) keeps the research
+  dispatches (code-explorer/docs-lookup), the completeness gate, the **`phase1-research.md` synthesis**
+  (interpretation of findings — never the contractor's), and the Step 6 branch cut (git mutation).
+- Mirrored across the 3 phase1 commands (real `model="{CONTRACTOR_MODEL}"` dispatch) + 3 research skills
+  (prose delegation). Authored + executed via the adaptive path (frozen 7-node plan, G1 code-reviewed).
+- **Note:** C4 (aggregator-direct bracketing of phases 2–5) was evaluated and **dropped** — phases 2–5 are
+  the full (phaseN) path and never touch the adaptive aggregator barrier, so there was nothing to wrap.
+
+### Part B — lean-orchestrator: aggregators + contractor + wired seams (#242)
+
+**Summary of the single Part B release** (Stages A–C3, authored + executed across four sequenced adaptive
+runs, each G1 code-reviewed; Stage B additionally security-reviewed). Part B adds a cost-aware
+"lean orchestrator": mechanical script-running + durable bookkeeping move to a cheaper Sonnet
+**contractor**, while the main Opus session keeps judgment, dispatch, synthesis, and the sink/close.
+
+- **Aggregator scripts** (`kaola-workflow-next-action.js` + `kaola-workflow-commit-node.js`, all 4 editions)
+  encapsulate the adaptive per-node barrier choreography.
+- **`contractor` agent** (Sonnet, mechanical) registered in all four editions' agent systems; stays sonnet
+  under `--profile=higher`; never dispatches a role, judges, or asks the user.
+- **Wired seams:** the adaptive executor loop is aggregator-direct; phase6 + phase1 offload their mechanical
+  blocks to the contractor (the main session keeps the sink/close + research synthesis).
+- **Versions:** Claude/main `4.0.0 → 4.1.0`; the independent Codex packs `2.0.0 → 2.1.0`. Tag
+  `kaola-workflow--v4.1.0`.
+
+(See the per-stage entries above for detail.)
 
 ## [4.0.0] — 2026-06-04
 
