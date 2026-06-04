@@ -1,5 +1,28 @@
 # Changelog
 
+## [3.23.0] — 2026-06-04
+
+### Adaptive authoring — recommend (not mandate) plan-before-implement and docs-before-finalize (#241)
+
+The adaptive authoring surfaces now carry a short **"Shaping guidance (recommendations, not
+gates)"** section, and the canonical copy-paste example models the recommended shape. The
+adaptive grammar is **unchanged** — no new gate; the validator refuses nothing new. These are
+author judgment calls, surfaced because a real run (and the prior example) modelled a
+plan-less, docs-less shape.
+
+- **Plan before you build.** Authors are nudged to consider a `planner`/`code-architect` node
+  that dominates the implement nodes for non-trivial work (the forward-reasoning roles; one
+  `planner` upstream of a fan-out's shared parent covers every leg, not one per leg).
+  Trivial/mechanical work can skip it or use the fast path.
+- **Update the docs you changed.** Authors are nudged to consider a `doc-updater` node before
+  `finalize` when the change touches README / API docs / architecture / a public interface,
+  since the sink only does CHANGELOG / state bookkeeping.
+- The canonical example is refreshed to a 7-node shape (`explore → planner → tdd-guide ×2 →
+  code-reviewer → doc-updater → finalize`) and stays in-grammar (write-role fan-out → ask).
+- Ships across **all four editions** (Claude / Codex / GitLab / Gitea); the guidance block and
+  refreshed example are byte-identical across the three command mirrors. The Claude command
+  packs ride `3.23.0`; the three Codex packs bump to `1.14.0`. No script/validator code changed.
+
 ## [3.22.0] — 2026-06-04
 
 ### Roadmap generator — optional project-local `.roadmap/_rules.md` (#240)
