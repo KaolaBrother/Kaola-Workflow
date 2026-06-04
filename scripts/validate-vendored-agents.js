@@ -24,6 +24,7 @@ const vendoredAgents = [
 // They still must be valid managed agents (front matter at byte 0, name, model, marker).
 const localAgents = [
   'adversarial-verifier',
+  'contractor',
 ];
 const allAgents = [...vendoredAgents, ...localAgents];
 

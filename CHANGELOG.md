@@ -26,6 +26,27 @@ wired into any command/skill, that lands in a later stage):
 - Authored + executed via the adaptive workflow path (frozen 8-node `workflow-plan.md`). **No
   version bump** — Part B accumulates toward a single release.
 
+### Part B Stage B — `contractor` agent registered across all four editions (#242)
+
+A new mechanical, **Sonnet** subagent `contractor` for the lean-orchestrator — registered in
+every edition's agent system (**additive**: nothing dispatches it yet; the seam wiring lands in
+a later stage):
+
+- **Role:** runs the workflow scripts, parses subagent prose + `.cache` evidence, and authors the
+  durable bookkeeping (ledger rows / phase files / roadmap mirror / archive), returning a compact
+  summary. The Opus orchestrator keeps all judgment; the contractor owns faithful transcription.
+- **Hard boundary (#44):** never dispatches a role, never judges / assesses risk / asks the user,
+  never acts as a gate. Stays **sonnet** even under `--profile=higher` (no `profiles/higher/contractor.md`
+  by design); the install manifest emits `contractor: sonnet` for both profiles.
+- **All four editions:** Claude `agents/contractor.md` (tools `Read/Write/Edit/Bash/Grep/Glob`,
+  provenance-exempt local agent); byte-identical Codex `.toml` profile (`model_reasoning_effort = "low"`)
+  + `[agents.contractor]` block in `plugins/kaola-workflow{,-gitlab,-gitea}/config/agents.toml`;
+  `install.sh`/`uninstall.sh` REQUIRED_AGENTS + `CONTRACTOR_MODEL` placeholder; resolver
+  `DEFAULT_AGENT_MODELS` (×4 byte-identical); forge agent-profile count bumped 10→11 in the gitlab/gitea
+  contract validators and test suites.
+- Authored + executed via the adaptive workflow path (frozen 10-node `workflow-plan.md`, G1
+  code-reviewed + security-reviewed). **No version bump** — Part B accumulates toward a single release.
+
 ## [4.0.0] — 2026-06-04
 
 ### Install-time, profile-aware subagent model resolution + lean-orchestrator Part B plan (#242)

@@ -136,7 +136,7 @@ assertNotIncludes(pluginRoot + '/hooks/hooks.json', 'subagentStatusLine');
 assertNotIncludes(pluginRoot + '/hooks/hooks.json', 'kaola-workflow-subagent-statusline.js');
 assert(hookFiles.some(file => file.endsWith('kaola-workflow-pre-commit.sh')), 'GitLab pre-commit hook missing');
 assert(hookFiles.some(file => file.endsWith('kaola-workflow-phantom-advisor.sh')), 'GitLab advisor hook missing');
-assert(agentFiles.length === 10, 'expected 10 GitLab agent profiles');
+assert(agentFiles.length === 11, 'expected 11 GitLab agent profiles');
 assert(exists(pluginRoot + '/config/agents.toml'), 'GitLab agents config missing');
 
 for (const file of [...commandFiles, ...skillFiles, ...hookFiles, ...agentFiles, pluginRoot + '/config/agents.toml']) {

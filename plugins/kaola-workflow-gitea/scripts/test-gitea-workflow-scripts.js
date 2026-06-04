@@ -1991,8 +1991,8 @@ function testInstallProfilesFeaturesTableHandling() {
     assert.ok(freshConfig.includes('# BEGIN kaola-workflow agents'), 'fresh install should include managed block');
     assert.strictEqual(
       fs.readdirSync(path.join(fresh, '.codex', 'agents', 'kaola-workflow')).length,
-      10,
-      'should install 10 agent TOML files'
+      11,
+      'should install 11 agent TOML files'
     );
 
     const existingCodexDir = path.join(existing, '.codex');

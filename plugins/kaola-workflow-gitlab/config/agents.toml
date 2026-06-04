@@ -50,3 +50,8 @@ nickname_candidates = ["Docs", "Docking", "Writer"]
 description = "Kaola-Workflow for Codex adaptive-path falsifier: tries to disprove a recorded claim (refute-if-uncertain); read-only, never a gate."
 config_file = "./agents/kaola-workflow/adversarial-verifier.toml"
 nickname_candidates = ["Adversary", "Refuter", "Breaker"]
+
+[agents.contractor]
+description = "Kaola-Workflow for Codex lean-orchestrator bookkeeper: mechanically runs scripts and transcribes evidence into durable state; never dispatches a role and never judges."
+config_file = "./agents/kaola-workflow/contractor.toml"
+nickname_candidates = ["Contractor", "Bookkeeper", "Scribe"]

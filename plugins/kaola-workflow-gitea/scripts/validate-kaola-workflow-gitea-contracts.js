@@ -135,7 +135,7 @@ assertNotIncludes(pluginRoot + '/hooks/hooks.json', 'subagentStatusLine');
 assertNotIncludes(pluginRoot + '/hooks/hooks.json', 'kaola-workflow-subagent-statusline.js');
 assert(hookFiles.some(file => file.endsWith('kaola-workflow-pre-commit.sh')), 'Gitea pre-commit hook missing');
 assert(hookFiles.some(file => file.endsWith('kaola-workflow-phantom-advisor.sh')), 'Gitea advisor hook missing');
-assert(agentFiles.length === 10, 'expected 10 Gitea agent profiles, got ' + agentFiles.length);
+assert(agentFiles.length === 11, 'expected 11 Gitea agent profiles, got ' + agentFiles.length);
 assert(exists(pluginRoot + '/config/agents.toml'), 'Gitea agents config missing');
 
 for (const file of [...commandFiles, ...skillFiles, ...hookFiles, ...agentFiles, pluginRoot + '/config/agents.toml']) {

@@ -372,6 +372,42 @@ node scripts/kaola-workflow-commit-node.js <plan-path> --json
   ```
   Also: `"errors": ["--node-id requires a value"]` when `--node-id` flag is present but value is missing or starts with `--`.
 
+## Contractor Agent (issue #242 Part B Stage B)
+
+The `contractor` is a mechanical Sonnet agent registered across all four editions. It is the bookkeeper half of the lean-orchestrator design. This section documents its contract as a registered agent. It is **not yet dispatched by any command** — Stage C wires the dispatch seam.
+
+### Role
+
+The contractor runs the workflow scripts, parses subagent prose and `.cache` evidence that the Opus orchestrator hands it, and **authors the durable bookkeeping**: ledger rows, phase files, the roadmap mirror, and the archive. It returns a compact summary. It is deterministic plumbing, not a decision-maker.
+
+### Hard boundary — never dispatch, never judge, never gate
+
+This boundary is the reason the contractor exists as a separate Sonnet role (issue #44: the agent owns reasoning; scripts own atomicity):
+
+- **Never dispatches a role.** Choosing which subagent runs next is the orchestrator's decision. The contractor does not spawn, fan out, or route.
+- **Never judges, assesses risk, or grades.** The contractor does not decide whether a change is correct, complete, or regression-free. It does not assess severity.
+- **Never acts as a gate.** The contractor does not halt a plan, ask the user a question, or surface a risk escalation. Those are orchestrator responsibilities.
+
+### Model
+
+`sonnet` — stays Sonnet even under `--profile=higher`. There is deliberately no `profiles/higher/contractor.md`. Mechanical transcription cannot be judgment-upgraded by installing a higher profile; only judgment roles benefit from Opus. The install-time manifest emits `contractor: sonnet`. See the Agent model manifest subsection under Configuration for the manifest format.
+
+### Tools
+
+`Read, Write, Edit, Bash, Grep, Glob` — Write and Edit author the durable bookkeeping files; Bash runs the workflow scripts.
+
+### Registration (all four editions)
+
+The contractor is registered in all four editions identically:
+
+- **`agents/contractor.md`** — canonical Claude Code agent file (`model: sonnet`, `locally-authored: true`; provenance-exempt in `validate-vendored-agents.js` `localAgents` because it is not vendored upstream).
+- **`install.sh`** — listed in `REQUIRED_AGENTS`; `default_agent_model` entry maps to sonnet; `model_for_placeholder` maps to `CONTRACTOR_MODEL`; `render_command_file` emits the model placeholder.
+- **`uninstall.sh`** — listed in `REQUIRED_AGENTS` for clean removal.
+- **`kaola-workflow-resolve-agent-model.js`** — `DEFAULT_AGENT_MODELS` includes `contractor: 'sonnet'`; four byte-identical copies (canonical `scripts/` + Codex + GitLab + Gitea plugins).
+- **Codex `.toml` agent profile** — `agents/contractor.toml` (three byte-identical copies across the Codex, GitLab, and Gitea plugin editions; Claude uses `agents/contractor.md`) with `model_reasoning_effort = "low"`. Per-edition `config/agents.toml` also carries a `[agents.contractor]` block (three byte-identical copies across all Codex editions).
+
+---
+
 ## Module Exports — Public API Functions
 
 The following functions are exported from sink and claim modules for use by test suites and advanced integrations:

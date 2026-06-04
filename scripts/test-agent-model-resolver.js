@@ -86,4 +86,23 @@ try {
   fs.rmSync(tmpBadManifest, { recursive: true, force: true });
 }
 
+// CONTRACTOR CASE 1: no manifest, no agent file → DEFAULT fallback must return 'sonnet'
+const tmpContractorDefault = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-agent-model-contractor-'));
+try {
+  // empty dir — no manifest, no agent file
+  assert.strictEqual(resolver.resolveAgentModel('contractor', { agentDir: tmpContractorDefault }), 'sonnet');
+} finally {
+  fs.rmSync(tmpContractorDefault, { recursive: true, force: true });
+}
+
+// CONTRACTOR CASE 2: manifest maps contractor: 'sonnet', agent file has inherit → manifest wins
+const tmpContractorManifest = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-agent-model-contractor-mf-'));
+try {
+  writeManifest(tmpContractorManifest, { contractor: 'sonnet' });
+  writeAgent(tmpContractorManifest, 'contractor', 'inherit');
+  assert.strictEqual(resolver.resolveAgentModel('contractor', { agentDir: tmpContractorManifest }), 'sonnet');
+} finally {
+  fs.rmSync(tmpContractorManifest, { recursive: true, force: true });
+}
+
 console.log('Agent model resolver tests passed');

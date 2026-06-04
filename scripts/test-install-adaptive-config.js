@@ -79,6 +79,17 @@ try {
     execFileSync('bash', ['uninstall.sh', '--forge=github'],
       { cwd: root, env: { ...process.env, HOME: home }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
     assert(!fs.existsSync(manifestPath), 'uninstall.sh must remove .kaola-agent-models.json');
+    assert(!fs.existsSync(path.join(home, '.claude', 'agents', 'contractor.md')), 'uninstall.sh must remove contractor.md');
+  }
+
+  // issue #242 Part B: contractor agent manifest assertions.
+  // contractor must map to sonnet in both default (higher) and --profile=higher installs.
+  for (const args of [[], ['--profile=higher']]) {
+    const h = freshHome('contractor-' + (args[0] || 'default').replace(/[^a-z]/gi,'')); homes.push(h);
+    runInstall(h, args);
+    const manifestPath = path.join(h, '.claude', 'agents', '.kaola-agent-models.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    assert(manifest['contractor'] === 'sonnet', 'install ' + JSON.stringify(args) + ' must map contractor→sonnet; got ' + manifest['contractor']);
   }
 
   console.log('Install adaptive-config tests passed');

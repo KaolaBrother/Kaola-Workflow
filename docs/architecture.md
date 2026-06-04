@@ -43,6 +43,8 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   the nine canonical roles are **inherited unchanged** — only small adaptive-aware
   touches are added. The switch gates selection only; resume is toggle-agnostic.
 
+  **Lean-orchestrator boundary (issue #242 Part B Stage B — additive registration only; not yet dispatched, Stage C wires the seams).** The lean-orchestrator design keeps the main Opus orchestrator's context lean by dividing responsibility along a strict judgment vs. mechanical line. The Opus orchestrator owns all judgment: which role runs next, whether work is correct, risk assessment, gating decisions, and any user-facing question (#44: the agent owns reasoning). A separate mechanical **contractor** agent owns everything else: running the workflow scripts, parsing subagent prose and `.cache` evidence, and faithfully authoring the durable bookkeeping (ledger rows, phase files, roadmap mirror, archive), then returning a compact summary. The contractor is Sonnet and stays Sonnet even under `--profile=higher` (mechanical transcription cannot be judgment-upgraded by installing a higher profile; there is deliberately no `profiles/higher/contractor.md`). The contractor is registered in all four editions but not yet dispatched by any command — Stage C wires the seams. See `docs/api.md` § Contractor Agent for the tools list and all-edition registration details.
+
   **Atomicity layer (issue #242 Part B Stage A — additive, not yet wired into any command).**
   Two aggregator scripts form the atomicity interface the executor and Phase-6 will call:
   `kaola-workflow-next-action.js` reads a frozen `workflow-plan.md` and computes the
