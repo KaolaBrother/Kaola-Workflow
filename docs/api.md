@@ -238,9 +238,9 @@ kaola-workflow-plan-validator.js <workflow-plan.md> [--json] [--freeze] [--resum
 
 **Authoring-entry guard (`kaola-workflow-claim.js authoring-allowed`, issue #235):** the only switch-reading guard besides `claimProject` selection. `/kaola-workflow-adapt` runs `node kaola-workflow-claim.js authoring-allowed --project <p>` BEFORE authoring/freezing a plan; it returns `{ "status": "authoring_allowed", "allowed": true }` when the `enable_adaptive` switch is ON, else a typed `{ "status": "authoring_refused", "allowed": false, "reasoning": "...OFF...#44" }` (exit 0; the caller branches on `status`). The validator stays toggle-agnostic — the switch is read only here and in `claimProject`.
 
-## Adaptive Executor Aggregators (issue #242 Part B Stage A)
+## Adaptive Executor Aggregators (issue #242 Part B, wired in Stage C)
 
-These two scripts form the atomicity interface for the adaptive executor. They are additive (Stage A) — not yet wired into any command or skill. Both ship in all four editions (canonical `scripts/`, Codex copy, and forge-named GitLab/Gitea ports); all are registered in `validate-script-sync.js` and the three `install.sh` SUPPORT_SCRIPT_NAMES blocks.
+These two scripts form the atomicity interface for the adaptive executor. They are now wired: `kaola-workflow-plan-run` calls them directly from the Opus main session on every node iteration (C1), and the Phase-6 whole-plan gate calls `kaola-workflow-commit-node.js` (no `--node-id`) as the final barrier before the contractor dispatch (C2). Both ship in all four editions (canonical `scripts/`, Codex copy, and forge-named GitLab/Gitea ports); all are registered in `validate-script-sync.js` and the three `install.sh` SUPPORT_SCRIPT_NAMES blocks.
 
 ### Script: `kaola-workflow-next-action.js`
 
@@ -372,9 +372,9 @@ node scripts/kaola-workflow-commit-node.js <plan-path> --json
   ```
   Also: `"errors": ["--node-id requires a value"]` when `--node-id` flag is present but value is missing or starts with `--`.
 
-## Contractor Agent (issue #242 Part B Stage B)
+## Contractor Agent (issue #242 Part B, wired in Stage C)
 
-The `contractor` is a mechanical Sonnet agent registered across all four editions. It is the bookkeeper half of the lean-orchestrator design. This section documents its contract as a registered agent. It is **not yet dispatched by any command** — Stage C wires the dispatch seam.
+The `contractor` is a mechanical Sonnet agent registered across all four editions. It is the bookkeeper half of the lean-orchestrator design. As of Stage C it is dispatched by `kaola-workflow-phase6`: Opus delegates the mechanical finalization block (Step 8a artifact mirror, `cmdFinalize` archive, roadmap regen, the `chore: finalize` commit gate) to the contractor, then resumes at Step 9 (the sink: merge/PR), the issue-close decision, and all governance. The per-node executor loop does **not** go through the contractor — see § Adaptive Executor Aggregators above.
 
 ### Role
 

@@ -557,6 +557,41 @@ fi
 
 If the check fails, do not stage; split the commit or coordinate manually.
 
+## Sink Metadata Capture (before contractor dispatch)
+
+Capture sink metadata now, while `workflow-state.md` still exists. The contractor
+archives it during Step 8b; the main session reuses these variables in Step 9. Shell
+variables do NOT cross the subagent boundary, so this capture runs here (main session)
+and the contractor re-derives its own copy.
+
+```bash
+kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
+SINK_STATE_FILE="kaola-workflow/{project}/workflow-state.md"
+SINK_BRANCH=$(grep '^branch:' "$SINK_STATE_FILE" | awk '{print $2}')
+SINK_ISSUE=$(grep '^issue_number:' "$SINK_STATE_FILE" | awk '{print $2}')
+SINK_KIND=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | grep '^sink:' | awk '{print $2}')
+SINK_KIND=${SINK_KIND:-merge}
+SINK_ISSUE_FLAG=""
+[ -n "$SINK_ISSUE" ] && [ "$SINK_ISSUE" != "unset" ] && SINK_ISSUE_FLAG="--issue $SINK_ISSUE"
+ACTIVE_WORKTREE_PATH="$(pwd)"
+_WT_PRE="$(node -e "try{const fs=require('fs');const s=fs.readFileSync('kaola-workflow/{project}/workflow-state.md','utf8');const m=s.match(/^worktree_path:\\s*(.+)$/m);process.stdout.write(m?m[1].trim():'');}catch(e){}" 2>/dev/null)" || true
+[ -n "$_WT_PRE" ] && [ -d "$_WT_PRE" ] && ACTIVE_WORKTREE_PATH="$_WT_PRE"
+```
+
+## Mechanical Finalization (delegated to the contractor)
+
+You MUST pass `model="{CONTRACTOR_MODEL}"` in this Agent call exactly as shown —
+do not omit the `model=` line.
+
+```text
+Agent(
+  subagent_type="contractor",
+  model="{CONTRACTOR_MODEL}",
+  description="Mechanical finalize {project}",
+  prompt="Run the mechanical finalization for {project} (sink kind SINK_KIND). Execute Step 8a (artifact mirror), Step 8b (cmdFinalize archive + status close, --keep-worktree, merge path only), the Step 7 roadmap regen + git-add staging, and the Step 8 commit gate (chore: finalize {project}), exactly as written below in this command file. Re-derive your own kaola_script/CLAIM_JS and re-read SINK_KIND from workflow-state.md (it exists until cmdFinalize archives it). Capture real exit codes; never gate on a piped | tail. Return a compact bookkeeping summary; do NOT run Step 9 (the sink), do NOT close the issue, do NOT judge."
+)
+```
+
 ## Step 8a - Artifact Mirror
 
 Before staging, mirror Phase 6 artifacts from the main worktree into the linked worktree (if active):

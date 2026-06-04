@@ -72,6 +72,9 @@ choices, or ambiguity that blocks correctness.
    ```
 
    If the check fails, do not stage; split the commit or coordinate manually.
+
+   The mechanical finalization below — the artifact mirror, the `cmdFinalize` archive + status close (with `--keep-worktree`, merge path only), roadmap refresh, and the `chore: finalize ${KAOLA_PROJECT}` commit gate — is deterministic bookkeeping. Delegate it to the mechanical `contractor` Codex agent role when that subagent is available; it runs the scripts and authors the durable bookkeeping but never dispatches a role, judges, or asks the user. The current session keeps the sink dispatch and issue-close decision. Because a subagent runs in its own shell, capture the sink metadata (`SINK_BRANCH`, `SINK_KIND`, `SINK_ISSUE_FLAG`, `ACTIVE_WORKTREE_PATH`) in THIS session before delegating — they are reused at the sink step and do not cross the delegation boundary.
+
    Before mirroring artifacts, resolve the linked worktree and copy Phase 6 artifacts:
 
    ```bash

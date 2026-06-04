@@ -43,10 +43,10 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   the nine canonical roles are **inherited unchanged** — only small adaptive-aware
   touches are added. The switch gates selection only; resume is toggle-agnostic.
 
-  **Lean-orchestrator boundary (issue #242 Part B Stage B — additive registration only; not yet dispatched, Stage C wires the seams).** The lean-orchestrator design keeps the main Opus orchestrator's context lean by dividing responsibility along a strict judgment vs. mechanical line. The Opus orchestrator owns all judgment: which role runs next, whether work is correct, risk assessment, gating decisions, and any user-facing question (#44: the agent owns reasoning). A separate mechanical **contractor** agent owns everything else: running the workflow scripts, parsing subagent prose and `.cache` evidence, and faithfully authoring the durable bookkeeping (ledger rows, phase files, roadmap mirror, archive), then returning a compact summary. The contractor is Sonnet and stays Sonnet even under `--profile=higher` (mechanical transcription cannot be judgment-upgraded by installing a higher profile; there is deliberately no `profiles/higher/contractor.md`). The contractor is registered in all four editions but not yet dispatched by any command — Stage C wires the seams. See `docs/api.md` § Contractor Agent for the tools list and all-edition registration details.
+  **Lean-orchestrator boundary (issue #242 Part B, wired in Stage C).** The lean-orchestrator design keeps the main Opus orchestrator's context lean by dividing responsibility along a strict judgment vs. mechanical line. The Opus orchestrator owns all judgment: which role runs next, whether work is correct, risk assessment, gating decisions, and any user-facing question (#44: the agent owns reasoning). A separate mechanical **contractor** agent owns the mechanical block in Phase 6: running the finalization scripts (`cmdFinalize` archive, artifact mirror, roadmap regen, the `chore: finalize` commit gate), then returning a compact summary. The per-node loop in `kaola-workflow-plan-run` is **not** contractor-mediated — Opus calls the aggregator scripts directly (see Atomicity layer below). The contractor is Sonnet and stays Sonnet even under `--profile=higher` (mechanical transcription cannot be judgment-upgraded by installing a higher profile; there is deliberately no `profiles/higher/contractor.md`). **Shell-var lifetime:** a subagent runs in its own shell, so the orchestrator captures sink and worktree metadata BEFORE the contractor dispatch; the contractor's commit and archive are durable git state that persists across the shell boundary and is reused at the Step-9 sink. The boundary in one line: **Opus decides *what* + dispatches *roles* + owns the sink/close; the contractor runs scripts + writes durable bookkeeping; the aggregator scripts own the per-node barrier choreography.** See `docs/api.md` § Contractor Agent for the tools list and all-edition registration details.
 
-  **Atomicity layer (issue #242 Part B Stage A — additive, not yet wired into any command).**
-  Two aggregator scripts form the atomicity interface the executor and Phase-6 will call:
+  **Atomicity layer (issue #242 Part B Stage A, wired in Stage C).**
+  Two aggregator scripts form the atomicity interface the executor and Phase-6 now call:
   `kaola-workflow-next-action.js` reads a frozen `workflow-plan.md` and computes the
   ready-set (nodes whose dependencies are all `complete`/`n/a` and whose own status is
   non-terminal), the `nextNode` (first ready node), and the resolved model for each
@@ -62,6 +62,11 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   whole-plan (Phase-6 merge gate) both checks are blocking. The split between next-action
   and commit-node mirrors the executor's own dispatch/commit cycle: next-action resolves
   *what* to run next; commit-node proves *what was written* was in bounds.
+  In the wired executor (`kaola-workflow-plan-run`), Opus calls `kaola-workflow-next-action.js`
+  to compute the ready set and `kaola-workflow-commit-node.js --node-id X --start` at node
+  start and `--node-id X` at node end — all directly from the main session with no
+  contractor round-trip (the scripts are already self-contained; a per-node contractor
+  dispatch would add latency with no isolation benefit).
   Both scripts ship in all four editions (canonical `scripts/` + Codex copy in
   `plugins/kaola-workflow/scripts/`, plus GitLab and Gitea forge-named ports); all are
   registered in `validate-script-sync.js` COMMON_SCRIPTS and the three `install.sh`

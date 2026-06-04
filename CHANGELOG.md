@@ -47,6 +47,31 @@ a later stage):
 - Authored + executed via the adaptive workflow path (frozen 10-node `workflow-plan.md`, G1
   code-reviewed + security-reviewed). **No version bump** — Part B accumulates toward a single release.
 
+### Part B Stage C — seam rewires: aggregator-direct loop + phase6 contractor offload (#242)
+
+The lean-orchestrator is now **wired** (behavior-changing for future installs; takes effect on
+reinstall):
+
+- **C1 — adaptive executor loop is aggregator-direct.** The per-node loop in `kaola-workflow-plan-run`
+  now calls `kaola-workflow-commit-node.js` directly from the main session — `--node-id X --start`
+  at node start (record-base), `--node-id X` at node end (barrier) — and `kaola-workflow-next-action.js`
+  to compute the ready set. No contractor in the loop (it is already script-encapsulated; a per-node
+  contractor round-trip would buy nothing). Mirrored across the Claude command, the github-Codex skill,
+  and the gitlab/gitea commands (forge-named scripts).
+- **C2 — Phase-6 mechanical block is offloaded to the contractor.** `kaola-workflow-phase6` wraps the
+  mechanical block (Step 8a artifact mirror, `cmdFinalize` archive, roadmap regen, the
+  `chore: finalize` commit gate) in a `contractor` dispatch (Sonnet). The main session (Opus) keeps
+  Step 9 (the sink: merge/PR), the issue-close decision + recheck, and all governance. **Shell-var
+  lifetime:** a subagent runs in its own shell, so the orchestrator captures sink/worktree metadata
+  *before* the dispatch (reused at the sink); the contractor's commit + archive are durable git state
+  that persists across the boundary. Mirrored across the 3 phase6 commands (real `model="{CONTRACTOR_MODEL}"`
+  dispatch) + 3 finalize skills (prose delegation).
+- The boundary in one line: **Opus decides *what* + dispatches *roles* + owns the sink/close; the
+  contractor runs scripts + writes durable bookkeeping; the aggregator scripts own the per-node barrier
+  choreography.** All contract-pinned sink strings preserved; 4-edition contract validators + walkthrough
+  green. Authored + executed via the adaptive path (frozen 6-node plan, G1 code-reviewed). **No version
+  bump** — accumulates toward the single Part B release.
+
 ## [4.0.0] — 2026-06-04
 
 ### Install-time, profile-aware subagent model resolution + lean-orchestrator Part B plan (#242)

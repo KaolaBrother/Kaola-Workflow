@@ -35,7 +35,7 @@ Then parse the `## Node Ledger` and `workflow-state.md`:
   re-dispatch exactly that node. Re-running its node-start `--record-base` is **idempotent**
   (#239) — the original baseline is reused, so a crashed attempt's writes stay visible to the barrier.
 - otherwise compute the **ready set**: nodes whose `status != complete` and all of whose
-  `depends_on` are `complete` with resolved compliance.
+  `depends_on` are `complete` with resolved compliance. Compute it with the aggregator rather than by hand — it returns the ready set (each node already carrying its resolved `model`), the next node, and `allDone`: `node "$KAOLA_SCRIPTS/kaola-workflow-next-action.js" kaola-workflow/{project}/workflow-plan.md --json`
 
 ## Governance — auto-run only when provably low-risk, else ask
 
@@ -65,7 +65,7 @@ At node START (with the `in_progress` mark) record this node's per-instance writ
 so the barrier diffs exactly THIS node's writes (nodes run one at a time):
 
 ```bash
-node "$KAOLA_SCRIPTS/kaola-workflow-plan-validator.js" kaola-workflow/{project}/workflow-plan.md --record-base --node-id {node-id}
+node "$KAOLA_SCRIPTS/kaola-workflow-commit-node.js" kaola-workflow/{project}/workflow-plan.md --node-id {node-id} --start --json
 ```
 
 At the barrier, re-scan the files the node actually wrote — **script-enforced** (#231/#239). With
@@ -74,7 +74,7 @@ OWN declared lane, so a fan-out instance overflowing into a SIBLING's lane is re
 whole-plan barrier stays the union-level floor):
 
 ```bash
-node "$KAOLA_SCRIPTS/kaola-workflow-plan-validator.js" kaola-workflow/{project}/workflow-plan.md --barrier-check --node-id {node-id} --json; BC=$?
+node "$KAOLA_SCRIPTS/kaola-workflow-commit-node.js" kaola-workflow/{project}/workflow-plan.md --node-id {node-id} --json; BC=$?
 ```
 
 On exit 1 (a write turned out sensitive — a Phase-5 category — on a plan with no

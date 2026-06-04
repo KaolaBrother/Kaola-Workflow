@@ -64,6 +64,11 @@ Then parse the `## Node Ledger` and `workflow-state.md`:
 - Otherwise compute the **ready set**: every node whose `status != complete` and
   all of whose `depends_on` are `complete` **with resolved compliance**.
 
+Compute it with the aggregator rather than by hand — it returns the ready set (each node already carrying its resolved `model`), the next node, and `allDone`:
+```text
+node scripts/kaola-gitlab-workflow-next-action.js kaola-workflow/{project}/workflow-plan.md --json
+```
+
 ## Governance — auto-run only when provably low-risk, else ask
 
 The validator classifies the frozen plan once. Re-read its verdict
@@ -88,9 +93,9 @@ For each ready node, run the Phase-4-style loop, generalized from a phase ladder
 to a plan DAG:
 
 1. **update-ledger** — mark the node `in_progress`, and record its per-instance write
-   baseline (#239) so the step-4 barrier can diff exactly THIS node's writes:
+   baseline (#239) so the step-4 barrier can diff exactly THIS node's writes. The node-START aggregator runs ONLY record-base (idempotent).
    ```bash
-   node scripts/kaola-gitlab-workflow-plan-validator.js kaola-workflow/{project}/workflow-plan.md --record-base --node-id {node-id}
+   node scripts/kaola-gitlab-workflow-commit-node.js kaola-workflow/{project}/workflow-plan.md --node-id {node-id} --start --json
    ```
 2. **dispatch** the node's role. An implement node:
 
@@ -145,7 +150,7 @@ Agent(
    pointer LAST).** Re-scan the files this node actually wrote — **script-enforced**
    (#231), not prose:
    ```bash
-   node scripts/kaola-gitlab-workflow-plan-validator.js kaola-workflow/{project}/workflow-plan.md --barrier-check --node-id {node-id} --json; BC=$?
+   node scripts/kaola-gitlab-workflow-commit-node.js kaola-workflow/{project}/workflow-plan.md --node-id {node-id} --json; BC=$?
    ```
    On exit 1 (a write turned out sensitive — a Phase-5 category — on a plan with no
    `security-reviewer` node, or overflowed outside the declared allowlist) the
