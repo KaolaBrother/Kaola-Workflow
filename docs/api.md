@@ -137,6 +137,16 @@ Configuration files control workflow behavior and issue sorting.
 - `mr_auto_merge` — Enable automatic MR merge after creation (GitLab edition; equivalent to `glab mr merge --auto-merge`; non-fatal if merge fails)
 - `enable_adaptive` — Opt-in switch for the adaptive workflow path (issue #227); default OFF. Written by `install.sh --enable-adaptive=yes` (read-modify-write, preserving `parallel_mode`); overridable per session by the `KAOLA_ENABLE_ADAPTIVE` environment variable (precedence: env > config > OFF). See `docs/workflow-state-contract.md` § Adaptive Path Switch
 
+### Agent model manifest (`~/.claude/agents/.kaola-agent-models.json`)
+
+Written by `install.sh` at install time; removed by `uninstall.sh`. Path respects `KAOLA_AGENT_DIR` when set.
+
+```json
+{ "<agent-name>": "<model-string>", ... }
+```
+
+Maps each installed agent to the model string selected for the active profile (e.g. `"planner": "claude-opus-4-5"`). Read by `resolve-agent-model` with this precedence: **manifest → frontmatter (if not `inherit`) → `DEFAULT_AGENT_MODELS` → `''`**. Ensures dynamically dispatched adaptive nodes resolve to the correct profile-aware model and render the model badge, rather than silently inheriting the orchestrator's model.
+
 ### Project-local config
 
 `kaola-workflow/config.json` (optional, checked into repo):

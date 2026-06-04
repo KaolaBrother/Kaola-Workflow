@@ -33,7 +33,7 @@ fi
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 COMMANDS_DIR="$HOME/.claude/commands"
-AGENTS_DIR="$HOME/.claude/agents"
+AGENTS_DIR="${KAOLA_AGENT_DIR:-$HOME/.claude/agents}"
 SOURCE_AGENTS_DIR="$SCRIPT_DIR/agents"
 AGENT_MANIFEST_FILE="$AGENTS_DIR/.kaola-workflow-agent-manifest"
 MANAGED_AGENT_MARKER="kaola-workflow-managed-agent: true"
@@ -454,6 +454,39 @@ model_for_placeholder() {
     DOC_UPDATER_MODEL) resolve_agent_model_for_install doc-updater ;;
   esac
 }
+
+# Emit .kaola-agent-models.json so the adaptive resolver can look up
+# profile-aware models without parsing agent frontmatter at runtime.
+# Agents that resolve to empty or 'inherit' are omitted (they fall through
+# to the resolver's next precedence step).
+emit_agent_model_manifest() {
+  local manifest_file="$AGENTS_DIR/.kaola-agent-models.json"
+  local first=1
+  local json_body=""
+  for agent in "${REQUIRED_AGENTS[@]}"; do
+    local model
+    model="$(resolve_agent_model_for_install "$agent")"
+    if [[ -z "$model" ]]; then
+      continue
+    fi
+    if [[ "$first" -eq 1 ]]; then
+      json_body="  \"$agent\": \"$model\""
+      first=0
+    else
+      json_body="$json_body,
+  \"$agent\": \"$model\""
+    fi
+  done
+  if [[ "$first" -eq 1 ]]; then
+    # All agents resolved to inherit/empty — write empty object.
+    printf '{}\n' > "$manifest_file"
+  else
+    printf '{\n%s\n}\n' "$json_body" > "$manifest_file"
+  fi
+  echo "Installed agent model manifest: $manifest_file"
+}
+
+emit_agent_model_manifest
 
 render_command_file() {
   local source_file="$1"

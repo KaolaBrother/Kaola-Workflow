@@ -2,7 +2,7 @@
 set -euo pipefail
 
 FORGE=""
-AGENTS_DIR="$HOME/.claude/agents"
+AGENTS_DIR="${KAOLA_AGENT_DIR:-$HOME/.claude/agents}"
 AGENT_MANIFEST_FILE="$AGENTS_DIR/.kaola-workflow-agent-manifest"
 MANAGED_AGENT_MARKER="kaola-workflow-managed-agent: true"
 REQUIRED_AGENTS=("code-explorer" "docs-lookup" "planner" "code-architect" "tdd-guide" "build-error-resolver" "code-reviewer" "security-reviewer" "doc-updater" "adversarial-verifier")
@@ -79,6 +79,12 @@ if [[ -f "$AGENT_MANIFEST_FILE" ]]; then
     echo "Removed managed agent manifest: $AGENT_MANIFEST_FILE"
     removed=$((removed + 1))
   fi
+fi
+
+# Remove the agent model manifest written by install.sh for the adaptive resolver.
+AGENT_MODEL_MANIFEST="$AGENTS_DIR/.kaola-agent-models.json"
+if rm -f "$AGENT_MODEL_MANIFEST" 2>/dev/null; then
+  echo "Removed agent model manifest: $AGENT_MODEL_MANIFEST"
 fi
 
 COMMANDS=(

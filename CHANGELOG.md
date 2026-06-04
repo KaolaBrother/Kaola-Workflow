@@ -1,5 +1,32 @@
 # Changelog
 
+## [4.0.0] — 2026-06-04
+
+### Install-time, profile-aware subagent model resolution + lean-orchestrator Part B plan (#242)
+
+**Breaking (major):** subagent model resolution is now **install-time and profile-aware**.
+`install.sh` emits a manifest `~/.claude/agents/.kaola-agent-models.json` (honoring
+`KAOLA_AGENT_DIR`) mapping each agent to its profile-selected model; the resolver precedence
+is now **manifest → frontmatter (if ≠ `inherit`) → `DEFAULT_AGENT_MODELS` → `''`**. Existing
+installs must **reinstall** to emit the manifest; `uninstall.sh` removes it.
+
+- **Fixes silent Opus inheritance (Part A).** `install.sh` rewrites every installed agent's
+  frontmatter to `model: inherit`, which the old resolver treated as a truthy hit that killed
+  the `DEFAULT_AGENT_MODELS` fallback (returning `''`), so dynamically-dispatched adaptive
+  nodes (code-explorer, code-architect, security-reviewer, doc-updater, adversarial-verifier,
+  docs-lookup) got no `model=` → **no badge** and **silently inherited Opus**. The manifest
+  restores the correct profile-aware model and the badge. A naive DEFAULT-only fallback is
+  avoided — it would downgrade security-reviewer to sonnet under `--profile=higher`.
+  Frontmatter stays `inherit`; the dispatch still carries an explicit `model=`, so the badge
+  is preserved.
+- The four byte-identical `resolve-agent-model` copies stay in sync (`validate-script-sync.js`).
+- **Part B planned, not yet implemented.** The lean-orchestrator "Sonnet contractor offload"
+  is designed and decision-complete in `docs/investigations/lean-orchestrator-part-b-plan.md`
+  (its four open decisions resolved); implementation is a separate follow-up. Issue #242
+  remains **open**.
+- **Versions:** Claude/main `3.23.0 → 4.0.0`; the independent Codex packs `1.14.0 → 2.0.0`.
+- Authored + executed via the adaptive workflow path (a frozen 9-node `workflow-plan.md`).
+
 ## [3.23.0] — 2026-06-04
 
 ### Adaptive authoring — recommend (not mandate) plan-before-implement and docs-before-finalize (#241)

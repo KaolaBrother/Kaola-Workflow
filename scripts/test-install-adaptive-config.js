@@ -69,6 +69,18 @@ try {
   catch (e) { failed = true; assert(e.status === 2, 'bad --enable-adaptive must exit 2, got ' + e.status); }
   assert(failed, '--enable-adaptive=maybe must be rejected');
 
+  // issue #242: .kaola-agent-models.json manifest — uninstall.sh must remove it.
+  // (g) after install then uninstall, manifest is gone.
+  {
+    home = freshHome('uninstall'); homes.push(home);
+    runInstall(home, []);
+    const manifestPath = path.join(home, '.claude', 'agents', '.kaola-agent-models.json');
+    assert(fs.existsSync(manifestPath), 'manifest must exist after install (prerequisite for uninstall test)');
+    execFileSync('bash', ['uninstall.sh', '--forge=github'],
+      { cwd: root, env: { ...process.env, HOME: home }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    assert(!fs.existsSync(manifestPath), 'uninstall.sh must remove .kaola-agent-models.json');
+  }
+
   console.log('Install adaptive-config tests passed');
 } finally {
   cleanup();

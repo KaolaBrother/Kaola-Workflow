@@ -102,6 +102,48 @@ try {
         '--profile=common must render code-reviewer as sonnet');
     } finally { fs.rmSync(ctmp, { recursive: true, force: true }); }
   }
+
+  // issue #242: .kaola-agent-models.json manifest — produced by install.sh so the
+  // adaptive resolver has a profile-aware model for every agent.
+  //
+  // (i) higher-profile install: manifest exists, maps planner→opus, sonnet agents→sonnet,
+  //     and higher-profile trio (code-architect/code-reviewer/security-reviewer)→opus.
+  {
+    const htmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-manifest-higher-'));
+    try {
+      execFileSync('bash', ['install.sh', '--yes', '--forge=github', '--profile=higher', '--no-settings-merge'],
+        { cwd: root, env: { ...process.env, HOME: htmp }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      const manifestPath = path.join(htmp, '.claude', 'agents', '.kaola-agent-models.json');
+      assert(fs.existsSync(manifestPath), 'higher-profile install must write .kaola-agent-models.json');
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      assert(manifest['planner'] === 'opus', 'manifest must map planner→opus; got ' + manifest['planner']);
+      assert(manifest['code-architect'] === 'opus', 'higher manifest must map code-architect→opus; got ' + manifest['code-architect']);
+      assert(manifest['code-reviewer'] === 'opus', 'higher manifest must map code-reviewer→opus; got ' + manifest['code-reviewer']);
+      assert(manifest['security-reviewer'] === 'opus', 'higher manifest must map security-reviewer→opus; got ' + manifest['security-reviewer']);
+      assert(manifest['tdd-guide'] === 'sonnet', 'manifest must map tdd-guide→sonnet; got ' + manifest['tdd-guide']);
+      assert(manifest['code-explorer'] === 'sonnet', 'manifest must map code-explorer→sonnet; got ' + manifest['code-explorer']);
+      // All keys must be non-empty and in {opus,sonnet}
+      for (const [k, v] of Object.entries(manifest)) {
+        assert(v === 'opus' || v === 'sonnet', 'manifest value for ' + k + ' must be opus or sonnet; got ' + v);
+      }
+    } finally { fs.rmSync(htmp, { recursive: true, force: true }); }
+  }
+
+  // (ii) common-profile install: manifest maps security-reviewer→sonnet (profile-aware contrast).
+  {
+    const cmtmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-manifest-common-'));
+    try {
+      execFileSync('bash', ['install.sh', '--yes', '--forge=github', '--profile=common', '--no-settings-merge'],
+        { cwd: root, env: { ...process.env, HOME: cmtmp }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      const manifestPath = path.join(cmtmp, '.claude', 'agents', '.kaola-agent-models.json');
+      assert(fs.existsSync(manifestPath), 'common-profile install must write .kaola-agent-models.json');
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      assert(manifest['security-reviewer'] === 'sonnet', 'common manifest must map security-reviewer→sonnet (no higher override); got ' + manifest['security-reviewer']);
+      assert(manifest['code-architect'] === 'sonnet', 'common manifest must map code-architect→sonnet; got ' + manifest['code-architect']);
+      assert(manifest['code-reviewer'] === 'sonnet', 'common manifest must map code-reviewer→sonnet; got ' + manifest['code-reviewer']);
+      assert(manifest['planner'] === 'opus', 'common manifest must still map planner→opus; got ' + manifest['planner']);
+    } finally { fs.rmSync(cmtmp, { recursive: true, force: true }); }
+  }
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
 }

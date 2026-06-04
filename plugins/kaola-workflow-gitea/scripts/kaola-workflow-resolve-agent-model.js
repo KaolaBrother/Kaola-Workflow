@@ -45,8 +45,27 @@ function modelFromFile(agentName, agentDir) {
 function resolveAgentModel(agentName, options = {}) {
   const name = String(agentName || '').trim();
   if (!name) return '';
-  const model = modelFromFile(name, options.agentDir || defaultAgentDir()) || DEFAULT_AGENT_MODELS[name] || '';
-  return model.toLowerCase() === 'inherit' ? '' : model;
+  const dir = options.agentDir || defaultAgentDir();
+
+  // 1. manifest: .kaola-agent-models.json in agentDir — written at install time
+  try {
+    const manifest = JSON.parse(fs.readFileSync(path.join(dir, '.kaola-agent-models.json'), 'utf8'));
+    if (manifest && Object.prototype.hasOwnProperty.call(manifest, name)) {
+      const v = String(manifest[name] || '');
+      return v.toLowerCase() === 'inherit' ? '' : v;
+    }
+  } catch { /* missing or unparseable — fall through */ }
+
+  // 2. frontmatter, only if not 'inherit'
+  const fm = modelFromFile(name, dir);
+  if (fm && fm.toLowerCase() !== 'inherit') return fm;
+
+  // 3. DEFAULT_AGENT_MODELS
+  const def = DEFAULT_AGENT_MODELS[name];
+  if (def) return def.toLowerCase() === 'inherit' ? '' : def;
+
+  // 4. empty
+  return '';
 }
 
 function formatAgentArgument(model) {

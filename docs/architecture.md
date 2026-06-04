@@ -21,7 +21,7 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   The agent owns the *middle* (how many explorers, whether to fan out `tdd-guide`
   over disjoint sub-areas, extra review passes, ordering, bounded loops). The
   **harness owns the frame and the computed gates**: the runtime-closed role
-  library + fixed models (`resolve-agent-model`), the three shapes
+  library + fixed models (`resolve-agent-model`; see **Model resolution** below), the three shapes
   (sequence / fan-out / bounded loop), a unique `finalize` sink, **post-dominance**
   gates (`code-reviewer` over every code-producing node — implement roles, plus any
   write role writing a non-docs file, plus non-docs writes declared on the `finalize`
@@ -150,3 +150,16 @@ Gitea edition (`plugins/kaola-workflow-gitea/`) now includes a complete Phase 6 
 - **`kaola-gitea-workflow-sink-pr.js`**: Create or reuse PR, record metadata in workflow-state.md, automatic metadata commit.
 - **Squash-merge gating**: `checkRepoSquashEnabled(project, opts)` validates repository configuration before attempting squash merge via `mergePullRequest(project, prNumber, {squash: true})`.
 - **Test coverage**: 18 offline integration tests in `test-gitea-sinks.js` covering PR reuse, creation, state updates, and edge cases.
+
+## Model Resolution (Install-Time, Profile-Aware)
+
+**Model resolution for adaptive subagent nodes** is install-time and profile-aware. `install.sh` writes a manifest `~/.claude/agents/.kaola-agent-models.json` (path honoring `KAOLA_AGENT_DIR`) that maps each agent name to its install-selected model string (e.g. `{ "planner": "claude-opus-4-5", "code-writer": "claude-sonnet-4-5" }`). `uninstall.sh` removes the manifest.
+
+The resolver (`resolve-agent-model`) uses this precedence chain:
+
+1. **Manifest** — value from `~/.claude/agents/.kaola-agent-models.json` for the agent name (if present and non-empty).
+2. **Frontmatter** — agent frontmatter `model:` field, when it is not `inherit` or empty.
+3. **`DEFAULT_AGENT_MODELS`** — the hardcoded per-role defaults in `kaola-workflow-adaptive-schema.js`.
+4. **`''`** — empty string, letting the orchestrator's model inherit (last resort).
+
+**Effect on adaptive nodes:** Dynamically dispatched nodes now resolve to their correct profile-aware model and render the model badge in the dispatch call. Previously, agents with `model: inherit` frontmatter resolved to `''` and silently inherited Opus regardless of the installed profile. Frontmatter remains `inherit` (the install-emitted manifest is the authoritative source); the dispatch carries an explicit `model=` so the badge is always visible.
