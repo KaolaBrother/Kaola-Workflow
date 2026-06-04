@@ -7,7 +7,7 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 
 | Issue | Title | Status | Workflow Project | Next Step |
 |-------|-------|--------|------------------|-----------|
-| none | No active work | — | — | — |
+| #242 | Lean orchestrator: install-time profile-aware model resolution + Sonnet contractor offload | in-progress (run1 shipped: Part A v4.0.0) | — | Run 2 — implement Part B per docs/investigations/lean-orchestrator-part-b-plan.md |
 
 ## Rules
 
