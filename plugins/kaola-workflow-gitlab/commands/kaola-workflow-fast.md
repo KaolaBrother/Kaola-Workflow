@@ -23,6 +23,7 @@ Every subagent dispatch below includes an explicit `model=` line. Always pass it
 exactly as written — it is what makes Claude Code show the model badge on the
 subagent card. The installer fills each `model="{...}"` placeholder with the
 agent's frontmatter model (for example `model="sonnet"`); never omit the `model=` line.
+You MUST pass `model="{CONTRACTOR_MODEL}"` in this Agent call exactly as shown — do not omit the `model=` line.
 
 ## Resume Detection
 
@@ -87,15 +88,12 @@ The orchestrator dispatches the `planner` (below) and judges its plan; the
 mechanical bracket — making the cache dir and stamping the `step: plan`
 checkpoint — is deterministic bookkeeping the contractor owns.
 
-You MUST pass `model="{CONTRACTOR_MODEL}"` in this Agent call exactly as shown —
-do not omit the `model=` line.
-
 ```text
 Agent(
   subagent_type="contractor",
   model="{CONTRACTOR_MODEL}",
   description="Mechanical fast plan-setup {project}",
-  prompt="Run the Step 1 mechanical setup for the fast path of {project}: create the cache dir (`mkdir -p kaola-workflow/{project}/.cache`) and write the `step: plan` checkpoint into `kaola-workflow/{project}/workflow-state.md` exactly as the block below in this command file specifies (phase: fast / phase_name: Fast / step: plan / workflow_path: fast / next_command: /kaola-workflow-fast {project} / main_session_role: orchestrator / implementation_owner: planner / inline_emergency_fallback_authorized: no), PRESERVING any existing `## Sink` block byte-for-byte. Re-derive your own kaola_script. Capture real exit codes; never gate on a piped | tail. Return a compact bookkeeping summary; do NOT dispatch the planner or any role, do NOT judge the plan, do NOT escalate, do NOT close the issue, do NOT ask the user."
+  prompt="Run the Step 1 mechanical setup for the fast path of {project}: create the cache dir (`mkdir -p kaola-workflow/{project}/.cache`) and write the `step: plan` checkpoint into `kaola-workflow/{project}/workflow-state.md` exactly as the block below in this command file specifies (phase: fast / phase_name: Fast / step: plan / workflow_path: fast / next_command: /kaola-workflow-fast {project} / main_session_role: orchestrator / implementation_owner: planner / inline_emergency_fallback_authorized: no), PRESERVING any existing `## Sink` block byte-for-byte. Return a compact bookkeeping summary; do NOT dispatch the planner or any role, do NOT judge the plan, do NOT escalate, do NOT close the issue, do NOT ask the user."
 )
 ```
 
@@ -116,9 +114,6 @@ inline_emergency_fallback_authorized: no
 Invoke the Claude Code agent `planner` with the linked
 GitLab issue body and `phase1-research.md` / `phase2-ideation.md` excerpts if
 they exist (otherwise issue body alone):
-
-You MUST pass `model="{PLANNER_MODEL}"` in this Agent call exactly as shown —
-do not omit the `model=` line.
 
 ```text
 Agent(
@@ -155,15 +150,12 @@ which writes the `fast-summary.md` stub.
 
 ### Mechanical Plan Capture (delegated to the contractor)
 
-You MUST pass `model="{CONTRACTOR_MODEL}"` in this Agent call exactly as shown —
-do not omit the `model=` line.
-
 ```text
 Agent(
   subagent_type="contractor",
   model="{CONTRACTOR_MODEL}",
   description="Mechanical fast plan-capture {project}",
-  prompt="Capture the orchestrator-judged plan for the fast path of {project} into the durable `fast-summary.md` stub. Read `.cache/planner.md` for the plan detail. Write `kaola-workflow/{project}/fast-summary.md` with `## Status` line `IN_PROGRESS`, and in `## Scope` record the declared write set the orchestrator hands you as the `- Write Set:` line using the real repository paths exactly as given (so the parallel-overlap classifier can see this fast project's in-flight files), plus the acceptance check command on the `- Acceptance:` line. Fill the remaining sections per the `## Write fast-summary.md` template below in this command file (Plan from `.cache/planner.md`; Implementation Evidence / Review left as pending placeholders at this stage). Re-derive your own kaola_script. Capture real exit codes; never gate on a piped | tail. Return a compact bookkeeping summary; do NOT dispatch a role, do NOT judge eligibility or the plan, do NOT decide the status verdict, do NOT escalate, do NOT close the issue, do NOT ask the user."
+  prompt="Capture the orchestrator-judged plan for the fast path of {project} into the durable `fast-summary.md` stub. Read `.cache/planner.md` for the plan detail. Write `kaola-workflow/{project}/fast-summary.md` with `## Status` line `IN_PROGRESS`, and in `## Scope` record the declared write set the orchestrator hands you as the `- Write Set:` line using the real repository paths exactly as given (so the parallel-overlap classifier can see this fast project's in-flight files), plus the acceptance check command on the `- Acceptance:` line. Fill the remaining sections per the `## Write fast-summary.md` template below in this command file (Plan from `.cache/planner.md`; Implementation Evidence / Review left as pending placeholders at this stage). Return a compact bookkeeping summary; do NOT dispatch a role, do NOT judge eligibility or the plan, do NOT decide the status verdict, do NOT escalate, do NOT close the issue, do NOT ask the user."
 )
 ```
 
@@ -171,15 +163,12 @@ Agent(
 
 ### Mechanical Execute Setup (delegated to the contractor)
 
-You MUST pass `model="{CONTRACTOR_MODEL}"` in this Agent call exactly as shown —
-do not omit the `model=` line.
-
 ```text
 Agent(
   subagent_type="contractor",
   model="{CONTRACTOR_MODEL}",
   description="Mechanical fast execute-setup {project}",
-  prompt="Write the `step: execute` checkpoint into `kaola-workflow/{project}/workflow-state.md` exactly as the block below in this command file specifies (phase: fast / phase_name: Fast / step: execute / workflow_path: fast / next_command: /kaola-workflow-fast {project} / main_session_role: orchestrator / implementation_owner: tdd-guide / inline_emergency_fallback_authorized: no), PRESERVING any existing `## Sink` block byte-for-byte. Re-derive your own kaola_script. Capture real exit codes; never gate on a piped | tail. Return a compact bookkeeping summary; do NOT dispatch the tdd-guide or any role, do NOT run the acceptance check, do NOT judge, do NOT escalate, do NOT close the issue, do NOT ask the user."
+  prompt="Write the `step: execute` checkpoint into `kaola-workflow/{project}/workflow-state.md` exactly as the block below in this command file specifies (phase: fast / phase_name: Fast / step: execute / workflow_path: fast / next_command: /kaola-workflow-fast {project} / main_session_role: orchestrator / implementation_owner: tdd-guide / inline_emergency_fallback_authorized: no), PRESERVING any existing `## Sink` block byte-for-byte. Return a compact bookkeeping summary; do NOT dispatch the tdd-guide or any role, do NOT run the acceptance check, do NOT judge, do NOT escalate, do NOT close the issue, do NOT ask the user."
 )
 ```
 
@@ -198,9 +187,6 @@ inline_emergency_fallback_authorized: no
 
 Invoke the Claude Code agent `tdd-guide` with the
 planner-produced plan and explicit constraints:
-
-You MUST pass `model="{TDD_GUIDE_MODEL}"` in this Agent call exactly as shown —
-do not omit the `model=` line.
 
 ```text
 Agent(
@@ -233,15 +219,12 @@ two separate contractor summons, never one.
 
 ### Mechanical Acceptance Run (delegated to the contractor)
 
-You MUST pass `model="{CONTRACTOR_MODEL}"` in this Agent call exactly as shown —
-do not omit the `model=` line.
-
 ```text
 Agent(
   subagent_type="contractor",
   model="{CONTRACTOR_MODEL}",
   description="Mechanical fast acceptance {project}",
-  prompt="Run the acceptance-check command for the fast path of {project} (read it from the `- Acceptance:` line of `kaola-workflow/{project}/fast-summary.md`, or as the orchestrator hands it in) and STOP — write no consequence. Capture its real exit code and a short output tail; never gate on a piped | tail. Report whether the acceptance check passed (its real exit code) and the `test_thrash` count (consecutive same-test RED→RED cycles) you read from `.cache/tdd-guide.md`. Re-derive your own kaola_script. Return a compact report of the exit code + thrash count and nothing more; do NOT dispatch a role, do NOT judge the acceptance result, do NOT decide PROCEED vs escalate, do NOT write any `workflow-state.md` or `fast-summary.md` consequence, do NOT close the issue, do NOT ask the user."
+  prompt="Run the acceptance-check command for the fast path of {project} (read it from the `- Acceptance:` line of `kaola-workflow/{project}/fast-summary.md`, or as the orchestrator hands it in) and STOP — write no consequence. Capture its real exit code and a short output tail; never gate on a piped | tail. Report whether the acceptance check passed (its real exit code) and the `test_thrash` count (consecutive same-test RED→RED cycles) you read from `.cache/tdd-guide.md`. Return a compact report of the exit code + thrash count and nothing more; do NOT dispatch a role, do NOT judge the acceptance result, do NOT decide PROCEED vs escalate, do NOT write any `workflow-state.md` or `fast-summary.md` consequence, do NOT close the issue, do NOT ask the user."
 )
 ```
 
@@ -253,15 +236,12 @@ decided consequence into the contractor below, which writes it verbatim.
 
 ### Mechanical Acceptance Consequence (delegated to the contractor)
 
-You MUST pass `model="{CONTRACTOR_MODEL}"` in this Agent call exactly as shown —
-do not omit the `model=` line.
-
 ```text
 Agent(
   subagent_type="contractor",
   model="{CONTRACTOR_MODEL}",
   description="Mechanical fast acceptance-consequence {project}",
-  prompt="Write the single durable consequence the orchestrator has decided for the fast path of {project}, and ONLY that one — the orchestrator made the judgment; you transcribe it. If the orchestrator hands you PROCEED: write the `step: review` checkpoint into `kaola-workflow/{project}/workflow-state.md` (phase: fast / phase_name: Fast / step: review / workflow_path: fast / next_command: /kaola-workflow-fast {project} / main_session_role: orchestrator / implementation_owner: code-reviewer / inline_emergency_fallback_authorized: no) and set `fast-summary.md` `## Status` to `REVIEW`. If the orchestrator hands you ESCALATE: write the `escalated_to_full: <trigger> — <detail>` field (with the literal ` — ` em-dash spacing) plus the `workflow_path: full` / `next_command: /kaola-workflow-phase1 {project}` / `next_skill: kaola-workflow-research {project}` routing into `workflow-state.md` and set `fast-summary.md` `## Status` to `ESCALATED`, exactly as the Mid-Flight Escalation section above specifies. PRESERVE any existing `## Sink` block byte-for-byte. Re-derive your own kaola_script. Capture real exit codes; never gate on a piped | tail. Return a compact bookkeeping summary; do NOT dispatch a role, do NOT judge the acceptance result, do NOT decide the status verdict or whether to escalate, do NOT close the issue, do NOT ask the user."
+  prompt="Write the single durable consequence the orchestrator has decided for the fast path of {project}, and ONLY that one — the orchestrator made the judgment; you transcribe it. If the orchestrator hands you PROCEED: write the `step: review` checkpoint into `kaola-workflow/{project}/workflow-state.md` (phase: fast / phase_name: Fast / step: review / workflow_path: fast / next_command: /kaola-workflow-fast {project} / main_session_role: orchestrator / implementation_owner: code-reviewer / inline_emergency_fallback_authorized: no) and set `fast-summary.md` `## Status` to `REVIEW`. If the orchestrator hands you ESCALATE: write the `escalated_to_full: <trigger> — <detail>` field (with the literal ` — ` em-dash spacing) plus the `workflow_path: full` / `next_command: /kaola-workflow-phase1 {project}` / `next_skill: kaola-workflow-research {project}` routing into `workflow-state.md` and set `fast-summary.md` `## Status` to `ESCALATED`, exactly as the Mid-Flight Escalation section above specifies. PRESERVE any existing `## Sink` block byte-for-byte. Return a compact bookkeeping summary; do NOT dispatch a role, do NOT judge the acceptance result, do NOT decide the status verdict or whether to escalate, do NOT close the issue, do NOT ask the user."
 )
 ```
 
@@ -297,9 +277,6 @@ inline_emergency_fallback_authorized: no
 
 Invoke the Claude Code agent `code-reviewer` on the
 modified files from Step 2:
-
-You MUST pass `model="{CODE_REVIEWER_MODEL}"` in this Agent call exactly as shown —
-do not omit the `model=` line.
 
 ```text
 Agent(
@@ -339,15 +316,12 @@ verbatim.
 
 ### Mechanical Summary Write (delegated to the contractor)
 
-You MUST pass `model="{CONTRACTOR_MODEL}"` in this Agent call exactly as shown —
-do not omit the `model=` line.
-
 ```text
 Agent(
   subagent_type="contractor",
   model="{CONTRACTOR_MODEL}",
   description="Mechanical fast summary {project}",
-  prompt="Author the final `kaola-workflow/{project}/fast-summary.md` for the fast path of {project} from the orchestrator-judged review verdict and the `.cache` evidence. Write the `## Status` line EXACTLY as the orchestrator hands it in (`PASSED` on a clean review) — do not restate, soften, or upgrade it. Fill the file per the `## Write fast-summary.md` template below in this command file: keep the `## Scope` `- Write Set:` / `- Acceptance:` lines from the stub; transcribe Implementation Evidence from `.cache/tdd-guide.md` (commands run, test-output summary), Review from `.cache/code-reviewer.md`, and the `## Required Agent Compliance` rows (planner / tdd-guide / code-reviewer, each `invoked` with its `.cache/<role>.md` evidence path); set `## Escalation` to N/A on the PASSED path. Re-derive your own kaola_script. Capture real exit codes; never gate on a piped | tail. Return a compact bookkeeping summary; do NOT dispatch a role, do NOT judge the review or decide the status verdict, do NOT escalate, do NOT close the issue, do NOT ask the user."
+  prompt="Author the final `kaola-workflow/{project}/fast-summary.md` for the fast path of {project} from the orchestrator-judged review verdict and the `.cache` evidence. Write the `## Status` line EXACTLY as the orchestrator hands it in (`PASSED` on a clean review) — do not restate, soften, or upgrade it. Fill the file per the `## Write fast-summary.md` template below in this command file: keep the `## Scope` `- Write Set:` / `- Acceptance:` lines from the stub; transcribe Implementation Evidence from `.cache/tdd-guide.md` (commands run, test-output summary), Review from `.cache/code-reviewer.md`, and the `## Required Agent Compliance` rows (planner / tdd-guide / code-reviewer, each `invoked` with its `.cache/<role>.md` evidence path); set `## Escalation` to N/A on the PASSED path. Return a compact bookkeeping summary; do NOT dispatch a role, do NOT judge the review or decide the status verdict, do NOT escalate, do NOT close the issue, do NOT ask the user."
 )
 ```
 

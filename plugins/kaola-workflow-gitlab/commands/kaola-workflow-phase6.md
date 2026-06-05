@@ -112,6 +112,7 @@ Every subagent dispatch below includes an explicit `model=` line. Always pass it
 exactly as written — it is what makes Claude Code show the model badge on the
 subagent card. The installer fills each `model="{...}"` placeholder with the
 agent's frontmatter model (for example `model="sonnet"`); never omit the `model=` line.
+You MUST pass `model="{CONTRACTOR_MODEL}"` in this Agent call exactly as shown — do not omit the `model=` line.
 
 ## Validation Delegation Policy
 
@@ -138,9 +139,6 @@ the relevant fix agent (`tdd-guide` for behavior/regression/coverage checks,
 
 Route behavior/test fixes to the Claude Code agent `tdd-guide`:
 
-You MUST pass `model="{TDD_GUIDE_MODEL}"` in this Agent call exactly as shown —
-do not omit the `model=` line.
-
 ```text
 Agent(
   subagent_type="tdd-guide",
@@ -152,9 +150,6 @@ Agent(
 
 Route build/type/lint/tooling fixes to the Claude Code agent
 `build-error-resolver`:
-
-You MUST pass `model="{BUILD_ERROR_RESOLVER_MODEL}"` in this Agent call exactly
-as shown — do not omit the `model=` line.
 
 ```text
 Agent(
@@ -338,9 +333,6 @@ If checklist exists, invoke the Claude Code agent
 `doc-updater` with changed files and checklist.
 
 If missing, create or append the checklist, then invoke `doc-updater`:
-
-You MUST pass `model="{DOC_UPDATER_MODEL}"` in this Agent call exactly as shown —
-do not omit the `model=` line.
 
 ```text
 Agent(
@@ -576,15 +568,12 @@ _WT_PRE="$(node -e "try{const fs=require('fs');const s=fs.readFileSync('kaola-wo
 
 ## Mechanical Finalization (delegated to the contractor)
 
-You MUST pass `model="{CONTRACTOR_MODEL}"` in this Agent call exactly as shown —
-do not omit the `model=` line.
-
 ```text
 Agent(
   subagent_type="contractor",
   model="{CONTRACTOR_MODEL}",
   description="Mechanical finalize {project}",
-  prompt="Run the mechanical finalization for {project} (sink kind SINK_KIND). Execute Step 8a (artifact mirror), Step 8b (cmdFinalize archive + status close, --keep-worktree, merge path only), the Step 7 roadmap regen + git-add staging, and the Step 8 commit gate (chore: finalize {project}), exactly as written below in this command file. Re-derive your own kaola_script/CLAIM_JS and re-read SINK_KIND from workflow-state.md (it exists until cmdFinalize archives it). Capture real exit codes; never gate on a piped | tail. Return a compact bookkeeping summary; do NOT run Step 9 (the sink), do NOT close the issue, do NOT judge."
+  prompt="Run the mechanical finalization for {project} (sink kind SINK_KIND). Execute Step 8a (artifact mirror), Step 8b (cmdFinalize archive + status close, --keep-worktree, merge path only), the Step 7 roadmap regen + git-add staging, and the Step 8 commit gate (chore: finalize {project}), exactly as written below in this command file. Re-derive your own kaola_script/CLAIM_JS and re-read SINK_KIND from workflow-state.md (it exists until cmdFinalize archives it). Return a compact bookkeeping summary; do NOT run Step 9 (the sink), do NOT close the issue, do NOT judge."
 )
 ```
 

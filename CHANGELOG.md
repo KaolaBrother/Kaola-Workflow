@@ -43,6 +43,28 @@ command/skill files drop the delegated boilerplate from their subagent dispatch 
   (the boilerplate was mid-line in single-line prompts).
 - Intermediate accumulate stage: no version bump, no tag, issue stays open.
 
+### Compress orchestrator prompts — Stage C1: phase6/phase4/fast prompts compressed (issue #244)
+
+First of the Stage-C fan-out across the phase commands. Applies the Stage-B safe-compression pattern
+to the three procedure-heaviest commands — `phase6`, `phase4`, `fast` — across the github / gitlab /
+gitea editions (9 command files).
+
+- Removed the now-delegated discipline boilerplate ("Re-derive your own kaola_script"/"… script
+  paths" and "capture real exit codes; never gate on a piped `| tail`") from inside the
+  `Agent(... prompt="…")` dispatch blocks, and consolidated each file's repeated "You MUST pass
+  `model=`" badge preamble to a single retained occurrence (exact substring kept verbatim so the
+  `assertIncludes` lock still passes). Per edition: `phase6` −11, `phase4` −17, `fast` −26 lines.
+- Net **−162 lines / −1418 words** across the 9 files (4510 → 3848 lines; 27482 → 26064 words).
+  The github-plugin SKILL mirrors (`kaola-workflow-finalize`/`execute`/`fast`) carried none of this
+  boilerplate and are unchanged.
+- Surgical and behavior-preserving: every dispatch's task contract, every `model="{..._MODEL}"`
+  dispatch line, every decision rubric (path-intent / risk-govern / resume-judge / closure-decision /
+  validation-delegation), gate / post-dominance / barrier logic, the Step 7/8/9 sink choreography and
+  its bash, and the Step 5 summary template are retained verbatim; main-session inline-bash exit-code
+  copy preserved. All 4-edition contract validators + `npm test` green; adversarial G1 review PASS
+  (0 confirmed findings).
+- Intermediate accumulate stage: no version bump, no tag, issue stays open.
+
 ## [5.1.0] — 2026-06-05
 
 ### Adaptive front-end: a `workflow-planner` subagent owns claim + design
