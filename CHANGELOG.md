@@ -24,6 +24,25 @@ prompts.
 - Intermediate accumulate stage: no version bump, no tag, issue stays open; the shared
   `workflow/issue-244` branch keeps accumulating toward the final-stage release-once.
 
+### Compress orchestrator prompts — Stage B: adaptive-path dispatch prompts slimmed (issue #244)
+
+PROOF stage. Now that the agent definitions own the discipline (Stage A), the adaptive-path
+command/skill files drop the delegated boilerplate from their subagent dispatch prompts.
+
+- Removed the now-delegated discipline boilerplate ("Re-derive your own kaola_script"/"… script
+  paths" and "capture real exit codes; never gate on a piped `| tail`") from inside the
+  `Agent(... prompt="…")` dispatch blocks of the adaptive-path commands — 9 occurrences each across
+  the Claude, gitlab, and gitea `kaola-workflow-adapt` and `kaola-workflow-plan-run` commands (18
+  total). The github-plugin SKILL mirrors carried none; the `workflow-next` router is dispatch-free
+  and unchanged.
+- Surgical and behavior-preserving: every dispatch's task contract, every `model="{..._MODEL}"` line
+  and "You MUST pass `model=`" badge preamble, every decision rubric (path-intent / risk-govern /
+  resume-judge / per-node-loop / consent-halt), gate / post-dominance / barrier logic, and `#NNN`
+  tag is retained verbatim. All 4-edition contract validators + `npm test` green; adversarial G1
+  review PASS (0 findings). The win is reading-burden (≈ −0.27 KB per command file), not line count
+  (the boilerplate was mid-line in single-line prompts).
+- Intermediate accumulate stage: no version bump, no tag, issue stays open.
+
 ## [5.1.0] — 2026-06-05
 
 ### Adaptive front-end: a `workflow-planner` subagent owns claim + design
