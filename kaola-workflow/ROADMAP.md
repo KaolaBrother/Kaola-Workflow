@@ -7,7 +7,7 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 
 | Issue | Title | Status | Workflow Project | Next Step |
 |-------|-------|--------|------------------|-----------|
-| #244 | Compress orchestrator prompts — move delegated procedure into the subagent definitions | open | issue-244-stage-a | adaptive |
+| none | No active work | — | — | — |
 
 ## Rules
 

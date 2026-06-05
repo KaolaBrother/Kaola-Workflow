@@ -2,6 +2,42 @@
 
 ## [Unreleased]
 
+## [5.2.0] — 2026-06-06
+
+### Compress orchestrator prompts — move delegated procedure into the subagent definitions (issue #244)
+
+Run as four sequenced adaptive stages accumulating on one branch, released once. The lean-orchestrator
+already moved the *execution* to subagents (the Sonnet `contractor` runs the scripts; the Opus
+`workflow-planner` owns the adaptive claim + DAG authoring); this release moves the delegated
+*procedural text* out of the orchestrator's own reading across all 10 command files + their skill
+mirrors, in all four editions.
+
+- **Cumulative result:** the 10 orchestrator command files drop from 3,640 → 3,556 lines and
+  22,254 → 21,498 words (github edition; the gitlab/gitea command editions take the same per-command
+  deltas). The discipline boilerplate ("Re-derive your own kaola_script" / "never gate on a piped
+  `| tail`") is removed from every `Agent(...)` dispatch prompt and now lives once in
+  `agents/contractor.md` + `agents/workflow-planner.md` (and their codex/gitlab/gitea mirrors), which
+  state it as a standing dispatch-invariant.
+- **Behavior-preserving:** zero change to any decision rubric, gate / post-dominance logic, sink
+  choreography (Step 7/8/9 + bash), summary template, transcription contract, or dispatch task
+  contract; every contract-validator-asserted phrase and every `model="{..._MODEL}"` dispatch line
+  preserved; cross-edition parity held (the `contractor`/`workflow-planner` `.toml` mirrors stay
+  byte-identical across editions). All 4-edition contract validators + `npm test` green at every
+  stage; per-stage adversarial G1 review + a final adversarial branch review returned 0 confirmed
+  regressions.
+- **Acceptance criteria:** AC#1 (validators/tests green) ✅, AC#2 (boilerplate removed from dispatch
+  prompts, owned once in the agent defs) ✅, AC#4 (behaves identically — no orchestration logic
+  changed) ✅. **AC#3 (≥20% line reduction) was not met and is unreachable by safe means:** the
+  removable procedure is mid-line inside single-line dispatch prompts (word-weighted, ~0 lines), the
+  `kaola_script` blob is a single line embedded in protected main-session sink-choreography bash, and
+  the bulk of the line count *is* the rubrics/gates/sink/templates the issue forbids touching — so a
+  20%-line cut conflicts directly with the behavior-preservation guardrail. Achieved 2.3% lines /
+  3.4% words; the win is reading-burden, as the issue itself framed it ("22,254 words", "the win is
+  reading-burden"). The Codex agent-profile change (Stage A) rides this release as a Codex manifest
+  bump (3.1.0 → 3.2.0).
+
+The four staged entries below record the per-stage detail.
+
 ### Compress orchestrator prompts — Stage A: agent defs own the procedural discipline (issue #244)
 
 First of the staged runs for issue #244 ("Compress orchestrator prompts — move delegated procedure
