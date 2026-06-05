@@ -65,6 +65,30 @@ gitea editions (9 command files).
   (0 confirmed findings).
 - Intermediate accumulate stage: no version bump, no tag, issue stays open.
 
+### Compress orchestrator prompts — Stage C2: phase1/2/3/5 prompts compressed (issue #244)
+
+Completes the Stage-C fan-out across the remaining phase-ladder commands — `phase1`, `phase2`,
+`phase3`, `phase5` — across the github / gitlab / gitea editions (12 command files). The
+`workflow-next` router is a documented no-op (dispatch-free; 0 boilerplate; its single-line
+`kaola_script` blob is retained — collapsing it is word-only and several instances live in protected
+main-session sink-choreography bash).
+
+- Removed the now-delegated discipline boilerplate ("Re-derive your own kaola_script[/ROADMAP_JS]"
+  and "Capture real exit codes; never gate on a piped `| tail`") from inside each command's single
+  contractor bookkeeping dispatch prompt, and consolidated each file's repeated "You MUST pass
+  `model=`" badge preamble to a single retained occurrence in `## Agent Model Badge` (exact substring
+  kept verbatim). Per edition: `phase1` −7, `phase2` −5, `phase3` −4, `phase5` −14 lines.
+- Net **−90 lines / −657 words** across the 12 files (24 insertions, 114 deletions). Each phase
+  command stays byte-identical across the three editions (parity confirmed).
+- Surgical and behavior-preserving: every transcription contract (phase2 "copy the selection
+  verbatim / do NOT re-select", phase3 "transcribe the architect blueprint / do NOT design", phase5
+  "copy the verdict verbatim / do NOT re-grade / do NOT act as a review gate"), every
+  `model="{..._MODEL}"` dispatch line, every gate / post-dominance rubric, the `kaola_script` blob,
+  and every `#NNN` tag are retained verbatim. All 4-edition contract validators + `npm test` green;
+  adversarial G1 review PASS (0 confirmed findings).
+- Completes the issue's "all 10 commands" scope. Intermediate accumulate stage: no version bump, no
+  tag, issue stays open.
+
 ## [5.1.0] — 2026-06-05
 
 ### Adaptive front-end: a `workflow-planner` subagent owns claim + design

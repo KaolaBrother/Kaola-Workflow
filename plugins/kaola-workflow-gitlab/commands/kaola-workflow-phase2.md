@@ -31,6 +31,7 @@ Every subagent dispatch below includes an explicit `model=` line. Always pass it
 exactly as written — it is what makes Claude Code show the model badge on the
 subagent card. The installer fills each `model="{...}"` placeholder with the
 agent's frontmatter model (for example `model="sonnet"`); never omit the `model=` line.
+You MUST pass `model="{CONTRACTOR_MODEL}"` in this Agent call exactly as shown — do not omit the `model=` line.
 
 ## Resume Detection
 
@@ -80,9 +81,6 @@ inline_emergency_fallback_authorized: no
 
 Invoke the Claude Code agent `planner` with relevant
 Phase 1 excerpts only:
-
-You MUST pass `model="{PLANNER_MODEL}"` in this Agent call exactly as shown —
-do not omit the `model=` line.
 
 ```text
 Agent(
@@ -146,15 +144,12 @@ and advance the `workflow-state.md` pointer. Hand the decided **Selected Approac
 text (name + reason + rejected alternatives) into the prompt; the contractor writes
 it exactly as given.
 
-You MUST pass `model="{CONTRACTOR_MODEL}"` in this Agent call exactly as shown —
-do not omit the `model=` line.
-
 ```text
 Agent(
   subagent_type="contractor",
   model="{CONTRACTOR_MODEL}",
   description="Mechanical ideation finalize {project}",
-  prompt="Run the mechanical ideation-finalization bookkeeping for {project}. Execute Step 4 below exactly as written in this command file: author kaola-workflow/{project}/phase2-ideation.md from the template, then update workflow-state.md (phase: 2 / step: complete / next_command: /kaola-workflow-phase3 {project}), PRESERVING any existing ## Sink block byte-for-byte. Write the Selected Approach EXACTLY as the orchestrator hands it to you — copy the selection and rationale verbatim into the ## Selected Approach section; do NOT re-select, re-rank, restate, soften, or judge it, and do NOT decide which approach wins. Transcribe the rest from the evidence the orchestrator names: the Approaches Evaluated (pros/cons/risk/complexity) and Out of Scope list from .cache/planner.md, the Advisor Findings from .cache/advisor-ideation.md, and the Required Agent Compliance rows. Re-derive your own kaola_script if any script is needed. Capture real exit codes; never gate on a piped | tail. Return a compact bookkeeping summary; do NOT dispatch planner or any role, do NOT judge or assess risk, do NOT route, do NOT act as a gate, do NOT close the issue, and do NOT ask the user."
+  prompt="Run the mechanical ideation-finalization bookkeeping for {project}. Execute Step 4 below exactly as written in this command file: author kaola-workflow/{project}/phase2-ideation.md from the template, then update workflow-state.md (phase: 2 / step: complete / next_command: /kaola-workflow-phase3 {project}), PRESERVING any existing ## Sink block byte-for-byte. Write the Selected Approach EXACTLY as the orchestrator hands it to you — copy the selection and rationale verbatim into the ## Selected Approach section; do NOT re-select, re-rank, restate, soften, or judge it, and do NOT decide which approach wins. Transcribe the rest from the evidence the orchestrator names: the Approaches Evaluated (pros/cons/risk/complexity) and Out of Scope list from .cache/planner.md, the Advisor Findings from .cache/advisor-ideation.md, and the Required Agent Compliance rows. Return a compact bookkeeping summary; do NOT dispatch planner or any role, do NOT judge or assess risk, do NOT route, do NOT act as a gate, do NOT close the issue, and do NOT ask the user."
 )
 ```
 

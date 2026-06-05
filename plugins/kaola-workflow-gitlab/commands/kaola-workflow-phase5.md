@@ -57,6 +57,7 @@ Every subagent dispatch below includes an explicit `model=` line. Always pass it
 exactly as written — it is what makes Claude Code show the model badge on the
 subagent card. The installer fills each `model="{...}"` placeholder with the
 agent's frontmatter model (for example `model="sonnet"`); never omit the `model=` line.
+You MUST pass `model="{CONTRACTOR_MODEL}"` in this Agent call exactly as shown — do not omit the `model=` line.
 
 ## Validation Delegation Policy
 
@@ -80,9 +81,6 @@ to:
 
 Route behavior/test fixes to the Claude Code agent `tdd-guide`:
 
-You MUST pass `model="{TDD_GUIDE_MODEL}"` in this Agent call exactly as shown —
-do not omit the `model=` line.
-
 ```text
 Agent(
   subagent_type="tdd-guide",
@@ -94,9 +92,6 @@ Agent(
 
 Route build/type/lint/tooling fixes to the Claude Code agent
 `build-error-resolver`:
-
-You MUST pass `model="{BUILD_ERROR_RESOLVER_MODEL}"` in this Agent call exactly
-as shown — do not omit the `model=` line.
 
 ```text
 Agent(
@@ -163,9 +158,6 @@ inline_emergency_fallback_authorized: no
 
 Invoke the Claude Code agent `code-reviewer`:
 
-You MUST pass `model="{CODE_REVIEWER_MODEL}"` in this Agent call exactly as shown —
-do not omit the `model=` line.
-
 ```text
 Agent(
   subagent_type="code-reviewer",
@@ -195,9 +187,6 @@ Perform a file-risk scan from Phase 4 modified files.
 
 If security-sensitive files were touched, invoke the
 Claude Code agent `security-reviewer` with:
-
-You MUST pass `model="{SECURITY_REVIEWER_MODEL}"` in this Agent call exactly as shown —
-do not omit the `model=` line.
 
 ```text
 Agent(
@@ -272,15 +261,12 @@ and advance the `workflow-state.md` pointer. Hand the decided **Review Status**
 string and the resolved CRITICAL/HIGH/MEDIUM/LOW finding lists into the prompt;
 the contractor writes them exactly as given.
 
-You MUST pass `model="{CONTRACTOR_MODEL}"` in this Agent call exactly as shown —
-do not omit the `model=` line.
-
 ```text
 Agent(
   subagent_type="contractor",
   model="{CONTRACTOR_MODEL}",
   description="Mechanical review finalize {project}",
-  prompt="Run the mechanical review-finalization bookkeeping for {project}. Execute Step 4 below exactly as written in this command file: author kaola-workflow/{project}/phase5-review.md from the template, then update workflow-state.md (phase: 5 / step: complete / next_command: /kaola-workflow-phase6 {project}), PRESERVING any existing ## Sink block byte-for-byte. Write the Review Status verdict, the CRITICAL/HIGH/MEDIUM/LOW finding lists, the Required Agent Compliance rows, fixes-applied, validation evidence, and follow-up items EXACTLY as the orchestrator hands them to you — copy the verdict verbatim; do NOT restate, soften, upgrade, or re-grade it, and do NOT decide severity or whether the review passed. Read the .cache evidence paths the orchestrator names only to transcribe file lists and evidence paths. Re-derive your own kaola_script if any script is needed. Capture real exit codes; never gate on a piped | tail. Return a compact bookkeeping summary; do NOT dispatch code-reviewer/security-reviewer/tdd-guide/build-error-resolver or any role, do NOT judge or triage findings, do NOT route or apply fixes, do NOT act as a review gate, do NOT close the issue, and do NOT ask the user."
+  prompt="Run the mechanical review-finalization bookkeeping for {project}. Execute Step 4 below exactly as written in this command file: author kaola-workflow/{project}/phase5-review.md from the template, then update workflow-state.md (phase: 5 / step: complete / next_command: /kaola-workflow-phase6 {project}), PRESERVING any existing ## Sink block byte-for-byte. Write the Review Status verdict, the CRITICAL/HIGH/MEDIUM/LOW finding lists, the Required Agent Compliance rows, fixes-applied, validation evidence, and follow-up items EXACTLY as the orchestrator hands them to you — copy the verdict verbatim; do NOT restate, soften, upgrade, or re-grade it, and do NOT decide severity or whether the review passed. Read the .cache evidence paths the orchestrator names only to transcribe file lists and evidence paths. Return a compact bookkeeping summary; do NOT dispatch code-reviewer/security-reviewer/tdd-guide/build-error-resolver or any role, do NOT judge or triage findings, do NOT route or apply fixes, do NOT act as a review gate, do NOT close the issue, and do NOT ask the user."
 )
 ```
 

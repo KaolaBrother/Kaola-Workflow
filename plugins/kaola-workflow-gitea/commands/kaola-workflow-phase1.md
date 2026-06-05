@@ -27,6 +27,7 @@ Every subagent dispatch below includes an explicit `model=` line. Always pass it
 exactly as written — it is what makes Claude Code show the model badge on the
 subagent card. The installer fills each `model="{...}"` placeholder with the
 agent's frontmatter model (for example `model="sonnet"`); never omit the `model=` line.
+You MUST pass `model="{CONTRACTOR_MODEL}"` in this Agent call exactly as shown — do not omit the `model=` line.
 
 ## Resume Detection
 
@@ -101,9 +102,6 @@ inline_emergency_fallback_authorized: no
 
 Invoke the Claude Code agent `code-explorer`:
 
-You MUST pass `model="{CODE_EXPLORER_MODEL}"` in this Agent call exactly as shown —
-do not omit the `model=` line.
-
 ```text
 Agent(
   subagent_type="code-explorer",
@@ -133,9 +131,6 @@ Update `workflow-state.md` before invoking and after writing the cache file.
 ## Step 3 - External Docs Lookup
 
 Invoke `docs-lookup` only when current external behavior matters. Pass its model explicitly:
-
-You MUST pass `model="{DOCS_LOOKUP_MODEL}"` in this Agent call exactly as shown —
-do not omit the `model=` line.
 
 ```text
 Agent(
@@ -231,14 +226,12 @@ RESEARCH_ISSUE=$(grep '^issue_number:' "kaola-workflow/{project-name}/workflow-s
 
 ## Mechanical Checkpoint (delegated to the contractor)
 
-You MUST pass `model="{CONTRACTOR_MODEL}"` in this Agent call exactly as shown — do not omit the `model=` line.
-
 ```text
 Agent(
   subagent_type="contractor",
   model="{CONTRACTOR_MODEL}",
   description="Mechanical checkpoint {project-name}",
-  prompt="Run the mechanical bookkeeping for Phase 1 of {project-name}. phase1-research.md is already written on disk (do NOT author or edit it — the research synthesis is the orchestrator's). Execute the Step 5 workflow-state.md checkpoint update (phase: 1 / step: complete / next_command: /kaola-workflow-phase2 {project-name}), PRESERVING any existing ## Sink block byte-for-byte, and Step 5b (the per-issue roadmap init-issue + git add kaola-workflow/.roadmap/issue-N.md staging), exactly as written below in this command file. Re-derive your own kaola_script/ROADMAP_JS. Capture real exit codes; never gate on a piped | tail. Return a compact bookkeeping summary; do NOT cut the feature branch (Step 6), do NOT invoke code-explorer/docs-lookup, do NOT judge or interpret findings."
+  prompt="Run the mechanical bookkeeping for Phase 1 of {project-name}. phase1-research.md is already written on disk (do NOT author or edit it — the research synthesis is the orchestrator's). Execute the Step 5 workflow-state.md checkpoint update (phase: 1 / step: complete / next_command: /kaola-workflow-phase2 {project-name}), PRESERVING any existing ## Sink block byte-for-byte, and Step 5b (the per-issue roadmap init-issue + git add kaola-workflow/.roadmap/issue-N.md staging), exactly as written below in this command file. Return a compact bookkeeping summary; do NOT cut the feature branch (Step 6), do NOT invoke code-explorer/docs-lookup, do NOT judge or interpret findings."
 )
 ```
 

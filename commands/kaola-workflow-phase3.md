@@ -29,6 +29,7 @@ Every subagent dispatch below includes an explicit `model=` line. Always pass it
 exactly as written — it is what makes Claude Code show the model badge on the
 subagent card. The installer fills each `model="{...}"` placeholder with the
 agent's frontmatter model (for example `model="sonnet"`); never omit the `model=` line.
+You MUST pass `model="{CONTRACTOR_MODEL}"` in this Agent call exactly as shown — do not omit the `model=` line.
 
 ## Resume Detection
 
@@ -74,9 +75,6 @@ inline_emergency_fallback_authorized: no
 
 Invoke the Claude Code agent `code-architect` with
 relevant excerpts from Phase 1 and Phase 2:
-
-You MUST pass `model="{CODE_ARCHITECT_MODEL}"` in this Agent call exactly as shown —
-do not omit the `model=` line.
 
 ```text
 Agent(
@@ -152,14 +150,12 @@ the subagent boundary):
 PLAN_PROJECT="{project}"
 ```
 
-You MUST pass `model="{CONTRACTOR_MODEL}"` in this Agent call exactly as shown — do not omit the `model=` line.
-
 ```text
 Agent(
   subagent_type="contractor",
   model="{CONTRACTOR_MODEL}",
   description="Mechanical plan write {project}",
-  prompt="Run the mechanical bookkeeping for Phase 3 of {project}. Author `kaola-workflow/{project}/phase3-plan.md` by transcribing the advisor-reviewed blueprint and task list from `.cache/architect.md` (plus any `.cache/architect-revision-*.md`) and `.cache/advisor-plan.md`, using the exact phase3-plan.md template and ## Required Agent Compliance table written below in this command file. The blueprint was already judged complete at the Step 2 advisor gate — do NOT design, re-plan, judge, or change the selected Phase 2 approach; transcribe the architect's evidence verbatim (files to create/modify, build sequence, parallelization, task write sets, validate commands). Then execute the Step 5 completion checkpoint: update `workflow-state.md` (phase: 3 / step: complete / next_command: /kaola-workflow-phase4 {project}), PRESERVING any existing ## Sink block byte-for-byte. Re-derive your own kaola_script if any script is needed. Capture real exit codes; never gate on a piped | tail. Return a compact bookkeeping summary; do NOT dispatch code-architect or the advisor, do NOT implement code, do NOT route to Phase 4, do NOT ask the user."
+  prompt="Run the mechanical bookkeeping for Phase 3 of {project}. Author `kaola-workflow/{project}/phase3-plan.md` by transcribing the advisor-reviewed blueprint and task list from `.cache/architect.md` (plus any `.cache/architect-revision-*.md`) and `.cache/advisor-plan.md`, using the exact phase3-plan.md template and ## Required Agent Compliance table written below in this command file. The blueprint was already judged complete at the Step 2 advisor gate — do NOT design, re-plan, judge, or change the selected Phase 2 approach; transcribe the architect's evidence verbatim (files to create/modify, build sequence, parallelization, task write sets, validate commands). Then execute the Step 5 completion checkpoint: update `workflow-state.md` (phase: 3 / step: complete / next_command: /kaola-workflow-phase4 {project}), PRESERVING any existing ## Sink block byte-for-byte. Return a compact bookkeeping summary; do NOT dispatch code-architect or the advisor, do NOT implement code, do NOT route to Phase 4, do NOT ask the user."
 )
 ```
 
