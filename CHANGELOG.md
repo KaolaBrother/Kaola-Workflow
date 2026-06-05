@@ -1,5 +1,29 @@
 # Changelog
 
+## [Unreleased]
+
+### Compress orchestrator prompts — Stage A: agent defs own the procedural discipline (issue #244)
+
+First of the staged runs for issue #244 ("Compress orchestrator prompts — move delegated procedure
+into the subagent definitions"). The lean-orchestrator already moved the *execution* to subagents
+(the Sonnet `contractor` runs the scripts; the Opus `workflow-planner` owns the adaptive claim +
+DAG authoring), but the orchestrator's command prompts still carried that delegated *procedure*
+inline. This stage lays the foundation by making the subagent definitions the **authoritative owner**
+of the procedural discipline, so later stages can drop the repeated boilerplate from the dispatch
+prompts.
+
+- **`agents/contractor.md` + `agents/workflow-planner.md`** (and their Codex/gitlab/gitea
+  `.toml` mirrors) now state explicitly that the procedural discipline — re-derive your own script
+  path; capture real exit codes; never gate on a piped `| tail` — is a **standing invariant applied
+  on every dispatch, regardless of whether the summoning dispatch prompt restates it.** A dispatch
+  prompt that omits these reminders does not relax them.
+- Additive and behavior-preserving: no orchestration logic, gate, rubric, or task contract changed;
+  every contract-validator-asserted phrase (incl. the `workflow-planner` `` NOT `acquired`/`owned` ``
+  pin) preserved; the three `contractor.toml` and three `workflow-planner.toml` stay byte-identical
+  across editions. All 4-edition contract validators + `npm test` green.
+- Intermediate accumulate stage: no version bump, no tag, issue stays open; the shared
+  `workflow/issue-244` branch keeps accumulating toward the final-stage release-once.
+
 ## [5.1.0] — 2026-06-05
 
 ### Adaptive front-end: a `workflow-planner` subagent owns claim + design
