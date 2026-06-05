@@ -88,28 +88,38 @@ the example above models both.
 
 ## Validate + freeze
 
+**Consult the `planner` Codex agent role to PROPOSE the decomposition** (disjoint sub-areas /
+parallel research / extra verification); the current session comprehends, **authors** the `## Nodes`
+table + empty `## Node Ledger`, governs, and freezes it (the planner has no `Write`, and the session
+must internalize the DAG to dispatch + `plan_hash`-freeze it — the authoring write is the session's,
+not the contractor's).
+
 First confirm the adaptive switch is ON — the **hard authoring guard** (#235). If it refuses,
 STOP: do not author or freeze a plan (mirrors the `claimProject` selection guard; closes audit
-D8). The validator stays toggle-agnostic; the switch is read only here.
+D8). The validator stays toggle-agnostic; the switch is read only here. This entry guard is the
+current session's — it gates whether the contractor is summoned at all.
 
 ```bash
 node "$KAOLA_SCRIPTS/kaola-workflow-claim.js" authoring-allowed --project {project}
 ```
 
 If the JSON `status` is `authoring_refused`, surface the typed refusal and STOP. If
-`authoring_allowed`, proceed:
-
-```bash
-node "$KAOLA_SCRIPTS/kaola-workflow-plan-validator.js" kaola-workflow/{project}/workflow-plan.md --json
-```
+`authoring_allowed`, **delegate classification to the mechanical `contractor` Codex agent role when
+that subagent is available** — it runs `node "$KAOLA_SCRIPTS/kaola-workflow-plan-validator.js"
+kaola-workflow/{project}/workflow-plan.md --json` and returns the FULL verdict JSON verbatim (a
+governance input, not a compact summary); the current session **governs** (the contractor never
+judges risk):
 - **out-of-grammar → typed refusal** (unknown role, gate routed around, cap busted,
   non-disjoint write-role fan-out). Fix the plan; never clamp around the gate.
 - **in-grammar, provably low-risk → auto-run.** Freeze immediately.
 - **in-grammar, risky or uncertain → ask the user first** (show the DAG + validator
   report + risk findings). Freeze only on an explicit yes.
 
-Freeze once authorized (the script computes and writes `plan_hash` into the plan), then
-hand off to `kaola-workflow-plan-run {project}`:
-```bash
-node "$KAOLA_SCRIPTS/kaola-workflow-plan-validator.js" kaola-workflow/{project}/workflow-plan.md --freeze
-```
+Once authorized, **delegate freeze + checkpoint to the contractor**: it runs `node
+"$KAOLA_SCRIPTS/kaola-workflow-plan-validator.js" kaola-workflow/{project}/workflow-plan.md --freeze`
+(computes + writes `plan_hash`; the plan is then author-immutable), records the planning evidence in
+`workflow-state.md` (preserving any `## Sink` block), and — if a GitHub issue N is linked — stages the
+per-issue roadmap (`kaola-workflow-roadmap.js init-issue --issue N --title "TITLE" --status open
+--workflow-project "{project}" --next-step adaptive` then `git add kaola-workflow/.roadmap/issue-N.md`).
+It never judges; the current session keeps the freeze decision. Then hand off to
+`kaola-workflow-plan-run {project}`.

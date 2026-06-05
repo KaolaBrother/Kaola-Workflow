@@ -37,37 +37,45 @@ on the `model=` line — never omit it.
 
 ## Resume Detection
 
-Load `workflow-plan.md`, re-check `plan_hash`, and re-validate **only**
-closed-library membership + structural grammar + hash integrity (NOT the full
-gate rubric — re-running it would brick an in-flight plan if the rubric tightened
-after freeze):
+On entry (and on every resume), the main session **summons the `contractor`** to re-orient: the
+contractor runs the integrity + readiness scripts and reports the durable markers; the main session
+reads that report and **judges** which resume branch applies. The main session never runs these
+scripts itself — but the judgment is always its own.
+
+You MUST pass `model="{CONTRACTOR_MODEL}"` in this Agent call exactly as shown — do not omit the
+`model=` line.
 
 ```text
-node scripts/kaola-workflow-plan-validator.js kaola-workflow/{project}/workflow-plan.md --resume-check --json
+Agent(
+  subagent_type="contractor",
+  model="{CONTRACTOR_MODEL}",
+  description="Adaptive orient {project}",
+  prompt="Re-orient the frozen plan for {project}; run scripts + report markers, do NOT judge or clear anything. Run `kaola-workflow-plan-validator.js kaola-workflow/{project}/workflow-plan.md --resume-check --json` — re-check `plan_hash` + closed-library membership + structural grammar + hash integrity ONLY (NOT the full gate rubric — re-running it would brick an in-flight plan if the rubric tightened after freeze) — and `kaola-workflow-next-action.js kaola-workflow/{project}/workflow-plan.md --json` (ready set, next node with resolved `model`, `allDone`). Then read the `## Node Ledger` + `workflow-state.md` and REPORT VERBATIM: both JSON outputs in full; whether `escalated_to_full: consent` is in `workflow-state.md` OR `consent_halt: pending` is in the `## Node Ledger`; any node at `status: in_progress` and, for it, whether `.cache/{node-id}.md` is absent / partial / complete and whether its barrier has already run. Re-derive your own kaola_script. Capture real exit codes; never gate on a piped | tail. Do NOT judge, dispatch, or clear any marker."
+)
 ```
 
-Then parse the `## Node Ledger` and `workflow-state.md`:
+The main session then **judges** the resume branch from the contractor's report:
 
 - a consent-halt — signalled by EITHER `escalated_to_full: consent` in
   `workflow-state.md` OR `consent_halt: pending` in the plan's `## Node Ledger`
   (#234; the Ledger marker is non-hashed and survives a lost/regenerated state
   file) — means a provisional auto-run was **revoked at the barrier**; surface the
   pending approval for the user's explicit yes and do NOT re-dispatch the
-  `in_progress` node. On the user's explicit approval, REMOVE the
+  `in_progress` node. On the user's explicit approval, summon the contractor to REMOVE the
   `consent_halt: pending` line from the `## Node Ledger` AND clear
   `escalated_to_full: consent` from `workflow-state.md` in lockstep, then resume the
   ready set — never re-ask an authorization already granted.
-- A node `in_progress` with absent/partial `.cache/{node-id}.md` → crash mid-node;
-  re-dispatch exactly that node (mirrors phase4 `in_progress → delegate`). Re-running its
-  step-1 `--record-base` is **idempotent** (#239) — the original node-start baseline is reused,
-  not re-snapshotted, so a crashed attempt's writes stay visible to the step-4 barrier.
-- Otherwise compute the **ready set**: every node whose `status != complete` and
-  all of whose `depends_on` are `complete` **with resolved compliance**.
-
-Compute it with the aggregator rather than by hand — it returns the ready set (each node already carrying its resolved `model`), the next node, and `allDone`:
-```text
-node scripts/kaola-workflow-next-action.js kaola-workflow/{project}/workflow-plan.md --json
-```
+- A node `in_progress` with **absent/partial** `.cache/{node-id}.md` → crash mid-node before the
+  role finished; re-dispatch exactly that role node (mirrors phase4 `in_progress → delegate`). The
+  advance bracket's `--record-base` is **idempotent** (#239) — the original node-start baseline is
+  reused, not re-snapshotted, so a crashed attempt's writes stay visible to the barrier.
+- A node `in_progress` with **complete** `.cache/{node-id}.md` but the barrier not yet run / the node
+  not yet marked `complete` → crash AFTER the role finished but before the commit bracket: **re-run
+  the commit bracket (step 3) only — do NOT re-dispatch the role**, which would redo the role's
+  possibly-non-idempotent writes. The idempotent baseline still anchors the barrier diff.
+- Otherwise the ready set from `next-action` (each node already carrying its resolved `model`) drives
+  the loop: every node whose `status != complete` and all of whose `depends_on` are `complete`
+  **with resolved compliance**.
 
 ## Governance — auto-run only when provably low-risk, else ask
 
@@ -90,15 +98,27 @@ The validator classifies the frozen plan once. Re-read its verdict
 ## Per-Node Loop
 
 For each ready node, run the Phase-4-style loop, generalized from a phase ladder
-to a plan DAG:
+to a plan DAG. The main session **owns the loop and dispatches the role** (a subagent cannot
+dispatch a subagent, so the dispatch and the loop control flow stay with the orchestrator); it
+**summons the `contractor`** for the mechanical brackets around the role dispatch — running the
+scripts and writing the durable ledger/state — and **judges** the barrier outcome. The main
+session never runs the loop scripts itself.
 
-1. **update-ledger** — mark the node `in_progress`, and record its per-instance write
-   baseline (#239) so the step-4 barrier can diff exactly THIS node's writes (nodes run
-   one at a time). The node-START aggregator runs ONLY record-base (idempotent).
-   ```bash
-   node scripts/kaola-workflow-commit-node.js kaola-workflow/{project}/workflow-plan.md --node-id {node-id} --start --json
+You MUST pass `model="{CONTRACTOR_MODEL}"` in the contractor Agent calls below exactly as shown.
+
+1. **advance (contractor bracket)** — the contractor opens the next ready node:
+   ```text
+   Agent(
+     subagent_type="contractor",
+     model="{CONTRACTOR_MODEL}",
+     description="Adaptive advance {project}",
+     prompt="Open the next ready node for {project}; run scripts + write the in_progress row, do NOT dispatch/judge/run the barrier. Run `kaola-workflow-next-action.js kaola-workflow/{project}/workflow-plan.md --json` and report its full JSON (ready set, next node, each node's resolved `model`, `allDone`). For the next ready node, mark it `in_progress` in the `## Node Ledger` and record its per-instance write baseline by running `kaola-workflow-commit-node.js kaola-workflow/{project}/workflow-plan.md --node-id {node-id} --start --json` — record-base runs ONLY at node start and is **idempotent** (#239); an end-time baseline would neuter the barrier. Re-derive your own kaola_script. Capture real exit codes; never gate on a piped | tail. Return the next-action JSON + the node you opened."
+   )
    ```
-2. **dispatch** the node's role. An implement node:
+   If the contractor reports `allDone` (every ledger row `complete`/`n/a`), route to Phase 6
+   (Completion below) — there is no node to dispatch.
+2. **dispatch** the node's role (main session — see above). Use the `model` the contractor resolved
+   for the node. An implement node:
 
 You MUST pass `model="{TDD_GUIDE_MODEL}"` in this Agent call exactly as shown —
 do not omit the `model=` line.
@@ -143,38 +163,31 @@ Agent(
    `subagent_type` set to the node's role and `model=` resolved via
    `scripts/kaola-workflow-resolve-agent-model.js`. Per-instance evidence is
    namespaced `.cache/{role}-{claim-id}.md` so siblings never collide.
-3. **verify** — read the node's `.cache/{node-id}.md` evidence. A `tdd-guide`
-   node cannot transition to `complete` without both RED and GREEN evidence (or an
-   explicit `n/a` skip reason). Count `test_thrash`: ≥ 3 consecutive same-test
-   RED→RED cycles writes `escalated_to_full: test_thrash` and stops.
-4. **barrier (commit order: `.cache` evidence → Node Ledger row → `workflow-state.md`
-   pointer LAST).** Re-scan the files this node actually wrote — **script-enforced**
-   (#231), not prose. With `--node-id` this is the PER-INSTANCE barrier (#239): it
-   diffs against the node's step-1 recorded base (exactly this node's writes) and
-   checks them against the node's OWN declared write set, so a fan-out instance that
-   overflows into a SIBLING's lane is refused (the whole-plan barrier in Phase 6
-   remains the union-level floor):
-   ```bash
-   node scripts/kaola-workflow-commit-node.js kaola-workflow/{project}/workflow-plan.md --node-id {node-id} --json; BC=$?
+3. **commit (contractor bracket)** — after the role returns, the contractor verifies the evidence,
+   runs the barrier (commit order: `.cache` evidence → Node Ledger row → `workflow-state.md` pointer
+   LAST), and **only on a clean barrier** closes the node:
+   ```text
+   Agent(
+     subagent_type="contractor",
+     model="{CONTRACTOR_MODEL}",
+     description="Adaptive commit {project}",
+     prompt="Close node {node-id} for {project} in commit order (`.cache` evidence → `## Node Ledger` row → `workflow-state.md` pointer LAST); run scripts + write the durable rows, do NOT judge sufficiency or write any escalation marker. (a) Read `.cache/{node-id}.md` and report whether BOTH RED and GREEN evidence are present (a `tdd-guide` node cannot transition to `complete` without both, or an explicit `n/a` skip reason) and the `test_thrash` count (consecutive same-test RED→RED cycles). (b) Run the PER-INSTANCE barrier `kaola-workflow-commit-node.js kaola-workflow/{project}/workflow-plan.md --node-id {node-id} --json` and report its exit code — the re-scan of the files this node actually wrote is **script-enforced** (#231), not prose; with `--node-id` it diffs against the node's step-1 recorded base (exactly THIS node's writes, #239) and checks them against the node's OWN declared write set, so a fan-out instance that overflows into a SIBLING's lane is refused (the whole-plan barrier in Phase 6 remains the union-level floor). (c) ONLY IF the barrier exits 0 AND RED+GREEN evidence is present (or a valid `n/a`): mark the node `complete` (or `n/a`) and emit its one `## Required Agent Compliance` row — for a `code-reviewer`/`security-reviewer` gate or skeptic row, key it with the **bare role string** (`code-reviewer`, `security-reviewer`); per-instance disambiguation goes in the Evidence column only (the canonical compliance-row format the full-path `delegationPolicyCompliance()` matcher expects). Never mark a gate row `n/a` while a node it post-dominates reached `complete` — a gate row must record a node that actually ran and produced a passing verdict. If the barrier exits 1, or `test_thrash` ≥ 3, or evidence is missing: do NOT mark the node `complete` — report the condition and stop. Re-derive your own kaola_script. Capture real exit codes; never gate on a piped | tail. Do NOT dispatch a role, judge sufficiency, write any `escalated_to_full`/`consent_halt` marker, or ask the user."
+   )
    ```
-   On exit 1 (a write turned out sensitive — a Phase-5 category — on a plan with no
-   `security-reviewer` node, or overflowed outside this node's own declared allowlist) the
-   provisional authorization was granted on a now-false premise:
-   **revoke and halt for consent** — write `escalated_to_full: consent` AND force
-   `security-reviewer` post-dominance (`escalated_to_full: security`) into
-   `workflow-state.md`, AND write the durable line `consent_halt: pending` into the
-   plan's `## Node Ledger` (#234: a non-hashed section, so the halt survives a
-   lost/regenerated `workflow-state.md`). Never write into `## Meta` / `## Nodes`.
-   These co-occur — one barrier moment, multiple consequences. Do not mark the node
-   `complete` until the barrier exits 0.
-5. **update-ledger** — mark `complete` (or `n/a`), emit the node's one
-   `## Required Agent Compliance` row. For a `code-reviewer` / `security-reviewer`
-   gate or skeptic row, key it with the **bare role string** (`code-reviewer`,
-   `security-reviewer`); per-instance disambiguation goes in the Evidence column only
-   (the canonical compliance-row format the full-path `delegationPolicyCompliance()`
-   matcher expects). Never mark a gate row `n/a` while a node it post-dominates reached
-   `complete` — a gate row must record a node that actually ran and produced a passing
-   verdict.
+4. **judge the barrier (main session — governance).** Read the contractor's commit report:
+   - barrier exit 0 + RED+GREEN evidence (or valid `n/a`) → the node is `complete`; continue the
+     loop (back to step 1). Do not treat a node as `complete` until the barrier exits 0.
+   - barrier exit 1 (a write turned out sensitive — a Phase-5 category — on a plan with no
+     `security-reviewer` node, or overflowed outside this node's own declared allowlist): the
+     **provisional** authorization was granted on a now-false premise. **Revoke and halt for consent**
+     — this **decision** is yours (the contractor is never a gate); summon the contractor
+     to write `escalated_to_full: consent` AND force `security-reviewer` post-dominance
+     (`escalated_to_full: security`) into `workflow-state.md`, AND write the durable line
+     `consent_halt: pending` into the plan's `## Node Ledger` (#234: a non-hashed section, so the
+     halt survives a lost/regenerated `workflow-state.md`; never write into `## Meta` / `## Nodes`)
+     — then surface the pending approval. You decide; the contractor transcribes the consequence.
+   - `test_thrash` ≥ 3 consecutive same-test RED→RED cycles → escalate the same way
+     (`escalated_to_full: test_thrash`) and stop.
 
 > **Enforcement boundary (#231 — now script-enforced).** Gate *presence* is proven
 > statically at freeze (post-dominance over the unique sink). Gate *execution* is now
@@ -183,7 +196,7 @@ Agent(
 > reviewer is marked `n/a` at runtime). It is wired into `routeAdaptive` (surfaced as
 > `pendingGates`, non-blocking on resume) and enforced as a **hard merge gate** in
 > Phase 6. The actual-writes re-scan + sensitive/allowlist refusal is `--barrier-check`
-> (per-node in step 4 above, and whole-plan in Phase 6). Only the quorum tally and the
+> (per-node in the commit bracket, step 3 above, and whole-plan in Phase 6). Only the quorum tally and the
 > `validateNodeOutput` schema checkpoints remain agent-discipline prose — perform those;
 > the gate execution and the write barrier are guaranteed by the validator scripts.
 

@@ -64,4 +64,32 @@ Routing Ledger:
 - behavior, regression, coverage, or acceptance failure -> `tdd-guide`
 - build, type, lint, dependency, formatting, or tooling failure -> `build-error-resolver`
 
+## Mechanical Bookkeeping (delegated to the contractor)
+
+The per-task **judgment** stays with the current session: it dispatches the
+`tdd-guide` role agent (a subagent cannot dispatch a subagent), reviews the
+returned diff and RED/GREEN evidence, runs or delegates the validation command,
+**classifies** any failure, and **decides** the route (`tdd-guide` vs
+`build-error-resolver`) and whether validation PASSED. Once those decisions are
+made, the deterministic bookkeeping around them — stamping
+`kaola-workflow/{project}/phase4-progress.md` from `phase3-plan.md` (one `## Tasks`
+row and one `## Required Agent Compliance` `tdd-guide executor task N` row per
+Phase 3 task, all `pending`); moving the `workflow-state.md` pointer to open each
+task (`step: red`, `task: N`, preserving any `## Sink` block byte-for-byte);
+transcribing the orchestrator-decided Failing Command / Classification / Routed To
+/ Evidence / Status into a `## Failure Routing Ledger` row; and, only after the
+current session has judged validation PASSED, marking the task `complete`,
+recording Files Modified, flipping its compliance row to the delegation status the
+session recorded, and advancing `workflow-state.md` — is delegated to the
+mechanical `contractor` Codex agent role when that subagent is available. The
+contractor runs the scripts and authors the durable bookkeeping but never
+dispatches `tdd-guide`/`build-error-resolver` or any role, never classifies a
+failure, never chooses a route, never judges whether validation passed, and never
+asks the user; it transcribes the verdicts and lists the session hands it verbatim.
+Capture the task result (task number, modified-file list, evidence path, validation
+verdict) in THIS session before delegating — shell state does not cross the
+delegation boundary. Re-derive any needed forge script as
+`$KAOLA_SCRIPTS/kaola-gitea-workflow-*.js`, capture real exit codes, and never gate
+on a piped `| tail`.
+
 When all tasks are complete, set `next_skill: kaola-workflow-review {project}`.

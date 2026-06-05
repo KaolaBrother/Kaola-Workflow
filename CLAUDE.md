@@ -27,6 +27,8 @@ Issue selection is an agent decision, not a hidden script decision.
 - `scripts/kaola-workflow-roadmap.js` — roadmap generation from GitHub issues
 - `scripts/kaola-workflow-plan-validator.js` — adaptive-path (#227) plan validator: closed-library + three-shape grammar + unique sink + post-dominance gates + caps + disjointness + risk-assessment governance (`--json`/`--freeze`/`--resume-check`); `plan_hash` lives inside `workflow-plan.md`. Toggle-agnostic.
 - `scripts/kaola-workflow-adaptive-schema.js` — adaptive-path forge-neutral constants + toggle resolution; byte-identical across all four editions (cross-edition drift anchor).
+- `scripts/kaola-workflow-next-action.js` — adaptive aggregator: ready-set / next node / resolved model from a frozen `workflow-plan.md` (n/a-aware; typed refusal on a stalled/corrupt DAG). Run by the `contractor` in the per-node *advance* bracket.
+- `scripts/kaola-workflow-commit-node.js` — adaptive aggregator: composes the per-node barrier choreography (`--record-base` → `--barrier-check` + `--gate-verify`) by shelling the plan-validator. Run by the `contractor` in the per-node *commit* bracket; fails closed on a missing baseline; never mutates the ledger/state.
 
 ## Running Tests
 ```bash

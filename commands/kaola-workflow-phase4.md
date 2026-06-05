@@ -169,7 +169,9 @@ Anything else is routed to `tdd-guide` or `build-error-resolver`.
 
 ## Resume Detection
 
-If `phase4-progress.md` is missing, create it from `phase3-plan.md`.
+If `phase4-progress.md` is missing, the main session delegates its creation from
+`phase3-plan.md` to the contractor (see Progress File Initialization below). The
+resume branch the file selects is the main session's judgment.
 
 If present:
 
@@ -183,9 +185,27 @@ If present:
 
 If ambiguous, stop and ask. Do not guess.
 
-## Progress File Template
+## Progress File Initialization (delegated to the contractor)
 
-Create `kaola-workflow/{project}/phase4-progress.md`:
+Authoring `phase4-progress.md` is mechanical bookkeeping: the contractor stamps
+the template from `phase3-plan.md` (one `## Tasks` / `## Required Agent Compliance`
+row per Phase 3 task). The main session owns no judgment here — it only confirms
+the file exists before the per-task loop. Run this once, when Resume Detection
+finds the file missing.
+
+You MUST pass `model="{CONTRACTOR_MODEL}"` in this Agent call exactly as shown —
+do not omit the `model=` line.
+
+```text
+Agent(
+  subagent_type="contractor",
+  model="{CONTRACTOR_MODEL}",
+  description="Init phase4 progress {project}",
+  prompt="Create kaola-workflow/{project}/phase4-progress.md for {project} from kaola-workflow/{project}/phase3-plan.md, using the Progress File template exactly as written below in this command file. Emit one ## Tasks row and one ## Required Agent Compliance `tdd-guide executor task N` row per Phase 3 task, all status `pending`; set Build Status `clean`, an empty Failure Routing Ledger, and Last Updated to the current ISO-8601 UTC timestamp. Re-derive your own kaola_script if needed. Capture real exit codes; never gate on a piped | tail. Do NOT dispatch a role, classify failures, judge, or run any task. Return a compact bookkeeping summary."
+)
+```
+
+The template the contractor stamps:
 
 ```markdown
 # Phase 4 - Progress: {project}
@@ -239,7 +259,24 @@ clean
 
 ### Step 1 - Delegate Task
 
-Before invoking the agent, update:
+Before invoking the role agent, the main session delegates the open-the-task
+state write to the contractor (a mechanical `workflow-state.md` pointer move — no
+judgment). The main session keeps the `tdd-guide` dispatch itself, since a
+subagent cannot dispatch a subagent.
+
+You MUST pass `model="{CONTRACTOR_MODEL}"` in this Agent call exactly as shown —
+do not omit the `model=` line.
+
+```text
+Agent(
+  subagent_type="contractor",
+  model="{CONTRACTOR_MODEL}",
+  description="Open task {n} {project}",
+  prompt="Open task {n} for {project}. Update kaola-workflow/{project}/workflow-state.md to phase: 4 / phase_name: Execute / step: delegate-task / task: {n} / next_command: /kaola-workflow-phase4 {project} / inline_emergency_fallback_authorized: no, PRESERVING any existing ## Sink block byte-for-byte. Re-derive your own kaola_script if needed. Capture real exit codes; never gate on a piped | tail. Do NOT dispatch tdd-guide or any role, classify, judge, or run the task. Return a compact bookkeeping summary."
+)
+```
+
+The pointer the contractor writes:
 
 ```text
 phase: 4
@@ -250,7 +287,7 @@ next_command: /kaola-workflow-phase4 {project}
 inline_emergency_fallback_authorized: no
 ```
 
-Invoke the Claude Code agent `tdd-guide` for the task:
+Then the main session invokes the Claude Code agent `tdd-guide` for the task:
 
 You MUST pass `model="{TDD_GUIDE_MODEL}"` in this Agent call exactly as shown —
 do not omit the `model=` line.
@@ -285,7 +322,9 @@ Write raw output to:
 kaola-workflow/{project}/.cache/tdd-task-{n}.md
 ```
 
-Mark the compliance row `invoked` with that evidence path.
+The `tdd-guide executor task {n}` compliance row is flipped to `invoked` with
+that evidence path by the contractor in the Step 4 close-the-task bracket — the
+main session writes no durable progress rows itself.
 
 ### Step 2 - Verify Agent Result
 
@@ -310,17 +349,33 @@ or noisy validation and save raw output to:
 kaola-workflow/{project}/.cache/validation-task-{n}.md
 ```
 
-If validation fails, add a row to `Failure Routing Ledger` before invoking the
-fix agent.
+If validation fails, the main session **classifies** the failure and **decides**
+the route, then delegates the mechanical `Failure Routing Ledger` row write to the
+contractor before invoking the fix agent. The classification and routing decision
+are the main session's; only the row transcription is the contractor's.
 
-Routing:
+You MUST pass `model="{CONTRACTOR_MODEL}"` in this Agent call exactly as shown —
+do not omit the `model=` line.
+
+```text
+Agent(
+  subagent_type="contractor",
+  model="{CONTRACTOR_MODEL}",
+  description="Ledger row task {n} {project}",
+  prompt="Append one row to the ## Failure Routing Ledger in kaola-workflow/{project}/phase4-progress.md for task {n}, transcribing verbatim the values the orchestrator hands you: Failing Command, Classification, Routed To, Evidence path, Status (open). Do NOT classify, choose the route, dispatch the fix agent, judge, or alter any other row. Re-derive your own kaola_script if needed. Capture real exit codes; never gate on a piped | tail. Return a compact bookkeeping summary."
+)
+```
+
+Routing (the main session's decision):
 - build/type/lint/dependency/tooling -> `build-error-resolver`
 - behavior/regression/coverage/acceptance -> `tdd-guide`
 - scope/write-set -> stop and ask, unless reverting the agent's own deviation
 
-For every routed fix or delegated validation agent, include the explicit
-`model=` parameter in the `Agent(...)` call exactly as documented above — never
-omit it.
+The main session dispatches the routed fix agent (`build-error-resolver` /
+`tdd-guide`) itself, using the Agent block documented under Validation Delegation
+Policy above. For every routed fix or delegated validation agent, include the
+explicit `model=` parameter in the `Agent(...)` call exactly as documented above —
+never omit it.
 
 Record each routed fix in:
 
@@ -331,15 +386,31 @@ kaola-workflow/{project}/.cache/tdd-task-{n}-fix-{m}.md
 Re-run validation after the routed fix. Keep the task `in_progress` until
 validation passes.
 
-### Step 4 - Update Progress
+### Step 4 - Update Progress (delegated to the contractor)
 
-Only after validation passes:
+Only after the main session has **judged** that validation passed for the task,
+it delegates the per-task post-dispatch bookkeeping to the contractor. The
+"validation passed" verdict is the main session's and is handed into the prompt;
+the contractor only transcribes the completion rows. It marks the task `complete`,
+records modified files, updates Build Status, `Last Updated`, and moves the
+`workflow-state.md` pointer to the next task or Phase 5.
 
-- mark task `complete`
-- record modified files
-- update build status
-- update `Last Updated`
-- update `workflow-state.md` to next task or Phase 5
+Capture the task result before delegating (shell variables do not cross the
+subagent boundary): the task number `{n}`, the modified-file list (from the
+verified `tdd-guide` evidence), the `tdd-task-{n}.md` evidence path, and the
+build status (`clean`, or the failure detail if the build surfaced one).
+
+You MUST pass `model="{CONTRACTOR_MODEL}"` in this Agent call exactly as shown —
+do not omit the `model=` line.
+
+```text
+Agent(
+  subagent_type="contractor",
+  model="{CONTRACTOR_MODEL}",
+  description="Close task {n} {project}",
+  prompt="Record the completion of task {n} for {project}; the orchestrator has already judged validation PASSED — transcribe, do not re-judge. In kaola-workflow/{project}/phase4-progress.md: mark task {n} `complete` in ## Tasks and fill its Files Modified column from the file list the orchestrator hands you; flip its ## Required Agent Compliance `tdd-guide executor task {n}` row to `invoked` with Evidence `.cache/tdd-task-{n}.md`; set Build Status to the value handed you (default `clean`); set Last Updated to the current ISO-8601 UTC timestamp. Then update kaola-workflow/{project}/workflow-state.md to point at the next task (or step: complete / next_command: /kaola-workflow-phase5 {project} when this was the last task), PRESERVING any existing ## Sink block byte-for-byte. Re-derive your own kaola_script if needed. Capture real exit codes; never gate on a piped | tail. Do NOT dispatch a role, classify, judge sufficiency, run validation, or close the issue. Return a compact bookkeeping summary."
+)
+```
 
 ## Completion
 

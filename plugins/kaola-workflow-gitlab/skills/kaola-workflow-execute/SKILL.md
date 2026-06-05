@@ -65,3 +65,31 @@ Routing Ledger:
 - build, type, lint, dependency, formatting, or tooling failure -> `build-error-resolver`
 
 When all tasks are complete, set `next_skill: kaola-workflow-review {project}`.
+
+## Mechanical Bookkeeping
+
+The deterministic bookkeeping in the per-task loop — stamping `phase4-progress.md`
+from the template above when it is missing, moving the `workflow-state.md` pointer
+to open each task (`phase: 4`, `step: red`, `task: N`, `next_skill: kaola-workflow-execute {project}`),
+transcribing a Failure Routing Ledger row, and on a passed task marking it
+`complete`, recording Files Modified / Build Status / Last Updated and advancing
+the pointer to the next task or `next_skill: kaola-workflow-review {project}`
+(preserving any `## Sink` block byte-for-byte) — is delegated to the mechanical
+`contractor` Codex agent role when that subagent is available; it runs any needed
+script (re-deriving its own `node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-claim.js"`
+path, capturing real exit codes and never gating on a piped `| tail`) and authors
+the durable bookkeeping but never dispatches `tdd-guide`, `build-error-resolver`,
+or any role, never classifies a failure, never chooses or runs the fix route,
+never judges whether validation passed, and never asks the user. The current
+session keeps the `tdd-guide` and `build-error-resolver` dispatches, the failure
+classification, the route choice, and the "validation passed" verdict. Because the
+classification, the route, and the verdict are the current session's judgment,
+decide them first — pick `tdd-guide` for behavior/regression/coverage/acceptance
+failures and `build-error-resolver` for build/type/lint/dependency/tooling
+failures, and judge the task complete only after validation passes — then hand the
+exact values (Failing Command, Classification, Routed To, Evidence path, Status;
+or the Files Modified list and Build Status) into the contractor so it transcribes
+them verbatim into the Failure Routing Ledger and the `## Required Agent Compliance`
+rows; the contractor copies what it is given and does not restate, soften, upgrade,
+or re-grade it. Because a subagent runs in its own shell, capture those values in
+THIS session before delegating — they do not cross the delegation boundary.

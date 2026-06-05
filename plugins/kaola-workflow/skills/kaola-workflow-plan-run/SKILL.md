@@ -17,25 +17,31 @@ refusal**, never a silent fallback to the phaseN ladder.
 
 ## Resume Detection
 
-Load `workflow-plan.md`, re-check `plan_hash`, and re-validate **only** closed-library
-membership + structural grammar + hash integrity (NOT the full gate rubric — re-running
-it would brick an in-flight plan if the rubric tightened after freeze):
+On entry (and on every resume), **delegate the re-orientation to the mechanical `contractor`
+Codex agent role when that subagent is available** — it runs the integrity + readiness scripts and
+reports the durable markers; the current session **judges** which resume branch applies and never
+runs these scripts itself. The contractor runs `node "$KAOLA_SCRIPTS/kaola-workflow-plan-validator.js"
+kaola-workflow/{project}/workflow-plan.md --resume-check --json` (re-check `plan_hash` + closed-library
+membership + structural grammar + hash integrity ONLY — NOT the full gate rubric, which would brick an
+in-flight plan if the rubric tightened after freeze) and `node "$KAOLA_SCRIPTS/kaola-workflow-next-action.js"
+kaola-workflow/{project}/workflow-plan.md --json` (ready set, next node with resolved `model`, `allDone`),
+then reports the `## Node Ledger` + `workflow-state.md` markers verbatim. It never judges, dispatches, or
+clears a marker.
 
-```bash
-node "$KAOLA_SCRIPTS/kaola-workflow-plan-validator.js" kaola-workflow/{project}/workflow-plan.md --resume-check --json
-```
-
-Then parse the `## Node Ledger` and `workflow-state.md`:
+The current session then **judges** the resume branch:
 - a consent-halt — EITHER `escalated_to_full: consent` in `workflow-state.md` OR
   `consent_halt: pending` in the plan's `## Node Ledger` (#234; non-hashed, survives a
   lost state file) → a provisional auto-run was **revoked at the barrier**; surface the
-  pending approval for the user's explicit yes, do NOT re-dispatch. On approval, REMOVE
-  the Ledger marker AND clear `escalated_to_full: consent` in lockstep, then resume.
-- a node `in_progress` with absent/partial `.cache/{node-id}.md` → crash mid-node;
-  re-dispatch exactly that node. Re-running its node-start `--record-base` is **idempotent**
+  pending approval for the user's explicit yes, do NOT re-dispatch. On approval, have the contractor
+  REMOVE the Ledger marker AND clear `escalated_to_full: consent` in lockstep, then resume.
+- a node `in_progress` with **absent/partial** `.cache/{node-id}.md` → crash mid-node before the role
+  finished; re-dispatch exactly that role node. The advance bracket's `--record-base` is **idempotent**
   (#239) — the original baseline is reused, so a crashed attempt's writes stay visible to the barrier.
-- otherwise compute the **ready set**: nodes whose `status != complete` and all of whose
-  `depends_on` are `complete` with resolved compliance. Compute it with the aggregator rather than by hand — it returns the ready set (each node already carrying its resolved `model`), the next node, and `allDone`: `node "$KAOLA_SCRIPTS/kaola-workflow-next-action.js" kaola-workflow/{project}/workflow-plan.md --json`
+- a node `in_progress` with **complete** `.cache/{node-id}.md` but the barrier not yet run / the node not
+  yet marked `complete` → crash AFTER the role finished but before the commit bracket: **re-run the commit
+  bracket only — do NOT re-dispatch the role** (which would redo non-idempotent writes).
+- otherwise the ready set from `next-action` (each node carrying its resolved `model`) drives the loop:
+  nodes whose `status != complete` and all of whose `depends_on` are `complete` with resolved compliance.
 
 ## Governance — auto-run only when provably low-risk, else ask
 
@@ -54,44 +60,43 @@ Re-read the validator verdict (`--json`); do not re-derive risk by hand.
 
 ## Per-Node Loop
 
-For each ready node: update-ledger (`in_progress`) → dispatch the node's role (Codex
-delegates to the matching agent profile; resolve its model via
-`kaola-workflow-resolve-agent-model.js`) → verify `.cache/{node-id}.md` (a `tdd-guide`
-node needs RED then GREEN; count `test_thrash` ≥ 3 same-test cycles → escalate) →
-**barrier (commit order `.cache` → Node Ledger row → `workflow-state.md` pointer LAST)**
-→ update-ledger (`complete`/`n/a`, emit one `## Required Agent Compliance` row).
+The current session **owns the loop and dispatches the role** (a subagent cannot dispatch a
+subagent); it **delegates the mechanical brackets around each role dispatch to the `contractor`
+Codex agent role when that subagent is available** — running the scripts and writing the durable
+ledger/state — and **judges** the barrier outcome. It never runs the loop scripts itself.
 
-At node START (with the `in_progress` mark) record this node's per-instance write baseline (#239),
-so the barrier diffs exactly THIS node's writes (nodes run one at a time):
-
-```bash
-node "$KAOLA_SCRIPTS/kaola-workflow-commit-node.js" kaola-workflow/{project}/workflow-plan.md --node-id {node-id} --start --json
-```
-
-At the barrier, re-scan the files the node actually wrote — **script-enforced** (#231/#239). With
-`--node-id` this is the PER-INSTANCE barrier: it diffs against the recorded base and checks the node's
-OWN declared lane, so a fan-out instance overflowing into a SIBLING's lane is refused (Phase 6's
-whole-plan barrier stays the union-level floor):
-
-```bash
-node "$KAOLA_SCRIPTS/kaola-workflow-commit-node.js" kaola-workflow/{project}/workflow-plan.md --node-id {node-id} --json; BC=$?
-```
-
-On exit 1 (a write turned out sensitive — a Phase-5 category — on a plan with no
-`security-reviewer` node, or overflowed outside the declared allowlist) the provisional
-authorization was granted on a now-false premise: **revoke and halt for consent** — write
-`escalated_to_full: consent` AND force a `security-reviewer` to post-dominate every
-remaining sensitive node (`escalated_to_full: security`), into `workflow-state.md`, AND
-write the durable line `consent_halt: pending` into the plan's `## Node Ledger` (#234: a
-non-hashed section, so the halt survives a lost/regenerated `workflow-state.md`). These
-co-occur. (A `code-reviewer` must already post-dominate every implement node, and
-`security-reviewer` every sensitive node — the validator computes these from the topology;
-the executor never drops them.)
-
-**Gate compliance rows for `code-reviewer`/`security-reviewer` use the bare role string**
-(the canonical compliance-row format the full-path anchored delegation matcher expects);
-per-instance disambiguation goes in the Evidence column only. Never mark a gate row `n/a`
-while a node it post-dominates reached `complete`.
+For each ready node:
+1. **advance (contractor)** — the contractor runs `node "$KAOLA_SCRIPTS/kaola-workflow-next-action.js"
+   kaola-workflow/{project}/workflow-plan.md --json` (reports ready set / next node / resolved `model` /
+   `allDone`), then for the next ready node marks it `in_progress` in the `## Node Ledger` and records its
+   per-instance write baseline with `node "$KAOLA_SCRIPTS/kaola-workflow-commit-node.js"
+   kaola-workflow/{project}/workflow-plan.md --node-id {node-id} --start --json` (record-base ONLY at node
+   start — **idempotent** #239; an end-time baseline would neuter the barrier). If `allDone`, route to finalize.
+2. **dispatch** the node's role (current session — Codex delegates to the matching agent profile; resolve
+   its model via `kaola-workflow-resolve-agent-model.js`).
+3. **commit (contractor)** — after the role returns, the contractor reads `.cache/{node-id}.md` (a
+   `tdd-guide` node needs RED then GREEN; counts `test_thrash` ≥ 3 same-test cycles), runs the PER-INSTANCE
+   barrier `node "$KAOLA_SCRIPTS/kaola-workflow-commit-node.js" kaola-workflow/{project}/workflow-plan.md
+   --node-id {node-id} --json` (re-scans the files the node actually wrote — **script-enforced** #231/#239 —
+   diffing the recorded base against the node's OWN declared lane, so a fan-out instance overflowing into a
+   SIBLING's lane is refused; Phase 6's whole-plan barrier stays the union-level floor), and ONLY IF the
+   barrier exits 0 with RED+GREEN evidence (or a valid `n/a`) marks the node `complete`/`n/a` and emits one
+   **`## Required Agent Compliance`** row. Gate compliance rows for `code-reviewer`/`security-reviewer` use
+   the **bare role string** (the canonical compliance-row format the full-path anchored delegation matcher
+   expects); per-instance disambiguation goes in the Evidence column only. Never mark a gate row `n/a` while
+   a node it post-dominates reached `complete`. The contractor never judges sufficiency or writes an
+   escalation marker.
+4. **judge the barrier (current session — governance).** On barrier exit 1 (a write turned out sensitive —
+   a Phase-5 category — on a plan with no `security-reviewer` node, or overflowed outside the declared
+   allowlist) the provisional authorization was granted on a now-false premise:
+   **revoke and halt for consent** — this **decision** is the session's (the contractor is never a gate);
+   have the contractor write
+   `escalated_to_full: consent` AND force a `security-reviewer` to post-dominate every remaining sensitive
+   node (`escalated_to_full: security`) into `workflow-state.md`, AND write the durable line
+   `consent_halt: pending` into the plan's `## Node Ledger` (#234: a non-hashed section, so the halt survives
+   a lost/regenerated `workflow-state.md`). `test_thrash` ≥ 3 escalates the same way. (A `code-reviewer` must
+   already post-dominate every implement node, and `security-reviewer` every sensitive node — the validator
+   computes these from the topology; the executor never drops them.)
 
 > **Enforcement boundary (#231 — now script-enforced).** Gate *presence* is proven
 > statically at freeze (post-dominance over the unique sink). Gate *execution* is proven by

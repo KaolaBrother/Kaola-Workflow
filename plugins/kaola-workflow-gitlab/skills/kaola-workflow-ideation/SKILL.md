@@ -34,7 +34,11 @@ kaola-workflow/{project}/.cache/code-explorer.md
 3. For each option, record summary, pros, cons, risk, complexity, and what not to build.
 4. Consult the strongest available expert model/profile for the session or perform the same advisor gate locally: check for missing approaches, hidden risks, and overbuilt scope. Save it to `.cache/advisor-ideation.md`.
 5. Select the advisor-reviewed recommended approach internally and record the rationale. Do not ask the user to approve routine technical strategy selection.
-6. Write `phase2-ideation.md` after internal selection.
+6. Author `phase2-ideation.md` after internal selection (delegated below).
+
+## Mechanical Ideation Finalization
+
+The deterministic bookkeeping below — authoring `phase2-ideation.md` from the template and advancing the `workflow-state.md` pointer (`next_skill: kaola-workflow-plan {project}`, preserving any existing `## Sink` block byte-for-byte) — is delegated to the mechanical `contractor` Codex agent role when that subagent is available; it runs any needed script (re-deriving its own `node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-claim.js"` path, capturing real exit codes and never gating on a piped `| tail`) and authors the durable bookkeeping but never dispatches `planner` or any role, never runs the advisor ideation gate, never weighs approaches, never assesses risk, never routes, never acts as a gate, never closes the issue, and never asks the user. The current session keeps the `planner` dispatch, the advisor ideation gate, and the **Selected Approach** verdict decision. Because the verdict is the current session's judgment, decide the selected approach (name + reason + rejected alternatives) first — reading `.cache/planner.md` and `.cache/advisor-ideation.md` and picking the advisor-reviewed recommended option — then hand it into the contractor so it transcribes the text verbatim into the `## Selected Approach` section; the contractor copies the selection as given and does not re-select, re-rank, restate, soften, or judge it, and transcribes the Approaches Evaluated, Advisor Findings, Out of Scope, and `## Required Agent Compliance` rows from the evidence the current session names.
 
 ## Phase File
 

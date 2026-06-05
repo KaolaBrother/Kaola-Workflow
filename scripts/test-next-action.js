@@ -192,6 +192,47 @@ function makePlan(nodesRows, ledgerRows) {
 }
 
 // -----------------------------------------------------------------------
+// Test 6: Stalled/deadlocked plan — a 2-cycle (a↔b) leaves the readySet empty
+// while NOT allDone → result==='refuse', error mentions "stalled".
+// (mutation-proven gap: neutering the stalled guard left the suite green.)
+// -----------------------------------------------------------------------
+{
+  const content = makePlan(
+    [
+      '| a        | tdd-guide | b | scripts/foo.js | 1 | sequence |',
+      '| b        | tdd-guide | a | scripts/bar.js | 1 | sequence |',
+      '| finalize | finalize  | a | —              | 1 | sequence |',
+    ],
+    [
+      '| a        | pending |',
+      '| b        | pending |',
+      '| finalize | pending |',
+    ]
+  );
+  const r = computeNextAction(content, { resolveModel: stub });
+  assert(r.result === 'refuse', 'test6: stalled/cyclic plan is refused');
+  assert(Array.isArray(r.errors) && r.errors.some(e => e.includes('stalled')),
+    'test6: error mentions "stalled"');
+  assert(!('readySet' in r) || r.readySet === undefined, 'test6: no readySet on refuse');
+}
+
+// -----------------------------------------------------------------------
+// Test 7: No parseable ## Nodes table → result==='refuse', error mentions Nodes.
+// (mutation-proven gap: neutering the empty-Nodes refuse left the suite green.)
+// -----------------------------------------------------------------------
+{
+  const noNodes = '## Node Ledger\n\n| id | status |\n|---|---|\n| a | pending |\n';
+  const r = computeNextAction(noNodes, { resolveModel: stub });
+  assert(r.result === 'refuse', 'test7: plan with no ## Nodes table is refused');
+  assert(Array.isArray(r.errors) && r.errors.some(e => e.includes('Nodes')),
+    'test7: error mentions the missing Nodes table');
+
+  // and an entirely empty document
+  const empty = computeNextAction('', { resolveModel: stub });
+  assert(empty.result === 'refuse', 'test7: empty document is refused');
+}
+
+// -----------------------------------------------------------------------
 // Summary
 // -----------------------------------------------------------------------
 if (failed > 0) {

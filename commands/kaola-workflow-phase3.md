@@ -137,9 +137,33 @@ kaola-workflow/{project}/.cache/architect-revision-{n}.md
 After three architect-revision attempts without a complete blueprint, stop and
 ask the user.
 
-## Step 4 - Write Phase File
+## Step 4 - Write Phase File (delegated to the contractor)
 
-Create `kaola-workflow/{project}/phase3-plan.md`:
+The blueprint and task list are a mechanical transcription of the
+advisor-reviewed `code-architect` output. The main session has already judged the
+blueprint complete at the Step 2 advisor gate; the contractor only transcribes the
+architect's evidence into the durable phase file and records the completion
+checkpoint. It does not design, judge, or alter the selected approach.
+
+Capture the resolved project name before delegating (shell variables do not cross
+the subagent boundary):
+
+```bash
+PLAN_PROJECT="{project}"
+```
+
+You MUST pass `model="{CONTRACTOR_MODEL}"` in this Agent call exactly as shown — do not omit the `model=` line.
+
+```text
+Agent(
+  subagent_type="contractor",
+  model="{CONTRACTOR_MODEL}",
+  description="Mechanical plan write {project}",
+  prompt="Run the mechanical bookkeeping for Phase 3 of {project}. Author `kaola-workflow/{project}/phase3-plan.md` by transcribing the advisor-reviewed blueprint and task list from `.cache/architect.md` (plus any `.cache/architect-revision-*.md`) and `.cache/advisor-plan.md`, using the exact phase3-plan.md template and ## Required Agent Compliance table written below in this command file. The blueprint was already judged complete at the Step 2 advisor gate — do NOT design, re-plan, judge, or change the selected Phase 2 approach; transcribe the architect's evidence verbatim (files to create/modify, build sequence, parallelization, task write sets, validate commands). Then execute the Step 5 completion checkpoint: update `workflow-state.md` (phase: 3 / step: complete / next_command: /kaola-workflow-phase4 {project}), PRESERVING any existing ## Sink block byte-for-byte. Re-derive your own kaola_script if any script is needed. Capture real exit codes; never gate on a piped | tail. Return a compact bookkeeping summary; do NOT dispatch code-architect or the advisor, do NOT implement code, do NOT route to Phase 4, do NOT ask the user."
+)
+```
+
+The contractor authors `kaola-workflow/{project}/phase3-plan.md` from this template:
 
 ```markdown
 # Phase 3 - Plan: {project}
@@ -194,13 +218,15 @@ Create `kaola-workflow/{project}/phase3-plan.md`:
 
 ## Step 5 - Continue To Phase 4
 
-Record the task list and validation commands, then continue to Phase 4. Do not
-ask the user to confirm internal workflow execution.
-
-Update `workflow-state.md`:
+The contractor performs this completion checkpoint as part of the Step 4 dispatch,
+updating `workflow-state.md` and PRESERVING any existing `## Sink` block:
 
 ```text
 phase: 3
 step: complete
 next_command: /kaola-workflow-phase4 {project}
 ```
+
+Once the contractor returns its bookkeeping summary and the phase file plus
+compliance rows are complete, the main session continues to Phase 4. Do not ask
+the user to confirm internal workflow execution.

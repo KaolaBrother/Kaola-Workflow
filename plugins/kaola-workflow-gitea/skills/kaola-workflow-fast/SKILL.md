@@ -88,6 +88,63 @@ On BLOCK or CRITICAL/HIGH finding, escalate unless Trivial Inline Edit. In that 
 
 Update `fast-summary.md` status to `PASSED`.
 
+## Mechanical Bookkeeping (delegated to the contractor)
+
+Every **judgment** stays with the current session: it dispatches the `planner` /
+`tdd-guide` / `code-reviewer` role agents (a subagent cannot dispatch a subagent),
+judges fast eligibility (≤ 5 files, exactly one sensible approach vs. a design
+choice), judges the acceptance result and the `test_thrash` count, decides PROCEED
+vs. escalate, judges the review verdict, and DECIDES the `fast-summary.md`
+`## Status` verdict (`PASSED` on a clean review, `ESCALATED` otherwise). The
+deterministic bookkeeping around those decisions is delegated to the mechanical
+`contractor` Codex agent role when that subagent is available; it runs the scripts
+and authors the durable bookkeeping but never dispatches a role, never judges
+eligibility / acceptance / the review, never decides PROCEED vs. escalate or the
+status verdict, never escalates on its own, never closes the issue, and never asks
+the user — it transcribes the verdicts the session hands it verbatim. Re-derive any
+needed forge script as `$KAOLA_SCRIPTS/kaola-gitea-workflow-*.js`, capture real exit
+codes, and never gate on a piped `| tail`.
+
+The mechanical bracket the contractor owns:
+
+- **Plan setup:** `mkdir -p kaola-workflow/{project}/.cache` and stamp the
+  `step: plan` checkpoint into `workflow-state.md` (`main_session_role:
+  orchestrator`, `implementation_owner: planner`,
+  `inline_emergency_fallback_authorized: no`), preserving any `## Sink` block
+  byte-for-byte.
+- **Plan capture:** once the orchestrator has judged the plan eligible, write the
+  `IN_PROGRESS` `fast-summary.md` stub, recording the orchestrator-handed declared
+  write set as the `## Scope` `- Write Set:` line with real repository paths (so the
+  parallel-overlap classifier can see this fast project's in-flight files) plus the
+  acceptance command on `- Acceptance:`.
+- **Execute setup:** stamp the `step: execute` checkpoint
+  (`implementation_owner: tdd-guide`), preserving `## Sink`.
+- **Acceptance run, then STOP:** run the acceptance command (from `- Acceptance:` or
+  as handed in), capture its real exit code plus a short output tail, and report the
+  pass/fail and the `test_thrash` count read from `.cache/tdd-guide.md` — write **no**
+  consequence. The orchestrator JUDGES that report and decides PROCEED vs. escalate.
+- **Acceptance consequence (a separate, second contractor summons):** write the one
+  durable consequence the orchestrator decided. On PROCEED: stamp the `step: review`
+  checkpoint (`implementation_owner: code-reviewer`) and set `fast-summary.md` to
+  `REVIEW`. On ESCALATE: write the `escalated_to_full: <trigger> — <detail>` field
+  (literal ` — ` em-dash spacing) plus the `workflow_path: full` /
+  `next_command: /kaola-workflow-phase1 {project}` /
+  `next_skill: kaola-workflow-research {project}` routing and set `fast-summary.md`
+  to status `ESCALATED`. The run and the consequence-write straddle the
+  orchestrator's judgment — they are two separate contractor summons, never one. This
+  same consequence summons is reused whenever the orchestrator decides an escalation
+  at Plan (`approach_ambiguity` / `file_overflow`) or Review.
+- **Summary write:** author the final `fast-summary.md` from the orchestrator-judged
+  verdict and the `.cache` evidence — write the `## Status` line EXACTLY as the
+  orchestrator hands it in (do not restate, soften, or upgrade it); keep the
+  `## Scope` lines; transcribe Implementation Evidence from `.cache/tdd-guide.md`,
+  Review from `.cache/code-reviewer.md`, and the `## Required Agent Compliance` rows.
+
+Because a subagent runs in its own shell, capture anything the contractor needs
+(the orchestrator-decided write set, acceptance command, PROCEED/ESCALATE decision,
+trigger + detail, and the `## Status` verdict) in THIS session before delegating —
+shell state and judgments do not cross the delegation boundary.
+
 ## fast-summary.md Format
 
 ```markdown

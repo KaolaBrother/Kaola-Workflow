@@ -1,5 +1,66 @@
 # Changelog
 
+## [5.0.0] — 2026-06-05
+
+### Lean-orchestrator realigned to original intent — contractor at every seam (#242)
+
+**Breaking (major):** the workflow's runtime division of labor is realigned to the original #242
+parent-design intent — **the main Opus session no longer runs workflow scripts or writes durable
+bookkeeping itself; the Sonnet `contractor` subagent does, at every seam.** This reverses two
+overrides that shipped in v4.1.0 (documented in
+[`docs/decisions/0002-lean-orchestrator-intent-realignment.md`](docs/decisions/0002-lean-orchestrator-intent-realignment.md),
+which supersedes `lean-orchestrator-part-b-plan.md` Decisions 1 and 4). Takes effect on reinstall.
+
+- **Adaptive per-node loop (`plan-run`) — Decision 1 reversed.** The main session no longer calls
+  `next-action`/`commit-node` directly. Each role dispatch is now bracketed by two contractor calls:
+  **advance** (`next-action` + `commit-node --start` + the `in_progress` row) and **commit** (`.cache`
+  verify + the per-instance barrier + `complete` + the bare-role-string `## Required Agent Compliance`
+  row + the `workflow-state.md` pointer). The main session keeps the role dispatch and the
+  consent-halt/escalation **decision** (the contractor writes the markers on instruction; it is never
+  a gate). A **new resume branch** was added: a node `in_progress` with a *complete* `.cache` but an
+  unrun barrier re-runs the commit bracket only — never the role (which could redo non-idempotent
+  writes).
+- **Adaptive authoring (`adapt`) — Decision 4 reframed + start seam offloaded.** The **planner**
+  subagent now *proposes* the decomposition (promoted from an optional consult); the main session
+  still comprehends, authors, and `plan_hash`-freezes the `## Nodes` table (the planner has no `Write`
+  tool, and the orchestrator must own the DAG to govern it). The contractor runs the validator
+  `--json` (returned verbatim as a governance input), the `--freeze`, the planning-evidence
+  checkpoint, **and the per-issue roadmap `init-issue`** — which closes a latent gap where adaptive
+  (and fast) issues never appeared in the generated `ROADMAP.md` during their active life.
+- **Router/startup (`workflow-next`) — deliberately NOT offloaded (the bootstrap exception).** The
+  startup transaction stays a deterministic main-session bash block. It is the entry point that
+  *summons* every subagent, so it has nothing to capture before a dispatch; offloading it would force
+  prose-transcribing the startup JSON (`verdict`/`project`/`worktree_path`/`claim`) back into the
+  shell for the downstream git-freshness/routing bash, trading determinism for fragility. The safe
+  contractor pattern (phase1/phase6) captures data *before* the dispatch and never parses the
+  contractor's prose back into bash; the router cannot follow it. Every other seam is offloaded.
+- **Phases 2–5 bracketing built (the dropped C4).** The contractor now owns the post-dispatch
+  ledger/state writes + the `phaseN-*.md` authoring; the main session hands its verdict (e.g. phase-2
+  Selected Approach, phase-5 Review Status) into the contractor, which transcribes it verbatim. The
+  `build-error-resolver` / `tdd-guide` routed-fix dispatches stay with the main session.
+- **Fast path offloaded.** The contractor runs the `.cache` mkdir, the per-step state writes, the
+  acceptance-check run, and authors `fast-summary.md` from the orchestrator's PASSED/ESCALATED verdict.
+- **Boundary (one line):** Opus decides *what* + dispatches *subagents* + owns synthesis + the
+  sink/close + the branch cut; the contractor runs every workflow script + writes every durable file;
+  the aggregator scripts own the per-node barrier choreography. The cost — a per-node contractor
+  round-trip — is the accepted trade for a lean Opus context.
+- **All four editions** (canonical Claude, github-Codex skills, gitlab/gitea commands + skills);
+  4-edition contract validators + walkthrough + `npm test` green. Authored across the adaptive path's
+  own seams 1–2 (by hand) + a controlled mirror workflow for seams 3–5.
+
+### Docs + tests
+
+- Corrected `docs/api.md` + `docs/architecture.md` (and removed the stale claim that Phase 6 calls
+  `commit-node` whole-plan — Phase 6 calls the plan-validator directly to preserve the
+  `--resume-check`/`plan_hash` integrity check; the aggregator's whole-plan mode is test-only).
+  Added the two aggregators to `CLAUDE.md` "Key Scripts" and the `contractor` row to the README agent
+  table (10 → 11).
+- Added `next-action` tests for the stalled-DAG and empty-`## Nodes` typed refusals (mutation-proven
+  previously invisible) and a `--profile=common` `contractor → sonnet` manifest assertion.
+
+- **Versions:** Claude/main `4.1.0 → 5.0.0`; the independent Codex packs `2.1.0 → 3.0.0`. Tag
+  `kaola-workflow--v5.0.0`.
+
 ## [4.1.0] — 2026-06-04
 
 ### Part B Stage A — adaptive-executor aggregator scripts (#242)

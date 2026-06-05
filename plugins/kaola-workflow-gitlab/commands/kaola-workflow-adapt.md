@@ -142,8 +142,11 @@ grammar will **not** refuse; the example above models both.
 
 ## Authoring
 
-Optionally consult `planner` to shape the decomposition (it does not author the
-table — you do):
+**Consult `planner` to propose the decomposition** — the planner is the planning subagent: it
+*proposes* the disjoint sub-areas / parallel research / extra verification, and the main session
+comprehends, **authors**, governs, and freezes the table (the planner has only `Read/Grep/Glob` —
+no `Write` — and the main session must internalize the DAG to dispatch + `plan_hash`-freeze it, so
+the authoring write is the orchestrator's, #44 + freeze-integrity):
 
 You MUST pass `model="{PLANNER_MODEL}"` in this Agent call exactly as shown —
 do not omit the `model=` line.
@@ -157,26 +160,39 @@ Agent(
 )
 ```
 
-Write `kaola-workflow/{project}/workflow-plan.md` with `## Meta`, the `## Nodes`
-table, and an empty `## Node Ledger` (one row per node, `status: pending`). Then
-record the planning evidence in `workflow-state.md`.
+Then **the main session writes** `kaola-workflow/{project}/workflow-plan.md` with `## Meta`, the
+`## Nodes` table, and an empty `## Node Ledger` (one row per node, `status: pending`) — this
+authoring write is the orchestrator's, not the contractor's. The planning-evidence
+`workflow-state.md` checkpoint is mechanical and is written by the contractor at freeze (below).
 
 ## Validate + freeze
 
 First confirm the adaptive switch is ON — the **hard authoring guard** (#235). If it
 refuses, STOP: do not author or freeze a plan (mirrors the `claimProject` selection guard;
-closes audit D8). The validator stays toggle-agnostic; the switch is read only here.
+closes audit D8). The validator stays toggle-agnostic; the switch is read only here. This entry
+guard is the main session's — it gates whether the contractor is summoned at all.
 
 ```bash
 node scripts/kaola-gitlab-workflow-claim.js authoring-allowed --project {project}
 ```
 
 If the JSON `status` is `authoring_refused`, surface the typed refusal and STOP. If
-`authoring_allowed`, proceed:
+`authoring_allowed`, **summon the contractor to classify** the plan — it runs the validator and
+returns the verdict verbatim (a governance input, not a compact summary):
+
+You MUST pass `model="{CONTRACTOR_MODEL}"` in this Agent call exactly as shown — do not omit the
+`model=` line.
 
 ```text
-node scripts/kaola-gitlab-workflow-plan-validator.js kaola-workflow/{project}/workflow-plan.md --json
+Agent(
+  subagent_type="contractor",
+  model="{CONTRACTOR_MODEL}",
+  description="Adaptive classify {project}",
+  prompt="Run `kaola-gitlab-workflow-plan-validator.js kaola-workflow/{project}/workflow-plan.md --json` and return its FULL verdict JSON verbatim (a governance input for the orchestrator, not a compact summary). Re-derive your own kaola_script. Capture the real exit code; never gate on a piped | tail. Do NOT freeze, judge, or write anything."
+)
 ```
+
+The main session reads the verdict and **governs** (the contractor never judges risk):
 
 - **out-of-grammar → typed refusal** (unknown role, a gate routed around, a cap
   busted, a non-disjoint write-role fan-out). Stop and surface; fix the plan.
@@ -186,10 +202,17 @@ node scripts/kaola-gitlab-workflow-plan-validator.js kaola-workflow/{project}/wo
   yes. Any sensitivity, any write-role fan-out, `SHARED_INFRA`, over-ceiling, a
   loop, or any uncertainty is risky (fail closed).
 
-Freeze once authorized — the script computes and writes `plan_hash` into the plan:
+Once authorized, **summon the contractor to freeze + checkpoint** — it stamps `plan_hash`, records
+the planning evidence, and stages the per-issue roadmap; the main session keeps only the freeze
+**decision** above:
 
 ```text
-node scripts/kaola-gitlab-workflow-plan-validator.js kaola-workflow/{project}/workflow-plan.md --freeze
+Agent(
+  subagent_type="contractor",
+  model="{CONTRACTOR_MODEL}",
+  description="Adaptive freeze {project}",
+  prompt="Freeze the authorized plan for {project} and write the durable bookkeeping; do NOT judge or re-classify. (1) Run `kaola-gitlab-workflow-plan-validator.js kaola-workflow/{project}/workflow-plan.md --freeze` — it computes and writes `plan_hash` into the plan (after this the plan is author-immutable). (2) Record the planning evidence in `workflow-state.md`, PRESERVING any existing `## Sink` block byte-for-byte. (3) If a GitLab issue number N is linked (read `issue_number` from `workflow-state.md`), stage the per-issue roadmap: resolve the title, run `kaola-gitlab-workflow-roadmap.js init-issue --issue N --title \"TITLE\" --status open --workflow-project \"{project}\" --next-step adaptive`, then `git add kaola-workflow/.roadmap/issue-N.md` (skip if init-issue printed `skip:`). Re-derive your own kaola_script/ROADMAP_JS. Capture real exit codes; never gate on a piped | tail. Return a compact bookkeeping summary (scripts run + exit codes + files written)."
+)
 ```
 
 After freeze the plan is author-immutable. Hand off to the executor:

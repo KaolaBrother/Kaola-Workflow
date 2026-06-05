@@ -114,6 +114,7 @@ for the pinned upstream commit, attribution, and refresh procedure.
 | `security-reviewer` | 5 — Review (conditional) | Sonnet | yes |
 | `doc-updater` | 6 — Finalize | Sonnet | |
 | `adversarial-verifier` | Adaptive path — read-only skeptic (never a gate) | Sonnet | |
+| `contractor` | All paths — mechanical bookkeeper (runs scripts + writes durable state; never a gate) | Sonnet | no |
 
 The **Model** column is the `common` profile. The **default** install profile is
 `higher`, so the three agents marked _yes_ (`code-architect`, `code-reviewer`,
@@ -124,6 +125,13 @@ The **Model** column is the `common` profile. The **default** install profile is
 reuses no vendored profile. It is read-only (touches zero repository files), is exercised
 only on the adaptive path, and is never a review gate. It installs on every edition
 regardless of whether the adaptive path is enabled.
+
+`contractor` is locally authored for the lean-orchestrator (issue #242): a mechanical Sonnet
+bookkeeper that runs the workflow scripts and writes the durable bookkeeping (ledger rows, phase
+files, `workflow-state.md`, roadmap, archive) at every seam, returning a compact summary. The main
+Opus session keeps all judgment, dispatch, synthesis, and the sink/close. It never dispatches a
+role, judges, gates, or asks the user, and stays Sonnet even under `--profile=higher` (there is no
+`profiles/higher/contractor.md`).
 
 When agents are installed, their frontmatter `model:` field is rewritten to
 `inherit`. Command files render each agent's concrete assigned model (e.g.,
@@ -432,12 +440,12 @@ performs the same review locally when no detached advisor profile is available.
 
 Current official release versions:
 
-- Claude Code command install, GitHub edition: `4.1.0`
-- Claude Code command install, GitLab edition: `4.1.0`
-- Claude Code command install, Gitea edition: `4.1.0`
-- Codex `kaola-workflow` plugin manifest: `2.1.0`
-- Codex `kaola-workflow-gitlab` plugin manifest: `2.1.0`
-- Codex `kaola-workflow-gitea` plugin manifest: `2.1.0`
+- Claude Code command install, GitHub edition: `5.0.0`
+- Claude Code command install, GitLab edition: `5.0.0`
+- Claude Code command install, Gitea edition: `5.0.0`
+- Codex `kaola-workflow` plugin manifest: `3.0.0`
+- Codex `kaola-workflow-gitlab` plugin manifest: `3.0.0`
+- Codex `kaola-workflow-gitea` plugin manifest: `3.0.0`
 
 The root `package.json` version is the official repository and Claude Code
 command-install release version. The GitLab Claude command pack follows that

@@ -64,4 +64,29 @@ advisor review; delegation vocabulary applies only to Codex role rows like
 | advisor ideation gate | invoked | .cache/advisor-ideation.md | |
 ```
 
+## Mechanical Ideation Finalization (delegated to the contractor)
+
+The **Selected Approach** verdict (the chosen option + rationale + rejected
+alternatives) is the current session's **judgment**: the session reads
+`.cache/planner.md` and `.cache/advisor-ideation.md`, picks the
+advisor-reviewed recommended option, and decides the selection (Step 5). The
+contractor never re-selects, never re-ranks or weighs approaches, never judges
+risk, and never dispatches a role.
+
+Once the approach is decided, the deterministic bookkeeping below — authoring
+`phase2-ideation.md` from the Phase File template (the **Selected Approach**
+verdict, the Approaches Evaluated pros/cons/risk/complexity, the Advisor
+Findings, the Out of Scope list, and the `## Required Agent Compliance` rows)
+and advancing the `workflow-state.md` pointer to `next_skill:
+kaola-workflow-plan {project}` (preserving any existing `## Sink` block
+byte-for-byte) — is delegated to the mechanical `contractor` Codex agent role
+when that subagent is available; it writes the durable bookkeeping files but
+copies the Selected Approach and rationale exactly as the session hands them —
+it never re-selects, restates, softens, re-ranks, or judges the choice, never
+weighs approaches or assesses risk, never invokes `planner` or any other role,
+never routes, never acts as a gate, and never asks the user. It re-derives its
+own `$KAOLA_SCRIPTS` path if any script is needed, captures real exit codes,
+and never gates on a piped `| tail`. The current session keeps the `planner`
+dispatch, the advisor ideation gate, and the selection judgment.
+
 Update `workflow-state.md` with `next_skill: kaola-workflow-plan {project}`.

@@ -26,6 +26,23 @@ correctness.
 - Route build/type/lint/tooling failures to `build-error-resolver`.
 - Record every command, result, and evidence path.
 
+The mechanical bookkeeping below — creating or updating
+`kaola-workflow/{project}/phase4-progress.md` from the template (the `## Tasks`,
+`## Failure Routing Ledger`, and `## Required Agent Compliance` rows), the
+per-task `workflow-state.md` pointer moves (preserving any existing `## Sink`
+block byte-for-byte), the Failure Routing Ledger row transcriptions, and the
+task-completion rows that mark a task complete and advance `workflow-state.md`
+to `next_skill: kaola-workflow-review {project}` — is delegated to the
+mechanical `contractor` Codex agent role when that subagent is available; it
+writes the durable bookkeeping files but copies the classification, route,
+and validation verdict exactly as the session hands them — it never classifies
+a failure, chooses a route, judges that validation passed, dispatches
+`tdd-guide`, `build-error-resolver`, or any other role, acts as a gate, or asks
+the user. It re-derives its own `$KAOLA_SCRIPTS` path if any script is needed,
+captures real exit codes, and never gates on a piped `| tail`. The current
+session keeps the `tdd-guide` and `build-error-resolver` dispatches, the
+failure classification and routing decision, and the validation-passed verdict.
+
 ## Progress File
 
 Create or update `kaola-workflow/{project}/phase4-progress.md`:

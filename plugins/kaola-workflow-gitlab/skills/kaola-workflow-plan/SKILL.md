@@ -65,4 +65,6 @@ advisor plan review; delegation vocabulary applies only to Codex role rows like
 | blueprint revisions | invoked/N/A | .cache/architect-revision-*.md | reason if N/A |
 ```
 
+The deterministic bookkeeping below — authoring `phase3-plan.md` by transcribing the advisor-reviewed blueprint and per-task write sets, recording the `## Required Agent Compliance` rows, and the `workflow-state.md` checkpoint write with `next_skill: kaola-workflow-execute {project}` (preserving any existing `## Sink` block) — is delegated to the mechanical `contractor` Codex agent role when that subagent is available; it authors the durable bookkeeping but never dispatches the `code-architect` role, runs the advisor plan gate, designs, re-plans, judges, or asks the user. The blueprint was already judged complete at the advisor plan gate; the contractor transcribes the architect's evidence verbatim and does not change the selected approach. The current session keeps the `code-architect` dispatch, the advisor plan gate, the blueprint-complete judgment, and the revision-routing decision.
+
 Update `workflow-state.md` with `next_skill: kaola-workflow-execute {project}` after the advisor-reviewed plan is complete. Do not ask the user to approve routine internal workflow execution.

@@ -31,30 +31,58 @@ Otherwise detect step:
 
 ## Mid-Flight Escalation
 
-On escalation:
+The escalation **decision** — which `<trigger>` fired (`approach_ambiguity`,
+`file_overflow`, `test_thrash`, security/architecture/breaking-change,
+discovered dependency, or new external package) and the `<detail>` — is the
+current session's **judgment**, made at Plan, Execute, or Review. Once the
+session decides to escalate, the mechanical escalation writes below are
+delegated to the mechanical `contractor` Codex agent role when that subagent is
+available; it writes the durable bookkeeping files but copies the decided
+trigger and detail exactly as the session hands them — it never decides whether
+to escalate, never chooses the trigger, never dispatches a role, and never asks
+the user. It re-derives its own `$KAOLA_SCRIPTS` path if any script is needed,
+captures real exit codes, and never gates on a piped `| tail`.
 
-1. Rewrite `workflow-state.md` with `workflow_path: full`, `next_command: /kaola-workflow-phase1 {project}`, `next_skill: kaola-workflow-research {project}` so `/workflow-next` routes correctly on resume.
-2. Write `escalated_to_full: <trigger> — <detail>` to `workflow-state.md`.
-3. Write a brief escalation note to `fast-summary.md` with status `ESCALATED`.
-4. Stop and tell the user to re-run `kaola-workflow-next {project}`.
+On escalation the contractor:
 
-Do not continue fast-path execution after writing the escalation field.
+1. Rewrites `workflow-state.md` with `workflow_path: full`, `next_command: /kaola-workflow-phase1 {project}`, `next_skill: kaola-workflow-research {project}` so `/workflow-next` routes correctly on resume (preserving any existing `## Sink` block byte-for-byte).
+2. Writes `escalated_to_full: <trigger> — <detail>` to `workflow-state.md`.
+3. Writes a brief escalation note to `fast-summary.md`, setting its `## Status` to the bare verdict `status ESCALATED` exactly as the session decided it.
+4. Stops; the session then tells the user to re-run `kaola-workflow-next {project}`.
+
+Do not continue fast-path execution after the escalation field is written. If
+the subagent tooling is unavailable, the current session runs these same writes
+inline.
 
 ## Step 1 - Plan (planner)
 
-Ensure `kaola-workflow/{project}/.cache/` exists before invoking agents.
-
-Update `workflow-state.md` with `step: plan`, `main_session_role: orchestrator`, `implementation_owner: planner`, `inline_emergency_fallback_authorized: no`.
+The deterministic bookkeeping in this step — making the cache dir
+(`mkdir -p kaola-workflow/{project}/.cache`) and stamping the `step: plan`
+checkpoint into `workflow-state.md` (`main_session_role: orchestrator`,
+`implementation_owner: planner`, `inline_emergency_fallback_authorized: no`,
+preserving any existing `## Sink` block byte-for-byte) — is delegated to the
+mechanical `contractor` Codex agent role when that subagent is available; it
+re-derives its own `$KAOLA_SCRIPTS` path if any script is needed, captures real
+exit codes, never gates on a piped `| tail`, and never dispatches `planner`,
+judges the plan, escalates, or asks the user. If the subagent tooling is
+unavailable, the current session runs these writes inline.
 
 Invoke the `planner` Codex agent role with the linked GitHub issue body and phase1/phase2 excerpts if they exist. Ask for: files to touch (the declared write set — ≤ 5 files in a single area), whether the approach is mechanical with exactly one sensible way or has ≥ 2 materially-different viable approaches, exact change per file, acceptance check command, out-of-scope items.
 
 Write raw output to `kaola-workflow/{project}/.cache/planner.md`.
 
-If planner reports > 5 files or ≥ 2 materially-different viable approaches (`approach_ambiguity`), escalate. The orchestrator captures the returned plan into `fast-summary.md` with status `IN_PROGRESS`, recording the declared write set as the `## Scope` `- Write Set:` line with real repository paths so the parallel-overlap classifier can see this fast project's in-flight files (planner has Read-only tools).
+If planner reports > 5 files or ≥ 2 materially-different viable approaches (`approach_ambiguity`), escalate — that eligibility judgment is the current session's, not the contractor's. Once the session has judged the plan eligible, it hands the planner's declared write set to the contractor, which captures the returned plan into `fast-summary.md` with status `IN_PROGRESS`, recording that declared write set as the `## Scope` `- Write Set:` line with the real repository paths exactly as the session hands them (so the parallel-overlap classifier can see this fast project's in-flight files; planner has Read-only tools) plus the acceptance check command on the `- Acceptance:` line. The contractor copies the write set verbatim and never judges eligibility or the plan.
 
 ## Step 2 - Execute (tdd-guide)
 
-Update `workflow-state.md` with `step: execute`, `main_session_role: orchestrator`, `implementation_owner: tdd-guide`, `inline_emergency_fallback_authorized: no`.
+The `step: execute` checkpoint write (`main_session_role: orchestrator`,
+`implementation_owner: tdd-guide`, `inline_emergency_fallback_authorized: no`,
+preserving any existing `## Sink` block byte-for-byte) is delegated to the
+mechanical `contractor` Codex agent role when that subagent is available; it
+re-derives its own `$KAOLA_SCRIPTS` path, captures real exit codes, never gates
+on a piped `| tail`, and never dispatches `tdd-guide`, judges, or asks the user.
+If the subagent tooling is unavailable, the current session runs the write
+inline.
 
 Invoke the `tdd-guide` Codex agent role with the planner plan and constraints:
 
@@ -65,13 +93,31 @@ Invoke the `tdd-guide` Codex agent role with the planner plan and constraints:
 
 Write raw output to `kaola-workflow/{project}/.cache/tdd-guide.md`.
 
-Orchestrator runs acceptance check after agent returns. Escalate on `test_thrash` threshold.
+The acceptance-check **run** is mechanical and is delegated to the contractor:
+after `tdd-guide` returns, the contractor runs the acceptance-check command,
+captures its real exit code and a short output tail (never gating on a piped
+`| tail`), reports that exit code plus the `test_thrash` count (consecutive
+same-test RED→RED cycles read from `.cache/tdd-guide.md`), and **stops** — it
+writes no consequence. The current session **judges** that report: a passing
+check below threshold is PROCEED; hitting the `test_thrash` threshold (≥ 3
+consecutive RED→RED cycles on the same test) is a decision to escalate. The run
+and the consequence-write straddle the session's judgment as two separate
+contractor summons, never one.
 
-Update `fast-summary.md` status to `REVIEW`.
+Once the session decides PROCEED, the contractor writes the single decided
+consequence verbatim: the `step: review` checkpoint (`implementation_owner:
+code-reviewer`, preserving the `## Sink` block) and `fast-summary.md` status
+`REVIEW`. On an escalate decision it instead writes the Mid-Flight Escalation
+fields above from the session-decided trigger. The contractor never judges the
+acceptance result, decides PROCEED vs escalate, or chooses the verdict.
 
 ## Step 3 - Review (code-reviewer)
 
-Update `workflow-state.md` with `step: review`, `main_session_role: orchestrator`, `implementation_owner: code-reviewer`, `inline_emergency_fallback_authorized: no`.
+The `step: review` checkpoint (`main_session_role: orchestrator`,
+`implementation_owner: code-reviewer`, `inline_emergency_fallback_authorized: no`)
+was already stamped by the contractor on the PROCEED path of Step 2; if it is
+not yet stamped, that mechanical write — preserving any existing `## Sink` block
+byte-for-byte — is delegated to the contractor.
 
 Delegated `code-reviewer` is mandatory for any change touching > 1 file or any production-path file (outside `docs/`, `*.md`, `tests/`); self-review only for the trivial band (single docs/comment/markdown edit).
 
@@ -84,9 +130,21 @@ Invoke the `code-reviewer` Codex agent role on modified files. Ask it to check:
 
 Write raw output to `kaola-workflow/{project}/.cache/code-reviewer.md`.
 
-On BLOCK or CRITICAL/HIGH finding, escalate unless Trivial Inline Edit. In that exempted case, orchestrator applies the fix and records `implementation_owner: orchestrator-trivial-fix`.
+On BLOCK or CRITICAL/HIGH finding, escalate unless Trivial Inline Edit — that triage is the current session's **judgment**. In that exempted case, the orchestrator (not `code-reviewer`, which is Read-only) applies the one-line fix and records `implementation_owner: orchestrator-trivial-fix`.
 
-Update `fast-summary.md` status to `PASSED`.
+The `## Status` verdict (`PASSED` on a clean review, `ESCALATED` otherwise) is
+the current session's judgment. Once the session decides the verdict, the
+deterministic bookkeeping — authoring the final `fast-summary.md` from the
+template (the `## Status` line, the `## Scope` `- Write Set:` / `- Acceptance:`
+lines carried from the stub, Implementation Evidence from `.cache/tdd-guide.md`,
+Review from `.cache/code-reviewer.md`, and the `## Required Agent Compliance`
+rows) — is delegated to the mechanical `contractor` Codex agent role when that
+subagent is available; it writes the `## Status` line exactly as the session
+hands it (`PASSED` on a clean review) and never restates, softens, upgrades, or
+re-grades the verdict, never dispatches a role, never escalates on its own, and
+never asks the user. It re-derives its own `$KAOLA_SCRIPTS` path if any script
+is needed, captures real exit codes, and never gates on a piped `| tail`. If the
+subagent tooling is unavailable, the current session authors the file inline.
 
 ## fast-summary.md Format
 
