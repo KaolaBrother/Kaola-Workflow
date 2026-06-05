@@ -1,6 +1,6 @@
 {
   "name": "kaola-workflow",
-  "version": "5.0.0",
+  "version": "5.1.0",
   "description": "6-phase Kaola-Workflow for Claude Code and Codex — Research, Ideation, Plan, Execute, Review, Finalize. Multi-model orchestration with resumable phase artifacts.",
   "repository": {
     "type": "git",

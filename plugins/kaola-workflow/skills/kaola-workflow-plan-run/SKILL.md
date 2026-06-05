@@ -40,8 +40,13 @@ The current session then **judges** the resume branch:
 - a node `in_progress` with **complete** `.cache/{node-id}.md` but the barrier not yet run / the node not
   yet marked `complete` → crash AFTER the role finished but before the commit bracket: **re-run the commit
   bracket only — do NOT re-dispatch the role** (which would redo non-idempotent writes).
+- the plan is authored but NOT frozen (`--resume-check` refused with `plan_hash missing` — a prior
+  `kaola-workflow-adapt` exited before freezing): do NOT run the loop; route to `kaola-workflow-adapt
+  {project}` to complete Govern + freeze (adapt re-enters at freeze), then resume here once frozen.
 - otherwise the ready set from `next-action` (each node carrying its resolved `model`) drives the loop:
   nodes whose `status != complete` and all of whose `depends_on` are `complete` with resolved compliance.
+  When no node is `in_progress` (e.g. a crash between a node's commit and its fused advance left the next
+  node unopened), **re-enter at step 1** to open the next ready node.
 
 ## Governance — auto-run only when provably low-risk, else ask
 
@@ -65,8 +70,23 @@ subagent); it **delegates the mechanical brackets around each role dispatch to t
 Codex agent role when that subagent is available** — running the scripts and writing the durable
 ledger/state — and **judges** the barrier outcome. It never runs the loop scripts itself.
 
-For each ready node:
-1. **advance (contractor)** — the contractor runs `node "$KAOLA_SCRIPTS/kaola-workflow-next-action.js"
+**Task list = the workflow nodes.** The session keeps a task list with one item per `## Nodes` row
+(`id · role`, in `depends_on` order) — established by `kaola-workflow-adapt` after freeze, or, on a
+direct resume, reconstructed here from the `## Node Ledger`. Mark a node's task `in_progress` when
+its role is dispatched (after the advance bracket) and `completed` once its barrier passes in the
+commit step (`n/a` → skipped). The task list is a live mirror; the durable `## Node Ledger` stays the
+single source of truth, so reconcile to the ledger on every resume rather than trusting a stale list.
+
+The commit of a node and the advance to the next are **fused into ONE contractor call** (step 3) so the
+contractor is summoned **once** per node transition, not twice. Step 1 only bootstraps the first node;
+thereafter the loop cycles step 2 → 3 → 4 → 2.
+
+1. **advance — open the next ready node when none is `in_progress` (contractor)** — run this to
+   bootstrap the first node, and on resume to open the next ready node **whenever no node is
+   `in_progress`** (a never-opened first node, or one orphaned by a crash between a node's commit and
+   its fused advance); every later advance is fused into step 3, so do not re-run it while a node is
+   already `in_progress`. The contractor
+   runs `node "$KAOLA_SCRIPTS/kaola-workflow-next-action.js"
    kaola-workflow/{project}/workflow-plan.md --json` (reports ready set / next node / resolved `model` /
    `allDone`), then for the next ready node marks it `in_progress` in the `## Node Ledger` and records its
    per-instance write baseline with `node "$KAOLA_SCRIPTS/kaola-workflow-commit-node.js"
@@ -74,7 +94,7 @@ For each ready node:
    start — **idempotent** #239; an end-time baseline would neuter the barrier). If `allDone`, route to finalize.
 2. **dispatch** the node's role (current session — Codex delegates to the matching agent profile; resolve
    its model via `kaola-workflow-resolve-agent-model.js`).
-3. **commit (contractor)** — after the role returns, the contractor reads `.cache/{node-id}.md` (a
+3. **commit + advance (contractor)** — after the role returns, the contractor reads `.cache/{node-id}.md` (a
    `tdd-guide` node needs RED then GREEN; counts `test_thrash` ≥ 3 same-test cycles), runs the PER-INSTANCE
    barrier `node "$KAOLA_SCRIPTS/kaola-workflow-commit-node.js" kaola-workflow/{project}/workflow-plan.md
    --node-id {node-id} --json` (re-scans the files the node actually wrote — **script-enforced** #231/#239 —
@@ -84,9 +104,16 @@ For each ready node:
    **`## Required Agent Compliance`** row. Gate compliance rows for `code-reviewer`/`security-reviewer` use
    the **bare role string** (the canonical compliance-row format the full-path anchored delegation matcher
    expects); per-instance disambiguation goes in the Evidence column only. Never mark a gate row `n/a` while
-   a node it post-dominates reached `complete`. The contractor never judges sufficiency or writes an
-   escalation marker.
-4. **judge the barrier (current session — governance).** On barrier exit 1 (a write turned out sensitive —
+   a node it post-dominates reached `complete`. **Then, ONLY IF the barrier exited 0** (the node is now
+   `complete`/`n/a`), the contractor FUSES the next advance in the SAME call — re-runs `node
+   "$KAOLA_SCRIPTS/kaola-workflow-next-action.js" kaola-workflow/{project}/workflow-plan.md --json` and, if
+   a next ready node exists, opens it (`in_progress` + `kaola-workflow-commit-node.js --node-id {next}
+   --start --json`, idempotent #239), reporting the node opened or `allDone`. On a failed barrier /
+   `test_thrash` ≥ 3 / missing evidence it does NOT advance. The contractor never judges sufficiency or
+   writes an escalation marker.
+4. **judge the barrier (current session — governance).** On barrier exit 0 the node is `complete` and, per
+   the fused advance, the next ready node is already open — dispatch it (back to step 2), or route to
+   finalize on `allDone`. On barrier exit 1 (a write turned out sensitive —
    a Phase-5 category — on a plan with no `security-reviewer` node, or overflowed outside the declared
    allowlist) the provisional authorization was granted on a now-false premise:
    **revoke and halt for consent** — this **decision** is the session's (the contractor is never a gate);

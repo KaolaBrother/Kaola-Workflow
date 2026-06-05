@@ -1,5 +1,39 @@
 # Changelog
 
+## [5.1.0] — 2026-06-05
+
+### Adaptive front-end: a `workflow-planner` subagent owns claim + design
+
+The adaptive path now opens with a dedicated **`workflow-planner`** subagent (Opus;
+`Read/Write/Bash/Grep/Glob`) — dispatched **once** by the main session — that settles the starting
+contract (claim + worktree + `workflow-state.md`) and **authors** the `## Nodes` DAG into
+`workflow-plan.md`, then returns. The main session keeps every judgment: it reads the durable files,
+runs git-freshness, **governs** the risk decision, and the `contractor` stamps the freeze; main then
+**establishes a task list = the workflow nodes** (one task per `## Nodes` row, a live mirror of the
+`## Node Ledger`) and hands to `plan-run`, whose loop flips each task `in_progress`/`completed`.
+
+This fixes a real gap: a skill-driven adaptive run used to do the claim + authoring **inline** in the
+main session because the adaptive **skill** mirror carried only advisory prose while the **command**
+carried enforced `Agent(...)` dispatches. The `workflow-planner` dispatch is now **enforced in both
+surfaces** (command `Agent` block + a "MUST delegate" skill instruction), across all four editions
+(github/gitlab/gitea + Codex `workflow-planner.toml` profiles), and contract validators lock both
+surfaces so the skill can never silently drift back to prose.
+
+- New agent `agents/workflow-planner.md` (Opus, locally-authored; distinct from the read-only
+  vendored `planner` node role) + Codex `workflow-planner.toml` in all three packs.
+- Router (`workflow-next`): for `KAOLA_PATH=adaptive` the router skips its inline claim and routes
+  to `/kaola-workflow-adapt <issue>` (the front end claims), subordinate to resume detection — an
+  existing frozen plan resumes via `/kaola-workflow-plan-run`, never re-authored.
+- See [`docs/decisions/0003-adaptive-front-end-planner.md`](docs/decisions/0003-adaptive-front-end-planner.md)
+  (supersedes the adaptive-authoring + bootstrap-exception portions of ADR 0002). No `claim.js` code
+  change was needed — `--workflow-path adaptive` parses via the existing flag handler.
+- **Per-node loop: contractor `commit` + `advance` fused.** In the adaptive executor (`plan-run`),
+  closing a node and opening the next are now a SINGLE contractor dispatch on a clean barrier (a
+  standalone advance only bootstraps the first node) — halving the contractor summons per node
+  transition. A failed barrier / `test_thrash` still stops *without* advancing, so the orchestrator
+  keeps the consent-halt judgment.
+- Release bump on tag: Claude/main `5.0.0 → 5.1.0`; Codex packs `3.0.0 → 3.1.0`.
+
 ## [5.0.0] — 2026-06-05
 
 ### Lean-orchestrator realigned to original intent — contractor at every seam (#242)

@@ -25,6 +25,7 @@ const vendoredAgents = [
 const localAgents = [
   'adversarial-verifier',
   'contractor',
+  'workflow-planner',
 ];
 const allAgents = [...vendoredAgents, ...localAgents];
 

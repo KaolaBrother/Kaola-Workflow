@@ -1,14 +1,16 @@
 ---
 description: Kaola-Workflow Adaptive Authoring. The agent freely composes a task-shaped DAG of role nodes into workflow-plan.md, then the validator proves it in-grammar and freezes it.
-argument-hint: <project name>
+argument-hint: <issue number>
 ---
 
 # Kaola-Workflow Adaptive Authoring (adapt)
 
-Phase-0 of the adaptive path: the agent **freely authors** a task-shaped DAG for
-*this* issue — which roles, how many, in what shape — into a `workflow-plan.md`.
-There is no template library and no knob-binding ceremony: the agent writes the
-`## Nodes` table directly, and the validator proves the result is in-grammar.
+Phase-0 of the adaptive path: a dedicated **`workflow-planner`** subagent (Opus) settles the
+starting contract (claim + worktree) and **freely authors** a task-shaped DAG for *this* issue —
+which roles, how many, in what shape — into a `workflow-plan.md`. There is no template library and
+no knob-binding ceremony: the workflow-planner writes the `## Nodes` table directly, and the
+validator proves the result is in-grammar. The main session governs the risk decision and the
+freeze; the contractor stamps the durable bookkeeping.
 
 Reachable only when the adaptive switch is ON *and* the structure question in
 `workflow-next.md` Step 0a-1 was affirmatively confirmed. The middle of the run
@@ -140,45 +142,85 @@ grammar will **not** refuse; the example above models both.
   architecture / a public interface, consider a `doc-updater` node before `finalize` —
   the sink only does CHANGELOG / state bookkeeping, not the docs themselves.
 
-## Authoring
+## Front end: claim + author (the `workflow-planner` subagent)
 
-**Consult `planner` to propose the decomposition** — the planner is the planning subagent: it
-*proposes* the disjoint sub-areas / parallel research / extra verification, and the main session
-comprehends, **authors**, governs, and freezes the table (the planner has only `Read/Grep/Glob` —
-no `Write` — and the main session must internalize the DAG to dispatch + `plan_hash`-freeze it, so
-the authoring write is the orchestrator's, #44 + freeze-integrity):
+The adaptive path opens with ONE enforced subagent dispatch. The **`workflow-planner`** (Opus)
+settles the **starting contract** (claim + worktree + `workflow-state.md`) and **authors** the
+task-shaped DAG into `workflow-plan.md`. The main session never runs the claim or the authoring
+write itself — that is the whole point of this path. The main session keeps every **judgment**:
+git-freshness, the risk decision, the freeze, and the dispatch loop (a subagent can never dispatch
+a subagent — the `workflow-planner` returns control to you).
 
-You MUST pass `model="{PLANNER_MODEL}"` in this Agent call exactly as shown —
-do not omit the `model=` line.
+The router enters this command with the agent-selected target issue for fresh adaptive work; use
+`{issue}` for the front-end dispatch and the planner RETURNS the `{project}` you use after. **Re-entry
+(resume of an unfrozen plan):** a *frozen* plan never reaches adapt (it resumes via
+`/kaola-workflow-plan-run`), but an **authored-but-NOT-frozen** plan does — if `{project}`'s
+`workflow-plan.md` already exists with **no `plan_hash`** (a prior governance refusal / declined
+risk-ask / abort left it unfrozen), SKIP the freshness gate + planner dispatch below and go straight to
+**Govern + freeze** on that existing plan (read the issue from its `workflow-state.md`). A pre-freeze
+exit therefore leaves a **resumable** project, not an orphan; `kaola-gitlab-workflow-claim.js discard
+--project {project}` abandons it (removing the worktree).
+
+**Entry guard (main session, before the dispatch).** Confirm the adaptive switch is ON — the
+**hard authoring guard** (#235). It is switch-only and needs no project, so it runs before the
+claim. If it refuses, STOP; do not summon the planner. (Defense in depth: the planner's `startup`
+re-checks the switch via `claimProject`, so a plan can never be authored under an OFF switch.)
+
+```bash
+node scripts/kaola-gitlab-workflow-claim.js authoring-allowed
+```
+
+If the JSON `status` is `authoring_refused`, surface the typed refusal and STOP — fix the switch or
+the path selection, never clamp around the gate.
+
+**Git freshness (main session, BEFORE the claim).** If `authoring_allowed`, gate on a clean main
+*before* summoning the planner: you are at the repo root and nothing is claimed yet — run the Startup
+Step 1 git-freshness checks (`workflow-next.md`) against the MAIN repo. If local is behind,
+`git pull --ff-only`; if it cannot resolve cleanly (dirty worktree, or a merge / rebase / stash /
+reset is required), STOP and ask — do **not** summon the planner, so **no folder / worktree /
+`workflow:in-progress` label is created until git is clean**. The adaptive path gates freshness here,
+*before* the claim, because the front end provisions the worktree — the router's post-claim
+freshness-block release no longer guards this path, and gating up front leaves nothing to orphan.
+
+Once main is clean, **summon the `workflow-planner`** — it claims, authors `workflow-plan.md`, runs
+the validator `--json` as a self-check, and RETURNS a structured summary; it never freezes, judges
+risk, asks the user, or dispatches.
+
+You MUST pass `model="{WORKFLOW_PLANNER_MODEL}"` in this Agent call exactly as shown — do not omit
+the `model=` line.
 
 ```text
 Agent(
-  subagent_type="planner",
-  model="{PLANNER_MODEL}",
-  description="Adaptive decomposition {project}",
-  prompt="Propose disjoint sub-areas / parallel research / extra verification for issue {issue}; do NOT author the plan table."
+  subagent_type="workflow-planner",
+  model="{WORKFLOW_PLANNER_MODEL}",
+  description="Adaptive front end {issue}",
+  prompt="Settle the starting contract and design the adaptive workflow for issue {issue}, per your workflow-planner contract. (1) Run `kaola-gitlab-workflow-claim.js startup --runtime claude --workflow-path adaptive --target-issue {issue}` — `--workflow-path adaptive` is REQUIRED (a subagent shell does not inherit KAOLA_PATH, so without it the project would be mis-stamped workflow_path:full). Add `--sink pr` ONLY if the user requested an MR/PR sink (else omit; merge is the default). This creates the project folder + worktree + workflow-state.md. (2) If that project already has a workflow-plan.md, do NOT overwrite it — STOP and return so the orchestrator routes to the executor. (3) Otherwise author via Write the `## Meta` labels line, the `## Nodes` DAG, and an empty `## Node Ledger` (one row per node, `status: pending`) into that project's workflow-plan.md. (4) Run `kaola-gitlab-workflow-plan-validator.js <plan> --json` as a self-check and fix until in-grammar — do NOT run --freeze or authoring-allowed; do NOT judge risk, ask the user, or dispatch. Re-derive your own kaola_script. Capture real exit codes; never gate on a piped | tail. RETURN { project, worktree_path, claim_verdict, claim_reasoning, plan_path, validator_verdict }. On a claim refusal, STOP after startup (no state file is written) and return the verdict + reasoning."
 )
 ```
 
-Then **the main session writes** `kaola-workflow/{project}/workflow-plan.md` with `## Meta`, the
-`## Nodes` table, and an empty `## Node Ledger` (one row per node, `status: pending`) — this
-authoring write is the orchestrator's, not the contractor's. The planning-evidence
-`workflow-state.md` checkpoint is mechanical and is written by the contractor at freeze (below).
+**Read the durable state, not the planner's prose.** The structured return is a thin pointer; the
+files are authoritative.
 
-## Validate + freeze
+- **Refusal — any `claim_verdict` that is NOT `acquired` or `owned`** (e.g. `workflow_path_refused`,
+  `target_occupied`, `user_target_blocked`, `user_target_red`, `user_target_closed`,
+  `target_unavailable`, `target_unverified`, or `claim: none`): NO `workflow-state.md` was written.
+  Surface `claim_reasoning` and STOP (**fail closed** — treat any non-`acquired`/`owned` verdict as a
+  refusal); do not blind-read a missing state file, and never retry a different issue.
+- **Plan already existed** (`plan_path: null` on an `owned` claim): route to
+  `/kaola-workflow-plan-run {project}` — never re-author over a frozen plan.
+- **Success** (`acquired` | `owned`, plan authored): take `{project}` from the return, then re-read
+  `kaola-workflow/{project}/workflow-state.md` (the `## Sink` block, `workflow_path: adaptive`) and
+  `kaola-workflow/{project}/workflow-plan.md` (internalize the `## Nodes` DAG you will govern,
+  dispatch, and freeze).
 
-First confirm the adaptive switch is ON — the **hard authoring guard** (#235). If it
-refuses, STOP: do not author or freeze a plan (mirrors the `claimProject` selection guard;
-closes audit D8). The validator stays toggle-agnostic; the switch is read only here. This entry
-guard is the main session's — it gates whether the contractor is summoned at all.
+The worktree was cut from a now-clean main (git-freshness ran *before* the claim, above), so proceed
+straight to governance.
 
-```bash
-node scripts/kaola-gitlab-workflow-claim.js authoring-allowed --project {project}
-```
+## Govern + freeze
 
-If the JSON `status` is `authoring_refused`, surface the typed refusal and STOP. If
-`authoring_allowed`, **summon the contractor to classify** the plan — it runs the validator and
-returns the verdict verbatim (a governance input, not a compact summary):
+**Summon the contractor to classify** the durable plan — it re-runs the validator and returns the
+verdict verbatim (a governance input, not a compact summary; the planner's self-check `--json` is
+orientation only — freeze-integrity rests on this re-run):
 
 You MUST pass `model="{CONTRACTOR_MODEL}"` in this Agent call exactly as shown — do not omit the
 `model=` line.
@@ -215,7 +257,14 @@ Agent(
 )
 ```
 
-After freeze the plan is author-immutable. Hand off to the executor:
+## Establish the task list, then hand off
+
+After freeze the plan is author-immutable. **Establish the orchestrator's task list = the workflow
+nodes** — one task per row of the frozen `## Nodes` table, labeled `id · role`, in `depends_on`
+(topological) order. This task list is a **live mirror** of the `## Node Ledger`, which stays the
+durable source of truth; the executor flips each task `in_progress` when the contractor's *advance*
+bracket opens that node and `completed` after the *commit* bracket (`n/a` nodes → skipped). Then
+hand off to the executor:
 
 ```text
 /kaola-workflow-plan-run {project}

@@ -86,29 +86,63 @@ the example above models both.
   architecture / a public interface, consider a `doc-updater` node before `finalize` — the
   sink only does CHANGELOG / state bookkeeping.
 
-## Validate + freeze
+## Front end: claim + author (the `workflow-planner` agent role)
 
-**Consult the `planner` Codex agent role to PROPOSE the decomposition** (disjoint sub-areas /
-parallel research / extra verification); the current session comprehends, **authors** the `## Nodes`
-table + empty `## Node Ledger`, governs, and freezes it (the planner has no `Write`, and the session
-must internalize the DAG to dispatch + `plan_hash`-freeze it — the authoring write is the session's,
-not the contractor's).
+The adaptive path opens by delegating to ONE subagent. **You MUST delegate the starting contract
+and the DAG authoring to the `workflow-planner` agent role** (Opus) — do NOT run the claim or author
+the `## Nodes` table inline in this session. In Claude Code dispatch it via the Agent tool
+(`subagent_type="workflow-planner"`); in Codex delegate to the `workflow-planner` agent role when its
+profile is present at `.codex/agents/kaola-workflow/`. Only if the agent tool is genuinely
+unavailable (`local-fallback-tool-unavailable`) may this session run the claim + author inline. The
+planner never freezes, judges risk, asks the user, or dispatches further — it returns control here.
 
-First confirm the adaptive switch is ON — the **hard authoring guard** (#235). If it refuses,
-STOP: do not author or freeze a plan (mirrors the `claimProject` selection guard; closes audit
-D8). The validator stays toggle-agnostic; the switch is read only here. This entry guard is the
-current session's — it gates whether the contractor is summoned at all.
+The router enters with the agent-selected target issue for fresh adaptive work; the planner RETURNS
+the `{project}` used after. **Re-entry (unfrozen plan):** an *authored-but-NOT-frozen* plan (a prior
+governance refusal / declined ask / abort — no `plan_hash`) routes back here; SKIP the freshness gate
++ planner delegation and go straight to **Govern + freeze** on the existing plan. A pre-freeze exit
+leaves a **resumable** project (re-run resumes the freeze); `kaola-workflow-claim.js discard --project
+{project}` abandons it.
+
+**Entry guard (this session, before the delegation).** Confirm the adaptive switch is ON — the
+**hard authoring guard** (#235). It is switch-only and needs no project. If it refuses, STOP; do
+not summon the planner (the planner's `startup` re-checks the switch via `claimProject`, so a plan
+can never be authored under an OFF switch):
 
 ```bash
-node "$KAOLA_SCRIPTS/kaola-workflow-claim.js" authoring-allowed --project {project}
+node "$KAOLA_SCRIPTS/kaola-workflow-claim.js" authoring-allowed
 ```
 
-If the JSON `status` is `authoring_refused`, surface the typed refusal and STOP. If
-`authoring_allowed`, **delegate classification to the mechanical `contractor` Codex agent role when
-that subagent is available** — it runs `node "$KAOLA_SCRIPTS/kaola-workflow-plan-validator.js"
-kaola-workflow/{project}/workflow-plan.md --json` and returns the FULL verdict JSON verbatim (a
-governance input, not a compact summary); the current session **governs** (the contractor never
-judges risk):
+If the JSON `status` is `authoring_refused`, surface the typed refusal and STOP.
+
+**Git freshness (BEFORE the claim).** If `authoring_allowed`, gate on a clean main *before*
+delegating: nothing is claimed yet — run the Startup git-freshness checks against the MAIN repo
+(`git pull --ff-only` if behind). If it cannot resolve cleanly (dirty, or a merge / rebase / stash /
+reset is needed), STOP and ask — do NOT delegate, so **no folder / worktree / `workflow:in-progress`
+label is created until git is clean** (the front end provisions the worktree, so the router's
+post-claim freshness-block release no longer guards this path).
+
+Once main is clean, **delegate to the `workflow-planner`**: it runs `node
+"$KAOLA_SCRIPTS/kaola-workflow-claim.js" startup --runtime <runtime> --workflow-path adaptive
+--target-issue <issue>` (`--workflow-path adaptive` is REQUIRED — a subagent shell does not inherit
+KAOLA_PATH; add `--sink pr` only for a requested PR sink), authors the `## Meta` + `## Nodes` DAG +
+empty `## Node Ledger` into the project's `workflow-plan.md` via Write, runs the validator `--json`
+as a self-check (NOT `--freeze`, NOT `authoring-allowed`), and RETURNS `{ project, worktree_path,
+claim_verdict, claim_reasoning, plan_path, validator_verdict }`. If the project already has a
+`workflow-plan.md` it refuses-and-returns (never overwrite a frozen plan). On a claim refusal — any
+`claim_verdict` that is NOT `acquired`/`owned` — no `workflow-state.md` is written; surface
+`claim_reasoning` and STOP (**fail closed** — do not blind-read a missing state file), never retry a
+different issue.
+
+**Read the durable state, not the planner's prose.** On success take `{project}` from the return,
+re-read `kaola-workflow/{project}/workflow-state.md` (the `## Sink` block, `workflow_path: adaptive`)
+and `kaola-workflow/{project}/workflow-plan.md` (internalize the `## Nodes` DAG you govern, dispatch,
+and freeze). The worktree was cut from a now-clean main (git-freshness ran before the claim, above).
+
+**Govern + freeze.** **Delegate classification to the `contractor` agent role** — it re-runs `node
+"$KAOLA_SCRIPTS/kaola-workflow-plan-validator.js" kaola-workflow/{project}/workflow-plan.md --json`
+on the durable plan and returns the FULL verdict JSON verbatim (governance input; the planner's
+self-check is orientation only — freeze-integrity rests on this re-run); this session **governs**
+(the contractor never judges risk):
 - **out-of-grammar → typed refusal** (unknown role, gate routed around, cap busted,
   non-disjoint write-role fan-out). Fix the plan; never clamp around the gate.
 - **in-grammar, provably low-risk → auto-run.** Freeze immediately.
@@ -121,5 +155,9 @@ Once authorized, **delegate freeze + checkpoint to the contractor**: it runs `no
 `workflow-state.md` (preserving any `## Sink` block), and — if a GitHub issue N is linked — stages the
 per-issue roadmap (`kaola-workflow-roadmap.js init-issue --issue N --title "TITLE" --status open
 --workflow-project "{project}" --next-step adaptive` then `git add kaola-workflow/.roadmap/issue-N.md`).
-It never judges; the current session keeps the freeze decision. Then hand off to
+It never judges; this session keeps the freeze decision.
+
+**Establish the task list = the workflow nodes** — one task per row of the frozen `## Nodes` table,
+labeled `id · role`, in `depends_on` order; a live mirror of the `## Node Ledger` (the durable
+source of truth) that the executor flips `in_progress`/`completed` per node. Then hand off to
 `kaola-workflow-plan-run {project}`.

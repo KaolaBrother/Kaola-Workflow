@@ -433,9 +433,16 @@ assertConcept(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'adaptive pat
   'KAOLA_ENABLE_ADAPTIVE', 'adaptive', 'fast|full|adaptive', 'flag-only', 'typed refusal'
 ]);
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'workflow-plan.md exists -> kaola-workflow-plan-run');
+// v5.1.0: the adaptive front-end routing must stay enforced in the router SKILL mirror too — the
+// skill routes a fresh adaptive run to the workflow-planner front end (kaola-workflow-adapt skill).
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'kaola-workflow-adapt $KAOLA_TARGET_ISSUE');
 assertConcept(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'adaptive authoring', [
   'workflow-plan.md', '## Nodes', 'post-dominate', 'finalize', 'FANOUT_CAP', 'plan_hash', 'typed refusal'
 ]);
+// the adaptive front-end delegation must stay ENFORCED in the skill mirror (the v5.1.0 fix) — an
+// advisory-prose skill is the exact bug that ran claim + authoring inline in the main session.
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'workflow-planner');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'MUST delegate');
 assertConcept(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'adaptive execution + governance', [
   '## Node Ledger', 'plan_hash', 'post-dominate', 'auto-run', 'provisional', 'halt for consent',
   'escalated_to_full: consent', 'typed refusal', 'quorum', 'tally-fn', 'validateNodeOutput', 'test_thrash'

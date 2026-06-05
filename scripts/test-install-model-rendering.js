@@ -65,7 +65,7 @@ try {
   assert(!/model="\{[A-Z_]+_MODEL\}"/.test(allCommands), 'installed commands must not keep model placeholders');
 
   const requiredAgents = ['code-explorer','docs-lookup','planner','code-architect','tdd-guide',
-    'build-error-resolver','code-reviewer','security-reviewer','doc-updater','adversarial-verifier','contractor'];
+    'build-error-resolver','code-reviewer','security-reviewer','doc-updater','adversarial-verifier','contractor','workflow-planner'];
   for (const agent of requiredAgents) {
     const installed = fs.readFileSync(path.join(tmp,'.claude','agents',agent+'.md'),'utf8');
     const fmEnd = installed.indexOf('\n---', 3);
@@ -123,6 +123,7 @@ try {
       assert(manifest['tdd-guide'] === 'sonnet', 'manifest must map tdd-guide→sonnet; got ' + manifest['tdd-guide']);
       assert(manifest['code-explorer'] === 'sonnet', 'manifest must map code-explorer→sonnet; got ' + manifest['code-explorer']);
       assert(manifest['contractor'] === 'sonnet', 'higher manifest must map contractor→sonnet');
+      assert(manifest['workflow-planner'] === 'opus', 'higher manifest must map workflow-planner→opus; got ' + manifest['workflow-planner']);
       // All keys must be non-empty and in {opus,sonnet}
       for (const [k, v] of Object.entries(manifest)) {
         assert(v === 'opus' || v === 'sonnet', 'manifest value for ' + k + ' must be opus or sonnet; got ' + v);
@@ -144,6 +145,7 @@ try {
       assert(manifest['code-reviewer'] === 'sonnet', 'common manifest must map code-reviewer→sonnet; got ' + manifest['code-reviewer']);
       assert(manifest['planner'] === 'opus', 'common manifest must still map planner→opus; got ' + manifest['planner']);
       assert(manifest['contractor'] === 'sonnet', 'common manifest must map contractor→sonnet (the contractor stays sonnet under every profile); got ' + manifest['contractor']);
+      assert(manifest['workflow-planner'] === 'opus', 'common manifest must still map workflow-planner→opus (Opus under every profile); got ' + manifest['workflow-planner']);
     } finally { fs.rmSync(cmtmp, { recursive: true, force: true }); }
   }
 } finally {

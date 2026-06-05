@@ -511,10 +511,25 @@ assertConcept('commands/workflow-next.md', 'adaptive path selection', [
   'KAOLA_ENABLE_ADAPTIVE', 'adaptive', 'fast|full|adaptive', 'flag-only', 'typed refusal'
 ]);
 assertIncludes('commands/workflow-next.md', 'workflow-plan.md exists -> /kaola-workflow-plan-run');
+// v5.1.0: the adaptive front-end ROUTING must stay enforced — the router skips its inline claim and
+// routes a fresh adaptive run to the workflow-planner front end (commands/kaola-workflow-adapt.md).
+// This surface was unlocked before, which let forge-edition router drift ship green on all 4 lanes.
+assertIncludes('commands/workflow-next.md', 'kaola-workflow-adapt $KAOLA_TARGET_ISSUE');
+assertIncludes('commands/workflow-next.md', 'Skip this entire step when `KAOLA_PATH=adaptive`');
 // adapt (authoring) + plan-run (executor) prose: artifacts, gates, caps, governance
 assertConcept('commands/kaola-workflow-adapt.md', 'adaptive authoring', [
   'workflow-plan.md', '## Nodes', 'post-dominate', 'finalize', 'FANOUT_CAP', 'plan_hash', 'typed refusal'
 ]);
+// the adaptive front-end dispatch must stay ENFORCED (a workflow-planner Agent block carrying its
+// model badge), never drift back to advisory prose — the bug fixed in v5.1.0 where a skill-driven
+// run claimed + authored inline in the main session.
+assertIncludes('commands/kaola-workflow-adapt.md', 'subagent_type="workflow-planner"');
+assertIncludes('commands/kaola-workflow-adapt.md', 'model="{WORKFLOW_PLANNER_MODEL}"');
+// v5.1.0: the refusal consumer branch must stay FAIL-CLOSED — any verdict that is not acquired/owned
+// is a refusal, never a blind read of a missing workflow-state.md.
+assertIncludes('commands/kaola-workflow-adapt.md', 'NOT `acquired` or `owned`');
+assertIncludes('commands/kaola-workflow-adapt.md', 'do not blind-read');
+assertIncludes('agents/workflow-planner.md', 'NOT `acquired`/`owned`');
 assertConcept('commands/kaola-workflow-plan-run.md', 'adaptive execution + governance', [
   '## Node Ledger', 'plan_hash', 'post-dominate', 'auto-run', 'provisional', 'halt for consent',
   'escalated_to_full: consent', 'typed refusal', 'quorum', 'tally-fn', 'validateNodeOutput',

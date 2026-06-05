@@ -134,7 +134,31 @@ a custom graph must earn itself. Fast false positives escalate cleanly via the
 Fast Eligibility and Mid-Flight Escalation sections of `commands/kaola-workflow-fast.md`; false
 negatives only cost ceremony.
 
+## Startup Step 0a-2 — Adaptive front-end entry (path = adaptive only)
+
+If `KAOLA_PATH=adaptive`, the **starting contract moves into the adaptive front end**: do NOT run
+the Step 0b inline startup for this path. The `workflow-planner` subagent — dispatched by
+`/kaola-workflow-adapt`, never by this router — runs the claim itself, so the router only selects +
+validates the issue (Step 0), then hands off. This keeps the router dispatch-free (Router Rules)
+while the Opus front end owns the claim + the DAG authoring:
+
+1. **Resume wins — never re-author a frozen plan.** If an active folder already exists for the
+   target issue and contains `kaola-workflow/{project}/workflow-plan.md`, run `watch-pr` once, then
+   route to `/kaola-workflow-plan-run {project}` and stop — the same `workflow-plan.md exists ->
+   /kaola-workflow-plan-run` rule as Resume Detection. The front end is for FRESH adaptive work only.
+2. **Fresh adaptive.** Run `watch-pr` once for global PR-folder reconciliation, then route to
+   `/kaola-workflow-adapt $KAOLA_TARGET_ISSUE`. The adapt command's `workflow-planner` runs
+   `kaola-workflow-claim.js startup --workflow-path adaptive --target-issue $KAOLA_TARGET_ISSUE`
+   (the claim + worktree + `workflow-state.md`); git-freshness (Startup Step 1) runs INSIDE adapt against MAIN **before** the planner claims
+   (so a dirty/behind main never orphans a worktree); the roadmap check (Startup Step 2) runs in adapt too.
+   Do NOT run Startup Step 0b / 1 / 2 in the router for this path.
+
+Non-adaptive paths (`fast` | `full`) fall through to Step 0b unchanged.
+
 ## Startup Step 0b - Startup Transaction
+
+**Skip this entire step when `KAOLA_PATH=adaptive`** — the adaptive front end (Step 0a-2) claims via
+the `workflow-planner`, not here. Step 0b runs for the `fast` and `full` paths only.
 
 If `kaola-workflow-claim.js` and `kaola-workflow-classifier.js` are available,
 run the startup transaction with the agent-selected target. The startup script

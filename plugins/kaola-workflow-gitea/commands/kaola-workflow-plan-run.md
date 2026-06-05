@@ -73,9 +73,15 @@ The main session then **judges** the resume branch from the contractor's report:
   not yet marked `complete` → crash AFTER the role finished but before the commit bracket: **re-run
   the commit bracket (step 3) only — do NOT re-dispatch the role**, which would redo the role's
   possibly-non-idempotent writes. The idempotent baseline still anchors the barrier diff.
+- The plan is **authored but NOT frozen** (the orient's `--resume-check` refused with `plan_hash
+  missing`) → a prior `/kaola-workflow-adapt` exited before freezing (governance refusal / declined
+  risk-ask / abort). Do NOT run the loop on an unfrozen plan; route to `/kaola-workflow-adapt
+  {project}` to complete **Govern + freeze** (adapt re-enters at freeze on the existing plan), then
+  resume here once it is frozen.
 - Otherwise the ready set from `next-action` (each node already carrying its resolved `model`) drives
   the loop: every node whose `status != complete` and all of whose `depends_on` are `complete`
-  **with resolved compliance**.
+  **with resolved compliance**. When no node is `in_progress` (e.g. a crash between a node's commit
+  and its fused advance left the next node unopened), **re-enter at step 1** to open the next ready node.
 
 ## Governance — auto-run only when provably low-risk, else ask
 
@@ -104,9 +110,26 @@ dispatch a subagent, so the dispatch and the loop control flow stay with the orc
 scripts and writing the durable ledger/state — and **judges** the barrier outcome. The main
 session never runs the loop scripts itself.
 
+**Task list = the workflow nodes.** The main session keeps a task list with one item per `## Nodes`
+row (`id · role`, in `depends_on` order) — established by `/kaola-workflow-adapt` after freeze, or,
+on a direct resume, reconstructed here from the `## Node Ledger`. Mark a node's task `in_progress`
+when you dispatch its role (after the advance bracket) and `completed` once its barrier passes in the
+commit step (`n/a` → skipped). This task list is a **live mirror** for visibility; the durable
+`## Node Ledger` stays the single source of truth, so reconcile the task list to the ledger on every
+resume rather than trusting a stale in-session list.
+
 You MUST pass `model="{CONTRACTOR_MODEL}"` in the contractor Agent calls below exactly as shown.
 
-1. **advance (contractor bracket)** — the contractor opens the next ready node:
+The commit of a node and the advance to the next node are **fused into ONE contractor dispatch**
+(step 3) so the contractor is summoned **once** per node transition, not twice. A standalone advance
+(step 1) only bootstraps the FIRST node (and, on resume, re-opens the `in_progress` node); thereafter
+the loop cycles step 2 → 3 → 4 → 2.
+
+1. **advance — open the next ready node when none is `in_progress` (contractor bracket)** — run this
+   to bootstrap the first node, and on resume to open the next ready node **whenever no node is
+   `in_progress`** (a never-opened first node, OR a node orphaned by a crash between a prior node's
+   commit and its fused advance — see step 3). In steady state the fused advance (step 3) opens the
+   next node, so do not re-run this while a node is already `in_progress`. The contractor opens the node:
    ```text
    Agent(
      subagent_type="contractor",
@@ -163,20 +186,23 @@ Agent(
    `subagent_type` set to the node's role and `model=` resolved via
    `scripts/kaola-workflow-resolve-agent-model.js`. Per-instance evidence is
    namespaced `.cache/{role}-{claim-id}.md` so siblings never collide.
-3. **commit (contractor bracket)** — after the role returns, the contractor verifies the evidence,
-   runs the barrier (commit order: `.cache` evidence → Node Ledger row → `workflow-state.md` pointer
-   LAST), and **only on a clean barrier** closes the node:
+3. **commit + advance (contractor bracket)** — after the role returns, the contractor verifies the
+   evidence, runs the barrier (commit order: `.cache` evidence → Node Ledger row → `workflow-state.md`
+   pointer LAST), **only on a clean barrier** closes the node, AND — in the SAME dispatch — opens the
+   next ready node (the fused advance; this is what removes the second contractor summons):
    ```text
    Agent(
      subagent_type="contractor",
      model="{CONTRACTOR_MODEL}",
-     description="Adaptive commit {project}",
-     prompt="Close node {node-id} for {project} in commit order (`.cache` evidence → `## Node Ledger` row → `workflow-state.md` pointer LAST); run scripts + write the durable rows, do NOT judge sufficiency or write any escalation marker. (a) Read `.cache/{node-id}.md` and report whether BOTH RED and GREEN evidence are present (a `tdd-guide` node cannot transition to `complete` without both, or an explicit `n/a` skip reason) and the `test_thrash` count (consecutive same-test RED→RED cycles). (b) Run the PER-INSTANCE barrier `kaola-gitea-workflow-commit-node.js kaola-workflow/{project}/workflow-plan.md --node-id {node-id} --json` and report its exit code — the re-scan of the files this node actually wrote is **script-enforced** (#231), not prose; with `--node-id` it diffs against the node's step-1 recorded base (exactly THIS node's writes, #239) and checks them against the node's OWN declared write set, so a fan-out instance that overflows into a SIBLING's lane is refused (the whole-plan barrier in Phase 6 remains the union-level floor). (c) ONLY IF the barrier exits 0 AND RED+GREEN evidence is present (or a valid `n/a`): mark the node `complete` (or `n/a`) and emit its one `## Required Agent Compliance` row — for a `code-reviewer`/`security-reviewer` gate or skeptic row, key it with the **bare role string** (`code-reviewer`, `security-reviewer`); per-instance disambiguation goes in the Evidence column only (the canonical compliance-row format the full-path `delegationPolicyCompliance()` matcher expects). Never mark a gate row `n/a` while a node it post-dominates reached `complete` — a gate row must record a node that actually ran and produced a passing verdict. If the barrier exits 1, or `test_thrash` ≥ 3, or evidence is missing: do NOT mark the node `complete` — report the condition and stop. Re-derive your own kaola_script. Capture real exit codes; never gate on a piped | tail. Do NOT dispatch a role, judge sufficiency, write any `escalated_to_full`/`consent_halt` marker, or ask the user."
+     description="Adaptive commit+advance {project}",
+     prompt="Close node {node-id} for {project} in commit order (`.cache` evidence → `## Node Ledger` row → `workflow-state.md` pointer LAST); run scripts + write the durable rows, do NOT judge sufficiency or write any escalation marker. (a) Read `.cache/{node-id}.md` and report whether BOTH RED and GREEN evidence are present (a `tdd-guide` node cannot transition to `complete` without both, or an explicit `n/a` skip reason) and the `test_thrash` count (consecutive same-test RED→RED cycles). (b) Run the PER-INSTANCE barrier `kaola-gitea-workflow-commit-node.js kaola-workflow/{project}/workflow-plan.md --node-id {node-id} --json` and report its exit code — the re-scan of the files this node actually wrote is **script-enforced** (#231), not prose; with `--node-id` it diffs against the node's step-1 recorded base (exactly THIS node's writes, #239) and checks them against the node's OWN declared write set, so a fan-out instance that overflows into a SIBLING's lane is refused (the whole-plan barrier in Phase 6 remains the union-level floor). (c) ONLY IF the barrier exits 0 AND RED+GREEN evidence is present (or a valid `n/a`): mark the node `complete` (or `n/a`) and emit its one `## Required Agent Compliance` row — for a `code-reviewer`/`security-reviewer` gate or skeptic row, key it with the **bare role string** (`code-reviewer`, `security-reviewer`); per-instance disambiguation goes in the Evidence column only (the canonical compliance-row format the full-path `delegationPolicyCompliance()` matcher expects). Never mark a gate row `n/a` while a node it post-dominates reached `complete` — a gate row must record a node that actually ran and produced a passing verdict. (d) FUSED ADVANCE — ONLY IF the barrier exited 0 and the node is now `complete`/`n/a`: in this SAME call, open the next node — run `kaola-gitea-workflow-next-action.js kaola-workflow/{project}/workflow-plan.md --json` and, if it reports a next ready node, mark that node `in_progress` and record its baseline with `kaola-gitea-workflow-commit-node.js kaola-workflow/{project}/workflow-plan.md --node-id {next-node-id} --start --json` (record-base runs only at node start and is **idempotent**, #239); report the next-action JSON + the node you opened, or `allDone`. If the barrier exits 1, or `test_thrash` ≥ 3, or evidence is missing: do NOT mark the node `complete` AND do NOT run the fused advance — report the condition and stop (the orchestrator owns the halt). Re-derive your own kaola_script. Capture real exit codes; never gate on a piped | tail. Do NOT dispatch a role, judge sufficiency, write any `escalated_to_full`/`consent_halt` marker, or ask the user."
    )
    ```
-4. **judge the barrier (main session — governance).** Read the contractor's commit report:
-   - barrier exit 0 + RED+GREEN evidence (or valid `n/a`) → the node is `complete`; continue the
-     loop (back to step 1). Do not treat a node as `complete` until the barrier exits 0.
+4. **judge the barrier (main session — governance).** Read the contractor's commit+advance report:
+   - barrier exit 0 + RED+GREEN evidence (or valid `n/a`) → the node is `complete` AND, per the fused
+     advance, the next ready node is **already open** (or the contractor reported `allDone` → route to
+     Phase 6, Completion below). Dispatch the freshly-opened node (back to step 2) — do not re-run a
+     standalone advance. Do not treat a node as `complete` until the barrier exits 0.
    - barrier exit 1 (a write turned out sensitive — a Phase-5 category — on a plan with no
      `security-reviewer` node, or overflowed outside the declared allowlist): the **provisional**
      authorization was granted on a now-false premise. **Revoke and halt for consent** — this

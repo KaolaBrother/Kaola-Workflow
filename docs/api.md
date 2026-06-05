@@ -413,6 +413,78 @@ The contractor is registered in all four editions identically:
 
 ---
 
+## Workflow-Planner Agent (adaptive front end)
+
+The `workflow-planner` is a locally-authored Opus agent that fronts the adaptive path. The main
+session dispatches it **once** at the start of an adaptive run; it claims the issue and authors the
+plan, then returns control. It is DISTINCT from the vendored read-only `planner` agent (a Phase-2 /
+in-plan node role) — `workflow-planner` is the front-end orchestration role, not an in-plan node.
+
+### Purpose
+
+Offload the two seams that ADR 0002 left running inline in the main Opus context on the adaptive
+path — the starting **claim** and the `## Nodes` **DAG authoring** — into a single front-end
+subagent, so the orchestrator's context stays lean. The agent never freezes, judges risk, asks the
+user, or dispatches; it claims, authors, self-checks, and returns. The main session keeps every
+judgment.
+
+### Tools and model
+
+`Read, Write, Bash, Grep, Glob`; model **Opus** (fixed — profile-invariant, like the contractor's
+fixed Sonnet). `Write` authors `workflow-plan.md`; `Bash` runs the claim/startup and the validator
+self-check.
+
+### Ordered contract
+
+The agent runs these steps in order, then returns:
+
+1. **Claim** — `node kaola-workflow-claim.js startup --workflow-path adaptive --target-issue <N>`,
+   which creates the per-issue worktree and `workflow-state.md` and stamps `workflow_path: adaptive`.
+   (`claim.js` needs no code change: `--workflow-path` is parsed by the generic kebab→camel handler,
+   so a subagent shell that does not inherit the orchestrator's `KAOLA_PATH` still records the path.)
+2. **Author** — write the `## Meta` + `## Nodes` DAG + an **empty** `## Node Ledger` into
+   `workflow-plan.md` via `Write`.
+3. **Self-check** — run the plan-validator `--json` for orientation only (`kaola-workflow-plan-validator.js <plan> --json`).
+   This is NOT the authoritative freeze gate; the main session re-runs the validator on the durable
+   plan when it governs.
+4. **Return** — emit the structured summary below and hand control back to the main session.
+
+### Structured return
+
+```json
+{
+  "project": "<project-folder-name>",
+  "worktree_path": "<absolute path to the per-issue worktree>",
+  "claim_verdict": "owned | <typed refusal verdict>",
+  "claim_reasoning": "<one-line reasoning from the claim>",
+  "plan_path": "<path to the authored workflow-plan.md, or null on a claim refusal>",
+  "validator_verdict": "<the self-check verdict line, or null on a claim refusal>"
+}
+```
+
+### Two-mode durable handoff
+
+- **Success.** Every value the main session needs is durable: `workflow-state.md` (Sink block) and
+  `workflow-plan.md` are authoritative. The main session reads those **files**, never the planner's
+  prose — the structured return is an index, not the source of truth.
+- **Claim refusal.** No `workflow-state.md` is written, so there is no durable state to read. The
+  structured return is then the **sole** carrier of `claim_verdict` + `claim_reasoning`, and the main
+  session branches on the **absence** of the state file rather than blind-reading it.
+
+### Hard boundary — never freeze, judge, ask, or dispatch
+
+- **Never freezes.** The `plan_hash` freeze is the contractor's stamp, governed by the main session;
+  the agent's validator `--json` run is orientation only.
+- **Never judges risk.** The auto-run / ask / typed-refusal governance is the main session's call.
+- **Never asks the user.** User consent is an orchestrator responsibility.
+- **Never dispatches a subagent.** A subagent cannot dispatch a subagent (governing harness
+  constraint); the agent returns control to main, which owns the entire dispatch loop, the freeze,
+  and all governance.
+
+Full rationale: `docs/decisions/0003-adaptive-front-end-planner.md`.
+
+---
+
 ## Module Exports — Public API Functions
 
 The following functions are exported from sink and claim modules for use by test suites and advanced integrations:

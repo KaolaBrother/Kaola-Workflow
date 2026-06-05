@@ -645,7 +645,7 @@ If `SINK_KIND` is `merge`, run `cmdFinalize` from the linked worktree context. T
 ```bash
 if [ "$SINK_KIND" = "merge" ]; then
   (cd "$ACTIVE_WORKTREE_PATH" && node "$CLAIM_JS" finalize \
-    --project "$KAOLA_PROJECT" \
+    --project "{project}" \
     --keep-worktree)
 fi
 ```

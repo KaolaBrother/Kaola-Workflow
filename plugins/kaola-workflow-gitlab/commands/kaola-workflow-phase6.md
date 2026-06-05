@@ -640,7 +640,7 @@ SINK_ISSUE_FLAG=""
 
 if [ "$SINK_KIND" = "merge" ]; then
   (cd "$ACTIVE_WORKTREE_PATH" && node "$CLAIM_JS" finalize \
-    --project "$KAOLA_PROJECT" \
+    --project "{project}" \
     --keep-worktree)
 fi
 ```

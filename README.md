@@ -115,6 +115,7 @@ for the pinned upstream commit, attribution, and refresh procedure.
 | `doc-updater` | 6 — Finalize | Sonnet | |
 | `adversarial-verifier` | Adaptive path — read-only skeptic (never a gate) | Sonnet | |
 | `contractor` | All paths — mechanical bookkeeper (runs scripts + writes durable state; never a gate) | Sonnet | no |
+| `workflow-planner` | Adaptive path — front-end (claims + authors the `## Nodes` DAG; main governs + freezes) | Opus | no |
 
 The **Model** column is the `common` profile. The **default** install profile is
 `higher`, so the three agents marked _yes_ (`code-architect`, `code-reviewer`,
@@ -132,6 +133,17 @@ files, `workflow-state.md`, roadmap, archive) at every seam, returning a compact
 Opus session keeps all judgment, dispatch, synthesis, and the sink/close. It never dispatches a
 role, judges, gates, or asks the user, and stays Sonnet even under `--profile=higher` (there is no
 `profiles/higher/contractor.md`).
+
+`workflow-planner` is locally authored for the [adaptive path](#adaptive-path-optional) front end: a
+fixed-Opus agent the main session dispatches **once** at the start of the adaptive path. It runs the
+claim/startup (worktree + `workflow-state.md`), **authors** the `## Nodes` DAG plus an empty
+`## Node Ledger` into `workflow-plan.md`, runs the plan-validator `--json` as a self-check, and
+returns a structured summary. The main Opus session then reads the durable files, runs git-freshness,
+**governs** the risk decision (auto-run / ask / typed-refusal), and the `contractor` stamps the
+freeze + checkpoint + roadmap. It never freezes, judges risk, asks the user, or dispatches a subagent
+(a subagent cannot dispatch a subagent — it returns control to main), and stays Opus regardless of
+profile (there is no `profiles/higher/workflow-planner.md`). It is DISTINCT from the vendored
+read-only `planner`, which stays a read-only in-plan node role.
 
 When agents are installed, their frontmatter `model:` field is rewritten to
 `inherit`. Command files render each agent's concrete assigned model (e.g.,
@@ -440,12 +452,12 @@ performs the same review locally when no detached advisor profile is available.
 
 Current official release versions:
 
-- Claude Code command install, GitHub edition: `5.0.0`
-- Claude Code command install, GitLab edition: `5.0.0`
-- Claude Code command install, Gitea edition: `5.0.0`
-- Codex `kaola-workflow` plugin manifest: `3.0.0`
-- Codex `kaola-workflow-gitlab` plugin manifest: `3.0.0`
-- Codex `kaola-workflow-gitea` plugin manifest: `3.0.0`
+- Claude Code command install, GitHub edition: `5.1.0`
+- Claude Code command install, GitLab edition: `5.1.0`
+- Claude Code command install, Gitea edition: `5.1.0`
+- Codex `kaola-workflow` plugin manifest: `3.1.0`
+- Codex `kaola-workflow-gitlab` plugin manifest: `3.1.0`
+- Codex `kaola-workflow-gitea` plugin manifest: `3.1.0`
 
 The root `package.json` version is the official repository and Claude Code
 command-install release version. The GitLab Claude command pack follows that
@@ -548,7 +560,7 @@ For larger, **structurally non-linear** issues — work that naturally fans out 
 KAOLA_PATH=adaptive /workflow-next
 ```
 
-`/kaola-workflow-adapt` authors the plan as a `workflow-plan.md` (a `## Nodes` DAG plus a `## Node Ledger`) and validates it. The plan must be **in-grammar**: roles drawn from the closed role library, one of three shapes (`sequence`, bounded fan-out over pairwise-disjoint write sets up to `KAOLA_FANOUT_CAP`, or a bounded loop), a single unique `finalize` sink, and computed **post-dominance gates** (`code-reviewer` over every code-producing node, `security-reviewer` over every sensitive node). The validator then makes one fail-closed governance decision: in-grammar **and** provably low-risk → provisional auto-run; any sensitivity, write-role fan-out, shared-infrastructure touch, over-ceiling, loop, or uncertainty → **ask the user first**; out-of-grammar → typed refusal. On approval the plan is frozen — a `plan_hash` is stamped inside `workflow-plan.md` and re-checked on every load, so post-freeze tampering is refused. `/kaola-workflow-plan-run` then executes the DAG node by node with per-node checkpoints; it is resume-safe and toggle-agnostic (a frozen plan finishes even if the switch is later turned off) and hands off to Phase 6 on an all-complete ledger.
+`/kaola-workflow-adapt` opens by dispatching the `workflow-planner` front-end subagent **once**: it claims/starts up (worktree + `workflow-state.md`), authors the plan as a `workflow-plan.md` (a `## Nodes` DAG plus an empty `## Node Ledger`), runs the plan-validator `--json` as a self-check, and returns a structured summary. The plan must be **in-grammar**: roles drawn from the closed role library, one of three shapes (`sequence`, bounded fan-out over pairwise-disjoint write sets up to `KAOLA_FANOUT_CAP`, or a bounded loop), a single unique `finalize` sink, and computed **post-dominance gates** (`code-reviewer` over every code-producing node, `security-reviewer` over every sensitive node). The main session then reads the durable files, runs git-freshness, and **governs** one fail-closed risk decision: in-grammar **and** provably low-risk → provisional auto-run; any sensitivity, write-role fan-out, shared-infrastructure touch, over-ceiling, loop, or uncertainty → **ask the user first**; out-of-grammar → typed refusal. On approval the `contractor` stamps the freeze — a `plan_hash` is written inside `workflow-plan.md` and re-checked on every load, so post-freeze tampering is refused. `/kaola-workflow-plan-run` then executes the DAG node by node with per-node checkpoints; it is resume-safe and toggle-agnostic (a frozen plan finishes even if the switch is later turned off) and hands off to Phase 6 on an all-complete ledger.
 
 The adaptive path adds one role — `adversarial-verifier`, a read-only, refute-by-default skeptic used in read-only verification fan-outs. It is never a review gate and touches zero repository files.
 

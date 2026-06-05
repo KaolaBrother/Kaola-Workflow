@@ -146,7 +146,31 @@ Bias toward full when in doubt. Fast false positives escalate cleanly via the
 Mid-Flight Escalation section of the `kaola-workflow-fast` skill; false
 negatives only cost ceremony.
 
+## Startup — Adaptive front-end entry (path = adaptive only)
+
+If `KAOLA_PATH=adaptive`, the **starting contract moves into the adaptive front end**: do NOT run
+the Startup transaction below for this path. The `workflow-planner` agent role — delegated by
+`kaola-workflow-adapt`, never by this router — runs the claim itself, so the router only selects +
+validates the issue, then hands off (keeping the router dispatch-free):
+
+1. **Resume wins — never re-author a frozen plan.** If an active folder already exists for the
+   target issue and contains `kaola-workflow/{project}/workflow-plan.md`, run `watch-pr` once, then
+   route to `kaola-workflow-plan-run {project}` and stop (the same `workflow-plan.md exists ->
+   kaola-workflow-plan-run` rule as resume reconstruction). The front end is for FRESH adaptive
+   work only.
+2. **Fresh adaptive.** Run `watch-pr` once, then route to `kaola-workflow-adapt $KAOLA_TARGET_ISSUE`.
+   The adapt skill's `workflow-planner` runs `kaola-workflow-claim.js startup --workflow-path
+   adaptive --target-issue $KAOLA_TARGET_ISSUE` (the claim + worktree + `workflow-state.md`);
+   git-freshness runs inside adapt against MAIN **before** the planner claims (so a dirty/behind main
+   never orphans a worktree); the roadmap check runs in adapt too. Do NOT run
+   the Startup transaction / git-freshness / roadmap steps in the router for this path.
+
+Non-adaptive paths (`fast` | `full`) fall through to the Startup transaction unchanged.
+
 ## Startup
+
+**Skip this transaction when `KAOLA_PATH=adaptive`** — the adaptive front end (above) claims via the
+`workflow-planner`, not here. It runs for the `fast` and `full` paths only.
 
 Run the startup transaction with the agent-selected target. Startup validates
 the explicit issue, refreshes PR-backed folders with `watch-pr`, and atomically
