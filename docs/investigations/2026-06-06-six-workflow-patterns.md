@@ -61,6 +61,62 @@ carve-out validates today (P3 above, `blastRadius: false`); #251 added a script-
 `kaola-workflow-adaptive-schema.js:99`) and `--verdict-check` so the loop's exit and the
 quorum tally are mechanically enforced rather than agent-asserted.
 
+### Patterns compose — the planner draws one DAG, not picks one pattern
+
+The patterns are **not a menu to choose from**. They are a composable vocabulary: the
+`workflow-planner` authors **one** task-shaped DAG for the issue and draws *several* of
+these sub-graphs into it, wired with `depends_on`. "Pick a pattern" is the wrong frame;
+"compose the patterns this work needs" is the design intent (the adaptive path's whole
+purpose — *"freely compose a task-shaped DAG of role nodes"*).
+
+A single plan composing **three** patterns — a read-only multi-modal sweep
+(Fan-out-and-synthesize, research form), a parallel write-role implement
+(Fan-out-and-synthesize, build form), and an Adversarial-verification skeptic fan-out —
+validates `in-grammar` (run on 2026-06-06):
+
+```
+| id       | role                 | depends_on          | declared_write_set | cardinality | shape         |
+|----------|----------------------|---------------------|--------------------|-------------|---------------|
+| sweep1   | code-explorer        | —                   | —                  | 1           | fanout(sweep) |
+| sweep2   | code-explorer        | —                   | —                  | 1           | fanout(sweep) |
+| sweep3   | code-explorer        | —                   | —                  | 1           | fanout(sweep) |
+| plan     | planner              | sweep1,sweep2,sweep3 | —                 | 1           | sequence      |
+| impl-api | tdd-guide            | plan                | api/x.js           | 1           | fanout(impl)  |
+| impl-cli | tdd-guide            | plan                | cli/y.js           | 1           | fanout(impl)  |
+| review   | code-reviewer        | impl-api,impl-cli   | —                  | 1           | sequence      |
+| sk1      | adversarial-verifier | review              | —                  | 1           | fanout(verify)|
+| sk2      | adversarial-verifier | review              | —                  | 1           | fanout(verify)|
+| done     | finalize             | sk1,sk2             | —                  | 1           | sequence      |
+```
+
+```text
+ sweep1 ┐                                            ┌─► sk1 ┐
+ sweep2 ┼─► plan ─┬─► impl-api ┐                      │       │
+ sweep3 ┘         └─► impl-cli ┴─► review (G1 gate) ──┴─► sk2 ┴─► finalize
+   └ multi-modal sweep   └ parallel implement   └ adversarial verification
+     (read-only fan-out    (write fan-out →        (read-only skeptic
+      → planner synth)      reviewer gate)           fan-out → quorum)
+```
+
+```
+$ node scripts/kaola-workflow-plan-validator.js composed.md --json
+{"result":"in-grammar","decision":"ask","sink":"done",
+ "risk":{"sensitivity":false,"blastRadius":true,"reasons":["write-role fan-out (N>=2)"]},
+ "nodeCount":10}
+```
+
+Composition is safe **by construction**, not by review: the walls — the unique `finalize`
+sink, `code-reviewer` post-dominating every code-producing node, `security-reviewer` over
+every sensitive node — are **graph properties the validator computes over any topology**.
+`code-reviewer` post-dominates *both* `impl-api` and `impl-cli` here no matter how many
+research or verification sub-graphs are stacked around them. **More composition can never
+erode a gate** (Principle 1 of the 2026-06-02 design). The planner's job is therefore
+*composition, not selection*: decide the shape the work needs and draw that DAG.
+
+This is also why **selective execution composes cleanly** (below): a `select(...)` arm is
+not a leaf — it can itself be a Fan-out-and-synthesize or carry its own review loop.
+Classify-And-Act just adds "choose *which* sub-graph runs" to the same composition algebra.
+
 ## The one gap: Classify-And-Act
 
 The catalogue surveyed **verification and orchestration** patterns. It never surveyed
