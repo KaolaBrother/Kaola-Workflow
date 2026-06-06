@@ -161,8 +161,7 @@ The router enters this command with the agent-selected target issue for fresh ad
 (resume of an unfrozen plan):** a *frozen* plan never reaches adapt (it resumes via
 `/kaola-workflow-plan-run`), but an **authored-but-NOT-frozen** plan does — if `{project}`'s
 `workflow-plan.md` already exists with **no `plan_hash`** (a prior governance refusal / declined
-risk-ask / abort left it unfrozen), SKIP the freshness gate + planner dispatch below and go straight to
-**Govern + freeze** on that existing plan (read the issue from its `workflow-state.md`). A pre-freeze
+risk-ask / abort left it unfrozen), re-run the planner+handoff on it (the planner MAY overwrite an unfrozen invalid plan; never a frozen one), passing prior validator errors. Do NOT route to a separate freeze step — the handoff freezes mechanically. A pre-freeze
 exit therefore leaves a **resumable** project, not an orphan; `kaola-workflow-claim.js discard
 --project {project}` abandons it.
 
@@ -190,8 +189,7 @@ worktree — that is for the full/fast paths only, pending #264) — the router'
 freshness-block release no longer guards this path, and gating up front leaves nothing to orphan.
 
 Once main is clean, **summon the `workflow-planner`** — it claims, authors `workflow-plan.md`, runs
-the validator `--json` as a self-check, and RETURNS a structured summary; it never freezes, judges
-risk, asks the user, or dispatches.
+the validator `--json` as a self-check, and RETURNS a structured summary; it never JUDGES risk or asks the user (decision:ask is recorded metadata); it RUNS the handoff, which freezes mechanically, and returns the packet; it never dispatches.
 
 You MUST pass `model="{WORKFLOW_PLANNER_MODEL}"` in this Agent call exactly as shown — do not omit
 the `model=` line.
@@ -201,7 +199,7 @@ Agent(
   subagent_type="workflow-planner",
   model="{WORKFLOW_PLANNER_MODEL}",
   description="Adaptive front end {issue}",
-  prompt="Settle the starting contract and design the adaptive workflow for issue {issue}, per your workflow-planner contract. (1) Run `kaola-workflow-claim.js startup --runtime claude --workflow-path adaptive --target-issue {issue}` — `--workflow-path adaptive` is REQUIRED (a subagent shell does not inherit KAOLA_PATH, so without it the project would be mis-stamped workflow_path:full). Add `--sink pr` ONLY if the user requested a PR sink (else omit; merge is the default). This creates the project folder + workflow-state.md at repo-root — the adaptive path does NOT provision a worktree (that is for the full/fast paths only, pending #264). (2) If that project already has a workflow-plan.md, do NOT overwrite it — STOP and return so the orchestrator routes to the executor. (3) Otherwise author via Write the `## Meta` labels line, the `## Nodes` DAG, and an empty `## Node Ledger` (one row per node, `status: pending`) into that project's workflow-plan.md. (4) Run `kaola-workflow-plan-validator.js <plan> --json` as a self-check and fix until in-grammar — do NOT run --freeze or authoring-allowed; do NOT judge risk, ask the user, or dispatch. RETURN { project, worktree_path, claim_verdict, claim_reasoning, plan_path, validator_verdict }. On a claim refusal, STOP after startup (no state file is written) and return the verdict + reasoning."
+  prompt="Settle the starting contract and design the adaptive workflow for issue {issue}, per your workflow-planner contract. (1) Run `kaola-workflow-claim.js startup --runtime claude --workflow-path adaptive --target-issue {issue}` — `--workflow-path adaptive` is REQUIRED (a subagent shell does not inherit KAOLA_PATH, so without it the project would be mis-stamped workflow_path:full). Add `--sink pr` ONLY if the user requested a PR sink (else omit; merge is the default). This creates the project folder + workflow-state.md at repo-root — the adaptive path does NOT provision a worktree (that is for the full/fast paths only, pending #264). (2) If that project already has a workflow-plan.md, do NOT overwrite it — STOP and return so the orchestrator routes to the executor. (3) Otherwise author via Write the `## Meta` labels line, the `## Nodes` DAG, and an empty `## Node Ledger` (one row per node, `status: pending`) into that project's workflow-plan.md. (4) Run plan-validator <plan> --json self-check, fix until in-grammar — do NOT run authoring-allowed. (5) Run kaola-workflow-adaptive-handoff.js --project {project} --json (freezes, resume-checks, opens node1, records baseline, stages roadmap, writes Planning Evidence; decision:ask is recorded metadata, not a gate). RETURN its handoff packet {handoff_status,checklist,first_node,decision,risk} on ready, or {handoff_status:'plan_invalid',result:'refuse',errors,validator_verdict} on validator refuse."
 )
 ```
 
@@ -221,48 +219,15 @@ files are authoritative.
   dispatch, and freeze).
 
 The claim (at repo-root — the adaptive path provisions no worktree, pending #264) was cut from a now-clean main (git-freshness ran *before* the claim, above), so proceed
-straight to governance.
+straight to reading the handoff packet.
 
-## Govern + freeze
+## Read the handoff packet
 
-**Summon the contractor to classify** the durable plan — it re-runs the validator and returns the
-verdict verbatim (a governance input, not a compact summary; the planner's self-check `--json` is
-orientation only — freeze-integrity rests on this re-run):
+The planner RAN `kaola-workflow-adaptive-handoff.js` and returned a checklist-backed packet (plan already frozen, node1 baseline+ledger+Planning Evidence written). The handoff is mechanical; `decision:ask` is **audit metadata only** — it freezes-and-proceeds, NEVER pauses for approval.
 
-You MUST pass `model="{CONTRACTOR_MODEL}"` in this Agent call exactly as shown — do not omit the
-`model=` line.
+- **`handoff_status: ready_to_dispatch_first_node`** (all checklist true) → dispatch `first_node.role` with `model="<first_node.model>"` scoped to `first_node.declared_write_set` IMMEDIATELY (even when `decision:ask`, no approval gate), then hand off to `/kaola-workflow-plan-run {project}`.
 
-```text
-Agent(
-  subagent_type="contractor",
-  model="{CONTRACTOR_MODEL}",
-  description="Adaptive classify {project}",
-  prompt="Run `kaola-workflow-plan-validator.js kaola-workflow/{project}/workflow-plan.md --json` and return its FULL verdict JSON verbatim (a governance input for the orchestrator, not a compact summary). Do NOT freeze, judge, or write anything."
-)
-```
-
-The main session reads the verdict and **governs** (the contractor never judges risk):
-
-- **out-of-grammar → typed refusal** (unknown role, a gate routed around, a cap
-  busted, a non-disjoint write-role fan-out). Stop and surface; fix the plan.
-- **in-grammar, provably low-risk → auto-run.** Freeze immediately.
-- **in-grammar, risky or uncertain → ask the user first** (ExitPlanMode-style:
-  show the DAG + validator report + risk findings). Freeze only on an explicit
-  yes. Any sensitivity, any write-role fan-out, `SHARED_INFRA`, over-ceiling, a
-  loop, or any uncertainty is risky (fail closed).
-
-Once authorized, **summon the contractor to freeze + checkpoint** — it stamps `plan_hash`, records
-the planning evidence, and stages the per-issue roadmap; the main session keeps only the freeze
-**decision** above:
-
-```text
-Agent(
-  subagent_type="contractor",
-  model="{CONTRACTOR_MODEL}",
-  description="Adaptive freeze {project}",
-  prompt="Freeze the authorized plan for {project} and write the durable bookkeeping; do NOT judge or re-classify. (1) Run `kaola-workflow-plan-validator.js kaola-workflow/{project}/workflow-plan.md --freeze` — it computes and writes `plan_hash` into the plan (after this the plan is author-immutable). (2) Record the planning evidence in `workflow-state.md`, PRESERVING any existing `## Sink` block byte-for-byte. (3) If a GitHub issue number N is linked (read `issue_number` from `workflow-state.md`), stage the per-issue roadmap: resolve the title (ONLINE `gh issue view N --json title -q .title`, else from the plan/state or `—`), run `kaola-workflow-roadmap.js init-issue --issue N --title \"TITLE\" --status open --workflow-project \"{project}\" --next-step adaptive`, then `git add kaola-workflow/.roadmap/issue-N.md` (skip if init-issue printed `skip:`). Return a compact bookkeeping summary (scripts run + exit codes + files written)."
-)
-```
+- **`handoff_status: plan_invalid`** (validator refused; plan never froze, NOTHING written) → bounded **repair loop**: re-dispatch the `workflow-planner` with the verbatim `errors`/`validator_verdict` so it overwrites the UNFROZEN plan with a corrected DAG and re-runs the handoff. Retry ~2x (the retry counter lives in the ORCHESTRATOR, never in the script). After repeated failure → a REAL decision: downgrade to full path / discard+restart (`kaola-workflow-claim.js discard --project {project}` then fresh adaptive start) / STOP + surface a concrete blocker with validator evidence. Never silently loop.
 
 ## Establish the task list, then hand off
 

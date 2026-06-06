@@ -100,7 +100,9 @@ const retired = [
   ['derive', 'session'].join('-'),
   ['verify', 'startup'].join('-'),
   ['can', 'hand' + 'off'].join('-'),
-  'hand' + 'off',
+  // #255: the bare 'handoff' token is no longer retired — it is the live name of the
+  // adaptive planner-to-first-node handoff (kaola-workflow-adaptive-handoff.js). Only the
+  // legacy session-lease 'can-handoff' compound stays retired (kept above).
   ['startup', 'receipt'].join(' '),
   ['session', 'id'].join('_'),
   ['last', 'heart' + 'beat'].join('_'),
@@ -529,6 +531,11 @@ assertIncludes('commands/kaola-workflow-adapt.md', 'model="{WORKFLOW_PLANNER_MOD
 // is a refusal, never a blind read of a missing workflow-state.md.
 assertIncludes('commands/kaola-workflow-adapt.md', 'NOT `acquired` or `owned`');
 assertIncludes('commands/kaola-workflow-adapt.md', 'do not blind-read');
+// #255: the checklist-backed handoff contract must stay enforced — the orchestrator reads the
+// planner's handoff packet (it no longer runs a contractor classify/freeze chain). Lock the two
+// terminal handoff statuses so the design cannot silently drift back to a pre-handoff approval gate.
+assertIncludes('commands/kaola-workflow-adapt.md', 'ready_to_dispatch_first_node');
+assertIncludes('commands/kaola-workflow-adapt.md', 'plan_invalid');
 assertIncludes('agents/workflow-planner.md', 'NOT `acquired`/`owned`');
 assertConcept('commands/kaola-workflow-plan-run.md', 'adaptive execution + governance', [
   '## Node Ledger', 'plan_hash', 'post-dominate', 'auto-run', 'provisional', 'halt for consent',

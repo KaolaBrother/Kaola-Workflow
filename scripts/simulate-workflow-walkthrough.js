@@ -15,6 +15,7 @@ const sinkPrScript = path.join(repoRoot, 'scripts', 'kaola-workflow-sink-pr.js')
 const activeFoldersScript = path.join(repoRoot, 'scripts', 'kaola-workflow-active-folders.js');
 const closureAuditScript = path.join(repoRoot, 'scripts', 'kaola-workflow-closure-audit.js');
 const planValidatorScript = path.join(repoRoot, 'scripts', 'kaola-workflow-plan-validator.js'); // issue #227
+const handoffScript = path.join(repoRoot, 'scripts', 'kaola-workflow-adaptive-handoff.js'); // issue #255
 const hookScript = path.join(repoRoot, 'hooks', 'kaola-workflow-pre-commit.sh');
 const phantomAdvisorHook = path.join(repoRoot, 'hooks', 'kaola-workflow-phantom-advisor.sh');
 
@@ -6905,6 +6906,393 @@ function testAdaptivePatternLibrary() {
   console.log('testAdaptivePatternLibrary: PASSED');
 }
 
+// ---------------------------------------------------------------------------
+// issue #255 — adaptive handoff integration tests
+// ---------------------------------------------------------------------------
+
+// Helper: build an unfrozen plan text with a ## Node Ledger section.
+// All ledger entries are 'pending' so the handoff can open node1.
+// No ## Sink / issue_number → roadmap_staged is vacuously true (hermetic).
+function makeHandoffPlan(nodesRows, ledgerRows, labels) {
+  const labelLine = Array.isArray(labels) ? labels.join(', ') : (labels || 'enhancement');
+  return [
+    '# Workflow Plan — issue #255-sim', '',
+    '## Meta', 'labels: ' + labelLine, '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+  ].concat(nodesRows).concat([
+    '',
+    '## Node Ledger', '',
+    '| id | status |',
+    '|---|---|',
+  ]).concat(ledgerRows).concat(['']).join('\n');
+}
+
+// Helper: plant a workflow-state.md stub (no issue_number → vacuous roadmap_staged).
+function plantHandoffState(projectDir, projectName) {
+  const stateContent = [
+    '## Project', 'name: ' + projectName, 'status: active',
+    'workflow_path: adaptive', '',
+  ].join('\n');
+  fs.writeFileSync(path.join(projectDir, 'workflow-state.md'), stateContent);
+}
+
+// ---------------------------------------------------------------------------
+// testAdaptiveHandoffInGrammarReady — UNFROZEN in-grammar auto-run plan with a
+// temp git repo (for --start baseline). Asserts full checklist + node1 opened.
+// ---------------------------------------------------------------------------
+function testAdaptiveHandoffInGrammarReady() {
+  const tmp = adaptiveTmp('handoff-ready');
+  try {
+    // Set up a real git repo (required for commit-node --start / --record-base).
+    initGitRepo(tmp);
+
+    const projectName = 'issue-255-sim-ready';
+    const projectDir = path.join(tmp, 'kaola-workflow', projectName);
+    fs.mkdirSync(projectDir, { recursive: true });
+
+    // Plant UNFROZEN in-grammar auto-run plan (sequential, no write-role fanout → auto-run).
+    const planText = makeHandoffPlan([
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| impl | tdd-guide | explore | lib/foo.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], [
+      '| explore | pending |',
+      '| impl | pending |',
+      '| review | pending |',
+      '| done | pending |',
+    ]);
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, planText);
+
+    // Plant state (no issue_number → vacuous roadmap_staged).
+    plantHandoffState(projectDir, projectName);
+
+    // Git-commit plan + state so the repo HEAD is current (record-base needs a resolvable tree).
+    spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8' });
+    spawnSync('git', ['commit', '-m', 'handoff-ready fixture'], { cwd: tmp, encoding: 'utf8' });
+
+    // Run handoff using --plan (absolute path) — NOT --project (resolves from script's repoRoot).
+    const r = runNode(handoffScript, ['--plan', planPath, '--json'], tmp);
+    assert(r.status === 0, 'in-grammar handoff must exit 0, got ' + r.status + '\nstderr: ' + r.stderr + '\nstdout: ' + r.stdout);
+    const result = JSON.parse(r.stdout);
+
+    assert(result.handoff_status === 'ready_to_dispatch_first_node',
+      'must be ready_to_dispatch_first_node, got: ' + JSON.stringify(result));
+    assert(result.checklist && result.checklist.claim_acquired === true, 'checklist.claim_acquired must be true');
+    assert(result.checklist.plan_in_grammar === true, 'checklist.plan_in_grammar must be true');
+    assert(result.checklist.plan_frozen === true, 'checklist.plan_frozen must be true');
+    assert(result.checklist.resume_check_ok === true, 'checklist.resume_check_ok must be true');
+    assert(result.checklist.first_node_opened === true, 'checklist.first_node_opened must be true');
+    assert(result.checklist.baseline_recorded === true, 'checklist.baseline_recorded must be true');
+    assert(result.checklist.roadmap_staged === true, 'checklist.roadmap_staged must be true');
+    assert(result.first_node && result.first_node.id === 'explore',
+      'first_node.id must be explore, got: ' + JSON.stringify(result.first_node));
+    assert(result.first_node.model && result.first_node.model.length > 0,
+      'first_node.model must be non-empty, got: ' + result.first_node.model);
+    assert(result.decision === 'auto-run',
+      'decision must be auto-run, got: ' + result.decision);
+
+    // Plan must now contain plan_hash marker (proof of freeze).
+    const frozenPlan = fs.readFileSync(planPath, 'utf8');
+    assert(/<!-- plan_hash: [0-9a-f]{64} -->/.test(frozenPlan),
+      'plan must contain <!-- plan_hash: --> after handoff');
+
+    // Node1 ledger row must be in_progress.
+    assert(/\|\s*explore\s*\|\s*in_progress\s*\|/.test(frozenPlan),
+      'explore ledger row must be in_progress after handoff');
+
+    // .cache/barrier-base-explore must exist.
+    const cacheBase = path.join(projectDir, '.cache', 'barrier-base-explore');
+    assert(fs.existsSync(cacheBase),
+      '.cache/barrier-base-explore must exist after handoff --start, checked: ' + cacheBase);
+
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptiveHandoffInGrammarReady: PASSED');
+}
+
+// ---------------------------------------------------------------------------
+// testAdaptiveHandoffAskFreezesNotApproval — REGRESSION case: write-role fanout(impl)
+// plan that validates decision:ask must still return ready_to_dispatch_first_node
+// (NOT needs_user_approval). decision:ask is audit metadata; handoff freezes and proceeds.
+// ---------------------------------------------------------------------------
+function testAdaptiveHandoffAskFreezesNotApproval() {
+  const tmp = adaptiveTmp('handoff-ask');
+  try {
+    initGitRepo(tmp);
+
+    const projectName = 'issue-255-sim-ask';
+    const projectDir = path.join(tmp, 'kaola-workflow', projectName);
+    fs.mkdirSync(projectDir, { recursive: true });
+
+    // write-role fanout(impl) → validator returns decision:ask (blast radius).
+    const planText = makeHandoffPlan([
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| api | tdd-guide | explore | api/x.js | 1 | fanout(impl) |',
+      '| cli | tdd-guide | explore | cli/y.js | 1 | fanout(impl) |',
+      '| review | code-reviewer | api,cli | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], [
+      '| explore | pending |',
+      '| api | pending |',
+      '| cli | pending |',
+      '| review | pending |',
+      '| done | pending |',
+    ]);
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, planText);
+    plantHandoffState(projectDir, projectName);
+
+    spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8' });
+    spawnSync('git', ['commit', '-m', 'handoff-ask fixture'], { cwd: tmp, encoding: 'utf8' });
+
+    const r = runNode(handoffScript, ['--plan', planPath, '--json'], tmp);
+    assert(r.status === 0, 'ask handoff must exit 0, got ' + r.status + '\nstderr: ' + r.stderr + '\nstdout: ' + r.stdout);
+    const result = JSON.parse(r.stdout);
+
+    // THE REGRESSION: must NOT be needs_user_approval; ask freezes and proceeds.
+    assert(result.handoff_status === 'ready_to_dispatch_first_node',
+      'REGRESSION: decision:ask must still be ready_to_dispatch_first_node (NOT needs_user_approval), got: ' + JSON.stringify(result));
+    assert(result.decision === 'ask',
+      'decision must be ask (audit metadata), got: ' + result.decision);
+
+    // All checklist flags must be true.
+    assert(result.checklist && result.checklist.claim_acquired === true, 'checklist.claim_acquired must be true');
+    assert(result.checklist.plan_in_grammar === true, 'checklist.plan_in_grammar must be true');
+    assert(result.checklist.plan_frozen === true, 'checklist.plan_frozen must be true');
+    assert(result.checklist.resume_check_ok === true, 'checklist.resume_check_ok must be true');
+    assert(result.checklist.first_node_opened === true, 'checklist.first_node_opened must be true');
+    assert(result.checklist.baseline_recorded === true, 'checklist.baseline_recorded must be true');
+    assert(result.checklist.roadmap_staged === true, 'checklist.roadmap_staged must be true');
+
+    // NO risk_authorized key (2-state design; never returns this field).
+    assert(!('risk_authorized' in result),
+      'result must NOT have risk_authorized key, got: ' + JSON.stringify(Object.keys(result)));
+
+    // Plan must be frozen.
+    const frozenPlan = fs.readFileSync(planPath, 'utf8');
+    assert(/<!-- plan_hash: [0-9a-f]{64} -->/.test(frozenPlan),
+      'plan must be frozen (plan_hash present) after ask handoff');
+
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptiveHandoffAskFreezesNotApproval: PASSED');
+}
+
+// ---------------------------------------------------------------------------
+// testAdaptiveHandoffRefuseNoMutation — out-of-grammar plan (post-dominance leak).
+// Snapshot bytes first. Assert plan_invalid, exit≠0, NO mutation of any kind.
+// ---------------------------------------------------------------------------
+function testAdaptiveHandoffRefuseNoMutation() {
+  const tmp = adaptiveTmp('handoff-refuse');
+  try {
+    const projectName = 'issue-255-sim-refuse';
+    const projectDir = path.join(tmp, 'kaola-workflow', projectName);
+    fs.mkdirSync(projectDir, { recursive: true });
+
+    // Post-dominance leak: doc-updater side-branches the main flow (not dominated by code-reviewer).
+    const planText = makeHandoffPlan([
+      '| impl | tdd-guide | — | lib/foo.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| doc | doc-updater | impl | — | 1 | sequence |',
+      '| done | finalize | review,doc | — | 1 | sequence |',
+    ], [
+      '| impl | pending |',
+      '| review | pending |',
+      '| doc | pending |',
+      '| done | pending |',
+    ]);
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, planText);
+
+    // Plant state so precondition passes (state must exist before validator runs).
+    plantHandoffState(projectDir, projectName);
+
+    // Snapshot plan bytes before handoff.
+    const planBytesBefore = fs.readFileSync(planPath);
+
+    const r = runNode(handoffScript, ['--plan', planPath, '--json'], tmp);
+
+    // Must exit non-zero (plan_invalid).
+    assert(r.status !== 0,
+      'refuse handoff must exit non-zero, got exit ' + r.status + '\nstdout: ' + r.stdout);
+
+    const result = JSON.parse(r.stdout);
+    assert(result.handoff_status === 'plan_invalid',
+      'must be plan_invalid, got: ' + JSON.stringify(result));
+    assert(result.result === 'refuse',
+      'result must be refuse, got: ' + result.result);
+    assert(Array.isArray(result.errors) && result.errors.length > 0,
+      'errors must be non-empty, got: ' + JSON.stringify(result.errors));
+    assert(result.validator_verdict !== undefined && result.validator_verdict !== null,
+      'validator_verdict must be present (non-null), got: ' + JSON.stringify(result));
+    // Lock: refuse must come from the validator (not the precondition / state-missing path).
+    assert(result.validator_verdict && result.validator_verdict.result === 'refuse',
+      'must refuse at the validator (not the precondition), got: ' + JSON.stringify(result.validator_verdict));
+
+    // Plan must be byte-identical (no plan_hash written, no mutation).
+    const planBytesAfter = fs.readFileSync(planPath);
+    assert(planBytesBefore.equals(planBytesAfter),
+      'plan must be byte-identical after refuse (no mutation)');
+
+    // No ## Planning Evidence in state.
+    const stateContent = fs.readFileSync(path.join(projectDir, 'workflow-state.md'), 'utf8');
+    assert(!stateContent.includes('## Planning Evidence'),
+      'workflow-state.md must NOT have ## Planning Evidence after refuse');
+
+    // No .cache/barrier-base-* baseline written.
+    const cacheDir = path.join(projectDir, '.cache');
+    const hasBarrierBase = fs.existsSync(cacheDir) &&
+      fs.readdirSync(cacheDir).some(f => f.startsWith('barrier-base-'));
+    assert(!hasBarrierBase,
+      '.cache/barrier-base-* must NOT exist after refuse');
+
+    // No .roadmap/issue-* written.
+    const roadmapDir = path.join(tmp, 'kaola-workflow', '.roadmap');
+    const hasRoadmapEntry = fs.existsSync(roadmapDir) &&
+      fs.readdirSync(roadmapDir).some(f => /^issue-/.test(f));
+    assert(!hasRoadmapEntry,
+      '.roadmap/issue-* must NOT exist after refuse');
+
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptiveHandoffRefuseNoMutation: PASSED');
+}
+
+// ---------------------------------------------------------------------------
+// testAdaptiveHandoffIdempotentReRun — run in-grammar handoff TWICE.
+// 2nd run must also be ready; plan_hash unchanged; node1 single in_progress;
+// ## Planning Evidence exactly once (replaced not appended).
+// ---------------------------------------------------------------------------
+function testAdaptiveHandoffIdempotentReRun() {
+  const tmp = adaptiveTmp('handoff-idempotent');
+  try {
+    initGitRepo(tmp);
+
+    const projectName = 'issue-255-sim-idem';
+    const projectDir = path.join(tmp, 'kaola-workflow', projectName);
+    fs.mkdirSync(projectDir, { recursive: true });
+
+    const planText = makeHandoffPlan([
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| impl | tdd-guide | explore | lib/bar.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], [
+      '| explore | pending |',
+      '| impl | pending |',
+      '| review | pending |',
+      '| done | pending |',
+    ]);
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, planText);
+    plantHandoffState(projectDir, projectName);
+
+    spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8' });
+    spawnSync('git', ['commit', '-m', 'handoff-idem fixture'], { cwd: tmp, encoding: 'utf8' });
+
+    // First run.
+    const r1 = runNode(handoffScript, ['--plan', planPath, '--json'], tmp);
+    assert(r1.status === 0, 'first run must exit 0, got ' + r1.status + '\nstderr: ' + r1.stderr + '\nstdout: ' + r1.stdout);
+    const result1 = JSON.parse(r1.stdout);
+    assert(result1.handoff_status === 'ready_to_dispatch_first_node', 'first run must be ready');
+
+    // Capture plan_hash from the frozen plan file.
+    const planAfterRun1 = fs.readFileSync(planPath, 'utf8');
+    const hashMatch1 = planAfterRun1.match(/<!-- plan_hash: ([0-9a-f]{64}) -->/);
+    assert(hashMatch1, 'plan must have plan_hash after first run');
+    const planHashRun1 = hashMatch1[1];
+
+    // Second run (idempotent re-run).
+    const r2 = runNode(handoffScript, ['--plan', planPath, '--json'], tmp);
+    assert(r2.status === 0, 'second run must exit 0, got ' + r2.status + '\nstderr: ' + r2.stderr + '\nstdout: ' + r2.stdout);
+    const result2 = JSON.parse(r2.stdout);
+
+    assert(result2.handoff_status === 'ready_to_dispatch_first_node',
+      '2nd run must also be ready_to_dispatch_first_node, got: ' + JSON.stringify(result2));
+
+    // plan_hash must be unchanged.
+    const planAfterRun2 = fs.readFileSync(planPath, 'utf8');
+    const hashMatch2 = planAfterRun2.match(/<!-- plan_hash: ([0-9a-f]{64}) -->/);
+    assert(hashMatch2, 'plan must still have plan_hash after second run');
+    assert(hashMatch2[1] === planHashRun1,
+      'plan_hash must be unchanged after idempotent re-run, run1=' + planHashRun1 + ' run2=' + hashMatch2[1]);
+
+    // Node1 ledger must have exactly one in_progress row (not duplicated).
+    const inProgressMatches = planAfterRun2.match(/\|\s*explore\s*\|\s*in_progress\s*\|/g);
+    assert(inProgressMatches && inProgressMatches.length === 1,
+      'explore ledger row must appear in_progress exactly once, got: ' + JSON.stringify(inProgressMatches));
+
+    // ## Planning Evidence must appear exactly once in state (replaced, not appended).
+    const stateContent = fs.readFileSync(path.join(projectDir, 'workflow-state.md'), 'utf8');
+    const peMatches = stateContent.match(/## Planning Evidence/g);
+    assert(peMatches && peMatches.length === 1,
+      '## Planning Evidence must appear exactly once in state after 2 runs, got: ' + (peMatches ? peMatches.length : 0));
+
+    // roadmap_staged still true on second run (init-issue no-op).
+    assert(result2.checklist.roadmap_staged === true, 'roadmap_staged must be true on 2nd run');
+
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptiveHandoffIdempotentReRun: PASSED');
+}
+
+// ---------------------------------------------------------------------------
+// testAdaptiveHandoffProjectFlagResolvesRepoRoot — BLOCKING-1 regression (#255 review).
+//
+// In an install the handoff script lives at $HOME/.claude/kaola-workflow/scripts/
+// so path.resolve(__dirname, '..') would be the INSTALL dir, not the user's repo.
+// The fix: use git rev-parse --show-toplevel (cwd fallback) to resolve the user-repo.
+//
+// Proof: create a fresh tmp git repo (script-dir ≠ repo-root), plant
+// kaola-workflow/<proj>/workflow-plan.md (in-grammar) + workflow-state.md,
+// then run the REAL handoff script with --project <proj> --json and cwd=tmp.
+// Assert handoff_status==='ready_to_dispatch_first_node' — proves --project
+// resolved the tmp repo, not the script's install dir.
+// ---------------------------------------------------------------------------
+function testAdaptiveHandoffProjectFlagResolvesRepoRoot() {
+  const tmp = adaptiveTmp('handoff-proj-root');
+  try {
+    initGitRepo(tmp);
+
+    const projectName = 'issue-255-proj-root';
+    const projectDir = path.join(tmp, 'kaola-workflow', projectName);
+    fs.mkdirSync(projectDir, { recursive: true });
+
+    // In-grammar auto-run plan (sequential) — code-reviewer post-dominates tdd-guide (G1).
+    const planText = makeHandoffPlan([
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| impl | tdd-guide | explore | lib/bar.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], [
+      '| explore | pending |',
+      '| impl | pending |',
+      '| review | pending |',
+      '| done | pending |',
+    ]);
+    fs.writeFileSync(path.join(projectDir, 'workflow-plan.md'), planText);
+    plantHandoffState(projectDir, projectName);
+
+    // Commit so record-base has a tree to hash.
+    spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8' });
+    spawnSync('git', ['commit', '-m', 'proj-root fixture'], { cwd: tmp, encoding: 'utf8' });
+
+    // Run handoff with --project (NOT --plan) and cwd=tmp.
+    // script-dir (__dirname of handoffScript) is the REAL repoRoot/scripts/;
+    // tmp is a DIFFERENT git repo. The getRoot() fix ensures --project resolves tmp.
+    const r = runNode(handoffScript, ['--project', projectName, '--json'], tmp);
+    assert(r.status === 0,
+      'testAdaptiveHandoffProjectFlagResolvesRepoRoot: exit must be 0, got ' + r.status +
+      '\nstderr: ' + r.stderr + '\nstdout: ' + r.stdout);
+    const result = JSON.parse(r.stdout);
+    assert(result.handoff_status === 'ready_to_dispatch_first_node',
+      'testAdaptiveHandoffProjectFlagResolvesRepoRoot: --project must resolve tmp repo root, ' +
+      'got handoff_status=' + result.handoff_status + ' errors=' + JSON.stringify(result.errors));
+
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptiveHandoffProjectFlagResolvesRepoRoot: PASSED');
+}
+
 async function main() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-active-folders-'));
   try {
@@ -7057,6 +7445,13 @@ async function main() {
     testAdaptiveAuditCoverage();
     testAdaptiveVerdictCheck();
     testAdaptivePatternLibrary();
+    // issue #255 — adaptive handoff integration tests
+    testAdaptiveHandoffInGrammarReady();
+    testAdaptiveHandoffAskFreezesNotApproval();
+    testAdaptiveHandoffRefuseNoMutation();
+    testAdaptiveHandoffIdempotentReRun();
+    // issue #255 review BLOCKING-1: --project must resolve user-repo root via git rev-parse
+    testAdaptiveHandoffProjectFlagResolvesRepoRoot();
     console.log('Workflow walkthrough simulation passed');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });

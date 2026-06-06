@@ -29,6 +29,7 @@ Issue selection is an agent decision, not a hidden script decision.
 - `scripts/kaola-workflow-adaptive-schema.js` — adaptive-path forge-neutral constants + toggle resolution; byte-identical across all four editions (cross-edition drift anchor).
 - `scripts/kaola-workflow-next-action.js` — adaptive aggregator: ready-set / next node / resolved model from a frozen `workflow-plan.md` (n/a-aware; typed refusal on a stalled/corrupt DAG). Run by the `contractor` in the per-node *advance* bracket.
 - `scripts/kaola-workflow-commit-node.js` — adaptive aggregator: composes the per-node barrier choreography (`--record-base` → `--barrier-check` + `--gate-verify`) by shelling the plan-validator. Run by the `contractor` in the per-node *commit* bracket; fails closed on a missing baseline; never mutates the ledger/state.
+- `scripts/kaola-workflow-adaptive-handoff.js` — adaptive aggregator (#255): collapses the contractor classify/freeze/orient/advance chain into ONE mechanical planner→first-node transaction. Branches on validator `result` (in-grammar → freeze + resume-check + open node1 + baseline + roadmap + Planning Evidence → `ready_to_dispatch_first_node`; refuse → `plan_invalid`, no mutation). `decision:ask` is audit metadata, not a gate. Run by the `workflow-planner`; the orchestrator drives the bounded repair loop on `plan_invalid`.
 
 ## Running Tests
 ```bash

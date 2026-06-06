@@ -53,6 +53,8 @@ const COMMON_SCRIPTS = [
   // #242 Part B Stage A: adaptive aggregator scripts (next-action, commit-node)
   'kaola-workflow-next-action.js',
   'kaola-workflow-commit-node.js',
+  // #255 adaptive handoff: planner→first-node mechanical transition
+  'kaola-workflow-adaptive-handoff.js',
 ];
 
 const BYTE_IDENTICAL_GROUPS = [

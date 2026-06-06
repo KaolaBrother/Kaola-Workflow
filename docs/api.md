@@ -532,15 +532,18 @@ The agent runs these steps in order, then returns:
   structured return is then the **sole** carrier of `claim_verdict` + `claim_reasoning`, and the main
   session branches on the **absence** of the state file rather than blind-reading it.
 
-### Hard boundary — never freeze, judge, ask, or dispatch
+### Hard boundary — never judge risk, never ask, never dispatch
 
-- **Never freezes.** The `plan_hash` freeze is the contractor's stamp, governed by the main session;
-  the agent's validator `--json` run is orientation only.
-- **Never judges risk.** The auto-run / ask / typed-refusal governance is the main session's call.
-- **Never asks the user.** User consent is an orchestrator responsibility.
+- **Freeze is mechanical.** The planner RUNS `kaola-workflow-adaptive-handoff.js`, which stamps the
+  `plan_hash` freeze automatically on `result:in-grammar`. The planner does not decide to freeze —
+  the script does it on an in-grammar result.
+- **Never judges risk.** `decision:auto-run` vs `ask` is audit metadata recorded by the handoff;
+  the run proceeds either way. The planner makes the plan in-grammar, runs the handoff, and returns
+  the packet — it does not govern the risk decision.
+- **Never asks the user.** User consent is an orchestrator responsibility; `decision:ask` is not a
+  pre-handoff approval gate.
 - **Never dispatches a subagent.** A subagent cannot dispatch a subagent (governing harness
-  constraint); the agent returns control to main, which owns the entire dispatch loop, the freeze,
-  and all governance.
+  constraint); the agent runs scripts (shells the handoff) and returns the packet to main.
 
 Full rationale: `docs/decisions/0003-adaptive-front-end-planner.md`.
 
