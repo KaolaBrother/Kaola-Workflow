@@ -12,6 +12,19 @@ The adaptive starting contract recorded a branch *name* and `worktree_path:''` w
 - **Codex adaptive roles (the issue's 4th cited defect): already resolved in source** — `workflow-planner.toml` + `contractor.toml` ship in all three plugin `agents/` dirs and `install-codex-agent-profiles.js` copies every `.toml` unfiltered; the missing-roles report reflected a stale local `~/.codex` install, not a repo gap. No change.
 - Verified by a RED→GREEN provision-failure repro (force an `EEXIST` throw under `KAOLA_WORKTREE_NATIVE=1`: pre-fix the failure is masked, post-fix `worktree_error` surfaces while the claim still returns `acquired`), independently re-confirmed by the review gate against patched source. All four edition suites (`npm test`) + `simulate-workflow-walkthrough.js` stayed green. The **permanent committed regression test** is a queued follow-up (tracked as #256) — `scripts/simulate-workflow-walkthrough.js` is outside this change's frozen write set.
 
+### Mechanical verdict gate for the adaptive review-fix loop (issue #251)
+
+Turns the adaptive path's gap-finder verdict from orchestrator prose into a script-read PASS/FAIL, closing the #231-shaped leak where a `code-reviewer` could report "REJECTED" yet still pass its barrier, be marked `complete`, and advance to `finalize`. Adaptive-path only; toggle-agnostic (runs on a frozen plan regardless of the install switch).
+
+- **Part A — doc-honesty.** Reworded three over-promising claims across the `kaola-workflow-plan-run` command + SKILL surfaces (×4 editions) that implied a mechanical engine the code did not have: the "script-decidable `dry_streak` convergence cap" (now stated as agent-tracked under the script-enforced static `LOOP_CAP`), the quorum/decision-node `validateNodeOutput()` schema checkpoint (now the real `--verdict-check` mechanism; the tally arithmetic is orchestrator prose), and the `validateNodeOutput` checkpoints claim (debunked — no such script exists).
+- **Part B — verdict gate.** New machine-readable verdict contract:
+  - `parseNodeVerdict(cacheText)` + the `VERDICT_PASS`/`VERDICT_FAIL`/`VERDICT_VOCABULARY` constants in `kaola-workflow-adaptive-schema.js` (the byte-identical cross-edition anchor). Fence-blind by a column-0 anchor; malformed/absent tokens fail closed.
+  - `kaola-workflow-plan-validator.js --verdict-check` (pure-read, toggle-agnostic, sibling to `--gate-verify`): self-skips non-gate roles; for `code-reviewer`/`security-reviewer`/`adversarial-verifier` nodes it requires a parseable `verdict: pass` with `findings_blocking: 0`, fail-closed on fail/missing/unparseable. An `adversarial-verifier` fan-out applies `majority-refute` over the sibling per-instance `.cache` files (a single skeptic cannot unilaterally halt; missing/unparseable counts as a refute).
+  - Wired into `kaola-workflow-commit-node.js` (per-node informational, whole-plan blocking) and the Phase-6 merge gate beside `--gate-verify` (×3 forge editions).
+  - The gap-finder agents (`code-reviewer`, `security-reviewer`, `adversarial-verifier`, plus the `higher` profiles) now emit the fence-free verdict block into their `.cache` evidence with a defined prose→verdict mapping.
+  - New `testAdaptiveVerdictCheck` coverage in the walkthrough suite (parseNodeVerdict pass/fail/missing/malformed; verifyVerdictBlock gate-pass / fail-closed / non-gate-skip / fan-out quorum; `--verdict-check` CLI per-node + whole-plan).
+- All four edition test suites (`npm test`) stay green; schema is byte-identical ×4 and the validator/commit-node copies are in sync (`validate-script-sync.js`) with the gitea/gitlab forks differing only by their forge tokens.
+
 ## [5.2.1] — 2026-06-06
 
 ### Fix adaptive authoring-entry guard — define the `kaola_script()` resolver (issue #245)

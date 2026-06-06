@@ -97,3 +97,32 @@ REFUTED | NOT-REFUTED   (confidence: high | medium | low)
 A `REFUTED` verdict (or a failed quorum of refuters) routes the claim into a
 bounded self-repair loop or surfaces it as a RISKY escalation — it never silently
 drops a wall and never auto-approves.
+
+## Machine Verdict (adaptive path)
+
+When invoked as a skeptic node on the adaptive path, write a machine-readable
+verdict block at the TOP LEVEL of your per-instance `.cache` evidence file
+(`.cache/adversarial-verifier-{claim-id}.md`), at column 0, no leading
+whitespace. The actual `.cache` file must be fence-free — do NOT wrap in a code
+fence. The block shown below is fenced here only so it renders in this doc:
+
+```
+verdict: pass
+findings_blocking: 0
+```
+
+Mappings from your prose verdict to the machine block:
+
+| Prose verdict | verdict field | findings_blocking |
+|---------------|--------------|-------------------|
+| NOT-REFUTED   | pass         | 0                 |
+| REFUTED       | fail         | 1                 |
+
+The block is parsed by `parseNodeVerdict` in `kaola-workflow-adaptive-schema.js`
+using a column-0 anchor (`^verdict:` — no leading whitespace). An indented or
+fenced block in the actual `.cache` file is rejected and counts as a refute
+(fail-closed). A missing or unparseable block also counts as a refute.
+
+Note: a single skeptic refute does NOT unilaterally fail a majority quorum — the
+orchestrator applies strict majority (`refutes * 2 > total`). Emit the block at
+the very top of the `.cache/adversarial-verifier-{claim-id}.md` file.

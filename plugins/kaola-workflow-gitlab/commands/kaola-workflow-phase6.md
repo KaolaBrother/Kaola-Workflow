@@ -29,8 +29,9 @@ If `workflow_path: adaptive`:
   node scripts/kaola-gitlab-workflow-plan-validator.js "$PLAN" --resume-check --json; RC=$?
   node scripts/kaola-gitlab-workflow-plan-validator.js "$PLAN" --gate-verify --json; GV=$?
   node scripts/kaola-gitlab-workflow-plan-validator.js "$PLAN" --barrier-check --json; BC=$?
-  if [ "$RC" -ne 0 ] || [ "$GV" -ne 0 ] || [ "$BC" -ne 0 ]; then
-    echo "BLOCKED: adaptive barrier failed (resume=$RC gate=$GV barrier=$BC) — run /kaola-workflow-plan-run first"; exit 1
+  node scripts/kaola-gitlab-workflow-plan-validator.js "$PLAN" --verdict-check --json; VC=$?
+  if [ "$RC" -ne 0 ] || [ "$GV" -ne 0 ] || [ "$BC" -ne 0 ] || [ "$VC" -ne 0 ]; then
+    echo "BLOCKED: adaptive barrier failed (resume=$RC gate=$GV barrier=$BC verdict=$VC) — run /kaola-workflow-plan-run first"; exit 1
   fi
   ```
   - `--gate-verify` proves every completed code/sensitive node is post-dominated by a
@@ -38,7 +39,12 @@ If `workflow_path: adaptive`:
   - `--barrier-check` re-scans the files actually written (git diff vs the merge-base
     of HEAD and `origin/main`) and refuses a sensitive write with no `security-reviewer`
     node, or an out-of-allowlist production write (closes H1/H3). Any nonzero exit
-    **blocks the merge**. On any failure stop with a **typed refusal** (do not proceed):
+    **blocks the merge**.
+  - `--verdict-check` reads every completed gate-role node's `.cache/{node-id}.md` and
+    requires `verdict: pass` with `findings_blocking: 0`. Any nonzero exit **blocks the
+    merge** — proves every code-reviewer/security-reviewer/adversarial-verifier node
+    recorded a passing verdict.
+  On any failure stop with a **typed refusal** (do not proceed):
   ```text
   Adaptive plan failed the script-enforced barrier. Run /kaola-workflow-plan-run first.
   ```

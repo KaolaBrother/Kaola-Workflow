@@ -222,9 +222,9 @@ Agent(
 > reviewer is marked `n/a` at runtime). It is wired into `routeAdaptive` (surfaced as
 > `pendingGates`, non-blocking on resume) and enforced as a **hard merge gate** in
 > Phase 6. The actual-writes re-scan + sensitive/allowlist refusal is `--barrier-check`
-> (per-node in step 4 above, and whole-plan in Phase 6). Only the quorum tally and the
-> `validateNodeOutput` schema checkpoints remain agent-discipline prose — perform those;
-> the gate execution and the write barrier are guaranteed by the validator scripts.
+> (per-node in step 4 above, and whole-plan in Phase 6). --verdict-check (#251) now script-enforces the reviewer/skeptic verdict (informational
+> per-node, BLOCKING in Phase 6). What remains agent-discipline is the quorum tally count
+> and dry_streak counting; gate presence, execution, barrier, and verdict are all script-guaranteed.
 
 ## Quorum / decision nodes (read-only fan-out)
 
@@ -233,11 +233,14 @@ After a read-only fan-out (e.g. adversarial-verify), an orchestrator
 *static* threshold (`tally-fn` ∈ {`majority-refute`, `argmax-score`}) and emits
 exactly one accept/kill (or winner) decision. The count is derived **solely** from
 the durable per-child ledger rows (recomputed on resume — never an in-memory
-counter), and each child verdict passes a `validateNodeOutput()` schema checkpoint
-before it is tallied. A failed quorum (majority refute) routes the claim into a
+counter). Each child verdict is a `verdict: pass|fail` block in `.cache`,
+mechanically checked by `--verdict-check` (#251) — there is no `validateNodeOutput()`
+script; that schema checkpoint was never script-enforced. The orchestrator tallies
+recorded verdicts — the tally arithmetic is prose, not a script. A failed quorum (majority refute) routes the claim into a
 bounded self-repair loop or surfaces as a RISKY escalation — it never drops a wall
-and never auto-approves. A `loop-until-dry` body terminates on a script-decidable
-`dry_streak` convergence cap layered under the mandatory static `LOOP_CAP`.
+and never auto-approves. A `loop-until-dry` body terminates on static LOOP_CAP
+(script-enforced) plus an agent-tracked dry_streak (orchestrator counts no-change
+cycles; only LOOP_CAP is validator-enforced).
 
 ## Caps
 

@@ -131,8 +131,9 @@ thereafter the loop cycles step 2 → 3 → 4 → 2.
 > node in the `## Node Ledger` — closes the G1/H5 leak where a reviewer is marked `n/a`),
 > wired into `routeAdaptive` (surfaced as `pendingGates`, non-blocking on resume) and enforced
 > as a hard merge gate in finalize; the actual-writes re-scan + sensitive/allowlist refusal is
-> `--barrier-check`. Only the quorum tally and `validateNodeOutput` remain agent discipline —
-> perform those; gate execution and the write barrier are guaranteed by the validator.
+> `--barrier-check`. --verdict-check (#251) now script-enforces the reviewer/skeptic verdict
+> (informational per-node, BLOCKING in finalize); what remains agent-discipline is the quorum
+> tally count and dry_streak counting; gate presence, execution, barrier, and verdict are all script-guaranteed.
 
 ## Quorum / decision nodes (read-only fan-out)
 
@@ -140,10 +141,12 @@ After a read-only fan-out (e.g. adversarial-verify with `adversarial-verifier` s
 an orchestrator **quorum/decision** node tallies N schema-validated child verdicts
 against a *static* threshold (`tally-fn` ∈ {`majority-refute`, `argmax-score`}) and emits
 one accept/kill (or winner) decision, derived solely from the durable per-child ledger
-rows (recomputed on resume), each gated by a `validateNodeOutput()` schema checkpoint. A
+rows (recomputed on resume), each a `verdict: pass|fail` block in `.cache` mechanically
+checked by --verdict-check (#251) — there is no `validateNodeOutput()` script; that schema
+checkpoint was never script-enforced. The tally arithmetic is prose, not a script. A
 failed quorum routes to a bounded self-repair loop or surfaces as a RISKY escalation — it
-never drops a wall. `loop-until-dry` terminates on a `dry_streak` convergence cap under
-the mandatory static `LOOP_CAP`.
+never drops a wall. `loop-until-dry` terminates on static LOOP_CAP (script-enforced)
+plus an agent-tracked dry_streak (orchestrator counts no-change cycles; only LOOP_CAP is validator-enforced).
 
 ## Caps
 

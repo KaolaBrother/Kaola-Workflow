@@ -30,8 +30,9 @@ If `workflow_path: adaptive`:
   node scripts/kaola-workflow-plan-validator.js "$PLAN" --resume-check --json; RC=$?
   node scripts/kaola-workflow-plan-validator.js "$PLAN" --gate-verify --json; GV=$?
   node scripts/kaola-workflow-plan-validator.js "$PLAN" --barrier-check --json; BC=$?
-  if [ "$RC" -ne 0 ] || [ "$GV" -ne 0 ] || [ "$BC" -ne 0 ]; then
-    echo "BLOCKED: adaptive barrier failed (resume=$RC gate=$GV barrier=$BC) — run /kaola-workflow-plan-run first"; exit 1
+  node scripts/kaola-workflow-plan-validator.js "$PLAN" --verdict-check --json; VC=$?
+  if [ "$RC" -ne 0 ] || [ "$GV" -ne 0 ] || [ "$BC" -ne 0 ] || [ "$VC" -ne 0 ]; then
+    echo "BLOCKED: adaptive barrier failed (resume=$RC gate=$GV barrier=$BC verdict=$VC) — run /kaola-workflow-plan-run first"; exit 1
   fi
   ```
   - `--resume-check` proves `plan_hash` integrity + structure + closed library.
@@ -43,6 +44,11 @@ If `workflow_path: adaptive`:
     `security-reviewer` node, or an out-of-allowlist production write — closing
     H1/H3. Any nonzero exit **blocks the merge**: the script is the enforcement,
     not a prose obligation.
+  - `--verdict-check` reads every completed `code-reviewer`, `security-reviewer`,
+    and `adversarial-verifier` node's `.cache/{node-id}.md` and requires a
+    machine-readable `verdict: pass` with `findings_blocking: 0`. Any nonzero
+    exit **blocks the merge** — this proves every gate-role node recorded a
+    passing verdict before the plan is allowed to close.
   On any failure stop with a **typed refusal** (do not proceed):
   ```text
   Adaptive plan failed the script-enforced barrier. Run /kaola-workflow-plan-run first.

@@ -87,6 +87,29 @@ function readDurableConsentHalt(planContent) {
   return /^consent_halt:[ \t]*pending[ \t]*$/m.test(body);
 }
 
+// #251: the mechanical verdict vocabulary a gate/skeptic role emits into its `.cache` evidence file.
+const VERDICT_PASS = 'pass';
+const VERDICT_FAIL = 'fail';
+const VERDICT_VOCABULARY = Object.freeze([VERDICT_PASS, VERDICT_FAIL]);
+
+// PURE (no fs): parse a gate/skeptic role's `.cache/{node-id}.md` for its machine verdict. Native
+// multiline regex ONLY (no classifier — cross-edition byte-identity). FENCE-BLIND BY ANCHOR: a verdict
+// line is recognised ONLY at column 0 (`^verdict:` no leading whitespace). findings_blocking optional
+// non-negative int; absent => null. Returns { found, verdict:'pass'|'fail'|null, findings_blocking:number|null }.
+function parseNodeVerdict(cacheText) {
+  const text = String(cacheText || '');
+  const vRe = /^verdict:[ \t]*([A-Za-z-]+)[ \t]*$/gm;
+  let vm, lastVerdictTok = null;
+  while ((vm = vRe.exec(text)) !== null) { lastVerdictTok = vm[1].toLowerCase(); }
+  const found = lastVerdictTok !== null;
+  let verdict = null;
+  if (found && VERDICT_VOCABULARY.includes(lastVerdictTok)) verdict = lastVerdictTok;
+  const fRe = /^findings_blocking:[ \t]*(\d+)[ \t]*$/gm;
+  let fm, lastBlocking = null;
+  while ((fm = fRe.exec(text)) !== null) { lastBlocking = parseInt(fm[1], 10); }
+  return { found, verdict, findings_blocking: lastBlocking };
+}
+
 // #238: curated, high-collision-risk ROOT (slashless) filenames — CI/CD, container, secrets,
 // dependency-lock, and build manifests where two concurrent projects editing the same one clobber.
 // This is a FOURTH, DISTINCT path vocabulary, kept here on purpose so it cannot drift across the four
@@ -198,6 +221,10 @@ module.exports = {
   ESCALATION_MARKERS,
   CONSENT_HALT_MARKER,
   readDurableConsentHalt,
+  VERDICT_PASS,
+  VERDICT_FAIL,
+  VERDICT_VOCABULARY,
+  parseNodeVerdict,
   CURATED_ROOT_PATHS,
   extractCuratedRootPaths,
   isCuratedRoot,

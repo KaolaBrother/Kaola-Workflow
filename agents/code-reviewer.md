@@ -296,6 +296,31 @@ End every review with:
 Verdict: WARNING — 2 HIGH issues should be resolved before merge.
 ```
 
+### Machine Verdict (adaptive path)
+
+When invoked as a gate node on the adaptive path, write a machine-readable verdict
+block at the TOP LEVEL of your `.cache` evidence file (column 0, no leading
+whitespace). The actual `.cache` file must be fence-free — do NOT wrap in a code
+fence. The block shown below is fenced here only so it renders in this doc:
+
+```
+verdict: pass
+findings_blocking: 0
+```
+
+Mappings from your prose verdict to the machine block:
+
+| Prose verdict | verdict field | findings_blocking |
+|---------------|--------------|-------------------|
+| APPROVE       | pass         | 0                 |
+| WARNING       | pass         | 0 (HIGH advisory; not blocking) |
+| BLOCK         | fail         | <count of CRITICAL findings> |
+
+The block is parsed by `parseNodeVerdict` in `kaola-workflow-adaptive-schema.js`
+using a column-0 anchor (`^verdict:` — no leading whitespace). An indented or
+fenced block in the actual `.cache` file is rejected (fail-closed). Emit the
+block at the very top of the `.cache/{node-id}.md` file.
+
 ## Approval Criteria
 
 - **Approve**: No CRITICAL or HIGH issues, including clean reviews with zero

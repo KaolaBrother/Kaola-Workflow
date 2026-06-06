@@ -52,6 +52,8 @@ const CANONICAL_ROLES = [
 // security-reviewer is Write by manifest, review-only only by governance posture).
 const WRITE_ROLES = new Set(['tdd-guide', 'build-error-resolver', 'doc-updater', 'security-reviewer']);
 const IMPLEMENT_ROLES = new Set(['tdd-guide', 'build-error-resolver']);
+// #251: roles that must emit a machine verdict block into their .cache evidence file.
+const GATE_VERDICT_ROLES = new Set(['code-reviewer', 'security-reviewer', 'adversarial-verifier']);
 
 // Phase-5 sensitivity categories (phase5.md:45-46): auth, payments, user data,
 // filesystem access, external API calls, secrets. Over-approximated from the
@@ -325,6 +327,75 @@ function verifyGateExecution(content, opts) {
     checkGate(n => (sensitiveByLabel && producesCode(n)) || sensitiveNodes.includes(n), 'security-reviewer', 'G2');
   }
   return { ok: unsatisfied.length === 0, unsatisfied };
+}
+
+// #251: Pure (no fs). Verify that every completed gate-role node's .cache evidence file carries a
+// machine verdict of 'pass' with findings_blocking === 0. Injectable readCache/globCache for tests.
+// Per-node (opts.nodeId): role-self-skip for non-gate roles; fanout adversarial-verifier uses glob
+// + majority-refute; sequence gate roles read <nodeId>.md directly.
+// Whole-plan (no opts.nodeId): parseLedger; only complete gate-role nodes are checked.
+function verifyVerdictBlock(content, opts) {
+  opts = opts || {};
+  const readCache = opts.readCache || (() => null);
+  const globCache = opts.globCache || (() => []);
+  const nodes = parseNodes(content);
+  if (!nodes.length) return { ok: false, failures: [{ nodeId: null, role: null, reason: 'unparseable ## Nodes' }], checked: [] };
+  function checkOne(node) {
+    const role = node.role;
+    if (!GATE_VERDICT_ROLES.has(role)) {
+      return { ok: true, nodeId: node.id, role, verdict: null, findings_blocking: null, found: false };
+    }
+    if (role === 'adversarial-verifier' && node.shape && node.shape.kind === 'fanout') {
+      const files = globCache('adversarial-verifier-');
+      const verdicts = [];
+      for (const f of files) {
+        const v = schema.parseNodeVerdict(readCache(f) || '');
+        if (!v.found || v.verdict === null) { verdicts.push('fail'); continue; }
+        verdicts.push((v.verdict === 'fail' || (v.findings_blocking || 0) > 0) ? 'fail' : 'pass');
+      }
+      if (!verdicts.length) {
+        return { ok: false, nodeId: node.id, role, verdict: 'fail', findings_blocking: null, found: false,
+          reason: 'fanout adversarial-verifier: no per-instance .cache/adversarial-verifier-*.md found' };
+      }
+      const refutes = verdicts.filter(x => x === 'fail').length;
+      const majorityRefute = refutes * 2 > verdicts.length;
+      return majorityRefute
+        ? { ok: false, nodeId: node.id, role, verdict: 'fail', findings_blocking: null, found: true,
+            reason: `fanout majority-refute: ${refutes}/${verdicts.length} skeptics refuted` }
+        : { ok: true, nodeId: node.id, role, verdict: 'pass', findings_blocking: null, found: true };
+    }
+    const raw = readCache(node.id + '.md');
+    if (raw == null) {
+      return { ok: false, nodeId: node.id, role, verdict: null, findings_blocking: null, found: false,
+        reason: `gate role ${role} node ${node.id} has no .cache/${node.id}.md verdict evidence` };
+    }
+    const v = schema.parseNodeVerdict(raw);
+    if (!v.found || v.verdict === null) {
+      return { ok: false, nodeId: node.id, role, verdict: v.verdict, findings_blocking: v.findings_blocking, found: v.found,
+        reason: `gate role ${role} node ${node.id} verdict missing or unparseable` };
+    }
+    const blocking = v.findings_blocking || 0;
+    const ok = v.verdict === 'pass' && blocking === 0;
+    return { ok, nodeId: node.id, role, verdict: v.verdict, findings_blocking: v.findings_blocking, found: true,
+      reason: ok ? undefined : `gate role ${role} node ${node.id} verdict=${v.verdict} findings_blocking=${blocking}` };
+  }
+  if (opts.nodeId) {
+    const node = nodes.find(n => n.id === opts.nodeId);
+    if (!node) return { ok: false, nodeId: opts.nodeId, role: null, verdict: null, findings_blocking: null, found: false,
+      reason: `--node-id "${opts.nodeId}" not found in the frozen plan` };
+    return checkOne(node);
+  }
+  const ledger = parseLedger(content);
+  const failures = [];
+  const checked = [];
+  for (const node of nodes) {
+    if (!GATE_VERDICT_ROLES.has(node.role)) continue;
+    if (ledger.get(node.id) !== 'complete') continue;
+    checked.push(node.id);
+    const r = checkOne(node);
+    if (!r.ok) failures.push({ nodeId: node.id, role: node.role, reason: r.reason || 'verdict not pass' });
+  }
+  return { ok: failures.length === 0, failures, checked };
 }
 
 // The runtime BARRIER (audit H1/H3). Given the files a node (or the whole plan) ACTUALLY wrote
@@ -707,7 +778,7 @@ function anchorBase(root, refName, tree) {
 }
 function printHelp() {
   process.stdout.write(
-    'usage: kaola-workflow-plan-validator.js <workflow-plan.md> [--json] [--freeze] [--resume-check] [--gate-verify] [--barrier-check [--node-id ID] [--base REF]]\n' +
+    'usage: kaola-workflow-plan-validator.js <workflow-plan.md> [--json] [--freeze] [--resume-check] [--gate-verify] [--barrier-check [--node-id ID] [--base REF]] [--verdict-check [--node-id ID]]\n' +
     '  default        validate + print the governance verdict; exit 1 on typed refusal\n' +
     '  --freeze       validate, then write the computed plan_hash into the plan file\n' +
     '  --resume-check re-validate library + structure + hash only (not the gate rubric)\n' +
@@ -717,7 +788,9 @@ function printHelp() {
     '  --barrier-check re-scan ACTUAL writes and refuse a sensitive write with no security-reviewer, or an out-of-allowlist\n' +
     '                 write; exit 1 on refusal. Whole-plan (no --node-id): union allowlist, diff vs merge-base of HEAD and\n' +
     '                 --base (default origin/main). Per-node (--node-id ID): the node\'s OWN allowlist, tree-diff vs its recorded\n' +
-    '                 node-start snapshot (--base is rejected per-node — the baseline is the recorded snapshot)\n'
+    '                 node-start snapshot (--base is rejected per-node — the baseline is the recorded snapshot)\n' +
+    '  --verdict-check verify that every completed gate-role node\'s .cache evidence file carries verdict:pass/findings_blocking:0;\n' +
+    '                 exit 1 on any failure. Per-node (--node-id ID): check one node; non-gate roles self-skip (exit 0).\n'
   );
 }
 function main() {
@@ -832,6 +905,21 @@ function main() {
     if (r.result !== 'pass') process.exitCode = 1;
     return;
   }
+  if (args.includes('--verdict-check')) {
+    const flagVal = name => { const i = args.indexOf(name); return i >= 0 && i + 1 < args.length ? args[i + 1] : null; };
+    const nodeId = flagVal('--node-id');
+    if (args.includes('--node-id') && !nodeId) {
+      process.stdout.write((json ? JSON.stringify({ ok: false, errors: ['--node-id requires a value'] }) : 'typed refusal: --node-id requires a value') + '\n');
+      process.exitCode = 1; return;
+    }
+    const cacheDir = path.join(path.dirname(path.resolve(planPath)), '.cache');
+    const readCache = fileName => { try { return fs.readFileSync(path.join(cacheDir, fileName), 'utf8'); } catch (_) { return null; } };
+    const globCache = prefix => { try { return fs.readdirSync(cacheDir).filter(f => f.startsWith(prefix) && f.endsWith('.md')); } catch (_) { return []; } };
+    const r = verifyVerdictBlock(content, { nodeId: nodeId || undefined, readCache, globCache });
+    process.stdout.write((json ? JSON.stringify(r) : (r.ok ? 'verdict ok' : 'typed refusal: verdict-check failed')) + '\n');
+    if (!r.ok) process.exitCode = 1;
+    return;
+  }
 
   const v = validatePlan(content, { root });
   if (json) process.stdout.write(JSON.stringify(v) + '\n');
@@ -867,6 +955,7 @@ module.exports = {
   uniqueSink,
   gateUncovered,
   verifyGateExecution,
+  verifyVerdictBlock,
   barrierCheck,
   installedRoles,
 };

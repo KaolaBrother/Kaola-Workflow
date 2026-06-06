@@ -6280,6 +6280,219 @@ function testPatchBranchGuards() {
   console.log('testPatchBranchGuards: PASSED');
 }
 
+// issue #251: verdict-gate unit tests — parseNodeVerdict pure, verifyVerdictBlock pure,
+// and --verdict-check CLI (per-node missing/non-gate/passing, whole-plan pass/fail).
+function testAdaptiveVerdictCheck() {
+  const tmp = adaptiveTmp('verdict-check');
+  const planValidator = require(planValidatorScript);
+  const schema = require(path.join(repoRoot, 'scripts', 'kaola-workflow-adaptive-schema.js'));
+
+  // Helper: build a minimal ledger plan table for verifyVerdictBlock tests.
+  const mkVerdictPlan = (nodes, ledger, labels) => [
+    '# Plan', '',
+    '## Meta', 'labels: ' + (labels || 'chore'), '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+  ].concat(nodes).concat([
+    '',
+    '## Node Ledger', '',
+    '| id | status |',
+    '|---|---|',
+  ]).concat(ledger).join('\n');
+
+  try {
+    // -------------------------------------------------------------------
+    // (1) parseNodeVerdict pure cases
+    // -------------------------------------------------------------------
+
+    // pass
+    let pv = schema.parseNodeVerdict('verdict: pass\nfindings_blocking: 0\n');
+    assert(pv.found === true && pv.verdict === 'pass' && pv.findings_blocking === 0,
+      'parseNodeVerdict: verdict:pass must parse, got ' + JSON.stringify(pv));
+
+    // fail
+    pv = schema.parseNodeVerdict('verdict: fail\nfindings_blocking: 3\n');
+    assert(pv.found === true && pv.verdict === 'fail' && pv.findings_blocking === 3,
+      'parseNodeVerdict: verdict:fail/3 must parse, got ' + JSON.stringify(pv));
+
+    // missing (empty text) -> found:false
+    pv = schema.parseNodeVerdict('');
+    assert(pv.found === false && pv.verdict === null,
+      'parseNodeVerdict: empty text must return found:false, got ' + JSON.stringify(pv));
+
+    // malformed: verdict:maybe -> found:true, verdict:null (not in vocabulary)
+    pv = schema.parseNodeVerdict('verdict: maybe\n');
+    assert(pv.found === true && pv.verdict === null,
+      'parseNodeVerdict: "verdict: maybe" -> found:true/verdict:null, got ' + JSON.stringify(pv));
+
+    // indented verdict (not at col-0) -> found:false (D2 col-0 anchor)
+    pv = schema.parseNodeVerdict('    verdict: pass\n');
+    assert(pv.found === false,
+      'parseNodeVerdict: indented "    verdict: pass" must NOT match (col-0 anchor), got ' + JSON.stringify(pv));
+
+    // -------------------------------------------------------------------
+    // (2) verifyVerdictBlock pure cases (injected readCache/globCache)
+    // -------------------------------------------------------------------
+
+    const baseNodes = [
+      '| impl | tdd-guide | — | lib/foo.js | 1 | sequence |',
+      '| rv | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | rv | — | 1 | sequence |',
+    ];
+    const allComplete = ['| impl | complete |', '| rv | complete |', '| done | complete |'];
+
+    // gate role pass -> ok:true
+    let r = planValidator.verifyVerdictBlock(
+      mkVerdictPlan(baseNodes, allComplete),
+      { readCache: (f) => f === 'rv.md' ? 'verdict: pass\nfindings_blocking: 0\n' : null }
+    );
+    assert(r.ok === true, 'verifyVerdictBlock: gate pass -> ok:true, got ' + JSON.stringify(r));
+
+    // gate role fail -> ok:false
+    r = planValidator.verifyVerdictBlock(
+      mkVerdictPlan(baseNodes, allComplete),
+      { readCache: (f) => f === 'rv.md' ? 'verdict: fail\nfindings_blocking: 2\n' : null }
+    );
+    assert(r.ok === false && r.failures.length === 1,
+      'verifyVerdictBlock: gate fail -> ok:false/failures.length===1, got ' + JSON.stringify(r));
+
+    // missing cache file -> ok:false/found:false
+    r = planValidator.verifyVerdictBlock(
+      mkVerdictPlan(baseNodes, allComplete),
+      { readCache: () => null }
+    );
+    assert(r.ok === false && r.failures.length === 1,
+      'verifyVerdictBlock: missing cache -> ok:false, got ' + JSON.stringify(r));
+    assert(r.failures[0].nodeId === 'rv',
+      'verifyVerdictBlock: missing cache failure.nodeId must be rv, got ' + JSON.stringify(r.failures[0]));
+
+    // findings_blocking > 0 forces fail even if verdict is pass
+    r = planValidator.verifyVerdictBlock(
+      mkVerdictPlan(baseNodes, allComplete),
+      { readCache: (f) => f === 'rv.md' ? 'verdict: pass\nfindings_blocking: 1\n' : null }
+    );
+    assert(r.ok === false,
+      'verifyVerdictBlock: findings_blocking>0 forces fail even with verdict:pass, got ' + JSON.stringify(r));
+
+    // non-gate role self-skip -> ok:true, found:false
+    const nonGateNodes = [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| done | finalize | explore | — | 1 | sequence |',
+    ];
+    const nonGateLedger = ['| explore | complete |', '| done | complete |'];
+    r = planValidator.verifyVerdictBlock(
+      mkVerdictPlan(nonGateNodes, nonGateLedger),
+      { readCache: () => null, nodeId: 'explore' }
+    );
+    assert(r.ok === true && r.found === false,
+      'verifyVerdictBlock: non-gate role self-skip -> ok:true/found:false, got ' + JSON.stringify(r));
+
+    // fanout adversarial-verifier: 1/3 refute -> pass (minority)
+    // globCache returns filenames like 'adversarial-verifier-sk1.md'; readCache is called with those names.
+    const fanoutNodes = [
+      '| claim | code-explorer | — | — | 1 | sequence |',
+      '| sk1 | adversarial-verifier | claim | — | 1 | fanout(skeptics) |',
+      '| sk2 | adversarial-verifier | claim | — | 1 | fanout(skeptics) |',
+      '| sk3 | adversarial-verifier | claim | — | 1 | fanout(skeptics) |',
+      '| done | finalize | sk1,sk2,sk3 | — | 1 | sequence |',
+    ];
+    const fanoutLedger = ['| claim | complete |', '| sk1 | complete |', '| sk2 | complete |', '| sk3 | complete |', '| done | complete |'];
+    const fanoutGlob = (prefix) => prefix === 'adversarial-verifier-'
+      ? ['adversarial-verifier-sk1.md', 'adversarial-verifier-sk2.md', 'adversarial-verifier-sk3.md']
+      : [];
+    // 1/3 refute: sk1's file fails, sk2 and sk3 pass -> majority NOT refuted -> ok:true
+    r = planValidator.verifyVerdictBlock(
+      mkVerdictPlan(fanoutNodes, fanoutLedger),
+      {
+        readCache: (f) => {
+          if (f === 'adversarial-verifier-sk1.md') return 'verdict: fail\nfindings_blocking: 1\n';
+          if (f === 'adversarial-verifier-sk2.md') return 'verdict: pass\nfindings_blocking: 0\n';
+          if (f === 'adversarial-verifier-sk3.md') return 'verdict: pass\nfindings_blocking: 0\n';
+          return null;
+        },
+        globCache: fanoutGlob,
+        nodeId: 'sk1',
+      }
+    );
+    // Per-node: sk1 is adversarial-verifier with fanout shape -> globCache used; 1/3 refute = minority -> pass
+    assert(r.ok === true,
+      'verifyVerdictBlock: fanout 1/3 refute is minority -> ok:true, got ' + JSON.stringify(r));
+
+    // fanout adversarial-verifier: 2/3 refute -> fail (majority)
+    r = planValidator.verifyVerdictBlock(
+      mkVerdictPlan(fanoutNodes, fanoutLedger),
+      {
+        readCache: (f) => {
+          if (f === 'adversarial-verifier-sk1.md') return 'verdict: fail\nfindings_blocking: 1\n';
+          if (f === 'adversarial-verifier-sk2.md') return 'verdict: fail\nfindings_blocking: 1\n';
+          if (f === 'adversarial-verifier-sk3.md') return 'verdict: pass\nfindings_blocking: 0\n';
+          return null;
+        },
+        globCache: fanoutGlob,
+        nodeId: 'sk1',
+      }
+    );
+    assert(r.ok === false && /majority-refute/.test(r.reason || ''),
+      'verifyVerdictBlock: fanout 2/3 refute is majority -> ok:false + majority-refute reason, got ' + JSON.stringify(r));
+
+    // -------------------------------------------------------------------
+    // (3) --verdict-check CLI via runNode on a temp .cache dir
+    // -------------------------------------------------------------------
+
+    // Build a plan with code-reviewer and a non-gate node
+    const vcPlanContent = mkVerdictPlan(
+      ['| impl | tdd-guide | — | lib/foo.js | 1 | sequence |',
+       '| rv | code-reviewer | impl | — | 1 | sequence |',
+       '| done | finalize | rv | — | 1 | sequence |'],
+      ['| impl | complete |', '| rv | complete |', '| done | complete |']
+    );
+    const vcDir = path.join(tmp, 'vc-cli');
+    fs.mkdirSync(vcDir, { recursive: true });
+    const vcPlanPath = path.join(vcDir, 'workflow-plan.md');
+    const cacheDir = path.join(vcDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+
+    // per-node: missing gate cache -> exit 1
+    fs.writeFileSync(vcPlanPath, vcPlanContent);
+    let cr = runNode(planValidatorScript, [vcPlanPath, '--verdict-check', '--node-id', 'rv', '--json'], vcDir);
+    assert(cr.status === 1,
+      '--verdict-check --node-id rv (missing cache) must exit 1, got ' + cr.status + ' ' + cr.stdout);
+
+    // per-node: non-gate node -> exit 0 (self-skip)
+    cr = runNode(planValidatorScript, [vcPlanPath, '--verdict-check', '--node-id', 'impl', '--json'], vcDir);
+    assert(cr.status === 0,
+      '--verdict-check --node-id impl (non-gate, self-skip) must exit 0, got ' + cr.status + ' ' + cr.stdout);
+
+    // per-node: passing gate -> exit 0
+    fs.writeFileSync(path.join(cacheDir, 'rv.md'), 'verdict: pass\nfindings_blocking: 0\n');
+    cr = runNode(planValidatorScript, [vcPlanPath, '--verdict-check', '--node-id', 'rv', '--json'], vcDir);
+    assert(cr.status === 0,
+      '--verdict-check --node-id rv (pass) must exit 0, got ' + cr.status + ' ' + cr.stdout);
+
+    // (4) whole-plan: all complete+passing -> exit 0
+    cr = runNode(planValidatorScript, [vcPlanPath, '--verdict-check', '--json'], vcDir);
+    assert(cr.status === 0,
+      '--verdict-check whole-plan (all pass) must exit 0, got ' + cr.status + ' ' + cr.stdout);
+    const crJson = JSON.parse(cr.stdout);
+    assert(crJson.ok === true && crJson.failures && crJson.failures.length === 0,
+      '--verdict-check whole-plan pass: ok:true/failures:[], got ' + cr.stdout);
+
+    // whole-plan: complete gate with verdict fail -> exit 1, failures.length===1
+    fs.writeFileSync(path.join(cacheDir, 'rv.md'), 'verdict: fail\nfindings_blocking: 2\n');
+    cr = runNode(planValidatorScript, [vcPlanPath, '--verdict-check', '--json'], vcDir);
+    assert(cr.status === 1,
+      '--verdict-check whole-plan (gate fail) must exit 1, got ' + cr.status + ' ' + cr.stdout);
+    const crFailJson = JSON.parse(cr.stdout);
+    assert(crFailJson.ok === false && crFailJson.failures.length === 1,
+      '--verdict-check whole-plan fail: ok:false/failures.length===1, got ' + cr.stdout);
+
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log('testAdaptiveVerdictCheck: PASSED');
+}
+
 async function main() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-active-folders-'));
   try {
@@ -6428,6 +6641,7 @@ async function main() {
     testAdaptiveValidatorNodeCap();
     testAdaptiveCheapWinFixes();
     testAdaptiveAuditCoverage();
+    testAdaptiveVerdictCheck();
     console.log('Workflow walkthrough simulation passed');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });

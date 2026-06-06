@@ -117,6 +117,30 @@ If you find a CRITICAL vulnerability:
 - Dependencies up to date
 - Security checklist complete
 
+## Machine Verdict (adaptive path)
+
+When invoked as a gate node on the adaptive path, write a machine-readable verdict
+block at the TOP LEVEL of your `.cache` evidence file (column 0, no leading
+whitespace). The actual `.cache` file must be fence-free — do NOT wrap in a code
+fence. The block shown below is fenced here only so it renders in this doc:
+
+```
+verdict: pass
+findings_blocking: 0
+```
+
+Mappings from your findings to the machine block:
+
+| Condition                        | verdict field | findings_blocking         |
+|----------------------------------|--------------|---------------------------|
+| No CRITICAL and no HIGH findings | pass         | 0                         |
+| Any CRITICAL or HIGH findings    | fail         | <count of CRITICAL + HIGH> |
+
+The block is parsed by `parseNodeVerdict` in `kaola-workflow-adaptive-schema.js`
+using a column-0 anchor (`^verdict:` — no leading whitespace). An indented or
+fenced block in the actual `.cache` file is rejected (fail-closed). Emit the
+block at the very top of the `.cache/{node-id}.md` file.
+
 ## Reference
 
 For detailed vulnerability patterns, code examples, report templates, and PR review templates, see skill: `security-review`.
