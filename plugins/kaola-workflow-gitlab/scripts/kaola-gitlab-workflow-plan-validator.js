@@ -313,7 +313,7 @@ function verifyGateExecution(content, opts) {
     // crossing a COMPLETE gate) is an uncovered leak. (Filtering the node out instead would
     // disconnect the target from the sink and silently MASK the leak — the n/a-gate evasion.)
     const relabeled = nodes.map(n => (n.role === gateRole && !done(n.id))
-      ? Object.assign({}, n, { role: gateRole + ' pending' })
+      ? Object.assign({}, n, { role: gateRole + 'pending' })
       : n);
     const leak = gateUncovered(relabeled, n => isTarget(n) && done(n.id), gateRole, sink);
     for (const id of leak) unsatisfied.push({ requirement: gid + ' gate execution', reason: `node ${id} reached complete but no completed ${gateRole} post-dominates it` });
@@ -482,7 +482,7 @@ function validatePlan(content, opts) {
       // audit B6 (#233): key by (label, fan-out origin), not label alone, so the same label in
       // two independent branches forms two separate groups. NUL separator can never collide with
       // a real label (labels come from fanout(...) cell text, which cannot contain NUL).
-      const key = n.shape.group + ' ' + fanoutOriginKey(n, ids);
+      const key = n.shape.group + '' + fanoutOriginKey(n, ids);
       if (!groups.has(key)) groups.set(key, { label: n.shape.group, origin: fanoutOriginKey(n, ids), members: [] });
       groups.get(key).members.push(n);
     }
