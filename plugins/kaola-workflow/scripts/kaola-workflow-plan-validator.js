@@ -595,6 +595,19 @@ function validatePlan(content, opts) {
     // read-only fan-out: width bounded by FANOUT_CAP alone (no clamp to #disjoint groups)
   }
 
+  // --- #271 G-SEL-1 pre-pass: globally-unique group names ---------------------------------
+  // selectGroups is keyed by bare group name, so two independent select(<group>) groups that
+  // share a name merge into one map entry. Detect this by collecting the distinct
+  // selector_source values per group name: if a name is associated with more than one
+  // selector_source node, the plan has duplicate group names in independent branches and must
+  // refuse with a clear, actionable message before the per-group checks run.
+  for (const [, grp] of selectGroups) {
+    const srcsForName = new Set(grp.members.map(m => m.selectorSource).filter(Boolean));
+    if (srcsForName.size > 1) {
+      errors.push(`G-SEL-1: select group name "${grp.label}" used by arms with different selector_source nodes; use distinct group names for independent groups`);
+    }
+  }
+
   // --- #263 G-SEL: selective-execution (Classify-And-Act) groups -----------------------------
   // All four rules fail-closed (push to errors => refuse). Post-dominance over the superset
   // (G-SEL-3) needs NO code here: G1/G2 below already run over ALL nodes including every arm,

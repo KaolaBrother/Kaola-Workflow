@@ -6891,6 +6891,59 @@ function testAdaptivePatternLibrary() {
         'G-SEL-4: overlapping arm write sets must refuse with "overlapping write sets", got: ' + JSON.stringify(r));
     }
 
+    // #271 AC#1: two independent select(fix) groups with DIFFERENT classifier nodes must
+    // refuse with the G-SEL-1 duplicate-group-name message.
+    {
+      const selPlanPath = path.join(tmp, 'select-dup-group-diff-classifier.md');
+      fs.writeFileSync(selPlanPath, [
+        '# Plan', '',
+        '## Meta', 'labels: bug', '',
+        '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape | selector_source |',
+        '|---|---|---|---|---|---|---|',
+        '| classify1 | code-explorer | — | — | 1 | sequence | — |',
+        '| arm-a | tdd-guide | classify1 | src/a.js | 1 | select(fix) | classify1 |',
+        '| arm-b | tdd-guide | classify1 | src/b.js | 1 | select(fix) | classify1 |',
+        '| classify2 | code-explorer | — | — | 1 | sequence | — |',
+        '| arm-c | tdd-guide | classify2 | src/c.js | 1 | select(fix) | classify2 |',
+        '| arm-d | tdd-guide | classify2 | src/d.js | 1 | select(fix) | classify2 |',
+        '| review | code-reviewer | arm-a,arm-b,arm-c,arm-d | — | 1 | sequence | — |',
+        '| done | finalize | review | — | 1 | sequence | — |',
+        '',
+      ].join('\n'));
+      const r = JSON.parse(runNode(planValidatorScript, [selPlanPath, '--json'], tmp).stdout);
+      assert(r.result === 'refuse' && Array.isArray(r.errors) && r.errors.some(e => /G-SEL-1: select group name "fix" used by arms with different selector_source nodes/.test(e)),
+        '#271 AC#1: duplicate group name with different classifiers must refuse with G-SEL-1 duplicate-group message, got: ' + JSON.stringify(r));
+    }
+
+    // #271 AC#2: two select(fix) groups with THE SAME classifier and overlapping write sets
+    // must refuse. NOTE: same-name + same-classifier is structurally indistinguishable from a
+    // valid N-arm group, so the #271 pre-pass cannot add a NEW refusal here. The refusal is
+    // governed by the existing G-SEL-4 rule (overlapping write sets). This test verifies that
+    // the combined fixture (two logical groups, same classifier, overlapping writes) remains
+    // refused under current + new logic — it exercises G-SEL-4 coverage, not #271 regression.
+    {
+      const selPlanPath = path.join(tmp, 'select-dup-group-same-classifier.md');
+      fs.writeFileSync(selPlanPath, [
+        '# Plan', '',
+        '## Meta', 'labels: bug', '',
+        '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape | selector_source |',
+        '|---|---|---|---|---|---|---|',
+        '| classify | code-explorer | — | — | 1 | sequence | — |',
+        '| arm-a | tdd-guide | classify | src/shared.js | 1 | select(fix) | classify |',
+        '| arm-b | tdd-guide | classify | src/b.js | 1 | select(fix) | classify |',
+        '| arm-c | tdd-guide | classify | src/shared.js | 1 | select(fix) | classify |',
+        '| arm-d | tdd-guide | classify | src/d.js | 1 | select(fix) | classify |',
+        '| review | code-reviewer | arm-a,arm-b,arm-c,arm-d | — | 1 | sequence | — |',
+        '| done | finalize | review | — | 1 | sequence | — |',
+        '',
+      ].join('\n'));
+      const r = JSON.parse(runNode(planValidatorScript, [selPlanPath, '--json'], tmp).stdout);
+      assert(r.result === 'refuse' && Array.isArray(r.errors) && r.errors.some(e => /overlapping write sets/.test(e)),
+        '#271 AC#2: duplicate group name with same classifier and overlapping write sets must refuse via G-SEL-4, got: ' + JSON.stringify(r));
+    }
+
     // (b) the only legal workaround today — both arms as a fan-out — is in-grammar but
     // runs BOTH arms (no real selection). This locks the honest cost the issue removes.
     v = validatePlanFixture(tmp, [

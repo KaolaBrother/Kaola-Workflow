@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **adaptive: `selectGroups` no longer mis-diagnoses two independent `select(<group>)` groups that share a name (#271).** The validator keyed `selectGroups` by the bare group name (unlike fanout, which keys by `(label, origin)`), so two independent `select(fix)` groups in different DAG branches — each with its own classifier — merged into one entry, and G-SEL-1 over-blocked a would-be-valid plan with a misleading "selector_source mismatch" refusal (the issue's stated behavior is *over-blocks only, never under-blocks*). Per the issue's recommended **option 1** (globally-unique group names), an additive G-SEL-1 pre-pass now emits a clear, actionable typed refusal when one group name is used by arms with different `selector_source` nodes: `G-SEL-1: select group name "<name>" used by arms with different selector_source nodes; use distinct group names for independent groups`. Purely additive — it never relaxes an existing gate (proven: the new check fires iff the pre-existing different-`selector_source` branch already would, so no plan's pass/refuse outcome changes — only the diagnostic and the now-documented unique-name contract). Applied byte-identically to the canonical (`scripts/`) and Codex (`plugins/kaola-workflow/scripts/`) validators and mirrored into the GitLab/Gitea ports; `docs/api.md` G-SEL-1 contract updated; regression coverage added to `scripts/simulate-workflow-walkthrough.js`. **AC#2 boundary (documented, not forced to pass):** the issue's AC#2 ("two same-name groups with the *same* classifier must refuse") is structurally unreachable under option 1 for the disjoint-write case — a single classifier emits exactly one selection, so same-name + same-classifier arms are grammar-indistinguishable from one valid N-arm select group, and refusing them would wrongly reject every legitimate single group; the realistic same-classifier authoring error (overlapping arm write sets) is still caught by the pre-existing G-SEL-4 rule. Honestly recorded at closure (cf. the #244 AC#3-unreachable precedent). `npm test` green across all four editions (claude/codex/gitlab/gitea).
+
 ## [5.4.1] — 2026-06-06
 
 ### Fixed
