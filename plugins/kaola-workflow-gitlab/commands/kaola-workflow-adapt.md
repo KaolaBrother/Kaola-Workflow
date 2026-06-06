@@ -210,7 +210,7 @@ Agent(
   subagent_type="workflow-planner",
   model="{WORKFLOW_PLANNER_MODEL}",
   description="Adaptive front end {issue}",
-  prompt="Settle the starting contract and design the adaptive workflow for issue {issue}, per your workflow-planner contract. (1) Run `kaola-gitlab-workflow-claim.js startup --runtime claude --workflow-path adaptive --target-issue {issue}` — `--workflow-path adaptive` is REQUIRED (a subagent shell does not inherit KAOLA_PATH, so without it the project would be mis-stamped workflow_path:full). Add `--sink pr` ONLY if the user requested an MR/PR sink (else omit; merge is the default). This creates the project folder + workflow-state.md at repo-root AND provisions a repo-local hidden worktree at `<repo-root>/.kw/worktrees/<project>/`; you author the plan at repo-root (you do NOT cd into the worktree — the executor /kaola-workflow-plan-run mirrors the folder into the worktree and operates there). (2) If that project already has a workflow-plan.md, do NOT overwrite it — STOP and return so the orchestrator routes to the executor. (3) Otherwise author via Write the `## Meta` labels line, the `## Nodes` DAG, and an empty `## Node Ledger` (one row per node, `status: pending`) into that project's workflow-plan.md. (4) Run plan-validator <plan> --json self-check, fix until in-grammar — do NOT run authoring-allowed. (5) Run kaola-gitlab-workflow-adaptive-handoff.js --project {project} --json (freezes, resume-checks, opens node1, records baseline, stages roadmap, writes Planning Evidence; decision:ask is recorded metadata, not a gate). RETURN its handoff packet {handoff_status,checklist,first_node,decision,risk} on ready, or {handoff_status:'plan_invalid',result:'refuse',errors,validator_verdict} on validator refuse."
+  prompt="Settle the starting contract and design the adaptive workflow for issue {issue}, per your workflow-planner contract. (1) Run `kaola-gitlab-workflow-claim.js startup --runtime claude --workflow-path adaptive --target-issue {issue}` — `--workflow-path adaptive` is REQUIRED (a subagent shell does not inherit KAOLA_PATH, so without it the project would be mis-stamped workflow_path:full). Add `--sink pr` ONLY if the user requested an MR/PR sink (else omit; merge is the default). This creates the project folder + workflow-state.md at repo-root AND provisions a repo-local hidden worktree at `<repo-root>/.kw/worktrees/<project>/`; you author the plan at repo-root (you do NOT cd into the worktree — the executor /kaola-workflow-plan-run mirrors the folder into the worktree and operates there). (2) If that project already has a workflow-plan.md, do NOT overwrite it — STOP and return so the orchestrator routes to the executor. (3) Otherwise author via Write the `## Meta` labels line, the `## Nodes` DAG, and an empty `## Node Ledger` (one row per node, `status: pending`) into that project's workflow-plan.md. (4) Run plan-validator <plan> --json self-check, fix until in-grammar — do NOT run authoring-allowed. (5) Run kaola-gitlab-workflow-adaptive-handoff.js --project {project} --json (freezes, resume-checks, stages roadmap, writes Planning Evidence; does NOT open node1 or record the node1 baseline — plan-run owns the full node lifecycle including the first node; decision:ask is recorded metadata, not a gate). RETURN its handoff packet {handoff_status,checklist,first_node,decision,risk} on ready, or {handoff_status:'plan_invalid',result:'refuse',errors,validator_verdict} on validator refuse."
 )
 ```
 
@@ -234,9 +234,9 @@ straight to reading the handoff packet.
 
 ## Read the handoff packet
 
-The planner RAN `kaola-gitlab-workflow-adaptive-handoff.js` and returned a checklist-backed packet (plan already frozen, node1 baseline+ledger+Planning Evidence written). The handoff is mechanical; `decision:ask` is **audit metadata only** — it freezes-and-proceeds, NEVER pauses for approval.
+The planner RAN `kaola-gitlab-workflow-adaptive-handoff.js` and returned a checklist-backed packet (plan already frozen, Planning Evidence written; the handoff does NOT open node1 or record the node1 baseline — plan-run owns the full node lifecycle including the first node). The handoff is mechanical; `decision:ask` is **audit metadata only** — it freezes-and-proceeds, NEVER pauses for approval.
 
-- **`handoff_status: ready_to_dispatch_first_node`** (all checklist true) → dispatch `first_node.role` with `model="<first_node.model>"` scoped to `first_node.declared_write_set` IMMEDIATELY (even when `decision:ask`, no approval gate), then hand off to `/kaola-workflow-plan-run {project}`.
+- **`handoff_status: ready_to_run`** (all checklist true) → hand off DIRECTLY to `/kaola-workflow-plan-run {project}` (even when `decision:ask`, no approval gate). `/kaola-workflow-plan-run` owns the complete node lifecycle — it opens and dispatches every node including the first, via `kaola-gitlab-workflow-adaptive-node.js`.
 
 - **`handoff_status: plan_invalid`** (validator refused; plan never froze, NOTHING written) → bounded **repair loop**: re-dispatch the `workflow-planner` with the verbatim `errors`/`validator_verdict` so it overwrites the UNFROZEN plan with a corrected DAG and re-runs the handoff. Retry ~2x (the retry counter lives in the ORCHESTRATOR, never in the script). After repeated failure → a REAL decision: downgrade to full path / discard+restart (`kaola-gitlab-workflow-claim.js discard --project {project}` then fresh adaptive start) / STOP + surface a concrete blocker with validator evidence. Never silently loop.
 
@@ -245,9 +245,9 @@ The planner RAN `kaola-gitlab-workflow-adaptive-handoff.js` and returned a check
 After freeze the plan is author-immutable. **Establish the orchestrator's task list = the workflow
 nodes** — one task per row of the frozen `## Nodes` table, labeled `id · role`, in `depends_on`
 (topological) order. This task list is a **live mirror** of the `## Node Ledger`, which stays the
-durable source of truth; the executor flips each task `in_progress` when the contractor's *advance*
-bracket opens that node and `completed` after the *commit* bracket (`n/a` nodes → skipped). Then
-hand off to the executor:
+durable source of truth; the executor (`/kaola-workflow-plan-run`) flips each task `in_progress`
+when it opens that node (via `kaola-gitlab-workflow-adaptive-node.js open-next`) and `completed` after the
+commit step closes it (`n/a` nodes → skipped). Then hand off to the executor:
 
 ```text
 /kaola-workflow-plan-run {project}

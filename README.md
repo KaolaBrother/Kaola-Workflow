@@ -140,16 +140,17 @@ fixed-Opus agent the main session dispatches **once** at the start of the adapti
 claim/startup (worktree + `workflow-state.md`), **authors** the `## Nodes` DAG plus an empty
 `## Node Ledger` into `workflow-plan.md`, runs the plan-validator `--json` as a self-check, and then
 **runs `kaola-workflow-adaptive-handoff.js`** — which freezes mechanically on `result:in-grammar`,
-resume-checks, opens the first ready node (ledger `in_progress`), records the node1 baseline, stages
-the roadmap, and writes `## Planning Evidence` into `workflow-state.md` (preserving the `## Sink`
-block) — returning a checklist-backed packet (`handoff_status: ready_to_dispatch_first_node` with
-`first_node` on success; `plan_invalid` with no mutation on `refuse`). The orchestrator reads the
-packet and dispatches the first node directly, then runs `/kaola-workflow-plan-run`. It never
-**judges** risk and never asks the user — `decision:auto-run` vs `ask` is audit metadata recorded by
-the handoff; the run proceeds either way with no approval gate. It never dispatches a subagent
-(a subagent cannot dispatch a subagent — it returns control to main), and stays Opus regardless of
-profile (there is no `profiles/higher/workflow-planner.md`). It is DISTINCT from the vendored
-read-only `planner`, which stays a read-only in-plan node role.
+resume-checks, stages the roadmap, and writes `## Planning Evidence` into `workflow-state.md`
+(preserving the `## Sink` block) — returning a checklist-backed packet (`handoff_status: ready_to_run`
+with advisory `first_node` metadata on success; `plan_invalid` with no mutation on `refuse`). The
+handoff does **not** open the first node or record its baseline — `/kaola-workflow-plan-run` owns the
+complete node lifecycle including the first node, opening and dispatching every node via
+`kaola-workflow-adaptive-node.js`. It never **judges** risk and never asks the user —
+`decision:auto-run` vs `ask` is audit metadata recorded by the handoff; the run proceeds either way
+with no approval gate. It never dispatches a subagent (a subagent cannot dispatch a subagent — it
+returns control to main), and stays Opus regardless of profile (there is no
+`profiles/higher/workflow-planner.md`). It is DISTINCT from the vendored read-only `planner`, which
+stays a read-only in-plan node role.
 
 When agents are installed, their frontmatter `model:` field is rewritten to
 `inherit`. Command files render each agent's concrete assigned model (e.g.,
@@ -566,7 +567,7 @@ For larger, **structurally non-linear** issues — work that naturally fans out 
 KAOLA_PATH=adaptive /workflow-next
 ```
 
-`/kaola-workflow-adapt` opens by dispatching the `workflow-planner` front-end subagent **once**: it claims/starts up (writes `workflow-state.md` and provisions a worktree at `.kw/worktrees/<project>/` — the planner authors the plan at repo-root and the executor operates inside the provisioned worktree), authors the plan as a `workflow-plan.md` (a `## Nodes` DAG plus an empty `## Node Ledger`), and runs `kaola-workflow-adaptive-handoff.js`. The plan must be **in-grammar**: roles drawn from the closed role library, one of four shapes (`sequence`, bounded fan-out over pairwise-disjoint write sets up to `KAOLA_FANOUT_CAP`, a bounded loop, or a selective-execution `select(<group>)` arm), a single unique `finalize` sink, and computed **post-dominance gates** (`code-reviewer` over every code-producing node, `security-reviewer` over every sensitive node). The handoff script branches on the plan-validator `--json` `result`: on `in-grammar` it freezes mechanically — writing a `plan_hash` inside `workflow-plan.md` (re-checked on every load, so post-freeze tampering is refused) — resume-checks, opens the first ready node (ledger `in_progress`), records the node1 baseline, stages the roadmap, and writes `## Planning Evidence` into `workflow-state.md`, then returns `handoff_status: ready_to_dispatch_first_node` with a checklist and `first_node` packet. `decision:auto-run` vs `ask` is **audit metadata** recorded in the packet — the run proceeds either way with no user-approval gate. On `refuse` the handoff returns `plan_invalid` with no mutation; the orchestrator drives a bounded repair loop (re-dispatching the planner with validator errors) rather than silently looping. The main session reads the packet and, on success, dispatches the first node directly, then runs `/kaola-workflow-plan-run` node by node with per-node checkpoints; it is resume-safe and toggle-agnostic (a frozen plan finishes even if the switch is later turned off) and hands off to Phase 6 on an all-complete ledger.
+`/kaola-workflow-adapt` opens by dispatching the `workflow-planner` front-end subagent **once**: it claims/starts up (writes `workflow-state.md` and provisions a worktree at `.kw/worktrees/<project>/` — the planner authors the plan at repo-root and the executor operates inside the provisioned worktree), authors the plan as a `workflow-plan.md` (a `## Nodes` DAG plus an empty `## Node Ledger`), and runs `kaola-workflow-adaptive-handoff.js`. The plan must be **in-grammar**: roles drawn from the closed role library, one of four shapes (`sequence`, bounded fan-out over pairwise-disjoint write sets up to `KAOLA_FANOUT_CAP`, a bounded loop, or a selective-execution `select(<group>)` arm), a single unique `finalize` sink, and computed **post-dominance gates** (`code-reviewer` over every code-producing node, `security-reviewer` over every sensitive node). The handoff script branches on the plan-validator `--json` `result`: on `in-grammar` it freezes mechanically — writing a `plan_hash` inside `workflow-plan.md` (re-checked on every load, so post-freeze tampering is refused) — resume-checks, stages the roadmap, and writes `## Planning Evidence` into `workflow-state.md`, then returns `handoff_status: ready_to_run` with a checklist and advisory `first_node` metadata. The handoff does **not** open the first node or record its baseline. `decision:auto-run` vs `ask` is **audit metadata** recorded in the packet — the run proceeds either way with no user-approval gate. On `refuse` the handoff returns `plan_invalid` with no mutation; the orchestrator drives a bounded repair loop (re-dispatching the planner with validator errors) rather than silently looping. The main session routes directly to `/kaola-workflow-plan-run`, which opens and dispatches every node including the first via `kaola-workflow-adaptive-node.js` transactions, with per-node checkpoints; it is resume-safe and toggle-agnostic (a frozen plan finishes even if the switch is later turned off) and hands off to Phase 6 on an all-complete ledger.
 
 The adaptive path adds one role — `adversarial-verifier`, a read-only, refute-by-default skeptic used in read-only verification fan-outs. It is never a review gate and touches zero repository files.
 

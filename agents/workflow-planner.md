@@ -124,26 +124,30 @@ these reminders does not relax them.
    ```
    node <adaptive-handoff.js> --project {project} --json
    ```
-   It freezes, resume-checks, opens node1 (ledger in_progress), records the node1 baseline, stages
-   the roadmap, and writes Planning Evidence into `workflow-state.md` (preserving `## Sink`). Returns
-   a checklist-backed packet. You do NOT judge its `decision`/`risk` fields — audit metadata.
+   It freezes the plan (`plan_hash` stamped), resume-checks, stages the roadmap, and writes Planning
+   Evidence into `workflow-state.md` (preserving `## Sink`). It does NOT open node1 or record the
+   node1 baseline — `/kaola-workflow-plan-run` owns the full node lifecycle including the first node.
+   Returns a checklist-backed packet. You do NOT judge its `decision`/`risk` fields — audit metadata.
 5. **Return.** Hand the handoff packet back and stop. On `handoff_status:plan_invalid` (validator
    refuse) return the packet verbatim — the ORCHESTRATOR drives the bounded repair loop; you do not
    retry/redesign unasked.
 
 ## Durable return contract (three modes)
 
-The handoff has already done the durable work by the time you return — frozen the plan, opened
-node1, recorded the baseline, staged the roadmap, written Planning Evidence into `workflow-state.md`
-(preserving `## Sink`). Your return carries the **handoff packet** so the orchestrator can act
-without re-deriving any of that. There is **no** pre-handoff governance step: the orchestrator does
-not re-read the plan and re-run the validator to govern risk — it reads the packet's `checklist` +
-`first_node` and dispatches the first node directly. `decision:ask` is recorded metadata, not a gate.
+The handoff has already done the durable work by the time you return — frozen the plan (`plan_hash`
+stamped), resume-checked, staged the roadmap, written Planning Evidence into `workflow-state.md`
+(preserving `## Sink`). The handoff does NOT open node1 or record the node1 baseline;
+`/kaola-workflow-plan-run` owns the complete node lifecycle including the first node. Your return
+carries the **handoff packet** so the orchestrator can act without re-deriving any of that. There is
+**no** pre-handoff governance step: the orchestrator reads the packet's `checklist` + `first_node`
+(advisory) and routes directly to `/kaola-workflow-plan-run`. `decision:ask` is recorded metadata,
+not a gate.
 
-- **Handoff success (`handoff_status: ready_to_dispatch_first_node`):** the plan is frozen
-  (`plan_hash` stamped), node1 is `in_progress` with a baseline, and Planning Evidence is durable.
-  Return the handoff packet (`checklist`, `first_node`, `decision`, `risk`); the orchestrator
-  dispatches `first_node.role` directly — even when `decision:ask`.
+- **Handoff success (`handoff_status: ready_to_run`):** the plan is frozen (`plan_hash` stamped) and
+  Planning Evidence is durable. Return the handoff packet (`checklist`, `first_node`, `decision`,
+  `risk`); the orchestrator routes to `/kaola-workflow-plan-run {project}` — even when
+  `decision:ask`. `first_node` is advisory; plan-run opens it uniformly via `adaptive-node.js
+  open-next`.
 - **Handoff refuse (`handoff_status: plan_invalid`):** the validator returned `result:refuse`, so the
   plan **never froze** and NOTHING was written. Return `{handoff_status:'plan_invalid', result:'refuse',
   errors, validator_verdict}` verbatim; the orchestrator drives the bounded repair loop.
@@ -164,11 +168,11 @@ extra prose, no re-narration):
 }
 ```
 
-**On handoff success** (`handoff_status: ready_to_dispatch_first_node`):
+**On handoff success** (`handoff_status: ready_to_run`):
 ```
 {
-  "handoff_status": "ready_to_dispatch_first_node",
-  "checklist": { "claim_acquired": true, "plan_in_grammar": true, "plan_frozen": true, "resume_check_ok": true, "first_node_opened": true, "baseline_recorded": true, "roadmap_staged": true },
+  "handoff_status": "ready_to_run",
+  "checklist": { "claim_acquired": true, "plan_in_grammar": true, "plan_frozen": true, "resume_check_ok": true, "roadmap_staged": true },
   "first_node": { "id": "<id>", "role": "<role>", "model": "<model>", "declared_write_set": [...] },
   "decision": "<auto-run|ask>",
   "risk": { "sensitivity": "<bool>", "blast_radius": "<bool>", "uncertain": "<bool>", "reasons": "<;-joined or —>" }

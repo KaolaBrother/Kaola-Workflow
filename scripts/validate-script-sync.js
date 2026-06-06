@@ -55,6 +55,8 @@ const COMMON_SCRIPTS = [
   'kaola-workflow-commit-node.js',
   // #255 adaptive handoff: planner→first-node mechanical transition
   'kaola-workflow-adaptive-handoff.js',
+  // #272 adaptive node: plan-run owns the per-node lifecycle
+  'kaola-workflow-adaptive-node.js',
 ];
 
 const BYTE_IDENTICAL_GROUPS = [

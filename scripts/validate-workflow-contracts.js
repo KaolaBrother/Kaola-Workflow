@@ -506,6 +506,7 @@ assertIncludes('scripts/simulate-workflow-walkthrough.js', 'Workflow walkthrough
 // issue #227: adaptive-path contract. Locks the selection/execution prose + the spine.
 assert(exists('scripts/kaola-workflow-plan-validator.js'), 'adaptive plan validator is missing');
 assert(exists('scripts/kaola-workflow-adaptive-schema.js'), 'adaptive schema module is missing');
+assert(exists('scripts/kaola-workflow-adaptive-node.js'), '#272 adaptive-node aggregator missing');
 assertIncludes('install.sh', 'kaola-workflow-plan-validator.js');
 assertIncludes('install.sh', '--enable-adaptive');
 // #255: the adaptive-handoff script must be in install.sh's per-edition SUPPORT_SCRIPT_NAMES
@@ -514,6 +515,12 @@ assertIncludes('install.sh', '--enable-adaptive');
 assertIncludes('install.sh', 'kaola-workflow-adaptive-handoff.js');
 assertIncludes('install.sh', 'kaola-gitlab-workflow-adaptive-handoff.js');
 assertIncludes('install.sh', 'kaola-gitea-workflow-adaptive-handoff.js');
+// #272: the adaptive-node aggregator must be in install.sh per-edition SUPPORT_SCRIPT_NAMES
+// allowlist so a manual (non-plugin) install ships the per-node lifecycle script alongside
+// adaptive-handoff and the plan-validator.
+assertIncludes('install.sh', 'kaola-workflow-adaptive-node.js');
+assertIncludes('install.sh', 'kaola-gitlab-workflow-adaptive-node.js');
+assertIncludes('install.sh', 'kaola-gitea-workflow-adaptive-node.js');
 // router 3-way selection: switch first, adaptive keyword flag-only, OFF preserves 2-way
 assertConcept('commands/workflow-next.md', 'adaptive path selection', [
   'KAOLA_ENABLE_ADAPTIVE', 'adaptive', 'fast|full|adaptive', 'flag-only', 'typed refusal'
@@ -540,7 +547,8 @@ assertIncludes('commands/kaola-workflow-adapt.md', 'do not blind-read');
 // #255: the checklist-backed handoff contract must stay enforced — the orchestrator reads the
 // planner's handoff packet (it no longer runs a contractor classify/freeze chain). Lock the two
 // terminal handoff statuses so the design cannot silently drift back to a pre-handoff approval gate.
-assertIncludes('commands/kaola-workflow-adapt.md', 'ready_to_dispatch_first_node');
+// #272: token renamed from ready_to_dispatch_first_node → ready_to_run (plan-run owns node lifecycle).
+assertIncludes('commands/kaola-workflow-adapt.md', 'ready_to_run');
 assertIncludes('commands/kaola-workflow-adapt.md', 'plan_invalid');
 assertIncludes('agents/workflow-planner.md', 'NOT `acquired`/`owned`');
 assertConcept('commands/kaola-workflow-plan-run.md', 'adaptive execution + governance', [

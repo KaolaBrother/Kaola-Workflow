@@ -185,7 +185,7 @@ function makeShellStub(responses) {
 const PLAN_HASH_64 = ('a').repeat(64);
 
 // ---------------------------------------------------------------------------
-// T1 (REGRESSION): decision:ask → ready_to_dispatch_first_node (NOT needs_user_approval)
+// T1 (REGRESSION): decision:ask → ready_to_run (NOT needs_user_approval)
 // decision='ask', all checklist true, NO risk_authorized key, plan frozen.
 // ---------------------------------------------------------------------------
 {
@@ -212,11 +212,6 @@ const PLAN_HASH_64 = ('a').repeat(64);
     // validator --resume-check --json
     'kaola-workflow-plan-validator.js:--resume-check': {
       exitCode: 0, ok: true, planHash: PLAN_HASH_64
-    },
-    // commit-node --node-id explore --start --json
-    'kaola-workflow-commit-node.js:--node-id': {
-      exitCode: 0, result: 'ok', mode: 'per-node-start', nodeId: 'explore',
-      recordBase: { result: 'ok', nodeId: 'explore', base: 'sha123abc' }, overallOk: true
     },
     // roadmap init-issue
     'kaola-workflow-roadmap.js:init-issue': { exitCode: 0, created: true },
@@ -247,8 +242,8 @@ const PLAN_HASH_64 = ('a').repeat(64);
   });
 
   // T1 assertions
-  assert(result.handoff_status === 'ready_to_dispatch_first_node',
-    'T1: handoff_status===ready_to_dispatch_first_node (NOT needs_user_approval)');
+  assert(result.handoff_status === 'ready_to_run',
+    'T1: handoff_status===ready_to_run (NOT needs_user_approval)');
   assert(result.decision === 'ask',
     'T1: decision===ask (audit metadata preserved)');
   assert(result.checklist !== undefined, 'T1: checklist present');
@@ -256,8 +251,6 @@ const PLAN_HASH_64 = ('a').repeat(64);
   assert(result.checklist.plan_in_grammar === true, 'T1: checklist.plan_in_grammar===true');
   assert(result.checklist.plan_frozen === true, 'T1: checklist.plan_frozen===true');
   assert(result.checklist.resume_check_ok === true, 'T1: checklist.resume_check_ok===true');
-  assert(result.checklist.first_node_opened === true, 'T1: checklist.first_node_opened===true');
-  assert(result.checklist.baseline_recorded === true, 'T1: checklist.baseline_recorded===true');
   assert(result.checklist.roadmap_staged === true, 'T1: checklist.roadmap_staged===true');
   assert(result.risk !== undefined, 'T1: risk field present (echoed from validator)');
   assert(result.risk.blastRadius === true, 'T1: risk.blastRadius===true echoed');
@@ -267,7 +260,7 @@ const PLAN_HASH_64 = ('a').repeat(64);
 }
 
 // ---------------------------------------------------------------------------
-// T2: in-grammar + auto-run → ready_to_dispatch_first_node, all checklist true
+// T2: in-grammar + auto-run → ready_to_run, all checklist true
 // ---------------------------------------------------------------------------
 {
   const planContent = makeUnfrozenPlan('auto-run');
@@ -288,10 +281,6 @@ const PLAN_HASH_64 = ('a').repeat(64);
       risk: { sensitivity: false, blastRadius: false, uncertain: false, reasons: [] }
     },
     'kaola-workflow-plan-validator.js:--resume-check': { exitCode: 0, ok: true, planHash: PLAN_HASH_64 },
-    'kaola-workflow-commit-node.js:--node-id': {
-      exitCode: 0, result: 'ok', mode: 'per-node-start', nodeId: 'explore',
-      recordBase: { result: 'ok', nodeId: 'explore', base: 'sha456' }, overallOk: true
-    },
     'kaola-workflow-roadmap.js:init-issue': { exitCode: 0, created: true },
     'git:add': { exitCode: 0 },
   });
@@ -316,11 +305,11 @@ const PLAN_HASH_64 = ('a').repeat(64);
     stateMtime: undefined,
   });
 
-  assert(result.handoff_status === 'ready_to_dispatch_first_node', 'T2: ready on auto-run');
+  assert(result.handoff_status === 'ready_to_run', 'T2: ready on auto-run');
   assert(result.decision === 'auto-run', 'T2: decision===auto-run');
   const ck = result.checklist || {};
   assert(ck.claim_acquired && ck.plan_in_grammar && ck.plan_frozen && ck.resume_check_ok &&
-         ck.first_node_opened && ck.baseline_recorded && ck.roadmap_staged,
+         ck.roadmap_staged,
     'T2: all checklist fields true');
   assert(!('risk_authorized' in result), 'T2: no risk_authorized');
 }
@@ -396,10 +385,6 @@ const PLAN_HASH_64 = ('a').repeat(64);
       return { exitCode: 0, result: 'in-grammar', decision: 'auto-run', planHash: PLAN_HASH_64,
                risk: { sensitivity: false, blastRadius: false, uncertain: false, reasons: [] } };
     }
-    if (base === 'kaola-workflow-commit-node.js') {
-      return { exitCode: 0, result: 'ok', mode: 'per-node-start', nodeId: 'explore',
-               recordBase: { result: 'ok', nodeId: 'explore', base: 'sha789' }, overallOk: true };
-    }
     if (base === 'kaola-workflow-roadmap.js') {
       roadmapInitCalled = true;
       return { exitCode: 0, created: true };
@@ -430,7 +415,7 @@ const PLAN_HASH_64 = ('a').repeat(64);
     stateMtime: undefined,
   });
 
-  assert(result.handoff_status === 'ready_to_dispatch_first_node', 'T4: ready even with no issue_number');
+  assert(result.handoff_status === 'ready_to_run', 'T4: ready even with no issue_number');
   assert(result.checklist && result.checklist.roadmap_staged === true, 'T4: roadmap_staged===true vacuously when no issue_number');
   assert(roadmapInitCalled === false, 'T4: roadmap init NOT called when no issue_number');
 }
@@ -459,10 +444,6 @@ const PLAN_HASH_64 = ('a').repeat(64);
       risk: { sensitivity: false, blastRadius: false, uncertain: false, reasons: [] }
     },
     'kaola-workflow-plan-validator.js:--resume-check': { exitCode: 0, ok: true, planHash: HASH },
-    'kaola-workflow-commit-node.js:--node-id': {
-      exitCode: 0, result: 'ok', mode: 'per-node-start', nodeId: 'explore',
-      recordBase: { result: 'ok', nodeId: 'explore', base: 'sha123', reused: true }, overallOk: true
-    },
     'kaola-workflow-roadmap.js:init-issue': { exitCode: 0, skip: true }, // EEXIST-skip
     'git:add': { exitCode: 0 },
   });
@@ -496,8 +477,7 @@ const PLAN_HASH_64 = ('a').repeat(64);
     stateMtime: undefined,
   });
 
-  assert(result.handoff_status === 'ready_to_dispatch_first_node', 'T5: idempotent re-run → ready');
-  assert(result.checklist && result.checklist.first_node_opened === true, 'T5: first_node_opened true (already in_progress)');
+  assert(result.handoff_status === 'ready_to_run', 'T5: idempotent re-run → ready');
 
   // Check Planning Evidence replaced-not-appended: exactly ONE ## Planning Evidence section
   const stateAfterRun1 = writtenStateContents[writtenStateContents.length - 1] || stateContent;
@@ -540,7 +520,7 @@ const PLAN_HASH_64 = ('a').repeat(64);
     stateMtime: undefined,
   });
 
-  assert(result2.handoff_status === 'ready_to_dispatch_first_node', 'T5: run2 → ready');
+  assert(result2.handoff_status === 'ready_to_run', 'T5: run2 → ready');
   const stateAfterRun2 = writtenStateContents[writtenStateContents.length - 1];
   assert(stateAfterRun2 !== undefined, 'T5: run2 wrote state');
   assert(stateAfterRun2 === stateAfterRun1,
@@ -570,7 +550,7 @@ const PLAN_HASH_64 = ('a').repeat(64);
     stateMtime: undefined,
   });
 
-  assert(result3.handoff_status === 'ready_to_dispatch_first_node', 'T5: run3 → ready');
+  assert(result3.handoff_status === 'ready_to_run', 'T5: run3 → ready');
   const stateAfterRun3 = writtenStateContents[writtenStateContents.length - 1];
   assert(stateAfterRun3 !== undefined, 'T5: run3 wrote state');
   assert(stateAfterRun3 === stateAfterRun2,
@@ -617,10 +597,6 @@ const PLAN_HASH_64 = ('a').repeat(64);
       risk: { sensitivity: false, blastRadius: false, uncertain: false, reasons: [] }
     },
     'kaola-workflow-plan-validator.js:--resume-check': { exitCode: 0, ok: true, planHash: HASH },
-    'kaola-workflow-commit-node.js:--node-id': {
-      exitCode: 0, result: 'ok', mode: 'per-node-start', nodeId: 'explore',
-      recordBase: { result: 'ok', nodeId: 'explore', base: 'sha123', reused: true }, overallOk: true
-    },
     'kaola-workflow-roadmap.js:init-issue': { exitCode: 0, skip: true },
     'git:add': { exitCode: 0 },
   });
@@ -653,20 +629,20 @@ const PLAN_HASH_64 = ('a').repeat(64);
   }
 
   const r5b1 = run5b();
-  assert(r5b1.handoff_status === 'ready_to_dispatch_first_node', 'T5b: run1 → ready');
+  assert(r5b1.handoff_status === 'ready_to_run', 'T5b: run1 → ready');
   const s5b1 = written5b[written5b.length - 1];
   assert(s5b1 !== undefined, 'T5b: run1 wrote state');
   // EOF-append result must end with ## Planning Evidence block (newline-terminated).
   assert(s5b1.includes('## Planning Evidence\n'), 'T5b: ## Planning Evidence present after EOF-append');
 
   const r5b2 = run5b();
-  assert(r5b2.handoff_status === 'ready_to_dispatch_first_node', 'T5b: run2 → ready');
+  assert(r5b2.handoff_status === 'ready_to_run', 'T5b: run2 → ready');
   const s5b2 = written5b[written5b.length - 1];
   assert(s5b2 !== undefined, 'T5b: run2 wrote state');
   assert(s5b2 === s5b1, 'T5b: state byte-identical run1==run2 (EOF-append branch idempotency)');
 
   const r5b3 = run5b();
-  assert(r5b3.handoff_status === 'ready_to_dispatch_first_node', 'T5b: run3 → ready');
+  assert(r5b3.handoff_status === 'ready_to_run', 'T5b: run3 → ready');
   const s5b3 = written5b[written5b.length - 1];
   assert(s5b3 !== undefined, 'T5b: run3 wrote state');
   assert(s5b3 === s5b2, 'T5b: state byte-identical run2==run3 (3-way EOF-append stability)');
@@ -728,10 +704,6 @@ const PLAN_HASH_64 = ('a').repeat(64);
       risk: { sensitivity: false, blastRadius: false, uncertain: false, reasons: [] }
     },
     'kaola-workflow-plan-validator.js:--resume-check': { exitCode: 0, ok: true, planHash: HASH },
-    'kaola-workflow-commit-node.js:--node-id': {
-      exitCode: 0, result: 'ok', mode: 'per-node-start', nodeId: 'explore',
-      recordBase: { result: 'ok', nodeId: 'explore', base: 'sha000' }, overallOk: true
-    },
     'kaola-workflow-roadmap.js:init-issue': { exitCode: 0, created: true },
     'git:add': { exitCode: 0 },
   });
@@ -758,7 +730,7 @@ const PLAN_HASH_64 = ('a').repeat(64);
     stateMtime: undefined,
   });
 
-  assert(result.handoff_status === 'ready_to_dispatch_first_node', 'T6: handoff ready');
+  assert(result.handoff_status === 'ready_to_run', 'T6: handoff ready');
 
   // ## Planning Evidence appears before ## Last Updated
   const pePos = (writtenStateContent || '').indexOf('\n## Planning Evidence');

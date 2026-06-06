@@ -7050,7 +7050,7 @@ function plantHandoffState(projectDir, projectName) {
 function testAdaptiveHandoffInGrammarReady() {
   const tmp = adaptiveTmp('handoff-ready');
   try {
-    // Set up a real git repo (required for commit-node --start / --record-base).
+    // Set up a real git repo (required for --plan path resolution via git rev-parse).
     initGitRepo(tmp);
 
     const projectName = 'issue-255-sim-ready';
@@ -7084,17 +7084,15 @@ function testAdaptiveHandoffInGrammarReady() {
     assert(r.status === 0, 'in-grammar handoff must exit 0, got ' + r.status + '\nstderr: ' + r.stderr + '\nstdout: ' + r.stdout);
     const result = JSON.parse(r.stdout);
 
-    assert(result.handoff_status === 'ready_to_dispatch_first_node',
-      'must be ready_to_dispatch_first_node, got: ' + JSON.stringify(result));
+    assert(result.handoff_status === 'ready_to_run',
+      'must be ready_to_run, got: ' + JSON.stringify(result));
     assert(result.checklist && result.checklist.claim_acquired === true, 'checklist.claim_acquired must be true');
     assert(result.checklist.plan_in_grammar === true, 'checklist.plan_in_grammar must be true');
     assert(result.checklist.plan_frozen === true, 'checklist.plan_frozen must be true');
     assert(result.checklist.resume_check_ok === true, 'checklist.resume_check_ok must be true');
-    assert(result.checklist.first_node_opened === true, 'checklist.first_node_opened must be true');
-    assert(result.checklist.baseline_recorded === true, 'checklist.baseline_recorded must be true');
     assert(result.checklist.roadmap_staged === true, 'checklist.roadmap_staged must be true');
     assert(result.first_node && result.first_node.id === 'explore',
-      'first_node.id must be explore, got: ' + JSON.stringify(result.first_node));
+      'first_node.id must be explore (advisory), got: ' + JSON.stringify(result.first_node));
     assert(result.first_node.model && result.first_node.model.length > 0,
       'first_node.model must be non-empty, got: ' + result.first_node.model);
     assert(result.decision === 'auto-run',
@@ -7105,14 +7103,9 @@ function testAdaptiveHandoffInGrammarReady() {
     assert(/<!-- plan_hash: [0-9a-f]{64} -->/.test(frozenPlan),
       'plan must contain <!-- plan_hash: --> after handoff');
 
-    // Node1 ledger row must be in_progress.
-    assert(/\|\s*explore\s*\|\s*in_progress\s*\|/.test(frozenPlan),
-      'explore ledger row must be in_progress after handoff');
-
-    // .cache/barrier-base-explore must exist.
-    const cacheBase = path.join(projectDir, '.cache', 'barrier-base-explore');
-    assert(fs.existsSync(cacheBase),
-      '.cache/barrier-base-explore must exist after handoff --start, checked: ' + cacheBase);
+    // Node1 ledger row must still be pending (handoff no longer opens it — adaptive-node.js does).
+    assert(/\|\s*explore\s*\|\s*pending\s*\|/.test(frozenPlan),
+      'explore ledger row must remain pending after handoff (adaptive-node.js opens it)');
 
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   console.log('testAdaptiveHandoffInGrammarReady: PASSED');
@@ -7158,8 +7151,8 @@ function testAdaptiveHandoffAskFreezesNotApproval() {
     const result = JSON.parse(r.stdout);
 
     // THE REGRESSION: must NOT be needs_user_approval; ask freezes and proceeds.
-    assert(result.handoff_status === 'ready_to_dispatch_first_node',
-      'REGRESSION: decision:ask must still be ready_to_dispatch_first_node (NOT needs_user_approval), got: ' + JSON.stringify(result));
+    assert(result.handoff_status === 'ready_to_run',
+      'REGRESSION: decision:ask must still be ready_to_run (NOT needs_user_approval), got: ' + JSON.stringify(result));
     assert(result.decision === 'ask',
       'decision must be ask (audit metadata), got: ' + result.decision);
 
@@ -7168,8 +7161,6 @@ function testAdaptiveHandoffAskFreezesNotApproval() {
     assert(result.checklist.plan_in_grammar === true, 'checklist.plan_in_grammar must be true');
     assert(result.checklist.plan_frozen === true, 'checklist.plan_frozen must be true');
     assert(result.checklist.resume_check_ok === true, 'checklist.resume_check_ok must be true');
-    assert(result.checklist.first_node_opened === true, 'checklist.first_node_opened must be true');
-    assert(result.checklist.baseline_recorded === true, 'checklist.baseline_recorded must be true');
     assert(result.checklist.roadmap_staged === true, 'checklist.roadmap_staged must be true');
 
     // NO risk_authorized key (2-state design; never returns this field).
@@ -7266,7 +7257,7 @@ function testAdaptiveHandoffRefuseNoMutation() {
 
 // ---------------------------------------------------------------------------
 // testAdaptiveHandoffIdempotentReRun — run in-grammar handoff TWICE.
-// 2nd run must also be ready; plan_hash unchanged; node1 single in_progress;
+// 2nd run must also be ready; plan_hash unchanged; ledger stays ALL-PENDING after handoff;
 // ## Planning Evidence exactly once (replaced not appended).
 // ---------------------------------------------------------------------------
 function testAdaptiveHandoffIdempotentReRun() {
@@ -7300,7 +7291,7 @@ function testAdaptiveHandoffIdempotentReRun() {
     const r1 = runNode(handoffScript, ['--plan', planPath, '--json'], tmp);
     assert(r1.status === 0, 'first run must exit 0, got ' + r1.status + '\nstderr: ' + r1.stderr + '\nstdout: ' + r1.stdout);
     const result1 = JSON.parse(r1.stdout);
-    assert(result1.handoff_status === 'ready_to_dispatch_first_node', 'first run must be ready');
+    assert(result1.handoff_status === 'ready_to_run', 'first run must be ready');
 
     // Capture plan_hash from the frozen plan file.
     const planAfterRun1 = fs.readFileSync(planPath, 'utf8');
@@ -7313,8 +7304,8 @@ function testAdaptiveHandoffIdempotentReRun() {
     assert(r2.status === 0, 'second run must exit 0, got ' + r2.status + '\nstderr: ' + r2.stderr + '\nstdout: ' + r2.stdout);
     const result2 = JSON.parse(r2.stdout);
 
-    assert(result2.handoff_status === 'ready_to_dispatch_first_node',
-      '2nd run must also be ready_to_dispatch_first_node, got: ' + JSON.stringify(result2));
+    assert(result2.handoff_status === 'ready_to_run',
+      '2nd run must also be ready_to_run, got: ' + JSON.stringify(result2));
 
     // plan_hash must be unchanged.
     const planAfterRun2 = fs.readFileSync(planPath, 'utf8');
@@ -7323,10 +7314,10 @@ function testAdaptiveHandoffIdempotentReRun() {
     assert(hashMatch2[1] === planHashRun1,
       'plan_hash must be unchanged after idempotent re-run, run1=' + planHashRun1 + ' run2=' + hashMatch2[1]);
 
-    // Node1 ledger must have exactly one in_progress row (not duplicated).
-    const inProgressMatches = planAfterRun2.match(/\|\s*explore\s*\|\s*in_progress\s*\|/g);
-    assert(inProgressMatches && inProgressMatches.length === 1,
-      'explore ledger row must appear in_progress exactly once, got: ' + JSON.stringify(inProgressMatches));
+    // Node1 ledger must still be pending (handoff no longer opens it).
+    const pendingMatches = planAfterRun2.match(/\|\s*explore\s*\|\s*pending\s*\|/g);
+    assert(pendingMatches && pendingMatches.length === 1,
+      'explore ledger row must remain pending after idempotent re-run, got: ' + JSON.stringify(pendingMatches));
 
     // ## Planning Evidence must appear exactly once in state (replaced, not appended).
     const stateContent = fs.readFileSync(path.join(projectDir, 'workflow-state.md'), 'utf8');
@@ -7390,7 +7381,7 @@ function testAdaptiveHandoffProjectFlagResolvesRepoRoot() {
       'testAdaptiveHandoffProjectFlagResolvesRepoRoot: exit must be 0, got ' + r.status +
       '\nstderr: ' + r.stderr + '\nstdout: ' + r.stdout);
     const result = JSON.parse(r.stdout);
-    assert(result.handoff_status === 'ready_to_dispatch_first_node',
+    assert(result.handoff_status === 'ready_to_run',
       'testAdaptiveHandoffProjectFlagResolvesRepoRoot: --project must resolve tmp repo root, ' +
       'got handoff_status=' + result.handoff_status + ' errors=' + JSON.stringify(result.errors));
 

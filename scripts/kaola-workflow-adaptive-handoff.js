@@ -2,19 +2,23 @@
 'use strict';
 
 // ---------------------------------------------------------------------------
-// kaola-workflow-adaptive-handoff.js (issue #255)
+// kaola-workflow-adaptive-handoff.js (issue #255, updated #272)
 //
-// Aggregator: collapses the contractor classify/freeze/orient/advance steps into
+// Aggregator: collapses the contractor classify/freeze/orient steps into
 // ONE mechanical transition. The workflow-planner RUNS this (never judges);
 // the orchestrator drives the bounded repair loop on plan_invalid.
+// After #272, /kaola-workflow-plan-run owns the entire node lifecycle (incl. the
+// FIRST node) via kaola-workflow-adaptive-node.js. This handoff no longer opens
+// node1 or records its baseline — it returns ready_to_run and routes to plan-run.
 //
 // CLI: node kaola-workflow-adaptive-handoff.js (--project NAME | --plan PATH) --json [--state-mtime ISO]
 //
 // JSON output schema:
-//   ready:   { handoff_status:'ready_to_dispatch_first_node',
+//   ready:   { handoff_status:'ready_to_run',
 //               checklist:{ claim_acquired, plan_in_grammar, plan_frozen, resume_check_ok,
-//                           first_node_opened, baseline_recorded, roadmap_staged },
-//               first_node:{ id, role, model, declared_write_set }, decision, risk }
+//                           roadmap_staged },
+//               first_node:{ id, role, model, declared_write_set }  (ADVISORY — not yet opened),
+//               decision, risk }
 //   invalid: { handoff_status:'plan_invalid', result:'refuse', errors, validator_verdict }
 //
 // 2-state only: branch on validator --json `result` ('in-grammar'|'refuse'), NEVER on `decision`.
@@ -24,13 +28,9 @@
 //   1. validator --json  → branch on result. refuse → plan_invalid exit≠0, NO mutation; stop.
 //   2. --freeze          → FIRST mutation.
 //   3. --resume-check    → integrity gate.
-//   4. next-action PURE  → first ready node + model.
-//   5. commit-node --node-id <id> --start  → baseline (idempotent reuse).
-//   6. Ledger splice: node1 pending→in_progress in workflow-plan.md.
-//      NOTE: ## Node Ledger is OUTSIDE plan_hash (validator lines 146-148);
-//            post-freeze ledger write is hash-safe.
-//   7. roadmap init-issue + git add (EEXIST-skips).
-//   8. workflow-state.md ## Planning Evidence insert — LAST (state pointer after all mutations).
+//   4. next-action PURE  → first ready node (ADVISORY; not opened here — adaptive-node.js opens it).
+//   5. roadmap init-issue + git add (EEXIST-skips).
+//   6. workflow-state.md ## Planning Evidence insert — LAST (state pointer after all mutations).
 // ---------------------------------------------------------------------------
 
 const path = require('path');
@@ -59,11 +59,9 @@ function getRoot() {
 // Keep each constant on its own clearly-named line so forge ports are one-line edits.
 // ---------------------------------------------------------------------------
 const VALIDATOR    = 'kaola-workflow-plan-validator.js';
-const COMMIT_NODE  = 'kaola-workflow-commit-node.js';
 const ROADMAP      = 'kaola-workflow-roadmap.js';
 
 const validatorPath  = path.join(__dirname, VALIDATOR);
-const commitNodePath = path.join(__dirname, COMMIT_NODE);
 const roadmapPath    = path.join(__dirname, ROADMAP);
 
 // ---------------------------------------------------------------------------
@@ -170,72 +168,6 @@ function splicePlanningEvidence(content, fields, stateMtime) {
 
   // Final fallback: append
   return content.trimEnd() + '\n\n' + newBlock;
-}
-
-// ---------------------------------------------------------------------------
-// spliceLedgerNode — update a single node row's status cell in ## Node Ledger.
-//
-// GUARD: only write if current status === 'pending'.
-// If already in_progress → leave (returns original content; first_node_opened:true).
-// Does NOT regenerate the whole ledger — only replaces the status cell in the matching row.
-//
-// Returns { content: string, alreadyInProgress: boolean, found: boolean }
-// ---------------------------------------------------------------------------
-function spliceLedgerNode(content, nodeId, newStatus) {
-  const ledgerMarker = '\n## Node Ledger';
-  const ledgerIdx = content.indexOf(ledgerMarker);
-  if (ledgerIdx < 0) return { content, alreadyInProgress: false, found: false };
-
-  // Find the next ## heading after the ledger section (or end of file)
-  const afterLedger = content.indexOf('\n## ', ledgerIdx + 1);
-  const ledgerBlock = afterLedger >= 0
-    ? content.slice(ledgerIdx, afterLedger)
-    : content.slice(ledgerIdx);
-
-  const rows = ledgerBlock.split('\n').filter(l => l.trim().startsWith('|'));
-  if (rows.length < 2) return { content, alreadyInProgress: false, found: false };
-
-  const header = rows[0].split('|').slice(1, -1).map(c => c.trim().toLowerCase());
-  const idIdx   = header.indexOf('id');
-  const stIdx   = header.indexOf('status');
-  if (idIdx < 0 || stIdx < 0) return { content, alreadyInProgress: false, found: false };
-
-  let found = false;
-  let alreadyInProgress = false;
-
-  const newLedgerBlock = ledgerBlock.replace(/\n(\|[^\n]+)/g, (match, row) => {
-    const cells = row.split('|').slice(1, -1);
-    const rowId = (cells[idIdx] || '').trim();
-    if (rowId !== nodeId) return match;
-
-    found = true;
-    const currentStatus = (cells[stIdx] || '').trim().toLowerCase();
-    if (currentStatus === 'in_progress') {
-      alreadyInProgress = true;
-      return match; // leave unchanged
-    }
-    if (currentStatus !== 'pending') {
-      // complete/n-a: contract boundary — don't touch
-      return match;
-    }
-
-    // Replace ONLY the status cell (preserve all other columns + formatting)
-    // Mirror the original cell spacing
-    const origCell = cells[stIdx];
-    const leadingSpace = origCell.match(/^(\s*)/)[1];
-    const trailingSpace = origCell.match(/(\s*)$/)[1];
-    const newCell = leadingSpace + newStatus + trailingSpace;
-    cells[stIdx] = newCell;
-    return '\n|' + cells.join('|') + '|';
-  });
-
-  if (!found) return { content, alreadyInProgress: false, found: false };
-
-  const newContent = afterLedger >= 0
-    ? content.slice(0, ledgerIdx) + newLedgerBlock + content.slice(afterLedger)
-    : content.slice(0, ledgerIdx) + newLedgerBlock;
-
-  return { content: newContent, alreadyInProgress, found };
 }
 
 // ---------------------------------------------------------------------------
@@ -370,49 +302,10 @@ function runHandoff(opts) {
   }
 
   // -------------------------------------------------------------------------
-  // Step 5: commit-node --node-id <id> --start --json (baseline; idempotent reuse).
-  // -------------------------------------------------------------------------
-  const baselineResult = shell(commitNodePath, [
-    planPath, '--node-id', firstNode.id, '--start', '--json'
-  ]);
-  const baselineOk = baselineResult.exitCode === 0 && baselineResult.result === 'ok';
-  if (!baselineOk) {
-    return {
-      handoff_status: 'plan_invalid',
-      result: 'refuse',
-      errors: ['baseline record failed (infra): result !== ok — ' + JSON.stringify(baselineResult)],
-      validator_verdict: null,
-    };
-  }
-
-  // -------------------------------------------------------------------------
-  // Step 6: Ledger splice — node1 pending→in_progress in workflow-plan.md.
-  // NOTE: ## Node Ledger is OUTSIDE plan_hash (validator lines 146-148);
-  //       post-freeze ledger write is hash-safe.
-  // GUARD: write iff status==='pending'. If already in_progress → leave (first_node_opened:true).
-  // Read-modify-write (does NOT use the stale frozenPlanContent; re-reads via readFile).
-  // -------------------------------------------------------------------------
-  let currentPlanContent;
-  try {
-    currentPlanContent = readFile(planPath);
-  } catch (_) {
-    currentPlanContent = frozenPlanContent; // fallback (should not happen)
-  }
-
-  const spliceResult = spliceLedgerNode(currentPlanContent, firstNode.id, 'in_progress');
-  let firstNodeOpened = false;
-  if (spliceResult.alreadyInProgress) {
-    firstNodeOpened = true; // already in_progress → idempotent
-  } else if (spliceResult.found) {
-    writeFile(planPath, spliceResult.content);
-    firstNodeOpened = true;
-  }
-
-  // -------------------------------------------------------------------------
-  // Step 7: roadmap init-issue + git add (EEXIST-skips when no issue_number).
+  // Step 5: roadmap init-issue + git add (EEXIST-skips when no issue_number).
   // roadmap_staged is vacuously true when no issue_number in state.
   // roadmap_staged is ADVISORY/best-effort: a non-EEXIST init-issue failure does
-  // NOT block ready_to_dispatch_first_node; the finalize sink regenerates the roadmap.
+  // NOT block ready_to_run; the finalize sink regenerates the roadmap.
   // -------------------------------------------------------------------------
   const issueNumber = parseIssueNumber(stateContent);
   let roadmapStaged = true;
@@ -441,8 +334,9 @@ function runHandoff(opts) {
   }
 
   // -------------------------------------------------------------------------
-  // Step 8: workflow-state.md ## Planning Evidence insert — LAST.
+  // Step 6: workflow-state.md ## Planning Evidence insert — LAST.
   // State pointer (## Current Position) NOT flipped (startup already set it).
+  // first_node_id/role recorded as advisory metadata (node not yet opened here).
   // -------------------------------------------------------------------------
   const peFields = [
     { line: 'plan_hash: ' + planHash },
@@ -461,17 +355,15 @@ function runHandoff(opts) {
   writeFile(statePath, updatedState);
 
   // -------------------------------------------------------------------------
-  // Return — ready_to_dispatch_first_node
+  // Return — ready_to_run (plan-run owns node lifecycle incl. first node)
   // -------------------------------------------------------------------------
   return {
-    handoff_status: 'ready_to_dispatch_first_node',
+    handoff_status: 'ready_to_run',
     checklist: {
       claim_acquired:    true,
       plan_in_grammar:   true,
       plan_frozen:       true,
       resume_check_ok:   true,
-      first_node_opened: firstNodeOpened,
-      baseline_recorded: baselineOk,
       roadmap_staged:    roadmapStaged,
     },
     first_node: {
@@ -564,7 +456,7 @@ function main() {
   });
 
   process.stdout.write(JSON.stringify(result) + '\n');
-  if (result.handoff_status !== 'ready_to_dispatch_first_node') {
+  if (result.handoff_status !== 'ready_to_run') {
     process.exitCode = 1;
   }
 }
