@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [5.4.0] — 2026-06-06
+
 ### Fixed
 - adaptive: wire contractor to consume `selectorCheck.armsToNa` and write `n/a` ledger rows for unselected arms after a `selector_source` node completes; add halt protocol when `selectorCheck.ok === false`; add "Selector routing — orchestrator contract" section to `docs/api.md`; update all four edition mirrors (GitHub/Codex/Gitea/GitLab) (#269)
 
