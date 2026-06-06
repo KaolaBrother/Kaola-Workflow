@@ -104,7 +104,7 @@ thereafter the loop cycles step 2 → 3 → 4 → 2.
    **`## Required Agent Compliance`** row. Gate compliance rows for `code-reviewer`/`security-reviewer` use
    the **bare role string** (the canonical compliance-row format the full-path anchored delegation matcher
    expects); per-instance disambiguation goes in the Evidence column only. Never mark a gate row `n/a` while
-   a node it post-dominates reached `complete`. **Then, ONLY IF the barrier exited 0** (the node is now
+   a node it post-dominates reached `complete`. **Selector routing (ONLY when `selectorCheck.isSelector === true` and `selectorCheck.ok === true`):** read `selectorCheck.armsToNa` from the barrier JSON. For each arm-id in that list, write its `## Node Ledger` row to `n/a` with note `selected: <selectorCheck.selected> (not this arm)`. These writes MUST precede the fused advance so `next-action` sees them as TERMINAL. If `selectorCheck.ok === false` (missing/foreign selector), do NOT mark any arm — report and stop (the orchestrator owns the halt). Non-selector nodes (`selectorCheck.isSelector === false`) require no action. **Then, ONLY IF the barrier exited 0** (the node is now
    `complete`/`n/a`), the contractor FUSES the next advance in the SAME call — re-runs `node
    "$KAOLA_SCRIPTS/kaola-workflow-next-action.js" kaola-workflow/{project}/workflow-plan.md --json` and, if
    a next ready node exists, opens it (`in_progress` + `kaola-workflow-commit-node.js --node-id {next}

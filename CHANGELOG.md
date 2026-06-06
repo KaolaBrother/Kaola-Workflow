@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- adaptive: wire contractor to consume `selectorCheck.armsToNa` and write `n/a` ledger rows for unselected arms after a `selector_source` node completes; add halt protocol when `selectorCheck.ok === false`; add "Selector routing — orchestrator contract" section to `docs/api.md`; update all four edition mirrors (GitHub/Codex/Gitea/GitLab) (#269)
+
 ### Classify-And-Act selective execution — `select(<group>)` shape + mechanical n/a routing (issue #263)
 
 Adds a fourth node shape, `select(<group>)`, that routes execution to exactly one of several mutually-exclusive arms based on what a read-only classifier node emits, and wires its mechanical n/a routing into the per-node commit barrier.

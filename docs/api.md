@@ -396,6 +396,40 @@ node scripts/kaola-workflow-commit-node.js <plan-path> --json
   ```
   Also: `"errors": ["--node-id requires a value"]` when `--node-id` flag is present but value is missing or starts with `--`.
 
+## Selector routing — orchestrator contract
+
+When a `selector_source` node completes, the contractor reads `selectorCheck` from the per-node `commit-node --json` output and routes unselected arms before the fused advance.
+
+### Fields (per-node mode only; `null` in `per-node-start` and `whole-plan`)
+
+```json
+// non-selector node
+{ "ok": true, "isSelector": false, "armsToNa": [] }
+
+// selector — valid selected arm (exit 0)
+{ "ok": true, "isSelector": true, "selected": "arm-b", "group": "impl", "armsToNa": ["arm-a", "arm-c"] }
+
+// selector — missing or foreign value (exit 1, fail-closed)
+{ "ok": false, "isSelector": true, "errors": ["selector_source \"decide\" produced no selector: line"] }
+```
+
+### Contractor protocol
+
+1. **`selectorCheck.isSelector === false`** — non-selector node; skip this section entirely.
+2. **`selectorCheck.isSelector === true` and `selectorCheck.ok === true`** — read `armsToNa`. For each arm-id in that list, write its `## Node Ledger` row to `n/a` with note `selected: <selectorCheck.selected> (not this arm)`. These writes MUST precede the fused advance (`next-action` reads the ledger synchronously; missing n/a rows leave arms as `pending`, stalling the ready set).
+3. **`selectorCheck.isSelector === true` and `selectorCheck.ok === false`** — missing or foreign selector. Do NOT mark any arm. Report the condition and stop; the orchestrator owns the halt.
+
+### How n/a rows interact with `next-action`
+
+`next-action` treats `complete` and `n/a` as the TERMINAL set:
+
+- **`depends_on` predicate**: a node whose `depends_on` names an n/a arm is unblocked — the skipped arm satisfies the join as though completed.
+- **`allDone` predicate**: n/a arms count toward plan completion; once the selected arm reaches `complete` and all skipped arms carry `n/a`, `allDone` becomes `true` and the plan routes to Phase 6.
+
+### Resume re-entry
+
+On resume, the `## Node Ledger` n/a rows are already written (durable). `next-action` re-reads the ledger and treats those arms as TERMINAL — no re-routing step is needed.
+
 ## Contractor Agent (issue #242 Part B, wired in Stage C)
 
 The `contractor` is a mechanical Sonnet agent registered across all four editions. It is the bookkeeper half of the lean-orchestrator design. As of Stage D (issue #242 Part B complete) the contractor is dispatched at **both** fuzzy/bulky seams:
