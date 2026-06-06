@@ -110,6 +110,21 @@ function parseNodeVerdict(cacheText) {
   return { found, verdict, findings_blocking: lastBlocking };
 }
 
+// #263: the mechanical SELECTOR vocabulary a read-only classifier (selector_source) emits
+// into its `.cache/{node-id}.md` evidence. Same discipline as parseNodeVerdict: native
+// multiline regex ONLY (no classifier import — cross-edition byte-identity). FENCE-BLIND BY
+// ANCHOR: a selector line is recognised ONLY at column 0 (`^selector:`). Last-match-wins.
+// Value is a single bare token (an arm id — no whitespace). No vocabulary clamp: which arm
+// ids are legal is plan-relative and is checked by the validator's --selector-check.
+// Returns { found, selector: <arm-id>|null }.
+function parseNodeSelector(cacheText) {
+  const text = String(cacheText || '');
+  const re = /^selector:[ \t]*([^\s]+)[ \t]*$/gm;
+  let m, last = null;
+  while ((m = re.exec(text)) !== null) { last = m[1]; }
+  return { found: last !== null, selector: last };
+}
+
 // #238: curated, high-collision-risk ROOT (slashless) filenames — CI/CD, container, secrets,
 // dependency-lock, and build manifests where two concurrent projects editing the same one clobber.
 // This is a FOURTH, DISTINCT path vocabulary, kept here on purpose so it cannot drift across the four
@@ -225,6 +240,7 @@ module.exports = {
   VERDICT_FAIL,
   VERDICT_VOCABULARY,
   parseNodeVerdict,
+  parseNodeSelector,
   CURATED_ROOT_PATHS,
   extractCuratedRootPaths,
   isCuratedRoot,

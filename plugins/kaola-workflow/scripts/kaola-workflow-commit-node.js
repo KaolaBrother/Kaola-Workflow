@@ -68,7 +68,7 @@ function shellValidator(vPath, planPath, flags) {
 // combineResults — pure IO-free core.
 //
 // Inputs:
-//   steps: { recordBase, barrierCheck, gateVerify, verdictCheck }
+//   steps: { recordBase, barrierCheck, gateVerify, verdictCheck, selectorCheck }
 //     each is { exitCode, ...parsedJson } | null
 //   opts:  { mode: 'per-node-start'|'per-node'|'whole-plan', nodeId?: string }
 //
@@ -77,7 +77,7 @@ function shellValidator(vPath, planPath, flags) {
 function combineResults(steps, opts) {
   const mode = opts.mode;
   const nodeId = opts.nodeId || null;
-  const { recordBase, barrierCheck, gateVerify, verdictCheck } = steps;
+  const { recordBase, barrierCheck, gateVerify, verdictCheck, selectorCheck } = steps;
 
   let overallOk;
   let gvOut = gateVerify;
@@ -93,7 +93,13 @@ function combineResults(steps, opts) {
     // downstream reviewer is still pending when this node commits).
     // verdict-check is also INFORMATIONAL per-node (no deadlock when reviewer hasn't run yet).
     const barrierPass = !!(barrierCheck && barrierCheck.exitCode === 0 && barrierCheck.result === 'pass');
-    overallOk = barrierPass;
+    // #263: selector-check is BLOCKING per-node (checks the completing node's own .cache, like
+    // barrier-check — no deadlock risk). A non-selector node returns isSelector:false/ok:true
+    // (never false-blocks). A selector_source with missing/foreign selector returns ok:false/exit 1
+    // => fails the commit (fail-closed). Absent (null/undefined) => selectorPass true (back-compat).
+    const selectorPass = (selectorCheck == null) ? true
+      : (selectorCheck.exitCode === 0 && selectorCheck.ok === true);
+    overallOk = barrierPass && selectorPass;
     // Tag gate-verify as informational — do NOT include it in overallOk.
     if (gateVerify != null) {
       gvOut = { ...gateVerify, informational: true };
@@ -125,6 +131,7 @@ function combineResults(steps, opts) {
     barrierCheck: mode !== 'per-node-start' ? barrierCheck : null,
     gateVerify: gvOut,
     verdictCheck: vcOut,
+    selectorCheck: (selectorCheck !== undefined) ? selectorCheck : null,
     overallOk,
   };
 }
@@ -183,6 +190,7 @@ function main() {
   let barrierCheck = null;
   let gateVerify = null;
   let verdictCheck = null;
+  let selectorCheck = null;
 
   if (mode === 'per-node-start') {
     // Shell: --record-base --node-id ID --json
@@ -194,6 +202,12 @@ function main() {
     gateVerify = shellValidator(validatorPath, planPath, ['--gate-verify', '--json']);
     // Shell: --verdict-check --node-id ID --json (informational only — no deadlock when reviewer hasn't run)
     verdictCheck = shellValidator(validatorPath, planPath, ['--verdict-check', '--node-id', nodeIdValue, '--json']);
+    // #263: selector-check ID --json. BLOCKING per-node (checks the COMPLETING node's OWN
+    // .cache, like barrier-check — no deadlock risk, so NOT informational). A non-selector
+    // node returns isSelector:false/ok:true (never false-blocks). A selector_source with a
+    // missing/foreign selector returns ok:false/exit 1 => fails the commit (fail-closed).
+    // NEVER mutates the ledger: on success it RETURNS armsToNa for the contractor to transcribe.
+    selectorCheck = shellValidator(validatorPath, planPath, ['--selector-check', '--node-id', nodeIdValue, '--json']);
   } else {
     // whole-plan: shell --barrier-check --json, --gate-verify --json, --verdict-check --json (all blocking)
     barrierCheck = shellValidator(validatorPath, planPath, ['--barrier-check', '--json']);
@@ -201,7 +215,7 @@ function main() {
     verdictCheck = shellValidator(validatorPath, planPath, ['--verdict-check', '--json']);
   }
 
-  const out = combineResults({ recordBase, barrierCheck, gateVerify, verdictCheck }, { mode, nodeId: nodeIdValue });
+  const out = combineResults({ recordBase, barrierCheck, gateVerify, verdictCheck, selectorCheck }, { mode, nodeId: nodeIdValue });
   process.stdout.write(JSON.stringify(out) + '\n');
   process.exitCode = out.overallOk ? 0 : 1;
 }

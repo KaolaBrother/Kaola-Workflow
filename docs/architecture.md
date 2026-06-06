@@ -21,8 +21,8 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   The agent owns the *middle* (how many explorers, whether to fan out `tdd-guide`
   over disjoint sub-areas, extra review passes, ordering, bounded loops). The
   **harness owns the frame and the computed gates**: the runtime-closed role
-  library + fixed models (`resolve-agent-model`; see **Model resolution** below), the three shapes
-  (sequence / fan-out / bounded loop), a unique `finalize` sink, **post-dominance**
+  library + fixed models (`resolve-agent-model`; see **Model resolution** below), the four shapes
+  (sequence / fan-out / bounded loop / selective-execution `select`), a unique `finalize` sink, **post-dominance**
   gates (`code-reviewer` over every code-producing node — implement roles, plus any
   write role writing a non-docs file, plus non-docs writes declared on the `finalize`
   sink; `security-reviewer` over every sensitive node — computed as

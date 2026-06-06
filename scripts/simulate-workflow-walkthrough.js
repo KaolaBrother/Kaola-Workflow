@@ -6384,6 +6384,35 @@ function testAdaptiveVerdictCheck() {
       'parseNodeVerdict: indented "    verdict: pass" must NOT match (col-0 anchor), got ' + JSON.stringify(pv));
 
     // -------------------------------------------------------------------
+    // (1b) #263 parseNodeSelector pure cases
+    // -------------------------------------------------------------------
+
+    // basic: selector: arm-csv -> found:true
+    let ps = schema.parseNodeSelector('selector: arm-csv\n');
+    assert(ps.found === true && ps.selector === 'arm-csv',
+      'parseNodeSelector: "selector: arm-csv" must parse, got ' + JSON.stringify(ps));
+
+    // last-match-wins: two selector lines -> returns last
+    ps = schema.parseNodeSelector('selector: arm-csv\nselector: arm-html\n');
+    assert(ps.found === true && ps.selector === 'arm-html',
+      'parseNodeSelector: last-match-wins, got ' + JSON.stringify(ps));
+
+    // missing (empty text) -> found:false
+    ps = schema.parseNodeSelector('');
+    assert(ps.found === false && ps.selector === null,
+      'parseNodeSelector: empty text => found:false, got ' + JSON.stringify(ps));
+
+    // fence-blind by col-0 anchor: indented selector must NOT match
+    ps = schema.parseNodeSelector('    selector: arm-csv\n');
+    assert(ps.found === false,
+      'parseNodeSelector: indented selector must NOT match (col-0 anchor), got ' + JSON.stringify(ps));
+
+    // no keyword -> found:false
+    ps = schema.parseNodeSelector('some random text\nno selector here\n');
+    assert(ps.found === false && ps.selector === null,
+      'parseNodeSelector: no keyword => found:false, got ' + JSON.stringify(ps));
+
+    // -------------------------------------------------------------------
     // (2) verifyVerdictBlock pure cases (injected readCache/globCache)
     // -------------------------------------------------------------------
 
@@ -6539,6 +6568,67 @@ function testAdaptiveVerdictCheck() {
     assert(crFailJson.ok === false && crFailJson.failures.length === 1,
       '--verdict-check whole-plan fail: ok:false/failures.length===1, got ' + cr.stdout);
 
+    // -------------------------------------------------------------------
+    // (5) #263 --selector-check CLI via runNode on a temp dir
+    // -------------------------------------------------------------------
+
+    // Build a 7-column select plan for selector-check tests
+    const scPlanContent = [
+      '# Plan', '',
+      '## Meta', 'labels: enhancement', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape | selector_source |',
+      '|---|---|---|---|---|---|---|',
+      '| classify | code-explorer | — | — | 1 | sequence | — |',
+      '| arm-csv | tdd-guide | classify | exporter/csv.js | 1 | select(fix) | classify |',
+      '| arm-html | tdd-guide | classify | renderer/html.js | 1 | select(fix) | classify |',
+      '| review | code-reviewer | arm-csv,arm-html | — | 1 | sequence | — |',
+      '| done | finalize | review | — | 1 | sequence | — |',
+      '',
+    ].join('\n');
+    const scDir = path.join(tmp, 'sc-cli');
+    fs.mkdirSync(scDir, { recursive: true });
+    const scPlanPath = path.join(scDir, 'workflow-plan.md');
+    const scCacheDir = path.join(scDir, '.cache');
+    fs.mkdirSync(scCacheDir, { recursive: true });
+    fs.writeFileSync(scPlanPath, scPlanContent);
+
+    // non-selector node -> exit 0, isSelector:false
+    cr = runNode(planValidatorScript, [scPlanPath, '--selector-check', '--node-id', 'review', '--json'], scDir);
+    assert(cr.status === 0,
+      '--selector-check --node-id review (non-selector) must exit 0, got ' + cr.status + ' ' + cr.stdout);
+    let scJson = JSON.parse(cr.stdout);
+    assert(scJson.ok === true && scJson.isSelector === false && Array.isArray(scJson.armsToNa) && scJson.armsToNa.length === 0,
+      '--selector-check non-selector: ok:true/isSelector:false/armsToNa:[], got ' + cr.stdout);
+
+    // selector_source with missing cache -> exit 1, ok:false
+    cr = runNode(planValidatorScript, [scPlanPath, '--selector-check', '--node-id', 'classify', '--json'], scDir);
+    assert(cr.status === 1,
+      '--selector-check --node-id classify (missing cache) must exit 1, got ' + cr.status + ' ' + cr.stdout);
+    scJson = JSON.parse(cr.stdout);
+    assert(scJson.ok === false && scJson.isSelector === true,
+      '--selector-check missing cache: ok:false/isSelector:true, got ' + cr.stdout);
+
+    // selector_source with valid selector -> exit 0, selected + armsToNa
+    fs.writeFileSync(path.join(scCacheDir, 'classify.md'), 'selector: arm-csv\n');
+    cr = runNode(planValidatorScript, [scPlanPath, '--selector-check', '--node-id', 'classify', '--json'], scDir);
+    assert(cr.status === 0,
+      '--selector-check --node-id classify (valid selector) must exit 0, got ' + cr.status + ' ' + cr.stdout);
+    scJson = JSON.parse(cr.stdout);
+    assert(scJson.ok === true && scJson.isSelector === true && scJson.selected === 'arm-csv' && scJson.group === 'fix',
+      '--selector-check valid: ok:true/selected:arm-csv/group:fix, got ' + cr.stdout);
+    assert(Array.isArray(scJson.armsToNa) && scJson.armsToNa.length === 1 && scJson.armsToNa[0] === 'arm-html',
+      '--selector-check valid: armsToNa must be [arm-html], got ' + cr.stdout);
+
+    // selector_source with foreign selector -> exit 1, ok:false
+    fs.writeFileSync(path.join(scCacheDir, 'classify.md'), 'selector: arm-unknown\n');
+    cr = runNode(planValidatorScript, [scPlanPath, '--selector-check', '--node-id', 'classify', '--json'], scDir);
+    assert(cr.status === 1,
+      '--selector-check --node-id classify (foreign selector) must exit 1, got ' + cr.status + ' ' + cr.stdout);
+    scJson = JSON.parse(cr.stdout);
+    assert(scJson.ok === false && scJson.isSelector === true,
+      '--selector-check foreign selector: ok:false/isSelector:true, got ' + cr.stdout);
+
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -6670,19 +6760,135 @@ function testAdaptivePatternLibrary() {
     assert(v.nodeCount === 10 && v.risk && v.risk.blastRadius === true,
       'composed multi-pattern DAG must be 10 nodes with blast-radius flagged (gates still post-dominate both implements), got: ' + JSON.stringify(v));
 
-    // Classify-And-Act TRIPWIRE — selective execution is NOT YET supported.
-    // (a) a `select(<group>)` shape is out-of-grammar today.
-    v = validatePlanFixture(tmp, [
-      '| classify | code-explorer | — | — | 1 | sequence |',
-      '| arm-csv | tdd-guide | classify | exporter/csv.js | 1 | select(fix) |',
-      '| arm-html | tdd-guide | classify | renderer/html.js | 1 | select(fix) |',
-      '| review | code-reviewer | arm-csv,arm-html | — | 1 | sequence |',
-      '| done | finalize | review | — | 1 | sequence |',
-    ], ['enhancement']);
-    assert(v.result === 'refuse',
-      'TRIPWIRE: select() classify-and-act must be out-of-grammar until the selective-execution primitive ships, got: ' + JSON.stringify(v));
-    assert(Array.isArray(v.errors) && v.errors.some(e => /invalid shape "select\(fix\)"/.test(e)),
-      'TRIPWIRE: select() refusal must name the invalid shape, got: ' + JSON.stringify(v));
+    // Classify-And-Act — selective execution is now supported (#263).
+    // (a) a valid 7-column select plan with a read-only classifier + 2 disjoint arms
+    // must be in-grammar (the select() tripwire is flipped).
+    {
+      const selPlanPath = path.join(tmp, 'select-valid-plan.md');
+      fs.writeFileSync(selPlanPath, [
+        '# Plan', '',
+        '## Meta', 'labels: enhancement', '',
+        '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape | selector_source |',
+        '|---|---|---|---|---|---|---|',
+        '| classify | code-explorer | — | — | 1 | sequence | — |',
+        '| arm-csv | tdd-guide | classify | exporter/csv.js | 1 | select(fix) | classify |',
+        '| arm-html | tdd-guide | classify | renderer/html.js | 1 | select(fix) | classify |',
+        '| review | code-reviewer | arm-csv,arm-html | — | 1 | sequence | — |',
+        '| done | finalize | review | — | 1 | sequence | — |',
+        '',
+      ].join('\n'));
+      v = JSON.parse(runNode(planValidatorScript, [selPlanPath, '--json'], tmp).stdout);
+    }
+    assert(v.result === 'in-grammar',
+      'select() classify-and-act with a read-only selector_source + 2 disjoint arms must be in-grammar after #263, got: ' + JSON.stringify(v));
+    assert(v.decision === 'ask' || v.decision === 'auto-run',
+      'select() plan decision must be ask or auto-run, got: ' + JSON.stringify(v));
+
+    // G-SEL typed-refusal cases — each must refuse with a specific error substring.
+    // G-SEL-1a: single-arm group (< 2 arms).
+    {
+      const selPlanPath = path.join(tmp, 'select-one-arm-plan.md');
+      fs.writeFileSync(selPlanPath, [
+        '# Plan', '',
+        '## Meta', 'labels: enhancement', '',
+        '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape | selector_source |',
+        '|---|---|---|---|---|---|---|',
+        '| classify | code-explorer | — | — | 1 | sequence | — |',
+        '| arm-csv | tdd-guide | classify | exporter/csv.js | 1 | select(fix) | classify |',
+        '| review | code-reviewer | arm-csv | — | 1 | sequence | — |',
+        '| done | finalize | review | — | 1 | sequence | — |',
+        '',
+      ].join('\n'));
+      const r = JSON.parse(runNode(planValidatorScript, [selPlanPath, '--json'], tmp).stdout);
+      assert(r.result === 'refuse' && Array.isArray(r.errors) && r.errors.some(e => /select group "fix" has only 1 arm/.test(e)),
+        'G-SEL-1a: single-arm group must refuse with "has only 1 arm", got: ' + JSON.stringify(r));
+    }
+
+    // G-SEL-2: gate arm (code-reviewer as a select arm).
+    {
+      const selPlanPath = path.join(tmp, 'select-gate-arm-plan.md');
+      fs.writeFileSync(selPlanPath, [
+        '# Plan', '',
+        '## Meta', 'labels: enhancement', '',
+        '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape | selector_source |',
+        '|---|---|---|---|---|---|---|',
+        '| classify | code-explorer | — | — | 1 | sequence | — |',
+        '| arm-csv | tdd-guide | classify | exporter/csv.js | 1 | select(fix) | classify |',
+        '| arm-rv | code-reviewer | classify | — | 1 | select(fix) | classify |',
+        '| review | code-reviewer | arm-csv,arm-rv | — | 1 | sequence | — |',
+        '| done | finalize | review | — | 1 | sequence | — |',
+        '',
+      ].join('\n'));
+      const r = JSON.parse(runNode(planValidatorScript, [selPlanPath, '--json'], tmp).stdout);
+      assert(r.result === 'refuse' && Array.isArray(r.errors) && r.errors.some(e => /gates cannot be select arms/.test(e)),
+        'G-SEL-2: gate arm must refuse with "gates cannot be select arms", got: ' + JSON.stringify(r));
+    }
+
+    // G-SEL-1d: write-role selector_source (tdd-guide is a write role).
+    {
+      const selPlanPath = path.join(tmp, 'select-write-classifier-plan.md');
+      fs.writeFileSync(selPlanPath, [
+        '# Plan', '',
+        '## Meta', 'labels: enhancement', '',
+        '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape | selector_source |',
+        '|---|---|---|---|---|---|---|',
+        '| classify | tdd-guide | — | lib/foo.js | 1 | sequence | — |',
+        '| arm-csv | tdd-guide | classify | exporter/csv.js | 1 | select(fix) | classify |',
+        '| arm-html | tdd-guide | classify | renderer/html.js | 1 | select(fix) | classify |',
+        '| review | code-reviewer | arm-csv,arm-html | — | 1 | sequence | — |',
+        '| done | finalize | review | — | 1 | sequence | — |',
+        '',
+      ].join('\n'));
+      const r = JSON.parse(runNode(planValidatorScript, [selPlanPath, '--json'], tmp).stdout);
+      assert(r.result === 'refuse' && Array.isArray(r.errors) && r.errors.some(e => /must be a read-only node/.test(e)),
+        'G-SEL-1d: write-role selector_source must refuse with "must be a read-only node", got: ' + JSON.stringify(r));
+    }
+
+    // G-SEL-1e: arm missing depends_on the selector_source.
+    {
+      const selPlanPath = path.join(tmp, 'select-no-dep-plan.md');
+      fs.writeFileSync(selPlanPath, [
+        '# Plan', '',
+        '## Meta', 'labels: enhancement', '',
+        '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape | selector_source |',
+        '|---|---|---|---|---|---|---|',
+        '| classify | code-explorer | — | — | 1 | sequence | — |',
+        '| arm-csv | tdd-guide | classify | exporter/csv.js | 1 | select(fix) | classify |',
+        '| arm-html | tdd-guide | — | renderer/html.js | 1 | select(fix) | classify |',
+        '| review | code-reviewer | arm-csv,arm-html | — | 1 | sequence | — |',
+        '| done | finalize | review | — | 1 | sequence | — |',
+        '',
+      ].join('\n'));
+      const r = JSON.parse(runNode(planValidatorScript, [selPlanPath, '--json'], tmp).stdout);
+      assert(r.result === 'refuse' && Array.isArray(r.errors) && r.errors.some(e => /must depend_on selector_source/.test(e)),
+        'G-SEL-1e: arm missing depends_on selector_source must refuse with "must depend_on selector_source", got: ' + JSON.stringify(r));
+    }
+
+    // G-SEL-4: overlapping arm write sets (same file in both arms -> red).
+    {
+      const selPlanPath = path.join(tmp, 'select-overlap-plan.md');
+      fs.writeFileSync(selPlanPath, [
+        '# Plan', '',
+        '## Meta', 'labels: enhancement', '',
+        '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape | selector_source |',
+        '|---|---|---|---|---|---|---|',
+        '| classify | code-explorer | — | — | 1 | sequence | — |',
+        '| arm-csv | tdd-guide | classify | exporter/csv.js | 1 | select(fix) | classify |',
+        '| arm-html | tdd-guide | classify | exporter/csv.js | 1 | select(fix) | classify |',
+        '| review | code-reviewer | arm-csv,arm-html | — | 1 | sequence | — |',
+        '| done | finalize | review | — | 1 | sequence | — |',
+        '',
+      ].join('\n'));
+      const r = JSON.parse(runNode(planValidatorScript, [selPlanPath, '--json'], tmp).stdout);
+      assert(r.result === 'refuse' && Array.isArray(r.errors) && r.errors.some(e => /overlapping write sets/.test(e)),
+        'G-SEL-4: overlapping arm write sets must refuse with "overlapping write sets", got: ' + JSON.stringify(r));
+    }
 
     // (b) the only legal workaround today — both arms as a fan-out — is in-grammar but
     // runs BOTH arms (no real selection). This locks the honest cost the issue removes.

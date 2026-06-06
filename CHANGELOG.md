@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Classify-And-Act selective execution — `select(<group>)` shape + mechanical n/a routing (issue #263)
+
+Adds a fourth node shape, `select(<group>)`, that routes execution to exactly one of several mutually-exclusive arms based on what a read-only classifier node emits, and wires its mechanical n/a routing into the per-node commit barrier.
+
+- **`select(<group>)` shape** (fourth grammar shape alongside `sequence`, `fanout`, `loop`): arm nodes declare `shape: select(<group>)` and a `selector_source` column pointing to the read-only classifier node that runs before them. `parseShape` in `kaola-workflow-plan-validator.js` recognizes the shape; `parseNodes` parses the `selector_source` column (hash-covered — lives in `## Nodes`, backward-compatible: absent column treated as non-arm).
+- **`parseNodeSelector(cacheText)`** — new exported function in `kaola-workflow-adaptive-schema.js` (byte-identical across all four editions). Reads the `selector: <arm-id>` vocabulary a classifier node writes to its `.cache/<node-id>.md` evidence. Column-0 anchor (`^selector:`), last-match-wins, fence-blind. Returns `{ found: true|false, selector: "<arm-id>"|null }`.
+- **G-SEL-1..4 validation rules** — four new validator rules for Classify-And-Act groups: G-SEL-1 (≥ 2 arms; all arms name the same existing read-only `selector_source`; every arm `depends_on` that source); G-SEL-2 (gate roles cannot be select arms); G-SEL-3 (no-op by design — G1/G2 post-dominance already covers all nodes including arms); G-SEL-4 (disjoint-or-identical write sets across arms). Out-of-grammar on any violation — typed refusal.
+- **`--selector-check --node-id ID`** CLI mode on `kaola-workflow-plan-validator.js` — pure-read, blocking per-node check. Non-selector nodes return `{ ok: true, isSelector: false, armsToNa: [] }` (never blocks). A `selector_source` node with a missing or foreign selector value returns `{ ok: false, isSelector: true, errors: [...] }` (exit 1, blocking the commit — the script-mechanical guarantee that neither "run all" nor "run none" can occur). On success returns `{ ok: true, isSelector: true, selected: "<arm-id>", group: "<group>", armsToNa: ["<arm-id>", ...] }`.
+- **`selectorCheck` step in `kaola-workflow-commit-node.js`** — the `--selector-check` result is added as a **blocking** per-node step (`overallOk = barrierPass && selectorPass`). A non-selector node never false-blocks. Returns `armsToNa` for the contractor to transcribe into the `## Node Ledger` as `n/a` rows; `next-action.js` then treats those arms as terminal so only the one selected arm becomes ready. Null when no `--node-id` is provided (backward-compatible). All four editions (canonical `scripts/`, Codex copy, GitLab and Gitea forge-named ports).
+- **Tests** — `parseNodeSelector` unit tests, `--selector-check` CLI tests, five G-SEL typed-refusal cases, and the `select()` tripwire (asserts `in-grammar` for a valid Classify-And-Act plan) in `scripts/simulate-workflow-walkthrough.js`. All four edition test suites (`npm test`) stay green.
+- **README** — Classify-And-Act row added to the "Supported adaptive patterns" table (was Planned; now documented with governance note).
+
 ## [5.3.0] — 2026-06-06
 
 ### Worktree provisioning ON by default for the full/fast paths (opt-out via `KAOLA_WORKTREE_NATIVE=0`)

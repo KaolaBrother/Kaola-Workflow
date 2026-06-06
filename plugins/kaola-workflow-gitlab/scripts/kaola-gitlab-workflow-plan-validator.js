@@ -96,6 +96,7 @@ function parseShape(cell) {
   let m;
   if (s === '' || s === 'sequence') return { kind: 'sequence' };
   if ((m = s.match(/^fanout\(([^)]+)\)$/))) return { kind: 'fanout', group: m[1].trim() };
+  if ((m = s.match(/^select\(([^)]+)\)$/))) return { kind: 'select', group: m[1].trim() }; // #263
   if ((m = s.match(/^loop\((\d+)\)$/))) return { kind: 'loop', cap: parseInt(m[1], 10) };
   return { kind: 'invalid', raw: s };
 }
@@ -134,6 +135,9 @@ function parseNodes(content) {
       writeSet: classifier.parseWriteSetCell(get('declared_write_set')),
       cardinality: get('cardinality'),
       shape: parseShape(get('shape')),
+      // #263: classifier node id this node is an arm of ('—'/'' => not an arm). Hash-covered
+      // (lives in ## Nodes). Absent column => '' => treated as non-arm (back-compat).
+      selectorSource: (() => { const v = get('selector_source'); return (v && v !== '—' && v !== '-') ? v : ''; })(),
     });
   }
   return nodes;
@@ -543,6 +547,7 @@ function validatePlan(content, opts) {
 
   // shapes: fan-out groups + loops
   const groups = new Map();
+  const selectGroups = new Map();   // #263: select(<group>) label -> { label, members: [] }
   let loopPresent = false;
   let writeRoleFanout = false;
   let sharedInfraTouch = false;
@@ -556,6 +561,11 @@ function validatePlan(content, opts) {
       const key = n.shape.group + '' + fanoutOriginKey(n, ids);
       if (!groups.has(key)) groups.set(key, { label: n.shape.group, origin: fanoutOriginKey(n, ids), members: [] });
       groups.get(key).members.push(n);
+    }
+    if (n.shape.kind === 'select') {
+      // #263: collect select group members for G-SEL validation below.
+      if (!selectGroups.has(n.shape.group)) selectGroups.set(n.shape.group, { label: n.shape.group, members: [] });
+      selectGroups.get(n.shape.group).members.push(n);
     }
     if (n.shape.kind === 'loop') {
       loopPresent = true;
@@ -583,6 +593,68 @@ function validatePlan(content, opts) {
       if (dj.verdict === 'yellow') errors.push(`fan-out group "${g}" touches shared infra (${dj.reasoning}) — must serialize, not fan out`);
     }
     // read-only fan-out: width bounded by FANOUT_CAP alone (no clamp to #disjoint groups)
+  }
+
+  // --- #263 G-SEL: selective-execution (Classify-And-Act) groups -----------------------------
+  // All four rules fail-closed (push to errors => refuse). Post-dominance over the superset
+  // (G-SEL-3) needs NO code here: G1/G2 below already run over ALL nodes including every arm,
+  // because all arms are present in the frozen DAG (documented, not re-implemented).
+  for (const [, grp] of selectGroups) {
+    const members = grp.members;
+    const g = grp.label;
+
+    // G-SEL-1a — exactly-one membership: a select group needs >= 2 arms.
+    if (members.length < 2) {
+      errors.push(`select group "${g}" has only ${members.length} arm(s) (needs >= 2)`);
+    }
+
+    // G-SEL-1b — every arm names a selector_source, and all arms in the group name the SAME one.
+    const srcs = new Set(members.map(m => m.selectorSource).filter(Boolean));
+    if (srcs.size === 0) {
+      errors.push(`select group "${g}" arms declare no selector_source`);
+    } else if (srcs.size > 1) {
+      errors.push(`select group "${g}" arms name conflicting selector_source(s): ${[...srcs].join(', ')}`);
+    } else {
+      const srcId = [...srcs][0];
+      const srcNode = nodes.find(n => n.id === srcId);
+      // G-SEL-1c — the selector_source must EXIST in the plan.
+      if (!srcNode) {
+        errors.push(`select group "${g}" selector_source "${srcId}" not found in plan`);
+      } else {
+        // G-SEL-1d — the selector_source must be READ-ONLY. Use the SAME predicate the fanout
+        // read-only carve-out uses: !WRITE_ROLES.has(role). NOT a hand-listed allowlist.
+        if (WRITE_ROLES.has(srcNode.role)) {
+          errors.push(`select group "${g}" selector_source "${srcId}" (role ${srcNode.role}) must be a read-only node`);
+        }
+        // G-SEL-1e — every arm must depend_on the selector_source (it runs strictly before them).
+        for (const m of members) {
+          if (!m.dependsOn.includes(srcId)) {
+            errors.push(`select group "${g}" arm "${m.id}" must depend_on selector_source "${srcId}"`);
+          }
+        }
+      }
+    }
+
+    // G-SEL-2 — gates are never selectable. GATE_VERDICT_ROLES already exists at module scope.
+    for (const m of members) {
+      if (GATE_VERDICT_ROLES.has(m.role)) {
+        errors.push(`select group "${g}" arm "${m.id}" has gate role ${m.role} — gates cannot be select arms (G-SEL-2)`);
+      }
+    }
+
+    // G-SEL-3 — NO-OP by design. G1/G2 (below) already run over ALL nodes including every arm
+    // (all arms are frozen in the DAG), which is strictly-more-conservative post-dominance over
+    // the superset. Do not duplicate.
+
+    // G-SEL-4 — disjoint-or-identical write sets across arms. Reuse classifier.disjointWriteSets.
+    // Only RED is fatal: select arms are mutually exclusive (only one ever runs), so a shared-infra
+    // (yellow) touch is not a concurrency hazard — unlike concurrent fanout arms. Do not copy the
+    // fanout yellow push. (red = exact-path / coarse-area overlap = a stale mis-attributable
+    // declaration = still fatal.)
+    const dj = classifier.disjointWriteSets(members.map(m => m.writeSet));
+    if (dj.verdict === 'red') {
+      errors.push(`select group "${g}" arms have overlapping write sets (${dj.reasoning})`);
+    }
   }
 
   // --- #232 (audit A3): inferred concurrent-sibling write disjointness ------------------------
@@ -778,7 +850,7 @@ function anchorBase(root, refName, tree) {
 }
 function printHelp() {
   process.stdout.write(
-    'usage: kaola-workflow-plan-validator.js <workflow-plan.md> [--json] [--freeze] [--resume-check] [--gate-verify] [--barrier-check [--node-id ID] [--base REF]] [--verdict-check [--node-id ID]]\n' +
+    'usage: kaola-workflow-plan-validator.js <workflow-plan.md> [--json] [--freeze] [--resume-check] [--gate-verify] [--barrier-check [--node-id ID] [--base REF]] [--verdict-check [--node-id ID]] [--selector-check --node-id ID]\n' +
     '  default        validate + print the governance verdict; exit 1 on typed refusal\n' +
     '  --freeze       validate, then write the computed plan_hash into the plan file\n' +
     '  --resume-check re-validate library + structure + hash only (not the gate rubric)\n' +
@@ -790,7 +862,9 @@ function printHelp() {
     '                 --base (default origin/main). Per-node (--node-id ID): the node\'s OWN allowlist, tree-diff vs its recorded\n' +
     '                 node-start snapshot (--base is rejected per-node — the baseline is the recorded snapshot)\n' +
     '  --verdict-check verify that every completed gate-role node\'s .cache evidence file carries verdict:pass/findings_blocking:0;\n' +
-    '                 exit 1 on any failure. Per-node (--node-id ID): check one node; non-gate roles self-skip (exit 0).\n'
+    '                 exit 1 on any failure. Per-node (--node-id ID): check one node; non-gate roles self-skip (exit 0).\n' +
+    '  --selector-check --node-id ID  check which select arm the selector_source node chose, and compute which arms to mark n/a.\n' +
+    '                 Non-selector nodes return ok:true/isSelector:false (never false-blocks). Missing/foreign selector => exit 1.\n'
   );
 }
 function main() {
@@ -903,6 +977,63 @@ function main() {
     const r = barrierCheck(content, actualPaths, { nodeId: nodeId || undefined, root });
     process.stdout.write((json ? JSON.stringify(r) : (r.result === 'pass' ? 'barrier ok' : 'typed refusal: ' + r.errors.join('; '))) + '\n');
     if (r.result !== 'pass') process.exitCode = 1;
+    return;
+  }
+  if (args.includes('--selector-check')) {
+    // #263: mechanical n/a computation for Classify-And-Act selective execution.
+    // Inputs: plan path, --node-id <selector_source-id>. Non-selector nodes return ok:true/isSelector:false
+    // (never false-blocks a normal commit). Missing/foreign selector => ok:false/exit 1 (fail-closed).
+    const flagVal = name => { const i = args.indexOf(name); return i >= 0 && i + 1 < args.length ? args[i + 1] : null; };
+    const nodeId = flagVal('--node-id');
+    if (!nodeId) {
+      const out = { ok: false, errors: ['--selector-check requires --node-id <id>'] };
+      process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: --selector-check requires --node-id') + '\n');
+      process.exitCode = 1; return;
+    }
+    const nodes = parseNodes(content);
+    if (!nodes.length) {
+      const out = { ok: false, errors: ['plan has no parseable ## Nodes table'] };
+      process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: ' + out.errors[0]) + '\n');
+      process.exitCode = 1; return;
+    }
+    const node = nodes.find(n => n.id === nodeId);
+    if (!node) {
+      const out = { ok: false, errors: [`--node-id "${nodeId}" not found in the frozen plan`] };
+      process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: ' + out.errors[0]) + '\n');
+      process.exitCode = 1; return;
+    }
+    // Determine the select group this node is the selector_source of.
+    const arms = nodes.filter(n => n.selectorSource === nodeId);
+    if (!arms.length) {
+      // Not a selector_source — non-selector node, never false-blocks.
+      const out = { ok: true, isSelector: false, armsToNa: [] };
+      process.stdout.write((json ? JSON.stringify(out) : 'selector-check ok: not a selector') + '\n');
+      return;
+    }
+    // Determine the group label (all arms must share one — if somehow multiple groups point here, use first).
+    const group = arms[0].shape.group;
+    const cacheDir = path.join(path.dirname(path.resolve(planPath)), '.cache');
+    let cacheText = null;
+    try { cacheText = fs.readFileSync(path.join(cacheDir, nodeId + '.md'), 'utf8'); } catch (_) { cacheText = null; }
+    const parsed = schema.parseNodeSelector(cacheText || '');
+    // FAIL-CLOSED: selector not found.
+    if (!parsed.found) {
+      const out = { ok: false, isSelector: true, errors: [`selector_source "${nodeId}" produced no selector: line`] };
+      process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: ' + out.errors[0]) + '\n');
+      process.exitCode = 1; return;
+    }
+    const selected = parsed.selector;
+    const armIds = arms.map(a => a.id);
+    // FAIL-CLOSED: selector names an id not among the arms (foreign).
+    if (!armIds.includes(selected)) {
+      const out = { ok: false, isSelector: true, errors: [`selector "${selected}" is not an arm of select group "${group}" (${armIds.join(', ')})`] };
+      process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: ' + out.errors[0]) + '\n');
+      process.exitCode = 1; return;
+    }
+    // Valid selected arm: return armsToNa (all arms except the selected one).
+    const armsToNa = armIds.filter(id => id !== selected);
+    const out = { ok: true, isSelector: true, selected, group, armsToNa };
+    process.stdout.write((json ? JSON.stringify(out) : `selector-check ok: selected="${selected}" group="${group}" armsToNa=[${armsToNa.join(',')}]`) + '\n');
     return;
   }
   if (args.includes('--verdict-check')) {

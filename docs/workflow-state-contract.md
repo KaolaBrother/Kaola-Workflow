@@ -22,9 +22,11 @@ here for the full contract.
 - Adaptive-path projects (`workflow_path: adaptive`, issue #227) use
   `workflow-plan.md` instead of the full Phase 1-5 set — the frozen DAG is the
   spine. It contains a `## Meta` block (frozen issue `labels:`), a machine-readable
-  `## Nodes` table (`| id | role | depends_on | declared_write_set | cardinality | shape |`;
-  `shape` ∈ `sequence` / `fanout(<group>)` / `loop(<cap>)`; a single unique
-  `finalize` sink; `cardinality` is a reserved/advisory column — parsed but not
+  `## Nodes` table (`| id | role | depends_on | declared_write_set | cardinality | shape | selector_source |`;
+  `shape` ∈ `sequence` / `fanout(<group>)` / `loop(<cap>)` / `select(<group>)` (issue #263 Classify-And-Act);
+  `selector_source` names the read-only classifier node whose `.cache` evidence determines which
+  `select` arm executes — absent or `—` for non-arm nodes (backward-compatible: missing column treated as non-arm);
+  a single unique `finalize` sink; `cardinality` is a reserved/advisory column — parsed but not
   validated or used by the grammar or gates, though its text still feeds `plan_hash`
   as part of `## Nodes`, so keep it present and stable), a `## Node Ledger` (`status` ∈ `pending`/`in_progress`/`complete`/`n/a`),
   and a script-computed `plan_hash` (an HTML comment `<!-- plan_hash: <sha256> -->`)
