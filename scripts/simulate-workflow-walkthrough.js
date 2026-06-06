@@ -6899,6 +6899,29 @@ function testAdaptivePatternLibrary() {
         'G-SEL-1e: arm missing depends_on selector_source must refuse with "must depend_on selector_source", got: ' + JSON.stringify(r));
     }
 
+    // G-SEL-1b (#268): arm with blank selector_source must refuse with per-arm message.
+    // Before the fix this plan passes validation (the blank arm is silently dropped by
+    // .filter(Boolean) inside the srcs Set, so srcs.size === 1 and the group looks valid).
+    {
+      const selPlanPath = path.join(tmp, 'select-blank-src-plan.md');
+      fs.writeFileSync(selPlanPath, [
+        '# Plan', '',
+        '## Meta', 'labels: enhancement', '',
+        '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape | selector_source |',
+        '|---|---|---|---|---|---|---|',
+        '| classify | code-explorer | — | — | 1 | sequence | — |',
+        '| arm-csv | tdd-guide | classify | exporter/csv.js | 1 | select(fix) | classify |',
+        '| arm-html | tdd-guide | classify | renderer/html.js | 1 | select(fix) | — |',
+        '| review | code-reviewer | arm-csv,arm-html | — | 1 | sequence | — |',
+        '| done | finalize | review | — | 1 | sequence | — |',
+        '',
+      ].join('\n'));
+      const r = JSON.parse(runNode(planValidatorScript, [selPlanPath, '--json'], tmp).stdout);
+      assert(r.result === 'refuse' && Array.isArray(r.errors) && r.errors.some(e => e.includes('G-SEL-1b: arm "arm-html" in select group "fix" has no selector_source declared')),
+        'G-SEL-1b (#268): blank selector_source arm must refuse with per-arm G-SEL-1b message, got: ' + JSON.stringify(r));
+    }
+
     // G-SEL-4: overlapping arm write sets (same file in both arms -> red).
     {
       const selPlanPath = path.join(tmp, 'select-overlap-plan.md');

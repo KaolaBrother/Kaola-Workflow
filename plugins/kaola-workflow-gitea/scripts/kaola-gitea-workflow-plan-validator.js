@@ -545,6 +545,15 @@ function validatePlan(content, opts) {
     }
   }
 
+  // #268 G-SEL-1b pre-check — every select arm must name a non-empty selector_source.
+  // Run BEFORE selectGroups aggregation so a blank arm cannot slip past the .filter(Boolean)
+  // in the per-group srcs Set and masquerade as the sole source (phantom arm bypass).
+  for (const n of nodes) {
+    if (n.shape.kind === 'select' && !n.selectorSource) {
+      errors.push(`G-SEL-1b: arm "${n.id}" in select group "${n.shape.group}" has no selector_source declared`);
+    }
+  }
+
   // shapes: fan-out groups + loops
   const groups = new Map();
   const selectGroups = new Map();   // #263: select(<group>) label -> { label, members: [] }
