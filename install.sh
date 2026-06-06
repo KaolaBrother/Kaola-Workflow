@@ -153,6 +153,7 @@ case "$FORGE" in
       kaola-workflow-plan-validator.js
       kaola-workflow-next-action.js
       kaola-workflow-commit-node.js
+      kaola-workflow-adaptive-handoff.js
       kaola-workflow-adaptive-schema.js
       kaola-workflow-resolve-agent-model.js
     )
@@ -177,6 +178,7 @@ case "$FORGE" in
       kaola-gitlab-workflow-plan-validator.js
       kaola-gitlab-workflow-next-action.js
       kaola-gitlab-workflow-commit-node.js
+      kaola-gitlab-workflow-adaptive-handoff.js
       kaola-gitlab-workflow-repair-state.js
       kaola-gitlab-workflow-roadmap.js
       kaola-gitlab-workflow-sink-merge.js
@@ -205,6 +207,7 @@ case "$FORGE" in
       kaola-gitea-workflow-plan-validator.js
       kaola-gitea-workflow-next-action.js
       kaola-gitea-workflow-commit-node.js
+      kaola-gitea-workflow-adaptive-handoff.js
       kaola-gitea-workflow-repair-state.js
       kaola-gitea-workflow-roadmap.js
       kaola-gitea-workflow-sink-merge.js

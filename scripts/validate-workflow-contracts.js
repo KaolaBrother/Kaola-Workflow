@@ -508,6 +508,12 @@ assert(exists('scripts/kaola-workflow-plan-validator.js'), 'adaptive plan valida
 assert(exists('scripts/kaola-workflow-adaptive-schema.js'), 'adaptive schema module is missing');
 assertIncludes('install.sh', 'kaola-workflow-plan-validator.js');
 assertIncludes('install.sh', '--enable-adaptive');
+// #255: the adaptive-handoff script must be in install.sh's per-edition SUPPORT_SCRIPT_NAMES
+// allowlist for every edition, or a manual (non-plugin) install omits it and the planner's
+// `--project` handoff invocation fails at `$HOME/.claude/.../scripts/`. Guards the 5.4.0 omission.
+assertIncludes('install.sh', 'kaola-workflow-adaptive-handoff.js');
+assertIncludes('install.sh', 'kaola-gitlab-workflow-adaptive-handoff.js');
+assertIncludes('install.sh', 'kaola-gitea-workflow-adaptive-handoff.js');
 // router 3-way selection: switch first, adaptive keyword flag-only, OFF preserves 2-way
 assertConcept('commands/workflow-next.md', 'adaptive path selection', [
   'KAOLA_ENABLE_ADAPTIVE', 'adaptive', 'fast|full|adaptive', 'flag-only', 'typed refusal'

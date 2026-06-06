@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [5.4.1] — 2026-06-06
+
+### Fixed
+
+- **install.sh now ships `kaola-workflow-adaptive-handoff.js` (#255 follow-up).** The per-edition `SUPPORT_SCRIPT_NAMES` allowlists omitted the new handoff script, so a manual (non-plugin) install left it out of `~/.claude/kaola-workflow*/scripts/` and the `workflow-planner`'s `--project` handoff invocation would fail. Added the script (forge-named for gitlab/gitea) to all three allowlists, plus a `validate-workflow-contracts.js` guard (`assertIncludes('install.sh', …)`) so a future new aggregator can't ship un-installed. No behavior change for plugin-marketplace installs (those bundle every script).
+
 ## [5.4.0] — 2026-06-06
 
 ### Fixed
