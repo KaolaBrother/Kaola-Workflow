@@ -288,6 +288,7 @@ function writeState(root, data) {
     'sink: ' + (data.sink || 'merge')
   ];
   if (data.worktree_path) lines.push('worktree_path: ' + data.worktree_path);
+  if (data.worktree_error) lines.push('worktree_error: ' + data.worktree_error);
   if (data.pr_url) lines.push('pr_url: ' + data.pr_url);
   if (data.pr_number) lines.push('pr_number: ' + data.pr_number);
   writeFile(stateFile(root, data.project), lines.join('\n') + '\n');
@@ -425,8 +426,9 @@ function claimProject(root, args) {
 
   const branch = buildBranchName(issueIid, project, args.branch);
   let worktreePath = '';
+  let worktreeError = '';
   if (!OFFLINE && WORKTREE_NATIVE && hasGitHistory(root)) {
-    try { worktreePath = provisionWorktree(root, project, branch).path; } catch (_) { worktreePath = ''; }
+    try { worktreePath = provisionWorktree(root, project, branch).path; } catch (_) { worktreeError = (_ && _.message) || String(_); }
   }
   const projectInfo = discoverProjectSafe();
   writeState(root, {
@@ -435,6 +437,7 @@ function claimProject(root, args) {
     branch,
     sink: args.sink || process.env.KAOLA_SINK || 'merge',
     worktree_path: worktreePath,
+    worktree_error: worktreeError,
     workflow_path: args.workflowPath || process.env.KAOLA_PATH || 'full',
     runtime: args.runtime || 'claude',
     status: 'active',
@@ -442,7 +445,7 @@ function claimProject(root, args) {
     project_html_url: projectInfo.html_url
   });
   postAdvisoryClaim(issueIid, project, projectInfo);
-  return { status: 'acquired', verdict: 'green', claim: 'acquired', issue: issueIid, project, branch, worktree_path: worktreePath };
+  return Object.assign({ status: 'acquired', verdict: 'green', claim: 'acquired', issue: issueIid, project, branch, worktree_path: worktreePath }, worktreeError ? { worktree_error: worktreeError } : {});
 }
 
 function claimExplicitTarget(root, args) {

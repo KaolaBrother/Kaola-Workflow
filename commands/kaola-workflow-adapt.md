@@ -182,7 +182,7 @@ Step 1 git-freshness checks (`workflow-next.md`) against the MAIN repo. If local
 `git pull --ff-only`; if it cannot resolve cleanly (dirty worktree, or a merge / rebase / stash /
 reset is required), STOP and ask — do **not** summon the planner, so **no folder / worktree /
 `workflow:in-progress` label is created until git is clean**. The adaptive path gates freshness here,
-*before* the claim, because the front end provisions the worktree — the router's post-claim
+*before* the claim, because the front end claims (and provisions a worktree only when KAOLA_WORKTREE_NATIVE=1 — not offline, repo has git history; otherwise a repo-root run) — the router's post-claim
 freshness-block release no longer guards this path, and gating up front leaves nothing to orphan.
 
 Once main is clean, **summon the `workflow-planner`** — it claims, authors `workflow-plan.md`, runs
@@ -197,7 +197,7 @@ Agent(
   subagent_type="workflow-planner",
   model="{WORKFLOW_PLANNER_MODEL}",
   description="Adaptive front end {issue}",
-  prompt="Settle the starting contract and design the adaptive workflow for issue {issue}, per your workflow-planner contract. (1) Run `kaola-workflow-claim.js startup --runtime claude --workflow-path adaptive --target-issue {issue}` — `--workflow-path adaptive` is REQUIRED (a subagent shell does not inherit KAOLA_PATH, so without it the project would be mis-stamped workflow_path:full). Add `--sink pr` ONLY if the user requested a PR sink (else omit; merge is the default). This creates the project folder + worktree + workflow-state.md. (2) If that project already has a workflow-plan.md, do NOT overwrite it — STOP and return so the orchestrator routes to the executor. (3) Otherwise author via Write the `## Meta` labels line, the `## Nodes` DAG, and an empty `## Node Ledger` (one row per node, `status: pending`) into that project's workflow-plan.md. (4) Run `kaola-workflow-plan-validator.js <plan> --json` as a self-check and fix until in-grammar — do NOT run --freeze or authoring-allowed; do NOT judge risk, ask the user, or dispatch. RETURN { project, worktree_path, claim_verdict, claim_reasoning, plan_path, validator_verdict }. On a claim refusal, STOP after startup (no state file is written) and return the verdict + reasoning."
+  prompt="Settle the starting contract and design the adaptive workflow for issue {issue}, per your workflow-planner contract. (1) Run `kaola-workflow-claim.js startup --runtime claude --workflow-path adaptive --target-issue {issue}` — `--workflow-path adaptive` is REQUIRED (a subagent shell does not inherit KAOLA_PATH, so without it the project would be mis-stamped workflow_path:full). Add `--sink pr` ONLY if the user requested a PR sink (else omit; merge is the default). This creates the project folder + workflow-state.md (and a per-issue worktree only when KAOLA_WORKTREE_NATIVE=1). (2) If that project already has a workflow-plan.md, do NOT overwrite it — STOP and return so the orchestrator routes to the executor. (3) Otherwise author via Write the `## Meta` labels line, the `## Nodes` DAG, and an empty `## Node Ledger` (one row per node, `status: pending`) into that project's workflow-plan.md. (4) Run `kaola-workflow-plan-validator.js <plan> --json` as a self-check and fix until in-grammar — do NOT run --freeze or authoring-allowed; do NOT judge risk, ask the user, or dispatch. RETURN { project, worktree_path, claim_verdict, claim_reasoning, plan_path, validator_verdict }. On a claim refusal, STOP after startup (no state file is written) and return the verdict + reasoning."
 )
 ```
 
@@ -216,7 +216,7 @@ files are authoritative.
   `kaola-workflow/{project}/workflow-plan.md` (internalize the `## Nodes` DAG you will govern,
   dispatch, and freeze).
 
-The worktree was cut from a now-clean main (git-freshness ran *before* the claim, above), so proceed
+The claim (and the worktree, when KAOLA_WORKTREE_NATIVE=1) was cut from a now-clean main (git-freshness ran *before* the claim, above), so proceed
 straight to governance.
 
 ## Govern + freeze

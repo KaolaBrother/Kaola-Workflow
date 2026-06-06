@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Honest opt-in for adaptive worktree provisioning — un-silence the catch + correct the prose (issue #246)
+
+The adaptive starting contract recorded a branch *name* and `worktree_path:''` while creating no real worktree or branch ref, with no signal as to why. Root cause was a stack: a silent `catch` that masked a genuine `provisionWorktree` throw as "no worktree", and unconditional prose claiming the front end always provisions a worktree when provisioning is in fact gated behind opt-in `KAOLA_WORKTREE_NATIVE=1`. Resolved as **honest opt-in** (owner decision): the default stays opt-in (no behaviour change); the genuine defects are fixed and the conditional behaviour is made honest and documented.
+
+- **Un-silenced the provision failure (all 4 `claim.js` copies — repo-root canonical, byte-identical `kaola-workflow` plugin, and the gitlab/gitea forge ports).** The worktree-provision `catch` now captures the error into a new `worktree_error` field surfaced in the claim's returned JSON and in `workflow-state.md`, **only** when provisioning was attempted and threw. A repo-root run (gate off / offline / no git history) emits no `worktree_error` — so "intentionally no worktree" is now distinguishable from "tried and failed". The `KAOLA_WORKTREE_NATIVE === '1'` gate, the `OFFLINE` and `hasGitHistory(root)` guards, and `cmdStartup` are unchanged.
+- **Corrected the false unconditional prose** in the adapt skill, the three edition adapt commands, and `agents/workflow-planner.md`: "the front end provisions the worktree" / "creates the project folder + worktree" are now conditional on `KAOLA_WORKTREE_NATIVE=1` (and not offline, with git history; otherwise a repo-root run). The surrounding git-freshness/orphan argument is preserved.
+- **Documented** `KAOLA_WORKTREE_NATIVE`, the three-condition provisioning gate, the repo-root fallback (`worktree_path: ''`), and the new `worktree_error` discriminator in `docs/api.md` (`### Worktree Provisioning`); `README.md` and `.env.example` were already conditional-accurate.
+- **Codex adaptive roles (the issue's 4th cited defect): already resolved in source** — `workflow-planner.toml` + `contractor.toml` ship in all three plugin `agents/` dirs and `install-codex-agent-profiles.js` copies every `.toml` unfiltered; the missing-roles report reflected a stale local `~/.codex` install, not a repo gap. No change.
+- Verified by a RED→GREEN provision-failure repro (force an `EEXIST` throw under `KAOLA_WORKTREE_NATIVE=1`: pre-fix the failure is masked, post-fix `worktree_error` surfaces while the claim still returns `acquired`), independently re-confirmed by the review gate against patched source. All four edition suites (`npm test`) + `simulate-workflow-walkthrough.js` stayed green. The **permanent committed regression test** is a queued follow-up (tracked as #256) — `scripts/simulate-workflow-walkthrough.js` is outside this change's frozen write set.
+
 ## [5.2.1] — 2026-06-06
 
 ### Fix adaptive authoring-entry guard — define the `kaola_script()` resolver (issue #245)

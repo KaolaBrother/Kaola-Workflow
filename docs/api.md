@@ -101,6 +101,18 @@ The Phase 6 sink is responsible for delivering completed work to the repository 
 
 - **`KAOLA_GH_REMOTE_TIMEOUT_MS`** (default 30000) — Timeout in milliseconds for all forge API calls made by `ghExec`, `glabExec`, and `teaExec`. Controls how long to wait for GitHub, GitLab, or Gitea API responses during issue state checks, closure audits, and label operations. When a call times out, affected operations return `unavailable` or `skipped_timeout` sentinels instead of failing hard. Set lower in tests to simulate API hangs (e.g., `KAOLA_GH_REMOTE_TIMEOUT_MS=300` to timeout after 300ms). Applies to all three forge editions (GitHub, GitLab, Gitea). Non-numeric, zero, or negative values fall back to the 30000ms default (issue #184). Values above 600000ms (10 minutes) are clamped to 600000ms; this cap prevents excessively large values from silently disabling the hang protection (issue #185).
 
+### Worktree Provisioning
+
+- **`KAOLA_WORKTREE_NATIVE`** (default `0`/OFF, experimental) — When set to `1`, the claim/startup scripts (all three editions: GitHub, GitLab, Gitea) provision a per-issue sibling Git worktree at `<repo-parent>/<repo-name>.kw/<project>/` and record the absolute path as `worktree_path` in the active folder's Sink block. This is opt-in; the default is OFF (repo-root run, no worktree).
+
+  **When provisioning is attempted:** Provisioning occurs only when ALL of the following hold: `KAOLA_WORKTREE_NATIVE=1`, `KAOLA_WORKFLOW_OFFLINE` is not `1`, and the repo has git history (`git rev-parse HEAD` succeeds). When any condition is unmet, the claim proceeds as a repo-root run and `worktree_path` is `''`.
+
+  **On provisioning failure:** If provisioning is attempted (gate on) but throws, the claim still succeeds (status: `acquired`) and the returned JSON and `workflow-state.md` carry a `worktree_error` field describing the failure. `worktree_path` remains `''`. This is distinct from the gate being off: gate off means `worktree_error` is absent entirely; `worktree_error` present means a real provisioning failure occurred.
+
+  **Discriminator:**
+  - `worktree_path: ''` and no `worktree_error` field → gate was off (intentional repo-root run)
+  - `worktree_path: ''` and `worktree_error` present → gate was on, provisioning attempted and failed
+
 ### Test Hooks
 
 The following environment variables are **test-only hooks** used by the test suite to simulate failure scenarios. Do not use in production.
@@ -439,7 +451,8 @@ self-check.
 The agent runs these steps in order, then returns:
 
 1. **Claim** — `node kaola-workflow-claim.js startup --workflow-path adaptive --target-issue <N>`,
-   which creates the per-issue worktree and `workflow-state.md` and stamps `workflow_path: adaptive`.
+   which writes `workflow-state.md`, stamps `workflow_path: adaptive`, and creates a per-issue worktree
+   only when `KAOLA_WORKTREE_NATIVE=1` (see Worktree Provisioning above).
    (`claim.js` needs no code change: `--workflow-path` is parsed by the generic kebab→camel handler,
    so a subagent shell that does not inherit the orchestrator's `KAOLA_PATH` still records the path.)
 2. **Author** — write the `## Meta` + `## Nodes` DAG + an **empty** `## Node Ledger` into
@@ -454,7 +467,7 @@ The agent runs these steps in order, then returns:
 ```json
 {
   "project": "<project-folder-name>",
-  "worktree_path": "<absolute path to the per-issue worktree>",
+  "worktree_path": "<absolute path to the per-issue worktree when KAOLA_WORKTREE_NATIVE=1, else '' on a repo-root run>",
   "claim_verdict": "owned | <typed refusal verdict>",
   "claim_reasoning": "<one-line reasoning from the claim>",
   "plan_path": "<path to the authored workflow-plan.md, or null on a claim refusal>",

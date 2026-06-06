@@ -119,8 +119,7 @@ If the JSON `status` is `authoring_refused`, surface the typed refusal and STOP.
 delegating: nothing is claimed yet — run the Startup git-freshness checks against the MAIN repo
 (`git pull --ff-only` if behind). If it cannot resolve cleanly (dirty, or a merge / rebase / stash /
 reset is needed), STOP and ask — do NOT delegate, so **no folder / worktree / `workflow:in-progress`
-label is created until git is clean** (the front end provisions the worktree, so the router's
-post-claim freshness-block release no longer guards this path).
+label is created until git is clean** (the front end claims here — and provisions a worktree only when KAOLA_WORKTREE_NATIVE=1, not offline, and the repo has git history; otherwise it is a repo-root run — so the router's post-claim freshness-block release no longer guards this path).
 
 Once main is clean, **delegate to the `workflow-planner`**: it runs `kaola-workflow-claim.js startup --runtime <runtime> --workflow-path adaptive
 --target-issue <issue>` (`--workflow-path adaptive` is REQUIRED — a subagent shell does not inherit
@@ -136,7 +135,7 @@ different issue.
 **Read the durable state, not the planner's prose.** On success take `{project}` from the return,
 re-read `kaola-workflow/{project}/workflow-state.md` (the `## Sink` block, `workflow_path: adaptive`)
 and `kaola-workflow/{project}/workflow-plan.md` (internalize the `## Nodes` DAG you govern, dispatch,
-and freeze). The worktree was cut from a now-clean main (git-freshness ran before the claim, above).
+and freeze). The claim (and the worktree, when KAOLA_WORKTREE_NATIVE=1) was cut from a now-clean main (git-freshness ran before the claim, above).
 
 **Govern + freeze.** **Delegate classification to the `contractor` agent role** — it re-runs `kaola-workflow-plan-validator.js kaola-workflow/{project}/workflow-plan.md --json`
 on the durable plan and returns the FULL verdict JSON verbatim (governance input; the planner's
