@@ -1,4 +1,24 @@
 #!/usr/bin/env node
+
+// ================================================
+// Worktree Support for Issue #264 (Adaptive Path)
+// ================================================
+
+const fs = require('fs');
+const path = require('path');
+
+// Get ACTIVE_WORKTREE_PATH from environment (set by kaola-workflow-plan-run)
+function getActiveWorktree() {
+  if (process.env.ACTIVE_WORKTREE_PATH) {
+    return process.env.ACTIVE_WORKTREE_PATH;
+  }
+  return process.cwd();
+}
+
+const ACTIVE_WORKTREE = getActiveWorktree();
+
+console.log(`[Worktree #264] Using ACTIVE_WORKTREE: ${ACTIVE_WORKTREE}`);
+
 'use strict';
 
 // ---------------------------------------------------------------------------
@@ -114,9 +134,15 @@ function main() {
 
   const planPath = args[0];
 
+  
   let content;
   try {
-    content = fs.readFileSync(planPath, 'utf8');
+    // Worktree-aware read (Issue #264)
+    const fullPlanPath = path.isAbsolute(planPath) 
+      ? planPath 
+      : path.join(ACTIVE_WORKTREE, planPath);
+    
+    content = fs.readFileSync(fullPlanPath, 'utf8');
   } catch (_) {
     const out = { result: 'refuse', errors: ['cannot read plan: ' + planPath] };
     process.stdout.write(JSON.stringify(out) + '\n');

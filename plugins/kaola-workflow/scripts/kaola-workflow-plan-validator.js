@@ -1,4 +1,24 @@
 #!/usr/bin/env node
+
+// ================================================
+// Worktree Support for Issue #264 (Adaptive Path)
+// ================================================
+
+const fs = require('fs');
+const path = require('path');
+
+// Get ACTIVE_WORKTREE_PATH from environment (set by kaola-workflow-plan-run)
+function getActiveWorktree() {
+  if (process.env.ACTIVE_WORKTREE_PATH) {
+    return process.env.ACTIVE_WORKTREE_PATH;
+  }
+  return process.cwd();
+}
+
+const ACTIVE_WORKTREE = getActiveWorktree();
+
+console.log(`[Worktree #264] Using ACTIVE_WORKTREE: ${ACTIVE_WORKTREE}`);
+
 'use strict';
 
 // ---------------------------------------------------------------------------
@@ -68,23 +88,38 @@ const SENSITIVE_PATTERNS = [
 const SENSITIVE_LABELS = new Set(['security', 'auth', 'payments', 'secrets', 'user-data']);
 
 // --- discovery of the installed role library -------------------------------
+// Updated findRepoRoot — worktree-aware (Issue #264)
 function findRepoRoot(startDir) {
-  let dir = startDir;
+  let dir = startDir || ACTIVE_WORKTREE;
+  
+  // If we are already inside worktree, respect it
+  if (fs.existsSync(path.join(dir, '.git'))) {
+    return dir;
+  }
+
   for (let i = 0; i < 12 && dir; i++) {
-    if (fs.existsSync(path.join(dir, 'agents')) || fs.existsSync(path.join(dir, '.git'))) return dir;
+    if (fs.existsSync(path.join(dir, 'agents')) || fs.existsSync(path.join(dir, '.git'))) {
+      return dir;
+    }
     const parent = path.dirname(dir);
     if (parent === dir) break;
     dir = parent;
   }
-  return startDir;
+  return dir || ACTIVE_WORKTREE;
 }
+
+// Updated installedRoles — worktree-aware (Issue #264)
 function installedRoles(root) {
+  const effectiveRoot = root || ACTIVE_WORKTREE;
   const roles = new Set(CANONICAL_ROLES);
   try {
-    for (const f of fs.readdirSync(path.join(root, 'agents'))) {
+    const agentsDir = path.join(effectiveRoot, 'agents');
+    for (const f of fs.readdirSync(agentsDir)) {
       if (f.endsWith('.md')) roles.add(f.slice(0, -3));
     }
-  } catch (_) { /* no agents dir (e.g. test fixture) => baseline only */ }
+  } catch (_) { 
+    /* no agents dir (e.g. test fixture) => baseline only */ 
+  }
   return roles;
 }
 
@@ -727,10 +762,16 @@ function main() {
   const json = args.includes('--json');
   const root = findRepoRoot(path.dirname(path.resolve(planPath)));
   let content;
-  try { content = fs.readFileSync(planPath, 'utf8'); }
-  catch (_) {
-    const out = { result: 'refuse', errors: [`cannot read plan: ${planPath}`] };
-    process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: ' + out.errors[0]) + '\n');
+  try {
+    // Worktree-aware plan reading (Issue #264)
+    const fullPlanPath = path.isAbsolute(planPath) 
+      ? planPath 
+      : path.join(ACTIVE_WORKTREE, planPath);
+    
+    content = fs.readFileSync(fullPlanPath, 'utf8');
+  } catch (_) {
+    const out = { result: 'refuse', errors: ['cannot read plan: ' + planPath] };
+    process.stdout.write(JSON.stringify(out) + '\n');
     process.exitCode = 1;
     return;
   }

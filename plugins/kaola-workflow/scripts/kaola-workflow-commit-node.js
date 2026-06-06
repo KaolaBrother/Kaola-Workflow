@@ -1,4 +1,25 @@
 #!/usr/bin/env node
+
+// ================================================
+// Worktree Support for Issue #264 (Adaptive Path)
+// ================================================
+
+const fs = require('fs');
+const path = require('path');
+
+// Get ACTIVE_WORKTREE_PATH from environment (set by kaola-workflow-plan-run)
+// or fallback to current directory
+function getActiveWorktree() {
+  if (process.env.ACTIVE_WORKTREE_PATH) {
+    return process.env.ACTIVE_WORKTREE_PATH;
+  }
+  return process.cwd();
+}
+
+const ACTIVE_WORKTREE = getActiveWorktree();
+
+console.log(`[Worktree #264] Using ACTIVE_WORKTREE: ${ACTIVE_WORKTREE}`);
+
 'use strict';
 
 // ---------------------------------------------------------------------------
@@ -52,14 +73,20 @@ function safeJsonParse(str) {
 // @param {string[]} flags   extra CLI flags (e.g. ['--barrier-check', '--json'])
 // @returns {{ exitCode:number, [key:string]: any }}
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// shellValidator — now worktree-aware (Issue #264)
+// ---------------------------------------------------------------------------
 function shellValidator(vPath, planPath, flags) {
   let stdout;
   try {
-    stdout = execFileSync('node', [vPath, planPath, ...flags], { encoding: 'utf8' });
+    stdout = execFileSync('node', [vPath, planPath, ...flags], {
+      encoding: 'utf8',
+      cwd: ACTIVE_WORKTREE          // ← Yeh important line hai
+    });
     return { exitCode: 0, ...safeJsonParse(stdout) };
   } catch (err) {
     // The validator writes valid JSON to stdout even on exit 1; read err.stdout.
-    const status = (err.status == null) ? 1 : err.status; // fail-closed on signal kill
+    const status = (err.status == null) ? 1 : err.status;
     return { exitCode: status, ...safeJsonParse(err.stdout) };
   }
 }

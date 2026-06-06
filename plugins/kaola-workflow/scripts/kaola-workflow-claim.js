@@ -457,9 +457,16 @@ function claimProject(root, args) {
 
   const branch = buildBranchName(issueNumber, project, args.branch);
   let worktreePath = '';
-  if (!OFFLINE && WORKTREE_NATIVE && hasGitHistory(root)) {
-    try { worktreePath = provisionWorktree(root, project, branch).path; } catch (e) { worktreePath = ''; }
+  // issue #264: Adaptive path bhi ab worktree use karega
+if (!OFFLINE && WORKTREE_NATIVE && hasGitHistory(root)) {
+  // Adaptive ko bhi provision karne do (suppression hataya)
+  try { 
+    worktreePath = provisionWorktree(root, project, branch).path; 
+  } catch (e) { 
+    worktreePath = ''; 
+    console.warn('[#264] Worktree provisioning failed for', project);
   }
+}
   writeState(root, {
     project,
     issue_number: issueNumber,
