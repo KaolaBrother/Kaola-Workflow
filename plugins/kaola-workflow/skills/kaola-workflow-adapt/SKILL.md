@@ -109,7 +109,8 @@ not summon the planner (the planner's `startup` re-checks the switch via `claimP
 can never be authored under an OFF switch):
 
 ```bash
-node "$KAOLA_SCRIPTS/kaola-workflow-claim.js" authoring-allowed
+kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
+node "$(kaola_script kaola-workflow-claim.js)" authoring-allowed
 ```
 
 If the JSON `status` is `authoring_refused`, surface the typed refusal and STOP.
@@ -121,8 +122,7 @@ reset is needed), STOP and ask — do NOT delegate, so **no folder / worktree / 
 label is created until git is clean** (the front end provisions the worktree, so the router's
 post-claim freshness-block release no longer guards this path).
 
-Once main is clean, **delegate to the `workflow-planner`**: it runs `node
-"$KAOLA_SCRIPTS/kaola-workflow-claim.js" startup --runtime <runtime> --workflow-path adaptive
+Once main is clean, **delegate to the `workflow-planner`**: it runs `kaola-workflow-claim.js startup --runtime <runtime> --workflow-path adaptive
 --target-issue <issue>` (`--workflow-path adaptive` is REQUIRED — a subagent shell does not inherit
 KAOLA_PATH; add `--sink pr` only for a requested PR sink), authors the `## Meta` + `## Nodes` DAG +
 empty `## Node Ledger` into the project's `workflow-plan.md` via Write, runs the validator `--json`
@@ -138,8 +138,7 @@ re-read `kaola-workflow/{project}/workflow-state.md` (the `## Sink` block, `work
 and `kaola-workflow/{project}/workflow-plan.md` (internalize the `## Nodes` DAG you govern, dispatch,
 and freeze). The worktree was cut from a now-clean main (git-freshness ran before the claim, above).
 
-**Govern + freeze.** **Delegate classification to the `contractor` agent role** — it re-runs `node
-"$KAOLA_SCRIPTS/kaola-workflow-plan-validator.js" kaola-workflow/{project}/workflow-plan.md --json`
+**Govern + freeze.** **Delegate classification to the `contractor` agent role** — it re-runs `kaola-workflow-plan-validator.js kaola-workflow/{project}/workflow-plan.md --json`
 on the durable plan and returns the FULL verdict JSON verbatim (governance input; the planner's
 self-check is orientation only — freeze-integrity rests on this re-run); this session **governs**
 (the contractor never judges risk):
@@ -149,8 +148,7 @@ self-check is orientation only — freeze-integrity rests on this re-run); this 
 - **in-grammar, risky or uncertain → ask the user first** (show the DAG + validator
   report + risk findings). Freeze only on an explicit yes.
 
-Once authorized, **delegate freeze + checkpoint to the contractor**: it runs `node
-"$KAOLA_SCRIPTS/kaola-workflow-plan-validator.js" kaola-workflow/{project}/workflow-plan.md --freeze`
+Once authorized, **delegate freeze + checkpoint to the contractor**: it runs `kaola-workflow-plan-validator.js kaola-workflow/{project}/workflow-plan.md --freeze`
 (computes + writes `plan_hash`; the plan is then author-immutable), records the planning evidence in
 `workflow-state.md` (preserving any `## Sink` block), and — if a GitHub issue N is linked — stages the
 per-issue roadmap (`kaola-workflow-roadmap.js init-issue --issue N --title "TITLE" --status open

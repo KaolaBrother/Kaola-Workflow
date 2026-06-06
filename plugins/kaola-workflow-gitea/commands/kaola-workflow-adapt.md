@@ -167,7 +167,8 @@ claim. If it refuses, STOP; do not summon the planner. (Defense in depth: the pl
 re-checks the switch via `claimProject`, so a plan can never be authored under an OFF switch.)
 
 ```bash
-node scripts/kaola-gitea-workflow-claim.js authoring-allowed
+kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./plugins/kaola-workflow-gitea/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitea/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitea/scripts/$_n" "./plugins/kaola-workflow-gitea/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
+node "$(kaola_script kaola-gitea-workflow-claim.js)" authoring-allowed
 ```
 
 If the JSON `status` is `authoring_refused`, surface the typed refusal and STOP — fix the switch or

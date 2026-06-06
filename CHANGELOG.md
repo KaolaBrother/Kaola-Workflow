@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [5.2.1] — 2026-06-06
+
+### Fix adaptive authoring-entry guard — define the `kaola_script()` resolver (issue #245)
+
+- The `kaola-workflow-adapt` skill referenced `$KAOLA_SCRIPTS` four times but never defined it, and the three edition adapt command files invoked the claim script via a bare relative `scripts/…` path. Both threw `MODULE_NOT_FOUND` on the first `authoring-allowed` guard in consumer projects that do not vendor the scripts.
+- Insert the canonical `kaola_script()` resolver — lifted verbatim per-edition from each edition's own `kaola-workflow-phase1.md` (github/gitlab/gitea use edition-correct script tokens + install dirs) — at the four executable guard sites (`SKILL.md`, `commands/kaola-workflow-adapt.md`, and the gitlab/gitea adapt commands).
+- The three subagent-prompt prose refs in `SKILL.md` (planner/contractor commands) were reduced to bare script names, matching the command-file mirror convention; the delegated subagents re-derive their own resolver.
+- Verified by the issue's repro: from a non-kaola cwd with scripts only at the plugin install dir, the resolver now resolves a real path and `authoring-allowed` returns `{"status":"authoring_allowed",...}` (was MODULE_NOT_FOUND). All four edition test suites (`npm test`) stayed green.
+- Release surface: Claude editions `5.2.0 → 5.2.1`; all three Codex plugin manifests `3.2.0 → 3.2.1` in lockstep (the base `kaola-workflow` adapt skill changed, and `validate-workflow-contracts.js` enforces cross-edition Codex-version parity).
+
 ## [5.2.0] — 2026-06-06
 
 ### Compress orchestrator prompts — move delegated procedure into the subagent definitions (issue #244)
