@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+## [5.3.0] — 2026-06-06
+
+### Worktree provisioning ON by default for the full/fast paths (opt-out via `KAOLA_WORKTREE_NATIVE=0`)
+
+The git-worktree-per-issue gate flips from opt-in (`KAOLA_WORKTREE_NATIVE === '1'`) to opt-out (`!== '0'`) in all four `claim.js` copies, so full and fast workflow runs isolate each issue in a sibling `<repo>.kw/<project>/` worktree **by default** — for any forge and any runtime (Claude/Codex), since the default no longer depends on a harness-set env var that Codex never wired. Provisioning still also requires not-offline + git history; otherwise a repo-root run (`worktree_path: ''`).
+
+- **Phase 4 worktree discovery** now resolves `ACTIVE_WORKTREE_PATH` from the `worktree_path` the claim recorded in `workflow-state.md` (the same source Phase 6 uses) instead of re-deriving it from the env, so it honors whatever the claim actually provisioned and falls back to a repo-root run when none was.
+- **The adaptive path is deliberately exempt (still repo-root).** The provisioning gate adds `requestedPath !== ADAPTIVE_PATH`: the adaptive orchestrator (`/kaola-workflow-plan-run`) does not yet operate inside the worktree, so provisioning one would strand the implementation in the repo-root tree and risk finalizing an empty branch. Wiring the adaptive executor into the worktree (then enabling worktree-on for adaptive) is tracked in #264; until then adaptive runs at repo-root exactly as before.
+- Prose corrected across all editions (README, `.env.example`, `docs/api.md`, `agents/workflow-planner.md`, the adapt/init commands + skills) from "opt-in / default OFF" to "on by default / opt-out via `=0`". New `testWorktreeAdaptiveSuppressed` locks the adaptive exemption; `npm test` stays green across all four editions.
+
 ### Commit the deferred worktree_error provision-failure regression test (issue #256)
 
 Follow-up to #246, which un-silenced the worktree-provision `catch` so a genuine `provisionWorktree` throw surfaces as a conditional `worktree_error` field. #246 verified the behaviour via a live RED→GREEN repro but could not land the permanent committed test — `scripts/simulate-workflow-walkthrough.js` was outside its frozen adaptive write set, so adding it there would have failed the per-node barrier. This change adds that regression test (one file, test-only).
@@ -32,6 +42,18 @@ Turns the adaptive path's gap-finder verdict from orchestrator prose into a scri
   - The gap-finder agents (`code-reviewer`, `security-reviewer`, `adversarial-verifier`, plus the `higher` profiles) now emit the fence-free verdict block into their `.cache` evidence with a defined prose→verdict mapping.
   - New `testAdaptiveVerdictCheck` coverage in the walkthrough suite (parseNodeVerdict pass/fail/missing/malformed; verifyVerdictBlock gate-pass / fail-closed / non-gate-skip / fan-out quorum; `--verdict-check` CLI per-node + whole-plan).
 - All four edition test suites (`npm test`) stay green; schema is byte-identical ×4 and the validator/commit-node copies are in sync (`validate-script-sync.js`) with the gitea/gitlab forks differing only by their forge tokens.
+
+### Replace NUL-byte sentinels with US (0x1f) for grep compatibility (issue #252)
+
+The adaptive sentinel bytes were changed from NUL to the US control character (`0x1f`) so `grep` handles the sentinel-delimited streams reliably across environments.
+
+### ADR 0004 — script-owned mechanical workflow transitions
+
+Added `docs/decisions/0004-script-owned-mechanical-transitions.md`, recording the decision that mechanical workflow transitions are script-owned.
+
+### Release surface
+
+Claude editions `5.2.1 → 5.3.0`; all three Codex plugin manifests `3.2.1 → 3.3.0` in lockstep (minor bump for the new `--verdict-check` adaptive gate and the worktree-default flip; `validate-workflow-contracts.js` enforces cross-edition Codex-version parity and that a `kaola-workflow--v5.3.0` tag exists for the bumped `package.json`).
 
 ## [5.2.1] — 2026-06-06
 

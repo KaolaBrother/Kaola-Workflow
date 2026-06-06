@@ -2763,6 +2763,33 @@ function testWorktreeNativeSurfacesProvisionFailure() {
   }
 }
 
+function testWorktreeAdaptiveSuppressed() {
+  // Worktree is ON by default for full/fast, but FORCED OFF for the adaptive path (the adaptive
+  // orchestrator does not operate in the worktree). Even with KAOLA_WORKTREE_NATIVE=1, an adaptive
+  // claim must NOT provision a worktree, and must NOT surface a worktree_error (policy suppression,
+  // not a failed provision attempt).
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-wt-adaptive-suppressed-'));
+  const kwRoot = fs.realpathSync(tmp) + '.kw';
+  try {
+    initGitRepo(tmp);
+    const binDir = path.join(tmp, 'bin');
+    writeGhShimForStartup(binDir);
+    // runClaimOnline hardcodes KAOLA_WORKTREE_NATIVE=1; KAOLA_ENABLE_ADAPTIVE=1 makes the adaptive path legal.
+    const result = runClaimOnlineLastJson(
+      ['startup', '--workflow-path', 'adaptive', '--target-issue', '507'],
+      tmp, binDir, { KAOLA_ENABLE_ADAPTIVE: '1' });
+    assert(result.claim === 'acquired', 'adaptive startup 507 should acquire');
+    assert(result.worktree_path === '', 'adaptive path must NOT provision a worktree even with KAOLA_WORKTREE_NATIVE=1, got: ' + JSON.stringify(result.worktree_path));
+    assert(result.worktree_error === undefined, 'adaptive worktree suppression must not surface worktree_error (policy suppression, not a failed attempt)');
+    // Confirm the adaptive path was actually applied (so the empty worktree_path is the guard, not a refusal).
+    const state = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'issue-507', 'workflow-state.md'), 'utf8');
+    assert(/^workflow_path:\s*adaptive\s*$/m.test(state), 'workflow-state.md must record workflow_path: adaptive (confirms the adaptive path was applied)');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(kwRoot, { recursive: true, force: true });
+  }
+}
+
 function testFastStartupState() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-fast-startup-'));
   try {
@@ -6719,6 +6746,7 @@ async function main() {
     testWorktreeNativeDefaultOff();
     testWorktreeNativeOfflineWins();
     testWorktreeNativeSurfacesProvisionFailure();
+    testWorktreeAdaptiveSuppressed();
     testFastStartupState();
     testResumeFastEmptyNextCommand();
     testClassifierCurrentClaimMarkerBlocks();

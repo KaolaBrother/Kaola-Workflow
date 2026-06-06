@@ -18,16 +18,12 @@ routes fixes. It does not own implementation or test code.
 Resolve the active worktree path before running any git commands in this phase:
 
 ```bash
-if [ "${KAOLA_WORKTREE_NATIVE:-0}" = "1" ]; then
-  COORD_ROOT="$(git worktree list --porcelain | awk '/^worktree /{print substr($0,10); exit}')"
-  ACTIVE_WORKTREE_PATH="${COORD_ROOT%/}.kw/{project}"
-else
-  ACTIVE_WORKTREE_PATH="$(pwd)"
-fi
+ACTIVE_WORKTREE_PATH="$(node -e "try{const fs=require('fs');const s=fs.readFileSync('kaola-workflow/{project}/workflow-state.md','utf8');const m=s.match(/^worktree_path:\\s*(.+)$/m);process.stdout.write(m?m[1].trim():'');}catch(e){}" 2>/dev/null)" || true
+[ -z "$ACTIVE_WORKTREE_PATH" ] && ACTIVE_WORKTREE_PATH="$(pwd)"
 export ACTIVE_WORKTREE_PATH
 ```
 
-All subsequent `git -C`, `cp`, and path operations in Phase 4 use `$ACTIVE_WORKTREE_PATH` as the working root for issue-branch changes. When `KAOLA_WORKTREE_NATIVE=0` (default), `ACTIVE_WORKTREE_PATH` is the current directory, preserving existing behavior.
+All subsequent `git -C`, `cp`, and path operations in Phase 4 use `$ACTIVE_WORKTREE_PATH` as the working root for issue-branch changes. It is read from the `worktree_path` the claim recorded in `workflow-state.md` (the same source Phase 6 uses), so it honors whatever the claim actually provisioned. When the claim recorded no worktree — `KAOLA_WORKTREE_NATIVE=0`, an offline run, or no git history — `worktree_path` is empty and `ACTIVE_WORKTREE_PATH` falls back to the current directory (a repo-root run).
 
 ## Prerequisite
 

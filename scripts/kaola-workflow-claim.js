@@ -31,7 +31,7 @@ function readAdaptiveConfig() {
 }
 
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
-const WORKTREE_NATIVE = process.env.KAOLA_WORKTREE_NATIVE === '1';
+const WORKTREE_NATIVE = process.env.KAOLA_WORKTREE_NATIVE !== '0';
 const CLAIM_LABEL = 'workflow:in-progress';
 
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
@@ -459,7 +459,12 @@ function claimProject(root, args) {
   const branch = buildBranchName(issueNumber, project, args.branch);
   let worktreePath = '';
   let worktreeError = '';
-  if (!OFFLINE && WORKTREE_NATIVE && hasGitHistory(root)) {
+  // Worktree provisioning is ON by default (full/fast paths operate inside it via Phase 4's
+  // ACTIVE_WORKTREE_PATH), but FORCED OFF for the adaptive path: its orchestrator (plan-run) does not
+  // yet cd into the worktree, so provisioning one would strand the implementation in the repo-root tree
+  // and risk finalizing an empty branch. Re-enable for adaptive once the executor operates in the
+  // worktree (tracked follow-up). Set KAOLA_WORKTREE_NATIVE=0 to opt out entirely.
+  if (!OFFLINE && WORKTREE_NATIVE && requestedPath !== adaptiveSchema.ADAPTIVE_PATH && hasGitHistory(root)) {
     try { worktreePath = provisionWorktree(root, project, branch).path; } catch (e) { worktreeError = (e && e.message) || String(e); }
   }
   writeState(root, {
