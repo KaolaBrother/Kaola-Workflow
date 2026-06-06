@@ -2761,19 +2761,24 @@ function testWorktreeNativeSurfacesProvisionFailure() {
   // Regression test for #246: when provisionWorktree throws (EEXIST — a regular file
   // blocks the .kw parent dir), claim must still succeed (acquired), set worktree_path
   // to '', and surface worktree_error matching /EEXIST/.
+  // Updated for #264: worktrees now live at <root>/.kw/worktrees/<project>.
+  // Block <root>/.kw with a regular file so mkdirSync(<root>/.kw/worktrees, {recursive}) throws EEXIST.
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-wt-provision-fail-'));
+  // Legacy sibling path (old scheme) — may never be created by new code; harmless cleanup attempt below.
   const kwRoot = fs.realpathSync(tmp) + '.kw';
+  // New hidden-local .kw dir inside tmp (block this to cause EEXIST)
+  const kwLocal = path.join(fs.realpathSync(tmp), '.kw');
   try {
     initGitRepo(tmp);
     const binDir = path.join(tmp, 'bin');
     writeGhShimForStartup(binDir);
-    // Plant a regular FILE at kwRoot so mkdirSync(kwRoot, {recursive:true}) throws EEXIST.
+    // Plant a regular FILE at the hidden-local .kw path so mkdirSync(.kw/worktrees, {recursive:true}) throws EEXIST.
     // Must be done AFTER initGitRepo (which needs the dir to be absent), BEFORE the claim.
-    fs.writeFileSync(kwRoot, 'x');
+    fs.writeFileSync(kwLocal, 'x');
     const result = runClaimOnlineLastJson(['startup', '--target-issue', '507'], tmp, binDir);
     assert(result.claim === 'acquired', 'startup 507 should acquire even when provisionWorktree throws, got: ' + JSON.stringify(result.claim));
     assert(result.worktree_path === '', 'worktree_path must be empty when provision fails, got: ' + JSON.stringify(result.worktree_path));
-    assert(/EEXIST/.test(result.worktree_error), 'worktree_error must match /EEXIST/ when provision fails due to file collision, got: ' + JSON.stringify(result.worktree_error));
+    assert(/EEXIST|ENOTDIR/.test(result.worktree_error), 'worktree_error must match /EEXIST|ENOTDIR/ when provision fails due to file collision, got: ' + JSON.stringify(result.worktree_error));
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
     try { fs.rmSync(kwRoot, { force: true }); } catch (_) {}
@@ -3137,12 +3142,13 @@ function testSinkMergeFromLinkedWorktree() {
   // The fix uses `git -C mainRoot` for every git call so the script never
   // relies on its inherited cwd. We deliberately chdir to tmpdir before
   // worktree removal, which makes any missing `-C mainRoot` fail fast.
+  // Updated for #264: worktrees now live at <root>/.kw/worktrees/<project>.
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-merge-linked-')));
-  const kwRoot = tmp + '.kw';
+  const kwRoot = tmp + '.kw'; // legacy path — kept for cleanup only
   try {
     initGitRepo(tmp);
-    const wtPath = path.join(kwRoot, 'issue-941');
-    fs.mkdirSync(kwRoot, { recursive: true });
+    const wtPath = path.join(tmp, '.kw', 'worktrees', 'issue-941');
+    fs.mkdirSync(path.dirname(wtPath), { recursive: true });
     spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-941', '--', wtPath, 'HEAD'], {
       cwd: tmp,
       encoding: 'utf8'
@@ -5133,12 +5139,13 @@ function testSinkMergeEmitsClosureReceipt() {
   // Exercise sink-merge (OFFLINE=1) and verify it emits a well-formed closure receipt JSON.
   // Uses the same linked-worktree setup as testSinkMergeFromLinkedWorktree so that
   // the branch can be deleted (Step 9) and the FF merge succeeds.
+  // Updated for #264: worktrees now live at <root>/.kw/worktrees/<project>.
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sm-receipt-')));
-  const kwRoot = tmp + '.kw';
+  const kwRoot = tmp + '.kw'; // legacy path — kept for cleanup only
   try {
     initGitRepo(tmp);
-    const wtPath = path.join(kwRoot, 'issue-164r');
-    fs.mkdirSync(kwRoot, { recursive: true });
+    const wtPath = path.join(tmp, '.kw', 'worktrees', 'issue-164r');
+    fs.mkdirSync(path.dirname(wtPath), { recursive: true });
     spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-164r', '--', wtPath, 'HEAD'], {
       cwd: tmp, encoding: 'utf8'
     });
@@ -5486,7 +5493,13 @@ function testSinkMergeSkipsArchivedProjectPhantom() {
     fs.mkdirSync(archiveDir, { recursive: true });
     fs.writeFileSync(path.join(archiveDir, 'workflow-state.md'), '# archived\n');
     fs.writeFileSync(path.join(archiveDir, 'phase6-summary.md'), '# summary\n');
-    spawnSync('git', ['-C', tmp, 'add', '-A', 'kaola-workflow/'], { encoding: 'utf8' });
+    // #264 AC7: the branch must carry a real (non-kaola-workflow/) implementation file, otherwise
+    // the new sink-merge AC7 guard (assertBranchHasNonWorkflowChanges) refuses a workflow-only branch
+    // with exit 1 before the merge-impossible path is reached. A genuine archived project carried
+    // implementation during its original run, so this is the realistic fixture. Root-level so it is
+    // outside kaola-workflow/ and does not perturb the wasArchived (liveDir) discriminator below.
+    fs.writeFileSync(path.join(tmp, 'impl-850.txt'), 'implementation for issue 850\n');
+    spawnSync('git', ['-C', tmp, 'add', '-A', 'kaola-workflow/', 'impl-850.txt'], { encoding: 'utf8' });
     spawnSync('git', ['-C', tmp, 'commit', '-m', 'chore: archive issue-850'], {
       encoding: 'utf8',
       env: { ...process.env, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@test.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@test.com' }
@@ -7362,6 +7375,441 @@ function testAdaptiveHandoffProjectFlagResolvesRepoRoot() {
   console.log('testAdaptiveHandoffProjectFlagResolvesRepoRoot: PASSED');
 }
 
+// ===========================================================================
+// issue #264 — hidden-local worktree path, gitignore, legacy cleanup, sink guard
+// ===========================================================================
+
+// Feature-detect signals (all absent until their owning node lands):
+//   CLAIM_SIGNAL      = typeof claim.legacySiblingWorktreePathFor === 'function'  (impl-claim, node 8)
+//   SINK_SIGNAL       = typeof require(sinkMergeScript).assertBranchHasNonWorkflowChanges === 'function'  (impl-sink-guard, node 2)
+//   PLAN_RUN_SIGNAL   = commands/kaola-workflow-plan-run.md contains 'ACTIVE_WORKTREE_PATH'  (impl-plan-run, node 3)
+
+// Lazy signal accessors (evaluated once per test call, not at module load).
+function claimSignal() {
+  const claim = require(claimScript);
+  return typeof claim.legacySiblingWorktreePathFor === 'function';
+}
+function sinkSignal() {
+  return typeof require(sinkMergeScript).assertBranchHasNonWorkflowChanges === 'function';
+}
+function planRunSignal() {
+  const planRunPath = path.join(repoRoot, 'commands', 'kaola-workflow-plan-run.md');
+  try {
+    return fs.readFileSync(planRunPath, 'utf8').includes('ACTIVE_WORKTREE_PATH');
+  } catch (_) { return false; }
+}
+
+// ── Strict (no feature-detect) — this node's own RED→GREEN ──────────────────
+
+function testGitignoreCoversKw() {
+  // AC2 (#264): repo .gitignore must contain a line equal to '.kw/' so the hidden
+  // repo-local worktree container is never accidentally committed.
+  const gitignorePath = path.join(repoRoot, '.gitignore');
+  const lines = fs.readFileSync(gitignorePath, 'utf8').split('\n').map(l => l.trim());
+  assert(lines.includes('.kw/'), '.gitignore must contain a line exactly equal to ".kw/" (AC2 #264); got lines: ' + JSON.stringify(lines));
+  console.log('testGitignoreCoversKw: PASSED');
+}
+
+// ── INVERTED: testStartupJsonAndHiddenLocalWorktrees ────────────────────────
+// (was testStartupJsonAndSiblingWorktrees)
+// Signal = claimSignal() → assert <root>/.kw/worktrees/<project>
+// Else    → assert old <parent>/<repo>.kw/<project> (keeps suite GREEN until impl-claim lands)
+
+function testStartupJsonAndHiddenLocalWorktrees() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-startup-worktrees-'));
+  // Legacy sibling path (old scheme) — may never be created by new code; harmless cleanup attempt below.
+  const kwRoot = fs.realpathSync(tmp) + '.kw';
+  try {
+    initGitRepo(tmp);
+    const binDir = path.join(tmp, 'bin');
+    writeGhShimForStartup(binDir);
+
+    const first = runClaimOnline(['startup', '--target-issue', '501'], tmp, binDir);
+
+    if (claimSignal()) {
+      // impl-claim landed: assert hidden-local path
+      const wtRoot = path.join(fs.realpathSync(tmp), '.kw', 'worktrees');
+      assert(first.worktree_path === path.join(wtRoot, 'issue-501'),
+        'first worktree should be hidden-local path, got: ' + first.worktree_path);
+      const second = runClaimOnline(['startup', '--target-issue', '502'], first.worktree_path, binDir);
+      assert(second.worktree_path === path.join(wtRoot, 'issue-502'),
+        'nested startup should still create canonical hidden-local worktree, got: ' + second.worktree_path);
+      assert(!second.worktree_path.includes('issue-501/.kw'),
+        'nested startup must not create issue-501/.kw paths');
+    } else {
+      // old sibling path still in effect
+      assert(first.worktree_path === path.join(kwRoot, 'issue-501'),
+        'first worktree should be canonical sibling path (pre-impl-claim), got: ' + first.worktree_path);
+      const second = runClaimOnline(['startup', '--target-issue', '502'], first.worktree_path, binDir);
+      assert(second.worktree_path === path.join(kwRoot, 'issue-502'),
+        'nested startup should still create canonical sibling worktree, got: ' + second.worktree_path);
+      assert(!second.worktree_path.includes('issue-501.kw'),
+        'nested startup must not create issue-501.kw paths');
+    }
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+  }
+  console.log('testStartupJsonAndHiddenLocalWorktrees: PASSED');
+}
+
+// ── INVERTED: testWorktreeAdaptiveProvisioned ────────────────────────────────
+// (was testWorktreeAdaptiveSuppressed)
+// Signal = claimSignal() → adaptive WITH KAOLA_WORKTREE_NATIVE=1 MUST now provision
+// Else    → assert worktree_path === '' (old suppressed behavior)
+
+function testWorktreeAdaptiveProvisioned() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-wt-adaptive-provisioned-'));
+  const kwRoot = fs.realpathSync(tmp) + '.kw';
+  try {
+    initGitRepo(tmp);
+    const binDir = path.join(tmp, 'bin');
+    writeGhShimForStartup(binDir);
+    // runClaimOnline hardcodes KAOLA_WORKTREE_NATIVE=1; KAOLA_ENABLE_ADAPTIVE=1 makes adaptive legal.
+    const result = runClaimOnlineLastJson(
+      ['startup', '--workflow-path', 'adaptive', '--target-issue', '507'],
+      tmp, binDir, { KAOLA_ENABLE_ADAPTIVE: '1' });
+    assert(result.claim === 'acquired', 'adaptive startup 507 should acquire');
+
+    if (claimSignal()) {
+      // impl-claim landed: adaptive now provisions
+      const wtRoot = path.join(fs.realpathSync(tmp), '.kw', 'worktrees');
+      assert(result.worktree_path === path.join(wtRoot, 'issue-507'),
+        'adaptive path MUST provision a hidden-local worktree after impl-claim, got: ' + JSON.stringify(result.worktree_path));
+      assert(result.worktree_error === undefined,
+        'worktree_error must be absent when adaptive provisions successfully');
+    } else {
+      // old suppression still in effect
+      assert(result.worktree_path === '',
+        'adaptive path must NOT provision a worktree (old suppression, pre-impl-claim), got: ' + JSON.stringify(result.worktree_path));
+      assert(result.worktree_error === undefined,
+        'adaptive worktree suppression must not surface worktree_error (policy suppression, not a failed attempt)');
+    }
+    // Confirm the adaptive path was actually applied in both states.
+    const state = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'issue-507', 'workflow-state.md'), 'utf8');
+    assert(/^workflow_path:\s*adaptive\s*$/m.test(state),
+      'workflow-state.md must record workflow_path: adaptive');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+  }
+  console.log('testWorktreeAdaptiveProvisioned: PASSED');
+}
+
+// ── NEW: testWorktreeHiddenLocalPath ─────────────────────────────────────────
+// Signal = claimSignal() → assert full/fast claim produces hidden-local path + dir exists
+// Else    → assert old sibling path (green now)
+
+function testWorktreeHiddenLocalPath() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-wt-hidden-local-'));
+  const kwRoot = fs.realpathSync(tmp) + '.kw';
+  try {
+    initGitRepo(tmp);
+    const binDir = path.join(tmp, 'bin');
+    writeGhShimForStartup(binDir);
+    const result = runClaimOnline(['startup', '--target-issue', '510'], tmp, binDir);
+    assert(result.claim === 'acquired', 'startup 510 should acquire');
+
+    if (claimSignal()) {
+      const expected = path.join(fs.realpathSync(tmp), '.kw', 'worktrees', 'issue-510');
+      assert(result.worktree_path === expected,
+        'worktree_path must be hidden-local after impl-claim, got: ' + result.worktree_path);
+      assert(fs.existsSync(expected),
+        'hidden-local worktree dir must exist after provisioning');
+    } else {
+      // old sibling scheme
+      assert(result.worktree_path === path.join(kwRoot, 'issue-510'),
+        'worktree_path must be sibling path (pre-impl-claim), got: ' + result.worktree_path);
+    }
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+  }
+  console.log('testWorktreeHiddenLocalPath: PASSED');
+}
+
+// ── NEW: testLegacyWorktreeCleanupDryRun ─────────────────────────────────────
+// Signal = claimSignal() → the legacy-worktree-cleanup subcommand is recognized
+// Else    → skip (early return, green)
+
+function testLegacyWorktreeCleanupDryRun() {
+  if (!claimSignal()) {
+    // impl-claim not yet landed; subcommand does not exist — skip
+    console.log('testLegacyWorktreeCleanupDryRun: SKIPPED (impl-claim pending)');
+    return;
+  }
+  const claim = require(claimScript);
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-legacy-dryrun-')));
+  const legacyContainer = path.dirname(tmp) + '/' + path.basename(tmp) + '.kw';
+  const legacyWtPath = path.join(legacyContainer, 'issue-520');
+  try {
+    initGitRepo(tmp);
+    // Register a worktree at the legacy sibling path using legacySiblingWorktreePathFor
+    const computedLegacy = claim.legacySiblingWorktreePathFor(tmp, 'issue-520');
+    assert(computedLegacy === legacyWtPath,
+      'legacySiblingWorktreePathFor must return legacy sibling path, got: ' + computedLegacy);
+    fs.mkdirSync(legacyWtPath, { recursive: true });
+    spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-520', '--', legacyWtPath, 'HEAD'],
+      { cwd: tmp, encoding: 'utf8' });
+
+    // Run legacy-worktree-cleanup (dry-run is the default, no --execute)
+    const r = runNode(claimScript, ['legacy-worktree-cleanup'], tmp);
+    const out = JSON.parse(r.stdout);
+    assert(out.dry_run === true, 'legacy-worktree-cleanup must be dry-run by default, got: ' + JSON.stringify(out));
+    assert(Array.isArray(out.would_remove) && out.would_remove.some(p => p === legacyWtPath || p.includes('issue-520')),
+      'dry_run would_remove must include the legacy worktree path, got: ' + JSON.stringify(out.would_remove));
+    assert(fs.existsSync(legacyWtPath),
+      'dry-run must NOT remove the worktree dir (AC3 dry-run-default)');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    try { fs.rmSync(legacyContainer, { recursive: true, force: true }); } catch (_) {}
+  }
+  console.log('testLegacyWorktreeCleanupDryRun: PASSED');
+}
+
+// ── NEW: testLegacyWorktreeCleanupDirtySkip ──────────────────────────────────
+// Signal = claimSignal() → legacy worktree with uncommitted change must be skipped
+// Else    → skip (early return, green)
+
+function testLegacyWorktreeCleanupDirtySkip() {
+  if (!claimSignal()) {
+    console.log('testLegacyWorktreeCleanupDirtySkip: SKIPPED (impl-claim pending)');
+    return;
+  }
+  const claim = require(claimScript);
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-legacy-dirty-')));
+  const legacyContainer = path.dirname(tmp) + '/' + path.basename(tmp) + '.kw';
+  const legacyWtPath = claim.legacySiblingWorktreePathFor(tmp, 'issue-521');
+  try {
+    initGitRepo(tmp);
+    fs.mkdirSync(legacyWtPath, { recursive: true });
+    spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-521', '--', legacyWtPath, 'HEAD'],
+      { cwd: tmp, encoding: 'utf8' });
+    // Plant an uncommitted change so the worktree is dirty
+    fs.writeFileSync(path.join(legacyWtPath, 'dirty.txt'), 'dirty\n');
+
+    // --execute without --force → dirty skip (AC4)
+    const r1 = runNode(claimScript, ['legacy-worktree-cleanup', '--execute'], tmp);
+    const out1 = JSON.parse(r1.stdout);
+    assert(out1.dry_run === false, 'should be execute mode, got: ' + JSON.stringify(out1));
+    assert(Array.isArray(out1.skipped_dirty) && out1.skipped_dirty.some(p => p === legacyWtPath || p.includes('issue-521')),
+      'dirty worktree must appear in skipped_dirty (AC4), got: ' + JSON.stringify(out1.skipped_dirty));
+    assert(fs.existsSync(legacyWtPath),
+      'dirty worktree must NOT be removed without --force (AC4 dirty-safety)');
+
+    // --execute --force → removes
+    const r2 = runNode(claimScript, ['legacy-worktree-cleanup', '--execute', '--force'], tmp);
+    const out2 = JSON.parse(r2.stdout);
+    assert(Array.isArray(out2.removed) && out2.removed.some(p => p === legacyWtPath || p.includes('issue-521')),
+      '--force should remove the dirty worktree, got: ' + JSON.stringify(out2.removed));
+    assert(!fs.existsSync(legacyWtPath),
+      'dirty worktree must be removed with --force');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    try { fs.rmSync(legacyContainer, { recursive: true, force: true }); } catch (_) {}
+  }
+  console.log('testLegacyWorktreeCleanupDirtySkip: PASSED');
+}
+
+// ── NEW: testAdaptiveWorktreeProvisionedE2E ──────────────────────────────────
+// AC6+AC8 anchor: adaptive claim, plan+.cache in worktree, impl in worktree,
+// commit-node barrier with worktree plan path, sink-merge → merged main contains impl file.
+// Signal = worktree_path non-empty on adaptive claim (impl-claim + impl-plan-run)
+// Else    → skip (early return, green)
+
+function testAdaptiveWorktreeProvisionedE2E() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-e2e-adaptive-')));
+  const kwRoot = tmp + '.kw';
+  try {
+    initGitRepo(tmp);
+    const binDir = path.join(tmp, 'bin');
+    writeGhShimForStartup(binDir);
+
+    // Step 1: adaptive claim with NATIVE=1
+    const sResult = runClaimOnlineLastJson(
+      ['startup', '--workflow-path', 'adaptive', '--target-issue', '530'],
+      tmp, binDir, { KAOLA_ENABLE_ADAPTIVE: '1' });
+    assert(sResult.claim === 'acquired', 'adaptive startup 530 should acquire');
+
+    if (!sResult.worktree_path) {
+      // impl-claim not landed or provisioning suppressed → skip
+      console.log('testAdaptiveWorktreeProvisionedE2E: SKIPPED (worktree_path empty, impl-claim+impl-plan-run pending)');
+      return;
+    }
+
+    const wt530 = sResult.worktree_path;
+    assert(fs.existsSync(wt530), 'worktree dir must exist, path: ' + wt530);
+
+    // Step 2: mirror plan+.cache into the worktree (simulating impl-plan-run's one-time mirror)
+    const projSrc = path.join(tmp, 'kaola-workflow', 'issue-530');
+    const projDst = path.join(wt530, 'kaola-workflow', 'issue-530');
+    fs.mkdirSync(projDst, { recursive: true });
+    const cacheDir = path.join(projDst, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+
+    // Minimal frozen workflow-plan.md with one node
+    const planContent = [
+      '# Workflow Plan — issue #530', '',
+      '## Meta', 'labels: enhancement', 'plan_hash: abc123', '',
+      '## Nodes', '',
+      '### Node impl-test', '- id: impl-test', '- depends_on: []', '- write_set: impl-test.txt',
+      '- workflow_path: adaptive', '',
+      '## Node Ledger', '',
+      '| Node | Status | Started | Completed |',
+      '|------|--------|---------|-----------|',
+      '| impl-test | open | — | — |',
+      ''
+    ].join('\n');
+    fs.writeFileSync(path.join(projDst, 'workflow-plan.md'), planContent);
+
+    // Step 3: land an impl file in the worktree on the feature branch
+    // The worktree is on workflow/issue-530 (created by claim)
+    fs.writeFileSync(path.join(wt530, 'impl-test.txt'), 'implementation\n');
+    spawnSync('git', ['add', 'impl-test.txt'], { cwd: wt530, encoding: 'utf8' });
+    spawnSync('git', ['commit', '-m', 'feat: impl-test for issue 530'], { cwd: wt530, encoding: 'utf8' });
+
+    // Step 4: worktree-finalize so workflow state is in the worktree branch
+    const wfResult = runClaimOnlineLastJson(['worktree-finalize', '--project', 'issue-530'], tmp, binDir);
+    assert(wfResult.finalized === true, 'worktree-finalize should succeed for adaptive e2e');
+
+    // Step 5: finalize --keep-worktree
+    const finResult = spawnSync(process.execPath, [
+      claimScript, 'finalize', '--project', 'issue-530', '--keep-worktree'
+    ], { cwd: wt530, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
+    assert(finResult.status === 0, 'finalize --keep-worktree should exit 0\nstderr: ' + finResult.stderr);
+
+    // Step 6: sink-merge (OFFLINE) — assert main now contains impl-test.txt (AC8)
+    const featureHead = spawnSync('git', ['rev-parse', 'workflow/issue-530'],
+      { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+    const smResult = spawnSync(process.execPath, [
+      sinkMergeScript, '--project', 'issue-530', '--branch', 'workflow/issue-530', '--issue', '530'
+    ], { cwd: wt530, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
+    assert(smResult.status === 0,
+      'sink-merge should exit 0 for adaptive e2e\nstdout: ' + smResult.stdout + '\nstderr: ' + smResult.stderr);
+
+    const mainAfter = spawnSync('git', ['rev-parse', 'main'], { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+    assert(mainAfter === featureHead, 'main must advance to feature HEAD after sink-merge (AC8)');
+    // AC8 core: merged main must contain the impl file
+    const implInMain = spawnSync('git', ['cat-file', '-e', 'HEAD:impl-test.txt'],
+      { cwd: tmp, encoding: 'utf8' });
+    assert(implInMain.status === 0,
+      'AC8: merged main must contain impl-test.txt — the implementation that landed in the worktree');
+
+    console.log('testAdaptiveWorktreeProvisionedE2E: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
+// ── NEW: testSinkRefusesWorkflowOnlyBranch ───────────────────────────────────
+// AC7: sink-merge MUST exit 1 when the branch diff vs origin/main is all kaola-workflow/**
+// Signal = sinkSignal() → assert exit 1 with refusal message
+// Else    → assert today's behavior (allow — exit 0) so it's green now
+
+function testSinkRefusesWorkflowOnlyBranch() {
+  // AC7 (#264): the assertBranchHasNonWorkflowChanges helper must throw when the branch diff vs
+  // origin/main is entirely kaola-workflow/**. We invoke the helper directly (bypassing the
+  // OFFLINE gate and gh/push machinery) so the assertion is unambiguous.
+  // Signal = sinkSignal() → strict assert helper throws; else skip (green).
+  if (!sinkSignal()) {
+    console.log('testSinkRefusesWorkflowOnlyBranch: SKIPPED (impl-sink-guard pending)');
+    return;
+  }
+  const { assertBranchHasNonWorkflowChanges } = require(sinkMergeScript);
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-wf-only-')));
+  try {
+    // Need origin/main for the helper's git rev-parse
+    initGitRepoWithBareRemote(tmp);
+
+    spawnSync('git', ['checkout', '-b', 'workflow/issue-911'], { cwd: tmp, encoding: 'utf8' });
+    // Archived folder only — no live folder, no impl file
+    fs.mkdirSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-911'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-911', 'workflow-state.md'), 'status: closed\n');
+    spawnSync('git', ['add', 'kaola-workflow/'], { cwd: tmp, encoding: 'utf8' });
+    spawnSync('git', ['commit', '-m', 'chore: archive issue 911 (workflow-only, no impl)'], { cwd: tmp, encoding: 'utf8' });
+
+    // Direct call: must throw (branch is workflow-only)
+    let threw = false;
+    let thrownMsg = '';
+    try {
+      assertBranchHasNonWorkflowChanges(tmp, 'workflow/issue-911');
+    } catch (e) {
+      threw = true;
+      thrownMsg = e && e.message ? e.message : String(e);
+    }
+    assert(threw,
+      'AC7: assertBranchHasNonWorkflowChanges must throw for a workflow-only branch');
+    assert(/kaola-workflow|workflow-only|no implementation/i.test(thrownMsg),
+      'refusal message must mention kaola-workflow or workflow-only, got: ' + thrownMsg);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    try { fs.rmSync(tmp + '-remote', { recursive: true, force: true }); } catch (_) {}
+  }
+  console.log('testSinkRefusesWorkflowOnlyBranch: PASSED');
+}
+
+// ── NEW: testSinkAllowsMixedBranch ───────────────────────────────────────────
+// AC7 allow arm: assertBranchHasNonWorkflowChanges must NOT throw when branch has a real impl file.
+// Signal = sinkSignal() → strict assert helper does not throw; else skip (green).
+// This is the no-false-positive test for the guard logic itself.
+
+function testSinkAllowsMixedBranch() {
+  if (!sinkSignal()) {
+    console.log('testSinkAllowsMixedBranch: SKIPPED (impl-sink-guard pending)');
+    return;
+  }
+  const { assertBranchHasNonWorkflowChanges } = require(sinkMergeScript);
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-mixed-')));
+  try {
+    initGitRepoWithBareRemote(tmp);
+
+    spawnSync('git', ['checkout', '-b', 'workflow/issue-912'], { cwd: tmp, encoding: 'utf8' });
+    // Real impl file — makes the branch NOT workflow-only
+    fs.writeFileSync(path.join(tmp, 'impl-912.txt'), 'implementation\n');
+    // Plus archived workflow artifacts
+    fs.mkdirSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-912'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-912', 'workflow-state.md'), 'status: closed\n');
+    spawnSync('git', ['add', '.'], { cwd: tmp, encoding: 'utf8' });
+    spawnSync('git', ['commit', '-m', 'feat: impl and archived workflow for 912'], { cwd: tmp, encoding: 'utf8' });
+
+    // Direct call: must NOT throw (impl file is present)
+    let threw = false;
+    let thrownMsg = '';
+    try {
+      assertBranchHasNonWorkflowChanges(tmp, 'workflow/issue-912');
+    } catch (e) {
+      threw = true;
+      thrownMsg = e && e.message ? e.message : String(e);
+    }
+    assert(!threw,
+      'AC7 must NOT refuse a branch with real impl + workflow artifacts (no false positive), got: ' + thrownMsg);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    try { fs.rmSync(tmp + '-remote', { recursive: true, force: true }); } catch (_) {}
+  }
+  console.log('testSinkAllowsMixedBranch: PASSED');
+}
+
+// ── NEW: testPlanRunWiredForWorktree ─────────────────────────────────────────
+// D3 (governance): reads commands/kaola-workflow-plan-run.md; asserts ACTIVE_WORKTREE_PATH + Working directory
+// Signal = planRunSignal() → strict assert both present; else pass (pending impl-plan-run)
+
+function testPlanRunWiredForWorktree() {
+  if (!planRunSignal()) {
+    // impl-plan-run not yet landed → skip
+    console.log('testPlanRunWiredForWorktree: SKIPPED (impl-plan-run pending)');
+    return;
+  }
+  const planRunPath = path.join(repoRoot, 'commands', 'kaola-workflow-plan-run.md');
+  const content = fs.readFileSync(planRunPath, 'utf8');
+  assert(content.includes('ACTIVE_WORKTREE_PATH'),
+    'plan-run.md must contain ACTIVE_WORKTREE_PATH resolver (impl-plan-run, AC6)');
+  assert(/Working directory:/i.test(content),
+    'plan-run.md must contain a "Working directory:" line proving the executor is dispatched into the worktree (impl-plan-run, AC6)');
+  console.log('testPlanRunWiredForWorktree: PASSED');
+}
+
 async function main() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-active-folders-'));
   try {
@@ -7405,11 +7853,11 @@ async function main() {
     testProbeIssueStateNullIssue();
     testProbeIssueStateEmptyGhResponse();
     testProbeIssueStateGhThrows();
-    testStartupJsonAndSiblingWorktrees();
+    testStartupJsonAndHiddenLocalWorktrees();
     testWorktreeNativeDefaultOff();
     testWorktreeNativeOfflineWins();
     testWorktreeNativeSurfacesProvisionFailure();
-    testWorktreeAdaptiveSuppressed();
+    testWorktreeAdaptiveProvisioned();
     testFastStartupState();
     testResumeFastEmptyNextCommand();
     testClassifierCurrentClaimMarkerBlocks();
@@ -7521,6 +7969,15 @@ async function main() {
     testAdaptiveHandoffIdempotentReRun();
     // issue #255 review BLOCKING-1: --project must resolve user-repo root via git rev-parse
     testAdaptiveHandoffProjectFlagResolvesRepoRoot();
+    // issue #264 — hidden-local worktree path, gitignore, legacy cleanup, sink guard
+    testGitignoreCoversKw();
+    testWorktreeHiddenLocalPath();
+    testLegacyWorktreeCleanupDryRun();
+    testLegacyWorktreeCleanupDirtySkip();
+    testAdaptiveWorktreeProvisionedE2E();
+    testSinkRefusesWorkflowOnlyBranch();
+    testSinkAllowsMixedBranch();
+    testPlanRunWiredForWorktree();
     console.log('Workflow walkthrough simulation passed');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });

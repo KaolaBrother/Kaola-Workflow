@@ -35,6 +35,41 @@ one of the placeholder examples below, resolve its model with
 `scripts/kaola-workflow-resolve-agent-model.js <role>` and pass that exact value
 on the `model=` line — never omit it.
 
+## Adaptive Worktree
+
+At the very start of plan-run — before the first contractor dispatch — resolve the provisioned
+worktree path and, when it differs from the current directory, mirror the project folder into the
+worktree once so that all node dispatches operate with their working directory inside the worktree.
+
+```bash
+# Resolve linked worktree path from workflow-state.md
+ACTIVE_WORKTREE_PATH="$(node -e "try{const fs=require('fs');const s=fs.readFileSync('kaola-workflow/{project}/workflow-state.md','utf8');const m=s.match(/^worktree_path:\\s*(.+)$/m);process.stdout.write(m?m[1].trim():'');}catch(e){}" 2>/dev/null)" || true
+[ -z "$ACTIVE_WORKTREE_PATH" ] || [ ! -d "$ACTIVE_WORKTREE_PATH" ] && ACTIVE_WORKTREE_PATH="$(pwd)"
+```
+
+When `worktree_path` is absent or empty (e.g. `KAOLA_WORKTREE_NATIVE=0`, offline, no-git, or this
+very issue's own adaptive run which has `worktree_path: ''`), the resolver yields an empty string
+and the fallback sets `ACTIVE_WORKTREE_PATH` to the repo root — the orchestrator behaves EXACTLY as
+before this change. The mirror below is SKIPPED in that case. If `worktree_path` is recorded but the
+directory no longer exists (e.g. it was pruned), the `-d` guard falls back to `$(pwd)` for safety.
+
+```bash
+# One-time main→worktree project-folder mirror (mirror once at first entry; on resume the worktree copy is authoritative)
+if [ "$ACTIVE_WORKTREE_PATH" != "$(pwd)" ] && [ ! -f "$ACTIVE_WORKTREE_PATH/kaola-workflow/{project}/workflow-plan.md" ]; then
+  mkdir -p "$ACTIVE_WORKTREE_PATH/kaola-workflow/{project}/"
+  cp -R "kaola-workflow/{project}/." "$ACTIVE_WORKTREE_PATH/kaola-workflow/{project}/"
+fi
+```
+
+This copies the project folder (workflow-plan.md + Node Ledger + `.cache/`) into the worktree once
+at start. From this point the orchestrator dispatches EVERY Agent() call below — all contractor
+brackets and all role dispatches — with `Working directory: ${ACTIVE_WORKTREE_PATH}`. The relative
+plan paths in every script invocation remain relative (relative + cwd is the mechanism; do NOT
+switch to absolute paths); with cwd == worktree they resolve to the worktree copy, the per-node
+barrier diffs the worktree's working tree, and the impl lands on `workflow/issue-N`. When
+`ACTIVE_WORKTREE_PATH == $(pwd)` (repo-root fallback), the `Working directory:` line is harmless
+and the orchestrator behaves exactly as today.
+
 ## Resume Detection
 
 On entry (and on every resume), the main session **summons the `contractor`** to re-orient: the
@@ -50,7 +85,7 @@ Agent(
   subagent_type="contractor",
   model="{CONTRACTOR_MODEL}",
   description="Adaptive orient {project}",
-  prompt="Re-orient the frozen plan for {project}; run scripts + report markers, do NOT judge or clear anything. Run `kaola-gitlab-workflow-plan-validator.js kaola-workflow/{project}/workflow-plan.md --resume-check --json` — re-check `plan_hash` + closed-library membership + structural grammar + hash integrity ONLY (NOT the full gate rubric — re-running it would brick an in-flight plan if the rubric tightened after freeze) — and `kaola-gitlab-workflow-next-action.js kaola-workflow/{project}/workflow-plan.md --json` (ready set, next node with resolved `model`, `allDone`). Then read the `## Node Ledger` + `workflow-state.md` and REPORT VERBATIM: both JSON outputs in full; whether `escalated_to_full: consent` is in `workflow-state.md` OR `consent_halt: pending` is in the `## Node Ledger`; any node at `status: in_progress` and, for it, whether `.cache/{node-id}.md` is absent / partial / complete and whether its barrier has already run. Do NOT judge, dispatch, or clear any marker."
+  prompt="Working directory: ${ACTIVE_WORKTREE_PATH} — run all scripts and resolve every relative path from this directory (it is the provisioned worktree for adaptive; when it equals the repo root, behavior is unchanged). Re-orient the frozen plan for {project}; run scripts + report markers, do NOT judge or clear anything. Run `kaola-gitlab-workflow-plan-validator.js kaola-workflow/{project}/workflow-plan.md --resume-check --json` — re-check `plan_hash` + closed-library membership + structural grammar + hash integrity ONLY (NOT the full gate rubric — re-running it would brick an in-flight plan if the rubric tightened after freeze) — and `kaola-gitlab-workflow-next-action.js kaola-workflow/{project}/workflow-plan.md --json` (ready set, next node with resolved `model`, `allDone`). Then read the `## Node Ledger` + `workflow-state.md` and REPORT VERBATIM: both JSON outputs in full; whether `escalated_to_full: consent` is in `workflow-state.md` OR `consent_halt: pending` is in the `## Node Ledger`; any node at `status: in_progress` and, for it, whether `.cache/{node-id}.md` is absent / partial / complete and whether its barrier has already run. Do NOT judge, dispatch, or clear any marker."
 )
 ```
 
@@ -135,7 +170,7 @@ the loop cycles step 2 → 3 → 4 → 2.
      subagent_type="contractor",
      model="{CONTRACTOR_MODEL}",
      description="Adaptive advance {project}",
-     prompt="Open the next ready node for {project}; run scripts + write the in_progress row, do NOT dispatch/judge/run the barrier. Run `kaola-gitlab-workflow-next-action.js kaola-workflow/{project}/workflow-plan.md --json` and report its full JSON (ready set, next node, each node's resolved `model`, `allDone`). For the next ready node, mark it `in_progress` in the `## Node Ledger` and record its per-instance write baseline by running `kaola-gitlab-workflow-commit-node.js kaola-workflow/{project}/workflow-plan.md --node-id {node-id} --start --json` — record-base runs ONLY at node start and is **idempotent** (#239); an end-time baseline would neuter the barrier. Return the next-action JSON + the node you opened."
+     prompt="Working directory: ${ACTIVE_WORKTREE_PATH} — run all scripts and resolve every relative path from this directory (it is the provisioned worktree for adaptive; when it equals the repo root, behavior is unchanged). Open the next ready node for {project}; run scripts + write the in_progress row, do NOT dispatch/judge/run the barrier. Run `kaola-gitlab-workflow-next-action.js kaola-workflow/{project}/workflow-plan.md --json` and report its full JSON (ready set, next node, each node's resolved `model`, `allDone`). For the next ready node, mark it `in_progress` in the `## Node Ledger` and record its per-instance write baseline by running `kaola-gitlab-workflow-commit-node.js kaola-workflow/{project}/workflow-plan.md --node-id {node-id} --start --json` — record-base runs ONLY at node start and is **idempotent** (#239); an end-time baseline would neuter the barrier. Return the next-action JSON + the node you opened."
    )
    ```
    If the contractor reports `allDone` (every ledger row `complete`/`n/a`), route to Phase 6
@@ -151,7 +186,7 @@ Agent(
   subagent_type="tdd-guide",
   model="{TDD_GUIDE_MODEL}",
   description="Adaptive node {node-id} {project}",
-  prompt="Implement node {node-id}. Declared write set: {declared_write_set}. RED→GREEN required."
+  prompt="Working directory: ${ACTIVE_WORKTREE_PATH} — run all scripts and resolve every relative path from this directory (it is the provisioned worktree for adaptive; when it equals the repo root, behavior is unchanged). Implement node {node-id}. Declared write set: {declared_write_set}. RED→GREEN required."
 )
 ```
 
@@ -178,7 +213,7 @@ Agent(
   subagent_type="code-reviewer",
   model="{CODE_REVIEWER_MODEL}",
   description="Adaptive review {project}",
-  prompt="Review the changes produced by the implement nodes this gate post-dominates."
+  prompt="Working directory: ${ACTIVE_WORKTREE_PATH} — run all scripts and resolve every relative path from this directory (it is the provisioned worktree for adaptive; when it equals the repo root, behavior is unchanged). Review the changes produced by the implement nodes this gate post-dominates."
 )
 ```
 
@@ -191,15 +226,16 @@ Agent(
   subagent_type="build-error-resolver",
   model="{BUILD_ERROR_RESOLVER_MODEL}",
   description="Adaptive fix {project}",
-  prompt="Resolve the failure recorded in the ledger for node {node-id}."
+  prompt="Working directory: ${ACTIVE_WORKTREE_PATH} — run all scripts and resolve every relative path from this directory (it is the provisioned worktree for adaptive; when it equals the repo root, behavior is unchanged). Resolve the failure recorded in the ledger for node {node-id}."
 )
 ```
 
    A read-only fan-out instance (e.g. an `adversarial-verifier` skeptic, or any
    other read-only role) is dispatched the same way, one instance at a time, with
-   `subagent_type` set to the node's role and `model=` resolved via
-   `scripts/kaola-workflow-resolve-agent-model.js`. Per-instance evidence is
-   namespaced `.cache/{role}-{claim-id}.md` so siblings never collide.
+   `subagent_type` set to the node's role, `model=` resolved via
+   `scripts/kaola-workflow-resolve-agent-model.js`, and `Working directory:
+   ${ACTIVE_WORKTREE_PATH}` so the relative plan path resolves in the worktree.
+   Per-instance evidence is namespaced `.cache/{role}-{claim-id}.md` so siblings never collide.
 3. **commit + advance (contractor bracket)** — after the role returns, the contractor verifies the
    evidence, runs the barrier (commit order: `.cache` evidence → Node Ledger row → `workflow-state.md`
    pointer LAST), **only on a clean barrier** closes the node, AND — in the SAME dispatch — opens the
@@ -209,7 +245,7 @@ Agent(
      subagent_type="contractor",
      model="{CONTRACTOR_MODEL}",
      description="Adaptive commit+advance {project}",
-     prompt="Close node {node-id} for {project} in commit order (`.cache` evidence → `## Node Ledger` row → `workflow-state.md` pointer LAST); run scripts + write the durable rows, do NOT judge sufficiency or write any escalation marker. (a) Read `.cache/{node-id}.md` and report whether BOTH RED and GREEN evidence are present (a `tdd-guide` node cannot transition to `complete` without both, or an explicit `n/a` skip reason); for an `implementer` node, report whether a recorded `non_tdd_reason` AND a passing change-type-appropriate check (regression-green / build-green / executable smoke-integration) are present in place of RED→GREEN — an `implementer` node cannot transition to `complete` without both; and the `test_thrash` count (consecutive same-test RED→RED cycles). (b) Run the PER-INSTANCE barrier `kaola-gitlab-workflow-commit-node.js kaola-workflow/{project}/workflow-plan.md --node-id {node-id} --json` and report its exit code — the re-scan of the files this node actually wrote is **script-enforced** (#231), not prose; with `--node-id` it diffs against the node's step-1 recorded base (exactly THIS node's writes, #239) and checks them against the node's OWN declared write set, so a fan-out instance that overflows into a SIBLING's lane is refused (the whole-plan barrier in Phase 6 remains the union-level floor). (c) ONLY IF the barrier exits 0 AND RED+GREEN evidence is present (or a valid `n/a`): mark the node `complete` (or `n/a`) and emit its one `## Required Agent Compliance` row — for a `code-reviewer`/`security-reviewer` gate or skeptic row, key it with the **bare role string** (`code-reviewer`, `security-reviewer`); per-instance disambiguation goes in the Evidence column only (the canonical compliance-row format the full-path `delegationPolicyCompliance()` matcher expects). Never mark a gate row `n/a` while a node it post-dominates reached `complete` — a gate row must record a node that actually ran and produced a passing verdict. (d) FUSED ADVANCE — ONLY IF the barrier exited 0 and the node is now `complete`/`n/a`: in this SAME call, open the next node — run `kaola-gitlab-workflow-next-action.js kaola-workflow/{project}/workflow-plan.md --json` and, if it reports a next ready node, mark that node `in_progress` and record its baseline with `kaola-gitlab-workflow-commit-node.js kaola-workflow/{project}/workflow-plan.md --node-id {next-node-id} --start --json` (record-base runs only at node start and is **idempotent**, #239); report the next-action JSON + the node you opened, or `allDone`. If the barrier exits 1, or `test_thrash` ≥ 3, or evidence is missing: do NOT mark the node `complete` AND do NOT run the fused advance — report the condition and stop (the orchestrator owns the halt). (e) SELECTOR ROUTING — ONLY IF `selectorCheck.isSelector === true` AND `selectorCheck.ok === true` (barrier already exited 0 above): read `selectorCheck.armsToNa` from the barrier JSON. For each arm-id in `armsToNa`, write its `## Node Ledger` row to `n/a` with note `selected: <selectorCheck.selected> (not this arm)`. These writes MUST happen BEFORE the fused advance in (d) so `next-action` sees the n/a rows as TERMINAL when computing the new ready set. If `selectorCheck.ok === false` (missing/foreign selector), do NOT mark any arm n/a — report the condition and stop (the orchestrator owns the halt). Non-selector nodes (`selectorCheck.isSelector === false`) require no action. Do NOT dispatch a role, judge sufficiency, write any `escalated_to_full`/`consent_halt` marker, or ask the user."
+     prompt="Working directory: ${ACTIVE_WORKTREE_PATH} — run all scripts and resolve every relative path from this directory (it is the provisioned worktree for adaptive; when it equals the repo root, behavior is unchanged). Close node {node-id} for {project} in commit order (`.cache` evidence → `## Node Ledger` row → `workflow-state.md` pointer LAST); run scripts + write the durable rows, do NOT judge sufficiency or write any escalation marker. (a) Read `.cache/{node-id}.md` and report whether BOTH RED and GREEN evidence are present (a `tdd-guide` node cannot transition to `complete` without both, or an explicit `n/a` skip reason); for an `implementer` node, report whether a recorded `non_tdd_reason` AND a passing change-type-appropriate check (regression-green / build-green / executable smoke-integration) are present in place of RED→GREEN — an `implementer` node cannot transition to `complete` without both; and the `test_thrash` count (consecutive same-test RED→RED cycles). (b) Run the PER-INSTANCE barrier `kaola-gitlab-workflow-commit-node.js kaola-workflow/{project}/workflow-plan.md --node-id {node-id} --json` and report its exit code — the re-scan of the files this node actually wrote is **script-enforced** (#231), not prose; with `--node-id` it diffs against the node's step-1 recorded base (exactly THIS node's writes, #239) and checks them against the node's OWN declared write set, so a fan-out instance that overflows into a SIBLING's lane is refused (the whole-plan barrier in Phase 6 remains the union-level floor). (c) ONLY IF the barrier exits 0 AND RED+GREEN evidence is present (or a valid `n/a`): mark the node `complete` (or `n/a`) and emit its one `## Required Agent Compliance` row — for a `code-reviewer`/`security-reviewer` gate or skeptic row, key it with the **bare role string** (`code-reviewer`, `security-reviewer`); per-instance disambiguation goes in the Evidence column only (the canonical compliance-row format the full-path `delegationPolicyCompliance()` matcher expects). Never mark a gate row `n/a` while a node it post-dominates reached `complete` — a gate row must record a node that actually ran and produced a passing verdict. (d) FUSED ADVANCE — ONLY IF the barrier exited 0 and the node is now `complete`/`n/a`: in this SAME call, open the next node — run `kaola-gitlab-workflow-next-action.js kaola-workflow/{project}/workflow-plan.md --json` and, if it reports a next ready node, mark that node `in_progress` and record its baseline with `kaola-gitlab-workflow-commit-node.js kaola-workflow/{project}/workflow-plan.md --node-id {next-node-id} --start --json` (record-base runs only at node start and is **idempotent**, #239); report the next-action JSON + the node you opened, or `allDone`. If the barrier exits 1, or `test_thrash` ≥ 3, or evidence is missing: do NOT mark the node `complete` AND do NOT run the fused advance — report the condition and stop (the orchestrator owns the halt). (e) SELECTOR ROUTING — ONLY IF `selectorCheck.isSelector === true` AND `selectorCheck.ok === true` (barrier already exited 0 above): read `selectorCheck.armsToNa` from the barrier JSON. For each arm-id in `armsToNa`, write its `## Node Ledger` row to `n/a` with note `selected: <selectorCheck.selected> (not this arm)`. These writes MUST happen BEFORE the fused advance in (d) so `next-action` sees the n/a rows as TERMINAL when computing the new ready set. If `selectorCheck.ok === false` (missing/foreign selector), do NOT mark any arm n/a — report the condition and stop (the orchestrator owns the halt). Non-selector nodes (`selectorCheck.isSelector === false`) require no action. Do NOT dispatch a role, judge sufficiency, write any `escalated_to_full`/`consent_halt` marker, or ask the user."
    )
    ```
 4. **judge the barrier (main session — governance).** Read the contractor's commit+advance report:

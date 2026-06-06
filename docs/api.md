@@ -68,6 +68,10 @@ The Phase 6 sink is responsible for delivering completed work to the repository 
     - Exits 1 with remediation hint (`git push -u origin <branch>`)
     - Prevents accidental merge of incomplete or out-of-sync branches
     - Skipped when `KAOLA_WORKFLOW_OFFLINE=1`
+  - **Workflow-artifacts-only guard** (`assertBranchHasNonWorkflowChanges`, issue #264, AC7):
+    - All three editions (GitHub, GitLab, Gitea) refuse to merge a branch whose entire diff vs `origin/main` consists solely of `kaola-workflow/**` workflow artifacts — turning silent implementation loss into a loud, recoverable failure
+    - Exits 1 with a list of the workflow-only changed files and a remediation note
+    - Skipped when `origin/main` is unresolvable (mirror already up-to-date, no integration base to diff against) — cannot judge, so does not block
 - **Exit codes**:
   - `0`: merge succeeded, branch pushed, issue closed (or close failure emits warning but exit code stays 0)
   - `1`: merge failed (non-recoverable; includes pre-merge guard failures: live workflow-state, unpushed commits, or no upstream tracking ref)
@@ -103,14 +107,14 @@ The Phase 6 sink is responsible for delivering completed work to the repository 
 
 ### Worktree Provisioning
 
-- **`KAOLA_WORKTREE_NATIVE`** (ON by default; set to `0` to disable) — By default the claim/startup scripts (all three editions: GitHub, GitLab, Gitea) provision a per-issue sibling Git worktree at `<repo-parent>/<repo-name>.kw/<project>/` and record the absolute path as `worktree_path` in the active folder's Sink block. Set `KAOLA_WORKTREE_NATIVE=0` to opt out (repo-root run, no worktree). Worktree-on-by-default applies to the **full and fast** workflow paths; the **adaptive** path is exempt and always runs at repo-root (no worktree, `worktree_path: ''`) regardless of `KAOLA_WORKTREE_NATIVE` — adaptive worktree support is tracked in #264.
+- **`KAOLA_WORKTREE_NATIVE`** (ON by default; set to `0` to disable) — By default the claim/startup scripts (all three editions: GitHub, GitLab, Gitea) provision a per-issue repo-local Git worktree at `<repo-root>/.kw/worktrees/<project>/` and record the absolute path as `worktree_path` in the active folder's Sink block. Set `KAOLA_WORKTREE_NATIVE=0` to opt out (repo-root run, no worktree). Worktree provisioning applies to **all** workflow paths (full, fast, and adaptive); the adaptive path no longer exempts itself (#264).
 
-  **When provisioning is attempted:** Provisioning occurs unless one of the following holds: `KAOLA_WORKTREE_NATIVE=0`, `KAOLA_WORKFLOW_OFFLINE` is `1`, the repo has no git history (`git rev-parse HEAD` fails), or the claim is on the adaptive path (`--workflow-path adaptive`). In any of those cases the claim proceeds as a repo-root run and `worktree_path` is `''`.
+  **When provisioning is attempted:** Provisioning occurs unless one of the following holds: `KAOLA_WORKTREE_NATIVE=0`, `KAOLA_WORKFLOW_OFFLINE` is `1`, or the repo has no git history (`git rev-parse HEAD` fails). In any of those cases the claim proceeds as a repo-root run and `worktree_path` is `''`.
 
-  **On provisioning failure:** If provisioning is attempted (not opted out) but throws, the claim still succeeds (status: `acquired`) and the returned JSON and `workflow-state.md` carry a `worktree_error` field describing the failure. `worktree_path` remains `''`. This is distinct from a deliberate repo-root run: an opted-out / offline / no-history / adaptive run means `worktree_error` is absent entirely; `worktree_error` present means a real provisioning failure occurred.
+  **On provisioning failure:** If provisioning is attempted (not opted out) but throws, the claim still succeeds (status: `acquired`) and the returned JSON and `workflow-state.md` carry a `worktree_error` field describing the failure. `worktree_path` remains `''`. This is distinct from a deliberate repo-root run: an opted-out / offline / no-history run means `worktree_error` is absent entirely; `worktree_error` present means a real provisioning failure occurred.
 
   **Discriminator:**
-  - `worktree_path: ''` and no `worktree_error` field → intentional repo-root run (opted out, offline, no git history, or an adaptive-path claim — provisioning is suppressed by policy regardless of `KAOLA_WORKTREE_NATIVE`, pending #264)
+  - `worktree_path: ''` and no `worktree_error` field → intentional repo-root run (opted out, offline, or no git history — provisioning suppressed by policy)
   - `worktree_path: ''` and `worktree_error` present → provisioning was attempted and failed
 
 ### Test Hooks
@@ -497,10 +501,10 @@ self-check.
 The agent runs these steps in order, then returns:
 
 1. **Claim** — `node kaola-workflow-claim.js startup --workflow-path adaptive --target-issue <N>`,
-   which writes `workflow-state.md` and stamps `workflow_path: adaptive`. The adaptive path runs at
-   repo-root and does NOT provision a worktree (`worktree_path: ''`) regardless of `KAOLA_WORKTREE_NATIVE`
-   — worktree-on-by-default is for the full/fast paths only (see Worktree Provisioning above); adaptive
-   worktree support is tracked in #264.
+   which writes `workflow-state.md`, stamps `workflow_path: adaptive`, and provisions a worktree at
+   `.kw/worktrees/<project>/` (same as full/fast paths; see Worktree Provisioning above). The planner
+   authors the plan at repo-root; the executor (`/kaola-workflow-plan-run`) operates inside the
+   provisioned worktree so implementation lands on `workflow/issue-N`.
    (`claim.js` needs no code change: `--workflow-path` is parsed by the generic kebab→camel handler,
    so a subagent shell that does not inherit the orchestrator's `KAOLA_PATH` still records the path.)
 2. **Author** — write the `## Meta` + `## Nodes` DAG + an **empty** `## Node Ledger` into
@@ -515,7 +519,7 @@ The agent runs these steps in order, then returns:
 ```json
 {
   "project": "<project-folder-name>",
-  "worktree_path": "<always '' on the adaptive path — a repo-root run, no worktree, pending #264>",
+  "worktree_path": "<path to the provisioned worktree, or '' if provisioning was skipped/failed>",
   "claim_verdict": "owned | <typed refusal verdict>",
   "claim_reasoning": "<one-line reasoning from the claim>",
   "plan_path": "<path to the authored workflow-plan.md, or null on a claim refusal>",
@@ -830,6 +834,58 @@ node scripts/kaola-workflow-claim.js stale-worktree-check
 **Offline mode** (`KAOLA_WORKFLOW_OFFLINE=1`):
 
 The command still removes local worktrees and branches. Archive/export strategies work normally. The detection of which worktrees/branches are "stale" uses only the local archive-existence check (no remote API calls to verify if issues are closed).
+
+### Script: `kaola-workflow-claim.js legacy-worktree-cleanup`
+
+Discovers and removes Git worktrees that were provisioned under the old sibling-container path (`<repo-parent>/<repo-name>.kw/<project>/`) before the repo-local `.kw/worktrees/` layout was introduced (#264). This is a separate subcommand from `stale-worktree-cleanup` (which targets issue-closed/archived staleness, not path-layout migration).
+
+**Invocation:**
+
+```bash
+# Dry-run (default — no changes)
+node scripts/kaola-workflow-claim.js legacy-worktree-cleanup
+
+# Execute removal
+node scripts/kaola-workflow-claim.js legacy-worktree-cleanup --execute
+
+# Execute with dirty-worktree handling
+node scripts/kaola-workflow-claim.js legacy-worktree-cleanup --execute --archive
+node scripts/kaola-workflow-claim.js legacy-worktree-cleanup --execute --export
+node scripts/kaola-workflow-claim.js legacy-worktree-cleanup --execute --force
+```
+
+**Flags:**
+
+- **`--execute`** — Perform actual removal. Without this flag, the command dry-runs and prints what would change.
+- **`--archive`** — For dirty worktrees, stash uncommitted changes before removal (recoverable via `git stash`).
+- **`--export`** — For dirty worktrees, write a patch file to `kaola-workflow/archive/exports/` before removal.
+- **`--force`** — For dirty worktrees, discard uncommitted changes without recovery.
+
+When no strategy flag is given, dirty worktrees are skipped and reported in `skipped_dirty`. Branch refs are preserved (only the worktree registration and filesystem directory are removed). After all legacy worktrees are removed, the now-empty legacy container directory is deleted. The command refuses to operate if the current working directory is inside a target legacy worktree.
+
+**JSON output:**
+
+```json
+{
+  "dry_run": true,
+  "would_remove": [],
+  "would_delete_branch": [],
+  "skipped_dirty": []
+}
+```
+
+Note: `would_delete_branch` is populated in dry-run output for each worktree that lacks `--keep-branch`, but the execute path removes only the worktree (via `git worktree remove`) and does not delete the branch ref. Branch refs are always preserved.
+
+```json
+{
+  "dry_run": false,
+  "removed": [],
+  "skipped_dirty": [],
+  "stashed": [],
+  "exported": [],
+  "failed_preserve": []
+}
+```
 
 ## Closure Contract
 

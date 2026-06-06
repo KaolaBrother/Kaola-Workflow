@@ -131,7 +131,7 @@ If the JSON `status` is `authoring_refused`, surface the typed refusal and STOP.
 delegating: nothing is claimed yet — run the Startup git-freshness checks against the MAIN repo
 (`git pull --ff-only` if behind). If it cannot resolve cleanly (dirty, or a merge / rebase / stash /
 reset is needed), STOP and ask — do NOT delegate, so **no folder / `workflow:in-progress`
-label is created until git is clean** (the front end claims here — at repo-root, since the adaptive path does NOT provision a worktree; that is for the full/fast paths only, pending #264 — so the router's post-claim freshness-block release no longer guards this path).
+label is created until git is clean** (the front end claims here at repo-root — the adaptive claim provisions a repo-local hidden worktree at `<repo-root>/.kw/worktrees/<project>/`, the same as full/fast paths; the planner authors + freezes at repo-root and does NOT itself cd into the worktree — so the router's post-claim freshness-block release no longer guards this path).
 
 Once main is clean, **delegate to the `workflow-planner`**: it runs `kaola-workflow-claim.js startup --runtime <runtime> --workflow-path adaptive
 --target-issue <issue>` (`--workflow-path adaptive` is REQUIRED — a subagent shell does not inherit
@@ -146,7 +146,7 @@ different issue.
 **Read the durable state, not the planner's prose.** On success take `{project}` from the return,
 re-read `kaola-workflow/{project}/workflow-state.md` (the `## Sink` block, `workflow_path: adaptive`)
 and `kaola-workflow/{project}/workflow-plan.md` (internalize the `## Nodes` DAG you govern, dispatch,
-and freeze). The claim (at repo-root — the adaptive path provisions no worktree, pending #264) was cut from a now-clean main (git-freshness ran before the claim, above).
+and freeze). The claim (at repo-root — the adaptive claim provisions a worktree at `<repo-root>/.kw/worktrees/<project>/`; the planner authors + freezes at repo-root) was cut from a now-clean main (git-freshness ran before the claim, above).
 
 **Read the handoff packet.** The planner RAN `kaola-workflow-adaptive-handoff.js` and returned a checklist-backed packet (plan already frozen, node1 baseline+ledger+Planning Evidence written). The handoff is mechanical; `decision:ask` is audit metadata only — it freezes-and-proceeds, NEVER pauses for approval.
 

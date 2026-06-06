@@ -566,7 +566,7 @@ For larger, **structurally non-linear** issues — work that naturally fans out 
 KAOLA_PATH=adaptive /workflow-next
 ```
 
-`/kaola-workflow-adapt` opens by dispatching the `workflow-planner` front-end subagent **once**: it claims/starts up (writes `workflow-state.md` at repo-root — the adaptive path does NOT provision a worktree, which is a full/fast-path behavior, pending #264), authors the plan as a `workflow-plan.md` (a `## Nodes` DAG plus an empty `## Node Ledger`), and runs `kaola-workflow-adaptive-handoff.js`. The plan must be **in-grammar**: roles drawn from the closed role library, one of four shapes (`sequence`, bounded fan-out over pairwise-disjoint write sets up to `KAOLA_FANOUT_CAP`, a bounded loop, or a selective-execution `select(<group>)` arm), a single unique `finalize` sink, and computed **post-dominance gates** (`code-reviewer` over every code-producing node, `security-reviewer` over every sensitive node). The handoff script branches on the plan-validator `--json` `result`: on `in-grammar` it freezes mechanically — writing a `plan_hash` inside `workflow-plan.md` (re-checked on every load, so post-freeze tampering is refused) — resume-checks, opens the first ready node (ledger `in_progress`), records the node1 baseline, stages the roadmap, and writes `## Planning Evidence` into `workflow-state.md`, then returns `handoff_status: ready_to_dispatch_first_node` with a checklist and `first_node` packet. `decision:auto-run` vs `ask` is **audit metadata** recorded in the packet — the run proceeds either way with no user-approval gate. On `refuse` the handoff returns `plan_invalid` with no mutation; the orchestrator drives a bounded repair loop (re-dispatching the planner with validator errors) rather than silently looping. The main session reads the packet and, on success, dispatches the first node directly, then runs `/kaola-workflow-plan-run` node by node with per-node checkpoints; it is resume-safe and toggle-agnostic (a frozen plan finishes even if the switch is later turned off) and hands off to Phase 6 on an all-complete ledger.
+`/kaola-workflow-adapt` opens by dispatching the `workflow-planner` front-end subagent **once**: it claims/starts up (writes `workflow-state.md` and provisions a worktree at `.kw/worktrees/<project>/` — the planner authors the plan at repo-root and the executor operates inside the provisioned worktree), authors the plan as a `workflow-plan.md` (a `## Nodes` DAG plus an empty `## Node Ledger`), and runs `kaola-workflow-adaptive-handoff.js`. The plan must be **in-grammar**: roles drawn from the closed role library, one of four shapes (`sequence`, bounded fan-out over pairwise-disjoint write sets up to `KAOLA_FANOUT_CAP`, a bounded loop, or a selective-execution `select(<group>)` arm), a single unique `finalize` sink, and computed **post-dominance gates** (`code-reviewer` over every code-producing node, `security-reviewer` over every sensitive node). The handoff script branches on the plan-validator `--json` `result`: on `in-grammar` it freezes mechanically — writing a `plan_hash` inside `workflow-plan.md` (re-checked on every load, so post-freeze tampering is refused) — resume-checks, opens the first ready node (ledger `in_progress`), records the node1 baseline, stages the roadmap, and writes `## Planning Evidence` into `workflow-state.md`, then returns `handoff_status: ready_to_dispatch_first_node` with a checklist and `first_node` packet. `decision:auto-run` vs `ask` is **audit metadata** recorded in the packet — the run proceeds either way with no user-approval gate. On `refuse` the handoff returns `plan_invalid` with no mutation; the orchestrator drives a bounded repair loop (re-dispatching the planner with validator errors) rather than silently looping. The main session reads the packet and, on success, dispatches the first node directly, then runs `/kaola-workflow-plan-run` node by node with per-node checkpoints; it is resume-safe and toggle-agnostic (a frozen plan finishes even if the switch is later turned off) and hands off to Phase 6 on an all-complete ledger.
 
 The adaptive path adds one role — `adversarial-verifier`, a read-only, refute-by-default skeptic used in read-only verification fan-outs. It is never a review gate and touches zero repository files.
 
@@ -602,7 +602,7 @@ when developing locally. Drift between `scripts/` and
 
 | Script | What it does | When it runs |
 |--------|--------------|--------------|
-| `kaola-workflow-claim.js` (GitHub) / `kaola-gitlab-workflow-claim.js` (GitLab) / `kaola-gitea-workflow-claim.js` (Gitea) | Active-folder coordination: claim, release/discard, status, watch-pr (watch-mr on GitLab), bootstrap/startup, finalize, pick-next, resume, worktree-status, worktree-finalize, stale-worktree-check, stale-worktree-cleanup. On the full/fast paths it provisions a per-issue Git worktree by default (set `KAOLA_WORKTREE_NATIVE=0` to disable); the adaptive path is exempt and runs at repo-root, pending #264. | All phases |
+| `kaola-workflow-claim.js` (GitHub) / `kaola-gitlab-workflow-claim.js` (GitLab) / `kaola-gitea-workflow-claim.js` (Gitea) | Active-folder coordination: claim, release/discard, status, watch-pr (watch-mr on GitLab), bootstrap/startup, finalize, pick-next, resume, worktree-status, worktree-finalize, stale-worktree-check, stale-worktree-cleanup, legacy-worktree-cleanup. Provisions a per-issue Git worktree at `<repo-root>/.kw/worktrees/<project>/` by default on all workflow paths (full, fast, adaptive); set `KAOLA_WORKTREE_NATIVE=0` to disable. | All phases |
 | `kaola-workflow-active-folders.js` | Shared library: reads the active-folder table from `kaola-workflow/{project}/workflow-state.md`. Imported by claim, classifier, and sink scripts. | Library |
 | `kaola-workflow-classifier.js` | Parallel-work classifier: marks each open issue green/yellow/red/blocked based on dependency graph, exact file-path overlaps, shared-infra directories, and active folders. | Startup |
 | `kaola-workflow-roadmap.js` (GitHub) / `kaola-gitlab-workflow-roadmap.js` (GitLab) / `kaola-gitea-workflow-roadmap.js` (Gitea) | Regenerates `kaola-workflow/ROADMAP.md` from `kaola-workflow/.roadmap/issue-{N}.md`, and appends an optional project-local `kaola-workflow/.roadmap/_rules.md` to the generated `## Rules` section under a `### Project rules` sub-heading (no-op, byte-identical output, when the file is absent or empty). Shared subcommands: `generate`, `validate`, `validate-remote`, `init-issue`, `project-name`; GitHub also supports `migrate`, while GitLab/Gitea support `refresh`. | Phase 1, Phase 6 |
@@ -900,10 +900,10 @@ cd ~/Workspace/Kaola-Workflow
 /goal use the workflow-next skill to finish issue #43.
 ```
 
-By default, each active issue on the full/fast paths runs in a sibling worktree at
-`<repo-parent>/<repo-name>.kw/<project>/`, so file edits in one issue do
-not interfere with another (set `KAOLA_WORKTREE_NATIVE=0` to disable). The
-adaptive path is exempt and runs at repo-root (no worktree), pending #264.
+By default, every active issue (full, fast, and adaptive paths) runs in a
+repo-local worktree at `<repo-root>/.kw/worktrees/<project>/`, so file edits
+in one issue do not interfere with another (set `KAOLA_WORKTREE_NATIVE=0` to
+disable).
 
 To drive several issues from a single session instead of several
 terminals, scope the goal text accordingly:
@@ -915,23 +915,23 @@ terminals, scope the goal text accordingly:
 
 ### Per-issue Git worktrees
 
-By default, `kaola-workflow-claim.js` provisions a sibling Git worktree
-on every full/fast-path claim so each active issue has its own checkout — separate from
-the main repo checkout and from every other active issue. Set
-`KAOLA_WORKTREE_NATIVE=0` to disable (a repo-root run, no worktree). The
-adaptive path is exempt and always runs at repo-root (no worktree), pending #264.
+By default, `kaola-workflow-claim.js` provisions a Git worktree on every
+claim (full, fast, and adaptive paths) so each active issue has its own
+checkout — separate from the main repo checkout and from every other active
+issue. Set `KAOLA_WORKTREE_NATIVE=0` to disable (a repo-root run, no
+worktree).
 
 **Why.** With one shared checkout, two parallel sessions stepping on the
 same files would collide on branch switches and stash state. A
 per-issue worktree gives each session its own working tree, so file
 edits, builds, and Phase 4 TDD runs in one issue do not affect another.
 
-**Where.** Worktrees live at `<repo-parent>/<repo-name>.kw/<project>/`.
+**Where.** Worktrees live at `<repo-root>/.kw/worktrees/<project>/`.
 If the main repo is `~/Workspace/Kaola-Workflow`, the worktree for
-project `issue-42` is `~/Workspace/Kaola-Workflow.kw/issue-42/`. The
-absolute path is recorded in the active folder's Sink block as
-`worktree_path`, so phase commands can resolve the linked worktree
-without consulting a lock file.
+project `issue-42` is `~/Workspace/Kaola-Workflow/.kw/worktrees/issue-42/`.
+The `.kw/` directory is git-ignored. The absolute path is recorded in the
+active folder's Sink block as `worktree_path`, so phase commands can resolve
+the linked worktree without consulting a lock file.
 
 **How phases use it.** Phase 4 resolves `ACTIVE_WORKTREE_PATH` at
 startup — when `KAOLA_WORKTREE_NATIVE=0` it is the current directory; when
@@ -944,7 +944,12 @@ preserves it with `--keep-worktree` for the final commit gate.
 **Listing and removal.** `kaola-workflow-claim.js worktree-status` lists
 all active workflow worktrees with their issue, branch, and folder
 metadata. `worktree-finalize` mirrors the final phase artifacts into the
-linked worktree and commits them.
+linked worktree and commits them. The old visible sibling container
+(`<repo-parent>/<repo-name>.kw/`) is deprecated; run
+`kaola-workflow-claim.js legacy-worktree-cleanup` (dry-run by default;
+add `--execute` to perform) to remove any worktrees still registered
+under it. Dirty worktrees are skipped unless `--archive`, `--export`, or
+`--force` is passed; branch refs are preserved.
 
 ## Updating
 

@@ -95,6 +95,33 @@ function assertNoLiveWorkflowFolder(mainRoot, project) {
   }
 }
 
+function assertBranchHasNonWorkflowChanges(mainRoot, branch) {
+  // AC7 (#264): refuse a sink whose entire diff vs origin/main is kaola-workflow/** bookkeeping —
+  // the branch carries no implementation. Skip when origin/main is unresolvable (mirror
+  // alreadyUpToDate: no integration base to diff against → cannot judge, do not block).
+  let base;
+  try {
+    base = execFileSync('git', ['-C', mainRoot, 'rev-parse', '--verify', 'origin/main'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch (_) { return; } // origin/main missing → skip (same posture as merge-base skip-check)
+  let files;
+  try {
+    const out = execFileSync('git', ['-C', mainRoot, 'diff', '--name-only', base + '...' + branch],
+      { encoding: 'utf8' });
+    files = out.split('\n').map(s => s.trim()).filter(Boolean);
+  } catch (_) { return; } // diff failed → do not fabricate a refusal
+  if (files.length === 0) return; // no changes at all — leave to the existing up-to-date / FF logic
+  const allWorkflow = files.every(f => f.startsWith('kaola-workflow/'));
+  if (allWorkflow) {
+    throw new Error(
+      'sink-merge refused: branch ' + branch + ' has no implementation changes beyond origin/main.\n' +
+      'Every changed file is a kaola-workflow/** workflow artifact:\n  ' + files.join('\n  ') + '\n' +
+      'A workflow branch must carry the implementation it claims to deliver. If this is intentional\n' +
+      '(docs/roadmap-only change), include the real changed files in the final commit before sinking.'
+    );
+  }
+}
+
 function assertBranchPushedToUpstream(mainRoot, branch) {
   let upstream;
   try {
@@ -335,6 +362,7 @@ function main() {
   execFileSync('git', ['-C', mainRoot, 'checkout', args.branch], { encoding: 'utf8' });
   assertNoLiveWorkflowFolder(mainRoot, args.project);
   if (!OFFLINE) assertBranchPushedToUpstream(mainRoot, args.branch);
+  if (!OFFLINE) assertBranchHasNonWorkflowChanges(mainRoot, args.branch);
 
   // Step 2 — Merge-base skip-check
   // If origin/main doesn't exist (e.g. no remote, or OFFLINE with no cached ref),
@@ -366,4 +394,4 @@ if (require.main === module) {
   try { main(); } catch (err) { process.stderr.write(err.message + '\n'); process.exitCode = 1; }
 }
 
-module.exports = { classifyMergeError };
+module.exports = { classifyMergeError, assertBranchHasNonWorkflowChanges };

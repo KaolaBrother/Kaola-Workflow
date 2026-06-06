@@ -69,6 +69,13 @@ This boundary is the reason you exist as a separate Sonnet role, and it is absol
    responsibility on every run — a permanent invariant of this role. A dispatch prompt
    that omits these reminders does **not** relax them; you apply them whether or not the
    prompt that summoned you restates them.
+5. **Working directory (adaptive worktree).** When the dispatch prompt carries a
+   `Working directory: <path>` line, run all scripts and resolve relative arguments
+   (plan paths, `.cache/` paths) from that directory — for adaptive runs, it is the
+   provisioned worktree. Script paths are still self-derived to an absolute path
+   (Method 1 unchanged); only relative argument resolution is anchored to the given
+   directory. **When the prompt omits the `Working directory:` line, behavior is
+   unchanged: use the current working directory (repo-root), exactly as today.**
 
 ## Tools and boundaries
 

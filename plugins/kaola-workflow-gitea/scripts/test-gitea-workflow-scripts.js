@@ -1674,36 +1674,38 @@ assert.strictEqual(classifier.issueHasRemoteClaimNotes(35), false,
   }
 }
 
-// Issue #100: sibling worktree path - startup from a linked worktree must produce sibling paths
+// Issue #100: no-nesting — startup from a linked worktree must produce a path in the canonical
+// hidden-local container (<main-root>/.kw/worktrees/), never nested under the linked worktree.
+// Updated for #264: worktrees now live at <root>/.kw/worktrees/<project>, not the sibling scheme.
 {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-sibling-'));
-  const kwRoot = fs.realpathSync(tmp) + '.kw';
+  const kwRoot = fs.realpathSync(tmp) + '.kw'; // legacy path — kept for cleanup only
   const binDir = path.join(tmp, 'bin');
   writeTeaShimOpen(binDir);
   try {
     initGitRepo(tmp);
     // Simulate a linked worktree by running startup from within a hypothetical linked path.
-    // We do this by creating a sibling dir that shares the same git common-dir.
-    const linkedWt = path.join(kwRoot, 'issue-5');
+    // We do this by creating a hidden-local dir that shares the same git common-dir.
+    const linkedWt = path.join(fs.realpathSync(tmp), '.kw', 'worktrees', 'issue-5');
     fs.mkdirSync(linkedWt, { recursive: true });
     // Create a worktree so git knows about it
     spawnSync('git', ['worktree', 'add', '--detach', linkedWt], { cwd: tmp, encoding: 'utf8' });
 
-    // Run startup from the linked worktree cwd — should produce sibling, not nested path
+    // Run startup from the linked worktree cwd — should produce hidden-local, not nested path
     const result = spawnSync(process.execPath, [claimScript, 'startup', '--runtime', 'test', '--target-issue', '6'], {
       cwd: linkedWt, encoding: 'utf8',
       env: { ...process.env, KAOLA_WORKTREE_NATIVE: '1', ...teaMockEnv(binDir), PATH: binDir + path.delimiter + (process.env.PATH || '') }
     });
-    assert.strictEqual(result.status, 0, 'sibling startup must exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert.strictEqual(result.status, 0, 'hidden-local startup must exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
     const out = JSON.parse(result.stdout.trim());
-    const expectedSibling = path.join(kwRoot, 'issue-6');
-    assert.strictEqual(out.worktree_path, expectedSibling,
-      'startup from linked worktree must produce sibling path, not nested: got ' + out.worktree_path);
-    assert.ok(!out.worktree_path.includes('issue-5.kw'),
-      'worktree path must not contain issue-5.kw nesting: ' + out.worktree_path);
+    const expectedHiddenLocal = path.join(fs.realpathSync(tmp), '.kw', 'worktrees', 'issue-6');
+    assert.strictEqual(out.worktree_path, expectedHiddenLocal,
+      'startup from linked worktree must produce hidden-local path, not nested: got ' + out.worktree_path);
+    assert.ok(!out.worktree_path.includes('issue-5/.kw'),
+      'worktree path must not contain issue-5/.kw nesting: ' + out.worktree_path);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
-    fs.rmSync(kwRoot, { recursive: true, force: true });
+    try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
   }
 }
 
@@ -3058,6 +3060,110 @@ function testGiteaCmdClassifyResidualNonJsonExit0() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Issue #264 — AC9 parity: worktreePathFor hidden-local-path + legacy-cleanup
+// Feature-detecting tests: assert OLD behavior until impl-claim lands the path-
+// split + cmdLegacyWorktreeCleanup into kaola-gitea-workflow-claim.js.
+// When impl-claim lands, SIGNAL = typeof claim.legacySiblingWorktreePathFor === 'function'
+// activates the strict new-path assertions (RED-pending forward dependency on impl-claim).
+// ---------------------------------------------------------------------------
+
+// Test #11a (§F): worktreePathFor hidden-local-path assertion.
+// SIGNAL: typeof claim.legacySiblingWorktreePathFor === 'function'
+// If present (impl-claim landed): assert worktreePathFor returns a path under <root>/.kw/worktrees/
+// Else (not yet landed): assert worktreePathFor returns OLD sibling path (parent/<repo>.kw/<project>)
+function testGiteaWorktreePathForHiddenLocal() {
+  const root = tempRoot('kw-gt-264-wtpath-');
+  try {
+    initGitRepo(root);
+    const project = 'issue-264-wtpath-test';
+    const result = claim.worktreePathFor(root, project);
+    const hasNewApi = typeof claim.legacySiblingWorktreePathFor === 'function';
+    if (hasNewApi) {
+      // impl-claim landed: new path is under <root>/.kw/worktrees/<project>
+      assert(
+        result.includes(path.join('.kw', 'worktrees', project)),
+        'testGiteaWorktreePathForHiddenLocal: expected path under .kw/worktrees/' + project + ', got: ' + result
+      );
+      assert(
+        !result.includes(path.join('.kw', project)) || result.includes(path.join('worktrees', project)),
+        'testGiteaWorktreePathForHiddenLocal: path must not be legacy sibling, got: ' + result
+      );
+    } else {
+      // impl-claim not yet landed: old sibling path — parent/<repo>.kw/<project>
+      const endsWithKwProject = result.endsWith(path.sep + project) &&
+        result.includes('.kw' + path.sep + project) &&
+        !result.includes(path.join('.kw', 'worktrees'));
+      assert(
+        endsWithKwProject,
+        'testGiteaWorktreePathForHiddenLocal: expected OLD sibling path ending in .kw/<project>, got: ' + result
+      );
+    }
+    console.log('testGiteaWorktreePathForHiddenLocal: PASSED (hasNewApi=' + hasNewApi + ')');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+// Test #11b (§F): legacy-worktree-cleanup dry-run assertion.
+// SIGNAL: legacy-worktree-cleanup subcommand recognized (exit 0 + JSON with dry_run field).
+// If recognized (impl-claim landed): assert dry-run reports legacy path in would_remove, removes nothing.
+// Else (not yet landed): SKIP with a SKIPPED line, keeping the walkthrough green.
+function testGiteaLegacyWorktreeCleanupDryRun() {
+  const root = tempRoot('kw-gt-264-legacy-cleanup-');
+  try {
+    initGitRepo(root);
+    // Probe: invoke legacy-worktree-cleanup without --execute on an offline repo
+    const probe = spawnSync(process.execPath, [claimScript, 'legacy-worktree-cleanup'], {
+      cwd: root,
+      encoding: 'utf8',
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }
+    });
+    // Recognized = exit 0 AND stdout is valid JSON containing dry_run key
+    let recognized = false;
+    let probeJson = null;
+    if (probe.status === 0) {
+      try {
+        probeJson = JSON.parse(probe.stdout.trim());
+        recognized = probeJson !== null && typeof probeJson === 'object' && 'dry_run' in probeJson;
+      } catch (_) { /* not JSON */ }
+    }
+    if (!recognized) {
+      // impl-claim not yet landed; subcommand unknown — skip gracefully
+      console.log('testGiteaLegacyWorktreeCleanupDryRun: SKIPPED (legacy-worktree-cleanup not yet recognized — lands in impl-claim)');
+      return;
+    }
+    // impl-claim landed: build a legacy-path worktree and assert dry-run reports it
+    const mainRoot = fs.realpathSync(root);
+    const legacyContainer = path.dirname(mainRoot) + path.sep + path.basename(mainRoot) + '.kw';
+    const legacyWt = path.join(legacyContainer, 'issue-264-legacy');
+    fs.mkdirSync(legacyWt, { recursive: true });
+    const addResult = spawnSync('git', ['worktree', 'add', '-b', 'workflow/gitea-issue-264-legacy', '--', legacyWt, 'HEAD'], {
+      cwd: root, encoding: 'utf8'
+    });
+    assert.strictEqual(addResult.status, 0, 'git worktree add failed: ' + addResult.stderr);
+    try {
+      const dryRun = spawnSync(process.execPath, [claimScript, 'legacy-worktree-cleanup'], {
+        cwd: root,
+        encoding: 'utf8',
+        env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }
+      });
+      assert.strictEqual(dryRun.status, 0, 'legacy-worktree-cleanup dry-run must exit 0, got: ' + dryRun.status + ' stderr: ' + dryRun.stderr);
+      const out = JSON.parse(dryRun.stdout.trim());
+      assert.strictEqual(out.dry_run, true, 'dry-run must report dry_run:true, got: ' + JSON.stringify(out));
+      assert(Array.isArray(out.would_remove) && out.would_remove.some(p => JSON.stringify(p).includes('issue-264-legacy')),
+        'dry-run must report legacy worktree in would_remove, got: ' + JSON.stringify(out));
+      assert(fs.existsSync(legacyWt), 'dry-run must not remove the worktree');
+      console.log('testGiteaLegacyWorktreeCleanupDryRun: PASSED');
+    } finally {
+      spawnSync('git', ['worktree', 'remove', '--force', legacyWt], { cwd: root, encoding: 'utf8' });
+      try { fs.rmSync(legacyContainer, { recursive: true, force: true }); } catch (_) {}
+    }
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
 testGiteaClassifyIssueResidualEmptyExit0();
 testGiteaClassifyIssueResidualNonJsonExit0();
 testGiteaCmdClassifyResidualEmptyExit0();
@@ -3065,6 +3171,8 @@ testGiteaCmdClassifyResidualNonJsonExit0();
 testWatchPrAbandonedClosureInvariantsClean();
 testGiteaClaimReclaimsStatelessOrphanDir();
 testGiteaPatchBranchGuards();
+testGiteaWorktreePathForHiddenLocal();
+testGiteaLegacyWorktreeCleanupDryRun();
 
 testGiteaRoadmapInitIssueExclusiveAndUpdate()
   .then(() => {

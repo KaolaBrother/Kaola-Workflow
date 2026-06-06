@@ -15,12 +15,45 @@ The plan is author-immutable after freeze, guarded by `plan_hash` (stored inside
 `workflow-plan.md`, re-checked every load). A tampered or unparseable plan is a **typed
 refusal**, never a silent fallback to the phaseN ladder.
 
+## Adaptive Worktree
+
+At the very start of plan-run — before the first contractor delegation — resolve the provisioned
+worktree path and, when it differs from the current directory, mirror the project folder into the
+worktree once so that all node dispatches operate with their working directory inside the worktree.
+
+```bash
+# Resolve linked worktree path from workflow-state.md (Codex: uses KAOLA_PROJECT env var)
+ACTIVE_WORKTREE_PATH="$(node -e "try{const fs=require('fs');const s=fs.readFileSync('kaola-workflow/' + process.env.KAOLA_PROJECT + '/workflow-state.md','utf8');const m=s.match(/^worktree_path:\\s*(.+)$/m);process.stdout.write(m?m[1].trim():'');}catch(e){}" 2>/dev/null)" || true
+[ -z "$ACTIVE_WORKTREE_PATH" ] && ACTIVE_WORKTREE_PATH="$(pwd)"
+```
+
+When `worktree_path` is absent or empty (e.g. `KAOLA_WORKTREE_NATIVE=0`, offline, no-git, or this
+very issue's own adaptive run which has `worktree_path: ''`), the fallback sets
+`ACTIVE_WORKTREE_PATH` to the repo root — the orchestrator behaves EXACTLY as before this change.
+The mirror below is SKIPPED in that case.
+
+```bash
+# One-time main→worktree project-folder mirror (skipped when paths are equal / repo-root run)
+if [ "$ACTIVE_WORKTREE_PATH" != "$(pwd)" ]; then
+  mkdir -p "$ACTIVE_WORKTREE_PATH/kaola-workflow/${KAOLA_PROJECT}/"
+  cp -R "kaola-workflow/${KAOLA_PROJECT}/." "$ACTIVE_WORKTREE_PATH/kaola-workflow/${KAOLA_PROJECT}/"
+fi
+```
+
+This copies the project folder (workflow-plan.md + Node Ledger + `.cache/`) into the worktree once
+at start. From this point pass `Working directory: ${ACTIVE_WORKTREE_PATH}` to EVERY contractor and
+role delegation below. The relative plan paths remain relative (relative + cwd is the mechanism; do
+NOT switch to absolute paths); with cwd == worktree they resolve to the worktree copy. When
+`ACTIVE_WORKTREE_PATH == $(pwd)` (repo-root fallback), the `Working directory:` line is harmless
+and the orchestrator behaves exactly as today.
+
 ## Resume Detection
 
 On entry (and on every resume), **delegate the re-orientation to the mechanical `contractor`
 Codex agent role when that subagent is available** — it runs the integrity + readiness scripts and
 reports the durable markers; the current session **judges** which resume branch applies and never
-runs these scripts itself. The contractor runs `node "$KAOLA_SCRIPTS/kaola-workflow-plan-validator.js"
+runs these scripts itself. Pass `Working directory: ${ACTIVE_WORKTREE_PATH}` to the contractor.
+The contractor runs `node "$KAOLA_SCRIPTS/kaola-workflow-plan-validator.js"
 kaola-workflow/{project}/workflow-plan.md --resume-check --json` (re-check `plan_hash` + closed-library
 membership + structural grammar + hash integrity ONLY — NOT the full gate rubric, which would brick an
 in-flight plan if the rubric tightened after freeze) and `node "$KAOLA_SCRIPTS/kaola-workflow-next-action.js"
@@ -85,16 +118,20 @@ thereafter the loop cycles step 2 → 3 → 4 → 2.
    bootstrap the first node, and on resume to open the next ready node **whenever no node is
    `in_progress`** (a never-opened first node, or one orphaned by a crash between a node's commit and
    its fused advance); every later advance is fused into step 3, so do not re-run it while a node is
-   already `in_progress`. The contractor
-   runs `node "$KAOLA_SCRIPTS/kaola-workflow-next-action.js"
+   already `in_progress`. Pass `Working directory: ${ACTIVE_WORKTREE_PATH}` to the contractor. The
+   contractor runs `node "$KAOLA_SCRIPTS/kaola-workflow-next-action.js"
    kaola-workflow/{project}/workflow-plan.md --json` (reports ready set / next node / resolved `model` /
    `allDone`), then for the next ready node marks it `in_progress` in the `## Node Ledger` and records its
    per-instance write baseline with `node "$KAOLA_SCRIPTS/kaola-workflow-commit-node.js"
    kaola-workflow/{project}/workflow-plan.md --node-id {node-id} --start --json` (record-base ONLY at node
    start — **idempotent** #239; an end-time baseline would neuter the barrier). If `allDone`, route to finalize.
 2. **dispatch** the node's role (current session — Codex delegates to the matching agent profile; resolve
-   its model via `kaola-workflow-resolve-agent-model.js`).
-3. **commit + advance (contractor)** — after the role returns, the contractor reads `.cache/{node-id}.md` (a
+   its model via `kaola-workflow-resolve-agent-model.js`). Pass `Working directory:
+   ${ACTIVE_WORKTREE_PATH}` to every role delegation (tdd-guide, code-reviewer, build-error-resolver,
+   read-only fan-out, or any dynamically-resolved role) so the relative plan path resolves inside the
+   worktree. When `ACTIVE_WORKTREE_PATH == $(pwd)` (repo-root fallback), the line is harmless.
+3. **commit + advance (contractor)** — after the role returns, pass `Working directory:
+   ${ACTIVE_WORKTREE_PATH}` to the contractor. The contractor reads `.cache/{node-id}.md` (a
    `tdd-guide` node needs RED then GREEN; an `implementer` node needs a recorded `non_tdd_reason` and a
    passing change-type-appropriate check — regression-green / build-green / executable smoke-integration —
    in place of RED→GREEN; counts `test_thrash` ≥ 3 same-test cycles), runs the PER-INSTANCE

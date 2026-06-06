@@ -93,6 +93,11 @@ function mainRootFromCoord(coordRoot) {
 
 function worktreePathFor(root, project) {
   const mainRoot = mainRootFromCoord(getCoordRoot(root));
+  return path.join(mainRoot, '.kw', 'worktrees', project);
+}
+
+function legacySiblingWorktreePathFor(root, project) {
+  const mainRoot = mainRootFromCoord(getCoordRoot(root));
   return path.join(path.dirname(mainRoot), path.basename(mainRoot) + '.kw', project);
 }
 
@@ -423,12 +428,11 @@ function claimProject(root, args) {
   const branch = buildBranchName(issueIid, project, args.branch);
   let worktreePath = '';
   let worktreeError = '';
-  // Worktree provisioning is ON by default (full/fast paths operate inside it via Phase 4's
-  // ACTIVE_WORKTREE_PATH), but FORCED OFF for the adaptive path: its orchestrator (plan-run) does not
-  // yet cd into the worktree, so provisioning one would strand the implementation in the repo-root tree
-  // and risk finalizing an empty branch. Re-enable for adaptive once the executor operates in the
-  // worktree (tracked follow-up). Set KAOLA_WORKTREE_NATIVE=0 to opt out entirely.
-  if (!OFFLINE && WORKTREE_NATIVE && requestedPath !== adaptiveSchema.ADAPTIVE_PATH && hasGitHistory(root)) {
+  // Worktree provisioning is ON by default. All workflow paths (full, fast, adaptive) provision a
+  // repo-local hidden worktree at <root>/.kw/worktrees/<project> (#264). The executor (plan-run)
+  // operates in the worktree via the ACTIVE_WORKTREE_PATH resolver, so adaptive runs now provision
+  // per #264. Set KAOLA_WORKTREE_NATIVE=0 to opt out entirely.
+  if (!OFFLINE && WORKTREE_NATIVE && hasGitHistory(root)) {
     try { worktreePath = provisionWorktree(root, project, branch).path; } catch (_) { worktreeError = (_ && _.message) || String(_); }
   }
   const projectInfo = discoverProjectSafe();
@@ -1179,9 +1183,133 @@ function cmdRepairLabels() {
   output({ dry_run: false, removed, failed });
 }
 
+// cmdLegacyWorktreeCleanup — AC3 (#264): discover and remove worktrees that were provisioned
+// under the OLD sibling-container path (<parent>/<repo>.kw/<project>). Dedicated subcommand,
+// NOT folded into cmdStaleWorktreeCleanup (which targets issue-closed/archived staleness).
+// Dry-run is the DEFAULT; real removal only with --execute.
+// Never silently destroys dirty worktrees (AC4): requires --archive, --export, or --force.
+function cmdLegacyWorktreeCleanup() {
+  const root = getRoot();
+  const args = parseArgs(process.argv.slice(3));
+  // Legacy container is the old sibling path: <parent>/<repo>.kw/
+  const legacyContainerDir = path.dirname(legacySiblingWorktreePathFor(root, 'x'));
+
+  // Enumerate ALL registered worktrees (not just workflow/issue-* branches) and
+  // filter to those whose path is under the legacy container.
+  let allWorktrees = [];
+  try {
+    const out = execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: root, encoding: 'utf8' });
+    allWorktrees = out.split('\n\n').filter(Boolean).map(block => {
+      const lines = block.split('\n');
+      const entry = {};
+      for (const line of lines) {
+        const idx = line.indexOf(' ');
+        if (idx > 0) entry[line.slice(0, idx)] = line.slice(idx + 1);
+      }
+      return entry;
+    });
+  } catch (_) {}
+
+  // Resolve legacy container to realpath for reliable prefix-match
+  let legacyContainerReal = legacyContainerDir;
+  try { legacyContainerReal = fs.realpathSync(legacyContainerDir); } catch (_) {}
+
+  const legacyWorktrees = allWorktrees.filter(wt => {
+    if (!wt.worktree) return false;
+    // Skip the main worktree itself
+    let wtReal = wt.worktree;
+    try { wtReal = fs.realpathSync(wt.worktree); } catch (_) {}
+    return wtReal === legacyContainerReal ||
+      wtReal.startsWith(legacyContainerReal + path.sep);
+  });
+
+  // Refuse entire run if cwd is inside any candidate legacy worktree
+  for (const wt of legacyWorktrees) {
+    if (fs.existsSync(wt.worktree) && cwdInside(wt.worktree)) {
+      output({ cleanup: false, reason: 'refusing to operate from inside a target legacy worktree: ' + wt.worktree }, 1);
+      return;
+    }
+  }
+
+  const dryRun = !args.execute;
+  const buckets = { removed: [], skipped_dirty: [], stashed: [], exported: [], failed_preserve: [] };
+  const dryBuckets = { would_remove: [], would_delete_branch: [], skipped_dirty: [] };
+
+  for (const wt of legacyWorktrees) {
+    const wtPath = wt.worktree;
+    const branch = (wt.branch || '').replace(/^refs\/heads\//, '');
+    const state = worktreeDirtyState(wtPath);
+
+    if (state === 'dirty' && !(args.archive || args.export || args.force)) {
+      (dryRun ? dryBuckets : buckets).skipped_dirty.push(wtPath);
+      continue;
+    }
+
+    if (dryRun) {
+      dryBuckets.would_remove.push(wtPath);
+      if (branch && !args.keepBranch) dryBuckets.would_delete_branch.push(branch);
+      continue;
+    }
+
+    // EXECUTE path
+    if (state === 'dirty') {
+      if (args.archive) {
+        const issueNum = extractIssueNumber(branch) || 0;
+        if (stashWorktree(wtPath, issueNum)) {
+          buckets.stashed.push(wtPath);
+        } else {
+          buckets.failed_preserve.push(wtPath);
+          continue;
+        }
+      } else if (args.export) {
+        const issueNum = extractIssueNumber(branch) || 0;
+        const p = exportWorktreeDiff(root, wtPath, issueNum);
+        if (p) {
+          buckets.exported.push(...p);
+        } else {
+          buckets.failed_preserve.push(wtPath);
+          continue;
+        }
+      }
+      // --force: straight removal (no pre-step)
+    }
+
+    // For missing-path worktrees, prune the stale registration
+    if (state === 'missing') {
+      try {
+        execFileSync('git', ['-C', root, 'worktree', 'prune'], { stdio: ['ignore', 'ignore', 'ignore'] });
+      } catch (_) {}
+      buckets.removed.push(wtPath);
+    } else {
+      const rmResult = removeWorktree(root, branch || wtPath, { worktree_path: wtPath });
+      if (rmResult.removed) {
+        buckets.removed.push(wtPath);
+      }
+    }
+  }
+
+  // After removal, if legacy container is now empty, remove it
+  if (!dryRun) {
+    try {
+      if (fs.existsSync(legacyContainerDir)) {
+        fs.rmdirSync(legacyContainerDir); // refuses if non-empty — desired safety
+        buckets.removed_container = legacyContainerDir;
+      }
+    } catch (_) {
+      buckets.container_not_empty = legacyContainerDir;
+    }
+  }
+
+  if (dryRun) {
+    output({ dry_run: true, ...dryBuckets });
+  } else {
+    output({ dry_run: false, ...buckets });
+  }
+}
+
 function main() {
   const sub = process.argv[2];
-  assert(sub, 'usage: kaola-gitlab-workflow-claim.js <claim|authoring-allowed|release|status|patch-branch|bootstrap|startup|finalize|pick-next|resume|worktree-status|worktree-finalize|sink-fallback|watch-mr|stale-worktree-check|stale-worktree-cleanup|audit-labels|repair-labels>');
+  assert(sub, 'usage: kaola-gitlab-workflow-claim.js <claim|authoring-allowed|release|status|patch-branch|bootstrap|startup|finalize|pick-next|resume|worktree-status|worktree-finalize|sink-fallback|watch-mr|stale-worktree-check|stale-worktree-cleanup|legacy-worktree-cleanup|audit-labels|repair-labels>');
   if (sub === 'claim') return cmdClaim();
   if (sub === 'authoring-allowed') return cmdAuthoringAllowed();
   if (sub === 'release' || sub === 'discard') return cmdRelease();
@@ -1197,6 +1325,7 @@ function main() {
   if (sub === 'sink-fallback') return cmdSinkFallback();
   if (sub === 'stale-worktree-check') return cmdStaleWorktreeCheck();
   if (sub === 'stale-worktree-cleanup') return cmdStaleWorktreeCleanup();
+  if (sub === 'legacy-worktree-cleanup') return cmdLegacyWorktreeCleanup();
   if (sub === 'audit-labels') return cmdAuditLabels();
   if (sub === 'repair-labels') return cmdRepairLabels();
   throw new Error('unknown subcommand: ' + sub);
@@ -1214,10 +1343,12 @@ module.exports = {
   claimExplicitTarget,
   claimProject,
   cmdAuditLabels,
+  cmdLegacyWorktreeCleanup,
   cmdRepairLabels,
   collectStale,
   cmdStaleWorktreeCleanup,
   getCoordRoot,
+  legacySiblingWorktreePathFor,
   listOpenIssues,
   partitionActiveAndDrift,
   projectNameForIssue,
