@@ -6518,6 +6518,103 @@ function testAdaptiveVerdictCheck() {
   console.log('testAdaptiveVerdictCheck: PASSED');
 }
 
+// Pattern library: the four adaptive composition patterns documented in
+// README "Supported adaptive patterns" are locked here as executable fixtures —
+// the README table and the validator stay in lockstep. Each row authors a
+// canonical in-grammar plan for one named pattern and asserts the live
+// validator's verdict (result + governance decision). The final block is the
+// Classify-And-Act TRIPWIRE: selective execution (one-of-N arms) is out-of-grammar
+// today; the `select()` shape is refused and the only workaround (both arms as a
+// fan-out) runs BOTH arms. When the selective-execution primitive ships
+// (docs/investigations/2026-06-06-six-workflow-patterns.md), the tripwire flips
+// and this assertion must be updated — that is the intended signal.
+function testAdaptivePatternLibrary() {
+  const tmp = adaptiveTmp('pattern-library');
+  try {
+    // Pattern 1 — Plan-then-implement (the linear shape, with an explicit planner
+    // dominating the implement). Low-risk, sequential => auto-run.
+    let v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| plan | planner | explore | — | 1 | sequence |',
+      '| impl | tdd-guide | plan | lib/foo.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], ['enhancement']);
+    assert(v.result === 'in-grammar' && v.decision === 'auto-run',
+      'pattern Plan-then-implement must be in-grammar + auto-run, got: ' + JSON.stringify(v));
+
+    // Pattern 2 — Fan-out-and-synthesize: disjoint write-role legs merge at a
+    // code-reviewer that depends_on every leg (the synthesize point). Write-role
+    // fan-out => ask (blast radius).
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| plan | planner | explore | — | 1 | sequence |',
+      '| impl-api | tdd-guide | plan | api/foo.js | 1 | fanout(impl) |',
+      '| impl-cli | tdd-guide | plan | cli/bar.js | 1 | fanout(impl) |',
+      '| synth | code-reviewer | impl-api,impl-cli | — | 1 | sequence |',
+      '| done | finalize | synth | — | 1 | sequence |',
+    ], ['enhancement']);
+    assert(v.result === 'in-grammar' && v.decision === 'ask',
+      'pattern Fan-out-and-synthesize must be in-grammar + ask (write-role fan-out), got: ' + JSON.stringify(v));
+    assert(v.risk && v.risk.blastRadius === true,
+      'pattern Fan-out-and-synthesize must flag blast-radius risk, got: ' + JSON.stringify(v));
+
+    // Pattern 3 — Adversarial verification: after the code-reviewer gate, a read-only
+    // fan-out of adversarial-verifier skeptics (empty write sets) re-tests the claim
+    // before the sink. Read-only fan-out has ZERO blast radius => auto-run.
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| impl | tdd-guide | explore | lib/foo.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| sk1 | adversarial-verifier | review | — | 1 | fanout(verify) |',
+      '| sk2 | adversarial-verifier | review | — | 1 | fanout(verify) |',
+      '| sk3 | adversarial-verifier | review | — | 1 | fanout(verify) |',
+      '| done | finalize | sk1,sk2,sk3 | — | 1 | sequence |',
+    ], ['enhancement']);
+    assert(v.result === 'in-grammar' && v.decision === 'auto-run',
+      'pattern Adversarial verification (read-only fan-out) must be in-grammar + auto-run, got: ' + JSON.stringify(v));
+    assert(v.risk && v.risk.blastRadius === false,
+      'pattern Adversarial verification must be zero blast-radius, got: ' + JSON.stringify(v));
+
+    // Pattern 4 — Bounded loop (review-fix cycle) within LOOP_CAP. Loop present => ask.
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| impl | tdd-guide | explore | lib/foo.js | 1 | sequence |',
+      '| fix | code-reviewer | impl | — | 1 | loop(3) |',
+      '| done | finalize | fix | — | 1 | sequence |',
+    ], ['enhancement']);
+    assert(v.result === 'in-grammar' && v.decision === 'ask',
+      'pattern Bounded loop must be in-grammar + ask (loop present), got: ' + JSON.stringify(v));
+
+    // Classify-And-Act TRIPWIRE — selective execution is NOT YET supported.
+    // (a) a `select(<group>)` shape is out-of-grammar today.
+    v = validatePlanFixture(tmp, [
+      '| classify | code-explorer | — | — | 1 | sequence |',
+      '| arm-csv | tdd-guide | classify | exporter/csv.js | 1 | select(fix) |',
+      '| arm-html | tdd-guide | classify | renderer/html.js | 1 | select(fix) |',
+      '| review | code-reviewer | arm-csv,arm-html | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], ['enhancement']);
+    assert(v.result === 'refuse',
+      'TRIPWIRE: select() classify-and-act must be out-of-grammar until the selective-execution primitive ships, got: ' + JSON.stringify(v));
+    assert(Array.isArray(v.errors) && v.errors.some(e => /invalid shape "select\(fix\)"/.test(e)),
+      'TRIPWIRE: select() refusal must name the invalid shape, got: ' + JSON.stringify(v));
+
+    // (b) the only legal workaround today — both arms as a fan-out — is in-grammar but
+    // runs BOTH arms (no real selection). This locks the honest cost the issue removes.
+    v = validatePlanFixture(tmp, [
+      '| classify | code-explorer | — | — | 1 | sequence |',
+      '| arm-csv | tdd-guide | classify | exporter/csv.js | 1 | fanout(fix) |',
+      '| arm-html | tdd-guide | classify | renderer/html.js | 1 | fanout(fix) |',
+      '| review | code-reviewer | arm-csv,arm-html | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], ['enhancement']);
+    assert(v.result === 'in-grammar' && v.decision === 'ask' && v.risk && v.risk.blastRadius === true,
+      'TRIPWIRE: both-arms-as-fan-out workaround runs both arms (in-grammar + ask + blast-radius), got: ' + JSON.stringify(v));
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptivePatternLibrary: PASSED');
+}
+
 async function main() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-active-folders-'));
   try {
@@ -6668,6 +6765,7 @@ async function main() {
     testAdaptiveCheapWinFixes();
     testAdaptiveAuditCoverage();
     testAdaptiveVerdictCheck();
+    testAdaptivePatternLibrary();
     console.log('Workflow walkthrough simulation passed');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });

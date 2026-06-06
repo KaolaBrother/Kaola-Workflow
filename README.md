@@ -564,6 +564,21 @@ KAOLA_PATH=adaptive /workflow-next
 
 The adaptive path adds one role — `adversarial-verifier`, a read-only, refute-by-default skeptic used in read-only verification fan-outs. It is never a review gate and touches zero repository files.
 
+#### Supported adaptive patterns
+
+The three shapes (`sequence`, `fanout`, `loop`) are a *grammar*, not a fixed menu — the planner composes them with `depends_on` edges and the right role on each node into a task-shaped DAG. A handful of recurring shapes cover most real plans. Each one below is a real, in-grammar `workflow-plan.md` the validator accepts; the **Governance** column is the decision `kaola-workflow-plan-validator.js` returns (`auto-run` = runs without asking; `ask` = surfaces the DAG for your approval before it freezes, because write concurrency or a loop carries blast-radius risk).
+
+| Pattern | What it is | How the planner composes it | Governance |
+|---|---|---|---|
+| **Plan-then-implement** | The linear shape: explore, plan, implement, review, finalize. | `code-explorer` → `planner` → `tdd-guide` → `code-reviewer` → `finalize`, each `depends_on` the previous (`shape: sequence`). | `auto-run` (no fan-out, no loop) |
+| **Fan-out-and-synthesize** | Work that splits into disjoint sub-areas, then merges. | `fanout(impl)`: N `tdd-guide` nodes over **pairwise-disjoint** top-level directories (e.g. `api/` and `cli/`), then a `code-reviewer` node that `depends_on` every leg — the merge/synthesize point. Width is bounded by `KAOLA_FANOUT_CAP` (default 4). | `ask` (write-role fan-out → blast-radius) |
+| **Adversarial verification** | Re-test a finished claim with independent skeptics. | After the `code-reviewer` gate, a read-only `fanout(verify)` of `adversarial-verifier` nodes (empty write sets, each prompted to *refute*) feeding the sink; the orchestrator tallies a quorum from their `verdict: pass\|fail` evidence. Read-only fan-out has **zero** blast radius. | `auto-run` |
+| **Bounded loop (review-fix)** | Re-run one role until a mechanical verdict passes. | A `loop(<cap>)` node (e.g. a `code-reviewer` or `build-error-resolver` cycle) re-invoked up to a static cap (`LOOP_CAP` = 5); a #251 `verdict: pass` exits early. The cap is the halting guarantee — the loop can only end sooner, never run longer. | `ask` (loop present) |
+
+Every plan, whatever its shape, still crosses the same non-removable walls: a single unique `finalize` sink, `code-reviewer` **post-dominating** every code-producing node, and `security-reviewer` post-dominating every sensitive node (re-derived from the files actually touched, not an author flag). A plan that routes a gate around itself is a typed refusal, not a silent pass.
+
+**Planned — Classify-And-Act (selective execution):** routing to *one of several mutually-exclusive arms* based on what exploration finds (e.g. "fix the CSV exporter **or** the HTML renderer, whichever is at fault") is not yet expressible — both arms must currently be authored as a fan-out, so both run. The design for a script-decidable selector that runs exactly one arm is tracked in issue #263 (`docs/investigations/2026-06-06-six-workflow-patterns.md`).
+
 ## Automation scripts
 
 The workflow includes automation scripts installed by `install.sh` to
