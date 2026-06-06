@@ -2702,6 +2702,7 @@ function testWorktreeNativeDefaultOff() {
     const result = runClaimOnlineLastJson(['startup', '--target-issue', '505'], tmp, binDir, { KAOLA_WORKTREE_NATIVE: '0' });
     assert(result.claim === 'acquired', 'startup 505 should acquire');
     assert(result.worktree_path === '', 'worktree_path must be empty when KAOLA_WORKTREE_NATIVE=0, got: ' + JSON.stringify(result.worktree_path));
+    assert(result.worktree_error === undefined, 'worktree_error must be absent when KAOLA_WORKTREE_NATIVE=0 (gate-off path must not surface error field)');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
     fs.rmSync(kwRoot, { recursive: true, force: true });
@@ -2732,9 +2733,33 @@ function testWorktreeNativeOfflineWins() {
     assert(spawnResult.status === 0, 'offline startup should exit 0, got ' + spawnResult.status + '\nstdout: ' + spawnResult.stdout + '\nstderr: ' + spawnResult.stderr);
     const parsed = JSON.parse(spawnResult.stdout.trim());
     assert(parsed.worktree_path === '', 'worktree_path must be empty when KAOLA_WORKFLOW_OFFLINE=1 even if KAOLA_WORKTREE_NATIVE=1, got: ' + JSON.stringify(parsed.worktree_path));
+    assert(parsed.worktree_error === undefined, 'worktree_error must be absent when KAOLA_WORKFLOW_OFFLINE=1 (offline path must not surface error field)');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
     fs.rmSync(kwRoot, { recursive: true, force: true });
+  }
+}
+
+function testWorktreeNativeSurfacesProvisionFailure() {
+  // Regression test for #246: when provisionWorktree throws (EEXIST — a regular file
+  // blocks the .kw parent dir), claim must still succeed (acquired), set worktree_path
+  // to '', and surface worktree_error matching /EEXIST/.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-wt-provision-fail-'));
+  const kwRoot = fs.realpathSync(tmp) + '.kw';
+  try {
+    initGitRepo(tmp);
+    const binDir = path.join(tmp, 'bin');
+    writeGhShimForStartup(binDir);
+    // Plant a regular FILE at kwRoot so mkdirSync(kwRoot, {recursive:true}) throws EEXIST.
+    // Must be done AFTER initGitRepo (which needs the dir to be absent), BEFORE the claim.
+    fs.writeFileSync(kwRoot, 'x');
+    const result = runClaimOnlineLastJson(['startup', '--target-issue', '507'], tmp, binDir);
+    assert(result.claim === 'acquired', 'startup 507 should acquire even when provisionWorktree throws, got: ' + JSON.stringify(result.claim));
+    assert(result.worktree_path === '', 'worktree_path must be empty when provision fails, got: ' + JSON.stringify(result.worktree_path));
+    assert(/EEXIST/.test(result.worktree_error), 'worktree_error must match /EEXIST/ when provision fails due to file collision, got: ' + JSON.stringify(result.worktree_error));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    try { fs.rmSync(kwRoot, { force: true }); } catch (_) {}
   }
 }
 
@@ -6539,6 +6564,7 @@ async function main() {
     testStartupJsonAndSiblingWorktrees();
     testWorktreeNativeDefaultOff();
     testWorktreeNativeOfflineWins();
+    testWorktreeNativeSurfacesProvisionFailure();
     testFastStartupState();
     testResumeFastEmptyNextCommand();
     testClassifierCurrentClaimMarkerBlocks();

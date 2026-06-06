@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Commit the deferred worktree_error provision-failure regression test (issue #256)
+
+Follow-up to #246, which un-silenced the worktree-provision `catch` so a genuine `provisionWorktree` throw surfaces as a conditional `worktree_error` field. #246 verified the behaviour via a live RED→GREEN repro but could not land the permanent committed test — `scripts/simulate-workflow-walkthrough.js` was outside its frozen adaptive write set, so adding it there would have failed the per-node barrier. This change adds that regression test (one file, test-only).
+
+- **New `testWorktreeNativeSurfacesProvisionFailure()`** in `scripts/simulate-workflow-walkthrough.js` (registered right after `testWorktreeNativeOfflineWins`): under `KAOLA_WORKTREE_NATIVE=1` it plants a regular file at the `.kw` worktree-parent dir (`fs.realpathSync(tmp) + '.kw'`) so `provisionWorktree`'s `mkdirSync(path.dirname(wtPath), {recursive:true})` throws `EEXIST`, then asserts the claim still returns `acquired` with `worktree_path: ''` and a `worktree_error` matching `/EEXIST/` (non-exact — the message embeds an absolute path). Genuinely guards the #246 surfacing: the test fails (RED) if the `catch` is re-silenced.
+- **Locked the gate-off / offline half of the contract**: added a `worktree_error === undefined` regression assert to both `testWorktreeNativeDefaultOff` and `testWorktreeNativeOfflineWins`, so an intentional no-worktree run stays distinguishable from a tried-and-failed one.
+- Verified RED→GREEN against the surfacing in `kaola-workflow-claim.js`; `node scripts/simulate-workflow-walkthrough.js` stays green. Only the canonical simulator is touched (the plugin simulator is not byte-synced and has no `runClaimOnline` helper; the gitlab/gitea suites have no worktree-native tests).
+
 ### Honest opt-in for adaptive worktree provisioning — un-silence the catch + correct the prose (issue #246)
 
 The adaptive starting contract recorded a branch *name* and `worktree_path:''` while creating no real worktree or branch ref, with no signal as to why. Root cause was a stack: a silent `catch` that masked a genuine `provisionWorktree` throw as "no worktree", and unconditional prose claiming the front end always provisions a worktree when provisioning is in fact gated behind opt-in `KAOLA_WORKTREE_NATIVE=1`. Resolved as **honest opt-in** (owner decision): the default stays opt-in (no behaviour change); the genuine defects are fixed and the conditional behaviour is made honest and documented.
