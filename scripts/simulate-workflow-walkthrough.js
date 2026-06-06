@@ -6619,6 +6619,30 @@ function testAdaptivePatternLibrary() {
     assert(v.result === 'in-grammar' && v.decision === 'auto-run',
       'pattern Tournament (read-only bracket) must be in-grammar + auto-run, got: ' + JSON.stringify(v));
 
+    // Composition capstone — the planner COMPOSES patterns, it does not pick one. ONE DAG
+    // stacking three: a read-only multi-modal sweep (fan-out → planner synthesize), a
+    // parallel write-role implement (fan-out → code-reviewer gate), and an
+    // adversarial-verification skeptic fan-out → sink. Mirrors the validated example in
+    // docs/investigations/2026-06-06-six-workflow-patterns.md. Write-role fan-out present
+    // => ask; code-reviewer still post-dominates BOTH implement nodes — gates hold over any
+    // topology, so composition can never erode a wall.
+    v = validatePlanFixture(tmp, [
+      '| sweep1 | code-explorer | — | — | 1 | fanout(sweep) |',
+      '| sweep2 | code-explorer | — | — | 1 | fanout(sweep) |',
+      '| sweep3 | code-explorer | — | — | 1 | fanout(sweep) |',
+      '| plan | planner | sweep1,sweep2,sweep3 | — | 1 | sequence |',
+      '| impl-api | tdd-guide | plan | api/x.js | 1 | fanout(impl) |',
+      '| impl-cli | tdd-guide | plan | cli/y.js | 1 | fanout(impl) |',
+      '| review | code-reviewer | impl-api,impl-cli | — | 1 | sequence |',
+      '| sk1 | adversarial-verifier | review | — | 1 | fanout(verify) |',
+      '| sk2 | adversarial-verifier | review | — | 1 | fanout(verify) |',
+      '| done | finalize | sk1,sk2 | — | 1 | sequence |',
+    ], ['enhancement']);
+    assert(v.result === 'in-grammar' && v.decision === 'ask',
+      'composed multi-pattern DAG must be in-grammar + ask (write-role fan-out present), got: ' + JSON.stringify(v));
+    assert(v.nodeCount === 10 && v.risk && v.risk.blastRadius === true,
+      'composed multi-pattern DAG must be 10 nodes with blast-radius flagged (gates still post-dominate both implements), got: ' + JSON.stringify(v));
+
     // Classify-And-Act TRIPWIRE — selective execution is NOT YET supported.
     // (a) a `select(<group>)` shape is out-of-grammar today.
     v = validatePlanFixture(tmp, [
