@@ -109,6 +109,7 @@ for the pinned upstream commit, attribution, and refresh procedure.
 | `planner` | 2 — Ideation | Opus | |
 | `code-architect` | 3 — Plan | Sonnet | yes |
 | `tdd-guide` | 4 — Execute (per-task TDD executor) | Sonnet | |
+| `implementer` | 4 — Execute (implementation without test-first ceremony; refactors, scaffolding, config, UI, migrations) | Sonnet | |
 | `build-error-resolver` | 4–6 — Validation repair when needed | Sonnet | |
 | `code-reviewer` | 5 — Review | Sonnet | yes |
 | `security-reviewer` | 5 — Review (conditional) | Sonnet | yes |
@@ -160,7 +161,7 @@ differs from the agent's frontmatter). **After installing or re-running
 
 > **Badge visibility by session model (Claude Code platform behaviour):**
 > - **Session on Sonnet** — only Opus subagents show a badge. Sonnet-dispatched
->   agents (`code-explorer`, `tdd-guide`, `build-error-resolver`, `docs-lookup`,
+>   agents (`code-explorer`, `tdd-guide`, `implementer`, `build-error-resolver`, `docs-lookup`,
 >   `doc-updater`, `adversarial-verifier`) run silently. Opus-dispatched agents (`planner`,
 >   `code-architect`, `code-reviewer`, `security-reviewer` on the default
 >   `higher` profile) badge as expected.

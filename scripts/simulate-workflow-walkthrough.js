@@ -865,6 +865,22 @@ function testAdaptiveValidatorGovernance() {
       '| done | finalize | s1,s2,s3 | — | 1 | sequence |',
     ], []);
     assert(v.result === 'in-grammar' && v.decision === 'auto-run', 'read-only fan-out must auto-run (zero blast radius), got: ' + JSON.stringify(v));
+
+    // implementer in-grammar (code-reviewer post-dominates) -> auto-run
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| impl | implementer | explore | lib/foo.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'in-grammar' && v.decision === 'auto-run', 'implementer node with code-reviewer must be in-grammar+auto-run, got: ' + JSON.stringify(v));
+    // implementer G1 fires when code-reviewer removed
+    v = validatePlanFixture(tmp, [
+      '| impl | implementer | — | lib/foo.js | 1 | sequence |',
+      '| doc | doc-updater | impl | — | 1 | sequence |',
+      '| done | finalize | doc | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /G1/.test((v.errors||[]).join(';')), 'implementer without code-reviewer post-dominance must refuse (G1), got: ' + JSON.stringify(v));
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   console.log('testAdaptiveValidatorGovernance: PASSED');
 }

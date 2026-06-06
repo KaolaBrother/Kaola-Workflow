@@ -46,12 +46,12 @@ const TERMINAL_ROLE = 'finalize';
 const CANONICAL_ROLES = [
   'code-explorer', 'docs-lookup', 'planner', 'code-architect', 'tdd-guide',
   'build-error-resolver', 'code-reviewer', 'security-reviewer', 'doc-updater',
-  'adversarial-verifier',
+  'adversarial-verifier', 'implementer',
 ];
 // Roles that may legitimately declare a repo write set (by TOOL MANIFEST; note
 // security-reviewer is Write by manifest, review-only only by governance posture).
-const WRITE_ROLES = new Set(['tdd-guide', 'build-error-resolver', 'doc-updater', 'security-reviewer']);
-const IMPLEMENT_ROLES = new Set(['tdd-guide', 'build-error-resolver']);
+const WRITE_ROLES = new Set(['tdd-guide', 'build-error-resolver', 'doc-updater', 'security-reviewer', 'implementer']);
+const IMPLEMENT_ROLES = new Set(['tdd-guide', 'build-error-resolver', 'implementer']);
 // #251: roles that must emit a machine verdict block into their .cache evidence file.
 const GATE_VERDICT_ROLES = new Set(['code-reviewer', 'security-reviewer', 'adversarial-verifier']);
 

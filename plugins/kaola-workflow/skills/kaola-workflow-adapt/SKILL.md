@@ -85,6 +85,18 @@ the example above models both.
 - **Update the docs you changed.** When the change touches README / API docs /
   architecture / a public interface, consider a `doc-updater` node before `finalize` — the
   sink only does CHANGELOG / state bookkeeping.
+- **Choose the right implement role.** Default to `tdd-guide`; pick `implementer` ONLY
+  for an enumerated non-test-first category — behavior-preserving refactor; scaffolding /
+  boilerplate / wiring; config / IaC / scripts; UI / markup; migrations / fixtures;
+  integration glue — and RECORD which one (`non_tdd_reason`). Asymmetric tie-breaker: if
+  a meaningful failing unit test CAN be written for the work, use `tdd-guide`; when in
+  doubt, use `tdd-guide`. "Hard to test" is NOT a valid `non_tdd_reason`; bug fixes are
+  ALWAYS `tdd-guide`. A mixed node (some sub-tasks test-first, some not) should be split
+  into separate nodes by lane, or routed to the stricter role (`tdd-guide`). Both
+  `tdd-guide` and `implementer` require `code-reviewer` post-dominance (G1); `implementer`
+  is equal-burden, different-shape — it swaps RED→GREEN for change-type-appropriate
+  verification (regression-green / build-green / executable smoke-integration), NOT a
+  lighter path.
 
 ## Front end: claim + author (the `workflow-planner` agent role)
 

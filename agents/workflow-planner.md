@@ -71,6 +71,13 @@ Author the `## Nodes` table so the validator passes it. Each node is one row:
   post-dominate every code-producing node (G1); `security-reviewer` must post-dominate every
   sensitive node (G2). Plan a `planner`/`code-architect` node above a non-trivial implement, and a
   `doc-updater` before `finalize` when docs/public interfaces changed.
+- **Choose the right implement role:** Use `tdd-guide` for test-first work (behavioral logic, bug
+  fixes — failing test first). Use `implementer` for implementation with NO natural failing-unit-test:
+  behavior-preserving refactors, scaffolding/boilerplate/wiring, config/IaC/scripts, UI/markup,
+  migrations/fixtures, integration glue. Record a `non_tdd_reason`. Default to `tdd-guide`; if a
+  meaningful failing unit test can be written, choose `tdd-guide`; doubt → `tdd-guide`. "Hard to
+  test" is NOT an `implementer` reason. Both implement roles require `code-reviewer`
+  post-dominance (G1).
 
 Capture the frozen issue labels into a `## Meta` `labels:` line so the validator can derive
 sensitivity. If the validator refuses, read the typed refusal and fix the plan — never clamp around

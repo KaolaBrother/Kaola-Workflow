@@ -95,13 +95,16 @@ thereafter the loop cycles step 2 → 3 → 4 → 2.
 2. **dispatch** the node's role (current session — Codex delegates to the matching agent profile; resolve
    its model via `kaola-workflow-resolve-agent-model.js`).
 3. **commit + advance (contractor)** — after the role returns, the contractor reads `.cache/{node-id}.md` (a
-   `tdd-guide` node needs RED then GREEN; counts `test_thrash` ≥ 3 same-test cycles), runs the PER-INSTANCE
+   `tdd-guide` node needs RED then GREEN; an `implementer` node needs a recorded `non_tdd_reason` and a
+   passing change-type-appropriate check — regression-green / build-green / executable smoke-integration —
+   in place of RED→GREEN; counts `test_thrash` ≥ 3 same-test cycles), runs the PER-INSTANCE
    barrier `node "$KAOLA_SCRIPTS/kaola-workflow-commit-node.js" kaola-workflow/{project}/workflow-plan.md
    --node-id {node-id} --json` (re-scans the files the node actually wrote — **script-enforced** #231/#239 —
    diffing the recorded base against the node's OWN declared lane, so a fan-out instance overflowing into a
    SIBLING's lane is refused; Phase 6's whole-plan barrier stays the union-level floor), and ONLY IF the
-   barrier exits 0 with RED+GREEN evidence (or a valid `n/a`) marks the node `complete`/`n/a` and emits one
-   **`## Required Agent Compliance`** row. Gate compliance rows for `code-reviewer`/`security-reviewer` use
+   barrier exits 0 with RED+GREEN evidence for a `tdd-guide` node (or recorded `non_tdd_reason` + passing
+   change-type-appropriate check for an `implementer` node, or a valid `n/a`) marks the node `complete`/`n/a`
+   and emits one **`## Required Agent Compliance`** row. Gate compliance rows for `code-reviewer`/`security-reviewer` use
    the **bare role string** (the canonical compliance-row format the full-path anchored delegation matcher
    expects); per-instance disambiguation goes in the Evidence column only. Never mark a gate row `n/a` while
    a node it post-dominates reached `complete`. **Selector routing (ONLY when `selectorCheck.isSelector === true` and `selectorCheck.ok === true`):** read `selectorCheck.armsToNa` from the barrier JSON. For each arm-id in that list, write its `## Node Ledger` row to `n/a` with note `selected: <selectorCheck.selected> (not this arm)`. These writes MUST precede the fused advance so `next-action` sees them as TERMINAL. If `selectorCheck.ok === false` (missing/foreign selector), do NOT mark any arm — report and stop (the orchestrator owns the halt). Non-selector nodes (`selectorCheck.isSelector === false`) require no action. **Then, ONLY IF the barrier exited 0** (the node is now

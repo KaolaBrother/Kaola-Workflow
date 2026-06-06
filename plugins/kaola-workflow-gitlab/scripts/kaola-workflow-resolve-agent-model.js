@@ -11,6 +11,7 @@ const DEFAULT_AGENT_MODELS = {
   planner: 'opus',
   'code-architect': 'sonnet',
   'tdd-guide': 'sonnet',
+  'implementer': 'sonnet',
   'build-error-resolver': 'sonnet',
   'code-reviewer': 'sonnet',
   'security-reviewer': 'sonnet',

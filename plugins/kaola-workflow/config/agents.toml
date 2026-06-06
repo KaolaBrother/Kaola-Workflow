@@ -26,6 +26,11 @@ description = "Kaola-Workflow for Codex Phase 4 executor: implements assigned ta
 config_file = "./agents/kaola-workflow/tdd-guide.toml"
 nickname_candidates = ["TDD", "Executor", "Builder"]
 
+[agents.implementer]
+description = "Kaola-Workflow for Codex adaptive implementer: implements work without test-first ceremony (refactors, scaffolding, config, UI, migrations), verified by change-type-appropriate checks."
+config_file = "./agents/kaola-workflow/implementer.toml"
+nickname_candidates = ["Implementer", "Builder", "Executor"]
+
 [agents.build-error-resolver]
 description = "Kaola-Workflow for Codex repair specialist: resolves build, type, lint, dependency, and tooling failures with scoped evidence."
 config_file = "./agents/kaola-workflow/build-error-resolver.toml"
