@@ -6518,7 +6518,7 @@ function testAdaptiveVerdictCheck() {
   console.log('testAdaptiveVerdictCheck: PASSED');
 }
 
-// Pattern library: the four adaptive composition patterns documented in
+// Pattern library: the six adaptive composition patterns documented in
 // README "Supported adaptive patterns" are locked here as executable fixtures —
 // the README table and the validator stay in lockstep. Each row authors a
 // canonical in-grammar plan for one named pattern and asserts the live
@@ -6585,6 +6585,39 @@ function testAdaptivePatternLibrary() {
     ], ['enhancement']);
     assert(v.result === 'in-grammar' && v.decision === 'ask',
       'pattern Bounded loop must be in-grammar + ask (loop present), got: ' + JSON.stringify(v));
+
+    // Pattern 5 — Generate-and-filter (read-only judge-panel): planner generators fan out
+    // → a planner reduce node (rubric/filter) → ONE tdd-guide implements the winner → gate.
+    // Read-only generators + a single sequential implement => zero fan-out blast radius => auto-run.
+    v = validatePlanFixture(tmp, [
+      '| gen1 | planner | — | — | 1 | fanout(gen) |',
+      '| gen2 | planner | — | — | 1 | fanout(gen) |',
+      '| gen3 | planner | — | — | 1 | fanout(gen) |',
+      '| filter | planner | gen1,gen2,gen3 | — | 1 | sequence |',
+      '| impl | tdd-guide | filter | lib/foo.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], ['enhancement']);
+    assert(v.result === 'in-grammar' && v.decision === 'auto-run',
+      'pattern Generate-and-filter (read-only judge-panel) must be in-grammar + auto-run, got: ' + JSON.stringify(v));
+    assert(v.risk && v.risk.blastRadius === false,
+      'pattern Generate-and-filter must be zero blast-radius, got: ' + JSON.stringify(v));
+
+    // Pattern 6 — Tournament (read-only bracket): 4 read-only planner attempts, hand-wired
+    // pairwise code-reviewer judges, a final judge, reducing to the sink. No native bracket
+    // shape — the bracket is ordinary depends_on wiring. All read-only => auto-run.
+    v = validatePlanFixture(tmp, [
+      '| a1 | planner | — | — | 1 | fanout(attempt) |',
+      '| a2 | planner | — | — | 1 | fanout(attempt) |',
+      '| a3 | planner | — | — | 1 | fanout(attempt) |',
+      '| a4 | planner | — | — | 1 | fanout(attempt) |',
+      '| semi1 | code-reviewer | a1,a2 | — | 1 | sequence |',
+      '| semi2 | code-reviewer | a3,a4 | — | 1 | sequence |',
+      '| final | code-reviewer | semi1,semi2 | — | 1 | sequence |',
+      '| done | finalize | final | — | 1 | sequence |',
+    ], ['enhancement']);
+    assert(v.result === 'in-grammar' && v.decision === 'auto-run',
+      'pattern Tournament (read-only bracket) must be in-grammar + auto-run, got: ' + JSON.stringify(v));
 
     // Classify-And-Act TRIPWIRE — selective execution is NOT YET supported.
     // (a) a `select(<group>)` shape is out-of-grammar today.
