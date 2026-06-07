@@ -1,0 +1,7 @@
+{"ts":"2026-06-07T21:37:12Z","agent_type":"workflow-planner","agent_id":"claim-backfill","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow"}
+{"ts":"2026-06-07T21:46:19Z","agent_type":"tdd-guide","agent_id":"a7e08c73de9e0b20d","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/issue-291"}
+{"ts":"2026-06-07T22:12:25Z","agent_type":"code-reviewer","agent_id":"a1b5d7f7d77f24f16","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/issue-291"}
+{"ts":"2026-06-07T22:34:12Z","agent_type":"implementer","agent_id":"a0cfc3fd3c5c1e3c9","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/issue-291"}
+{"ts":"2026-06-07T22:54:47Z","agent_type":"code-reviewer","agent_id":"ad5afc2e48a52cb29","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/issue-291"}
+{"ts":"2026-06-07T23:15:28Z","agent_type":"adversarial-verifier","agent_id":"addadfe647edff67b","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/issue-291"}
+{"ts":"2026-06-07T23:54:32Z","agent_type":"contractor","agent_id":"a423f980fc11ca059","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/issue-291"}
