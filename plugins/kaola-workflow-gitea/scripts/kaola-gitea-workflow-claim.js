@@ -1220,7 +1220,7 @@ function cmdLegacyWorktreeCleanup() {
 
   const dryRun = !args.execute;
   const buckets = { removed: [], skipped_dirty: [], stashed: [], exported: [], failed_preserve: [] };
-  const dryBuckets = { would_remove: [], would_delete_branch: [], skipped_dirty: [] };
+  const dryBuckets = { would_remove: [], skipped_dirty: [] };
 
   for (const wt of legacyWorktrees) {
     const wtPath = wt.worktree;
@@ -1234,7 +1234,6 @@ function cmdLegacyWorktreeCleanup() {
 
     if (dryRun) {
       dryBuckets.would_remove.push(wtPath);
-      if (branch && !args.keepBranch) dryBuckets.would_delete_branch.push(branch);
       continue;
     }
 

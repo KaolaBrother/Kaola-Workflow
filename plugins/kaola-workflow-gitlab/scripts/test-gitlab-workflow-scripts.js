@@ -3188,6 +3188,8 @@ function testGitlabLegacyWorktreeCleanupDryRun() {
       assert(Array.isArray(out.would_remove) && out.would_remove.some(p => JSON.stringify(p).includes('issue-264-legacy')),
         'dry-run must report legacy worktree in would_remove, got: ' + JSON.stringify(out));
       assert(fs.existsSync(legacyWt), 'dry-run must not remove the worktree');
+      assert(!('would_delete_branch' in out),
+        'Option B: legacy-worktree-cleanup dry-run must NOT emit would_delete_branch, got: ' + JSON.stringify(out));
       console.log('testGitlabLegacyWorktreeCleanupDryRun: PASSED');
     } finally {
       spawnSync('git', ['worktree', 'remove', '--force', legacyWt], { cwd: root, encoding: 'utf8' });

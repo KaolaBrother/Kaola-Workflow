@@ -869,12 +869,9 @@ When no strategy flag is given, dirty worktrees are skipped and reported in `ski
 {
   "dry_run": true,
   "would_remove": [],
-  "would_delete_branch": [],
   "skipped_dirty": []
 }
 ```
-
-Note: `would_delete_branch` is populated in dry-run output for each worktree that lacks `--keep-branch`, but the execute path removes only the worktree (via `git worktree remove`) and does not delete the branch ref. Branch refs are always preserved.
 
 ```json
 {

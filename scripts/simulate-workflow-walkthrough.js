@@ -7574,6 +7574,8 @@ function testLegacyWorktreeCleanupDryRun() {
       'dry_run would_remove must include the legacy worktree path, got: ' + JSON.stringify(out.would_remove));
     assert(fs.existsSync(legacyWtPath),
       'dry-run must NOT remove the worktree dir (AC3 dry-run-default)');
+    assert(!('would_delete_branch' in out),
+      'Option B: legacy-worktree-cleanup dry-run must NOT emit would_delete_branch, got: ' + JSON.stringify(out));
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
     try { fs.rmSync(legacyContainer, { recursive: true, force: true }); } catch (_) {}
