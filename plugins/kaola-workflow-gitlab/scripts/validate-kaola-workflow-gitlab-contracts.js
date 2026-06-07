@@ -174,7 +174,8 @@ const scriptFiles = [
   'install-codex-agent-profiles.js',
   'kaola-workflow-codex-preflight.js',
   'kaola-gitlab-workflow-task-mirror.js',
-  'kaola-gitlab-workflow-codex-compact-resume.js'
+  'kaola-gitlab-workflow-codex-compact-resume.js',
+  'kaola-gitlab-workflow-parallel-batch.js'
 ];
 for (const script of scriptFiles) assert(exists(pluginRoot + '/scripts/' + script), script + ' missing');
 
@@ -194,7 +195,8 @@ const installSupportScripts = [
   'kaola-workflow-resolve-agent-model.js',
   'kaola-workflow-codex-preflight.js',
   'kaola-gitlab-workflow-task-mirror.js',
-  'kaola-gitlab-workflow-codex-compact-resume.js'
+  'kaola-gitlab-workflow-codex-compact-resume.js',
+  'kaola-gitlab-workflow-parallel-batch.js'
 ];
 for (const script of installSupportScripts) {
   assert(installScript.includes(script), 'install.sh must install GitLab support script: ' + script);
@@ -522,5 +524,9 @@ for (const reviewerBody of [
 ]) {
   assertIncludes(reviewerBody, 'finding: id=');
 }
+// #281: frontier-unit semantics in GitLab plan-run command (added by plan-run-semantics node)
+assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'frontier unit');
+// #281: efficient-DAG instruction in GitLab workflow-planner profile (added by planner-profile node)
+assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'EFFICIENT DAGs');
 
 console.log('Kaola-Workflow GitLab contract validation passed');

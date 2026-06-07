@@ -1,13 +1,13 @@
 ---
 name: kaola-workflow-plan-run
-description: Use when executing a frozen adaptive workflow-plan.md — traverse its DAG + Node Ledger, dispatching one role node at a time with per-node checkpoints. Resume-safe. Mirror of commands/kaola-workflow-plan-run.md for Codex runtime.
+description: Use when executing a frozen adaptive workflow-plan.md — traverse its DAG + Node Ledger, dispatching one frontier unit at a time with per-node checkpoints. Resume-safe. Mirror of commands/kaola-workflow-plan-run.md for Codex runtime.
 ---
 
 # Skill: kaola-workflow-plan-run
 
 Adaptive executor. Runs a frozen `workflow-plan.md` (`workflow_path: adaptive`) by
 traversing its DAG + `## Node Ledger` instead of the fixed phaseN ladder, dispatching
-one role node at a time and checkpointing between calls. Mirror of
+one frontier unit at a time and checkpointing between calls. Mirror of
 `commands/kaola-workflow-plan-run.md` for the Codex runtime. Reads and updates
 `kaola-workflow/{project}/workflow-state.md` throughout.
 
@@ -123,6 +123,30 @@ bootstraps the first node (handoff no longer pre-opens it) and, on resume, re-op
 thereafter the loop cycles step 2 → 3 → 4 → 2.
 
 Run all invocations from `${ACTIVE_WORKTREE_PATH}` using `node "$KAOLA_SCRIPTS/kaola-workflow-adaptive-node.js" <subcommand>`.
+
+### Frontier unit / parallel batch
+
+Each loop iteration advances one **frontier unit** — either a single node (legacy serial path,
+unchanged) or a batch of ready siblings when `next-action`'s `readyPending.length >= 2`.
+
+**Deciding the unit:** inspect `readyPending` from `next-action --json`. One or zero → single-node
+path (steps 1–4, unchanged). Two or more eligible siblings → batch path.
+
+**Batch path:**
+- **(a) open-batch:** `node "$KAOLA_SCRIPTS/kaola-workflow-parallel-batch.js" open-batch --project {project} --json` — flips N ledger rows to `in_progress`, records N baselines, writes `active-batch.json`.
+- **(b) Concurrent dispatch:** the current session issues **multiple `Agent()` calls in ONE message**, one per member. Write-role members get `Working directory: <isolated worktree>`; read-only members share `${ACTIVE_WORKTREE_PATH}`. **The script manages batch STATE; the orchestrator (current session) owns DISPATCH. `kaola-workflow-parallel-batch.js` NEVER spawns an agent — the only concurrency is the current session issuing multiple `Agent()` calls in one message.**
+- **(c) record-evidence per member:** read-only siblings namespace evidence as `.cache/{role}-{claim-id}.md`.
+- **(d) seal:** `node "$KAOLA_SCRIPTS/kaola-workflow-parallel-batch.js" seal --project {project} --json` — runs the unchanged per-node `commit-node` barrier for each member.
+- **(e) join:** `node "$KAOLA_SCRIPTS/kaola-workflow-parallel-batch.js" join --project {project} --json` — no-op for read-only; path-scoped idempotent checkout merge for write-role. Orchestrator deletes manifest after join.
+- **(f) re-enter next-action** — terminal batch members unblock downstream (existing readiness semantics, no new gate).
+
+**Legality rule:** multiple `in_progress` ledger rows are legal ONLY with a valid `active-batch.json`
+whose `members` set exactly matches the `in_progress` set; otherwise a typed refusal
+(`orphan_multi_in_progress`). Batch lifecycle states: `open → dispatched → sealed → joining → joined`.
+
+**Crash/resume:** `open` → re-dispatch all (baselines idempotent). `dispatched` → per-member recovery
+(absent evidence → re-dispatch; present + `in_progress` → `seal-member` only). `sealed` → run `join`.
+`joining` → re-run `join` (idempotent). `joined` → delete manifest, re-enter `next-action`.
 
 1. **open-next — open the next ready node when none is `in_progress`** — run this to open the first
    node (the handoff no longer pre-opens it), and on resume to open the next ready node **whenever no

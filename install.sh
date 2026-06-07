@@ -155,6 +155,7 @@ case "$FORGE" in
       kaola-workflow-commit-node.js
       kaola-workflow-adaptive-handoff.js
       kaola-workflow-adaptive-node.js
+      kaola-workflow-parallel-batch.js
       kaola-workflow-adaptive-schema.js
       kaola-workflow-resolve-agent-model.js
       kaola-workflow-codex-preflight.js
@@ -184,6 +185,7 @@ case "$FORGE" in
       kaola-gitlab-workflow-commit-node.js
       kaola-gitlab-workflow-adaptive-handoff.js
       kaola-gitlab-workflow-adaptive-node.js
+      kaola-gitlab-workflow-parallel-batch.js
       kaola-gitlab-workflow-repair-state.js
       kaola-gitlab-workflow-roadmap.js
       kaola-gitlab-workflow-sink-merge.js
@@ -218,6 +220,7 @@ case "$FORGE" in
       kaola-gitea-workflow-commit-node.js
       kaola-gitea-workflow-adaptive-handoff.js
       kaola-gitea-workflow-adaptive-node.js
+      kaola-gitea-workflow-parallel-batch.js
       kaola-gitea-workflow-repair-state.js
       kaola-gitea-workflow-roadmap.js
       kaola-gitea-workflow-sink-merge.js

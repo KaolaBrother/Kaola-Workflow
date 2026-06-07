@@ -101,6 +101,47 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   registered in `validate-script-sync.js` COMMON_SCRIPTS and the three `install.sh`
   SUPPORT_SCRIPT_NAMES blocks.
 
+  **Parallel ready-set execution — fourth aggregator (issue #281).** The executor advances
+  **one FRONTIER UNIT at a time** (a single node or a batch of eligible siblings) instead of
+  strictly one node at a time. `kaola-workflow-parallel-batch.js` is the fourth aggregator and
+  owns the batch lifecycle STATE; the plan-run SKILL (main session) owns concurrent DISPATCH via
+  multiple `Agent()` calls in one message. Like `adaptive-node.js`, `parallel-batch.js` is
+  pure composition over `next-action.js`, `commit-node.js`, and `plan-validator.js`; it never
+  imports-and-mutates them and never spawns an agent.
+
+  `next-action.js` gains two additive fields — `readyPending` (members of `readySet` whose own
+  ledger status is `pending`, i.e. the openable frontier) and `active` (all currently
+  `in_progress` nodes). Existing `readySet`, `nextNode`, and `allDone` are byte-unchanged. The
+  distinction lets the plan-run SKILL decide: `readyPending.length >= 2` → batch path;
+  `readyPending.length == 1` → legacy single-node path; `readyPending.length == 0` with active
+  members → resume an in-progress batch.
+
+  The batch manifest lives at `kaola-workflow/{project}/.cache/active-batch.json` — a
+  non-hashed runtime artifact (the `plan_hash` covers only `## Meta` and `## Nodes`) that
+  tracks the five lifecycle states:
+
+  | State | Meaning |
+  |-------|---------|
+  | `open` | N ledger rows flipped to `in_progress`; N baselines recorded; members not yet dispatched or evidence absent |
+  | `dispatched` | Some members have `.cache/{id}.md` evidence; others are still running |
+  | `sealed` | All members passed their per-node barrier; all rows `complete` or `n/a` |
+  | `joining` | Write-role path-scoped merge in progress; per-member `joined` flags track completion |
+  | `joined` | Transient; manifest deleted; orchestrator re-enters `next-action` |
+
+  **AC#5 invariant.** Multiple `in_progress` ledger rows are **legal only** when a valid
+  `active-batch.json` exists whose `members` set exactly matches the `in_progress` set. Any
+  other configuration is a typed refusal (`orphan_multi_in_progress`). The `orient` subcommand
+  of `adaptive-node.js` enforces this gate: it enumerates all `in_progress` rows, reads the
+  manifest via `parallel-batch status`, and either confirms the batch is valid, routes to the
+  legacy single-node path, or refuses.
+
+  Crash/resume is a pure function of durable artifacts: each state has a deterministic
+  reconstruction path (re-dispatch on `open`; per-member recovery on `dispatched`; run `join`
+  on `sealed`/`joining`; delete manifest on `joined`). `seal-member` calls the unchanged
+  `commit-node --node-id N` barrier; no new gate surface is introduced. Phase-6
+  `--barrier-check` sees normal `complete` rows after `join`. Full design at
+  `docs/investigations/2026-06-07-parallel-ready-set-execution-design.md`.
+
   **Enforcement boundary (script-enforced, #231).** The validator enforces gate
   *presence* statically at freeze: post-dominance proves a `code-reviewer` sits on
   every path from each code-producing node to the unique sink, and a `security-reviewer`

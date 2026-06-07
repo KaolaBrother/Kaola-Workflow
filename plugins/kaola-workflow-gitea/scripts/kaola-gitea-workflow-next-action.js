@@ -12,8 +12,13 @@
 //
 // JSON output schema:
 //   ok:     { result:'ok', readySet:[{id,role,dependsOn,model,declared_write_set,shape}],
-//             nextNode:{...}|null, allDone:boolean }
+//             nextNode:{...}|null, allDone:boolean,
+//             readyPending:[...subset of readySet whose own status is pending],
+//             active:[...same node-descriptor shape, every in_progress node] }
 //   refuse: { result:'refuse', errors:[...] }
+//
+// readyPending and active are purely additive (issue #281): the openable batch
+// frontier and the in_progress set. readySet/nextNode/allDone are unchanged.
 //
 // Exit code 1 iff result==='refuse'.
 // ---------------------------------------------------------------------------
@@ -90,11 +95,33 @@ function computeNextAction(content, opts) {
     };
   }
 
+  // 7. Batch-frontier fields (purely additive; the legacy fields above are
+  //    byte-unchanged). readyPending = the openable frontier the scheduler may
+  //    fan out (readySet members whose OWN status is still 'pending', i.e. not
+  //    yet 'in_progress'). active = every node whose own status is 'in_progress'
+  //    (one per legacy run, N during a batch); active.length > 1 is the
+  //    multi-in_progress (batch) signal. readySet still includes in_progress
+  //    nodes (only TERMINAL nodes are excluded), so nextNode = readySet[0] keeps
+  //    working and a fully-in_progress frontier does NOT trip the stall refusal.
+  const readyPending = readySet.filter(n => st(n.id) === 'pending');
+  const active = nodes
+    .filter(node => st(node.id) === 'in_progress')
+    .map(node => ({
+      id: node.id,
+      role: node.role,
+      dependsOn: node.dependsOn,
+      model: resolveModel(node.role),
+      declared_write_set: node.writeSetRaw,
+      shape: node.shape.kind,
+    }));
+
   return {
     result: 'ok',
     readySet,
     nextNode: readySet[0] || null,
     allDone,
+    readyPending,
+    active,
   };
 }
 

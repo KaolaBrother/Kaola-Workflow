@@ -588,6 +588,22 @@ The four shapes (`sequence`, `fanout`, `loop`, `select`) are a *grammar*, not a 
 
 The first seven are building blocks; the last row stacks three of them. The two read-only design shapes (**Generate-and-filter**, **Tournament**) — they compare or select approaches and write nothing, so they carry zero blast radius and auto-run; the chosen approach then flows into an ordinary write-role implement under the same gates. Every plan, whatever its shape, still crosses the same non-removable walls: a single unique `finalize` sink, `code-reviewer` **post-dominating** every code-producing node, and `security-reviewer` post-dominating every sensitive node (re-derived from the files actually touched, not an author flag). A plan that routes a gate around itself is a typed refusal, not a silent pass.
 
+#### Parallel ready-set execution (issue #281)
+
+The executor runs **one FRONTIER UNIT at a time** rather than strictly one node at a time. A frontier unit is either a single node (the legacy path, unchanged) or a **batch** of ready siblings when `next-action.js` reports `readyPending.length >= 2`.
+
+**Responsibility split.** `kaola-workflow-parallel-batch.js` owns batch **STATE** only: it opens the batch (`open-batch`), seals members individually (`seal-member`, `seal`), and merges results (`join`). The plan-run SKILL running in the main session owns concurrent **DISPATCH**: after `open-batch` completes, the main session issues multiple `Agent()` calls in one message — one per batch member. The script never spawns an agent; a subagent cannot dispatch a subagent. A green plan-run is not evidence of wall-clock parallelism — the only observable concurrency is at host runtime when the main session issues those concurrent `Agent()` calls.
+
+**Read-only batches** (fully supported): siblings with empty declared write sets need no filesystem isolation. They share the active worktree; each writes `.cache/{id}.md` evidence; `seal-member` trivially passes the per-node barrier (empty declared set → empty diff). Use cases include Fan-out-and-synthesize research legs, Adversarial Verification skeptic fan-outs, and quorum reviews.
+
+**Write-role batches** (`fanout(...)` over disjoint write sets): each member requires an isolated node worktree keyed by `(projTag, node-id)`. Disjointness is proven at validator freeze time and re-confirmed in `open-batch` (fail-closed on overlap). The `join` step performs a path-scoped, idempotent checkout into the parent worktree; no attribution ambiguity is possible because every path belongs to exactly one member. Where the host lacks isolated-worktree support, write-role batch members **degrade to serialized execution** — opened one at a time through the same per-node lifecycle. Correctness is preserved; wall-clock parallelism is forgone.
+
+**`parallel-batch.js`** is pure composition over `next-action.js`, `commit-node.js`, and `plan-validator.js`, mirroring the pattern `adaptive-node.js` uses. It adds no new barrier or gate surface — `seal-member` calls the unchanged `commit-node --node-id N` barrier for each member; Phase-6 `--barrier-check` sees normal `complete` rows in the ledger after `join`.
+
+**`workflow-planner` now authors efficient DAGs**: expose independent work as siblings (a shared ready frontier) so the executor can open them as one batch; serialize only for true dependencies, shared file lanes, selectors, loops, or gates.
+
+For the full design, see `docs/investigations/2026-06-07-parallel-ready-set-execution-design.md`.
+
 ## Automation scripts
 
 The workflow includes automation scripts installed by `install.sh` to

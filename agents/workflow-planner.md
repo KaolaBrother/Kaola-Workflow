@@ -79,6 +79,8 @@ Author the `## Nodes` table so the validator passes it. Each node is one row:
   test" is NOT an `implementer` reason. Both implement roles require `code-reviewer`
   post-dominance (G1).
 
+**Author EFFICIENT DAGs, not merely valid DAGs.** Minimize the safe critical path; expose independent work as siblings (a shared ready frontier) so the executor can open them as one batch; serialize only for true dependencies, shared file lanes, selectors, loops, or gates. Read-only verification/research siblings are zero-blast-radius — prefer fanning them out. Write-role siblings must declare disjoint write sets to be batch-eligible.
+
 Capture the frozen issue labels into a `## Meta` `labels:` line so the validator can derive
 sensitivity. If the validator refuses, read the typed refusal and fix the plan — never clamp around
 a gate.

@@ -974,6 +974,274 @@ function makeState(opts) {
 }
 
 // ---------------------------------------------------------------------------
+// T20a: runOrient — single in_progress, NO manifest → legacy single-node path
+//       (back-compat proof: inProgressNode set, inProgressNodes.length===1, batch:null)
+// ---------------------------------------------------------------------------
+{
+  let writeFileCalled = false;
+
+  const plan = makePlan([
+    '| impl-core | in_progress | |',
+    '| impl-other | pending | |',
+    '| review | pending | |',
+    '| finalize | pending | |',
+  ]);
+  const state = makeState();
+  const cacheContent = 'RED: failed\nGREEN: passed';
+
+  const shellStub = function(scriptPath, args) {
+    const base = path.basename(scriptPath);
+    if (base === 'kaola-workflow-plan-validator.js') {
+      return { exitCode: 0, ok: true, planHash: 'abc123' };
+    }
+    if (base === 'kaola-workflow-next-action.js') {
+      return {
+        exitCode: 0,
+        result: 'ok',
+        readySet: [{ id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js', dependsOn: [] }],
+        nextNode: { id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js' },
+        allDone: false,
+      };
+    }
+    return { exitCode: 1 };
+  };
+
+  const result = runOrient({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project',
+    shell: shellStub,
+    readFile: (fpath) => {
+      if (fpath.endsWith('workflow-plan.md')) return plan;
+      if (fpath.endsWith('workflow-state.md')) return state;
+      if (fpath.endsWith('active-batch.json')) throw new Error('ENOENT: ' + fpath); // no manifest
+      if (fpath.includes('.cache/')) return cacheContent;
+      throw new Error('ENOENT: ' + fpath);
+    },
+    writeFile: (fpath, content) => { writeFileCalled = true; },
+    cacheExists: (fpath) => fpath.includes('impl-core'),
+  });
+
+  assert(writeFileCalled === false, 'T20a: orient never calls writeFile (read-only)');
+  assert(result.result === 'ok', 'T20a: legacy single-node path → result ok (no refusal)');
+  assert(result.inProgressNode === 'impl-core', 'T20a: inProgressNode set as before (back-compat)');
+  assert(result.cacheState === 'present', 'T20a: cacheState preserved (back-compat)');
+  assert(Array.isArray(result.inProgressNodes), 'T20a: inProgressNodes is an array (additive field)');
+  assert(result.inProgressNodes.length === 1, 'T20a: inProgressNodes lists exactly the one in_progress row');
+  assert(result.inProgressNodes[0] === 'impl-core', 'T20a: inProgressNodes[0]===impl-core');
+  assert(result.batch === null, 'T20a: batch===null on legacy single-node path');
+}
+
+// ---------------------------------------------------------------------------
+// T20b: runOrient — TWO in_progress rows WITH a matching active-batch.json manifest
+//       → valid active batch (result ok, batch.state set, batch.members lists both, NO refusal)
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan([
+    '| impl-core | in_progress | |',
+    '| impl-other | in_progress | |',
+    '| review | pending | |',
+    '| finalize | pending | |',
+  ]);
+  const state = makeState();
+
+  const manifest = JSON.stringify({
+    batchId: 'batch-impl-core-impl-other',
+    state: 'open',
+    kind: 'read_only',
+    members: [
+      { id: 'impl-core', role: 'tdd-guide', sealed: false },
+      { id: 'impl-other', role: 'implementer', sealed: false },
+    ],
+    createdAt: '1970-01-01T00:00:00.000Z',
+  });
+
+  const shellStub = function(scriptPath, args) {
+    const base = path.basename(scriptPath);
+    if (base === 'kaola-workflow-plan-validator.js') return { exitCode: 0, ok: true };
+    if (base === 'kaola-workflow-next-action.js') {
+      return { exitCode: 0, result: 'ok', readySet: [], nextNode: null, allDone: false };
+    }
+    return { exitCode: 1 };
+  };
+
+  const result = runOrient({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project',
+    shell: shellStub,
+    readFile: (fpath) => {
+      if (fpath.endsWith('workflow-plan.md')) return plan;
+      if (fpath.endsWith('workflow-state.md')) return state;
+      if (fpath.endsWith('active-batch.json')) return manifest;
+      if (fpath.includes('.cache/')) return 'evidence';
+      throw new Error('ENOENT: ' + fpath);
+    },
+    writeFile: () => { throw new Error('orient must not write'); },
+    cacheExists: (fpath) => fpath.endsWith('active-batch.json') || fpath.includes('impl-core') || fpath.includes('impl-other'),
+  });
+
+  assert(result.result === 'ok', 'T20b: valid active batch → result ok (NO refusal)');
+  assert(Array.isArray(result.inProgressNodes), 'T20b: inProgressNodes is an array');
+  assert(result.inProgressNodes.length === 2, 'T20b: inProgressNodes lists BOTH in_progress rows');
+  assert(result.batch !== null && typeof result.batch === 'object', 'T20b: batch object present for valid batch');
+  assert(result.batch.state === 'open', 'T20b: batch.state set from manifest');
+  assert(Array.isArray(result.batch.members), 'T20b: batch.members is an array');
+  assert(result.batch.members.length === 2, 'T20b: batch.members lists both members');
+  const memberIds = result.batch.members.map(m => m.id).sort();
+  assert(memberIds[0] === 'impl-core' && memberIds[1] === 'impl-other', 'T20b: batch.members ids match the two in_progress rows');
+}
+
+// ---------------------------------------------------------------------------
+// T20c: runOrient — TWO in_progress rows WITHOUT a manifest → typed refusal
+//       (result refuse, reason orphan_multi_in_progress, inProgressNodes lists both)
+// ---------------------------------------------------------------------------
+{
+  let writeFileCalled = false;
+
+  const plan = makePlan([
+    '| impl-core | in_progress | |',
+    '| impl-other | in_progress | |',
+    '| review | pending | |',
+    '| finalize | pending | |',
+  ]);
+  const state = makeState();
+
+  const shellStub = function(scriptPath, args) {
+    const base = path.basename(scriptPath);
+    if (base === 'kaola-workflow-plan-validator.js') return { exitCode: 0, ok: true };
+    if (base === 'kaola-workflow-next-action.js') {
+      return { exitCode: 0, result: 'ok', readySet: [], nextNode: null, allDone: false };
+    }
+    return { exitCode: 1 };
+  };
+
+  const result = runOrient({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project',
+    shell: shellStub,
+    readFile: (fpath) => {
+      if (fpath.endsWith('workflow-plan.md')) return plan;
+      if (fpath.endsWith('workflow-state.md')) return state;
+      if (fpath.endsWith('active-batch.json')) throw new Error('ENOENT: ' + fpath); // NO manifest
+      if (fpath.includes('.cache/')) return 'evidence';
+      throw new Error('ENOENT: ' + fpath);
+    },
+    writeFile: () => { writeFileCalled = true; },
+    cacheExists: (fpath) => false, // active-batch.json absent
+  });
+
+  assert(writeFileCalled === false, 'T20c: orient never writes (read-only) even on refuse');
+  assert(result.result === 'refuse', 'T20c: multi in_progress + no manifest → refuse');
+  assert(result.reason === 'orphan_multi_in_progress', 'T20c: reason===orphan_multi_in_progress (the AC#5 emission)');
+  assert(Array.isArray(result.inProgressNodes) && result.inProgressNodes.length === 2, 'T20c: inProgressNodes lists both orphaned rows');
+  const ids = result.inProgressNodes.slice().sort();
+  assert(ids[0] === 'impl-core' && ids[1] === 'impl-other', 'T20c: inProgressNodes are the two in_progress ids');
+}
+
+// ---------------------------------------------------------------------------
+// T20d: runOrient — TWO in_progress rows WITH a MISMATCHED manifest member set
+//       → typed refusal orphan_multi_in_progress (member set must EQUAL in_progress set)
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan([
+    '| impl-core | in_progress | |',
+    '| impl-other | in_progress | |',
+    '| review | pending | |',
+    '| finalize | pending | |',
+  ]);
+  const state = makeState();
+
+  // Manifest names impl-core + review, but review is NOT in_progress → mismatch.
+  const manifest = JSON.stringify({
+    batchId: 'batch-impl-core-review',
+    state: 'open',
+    kind: 'read_only',
+    members: [
+      { id: 'impl-core', role: 'tdd-guide', sealed: false },
+      { id: 'review', role: 'code-reviewer', sealed: false },
+    ],
+    createdAt: '1970-01-01T00:00:00.000Z',
+  });
+
+  const shellStub = function(scriptPath, args) {
+    const base = path.basename(scriptPath);
+    if (base === 'kaola-workflow-plan-validator.js') return { exitCode: 0, ok: true };
+    if (base === 'kaola-workflow-next-action.js') {
+      return { exitCode: 0, result: 'ok', readySet: [], nextNode: null, allDone: false };
+    }
+    return { exitCode: 1 };
+  };
+
+  const result = runOrient({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project',
+    shell: shellStub,
+    readFile: (fpath) => {
+      if (fpath.endsWith('workflow-plan.md')) return plan;
+      if (fpath.endsWith('workflow-state.md')) return state;
+      if (fpath.endsWith('active-batch.json')) return manifest;
+      if (fpath.includes('.cache/')) return 'evidence';
+      throw new Error('ENOENT: ' + fpath);
+    },
+    writeFile: () => { throw new Error('orient must not write'); },
+    cacheExists: (fpath) => fpath.endsWith('active-batch.json') || fpath.includes('impl'),
+  });
+
+  assert(result.result === 'refuse', 'T20d: multi in_progress + mismatched manifest → refuse');
+  assert(result.reason === 'orphan_multi_in_progress', 'T20d: reason===orphan_multi_in_progress on member-set mismatch');
+  assert(Array.isArray(result.inProgressNodes) && result.inProgressNodes.length === 2, 'T20d: inProgressNodes lists both in_progress rows');
+}
+
+// ---------------------------------------------------------------------------
+// T20e: runOrient — consentHalt / escalatedToFull / allDone paths unchanged
+//       (multi-in_progress legality gate must not disturb these existing fields)
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan([
+    '| impl-core | complete | |',
+    '| impl-other | complete | |',
+    '| review | complete | |',
+    '| finalize | complete | |',
+  ]).replace('## Node Ledger\n', '## Node Ledger\nconsent_halt: pending\n');
+  const state = makeState({ escalated: 'security' });
+
+  const shellStub = function(scriptPath, args) {
+    const base = path.basename(scriptPath);
+    if (base === 'kaola-workflow-plan-validator.js') return { exitCode: 0, ok: true };
+    if (base === 'kaola-workflow-next-action.js') {
+      return { exitCode: 0, result: 'ok', readySet: [], nextNode: null, allDone: true };
+    }
+    return { exitCode: 1 };
+  };
+
+  const result = runOrient({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project',
+    shell: shellStub,
+    readFile: (fpath) => {
+      if (fpath.endsWith('workflow-plan.md')) return plan;
+      if (fpath.endsWith('workflow-state.md')) return state;
+      if (fpath.endsWith('active-batch.json')) throw new Error('ENOENT');
+      throw new Error('ENOENT: ' + fpath);
+    },
+    writeFile: () => { throw new Error('orient must not write'); },
+    cacheExists: (fpath) => false,
+  });
+
+  assert(result.result === 'ok', 'T20e: all-complete + no in_progress → result ok (no refusal)');
+  assert(result.consentHalt === true, 'T20e: consentHalt still detected (unchanged)');
+  assert(result.escalatedToFull === 'security', 'T20e: escalatedToFull still parsed (unchanged)');
+  assert(result.allDone === true, 'T20e: allDone still derived from next-action (unchanged)');
+  assert(result.inProgressNode === null, 'T20e: inProgressNode null when none in_progress (unchanged)');
+  assert(Array.isArray(result.inProgressNodes) && result.inProgressNodes.length === 0, 'T20e: inProgressNodes empty array when none in_progress');
+  assert(result.batch === null, 'T20e: batch null when no in_progress / no manifest');
+}
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 if (failed > 0) {

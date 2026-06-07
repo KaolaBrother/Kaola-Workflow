@@ -1,5 +1,5 @@
 ---
-description: Kaola-Workflow Adaptive Executor. Runs a frozen workflow-plan.md by traversing its DAG + Node Ledger, dispatching one role node at a time with per-node checkpoints. Resume-safe.
+description: Kaola-Workflow Adaptive Executor. Runs a frozen workflow-plan.md by traversing its DAG + Node Ledger, dispatching one frontier unit at a time with per-node checkpoints. Resume-safe.
 argument-hint: <project name>
 ---
 
@@ -8,7 +8,7 @@ argument-hint: <project name>
 Executes a frozen `workflow-plan.md` for an adaptive project (`workflow_path:
 adaptive`). The plan — authored by `/kaola-workflow-adapt` and frozen by the
 validator — is the spine: the executor traverses its DAG + `## Node Ledger`
-instead of the fixed phaseN ladder, dispatching one role node at a time and
+instead of the fixed phaseN ladder, dispatching one frontier unit at a time and
 checkpointing between calls. This is the Branch-A substrate: the agent freely
 designed the *shape*; the harness owns the lifecycle frame, the computed gates,
 and the durable resume contract.
@@ -162,6 +162,79 @@ node's commit and its fused advance); thereafter the loop cycles step 2 → 3 �
 The main session owns and runs these script transactions **directly** from `${ACTIVE_WORKTREE_PATH}`.
 The script owns the deterministic mechanics (ledger writes, baseline records, compliance rows,
 selector routing); the main session owns the dispatch and the governance judgment.
+
+### Frontier unit / parallel batch
+
+Each iteration of the loop advances exactly one **frontier unit**. A frontier unit is either a
+single node (the legacy serial path, unchanged) or a batch of ready siblings when `next-action`'s
+`readyPending` contains ≥2 eligible nodes.
+
+**Deciding the unit:** after `orient`, read `next-action --json` and inspect `readyPending`:
+- `readyPending.length == 1` (or 0 with a node already `in_progress`) → **single-node path**: run
+  steps 1–4 below as today, with zero change.
+- `readyPending.length >= 2` and members are eligible → **batch path** (see below).
+
+**Batch eligibility rules** (checked by `open-batch`):
+- All-read-only (empty declared write sets): eligible; no worktree isolation required.
+- All-write-role over pairwise-disjoint declared write sets: eligible (disjointness re-confirmed at
+  `open-batch`, fail-closed on overlap).
+- Mixed read-only + write-role: open the read-only subset first; never mix in one batch.
+
+**Batch path — steps:**
+
+**(a)** `parallel-batch open-batch`:
+```bash
+node "$KAOLA_SCRIPTS/kaola-workflow-parallel-batch.js" open-batch \
+  --project {project} --json
+```
+Flips N ledger rows `pending → in_progress`, records N baselines (idempotent, #239), writes
+`kaola-workflow/{project}/.cache/active-batch.json` with `state: 'open'`. Returns
+`{result:'ok', batchId, state:'open', members:[{id, role, model, declared_write_set, kind, baseline, worktreePath}], allDone:false}`.
+
+**(b)** **Concurrent dispatch — the ONLY real concurrency:** the main session issues **MULTIPLE
+`Agent()` calls in ONE message**, one per batch member. Each call carries `subagent_type` = member
+role, `model` = per-member model, and:
+- Write-role members: `Working directory: <member isolated worktree>`.
+- Read-only members: `Working directory: ${ACTIVE_WORKTREE_PATH}` (shared worktree).
+
+**The script manages batch STATE; the orchestrator (main session) owns DISPATCH.
+`kaola-workflow-parallel-batch.js` NEVER spawns an agent — the only concurrency is the main
+session issuing multiple `Agent()` calls in one message.**
+
+**(c)** `record-evidence` per member — each subagent writes its evidence. Read-only siblings use
+namespaced paths `.cache/{role}-{claim-id}.md` so members never collide.
+
+**(d)** `parallel-batch seal`:
+```bash
+node "$KAOLA_SCRIPTS/kaola-workflow-parallel-batch.js" seal \
+  --project {project} --json
+```
+Runs the unchanged per-node `commit-node` barrier for each member (same barrier as the single-node
+path, called N times). Manifest transitions to `state: 'sealed'` only when all members pass.
+
+**(e)** `parallel-batch join` (no-op for read-only; path-scoped merge for write-role):
+```bash
+node "$KAOLA_SCRIPTS/kaola-workflow-parallel-batch.js" join \
+  --project {project} --json
+```
+For write-role batches: runs path-scoped `git -C <parent> checkout <member-ref> -- <each declared
+path>` for each member (disjoint sets → conflict-free; idempotent). For read-only batches: no-op.
+After join, the orchestrator deletes the manifest (`active-batch.json`).
+
+**(f)** Re-enter `next-action` — the now-terminal batch members unblock downstream nodes
+(existing readiness semantics: `next-action` requires all `depends_on` to be TERMINAL before a
+node enters `readyPending`; no new gate needed).
+
+**Legality rule:** multiple `in_progress` ledger rows are legal ONLY when a valid
+`active-batch.json` exists whose `members` set exactly matches the `in_progress` set. Any other
+configuration is a typed refusal (`orphan_multi_in_progress`). The batch lifecycle states are:
+`open → dispatched → sealed → joining → joined`.
+
+**Crash/resume:** the batch state is fully recoverable from durable artifacts. `open` → re-dispatch
+all members (baselines idempotent). `dispatched` → per-member: absent evidence re-dispatch; present
+evidence but `in_progress` ledger → run `seal-member` only. `sealed` → run `join`. `joining` →
+re-run `join` (idempotent on already-merged members). `joined` → delete manifest, re-enter
+`next-action`.
 
 1. **open-next — open the next ready node when none is `in_progress`** — run this to open the
    first node (handoff no longer pre-opens it), and on resume to open the next ready node

@@ -233,6 +233,141 @@ function makePlan(nodesRows, ledgerRows) {
 }
 
 // -----------------------------------------------------------------------
+// Test 8 (AC#1): Two sibling PENDING nodes v1,v2 sharing a satisfied dep a
+// (complete) → readyPending lists BOTH (the openable batch frontier) and
+// active is empty (no node is in_progress).
+// -----------------------------------------------------------------------
+{
+  const content = makePlan(
+    [
+      '| a        | code-explorer | —    | — | 1 | sequence          |',
+      '| v1       | tdd-guide     | a    | scripts/v1.js | 1 | fanout(verify) |',
+      '| v2       | tdd-guide     | a    | scripts/v2.js | 1 | fanout(verify) |',
+      '| finalize | finalize      | v1,v2| — | 1 | sequence          |',
+    ],
+    [
+      '| a        | complete |',
+      '| v1       | pending  |',
+      '| v2       | pending  |',
+      '| finalize | pending  |',
+    ]
+  );
+  const r = computeNextAction(content, { resolveModel: stub });
+  assert(r.result === 'ok', 'test8: result is ok');
+  assert(Array.isArray(r.readyPending), 'test8: readyPending is an array');
+  assert(r.readyPending.length === 2, 'test8: readyPending has both siblings');
+  assert(r.readyPending[0].id === 'v1', 'test8: readyPending[0].id === v1 (doc order)');
+  assert(r.readyPending[1].id === 'v2', 'test8: readyPending[1].id === v2');
+  assert(Array.isArray(r.active), 'test8: active is an array');
+  assert(r.active.length === 0, 'test8: active is empty (no in_progress node)');
+  // readyPending entries carry the same descriptor shape as readySet entries.
+  assert(r.readyPending[0].role === 'tdd-guide', 'test8: readyPending[0].role === tdd-guide');
+  assert(r.readyPending[0].shape === 'fanout', 'test8: readyPending[0].shape === fanout');
+  assert(r.readyPending[0].model === 'sonnet', 'test8: readyPending[0].model resolved');
+  assert(r.readyPending[0].declared_write_set === 'scripts/v1.js',
+    'test8: readyPending[0].declared_write_set carried through');
+}
+
+// -----------------------------------------------------------------------
+// Test 9 (AC#5): One sibling flipped to in_progress (v1), the other pending (v2).
+//   - v1 is EXCLUDED from readyPending but INCLUDED in active.
+//   - v2 remains in readyPending.
+//   - readySet / nextNode / allDone are BYTE-UNCHANGED from the pre-change
+//     expectation: readySet still includes the in_progress node (it is NOT
+//     terminal), so nextNode = readySet[0] keeps working AND a frontier that
+//     is partially/fully in_progress does NOT trip the deadlock refusal.
+// -----------------------------------------------------------------------
+{
+  const content = makePlan(
+    [
+      '| a        | code-explorer | —    | — | 1 | sequence          |',
+      '| v1       | tdd-guide     | a    | scripts/v1.js | 1 | fanout(verify) |',
+      '| v2       | tdd-guide     | a    | scripts/v2.js | 1 | fanout(verify) |',
+      '| finalize | finalize      | v1,v2| — | 1 | sequence          |',
+    ],
+    [
+      '| a        | complete    |',
+      '| v1       | in_progress |',
+      '| v2       | pending     |',
+      '| finalize | pending     |',
+    ]
+  );
+  const r = computeNextAction(content, { resolveModel: stub });
+  assert(r.result === 'ok', 'test9: result is ok (in_progress frontier is NOT a deadlock)');
+
+  // Legacy fields byte-unchanged: readySet still includes BOTH v1 (in_progress,
+  // non-terminal) and v2, in document order; nextNode = readySet[0] = v1.
+  assert(r.readySet.length === 2, 'test9: readySet still includes the in_progress node');
+  assert(r.readySet[0].id === 'v1', 'test9: readySet[0].id === v1 (in_progress kept, doc order)');
+  assert(r.readySet[1].id === 'v2', 'test9: readySet[1].id === v2');
+  assert(r.nextNode !== null && r.nextNode.id === 'v1', 'test9: nextNode === readySet[0] === v1');
+  assert(r.allDone === false, 'test9: allDone is false');
+
+  // New fields: readyPending excludes the in_progress node, active includes it.
+  assert(r.readyPending.length === 1, 'test9: readyPending has only the pending sibling');
+  assert(r.readyPending[0].id === 'v2', 'test9: readyPending excludes v1 (in_progress)');
+  assert(!r.readyPending.some(n => n.id === 'v1'), 'test9: v1 NOT in readyPending');
+  assert(r.active.length === 1, 'test9: active has the one in_progress node');
+  assert(r.active[0].id === 'v1', 'test9: active[0].id === v1');
+  assert(r.active[0].role === 'tdd-guide', 'test9: active[0].role carried');
+  assert(r.active[0].shape === 'fanout', 'test9: active[0].shape carried');
+  assert(r.active[0].model === 'sonnet', 'test9: active[0].model resolved');
+  assert(r.active[0].declared_write_set === 'scripts/v1.js', 'test9: active[0].declared_write_set carried');
+  assert(Array.isArray(r.active[0].dependsOn) && r.active[0].dependsOn[0] === 'a',
+    'test9: active[0].dependsOn carried');
+
+  // AC#5 multi-in_progress signal: a fully-in_progress frontier (both siblings
+  // in_progress) is still ok (not a deadlock) and surfaces active.length > 1.
+  const both = makePlan(
+    [
+      '| a        | code-explorer | —    | — | 1 | sequence          |',
+      '| v1       | tdd-guide     | a    | scripts/v1.js | 1 | fanout(verify) |',
+      '| v2       | tdd-guide     | a    | scripts/v2.js | 1 | fanout(verify) |',
+      '| finalize | finalize      | v1,v2| — | 1 | sequence          |',
+    ],
+    [
+      '| a        | complete    |',
+      '| v1       | in_progress |',
+      '| v2       | in_progress |',
+      '| finalize | pending     |',
+    ]
+  );
+  const rb = computeNextAction(both, { resolveModel: stub });
+  assert(rb.result === 'ok', 'test9: fully-in_progress frontier is ok (NOT a deadlock refusal)');
+  assert(rb.readyPending.length === 0, 'test9: readyPending empty when all ready nodes in_progress');
+  assert(rb.active.length === 2, 'test9: active.length > 1 is the multi-in_progress signal');
+}
+
+// -----------------------------------------------------------------------
+// Test 10 (AC#1/AC#5 invariant): readyPending is a (⊆) subset of readySet —
+// every readyPending member appears in readySet. Verified across a mixed
+// frontier (one pending, one in_progress).
+// -----------------------------------------------------------------------
+{
+  const content = makePlan(
+    [
+      '| a        | code-explorer | —    | — | 1 | sequence          |',
+      '| v1       | tdd-guide     | a    | scripts/v1.js | 1 | fanout(verify) |',
+      '| v2       | tdd-guide     | a    | scripts/v2.js | 1 | fanout(verify) |',
+      '| finalize | finalize      | v1,v2| — | 1 | sequence          |',
+    ],
+    [
+      '| a        | complete    |',
+      '| v1       | in_progress |',
+      '| v2       | pending     |',
+      '| finalize | pending     |',
+    ]
+  );
+  const r = computeNextAction(content, { resolveModel: stub });
+  const readyIds = new Set(r.readySet.map(n => n.id));
+  assert(r.readyPending.every(n => readyIds.has(n.id)),
+    'test10: readyPending is a subset of readySet (every member present)');
+  // Proper subset here: the in_progress node is in readySet but not readyPending.
+  assert(r.readyPending.length < r.readySet.length,
+    'test10: readyPending is a PROPER subset when a ready node is in_progress');
+}
+
+// -----------------------------------------------------------------------
 // Summary
 // -----------------------------------------------------------------------
 if (failed > 0) {

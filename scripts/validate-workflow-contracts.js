@@ -617,5 +617,13 @@ for (const reviewerBody of [
 ]) {
   assertIncludes(reviewerBody, 'finding: id=');
 }
+// #281: parallel-batch aggregator presence + install.sh registration
+assert(exists('scripts/kaola-workflow-parallel-batch.js'), '#281 parallel-batch aggregator missing from scripts/');
+assert(exists('plugins/kaola-workflow/scripts/kaola-workflow-parallel-batch.js'), '#281 parallel-batch aggregator missing from claude plugin');
+assertIncludes('install.sh', 'kaola-workflow-parallel-batch.js');
+// #281: frontier-unit semantics in plan-run executor surface (added by plan-run-semantics node)
+assertIncludes('commands/kaola-workflow-plan-run.md', 'frontier unit');
+// #281: efficient-DAG instruction in workflow-planner profile (added by planner-profile node)
+assertIncludes('agents/workflow-planner.md', 'EFFICIENT DAGs');
 
 console.log('Workflow contract validation passed');

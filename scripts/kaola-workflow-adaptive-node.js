@@ -332,11 +332,20 @@ function runOrient(opts) {
 
   const consentHalt = /consent_halt:\s*pending/.test(planContent);
 
-  // Detect in_progress node.
+  // Resolve per-node cache (.cache/{id}.md) presence — same check the single-node
+  // resume path has always used.
+  const cacheStateFor = (rowId) => {
+    const cachePath = path.join(path.dirname(planPath), '.cache', rowId + '.md');
+    if (cacheExists) {
+      return cacheExists(cachePath) ? 'present' : 'absent';
+    }
+    try { readFile(cachePath); return 'present'; } catch (_) { return 'absent'; }
+  };
+
+  // Enumerate ALL in_progress ledger rows (no early break — AC#5 batch awareness).
   const ledgerMarker = '\n## Node Ledger';
   const ledgerIdx = planContent.indexOf(ledgerMarker);
-  let inProgressNode = null;
-  let cacheState = null;
+  const inProgressNodes = [];
 
   if (ledgerIdx >= 0) {
     const afterLedger = planContent.indexOf('\n## ', ledgerIdx + 1);
@@ -355,19 +364,77 @@ function runOrient(opts) {
           const rowId = cells[idIdx] || '';
           const rowSt = (cells[stIdx] || '').toLowerCase();
           if (rowSt === 'in_progress') {
-            inProgressNode = rowId;
-            // Check cache state.
-            const cachePath = path.join(path.dirname(planPath), '.cache', rowId + '.md');
-            if (cacheExists) {
-              cacheState = cacheExists(cachePath) ? 'present' : 'absent';
-            } else {
-              try { readFile(cachePath); cacheState = 'present'; } catch (_) { cacheState = 'absent'; }
-            }
-            break;
+            inProgressNodes.push(rowId);
           }
         }
       }
     }
+  }
+
+  // Keep the existing single-node fields byte-for-byte unchanged: the first
+  // (legacy: only) in_progress row + its cache state.
+  const inProgressNode = inProgressNodes.length ? inProgressNodes[0] : null;
+  const cacheState = inProgressNode ? cacheStateFor(inProgressNode) : null;
+
+  // Read the active-batch manifest directly (READ-ONLY) — matches orient's
+  // established "read the durable artifact" pattern (no shelling, no new sibling
+  // filename literal so the forge ports stay verbatim copies). Fail-closed to null.
+  const manifestPath = path.join(path.dirname(planPath), '.cache', 'active-batch.json');
+  let manifest = null;
+  const manifestPresent = cacheExists ? cacheExists(manifestPath) : true;
+  if (manifestPresent) {
+    let raw = null;
+    try { raw = readFile(manifestPath); } catch (_) { raw = null; }
+    if (raw != null) {
+      const parsed = safeJsonParse(raw);
+      if (parsed && Array.isArray(parsed.members)) {
+        manifest = parsed;
+      }
+    }
+  }
+
+  // Order-independent member-set equality between the manifest and the
+  // in_progress rows.
+  const manifestMemberIds = manifest ? (manifest.members || []).map(m => m.id) : [];
+  const setsEqual = (a, b) => {
+    if (a.length !== b.length) return false;
+    const sa = new Set(a);
+    return b.every(id => sa.has(id));
+  };
+  const memberSetEquals = !!manifest && setsEqual(manifestMemberIds, inProgressNodes);
+
+  // -- AC#5 legality gate --------------------------------------------------
+  //  ≤1 in_progress (with or without a manifest) → legacy single-node path.
+  //  ≥1 in_progress AND manifest member-set EQUALS the in_progress set → valid batch.
+  //  >1 in_progress AND (no manifest OR member-set mismatch) → typed refusal.
+  let batch = null;
+
+  if (memberSetEquals && inProgressNodes.length >= 1) {
+    // Valid active batch.
+    batch = {
+      state: manifest.state || null,
+      members: (manifest.members || []).map(m => ({
+        id: m.id,
+        cacheState: cacheStateFor(m.id),
+        sealed: !!m.sealed,
+      })),
+    };
+  } else if (inProgressNodes.length > 1) {
+    // Multiple in_progress rows with no valid active batch — orphan/repair state.
+    return {
+      result: 'refuse',
+      reason: 'orphan_multi_in_progress',
+      resumeCheck,
+      nextAction,
+      consentHalt,
+      escalatedToFull,
+      inProgressNode,
+      cacheState,
+      inProgressNodes,
+      manifest,
+      batch: null,
+      allDone: false,
+    };
   }
 
   const allDone = !!(nextAction.result === 'ok' && nextAction.allDone);
@@ -380,6 +447,8 @@ function runOrient(opts) {
     escalatedToFull,
     inProgressNode,
     cacheState: inProgressNode ? cacheState : null,
+    inProgressNodes,
+    batch,
     allDone,
   };
 }
