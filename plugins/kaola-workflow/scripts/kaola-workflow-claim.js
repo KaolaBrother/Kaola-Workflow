@@ -105,6 +105,8 @@ function parseArgs(argv) {
     if (key === '--archive') { args.archive = true; continue; }
     if (key === '--export')  { args.export = true; continue; }
     if (key === '--keep-branch') { args.keepBranch = true; continue; }
+    // M1 (#280): planner self-attest flag; a boolean flag like --json/--force.
+    if (key === '--attest-planner-spawn') { args.attestPlannerSpawn = true; continue; }
     if (key.startsWith('--') && val !== undefined && !val.startsWith('--')) {
       const name = key.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
       args[name] = val;
@@ -610,6 +612,23 @@ function claimProject(root, args) {
     status: 'active'
   });
   postAdvisoryClaim(issueNumber, project);
+  // M1 (#280): planner self-attest back-fill.
+  // The SubagentStart hook logs dispatched agents to .cache/dispatch-log.jsonl but cannot
+  // log the planner's OWN spawn (no project state file exists at that moment — this claim
+  // creates it). When --attest-planner-spawn is supplied by the planner's own startup
+  // invocation, back-fill a workflow-planner entry so checkDispatchAttestations sees it.
+  // Gated strictly on the flag: a main-session inline bypass (no flag) writes nothing →
+  // claim_planner_attested stays missing/failed (inline-bypass detector still fires).
+  // Wrapped in try/catch: attestation is warn-first and must NEVER block the claim.
+  if (args.attestPlannerSpawn) {
+    try {
+      const cacheDir = path.join(root, 'kaola-workflow', project, '.cache');
+      fs.mkdirSync(cacheDir, { recursive: true });
+      const ts = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+      const entry = JSON.stringify({ ts, agent_type: 'workflow-planner', agent_id: 'claim-backfill', cwd: root });
+      fs.appendFileSync(path.join(cacheDir, 'dispatch-log.jsonl'), entry + '\n');
+    } catch (_) { /* fail-open: attestation is warn-first */ }
+  }
   return Object.assign(
     { status: 'acquired', verdict: 'green', claim: 'acquired', issue: issueNumber, project, branch, worktree_path: worktreePath },
     worktreeError ? { worktree_error: worktreeError } : {},

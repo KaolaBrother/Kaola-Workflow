@@ -3,7 +3,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { getCoordRoot, readActiveFolders, removeWorktree, buildClosureReceipt, checkClosureInvariants } = require('./kaola-workflow-claim.js');
+const { getCoordRoot, readActiveFolders, removeWorktree, buildClosureReceipt, checkClosureInvariants, checkDispatchAttestations } = require('./kaola-workflow-claim.js');
 
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
 const FORCE_FF_FAIL = parseInt(process.env.KAOLA_WORKFLOW_FORCE_FF_FAIL || '0', 10);
@@ -299,6 +299,14 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus) {
     worktree_removed: worktreeRemoved,
     branch_removed: branchRemoved
   });
+  // M2 (#280): WARN-FIRST dispatch attestation check, archive-first (matching cmdFinalize).
+  // cmdFinalize archives .cache/ before sink-merge runs, so the live path is absent;
+  // check archive candidate first, then live as fallback. emptyReceipt 'failed' defaults
+  // are overwritten here so a real dispatch-log (with both lines) yields 'attested'.
+  checkDispatchAttestations([
+    path.join(archiveDest, '.cache'),
+    path.join(mainRoot, 'kaola-workflow', args.project, '.cache')
+  ], receipt);
   const invariants = checkClosureInvariants(mainRoot, receipt, archiveDest);
   process.stdout.write(JSON.stringify({ status: 'merged', closure_receipt: receipt, closure_invariants: invariants }) + '\n');
 }

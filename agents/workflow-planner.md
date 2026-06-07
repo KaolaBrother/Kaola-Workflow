@@ -93,8 +93,11 @@ these reminders does not relax them.
 
 1. **Claim / starting contract.** Run the startup transaction for the agent-selected target issue:
    ```
-   node <claim.js> startup --runtime claude --workflow-path adaptive [--sink <sink>] --target-issue <N>
+   node <claim.js> startup --runtime claude --workflow-path adaptive [--sink <sink>] --target-issue <N> --attest-planner-spawn
    ```
+   `--attest-planner-spawn` lets claim.js back-fill the planner's own (otherwise-unloggable) dispatch
+   marker into `.cache/dispatch-log.jsonl`; only a genuinely-dispatched workflow-planner running this
+   startup procedure passes it (#280).
    `--workflow-path adaptive` is **required** so the project is stamped `workflow_path: adaptive`
    (a subagent shell does not inherit the orchestrator's `KAOLA_PATH`). This writes `kaola-workflow/{project}/workflow-state.md` at repo-root AND provisions a repo-local hidden worktree at `<repo-root>/.kw/worktrees/<project>/`. You author and freeze the plan at repo-root; you do NOT cd into the worktree — the executor `/kaola-workflow-plan-run` mirrors the folder into the worktree and operates there.
    - **Overwrite-guard carve-out (frozen vs unfrozen):** if `kaola-workflow/{project}/workflow-plan.md`

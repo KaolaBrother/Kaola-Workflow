@@ -8837,10 +8837,197 @@ async function main() {
     testSinkRefusesWorkflowOnlyBranch();
     testSinkAllowsMixedBranch();
     testPlanRunWiredForWorktree();
+    // issue #280 — closure attestation false-failures
+    testPlannerAttestFlagBackfillsDispatchLog();     // AC1: M1 back-fill + M2 sink-merge check
+    testPlannerAttestFlagAbsentStaysMissing();        // AC2: no-flag path stays not-attested
+    testPlannerAttestFlagPresentInPlannerAgent();     // contract guard
     console.log('Workflow walkthrough simulation passed');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
+}
+
+// ── #280: AC1 — M1 planner back-fill + M2 sink-merge attestation check ──────
+// Drives a real startup claim WITH --attest-planner-spawn, verifies the back-fill
+// lands in dispatch-log.jsonl, then appends a contractor line (simulating the hook),
+// runs finalize, asserts claim_planner_attested===attested + finalize_contractor_attested===attested
+// in BOTH the finalize receipt and the sink-merge closure_receipt.
+// The sink-merge assertion is the primary M2 regression check.
+function testPlannerAttestFlagBackfillsDispatchLog() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-280-ac1-')));
+  const kwRoot = tmp + '.kw';
+  try {
+    initGitRepo(tmp);
+    const binDir = path.join(tmp, 'bin');
+    writeGhShimForStartup(binDir);
+
+    // Real startup claim WITH --attest-planner-spawn (M1 fix path)
+    const sResult = runClaimOnlineLastJson(
+      ['startup', '--target-issue', '280001', '--attest-planner-spawn'],
+      tmp, binDir
+    );
+    assert(sResult.claim === 'acquired', 'M1 (#280): startup must acquire');
+    const project = sResult.selected_project || 'issue-280001';
+
+    // The back-fill must have written to .cache/dispatch-log.jsonl
+    const dispatchLog = path.join(tmp, 'kaola-workflow', project, '.cache', 'dispatch-log.jsonl');
+    assert(fs.existsSync(dispatchLog),
+      'M1 (#280): --attest-planner-spawn must create dispatch-log.jsonl at ' + dispatchLog);
+    const logContent = fs.readFileSync(dispatchLog, 'utf8');
+    const lines = logContent.split('\n').filter(Boolean);
+    const plannerLine = lines.find(l => { try { return JSON.parse(l).agent_type === 'workflow-planner'; } catch(_) { return false; } });
+    assert(plannerLine, 'M1 (#280): dispatch-log must contain a workflow-planner entry, got: ' + logContent);
+
+    // Append a contractor line (simulating the SubagentStart hook logging the contractor)
+    const contractorEntry = JSON.stringify({
+      ts: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+      agent_type: 'contractor',
+      agent_id: 'test-contractor',
+      cwd: tmp
+    });
+    fs.appendFileSync(dispatchLog, contractorEntry + '\n');
+
+    // finalize — must see both lines (archive-first check matches cmdFinalize behaviour)
+    const finResult = runClaimOnlineLastJson(
+      ['finalize', '--project', project],
+      tmp, binDir
+    );
+    assert(finResult.status === 'closed', 'M1 (#280): finalize must return status:closed, got: ' + JSON.stringify(finResult));
+    const finReceipt = finResult.closure_receipt;
+    assert(finReceipt, 'M1 (#280): finalize must emit closure_receipt');
+    assert(finReceipt.claim_planner_attested === 'attested',
+      'M1 (#280): finalize closure_receipt.claim_planner_attested must be attested, got: ' + finReceipt.claim_planner_attested);
+    assert(finReceipt.finalize_contractor_attested === 'attested',
+      'M1 (#280): finalize closure_receipt.finalize_contractor_attested must be attested, got: ' + finReceipt.finalize_contractor_attested);
+
+    // sink-merge — M2: must also check the archived dispatch-log (archive-first)
+    // Set up the worktree branch that sink-merge needs to FF-merge.
+    const wtPath = sResult.worktree_path;
+    const branchName = sResult.branch || ('workflow/issue-280001');
+    // We need a feature commit on the branch before sink-merge can FF.
+    // The worktree is on the feature branch already (provisioned by claim).
+    // If worktree not provisioned (NATIVE=1 offline), fall back to in-repo branch.
+    const commitRepo = (wtPath && fs.existsSync(wtPath)) ? wtPath : tmp;
+    fs.writeFileSync(path.join(commitRepo, 'feature-280001.txt'), 'ac1 test\n');
+    spawnSync('git', ['add', 'feature-280001.txt'], { cwd: commitRepo, encoding: 'utf8' });
+    spawnSync('git', ['commit', '-m', 'feat: ac1 test for issue 280001'], { cwd: commitRepo, encoding: 'utf8' });
+
+    const smResult = spawnSync(process.execPath, [
+      sinkMergeScript,
+      '--project', project,
+      '--branch', branchName,
+      '--issue', '280001'
+    ], {
+      cwd: commitRepo,
+      encoding: 'utf8',
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }
+    });
+    assert(smResult.status === 0,
+      'M2 (#280): sink-merge must exit 0\nstdout: ' + smResult.stdout + '\nstderr: ' + smResult.stderr);
+
+    const smLines = smResult.stdout.trim().split('\n').filter(l => l.trim());
+    const smParsed = JSON.parse(smLines[smLines.length - 1]);
+    assert(smParsed.status === 'merged',
+      'M2 (#280): sink-merge must emit status:merged, got: ' + JSON.stringify(smParsed));
+    const smReceipt = smParsed.closure_receipt;
+    assert(smReceipt, 'M2 (#280): sink-merge must emit closure_receipt');
+    assert(smReceipt.claim_planner_attested === 'attested',
+      'M2 (#280): sink-merge closure_receipt.claim_planner_attested must be attested, got: ' + smReceipt.claim_planner_attested);
+    assert(smReceipt.finalize_contractor_attested === 'attested',
+      'M2 (#280): sink-merge closure_receipt.finalize_contractor_attested must be attested, got: ' + smReceipt.finalize_contractor_attested);
+
+    console.log('testPlannerAttestFlagBackfillsDispatchLog: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
+// ── #280: AC2 — no flag + no log → fields stay not-attested (inline-bypass guard) ──
+// Same startup WITHOUT --attest-planner-spawn, no dispatch-log written.
+// Both finalize and sink-merge receipts must have claim_planner_attested !== 'attested'
+// (may be 'missing' or 'failed' — we accept either to survive the M2 'missing' shift).
+function testPlannerAttestFlagAbsentStaysMissing() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-280-ac2-')));
+  const kwRoot = tmp + '.kw';
+  try {
+    initGitRepo(tmp);
+    const binDir = path.join(tmp, 'bin');
+    writeGhShimForStartup(binDir);
+
+    // Real startup WITHOUT the flag
+    const sResult = runClaimOnlineLastJson(
+      ['startup', '--target-issue', '280002'],
+      tmp, binDir
+    );
+    assert(sResult.claim === 'acquired', 'AC2 (#280): startup must acquire');
+    const project = sResult.selected_project || 'issue-280002';
+
+    // No dispatch-log must be written (no flag, no hook in test env)
+    const dispatchLog = path.join(tmp, 'kaola-workflow', project, '.cache', 'dispatch-log.jsonl');
+    assert(!fs.existsSync(dispatchLog),
+      'AC2 (#280): without --attest-planner-spawn, dispatch-log must NOT be created');
+
+    // finalize
+    const finResult = runClaimOnlineLastJson(
+      ['finalize', '--project', project],
+      tmp, binDir
+    );
+    assert(finResult.status === 'closed', 'AC2 (#280): finalize must return status:closed');
+    const finReceipt = finResult.closure_receipt;
+    assert(finReceipt, 'AC2 (#280): finalize must emit closure_receipt');
+    assert(finReceipt.claim_planner_attested !== 'attested',
+      'AC2 (#280): finalize closure_receipt.claim_planner_attested must NOT be attested (inline-bypass guard), got: ' + finReceipt.claim_planner_attested);
+    assert(finReceipt.finalize_contractor_attested !== 'attested',
+      'AC2 (#280): finalize closure_receipt.finalize_contractor_attested must NOT be attested, got: ' + finReceipt.finalize_contractor_attested);
+
+    // sink-merge
+    const wtPath = sResult.worktree_path;
+    const branchName = sResult.branch || 'workflow/issue-280002';
+    const commitRepo = (wtPath && fs.existsSync(wtPath)) ? wtPath : tmp;
+    fs.writeFileSync(path.join(commitRepo, 'feature-280002.txt'), 'ac2 test\n');
+    spawnSync('git', ['add', 'feature-280002.txt'], { cwd: commitRepo, encoding: 'utf8' });
+    spawnSync('git', ['commit', '-m', 'feat: ac2 test for issue 280002'], { cwd: commitRepo, encoding: 'utf8' });
+
+    const smResult = spawnSync(process.execPath, [
+      sinkMergeScript,
+      '--project', project,
+      '--branch', branchName,
+      '--issue', '280002'
+    ], {
+      cwd: commitRepo,
+      encoding: 'utf8',
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }
+    });
+    assert(smResult.status === 0,
+      'AC2 (#280): sink-merge must exit 0\nstdout: ' + smResult.stdout + '\nstderr: ' + smResult.stderr);
+
+    const smLines = smResult.stdout.trim().split('\n').filter(l => l.trim());
+    const smParsed = JSON.parse(smLines[smLines.length - 1]);
+    const smReceipt = smParsed.closure_receipt;
+    assert(smReceipt, 'AC2 (#280): sink-merge must emit closure_receipt');
+    assert(smReceipt.claim_planner_attested !== 'attested',
+      'AC2 (#280): sink-merge closure_receipt.claim_planner_attested must NOT be attested (no flag), got: ' + smReceipt.claim_planner_attested);
+    assert(smReceipt.finalize_contractor_attested !== 'attested',
+      'AC2 (#280): sink-merge closure_receipt.finalize_contractor_attested must NOT be attested (no flag), got: ' + smReceipt.finalize_contractor_attested);
+
+    console.log('testPlannerAttestFlagAbsentStaysMissing: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
+// ── #280: contract guard — agents/workflow-planner.md must contain --attest-planner-spawn ──
+// Non-circular: the behavioral tests above SET the flag themselves; this guard proves
+// production actually passes it by checking the planner agent body.
+function testPlannerAttestFlagPresentInPlannerAgent() {
+  const plannerPath = path.join(repoRoot, 'agents', 'workflow-planner.md');
+  const plannerText = fs.readFileSync(plannerPath, 'utf8');
+  assert(plannerText.includes('--attest-planner-spawn'),
+    'contract guard (#280): agents/workflow-planner.md startup invocation must contain --attest-planner-spawn, got (excerpt): ' +
+    plannerText.substring(plannerText.indexOf('startup'), plannerText.indexOf('startup') + 200));
+  console.log('testPlannerAttestFlagPresentInPlannerAgent: PASSED');
 }
 
 main().catch(err => {
