@@ -216,6 +216,16 @@ function updateIssueComment(project, issueNum, commentId, body, opts) {
   return parseJson(raw, {});
 }
 
+function deleteIssueComment(project, issueNum, commentId, opts) {
+  const options = opts || {};
+  // Gitea DELETE comment endpoint omits the issue index — /issues/comments/{id} per docs
+  const raw = teaExec([
+    'api', '-X', 'DELETE',
+    '/api/v1/repos/' + project.full_name + '/issues/comments/' + String(commentId)
+  ], options);
+  return parseJson(raw, {});
+}
+
 function createPullRequest(opts) {
   const options = opts || {};
   const args = ['pr', 'create', '--output', 'json'];
@@ -297,7 +307,7 @@ module.exports = {
   normalizeProject, normalizeIssue, normalizePullRequest,
   discoverProject,
   listIssues, viewIssue, updateIssueLabels, closeIssue,
-  createIssueComment, listIssueComments, updateIssueComment,
+  createIssueComment, listIssueComments, updateIssueComment, deleteIssueComment,
   createPullRequest, viewPullRequest, listPullRequests, checkServerVersion, checkRepoSquashEnabled, mergePullRequest,
   ensureLabel
 };

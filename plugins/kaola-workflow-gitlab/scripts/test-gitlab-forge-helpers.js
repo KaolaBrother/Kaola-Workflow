@@ -135,3 +135,131 @@ for (const call of calls) {
 }
 
 console.log('GitLab forge helper tests passed');
+
+// ── deleteIssueNote: RED→GREEN (issue #278) ─────────────────────────────────
+// Test 1: forge.deleteIssueNote issues the correct DELETE call
+{
+  const deleteCalls = [];
+  const deleteExec = runner(deleteCalls, {
+    'api --method DELETE projects/77/issues/4/notes/9001': ''
+  });
+  const result = forge.deleteIssueNote(project, 4, 9001, { execFileSync: deleteExec });
+  assert.deepStrictEqual(deleteCalls[0], ['glab', ['api', '--method', 'DELETE', 'projects/77/issues/4/notes/9001']]);
+  // DELETE returns empty body from GitLab — result is the parsed fallback {}
+  assert.deepStrictEqual(result, {});
+}
+console.log('deleteIssueNote: correct DELETE call — passed');
+
+// ── clearAdvisoryClaim marker deletion: RED→GREEN (issue #278) ──────────────
+{
+  const claim = require('./kaola-gitlab-workflow-claim');
+
+  // Notes fixture for clearAdvisoryClaim tests
+  const NOTES_FIXTURE = [
+    { id: 101, body: '<!-- kw:claim project=issue-278 -->\nKaola-Workflow started local GitLab work for `issue-278`.' },
+    { id: 102, body: '<!-- kw:claim project=issue-999 -->\nKaola-Workflow started local GitLab work for `issue-999`.' },
+    { id: 103, body: 'Kaola-Workflow advisory claim cleared: old' },
+    { id: 104, body: 'Just a regular comment' }
+  ];
+
+  const projectInfo = { project_id: 77, path_with_namespace: 'group/project' };
+
+  // Test 2: project-scoped marker is preferred — only issue-278 note deleted
+  {
+    const deletedIds = [];
+    const origUpdate = forge.updateIssue;
+    const origCreate = forge.createIssueNote;
+    const origList = forge.listIssueNotes;
+    const origDelete = forge.deleteIssueNote;
+    forge.updateIssue = function() { return null; };
+    forge.createIssueNote = function() { return {}; };
+    forge.listIssueNotes = function() { return NOTES_FIXTURE; };
+    forge.deleteIssueNote = function(proj, iid, noteId) { deletedIds.push(noteId); };
+    try {
+      claim.clearAdvisoryClaim(42, 'discarded', projectInfo, 'issue-278');
+    } finally {
+      forge.updateIssue = origUpdate;
+      forge.createIssueNote = origCreate;
+      forge.listIssueNotes = origList;
+      forge.deleteIssueNote = origDelete;
+    }
+    assert.deepStrictEqual(deletedIds, [101], 'project-scoped: only issue-278 marker deleted');
+  }
+  console.log('clearAdvisoryClaim: project-scoped match deletes only target marker — passed');
+
+  // Test 3: generic regex fallback when slug is null
+  {
+    const deletedIds = [];
+    const origUpdate = forge.updateIssue;
+    const origCreate = forge.createIssueNote;
+    const origList = forge.listIssueNotes;
+    const origDelete = forge.deleteIssueNote;
+    forge.updateIssue = function() { return null; };
+    forge.createIssueNote = function() { return {}; };
+    forge.listIssueNotes = function() { return NOTES_FIXTURE; };
+    forge.deleteIssueNote = function(proj, iid, noteId) { deletedIds.push(noteId); };
+    try {
+      claim.clearAdvisoryClaim(42, 'discarded', projectInfo, null);
+    } finally {
+      forge.updateIssue = origUpdate;
+      forge.createIssueNote = origCreate;
+      forge.listIssueNotes = origList;
+      forge.deleteIssueNote = origDelete;
+    }
+    // Generic fallback: both project= markers deleted (101 and 102), not the others
+    assert.deepStrictEqual(deletedIds.sort((a,b)=>a-b), [101, 102], 'generic regex: all kw:claim project= markers deleted');
+  }
+  console.log('clearAdvisoryClaim: generic-regex fallback deletes all project= markers — passed');
+
+  // Test 4: a live session from another project (non-marker note) is NOT deleted
+  {
+    const deletedIds = [];
+    const origUpdate = forge.updateIssue;
+    const origCreate = forge.createIssueNote;
+    const origList = forge.listIssueNotes;
+    const origDelete = forge.deleteIssueNote;
+    forge.updateIssue = function() { return null; };
+    forge.createIssueNote = function() { return {}; };
+    forge.listIssueNotes = function() { return NOTES_FIXTURE; };
+    forge.deleteIssueNote = function(proj, iid, noteId) { deletedIds.push(noteId); };
+    try {
+      claim.clearAdvisoryClaim(42, 'discarded', projectInfo, 'issue-278');
+    } finally {
+      forge.updateIssue = origUpdate;
+      forge.createIssueNote = origCreate;
+      forge.listIssueNotes = origList;
+      forge.deleteIssueNote = origDelete;
+    }
+    // id 103 (cleared note) and 104 (plain comment) must NOT be deleted
+    assert.ok(!deletedIds.includes(103), 'cleared note not deleted');
+    assert.ok(!deletedIds.includes(104), 'plain comment not deleted');
+    // id 102 (issue-999 marker) must NOT be deleted when slug is known
+    assert.ok(!deletedIds.includes(102), 'another project marker not deleted with known slug');
+  }
+  console.log('clearAdvisoryClaim: non-marker notes from other sessions not deleted — passed');
+
+  // Test 5: OFFLINE mode — no network calls to deleteIssueNote
+  {
+    const deletedIds = [];
+    process.env.KAOLA_WORKFLOW_OFFLINE = '1';
+    // Bust claim module cache so OFFLINE is re-read
+    delete require.cache[require.resolve('./kaola-gitlab-workflow-claim')];
+    const claimOffline = require('./kaola-gitlab-workflow-claim');
+    const origDelete = forge.deleteIssueNote;
+    forge.deleteIssueNote = function(proj, iid, noteId) { deletedIds.push(noteId); };
+    let offlineResult;
+    try {
+      offlineResult = claimOffline.clearAdvisoryClaim(42, 'discarded', projectInfo, 'issue-278');
+    } finally {
+      forge.deleteIssueNote = origDelete;
+      delete process.env.KAOLA_WORKFLOW_OFFLINE;
+      // Restore the non-offline module
+      delete require.cache[require.resolve('./kaola-gitlab-workflow-claim')];
+    }
+    assert.strictEqual(offlineResult, 'skipped_offline', 'OFFLINE returns skipped_offline');
+    assert.deepStrictEqual(deletedIds, [], 'OFFLINE: no deleteIssueNote calls');
+  }
+  console.log('clearAdvisoryClaim: OFFLINE mode makes no network calls — passed');
+}
+
+console.log('All clearAdvisoryClaim marker-deletion tests passed');

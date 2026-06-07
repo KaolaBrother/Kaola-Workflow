@@ -202,3 +202,131 @@ forge.checkServerVersion({ offline: true, offlineStdout: JSON.stringify({}) });
 }
 
 console.log('Gitea forge helper tests passed');
+
+// ── deleteIssueComment: RED→GREEN (issue #278) ──────────────────────────────
+// Test 1: forge.deleteIssueComment issues the correct DELETE call
+{
+  const deleteCalls = [];
+  const deleteExec = runner(deleteCalls, {
+    'api -X DELETE /api/v1/repos/group/project/issues/comments/9001': ''
+  });
+  const result = forge.deleteIssueComment(project, 4, 9001, { execFileSync: deleteExec });
+  assert.deepStrictEqual(deleteCalls[0], ['tea', ['api', '-X', 'DELETE', '/api/v1/repos/group/project/issues/comments/9001']]);
+  // DELETE returns empty body — result is the parsed fallback {}
+  assert.deepStrictEqual(result, {});
+}
+console.log('deleteIssueComment: correct DELETE call — passed');
+
+// ── clearAdvisoryClaim marker deletion: RED→GREEN (issue #278) ───────────────
+{
+  const claim = require('./kaola-gitea-workflow-claim');
+
+  // Notes fixture for clearAdvisoryClaim tests
+  const NOTES_FIXTURE = [
+    { id: 101, body: '<!-- kw:claim project=issue-278 -->\nKaola-Workflow started local Gitea work for `issue-278`.' },
+    { id: 102, body: '<!-- kw:claim project=issue-999 -->\nKaola-Workflow started local Gitea work for `issue-999`.' },
+    { id: 103, body: 'Kaola-Workflow advisory claim cleared: old' },
+    { id: 104, body: 'Just a regular comment' }
+  ];
+
+  const projectInfo = { full_name: 'group/project', html_url: 'https://gitea.example/group/project' };
+
+  // Test 2: project-scoped marker is preferred — only issue-278 note deleted
+  {
+    const deletedIds = [];
+    const origUpdateLabels = forge.updateIssueLabels;
+    const origCreate = forge.createIssueComment;
+    const origList = forge.listIssueComments;
+    const origDelete = forge.deleteIssueComment;
+    forge.updateIssueLabels = function() { return {}; };
+    forge.createIssueComment = function() { return {}; };
+    forge.listIssueComments = function() { return NOTES_FIXTURE; };
+    forge.deleteIssueComment = function(proj, issueNum, commentId) { deletedIds.push(commentId); };
+    try {
+      claim.clearAdvisoryClaim(42, 'discarded', projectInfo, 'issue-278');
+    } finally {
+      forge.updateIssueLabels = origUpdateLabels;
+      forge.createIssueComment = origCreate;
+      forge.listIssueComments = origList;
+      forge.deleteIssueComment = origDelete;
+    }
+    assert.deepStrictEqual(deletedIds, [101], 'project-scoped: only issue-278 marker deleted');
+  }
+  console.log('clearAdvisoryClaim: project-scoped match deletes only target marker — passed');
+
+  // Test 3: generic regex fallback when slug is null
+  {
+    const deletedIds = [];
+    const origUpdateLabels = forge.updateIssueLabels;
+    const origCreate = forge.createIssueComment;
+    const origList = forge.listIssueComments;
+    const origDelete = forge.deleteIssueComment;
+    forge.updateIssueLabels = function() { return {}; };
+    forge.createIssueComment = function() { return {}; };
+    forge.listIssueComments = function() { return NOTES_FIXTURE; };
+    forge.deleteIssueComment = function(proj, issueNum, commentId) { deletedIds.push(commentId); };
+    try {
+      claim.clearAdvisoryClaim(42, 'discarded', projectInfo, null);
+    } finally {
+      forge.updateIssueLabels = origUpdateLabels;
+      forge.createIssueComment = origCreate;
+      forge.listIssueComments = origList;
+      forge.deleteIssueComment = origDelete;
+    }
+    // Generic fallback: both project= markers deleted (101 and 102), not the others
+    assert.deepStrictEqual(deletedIds.sort((a, b) => a - b), [101, 102], 'generic regex: all kw:claim project= markers deleted');
+  }
+  console.log('clearAdvisoryClaim: generic-regex fallback deletes all project= markers — passed');
+
+  // Test 4: a live session from another project (non-marker note) is NOT deleted
+  {
+    const deletedIds = [];
+    const origUpdateLabels = forge.updateIssueLabels;
+    const origCreate = forge.createIssueComment;
+    const origList = forge.listIssueComments;
+    const origDelete = forge.deleteIssueComment;
+    forge.updateIssueLabels = function() { return {}; };
+    forge.createIssueComment = function() { return {}; };
+    forge.listIssueComments = function() { return NOTES_FIXTURE; };
+    forge.deleteIssueComment = function(proj, issueNum, commentId) { deletedIds.push(commentId); };
+    try {
+      claim.clearAdvisoryClaim(42, 'discarded', projectInfo, 'issue-278');
+    } finally {
+      forge.updateIssueLabels = origUpdateLabels;
+      forge.createIssueComment = origCreate;
+      forge.listIssueComments = origList;
+      forge.deleteIssueComment = origDelete;
+    }
+    // id 103 (cleared note) and 104 (plain comment) must NOT be deleted
+    assert.ok(!deletedIds.includes(103), 'cleared note not deleted');
+    assert.ok(!deletedIds.includes(104), 'plain comment not deleted');
+    // id 102 (issue-999 marker) must NOT be deleted when slug is known
+    assert.ok(!deletedIds.includes(102), 'another project marker not deleted with known slug');
+  }
+  console.log('clearAdvisoryClaim: non-marker notes from other sessions not deleted — passed');
+
+  // Test 5: OFFLINE mode — no network calls to deleteIssueComment
+  {
+    const deletedIds = [];
+    process.env.KAOLA_WORKFLOW_OFFLINE = '1';
+    // Bust claim module cache so OFFLINE is re-read
+    delete require.cache[require.resolve('./kaola-gitea-workflow-claim')];
+    const claimOffline = require('./kaola-gitea-workflow-claim');
+    const origDelete = forge.deleteIssueComment;
+    forge.deleteIssueComment = function(proj, issueNum, commentId) { deletedIds.push(commentId); };
+    let offlineResult;
+    try {
+      offlineResult = claimOffline.clearAdvisoryClaim(42, 'discarded', projectInfo, 'issue-278');
+    } finally {
+      forge.deleteIssueComment = origDelete;
+      delete process.env.KAOLA_WORKFLOW_OFFLINE;
+      // Restore the non-offline module
+      delete require.cache[require.resolve('./kaola-gitea-workflow-claim')];
+    }
+    assert.strictEqual(offlineResult, 'skipped_offline', 'OFFLINE returns skipped_offline');
+    assert.deepStrictEqual(deletedIds, [], 'OFFLINE: no deleteIssueComment calls');
+  }
+  console.log('clearAdvisoryClaim: OFFLINE mode makes no network calls — passed');
+}
+
+console.log('All clearAdvisoryClaim marker-deletion tests passed');

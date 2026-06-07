@@ -186,6 +186,16 @@ function updateIssueNote(project, issueIid, noteId, body, opts) {
   return parseJson(raw, {});
 }
 
+function deleteIssueNote(project, issueIid, noteId, opts) {
+  const options = opts || {};
+  const raw = glabExec([
+    'api',
+    '--method', 'DELETE',
+    'projects/' + projectApiRef(project) + '/issues/' + String(issueIid) + '/notes/' + String(noteId)
+  ], options);
+  return parseJson(raw, {});
+}
+
 function createMergeRequest(opts) {
   const options = opts || {};
   const args = ['mr', 'create', '--output', 'json'];
@@ -225,6 +235,7 @@ module.exports = {
   closeIssue,
   createIssueNote,
   createMergeRequest,
+  deleteIssueNote,
   discoverProject,
   glabExec,
   labelsOf,

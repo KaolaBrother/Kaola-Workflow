@@ -395,13 +395,25 @@ function postAdvisoryClaim(issueIid, project, projectInfo) {
   } catch (_) {}
 }
 
-function clearAdvisoryClaim(issueIid, reason, projectInfo) {
+function clearAdvisoryClaim(issueIid, reason, projectInfo, project) {
   if (OFFLINE || issueIid == null) return 'skipped_offline';
   let status = 'failed';
   try { forge.updateIssue(issueIid, { unlabels: [CLAIM_LABEL] }); status = 'removed'; } catch (_) {}
   try {
     if (reason && projectInfo && (projectInfo.project_id || projectInfo.path_with_namespace)) {
       forge.createIssueNote(projectInfo, issueIid, 'Kaola-Workflow advisory claim cleared: ' + reason);
+    }
+  } catch (_) {}
+  // Delete the project-scoped kw:claim marker note so the remote-claim detector
+  // no longer blocks re-claiming this issue after discard/release/finalize (#278).
+  try {
+    const notes = forge.listIssueNotes(projectInfo, issueIid);
+    const marker = project ? ('<!-- kw:claim project=' + project + ' -->') : null;
+    for (const note of (Array.isArray(notes) ? notes : [])) {
+      if (!note || !note.body || !note.id) continue;
+      if (marker ? note.body.includes(marker) : /<!--\s*kw:claim\s+project=/.test(note.body)) {
+        try { forge.deleteIssueNote(projectInfo, issueIid, note.id); } catch (_) {}
+      }
     }
   } catch (_) {}
   return status;
@@ -899,7 +911,7 @@ function cmdFinalize() {
       }
     } catch (_) {}
   }
-  const claimLabelRemoved = clearAdvisoryClaim(issueIid, 'finalized', projectInfo);
+  const claimLabelRemoved = clearAdvisoryClaim(issueIid, 'finalized', projectInfo, args.project);
   let remoteIssueClosed = 'skipped_offline';
   if (!OFFLINE && issueIid) {
     try {
@@ -975,7 +987,7 @@ function cmdRelease() {
     } catch (_) { /* defensive: discard must not throw */ }
   }
 
-  clearAdvisoryClaim(folder.issue_iid, args.reason || 'discarded', { project_id: folder.project_id, path_with_namespace: folder.path_with_namespace });
+  clearAdvisoryClaim(folder.issue_iid, args.reason || 'discarded', { project_id: folder.project_id, path_with_namespace: folder.path_with_namespace }, folder.project);
   output(Object.assign({ released: true, project: folder.project }, result, restoreNote ? { restore_note: restoreNote } : {}));
 }
 
@@ -1222,7 +1234,7 @@ function watchMergeRequests(root, args) {
         else if (wtResult && wtResult.removed === false && wtResult.reason === 'missing') worktreeRemoved = 'missing';
         else if (wtResult && wtResult.removed === false) worktreeRemoved = 'failed';
       } catch (_) { worktreeRemoved = 'failed'; }
-      const claimLabelStatus = clearAdvisoryClaim(folder.issue_iid, 'mr merged', { project_id: folder.project_id, path_with_namespace: folder.path_with_namespace });
+      const claimLabelStatus = clearAdvisoryClaim(folder.issue_iid, 'mr merged', { project_id: folder.project_id, path_with_namespace: folder.path_with_namespace }, folder.project);
       const folderReceipt = buildClosureReceipt(folder.project, folder.issue_iid, {
         archive: archiveResult.skipped ? 'skipped' : (archiveResult.archived ? 'closed' : 'failed'),
         roadmap_source_removed: archiveResult ? archiveResult.roadmap_source_removed : 'failed',
@@ -1243,7 +1255,7 @@ function watchMergeRequests(root, args) {
         else if (wtResult && wtResult.removed === false && wtResult.reason === 'missing') worktreeRemoved = 'missing';
         else if (wtResult && wtResult.removed === false) worktreeRemoved = 'failed';
       } catch (_) { worktreeRemoved = 'failed'; }
-      const claimLabelStatus = clearAdvisoryClaim(folder.issue_iid, 'mr closed', { project_id: folder.project_id, path_with_namespace: folder.path_with_namespace });
+      const claimLabelStatus = clearAdvisoryClaim(folder.issue_iid, 'mr closed', { project_id: folder.project_id, path_with_namespace: folder.path_with_namespace }, folder.project);
       const folderReceipt = buildClosureReceipt(folder.project, folder.issue_iid, {
         archive: archiveResult.skipped ? 'skipped' : (archiveResult.archived ? 'abandoned' : 'failed'),
         roadmap_source_removed: archiveResult ? archiveResult.roadmap_source_removed : 'failed',
@@ -1496,6 +1508,7 @@ module.exports = {
   checkDispatchAttestations,
   claimExplicitTarget,
   claimProject,
+  clearAdvisoryClaim,
   cmdAuditLabels,
   cmdLegacyWorktreeCleanup,
   cmdRepairLabels,
