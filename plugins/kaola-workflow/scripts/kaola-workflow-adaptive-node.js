@@ -395,7 +395,8 @@ function runOrient(opts) {
 
   // Order-independent member-set equality between the manifest and the
   // in_progress rows.
-  const manifestMemberIds = manifest ? (manifest.members || []).map(m => m.id) : [];
+  // R4 (#291): UNSEALED members only — a partial-seal keeps sealed members in the manifest.
+  const manifestMemberIds = manifest ? (manifest.members || []).filter(m => !m.sealed).map(m => m.id) : [];
   const setsEqual = (a, b) => {
     if (a.length !== b.length) return false;
     const sa = new Set(a);

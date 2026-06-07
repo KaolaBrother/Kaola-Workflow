@@ -669,6 +669,140 @@ function realNextActionShell(planPath) {
 }
 
 // ---------------------------------------------------------------------------
+// R1: runSealMember idempotency — sealing an already-sealed member must NOT
+//     append a second compliance row. (TDD RED before idempotency guard is added.)
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan(
+    [
+      '| a        | code-explorer | —    | — | 1 | sequence       |',
+      '| v1       | tdd-guide     | a    | — | 1 | fanout(verify) |',
+      '| v2       | tdd-guide     | a    | — | 1 | fanout(verify) |',
+      '| finalize | finalize      | v1,v2| — | 1 | sequence       |',
+    ],
+    [
+      '| a        | complete    |  |',
+      '| v1       | in_progress |  |',
+      '| v2       | in_progress |  |',
+      '| finalize | pending     |  |',
+    ]
+  );
+  const { root, planPath, statePath, cacheDir } = makeProjectDir(plan);
+  const io = makeIo();
+  const manifestPath = path.join(cacheDir, 'active-batch.json');
+
+  const manifest = {
+    batchId: 'b-r1', state: 'open', kind: 'read_only',
+    members: [
+      { id: 'v1', role: 'tdd-guide', declared_write_set: '—', baseline: 'rec', worktreePath: null, sealed: false, joined: false },
+      { id: 'v2', role: 'tdd-guide', declared_write_set: '—', baseline: 'rec', worktreePath: null, sealed: false, joined: false },
+    ],
+    createdAt: '2026-06-07T00:00:00.000Z',
+  };
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+  fs.writeFileSync(path.join(cacheDir, 'v1.md'), 'RED: failed\nGREEN: passed\n');
+  fs.writeFileSync(path.join(cacheDir, 'v2.md'), 'RED: failed\nGREEN: passed\n');
+
+  // First seal of v1 (should succeed and mark sealed).
+  const r1 = runSealMember({
+    planPath, statePath, cacheDir, manifestPath, project: 'test-project',
+    nodeId: 'v1', shell: realNextActionShell(planPath), ...io,
+  });
+  assert(r1.result === 'ok', 'R1: first seal-member v1 → ok');
+
+  // Second seal of the SAME (now-sealed) member.
+  const r2 = runSealMember({
+    planPath, statePath, cacheDir, manifestPath, project: 'test-project',
+    nodeId: 'v1', shell: realNextActionShell(planPath), ...io,
+  });
+  assert(r2.result === 'ok', 'R1: second seal-member (already sealed) → ok');
+  assert(r2.alreadySealed === true, 'R1: alreadySealed===true on repeat call');
+
+  // The plan must contain EXACTLY ONE compliance row for v1 (idempotency).
+  const planContent = fs.readFileSync(planPath, 'utf8');
+  const tddGuideRows = (planContent.match(/\|\s*tdd-guide\s*\(v1\)\s*\|/g) || []).length;
+  assert(tddGuideRows === 1, 'R1: exactly ONE compliance row for v1 after double-seal, found ' + tddGuideRows);
+
+  cleanup(root);
+}
+
+// ---------------------------------------------------------------------------
+// R2: runOpenBatch BASELINES-FIRST atomicity — when commit-node --start fails,
+//     the plan file must NOT be written with any flipped (in_progress) rows.
+//     (TDD RED before BASELINES-FIRST reorder is applied.)
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan(
+    [
+      '| a        | code-explorer | —    | — | 1 | sequence       |',
+      '| v1       | tdd-guide     | a    | — | 1 | fanout(verify) |',
+      '| v2       | tdd-guide     | a    | — | 1 | fanout(verify) |',
+      '| finalize | finalize      | v1,v2| — | 1 | sequence       |',
+    ],
+    [
+      '| a        | complete |  |',
+      '| v1       | pending  |  |',
+      '| v2       | pending  |  |',
+      '| finalize | pending  |  |',
+    ]
+  );
+  const { root, planPath, statePath, cacheDir } = makeProjectDir(plan);
+  const io = makeIo();
+  const manifestPath = path.join(cacheDir, 'active-batch.json');
+
+  // Shell stub: next-action SUCCEEDS; commit-node --start FAILS (simulates baseline error).
+  const shell = (function () {
+    const inner = realNextActionShell(planPath);
+    return function (scriptPath, args) {
+      const base = path.basename(scriptPath);
+      if (base === 'kaola-workflow-commit-node.js' && (args || []).includes('--start')) {
+        return { exitCode: 1, result: 'refuse', errors: ['R2 stub: baseline intentionally failed'] };
+      }
+      return inner(scriptPath, args);
+    };
+  })();
+
+  const r = runOpenBatch({
+    planPath, statePath, cacheDir, manifestPath, project: 'test-project',
+    max: null, fanoutCap: 4, shell, ...io,
+  });
+
+  assert(r.result === 'refuse', 'R2: baseline failure → refuse');
+  assert(r.reason === 'baseline_failed', 'R2: reason===baseline_failed');
+
+  // Plan on disk must NOT have any in_progress rows (no orphan ledger flip).
+  const writtenPlan = fs.readFileSync(planPath, 'utf8');
+  assert(!/\|\s*v1\s*\|\s*in_progress\s*\|/.test(writtenPlan), 'R2: v1 still pending (no orphan flip when baseline fails)');
+  assert(!/\|\s*v2\s*\|\s*in_progress\s*\|/.test(writtenPlan), 'R2: v2 still pending (no orphan flip when baseline fails)');
+  assert(!fs.existsSync(manifestPath), 'R2: no manifest written when baseline fails (no orphan)');
+
+  cleanup(root);
+}
+
+// ---------------------------------------------------------------------------
+// R4 site (a): crossCheckStatus with a PARTIAL-SEAL manifest — sealed members
+//     must NOT be counted in the in_progress comparison.
+//     (TDD RED before the unsealed-filter is applied to crossCheckStatus.)
+// ---------------------------------------------------------------------------
+{
+  // Manifest has 3 members: 'a' is sealed, 'b' and 'c' are unsealed (in_progress).
+  // inProgressIds = ['b','c'] — a partial-seal crash-resume scenario.
+  const partialSealManifest = {
+    batchId: 'b-r4a', state: 'open', kind: 'read_only',
+    members: [
+      { id: 'a', sealed: true },
+      { id: 'b', sealed: false },
+      { id: 'c', sealed: false },
+    ],
+  };
+
+  const result = crossCheckStatus(partialSealManifest, ['b', 'c']);
+
+  assert(result.valid === true, 'R4a: partial-seal manifest with in_progress=unsealed-members → valid (not orphan)');
+  assert(result.orphan === false, 'R4a: partial-seal must NOT be flagged orphan_member_set_mismatch');
+}
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 if (failed > 0) {

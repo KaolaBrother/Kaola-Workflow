@@ -211,7 +211,8 @@ function crossCheckStatus(manifest, inProgressIds) {
     return { valid: false, orphan: true, reason: 'orphan_multi_in_progress' };
   }
 
-  const memberIds = (manifest.members || []).map(m => m.id).slice().sort();
+  // R4 (#291): UNSEALED members only — a partial-seal keeps sealed members in the manifest.
+  const memberIds = (manifest.members || []).filter(m => !m.sealed).map(m => m.id).slice().sort();
   const setsEqual = memberIds.length === ip.length && memberIds.every((id, i) => id === ip[i]);
 
   if (setsEqual) {
@@ -300,17 +301,13 @@ function runOpenBatch(opts) {
   // Cap the member set.
   const capped = capMembers(classified.members, { fanoutCap, max });
 
-  // Flip each member's ledger row → in_progress (allowFrom ['pending']).
-  for (const m of capped) {
-    const spliced = spliceLedgerNode(planContent, m.id, 'in_progress', { allowFrom: ['pending'] });
-    if (!spliced.found) {
-      return { result: 'refuse', reason: 'node_not_in_ledger', nodeId: m.id };
-    }
-    if (spliced.changed) planContent = spliced.content;
-  }
-  writeFile(planPath, planContent);
-
-  // Record one baseline per member (idempotent).
+  // BASELINES-FIRST: record all N baselines BEFORE any ledger flip or plan write.
+  // commit-node --start is record-base-only / idempotent / ledger-independent, so
+  // recording a baseline before the row is flipped is safe. On any baseline failure
+  // we return refuse having made ZERO plan/ledger mutation (no orphan). NOTE: this
+  // survives a crash DURING baseline recording but does NOT make open-batch fully
+  // atomic — the plan-write → manifest-write gap remains (two files can't be written
+  // atomically). Still fails closed.
   const members = [];
   for (const m of capped) {
     const baseline = shell(commitNodePath, [planPath, '--node-id', m.id, '--start', '--json']);
@@ -330,6 +327,16 @@ function runOpenBatch(opts) {
       joined: false,
     });
   }
+
+  // Flip each member's ledger row → in_progress (allowFrom ['pending']).
+  for (const m of capped) {
+    const spliced = spliceLedgerNode(planContent, m.id, 'in_progress', { allowFrom: ['pending'] });
+    if (!spliced.found) {
+      return { result: 'refuse', reason: 'node_not_in_ledger', nodeId: m.id };
+    }
+    if (spliced.changed) planContent = spliced.content;
+  }
+  writeFile(planPath, planContent);
 
   // Write the manifest LAST (state:'open').
   const batchId = 'batch-' + (capped.map(m => m.id).join('-'));
@@ -440,6 +447,10 @@ function runSealMember(opts) {
   const member = manifest.members.find(m => m.id === nodeId);
   if (!member) {
     return { result: 'refuse', reason: 'not_a_member', nodeId };
+  }
+
+  if (member.sealed) {
+    return { result: 'ok', sealed: nodeId, state: manifest.state, alreadySealed: true };
   }
 
   let planContent = readFile(planPath);

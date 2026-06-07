@@ -1242,6 +1242,72 @@ function makeState(opts) {
 }
 
 // ---------------------------------------------------------------------------
+// R4 site (b): runOrient PARTIAL-SEAL — plan ledger has 'a' complete, 'b'+'c'
+//     in_progress; manifest members [{id:'a',sealed:true},{id:'b',sealed:false},
+//     {id:'c',sealed:false}]. The AC#5 gate must compare in_progress ONLY to
+//     UNSEALED manifest members (b,c), NOT all members (a,b,c), and return ok
+//     with batch != null.  (TDD RED before the unsealed-filter is applied.)
+// ---------------------------------------------------------------------------
+{
+  // Plan: 'a' complete, 'b' and 'c' in_progress (partial-seal crash-resume).
+  const partialSealNodes = [
+    '| a | tdd-guide        | —   | — | 1 | fanout(verify) |',
+    '| b | tdd-guide        | —   | — | 1 | fanout(verify) |',
+    '| c | tdd-guide        | —   | — | 1 | fanout(verify) |',
+    '| finalize | finalize  | a,b,c | — | 1 | sequence     |',
+  ];
+  const plan = makePlan([
+    '| a        | complete    | |',
+    '| b        | in_progress | |',
+    '| c        | in_progress | |',
+    '| finalize | pending     | |',
+  ], partialSealNodes);
+  const state = makeState();
+
+  // Manifest: 'a' sealed, 'b'+'c' unsealed.
+  const manifest = JSON.stringify({
+    batchId: 'batch-a-b-c',
+    state: 'open',
+    kind: 'read_only',
+    members: [
+      { id: 'a', role: 'tdd-guide', sealed: true },
+      { id: 'b', role: 'tdd-guide', sealed: false },
+      { id: 'c', role: 'tdd-guide', sealed: false },
+    ],
+    createdAt: '1970-01-01T00:00:00.000Z',
+  });
+
+  const shellStub = function(scriptPath) {
+    const base = path.basename(scriptPath);
+    if (base === 'kaola-workflow-plan-validator.js') return { exitCode: 0, ok: true };
+    if (base === 'kaola-workflow-next-action.js') {
+      return { exitCode: 0, result: 'ok', readySet: [], nextNode: null, allDone: false };
+    }
+    return { exitCode: 1 };
+  };
+
+  const result = runOrient({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project',
+    shell: shellStub,
+    readFile: (fpath) => {
+      if (fpath.endsWith('workflow-plan.md')) return plan;
+      if (fpath.endsWith('workflow-state.md')) return state;
+      if (fpath.endsWith('active-batch.json')) return manifest;
+      if (fpath.includes('.cache/')) return 'evidence';
+      throw new Error('ENOENT: ' + fpath);
+    },
+    writeFile: () => { throw new Error('orient must not write'); },
+    cacheExists: (fpath) => fpath.endsWith('active-batch.json') || fpath.includes('/b') || fpath.includes('/c'),
+  });
+
+  assert(result.result === 'ok', 'R4b: partial-seal (a=sealed, b+c in_progress) → result ok (NOT orphan_multi_in_progress)');
+  assert(result.batch !== null, 'R4b: batch object present (valid partial-seal batch)');
+  assert(Array.isArray(result.inProgressNodes) && result.inProgressNodes.length === 2, 'R4b: inProgressNodes lists b and c');
+}
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 if (failed > 0) {
