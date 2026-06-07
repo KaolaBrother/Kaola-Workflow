@@ -155,5 +155,6 @@ and freeze). The claim (at repo-root — the adaptive claim provisions a worktre
 
 **Establish the task list = the workflow nodes** — one task per row of the frozen `## Nodes` table,
 labeled `id · role`, in `depends_on` order; a live mirror of the `## Node Ledger` (the durable
-source of truth) that the executor flips `in_progress`/`completed` per node. Then hand off to
+source of truth) that the executor flips `in_progress` when it dispatches that node's role (after
+`open-next`) and `completed` after the commit step closes it (`n/a` nodes → skipped). Then hand off to
 `kaola-workflow-plan-run {project}`.

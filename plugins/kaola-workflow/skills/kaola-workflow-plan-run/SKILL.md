@@ -113,7 +113,7 @@ main session owns loop + dispatch + judgment; scripts own deterministic transiti
 **Task list = the workflow nodes.** The session keeps a task list with one item per `## Nodes` row
 (`id · role`, in `depends_on` order) — established by `kaola-workflow-adapt` after freeze, or, on a
 direct resume, reconstructed here from the `## Node Ledger`. Mark a node's task `in_progress` when
-its role is dispatched (after `open-next`) and `completed` once `close-and-open-next` returns
+you dispatch its role (after `open-next`) and `completed` once `close-and-open-next` returns
 `result: ok` (`n/a` → skipped). The task list is a live mirror; the durable `## Node Ledger` stays
 the single source of truth, so reconcile to the ledger on every resume rather than trusting a stale list.
 

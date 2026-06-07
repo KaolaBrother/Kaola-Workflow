@@ -129,7 +129,7 @@ After freeze the plan is author-immutable. **Establish the orchestrator's task l
 nodes** — one task per row of the frozen `## Nodes` table, labeled `id · role`, in `depends_on`
 (topological) order. This task list is a **live mirror** of the `## Node Ledger`, which stays the
 durable source of truth; the executor (`/kaola-workflow-plan-run`) flips each task `in_progress`
-when it opens that node (via `kaola-gitea-workflow-adaptive-node.js open-next`) and `completed` after the
+when it dispatches that node's role (after `open-next`) and `completed` after the
 commit step closes it (`n/a` nodes → skipped). Then hand off to the executor:
 
 ```text
