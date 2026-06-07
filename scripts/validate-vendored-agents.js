@@ -11,21 +11,26 @@ const vendoredAgents = [
   'build-error-resolver',
   'code-architect',
   'code-explorer',
-  'code-reviewer',
   'doc-updater',
   'docs-lookup',
   'planner',
-  'security-reviewer',
   'tdd-guide',
 ];
-// issue #227: locally-authored agents (the adaptive-path roles) are name-pinned but
-// PROVENANCE-EXEMPT — they have no upstream blob, so the upstream/blob-sha/sha256/
-// license/copyright asserts and the agents-source.md vendored-table row do NOT apply.
-// They still must be valid managed agents (front matter at byte 0, name, model, marker).
+// issue #227 + #279 follow-up: PROVENANCE-EXEMPT agents — name-pinned, but the
+// upstream/blob-sha/sha256/license/copyright asserts and the agents-source.md vendored-table row
+// do NOT apply. They still must be valid managed agents (front matter at byte 0, name, model,
+// marker). Two sub-kinds: (a) locally-authored adaptive-path roles with no upstream blob
+// (adversarial-verifier/contractor/implementer/workflow-planner); (b) code-reviewer + security-reviewer,
+// which were FORKED from ECC into local agents (#279 follow-up) so they can carry the
+// Kaola-Workflow findings-emission contract in their bodies — they remain DERIVED from ECC (MIT,
+// Affaan Mustafa), but that attribution is now honored at the project level in docs/agents-source.md
+// rather than per-file, and they are no longer byte-tracked to upstream.
 const localAgents = [
   'adversarial-verifier',
+  'code-reviewer',
   'contractor',
   'implementer',
+  'security-reviewer',
   'workflow-planner',
 ];
 const allAgents = [...vendoredAgents, ...localAgents];

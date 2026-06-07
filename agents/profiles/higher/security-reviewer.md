@@ -6,12 +6,10 @@ model: opus
 ---
 <!--
 kaola-workflow-managed-agent: true
-upstream: https://github.com/affaan-m/everything-claude-code/blob/922d2d8f8b64f4e50936e24465cb3bcac81ac0e1/agents/security-reviewer.md
-source-commit: 922d2d8f8b64f4e50936e24465cb3bcac81ac0e1
-source-blob-sha: c444a61988937bb50812451ccb192cfac7368ad0
-source-sha256: 46d310c1ddc42a727cab58e5e4342a8c261b55541161dc6ffe3d6c3259fd019e
-license: MIT License
-copyright: Copyright (c) 2026 Affaan Mustafa
+locally-forked: true
+note: Locally forked for Kaola-Workflow; derived from everything-claude-code and no longer
+byte-tracked to upstream. Upstream attribution (MIT, Copyright (c) 2026 Affaan Mustafa) is
+honored at the project level in docs/agents-source.md.
 -->
 
 ## Prompt Defense Baseline
@@ -140,6 +138,30 @@ The block is parsed by `parseNodeVerdict` in `kaola-workflow-adaptive-schema.js`
 using a column-0 anchor (`^verdict:` — no leading whitespace). An indented or
 fenced block in the actual `.cache` file is rejected (fail-closed). Emit the
 block at the very top of the `.cache/{node-id}.md` file.
+
+### Machine-Readable Findings (adaptive path)
+
+Alongside the verdict block, record each actionable finding as a flat, column-0 line (one per
+line, same fence-free discipline as the verdict block) in the SAME `.cache/{node-id}.md` file. The
+block below is fenced only so it renders here:
+
+```
+finding: id=R1 scope=in_scope action=fix status=open severity=high fix_role=security rationale=<short>
+```
+
+Closed vocabulary: `scope` ∈ {in_scope, out_of_scope, pre_existing, needs_user_decision}; `action` ∈
+{fix, follow_up, document, none}; `status` ∈ {open, resolved, deferred}; `fix_role` ∈ {tdd-guide,
+implementer, build-error-resolver, security, none}.
+
+Use `scope=in_scope action=fix status=open` ONLY for a genuine in-scope actionable defect that must
+be fixed before finalize: the mechanical `--verdict-check` gate fails on it EVEN when `verdict: pass`
+/ `findings_blocking: 0`, which correctly forces a bounded repair cycle (intended behavior, not an
+error). A security-sensitive correction should route `fix_role=security` so the orchestrator re-runs
+this reviewer after the fix. Record anything outside this change as `out_of_scope` / `pre_existing`
+/ `needs_user_decision` with `action: follow_up|document|none` so it stays explicit and
+machine-readable but non-blocking. Severity governs urgency and escalation, never whether the gate
+blocks. Findings are parsed by `parseNodeFindings` / `unresolvedInScopeFixes` in
+`kaola-workflow-adaptive-schema.js` (column-0 anchor, fence-blind).
 
 ## Reference
 

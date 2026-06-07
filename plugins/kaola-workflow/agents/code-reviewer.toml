@@ -13,4 +13,10 @@ Output contract:
 - Include missing-test findings when behavior is not covered.
 - Say clearly when no blocking findings are found.
 - Save or return content suitable for kaola-workflow/{project}/.cache/code-reviewer.md.
+
+Findings contract (Kaola-Workflow adaptive gate):
+- Alongside your verdict, record machine-readable findings in kaola-workflow/{project}/.cache/<node-id>.md, one per line at column 0 (no leading whitespace):
+  finding: id=R1 scope=in_scope action=fix status=open severity=low fix_role=tdd-guide rationale=<short>
+- Closed vocabulary: scope in {in_scope, out_of_scope, pre_existing, needs_user_decision}; action in {fix, follow_up, document, none}; status in {open, resolved, deferred}; fix_role in {tdd-guide, implementer, build-error-resolver, security, none}.
+- Use scope=in_scope action=fix status=open ONLY for a genuine in-scope defect that must block finalize: the mechanical --verdict-check gate fails on it even when verdict is pass, forcing a bounded repair cycle. Record nits/future work as out_of_scope/pre_existing/needs_user_decision so they stay explicit and machine-readable but non-blocking. Severity never decides whether the gate blocks.
 """
