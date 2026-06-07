@@ -6602,6 +6602,52 @@ function testPatchBranchGuards() {
   console.log('testPatchBranchGuards: PASSED');
 }
 
+// issue #274: plan-validator must refuse a frozen plan that edits one half of a
+// byte-identity / sync-group pair (the drift validate-script-sync.js rejects post-merge).
+function testAdaptiveSyncGroupGap() {
+  const tmp = adaptiveTmp('sync-gap');
+  try {
+    // (a) COMMON_SCRIPTS member WITHOUT peer -> refuse.
+    let v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| impl | tdd-guide | explore | scripts/kaola-workflow-claim.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /sync-group gap/.test((v.errors || []).join(';')),
+      '(a) lone COMMON_SCRIPTS member must refuse with sync-group gap, got: ' + JSON.stringify(v));
+    // (b) BOTH halves (across two nodes) -> in-grammar.
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| impl | tdd-guide | explore | scripts/kaola-workflow-claim.js | 1 | sequence |',
+      '| doc | doc-updater | impl | plugins/kaola-workflow/scripts/kaola-workflow-claim.js | 1 | sequence |',
+      '| review | code-reviewer | impl,doc | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'in-grammar',
+      '(b) both COMMON_SCRIPTS halves present must be in-grammar, got: ' + JSON.stringify(v));
+    // (c) BYTE_IDENTICAL_GROUPS member WITHOUT peers -> refuse.
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| impl | tdd-guide | explore | scripts/kaola-workflow-closure-contract.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /sync-group gap/.test((v.errors || []).join(';')),
+      '(c) lone BYTE_IDENTICAL_GROUPS member must refuse with sync-group gap, got: ' + JSON.stringify(v));
+    // (d) forge-rename port path alone -> in-grammar (no false positive).
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| impl | tdd-guide | explore | plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'in-grammar',
+      '(d) forge-rename port path alone must NOT false-refuse, got: ' + JSON.stringify(v));
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptiveSyncGroupGap: PASSED');
+}
+
 // issue #251: verdict-gate unit tests — parseNodeVerdict pure, verifyVerdictBlock pure,
 // and --verdict-check CLI (per-node missing/non-gate/passing, whole-plan pass/fail).
 function testAdaptiveVerdictCheck() {
@@ -8222,6 +8268,7 @@ async function main() {
     testAdaptiveValidatorNodeCap();
     testAdaptiveCheapWinFixes();
     testAdaptiveAuditCoverage();
+    testAdaptiveSyncGroupGap();   // #274
     testAdaptiveVerdictCheck();
     testAdaptivePatternLibrary();
     // issue #255 — adaptive handoff integration tests

@@ -115,52 +115,56 @@ function readOrNull(p) {
   try { return fs.readFileSync(p); } catch { return null; }
 }
 
-const drift = [];
-const missing = [];
+if (require.main === module) {
+  const drift = [];
+  const missing = [];
 
-for (const name of COMMON_SCRIPTS) {
-  const a = readOrNull(path.join(claudeDir, name));
-  const b = readOrNull(path.join(codexDir, name));
-  if (a === null) missing.push(`scripts/${name}`);
-  if (b === null) missing.push(`plugins/kaola-workflow/scripts/${name}`);
-  if (a !== null && b !== null && !a.equals(b)) {
-    drift.push(name);
-  }
-}
-
-for (const group of BYTE_IDENTICAL_GROUPS) {
-  const [reference, ...copies] = group.files;
-  const referenceBytes = readOrNull(path.join(repoRoot, reference));
-  if (referenceBytes === null) {
-    missing.push(reference);
-    continue;
-  }
-  for (const copy of copies) {
-    const copyBytes = readOrNull(path.join(repoRoot, copy));
-    if (copyBytes === null) {
-      missing.push(copy);
-    } else if (!referenceBytes.equals(copyBytes)) {
-      drift.push(`${group.label}: ${copy} differs from ${reference}`);
+  for (const name of COMMON_SCRIPTS) {
+    const a = readOrNull(path.join(claudeDir, name));
+    const b = readOrNull(path.join(codexDir, name));
+    if (a === null) missing.push(`scripts/${name}`);
+    if (b === null) missing.push(`plugins/kaola-workflow/scripts/${name}`);
+    if (a !== null && b !== null && !a.equals(b)) {
+      drift.push(name);
     }
   }
+
+  for (const group of BYTE_IDENTICAL_GROUPS) {
+    const [reference, ...copies] = group.files;
+    const referenceBytes = readOrNull(path.join(repoRoot, reference));
+    if (referenceBytes === null) {
+      missing.push(reference);
+      continue;
+    }
+    for (const copy of copies) {
+      const copyBytes = readOrNull(path.join(repoRoot, copy));
+      if (copyBytes === null) {
+        missing.push(copy);
+      } else if (!referenceBytes.equals(copyBytes)) {
+        drift.push(`${group.label}: ${copy} differs from ${reference}`);
+      }
+    }
+  }
+
+  if (missing.length === 0 && drift.length === 0) {
+    console.log(`OK: ${COMMON_SCRIPTS.length} common scripts and ${BYTE_IDENTICAL_GROUPS.length} byte-identical file group in sync.`);
+    process.exit(0);
+  }
+
+  if (missing.length > 0) {
+    console.error('Missing files:');
+    for (const m of missing) console.error(`  - ${m}`);
+  }
+  if (drift.length > 0) {
+    console.error('Out of sync (scripts/ vs plugins/kaola-workflow/scripts/):');
+    for (const d of drift) console.error(`  - ${d}`);
+    console.error('');
+    console.error('Fix: copy the canonical version. Example:');
+    console.error('  for f in ' + drift.join(' ') + '; do');
+    console.error('    cp "scripts/$f" "plugins/kaola-workflow/scripts/$f"');
+    console.error('  done');
+  }
+  process.exit(1);
 }
 
-if (missing.length === 0 && drift.length === 0) {
-  console.log(`OK: ${COMMON_SCRIPTS.length} common scripts and ${BYTE_IDENTICAL_GROUPS.length} byte-identical file group in sync.`);
-  process.exit(0);
-}
-
-if (missing.length > 0) {
-  console.error('Missing files:');
-  for (const m of missing) console.error(`  - ${m}`);
-}
-if (drift.length > 0) {
-  console.error('Out of sync (scripts/ vs plugins/kaola-workflow/scripts/):');
-  for (const d of drift) console.error(`  - ${d}`);
-  console.error('');
-  console.error('Fix: copy the canonical version. Example:');
-  console.error('  for f in ' + drift.join(' ') + '; do');
-  console.error('    cp "scripts/$f" "plugins/kaola-workflow/scripts/$f"');
-  console.error('  done');
-}
-process.exit(1);
+module.exports = { COMMON_SCRIPTS, BYTE_IDENTICAL_GROUPS };

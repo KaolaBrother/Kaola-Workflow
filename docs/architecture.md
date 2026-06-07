@@ -106,6 +106,9 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   hardened the *static* floor — write-set extraction (root-level + dot-leading paths),
   `finalize`-sink writes, `## Meta`-scoped label reading, and fence-aware hashing — so the
   `auto-run` verdict is no longer computed over a write set that under-counts sensitive files.
+  Freeze (#274) now also cross-checks the repo's byte-identity/sync-group obligations
+  (COMMON_SCRIPTS + BYTE_IDENTICAL_GROUPS from `validate-script-sync.js`), catching a synced
+  file edited without its mirror lane at freeze instead of post-merge at `npm test`.
 
   **No mid-run kill-switch once a plan is frozen (accepted, #236).** Flipping the
   `enable_adaptive` switch OFF stops *new* adaptive selection but does **not** halt an

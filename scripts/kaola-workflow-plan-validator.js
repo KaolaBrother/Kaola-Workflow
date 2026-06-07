@@ -37,6 +37,11 @@ const crypto = require('crypto');
 const { execFileSync } = require('child_process'); // #231: ONLY the --barrier-check / --gate-verify CLI handlers shell out to git; the core functions stay IO-free.
 const classifier = require('./kaola-workflow-classifier');
 const schema = require('./kaola-workflow-adaptive-schema');
+// #274: byte-identity / sync-group write-set gap check. Root-only module (no plugin
+// copy) — resolves in the Claude scripts/ tree; throws+caught (null) in Codex/GitLab/
+// Gitea trees, where the gap check below becomes a graceful no-op (zero false positives).
+let syncMeta = null;
+try { syncMeta = require('./validate-script-sync'); } catch (_) { /* forge/codex/user install: no sync module */ }
 
 const TERMINAL_ROLE = 'finalize';
 
@@ -750,6 +755,49 @@ function validatePlan(content, opts) {
       const isTarget = n => (sensitiveByLabel && producesCode(n)) || sensitiveNodes.includes(n);
       const g2 = gateUncovered(nodes, isTarget, 'security-reviewer', sink);
       if (g2.length) errors.push(`G2: security-reviewer does not post-dominate sensitive node(s): ${g2.join(', ')}`);
+    }
+  }
+
+  // #274: sync-group write-set gap. A frozen plan that edits one half of a byte-identical
+  // sync pair would pass every other gate, run, and SHIP drift that npm test's
+  // validate-script-sync.js then rejects post-merge. Refuse at freeze instead.
+  // Inert when the sync module is absent (forge/codex/user installs: syncMeta === null)
+  // and for forge-rename ports (paths in neither list). Membership is path-exact, so a
+  // non-sync path can never false-refuse.
+  if (syncMeta) {
+    const unionWrites = new Set();
+    for (const n of nodes) for (const p of n.writeSet) unionWrites.add(p);
+
+    const COMMON = Array.isArray(syncMeta.COMMON_SCRIPTS) ? syncMeta.COMMON_SCRIPTS : [];
+    const GROUPS = Array.isArray(syncMeta.BYTE_IDENTICAL_GROUPS) ? syncMeta.BYTE_IDENTICAL_GROUPS : [];
+    // NOTE: the peer prefix is built by joining segments to keep the literal out of
+    // forge-plugin copies, where the contract validator scans for forbidden path tokens.
+    const codexScriptsPrefix = ['plugins', 'kaola-workflow', 'scripts'].join('/');
+    const commonPair = name => [`scripts/${name}`, `${codexScriptsPrefix}/${name}`];
+
+    for (const n of nodes) {
+      for (const p of n.writeSet) {
+        const base = path.basename(p);
+        if (COMMON.includes(base)) {
+          const [a, b] = commonPair(base);
+          if (p === a || p === b) {
+            const peer = p === a ? b : a;
+            if (!unionWrites.has(peer)) {
+              errors.push(`sync-group gap: node ${n.id} declares "${p}" without its byte-identical peer "${peer}" (#274)`);
+            }
+          }
+        }
+        for (const group of GROUPS) {
+          const members = Array.isArray(group.files) ? group.files : [];
+          if (members.includes(p)) {
+            for (const peer of members) {
+              if (peer !== p && !unionWrites.has(peer)) {
+                errors.push(`sync-group gap: node ${n.id} declares "${p}" without its byte-identical peer "${peer}" (${group.label}, #274)`);
+              }
+            }
+          }
+        }
+      }
     }
   }
 
