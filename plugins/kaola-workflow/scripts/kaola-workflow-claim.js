@@ -36,6 +36,63 @@ const CLAIM_LABEL = 'workflow:in-progress';
 
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
 
+// M4 (#277): derive run_posture from the actual provisioning outcome.
+// worktreePath truthy => 'worktree'; falsy => 'in-place'.
+// Pure / unit-testable; no env reads.
+function deriveRunPosture(worktreePath) {
+  return worktreePath ? 'worktree' : 'in-place';
+}
+
+// M2 (#277 Phase 2): WARN-FIRST dispatch-log attestation checker.
+// logDirCandidates: ordered array of directory paths that may contain
+// dispatch-log.jsonl; the first existing file wins. Mutates receipt
+// fields + receipt.warnings in-place; never throws; never modifies
+// closure_invariants.violations (warn-first contract).
+function checkDispatchAttestations(logDirCandidates, receipt) {
+  let logPath = null;
+  for (const dir of (logDirCandidates || [])) {
+    if (!dir) continue;
+    const candidate = path.join(dir, 'dispatch-log.jsonl');
+    try {
+      if (fs.existsSync(candidate)) { logPath = candidate; break; }
+    } catch (_) {}
+  }
+  if (!logPath) {
+    // Detector inactive: Codex, pre-hook installs, and this repo's own runs all hit here.
+    receipt.claim_planner_attested = 'missing';
+    receipt.finalize_contractor_attested = 'missing';
+    receipt.warnings.push('attestation: dispatch-log not found (SubagentStart hook not installed) — detector inactive');
+    return;
+  }
+  // Log found — parse and check each seam.
+  let lines = [];
+  try {
+    lines = fs.readFileSync(logPath, 'utf8').split('\n').filter(Boolean);
+  } catch (e) {
+    receipt.claim_planner_attested = 'failed';
+    receipt.finalize_contractor_attested = 'failed';
+    receipt.warnings.push('attestation: failed to read dispatch-log (' + String(e && e.message) + ')');
+    return;
+  }
+  let sawPlanner = false;
+  let sawContractor = false;
+  for (const line of lines) {
+    try {
+      const entry = JSON.parse(line);
+      if (entry && entry.agent_type === 'workflow-planner') sawPlanner = true;
+      if (entry && entry.agent_type === 'contractor') sawContractor = true;
+    } catch (_) {}
+  }
+  receipt.claim_planner_attested = sawPlanner ? 'attested' : 'missing';
+  receipt.finalize_contractor_attested = sawContractor ? 'attested' : 'missing';
+  if (!sawPlanner) {
+    receipt.warnings.push('ATTESTATION WARNING: no workflow-planner dispatch found in dispatch-log — claim/author seam may have been run inline by main session');
+  }
+  if (!sawContractor) {
+    receipt.warnings.push('ATTESTATION WARNING: no contractor dispatch found in dispatch-log — finalize seam may have been run inline by main session');
+  }
+}
+
 function parseArgs(argv) {
   const args = {};
   for (let i = 0; i < argv.length; i++) {
@@ -351,7 +408,8 @@ function writeState(root, data) {
     '## Sink',
     'branch: ' + data.branch,
     'issue_number: ' + (data.issue_number || ''),
-    'sink: ' + (data.sink || 'merge')
+    'sink: ' + (data.sink || 'merge'),
+    'run_posture: ' + deriveRunPosture(data.worktree_path)
   ];
   if (data.worktree_path) lines.push('worktree_path: ' + data.worktree_path);
   if (data.worktree_error) lines.push('worktree_error: ' + data.worktree_error);
@@ -860,6 +918,12 @@ function cmdFinalize() {
     worktree_removed: worktreeRemoved,
     branch_removed: 'kept'
   });
+  // M2 (#277 Phase 2): WARN-FIRST attestation check.
+  // archiveProjectDir runs first (line ~863) and renames the live folder to result.dest,
+  // so the live cache is gone; check the archive candidate first, then live as fallback.
+  const liveCacheDir = path.join(root, 'kaola-workflow', args.project, '.cache');
+  const archiveCacheDir = result.dest ? path.join(result.dest, '.cache') : null;
+  checkDispatchAttestations([archiveCacheDir, liveCacheDir], closureReceipt);
   const invariantResult = checkClosureInvariants(root, closureReceipt, result.dest);
   output(Object.assign({ status: 'closed' }, result, {
     claim_label_removed: claimLabelRemoved,
@@ -1433,6 +1497,7 @@ module.exports = {
   buildBranchName,
   buildClosureReceipt,
   checkClosureInvariants,
+  checkDispatchAttestations,
   claimExplicitTarget,
   claimProject,
   collectStale,
@@ -1440,6 +1505,7 @@ module.exports = {
   cmdLegacyWorktreeCleanup,
   cmdRepairLabels,
   cmdStaleWorktreeCleanup,
+  deriveRunPosture,
   getCoordRoot,
   legacySiblingWorktreePathFor,
   projectNameForIssue,

@@ -42,6 +42,20 @@
         "description": "Block advisor citations in workflow files without a backing .cache/advisor-*.md",
         "id": "kaola-workflow:phantom-advisor"
       }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/kaola-workflow-subagent-dispatch-log.sh\"",
+            "timeout": 5
+          }
+        ],
+        "description": "Record subagent spawns (agent_type/agent_id/cwd) to .cache/dispatch-log.jsonl for closure attestation (#277 M1)",
+        "id": "kaola-workflow:subagent-dispatch-log"
+      }
     ]
   }
 }

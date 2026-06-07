@@ -86,6 +86,7 @@ function testClaimStatusRelease(tmp) {
   assert(state.includes('status: active'), 'state must be active');
   assert(state.includes('issue_number: 63'), 'state must record issue number');
   assert(state.includes('sink: pr'), 'state must record PR sink');
+  assert(/^run_posture: (worktree|in-place)$/m.test(state), 'M4 (#277): state must contain run_posture: worktree or in-place');
   assert(!state.includes('## ' + 'Lease'), 'state must not contain a retired ownership block');
   assertNoLegacyCoordDirs(tmp);
 
@@ -364,6 +365,22 @@ function testPhantomAdvisorHookGuard() {
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
+}
+
+function testSubagentDispatchHookExists() {
+  // M1 (#277): dispatch-log hook must be installed in the root hooks directory.
+  const hooksDir = path.join(repoRoot, 'hooks');
+  const dispatchLog = path.join(hooksDir, 'kaola-workflow-subagent-dispatch-log.sh');
+  assert(fs.existsSync(dispatchLog), 'M1 (#277): hooks/kaola-workflow-subagent-dispatch-log.sh must exist');
+  const hooksJson = path.join(hooksDir, 'hooks.json');
+  assert(fs.existsSync(hooksJson), 'M1 (#277): hooks/hooks.json must exist');
+  const hooks = JSON.parse(fs.readFileSync(hooksJson, 'utf8'));
+  const subagentHooks = (hooks.hooks && hooks.hooks.SubagentStart) || [];
+  assert(
+    subagentHooks.some(e => e.id === 'kaola-workflow:subagent-dispatch-log'),
+    'M1 (#277): hooks.json must have a SubagentStart entry with id: kaola-workflow:subagent-dispatch-log'
+  );
+  console.log('testSubagentDispatchHookExists: PASSED');
 }
 
 function testRoadmapGenerateMissingSourceGuard(tmp) {
@@ -4571,6 +4588,26 @@ function testFinalizeCleansRoadmapEntry() {
       finalizeResult.closure_invariants && finalizeResult.closure_invariants.ok === true,
       'receipt: closure_invariants.ok must be true, got ' + JSON.stringify(finalizeResult.closure_invariants)
     );
+    // M2 (#277): warn-first attestation fields must be present; no dispatch-log in offline test
+    // so both fields are 'missing', but closure_invariants.ok must still be true (warn-first contract).
+    assert(
+      finalizeResult.closure_receipt && 'claim_planner_attested' in finalizeResult.closure_receipt,
+      'M2 (#277): closure_receipt must have claim_planner_attested field'
+    );
+    assert(
+      finalizeResult.closure_receipt && 'finalize_contractor_attested' in finalizeResult.closure_receipt,
+      'M2 (#277): closure_receipt must have finalize_contractor_attested field'
+    );
+    assert(
+      finalizeResult.closure_receipt.claim_planner_attested === 'missing' ||
+      finalizeResult.closure_receipt.claim_planner_attested === 'attested',
+      'M2 (#277): claim_planner_attested must be missing or attested, got ' + finalizeResult.closure_receipt.claim_planner_attested
+    );
+    assert(
+      finalizeResult.closure_receipt.finalize_contractor_attested === 'missing' ||
+      finalizeResult.closure_receipt.finalize_contractor_attested === 'attested',
+      'M2 (#277): finalize_contractor_attested must be missing or attested, got ' + finalizeResult.closure_receipt.finalize_contractor_attested
+    );
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -8138,6 +8175,7 @@ async function main() {
     testRepairFastNoArgAmbiguous();
     testHookSingleProjectGuard(tmp);
     testPhantomAdvisorHookGuard();
+    testSubagentDispatchHookExists();
     testRoadmapGenerateMissingSourceGuard(tmp);
     testRoadmapGenerateAtomicReplace(tmp);
     testRoadmapProjectRulesAppend(tmp);

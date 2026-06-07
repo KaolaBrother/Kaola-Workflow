@@ -27,10 +27,13 @@ const CLOSURE_RECEIPT_FIELDS = {
   claim_label_removed: ['removed', 'already_absent', 'skipped_offline', 'failed'],
   worktree_removed: ['removed', 'missing', 'kept', 'failed'],
   branch_removed: ['removed', 'kept', 'failed'],
+  // WARN-FIRST detection invariants (#277 Phase 2 / M2) — recorded, not hard-blocking.
+  claim_planner_attested: ['attested', 'missing', 'failed'],
+  finalize_contractor_attested: ['attested', 'missing', 'failed'],
   warnings: 'string[]',
 };
 
-// The seven closure invariants for a completed linked issue N. `id` is a stable
+// The nine closure invariants for a completed linked issue N. `id` is a stable
 // machine token; `description` mirrors docs/api.md § Closure Contract.
 const CLOSURE_INVARIANTS = [
   { id: 'roadmap-source-absent', description: 'kaola-workflow/.roadmap/issue-N.md is absent.' },
@@ -40,6 +43,9 @@ const CLOSURE_INVARIANTS = [
   { id: 'remote-closed-after-publish', description: 'The remote issue is closed only after acceptance criteria pass and implementation is published.' },
   { id: 'in-progress-label-removed', description: 'The remote issue does not have workflow:in-progress after closure.' },
   { id: 'branch-worktree-resolved', description: 'Any branch/worktree cleanup is either complete or explicitly reported by stale-worktree tooling.' },
+  // WARN-FIRST detection invariants (#277 Phase 2 / M2) — recorded, not hard-blocking.
+  { id: 'claim-planner-attested', description: 'A workflow-planner subagent spawn is recorded in the dispatch log (.cache/dispatch-log.jsonl) BEFORE the plan was frozen.' },
+  { id: 'finalize-contractor-attested', description: 'A contractor subagent spawn is recorded in the dispatch log during the finalize window.' },
 ];
 
 // Returns a fresh receipt for the given project/issue with every status field
@@ -56,6 +62,9 @@ function emptyReceipt(project, issueNumber) {
     claim_label_removed: 'failed',
     worktree_removed: 'failed',
     branch_removed: 'failed',
+    // WARN-FIRST detection invariants (#277 Phase 2 / M2) — recorded, not hard-blocking.
+    claim_planner_attested: 'failed',
+    finalize_contractor_attested: 'failed',
     warnings: [],
   };
 }

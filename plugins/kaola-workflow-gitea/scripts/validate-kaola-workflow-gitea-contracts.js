@@ -211,6 +211,12 @@ assert(
   read(pluginRoot + '/commands/kaola-workflow-phase6.md').includes('Use the sink metadata captured before Step 8b'),
   'Gitea Phase 6 command must capture sink metadata before archive and preserve worktree for the final commit'
 );
+// #277 M3: contractor-dispatch HANDLE lock — mechanical finalization body moved to
+// agents/contractor.md; phase6 retains only the Agent(...) dispatch handle.
+assert(
+  read(pluginRoot + '/commands/kaola-workflow-phase6.md').includes('subagent_type="contractor"'),
+  'Gitea Phase 6 command must dispatch the mechanical finalization to the contractor subagent'
+);
 assert(
   read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('mr|pr)'),
   'Gitea finalize skill must dispatch canonical pr sink (mr|pr) case)'
@@ -481,7 +487,10 @@ assertIncludes(pluginRoot + '/commands/workflow-next.md', 'workflow-plan.md exis
 // which let this forge edition ship green with the front end unreachable (inline-claim regression).
 assertIncludes(pluginRoot + '/commands/workflow-next.md', 'kaola-workflow-adapt $KAOLA_TARGET_ISSUE');
 assertIncludes(pluginRoot + '/commands/workflow-next.md', 'Skip this entire step when `KAOLA_PATH=adaptive`');
-assertConcept(pluginRoot + '/commands/kaola-workflow-adapt.md', 'adaptive authoring', [
+// #277 M3: FANOUT_CAP and post-dominate relocated from commands/kaola-workflow-adapt.md
+// (dispatch-handle-only) to agents/workflow-planner.md (sole home of authoring procedure).
+// agents/workflow-planner.md is a shared repo-root file; use a root-relative path (no pluginRoot).
+assertConcept('agents/workflow-planner.md', 'adaptive authoring', [
   'workflow-plan.md', '## Nodes', 'post-dominate', 'finalize', 'FANOUT_CAP', 'plan_hash', 'typed refusal'
 ]);
 // v5.1.0: the workflow-planner dispatch must stay ENFORCED (Agent block + model badge), not inline prose.

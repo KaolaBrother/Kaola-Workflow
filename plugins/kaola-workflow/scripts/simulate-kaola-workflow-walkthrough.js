@@ -224,6 +224,7 @@ function main() {
     const state = fs.readFileSync(stateFile, 'utf8');
     assert(state.includes('issue_number: 163'), 'state should record issue number');
     assert(state.includes('sink: pr'), 'state should record PR sink');
+    assert(/^run_posture: (worktree|in-place)$/m.test(state), 'M4 (#277): Codex state must contain run_posture: worktree or in-place');
     assert(!state.includes('## ' + 'Lease'), 'state should not contain a retired ownership block');
     assertNoLegacyCoordDirs(tmp);
 
@@ -232,6 +233,35 @@ function main() {
 
     const status = runClaim(['status'], tmp);
     assert(status.count === 1, 'status should report one active folder');
+
+    // M2 (#277): warn-first attestation — finalize must emit closure_receipt with
+    // claim_planner_attested and finalize_contractor_attested; both 'missing' in offline test
+    // (no dispatch-log), but closure_invariants.ok must still be true (warn-first contract).
+    plantRoadmap(tmp, 163, '');
+    const finalizeResult = runClaim(['finalize', '--project', 'issue-163'], tmp);
+    assert(finalizeResult.status === 'closed', 'M2 (#277): Codex finalize must return status:closed');
+    assert(
+      finalizeResult.closure_receipt && 'claim_planner_attested' in finalizeResult.closure_receipt,
+      'M2 (#277): Codex closure_receipt must have claim_planner_attested field'
+    );
+    assert(
+      finalizeResult.closure_receipt && 'finalize_contractor_attested' in finalizeResult.closure_receipt,
+      'M2 (#277): Codex closure_receipt must have finalize_contractor_attested field'
+    );
+    assert(
+      finalizeResult.closure_receipt.claim_planner_attested === 'missing' ||
+      finalizeResult.closure_receipt.claim_planner_attested === 'attested',
+      'M2 (#277): Codex claim_planner_attested must be missing or attested'
+    );
+    assert(
+      finalizeResult.closure_receipt.finalize_contractor_attested === 'missing' ||
+      finalizeResult.closure_receipt.finalize_contractor_attested === 'attested',
+      'M2 (#277): Codex finalize_contractor_attested must be missing or attested'
+    );
+    assert(
+      finalizeResult.closure_invariants && finalizeResult.closure_invariants.ok === true,
+      'M2 (#277): Codex closure_invariants.ok must be true (warn-first: attestation miss is not a hard violation)'
+    );
 
     const skill = fs.readFileSync(nextSkill, 'utf8');
     assert(skill.includes('active folders'), 'next skill should route via active folders');

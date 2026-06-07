@@ -20,6 +20,12 @@ Reachable only when the adaptive switch is ON *and* the structure question in
 is free; the lifecycle frame around it (claim → branch/worktree → [this plan] →
 Phase-6 sink) is fixed.
 
+The full claim + author + handoff procedure (grammar, caps, example plan, shaping
+guidance, and `kaola-gitea-workflow-claim.js startup …` / `Write` / `kaola-gitea-workflow-adaptive-handoff.js`
+literals) lives exclusively in `agents/workflow-planner.md` — the workflow-planner
+reads it there. This command holds only the dispatch handle, the entry guard, and
+the handoff-packet routing.
+
 ## Goal Contract
 
 Author a `workflow-plan.md` whose `## Nodes` table passes
@@ -36,137 +42,14 @@ exactly as written — it is what makes Claude Code show the model badge on the
 subagent card. The installer fills each `model="{...}"` placeholder with the
 agent's frontmatter model; never omit the `model=` line.
 
-## The grammar (the closed envelope)
-
-Each node is `{ id, role, depends_on[], declared_write_set, cardinality, shape }`,
-written as one row of the `## Nodes` markdown table:
-
-```text
-| id | role | depends_on | declared_write_set | cardinality | shape |
-```
-
-- **role** must be in the **installed library** (the nine canonical roles plus
-  any maintainer-installed role such as `adversarial-verifier`). The validator
-  hard-rejects an unknown role. The author **never** sets a model — the model
-  comes only from `resolve-agent-model`.
-- **shape** is exactly one of three grammar productions: `sequence`,
-  `fanout(<group>)` (N instances of one role over pairwise-disjoint declared
-  write sets, N ≤ `FANOUT_CAP`), or `loop(<cap>)` (one role re-invoked up to a
-  static cap; loops do not fan out).
-- **cardinality** is a **reserved / advisory** column: the validator parses it but
-  does not validate or use it (fan-out width is the row count in a `fanout(<group>)`,
-  not this column). Keep a plain count (e.g. `1`); its text still feeds `plan_hash`
-  as part of `## Nodes`, so keep the column present and stable.
-- A single unique `finalize` sink is mandatory — it makes the gate checks
-  decidable.
-
-**Free (the flexibility):** how many `code-explorer` / `docs-lookup` nodes,
-whether to fan out `tdd-guide` or `implementer` over disjoint sub-areas, where to insert extra
-review passes, the DAG branching and ordering.
-
-**Fixed (the harness):** the role alphabet, the model resolution, the three
-shapes, the unique sink, the computed gates, the caps. A gate is a wall the
-validator finds in the graph — `code-reviewer` must **post-dominate** every
-implement node; `security-reviewer` must post-dominate every sensitive node —
-not a flag the author can set.
-
-Capture the **frozen issue labels** into a `## Meta` `labels:` line (a non-author
-field) so the validator can derive sensitivity.
-
-## Caps and the sink (fixed by the harness)
-
-- **`FANOUT_CAP`** — max instances in one `fanout(<group>)`; default **4** (env
-  `KAOLA_FANOUT_CAP`). Width is the number of rows sharing the group token.
-- **`LOOP_CAP`** — max `loop(<cap>)` bound: **5**. A loop must run at least once —
-  `loop(0)` is a typed refusal.
-- **`FILE_CEILING`** — max paths in any one node's `declared_write_set`: **6**.
-  Root-level (`Dockerfile`) and dot-leading (`.config/ci.yml`) paths count too.
-- **Unique `finalize` sink** — exactly one terminal node, role **`finalize`**. It
-  may only write docs/state bookkeeping (e.g. `CHANGELOG.md`); any non-docs write
-  declared on the sink is treated as unreviewed code and trips the `code-reviewer` gate.
-
-## A complete example (`workflow-plan.md`)
-
-A minimal in-grammar plan to copy and adapt: `code-explorer` explores, a `planner` node
-shapes and dominates the implements, two `tdd-guide` nodes implement in parallel over
-**disjoint top-level directories** (`exporter/` vs `renderer/`), `code-reviewer`
-post-dominates both, a `doc-updater` node updates the changed docs, and the unique
-`finalize` sink closes the DAG. It validates in-grammar and freezes; because it is a
-write-role fan-out it routes to **ask** (surface for approval) — expected, not an error.
-
-```markdown
-# Workflow Plan — issue #142
-
-## Meta
-labels: enhancement
-
-## Nodes
-
-| id        | role          | depends_on          | declared_write_set | cardinality | shape        |
-|-----------|---------------|---------------------|--------------------|-------------|--------------|
-| explore   | code-explorer | —                   | —                  | 1           | sequence     |
-| plan      | planner       | explore             | —                  | 1           | sequence     |
-| impl-csv  | tdd-guide     | plan                | exporter/csv.js    | 1           | fanout(impl) |
-| impl-html | tdd-guide     | plan                | renderer/html.js   | 1           | fanout(impl) |
-| review    | code-reviewer | impl-csv, impl-html | —                  | 1           | sequence     |
-| docs      | doc-updater   | review              | docs/api.md        | 1           | sequence     |
-| finalize  | finalize      | review, docs        | CHANGELOG.md       | 1           | sequence     |
-
-## Node Ledger
-
-| id        | status  |
-|-----------|---------|
-| explore   | pending |
-| plan      | pending |
-| impl-csv  | pending |
-| impl-html | pending |
-| review    | pending |
-| docs      | pending |
-| finalize  | pending |
-```
-
-Disjointness is checked at **top-level-directory** granularity (`exporter/` vs `renderer/`,
-not exact path), so fan-out siblings must live under different top-level directories. To turn
-a refusal into a fix, read the typed refusal and correct the plan — never clamp around the gate.
-
-## Shaping guidance (recommendations, not gates)
-
-The validator enforces only the **walls** — the unique `finalize` sink, G1
-(`code-reviewer` post-dominates every code-producing node), and G2 (`security-reviewer`
-post-dominates every sensitive node). Everything below is an author judgment call the
-grammar will **not** refuse; the example above models both.
-
-- **Plan before you build.** For a non-trivial implement, consider a `planner` (or
-  `code-architect`) **node** that precedes — and so dominates — the implement nodes:
-  these are the forward-reasoning roles. One `planner` upstream of a fan-out's shared
-  parent covers every leg (not one per leg). Trivial or mechanical work can skip it, or
-  use the fast path.
-- **Update the docs you changed.** When the change touches README / API docs /
-  architecture / a public interface, consider a `doc-updater` node before `finalize` —
-  the sink only does CHANGELOG / state bookkeeping, not the docs themselves.
-- **Choose the right implement role.** Default to `tdd-guide`; pick `implementer` ONLY
-  for an enumerated non-test-first category — behavior-preserving refactor; scaffolding /
-  boilerplate / wiring; config / IaC / scripts; UI / markup; migrations / fixtures;
-  integration glue — and RECORD which one (`non_tdd_reason`). Asymmetric tie-breaker: if
-  a meaningful failing unit test CAN be written for the work, use `tdd-guide`; when in
-  doubt, use `tdd-guide`. "Hard to test" is NOT a valid `non_tdd_reason`; bug fixes are
-  ALWAYS `tdd-guide`. A mixed node (some sub-tasks test-first, some not) should be split
-  into separate nodes by lane, or routed to the stricter role (`tdd-guide`). Both
-  `tdd-guide` and `implementer` require `code-reviewer` post-dominance (G1); `implementer`
-  is equal-burden, different-shape — it swaps RED→GREEN for change-type-appropriate
-  verification (regression-green / build-green / executable smoke-integration), NOT a
-  lighter path.
-
 ## Front end: claim + author (the `workflow-planner` subagent)
 
 The adaptive path opens with ONE enforced subagent dispatch. The **`workflow-planner`** (Opus)
-settles the **starting contract** (claim + `workflow-state.md`, at repo-root — the adaptive claim
-provisions a repo-local hidden worktree at `<repo-root>/.kw/worktrees/<project>/`; the planner
-authors and freezes the plan at repo-root and does NOT itself operate in the worktree) and **authors** the
-task-shaped DAG into `workflow-plan.md`. The main session never runs the claim or the authoring
-write itself — that is the whole point of this path. The main session keeps every **judgment**:
-git-freshness, the risk decision, the freeze, and the dispatch loop (a subagent can never dispatch
-a subagent — the `workflow-planner` returns control to you).
+settles the **starting contract** and **authors** the task-shaped DAG into `workflow-plan.md`. The
+main session never runs the claim or the authoring write itself — that is the whole point of this
+path. The main session keeps every **judgment**: git-freshness, the risk decision, the freeze, and
+the dispatch loop (a subagent can never dispatch a subagent — the `workflow-planner` returns control
+to you).
 
 The router enters this command with the agent-selected target issue for fresh adaptive work; use
 `{issue}` for the front-end dispatch and the planner RETURNS the `{project}` you use after. **Re-entry
@@ -210,7 +93,7 @@ Agent(
   subagent_type="workflow-planner",
   model="{WORKFLOW_PLANNER_MODEL}",
   description="Adaptive front end {issue}",
-  prompt="Settle the starting contract and design the adaptive workflow for issue {issue}, per your workflow-planner contract. (1) Run `kaola-gitea-workflow-claim.js startup --runtime claude --workflow-path adaptive --target-issue {issue}` — `--workflow-path adaptive` is REQUIRED (a subagent shell does not inherit KAOLA_PATH, so without it the project would be mis-stamped workflow_path:full). Add `--sink pr` ONLY if the user requested an MR/PR sink (else omit; merge is the default). This creates the project folder + workflow-state.md at repo-root AND provisions a repo-local hidden worktree at `<repo-root>/.kw/worktrees/<project>/`; you author the plan at repo-root (you do NOT cd into the worktree — the executor /kaola-workflow-plan-run mirrors the folder into the worktree and operates there). (2) If that project already has a workflow-plan.md, do NOT overwrite it — STOP and return so the orchestrator routes to the executor. (3) Otherwise author via Write the `## Meta` labels line, the `## Nodes` DAG, and an empty `## Node Ledger` (one row per node, `status: pending`) into that project's workflow-plan.md. (4) Run plan-validator <plan> --json self-check, fix until in-grammar — do NOT run authoring-allowed. (5) Run kaola-gitea-workflow-adaptive-handoff.js --project {project} --json (freezes, resume-checks, stages roadmap, writes Planning Evidence; does NOT open node1 or record the node1 baseline — plan-run owns the full node lifecycle including the first node; decision:ask is recorded metadata, not a gate). RETURN its handoff packet {handoff_status,checklist,first_node,decision,risk} on ready, or {handoff_status:'plan_invalid',result:'refuse',errors,validator_verdict} on validator refuse."
+  prompt="Settle the starting contract and design the adaptive workflow for issue {issue}, per your workflow-planner contract. Follow the Method in your agent profile (agents/workflow-planner.md). The full procedure — startup, Write of ## Nodes, adaptive-handoff.js — lives there as the sole home."
 )
 ```
 

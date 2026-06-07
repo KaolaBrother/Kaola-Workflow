@@ -153,6 +153,13 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'Documen
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'SINK_STATE_FILE="kaola-workflow/${KAOLA_PROJECT}/workflow-state.md"');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, '--keep-worktree');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'metadata captured before archive');
+// #277 M3: contractor-dispatch HANDLE lock (Codex edition). Codex has no command file — the
+// finalize SKILL.md is the contractor seam. The node-4 rewrite made the contractor the SOLE HOME
+// of the mechanical finalization and requires the session to delegate it (inline only on a logged
+// local-fallback-tool-unavailable escape). Lock the delegation clause so the seam cannot drift back
+// to inline-by-preference.
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'The `contractor` Codex agent role is the SOLE HOME of this procedure and the session MUST delegate it');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'local-fallback-tool-unavailable');
 
 // Issue #77: typed-acknowledgement delegation gate — remove ungated fallback language
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-research/SKILL.md`, 'when subagents are available; otherwise perform the same read-only research');

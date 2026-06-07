@@ -96,6 +96,14 @@ const BYTE_IDENTICAL_GROUPS = [
     ],
   },
   {
+    label: 'subagent-dispatch-log hook copies',
+    files: [
+      'hooks/kaola-workflow-subagent-dispatch-log.sh',
+      'plugins/kaola-workflow-gitlab/hooks/kaola-workflow-subagent-dispatch-log.sh',
+      'plugins/kaola-workflow-gitea/hooks/kaola-workflow-subagent-dispatch-log.sh',
+    ],
+  },
+  {
     // issue #227: the adaptive-path cross-fork DRIFT ANCHOR. Forge-neutral constants
     // (path whitelist, plan-run command, caps, ledger enum, escalation markers, config
     // path) shared by claim/repair-state/plan-validator across all four trees. Because

@@ -916,6 +916,11 @@ For a completed linked issue N:
 6. The remote issue does not have `workflow:in-progress` after closure.
 7. Any branch/worktree cleanup is either complete or explicitly reported by stale-worktree tooling.
 
+**WARN-FIRST detection invariants (issue #277 M2):** The following two invariants are recorded in the receipt but do NOT affect `closure_invariants.ok`. Missing attestation adds a warning and sets the receipt field to `missing`; it never blocks closure. The detector is log-gated: if no `dispatch-log.jsonl` is found in the project `.cache/`, both fields are set to `missing` and a warning `'attestation: dispatch-log not found (SubagentStart hook not installed) — detector inactive'` is added — closure is not blocked.
+
+8. `claim-planner-attested` — A workflow-planner subagent spawn is recorded in the dispatch log (`.cache/dispatch-log.jsonl`) BEFORE the plan was frozen.
+9. `finalize-contractor-attested` — A contractor subagent spawn is recorded in the dispatch log during the finalize window.
+
 ### Closure receipt schema
 
 The closure receipt is an auditable record of every closure step. Field names
@@ -936,9 +941,13 @@ unpopulated receipt reads as total failure, never silent success) and
   "claim_label_removed": "removed|already_absent|skipped_offline|failed",
   "worktree_removed": "removed|missing|kept|failed",
   "branch_removed": "removed|kept|failed",
+  "claim_planner_attested": "attested|missing|failed",
+  "finalize_contractor_attested": "attested|missing|failed",
   "warnings": []
 }
 ```
+
+`claim_planner_attested` and `finalize_contractor_attested` are WARN-FIRST detection fields (issue #277 M2). Both default to `'failed'` in `emptyReceipt()`. `checkDispatchAttestations` (called from the closure path in `kaola-workflow-claim.js`) reads `.cache/dispatch-log.jsonl`, sets each field to `attested` or `missing`, and pushes any warnings. It never modifies `closure_invariants.violations` — missing attestation is advisory only.
 
 Offline behavior is explicit: local invariants (1-4) are always checked; remote
 actions (`remote_issue_closed`, `claim_label_removed`) record `skipped_offline`

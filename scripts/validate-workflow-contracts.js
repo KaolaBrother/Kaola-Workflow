@@ -377,10 +377,16 @@ assertIncludes('commands/workflow-init.md', '> **MANDATORY — READ CLAUDE.md BE
 assertIncludes('commands/kaola-workflow-phase6.md', 'kaola-workflow-sink-merge.js');
 assertIncludes('commands/kaola-workflow-phase6.md', 'kaola-workflow-sink-pr.js');
 assertIncludes('commands/kaola-workflow-phase6.md', 'SINK_STATE_FILE="kaola-workflow/{project}/workflow-state.md"');
+// #277 M3: --keep-worktree procedure relocated from phase6 inline body to agents/contractor.md;
+// still asserted in the dispatch prompt string inside phase6.md (pass-through reference).
 assertIncludes('commands/kaola-workflow-phase6.md', '--keep-worktree');
 assertIncludes('commands/kaola-workflow-phase6.md', 'Use the sink metadata captured before Step 8b');
-assertBefore('commands/kaola-workflow-phase6.md', 'commit -m "chore: finalize {project}"', 'kaola-workflow-sink-merge.js');
-assertBefore('commands/kaola-workflow-phase6.md', 'SINK_STATE_FILE="kaola-workflow/{project}/workflow-state.md"', 'node "$CLAIM_JS" finalize');
+// #277 M3: contractor-dispatch HANDLE lock — the mechanical finalization body moved to
+// agents/contractor.md; the phase6 command retains only the Agent(...) dispatch handle.
+assertIncludes('commands/kaola-workflow-phase6.md', 'subagent_type="contractor"');
+// #277 M3: assertBefore calls for 'commit -m "chore: finalize {project}"' and
+// 'node "$CLAIM_JS" finalize' DROPPED — those tokens relocated to agents/contractor.md;
+// cross-file ordering is not expressible via assertBefore (single-file only).
 
 const packageJson = JSON.parse(read('package.json'));
 assert(Array.isArray(packageJson.files) && packageJson.files.includes('hooks/'), 'package files must include hooks/');
@@ -541,7 +547,9 @@ assertIncludes('commands/workflow-next.md', 'workflow-plan.md exists -> /kaola-w
 assertIncludes('commands/workflow-next.md', 'kaola-workflow-adapt $KAOLA_TARGET_ISSUE');
 assertIncludes('commands/workflow-next.md', 'Skip this entire step when `KAOLA_PATH=adaptive`');
 // adapt (authoring) + plan-run (executor) prose: artifacts, gates, caps, governance
-assertConcept('commands/kaola-workflow-adapt.md', 'adaptive authoring', [
+// #277 M3: FANOUT_CAP and post-dominate concepts relocated from commands/kaola-workflow-adapt.md
+// (now a dispatch-handle-only file) to agents/workflow-planner.md (sole home of authoring procedure).
+assertConcept('agents/workflow-planner.md', 'adaptive authoring', [
   'workflow-plan.md', '## Nodes', 'post-dominate', 'finalize', 'FANOUT_CAP', 'plan_hash', 'typed refusal'
 ]);
 // the adaptive front-end dispatch must stay ENFORCED (a workflow-planner Agent block carrying its

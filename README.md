@@ -567,7 +567,7 @@ For larger, **structurally non-linear** issues — work that naturally fans out 
 KAOLA_PATH=adaptive /workflow-next
 ```
 
-`/kaola-workflow-adapt` opens by dispatching the `workflow-planner` front-end subagent **once**: it claims/starts up (writes `workflow-state.md` and provisions a worktree at `.kw/worktrees/<project>/` — the planner authors the plan at repo-root and the executor operates inside the provisioned worktree), authors the plan as a `workflow-plan.md` (a `## Nodes` DAG plus an empty `## Node Ledger`), and runs `kaola-workflow-adaptive-handoff.js`. The plan must be **in-grammar**: roles drawn from the closed role library, one of four shapes (`sequence`, bounded fan-out over pairwise-disjoint write sets up to `KAOLA_FANOUT_CAP`, a bounded loop, or a selective-execution `select(<group>)` arm), a single unique `finalize` sink, and computed **post-dominance gates** (`code-reviewer` over every code-producing node, `security-reviewer` over every sensitive node). The handoff script branches on the plan-validator `--json` `result`: on `in-grammar` it freezes mechanically — writing a `plan_hash` inside `workflow-plan.md` (re-checked on every load, so post-freeze tampering is refused) — resume-checks, stages the roadmap, and writes `## Planning Evidence` into `workflow-state.md`, then returns `handoff_status: ready_to_run` with a checklist and advisory `first_node` metadata. The handoff does **not** open the first node or record its baseline. `decision:auto-run` vs `ask` is **audit metadata** recorded in the packet — the run proceeds either way with no user-approval gate. On `refuse` the handoff returns `plan_invalid` with no mutation; the orchestrator drives a bounded repair loop (re-dispatching the planner with validator errors) rather than silently looping. The main session routes directly to `/kaola-workflow-plan-run`, which opens and dispatches every node including the first via `kaola-workflow-adaptive-node.js` transactions, with per-node checkpoints; it is resume-safe and toggle-agnostic (a frozen plan finishes even if the switch is later turned off) and hands off to Phase 6 on an all-complete ledger.
+`/kaola-workflow-adapt` opens by dispatching the `workflow-planner` front-end subagent **once**: it claims/starts up (writes `workflow-state.md` and provisions a worktree at `.kw/worktrees/<project>/` — startup records `run_posture: worktree` in the `## Sink` block, derived from the actual worktree resolution; the planner authors the plan at repo-root and the executor operates inside the provisioned worktree), authors the plan as a `workflow-plan.md` (a `## Nodes` DAG plus an empty `## Node Ledger`), and runs `kaola-workflow-adaptive-handoff.js`. The plan must be **in-grammar**: roles drawn from the closed role library, one of four shapes (`sequence`, bounded fan-out over pairwise-disjoint write sets up to `KAOLA_FANOUT_CAP`, a bounded loop, or a selective-execution `select(<group>)` arm), a single unique `finalize` sink, and computed **post-dominance gates** (`code-reviewer` over every code-producing node, `security-reviewer` over every sensitive node). The handoff script branches on the plan-validator `--json` `result`: on `in-grammar` it freezes mechanically — writing a `plan_hash` inside `workflow-plan.md` (re-checked on every load, so post-freeze tampering is refused) — resume-checks, stages the roadmap, and writes `## Planning Evidence` into `workflow-state.md`, then returns `handoff_status: ready_to_run` with a checklist and advisory `first_node` metadata. The handoff does **not** open the first node or record its baseline. `decision:auto-run` vs `ask` is **audit metadata** recorded in the packet — the run proceeds either way with no user-approval gate. On `refuse` the handoff returns `plan_invalid` with no mutation; the orchestrator drives a bounded repair loop (re-dispatching the planner with validator errors) rather than silently looping. The main session routes directly to `/kaola-workflow-plan-run`, which opens and dispatches every node including the first via `kaola-workflow-adaptive-node.js` transactions, with per-node checkpoints; it is resume-safe and toggle-agnostic (a frozen plan finishes even if the switch is later turned off) and hands off to Phase 6 on an all-complete ledger.
 
 The adaptive path adds one role — `adversarial-verifier`, a read-only, refute-by-default skeptic used in read-only verification fan-outs. It is never a review gate and touches zero repository files.
 
@@ -777,7 +777,7 @@ Avoid redundant validation runs: Phase 4 uses targeted affected checks, Phase 5 
 
 ## Hook policy
 
-Kaola-Workflow ships three Claude Code hooks via `install.sh`. They run
+Kaola-Workflow ships four Claude Code hooks via `install.sh`. They run
 silently in the background as background hygiene — they do not replace
 workflow validation, and `/workflow-next` should not re-run a check the
 hook already performed unless the phase requires broader validation or
@@ -792,17 +792,18 @@ evidence path.
 | `kaola-workflow:compact-context` | `SessionStart` (`compact`) | After Claude Code's `/compact`, injects a resume hint (active project, current phase, current step, next command, fallback authorization) read from the most recent `workflow-state.md` | `scripts/kaola-workflow-compact-context.js` |
 | `kaola-workflow:pre-commit-guard` | `PreToolUse` (`Bash`) | Blocks `git commit` invocations whose staged files span more than one `kaola-workflow/{project}/` folder (archive, `.roadmap/`, and `ROADMAP.md` are exempt) | `hooks/kaola-workflow-pre-commit.sh` |
 | `kaola-workflow:phantom-advisor` | `PostToolUse` (`Write\|Edit`) | Blocks writes/edits to files under `kaola-workflow/{project}/` that cite the advisor without a backing `.cache/advisor-*.md` evidence file in the same project | `hooks/kaola-workflow-phantom-advisor.sh` |
+| `kaola-workflow:subagent-dispatch-log` | `SubagentStart` (`*`) | Records each subagent spawn (`agent_type`, `agent_id`, `cwd`) as one JSON line to `kaola-workflow/{project}/.cache/dispatch-log.jsonl` for WARN-FIRST closure attestation (#277 M1). Fail-open; Claude-Code editions only | `hooks/kaola-workflow-subagent-dispatch-log.sh` |
 
 ### Installation and verification
 
 - `install.sh` copies hook files to `~/.claude/kaola-workflow/hooks/`, support
-  scripts to `~/.claude/kaola-workflow/scripts/`, and auto-merges the three
+  scripts to `~/.claude/kaola-workflow/scripts/`, and auto-merges the four
   managed hook entries into `~/.claude/settings.json`.
   The merge is idempotent and identifies managed entries by `id` prefix
   `kaola-workflow:` or a command path containing `kaola-workflow`. Prior
   settings are backed up under
   `~/.claude/backups/settings.json.kaola-workflow.<ts>.bak`.
-- Verify with `jq '.hooks' ~/.claude/settings.json` — expect the three ids
+- Verify with `jq '.hooks' ~/.claude/settings.json` — expect the four ids
   above, with scripts under `~/.claude/kaola-workflow/hooks/` or
   `~/.claude/kaola-workflow/scripts/`.
 - Model badges are enforced by slash-command dispatch, not by a status-line

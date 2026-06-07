@@ -38,12 +38,18 @@ here for the full contract.
   the Evidence column only. The barrier commit order is `.cache` evidence → Node
   Ledger row → `workflow-state.md` pointer LAST, so a crash mid-node is recoverable.
 - `.cache/` files under an active project hold supporting evidence referenced by
-  phase artifacts or summaries.
+  phase artifacts or summaries. `.cache/dispatch-log.jsonl` is written by the
+  `kaola-workflow-subagent-dispatch-log.sh` SubagentStart hook; each line is a
+  JSON object recording a subagent spawn (`ts`, `agent_type`, `agent_id`, `cwd`).
+  This file is used by `checkDispatchAttestations` at closure time for WARN-FIRST
+  subagent-seam attestation (see `docs/api.md` § Closure Contract).
 - `kaola-workflow/archive/{project}/` keeps completed, abandoned, or stale
   project folders after finalize or discard.
 - Closure of a completed linked issue is governed by explicit invariants and an
-  auditable receipt schema. See `docs/api.md` § Closure Contract for the seven
-  closure invariants, the receipt field/enum schema, and the flow mapping.
+  auditable receipt schema. See `docs/api.md` § Closure Contract for the nine
+  closure invariants (seven hard-gating + two WARN-FIRST detection invariants added in #277),
+  the receipt field/enum schema, and the flow mapping. The closure contract is
+  implemented in `scripts/kaola-workflow-closure-contract.js`.
 
 ## Workflow State Fields
 
@@ -52,7 +58,7 @@ The `workflow-state.md` file contains several key blocks:
 - `## Current Position` — Active phase, step, workflow path, runtime, and next command or skill. Key fields:
   - **workflow_path** — Workflow execution path (`full`, `fast`, or `adaptive`). Persisted from the `KAOLA_PATH` environment variable (set `KAOLA_PATH=fast` to request the fast path), or the `--workflow-path` startup flag when supplied; defaults to `full`. `claimProject` whitelists the persisted value: `{fast, full}` when the adaptive switch is OFF, `{fast, full, adaptive}` when ON — any other value (including `adaptive` under an OFF switch) is a **typed refusal**, never a silent downgrade.
   - **runtime** — The runtime that claimed the folder (`claude` or `codex`). Persisted from the `--runtime` startup flag; defaults to `claude`.
-- `## Sink` — Issue number, sink mode (merge or pr), branch name, and worktree path
+- `## Sink` — Issue number, sink mode (merge or pr), branch name, worktree path, and `run_posture` (`worktree` or `in-place`). `run_posture` is derived from the actual worktree resolution at startup via `deriveRunPosture(worktreePath)` in `kaola-workflow-claim.js`; it is never inherited from an environment variable. Adaptive runs always provision a worktree, so `run_posture: worktree` is the normal adaptive value.
 - `## Lease` — (Legacy, deprecated) Coordination metadata; preserved for backward compatibility
 - `delegation_policy:` — Delegation mode for Codex workflows. Defaults to
   `delegate`, established without prompting the user; `local-authorized` is an

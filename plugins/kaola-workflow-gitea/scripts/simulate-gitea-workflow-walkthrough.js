@@ -328,6 +328,8 @@ function testGiteaAdaptive() {
     const claimedState = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'issue-902', 'workflow-state.md'), 'utf8');
     assert.ok(/workflow_path: adaptive/.test(claimedState) && /next_command: \/kaola-workflow-plan-run issue-902/.test(claimedState),
       'gitea: adaptive claim state must route to plan-run');
+    assert.ok(/^run_posture: (worktree|in-place)$/m.test(claimedState),
+      'M4 (#277): gitea adaptive claim state must contain run_posture: worktree or in-place');
 
     const pdir = path.join(tmp, 'kaola-workflow', 'issue-903');
     fs.mkdirSync(pdir, { recursive: true });
@@ -509,6 +511,42 @@ function testGiteaAdaptive() {
     const perInst = mkL(['| a | tdd-guide | — | aaa/x.js | 1 | fanout(impl) |', '| b | tdd-guide | — | bbb/y.js | 1 | fanout(impl) |', '| rv | code-reviewer | a,b | — | 1 | sequence |', '| done | finalize | rv | — | 1 | sequence |'], ['| a | complete |', '| b | complete |', '| done | complete |'], 'enhancement');
     assert.strictEqual(fv.barrierCheck(perInst, ['aaa/x.js', 'bbb/y.js'], { nodeId: 'a' }).result, 'refuse', 'gitea #239: per-node overflow into sibling lane must refuse');
     assert.strictEqual(fv.barrierCheck(perInst, ['aaa/x.js'], { nodeId: 'a' }).result, 'pass', 'gitea #239: per-node own-lane must pass');
+
+    // M2 (#277): warn-first attestation — finalize must emit closure_receipt with
+    // claim_planner_attested and finalize_contractor_attested; both 'missing' in offline test
+    // (no dispatch-log), but closure_invariants.ok must still be true (warn-first contract).
+    const m2dir = path.join(tmp, 'kaola-workflow', 'issue-970');
+    fs.mkdirSync(m2dir, { recursive: true });
+    fs.writeFileSync(path.join(m2dir, 'workflow-state.md'),
+      '## Project\nname: issue-970\nstatus: active\nissue_number: 970\n## Sink\nbranch: workflow/issue-970\nsink: pr\n');
+    const roadmapM2Dir = path.join(tmp, 'kaola-workflow', '.roadmap');
+    fs.mkdirSync(roadmapM2Dir, { recursive: true });
+    fs.writeFileSync(path.join(roadmapM2Dir, 'issue-970.md'),
+      'issue: #970\ntitle: t\nstatus: open\nworkflow_project: issue-970\nnext_step: ready\n');
+    const m2Result = JSON.parse(spawnNode(claimScript, ['finalize', '--project', 'issue-970'], tmp).stdout);
+    assert.strictEqual(m2Result.status, 'closed', 'M2 (#277): gitea finalize must return status:closed');
+    assert.ok(
+      m2Result.closure_receipt && 'claim_planner_attested' in m2Result.closure_receipt,
+      'M2 (#277): gitea closure_receipt must have claim_planner_attested field'
+    );
+    assert.ok(
+      m2Result.closure_receipt && 'finalize_contractor_attested' in m2Result.closure_receipt,
+      'M2 (#277): gitea closure_receipt must have finalize_contractor_attested field'
+    );
+    assert.ok(
+      m2Result.closure_receipt.claim_planner_attested === 'missing' ||
+      m2Result.closure_receipt.claim_planner_attested === 'attested',
+      'M2 (#277): gitea claim_planner_attested must be missing or attested, got ' + m2Result.closure_receipt.claim_planner_attested
+    );
+    assert.ok(
+      m2Result.closure_receipt.finalize_contractor_attested === 'missing' ||
+      m2Result.closure_receipt.finalize_contractor_attested === 'attested',
+      'M2 (#277): gitea finalize_contractor_attested must be missing or attested, got ' + m2Result.closure_receipt.finalize_contractor_attested
+    );
+    assert.ok(
+      m2Result.closure_invariants && m2Result.closure_invariants.ok === true,
+      'M2 (#277): gitea closure_invariants.ok must be true (warn-first: attestation miss is not a hard violation)'
+    );
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -528,8 +566,25 @@ function testGitea237DotPathExtraction() {
     'gitea #237: bare-word prose must NOT over-match into paths, got: ' + JSON.stringify([...prose]));
   console.log('testGitea237DotPathExtraction: PASSED');
 }
+// M1 (#277): dispatch-log hook must be installed in the gitea plugin hooks directory.
+function testGiteaDispatchHookExists() {
+  const hooksDir = path.join(root, 'plugins/kaola-workflow-gitea/hooks');
+  const dispatchLog = path.join(hooksDir, 'kaola-workflow-subagent-dispatch-log.sh');
+  assert.ok(fs.existsSync(dispatchLog), 'M1 (#277): gitea hooks/kaola-workflow-subagent-dispatch-log.sh must exist');
+  const hooksJson = path.join(hooksDir, 'hooks.json');
+  assert.ok(fs.existsSync(hooksJson), 'M1 (#277): gitea hooks/hooks.json must exist');
+  const hooks = JSON.parse(fs.readFileSync(hooksJson, 'utf8'));
+  const subagentHooks = (hooks.hooks && hooks.hooks.SubagentStart) || [];
+  assert.ok(
+    subagentHooks.some(e => e.id === 'kaola-workflow:subagent-dispatch-log'),
+    'M1 (#277): gitea hooks.json must have a SubagentStart entry with id: kaola-workflow:subagent-dispatch-log'
+  );
+  console.log('testGiteaDispatchHookExists: PASSED');
+}
+
 testGiteaAdaptive();
 testGitea237DotPathExtraction();
+testGiteaDispatchHookExists();
 
 run('test-gitea-forge-helpers.js');
 run('test-gitea-workflow-scripts.js');
