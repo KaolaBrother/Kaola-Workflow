@@ -236,16 +236,11 @@ plus an agent-tracked dry_streak (orchestrator counts no-change cycles; only LOO
 
 ## Repair routing (in-scope review findings — #279)
 
-A gate/skeptic role (`code-reviewer`, `security-reviewer`, `adversarial-verifier`) records its
-machine verdict AND, alongside it, zero or more **structured findings** in its `.cache/{node-id}.md`
-evidence — one finding per line, anchored at column 0 (fence-blind, exactly like `verdict:`):
-
-`finding: id=R1 scope=in_scope action=fix status=open severity=low fix_role=tdd-guide rationale=<short>`
-
-Closed vocabulary: `scope` ∈ {in_scope, out_of_scope, pre_existing, needs_user_decision}; `action` ∈
-{fix, follow_up, document, none}; `status` ∈ {open, resolved, deferred}; `fix_role` ∈ {tdd-guide,
-implementer, build-error-resolver, security, none}. `severity` governs urgency/escalation, NEVER
-whether the gate blocks — a LOW/MEDIUM in-scope fix still blocks.
+A gate/skeptic role (`code-reviewer`, `security-reviewer`, `adversarial-verifier`) emits its machine
+verdict AND zero or more **structured findings** into its `.cache/{node-id}.md` evidence, per the
+**Machine-Readable Findings** contract that now lives in each reviewer's own agent definition (the
+reviewer owns the emission format — the closed vocabulary and the column-0 `finding:` line shape are
+documented there). The orchestrator owns what happens next:
 
 `--verdict-check` (#251, hardened by #279) now FAILS a gate — even on `verdict: pass` /
 `findings_blocking: 0` — when any finding is `scope: in_scope, action: fix` whose `status` is not

@@ -126,3 +126,22 @@ fenced block in the actual `.cache` file is rejected and counts as a refute
 Note: a single skeptic refute does NOT unilaterally fail a majority quorum — the
 orchestrator applies strict majority (`refutes * 2 > total`). Emit the block at
 the very top of the `.cache/adversarial-verifier-{claim-id}.md` file.
+
+## Machine-Readable Findings (adaptive path)
+
+When your disproof surfaces a concrete in-scope defect that should be fixed (not merely a refute
+verdict), ALSO record it as a flat, column-0 line in the same per-instance `.cache` file, alongside
+the verdict block. The block below is fenced only so it renders here:
+
+```
+finding: id=R1 scope=in_scope action=fix status=open severity=medium fix_role=tdd-guide rationale=<short>
+```
+
+Closed vocabulary: `scope` ∈ {in_scope, out_of_scope, pre_existing, needs_user_decision}; `action` ∈
+{fix, follow_up, document, none}; `status` ∈ {open, resolved, deferred}; `fix_role` ∈ {tdd-guide,
+implementer, build-error-resolver, security, none}. An unresolved `scope=in_scope action=fix
+status=open` finding fails the mechanical `--verdict-check` gate even when `verdict: pass`, routing
+the named `fix_role` into a bounded repair cycle before finalize; record anything outside the change
+as `out_of_scope` / `pre_existing` / `needs_user_decision` so it is explicit but non-blocking.
+Severity never decides whether the gate blocks. Parsed by `parseNodeFindings` /
+`unresolvedInScopeFixes` in `kaola-workflow-adaptive-schema.js`.
