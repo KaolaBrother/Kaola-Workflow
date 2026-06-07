@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [5.7.0] — 2026-06-08
+
 ### Changed
 
 - **agents: forked `code-reviewer` + `security-reviewer` from vendored into local agents and moved the #279 findings-emission contract into the reviewer bodies (#279 follow-up).** The #279 machine-readable findings contract was originally documented only in the `/kaola-workflow-plan-run` dispatch prose, on the assumption that the vendored `code-reviewer`/`security-reviewer` agents could not be edited. They can: `validate-vendored-agents.js` only asserts the provenance *lines exist* (it never recomputes the content hash), and the vendored reviewers were already locally extended by design (the `Prompt Defense Baseline` section; the #197 `doc-updater` model override). This relocates the emission contract to its correct home — the reviewer's own persona, where the `verdict:` contract already lived — and makes the project own these agents outright.
