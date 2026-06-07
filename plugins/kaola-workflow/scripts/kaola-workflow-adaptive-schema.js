@@ -135,14 +135,18 @@ function parseNodeSelector(cacheText) {
 const FINDING_SCOPE_VOCABULARY = Object.freeze(['in_scope', 'out_of_scope', 'pre_existing', 'needs_user_decision']);
 const FINDING_ACTION_VOCABULARY = Object.freeze(['fix', 'follow_up', 'document', 'none']);
 const FINDING_STATUS_VOCABULARY = Object.freeze(['open', 'resolved', 'deferred']);
+// Gate-relevant finding keys whose VALUES are lowercased during parsing (mirrors parseNodeVerdict's
+// value-lowercasing discipline). Non-gate keys (id, severity, raw, unknowns) keep original case.
+const GATE_RELEVANT_FINDING_KEYS = Object.freeze(new Set(['scope', 'action', 'status', 'fix_role']));
 
 // PURE (no fs): parse a gate/skeptic role's `.cache/{node-id}.md` for its structured findings. Same
 // discipline as parseNodeVerdict: native multiline regex ONLY (no classifier import — cross-edition
 // byte-identity). FENCE-BLIND BY ANCHOR: a finding line is recognised ONLY at column 0 (`^finding:`,
 // no leading whitespace). FLAT, one finding per line, space/tab-separated `key=value` pairs:
 //   finding: id=R1 scope=in_scope action=fix status=open severity=low fix_role=tdd-guide
-// Keys are lowercased; first value wins on a duplicate key; a token without `=` is ignored; a missing
-// key stays undefined. ABSENT findings block ⇒ []. Returns an array of
+// Keys are lowercased; gate-relevant values (scope, action, status, fix_role) are also lowercased
+// (mirrors parseNodeVerdict's value-lowercasing discipline); first value wins on a duplicate key;
+// a token without `=` is ignored; a missing key stays undefined. ABSENT findings block ⇒ []. Returns an array of
 // { raw, id?, scope?, action?, status?, severity?, fix_role? } (only `raw` is guaranteed).
 function parseNodeFindings(cacheText) {
   const text = String(cacheText || '');
@@ -155,7 +159,7 @@ function parseNodeFindings(cacheText) {
       const eq = tok.indexOf('=');
       if (eq <= 0) continue;
       const key = tok.slice(0, eq).toLowerCase();
-      if (finding[key] === undefined) finding[key] = tok.slice(eq + 1);
+      if (finding[key] === undefined) finding[key] = GATE_RELEVANT_FINDING_KEYS.has(key) ? tok.slice(eq + 1).toLowerCase() : tok.slice(eq + 1);
     }
     out.push(finding);
   }

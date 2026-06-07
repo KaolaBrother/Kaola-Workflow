@@ -7117,6 +7117,10 @@ function testAdaptiveVerdictCheck() {
     assert(schema.unresolvedInScopeFixes(schema.parseNodeFindings('finding: id=R6 scope=in_scope action=fix status=open severity=low\n')).length === 1,
       'unresolvedInScopeFixes: low severity still blocks');
 
+    // #289 fail-open fix: mixed-case gate-relevant values (scope/action/status) must be normalised
+    assert(schema.unresolvedInScopeFixes(schema.parseNodeFindings('finding: id=R7 scope=In_Scope action=Fix status=Open\n')).length === 1,
+      'unresolvedInScopeFixes: mixed-case scope/action/status still blocks (#289 fail-open fix)');
+
     // verifyVerdictBlock pure (AC1): verdict:pass + unresolved in-scope fix -> ok:false
     r = planValidator.verifyVerdictBlock(
       mkVerdictPlan(baseNodes, allComplete),
