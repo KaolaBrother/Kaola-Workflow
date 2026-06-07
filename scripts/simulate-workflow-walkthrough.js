@@ -15,6 +15,7 @@ const sinkPrScript = path.join(repoRoot, 'scripts', 'kaola-workflow-sink-pr.js')
 const activeFoldersScript = path.join(repoRoot, 'scripts', 'kaola-workflow-active-folders.js');
 const closureAuditScript = path.join(repoRoot, 'scripts', 'kaola-workflow-closure-audit.js');
 const planValidatorScript = path.join(repoRoot, 'scripts', 'kaola-workflow-plan-validator.js'); // issue #227
+const nextActionScript = path.join(repoRoot, 'scripts', 'kaola-workflow-next-action.js'); // issue #267
 const handoffScript = path.join(repoRoot, 'scripts', 'kaola-workflow-adaptive-handoff.js'); // issue #255
 const hookScript = path.join(repoRoot, 'hooks', 'kaola-workflow-pre-commit.sh');
 const phantomAdvisorHook = path.join(repoRoot, 'hooks', 'kaola-workflow-phantom-advisor.sh');
@@ -7497,6 +7498,279 @@ function testAdaptivePatternLibrary() {
 }
 
 // ---------------------------------------------------------------------------
+// issue #267 — additive select() composition + runtime test coverage
+// G1: select() composed with other shapes (validator fixtures)
+// G2: multi-group select (validator fixture)
+// G3: n/a propagation via next-action (runtime, unfrozen plan)
+// G4: resume-check with select groups (runtime, frozen plan)
+// G5: selector_source also a fanout member (probe-then-pin)
+// ---------------------------------------------------------------------------
+
+// Helper: write a 7-column selector plan file and run the validator.
+function validateSelectFixture(planPath, nodesRows7col, labels) {
+  const meta = labels !== undefined ? ['## Meta', 'labels: ' + labels.join(', '), ''] : [];
+  fs.writeFileSync(planPath, ['# Plan', ''].concat(meta).concat([
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape | selector_source |',
+    '|---|---|---|---|---|---|---|',
+  ]).concat(nodesRows7col).concat(['']).join('\n'));
+  return JSON.parse(runNode(planValidatorScript, [planPath, '--json'], path.dirname(planPath)).stdout);
+}
+
+// G1/G2 validator-fixture tests (appended to the pattern library).
+function testAdaptiveSelectComposition() {
+  const tmp = adaptiveTmp('select-composition');
+  try {
+    // G1a — select+fanout: write-role fanout legs merge at a read-only synth (planner)
+    // classifier, which becomes the selector_source for a downstream select() group.
+    // The outer gate must post-dominate ALL arms AND the fanout legs transitively.
+    {
+      const planPath = path.join(tmp, 'g1a.md');
+      const v = validateSelectFixture(planPath, [
+        '| explore | code-explorer | — | — | 1 | sequence | — |',
+        '| impl-a | tdd-guide | explore | api/a.js | 1 | fanout(impl) | — |',
+        '| impl-b | tdd-guide | explore | cli/b.js | 1 | fanout(impl) | — |',
+        '| synth | planner | impl-a,impl-b | — | 1 | sequence | — |',
+        '| arm-fix | implementer | synth | fix/x.js | 1 | select(fix) | synth |',
+        '| arm-refactor | implementer | synth | refactor/y.js | 1 | select(fix) | synth |',
+        '| gate | code-reviewer | arm-fix,arm-refactor | — | 1 | sequence | — |',
+        '| done | finalize | gate | — | 1 | sequence | — |',
+      ], ['enhancement']);
+      assert(v.result === 'in-grammar',
+        'G1a select+fanout: write-role fanout -> read-only synth classifier -> select() must be in-grammar, got: ' + JSON.stringify(v));
+    }
+
+    // G1b — select+adversarial-verify: adversarial-verifier read-only fan-out upstream
+    // of a select() group; the tally/synth node the verifiers feed is the selector_source.
+    {
+      const planPath = path.join(tmp, 'g1b.md');
+      const v = validateSelectFixture(planPath, [
+        '| explore | code-explorer | — | — | 1 | sequence | — |',
+        '| impl | tdd-guide | explore | lib/foo.js | 1 | sequence | — |',
+        '| review | code-reviewer | impl | — | 1 | sequence | — |',
+        '| sk1 | adversarial-verifier | review | — | 1 | fanout(verify) | — |',
+        '| sk2 | adversarial-verifier | review | — | 1 | fanout(verify) | — |',
+        '| tally | planner | sk1,sk2 | — | 1 | sequence | — |',
+        '| arm-fix | implementer | tally | fix/x.js | 1 | select(repair) | tally |',
+        '| arm-ok | implementer | tally | docs/ok.md | 1 | select(repair) | tally |',
+        '| gate2 | code-reviewer | arm-fix,arm-ok | — | 1 | sequence | — |',
+        '| done | finalize | gate2 | — | 1 | sequence | — |',
+      ], ['enhancement']);
+      assert(v.result === 'in-grammar',
+        'G1b select+adversarial-verify: adversarial fan-out upstream of select() must be in-grammar, got: ' + JSON.stringify(v));
+    }
+
+    // G1c — select+loop: a loop(cap) node and a select() group co-existing in the same
+    // plan as non-overlapping subgraphs.
+    {
+      const planPath = path.join(tmp, 'g1c.md');
+      const v = validateSelectFixture(planPath, [
+        '| explore | code-explorer | — | — | 1 | sequence | — |',
+        '| fix | tdd-guide | explore | lib/foo.js | 1 | loop(3) | — |',
+        '| classify | code-explorer | fix | — | 1 | sequence | — |',
+        '| arm-a | implementer | classify | exporter/csv.js | 1 | select(path) | classify |',
+        '| arm-b | implementer | classify | renderer/html.js | 1 | select(path) | classify |',
+        '| review | code-reviewer | fix,arm-a,arm-b | — | 1 | sequence | — |',
+        '| done | finalize | review | — | 1 | sequence | — |',
+      ], ['enhancement']);
+      assert(v.result === 'in-grammar',
+        'G1c select+loop: loop(cap) + select() as non-overlapping subgraphs must be in-grammar, got: ' + JSON.stringify(v));
+    }
+
+    // G1d VALID — gate post-dominates ALL arms: review depends_on every arm → in-grammar.
+    {
+      const planPath = path.join(tmp, 'g1d-valid.md');
+      const v = validateSelectFixture(planPath, [
+        '| classify | code-explorer | — | — | 1 | sequence | — |',
+        '| arm-a | tdd-guide | classify | exporter/csv.js | 1 | select(fix) | classify |',
+        '| arm-b | tdd-guide | classify | renderer/html.js | 1 | select(fix) | classify |',
+        '| review | code-reviewer | arm-a,arm-b | — | 1 | sequence | — |',
+        '| done | finalize | review | — | 1 | sequence | — |',
+      ], ['enhancement']);
+      assert(v.result === 'in-grammar',
+        'G1d VALID: gate depending on ALL arms must be in-grammar, got: ' + JSON.stringify(v));
+    }
+
+    // G1d NEGATIVE — gate post-dominates only SOME arms (arm-a but not arm-b via done):
+    // the code-reviewer does not post-dominate arm-b → typed refusal with post-dominance message.
+    {
+      const planPath = path.join(tmp, 'g1d-neg.md');
+      const r = validateSelectFixture(planPath, [
+        '| classify | code-explorer | — | — | 1 | sequence | — |',
+        '| arm-a | tdd-guide | classify | exporter/csv.js | 1 | select(fix) | classify |',
+        '| arm-b | tdd-guide | classify | renderer/html.js | 1 | select(fix) | classify |',
+        '| review | code-reviewer | arm-a | — | 1 | sequence | — |',
+        '| done | finalize | review,arm-b | — | 1 | sequence | — |',
+      ], ['enhancement']);
+      assert(r.result === 'refuse',
+        'G1d NEGATIVE: gate missing arm-b must refuse, got: ' + JSON.stringify(r));
+      assert(Array.isArray(r.errors) && r.errors.some(e => /does not post-dominate/.test(e)),
+        'G1d NEGATIVE: refusal must cite post-dominance failure (not an unrelated error), got: ' + JSON.stringify(r));
+    }
+
+    // G2 — two INDEPENDENT select() groups with DIFFERENT group names (select(fix) and
+    // select(theme)) and DIFFERENT classifier nodes, non-overlapping write sets, both gated.
+    // (Same-name-different-classifier is already covered by #271 AC#1 refusal test.)
+    {
+      const planPath = path.join(tmp, 'g2.md');
+      const v = validateSelectFixture(planPath, [
+        '| classify1 | code-explorer | — | — | 1 | sequence | — |',
+        '| arm-a | implementer | classify1 | exporter/csv.js | 1 | select(fix) | classify1 |',
+        '| arm-b | implementer | classify1 | renderer/html.js | 1 | select(fix) | classify1 |',
+        '| classify2 | code-explorer | — | — | 1 | sequence | — |',
+        '| arm-c | tdd-guide | classify2 | api/theme.js | 1 | select(theme) | classify2 |',
+        '| arm-d | tdd-guide | classify2 | cli/theme.js | 1 | select(theme) | classify2 |',
+        '| review | code-reviewer | arm-a,arm-b,arm-c,arm-d | — | 1 | sequence | — |',
+        '| done | finalize | review | — | 1 | sequence | — |',
+      ], ['enhancement']);
+      assert(v.result === 'in-grammar',
+        'G2: two independent select() groups with distinct names and classifiers must be in-grammar, got: ' + JSON.stringify(v));
+    }
+
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptiveSelectComposition: PASSED');
+}
+
+// G3 — n/a propagation via next-action (runtime, UNFROZEN plan).
+// next-action does no plan_hash check so the plan need not be frozen.
+// Build a select plan with classifier=complete, one arm=n/a, other arm=pending.
+// Assert: the n/a arm is ABSENT from readySet; the pending arm IS present.
+function testAdaptiveSelectNaPropagation() {
+  const tmp = adaptiveTmp('select-na-propagation');
+  try {
+    const planPath = path.join(tmp, 'na-plan.md');
+    fs.writeFileSync(planPath, [
+      '# Plan', '',
+      '## Meta', 'labels: enhancement', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape | selector_source |',
+      '|---|---|---|---|---|---|---|',
+      '| classify | code-explorer | — | — | 1 | sequence | — |',
+      '| arm-a | tdd-guide | classify | exporter/csv.js | 1 | select(fix) | classify |',
+      '| arm-b | tdd-guide | classify | renderer/html.js | 1 | select(fix) | classify |',
+      '| review | code-reviewer | arm-a,arm-b | — | 1 | sequence | — |',
+      '| done | finalize | review | — | 1 | sequence | — |',
+      '',
+      '## Node Ledger', '',
+      '| id | status |',
+      '|---|---|',
+      '| classify | complete |',
+      '| arm-a | n/a |',
+      '| arm-b | pending |',
+      '| review | pending |',
+      '| done | pending |',
+      '',
+    ].join('\n'));
+
+    const r = runNode(nextActionScript, [planPath, '--json'], tmp);
+    assert(r.status === 0, 'G3: next-action must exit 0, got ' + r.status + ' stderr: ' + r.stderr);
+    const json = JSON.parse(r.stdout);
+    assert(json.result === 'ok',
+      'G3: next-action must return result=ok, got: ' + JSON.stringify(json));
+    assert(!json.readySet.some(n => n.id === 'arm-a'),
+      'G3: n/a arm (arm-a) must be ABSENT from readySet, got: ' + JSON.stringify(json.readySet));
+    assert(json.readySet.some(n => n.id === 'arm-b'),
+      'G3: pending arm (arm-b) must be PRESENT in readySet, got: ' + JSON.stringify(json.readySet));
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptiveSelectNaPropagation: PASSED');
+}
+
+// G4 — resume-check with select groups (runtime, FROZEN plan).
+// Confirms that ## Node Ledger is OUTSIDE the plan_hash region (hash covers ## Meta +
+// ## Nodes only, per computePlanHash lines 488-493 of kaola-workflow-plan-validator.js).
+// freeze-then-advance-ledger keeps --resume-check green because the hash is unchanged.
+function testAdaptiveSelectResumeCheck() {
+  const tmp = adaptiveTmp('select-resume');
+  try {
+    const proj = 'issue-g4-sim';
+    // plantFrozenPlan creates kaola-workflow/{proj}/workflow-plan.md and stamps plan_hash.
+    // The planText includes all-pending ledger rows — plantFrozenPlan freezes it as written.
+    const planText = [
+      '# Workflow Plan — issue #g4-sim', '',
+      '## Meta', 'labels: enhancement', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape | selector_source |',
+      '|---|---|---|---|---|---|---|',
+      '| classify | code-explorer | — | — | 1 | sequence | — |',
+      '| arm-a | tdd-guide | classify | exporter/csv.js | 1 | select(fix) | classify |',
+      '| arm-b | tdd-guide | classify | renderer/html.js | 1 | select(fix) | classify |',
+      '| review | code-reviewer | arm-a,arm-b | — | 1 | sequence | — |',
+      '| done | finalize | review | — | 1 | sequence | — |',
+      '',
+      '## Node Ledger', '',
+      '| id | status |',
+      '|---|---|',
+      '| classify | pending |',
+      '| arm-a | pending |',
+      '| arm-b | pending |',
+      '| review | pending |',
+      '| done | pending |',
+      '',
+    ].join('\n');
+    const planPath = plantFrozenPlan(tmp, proj, planText);
+
+    // Advance the ledger to a partial select state (simulate mid-run: classify done, arm-a n/a).
+    // The ## Nodes section is untouched, so the plan_hash stays valid.
+    const frozen = fs.readFileSync(planPath, 'utf8');
+    const mutated = frozen
+      .replace('| classify | pending |', '| classify | complete |')
+      .replace('| arm-a | pending |', '| arm-a | n/a |');
+    fs.writeFileSync(planPath, mutated);
+
+    // --resume-check must pass: hash covers only ## Meta + ## Nodes, not ## Node Ledger.
+    const rc = runNode(planValidatorScript, [planPath, '--resume-check', '--json'], tmp);
+    assert(rc.status === 0, 'G4: --resume-check must exit 0 after ledger mutation, got ' + rc.status + ' stderr: ' + rc.stderr);
+    const rcJson = JSON.parse(rc.stdout);
+    assert(rcJson.ok === true,
+      'G4: --resume-check must return ok=true (ledger excluded from hash), got: ' + JSON.stringify(rcJson));
+
+    // next-action against the frozen+mutated plan: arm-b (pending) must be ready; arm-a (n/a) absent.
+    const na = runNode(nextActionScript, [planPath, '--json'], tmp);
+    assert(na.status === 0, 'G4: next-action must exit 0, got ' + na.status + ' stderr: ' + na.stderr);
+    const naJson = JSON.parse(na.stdout);
+    assert(naJson.result === 'ok',
+      'G4: next-action must return result=ok, got: ' + JSON.stringify(naJson));
+    assert(naJson.readySet.some(n => n.id === 'arm-b'),
+      'G4: pending arm (arm-b) must be in readySet after ledger advance, got: ' + JSON.stringify(naJson.readySet));
+    assert(!naJson.readySet.some(n => n.id === 'arm-a'),
+      'G4: n/a arm (arm-a) must be ABSENT from readySet after ledger advance, got: ' + JSON.stringify(naJson.readySet));
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptiveSelectResumeCheck: PASSED');
+}
+
+// G5 — selector_source also a fanout member (probe-then-pin).
+// Probed empirically: a read-only code-explorer node that is both a fanout(sweep) leg
+// AND the selector_source for a select() group resolves as in-grammar (exit 0).
+// The validator has no rule forbidding a read-only node from playing both roles.
+function testAdaptiveSelectSelectorSourceFanoutMember() {
+  const tmp = adaptiveTmp('select-selector-fanout');
+  try {
+    const planPath = path.join(tmp, 'g5.md');
+    // classifier is both a fanout(sweep) member AND the selector_source for select(fix).
+    fs.writeFileSync(planPath, [
+      '# Plan', '',
+      '## Meta', 'labels: enhancement', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape | selector_source |',
+      '|---|---|---|---|---|---|---|',
+      '| sweep1 | code-explorer | — | — | 1 | fanout(sweep) | — |',
+      '| classifier | code-explorer | sweep1 | — | 1 | fanout(sweep) | — |',
+      '| arm-a | tdd-guide | classifier | exporter/csv.js | 1 | select(fix) | classifier |',
+      '| arm-b | tdd-guide | classifier | renderer/html.js | 1 | select(fix) | classifier |',
+      '| review | code-reviewer | arm-a,arm-b | — | 1 | sequence | — |',
+      '| done | finalize | review | — | 1 | sequence | — |',
+      '',
+    ].join('\n'));
+    const v = JSON.parse(runNode(planValidatorScript, [planPath, '--json'], tmp).stdout);
+    // Empirically observed result: in-grammar. The validator permits a read-only node to
+    // simultaneously be a fanout leg and a selector_source.
+    assert(v.result === 'in-grammar',
+      'G5: selector_source that is also a fanout member (read-only) must be in-grammar, got: ' + JSON.stringify(v));
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptiveSelectSelectorSourceFanoutMember: PASSED');
+}
+
+// ---------------------------------------------------------------------------
 // issue #255 — adaptive handoff integration tests
 // ---------------------------------------------------------------------------
 
@@ -8474,6 +8748,11 @@ async function main() {
     testAdaptiveSyncGroupGap();   // #274
     testAdaptiveVerdictCheck();
     testAdaptivePatternLibrary();
+    // issue #267 — select() composition + runtime coverage
+    testAdaptiveSelectComposition();
+    testAdaptiveSelectNaPropagation();
+    testAdaptiveSelectResumeCheck();
+    testAdaptiveSelectSelectorSourceFanoutMember();
     // issue #255 — adaptive handoff integration tests
     testAdaptiveHandoffInGrammarReady();
     testAdaptiveHandoffAskFreezesNotApproval();
