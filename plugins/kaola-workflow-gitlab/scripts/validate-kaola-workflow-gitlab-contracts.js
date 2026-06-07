@@ -512,4 +512,15 @@ assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-repair-state.js', 'r
 assertNotIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-repair-state.js', 'enable_adaptive');
 assertNotIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-plan-validator.js', 'enable_adaptive');
 
+// issue #290 / #288: pin the machine-readable findings-emission contract presence in all
+// reviewer agent bodies (GitLab edition — .toml bodies). Removing the emission section from
+// any of these files must fail npm test so a re-vendor or refactor cannot silently drop it.
+for (const reviewerBody of [
+  pluginRoot + '/agents/code-reviewer.toml',
+  pluginRoot + '/agents/security-reviewer.toml',
+  pluginRoot + '/agents/adversarial-verifier.toml'
+]) {
+  assertIncludes(reviewerBody, 'finding: id=');
+}
+
 console.log('Kaola-Workflow GitLab contract validation passed');

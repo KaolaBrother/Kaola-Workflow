@@ -605,4 +605,17 @@ assertNotIncludes('scripts/kaola-workflow-plan-validator.js', 'KAOLA_ENABLE_ADAP
 // phase6 adaptive prerequisite
 assertIncludes('commands/kaola-workflow-phase6.md', 'workflow_path: adaptive');
 
+// issue #290 / #288: pin the machine-readable findings-emission contract presence in all
+// reviewer agent bodies (CLAUDE edition — .md bodies). Removing the emission section from
+// any of these files must fail npm test so a re-vendor or refactor cannot silently drop it.
+for (const reviewerBody of [
+  'agents/code-reviewer.md',
+  'agents/security-reviewer.md',
+  'agents/adversarial-verifier.md',
+  'agents/profiles/higher/code-reviewer.md',
+  'agents/profiles/higher/security-reviewer.md'
+]) {
+  assertIncludes(reviewerBody, 'finding: id=');
+}
+
 console.log('Workflow contract validation passed');
