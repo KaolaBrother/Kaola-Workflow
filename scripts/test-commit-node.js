@@ -6,6 +6,7 @@
 // Most cases test the pure combineResults core — zero git/fs.
 
 const { combineResults, shellValidator } = require('./kaola-workflow-commit-node');
+const planValidator = require('./kaola-workflow-plan-validator');
 
 const fs = require('fs');
 const os = require('os');
@@ -161,6 +162,50 @@ function assert(condition, message) {
     }
   } finally {
     try { fs.rmSync(stubPath); } catch (_) {}
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Test 6: barrierCheck foreign-archive carveout (pure-fn, no git repo needed)
+// AC3: --barrier-check must REFUSE a foreign project's archive band while
+// still exempting the finalized project's own archive band.
+// ---------------------------------------------------------------------------
+{
+  // Minimal frozen plan with one tdd-guide node + finalize sink (parseable ## Nodes).
+  const minimalPlan = [
+    '# Workflow Plan — issue #261', '', '## Meta', 'labels: refactor', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+    '| impl | tdd-guide | — | scripts/kaola-workflow-plan-validator.js | 1 | sequence |',
+    '| done | finalize | impl | — | 1 | sequence |', '',
+    '## Node Ledger', '', '| id | status |', '|---|---|',
+    '| impl | complete |', '| done | complete |', '',
+  ].join('\n');
+
+  // 6a: foreign archive REFUSED — a write to another project's archive band must be refused.
+  {
+    const r = planValidator.barrierCheck(minimalPlan, ['kaola-workflow/archive/issue-999/x.md'], { project: 'issue-261' });
+    assert(r.result === 'refuse', 'test6a: foreign archive write must be refused (RED→GREEN AC3)');
+    assert(r.errors && r.errors.join(' ').toLowerCase().includes('foreign'), 'test6a: error message must mention FOREIGN');
+  }
+
+  // 6b: own archive PASSES — a write to the finalized project's own archive band must pass.
+  {
+    const r = planValidator.barrierCheck(minimalPlan, ['kaola-workflow/archive/issue-261/x.md'], { project: 'issue-261' });
+    assert(r.result === 'pass', 'test6b: own archive write must pass');
+  }
+
+  // 6c: suffix-tolerant — .archived-<timestamp> suffix on the own archive dir must still pass.
+  {
+    const r = planValidator.barrierCheck(minimalPlan, ['kaola-workflow/archive/issue-261.archived-2026-01-01T00-00-00/x.md'], { project: 'issue-261' });
+    assert(r.result === 'pass', 'test6c: own archive with .archived- suffix must pass');
+  }
+
+  // 6d: backward-compat — no project arg, non-archive workflow artifact must still pass.
+  {
+    const r = planValidator.barrierCheck(minimalPlan, ['kaola-workflow/p/workflow-plan.md'], {});
+    assert(r.result === 'pass', 'test6d: backward-compat — non-archive workflow artifact with no project passes');
   }
 }
 

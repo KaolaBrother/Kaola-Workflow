@@ -444,7 +444,15 @@ function barrierCheck(content, actualPaths, opts) {
   if (ownNode) { for (const p of ownNode.writeSet) declared.add(p); }
   else { for (const n of nodes) for (const p of n.writeSet) declared.add(p); }
   const real = (actualPaths || []).map(p => String(p || '').trim()).filter(Boolean);
-  const isWorkflowArtifact = p => /^kaola-workflow\//.test(p);
+  const archiveProj = opts.project || null;
+  const foreignArchive = p => {
+    const m = /^kaola-workflow\/archive\/([^/]+)\//.exec(p);
+    if (!m) return false;
+    if (!archiveProj) return true;
+    const dir = m[1];
+    return dir !== archiveProj && !dir.startsWith(archiveProj + '.archived-');
+  };
+  const isWorkflowArtifact = p => /^kaola-workflow\//.test(p) && !foreignArchive(p);
   const isTestPath = p => /(^|\/)(tests?|__tests__|spec)\//i.test(p) || /\.(test|spec)\.[A-Za-z0-9]+$/i.test(p);
   // A "production" actual write is one that is NOT docs / tests / a workflow artifact — those bands
   // never need the code/security gate. They are exempt from BOTH the sensitivity teeth and the
@@ -452,7 +460,12 @@ function barrierCheck(content, actualPaths, opts) {
   // whose NAME matched a Phase-5 pattern — e.g. `test/login.test.js`, `docs/auth.md` — was wrongly
   // refused at the merge gate, with no in-grammar escape).
   const isExempt = p => isWorkflowArtifact(p) || isDocsPath(p) || isTestPath(p);
-  const production = real.filter(p => !isExempt(p));
+  const production = real.filter(p => !isExempt(p) && !foreignArchive(p));
+  // (AC3) foreign-archive refusal: a write to another project's archive band must be blocked.
+  const foreignArchiveHits = real.filter(foreignArchive);
+  if (foreignArchiveHits.length) {
+    errors.push(`actual writes touch a FOREIGN project's archive band (${foreignArchiveHits.join(', ')}) — a stray archive/<other>/ must not be swept onto this branch (finalized project: ${archiveProj || 'unknown'})`);
+  }
   // (a) sensitivity teeth (H1): a sensitive PRODUCTION write on a plan with no security-reviewer node.
   const hasSecReviewer = nodes.some(n => n.role === 'security-reviewer');
   const sensitiveHits = production.filter(p => SENSITIVE_PATTERNS.some(re => re.test(p)));
@@ -1056,7 +1069,7 @@ function main() {
       const diffOut = execFileSync('git', ['-C', root, 'diff', '--name-only', mergeBase], { encoding: 'utf8' });
       actualPaths = diffOut.split('\n').map(s => s.trim()).filter(Boolean);
     }
-    const r = barrierCheck(content, actualPaths, { nodeId: nodeId || undefined, root });
+    const r = barrierCheck(content, actualPaths, { nodeId: nodeId || undefined, root, project: projTag });
     process.stdout.write((json ? JSON.stringify(r) : (r.result === 'pass' ? 'barrier ok' : 'typed refusal: ' + r.errors.join('; '))) + '\n');
     if (r.result !== 'pass') process.exitCode = 1;
     return;

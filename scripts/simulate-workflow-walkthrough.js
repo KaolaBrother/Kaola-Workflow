@@ -3276,6 +3276,74 @@ function testFinalizeFromLinkedWorktreeCleansMainCopy() {
   }
 }
 
+function testFinalizeNarrowStagingExcludesForeignArchive() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-finalize-narrow-stage-')));
+  const kwRoot = tmp + '.kw';
+  try {
+    initGitRepo(tmp);
+    // Plant active folder and roadmap issue in main worktree, then commit
+    plantActiveFolder(tmp, 'issue-701', 701, null);
+    plantRoadmapIssue(tmp, 701, '');
+    spawnSync('git', ['-C', tmp, 'add', '-A'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'plant'], { encoding: 'utf8' });
+    // Create linked worktree on a feature branch
+    const wtPath = path.join(kwRoot, 'issue-701');
+    fs.mkdirSync(kwRoot, { recursive: true });
+    spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-701', '--', wtPath, 'HEAD'], {
+      cwd: tmp,
+      encoding: 'utf8'
+    });
+    // Mirror active folder in linked worktree
+    plantActiveFolder(wtPath, 'issue-701', 701, null);
+    // Plant a stray UNTRACKED foreign archive dir+file before finalize
+    const foreignDir = path.join(wtPath, 'kaola-workflow', 'archive', 'issue-999');
+    fs.mkdirSync(foreignDir, { recursive: true });
+    fs.writeFileSync(path.join(foreignDir, 'x.md'), 'stray foreign archive\n');
+    // Run finalize from the linked worktree with --keep-worktree
+    const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', 'issue-701', '--keep-worktree'], {
+      cwd: wtPath,
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' },
+      encoding: 'utf8'
+    });
+    assert(
+      result.status === 0,
+      'finalize narrow staging: should exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr
+    );
+    // --keep-worktree causes an archive commit on the feature branch; check what was committed
+    // Use --no-renames so renamed files show as both delete (source) and add (dest) paths
+    const showResult = spawnSync('git', ['show', 'HEAD', '--name-only', '--no-renames'], {
+      cwd: wtPath,
+      encoding: 'utf8'
+    });
+    const showOutput = showResult.stdout;
+    // Must include finalized project's archive (dest of rename)
+    assert(
+      /kaola-workflow\/archive\/issue-701\//.test(showOutput),
+      'committed HEAD must include issue-701 archive files\ngit show output:\n' + showOutput
+    );
+    // Must include ROADMAP.md regeneration
+    assert(
+      /kaola-workflow\/ROADMAP\.md/.test(showOutput),
+      'committed HEAD must include ROADMAP.md\ngit show output:\n' + showOutput
+    );
+    // Must include live folder path (source of rename, appears as deleted in --no-renames)
+    assert(
+      /kaola-workflow\/issue-701\//.test(showOutput),
+      'committed HEAD must include kaola-workflow/issue-701/ live folder path\ngit show output:\n' + showOutput
+    );
+    // Must NOT include the foreign archive (issue-999)
+    assert(
+      !/kaola-workflow\/archive\/issue-999\//.test(showOutput),
+      'committed HEAD must NOT include foreign archive kaola-workflow/archive/issue-999/\ngit show output:\n' + showOutput
+    );
+  } finally {
+    try { spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', kwRoot + '/issue-701'], { encoding: 'utf8' }); } catch (_) {}
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(kwRoot, { recursive: true, force: true });
+  }
+  console.log('testFinalizeNarrowStagingExcludesForeignArchive: PASSED');
+}
+
 function testFinalizeFromMainRootNoSpuriousRemoval() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-finalize-main-noop-')));
   try {
@@ -8714,6 +8782,7 @@ async function main() {
     testSinkFallbackSkipsArchivedProject();
     testFinalizeReleaseCleansWorktree();
     testFinalizeFromLinkedWorktreeCleansMainCopy();
+    testFinalizeNarrowStagingExcludesForeignArchive();
     testFinalizeFromMainRootNoSpuriousRemoval();
     testFinalizeCleansRoadmapEntry();
     testFinalizeFromLinkedWorktreeCleansRoadmapEntry();

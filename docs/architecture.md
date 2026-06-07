@@ -152,7 +152,7 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   (surfaced as `pendingGates`, non-blocking on resume so a mid-run pending gate never
   bricks an in-flight plan) and enforced as a hard merge gate in Phase 6. `--barrier-check`
   re-scans the files actually written and refuses a sensitive write with no `security-reviewer`
-  node (audit H1) or an out-of-allowlist production write (audit H3). It runs in two modes: the
+  node (audit H1), an out-of-allowlist production write (audit H3), or a foreign-project `kaola-workflow/archive/<X>/` write whose `<X>` is not the finalized project (#261 — scoping the blanket `kaola-workflow/` artifact exemption so a stray cross-issue archive folder cannot reach a protected branch undetected; companion defense-in-depth: `cmdFinalize` stages only the finalized project's own archive/rename/roadmap paths, and the Phase-6 Staging Guard typed-blocks a staged foreign `archive/<other>/`). It runs in two modes: the
   **whole-plan** Phase-6 merge gate diffs vs the merge-base of HEAD and `origin/main` (so a
   committed sensitive write is not invisible) against the **union** of declared write sets; the
   **per-node** barrier (#239) tree-diffs the current full-worktree snapshot against the node's

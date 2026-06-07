@@ -912,8 +912,15 @@ function cmdFinalize() {
     } catch (_) { mainRoot2 = null; }
     if (mainRoot2 && mainRoot2 !== linkedRoot2) {
       try {
-        execFileSync('git', ['-C', root, 'add', '-A', 'kaola-workflow/'],
+        execFileSync('git', ['-C', root, 'rm', '-r', '--cached', '--ignore-unmatch', '--', 'kaola-workflow/' + args.project],
           { encoding: 'utf8', stdio: 'inherit' });
+        const candidatePaths = ['kaola-workflow/.roadmap', 'kaola-workflow/ROADMAP.md'];
+        if (result.dest) candidatePaths.unshift(path.relative(root, result.dest));
+        const existingPaths = candidatePaths.filter(p => fs.existsSync(path.join(root, p)));
+        if (existingPaths.length > 0) {
+          execFileSync('git', ['-C', root, 'add', '-A', '--', ...existingPaths],
+            { encoding: 'utf8', stdio: 'inherit' });
+        }
         execFileSync('git', ['-C', root, 'diff', '--cached', '--quiet'],
           { stdio: 'ignore' });
       } catch (_) {
