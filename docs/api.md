@@ -564,6 +564,147 @@ Full rationale: `docs/decisions/0003-adaptive-front-end-planner.md`.
 
 ---
 
+## Codex Harness Scripts (issue #266)
+
+Three scripts harden the Codex edition against config drift, silent inline execution, and state loss after compaction. All three are installed via `SUPPORT_SCRIPT_NAMES` in `install.sh` (not `SUPPORT_HOOK_NAMES`).
+
+### Script: `kaola-workflow-codex-preflight.js`
+
+Hard-gates Codex role-profile/config freshness before any `subagent-invoked` compliance row may be written. TRUE 4-tree byte-identical (all four editions share the same file, authored require-free of edition code — only `fs`/`path` and an inline TOML-block scanner).
+
+**CLI:**
+
+```bash
+node scripts/kaola-workflow-codex-preflight.js --project-root <dir> [--plan <plan-path>] [--no-autofix] [--json]
+```
+
+**Behavior:**
+
+1. Resolves `--project-root` (or `process.cwd()`) and checks `.codex/agents/kaola-workflow/` for per-role `.toml` files.
+2. Reads `.codex/config.toml`, locates the managed block between `# BEGIN kaola-workflow agents` and `# END kaola-workflow agents`, and asserts every required role has an `[agents.{role}]` entry inside it.
+3. Required-role set: the union of (a) all roles in the bundled `config/agents.toml` template (read dynamically — no hardcoded count) and (b) the roles named in the frozen plan's `## Nodes` table when `--plan <path>` is supplied.
+4. **Auto-install when safe**: if the only problem is a stale or missing managed block, runs `install-codex-agent-profiles.js`, then re-verifies. On success, returns exit 0 with `autofixed: true`.
+5. **Typed refusal when unsafe**: if a conflicting `[agents.*]` table exists OUTSIDE the managed markers, the installer is unavailable/errors, or the plan names a role absent from the template entirely, exits non-zero with a typed-refusal JSON. `--no-autofix` forces the refusal path (useful in tests).
+6. **Never a silent `subagent-invoked`**: any non-`ok` status is a STOP for the caller. The caller must not write `subagent-invoked` compliance rows when preflight did not return `status:"ok"`.
+
+**Exit codes:**
+
+| Exit code | Meaning |
+|-----------|---------|
+| `0` | Fresh (or auto-fixed-then-fresh). `status:"ok"` |
+| non-zero | Typed refusal — see `status` field |
+
+**JSON output (`--json`):**
+
+Success:
+```json
+{ "status": "ok", "roles_checked": ["code-explorer", "..."], "autofixed": false }
+```
+
+Typed refusals (non-zero exit):
+```json
+{
+  "status": "config_stale" | "profiles_missing" | "role_not_in_template" | "autofix_unsafe" | "installer_failed",
+  "missing_roles": ["role-name"],
+  "stale": true,
+  "repair": "run install-codex-agent-profiles.js --project-root <dir>",
+  "safe_autofix": false
+}
+```
+
+---
+
+### Script: `kaola-workflow-task-mirror.js`
+
+Generates `kaola-workflow/{project}/workflow-tasks.json` from the frozen `workflow-plan.md`. COMMON_SCRIPTS 2-tree byte-identical (claude + codex share the same base-named file); gitlab and gitea carry edition-named ports (`kaola-gitlab-workflow-task-mirror.js` / `kaola-gitea-workflow-task-mirror.js`) with a single `require` line swapped to the edition-named plan-validator — exactly the `next-action`/`commit-node` pattern.
+
+**CLI:**
+
+```bash
+node scripts/kaola-workflow-task-mirror.js --project <name> [--now <iso>] [--json]
+```
+
+Resolves `kaola-workflow/<project>/workflow-plan.md`, writes `kaola-workflow/<project>/workflow-tasks.json`. `--json` echoes the written object to stdout.
+
+**Exported API (for tests):**
+
+```js
+const { generateMirror, mapLedgerStatus } = require('./kaola-workflow-task-mirror');
+// generateMirror({ planContent, now }) -> { source_plan_hash, tasks, last_synced_from_ledger }
+// mapLedgerStatus(ledger_status) -> { status, ledger_status }
+```
+
+**Schema (written JSON):**
+
+```json
+{
+  "source_plan_hash": "<64-hex>",
+  "tasks": [
+    { "id": "explore", "role": "code-explorer", "status": "completed", "ledger_status": "complete" }
+  ],
+  "last_synced_from_ledger": "<ISO timestamp>"
+}
+```
+
+**`ledger_status` → `status` mapping:**
+
+| `ledger_status` | `status` emitted | `ledger_status` field emitted |
+|-----------------|-----------------|-------------------------------|
+| `complete`      | `completed`     | `"complete"` |
+| `in_progress`   | `in_progress`   | `"in_progress"` |
+| `pending`       | `pending`       | `"pending"` |
+| `n/a`           | `completed`     | `"n/a"` (skipped Classify-And-Act arm — appears completed in the UI) |
+| unknown/absent  | `pending`       | raw value (conservative) |
+
+**Rebuild-if-stale rule:** on resume, compare `workflow-tasks.json.source_plan_hash` against `readStoredHash(planContent)` from the current plan. Regenerate when the file is missing, unparseable, or the stored hash differs. When hashes match, regenerate anyway to pick up current ledger status — it is idempotent and cheap.
+
+**Exit codes:**
+
+- `0` — file written successfully.
+- non-zero — typed refusal: `{ "status": "plan_not_frozen" }` when the plan has no `plan_hash` (the mirror is only meaningful for a frozen plan); also on unreadable plan.
+
+---
+
+### Script: `kaola-workflow-codex-compact-resume.js`
+
+The Codex compact/resume entrypoint. A self-contained stdin/stdout filter that reads durable workflow artifacts and emits a deterministic resume packet. Edition-named ×3 (codex: `kaola-workflow-codex-compact-resume.js`, gitlab: `kaola-gitlab-workflow-codex-compact-resume.js`, gitea: `kaola-gitea-workflow-codex-compact-resume.js`); only the filename comment differs across editions.
+
+**Note:** Codex has no `hooks` key in its plugin manifest, so this script is NOT wired as a plugin lifecycle hook. It is the correct resume entrypoint and is invoked on demand.
+
+**Invocation (on demand):**
+
+```bash
+echo '{"cwd":"<repo-root>"}' | node plugins/kaola-workflow/scripts/kaola-workflow-codex-compact-resume.js
+```
+
+Reads the `cwd` field from optional stdin JSON; walks up from `cwd` to find the `kaola-workflow/` directory. Emits the resume packet to stdout. Swallows errors to a `[skipped]` stderr line; always exits 0 (fail-open, never blocks a session).
+
+**Resume packet (6 sections, deterministic order):**
+
+```
+Kaola-Workflow compact resume:
+active project: <project-name>
+next skill/command: <next command from workflow-state.md>
+in-progress node: <node-id> (role: <role>)
+pending gates: <gate-node-id>, ...
+consent-halt markers: consent_halt=<none|pending> escalated_to_full=<value> inline_emergency_fallback_authorized=<value>
+task mirror: completed: N, in_progress: N, pending: N, in_progress_task: <node-id>
+```
+
+When `workflow-tasks.json` is absent, section 6 reads `task mirror: not generated`.
+
+**Sources read (all read-only; no state mutation):**
+
+| Artifact | What is extracted |
+|----------|-------------------|
+| `workflow-state.md` | Active project name, `next_command`, consent/fallback markers |
+| `workflow-plan.md` `## Node Ledger` | In-progress node id + role, pending gate nodes |
+| `workflow-tasks.json` | Task counts by status, in-progress task id |
+
+**AC-F:** Zero `CLAUDE_PLUGIN_ROOT` references; no `require()` of edition code — only stdlib `fs` and `path`. Claude-settings-free.
+
+---
+
 ## Module Exports — Public API Functions
 
 The following functions are exported from sink and claim modules for use by test suites and advanced integrations:

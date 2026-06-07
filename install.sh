@@ -157,6 +157,8 @@ case "$FORGE" in
       kaola-workflow-adaptive-node.js
       kaola-workflow-adaptive-schema.js
       kaola-workflow-resolve-agent-model.js
+      kaola-workflow-codex-preflight.js
+      kaola-workflow-task-mirror.js
     )
     SUPPORT_HOOK_NAMES=(
       kaola-workflow-pre-commit.sh
@@ -188,6 +190,9 @@ case "$FORGE" in
       kaola-gitlab-workflow-sink-mr.js
       kaola-workflow-adaptive-schema.js
       kaola-workflow-resolve-agent-model.js
+      kaola-workflow-codex-preflight.js
+      kaola-gitlab-workflow-task-mirror.js
+      kaola-gitlab-workflow-codex-compact-resume.js
     )
     SUPPORT_HOOK_NAMES=(
       kaola-workflow-pre-commit.sh
@@ -219,6 +224,9 @@ case "$FORGE" in
       kaola-gitea-workflow-sink-pr.js
       kaola-workflow-adaptive-schema.js
       kaola-workflow-resolve-agent-model.js
+      kaola-workflow-codex-preflight.js
+      kaola-gitea-workflow-task-mirror.js
+      kaola-gitea-workflow-codex-compact-resume.js
     )
     SUPPORT_HOOK_NAMES=(
       kaola-workflow-pre-commit.sh

@@ -3186,6 +3186,319 @@ testGiteaPatchBranchGuards();
 testGiteaWorktreePathForHiddenLocal();
 testGiteaLegacyWorktreeCleanupDryRun();
 
+// ---------------------------------------------------------------------------
+// AC-7 (#266): RED-first regression tests for the 3 new scripts (gitea edition).
+// Cases 1-2 (stale config, missing profiles), Case 3 (task-mirror),
+// Case 4 (compact-resume), Case 5 (no-silent-inline-fallback).
+// ---------------------------------------------------------------------------
+
+const giteaPreflightScript     = path.join(giteaPluginRoot, 'scripts', 'kaola-workflow-codex-preflight.js');
+const giteaTaskMirrorScript    = path.join(giteaPluginRoot, 'scripts', 'kaola-gitea-workflow-task-mirror.js');
+const giteaCompactResumeScript = path.join(giteaPluginRoot, 'scripts', 'kaola-gitea-workflow-codex-compact-resume.js');
+
+// Shared frozen plan fixture (consistent across editions)
+const GITEA_FIXTURE_PLAN_HASH = 'f59d3465f4ca7584eba5f7d04446bf2914e019ba1aa4511c5a25f4e65a80497e';
+const GITEA_FIXTURE_PLAN = [
+  '# Workflow Plan',
+  `<!-- plan_hash: ${GITEA_FIXTURE_PLAN_HASH} -->`,
+  '',
+  '## Meta',
+  'labels: enhancement',
+  '',
+  '## Nodes',
+  '',
+  '| id | role | depends_on | declared_write_set | cardinality | shape |',
+  '|---|---|---|---|---|---|',
+  '| explore | code-explorer | — | — | 1 | sequence |',
+  '| impl | implementer | explore | src/x.js | 1 | sequence |',
+  '| gate | code-reviewer | impl | — | 1 | sequence |',
+  '| done | finalize | gate | — | 1 | sequence |',
+  '',
+  '## Node Ledger',
+  '',
+  '| id | status |',
+  '|---|---|',
+  '| explore | complete |',
+  '| impl | in_progress |',
+  '| gate | pending |',
+  '| done | n/a |',
+  'consent_halt: pending',
+  ''
+].join('\n');
+
+// Case 1 + Case 2 + Case 5: preflight tests (stale config, missing profiles, no-silent-fallback)
+function testGiteaPreflight266() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-266-preflight-'));
+  try {
+    // Install all 13 profiles into the fixture
+    const installResult = spawnSync(process.execPath, [installProfilesScript, root], {
+      cwd: giteaPluginRoot, encoding: 'utf8'
+    });
+    if (installResult.error) throw installResult.error;
+    assert.ok(installResult.status === 0, 'gitea preflight fixture install failed: ' + installResult.stderr);
+
+    // --- GREEN: fresh fixture must pass preflight ---
+    const freshResult = spawnSync(process.execPath,
+      [giteaPreflightScript, '--project-root', root, '--no-autofix', '--json'],
+      { encoding: 'utf8' });
+    assert.strictEqual(freshResult.status, 0,
+      '#266 gt case1 RED-discriminator: fresh fixture must exit 0, got ' + freshResult.status + '\n' + freshResult.stdout);
+    const freshJson = JSON.parse(freshResult.stdout);
+    assert.strictEqual(freshJson.status, 'ok',
+      '#266 gt case1 RED-discriminator: fresh fixture must return status:ok, got ' + freshJson.status);
+
+    // --- Case 1 RED: remove a role from the managed block → config_stale ---
+    const configPath = path.join(root, '.codex', 'config.toml');
+    const origConfig = fs.readFileSync(configPath, 'utf8');
+    const staleConfig = origConfig.replace('[agents.workflow-planner]', '[agents.STALE-workflow-planner]');
+    fs.writeFileSync(configPath, staleConfig);
+
+    const staleResult = spawnSync(process.execPath,
+      [giteaPreflightScript, '--project-root', root, '--no-autofix', '--json'],
+      { encoding: 'utf8' });
+    assert.notStrictEqual(staleResult.status, 0,
+      '#266 gt case1: stale managed block must cause non-zero exit, got ' + staleResult.status);
+    const staleJson = JSON.parse(staleResult.stdout);
+    assert.strictEqual(staleJson.status, 'config_stale',
+      '#266 gt case1: must return config_stale, got ' + staleJson.status);
+    assert.ok(Array.isArray(staleJson.missing_roles) && staleJson.missing_roles.includes('workflow-planner'),
+      '#266 gt case1: missing_roles must include workflow-planner, got ' + JSON.stringify(staleJson.missing_roles));
+
+    // --- Case 1 GREEN (autofix): ---
+    const autofixRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-266-preflight-autofix-'));
+    try {
+      fs.mkdirSync(path.join(autofixRoot, '.codex', 'agents', 'kaola-workflow'), { recursive: true });
+      fs.writeFileSync(path.join(autofixRoot, '.codex', 'config.toml'), staleConfig);
+      const srcAgentsDir = path.join(root, '.codex', 'agents', 'kaola-workflow');
+      const dstAgentsDir = path.join(autofixRoot, '.codex', 'agents', 'kaola-workflow');
+      for (const f of fs.readdirSync(srcAgentsDir)) {
+        fs.copyFileSync(path.join(srcAgentsDir, f), path.join(dstAgentsDir, f));
+      }
+      const autofixResult = spawnSync(process.execPath,
+        [giteaPreflightScript, '--project-root', autofixRoot, '--json'],
+        { encoding: 'utf8' });
+      assert.strictEqual(autofixResult.status, 0,
+        '#266 gt case1 autofix: must exit 0 after repair, got ' + autofixResult.status + '\n' + autofixResult.stdout);
+      const autofixJson = JSON.parse(autofixResult.stdout);
+      assert.ok(autofixJson.status === 'ok' && autofixJson.autofixed === true,
+        '#266 gt case1 autofix: must return ok+autofixed:true, got ' + JSON.stringify(autofixJson));
+    } finally {
+      fs.rmSync(autofixRoot, { recursive: true, force: true });
+    }
+
+    // Restore config for case 2
+    fs.writeFileSync(configPath, origConfig);
+
+    // --- Case 2 RED: remove a profile toml file → profiles_missing ---
+    const wpToml = path.join(root, '.codex', 'agents', 'kaola-workflow', 'workflow-planner.toml');
+    const savedToml = fs.readFileSync(wpToml);
+    fs.unlinkSync(wpToml);
+
+    const missingResult = spawnSync(process.execPath,
+      [giteaPreflightScript, '--project-root', root, '--no-autofix', '--json'],
+      { encoding: 'utf8' });
+    assert.notStrictEqual(missingResult.status, 0,
+      '#266 gt case2: missing profile toml must cause non-zero exit, got ' + missingResult.status);
+    const missingJson = JSON.parse(missingResult.stdout);
+    assert.strictEqual(missingJson.status, 'profiles_missing',
+      '#266 gt case2: must return profiles_missing, got ' + missingJson.status);
+    assert.ok(Array.isArray(missingJson.missing_roles) && missingJson.missing_roles.includes('workflow-planner'),
+      '#266 gt case2: missing_roles must include workflow-planner');
+
+    // Restore toml
+    fs.writeFileSync(wpToml, savedToml);
+
+    // --- Case 2 GREEN: restored → fresh again ---
+    const restoredResult = spawnSync(process.execPath,
+      [giteaPreflightScript, '--project-root', root, '--no-autofix', '--json'],
+      { encoding: 'utf8' });
+    assert.strictEqual(restoredResult.status, 0,
+      '#266 gt case2 GREEN: restored fixture must pass, got ' + restoredResult.status);
+
+    // --- Case 5 RED: absent profile → REFUSES, stdout must NOT contain subagent-invoked or local-fallback ---
+    fs.unlinkSync(wpToml);
+    const refusalResult = spawnSync(process.execPath,
+      [giteaPreflightScript, '--project-root', root, '--no-autofix', '--json'],
+      { encoding: 'utf8' });
+    assert.notStrictEqual(refusalResult.status, 0,
+      '#266 gt case5 RED: absent profile must cause non-zero exit, got ' + refusalResult.status);
+    assert.ok(!refusalResult.stdout.includes('subagent-invoked'),
+      '#266 gt case5: preflight refusal must NOT emit subagent-invoked, got: ' + refusalResult.stdout);
+    assert.ok(!refusalResult.stdout.includes('local-fallback'),
+      '#266 gt case5: preflight refusal must NOT emit local-fallback, got: ' + refusalResult.stdout);
+    // Restore
+    fs.writeFileSync(wpToml, savedToml);
+
+    console.log('testGiteaPreflight266 (#266 cases 1,2,5): PASSED');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+// Case 3: task-mirror regeneration (gitea edition)
+function testGiteaTaskMirror266() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-266-taskmirror-'));
+  try {
+    const projectName = 'issue-266-mirror';
+    const projDir = path.join(root, 'kaola-workflow', projectName);
+    fs.mkdirSync(projDir, { recursive: true });
+    fs.writeFileSync(path.join(projDir, 'workflow-plan.md'), GITEA_FIXTURE_PLAN);
+
+    const NOW = '2026-06-07T12:00:00.000Z';
+
+    // --- GREEN: run task-mirror → produces correct JSON ---
+    const r1 = spawnSync(process.execPath,
+      [giteaTaskMirrorScript, '--project', projectName, '--now', NOW, '--json'],
+      { cwd: root, encoding: 'utf8' });
+    assert.strictEqual(r1.status, 0,
+      '#266 gt case3: task-mirror must exit 0, got ' + r1.status + '\n' + r1.stderr);
+    const mirror1 = JSON.parse(r1.stdout);
+    assert.strictEqual(mirror1.source_plan_hash, GITEA_FIXTURE_PLAN_HASH,
+      '#266 gt case3: source_plan_hash mismatch, got ' + mirror1.source_plan_hash);
+    assert.ok(Array.isArray(mirror1.tasks) && mirror1.tasks.length === 4,
+      '#266 gt case3: expected 4 tasks, got ' + mirror1.tasks.length);
+    assert.strictEqual(mirror1.last_synced_from_ledger, NOW,
+      '#266 gt case3: last_synced_from_ledger mismatch, got ' + mirror1.last_synced_from_ledger);
+
+    // --- Verify all 4 ledger→status mappings ---
+    const byId = Object.fromEntries(mirror1.tasks.map(t => [t.id, t]));
+    assert.ok(byId.explore.status === 'completed' && byId.explore.ledger_status === 'complete',
+      '#266 gt case3: explore mapping wrong, got ' + JSON.stringify(byId.explore));
+    assert.ok(byId.impl.status === 'in_progress' && byId.impl.ledger_status === 'in_progress',
+      '#266 gt case3: impl mapping wrong, got ' + JSON.stringify(byId.impl));
+    assert.ok(byId.gate.status === 'pending' && byId.gate.ledger_status === 'pending',
+      '#266 gt case3: gate mapping wrong, got ' + JSON.stringify(byId.gate));
+    assert.ok(byId.done.status === 'completed' && byId.done.ledger_status === 'n/a',
+      '#266 gt case3: done (n/a) mapping wrong, got ' + JSON.stringify(byId.done));
+
+    // --- Determinism: same --now ⇒ identical output ---
+    const r2 = spawnSync(process.execPath,
+      [giteaTaskMirrorScript, '--project', projectName, '--now', NOW, '--json'],
+      { cwd: root, encoding: 'utf8' });
+    assert.strictEqual(r1.stdout, r2.stdout,
+      '#266 gt case3 det: two runs must produce identical stdout');
+
+    // --- RED discriminator: unfrozen plan → non-zero exit ---
+    const unfrozenPlan = GITEA_FIXTURE_PLAN.replace(
+      `<!-- plan_hash: ${GITEA_FIXTURE_PLAN_HASH} -->`, '');
+    fs.writeFileSync(path.join(projDir, 'workflow-plan.md'), unfrozenPlan);
+    const rUnfrozen = spawnSync(process.execPath,
+      [giteaTaskMirrorScript, '--project', projectName, '--now', NOW, '--json'],
+      { cwd: root, encoding: 'utf8' });
+    assert.notStrictEqual(rUnfrozen.status, 0,
+      '#266 gt case3 RED: unfrozen plan must cause non-zero exit, got ' + rUnfrozen.status);
+
+    // --- Stale-hash regeneration ---
+    const FAKE_HASH = 'a'.repeat(64);
+    const staleHashPlan = GITEA_FIXTURE_PLAN.replace(
+      `<!-- plan_hash: ${GITEA_FIXTURE_PLAN_HASH} -->`,
+      `<!-- plan_hash: ${FAKE_HASH} -->`);
+    fs.writeFileSync(path.join(projDir, 'workflow-plan.md'), staleHashPlan);
+    const rStale = spawnSync(process.execPath,
+      [giteaTaskMirrorScript, '--project', projectName, '--now', NOW, '--json'],
+      { cwd: root, encoding: 'utf8' });
+    assert.strictEqual(rStale.status, 0,
+      '#266 gt case3 stale-hash: must exit 0, got ' + rStale.status + '\n' + rStale.stderr);
+    const mirrorStale = JSON.parse(rStale.stdout);
+    assert.strictEqual(mirrorStale.source_plan_hash, FAKE_HASH,
+      '#266 gt case3 stale-hash: output hash must reflect new plan_hash');
+    assert.notStrictEqual(mirrorStale.source_plan_hash, GITEA_FIXTURE_PLAN_HASH,
+      '#266 gt case3 stale-hash: stale mirror must NOT carry old hash');
+
+    console.log('testGiteaTaskMirror266 (#266 case 3): PASSED');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+// Case 4: compact/resume packet (gitea edition)
+function testGiteaCompactResume266() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-266-compact-'));
+  try {
+    const projectName = 'issue-266-compact';
+    const projDir = path.join(root, 'kaola-workflow', projectName);
+    fs.mkdirSync(projDir, { recursive: true });
+
+    fs.writeFileSync(path.join(projDir, 'workflow-state.md'), [
+      '# State', '',
+      '## Project',
+      'name: issue-266-compact',
+      'status: active', '',
+      '## Sink',
+      'branch: workflow/issue-266',
+      'issue_number: 266',
+      'next_command: /kaola-workflow-plan-run',
+      'next_skill: kaola-workflow-next',
+      ''
+    ].join('\n'));
+
+    fs.writeFileSync(path.join(projDir, 'workflow-plan.md'), GITEA_FIXTURE_PLAN);
+
+    const tasksJson = JSON.stringify({
+      source_plan_hash: GITEA_FIXTURE_PLAN_HASH,
+      tasks: [
+        { id: 'explore', role: 'code-explorer', status: 'completed', ledger_status: 'complete' },
+        { id: 'impl',    role: 'implementer',   status: 'in_progress', ledger_status: 'in_progress' },
+        { id: 'gate',    role: 'code-reviewer', status: 'pending',    ledger_status: 'pending' },
+        { id: 'done',    role: 'finalize',       status: 'completed',  ledger_status: 'n/a' }
+      ],
+      last_synced_from_ledger: '2026-06-07T12:00:00.000Z'
+    }, null, 2) + '\n';
+    fs.writeFileSync(path.join(projDir, 'workflow-tasks.json'), tasksJson);
+
+    const input = JSON.stringify({ cwd: root });
+
+    // --- GREEN: run compact-resume → deterministic 7-line packet ---
+    const r1 = spawnSync(process.execPath, [giteaCompactResumeScript],
+      { input, encoding: 'utf8' });
+    assert.strictEqual(r1.status, 0,
+      '#266 gt case4: compact-resume must exit 0, got ' + r1.status + '\n' + r1.stderr);
+    const lines1 = r1.stdout.trim().split('\n');
+    assert.strictEqual(lines1.length, 7,
+      '#266 gt case4: packet must have 7 lines, got ' + lines1.length + '\n' + r1.stdout);
+
+    assert.strictEqual(lines1[0], 'Kaola-Workflow compact resume:',
+      '#266 gt case4: line[0] must be header, got ' + lines1[0]);
+    assert.ok(lines1[1].includes('issue-266-compact'),
+      '#266 gt case4: active project must include project name, got ' + lines1[1]);
+    assert.ok(lines1[3].includes('impl') && lines1[3].includes('implementer'),
+      '#266 gt case4: in-progress node must show impl+role, got ' + lines1[3]);
+    assert.ok(lines1[4].includes('gate'),
+      '#266 gt case4: pending gates must include gate, got ' + lines1[4]);
+    assert.ok(lines1[5].includes('consent_halt=pending'),
+      '#266 gt case4: consent-halt must show pending, got ' + lines1[5]);
+    assert.ok(lines1[6].includes('completed: 2') && lines1[6].includes('in_progress: 1'),
+      '#266 gt case4: task mirror must show correct counts, got ' + lines1[6]);
+
+    // --- Determinism: two runs → identical stdout ---
+    const r2 = spawnSync(process.execPath, [giteaCompactResumeScript],
+      { input, encoding: 'utf8' });
+    assert.strictEqual(r1.stdout, r2.stdout,
+      '#266 gt case4 det: two compact-resume runs must produce identical stdout');
+
+    // --- RED discriminator: no workflow-state → empty stdout ---
+    const emptyRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-266-compact-empty-'));
+    try {
+      const rEmpty = spawnSync(process.execPath, [giteaCompactResumeScript],
+        { input: JSON.stringify({ cwd: emptyRoot }), encoding: 'utf8' });
+      assert.strictEqual(rEmpty.status, 0,
+        '#266 gt case4 RED: empty root must exit 0, got ' + rEmpty.status);
+      assert.strictEqual(rEmpty.stdout.trim(), '',
+        '#266 gt case4 RED: no workflow dir must produce no output, got: ' + rEmpty.stdout);
+    } finally {
+      fs.rmSync(emptyRoot, { recursive: true, force: true });
+    }
+
+    console.log('testGiteaCompactResume266 (#266 case 4): PASSED');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+testGiteaPreflight266();
+testGiteaTaskMirror266();
+testGiteaCompactResume266();
+
 testGiteaRoadmapInitIssueExclusiveAndUpdate()
   .then(() => {
     console.log('Gitea workflow script tests passed');

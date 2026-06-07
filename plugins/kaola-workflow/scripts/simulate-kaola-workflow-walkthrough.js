@@ -195,6 +195,346 @@ function testCodexAdaptiveCuratedAndBarrier() {
   console.log('Codex adaptive #238/#239 coverage: PASSED');
 }
 
+// ---------------------------------------------------------------------------
+// AC-7 (#266): RED-first regression tests for the 3 new scripts.
+// Each case proves discriminating RED (wrong fixture → typed refusal / wrong JSON)
+// then GREEN (correct fixture → ok / correct JSON).
+// ---------------------------------------------------------------------------
+
+const preflightScript   = path.join(pluginRoot, 'scripts', 'kaola-workflow-codex-preflight.js');
+const taskMirrorScript  = path.join(pluginRoot, 'scripts', 'kaola-workflow-task-mirror.js');
+const compactResumeScript = path.join(pluginRoot, 'scripts', 'kaola-workflow-codex-compact-resume.js');
+
+// Shared frozen plan fixture (used by task-mirror + compact-resume tests)
+const FIXTURE_PLAN_HASH = 'f59d3465f4ca7584eba5f7d04446bf2914e019ba1aa4511c5a25f4e65a80497e';
+const FIXTURE_PLAN = [
+  '# Workflow Plan',
+  `<!-- plan_hash: ${FIXTURE_PLAN_HASH} -->`,
+  '',
+  '## Meta',
+  'labels: enhancement',
+  '',
+  '## Nodes',
+  '',
+  '| id | role | depends_on | declared_write_set | cardinality | shape |',
+  '|---|---|---|---|---|---|',
+  '| explore | code-explorer | — | — | 1 | sequence |',
+  '| impl | implementer | explore | src/x.js | 1 | sequence |',
+  '| gate | code-reviewer | impl | — | 1 | sequence |',
+  '| done | finalize | gate | — | 1 | sequence |',
+  '',
+  '## Node Ledger',
+  '',
+  '| id | status |',
+  '|---|---|',
+  '| explore | complete |',
+  '| impl | in_progress |',
+  '| gate | pending |',
+  '| done | n/a |',
+  'consent_halt: pending',
+  ''
+].join('\n');
+
+function runScript(scriptPath, args, opts) {
+  return spawnSync(process.execPath, [scriptPath, ...args], {
+    encoding: 'utf8',
+    ...opts
+  });
+}
+
+// Case 1 + Case 2 + Case 5: preflight tests (stale config, missing profiles, no-silent-fallback)
+function testCodexPreflight266() {
+  // Build a fully-installed fixture to start from
+  const root266 = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-266-preflight-'));
+  try {
+    // Install all 13 profiles into the fixture
+    const installResult = spawnSync(process.execPath, [installProfilesScript, root266], {
+      cwd: repoRoot, encoding: 'utf8'
+    });
+    if (installResult.error) throw installResult.error;
+    assert(installResult.status === 0, 'preflight fixture install failed: ' + installResult.stderr);
+
+    // --- GREEN: fresh fixture must pass preflight ---
+    const freshResult = runScript(preflightScript,
+      ['--project-root', root266, '--no-autofix', '--json'], {});
+    assert(freshResult.status === 0,
+      '#266 case1 RED-discriminator: fresh fixture must exit 0, got ' + freshResult.status + '\n' + freshResult.stdout);
+    const freshJson = JSON.parse(freshResult.stdout);
+    assert(freshJson.status === 'ok',
+      '#266 case1 RED-discriminator: fresh fixture must return status:ok, got ' + freshJson.status);
+
+    // --- Case 1 RED: corrupt the managed block (remove a role entry) → config_stale ---
+    const configPath = path.join(root266, '.codex', 'config.toml');
+    const origConfig = fs.readFileSync(configPath, 'utf8');
+    // Replace [agents.workflow-planner] inside the block — makes that role missing from block
+    const staleConfig = origConfig.replace('[agents.workflow-planner]', '[agents.STALE-workflow-planner]');
+    fs.writeFileSync(configPath, staleConfig);
+
+    const staleResult = runScript(preflightScript,
+      ['--project-root', root266, '--no-autofix', '--json'], {});
+    assert(staleResult.status !== 0,
+      '#266 case1: stale managed block must cause non-zero exit, got ' + staleResult.status);
+    const staleJson = JSON.parse(staleResult.stdout);
+    assert(staleJson.status === 'config_stale',
+      '#266 case1: stale managed block must return status:config_stale, got ' + staleJson.status);
+    assert(Array.isArray(staleJson.missing_roles) && staleJson.missing_roles.includes('workflow-planner'),
+      '#266 case1: missing_roles must include workflow-planner, got ' + JSON.stringify(staleJson.missing_roles));
+
+    // --- Case 1 GREEN (autofix): without --no-autofix the installer repairs the block ---
+    const autofixRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-266-preflight-autofix-'));
+    try {
+      fs.mkdirSync(path.join(autofixRoot, '.codex', 'agents', 'kaola-workflow'), { recursive: true });
+      fs.writeFileSync(path.join(autofixRoot, '.codex', 'config.toml'), staleConfig);
+      // Copy all profile toml files so the installer only needs to fix the block
+      const srcAgentsDir = path.join(root266, '.codex', 'agents', 'kaola-workflow');
+      const dstAgentsDir = path.join(autofixRoot, '.codex', 'agents', 'kaola-workflow');
+      for (const f of fs.readdirSync(srcAgentsDir)) {
+        fs.copyFileSync(path.join(srcAgentsDir, f), path.join(dstAgentsDir, f));
+      }
+      const autofixResult = runScript(preflightScript,
+        ['--project-root', autofixRoot, '--json'], {});
+      assert(autofixResult.status === 0,
+        '#266 case1 autofix: preflight with autofix must exit 0 after repair, got ' + autofixResult.status + '\n' + autofixResult.stdout);
+      const autofixJson = JSON.parse(autofixResult.stdout);
+      assert(autofixJson.status === 'ok' && autofixJson.autofixed === true,
+        '#266 case1 autofix: must return status:ok autofixed:true, got ' + JSON.stringify(autofixJson));
+    } finally {
+      fs.rmSync(autofixRoot, { recursive: true, force: true });
+    }
+
+    // Restore config for case 2
+    fs.writeFileSync(configPath, origConfig);
+
+    // --- Case 2 RED: remove a profile toml file → profiles_missing ---
+    const wpToml = path.join(root266, '.codex', 'agents', 'kaola-workflow', 'workflow-planner.toml');
+    const savedToml = fs.readFileSync(wpToml);
+    fs.unlinkSync(wpToml);
+
+    const missingResult = runScript(preflightScript,
+      ['--project-root', root266, '--no-autofix', '--json'], {});
+    assert(missingResult.status !== 0,
+      '#266 case2: missing profile toml must cause non-zero exit, got ' + missingResult.status);
+    const missingJson = JSON.parse(missingResult.stdout);
+    assert(missingJson.status === 'profiles_missing',
+      '#266 case2: missing profile toml must return status:profiles_missing, got ' + missingJson.status);
+    assert(Array.isArray(missingJson.missing_roles) && missingJson.missing_roles.includes('workflow-planner'),
+      '#266 case2: missing_roles must include workflow-planner, got ' + JSON.stringify(missingJson.missing_roles));
+
+    // Restore toml
+    fs.writeFileSync(wpToml, savedToml);
+
+    // --- Case 2 GREEN: restored → fresh again ---
+    const restoredResult = runScript(preflightScript,
+      ['--project-root', root266, '--no-autofix', '--json'], {});
+    assert(restoredResult.status === 0,
+      '#266 case2 GREEN: restored fixture must pass, got ' + restoredResult.status);
+
+    // --- Case 5 RED: absent profile → preflight REFUSES, stdout must NOT contain subagent-invoked or local-fallback ---
+    fs.unlinkSync(wpToml);
+    const refusalResult = runScript(preflightScript,
+      ['--project-root', root266, '--no-autofix', '--json'], {});
+    assert(refusalResult.status !== 0,
+      '#266 case5 RED: absent profile must cause non-zero exit, got ' + refusalResult.status);
+    assert(!refusalResult.stdout.includes('subagent-invoked'),
+      '#266 case5: preflight refusal must NOT emit subagent-invoked, got: ' + refusalResult.stdout);
+    assert(!refusalResult.stdout.includes('local-fallback'),
+      '#266 case5: preflight refusal must NOT emit local-fallback, got: ' + refusalResult.stdout);
+    // Restore
+    fs.writeFileSync(wpToml, savedToml);
+
+    console.log('testCodexPreflight266 (#266 cases 1,2,5): PASSED');
+  } finally {
+    fs.rmSync(root266, { recursive: true, force: true });
+  }
+}
+
+// Case 3: task-mirror regeneration
+function testCodexTaskMirror266() {
+  const root266m = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-266-taskmirror-'));
+  try {
+    const projectName = 'issue-266-mirror';
+    const projDir = path.join(root266m, 'kaola-workflow', projectName);
+    fs.mkdirSync(projDir, { recursive: true });
+    fs.writeFileSync(path.join(projDir, 'workflow-plan.md'), FIXTURE_PLAN);
+
+    const NOW = '2026-06-07T12:00:00.000Z';
+
+    // --- GREEN: run task-mirror → produces correct JSON ---
+    const r1 = runScript(taskMirrorScript,
+      ['--project', projectName, '--now', NOW, '--json'],
+      { cwd: root266m });
+    assert(r1.status === 0,
+      '#266 case3: task-mirror must exit 0, got ' + r1.status + '\n' + r1.stderr);
+    const mirror1 = JSON.parse(r1.stdout);
+    assert(mirror1.source_plan_hash === FIXTURE_PLAN_HASH,
+      '#266 case3: source_plan_hash mismatch, got ' + mirror1.source_plan_hash);
+    assert(Array.isArray(mirror1.tasks) && mirror1.tasks.length === 4,
+      '#266 case3: expected 4 tasks, got ' + mirror1.tasks.length);
+    assert(mirror1.last_synced_from_ledger === NOW,
+      '#266 case3: last_synced_from_ledger mismatch, got ' + mirror1.last_synced_from_ledger);
+
+    // --- Verify ledger→status mappings (all 4) ---
+    const byId = Object.fromEntries(mirror1.tasks.map(t => [t.id, t]));
+    assert(byId.explore.status === 'completed' && byId.explore.ledger_status === 'complete',
+      '#266 case3: explore must be completed/complete, got ' + JSON.stringify(byId.explore));
+    assert(byId.impl.status === 'in_progress' && byId.impl.ledger_status === 'in_progress',
+      '#266 case3: impl must be in_progress/in_progress, got ' + JSON.stringify(byId.impl));
+    assert(byId.gate.status === 'pending' && byId.gate.ledger_status === 'pending',
+      '#266 case3: gate must be pending/pending, got ' + JSON.stringify(byId.gate));
+    // n/a → completed with ledger_status "n/a"
+    assert(byId.done.status === 'completed' && byId.done.ledger_status === 'n/a',
+      '#266 case3: done (n/a) must be completed with ledger_status n/a, got ' + JSON.stringify(byId.done));
+
+    // --- Determinism: same --now ⇒ identical output ---
+    const r2 = runScript(taskMirrorScript,
+      ['--project', projectName, '--now', NOW, '--json'],
+      { cwd: root266m });
+    assert(r2.status === 0, '#266 case3 det: second run must exit 0');
+    assert(r1.stdout === r2.stdout,
+      '#266 case3 det: two runs with same --now must produce identical stdout');
+
+    // --- RED discriminator: wrong/missing hash → plan_not_frozen → non-zero exit ---
+    const unfrozenPlan = FIXTURE_PLAN.replace(
+      `<!-- plan_hash: ${FIXTURE_PLAN_HASH} -->`, '');
+    fs.writeFileSync(path.join(projDir, 'workflow-plan.md'), unfrozenPlan);
+    const rUnfrozen = runScript(taskMirrorScript,
+      ['--project', projectName, '--now', NOW, '--json'],
+      { cwd: root266m });
+    assert(rUnfrozen.status !== 0,
+      '#266 case3 RED: unfrozen plan must cause non-zero exit, got ' + rUnfrozen.status);
+
+    // --- Stale-hash regeneration: changing plan_hash forces new source_plan_hash in output ---
+    const FAKE_HASH = 'a'.repeat(64);
+    const staleHashPlan = FIXTURE_PLAN.replace(
+      `<!-- plan_hash: ${FIXTURE_PLAN_HASH} -->`,
+      `<!-- plan_hash: ${FAKE_HASH} -->`);
+    fs.writeFileSync(path.join(projDir, 'workflow-plan.md'), staleHashPlan);
+    const rStale = runScript(taskMirrorScript,
+      ['--project', projectName, '--now', NOW, '--json'],
+      { cwd: root266m });
+    assert(rStale.status === 0, '#266 case3 stale-hash: must exit 0, got ' + rStale.status + '\n' + rStale.stderr);
+    const mirrorStale = JSON.parse(rStale.stdout);
+    assert(mirrorStale.source_plan_hash === FAKE_HASH,
+      '#266 case3 stale-hash: output hash must reflect new plan_hash, got ' + mirrorStale.source_plan_hash);
+    assert(mirrorStale.source_plan_hash !== FIXTURE_PLAN_HASH,
+      '#266 case3 stale-hash: stale mirror must NOT carry the old hash');
+
+    console.log('testCodexTaskMirror266 (#266 case 3): PASSED');
+  } finally {
+    fs.rmSync(root266m, { recursive: true, force: true });
+  }
+}
+
+// Case 4: compact/resume packet
+function testCodexCompactResume266() {
+  const root266c = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-266-compact-'));
+  try {
+    const projectName = 'issue-266-compact';
+    const projDir = path.join(root266c, 'kaola-workflow', projectName);
+    fs.mkdirSync(projDir, { recursive: true });
+
+    // workflow-state.md
+    fs.writeFileSync(path.join(projDir, 'workflow-state.md'), [
+      '# State', '',
+      '## Project',
+      'name: issue-266-compact',
+      'status: active', '',
+      '## Sink',
+      'branch: workflow/issue-266',
+      'issue_number: 266',
+      'next_command: /kaola-workflow-plan-run',
+      'next_skill: kaola-workflow-next',
+      ''
+    ].join('\n'));
+
+    // workflow-plan.md (with in-progress node + pending gate + consent_halt)
+    fs.writeFileSync(path.join(projDir, 'workflow-plan.md'), FIXTURE_PLAN);
+
+    // workflow-tasks.json
+    const tasksJson = JSON.stringify({
+      source_plan_hash: FIXTURE_PLAN_HASH,
+      tasks: [
+        { id: 'explore', role: 'code-explorer', status: 'completed', ledger_status: 'complete' },
+        { id: 'impl',    role: 'implementer',   status: 'in_progress', ledger_status: 'in_progress' },
+        { id: 'gate',    role: 'code-reviewer', status: 'pending',    ledger_status: 'pending' },
+        { id: 'done',    role: 'finalize',       status: 'completed',  ledger_status: 'n/a' }
+      ],
+      last_synced_from_ledger: '2026-06-07T12:00:00.000Z'
+    }, null, 2) + '\n';
+    fs.writeFileSync(path.join(projDir, 'workflow-tasks.json'), tasksJson);
+
+    const input = JSON.stringify({ cwd: root266c });
+
+    // --- GREEN: run compact-resume → deterministic 7-line packet ---
+    const r1 = runScript(compactResumeScript, [], { input, encoding: 'utf8' });
+    assert(r1.status === 0,
+      '#266 case4: compact-resume must exit 0, got ' + r1.status + '\n' + r1.stderr);
+    const lines1 = r1.stdout.trim().split('\n');
+    assert(lines1.length === 7,
+      '#266 case4: packet must have 7 lines, got ' + lines1.length + '\n' + r1.stdout);
+
+    // Section 1: header
+    assert(lines1[0] === 'Kaola-Workflow compact resume:',
+      '#266 case4: line[0] must be header, got ' + lines1[0]);
+    // Section 2: active project
+    assert(lines1[1].startsWith('active project:'),
+      '#266 case4: line[1] must be active project, got ' + lines1[1]);
+    assert(lines1[1].includes('issue-266-compact'),
+      '#266 case4: active project must include project name, got ' + lines1[1]);
+    // Section 3: next skill/command
+    assert(lines1[2].startsWith('next skill/command:'),
+      '#266 case4: line[2] must be next skill/command, got ' + lines1[2]);
+    // Section 4: in-progress node
+    assert(lines1[3].startsWith('in-progress node:'),
+      '#266 case4: line[3] must be in-progress node, got ' + lines1[3]);
+    assert(lines1[3].includes('impl'),
+      '#266 case4: in-progress node must include impl, got ' + lines1[3]);
+    assert(lines1[3].includes('implementer'),
+      '#266 case4: in-progress node must include role, got ' + lines1[3]);
+    // Section 5: pending gates (gate node has role code-reviewer which IS a gate-verdict role)
+    assert(lines1[4].startsWith('pending gates:'),
+      '#266 case4: line[4] must be pending gates, got ' + lines1[4]);
+    assert(lines1[4].includes('gate'),
+      '#266 case4: pending gates must include gate node, got ' + lines1[4]);
+    // Section 6: consent-halt markers
+    assert(lines1[5].startsWith('consent-halt markers:'),
+      '#266 case4: line[5] must be consent-halt markers, got ' + lines1[5]);
+    assert(lines1[5].includes('consent_halt=pending'),
+      '#266 case4: consent-halt must show pending, got ' + lines1[5]);
+    // Section 7: task-mirror summary
+    assert(lines1[6].startsWith('task mirror:'),
+      '#266 case4: line[6] must be task mirror, got ' + lines1[6]);
+    assert(lines1[6].includes('completed: 2'),
+      '#266 case4: task mirror must show completed:2, got ' + lines1[6]);
+    assert(lines1[6].includes('in_progress: 1'),
+      '#266 case4: task mirror must show in_progress:1, got ' + lines1[6]);
+    assert(lines1[6].includes('pending: 1'),
+      '#266 case4: task mirror must show pending:1, got ' + lines1[6]);
+
+    // --- Determinism: two runs → identical stdout ---
+    const r2 = runScript(compactResumeScript, [], { input, encoding: 'utf8' });
+    assert(r1.stdout === r2.stdout,
+      '#266 case4 det: two compact-resume runs must produce identical stdout');
+
+    // --- RED discriminator: no workflow-state → no output (empty stdout) ---
+    const emptyRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-266-compact-empty-'));
+    try {
+      // No kaola-workflow/ dir at all → script returns silently (no output, exit 0)
+      const rEmpty = runScript(compactResumeScript, [],
+        { input: JSON.stringify({ cwd: emptyRoot }), encoding: 'utf8' });
+      assert(rEmpty.status === 0, '#266 case4 RED: empty root must exit 0, got ' + rEmpty.status);
+      assert(rEmpty.stdout.trim() === '',
+        '#266 case4 RED: no workflow dir must produce no output, got: ' + rEmpty.stdout);
+    } finally {
+      fs.rmSync(emptyRoot, { recursive: true, force: true });
+    }
+
+    console.log('testCodexCompactResume266 (#266 case 4): PASSED');
+  } finally {
+    fs.rmSync(root266c, { recursive: true, force: true });
+  }
+}
+
 function main() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-codex-active-folders-'));
   try {
@@ -273,6 +613,9 @@ function main() {
 
     testInstallProfilesFeaturesTableHandling();
     testCodexAdaptiveCuratedAndBarrier();
+    testCodexPreflight266();
+    testCodexTaskMirror266();
+    testCodexCompactResume266();
 
     console.log('Kaola-Workflow walkthrough simulation passed');
   } finally {

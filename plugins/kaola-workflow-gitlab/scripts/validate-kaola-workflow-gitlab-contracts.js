@@ -171,7 +171,10 @@ const scriptFiles = [
   'kaola-workflow-resolve-agent-model.js',
   'simulate-gitlab-workflow-walkthrough.js',
   'simulate-gitlab-codex-workflow-walkthrough.js',
-  'install-codex-agent-profiles.js'
+  'install-codex-agent-profiles.js',
+  'kaola-workflow-codex-preflight.js',
+  'kaola-gitlab-workflow-task-mirror.js',
+  'kaola-gitlab-workflow-codex-compact-resume.js'
 ];
 for (const script of scriptFiles) assert(exists(pluginRoot + '/scripts/' + script), script + ' missing');
 
@@ -188,7 +191,10 @@ const installSupportScripts = [
   'kaola-gitlab-workflow-sink-merge.js',
   'kaola-gitlab-workflow-sink-mr.js',
   'kaola-workflow-adaptive-schema.js',
-  'kaola-workflow-resolve-agent-model.js'
+  'kaola-workflow-resolve-agent-model.js',
+  'kaola-workflow-codex-preflight.js',
+  'kaola-gitlab-workflow-task-mirror.js',
+  'kaola-gitlab-workflow-codex-compact-resume.js'
 ];
 for (const script of installSupportScripts) {
   assert(installScript.includes(script), 'install.sh must install GitLab support script: ' + script);

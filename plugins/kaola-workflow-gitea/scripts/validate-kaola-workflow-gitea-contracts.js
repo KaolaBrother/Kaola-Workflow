@@ -171,7 +171,10 @@ const scriptFiles = [
   'kaola-workflow-resolve-agent-model.js',
   'simulate-gitea-workflow-walkthrough.js',
   'simulate-gitea-codex-workflow-walkthrough.js',
-  'install-codex-agent-profiles.js'
+  'install-codex-agent-profiles.js',
+  'kaola-workflow-codex-preflight.js',
+  'kaola-gitea-workflow-task-mirror.js',
+  'kaola-gitea-workflow-codex-compact-resume.js'
 ];
 for (const script of scriptFiles) assert(exists(pluginRoot + '/scripts/' + script), script + ' missing');
 
@@ -189,7 +192,10 @@ const installSupportScripts = [
   'kaola-gitea-workflow-sink-merge.js',
   'kaola-gitea-workflow-sink-pr.js',
   'kaola-workflow-adaptive-schema.js',
-  'kaola-workflow-resolve-agent-model.js'
+  'kaola-workflow-resolve-agent-model.js',
+  'kaola-workflow-codex-preflight.js',
+  'kaola-gitea-workflow-task-mirror.js',
+  'kaola-gitea-workflow-codex-compact-resume.js'
 ];
 for (const script of installSupportScripts) {
   assert(installScript.includes(script), 'install.sh must install Gitea support script: ' + script);

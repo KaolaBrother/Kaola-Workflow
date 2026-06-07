@@ -109,6 +109,55 @@ shared switch.
   emit `/kaola-workflow-plan-run {project}` toggle-agnostically — never
   `/kaola-workflow-phase{N}`.
 
+## Codex Task Mirror (issue #266, AC-C + AC-D)
+
+`kaola-workflow/{project}/workflow-tasks.json` is a **durable artifact** generated
+by `kaola-workflow-task-mirror.js` from the frozen `workflow-plan.md`. It is part of
+the adaptive-path durable state and must be treated as a generated mirror — never
+hand-authored.
+
+**Source of truth chain (important):**
+
+The three levels of task state must never be confused:
+
+1. `## Node Ledger` in `workflow-plan.md` — **correctness truth**. The authoritative
+   record of node lifecycle state. Scripts and barrier logic read only this.
+2. `workflow-tasks.json` — **durable mirror** derived from the `## Node Ledger` (and
+   the `## Nodes` table). Generated; regenerated on resume when missing, unparseable,
+   or when the stored `source_plan_hash` does not match the current plan hash.
+3. Codex UI task list — **ephemeral UI mirror** of `workflow-tasks.json`. It mirrors
+   the file; it is **NOT correctness state** and must never be treated as the reverse.
+   Writing a task item complete in the UI does not update the `## Node Ledger` and
+   confers no workflow guarantees. When the UI task list and `workflow-tasks.json`
+   disagree, `workflow-tasks.json` (and by extension the `## Node Ledger`) is
+   authoritative.
+
+**When to regenerate:** on plan-run resume, compare the on-disk
+`workflow-tasks.json.source_plan_hash` against `readStoredHash` from the current
+`workflow-plan.md`. Regenerate when the file is missing, unparseable, or the stored
+hash does not match. When the hashes match, regeneration is still idempotent and
+cheap (the ledger advances under a fixed `plan_hash`); run it to keep the mirror
+current.
+
+**Schema:**
+
+```json
+{
+  "source_plan_hash": "<64-hex, from the frozen plan_hash>",
+  "tasks": [
+    { "id": "explore", "role": "code-explorer", "status": "completed", "ledger_status": "complete" }
+  ],
+  "last_synced_from_ledger": "<ISO timestamp>"
+}
+```
+
+Field rules:
+- `source_plan_hash`: the `plan_hash` from `workflow-plan.md` (`readStoredHash`); absent on an unfrozen plan — the mirror is only meaningful for a frozen plan, and the generator refuses with `{ "status": "plan_not_frozen" }` when the hash is absent.
+- `tasks[]`: ordered by `## Nodes` row order. `ledger_status` is the raw value from `## Node Ledger` (`complete`/`in_progress`/`pending`/`n/a`); `status` is the UI-facing mapping: `n/a` ledger → `status:"completed"` (for Codex UI compatibility, the skipped arm still appears completed), all others map one-to-one.
+- `last_synced_from_ledger`: the timestamp at which the mirror was last written; injected deterministically in tests via `generateMirror({ planContent, now })`.
+
+See `docs/api.md` § Codex Harness Scripts for the generator CLI and the full `ledger_status → status` mapping table.
+
 ## Generated Mirrors
 
 - `kaola-workflow/ROADMAP.md` is generated from

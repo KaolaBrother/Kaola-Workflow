@@ -57,6 +57,11 @@ const COMMON_SCRIPTS = [
   'kaola-workflow-adaptive-handoff.js',
   // #272 adaptive node: plan-run owns the per-node lifecycle
   'kaola-workflow-adaptive-node.js',
+  // #266 AC-B: Codex agent-profile freshness preflight (true 4-tree byte-identical)
+  'kaola-workflow-codex-preflight.js',
+  // #266 AC-C: workflow-tasks.json generator (base-named claude↔codex pair; gitlab/gitea
+  // are edition-named ports — kaola-{forge}-workflow-task-mirror.js — NOT byte-synced)
+  'kaola-workflow-task-mirror.js',
 ];
 
 const BYTE_IDENTICAL_GROUPS = [
@@ -115,6 +120,18 @@ const BYTE_IDENTICAL_GROUPS = [
       'plugins/kaola-workflow/scripts/kaola-workflow-adaptive-schema.js',
       'plugins/kaola-workflow-gitlab/scripts/kaola-workflow-adaptive-schema.js',
       'plugins/kaola-workflow-gitea/scripts/kaola-workflow-adaptive-schema.js',
+    ],
+  },
+  {
+    // issue #266 AC-B: Codex agent-profile freshness preflight. Authored require-free
+    // (only fs + path + inline regex) so it qualifies as a true 4-tree byte-identical
+    // script — no edition-specific require() means no edition-specific bytes.
+    label: 'codex-preflight copies',
+    files: [
+      'scripts/kaola-workflow-codex-preflight.js',
+      'plugins/kaola-workflow/scripts/kaola-workflow-codex-preflight.js',
+      'plugins/kaola-workflow-gitlab/scripts/kaola-workflow-codex-preflight.js',
+      'plugins/kaola-workflow-gitea/scripts/kaola-workflow-codex-preflight.js',
     ],
   },
 ];

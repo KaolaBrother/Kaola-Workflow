@@ -266,7 +266,9 @@ const sharedScripts = [
   'kaola-workflow-roadmap.js',
   'kaola-workflow-sink-merge.js',
   'kaola-workflow-sink-pr.js',
-  'validate-workflow-contracts.js'
+  'validate-workflow-contracts.js',
+  'kaola-workflow-codex-preflight.js',
+  'kaola-workflow-task-mirror.js'
 ];
 
 for (const script of sharedScripts) {
@@ -474,5 +476,7 @@ assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, 'workflow_path_r
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-repair-state.js`, 'routeAdaptive');
 assertNotIncludes(`${pluginRoot}/scripts/kaola-workflow-repair-state.js`, 'enable_adaptive');
 assertNotIncludes(`${pluginRoot}/scripts/kaola-workflow-plan-validator.js`, 'enable_adaptive');
+// #266: Codex-only compact/resume hook — no claude scripts/ copy; codex plugin tree only.
+assert(exists(`${pluginRoot}/scripts/kaola-workflow-codex-compact-resume.js`), '#266 codex compact-resume hook missing from Codex plugin');
 
 console.log('Kaola-Workflow Codex contract validation passed');

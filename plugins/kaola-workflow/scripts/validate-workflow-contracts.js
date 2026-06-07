@@ -536,6 +536,16 @@ assertIncludes('install.sh', 'kaola-gitea-workflow-adaptive-handoff.js');
 assertIncludes('install.sh', 'kaola-workflow-adaptive-node.js');
 assertIncludes('install.sh', 'kaola-gitlab-workflow-adaptive-node.js');
 assertIncludes('install.sh', 'kaola-gitea-workflow-adaptive-node.js');
+// #266: Codex harness scripts (preflight, task-mirror, compact-resume) must be in
+// install.sh per-edition SUPPORT_SCRIPT_NAMES allowlist. preflight is base-named (4-tree
+// byte-identical); task-mirror is base-named in github/codex, edition-named in gitlab/gitea;
+// compact-resume is codex-only (no claude scripts/ copy) — asserted in codex-only validator.
+assert(exists('scripts/kaola-workflow-codex-preflight.js'), '#266 codex preflight script missing from scripts/');
+assert(exists('scripts/kaola-workflow-task-mirror.js'), '#266 task-mirror script missing from scripts/');
+assertIncludes('install.sh', 'kaola-workflow-codex-preflight.js');
+assertIncludes('install.sh', 'kaola-workflow-task-mirror.js');
+assertIncludes('install.sh', 'kaola-gitlab-workflow-task-mirror.js');
+assertIncludes('install.sh', 'kaola-gitea-workflow-task-mirror.js');
 // router 3-way selection: switch first, adaptive keyword flag-only, OFF preserves 2-way
 assertConcept('commands/workflow-next.md', 'adaptive path selection', [
   'KAOLA_ENABLE_ADAPTIVE', 'adaptive', 'fast|full|adaptive', 'flag-only', 'typed refusal'
