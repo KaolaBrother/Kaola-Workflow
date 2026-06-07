@@ -125,6 +125,56 @@ function parseNodeSelector(cacheText) {
   return { found: last !== null, selector: last };
 }
 
+
+// #279: the mechanical FINDINGS vocabulary a gate/skeptic role (code-reviewer/security-reviewer/
+// adversarial-verifier) emits into its `.cache/{node-id}.md` evidence alongside its verdict. A
+// reviewer/verifier records zero or more structured findings; an UNRESOLVED in-scope action:fix
+// finding must BLOCK the gate even when verdict:pass / findings_blocking:0, so an actionable in-scope
+// defect can never silently become a follow-up (the #279 contract). Three closed vocabularies:
+// scope (where the defect lives), action (what to do), status (resolution state).
+const FINDING_SCOPE_VOCABULARY = Object.freeze(['in_scope', 'out_of_scope', 'pre_existing', 'needs_user_decision']);
+const FINDING_ACTION_VOCABULARY = Object.freeze(['fix', 'follow_up', 'document', 'none']);
+const FINDING_STATUS_VOCABULARY = Object.freeze(['open', 'resolved', 'deferred']);
+
+// PURE (no fs): parse a gate/skeptic role's `.cache/{node-id}.md` for its structured findings. Same
+// discipline as parseNodeVerdict: native multiline regex ONLY (no classifier import — cross-edition
+// byte-identity). FENCE-BLIND BY ANCHOR: a finding line is recognised ONLY at column 0 (`^finding:`,
+// no leading whitespace). FLAT, one finding per line, space/tab-separated `key=value` pairs:
+//   finding: id=R1 scope=in_scope action=fix status=open severity=low fix_role=tdd-guide
+// Keys are lowercased; first value wins on a duplicate key; a token without `=` is ignored; a missing
+// key stays undefined. ABSENT findings block ⇒ []. Returns an array of
+// { raw, id?, scope?, action?, status?, severity?, fix_role? } (only `raw` is guaranteed).
+function parseNodeFindings(cacheText) {
+  const text = String(cacheText || '');
+  const re = /^finding:[ \t]*(.+)$/gm;
+  const out = [];
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const finding = { raw: m[1].trim() };
+    for (const tok of finding.raw.split(/[ \t]+/)) {
+      const eq = tok.indexOf('=');
+      if (eq <= 0) continue;
+      const key = tok.slice(0, eq).toLowerCase();
+      if (finding[key] === undefined) finding[key] = tok.slice(eq + 1);
+    }
+    out.push(finding);
+  }
+  return out;
+}
+
+// PURE (no fs): the #279 gate predicate. Given parsed findings, return those that are an UNRESOLVED
+// IN-SCOPE actionable fix — the set whose non-emptiness must fail the verdict gate even on verdict:pass
+// / findings_blocking:0. FAIL-CLOSED on the resolution state: a present finding blocks unless its
+// status is EXPLICITLY `resolved` or `deferred`, so a missing/unknown status counts as open and a
+// reviewer cannot bypass the gate by omitting status. scope and action must be EXPLICITLY in_scope /
+// fix (the issue's literal `scope: in_scope, action: fix` predicate). severity is IRRELEVANT to
+// blocking — a LOW/MEDIUM in-scope fix still blocks; severity governs urgency/escalation, not the gate.
+function unresolvedInScopeFixes(findings) {
+  return (Array.isArray(findings) ? findings : []).filter(f =>
+    f && f.scope === 'in_scope' && f.action === 'fix' &&
+    f.status !== 'resolved' && f.status !== 'deferred');
+}
+
 // #238: curated, high-collision-risk ROOT (slashless) filenames — CI/CD, container, secrets,
 // dependency-lock, and build manifests where two concurrent projects editing the same one clobber.
 // This is a FOURTH, DISTINCT path vocabulary, kept here on purpose so it cannot drift across the four
@@ -241,6 +291,11 @@ module.exports = {
   VERDICT_VOCABULARY,
   parseNodeVerdict,
   parseNodeSelector,
+  FINDING_SCOPE_VOCABULARY,
+  FINDING_ACTION_VOCABULARY,
+  FINDING_STATUS_VOCABULARY,
+  parseNodeFindings,
+  unresolvedInScopeFixes,
   CURATED_ROOT_PATHS,
   extractCuratedRootPaths,
   isCuratedRoot,

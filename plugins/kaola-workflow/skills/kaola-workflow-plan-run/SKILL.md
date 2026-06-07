@@ -234,6 +234,48 @@ failed quorum routes to a bounded self-repair loop or surfaces as a RISKY escala
 never drops a wall. `loop-until-dry` terminates on static LOOP_CAP (script-enforced)
 plus an agent-tracked dry_streak (orchestrator counts no-change cycles; only LOOP_CAP is validator-enforced).
 
+## Repair routing (in-scope review findings — #279)
+
+A gate/skeptic role (`code-reviewer`, `security-reviewer`, `adversarial-verifier`) records its
+machine verdict AND, alongside it, zero or more **structured findings** in its `.cache/{node-id}.md`
+evidence — one finding per line, anchored at column 0 (fence-blind, exactly like `verdict:`):
+
+`finding: id=R1 scope=in_scope action=fix status=open severity=low fix_role=tdd-guide rationale=<short>`
+
+Closed vocabulary: `scope` ∈ {in_scope, out_of_scope, pre_existing, needs_user_decision}; `action` ∈
+{fix, follow_up, document, none}; `status` ∈ {open, resolved, deferred}; `fix_role` ∈ {tdd-guide,
+implementer, build-error-resolver, security, none}. `severity` governs urgency/escalation, NEVER
+whether the gate blocks — a LOW/MEDIUM in-scope fix still blocks.
+
+`--verdict-check` (#251, hardened by #279) now FAILS a gate — even on `verdict: pass` /
+`findings_blocking: 0` — when any finding is `scope: in_scope, action: fix` whose `status` is not
+`resolved`/`deferred` (a missing `status` reads as `open`, fail-closed). It is informational per-node
+and BLOCKING whole-plan in Phase 6, so an unresolved in-scope actionable defect can never silently
+become a follow-up. The offending finding ids surface in the verdict-check JSON `unresolvedFixes[]`.
+
+When `--verdict-check` reports `unresolvedFixes`, the orchestrator does NOT route to finalize. It
+enters a **bounded repair controller** (static `LOOP_CAP`):
+
+1. **Route** each unresolved finding to its `fix_role`, dispatching one fix at a time: behavior /
+   test / code → `tdd-guide`; no-natural-test / refactor / config / docs glue → `implementer`; build
+   / type / lint / tooling → `build-error-resolver`; a security-sensitive correction → the applicable
+   fix role, then **re-run `security-reviewer`**; an adversarial refute → the applicable fix role,
+   then **re-run the verifier/quorum**.
+2. **Stay inside the repair envelope** = the original implementation write set ∪ tests ∪
+   docs/changelog ∪ required byte-identical mirrors. The per-node barrier (`commit-node`) enforces
+   this mechanically — a write outside the envelope is refused. If a fix genuinely needs a file
+   outside the envelope, **halt/replan/ask** via `write-halt` — never silently defer.
+3. **Re-review**: after the fix lands, the reviewer re-emits its evidence with the finding's
+   `status: resolved` (or is re-dispatched), and `--verdict-check` runs again. Repeat until no
+   `unresolvedFixes` remain or `LOOP_CAP` is reached.
+4. **Cap exhaustion** → halt as blocked/escalated via `write-halt` (`--reason consent` / `test_thrash`),
+   the same revoke-and-surface path the barrier uses. Do NOT convert an unresolved in-scope fix into a
+   follow-up.
+
+Findings marked `out_of_scope`, `pre_existing`, or `needs_user_decision` (or `action: follow_up` /
+`document`) do not block — but they MUST be recorded as **explicit, machine-readable** follow-ups /
+escalations (they remain in the evidence and surface at finalize), never silently dropped.
+
 ## Caps
 
 `FANOUT_CAP` (default 4, env `KAOLA_FANOUT_CAP`), `test_thrash` ≥ 3, file overflow

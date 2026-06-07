@@ -358,9 +358,12 @@ function verifyVerdictBlock(content, opts) {
       const files = globCache('adversarial-verifier-');
       const verdicts = [];
       for (const f of files) {
-        const v = schema.parseNodeVerdict(readCache(f) || '');
+        const cacheText = readCache(f) || '';
+        const v = schema.parseNodeVerdict(cacheText);
         if (!v.found || v.verdict === null) { verdicts.push('fail'); continue; }
-        verdicts.push((v.verdict === 'fail' || (v.findings_blocking || 0) > 0) ? 'fail' : 'pass');
+        // #279: an unresolved in-scope action:fix finding refutes the instance even on verdict:pass.
+        const fixes = schema.unresolvedInScopeFixes(schema.parseNodeFindings(cacheText));
+        verdicts.push((v.verdict === 'fail' || (v.findings_blocking || 0) > 0 || fixes.length > 0) ? 'fail' : 'pass');
       }
       if (!verdicts.length) {
         return { ok: false, nodeId: node.id, role, verdict: 'fail', findings_blocking: null, found: false,
@@ -384,9 +387,18 @@ function verifyVerdictBlock(content, opts) {
         reason: `gate role ${role} node ${node.id} verdict missing or unparseable` };
     }
     const blocking = v.findings_blocking || 0;
-    const ok = v.verdict === 'pass' && blocking === 0;
-    return { ok, nodeId: node.id, role, verdict: v.verdict, findings_blocking: v.findings_blocking, found: true,
-      reason: ok ? undefined : `gate role ${role} node ${node.id} verdict=${v.verdict} findings_blocking=${blocking}` };
+    // #279: an unresolved in-scope action:fix finding fails the gate EVEN on verdict:pass /
+    // findings_blocking:0 — an actionable in-scope defect can never silently become a follow-up.
+    const unresolvedFixes = schema.unresolvedInScopeFixes(schema.parseNodeFindings(raw));
+    const ok = v.verdict === 'pass' && blocking === 0 && unresolvedFixes.length === 0;
+    const fixIds = unresolvedFixes.map(f => f.id || f.raw).join(', ');
+    return { ok, nodeId: node.id, role, verdict: v.verdict, findings_blocking: v.findings_blocking,
+      unresolvedFixes: unresolvedFixes.map(f => ({ id: f.id || null, fix_role: f.fix_role || null, severity: f.severity || null, raw: f.raw })),
+      found: true,
+      reason: ok ? undefined
+        : (v.verdict === 'pass' && blocking === 0
+          ? `gate role ${role} node ${node.id} verdict=pass but ${unresolvedFixes.length} unresolved in-scope action:fix finding(s): ${fixIds}`
+          : `gate role ${role} node ${node.id} verdict=${v.verdict} findings_blocking=${blocking}`) };
   }
   if (opts.nodeId) {
     const node = nodes.find(n => n.id === opts.nodeId);

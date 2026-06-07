@@ -7085,6 +7085,70 @@ function testAdaptiveVerdictCheck() {
       '--verdict-check whole-plan fail: ok:false/failures.length===1, got ' + cr.stdout);
 
     // -------------------------------------------------------------------
+    // (4b) #279: an unresolved in-scope action:fix finding fails the gate even on verdict:pass
+    // -------------------------------------------------------------------
+
+    // parseNodeFindings pure: flat col-0 lines parse into key=value objects
+    let nf = schema.parseNodeFindings('verdict: pass\nfinding: id=R1 scope=in_scope action=fix status=open severity=low\nfinding: id=R2 scope=out_of_scope action=follow_up status=open\n');
+    assert(nf.length === 2 && nf[0].id === 'R1' && nf[0].scope === 'in_scope' && nf[0].action === 'fix' && nf[0].status === 'open',
+      'parseNodeFindings: two flat findings parse, got ' + JSON.stringify(nf));
+
+    // absent findings -> []
+    assert(schema.parseNodeFindings('verdict: pass\nfindings_blocking: 0\n').length === 0,
+      'parseNodeFindings: absent findings => []');
+
+    // fence-blind col-0 anchor: indented finding must NOT match
+    assert(schema.parseNodeFindings('    finding: id=R9 scope=in_scope action=fix\n').length === 0,
+      'parseNodeFindings: indented finding must NOT match (col-0 anchor)');
+
+    // unresolvedInScopeFixes predicate: only the in_scope/fix/open finding blocks
+    assert(schema.unresolvedInScopeFixes(nf).length === 1 && schema.unresolvedInScopeFixes(nf)[0].id === 'R1',
+      'unresolvedInScopeFixes: only the in_scope/fix finding blocks, got ' + JSON.stringify(schema.unresolvedInScopeFixes(nf)));
+
+    // fail-closed: missing status counts as open (blocks)
+    assert(schema.unresolvedInScopeFixes(schema.parseNodeFindings('finding: id=R3 scope=in_scope action=fix\n')).length === 1,
+      'unresolvedInScopeFixes: missing status fails closed (blocks)');
+
+    // resolved / deferred do not block
+    assert(schema.unresolvedInScopeFixes(schema.parseNodeFindings('finding: id=R4 scope=in_scope action=fix status=resolved\nfinding: id=R5 scope=in_scope action=fix status=deferred\n')).length === 0,
+      'unresolvedInScopeFixes: resolved/deferred do not block');
+
+    // severity is irrelevant: a low-severity in-scope fix still blocks
+    assert(schema.unresolvedInScopeFixes(schema.parseNodeFindings('finding: id=R6 scope=in_scope action=fix status=open severity=low\n')).length === 1,
+      'unresolvedInScopeFixes: low severity still blocks');
+
+    // verifyVerdictBlock pure (AC1): verdict:pass + unresolved in-scope fix -> ok:false
+    r = planValidator.verifyVerdictBlock(
+      mkVerdictPlan(baseNodes, allComplete),
+      { readCache: (f) => f === 'rv.md' ? 'verdict: pass\nfindings_blocking: 0\nfinding: id=R1 scope=in_scope action=fix status=open severity=low\n' : null }
+    );
+    assert(r.ok === false && /unresolved in-scope/.test(r.failures.map(x => x.reason || '').join(' ')),
+      'verifyVerdictBlock: verdict:pass + unresolved in-scope fix -> ok:false (#279 AC1), got ' + JSON.stringify(r));
+
+    // verifyVerdictBlock pure (AC3): verdict:pass + out_of_scope follow_up -> ok:true (recordable, not blocking)
+    r = planValidator.verifyVerdictBlock(
+      mkVerdictPlan(baseNodes, allComplete),
+      { readCache: (f) => f === 'rv.md' ? 'verdict: pass\nfindings_blocking: 0\nfinding: id=R2 scope=out_of_scope action=follow_up status=open\n' : null }
+    );
+    assert(r.ok === true,
+      'verifyVerdictBlock: out_of_scope follow_up does not block (#279 AC3), got ' + JSON.stringify(r));
+
+    // CLI whole-plan (AC6 — the actual finalize gate): a COMPLETE review node with verdict:pass but an unresolved in-scope fix -> exit 1
+    fs.writeFileSync(path.join(cacheDir, 'rv.md'), 'verdict: pass\nfindings_blocking: 0\nfinding: id=R1 scope=in_scope action=fix status=open severity=low\n');
+    cr = runNode(planValidatorScript, [vcPlanPath, '--verdict-check', '--json'], vcDir);
+    assert(cr.status === 1,
+      '#279 AC6: whole-plan --verdict-check must exit 1 when a complete review node has verdict:pass + unresolved in-scope fix, got ' + cr.status + ' ' + cr.stdout);
+    const f279 = JSON.parse(cr.stdout);
+    assert(f279.ok === false && f279.failures.length === 1,
+      '#279 AC6: whole-plan fail -> ok:false/failures.length===1, got ' + cr.stdout);
+
+    // CLI whole-plan negative control: verdict:pass + RESOLVED in-scope fix -> exit 0
+    fs.writeFileSync(path.join(cacheDir, 'rv.md'), 'verdict: pass\nfindings_blocking: 0\nfinding: id=R1 scope=in_scope action=fix status=resolved\n');
+    cr = runNode(planValidatorScript, [vcPlanPath, '--verdict-check', '--json'], vcDir);
+    assert(cr.status === 0,
+      '#279: whole-plan --verdict-check must exit 0 when the in-scope fix is resolved, got ' + cr.status + ' ' + cr.stdout);
+
+    // -------------------------------------------------------------------
     // (5) #263 --selector-check CLI via runNode on a temp dir
     // -------------------------------------------------------------------
 
