@@ -5380,6 +5380,154 @@ function testFinalizeClaimLabelFailedTriggersInvariant() {
   }
 }
 
+// Issue #275 — clearAdvisoryClaim deletes the kw:claim marker comment at source
+// ---------------------------------------------------------------------------
+
+function testClearAdvisoryClaimDeletesMarkerComment() {
+  // RED->GREEN: after discard, the gh api DELETE for the matched comment id MUST be called.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-clear-claim-delete-'));
+  const binDir = path.join(tmp, 'bin');
+  const deleteMarker = path.join(tmp, 'comment-deleted.marker');
+  const listCalledMarker = path.join(tmp, 'list-called.marker');
+  try {
+    initGitRepo(tmp);
+    plantActiveFolder(tmp, 'issue-920', 920, null);
+    plantRoadmapIssue(tmp, 920, '');
+    fs.mkdirSync(binDir, { recursive: true });
+    // Shim: --method DELETE branch MUST come before the bare list branch (both contain "comments")
+    writeShimFiles(path.join(binDir, 'gh'), [
+      "const fs = require('fs');",
+      "const a = process.argv.slice(2).join(' ');",
+      // DELETE: repos/{owner}/{repo}/issues/comments/42001
+      "if ((a.includes('--method DELETE') || a.includes('-X DELETE')) && a.includes('issues/comments/42001')) {",
+      "  fs.writeFileSync(" + JSON.stringify(deleteMarker) + ", 'x');",
+      "  process.stdout.write('\\n');",
+      // list comments for issue 920 — return one matching project-scoped marker with id 42001
+      "} else if (a.includes('api') && a.includes('issues/920/comments')) {",
+      "  fs.writeFileSync(" + JSON.stringify(listCalledMarker) + ", 'x');",
+      "  process.stdout.write('[{\"id\":42001,\"body\":\"<!-- kw:claim project=issue-920 -->\\\\nKaola-Workflow started local work for `issue-920`.\",\"updated_at\":\"2099-01-01T00:00:00Z\"}]\\n');",
+      "} else if (a.includes('issue edit') && a.includes('--remove-label')) {",
+      "  process.stdout.write('{}\\n');",
+      "} else if (a.includes('issue view')) {",
+      "  process.stdout.write('{\"state\":\"open\"}\\n');",
+      "} else if (a.includes('issue comment')) {",
+      "  process.stdout.write('{}\\n');",
+      "} else {",
+      "  process.stdout.write('{}\\n');",
+      "}"
+    ]);
+    runClaimOnline(['finalize', '--project', 'issue-920'], tmp, binDir);
+    assert(
+      fs.existsSync(listCalledMarker),
+      'clearAdvisoryClaim must list issue comments via gh api (list-called.marker absent)'
+    );
+    assert(
+      fs.existsSync(deleteMarker),
+      'clearAdvisoryClaim must DELETE the matched project-scoped marker comment (comment-deleted.marker absent)'
+    );
+    console.log('testClearAdvisoryClaimDeletesMarkerComment: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testClearAdvisoryClaimDoesNotDeleteOtherProjectMarker() {
+  // Project-scoping: a marker for a DIFFERENT project must NOT be deleted.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-clear-claim-nodel-'));
+  const binDir = path.join(tmp, 'bin');
+  const deleteMarker = path.join(tmp, 'comment-deleted.marker');
+  const listCalledMarker = path.join(tmp, 'list-called.marker');
+  try {
+    initGitRepo(tmp);
+    plantActiveFolder(tmp, 'issue-921', 921, null);
+    plantRoadmapIssue(tmp, 921, '');
+    fs.mkdirSync(binDir, { recursive: true });
+    writeShimFiles(path.join(binDir, 'gh'), [
+      "const fs = require('fs');",
+      "const a = process.argv.slice(2).join(' ');",
+      // DELETE — should NOT be called for the wrong project's comment
+      "if ((a.includes('--method DELETE') || a.includes('-X DELETE')) && a.includes('issues/comments/')) {",
+      "  fs.writeFileSync(" + JSON.stringify(deleteMarker) + ", 'x');",
+      "  process.stdout.write('\\n');",
+      // list comments — return a marker for a DIFFERENT project (issue-OTHER)
+      "} else if (a.includes('api') && a.includes('issues/921/comments')) {",
+      "  fs.writeFileSync(" + JSON.stringify(listCalledMarker) + ", 'x');",
+      "  process.stdout.write('[{\"id\":99999,\"body\":\"<!-- kw:claim project=issue-OTHER -->\\\\nKaola-Workflow started local work for `issue-OTHER`.\",\"updated_at\":\"2099-01-01T00:00:00Z\"}]\\n');",
+      "} else if (a.includes('issue edit') && a.includes('--remove-label')) {",
+      "  process.stdout.write('{}\\n');",
+      "} else if (a.includes('issue view')) {",
+      "  process.stdout.write('{\"state\":\"open\"}\\n');",
+      "} else if (a.includes('issue comment')) {",
+      "  process.stdout.write('{}\\n');",
+      "} else {",
+      "  process.stdout.write('{}\\n');",
+      "}"
+    ]);
+    runClaimOnline(['finalize', '--project', 'issue-921'], tmp, binDir);
+    assert(
+      fs.existsSync(listCalledMarker),
+      'clearAdvisoryClaim must still list comments to check for a match (list-called.marker absent)'
+    );
+    assert(
+      !fs.existsSync(deleteMarker),
+      'clearAdvisoryClaim must NOT delete a comment from a DIFFERENT project (comment-deleted.marker must be absent)'
+    );
+    console.log('testClearAdvisoryClaimDoesNotDeleteOtherProjectMarker: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testClearAdvisoryClaimOfflineSkipsDelete() {
+  // OFFLINE: no comment list and no DELETE must happen; return stays skipped_offline.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-clear-claim-offline-'));
+  const binDir = path.join(tmp, 'bin');
+  const listCalledMarker = path.join(tmp, 'list-called.marker');
+  const deleteMarker = path.join(tmp, 'comment-deleted.marker');
+  try {
+    initGitRepo(tmp);
+    plantActiveFolder(tmp, 'issue-922', 922, null);
+    // No roadmap entry — offline finalize skips roadmap ops
+    fs.mkdirSync(binDir, { recursive: true });
+    writeShimFiles(path.join(binDir, 'gh'), [
+      "const fs = require('fs');",
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('api') && a.includes('issues/922/comments')) {",
+      "  fs.writeFileSync(" + JSON.stringify(listCalledMarker) + ", 'x');",
+      "  process.stdout.write('[{\"id\":77777,\"body\":\"<!-- kw:claim project=issue-922 -->\",\"updated_at\":\"2099-01-01T00:00:00Z\"}]\\n');",
+      "} else if ((a.includes('--method DELETE') || a.includes('-X DELETE')) && a.includes('issues/comments/')) {",
+      "  fs.writeFileSync(" + JSON.stringify(deleteMarker) + ", 'x');",
+      "  process.stdout.write('\\n');",
+      "} else {",
+      "  process.stdout.write('{}\\n');",
+      "}"
+    ]);
+    // Use spawnSync directly (not runClaimOnline) to set OFFLINE=1
+    const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', 'issue-922'], {
+      cwd: tmp,
+      encoding: 'utf8',
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_GH_MOCK_SCRIPT: path.join(binDir, 'gh.js') }
+    });
+    assert(result.status === 0, 'offline finalize should exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    const parsed = JSON.parse(result.stdout);
+    assert(
+      parsed.claim_label_removed === 'skipped_offline',
+      'offline finalize must return claim_label_removed:skipped_offline, got: ' + parsed.claim_label_removed
+    );
+    assert(
+      !fs.existsSync(listCalledMarker),
+      'offline clearAdvisoryClaim must NOT call gh api to list comments (list-called.marker must be absent)'
+    );
+    assert(
+      !fs.existsSync(deleteMarker),
+      'offline clearAdvisoryClaim must NOT call gh api DELETE (comment-deleted.marker must be absent)'
+    );
+    console.log('testClearAdvisoryClaimOfflineSkipsDelete: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 // issue-164 Task 5: tests for closure receipt shape and mockability
 
 function testSinkMergeEmitsClosureReceipt() {
@@ -8262,6 +8410,9 @@ async function main() {
     testWatchPrEmitsClaimLabelReceipt();
     testAuditAndRepairLabels();
     testFinalizeClaimLabelFailedTriggersInvariant();
+    testClearAdvisoryClaimDeletesMarkerComment();
+    testClearAdvisoryClaimDoesNotDeleteOtherProjectMarker();
+    testClearAdvisoryClaimOfflineSkipsDelete();
     testSinkMergeEmitsClosureReceipt();
     testWatchPrMergedClosureReceipt();
     testFinalizeOfflineClosureReceiptSkipped();

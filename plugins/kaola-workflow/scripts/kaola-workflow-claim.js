@@ -450,7 +450,7 @@ function removeLegacyStateBlocks(content) {
     .replace(fieldPattern, '');
 }
 
-function clearAdvisoryClaim(issueNumber, reason) {
+function clearAdvisoryClaim(issueNumber, reason, project) {
   if (OFFLINE || issueNumber == null) return 'skipped_offline';
   let status = 'failed';
   try {
@@ -460,6 +460,19 @@ function clearAdvisoryClaim(issueNumber, reason) {
   if (reason) {
     try { ghExec(['issue', 'comment', String(issueNumber), '--body', 'Kaola-Workflow advisory claim cleared: ' + reason]); } catch (_) {}
   }
+  // Delete the project-scoped kw:claim marker comment so the remote-claim detector
+  // no longer blocks re-claiming this issue after discard/release/finalize (#275).
+  try {
+    const raw = ghExec(['api', 'repos/{owner}/{repo}/issues/' + String(issueNumber) + '/comments']);
+    const comments = JSON.parse(raw || '[]');
+    const marker = project ? ('<!-- kw:claim project=' + project + ' -->') : null;
+    for (const comment of comments) {
+      if (!comment || !comment.body || !comment.id) continue;
+      if (marker ? comment.body.includes(marker) : /<!--\s*kw:claim\s+project=/.test(comment.body)) {
+        try { ghExec(['api', '--method', 'DELETE', 'repos/{owner}/{repo}/issues/comments/' + String(comment.id)]); } catch (_) {}
+      }
+    }
+  } catch (_) {}
   return status;
 }
 
@@ -901,7 +914,7 @@ function cmdFinalize() {
       }
     } catch (_) {}
   }
-  const claimLabelRemoved = clearAdvisoryClaim(issueNumber, 'finalized');
+  const claimLabelRemoved = clearAdvisoryClaim(issueNumber, 'finalized', args.project);
   let remoteIssueClosed = 'skipped_offline';
   if (!OFFLINE && issueNumber) {
     try {
@@ -976,7 +989,7 @@ function cmdRelease() {
     } catch (_) { /* defensive: discard must not throw */ }
   }
 
-  clearAdvisoryClaim(folder.issue_number, args.reason || 'discarded');
+  clearAdvisoryClaim(folder.issue_number, args.reason || 'discarded', folder.project);
   output(Object.assign({ released: true, project: folder.project }, result, restoreNote ? { restore_note: restoreNote } : {}));
 }
 
@@ -1283,7 +1296,7 @@ function cmdWatchPr() {
         else if (wtResult && wtResult.removed === false && wtResult.reason === 'missing') worktreeRemoved = 'missing';
         else if (wtResult && wtResult.removed === false) worktreeRemoved = 'failed';
       } catch (_) { worktreeRemoved = 'failed'; }
-      const claimLabelStatus = clearAdvisoryClaim(folder.issue_number, 'pr merged');
+      const claimLabelStatus = clearAdvisoryClaim(folder.issue_number, 'pr merged', folder.project);
       const folderReceipt = buildClosureReceipt(folder.project, folder.issue_number, {
         archive: archiveResult.skipped ? 'skipped' : (archiveResult.archived ? 'closed' : 'failed'),
         roadmap_source_removed: archiveResult ? archiveResult.roadmap_source_removed : 'failed',
@@ -1304,7 +1317,7 @@ function cmdWatchPr() {
         else if (wtResult && wtResult.removed === false && wtResult.reason === 'missing') worktreeRemoved = 'missing';
         else if (wtResult && wtResult.removed === false) worktreeRemoved = 'failed';
       } catch (_) { worktreeRemoved = 'failed'; }
-      const claimLabelStatus = clearAdvisoryClaim(folder.issue_number, 'pr closed');
+      const claimLabelStatus = clearAdvisoryClaim(folder.issue_number, 'pr closed', folder.project);
       const folderReceipt = buildClosureReceipt(folder.project, folder.issue_number, {
         archive: archiveResult.skipped ? 'skipped' : (archiveResult.archived ? 'abandoned' : 'failed'),
         roadmap_source_removed: archiveResult ? archiveResult.roadmap_source_removed : 'failed',
