@@ -155,23 +155,11 @@ When it runs, `cmdFinalize` atomically writes `status: closed` + `step: complete
 
 If `SINK_KIND` is `pr`: skip this step. Proceed to Step 8 (commit). The active folder remains open. `sink-pr.js` (Step 9) writes the PR URL into the active folder and then immediately creates a deliberate metadata follow-up commit (`chore: record PR metadata for {project}`) so the worktree is clean after sink. `watch-pr` (on the next `/workflow-next` startup) detects the merged or closed PR and archives the folder automatically.
 
-### Step 7 - Roadmap Regeneration and git-add Staging
+### Step 7 - Roadmap git-add Staging
 
-If this project was linked to GitHub issue N, delete its per-issue roadmap file:
-
-```bash
-rm -f kaola-workflow/.roadmap/issue-N.md
-```
-
-(`rm -f` is idempotent — safe if the file is missing or no issue was linked.)
-
-Regenerate `ROADMAP.md` from the remaining per-issue files:
-
-```bash
-kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
-ROADMAP_JS="$(kaola_script kaola-workflow-roadmap.js)"
-[ -f "$ROADMAP_JS" ] && node "$ROADMAP_JS" generate
-```
+The roadmap closure (removing `kaola-workflow/.roadmap/issue-N.md` and regenerating
+`ROADMAP.md`) is performed by `cmdFinalize` / `archiveProjectDir` at Step 8b.
+Step 7 only stages the result of that closure for inclusion in the final commit.
 
 Stage both the deleted per-issue file and the regenerated `ROADMAP.md` together in the final commit:
 

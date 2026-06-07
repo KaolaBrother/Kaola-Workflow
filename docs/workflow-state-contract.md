@@ -164,6 +164,11 @@ See `docs/api.md` § Codex Harness Scripts for the generator CLI and the full `l
   `kaola-workflow/.roadmap/issue-*.md`. Treat it as a mirror, not a source.
 - Regenerate the mirror after issue state changes, after removing the source file
   for a closed issue, or after creating a new per-issue source file.
+- **Single-owner finalize invariant**: during issue finalize, the per-issue source
+  removal (`kaola-workflow/.roadmap/issue-N.md`) and `ROADMAP.md` regeneration are
+  performed exactly once by `cmdFinalize` / `archiveProjectDir` (Phase-6 Step 8b).
+  The Phase-6 Mechanical-Finalization Step 7 (in `agents/contractor.md`) only stages
+  the result with `git add`; it does not re-run the rm or the regenerate.
 - `kaola-workflow-roadmap.js generate` must not replace a generated roadmap that
   still lists active issues with `none` solely because `.roadmap/` is missing.
 - An **optional** project-local file `kaola-workflow/.roadmap/_rules.md` may carry

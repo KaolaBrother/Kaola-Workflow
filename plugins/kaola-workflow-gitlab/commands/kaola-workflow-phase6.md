@@ -488,18 +488,14 @@ or `issue_iid` in `workflow-state.md` on the fast path):
 
 **Roadmap regeneration:**
 
-If this project was linked to GitLab issue N, delete its per-issue roadmap file:
-
-```bash
-rm -f kaola-workflow/.roadmap/issue-N.md
-```
-
-(`rm -f` is idempotent — safe if the file is missing or no issue was linked.)
-
-The roadmap-regen + git-add staging runnable body lives exclusively in
-`agents/contractor.md` (Step 7 of the Mechanical Finalization Procedure). The
-contractor executes it: delete `kaola-workflow/.roadmap/issue-N.md`, run
-`kaola-gitlab-workflow-roadmap.js generate`, then `git add` both files.
+The actual roadmap closure (delete `kaola-workflow/.roadmap/issue-N.md` +
+regenerate `ROADMAP.md` via `kaola-gitlab-workflow-roadmap.js generate`) is
+performed by `cmdFinalize` / `archiveProjectDir` at Step 8b. The git-add staging
+runnable body lives exclusively in `agents/contractor.md` (Step 7 of the
+Mechanical Finalization Procedure): the contractor only stages the result — the
+deleted per-issue file and the regenerated `ROADMAP.md` — with `git add`. It does
+not re-run the delete or generate. This ensures the closure happens exactly once,
+owned solely by `cmdFinalize`.
 
 Do not reorganize roadmap entries that came from closure decision items until the user has approved the advisor-backed next step.
 

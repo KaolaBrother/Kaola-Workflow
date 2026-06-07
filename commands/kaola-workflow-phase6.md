@@ -493,10 +493,17 @@ or `issue_number` in `workflow-state.md` on the fast path):
 
 **Roadmap regeneration:**
 
-The roadmap-regen + git-add staging runnable body lives exclusively in
-`agents/contractor.md` (Step 7 of the Mechanical Finalization Procedure). The
-contractor executes it: delete `kaola-workflow/.roadmap/issue-N.md`, run
-`kaola-workflow-roadmap.js generate`, then `git add` both files.
+The actual roadmap closure (rm `kaola-workflow/.roadmap/issue-N.md` + regenerate
+`ROADMAP.md`) is performed by `cmdFinalize` / `archiveProjectDir` at Step 8b.
+The runnable body in `agents/contractor.md` (Step 7) only stages the result —
+it does NOT re-run the rm or generate. This ensures the closure happens exactly
+once, owned solely by `cmdFinalize`.
+
+The git-add staging runnable body lives exclusively in `agents/contractor.md`
+(Step 7 of the Mechanical Finalization Procedure): the contractor stages the
+closure result — the deleted `kaola-workflow/.roadmap/issue-N.md` and the
+regenerated `ROADMAP.md` — with `git add`. It does not perform the delete or the
+`generate` itself; those run once, in `cmdFinalize` / `archiveProjectDir` (Step 8b).
 
 Do not reorganize roadmap entries that came from closure decision items until the user has approved the advisor-backed next step.
 
