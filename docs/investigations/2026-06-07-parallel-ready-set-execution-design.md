@@ -336,6 +336,8 @@ The plan for issue #281 is a sequential DAG, executed by the installed one-node-
   - The `join` step is path-scoped and idempotent (re-checkout of identical content is a no-op; partial/crashed join recovers by re-running only unmerged members).
 - **Where the host lacks isolated-worktree support, write-role batch members degrade to serialized execution** — opened one at a time, same per-node lifecycle, correctness preserved, wall-clock parallelism forgone. This is an intentional degradation path, not a failure mode.
 
+> **Tracked as a follow-up:** completing AC#3 (activating isolated node worktrees + idempotent path-scoped joins for write-role batches) and the related `gitCheckout` ref-vs-path edge on the dormant join path (review finding R3) are tracked in **issue #292**. The state-logic hardening follow-ups (R1/R2/R4) are tracked in **issue #291**.
+
 ---
 
 ## 11. Implementation file and anchor map
