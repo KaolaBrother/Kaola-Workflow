@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **adaptive: contract-validator concept checks tolerate cosmetic prose reflow (#276).** The contract-validator inclusion/concept helpers (`assertIncludes`, `assertConcept`, `assertBefore`) matched pinned multi-word prose with raw, whitespace-sensitive substring matching (`String.includes`/`indexOf`), so a purely cosmetic Markdown line reflow of a pinned phrase — splitting it across a newline + indentation — made the substring absent and **false-failed** the gate even though the concept was fully intact (it bit the #272 run: a `**Revoke and halt for consent**` reflow false-failed `npm test` and cost a manual rejoin + barrier re-baseline). A new `norm(s) = String(s).replace(/\s+/g, ' ')` collapses whitespace runs (newlines + indentation) to a single space on **both** the haystack and the needle before matching, in all three helpers. This errs **only** toward false-negatives by construction — it adds reflow tolerance while a genuinely removed or reworded concept still fails (different/absent words), so it can never let drift slip through; single-token pins are unaffected. Applied across all five validator copies: the byte-identical Claude↔Codex `validate-workflow-contracts.js` pair (`validate-script-sync.js` `COMMON_SCRIPTS`), the Codex-only `validate-kaola-workflow-contracts.js`, and the GitLab/Gitea renamed ports. The Claude pair additionally gains a `require.main`-guarded `module.exports` (legal top-level `return`; run-as-script behavior byte-unchanged — verified no module `require()`s these validators) so the helpers are unit-testable. New RED→GREEN regression in `scripts/simulate-workflow-walkthrough.js` (`testContractValidatorReflowTolerant`): a fixture whose pinned phrase is wrapped across a line break now passes, and a fixture with the phrase removed still throws. `npm test` green across all four editions (claude/codex/gitlab/gitea).
+
 ## [5.5.0] — 2026-06-07
 
 ### Added

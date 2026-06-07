@@ -19,8 +19,11 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
+// issue #276: whitespace-normalize multi-word needles for reflow tolerance
+function norm(s) { return String(s).replace(/\s+/g, ' '); }
+
 function assertIncludes(file, needle) {
-  assert(read(file).includes(needle), file + ' must include: ' + needle);
+  assert(norm(read(file)).includes(norm(needle)), file + ' must include: ' + needle);
 }
 
 function assertNotIncludes(file, needle) {
@@ -28,8 +31,8 @@ function assertNotIncludes(file, needle) {
 }
 
 function assertConcept(file, concept, terms) {
-  const content = read(file).toLowerCase();
-  const missing = terms.filter(term => !content.includes(term.toLowerCase()));
+  const content = norm(read(file).toLowerCase());
+  const missing = terms.filter(term => !content.includes(norm(term.toLowerCase())));
   assert(missing.length === 0, file + ' must document ' + concept + '; missing: ' + missing.join(', '));
 }
 

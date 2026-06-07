@@ -6169,6 +6169,50 @@ function testContractValidatorOfflineSkip() {
   console.log('testContractValidatorOfflineSkip: PASSED');
 }
 
+function testContractValidatorReflowTolerant() {
+  // issue #276 RED→GREEN: assertConcept must tolerate a multi-word phrase
+  // split across a newline + indentation (cosmetic Markdown reflow).
+  const contractsModule = require('./validate-workflow-contracts.js');
+  const { assertConcept } = contractsModule;
+  const root = path.resolve(__dirname, '..');
+  const tmpDir = fs.mkdtempSync(path.join(root, '.kw-contract-fixture-'));
+  try {
+    // Fixture A: phrase "halt for consent" wrapped across a line break.
+    // assertConcept must NOT throw (concept is still present — norm collapses whitespace).
+    const fixtureA = path.join(tmpDir, 'fixture-a.md');
+    fs.writeFileSync(fixtureA,
+      '# Doc\nThe system will halt for\n   consent before proceeding.\n');
+    const relA = path.relative(root, fixtureA);
+    let threw = false;
+    try {
+      assertConcept(relA, 'consent halt', ['halt for consent']);
+    } catch (_) {
+      threw = true;
+    }
+    assert(!threw,
+      'testContractValidatorReflowTolerant: assertConcept must NOT throw for a ' +
+      'line-wrapped phrase (norm should collapse whitespace)');
+
+    // Fixture B: phrase "halt for consent" entirely absent — must still throw.
+    const fixtureB = path.join(tmpDir, 'fixture-b.md');
+    fs.writeFileSync(fixtureB,
+      '# Doc\nThe system proceeds normally.\n');
+    const relB = path.relative(root, fixtureB);
+    let threwB = false;
+    try {
+      assertConcept(relB, 'consent halt', ['halt for consent']);
+    } catch (_) {
+      threwB = true;
+    }
+    assert(threwB,
+      'testContractValidatorReflowTolerant: assertConcept must THROW when phrase is absent');
+
+    console.log('testContractValidatorReflowTolerant: PASSED');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+}
+
 function testContractValidatorMissingTag() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-contracts-missing-tag-'));
   try {
@@ -7947,6 +7991,7 @@ async function main() {
     testClosureAuditExecuteLabelRemovalNonTimeoutFails();
     testClosureAuditPrFolderTimeout();
     testContractValidatorOfflineSkip();
+    testContractValidatorReflowTolerant();
     testContractValidatorMissingTag();
     testWatchPrAbandonedClosureInvariantsClean();
     testClaimReclaimsStatelessOrphanDir();

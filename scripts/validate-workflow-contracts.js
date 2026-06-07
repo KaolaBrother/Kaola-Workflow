@@ -19,7 +19,7 @@ function assert(condition, message) {
 }
 
 function assertIncludes(file, needle) {
-  assert(read(file).includes(needle), file + ' must include: ' + needle);
+  assert(norm(read(file)).includes(norm(needle)), file + ' must include: ' + needle);
 }
 
 function assertNotIncludes(file, needle) {
@@ -27,16 +27,17 @@ function assertNotIncludes(file, needle) {
 }
 
 function assertConcept(file, concept, terms) {
-  const content = read(file).toLowerCase();
-  const missing = terms.filter(term => !content.includes(term.toLowerCase()));
+  const content = norm(read(file).toLowerCase());
+  const missing = terms.filter(term => !content.includes(norm(term.toLowerCase())));
   assert(missing.length === 0, file + ' must document ' + concept + '; missing: ' + missing.join(', '));
 }
 
 function assertBefore(file, first, second) {
-  const content = read(file);
-  assert(content.indexOf(first) >= 0, file + ' must include: ' + first);
-  assert(content.indexOf(second) >= 0, file + ' must include: ' + second);
-  assert(content.indexOf(first) < content.indexOf(second), file + ' must put ' + first + ' before ' + second);
+  const content = norm(read(file));
+  const nf = norm(first), ns = norm(second);
+  assert(content.indexOf(nf) >= 0, file + ' must include: ' + first);
+  assert(content.indexOf(ns) >= 0, file + ' must include: ' + second);
+  assert(content.indexOf(nf) < content.indexOf(ns), file + ' must put ' + first + ' before ' + second);
 }
 
 function assertEveryDispatchHasModel(file) {
@@ -91,6 +92,14 @@ function resumeClausePair(content) {
   const lines = String(content || '').split('\n');
   const idx = lines.findIndex(line => line.includes('On resume, extract and reassign'));
   return idx < 0 ? '' : lines[idx] + '\n' + (lines[idx + 1] || '');
+}
+
+// issue #276: whitespace-normalize multi-word needles for reflow tolerance
+function norm(s) { return String(s).replace(/\s+/g, ' '); }
+
+if (require.main !== module) {
+  module.exports = { norm, assertIncludes, assertConcept, assertBefore };
+  return;
 }
 
 const retired = [

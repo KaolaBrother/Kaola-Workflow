@@ -57,8 +57,11 @@ function assertNoForbidden(file) {
   for (const re of forbidden) assert(!re.test(text), file + ' contains forbidden reference: ' + re);
 }
 
+// issue #276: whitespace-normalize multi-word needles for reflow tolerance
+function norm(s) { return String(s).replace(/\s+/g, ' '); }
+
 function assertIncludes(file, needle) {
-  assert(read(file).includes(needle), file + ' must include: ' + needle);
+  assert(norm(read(file)).includes(norm(needle)), file + ' must include: ' + needle);
 }
 
 function assertNotIncludes(file, needle) {
@@ -66,16 +69,17 @@ function assertNotIncludes(file, needle) {
 }
 
 function assertBefore(file, earlier, later) {
-  const text = read(file);
-  const ei = text.indexOf(earlier), li = text.indexOf(later);
+  const text = norm(read(file));
+  const ne = norm(earlier), nl = norm(later);
+  const ei = text.indexOf(ne), li = text.indexOf(nl);
   assert(ei !== -1, file + ' must include: ' + earlier);
   assert(li !== -1, file + ' must include: ' + later);
   assert(ei < li, file + ': "' + earlier + '" must appear before "' + later + '"');
 }
 
 function assertConcept(file, concept, terms) {
-  const content = read(file).toLowerCase();
-  const missing = terms.filter(term => !content.includes(term.toLowerCase()));
+  const content = norm(read(file).toLowerCase());
+  const missing = terms.filter(term => !content.includes(norm(term.toLowerCase())));
   assert(missing.length === 0,
     file + ' must document ' + concept + '; missing: ' + missing.join(', '));
 }
