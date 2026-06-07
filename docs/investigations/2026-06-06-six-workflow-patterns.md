@@ -1,7 +1,7 @@
-# Six workflow patterns, mapped to the adaptive grammar — and the one gap worth filling
+# Six workflow patterns, mapped to the adaptive grammar — including the now-shipped Classify-And-Act
 
 **Date:** 2026-06-06
-**Status:** Design — filed as issue #263
+**Status:** Shipped (#263, commit `84d6e23`)
 **Relates to:** `docs/investigations/dynamic-workflow-composition-2026-06-02.md`
 (the "Borrowed orchestration patterns" catalogue, §lines 972–1064),
 `docs/decisions/0003-adaptive-front-end-planner.md`, issue #251 (mechanical
@@ -117,36 +117,47 @@ This is also why **selective execution composes cleanly** (below): a `select(...
 not a leaf — it can itself be a Fan-out-and-synthesize or carry its own review loop.
 Classify-And-Act just adds "choose *which* sub-graph runs" to the same composition algebra.
 
-## The one gap: Classify-And-Act
+## Classify-And-Act (shipped in #263)
+
+> **Resolution:** Shipped as commit `84d6e23` ("feat(adaptive): add select(<group>)
+> Classify-And-Act grammar shape (#263)"). All six acceptance criteria from the design
+> are met. Follow-up issues: **#267 OPEN** — select() composition and runtime test
+> coverage (multi-group, resume, n/a propagation, fanout/loop/adversarial-verify
+> composition); **#268 CLOSED/shipped** — G-SEL-1b blank `selector_source` phantom-arm
+> fix ([5.5.0]); **#269 CLOSED/shipped** — wire orchestrator to consume
+> `selectorCheck.armsToNa` + write n/a ledger rows ([5.4.0]).
 
 The catalogue surveyed **verification and orchestration** patterns. It never surveyed
 **conditional routing** — the classify-and-act shape where a decision node inspects the
 task and routes to *one of several mutually-exclusive arms*, leaving the others un-run.
 
-Verified out-of-grammar today. Authoring two mutually-exclusive arms with a `select(...)`
-shape is refused by the validator:
+Before #263, this was out-of-grammar. Authoring two mutually-exclusive arms with a
+`select(...)` shape was refused by the validator:
 
 ```
 $ node scripts/kaola-workflow-plan-validator.js select.md --json
 {"result":"refuse","errors":["node arm-csv has invalid shape \"select(fix)\"", ...]}
 ```
 
-The only legal workaround is to author both arms as a `fanout` — but then **both arms
-run**:
+The only legal workaround had been to author both arms as a `fanout` — but then **both
+arms ran**:
 
 ```
 $ node scripts/kaola-workflow-plan-validator.js both-arms.md --json
 {"result":"in-grammar","decision":"ask","risk":{"blastRadius":true,...}}   # BOTH arms execute
 ```
 
-### Why it's a real gap
+After #263, the `select()` tripwire in `simulate-workflow-walkthrough.js` flips from
+`refuse` to `in-grammar`; selective execution is first-class.
+
+### Why it was a real gap
 
 The `workflow-planner` is **author-time blind**: it freezes the DAG *before any
 exploration runs*. So for an issue whose fix lives in either the CSV exporter **or** the
-HTML renderer — undecidable until `code-explorer` has looked — the planner today must
+HTML renderer — undecidable until `code-explorer` has looked — the planner had to
 either (a) author both write-role arms (both run: wasted work, doubled blast radius,
-spurious `ask`) or (b) guess one arm and risk being wrong. Classify-and-act is exactly
-the missing tool: explore first, then commit to the matching arm.
+spurious `ask`) or (b) guess one arm and risk being wrong. Classify-and-act was exactly
+the missing tool: explore first, then commit to the matching arm. #263 shipped it.
 
 ### Why the naive form is forbidden — and what the precedent is
 
@@ -176,7 +187,7 @@ refusal**; `adversarial-verify` keeps the **tally in the orchestrator**, not in 
 subagent. A classifier that *decides which arm in prose* is out-of-grammar by these
 existing rules.
 
-In-grammar selective execution therefore means:
+In-grammar selective execution therefore requires:
 
 1. A **read-only classifier node** (`code-explorer` or `planner`; zero blast radius) emits
    a **structured selector verdict** into its `.cache` evidence — e.g. `selector: arm-csv`
@@ -186,8 +197,10 @@ In-grammar selective execution therefore means:
    unselected arms' ledger rows `n/a`. The agent *judges*; the routing is *mechanical and
    reproducible from durable rows on resume* — exactly the #251 upgrade, applied to routing.
 
-If selection cannot be made script-decidable for real use cases, the honest verdict is
-**Reject as redundant with `staged-escalation`** — do not ship an agent-prose router.
+The shipped form proved selection IS script-decidable: the `selector_source` column, the
+column-0 `selector:` verdict in `.cache`, and the fail-closed `--selector-check` together
+provide a mechanical, reproducible routing step. An agent-prose router remains
+out-of-grammar.
 
 ## The design
 
@@ -198,8 +211,8 @@ are ordinary `sequence` branches that each `depends_on` the classifier. The new 
 is a **selection group** annotation plus a **selector source**, declared in the plan the
 way `fanout(<group>)` names its group:
 
-- Arms carry `select(<group>)` in a new **optional** column (or reuse the reserved
-  `cardinality` column's sibling slot — TBD at implementation; keep `plan_hash` coverage).
+- Arms carry `select(<group>)` as their shape (parsed by the validator the same way
+  `fanout(<group>)` is; `plan_hash` covers it).
 - The classifier node is named as the group's `selector_source` (a `## Selectors` meta
   block, or a per-group line, kept inside the hashed `## Nodes`/`## Meta` region so freeze
   covers it).
@@ -210,28 +223,32 @@ of concurrent-disjoint semantics.
 
 ### 2. Selector verdict vocabulary (extends #251)
 
-Extend `parseNodeVerdict` (`kaola-workflow-adaptive-schema.js:99`) — today `{pass, fail}`
-— with a parallel `parseNodeSelector` that reads `^selector:[ \t]*([arm-id])` at column 0
-from the classifier's `.cache/<classifier-id>.md`. Reuse the exact fence-blind, last-match-
-wins, native-multiline-regex discipline (no classifier dependency, cross-edition
+`parseNodeSelector` (`kaola-workflow-adaptive-schema.js:120`, exported at line 243) was
+added alongside `parseNodeVerdict` (`{pass, fail}`). It reads `^selector:[ \t]*([arm-id])`
+at column 0 from the classifier's `.cache/<classifier-id>.md`. Reuses the exact fence-blind,
+last-match-wins, native-multiline-regex discipline (no classifier dependency, cross-edition
 byte-identical). Returns `{ found, selector: <arm-id>|null }`.
 
 ### 3. Mechanical routing step (extends `commit-node`)
 
-A new bracket in `kaola-workflow-commit-node.js` (sibling to the quorum/decision step): on
-completing a `selector_source` node, read its selector verdict and write `n/a` to every
-arm in the group **except** the named one. Fails closed: a missing/unparseable selector,
-or a selector naming an id **not** in the declared group, is a typed refusal (halt), never
-a silent "run them all" or "run none."
+The `selectorCheck` bracket was added to `kaola-workflow-commit-node.js` (sibling to the
+quorum/decision step): on completing a `selector_source` node, reads its selector verdict
+and writes `n/a` to every arm in the group **except** the named one. Fails closed: a
+missing/unparseable selector, or a selector naming an id **not** in the declared group, is
+a typed refusal (halt), never a silent "run them all" or "run none." (#269 shipped the
+orchestrator side: `selectorCheck.armsToNa` is consumed in `kaola-workflow-adaptive-node.js`
+to write the n/a ledger rows.)
 
 ### 4. Validator rules (the walls)
 
-The validator (`kaola-workflow-plan-validator.js`) gains, all fail-closed:
+The validator (`kaola-workflow-plan-validator.js`) gained these rules in #263, all
+fail-closed:
 
 - **G-SEL-1 — exactly-one membership.** A `select(<group>)` group must have ≥ 2 arms, each
   with a `selector_source` resolving to a real, earlier read-only node that all arms
   `depends_on`. Exactly one is selected at runtime; the validator proves the *structure*,
-  the script enforces the *count*.
+  the script enforces the *count*. (#268 patched G-SEL-1b: blank `selector_source` no longer
+  generates a phantom arm.)
 - **G-SEL-2 — gates are never selectable.** A `code-reviewer` or `security-reviewer` node
   (or any gate role) inside a `select(...)` group is **out-of-grammar → typed refusal.**
   This is defense-in-depth: the runtime post-dominance-execution cross-check already
@@ -256,11 +273,11 @@ so adding the selector never *raises* risk on its own. Net effect on authorizati
 selective execution can only *lower* realized blast radius (one arm instead of all), while
 the *authorized* envelope stays the conservative union. No safety gate moves.
 
-### 6. Verdict: **Adapt** (in the catalogue's Adopt/Adapt/Reject framing)
+### 6. Verdict: **Adapt** — adopted and shipped in #263
 
-Classify-and-act is **Adapted**, not Adopted whole: the prose-routing form is **Rejected**
+Classify-and-act was **Adapted**, not Adopted whole: the prose-routing form is **Rejected**
 (out-of-grammar, like `loop-until-dry`'s agent predicate); the **script-decidable**
-selector form is adopted, mirroring how `adversarial-verify` kept the tally mechanical and
+selector form was adopted, mirroring how `adversarial-verify` kept the tally mechanical and
 in the orchestrator. One new primitive (the selector verdict + routing step), no new shape,
 no new role, every invariant preserved.
 
@@ -290,30 +307,33 @@ no new role, every invariant preserved.
   the single-writer ledger). Selective execution does **not** revive it: its arms are
   *mutually-exclusive* (one runs), not *competing* (all run, pick a winner).
 
-## Acceptance criteria (for the issue)
+## Acceptance criteria — met by #263
+
+All six criteria below were satisfied by commit `84d6e23`:
 
 1. A `select(<group>)` plan with a read-only `selector_source` and ≥ 2 disjoint arms
    validates `in-grammar`; a single-arm or gate-containing group is a typed refusal
    (G-SEL-1/G-SEL-2).
-2. `parseNodeSelector` (or equivalent) reads a column-0 `selector: <arm-id>` from
-   `.cache`, fence-blind, last-match-wins, cross-edition byte-identical; unit-covered in
-   the schema module.
+2. `parseNodeSelector` reads a column-0 `selector: <arm-id>` from `.cache`, fence-blind,
+   last-match-wins, cross-edition byte-identical; unit-covered in the schema module.
 3. The routing step marks exactly the unselected arms `n/a`, recomputed from durable rows
    on resume; a missing/foreign selector halts (fail-closed), never runs-all/runs-none.
 4. Gate post-dominance and write-attribution hold over the superset; an `n/a` arm cannot
    smuggle an unreviewed write (existing checks, re-asserted under selection).
-5. `simulate-workflow-walkthrough.js` gains a selective-execution case that flips the
-   currently-`refuse` `select()` fixture (this document's tripwire) to `in-grammar`.
+5. `simulate-workflow-walkthrough.js` gained a selective-execution case that flips the
+   previously-`refuse` `select()` fixture (this document's tripwire) to `in-grammar`.
+   (#267 tracks the remaining runtime/composition test coverage: multi-group, resume, n/a
+   propagation, fanout/loop/adversarial-verify composition.)
 6. Parity: the new schema constant/helper is byte-synced across all four editions
-   (`validate-script-sync.js`); the renamed forks get a structural/region assertion.
+   (`validate-script-sync.js`); the renamed forks have a structural/region assertion.
 
-## Companion deliverables (shipping alongside this design, not blocked on the issue)
+## Companion deliverables (shipped alongside #263)
 
 - **README** — a "Supported adaptive patterns" subsection documenting the five
   already-supported recipes (sequence/plan-implement, fan-out-and-synthesize,
-  adversarial-verify, bounded loop) with their governance decision, so users understand
-  how an adaptive plan is composed. Classify-and-act is listed as "planned" with a link to
-  the issue.
+  adversarial-verify, bounded loop) with their governance decision. Classify-and-act was
+  listed as "planned" in the README prior to [5.4.0]; it is now documented (CHANGELOG
+  [5.4.0]: "was Planned; now documented").
 - **Simulation tests** — a `testAdaptivePatternLibrary` case authoring a canonical plan per
-  supported pattern, asserting the live validator verdict, plus the `select()`-is-refused
-  tripwire that the issue will flip.
+  supported pattern, asserting the live validator verdict, plus the `select()`-is-now-valid
+  selective-execution fixture. (#267 tracks additional composition coverage.)
