@@ -1184,6 +1184,20 @@ function testAdaptiveGateBarrierEnforcement() {
     assert(repaired.stdout.includes('/kaola-workflow-plan-run issue-951'), 'routeAdaptive: must still route to plan-run with a pending gate');
     const st = read(statePath(tmp, 'issue-951'));
     assert(/## Pending Gates[\s\S]*G1 gate execution/.test(st), 'routeAdaptive: must SURFACE the pending gate as data, got:\n' + st);
+
+    // --- routeAdaptive verdict-check surface (#258): a frozen plan with a COMPLETE code-reviewer
+    // node whose .cache verdict file is MISSING surfaces a "verdict gate <id>" entry in pendingGates
+    // NON-blocking (exit 0, still routes to plan-run). Uses all-complete ledger so G1 contributes
+    // nothing; isolation is clean.
+    plantFrozenPlan(tmp, 'issue-952', mkLedgerPlan(
+      ['| impl | tdd-guide | — | lib/foo.js | 1 | sequence |', '| rv | code-reviewer | impl | — | 1 | sequence |', '| done | finalize | rv | — | 1 | sequence |'],
+      ['| impl | complete |', '| rv | complete |', '| done | complete |']));
+    // no .cache/rv.md written — verdict evidence is missing
+    const vRepaired = runNode(repairScript, ['issue-952'], tmp);
+    assert(vRepaired.status === 0, 'verdict-check: missing verdict must NOT block resume (exit 0), got ' + vRepaired.status + ' ' + vRepaired.stderr);
+    assert(vRepaired.stdout.includes('/kaola-workflow-plan-run issue-952'), 'verdict-check: must still route to plan-run, got: ' + vRepaired.stdout);
+    const vSt = read(statePath(tmp, 'issue-952'));
+    assert(/## Pending Gates[\s\S]*verdict gate rv/.test(vSt), 'verdict-check: ## Pending Gates must contain "verdict gate rv", got:\n' + vSt);
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   console.log('testAdaptiveGateBarrierEnforcement: PASSED');
 }

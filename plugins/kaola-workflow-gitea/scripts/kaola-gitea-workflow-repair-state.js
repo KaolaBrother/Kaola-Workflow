@@ -409,6 +409,12 @@ function routeAdaptive(root, workflowDir, project) {
   const pendingGates = gate.ok ? [] : gate.unsatisfied.map(u => ({
     requirement: u.requirement, status: 'unsatisfied', evidence: '', skipReason: u.reason
   }));
+  // #258: surface missing/failing verdict evidence for COMPLETE gate-role nodes, NON-blocking.
+  const cacheDir = path.join(projectDir, '.cache');
+  const readCache = fileName => { try { return fs.readFileSync(path.join(cacheDir, fileName), 'utf8'); } catch (_) { return null; } };
+  const globCache = prefix => { try { return fs.readdirSync(cacheDir).filter(f => f.startsWith(prefix) && f.endsWith('.md')); } catch (_) { return []; } };
+  const verdict = planValidator.verifyVerdictBlock(content, { readCache, globCache });
+  if (!verdict.ok) { for (const f of verdict.failures) { pendingGates.push({ requirement: 'verdict gate ' + f.nodeId + ' (' + f.role + ')', status: 'missing-verdict', evidence: '', skipReason: f.reason }); } }
   return {
     root, project, phase: 'adaptive', phaseName: 'Adaptive', workflowPath: 'adaptive',
     step: consentHalt ? 'consent-halt-surface' : 'router-reconstructed', task: 'N/A', consentHalt,
