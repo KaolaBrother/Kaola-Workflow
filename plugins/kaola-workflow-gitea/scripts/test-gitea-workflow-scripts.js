@@ -1710,12 +1710,17 @@ assert.strictEqual(classifier.issueHasRemoteClaimNotes(35), false,
 }
 
 // Issue #149 Test 1: KAOLA_WORKTREE_NATIVE default-OFF — worktree_path must be empty when NATIVE=0
+// Also asserts in-place branch created+checked-out (workflow/gitea-issue-8) + tree clean (#260).
 {
   const root = tempRoot('kw-gt-native-off-');
   const binDir = path.join(root, 'bin');
   writeTeaShimOpen(binDir);
   try {
     initGitRepo(root);
+    // Commit a .gitignore so the bin/ shim + kaola-workflow/ folder don't dirty the tree
+    fs.writeFileSync(path.join(root, '.gitignore'), 'bin/\nkaola-workflow/\n.kw/\n');
+    spawnSync('git', ['add', '.gitignore'], { cwd: root, encoding: 'utf8' });
+    spawnSync('git', ['commit', '-m', 'add gitignore'], { cwd: root, encoding: 'utf8' });
     const result = spawnSync(process.execPath, [claimScript, 'startup', '--runtime', 'test', '--target-issue', '8'], {
       cwd: root, encoding: 'utf8',
       env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_WORKTREE_NATIVE: '0',
@@ -1724,6 +1729,11 @@ assert.strictEqual(classifier.issueHasRemoteClaimNotes(35), false,
     assert.strictEqual(result.status, 0, 'NATIVE=0 startup must exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
     const out = JSON.parse(result.stdout.trim());
     assert.strictEqual(out.worktree_path, '', 'NATIVE=0 must produce empty worktree_path, got: ' + out.worktree_path);
+    // #260: in-place branch must be created and checked out
+    const headBranch = spawnSync('git', ['-C', root, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    assert.strictEqual(headBranch, 'workflow/gitea-issue-8', 'NATIVE=0 must checkout in-place branch workflow/gitea-issue-8, got: ' + headBranch);
+    const treeStatus = spawnSync('git', ['-C', root, 'status', '--porcelain'], { encoding: 'utf8' }).stdout.trim();
+    assert.strictEqual(treeStatus, '', 'tree must be clean after in-place claim (all untracked entries gitignored), got: ' + JSON.stringify(treeStatus));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

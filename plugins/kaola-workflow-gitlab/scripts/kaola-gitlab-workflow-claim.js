@@ -119,6 +119,25 @@ function branchExists(root, branch) {
   }
 }
 
+function inPlaceHead(root) {
+  try {
+    return execFileSync('git', ['-C', root, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch (_) { return ''; }
+}
+
+function treeDirty(root) {
+  try {
+    return execFileSync('git', ['-C', root, 'status', '--porcelain'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim().length > 0;
+  } catch (_) { return false; }
+}
+
+function defaultBranch(root) {
+  try {
+    const ref = execFileSync('git', ['-C', root, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    return ref.replace(/^origin\//, '');
+  } catch (_) { return 'main'; }
+}
+
 function worktreeRegistered(root, wtPath) {
   try {
     return execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: root, encoding: 'utf8' }).includes('worktree ' + wtPath + '\n');
@@ -295,6 +314,7 @@ function writeState(root, data) {
   ];
   if (data.worktree_path) lines.push('worktree_path: ' + data.worktree_path);
   if (data.worktree_error) lines.push('worktree_error: ' + data.worktree_error);
+  if (data.base_branch) lines.push('base_branch: ' + data.base_branch);
   if (data.mr_url) lines.push('mr_url: ' + data.mr_url);
   if (data.mr_iid) lines.push('mr_iid: ' + data.mr_iid);
   writeFile(stateFile(root, data.project), lines.join('\n') + '\n');
@@ -412,6 +432,20 @@ function claimProject(root, args) {
     }
   }
 
+  // Hoist branch name computation before mkdir so the dirty-tree gate and in-place checkout block
+  // can reference it without orphaning a created folder on refusal.
+  const branch = buildBranchName(issueIid, project, args.branch);
+
+  // Dirty-tree gate: refuse in-place branch creation if the working tree has uncommitted changes.
+  // Fires ONLY when NATIVE=0 (in-place mode), online, with git history, and HEAD not detached.
+  // Detached HEAD is NOT refused here — it falls to record-only below.
+  const headBranch = inPlaceHead(root);
+  const wouldInPlace = !OFFLINE && hasGitHistory(root) && !WORKTREE_NATIVE;
+  if (wouldInPlace && headBranch !== 'HEAD' && headBranch !== '' && treeDirty(root)) {
+    return { status: 'dirty_tree_refused', claim: 'none', issue: issueIid, project,
+      reasoning: 'working tree has uncommitted changes; refusing to create in-place feature branch (KAOLA_WORKTREE_NATIVE=0). Commit or stash, or use a worktree.' };
+  }
+
   const dir = projectDir(root, project);
   fs.mkdirSync(path.dirname(dir), { recursive: true });
   try {
@@ -425,7 +459,6 @@ function claimProject(root, args) {
     } else { throw e; }
   }
 
-  const branch = buildBranchName(issueIid, project, args.branch);
   let worktreePath = '';
   let worktreeError = '';
   // Worktree provisioning is ON by default. All workflow paths (full, fast, adaptive) provision a
@@ -435,6 +468,28 @@ function claimProject(root, args) {
   if (!OFFLINE && WORKTREE_NATIVE && hasGitHistory(root)) {
     try { worktreePath = provisionWorktree(root, project, branch).path; } catch (_) { worktreeError = (_ && _.message) || String(_); }
   }
+
+  // In-place branch creation: NATIVE=0 + online + git history -> create/checkout feature branch.
+  // Parallel to the worktree block above; mutually exclusive by WORKTREE_NATIVE vs !WORKTREE_NATIVE.
+  let baseBranch = '';
+  let inPlaceNote = '';
+  if (wouldInPlace) {
+    if (headBranch === 'HEAD' || headBranch === '') {
+      inPlaceNote = 'detached HEAD: skipped in-place branch creation (record-only)';
+    } else {
+      try {
+        if (branchExists(root, branch)) {
+          execFileSync('git', ['-C', root, 'checkout', branch], { stdio: ['ignore', 'ignore', 'ignore'] });
+        } else {
+          execFileSync('git', ['-C', root, 'checkout', '-b', branch], { stdio: ['ignore', 'ignore', 'ignore'] });
+        }
+        baseBranch = (headBranch && headBranch !== 'HEAD' && headBranch !== branch) ? headBranch : '';
+      } catch (e) {
+        inPlaceNote = 'in-place branch checkout failed: ' + ((e && e.message) || String(e));
+      }
+    }
+  }
+
   const projectInfo = discoverProjectSafe();
   writeState(root, {
     project,
@@ -443,6 +498,7 @@ function claimProject(root, args) {
     sink: args.sink || process.env.KAOLA_SINK || 'merge',
     worktree_path: worktreePath,
     worktree_error: worktreeError,
+    base_branch: baseBranch,
     workflow_path: args.workflowPath || process.env.KAOLA_PATH || 'full',
     runtime: args.runtime || 'claude',
     status: 'active',
@@ -451,7 +507,12 @@ function claimProject(root, args) {
     project_web_url: projectInfo.web_url
   });
   postAdvisoryClaim(issueIid, project, projectInfo);
-  return Object.assign({ status: 'acquired', verdict: 'green', claim: 'acquired', issue: issueIid, project, branch, worktree_path: worktreePath }, worktreeError ? { worktree_error: worktreeError } : {});
+  return Object.assign(
+    { status: 'acquired', verdict: 'green', claim: 'acquired', issue: issueIid, project, branch, worktree_path: worktreePath },
+    worktreeError ? { worktree_error: worktreeError } : {},
+    baseBranch ? { base_branch: baseBranch } : {},
+    inPlaceNote ? { inPlaceNote } : {}
+  );
 }
 
 function claimExplicitTarget(root, args) {
@@ -819,10 +880,39 @@ function cmdRelease() {
     output({ released: false, reason: 'refusing to discard current working directory' }, 1);
     return;
   }
+  // Read base_branch BEFORE archiveProjectDir moves the state file.
+  let savedBaseBranch = '';
+  try { savedBaseBranch = field(fs.readFileSync(folder.state_file, 'utf8'), 'base_branch'); } catch (_) {}
+
   const result = archiveProjectDir(root, folder.project, 'abandoned', '.discarded-' + new Date().toISOString().replace(/[:.]/g, '-'));
   try { removeWorktree(root, folder.project, folder); } catch (_) {}
+
+  // In-place branch restore: if this project created a feature branch (NATIVE=0 path),
+  // checkout base/default BEFORE deleting the feature branch (git refuses deleting current branch).
+  const featureBranch = folder.branch;
+  let restoreNote = '';
+  if (featureBranch && branchExists(root, featureBranch)) {
+    try {
+      const cur = inPlaceHead(root);
+      const dirty = treeDirty(root);
+      const target = savedBaseBranch || defaultBranch(root);
+      if (cur === featureBranch) {
+        if (dirty) {
+          restoreNote = 'tree dirty while on feature branch; skipped base restore + branch delete';
+        } else if (target) {
+          execFileSync('git', ['-C', root, 'checkout', target], { stdio: ['ignore', 'ignore', 'ignore'] });
+          removeBranch(root, featureBranch);
+        } else {
+          restoreNote = 'no base_branch and no resolvable default; skipped branch delete';
+        }
+      } else {
+        removeBranch(root, featureBranch);
+      }
+    } catch (_) { /* defensive: discard must not throw */ }
+  }
+
   clearAdvisoryClaim(folder.issue_iid, args.reason || 'discarded', { project_id: folder.project_id, path_with_namespace: folder.path_with_namespace });
-  output(Object.assign({ released: true, project: folder.project }, result));
+  output(Object.assign({ released: true, project: folder.project }, result, restoreNote ? { restore_note: restoreNote } : {}));
 }
 
 // Partition active folders into current and drift (closed-issue) groups.

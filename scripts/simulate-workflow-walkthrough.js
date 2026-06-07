@@ -2709,20 +2709,216 @@ function testStartupJsonAndSiblingWorktrees() {
 }
 
 function testWorktreeNativeDefaultOff() {
-  // Test: KAOLA_WORKTREE_NATIVE=0 must suppress worktree provisioning
+  // Test: KAOLA_WORKTREE_NATIVE=0 must suppress worktree provisioning AND create in-place branch
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-wt-native-off-'));
   const kwRoot = fs.realpathSync(tmp) + '.kw';
   try {
     initGitRepo(tmp);
+    // Commit a .gitignore so the bin/ shim + kaola-workflow/ folder don't dirty the tree
+    fs.writeFileSync(path.join(tmp, '.gitignore'), 'bin/\nkaola-workflow/\n.kw/\n');
+    spawnSync('git', ['add', '.gitignore'], { cwd: tmp, encoding: 'utf8' });
+    spawnSync('git', ['commit', '-m', 'add gitignore'], { cwd: tmp, encoding: 'utf8' });
     const binDir = path.join(tmp, 'bin');
     writeGhShimForStartup(binDir);
     const result = runClaimOnlineLastJson(['startup', '--target-issue', '505'], tmp, binDir, { KAOLA_WORKTREE_NATIVE: '0' });
     assert(result.claim === 'acquired', 'startup 505 should acquire');
     assert(result.worktree_path === '', 'worktree_path must be empty when KAOLA_WORKTREE_NATIVE=0, got: ' + JSON.stringify(result.worktree_path));
     assert(result.worktree_error === undefined, 'worktree_error must be absent when KAOLA_WORKTREE_NATIVE=0 (gate-off path must not surface error field)');
+    // Case A: in-place branch must be created and checked out
+    const headBranch = spawnSync('git', ['-C', tmp, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    assert(headBranch === 'workflow/issue-505', 'NATIVE=0 must checkout in-place branch workflow/issue-505, got: ' + headBranch);
+    // Tree must be clean (all untracked entries should be gitignored)
+    const status = spawnSync('git', ['-C', tmp, 'status', '--porcelain'], { encoding: 'utf8' }).stdout.trim();
+    assert(status === '', 'tree must be clean after in-place claim, got: ' + JSON.stringify(status));
+    // State file must record base_branch: main
+    const stateContent = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'issue-505', 'workflow-state.md'), 'utf8');
+    assert(/^base_branch:\s*main\s*$/m.test(stateContent), 'state file must contain base_branch: main, got: ' + stateContent);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
-    fs.rmSync(kwRoot, { recursive: true, force: true });
+    try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
+function testWorktreeNativeInPlaceIdempotentReclaim() {
+  // Case B: idempotent re-claim — folder-absent but branch present -> re-claim uses existing branch
+  // Setup: claim 505, then directly remove the project folder (keep branch + HEAD on feature branch),
+  // then re-claim. Must not error, claim===acquired, base_branch empty (cur===branch guard).
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-wt-native-idempotent-'));
+  const kwRoot = fs.realpathSync(tmp) + '.kw';
+  try {
+    initGitRepo(tmp);
+    fs.writeFileSync(path.join(tmp, '.gitignore'), 'bin/\nkaola-workflow/\n.kw/\n');
+    spawnSync('git', ['add', '.gitignore'], { cwd: tmp, encoding: 'utf8' });
+    spawnSync('git', ['commit', '-m', 'add gitignore'], { cwd: tmp, encoding: 'utf8' });
+    const binDir = path.join(tmp, 'bin');
+    writeGhShimForStartup(binDir);
+    // First claim
+    const first = runClaimOnlineLastJson(['startup', '--target-issue', '505'], tmp, binDir, { KAOLA_WORKTREE_NATIVE: '0' });
+    assert(first.claim === 'acquired', 'first claim should acquire, got: ' + JSON.stringify(first));
+    // Directly remove the project folder — leave branch present, HEAD on workflow/issue-505
+    const projDir = path.join(tmp, 'kaola-workflow', 'issue-505');
+    fs.rmSync(projDir, { recursive: true, force: true });
+    // Verify HEAD is still on feature branch
+    const headAfterRemove = spawnSync('git', ['-C', tmp, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    assert(headAfterRemove === 'workflow/issue-505', 'HEAD should still be on workflow/issue-505 after folder removal, got: ' + headAfterRemove);
+    // Re-claim: should use existing branch (not -b), no error, base_branch empty
+    const second = runClaimOnlineLastJson(['startup', '--target-issue', '505'], tmp, binDir, { KAOLA_WORKTREE_NATIVE: '0' });
+    assert(second.claim === 'acquired', 'second claim should acquire (idempotent), got: ' + JSON.stringify(second));
+    const headAfter = spawnSync('git', ['-C', tmp, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    assert(headAfter === 'workflow/issue-505', 'HEAD should remain workflow/issue-505 after re-claim, got: ' + headAfter);
+    // base_branch should be empty (cur === branch guard prevents recording feature as its own base)
+    const stateContent = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'issue-505', 'workflow-state.md'), 'utf8');
+    const baseBranchMatch = stateContent.match(/^base_branch:\s*(.*)$/m);
+    const baseBranch = baseBranchMatch ? baseBranchMatch[1].trim() : '';
+    assert(baseBranch === '', 'base_branch must be empty on idempotent re-claim (cur===branch guard), got: ' + JSON.stringify(baseBranch));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
+function testWorktreeNativeDirtyTreeRefusal() {
+  // Case C: dirty tree -> dirty_tree_refused, no folder, no branch, HEAD unchanged
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-wt-native-dirty-'));
+  const kwRoot = fs.realpathSync(tmp) + '.kw';
+  try {
+    initGitRepo(tmp);
+    // Dirty the tree by modifying a tracked file (README.md is committed)
+    fs.writeFileSync(path.join(tmp, 'README.md'), 'dirty\n');
+    const binDir = path.join(tmp, 'bin');
+    writeGhShimForStartup(binDir);
+    // cmdStartup exits 1 for dirty_tree_refused, so use raw spawnSync
+    const spawnResult = spawnSync(process.execPath, [claimScript, 'startup', '--target-issue', '505'], {
+      cwd: tmp,
+      encoding: 'utf8',
+      timeout: 60000,
+      env: {
+        ...process.env,
+        KAOLA_WORKTREE_NATIVE: '0',
+        KAOLA_WORKFLOW_OFFLINE: '0',
+        ...ghMockEnv(binDir),
+        PATH: binDir + path.delimiter + path.dirname(process.execPath) + path.delimiter + (process.env.PATH || '')
+      }
+    });
+    const lastLine = spawnResult.stdout.trim().split('\n').filter(l => l.trim().startsWith('{')).pop();
+    assert(lastLine, 'expected JSON output from dirty_tree_refused, got: ' + spawnResult.stdout);
+    const parsed = JSON.parse(lastLine);
+    assert(parsed.status === 'dirty_tree_refused', 'dirty tree must yield dirty_tree_refused, got: ' + JSON.stringify(parsed.status));
+    assert(parsed.claim === 'none', 'dirty_tree_refused must have claim===none, got: ' + JSON.stringify(parsed.claim));
+    // No project folder should be created
+    assert(!fs.existsSync(path.join(tmp, 'kaola-workflow', 'issue-505')), 'project folder must not be created on dirty_tree_refused');
+    // No feature branch should be created
+    const branchCheck = spawnSync('git', ['-C', tmp, 'show-ref', '--verify', '--quiet', 'refs/heads/workflow/issue-505'], { encoding: 'utf8' });
+    assert(branchCheck.status !== 0, 'feature branch must not be created on dirty_tree_refused');
+    // HEAD must remain on main
+    const head = spawnSync('git', ['-C', tmp, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    assert(head === 'main', 'HEAD must remain on main after dirty_tree_refused, got: ' + head);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
+function testWorktreeNativeDetachedHeadRecordOnly() {
+  // Case D: detached HEAD -> claim acquires, no branch created, base_branch absent/empty, note present
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-wt-native-detached-'));
+  const kwRoot = fs.realpathSync(tmp) + '.kw';
+  try {
+    initGitRepo(tmp);
+    fs.writeFileSync(path.join(tmp, '.gitignore'), 'bin/\nkaola-workflow/\n.kw/\n');
+    spawnSync('git', ['add', '.gitignore'], { cwd: tmp, encoding: 'utf8' });
+    spawnSync('git', ['commit', '-m', 'add gitignore'], { cwd: tmp, encoding: 'utf8' });
+    // Enter detached HEAD state
+    const sha = spawnSync('git', ['-C', tmp, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    spawnSync('git', ['-C', tmp, 'checkout', '--detach', sha], { encoding: 'utf8' });
+    const binDir = path.join(tmp, 'bin');
+    writeGhShimForStartup(binDir);
+    const result = runClaimOnlineLastJson(['startup', '--target-issue', '505'], tmp, binDir, { KAOLA_WORKTREE_NATIVE: '0' });
+    assert(result.claim === 'acquired', 'detached HEAD must still acquire, got: ' + JSON.stringify(result));
+    // No feature branch should be created
+    const branchCheck = spawnSync('git', ['-C', tmp, 'show-ref', '--verify', '--quiet', 'refs/heads/workflow/issue-505'], { encoding: 'utf8' });
+    assert(branchCheck.status !== 0, 'feature branch must not be created in detached HEAD mode');
+    // State file: base_branch should be absent or empty
+    const stateContent = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'issue-505', 'workflow-state.md'), 'utf8');
+    const baseBranchMatch = stateContent.match(/^base_branch:\s*(.*)$/m);
+    const baseBranch = baseBranchMatch ? baseBranchMatch[1].trim() : '';
+    assert(baseBranch === '', 'base_branch must be empty/absent in detached HEAD mode, got: ' + JSON.stringify(baseBranch));
+    // Note should be present in result
+    assert(result.inPlaceNote && result.inPlaceNote.includes('detached'), 'detached HEAD must surface a note, got: ' + JSON.stringify(result.inPlaceNote));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
+function testWorktreeNativeDiscardRestoresBase() {
+  // Case F: discard restores base branch (HEAD->main) and deletes workflow/issue-505
+  // Run release from cwd OUTSIDE the project folder to avoid the cwdInside guard.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-wt-native-discard-'));
+  const kwRoot = fs.realpathSync(tmp) + '.kw';
+  try {
+    initGitRepo(tmp);
+    fs.writeFileSync(path.join(tmp, '.gitignore'), 'bin/\nkaola-workflow/\n.kw/\n');
+    spawnSync('git', ['add', '.gitignore'], { cwd: tmp, encoding: 'utf8' });
+    spawnSync('git', ['commit', '-m', 'add gitignore'], { cwd: tmp, encoding: 'utf8' });
+    const binDir = path.join(tmp, 'bin');
+    writeGhShimForStartup(binDir);
+    // Claim: should create workflow/issue-505 and base_branch: main
+    const claimed = runClaimOnlineLastJson(['startup', '--target-issue', '505'], tmp, binDir, { KAOLA_WORKTREE_NATIVE: '0' });
+    assert(claimed.claim === 'acquired', 'startup must acquire, got: ' + JSON.stringify(claimed));
+    // Verify we are on the feature branch
+    const headOnFeature = spawnSync('git', ['-C', tmp, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    assert(headOnFeature === 'workflow/issue-505', 'should be on feature branch before release, got: ' + headOnFeature);
+    // Release from tmp root (NOT from inside the project folder)
+    const releaseResult = runClaimOnlineLastJson(['release', '--project', 'issue-505'], tmp, binDir, { KAOLA_WORKTREE_NATIVE: '0' });
+    assert(releaseResult.released === true, 'release must succeed, got: ' + JSON.stringify(releaseResult));
+    // HEAD must be restored to main
+    const headAfter = spawnSync('git', ['-C', tmp, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    assert(headAfter === 'main', 'HEAD must be restored to main after discard, got: ' + headAfter);
+    // workflow/issue-505 branch must be deleted
+    const branchGone = spawnSync('git', ['-C', tmp, 'show-ref', '--verify', '--quiet', 'refs/heads/workflow/issue-505'], { encoding: 'utf8' });
+    assert(branchGone.status !== 0, 'workflow/issue-505 branch must be deleted after discard');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
+function testWorktreeNativeDiscardRestoresNonDefaultBase() {
+  // Discriminating test: base_branch is a non-default branch (develop), not 'main'.
+  // Verifies that base_branch is actually read (not just defaultBranch() falling back to main).
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-wt-native-discard-develop-'));
+  const kwRoot = fs.realpathSync(tmp) + '.kw';
+  try {
+    initGitRepo(tmp);
+    fs.writeFileSync(path.join(tmp, '.gitignore'), 'bin/\nkaola-workflow/\n.kw/\n');
+    spawnSync('git', ['add', '.gitignore'], { cwd: tmp, encoding: 'utf8' });
+    spawnSync('git', ['commit', '-m', 'add gitignore'], { cwd: tmp, encoding: 'utf8' });
+    // Create and checkout a non-default base branch 'develop'
+    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'develop'], { encoding: 'utf8' });
+    fs.writeFileSync(path.join(tmp, 'DEV.md'), 'dev\n');
+    spawnSync('git', ['-C', tmp, 'add', 'DEV.md'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'dev commit'], { encoding: 'utf8' });
+    const binDir = path.join(tmp, 'bin');
+    writeGhShimForStartup(binDir);
+    // Claim from develop -> base_branch should be 'develop'
+    const claimed = runClaimOnlineLastJson(['startup', '--target-issue', '505'], tmp, binDir, { KAOLA_WORKTREE_NATIVE: '0' });
+    assert(claimed.claim === 'acquired', 'startup must acquire from develop, got: ' + JSON.stringify(claimed));
+    assert(claimed.base_branch === 'develop', 'base_branch must be develop, got: ' + JSON.stringify(claimed.base_branch));
+    const stateContent = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'issue-505', 'workflow-state.md'), 'utf8');
+    assert(/^base_branch:\s*develop\s*$/m.test(stateContent), 'state must contain base_branch: develop, got: ' + stateContent);
+    // Discard from tmp root
+    const releaseResult = runClaimOnlineLastJson(['release', '--project', 'issue-505'], tmp, binDir, { KAOLA_WORKTREE_NATIVE: '0' });
+    assert(releaseResult.released === true, 'release must succeed, got: ' + JSON.stringify(releaseResult));
+    // HEAD must be restored to 'develop' (not 'main')
+    const headAfter = spawnSync('git', ['-C', tmp, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    assert(headAfter === 'develop', 'HEAD must be restored to develop (recorded base_branch) after discard, got: ' + headAfter);
+    // workflow/issue-505 branch must be deleted
+    const branchGone = spawnSync('git', ['-C', tmp, 'show-ref', '--verify', '--quiet', 'refs/heads/workflow/issue-505'], { encoding: 'utf8' });
+    assert(branchGone.status !== 0, 'workflow/issue-505 branch must be deleted after discard (develop base)');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
   }
 }
 
@@ -7915,6 +8111,11 @@ async function main() {
     testProbeIssueStateGhThrows();
     testStartupJsonAndHiddenLocalWorktrees();
     testWorktreeNativeDefaultOff();
+    testWorktreeNativeInPlaceIdempotentReclaim();
+    testWorktreeNativeDirtyTreeRefusal();
+    testWorktreeNativeDetachedHeadRecordOnly();
+    testWorktreeNativeDiscardRestoresBase();
+    testWorktreeNativeDiscardRestoresNonDefaultBase();
     testWorktreeNativeOfflineWins();
     testWorktreeNativeSurfacesProvisionFailure();
     testWorktreeAdaptiveProvisioned();

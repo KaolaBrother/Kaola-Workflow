@@ -1981,10 +1981,15 @@ function testInstallProfilesFeaturesTableHandling() {
 }
 
 // Issue #149: Test 1 — default-OFF (KAOLA_WORKTREE_NATIVE=0 must not provision worktree)
+// Also asserts in-place branch created+checked-out (workflow/gitlab-issue-601) + tree clean (#260).
 {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-native-off-')));
   try {
     initGitRepo(root);
+    // Commit a .gitignore so the bin/ shim + kaola-workflow/ folder don't dirty the tree
+    fs.writeFileSync(path.join(root, '.gitignore'), 'bin149/\nkaola-workflow/\n.kw/\n');
+    spawnSync('git', ['add', '.gitignore'], { cwd: root, encoding: 'utf8' });
+    spawnSync('git', ['commit', '-m', 'add gitignore'], { cwd: root, encoding: 'utf8' });
     const binDir149 = path.join(root, 'bin149');
     fs.mkdirSync(binDir149, { recursive: true });
     writeShimFiles(path.join(binDir149, 'glab'), [
@@ -2002,6 +2007,11 @@ function testInstallProfilesFeaturesTableHandling() {
     assert.strictEqual(r.status, 0, 'exit 0 when KAOLA_WORKTREE_NATIVE=0\nstdout: ' + r.stdout + '\nstderr: ' + r.stderr);
     const out = JSON.parse(r.stdout.trim().split('\n').pop());
     assert.strictEqual(out.worktree_path, '', 'worktree_path empty when KAOLA_WORKTREE_NATIVE=0');
+    // #260: in-place branch must be created and checked out
+    const headBranch = spawnSync('git', ['-C', root, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    assert.strictEqual(headBranch, 'workflow/gitlab-issue-601', 'NATIVE=0 must checkout in-place branch workflow/gitlab-issue-601, got: ' + headBranch);
+    const treeStatus = spawnSync('git', ['-C', root, 'status', '--porcelain'], { encoding: 'utf8' }).stdout.trim();
+    assert.strictEqual(treeStatus, '', 'tree must be clean after in-place claim (all untracked entries gitignored), got: ' + JSON.stringify(treeStatus));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
     const kwRoot = root + '.kw';
