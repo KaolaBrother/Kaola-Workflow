@@ -584,6 +584,20 @@ Agent(
 )
 ```
 
+## Crash Recovery
+
+If the session crashes after `cmdFinalize` archives the project folder but before the Step 8 `git commit` runs, finalize is resumable.
+
+**Detect:** run from the worktree root:
+
+```bash
+node "$CLAIM_JS" resume --project {project} --json
+```
+
+A result with `"reason":"finalize_incomplete"` confirms the archive dir (`kaola-workflow/archive/{project}/`) is present but uncommitted. `"reason":"already_finalized"` means the commit already landed — no action needed.
+
+**Recover:** re-dispatch the contractor with the same finalization prompt. Step 8b re-runs `cmdFinalize --keep-worktree`; it detects the source-missing state and stages the already-archived dir, then proceeds through Step 7 and Step 8 normally.
+
 ## Step 9 - Sink
 
 Use the sink metadata captured before Step 8b. Do not read the active

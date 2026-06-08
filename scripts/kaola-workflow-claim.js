@@ -761,11 +761,43 @@ function reconcileNextCommand(root, folder) {
   return folder.next_command || resumeFallbackCommand(root, folder);
 }
 
+// Detect the crash state where archiveProjectDir ran but the implementation commit was
+// not made yet. Pure read — no mutations. Returns:
+//   { incomplete: true,  reason: 'archived_impl_uncommitted' }  — crash state, resumable
+//   { incomplete: false, reason: 'already_finalized' }          — clean, nothing to resume
+//   null                                                         — archive dir absent, not applicable
+function archiveDirDirty(root, project) {
+  try {
+    const out = execFileSync('git', ['-C', root, 'status', '--porcelain', '--', path.join('kaola-workflow', 'archive', project)],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    return out.trim().length > 0;
+  } catch (_) { return false; }
+}
+function detectFinalizeIncomplete(root, project) {
+  if (!project) return null;
+  const archiveDir = path.join(root, 'kaola-workflow', 'archive', project);
+  if (!fs.existsSync(archiveDir)) return null;
+  if (archiveDirDirty(root, project)) return { incomplete: true, reason: 'archived_impl_uncommitted' };
+  return { incomplete: false, reason: 'already_finalized' };
+}
+
 function cmdResume() {
   const root = getRoot();
   const args = parseArgs(process.argv.slice(3));
   const folder = args.project ? activeByProject(root, args.project) : readActiveFolders(root)[0];
   if (!folder) {
+    if (args.project) {
+      const archiveCheck = detectFinalizeIncomplete(root, args.project);
+      if (archiveCheck !== null) {
+        if (archiveCheck.incomplete) {
+          output({ resumed: true, project: args.project, reason: 'finalize_incomplete', next_command: 'finalize --keep-worktree' });
+          return;
+        } else {
+          output({ resumed: false, reason: 'already_finalized', project: args.project }, 1);
+          return;
+        }
+      }
+    }
     output({ resumed: false, reason: 'no active workflow project' }, 1);
     return;
   }
@@ -943,6 +975,7 @@ function cmdFinalize() {
           { encoding: 'utf8', stdio: 'inherit' });
         const candidatePaths = ['kaola-workflow/.roadmap', 'kaola-workflow/ROADMAP.md'];
         if (result.dest) candidatePaths.unshift(path.relative(root, result.dest));
+        else if (result.skipped === 'source-missing') candidatePaths.unshift(path.join('kaola-workflow', 'archive', args.project));
         const existingPaths = candidatePaths.filter(p => fs.existsSync(path.join(root, p)));
         if (existingPaths.length > 0) {
           execFileSync('git', ['-C', root, 'add', '-A', '--', ...existingPaths],

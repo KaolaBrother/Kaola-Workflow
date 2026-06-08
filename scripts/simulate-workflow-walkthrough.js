@@ -9155,6 +9155,11 @@ async function main() {
     testPlannerAttestFlagBackfillsDispatchLog();     // AC1: M1 back-fill + M2 sink-merge check
     testPlannerAttestFlagAbsentStaysMissing();        // AC2: no-flag path stays not-attested
     testPlannerAttestFlagPresentInPlannerAgent();     // contract guard
+    // issue #296 — worktree finalize crash-resumability
+    testFinalizeIncompleteResumesCrashState();
+    testFinalizeIncompleteNegativeControlAlreadyDone();
+    testFinalizeIncompleteNegativeControlRepoDirty();
+    testFinalizeIncompleteWorktreeReentryFix();
     console.log('Workflow walkthrough simulation passed');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -9342,6 +9347,199 @@ function testPlannerAttestFlagPresentInPlannerAgent() {
     'contract guard (#280): agents/workflow-planner.md startup invocation must contain --attest-planner-spawn, got (excerpt): ' +
     plannerText.substring(plannerText.indexOf('startup'), plannerText.indexOf('startup') + 200));
   console.log('testPlannerAttestFlagPresentInPlannerAgent: PASSED');
+}
+
+// ── #296: cmdResume crash-resume after archiveProjectDir ran but impl uncommitted ──
+// Crash state: kaola-workflow/archive/{project}/ exists, no active folder,
+// working tree is dirty (impl not committed) → resumed:true, reason:finalize_incomplete.
+function testFinalizeIncompleteResumesCrashState() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-296-crash-'));
+  try {
+    initGitRepo(tmp);
+    const project = 'issue-296x';
+    // Simulate archiveProjectDir: create the archive dir with a workflow-state.md
+    const archiveDir = path.join(tmp, 'kaola-workflow', 'archive', project);
+    fs.mkdirSync(archiveDir, { recursive: true });
+    fs.writeFileSync(path.join(archiveDir, 'workflow-state.md'), [
+      '# Kaola-Workflow State', '',
+      'name: ' + project,
+      'issue_number: 296',
+      'status: closed',
+      'step: complete',
+      ''
+    ].join('\n'));
+    // No active folder (the rename already happened).
+    // Leave working tree dirty: an uncommitted implementation file.
+    fs.writeFileSync(path.join(tmp, 'impl-296.js'), '// implementation\n');
+    // Confirm tree is dirty before calling resume.
+    const dirtyCheck = spawnSync('git', ['-C', tmp, 'status', '--porcelain'], { encoding: 'utf8' });
+    assert(dirtyCheck.stdout.trim().length > 0, 'fixture: working tree must be dirty for crash test');
+    const result = JSON.parse(
+      runNode(claimScript, ['resume', '--project', project], tmp).stdout
+    );
+    assert(result.resumed === true,
+      '#296 crash resume: resumed must be true, got: ' + JSON.stringify(result));
+    assert(result.reason === 'finalize_incomplete',
+      '#296 crash resume: reason must be finalize_incomplete, got: ' + JSON.stringify(result));
+    assert(result.next_command && result.next_command.includes('finalize'),
+      '#296 crash resume: next_command must mention finalize, got: ' + JSON.stringify(result));
+    console.log('testFinalizeIncompleteResumesCrashState: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// Negative control: same archive-present / no-active-folder setup but working tree is CLEAN
+// (impl was committed). Must NOT re-route to finalize — must return already_finalized.
+function testFinalizeIncompleteNegativeControlAlreadyDone() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-296-clean-'));
+  try {
+    initGitRepo(tmp);
+    const project = 'issue-296y';
+    // Simulate archiveProjectDir: create archive dir
+    const archiveDir = path.join(tmp, 'kaola-workflow', 'archive', project);
+    fs.mkdirSync(archiveDir, { recursive: true });
+    fs.writeFileSync(path.join(archiveDir, 'workflow-state.md'), [
+      '# Kaola-Workflow State', '',
+      'name: ' + project,
+      'issue_number: 296',
+      'status: closed',
+      'step: complete',
+      ''
+    ].join('\n'));
+    // Commit everything so the working tree is clean.
+    spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8' });
+    spawnSync('git', ['commit', '-m', 'impl: issue 296y'], { cwd: tmp, encoding: 'utf8' });
+    // Confirm tree is clean.
+    const cleanCheck = spawnSync('git', ['-C', tmp, 'status', '--porcelain'], { encoding: 'utf8' });
+    assert(cleanCheck.stdout.trim().length === 0, 'fixture: working tree must be clean for negative control');
+    const result = JSON.parse(
+      runNode(claimScript, ['resume', '--project', project], tmp).stdout
+    );
+    assert(result.resumed === false,
+      '#296 negative control: resumed must be false for already-finalized, got: ' + JSON.stringify(result));
+    assert(result.reason === 'already_finalized',
+      '#296 negative control: reason must be already_finalized, got: ' + JSON.stringify(result));
+    console.log('testFinalizeIncompleteNegativeControlAlreadyDone: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// B2 negative control: archive present + no active folder, but ONLY an unrelated file is
+// dirty (simulating another issue in progress). detectFinalizeIncomplete must NOT falsely
+// signal crash — must return already_finalized because the project's archive is committed.
+function testFinalizeIncompleteNegativeControlRepoDirty() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-296-repodirty-'));
+  try {
+    initGitRepo(tmp);
+    const project = 'issue-296z';
+    const archiveDir = path.join(tmp, 'kaola-workflow', 'archive', project);
+    fs.mkdirSync(archiveDir, { recursive: true });
+    fs.writeFileSync(path.join(archiveDir, 'workflow-state.md'), [
+      '# Kaola-Workflow State', '',
+      'name: ' + project,
+      'issue_number: 296',
+      'status: closed',
+      'step: complete',
+      ''
+    ].join('\n'));
+    // Commit the archive dir so it is clean for this project.
+    spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8' });
+    spawnSync('git', ['commit', '-m', 'impl: archive issue-296z'], { cwd: tmp, encoding: 'utf8' });
+    // Now add an UNRELATED untracked file — simulating another issue in progress.
+    fs.writeFileSync(path.join(tmp, 'other-issue-work.js'), '// unrelated\n');
+    // Confirm the repo is dirty but only because of the unrelated file.
+    const dirtyCheck = spawnSync('git', ['-C', tmp, 'status', '--porcelain'], { encoding: 'utf8' });
+    assert(dirtyCheck.stdout.trim().length > 0, 'fixture: repo must be dirty (unrelated file)');
+    const result = JSON.parse(
+      runNode(claimScript, ['resume', '--project', project], tmp).stdout
+    );
+    assert(result.resumed === false,
+      '#296 B2 negative control (repo dirty): resumed must be false for already-finalized project, got: ' + JSON.stringify(result));
+    assert(result.reason === 'already_finalized',
+      '#296 B2 negative control (repo dirty): reason must be already_finalized, not finalize_incomplete, got: ' + JSON.stringify(result));
+    console.log('testFinalizeIncompleteNegativeControlRepoDirty: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// B1 re-entry fix: in a linked worktree, when cmdFinalize --keep-worktree is called a
+// second time (re-entry after crash), result.dest is undefined (source already moved),
+// but the archive dir must still be staged and committed so the tree goes clean.
+function testFinalizeIncompleteWorktreeReentryFix() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-296-b1-main-')));
+  const wtPath = path.join(tmp, '.kw', 'worktrees', 'issue-296b1');
+  try {
+    initGitRepo(tmp);
+    // Create a feature branch directly in the linked worktree (worktree add -b).
+    fs.mkdirSync(path.dirname(wtPath), { recursive: true });
+    spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-296b1', '--', wtPath, 'HEAD'],
+      { cwd: tmp, encoding: 'utf8' });
+
+    // Confirm the worktree is linked (getCoordRoot from wt points to main .git).
+    const coordFromWt = spawnSync('git', ['rev-parse', '--git-common-dir'],
+      { cwd: wtPath, encoding: 'utf8' }).stdout.trim();
+    const coordAbs = path.resolve(wtPath, coordFromWt);
+    assert(coordAbs === path.join(tmp, '.git'),
+      'fixture: worktree must have a different coord root from wt root; got: ' + coordAbs);
+
+    const project = 'issue-296b1';
+    // Simulate the crash state: archiveProjectDir has already run (archive dir exists,
+    // project source dir is GONE) but the impl commit was never made.
+    const archiveDir = path.join(wtPath, 'kaola-workflow', 'archive', project);
+    fs.mkdirSync(archiveDir, { recursive: true });
+    fs.writeFileSync(path.join(archiveDir, 'workflow-state.md'), [
+      '# Kaola-Workflow State', '',
+      'name: ' + project,
+      'issue_number: 296',
+      'status: closed',
+      'step: complete',
+      ''
+    ].join('\n'));
+    // Verify archive is untracked in the worktree (crash state).
+    const dirtyBefore = spawnSync('git', ['status', '--porcelain'],
+      { cwd: wtPath, encoding: 'utf8' });
+    assert(dirtyBefore.stdout.trim().length > 0,
+      'fixture: worktree must be dirty (archive uncommitted) before re-entry');
+
+    // Re-entry: run cmdFinalize --keep-worktree from the worktree (second call).
+    const finResult = spawnSync(process.execPath, [
+      claimScript, 'finalize', '--project', project, '--keep-worktree'
+    ], { cwd: wtPath, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
+    assert(finResult.status === 0,
+      '#296 B1: finalize re-entry must exit 0\nstdout: ' + finResult.stdout + '\nstderr: ' + finResult.stderr);
+
+    // After re-entry with the fix: archive must be committed, tree must be clean.
+    const dirtyAfter = spawnSync('git', ['status', '--porcelain'],
+      { cwd: wtPath, encoding: 'utf8' });
+    assert(dirtyAfter.stdout.trim().length === 0,
+      '#296 B1: working tree must be clean after finalize re-entry, got: ' + JSON.stringify(dirtyAfter.stdout));
+
+    // Confirm the archive was committed (not just staged).
+    const archiveRelPath = path.join('kaola-workflow', 'archive', project, 'workflow-state.md');
+    const catFile = spawnSync('git', ['cat-file', '-e', 'HEAD:' + archiveRelPath],
+      { cwd: wtPath, encoding: 'utf8' });
+    assert(catFile.status === 0,
+      '#296 B1: archive workflow-state.md must be in HEAD commit after re-entry');
+
+    // Idempotency: resume must now return already_finalized.
+    const resumeResult = JSON.parse(
+      runNode(claimScript, ['resume', '--project', project], wtPath).stdout
+    );
+    assert(resumeResult.resumed === false,
+      '#296 B1 idempotency: resumed must be false after re-entry commit, got: ' + JSON.stringify(resumeResult));
+    assert(resumeResult.reason === 'already_finalized',
+      '#296 B1 idempotency: reason must be already_finalized, got: ' + JSON.stringify(resumeResult));
+
+    console.log('testFinalizeIncompleteWorktreeReentryFix: PASSED');
+  } finally {
+    try {
+      spawnSync('git', ['worktree', 'remove', '--force', wtPath], { cwd: tmp, encoding: 'utf8' });
+    } catch (_) {}
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 }
 
 main().catch(err => {

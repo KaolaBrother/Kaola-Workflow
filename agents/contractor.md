@@ -153,6 +153,8 @@ fi
 
 When it runs, `cmdFinalize` atomically writes `status: closed` + `step: complete` to `workflow-state.md` and renames `kaola-workflow/{project}/` → `kaola-workflow/archive/{project}/` in the linked worktree. The rename is included in the Step 8 commit via git rename detection. `sink-merge` will refuse with exit 1 if `kaola-workflow/{project}/workflow-state.md` is still present on the branch HEAD when it runs; this is a safety guard that ensures finalize always precedes the merge.
 
+**Crash recovery.** If the process crashes after `cmdFinalize` archives the folder but before Step 8's `git commit` runs, the finalize is resumable. Run `node "$CLAIM_JS" resume --project {project} --json` from the worktree: a result of `reason:'finalize_incomplete'` confirms the archive dir exists but is uncommitted. Re-run `cmdFinalize --keep-worktree` (same command — it detects `source-missing` and stages the already-archived dir), then continue at Step 7.
+
 If `SINK_KIND` is `pr`: skip this step. Proceed to Step 8 (commit). The active folder remains open. `sink-pr.js` (Step 9) writes the PR URL into the active folder and then immediately creates a deliberate metadata follow-up commit (`chore: record PR metadata for {project}`) so the worktree is clean after sink. `watch-pr` (on the next `/workflow-next` startup) detects the merged or closed PR and archives the folder automatically.
 
 ### Step 7 - Roadmap git-add Staging
