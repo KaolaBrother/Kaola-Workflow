@@ -440,6 +440,15 @@ function runOrient(opts) {
 
   const allDone = !!(nextAction.result === 'ok' && nextAction.allDone);
 
+  // #303 (sub-gap C): START-frontier batch signal. When NOTHING is in_progress (a fresh
+  // frontier at startup/resume) and the ready-pending set has >= 2 own-pending siblings, the
+  // plan STARTS with a fan-out — signal enterBatch so the orchestrator opens a batch instead
+  // of single-opening one node and serializing the rest. Suppressed once any node is in_progress
+  // (mid-node / active batch) and when allDone.
+  const startReadyPending = (nextAction.result === 'ok' && Array.isArray(nextAction.readyPending))
+    ? nextAction.readyPending : [];
+  const enterBatch = !allDone && inProgressNodes.length === 0 && startReadyPending.length >= 2;
+
   return {
     result: 'ok',
     resumeCheck,
@@ -451,6 +460,10 @@ function runOrient(opts) {
     inProgressNodes,
     batch,
     allDone,
+    enterBatch,
+    frontier: enterBatch
+      ? startReadyPending.map(n => ({ id: n.id, role: n.role, model: n.model, declared_write_set: n.declared_write_set }))
+      : [],
   };
 }
 
@@ -675,6 +688,25 @@ function runCloseAndOpenNext(opts) {
 
   if (nextAction.allDone) {
     return { result: 'ok', closed: nodeId, opened: null, allDone: true };
+  }
+
+  // #303 (gap #2 / sub-gap C): SCHEDULER-AWARE fused advance. When closing this node
+  // exposes a frontier of >= 2 own-pending ready siblings, that is a fan-out — do NOT
+  // single-open one node (which would serialize an independent fan-out behind one member).
+  // Signal enterBatch so the orchestrator routes to the bounded batch scheduler (open-batch
+  // + rolling top-up). Linear chains (readyPending < 2) keep the serial single-open below.
+  const readyPending = nextAction.readyPending || [];
+  if (readyPending.length >= 2) {
+    return {
+      result: 'ok',
+      closed: nodeId,
+      opened: null,
+      enterBatch: true,
+      frontier: readyPending.map(n => ({
+        id: n.id, role: n.role, model: n.model, declared_write_set: n.declared_write_set,
+      })),
+      allDone: false,
+    };
   }
 
   // Open the next ready node.

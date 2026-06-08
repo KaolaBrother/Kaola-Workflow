@@ -471,7 +471,9 @@ assert(exists(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`), '#272 ad
 assert(exists(`${pluginRoot}/scripts/kaola-workflow-parallel-batch.js`), '#281 parallel-batch aggregator missing from Codex plugin');
 assertConcept(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'adaptive execution + governance', [
   '## Node Ledger', 'plan_hash', 'post-dominate', 'auto-run', 'provisional', 'halt for consent',
-  'escalated_to_full: consent', 'typed refusal', 'quorum', 'tally-fn', 'validateNodeOutput', 'test_thrash'
+  'escalated_to_full: consent', 'typed refusal', 'quorum', 'tally-fn', 'validateNodeOutput', 'test_thrash',
+  // #303 anti-drift: pin the rolling-dispatch + crash-repair + opening-lifecycle primitives.
+  'top-up', 'reconcile', 'opening'
 ]);
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'workflow_path: adaptive');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'disjointWriteSets');

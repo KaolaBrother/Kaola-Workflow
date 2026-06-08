@@ -22,8 +22,9 @@ Each node is one row of the `## Nodes` table:
   an unknown role. The author **never** sets a model — on Codex it comes from the role's
   `model_reasoning_effort` tier in its `agents/<role>.toml` profile (selected by role name).
 - **shape** is exactly one of three productions: `sequence`, `fanout(<group>)` (N
-  instances of one role over pairwise-disjoint declared write sets, N ≤ `FANOUT_CAP`),
-  or `loop(<cap>)` (one role re-invoked up to a static cap; loops do not fan out).
+  instances of one role over pairwise-disjoint declared write sets — author N as wide as the
+  subtasks are genuinely independent; `FANOUT_CAP` caps only *runtime concurrency*, not authored
+  width), or `loop(<cap>)` (one role re-invoked up to a static cap; loops do not fan out).
 - **cardinality** is a **reserved / advisory** column: parsed but not validated or used
   (fan-out width is the row count in a `fanout(<group>)`); its text still feeds `plan_hash`
   as part of `## Nodes`, so keep the column present and stable.
@@ -37,8 +38,12 @@ so the validator can derive sensitivity.
 
 ## Caps and the sink (fixed by the harness)
 
-`FANOUT_CAP` (max fan-out width, default **4**; width is the row count in a `fanout(<group>)`),
-`LOOP_CAP` (**5**; a loop must run at least once — `loop(0)` is a typed refusal), `FILE_CEILING`
+`FANOUT_CAP` (default **4**) is a **runtime concurrency limit**, NOT a width bound on the authored
+plan: it is the maximum number of `fanout(<group>)` siblings the executor dispatches at once — the
+executor opens up to `FANOUT_CAP` legs and drains the rest via rolling top-up (queue the overflow,
+top up as a slot frees). Author a fan-out as wide as the work is genuinely independent over disjoint
+write sets; the validator validates dependency shape / disjointness / gates / write-set safety, never
+width. `LOOP_CAP` (**5**; a loop must run at least once — `loop(0)` is a typed refusal), `FILE_CEILING`
 (**6** paths per node's write set; root-level + dot-leading paths count). The unique **`finalize`**
 sink may only write docs/state (e.g. `CHANGELOG.md`); a non-docs write on the sink trips `code-reviewer`.
 

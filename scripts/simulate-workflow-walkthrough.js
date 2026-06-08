@@ -1063,8 +1063,9 @@ function testAdaptiveFanoutGroupScoping() {
   const tmp = adaptiveTmp('fanout-scope');
   try {
     // GAP: label `impl` reused across two independent branches (origins root1 vs root2), 3 each.
-    // Pre-#233 the merged group had width 6 > FANOUT_CAP(4) -> refuse. Post-#233 two groups of 3,
-    // each under the cap and internally disjoint -> in-grammar (write-role fan-out => ask).
+    // Post-#233 these scope as two separate groups (NOT one merged width-6 group) so the within-group
+    // disjointness check runs per-branch. Width is no longer a refusal axis (#303); both branches are
+    // internally disjoint -> in-grammar (write-role fan-out => ask).
     let v = validatePlanFixture(tmp, [
       '| root1 | code-explorer | — | — | 1 | sequence |',
       '| root2 | code-explorer | — | — | 1 | sequence |',
@@ -1080,8 +1081,10 @@ function testAdaptiveFanoutGroupScoping() {
     assert(v.result === 'in-grammar',
       'B6 gap: independent branches reusing a label must NOT sum against FANOUT_CAP, got: ' + JSON.stringify(v));
 
-    // CONTROL 1: a genuine single-origin fan-out (5 members, all depends_on root) over FANOUT_CAP=4
-    // must STILL refuse — the scoping must not let a real over-cap fan-out through.
+    // CONTROL 1 (#303): a genuine single-origin fan-out (5 members, all depends_on root) over
+    // FANOUT_CAP=4 is now IN-GRAMMAR — FANOUT_CAP is a runtime concurrency limit, not a planning
+    // validity cap. The over-cap group is recorded as a non-blocking diagnostic; write-role
+    // fan-out (N>=2) still demotes the decision to ask.
     v = validatePlanFixture(tmp, [
       '| root | code-explorer | — | — | 1 | sequence |',
       '| i1 | tdd-guide | root | aaa/1.js | 1 | fanout(impl) |',
@@ -1092,8 +1095,10 @@ function testAdaptiveFanoutGroupScoping() {
       '| review | code-reviewer | i1,i2,i3,i4,i5 | — | 1 | sequence |',
       '| done | finalize | review | — | 1 | sequence |',
     ], []);
-    assert(v.result === 'refuse' && /FANOUT_CAP/.test((v.errors || []).join(';')),
-      'B6 control: genuine single-origin fan-out over the cap must still refuse, got: ' + JSON.stringify(v));
+    assert(v.result === 'in-grammar' && v.decision === 'ask',
+      'B6 control (#303): over-cap single-origin write-role fan-out must be in-grammar + ask, got: ' + JSON.stringify(v));
+    assert(v.diagnostics && Array.isArray(v.diagnostics.wideFanout) && v.diagnostics.wideFanout.some(w => w.width === 5),
+      'B6 control (#303): over-cap fan-out must be recorded as a wideFanout diagnostic, got: ' + JSON.stringify(v.diagnostics));
 
     // CONTROL 2: a genuine single-origin fan-out whose members overlap (same coarse area) must
     // STILL refuse on disjointness — scoping must not drop the within-group disjointness check.
@@ -2126,7 +2131,7 @@ function testAdaptiveAuditCoverage() {
       '| review | code-reviewer | f1,f2,f3,f4,f5 | — | 1 | sequence |',
       '| done | finalize | review | — | 1 | sequence |',
     ], ['chore']);
-    assert(v.result === 'refuse' && /FANOUT_CAP/.test((v.errors || []).join(';')), 'I6: fan-out of 5 > FANOUT_CAP must refuse, got: ' + JSON.stringify(v));
+    assert(v.result === 'in-grammar', 'I6 (#303): fan-out of 5 > FANOUT_CAP is now in-grammar (runtime concurrency limit, not validity cap), got: ' + JSON.stringify(v));
     v = validatePlanFixture(tmp, [
       '| explore | code-explorer | — | — | 1 | sequence |',
       '| f1 | tdd-guide | explore | scripts/a.js | 1 | fanout(g) |',
@@ -2136,7 +2141,7 @@ function testAdaptiveAuditCoverage() {
     ], ['chore']);
     assert(v.result === 'refuse' && /shared infra/.test((v.errors || []).join(';')), 'I6: YELLOW shared-infra fan-out must refuse, got: ' + JSON.stringify(v));
 
-    // I7: LOOP_CAP boundary + read-only width cap.
+    // I7: LOOP_CAP boundary + read-only fan-out width (now uncapped at validation, #303).
     v = validatePlanFixture(tmp, [
       '| impl | tdd-guide | — | lib/foo.js | 1 | sequence |',
       '| review | code-reviewer | impl | — | 1 | loop(5) |',
@@ -2157,7 +2162,7 @@ function testAdaptiveAuditCoverage() {
       '| f5 | code-explorer | — | — | 1 | fanout(g) |',
       '| done | finalize | f1,f2,f3,f4,f5 | — | 1 | sequence |',
     ], ['chore']);
-    assert(v.result === 'refuse' && /FANOUT_CAP/.test((v.errors || []).join(';')), 'I7: read-only fan-out of 5 > FANOUT_CAP must refuse, got: ' + JSON.stringify(v));
+    assert(v.result === 'in-grammar', 'I7 (#303): read-only fan-out of 5 > FANOUT_CAP is now in-grammar; the executor concurrency-limits dispatch at runtime, got: ' + JSON.stringify(v));
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   console.log('testAdaptiveAuditCoverage: PASSED');
 }

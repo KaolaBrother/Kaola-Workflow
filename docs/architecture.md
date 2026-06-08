@@ -122,21 +122,29 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
 
   | State | Meaning |
   |-------|---------|
-  | `open` | N ledger rows flipped to `in_progress`; N baselines recorded; members not yet dispatched or evidence absent |
-  | `dispatched` | Some members have `.cache/{id}.md` evidence; others are still running |
+  | `opening` | Crash-safe transaction marker: the manifest is written with the intended member set **before** any ledger row flips. Reconcilable via the `reconcile` subcommand (roll-forward to `open`, or `--abort` roll-back) — never left an orphan |
+  | `open` | N ledger rows flipped to `in_progress`; N baselines recorded; members not yet evidence-complete |
   | `sealed` | All members passed their per-node barrier; all rows `complete` or `n/a` |
   | `joining` | Write-role path-scoped merge in progress; per-member `joined` flags track completion |
   | `joined` | Transient; manifest deleted; orchestrator re-enters `next-action` |
 
+  The executor does **rolling bounded dispatch**: it opens up to `KAOLA_FANOUT_CAP`
+  members at once, queues the rest, and a `top-up` subcommand drains the queue as
+  earlier members seal. A logical fan-out MAY therefore be wider than the cap — the cap
+  bounds runtime concurrency, not plan validity.
+
   **AC#5 invariant.** Multiple `in_progress` ledger rows are **legal only** when a valid
-  `active-batch.json` exists whose `members` set exactly matches the `in_progress` set. Any
+  `active-batch.json` exists whose currently-opened members exactly match the `in_progress`
+  set (under rolling dispatch the manifest's full `members` set may name queued members not
+  yet opened, and the transient `opening` window is reconciled by `reconcile`). Any
   other configuration is a typed refusal (`orphan_multi_in_progress`). The `orient` subcommand
   of `adaptive-node.js` enforces this gate: it enumerates all `in_progress` rows, reads the
   manifest via `parallel-batch status`, and either confirms the batch is valid, routes to the
   legacy single-node path, or refuses.
 
   Crash/resume is a pure function of durable artifacts: each state has a deterministic
-  reconstruction path (re-dispatch on `open`; per-member recovery on `dispatched`; run `join`
+  reconstruction path (run `reconcile` on `opening` to repair an interrupted open or
+  `top-up` — roll-forward to `open`, or `--abort` roll-back; re-dispatch on `open`; run `join`
   on `sealed`/`joining`; delete manifest on `joined`). `seal-member` calls the unchanged
   `commit-node --node-id N` barrier; no new gate surface is introduced. Finalization
   `--barrier-check` sees normal `complete` rows after `join`. Full design at

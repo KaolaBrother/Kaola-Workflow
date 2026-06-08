@@ -87,18 +87,22 @@ The current session then **judges** the resume branch:
   When no node is `in_progress` (e.g. a crash between a node's commit and its fused advance left the next
   node unopened), **re-enter at step 1** to open the next ready node.
 
-## Governance — auto-run only when provably low-risk, else ask
+## Governance — a frozen in-grammar plan RUNS; `decision:ask` is audit metadata, not an approval gate
 
-Re-read the validator verdict (`--json`); do not re-derive risk by hand.
-- **in-grammar + provably low-risk → auto-run** (sequential, no write-role fan-out,
-  declared write set outside every Phase-5 area, no `SHARED_INFRA`, under the file
-  ceiling, no loop). This authorization is **provisional**.
-- **in-grammar + risky or uncertain → ask the user first** (surface the DAG + validator
-  report + risk findings). Risky = any sensitivity (labels OR declared write set touch
-  auth / payments / user data / filesystem / external-API / secrets), any WRITE-ROLE
-  fan-out (N ≥ 2), `SHARED_INFRA`, over the file ceiling, a bounded loop, or any
-  uncertainty (**fail closed**). Read-only verification/research fan-out is
-  zero-blast-radius and does **not** trigger ask.
+The plan is **already frozen** (the `workflow-planner` + handoff froze it). The validator's
+`decision` (`auto-run` vs `ask`) is **recorded audit metadata** — plan-run proceeds **either way,
+with no user-approval gate**. Re-read the verdict (`--json`); do not re-derive risk by hand, and
+**do not pause to ask the user** before running an in-grammar frozen plan.
+- **in-grammar (`decision:auto-run` OR `decision:ask`) → run.** `decision:ask` records that the
+  validator flagged sensitivity (labels OR declared write set touch auth / payments / user data /
+  filesystem / external-API / secrets), a WRITE-ROLE fan-out (N ≥ 2), `SHARED_INFRA`, the file
+  ceiling, a bounded loop, or uncertainty (fail-closed) — surfaced in the handoff packet for the
+  audit trail; it does **not** stop the run. Read-only fan-out is zero-blast-radius.
+- **run authorization is `provisional`:** each node's per-node barrier re-checks ACTUAL writes at
+  commit time and can still refuse.
+- **plan-run HALTS only on:** a typed refusal (resume-check/barrier finds the plan out-of-grammar or
+  tampered), a per-node barrier failure, or a durable consent-halt / test-thrash escalation. None is
+  a discretionary "ask the user first."
 - **out-of-grammar → typed refusal** (unknown role, a gate routed around, a cap busted,
   a non-disjoint write-role fan-out).
 
@@ -129,23 +133,36 @@ Run all invocations from `${ACTIVE_WORKTREE_PATH}` using `node "$KAOLA_SCRIPTS/k
 Each loop iteration advances one **frontier unit** — either a single node (legacy serial path,
 unchanged) or a batch of ready siblings when `next-action`'s `readyPending.length >= 2`.
 
-**Deciding the unit:** inspect `readyPending` from `next-action --json`. One or zero → single-node
-path (steps 1–4, unchanged). Two or more eligible siblings → batch path.
+**Logical width vs runtime concurrency (#303):** a `fanout(<group>)` may be **wider than `FANOUT_CAP`**
+when the subtasks are genuinely independent. `FANOUT_CAP` is a **runtime concurrency limit** (max
+concurrently-running subagents), NOT a planning validity cap. `open-batch` opens at most `FANOUT_CAP`
+members and leaves the rest **queued**; `top-up` drains the queue by rolling bounded dispatch.
+
+**Deciding the unit:** the scheduler is **batch-aware** — `orient` signals `enterBatch:true` on a ≥2
+START frontier, and `close-and-open-next` returns `enterBatch:true` on a ≥2-wide downstream frontier
+so a fan-out is **never serialized**. `enterBatch:true` (or `readyPending.length >= 2`) → batch path;
+otherwise single-node path (steps 1–4, unchanged).
 
 **Batch path:**
-- **(a) open-batch:** `node "$KAOLA_SCRIPTS/kaola-workflow-parallel-batch.js" open-batch --project {project} --json` — for a write-role batch, first checks isolated-worktree capability; when available, provisions one worktree per member then flips N ledger rows to `in_progress`, records N baselines, and writes `active-batch.json`. **Degraded mode:** when the host lacks isolated-worktree capability, returns `{result:'ok', degraded:true, reason:'worktree_unavailable', opened:[], allDone:false}` with ZERO mutation (no ledger flip, no baseline, no manifest; any worktrees provisioned mid-attempt are rolled back). On `degraded:true`, the orchestrator MUST NOT concurrent-dispatch — it `log()`s the degradation and falls back to the single-node `open-next` path, opening write-role siblings one at a time with the same per-node lifecycle (correctness preserved, wall-clock parallelism forgone — design §10.3). Read-only batches are unaffected (no worktrees ever provisioned, never degraded).
+- **(a) open-batch:** `node "$KAOLA_SCRIPTS/kaola-workflow-parallel-batch.js" open-batch --project {project} --json` — first runs a `--resume-check` integrity gate (refuse `plan_integrity_failed`, zero mutation); refuses a fresh open while a live `active-batch.json` exists (`active_batch_exists`) or an `opening` manifest needs repair (`reconcile_first`). Opens at most `FANOUT_CAP` members (the rest stay **queued** for `top-up`). For a write-role batch, checks isolated-worktree capability; when available, provisions one worktree per member, records N baselines, then performs a **crash-safe two-phase commit** — writes `active-batch.json` with `state:'opening'` BEFORE flipping the N ledger rows to `in_progress`, then promotes to `state:'open'`. **Degraded mode:** when the host lacks isolated-worktree capability, returns `{result:'ok', degraded:true, reason:'worktree_unavailable', opened:[], allDone:false}` with ZERO mutation (no ledger flip, no baseline, no manifest; any worktrees provisioned mid-attempt are rolled back). On `degraded:true`, the orchestrator MUST NOT concurrent-dispatch — it `log()`s the degradation and falls back to the single-node `open-next` path, opening write-role siblings one at a time with the same per-node lifecycle (correctness preserved, wall-clock parallelism forgone — design §10.3). Read-only batches are unaffected (no worktrees ever provisioned, never degraded).
 - **(b) Concurrent dispatch:** the current session issues **multiple `Agent()` calls in ONE message**, one per member. Write-role members get `Working directory: <isolated worktree>`; read-only members share `${ACTIVE_WORKTREE_PATH}`. **The script manages batch STATE; the orchestrator (current session) owns DISPATCH. `kaola-workflow-parallel-batch.js` NEVER spawns an agent — the only concurrency is the current session issuing multiple `Agent()` calls in one message.**
-- **(c) record-evidence per member:** read-only siblings namespace evidence as `.cache/{role}-{claim-id}.md`.
-- **(d) seal:** `node "$KAOLA_SCRIPTS/kaola-workflow-parallel-batch.js" seal --project {project} --json` — runs the unchanged per-node `commit-node` barrier for each member.
-- **(e) join:** `node "$KAOLA_SCRIPTS/kaola-workflow-parallel-batch.js" join --project {project} --json` — no-op for read-only; path-scoped idempotent checkout merge for write-role. Orchestrator deletes manifest after join.
+- **(c) record-evidence per member:** the **orchestrator** records each member PARENT-side at ONE canonical path `.cache/{node-id}.md` (members do NOT self-write into their worktree). The ONLY exception is the adversarial-verifier fan-out, whose per-skeptic `.cache/adversarial-verifier-*.md` files feed the validator's quorum glob.
+- **(c′) top-up:** `node "$KAOLA_SCRIPTS/kaola-workflow-parallel-batch.js" top-up --project {project} --json` — after a member completes, `record-evidence` + `seal-member` it, then `top-up` opens up to (`FANOUT_CAP` − running) more **same-frontier** siblings (never a downstream node), records their baselines/worktrees, appends them to the manifest. Returns `reason:'at_capacity'` (no slot) / `reason:'frontier_drained'` (queue empty). Repeat until drained. (State-level rolling bounded dispatch; the script never spawns agents, so it never overclaims wall-clock parallelism.)
+- **(d) seal:** `node "$KAOLA_SCRIPTS/kaola-workflow-parallel-batch.js" seal --project {project} --json` — for each member applies the serial gates before close: **evidence-shape** (`evidence_missing`) + write-role **non-empty-in-lane** vacuity guard (`empty_member`) + the per-node `commit-node` barrier. Manifest → `sealed` only when ALL pass.
+- **(e) join:** `node "$KAOLA_SCRIPTS/kaola-workflow-parallel-batch.js" join --project {project} --json` — no-op for read-only; a per-declared-path **tree-aware** merge for write-role: a path present in the member's sealed tree → checkout; absent → `git rm` (handles deletions + the old side of a rename). Disjoint → conflict-free; idempotent. Orchestrator deletes manifest after join.
 - **(f) re-enter next-action** — terminal batch members unblock downstream (existing readiness semantics, no new gate).
 
-**Legality rule:** multiple `in_progress` ledger rows are legal ONLY with a valid `active-batch.json`
-whose `members` set exactly matches the `in_progress` set; otherwise a typed refusal
-(`orphan_multi_in_progress`). Batch lifecycle states: `open → dispatched → sealed → joining → joined`.
+**Drain/termination:** exhausted when `top-up` reports `frontier_drained` AND every manifest member is
+sealed → `seal → join → advance`. Until then, keep dispatching + topping up.
 
-**Crash/resume:** `open` → re-dispatch all (baselines idempotent). `dispatched` → per-member recovery
-(absent evidence → re-dispatch; present + `in_progress` → `seal-member` only). `sealed` → run `join`.
+**Legality rule:** multiple `in_progress` ledger rows are legal ONLY with a valid `active-batch.json`
+whose UNSEALED `members` set matches the `in_progress` set; otherwise a typed refusal
+(`orphan_multi_in_progress`). Batch lifecycle states: `opening → open → sealed → joining → joined`
+(the dead `dispatched` state was removed in #303; the crash-safe `opening` marker replaces it).
+
+**Crash/resume:** `opening` → run `reconcile` (roll-forward) or `reconcile --abort` (roll-back).
+`open` → re-dispatch any member whose evidence is absent (baselines idempotent); present evidence but
+`in_progress` ledger → `seal-member` only; frontier not yet drained → `top-up`. `sealed` → run `join`.
 `joining` → re-run `join` (idempotent). `joined` → delete manifest, re-enter `next-action`.
 
 1. **open-next — open the next ready node when none is `in_progress`** — run this to open the first
@@ -319,8 +336,11 @@ escalations (they remain in the evidence and surface at finalize), never silentl
 
 ## Caps
 
-`FANOUT_CAP` (default 4, env `KAOLA_FANOUT_CAP`), `test_thrash` ≥ 3, file overflow
-declared+1 / absolute backstop of 6, the static loop bound — enforced per node at the barrier.
+`FANOUT_CAP` (default 4, env `KAOLA_FANOUT_CAP`) is a **runtime concurrency limit** (#303), NOT a
+planning width cap — the validator accepts a fan-out wider than `FANOUT_CAP` (write-role members must
+still be pairwise-disjoint); the executor runs at most `FANOUT_CAP` at once and drains the rest via
+`top-up`. `test_thrash` ≥ 3, file overflow declared+1 / absolute backstop of 6, the static loop
+bound — enforced per node at the barrier.
 
 ## Completion
 

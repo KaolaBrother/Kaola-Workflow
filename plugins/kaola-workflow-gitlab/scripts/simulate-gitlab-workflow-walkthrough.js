@@ -290,8 +290,9 @@ function testGitlabAdaptive() {
     ].join('\n')).result, 'refuse', 'gitlab B1: decoy labels line outside ## Meta must not drop G2');
 
     // issue #233 (audit B6): fan-out groups are scoped by (label, origin). Independent branches
-    // reusing label `impl` (3+3) must NOT sum against FANOUT_CAP; a genuine single-origin over-cap
-    // fan-out (5 under one parent) must still refuse.
+    // reusing label `impl` (3+3) must NOT sum into one group. #303: a single-origin over-cap
+    // fan-out (5 under one parent) is now IN-GRAMMAR — FANOUT_CAP is a runtime concurrency limit,
+    // not a planning validity cap (write-role fan-out still demotes the decision to ask).
     assert.strictEqual(gateVal([
       '| root1 | code-explorer | — | — | 1 | sequence |',
       '| root2 | code-explorer | — | — | 1 | sequence |',
@@ -313,7 +314,7 @@ function testGitlabAdaptive() {
       '| i5 | tdd-guide | root | eee/1.js | 1 | fanout(impl) |',
       '| r | code-reviewer | i1,i2,i3,i4,i5 | — | 1 | sequence |',
       '| d | finalize | r | — | 1 | sequence |',
-    ], 'enhancement').result, 'refuse', 'gitlab B6 control: single-origin over-cap fan-out must still refuse');
+    ], 'enhancement').result, 'in-grammar', 'gitlab B6 control (#303): single-origin over-cap fan-out is in-grammar (runtime concurrency limit, not validity cap)');
 
     // issue #232 (audit A3): concurrent non-fanout siblings (same parent) writing the EXACT same
     // file must refuse; independent branches (no common ancestor) with identical writes must NOT.

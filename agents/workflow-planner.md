@@ -66,9 +66,14 @@ Author the `## Nodes` table so the validator passes it. Each node is one row:
   Do **not** use `workflow-planner` or `contractor` as a node role; they are orchestration roles,
   not in-plan node roles.
 - **shape** is exactly one of three productions: `sequence`, `fanout(<group>)` (N instances of one
-  role over pairwise-disjoint declared write sets, N ≤ `FANOUT_CAP`, default 4; disjointness is
-  checked at top-level-directory granularity), or `loop(<cap>)` (one role re-invoked up to a static
-  cap ≤ `LOOP_CAP` = 5; a loop must run at least once — `loop(0)` is refused).
+  role over pairwise-disjoint declared write sets; disjointness is checked at top-level-directory
+  granularity), or `loop(<cap>)` (one role re-invoked up to a static cap ≤ `LOOP_CAP` = 5; a loop
+  must run at least once — `loop(0)` is refused). **`FANOUT_CAP` (default 4) is NOT a width bound on
+  the authored plan** — it is a *runtime concurrency limit*: the maximum number of fan-out siblings
+  the executor dispatches at once. Author the fan-out as wide as the work is genuinely independent
+  (each leg over a disjoint write set); the validator validates dependency shape, disjointness,
+  gates, and write-set safety, never width. The executor opens up to `FANOUT_CAP` legs and drains
+  the rest via rolling bounded dispatch (queue the overflow, top up as slots free).
 - **cardinality** is a reserved/advisory column (parsed, not validated). Keep a plain count and keep
   the column present and stable (it feeds `plan_hash`).
 - A single unique **`finalize`** sink is mandatory and makes the gate checks decidable. The sink may

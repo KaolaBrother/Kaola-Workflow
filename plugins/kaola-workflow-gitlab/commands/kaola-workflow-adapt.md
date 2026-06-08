@@ -30,10 +30,10 @@ the handoff-packet routing.
 
 Author a `workflow-plan.md` whose `## Nodes` table passes
 `kaola-gitlab-workflow-plan-validator.js`, freeze it (the script stamps `plan_hash`),
-record the governance decision, and hand off to `/kaola-workflow-plan-run`. If
-the plan is risky or uncertain, surface it for approval before freezing; if it is
-out of grammar, the validator returns a **typed refusal** — fix the plan, never
-clamp around the gate.
+record the governance decision (`auto-run` vs `ask` is audit metadata, NOT an
+approval gate — freeze and hand off either way), and hand off to
+`/kaola-workflow-plan-run`. If the plan is out of grammar, the validator returns
+a **typed refusal** — fix the plan, never clamp around the gate.
 
 ## Agent Model Badge
 

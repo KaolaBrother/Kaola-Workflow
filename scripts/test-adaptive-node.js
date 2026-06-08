@@ -1374,6 +1374,125 @@ function makeState(opts) {
 }
 
 // ---------------------------------------------------------------------------
+// T21 (#303 gap #2): runCloseAndOpenNext — closing a node that exposes a >=2 own-pending
+// ready frontier returns enterBatch:true and does NOT single-open a node (no serialization).
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan([
+    '| prep | complete | |',
+    '| a | pending | |',
+    '| b | pending | |',
+    '| c | pending | |',
+    '| review | pending | |',
+  ], [
+    '| prep | code-explorer | — | — | 1 | sequence |',
+    '| a | tdd-guide | prep | aaa/1.js | 1 | fanout(impl) |',
+    '| b | tdd-guide | prep | bbb/1.js | 1 | fanout(impl) |',
+    '| c | tdd-guide | prep | ccc/1.js | 1 | fanout(impl) |',
+    '| review | code-reviewer | a,b,c | — | 1 | sequence |',
+  ]);
+  // The node we are closing is `prep`; mark it in_progress for the close path.
+  let planContent = plan.replace('| prep | complete | |', '| prep | in_progress | |');
+  const writtenFiles = {};
+
+  const shellStub = function(scriptPath, args) {
+    const base = path.basename(scriptPath);
+    const argsArr = args || [];
+    if (base === 'kaola-workflow-commit-node.js' && !argsArr.includes('--start')) {
+      return { exitCode: 0, result: 'ok', mode: 'per-node', nodeId: 'prep', overallOk: true, selectorCheck: { isSelector: false, ok: true }, barrierCheck: { exitCode: 0, result: 'pass' } };
+    }
+    if (base === 'kaola-workflow-commit-node.js' && argsArr.includes('--start')) {
+      return { exitCode: 0, result: 'ok', mode: 'per-node-start', overallOk: true };
+    }
+    if (base === 'kaola-workflow-next-action.js') {
+      // After closing prep, a,b,c are all ready + own-pending => readyPending=[a,b,c].
+      const sib = id => ({ id, role: 'tdd-guide', model: 'sonnet', declared_write_set: id + 'aa/1.js', dependsOn: ['prep'] });
+      return {
+        exitCode: 0, result: 'ok',
+        readySet: [sib('a'), sib('b'), sib('c')],
+        nextNode: sib('a'),
+        readyPending: [sib('a'), sib('b'), sib('c')],
+        active: [],
+        allDone: false,
+      };
+    }
+    return { exitCode: 1, result: 'refuse', errors: ['stub: unexpected ' + base] };
+  };
+
+  const result = runCloseAndOpenNext({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project',
+    nodeId: 'prep',
+    shell: shellStub,
+    readFile: (fpath) => {
+      if (fpath.endsWith('workflow-plan.md')) return planContent;
+      if (fpath.endsWith('workflow-state.md')) return makeState();
+      if (fpath.endsWith('/.cache/prep.md')) return 'explored the area; findings recorded';
+      throw new Error('ENOENT: ' + fpath);
+    },
+    writeFile: (fpath, content) => { writtenFiles[fpath] = content; if (fpath.endsWith('workflow-plan.md')) planContent = content; },
+    cacheExists: (fpath) => fpath.endsWith('/.cache/prep.md'),
+  });
+
+  assert(result.result === 'ok', 'T21: enterBatch close result===ok');
+  assert(result.closed === 'prep', 'T21: closed===prep');
+  assert(result.enterBatch === true, 'T21: enterBatch===true on a >=2 ready frontier');
+  assert(result.opened === null, 'T21: opened===null (NOT single-opened — no serialization)');
+  assert(Array.isArray(result.frontier) && result.frontier.length === 3, 'T21: frontier carries all 3 ready siblings');
+  // prep is closed, but NO sibling was flipped to in_progress (the batch opener owns that).
+  const writtenPlan = writtenFiles['/fake/kaola-workflow/test-project/workflow-plan.md'];
+  assert(writtenPlan.includes('| prep | complete | |'), 'T21: prep marked complete');
+  assert(writtenPlan.includes('| a | pending | |') && writtenPlan.includes('| b | pending | |') && writtenPlan.includes('| c | pending | |'),
+    'T21: no sibling single-opened by fused advance (all still pending for the batch opener)');
+}
+
+// ---------------------------------------------------------------------------
+// T22 (#303 sub-gap C): runOrient — a fresh frontier (nothing in_progress) with >=2 own-pending
+// ready siblings signals enterBatch:true so a plan that STARTS with a fan-out is batched.
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan([
+    '| a | pending | |',
+    '| b | pending | |',
+    '| review | pending | |',
+  ], [
+    '| a | tdd-guide | — | aaa/1.js | 1 | fanout(impl) |',
+    '| b | tdd-guide | — | bbb/1.js | 1 | fanout(impl) |',
+    '| review | code-reviewer | a,b | — | 1 | sequence |',
+  ]);
+
+  const shellStub = function(scriptPath, args) {
+    const base = path.basename(scriptPath);
+    if (base === 'kaola-workflow-plan-validator.js') return { exitCode: 0, ok: true, planHash: 'abc' };
+    if (base === 'kaola-workflow-next-action.js') {
+      const sib = id => ({ id, role: 'tdd-guide', model: 'sonnet', declared_write_set: id + 'aa/1.js', dependsOn: [] });
+      return { exitCode: 0, result: 'ok', readySet: [sib('a'), sib('b')], nextNode: sib('a'), readyPending: [sib('a'), sib('b')], active: [], allDone: false };
+    }
+    return { exitCode: 1, result: 'refuse' };
+  };
+
+  const result = runOrient({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project',
+    shell: shellStub,
+    readFile: (fpath) => {
+      if (fpath.endsWith('workflow-plan.md')) return plan;
+      if (fpath.endsWith('workflow-state.md')) return makeState();
+      throw new Error('ENOENT: ' + fpath);
+    },
+    writeFile: () => {},
+    cacheExists: () => false,
+  });
+
+  assert(result.result === 'ok', 'T22: orient start-frontier result===ok');
+  assert(result.enterBatch === true, 'T22: enterBatch===true at a fresh >=2 frontier');
+  assert(Array.isArray(result.frontier) && result.frontier.length === 2, 'T22: frontier carries both start siblings');
+  assert(result.inProgressNodes.length === 0, 'T22: nothing in_progress at the start frontier');
+}
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 if (failed > 0) {

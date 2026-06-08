@@ -521,6 +521,11 @@ function validatePlan(content, opts) {
   const roles = opts.installedRoles || installedRoles(opts.root || process.cwd());
   const fanoutCap = Number.isInteger(opts.fanoutCap) ? opts.fanoutCap : schema.resolveFanoutCap(process.env);
   const errors = [];
+  // #303: logical fan-out width wider than FANOUT_CAP is IN-GRAMMAR. FANOUT_CAP is a
+  // RUNTIME concurrency limit (max concurrently-running subagents the executor's
+  // open-batch/top-up will dispatch), NOT a planning-validity cap. Over-cap groups are
+  // recorded here as non-blocking diagnostics so a very wide fan-out stays observable.
+  const wideFanouts = [];
 
   if (!nodes.length) {
     return { result: 'refuse', errors: ['plan has no parseable ## Nodes table'], planHash: computePlanHash(content) };
@@ -609,7 +614,9 @@ function validatePlan(content, opts) {
     const g = grp.origin === '*' ? grp.label : `${grp.label}@${grp.origin}`;
     const memberRoles = new Set(members.map(m => m.role));
     if (memberRoles.size > 1) errors.push(`fan-out group "${g}" is heterogeneous (roles: ${[...memberRoles].join(', ')})`);
-    if (members.length > fanoutCap) errors.push(`fan-out group "${g}" width ${members.length} > FANOUT_CAP ${fanoutCap}`);
+    // #303: width > FANOUT_CAP is NOT a refusal — it is a runtime concurrency concern the
+    // executor drains via rolling bounded dispatch. Record it as a diagnostic only.
+    if (members.length > fanoutCap) wideFanouts.push({ group: g, width: members.length, cap: fanoutCap });
     const role = members[0].role;
     const readOnly = !WRITE_ROLES.has(role);
     if (!readOnly) {
@@ -618,7 +625,8 @@ function validatePlan(content, opts) {
       if (dj.verdict === 'red') errors.push(`fan-out group "${g}" write sets not pairwise disjoint (${dj.reasoning})`);
       if (dj.verdict === 'yellow') errors.push(`fan-out group "${g}" touches shared infra (${dj.reasoning}) — must serialize, not fan out`);
     }
-    // read-only fan-out: width bounded by FANOUT_CAP alone (no clamp to #disjoint groups)
+    // read-only fan-out: any width is in-grammar (empty write sets are trivially disjoint);
+    // the executor concurrency-limits dispatch to FANOUT_CAP at runtime (#303).
   }
 
   // --- #271 G-SEL-1 pre-pass: globally-unique group names ---------------------------------
@@ -832,6 +840,7 @@ function validatePlan(content, opts) {
     result: 'in-grammar', decision, planHash, sink,
     risk: { sensitivity, blastRadius, uncertain, reasons },
     nodeCount: nodes.length,
+    diagnostics: { wideFanout: wideFanouts },
   };
 }
 
