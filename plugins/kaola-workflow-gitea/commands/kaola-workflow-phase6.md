@@ -520,11 +520,13 @@ Enforce the single-project rule before committing. If more than one
 `kaola-workflow/*/` project is staged at once, split the commit:
 
 ```bash
-# #261: a staged archive/<other>/ that is NOT the finalized project is a swept-in stray.
+# #261/#294: a staged archive/<other>/ that is NOT the finalized project is a swept-in stray.
+# Compare {project} as a fixed string (awk index/equality), never as a regex, so a project
+# name carrying regex metacharacters cannot make this guard fail open (#294).
 FOREIGN_ARCHIVE=$(git diff --cached --name-only \
   | grep '^kaola-workflow/archive/' \
   | awk -F'/' 'NF>=3 {print $3}' | sort -u \
-  | grep -v -E -x "{project}(\.archived-.*)?" || true)
+  | awk -v p="{project}" '$0 != p && index($0, p ".archived-") != 1' || true)
 if [ -n "$FOREIGN_ARCHIVE" ]; then
   echo "BLOCKED: a foreign project's archive band is staged (${FOREIGN_ARCHIVE}) — only {project}'s archive may be committed. Unstage the stray archive/<other>/ before committing." >&2
   exit 1
