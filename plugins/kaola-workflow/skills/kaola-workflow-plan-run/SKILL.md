@@ -163,14 +163,35 @@ whose `members` set exactly matches the `in_progress` set; otherwise a typed ref
    `--node-id`), splices the ledger row to `in_progress`, and shells `commit-node --node-id N
    --start --json` to record the per-instance write baseline (idempotent, #239). Returns
    `{opened:{id,role,model,declared_write_set}, baselineRecorded:true}`, or `{allDone:true}`.
-   On `allDone`, route to finalize.
+   On `allDone`, route to finalize. `allDone` is valid only after the mandatory `finalize` sink
+   node itself has been closed. If `open-next` opens a node whose `role` is `finalize`, stay in the
+   per-node loop and use the finalize sink contract below instead.
 
 2. **dispatch** the node's role (current session — Codex delegates to the matching agent profile;
    resolve its model via `node "$KAOLA_SCRIPTS/kaola-workflow-resolve-agent-model.js" <role>`). Pass
    `Working directory: ${ACTIVE_WORKTREE_PATH}` to every role delegation so the relative plan path
-   resolves inside the worktree. **After the role returns, record durable evidence immediately**
-   before step 3 — `close-and-open-next` refuses (`evidence_missing`) if `.cache/{node-id}.md` is
-   absent when it runs:
+   resolves inside the worktree.
+
+   **Special case — `role: finalize` sink:** `finalize` is the mandatory DAG sink, not a
+   dispatchable subagent role. It is expected that
+   `kaola-workflow-resolve-agent-model.js finalize` returns an empty model. When the opened node role
+   is `finalize`, do not delegate to an agent profile. The main session performs the node's declared
+   docs/state bookkeeping directly within the validator-allowed finalize write set, then records
+   evidence for the `finalize` node:
+
+   ```bash
+   echo "<finalize-bookkeeping-evidence>" | \
+     node "$KAOLA_SCRIPTS/kaola-workflow-adaptive-node.js" record-evidence \
+       --project {project} --node-id {node-id} --stdin --json
+   ```
+
+   Then run `close-and-open-next` for that same node. Only after that command returns
+   `{allDone:true}` is the DAG complete and ready to route to Finalization. If the close refuses,
+   stay in the per-node loop and fix or refuse as with any other node.
+
+   **For non-finalize roles, after the role returns, record durable evidence immediately** before
+   step 3 — `close-and-open-next` refuses (`evidence_missing`) if `.cache/{node-id}.md` is absent
+   when it runs:
 
    ```bash
    echo "<role-returned-evidence>" | \
@@ -302,5 +323,7 @@ declared+1 / absolute backstop of 6, the static loop bound — enforced per node
 
 ## Completion
 
-When every ledger row is `complete` or `n/a`, route to `kaola-workflow-finalize {project}`
-(adaptive runs have no `phase5-review.md`; finalize anchors on the all-complete plan).
+Completion begins only after the `finalize` sink row has been closed and `close-and-open-next`
+returns `{allDone:true}`. At that point every ledger row is `complete` or `n/a`; route to
+`kaola-workflow-finalize {project}` (adaptive runs have no `phase5-review.md`; finalize anchors on
+the all-complete plan).
