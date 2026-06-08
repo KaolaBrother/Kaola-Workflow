@@ -116,7 +116,7 @@ Append equivalent missing sections only. Treat headings with the same meaning as
 - In Phase 1, spawn `code-explorer` for codebase research and `docs-lookup` when external/library/API documentation is needed.
 - In Phase 4, spawn `tdd-guide` per task as the executor. `tdd-guide` is the executor agent; `tdd-workflow` is the RED -> GREEN -> REFACTOR playbook it follows.
 - Route build/type/lint validation failures to `build-error-resolver`; route behavior or coverage failures back to `tdd-guide`.
-- Use the vendored agent names exactly as installed under `~/.claude/agents`; prefer short names like `planner`. When spawning a Kaola subagent, resolve its installed frontmatter model and pass it explicitly as `model=` on the `Agent(...)` call.
+- Use the vendored agent role names exactly as installed; prefer short names like `planner`. When spawning a Kaola subagent, pass the role's configured model on the spawn call — each agent ships its model in its installed profile.
 - At `/workflow-next` startup, fetch remote-tracking refs, classify local/upstream sync state, and ask before any risky synchronization.
 - Use `/goal` or equivalent prompt-based Stop-hook wording so each phase continues until its objective and completion audit are satisfied.
 - The `/goal` template must not use "next issue in line" or any phrasing that implies automatic cross-issue continuation. Each `/workflow-next` run targets one issue; finishing it is the terminal event. The single-issue completion contract requires explicit re-direction for the next issue.

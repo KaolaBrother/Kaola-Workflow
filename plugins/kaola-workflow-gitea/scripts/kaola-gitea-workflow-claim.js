@@ -1231,6 +1231,9 @@ function watchMergeRequests(root, args) {
         worktree_removed: worktreeRemoved,
         branch_removed: 'kept'
       });
+      const liveCacheDir = path.join(root, 'kaola-workflow', folder.project, '.cache');
+      const archiveCacheDir = archiveResult && archiveResult.dest ? path.join(archiveResult.dest, '.cache') : null;
+      checkDispatchAttestations([archiveCacheDir, liveCacheDir], folderReceipt);
       const folderInvariants = checkClosureInvariants(root, folderReceipt, archiveResult ? archiveResult.dest : undefined);
       cleanups.push({ folder: folder.project, claim_label_removed: claimLabelStatus, receipt: folderReceipt, closure_invariants: folderInvariants });
     } else if (state === 'closed') {
@@ -1252,6 +1255,9 @@ function watchMergeRequests(root, args) {
         worktree_removed: worktreeRemoved,
         branch_removed: 'kept'
       });
+      const liveCacheDir = path.join(root, 'kaola-workflow', folder.project, '.cache');
+      const archiveCacheDir = archiveResult && archiveResult.dest ? path.join(archiveResult.dest, '.cache') : null;
+      checkDispatchAttestations([archiveCacheDir, liveCacheDir], folderReceipt);
       const folderInvariants = checkClosureInvariants(root, folderReceipt, archiveResult ? archiveResult.dest : undefined);
       cleanups.push({ folder: folder.project, claim_label_removed: claimLabelStatus, receipt: folderReceipt, closure_invariants: folderInvariants });
     }

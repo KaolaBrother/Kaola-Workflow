@@ -165,8 +165,9 @@ whose `members` set exactly matches the `in_progress` set; otherwise a typed ref
    `{opened:{id,role,model,declared_write_set}, baselineRecorded:true}`, or `{allDone:true}`.
    On `allDone`, route to finalize.
 
-2. **dispatch** the node's role (current session — Codex delegates to the matching agent profile;
-   resolve its model via `node "$KAOLA_SCRIPTS/kaola-workflow-resolve-agent-model.js" <role>`). Pass
+2. **dispatch** the node's role (current session — Codex delegates to the matching agent profile by
+   role name; the role's `model_reasoning_effort` tier in its `agents/<role>.toml` profile is the
+   model signal). Pass
    `Working directory: ${ACTIVE_WORKTREE_PATH}` to every role delegation so the relative plan path
    resolves inside the worktree. **After the role returns, record durable evidence immediately**
    before step 3 — `close-and-open-next` refuses (`evidence_missing`) if `.cache/{node-id}.md` is

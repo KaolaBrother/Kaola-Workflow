@@ -5732,6 +5732,16 @@ function testWatchPrMergedClosureReceipt() {
       result.cleanups[0].closure_invariants,
       'cleanups[0] must have closure_invariants, got: ' + JSON.stringify(cleanup)
     );
+    // #286 Fix 2: checkDispatchAttestations must run on watch-pr MERGED receipt.
+    // With no dispatch-log producer in the fixture, post-fix value is 'missing' (not stale 'failed').
+    assert(
+      receipt.claim_planner_attested === 'missing',
+      'watch-pr MERGED receipt.claim_planner_attested must be missing after attestation check, got: ' + receipt.claim_planner_attested
+    );
+    assert(
+      receipt.finalize_contractor_attested === 'missing',
+      'watch-pr MERGED receipt.finalize_contractor_attested must be missing after attestation check, got: ' + receipt.finalize_contractor_attested
+    );
     console.log('testWatchPrMergedClosureReceipt: PASSED');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });

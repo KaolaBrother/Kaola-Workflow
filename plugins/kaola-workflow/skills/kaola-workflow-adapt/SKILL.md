@@ -19,8 +19,8 @@ Each node is one row of the `## Nodes` table:
 `| id | role | depends_on | declared_write_set | cardinality | shape |`.
 - **role** must be in the installed library (the nine canonical roles + any
   maintainer-installed role such as `adversarial-verifier`). The validator hard-rejects
-  an unknown role. The author **never** sets a model — it comes only from
-  `resolve-agent-model`.
+  an unknown role. The author **never** sets a model — on Codex it comes from the role's
+  `model_reasoning_effort` tier in its `agents/<role>.toml` profile (selected by role name).
 - **shape** is exactly one of three productions: `sequence`, `fanout(<group>)` (N
   instances of one role over pairwise-disjoint declared write sets, N ≤ `FANOUT_CAP`),
   or `loop(<cap>)` (one role re-invoked up to a static cap; loops do not fan out).
