@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [5.9.0] — 2026-06-08
+
 ### Added
 
 - **adaptive: parallel fan-out completed end-to-end (#303).** The adaptive parallel-fanout path is now wired through planning, scheduling, execution, seal, and join. Planner fan-out **width is decoupled from `KAOLA_FANOUT_CAP`** — the cap is a **runtime concurrency limit only** (at most that many members run at once), not a planning-validity bound, so a logical fan-out MAY be wider. The executor performs **rolling bounded dispatch** via a new `parallel-batch top-up` subcommand: it opens up to the cap, queues the rest, and drains the queue as earlier members seal. Scheduling is now **scheduler-aware** — fused advance plus start-frontier batching opens the openable frontier together. **Batch seal** enforces the serial evidence-shape gate plus a **write-role non-empty-in-lane vacuity guard** (a member that leaked no writes into its own lane can no longer pass vacuously). **Write-role join is tree-aware** (handles deletions and renames, not just adds). **`open-batch` gains an active-manifest precondition plus a `--resume-check` integrity gate.** A **crash-safe `opening` transaction marker** (manifest written with the intended member set before the ledger rows flip) plus a **`reconcile` repair subcommand** (roll-forward, or `--abort` roll-back) close the interrupted-open/top-up window; the dead `dispatched` batch state is removed. `decision:ask` is normalized to **audit-metadata-only** in plan-run, and the evidence path is normalized to `.cache/{node-id}.md`.
