@@ -802,6 +802,243 @@ function realNextActionShell(planPath) {
   assert(result.orphan === false, 'R4a: partial-seal must NOT be flagged orphan_member_set_mismatch');
 }
 
+// ===========================================================================
+// END-TO-END WRITE-ROLE TESTS (REAL git via the SUBPROCESS CLI) — issue #292
+//
+// These drive the ACTUAL `node kaola-workflow-parallel-batch.js <sub> --json`
+// binary against a REAL $TMPDIR git repo so the io shim's git invocation
+// (gitCheckout, worktree add/remove, snapshot/anchor) is genuinely exercised —
+// NOT a mock gitCheckout, NOT an injected git-backed seam that bypasses main().
+// cwd MUST be the tmp repo so main()'s getRoot() (git rev-parse --show-toplevel)
+// resolves the FIXTURE repo, never the real worktree this suite runs in.
+// ===========================================================================
+
+const { execFileSync } = require('child_process');
+const BATCH_CLI = path.join(__dirname, 'kaola-workflow-parallel-batch.js');
+
+// Run the parallel-batch CLI as a real subprocess rooted at `repoRoot`.
+// Returns { exitCode, ...parsedJson }.
+function runBatchCli(repoRoot, subArgs) {
+  try {
+    const stdout = execFileSync('node', [BATCH_CLI, ...subArgs], { cwd: repoRoot, encoding: 'utf8' });
+    let parsed = {};
+    try { parsed = JSON.parse(stdout.trim().split('\n').pop()); } catch (_) {}
+    return { exitCode: 0, ...parsed };
+  } catch (err) {
+    const status = (err.status == null) ? 1 : err.status;
+    let parsed = {};
+    try { parsed = JSON.parse(String(err.stdout || '').trim().split('\n').pop()); } catch (_) {}
+    return { exitCode: status, ...parsed };
+  }
+}
+
+// Build a REAL git repo under $TMPDIR with a frozen plan carrying two write-role
+// siblings wa (decl wa.js) wb (decl wb.js) depending on complete a, plus finalize.
+// Returns { repoRoot, project, planPath, cacheDir }.
+function makeRealGitRepo() {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'pb-e2e-'));
+  const project = 'test-project';
+  const projDir = path.join(repoRoot, 'kaola-workflow', project);
+  const cacheDir = path.join(projDir, '.cache');
+  fs.mkdirSync(cacheDir, { recursive: true });
+  const planPath = path.join(projDir, 'workflow-plan.md');
+  const plan = makePlan(
+    [
+      '| a        | code-explorer | —    | —     | 1 | sequence        |',
+      '| wa       | implementer   | a    | wa.js | 1 | fanout(execute) |',
+      '| wb       | implementer   | a    | wb.js | 1 | fanout(execute) |',
+      '| finalize | finalize      | wa,wb| —     | 1 | sequence        |',
+    ],
+    [
+      '| a        | complete    |  |',
+      '| wa       | pending     |  |',
+      '| wb       | pending     |  |',
+      '| finalize | pending     |  |',
+    ]
+  );
+  fs.writeFileSync(planPath, plan);
+  fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n');
+  // Real git repo: init + identity + initial commit (the seed snapshot needs a HEAD).
+  const g = (args) => execFileSync('git', ['-C', repoRoot, ...args], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+  g(['init']);
+  g(['config', 'user.email', 'kw@test']);
+  g(['config', 'user.name', 'kw']);
+  g(['config', 'commit.gpgsign', 'false']);
+  fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
+  g(['add', '-A']);
+  g(['commit', '-m', 'init']);
+  return { repoRoot, project, planPath, cacheDir };
+}
+
+function readFileOr(fpath, fallback) {
+  try { return fs.readFileSync(fpath, 'utf8'); } catch (_) { return fallback; }
+}
+
+// ---------------------------------------------------------------------------
+// E1: core write-role open → seal → join with REAL git through the CLI (R3 closed).
+//   open-batch provisions a real worktree per write-role member; we write distinct
+//   content in each member worktree; seal captures a non-empty mergeRef per member;
+//   join checks out `git -C <repoRoot> checkout <mergeRef> -- <decl paths>` so the
+//   PARENT worktree actually contains wa.js=="AAA" AND wb.js=="BBB".
+//   E1a/E1b assert REAL parent content (NOT merely state:'joined' — that false-green
+//   is exactly what current code emits without a real checkout). E1c idempotent.
+// ---------------------------------------------------------------------------
+{
+  const { repoRoot, project } = makeRealGitRepo();
+  const proj = ['--project', project, '--json'];
+
+  // open-batch: write-role frontier → real worktrees.
+  const open = runBatchCli(repoRoot, ['open-batch', ...proj]);
+  assert(open.result === 'ok', 'E1: open-batch write-role frontier → ok');
+  assert(open.kind === 'write_role', 'E1: kind write_role');
+  const members = Array.isArray(open.members) ? open.members : [];
+  assert(members.length === 2, 'E1: two members opened, got ' + members.length);
+  const wa = members.find(m => m.id === 'wa') || {};
+  const wb = members.find(m => m.id === 'wb') || {};
+  assert(!!wa.worktreePath, 'E1: wa has a non-null worktreePath (R3/dormant join activated)');
+  assert(!!wb.worktreePath, 'E1: wb has a non-null worktreePath');
+  // Guard: worktrees live UNDER the fixture repo (getRoot resolved the tmp repo, not
+  // the real one). git rev-parse --show-toplevel returns the realpath, while mkdtempSync
+  // returns the symlinked /var path on macOS — compare against the resolved realpath.
+  const repoReal = fs.realpathSync(repoRoot);
+  assert(typeof wa.worktreePath === 'string'
+    && (wa.worktreePath.indexOf(repoRoot) === 0 || wa.worktreePath.indexOf(repoReal) === 0),
+    'E1: wa worktreePath is rooted at the fixture repo (cwd correctly set, not the real worktree)');
+
+  // Write each member's DISJOINT declared file inside its OWN worktree + evidence in parent .cache.
+  const parentCache = path.join(repoRoot, 'kaola-workflow', project, '.cache');
+  if (wa.worktreePath) fs.writeFileSync(path.join(wa.worktreePath, 'wa.js'), 'AAA');
+  if (wb.worktreePath) fs.writeFileSync(path.join(wb.worktreePath, 'wb.js'), 'BBB');
+  fs.writeFileSync(path.join(parentCache, 'wa.md'), 'RED: x\nGREEN: y\n');
+  fs.writeFileSync(path.join(parentCache, 'wb.md'), 'RED: x\nGREEN: y\n');
+
+  // seal: member-scoped barrier passes (in-lane) + captures a non-empty mergeRef each.
+  const seal = runBatchCli(repoRoot, ['seal', ...proj]);
+  assert(seal.result === 'ok', 'E1: seal → ok (member-scoped barrier passes for in-lane writes)');
+  assert(seal.state === 'sealed', 'E1: seal state sealed');
+  const manifestPath = path.join(parentCache, 'active-batch.json');
+  const sealedManifest = JSON.parse(readFileOr(manifestPath, '{"members":[]}'));
+  const sm = id => (sealedManifest.members || []).find(m => m.id === id) || {};
+  assert(typeof sm('wa').mergeRef === 'string' && sm('wa').mergeRef.length > 0,
+    'E1: wa member has a non-empty gc-anchored mergeRef after seal');
+  assert(typeof sm('wb').mergeRef === 'string' && sm('wb').mergeRef.length > 0,
+    'E1: wb member has a non-empty mergeRef after seal');
+
+  // join: REAL git checkout <mergeRef> -- <paths> into the PARENT worktree.
+  const join = runBatchCli(repoRoot, ['join', ...proj]);
+  assert(join.result === 'ok', 'E1: join → ok');
+  assert(join.state === 'joined', 'E1: join state joined');
+  assert(Array.isArray(join.joined) && join.joined.includes('wa') && join.joined.includes('wb'),
+    'E1: both write-role members joined');
+
+  // E1a/E1b — the headline anti-false-green proof: REAL parent content landed.
+  assert(readFileOr(path.join(repoRoot, 'wa.js'), null) === 'AAA',
+    'E1a: PARENT worktree contains wa.js=="AAA" (real checkout landed, not a state-only false-green)');
+  assert(readFileOr(path.join(repoRoot, 'wb.js'), null) === 'BBB',
+    'E1b: PARENT worktree contains wb.js=="BBB"');
+
+  // E1c — idempotent second join: same ok/joined, content unchanged.
+  const join2 = runBatchCli(repoRoot, ['join', ...proj]);
+  assert(join2.result === 'ok', 'E1c: second join → still ok (idempotent)');
+  assert(join2.state === 'joined', 'E1c: idempotent join state still joined');
+  assert(readFileOr(path.join(repoRoot, 'wa.js'), null) === 'AAA', 'E1c: wa.js still AAA after idempotent re-join');
+
+  cleanup(repoRoot);
+}
+
+// ---------------------------------------------------------------------------
+// E2: no false-green at seal. A write-role member writes a file OUTSIDE its
+//   declared set inside its OWN worktree → the MEMBER-SCOPED barrier sees the
+//   lane overflow → seal refuses barrier_failed; the member is NOT sealed/joined.
+//   (Against parent-scoped seal this overflow is invisible — the false-green twin.)
+// ---------------------------------------------------------------------------
+{
+  const { repoRoot, project } = makeRealGitRepo();
+  const proj = ['--project', project, '--json'];
+
+  const open = runBatchCli(repoRoot, ['open-batch', ...proj]);
+  assert(open.result === 'ok', 'E2: open-batch → ok');
+  const members = Array.isArray(open.members) ? open.members : [];
+  const wa = members.find(m => m.id === 'wa') || {};
+  const wb = members.find(m => m.id === 'wb') || {};
+
+  const parentCache = path.join(repoRoot, 'kaola-workflow', project, '.cache');
+  // wa writes its OWN file PLUS an out-of-lane production file (intruder.js) — overflow.
+  if (wa.worktreePath) {
+    fs.writeFileSync(path.join(wa.worktreePath, 'wa.js'), 'AAA');
+    fs.writeFileSync(path.join(wa.worktreePath, 'intruder.js'), 'OUT-OF-LANE');
+  }
+  if (wb.worktreePath) fs.writeFileSync(path.join(wb.worktreePath, 'wb.js'), 'BBB');
+  fs.writeFileSync(path.join(parentCache, 'wa.md'), 'RED: x\nGREEN: y\n');
+  fs.writeFileSync(path.join(parentCache, 'wb.md'), 'RED: x\nGREEN: y\n');
+
+  // seal-member wa → must refuse barrier_failed (member-scoped barrier sees intruder.js).
+  const sealWa = runBatchCli(repoRoot, ['seal-member', '--node-id', 'wa', ...proj]);
+  assert(sealWa.result === 'refuse', 'E2: seal-member wa with out-of-lane write → refuse (NOT a false-green)');
+  assert(sealWa.reason === 'barrier_failed', 'E2: reason barrier_failed (member-scoped barrier saw the overflow)');
+  // Airtight: the barrier must refuse for THIS specific overflow (names intruder.js),
+  // not for an unrelated reason — proves the member-scoped diff saw the out-of-lane file.
+  const barrierErrs = JSON.stringify((sealWa.barrierOut && sealWa.barrierOut.barrierCheck) || sealWa.barrierOut || '');
+  assert(barrierErrs.indexOf('intruder.js') >= 0,
+    'E2: barrier error names the out-of-lane file intruder.js (the specific overflow, not an unrelated failure)');
+
+  // wa must NOT be sealed or joined in the manifest.
+  const manifestPath = path.join(parentCache, 'active-batch.json');
+  const m = JSON.parse(readFileOr(manifestPath, '{"members":[]}'));
+  const mwa = (m.members || []).find(x => x.id === 'wa') || {};
+  assert(mwa.sealed !== true, 'E2: wa member NOT sealed after barrier refusal');
+  assert(mwa.joined !== true, 'E2: wa member NOT joined after barrier refusal');
+
+  cleanup(repoRoot);
+}
+
+// ---------------------------------------------------------------------------
+// E3: degraded fallback. When the worktree capability is unavailable (cwd is a
+//   plan dir that is NOT a git repo), open-batch returns degraded with ZERO
+//   mutation: result ok, degraded true, reason worktree_unavailable, opened [],
+//   no manifest, ledger rows still pending.
+// ---------------------------------------------------------------------------
+{
+  // A project dir WITHOUT git init — next-action is pure (succeeds) but the seed
+  // snapshot / worktree add cannot run → degraded.
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'pb-e3-'));
+  const project = 'test-project';
+  const projDir = path.join(repoRoot, 'kaola-workflow', project);
+  fs.mkdirSync(path.join(projDir, '.cache'), { recursive: true });
+  const planPath = path.join(projDir, 'workflow-plan.md');
+  fs.writeFileSync(planPath, makePlan(
+    [
+      '| a        | code-explorer | —    | —     | 1 | sequence        |',
+      '| wa       | implementer   | a    | wa.js | 1 | fanout(execute) |',
+      '| wb       | implementer   | a    | wb.js | 1 | fanout(execute) |',
+      '| finalize | finalize      | wa,wb| —     | 1 | sequence        |',
+    ],
+    [
+      '| a        | complete |  |',
+      '| wa       | pending  |  |',
+      '| wb       | pending  |  |',
+      '| finalize | pending  |  |',
+    ]
+  ));
+  fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n');
+
+  const proj = ['--project', project, '--json'];
+  const open = runBatchCli(repoRoot, ['open-batch', ...proj]);
+  assert(open.result === 'ok', 'E3: degraded open-batch → result ok');
+  assert(open.degraded === true, 'E3: degraded === true when worktree capability absent');
+  assert(open.reason === 'worktree_unavailable', 'E3: reason worktree_unavailable');
+  assert(Array.isArray(open.opened) && open.opened.length === 0, 'E3: opened === [] (zero mutation)');
+
+  // No manifest written; ledger rows still pending (zero mutation).
+  const manifestPath = path.join(projDir, '.cache', 'active-batch.json');
+  assert(!fs.existsSync(manifestPath), 'E3: no manifest written in degraded mode');
+  const writtenPlan = readFileOr(planPath, '');
+  assert(/\|\s*wa\s*\|\s*pending\s*\|/.test(writtenPlan), 'E3: wa ledger row still pending (no flip in degraded mode)');
+  assert(/\|\s*wb\s*\|\s*pending\s*\|/.test(writtenPlan), 'E3: wb ledger row still pending');
+
+  cleanup(repoRoot);
+}
+
 // ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------

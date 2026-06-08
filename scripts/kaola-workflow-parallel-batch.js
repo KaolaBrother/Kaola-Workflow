@@ -79,6 +79,49 @@ function getRoot() {
 }
 
 // ---------------------------------------------------------------------------
+// snapshotMember / anchorMergeRef (#292) — local gc-safe snapshot recipe.
+//
+// Re-implemented LOCALLY (D1): pure git, zero edition token, so the diff is
+// byte-identical across all 4 ports automatically; we do NOT export the
+// validator's snapshotWorktree/anchorBase internals (byte-synced ×4, would
+// widen the blast radius). Mirrors validator:913-945.
+//
+// snapshotMember: write-tree of a member worktree's FULL landable state via an
+//   out-of-repo GIT_INDEX_FILE (read-tree HEAD → add -A → write-tree). Returns
+//   the tree SHA, or null on any git failure (degraded-mode trigger).
+// anchorMergeRef: wrap the tree in a commit (commit-tree, explicit identity so
+//   it works with git user.* unset) and pin it under a ref so `git gc` cannot
+//   prune it between seal and join (#239 pattern). Returns the commit SHA.
+// ---------------------------------------------------------------------------
+function snapshotMember(worktreeRoot, tag) {
+  const os = require('os');
+  const fs = require('fs');
+  const idx = path.join(os.tmpdir(), 'kw-batch-idx-' + process.pid + '-' + String(tag).replace(/[^A-Za-z0-9_-]/g, '_'));
+  try { fs.unlinkSync(idx); } catch (_) {}
+  try { fs.unlinkSync(idx + '.lock'); } catch (_) {}
+  const env = Object.assign({}, process.env, { GIT_INDEX_FILE: idx });
+  try {
+    try { execFileSync('git', ['-C', worktreeRoot, 'read-tree', 'HEAD'], { env, stdio: ['ignore', 'ignore', 'ignore'] }); } catch (_) {}
+    execFileSync('git', ['-C', worktreeRoot, 'add', '-A'], { env, stdio: ['ignore', 'ignore', 'ignore'] });
+    return execFileSync('git', ['-C', worktreeRoot, 'write-tree'], { env, encoding: 'utf8' }).trim();
+  } catch (_) {
+    return null;
+  } finally {
+    try { fs.unlinkSync(idx); } catch (_) {}
+    try { fs.unlinkSync(idx + '.lock'); } catch (_) {}
+  }
+}
+function anchorMergeRef(repoRoot, refName, tree) {
+  const env = Object.assign({}, process.env, {
+    GIT_AUTHOR_NAME: 'kaola-workflow', GIT_AUTHOR_EMAIL: 'kaola-workflow@localhost',
+    GIT_COMMITTER_NAME: 'kaola-workflow', GIT_COMMITTER_EMAIL: 'kaola-workflow@localhost',
+  });
+  const commit = execFileSync('git', ['-C', repoRoot, 'commit-tree', tree, '-m', 'kaola-workflow batch merge ref'], { env, encoding: 'utf8' }).trim();
+  execFileSync('git', ['-C', repoRoot, 'update-ref', refName, commit], { stdio: ['ignore', 'ignore', 'ignore'] });
+  return commit;
+}
+
+// ---------------------------------------------------------------------------
 // shellNode — thin seam: execute a Node.js script and return {exitCode,...json}.
 // Fail-closed: exitCode 1 + {} on throw with no stdout. (Mirrors adaptive-node.js.)
 // ---------------------------------------------------------------------------
@@ -264,7 +307,10 @@ function listInProgress(ledger) {
 // 7. write manifest state:'open' LAST.
 // ---------------------------------------------------------------------------
 function runOpenBatch(opts) {
-  const { planPath, manifestPath, max, fanoutCap, shell, readFile, writeFile, mkdirp, now } = opts;
+  const {
+    planPath, manifestPath, max, fanoutCap, shell, readFile, writeFile, mkdirp, now,
+    project, projTag, repoRoot, worktreeAdd, worktreeRemove, snapshotMember: snapMember, anchorMergeRef: anchorRef,
+  } = opts;
 
   // Pull spliceLedgerNode (pure import — composition).
   const { spliceLedgerNode } = require(ADAPTIVE_NODE);
@@ -301,18 +347,76 @@ function runOpenBatch(opts) {
   // Cap the member set.
   const capped = capMembers(classified.members, { fanoutCap, max });
 
+  // WRITE-ROLE WORKTREE ACTIVATION + DEGRADED MODE (#292, D3/D4/D5).
+  //
+  // Each write-role member runs in an ISOLATED linked git worktree so its writes
+  // (a) are seal-barriered MEMBER-SCOPED (the per-member plan copy makes the
+  // validator's findRepoRoot resolve the member worktree → the diff sees ONLY this
+  // member's lane → out-of-lane overflow refuses) and (b) are captured as a
+  // gc-anchored mergeRef at seal for join to check out. If the worktree capability
+  // is unavailable (non-git dir, git error), open-batch DEGRADES with ZERO mutation
+  // so the orchestrator falls back to the serial legacy path — the false-green is
+  // killed by construction (a write-role manifest ⇒ every member has a real
+  // worktreePath, so a falsy mergeRef at join is corruption, never silent success).
+  const isWriteRole = kind === 'write_role';
+  let seedCommit = null;
+  const memberWorktrees = {}; // id → worktreePath (created, for rollback)
+  const degradedReturn = () => {
+    // Roll back any worktrees created so far BEFORE any ledger/manifest mutation
+    // (none has happened yet — manifest is written LAST), so this leaves zero orphans.
+    for (const id of Object.keys(memberWorktrees)) {
+      if (typeof worktreeRemove === 'function') worktreeRemove(memberWorktrees[id]);
+    }
+    return { result: 'ok', degraded: true, reason: 'worktree_unavailable', opened: [], allDone: false };
+  };
+
+  if (isWriteRole) {
+    // Seed every member worktree from the parent's CURRENT (uncommitted) state so the
+    // member's --start baseline (recorded AFTER seeding) attributes ONLY this member's
+    // own writes — prior terminal nodes' uncommitted writes cancel (#239 invariant).
+    if (typeof snapMember !== 'function' || typeof anchorRef !== 'function'
+        || typeof worktreeAdd !== 'function' || !repoRoot) {
+      return degradedReturn();
+    }
+    const seedTree = snapMember(repoRoot, 'seed-' + (projTag || 'plan'));
+    if (!seedTree) return degradedReturn();
+    seedCommit = anchorRef('refs/kaola-workflow/batch-seed/' + (projTag || 'plan'), seedTree);
+    if (!seedCommit) return degradedReturn();
+  }
+
   // BASELINES-FIRST: record all N baselines BEFORE any ledger flip or plan write.
   // commit-node --start is record-base-only / idempotent / ledger-independent, so
   // recording a baseline before the row is flipped is safe. On any baseline failure
   // we return refuse having made ZERO plan/ledger mutation (no orphan). NOTE: this
   // survives a crash DURING baseline recording but does NOT make open-batch fully
   // atomic — the plan-write → manifest-write gap remains (two files can't be written
-  // atomically). Still fails closed.
+  // atomically). Still fails closed. For write-role members the worktree is
+  // provisioned + the plan copied + the baseline recorded against the MEMBER plan.
   const members = [];
   for (const m of capped) {
-    const baseline = shell(commitNodePath, [planPath, '--node-id', m.id, '--start', '--json']);
+    let memberWtPath = null;
+    let baselinePlanPath = planPath;
+    if (isWriteRole) {
+      // Provision the isolated worktree seeded from the parent's current state.
+      memberWtPath = path.join(repoRoot, '.kw', 'batch', (projTag || 'plan'), m.id);
+      const added = worktreeAdd(memberWtPath, seedCommit);
+      if (!added || added.ok !== true) return degradedReturn();
+      memberWorktrees[m.id] = memberWtPath;
+      // Copy the plan into the member worktree's project dir so the barrier resolves
+      // findRepoRoot → the member worktree (member-scoped diff).
+      const memberPlanDir = path.join(memberWtPath, 'kaola-workflow', project);
+      if (mkdirp) mkdirp(memberPlanDir);
+      baselinePlanPath = path.join(memberPlanDir, 'workflow-plan.md');
+      try { writeFile(baselinePlanPath, planContent); } catch (_) { return degradedReturn(); }
+    }
+    const baseline = shell(commitNodePath, [baselinePlanPath, '--node-id', m.id, '--start', '--json']);
     const baselineOk = baseline.exitCode === 0 && baseline.result === 'ok';
     if (!baselineOk) {
+      // Roll back created worktrees so a baseline failure leaves zero orphans, then
+      // refuse (no ledger/manifest mutation yet). Read-only path is unchanged.
+      for (const id of Object.keys(memberWorktrees)) {
+        if (typeof worktreeRemove === 'function') worktreeRemove(memberWorktrees[id]);
+      }
       return { result: 'refuse', reason: 'baseline_failed', nodeId: m.id, baselineResult: baseline };
     }
     members.push({
@@ -322,7 +426,8 @@ function runOpenBatch(opts) {
       declared_write_set: m.declared_write_set,
       kind,
       baseline: 'recorded',
-      worktreePath: null,
+      worktreePath: memberWtPath,
+      mergeRef: null,
       sealed: false,
       joined: false,
     });
@@ -369,14 +474,36 @@ function runOpenBatch(opts) {
 // Returns { ok, reason?, barrierOut?, manifest, planContent }. Does NOT advance.
 // ---------------------------------------------------------------------------
 function sealOne(member, ctx) {
-  const { planPath, shell, readFile } = ctx;
+  const { planPath, shell, readFile, project, projTag, repoRoot, snapshotMember: snapMember, anchorMergeRef: anchorRef } = ctx;
   let { manifest, planContent } = ctx;
   const { spliceLedgerNode } = require(ADAPTIVE_NODE);
 
-  // Per-node barrier (unchanged commit-node --node-id N).
-  const barrierOut = shell(commitNodePath, [planPath, '--node-id', member.id, '--json']);
+  // MEMBER-SCOPED BARRIER (#292, D3): a write-role member ran in an isolated worktree,
+  // so its barrier must shell commit-node with the MEMBER plan copy → the validator's
+  // findRepoRoot resolves the member worktree → the tree-diff sees ONLY this member's
+  // own lane (an out-of-lane write refuses barrier_failed). A read-only member (no
+  // worktreePath) keeps the parent planPath — byte-unchanged for the read-only path.
+  const isWriteRole = !!member.worktreePath;
+  const barrierPlanPath = isWriteRole
+    ? path.join(member.worktreePath, 'kaola-workflow', project, 'workflow-plan.md')
+    : planPath;
+  const barrierOut = shell(commitNodePath, [barrierPlanPath, '--node-id', member.id, '--json']);
   if (barrierOut.exitCode !== 0 || barrierOut.result !== 'ok') {
     return { ok: false, reason: 'barrier_failed', barrierOut, manifest, planContent };
+  }
+
+  // mergeRef capture (#292, D2): a gc-anchored COMMIT of the member worktree's sealed
+  // state, keyed by (projTag, member.id). join checks out THIS SHA — decoupled from
+  // worktree liveness; survives gc across a crash. Captured AFTER the barrier passes.
+  let mergeRef = member.mergeRef || null;
+  if (isWriteRole) {
+    const tree = (typeof snapMember === 'function') ? snapMember(member.worktreePath, 'merge-' + member.id) : null;
+    mergeRef = (tree && typeof anchorRef === 'function')
+      ? anchorRef('refs/kaola-workflow/batch-merge/' + (projTag || 'plan') + '/' + member.id, tree)
+      : null;
+    if (!mergeRef) {
+      return { ok: false, reason: 'merge_ref_failed', manifest, planContent };
+    }
   }
 
   // Close: ledger row → complete (allowFrom ['in_progress','n/a']).
@@ -396,10 +523,10 @@ function sealOne(member, ctx) {
   const summary = evidence ? evidence.split('\n')[0].slice(0, 80) : 'evidence present';
   planContent = spliceComplianceRow(planContent, role, member.id, summary);
 
-  // Flip manifest member sealed:true.
+  // Flip manifest member sealed:true (+ persist the captured mergeRef for join).
   manifest = {
     ...manifest,
-    members: manifest.members.map(m => m.id === member.id ? { ...m, sealed: true } : m),
+    members: manifest.members.map(m => m.id === member.id ? { ...m, sealed: true, mergeRef } : m),
   };
 
   return { ok: true, barrierOut, manifest, planContent };
@@ -438,7 +565,10 @@ function appendComplianceRow(content, role, nodeId, summary) {
 // advance. Refuses on barrier fail (no close). (blueprint §2 seal-member.)
 // ---------------------------------------------------------------------------
 function runSealMember(opts) {
-  const { planPath, cacheDir, manifestPath, nodeId, shell, readFile, writeFile, cacheExists } = opts;
+  const {
+    planPath, cacheDir, manifestPath, nodeId, shell, readFile, writeFile, cacheExists,
+    project, projTag, repoRoot, snapshotMember, anchorMergeRef,
+  } = opts;
 
   const manifest = readManifest(manifestPath, cacheExists, readFile);
   if (!manifest) {
@@ -454,7 +584,10 @@ function runSealMember(opts) {
   }
 
   let planContent = readFile(planPath);
-  const sealed = sealOne(member, { planPath, cacheDir, shell, readFile, manifest, planContent });
+  const sealed = sealOne(member, {
+    planPath, cacheDir, shell, readFile, manifest, planContent,
+    project, projTag, repoRoot, snapshotMember, anchorMergeRef,
+  });
   if (!sealed.ok) {
     return { result: 'refuse', reason: sealed.reason, nodeId, barrierOut: sealed.barrierOut };
   }
@@ -471,7 +604,10 @@ function runSealMember(opts) {
 // order; manifest → 'sealed' only when ALL members complete/n/a. (blueprint §2.)
 // ---------------------------------------------------------------------------
 function runSeal(opts) {
-  const { planPath, cacheDir, manifestPath, shell, readFile, writeFile, cacheExists } = opts;
+  const {
+    planPath, cacheDir, manifestPath, shell, readFile, writeFile, cacheExists,
+    project, projTag, repoRoot, snapshotMember, anchorMergeRef,
+  } = opts;
 
   let manifest = readManifest(manifestPath, cacheExists, readFile);
   if (!manifest) {
@@ -484,7 +620,10 @@ function runSeal(opts) {
 
   for (const member of manifest.members) {
     if (member.sealed) { sealedIds.push(member.id); continue; }
-    const res = sealOne(member, { planPath, cacheDir, shell, readFile, manifest, planContent });
+    const res = sealOne(member, {
+      planPath, cacheDir, shell, readFile, manifest, planContent,
+      project, projTag, repoRoot, snapshotMember, anchorMergeRef,
+    });
     if (!res.ok) {
       failures.push({ id: member.id, reason: res.reason });
       continue;
@@ -522,7 +661,7 @@ function runSeal(opts) {
 // same {result:'ok',state:'joined',...}; deletion is the orchestrator's job.
 // ---------------------------------------------------------------------------
 function runJoin(opts) {
-  const { manifestPath, shell, readFile, writeFile, cacheExists, gitCheckout } = opts;
+  const { manifestPath, shell, readFile, writeFile, cacheExists, gitCheckout, worktreeRemove } = opts;
 
   let manifest = readManifest(manifestPath, cacheExists, readFile);
   if (!manifest) {
@@ -549,16 +688,28 @@ function runJoin(opts) {
 
   for (const m of writeRoleMembers) {
     if (m.joined) { joined.push(m.id); continue; } // idempotent: already merged
-    if (m.worktreePath && typeof gitCheckout === 'function') {
-      const paths = Array.from(parseWriteSet(m.declared_write_set));
-      const res = gitCheckout(m.worktreePath, paths);
-      if (!res || res.ok !== true) {
-        // Leave manifest 'joining'; resume re-runs only the unmerged remainder.
-        return { result: 'refuse', reason: 'join_failed', nodeId: m.id, detail: res && res.detail };
-      }
+    // FAIL-CLOSED (#292, D4): a write-role member with no captured mergeRef is
+    // corruption (a write-role manifest INVARIANTLY has one per member after seal),
+    // OR the io shim is missing its gitCheckout seam — refuse, NEVER mark joined.
+    // This is what kills the false-green: joined:true is reachable ONLY after a real
+    // checkout of the gc-anchored mergeRef commit into the PARENT worktree.
+    if (!m.mergeRef || typeof gitCheckout !== 'function') {
+      return { result: 'refuse', reason: 'missing_merge_ref', nodeId: m.id, state: 'joining' };
+    }
+    const paths = Array.from(parseWriteSet(m.declared_write_set));
+    const res = gitCheckout(m.mergeRef, paths);
+    if (!res || res.ok !== true) {
+      // Leave manifest 'joining'; resume re-runs only the unmerged remainder.
+      return { result: 'refuse', reason: 'join_failed', nodeId: m.id, detail: res && res.detail, state: 'joining' };
     }
     manifest = { ...manifest, members: manifest.members.map(x => x.id === m.id ? { ...x, joined: true } : x) };
     joined.push(m.id);
+    // Cleanup (#292, §3.6): the mergeRef is gc-anchored, so the worktree is no longer
+    // needed — remove it best-effort AFTER the checkout lands. .kw/ is gitignored so a
+    // leftover never enters a sink commit; the mergeRef stays (bounded by node count).
+    if (m.worktreePath && typeof worktreeRemove === 'function') {
+      worktreeRemove(m.worktreePath);
+    }
   }
 
   // All members merged (or none to merge) → state 'joined'.
@@ -646,6 +797,9 @@ function main() {
 
   const repoRoot   = getRoot();
   const projectDir = path.join(repoRoot, 'kaola-workflow', project);
+  // projTag mirrors the validator's (project) ref token (validator:1003): the project
+  // folder name sanitized. Keys the per-member mergeRef so concurrent projects never collide.
+  const projTag    = path.basename(projectDir).replace(/[^A-Za-z0-9_-]/g, '_') || 'plan';
   const planPath   = path.join(projectDir, 'workflow-plan.md');
   const statePath  = path.join(projectDir, 'workflow-state.md');
   const cacheDir   = path.join(projectDir, '.cache');
@@ -664,17 +818,47 @@ function main() {
     cacheExists: (fpath) => fs.existsSync(fpath),
     mkdirp: (dir) => { try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {} },
     now: () => new Date().toISOString(),
-    gitCheckout: (worktreePath, paths) => {
+    // R3 FIX (#292): the merge source is a gc-anchored COMMIT ref captured at seal,
+    // NOT the worktree filesystem path. `git checkout <ref> -- <paths>` lands the
+    // member's declared writes into the PARENT worktree (repoRoot, -C). Passing a
+    // filesystem path here was the R3 bug (`fatal: invalid reference: <path>`).
+    gitCheckout: (mergeRef, paths) => {
       try {
-        execFileSync('git', ['-C', projectDir, 'checkout', worktreePath, '--', ...paths], { encoding: 'utf8' });
+        execFileSync('git', ['-C', repoRoot, 'checkout', mergeRef, '--', ...paths], { encoding: 'utf8' });
         return { ok: true };
       } catch (err) {
         return { ok: false, detail: String(err && err.message || err) };
       }
     },
+    // Worktree lifecycle (#292): provision/teardown one isolated linked worktree per
+    // write-role member, seeded from a detached seed commit (the parent's current state).
+    worktreeAdd: (wtPath, seedCommit) => {
+      try {
+        execFileSync('git', ['-C', repoRoot, 'worktree', 'add', '--detach', wtPath, seedCommit],
+          { encoding: 'utf8', stdio: ['ignore', 'ignore', 'pipe'] });
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, detail: String(err && err.message || err) };
+      }
+    },
+    worktreeRemove: (wtPath) => {
+      try {
+        execFileSync('git', ['-C', repoRoot, 'worktree', 'remove', '--force', wtPath],
+          { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+        return { ok: true };
+      } catch (err) {
+        return { ok: false, detail: String(err && err.message || err) };
+      }
+    },
+    // gc-safe member snapshot/anchor (#292): pure-git, edition-neutral (zero forge token).
+    snapshotMember: (worktreeRoot, tag) => snapshotMember(worktreeRoot, tag),
+    anchorMergeRef: (refName, tree) => {
+      try { return anchorMergeRef(repoRoot, refName, tree); } catch (_) { return null; }
+    },
+    repoRoot,
   };
 
-  const ctx = { planPath, statePath, cacheDir, manifestPath, project, fanoutCap, max, nodeId, ...io };
+  const ctx = { planPath, statePath, cacheDir, manifestPath, project, projTag, repoRoot, fanoutCap, max, nodeId, ...io };
 
   let result;
   if (subcommand === 'open-batch') {

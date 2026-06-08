@@ -187,9 +187,22 @@ single node (the legacy serial path, unchanged) or a batch of ready siblings whe
 node "$KAOLA_SCRIPTS/kaola-gitea-workflow-parallel-batch.js" open-batch \
   --project {project} --json
 ```
-Flips N ledger rows `pending → in_progress`, records N baselines (idempotent, #239), writes
-`kaola-workflow/{project}/.cache/active-batch.json` with `state: 'open'`. Returns
+For a write-role batch, `kaola-gitea-workflow-parallel-batch.js` first checks whether the host
+supports isolated git worktrees (required to give each write-role member its own working tree). When
+isolation is available, it provisions one worktree per member, then flips N ledger rows
+`pending → in_progress`, records N baselines (idempotent, #239), and writes
+`kaola-workflow/{project}/.cache/active-batch.json` with `state: 'open'`, returning
 `{result:'ok', batchId, state:'open', members:[{id, role, model, declared_write_set, kind, baseline, worktreePath}], allDone:false}`.
+
+**Degraded mode (worktrees unavailable):** when the host lacks isolated-worktree capability,
+`open-batch` returns `{result:'ok', degraded:true, reason:'worktree_unavailable', opened:[], allDone:false}`
+with ZERO mutation — no ledger flip, no baseline, no manifest written; any worktrees provisioned
+mid-attempt are rolled back. On `degraded:true`, the orchestrator MUST NOT attempt concurrent batch
+dispatch. It `log()`s the degradation (so the forgone parallelism is visible, never silent) and falls
+back to the single-node legacy path — opening the write-role siblings one at a time via `open-next`,
+same per-node lifecycle as today, correctness preserved, wall-clock parallelism forgone (the
+intentional degradation of design §10.3). Read-only batches are unaffected — they never provision
+worktrees and are never degraded.
 
 **(b)** **Concurrent dispatch — the ONLY real concurrency:** the main session issues **MULTIPLE
 `Agent()` calls in ONE message**, one per batch member. Each call carries `subagent_type` = member
