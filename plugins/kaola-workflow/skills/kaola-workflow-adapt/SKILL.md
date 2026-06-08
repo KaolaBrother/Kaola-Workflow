@@ -10,8 +10,9 @@ issue — which roles, how many, in what shape — into a `workflow-plan.md`. Th
 template library and no knob-binding ceremony. Mirror of `commands/kaola-workflow-adapt.md`
 for the Codex runtime. Reads and updates `kaola-workflow/{project}/workflow-state.md`.
 
-Reachable only when the adaptive switch is ON *and* the structure question in the
-`kaola-workflow-next` Startup Step 0a-1 was affirmatively confirmed.
+Reachable only when the adaptive switch is ON; adaptive is the default under an ON
+switch and `fast`/`full` are explicit path-naming escapes (see `kaola-workflow-next`
+Startup Step 0a-1).
 
 ## The grammar (the closed envelope)
 

@@ -552,9 +552,10 @@ assertIncludes('install.sh', 'kaola-workflow-codex-preflight.js');
 assertIncludes('install.sh', 'kaola-workflow-task-mirror.js');
 assertIncludes('install.sh', 'kaola-gitlab-workflow-task-mirror.js');
 assertIncludes('install.sh', 'kaola-gitea-workflow-task-mirror.js');
-// router 3-way selection: switch first, adaptive keyword flag-only, OFF preserves 2-way
+// router 3-way selection: switch chooses branch AND default (adaptive is the default under ON;
+// fast/full are explicit escapes). OFF preserves 2-way fast/full with typed refusal on adaptive.
 assertConcept('commands/workflow-next.md', 'adaptive path selection', [
-  'KAOLA_ENABLE_ADAPTIVE', 'adaptive', 'fast|full|adaptive', 'flag-only', 'typed refusal'
+  'KAOLA_ENABLE_ADAPTIVE', 'adaptive', 'fast|full|adaptive', 'default', 'typed refusal'
 ]);
 assertIncludes('commands/workflow-next.md', 'workflow-plan.md exists -> /kaola-workflow-plan-run');
 // v5.1.0: the adaptive front-end ROUTING must stay enforced — the router skips its inline claim and

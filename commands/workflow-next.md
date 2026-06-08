@@ -80,19 +80,25 @@ Keyword matching is agent-level prose detection, not a bash conditional.
 ## Startup Step 0a-1 — Path Intent
 
 Before Step 0b, pick the workflow path and export `KAOLA_PATH` if it is not full.
-The agent owns this judgment; scripts do not auto-pick. Precedence top-down — first
-match wins. These are exactly the five levels of the decision tree below.
+The agent owns this judgment; scripts do not auto-pick.
 
-1. **Adaptive switch gate (FIRST).** Read the switch: env `KAOLA_ENABLE_ADAPTIVE`
-   (`1`/`0`) overrides config `enable_adaptive` in
-   `~/.config/kaola-workflow/config.json`, default OFF. **If the switch is OFF,
-   `adaptive` is removed from the menu entirely** — evaluate only fast vs full,
-   exactly as today. `adaptive` can never fire when the switch is off.
-2. **Explicit `KAOLA_PATH`.** If already exported, honor it (`fast` | `full` |
-   `adaptive`). An explicit `KAOLA_PATH=full`/`=fast` is honored verbatim and the
-   rubric is not re-derived. `KAOLA_PATH=adaptive` under an OFF switch is a **typed
-   refusal** in `claimProject`, never a silent downgrade to full.
-3. **Prompt keywords** (case-insensitive):
+**Read the adaptive switch first** (env `KAOLA_ENABLE_ADAPTIVE` (`1`/`0`) overrides
+config `enable_adaptive` in `~/.config/kaola-workflow/config.json`). The switch
+determines which branch applies:
+
+---
+
+### Branch A — switch OFF (legacy two-way picker, UNCHANGED)
+
+`adaptive` is removed from the menu entirely — evaluate only fast vs full, exactly as
+before. `adaptive` can never fire when the switch is off.
+
+Precedence top-down — first match wins:
+
+1. **Explicit `KAOLA_PATH`.** If already exported, honor it (`fast` | `full`).
+   `KAOLA_PATH=adaptive` under an OFF switch is a **typed refusal** in `claimProject`,
+   never a silent downgrade to full.
+2. **Prompt keywords** (case-insensitive):
    - fast triggers: "quick fix", "trivial", "one-line", "one line",
      "rename", "typo", "small change", "fast path", "fast mode"
    - full triggers: "thorough", "full review", "full path",
@@ -102,7 +108,7 @@ match wins. These are exactly the five levels of the decision tree below.
      An adaptive keyword only *flags* `adaptive` as a candidate; the level-4
      structure rubric must then confirm. Keyword-only with no structure → full.
    Tie, both match, or keyword-only adaptive without structure → prefer full.
-4. **Issue rubric.** Fetch the selected issue once:
+3. **Issue rubric.** Fetch the selected issue once:
    ```bash
    gh issue view "$KAOLA_TARGET_ISSUE" --json number,title,body,labels
    ```
@@ -117,7 +123,7 @@ match wins. These are exactly the five levels of the decision tree below.
    express? Structure confirmed (≥ 1 holds) **and** switch ON → export
    `KAOLA_PATH=adaptive`. Otherwise — including a flagged-but-unconfirmed adaptive
    candidate, or a single coherent linear change however large → `full`.
-5. **Default `full`.** On fetch failure, offline, or any ambiguity — including
+4. **Default `full`.** On fetch failure, offline, or any ambiguity — including
    adaptive-vs-full unclear — choose full. When in doubt, full.
 
 State the chosen path and one-line reason aloud before Step 0b:
@@ -125,7 +131,6 @@ State the chosen path and one-line reason aloud before Step 0b:
 ```text
 Path: fast (mechanical, single-area, 4 files)
 Path: full (≥2 viable approaches — design choice)
-Path: adaptive (3 disjoint sub-areas fan out — switch ON, structure confirmed)
 Path: full (adaptive keyword only, no structure — default)
 ```
 
@@ -133,6 +138,40 @@ Bias toward full when in doubt. A linear job in a DAG is just full with overhead
 a custom graph must earn itself. Fast false positives escalate cleanly via the
 Fast Eligibility and Mid-Flight Escalation sections of `commands/kaola-workflow-fast.md`; false
 negatives only cost ceremony.
+
+---
+
+### Branch B — switch ON (adaptive is the default)
+
+Under an ON switch, **`adaptive` is the default route**. `fast` and `full` are
+explicit path-naming escapes only — no keyword ⇒ adaptive, even for a one-liner.
+Adaptive fallback: on any adaptive-specific failure, re-export `KAOLA_PATH=full`
+and continue; adaptive never blocks.
+
+Precedence top-down — first match wins:
+
+1. **Explicit `KAOLA_PATH`.** If already exported, honor it verbatim
+   (`fast` | `full` | `adaptive`). Rubric is not re-derived.
+   `KAOLA_PATH=adaptive` under an OFF switch is a **typed refusal** in `claimProject`
+   (Branch A above); under an ON switch it is honored.
+2. **Explicit path-naming verbal escapes** (case-insensitive):
+   - fast escape: "fast path", "fast mode" → export `KAOLA_PATH=fast`
+   - full escape: "full path", "full mode", "full review", "all phases" → export `KAOLA_PATH=full`
+   Task descriptors ("typo", "one-line", "trivial", "quick fix", "rename",
+   "small change", "thorough", "carefully", "deep dive") are NOT path-naming
+   escapes under an ON switch — they route to adaptive (the default).
+3. **Default → `adaptive`.** No verbal escape matched: export `KAOLA_PATH=adaptive`
+   and proceed to Step 0a-2. On any adaptive-specific failure, re-export
+   `KAOLA_PATH=full` and fall through to the full path; never block.
+
+State the chosen path and one-line reason aloud before Step 0b:
+
+```text
+Path: adaptive (switch ON, default — no explicit escape)
+Path: fast (switch ON, explicit fast path escape)
+Path: full (switch ON, explicit full review escape)
+Path: full (switch ON, adaptive fallback — adaptive-specific failure)
+```
 
 ## Startup Step 0a-2 — Adaptive front-end entry (path = adaptive only)
 

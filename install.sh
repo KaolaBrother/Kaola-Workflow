@@ -44,14 +44,16 @@ MERGE_SETTINGS=1
 # Default profile is `higher` (Opus for code-architect/code-reviewer/security-reviewer).
 # Pass --profile=common to install the Sonnet assignments for those three agents.
 PROFILE=higher
-# Adaptive workflow path is OFF by default (opt-in). --enable-adaptive=yes writes
-# enable_adaptive:true into ~/.config/kaola-workflow/config.json (issue #227).
-ENABLE_ADAPTIVE=no
+# Adaptive workflow path is ON by default (opt-out). The installer always writes
+# enable_adaptive into ~/.config/kaola-workflow/config.json (issue #227 + #254):
+#   --enable-adaptive=yes (default) writes enable_adaptive:true
+#   --enable-adaptive=no  writes enable_adaptive:false (hard opt-out; survives re-install over stale :true)
+ENABLE_ADAPTIVE=yes
 
 usage() {
   echo "Usage: ./install.sh [--yes] [--forge=github|gitlab|gitea] [--no-settings-merge] [--profile=higher|common] [--enable-adaptive=yes|no]"
   echo "  --profile defaults to 'higher' (Opus reviewers); use --profile=common for Sonnet."
-  echo "  --enable-adaptive=yes writes enable_adaptive:true into ~/.config/kaola-workflow/config.json (default no; preserves parallel_mode)."
+  echo "  --enable-adaptive defaults to yes (writes enable_adaptive:true); use --enable-adaptive=no to opt out (writes enable_adaptive:false; preserves parallel_mode)."
 }
 
 while [[ "$#" -gt 0 ]]; do
@@ -723,19 +725,20 @@ PY
   fi
 fi
 
-# issue #227: enable the adaptive workflow path by writing enable_adaptive:true into
-# ~/.config/kaola-workflow/config.json — the SAME single file the classifiers read (no
-# per-forge namespace). Read-modify-write so an existing parallel_mode (and any other
-# keys) are preserved; runs ONLY on --enable-adaptive=yes. The default path writes
-# nothing, so the field stays absent and the adaptive path stays OFF.
-if [[ "$ENABLE_ADAPTIVE" == "yes" ]]; then
-  KAOLA_CONFIG_DIR="$HOME/.config/kaola-workflow"
-  KAOLA_CONFIG_FILE="$KAOLA_CONFIG_DIR/config.json"
-  if command -v python3 >/dev/null 2>&1; then
-    mkdir -p "$KAOLA_CONFIG_DIR"
-    if python3 - "$KAOLA_CONFIG_FILE" <<'PY'; then
+# issue #227 / #254: write enable_adaptive into ~/.config/kaola-workflow/config.json —
+# the SAME single file the classifiers read (no per-forge namespace). Runs for BOTH
+# yes (writes true) and no (writes false) so --enable-adaptive=no survives a re-install
+# over a stale :true (the stale-config trap). Read-modify-write preserves parallel_mode
+# and any other keys. Resolution floor (env > config > OFF) is unchanged — only the
+# install-written config field is affected here.
+KAOLA_CONFIG_DIR="$HOME/.config/kaola-workflow"
+KAOLA_CONFIG_FILE="$KAOLA_CONFIG_DIR/config.json"
+if command -v python3 >/dev/null 2>&1; then
+  mkdir -p "$KAOLA_CONFIG_DIR"
+  if python3 - "$KAOLA_CONFIG_FILE" "$ENABLE_ADAPTIVE" <<'PY'; then
 import json, os, sys
 path = sys.argv[1]
+enable = sys.argv[2] == 'yes'
 config = {}
 if os.path.exists(path):
     try:
@@ -748,18 +751,26 @@ if os.path.exists(path):
         print(f"warning: {path} is not a JSON object; leaving it untouched.", file=sys.stderr)
         sys.exit(2)
 config.setdefault("parallel_mode", "auto")
-config["enable_adaptive"] = True
+config["enable_adaptive"] = enable
 with open(path, "w") as f:
     json.dump(config, f, indent=2)
     f.write("\n")
-print(f"Enabled adaptive path (enable_adaptive:true) in: {path}")
+label = "true" if enable else "false"
+print(f"Set adaptive path (enable_adaptive:{label}) in: {path}")
 PY
-      :
-    else
-      echo "warning: failed to write $KAOLA_CONFIG_FILE; enable it by hand: {\"parallel_mode\":\"auto\",\"enable_adaptive\":true}" >&2
-    fi
+    :
   else
+    if [[ "$ENABLE_ADAPTIVE" == "yes" ]]; then
+      echo "warning: failed to write $KAOLA_CONFIG_FILE; enable it by hand: {\"parallel_mode\":\"auto\",\"enable_adaptive\":true}" >&2
+    else
+      echo "warning: failed to write $KAOLA_CONFIG_FILE; disable it by hand: {\"enable_adaptive\":false}" >&2
+    fi
+  fi
+else
+  if [[ "$ENABLE_ADAPTIVE" == "yes" ]]; then
     echo "warning: python3 not found; cannot write $KAOLA_CONFIG_FILE. Add enable_adaptive:true by hand." >&2
+  else
+    echo "warning: python3 not found; cannot write $KAOLA_CONFIG_FILE. Add enable_adaptive:false by hand." >&2
   fi
 fi
 

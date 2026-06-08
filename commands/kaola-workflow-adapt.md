@@ -15,8 +15,8 @@ no knob-binding ceremony: the workflow-planner writes the `## Nodes` table direc
 validator proves the result is in-grammar. The main session governs the risk decision and the
 freeze; the contractor stamps the durable bookkeeping.
 
-Reachable only when the adaptive switch is ON *and* the structure question in
-`workflow-next.md` Step 0a-1 was affirmatively confirmed. This is now
+Reachable only when the adaptive switch is ON; adaptive is the default under an ON
+switch — `fast`/`full` are explicit path-naming escapes. This is now
 **script-enforced** at the authoring entry by `kaola-workflow-claim.js
 authoring-allowed` (#235), not prose alone. The middle of the run is free; the
 lifecycle frame around it (claim → branch/worktree → [this plan] → Finalization sink)

@@ -1,0 +1,5 @@
+node: docs (doc-updater) — issue #254
+Files (2): README.md (modified), docs/decisions/0007-adaptive-default-under-switch-on.md (new).
+README: dropped "opt-in / OFF by default" framing; documents ON-by-default install switch, --enable-adaptive=no active opt-out, adaptive-as-default-route under ON (fast/full explicit escapes), switch-OFF unchanged, kill-switch resolution floor env>config>OFF. 5 surgical edits (overview diagram label, install section heading+body, adaptive-path section, KAOLA_PATH env table row, phase-table footer note).
+ADR 0007 (renumbered from issue's 0004 since 0004-0006 exist): Status Accepted; Supersedes the selection/"earn itself" portion of 0003-adaptive-front-end-planner.md + the #227 structure-question gate. Sections: Context / Decision / Invariants preserved / Open caveats at decision time / Consequences. Open caveats: #296 (open); #303 (resolved in v5.9.0).
+Verification: node scripts/validate-workflow-contracts.js -> exit 0 ("Workflow contract validation passed"). git status confirms only README.md + docs/decisions/0007-*.md are this node's additions; CHANGELOG.md untouched (reserved for finalize sink).

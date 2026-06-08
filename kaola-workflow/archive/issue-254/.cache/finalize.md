@@ -1,0 +1,2 @@
+node: finalize (sink) — issue #254, re-run to amend CHANGELOG after the harden-editions plan-repair
+Sink write (docs/state only): CHANGELOG.md — amended the #254 [Unreleased] entry: the flag-only->default contract edit spans ALL FOUR contract validators (claude pair + codex + gitlab + gitea), test-install-adaptive-config.js updated for default-ON + stale-config-trap, all four edition chains green, and the harden-editions plan-repair node recorded in the dogfood-path note. No version bump — UNRELEASED. finalize writes ONLY CHANGELOG.md (docs/state); no non-docs write.
