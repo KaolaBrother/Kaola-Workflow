@@ -803,4 +803,35 @@ withForge({
   console.log('offline watch-mr returns {watched:0,offline:true}: PASSED');
 }
 
+{
+  // #300 RED→GREEN: checkDispatchAttestations must be called in postMergeCleanup.
+  // Without the call, closure_receipt.claim_planner_attested === 'failed' (emptyReceipt default).
+  // After the fix, with no dispatch-log present, it resolves to 'missing' (detector-inactive path).
+  const sinkScript = path.join(__dirname, 'kaola-gitlab-workflow-sink-merge.js');
+  const { root, branch } = setupRealRepo('attest-test', 'test-gl-attest');
+  try {
+    const result = spawnSync(process.execPath, [
+      sinkScript,
+      '--branch', branch,
+      '--project', 'test-gl-attest',
+      '--issue', '300'
+    ], {
+      cwd: root,
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' },
+      encoding: 'utf8'
+    });
+    assert.strictEqual(result.status, 0,
+      'attestation test: expected exit 0, got ' + result.status + '. stderr: ' + result.stderr);
+    const lastLine = result.stdout.trim().split('\n').filter(Boolean).pop();
+    const parsed = JSON.parse(lastLine);
+    assert.strictEqual(parsed.closure_receipt.claim_planner_attested, 'missing',
+      'attestation test: claim_planner_attested must be "missing" (not "failed") — checkDispatchAttestations not called');
+    assert.strictEqual(parsed.closure_receipt.finalize_contractor_attested, 'missing',
+      'attestation test: finalize_contractor_attested must be "missing" (not "failed") — checkDispatchAttestations not called');
+    console.log('attestation fields populated by checkDispatchAttestations: PASSED');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
 console.log('GitLab sink tests passed');
