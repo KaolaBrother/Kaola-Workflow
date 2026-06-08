@@ -239,18 +239,24 @@ function capMembers(members, opts) {
 // ledger rows are LEGAL ONLY with a valid active manifest whose member set EXACTLY
 // equals them; else the orphan condition.
 //
-//   ≤1 in_progress + no manifest          → valid (legacy single-node path)
-//   ≥1 in_progress + manifest matches set  → valid batch
-//   >1 in_progress + no manifest/mismatch  → invalid, orphan
+//   ≤1 in_progress (with or without manifest) → valid (legacy single-node path)
+//   ≥1 in_progress + manifest matches set      → valid batch
+//   >1 in_progress + no manifest/mismatch      → invalid, orphan
+//
+// #293 (align): the ≤1 guard is hoisted ABOVE the manifest branch so a single
+// in_progress row is legacy-valid regardless of the manifest — matching the
+// runOrient AC#5 gate (else if inProgressNodes.length > 1).
 // ---------------------------------------------------------------------------
 function crossCheckStatus(manifest, inProgressIds) {
   const ip = (inProgressIds || []).slice().sort();
 
+  // ≤1 in_progress — always the legacy single-node path regardless of manifest.
+  if (ip.length <= 1) {
+    return { valid: true, orphan: false, reason: ip.length === 1 ? 'single_in_progress' : 'idle' };
+  }
+
   if (!manifest) {
-    // No manifest: ≤1 in_progress is the legacy serial path (valid); >1 is orphan.
-    if (ip.length <= 1) {
-      return { valid: true, orphan: false, reason: ip.length === 1 ? 'single_in_progress' : 'idle' };
-    }
+    // >1 in_progress + no manifest → orphan.
     return { valid: false, orphan: true, reason: 'orphan_multi_in_progress' };
   }
 

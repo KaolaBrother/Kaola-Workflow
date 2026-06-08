@@ -34,6 +34,12 @@ const {
   runStatus,
 } = require('./kaola-workflow-parallel-batch');
 
+const {
+  ORPHAN_LEGALITY_MANIFEST,
+  ORPHAN_LEGALITY_IN_PROGRESS_IDS,
+  CROSS_CHECK_EXPECTED,
+} = require('./fixtures-orphan-legality');
+
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -800,6 +806,25 @@ function realNextActionShell(planPath) {
 
   assert(result.valid === true, 'R4a: partial-seal manifest with in_progress=unsealed-members → valid (not orphan)');
   assert(result.orphan === false, 'R4a: partial-seal must NOT be flagged orphan_member_set_mismatch');
+}
+
+// ---------------------------------------------------------------------------
+// #293 align: crossCheckStatus with manifest=[{id:'a',sealed:true}] and
+//     inProgressIds=['a'] must return the LEGACY SINGLE-NODE path (valid:true,
+//     orphan:false, reason:'single_in_progress'), NOT orphan_member_set_mismatch.
+//     Uses the shared fixture from fixtures-orphan-legality.js.
+//     (TDD RED before the ip.length<=1 hoist; GREEN after.)
+// ---------------------------------------------------------------------------
+{
+  const manifestObj = { batchId: 'b-293', state: 'open', kind: 'read_only', members: ORPHAN_LEGALITY_MANIFEST };
+  const result = crossCheckStatus(manifestObj, ORPHAN_LEGALITY_IN_PROGRESS_IDS);
+
+  assert(result.valid === CROSS_CHECK_EXPECTED.valid,
+    '#293: single in_progress with all-sealed manifest → valid:true (legacy single-node path)');
+  assert(result.orphan === CROSS_CHECK_EXPECTED.orphan,
+    '#293: single in_progress with all-sealed manifest → orphan:false (NOT orphan_member_set_mismatch)');
+  assert(result.reason === CROSS_CHECK_EXPECTED.reason,
+    '#293: single in_progress with all-sealed manifest → reason:single_in_progress');
 }
 
 // ===========================================================================

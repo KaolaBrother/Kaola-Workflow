@@ -17,6 +17,12 @@ const {
   shellNode,
 } = require('./kaola-workflow-adaptive-node');
 
+const {
+  ORPHAN_LEGALITY_MANIFEST,
+  ORPHAN_LEGALITY_IN_PROGRESS_IDS,
+  RUN_ORIENT_EXPECTED,
+} = require('./fixtures-orphan-legality');
+
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -1305,6 +1311,66 @@ function makeState(opts) {
   assert(result.result === 'ok', 'R4b: partial-seal (a=sealed, b+c in_progress) → result ok (NOT orphan_multi_in_progress)');
   assert(result.batch !== null, 'R4b: batch object present (valid partial-seal batch)');
   assert(Array.isArray(result.inProgressNodes) && result.inProgressNodes.length === 2, 'R4b: inProgressNodes lists b and c');
+}
+
+// ---------------------------------------------------------------------------
+// #293 characterization-lock: runOrient with manifest=[{id:'a',sealed:true}]
+//     and one stale in_progress row 'a' must return result:ok / batch:null
+//     (legacy single-node path).  This is ALREADY CORRECT today — this test
+//     locks the behavior in place so future edits cannot regress it.
+//     Uses the shared fixture from fixtures-orphan-legality.js (anti-drift).
+// ---------------------------------------------------------------------------
+{
+  const planNodes = [
+    '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| finalize | finalize | a | CHANGELOG.md | 1 | sequence |',
+  ];
+  const plan = makePlan([
+    '| a        | in_progress | |',
+    '| finalize | pending     | |',
+  ], planNodes);
+  const state = makeState();
+
+  // Manifest: member 'a' sealed (matches ORPHAN_LEGALITY_MANIFEST).
+  const manifestJson = JSON.stringify({
+    batchId: 'b-293-orient',
+    state: 'open',
+    kind: 'read_only',
+    members: ORPHAN_LEGALITY_MANIFEST,
+    createdAt: '1970-01-01T00:00:00.000Z',
+  });
+
+  const shellStub = function(scriptPath) {
+    const base = path.basename(scriptPath);
+    if (base === 'kaola-workflow-plan-validator.js') return { exitCode: 0, ok: true };
+    if (base === 'kaola-workflow-next-action.js') {
+      return { exitCode: 0, result: 'ok', readySet: [], nextNode: null, allDone: false };
+    }
+    return { exitCode: 1 };
+  };
+
+  const result = runOrient({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project',
+    shell: shellStub,
+    readFile: (fpath) => {
+      if (fpath.endsWith('workflow-plan.md')) return plan;
+      if (fpath.endsWith('workflow-state.md')) return state;
+      if (fpath.endsWith('active-batch.json')) return manifestJson;
+      throw new Error('ENOENT: ' + fpath);
+    },
+    writeFile: () => { throw new Error('orient must not write'); },
+    // inProgressIds has 'a' only — the manifest manifest is present but
+    // ip.length === 1, so the AC#5 gate falls through to legacy single-node.
+    cacheExists: (fpath) => fpath.endsWith('active-batch.json'),
+  });
+
+  // inProgressNodes = ['a'] (length 1), so AC#5 guard does NOT fire orphan.
+  assert(result.result === RUN_ORIENT_EXPECTED.result,
+    '#293 orient-lock: single in_progress + all-sealed manifest → result:ok (legacy single-node path)');
+  assert(result.batch === RUN_ORIENT_EXPECTED.batch,
+    '#293 orient-lock: single in_progress + all-sealed manifest → batch:null (NOT a batch path)');
 }
 
 // ---------------------------------------------------------------------------
