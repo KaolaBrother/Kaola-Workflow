@@ -1348,7 +1348,7 @@ withForge({
   const root = tempRoot('kw-gl-repair-complete-');
   try {
     const dir = writeState(root, 'complete-project', 83);
-    fs.writeFileSync(path.join(dir, 'phase6-summary.md'), '# Phase 6\n');
+    fs.writeFileSync(path.join(dir, 'finalization-summary.md'), '# Finalization\n');
     const result = repair.repair('complete-project', root);
     assert.strictEqual(result.repaired, false);
     assert.strictEqual(result.complete, true);
@@ -1736,7 +1736,7 @@ withForge({
   }
 }
 
-// Issue #107: reconstruct() must not route to Phase 6 when phase4-progress.md has open tasks
+// Issue #107: reconstruct() must not route to Finalization when phase4-progress.md has open tasks
 // Test 1 — Negative guard (the bug fix):
 {
   const root = tempRoot('kw-gl-issue107-guard-');
@@ -1746,17 +1746,17 @@ withForge({
       '# Phase 4\n\n## Tasks\n| # | Task | Status |\n|---|------|--------|\n| A | Task A | open |\n');
     fs.writeFileSync(path.join(dir, 'phase5-review.md'), '# Phase 5\n');
     const result = repair.reconstruct(root, path.join(root, 'kaola-workflow'), 'issue107-guard');
-    assert(!result.nextCommand, 'guard must not route to Phase 6 when Phase 4 tasks are open');
+    assert(!result.nextCommand, 'guard must not route to Finalization when Phase 4 tasks are open');
     assert(/open tasks/.test(result.reason || ''), 'reason must mention open tasks');
     repair.repair('issue107-guard', root);
     const state = fs.readFileSync(path.join(dir, 'workflow-state.md'), 'utf8');
-    assert(!/phase: 6\b/.test(state), 'state file must not advance to phase 6 with open Phase 4 tasks');
+    assert(!/stage: finalization\b/.test(state), 'state file must not advance to Finalization with open Phase 4 tasks');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
 }
 
-// Issue #107: reconstruct() must still route to Phase 6 when all Phase 4 tasks are complete
+// Issue #107: reconstruct() must still route to Finalization when all Phase 4 tasks are complete
 // Test 2 — Positive regression (happy path still works):
 {
   const root = tempRoot('kw-gl-issue107-allow-');
@@ -1764,7 +1764,7 @@ withForge({
     const dir = writeState(root, 'issue107-allow', 108);
     fs.writeFileSync(path.join(dir, 'phase4-progress.md'),
       '# Phase 4\n\n## Tasks\n| # | Task | Status |\n|---|------|--------|\n| A | Task A | complete |\n');
-    // phase5-review carries a resolved compliance table so the phase6 boundary
+    // phase5-review carries a resolved compliance table so the Finalization boundary
     // crossing is allowed (the gate-project test above covers the refusal).
     fs.writeFileSync(path.join(dir, 'phase5-review.md'), [
       '# Phase 5 - Review', '',
@@ -1774,8 +1774,8 @@ withForge({
       '| code-reviewer | invoked | .cache/code-reviewer.md | |', ''
     ].join('\n'));
     const result = repair.reconstruct(root, path.join(root, 'kaola-workflow'), 'issue107-allow');
-    assert.strictEqual(result.phase, 6, 'happy path must still route to Phase 6');
-    assert(/kaola-workflow-phase6/.test(result.nextCommand), 'nextCommand must be phase 6');
+    assert.strictEqual(result.stage, 'finalization', 'happy path must still route to Finalization');
+    assert(/kaola-workflow-finalize/.test(result.nextCommand), 'nextCommand must be finalize');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

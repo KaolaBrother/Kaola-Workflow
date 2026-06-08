@@ -1645,14 +1645,14 @@ function testAdaptiveResumeReconcilesNextCommand() {
       'E1 control: a consistent full next_command must be preserved, got: ' + out.next_command);
 
     // CONTROL (regression guard): a full project's next_command legitimately points FORWARD of the
-    // `phase:` field (e.g. phase5 complete writes phase: 5 + next_command: /kaola-workflow-phase6).
+    // `phase:` field (e.g. phase5 complete writes phase: 5 + next_command: /kaola-workflow-finalize).
     // The non-adaptive path must PRESERVE it — reconciliation must not override it back to the
-    // phase-field-derived command. (#234 must not regress the phaseN->phaseN+1 transition resume.)
+    // phase-field-derived command. (#234 must not regress the phaseN->Finalization transition resume.)
     writeProject(tmp, 'issue-942', { 'workflow-state.md': [
       'name: issue-942', 'issue_number: 942', 'status: active',
-      'phase: 5', 'workflow_path: full', 'next_command: /kaola-workflow-phase6 issue-942', ''].join('\n') });
+      'phase: 5', 'workflow_path: full', 'next_command: /kaola-workflow-finalize issue-942', ''].join('\n') });
     out = JSON.parse(runNode(claimScript, ['resume', '--project', 'issue-942'], tmp).stdout);
-    assert(out.next_command === '/kaola-workflow-phase6 issue-942',
+    assert(out.next_command === '/kaola-workflow-finalize issue-942',
       'E1 regression guard: a forward-pointing full next_command must be preserved, got: ' + out.next_command);
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   console.log('testAdaptiveResumeReconcilesNextCommand: PASSED');

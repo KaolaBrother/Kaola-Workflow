@@ -17,7 +17,7 @@ here for the full contract.
 - Phase artifacts under `kaola-workflow/{project}/` are durable evidence while
   the project is active: `phase1-research.md`, `phase2-ideation.md`,
   `phase3-plan.md`, `phase4-progress.md`, `phase5-review.md`, and
-  `phase6-summary.md`.
+  `finalization-summary.md`.
 - Fast-path projects use `fast-summary.md` instead of the full Phase 1-5 set.
 - Adaptive-path projects (`workflow_path: adaptive`, issue #227) use
   `workflow-plan.md` instead of the full Phase 1-5 set — the frozen DAG is the
@@ -166,8 +166,8 @@ See `docs/api.md` § Codex Harness Scripts for the generator CLI and the full `l
   for a closed issue, or after creating a new per-issue source file.
 - **Single-owner finalize invariant**: during issue finalize, the per-issue source
   removal (`kaola-workflow/.roadmap/issue-N.md`) and `ROADMAP.md` regeneration are
-  performed exactly once by `cmdFinalize` / `archiveProjectDir` (Phase-6 Step 8b).
-  The Phase-6 Mechanical-Finalization Step 7 (in `agents/contractor.md`) only stages
+  performed exactly once by `cmdFinalize` / `archiveProjectDir` (Finalization Step 8b).
+  The Mechanical-Finalization Step 7 (in `agents/contractor.md`) only stages
   the result with `git add`; it does not re-run the rm or the regenerate.
 - `kaola-workflow-roadmap.js generate` must not replace a generated roadmap that
   still lists active issues with `none` solely because `.roadmap/` is missing.

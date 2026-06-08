@@ -1,19 +1,19 @@
 ---
 name: kaola-workflow-fast
-description: Use when executing a single-pass Plan+Execute+Review fast path for a small, well-scoped kaola-workflow issue. Writes fast-summary.md and gates Phase 6.
+description: Use when executing a single-pass Plan+Execute+Review fast path for a small, well-scoped kaola-workflow issue. Writes fast-summary.md and gates Finalization.
 ---
 
 # Skill: kaola-workflow-fast
 
 Single-pass Plan+Execute+Review for small, well-scoped issues. Writes
-`fast-summary.md` and gates Phase 6. Mirror of `commands/kaola-workflow-fast.md`
+`fast-summary.md` and gates Finalization. Mirror of `commands/kaola-workflow-fast.md`
 for Codex runtime. Reads and updates `kaola-workflow/{project}/workflow-state.md`
 throughout.
 
 ## Goal Contract
 
 Complete a single-pass Plan+Execute+Review cycle for the named project and
-write a `PASSED` `fast-summary.md` that Phase 6 accepts as a full-workflow
+write a `PASSED` `fast-summary.md` that Finalization accepts as a full-workflow
 substitute. Stop if scope exceeds fast-path bounds.
 
 Fast applies only to mechanical, single-area changes of ≤ 5 files with exactly one sensible approach; ≥ 2 materially-different viable approaches is a design choice that stays on full. Escalate (`escalated_to_full: <trigger> — <detail>`) on `approach_ambiguity`, scope past the declared write set by >1 file or the absolute backstop of 6, `test_thrash` (≥3), security/architecture/breaking-change, discovered dependency, or new external package.

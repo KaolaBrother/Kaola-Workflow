@@ -1,11 +1,11 @@
 ---
-description: Kaola-Workflow Phase 6. Final validation, documentation, roadmap/archive, commit, and issue update.
+description: Kaola-Workflow Finalization. Final validation, documentation, roadmap/archive, commit, and issue update.
 argument-hint: <project name>
 ---
 
-# Kaola-Workflow Phase 6 - Finalize
+# Kaola-Workflow Finalization
 
-Phase 6 proves the workflow is complete and records final metadata. Do not
+Finalization proves the workflow is complete and records final metadata. Do not
 repair inline when final validation fails except under the Trivial Inline Edit
 Exception below.
 
@@ -21,7 +21,7 @@ If `workflow_path: fast`:
 If `workflow_path: adaptive`:
 - `workflow-plan.md` must exist, be frozen (re-check `plan_hash`), and every
   `## Node Ledger` row must be `complete` or `n/a`. Adaptive runs have no
-  `phase5-review.md`; Phase 6 anchors on the plan's completion state. The barrier is
+  `phase5-review.md`; Finalization anchors on the plan's completion state. The barrier is
   **script-enforced** (#231) by three gates â€” run all three and capture each exit code
   DIRECTLY (never gate on a piped `| tail`, which masks failure):
   ```bash
@@ -121,7 +121,7 @@ You MUST pass `model="{CONTRACTOR_MODEL}"` in this Agent call exactly as shown â
 
 ## Validation Delegation Policy
 
-Phase 6 is the final validation gate. The required full relevant project
+Finalization is the final validation gate. The required full relevant project
 commands must pass, but the main session does not need to personally run noisy
 commands in conversation.
 
@@ -176,11 +176,11 @@ summary, classification, evidence path, and next route.
 
 Avoid redundant validation runs.
 
-- Phase 6 runs each full relevant final command once against the final candidate
+- Finalization runs each full relevant final command once against the final candidate
   state.
-- Do not rerun Phase 4 or Phase 5 targeted commands separately when the Phase 6
+- Do not rerun Phase 4 or Phase 5 targeted commands separately when the Finalization
   full command already covers them.
-- If a Phase 6 command already passed after the last relevant file change, cite
+- If a Finalization command already passed after the last relevant file change, cite
   its evidence path instead of rerunning it.
 - After a routed fix or Trivial Inline Edit Exception edit, rerun the failed or
   affected command. Rerun broader validation only when shared infrastructure,
@@ -197,7 +197,7 @@ when all conditions are true:
 - it fixes finalization friction, formatting, an unused import, a typo, import
   ordering, or an obvious generated path/name mistake
 - it stays inside the approved implementation/docs/workflow artifact scope
-- it is recorded in `phase6-summary.md` or `workflow-state.md`
+- it is recorded in `finalization-summary.md` or `workflow-state.md`
 - affected validation is rerun or prior valid evidence is cited under
   Validation De-Duplication
 
@@ -240,7 +240,7 @@ Before updating issues or reorganizing the roadmap, scan all phase artifacts for
 deferred items, unresolved conflicts, partial implementation notes, open review
 follow-ups, or decisions that need the user.
 
-If none exist, record the scan in `phase6-summary.md` and continue.
+If none exist, record the scan in `finalization-summary.md` and continue.
 
 If any exist:
 
@@ -263,10 +263,10 @@ Do not treat advisor output as user approval.
 Update `workflow-state.md`:
 
 ```text
-phase: 6
-phase_name: Finalize
+stage: finalization
+stage_name: Finalization
 step: final-validation
-next_command: /kaola-workflow-phase6 {project}
+next_command: /kaola-workflow-finalize {project}
 main_session_role: orchestrator
 implementation_owner: N/A
 fix_owner: tdd-guide or build-error-resolver
@@ -403,10 +403,10 @@ Only continue when the final verdict is `DOCKED`.
 
 ## Step 5 - Write Summary
 
-Create `kaola-workflow/{project}/phase6-summary.md`:
+Create `kaola-workflow/{project}/finalization-summary.md`:
 
 ```markdown
-# Phase 6 - Summary: {project}
+# Finalization Summary: {project}
 
 ## Delivered
 [what was built]
@@ -500,7 +500,7 @@ Do not reorganize roadmap entries that came from closure decision items until th
 
 Archive is performed atomically by `cmdFinalize` in Step 8b below. Do not perform a manual copy or git mv here.
 
-Update `phase6-summary.md` with:
+Update `finalization-summary.md` with:
 
 - final Gitea issue state
 - final roadmap state
@@ -642,7 +642,7 @@ cd "$_MAIN_ROOT" 2>/dev/null || true
 - Exit 0: branch merged onto main, issue closed (online), local branch deleted. Confirm worktree is on main with `git status --short --branch`.
 - Exit 1: conflict or fatal error. Rebase conflict remediation printed to stderr. Re-run after resolving.
 - Exit 2: FF race exhausted after MAX_AUTOMERGE_RETRIES retries. Follow printed remediation instructions.
-- Exit 3: merge-impossible (branch protection, non-fast-forward, permission denied). Receipt written to `.cache/sink-fallback.json`. Phase 6 pivots to PR creation automatically.
+- Exit 3: merge-impossible (branch protection, non-fast-forward, permission denied). Receipt written to `.cache/sink-fallback.json`. Finalization pivots to PR creation automatically.
 
 `sink-pr.js` exit codes:
 - Exit 0: branch pushed, PR opened, URL recorded in the `## Sink` block and committed in a metadata follow-up commit. If `pr_auto_merge: true` in config, auto-merge was requested.

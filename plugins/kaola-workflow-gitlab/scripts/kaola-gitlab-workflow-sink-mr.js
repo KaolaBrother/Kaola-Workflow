@@ -122,7 +122,7 @@ function ensureMergeRequest(args, opts) {
     const mrUrl = 'OFFLINE_PLACEHOLDER';
     const mrIid = 0;
     const stateFile = path.join(root, 'kaola-workflow', args.project, 'workflow-state.md');
-    const summaryFile = path.join(root, 'kaola-workflow', args.project, 'phase6-summary.md');
+    const summaryFile = path.join(root, 'kaola-workflow', args.project, 'finalization-summary.md');
     updateStateSinkBlock(stateFile, mrUrl, mrIid);
     appendSummary(summaryFile, mrUrl, mrIid);
     const relState = path.relative(root, stateFile);
@@ -155,7 +155,7 @@ function ensureMergeRequest(args, opts) {
   assert(mr.mr_url || mr.web_url, 'GitLab MR creation did not return a URL');
 
   const stateFile = path.join(root, 'kaola-workflow', args.project, 'workflow-state.md');
-  const summaryFile = path.join(root, 'kaola-workflow', args.project, 'phase6-summary.md');
+  const summaryFile = path.join(root, 'kaola-workflow', args.project, 'finalization-summary.md');
   updateStateSinkBlock(stateFile, mr.mr_url || mr.web_url, mr.mr_iid);
   appendSummary(summaryFile, mr.mr_url || mr.web_url, mr.mr_iid);
   if (!skipMetadataCommit) {

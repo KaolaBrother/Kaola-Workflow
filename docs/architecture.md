@@ -13,7 +13,7 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   **freely composes a task-shaped DAG** of role nodes inside a fixed lifecycle frame:
 
   ```text
-  claim ──► branch / worktree ──► [ FREE DESIGN ] ──► Phase-6 sink
+  claim ──► branch / worktree ──► [ FREE DESIGN ] ──► Finalization sink
   (atomic, classifier-checked)     agent composes      (close, archive,
                                    the orchestration    roadmap regen)
   ```
@@ -40,7 +40,7 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   provisional auto-run (halt for consent) when a write turns out sensitive, and a
   quorum/decision step over read-only fan-out (e.g. `adversarial-verifier`
   skeptics). `repair-state.js` `routeAdaptive` resumes by traversing the frozen plan
-  ahead of the phaseN ladder. The Phase-6 sink, claim/branch/worktree lifecycle, and
+  ahead of the phaseN ladder. The Finalization sink, claim/branch/worktree lifecycle, and
   the nine canonical roles are **inherited unchanged** — only small adaptive-aware
   touches are added. The switch gates selection only; resume is toggle-agnostic.
   **Note (issue #260):** when `KAOLA_WORKTREE_NATIVE=0` (explicit worktree opt-out), claim/startup now creates and checks out the feature branch in-place rather than leaving work on the default branch; the pre-checkout branch is recorded as `base_branch` in the Sink block and restored (with feature branch deleted) on `discard`/`release`.
@@ -49,7 +49,7 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
 
   **Strict lean-orchestrator boundary (issue #277 — script-enforced seams).** #277 hardens the lean-orchestrator boundary from prose guidance to script enforcement via three complementary mechanisms:
 
-  - **M3 — Procedure relocation (PREVENTION).** The complete Phase-6 finalize procedure (scripts, bookkeeping, archive, roadmap regen) now lives solely in the `contractor` agent profile. The claim + author + adaptive-handoff procedure lives solely in the `workflow-planner` profile. Orchestrator command files (`phase6.md`, `kaola-workflow-adapt.md`) keep only thin dispatch handles. `validate-workflow-contracts.js` text-locks the contractor dispatch handle on all four editions — removing it from an orchestrator command file fails the contract gate.
+  - **M3 — Procedure relocation (PREVENTION).** The complete Finalization procedure (scripts, bookkeeping, archive, roadmap regen) now lives solely in the `contractor` agent profile. The claim + author + adaptive-handoff procedure lives solely in the `workflow-planner` profile. Orchestrator command files (`finalize.md`, `kaola-workflow-adapt.md`) keep only thin dispatch handles. `validate-workflow-contracts.js` text-locks the contractor dispatch handle on all four editions — removing it from an orchestrator command file fails the contract gate.
 
   - **M4 — Run posture.** Adaptive claim always provisions a repo-local worktree (via `workflow-planner`-driven startup). Startup writes `run_posture: worktree|in-place` to the `## Sink` block of `workflow-state.md`, derived from the actual worktree resolution (`deriveRunPosture(worktreePath)` in `kaola-workflow-claim.js`: truthy path → `worktree`, falsy → `in-place`). The value is never env-forced or inherited; `in-place` persists as the automatic fallback only. No `--worktree` flag is needed.
 
@@ -63,7 +63,7 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   - **Durable task mirror (`kaola-workflow-task-mirror.js`).** Generates `kaola-workflow/{project}/workflow-tasks.json` from the frozen `## Nodes` + `## Node Ledger`. The Codex UI task list mirrors this file; `workflow-tasks.json` is NOT the source of truth — the `## Node Ledger` is. Regenerated when missing, unparseable, or stale (hash mismatch). See `docs/workflow-state-contract.md` § Codex Task Mirror for the source-of-truth chain and schema.
   - **Compact/resume hook (`kaola-workflow-codex-compact-resume.js`).** A self-contained stdin/stdout filter (invoked `node <path> < session.json` on demand) that reads the four durable artifacts (`workflow-state.md`, `workflow-plan.md` `## Node Ledger`, `workflow-tasks.json`) and emits a deterministic 6-section resume packet: active project, next skill/command, in-progress node, pending gates, consent-halt markers, task-mirror summary. Does not mutate state. No `CLAUDE_PLUGIN_ROOT` dependency; edition-named ×3 (codex/gitlab/gitea). This is the Codex compact/resume entrypoint — Codex has no hooks manifest key, so the script is invoked on demand. See `docs/api.md` § Codex Harness Scripts for the packet format.
 
-  **Main-direct carve-outs (explicitly out of attestation scope per §5).** The adaptive per-node lifecycle transactions (`kaola-workflow-adaptive-node.js`) and the Phase-6 sink (`sink-merge.js` / `sink-pr.js`) are intentionally main-direct. No provenance is added there; they are not expected to generate contractor or planner dispatch-log entries.
+  **Main-direct carve-outs (explicitly out of attestation scope per §5).** The adaptive per-node lifecycle transactions (`kaola-workflow-adaptive-node.js`) and the Finalization sink (`sink-merge.js` / `sink-pr.js`) are intentionally main-direct. No provenance is added there; they are not expected to generate contractor or planner dispatch-log entries.
 
   **Atomicity layer (issue #242 Part B Stage A, wired in Stage C; completed in #272).**
   Three aggregator scripts form the atomicity interface for the adaptive executor:
@@ -71,7 +71,7 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   ready-set (nodes whose dependencies are all `complete`/`n/a` and whose own status is
   non-terminal), the `nextNode` (first ready node), and the resolved model for each
   candidate, via the validator's exported `parseNodes`/`parseLedger` (no reimplementation);
-  model resolution delegates to `resolveAgentModel` (a separate module). An empty ready-set with all nodes terminal is the Phase-6
+  model resolution delegates to `resolveAgentModel` (a separate module). An empty ready-set with all nodes terminal is the Finalization
   handoff signal (`allDone:true`); an empty ready-set with non-terminal nodes remaining
   is a stalled DAG, and results in a typed refusal.
   `kaola-workflow-commit-node.js` composes the plan-validator barrier subcommands into
@@ -92,9 +92,9 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   scripts never call back into it (acyclic, recursion-safe). The main session in
   `kaola-workflow-plan-run` calls `kaola-workflow-adaptive-node.js` transactions directly —
   no contractor subagent is needed for the per-node mechanical transitions. The contractor
-  exception from ADR 0004 (Phase 6 finalization) remains in effect.
+  exception from ADR 0004 (Finalization) remains in effect.
   The aggregator's whole-plan `commit-node` mode (no `--node-id`, both checks
-  blocking) is exercised by unit tests; Phase 6 runs its merge gate by calling the plan-validator
+  blocking) is exercised by unit tests; Finalization runs its merge gate by calling the plan-validator
   directly (preserving the `--resume-check`/`plan_hash` integrity check), not via the aggregator.
   All three aggregator scripts ship in all four editions (canonical `scripts/` + Codex copy in
   `plugins/kaola-workflow/scripts/`, plus GitLab and Gitea forge-named ports); all are
@@ -138,7 +138,7 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   Crash/resume is a pure function of durable artifacts: each state has a deterministic
   reconstruction path (re-dispatch on `open`; per-member recovery on `dispatched`; run `join`
   on `sealed`/`joining`; delete manifest on `joined`). `seal-member` calls the unchanged
-  `commit-node --node-id N` barrier; no new gate surface is introduced. Phase-6
+  `commit-node --node-id N` barrier; no new gate surface is introduced. Finalization
   `--barrier-check` sees normal `complete` rows after `join`. Full design at
   `docs/investigations/2026-06-07-parallel-ready-set-execution-design.md`.
 
@@ -150,10 +150,10 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   every completed code/sensitive node in the `## Node Ledger` — closing the leak where a
   required reviewer is marked `n/a` at runtime (audit G1/H5) — wired into `routeAdaptive`
   (surfaced as `pendingGates`, non-blocking on resume so a mid-run pending gate never
-  bricks an in-flight plan) and enforced as a hard merge gate in Phase 6. `--barrier-check`
+  bricks an in-flight plan) and enforced as a hard merge gate in Finalization. `--barrier-check`
   re-scans the files actually written and refuses a sensitive write with no `security-reviewer`
-  node (audit H1), an out-of-allowlist production write (audit H3), or a foreign-project `kaola-workflow/archive/<X>/` write whose `<X>` is not the finalized project (#261 — scoping the blanket `kaola-workflow/` artifact exemption so a stray cross-issue archive folder cannot reach a protected branch undetected; companion defense-in-depth: `cmdFinalize` stages only the finalized project's own archive/rename/roadmap paths, and the Phase-6 Staging Guard typed-blocks a staged foreign `archive/<other>/`). It runs in two modes: the
-  **whole-plan** Phase-6 merge gate diffs vs the merge-base of HEAD and `origin/main` (so a
+  node (audit H1), an out-of-allowlist production write (audit H3), or a foreign-project `kaola-workflow/archive/<X>/` write whose `<X>` is not the finalized project (#261 — scoping the blanket `kaola-workflow/` artifact exemption so a stray cross-issue archive folder cannot reach a protected branch undetected; companion defense-in-depth: `cmdFinalize` stages only the finalized project's own archive/rename/roadmap paths, and the Finalization Staging Guard typed-blocks a staged foreign `archive/<other>/`). It runs in two modes: the
+  **whole-plan** Finalization merge gate diffs vs the merge-base of HEAD and `origin/main` (so a
   committed sensitive write is not invisible) against the **union** of declared write sets; the
   **per-node** barrier (#239) tree-diffs the current full-worktree snapshot against the node's
   recorded node-start snapshot (`--record-base`, idempotent for resume-safety) against the node's
@@ -182,9 +182,9 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   marginal benefit; the principled containment for a bad frozen plan is the per-tier
   runtime `--barrier-check` (#231), not a binary kill-switch.
 
-## Phase 6 Finalization and Sink Flow
+## Finalization and Sink Flow
 
-Phase 6 delivers completed work through one of two sink paths:
+Finalization delivers completed work through one of two sink paths:
 
 ### Merge Sink (Default)
 
@@ -208,7 +208,7 @@ Clean up .roadmap/issue-N.md and regenerate ROADMAP.md
 
 **Success condition**: Branch merges without conflicts, push succeeds.
 
-**Failure handling**: On merge-impossible error (branch protected, non-fast-forward, permission denied), sink-merge exits code 3 and Phase 6 automatically pivots to PR sink.
+**Failure handling**: On merge-impossible error (branch protected, non-fast-forward, permission denied), sink-merge exits code 3 and Finalization automatically pivots to PR sink.
 
 ### PR Sink (Intent-Based or Fallback)
 
@@ -242,11 +242,11 @@ Clean up .roadmap/issue-N.md and regenerate ROADMAP.md (MERGED only)
 
 1. **Intent detection** (recommended): If user prompt contains PR keywords ("open a PR", "create a PR", "pull request", "sink=pr"), agent sets `KAOLA_SINK=pr` before startup, and sink-pr is used.
 2. **Default merge**: `sink: merge` is the fallback when no PR intent is detected.
-3. **Auto-fallback**: When merge is configured but fails with exit 3, Phase 6 automatically pivots to PR sink.
+3. **Auto-fallback**: When merge is configured but fails with exit 3, Finalization automatically pivots to PR sink.
 
 ### Gitea Sink Layer (Complete — GitHub/GitLab Parity)
 
-Gitea edition (`plugins/kaola-workflow-gitea/`) now includes a complete Phase 6 sink implementation:
+Gitea edition (`plugins/kaola-workflow-gitea/`) now includes a complete Finalization sink implementation:
 
 - **`kaola-gitea-workflow-sink-merge.js`**: Fetch, rebase, fast-forward merge with retry, push, close issue, worktree cleanup. Same exit codes and error classification as GitHub/GitLab editions.
 - **`kaola-gitea-workflow-sink-pr.js`**: Create or reuse PR, record metadata in workflow-state.md, automatic metadata commit.

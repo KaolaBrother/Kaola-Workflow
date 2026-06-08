@@ -29,7 +29,7 @@ try {
   const phase3 = readInstalledCommand('kaola-workflow-phase3.md');
   const phase4 = readInstalledCommand('kaola-workflow-phase4.md');
   const phase5 = readInstalledCommand('kaola-workflow-phase5.md');
-  const phase6 = readInstalledCommand('kaola-workflow-phase6.md');
+  const finalize = readInstalledCommand('kaola-workflow-finalize.md');
   const fast = readInstalledCommand('kaola-workflow-fast.md');
 
   assert(phase3.includes('model="opus",'), 'higher profile should render code-architect as opus');
@@ -39,22 +39,22 @@ try {
     'installer rendering should preserve blank markdown lines'
   );
   assert(phase5.includes('model="opus",'), 'higher profile should render reviewers as opus');
-  assert(phase6.includes('model="sonnet",'), 'doc-updater should render as sonnet');
+  assert(finalize.includes('model="sonnet",'), 'doc-updater should render as sonnet');
   assert(
     phase5.includes('subagent_type="build-error-resolver",\n  model="sonnet",'),
     'phase5 routed-fix build-error-resolver block should render as sonnet'
   );
   assert(
-    phase6.includes('subagent_type="build-error-resolver",\n  model="sonnet",'),
-    'phase6 routed-fix build-error-resolver block should render as sonnet'
+    finalize.includes('subagent_type="build-error-resolver",\n  model="sonnet",'),
+    'finalize routed-fix build-error-resolver block should render as sonnet'
   );
   assert(
     phase5.includes('subagent_type="tdd-guide",\n  model="sonnet",'),
     'phase5 routed-fix tdd-guide block should render as sonnet'
   );
   assert(
-    phase6.includes('subagent_type="tdd-guide",\n  model="sonnet",'),
-    'phase6 routed-fix tdd-guide block should render as sonnet'
+    finalize.includes('subagent_type="tdd-guide",\n  model="sonnet",'),
+    'finalize routed-fix tdd-guide block should render as sonnet'
   );
   assert(fast.includes('model="opus",'), 'fast command should render higher-profile reviewer/planner models');
 

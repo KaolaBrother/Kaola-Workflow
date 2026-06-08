@@ -97,7 +97,7 @@ function main() {
     `- Current step: ${step}`,
     `- Next command: ${nextCommand}`,
     `- Inline emergency fallback authorized: ${fallback}`,
-    '- If Phase 4 or Phase 6 validation failed, classify and route the failure; do not repair inline unless fallback is explicitly authorized.',
+    '- If Phase 4 or Finalization validation failed, classify and route the failure; do not repair inline unless fallback is explicitly authorized.',
     '- If state and artifacts disagree, stop and reconstruct conservatively from phase files or `fast-summary.md`.'
   ];
 

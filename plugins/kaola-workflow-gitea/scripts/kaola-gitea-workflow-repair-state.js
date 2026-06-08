@@ -424,17 +424,36 @@ function routeAdaptive(root, workflowDir, project) {
   };
 }
 
+function routeFinalization(root, workflowDir, project, phaseFileName) {
+  const projectDir = path.join(workflowDir, project);
+  const phaseFile = path.join(projectDir, phaseFileName);
+  const content = readFile(phaseFile);
+  const stateFile = path.join(projectDir, 'workflow-state.md');
+  const stateContent = exists(stateFile) ? readFile(stateFile) : '';
+  const unresolved = unresolvedCompliance(content, stateContent);
+  if (unresolved.length > 0) {
+    return { reason: 'unresolved compliance gates in ' + phaseFileName + ': ' + unresolved.map(function(row) { return row.requirement; }).join(', ') };
+  }
+  return {
+    root, project, stage: 'finalization', stageName: 'Finalization',
+    step: 'router-reconstructed', task: 'N/A',
+    nextCommand: '/kaola-workflow-finalize ' + project,
+    nextSkill: 'kaola-workflow-finalize ' + project,
+    phaseFile, pendingGates: unresolved, isFinalization: true
+  };
+}
+
 function reconstruct(root, workflowDir, project) {
   const projectDir = path.join(workflowDir, project);
   const phase4 = artifact(projectDir, 'phase4-progress.md');
-  if (artifact(projectDir, 'phase6-summary.md')) return { complete: true, reason: 'phase6-summary.md exists; workflow is complete' };
+  if (artifact(projectDir, 'finalization-summary.md')) return { complete: true, reason: 'finalization-summary.md exists; workflow is complete' };
   // issue #227: adaptive plan caught ahead of the phaseN ladder (the ladder must not run).
   if (artifact(projectDir, 'workflow-plan.md')) return routeAdaptive(root, workflowDir, project);
   if (artifact(projectDir, 'phase5-review.md')) {
     if (phase4 && !allPhase4TasksComplete(readFile(phase4))) {
       return { reason: 'phase5-review.md exists but phase4-progress.md still has open tasks' };
     }
-    return route(root, workflowDir, project, 6, artifact(projectDir, 'phase5-review.md'), undefined, true);
+    return routeFinalization(root, workflowDir, project, 'phase5-review.md');
   }
   if (phase4) {
     const content = readFile(phase4);
@@ -468,6 +487,18 @@ function stateContent(routeResult, existingContent) {
   const preserved = ['Gitea', 'Sink']
     .map(section => extractSection(existingContent || '', section))
     .filter(Boolean);
+  const positionLines = routeResult.isFinalization
+    ? [
+        'stage: ' + routeResult.stage,
+        'stage_name: ' + routeResult.stageName,
+      ]
+    : [
+        'phase: ' + routeResult.phase,
+        'phase_name: ' + routeResult.phaseName,
+      ];
+  const fixOwner = routeResult.phase >= 4 || routeResult.isFinalization
+    ? 'tdd-guide or build-error-resolver'
+    : 'N/A';
   const lines = [
     '# Kaola-Workflow State',
     '',
@@ -476,8 +507,7 @@ function stateContent(routeResult, existingContent) {
     'status: active',
     '',
     '## Current Position',
-    'phase: ' + routeResult.phase,
-    'phase_name: ' + routeResult.phaseName,
+    ...positionLines,
     ...(routeResult.workflowPath ? ['workflow_path: ' + routeResult.workflowPath] : []),
     'step: ' + routeResult.step,
     'task: ' + routeResult.task,
@@ -495,7 +525,7 @@ function stateContent(routeResult, existingContent) {
     '## Ownership Rules',
     'main_session_role: orchestrator',
     'implementation_owner: ' + (routeResult.phase === 4 ? 'tdd-guide' : 'N/A'),
-    'fix_owner: ' + (routeResult.phase >= 4 ? 'tdd-guide or build-error-resolver' : 'N/A'),
+    'fix_owner: ' + fixOwner,
     'inline_emergency_fallback_authorized: no',
     '',
     '## Last Evidence',
@@ -510,11 +540,36 @@ function stateContent(routeResult, existingContent) {
   return lines.concat('', preserved).join('\n') + '\n';
 }
 
+// issue #283: one-way in-flight migration — converts legacy active folders from
+// phase6-summary.md → finalization-summary.md and rewrites stale state fields.
+// Non-destructive to archive/ (never runs on archived projects).
+function migrateActiveLegacyFolder(workflowDir, project) {
+  const projectDir = path.join(workflowDir, project);
+  if (!exists(projectDir)) return;
+  const legacySummary = path.join(projectDir, 'phase6-summary.md');
+  const newSummary = path.join(projectDir, 'finalization-summary.md');
+  if (exists(legacySummary) && !exists(newSummary)) {
+    fs.renameSync(legacySummary, newSummary);
+  }
+  const stateFile = path.join(projectDir, 'workflow-state.md');
+  if (!exists(stateFile)) return;
+  let content = readFile(stateFile);
+  let changed = false;
+  if (/^phase:\s*6\s*$/m.test(content)) { content = content.replace(/^phase:\s*6\s*$/m, 'stage: finalization'); changed = true; }
+  if (/^phase_name:\s*Finalize\s*$/m.test(content)) { content = content.replace(/^phase_name:\s*Finalize\s*$/m, 'stage_name: Finalization'); changed = true; }
+  if (/^next_command:\s*\/kaola-workflow-phase6\s+/m.test(content)) {
+    content = content.replace(/^(next_command:\s*)\/kaola-workflow-phase6(\s+)/m, '$1/kaola-workflow-finalize$2');
+    changed = true;
+  }
+  if (changed) { fs.writeFileSync(stateFile, content); }
+}
+
 function repair(projectArg, startDir) {
   const location = findWorkflowLocation(startDir || process.cwd());
   if (!location) return { repaired: false, reason: 'workflow directory not found' };
   const selected = selectProject(location.workflowDir, projectArg);
   if (!selected.project) return { repaired: false, reason: selected.reason };
+  migrateActiveLegacyFolder(location.workflowDir, selected.project);
 
   const stateFilePath = path.join(location.workflowDir, selected.project, 'workflow-state.md');
   let existingContent = '';

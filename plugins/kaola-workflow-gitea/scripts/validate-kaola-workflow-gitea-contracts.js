@@ -209,21 +209,26 @@ assert(uninstallScript.includes('"$FORGE" = "gitea"'), 'uninstall.sh must branch
 assert(uninstallScript.includes('kaola-workflow-gitea'), 'uninstall.sh must remove the Gitea install directory');
 assert(/Usage:.*gitea/.test(uninstallScript), 'uninstall.sh usage string must list gitea');
 
+// issue #283: kaola-workflow-phase6.md was removed; kaola-workflow-finalize.md is the terminal routine.
+assert(!exists(pluginRoot + '/commands/kaola-workflow-phase6.md'),
+  'Gitea legacy kaola-workflow-phase6.md must be absent (hard-removed by #283)');
+assert(exists(pluginRoot + '/commands/kaola-workflow-finalize.md'),
+  'Gitea kaola-workflow-finalize.md must be present');
 assert(
-  read(pluginRoot + '/commands/kaola-workflow-phase6.md').includes('mr|pr)'),
-  'Gitea Phase 6 command must dispatch canonical pr sink (mr|pr) case)'
+  read(pluginRoot + '/commands/kaola-workflow-finalize.md').includes('mr|pr)'),
+  'Gitea Finalization command must dispatch canonical pr sink (mr|pr) case)'
 );
 assert(
-  read(pluginRoot + '/commands/kaola-workflow-phase6.md').includes('SINK_STATE_FILE="kaola-workflow/{project}/workflow-state.md"') &&
-  read(pluginRoot + '/commands/kaola-workflow-phase6.md').includes('--keep-worktree') &&
-  read(pluginRoot + '/commands/kaola-workflow-phase6.md').includes('Use the sink metadata captured before Step 8b'),
-  'Gitea Phase 6 command must capture sink metadata before archive and preserve worktree for the final commit'
+  read(pluginRoot + '/commands/kaola-workflow-finalize.md').includes('SINK_STATE_FILE="kaola-workflow/{project}/workflow-state.md"') &&
+  read(pluginRoot + '/commands/kaola-workflow-finalize.md').includes('--keep-worktree') &&
+  read(pluginRoot + '/commands/kaola-workflow-finalize.md').includes('metadata captured before'),
+  'Gitea Finalization command must capture sink metadata before archive and preserve worktree for the final commit'
 );
 // #277 M3: contractor-dispatch HANDLE lock — mechanical finalization body moved to
-// agents/contractor.md; phase6 retains only the Agent(...) dispatch handle.
+// agents/contractor.md; finalize retains only the Agent(...) dispatch handle.
 assert(
-  read(pluginRoot + '/commands/kaola-workflow-phase6.md').includes('subagent_type="contractor"'),
-  'Gitea Phase 6 command must dispatch the mechanical finalization to the contractor subagent'
+  read(pluginRoot + '/commands/kaola-workflow-finalize.md').includes('subagent_type="contractor"'),
+  'Gitea Finalization command must dispatch the mechanical finalization to the contractor subagent'
 );
 assert(
   read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('mr|pr)'),
@@ -511,7 +516,7 @@ assertConcept(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'adaptive exe
   '## Node Ledger', 'plan_hash', 'post-dominate', 'auto-run', 'provisional', 'halt for consent',
   'escalated_to_full: consent', 'typed refusal', 'quorum', 'tally-fn', 'validateNodeOutput', 'test_thrash'
 ]);
-assertIncludes(pluginRoot + '/commands/kaola-workflow-phase6.md', 'workflow_path: adaptive');
+assertIncludes(pluginRoot + '/commands/kaola-workflow-finalize.md', 'workflow_path: adaptive');
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-classifier.js', 'disjointWriteSets');
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-classifier.js', 'readPlanNodes');
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'workflow_path_refused');

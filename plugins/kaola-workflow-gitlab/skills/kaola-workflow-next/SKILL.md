@@ -215,7 +215,7 @@ Stop and ask the user to resolve the Git state manually before retrying `/workfl
 
 If multiple active folders exist from prior sessions (e.g., `issue-63` and `issue-65` in different states), they operate independently. Each folder has its own `workflow-state.md`, branch, and worktree metadata. The pre-commit hook prevents commits that stage multiple workflow project folders together.
 
-**Important**: Do NOT merge, interleave, or batch commits from different active folders. Each folder must complete its own Phase 4 → Phase 6 sequence independently. If the same file appears in multiple active write sets, stop and resolve the conflict before continuing — do not proceed with overlapping modifications.
+**Important**: Do NOT merge, interleave, or batch commits from different active folders. Each folder must complete its own Phase 4 → Finalization sequence independently. If the same file appears in multiple active write sets, stop and resolve the conflict before continuing — do not proceed with overlapping modifications.
 
 If GitLab is available, refresh open issues:
 
@@ -250,7 +250,7 @@ the user to confirm the generated workflow folder name.
 Manual reconstruction order:
 
 ```text
-phase6-summary.md exists -> workflow complete
+finalization-summary.md exists -> workflow complete
 phase5-review.md exists -> kaola-workflow-finalize
 fast-summary.md status ESCALATED -> kaola-workflow-research
 fast-summary.md exists -> kaola-workflow-fast

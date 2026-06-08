@@ -22,7 +22,7 @@ silent fallback to the phaseN ladder.
 
 Drive every node in the frozen `workflow-plan.md` to `complete` or `n/a` in its
 `## Node Ledger`, honoring the computed gates over the DAG, then hand off to
-Phase 6 (which anchors on the all-complete ledger, not a phaseN artifact). Stop
+Finalization (which anchors on the all-complete ledger, not a phaseN artifact). Stop
 and surface for approval on any consent-halt or typed refusal.
 
 ## Agent Model Badge
@@ -266,10 +266,10 @@ re-run `join` (idempotent on already-merged members). `joined` → delete manife
    baseline would neuter the barrier). Returns `{opened:{id,role,model,declared_write_set},
    baselineRecorded:true}`, or `{allDone:true}` when every ledger row is `complete`/`n/a`.
 
-   On `allDone`, route to Phase 6 (Completion below) — there is no node to dispatch.
+   On `allDone`, route to Finalization (Completion below) — there is no node to dispatch.
    `allDone` is valid only after the mandatory `finalize` sink node itself has been closed.
    If `open-next` opens a node whose `role` is `finalize`, stay in the per-node loop and use
-   the finalize sink contract below instead of routing to Phase 6.
+   the finalize sink contract below instead of routing to Finalization.
 2. **dispatch** the node's role (main session — see above). Use the `model` returned by `open-next`
    for the node (or resolved via `scripts/kaola-workflow-resolve-agent-model.js <role>` on resume).
    **Special case — `role: finalize` sink:** `finalize` is the mandatory DAG sink, not a
@@ -286,7 +286,7 @@ re-run `join` (idempotent on already-merged members). `joined` → delete manife
    ```
 
    Then run `close-and-open-next` for that same node. Only after that command returns
-   `{allDone:true}` is the DAG complete and ready to route to Phase 6 / Finalization. If the close
+   `{allDone:true}` is the DAG complete and ready to route to Finalization. If the close
    refuses, stay in the per-node loop and fix or refuse as with any other node.
 
    **For non-finalize roles, after the role returns, capture durable evidence immediately** — the
@@ -383,7 +383,7 @@ Agent(
    **(b) Per-node barrier — script-enforced (#231/#239):** shells `commit-node --node-id {node-id}
    --json`. Re-scans the files the node actually wrote against the node's OWN declared write set
    (diffs the recorded baseline — exact THIS node's writes, #239); a fan-out instance overflowing
-   into a sibling's lane is refused. The whole-plan barrier in Phase 6 remains the union-level floor.
+   into a sibling's lane is refused. The whole-plan barrier in Finalization remains the union-level floor.
    Barrier fail → typed refuse, NO close, NO advance.
 
    **(c) Close + compliance row — ONLY IF barrier exit 0 AND evidence present:** splices the ledger
@@ -411,7 +411,7 @@ Agent(
 4. **judge the barrier (main session — governance).** Read the `close-and-open-next` result:
    - `result: ok` + `opened: {...}` → the node is `complete` AND, per the fused advance, the next
      ready node is **already open**. Dispatch the freshly-opened node (back to step 2) — do not
-     re-run a standalone `open-next`. On `allDone: true` → route to Phase 6 (Completion below). Do
+     re-run a standalone `open-next`. On `allDone: true` → route to Finalization (Completion below). Do
      not treat a node as `complete` until the script returns `result: ok` (barrier exit 0).
    - `result: refuse, reason: barrier_failed` — a write turned out sensitive (a Phase-5 category)
      on a plan with no `security-reviewer` node, or overflowed outside the node's declared allowlist:
@@ -439,9 +439,9 @@ Agent(
 > completed code/sensitive node in the `## Node Ledger` (closes the G1/H5 leak where a
 > reviewer is marked `n/a` at runtime). It is wired into `routeAdaptive` (surfaced as
 > `pendingGates`, non-blocking on resume) and enforced as a **hard merge gate** in
-> Phase 6. The actual-writes re-scan + sensitive/allowlist refusal is `--barrier-check`
-> (per-node in the commit bracket, step 3 above, and whole-plan in Phase 6). --verdict-check (#251) now script-enforces the reviewer/skeptic verdict (informational
-> per-node, BLOCKING in Phase 6). What remains agent-discipline is the quorum tally count
+> Finalization. The actual-writes re-scan + sensitive/allowlist refusal is `--barrier-check`
+> (per-node in the commit bracket, step 3 above, and whole-plan in Finalization). --verdict-check (#251) now script-enforces the reviewer/skeptic verdict (informational
+> per-node, BLOCKING in Finalization). What remains agent-discipline is the quorum tally count
 > and dry_streak counting; gate presence, execution, barrier, and verdict are all script-guaranteed.
 
 ## Quorum / decision nodes (read-only fan-out)
@@ -471,7 +471,7 @@ documented there). The orchestrator owns what happens next:
 `--verdict-check` (#251, hardened by #279) now FAILS a gate — even on `verdict: pass` /
 `findings_blocking: 0` — when any finding is `scope: in_scope, action: fix` whose `status` is not
 `resolved`/`deferred` (a missing `status` reads as `open`, fail-closed). It is informational per-node
-and BLOCKING whole-plan in Phase 6, so an unresolved in-scope actionable defect can never silently
+and BLOCKING whole-plan in Finalization, so an unresolved in-scope actionable defect can never silently
 become a follow-up. The offending finding ids surface in the verdict-check JSON `unresolvedFixes[]`.
 
 When `--verdict-check` reports `unresolvedFixes`, the orchestrator does NOT route to finalize. It
@@ -507,12 +507,12 @@ the static loop bound are enforced per node at the barrier.
 ## Completion
 
 Completion begins only after the `finalize` sink row has been closed and `close-and-open-next`
-returns `{allDone:true}`. At that point every ledger row is `complete` or `n/a`; route to Phase 6:
+returns `{allDone:true}`. At that point every ledger row is `complete` or `n/a`; route to Finalization:
 
 ```text
-/kaola-workflow-phase6 {project}
+/kaola-workflow-finalize {project}
 ```
 
-Phase 6 anchors on the frozen plan + all-complete ledger (adaptive projects have
+Finalization anchors on the frozen plan + all-complete ledger (adaptive projects have
 no `phase5-review.md`), then runs the unchanged sink (merge/PR, archive, close,
 roadmap regen).

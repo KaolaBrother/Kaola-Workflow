@@ -126,7 +126,7 @@ const phaseCommands = [
   'commands/kaola-workflow-phase3.md',
   'commands/kaola-workflow-phase4.md',
   'commands/kaola-workflow-phase5.md',
-  'commands/kaola-workflow-phase6.md',
+  'commands/kaola-workflow-finalize.md',
   'commands/kaola-workflow-fast.md',
   'commands/kaola-workflow-adapt.md',
   'commands/kaola-workflow-plan-run.md'
@@ -148,19 +148,19 @@ for (const file of phaseCommands) {
 const routedFixFiles = [
   'commands/kaola-workflow-phase4.md',
   'commands/kaola-workflow-phase5.md',
-  'commands/kaola-workflow-phase6.md',
+  'commands/kaola-workflow-finalize.md',
   'plugins/kaola-workflow-gitlab/commands/kaola-workflow-phase4.md',
   'plugins/kaola-workflow-gitlab/commands/kaola-workflow-phase5.md',
-  'plugins/kaola-workflow-gitlab/commands/kaola-workflow-phase6.md',
+  'plugins/kaola-workflow-gitlab/commands/kaola-workflow-finalize.md',
   'plugins/kaola-workflow-gitea/commands/kaola-workflow-phase4.md',
   'plugins/kaola-workflow-gitea/commands/kaola-workflow-phase5.md',
-  'plugins/kaola-workflow-gitea/commands/kaola-workflow-phase6.md',
+  'plugins/kaola-workflow-gitea/commands/kaola-workflow-finalize.md',
 ];
 for (const file of routedFixFiles) {
   assertIncludes(file, 'model="{BUILD_ERROR_RESOLVER_MODEL}"');
   assertIncludes(file, 'subagent_type="build-error-resolver"');
 }
-for (const file of routedFixFiles.filter(f => /phase[56]/.test(f))) {
+for (const file of routedFixFiles.filter(f => /phase5|finalize/.test(f))) {
   assertIncludes(file, 'model="{TDD_GUIDE_MODEL}"');
 }
 
@@ -374,16 +374,22 @@ assert(exists('AGENTS.md'), 'AGENTS.md must exist at repo root (dogfood redirect
 assertIncludes('AGENTS.md', '> **MANDATORY — READ CLAUDE.md BEFORE ANY ACTION THIS SESSION.**');
 assertIncludes('commands/workflow-init.md', '> **MANDATORY — READ CLAUDE.md BEFORE ANY ACTION THIS SESSION.**');
 
-assertIncludes('commands/kaola-workflow-phase6.md', 'kaola-workflow-sink-merge.js');
-assertIncludes('commands/kaola-workflow-phase6.md', 'kaola-workflow-sink-pr.js');
-assertIncludes('commands/kaola-workflow-phase6.md', 'SINK_STATE_FILE="kaola-workflow/{project}/workflow-state.md"');
+// issue #283: kaola-workflow-phase6.md hard-removed; kaola-workflow-finalize.md is the
+// route-agnostic terminal routine. Assert canonical present + legacy absent.
+assert(!exists('commands/kaola-workflow-phase6.md'),
+  'commands/kaola-workflow-phase6.md must be absent (hard-removed by #283)'); // issue #283
+assert(exists('commands/kaola-workflow-finalize.md'),
+  'commands/kaola-workflow-finalize.md must be present (#283 terminal routine)');
+assertIncludes('commands/kaola-workflow-finalize.md', 'kaola-workflow-sink-merge.js');
+assertIncludes('commands/kaola-workflow-finalize.md', 'kaola-workflow-sink-pr.js');
+assertIncludes('commands/kaola-workflow-finalize.md', 'SINK_STATE_FILE="kaola-workflow/{project}/workflow-state.md"');
 // #277 M3: --keep-worktree procedure relocated from phase6 inline body to agents/contractor.md;
-// still asserted in the dispatch prompt string inside phase6.md (pass-through reference).
-assertIncludes('commands/kaola-workflow-phase6.md', '--keep-worktree');
-assertIncludes('commands/kaola-workflow-phase6.md', 'Use the sink metadata captured before Step 8b');
+// still asserted in the dispatch prompt string inside finalize.md (pass-through reference).
+assertIncludes('commands/kaola-workflow-finalize.md', '--keep-worktree');
+assertIncludes('commands/kaola-workflow-finalize.md', 'Use the sink metadata captured before Step 8b');
 // #277 M3: contractor-dispatch HANDLE lock — the mechanical finalization body moved to
-// agents/contractor.md; the phase6 command retains only the Agent(...) dispatch handle.
-assertIncludes('commands/kaola-workflow-phase6.md', 'subagent_type="contractor"');
+// agents/contractor.md; the finalize command retains only the Agent(...) dispatch handle.
+assertIncludes('commands/kaola-workflow-finalize.md', 'subagent_type="contractor"');
 // #277 M3: assertBefore calls for 'commit -m "chore: finalize {project}"' and
 // 'node "$CLAIM_JS" finalize' DROPPED — those tokens relocated to agents/contractor.md;
 // cross-file ordering is not expressible via assertBefore (single-file only).
@@ -607,8 +613,8 @@ assertNotIncludes('scripts/kaola-workflow-repair-state.js', 'enable_adaptive');
 assertNotIncludes('scripts/kaola-workflow-repair-state.js', 'KAOLA_ENABLE_ADAPTIVE');
 assertNotIncludes('scripts/kaola-workflow-plan-validator.js', 'enable_adaptive');
 assertNotIncludes('scripts/kaola-workflow-plan-validator.js', 'KAOLA_ENABLE_ADAPTIVE');
-// phase6 adaptive prerequisite
-assertIncludes('commands/kaola-workflow-phase6.md', 'workflow_path: adaptive');
+// finalize adaptive prerequisite (#283: phase6 renamed to finalize)
+assertIncludes('commands/kaola-workflow-finalize.md', 'workflow_path: adaptive');
 
 // issue #290 / #288: pin the machine-readable findings-emission contract presence in all
 // reviewer agent bodies (CLAUDE edition — .md bodies). Removing the emission section from

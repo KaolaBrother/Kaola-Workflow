@@ -424,17 +424,51 @@ function routeAdaptive(root, workflowDir, project) {
   };
 }
 
+// issue #283: Terminal-routine reconstruction — the shared Finalization step reached from any
+// full-path route (phase5-review.md complete → Finalization). Emits the route-neutral
+// finalization surface (stage: finalization / stage_name: Finalization /
+// next_command: /kaola-workflow-finalize) instead of the legacy phase: 6 / phase_name: Finalize /
+// next_command: /kaola-workflow-phase6. The crossesBoundary compliance gate is preserved.
+function routeFinalization(root, workflowDir, project, phaseFileName) {
+  const projectDir = path.join(workflowDir, project);
+  const phaseFile = path.join(projectDir, phaseFileName);
+  const content = readFile(phaseFile);
+  const stateFile = path.join(projectDir, 'workflow-state.md');
+  const stateContent = exists(stateFile) ? readFile(stateFile) : '';
+  const unresolved = unresolvedCompliance(content, stateContent);
+
+  if (unresolved.length > 0) {
+    return {
+      reason: 'unresolved compliance gates in ' + phaseFileName + ': ' + unresolved.map(function(row) { return row.requirement; }).join(', ')
+    };
+  }
+
+  return {
+    root,
+    project,
+    stage: 'finalization',
+    stageName: 'Finalization',
+    step: 'router-reconstructed',
+    task: 'N/A',
+    nextCommand: '/kaola-workflow-finalize ' + project,
+    nextSkill: 'kaola-workflow-finalize ' + project,
+    phaseFile,
+    pendingGates: unresolved,
+    isFinalization: true
+  };
+}
+
 function reconstruct(root, workflowDir, project) {
   const projectDir = path.join(workflowDir, project);
   const phase4 = artifact(projectDir, 'phase4-progress.md');
-  if (artifact(projectDir, 'phase6-summary.md')) return { complete: true, reason: 'phase6-summary.md exists; workflow is complete' };
+  if (artifact(projectDir, 'finalization-summary.md')) return { complete: true, reason: 'finalization-summary.md exists; workflow is complete' };
   // issue #227: adaptive plan caught ahead of the phaseN ladder (the ladder must not run).
   if (artifact(projectDir, 'workflow-plan.md')) return routeAdaptive(root, workflowDir, project);
   if (artifact(projectDir, 'phase5-review.md')) {
     if (phase4 && !allPhase4TasksComplete(readFile(phase4))) {
       return { reason: 'phase5-review.md exists but phase4-progress.md still has open tasks' };
     }
-    return route(root, workflowDir, project, 6, artifact(projectDir, 'phase5-review.md'), undefined, true);
+    return routeFinalization(root, workflowDir, project, 'phase5-review.md');
   }
   if (phase4) {
     const content = readFile(phase4);
@@ -468,6 +502,22 @@ function stateContent(routeResult, existingContent) {
   const preserved = ['GitLab', 'Sink']
     .map(section => extractSection(existingContent || '', section))
     .filter(Boolean);
+
+  // issue #283: finalization route emits stage:/stage_name: instead of phase:/phase_name:
+  const positionFields = routeResult.isFinalization
+    ? [
+        'stage: ' + routeResult.stage,
+        'stage_name: ' + routeResult.stageName
+      ]
+    : [
+        'phase: ' + routeResult.phase,
+        'phase_name: ' + routeResult.phaseName
+      ];
+
+  const fixOwner = (routeResult.isFinalization || (routeResult.phase >= 4 && routeResult.phase <= 6))
+    ? 'tdd-guide or build-error-resolver'
+    : 'N/A';
+
   const lines = [
     '# Kaola-Workflow State',
     '',
@@ -476,8 +526,7 @@ function stateContent(routeResult, existingContent) {
     'status: active',
     '',
     '## Current Position',
-    'phase: ' + routeResult.phase,
-    'phase_name: ' + routeResult.phaseName,
+    ...positionFields,
     ...(routeResult.workflowPath ? ['workflow_path: ' + routeResult.workflowPath] : []),
     'step: ' + routeResult.step,
     'task: ' + routeResult.task,
@@ -495,7 +544,7 @@ function stateContent(routeResult, existingContent) {
     '## Ownership Rules',
     'main_session_role: orchestrator',
     'implementation_owner: ' + (routeResult.phase === 4 ? 'tdd-guide' : 'N/A'),
-    'fix_owner: ' + (routeResult.phase >= 4 ? 'tdd-guide or build-error-resolver' : 'N/A'),
+    'fix_owner: ' + fixOwner,
     'inline_emergency_fallback_authorized: no',
     '',
     '## Last Evidence',
@@ -510,11 +559,63 @@ function stateContent(routeResult, existingContent) {
   return lines.concat('', preserved).join('\n') + '\n';
 }
 
+// issue #283: one-way in-flight migration. Rewrites legacy phase-6 surface in a single
+// NON-archived active project folder:
+//   - phase6-summary.md → finalization-summary.md (file rename)
+//   - workflow-state.md: phase: 6 → stage: finalization, phase_name: Finalize →
+//     stage_name: Finalization, next_command: /kaola-workflow-phase6 → /kaola-workflow-finalize
+// Run once before reconstruct() so the new readers find the canonical artifact names.
+// Never touches archive/ subdirectories.
+function migrateActiveLegacyFolder(workflowDir, project) {
+  const projectDir = path.join(workflowDir, project);
+  if (!exists(projectDir)) return;
+
+  // Rename phase6-summary.md → finalization-summary.md
+  const legacySummary = path.join(projectDir, 'phase6-summary.md');
+  const newSummary = path.join(projectDir, 'finalization-summary.md');
+  if (exists(legacySummary) && !exists(newSummary)) {
+    fs.renameSync(legacySummary, newSummary);
+  }
+
+  // Rewrite workflow-state.md legacy fields
+  const stateFile = path.join(projectDir, 'workflow-state.md');
+  if (!exists(stateFile)) return;
+  let content = readFile(stateFile);
+  let changed = false;
+
+  // phase: 6 → stage: finalization
+  if (/^phase:\s*6\s*$/m.test(content)) {
+    content = content.replace(/^phase:\s*6\s*$/m, 'stage: finalization');
+    changed = true;
+  }
+  // phase_name: Finalize → stage_name: Finalization
+  if (/^phase_name:\s*Finalize\s*$/m.test(content)) {
+    content = content.replace(/^phase_name:\s*Finalize\s*$/m, 'stage_name: Finalization');
+    changed = true;
+  }
+  // next_command: /kaola-workflow-phase6 {project} → /kaola-workflow-finalize {project}
+  if (/^next_command:\s*\/kaola-workflow-phase6\s+/m.test(content)) {
+    content = content.replace(
+      /^(next_command:\s*)\/kaola-workflow-phase6(\s+)/m,
+      '$1/kaola-workflow-finalize$2'
+    );
+    changed = true;
+  }
+
+  if (changed) {
+    fs.writeFileSync(stateFile, content);
+  }
+}
+
 function repair(projectArg, startDir) {
   const location = findWorkflowLocation(startDir || process.cwd());
   if (!location) return { repaired: false, reason: 'workflow directory not found' };
   const selected = selectProject(location.workflowDir, projectArg);
   if (!selected.project) return { repaired: false, reason: selected.reason };
+
+  // issue #283: one-way in-flight migration — rewrite legacy phase-6 names to
+  // finalization equivalents before reconstruct() runs so new readers find canonical names.
+  migrateActiveLegacyFolder(location.workflowDir, selected.project);
 
   const stateFilePath = path.join(location.workflowDir, selected.project, 'workflow-state.md');
   let existingContent = '';

@@ -29,8 +29,8 @@ function testFallbackGuardsAfterArchive() {
     fs.mkdirSync(liveDir, { recursive: true });
     fs.writeFileSync(path.join(liveDir, 'workflow-state.md'),
       '## Project\nname: fb-project\nstatus: active\n## Sink\nbranch: workflow/fb-project\nsink: merge\n');
-    fs.writeFileSync(path.join(liveDir, 'phase6-summary.md'),
-      '# Phase 6 Summary\n## Final Validation\nFinal Validation: pass\n');
+    fs.writeFileSync(path.join(liveDir, 'finalization-summary.md'),
+      '# Finalization Summary\n## Final Validation\nFinal Validation: pass\n');
 
     // Simulate cmdFinalize: archive the project dir
     fs.mkdirSync(path.join(tmpRoot, 'kaola-workflow', 'archive'), { recursive: true });
@@ -63,7 +63,7 @@ function testFallbackGuardsAfterArchive() {
     assert(!fs.existsSync(liveDir), 'live dir must not be recreated by sink-fallback');
 
     // Step 2: appendSummary on archived path — should return false, not recreate dir
-    const summaryFile = path.join(tmpRoot, 'kaola-workflow', 'fb-project', 'phase6-summary.md');
+    const summaryFile = path.join(tmpRoot, 'kaola-workflow', 'fb-project', 'finalization-summary.md');
     const appendResult = sinkMr.appendSummary(summaryFile, 'https://gl.example/mr/99', 99);
     assert.strictEqual(appendResult, false, 'appendSummary should return false on archived dir');
     assert(!fs.existsSync(path.join(tmpRoot, 'kaola-workflow', 'fb-project')),
@@ -498,9 +498,191 @@ function testGitlabDispatchHookExists() {
   console.log('testGitlabDispatchHookExists: PASSED');
 }
 
+// issue #283: repair-state must use finalization-summary.md (not phase6-summary.md) as the
+// completion signal, emit stage: finalization / stage_name: Finalization / next_command:
+// /kaola-workflow-finalize for the terminal routine, and the one-way migration must convert
+// a legacy active folder (phase6-summary.md→finalization-summary.md, state fields rewritten).
+function testRepairFinalizationRoute() {
+  const repairScript = path.join(root, 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-repair-state.js');
+  const { reconstruct } = require(repairScript);
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-repair-finalization-'));
+  const workflowDir = path.join(tmp, 'kaola-workflow');
+  fs.mkdirSync(workflowDir, { recursive: true });
+
+  function writeProject(projectName, files) {
+    const projectDir = path.join(workflowDir, projectName);
+    fs.mkdirSync(projectDir, { recursive: true });
+    for (const [name, content] of Object.entries(files)) {
+      fs.writeFileSync(path.join(projectDir, name), content);
+    }
+  }
+
+  function statePath(projectName) {
+    return path.join(workflowDir, projectName, 'workflow-state.md');
+  }
+
+  function readState(projectName) {
+    return fs.readFileSync(statePath(projectName), 'utf8');
+  }
+
+  try {
+    // --- R1: finalization-summary.md present → reconstruct reports complete ---
+    writeProject('fin-complete', {
+      'finalization-summary.md': '# Finalization Summary\n'
+    });
+    const finComplete = reconstruct(tmp, workflowDir, 'fin-complete');
+    assert.ok(finComplete.complete === true,
+      'R1: finalization-summary.md must be the completion signal, got: ' + JSON.stringify(finComplete));
+
+    // --- R2: ONLY phase6-summary.md present → reconstruct must NOT report complete ---
+    writeProject('legacy-complete', {
+      'phase6-summary.md': '# Phase 6 Summary\n'
+    });
+    const legacyComplete = reconstruct(tmp, workflowDir, 'legacy-complete');
+    assert.ok(legacyComplete.complete !== true,
+      'R2: phase6-summary.md alone must NOT be the completion signal (hard-removed), got: ' + JSON.stringify(legacyComplete));
+
+    // --- R3: phase5-review.md present (with compliance) → state must use finalization names ---
+    const phase5Content = [
+      '# Phase 5 - Review: fin-route',
+      '',
+      '## Required Agent Compliance',
+      '| Requirement | Status | Evidence | Skip Reason |',
+      '|-------------|--------|----------|-------------|',
+      '| code-reviewer | subagent-invoked | .cache/review.md | |',
+      ''
+    ].join('\n');
+    writeProject('fin-route', {
+      'phase5-review.md': phase5Content,
+      'phase4-progress.md': [
+        '# Phase 4',
+        '## Tasks',
+        '| # | Task | Status |',
+        '|---|------|--------|',
+        '| 1 | done | complete |',
+        ''
+      ].join('\n')
+    });
+    const r3 = spawnSync(process.execPath, [repairScript, 'fin-route'], {
+      cwd: tmp,
+      encoding: 'utf8',
+      env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
+    });
+    assert.strictEqual(r3.status, 0, 'R3: repair must exit 0 for fin-route, stderr: ' + r3.stderr);
+    const finRouteState = readState('fin-route');
+    assert.ok(finRouteState.includes('stage: finalization'),
+      'R3: repair must emit stage: finalization for terminal routine, got state:\n' + finRouteState);
+    assert.ok(finRouteState.includes('stage_name: Finalization'),
+      'R3: repair must emit stage_name: Finalization for terminal routine, got state:\n' + finRouteState);
+    assert.ok(finRouteState.includes('next_command: /kaola-workflow-finalize fin-route'),
+      'R3: repair must emit next_command: /kaola-workflow-finalize, got state:\n' + finRouteState);
+    assert.ok(!finRouteState.includes('phase: 6'),
+      'R3: repair must NOT emit phase: 6, got state:\n' + finRouteState);
+    assert.ok(!finRouteState.includes('next_command: /kaola-workflow-phase6'),
+      'R3: repair must NOT emit /kaola-workflow-phase6, got state:\n' + finRouteState);
+
+    // --- R4: one-way migration converts legacy active folder ---
+    writeProject('legacy-active', {
+      'phase6-summary.md': '# Phase 6 Summary\nLegacy content\n',
+      'workflow-state.md': [
+        '# Kaola-Workflow State',
+        '## Project',
+        'name: legacy-active',
+        'status: active',
+        '## Current Position',
+        'phase: 6',
+        'phase_name: Finalize',
+        'step: some-step',
+        'task: N/A',
+        'next_command: /kaola-workflow-phase6 legacy-active',
+        'next_skill: kaola-workflow-finalize legacy-active',
+        ''
+      ].join('\n')
+    });
+    const r4 = spawnSync(process.execPath, [repairScript, 'legacy-active'], {
+      cwd: tmp,
+      encoding: 'utf8',
+      env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
+    });
+    assert.strictEqual(r4.status, 0, 'R4: repair must exit 0 for legacy-active, stderr: ' + r4.stderr);
+    const migratedDir = path.join(workflowDir, 'legacy-active');
+    assert.ok(!fs.existsSync(path.join(migratedDir, 'phase6-summary.md')),
+      'R4: migration must remove phase6-summary.md from active folder');
+    assert.ok(fs.existsSync(path.join(migratedDir, 'finalization-summary.md')),
+      'R4: migration must create finalization-summary.md in active folder');
+    const migratedState = readState('legacy-active');
+    assert.ok(!migratedState.includes('phase: 6'),
+      'R4: migrated state must not contain phase: 6, got:\n' + migratedState);
+    assert.ok(!migratedState.includes('next_command: /kaola-workflow-phase6'),
+      'R4: migrated state must not contain /kaola-workflow-phase6, got:\n' + migratedState);
+
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log('testRepairFinalizationRoute: PASSED');
+}
+
+// issue #283: sink-mr must read/write finalization-summary.md (not phase6-summary.md).
+function testSinkMrUsesFinalizationSummary() {
+  const sinkMrScript = path.join(root, 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-sink-mr.js');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-sink-mr-fin-'));
+  try {
+    execFileSync('git', ['init', '-b', 'main'], { cwd: tmp, encoding: 'utf8' });
+    execFileSync('git', ['-C', tmp, 'config', 'user.email', 'test@example.com'], { encoding: 'utf8', stdio: 'pipe' });
+    execFileSync('git', ['-C', tmp, 'config', 'user.name', 'Test User'], { encoding: 'utf8', stdio: 'pipe' });
+    const kwDir = path.join(tmp, 'kaola-workflow', 'issue-2830');
+    fs.mkdirSync(kwDir, { recursive: true });
+    fs.writeFileSync(path.join(kwDir, 'workflow-state.md'), [
+      '# Kaola-Workflow State',
+      '## Project',
+      'name: issue-2830',
+      'status: active',
+      '## Sink',
+      'branch: workflow/issue-2830',
+      'issue_number: 2830',
+      'sink: merge',
+      ''
+    ].join('\n'));
+    // Plant finalization-summary.md (the new canonical file)
+    fs.writeFileSync(path.join(kwDir, 'finalization-summary.md'), '# Finalization Summary\n');
+    execFileSync('git', ['-C', tmp, 'add', '-A'], { encoding: 'utf8', stdio: 'pipe' });
+    execFileSync('git', ['-C', tmp, 'commit', '-m', 'initial'], { encoding: 'utf8', stdio: 'pipe' });
+
+    const result = spawnSync(process.execPath, [
+      sinkMrScript,
+      '--branch', 'workflow/issue-2830',
+      '--project', 'issue-2830',
+      '--issue', '2830'
+    ], {
+      cwd: tmp,
+      env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }),
+      encoding: 'utf8'
+    });
+    assert.strictEqual(result.status, 0,
+      'sink-mr (finalization-summary) offline should exit 0, got ' + result.status + '. stderr: ' + result.stderr);
+
+    // finalization-summary.md must exist and contain MR URL
+    const finSummaryPath = path.join(kwDir, 'finalization-summary.md');
+    assert.ok(fs.existsSync(finSummaryPath),
+      'sink-mr must write to finalization-summary.md, not phase6-summary.md');
+    const finContent = fs.readFileSync(finSummaryPath, 'utf8');
+    assert.ok(finContent.includes('MR URL:'),
+      'finalization-summary.md must contain MR URL after sink-mr, got: ' + finContent);
+
+    // phase6-summary.md must NOT be created
+    assert.ok(!fs.existsSync(path.join(kwDir, 'phase6-summary.md')),
+      'sink-mr must NOT create phase6-summary.md');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log('testSinkMrUsesFinalizationSummary: PASSED');
+}
+
 testFallbackGuardsAfterArchive();
 testAuditAndRepairLabels();
 testRepairFastEscalation();
+testRepairFinalizationRoute();
+testSinkMrUsesFinalizationSummary();
 testGitlabAdaptive();
 testGitlab237DotPathExtraction();
 testGitlabDispatchHookExists();

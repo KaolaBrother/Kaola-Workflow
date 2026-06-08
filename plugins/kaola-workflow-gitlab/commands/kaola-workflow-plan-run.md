@@ -270,7 +270,7 @@ re-run `join` (idempotent on already-merged members). `joined` → delete manife
    On `allDone`, route to Finalization (Completion below) — there is no node to dispatch.
    `allDone` is valid only after the mandatory `finalize` sink node itself has been closed.
    If `open-next` opens a node whose `role` is `finalize`, stay in the per-node loop and use
-   the finalize sink contract below instead of routing to Phase 6.
+   the finalize sink contract below instead of routing to Finalization.
 2. **dispatch** the node's role (main session — see above). Use the `model` returned by `open-next`
    for the node (or resolved via `scripts/kaola-workflow-resolve-agent-model.js <role>` on resume).
    **Special case — `role: finalize` sink:** `finalize` is the mandatory DAG sink, not a

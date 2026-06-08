@@ -33,7 +33,7 @@ kaola-workflow/{project}/phase4-progress.md
 2. Use the `code-reviewer` Codex agent role or `codex review` for a detached review pass. Record status as `subagent-invoked` in the compliance ledger if delegation occurred, `local-fallback-explicit` if the user explicitly authorized local execution, or `local-fallback-tool-unavailable` if the subagent tooling was unavailable.
 3. Check correctness, scope, naming, error handling, test coverage, debug statements, and validation evidence.
 4. Run a security-sensitive file scan. If auth, payments, user data, filesystem access, external APIs, or secrets changed, use the `security-reviewer` Codex agent role. Record status as `subagent-invoked` in the compliance ledger if delegation occurred, `local-fallback-explicit` if the user explicitly authorized local execution, or `local-fallback-tool-unavailable` if the subagent tooling was unavailable.
-5. Route CRITICAL/HIGH findings back to implementation before Phase 6. MEDIUM/LOW findings may become follow-ups. Route behavior/test/coverage corrections to the `tdd-guide` Codex agent role and build/type/lint/tooling corrections to the `build-error-resolver` Codex agent role; for a security-sensitive correction, re-run the `security-reviewer` Codex agent role after the fix. Record each fix-routing status as `subagent-invoked` in the compliance ledger if delegation occurred, `local-fallback-explicit` if the user explicitly authorized local execution, or `local-fallback-tool-unavailable` if the subagent tooling was unavailable. Save each fix-agent output to `.cache/review-fix-{n}.md`.
+5. Route CRITICAL/HIGH findings back to implementation before Finalization. MEDIUM/LOW findings may become follow-ups. Route behavior/test/coverage corrections to the `tdd-guide` Codex agent role and build/type/lint/tooling corrections to the `build-error-resolver` Codex agent role; for a security-sensitive correction, re-run the `security-reviewer` Codex agent role after the fix. Record each fix-routing status as `subagent-invoked` in the compliance ledger if delegation occurred, `local-fallback-explicit` if the user explicitly authorized local execution, or `local-fallback-tool-unavailable` if the subagent tooling was unavailable. Save each fix-agent output to `.cache/review-fix-{n}.md`.
 6. Save raw review output to `.cache/code-reviewer.md` and `.cache/security-reviewer.md` when used.
 
 ## Mechanical Review Finalization (delegated to the contractor)
@@ -50,7 +50,7 @@ and the `## Required Agent Compliance` rows, then advancing the
 (preserving the `## Sink` block) — is delegated to the mechanical `contractor`
 Codex agent role when that subagent is available; it authors the durable
 bookkeeping and transcribes the verdict verbatim but never judges severity,
-never grades the review, never gates Phase 6, never dispatches
+never grades the review, never gates Finalization, never dispatches
 code-reviewer/security-reviewer/tdd-guide/build-error-resolver or any role, and
 never asks the user. The current session keeps the review dispatches, the
 CRITICAL/HIGH triage, and the Review Status decision; it hands the decided

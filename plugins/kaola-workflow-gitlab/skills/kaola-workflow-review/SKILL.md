@@ -33,7 +33,7 @@ kaola-workflow/{project}/phase4-progress.md
 2. Use the `code-reviewer` Codex agent role or `codex review` for a detached review pass. Record status as `subagent-invoked` in the compliance ledger if delegation occurred, `local-fallback-explicit` if the user explicitly authorized local execution, or `local-fallback-tool-unavailable` if the subagent tooling was unavailable.
 3. Check correctness, scope, naming, error handling, test coverage, debug statements, and validation evidence.
 4. Run a security-sensitive file scan. If auth, payments, user data, filesystem access, external APIs, or secrets changed, use the `security-reviewer` Codex agent role. Record status as `subagent-invoked` in the compliance ledger if delegation occurred, `local-fallback-explicit` if the user explicitly authorized local execution, or `local-fallback-tool-unavailable` if the subagent tooling was unavailable.
-5. Route CRITICAL/HIGH findings back to implementation before Phase 6. MEDIUM/LOW findings may become follow-ups. Behavior/test fixes route to the `tdd-guide` Codex agent role; build/type/lint/tooling fixes route to the `build-error-resolver` Codex agent role; save each fix-agent output to `.cache/review-fix-*.md`.
+5. Route CRITICAL/HIGH findings back to implementation before Finalization. MEDIUM/LOW findings may become follow-ups. Behavior/test fixes route to the `tdd-guide` Codex agent role; build/type/lint/tooling fixes route to the `build-error-resolver` Codex agent role; save each fix-agent output to `.cache/review-fix-*.md`.
 6. Save raw review output to `.cache/code-reviewer.md` and `.cache/security-reviewer.md` when used.
 
 ## Mechanical Review Finalization

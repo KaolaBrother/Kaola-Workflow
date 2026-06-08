@@ -79,7 +79,7 @@ function setupRepoWithLiveFolderOnBranch(name, project) {
   git('add', path.join('kaola-workflow', project, 'workflow-state.md'));
   git('commit', '-m', 'accidentally committed live folder');
   git('checkout', 'main');
-  // main still has phase6-summary.md committed, so finalValidationPassed() passes.
+  // main still has finalization-summary.md committed, so finalValidationPassed() passes.
   return { root, branch };
 }
 
@@ -101,7 +101,7 @@ function writeWorkflow(root, project, issuePrNum, summary) {
     'sink: merge',
     ''
   ].join('\n'));
-  fs.writeFileSync(path.join(dir, 'phase6-summary.md'), summary || '# Phase 6\n\n## Final Validation\n\n- `npm test`: pass\n');
+  fs.writeFileSync(path.join(dir, 'finalization-summary.md'), summary || '# Finalization\n\n## Final Validation\n\n- `npm test`: pass\n');
   return dir;
 }
 
@@ -141,7 +141,7 @@ withForge({
   assert(state.includes('pr_url: https://gitea.example/group/project/pulls/8'));
   assert(state.includes('pr_number: 8'));
   assert(state.includes('full_name: group/project'));
-  const summary = fs.readFileSync(path.join(root, 'kaola-workflow', 'sink-project', 'phase6-summary.md'), 'utf8');
+  const summary = fs.readFileSync(path.join(root, 'kaola-workflow', 'sink-project', 'finalization-summary.md'), 'utf8');
   assert(summary.includes('PR URL: https://gitea.example/group/project/pulls/8'));
   assert(summary.includes('PR Number: 8'));
 });
@@ -207,7 +207,7 @@ assert.strictEqual(sinkPr.routePullRequestState({ state: 'merged' }), 'merged');
 // Test 5: closeLinkedIssue gate (final validation must pass)
 {
   const root = tempRoot('kw-gt-merge-gate-');
-  writeWorkflow(root, 'gate-project', 70, '# Phase 6\n\n## Final Validation\n\n- `npm test`: blocked\n');
+  writeWorkflow(root, 'gate-project', 70, '# Finalization\n\n## Final Validation\n\n- `npm test`: blocked\n');
   assert.throws(() => sinkMerge.closeLinkedIssue(root, 'gate-project', 70), /Final validation evidence/);
 }
 
@@ -312,7 +312,7 @@ withForge({
     'sink: merge',
     ''
   ].join('\n'));
-  fs.writeFileSync(path.join(dir, 'phase6-summary.md'), '# Phase 6\n\n## Final Validation\n\n- `npm test`: pass\n');
+  fs.writeFileSync(path.join(dir, 'finalization-summary.md'), '# Finalization\n\n## Final Validation\n\n- `npm test`: pass\n');
   const result = sinkMerge.runDirectMerge(
     { branch: 'workflow/fallback-proj', project: 'fallback-proj', issue: 100 },
     { root, skipGit: true }
@@ -347,7 +347,7 @@ withForge({
 {
   const root = tempRoot('kw-gt-appsum-archived-');
   try {
-    const summaryFile = path.join(root, 'kaola-workflow', 'gone-project', 'phase6-summary.md');
+    const summaryFile = path.join(root, 'kaola-workflow', 'gone-project', 'finalization-summary.md');
     const result = sinkPr.appendSummary(summaryFile, 'https://example/pr/1', 1);
     assert.strictEqual(result, false, 'appendSummary should return false when parent dir missing');
     assert(!fs.existsSync(path.dirname(summaryFile)), 'appendSummary must not create the parent directory');
@@ -361,7 +361,7 @@ withForge({
   const root = tempRoot('kw-gt-appsum-live-');
   try {
     fs.mkdirSync(path.join(root, 'kaola-workflow', 'live-project'), { recursive: true });
-    const summaryFile = path.join(root, 'kaola-workflow', 'live-project', 'phase6-summary.md');
+    const summaryFile = path.join(root, 'kaola-workflow', 'live-project', 'finalization-summary.md');
     const result = sinkPr.appendSummary(summaryFile, 'https://example/pr/2', 2);
     assert.strictEqual(result, true, 'appendSummary should return true when dir exists');
     const content = fs.readFileSync(summaryFile, 'utf8');
@@ -611,7 +611,7 @@ const sinkScript = path.join(__dirname, 'kaola-gitea-workflow-sink-merge.js');
   assert(state.includes('full_name: OFFLINE_PLACEHOLDER'), `offline-pr test: state must include 'full_name: OFFLINE_PLACEHOLDER'`);
   assert(state.includes('project_html_url: OFFLINE_PLACEHOLDER'), `offline-pr test: state must include 'project_html_url: OFFLINE_PLACEHOLDER'`);
 
-  const summaryFile = path.join(root, 'kaola-workflow', 'test-gt-offline-pr', 'phase6-summary.md');
+  const summaryFile = path.join(root, 'kaola-workflow', 'test-gt-offline-pr', 'finalization-summary.md');
   const summary = fs.readFileSync(summaryFile, 'utf8');
   assert(summary.includes('PR URL: OFFLINE_PLACEHOLDER'), `offline-pr test: summary must include 'PR URL: OFFLINE_PLACEHOLDER'`);
   assert(summary.includes('PR Number: 0'), `offline-pr test: summary must include 'PR Number: 0'`);

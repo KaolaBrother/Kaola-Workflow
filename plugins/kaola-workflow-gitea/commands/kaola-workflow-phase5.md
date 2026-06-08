@@ -35,7 +35,7 @@ kaola-workflow/{project}/phase4-progress.md
 - CRITICAL/HIGH review findings unresolved -> `route-review-fixes`
 - fix cache exists but reviewer not re-run -> `re-review`
 - `phase5-review.md` missing -> `write-phase-file`
-- `phase5-review.md` complete -> route to `/kaola-workflow-phase6 {project}`
+- `phase5-review.md` complete -> route to `/kaola-workflow-finalize {project}`
 
 If ambiguous, stop and ask.
 
@@ -49,7 +49,7 @@ If ambiguous, stop and ask.
 - Review fixes are subagent-executed. Do not apply review fixes inline unless
   the Trivial Inline Edit Exception applies or explicit emergency fallback
   authorization is recorded.
-- CRITICAL and HIGH findings block Phase 6.
+- CRITICAL and HIGH findings block Finalization.
 
 ## Agent Model Badge
 
@@ -121,7 +121,7 @@ Avoid redundant validation runs.
 - If the same command already passed against the same relevant file set and no
   relevant files changed afterward, cite the prior evidence path instead of
   rerunning it.
-- Leave full fresh validation to Phase 6.
+- Leave full fresh validation to Finalization.
 
 ## Trivial Inline Edit Exception
 
@@ -216,7 +216,7 @@ If security review is not needed, record `N/A` with the file-risk scan evidence.
 Route findings:
 
 - CRITICAL -> delegate fix immediately, re-run relevant reviewer
-- HIGH -> delegate fix before Phase 6
+- HIGH -> delegate fix before Finalization
 - MEDIUM/LOW -> log as follow-up; does not block
 
 If CRITICAL findings exist, consult the configured Claude Code advisor and save:
@@ -253,7 +253,7 @@ CRITICAL/HIGH triage are the main session's **judgment**: the main session reads
 `.cache/code-reviewer.md`, `.cache/security-reviewer.md`, and every
 `.cache/review-fix-*.md`, decides whether any CRITICAL or HIGH finding remains
 unresolved, and DECIDES the verdict. The contractor never judges severity, never
-grades the review, and never gates Phase 6 — it only transcribes the verdict the
+grades the review, and never gates Finalization — it only transcribes the verdict the
 main session hands it, verbatim.
 
 Once the verdict is decided, summon the contractor to author `phase5-review.md`
@@ -266,7 +266,7 @@ Agent(
   subagent_type="contractor",
   model="{CONTRACTOR_MODEL}",
   description="Mechanical review finalize {project}",
-  prompt="Run the mechanical review-finalization bookkeeping for {project}. Execute Step 4 below exactly as written in this command file: author kaola-workflow/{project}/phase5-review.md from the template, then update workflow-state.md (phase: 5 / step: complete / next_command: /kaola-workflow-phase6 {project}), PRESERVING any existing ## Sink block byte-for-byte. Write the Review Status verdict, the CRITICAL/HIGH/MEDIUM/LOW finding lists, the Required Agent Compliance rows, fixes-applied, validation evidence, and follow-up items EXACTLY as the orchestrator hands them to you — copy the verdict verbatim; do NOT restate, soften, upgrade, or re-grade it, and do NOT decide severity or whether the review passed. Read the .cache evidence paths the orchestrator names only to transcribe file lists and evidence paths. Return a compact bookkeeping summary; do NOT dispatch code-reviewer/security-reviewer/tdd-guide/build-error-resolver or any role, do NOT judge or triage findings, do NOT route or apply fixes, do NOT act as a review gate, do NOT close the issue, and do NOT ask the user."
+  prompt="Run the mechanical review-finalization bookkeeping for {project}. Execute Step 4 below exactly as written in this command file: author kaola-workflow/{project}/phase5-review.md from the template, then update workflow-state.md (phase: 5 / step: complete / next_command: /kaola-workflow-finalize {project}), PRESERVING any existing ## Sink block byte-for-byte. Write the Review Status verdict, the CRITICAL/HIGH/MEDIUM/LOW finding lists, the Required Agent Compliance rows, fixes-applied, validation evidence, and follow-up items EXACTLY as the orchestrator hands them to you — copy the verdict verbatim; do NOT restate, soften, upgrade, or re-grade it, and do NOT decide severity or whether the review passed. Read the .cache evidence paths the orchestrator names only to transcribe file lists and evidence paths. Return a compact bookkeeping summary; do NOT dispatch code-reviewer/security-reviewer/tdd-guide/build-error-resolver or any role, do NOT judge or triage findings, do NOT route or apply fixes, do NOT act as a review gate, do NOT close the issue, and do NOT ask the user."
 )
 ```
 
@@ -316,5 +316,5 @@ Update `workflow-state.md`:
 ```text
 phase: 5
 step: complete
-next_command: /kaola-workflow-phase6 {project}
+next_command: /kaola-workflow-finalize {project}
 ```

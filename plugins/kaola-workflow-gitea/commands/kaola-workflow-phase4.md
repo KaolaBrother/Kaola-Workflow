@@ -23,7 +23,7 @@ ACTIVE_WORKTREE_PATH="$(node -e "try{const fs=require('fs');const s=fs.readFileS
 export ACTIVE_WORKTREE_PATH
 ```
 
-All subsequent `git -C`, `cp`, and path operations in Phase 4 use `$ACTIVE_WORKTREE_PATH` as the working root for issue-branch changes. It is read from the `worktree_path` the claim recorded in `workflow-state.md` (the same source Phase 6 uses), so it honors whatever the claim actually provisioned. When the claim recorded no worktree — `KAOLA_WORKTREE_NATIVE=0`, an offline run, or no git history — `worktree_path` is empty and `ACTIVE_WORKTREE_PATH` falls back to the current directory (a repo-root run).
+All subsequent `git -C`, `cp`, and path operations in Phase 4 use `$ACTIVE_WORKTREE_PATH` as the working root for issue-branch changes. It is read from the `worktree_path` the claim recorded in `workflow-state.md` (the same source Finalization uses), so it honors whatever the claim actually provisioned. When the claim recorded no worktree — `KAOLA_WORKTREE_NATIVE=0`, an offline run, or no git history — `worktree_path` is empty and `ACTIVE_WORKTREE_PATH` falls back to the current directory (a repo-root run).
 
 ## Prerequisite
 
@@ -142,7 +142,7 @@ Avoid redundant validation runs.
   rerunning it.
 - After any routed fix or Trivial Inline Edit Exception edit, rerun only the
   affected command unless the fix changes shared infrastructure.
-- Reserve full-suite validation for Phase 6 unless Phase 3 lists it as the
+- Reserve full-suite validation for Finalization unless Phase 3 lists it as the
   task-level validation command.
 
 ## Trivial Inline Edit Exception

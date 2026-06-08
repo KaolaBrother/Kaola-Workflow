@@ -45,12 +45,12 @@ All forge API calls made by `ghExec`, `glabExec`, and `teaExec` subprocess wrapp
 
 ## Sink API
 
-The Phase 6 sink is responsible for delivering completed work to the repository and updating GitHub, GitLab, or Gitea metadata.
+The Finalization sink is responsible for delivering completed work to the repository and updating GitHub, GitLab, or Gitea metadata.
 
 ### Merge Sink
 
 - **Script**: `kaola-workflow-sink-merge.js` (GitHub) / `kaola-gitlab-workflow-sink-merge.js` (GitLab) / `kaola-gitea-workflow-sink-merge.js` (Gitea)
-- **Invocation**: Called from Phase 6 Step 9 when `sink: merge` is configured
+- **Invocation**: Called from Finalization Step 9 when `sink: merge` is configured
 - **Contract**: Atomic fetch, rebase onto `origin/main`, fast-forward merge with race-condition retry (MAX_AUTOMERGE_RETRIES=3), branch deletion, and issue closure
   - GitHub: uses `gh` CLI
   - GitLab: uses `glab` CLI and GitLab forge API
@@ -90,7 +90,7 @@ The Phase 6 sink is responsible for delivering completed work to the repository 
 ### PR Sink
 
 - **Script**: `kaola-workflow-sink-pr.js` (GitHub) / `kaola-gitlab-workflow-sink-mr.js` (GitLab) / `kaola-gitea-workflow-sink-pr.js` (Gitea)
-- **Invocation**: Called from Phase 6 Step 9 when `sink: pr` is configured, or auto-fallback from merge sink exit 3
+- **Invocation**: Called from Finalization Step 9 when `sink: pr` is configured, or auto-fallback from merge sink exit 3
 - **Contract**: Push branch, create PR/MR via `gh pr create` (GitHub), `glab mr create` (GitLab), or `tea pr create` (Gitea), record PR URL and number in workflow-state.md `## Sink` block, then create deliberate metadata follow-up commit (`chore: record PR metadata for {project}`) to leave worktree clean
 - **Exit codes**:
   - `0`: PR/MR created successfully, metadata commit written, worktree clean
@@ -222,14 +222,14 @@ kaola-workflow-plan-validator.js <workflow-plan.md> [--json] [--freeze] [--resum
 - **default** — Validate and print the governance verdict. In-grammar prints `in-grammar: auto-run` or `in-grammar: ask — <reasons>`; out of grammar prints `typed refusal (out of grammar): <errors>`.
 - **`--freeze`** — Validate, and if in-grammar, compute the `plan_hash` and write it into the plan file as an HTML comment. Prints `frozen (<decision>) plan_hash=<sha256>` on success. After freeze the plan's `## Meta` + `## Nodes` are author-immutable.
 - **`--resume-check`** — Re-validate **only** closed-library membership, structural grammar, and `plan_hash` integrity — **not** the full gate rubric (re-running it would brick an in-flight plan if the rubric tightened after freeze). Prints `resume ok` or `typed refusal: <reason>`.
-- **`--gate-verify`** (issue #231) — Verify gate **execution** over the `## Node Ledger`: a *completed* `code-reviewer` must post-dominate every completed code-producing node (G1) and a *completed* `security-reviewer` every completed sensitive node (G2). A required reviewer left pending or marked `n/a` while a node it covers is `complete` is an unsatisfied gate. PURE + toggle-agnostic (reads parsed nodes + ledger only). Prints `gate execution verified` or `typed refusal: <unsatisfied>`. Surfaced non-blocking by `routeAdaptive` (as `pendingGates`) and enforced as a hard merge gate in Phase 6.
+- **`--gate-verify`** (issue #231) — Verify gate **execution** over the `## Node Ledger`: a *completed* `code-reviewer` must post-dominate every completed code-producing node (G1) and a *completed* `security-reviewer` every completed sensitive node (G2). A required reviewer left pending or marked `n/a` while a node it covers is `complete` is an unsatisfied gate. PURE + toggle-agnostic (reads parsed nodes + ledger only). Prints `gate execution verified` or `typed refusal: <unsatisfied>`. Surfaced non-blocking by `routeAdaptive` (as `pendingGates`) and enforced as a hard merge gate in Finalization.
 - **`--record-base --node-id ID`** (issue #239) — Snapshot the **full worktree** (tracked + untracked, honoring `.gitignore`) as node `ID`'s per-instance baseline at node start, via a throwaway index (`git add -A` into a temp `GIT_INDEX_FILE` outside the repo → `git write-tree`), and store the tree SHA in `.cache/barrier-base-<id>`. **Idempotent**: if a baseline already exists for the node it is *reused* (`reused: true`), so a crash + re-dispatch or a consent-halt re-entry never re-snapshots a now-dirty tree and launders the crashed attempt's writes. Refuses without `--node-id`. Prints `recorded base <tree> for node <id>` / `reused base …`.
 - **`--barrier-check [--node-id ID] [--base REF]`** (issue #231; per-node tree-diff #239) — Re-scan the files actually written and refuse on (a) a Phase-5 **sensitive** actual write when the plan has no `security-reviewer` node (closes H1), (b) an out-of-**allowlist** production write — a non-docs, non-test, non-`kaola-workflow/` write not in the allowlist (closes H3), or (c) a **foreign-project archive** write — an actual write under `kaola-workflow/archive/<X>/` whose `<X>` is neither the finalized project nor its `<project>.archived-<ts>` collision-rename (issue #261). Fix (c) scopes the otherwise-blanket `kaola-workflow/` artifact exemption so a stray cross-issue `archive/<other>/` folder cannot reach a protected branch undetected; the finalized project is `opts.project`, threaded from the validator's `projTag` (the basename of the directory holding `workflow-plan.md`), and the check is fail-closed (absent project ⇒ any archive write is treated as foreign). Two modes:
-  - **Whole-plan** (no `--node-id`, the Phase-6 merge gate): `git diff --name-only` vs the merge-base of `HEAD` and `--base` (default `origin/main`; cumulative, so committed sensitive writes are not invisible), allowlist = the **union** of all declared write sets, plus the v3.20.1 ledger-consistency floor.
+  - **Whole-plan** (no `--node-id`, the Finalization merge gate): `git diff --name-only` vs the merge-base of `HEAD` and `--base` (default `origin/main`; cumulative, so committed sensitive writes are not invisible), allowlist = the **union** of all declared write sets, plus the v3.20.1 ledger-consistency floor.
   - **Per-node** (`--node-id ID`): tree-diff (`git diff-tree`) the current full-worktree snapshot against the node's **recorded node-start snapshot** (`--record-base`), so it attributes **exactly this node's own changes** — new / modified / deleted, tracked or untracked — without over-attributing prior nodes' still-uncommitted source or pre-existing strays, and checks them against the node's **own** declared write set. `--base` is **rejected** here (the baseline is the recorded snapshot; honoring `--base HEAD` after a commit would empty the diff and neuter the gate); fail-closed if no base was recorded.
 
   PURE core (`barrierCheck(content, actualPaths, opts)`); only the CLI shells out to git, failing closed (typed refusal) on any git error. Prints `barrier ok` or `typed refusal: <errors>`.
-- **`--verdict-check [--node-id ID]`** (issue #251) — Verify that every completed gate-role node's `.cache` evidence file carries `verdict: pass` and `findings_blocking: 0`. Exit 1 on any failure. Per-node (`--node-id ID`): checks one node; non-gate roles self-skip (exit 0, `ok: true`). Whole-plan (no `--node-id`): checks all completed gate-role nodes in the ledger; an `adversarial-verifier` fan-out applies majority-refute over sibling per-instance `.cache/adversarial-verifier-*.md` files. PURE + toggle-agnostic. Wired informational per-node in `kaola-workflow-commit-node.js` and enforced as a hard merge gate in Phase 6. Prints `verdict ok` or `typed refusal: verdict-check failed`.
+- **`--verdict-check [--node-id ID]`** (issue #251) — Verify that every completed gate-role node's `.cache` evidence file carries `verdict: pass` and `findings_blocking: 0`. Exit 1 on any failure. Per-node (`--node-id ID`): checks one node; non-gate roles self-skip (exit 0, `ok: true`). Whole-plan (no `--node-id`): checks all completed gate-role nodes in the ledger; an `adversarial-verifier` fan-out applies majority-refute over sibling per-instance `.cache/adversarial-verifier-*.md` files. PURE + toggle-agnostic. Wired informational per-node in `kaola-workflow-commit-node.js` and enforced as a hard merge gate in Finalization. Prints `verdict ok` or `typed refusal: verdict-check failed`.
 - **`--selector-check --node-id ID`** (issue #263) — Check which `select` arm the `selector_source` node chose and compute which arms to mark `n/a`. Requires `--node-id`. Non-selector nodes (not a `selector_source` of any group) return `{ ok: true, isSelector: false, armsToNa: [] }` and exit 0 — never false-blocks. A `selector_source` node with a missing or foreign `selector: <arm-id>` value in its `.cache/<id>.md` evidence returns `{ ok: false, isSelector: true, errors: [...] }` and exits 1 (fail-closed, blocking the commit). Success: `{ ok: true, isSelector: true, selected: "<arm-id>", group: "<group>", armsToNa: ["<arm-id>", ...] }`. The caller (contractor) transcribes `armsToNa` into `n/a` ledger rows; `next-action.js` treats `n/a` arms as terminal so only the selected arm becomes ready. Wired BLOCKING per-node in `kaola-workflow-commit-node.js`.
 - **`--json`** — Emit the machine-readable result object (below) instead of the human line; composes with any mode.
 - **`--help` / `-h` / no args** — Print usage and exit 0.
@@ -274,7 +274,7 @@ kaola-workflow-plan-validator.js <workflow-plan.md> [--json] [--freeze] [--resum
 
 ## Adaptive Executor Aggregators (issue #242 Part B, wired in Stage C)
 
-These two scripts form the atomicity interface for the adaptive executor. They are wired into the per-node loop of `kaola-workflow-plan-run`, **run by the `contractor`** (v5.0.0 intent realignment — the main session is not exposed to the loop scripts; v4.1.0's "aggregator-direct" wiring was reversed): the contractor runs `kaola-workflow-next-action.js` for the ready set and `kaola-workflow-commit-node.js --node-id X --start` / `--node-id X` for the per-node *advance* and *commit* brackets, returning the ready set + barrier exit code to the Opus main session, which dispatches the role and owns the consent-halt decision. The aggregator's **whole-plan** mode (no `--node-id`) is exercised by unit tests only; Phase 6 runs its merge gate by calling the plan-validator directly (this preserves the `--resume-check`/`plan_hash` integrity check that the whole-plan barrier does not run), not via the aggregator. Both ship in all four editions (canonical `scripts/`, Codex copy, and forge-named GitLab/Gitea ports); all are registered in `validate-script-sync.js` and the three `install.sh` SUPPORT_SCRIPT_NAMES blocks.
+These two scripts form the atomicity interface for the adaptive executor. They are wired into the per-node loop of `kaola-workflow-plan-run`, **run by the `contractor`** (v5.0.0 intent realignment — the main session is not exposed to the loop scripts; v4.1.0's "aggregator-direct" wiring was reversed): the contractor runs `kaola-workflow-next-action.js` for the ready set and `kaola-workflow-commit-node.js --node-id X --start` / `--node-id X` for the per-node *advance* and *commit* brackets, returning the ready set + barrier exit code to the Opus main session, which dispatches the role and owns the consent-halt decision. The aggregator's **whole-plan** mode (no `--node-id`) is exercised by unit tests only; Finalization runs its merge gate by calling the plan-validator directly (this preserves the `--resume-check`/`plan_hash` integrity check that the whole-plan barrier does not run), not via the aggregator. Both ship in all four editions (canonical `scripts/`, Codex copy, and forge-named GitLab/Gitea ports); all are registered in `validate-script-sync.js` and the three `install.sh` SUPPORT_SCRIPT_NAMES blocks.
 
 ### Script: `kaola-workflow-next-action.js`
 
@@ -291,7 +291,7 @@ node scripts/kaola-workflow-next-action.js <plan-path> --json
 - Parses `## Nodes` and `## Node Ledger` from the plan file.
 - Validates every ledger status present is in the `LEDGER_STATUSES` enum; absent nodes default to `pending`.
 - Computes the ready-set in document order: a node is ready iff its own status is not in `{complete, n/a}` and every `depends_on` entry has status in `{complete, n/a}` (n/a-aware predicate).
-- `allDone:true` (empty ready-set, all nodes terminal) is the Phase-6 handoff signal — `result:'ok'`, exit 0.
+- `allDone:true` (empty ready-set, all nodes terminal) is the Finalization handoff signal — `result:'ok'`, exit 0.
 - Empty ready-set while at least one node is non-terminal = stalled DAG — `result:'refuse'`, exit 1.
 - Always emits JSON to stdout. The `--json` flag is conventional (matches usage text) but output is always JSON.
 
@@ -354,7 +354,7 @@ node scripts/kaola-workflow-commit-node.js <plan-path> --node-id <id> --start --
 # Per-node end — barrier-check (blocking) + gate-verify (informational)
 node scripts/kaola-workflow-commit-node.js <plan-path> --node-id <id> --json
 
-# Whole-plan — barrier-check + gate-verify (both blocking, Phase-6 merge gate)
+# Whole-plan — barrier-check + gate-verify (both blocking, Finalization merge gate)
 node scripts/kaola-workflow-commit-node.js <plan-path> --json
 ```
 
@@ -439,7 +439,7 @@ When a `selector_source` node completes, the contractor reads `selectorCheck` fr
 `next-action` treats `complete` and `n/a` as the TERMINAL set:
 
 - **`depends_on` predicate**: a node whose `depends_on` names an n/a arm is unblocked — the skipped arm satisfies the join as though completed.
-- **`allDone` predicate**: n/a arms count toward plan completion; once the selected arm reaches `complete` and all skipped arms carry `n/a`, `allDone` becomes `true` and the plan routes to Phase 6.
+- **`allDone` predicate**: n/a arms count toward plan completion; once the selected arm reaches `complete` and all skipped arms carry `n/a`, `allDone` becomes `true` and the plan routes to Finalization.
 
 ### Resume re-entry
 
@@ -449,7 +449,7 @@ On resume, the `## Node Ledger` n/a rows are already written (durable). `next-ac
 
 The `contractor` is a mechanical Sonnet agent registered across all four editions. It is the bookkeeper half of the lean-orchestrator design. As of Stage D (issue #242 Part B complete) the contractor is dispatched at **both** fuzzy/bulky seams:
 
-- **Phase 6** (Stage C): Opus delegates the mechanical finalization block (Step 8a artifact mirror, `cmdFinalize` archive, roadmap regen, the `chore: finalize` commit gate) to the contractor, then resumes at Step 9 (the sink: merge/PR), the issue-close decision, and all governance.
+- **Finalization** (Stage C): Opus delegates the mechanical finalization block (Step 8a artifact mirror, `cmdFinalize` archive, roadmap regen, the `chore: finalize` commit gate) to the contractor, then resumes at Step 9 (the sink: merge/PR), the issue-close decision, and all governance.
 - **Phase 1 / research** (Stage D): `kaola-workflow-phase1` (the research/scout phase) delegates its deterministic mechanical bookkeeping — the `workflow-state.md` checkpoint write (preserving the `## Sink` block byte-for-byte) and the per-issue roadmap `init-issue` staging — to the contractor. Opus retains the research dispatches (code-explorer/docs-lookup), the completeness gate, the **`phase1-research.md` synthesis** (interpretation of findings — the contractor never authors this), and the Step 6 branch cut (git mutation).
 
 The per-node executor loop does **not** go through the contractor — see § Adaptive Executor Aggregators above.
@@ -730,7 +730,7 @@ The following functions are exported from sink and claim modules for use by test
 - `classifyMergeError(error)` — Classifies a push/merge error (same contract as GitHub). Additionally respects `KAOLA_WORKFLOW_FORCE_MERGE_IMPOSSIBLE` test hook for deterministic merge-impossible simulation.
 - `closeLinkedIssue(root, project, issueIid, opts)` — GitLab-specific function to close a linked issue after merge. Used in test scenarios.
 - `fastForwardMain(args, opts)` — Legacy single-pass merge implementation (used by tests).
-- `finalValidationPassed(root, project)` — Checks `phase6-summary.md` for final validation evidence. Required before direct merge runs.
+- `finalValidationPassed(root, project)` — Checks `finalization-summary.md` for final validation evidence. Required before direct merge runs.
 - `runDirectMerge(args, opts)` — Main entry point for the direct merge pipeline. Performs all 9 steps (fetch, rebase, FF retry, test, push, close issue, delete branch).
 
 **`plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js`:**
@@ -771,12 +771,12 @@ The following functions are exported from sink and claim modules for use by test
 **`plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-sink-pr.js`:**
 - `ensurePullRequest(args, opts)` — Create or reuse a pull request. Returns `{pr, project}` with PR metadata (url, number, state, source_branch) and project info (full_name, html_url). Automatically updates `workflow-state.md` Sink block with pr_url, pr_number, full_name, and project_html_url.
 - **Exit codes**:
-  - `0`: PR created/reused successfully, metadata recorded in workflow-state.md and phase6-summary.md
+  - `0`: PR created/reused successfully, metadata recorded in workflow-state.md and finalization-summary.md
 
 **`plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-sink-merge.js`:**
 - `ensureMergeReady(args, opts)` — Validate final merge conditions and execute the merge pipeline. Returns merge result with exit code.
 - `readProjectInfo(root, project)` — Read project full_name and html_url from workflow-state.md, with fallback to `discoverProject()` from git remote.
-- `finalValidationPassed(root, project)` — Check if phase6-summary.md contains passing final validation evidence.
+- `finalValidationPassed(root, project)` — Check if finalization-summary.md contains passing final validation evidence.
 - **Exit codes**:
   - `0`: merge succeeded, branch pushed, issue closed, worktree cleaned
   - `2`: fast-forward race condition exhausted after MAX_AUTOMERGE_RETRIES attempts

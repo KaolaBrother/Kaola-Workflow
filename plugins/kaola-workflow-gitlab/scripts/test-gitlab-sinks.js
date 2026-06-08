@@ -78,7 +78,7 @@ function setupRepoWithLiveFolderOnBranch(name, project) {
   git('add', path.join('kaola-workflow', project, 'workflow-state.md'));
   git('commit', '-m', 'accidentally committed live folder');
   git('checkout', 'main');
-  // main still has phase6-summary.md committed, so finalValidationPassed() passes.
+  // main still has finalization-summary.md committed, so finalValidationPassed() passes.
   return { root, branch };
 }
 
@@ -104,7 +104,7 @@ function writeWorkflow(root, project, issueIid, summary) {
     'sink: merge',
     ''
   ].join('\n'));
-  fs.writeFileSync(path.join(dir, 'phase6-summary.md'), summary || '# Phase 6\n\n## Final Validation\n\n- `npm test`: pass\n');
+  fs.writeFileSync(path.join(dir, 'finalization-summary.md'), summary || '# Finalization\n\n## Final Validation\n\n- `npm test`: pass\n');
   return dir;
 }
 
@@ -139,7 +139,7 @@ withForge({
   assert(state.includes('sink: mr'));
   assert(state.includes('mr_url: https://gitlab.example/group/project/-/merge_requests/8'));
   assert(state.includes('mr_iid: 8'));
-  const summary = fs.readFileSync(path.join(root, 'kaola-workflow', 'sink-project', 'phase6-summary.md'), 'utf8');
+  const summary = fs.readFileSync(path.join(root, 'kaola-workflow', 'sink-project', 'finalization-summary.md'), 'utf8');
   assert(summary.includes('MR URL: https://gitlab.example/group/project/-/merge_requests/8'));
   assert(summary.includes('MR IID: 8'));
 });
@@ -196,7 +196,7 @@ assert.strictEqual(sinkMr.routeMergeRequestState({ state: 'merged' }), 'merged')
 
 {
   const root = tempRoot('kw-gl-merge-gate-');
-  writeWorkflow(root, 'gate-project', 70, '# Phase 6\n\n## Final Validation\n\n- `npm test`: blocked\n');
+  writeWorkflow(root, 'gate-project', 70, '# Finalization\n\n## Final Validation\n\n- `npm test`: blocked\n');
   assert.throws(() => sinkMerge.closeLinkedIssue(root, 'gate-project', 70), /Final validation evidence/);
 }
 
@@ -288,7 +288,7 @@ withForge({
   // Bug 3: appendSummary returns false when parent dir doesn't exist (archived)
   const root = tempRoot('kw-gl-appsum-archived-');
   try {
-    const summaryFile = path.join(root, 'kaola-workflow', 'gone-project', 'phase6-summary.md');
+    const summaryFile = path.join(root, 'kaola-workflow', 'gone-project', 'finalization-summary.md');
     // Parent dir does NOT exist
     const result = sinkMr.appendSummary(summaryFile, 'https://example/mr/1', 1);
     assert.strictEqual(result, false, 'appendSummary should return false when parent dir missing');
@@ -304,7 +304,7 @@ withForge({
   const root = tempRoot('kw-gl-appsum-live-');
   try {
     fs.mkdirSync(path.join(root, 'kaola-workflow', 'live-project'), { recursive: true });
-    const summaryFile = path.join(root, 'kaola-workflow', 'live-project', 'phase6-summary.md');
+    const summaryFile = path.join(root, 'kaola-workflow', 'live-project', 'finalization-summary.md');
     const result = sinkMr.appendSummary(summaryFile, 'https://example/mr/2', 2);
     assert.strictEqual(result, true, 'appendSummary should return true when dir exists');
     const content = fs.readFileSync(summaryFile, 'utf8');
@@ -645,7 +645,7 @@ withForge({
   assert(state.includes('mr_url: OFFLINE_PLACEHOLDER'), `offline-mr test: state must include 'mr_url: OFFLINE_PLACEHOLDER'`);
   assert(state.includes('mr_iid: 0'), `offline-mr test: state must include 'mr_iid: 0'`);
 
-  const summaryFile = path.join(root, 'kaola-workflow', 'test-gl-offline-mr', 'phase6-summary.md');
+  const summaryFile = path.join(root, 'kaola-workflow', 'test-gl-offline-mr', 'finalization-summary.md');
   const summary = fs.readFileSync(summaryFile, 'utf8');
   assert(summary.includes('MR URL: OFFLINE_PLACEHOLDER'), `offline-mr test: summary must include 'MR URL: OFFLINE_PLACEHOLDER'`);
   assert(summary.includes('MR IID: 0'), `offline-mr test: summary must include 'MR IID: 0'`);

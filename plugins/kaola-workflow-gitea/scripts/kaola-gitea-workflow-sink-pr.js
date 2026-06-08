@@ -131,7 +131,7 @@ function ensurePullRequest(args, opts) {
       name: 'PLACEHOLDER'
     };
     const stateFile = path.join(root, 'kaola-workflow', args.project, 'workflow-state.md');
-    const summaryFile = path.join(root, 'kaola-workflow', args.project, 'phase6-summary.md');
+    const summaryFile = path.join(root, 'kaola-workflow', args.project, 'finalization-summary.md');
     updateStateSinkBlock(stateFile, prUrl, prNumber, project.full_name, project.html_url);
     appendSummary(summaryFile, prUrl, prNumber);
     const relState = path.relative(root, stateFile);
@@ -166,7 +166,7 @@ function ensurePullRequest(args, opts) {
   assert(pr.pr_url || pr.web_url, 'Gitea PR creation did not return a URL');
 
   const stateFile = path.join(root, 'kaola-workflow', args.project, 'workflow-state.md');
-  const summaryFile = path.join(root, 'kaola-workflow', args.project, 'phase6-summary.md');
+  const summaryFile = path.join(root, 'kaola-workflow', args.project, 'finalization-summary.md');
   updateStateSinkBlock(stateFile, pr.pr_url || pr.web_url, pr.pr_number, project.full_name, project.html_url);
   appendSummary(summaryFile, pr.pr_url || pr.web_url, pr.pr_number);
   if (!skipMetadataCommit) {

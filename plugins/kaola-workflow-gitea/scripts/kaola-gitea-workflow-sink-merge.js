@@ -66,7 +66,7 @@ function readProjectInfo(root, project) {
 }
 
 function finalValidationPassed(root, project) {
-  const summaryFile = resolveProjectFile(root, project, 'phase6-summary.md');
+  const summaryFile = resolveProjectFile(root, project, 'finalization-summary.md');
   let summary = '';
   try { summary = fs.readFileSync(summaryFile, 'utf8'); } catch (_) { return false; }
   return /Final Validation/i.test(summary) && /pass/i.test(summary) && !/blocked|failed/i.test(summary);
