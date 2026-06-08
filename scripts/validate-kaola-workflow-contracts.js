@@ -89,6 +89,8 @@ for (const skill of skills) {
   assertIncludes(file, 'kaola-workflow/');
   for (const token of retired) assertNotIncludes(file, token);
 }
+// #287: planner-first control boundary pinned across all editions
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'planner_control_boundary_violation');
 
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'active folders');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, '--target-issue');

@@ -85,6 +85,8 @@ freshness-block release no longer guards this path, and gating up front leaves n
 Once main is clean, **summon the `workflow-planner`** — it claims, authors `workflow-plan.md`, runs
 the validator `--json` as a self-check, and RETURNS a structured summary; it never JUDGES risk or asks the user (decision:ask is recorded metadata); it RUNS the handoff, which freezes mechanically, and returns the packet; it never dispatches.
 
+**Planner-first control boundary (issue #287).** The main session performs ONLY the allowed non-design preflight above (read repo/session rules, confirm target issue, authoring-allowed switch check, git freshness, non-design target availability), then dispatches `workflow-planner` immediately as the first issue-specific action. The main session MUST NOT pre-author the `## Nodes` DAG, choose role sequence/deps/shapes/write-sets, or pass a mandatory full DAG / `AUTHOR EXACTLY` / `do not redesign` prompt to the planner — the adaptive front-end design is the planner's to own, not the main session's. Doing so earns a typed refusal: `planner_control_boundary_violation`. The ONLY exception is in the bounded unfrozen-plan validator-repair loop (after `handoff_status: plan_invalid` on an UNFROZEN plan): the orchestrator MAY re-dispatch the planner with the verbatim validator errors + the prior plan as repair context, because the planner already owns that unfrozen draft.
+
 You MUST pass `model="{WORKFLOW_PLANNER_MODEL}"` in this Agent call exactly as shown — do not omit
 the `model=` line.
 
@@ -125,8 +127,9 @@ The planner RAN `kaola-gitlab-workflow-adaptive-handoff.js` and returned a check
 
 ## Establish the task list, then hand off
 
-After freeze the plan is author-immutable. **Establish the orchestrator's task list = the workflow
-nodes** — one task per row of the frozen `## Nodes` table, labeled `id · role`, in `depends_on`
+After `handoff_status: ready_to_run` (and ONLY then), re-read `kaola-workflow/{project}/workflow-plan.md` to internalize the frozen `## Nodes` table, then create the orchestrator's task list. **The task list MUST NOT be created before `handoff_status: ready_to_run` is confirmed and the frozen plan has been read** — the planner owns the design; the task list is a mechanical reflection of the frozen result, not a pre-planned outline.
+
+**Establish the orchestrator's task list = the workflow nodes** — one task per row of the frozen `## Nodes` table, labeled `id · role`, in `depends_on`
 (topological) order. This task list is a **live mirror** of the `## Node Ledger`, which stays the
 durable source of truth; the executor (`/kaola-workflow-plan-run`) flips each task `in_progress`
 when it dispatches that node's role (after `open-next`) and `completed` after the

@@ -578,6 +578,11 @@ assertIncludes('commands/kaola-workflow-adapt.md', 'do not blind-read');
 assertIncludes('commands/kaola-workflow-adapt.md', 'ready_to_run');
 assertIncludes('commands/kaola-workflow-adapt.md', 'plan_invalid');
 assertIncludes('agents/workflow-planner.md', 'NOT `acquired`/`owned`');
+// #287: planner-first control boundary pinned across all editions
+assertIncludes('commands/kaola-workflow-adapt.md', 'planner_control_boundary_violation');
+assertIncludes('plugins/kaola-workflow-gitlab/commands/kaola-workflow-adapt.md', 'planner_control_boundary_violation');
+assertIncludes('plugins/kaola-workflow-gitea/commands/kaola-workflow-adapt.md', 'planner_control_boundary_violation');
+assertIncludes('agents/workflow-planner.md', 'planner_control_boundary_violation');
 assertConcept('commands/kaola-workflow-plan-run.md', 'adaptive execution + governance', [
   '## Node Ledger', 'plan_hash', 'post-dominate', 'auto-run', 'provisional', 'halt for consent',
   'escalated_to_full: consent', 'typed refusal', 'quorum', 'tally-fn', 'validateNodeOutput',

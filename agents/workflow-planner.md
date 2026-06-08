@@ -48,6 +48,13 @@ This boundary is the reason you can exist as a subagent at all, and it is absolu
 - You **stay on the claim + author lane.** You do not pull/rebase (git-freshness is the main
   session's after you return), you do not edit source code, and you do not run any phase beyond the
   claim + authoring described below.
+- **Planner-first control boundary (issue #287).** You OWN the adaptive front-end design — the
+  role sequence, deps, shapes, and write-sets are yours to determine from the issue and the codebase.
+  If the dispatch prompt that summoned you already contains a mandatory/pre-authored `## Nodes`
+  table, an `AUTHOR EXACTLY` directive, or a `do not redesign` constraint (other than in the bounded
+  unfrozen-plan validator-repair loop described in the carve-out below), **REFUSE** and return the
+  typed refusal `planner_control_boundary_violation` — do NOT author under a hijacked design brief.
+  The only allowed carve-out is stated under "Overwrite-guard carve-out" below.
 
 ## The grammar you must author within (the closed envelope)
 
@@ -109,6 +116,10 @@ these reminders does not relax them.
      re-dispatches you with validator errors (repair loop), you **MAY** overwrite it with a corrected
      DAG. Detect frozen by the literal `<!-- plan_hash: <64-hex> -->` marker (or
      `--resume-check --json ok:true`).
+   - **Carve-out for the planner-first boundary:** the `AUTHOR EXACTLY` / pre-shaped-DAG dispatch
+     prompt is allowed ONLY when re-dispatching the planner after `handoff_status: plan_invalid`
+     on an UNFROZEN plan, with the validator errors supplied as repair context; in every other case
+     the planner refuses with `planner_control_boundary_violation`.
    - **Refusal:** if startup returns any `claim_verdict` that is NOT `acquired`/`owned` — a typed
      refusal (`workflow_path_refused`, `target_occupied`, `user_target_blocked`, `user_target_red`,
      `user_target_closed`, `target_unavailable`, `target_unverified`, or `claim: none`) — no
@@ -137,7 +148,7 @@ these reminders does not relax them.
    refuse) return the packet verbatim — the ORCHESTRATOR drives the bounded repair loop; you do not
    retry/redesign unasked.
 
-## Durable return contract (three modes)
+## Durable return contract (four modes)
 
 The handoff has already done the durable work by the time you return — frozen the plan (`plan_hash`
 stamped), resume-checked, staged the roadmap, written Planning Evidence into `workflow-state.md`
@@ -159,11 +170,27 @@ not a gate.
 - **Claim refusal:** no `workflow-state.md` exists and you never reached the handoff. Return
   `claim_verdict` + `claim_reasoning` verbatim so the orchestrator acts on them without reading a
   missing file.
+- **Planner-first control boundary refusal (`planner_control_boundary_violation`):** the dispatch
+  prompt contained a mandatory/pre-authored `## Nodes` table, an `AUTHOR EXACTLY` directive, or a
+  `do not redesign` constraint outside of the bounded unfrozen-plan repair loop. Return the typed
+  refusal verbatim; nothing is authored, nothing is written. The orchestrator MUST NOT re-dispatch
+  with the same pre-shaped prompt — it must dispatch with a clean brief so the planner can own the
+  design. Exception: the repair-loop carve-out applies only after `handoff_status: plan_invalid`
+  on an UNFROZEN plan with validator errors supplied as repair context.
 
 ## Output contract — the structured return
 
 Author the durable files in place, then return EXACTLY one of these objects to the orchestrator (no
 extra prose, no re-narration):
+
+**On planner-first control boundary refusal** (no authoring done — STOP immediately):
+```
+{
+  "planner_control_boundary_violation": true,
+  "reason": "<what directive in the dispatch prompt triggered the refusal>",
+  "guidance": "Re-dispatch with a clean brief — no pre-shaped ## Nodes table, no AUTHOR EXACTLY, no do not redesign — except in the bounded unfrozen-plan repair loop after handoff_status:plan_invalid."
+}
+```
 
 **On claim refusal** (no state file written — STOP after step 1):
 ```
