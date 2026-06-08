@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [5.8.0] — 2026-06-08
+
 ### Changed
 
 - **adaptive: enforce planner-first entry before any DAG shaping (#287).** Once the adaptive path is selected and the target issue is known, the FIRST issue-specific action must be dispatching `workflow-planner` — the main session performs only non-design preflight (read rules, confirm the target issue, the authoring-allowed switch check, git freshness, non-design availability checks) and must **not** pre-author the `## Nodes` DAG, choose role sequence/dependencies/shapes/write-sets, or create the node task list before the planner owns the design. A boundary leak observed in the #279 session — the main session pre-shaped the node/task/write-set structure, then dispatched the planner as an `AUTHOR EXACTLY` mechanical worker — is now closed by contract.
