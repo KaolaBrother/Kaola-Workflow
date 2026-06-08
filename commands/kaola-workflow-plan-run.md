@@ -267,9 +267,30 @@ re-run `join` (idempotent on already-merged members). `joined` → delete manife
    baselineRecorded:true}`, or `{allDone:true}` when every ledger row is `complete`/`n/a`.
 
    On `allDone`, route to Phase 6 (Completion below) — there is no node to dispatch.
+   `allDone` is valid only after the mandatory `finalize` sink node itself has been closed.
+   If `open-next` opens a node whose `role` is `finalize`, stay in the per-node loop and use
+   the finalize sink contract below instead of routing to Phase 6.
 2. **dispatch** the node's role (main session — see above). Use the `model` returned by `open-next`
    for the node (or resolved via `scripts/kaola-workflow-resolve-agent-model.js <role>` on resume).
-   **After the role returns, capture its durable evidence immediately** — the step-3 close refuses
+   **Special case — `role: finalize` sink:** `finalize` is the mandatory DAG sink, not a
+   dispatchable subagent role. It is expected that
+   `scripts/kaola-workflow-resolve-agent-model.js finalize` returns an empty model. When the opened
+   node role is `finalize`, do not call `Agent()`. The main session performs the node's declared
+   docs/state bookkeeping directly within the validator-allowed finalize write set, then records
+   evidence for the `finalize` node:
+
+   ```bash
+   echo "<finalize-bookkeeping-evidence>" | \
+     node "$KAOLA_SCRIPTS/kaola-workflow-adaptive-node.js" record-evidence \
+       --project {project} --node-id {node-id} --stdin --json
+   ```
+
+   Then run `close-and-open-next` for that same node. Only after that command returns
+   `{allDone:true}` is the DAG complete and ready to route to Phase 6 / Finalization. If the close
+   refuses, stay in the per-node loop and fix or refuse as with any other node.
+
+   **For non-finalize roles, after the role returns, capture durable evidence immediately** — the
+   step-3 close refuses
    (`evidence_missing`) if `.cache/{node-id}.md` is absent when it runs:
 
    ```bash
@@ -485,7 +506,8 @@ the static loop bound are enforced per node at the barrier.
 
 ## Completion
 
-When every ledger row is `complete` or `n/a`, route to Phase 6:
+Completion begins only after the `finalize` sink row has been closed and `close-and-open-next`
+returns `{allDone:true}`. At that point every ledger row is `complete` or `n/a`; route to Phase 6:
 
 ```text
 /kaola-workflow-phase6 {project}
