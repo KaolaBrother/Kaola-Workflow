@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **adaptive/worktree: reconcile MAIN-repo staged `.roadmap/issue-N.md` orphan at worktree finalize (#297).** On an adaptive worktree run, `kaola-workflow-adaptive-handoff.js` Step 5 creates `kaola-workflow/.roadmap/issue-N.md` in the MAIN repo and `git add`s it without committing (the worktree is forked from a HEAD that lacks the file). At finalize, `archiveProjectDir` running from the worktree found the roadmap source absent in the worktree (`roadmap_source_removed: "absent"`) and left the MAIN repo's staged ADD intact, causing `sink-merge.js`'s `git status --porcelain --untracked-files=no` clean check to fail. Fix: added a symmetric main-side reconciliation in `archiveProjectDir`'s existing `mainRoot !== linkedRoot` branch: when the file is staged-ADD-only in MAIN (not on HEAD — guarded by `git cat-file -e HEAD:<relpath>`), run `git -C <mainRoot> rm --cached --force --ignore-unmatch <relpath>` to drop the staged index entry, followed by `fs.unlinkSync` for the working-tree file (ENOENT-guarded). The committed-on-HEAD case (normal worktree-finalize) is explicitly skipped so the feature-branch archive commit handles deletion there, preventing a regression staged `D`. Fix mirrored across all four claim ports (root + byte-identical base-plugin + gitlab-edition + gitea-edition). Two new walkthrough assertions: the staged-ADD-only scenario (reproduces the bug, asserts MAIN clean after finalize) and a MAIN-status clean assertion on the existing committed-on-HEAD test (locks the no-regression). `node scripts/simulate-workflow-walkthrough.js` and `npm test` green.
+
 ## [5.8.0] — 2026-06-08
 
 ### Changed

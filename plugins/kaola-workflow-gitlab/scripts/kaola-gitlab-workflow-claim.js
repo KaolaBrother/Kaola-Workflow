@@ -781,6 +781,33 @@ function archiveProjectDir(root, project, statusValue, suffix) {
       } catch (e) {
         roadmapSourceRemoved = (e.code === 'ENOENT') ? 'absent' : 'failed';
       }
+      // #297: reconcile MAIN-repo staged roadmap source. On a worktree run,
+      // adaptive-handoff Step 5 creates this file in MAIN and `git add`s it
+      // WITHOUT committing (worktree was forked before the file existed on HEAD).
+      // fs.unlinkSync above only touches the worktree-local path; the MAIN index
+      // still holds a staged ADD that trips sink-merge.js:73 clean check.
+      // Must be a git index operation — unlink alone leaves the staged add/delete.
+      // Gate: only fire when the file is NOT on MAIN's HEAD (staged-ADD-only orphan
+      // case). If it IS on HEAD, the worktree's own archive commit handles deletion
+      // on the feature branch; running `git rm --cached` against MAIN would stage a
+      // spurious D entry and trip the same sink-merge.js:73 clean check.
+      if (mainRoot && mainRoot !== linkedRoot) {
+        try {
+          const mainRoadmapRel = path.join('kaola-workflow', '.roadmap', 'issue-' + archiveIssueNumber + '.md');
+          let onHead = false;
+          try {
+            execFileSync('git', ['-C', mainRoot, 'cat-file', '-e', 'HEAD:' + mainRoadmapRel],
+              { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+            onHead = true;
+          } catch (_) { onHead = false; }
+          if (!onHead) {
+            execFileSync('git', ['-C', mainRoot, 'rm', '--cached', '--force', '--ignore-unmatch', mainRoadmapRel],
+              { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+            const mainRoadmapAbs = path.join(mainRoot, mainRoadmapRel);
+            try { fs.unlinkSync(mainRoadmapAbs); } catch (e2) { if (e2.code !== 'ENOENT') throw e2; }
+          }
+        } catch (_) {}
+      }
     }
     try {
       roadmapModule.regenerateRoadmap(root);

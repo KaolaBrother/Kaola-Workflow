@@ -4687,11 +4687,13 @@ function testFinalizeFromLinkedWorktreeCleansRoadmapEntry() {
   const kwRoot = tmp + '.kw';
   try {
     initGitRepo(tmp);
-    // Plant active folder and roadmap issue in main worktree
-    plantActiveFolder(tmp, 'issue-911', 911, null);
+    // Plant only the roadmap issue in main worktree (NOT the active folder).
+    // Production pattern: the active folder lives only in the linked worktree;
+    // committing it here would make mainLive an rmSync target on HEAD and dirty
+    // MAIN's status (D entries) in the clean assertion added below.
     plantRoadmapIssue(tmp, 911, '');
-    // Commit so .roadmap/ is on HEAD (required for worktree checkout)
-    spawnSync('git', ['-C', tmp, 'add', '-A'], { encoding: 'utf8' });
+    // Commit so .roadmap/ is on HEAD (the gate check used by the regression fix).
+    spawnSync('git', ['-C', tmp, 'add', path.join('kaola-workflow', '.roadmap', 'issue-911.md')], { encoding: 'utf8' });
     spawnSync('git', ['-C', tmp, 'commit', '-m', 'plant'], { encoding: 'utf8' });
     // Create linked worktree on a feature branch
     const wtPath = path.join(kwRoot, 'issue-911');
@@ -4700,7 +4702,7 @@ function testFinalizeFromLinkedWorktreeCleansRoadmapEntry() {
       cwd: tmp,
       encoding: 'utf8'
     });
-    // Mirror active folder in linked worktree
+    // Active folder lives only in the linked worktree (production pattern).
     plantActiveFolder(wtPath, 'issue-911', 911, null);
     // Finalize from linked worktree with --keep-worktree (so archive commit is made on feature branch)
     const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', 'issue-911', '--keep-worktree'], {
@@ -4743,8 +4745,82 @@ function testFinalizeFromLinkedWorktreeCleansRoadmapEntry() {
       /^D\s+kaola-workflow\/\.roadmap\/issue-911\.md$/m.test(showResult.stdout),
       'deletion of kaola-workflow/.roadmap/issue-911.md must appear in archive commit\ngit show output:\n' + showResult.stdout
     );
+    // Regression lock (#297 R1): committed-on-HEAD path must NOT leave MAIN dirty.
+    // With the gated fix, rm --cached is skipped; the archive commit on the feature
+    // branch handles deletion, so MAIN's index is untouched.
+    const mainStatusResult = spawnSync('git', ['-C', tmp, 'status', '--porcelain', '--untracked-files=no'], {
+      encoding: 'utf8'
+    });
+    assert(
+      mainStatusResult.stdout.trim().length === 0,
+      'testFinalizeFromLinkedWorktreeCleansRoadmapEntry: main-repo `git status --porcelain --untracked-files=no` must be empty after finalize (regression lock for #297 R1), got: "' + mainStatusResult.stdout.trim() + '"'
+    );
   } finally {
     try { spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', kwRoot + '/issue-911'], { encoding: 'utf8' }); } catch (_) {}
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(kwRoot, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Issue #297 — worktree finalize cleans MAIN-repo staged roadmap source
+// Scenario: handoff creates .roadmap/issue-N.md in MAIN and `git add`s it
+// WITHOUT committing (worktree was forked before the file existed on HEAD).
+// archiveProjectDir must emit a git-index operation against mainRoot so that
+// `git status --porcelain --untracked-files=no` is empty post-finalize,
+// matching the sink-merge.js:73 clean check exactly.
+// ---------------------------------------------------------------------------
+
+function testFinalizeFromLinkedWorktreeCleansMainStagedRoadmapSource() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-fin-staged-roadmap-')));
+  const kwRoot = tmp + '.kw';
+  try {
+    initGitRepo(tmp);
+    // Create the linked worktree FIRST, from a HEAD that does NOT contain
+    // kaola-workflow/.roadmap/issue-921.md (it is not committed on HEAD yet).
+    const wtPath = path.join(kwRoot, 'issue-921');
+    fs.mkdirSync(kwRoot, { recursive: true });
+    spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-921', '--', wtPath, 'HEAD'], {
+      cwd: tmp,
+      encoding: 'utf8'
+    });
+    // Plant the active folder only in the linked worktree (production pattern).
+    plantActiveFolder(wtPath, 'issue-921', 921, null);
+    // THEN create kaola-workflow/.roadmap/issue-921.md in the MAIN tree and
+    // `git add` it WITHOUT committing — reproducing adaptive-handoff Step 5.
+    plantRoadmapIssue(tmp, 921, '');
+    spawnSync('git', ['-C', tmp, 'add', path.join('kaola-workflow', '.roadmap', 'issue-921.md')], {
+      encoding: 'utf8'
+    });
+    // PRE-FIX sanity: the main index must show a staged ADD (non-empty status).
+    const preStatus = spawnSync('git', ['-C', tmp, 'status', '--porcelain', '--untracked-files=no'], {
+      encoding: 'utf8'
+    });
+    assert(
+      preStatus.stdout.trim().length > 0,
+      '#297 setup: main-repo status must be non-empty (staged A) before finalize, got: "' + preStatus.stdout.trim() + '"'
+    );
+    // Finalize from the linked worktree with --keep-worktree.
+    const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', 'issue-921', '--keep-worktree'], {
+      cwd: wtPath,
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' },
+      encoding: 'utf8'
+    });
+    assert(
+      result.status === 0,
+      '#297 finalize from linked worktree must exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr
+    );
+    // POST-FIX assertion: main-repo index must be clean (mirrors sink-merge.js:73 EXACTLY).
+    const postStatus = spawnSync('git', ['-C', tmp, 'status', '--porcelain', '--untracked-files=no'], {
+      encoding: 'utf8'
+    });
+    assert(
+      postStatus.stdout.trim().length === 0,
+      '#297: main-repo `git status --porcelain --untracked-files=no` must be empty after finalize, got: "' + postStatus.stdout.trim() + '"'
+    );
+    console.log('testFinalizeFromLinkedWorktreeCleansMainStagedRoadmapSource: PASSED');
+  } finally {
+    try { spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', kwRoot + '/issue-921'], { encoding: 'utf8' }); } catch (_) {}
     fs.rmSync(tmp, { recursive: true, force: true });
     fs.rmSync(kwRoot, { recursive: true, force: true });
   }
@@ -8796,6 +8872,7 @@ async function main() {
     testFinalizeFromMainRootNoSpuriousRemoval();
     testFinalizeCleansRoadmapEntry();
     testFinalizeFromLinkedWorktreeCleansRoadmapEntry();
+    testFinalizeFromLinkedWorktreeCleansMainStagedRoadmapSource(); // #297
     testFinalizeRoadmapCleanupFailureReceipt();
     testWatchPrRoadmapCleanupWarning();
     testValidateRemoteOffline();
