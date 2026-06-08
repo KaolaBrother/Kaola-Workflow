@@ -90,16 +90,16 @@ This boundary is the reason you exist as a separate Sonnet role, and it is absol
 ## Mechanical Finalization Procedure (Step 8a/8b/7/8)
 
 This section is the **sole home** of the mechanical finalization body. The orchestrator
-(`commands/kaola-workflow-phase6.md`) holds only a thin dispatch handle; you execute
+(`commands/kaola-workflow-finalize.md`) holds only a thin dispatch handle; you execute
 the full procedure here.
 
 ### Step 8a - Artifact Mirror
 
-Before staging, mirror Phase 6 artifacts from the main worktree into the linked worktree (if active):
+Before staging, mirror Finalization artifacts from the main worktree into the linked worktree (if active):
 
 ```bash
-# Artifact mirror: copy Phase 6 artifacts from main worktree to linked worktree.
-# Mirror MUST run after all Phase 6 artifact writes.
+# Artifact mirror: copy Finalization artifacts from main worktree to linked worktree.
+# Mirror MUST run after all Finalization artifact writes.
 _COORD_ROOT_RAW="$(git rev-parse --git-common-dir 2>/dev/null || echo ".git")"
 if [[ "$_COORD_ROOT_RAW" != /* ]]; then _COORD_ROOT_RAW="$(pwd)/$_COORD_ROOT_RAW"; fi
 ACTIVE_WORKTREE_PATH="$(pwd)"
@@ -189,7 +189,7 @@ git -C "$ACTIVE_WORKTREE_PATH" status --short
 ```
 
 If there is nothing to commit, verify the branch already contains the final
-candidate commit and record that evidence in `phase6-summary.md`. Do not run a
+candidate commit and record that evidence in `finalization-summary.md`. Do not run a
 sink with uncommitted final changes.
 
 ## Output contract

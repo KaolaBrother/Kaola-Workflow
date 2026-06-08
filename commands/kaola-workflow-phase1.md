@@ -278,7 +278,7 @@ fi
 git add kaola-workflow/.roadmap/issue-N.md
 ```
 
-Note: Phases 4 and 5 do NOT update this file. Phase 6 Step 7 deletes it.
+Note: Phases 4 and 5 do NOT update this file. Finalization Step 7 deletes it.
 
 If no GitHub issue is linked (`phase1-research.md` records `GitHub Issue: none`), skip this step.
 

@@ -1,0 +1,5 @@
+# forge-gl-js (implementer) — issue-283
+non_tdd_reason: gitlab edition behavior port mirroring the base edition, no behavioral logic distinct from base (base unit tests/walkthrough cover behavior; gitlab walkthrough/contract asserted at base-contract/code-review).
+regression-green: node plugins/kaola-workflow-gitlab/scripts/test-gitlab-sinks.js -> exit 0. simulate-gitlab-workflow-walkthrough.js: all 8 own walkthrough functions PASS; exit 1 ONLY because it shells test-gitlab-workflow-scripts.js (forge-gl-rest file, line 1777 "happy path must still route to Phase 6") = expected-intermediate, fixed by forge-gl-rest.
+Files: kaola-gitlab-workflow-{repair-state (routeFinalization + one-way migration + finalization-summary reader, phase6-summary reader deleted), sink-mr, sink-merge, compact-context}.js; simulate-gitlab-workflow-walkthrough.js (new finalization tests); test-gitlab-sinks.js (phase6-summary->finalization-summary x7).
+HANDOFF -> forge-gl-rest: test-gitlab-workflow-scripts.js lines 1351/1777/1778 assert OLD repair-state behavior (phase6 completion / result.phase===6 / kaola-workflow-phase6 nextCommand) -> must flip to finalization.

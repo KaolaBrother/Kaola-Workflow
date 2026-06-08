@@ -19,7 +19,7 @@ Reachable only when the adaptive switch is ON *and* the structure question in
 `workflow-next.md` Step 0a-1 was affirmatively confirmed. This is now
 **script-enforced** at the authoring entry by `kaola-workflow-claim.js
 authoring-allowed` (#235), not prose alone. The middle of the run is free; the
-lifecycle frame around it (claim → branch/worktree → [this plan] → Phase-6 sink)
+lifecycle frame around it (claim → branch/worktree → [this plan] → Finalization sink)
 is fixed.
 
 The full claim + author + handoff procedure (grammar, caps, example plan, shaping

@@ -231,7 +231,7 @@ This releases the just-claimed folder and removes the worktree before stopping. 
 
 ### Co-active Folders Advisory
 
-If a second active folder already exists from a prior session, the two folders have disjoint write sets by design. Do not merge, interleave, or batch their commits. Each folder follows its own Phase 4 → Phase 6 sequence independently. If the same file appears in both write sets, stop and resolve the conflict before continuing.
+If a second active folder already exists from a prior session, the two folders have disjoint write sets by design. Do not merge, interleave, or batch their commits. Each folder follows its own Phase 4 → Finalization sequence independently. If the same file appears in both write sets, stop and resolve the conflict before continuing.
 
 Classify local and remote Git state:
 
@@ -280,7 +280,7 @@ the user to confirm the generated workflow folder name.
 Manual reconstruction order:
 
 ```text
-phase6-summary.md exists -> workflow complete
+finalization-summary.md exists -> workflow complete
 workflow-plan.md exists -> kaola-workflow-plan-run   (adaptive; ahead of the phaseN ladder, toggle-agnostic — a tampered/unparseable plan is a typed refusal, never a phaseN fallback)
 phase5-review.md exists -> kaola-workflow-finalize
 fast-summary.md status ESCALATED -> kaola-workflow-research

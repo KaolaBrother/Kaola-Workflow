@@ -1,0 +1,3 @@
+# docs (doc-updater) — issue-283
+docs-updated: zero terminal-routine "Phase 6" across all 6 docs files (case-sensitive grep clean; docs/README.md needed no change).
+Files: README.md (headline route-neutral "multi-path"; ASCII diagrams ──► Finalization; phase/agent/script tables -> Finalization + finalization-summary.md; route prose), docs/api.md (Finalization sink/merge-gate, finalValidationPassed phase6-summary->finalization-summary), docs/architecture.md (## Finalization and Sink Flow; Phase-6 sink->Finalization sink; ADR 0004 (Finalization); phase6.md->finalize.md), docs/workflow-state-contract.md (phase6-summary->finalization-summary; Mechanical-Finalization Step 7), docs/conventions.md (Finalization procedure/sink; phase6.md->finalize.md). R2 resolved.

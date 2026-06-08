@@ -218,7 +218,7 @@ whose `members` set exactly matches the `in_progress` set; otherwise a typed ref
    **(b)** Per-node barrier: shells `node "$KAOLA_SCRIPTS/kaola-workflow-commit-node.js" ... --node-id
    {node-id} --json` (re-scans the files the node actually wrote — **script-enforced** #231/#239 —
    diffing the recorded baseline against the node's OWN declared lane; a fan-out instance overflowing
-   into a sibling's lane is refused; Phase 6's whole-plan barrier stays the union-level floor).
+   into a sibling's lane is refused; Finalization's whole-plan barrier stays the union-level floor).
    Barrier fail → typed refuse, NO close, NO advance.
 
    **(c)** Close + compliance: ONLY IF barrier exit 0 AND evidence present — splices ledger row to
@@ -291,7 +291,7 @@ documented there). The orchestrator owns what happens next:
 `--verdict-check` (#251, hardened by #279) now FAILS a gate — even on `verdict: pass` /
 `findings_blocking: 0` — when any finding is `scope: in_scope, action: fix` whose `status` is not
 `resolved`/`deferred` (a missing `status` reads as `open`, fail-closed). It is informational per-node
-and BLOCKING whole-plan in Phase 6, so an unresolved in-scope actionable defect can never silently
+and BLOCKING whole-plan in Finalization, so an unresolved in-scope actionable defect can never silently
 become a follow-up. The offending finding ids surface in the verdict-check JSON `unresolvedFixes[]`.
 
 When `--verdict-check` reports `unresolvedFixes`, the orchestrator does NOT route to finalize. It

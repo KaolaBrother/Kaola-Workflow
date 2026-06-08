@@ -1,5 +1,5 @@
 ---
-description: Kaola-Workflow Fast Path. Single-pass Plan+Execute+Review for small, well-scoped issues. Writes fast-summary.md and gates Phase 6.
+description: Kaola-Workflow Fast Path. Single-pass Plan+Execute+Review for small, well-scoped issues. Writes fast-summary.md and gates Finalization.
 argument-hint: <project name>
 ---
 
@@ -7,14 +7,14 @@ argument-hint: <project name>
 
 Fast path executes Plan, Implement, and Review in a single pass for issues
 where the scope is small and the approach is unambiguous. Outputs `fast-summary.md`
-which Phase 6 reads when `workflow_path: fast`.
+which Finalization reads when `workflow_path: fast`.
 
 Mid-flight escalation to full workflow is mandatory if scope grows unexpectedly.
 
 ## Goal Contract
 
 Complete a single-pass Plan+Execute+Review cycle for the named project and
-write a `PASSED` `fast-summary.md` that Phase 6 accepts as a full-workflow
+write a `PASSED` `fast-summary.md` that Finalization accepts as a full-workflow
 substitute. Stop if scope exceeds fast-path bounds.
 
 ## Agent Model Badge
@@ -30,7 +30,7 @@ You MUST pass `model="{CONTRACTOR_MODEL}"` in this Agent call exactly as shown â
 If `fast-summary.md` exists with status `PASSED`, fast path is complete. Route to:
 
 ```text
-/kaola-workflow-phase6 {project}
+/kaola-workflow-finalize {project}
 ```
 
 Otherwise detect step:
@@ -360,10 +360,10 @@ PASSED | IN_PROGRESS | REVIEW | ESCALATED
 [escalated_to_full: <trigger> or N/A]
 ```
 
-## Continue to Phase 6
+## Continue to Finalization
 
 After `fast-summary.md` is `PASSED`, continue:
 
 ```text
-/kaola-workflow-phase6 {project}
+/kaola-workflow-finalize {project}
 ```

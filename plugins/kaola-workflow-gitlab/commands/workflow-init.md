@@ -276,7 +276,7 @@ This file mirrors active unfinished work. GitLab issues are the source of truth 
 - After each `/workflow-next` cycle, refresh this file from issue state.
 - Move completed workflow project folders to `kaola-workflow/archive/`.
 - Close linked GitLab issues only after acceptance criteria pass.
-- Keep commit and push as the final Phase 6 step after docs, issues, roadmap,
+- Keep commit and push as the final Finalization step after docs, issues, roadmap,
   archive, and metadata are complete.
 ```
 

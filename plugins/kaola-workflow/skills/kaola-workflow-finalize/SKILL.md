@@ -5,7 +5,7 @@ description: Use when reviewed Kaola-Workflow for Codex work, also called kaola-
 
 # Kaola-Workflow Finalize
 
-Phase 6 proves the work is complete and records closure metadata.
+Finalization proves the work is complete and records closure metadata.
 
 Read `workflow_path` from `kaola-workflow/{project}/workflow-state.md` (defaults
 to `full` when absent). If `workflow_path: fast`, the fast path replaces Phase
@@ -75,11 +75,11 @@ choices, or ambiguity that blocks correctness.
 
    The mechanical finalization below — the artifact mirror, the `cmdFinalize` archive + status close (with `--keep-worktree`, merge path only), roadmap refresh, and the `chore: finalize ${KAOLA_PROJECT}` commit gate — is deterministic bookkeeping. The `contractor` Codex agent role is the SOLE HOME of this procedure and the session MUST delegate it; the contractor runs the scripts and authors the durable bookkeeping but never dispatches a role, judges, or asks the user. Only if the `contractor` subagent tooling is genuinely unavailable may the session run it inline, and that fallback MUST be logged as `local-fallback-tool-unavailable` in the `## Required Agent Compliance` ledger. The current session keeps the sink dispatch and issue-close decision. Because a subagent runs in its own shell, capture the sink metadata (`SINK_BRANCH`, `SINK_KIND`, `SINK_ISSUE_FLAG`, `ACTIVE_WORKTREE_PATH`) in THIS session before delegating — they are reused at the sink step and do not cross the delegation boundary.
 
-   Before mirroring artifacts, resolve the linked worktree and copy Phase 6 artifacts:
+   Before mirroring artifacts, resolve the linked worktree and copy Finalization artifacts:
 
    ```bash
-   # Artifact mirror: copy Phase 6 artifacts from main worktree to linked worktree.
-   # Mirror MUST run after all Phase 6 artifact writes.
+   # Artifact mirror: copy Finalization artifacts from main worktree to linked worktree.
+   # Mirror MUST run after all Finalization artifact writes.
    _COORD_ROOT_RAW="$(git rev-parse --git-common-dir 2>/dev/null || echo ".git")"
    if [[ "$_COORD_ROOT_RAW" != /* ]]; then _COORD_ROOT_RAW="$(pwd)/$_COORD_ROOT_RAW"; fi
    ACTIVE_WORKTREE_PATH="$(pwd)"
@@ -190,7 +190,7 @@ validation, documentation docking, roadmap refresh, archive, and final commit;
 delegation vocabulary applies only to Codex role rows like `doc-updater`.
 
 ```markdown
-# Phase 6 - Summary: {project}
+# Finalization - Summary: {project}
 
 ## Delivered
 ...

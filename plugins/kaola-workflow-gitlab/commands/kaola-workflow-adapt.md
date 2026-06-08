@@ -18,7 +18,7 @@ freeze; the contractor stamps the durable bookkeeping.
 Reachable only when the adaptive switch is ON *and* the structure question in
 `workflow-next.md` Step 0a-1 was affirmatively confirmed. The middle of the run
 is free; the lifecycle frame around it (claim → branch/worktree → [this plan] →
-Phase-6 sink) is fixed.
+Finalization sink) is fixed.
 
 The full claim + author + handoff procedure (grammar, caps, example plan, shaping
 guidance, and `kaola-gitlab-workflow-claim.js startup …` / `Write` / `kaola-gitlab-workflow-adaptive-handoff.js`

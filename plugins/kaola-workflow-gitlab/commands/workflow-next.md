@@ -280,7 +280,7 @@ Continuing with stale ROADMAP.md — roadmap state may not reflect current per-i
 ```
 
 Do NOT run `generate` automatically. Do NOT stage or commit `ROADMAP.md` in this step.
-Commits stay phase-owned (Phase 6 Step 7). If `kaola-gitlab-workflow-roadmap.js` is unavailable, skip validation.
+Commits stay phase-owned (Finalization Step 7). If `kaola-gitlab-workflow-roadmap.js` is unavailable, skip validation.
 
 ## Startup Step 3 - Select Project
 
@@ -302,7 +302,7 @@ ask the user what to implement. New work starts with:
 
 If multiple active folders exist from prior sessions, they operate independently. Each folder has its own `workflow-state.md`, branch, and worktree metadata. The pre-commit hook prevents commits that stage multiple workflow project folders together.
 
-**Important**: Do NOT merge, interleave, or batch commits from different active folders. Each folder must complete its own Phase 4 → Phase 6 sequence independently. If the same file appears in multiple active write sets, stop and resolve the conflict before continuing — do not proceed with overlapping modifications.
+**Important**: Do NOT merge, interleave, or batch commits from different active folders. Each folder must complete its own Phase 4 → Finalization sequence independently. If the same file appears in multiple active write sets, stop and resolve the conflict before continuing — do not proceed with overlapping modifications.
 
 ## Co-active Folders
 
@@ -338,9 +338,9 @@ If the helper writes or validates `workflow-state.md`, route from that state.
 If missing or invalid, reconstruct:
 
 ```text
-phase6-summary.md exists -> workflow complete; show summary and stop
+finalization-summary.md exists -> workflow complete; show summary and stop
 workflow-plan.md exists -> /kaola-workflow-plan-run {project}   (adaptive; ahead of the phaseN ladder, toggle-agnostic — a tampered/unparseable plan is a typed refusal, never a phaseN fallback)
-phase5-review.md exists -> /kaola-workflow-phase6 {project}
+phase5-review.md exists -> /kaola-workflow-finalize {project}
 fast-summary.md status ESCALATED -> /kaola-workflow-phase1 {project}
 fast-summary.md exists -> /kaola-workflow-fast {project}
 phase4-progress.md exists:
@@ -406,7 +406,7 @@ printing the next command.
 
 ## Completion Contract
 
-Each `/workflow-next` run implements exactly one issue. After Phase 6 closes issue #N
+Each `/workflow-next` run implements exactly one issue. After Finalization closes issue #N
 and archives the active folder, the agent must stop and await explicit re-direction from the user.
 Do not auto-route into the next issue in line. The single-issue completion contract means
 finishing issue #N is the terminal event of the run. To start issue #N+1, the user must

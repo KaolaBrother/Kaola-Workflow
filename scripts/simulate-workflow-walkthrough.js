@@ -304,6 +304,157 @@ function testRepairFastNoArgAmbiguous() {
   }
 }
 
+// issue #283: repair-state must use finalization-summary.md (not phase6-summary.md) as the
+// completion signal, emit stage: finalization / stage_name: Finalization / next_command:
+// /kaola-workflow-finalize for the terminal routine, and the one-way migration must convert
+// a legacy active folder (phase6-summary.md→finalization-summary.md, state fields rewritten).
+function testRepairFinalizationRoute() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-repair-finalization-'));
+  const { reconstruct } = require(repairScript);
+  const workflowDir = path.join(tmp, 'kaola-workflow');
+  fs.mkdirSync(workflowDir, { recursive: true });
+
+  try {
+    // --- R1: finalization-summary.md present → reconstruct reports complete ---
+    writeProject(tmp, 'fin-complete', {
+      'finalization-summary.md': '# Finalization Summary\n'
+    });
+    const finComplete = reconstruct(tmp, workflowDir, 'fin-complete');
+    assert(finComplete.complete === true,
+      'R1: finalization-summary.md must be the completion signal, got: ' + JSON.stringify(finComplete));
+
+    // --- R2: ONLY phase6-summary.md present → reconstruct must NOT report complete ---
+    writeProject(tmp, 'legacy-complete', {
+      'phase6-summary.md': '# Phase 6 Summary\n'
+    });
+    const legacyComplete = reconstruct(tmp, workflowDir, 'legacy-complete');
+    assert(legacyComplete.complete !== true,
+      'R2: phase6-summary.md alone must NOT be the completion signal (hard-removed), got: ' + JSON.stringify(legacyComplete));
+
+    // --- R3: phase5-review.md present (with compliance) → state must use finalization names ---
+    const phase5Content = [
+      '# Phase 5 - Review: fin-route',
+      '',
+      '## Required Agent Compliance',
+      '| Requirement | Status | Evidence | Skip Reason |',
+      '|-------------|--------|----------|-------------|',
+      '| code-reviewer | subagent-invoked | .cache/review.md | |',
+      ''
+    ].join('\n');
+    writeProject(tmp, 'fin-route', {
+      'phase5-review.md': phase5Content,
+      'phase4-progress.md': [
+        '# Phase 4',
+        '## Tasks',
+        '| # | Task | Status |',
+        '|---|------|--------|',
+        '| 1 | done | complete |',
+        ''
+      ].join('\n')
+    });
+    runNode(repairScript, ['fin-route'], tmp);
+    const finRouteState = read(statePath(tmp, 'fin-route'));
+    assert(finRouteState.includes('stage: finalization'),
+      'R3: repair must emit stage: finalization for terminal routine, got state:\n' + finRouteState);
+    assert(finRouteState.includes('stage_name: Finalization'),
+      'R3: repair must emit stage_name: Finalization for terminal routine, got state:\n' + finRouteState);
+    assert(finRouteState.includes('next_command: /kaola-workflow-finalize fin-route'),
+      'R3: repair must emit next_command: /kaola-workflow-finalize, got state:\n' + finRouteState);
+    assert(!finRouteState.includes('phase: 6'),
+      'R3: repair must NOT emit phase: 6, got state:\n' + finRouteState);
+    assert(!finRouteState.includes('next_command: /kaola-workflow-phase6'),
+      'R3: repair must NOT emit /kaola-workflow-phase6, got state:\n' + finRouteState);
+
+    // --- R4: one-way migration converts legacy active folder ---
+    writeProject(tmp, 'legacy-active', {
+      'phase6-summary.md': '# Phase 6 Summary\nLegacy content\n',
+      'workflow-state.md': [
+        '# Kaola-Workflow State',
+        '## Project',
+        'name: legacy-active',
+        'status: active',
+        '## Current Position',
+        'phase: 6',
+        'phase_name: Finalize',
+        'step: some-step',
+        'task: N/A',
+        'next_command: /kaola-workflow-phase6 legacy-active',
+        'next_skill: kaola-workflow-finalize legacy-active',
+        ''
+      ].join('\n')
+    });
+    runNode(repairScript, ['legacy-active'], tmp);
+    const migratedDir = path.join(workflowDir, 'legacy-active');
+    assert(!fs.existsSync(path.join(migratedDir, 'phase6-summary.md')),
+      'R4: migration must remove phase6-summary.md from active folder');
+    assert(fs.existsSync(path.join(migratedDir, 'finalization-summary.md')),
+      'R4: migration must create finalization-summary.md in active folder');
+    const migratedState = read(statePath(tmp, 'legacy-active'));
+    assert(!migratedState.includes('phase: 6'),
+      'R4: migrated state must not contain phase: 6, got:\n' + migratedState);
+    assert(!migratedState.includes('next_command: /kaola-workflow-phase6'),
+      'R4: migrated state must not contain /kaola-workflow-phase6, got:\n' + migratedState);
+
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log('testRepairFinalizationRoute: PASSED');
+}
+
+// issue #283: sink-pr must read/write finalization-summary.md (not phase6-summary.md).
+function testSinkPrUsesFinalizationSummary() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-pr-fin-'));
+  try {
+    spawnSync('git', ['init'], { cwd: tmp, stdio: 'pipe' });
+    spawnSync('git', ['-C', tmp, 'config', 'user.email', 'test@example.com'], { stdio: 'pipe' });
+    spawnSync('git', ['-C', tmp, 'config', 'user.name', 'Test User'], { stdio: 'pipe' });
+    const kwDir = path.join(tmp, 'kaola-workflow', 'issue-2830');
+    fs.mkdirSync(kwDir, { recursive: true });
+    fs.writeFileSync(path.join(kwDir, 'workflow-state.md'), [
+      '# Kaola-Workflow State',
+      '## Project',
+      'name: issue-2830',
+      'status: active',
+      '## Sink',
+      'branch: workflow/issue-2830',
+      'issue_number: 2830',
+      'sink: pr',
+    ].join('\n') + '\n');
+    // Plant finalization-summary.md (the new canonical file)
+    fs.writeFileSync(path.join(kwDir, 'finalization-summary.md'), '# Finalization Summary\n');
+    spawnSync('git', ['-C', tmp, 'add', '-A'], { stdio: 'pipe' });
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'initial'], { stdio: 'pipe' });
+
+    const result = spawnSync(process.execPath, [
+      sinkPrScript,
+      '--branch', 'workflow/issue-2830',
+      '--project', 'issue-2830',
+      '--issue', '2830',
+    ], {
+      cwd: tmp,
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' },
+      stdio: 'pipe',
+    });
+    assert(result.status === 0,
+      'sink-pr (finalization-summary) offline should exit 0, got ' + result.status + '. stderr: ' + result.stderr);
+
+    // finalization-summary.md must exist and contain PR URL
+    const finSummaryPath = path.join(kwDir, 'finalization-summary.md');
+    assert(fs.existsSync(finSummaryPath),
+      'sink-pr must write to finalization-summary.md, not phase6-summary.md');
+    const finContent = fs.readFileSync(finSummaryPath, 'utf8');
+    assert(finContent.includes('PR URL:'),
+      'finalization-summary.md must contain PR URL after sink-pr, got: ' + finContent);
+
+    // phase6-summary.md must NOT be created
+    assert(!fs.existsSync(path.join(kwDir, 'phase6-summary.md')),
+      'sink-pr must NOT create phase6-summary.md');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log('testSinkPrUsesFinalizationSummary: PASSED');
+}
+
 function testHookSingleProjectGuard(tmp) {
   spawnSync('git', ['init'], { cwd: tmp, encoding: 'utf8' });
   writeProject(tmp, 'a', { 'workflow-state.md': 'status: active\n' });
@@ -4112,7 +4263,7 @@ async function testSinkPrLeavesCleanWorktree() {
       'issue_number: 82',
       'sink: pr',
     ].join('\n') + '\n');
-    fs.writeFileSync(path.join(kwDir, 'phase6-summary.md'), '# Phase 6 Summary\n');
+    fs.writeFileSync(path.join(kwDir, 'finalization-summary.md'), '# Finalization Summary\n');
     // Initial commit so HEAD exists and worktree is clean
     spawnSync('git', ['-C', tmp, 'add', '-A'], { stdio: 'pipe' });
     spawnSync('git', ['-C', tmp, 'commit', '-m', 'initial'], { stdio: 'pipe' });
@@ -4485,8 +4636,8 @@ function testE2EGitHubPrFullChain() {
     const kwDir860 = path.join(wt860, 'kaola-workflow', 'issue-860');
     assert(fs.existsSync(kwDir860), 'linked worktree issue folder must exist after worktree-finalize');
 
-    // Step 3: plant phase6-summary.md (required by sink-pr appendSummary)
-    fs.writeFileSync(path.join(kwDir860, 'phase6-summary.md'), '# Phase 6 Summary\n');
+    // Step 3: plant finalization-summary.md (required by sink-pr appendSummary)
+    fs.writeFileSync(path.join(kwDir860, 'finalization-summary.md'), '# Finalization Summary\n');
     spawnSync('git', ['add', '-A'], { cwd: wt860 });
     const diff = spawnSync('git', ['-C', wt860, 'diff', '--cached', '--quiet'], { stdio: 'pipe' });
     if (diff.status !== 0) {
@@ -8817,6 +8968,8 @@ async function main() {
     testRepairFastEscalation(tmp);
     testRepairFastNoArgSingle();
     testRepairFastNoArgAmbiguous();
+    testRepairFinalizationRoute();
+    testSinkPrUsesFinalizationSummary();
     testHookSingleProjectGuard(tmp);
     testPhantomAdvisorHookGuard();
     testSubagentDispatchHookExists();

@@ -1,0 +1,4 @@
+# forge-gl-rest (implementer) — issue-283
+non_tdd_reason: gitlab edition contract/test/skill finalization mirror, no behavioral logic distinct from base.
+regression-green: test-gitlab-workflow-scripts.js exit 0; simulate-gitlab-workflow-walkthrough.js exit 0 (fully green now); validate-kaola-workflow-gitlab-contracts.js exit 0. The 3 residual phase6 greps are the REQUIRED legacy-absence guards (assert kaola-workflow-phase6.md ABSENT) = AC "assert legacy route absent".
+Files: test-gitlab-workflow-scripts.js (stale assertions: result.phase===6 -> result.stage==="finalization", /kaola-workflow-phase6/ -> /kaola-workflow-finalize/, phase6-summary fixture); validate-kaola-workflow-gitlab-contracts.js (phase6.md present-assert -> finalize.md present + phase6.md/phase6-summary absent); gitlab skills next/fast/review/finalize SKILL.md -> Finalization (# Finalization - Summary, gates Finalization).

@@ -114,7 +114,7 @@ function main() {
   const root = getRoot();
   const config = readConfig();
   const stateFile = path.join(root, 'kaola-workflow', args.project, 'workflow-state.md');
-  const summaryFile = path.join(root, 'kaola-workflow', args.project, 'phase6-summary.md');
+  const summaryFile = path.join(root, 'kaola-workflow', args.project, 'finalization-summary.md');
 
   if (OFFLINE) {
     const prUrl = 'OFFLINE_PLACEHOLDER';
@@ -163,7 +163,7 @@ function main() {
   // Step 7 — update workflow-state.md Sink block
   updateStateSinkBlock(stateFile, prUrl, prNumber);
 
-  // Step 8 — append to phase6-summary.md
+  // Step 8 — append to finalization-summary.md
   appendSummary(summaryFile, prUrl, prNumber);
 
   // Metadata commit — deliberate follow-up commit for clean worktree
