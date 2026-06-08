@@ -14,7 +14,7 @@ A multi-path development workflow for Claude Code and Codex with per-phase file 
         ├──► Fast path (KAOLA_PATH=fast)
         │      plan + implement + review in one pass ──► Finalization
         │
-        ├──► Adaptive path (KAOLA_PATH=adaptive, opt-in)
+        ├──► Adaptive path (default under ON switch; KAOLA_PATH=adaptive explicit)
         │      freely composed task-shaped DAG of roles ──► Finalization
         │
         └──► Full 6-phase flow:
@@ -256,21 +256,22 @@ To install the three reviewer agents on Sonnet, request the `common` profile:
 ./install.sh --profile=common             # Sonnet assignments for the three reviewer agents
 ```
 
-#### Adaptive workflow path (opt-in)
+#### Adaptive workflow path
 
 The [adaptive workflow path](#adaptive-path-optional) — a third path beside fast and
-full — is **OFF by default**. Enable it at install time:
+full — is **ON by default** starting with this release: a bare `./install.sh` writes
+`enable_adaptive:true` to `~/.config/kaola-workflow/config.json`. To opt out:
 
 ```bash
-./install.sh --enable-adaptive=yes        # writes enable_adaptive:true to ~/.config/kaola-workflow/config.json
+./install.sh --enable-adaptive=no        # actively writes enable_adaptive:false (survives re-install over a stale :true)
 ```
 
-The flag only flips the `enable_adaptive` switch that lets the path be *selected*; the
-`/kaola-workflow-adapt` and `/kaola-workflow-plan-run` commands and the
-`adversarial-verifier` agent install on every run regardless. The default
-(`--enable-adaptive=no`) writes nothing, so the switch stays absent and the path stays
-off. You can also enable it per session with `KAOLA_ENABLE_ADAPTIVE=1` (environment
-overrides config).
+The flag only flips the `enable_adaptive` switch; the `/kaola-workflow-adapt` and
+`/kaola-workflow-plan-run` commands and the `adversarial-verifier` agent install on every
+run regardless. Under an **ON** switch, adaptive is the **default route** in
+`/workflow-next` Step 0a-1 — `fast` and `full` are reachable only by an explicit
+path-naming request or an explicit `KAOLA_PATH`. You can also override the switch
+per session with `KAOLA_ENABLE_ADAPTIVE=0` to disable (precedence: env > config > OFF).
 
 Then in Claude Code:
 
@@ -561,7 +562,7 @@ Fast path executes Plan, Implement, and Review in a single pass, writing `fast-s
 
 ### Adaptive path (optional)
 
-For larger, **structurally non-linear** issues — work that naturally fans out into disjoint sub-areas, needs parallel research across several subsystems, or calls for a non-standard verification shape — the adaptive path lets the agent **freely compose a task-shaped DAG of role nodes** inside Kaola's locked lifecycle frame (claim → branch/worktree → *free design* → Finalization sink), instead of following the fixed fast or full sequence. It is **opt-in and OFF by default**: enable it at install time with `./install.sh --enable-adaptive=yes` (writes `enable_adaptive: true` to `~/.config/kaola-workflow/config.json`) or per session with `KAOLA_ENABLE_ADAPTIVE=1` (precedence: env > config > OFF). With the switch off, behavior is exactly as before — `adaptive` is absent from path selection and `KAOLA_PATH=adaptive` is a typed refusal, never a silent downgrade.
+For larger, **structurally non-linear** issues — work that naturally fans out into disjoint sub-areas, needs parallel research across several subsystems, or calls for a non-standard verification shape — the adaptive path lets the agent **freely compose a task-shaped DAG of role nodes** inside Kaola's locked lifecycle frame (claim → branch/worktree → *free design* → Finalization sink), instead of following the fixed fast or full sequence. The install switch is **ON by default** (a bare `./install.sh` writes `enable_adaptive:true`; opt out with `--enable-adaptive=no`). Under an ON switch, adaptive is the **default route** in `/workflow-next` — `fast` and `full` are explicit path-naming escapes. A per-session override is available: `KAOLA_ENABLE_ADAPTIVE=0` disables (precedence: env > config > OFF). With the switch off, behavior is exactly as before — `adaptive` is absent from path selection and `KAOLA_PATH=adaptive` is a typed refusal, never a silent downgrade.
 
 ```
 KAOLA_PATH=adaptive /workflow-next
@@ -656,7 +657,7 @@ The detailed durable-state map lives in `docs/workflow-state-contract.md`. Keep 
 | `KAOLA_WORKFLOW_DEBUG_CWD` | (unset) | DEV/TEST ONLY — when set, `sink-merge.js` writes its final cwd to this file |
 | `KAOLA_WORKFLOW_FORCE_FF_FAIL` | (unset) | DEV/TEST ONLY — fail first N fast-forward merge attempts (GitHub, GitLab, and Gitea) |
 | `KAOLA_WORKFLOW_FORCE_MERGE_IMPOSSIBLE` | (unset) | DEV/TEST ONLY — force merge-impossible error in sink-merge fallback tests (GitHub, GitLab, and Gitea) |
-| `KAOLA_PATH` | (unset) | Set to `fast` to request fast-path execution, or `adaptive` to request the adaptive (dynamic-composition) path when `enable_adaptive` is on; defaults to the full six-phase flow |
+| `KAOLA_PATH` | (unset) | Set to `fast` or `full` to force a specific path explicitly. Under an ON adaptive switch the adaptive path is the default route; under an OFF switch the default is the full six-phase flow. Set to `adaptive` to force the adaptive path (no-op when already the default; typed refusal when the switch is off) |
 | `KAOLA_ENABLE_ADAPTIVE` | (unset) | Per-session override of the `enable_adaptive` install switch (`1`/`true`/`yes` on, `0`/`false`/`no` off). Precedence: env > `~/.config/kaola-workflow/config.json` > OFF |
 | `KAOLA_FANOUT_CAP` | `4` | Runtime concurrency limit: the executor runs at most this many adaptive fan-out members at once and drains a wider fan-out by rolling bounded dispatch (`top-up`). NOT a planning validity cap — a logical fan-out MAY be wider |
 
@@ -858,7 +859,7 @@ leaves commit-and-push as the final step on a clean, synced workspace.
 
 All phase files are written to `{project-root}/kaola-workflow/{project-name}/` while active. Completed workflow folders are archived to `{project-root}/kaola-workflow/archive/`. Active unfinished work is tracked in `{project-root}/kaola-workflow/ROADMAP.md`.
 
-The optional [adaptive path](#adaptive-path-optional) does not follow this fixed numbered sequence: it composes role nodes into a `workflow-plan.md` DAG (with a frozen `plan_hash` and a `## Node Ledger`) and runs them dynamically, still landing in the same Finalization sink. The fast and adaptive paths are opt-in; the full six phases above are the default.
+The [adaptive path](#adaptive-path-optional) does not follow this fixed numbered sequence: it composes role nodes into a `workflow-plan.md` DAG (with a frozen `plan_hash` and a `## Node Ledger`) and runs them dynamically, still landing in the same Finalization sink. Under an ON adaptive switch, adaptive is the default route and `fast`/`full` are explicit escapes; under an OFF switch, the full six phases above are the default and the fast path is an explicit opt-in.
 
 ## Resuming
 

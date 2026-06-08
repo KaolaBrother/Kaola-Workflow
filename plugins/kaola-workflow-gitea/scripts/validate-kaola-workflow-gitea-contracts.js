@@ -491,8 +491,10 @@ assertIncludes(giteaNextSkill198, 'fast-summary.md status ESCALATED -> kaola-wor
 // issue #227: adaptive-path contract (Gitea fork command prose + renamed scripts).
 assert(exists(pluginRoot + '/scripts/kaola-gitea-workflow-plan-validator.js'), 'Gitea adaptive plan validator missing');
 assert(exists(pluginRoot + '/scripts/kaola-workflow-adaptive-schema.js'), 'Gitea adaptive schema module missing');
+// router 3-way selection: switch chooses branch AND default (adaptive is the default under ON;
+// fast/full are explicit escapes). OFF preserves 2-way fast/full with typed refusal on adaptive.
 assertConcept(pluginRoot + '/commands/workflow-next.md', 'adaptive path selection', [
-  'KAOLA_ENABLE_ADAPTIVE', 'adaptive', 'fast|full|adaptive', 'flag-only', 'typed refusal'
+  'KAOLA_ENABLE_ADAPTIVE', 'adaptive', 'fast|full|adaptive', 'default', 'typed refusal'
 ]);
 assertIncludes(pluginRoot + '/commands/workflow-next.md', 'workflow-plan.md exists -> /kaola-workflow-plan-run');
 // v5.1.0: the adaptive front-end ROUTING must stay enforced — the router skips its inline claim and

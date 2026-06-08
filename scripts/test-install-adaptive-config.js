@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 'use strict';
 
-// issue #227: install.sh --enable-adaptive switch behavior. The default path writes
-// NO config (adaptive stays OFF); --enable-adaptive=yes writes enable_adaptive:true
-// into ~/.config/kaola-workflow/config.json via read-modify-write, preserving
-// parallel_mode; a bad value exits 2.
+// issue #227 + #254: install.sh --enable-adaptive switch behavior. The default path (bare
+// install, no flag) now writes enable_adaptive:true (adaptive ON by default, issue #254);
+// --enable-adaptive=yes explicitly writes enable_adaptive:true; --enable-adaptive=no writes
+// enable_adaptive:false (hard opt-out; survives re-install over a stale :true — the
+// stale-config trap). Both yes and no paths use read-modify-write, preserving parallel_mode.
+// A bad value exits 2.
 
 const assert = require('assert');
 const { execFileSync } = require('child_process');
@@ -29,15 +31,18 @@ const homes = [];
 function cleanup() { for (const h of homes) try { fs.rmSync(h, { recursive: true, force: true }); } catch (_) {} }
 
 try {
-  // (a) no flag -> config absent (adaptive OFF by absence)
+  // (a) bare install (no flag) -> config written with enable_adaptive:true AND parallel_mode:auto
+  // (adaptive is now the default under issue #254)
   let home = freshHome('noflag'); homes.push(home);
   runInstall(home, []);
-  assert(!fs.existsSync(configPath(home)), 'no --enable-adaptive => install must NOT write config.json');
+  let cfg = readConfig(home);
+  assert(cfg.enable_adaptive === true, 'bare install must write enable_adaptive:true, got ' + JSON.stringify(cfg));
+  assert(cfg.parallel_mode === 'auto', 'bare install must write parallel_mode:auto, got ' + JSON.stringify(cfg));
 
   // (b) --enable-adaptive=yes -> config created with enable_adaptive:true AND parallel_mode:auto
   home = freshHome('yes'); homes.push(home);
   runInstall(home, ['--enable-adaptive=yes']);
-  let cfg = readConfig(home);
+  cfg = readConfig(home);
   assert(cfg.enable_adaptive === true, '--enable-adaptive=yes must set enable_adaptive:true, got ' + JSON.stringify(cfg));
   assert(cfg.parallel_mode === 'auto', '--enable-adaptive=yes must default parallel_mode:auto, got ' + JSON.stringify(cfg));
 
@@ -50,15 +55,17 @@ try {
   assert(cfg.parallel_mode === 'on', 'read-modify-write must preserve parallel_mode:on, got ' + JSON.stringify(cfg));
   assert(cfg.enable_adaptive === true, 'read-modify-write must add enable_adaptive:true, got ' + JSON.stringify(cfg));
 
-  // (d) --enable-adaptive=no -> config NOT written (default-equivalent)
+  // (d) --enable-adaptive=no -> config written with enable_adaptive:false (hard opt-out)
   home = freshHome('no'); homes.push(home);
   runInstall(home, ['--enable-adaptive=no']);
-  assert(!fs.existsSync(configPath(home)), '--enable-adaptive=no must NOT write config.json');
+  cfg = readConfig(home);
+  assert(cfg.enable_adaptive === false, '--enable-adaptive=no must write enable_adaptive:false, got ' + JSON.stringify(cfg));
 
-  // (e) reinstall without the flag does NOT clobber an existing enable_adaptive:true
+  // (e) reinstall without the flag does NOT revoke enable_adaptive:true
+  // bare install writes true, so a prior true is preserved by the read-modify-write.
   home = freshHome('reinstall'); homes.push(home);
   runInstall(home, ['--enable-adaptive=yes']);
-  runInstall(home, []); // second install, no flag
+  runInstall(home, []); // second install, no flag (bare writes true — still true)
   cfg = readConfig(home);
   assert(cfg.enable_adaptive === true, 'reinstall without flag must NOT revoke enable_adaptive:true, got ' + JSON.stringify(cfg));
 
@@ -68,6 +75,16 @@ try {
   try { runInstall(home, ['--enable-adaptive=maybe']); }
   catch (e) { failed = true; assert(e.status === 2, 'bad --enable-adaptive must exit 2, got ' + e.status); }
   assert(failed, '--enable-adaptive=maybe must be rejected');
+
+  // issue #254 case 3: stale-config trap — pre-existing config with enable_adaptive:true,
+  // --enable-adaptive=no must overwrite it to false AND preserve other keys (parallel_mode).
+  home = freshHome('stale'); homes.push(home);
+  fs.mkdirSync(path.dirname(configPath(home)), { recursive: true });
+  fs.writeFileSync(configPath(home), JSON.stringify({ parallel_mode: 'auto', enable_adaptive: true }, null, 2) + '\n');
+  runInstall(home, ['--enable-adaptive=no']);
+  cfg = readConfig(home);
+  assert(cfg.enable_adaptive === false, 'stale-config trap: --enable-adaptive=no must write false over stale true, got ' + JSON.stringify(cfg));
+  assert(cfg.parallel_mode === 'auto', 'stale-config trap: --enable-adaptive=no must preserve parallel_mode:auto, got ' + JSON.stringify(cfg));
 
   // issue #242: .kaola-agent-models.json manifest — uninstall.sh must remove it.
   // (g) after install then uninstall, manifest is gone.
