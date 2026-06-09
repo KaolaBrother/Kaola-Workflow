@@ -7126,7 +7126,9 @@ function testAdaptiveSyncGroupGap() {
     ], []);
     assert(v.result === 'refuse' && /sync-group gap/.test((v.errors || []).join(';')),
       '(a) lone COMMON_SCRIPTS member must refuse with sync-group gap, got: ' + JSON.stringify(v));
-    // (b) BOTH halves (across two nodes) -> in-grammar.
+    // (b) #301: BOTH halves SPLIT across two nodes -> REFUSE (co-occurrence, not union). The pair
+    //     must be edited atomically in ONE node; split halves leave the two copies inconsistent
+    //     between nodes. (Was in-grammar under the original union semantics; #301 inverts it.)
     v = validatePlanFixture(tmp, [
       '| explore | code-explorer | — | — | 1 | sequence |',
       '| impl | tdd-guide | explore | scripts/kaola-workflow-claim.js | 1 | sequence |',
@@ -7134,8 +7136,17 @@ function testAdaptiveSyncGroupGap() {
       '| review | code-reviewer | impl,doc | — | 1 | sequence |',
       '| done | finalize | review | — | 1 | sequence |',
     ], []);
+    assert(v.result === 'refuse' && /sync-group gap/.test((v.errors || []).join(';')),
+      '(b) #301: COMMON_SCRIPTS halves SPLIT across nodes must refuse (co-occurrence), got: ' + JSON.stringify(v));
+    // (b2) #301: BOTH halves in the SAME node -> in-grammar (atomic co-edit).
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| impl | tdd-guide | explore | scripts/kaola-workflow-claim.js, plugins/kaola-workflow/scripts/kaola-workflow-claim.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
     assert(v.result === 'in-grammar',
-      '(b) both COMMON_SCRIPTS halves present must be in-grammar, got: ' + JSON.stringify(v));
+      '(b2) #301: both COMMON_SCRIPTS halves in ONE node must be in-grammar, got: ' + JSON.stringify(v));
     // (c) BYTE_IDENTICAL_GROUPS member WITHOUT peers -> refuse.
     v = validatePlanFixture(tmp, [
       '| explore | code-explorer | — | — | 1 | sequence |',
@@ -7154,6 +7165,26 @@ function testAdaptiveSyncGroupGap() {
     ], []);
     assert(v.result === 'in-grammar',
       '(d) forge-rename port path alone must NOT false-refuse, got: ' + JSON.stringify(v));
+    // (e) #301/#286: a per-forge workflow-init CLAUDE.md-template HALF (the init SKILL) without its
+    //     commands/workflow-init.md partner in the same node -> refuse naming the missing partner.
+    //     This is the #286 discard #2 case (template region byte-locked per pair; partner in NO node).
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| tmpl | doc-updater | explore | plugins/kaola-workflow/skills/kaola-workflow-init/SKILL.md | 1 | sequence |',
+      '| review | code-reviewer | tmpl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /commands\/workflow-init\.md/.test((v.errors || []).join(';')),
+      '(e) #301: lone workflow-init template SKILL half must refuse naming the commands/workflow-init.md partner, got: ' + JSON.stringify(v));
+    // (f) #301: the workflow-init template pair kept intra-node -> in-grammar.
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| tmpl | doc-updater | explore | commands/workflow-init.md, plugins/kaola-workflow/skills/kaola-workflow-init/SKILL.md | 1 | sequence |',
+      '| review | code-reviewer | tmpl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'in-grammar',
+      '(f) #301: workflow-init template pair intra-node must be in-grammar, got: ' + JSON.stringify(v));
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   console.log('testAdaptiveSyncGroupGap: PASSED');
 }

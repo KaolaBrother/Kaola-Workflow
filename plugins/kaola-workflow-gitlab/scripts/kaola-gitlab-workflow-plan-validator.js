@@ -778,43 +778,51 @@ function validatePlan(content, opts) {
     }
   }
 
-  // #274: sync-group write-set gap. A frozen plan that edits one half of a byte-identical
-  // sync pair would pass every other gate, run, and SHIP drift that npm test's
-  // validate-script-sync.js then rejects post-merge. Refuse at freeze instead.
-  // Inert when the sync module is absent (forge/codex/user installs: syncMeta === null)
-  // and for forge-rename ports (paths in neither list). Membership is path-exact, so a
-  // non-sync path can never false-refuse.
-  if (syncMeta) {
-    const unionWrites = new Set();
-    for (const n of nodes) for (const p of n.writeSet) unionWrites.add(p);
+  // #274 / #301: byte-identity write-set CO-OCCURRENCE gap. A frozen plan that edits one half of a
+  // byte-identical group WITHOUT its partner(s) in the SAME node would diverge the locked bytes —
+  // whole-file for the sync-script pairs, the marked region for the workflow-init CLAUDE.md-template
+  // pairs — and SHIP drift that the post-merge contract validators / validate-script-sync.js then
+  // reject, forcing a mid-run discard + re-author (the #286 discard #2). Refuse at freeze instead.
+  //
+  // #301 inverts the original UNION check (peer anywhere in the plan) to CO-OCCURRENCE (peer in the
+  // SAME node's write set): splitting halves across nodes is itself the defect — the pair must be
+  // edited atomically, so per-node the two copies are left inconsistent. #301 also adds the per-forge
+  // CLAUDE.md-template pairs, which validate-script-sync.js does NOT export (they are region-, not
+  // whole-file-identical), so they are hardcoded here and enforced in EVERY edition; the sync-script
+  // arm stays inert where the sync module is absent (forge/codex/user installs: syncMeta === null).
+  const byteIdentityGroups = [];
 
+  // (A) Per-forge workflow-init CLAUDE.md-template pairs (#301 / #286). Region byte-locked per pair
+  // by validate-kaola-workflow-contracts.js (commands/workflow-init.md <-> the edition's init SKILL).
+  // Segments are join()ed so no `plugins/<root>/scripts` literal forms in the forge plan-validator
+  // copies (the forge contract validator forbids that token) — these are /skills + /commands paths,
+  // but the join keeps the convention and guards against a future /scripts sibling.
+  const skillInit = ['skills', 'kaola-workflow-init', 'SKILL.md'].join('/');
+  const tmplPair = (cmdDir, root, label) => ({ label, files: [`${cmdDir}/workflow-init.md`, `${root}/${skillInit}`] });
+  byteIdentityGroups.push(tmplPair('commands', ['plugins', 'kaola-workflow'].join('/'), 'workflow-init template pair (github)'));
+  byteIdentityGroups.push(tmplPair(['plugins', 'kaola-workflow-gitlab', 'commands'].join('/'), ['plugins', 'kaola-workflow-gitlab'].join('/'), 'workflow-init template pair (gitlab)'));
+  byteIdentityGroups.push(tmplPair(['plugins', 'kaola-workflow-gitea', 'commands'].join('/'), ['plugins', 'kaola-workflow-gitea'].join('/'), 'workflow-init template pair (gitea)'));
+
+  // (B) validate-script-sync.js whole-file groups — repo root only (syncMeta === null elsewhere).
+  if (syncMeta) {
     const COMMON = Array.isArray(syncMeta.COMMON_SCRIPTS) ? syncMeta.COMMON_SCRIPTS : [];
     const GROUPS = Array.isArray(syncMeta.BYTE_IDENTICAL_GROUPS) ? syncMeta.BYTE_IDENTICAL_GROUPS : [];
-    // NOTE: the peer prefix is built by joining segments to keep the literal out of
-    // forge-plugin copies, where the contract validator scans for forbidden path tokens.
     const codexScriptsPrefix = ['plugins', 'kaola-workflow', 'scripts'].join('/');
-    const commonPair = name => [`scripts/${name}`, `${codexScriptsPrefix}/${name}`];
+    for (const name of COMMON) byteIdentityGroups.push({ label: 'common script pair (#274)', files: [`scripts/${name}`, `${codexScriptsPrefix}/${name}`] });
+    for (const group of GROUPS) byteIdentityGroups.push(group);
+  }
 
-    for (const n of nodes) {
-      for (const p of n.writeSet) {
-        const base = path.basename(p);
-        if (COMMON.includes(base)) {
-          const [a, b] = commonPair(base);
-          if (p === a || p === b) {
-            const peer = p === a ? b : a;
-            if (!unionWrites.has(peer)) {
-              errors.push(`sync-group gap: node ${n.id} declares "${p}" without its byte-identical peer "${peer}" (#274)`);
-            }
-          }
-        }
-        for (const group of GROUPS) {
-          const members = Array.isArray(group.files) ? group.files : [];
-          if (members.includes(p)) {
-            for (const peer of members) {
-              if (peer !== p && !unionWrites.has(peer)) {
-                errors.push(`sync-group gap: node ${n.id} declares "${p}" without its byte-identical peer "${peer}" (${group.label}, #274)`);
-              }
-            }
+  // Co-occurrence enforcement: every declared group member must have ALL its peers in the SAME
+  // node's write set (n.writeSet is a Set). Membership is path-exact, so a non-group path never
+  // false-refuses.
+  for (const n of nodes) {
+    for (const group of byteIdentityGroups) {
+      const members = Array.isArray(group.files) ? group.files : [];
+      for (const p of members) {
+        if (!n.writeSet.has(p)) continue;
+        for (const peer of members) {
+          if (peer !== p && !n.writeSet.has(peer)) {
+            errors.push(`sync-group gap: node ${n.id} declares "${p}" without its byte-identical peer "${peer}" (${group.label || '#274'}, #301)`);
           }
         }
       }
