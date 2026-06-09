@@ -778,43 +778,51 @@ function validatePlan(content, opts) {
     }
   }
 
-  // #274: sync-group write-set gap. A frozen plan that edits one half of a byte-identical
-  // sync pair would pass every other gate, run, and SHIP drift that npm test's
-  // validate-script-sync.js then rejects post-merge. Refuse at freeze instead.
-  // Inert when the sync module is absent (forge/codex/user installs: syncMeta === null)
-  // and for forge-rename ports (paths in neither list). Membership is path-exact, so a
-  // non-sync path can never false-refuse.
-  if (syncMeta) {
-    const unionWrites = new Set();
-    for (const n of nodes) for (const p of n.writeSet) unionWrites.add(p);
+  // #274 / #301: byte-identity write-set CO-OCCURRENCE gap. A frozen plan that edits one half of a
+  // byte-identical group WITHOUT its partner(s) in the SAME node would diverge the locked bytes —
+  // whole-file for the sync-script pairs, the marked region for the workflow-init CLAUDE.md-template
+  // pairs — and SHIP drift that the post-merge contract validators / validate-script-sync.js then
+  // reject, forcing a mid-run discard + re-author (the #286 discard #2). Refuse at freeze instead.
+  //
+  // #301 inverts the original UNION check (peer anywhere in the plan) to CO-OCCURRENCE (peer in the
+  // SAME node's write set): splitting halves across nodes is itself the defect — the pair must be
+  // edited atomically, so per-node the two copies are left inconsistent. #301 also adds the per-forge
+  // CLAUDE.md-template pairs, which validate-script-sync.js does NOT export (they are region-, not
+  // whole-file-identical), so they are hardcoded here and enforced in EVERY edition; the sync-script
+  // arm stays inert where the sync module is absent (forge/codex/user installs: syncMeta === null).
+  const byteIdentityGroups = [];
 
+  // (A) Per-forge workflow-init CLAUDE.md-template pairs (#301 / #286). Region byte-locked per pair
+  // by validate-kaola-workflow-contracts.js (commands/workflow-init.md <-> the edition's init SKILL).
+  // Segments are join()ed so no `plugins/<root>/scripts` literal forms in the forge plan-validator
+  // copies (the forge contract validator forbids that token) — these are /skills + /commands paths,
+  // but the join keeps the convention and guards against a future /scripts sibling.
+  const skillInit = ['skills', 'kaola-workflow-init', 'SKILL.md'].join('/');
+  const tmplPair = (cmdDir, root, label) => ({ label, files: [`${cmdDir}/workflow-init.md`, `${root}/${skillInit}`] });
+  byteIdentityGroups.push(tmplPair('commands', ['plugins', 'kaola-workflow'].join('/'), 'workflow-init template pair (github)'));
+  byteIdentityGroups.push(tmplPair(['plugins', 'kaola-workflow-gitlab', 'commands'].join('/'), ['plugins', 'kaola-workflow-gitlab'].join('/'), 'workflow-init template pair (gitlab)'));
+  byteIdentityGroups.push(tmplPair(['plugins', 'kaola-workflow-gitea', 'commands'].join('/'), ['plugins', 'kaola-workflow-gitea'].join('/'), 'workflow-init template pair (gitea)'));
+
+  // (B) validate-script-sync.js whole-file groups — repo root only (syncMeta === null elsewhere).
+  if (syncMeta) {
     const COMMON = Array.isArray(syncMeta.COMMON_SCRIPTS) ? syncMeta.COMMON_SCRIPTS : [];
     const GROUPS = Array.isArray(syncMeta.BYTE_IDENTICAL_GROUPS) ? syncMeta.BYTE_IDENTICAL_GROUPS : [];
-    // NOTE: the peer prefix is built by joining segments to keep the literal out of
-    // forge-plugin copies, where the contract validator scans for forbidden path tokens.
     const codexScriptsPrefix = ['plugins', 'kaola-workflow', 'scripts'].join('/');
-    const commonPair = name => [`scripts/${name}`, `${codexScriptsPrefix}/${name}`];
+    for (const name of COMMON) byteIdentityGroups.push({ label: 'common script pair (#274)', files: [`scripts/${name}`, `${codexScriptsPrefix}/${name}`] });
+    for (const group of GROUPS) byteIdentityGroups.push(group);
+  }
 
-    for (const n of nodes) {
-      for (const p of n.writeSet) {
-        const base = path.basename(p);
-        if (COMMON.includes(base)) {
-          const [a, b] = commonPair(base);
-          if (p === a || p === b) {
-            const peer = p === a ? b : a;
-            if (!unionWrites.has(peer)) {
-              errors.push(`sync-group gap: node ${n.id} declares "${p}" without its byte-identical peer "${peer}" (#274)`);
-            }
-          }
-        }
-        for (const group of GROUPS) {
-          const members = Array.isArray(group.files) ? group.files : [];
-          if (members.includes(p)) {
-            for (const peer of members) {
-              if (peer !== p && !unionWrites.has(peer)) {
-                errors.push(`sync-group gap: node ${n.id} declares "${p}" without its byte-identical peer "${peer}" (${group.label}, #274)`);
-              }
-            }
+  // Co-occurrence enforcement: every declared group member must have ALL its peers in the SAME
+  // node's write set (n.writeSet is a Set). Membership is path-exact, so a non-group path never
+  // false-refuses.
+  for (const n of nodes) {
+    for (const group of byteIdentityGroups) {
+      const members = Array.isArray(group.files) ? group.files : [];
+      for (const p of members) {
+        if (!n.writeSet.has(p)) continue;
+        for (const peer of members) {
+          if (peer !== p && !n.writeSet.has(peer)) {
+            errors.push(`sync-group gap: node ${n.id} declares "${p}" without its byte-identical peer "${peer}" (${group.label || '#274'}, #301)`);
           }
         }
       }
@@ -888,6 +896,53 @@ function injectHash(content, hash) {
   return marker + '\n' + content;
 }
 
+// #308: reconcileLedger — bring the `## Node Ledger` into agreement with the `## Nodes`
+// table for a plan-repair (a node added to a frozen plan re-froze without a ledger row →
+// next-action could never schedule it). Adds a `pending` row for every node present in
+// `## Nodes` but absent from the ledger; NEVER drops or rewrites an existing status. The
+// row is built to match the ledger header's column structure (id/status, plus role if the
+// ledger carries it). plan_hash covers only `## Meta` + `## Nodes`, so adding ledger rows
+// does NOT move the hash. Returns { content, added:[...ids] }; a no-op when nothing is
+// missing or the ledger section/header is unparseable (fail-safe — never corrupts).
+function reconcileLedger(content) {
+  const nodes = parseNodes(content);
+  const ledger = parseLedger(content);
+  const missing = nodes.filter(n => !ledger.has(n.id));
+  if (!missing.length) return { content, added: [] };
+
+  const marker = '\n## Node Ledger';
+  const ledgerIdx = content.indexOf(marker);
+  if (ledgerIdx < 0) return { content, added: [] };
+  const afterLedger = content.indexOf('\n## ', ledgerIdx + 1);
+  const sectionEnd = afterLedger >= 0 ? afterLedger : content.length;
+  const section = content.slice(ledgerIdx, sectionEnd);
+
+  const rowLines = section.split('\n').filter(l => l.trim().startsWith('|'));
+  if (rowLines.length < 1) return { content, added: [] };
+  const headerCells = rowLines[0].split('|').slice(1, -1).map(c => c.trim());
+  const lower = headerCells.map(c => c.toLowerCase());
+  const idIdx = lower.indexOf('id');
+  const stIdx = lower.indexOf('status');
+  const roleIdx = lower.indexOf('role');
+  if (idIdx < 0 || stIdx < 0) return { content, added: [] };
+
+  const nodeRole = new Map(nodes.map(n => [n.id, n.role]));
+  const buildRow = id => {
+    const cells = new Array(headerCells.length).fill('');
+    cells[idIdx] = id;
+    cells[stIdx] = 'pending';
+    if (roleIdx >= 0) cells[roleIdx] = nodeRole.get(id) || '';
+    return '| ' + cells.join(' | ') + ' |';
+  };
+  const newRows = missing.map(n => buildRow(n.id)).join('\n');
+
+  const lastRow = rowLines[rowLines.length - 1];
+  const lastOffsetInSection = section.lastIndexOf(lastRow);
+  const insertAt = ledgerIdx + lastOffsetInSection + lastRow.length;
+  const updated = content.slice(0, insertAt) + '\n' + newRows + content.slice(insertAt);
+  return { content: updated, added: missing.map(n => n.id) };
+}
+
 // --- CLI --------------------------------------------------------------------
 // #239 (v3.21.0): snapshot the LANDABLE worktree into a throwaway index and return the tree SHA. The
 // index is first seeded from HEAD (`read-tree HEAD`), then `git add -A` layers the working state on
@@ -941,9 +996,10 @@ function anchorBase(root, refName, tree) {
 }
 function printHelp() {
   process.stdout.write(
-    'usage: kaola-workflow-plan-validator.js <workflow-plan.md> [--json] [--freeze] [--resume-check] [--gate-verify] [--barrier-check [--node-id ID] [--base REF]] [--verdict-check [--node-id ID]] [--selector-check --node-id ID]\n' +
+    'usage: kaola-workflow-plan-validator.js <workflow-plan.md> [--json] [--freeze [--repair]] [--resume-check] [--gate-verify] [--barrier-check [--node-id ID] [--base REF]] [--verdict-check [--node-id ID]] [--selector-check --node-id ID]\n' +
     '  default        validate + print the governance verdict; exit 1 on typed refusal\n' +
     '  --freeze       validate, then write the computed plan_hash into the plan file\n' +
+    '  --freeze --repair  also reconcile the ## Node Ledger to ## Nodes (add missing rows as pending; never drop a status) before freezing\n' +
     '  --resume-check re-validate library + structure + hash only (not the gate rubric)\n' +
     '  --gate-verify  verify gate EXECUTION over the ## Node Ledger (G1/G2 ran); exit 1 if a completed node is uncovered\n' +
     '  --record-base --node-id ID  snapshot the full worktree as node ID\'s per-instance baseline (.cache); run at node start.\n' +
@@ -980,9 +1036,19 @@ function main() {
     return;
   }
   if (args.includes('--freeze')) {
-    const r = freezePlan(content);
+    // #308: --freeze --repair reconciles the ## Node Ledger to ## Nodes (adds missing rows
+    // as pending, never drops a status) BEFORE freezing. plan_hash excludes the ledger, so
+    // the reconcile never moves the hash; plain --freeze stays byte-stable.
+    let toFreeze = content;
+    let reconciledAdded = [];
+    if (args.includes('--repair')) {
+      const rec = reconcileLedger(content);
+      toFreeze = rec.content;
+      reconciledAdded = rec.added;
+    }
+    const r = freezePlan(toFreeze);
     if (r.frozen) fs.writeFileSync(planPath, r.content);
-    process.stdout.write((json ? JSON.stringify({ result: r.result, decision: r.decision, planHash: r.planHash, frozen: r.frozen, risk: r.risk, errors: r.errors }) : (r.frozen ? `frozen (${r.decision}) plan_hash=${r.planHash}` : 'typed refusal: ' + (r.errors || []).join('; '))) + '\n');
+    process.stdout.write((json ? JSON.stringify({ result: r.result, decision: r.decision, planHash: r.planHash, frozen: r.frozen, risk: r.risk, errors: r.errors, reconciled: reconciledAdded }) : (r.frozen ? `frozen (${r.decision}) plan_hash=${r.planHash}${reconciledAdded.length ? ' reconciled=' + reconciledAdded.join(',') : ''}` : 'typed refusal: ' + (r.errors || []).join('; '))) + '\n');
     if (!r.frozen) process.exitCode = 1;
     return;
   }
@@ -1169,6 +1235,7 @@ module.exports = {
   validatePlan,
   revalidateForResume,
   freezePlan,
+  reconcileLedger,
   computePlanHash,
   readStoredHash,
   parseNodes,

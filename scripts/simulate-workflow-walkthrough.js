@@ -7126,7 +7126,9 @@ function testAdaptiveSyncGroupGap() {
     ], []);
     assert(v.result === 'refuse' && /sync-group gap/.test((v.errors || []).join(';')),
       '(a) lone COMMON_SCRIPTS member must refuse with sync-group gap, got: ' + JSON.stringify(v));
-    // (b) BOTH halves (across two nodes) -> in-grammar.
+    // (b) #301: BOTH halves SPLIT across two nodes -> REFUSE (co-occurrence, not union). The pair
+    //     must be edited atomically in ONE node; split halves leave the two copies inconsistent
+    //     between nodes. (Was in-grammar under the original union semantics; #301 inverts it.)
     v = validatePlanFixture(tmp, [
       '| explore | code-explorer | — | — | 1 | sequence |',
       '| impl | tdd-guide | explore | scripts/kaola-workflow-claim.js | 1 | sequence |',
@@ -7134,8 +7136,17 @@ function testAdaptiveSyncGroupGap() {
       '| review | code-reviewer | impl,doc | — | 1 | sequence |',
       '| done | finalize | review | — | 1 | sequence |',
     ], []);
+    assert(v.result === 'refuse' && /sync-group gap/.test((v.errors || []).join(';')),
+      '(b) #301: COMMON_SCRIPTS halves SPLIT across nodes must refuse (co-occurrence), got: ' + JSON.stringify(v));
+    // (b2) #301: BOTH halves in the SAME node -> in-grammar (atomic co-edit).
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| impl | tdd-guide | explore | scripts/kaola-workflow-claim.js, plugins/kaola-workflow/scripts/kaola-workflow-claim.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
     assert(v.result === 'in-grammar',
-      '(b) both COMMON_SCRIPTS halves present must be in-grammar, got: ' + JSON.stringify(v));
+      '(b2) #301: both COMMON_SCRIPTS halves in ONE node must be in-grammar, got: ' + JSON.stringify(v));
     // (c) BYTE_IDENTICAL_GROUPS member WITHOUT peers -> refuse.
     v = validatePlanFixture(tmp, [
       '| explore | code-explorer | — | — | 1 | sequence |',
@@ -7154,8 +7165,73 @@ function testAdaptiveSyncGroupGap() {
     ], []);
     assert(v.result === 'in-grammar',
       '(d) forge-rename port path alone must NOT false-refuse, got: ' + JSON.stringify(v));
+    // (e) #301/#286: a per-forge workflow-init CLAUDE.md-template HALF (the init SKILL) without its
+    //     commands/workflow-init.md partner in the same node -> refuse naming the missing partner.
+    //     This is the #286 discard #2 case (template region byte-locked per pair; partner in NO node).
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| tmpl | doc-updater | explore | plugins/kaola-workflow/skills/kaola-workflow-init/SKILL.md | 1 | sequence |',
+      '| review | code-reviewer | tmpl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /commands\/workflow-init\.md/.test((v.errors || []).join(';')),
+      '(e) #301: lone workflow-init template SKILL half must refuse naming the commands/workflow-init.md partner, got: ' + JSON.stringify(v));
+    // (f) #301: the workflow-init template pair kept intra-node -> in-grammar.
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| tmpl | doc-updater | explore | commands/workflow-init.md, plugins/kaola-workflow/skills/kaola-workflow-init/SKILL.md | 1 | sequence |',
+      '| review | code-reviewer | tmpl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'in-grammar',
+      '(f) #301: workflow-init template pair intra-node must be in-grammar, got: ' + JSON.stringify(v));
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   console.log('testAdaptiveSyncGroupGap: PASSED');
+}
+
+// issue #308: reconcileLedger (--freeze --repair) brings the ## Node Ledger into agreement
+// with ## Nodes — adds a pending row for a node missing from the ledger, never drops an
+// existing status, and (since plan_hash excludes the ledger) does not move the hash.
+function testAdaptiveFreezeRepairReconcile() {
+  const planValidator = require(planValidatorScript);
+  const plan = [
+    '# Plan', '',
+    '## Meta', 'labels: chore', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+    '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| extra | doc-updater | a | docs/x.md | 1 | sequence |',
+    '| review | code-reviewer | a,extra | — | 1 | sequence |',
+    '| finalize | finalize | review | — | 1 | sequence |',
+    '',
+    '## Node Ledger', '',
+    '| id | status |',
+    '|---|---|',
+    '| a | complete |',
+    '| review | pending |',
+    '| finalize | pending |',
+    '',
+  ].join('\n');
+
+  // (1) the missing 'extra' row is added as pending; existing statuses are untouched.
+  const rec = planValidator.reconcileLedger(plan);
+  assert(rec.added.length === 1 && rec.added[0] === 'extra',
+    '#308 reconcile: missing node "extra" added, got ' + JSON.stringify(rec.added));
+  const led = planValidator.parseLedger(rec.content);
+  assert(led.get('extra') === 'pending', '#308 reconcile: extra row added as pending');
+  assert(led.get('a') === 'complete' && led.get('review') === 'pending',
+    '#308 reconcile: existing statuses are NOT dropped or rewritten');
+
+  // (2) reconcile must not move plan_hash (hash covers ## Meta + ## Nodes only).
+  assert(planValidator.computePlanHash(plan) === planValidator.computePlanHash(rec.content),
+    '#308 reconcile: adding ledger rows must not change plan_hash');
+
+  // (3) idempotent — a second pass adds nothing.
+  const rec2 = planValidator.reconcileLedger(rec.content);
+  assert(rec2.added.length === 0, '#308 reconcile: idempotent (second pass adds nothing)');
+
+  console.log('testAdaptiveFreezeRepairReconcile: PASSED');
 }
 
 // issue #251: verdict-gate unit tests — parseNodeVerdict pure, verifyVerdictBlock pure,
@@ -9128,6 +9204,7 @@ async function main() {
     testAdaptiveCheapWinFixes();
     testAdaptiveAuditCoverage();
     testAdaptiveSyncGroupGap();   // #274
+    testAdaptiveFreezeRepairReconcile();   // #308
     testAdaptiveVerdictCheck();
     testAdaptivePatternLibrary();
     // issue #267 — select() composition + runtime coverage

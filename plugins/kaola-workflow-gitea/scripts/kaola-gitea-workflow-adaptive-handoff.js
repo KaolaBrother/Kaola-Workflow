@@ -60,9 +60,11 @@ function getRoot() {
 // ---------------------------------------------------------------------------
 const VALIDATOR    = 'kaola-gitea-workflow-plan-validator.js';
 const ROADMAP      = 'kaola-gitea-workflow-roadmap.js';
+const TASK_MIRROR  = 'kaola-gitea-workflow-task-mirror.js';
 
 const validatorPath  = path.join(__dirname, VALIDATOR);
 const roadmapPath    = path.join(__dirname, ROADMAP);
+const taskMirrorPath = path.join(__dirname, TASK_MIRROR);
 
 // ---------------------------------------------------------------------------
 // safeJsonParse — returns {} on any parse failure (fail-closed).
@@ -264,6 +266,13 @@ function runHandoff(opts) {
       validator_verdict: resumeResult,
     };
   }
+
+  // #282 (AC-1): generate the durable task mirror (workflow-tasks.json) now that the plan is frozen
+  // and integrity-checked, so it exists from the first plan-run entry without a manual CLI call.
+  // Best-effort, like the roadmap stage below: the executor's orient reconciles it on every resume
+  // (#282 AC-2) and the compact-resume hook degrades gracefully when absent, so a non-zero here
+  // never blocks ready_to_run.
+  shell(taskMirrorPath, ['--project', project]);
 
   // -------------------------------------------------------------------------
   // Step 4: next-action PURE — read the (now frozen) plan content fresh to

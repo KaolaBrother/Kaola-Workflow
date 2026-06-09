@@ -11,6 +11,7 @@ const {
   checkEvidenceShape,
   runOrient,
   runOpenNext,
+  runReopenNode,
   runRecordEvidence,
   runCloseAndOpenNext,
   runWriteHalt,
@@ -21,6 +22,10 @@ const {
   ORPHAN_LEGALITY_MANIFEST,
   ORPHAN_LEGALITY_IN_PROGRESS_IDS,
   RUN_ORIENT_EXPECTED,
+  TOPUP_INCOMPLETE_MANIFEST,
+  TOPUP_INCOMPLETE_IN_PROGRESS_BEFORE,
+  TOPUP_INCOMPLETE_IN_PROGRESS_AFTER,
+  TOPUP_INCOMPLETE_REASON,
 } = require('./fixtures-orphan-legality');
 
 const fs = require('fs');
@@ -1325,8 +1330,13 @@ function makeState(opts) {
     '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
     '| finalize | finalize | a | CHANGELOG.md | 1 | sequence |',
   ];
+  // #302: DERIVE the in_progress ledger row(s) from the shared fixture's
+  // ORPHAN_LEGALITY_IN_PROGRESS_IDS rather than hard-coding `| a | in_progress |`.
+  // This binds the in_progress axis to the same definition crossCheckStatus uses,
+  // so a future re-divergence of either site is caught by construction (the import
+  // is now load-bearing, not a dead symbol).
   const plan = makePlan([
-    '| a        | in_progress | |',
+    ...ORPHAN_LEGALITY_IN_PROGRESS_IDS.map(id => `| ${id} | in_progress | |`),
     '| finalize | pending     | |',
   ], planNodes);
   const state = makeState();
@@ -1371,6 +1381,57 @@ function makeState(opts) {
     '#293 orient-lock: single in_progress + all-sealed manifest → result:ok (legacy single-node path)');
   assert(result.batch === RUN_ORIENT_EXPECTED.batch,
     '#293 orient-lock: single in_progress + all-sealed manifest → batch:null (NOT a batch path)');
+}
+
+// ---------------------------------------------------------------------------
+// #305: runOrient on a member.opening:true interrupted top-up (manifest state
+//     'open') must route to reconcile (result:'refuse', reason
+//     'batch_topup_incomplete') CONSISTENTLY before the in-flight row flips
+//     (in_progress=[a,b]) AND after it ([a,b,c]) — never reporting
+//     orphan_multi_in_progress (before) and never ACCEPTING it as a valid batch
+//     (after). Mirrors the crossCheckStatus site via the shared fixture.
+//     (TDD RED before the member-opening short-circuit; GREEN after.)
+// ---------------------------------------------------------------------------
+{
+  const memberIds = TOPUP_INCOMPLETE_MANIFEST.members.map(m => m.id); // ['a','b','c']
+  const planNodes = memberIds
+    .map(id => `| ${id} | code-explorer | — | — | 1 | fanout(scan) |`)
+    .concat([`| finalize | finalize | ${memberIds.join(',')} | CHANGELOG.md | 1 | sequence |`]);
+  // Derive the ledger from the SHARED in_progress arrays (anti-drift): a member
+  // listed in ipIds is in_progress, otherwise pending.
+  const ledgerFor = (ipIds) => memberIds
+    .map(id => `| ${id} | ${ipIds.includes(id) ? 'in_progress' : 'pending'} | |`)
+    .concat(['| finalize | pending | |']);
+
+  const manifestJson = JSON.stringify({ ...TOPUP_INCOMPLETE_MANIFEST, createdAt: '1970-01-01T00:00:00.000Z' });
+  const shellStub = function(scriptPath) {
+    const base = path.basename(scriptPath);
+    if (base === 'kaola-workflow-plan-validator.js') return { exitCode: 0, ok: true };
+    if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', readySet: [], readyPending: [], nextNode: null, allDone: false };
+    return { exitCode: 1 };
+  };
+  const orientFor = (ipIds) => runOrient({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project',
+    shell: shellStub,
+    readFile: (fpath) => {
+      if (fpath.endsWith('workflow-plan.md')) return makePlan(ledgerFor(ipIds), planNodes);
+      if (fpath.endsWith('workflow-state.md')) return makeState();
+      if (fpath.endsWith('active-batch.json')) return manifestJson;
+      throw new Error('ENOENT: ' + fpath);
+    },
+    writeFile: () => { throw new Error('orient must not write'); },
+    cacheExists: (fpath) => fpath.endsWith('active-batch.json'),
+  });
+
+  const before = orientFor(TOPUP_INCOMPLETE_IN_PROGRESS_BEFORE);
+  assert(before.result === 'refuse' && before.reason === TOPUP_INCOMPLETE_REASON,
+    '#305 orient: interrupted top-up BEFORE flip → refuse batch_topup_incomplete (not orphan_multi_in_progress), got ' + JSON.stringify({ result: before.result, reason: before.reason }));
+
+  const after = orientFor(TOPUP_INCOMPLETE_IN_PROGRESS_AFTER);
+  assert(after.result === 'refuse' && after.reason === TOPUP_INCOMPLETE_REASON,
+    '#305 orient: interrupted top-up AFTER flip → refuse batch_topup_incomplete (NOT accepted as a valid batch), got ' + JSON.stringify({ result: after.result, reason: after.reason, batch: after.batch }));
 }
 
 // ---------------------------------------------------------------------------
@@ -1493,6 +1554,164 @@ function makeState(opts) {
 }
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// #308: runReopenNode — first-class plan-repair transaction. Reopens a COMPLETE
+// node N, resets its post-dominating gate(s) to pending, removes the stale
+// barrier-base baselines, reopens N to in_progress, and re-records a fresh
+// baseline. Plan a→impl→review(code-reviewer)→finalize, all complete.
+// ---------------------------------------------------------------------------
+{
+  const planNodes = [
+    '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| impl | tdd-guide | a | scripts/b.js | 1 | sequence |',
+    '| review | code-reviewer | impl | — | 1 | sequence |',
+    '| finalize | finalize | review | — | 1 | sequence |',
+  ];
+  let planContent = makePlan([
+    '| a | complete | |',
+    '| impl | complete | |',
+    '| review | complete | |',
+    '| finalize | complete | |',
+  ], planNodes);
+  const removed = [];
+  const shelled = [];
+  const result = runReopenNode({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    project: 'test-project',
+    nodeId: 'impl',
+    shell: (scriptPath) => {
+      shelled.push(path.basename(scriptPath));
+      if (path.basename(scriptPath) === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok' };
+      return { exitCode: 1 };
+    },
+    readFile: (fpath) => { if (fpath.endsWith('workflow-plan.md')) return planContent; throw new Error('ENOENT ' + fpath); },
+    writeFile: (fpath, content) => { if (fpath.endsWith('workflow-plan.md')) planContent = content; },
+    cacheExists: (fpath) => /barrier-base-/.test(fpath), // baselines present; NO active batch
+    unlink: (fpath) => removed.push(path.basename(fpath)),
+  });
+  assert(result.result === 'ok', '#308 reopen: result ok, got ' + JSON.stringify(result));
+  assert(/\|\s*impl\s*\|\s*in_progress\s*\|/.test(planContent), '#308 reopen: impl reopened to in_progress');
+  assert(/\|\s*review\s*\|\s*pending\s*\|/.test(planContent), '#308 reopen: post-dominating gate review reset to pending');
+  assert(/\|\s*finalize\s*\|\s*complete\s*\|/.test(planContent), '#308 reopen: sink finalize left complete (narrow reset; transitive readiness withholds it)');
+  assert(/\|\s*a\s*\|\s*complete\s*\|/.test(planContent), '#308 reopen: upstream a left complete');
+  assert(result.gatesReset && result.gatesReset.includes('review'), '#308 reopen: gatesReset names review, got ' + JSON.stringify(result.gatesReset));
+  assert(removed.includes('barrier-base-impl') && removed.includes('barrier-base-review'),
+    '#308 reopen: stale baselines for impl + gate removed, got ' + JSON.stringify(removed));
+  assert(shelled.includes('kaola-workflow-commit-node.js'), '#308 reopen: fresh baseline (commit-node --start) recorded for impl');
+}
+
+// #308: runReopenNode refuses a non-complete node (only a complete node may be reopened).
+{
+  const planNodes = [
+    '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| impl | tdd-guide | a | scripts/b.js | 1 | sequence |',
+    '| review | code-reviewer | impl | — | 1 | sequence |',
+    '| finalize | finalize | review | — | 1 | sequence |',
+  ];
+  const planContent = makePlan([
+    '| a | complete | |', '| impl | in_progress | |', '| review | pending | |', '| finalize | pending | |',
+  ], planNodes);
+  const result = runReopenNode({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md', project: 'test-project', nodeId: 'impl',
+    shell: () => ({ exitCode: 0, result: 'ok' }),
+    readFile: (f) => { if (f.endsWith('workflow-plan.md')) return planContent; throw new Error('ENOENT ' + f); },
+    writeFile: () => { throw new Error('must not write on refusal'); },
+    cacheExists: () => false, unlink: () => {},
+  });
+  assert(result.result === 'refuse' && result.reason === 'node_not_complete',
+    '#308 reopen: refuses a non-complete node, got ' + JSON.stringify(result));
+}
+
+// #308: runReopenNode refuses over a live parallel batch / interrupted top-up (#305 guard parity).
+{
+  const planNodes = [
+    '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| impl | tdd-guide | a | scripts/b.js | 1 | sequence |',
+    '| review | code-reviewer | impl | — | 1 | sequence |',
+    '| finalize | finalize | review | — | 1 | sequence |',
+  ];
+  const planContent = makePlan([
+    '| a | complete | |', '| impl | complete | |', '| review | complete | |', '| finalize | complete | |',
+  ], planNodes);
+  const manifestJson = JSON.stringify({ batchId: 'b', state: 'open', members: [{ id: 'x', opening: true }] });
+  const result = runReopenNode({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md', project: 'test-project', nodeId: 'impl',
+    shell: () => ({ exitCode: 0, result: 'ok' }),
+    readFile: (f) => { if (f.endsWith('active-batch.json')) return manifestJson; if (f.endsWith('workflow-plan.md')) return planContent; throw new Error('ENOENT ' + f); },
+    writeFile: () => { throw new Error('must not write on refusal'); },
+    cacheExists: (f) => f.endsWith('active-batch.json'), unlink: () => {},
+  });
+  assert(result.result === 'refuse' && result.reason === 'active_batch_exists',
+    '#308 reopen: refuses over a live batch / opening member, got ' + JSON.stringify(result));
+}
+
+// ---------------------------------------------------------------------------
+// #308 INTEGRATION (reopen-node × transitive readiness): the COMPOSITION the
+// isolated tests miss. After reopen-node resets the post-dominating gate to
+// pending and reopens N, the resulting ledger must drive the REAL next-action to
+// offer ONLY the reopened node — the gate and the sink stay withheld by transitive
+// readiness (no premature [N, sink] frontier). Only commit-node (the git baseline)
+// is stubbed; spliceLedgerNode + parseNodes + computeNextAction run for real.
+// ---------------------------------------------------------------------------
+{
+  const { computeNextAction } = require('./kaola-workflow-next-action');
+  const planNodes = [
+    '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| impl | tdd-guide | a | scripts/b.js | 1 | sequence |',
+    '| review | code-reviewer | impl | — | 1 | sequence |',
+    '| finalize | finalize | review | — | 1 | sequence |',
+  ];
+  let planContent = makePlan([
+    '| a | complete | |', '| impl | complete | |', '| review | complete | |', '| finalize | pending | |',
+  ], planNodes);
+  const res = runReopenNode({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md', project: 'test-project', nodeId: 'impl',
+    shell: (sp) => path.basename(sp) === 'kaola-workflow-commit-node.js' ? { exitCode: 0, result: 'ok' } : { exitCode: 1 },
+    readFile: (f) => { if (f.endsWith('workflow-plan.md')) return planContent; throw new Error('ENOENT ' + f); },
+    writeFile: (f, c) => { if (f.endsWith('workflow-plan.md')) planContent = c; },
+    cacheExists: (f) => /barrier-base-/.test(f), unlink: () => {},
+  });
+  assert(res.result === 'ok', '#308 integ: reopen-node ok, got ' + JSON.stringify(res));
+  const na = computeNextAction(planContent, { resolveModel: () => 'sonnet' });
+  const ready = na.readySet.map(n => n.id).sort();
+  assert(JSON.stringify(ready) === JSON.stringify(['impl']),
+    '#308 integ: after reopen-node, next-action offers ONLY [impl] — gate + sink withheld, got ' + JSON.stringify(ready));
+  assert(!na.readySet.some(n => n.id === 'finalize'),
+    '#308 integ: finalize sink is NOT prematurely ready after the gate reset');
+}
+
+// ---------------------------------------------------------------------------
+// #282 (AC-2): orient reconciles the durable task mirror on every resume by
+// SHELLING the task-mirror CLI — while staying read-only (the injected writeFile
+// throws, proving orient never writes the plan/ledger/state itself).
+// ---------------------------------------------------------------------------
+{
+  const planNodes = [
+    '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| finalize | finalize | a | CHANGELOG.md | 1 | sequence |',
+  ];
+  const plan = makePlan(['| a | in_progress | |', '| finalize | pending | |'], planNodes);
+  const shelled = [];
+  const result = runOrient({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project',
+    shell: (scriptPath) => {
+      const b = path.basename(scriptPath);
+      shelled.push(b);
+      if (b === 'kaola-workflow-plan-validator.js') return { exitCode: 0, ok: true };
+      if (b === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', readySet: [], readyPending: [], allDone: false };
+      return { exitCode: 0 };
+    },
+    readFile: (f) => { if (f.endsWith('workflow-plan.md')) return plan; if (f.endsWith('workflow-state.md')) return makeState(); throw new Error('ENOENT ' + f); },
+    writeFile: () => { throw new Error('orient must not write (read-only)'); },
+    cacheExists: () => false,
+  });
+  assert(result.result === 'ok', '#282 AC-2: orient still returns ok');
+  assert(shelled.includes('kaola-workflow-task-mirror.js'),
+    '#282 AC-2: orient shells the task-mirror CLI to reconcile workflow-tasks.json, got ' + JSON.stringify(shelled));
+}
+
 // Summary
 // ---------------------------------------------------------------------------
 if (failed > 0) {

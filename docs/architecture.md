@@ -83,10 +83,15 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   and commit-node mirrors the executor's own dispatch/commit cycle: next-action resolves
   *what* to run next; commit-node proves *what was written* was in bounds.
   `kaola-workflow-adaptive-node.js` (#272) is the third aggregator and owns the complete
-  per-node lifecycle for `/kaola-workflow-plan-run`: the `orient` (read-only resume scan),
+  per-node lifecycle for `/kaola-workflow-plan-run`: the `orient` (read-only resume scan — it
+  also reconciles the durable task mirror `workflow-tasks.json` on every resume by shelling the
+  task-mirror CLI, so the write stays out of `orient` itself, #282),
   `open-next` (ledger `pending → in_progress` + baseline), `record-evidence` (`.cache` write),
   `close-and-open-next` (evidence-shape check → barrier → close + compliance row → selector
-  routing → fused advance), and `write-halt` (consent/security/test_thrash escalation)
+  routing → fused advance), `write-halt` (consent/security/test_thrash escalation), and
+  `reopen-node` (#308 first-class plan-repair: reset an already-`complete` node and its
+  post-dominating gate(s) → `pending`, remove the stale `.cache/barrier-base-<id>` baselines,
+  reopen the node to `in_progress`, and re-record a fresh baseline at the current merged state)
   transactions. It is a pure composition layer: it shells `next-action.js` and `commit-node.js`
   via `child_process` and read-only-imports the validator's `parseNodes` parser; the engine
   scripts never call back into it (acyclic, recursion-safe). The main session in
@@ -140,7 +145,12 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   other configuration is a typed refusal (`orphan_multi_in_progress`). The `orient` subcommand
   of `adaptive-node.js` enforces this gate: it enumerates all `in_progress` rows, reads the
   manifest via `parallel-batch status`, and either confirms the batch is valid, routes to the
-  legacy single-node path, or refuses.
+  legacy single-node path, or refuses. A manifest that stays whole-batch `open` but carries a
+  member with `opening:true` is an **interrupted rolling top-up** (the in-flight member was
+  appended before its ledger row flipped); both `crossCheckStatus` and `orient` route it to
+  `reconcile` with the typed reason `batch_topup_incomplete` — consistently before and after the
+  in-flight row flips — and every mutating batch command refuses `reconcile_first` while the
+  marker exists, so a crash mid-top-up is never mis-classified as orphan/valid (#305).
 
   Crash/resume is a pure function of durable artifacts: each state has a deterministic
   reconstruction path (run `reconcile` on `opening` to repair an interrupted open or

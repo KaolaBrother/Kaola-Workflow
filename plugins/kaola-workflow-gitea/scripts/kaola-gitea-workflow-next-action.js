@@ -66,13 +66,37 @@ function computeNextAction(content, opts) {
   // Helper: effective status for a node id.
   const st = id => ledger.get(id) || 'pending';
 
+  // #308: TRANSITIVE-ancestor readiness. A node is ready only when its FULL upstream
+  // closure is terminal — not merely its direct deps. This withholds a downstream sink
+  // when an UPSTREAM gate was reset to pending by a plan-repair, even though the sink's
+  // own direct deps are still complete (the premature-frontier defect). During normal
+  // forward progress a node cannot complete before its deps, so direct-terminal implies
+  // transitive-terminal — i.e. this is identical to the old direct check EXCEPT after a
+  // repair reset. Cycle-guarded (visited set); plans are DAGs but next-action may run on
+  // a mid-repair plan, so fail-safe rather than recurse.
+  const byId = new Map(nodes.map(n => [n.id, n]));
+  const allAncestorsTerminal = startId => {
+    const start = byId.get(startId);
+    const stack = start ? start.dependsOn.slice() : [];
+    const visited = new Set();
+    while (stack.length) {
+      const d = stack.pop();
+      if (visited.has(d)) continue;
+      visited.add(d);
+      if (!TERMINAL.has(st(d))) return false;
+      const dn = byId.get(d);
+      if (dn) for (const dd of dn.dependsOn) stack.push(dd);
+    }
+    return true;
+  };
+
   // 4. Compute ready-set in document order (parseNodes preserves table order).
   const readySet = nodes
     .filter(node => {
       // Node itself must not be terminal.
       if (TERMINAL.has(st(node.id))) return false;
-      // All dependencies must be terminal (n/a satisfies readiness).
-      return node.dependsOn.every(d => TERMINAL.has(st(d)));
+      // #308: ALL transitive ancestors must be terminal (n/a satisfies readiness).
+      return allAncestorsTerminal(node.id);
     })
     .map(node => ({
       id: node.id,
