@@ -1329,8 +1329,13 @@ function makeState(opts) {
     '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
     '| finalize | finalize | a | CHANGELOG.md | 1 | sequence |',
   ];
+  // #302: DERIVE the in_progress ledger row(s) from the shared fixture's
+  // ORPHAN_LEGALITY_IN_PROGRESS_IDS rather than hard-coding `| a | in_progress |`.
+  // This binds the in_progress axis to the same definition crossCheckStatus uses,
+  // so a future re-divergence of either site is caught by construction (the import
+  // is now load-bearing, not a dead symbol).
   const plan = makePlan([
-    '| a        | in_progress | |',
+    ...ORPHAN_LEGALITY_IN_PROGRESS_IDS.map(id => `| ${id} | in_progress | |`),
     '| finalize | pending     | |',
   ], planNodes);
   const state = makeState();
