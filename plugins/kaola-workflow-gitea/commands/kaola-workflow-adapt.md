@@ -129,7 +129,7 @@ The planner RAN `kaola-gitea-workflow-adaptive-handoff.js` and returned a checkl
 
 After `handoff_status: ready_to_run` (and ONLY then), re-read `kaola-workflow/{project}/workflow-plan.md` to internalize the frozen `## Nodes` table, then create the orchestrator's task list. **The task list MUST NOT be created before `handoff_status: ready_to_run` is confirmed and the frozen plan has been read** — the planner owns the design; the task list is a mechanical reflection of the frozen result, not a pre-planned outline.
 
-**Establish the orchestrator's task list = the workflow nodes** — one task per row of the frozen `## Nodes` table, labeled `id · role`, in `depends_on`
+**Establish the orchestrator's task list = the workflow nodes** (use **TodoWrite**) — one task per row of the frozen `## Nodes` table, labeled `id · role`, in `depends_on`
 (topological) order. This task list is a **live mirror** of the `## Node Ledger`, which stays the
 durable source of truth; the executor (`/kaola-workflow-plan-run`) flips each task `in_progress`
 when it dispatches that node's role (after `open-next`) and `completed` after the
