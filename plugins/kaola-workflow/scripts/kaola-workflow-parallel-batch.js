@@ -246,6 +246,19 @@ function capMembers(members, opts) {
 }
 
 // ---------------------------------------------------------------------------
+// hasInflightOpening — #305: true when a live manifest carries any member with
+// opening:true (an interrupted rolling top-up; whole-batch state stays 'open').
+// The read-side gates (crossCheckStatus / runOrient) route such a manifest to
+// reconcile, and every MUTATING batch command refuses reconcile_first while it
+// exists — so a crash mid-top-up is never silently mutated over. (runTopUp sets
+// and clears these flags WITHIN a single call, so a flag surviving into a fresh
+// invocation means a crash, not a normal top-up in flight.)
+// ---------------------------------------------------------------------------
+function hasInflightOpening(manifest) {
+  return !!(manifest && (manifest.members || []).some(m => m.opening));
+}
+
+// ---------------------------------------------------------------------------
 // crossCheckStatus — legality gate (blueprint §3, AC#5/#6). Multiple in_progress
 // ledger rows are LEGAL ONLY with a valid active manifest whose member set EXACTLY
 // equals them; else the orphan condition.
@@ -268,6 +281,17 @@ function crossCheckStatus(manifest, inProgressIds) {
   // FIRST so a partial flip (0 or 1 rows) is not masked by the ≤1 legacy path below.
   if (manifest && manifest.state === 'opening') {
     return { valid: false, orphan: false, reconcilable: true, reason: 'batch_opening_incomplete' };
+  }
+
+  // #305: a member-level `opening:true` marker is an interrupted ROLLING TOP-UP — `top-up`
+  // appended the in-flight member to the manifest (whole-batch state stays 'open') BEFORE flipping
+  // its ledger row, and a crash struck in that window. Like the whole-batch 'opening' marker above
+  // it is RECONCILABLE (run `reconcile`), never an orphan and never a dispatchable valid batch —
+  // and the verdict must be the SAME regardless of how many rows flipped before the crash. Check it
+  // BEFORE the ≤1 legacy path and the member-set equality so a partial flip (0 or 1 rows) is not
+  // masked as `idle`/`single_in_progress` and a full flip is not mis-accepted as `valid_batch`.
+  if (hasInflightOpening(manifest)) {
+    return { valid: false, orphan: false, reconcilable: true, reason: 'batch_topup_incomplete' };
   }
 
   // ≤1 in_progress — always the legacy single-node path regardless of manifest.
@@ -374,6 +398,11 @@ function runOpenBatch(opts) {
   if (existing && existing.state !== 'joined') {
     if (existing.state === 'opening') {
       return { result: 'refuse', reason: 'reconcile_first', state: 'opening', batchId: existing.batchId };
+    }
+    // #305: a member.opening:true marker (interrupted top-up; state still 'open') must be
+    // reconciled before a fresh open, not mis-reported as active_batch_exists below.
+    if (hasInflightOpening(existing)) {
+      return { result: 'refuse', reason: 'reconcile_first', state: existing.state, batchId: existing.batchId, detail: 'member_opening_incomplete' };
     }
     const liveIds = (existing.members || []).filter(m => !m.sealed).map(m => m.id).slice().sort();
     const ipSorted = listInProgress(ledger).slice().sort();
@@ -670,6 +699,10 @@ function runSealMember(opts) {
   if (!manifest) {
     return { result: 'refuse', reason: 'no_active_batch' };
   }
+  // #305: refuse over an interrupted top-up (member.opening:true) until reconciled.
+  if (hasInflightOpening(manifest)) {
+    return { result: 'refuse', reason: 'reconcile_first', state: manifest.state, detail: 'member_opening_incomplete' };
+  }
   const member = manifest.members.find(m => m.id === nodeId);
   if (!member) {
     return { result: 'refuse', reason: 'not_a_member', nodeId };
@@ -708,6 +741,10 @@ function runSeal(opts) {
   let manifest = readManifest(manifestPath, cacheExists, readFile);
   if (!manifest) {
     return { result: 'refuse', reason: 'no_active_batch' };
+  }
+  // #305: refuse over an interrupted top-up (member.opening:true) until reconciled.
+  if (hasInflightOpening(manifest)) {
+    return { result: 'refuse', reason: 'reconcile_first', state: manifest.state, detail: 'member_opening_incomplete' };
   }
 
   let planContent = readFile(planPath);
@@ -766,6 +803,11 @@ function runJoin(opts) {
   let manifest = readManifest(manifestPath, cacheExists, readFile);
   if (!manifest) {
     return { result: 'refuse', reason: 'no_active_batch' };
+  }
+  // #305: refuse over an interrupted top-up (member.opening:true) until reconciled — a clearer
+  // typed reason than the not_all_sealed that the open-state precondition below would emit.
+  if (hasInflightOpening(manifest)) {
+    return { result: 'refuse', reason: 'reconcile_first', state: manifest.state, detail: 'member_opening_incomplete' };
   }
 
   // Precondition: refuse ONLY when not yet sealed. {sealed,joining,joined} proceed
@@ -842,6 +884,8 @@ function runTopUp(opts) {
   let manifest = readManifest(manifestPath, cacheExists, readFile);
   if (!manifest) return { result: 'refuse', reason: 'no_active_batch' };
   if (manifest.state === 'opening') return { result: 'refuse', reason: 'reconcile_first', state: 'opening' };
+  // #305: an interrupted top-up (member.opening:true) must be reconciled before another top-up.
+  if (hasInflightOpening(manifest)) return { result: 'refuse', reason: 'reconcile_first', state: manifest.state, detail: 'member_opening_incomplete' };
   if (manifest.state !== 'open') return { result: 'ok', toppedUp: [], reason: 'batch_not_open', state: manifest.state };
 
   // Same integrity gate as open-batch: never schedule against a tampered/invalid plan.
@@ -1233,6 +1277,7 @@ module.exports = {
   checkDisjoint,
   capMembers,
   crossCheckStatus,
+  hasInflightOpening,
   runOpenBatch,
   runTopUp,
   runSealMember,

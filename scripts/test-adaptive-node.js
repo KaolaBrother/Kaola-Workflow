@@ -21,6 +21,10 @@ const {
   ORPHAN_LEGALITY_MANIFEST,
   ORPHAN_LEGALITY_IN_PROGRESS_IDS,
   RUN_ORIENT_EXPECTED,
+  TOPUP_INCOMPLETE_MANIFEST,
+  TOPUP_INCOMPLETE_IN_PROGRESS_BEFORE,
+  TOPUP_INCOMPLETE_IN_PROGRESS_AFTER,
+  TOPUP_INCOMPLETE_REASON,
 } = require('./fixtures-orphan-legality');
 
 const fs = require('fs');
@@ -1371,6 +1375,57 @@ function makeState(opts) {
     '#293 orient-lock: single in_progress + all-sealed manifest → result:ok (legacy single-node path)');
   assert(result.batch === RUN_ORIENT_EXPECTED.batch,
     '#293 orient-lock: single in_progress + all-sealed manifest → batch:null (NOT a batch path)');
+}
+
+// ---------------------------------------------------------------------------
+// #305: runOrient on a member.opening:true interrupted top-up (manifest state
+//     'open') must route to reconcile (result:'refuse', reason
+//     'batch_topup_incomplete') CONSISTENTLY before the in-flight row flips
+//     (in_progress=[a,b]) AND after it ([a,b,c]) — never reporting
+//     orphan_multi_in_progress (before) and never ACCEPTING it as a valid batch
+//     (after). Mirrors the crossCheckStatus site via the shared fixture.
+//     (TDD RED before the member-opening short-circuit; GREEN after.)
+// ---------------------------------------------------------------------------
+{
+  const memberIds = TOPUP_INCOMPLETE_MANIFEST.members.map(m => m.id); // ['a','b','c']
+  const planNodes = memberIds
+    .map(id => `| ${id} | code-explorer | — | — | 1 | fanout(scan) |`)
+    .concat([`| finalize | finalize | ${memberIds.join(',')} | CHANGELOG.md | 1 | sequence |`]);
+  // Derive the ledger from the SHARED in_progress arrays (anti-drift): a member
+  // listed in ipIds is in_progress, otherwise pending.
+  const ledgerFor = (ipIds) => memberIds
+    .map(id => `| ${id} | ${ipIds.includes(id) ? 'in_progress' : 'pending'} | |`)
+    .concat(['| finalize | pending | |']);
+
+  const manifestJson = JSON.stringify({ ...TOPUP_INCOMPLETE_MANIFEST, createdAt: '1970-01-01T00:00:00.000Z' });
+  const shellStub = function(scriptPath) {
+    const base = path.basename(scriptPath);
+    if (base === 'kaola-workflow-plan-validator.js') return { exitCode: 0, ok: true };
+    if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', readySet: [], readyPending: [], nextNode: null, allDone: false };
+    return { exitCode: 1 };
+  };
+  const orientFor = (ipIds) => runOrient({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project',
+    shell: shellStub,
+    readFile: (fpath) => {
+      if (fpath.endsWith('workflow-plan.md')) return makePlan(ledgerFor(ipIds), planNodes);
+      if (fpath.endsWith('workflow-state.md')) return makeState();
+      if (fpath.endsWith('active-batch.json')) return manifestJson;
+      throw new Error('ENOENT: ' + fpath);
+    },
+    writeFile: () => { throw new Error('orient must not write'); },
+    cacheExists: (fpath) => fpath.endsWith('active-batch.json'),
+  });
+
+  const before = orientFor(TOPUP_INCOMPLETE_IN_PROGRESS_BEFORE);
+  assert(before.result === 'refuse' && before.reason === TOPUP_INCOMPLETE_REASON,
+    '#305 orient: interrupted top-up BEFORE flip → refuse batch_topup_incomplete (not orphan_multi_in_progress), got ' + JSON.stringify({ result: before.result, reason: before.reason }));
+
+  const after = orientFor(TOPUP_INCOMPLETE_IN_PROGRESS_AFTER);
+  assert(after.result === 'refuse' && after.reason === TOPUP_INCOMPLETE_REASON,
+    '#305 orient: interrupted top-up AFTER flip → refuse batch_topup_incomplete (NOT accepted as a valid batch), got ' + JSON.stringify({ result: after.result, reason: after.reason, batch: after.batch }));
 }
 
 // ---------------------------------------------------------------------------

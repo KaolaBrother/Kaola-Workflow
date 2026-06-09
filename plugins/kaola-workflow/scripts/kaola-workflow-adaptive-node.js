@@ -393,10 +393,35 @@ function runOrient(opts) {
     }
   }
 
+  // #305: a member-level `opening:true` marker is an interrupted ROLLING TOP-UP (the manifest
+  // stays whole-batch state 'open' while the in-flight member was appended but its ledger row /
+  // baseline did not finish flipping). It is RECONCILABLE — route it to `reconcile`, the SAME
+  // verdict the parallel-batch crossCheckStatus gate gives. Check it BEFORE the AC#5 legality gate
+  // so it is never mis-reported as orphan_multi_in_progress (before the flip) and never ACCEPTED as
+  // a dispatchable valid batch (after the flip). Mirrors crossCheckStatus's member-opening branch.
+  if (manifest && (manifest.members || []).some(m => m.opening)) {
+    return {
+      result: 'refuse',
+      reason: 'batch_topup_incomplete',
+      resumeCheck,
+      nextAction,
+      consentHalt,
+      escalatedToFull,
+      inProgressNode,
+      cacheState: inProgressNode ? cacheState : null,
+      inProgressNodes,
+      manifest,
+      batch: null,
+      allDone: false,
+    };
+  }
+
   // Order-independent member-set equality between the manifest and the
   // in_progress rows.
   // R4 (#291): UNSEALED members only — a partial-seal keeps sealed members in the manifest.
-  const manifestMemberIds = manifest ? (manifest.members || []).filter(m => !m.sealed).map(m => m.id) : [];
+  // #305: also exclude `opening:true` members (mirrors crossCheckStatus); redundant after the
+  // short-circuit above but keeps the two member-set computations structurally identical.
+  const manifestMemberIds = manifest ? (manifest.members || []).filter(m => !m.sealed && !m.opening).map(m => m.id) : [];
   const setsEqual = (a, b) => {
     if (a.length !== b.length) return false;
     const sa = new Set(a);

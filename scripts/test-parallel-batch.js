@@ -40,6 +40,10 @@ const {
   ORPHAN_LEGALITY_MANIFEST,
   ORPHAN_LEGALITY_IN_PROGRESS_IDS,
   CROSS_CHECK_EXPECTED,
+  TOPUP_INCOMPLETE_MANIFEST,
+  TOPUP_INCOMPLETE_IN_PROGRESS_BEFORE,
+  TOPUP_INCOMPLETE_IN_PROGRESS_AFTER,
+  TOPUP_INCOMPLETE_REASON,
 } = require('./fixtures-orphan-legality');
 
 const fs = require('fs');
@@ -837,6 +841,29 @@ function realNextActionShell(planPath) {
     '#293: single in_progress with all-sealed manifest → reason:single_in_progress');
 }
 
+// ---------------------------------------------------------------------------
+// #305: crossCheckStatus with a member.opening:true interrupted top-up (state
+//     'open') must report a RECONCILABLE verdict (valid:false, orphan:false,
+//     reason:'batch_topup_incomplete') CONSISTENTLY both before the in-flight
+//     member's ledger row flips (in_progress=[a,b]) and after it ([a,b,c]).
+//     Today: valid_batch before, orphan_member_set_mismatch after (the bug).
+//     Uses the shared fixture (anti-drift with the runOrient site).
+//     (TDD RED before the member.opening short-circuit; GREEN after.)
+// ---------------------------------------------------------------------------
+{
+  const before = crossCheckStatus(TOPUP_INCOMPLETE_MANIFEST, TOPUP_INCOMPLETE_IN_PROGRESS_BEFORE);
+  assert(before.valid === false, '#305: interrupted top-up BEFORE flip → valid:false (not dispatchable)');
+  assert(before.orphan === false, '#305: interrupted top-up BEFORE flip → orphan:false (not an orphan)');
+  assert(before.reconcilable === true && before.reason === TOPUP_INCOMPLETE_REASON,
+    '#305: interrupted top-up BEFORE flip → reconcilable batch_topup_incomplete, got ' + JSON.stringify(before));
+
+  const after = crossCheckStatus(TOPUP_INCOMPLETE_MANIFEST, TOPUP_INCOMPLETE_IN_PROGRESS_AFTER);
+  assert(after.valid === false, '#305: interrupted top-up AFTER flip → valid:false (no more valid_batch)');
+  assert(after.orphan === false, '#305: interrupted top-up AFTER flip → orphan:false (no more orphan_member_set_mismatch)');
+  assert(after.reconcilable === true && after.reason === TOPUP_INCOMPLETE_REASON,
+    '#305: interrupted top-up AFTER flip → reconcilable batch_topup_incomplete, got ' + JSON.stringify(after));
+}
+
 // ===========================================================================
 // END-TO-END WRITE-ROLE TESTS (REAL git via the SUBPROCESS CLI) — issue #292
 //
@@ -1312,6 +1339,49 @@ function makeReadOnlyFanout(n) {
   assert(!fs.existsSync(manifestPath), 'N5: manifest deleted on whole-batch abort');
   plan = fs.readFileSync(planPath, 'utf8');
   assert((plan.match(/\|\s*f\d\s*\|\s*pending\s*\|/g) || []).length === 2, 'N5: both rows rolled back to pending on abort');
+  cleanup(root);
+}
+
+// ---------------------------------------------------------------------------
+// N6 (#305): a crash-interrupted ROLLING TOP-UP leaves the manifest 'open' with
+//     a member.opening:true (NOT the whole-batch 'opening' marker). status must
+//     flag it reconcilable (batch_topup_incomplete), and every MUTATING command
+//     must refuse with reconcile_first until it is reconciled — never silently
+//     mutate over an in-flight top-up.
+//     (TDD RED before the member-opening guards; GREEN after.)
+// ---------------------------------------------------------------------------
+{
+  const { root, planPath, statePath, cacheDir } = makeProjectDir(makeReadOnlyFanout(3));
+  const io = makeIo();
+  const manifestPath = path.join(cacheDir, 'active-batch.json');
+  const shell = realNextActionShell(planPath);
+  const baseCtx = { planPath, statePath, cacheDir, manifestPath, project: 'test-project', max: null, fanoutCap: 4, shell, ...io };
+
+  // Manifest left mid-top-up: f1,f2 open; f3 appended with opening:true, ledger flip not finished.
+  fs.writeFileSync(manifestPath, JSON.stringify({
+    batchId: 'batch-f1-f2-f3', state: 'open', kind: 'read_only',
+    members: [
+      { id: 'f1', role: 'code-explorer', declared_write_set: '—', kind: 'read_only', sealed: false, worktreePath: null },
+      { id: 'f2', role: 'code-explorer', declared_write_set: '—', kind: 'read_only', sealed: false, worktreePath: null },
+      { id: 'f3', role: 'code-explorer', declared_write_set: '—', kind: 'read_only', sealed: false, worktreePath: null, opening: true },
+    ], createdAt: '2026-06-08T00:00:00.000Z',
+  }, null, 2));
+
+  const st = runStatus(baseCtx);
+  assert(st.crossCheck && st.crossCheck.reconcilable === true && st.crossCheck.reason === 'batch_topup_incomplete',
+    'N6: status flags a member.opening:true manifest as reconcilable batch_topup_incomplete, got ' + JSON.stringify(st.crossCheck));
+
+  const op = runOpenBatch(baseCtx);
+  assert(op.result === 'refuse' && op.reason === 'reconcile_first', 'N6: open-batch refuses reconcile_first over an opening member, got ' + JSON.stringify(op));
+  const tu = runTopUp(baseCtx);
+  assert(tu.result === 'refuse' && tu.reason === 'reconcile_first', 'N6: top-up refuses reconcile_first over an opening member, got ' + JSON.stringify(tu));
+  const se = runSeal(baseCtx);
+  assert(se.result === 'refuse' && se.reason === 'reconcile_first', 'N6: seal refuses reconcile_first over an opening member, got ' + JSON.stringify(se));
+  const sm = runSealMember({ ...baseCtx, nodeId: 'f1' });
+  assert(sm.result === 'refuse' && sm.reason === 'reconcile_first', 'N6: seal-member refuses reconcile_first over an opening member, got ' + JSON.stringify(sm));
+  const jo = runJoin(baseCtx);
+  assert(jo.result === 'refuse' && jo.reason === 'reconcile_first', 'N6: join refuses reconcile_first over an opening member, got ' + JSON.stringify(jo));
+
   cleanup(root);
 }
 
