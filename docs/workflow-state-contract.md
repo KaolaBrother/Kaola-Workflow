@@ -116,6 +116,14 @@ by `kaola-workflow-task-mirror.js` from the frozen `workflow-plan.md`. It is par
 the adaptive-path durable state and must be treated as a generated mirror — never
 hand-authored.
 
+**Runtime generation/reconcile (issue #282):** generation is wired into the runtime, not
+left to a manual CLI call. The adaptive handoff (`kaola-workflow-adaptive-handoff.js`)
+generates the mirror once the plan is frozen, so it exists from the first plan-run entry,
+and `kaola-workflow-adaptive-node.js orient` reconciles it on **every** plan-run resume by
+shelling the task-mirror CLI (the write lands in that subprocess, so `orient` stays
+read-only with respect to the plan/ledger/state). Both are best-effort: a non-frozen plan
+degrades silently and the compact-resume hook tolerates an absent mirror.
+
 **Source of truth chain (important):**
 
 The three levels of task state must never be confused:

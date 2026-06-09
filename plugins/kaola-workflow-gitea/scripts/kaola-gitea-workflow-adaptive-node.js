@@ -29,10 +29,12 @@ const { execFileSync } = require('child_process');
 const COMMIT_NODE  = 'kaola-gitea-workflow-commit-node.js';
 const NEXT_ACTION  = 'kaola-gitea-workflow-next-action.js';
 const VALIDATOR    = 'kaola-gitea-workflow-plan-validator.js';
+const TASK_MIRROR  = 'kaola-gitea-workflow-task-mirror.js';
 
 const commitNodePath = path.join(__dirname, COMMIT_NODE);
 const nextActionPath = path.join(__dirname, NEXT_ACTION);
 const validatorPath  = path.join(__dirname, VALIDATOR);
+const taskMirrorPath = path.join(__dirname, TASK_MIRROR);
 
 // ---------------------------------------------------------------------------
 // getRoot — resolve the user-repo root via git rev-parse (cwd fallback).
@@ -309,15 +311,24 @@ function checkEvidenceShape(role, nodeId, evidence) {
 }
 
 // ---------------------------------------------------------------------------
-// runOrient — READ-ONLY orient. No mutations.
+// runOrient — READ-ONLY orient (no plan/ledger/state mutation; never calls writeFile).
 //
 // Shells VALIDATOR --resume-check + NEXT_ACTION; scans markers in state+plan.
+// #282 (AC-2): also reconciles the durable task mirror (workflow-tasks.json) on every resume
+// by SHELLING the task-mirror CLI — the write happens in that subprocess (a regenerable,
+// ledger-derived projection), so orient's read-only-w.r.t.-workflow-state contract is preserved.
 // ---------------------------------------------------------------------------
 function runOrient(opts) {
-  const { planPath, statePath, shell, readFile, cacheExists } = opts;
+  const { planPath, statePath, project, shell, readFile, cacheExists } = opts;
 
   const resumeCheck = shell(validatorPath, [planPath, '--resume-check', '--json']);
   const nextAction  = shell(nextActionPath, [planPath, '--json']);
+
+  // #282 (AC-2): rebuild/refresh the durable workflow-tasks.json from the current ledger on every
+  // resume. Unconditional regenerate is both the rebuild-if-stale and the idempotent-refresh path
+  // (the CLI re-derives from the ledger). Best-effort: a non-frozen plan / absent project degrades
+  // silently (the CLI exits non-zero, the compact-resume hook tolerates an absent mirror).
+  if (project) shell(taskMirrorPath, ['--project', project, '--json']);
 
   // Read state for escalated_to_full marker.
   let stateContent = '';

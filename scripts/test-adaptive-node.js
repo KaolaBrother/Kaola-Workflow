@@ -1645,6 +1645,38 @@ function makeState(opts) {
     '#308 reopen: refuses over a live batch / opening member, got ' + JSON.stringify(result));
 }
 
+// ---------------------------------------------------------------------------
+// #282 (AC-2): orient reconciles the durable task mirror on every resume by
+// SHELLING the task-mirror CLI — while staying read-only (the injected writeFile
+// throws, proving orient never writes the plan/ledger/state itself).
+// ---------------------------------------------------------------------------
+{
+  const planNodes = [
+    '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| finalize | finalize | a | CHANGELOG.md | 1 | sequence |',
+  ];
+  const plan = makePlan(['| a | in_progress | |', '| finalize | pending | |'], planNodes);
+  const shelled = [];
+  const result = runOrient({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project',
+    shell: (scriptPath) => {
+      const b = path.basename(scriptPath);
+      shelled.push(b);
+      if (b === 'kaola-workflow-plan-validator.js') return { exitCode: 0, ok: true };
+      if (b === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', readySet: [], readyPending: [], allDone: false };
+      return { exitCode: 0 };
+    },
+    readFile: (f) => { if (f.endsWith('workflow-plan.md')) return plan; if (f.endsWith('workflow-state.md')) return makeState(); throw new Error('ENOENT ' + f); },
+    writeFile: () => { throw new Error('orient must not write (read-only)'); },
+    cacheExists: () => false,
+  });
+  assert(result.result === 'ok', '#282 AC-2: orient still returns ok');
+  assert(shelled.includes('kaola-workflow-task-mirror.js'),
+    '#282 AC-2: orient shells the task-mirror CLI to reconcile workflow-tasks.json, got ' + JSON.stringify(shelled));
+}
+
 // Summary
 // ---------------------------------------------------------------------------
 if (failed > 0) {

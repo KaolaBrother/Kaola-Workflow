@@ -816,6 +816,48 @@ const PLAN_HASH_64 = ('a').repeat(64);
 }
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// #282 (AC-1): after freezing + integrity-checking the plan, the handoff generates
+// the durable task mirror (workflow-tasks.json) by shelling the task-mirror CLI, so
+// it exists from the first plan-run entry without a manual call. Best-effort (a
+// non-zero from the CLI never blocks ready_to_run).
+// ---------------------------------------------------------------------------
+{
+  const planContent = makeUnfrozenPlan('auto-run');
+  const stateContent = makeStateContent({ issueNumber: 7 });
+  let readCallCount = 0;
+  const frozenPlanContent = planContent.replace('# Workflow Plan', '<!-- plan_hash: ' + PLAN_HASH_64 + ' -->\n\n# Workflow Plan');
+  const shelled = [];
+  const inner = makeShellStub({
+    'kaola-workflow-plan-validator.js:--json': { exitCode: 0, result: 'in-grammar', decision: 'auto-run', planHash: PLAN_HASH_64, risk: {} },
+    'kaola-workflow-plan-validator.js:--freeze': { exitCode: 0, result: 'in-grammar', decision: 'auto-run', planHash: PLAN_HASH_64, frozen: true, risk: {} },
+    'kaola-workflow-plan-validator.js:--resume-check': { exitCode: 0, ok: true, planHash: PLAN_HASH_64 },
+    'kaola-workflow-roadmap.js:init-issue': { exitCode: 0, created: true },
+    'git:add': { exitCode: 0 },
+    'kaola-workflow-task-mirror.js': { exitCode: 0 },
+  });
+  const shellStub = (scriptPath, args) => { shelled.push(path.basename(scriptPath)); return inner(scriptPath, args); };
+  const result = runHandoff({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project',
+    json: true,
+    shell: shellStub,
+    computeNextAction: require('./kaola-workflow-next-action').computeNextAction,
+    resolveModel: () => 'sonnet',
+    readFile: (fpath) => {
+      if (fpath.endsWith('workflow-plan.md')) { readCallCount++; return readCallCount <= 1 ? planContent : frozenPlanContent; }
+      if (fpath.endsWith('workflow-state.md')) return stateContent;
+      return '';
+    },
+    writeFile: () => {},
+    stateMtime: undefined,
+  });
+  assert(result.handoff_status === 'ready_to_run', '#282 AC-1: handoff still ready_to_run, got ' + JSON.stringify(result.handoff_status));
+  assert(shelled.includes('kaola-workflow-task-mirror.js'),
+    '#282 AC-1: handoff shells the task-mirror CLI after freeze, got ' + JSON.stringify(shelled));
+}
+
 // Summary
 // ---------------------------------------------------------------------------
 if (failed > 0) {
