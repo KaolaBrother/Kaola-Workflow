@@ -116,17 +116,20 @@ main session owns loop + dispatch + judgment; scripts own deterministic transiti
 
 **Task list = the workflow nodes.** The session keeps a task list (use the runtime task surface) with
 one item per `## Nodes` row (`id · role`, in `depends_on` order) — established by `kaola-workflow-adapt`
-after freeze, or, on a direct resume, reconstructed here from the `## Node Ledger`. Mark a node's task
-`in_progress` when you dispatch its role (after `open-next`) and `completed` once `close-and-open-next`
-returns `result: ok`; a node committed `n/a` maps to `completed` (the task surface has no "skipped"
-state). **The fused `close-and-open-next` returns TWO transitions** — reflect BOTH in the SAME update:
-mark the committed node `completed` AND the newly-opened next node `in_progress`, never just the first
-(the half-done inference is marking N done but forgetting to open N+1). On a **consent-halt /
-escalation** (step 4 — failed barrier, security escalation, or `test_thrash`), leave the blocked node
-`in_progress` and append a halt note to its task (e.g. `… — HALTED: <reason>`) so the live view shows
-*why* it stopped; do not mark it `completed`. The task list is a live mirror; the durable
-`## Node Ledger` stays the single source of truth, so reconcile to the ledger on every resume rather
-than trusting a stale list.
+after freeze, or, on a direct resume, reconstructed here from the `## Node Ledger`.
+
+**Apply the returned `taskTransitions` after EVERY successful ledger-mutating script call (#317).**
+Every mutating command (`open-next`, `close-and-open-next`, `write-halt`, `reopen-node`, and the batch
+commands `open-batch`/`top-up`/`seal-member`/`seal`/`reconcile`) returns a machine-readable
+`taskTransitions` array (`{id, status, ledger_status, reason, note?}`) plus a `taskMirror` field. **Do
+not infer** — apply each transition's `status` verbatim. The fused `close-and-open-next` returns BOTH
+the committed node (`completed`) AND the newly-opened node (`in_progress`); after `open-batch`, mark
+**every** returned member `in_progress` **before** dispatching its subagent (the #284 inference failure
+was leaving members `pending` while their subagents ran). `n/a` arrives as `completed`; a halt arrives
+as `in_progress` + a `note`. The script also refreshes the durable `workflow-tasks.json` on each
+mutation (reported in `taskMirror`); `taskMirror.status: failed` is non-fatal (fail-open — the ledger
+transition still held). The task list is a live mirror; the durable `## Node Ledger` stays the single
+source of truth, so reconcile to the ledger on every resume rather than trusting a stale list.
 
 The commit of a node and the advance to the next are **fused into ONE `close-and-open-next` call**
 (step 3), so the session makes one per-node lifecycle call, not two. A standalone `open-next` (step 1)

@@ -43,6 +43,7 @@ const { execFileSync } = require('child_process');
 const NEXT_ACTION = 'kaola-gitea-workflow-next-action.js';
 const COMMIT_NODE = 'kaola-gitea-workflow-commit-node.js';
 const VALIDATOR   = 'kaola-gitea-workflow-plan-validator.js';
+const TASK_MIRROR = 'kaola-gitea-workflow-task-mirror.js';
 const ADAPTIVE_NODE = './kaola-gitea-workflow-adaptive-node';
 const PLAN_VALIDATOR = './kaola-gitea-workflow-plan-validator';
 const CLASSIFIER     = './kaola-gitea-workflow-classifier';
@@ -50,6 +51,7 @@ const CLASSIFIER     = './kaola-gitea-workflow-classifier';
 const nextActionPath = path.join(__dirname, NEXT_ACTION);
 const commitNodePath = path.join(__dirname, COMMIT_NODE);
 const validatorPath  = path.join(__dirname, VALIDATOR);
+const taskMirrorPath = path.join(__dirname, TASK_MIRROR);
 
 // ---------------------------------------------------------------------------
 // BATCH_STATES — closed batch lifecycle vocabulary (blueprint D3). Lives HERE
@@ -145,6 +147,29 @@ function shellNode(scriptPath, args) {
     const status = (err.status == null) ? 1 : err.status;
     return { exitCode: status, ...safeJsonParse(err.stdout) };
   }
+}
+
+// ---------------------------------------------------------------------------
+// #317 — mutation-time task-mirror sync + machine-readable UI transitions.
+// refreshTaskMirror is fail-OPEN: a regeneration failure is recorded in the returned
+// taskMirror field and NEVER rolls back a correct ledger/manifest mutation. buildTransition
+// maps the ledger status to the UI status via the task-mirror's mapLedgerStatus (single source).
+// Called ONLY after the final stable plan/manifest write of a successful mutation.
+// ---------------------------------------------------------------------------
+function refreshTaskMirror(project, shell) {
+  if (!project) return { status: 'skipped' };
+  const outPath = 'kaola-workflow/' + project + '/workflow-tasks.json';
+  let res;
+  try { res = shell(taskMirrorPath, ['--project', project, '--json']); }
+  catch (_) { return { status: 'failed', path: outPath }; }
+  return { status: (res && res.exitCode === 0) ? 'updated' : 'failed', path: outPath };
+}
+
+function buildTransition(id, ledgerStatus, reason, note) {
+  const { mapLedgerStatus } = require(taskMirrorPath);
+  const t = { id: id, status: mapLedgerStatus(ledgerStatus), ledger_status: ledgerStatus, reason: reason };
+  if (note) t.note = note;
+  return t;
 }
 
 // ---------------------------------------------------------------------------
@@ -381,7 +406,7 @@ function runOpenBatch(opts) {
     return { result: 'refuse', reason: 'next_action_failed', nextAction };
   }
   if (nextAction.allDone) {
-    return { result: 'ok', allDone: true, opened: [] };
+    return { result: 'ok', allDone: true, opened: [], taskTransitions: [] };
   }
 
   let planContent = readFile(planPath);
@@ -415,6 +440,9 @@ function runOpenBatch(opts) {
           kind: m.kind, baseline: m.baseline, worktreePath: m.worktreePath,
         })),
         allDone: false,
+        // #317: re-emit each live member → in_progress (idempotent re-open of THIS batch).
+        taskTransitions: (existing.members || []).filter(m => !m.sealed).map(m => buildTransition(m.id, 'in_progress', 'open-batch')),
+        taskMirror: refreshTaskMirror(project, shell),
       };
     }
     return { result: 'refuse', reason: 'active_batch_exists', state: existing.state, batchId: existing.batchId };
@@ -423,7 +451,7 @@ function runOpenBatch(opts) {
   const frontier = deriveReadyPending(nextAction.readySet || [], ledger);
   if (frontier.length === 0) {
     // No openable (own-pending) frontier — defer to the legacy single-node loop.
-    return { result: 'ok', allDone: false, opened: [] };
+    return { result: 'ok', allDone: false, opened: [], taskTransitions: [] };
   }
 
   // Classify; mixed frontier → the read-only subset.
@@ -444,7 +472,7 @@ function runOpenBatch(opts) {
     // (a future cwd-forcing harness) opens write-role batches — and only THEN does the
     // disjointness re-check apply, because true parallel isolation needs it (fail-closed).
     if (!cwdEnforced) {
-      return { result: 'ok', degraded: true, reason: 'cwd_unenforceable', opened: [], allDone: false };
+      return { result: 'ok', degraded: true, reason: 'cwd_unenforceable', opened: [], allDone: false, taskTransitions: [] };
     }
     const dj = checkDisjoint(classified.members);
     if (!dj.disjoint) {
@@ -477,7 +505,7 @@ function runOpenBatch(opts) {
     for (const id of Object.keys(memberWorktrees)) {
       if (typeof worktreeRemove === 'function') worktreeRemove(memberWorktrees[id]);
     }
-    return { result: 'ok', degraded: true, reason: 'worktree_unavailable', opened: [], allDone: false };
+    return { result: 'ok', degraded: true, reason: 'worktree_unavailable', opened: [], allDone: false, taskTransitions: [] };
   };
 
   if (isWriteRole) {
@@ -568,6 +596,9 @@ function runOpenBatch(opts) {
   const manifest = { ...openingManifest, state: 'open' };
   writeFile(manifestPath, JSON.stringify(manifest, null, 2));
 
+  // #317: every opened member flipped pending → in_progress; refresh the durable mirror
+  // (AFTER the manifest is promoted to 'open') and return one in_progress transition per member
+  // so the orchestrator marks them all in_progress BEFORE dispatching their subagents.
   return {
     result: 'ok',
     batchId,
@@ -579,6 +610,8 @@ function runOpenBatch(opts) {
       baseline: m.baseline, worktreePath: m.worktreePath,
     })),
     allDone: false,
+    taskTransitions: capped.map(m => buildTransition(m.id, 'in_progress', 'open-batch')),
+    taskMirror: refreshTaskMirror(project, shell),
   };
 }
 
@@ -734,7 +767,7 @@ function runSealMember(opts) {
   }
 
   if (member.sealed) {
-    return { result: 'ok', sealed: nodeId, state: manifest.state, alreadySealed: true };
+    return { result: 'ok', sealed: nodeId, state: manifest.state, alreadySealed: true, taskTransitions: [buildTransition(nodeId, 'complete', 'seal-member')], taskMirror: refreshTaskMirror(project, shell) };
   }
 
   let planContent = readFile(planPath);
@@ -750,7 +783,8 @@ function runSealMember(opts) {
   writeFile(planPath, sealed.planContent);
   writeFile(manifestPath, JSON.stringify(sealed.manifest, null, 2));
 
-  return { result: 'ok', sealed: nodeId, state: sealed.manifest.state };
+  // #317: the sealed member's ledger row → complete; refresh + return the transition.
+  return { result: 'ok', sealed: nodeId, state: sealed.manifest.state, taskTransitions: [buildTransition(nodeId, 'complete', 'seal-member')], taskMirror: refreshTaskMirror(project, shell) };
 }
 
 // ---------------------------------------------------------------------------
@@ -802,12 +836,16 @@ function runSeal(opts) {
   }
   writeFile(manifestPath, JSON.stringify(manifest, null, 2));
 
+  // #317: every genuinely-sealed member's ledger row is now complete (true even on a partial
+  // seal that still has failures) — refresh the mirror and return one completed transition each.
   return {
     result: failures.length === 0 ? 'ok' : 'refuse',
     state: manifest.state,
     sealed: sealedIds,
     pending,
     failures,
+    taskTransitions: sealedIds.map(id => buildTransition(id, 'complete', 'seal')),
+    taskMirror: refreshTaskMirror(project, shell),
   };
 }
 
@@ -911,7 +949,7 @@ function runTopUp(opts) {
   if (manifest.state === 'opening') return { result: 'refuse', reason: 'reconcile_first', state: 'opening' };
   // #305: an interrupted top-up (member.opening:true) must be reconciled before another top-up.
   if (hasInflightOpening(manifest)) return { result: 'refuse', reason: 'reconcile_first', state: manifest.state, detail: 'member_opening_incomplete' };
-  if (manifest.state !== 'open') return { result: 'ok', toppedUp: [], reason: 'batch_not_open', state: manifest.state };
+  if (manifest.state !== 'open') return { result: 'ok', toppedUp: [], reason: 'batch_not_open', state: manifest.state, taskTransitions: [] };
 
   // Same integrity gate as open-batch: never schedule against a tampered/invalid plan.
   const integrity = shell(validatorPath, [planPath, '--resume-check', '--json']);
@@ -924,7 +962,7 @@ function runTopUp(opts) {
   const effFanout = (Number.isInteger(fanoutCap) && fanoutCap >= 1) ? fanoutCap : 4;
   let capacity = effFanout - running;
   if (Number.isInteger(max) && max >= 1) capacity = Math.min(capacity, max);
-  if (capacity <= 0) return { result: 'ok', toppedUp: [], reason: 'at_capacity', running, cap: effFanout };
+  if (capacity <= 0) return { result: 'ok', toppedUp: [], reason: 'at_capacity', running, cap: effFanout, taskTransitions: [] };
 
   let planContent = readFile(planPath);
   const ledger = parseLedgerMap(planContent);
@@ -943,7 +981,7 @@ function runTopUp(opts) {
   const sameKind = n => (parseWriteSet(n.declared_write_set).size === 0) === !isWriteRole;
   const dependsOnMember = n => (n.dependsOn || []).some(d => memberIds.has(d));
   const queue = readyPending.filter(n => !memberIds.has(n.id) && sameKind(n) && !dependsOnMember(n));
-  if (queue.length === 0) return { result: 'ok', toppedUp: [], reason: 'frontier_drained', running };
+  if (queue.length === 0) return { result: 'ok', toppedUp: [], reason: 'frontier_drained', running, taskTransitions: [] };
 
   const toOpen = queue.slice(0, capacity);
 
@@ -952,7 +990,7 @@ function runTopUp(opts) {
     // #320: defense-in-depth — a write-role manifest cannot exist in the default
     // serial-degrade path (open-batch never opens one), but never roll a write-role
     // batch forward when member-worktree CWD cannot be enforced.
-    if (!cwdEnforced) return { result: 'ok', degraded: true, reason: 'cwd_unenforceable', toppedUp: [] };
+    if (!cwdEnforced) return { result: 'ok', degraded: true, reason: 'cwd_unenforceable', toppedUp: [], taskTransitions: [] };
     const dj = checkDisjoint(manifest.members.concat(toOpen));
     if (!dj.disjoint) return { result: 'refuse', reason: 'not_disjoint', detail: dj.reasoning };
   }
@@ -962,7 +1000,7 @@ function runTopUp(opts) {
   const memberWorktrees = {};
   const degradedReturn = () => {
     for (const id of Object.keys(memberWorktrees)) if (typeof worktreeRemove === 'function') worktreeRemove(memberWorktrees[id]);
-    return { result: 'ok', degraded: true, reason: 'worktree_unavailable', toppedUp: [] };
+    return { result: 'ok', degraded: true, reason: 'worktree_unavailable', toppedUp: [], taskTransitions: [] };
   };
   if (isWriteRole) {
     if (typeof snapMember !== 'function' || typeof anchorRef !== 'function' || typeof worktreeAdd !== 'function' || !repoRoot) return degradedReturn();
@@ -1015,12 +1053,15 @@ function runTopUp(opts) {
   manifest = { ...manifest, members: manifest.members.map(m => { if (!m.opening) return m; const c = { ...m }; delete c.opening; return c; }) };
   writeFile(manifestPath, JSON.stringify(manifest, null, 2));
 
+  // #317: each topped-up member flipped pending → in_progress; refresh + return transitions.
   return {
     result: 'ok',
     toppedUp: newMembers.map(m => ({ id: m.id, role: m.role, model: m.model, declared_write_set: m.declared_write_set, kind: m.kind, worktreePath: m.worktreePath })),
     running: running + newMembers.length,
     cap: effFanout,
     queueRemaining: queue.length - newMembers.length,
+    taskTransitions: newMembers.map(m => buildTransition(m.id, 'in_progress', 'top-up')),
+    taskMirror: refreshTaskMirror(project, shell),
   };
 }
 
@@ -1046,12 +1087,12 @@ function runReconcile(opts) {
   const { spliceLedgerNode } = require(ADAPTIVE_NODE);
 
   let manifest = readManifest(manifestPath, cacheExists, readFile);
-  if (!manifest) return { result: 'ok', reconciled: false, reason: 'no_active_batch' };
+  if (!manifest) return { result: 'ok', reconciled: false, reason: 'no_active_batch', taskTransitions: [] };
 
   const openingMembers = (manifest.members || []).filter(m => m.opening);
   const wholeOpening = manifest.state === 'opening';
   if (!wholeOpening && openingMembers.length === 0) {
-    return { result: 'ok', reconciled: false, reason: 'not_opening', state: manifest.state };
+    return { result: 'ok', reconciled: false, reason: 'not_opening', state: manifest.state, taskTransitions: [] };
   }
   const target = wholeOpening ? (manifest.members || []) : openingMembers;
   let planContent = readFile(planPath);
@@ -1066,12 +1107,13 @@ function runReconcile(opts) {
     if (wholeOpening) {
       if (typeof unlink === 'function') unlink(manifestPath);
       else writeFile(manifestPath, JSON.stringify({ batchId: manifest.batchId, state: 'aborted', members: [] }, null, 2));
-      return { result: 'ok', reconciled: true, rolledBack: target.map(m => m.id), state: 'aborted' };
+      // #317: rolled-back rows → pending.
+      return { result: 'ok', reconciled: true, rolledBack: target.map(m => m.id), state: 'aborted', taskTransitions: target.map(m => buildTransition(m.id, 'pending', 'reconcile-abort')), taskMirror: refreshTaskMirror(project, shell) };
     }
     const dropIds = new Set(target.map(m => m.id));
     manifest = { ...manifest, members: manifest.members.filter(m => !dropIds.has(m.id)) };
     writeFile(manifestPath, JSON.stringify(manifest, null, 2));
-    return { result: 'ok', reconciled: true, rolledBack: target.map(m => m.id), state: manifest.state };
+    return { result: 'ok', reconciled: true, rolledBack: target.map(m => m.id), state: manifest.state, taskTransitions: target.map(m => buildTransition(m.id, 'pending', 'reconcile-abort')), taskMirror: refreshTaskMirror(project, shell) };
   }
 
   // ROLL FORWARD.
@@ -1096,7 +1138,8 @@ function runReconcile(opts) {
   manifest = { ...manifest, members: manifest.members.map(m => { if (!m.opening) return m; const c = { ...m }; delete c.opening; return c; }) };
   if (wholeOpening) manifest.state = 'open';
   writeFile(manifestPath, JSON.stringify(manifest, null, 2));
-  return { result: 'ok', reconciled: true, promoted: true, state: manifest.state, members: target.map(m => m.id) };
+  // #317: roll-forward promoted the intended rows → in_progress.
+  return { result: 'ok', reconciled: true, promoted: true, state: manifest.state, members: target.map(m => m.id), taskTransitions: target.map(m => buildTransition(m.id, 'in_progress', 'reconcile')), taskMirror: refreshTaskMirror(project, shell) };
 }
 
 // ---------------------------------------------------------------------------

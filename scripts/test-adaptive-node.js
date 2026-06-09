@@ -1765,6 +1765,99 @@ function makeState(opts) {
     '#282 AC-2: orient shells the task-mirror CLI to reconcile workflow-tasks.json, got ' + JSON.stringify(shelled));
 }
 
+// ---------------------------------------------------------------------------
+// #317: ledger-mutating commands refresh the durable task mirror + return explicit
+// taskTransitions for the orchestrator to apply (no inference).
+// ---------------------------------------------------------------------------
+
+// #317-open-next: opened node → in_progress transition + task-mirror shelled.
+{
+  const shelled = [];
+  const plan = makePlan(['| impl-core | pending | |', '| impl-other | pending | |', '| review | pending | |', '| finalize | pending | |']);
+  let planContent = plan;
+  const shellStub = function (sp, args) {
+    const base = path.basename(sp);
+    shelled.push(base);
+    if (base === 'kaola-workflow-next-action.js') {
+      return { exitCode: 0, result: 'ok',
+        readySet: [{ id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js', dependsOn: [] }],
+        nextNode: { id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js' }, allDone: false };
+    }
+    if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok', mode: 'per-node-start', nodeId: 'impl-core', overallOk: true };
+    if (base === 'kaola-workflow-task-mirror.js') return { exitCode: 0, status: 'ok' };
+    return { exitCode: 1 };
+  };
+  const result = runOpenNext({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project', nodeId: null, shell: shellStub,
+    readFile: (f) => { if (f.endsWith('workflow-plan.md')) return planContent; if (f.endsWith('workflow-state.md')) return makeState(); throw new Error('ENOENT'); },
+    writeFile: (f, c) => { if (f.endsWith('workflow-plan.md')) planContent = c; },
+  });
+  assert(result.result === 'ok', '#317 open-next: ok');
+  assert(JSON.stringify(result.taskTransitions) === JSON.stringify([{ id: 'impl-core', status: 'in_progress', ledger_status: 'in_progress', reason: 'open-next' }]),
+    '#317 open-next: [impl-core→in_progress], got ' + JSON.stringify(result.taskTransitions));
+  assert(result.taskMirror && result.taskMirror.status === 'updated', '#317 open-next: taskMirror updated');
+  assert(shelled.includes('kaola-workflow-task-mirror.js'), '#317 open-next: task-mirror shelled after the mutation');
+}
+
+// #317-close-and-open-next (fused): closed → completed AND next → in_progress (two transitions).
+{
+  const plan = makePlan(['| impl-core | in_progress | |', '| impl-other | pending | |', '| review | pending | |', '| finalize | pending | |']);
+  let planContent = plan;
+  const cacheFiles = { '/fake/kaola-workflow/test-project/.cache/impl-core.md': 'RED: failing\nGREEN: passing\n' };
+  const shellStub = function (sp, args) {
+    const base = path.basename(sp); const a = args || [];
+    if (base === 'kaola-workflow-commit-node.js' && !a.includes('--start')) return { exitCode: 0, result: 'ok', mode: 'per-node', nodeId: 'impl-core', overallOk: true, selectorCheck: { isSelector: false, ok: true } };
+    if (base === 'kaola-workflow-commit-node.js' && a.includes('--start')) return { exitCode: 0, result: 'ok', mode: 'per-node-start', nodeId: 'impl-other', overallOk: true };
+    if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', readyPending: [{ id: 'impl-other' }],
+      nextNode: { id: 'impl-other', role: 'implementer', model: 'sonnet', declared_write_set: 'scripts/other.js' }, allDone: false };
+    if (base === 'kaola-workflow-task-mirror.js') return { exitCode: 0, status: 'ok' };
+    return { exitCode: 1 };
+  };
+  const result = runCloseAndOpenNext({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project', nodeId: 'impl-core', shell: shellStub,
+    readFile: (f) => { if (f.endsWith('workflow-plan.md')) return planContent; if (f.endsWith('workflow-state.md')) return makeState(); if (cacheFiles[f]) return cacheFiles[f]; throw new Error('ENOENT'); },
+    writeFile: (f, c) => { if (f.endsWith('workflow-plan.md')) planContent = c; },
+    cacheExists: (f) => !!cacheFiles[f],
+  });
+  assert(result.result === 'ok', '#317 close+open: ok');
+  assert(JSON.stringify(result.taskTransitions) === JSON.stringify([
+    { id: 'impl-core', status: 'completed', ledger_status: 'complete', reason: 'close-and-open-next' },
+    { id: 'impl-other', status: 'in_progress', ledger_status: 'in_progress', reason: 'close-and-open-next' },
+  ]), '#317 close+open: [closed→completed, next→in_progress], got ' + JSON.stringify(result.taskTransitions));
+  assert(result.taskMirror && result.taskMirror.status === 'updated', '#317 close+open: taskMirror updated');
+}
+
+// #317-enterBatch: a >=2 frontier closes the node and signals enterBatch — taskTransitions carry
+// ONLY the closed node (open-batch owns the member in_progress flips).
+{
+  const plan = makePlan(['| impl-core | in_progress | |', '| impl-other | pending | |', '| review | pending | |', '| finalize | pending | |']);
+  let planContent = plan;
+  const cacheFiles = { '/fake/kaola-workflow/test-project/.cache/impl-core.md': 'RED: failing\nGREEN: passing\n' };
+  const shellStub = function (sp, args) {
+    const base = path.basename(sp); const a = args || [];
+    if (base === 'kaola-workflow-commit-node.js' && !a.includes('--start')) return { exitCode: 0, result: 'ok', mode: 'per-node', nodeId: 'impl-core', overallOk: true, selectorCheck: { isSelector: false, ok: true } };
+    if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', readyPending: [{ id: 'b1', role: 'implementer' }, { id: 'b2', role: 'implementer' }], allDone: false };
+    if (base === 'kaola-workflow-task-mirror.js') return { exitCode: 0, status: 'ok' };
+    return { exitCode: 1 };
+  };
+  const result = runCloseAndOpenNext({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project', nodeId: 'impl-core', shell: shellStub,
+    readFile: (f) => { if (f.endsWith('workflow-plan.md')) return planContent; if (f.endsWith('workflow-state.md')) return makeState(); if (cacheFiles[f]) return cacheFiles[f]; throw new Error('ENOENT'); },
+    writeFile: (f, c) => { if (f.endsWith('workflow-plan.md')) planContent = c; },
+    cacheExists: (f) => !!cacheFiles[f],
+  });
+  assert(result.result === 'ok' && result.enterBatch === true, '#317 enterBatch: ok + enterBatch');
+  assert(JSON.stringify(result.taskTransitions) === JSON.stringify([
+    { id: 'impl-core', status: 'completed', ledger_status: 'complete', reason: 'close-and-open-next' },
+  ]), '#317 enterBatch: ONLY [closed→completed] (open-batch owns member flips), got ' + JSON.stringify(result.taskTransitions));
+}
+
 // Summary
 // ---------------------------------------------------------------------------
 if (failed > 0) {
