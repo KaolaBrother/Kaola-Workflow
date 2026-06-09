@@ -537,6 +537,9 @@ for (const reviewerBody of [
   pluginRoot + '/agents/adversarial-verifier.toml'
 ]) {
   assertIncludes(reviewerBody, 'finding: id=');
+  // #285: pin the machine-readable verdict-block emission contract (the column-0 block
+  // that --verdict-check reads at Finalization) so a gate node always emits it.
+  assertIncludes(reviewerBody, 'verdict: pass');
 }
 // #281: frontier-unit semantics in Gitea plan-run command (added by plan-run-semantics node)
 assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'frontier unit');

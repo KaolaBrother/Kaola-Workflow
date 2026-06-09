@@ -496,6 +496,9 @@ for (const reviewerBody of [
   `${pluginRoot}/agents/adversarial-verifier.toml`
 ]) {
   assertIncludes(reviewerBody, 'finding: id=');
+  // #285: pin the machine-readable verdict-block emission contract (the column-0 block
+  // that --verdict-check reads at Finalization) so a Codex gate node always emits it.
+  assertIncludes(reviewerBody, 'verdict: pass');
 }
 
 console.log('Kaola-Workflow Codex contract validation passed');
