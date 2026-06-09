@@ -19,7 +19,7 @@ A multi-path development workflow for Claude Code and Codex with per-phase file 
         │
         └──► Full 6-phase flow:
                                                               output file
-            Phase 1  Research    code-explorer, docs-lookup    phase1-research.md
+            Phase 1  Research    code-explorer, knowledge-lookup    phase1-research.md
             Phase 2  Ideation    planner  (advisor gate)       phase2-ideation.md
             Phase 3  Plan        code-architect                phase3-plan.md
             Phase 4  Execute     tdd-guide                     phase4-progress.md
@@ -105,7 +105,7 @@ for the pinned upstream commit, attribution, and refresh procedure.
 | Agent | Phase | Model | Higher profile |
 |-------|-------|-------|----------------|
 | `code-explorer` | 1 — Research/Discovery (code facts) | Sonnet | |
-| `docs-lookup` | 1 — Research/Discovery (external docs, when needed) | Sonnet | |
+| `knowledge-lookup` | 1 — Research/Discovery (external docs, when needed) | Sonnet | |
 | `planner` | 2 — Ideation | Opus | |
 | `code-architect` | 3 — Plan | Sonnet | yes |
 | `tdd-guide` | 4 — Execute (per-task TDD executor) | Sonnet | |
@@ -162,7 +162,7 @@ differs from the agent's frontmatter). **After installing or re-running
 
 > **Badge visibility by session model (Claude Code platform behaviour):**
 > - **Session on Sonnet** — only Opus subagents show a badge. Sonnet-dispatched
->   agents (`code-explorer`, `tdd-guide`, `implementer`, `build-error-resolver`, `docs-lookup`,
+>   agents (`code-explorer`, `tdd-guide`, `implementer`, `build-error-resolver`, `knowledge-lookup`,
 >   `doc-updater`, `adversarial-verifier`) run silently. Opus-dispatched agents (`planner`,
 >   `code-architect`, `code-reviewer`, `security-reviewer` on the default
 >   `higher` profile) badge as expected.
@@ -412,7 +412,7 @@ mirror the Claude workflow roles:
 
 ```text
 code-explorer
-docs-lookup
+knowledge-lookup
 planner
 code-architect
 tdd-guide
@@ -442,7 +442,7 @@ through the user's active Codex configuration. They only set reasoning effort:
 | Role | Reasoning effort |
 | --- | --- |
 | `code-explorer` | `medium` |
-| `docs-lookup` | `medium` |
+| `knowledge-lookup` | `medium` |
 | `planner` | `xhigh` |
 | `code-architect` | `high` |
 | `tdd-guide` | `medium` |
@@ -850,7 +850,7 @@ leaves commit-and-push as the final step on a clean, synced workspace.
 
 | # | Phase | What happens | Output file |
 |---|-------|-------------|-------------|
-| 1 | Research/Discovery | Facts only: requirement parsing → code-explorer maps affected code/patterns/tests/config → docs-lookup checks external docs when needed → completeness gate | `phase1-research.md` |
+| 1 | Research/Discovery | Facts only: requirement parsing → code-explorer maps affected code/patterns/tests/config → knowledge-lookup checks external docs when needed → completeness gate | `phase1-research.md` |
 | 2 | Ideation | Strategy only: planner generates 2–3 grounded approaches → advisor gate → user selects | `phase2-ideation.md` |
 | 3 | Plan | Blueprint only: code-architect turns selected approach into files, tasks, write sets, dependencies, parallel groups, and validation | `phase3-plan.md` |
 | 4 | Execute | Per-task TDD loop: tdd-guide executes RED → GREEN → REFACTOR; main session reviews, validates, and checkpoints | `phase4-progress.md` |

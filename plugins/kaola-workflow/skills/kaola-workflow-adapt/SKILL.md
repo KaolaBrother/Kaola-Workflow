@@ -103,6 +103,9 @@ the example above models both.
   is equal-burden, different-shape — it swaps RED→GREEN for change-type-appropriate
   verification (regression-green / build-green / executable smoke-integration), NOT a
   lighter path.
+- Author a `knowledge-lookup` node when the task depends on external library or API
+  behavior, framework conventions, or open-web/expertise knowledge that cannot be confirmed
+  from the local codebase alone. This mirrors the Phase 1 `knowledge-lookup` trigger.
 
 ## Front end: claim + author (the `workflow-planner` agent role)
 

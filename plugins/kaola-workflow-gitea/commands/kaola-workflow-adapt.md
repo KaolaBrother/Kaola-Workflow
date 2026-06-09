@@ -138,3 +138,9 @@ commit step closes it (`n/a` nodes → skipped). Then hand off to the executor:
 ```text
 /kaola-workflow-plan-run {project}
 ```
+
+## Shaping guidance
+
+The full shaping guidance lives in `agents/workflow-planner.md`. One heuristic is mirrored here for quick reference:
+
+- Author a `knowledge-lookup` node when the task depends on external library or API behavior, framework conventions, or open-web/expertise knowledge that cannot be confirmed from the local codebase alone. This mirrors the Phase 1 `knowledge-lookup` trigger.

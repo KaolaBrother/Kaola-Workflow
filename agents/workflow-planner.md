@@ -90,6 +90,11 @@ Author the `## Nodes` table so the validator passes it. Each node is one row:
   meaningful failing unit test can be written, choose `tdd-guide`; doubt → `tdd-guide`. "Hard to
   test" is NOT an `implementer` reason. Both implement roles require `code-reviewer`
   post-dominance (G1).
+- **Use `knowledge-lookup`** when the task depends on external library/API behavior, framework
+  conventions, or open-web/expertise knowledge that cannot be confirmed locally: author a
+  `knowledge-lookup` node when the task depends on external library or API behavior, framework
+  conventions, or open-web/expertise knowledge that cannot be confirmed from the local codebase
+  alone. This mirrors the Phase 1 `knowledge-lookup` trigger.
 
 **Author EFFICIENT DAGs, not merely valid DAGs.** Minimize the safe critical path; expose independent work as siblings (a shared ready frontier) so the executor can open them as one batch; serialize only for true dependencies, shared file lanes, selectors, loops, or gates. Read-only verification/research siblings are zero-blast-radius — prefer fanning them out. Write-role siblings must declare disjoint write sets to be batch-eligible.
 

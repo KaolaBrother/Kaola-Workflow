@@ -22,7 +22,7 @@ Read:
 kaola-workflow/{project}/workflow-state.md
 kaola-workflow/{project}/phase1-research.md
 kaola-workflow/{project}/.cache/code-explorer.md
-kaola-workflow/{project}/.cache/docs-lookup.md
+kaola-workflow/{project}/.cache/knowledge-lookup.md
 ```
 
 ## Agent Model Badge
@@ -55,7 +55,7 @@ Update `workflow-state.md` before continuing.
 
 - Do not invent facts missing from Phase 1.
 - If a required fact is missing, stop and return to Phase 1 with a focused
-  `code-explorer` or `docs-lookup` request.
+  `code-explorer` or `knowledge-lookup` request.
 - Use `planner` for deep approach analysis.
 - Save advisor output to `.cache/advisor-ideation.md`; do not keep it only in
   conversation memory.

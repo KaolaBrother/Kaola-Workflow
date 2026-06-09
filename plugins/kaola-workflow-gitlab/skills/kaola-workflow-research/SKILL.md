@@ -35,8 +35,8 @@ ambiguity that blocks correctness.
    later sessions can recognize the active issue before `phase1-research.md`
    exists.
 3. Inspect relevant files, tests, config, docs, and issues. Use the `code-explorer` Codex agent role for this step. Record status as `subagent-invoked` in the compliance ledger if delegation occurred, `local-fallback-explicit` if the user explicitly authorized local execution, or `local-fallback-tool-unavailable` if the subagent tooling was unavailable.
-4. Use the `docs-lookup` Codex agent role only when current external behavior matters; otherwise record why docs lookup is N/A.
-5. Write raw notes to `.cache/code-explorer.md` and `.cache/docs-lookup.md` when used.
+4. Use the `knowledge-lookup` Codex agent role only when current external behavior matters; otherwise record why docs lookup is N/A.
+5. Write raw notes to `.cache/code-explorer.md` and `.cache/knowledge-lookup.md` when used.
 6. Score completeness from 0-10. Stop and ask if below 7.
 7. Write `kaola-workflow/{project}/phase1-research.md` and update `workflow-state.md`. Preserve any existing `## Sink` blocks exactly; never replace the whole state file with phase-only fields.
 
@@ -72,10 +72,10 @@ X/10
 | Requirement | Status | Evidence | Skip Reason |
 |-------------|--------|----------|-------------|
 | code-explorer | subagent-invoked/local-fallback-explicit/local-fallback-tool-unavailable | .cache/code-explorer.md | |
-| docs-lookup | invoked/N/A | .cache/docs-lookup.md or docs-impact check | reason if N/A |
+| knowledge-lookup | invoked/N/A | .cache/knowledge-lookup.md or docs-impact check | reason if N/A |
 ```
 
-The deterministic bookkeeping below — the `workflow-state.md` checkpoint write (preserving the `## Sink` block) and the per-issue roadmap `init-issue` creation/staging — is delegated to the mechanical `contractor` Codex agent role when that subagent is available; it runs the scripts and authors the durable bookkeeping but never authors the `phase1-research.md` synthesis, never invokes code-explorer/docs-lookup, and never judges. The current session keeps requirement parsing, the research dispatches, the completeness gate, the `phase1-research.md` synthesis, and the branch decision.
+The deterministic bookkeeping below — the `workflow-state.md` checkpoint write (preserving the `## Sink` block) and the per-issue roadmap `init-issue` creation/staging — is delegated to the mechanical `contractor` Codex agent role when that subagent is available; it runs the scripts and authors the durable bookkeeping but never authors the `phase1-research.md` synthesis, never invokes code-explorer/knowledge-lookup, and never judges. The current session keeps requirement parsing, the research dispatches, the completeness gate, the `phase1-research.md` synthesis, and the branch decision.
 
 8. If a GitLab issue is linked, run `init-issue` to create the roadmap tracking file:
 

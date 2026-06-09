@@ -14,8 +14,7 @@ architecture, or write implementation code.
   unclear, stop and ask.
 - Invoke `code-explorer` for codebase research unless the task is explicitly
   documentation-only and no codebase facts are needed.
-- Invoke `docs-lookup` only when external/library/API/framework behavior is
-  needed; otherwise record it as `N/A` with evidence.
+- Invoke `knowledge-lookup` only when external library/API behavior or open-web/expertise knowledge that cannot be confirmed locally is needed; otherwise record it as `N/A` with evidence.
 - Persist raw agent outputs. Do not rely on conversation memory.
 - Maintain `workflow-state.md` before and after every gate.
 - Do not ask the user to confirm generated project/folder names. Routine naming
@@ -128,14 +127,14 @@ kaola-workflow/{project-name}/.cache/code-explorer.md
 
 Update `workflow-state.md` before invoking and after writing the cache file.
 
-## Step 3 - External Docs Lookup
+## Step 3 - External Knowledge Lookup
 
-Invoke `docs-lookup` only when current external behavior matters. Pass its model explicitly:
+Invoke `knowledge-lookup` only when current external behavior matters. Pass its model explicitly:
 
 ```text
 Agent(
-  subagent_type="docs-lookup",
-  model="{DOCS_LOOKUP_MODEL}",
+  subagent_type="knowledge-lookup",
+  model="{KNOWLEDGE_LOOKUP_MODEL}",
   description="Lookup docs for {project-name}",
   prompt="..."
 )
@@ -148,13 +147,13 @@ implementation approaches.
 Write raw output to:
 
 ```text
-kaola-workflow/{project-name}/.cache/docs-lookup.md
+kaola-workflow/{project-name}/.cache/knowledge-lookup.md
 ```
 
 If not needed, record:
 
 ```text
-docs-lookup: N/A - internal patterns sufficient
+knowledge-lookup: N/A - internal patterns sufficient
 ```
 
 ## Step 4 - Completeness Gate
@@ -211,7 +210,7 @@ Create `kaola-workflow/{project-name}/phase1-research.md`:
 | Requirement | Status | Evidence | Skip Reason |
 |-------------|--------|----------|-------------|
 | code-explorer | invoked | .cache/code-explorer.md | |
-| docs-lookup | invoked/N/A | .cache/docs-lookup.md or docs impact check | [reason if N/A] |
+| knowledge-lookup | invoked/N/A | .cache/knowledge-lookup.md or docs impact check | [reason if N/A] |
 
 ## Notes / Future Considerations
 [deferred questions or none]
@@ -231,7 +230,7 @@ Agent(
   subagent_type="contractor",
   model="{CONTRACTOR_MODEL}",
   description="Mechanical checkpoint {project-name}",
-  prompt="Run the mechanical bookkeeping for Phase 1 of {project-name}. phase1-research.md is already written on disk (do NOT author or edit it — the research synthesis is the orchestrator's). Execute the Step 5 workflow-state.md checkpoint update (phase: 1 / step: complete / next_command: /kaola-workflow-phase2 {project-name}), PRESERVING any existing ## Sink block byte-for-byte, and Step 5b (the per-issue roadmap init-issue + git add kaola-workflow/.roadmap/issue-N.md staging), exactly as written below in this command file. Return a compact bookkeeping summary; do NOT cut the feature branch (Step 6), do NOT invoke code-explorer/docs-lookup, do NOT judge or interpret findings."
+  prompt="Run the mechanical bookkeeping for Phase 1 of {project-name}. phase1-research.md is already written on disk (do NOT author or edit it — the research synthesis is the orchestrator's). Execute the Step 5 workflow-state.md checkpoint update (phase: 1 / step: complete / next_command: /kaola-workflow-phase2 {project-name}), PRESERVING any existing ## Sink block byte-for-byte, and Step 5b (the per-issue roadmap init-issue + git add kaola-workflow/.roadmap/issue-N.md staging), exactly as written below in this command file. Return a compact bookkeeping summary; do NOT cut the feature branch (Step 6), do NOT invoke code-explorer/knowledge-lookup, do NOT judge or interpret findings."
 )
 ```
 
