@@ -47,7 +47,7 @@ config_file = "./agents/kaola-workflow/security-reviewer.toml"
 nickname_candidates = ["Security", "Audit", "Threat"]
 
 [agents.doc-updater]
-description = "Kaola-Workflow for Codex Phase 6 documentation specialist: updates docs only when behavior, setup, API, architecture, or workflow changed."
+description = "Kaola-Workflow for Codex Finalization documentation specialist: updates docs only when behavior, setup, API, architecture, or workflow changed."
 config_file = "./agents/kaola-workflow/doc-updater.toml"
 nickname_candidates = ["Docs", "Docking", "Writer"]
 
