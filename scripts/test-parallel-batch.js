@@ -1659,7 +1659,7 @@ function makeWriteRoleRepo(waDeclared, seedFiles) {
   // End-to-end via runStatus: joined + manifest removed (members complete in ledger, no manifest).
   const { root, planPath, statePath, cacheDir } = makeProjectDir(makeReadOnlyFanout(2));
   // Mark the fan-out members complete (the post-join ledger) and remove any manifest.
-  let pl = fs.readFileSync(planPath, 'utf8').replace(/\|\s*v1\s*\|\s*pending\s*\|/, '| v1 | complete |').replace(/\|\s*v2\s*\|\s*pending\s*\|/, '| v2 | complete |');
+  let pl = fs.readFileSync(planPath, 'utf8').replace(/\|\s*f1\s*\|\s*pending\s*\|/, '| f1 | complete |').replace(/\|\s*f2\s*\|\s*pending\s*\|/, '| f2 | complete |');
   fs.writeFileSync(planPath, pl);
   const manifestPath = path.join(cacheDir, 'active-batch.json');
   if (fs.existsSync(manifestPath)) fs.unlinkSync(manifestPath);
@@ -1667,6 +1667,112 @@ function makeWriteRoleRepo(waDeclared, seedFiles) {
   assert(st.active === false, 'I6d: joined+cleared → active:false');
   assert(st.nextRoute === 'orient', 'I6d: joined+cleared status recommends orient, got ' + JSON.stringify(st.nextRoute));
   assert(st.nextRoute !== 'top-up', 'I6d: joined+cleared status NEVER recommends top-up (the no_active_batch trap)');
+  cleanup(root);
+}
+
+// ---------------------------------------------------------------------------
+// #317: mutation-time task-mirror sync + machine-readable taskTransitions.
+// A shell spy that delegates batch script calls to the real next-action shell but
+// intercepts task-mirror (record the call; optionally force a failure).
+// ---------------------------------------------------------------------------
+function spyMirrorShell(planPath, failMirror) {
+  const real = realNextActionShell(planPath);
+  const fn = function (sp, a) {
+    if (path.basename(sp) === 'kaola-workflow-task-mirror.js') {
+      fn.mirrorCalls++;
+      return failMirror ? { exitCode: 1, status: 'plan_not_frozen' } : { exitCode: 0, status: 'ok' };
+    }
+    return real(sp, a);
+  };
+  fn.mirrorCalls = 0;
+  return fn;
+}
+
+// #317-1 (AC1+AC2): open-batch over a frozen 2-wide write-role frontier refreshes
+// workflow-tasks.json (both members in_progress) and returns one in_progress transition
+// per member. CLI path → the REAL task-mirror runs against the frozen plan.
+{
+  const { repoRoot, project } = makeRealGitRepo();
+  const proj = ['--project', project, '--json'];
+  const open = runBatchCli(repoRoot, ['open-batch', ...proj], CWD1);
+  assert(open.result === 'ok' && open.kind === 'write_role', '#317-1: open-batch write-role → ok');
+  assert(Array.isArray(open.taskTransitions) && open.taskTransitions.length === 2,
+    '#317-1 (AC2): two taskTransitions returned, got ' + JSON.stringify(open.taskTransitions));
+  assert(open.taskTransitions.every(t => t.status === 'in_progress' && t.ledger_status === 'in_progress' && t.reason === 'open-batch'),
+    '#317-1 (AC2): each member transition is in_progress/open-batch');
+  assert(open.taskMirror && open.taskMirror.status === 'updated', '#317-1 (AC1): taskMirror.status updated, got ' + JSON.stringify(open.taskMirror));
+  const tasksPath = path.join(repoRoot, 'kaola-workflow', project, 'workflow-tasks.json');
+  assert(fs.existsSync(tasksPath), '#317-1 (AC1): workflow-tasks.json written before dispatch');
+  const tasks = JSON.parse(fs.readFileSync(tasksPath, 'utf8'));
+  const byId = {}; for (const t of tasks.tasks) byId[t.id] = t;
+  assert(byId.wa && byId.wa.ledger_status === 'in_progress', '#317-1 (AC1): wa in_progress in durable mirror');
+  assert(byId.wb && byId.wb.ledger_status === 'in_progress', '#317-1 (AC1): wb in_progress in durable mirror');
+  cleanup(repoRoot);
+}
+
+// #317-2 (FAIL-OPEN, load-bearing): a task-mirror refresh failure must NEVER roll back a
+// correct ledger transition — result stays ok, taskMirror.status === 'failed', ledger flipped.
+{
+  const { root, planPath, statePath, cacheDir } = makeProjectDir(makeReadOnlyFanout(2));
+  const io = makeIo();
+  const manifestPath = path.join(cacheDir, 'active-batch.json');
+  const shell = spyMirrorShell(planPath, /* failMirror */ true);
+  const r = runOpenBatch({ planPath, statePath, cacheDir, manifestPath, project: 'test-project', max: null, fanoutCap: 4, shell, ...io });
+  assert(r.result === 'ok', '#317-2 (fail-open): result STILL ok despite a failed mirror refresh');
+  assert(r.taskMirror && r.taskMirror.status === 'failed', '#317-2: taskMirror.status failed is recorded');
+  assert(Array.isArray(r.taskTransitions) && r.taskTransitions.length === 2, '#317-2: transitions still returned on mirror failure');
+  assert(shell.mirrorCalls === 1, '#317-2: task-mirror was shelled exactly once after the mutation');
+  const pl = fs.readFileSync(planPath, 'utf8');
+  assert(/\|\s*f1\s*\|\s*in_progress\s*\|/.test(pl) && /\|\s*f2\s*\|\s*in_progress\s*\|/.test(pl),
+    '#317-2: ledger rows STILL flipped in_progress (mutation not rolled back by mirror failure)');
+  assert(fs.existsSync(manifestPath), '#317-2: manifest STILL written');
+  cleanup(root);
+}
+
+// #317-3 (AC3/AC6): seal-member → [member→completed]; top-up → [member→in_progress]; both
+// shell task-mirror after the mutation (spy confirms the refresh call).
+{
+  const { root, planPath, statePath, cacheDir } = makeProjectDir(makeReadOnlyFanout(6));
+  const io = makeIo();
+  const manifestPath = path.join(cacheDir, 'active-batch.json');
+  const shell = spyMirrorShell(planPath, false);
+  const baseCtx = { planPath, statePath, cacheDir, manifestPath, project: 'test-project', max: null, fanoutCap: 4, shell, ...io };
+  const open = runOpenBatch(baseCtx);
+  assert(open.taskTransitions.length === 4 && open.taskMirror.status === 'updated', '#317-3: open-batch refresh + 4 transitions');
+  const firstId = open.members[0].id;
+  fs.writeFileSync(path.join(cacheDir, firstId + '.md'), 'scanned; findings');
+  const callsBeforeSeal = shell.mirrorCalls;
+  const seal = runSealMember({ ...baseCtx, nodeId: firstId });
+  assert(seal.result === 'ok', '#317-3: seal-member ok');
+  assert(JSON.stringify(seal.taskTransitions) === JSON.stringify([{ id: firstId, status: 'completed', ledger_status: 'complete', reason: 'seal-member' }]),
+    '#317-3 (AC3): seal-member returns [member→completed], got ' + JSON.stringify(seal.taskTransitions));
+  assert(shell.mirrorCalls === callsBeforeSeal + 1, '#317-3: seal-member shelled task-mirror after the mutation');
+  const callsBeforeTopup = shell.mirrorCalls;
+  const topup = runTopUp(baseCtx);
+  assert(topup.result === 'ok' && topup.toppedUp.length === 1, '#317-3: top-up opens one');
+  assert(topup.taskTransitions.length === 1 && topup.taskTransitions[0].status === 'in_progress' && topup.taskTransitions[0].reason === 'top-up',
+    '#317-3 (AC3): top-up returns [member→in_progress], got ' + JSON.stringify(topup.taskTransitions));
+  assert(shell.mirrorCalls === callsBeforeTopup + 1, '#317-3: top-up shelled task-mirror after the mutation');
+  cleanup(root);
+}
+
+// #317-4 (AC3/AC6): reconcile --abort returns rolled-back rows → pending.
+{
+  const { root, planPath, statePath, cacheDir } = makeProjectDir(makeReadOnlyFanout(2));
+  const io = makeIo();
+  const manifestPath = path.join(cacheDir, 'active-batch.json');
+  const shell = spyMirrorShell(planPath, false);
+  const baseCtx = { planPath, statePath, cacheDir, manifestPath, project: 'test-project', max: null, fanoutCap: 4, shell, ...io };
+  runOpenBatch(baseCtx);
+  // Force an 'opening' transaction marker so reconcile --abort has something to roll back.
+  let m = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  m.state = 'opening';
+  fs.writeFileSync(manifestPath, JSON.stringify(m, null, 2));
+  const abort = runReconcile({ ...baseCtx, abort: true, unlink: (f) => fs.unlinkSync(f) });
+  assert(abort.result === 'ok' && abort.reconciled === true, '#317-4: reconcile --abort ok');
+  assert(Array.isArray(abort.taskTransitions) && abort.taskTransitions.length === m.members.length
+    && abort.taskTransitions.every(t => t.status === 'pending' && t.reason === 'reconcile-abort'),
+    '#317-4 (AC3): reconcile --abort returns rolled-back rows → pending, got ' + JSON.stringify(abort.taskTransitions));
   cleanup(root);
 }
 

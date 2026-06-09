@@ -99,6 +99,36 @@ function shellNode(scriptPath, args) {
 }
 
 // ---------------------------------------------------------------------------
+// #317 — mutation-time task-mirror sync + machine-readable UI transitions.
+//
+// refreshTaskMirror: regenerate the durable workflow-tasks.json from the just-mutated
+// ledger by SHELLING the task-mirror CLI (resolved via taskMirrorPath, edition-neutral).
+// CRITICAL fail-OPEN contract (opposite of every other guard here): a mirror-refresh
+// failure must NEVER roll back a correct ledger transition — it is recorded in the
+// returned `taskMirror` field and the command still returns result:'ok'. Callers invoke
+// it ONLY after the final stable plan write of a successful ledger mutation.
+//
+// buildTransition: a machine-readable UI transition the orchestrator applies to the live
+// task list without inference. `status` is mapped via the task-mirror's mapLedgerStatus so
+// the UI map single-sources from the durable mirror and cannot drift.
+// ---------------------------------------------------------------------------
+function refreshTaskMirror(project, shell) {
+  if (!project) return { status: 'skipped' };
+  const outPath = 'kaola-workflow/' + project + '/workflow-tasks.json';
+  let res;
+  try { res = shell(taskMirrorPath, ['--project', project, '--json']); }
+  catch (_) { return { status: 'failed', path: outPath }; }
+  return { status: (res && res.exitCode === 0) ? 'updated' : 'failed', path: outPath };
+}
+
+function buildTransition(id, ledgerStatus, reason, note) {
+  const { mapLedgerStatus } = require(taskMirrorPath);
+  const t = { id: id, status: mapLedgerStatus(ledgerStatus), ledger_status: ledgerStatus, reason: reason };
+  if (note) t.note = note;
+  return t;
+}
+
+// ---------------------------------------------------------------------------
 // spliceLedgerNode — rewrite a single node row's status cell in ## Node Ledger.
 //
 // GUARD: flip ONLY when current status ∈ allowFrom.
@@ -534,7 +564,7 @@ function runOrient(opts) {
 // records its per-node baseline.
 // ---------------------------------------------------------------------------
 function runOpenNext(opts) {
-  const { planPath, statePath, nodeId: requestedId, shell, readFile, writeFile } = opts;
+  const { planPath, statePath, project, nodeId: requestedId, shell, readFile, writeFile } = opts;
 
   // Shell NEXT_ACTION.
   const nextAction = shell(nextActionPath, [planPath, '--json']);
@@ -544,7 +574,7 @@ function runOpenNext(opts) {
   }
 
   if (nextAction.allDone) {
-    return { result: 'ok', allDone: true, opened: null };
+    return { result: 'ok', allDone: true, opened: null, taskTransitions: [] };
   }
 
   // Determine the node to open.
@@ -596,6 +626,8 @@ function runOpenNext(opts) {
     };
   }
 
+  // #317: ledger row flipped pending → in_progress; refresh the durable mirror and
+  // return the explicit UI transition for the orchestrator to apply.
   return {
     result: 'ok',
     allDone: false,
@@ -606,6 +638,8 @@ function runOpenNext(opts) {
       declared_write_set: targetNode.declared_write_set,
     },
     baselineRecorded: true,
+    taskTransitions: [buildTransition(targetNode.id, 'in_progress', 'open-next')],
+    taskMirror: refreshTaskMirror(project, shell),
   };
 }
 
@@ -653,7 +687,11 @@ function runRecordEvidence(opts) {
 // Order: (a) evidence-shape → (b) barrier → (c) close+compliance → (e) selector → (d) fused-advance
 // ---------------------------------------------------------------------------
 function runCloseAndOpenNext(opts) {
-  const { planPath, statePath, nodeId, shell, readFile, writeFile, cacheExists } = opts;
+  const { planPath, statePath, project, nodeId, shell, readFile, writeFile, cacheExists } = opts;
+  // #317: accumulate the UI transitions as the ledger mutates so every ok exit returns
+  // the exact set the orchestrator must apply. The closed node is added after its close
+  // write; selector n/a arms and any newly-opened node are appended at their mutation points.
+  const transitions = [];
 
   // -- (a) Evidence-shape PRESENCE check ----------------------------------
   // Resolve role via parseNodes (read-only).
@@ -732,6 +770,9 @@ function runCloseAndOpenNext(opts) {
   // Write the plan now (ledger + compliance — all non-state writes).
   writeFile(planPath, currentPlan);
 
+  // #317: the closed node → completed (every ok exit carries this).
+  transitions.push(buildTransition(nodeId, 'complete', 'close-and-open-next'));
+
   // -- (e) Selector routing (BEFORE fused advance) -----------------------
   const selectorCheck = barrierOut.selectorCheck || {};
 
@@ -752,6 +793,8 @@ function runCloseAndOpenNext(opts) {
       if (armResult.changed) {
         planForSelector = armResult.content;
       }
+      // #317: each armed-off select arm → n/a (UI maps n/a to completed).
+      transitions.push(buildTransition(armId, 'n/a', 'selector-arm'));
     }
     writeFile(planPath, planForSelector);
     currentPlan = planForSelector;
@@ -768,11 +811,13 @@ function runCloseAndOpenNext(opts) {
       opened: null,
       allDone: false,
       nextActionError: nextAction,
+      taskTransitions: transitions,
+      taskMirror: refreshTaskMirror(project, shell),
     };
   }
 
   if (nextAction.allDone) {
-    return { result: 'ok', closed: nodeId, opened: null, allDone: true };
+    return { result: 'ok', closed: nodeId, opened: null, allDone: true, taskTransitions: transitions, taskMirror: refreshTaskMirror(project, shell) };
   }
 
   // #303 (gap #2 / sub-gap C): SCHEDULER-AWARE fused advance. When closing this node
@@ -782,6 +827,8 @@ function runCloseAndOpenNext(opts) {
   // + rolling top-up). Linear chains (readyPending < 2) keep the serial single-open below.
   const readyPending = nextAction.readyPending || [];
   if (readyPending.length >= 2) {
+    // #317: enterBatch carries ONLY the closed-node (and any selector arms) transitions —
+    // open-batch owns the member in_progress flips; do not invent them here.
     return {
       result: 'ok',
       closed: nodeId,
@@ -791,13 +838,15 @@ function runCloseAndOpenNext(opts) {
         id: n.id, role: n.role, model: n.model, declared_write_set: n.declared_write_set,
       })),
       allDone: false,
+      taskTransitions: transitions,
+      taskMirror: refreshTaskMirror(project, shell),
     };
   }
 
   // Open the next ready node.
   const nextNode = nextAction.nextNode;
   if (!nextNode) {
-    return { result: 'ok', closed: nodeId, opened: null, allDone: false };
+    return { result: 'ok', closed: nodeId, opened: null, allDone: false, taskTransitions: transitions, taskMirror: refreshTaskMirror(project, shell) };
   }
 
   let planForAdvance = readFile(planPath);
@@ -811,6 +860,9 @@ function runCloseAndOpenNext(opts) {
   // Record baseline for the newly opened node.
   const baselineResult = shell(commitNodePath, [planPath, '--node-id', nextNode.id, '--start', '--json']);
 
+  // #317: fused advance opened the next node → in_progress (in addition to the closed node).
+  transitions.push(buildTransition(nextNode.id, 'in_progress', 'close-and-open-next'));
+
   return {
     result: 'ok',
     closed: nodeId,
@@ -822,6 +874,8 @@ function runCloseAndOpenNext(opts) {
     },
     baselineRecorded: baselineResult.exitCode === 0,
     allDone: false,
+    taskTransitions: transitions,
+    taskMirror: refreshTaskMirror(project, shell),
   };
 }
 
@@ -830,7 +884,7 @@ function runCloseAndOpenNext(opts) {
 // Writes escalated_to_full + consent_halt markers. Idempotent.
 // ---------------------------------------------------------------------------
 function runWriteHalt(opts) {
-  const { planPath, statePath, nodeId, reason, readFile, writeFile } = opts;
+  const { planPath, statePath, project, nodeId, reason, shell, readFile, writeFile } = opts;
 
   const validReasons = ['consent', 'security', 'test_thrash'];
   if (!validReasons.includes(reason)) {
@@ -908,10 +962,14 @@ function runWriteHalt(opts) {
     markers.push('escalated_to_full:' + reason, 'consent_halt:pending');
   }
 
+  // #317: the halted node STAYS in_progress (write-halt adds a consent_halt marker, no ledger
+  // flip); surface that with a halt note + refresh the mirror (AC4 lists write-halt).
   return {
     result: 'ok',
     halt: 'written',
     markers,
+    taskTransitions: [buildTransition(nodeId, 'in_progress', 'write-halt', 'HALTED: ' + reason)],
+    taskMirror: refreshTaskMirror(project, shell),
   };
 }
 
@@ -934,7 +992,7 @@ function runWriteHalt(opts) {
 //       the next barrier attributes ONLY the repair.
 // ---------------------------------------------------------------------------
 function runReopenNode(opts) {
-  const { planPath, nodeId, shell, readFile, writeFile, cacheExists, unlink } = opts;
+  const { planPath, project, nodeId, shell, readFile, writeFile, cacheExists, unlink } = opts;
   const GATE_ROLES = new Set(['code-reviewer', 'security-reviewer', 'adversarial-verifier']);
 
   // (1) Refuse over a live batch / interrupted top-up — mirror the #305 guards.
@@ -1028,7 +1086,15 @@ function runReopenNode(opts) {
     return { result: 'refuse', reason: 'baseline_failed', nodeId, baselineResult: baseline, reopened: nodeId, gatesReset };
   }
 
-  return { result: 'ok', reopened: nodeId, gatesReset, baselinesRemoved, baselineRecorded: true };
+  // #317: post-dominating gates were reset complete → pending; the reopened node → in_progress.
+  const reopenTransitions = gatesReset.map(g => buildTransition(g, 'pending', 'reopen-node'));
+  reopenTransitions.push(buildTransition(nodeId, 'in_progress', 'reopen-node'));
+
+  return {
+    result: 'ok', reopened: nodeId, gatesReset, baselinesRemoved, baselineRecorded: true,
+    taskTransitions: reopenTransitions,
+    taskMirror: refreshTaskMirror(project, shell),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1135,7 +1201,7 @@ function main() {
     } else if (!reason) {
       result = { result: 'refuse', errors: ['--reason required for write-halt'] };
     } else {
-      result = runWriteHalt({ planPath, statePath, project, nodeId, reason, readFile, writeFile });
+      result = runWriteHalt({ planPath, statePath, project, nodeId, reason, shell, readFile, writeFile });
     }
   } else if (subcommand === 'reopen-node') {
     if (!nodeId) {
