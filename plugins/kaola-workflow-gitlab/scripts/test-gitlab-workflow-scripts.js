@@ -19,6 +19,7 @@ const classifier = require('./kaola-gitlab-workflow-classifier');
 const claim = require('./kaola-gitlab-workflow-claim');
 const roadmap = require('./kaola-gitlab-workflow-roadmap');
 const repair = require('./kaola-gitlab-workflow-repair-state');
+const planValidator = require('./kaola-gitlab-workflow-plan-validator');
 
 const claimScript = path.join(__dirname, 'kaola-gitlab-workflow-claim.js');
 const roadmapScript = path.join(__dirname, 'kaola-gitlab-workflow-roadmap.js');
@@ -3529,9 +3530,52 @@ function testGitlabCompactResume266() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// #261 forge-parity: barrierCheck foreign-archive carveout (pure-fn, no git repo).
+// AC3: --barrier-check must REFUSE a foreign project's archive band while still
+// exempting the finalized project's own archive band (incl. .archived- suffix).
+// Ported from base scripts/test-commit-node.js Test 6 (forge-parity follow-up).
+// ---------------------------------------------------------------------------
+function testGitlabForeignArchiveBarrier261() {
+  const minimalPlan = [
+    '# Workflow Plan — issue #261', '', '## Meta', 'labels: refactor', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+    '| impl | tdd-guide | — | scripts/kaola-gitlab-workflow-plan-validator.js | 1 | sequence |',
+    '| done | finalize | impl | — | 1 | sequence |', '',
+    '## Node Ledger', '', '| id | status |', '|---|---|',
+    '| impl | complete |', '| done | complete |', '',
+  ].join('\n');
+
+  // 6a: foreign archive REFUSED — a write to another project's archive band must be refused.
+  {
+    const r = planValidator.barrierCheck(minimalPlan, ['kaola-workflow/archive/issue-999/x.md'], { project: 'issue-261' });
+    assert.strictEqual(r.result, 'refuse', '#261 gl 6a: foreign archive write must be refused (RED→GREEN AC3)');
+    assert.ok(r.errors && r.errors.join(' ').toLowerCase().includes('foreign'), '#261 gl 6a: error message must mention FOREIGN');
+  }
+  // 6b: own archive PASSES — a write to the finalized project's own archive band must pass.
+  {
+    const r = planValidator.barrierCheck(minimalPlan, ['kaola-workflow/archive/issue-261/x.md'], { project: 'issue-261' });
+    assert.strictEqual(r.result, 'pass', '#261 gl 6b: own archive write must pass');
+  }
+  // 6c: suffix-tolerant — .archived-<timestamp> suffix on the own archive dir must still pass.
+  {
+    const r = planValidator.barrierCheck(minimalPlan, ['kaola-workflow/archive/issue-261.archived-2026-01-01T00-00-00/x.md'], { project: 'issue-261' });
+    assert.strictEqual(r.result, 'pass', '#261 gl 6c: own archive with .archived- suffix must pass');
+  }
+  // 6d: backward-compat — no project arg, non-archive workflow artifact must still pass.
+  {
+    const r = planValidator.barrierCheck(minimalPlan, ['kaola-workflow/p/workflow-plan.md'], {});
+    assert.strictEqual(r.result, 'pass', '#261 gl 6d: backward-compat — non-archive workflow artifact, no project, passes');
+  }
+  console.log('testGitlabForeignArchiveBarrier261 (#261 forge-parity): PASSED');
+}
+
 testGitlabPreflight266();
 testGitlabTaskMirror266();
 testGitlabCompactResume266();
+testGitlabForeignArchiveBarrier261();
 
 testGitLabRoadmapInitIssueExclusiveAndUpdate()
   .then(() => {
