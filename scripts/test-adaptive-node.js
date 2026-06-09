@@ -9,6 +9,7 @@
 const {
   spliceLedgerNode,
   checkEvidenceShape,
+  validateProjectName,
   runOrient,
   runOpenNext,
   runReopenNode,
@@ -192,6 +193,7 @@ function makeState(opts) {
   const r1 = checkEvidenceShape('tdd-guide', 'impl-core', evidenceWithOnlyRed);
   assert(r1.ok === false, 'T6a: tdd-guide missing GREEN → not ok');
   assert(r1.reason && r1.reason.includes('GREEN'), 'T6a: reason mentions GREEN');
+  assert(r1.kind === 'shape' && r1.missingTokenClass === 'GREEN', 'T6a (#319): kind shape + missingTokenClass GREEN');
 
   // Has both
   const evidenceWithBoth = 'RED: test failed\nGREEN: test passed\n';
@@ -212,11 +214,13 @@ function makeState(opts) {
   const evidenceMissingReason = 'regression-green: npm test passed';
   const r1 = checkEvidenceShape('implementer', 'impl-other', evidenceMissingReason);
   assert(r1.ok === false, 'T7a: implementer missing non_tdd_reason → not ok');
+  assert(r1.kind === 'shape' && r1.missingTokenClass === 'non_tdd_reason', 'T7a (#319): kind shape + missingTokenClass non_tdd_reason');
 
   // Has non_tdd_reason but missing change-type token
   const evidenceMissingToken = 'non_tdd_reason: config-only change, no logic paths';
   const r2 = checkEvidenceShape('implementer', 'impl-other', evidenceMissingToken);
   assert(r2.ok === false, 'T7b: implementer missing change-type token → not ok');
+  assert(r2.kind === 'shape' && r2.missingTokenClass === 'change-type', 'T7b (#319): kind shape + missingTokenClass change-type');
 
   // Has both: non_tdd_reason + regression-green
   const evidenceComplete = 'non_tdd_reason: config-only\nregression-green: tests pass';
@@ -253,9 +257,11 @@ function makeState(opts) {
   // Missing/empty evidence → not ok
   const r3 = checkEvidenceShape('code-reviewer', 'review', null);
   assert(r3.ok === false, 'T8c: code-reviewer with null evidence → not ok');
+  assert(r3.kind === 'absent', 'T8c (#319): null evidence → kind absent');
 
   const r4 = checkEvidenceShape('code-reviewer', 'review', '');
   assert(r4.ok === false, 'T8d: code-reviewer with empty evidence → not ok');
+  assert(r4.kind === 'absent', 'T8d (#319): empty evidence → kind absent');
 }
 
 // ---------------------------------------------------------------------------
@@ -503,6 +509,52 @@ function makeState(opts) {
 }
 
 // ---------------------------------------------------------------------------
+// T13b (#318): runRecordEvidence + validateProjectName refuse a reserved/illegal project
+// SEGMENT before any write, so a record-evidence call can never create a nested
+// kaola-workflow/kaola-workflow/.cache path (the #249 drift). Reserved-name (segment), NOT a
+// path substring — this repo's own toplevel IS kaola-workflow, so a legit issue-N project
+// resolves to .../kaola-workflow/kaola-workflow/issue-N and a substring check would false-positive.
+// ---------------------------------------------------------------------------
+{
+  // validateProjectName: reserved literal + escaping segments rejected; legit issue-N accepted.
+  assert(validateProjectName('kaola-workflow').ok === false, 'T13b: reserved literal kaola-workflow rejected');
+  assert(validateProjectName('issue-249').ok === true, 'T13b: legit issue-249 accepted (no substring false-positive)');
+  assert(validateProjectName('a/b').ok === false, 'T13b: separator-bearing segment rejected');
+  assert(validateProjectName('..').ok === false, 'T13b: ".." rejected');
+  assert(validateProjectName('').ok === false, 'T13b: empty rejected');
+
+  // runRecordEvidence with the reserved project → refuse nested_cache_path, ZERO write.
+  let writtenFiles = {};
+  let mkdirCalled = false;
+  const result = runRecordEvidence({
+    planPath: '/fake/kaola-workflow/kaola-workflow/workflow-plan.md',
+    project: 'kaola-workflow',
+    nodeId: 'n7',
+    stdinContent: 'RED\nGREEN\n',
+    writeFile: (fpath, content) => { writtenFiles[fpath] = content; },
+    mkdirp: () => { mkdirCalled = true; },
+  });
+  assert(result.result === 'refuse', 'T13b: reserved project → refuse');
+  assert(result.reason === 'nested_cache_path', 'T13b: reason nested_cache_path, got ' + JSON.stringify(result.reason));
+  assert(typeof result.repair === 'string' && result.repair.length > 0, 'T13b: refusal carries a repair route');
+  assert(Object.keys(writtenFiles).length === 0, 'T13b: ZERO files written on refusal (no nested path created)');
+  assert(mkdirCalled === false, 'T13b: mkdirp NOT called on refusal (pure no-op)');
+
+  // Legit project still writes canonically (no false-positive).
+  let okFiles = {};
+  const ok = runRecordEvidence({
+    planPath: '/fake/kaola-workflow/issue-249/workflow-plan.md',
+    project: 'issue-249',
+    nodeId: 'n7',
+    stdinContent: 'non_tdd_reason: x\nbuild-green: ok\n',
+    writeFile: (fpath, content) => { okFiles[fpath] = content; },
+    mkdirp: () => {},
+  });
+  assert(ok.result === 'ok', 'T13b: legit project record-evidence still succeeds');
+  assert(Object.keys(okFiles).some(k => k.includes('issue-249/.cache/n7.md')), 'T13b: legit evidence written to canonical issue-249/.cache path');
+}
+
+// ---------------------------------------------------------------------------
 // T14: runCloseAndOpenNext — barrier exit0 + evidence → close + compliance row (bare role) + fused advance
 // ---------------------------------------------------------------------------
 {
@@ -739,7 +791,7 @@ function makeState(opts) {
 }
 
 // ---------------------------------------------------------------------------
-// T16: runCloseAndOpenNext — evidence_missing → refuse, NO mutation
+// T16: runCloseAndOpenNext — present-but-malformed evidence → refuse evidence_shape_failed, NO mutation
 // ---------------------------------------------------------------------------
 {
   let writeFileCalled = false;
@@ -775,9 +827,10 @@ function makeState(opts) {
     cacheExists: (fpath) => !!cacheFiles[fpath],
   });
 
-  assert(result.result === 'refuse', 'T16: evidence_missing → refuse');
-  assert(result.reason === 'evidence_missing', 'T16: reason===evidence_missing');
-  assert(writeFileCalled === false, 'T16: writeFile NOT called on evidence_missing');
+  assert(result.result === 'refuse', 'T16: malformed evidence → refuse');
+  assert(result.reason === 'evidence_shape_failed', 'T16 (#319): present-but-malformed (tdd-guide RED without GREEN) → reason evidence_shape_failed, got ' + JSON.stringify(result.reason));
+  assert(result.missingTokenClass === 'GREEN', 'T16 (#319): missing token class GREEN surfaced, got ' + JSON.stringify(result.missingTokenClass));
+  assert(writeFileCalled === false, 'T16: writeFile NOT called on shape failure');
 }
 
 // ---------------------------------------------------------------------------

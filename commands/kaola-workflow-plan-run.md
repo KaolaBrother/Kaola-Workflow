@@ -222,15 +222,23 @@ A crash between the two file writes leaves an `opening` manifest that `status`/`
 **reconcilable** (not an orphan) — run `parallel-batch reconcile` (roll-forward) or
 `reconcile --abort` (roll-back) to repair it.
 
-**Degraded mode (worktrees unavailable):** when the host lacks isolated-worktree capability,
-`open-batch` returns `{result:'ok', degraded:true, reason:'worktree_unavailable', opened:[], allDone:false}`
-with ZERO mutation — no ledger flip, no baseline, no manifest written; any worktrees provisioned
-mid-attempt are rolled back. On `degraded:true`, the orchestrator MUST NOT attempt concurrent batch
+**Degraded mode (serial fallback before dispatch):** a write-role batch only stays isolated if each
+member subagent actually runs from its own member worktree. Because this harness cannot FORCE a
+dispatched subagent's working directory (the `Working directory:` line below is advisory prose), a
+write-role batch would leak its edits into the parent worktree (#320). So by default `open-batch`
+serial-degrades a write-role frontier BEFORE any dispatch, returning
+`{result:'ok', degraded:true, reason:'cwd_unenforceable', opened:[], allDone:false}` with ZERO
+mutation — no ledger flip, no baseline, no manifest, no member worktree provisioned. (The legacy
+`reason:'worktree_unavailable'` degrade — host lacks isolated-worktree capability at all — uses the
+same zero-mutation shape.) On ANY `degraded:true`, the orchestrator MUST NOT attempt concurrent batch
 dispatch. It `log()`s the degradation (so the forgone parallelism is visible, never silent) and falls
 back to the single-node legacy path — opening the write-role siblings one at a time via `open-next`,
 same per-node lifecycle as today, correctness preserved, wall-clock parallelism forgone (the
-intentional degradation of design §10.3). Read-only batches are unaffected — they never provision
-worktrees and are never degraded.
+intentional degradation of design §10.3). This is also why a frozen coarse-area-overlapping write
+antichain (in-grammar/ask at freeze) never hits a runtime `not_disjoint` refusal — the serial degrade
+fires first; the disjointness gate applies only in the opt-in `KAOLA_BATCH_CWD_ENFORCED` mode (a
+future cwd-forcing harness) where true parallel isolation needs it. Read-only batches are unaffected —
+they never provision worktrees and are never degraded.
 
 **(b)** **Concurrent dispatch — the ONLY real concurrency:** the main session issues **MULTIPLE
 `Agent()` calls in ONE message**, one per batch member. Each call carries `subagent_type` = member
@@ -269,8 +277,9 @@ node "$KAOLA_SCRIPTS/kaola-workflow-parallel-batch.js" seal \
   --project {project} --json
 ```
 For each member, `seal` applies the SAME gates as the serial path before closing it: the role-shaped
-**evidence-shape** check (refuse `evidence_missing` when `.cache/{node-id}.md` is absent/malformed for
-the role), a write-role **non-empty-in-lane** check (refuse `empty_member` when the member worktree
+**evidence-shape** check (#319: refuse `evidence_absent` when `.cache/{node-id}.md` is missing, or
+`evidence_shape_failed` — with the `missingTokenClass` naming the missing class, e.g. `change-type` —
+when present-but-malformed for the role), a write-role **non-empty-in-lane** check (refuse `empty_member` when the member worktree
 produced no declared changes — the no-op / parent-leak vacuity guard), then the per-node `commit-node`
 barrier. Manifest transitions to `state: 'sealed'` only when ALL members pass.
 
@@ -291,6 +300,14 @@ node enters `readyPending`; no new gate needed).
 
 **Drain/termination:** the batch is exhausted when `top-up` reports `frontier_drained` AND every
 manifest member is sealed; then `seal → join → advance`. Until then, keep dispatching + topping up.
+
+**Routing — never `top-up` without an active manifest (#322):** decide the next batch command from
+`parallel-batch status --json`'s `nextRoute` field, not from a free-form loop. Call `top-up` ONLY
+while `nextRoute === 'top-up'` (manifest `open` + valid batch with queued same-frontier siblings).
+Once `join` clears the manifest, `status` returns `active:false` / `nextRoute:'orient'` — route to
+`adaptive-node orient` → `open-batch` (≥2 frontier) or `open-next` (single), NEVER `top-up` (which
+would refuse `no_active_batch`). `nextRoute:'reconcile'` → run `reconcile`; `nextRoute:'join'` → run
+`join`.
 
 **Legality rule:** multiple `in_progress` ledger rows are legal ONLY when a valid `active-batch.json`
 exists whose UNSEALED `members` set matches the `in_progress` set. Any other configuration is a typed
@@ -348,7 +365,7 @@ delete manifest, re-enter `next-action`.
 
    **For non-finalize roles, after the role returns, capture durable evidence immediately** — the
    step-3 close refuses
-   (`evidence_missing`) if `.cache/{node-id}.md` is absent when it runs:
+   (`evidence_absent` if `.cache/{node-id}.md` is absent, `evidence_shape_failed` if present-but-malformed) when it runs:
 
    ```bash
    echo "<role-returned-evidence>" | \
@@ -434,7 +451,8 @@ Agent(
 
    **(a) Evidence-shape PRESENCE check (by role) — BLOCKING gate before the barrier:**
    - `tdd-guide`: `.cache/{node-id}.md` must contain BOTH `RED` AND `GREEN` tokens (or start with
-     `n/a` + explicit skip reason). Missing → `{result:'refuse', reason:'evidence_missing'}`, NO
+     `n/a` + explicit skip reason). Absent → `{result:'refuse', reason:'evidence_absent'}`;
+     present-but-malformed → `{result:'refuse', reason:'evidence_shape_failed', missingTokenClass:'RED'|'GREEN'}`. NO
      mutation.
    - `implementer`: must contain `non_tdd_reason` AND one of `regression-green` / `build-green` /
      `smoke-integration`. Missing → typed refuse, NO mutation.

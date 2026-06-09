@@ -360,7 +360,7 @@ function listInProgress(ledger) {
 // ---------------------------------------------------------------------------
 function runOpenBatch(opts) {
   const {
-    planPath, manifestPath, max, fanoutCap, shell, readFile, writeFile, mkdirp, now,
+    planPath, manifestPath, max, fanoutCap, cwdEnforced, shell, readFile, writeFile, mkdirp, now,
     project, projTag, repoRoot, worktreeAdd, worktreeRemove, snapshotMember: snapMember, anchorMergeRef: anchorRef,
   } = opts;
 
@@ -430,8 +430,22 @@ function runOpenBatch(opts) {
   const classified = classifyBatchKind(frontier);
   const kind = classified.kind;
 
-  // Re-confirm disjointness for write-role batches (fail-closed).
+  // Write-role batch eligibility.
   if (kind === 'write_role') {
+    // #320: a write-role batch only stays isolated if each member subagent runs from its OWN
+    // member worktree. This harness cannot force a dispatched subagent's CWD, so the writes would
+    // land in the parent worktree (the #249 leak). Degrade to serial BEFORE the disjointness
+    // re-check / worktree provisioning / ledger flip / manifest write — a zero-mutation return the
+    // orchestrator routes to the single-node open-next path. The degrade fires for ANY write-role
+    // frontier (file-disjoint OR coarse-area overlapping), so a coarse-overlap antichain
+    // serial-degrades gracefully instead of hard-refusing as not_disjoint — this is the runtime
+    // side of the #321 freeze/runtime alignment (freeze keeps such an antichain as in-grammar/ask,
+    // runtime runs it serially; neither refuses). Only an explicit KAOLA_BATCH_CWD_ENFORCED
+    // (a future cwd-forcing harness) opens write-role batches — and only THEN does the
+    // disjointness re-check apply, because true parallel isolation needs it (fail-closed).
+    if (!cwdEnforced) {
+      return { result: 'ok', degraded: true, reason: 'cwd_unenforceable', opened: [], allDone: false };
+    }
     const dj = checkDisjoint(classified.members);
     if (!dj.disjoint) {
       return { result: 'refuse', reason: 'not_disjoint', detail: dj.reasoning };
@@ -592,7 +606,18 @@ function sealOne(member, ctx) {
     ? checkEvidenceShape(role, member.id, evidence)
     : { ok: !!(evidence && evidence.trim()) };
   if (!evidence || !evidence.trim() || !shapeCheck.ok) {
-    return { ok: false, reason: 'evidence_missing', detail: shapeCheck.reason || 'cache file absent', expected: shapeCheck.expected || [], manifest, planContent };
+    // #319: split absent evidence from malformed (shape) evidence, and carry the
+    // missing token class, so a seal refusal names the actual fault instead of the
+    // old catch-all 'evidence_missing' (which forced manual build-green patching).
+    const absent = !evidence || !evidence.trim() || shapeCheck.kind === 'absent';
+    return {
+      ok: false,
+      reason: absent ? 'evidence_absent' : 'evidence_shape_failed',
+      missingTokenClass: shapeCheck.missingTokenClass || null,
+      detail: shapeCheck.reason || 'cache file absent',
+      expected: shapeCheck.expected || [],
+      manifest, planContent,
+    };
   }
 
   // #303 (gap #13, the #283 seal-vacuity gap): a write-role member ran in an ISOLATED worktree.
@@ -718,7 +743,7 @@ function runSealMember(opts) {
     project, projTag, repoRoot, memberDirty, snapshotMember, anchorMergeRef,
   });
   if (!sealed.ok) {
-    return { result: 'refuse', reason: sealed.reason, nodeId, barrierOut: sealed.barrierOut };
+    return { result: 'refuse', reason: sealed.reason, missingTokenClass: sealed.missingTokenClass || null, nodeId, barrierOut: sealed.barrierOut };
   }
 
   // Persist plan (ledger + compliance) then manifest.
@@ -758,7 +783,7 @@ function runSeal(opts) {
       project, projTag, repoRoot, memberDirty, snapshotMember, anchorMergeRef,
     });
     if (!res.ok) {
-      failures.push({ id: member.id, reason: res.reason });
+      failures.push({ id: member.id, reason: res.reason, missingTokenClass: res.missingTokenClass || null });
       continue;
     }
     manifest = res.manifest;
@@ -876,7 +901,7 @@ function runJoin(opts) {
 // ---------------------------------------------------------------------------
 function runTopUp(opts) {
   const {
-    planPath, manifestPath, max, fanoutCap, shell, readFile, writeFile, mkdirp, cacheExists,
+    planPath, manifestPath, max, fanoutCap, cwdEnforced, shell, readFile, writeFile, mkdirp, cacheExists,
     project, projTag, repoRoot, worktreeAdd, worktreeRemove, snapshotMember: snapMember, anchorMergeRef: anchorRef,
   } = opts;
   const { spliceLedgerNode } = require(ADAPTIVE_NODE);
@@ -924,6 +949,10 @@ function runTopUp(opts) {
 
   // Write-role: re-confirm the ENTIRE live + topped-up set stays pairwise disjoint (fail-closed).
   if (isWriteRole) {
+    // #320: defense-in-depth — a write-role manifest cannot exist in the default
+    // serial-degrade path (open-batch never opens one), but never roll a write-role
+    // batch forward when member-worktree CWD cannot be enforced.
+    if (!cwdEnforced) return { result: 'ok', degraded: true, reason: 'cwd_unenforceable', toppedUp: [] };
     const dj = checkDisjoint(manifest.members.concat(toOpen));
     if (!dj.disjoint) return { result: 'refuse', reason: 'not_disjoint', detail: dj.reasoning };
   }
@@ -1071,6 +1100,42 @@ function runReconcile(opts) {
 }
 
 // ---------------------------------------------------------------------------
+// recommendBatchRoute — #322: PURE derivation of the next batch-lifecycle
+// command from manifest presence/state + the cross-check verdict. The "what
+// comes next" routing decision used to live only in plan-run prose, so after a
+// batch joined and the manifest was deleted the executor would still issue a
+// rolling `top-up` and hit a spurious `no_active_batch` refusal (issue #322).
+// Lifting it into a read-only `status --json` field gives the orchestrator a
+// machine-readable signal to branch on. `top-up` is recommended ONLY for an
+// open + valid batch (the one state that legitimizes it); a joined/cleared
+// manifest routes to `orient` (→ open-batch / open-next), never top-up.
+//
+// @param {object|null} manifest    parsed active-batch manifest, or null
+// @param {object} crossCheck       crossCheckStatus() verdict
+// @returns {'orient'|'reconcile'|'top-up'|'join'} next route
+// ---------------------------------------------------------------------------
+function recommendBatchRoute(manifest, crossCheck) {
+  if (!manifest) {
+    // No active batch: an orphan (>1 in_progress, no manifest) needs repair;
+    // otherwise idle / single_in_progress / joined-and-cleared → re-orient.
+    return (crossCheck && crossCheck.orphan) ? 'reconcile' : 'orient';
+  }
+  if (manifest.state === 'opening' || hasInflightOpening(manifest)) {
+    return 'reconcile';
+  }
+  if (manifest.state === 'joined') {
+    return 'orient'; // terminal-but-uncleared: clear + re-orient, never top-up
+  }
+  if (manifest.state === 'sealed' || manifest.state === 'joining') {
+    return 'join';
+  }
+  if (manifest.state === 'open') {
+    return (crossCheck && crossCheck.valid) ? 'top-up' : 'reconcile';
+  }
+  return 'orient';
+}
+
+// ---------------------------------------------------------------------------
 // runStatus — READ-ONLY. Returns the parsed manifest (or {active:false}) plus a
 // cross-check of manifest members vs ledger in_progress rows. Never mutates.
 // ---------------------------------------------------------------------------
@@ -1084,9 +1149,10 @@ function runStatus(opts) {
 
   const manifest = readManifest(manifestPath, cacheExists, readFile);
   const crossCheck = crossCheckStatus(manifest, inProgress);
+  const nextRoute = recommendBatchRoute(manifest, crossCheck);
 
   if (!manifest) {
-    return { result: 'ok', active: false, inProgress, crossCheck };
+    return { result: 'ok', active: false, inProgress, crossCheck, nextRoute };
   }
 
   return {
@@ -1103,6 +1169,7 @@ function runStatus(opts) {
     })),
     inProgress,
     crossCheck,
+    nextRoute,
   };
 }
 
@@ -1159,10 +1226,12 @@ function main() {
   const manifestPath = path.join(cacheDir, MANIFEST_NAME);
 
   const fs = require('fs');
-  const { resolveFanoutCap } = (function () {
+  const { resolveFanoutCap, resolveBatchCwdEnforced } = (function () {
     try { return require('./kaola-workflow-adaptive-schema'); } catch (_) { return {}; }
   })();
   const fanoutCap = (typeof resolveFanoutCap === 'function') ? resolveFanoutCap(process.env) : 4;
+  // #320: default FALSE — write-role batches degrade to serial before dispatch.
+  const cwdEnforced = (typeof resolveBatchCwdEnforced === 'function') ? resolveBatchCwdEnforced(process.env) : false;
 
   const io = {
     shell: (scriptPath, scriptArgs) => shellNode(scriptPath, scriptArgs),
@@ -1240,7 +1309,7 @@ function main() {
   };
 
   const abort = args.includes('--abort');
-  const ctx = { planPath, statePath, cacheDir, manifestPath, project, projTag, repoRoot, fanoutCap, max, nodeId, abort, ...io };
+  const ctx = { planPath, statePath, cacheDir, manifestPath, project, projTag, repoRoot, fanoutCap, cwdEnforced, max, nodeId, abort, ...io };
 
   let result;
   if (subcommand === 'open-batch') {
@@ -1277,6 +1346,7 @@ module.exports = {
   checkDisjoint,
   capMembers,
   crossCheckStatus,
+  recommendBatchRoute,
   hasInflightOpening,
   runOpenBatch,
   runTopUp,

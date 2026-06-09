@@ -51,6 +51,28 @@ function getRoot() {
 }
 
 // ---------------------------------------------------------------------------
+// validateProjectName — #318: the project arg becomes a path SEGMENT under
+// kaola-workflow/<project>/. The reserved literal 'kaola-workflow' (or an
+// empty / '.' / '..' / separator-bearing segment) collapses the canonical
+// join into a nested kaola-workflow/kaola-workflow/.cache path, the exact
+// drift observed in the issue #249 run. Reject the project SEGMENT — NOT a
+// path substring: this repo's own toplevel is named kaola-workflow, so the
+// legitimate container path .../kaola-workflow/kaola-workflow/issue-N already
+// contains the substring and a substring check would false-positive on every
+// legit run. Legit projects are issue-N, so the reserved-name rule is safe.
+//
+// @param {string} project  the --project value
+// @returns {{ ok:boolean, reason?:string }}
+// ---------------------------------------------------------------------------
+function validateProjectName(project) {
+  if (!project || project === '.' || project === '..'
+      || /[\\/]/.test(project) || project === 'kaola-workflow') {
+    return { ok: false, reason: 'invalid_project' };
+  }
+  return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
 // safeJsonParse — returns {} on any parse failure (fail-closed).
 // ---------------------------------------------------------------------------
 function safeJsonParse(str) {
@@ -263,7 +285,10 @@ function parseNodesFromContent(content) {
 // @param {string}      role         node role string
 // @param {string}      nodeId       node id (for error context)
 // @param {string|null} evidence     evidence file content (null/'' → absent)
-// @returns {{ ok:boolean, reason?:string, expected?:string[] }}
+// @returns {{ ok:boolean, kind?:'absent'|'shape', missingTokenClass?:string, reason?:string, expected?:string[] }}
+//   #319: on failure, `kind` discriminates absent ('absent') vs malformed
+//   ('shape') evidence; `missingTokenClass` names the failed class
+//   ('non_tdd_reason' / 'change-type' / 'RED' / 'GREEN' / 'non-empty').
 // ---------------------------------------------------------------------------
 function checkEvidenceShape(role, nodeId, evidence) {
   const content = evidence || '';
@@ -275,37 +300,37 @@ function checkEvidenceShape(role, nodeId, evidence) {
 
   if (role === 'tdd-guide') {
     if (!content) {
-      return { ok: false, reason: 'evidence missing for tdd-guide node ' + nodeId, expected: ['RED', 'GREEN'] };
+      return { ok: false, kind: 'absent', missingTokenClass: 'non-empty', reason: 'evidence missing for tdd-guide node ' + nodeId, expected: ['RED', 'GREEN'] };
     }
     const hasRed   = /\bRED\b/.test(content);
     const hasGreen = /\bGREEN\b/.test(content);
     if (!hasRed) {
-      return { ok: false, reason: 'tdd-guide ' + nodeId + ' evidence missing RED token', expected: ['RED', 'GREEN'] };
+      return { ok: false, kind: 'shape', missingTokenClass: 'RED', reason: 'tdd-guide ' + nodeId + ' evidence missing RED token', expected: ['RED', 'GREEN'] };
     }
     if (!hasGreen) {
-      return { ok: false, reason: 'tdd-guide ' + nodeId + ' evidence missing GREEN token', expected: ['RED', 'GREEN'] };
+      return { ok: false, kind: 'shape', missingTokenClass: 'GREEN', reason: 'tdd-guide ' + nodeId + ' evidence missing GREEN token', expected: ['RED', 'GREEN'] };
     }
     return { ok: true };
   }
 
   if (role === 'implementer') {
     if (!content) {
-      return { ok: false, reason: 'evidence missing for implementer node ' + nodeId, expected: ['non_tdd_reason', 'regression-green|build-green|smoke-integration'] };
+      return { ok: false, kind: 'absent', missingTokenClass: 'non-empty', reason: 'evidence missing for implementer node ' + nodeId, expected: ['non_tdd_reason', 'regression-green|build-green|smoke-integration'] };
     }
     const hasReason = /non_tdd_reason/.test(content);
     const hasChangeType = /regression-green|build-green|smoke-integration/.test(content);
     if (!hasReason) {
-      return { ok: false, reason: 'implementer ' + nodeId + ' evidence missing non_tdd_reason', expected: ['non_tdd_reason', 'regression-green|build-green|smoke-integration'] };
+      return { ok: false, kind: 'shape', missingTokenClass: 'non_tdd_reason', reason: 'implementer ' + nodeId + ' evidence missing non_tdd_reason', expected: ['non_tdd_reason', 'regression-green|build-green|smoke-integration'] };
     }
     if (!hasChangeType) {
-      return { ok: false, reason: 'implementer ' + nodeId + ' evidence missing change-type token', expected: ['non_tdd_reason', 'regression-green|build-green|smoke-integration'] };
+      return { ok: false, kind: 'shape', missingTokenClass: 'change-type', reason: 'implementer ' + nodeId + ' evidence missing change-type token', expected: ['non_tdd_reason', 'regression-green|build-green|smoke-integration'] };
     }
     return { ok: true };
   }
 
   // Other roles: file present and non-empty.
   if (!content.trim()) {
-    return { ok: false, reason: role + ' ' + nodeId + ' evidence missing or empty', expected: ['non-empty evidence file'] };
+    return { ok: false, kind: 'absent', missingTokenClass: 'non-empty', reason: role + ' ' + nodeId + ' evidence missing or empty', expected: ['non-empty evidence file'] };
   }
   return { ok: true };
 }
@@ -589,7 +614,25 @@ function runOpenNext(opts) {
 // Reads stdin content and writes verbatim to .cache/<nodeId>.md.
 // ---------------------------------------------------------------------------
 function runRecordEvidence(opts) {
-  const { planPath, nodeId, stdinContent, writeFile, mkdirp } = opts;
+  const { planPath, project, nodeId, stdinContent, writeFile, mkdirp } = opts;
+
+  // #318: refuse a reserved/illegal project SEGMENT before any write so a
+  // record-evidence call can never create a nested kaola-workflow/kaola-workflow
+  // /.cache path. Fail-closed: return BEFORE mkdirp/writeFile so a refused call
+  // is a pure no-op (zero mutation).
+  const v = validateProjectName(project);
+  if (!v.ok) {
+    return {
+      result: 'refuse',
+      reason: 'nested_cache_path',
+      project: project,
+      detail: 'project segment ' + JSON.stringify(project) + ' is reserved/illegal — '
+        + 'would create a nested kaola-workflow/kaola-workflow/.cache path',
+      repair: 'Re-run record-evidence with --project <issue-N> (the active project '
+        + 'folder), then remove any stray kaola-workflow/kaola-workflow/ directory left '
+        + 'in the worktree.',
+    };
+  }
 
   const cacheDir = path.join(path.dirname(planPath), '.cache');
   const cachePath = path.join(cacheDir, nodeId + '.md');
@@ -633,9 +676,15 @@ function runCloseAndOpenNext(opts) {
   const shapeCheck = checkEvidenceShape(role, nodeId, evidenceContent);
 
   if (!evidencePresent || !shapeCheck.ok) {
+    // #319: distinguish absent evidence from malformed (shape) evidence so the
+    // refusal names the actual fault, and surface the missing token class so a
+    // consumer (or the operator) knows exactly what to add — instead of the old
+    // catch-all 'evidence_missing' that conflated absent and malformed.
+    const absent = !evidencePresent || shapeCheck.kind === 'absent';
     return {
       result: 'refuse',
-      reason: 'evidence_missing',
+      reason: absent ? 'evidence_absent' : 'evidence_shape_failed',
+      missingTokenClass: shapeCheck.missingTokenClass || null,
       nodeId,
       role,
       expected: shapeCheck.expected || [],
@@ -1023,6 +1072,22 @@ function main() {
   }
 
   const project  = args[projectIdx + 1];
+
+  // #318: fail-closed for every subcommand on a reserved/illegal project segment
+  // so no path (plan/state/cache/manifest) is ever built under a nested
+  // kaola-workflow/kaola-workflow/ directory.
+  const projectValid = validateProjectName(project);
+  if (!projectValid.ok) {
+    const out = {
+      result: 'refuse',
+      reason: 'invalid_project',
+      errors: ['project segment is reserved/illegal: ' + JSON.stringify(project)],
+    };
+    process.stdout.write(JSON.stringify(out) + '\n');
+    process.exitCode = 1;
+    return;
+  }
+
   const nodeId   = nodeIdIdx >= 0 ? args[nodeIdIdx + 1] : null;
   const reason   = reasonIdx >= 0 ? args[reasonIdx + 1] : null;
 
@@ -1098,6 +1163,7 @@ if (require.main === module) {
 module.exports = {
   spliceLedgerNode,
   checkEvidenceShape,
+  validateProjectName,
   runOrient,
   runOpenNext,
   runRecordEvidence,
