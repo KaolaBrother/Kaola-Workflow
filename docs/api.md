@@ -23,6 +23,53 @@ When the startup (`/workflow-next` → Startup Step 0) or explicit-target claim 
 - **Root cause**: Offline operation requires local roadmap evidence or an active folder. When neither exists, the target cannot be verified.
 - **Agent remedy**: Run online to validate the target exists on the forge, or create a `.roadmap/issue-N.md` entry offline with explicit scope.
 
+### Bundle claim: `--target-issues` / `KAOLA_TARGET_ISSUES` (issue #328)
+
+The startup/claim path accepts a multi-issue bundle target alongside the existing single-issue `--target-issue N` flag.
+
+**CLI flag:** `--target-issues A,B,C` (comma-separated; sorted and deduped before validation).
+
+**Env var:** `KAOLA_TARGET_ISSUES=A,B,C` — equivalent to the flag; resolved before flag parsing.
+
+**Ambiguity gate (`target_ambiguity`):** If both `--target-issue` (or `KAOLA_TARGET_ISSUE`) and `--target-issues` (or `KAOLA_TARGET_ISSUES`) resolve to non-empty values simultaneously, `cmdStartup` refuses with `target_ambiguity` before any state is written. This gate fires regardless of which combination of flag vs env-var is used.
+
+**Typed refusal codes** returned by `claimExplicitBundle` (all exit non-zero; no mutation on refusal):
+
+| Code | Condition |
+|------|-----------|
+| `target_ambiguity` | Both scalar and multi-target provided simultaneously |
+| `target_set_empty` | Resolved issue list is empty after sort+dedup |
+| `target_set_too_large` | Bundle size exceeds `KAOLA_BUNDLE_MAX_ISSUES` (default 4) |
+| `target_set_not_adaptive` | Bundle requested but `workflow_path` is not `adaptive` |
+| `target_set_conflicts_active_work` | One or more targets overlap an already-claimed active folder |
+| `target_set_has_closed_issue` | One or more targets are already closed on the forge |
+| `target_set_red` | One or more targets are red per the overlap classifier |
+| `target_set_unavailable` | Remote forge validation failed (unreachable; not offline mode) |
+| `target_set_unverified` | Offline with no local evidence for one or more targets |
+| `target_set_label_rollback_failed` | Claim succeeded but in-progress-label rollback on a partial failure itself failed |
+
+**All-or-nothing invariant:** `claimExplicitBundle` validates the complete set before mutating any state. If any single issue in the set fails validation the entire bundle is refused and no active folder is created.
+
+**Single-issue path unchanged:** passing `--target-issue N` only (no `--target-issues`) produces byte-identical behavior to prior releases. No `issue_numbers`, `bundle_id`, or `closure_policy` fields appear on single-issue projects.
+
+#### Additive `workflow-state.md` fields on bundle projects
+
+On a successful bundle claim, three additive lines are written alongside the existing `issue_number: <primary>` line in `workflow-state.md`:
+
+```
+issue_number: 42
+issue_numbers: 42,47,53
+bundle_id: bundle-42-47-53
+closure_policy: all_or_nothing
+```
+
+- `issue_number` — primary issue (first in sorted set); preserved for backward compatibility with all tooling that reads single-issue state.
+- `issue_numbers` — full comma-separated sorted set; identifies this as a bundle project.
+- `bundle_id` — canonical identifier for the bundle (`bundle-<N1>-<N2>-...`); used as the project folder name and as part of the branch name.
+- `closure_policy` — always `all_or_nothing` for v1 bundles.
+
+Single-issue projects retain only `issue_number` (no `issue_numbers`, `bundle_id`, or `closure_policy`). See `docs/workflow-state-contract.md` for the full field contract.
+
 ### Cross-project claim-overlap verdicts (`scanClaimedOverlap`)
 
 When a candidate issue is classified, its footprint is compared against every already-claimed active project to avoid two concurrent projects clobbering the same files:
@@ -104,6 +151,12 @@ The Finalization sink is responsible for delivering completed work to the reposi
 ### Timeout Control
 
 - **`KAOLA_GH_REMOTE_TIMEOUT_MS`** (default 30000) — Timeout in milliseconds for all forge API calls made by `ghExec`, `glabExec`, and `teaExec`. Controls how long to wait for GitHub, GitLab, or Gitea API responses during issue state checks, closure audits, and label operations. When a call times out, affected operations return `unavailable` or `skipped_timeout` sentinels instead of failing hard. Set lower in tests to simulate API hangs (e.g., `KAOLA_GH_REMOTE_TIMEOUT_MS=300` to timeout after 300ms). Applies to all three forge editions (GitHub, GitLab, Gitea). Non-numeric, zero, or negative values fall back to the 30000ms default (issue #184). Values above 600000ms (10 minutes) are clamped to 600000ms; this cap prevents excessively large values from silently disabling the hang protection (issue #185).
+
+### Bundle Lane
+
+- **`KAOLA_TARGET_ISSUES`** — Comma-separated list of issue numbers for an explicit bundle claim (e.g. `KAOLA_TARGET_ISSUES=42,47,53`). Equivalent to `--target-issues 42,47,53`. Must not be set together with `KAOLA_TARGET_ISSUE` (triggers `target_ambiguity` refusal). Refused with `target_set_not_adaptive` on fast/full paths. Numbers are sorted and deduped before validation.
+
+- **`KAOLA_BUNDLE_MAX_ISSUES`** (default `4`) — Maximum number of issues allowed in a single bundle. Bundles whose resolved size exceeds this cap are refused with `target_set_too_large`. Applies to both explicit (`--target-issues`) and scout-recommended bundles.
 
 ### Worktree Provisioning
 
@@ -1159,6 +1212,20 @@ unpopulated receipt reads as total failure, never silent success) and
   "warnings": []
 }
 ```
+
+**Bundle projects — additive receipt fields (issue #328):** On a bundle project, three additional fields are attached to the closure receipt AFTER `buildClosureReceipt()` returns. They are absent on single-issue receipts.
+
+```json
+{
+  "closed_issues": [42, 47, 53],
+  "failed_issue_closures": [],
+  "roadmap_sources_removed": ["issue-42.md", "issue-47.md", "issue-53.md"]
+}
+```
+
+- `closed_issues` — issue numbers successfully closed on the forge during finalization.
+- `failed_issue_closures` — issue numbers whose remote close call failed (non-empty means partial failure; logged as a warning but does not suppress the receipt).
+- `roadmap_sources_removed` — `.roadmap/issue-N.md` filenames removed during finalization (one per issue in the bundle).
 
 `claim_planner_attested` and `finalize_contractor_attested` are WARN-FIRST detection fields (issue #277 M2). Both default to `'failed'` in `emptyReceipt()`. `checkDispatchAttestations` (called from the closure path in `kaola-workflow-claim.js`) reads `.cache/dispatch-log.jsonl`, sets each field to `attested` or `missing`, and pushes any warnings. It never modifies `closure_invariants.violations` — missing attestation is advisory only.
 

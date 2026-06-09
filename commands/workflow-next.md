@@ -42,7 +42,9 @@ apply the chosen answer, and record it under `.cache/` or the phase artifact.
 Ask only for true external authorization or materially user-owned choices.
 
 The `/goal` template must NOT use "next issue in line" or similar phrasing that
-implies cross-issue continuation. Each run targets exactly one issue.
+implies cross-issue continuation. Each run targets exactly one issue or one
+explicitly selected same-scope bundle; auto-routing to an unselected issue after
+closure is still forbidden.
 
 ## Startup Step 0 - Agent Issue Selection (Required Before Startup)
 
@@ -68,6 +70,67 @@ do not auto-pick; the agent owns this decision.
 If no actionable issue is found (all blocked, red, or occupied), stop and explain.
 
 Set `KAOLA_TARGET_ISSUE` to the chosen issue number before calling startup.
+
+## Startup Step 0c — Bundle Lane (Multi-Issue)
+
+The bundle lane is additive: `--target-issue N` / `KAOLA_TARGET_ISSUE` single-issue
+behavior is unchanged. Use the bundle lane only when the user explicitly names
+several issues or when auto-bundle mode identifies a high-confidence same-scope
+set (see below).
+
+### Explicit-bundle entry
+
+When the user names several issues together (e.g., "finish issues #42 #47 #53
+together"), route through the bundle lane:
+
+- Set `KAOLA_TARGET_ISSUES=42,47,53` (comma-separated, no spaces) before calling startup.
+- The startup script validates the exact set — it does NOT substitute or reorder issues (#44).
+- Project name and active folder: `bundle-42-47-53` (sorted ascending, deduplicated).
+- Branch: `workflow/bundle-42-47-53`.
+- Bundle lane is **adaptive-path only** (`workflow_path: adaptive` is required). A
+  bundle request under switch-OFF or with an explicit `KAOLA_PATH=fast`/`full` is
+  refused with `target_set_not_adaptive`; do not silently downgrade to a single issue.
+- In the startup call, pass `--target-issues 42,47,53` (instead of `--target-issue N`)
+  and `--workflow-path adaptive`.
+
+Compatibility rule: `KAOLA_TARGET_ISSUE` / `--target-issue` keep current one-issue
+behavior UNCHANGED. `KAOLA_TARGET_ISSUES` / `--target-issues` are the ONLY
+multi-issue startup path. If BOTH are set, the script refuses with
+`target_ambiguity`; never set both.
+
+### Auto-bundle entry (AC#5/AC#6)
+
+When the user asks to work broadly on a project without naming specific issues,
+dispatch the read-only **`issue-scout`** agent to inspect the backlog before
+claiming anything. The issue-scout surveys:
+
+- local roadmap sources (`kaola-workflow/.roadmap/issue-*.md`);
+- remote open issues, labels, and dependency labels (`depends-on:#N`);
+- active folders and recently archived summaries.
+
+It returns one recommended same-scope bundle (or none). **The main orchestrator
+STATES the selected issue set aloud before calling startup.** Scripts validate but
+never select or substitute issues (#44).
+
+issue-scout is read-only: it cannot claim issues, write repository files, author
+`workflow-plan.md`, close issues, or dispatch other agents.
+
+Auto-bundle mode fires only when:
+- all candidate issues are open and unclaimed;
+- no dependency is unresolved outside the bundle;
+- the issues share a coherent scope signal (same subsystem, same label, same
+  failing area, or an explicit dependency relation);
+- issue count is at or below `KAOLA_BUNDLE_MAX_ISSUES` (default 4).
+
+**Fallback rule (AC#6):** when no high-confidence same-scope bundle exists, fall
+back to the existing single-issue selection behavior. Do not manufacture a bundle.
+
+### Bundle closure
+
+A bundle run ends at ONE finalization that closes EVERY issue in the set
+(all-or-nothing). There is one merge/PR sink per bundle. The finalization step
+removes each corresponding `.roadmap/issue-N.md` source and regenerates
+`kaola-workflow/ROADMAP.md` once.
 
 ## Startup Step 0a — PR Intent Capture
 
@@ -174,6 +237,12 @@ while the Opus front end owns the claim + the DAG authoring:
    (the claim + worktree + `workflow-state.md`); git-freshness (Startup Step 1) runs INSIDE adapt against MAIN **before** the planner claims
    (so a dirty/behind main never orphans a worktree); the roadmap check (Startup Step 2) runs in adapt too.
    Do NOT run Startup Step 0b / 1 / 2 in the router for this path.
+
+   **Bundle:** when `KAOLA_TARGET_ISSUES` is set (multi-issue bundle), route to
+   `/kaola-workflow-adapt` with the full issue set — the planner uses
+   `--target-issues $KAOLA_TARGET_ISSUES` instead of `--target-issue N`. See
+   "Startup Step 0c — Bundle Lane" above for selection, and the Bundle Lane section
+   of `kaola-workflow-adapt.md` for the planner's claim contract.
 
 Non-adaptive paths (`fast` | `full`) fall through to Step 0b unchanged.
 
@@ -427,8 +496,12 @@ printing the next command.
 
 ## Completion Contract
 
-Each `/workflow-next` run implements exactly one issue. After Finalization closes issue #N
-and archives the active folder, the agent must stop and await explicit re-direction from the user.
-Do not auto-route into the next issue in line. The single-issue completion contract means
-finishing issue #N is the terminal event of the run. To start issue #N+1, the user must
+Each `/workflow-next` run implements exactly one issue **or one explicitly selected
+same-scope bundle**. After Finalization closes the issue (or every issue in the bundle)
+and archives the active folder, the agent must stop and await explicit re-direction from
+the user. Do not auto-route into the next issue in line.
+
+A bundle closure is all-or-nothing: Finalization closes EVERY issue in `issue_numbers`,
+removes every matching `.roadmap/issue-N.md` source, regenerates `ROADMAP.md` once,
+archives one bundle folder, and then stops. To start additional work, the user must
 invoke `/workflow-next` again.

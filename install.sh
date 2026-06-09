@@ -37,7 +37,7 @@ AGENTS_DIR="${KAOLA_AGENT_DIR:-$HOME/.claude/agents}"
 SOURCE_AGENTS_DIR="$SCRIPT_DIR/agents"
 AGENT_MANIFEST_FILE="$AGENTS_DIR/.kaola-workflow-agent-manifest"
 MANAGED_AGENT_MARKER="kaola-workflow-managed-agent: true"
-REQUIRED_AGENTS=("code-explorer" "knowledge-lookup" "planner" "code-architect" "tdd-guide" "implementer" "build-error-resolver" "code-reviewer" "security-reviewer" "doc-updater" "adversarial-verifier" "contractor" "workflow-planner")
+REQUIRED_AGENTS=("code-explorer" "knowledge-lookup" "planner" "code-architect" "tdd-guide" "implementer" "build-error-resolver" "code-reviewer" "security-reviewer" "doc-updater" "adversarial-verifier" "contractor" "workflow-planner" "issue-scout")
 YES=0
 FORGE=github
 MERGE_SETTINGS=1
@@ -426,7 +426,7 @@ install_agent_files
 
 default_agent_model() {
   case "$1" in
-    code-explorer|knowledge-lookup|code-architect|tdd-guide|implementer|build-error-resolver|code-reviewer|security-reviewer|adversarial-verifier|contractor)
+    code-explorer|knowledge-lookup|code-architect|tdd-guide|implementer|build-error-resolver|code-reviewer|security-reviewer|adversarial-verifier|contractor|issue-scout)
       printf '%s\n' "sonnet"
       ;;
     planner|workflow-planner)

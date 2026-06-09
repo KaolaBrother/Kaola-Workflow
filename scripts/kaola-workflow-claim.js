@@ -116,6 +116,17 @@ function parseArgs(argv) {
   for (const key of ['issue', 'targetIssue', 'prNumber']) {
     if (args[key] != null) args[key] = parseInt(args[key], 10);
   }
+  // #328: --target-issues A,B,C (or KAOLA_TARGET_ISSUES env) — sorted, unique int array.
+  // The generic --flag value branch above already captures args.targetIssues as a string.
+  const envTargets = process.env.KAOLA_TARGET_ISSUES;
+  if (args.targetIssues == null && envTargets) args.targetIssues = envTargets;
+  if (typeof args.targetIssues === 'string') {
+    args.targetIssues = args.targetIssues.split(',')
+      .map(s => parseInt(s.trim(), 10))
+      .filter(n => Number.isFinite(n) && n > 0);
+    // sort ascending + dedupe — load-bearing for bundle_id/collision detection
+    args.targetIssues = Array.from(new Set(args.targetIssues)).sort((a, b) => a - b);
+  }
   return args;
 }
 
@@ -418,6 +429,12 @@ function writeState(root, data) {
   if (data.base_branch) lines.push('base_branch: ' + data.base_branch);
   if (data.pr_url) lines.push('pr_url: ' + data.pr_url);
   if (data.pr_number) lines.push('pr_number: ' + data.pr_number);
+  // #328: bundle-only additive fields — ONLY written when present (single-issue path stays byte-identical)
+  if (Array.isArray(data.issue_numbers) && data.issue_numbers.length) {
+    lines.push('issue_numbers: ' + data.issue_numbers.join(','));
+    lines.push('bundle_id: ' + data.bundle_id);
+    lines.push('closure_policy: ' + (data.closure_policy || 'all_or_nothing'));
+  }
   writeFile(stateFile(root, data.project), lines.join('\n') + '\n');
 }
 
@@ -496,7 +513,11 @@ function classifyIssue(root, issueNumber) {
 }
 
 function activeByIssue(root, issueNumber) {
-  return readActiveFolders(root).find(folder => folder.issue_number === issueNumber) || null;
+  // #328: bundle-aware — also checks issue_numbers array for bundle membership
+  return readActiveFolders(root).find(folder =>
+    folder.issue_number === issueNumber ||
+    (Array.isArray(folder.issue_numbers) && folder.issue_numbers.includes(issueNumber))
+  ) || null;
 }
 
 function activeByProject(root, project) {
@@ -664,6 +685,247 @@ function claimExplicitTarget(root, args) {
   return claimProject(root, Object.assign({}, args, { issue: targetIssue, project: args.project || projectNameForIssue(root, targetIssue) }));
 }
 
+// #328: bundle-specific hard add-label. Unlike postAdvisoryClaim (which swallows all gh errors
+// to be fire-and-forget), this helper THROWS on add-label failure so the claimBundle catch block
+// can drive the all-or-nothing rollback. label create is still fire-and-forget (best-effort).
+// The issue comment is also best-effort (after the hard label succeeds).
+function addBundleLabel(issueNumber, project) {
+  if (OFFLINE || issueNumber == null) return;
+  try { ghExec(['label', 'create', CLAIM_LABEL, '--color', 'f9d0c4', '--description', 'Kaola-Workflow active work marker']); } catch (_) {}
+  // Hard add-label: throws on failure — allows the claimBundle catch to drive rollback.
+  ghExec(['issue', 'edit', String(issueNumber), '--add-label', CLAIM_LABEL]);
+  // Best-effort comment (never throws — rollback already can't undo a comment so
+  // a hard throw here adds no correctness value and would orphan a REAL label).
+  try { ghExec(['issue', 'comment', String(issueNumber), '--body', '<!-- kw:claim project=' + project + ' -->\nKaola-Workflow started local work for `' + project + '`.']); } catch (_) {}
+}
+
+// #328: bundle-specific hard remove-label for the rollback path. THROWS on remove-label failure
+// so the claimBundle rollback loop can detect when teardown itself fails and return
+// target_set_label_rollback_failed (rather than silently masking the teardown error).
+// Unlike clearAdvisoryClaim (which swallows all errors), this propagates the gh error.
+// The best-effort comment + marker deletion are still fire-and-forget.
+function removeBundleLabel(issueNumber, project) {
+  if (OFFLINE || issueNumber == null) return;
+  // Hard remove-label: throws on failure so the rollback loop sets rollbackOk=false.
+  ghExec(['issue', 'edit', String(issueNumber), '--remove-label', CLAIM_LABEL]);
+  // Best-effort: comment + delete the kw:claim marker comment (same as clearAdvisoryClaim).
+  try { ghExec(['issue', 'comment', String(issueNumber), '--body', 'Kaola-Workflow advisory claim cleared: bundle claim rolled back']); } catch (_) {}
+  try {
+    const raw = ghExec(['api', 'repos/{owner}/{repo}/issues/' + String(issueNumber) + '/comments']);
+    const comments = JSON.parse(raw || '[]');
+    const marker = '<!-- kw:claim project=' + project + ' -->';
+    for (const comment of comments) {
+      if (!comment || !comment.body || !comment.id) continue;
+      if (comment.body.includes(marker)) {
+        try { ghExec(['api', '--method', 'DELETE', 'repos/{owner}/{repo}/issues/comments/' + String(comment.id)]); } catch (_) {}
+      }
+    }
+  } catch (_) {}
+}
+
+// #328: all-or-nothing bundle provision. Called by claimExplicitBundle after all validation
+// passes. Mirrors claimProject's structure (mkdir -> worktree -> writeState -> per-issue labels)
+// with a catch-block rollback that reverses every applied step in REVERSE order.
+// Applied steps are tracked in `applied` for safe teardown.
+function claimBundle(root, opts) {
+  const { targets, project, branch } = opts;
+  // applied: track what was provisioned so rollback can undo exactly what succeeded
+  const applied = { dir: false, worktree: false, worktreePath: '', labeled: [] };
+  let claimErr = null;
+  try {
+    // Step 2: mkdir projectDir (EEXIST + stateFile present -> conflict)
+    const dir = projectDir(root, project);
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    try {
+      fs.mkdirSync(dir);
+    } catch (e) {
+      if (e.code === 'EEXIST' && fs.existsSync(stateFile(root, project))) {
+        return { status: 'target_set_conflicts_active_work', issue: targets[0], project,
+          reasoning: 'bundle project folder already exists: ' + project };
+      } else if (e.code !== 'EEXIST') { throw e; }
+    }
+    applied.dir = true;
+
+    // Step 3: provisionWorktree (adaptive path: no worktree per policy — suppressed like claimProject)
+    // The adaptive path does NOT provision a worktree (#264 adaptive suppression).
+    // worktreePath stays '' for adaptive, matching single-issue adaptive behavior.
+    let worktreePath = '';
+    let worktreeError = '';
+    // Bundle lane is adaptive-only, so worktree is suppressed (matches adaptive single-issue).
+    // Do NOT provision for the adaptive path.
+
+    // Step 4: writeState with primary + bundle fields
+    writeState(root, {
+      project,
+      issue_number: targets[0],
+      issue_numbers: targets,
+      bundle_id: project,
+      closure_policy: 'all_or_nothing',
+      branch,
+      sink: opts.sink || 'merge',
+      worktree_path: worktreePath,
+      worktree_error: worktreeError,
+      workflow_path: 'adaptive',
+      runtime: opts.runtime || 'claude',
+      status: 'active'
+    });
+
+    // Step 5: per-member hard add-label (addBundleLabel throws on add-label failure,
+    // enabling the catch block to drive all-or-nothing rollback).
+    // Track labeled members AFTER the hard label succeeds so rollback reverses exactly
+    // what was applied.
+    for (const n of targets) {
+      addBundleLabel(n, project);
+      applied.labeled.push(n);
+    }
+
+    return {
+      status: 'acquired',
+      verdict: 'green',
+      claim: 'acquired',
+      issue: targets[0],
+      issue_numbers: targets,
+      project,
+      bundle_id: project,
+      branch,
+      worktree_path: worktreePath
+    };
+  } catch (err) {
+    claimErr = err;
+    // REVERSE-ORDER teardown
+    let rollbackOk = true;
+    // a. Clear labels/comments for each already-labeled member (reverse order).
+    //    Use removeBundleLabel (hard, throws on remove-label failure) instead of
+    //    clearAdvisoryClaim (which swallows all errors) so that a teardown failure
+    //    sets rollbackOk=false and returns target_set_label_rollback_failed.
+    for (const n of applied.labeled.slice().reverse()) {
+      try {
+        removeBundleLabel(n, project);
+      } catch (_) {
+        rollbackOk = false;
+      }
+    }
+    // b. Remove worktree if provisioned
+    if (applied.worktree) {
+      try {
+        removeWorktree(root, project, { worktree_path: applied.worktreePath });
+      } catch (_) {
+        rollbackOk = false;
+      }
+    }
+    // c. Remove project dir if created
+    if (applied.dir) {
+      try {
+        const dir = projectDir(root, project);
+        fs.rmSync(dir, { recursive: true, force: true });
+      } catch (_) {
+        rollbackOk = false;
+      }
+    }
+    if (!rollbackOk) {
+      return {
+        status: 'target_set_label_rollback_failed',
+        issue_numbers: targets,
+        project,
+        reasoning: 'partial claim could not be fully rolled back; manual cleanup may be required',
+        partial: applied
+      };
+    }
+    return {
+      status: 'target_set_unavailable',
+      issue_numbers: targets,
+      project,
+      reasoning: 'bundle provision failed and was rolled back: ' + ((claimErr && claimErr.message) || String(claimErr))
+    };
+  }
+}
+
+// #328: the bundle analog of claimExplicitTarget — validates every member (steps 1-4 from design.md)
+// before any mutation, then delegates provisioning to claimBundle (step 5-6).
+// KAOLA_BUNDLE_MAX_ISSUES default 4; bundle lane is adaptive-only.
+function claimExplicitBundle(root, args) {
+  const targets = args.targetIssues;
+  // Step 1: empty/missing
+  if (!Array.isArray(targets) || targets.length === 0) {
+    return { status: 'target_set_empty', claim: 'none', project: null, issue: null,
+      reasoning: '--target-issues <A,B,...> required' };
+  }
+  // Step 2: cap
+  const maxRaw = parseInt(process.env.KAOLA_BUNDLE_MAX_ISSUES || '4', 10);
+  const max = (Number.isFinite(maxRaw) && maxRaw > 0) ? maxRaw : 4;
+  if (targets.length > max) {
+    return { status: 'target_set_too_large', claim: 'none', project: null, issue: null,
+      reasoning: 'bundle of ' + targets.length + ' exceeds KAOLA_BUNDLE_MAX_ISSUES=' + max };
+  }
+  // Step 3: adaptive-path gate
+  const requestedPath = args.workflowPath || process.env.KAOLA_PATH || 'full';
+  if (requestedPath !== adaptiveSchema.ADAPTIVE_PATH) {
+    return { status: 'target_set_not_adaptive', claim: 'none', project: null, issue: null,
+      reasoning: 'bundle lane is adaptive-only; got workflow_path "' + requestedPath + '"' };
+  }
+  // Also check the adaptive switch is ON (isLegalWorkflowPath)
+  const adaptiveEnabled = adaptiveSchema.resolveEnableAdaptive(readAdaptiveConfig(), process.env);
+  if (!adaptiveSchema.isLegalWorkflowPath(requestedPath, adaptiveEnabled)) {
+    const legal = (adaptiveEnabled ? adaptiveSchema.WORKFLOW_PATHS : adaptiveSchema.WORKFLOW_PATHS_NO_ADAPTIVE).join(', ');
+    return {
+      status: 'workflow_path_refused',
+      claim: 'none',
+      issue: null,
+      project: null,
+      reasoning: 'workflow_path "' + requestedPath + '" is not permitted (adaptive switch is ' +
+        (adaptiveEnabled ? 'ON' : 'OFF') + '); legal values: ' + legal +
+        '. Refusing to silently downgrade (#44).'
+    };
+  }
+  // Step 4: per-issue validation loop (NO mutation yet)
+  for (const n of targets) {
+    // 4a: check active folders (bundle-aware activeByIssue)
+    const existing = activeByIssue(root, n);
+    if (existing) {
+      return { status: 'target_set_conflicts_active_work', claim: 'none', issue: n,
+        reasoning: '#' + n + ' is already claimed by project ' + existing.project };
+    }
+    // 4b: probe issue state FIRST so a closed member gets the dedicated code before
+    //     the classifier (which returns verdict:'red' for closed issues, causing it to
+    //     be unreachable if probe runs after classify).
+    const probe = probeIssueState(n);
+    if (probe.state === 'closed') {
+      return { status: 'target_set_has_closed_issue', claim: 'none', issue: n,
+        reasoning: '#' + n + ' is closed' };
+    }
+    if (!OFFLINE && probe.state === 'unavailable') {
+      return { status: 'target_set_unavailable', claim: 'none', issue: n,
+        reasoning: '#' + n + ' state probe failed' };
+    }
+    // 4c: classify
+    const classified = classifyIssue(root, n);
+    if (classified.verdict === 'owned' || classified.verdict === 'blocked') {
+      return { status: 'target_set_conflicts_active_work', claim: 'none', issue: n,
+        reasoning: classified.reasoning };
+    }
+    if (classified.verdict === 'red') {
+      return { status: 'target_set_red', claim: 'none', issue: n, reasoning: classified.reasoning };
+    }
+    if (classified.verdict === 'target_unavailable') {
+      return { status: 'target_set_unavailable', claim: 'none', issue: n, reasoning: classified.reasoning };
+    }
+    if (classified.verdict === 'target_unverified') {
+      return { status: 'target_set_unverified', claim: 'none', issue: n, reasoning: classified.reasoning };
+    }
+  }
+  // Step 5: derive project/branch — design §Naming: bundle_id = 'bundle-' + sorted targets
+  const project = 'bundle-' + targets.join('-');
+  const branch = buildBranchName(null, project, args.branch);
+  // Step 5-6: all-or-nothing provision
+  return claimBundle(root, {
+    targets,
+    project,
+    branch,
+    sink: args.sink || process.env.KAOLA_SINK || 'merge',
+    runtime: args.runtime || 'claude'
+  });
+}
+
 function output(obj, code) {
   process.stdout.write(JSON.stringify(obj) + '\n');
   if (code) process.exitCode = code;
@@ -702,12 +964,36 @@ function cmdAuthoringAllowed() {
 function cmdStartup() {
   const root = getRoot();
   const args = parseArgs(process.argv.slice(3));
-  const target = args.targetIssue || args.issue;
-  if (!target) {
+  const scalarTarget = args.targetIssue || args.issue;
+  const bundleTargets = Array.isArray(args.targetIssues) && args.targetIssues.length ? args.targetIssues : null;
+
+  // #328: target_ambiguity — both scalar and bundle set
+  if (scalarTarget && bundleTargets) {
+    output({ verdict: 'target_ambiguity', claim: 'none', project: null, issue: null,
+      status: 'target_ambiguity',
+      reasoning: 'both --target-issue and --target-issues set; choose one' }, 1);
+    return;
+  }
+
+  // #328: bundle path
+  if (bundleTargets) {
+    const result = claimExplicitBundle(root, args);
+    output(Object.assign({
+      verdict: result.status === 'acquired' ? (result.verdict || 'green') : result.status,
+      claim: result.status === 'acquired' ? 'acquired' : (result.status === 'owned' ? 'owned' : 'none'),
+      selected_project: result.project || null,
+      selected_issue: result.issue || null,
+      target_source: 'user_directed',
+      worktree_path: result.worktree_path || ''
+    }, result), result.status === 'acquired' || result.status === 'owned' ? 0 : 1);
+    return;
+  }
+
+  if (!scalarTarget) {
     output({ verdict: 'no_target', claim: 'none', project: null, issue: null }, 1);
     return;
   }
-  const result = claimExplicitTarget(root, Object.assign({}, args, { targetIssue: target }));
+  const result = claimExplicitTarget(root, Object.assign({}, args, { targetIssue: scalarTarget }));
   output(Object.assign({
     verdict: result.status === 'acquired' ? (result.verdict || 'green') : result.status,
     claim: result.status === 'acquired' ? 'acquired' : (result.status === 'owned' ? 'owned' : 'none'),
@@ -722,7 +1008,8 @@ function cmdPickNext() {
   const root = getRoot();
   const args = parseArgs(process.argv.slice(3));
   const target = args.targetIssue || args.issue;
-  if (target) return cmdStartup();
+  // #328: bundle path — delegate to cmdStartup which handles both scalar and bundle
+  if (target || (Array.isArray(args.targetIssues) && args.targetIssues.length)) return cmdStartup();
   output({ verdict: 'no_target', claim: 'none', project: null, issue: null }, 1);
 }
 
@@ -816,9 +1103,12 @@ function archiveProjectDir(root, project, statusValue, suffix) {
   if (!fs.existsSync(src)) return { skipped: 'source-missing' };
   const state = stateFile(root, project);
   let archiveIssueNumber = null;
+  // #328: read issue_numbers early (before rename) so we have the full member list
+  let archiveIssueNumbersRaw = '';
   try {
     let content = fs.readFileSync(state, 'utf8');
     archiveIssueNumber = parseInt(field(content, 'issue_number'), 10);
+    archiveIssueNumbersRaw = (field(content, 'issue_numbers') || '').trim();
     content = removeLegacyStateBlocks(content);
     content = content.replace(/^status:\s*.*$/m, 'status: ' + statusValue);
     if (!/^status:/m.test(content)) content += '\nstatus: ' + statusValue + '\n';
@@ -880,15 +1170,33 @@ function archiveProjectDir(root, project, statusValue, suffix) {
   }
   let roadmapSourceRemoved = 'absent';
   let roadmapRegenerated = 'skipped';
+  // #328: accumulate removed sources for bundle path (plural array)
+  const removedSources = [];
   if (statusValue === 'closed') {
-    if (Number.isInteger(archiveIssueNumber) && archiveIssueNumber > 0) {
-      const roadmapFilePath = path.join(root, 'kaola-workflow', '.roadmap', 'issue-' + archiveIssueNumber + '.md');
+    // #328: for a bundle project, use the pre-read member array (archiveIssueNumbersRaw was
+    // captured BEFORE the renameSync so we can parse it now even though the file moved)
+    let archiveIssueNumbers = [];
+    if (archiveIssueNumbersRaw) {
+      archiveIssueNumbers = archiveIssueNumbersRaw.split(',')
+        .map(s => parseInt(s.trim(), 10))
+        .filter(n => Number.isFinite(n) && n > 0);
+    }
+    if (archiveIssueNumbers.length === 0 && Number.isInteger(archiveIssueNumber) && archiveIssueNumber > 0) {
+      archiveIssueNumbers = [archiveIssueNumber];
+    }
+    // Loop per-issue removal (single-issue: one iteration; bundle: N iterations)
+    for (const issueN of archiveIssueNumbers) {
+      const roadmapFilePath = path.join(root, 'kaola-workflow', '.roadmap', 'issue-' + issueN + '.md');
+      let thisRemoved = 'absent';
       try {
         fs.unlinkSync(roadmapFilePath);
-        roadmapSourceRemoved = 'removed';
+        thisRemoved = 'removed';
       } catch (e) {
-        roadmapSourceRemoved = (e.code === 'ENOENT') ? 'absent' : 'failed';
+        thisRemoved = (e.code === 'ENOENT') ? 'absent' : 'failed';
       }
+      // Update scalar roadmap_source_removed for primary (first / single-issue) — keeps callers intact
+      if (issueN === archiveIssueNumber) roadmapSourceRemoved = thisRemoved;
+      if (thisRemoved === 'removed') removedSources.push('issue-' + issueN + '.md');
       // #297: reconcile MAIN-repo staged roadmap source. On a worktree run,
       // adaptive-handoff Step 5 creates this file in MAIN and `git add`s it
       // WITHOUT committing (worktree was forked before the file existed on HEAD).
@@ -901,7 +1209,7 @@ function archiveProjectDir(root, project, statusValue, suffix) {
       // spurious D entry and trip the same sink-merge.js:73 clean check.
       if (mainRoot && mainRoot !== linkedRoot) {
         try {
-          const mainRoadmapRel = path.join('kaola-workflow', '.roadmap', 'issue-' + archiveIssueNumber + '.md');
+          const mainRoadmapRel = path.join('kaola-workflow', '.roadmap', 'issue-' + issueN + '.md');
           let onHead = false;
           try {
             execFileSync('git', ['-C', mainRoot, 'cat-file', '-e', 'HEAD:' + mainRoadmapRel],
@@ -924,27 +1232,48 @@ function archiveProjectDir(root, project, statusValue, suffix) {
       roadmapRegenerated = 'failed';
     }
   }
-  return { archived: true, dest, roadmap_source_removed: roadmapSourceRemoved, roadmap_regenerated: roadmapRegenerated };
+  return {
+    archived: true,
+    dest,
+    roadmap_source_removed: roadmapSourceRemoved,
+    roadmap_regenerated: roadmapRegenerated,
+    roadmap_sources_removed: removedSources
+  };
 }
 
 function checkClosureInvariants(root, receipt, archiveDest) {
   const violations = [];
   const issueNumber = receipt.issue_number;
   const abandoned = receipt && receipt.archive === 'abandoned';
-  if (!abandoned && Number.isInteger(issueNumber) && issueNumber > 0) {
-    const roadmapFile = path.join(root, 'kaola-workflow', '.roadmap', 'issue-' + issueNumber + '.md');
-    if (fs.existsSync(roadmapFile)) {
-      const inv = closureContract.CLOSURE_INVARIANTS.find(i => i.id === 'roadmap-source-absent');
-      violations.push({ id: 'roadmap-source-absent', description: inv ? inv.description : 'roadmap source file still present' });
-    }
-    const roadmapMirror = path.join(root, 'kaola-workflow', 'ROADMAP.md');
-    try {
-      const content = fs.readFileSync(roadmapMirror, 'utf8');
-      if (content.includes('#' + issueNumber + ' ') || content.includes('#' + issueNumber + '\n') || content.includes('#' + issueNumber + ')')) {
-        const inv = closureContract.CLOSURE_INVARIANTS.find(i => i.id === 'roadmap-mirror-clean');
-        violations.push({ id: 'roadmap-mirror-clean', description: inv ? inv.description : 'ROADMAP.md still lists issue as active' });
+  // #328: for a bundle project, loop roadmap-source-absent + roadmap-mirror-clean checks
+  // over ALL members; fall back to scalar issue_number for single-issue (AC#1 unchanged).
+  const memberNumbers = Array.isArray(receipt.issue_numbers) && receipt.issue_numbers.length
+    ? receipt.issue_numbers
+    : (Number.isInteger(issueNumber) && issueNumber > 0 ? [issueNumber] : []);
+  if (!abandoned && memberNumbers.length > 0) {
+    const invSourceAbsent = closureContract.CLOSURE_INVARIANTS.find(i => i.id === 'roadmap-source-absent');
+    const invMirrorClean = closureContract.CLOSURE_INVARIANTS.find(i => i.id === 'roadmap-mirror-clean');
+    for (const n of memberNumbers) {
+      const roadmapFile = path.join(root, 'kaola-workflow', '.roadmap', 'issue-' + n + '.md');
+      if (fs.existsSync(roadmapFile)) {
+        const baseDesc = invSourceAbsent ? invSourceAbsent.description : 'roadmap source file still present';
+        violations.push({
+          id: 'roadmap-source-absent',
+          description: memberNumbers.length > 1 ? (baseDesc + ' (issue #' + n + ')') : baseDesc
+        });
       }
-    } catch (_) {}
+      const roadmapMirror = path.join(root, 'kaola-workflow', 'ROADMAP.md');
+      try {
+        const content = fs.readFileSync(roadmapMirror, 'utf8');
+        if (content.includes('#' + n + ' ') || content.includes('#' + n + '\n') || content.includes('#' + n + ')')) {
+          const baseDesc2 = invMirrorClean ? invMirrorClean.description : 'ROADMAP.md still lists issue as active';
+          violations.push({
+            id: 'roadmap-mirror-clean',
+            description: memberNumbers.length > 1 ? (baseDesc2 + ' (issue #' + n + ')') : baseDesc2
+          });
+        }
+      } catch (_) {}
+    }
   }
   // outside issueNumber guard: 'skipped_offline' must not violate even when issueNumber is null
   const labelStatus = receipt.claim_label_removed;
@@ -1028,19 +1357,64 @@ function cmdFinalize() {
     }
   }
   let issueNumber = folder && folder.issue_number;
+  // #328: read bundle member array — from folder (live) or archive dest (null-folder fallback)
+  let issueNumbers = (folder && Array.isArray(folder.issue_numbers) && folder.issue_numbers.length)
+    ? folder.issue_numbers : [];
   // null-folder fallback: archiveProjectDir ran first, so dest is the archive path
-  if (issueNumber == null && result.dest) {
+  if ((issueNumber == null || issueNumbers.length === 0) && result.dest) {
     try {
       const statePath = path.join(result.dest, 'workflow-state.md');
       if (fs.existsSync(statePath)) {
-        const n = parseInt(field(fs.readFileSync(statePath, 'utf8'), 'issue_number'), 10);
-        issueNumber = Number.isFinite(n) ? n : null;
+        const stateContent = fs.readFileSync(statePath, 'utf8');
+        if (issueNumber == null) {
+          const n = parseInt(field(stateContent, 'issue_number'), 10);
+          issueNumber = Number.isFinite(n) ? n : null;
+        }
+        if (issueNumbers.length === 0) {
+          const rawNums = (field(stateContent, 'issue_numbers') || '').trim();
+          if (rawNums) {
+            issueNumbers = rawNums.split(',')
+              .map(s => parseInt(s.trim(), 10))
+              .filter(n => Number.isFinite(n) && n > 0);
+          }
+        }
       }
     } catch (_) {}
   }
-  const claimLabelRemoved = clearAdvisoryClaim(issueNumber, 'finalized', args.project);
+  // #328: clearAdvisoryClaim per bundle member; primary's status feeds claim_label_removed
+  // for the existing checkClosureInvariants in-progress-label-removed check.
+  // Single-issue path: issueNumbers is empty; falls through to scalar call below (unchanged).
+  let claimLabelRemoved;
+  if (issueNumbers.length > 0) {
+    // Bundle: clear label for each member; primary's status is the canonical one.
+    for (const n of issueNumbers) {
+      const labelStatus = clearAdvisoryClaim(n, 'finalized', args.project);
+      if (n === issueNumber) claimLabelRemoved = labelStatus;
+    }
+    if (claimLabelRemoved == null) claimLabelRemoved = 'failed';
+  } else {
+    // Single-issue path (unchanged)
+    claimLabelRemoved = clearAdvisoryClaim(issueNumber, 'finalized', args.project);
+  }
+  // #328: per-member remote close probe (warning-first: catch per member, accumulate, never abort)
+  // Uses probeIssueState (from active-folders.js, already imported) for consistent JSON parsing.
   let remoteIssueClosed = 'skipped_offline';
-  if (!OFFLINE && issueNumber) {
+  const closedIssues = [];       // members probed as closed
+  const failedIssueClosures = []; // members whose probe threw/returned unavailable
+  if (!OFFLINE && issueNumbers.length > 0) {
+    // Bundle: probe each member (warning-first: unavailable probe -> failed_issue_closures)
+    for (const n of issueNumbers) {
+      const probe = probeIssueState(n);
+      if (probe.state === 'closed') {
+        closedIssues.push(n);
+      } else if (probe.state === 'unavailable') {
+        failedIssueClosures.push(n);
+      }
+      // 'open' state: neither closed nor failed — just not closed yet
+    }
+    remoteIssueClosed = (closedIssues.length === issueNumbers.length) ? 'already_closed' : 'skipped_offline';
+  } else if (!OFFLINE && issueNumber) {
+    // Single-issue path (unchanged)
     try {
       const viewOut = ghExec(['issue', 'view', String(issueNumber), '--json', 'state', '--jq', '.state']);
       remoteIssueClosed = (viewOut && viewOut.trim().toLowerCase() === 'closed') ? 'already_closed' : 'skipped_offline';
@@ -1055,6 +1429,15 @@ function cmdFinalize() {
     worktree_removed: worktreeRemoved,
     branch_removed: 'kept'
   });
+  // #328: attach bundle receipt fields AFTER buildClosureReceipt (the builder filters by
+  // CLOSURE_RECEIPT_FIELDS which does not include these new bundle keys — Decision-5 trap).
+  // Only attach when this is a bundle project (issueNumbers present).
+  if (issueNumbers.length > 0) {
+    closureReceipt.issue_numbers = issueNumbers;
+    closureReceipt.closed_issues = closedIssues;
+    closureReceipt.failed_issue_closures = failedIssueClosures;
+    closureReceipt.roadmap_sources_removed = result.roadmap_sources_removed || [];
+  }
   // M2 (#277 Phase 2): WARN-FIRST attestation check.
   // archiveProjectDir runs first (line ~863) and renames the live folder to result.dest,
   // so the live cache is gone; check the archive candidate first, then live as fallback.
@@ -1113,7 +1496,14 @@ function cmdRelease() {
     } catch (_) { /* defensive: discard must not throw */ }
   }
 
-  clearAdvisoryClaim(folder.issue_number, args.reason || 'discarded', folder.project);
+  // #328: for a bundle project, clear advisory claim for every member; single-issue falls through
+  if (Array.isArray(folder.issue_numbers) && folder.issue_numbers.length > 0) {
+    for (const n of folder.issue_numbers) {
+      clearAdvisoryClaim(n, args.reason || 'discarded', folder.project);
+    }
+  } else {
+    clearAdvisoryClaim(folder.issue_number, args.reason || 'discarded', folder.project);
+  }
   output(Object.assign({ released: true, project: folder.project }, result, restoreNote ? { restore_note: restoreNote } : {}));
 }
 
@@ -1420,7 +1810,17 @@ function cmdWatchPr() {
         else if (wtResult && wtResult.removed === false && wtResult.reason === 'missing') worktreeRemoved = 'missing';
         else if (wtResult && wtResult.removed === false) worktreeRemoved = 'failed';
       } catch (_) { worktreeRemoved = 'failed'; }
-      const claimLabelStatus = clearAdvisoryClaim(folder.issue_number, 'pr merged', folder.project);
+      // #328: for a bundle project, clear advisory claim per member; primary's status is canonical
+      let claimLabelStatus;
+      if (Array.isArray(folder.issue_numbers) && folder.issue_numbers.length > 0) {
+        for (const n of folder.issue_numbers) {
+          const s = clearAdvisoryClaim(n, 'pr merged', folder.project);
+          if (n === folder.issue_number) claimLabelStatus = s;
+        }
+        if (claimLabelStatus == null) claimLabelStatus = 'failed';
+      } else {
+        claimLabelStatus = clearAdvisoryClaim(folder.issue_number, 'pr merged', folder.project);
+      }
       const folderReceipt = buildClosureReceipt(folder.project, folder.issue_number, {
         archive: archiveResult.skipped ? 'skipped' : (archiveResult.archived ? 'closed' : 'failed'),
         roadmap_source_removed: archiveResult ? archiveResult.roadmap_source_removed : 'failed',
@@ -1430,6 +1830,11 @@ function cmdWatchPr() {
         worktree_removed: worktreeRemoved,
         branch_removed: 'kept'
       });
+      // #328: attach bundle receipt fields after builder (filter bypass)
+      if (Array.isArray(folder.issue_numbers) && folder.issue_numbers.length > 0) {
+        folderReceipt.issue_numbers = folder.issue_numbers;
+        folderReceipt.roadmap_sources_removed = archiveResult ? (archiveResult.roadmap_sources_removed || []) : [];
+      }
       const liveCacheDir = path.join(root, 'kaola-workflow', folder.project, '.cache');
       const archiveCacheDir = archiveResult && archiveResult.dest ? path.join(archiveResult.dest, '.cache') : null;
       checkDispatchAttestations([archiveCacheDir, liveCacheDir], folderReceipt);
@@ -1444,21 +1849,36 @@ function cmdWatchPr() {
         else if (wtResult && wtResult.removed === false && wtResult.reason === 'missing') worktreeRemoved = 'missing';
         else if (wtResult && wtResult.removed === false) worktreeRemoved = 'failed';
       } catch (_) { worktreeRemoved = 'failed'; }
-      const claimLabelStatus = clearAdvisoryClaim(folder.issue_number, 'pr closed', folder.project);
+      // #328: for a bundle project, clear advisory claim per member; primary's status is canonical
+      let claimLabelStatus2;
+      if (Array.isArray(folder.issue_numbers) && folder.issue_numbers.length > 0) {
+        for (const n of folder.issue_numbers) {
+          const s = clearAdvisoryClaim(n, 'pr closed', folder.project);
+          if (n === folder.issue_number) claimLabelStatus2 = s;
+        }
+        if (claimLabelStatus2 == null) claimLabelStatus2 = 'failed';
+      } else {
+        claimLabelStatus2 = clearAdvisoryClaim(folder.issue_number, 'pr closed', folder.project);
+      }
       const folderReceipt = buildClosureReceipt(folder.project, folder.issue_number, {
         archive: archiveResult.skipped ? 'skipped' : (archiveResult.archived ? 'abandoned' : 'failed'),
         roadmap_source_removed: archiveResult ? archiveResult.roadmap_source_removed : 'failed',
         roadmap_regenerated: archiveResult ? archiveResult.roadmap_regenerated : 'failed',
         remote_issue_closed: 'skipped_offline',
-        claim_label_removed: claimLabelStatus,
+        claim_label_removed: claimLabelStatus2,
         worktree_removed: worktreeRemoved,
         branch_removed: 'kept'
       });
+      // #328: attach bundle receipt fields after builder (filter bypass)
+      if (Array.isArray(folder.issue_numbers) && folder.issue_numbers.length > 0) {
+        folderReceipt.issue_numbers = folder.issue_numbers;
+        folderReceipt.roadmap_sources_removed = archiveResult ? (archiveResult.roadmap_sources_removed || []) : [];
+      }
       const liveCacheDir = path.join(root, 'kaola-workflow', folder.project, '.cache');
       const archiveCacheDir = archiveResult && archiveResult.dest ? path.join(archiveResult.dest, '.cache') : null;
       checkDispatchAttestations([archiveCacheDir, liveCacheDir], folderReceipt);
       const folderInvariants = checkClosureInvariants(root, folderReceipt, archiveResult ? archiveResult.dest : undefined);
-      cleanups.push({ folder: folder.project, claim_label_removed: claimLabelStatus, receipt: folderReceipt, closure_invariants: folderInvariants });
+      cleanups.push({ folder: folder.project, claim_label_removed: claimLabelStatus2, receipt: folderReceipt, closure_invariants: folderInvariants });
     }
   }
   const emit = { watched };
@@ -1641,6 +2061,8 @@ module.exports = {
   buildClosureReceipt,
   checkClosureInvariants,
   checkDispatchAttestations,
+  claimBundle,
+  claimExplicitBundle,
   claimExplicitTarget,
   claimProject,
   collectStale,

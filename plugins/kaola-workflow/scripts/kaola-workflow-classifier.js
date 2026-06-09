@@ -517,8 +517,12 @@ function cmdClassify(argv) {
   const activeFolders = readActiveFolders(root);
   const activeStateIssues = new Set(activeFolders.map(folder => folder.issue_number).filter(Boolean));
 
-  // Already claimed → exit 2, no stdout
-  if (activeStateIssues.has(args.issue)) {
+  // #328: also collect all bundle member issue numbers from active folders
+  const bundleMemberIssues = new Set();
+  for (const f of activeFolders) for (const n of (f.issue_numbers || [])) bundleMemberIssues.add(n);
+
+  // Already claimed (scalar) or a member of a live bundle → exit 2, no stdout
+  if (activeStateIssues.has(args.issue) || bundleMemberIssues.has(args.issue)) {
     process.exitCode = 2;
     return;
   }

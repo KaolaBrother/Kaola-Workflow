@@ -1986,8 +1986,8 @@ function testInstallProfilesFeaturesTableHandling() {
     assert.ok(freshConfig.includes('# BEGIN kaola-workflow agents'), 'fresh install should include managed block');
     assert.strictEqual(
       fs.readdirSync(path.join(fresh, '.codex', 'agents', 'kaola-workflow')).length,
-      13,
-      'should install 13 agent TOML files'
+      14,
+      'should install 14 agent TOML files'
     );
 
     // --- #284: hooks.json assertions (fresh install) ---
@@ -3350,7 +3350,7 @@ const GITLAB_FIXTURE_PLAN = [
 function testGitlabPreflight266() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-266-preflight-'));
   try {
-    // Install all 13 profiles into the fixture
+    // Install all 14 profiles into the fixture
     const installResult = spawnSync(process.execPath, [installProfilesScript, root], {
       cwd: gitlabPluginRoot, encoding: 'utf8'
     });

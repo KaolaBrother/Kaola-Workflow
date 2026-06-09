@@ -1858,6 +1858,187 @@ function makeState(opts) {
   ]), '#317 enterBatch: ONLY [closed→completed] (open-batch owns member flips), got ' + JSON.stringify(result.taskTransitions));
 }
 
+// ---------------------------------------------------------------------------
+// #328 bundle-display: runOrient surfaces bundle identity fields.
+// ---------------------------------------------------------------------------
+
+// Helper: make a bundle state file with issue_numbers/bundle_id/closure_policy.
+function makeBundleState(opts) {
+  opts = opts || {};
+  const primary = opts.primary || 42;
+  const issueNumbers = opts.issueNumbers || [42, 47, 53];
+  const bundleId = opts.bundleId || ('bundle-' + issueNumbers.join('-'));
+  const closurePolicy = opts.closurePolicy || 'all_or_nothing';
+  const lines = [
+    '# Kaola-Workflow State',
+    '',
+    '## Project',
+    'name: ' + bundleId,
+    'status: active',
+    '',
+    '## Current Position',
+    'phase: adaptive',
+    'next_command: /kaola-workflow-plan-run ' + bundleId,
+    '',
+    '## Last Evidence',
+    'phase_file: N/A',
+    'last_command: claim',
+    '',
+    '## Sink',
+    'issue_number: ' + primary,
+    'issue_numbers: ' + issueNumbers.join(','),
+    'bundle_id: ' + bundleId,
+    'closure_policy: ' + closurePolicy,
+    'branch: workflow/' + bundleId,
+  ];
+  return lines.join('\n') + '\n';
+}
+
+// T-bundle-1: runOrient on a bundle project populates bundleId/issueNumbers/closurePolicy/primaryIssue.
+{
+  const plan = makePlan([
+    '| impl-core | in_progress | |',
+    '| impl-other | pending | |',
+    '| review | pending | |',
+    '| finalize | pending | |',
+  ]);
+  const state = makeBundleState({ primary: 42, issueNumbers: [42, 47, 53] });
+
+  const shellStub = function(scriptPath) {
+    const base = path.basename(scriptPath);
+    if (base === 'kaola-workflow-plan-validator.js') return { exitCode: 0, ok: true, planHash: 'abc' };
+    if (base === 'kaola-workflow-next-action.js') {
+      return {
+        exitCode: 0, result: 'ok',
+        readySet: [{ id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js', dependsOn: [] }],
+        nextNode: { id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js' },
+        readyPending: [],
+        allDone: false,
+      };
+    }
+    return { exitCode: 0 };
+  };
+
+  const result = runOrient({
+    planPath: '/fake/kaola-workflow/bundle-42-47-53/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/bundle-42-47-53/workflow-state.md',
+    project: 'bundle-42-47-53',
+    shell: shellStub,
+    readFile: (fpath) => {
+      if (fpath.endsWith('workflow-plan.md')) return plan;
+      if (fpath.endsWith('workflow-state.md')) return state;
+      throw new Error('ENOENT: ' + fpath);
+    },
+    writeFile: () => { throw new Error('orient must not write'); },
+    cacheExists: (fpath) => fpath.includes('impl-core'),
+  });
+
+  assert(result.result === 'ok', 'T-bundle-1: bundle orient result===ok');
+  assert(result.bundleId === 'bundle-42-47-53', 'T-bundle-1: bundleId populated, got ' + result.bundleId);
+  assert(Array.isArray(result.issueNumbers) && result.issueNumbers.length === 3, 'T-bundle-1: issueNumbers is array of 3, got ' + JSON.stringify(result.issueNumbers));
+  const issNums = result.issueNumbers || [];
+  assert(issNums[0] === 42 && issNums[1] === 47 && issNums[2] === 53, 'T-bundle-1: issueNumbers values correct, got ' + JSON.stringify(issNums));
+  assert(result.closurePolicy === 'all_or_nothing', 'T-bundle-1: closurePolicy populated, got ' + result.closurePolicy);
+  assert(result.primaryIssue === 42, 'T-bundle-1: primaryIssue===42 (primary from issue_number), got ' + result.primaryIssue);
+}
+
+// T-bundle-2: runOrient on a single-issue project leaves bundle fields null/empty (AC#1 regression).
+// Single-issue state is UNCHANGED — no issue_numbers/bundle_id/closure_policy in the file.
+{
+  const plan = makePlan([
+    '| impl-core | in_progress | |',
+    '| impl-other | pending | |',
+    '| review | pending | |',
+    '| finalize | pending | |',
+  ]);
+  const state = makeState(); // single-issue: issue_number: 42, no bundle fields
+
+  const shellStub = function(scriptPath) {
+    const base = path.basename(scriptPath);
+    if (base === 'kaola-workflow-plan-validator.js') return { exitCode: 0, ok: true, planHash: 'def' };
+    if (base === 'kaola-workflow-next-action.js') {
+      return {
+        exitCode: 0, result: 'ok',
+        readySet: [{ id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js', dependsOn: [] }],
+        nextNode: { id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js' },
+        readyPending: [],
+        allDone: false,
+      };
+    }
+    return { exitCode: 0 };
+  };
+
+  const result = runOrient({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project',
+    shell: shellStub,
+    readFile: (fpath) => {
+      if (fpath.endsWith('workflow-plan.md')) return plan;
+      if (fpath.endsWith('workflow-state.md')) return state;
+      throw new Error('ENOENT: ' + fpath);
+    },
+    writeFile: () => { throw new Error('orient must not write'); },
+    cacheExists: (fpath) => fpath.includes('impl-core'),
+  });
+
+  assert(result.result === 'ok', 'T-bundle-2: single-issue orient result===ok (AC#1)');
+  assert(result.bundleId === null, 'T-bundle-2: bundleId===null for single-issue, got ' + result.bundleId);
+  assert(Array.isArray(result.issueNumbers) && result.issueNumbers.length === 0, 'T-bundle-2: issueNumbers===[] for single-issue, got ' + JSON.stringify(result.issueNumbers));
+  assert(result.closurePolicy === null, 'T-bundle-2: closurePolicy===null for single-issue, got ' + result.closurePolicy);
+  assert(result.primaryIssue === 42, 'T-bundle-2: primaryIssue===42 from issue_number in single-issue state, got ' + result.primaryIssue);
+  // AC#1: existing fields unchanged
+  assert(result.inProgressNode === 'impl-core', 'T-bundle-2 AC#1: inProgressNode still correct');
+  assert(result.consentHalt === false, 'T-bundle-2 AC#1: consentHalt still works');
+  assert(result.escalatedToFull === null || result.escalatedToFull === undefined, 'T-bundle-2 AC#1: escalatedToFull null/undefined unchanged');
+}
+
+// T-bundle-3: runOrient refuse paths (orphan + topup) also carry bundle identity fields.
+// Verifies all three return points carry bundleId/issueNumbers/closurePolicy/primaryIssue.
+{
+  const planNodes = [
+    '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| b | tdd-guide | — | scripts/b.js | 1 | sequence |',
+    '| finalize | finalize | a,b | CHANGELOG.md | 1 | sequence |',
+  ];
+  const plan = makePlan([
+    '| a | in_progress | |',
+    '| b | in_progress | |',
+    '| finalize | pending | |',
+  ], planNodes);
+  // A bundle state for a 2-member bundle
+  const state = makeBundleState({ primary: 10, issueNumbers: [10, 20], bundleId: 'bundle-10-20', closurePolicy: 'all_or_nothing' });
+
+  const shellStub = function(scriptPath) {
+    const base = path.basename(scriptPath);
+    if (base === 'kaola-workflow-plan-validator.js') return { exitCode: 0, ok: true };
+    if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', readySet: [], readyPending: [], nextNode: null, allDone: false };
+    return { exitCode: 0 };
+  };
+
+  // orphan_multi_in_progress: two in_progress rows, no valid batch manifest
+  const resultOrphan = runOrient({
+    planPath: '/fake/kaola-workflow/bundle-10-20/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/bundle-10-20/workflow-state.md',
+    project: 'bundle-10-20',
+    shell: shellStub,
+    readFile: (fpath) => {
+      if (fpath.endsWith('workflow-plan.md')) return plan;
+      if (fpath.endsWith('workflow-state.md')) return state;
+      throw new Error('ENOENT: ' + fpath);
+    },
+    writeFile: () => { throw new Error('orient must not write'); },
+    cacheExists: () => false,
+  });
+
+  assert(resultOrphan.result === 'refuse' && resultOrphan.reason === 'orphan_multi_in_progress',
+    'T-bundle-3: orphan refuse path still fires, got ' + JSON.stringify({ result: resultOrphan.result, reason: resultOrphan.reason }));
+  assert(resultOrphan.bundleId === 'bundle-10-20', 'T-bundle-3: orphan refuse carries bundleId, got ' + resultOrphan.bundleId);
+  assert(Array.isArray(resultOrphan.issueNumbers) && resultOrphan.issueNumbers.length === 2, 'T-bundle-3: orphan refuse carries issueNumbers, got ' + JSON.stringify(resultOrphan.issueNumbers));
+  assert(resultOrphan.closurePolicy === 'all_or_nothing', 'T-bundle-3: orphan refuse carries closurePolicy, got ' + resultOrphan.closurePolicy);
+  assert(resultOrphan.primaryIssue === 10, 'T-bundle-3: orphan refuse carries primaryIssue, got ' + resultOrphan.primaryIssue);
+}
+
 // Summary
 // ---------------------------------------------------------------------------
 if (failed > 0) {

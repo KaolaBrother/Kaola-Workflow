@@ -29,6 +29,7 @@ const localAgents = [
   'code-reviewer',
   'contractor',
   'implementer',
+  'issue-scout',
   'knowledge-lookup',
   'security-reviewer',
   'workflow-planner',

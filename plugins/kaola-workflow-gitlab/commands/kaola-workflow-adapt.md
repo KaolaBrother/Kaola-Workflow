@@ -144,3 +144,75 @@ commit step closes it (`n/a` nodes → skipped). Then hand off to the executor:
 The full shaping guidance lives in `agents/workflow-planner.md`. One heuristic is mirrored here for quick reference:
 
 - Author a `knowledge-lookup` node when the task depends on external library or API behavior, framework conventions, or open-web/expertise knowledge that cannot be confirmed from the local codebase alone. This mirrors the Phase 1 `knowledge-lookup` trigger.
+
+## Bundle Lane — Multi-Issue Adaptive Claim
+
+When the router delivers a same-scope bundle (explicit-bundle or auto-bundle mode —
+see `workflow-next.md` Step 0 Bundle Lane), the `workflow-planner` runs the bundle
+claim instead of the single-issue claim. The issue set was already selected and
+stated by the main orchestrator; the planner validates and claims it.
+
+### Bundle startup call
+
+The planner passes `--target-issues A,B,C` (sorted ascending, comma-separated)
+instead of `--target-issue N`:
+
+```bash
+node "$CLAIM_JS" startup \
+  --runtime claude \
+  --workflow-path adaptive \
+  --target-issues 42,47,53
+```
+
+Compatibility rule: `--target-issue` / `KAOLA_TARGET_ISSUE` keep current one-issue
+behavior unchanged. `--target-issues` / `KAOLA_TARGET_ISSUES` are the ONLY
+multi-issue startup path. If both are set, the script refuses with
+`target_ambiguity`; never pass both.
+
+### Bundle project and branch shape
+
+- Active folder (project name): `bundle-42-47-53` (sorted ascending, deduplicated).
+- Branch: `workflow/bundle-42-47-53`.
+- `workflow-state.md` records the primary issue as `issue_number: 42` plus three
+  additive bundle fields: `issue_numbers: 42,47,53`, `bundle_id: bundle-42-47-53`,
+  `closure_policy: all_or_nothing`.
+
+### Bundle is adaptive-only
+
+The bundle lane requires `workflow_path: adaptive`. The startup script refuses with
+`target_set_not_adaptive` when the path is `fast` or `full`.
+
+### Bundle authoring
+
+The planner receives the full issue set and authors ONE implementation-lane DAG in
+`workflow-plan.md` — not a mechanical one-node-per-issue plan. The `## Meta` block
+carries a conservative union of labels across all bundle issues so sensitivity and
+security gates are derived correctly.
+
+### Bundle finalization (one closure for all)
+
+A bundle run ends at ONE finalization. The finalization step:
+- closes every issue in `issue_numbers` (all-or-nothing);
+- removes every corresponding `.roadmap/issue-N.md` source;
+- regenerates `kaola-workflow/ROADMAP.md` once;
+- archives one bundle folder;
+- produces one closure receipt recording `primary_issue`, `issue_numbers`,
+  `closed_issues`, `failed_issue_closures`, and removed roadmap sources.
+
+### Claim refusals (bundle-specific)
+
+| code | trigger |
+|------|---------|
+| `target_ambiguity` | both `--target-issue` and `--target-issues` set |
+| `target_set_empty` | issue list empty or missing |
+| `target_set_too_large` | list exceeds `KAOLA_BUNDLE_MAX_ISSUES` (default 4) |
+| `target_set_not_adaptive` | `workflow_path` is not `adaptive` |
+| `target_set_conflicts_active_work` | any member is already claimed |
+| `target_set_has_closed_issue` | any member is already closed |
+| `target_set_red` | classifier returns `red` for any member |
+| `target_set_unavailable` | member state probe failed (online) |
+| `target_set_unverified` | member unverifiable (offline, no local evidence) |
+| `target_set_label_rollback_failed` | partial claim could not be fully rolled back |
+
+On any bundle claim refusal, treat it the same as a single-issue claim refusal:
+surface the typed code and STOP; do not retry with a different issue set.

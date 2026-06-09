@@ -401,6 +401,16 @@ function runOrient(opts) {
   const escalatedMatch = stateContent.match(/^escalated_to_full:\s*(.+)$/m);
   const escalatedToFull = escalatedMatch ? escalatedMatch[1].trim() : null;
 
+  // #328: read bundle identity fields from state (additive; null/[] when absent).
+  const m1 = stateContent.match(/^issue_numbers:\s*(.+)$/m);
+  const issueNumbers = m1 ? m1[1].trim().split(',').map(s => parseInt(s.trim(), 10)).filter(n => Number.isFinite(n) && n > 0) : [];
+  const m2 = stateContent.match(/^bundle_id:\s*(.+)$/m);
+  const bundleId = m2 ? m2[1].trim() : null;
+  const m3 = stateContent.match(/^closure_policy:\s*(.+)$/m);
+  const closurePolicy = m3 ? m3[1].trim() : null;
+  const m4 = stateContent.match(/^issue_number:\s*(\d+)$/m);
+  const primaryIssue = m4 ? parseInt(m4[1], 10) : null;
+
   // Read plan for consent_halt: pending in ## Node Ledger.
   let planContent = '';
   try { planContent = readFile(planPath); } catch (_) {}
@@ -482,6 +492,10 @@ function runOrient(opts) {
       nextAction,
       consentHalt,
       escalatedToFull,
+      bundleId,
+      issueNumbers,
+      closurePolicy,
+      primaryIssue,
       inProgressNode,
       cacheState: inProgressNode ? cacheState : null,
       inProgressNodes,
@@ -529,6 +543,10 @@ function runOrient(opts) {
       nextAction,
       consentHalt,
       escalatedToFull,
+      bundleId,
+      issueNumbers,
+      closurePolicy,
+      primaryIssue,
       inProgressNode,
       cacheState,
       inProgressNodes,
@@ -555,6 +573,10 @@ function runOrient(opts) {
     nextAction,
     consentHalt,
     escalatedToFull,
+    bundleId,
+    issueNumbers,
+    closurePolicy,
+    primaryIssue,
     inProgressNode,
     cacheState: inProgressNode ? cacheState : null,
     inProgressNodes,

@@ -17,6 +17,7 @@ const closureAuditScript = path.join(repoRoot, 'scripts', 'kaola-workflow-closur
 const planValidatorScript = path.join(repoRoot, 'scripts', 'kaola-workflow-plan-validator.js'); // issue #227
 const nextActionScript = path.join(repoRoot, 'scripts', 'kaola-workflow-next-action.js'); // issue #267
 const handoffScript = path.join(repoRoot, 'scripts', 'kaola-workflow-adaptive-handoff.js'); // issue #255
+const adaptiveNodeScript = path.join(repoRoot, 'scripts', 'kaola-workflow-adaptive-node.js'); // issue #272 / #328
 const hookScript = path.join(repoRoot, 'hooks', 'kaola-workflow-pre-commit.sh');
 const phantomAdvisorHook = path.join(repoRoot, 'hooks', 'kaola-workflow-phantom-advisor.sh');
 
@@ -2805,6 +2806,42 @@ function writeGhShimForStartup(binDir) {
     "else if (a.includes('api')) { process.stdout.write('[\\n'); }",
     "else { process.stdout.write('\\n'); }"
   ]);
+}
+
+// #328: Write a mock gh.js that logs label/comment events and returns issues as open or closed.
+// Used by bundle-lane E2E tests in the walkthrough (same pattern as test-bundle-claim.js).
+// opts: { logFile, openIssues: number[], closedIssues: number[] }
+function writeBundleGhMockScript(binDir, opts) {
+  const logFile = opts && opts.logFile ? JSON.stringify(opts.logFile) : 'null';
+  const openIssues = opts && opts.openIssues ? JSON.stringify(opts.openIssues) : '[]';
+  const closedIssues = opts && opts.closedIssues ? JSON.stringify(opts.closedIssues) : '[]';
+  fs.mkdirSync(binDir, { recursive: true });
+  const script = [
+    "'use strict';",
+    'const fs = require("fs");',
+    'const argv = process.argv.slice(2);',
+    'const a = argv.join(" ");',
+    'const logFile = ' + logFile + ';',
+    'const openIssues = new Set(' + openIssues + '.map(String));',
+    'const closedIssues = new Set(' + closedIssues + '.map(String));',
+    'function log(msg) { if (!logFile) return; try { fs.appendFileSync(logFile, msg + "\\n"); } catch(_) {} }',
+    'if (a.includes("repo view")) { process.stdout.write(JSON.stringify({owner:{login:"test"},name:"repo"}) + "\\n"); process.exit(0); }',
+    'const viewM = a.match(/issue view (\\d+)/);',
+    'if (viewM) {',
+    '  const n = viewM[1];',
+    '  const state = closedIssues.has(n) ? "closed" : "open";',
+    '  process.stdout.write(JSON.stringify({number:parseInt(n),state,title:"issue "+n,body:"",labels:[]}) + "\\n");',
+    '  process.exit(0);',
+    '}',
+    'if (a.includes("issue edit") && a.includes("--add-label")) { const m = a.match(/issue edit (\\d+)/); log("label-added:" + (m ? m[1] : "?")); process.exit(0); }',
+    'if (a.includes("issue edit") && a.includes("--remove-label")) { const m = a.match(/issue edit (\\d+)/); log("label-removed:" + (m ? m[1] : "?")); process.exit(0); }',
+    'if (a.includes("issue comment")) { const m = a.match(/issue comment (\\d+)/); log("comment:" + (m ? m[1] : "?")); process.exit(0); }',
+    'if (a.includes("label create")) { process.exit(0); }',
+    'if (a.includes("api") && a.includes("comments")) { process.stdout.write("[]\\n"); process.exit(0); }',
+    'if (a.includes("api") && a.includes("DELETE")) { process.exit(0); }',
+    'process.stdout.write("\\n"); process.exit(0);',
+  ].join('\n');
+  fs.writeFileSync(path.join(binDir, 'gh.js'), script);
 }
 
 function initGitRepo(tmp) {
@@ -9302,6 +9339,13 @@ async function main() {
     testFinalizeIncompleteNegativeControlAlreadyDone();
     testFinalizeIncompleteNegativeControlRepoDirty();
     testFinalizeIncompleteWorktreeReentryFix();
+    // issue #328 AC#14 — bundle-lane E2E integration tests
+    testBundleClaimCreatesOneFolder();
+    testBundleRefusalLeavesNoFolder();
+    testBundleDuplicateIssueBlocking();
+    testBundleAdaptiveResumeSurfacesBundleIdentity();
+    testBundleFinalizeRoadmapCleanup();
+    testBundleSingleIssueStateHasNoBundleFields();
     console.log('Workflow walkthrough simulation passed');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -9682,6 +9726,406 @@ function testFinalizeIncompleteWorktreeReentryFix() {
     } catch (_) {}
     fs.rmSync(tmp, { recursive: true, force: true });
   }
+}
+
+// ── #328 AC#14: bundle-lane E2E integration tests ─────────────────────────────
+//
+// Six scenarios drive the real claim/finalize/resume scripts end-to-end and guard
+// the wired-together behavior across claimExplicitBundle → claimBundle → writeState
+// → archiveProjectDir → cmdFinalize → runOrient.
+//
+// Strategy:
+//   Happy-path bundle claim and finalize use KAOLA_GH_MOCK_SCRIPT (online mode, same
+//   pattern as test-bundle-claim.js) so the classifier returns a definitive verdict
+//   (not target_unverified) and label calls are interceptable.
+//
+//   Refusal / conflict / AC#1 scenarios are offline-safe: they rely on planted
+//   active-folder state or over-cap arguments — both are pre-mutation validations
+//   that never call gh.
+//
+// Isolation: every test gets its OWN mkdtempSync root + try/finally cleanup.
+// The shared `tmp` used by testClaimStatusRelease/testFinalize is never touched.
+
+// #328 scenario 1: explicit bundle claim creates exactly ONE active folder and the state
+// file has the three additive bundle fields (issue_numbers, bundle_id, closure_policy).
+// AC#2 + AC#3 E2E guard.
+function testBundleClaimCreatesOneFolder() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-328-claim-')));
+  const binDir = path.join(tmp, 'bin');
+  const logFile = path.join(tmp, 'gh-calls.log');
+  try {
+    initGitRepo(tmp);
+    plantRoadmapIssue(tmp, 42, '');
+    plantRoadmapIssue(tmp, 47, '');
+    plantRoadmapIssue(tmp, 53, '');
+    writeBundleGhMockScript(binDir, { logFile, openIssues: [42, 47, 53] });
+
+    const result = spawnSync(process.execPath, [claimScript,
+      'startup', '--target-issues', '42,47,53', '--workflow-path', 'adaptive'
+    ], {
+      cwd: tmp,
+      encoding: 'utf8',
+      timeout: 60000,
+      env: Object.assign({}, process.env, {
+        KAOLA_WORKFLOW_OFFLINE: '0',
+        KAOLA_WORKTREE_NATIVE: '1',
+        KAOLA_ENABLE_ADAPTIVE: '1',
+        KAOLA_GH_MOCK_SCRIPT: path.join(binDir, 'gh.js'),
+      })
+    });
+
+    assert(result.status === 0,
+      '#328 claim: exit 0 expected, got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    const lines = (result.stdout || '').trim().split('\n').filter(l => l.trim().startsWith('{'));
+    assert(lines.length > 0, '#328 claim: expected JSON output line');
+    const out = JSON.parse(lines[lines.length - 1]);
+
+    assert(out.claim === 'acquired', '#328 claim: claim must be acquired, got ' + JSON.stringify(out.claim));
+    assert(out.bundle_id === 'bundle-42-47-53',
+      '#328 claim: bundle_id must be bundle-42-47-53, got ' + JSON.stringify(out.bundle_id));
+    assert(Array.isArray(out.issue_numbers) && out.issue_numbers.length === 3,
+      '#328 claim: issue_numbers must be [42,47,53], got ' + JSON.stringify(out.issue_numbers));
+
+    // ONE active folder
+    const kwDir = path.join(tmp, 'kaola-workflow');
+    const projects = fs.readdirSync(kwDir).filter(n => !n.startsWith('.') && n !== 'archive' && n !== 'ROADMAP.md');
+    assert(projects.length === 1 && projects[0] === 'bundle-42-47-53',
+      '#328 claim: exactly one active folder (bundle-42-47-53) expected, got ' + projects.join(','));
+
+    // State file has all three additive fields
+    const state = read(path.join(kwDir, 'bundle-42-47-53', 'workflow-state.md'));
+    assert(/^issue_number:\s*42\s*$/m.test(state),
+      '#328 claim: state must have issue_number: 42 (primary)');
+    assert(/^issue_numbers:\s*42,47,53\s*$/m.test(state),
+      '#328 claim: state must have issue_numbers: 42,47,53');
+    assert(/^bundle_id:\s*bundle-42-47-53\s*$/m.test(state),
+      '#328 claim: state must have bundle_id: bundle-42-47-53');
+    assert(/^closure_policy:\s*all_or_nothing\s*$/m.test(state),
+      '#328 claim: state must have closure_policy: all_or_nothing');
+    assert(!/^closure_policy:/m.test(state.replace(/^closure_policy:\s*all_or_nothing\s*$/m, '')),
+      '#328 claim: closure_policy must appear exactly once');
+    assert(/^branch:\s*workflow\/bundle-42-47-53\s*$/m.test(state),
+      '#328 claim: state must have branch: workflow/bundle-42-47-53');
+
+    // Labels were applied for all three members
+    const calls = fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8').split('\n').filter(Boolean) : [];
+    const added = calls.filter(c => c.startsWith('label-added:'));
+    assert(added.some(c => c === 'label-added:42'), '#328 claim: label added for member 42');
+    assert(added.some(c => c === 'label-added:47'), '#328 claim: label added for member 47');
+    assert(added.some(c => c === 'label-added:53'), '#328 claim: label added for member 53');
+
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testBundleClaimCreatesOneFolder: PASSED');
+}
+
+// #328 scenario 2: a refused bundle claim (closed member #47) leaves NO active folder
+// and NO lingering workflow:in-progress label.  Uses KAOLA_GH_MOCK_SCRIPT (online mode)
+// so the closed-member detection path is exercised and label calls are interceptable.
+// The refusal is pre-mutation (steps 1-4 validate before any mkdir/writeState/addLabel),
+// so the gh log must have zero label-added entries.  AC#5 + AC#6 guard.
+function testBundleRefusalLeavesNoFolder() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-328-refuse-')));
+  const binDir = path.join(tmp, 'bin');
+  const logFile = path.join(tmp, 'gh-calls.log');
+  try {
+    initGitRepo(tmp);
+    plantRoadmapIssue(tmp, 42, '');
+    plantRoadmapIssue(tmp, 47, '');
+    plantRoadmapIssue(tmp, 53, '');
+    // Member #47 is closed; members 42 and 53 are open
+    writeBundleGhMockScript(binDir, { logFile, openIssues: [42, 53], closedIssues: [47] });
+
+    const result = spawnSync(process.execPath, [claimScript,
+      'startup', '--target-issues', '42,47,53', '--workflow-path', 'adaptive'
+    ], {
+      cwd: tmp,
+      encoding: 'utf8',
+      timeout: 60000,
+      env: Object.assign({}, process.env, {
+        KAOLA_WORKFLOW_OFFLINE: '0',
+        KAOLA_WORKTREE_NATIVE: '1',
+        KAOLA_ENABLE_ADAPTIVE: '1',
+        KAOLA_GH_MOCK_SCRIPT: path.join(binDir, 'gh.js'),
+      })
+    });
+
+    assert(result.status === 1,
+      '#328 refuse: exit 1 expected for closed member, got ' + result.status + '\nstdout: ' + result.stdout);
+    const lines = (result.stdout || '').trim().split('\n').filter(l => l.trim().startsWith('{'));
+    assert(lines.length > 0, '#328 refuse: expected JSON output');
+    const out = JSON.parse(lines[lines.length - 1]);
+
+    assert(out.status === 'target_set_has_closed_issue',
+      '#328 refuse: status must be target_set_has_closed_issue, got ' + JSON.stringify(out.status));
+    assert(out.issue === 47,
+      '#328 refuse: refused on issue 47, got ' + JSON.stringify(out.issue));
+
+    // No bundle folder created (pre-mutation refusal)
+    assert(!fs.existsSync(path.join(tmp, 'kaola-workflow', 'bundle-42-47-53')),
+      '#328 refuse: no bundle-42-47-53 folder must exist after refusal');
+
+    // No labels were applied (refusal happened before addBundleLabel step)
+    const calls = fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8').split('\n').filter(Boolean) : [];
+    const labelsAdded = calls.filter(c => c.startsWith('label-added:'));
+    assert(labelsAdded.length === 0,
+      '#328 refuse: no labels must be applied after pre-mutation refusal, got: ' + labelsAdded.join(', '));
+
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testBundleRefusalLeavesNoFolder: PASSED');
+}
+
+// #328 scenario 3: a live bundle [42,47,53] blocks (a) a direct single-issue claim of member 47
+// and (b) an overlapping bundle claim [47,77].  AC#8 duplicate-block guard.
+function testBundleDuplicateIssueBlocking() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-328-dup-')));
+  try {
+    // Plant roadmap entries
+    plantRoadmapIssue(tmp, 47, '');
+    plantRoadmapIssue(tmp, 77, '');
+    // Seed a live bundle project for [42,47,53]
+    writeProject(tmp, 'bundle-42-47-53', {
+      'workflow-state.md': [
+        'name: bundle-42-47-53', 'status: active', 'phase: adaptive',
+        'issue_number: 42', 'issue_numbers: 42,47,53',
+        'bundle_id: bundle-42-47-53', 'closure_policy: all_or_nothing',
+        'branch: workflow/bundle-42-47-53', 'sink: merge', ''
+      ].join('\n')
+    });
+
+    // (a) Direct claim of member #47 must be blocked: activeByIssue(47) finds the live bundle
+    // and returns verdict:'owned' with claim:'owned' (exit 0 / reuse path), not a fresh acquire.
+    // The bundle is NOT re-provisioned; the caller gets back the existing bundle project.
+    const r1 = runNode(claimScript,
+      ['startup', '--target-issue', '47'],
+      tmp,
+      { KAOLA_ENABLE_ADAPTIVE: '1' });
+    const o1 = JSON.parse(r1.stdout);
+    // Two acceptable outcomes:
+    //   (i)  claim:'owned' — bundle-aware reuse (exit 0): member 47 is in a live bundle
+    //   (ii) claim:'none'  — typed refusal (exit 1): classifier returns blocked
+    // In either case the live bundle project must not change and no NEW folder is created.
+    assert(o1.claim === 'owned' || o1.claim === 'none',
+      '#328 dup-block (a): claim must be owned or none for live bundle member 47, got ' + JSON.stringify(o1.claim));
+    // Confirm the return refers to the live bundle project, not a new one
+    if (o1.claim === 'owned') {
+      assert(o1.project === 'bundle-42-47-53',
+        '#328 dup-block (a): owned claim must resolve to bundle-42-47-53, got ' + JSON.stringify(o1.project));
+    }
+
+    // (b) Overlapping bundle claim [47,77] must also be blocked
+    const r2 = runNode(claimScript,
+      ['startup', '--target-issues', '47,77', '--workflow-path', 'adaptive'],
+      tmp,
+      { KAOLA_ENABLE_ADAPTIVE: '1' });
+    assert(r2.status === 1,
+      '#328 dup-block (b): overlapping bundle [47,77] must exit 1, got ' + r2.status + '\nstdout: ' + r2.stdout);
+    const o2 = JSON.parse(r2.stdout);
+    assert(o2.status === 'target_set_conflicts_active_work',
+      '#328 dup-block (b): status must be target_set_conflicts_active_work, got ' + JSON.stringify(o2.status));
+
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testBundleDuplicateIssueBlocking: PASSED');
+}
+
+// #328 scenario 4: adaptive orient on a bundle project surfaces bundleId, issueNumbers,
+// primaryIssue, closurePolicy in the JSON output — so an orchestrator can identify bundle
+// identity at resume time without re-reading workflow-state.md manually.
+// AC#14 (orient surface) guard.
+function testBundleAdaptiveResumeSurfacesBundleIdentity() {
+  const tmp = adaptiveTmp('328-orient');
+  try {
+    const project = 'bundle-42-47-53';
+    // Write a bundle state file
+    writeProject(tmp, project, {
+      'workflow-state.md': [
+        '# Kaola-Workflow State', '',
+        '## Project', 'name: ' + project, 'status: active', '',
+        '## Current Position', 'phase: adaptive', 'workflow_path: adaptive',
+        'step: start', 'next_command: /kaola-workflow-plan-run ' + project, '',
+        '## Pending Gates', '- workflow-plan', '',
+        '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
+        '## Sink', 'branch: workflow/' + project,
+        'issue_number: 42',
+        'issue_numbers: 42,47,53',
+        'bundle_id: ' + project,
+        'closure_policy: all_or_nothing',
+        'sink: merge', ''
+      ].join('\n')
+    });
+
+    // Plant and freeze an adaptive plan so orient can run resume-check
+    const planText = [
+      '# Workflow Plan — ' + project, '',
+      '## Meta', 'labels: enhancement', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '|---|---|---|---|---|---|',
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| done | finalize | explore | — | 1 | sequence |',
+      ''
+    ].join('\n');
+    plantFrozenPlan(tmp, project, planText);
+
+    // Call adaptive-node orient (--json required by the CLI)
+    const result = runNode(adaptiveNodeScript, ['orient', '--project', project, '--json'], tmp);
+    assert(result.status === 0,
+      '#328 orient: exit 0 expected, got ' + result.status + '\nstderr: ' + result.stderr);
+    const out = JSON.parse(result.stdout);
+
+    assert(out.bundleId === 'bundle-42-47-53',
+      '#328 orient: bundleId must be bundle-42-47-53, got ' + JSON.stringify(out.bundleId));
+    assert(Array.isArray(out.issueNumbers) && out.issueNumbers.length === 3,
+      '#328 orient: issueNumbers must be [42,47,53], got ' + JSON.stringify(out.issueNumbers));
+    assert(out.issueNumbers[0] === 42 && out.issueNumbers[1] === 47 && out.issueNumbers[2] === 53,
+      '#328 orient: issueNumbers values must be 42,47,53, got ' + JSON.stringify(out.issueNumbers));
+    assert(out.primaryIssue === 42,
+      '#328 orient: primaryIssue must be 42, got ' + JSON.stringify(out.primaryIssue));
+    assert(out.closurePolicy === 'all_or_nothing',
+      '#328 orient: closurePolicy must be all_or_nothing, got ' + JSON.stringify(out.closurePolicy));
+
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testBundleAdaptiveResumeSurfacesBundleIdentity: PASSED');
+}
+
+// #328 scenario 5: finalize on a bundle project removes ALL member .roadmap/issue-N.md files,
+// regenerates ROADMAP.md once, archives exactly ONE folder, and the closure receipt has
+// closed_issues + failed_issue_closures + roadmap_sources_removed.
+// AC#11 + AC#12 + AC#13 E2E guard.
+function testBundleFinalizeRoadmapCleanup() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-328-finalize-')));
+  const binDir = path.join(tmp, 'bin');
+  const project = 'bundle-42-47-53';
+  try {
+    initGitRepo(tmp);
+    // Bundle state file with all three members
+    const stateLines = [
+      '# Kaola-Workflow State', '',
+      '## Project', 'name: ' + project, 'status: active', '',
+      '## Current Position', 'phase: adaptive', 'workflow_path: adaptive',
+      'step: start', 'next_command: /kaola-workflow-plan-run ' + project, '',
+      '## Pending Gates', '- none', '',
+      '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
+      '## Last Updated', new Date().toISOString(), '',
+      '## Sink', 'branch: workflow/' + project,
+      'issue_number: 42',
+      'issue_numbers: 42,47,53',
+      'bundle_id: ' + project,
+      'closure_policy: all_or_nothing',
+      'sink: merge', 'run_posture: in-place', ''
+    ].join('\n');
+    writeProject(tmp, project, { 'workflow-state.md': stateLines });
+
+    // Plant roadmap sources for all three members
+    plantRoadmapIssue(tmp, 42, '');
+    plantRoadmapIssue(tmp, 47, '');
+    plantRoadmapIssue(tmp, 53, '');
+
+    // Write a ROADMAP.md mirror that references all three (so regenerate can clean it)
+    const roadmapContent = [
+      '# Kaola-Workflow Roadmap', '',
+      '| Issue | Title | Status |',
+      '|-------|-------|--------|',
+      '| #42 | Test 42 | active |',
+      '| #47 | Test 47 | active |',
+      '| #53 | Test 53 | active |',
+      ''
+    ].join('\n');
+    fs.writeFileSync(path.join(tmp, 'kaola-workflow', 'ROADMAP.md'), roadmapContent);
+
+    // Mock gh: all three members are closed
+    writeBundleGhMockScript(binDir, { closedIssues: [42, 47, 53] });
+
+    const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', project], {
+      cwd: tmp,
+      encoding: 'utf8',
+      timeout: 60000,
+      env: Object.assign({}, process.env, {
+        KAOLA_WORKFLOW_OFFLINE: '0',
+        KAOLA_WORKTREE_NATIVE: '0',
+        KAOLA_GH_MOCK_SCRIPT: path.join(binDir, 'gh.js'),
+      })
+    });
+
+    assert(result.status === 0,
+      '#328 finalize: exit 0 expected, got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+
+    // Parse last JSON object from stdout
+    const lines = (result.stdout || '').trim().split('\n').filter(l => l.trim().startsWith('{'));
+    assert(lines.length > 0, '#328 finalize: expected JSON output');
+    const out = JSON.parse(lines[lines.length - 1]);
+
+    assert(out.status === 'closed', '#328 finalize: status must be closed, got ' + JSON.stringify(out.status));
+    assert(out.closure_receipt && out.closure_receipt.roadmap_regenerated === 'regenerated',
+      '#328 finalize: receipt.roadmap_regenerated must be "regenerated", got ' +
+      JSON.stringify(out.closure_receipt && out.closure_receipt.roadmap_regenerated));
+
+    // All three .roadmap sources were removed
+    for (const n of [42, 47, 53]) {
+      assert(!fs.existsSync(path.join(tmp, 'kaola-workflow', '.roadmap', 'issue-' + n + '.md')),
+        '#328 finalize: issue-' + n + '.md roadmap source must be removed after finalize');
+    }
+
+    // ONE archive folder created; live bundle dir is gone
+    const archiveDest = out.dest;
+    assert(archiveDest && fs.existsSync(archiveDest),
+      '#328 finalize: archive folder must exist at dest');
+    assert(!fs.existsSync(path.join(tmp, 'kaola-workflow', project)),
+      '#328 finalize: live project folder must be gone after finalize');
+
+    // Bundle fields on closure_receipt
+    const receipt = out.closure_receipt;
+    assert(receipt != null, '#328 finalize: closure_receipt must be present');
+    if (receipt) {
+      assert(Array.isArray(receipt.roadmap_sources_removed),
+        '#328 finalize: receipt must have roadmap_sources_removed array');
+      if (Array.isArray(receipt.roadmap_sources_removed)) {
+        assert(receipt.roadmap_sources_removed.length === 3,
+          '#328 finalize: roadmap_sources_removed must have 3 entries, got ' + receipt.roadmap_sources_removed.length);
+        for (const n of [42, 47, 53]) {
+          assert(receipt.roadmap_sources_removed.includes('issue-' + n + '.md'),
+            '#328 finalize: roadmap_sources_removed must include issue-' + n + '.md');
+        }
+      }
+      assert(Array.isArray(receipt.closed_issues),
+        '#328 finalize: receipt must have closed_issues array');
+      assert(Array.isArray(receipt.failed_issue_closures),
+        '#328 finalize: receipt must have failed_issue_closures array');
+      assert(receipt.failed_issue_closures.length === 0,
+        '#328 finalize: failed_issue_closures must be empty when all probes succeed');
+      assert(Array.isArray(receipt.issue_numbers) && receipt.issue_numbers.length === 3,
+        '#328 finalize: receipt must have issue_numbers with 3 members');
+    }
+
+    // Closure invariants pass
+    const inv = out.closure_invariants;
+    assert(inv && inv.ok === true,
+      '#328 finalize: closure_invariants must pass; violations: ' + JSON.stringify(inv && inv.violations));
+
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testBundleFinalizeRoadmapCleanup: PASSED');
+}
+
+// #328 AC#1 guard: a single-issue claim must NOT write issue_numbers, bundle_id, or
+// closure_policy lines in workflow-state.md — the bundle fields are strictly additive and
+// must not contaminate the single-issue path.
+function testBundleSingleIssueStateHasNoBundleFields() {
+  const tmp = adaptiveTmp('328-ac1');
+  try {
+    plantRoadmapIssue(tmp, 601, '');
+    const out = JSON.parse(runNode(claimScript,
+      ['startup', '--target-issue', '601'],
+      tmp).stdout);
+    assert(out.claim === 'acquired',
+      '#328 AC#1: single-issue startup must acquire, got ' + JSON.stringify(out.claim));
+    const state = read(statePath(tmp, 'issue-601'));
+    assert(!/^issue_numbers:/m.test(state),
+      '#328 AC#1: single-issue state must NOT contain issue_numbers line');
+    assert(!/^bundle_id:/m.test(state),
+      '#328 AC#1: single-issue state must NOT contain bundle_id line');
+    assert(!/^closure_policy:/m.test(state),
+      '#328 AC#1: single-issue state must NOT contain closure_policy line');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testBundleSingleIssueStateHasNoBundleFields: PASSED');
 }
 
 main().catch(err => {

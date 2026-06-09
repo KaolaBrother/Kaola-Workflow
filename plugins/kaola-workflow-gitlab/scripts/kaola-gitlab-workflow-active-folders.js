@@ -68,11 +68,19 @@ function parseStateFile(stateFile) {
   const issueIid = firstPositiveInteger(field(content, 'issue_iid'), field(content, 'issue_number'));
   const phase = firstPositiveInteger(field(content, 'phase'));
   const projectId = firstPositiveInteger(field(content, 'project_id'));
+  // #328: parse issue_numbers (bundle members) — additive; absent → empty array (AC#1)
+  const issueNumbersRaw = field(content, 'issue_numbers');
+  const issue_numbers = issueNumbersRaw
+    ? issueNumbersRaw.split(',').map(s => parseInt(s.trim(), 10)).filter(n => Number.isFinite(n) && n > 0)
+    : [];
   return {
     content,
     status: field(content, 'status') || 'unknown',
     issue_iid: issueIid,
     issue_number: issueIid,
+    issue_numbers,
+    bundle_id: field(content, 'bundle_id'),
+    closure_policy: field(content, 'closure_policy'),
     phase,
     next_command: field(content, 'next_command'),
     branch: field(content, 'branch'),
@@ -118,6 +126,9 @@ function readActiveFolders(root, options) {
       status: state.status,
       issue_iid: state.issue_iid,
       issue_number: state.issue_number,
+      issue_numbers: state.issue_numbers,
+      bundle_id: state.bundle_id,
+      closure_policy: state.closure_policy,
       phase: state.phase,
       next_command: state.next_command,
       branch: state.branch,

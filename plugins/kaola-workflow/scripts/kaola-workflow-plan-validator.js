@@ -51,7 +51,7 @@ const TERMINAL_ROLE = 'finalize';
 const CANONICAL_ROLES = [
   'code-explorer', 'knowledge-lookup', 'planner', 'code-architect', 'tdd-guide',
   'build-error-resolver', 'code-reviewer', 'security-reviewer', 'doc-updater',
-  'adversarial-verifier', 'implementer',
+  'adversarial-verifier', 'implementer', 'issue-scout',
 ];
 // Roles that may legitimately declare a repo write set (by TOOL MANIFEST; note
 // security-reviewer is Write by manifest, review-only only by governance posture).

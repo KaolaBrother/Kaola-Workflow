@@ -279,6 +279,41 @@ Gitea edition (`plugins/kaola-workflow-gitea/`) now includes a complete Finaliza
 - **Squash-merge gating**: `checkRepoSquashEnabled(project, opts)` validates repository configuration before attempting squash merge via `mergePullRequest(project, prNumber, {squash: true})`.
 - **Test coverage**: 18 offline integration tests in `test-gitea-sinks.js` covering PR reuse, creation, state updates, and edge cases.
 
+## Multi-Issue Bundle Execution Shape (issue #328)
+
+The bundle lane is an additive capability on the adaptive path. The overall execution shape is:
+
+```
+issue-set selection (explicit --target-issues A,B,C  OR  issue-scout recommendation)
+    ↓
+all-or-nothing multi-claim (claimExplicitBundle validates every target before any mutation)
+    ↓
+one worktree at .kw/worktrees/bundle-A-B-C/
+one branch  workflow/bundle-A-B-C  (forge editions prefix the edition, e.g. workflow/gitlab-bundle-A-B-C)
+one active folder  kaola-workflow/bundle-A-B-C/
+    ↓
+one adaptive workflow-plan.md  (authored by workflow-planner; covers all N issues as a unit)
+    ↓
+one plan-run  (the existing adaptive executor; no separate bundle scheduler)
+    ↓
+one finalization  →  close N issues  →  remove N .roadmap/issue-N.md files
+                  →  regenerate ROADMAP.md once
+                  →  archive single bundle folder
+```
+
+**Single-issue path unchanged.** Passing `--target-issue N` alone produces byte-identical behavior to prior releases; no bundle fields are written to `workflow-state.md`.
+
+**No separate scheduler.** The bundle shares the existing `kaola-workflow-plan-run` executor and `kaola-workflow-adaptive-node.js` per-node lifecycle. The plan itself covers the combined scope of all N issues as a single adaptive DAG.
+
+**`issue-scout` role — read-only only.** The `issue-scout` agent reads forge issues, the local roadmap, and active folders to recommend a same-scope issue set for bundling. It returns a structured recommendation to the orchestrator. Hard constraints:
+
+- MUST NOT claim issues.
+- MUST NOT write files, author plans, or modify durable state.
+- MUST NOT close issues or dispatch other agents.
+- The orchestrator decides whether to accept the recommendation and proceed as a bundle.
+
+`issue-scout` is not a write role, not an implement role, and not a gate node. It is advisory input only.
+
 ## Model Resolution (Install-Time, Profile-Aware)
 
 **Model resolution for adaptive subagent nodes** is install-time and profile-aware. `install.sh` writes a manifest `~/.claude/agents/.kaola-agent-models.json` (path honoring `KAOLA_AGENT_DIR`) that maps each agent name to its install-selected model string (e.g. `{ "planner": "claude-opus-4-5", "code-writer": "claude-sonnet-4-5" }`). `uninstall.sh` removes the manifest.

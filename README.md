@@ -112,6 +112,7 @@ for the pinned upstream commit, attribution, and refresh procedure.
 | `adversarial-verifier` | Adaptive path — read-only skeptic (never a gate) | Sonnet | |
 | `contractor` | All paths — mechanical bookkeeper (runs scripts + writes durable state; never a gate) | Sonnet | no |
 | `workflow-planner` | Adaptive path — front-end (claims + authors the `## Nodes` DAG; runs the handoff which freezes mechanically) | Opus | no |
+| `issue-scout` | Bundle lane — read-only selection agent (recommends same-scope issue sets; never claims, writes, or dispatches) | Sonnet | |
 
 The **Model** column is the `common` profile. The **default** install profile is
 `higher`, so the three agents marked _yes_ (`code-architect`, `code-reviewer`,
@@ -146,6 +147,8 @@ with no approval gate. It never dispatches a subagent (a subagent cannot dispatc
 returns control to main), and stays Opus regardless of profile (there is no
 `profiles/higher/workflow-planner.md`). It is DISTINCT from the vendored read-only `planner`, which
 stays a read-only in-plan node role.
+
+`issue-scout` is locally authored for the [bundle lane](#multi-issue-bundle-lane-adaptive-only) (issue #328): a read-only selection agent the orchestrator may dispatch to recommend a same-scope issue set for a bundle claim. It reads forge issues, the local roadmap, and active folders to surface candidate sets, then returns a structured recommendation. It MUST NOT claim issues, write files, author plans, close issues, or dispatch other agents. Its output is advisory input — the orchestrator decides whether to proceed as a bundle.
 
 When agents are installed, their frontmatter `model:` field is rewritten to
 `inherit`. Command files render each agent's concrete assigned model (e.g.,
@@ -675,6 +678,8 @@ The detailed durable-state map lives in `docs/workflow-state-contract.md`. Keep 
 | `KAOLA_PATH` | (unset) | Set to `fast` or `full` to force a specific path explicitly. Under an ON adaptive switch the adaptive path is the default route; under an OFF switch the default is the full six-phase flow. Set to `adaptive` to force the adaptive path (no-op when already the default; typed refusal when the switch is off) |
 | `KAOLA_ENABLE_ADAPTIVE` | (unset) | Per-session override of the `enable_adaptive` install switch (`1`/`true`/`yes` on, `0`/`false`/`no` off). Precedence: env > `~/.config/kaola-workflow/config.json` > OFF |
 | `KAOLA_FANOUT_CAP` | `4` | Runtime concurrency limit: the executor runs at most this many adaptive fan-out members at once and drains a wider fan-out by rolling bounded dispatch (`top-up`). NOT a planning validity cap — a logical fan-out MAY be wider |
+| `KAOLA_TARGET_ISSUES` | (unset) | Comma-separated list of issue numbers for an explicit bundle claim, e.g. `KAOLA_TARGET_ISSUES=42,47,53`. Equivalent to `--target-issues 42,47,53`. Must not be set together with `KAOLA_TARGET_ISSUE` (sets off the `target_ambiguity` refusal). Adaptive path only |
+| `KAOLA_BUNDLE_MAX_ISSUES` | `4` | Maximum number of issues allowed in a single bundle. Bundles larger than this cap are refused with `target_set_too_large`. Applies to both explicit (`--target-issues`) and scout-recommended bundles |
 
 **Active-folder subcommands:**
 
@@ -905,6 +910,45 @@ make the next command unsafe.
 
 Hook installation is covered in the [Hook policy](#hook-policy) section above —
 do not hand-merge entries into `~/.claude/settings.json`.
+
+## Multi-issue bundle lane (adaptive-only)
+
+Issue #328 adds an additive bundle lane that lets N same-scope issues share one worktree, one branch, one `workflow-plan.md`, and one finalization that closes all N issues together. The single-issue path is byte-unchanged.
+
+### Three entry modes
+
+1. **Single issue (unchanged)** — `--target-issue N` or `KAOLA_TARGET_ISSUE=N`. No bundle fields. Behavior identical to prior releases.
+
+2. **Explicit bundle** — pass `--target-issues A,B,C` (comma-separated, sorted+deduped) or set `KAOLA_TARGET_ISSUES=A,B,C`. Adaptive path only. The claim script validates all targets before any mutation (all-or-nothing: if any target is invalid the whole bundle is refused). On success, one `kaola-workflow/bundle-A-B-C/` folder is created and one `workflow/bundle-A-B-C` branch is provisioned (forge editions prefix the edition name, e.g. `workflow/gitlab-bundle-A-B-C`).
+
+3. **Auto-bundle via `issue-scout`** — the orchestrator may dispatch the read-only `issue-scout` agent to recommend a same-scope issue set. The scout returns a structured recommendation; the orchestrator decides whether to proceed as a bundle. The scout MUST NOT claim, write files, author plans, or dispatch agents.
+
+Setting both `--target-issue` and `--target-issues` (or both env-var equivalents) is refused with a `target_ambiguity` typed error before any state is written.
+
+### Bundle claim semantics
+
+`claimExplicitBundle` validates every issue in the set before mutating anything. If any single target fails validation the entire bundle is refused and no active folder is created. Typed refusal codes:
+
+| Code | Meaning |
+|------|---------|
+| `target_ambiguity` | Both scalar and multi-target provided simultaneously |
+| `target_set_empty` | Resolved issue list is empty after dedup |
+| `target_set_too_large` | Bundle exceeds `KAOLA_BUNDLE_MAX_ISSUES` (default 4) |
+| `target_set_not_adaptive` | Bundle requested but `workflow_path` is not adaptive |
+| `target_set_conflicts_active_work` | One or more targets overlap an already-claimed active folder |
+| `target_set_has_closed_issue` | One or more targets are already closed on the forge |
+| `target_set_red` | One or more targets are red (conflict) per the classifier |
+| `target_set_unavailable` | Remote validation failed (forge unreachable) |
+| `target_set_unverified` | Offline with no local evidence for one or more targets |
+| `target_set_label_rollback_failed` | Claim succeeded but in-progress-label rollback on partial failure itself failed |
+
+### All-or-nothing finalization
+
+`cmdFinalize` on a bundle project closes every issue in `issue_numbers`, removes every `.roadmap/issue-N.md` source file, regenerates `ROADMAP.md` once, and archives the single bundle folder. Partial closure is not a success state — if one issue close fails the attempt is retried or surfaced as a failure.
+
+### Adaptive path only
+
+The bundle lane requires `workflow_path: adaptive`. Attempting a bundle claim on any other path returns `target_set_not_adaptive`.
 
 ## Parallel active work
 

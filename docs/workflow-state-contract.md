@@ -92,6 +92,34 @@ ledgers before crossing a phase boundary. Codex role rows must match the policy:
 non-Codex-role workflow gates such as advisor review, final validation,
 documentation docking, roadmap refresh, archive, and final commit.
 
+## Bundle Project State Fields (issue #328)
+
+On a bundle project, three additive fields are written to `workflow-state.md` alongside the existing `issue_number` field. **Single-issue projects retain only `issue_number` — these fields are absent on non-bundle projects (AC#1 invariant).**
+
+```
+issue_number: 42
+issue_numbers: 42,47,53
+bundle_id: bundle-42-47-53
+closure_policy: all_or_nothing
+```
+
+- **`issue_number`** — Primary issue (first in the sorted set). Preserved verbatim for all tooling that reads single-issue state (backward-compatible).
+- **`issue_numbers`** — Full comma-separated sorted set of issue numbers. Presence of this field identifies the project as a bundle project.
+- **`bundle_id`** — Canonical identifier for the bundle: `bundle-<N1>-<N2>-...` (issues in ascending numerical order). Used as the project folder name (`kaola-workflow/bundle-42-47-53/`) and as the branch name stem.
+- **`closure_policy`** — Always `all_or_nothing` for v1 bundle projects. Every issue in the set must be closeable before any issue is closed; partial closure is not a success state.
+
+### Bundle project and branch naming
+
+| Artifact | Naming convention |
+|----------|------------------|
+| Active folder | `kaola-workflow/bundle-42-47-53/` |
+| GitHub branch | `workflow/bundle-42-47-53` |
+| GitLab branch | `workflow/gitlab-bundle-42-47-53` |
+| Gitea branch | `workflow/gitea-bundle-42-47-53` |
+| Worktree path | `.kw/worktrees/bundle-42-47-53/` |
+
+The numbers in the bundle identifier are always in ascending sorted order, matching the order in `issue_numbers`.
+
 ## Adaptive Path Switch (`enable_adaptive`)
 
 The adaptive path (issue #227) is opt-in at install time, gated by a single

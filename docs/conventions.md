@@ -39,6 +39,10 @@ The repo ships four editions (claude / codex / gitlab / gitea), each with its ow
 - **Run the four chains sequentially**, not in parallel — concurrent runs trip the known `testClosureAuditExecuteLabelRemovalTimeoutBreaks` CPU-contention timing flake. The canonical invocation is in `CLAUDE.md` § Running Tests.
 - A claude-only green is **insufficient evidence** for such a diff: surface each chain's exit code, do not infer the other three from `npm test` passing.
 
+## Bundle Lane — Cross-Edition Requirement (issue #328)
+
+The bundle lane (`--target-issues` / `KAOLA_TARGET_ISSUES` / `issue-scout`) spans all four editions. Any change to bundle-related code — `claimExplicitBundle`, `claimBundle`, bundle state fields, bundle branch naming, bundle finalization, or the `issue-scout` agent file — is a **cross-edition diff** and MUST have all four `npm run test:kaola-workflow:{claude,codex,gitlab,gitea}` chains green before Finalization. The cross-edition validation rules from § Testing — Cross-Edition Validation apply without exception.
+
 ## Release
 
 - Before merging a version bump, create the matching local git tag (`git tag kaola-workflow--v<version> <sha>`); `npm test` enforces the tag exists (unless `KAOLA_WORKFLOW_OFFLINE=1`).

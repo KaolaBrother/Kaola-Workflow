@@ -404,7 +404,9 @@ function classifyIssue(issueIid, root) {
 
   const repoRoot = root || active.getRoot();
   const activeFolders = active.readActiveFolders(repoRoot);
-  if (activeFolders.some(folder => folder.issue_iid === issueIid)) {
+  // #328: bundle-member overlap — owned if scalar or bundle member
+  if (activeFolders.some(folder => folder.issue_iid === issueIid) ||
+      activeFolders.some(folder => Array.isArray(folder.issue_numbers) && folder.issue_numbers.includes(issueIid))) {
     return { verdict: 'owned', reasoning: 'active local folder already exists' };
   }
 
@@ -455,7 +457,9 @@ function cmdClassify() {
   const repoRoot = active.getRoot();
   const activeFolders = active.readActiveFolders(repoRoot);
 
-  if (activeFolders.some(function(folder) { return folder.issue_iid === args.issue; })) {
+  // #328: bundle-member overlap — owned if scalar or bundle member
+  if (activeFolders.some(function(folder) { return folder.issue_iid === args.issue; }) ||
+      activeFolders.some(function(folder) { return Array.isArray(folder.issue_numbers) && folder.issue_numbers.includes(args.issue); })) {
     process.stdout.write(JSON.stringify({ verdict: 'owned', reasoning: 'active local folder already exists' }) + '\n');
     return;
   }
