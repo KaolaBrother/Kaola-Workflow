@@ -1987,6 +1987,7 @@ function runInstallProfiles(target) {
   });
   if (result.error) throw result.error;
   assert.ok(result.status === 0, 'install profiles failed: ' + result.stderr);
+  return result;
 }
 
 function countOccurrences(content, pattern) {
@@ -1997,7 +1998,7 @@ function testInstallProfilesFeaturesTableHandling() {
   const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gitea-codex-install-fresh-'));
   const existing = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gitea-codex-install-existing-'));
   try {
-    runInstallProfiles(fresh);
+    const freshResult = runInstallProfiles(fresh);
     const freshConfig = fs.readFileSync(path.join(fresh, '.codex', 'config.toml'), 'utf8');
     assert.ok(freshConfig.includes('[features]'), 'fresh install should include managed [features]');
     assert.ok(freshConfig.includes('multi_agent = true'), 'fresh install should enable multi_agent');
@@ -2007,6 +2008,27 @@ function testInstallProfilesFeaturesTableHandling() {
       13,
       'should install 13 agent TOML files'
     );
+
+    // #284: hooks.json assertions — 4 events, compact command, no token residue, /hooks trust line
+    const freshHooksPath = path.join(fresh, '.codex', 'hooks.json');
+    assert.ok(fs.existsSync(freshHooksPath), 'fresh install should create .codex/hooks.json');
+    const freshHooks = JSON.parse(fs.readFileSync(freshHooksPath, 'utf8'));
+    const requiredEvents = ['SessionStart', 'PreToolUse', 'PostToolUse', 'SubagentStart'];
+    for (const event of requiredEvents) {
+      const entries = freshHooks.hooks[event];
+      assert.ok(Array.isArray(entries) && entries.length > 0, `hooks.json must have entries for ${event}`);
+      const kwEntry = entries.find(e => e.id && e.id.startsWith('kaola-workflow:'));
+      assert.ok(kwEntry, `hooks.json ${event} must contain an entry whose id starts with kaola-workflow:`);
+    }
+    const sessionStartEntry = freshHooks.hooks['SessionStart'].find(e => e.id && e.id.startsWith('kaola-workflow:'));
+    const compactCmd = sessionStartEntry && sessionStartEntry.hooks && sessionStartEntry.hooks[0] && sessionStartEntry.hooks[0].command;
+    assert.ok(compactCmd && compactCmd.includes('kaola-gitea-workflow-codex-compact-resume.js'),
+      'SessionStart compact command must reference kaola-gitea-workflow-codex-compact-resume.js, got: ' + compactCmd);
+    const freshHooksText = fs.readFileSync(freshHooksPath, 'utf8');
+    assert.ok(!freshHooksText.includes('__KW_PLUGIN_ROOT__'),
+      'installed hooks.json must not contain literal __KW_PLUGIN_ROOT__ token');
+    assert.ok(freshResult.stdout.includes('/hooks'),
+      'install output must include /hooks trust line, got: ' + freshResult.stdout);
 
     const existingCodexDir = path.join(existing, '.codex');
     fs.mkdirSync(existingCodexDir, { recursive: true });
@@ -2025,6 +2047,18 @@ function testInstallProfilesFeaturesTableHandling() {
     );
     assert.ok(updated.includes('goals = true'), 'existing [features] content must be preserved');
     assert.ok(updated.includes('[agents.code-explorer]'), 'managed agent block should still be installed');
+
+    // #284: idempotency — after running installer twice on existing, each event must have
+    // exactly ONE managed (kaola-workflow:-prefixed) entry (no duplicates).
+    const existingHooksPath = path.join(existing, '.codex', 'hooks.json');
+    assert.ok(fs.existsSync(existingHooksPath), 'existing install should have .codex/hooks.json after idempotent runs');
+    const existingHooks = JSON.parse(fs.readFileSync(existingHooksPath, 'utf8'));
+    for (const event of requiredEvents) {
+      const entries = existingHooks.hooks[event] || [];
+      const managedCount = entries.filter(e => e.id && e.id.startsWith('kaola-workflow:')).length;
+      assert.strictEqual(managedCount, 1,
+        `idempotency: existing hooks.json must have exactly 1 managed entry for ${event} after 2 installs, got ${managedCount}`);
+    }
   } finally {
     fs.rmSync(fresh, { recursive: true, force: true });
     fs.rmSync(existing, { recursive: true, force: true });

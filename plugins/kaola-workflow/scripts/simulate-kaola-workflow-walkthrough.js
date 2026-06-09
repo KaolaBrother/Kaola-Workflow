@@ -50,6 +50,7 @@ function runInstallProfiles(target) {
   });
   if (result.error) throw result.error;
   assert(result.status === 0, 'install profiles failed: ' + result.stderr);
+  return result;
 }
 
 function countOccurrences(content, pattern) {
@@ -87,6 +88,262 @@ function testInstallProfilesFeaturesTableHandling() {
   } finally {
     fs.rmSync(fresh, { recursive: true, force: true });
     fs.rmSync(existing, { recursive: true, force: true });
+  }
+}
+
+// AC1 (#284): hooks.json assertions — events, ids, token resolution, trust-step stdout,
+// and idempotency with a pre-seeded user entry.
+function testAC1HooksJson() {
+  const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-284-hooks-fresh-'));
+  const existing = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-284-hooks-existing-'));
+  try {
+    // Install once to the fresh dir and capture stdout.
+    const freshResult = runInstallProfiles(fresh);
+
+    // AC1: trust-step line must be present in install stdout.
+    // RED (transient demonstration): assert it does NOT exist in an empty string — that fails.
+    // GREEN: assert it IS present in the real output.
+    assert(freshResult.stdout.includes('/hooks'),
+      'AC1: install stdout must contain the /hooks trust-step line');
+
+    const hooksPath = path.join(fresh, '.codex', 'hooks.json');
+    assert(fs.existsSync(hooksPath), 'AC1: hooks.json must exist after fresh install');
+
+    // AC1: no literal __KW_PLUGIN_ROOT__ token must survive in the installed file.
+    // RED (transient demonstration): the source template DOES contain the token.
+    const sourceHooksTemplate = path.join(pluginRoot, 'config', 'hooks.json');
+    const rawTemplate = fs.readFileSync(sourceHooksTemplate, 'utf8');
+    assert(rawTemplate.includes('__KW_PLUGIN_ROOT__'),
+      'AC1 RED-proof: source hooks template must contain __KW_PLUGIN_ROOT__ token (baseline)');
+    const installedRaw = fs.readFileSync(hooksPath, 'utf8');
+    assert(!installedRaw.includes('__KW_PLUGIN_ROOT__'),
+      'AC1 GREEN: installed hooks.json must NOT contain literal __KW_PLUGIN_ROOT__');
+
+    const parsed = JSON.parse(installedRaw);
+    const EVENTS = ['SessionStart', 'PreToolUse', 'PostToolUse', 'SubagentStart'];
+    for (const event of EVENTS) {
+      const entries = (parsed.hooks || {})[event];
+      assert(Array.isArray(entries) && entries.length > 0,
+        'AC1: hooks.json must have entries for event ' + event);
+      const managed = entries.filter(e => e.id && e.id.startsWith('kaola-workflow:'));
+      assert(managed.length >= 1,
+        'AC1: event ' + event + ' must have at least one kaola-workflow: managed entry');
+    }
+
+    // AC1: SessionStart entry with matcher "compact" must reference the compact-resume script.
+    const sessionStart = (parsed.hooks || {}).SessionStart || [];
+    const compactEntry = sessionStart.find(e => e.matcher === 'compact');
+    assert(compactEntry !== undefined,
+      'AC1: SessionStart must have an entry with matcher "compact"');
+    const compactCmd = compactEntry.hooks && compactEntry.hooks[0] && compactEntry.hooks[0].command;
+    assert(typeof compactCmd === 'string' && compactCmd.includes('kaola-workflow-codex-compact-resume.js'),
+      'AC1: SessionStart compact entry command must reference kaola-workflow-codex-compact-resume.js, got: ' + compactCmd);
+
+    // AC1 idempotency: seed a user-owned entry in SessionStart, then install a second time.
+    // Existing target starts from a copy of the fresh install.
+    const existingCodexDir = path.join(existing, '.codex');
+    fs.mkdirSync(existingCodexDir, { recursive: true });
+    // First install.
+    runInstallProfiles(existing);
+    const afterFirst = JSON.parse(fs.readFileSync(path.join(existing, '.codex', 'hooks.json'), 'utf8'));
+    // Seed a user entry (non-kaola id) into the SessionStart event.
+    const USER_ENTRY = { id: 'user-custom-session-hook', matcher: '*', hooks: [{ type: 'command', command: 'echo user-custom' }] };
+    afterFirst.hooks.SessionStart = (afterFirst.hooks.SessionStart || []).concat([USER_ENTRY]);
+    fs.writeFileSync(path.join(existing, '.codex', 'hooks.json'), JSON.stringify(afterFirst, null, 2) + '\n');
+    // Second install.
+    runInstallProfiles(existing);
+    const afterSecond = JSON.parse(fs.readFileSync(path.join(existing, '.codex', 'hooks.json'), 'utf8'));
+    // Assert exactly ONE managed entry per event (no duplicates).
+    for (const event of EVENTS) {
+      const entries = (afterSecond.hooks || {})[event] || [];
+      const managedCount = entries.filter(e => e.id && e.id.startsWith('kaola-workflow:')).length;
+      assert(managedCount === 1,
+        'AC1 idempotency: event ' + event + ' must have exactly 1 kaola-workflow: entry after 2nd install, got ' + managedCount);
+    }
+    // Assert the user entry survived.
+    const sessionStartAfter = (afterSecond.hooks || {}).SessionStart || [];
+    const survivedUser = sessionStartAfter.find(e => e.id === 'user-custom-session-hook');
+    assert(survivedUser !== undefined,
+      'AC1 idempotency: user-custom-session-hook entry must survive a second install');
+
+    console.log('testAC1HooksJson (#284 AC1): PASSED');
+  } finally {
+    fs.rmSync(fresh, { recursive: true, force: true });
+    fs.rmSync(existing, { recursive: true, force: true });
+  }
+}
+
+// AC3 (#284): positive attestation — seeded dispatch-log → 'attested' on both fields.
+// Demonstrates RED (no-seed → 'missing') is already proven by the existing main() test;
+// this function proves GREEN (seeded → 'attested').
+function testAC3AttestationSeeded() {
+  // Use an isolated tmp to avoid touching the live kaola-workflow folder.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-284-attest-'));
+  try {
+    // Seed local roadmap evidence so the offline classifier can verify the target.
+    const roadmapDir = path.join(root, 'kaola-workflow', '.roadmap');
+    fs.mkdirSync(roadmapDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(roadmapDir, 'issue-284.md'),
+      'issue: #284\ntitle: —\nstatus: open\nworkflow_project: issue-284\nnext_step: ready\n'
+    );
+    // Claim (startup) to create the project state.
+    const acquired = runClaim(['startup', '--target-issue', '284', '--runtime', 'codex', '--sink', 'pr'], root);
+    assert(acquired.claim === 'acquired', 'AC3 setup: startup must acquire issue-284, got: ' + JSON.stringify(acquired));
+
+    // Seed the dispatch-log BEFORE finalize.  finalize archives the folder (moves it), then
+    // checkDispatchAttestations checks archive-first — so seeding the live cache is correct.
+    const cacheDir = path.join(root, 'kaola-workflow', 'issue-284', '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const ts = '2026-06-09T00:00:00Z';
+    fs.writeFileSync(path.join(cacheDir, 'dispatch-log.jsonl'),
+      JSON.stringify({ ts, agent_type: 'workflow-planner', agent_id: 'test-planner', cwd: root }) + '\n' +
+      JSON.stringify({ ts, agent_type: 'contractor', agent_id: 'test-contractor', cwd: root }) + '\n'
+    );
+
+    // Plant roadmap entry (finalize reads it for roadmap cleanup).
+    plantRoadmap(root, 284, '');
+
+    // Finalize — offline mode.
+    const finalizeResult = runClaim(['finalize', '--project', 'issue-284'], root);
+    assert(finalizeResult.status === 'closed',
+      'AC3: finalize must return status:closed, got: ' + JSON.stringify(finalizeResult));
+    assert(finalizeResult.closure_receipt && finalizeResult.closure_receipt.claim_planner_attested === 'attested',
+      'AC3 GREEN: claim_planner_attested must be "attested" when dispatch-log is seeded, got: ' +
+      JSON.stringify(finalizeResult.closure_receipt && finalizeResult.closure_receipt.claim_planner_attested));
+    assert(finalizeResult.closure_receipt && finalizeResult.closure_receipt.finalize_contractor_attested === 'attested',
+      'AC3 GREEN: finalize_contractor_attested must be "attested" when dispatch-log is seeded, got: ' +
+      JSON.stringify(finalizeResult.closure_receipt && finalizeResult.closure_receipt.finalize_contractor_attested));
+
+    console.log('testAC3AttestationSeeded (#284 AC3): PASSED');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+// AC2 (#284): compact-resume stdout is PLAIN TEXT, not a JSON envelope.
+// Extends testCodexCompactResume266: asserts the already-GREEN output is plain-text,
+// not wrapped in { "hookSpecificOutput": ... }.
+function testAC2CompactPlainStdout() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-284-compact-plain-'));
+  try {
+    const projectName = 'issue-284-compact-plain';
+    const projDir = path.join(root, 'kaola-workflow', projectName);
+    fs.mkdirSync(projDir, { recursive: true });
+
+    fs.writeFileSync(path.join(projDir, 'workflow-state.md'), [
+      '# State', '',
+      '## Project',
+      'name: ' + projectName,
+      'status: active', '',
+      '## Sink',
+      'branch: workflow/issue-284',
+      'issue_number: 284',
+      'next_command: /kaola-workflow-plan-run',
+      'next_skill: kaola-workflow-next',
+      ''
+    ].join('\n'));
+
+    fs.writeFileSync(path.join(projDir, 'workflow-plan.md'), FIXTURE_PLAN);
+
+    const tasksJson = JSON.stringify({
+      source_plan_hash: FIXTURE_PLAN_HASH,
+      tasks: [
+        { id: 'explore', role: 'code-explorer', status: 'completed', ledger_status: 'complete' },
+        { id: 'impl', role: 'implementer', status: 'in_progress', ledger_status: 'in_progress' },
+        { id: 'gate', role: 'code-reviewer', status: 'pending', ledger_status: 'pending' },
+        { id: 'done', role: 'finalize', status: 'completed', ledger_status: 'n/a' }
+      ],
+      last_synced_from_ledger: '2026-06-09T00:00:00.000Z'
+    }, null, 2) + '\n';
+    fs.writeFileSync(path.join(projDir, 'workflow-tasks.json'), tasksJson);
+
+    const input = JSON.stringify({ cwd: root });
+    const r = runScript(compactResumeScript, [], { input, encoding: 'utf8' });
+    assert(r.status === 0, 'AC2: compact-resume must exit 0, got ' + r.status + '\n' + r.stderr);
+
+    // AC2 GREEN: output must NOT start with '{' (not a JSON object) and must NOT contain
+    // the Codex hookSpecificOutput envelope key.
+    // RED demonstration: if the script emitted a JSON envelope, the first char would be '{'.
+    assert(!r.stdout.startsWith('{'),
+      'AC2: compact-resume stdout must NOT be a JSON object (plain text expected), got: ' + r.stdout.slice(0, 80));
+    assert(!r.stdout.includes('"hookSpecificOutput"'),
+      'AC2: compact-resume stdout must NOT contain hookSpecificOutput envelope, got: ' + r.stdout.slice(0, 200));
+
+    // Assert the expected plain-text packet lines ARE present.
+    assert(r.stdout.includes('Kaola-Workflow compact resume:'),
+      'AC2: packet must include the header line');
+    assert(r.stdout.includes('active project:'),
+      'AC2: packet must include active project line');
+    assert(r.stdout.includes('next skill/command:'),
+      'AC2: packet must include next skill/command line');
+    assert(r.stdout.includes('in-progress node:'),
+      'AC2: packet must include in-progress node line');
+    assert(r.stdout.includes('pending gates:'),
+      'AC2: packet must include pending gates line');
+    assert(r.stdout.includes('consent-halt markers:'),
+      'AC2: packet must include consent-halt markers line');
+    assert(r.stdout.includes('task mirror:'),
+      'AC2: packet must include task mirror line');
+
+    console.log('testAC2CompactPlainStdout (#284 AC2): PASSED');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+// AC4 (#284): producer test — spawn the bash dispatch-log hook with valid JSON stdin and
+// assert it writes exactly one JSONL line containing "agent_type":"workflow-planner" to the
+// active project's .cache/dispatch-log.jsonl.  Also asserts exit 0 on empty stdin (fail-open).
+function testAC4SubagentDispatchLog() {
+  const dispatchLogScript = path.join(pluginRoot, 'hooks', 'kaola-workflow-subagent-dispatch-log.sh');
+  assert(fs.existsSync(dispatchLogScript), 'AC4: dispatch-log hook script must exist at ' + dispatchLogScript);
+
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-284-dispatch-'));
+  try {
+    // AC4: git init the tmp repo — the hook resolves the repo root via
+    // `git rev-parse --show-toplevel` using the PROCESS CWD, not the JSON cwd.
+    git(['init', '-b', 'main'], tmp);
+    git(['config', 'user.email', 't@t.t'], tmp);
+    git(['config', 'user.name', 't'], tmp);
+
+    // Plant an active project so the hook finds a workflow-state.md with status: active.
+    const projectName = 'issue-284-dispatchlog';
+    plantFolder(tmp, projectName, 284, null);
+    const cacheDir = path.join(tmp, 'kaola-workflow', projectName, '.cache');
+    const logPath = path.join(cacheDir, 'dispatch-log.jsonl');
+
+    // AC4 GREEN: valid JSON stdin → exactly one line in dispatch-log.jsonl
+    const hookInput = JSON.stringify({ agent_type: 'workflow-planner', agent_id: 'test-x', cwd: tmp });
+    const r1 = spawnSync('bash', [dispatchLogScript], {
+      cwd: tmp,
+      input: hookInput,
+      encoding: 'utf8'
+    });
+    assert(r1.status === 0, 'AC4: dispatch-log hook must exit 0 on valid stdin, stderr: ' + r1.stderr);
+    assert(fs.existsSync(logPath), 'AC4: dispatch-log.jsonl must be created after valid spawn');
+    const logContent = fs.readFileSync(logPath, 'utf8');
+    const logLines = logContent.trim().split('\n').filter(Boolean);
+    assert(logLines.length === 1,
+      'AC4: dispatch-log.jsonl must have exactly 1 line after one hook run, got ' + logLines.length);
+    assert(logLines[0].includes('"agent_type":"workflow-planner"'),
+      'AC4: dispatch-log line must contain agent_type workflow-planner, got: ' + logLines[0]);
+
+    // AC4: exit 0 on EMPTY stdin (fail-open).
+    // First remove the log to verify no new line is written.
+    fs.unlinkSync(logPath);
+    const r2 = spawnSync('bash', [dispatchLogScript], {
+      cwd: tmp,
+      input: '',
+      encoding: 'utf8'
+    });
+    assert(r2.status === 0, 'AC4: dispatch-log hook must exit 0 on empty stdin, stderr: ' + r2.stderr);
+    assert(!fs.existsSync(logPath),
+      'AC4: dispatch-log.jsonl must NOT be created on empty stdin (fail-open)');
+
+    console.log('testAC4SubagentDispatchLog (#284 AC4): PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
   }
 }
 
@@ -616,6 +873,10 @@ function main() {
     testCodexPreflight266();
     testCodexTaskMirror266();
     testCodexCompactResume266();
+    testAC1HooksJson();
+    testAC3AttestationSeeded();
+    testAC2CompactPlainStdout();
+    testAC4SubagentDispatchLog();
 
     console.log('Kaola-Workflow walkthrough simulation passed');
   } finally {

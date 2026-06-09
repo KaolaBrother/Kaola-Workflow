@@ -671,7 +671,7 @@ const { generateMirror, mapLedgerStatus } = require('./kaola-workflow-task-mirro
 
 The Codex compact/resume entrypoint. A self-contained stdin/stdout filter that reads durable workflow artifacts and emits a deterministic resume packet. Edition-named ×3 (codex: `kaola-workflow-codex-compact-resume.js`, gitlab: `kaola-gitlab-workflow-codex-compact-resume.js`, gitea: `kaola-gitea-workflow-codex-compact-resume.js`); only the filename comment differs across editions.
 
-**Note:** Codex has no `hooks` key in its plugin manifest, so this script is NOT wired as a plugin lifecycle hook. It is the correct resume entrypoint and is invoked on demand.
+**Note:** The Codex plugin manifest (`plugin.json`) has no `hooks` key. The lifecycle wiring lives in the project-local `.codex/hooks.json` written by `install-codex-agent-profiles.js`: this script is registered as a `SessionStart` (`compact`) hook (id `kaola-workflow:compact-context`) there. It is also invokable on demand via stdin (see invocation below).
 
 **Invocation (on demand):**
 
@@ -704,6 +704,76 @@ When `workflow-tasks.json` is absent, section 6 reads `task mirror: not generate
 | `workflow-tasks.json` | Task counts by status, in-progress task id |
 
 **AC-F:** Zero `CLAUDE_PLUGIN_ROOT` references; no `require()` of edition code — only stdlib `fs` and `path`. Claude-settings-free.
+
+---
+
+## Codex `.codex/hooks.json` managed-entry contract
+
+`install-codex-agent-profiles.js` (invoked by `./install.sh`) writes a project-local
+`.codex/hooks.json` containing the four managed Kaola-Workflow hook entries. The
+Codex plugin manifest (`plugin.json`) has no `hooks` key; this file is the sole
+wiring point for Codex lifecycle hooks.
+
+### Managed-entry identification
+
+Each managed entry carries an `id` field starting with `kaola-workflow:`. The installer
+identifies managed entries by that prefix and uses an idempotent merge-by-id strategy:
+
+- For each event in the managed template, existing entries whose `id` starts with
+  `kaola-workflow:` are dropped and the managed entries are appended.
+- User entries (no `id`, or a non-`kaola-workflow:` id) are preserved untouched.
+- Events not present in the managed template are left entirely unchanged.
+- If the existing `.codex/hooks.json` is missing or malformed JSON, it is treated as
+  empty with a warning printed to stderr (WARN-first; the install proceeds).
+
+### Template token substitution
+
+The source template (`plugins/kaola-workflow/config/hooks.json`) uses the token
+`__KW_PLUGIN_ROOT__` in every command path. The installer replaces ALL occurrences
+(using `split/join`, not `String.replace`) with the absolute path to the plugin root
+directory at install time. Written command paths in `.codex/hooks.json` are therefore
+absolute and resolve correctly regardless of the working directory when Codex runs the hook.
+
+### The four managed entries
+
+| Event | Matcher | id | Command script |
+|-------|---------|-----|----------------|
+| `SessionStart` | `compact` | `kaola-workflow:compact-context` | `scripts/kaola-workflow-codex-compact-resume.js` |
+| `PreToolUse` | `Bash` | `kaola-workflow:pre-commit-guard` | `hooks/kaola-workflow-pre-commit.sh` |
+| `PostToolUse` | `Write\|Edit` | `kaola-workflow:phantom-advisor` | `hooks/kaola-workflow-phantom-advisor.sh` |
+| `SubagentStart` | `*` | `kaola-workflow:subagent-dispatch-log` | `hooks/kaola-workflow-subagent-dispatch-log.sh` |
+
+All four entries carry a `timeout` field (5 or 10 seconds depending on the hook) and
+a `description` field. These values come directly from the template; the installer
+does not add or modify them beyond the token substitution above.
+
+### Installer console output
+
+The installer prints:
+
+```
+Kaola-Workflow Codex hooks: updated at .codex/hooks.json
+run /hooks once in Codex to review and trust these command hooks (or codex exec --dangerously-bypass-hook-trust for automation)
+```
+
+(or `unchanged` in place of `updated` when no diff was produced.)
+
+### Caveats
+
+- **`/hooks` one-time trust step (AC1):** after install, run `/hooks` once in Codex
+  to review and trust the command hooks (content-hash trust). Editing a hook file
+  marks it untrusted again. For automation use `codex exec --dangerously-bypass-hook-trust`.
+- **`multi_agent` precondition (AC5):** `SubagentStart` requires Codex `multi_agent`
+  enabled. With it off the hook never fires and `checkDispatchAttestations` reads
+  `claim_planner_attested: missing` / `finalize_contractor_attested: missing` —
+  non-fatal, WARN-first (closure still succeeds).
+- **Matcher caveat:** the `PreToolUse`/`PostToolUse` matchers (`Bash`, `Write|Edit`)
+  follow Claude Code tool names. If a Codex build uses different tool-event names the
+  matcher string in `.codex/hooks.json` may need adjustment.
+- **Uninstall scope:** `uninstall.sh` strips the managed entries from the
+  `.codex/hooks.json` in the directory it is run from. Because the file is
+  project-local (not global), running `uninstall.sh` from a different directory
+  leaves any copy written there intact.
 
 ---
 

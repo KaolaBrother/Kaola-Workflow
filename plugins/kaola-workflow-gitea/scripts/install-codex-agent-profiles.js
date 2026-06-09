@@ -6,11 +6,15 @@ const pluginRoot = path.resolve(__dirname, '..');
 const projectRoot = path.resolve(process.argv[2] || process.cwd());
 const sourceAgentsDir = path.join(pluginRoot, 'agents');
 const sourceTemplate = path.join(pluginRoot, 'config', 'agents.toml');
+const sourceHooksTemplate = path.join(pluginRoot, 'config', 'hooks.json');
 const targetCodexDir = path.join(projectRoot, '.codex');
 const targetAgentsDir = path.join(targetCodexDir, 'agents', 'kaola-workflow');
 const targetConfig = path.join(targetCodexDir, 'config.toml');
+const targetHooks = path.join(targetCodexDir, 'hooks.json');
 const beginMarker = '# BEGIN kaola-workflow agents';
 const endMarker = '# END kaola-workflow agents';
+const PLUGIN_ROOT_TOKEN = '__KW_PLUGIN_ROOT__';
+const MANAGED_HOOK_ID_PREFIX = 'kaola-workflow:';
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -105,18 +109,68 @@ function updateConfig() {
   return 'unchanged';
 }
 
+function updateHooks() {
+  fs.mkdirSync(targetCodexDir, { recursive: true });
+
+  // Read template and replace the plugin root token with the absolute pluginRoot.
+  // Use split/join to replace ALL occurrences (String.replace replaces only the first).
+  const templateText = read(sourceHooksTemplate).split(PLUGIN_ROOT_TOKEN).join(pluginRoot);
+  const managedHooks = JSON.parse(templateText);
+
+  // Read existing hooks.json or default to empty; tolerate parse failures (WARN-first).
+  let existing = { hooks: {} };
+  if (fs.existsSync(targetHooks)) {
+    try {
+      existing = JSON.parse(read(targetHooks));
+      if (!existing || typeof existing.hooks !== 'object' || existing.hooks === null) {
+        existing = { hooks: {} };
+      }
+    } catch (e) {
+      console.warn(`Kaola-Workflow Codex hooks: malformed existing hooks.json — treating as empty (${e.message})`);
+      existing = { hooks: {} };
+    }
+  }
+
+  // Merge: per event in managed template, drop kaola-workflow:-prefixed entries
+  // from existing, then append managed entries. Preserve all non-managed entries
+  // and unrelated events untouched.
+  const merged = Object.assign({}, existing, { hooks: Object.assign({}, existing.hooks) });
+
+  for (const [event, managedEntries] of Object.entries(managedHooks.hooks)) {
+    const existingEntries = merged.hooks[event] || [];
+    // Keep only entries whose id does NOT start with the managed prefix.
+    // Guard against entries that have no id (user entries without an id).
+    const kept = existingEntries.filter(e => !(e.id && e.id.startsWith(MANAGED_HOOK_ID_PREFIX)));
+    merged.hooks[event] = [...kept, ...managedEntries];
+  }
+
+  const next = JSON.stringify(merged, null, 2) + '\n';
+  const current = fs.existsSync(targetHooks) ? read(targetHooks) : null;
+
+  if (next !== current) {
+    fs.writeFileSync(targetHooks, next);
+    return 'updated';
+  }
+
+  return 'unchanged';
+}
+
 function main() {
   assert(fs.existsSync(sourceAgentsDir), `missing source agents directory: ${sourceAgentsDir}`);
   assert(fs.existsSync(sourceTemplate), `missing source config template: ${sourceTemplate}`);
+  assert(fs.existsSync(sourceHooksTemplate), `missing source hooks template: ${sourceHooksTemplate}`);
 
   const copied = copyAgentProfiles();
   const configStatus = updateConfig();
+  const hooksStatus = updateHooks();
 
   console.log(`Kaola-Workflow agent profiles: copied ${copied.length} profiles`);
   console.log(`Kaola-Workflow agent profiles: config ${configStatus} at ${path.relative(projectRoot, targetConfig)}`);
   for (const file of copied) {
     console.log(`- ${file}`);
   }
+  console.log(`Kaola-Workflow Codex hooks: ${hooksStatus} at ${path.relative(projectRoot, targetHooks)}`);
+  console.log(`run /hooks once in Codex to review and trust these command hooks (or codex exec --dangerously-bypass-hook-trust for automation)`);
 }
 
 main();

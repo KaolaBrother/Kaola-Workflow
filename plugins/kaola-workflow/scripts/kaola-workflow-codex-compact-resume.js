@@ -226,6 +226,10 @@ function main() {
     taskSummary
   ];
 
+  // SessionStart/compact context injection: emit the resume packet as PLAIN stdout.
+  // Per Claude Code hooks docs, any text a SessionStart hook writes to stdout is added
+  // to context; the hookSpecificOutput.additionalContext envelope is optional and not
+  // needed here. Codex CLI's hooks engine is schema-identical (issue #284), so plain stdout injects identically.
   process.stdout.write(`${lines.join('\n')}\n`);
 }
 

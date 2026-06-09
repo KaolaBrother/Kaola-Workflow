@@ -201,6 +201,65 @@ PY
   fi
 fi
 
+# Strip Kaola-Workflow-managed hook entries from the project-local .codex/hooks.json
+# written by install-codex-agent-profiles.js.
+#
+# ASYMMETRY: install writes project-local .codex/hooks.json (relative to $PWD at
+# install time). uninstall.sh can only clean the hooks config in the directory it
+# is run from; if you installed in a different directory, clean that directory too.
+CODEX_HOOKS_FILE="$PWD/.codex/hooks.json"
+if [[ -f "$CODEX_HOOKS_FILE" ]] && command -v python3 >/dev/null 2>&1; then
+  if python3 - "$CODEX_HOOKS_FILE" <<'PY'; then
+import json, os, sys
+hooks_path = sys.argv[1]
+
+try:
+    with open(hooks_path) as f:
+        data = json.load(f)
+except json.JSONDecodeError:
+    print(f"warning: {hooks_path} is not valid JSON; leaving hooks in place.", file=sys.stderr)
+    sys.exit(0)
+
+def is_managed(entry):
+    if not isinstance(entry, dict):
+        return False
+    eid = entry.get("id", "")
+    if isinstance(eid, str) and eid.startswith("kaola-workflow:"):
+        return True
+    for inner in entry.get("hooks", []) or []:
+        if isinstance(inner, dict):
+            cmd = inner.get("command", "")
+            if isinstance(cmd, str) and "kaola-workflow" in cmd:
+                return True
+    return False
+
+changed = False
+hooks = data.get("hooks")
+if isinstance(hooks, dict):
+    for event, entries in list(hooks.items()):
+        if not isinstance(entries, list):
+            continue
+        cleaned = [e for e in entries if not is_managed(e)]
+        if len(cleaned) != len(entries):
+            changed = True
+            if cleaned:
+                hooks[event] = cleaned
+            else:
+                del hooks[event]
+
+    if not hooks:
+        data.pop("hooks", None)
+
+if changed:
+    with open(hooks_path, "w") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+    print(f"Removed Kaola-Workflow hook entries from {hooks_path}")
+PY
+    :
+  fi
+fi
+
 if [[ "$removed" -eq 0 ]]; then
   echo "Not installed — nothing to remove."
 fi

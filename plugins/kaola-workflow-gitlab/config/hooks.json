@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"__KW_PLUGIN_ROOT__/scripts/kaola-gitlab-workflow-codex-compact-resume.js\"",
+            "timeout": 5
+          }
+        ],
+        "description": "Inject Kaola-Workflow resume state after Codex context compaction",
+        "id": "kaola-workflow:compact-context"
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"__KW_PLUGIN_ROOT__/hooks/kaola-workflow-pre-commit.sh\"",
+            "timeout": 5
+          }
+        ],
+        "description": "Block commits that mix multiple kaola-workflow project folders",
+        "id": "kaola-workflow:pre-commit-guard"
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"__KW_PLUGIN_ROOT__/hooks/kaola-workflow-phantom-advisor.sh\"",
+            "timeout": 10
+          }
+        ],
+        "description": "Block unsupported advisor citations in workflow files (requires backing cache artifact)",
+        "id": "kaola-workflow:phantom-advisor"
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"__KW_PLUGIN_ROOT__/hooks/kaola-workflow-subagent-dispatch-log.sh\"",
+            "timeout": 5
+          }
+        ],
+        "description": "Record subagent spawns to .cache/dispatch-log.jsonl for closure attestation",
+        "id": "kaola-workflow:subagent-dispatch-log"
+      }
+    ]
+  }
+}

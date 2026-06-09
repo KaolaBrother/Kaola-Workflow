@@ -1937,6 +1937,7 @@ function runInstallProfiles(target) {
   });
   if (result.error) throw result.error;
   assert.ok(result.status === 0, 'install profiles failed: ' + result.stderr);
+  return result;
 }
 
 function countOccurrences(content, pattern) {
@@ -1947,7 +1948,7 @@ function testInstallProfilesFeaturesTableHandling() {
   const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-codex-install-fresh-'));
   const existing = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-codex-install-existing-'));
   try {
-    runInstallProfiles(fresh);
+    const freshResult = runInstallProfiles(fresh);
     const freshConfig = fs.readFileSync(path.join(fresh, '.codex', 'config.toml'), 'utf8');
     assert.ok(freshConfig.includes('[features]'), 'fresh install should include managed [features]');
     assert.ok(freshConfig.includes('multi_agent = true'), 'fresh install should enable multi_agent');
@@ -1956,6 +1957,44 @@ function testInstallProfilesFeaturesTableHandling() {
       fs.readdirSync(path.join(fresh, '.codex', 'agents', 'kaola-workflow')).length,
       13,
       'should install 13 agent TOML files'
+    );
+
+    // --- #284: hooks.json assertions (fresh install) ---
+    const freshHooksPath = path.join(fresh, '.codex', 'hooks.json');
+    assert.ok(fs.existsSync(freshHooksPath), 'fresh install should create .codex/hooks.json');
+    const freshHooks = JSON.parse(fs.readFileSync(freshHooksPath, 'utf8'));
+
+    // All four required events must be present, each with at least one kaola-workflow: entry
+    for (const event of ['SessionStart', 'PreToolUse', 'PostToolUse', 'SubagentStart']) {
+      const entries = freshHooks.hooks[event];
+      assert.ok(Array.isArray(entries) && entries.length > 0,
+        `hooks.json must have entries for event ${event}`);
+      const managed = entries.filter(e => e.id && e.id.startsWith('kaola-workflow:'));
+      assert.ok(managed.length >= 1,
+        `hooks.json event ${event} must have at least one kaola-workflow: entry (got ${managed.length})`);
+    }
+
+    // SessionStart compact command must reference the GITLAB edition script name
+    const sessionStartEntries = freshHooks.hooks['SessionStart'];
+    const compactEntry = sessionStartEntries.find(e => e.id && e.id.startsWith('kaola-workflow:'));
+    assert.ok(compactEntry, 'SessionStart must have a kaola-workflow: managed entry');
+    const compactCmd = (compactEntry.hooks || []).map(h => h.command).join(' ');
+    assert.ok(
+      compactCmd.includes('kaola-gitlab-workflow-codex-compact-resume.js'),
+      `SessionStart command must reference kaola-gitlab-workflow-codex-compact-resume.js, got: ${compactCmd}`
+    );
+
+    // No unreplaced __KW_PLUGIN_ROOT__ token should remain in the written file
+    const freshHooksText = fs.readFileSync(freshHooksPath, 'utf8');
+    assert.ok(
+      !freshHooksText.includes('__KW_PLUGIN_ROOT__'),
+      'hooks.json must not contain literal __KW_PLUGIN_ROOT__ after install'
+    );
+
+    // Installer stdout must include the /hooks trust line
+    assert.ok(
+      freshResult.stdout.includes('/hooks'),
+      'installer stdout must include /hooks trust line'
     );
 
     const existingCodexDir = path.join(existing, '.codex');
@@ -1975,6 +2014,20 @@ function testInstallProfilesFeaturesTableHandling() {
     );
     assert.ok(updated.includes('goals = true'), 'existing [features] content must be preserved');
     assert.ok(updated.includes('[agents.code-explorer]'), 'managed agent block should still be installed');
+
+    // --- #284: idempotency — exactly ONE managed entry per event after double-run ---
+    const existingHooksPath = path.join(existing, '.codex', 'hooks.json');
+    assert.ok(fs.existsSync(existingHooksPath), 'existing dir: hooks.json must exist after install');
+    const existingHooks = JSON.parse(fs.readFileSync(existingHooksPath, 'utf8'));
+    for (const event of ['SessionStart', 'PreToolUse', 'PostToolUse', 'SubagentStart']) {
+      const entries = existingHooks.hooks[event] || [];
+      const managed = entries.filter(e => e.id && e.id.startsWith('kaola-workflow:'));
+      assert.strictEqual(
+        managed.length,
+        1,
+        `after double-run, event ${event} must have exactly 1 kaola-workflow: entry (got ${managed.length}) — idempotency violation`
+      );
+    }
   } finally {
     fs.rmSync(fresh, { recursive: true, force: true });
     fs.rmSync(existing, { recursive: true, force: true });
