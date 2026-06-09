@@ -698,7 +698,11 @@ function testGiteaAdaptive() {
     const m2dir = path.join(tmp, 'kaola-workflow', 'issue-970');
     fs.mkdirSync(m2dir, { recursive: true });
     fs.writeFileSync(path.join(m2dir, 'workflow-state.md'),
-      '## Project\nname: issue-970\nstatus: active\nissue_number: 970\n## Sink\nbranch: workflow/issue-970\nsink: pr\n');
+      '## Project\nname: issue-970\nstatus: active\nissue_number: 970\n## Sink\nbranch: workflow/issue-970\nsink: pr\n'
+      + '## Pending Gates\n- workflow-plan\n\n## Last Evidence\nlast_command: startup\nlast_result: folder_claimed\n');
+    // #324: seed a PRE-SINK finalization-summary carrying the terminal-mistakable sentinels.
+    fs.writeFileSync(path.join(m2dir, 'finalization-summary.md'),
+      '## Status\nREADY FOR FINAL GIT GATE\n\n## Commit And Push\nPending final git gate. Final hash reported after push.\n');
     const roadmapM2Dir = path.join(tmp, 'kaola-workflow', '.roadmap');
     fs.mkdirSync(roadmapM2Dir, { recursive: true });
     fs.writeFileSync(path.join(roadmapM2Dir, 'issue-970.md'),
@@ -727,6 +731,15 @@ function testGiteaAdaptive() {
       m2Result.closure_invariants && m2Result.closure_invariants.ok === true,
       'M2 (#277): gitea closure_invariants.ok must be true (warn-first: attestation miss is not a hard violation)'
     );
+    // #324: archived closure artifacts must not retain pre-run / pre-sink state.
+    const m2Archived = fs.readdirSync(path.join(tmp, 'kaola-workflow', 'archive')).filter(n => n.startsWith('issue-970'));
+    assert.strictEqual(m2Archived.length, 1, '#324: gitea finalize archives issue-970');
+    const m2State = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'archive', m2Archived[0], 'workflow-state.md'), 'utf8');
+    assert.ok(!/## Pending Gates\n[\s\S]*?workflow-plan/.test(m2State), '#324: gitea archived state drops pre-run Pending Gates');
+    assert.ok(!m2State.includes('last_command: startup'), '#324: gitea archived state drops last_command: startup');
+    assert.ok(m2State.includes('last_command: finalize'), '#324: gitea archived state normalizes last_command to finalize');
+    const m2Summary = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'archive', m2Archived[0], 'finalization-summary.md'), 'utf8');
+    assert.ok(!m2Summary.includes('READY FOR FINAL GIT GATE'), '#324: gitea archived summary neutralizes the pre-sink sentinel');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

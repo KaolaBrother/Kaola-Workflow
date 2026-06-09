@@ -824,8 +824,32 @@ function archiveProjectDir(root, project, statusValue, suffix) {
     if (!/^status:/m.test(content)) content += '\nstatus: ' + statusValue + '\n';
     content = content.replace(/^step:\s*.*$/m, 'step: complete');
     if (!/^step:/m.test(content)) content += '\nstep: complete\n';
+    // #324: at CLOSED archive, normalize the pre-run blocks that writeState seeded at claim time
+    // (## Pending Gates: - workflow-plan; last_command: startup / last_result: folder_claimed) so the
+    // archived state cannot read as self-contradictory terminal state (closed/complete yet "pending
+    // workflow-plan" + "startup"). Only on closed — a discard/release legitimately keeps mid-run state.
+    if (statusValue === 'closed') {
+      content = content.replace(/(^## Pending Gates\n)(?:[ \t]*-[ \t].*\n?)*/m, '$1- none\n');
+      content = content.replace(/^last_command:\s*.*$/m, 'last_command: finalize');
+      content = content.replace(/^last_result:\s*.*$/m, 'last_result: closed');
+    }
     fs.writeFileSync(state, content);
   } catch (_) {}
+  // #324: sanitize the archived finalization-summary's PRE-SINK sentinels so a later audit reading
+  // only the archive cannot mistake a merged/closed run for one still "READY FOR FINAL GIT GATE".
+  // BEFORE renameSync so the sanitized copy is what lands in archive/. Swallow-on-error (robust).
+  if (statusValue === 'closed') {
+    try {
+      const summaryPath = path.join(src, 'finalization-summary.md');
+      if (fs.existsSync(summaryPath)) {
+        let s = fs.readFileSync(summaryPath, 'utf8');
+        s = s.replace(/READY FOR FINAL GIT GATE/g, 'ARCHIVED AFTER FINAL GIT GATE');
+        s = s.replace(/Pending final git gate\. Final hash reported after push\./g,
+          'Final git gate complete; merge/close status recorded in the closure receipt.');
+        fs.writeFileSync(summaryPath, s);
+      }
+    } catch (_) {}
+  }
   const archiveBase = path.join(root, 'kaola-workflow', 'archive');
   fs.mkdirSync(archiveBase, { recursive: true });
   let dest = path.join(archiveBase, project + (suffix || ''));

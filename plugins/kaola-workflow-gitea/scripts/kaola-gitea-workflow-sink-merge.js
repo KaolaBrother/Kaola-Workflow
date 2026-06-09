@@ -131,10 +131,21 @@ function assertBranchPushedToUpstream(mainRoot, branch) {
     upstream = execFileSync('git', ['-C', mainRoot, 'rev-parse', '--abbrev-ref', '--symbolic-full-name', branch + '@{u}'],
     { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
   } catch (_) {
-    throw new Error(
-      "Branch '" + branch + "' has no upstream tracking ref.\n" +
-      'Push and set upstream before merging: git push -u origin ' + branch
-    );
+    // #323: a worktree-native run can reach the sink with a local-only workflow branch that was
+    // never pushed. Self-heal: push + set upstream, then return — after `push -u` the branch is at
+    // parity with its new upstream, so the ahead-count check below has nothing to do. Fail-CLOSED:
+    // if the push fails (e.g. no `origin` remote), re-throw the original guidance so an un-backed-up
+    // branch is never silently merged.
+    try {
+      execFileSync('git', ['-C', mainRoot, 'push', '-u', 'origin', branch], { encoding: 'utf8' });
+      return;
+    } catch (pushErr) {
+      throw new Error(
+        "Branch '" + branch + "' has no upstream tracking ref, and `git push -u origin " + branch + "` failed.\n" +
+        'Push and set upstream before merging: git push -u origin ' + branch + '\n' +
+        'Underlying push error: ' + (pushErr && pushErr.message ? pushErr.message : String(pushErr))
+      );
+    }
   }
   const ahead = parseInt(
     execFileSync('git', ['-C', mainRoot, 'rev-list', '--count', upstream + '..' + branch], { encoding: 'utf8' }).trim(),

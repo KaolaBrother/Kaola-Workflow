@@ -121,6 +121,11 @@ function testFinalize(tmp) {
     retiredHeartbeatField + ' 2026-01-01T00:00:00.000Z',
     ''
   ].join('\n'));
+  // #324: seed a PRE-SINK finalization-summary carrying the terminal-mistakable sentinels the
+  // Step-5 template writes; after archive they must be neutralized (a later audit reading only the
+  // archive must not see a merged/closed run as still "READY FOR FINAL GIT GATE").
+  fs.writeFileSync(path.join(tmp, 'kaola-workflow', 'issue-164', 'finalization-summary.md'),
+    '# Finalization Summary\n\n## Status\nREADY FOR FINAL GIT GATE\n\n## Commit And Push\nPending final git gate. Final hash reported after push.\n');
   const result = json(runNode(claimScript, ['finalize', '--project', 'issue-164'], tmp));
   assert(result.status === 'closed', 'finalize should report closed');
   assert(!fs.existsSync(path.join(tmp, 'kaola-workflow', 'issue-164')), 'finalize should remove active folder');
@@ -131,6 +136,19 @@ function testFinalize(tmp) {
   assert(archivedState.includes('step: complete'), 'finalize should mark archived state complete');
   assert(!archivedState.includes(retiredBlock), 'finalize should remove legacy lease blocks before archive');
   assert(!archivedState.includes(retiredSessionField), 'finalize should remove legacy session fields before archive');
+  // #324: closure normalization of the pre-run blocks writeState seeded at startup.
+  assert(!/## Pending Gates\n[\s\S]*?(?:phase1-research|workflow-plan|fast-summary)/.test(archivedState),
+    '#324: archived state Pending Gates must not retain a pre-run gate after closure, got: ' + archivedState);
+  assert(archivedState.includes('- none'), '#324: Pending Gates normalized to "- none" at closure');
+  assert(!archivedState.includes('last_command: startup'), '#324: archived state must not keep last_command: startup after closure');
+  assert(archivedState.includes('last_command: finalize'), '#324: archived state last_command normalized to finalize');
+  assert(archivedState.includes('last_result: closed'), '#324: archived state last_result normalized to closed');
+  // #324: finalization-summary sentinels neutralized in the archived copy.
+  const archivedSummary = read(path.join(tmp, 'kaola-workflow', 'archive', archived[0], 'finalization-summary.md'));
+  assert(!archivedSummary.includes('READY FOR FINAL GIT GATE'),
+    '#324: archived finalization-summary must not retain the pre-sink "READY FOR FINAL GIT GATE" sentinel');
+  assert(!archivedSummary.includes('Pending final git gate'),
+    '#324: archived finalization-summary must not retain the pre-sink "Pending final git gate" sentinel');
 }
 
 function testRepair(tmp) {
@@ -4486,6 +4504,42 @@ function testSinkMergeBlocksUnpushedCommits() {
     const mainAfter = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
     assert(mainBefore === mainAfter, 'main must not advance when guard blocks, got: ' + mainAfter);
     console.log('testSinkMergeBlocksUnpushedCommits: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(remotePath, { recursive: true, force: true });
+  }
+}
+
+// #323: a worktree-native run reaches the sink with a LOCAL-ONLY workflow branch (no upstream).
+// sink-merge must self-heal (auto `git push -u origin <branch>`) and complete, instead of aborting
+// with "no upstream tracking ref" and forcing a manual recovery.
+function testSinkMergeAutoPushesWhenNoUpstream() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-merge-autopush-')));
+  const remotePath = initGitRepoWithBareRemote(tmp);
+  const genv = { ...process.env, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@test.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@test.com' };
+  try {
+    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-913']);
+    // A real (non-workflow) impl commit so assertBranchHasNonWorkflowChanges passes. The branch
+    // is a descendant of origin/main → alreadyUpToDate (no rebase / no recursive npm test).
+    fs.writeFileSync(path.join(tmp, 'feature.txt'), 'impl');
+    spawnSync('git', ['-C', tmp, 'add', 'feature.txt']);
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'feat: real impl'], { env: genv });
+    // DELIBERATELY do NOT push the branch / set upstream (the #323 gap).
+    const mainBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+    const result = spawnSync(process.execPath, [sinkMergeScript, '--project', 'issue-913', '--branch', 'workflow/issue-913'], {
+      cwd: tmp, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0' }
+    });
+    assert(!String(result.stderr || '').includes('no upstream tracking ref'),
+      '#323: sink-merge must NOT abort on a no-upstream branch (auto-push self-heal), got stderr: ' + result.stderr);
+    assert(result.status === 0,
+      '#323: sink-merge completes without a manual git push -u, got status ' + result.status + '\nstderr: ' + result.stderr);
+    const mainAfter = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+    assert(mainBefore !== mainAfter, '#323: main advanced (FF to the feature commit)');
+    // status 0 + main advanced + no "no upstream tracking ref" abort proves the auto push -u
+    // self-heal ran: without it, assertBranchPushedToUpstream would have thrown (status 1).
+    // (We do not assert origin/workflow/issue-913 still resolves — sink-merge cleans up the
+    // merged branch afterward.)
+    console.log('testSinkMergeAutoPushesWhenNoUpstream: PASSED');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
     fs.rmSync(remotePath, { recursive: true, force: true });
@@ -9124,6 +9178,7 @@ async function main() {
     testE2EGitHubMergeFullChain();
     testSinkMergeRefusesLiveFolder();
     testSinkMergeBlocksUnpushedCommits();
+    testSinkMergeAutoPushesWhenNoUpstream();
     testSinkMergeOfflineSkipsPublishGuard();
     testFastE2EMergeFullChain();
     testE2EGitHubPrFullChain();
