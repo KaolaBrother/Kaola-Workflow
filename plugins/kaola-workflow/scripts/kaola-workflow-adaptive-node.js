@@ -122,8 +122,17 @@ function refreshTaskMirror(project, shell) {
 }
 
 function buildTransition(id, ledgerStatus, reason, note) {
-  const { mapLedgerStatus } = require(taskMirrorPath);
-  const t = { id: id, status: mapLedgerStatus(ledgerStatus), ledger_status: ledgerStatus, reason: reason };
+  // Fail-OPEN, matching refreshTaskMirror: this runs AFTER the ledger is already written, so it must
+  // never throw. mapLedgerStatus is a total switch (cannot throw), but the require() could in a
+  // broken/partial install — fall back to an inline equivalent map so a transition is still returned.
+  let status;
+  try {
+    status = require(taskMirrorPath).mapLedgerStatus(ledgerStatus);
+  } catch (_) {
+    status = (ledgerStatus === 'complete' || ledgerStatus === 'n/a') ? 'completed'
+      : (ledgerStatus === 'in_progress' ? 'in_progress' : 'pending');
+  }
+  const t = { id: id, status: status, ledger_status: ledgerStatus, reason: reason };
   if (note) t.note = note;
   return t;
 }

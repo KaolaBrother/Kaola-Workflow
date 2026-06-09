@@ -48,10 +48,14 @@ here for the full contract.
 - **Closure normalization (#324):** when `archiveProjectDir` archives a project with
   `status: closed`, it also normalizes the terminal state so a later audit reading only the
   archive cannot mistake it for an in-flight run: the `## Pending Gates` body is rewritten to
-  `- none`, `last_command`/`last_result` become `finalize`/`closed`, and any
+  `- none`, `last_command`/`last_result` become `finalize`/`closed`, any
   `finalization-summary.md` has its pre-sink sentinels (`READY FOR FINAL GIT GATE`,
-  `Pending final git gate. …`) neutralized before the folder is renamed into `archive/`. A
-  `discard`/`release` archive (non-`closed`) deliberately keeps mid-run state.
+  `Pending final git gate. …`) neutralized, and the known false-absolute phrase
+  (`No files changed after those runs`) in `.cache/final-validation.md` is rewritten to a
+  reuse-boundary caveat (#324 AC3 backstop) — all before the folder is renamed into `archive/`. A
+  `discard`/`release` archive (non-`closed`) deliberately keeps mid-run state. The accurate
+  validation-reuse boundary is stated by the agent per the finalize Validation De-Duplication
+  guidance; the archive-time rewrite is only a mechanical backstop for the known phrase.
 - Closure of a completed linked issue is governed by explicit invariants and an
   auditable receipt schema. See `docs/api.md` § Closure Contract for the nine
   closure invariants (seven hard-gating + two WARN-FIRST detection invariants added in #277),

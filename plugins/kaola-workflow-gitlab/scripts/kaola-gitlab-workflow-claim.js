@@ -814,6 +814,20 @@ function archiveProjectDir(root, project, statusValue, suffix) {
         fs.writeFileSync(summaryPath, s);
       }
     } catch (_) {}
+    // #324 AC3: neutralize the known false-absolute in the archived final-validation evidence so a
+    // later audit cannot read "No files changed after those runs" as terminal truth when the finalize
+    // node itself later changed docs/CHANGELOG. This is a mechanical BACKSTOP — the accurate reuse
+    // boundary is stated by the agent per the finalize.md Validation De-Duplication guidance. (Literal
+    // match, like the summary sentinel above; the agent guidance is the primary fix.)
+    try {
+      const finalValPath = path.join(src, '.cache', 'final-validation.md');
+      if (fs.existsSync(finalValPath)) {
+        let fv = fs.readFileSync(finalValPath, 'utf8');
+        fv = fv.replace(/No files changed after those runs\.?/g,
+          'Validation reuse covers code/test impact through the cited node; any later finalize-node docs/CHANGELOG edit is outside that rerun trigger (see the ## Node Ledger).');
+        fs.writeFileSync(finalValPath, fv);
+      }
+    } catch (_) {}
   }
   const archiveBase = path.join(root, 'kaola-workflow', 'archive');
   fs.mkdirSync(archiveBase, { recursive: true });

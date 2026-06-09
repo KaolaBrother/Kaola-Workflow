@@ -191,6 +191,16 @@ Avoid redundant validation runs.
 - After a routed fix or Trivial Inline Edit Exception edit, rerun the failed or
   affected command. Rerun broader validation only when shared infrastructure,
   dependencies, build config, or public behavior changed.
+- **State the actual reuse boundary, not a false absolute (#324 AC3).** When you cite
+  a prior run instead of rerunning, record WHICH node/state that run covered and that
+  later finalize-step edits (e.g. a `CHANGELOG.md`/docs touch in the finalize node)
+  are outside it. Do NOT write a terminal absolute like `No files changed after those
+  runs` when the finalize node itself changes docs/changelog afterward — say e.g.
+  `validation reuse covers code/test impact through node nN; the finalize-node
+  CHANGELOG edit is docs-only and outside the rerun trigger`. (At closure,
+  `archiveProjectDir` also mechanically neutralizes the known false-absolute phrase in
+  the archived `.cache/final-validation.md` as a backstop, but the accurate boundary
+  is yours to state here.)
 
 ## Trivial Inline Edit Exception
 

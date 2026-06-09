@@ -126,6 +126,10 @@ function testFinalize(tmp) {
   // archive must not see a merged/closed run as still "READY FOR FINAL GIT GATE").
   fs.writeFileSync(path.join(tmp, 'kaola-workflow', 'issue-164', 'finalization-summary.md'),
     '# Finalization Summary\n\n## Status\nREADY FOR FINAL GIT GATE\n\n## Commit And Push\nPending final git gate. Final hash reported after push.\n');
+  // #324 AC3: seed a false-absolute validation claim in the cache evidence.
+  fs.mkdirSync(path.join(tmp, 'kaola-workflow', 'issue-164', '.cache'), { recursive: true });
+  fs.writeFileSync(path.join(tmp, 'kaola-workflow', 'issue-164', '.cache', 'final-validation.md'),
+    'All four edition test chains run during n16.\nNo files changed after those runs.\n');
   const result = json(runNode(claimScript, ['finalize', '--project', 'issue-164'], tmp));
   assert(result.status === 'closed', 'finalize should report closed');
   assert(!fs.existsSync(path.join(tmp, 'kaola-workflow', 'issue-164')), 'finalize should remove active folder');
@@ -149,6 +153,12 @@ function testFinalize(tmp) {
     '#324: archived finalization-summary must not retain the pre-sink "READY FOR FINAL GIT GATE" sentinel');
   assert(!archivedSummary.includes('Pending final git gate'),
     '#324: archived finalization-summary must not retain the pre-sink "Pending final git gate" sentinel');
+  // #324 AC3: the false-absolute validation claim is neutralized in the archived cache evidence.
+  const archivedFinalVal = read(path.join(tmp, 'kaola-workflow', 'archive', archived[0], '.cache', 'final-validation.md'));
+  assert(!archivedFinalVal.includes('No files changed after those runs'),
+    '#324 AC3: archived final-validation.md must not retain the false-absolute "No files changed after those runs"');
+  assert(archivedFinalVal.includes('Validation reuse covers'),
+    '#324 AC3: archived final-validation.md states the actual reuse boundary instead of the false absolute');
 }
 
 function testRepair(tmp) {
