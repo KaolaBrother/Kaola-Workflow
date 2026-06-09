@@ -77,9 +77,10 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   `kaola-workflow-commit-node.js` composes the plan-validator barrier subcommands into
   one auditable call by shelling the validator: at node START it runs `--record-base`
   (idempotent, capturing the full-worktree snapshot so the barrier has a clean baseline);
-  at node END it runs `--barrier-check` (blocking) and `--gate-verify` (informational
-  only at the per-node level, because the downstream reviewer is still pending); at
-  a whole-plan invocation (no `--node-id`) both checks are blocking (a test-only mode — see the executor note below). The split between next-action
+  at node END it runs `--barrier-check` (blocking) plus `--gate-verify` and
+  `--verdict-check` (both informational only at the per-node level, because the
+  downstream reviewer is still pending); at
+  a whole-plan invocation (no `--node-id`) all three checks are blocking (a test-only mode — see the executor note below). The split between next-action
   and commit-node mirrors the executor's own dispatch/commit cycle: next-action resolves
   *what* to run next; commit-node proves *what was written* was in bounds.
   `kaola-workflow-adaptive-node.js` (#272) is the third aggregator and owns the complete
@@ -168,7 +169,14 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   every completed code/sensitive node in the `## Node Ledger` — closing the leak where a
   required reviewer is marked `n/a` at runtime (audit G1/H5) — wired into `routeAdaptive`
   (surfaced as `pendingGates`, non-blocking on resume so a mid-run pending gate never
-  bricks an in-flight plan) and enforced as a hard merge gate in Finalization. `--barrier-check`
+  bricks an in-flight plan) and enforced as a hard merge gate in Finalization. `--verdict-check`
+  (#251) goes one step further than `--gate-verify`: where gate-verify proves the reviewer
+  *executed*, verdict-check proves it *approved* — it reads each completed gate node's
+  `.cache/{node-id}.md` evidence and requires a parseable `verdict: pass` with
+  `findings_blocking: 0` (an `adversarial-verifier` fan-out applies **majority-refute** over the
+  sibling per-instance evidence files; missing/unparseable counts as a refute), fail-closed on a
+  fail/missing/unparseable verdict — informational per-node in `kaola-workflow-commit-node.js`
+  and a hard blocking merge gate in Finalization. `--barrier-check`
   re-scans the files actually written and refuses a sensitive write with no `security-reviewer`
   node (audit H1), an out-of-allowlist production write (audit H3), or a foreign-project `kaola-workflow/archive/<X>/` write whose `<X>` is not the finalized project (#261 — scoping the blanket `kaola-workflow/` artifact exemption so a stray cross-issue archive folder cannot reach a protected branch undetected; companion defense-in-depth: `cmdFinalize` stages only the finalized project's own archive/rename/roadmap paths, and the Finalization Staging Guard typed-blocks a staged foreign `archive/<other>/`). It runs in two modes: the
   **whole-plan** Finalization merge gate diffs vs the merge-base of HEAD and `origin/main` (so a
