@@ -117,6 +117,26 @@ function assert(condition, message) {
 }
 
 // ---------------------------------------------------------------------------
+// Test 4c: whole-plan — barrier pass + gate ok + verdictCheck present-and-FAILING
+//          → overallOk===false / result===refuse. verdict-check IS blocking in
+//          whole-plan mode (commit-node folds it into overallOk), but the
+//          aggregator layer had NO test referencing verdictCheck (#259 F3:
+//          coverage lock for existing behavior, not a defect).
+// ---------------------------------------------------------------------------
+{
+  const input = {
+    recordBase: null,
+    barrierCheck: { exitCode: 0, result: 'pass', errors: [], sensitiveHits: [], outOfAllow: [] },
+    gateVerify: { exitCode: 0, ok: true, unsatisfied: [] },
+    verdictCheck: { exitCode: 1, ok: false, failures: [{ nodeId: 'review', role: 'code-reviewer', reason: 'verdict fail' }] },
+  };
+  const r = combineResults(input, { mode: 'whole-plan' });
+  assert(r.overallOk === false, 'test4c: overallOk===false when whole-plan verdict-check fails');
+  assert(r.result === 'refuse', 'test4c: result===refuse on a failing whole-plan verdict-check');
+  assert(r.verdictCheck && r.verdictCheck.informational === undefined, 'test4c: verdictCheck does NOT carry informational in whole-plan mode');
+}
+
+// ---------------------------------------------------------------------------
 // Test 5: shellValidator seam tests (with a stub validator written to tmpdir)
 // ---------------------------------------------------------------------------
 {

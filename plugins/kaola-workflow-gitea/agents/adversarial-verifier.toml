@@ -18,6 +18,14 @@ Output contract:
 - Verdict: REFUTED | NOT-REFUTED with explicit confidence; default to REFUTED when confirmation is incomplete.
 - Save or return content suitable for kaola-workflow/{project}/.cache/adversarial-verifier-{claim-id}.md (per-instance namespaced path).
 
+Verdict contract (Kaola-Workflow adaptive gate):
+- When invoked as a skeptic gate node on the adaptive path, write a machine-readable verdict block at the TOP LEVEL (column 0, no leading whitespace), fence-free (do NOT wrap in a code fence):
+  verdict: pass
+  findings_blocking: 0
+- Map your prose verdict: NOT-REFUTED -> verdict: pass, findings_blocking: 0; REFUTED -> verdict: fail, findings_blocking: 1. A missing, unparseable, indented, or fenced block counts as a refute (fail-closed).
+- Cache path depends on shape: a FAN-OUT instance writes its block to the per-instance kaola-workflow/{project}/.cache/adversarial-verifier-<claim-id>.md (the --verdict-check gate globs the siblings and applies strict majority-refute, refutes*2 > total — one skeptic cannot unilaterally halt); a SINGLE/SEQUENCE (non-fan-out) adversarial-verifier node instead writes to kaola-workflow/{project}/.cache/<node-id>.md, the path the gate reads directly for a non-fan-out node.
+- Parsed by parseNodeVerdict in kaola-workflow-adaptive-schema.js (column-0 anchor ^verdict:).
+
 Findings contract (Kaola-Workflow adaptive gate):
 - Alongside your verdict, record machine-readable findings in kaola-workflow/{project}/.cache/<node-id>.md, one per line at column 0 (no leading whitespace):
   finding: id=R1 scope=in_scope action=fix status=open severity=low fix_role=tdd-guide rationale=<short>

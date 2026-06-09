@@ -19,6 +19,40 @@ ledger, stop with a **typed refusal** (`Adaptive plan is not complete or its pla
 failed. Run /kaola-workflow-plan-run first.`). Read the plan + Node Ledger as the Phase
 1-5 substitute.
 
+The adaptive completion check is **script-enforced** (#231/#285), not prose: run all
+four gates and capture each exit code DIRECTLY (never gate on a piped `| tail`, which
+reports the tail's exit and masks failure):
+
+```bash
+validator_script="plugins/kaola-workflow/scripts/kaola-workflow-plan-validator.js"
+if [ ! -f "$validator_script" ]; then
+  validator_script="$(find "$HOME/.codex/plugins/cache" -path '*/kaola-workflow/*/scripts/kaola-workflow-plan-validator.js' -print -quit 2>/dev/null)"
+fi
+PLAN="kaola-workflow/${KAOLA_PROJECT}/workflow-plan.md"
+node "$validator_script" "$PLAN" --resume-check --json; RC=$?
+node "$validator_script" "$PLAN" --gate-verify   --json; GV=$?
+node "$validator_script" "$PLAN" --barrier-check --json; BC=$?
+node "$validator_script" "$PLAN" --verdict-check --json; VC=$?
+if [ "$RC" -ne 0 ] || [ "$GV" -ne 0 ] || [ "$BC" -ne 0 ] || [ "$VC" -ne 0 ]; then
+  echo "BLOCKED: adaptive barrier failed (resume=$RC gate=$GV barrier=$BC verdict=$VC) — run /kaola-workflow-plan-run first"; exit 1
+fi
+```
+
+- `--resume-check` proves `plan_hash` integrity + structure + closed library.
+- `--gate-verify` proves every completed code/sensitive node is post-dominated by a
+  **completed** reviewer in the `## Node Ledger` — closing the G1/H5 leak where a
+  required reviewer node is silently marked `n/a` at runtime.
+- `--barrier-check` re-scans the files actually written (git diff vs the merge-base of
+  HEAD and `origin/main`) and refuses a sensitive write with no `security-reviewer`
+  node, or an out-of-allowlist production write — closing H1/H3.
+- `--verdict-check` reads every completed `code-reviewer`, `security-reviewer`, and
+  `adversarial-verifier` node's `.cache/{node-id}.md` and requires a machine-readable
+  `verdict: pass` with `findings_blocking: 0`. Any nonzero exit **blocks the merge** —
+  this proves every gate-role node recorded a passing verdict before the plan closes.
+
+On any failure stop with a **typed refusal** (do not proceed): `Adaptive plan failed
+the script-enforced barrier. Run /kaola-workflow-plan-run first.`
+
 ## Goal Contract
 
 Continue until final validation, acceptance audit, documentation docking,

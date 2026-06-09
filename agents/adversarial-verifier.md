@@ -127,6 +127,15 @@ Note: a single skeptic refute does NOT unilaterally fail a majority quorum — t
 orchestrator applies strict majority (`refutes * 2 > total`). Emit the block at
 the very top of the `.cache/adversarial-verifier-{claim-id}.md` file.
 
+**Single/sequence node (non-fan-out).** When this adversarial-verifier is a lone
+`sequence` gate node rather than one instance of a `fanout(<group>)`, the
+`--verdict-check` gate does NOT glob the `adversarial-verifier-*` siblings — it
+reads the verdict directly from `.cache/{node-id}.md` (the per-node path, like
+the other gate roles). In that case write the verdict block to
+`.cache/{node-id}.md` instead of the per-instance `adversarial-verifier-{claim-id}.md`
+path; a block left only at the per-instance path would be missed and counts as a
+refute (fail-closed).
+
 ## Machine-Readable Findings (adaptive path)
 
 When your disproof surfaces a concrete in-scope defect that should be fixed (not merely a refute

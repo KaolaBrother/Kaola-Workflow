@@ -14,6 +14,13 @@ Output contract:
 - Say clearly when no security-sensitive files were touched or no findings are found.
 - Save or return content suitable for kaola-workflow/{project}/.cache/security-reviewer.md.
 
+Verdict contract (Kaola-Workflow adaptive gate):
+- When invoked as a gate node on the adaptive path, write a machine-readable verdict block at the TOP LEVEL of kaola-workflow/{project}/.cache/<node-id>.md, at column 0 (no leading whitespace), fence-free (do NOT wrap in a code fence):
+  verdict: pass
+  findings_blocking: 0
+- Map your prose verdict: APPROVE -> verdict: pass, findings_blocking: 0; WARNING -> verdict: pass, findings_blocking: 0 (HIGH advisory, not blocking); BLOCK -> verdict: fail, findings_blocking: <count of CRITICAL findings>.
+- Parsed by parseNodeVerdict in kaola-workflow-adaptive-schema.js (column-0 anchor ^verdict:); an indented or fenced block is rejected fail-closed. The mechanical --verdict-check gate reads this block at Finalization: a missing, unparseable, or failing verdict — or an unresolved in_scope action=fix finding even when verdict is pass — blocks the merge.
+
 Findings contract (Kaola-Workflow adaptive gate):
 - Alongside your verdict, record machine-readable findings in kaola-workflow/{project}/.cache/<node-id>.md, one per line at column 0 (no leading whitespace):
   finding: id=R1 scope=in_scope action=fix status=open severity=low fix_role=tdd-guide rationale=<short>
