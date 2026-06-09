@@ -31,6 +31,14 @@ Do not present Claude `Agent(...)` call-syntax as the Codex runtime contract.
 
 See `docs/api.md` § Codex Harness Scripts for the preflight CLI and typed-refusal shapes.
 
+## Testing — Cross-Edition Validation (issue #307)
+
+The repo ships four editions (claude / codex / gitlab / gitea), each with its own validators and walkthroughs wired as a separate `npm` chain: `test:kaola-workflow:claude`, `:codex`, `:gitlab`, `:gitea`. `npm test` runs all four — but **chained with `&&`, so it short-circuits on the first failure**. A red codex/gitlab/gitea chain sitting *behind* a green claude chain is therefore never reached, and a Finalization gate that records only `npm test` (or only the claude walkthrough) can ship a change that broke an edition validator or walkthrough undetected.
+
+- **A cross-edition diff MUST have all four chains green, recorded before Finalization.** "Cross-edition" = the diff touches any of: `plugins/kaola-workflow-{gitlab,gitea}/…`, the codex `validate-kaola-workflow-contracts.js`, or any edition-port script (the forge-renamed `kaola-{gitlab,gitea}-workflow-*.js`, the codex byte-mirrors under `plugins/kaola-workflow/scripts/`, or shared scripts in `COMMON_SCRIPTS` / `BYTE_IDENTICAL_GROUPS`).
+- **Run the four chains sequentially**, not in parallel — concurrent runs trip the known `testClosureAuditExecuteLabelRemovalTimeoutBreaks` CPU-contention timing flake. The canonical invocation is in `CLAUDE.md` § Running Tests.
+- A claude-only green is **insufficient evidence** for such a diff: surface each chain's exit code, do not infer the other three from `npm test` passing.
+
 ## Release
 
 - Before merging a version bump, create the matching local git tag (`git tag kaola-workflow--v<version> <sha>`); `npm test` enforces the tag exists (unless `KAOLA_WORKFLOW_OFFLINE=1`).

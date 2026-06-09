@@ -38,6 +38,12 @@ node scripts/simulate-workflow-walkthrough.js
 ```
 Must exit 0 with "Workflow walkthrough simulation passed".
 
+For any **cross-edition** diff (see Validation Policy), run all four chains sequentially:
+```bash
+npm run test:kaola-workflow:claude && npm run test:kaola-workflow:codex && \
+  npm run test:kaola-workflow:gitlab && npm run test:kaola-workflow:gitea
+```
+
 ## Documentation Update Checklist
 
 - [ ] README.md - update feature list, usage examples, env vars
@@ -66,6 +72,7 @@ Must exit 0 with "Workflow walkthrough simulation passed".
 
 - Background hooks (advisor, pre-commit, phantom-advisor) are advisory; do not re-run their checks redundantly.
 - Verify with `node scripts/simulate-workflow-walkthrough.js` before claiming workflow-related changes complete.
+- **Cross-edition diffs require all four chains green (#307).** A diff touching the edition trees (`plugins/kaola-workflow-{gitlab,gitea}/`, the codex/forge contract validators, or any edition-port script) MUST have all four `npm run test:kaola-workflow:{claude,codex,gitlab,gitea}` chains green — run sequentially — recorded before Finalization. A green claude chain alone is **insufficient evidence**: `npm test` chains the four with `&&`, so it short-circuits on the first failure and a red codex/gitlab/gitea chain behind a green claude one is never reached. See `docs/conventions.md`.
 
 ## Documentation Map
 
