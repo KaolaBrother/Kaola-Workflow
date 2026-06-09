@@ -150,13 +150,19 @@ orchestrator). The main session runs the `kaola-gitlab-workflow-adaptive-node.js
 governance decisions (ADR 0004/0005: main session owns loop + dispatch + judgment; scripts own
 deterministic transitions).
 
-**Task list = the workflow nodes.** The main session keeps a task list with one item per `## Nodes`
-row (`id · role`, in `depends_on` order) — established by `/kaola-workflow-adapt` after freeze, or,
-on a direct resume, reconstructed here from the `## Node Ledger`. Mark a node's task `in_progress`
-when you dispatch its role (after `open-next`) and `completed` once `close-and-open-next` returns
-`result: ok` (`n/a` → skipped). This task list is a **live mirror** for visibility; the durable
-`## Node Ledger` stays the single source of truth, so reconcile the task list to the ledger on every
-resume rather than trusting a stale in-session list.
+**Task list = the workflow nodes.** The main session keeps a task list (use **TodoWrite**) with one
+item per `## Nodes` row (`id · role`, in `depends_on` order) — established by `/kaola-workflow-adapt`
+after freeze, or, on a direct resume, reconstructed here from the `## Node Ledger`. Mark a node's task
+`in_progress` when you dispatch its role (after `open-next`) and `completed` once `close-and-open-next`
+returns `result: ok`; a node committed `n/a` maps to `completed` (the task surface has no "skipped"
+state). **The fused `close-and-open-next` returns TWO transitions** — reflect BOTH in the SAME update:
+mark the committed node `completed` AND the newly-opened next node `in_progress`, never just the first
+(the half-done inference is marking N done but forgetting to open N+1). On a **consent-halt /
+escalation** (step 4 — failed barrier, security escalation, or `test_thrash`), leave the blocked node
+`in_progress` and append a halt note to its task (e.g. `… — HALTED: <reason>`) so the live view shows
+*why* it stopped; do not mark it `completed`. This task list is a **live mirror** for visibility; the
+durable `## Node Ledger` stays the single source of truth, so reconcile the task list to the ledger on
+every resume rather than trusting a stale in-session list.
 
 The commit of a node and the advance to the next node are **fused into ONE `close-and-open-next`
 call** (step 3) so the main session makes **one** per-node lifecycle call, not two. A standalone
@@ -550,6 +556,31 @@ enters a **bounded repair controller** (static `LOOP_CAP`):
 Findings marked `out_of_scope`, `pre_existing`, or `needs_user_decision` (or `action: follow_up` /
 `document`) do not block — but they MUST be recorded as **explicit, machine-readable** follow-ups /
 escalations (they remain in the evidence and surface at finalize), never silently dropped.
+
+### Re-opening an already-complete node (frozen-plan repair — #308)
+
+The bounded controller above repairs a finding on the node that is *currently* `in_progress`. When
+a repair must reach a node already marked `complete` — a Finalization-surfaced barrier/verdict
+failure attributed to an upstream node, or a finding whose `fix_role` work belongs to a node the
+loop has already closed — do NOT hand-edit `workflow-plan.md`. Run the first-class repair
+transaction:
+
+```
+node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-adaptive-node.js" reopen-node --project {project} --node-id N --json
+```
+
+`reopen-node` resets node N and its **post-dominating** gate node(s) (`code-reviewer` /
+`security-reviewer` / `adversarial-verifier`) from `complete → pending`, removes their stale
+`.cache/barrier-base-<id>` baselines, reopens N to `in_progress`, and re-records a fresh node-start
+baseline at the current merged state — so the re-run is barrier-clean and the gate MUST re-approve.
+It **refuses** over a live parallel batch / interrupted top-up (`member.opening: true`) and over a
+node that is not `complete` (reconcile first). Readiness is **transitive** (#308): a downstream sink
+whose own direct deps are still `complete` is correctly withheld until the reopened gate re-passes,
+so the plan cannot race ahead of the repair. After it returns, re-enter the per-node loop at the
+reopened node and reflect BOTH ledger transitions in the task list (N and its reset gate). If the
+ledger is missing a row for any node (a hand-authored or externally-edited plan),
+`kaola-gitlab-workflow-plan-validator.js --freeze --repair` reconciles `## Node Ledger` to `## Nodes` — adding a
+`pending` row per missing node, never dropping a status — and does not move `plan_hash`.
 
 ## Caps
 

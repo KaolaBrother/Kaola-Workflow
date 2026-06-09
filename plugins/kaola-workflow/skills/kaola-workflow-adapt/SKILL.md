@@ -163,7 +163,7 @@ and freeze). The claim (at repo-root — the adaptive claim provisions a worktre
 
 After `handoff_status: ready_to_run` (and ONLY then), re-read `kaola-workflow/{project}/workflow-plan.md` to internalize the frozen `## Nodes` table, then create the orchestrator's task list. **The task list MUST NOT be created before `handoff_status: ready_to_run` is confirmed and the frozen plan has been read** — the planner owns the design; the task list is a mechanical reflection of the frozen result, not a pre-planned outline.
 
-**Establish the task list = the workflow nodes** — one task per row of the frozen `## Nodes` table,
+**Establish the task list = the workflow nodes** (use the runtime task surface) — one task per row of the frozen `## Nodes` table,
 labeled `id · role`, in `depends_on` order; a live mirror of the `## Node Ledger` (the durable
 source of truth) that the executor flips `in_progress` when it dispatches that node's role (after
 `open-next`) and `completed` after the commit step closes it (`n/a` nodes → skipped). Then hand off to
