@@ -247,6 +247,14 @@ const CONFIG_REL_PATH = ['.config', 'kaola-workflow', 'config.json'];
 const ENABLE_ADAPTIVE_FIELD = 'enable_adaptive';
 const ENABLE_ADAPTIVE_ENV = 'KAOLA_ENABLE_ADAPTIVE';
 const FANOUT_CAP_ENV = 'KAOLA_FANOUT_CAP';
+// #320: a write-role parallel batch only stays isolated if each member subagent
+// actually runs from its own member worktree. This harness cannot FORCE a
+// dispatched subagent's CWD (the `Working directory:` line is advisory prose), so
+// write-role batches leak edits to the parent worktree. This env flag asserts that
+// the runtime CAN force member-worktree CWD; default FALSE means write-role batches
+// degrade to serial BEFORE dispatch instead of leaking. Set only by a future
+// harness that gains a real cwd-forcing primitive.
+const BATCH_CWD_ENFORCED_ENV = 'KAOLA_BATCH_CWD_ENFORCED';
 
 // Resolve the adaptive switch with precedence env > config > default OFF.
 // The OFF guarantee rests on the STRICT `config.enable_adaptive === true` on-test
@@ -264,6 +272,13 @@ function resolveFanoutCap(env) {
   const raw = (env || {})[FANOUT_CAP_ENV];
   const n = parseInt(raw, 10);
   return Number.isInteger(n) && n >= 1 ? n : DEFAULT_FANOUT_CAP;
+}
+
+// #320: resolve whether the runtime can force member-worktree CWD for batch
+// subagents. Fail-closed default FALSE — only an explicit 1/true/yes opts in.
+function resolveBatchCwdEnforced(env) {
+  const raw = (env || {})[BATCH_CWD_ENFORCED_ENV];
+  return raw === '1' || raw === 'true' || raw === 'yes';
 }
 
 function isLegalWorkflowPath(value, adaptiveEnabled) {
@@ -308,7 +323,9 @@ module.exports = {
   ENABLE_ADAPTIVE_FIELD,
   ENABLE_ADAPTIVE_ENV,
   FANOUT_CAP_ENV,
+  BATCH_CWD_ENFORCED_ENV,
   resolveEnableAdaptive,
   resolveFanoutCap,
+  resolveBatchCwdEnforced,
   isLegalWorkflowPath,
 };
