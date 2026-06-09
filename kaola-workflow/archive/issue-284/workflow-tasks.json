@@ -1,0 +1,54 @@
+{
+  "source_plan_hash": "1158f7e7e426467b5efb75d2464a9b642353b4d8d32338792ca425408d76d8ab",
+  "tasks": [
+    {
+      "id": "design",
+      "role": "code-architect",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "installer",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "hookports",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "compact",
+      "role": "implementer",
+      "status": "pending",
+      "ledger_status": "pending"
+    },
+    {
+      "id": "tests",
+      "role": "tdd-guide",
+      "status": "pending",
+      "ledger_status": "pending"
+    },
+    {
+      "id": "review",
+      "role": "code-reviewer",
+      "status": "pending",
+      "ledger_status": "pending"
+    },
+    {
+      "id": "docs",
+      "role": "doc-updater",
+      "status": "pending",
+      "ledger_status": "pending"
+    },
+    {
+      "id": "finalize",
+      "role": "finalize",
+      "status": "pending",
+      "ledger_status": "pending"
+    }
+  ],
+  "last_synced_from_ledger": "2026-06-09T07:11:42.341Z"
+}

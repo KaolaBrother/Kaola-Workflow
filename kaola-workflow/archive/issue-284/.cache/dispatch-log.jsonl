@@ -1,0 +1,12 @@
+{"ts":"2026-06-09T06:32:01Z","agent_type":"workflow-planner","agent_id":"claim-backfill","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow"}
+{"ts":"2026-06-09T06:37:31Z","agent_type":"code-architect","agent_id":"a2143a5f742352264","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/issue-284"}
+{"ts":"2026-06-09T06:52:10Z","agent_type":"tdd-guide","agent_id":"a14b556e0f1e30424","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/issue-284"}
+{"ts":"2026-06-09T06:52:28Z","agent_type":"implementer","agent_id":"a6721321fed108e0a","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/issue-284"}
+{"ts":"2026-06-09T07:14:16Z","agent_type":"claude-code-guide","agent_id":"a2879936fde6d3b7e","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/issue-284"}
+{"ts":"2026-06-09T07:16:34Z","agent_type":"implementer","agent_id":"a066d76bd177bde48","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/issue-284"}
+{"ts":"2026-06-09T07:20:23Z","agent_type":"tdd-guide","agent_id":"a3956835d5411818d","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/issue-284"}
+{"ts":"2026-06-09T07:36:01Z","agent_type":"tdd-guide","agent_id":"adbb4db7f2ffd0ebf","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/issue-284"}
+{"ts":"2026-06-09T07:36:13Z","agent_type":"tdd-guide","agent_id":"aad94d2d3c1a88123","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/issue-284"}
+{"ts":"2026-06-09T07:36:22Z","agent_type":"tdd-guide","agent_id":"abcb061f5fc80673b","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/issue-284"}
+{"ts":"2026-06-09T07:53:51Z","agent_type":"code-reviewer","agent_id":"aac767c9180e40825","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/issue-284"}
+{"ts":"2026-06-09T08:04:37Z","agent_type":"doc-updater","agent_id":"adac68cef01ce45da","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/issue-284"}
