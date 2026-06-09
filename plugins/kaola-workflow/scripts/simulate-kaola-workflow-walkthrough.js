@@ -292,6 +292,54 @@ function testAC2CompactPlainStdout() {
   }
 }
 
+// #325: updateHooks() hardening — R1 (metacharacter pluginRoot can't break JSON), R2 ($schema carry
+// on fresh install, existing wins), R3 (sweep ALL events for orphaned kaola-workflow: entries).
+// pluginRoot derives from __dirname, not argv, so R1/R3 are exercised via the exported pure helpers.
+function testUpdateHooksHardening325() {
+  const { buildManagedHooks, mergeHooks } = require(installProfilesScript);
+  const tmplText = JSON.stringify({
+    $schema: 'https://json.schemastore.org/claude-code-settings.json',
+    hooks: {
+      SessionStart: [{ matcher: 'compact', hooks: [{ type: 'command', command: 'node "__KW_PLUGIN_ROOT__/scripts/x.js"', timeout: 5 }], id: 'kaola-workflow:compact' }],
+    },
+  });
+
+  // R1: a pluginRoot with metacharacters (backslash + quote, the Windows case) must NOT throw, must
+  // substitute verbatim, and must round-trip through JSON (proving JSON.stringify re-escapes it).
+  let built;
+  try { built = buildManagedHooks(tmplText, 'C:\\plug"in'); }
+  catch (e) { assert(false, '#325 R1: buildManagedHooks must not throw on a metacharacter pluginRoot, threw: ' + e.message); }
+  const cmd = built.hooks.SessionStart[0].hooks[0].command;
+  assert(cmd === 'node "C:\\plug"in/scripts/x.js"', '#325 R1: pluginRoot substituted verbatim, got ' + cmd);
+  assert(!cmd.includes('__KW_PLUGIN_ROOT__'), '#325 R1: token fully substituted');
+  let round; try { round = JSON.parse(JSON.stringify(built)); } catch (e) { assert(false, '#325 R1: built hooks must re-serialize to valid JSON'); }
+  assert(round.hooks.SessionStart[0].hooks[0].command === cmd, '#325 R1: command round-trips through JSON');
+
+  // R2: a fresh install carries the managed $schema; an existing user $schema still wins.
+  assert(mergeHooks({ hooks: {} }, built).$schema === built.$schema, '#325 R2: fresh install carries the template $schema');
+  assert(mergeHooks({ $schema: 'user-schema', hooks: {} }, built).$schema === 'user-schema', '#325 R2: existing user $schema wins');
+
+  // R3: a re-install after the managed-event set shrinks leaves no orphaned kaola-workflow: entry,
+  // while preserving non-managed entries under that event.
+  const shrunk = { $schema: built.$schema, hooks: { SessionStart: built.hooks.SessionStart } }; // PostToolUse no longer managed
+  const existingOrphan = { hooks: { PostToolUse: [{ id: 'kaola-workflow:phantom-advisor', matcher: 'Write' }, { id: 'user:keep', matcher: 'Edit' }] } };
+  const swept = mergeHooks(existingOrphan, shrunk);
+  const post = swept.hooks.PostToolUse || [];
+  assert(!post.some(e => e.id && e.id.startsWith('kaola-workflow:')), '#325 R3: orphaned kaola-workflow: entry under a now-unmanaged event is swept');
+  assert(post.some(e => e.id === 'user:keep'), '#325 R3: non-managed user entry under that event is preserved');
+
+  // R2 black-box: a fresh install writes .codex/hooks.json carrying $schema.
+  const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-325-schema-'));
+  try {
+    runInstallProfiles(freshDir);
+    const installed = JSON.parse(fs.readFileSync(path.join(freshDir, '.codex', 'hooks.json'), 'utf8'));
+    assert(typeof installed.$schema === 'string' && installed.$schema.length > 0, '#325 R2 (black-box): fresh-install hooks.json carries $schema');
+  } finally {
+    fs.rmSync(freshDir, { recursive: true, force: true });
+  }
+  console.log('testUpdateHooksHardening325: PASSED');
+}
+
 // AC4 (#284): producer test — spawn the bash dispatch-log hook with valid JSON stdin and
 // assert it writes exactly one JSONL line containing "agent_type":"workflow-planner" to the
 // active project's .cache/dispatch-log.jsonl.  Also asserts exit 0 on empty stdin (fail-open).
@@ -874,6 +922,7 @@ function main() {
     testCodexTaskMirror266();
     testCodexCompactResume266();
     testAC1HooksJson();
+    testUpdateHooksHardening325();
     testAC3AttestationSeeded();
     testAC2CompactPlainStdout();
     testAC4SubagentDispatchLog();

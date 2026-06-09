@@ -1944,6 +1944,37 @@ function countOccurrences(content, pattern) {
   return (content.match(pattern) || []).length;
 }
 
+// #325: updateHooks() hardening on the gitlab installer copy — R1 (metacharacter pluginRoot),
+// R2 ($schema carry / existing wins), R3 (sweep ALL events). Helpers are exported (require.main guard).
+function testUpdateHooksHardening325() {
+  const { buildManagedHooks, mergeHooks } = require(installProfilesScript);
+  const tmplText = JSON.stringify({
+    $schema: 'https://json.schemastore.org/claude-code-settings.json',
+    hooks: { SessionStart: [{ matcher: 'compact', hooks: [{ type: 'command', command: 'node "__KW_PLUGIN_ROOT__/scripts/x.js"', timeout: 5 }], id: 'kaola-workflow:compact' }] },
+  });
+  // R1
+  const built = buildManagedHooks(tmplText, 'C:\\plug"in');
+  const cmd = built.hooks.SessionStart[0].hooks[0].command;
+  assert.strictEqual(cmd, 'node "C:\\plug"in/scripts/x.js"', '#325 R1: pluginRoot substituted verbatim');
+  assert.doesNotThrow(() => JSON.parse(JSON.stringify(built)), '#325 R1: built hooks re-serialize to valid JSON');
+  // R2
+  assert.strictEqual(mergeHooks({ hooks: {} }, built).$schema, built.$schema, '#325 R2: fresh install carries $schema');
+  assert.strictEqual(mergeHooks({ $schema: 'user-schema', hooks: {} }, built).$schema, 'user-schema', '#325 R2: existing $schema wins');
+  // R3
+  const shrunk = { $schema: built.$schema, hooks: { SessionStart: built.hooks.SessionStart } };
+  const swept = mergeHooks({ hooks: { PostToolUse: [{ id: 'kaola-workflow:phantom-advisor' }, { id: 'user:keep' }] } }, shrunk);
+  assert.ok(!(swept.hooks.PostToolUse || []).some(e => e.id && e.id.startsWith('kaola-workflow:')), '#325 R3: orphan kaola-workflow: entry swept');
+  assert.ok((swept.hooks.PostToolUse || []).some(e => e.id === 'user:keep'), '#325 R3: user entry preserved');
+  // R2 black-box
+  const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-325-schema-'));
+  try {
+    runInstallProfiles(freshDir);
+    const installed = JSON.parse(fs.readFileSync(path.join(freshDir, '.codex', 'hooks.json'), 'utf8'));
+    assert.ok(typeof installed.$schema === 'string' && installed.$schema.length > 0, '#325 R2 (black-box): fresh-install hooks.json carries $schema');
+  } finally { fs.rmSync(freshDir, { recursive: true, force: true }); }
+  console.log('testUpdateHooksHardening325 (gitlab): PASSED');
+}
+
 function testInstallProfilesFeaturesTableHandling() {
   const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-codex-install-fresh-'));
   const existing = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-codex-install-existing-'));
@@ -3006,6 +3037,7 @@ function testClosureAuditMrFolderTimeout() {
 }
 
 testInstallProfilesFeaturesTableHandling();
+testUpdateHooksHardening325();
 testGitLabRoadmapValidateRemote();
 testStaleWorktreeCheck();
 testStaleWorktreeCleanup();
