@@ -1646,6 +1646,41 @@ function makeState(opts) {
 }
 
 // ---------------------------------------------------------------------------
+// #308 INTEGRATION (reopen-node × transitive readiness): the COMPOSITION the
+// isolated tests miss. After reopen-node resets the post-dominating gate to
+// pending and reopens N, the resulting ledger must drive the REAL next-action to
+// offer ONLY the reopened node — the gate and the sink stay withheld by transitive
+// readiness (no premature [N, sink] frontier). Only commit-node (the git baseline)
+// is stubbed; spliceLedgerNode + parseNodes + computeNextAction run for real.
+// ---------------------------------------------------------------------------
+{
+  const { computeNextAction } = require('./kaola-workflow-next-action');
+  const planNodes = [
+    '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| impl | tdd-guide | a | scripts/b.js | 1 | sequence |',
+    '| review | code-reviewer | impl | — | 1 | sequence |',
+    '| finalize | finalize | review | — | 1 | sequence |',
+  ];
+  let planContent = makePlan([
+    '| a | complete | |', '| impl | complete | |', '| review | complete | |', '| finalize | pending | |',
+  ], planNodes);
+  const res = runReopenNode({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md', project: 'test-project', nodeId: 'impl',
+    shell: (sp) => path.basename(sp) === 'kaola-workflow-commit-node.js' ? { exitCode: 0, result: 'ok' } : { exitCode: 1 },
+    readFile: (f) => { if (f.endsWith('workflow-plan.md')) return planContent; throw new Error('ENOENT ' + f); },
+    writeFile: (f, c) => { if (f.endsWith('workflow-plan.md')) planContent = c; },
+    cacheExists: (f) => /barrier-base-/.test(f), unlink: () => {},
+  });
+  assert(res.result === 'ok', '#308 integ: reopen-node ok, got ' + JSON.stringify(res));
+  const na = computeNextAction(planContent, { resolveModel: () => 'sonnet' });
+  const ready = na.readySet.map(n => n.id).sort();
+  assert(JSON.stringify(ready) === JSON.stringify(['impl']),
+    '#308 integ: after reopen-node, next-action offers ONLY [impl] — gate + sink withheld, got ' + JSON.stringify(ready));
+  assert(!na.readySet.some(n => n.id === 'finalize'),
+    '#308 integ: finalize sink is NOT prematurely ready after the gate reset');
+}
+
+// ---------------------------------------------------------------------------
 // #282 (AC-2): orient reconciles the durable task mirror on every resume by
 // SHELLING the task-mirror CLI — while staying read-only (the injected writeFile
 // throws, proving orient never writes the plan/ledger/state itself).
