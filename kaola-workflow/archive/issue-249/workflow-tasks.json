@@ -1,0 +1,108 @@
+{
+  "source_plan_hash": "5c93081a227c6693531ccded50e3c11c606dfb284f3564d0a3c71177f49fe9fb",
+  "tasks": [
+    {
+      "id": "n1",
+      "role": "code-explorer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n2",
+      "role": "code-architect",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n3",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n4",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n5",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n6",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n7",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n8",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n9",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n10",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n11",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n12",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n13",
+      "role": "implementer",
+      "status": "in_progress",
+      "ledger_status": "in_progress"
+    },
+    {
+      "id": "n14",
+      "role": "code-reviewer",
+      "status": "pending",
+      "ledger_status": "pending"
+    },
+    {
+      "id": "n15",
+      "role": "adversarial-verifier",
+      "status": "pending",
+      "ledger_status": "pending"
+    },
+    {
+      "id": "n16",
+      "role": "doc-updater",
+      "status": "pending",
+      "ledger_status": "pending"
+    },
+    {
+      "id": "n17",
+      "role": "finalize",
+      "status": "pending",
+      "ledger_status": "pending"
+    }
+  ],
+  "last_synced_from_ledger": "2026-06-09T07:20:34.222Z"
+}

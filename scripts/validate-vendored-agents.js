@@ -12,7 +12,6 @@ const vendoredAgents = [
   'code-architect',
   'code-explorer',
   'doc-updater',
-  'docs-lookup',
   'planner',
   'tdd-guide',
 ];
@@ -30,6 +29,7 @@ const localAgents = [
   'code-reviewer',
   'contractor',
   'implementer',
+  'knowledge-lookup',
   'security-reviewer',
   'workflow-planner',
 ];

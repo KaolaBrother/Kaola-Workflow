@@ -6,9 +6,9 @@ description = "Kaola-Workflow for Codex Phase 1 codebase researcher: maps affect
 config_file = "./agents/kaola-workflow/code-explorer.toml"
 nickname_candidates = ["Explorer", "Mapper", "Scout"]
 
-[agents.docs-lookup]
-description = "Kaola-Workflow for Codex Phase 1 documentation researcher: checks current official docs only when external behavior matters."
-config_file = "./agents/kaola-workflow/docs-lookup.toml"
+[agents.knowledge-lookup]
+description = "Kaola-Workflow for Codex Phase 1 knowledge researcher: checks curated library/API docs (Context7) and, when runtime allows, the open web only when external behavior or expertise matters."
+config_file = "./agents/kaola-workflow/knowledge-lookup.toml"
 nickname_candidates = ["Docs", "Reference", "Lookup"]
 
 [agents.planner]

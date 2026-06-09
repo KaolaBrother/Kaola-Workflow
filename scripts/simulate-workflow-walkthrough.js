@@ -1815,7 +1815,7 @@ function testAdaptiveTier2Composition() {
     // distinction from legal multi-role branching above.
     v = validatePlanFixture(tmp, [
       '| a | code-explorer | — | — | 1 | fanout(g) |',
-      '| b | docs-lookup | — | — | 1 | fanout(g) |',
+      '| b | knowledge-lookup | — | — | 1 | fanout(g) |',
       '| done | finalize | a,b | — | 1 | sequence |',
     ], []);
     assert(v.result === 'refuse', 'tier2: heterogeneous fan-out must be a typed refusal, got: ' + JSON.stringify(v));

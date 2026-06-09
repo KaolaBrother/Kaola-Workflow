@@ -49,7 +49,7 @@ const TERMINAL_ROLE = 'finalize';
 // this baseline with any maintainer-added roles discovered under <root>/agents,
 // so the library is runtime-closed over the INSTALLED set (not the literal nine).
 const CANONICAL_ROLES = [
-  'code-explorer', 'docs-lookup', 'planner', 'code-architect', 'tdd-guide',
+  'code-explorer', 'knowledge-lookup', 'planner', 'code-architect', 'tdd-guide',
   'build-error-resolver', 'code-reviewer', 'security-reviewer', 'doc-updater',
   'adversarial-verifier', 'implementer',
 ];

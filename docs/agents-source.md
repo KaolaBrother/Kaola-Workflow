@@ -18,7 +18,6 @@ have to install Everything Claude Code (ECC) separately.
 | `agents/code-architect.md` | `agents/code-architect.md` | `e99b3c718087e3be05c1763182cf904b8b25edb4` |
 | `agents/code-explorer.md` | `agents/code-explorer.md` | `a391679941f71b8ff0e12cc6d9bb025a899eabb7` |
 | `agents/doc-updater.md` | `agents/doc-updater.md` | `0da663329128a5a03ff811c39c0c01004cab5ac1` |
-| `agents/docs-lookup.md` | `agents/docs-lookup.md` | `348d67c22219b3a51fde972ceffc1cc2f2e896e5` |
 | `agents/planner.md` | `agents/planner.md` | `c311f492bd1d3bae077c86716163966789eefae2` |
 | `agents/tdd-guide.md` | `agents/tdd-guide.md` | `1d0849840f0f5ed76541a48b2b4b0912b8926024` |
 
@@ -48,7 +47,7 @@ They are no longer byte-tracked to upstream and are NOT re-fetched by the Refres
 ## Refresh Procedure
 
 1. Choose the upstream commit to vendor and update the pinned commit above.
-2. Fetch the same 7 upstream files from `affaan-m/everything-claude-code` (code-reviewer and
+2. Fetch the same 6 upstream files from `affaan-m/everything-claude-code` (code-reviewer and
    security-reviewer are no longer vendored — see **Locally Forked Agents** above).
 3. Preserve each file's YAML front matter as the first bytes of the file.
 4. Insert the Kaola attribution comment immediately after the closing front

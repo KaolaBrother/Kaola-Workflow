@@ -7,7 +7,7 @@ const path = require('path');
 
 const DEFAULT_AGENT_MODELS = {
   'code-explorer': 'sonnet',
-  'docs-lookup': 'sonnet',
+  'knowledge-lookup': 'sonnet',
   planner: 'opus',
   'code-architect': 'sonnet',
   'tdd-guide': 'sonnet',

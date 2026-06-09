@@ -64,7 +64,7 @@ try {
     .join('\n');
   assert(!/model="\{[A-Z_]+_MODEL\}"/.test(allCommands), 'installed commands must not keep model placeholders');
 
-  const requiredAgents = ['code-explorer','docs-lookup','planner','code-architect','tdd-guide',
+  const requiredAgents = ['code-explorer','knowledge-lookup','planner','code-architect','tdd-guide',
     'build-error-resolver','code-reviewer','security-reviewer','doc-updater','adversarial-verifier','contractor','workflow-planner'];
   for (const agent of requiredAgents) {
     const installed = fs.readFileSync(path.join(tmp,'.claude','agents',agent+'.md'),'utf8');

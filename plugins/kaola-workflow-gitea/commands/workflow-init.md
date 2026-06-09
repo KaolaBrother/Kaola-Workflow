@@ -113,7 +113,7 @@ Append equivalent missing sections only. Treat headings with the same meaning as
 - Maintain `workflow-state.md` for active work; it records current phase, step, pending gates, and next command.
 - Delegate phase-specific work to the vendored Claude Code agents by default; the main session owns orchestration, review, validation, integration, and final decisions.
 - Phase boundaries: Phase 1 discovers facts, Phase 2 chooses strategy, Phase 3 creates the executable blueprint.
-- In Phase 1, spawn `code-explorer` for codebase research and `docs-lookup` when external/library/API documentation is needed.
+- In Phase 1, spawn `code-explorer` for codebase research and `knowledge-lookup` when external library/API behavior or open-web/expertise knowledge that cannot be confirmed locally is needed.
 - In Phase 4, spawn `tdd-guide` per task as the executor. `tdd-guide` is the executor agent; `tdd-workflow` is the RED -> GREEN -> REFACTOR playbook it follows.
 - Route build/type/lint validation failures to `build-error-resolver`; route behavior or coverage failures back to `tdd-guide`.
 - Use the vendored agent role names exactly as installed; prefer short names like `planner`. When spawning a Kaola subagent, pass the role's configured model on the spawn call — each agent ships its model in its installed profile.
