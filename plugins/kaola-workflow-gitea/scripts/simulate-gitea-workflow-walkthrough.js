@@ -703,6 +703,9 @@ function testGiteaAdaptive() {
     // #324: seed a PRE-SINK finalization-summary carrying the terminal-mistakable sentinels.
     fs.writeFileSync(path.join(m2dir, 'finalization-summary.md'),
       '## Status\nREADY FOR FINAL GIT GATE\n\n## Commit And Push\nPending final git gate. Final hash reported after push.\n');
+    // #324 AC3: seed a false-absolute validation claim in the cache evidence.
+    fs.mkdirSync(path.join(m2dir, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(m2dir, '.cache', 'final-validation.md'), 'chains run at n16.\nNo files changed after those runs.\n');
     const roadmapM2Dir = path.join(tmp, 'kaola-workflow', '.roadmap');
     fs.mkdirSync(roadmapM2Dir, { recursive: true });
     fs.writeFileSync(path.join(roadmapM2Dir, 'issue-970.md'),
@@ -740,6 +743,8 @@ function testGiteaAdaptive() {
     assert.ok(m2State.includes('last_command: finalize'), '#324: gitea archived state normalizes last_command to finalize');
     const m2Summary = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'archive', m2Archived[0], 'finalization-summary.md'), 'utf8');
     assert.ok(!m2Summary.includes('READY FOR FINAL GIT GATE'), '#324: gitea archived summary neutralizes the pre-sink sentinel');
+    const m2FinalVal = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'archive', m2Archived[0], '.cache', 'final-validation.md'), 'utf8');
+    assert.ok(!m2FinalVal.includes('No files changed after those runs'), '#324 AC3: gitea archived final-validation neutralizes the false absolute');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
