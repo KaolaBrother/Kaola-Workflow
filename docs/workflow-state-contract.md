@@ -45,6 +45,13 @@ here for the full contract.
   subagent-seam attestation (see `docs/api.md` § Closure Contract).
 - `kaola-workflow/archive/{project}/` keeps completed, abandoned, or stale
   project folders after finalize or discard.
+- **Closure normalization (#324):** when `archiveProjectDir` archives a project with
+  `status: closed`, it also normalizes the terminal state so a later audit reading only the
+  archive cannot mistake it for an in-flight run: the `## Pending Gates` body is rewritten to
+  `- none`, `last_command`/`last_result` become `finalize`/`closed`, and any
+  `finalization-summary.md` has its pre-sink sentinels (`READY FOR FINAL GIT GATE`,
+  `Pending final git gate. …`) neutralized before the folder is renamed into `archive/`. A
+  `discard`/`release` archive (non-`closed`) deliberately keeps mid-run state.
 - Closure of a completed linked issue is governed by explicit invariants and an
   auditable receipt schema. See `docs/api.md` § Closure Contract for the nine
   closure invariants (seven hard-gating + two WARN-FIRST detection invariants added in #277),
