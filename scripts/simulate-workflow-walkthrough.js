@@ -7189,6 +7189,51 @@ function testAdaptiveSyncGroupGap() {
   console.log('testAdaptiveSyncGroupGap: PASSED');
 }
 
+// issue #308: reconcileLedger (--freeze --repair) brings the ## Node Ledger into agreement
+// with ## Nodes — adds a pending row for a node missing from the ledger, never drops an
+// existing status, and (since plan_hash excludes the ledger) does not move the hash.
+function testAdaptiveFreezeRepairReconcile() {
+  const planValidator = require(planValidatorScript);
+  const plan = [
+    '# Plan', '',
+    '## Meta', 'labels: chore', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+    '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| extra | doc-updater | a | docs/x.md | 1 | sequence |',
+    '| review | code-reviewer | a,extra | — | 1 | sequence |',
+    '| finalize | finalize | review | — | 1 | sequence |',
+    '',
+    '## Node Ledger', '',
+    '| id | status |',
+    '|---|---|',
+    '| a | complete |',
+    '| review | pending |',
+    '| finalize | pending |',
+    '',
+  ].join('\n');
+
+  // (1) the missing 'extra' row is added as pending; existing statuses are untouched.
+  const rec = planValidator.reconcileLedger(plan);
+  assert(rec.added.length === 1 && rec.added[0] === 'extra',
+    '#308 reconcile: missing node "extra" added, got ' + JSON.stringify(rec.added));
+  const led = planValidator.parseLedger(rec.content);
+  assert(led.get('extra') === 'pending', '#308 reconcile: extra row added as pending');
+  assert(led.get('a') === 'complete' && led.get('review') === 'pending',
+    '#308 reconcile: existing statuses are NOT dropped or rewritten');
+
+  // (2) reconcile must not move plan_hash (hash covers ## Meta + ## Nodes only).
+  assert(planValidator.computePlanHash(plan) === planValidator.computePlanHash(rec.content),
+    '#308 reconcile: adding ledger rows must not change plan_hash');
+
+  // (3) idempotent — a second pass adds nothing.
+  const rec2 = planValidator.reconcileLedger(rec.content);
+  assert(rec2.added.length === 0, '#308 reconcile: idempotent (second pass adds nothing)');
+
+  console.log('testAdaptiveFreezeRepairReconcile: PASSED');
+}
+
 // issue #251: verdict-gate unit tests — parseNodeVerdict pure, verifyVerdictBlock pure,
 // and --verdict-check CLI (per-node missing/non-gate/passing, whole-plan pass/fail).
 function testAdaptiveVerdictCheck() {
@@ -9159,6 +9204,7 @@ async function main() {
     testAdaptiveCheapWinFixes();
     testAdaptiveAuditCoverage();
     testAdaptiveSyncGroupGap();   // #274
+    testAdaptiveFreezeRepairReconcile();   // #308
     testAdaptiveVerdictCheck();
     testAdaptivePatternLibrary();
     // issue #267 — select() composition + runtime coverage

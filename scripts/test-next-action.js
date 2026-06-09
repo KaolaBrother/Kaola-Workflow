@@ -368,6 +368,62 @@ function makePlan(nodesRows, ledgerRows) {
 }
 
 // -----------------------------------------------------------------------
+// Test 11 (#308): TRANSITIVE readiness — a node is ready only when its FULL
+// transitive ancestor closure is terminal, not just its direct deps. Models a
+// plan-repair partial reset: gate g1 reset to pending while a downstream sink
+// stayed/became pending and its direct dep (mid) is still complete. Direct
+// readiness would prematurely offer the sink ([g1, finalize]); transitive
+// readiness excludes it because its upstream gate g1 is non-terminal → [g1].
+// Topology a→g1→mid→finalize is G1-valid (the reviewer post-dominates a).
+// -----------------------------------------------------------------------
+{
+  const content = makePlan(
+    [
+      '| a        | tdd-guide     | —    | scripts/foo.js | 1 | sequence |',
+      '| g1       | code-reviewer | a    | —              | 1 | sequence |',
+      '| mid      | doc-updater   | g1   | docs/x.md      | 1 | sequence |',
+      '| finalize | finalize      | mid  | —              | 1 | sequence |',
+    ],
+    [
+      '| a        | complete    |',
+      '| g1       | pending     |',
+      '| mid      | complete    |',
+      '| finalize | pending     |',
+    ]
+  );
+  const r = computeNextAction(content, { resolveModel: stub });
+  assert(r.result === 'ok', 'test11: result is ok');
+  const ids = r.readyPending.map(n => n.id).sort();
+  assert(JSON.stringify(ids) === JSON.stringify(['g1']),
+    'test11 (#308): transitive readiness offers ONLY [g1], not the premature sink — got ' + JSON.stringify(ids));
+  assert(!r.readySet.some(n => n.id === 'finalize'),
+    'test11 (#308): finalize is excluded from readySet while its upstream gate g1 is non-terminal');
+}
+
+// -----------------------------------------------------------------------
+// Test 12 (#308 regression guard): transitive readiness must NOT change normal
+// forward progress — when all of a node's transitive ancestors are terminal it
+// is ready exactly as before. Linear a(complete)→b(pending)→finalize: b ready.
+// -----------------------------------------------------------------------
+{
+  const content = makePlan(
+    [
+      '| a        | tdd-guide | —  | scripts/foo.js | 1 | sequence |',
+      '| b        | tdd-guide | a  | scripts/bar.js | 1 | sequence |',
+      '| finalize | finalize  | b  | —              | 1 | sequence |',
+    ],
+    [
+      '| a        | complete |',
+      '| b        | pending  |',
+      '| finalize | pending  |',
+    ]
+  );
+  const r = computeNextAction(content, { resolveModel: stub });
+  assert(r.readySet.length === 1 && r.readySet[0].id === 'b',
+    'test12 (#308): normal forward progress unchanged — b ready, got ' + JSON.stringify(r.readySet.map(n => n.id)));
+}
+
+// -----------------------------------------------------------------------
 // Summary
 // -----------------------------------------------------------------------
 if (failed > 0) {

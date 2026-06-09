@@ -11,6 +11,7 @@ const {
   checkEvidenceShape,
   runOrient,
   runOpenNext,
+  runReopenNode,
   runRecordEvidence,
   runCloseAndOpenNext,
   runWriteHalt,
@@ -1553,6 +1554,97 @@ function makeState(opts) {
 }
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// #308: runReopenNode — first-class plan-repair transaction. Reopens a COMPLETE
+// node N, resets its post-dominating gate(s) to pending, removes the stale
+// barrier-base baselines, reopens N to in_progress, and re-records a fresh
+// baseline. Plan a→impl→review(code-reviewer)→finalize, all complete.
+// ---------------------------------------------------------------------------
+{
+  const planNodes = [
+    '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| impl | tdd-guide | a | scripts/b.js | 1 | sequence |',
+    '| review | code-reviewer | impl | — | 1 | sequence |',
+    '| finalize | finalize | review | — | 1 | sequence |',
+  ];
+  let planContent = makePlan([
+    '| a | complete | |',
+    '| impl | complete | |',
+    '| review | complete | |',
+    '| finalize | complete | |',
+  ], planNodes);
+  const removed = [];
+  const shelled = [];
+  const result = runReopenNode({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    project: 'test-project',
+    nodeId: 'impl',
+    shell: (scriptPath) => {
+      shelled.push(path.basename(scriptPath));
+      if (path.basename(scriptPath) === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok' };
+      return { exitCode: 1 };
+    },
+    readFile: (fpath) => { if (fpath.endsWith('workflow-plan.md')) return planContent; throw new Error('ENOENT ' + fpath); },
+    writeFile: (fpath, content) => { if (fpath.endsWith('workflow-plan.md')) planContent = content; },
+    cacheExists: (fpath) => /barrier-base-/.test(fpath), // baselines present; NO active batch
+    unlink: (fpath) => removed.push(path.basename(fpath)),
+  });
+  assert(result.result === 'ok', '#308 reopen: result ok, got ' + JSON.stringify(result));
+  assert(/\|\s*impl\s*\|\s*in_progress\s*\|/.test(planContent), '#308 reopen: impl reopened to in_progress');
+  assert(/\|\s*review\s*\|\s*pending\s*\|/.test(planContent), '#308 reopen: post-dominating gate review reset to pending');
+  assert(/\|\s*finalize\s*\|\s*complete\s*\|/.test(planContent), '#308 reopen: sink finalize left complete (narrow reset; transitive readiness withholds it)');
+  assert(/\|\s*a\s*\|\s*complete\s*\|/.test(planContent), '#308 reopen: upstream a left complete');
+  assert(result.gatesReset && result.gatesReset.includes('review'), '#308 reopen: gatesReset names review, got ' + JSON.stringify(result.gatesReset));
+  assert(removed.includes('barrier-base-impl') && removed.includes('barrier-base-review'),
+    '#308 reopen: stale baselines for impl + gate removed, got ' + JSON.stringify(removed));
+  assert(shelled.includes('kaola-workflow-commit-node.js'), '#308 reopen: fresh baseline (commit-node --start) recorded for impl');
+}
+
+// #308: runReopenNode refuses a non-complete node (only a complete node may be reopened).
+{
+  const planNodes = [
+    '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| impl | tdd-guide | a | scripts/b.js | 1 | sequence |',
+    '| review | code-reviewer | impl | — | 1 | sequence |',
+    '| finalize | finalize | review | — | 1 | sequence |',
+  ];
+  const planContent = makePlan([
+    '| a | complete | |', '| impl | in_progress | |', '| review | pending | |', '| finalize | pending | |',
+  ], planNodes);
+  const result = runReopenNode({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md', project: 'test-project', nodeId: 'impl',
+    shell: () => ({ exitCode: 0, result: 'ok' }),
+    readFile: (f) => { if (f.endsWith('workflow-plan.md')) return planContent; throw new Error('ENOENT ' + f); },
+    writeFile: () => { throw new Error('must not write on refusal'); },
+    cacheExists: () => false, unlink: () => {},
+  });
+  assert(result.result === 'refuse' && result.reason === 'node_not_complete',
+    '#308 reopen: refuses a non-complete node, got ' + JSON.stringify(result));
+}
+
+// #308: runReopenNode refuses over a live parallel batch / interrupted top-up (#305 guard parity).
+{
+  const planNodes = [
+    '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| impl | tdd-guide | a | scripts/b.js | 1 | sequence |',
+    '| review | code-reviewer | impl | — | 1 | sequence |',
+    '| finalize | finalize | review | — | 1 | sequence |',
+  ];
+  const planContent = makePlan([
+    '| a | complete | |', '| impl | complete | |', '| review | complete | |', '| finalize | complete | |',
+  ], planNodes);
+  const manifestJson = JSON.stringify({ batchId: 'b', state: 'open', members: [{ id: 'x', opening: true }] });
+  const result = runReopenNode({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md', project: 'test-project', nodeId: 'impl',
+    shell: () => ({ exitCode: 0, result: 'ok' }),
+    readFile: (f) => { if (f.endsWith('active-batch.json')) return manifestJson; if (f.endsWith('workflow-plan.md')) return planContent; throw new Error('ENOENT ' + f); },
+    writeFile: () => { throw new Error('must not write on refusal'); },
+    cacheExists: (f) => f.endsWith('active-batch.json'), unlink: () => {},
+  });
+  assert(result.result === 'refuse' && result.reason === 'active_batch_exists',
+    '#308 reopen: refuses over a live batch / opening member, got ' + JSON.stringify(result));
+}
+
 // Summary
 // ---------------------------------------------------------------------------
 if (failed > 0) {

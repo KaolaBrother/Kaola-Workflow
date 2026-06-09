@@ -856,6 +856,122 @@ function runWriteHalt(opts) {
 }
 
 // ---------------------------------------------------------------------------
+// runReopenNode — MUTATES ledger + per-node baselines. #308 first-class plan-repair.
+//
+// Reopens an already-`complete` node N for an in-place repair (a review-finding fix or
+// a finalize-surfaced scope fix) WITHOUT hand-editing workflow-plan.md. Steps:
+//   (1) Refuse over a live parallel batch / interrupted top-up (member.opening:true) so
+//       this never fights the #305 reconcile guards.
+//   (2) Require N to be a `complete` ledger row (only a finished node is repairable).
+//   (3) Reset N's POST-DOMINATING gate(s) — code-reviewer / security-reviewer /
+//       adversarial-verifier nodes that every path from N to the unique sink passes
+//       through — complete→pending, and remove their stale .cache/barrier-base-<id>
+//       baselines, so they re-review after the repair. Downstream NON-gate nodes (incl.
+//       the sink) are left as-is: next-action's #308 transitive readiness withholds them
+//       while an upstream gate is non-terminal (no broad cascade needed).
+//   (4) Reopen N pending→in_progress, remove its stale baseline, persist the plan, then
+//       re-record a FRESH baseline at the current merged state (commit-node --start) so
+//       the next barrier attributes ONLY the repair.
+// ---------------------------------------------------------------------------
+function runReopenNode(opts) {
+  const { planPath, nodeId, shell, readFile, writeFile, cacheExists, unlink } = opts;
+  const GATE_ROLES = new Set(['code-reviewer', 'security-reviewer', 'adversarial-verifier']);
+
+  // (1) Refuse over a live batch / interrupted top-up — mirror the #305 guards.
+  const manifestPath = path.join(path.dirname(planPath), '.cache', 'active-batch.json');
+  const manifestPresent = cacheExists ? cacheExists(manifestPath) : false;
+  if (manifestPresent) {
+    let raw = null;
+    try { raw = readFile(manifestPath); } catch (_) { raw = null; }
+    const m = raw != null ? safeJsonParse(raw) : null;
+    if (m && Array.isArray(m.members)) {
+      const live = m.state && m.state !== 'joined' && m.state !== 'aborted';
+      const opening = m.members.some(x => x.opening);
+      if (live || opening) {
+        return { result: 'refuse', reason: 'active_batch_exists', state: m.state || null, detail: 'reconcile/clear the active batch before a plan-repair reopen' };
+      }
+    }
+  }
+
+  let planContent = readFile(planPath);
+  const nodes = parseNodesFromContent(planContent);
+  if (!nodes.length) return { result: 'refuse', reason: 'no_parseable_nodes' };
+  if (!nodes.some(n => n.id === nodeId)) return { result: 'refuse', reason: 'node_not_found', nodeId };
+
+  // (2) N must be a COMPLETE ledger row — reset complete→pending.
+  const reset = spliceLedgerNode(planContent, nodeId, 'pending', { allowFrom: ['complete'] });
+  if (!reset.found) return { result: 'refuse', reason: 'node_not_in_ledger', nodeId };
+  if (!reset.changed) {
+    return { result: 'refuse', reason: 'node_not_complete', nodeId, detail: 'only a complete node can be reopened for repair' };
+  }
+  planContent = reset.content;
+
+  // (3) Post-dominating gate(s): gate-role descendants of N that every path N→sink crosses.
+  const fwd = new Map(nodes.map(n => [n.id, []]));
+  for (const n of nodes) for (const d of n.dependsOn) if (fwd.has(d)) fwd.get(d).push(n.id);
+  const descendantsOf = start => {
+    const seen = new Set();
+    const stack = (fwd.get(start) || []).slice();
+    while (stack.length) {
+      const x = stack.pop();
+      if (seen.has(x)) continue;
+      seen.add(x);
+      for (const y of (fwd.get(x) || [])) if (!seen.has(y)) stack.push(y);
+    }
+    return seen;
+  };
+  const ids = new Set(nodes.map(n => n.id));
+  const hasOut = new Set();
+  for (const n of nodes) for (const d of n.dependsOn) if (ids.has(d)) hasOut.add(d);
+  const terminals = nodes.filter(n => !hasOut.has(n.id));
+  const sink = terminals.length === 1 ? terminals[0].id : null;
+  const postDominates = gid => {
+    if (!sink) return true; // no unique sink → conservatively treat the gate as gating
+    const seen = new Set([gid]); // gid removed from the graph
+    const stack = [nodeId];
+    while (stack.length) {
+      const x = stack.pop();
+      if (x === sink) return false; // reached the sink avoiding gid → gid does NOT post-dominate
+      for (const y of (fwd.get(x) || [])) if (!seen.has(y)) { seen.add(y); stack.push(y); }
+    }
+    return true; // sink unreachable without gid → gid post-dominates N
+  };
+  const desc = descendantsOf(nodeId);
+  const gatesReset = nodes
+    .filter(n => desc.has(n.id) && GATE_ROLES.has(n.role) && postDominates(n.id))
+    .map(n => n.id);
+  for (const gid of gatesReset) {
+    const s = spliceLedgerNode(planContent, gid, 'pending', { allowFrom: ['complete'] });
+    if (s.changed) planContent = s.content;
+  }
+
+  // (4) Remove stale per-node baselines for N + the reset gates.
+  const cacheBaseFile = nid => path.join(path.dirname(planPath), '.cache', 'barrier-base-' + String(nid).replace(/[^A-Za-z0-9_-]/g, '_'));
+  const baselinesRemoved = [];
+  for (const id of [nodeId, ...gatesReset]) {
+    const bf = cacheBaseFile(id);
+    const present = cacheExists ? cacheExists(bf) : true;
+    if (present && typeof unlink === 'function') {
+      unlink(bf);
+      baselinesRemoved.push('barrier-base-' + String(id).replace(/[^A-Za-z0-9_-]/g, '_'));
+    }
+  }
+
+  // Reopen N pending→in_progress, persist the plan (so commit-node --start sees the row),
+  // then re-record the fresh baseline at the current merged state.
+  const reopen = spliceLedgerNode(planContent, nodeId, 'in_progress', { allowFrom: ['pending'] });
+  if (reopen.changed) planContent = reopen.content;
+  writeFile(planPath, planContent);
+
+  const baseline = shell(commitNodePath, [planPath, '--node-id', nodeId, '--start', '--json']);
+  if (!(baseline.exitCode === 0 && baseline.result === 'ok')) {
+    return { result: 'refuse', reason: 'baseline_failed', nodeId, baselineResult: baseline, reopened: nodeId, gatesReset };
+  }
+
+  return { result: 'ok', reopened: nodeId, gatesReset, baselinesRemoved, baselineRecorded: true };
+}
+
+// ---------------------------------------------------------------------------
 // CLI — thin wrapper; all process I/O lives here.
 // ---------------------------------------------------------------------------
 function main() {
@@ -868,7 +984,8 @@ function main() {
       '  open-next           --project P [--node-id N]\n' +
       '  record-evidence     --project P --node-id N --stdin\n' +
       '  close-and-open-next --project P --node-id N\n' +
-      '  write-halt          --project P --node-id N --reason consent|security|test_thrash\n'
+      '  write-halt          --project P --node-id N --reason consent|security|test_thrash\n' +
+      '  reopen-node         --project P --node-id N\n'
     );
     return;
   }
@@ -944,6 +1061,15 @@ function main() {
     } else {
       result = runWriteHalt({ planPath, statePath, project, nodeId, reason, readFile, writeFile });
     }
+  } else if (subcommand === 'reopen-node') {
+    if (!nodeId) {
+      result = { result: 'refuse', errors: ['--node-id required for reopen-node'] };
+    } else {
+      result = runReopenNode({
+        planPath, statePath, project, nodeId, shell, readFile, writeFile, cacheExists,
+        unlink: (f) => { try { fs.unlinkSync(f); } catch (_) {} },
+      });
+    }
   } else {
     result = { result: 'refuse', errors: ['unknown subcommand: ' + subcommand] };
   }
@@ -966,5 +1092,6 @@ module.exports = {
   runRecordEvidence,
   runCloseAndOpenNext,
   runWriteHalt,
+  runReopenNode,
   shellNode,
 };
