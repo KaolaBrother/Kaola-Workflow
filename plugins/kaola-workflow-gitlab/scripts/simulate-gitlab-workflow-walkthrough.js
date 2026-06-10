@@ -655,6 +655,366 @@ function testGitlabAdaptive() {
   console.log('testGitlabAdaptive: PASSED');
 }
 
+// ===========================================================================
+// issue #342: bundle-lane E2E behavioral coverage for the GitLab edition.
+// Mirrors the six root scenarios (simulate-workflow-walkthrough.js §#328) modulo
+// forge nouns, driving the REAL gitlab edition CLIs via subprocess (no direct-call
+// shims — the #292 io-shim lesson). Each scenario uses its own mkdtempSync root +
+// try/finally cleanup. Forbidden-token discipline: the GitHub-CLI binary token must
+// never appear here (the gitlab validator scans this file); we use glab-mock.js /
+// glab-calls.log and write "mirrors the root walkthrough" in prose.
+// ===========================================================================
+
+function glInitGitRepo(tmp) {
+  spawnSync('git', ['init', '-b', 'main'], { cwd: tmp, encoding: 'utf8' });
+  spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tmp, encoding: 'utf8' });
+  spawnSync('git', ['config', 'user.name', 'Test User'], { cwd: tmp, encoding: 'utf8' });
+  fs.writeFileSync(path.join(tmp, 'README.md'), 'fixture\n');
+  spawnSync('git', ['add', 'README.md'], { cwd: tmp, encoding: 'utf8' });
+  spawnSync('git', ['commit', '-m', 'init'], { cwd: tmp, encoding: 'utf8' });
+}
+
+function glPlantRoadmapIssue(tmp, n) {
+  const dir = path.join(tmp, 'kaola-workflow', '.roadmap');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'issue-' + n + '.md'),
+    ['issue: #' + n, 'title: bundle test issue ' + n, 'status: open',
+     'workflow_project: —', 'next_step: ready', ''].join('\n'));
+}
+
+function glWriteProject(tmp, project, files) {
+  const dir = path.join(tmp, 'kaola-workflow', project);
+  fs.mkdirSync(dir, { recursive: true });
+  for (const [name, content] of Object.entries(files)) fs.writeFileSync(path.join(dir, name), content);
+}
+
+// Mirrors the root writeBundleGhMockScript with glab arg shapes (kaola-gitlab-forge.js).
+// opts: { logFile, openIssues: number[], closedIssues: number[] }
+function writeBundleGlabMockScript(binDir, opts) {
+  const logFile = opts && opts.logFile ? JSON.stringify(opts.logFile) : 'null';
+  const openIssues = opts && opts.openIssues ? JSON.stringify(opts.openIssues) : '[]';
+  const closedIssues = opts && opts.closedIssues ? JSON.stringify(opts.closedIssues) : '[]';
+  fs.mkdirSync(binDir, { recursive: true });
+  const script = [
+    "'use strict';",
+    'const fs = require("fs");',
+    'const argv = process.argv.slice(2);',
+    'const a = argv.join(" ");',
+    'const logFile = ' + logFile + ';',
+    'const openIssues = new Set(' + openIssues + '.map(String));',
+    'const closedIssues = new Set(' + closedIssues + '.map(String));',
+    'function log(msg) { if (!logFile) return; try { fs.appendFileSync(logFile, msg + "\\n"); } catch(_) {} }',
+    // repo view → gitlab project shape (id feeds projectApiRef, path_with_namespace feeds normalizeProject)
+    'if (a.includes("repo view")) { process.stdout.write(JSON.stringify({id:1,path_with_namespace:"test/repo",web_url:"https://gl.invalid/test/repo"}) + "\\n"); process.exit(0); }',
+    'const viewM = a.match(/issue view (\\d+)/);',
+    'if (viewM) {',
+    '  const n = viewM[1];',
+    '  const state = closedIssues.has(n) ? "closed" : "opened";',
+    '  process.stdout.write(JSON.stringify({iid:parseInt(n),state,title:"issue "+n,description:"",labels:[]}) + "\\n");',
+    '  process.exit(0);',
+    '}',
+    'if (a.includes("issue update") && a.includes("--label")) { const m = a.match(/issue update (\\d+)/); log("label-added:" + (m ? m[1] : "?")); process.stdout.write("{}\\n"); process.exit(0); }',
+    'if (a.includes("issue update") && a.includes("--unlabel")) { const m = a.match(/issue update (\\d+)/); log("label-removed:" + (m ? m[1] : "?")); process.stdout.write("{}\\n"); process.exit(0); }',
+    // POST/DELETE must precede the GET /notes check (all three contain /notes).
+    'if (a.includes("api") && a.includes("--method POST") && a.includes("/notes")) { log("note:"); process.stdout.write("{}\\n"); process.exit(0); }',
+    'if (a.includes("api") && a.includes("--method DELETE")) { process.stdout.write("{}\\n"); process.exit(0); }',
+    'if (a.includes("api") && a.includes("/notes")) { process.stdout.write("[]\\n"); process.exit(0); }',
+    'if (a.includes("issue list")) { process.stdout.write("[]\\n"); process.exit(0); }',
+    'process.stdout.write("\\n"); process.exit(0);',
+  ].join('\n');
+  fs.writeFileSync(path.join(binDir, 'glab-mock.js'), script);
+}
+
+// Online runner mirroring the root walkthrough's pattern: spawn the real edition CLI
+// with KAOLA_GLAB_MOCK_SCRIPT routed at the mock and adaptive switch ON. Returns the
+// full spawnSync result (caller asserts status + parses the last JSON object line).
+function glSpawnBundle(args, cwd, binDir, extraEnv) {
+  return spawnSync(process.execPath, [claimScript, ...args], {
+    cwd, encoding: 'utf8', timeout: 60000,
+    env: Object.assign({}, process.env, {
+      KAOLA_WORKFLOW_OFFLINE: '0',
+      KAOLA_WORKTREE_NATIVE: '1',
+      KAOLA_ENABLE_ADAPTIVE: '1',
+      KAOLA_GLAB_MOCK_SCRIPT: path.join(binDir, 'glab-mock.js'),
+    }, extraEnv || {})
+  });
+}
+
+function glLastJson(stdout) {
+  const lines = (stdout || '').trim().split('\n').filter(l => l.trim().startsWith('{'));
+  assert(lines.length > 0, 'expected a JSON object line, got: ' + stdout);
+  return JSON.parse(lines[lines.length - 1]);
+}
+
+// S1: explicit bundle claim creates exactly ONE active folder + the three additive
+// bundle fields in workflow-state.md. AC#2 + AC#3 E2E guard.
+function testGitlabBundleClaimCreatesOneFolder() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-bundle-claim-')));
+  const binDir = path.join(tmp, 'bin');
+  const logFile = path.join(tmp, 'glab-calls.log');
+  try {
+    glInitGitRepo(tmp);
+    glPlantRoadmapIssue(tmp, 42);
+    glPlantRoadmapIssue(tmp, 47);
+    glPlantRoadmapIssue(tmp, 53);
+    writeBundleGlabMockScript(binDir, { logFile, openIssues: [42, 47, 53] });
+
+    const result = glSpawnBundle(['startup', '--target-issues', '42,47,53', '--workflow-path', 'adaptive'], tmp, binDir);
+    assert.strictEqual(result.status, 0,
+      'gitlab #342 S1: exit 0 expected, got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    const out = glLastJson(result.stdout);
+    assert.strictEqual(out.claim, 'acquired', 'gitlab #342 S1: claim must be acquired, got ' + JSON.stringify(out.claim));
+    assert.strictEqual(out.bundle_id, 'bundle-42-47-53', 'gitlab #342 S1: bundle_id must be bundle-42-47-53, got ' + JSON.stringify(out.bundle_id));
+    assert.ok(Array.isArray(out.issue_numbers) && out.issue_numbers.length === 3,
+      'gitlab #342 S1: issue_numbers must have 3 members, got ' + JSON.stringify(out.issue_numbers));
+
+    const kwDir = path.join(tmp, 'kaola-workflow');
+    const projects = fs.readdirSync(kwDir).filter(n => !n.startsWith('.') && n !== 'archive' && n !== 'ROADMAP.md');
+    assert.ok(projects.length === 1 && projects[0] === 'bundle-42-47-53',
+      'gitlab #342 S1: exactly one active folder (bundle-42-47-53) expected, got ' + projects.join(','));
+
+    const state = fs.readFileSync(path.join(kwDir, 'bundle-42-47-53', 'workflow-state.md'), 'utf8');
+    assert.ok(/^issue_iid:\s*42\s*$/m.test(state), 'gitlab #342 S1: state must have issue_iid: 42 (## GitLab)');
+    assert.ok(/^issue_number:\s*42\s*$/m.test(state), 'gitlab #342 S1: state must have issue_number: 42 (## Sink primary)');
+    assert.ok(/^issue_numbers:\s*42,47,53\s*$/m.test(state), 'gitlab #342 S1: state must have issue_numbers: 42,47,53');
+    assert.ok(/^bundle_id:\s*bundle-42-47-53\s*$/m.test(state), 'gitlab #342 S1: state must have bundle_id: bundle-42-47-53');
+    assert.ok(/^closure_policy:\s*all_or_nothing\s*$/m.test(state), 'gitlab #342 S1: state must have closure_policy: all_or_nothing');
+    assert.ok(!/^closure_policy:/m.test(state.replace(/^closure_policy:\s*all_or_nothing\s*$/m, '')),
+      'gitlab #342 S1: closure_policy must appear exactly once');
+    assert.ok(/^branch:\s*workflow\/gitlab-bundle-42-47-53\s*$/m.test(state),
+      'gitlab #342 S1: state must have branch: workflow/gitlab-bundle-42-47-53');
+
+    const calls = fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8').split('\n').filter(Boolean) : [];
+    const added = calls.filter(c => c.startsWith('label-added:'));
+    assert.ok(added.includes('label-added:42'), 'gitlab #342 S1: label added for member 42');
+    assert.ok(added.includes('label-added:47'), 'gitlab #342 S1: label added for member 47');
+    assert.ok(added.includes('label-added:53'), 'gitlab #342 S1: label added for member 53');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testGitlabBundleClaimCreatesOneFolder: PASSED');
+}
+
+// S2: a refused bundle claim (closed member #47) leaves NO active folder and applies
+// ZERO labels (pre-mutation refusal). AC#5 + AC#6 guard.
+function testGitlabBundleRefusalLeavesNoFolder() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-bundle-refuse-')));
+  const binDir = path.join(tmp, 'bin');
+  const logFile = path.join(tmp, 'glab-calls.log');
+  try {
+    glInitGitRepo(tmp);
+    glPlantRoadmapIssue(tmp, 42);
+    glPlantRoadmapIssue(tmp, 47);
+    glPlantRoadmapIssue(tmp, 53);
+    writeBundleGlabMockScript(binDir, { logFile, openIssues: [42, 53], closedIssues: [47] });
+
+    const result = glSpawnBundle(['startup', '--target-issues', '42,47,53', '--workflow-path', 'adaptive'], tmp, binDir);
+    assert.strictEqual(result.status, 1,
+      'gitlab #342 S2: exit 1 expected for closed member, got ' + result.status + '\nstdout: ' + result.stdout);
+    const out = glLastJson(result.stdout);
+    assert.strictEqual(out.status, 'target_set_has_closed_issue',
+      'gitlab #342 S2: status must be target_set_has_closed_issue, got ' + JSON.stringify(out.status));
+    assert.strictEqual(out.issue, 47, 'gitlab #342 S2: refused on issue 47, got ' + JSON.stringify(out.issue));
+
+    assert.ok(!fs.existsSync(path.join(tmp, 'kaola-workflow', 'bundle-42-47-53')),
+      'gitlab #342 S2: no bundle-42-47-53 folder must exist after refusal');
+    const calls = fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8').split('\n').filter(Boolean) : [];
+    const labelsAdded = calls.filter(c => c.startsWith('label-added:'));
+    assert.strictEqual(labelsAdded.length, 0,
+      'gitlab #342 S2: no labels must be applied after pre-mutation refusal, got: ' + labelsAdded.join(', '));
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testGitlabBundleRefusalLeavesNoFolder: PASSED');
+}
+
+// S3: a live bundle [42,47,53] blocks (a) a direct single-issue claim of member 47 and
+// (b) an overlapping bundle claim [47,77]. Offline. AC#8 duplicate-block guard.
+function testGitlabBundleDuplicateIssueBlocking() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-bundle-dup-')));
+  try {
+    glPlantRoadmapIssue(tmp, 47);
+    glPlantRoadmapIssue(tmp, 77);
+    glWriteProject(tmp, 'bundle-42-47-53', {
+      'workflow-state.md': [
+        'name: bundle-42-47-53', 'status: active', 'phase: adaptive',
+        'issue_iid: 42', 'issue_number: 42', 'issue_numbers: 42,47,53',
+        'bundle_id: bundle-42-47-53', 'closure_policy: all_or_nothing',
+        'branch: workflow/gitlab-bundle-42-47-53', 'sink: merge', ''
+      ].join('\n')
+    });
+
+    const offlineEnv = { KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_ENABLE_ADAPTIVE: '1' };
+    const r1 = spawnSync(process.execPath, [claimScript, 'startup', '--target-issue', '47'],
+      { cwd: tmp, encoding: 'utf8', env: Object.assign({}, process.env, offlineEnv) });
+    const o1 = JSON.parse(r1.stdout);
+    assert.ok(o1.claim === 'owned' || o1.claim === 'none',
+      'gitlab #342 S3 (a): claim must be owned or none for live bundle member 47, got ' + JSON.stringify(o1.claim));
+    if (o1.claim === 'owned') {
+      assert.strictEqual(o1.project, 'bundle-42-47-53',
+        'gitlab #342 S3 (a): owned claim must resolve to bundle-42-47-53, got ' + JSON.stringify(o1.project));
+    }
+
+    const r2 = spawnSync(process.execPath, [claimScript, 'startup', '--target-issues', '47,77', '--workflow-path', 'adaptive'],
+      { cwd: tmp, encoding: 'utf8', env: Object.assign({}, process.env, offlineEnv) });
+    assert.strictEqual(r2.status, 1,
+      'gitlab #342 S3 (b): overlapping bundle [47,77] must exit 1, got ' + r2.status + '\nstdout: ' + r2.stdout);
+    const o2 = JSON.parse(r2.stdout);
+    assert.strictEqual(o2.status, 'target_set_conflicts_active_work',
+      'gitlab #342 S3 (b): status must be target_set_conflicts_active_work, got ' + JSON.stringify(o2.status));
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testGitlabBundleDuplicateIssueBlocking: PASSED');
+}
+
+// S4: adaptive orient on a bundle project surfaces bundleId / issueNumbers / primaryIssue /
+// closurePolicy. Offline. AC#14 (orient surface) guard.
+function testGitlabBundleOrientSurfacesBundleIdentity() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-bundle-orient-'));
+  fs.mkdirSync(path.join(tmp, 'kaola-workflow'), { recursive: true });
+  const adaptiveNodeScript = path.join(root, 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-adaptive-node.js');
+  const valScript = path.join(root, 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-plan-validator.js');
+  try {
+    const project = 'bundle-42-47-53';
+    glWriteProject(tmp, project, {
+      'workflow-state.md': [
+        '# Kaola-Workflow State', '',
+        '## Project', 'name: ' + project, 'status: active', '',
+        '## Current Position', 'phase: adaptive', 'workflow_path: adaptive',
+        'step: start', 'next_command: /kaola-workflow-plan-run ' + project, '',
+        '## Pending Gates', '- workflow-plan', '',
+        '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
+        '## GitLab', 'issue_iid: 42', 'path_with_namespace: test/repo', '',
+        '## Sink', 'branch: workflow/gitlab-' + project,
+        'issue_number: 42', 'issue_numbers: 42,47,53',
+        'bundle_id: ' + project, 'closure_policy: all_or_nothing', 'sink: merge', ''
+      ].join('\n')
+    });
+
+    // Plant + freeze a 2-node adaptive plan with the EDITION validator (mirrors testGitlabAdaptive).
+    const planPath = path.join(tmp, 'kaola-workflow', project, 'workflow-plan.md');
+    fs.writeFileSync(planPath, [
+      '# Workflow Plan — ' + project, '',
+      '## Meta', 'labels: enhancement', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '|---|---|---|---|---|---|',
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| done | finalize | explore | — | 1 | sequence |', ''
+    ].join('\n'));
+    const fr = spawnSync(process.execPath, [valScript, planPath, '--freeze'],
+      { cwd: tmp, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
+    assert.strictEqual(fr.status, 0, 'gitlab #342 S4: plan freeze must exit 0, stderr: ' + fr.stderr);
+
+    const result = spawnSync(process.execPath, [adaptiveNodeScript, 'orient', '--project', project, '--json'],
+      { cwd: tmp, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
+    assert.strictEqual(result.status, 0,
+      'gitlab #342 S4: orient exit 0 expected, got ' + result.status + '\nstderr: ' + result.stderr);
+    const out = JSON.parse(result.stdout.trim().split('\n').filter(l => l.trim().startsWith('{')).pop());
+    assert.strictEqual(out.bundleId, 'bundle-42-47-53', 'gitlab #342 S4: bundleId must be bundle-42-47-53, got ' + JSON.stringify(out.bundleId));
+    assert.ok(Array.isArray(out.issueNumbers) && out.issueNumbers.length === 3 &&
+      out.issueNumbers[0] === 42 && out.issueNumbers[1] === 47 && out.issueNumbers[2] === 53,
+      'gitlab #342 S4: issueNumbers must be [42,47,53], got ' + JSON.stringify(out.issueNumbers));
+    assert.strictEqual(out.primaryIssue, 42, 'gitlab #342 S4: primaryIssue must be 42, got ' + JSON.stringify(out.primaryIssue));
+    assert.strictEqual(out.closurePolicy, 'all_or_nothing', 'gitlab #342 S4: closurePolicy must be all_or_nothing, got ' + JSON.stringify(out.closurePolicy));
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testGitlabBundleOrientSurfacesBundleIdentity: PASSED');
+}
+
+// S5: finalize on a bundle project removes ALL member .roadmap/issue-N.md files, regenerates
+// the mirror once, archives ONE folder, and the closure receipt carries the bundle fields.
+// THIS IS THE SCENARIO THAT WOULD HAVE CAUGHT THE #328 CR1 FORGE-FINALIZATION DEFECT.
+// AC#11 + AC#12 + AC#13 E2E guard.
+function testGitlabBundleFinalizeRoadmapCleanup() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-bundle-finalize-')));
+  const binDir = path.join(tmp, 'bin');
+  const project = 'bundle-42-47-53';
+  try {
+    glInitGitRepo(tmp);
+    glWriteProject(tmp, project, {
+      'workflow-state.md': [
+        '# Kaola-Workflow State', '',
+        '## Project', 'name: ' + project, 'status: active', '',
+        '## Current Position', 'phase: adaptive', 'workflow_path: adaptive',
+        'step: start', 'next_command: /kaola-workflow-plan-run ' + project, '',
+        '## Pending Gates', '- none', '',
+        '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
+        '## Last Updated', new Date().toISOString(), '',
+        '## GitLab', 'issue_iid: 42', 'path_with_namespace: test/repo', '',
+        '## Sink', 'branch: workflow/gitlab-' + project,
+        'issue_number: 42', 'issue_numbers: 42,47,53',
+        'bundle_id: ' + project, 'closure_policy: all_or_nothing',
+        'sink: merge', 'run_posture: in-place', ''
+      ].join('\n')
+    });
+    glPlantRoadmapIssue(tmp, 42);
+    glPlantRoadmapIssue(tmp, 47);
+    glPlantRoadmapIssue(tmp, 53);
+    fs.writeFileSync(path.join(tmp, 'kaola-workflow', 'ROADMAP.md'), [
+      '# Kaola-Workflow Roadmap', '',
+      '| Issue | Title | Status |', '|-------|-------|--------|',
+      '| #42 | Test 42 | active |', '| #47 | Test 47 | active |', '| #53 | Test 53 | active |', ''
+    ].join('\n'));
+    writeBundleGlabMockScript(binDir, { closedIssues: [42, 47, 53] });
+
+    const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', project], {
+      cwd: tmp, encoding: 'utf8', timeout: 60000,
+      env: Object.assign({}, process.env, {
+        KAOLA_WORKFLOW_OFFLINE: '0',
+        KAOLA_WORKTREE_NATIVE: '0',
+        KAOLA_GLAB_MOCK_SCRIPT: path.join(binDir, 'glab-mock.js'),
+      })
+    });
+    assert.strictEqual(result.status, 0,
+      'gitlab #342 S5: finalize exit 0 expected, got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    const out = glLastJson(result.stdout);
+    assert.strictEqual(out.status, 'closed', 'gitlab #342 S5: status must be closed, got ' + JSON.stringify(out.status));
+    assert.ok(out.closure_receipt && out.closure_receipt.roadmap_regenerated === 'regenerated',
+      'gitlab #342 S5: receipt.roadmap_regenerated must be "regenerated", got ' +
+      JSON.stringify(out.closure_receipt && out.closure_receipt.roadmap_regenerated));
+
+    for (const n of [42, 47, 53]) {
+      assert.ok(!fs.existsSync(path.join(tmp, 'kaola-workflow', '.roadmap', 'issue-' + n + '.md')),
+        'gitlab #342 S5: issue-' + n + '.md roadmap source must be removed after finalize');
+    }
+    assert.ok(out.dest && fs.existsSync(out.dest), 'gitlab #342 S5: archive folder must exist at dest');
+    assert.ok(!fs.existsSync(path.join(tmp, 'kaola-workflow', project)),
+      'gitlab #342 S5: live project folder must be gone after finalize');
+
+    const receipt = out.closure_receipt;
+    assert.ok(receipt != null, 'gitlab #342 S5: closure_receipt must be present');
+    assert.ok(Array.isArray(receipt.roadmap_sources_removed) && receipt.roadmap_sources_removed.length === 3,
+      'gitlab #342 S5: roadmap_sources_removed must have 3 entries, got ' + JSON.stringify(receipt.roadmap_sources_removed));
+    for (const n of [42, 47, 53]) {
+      assert.ok(receipt.roadmap_sources_removed.includes('issue-' + n + '.md'),
+        'gitlab #342 S5: roadmap_sources_removed must include issue-' + n + '.md');
+    }
+    assert.ok(Array.isArray(receipt.closed_issues), 'gitlab #342 S5: receipt must have closed_issues array');
+    assert.ok(Array.isArray(receipt.failed_issue_closures) && receipt.failed_issue_closures.length === 0,
+      'gitlab #342 S5: failed_issue_closures must be empty when all probes succeed, got ' + JSON.stringify(receipt.failed_issue_closures));
+    assert.ok(Array.isArray(receipt.issue_numbers) && receipt.issue_numbers.length === 3,
+      'gitlab #342 S5: receipt must have issue_numbers with 3 members, got ' + JSON.stringify(receipt.issue_numbers));
+
+    const inv = out.closure_invariants;
+    assert.ok(inv && inv.ok === true,
+      'gitlab #342 S5: closure_invariants must pass; violations: ' + JSON.stringify(inv && inv.violations));
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testGitlabBundleFinalizeRoadmapCleanup: PASSED');
+}
+
+// S6: AC#1 contamination guard — a single-issue claim must NOT write the bundle fields. Offline.
+function testGitlabBundleSingleIssueStateHasNoBundleFields() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-bundle-single-'));
+  fs.mkdirSync(path.join(tmp, 'kaola-workflow'), { recursive: true });
+  try {
+    glPlantRoadmapIssue(tmp, 601);
+    const r = spawnSync(process.execPath, [claimScript, 'startup', '--target-issue', '601'],
+      { cwd: tmp, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
+    const out = JSON.parse(r.stdout);
+    assert.strictEqual(out.claim, 'acquired', 'gitlab #342 S6: single-issue startup must acquire, got ' + JSON.stringify(out.claim));
+    const state = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'issue-601', 'workflow-state.md'), 'utf8');
+    assert.ok(!/^issue_numbers:/m.test(state), 'gitlab #342 S6: single-issue state must NOT contain issue_numbers line');
+    assert.ok(!/^bundle_id:/m.test(state), 'gitlab #342 S6: single-issue state must NOT contain bundle_id line');
+    assert.ok(!/^closure_policy:/m.test(state), 'gitlab #342 S6: single-issue state must NOT contain closure_policy line');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testGitlabBundleSingleIssueStateHasNoBundleFields: PASSED');
+}
+
 // issue #237: the leading-dot FILE_PATH_REGEX widening must hold on the FORK classifier too —
 // a dot-leading CI/supply-chain path is captured (so cross-project claim-overlap can see it on
 // both the candidate and claimed sides) while bare-word prose still does not over-match.
@@ -873,6 +1233,14 @@ testSinkMrUsesFinalizationSummary();
 testGitlabAdaptive();
 testGitlab237DotPathExtraction();
 testGitlabDispatchHookExists();
+
+// issue #342: bundle-lane E2E behavioral coverage (mirrors root §#328 modulo forge nouns).
+testGitlabBundleClaimCreatesOneFolder();
+testGitlabBundleRefusalLeavesNoFolder();
+testGitlabBundleDuplicateIssueBlocking();
+testGitlabBundleOrientSurfacesBundleIdentity();
+testGitlabBundleFinalizeRoadmapCleanup();
+testGitlabBundleSingleIssueStateHasNoBundleFields();
 
 run('test-gitlab-forge-helpers.js');
 run('test-gitlab-workflow-scripts.js');
