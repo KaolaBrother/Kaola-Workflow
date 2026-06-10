@@ -230,6 +230,52 @@ function assert(condition, message) {
 }
 
 // ---------------------------------------------------------------------------
+// Test 7 (#366): per-node end-mode makes ONE fused --node-end validator spawn instead of FOUR
+// (barrier + gate + verdict + selector) — ≥40% reduction. A logging stub counts validator
+// invocations. The fallback (stub without --node-end support) re-runs the legacy four spawns.
+// ---------------------------------------------------------------------------
+{
+  const { execFileSync } = require('child_process');
+  const commitNode = path.join(__dirname, 'kaola-workflow-commit-node.js');
+
+  function runWithStub(stubBody) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-spawn-'));
+    const stub = path.join(dir, 'vstub.js');
+    const log = path.join(dir, 'calls.log');
+    fs.writeFileSync(stub, "const fs=require('fs');\nfs.appendFileSync(" + JSON.stringify(log) + ", process.argv.slice(2).join(' ') + '\\n');\n" + stubBody);
+    try {
+      execFileSync(process.execPath, [commitNode, path.join(dir, 'plan.md'), '--node-id', 'n1', '--json'], {
+        encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_COMMIT_NODE_VALIDATOR: stub }),
+      });
+    } catch (_) { /* exit code irrelevant to the spawn count */ }
+    const calls = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').split('\n').filter(Boolean) : [];
+    fs.rmSync(dir, { recursive: true, force: true });
+    return calls;
+  }
+
+  // (a) --node-end-aware stub → exactly ONE validator spawn.
+  const fusedStub =
+    "const a=process.argv.slice(2);\n" +
+    "if(a.includes('--node-end')){process.stdout.write(JSON.stringify({result:'ok',mode:'node-end',nodeId:'n1',barrierCheck:{result:'pass',errors:[]},gateVerify:{ok:true,unsatisfied:[]},verdictCheck:{ok:true,failures:[]},selectorCheck:{ok:true,isSelector:false,armsToNa:[]}}));}\n" +
+    "else{process.stdout.write('{}');}\n";
+  const fusedCalls = runWithStub(fusedStub);
+  assert(fusedCalls.length === 1, 'test7: per-node end shells the validator exactly ONCE (--node-end), got ' + fusedCalls.length + ': ' + JSON.stringify(fusedCalls));
+  assert(fusedCalls[0].includes('--node-end'), 'test7: the single spawn is --node-end, got ' + fusedCalls[0]);
+
+  // (b) legacy stub (no --node-end support: returns {} ) → fallback to FOUR spawns.
+  const legacyStub =
+    "const a=process.argv.slice(2);\n" +
+    "if(a.includes('--barrier-check'))process.stdout.write(JSON.stringify({result:'pass',errors:[]}));\n" +
+    "else if(a.includes('--selector-check'))process.stdout.write(JSON.stringify({ok:true,isSelector:false}));\n" +
+    "else if(a.includes('--gate-verify')||a.includes('--verdict-check'))process.stdout.write(JSON.stringify({ok:true}));\n" +
+    "else process.stdout.write('{}');\n"; // --node-end → {} (no mode) → fallback
+  const legacyCalls = runWithStub(legacyStub);
+  assert(legacyCalls.length === 5, 'test7: fallback path = 1 (--node-end probe) + 4 legacy spawns = 5, got ' + legacyCalls.length + ': ' + JSON.stringify(legacyCalls));
+  assert(legacyCalls.filter(c => c.includes('--node-end')).length === 1, 'test7: fallback probes --node-end once');
+  assert(legacyCalls.filter(c => c.includes('--barrier-check')).length === 1, 'test7: fallback runs the legacy barrier-check');
+}
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 if (failed > 0) {

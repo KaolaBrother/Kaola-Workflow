@@ -34,7 +34,8 @@ const VALIDATOR = 'kaola-gitlab-workflow-plan-validator.js';
 
 // Resolve validator path relative to this script's own directory (so forge ports
 // under plugins/…/scripts/ find their forge-named sibling correctly).
-const validatorPath = path.join(__dirname, VALIDATOR);
+// #366: test-only validator-path override so a spawn-count test can point at a logging stub.
+const validatorPath = process.env.KAOLA_COMMIT_NODE_VALIDATOR || path.join(__dirname, VALIDATOR);
 
 // ---------------------------------------------------------------------------
 // safeJsonParse — returns {} on any parse failure (fail-closed).
@@ -196,18 +197,23 @@ function main() {
     // Shell: --record-base --node-id ID --json
     recordBase = shellValidator(validatorPath, planPath, ['--record-base', '--node-id', nodeIdValue, '--json']);
   } else if (mode === 'per-node') {
-    // Shell: --barrier-check --node-id ID --json
-    barrierCheck = shellValidator(validatorPath, planPath, ['--barrier-check', '--node-id', nodeIdValue, '--json']);
-    // Shell: --gate-verify --json (informational only — do not short-circuit on failure)
-    gateVerify = shellValidator(validatorPath, planPath, ['--gate-verify', '--json']);
-    // Shell: --verdict-check --node-id ID --json (informational only — no deadlock when reviewer hasn't run)
-    verdictCheck = shellValidator(validatorPath, planPath, ['--verdict-check', '--node-id', nodeIdValue, '--json']);
-    // #263: selector-check ID --json. BLOCKING per-node (checks the COMPLETING node's OWN
-    // .cache, like barrier-check — no deadlock risk, so NOT informational). A non-selector
-    // node returns isSelector:false/ok:true (never false-blocks). A selector_source with a
-    // missing/foreign selector returns ok:false/exit 1 => fails the commit (fail-closed).
-    // NEVER mutates the ledger: on success it RETURNS armsToNa for the contractor to transcribe.
-    selectorCheck = shellValidator(validatorPath, planPath, ['--selector-check', '--node-id', nodeIdValue, '--json']);
+    // #366: ONE fused validator spawn (--node-end) replaces the four separate barrier/gate/verdict/
+    // selector spawns. The fused envelope carries the same per-check payloads; we synthesize the
+    // per-check exitCode each separate spawn would have set so combineResults is unchanged.
+    const fused = shellValidator(validatorPath, planPath, ['--node-end', '--node-id', nodeIdValue, '--json']);
+    if (fused && fused.mode === 'node-end') {
+      const withExit = (sub, ok) => (sub == null) ? sub : Object.assign({}, sub, { exitCode: ok ? 0 : 1 });
+      barrierCheck = withExit(fused.barrierCheck, fused.barrierCheck && fused.barrierCheck.result === 'pass');
+      gateVerify = withExit(fused.gateVerify, fused.gateVerify && fused.gateVerify.ok === true);
+      verdictCheck = withExit(fused.verdictCheck, fused.verdictCheck && fused.verdictCheck.ok === true);
+      selectorCheck = withExit(fused.selectorCheck, fused.selectorCheck && fused.selectorCheck.ok === true);
+    } else {
+      // Fallback (older validator without --node-end, or a parse miss): the legacy four spawns.
+      barrierCheck = shellValidator(validatorPath, planPath, ['--barrier-check', '--node-id', nodeIdValue, '--json']);
+      gateVerify = shellValidator(validatorPath, planPath, ['--gate-verify', '--json']);
+      verdictCheck = shellValidator(validatorPath, planPath, ['--verdict-check', '--node-id', nodeIdValue, '--json']);
+      selectorCheck = shellValidator(validatorPath, planPath, ['--selector-check', '--node-id', nodeIdValue, '--json']);
+    }
   } else {
     // whole-plan: shell --barrier-check --json, --gate-verify --json, --verdict-check --json (all blocking)
     barrierCheck = shellValidator(validatorPath, planPath, ['--barrier-check', '--json']);

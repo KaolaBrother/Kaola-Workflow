@@ -1360,6 +1360,77 @@ function main() {
     if (r.result !== 'pass') process.exitCode = 1;
     return;
   }
+  if (args.includes('--node-end')) {
+    // #366: FUSED per-node end-of-node check — barrier-check + gate-verify + verdict-check +
+    // selector-check in ONE process / ONE plan parse, emitting the SAME per-check payloads keyed in
+    // one envelope (back-compat: commit-node's per-node end-mode reads barrierCheck/gateVerify/
+    // verdictCheck/selectorCheck). Replaces four separate validator spawns with one. selector-check
+    // runs only when the node IS a selector source (cheap non-selector short-circuit otherwise).
+    const flagVal = name => { const i = args.indexOf(name); return i >= 0 && i + 1 < args.length ? args[i + 1] : null; };
+    const nodeId = flagVal('--node-id');
+    if (!nodeId) {
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', errors: ['--node-end requires --node-id <id>'] }) : 'typed refusal: --node-end requires --node-id') + '\n');
+      process.exitCode = 1; return;
+    }
+    // (1) per-node barrier — same logic + #368 cross-check as --barrier-check --node-id.
+    let barrierCheckOut;
+    let base = '';
+    try { base = fs.readFileSync(cacheBaseFile(nodeId), 'utf8').trim(); } catch (_) { base = ''; }
+    if (!base) {
+      barrierCheckOut = { result: 'refuse', errors: ['no recorded per-node base for "' + nodeId + '" (run --record-base --node-id at node start)'] };
+    } else {
+      let refSha = '';
+      try { refSha = execFileSync('git', ['-C', root, 'rev-parse', '--verify', '--quiet', barrierRef(nodeId) + '^{commit}'], { encoding: 'utf8' }).trim(); } catch (_) { refSha = ''; }
+      if (!refSha) {
+        barrierCheckOut = { result: 'refuse', reason: 'barrier_base_mismatch', errors: ['anchored baseline ref missing for "' + nodeId + '" while a .cache base file exists — re-run --record-base'] };
+      } else if (refSha !== base) {
+        barrierCheckOut = { result: 'refuse', reason: 'barrier_base_mismatch', errors: ['.cache base SHA for "' + nodeId + '" does not match the anchored ref (file ' + base + ' != ref ' + refSha + ')'] };
+      } else {
+        const now = snapshotWorktree(root, nodeId + '-now');
+        const diffOut = execFileSync('git', ['-C', root, 'diff-tree', '-r', '--name-only', base, now], { encoding: 'utf8' });
+        const actualPaths = diffOut.split('\n').map(s => s.trim()).filter(Boolean);
+        barrierCheckOut = barrierCheck(content, actualPaths, { nodeId, root, project: projTag });
+      }
+    }
+    // (2) gate-verify (informational at the per-node level — commit-node tags it so).
+    const gateVerifyOut = verifyGateExecution(content, { root });
+    // (3) verdict-check (informational per-node).
+    const cacheDir = path.join(path.dirname(path.resolve(planPath)), '.cache');
+    const readCache = fileName => { try { return fs.readFileSync(path.join(cacheDir, fileName), 'utf8'); } catch (_) { return null; } };
+    const globCache = prefix => { try { return fs.readdirSync(cacheDir).filter(f => f.startsWith(prefix) && f.endsWith('.md')); } catch (_) { return []; } };
+    const verdictCheckOut = verifyVerdictBlock(content, { nodeId, readCache, globCache });
+    // (4) selector-check — only when this node is a selector_source (else cheap isSelector:false).
+    let selectorCheckOut;
+    {
+      const nodes = parseNodes(content);
+      const arms = nodes.filter(n => n.selectorSource === nodeId);
+      if (!arms.length) {
+        selectorCheckOut = { ok: true, isSelector: false, armsToNa: [] };
+      } else {
+        const group = arms[0].shape.group;
+        let cacheText = null;
+        try { cacheText = fs.readFileSync(path.join(cacheDir, nodeId + '.md'), 'utf8'); } catch (_) { cacheText = null; }
+        const parsed = schema.parseNodeSelector(cacheText || '');
+        if (!parsed.found) {
+          selectorCheckOut = { ok: false, isSelector: true, errors: [`selector_source "${nodeId}" produced no selector: line`] };
+        } else if (!arms.map(a => a.id).includes(parsed.selector)) {
+          selectorCheckOut = { ok: false, isSelector: true, errors: [`selector "${parsed.selector}" is not an arm of select group "${group}" (${arms.map(a => a.id).join(', ')})`] };
+        } else {
+          selectorCheckOut = { ok: true, isSelector: true, selected: parsed.selector, group, armsToNa: arms.map(a => a.id).filter(id => id !== parsed.selector) };
+        }
+      }
+    }
+    const out = {
+      result: 'ok', mode: 'node-end', nodeId,
+      barrierCheck: barrierCheckOut,
+      gateVerify: gateVerifyOut,
+      verdictCheck: verdictCheckOut,
+      selectorCheck: selectorCheckOut,
+    };
+    process.stdout.write(JSON.stringify(out) + '\n');
+    // The validator EMITS the fused data; the consumer (commit-node) computes overallOk + exit.
+    return;
+  }
   if (args.includes('--selector-check')) {
     // #263: mechanical n/a computation for Classify-And-Act selective execution.
     // Inputs: plan path, --node-id <selector_source-id>. Non-selector nodes return ok:true/isSelector:false
