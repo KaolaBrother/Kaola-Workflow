@@ -1,0 +1,6 @@
+{"ts":"2026-06-10T11:58:32Z","agent_type":"workflow-planner","agent_id":"claim-backfill","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow"}
+{"ts":"2026-06-10T12:05:06Z","agent_type":"tdd-guide","agent_id":"ad065e1bf43cd80b7","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/issue-357"}
+{"ts":"2026-06-10T12:17:06Z","agent_type":"implementer","agent_id":"a68b63db00fe2f136","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/issue-357"}
+{"ts":"2026-06-10T12:25:21Z","agent_type":"code-reviewer","agent_id":"adfcd06dc18adead4","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/issue-357"}
+{"ts":"2026-06-10T12:36:21Z","agent_type":"adversarial-verifier","agent_id":"a790ff3307673f560","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/issue-357"}
+{"ts":"2026-06-10T12:49:01Z","agent_type":"doc-updater","agent_id":"a88a9b0b45beebe3e","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/issue-357"}
