@@ -148,6 +148,63 @@ try {
       assert(manifest['workflow-planner'] === 'opus', 'common manifest must still map workflow-planner→opus (Opus under every profile); got ' + manifest['workflow-planner']);
     } finally { fs.rmSync(cmtmp, { recursive: true, force: true }); }
   }
+
+  // #363: forge installs must run end-to-end (HOME=tmpdir) — the prior suite only exercised
+  // --forge=github, so the forge copy/verify paths (now fail-closed) were never run. Assert each
+  // forge install exits 0 + writes a VALID-JSON manifest (the node encoder) + a rendered hooks.json.
+  for (const forge of ['gitlab', 'gitea']) {
+    const ftmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-' + forge + '-'));
+    try {
+      execFileSync('bash', ['install.sh', '--yes', '--forge=' + forge, '--no-settings-merge'],
+        { cwd: root, env: { ...process.env, HOME: ftmp }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      const manifestPath = path.join(ftmp, '.claude', 'agents', '.kaola-agent-models.json');
+      assert(fs.existsSync(manifestPath), forge + ' install must write the agent model manifest');
+      JSON.parse(fs.readFileSync(manifestPath, 'utf8')); // throws if invalid JSON (#363 encoder)
+      const hooksPath = path.join(ftmp, '.claude', 'kaola-workflow-' + forge, 'hooks', 'hooks.json');
+      assert(fs.existsSync(hooksPath), forge + ' install must render hooks.json');
+      JSON.parse(fs.readFileSync(hooksPath, 'utf8')); // throws if the node rewrite produced invalid JSON
+    } finally { fs.rmSync(ftmp, { recursive: true, force: true }); }
+  }
+
+  // #363: verification fails CLOSED for forges. Plant a typo'd entry in the gitea
+  // SUPPORT_SCRIPT_NAMES (a temp copy IN the repo root so SCRIPT_DIR still resolves to the repo)
+  // and assert the install ABORTS — the prior code silently skipped the missing source and verified
+  // green (the 5.4.0 incident class).
+  {
+    const typoScript = path.join(root, '.kw-install-typo-test-363.sh');
+    const ttmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-typo-'));
+    try {
+      const src = fs.readFileSync(path.join(root, 'install.sh'), 'utf8');
+      // inject a bogus name right after the first gitea allowlist entry.
+      const injected = src.replace('kaola-gitea-forge.js\n', 'kaola-gitea-forge.js\n      kaola-gitea-NONEXISTENT-typo-363.js\n');
+      assert(injected !== src, 'planted-typo test: failed to inject a bogus gitea allowlist entry');
+      fs.writeFileSync(typoScript, injected);
+      const result = require('child_process').spawnSync('bash', [typoScript, '--yes', '--forge=gitea', '--no-settings-merge'],
+        { cwd: root, env: { ...process.env, HOME: ttmp }, encoding: 'utf8' });
+      assert(result.status !== 0, '#363: a typo\'d gitea SUPPORT_SCRIPT_NAMES entry must FAIL the install, got exit ' + result.status);
+      assert(/missing from source/.test((result.stderr || '') + (result.stdout || '')),
+        '#363: the install abort must name the missing source; got: ' + result.stderr);
+    } finally {
+      fs.rmSync(typoScript, { force: true });
+      fs.rmSync(ttmp, { recursive: true, force: true });
+    }
+  }
+
+  // #363: the manifest encoder must produce VALID JSON even when a model value contains a quote or
+  // backslash (the string-concat builder it replaced would emit corrupt JSON). Exercise the exact
+  // node encoding used in install.sh with a hostile value.
+  {
+    const etmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-quote-'));
+    try {
+      const out = path.join(etmp, 'manifest.json');
+      execFileSync('node',
+        ['-e', 'const fs=require("fs");const o2=process.argv[1];const a=process.argv.slice(2);const o={};for(let i=0;i<a.length;i+=2)o[a[i]]=a[i+1];fs.writeFileSync(o2,JSON.stringify(o,null,2)+"\\n");',
+         out, 'planner', 'op"us\\back'],
+        { encoding: 'utf8' });
+      const parsed = JSON.parse(fs.readFileSync(out, 'utf8')); // throws if the quote/backslash broke JSON
+      assert(parsed.planner === 'op"us\\back', '#363: quote/backslash in a model value round-trips through valid JSON; got ' + JSON.stringify(parsed.planner));
+    } finally { fs.rmSync(etmp, { recursive: true, force: true }); }
+  }
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
 }
