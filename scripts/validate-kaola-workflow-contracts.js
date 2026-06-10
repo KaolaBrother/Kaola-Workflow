@@ -617,4 +617,11 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'full ac
     (danglingTables.length ? ' — [agents.*] tables with no profile: ' + danglingTables.join(', ') : ''));
 }
 
+// #334: the non-delegable main-session-gate role token + its G3 freeze gate + authoring/dispatch
+// prose, pinned in the codex copies (schema, validator, plan-run SKILL, planner TOML).
+assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-schema.js`, 'MAIN_SESSION_GATE_ROLE');
+assertIncludes(`${pluginRoot}/scripts/kaola-workflow-plan-validator.js`, 'G3: main-session-gate');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'main-session-gate');
+assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'main-session-gate');
+
 console.log('Kaola-Workflow Codex contract validation passed');

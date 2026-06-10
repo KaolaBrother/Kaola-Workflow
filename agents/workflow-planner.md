@@ -83,6 +83,14 @@ Author the `## Nodes` table so the validator passes it. Each node is one row:
   post-dominate every code-producing node (G1); `security-reviewer` must post-dominate every
   sensitive node (G2). Plan a `planner`/`code-architect` node above a non-trivial implement, and a
   `doc-updater` before `finalize` when docs/public interfaces changed.
+- **Non-delegable acceptance gates (`main-session-gate`, #334):** when the issue's acceptance
+  hinges on a check no subagent can perform — a GPU/visual confirmation, a device-in-hand check,
+  an explicit human sign-off — author a `main-session-gate` node as a first-class row instead of
+  leaving it as prose. It is a built-in role (no agent profile): read-only
+  (`declared_write_set: —`), shape `sequence` only (never a fan-out member, loop, or select arm),
+  and it must post-dominate every code-producing node (**G3** — the validator refuses otherwise),
+  so finalization is provably impossible until the main session records its `verdict: pass`
+  evidence. Put WHAT must be verified in the node id/notes so the executor knows the procedure.
 - **Choose the right implement role:** Use `tdd-guide` for test-first work (behavioral logic, bug
   fixes — failing test first). Use `implementer` for implementation with NO natural failing-unit-test:
   behavior-preserving refactors, scaffolding/boilerplate/wiring, config/IaC/scripts, UI/markup,

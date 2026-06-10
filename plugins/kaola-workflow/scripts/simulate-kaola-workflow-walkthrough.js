@@ -577,6 +577,29 @@ function testCodexAdaptiveCuratedAndBarrier() {
         'codex #340 A4: a port parallel to its root edit must refuse with forge-port ordering gap, got ' + r.stdout);
     } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   }
+  // ---- #334 non-delegable main-session-gate (CODEX byte copy) ----
+  { const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-codex-334-'));
+    try {
+      const g3Plan = (ledgerRows) => { const projDir = path.join(tmp, 'kaola-workflow', 'issue-334'); fs.mkdirSync(path.join(projDir, '.cache'), { recursive: true }); const p = path.join(projDir, 'workflow-plan.md'); fs.writeFileSync(p, ['# Plan', '', '## Meta', 'labels: chore', '', '## Nodes', '', '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|', '| impl | implementer | — | lib/foo.js | 1 | sequence |', '| rv | code-reviewer | impl | — | 1 | sequence |', '| vgate | main-session-gate | rv | — | 1 | sequence |', '| done | finalize | vgate | — | 1 | sequence |', '', '## Node Ledger', '', '| id | status |', '|---|---|', ...ledgerRows, ''].join('\n')); return { p, projDir }; };
+      // in-grammar control: a post-dominating main-session-gate freezes.
+      let r = runVal([g3Plan(['| impl | pending |', '| rv | pending |', '| vgate | pending |', '| done | pending |']).p, '--json'], tmp);
+      assert(JSON.parse(r.stdout).result === 'in-grammar', 'codex #334: post-dominating main-session-gate must be in-grammar, got ' + r.stdout);
+      // G3 freeze refusal: a side-branch gate (does not post-dominate impl) refuses /G3/.
+      { const p = path.join(tmp, 'g3side.md'); fs.writeFileSync(p, ['# Plan', '', '## Nodes', '', '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|', '| ex | code-explorer | — | — | 1 | sequence |', '| impl | implementer | ex | lib/foo.js | 1 | sequence |', '| rv | code-reviewer | impl | — | 1 | sequence |', '| vgate | main-session-gate | ex | — | 1 | sequence |', '| done | finalize | rv,vgate | — | 1 | sequence |', ''].join('\n'));
+        r = runVal([p, '--json'], tmp);
+        assert(JSON.parse(r.stdout).result === 'refuse' && /G3/.test((JSON.parse(r.stdout).errors || []).join(';')), 'codex #334: side-branch gate must refuse (G3), got ' + r.stdout); }
+      // --gate-verify: impl complete + gate PENDING -> exit 1 (the regression scenario).
+      assert(runVal([g3Plan(['| impl | complete |', '| rv | complete |', '| vgate | pending |', '| done | pending |']).p, '--gate-verify', '--json'], tmp).status === 1, 'codex #334: --gate-verify exit 1 when gate pending');
+      // --gate-verify: gate n/a -> exit 1 (cannot be skipped).
+      assert(runVal([g3Plan(['| impl | complete |', '| rv | complete |', '| vgate | n/a |', '| done | complete |']).p, '--gate-verify', '--json'], tmp).status === 1, 'codex #334: --gate-verify exit 1 when gate n/a');
+      // pass control: gate complete + .cache verdicts -> --gate-verify AND --verdict-check exit 0.
+      { const { p, projDir } = g3Plan(['| impl | complete |', '| rv | complete |', '| vgate | complete |', '| done | complete |']);
+        fs.writeFileSync(path.join(projDir, '.cache', 'rv.md'), 'verdict: pass\nfindings_blocking: 0\n');
+        fs.writeFileSync(path.join(projDir, '.cache', 'vgate.md'), 'verdict: pass\nfindings_blocking: 0\nGPU true-black confirmed\n');
+        assert(runVal([p, '--gate-verify', '--json'], tmp).status === 0, 'codex #334: --gate-verify exit 0 when gate complete + post-dominates');
+        assert(runVal([p, '--verdict-check', '--json'], tmp).status === 0, 'codex #334: --verdict-check exit 0 when gate records verdict: pass'); }
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
   console.log('Codex adaptive #238/#239 coverage: PASSED');
 }
 
@@ -1151,6 +1174,24 @@ function testCodexCompactResume266() {
       '#266 case4: task mirror must show in_progress:1, got ' + lines1[6]);
     assert(lines1[6].includes('pending: 1'),
       '#266 case4: task mirror must show pending:1, got ' + lines1[6]);
+
+    // --- #334 case4b: a pending main-session-gate must appear in the pending-gates packet line.
+    // Separate root + small fixture (NOT FIXTURE_PLAN, whose hash is asserted elsewhere). RED before
+    // the GATE_VERDICT_ROLES edit: the role was not in the set → the line read 'none'.
+    { const root334 = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-334-compact-'));
+      try {
+        const pj = 'issue-334-vgate';
+        const pd = path.join(root334, 'kaola-workflow', pj);
+        fs.mkdirSync(pd, { recursive: true });
+        fs.writeFileSync(path.join(pd, 'workflow-state.md'), ['# State', '', '## Project', 'name: ' + pj, 'status: active', '', '## Sink', 'branch: workflow/issue-334', 'issue_number: 334', 'next_command: /kaola-workflow-plan-run', 'next_skill: kaola-workflow-next', ''].join('\n'));
+        fs.writeFileSync(path.join(pd, 'workflow-plan.md'), ['# Plan', '', '## Nodes', '', '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|', '| impl | implementer | — | lib/foo.js | 1 | sequence |', '| rv | code-reviewer | impl | — | 1 | sequence |', '| vgate | main-session-gate | rv | — | 1 | sequence |', '| done | finalize | vgate | — | 1 | sequence |', '', '## Node Ledger', '', '| id | status |', '|---|---|', '| impl | complete |', '| rv | complete |', '| vgate | pending |', '| done | pending |', ''].join('\n'));
+        const r334 = runScript(compactResumeScript, [], { input: JSON.stringify({ cwd: root334 }), encoding: 'utf8' });
+        assert(r334.status === 0, '#334 case4b: compact-resume must exit 0, got ' + r334.status + '\n' + r334.stderr);
+        const gateLine = r334.stdout.trim().split('\n').find(l => l.startsWith('pending gates:'));
+        assert(gateLine && /\bvgate\b/.test(gateLine),
+          '#334 case4b: a pending main-session-gate (vgate) must appear in the pending-gates line, got: ' + gateLine);
+      } finally { fs.rmSync(root334, { recursive: true, force: true }); }
+    }
 
     // --- Determinism: two runs → identical stdout ---
     const r2 = runScript(compactResumeScript, [], { input, encoding: 'utf8' });

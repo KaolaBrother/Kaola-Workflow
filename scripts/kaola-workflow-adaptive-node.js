@@ -397,6 +397,24 @@ function parseNodesFromContent(content) {
 function checkEvidenceShape(role, nodeId, evidence) {
   const content = evidence || '';
 
+  // #334: a non-delegable main-session gate can never self-skip ('n/a') and must record a
+  // machine verdict (column-0, last-match-wins, lowercase — mirrors schema.parseNodeVerdict).
+  // Placed BEFORE the universal n/a carve-out on purpose.
+  if (role === 'main-session-gate') {
+    if (!content.trim()) {
+      return { ok: false, kind: 'absent', missingTokenClass: 'non-empty',
+        reason: 'evidence missing for main-session-gate node ' + nodeId, expected: ['verdict: pass|fail'] };
+    }
+    const vm = content.match(/^verdict:[ \t]*([A-Za-z-]+)[ \t]*$/gm);
+    const last = vm ? vm[vm.length - 1].replace(/^verdict:[ \t]*/, '').trim().toLowerCase() : null;
+    if (last !== 'pass' && last !== 'fail') {
+      return { ok: false, kind: 'shape', missingTokenClass: 'verdict',
+        reason: 'main-session-gate ' + nodeId + ' evidence missing column-0 verdict: pass|fail line (an n/a skip is refused for a non-delegable gate)',
+        expected: ['verdict: pass|fail'] };
+    }
+    return { ok: true };
+  }
+
   // 'n/a' skip is universal.
   if (content.trim().startsWith('n/a')) {
     return { ok: true };
@@ -650,7 +668,12 @@ function runOrient(opts) {
   // (mid-node / active batch) and when allDone.
   const startReadyPending = (nextAction.result === 'ok' && Array.isArray(nextAction.readyPending))
     ? nextAction.readyPending : [];
-  const enterBatch = !allDone && inProgressNodes.length === 0 && startReadyPending.length >= 2;
+  // #334: a main-session-gate is never an openable BATCH member (the main session cannot run
+  // concurrently with itself) — compute enterBatch/frontier over the delegable subset only. A
+  // [gate, x] frontier therefore drops to enterBatch=false (single-node path); [gate, x, y]
+  // batches [x, y] and the gate opens serially via open-next. Zero regression when absent.
+  const delegable = startReadyPending.filter(n => n.role !== 'main-session-gate');
+  const enterBatch = !allDone && inProgressNodes.length === 0 && delegable.length >= 2;
 
   return {
     result: 'ok',
@@ -669,7 +692,7 @@ function runOrient(opts) {
     allDone,
     enterBatch,
     frontier: enterBatch
-      ? startReadyPending.map(n => ({ id: n.id, role: n.role, model: n.model, declared_write_set: n.declared_write_set }))
+      ? delegable.map(n => ({ id: n.id, role: n.role, model: n.model, declared_write_set: n.declared_write_set }))
       : [],
   };
 }
@@ -1064,7 +1087,10 @@ function runCloseAndOpenNext(opts) {
   // single-open one node (which would serialize an independent fan-out behind one member).
   // Signal enterBatch so the orchestrator routes to the bounded batch scheduler (open-batch
   // + rolling top-up). Linear chains (readyPending < 2) keep the serial single-open below.
-  const readyPending = nextAction.readyPending || [];
+  // #334: exclude a main-session-gate from the batch frontier (the main session cannot run
+  // concurrently with itself) — the gate opens serially via the single-node path below. A
+  // [gate, x] frontier therefore falls through to single-open; [gate, x, y] batches [x, y].
+  const readyPending = (nextAction.readyPending || []).filter(n => n.role !== 'main-session-gate');
   if (readyPending.length >= 2) {
     // #317: enterBatch carries ONLY the closed-node (and any selector arms) transitions —
     // open-batch owns the member in_progress flips; do not invent them here.
@@ -1236,7 +1262,10 @@ function runWriteHalt(opts) {
 // ---------------------------------------------------------------------------
 function runReopenNode(opts) {
   const { planPath, project, nodeId, shell, readFile, writeFile, cacheExists, unlink } = opts;
-  const GATE_ROLES = new Set(['code-reviewer', 'security-reviewer', 'adversarial-verifier']);
+  // #334: a downstream non-delegable main-session-gate is reset like the reviewer gates so a
+  // plan-repair to implementation re-triggers the visual check (it post-dominates N and folds
+  // complete|in_progress → pending; the orphan guard at (3b) tolerates it for the same reason).
+  const GATE_ROLES = new Set(['code-reviewer', 'security-reviewer', 'adversarial-verifier', 'main-session-gate']);
 
   // (1) Refuse over a live batch / interrupted top-up — mirror the #305 guards.
   const manifestPath = path.join(path.dirname(planPath), '.cache', 'active-batch.json');

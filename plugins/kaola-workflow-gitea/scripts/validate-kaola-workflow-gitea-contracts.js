@@ -609,6 +609,12 @@ assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'full accumulated r
 assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'registration surface');
 assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'full accumulated root diff');
 
+// #334: the non-delegable main-session-gate role token + its G3 freeze gate + authoring/dispatch
+// prose, pinned in the Gitea edition surfaces (port validator, plan-run command, planner TOML).
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-plan-validator.js', 'G3: main-session-gate');
+assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'main-session-gate');
+assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'main-session-gate');
+
 // issue #290 / #288: pin the machine-readable findings-emission contract presence in all
 // reviewer agent bodies (Gitea edition — .toml bodies). Removing the emission section from
 // any of these files must fail npm test so a re-vendor or refactor cannot silently drop it.

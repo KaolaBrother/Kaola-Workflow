@@ -208,6 +208,9 @@ starting the next queued sibling as each running one finishes.
   a downstream fan-out is **never serialized** behind one member.
 - `enterBatch:true` (or `readyPending.length >= 2`) → **batch path** (below).
 - otherwise → **single-node path**: run steps 1–4 below as today, with zero change.
+- The frontier and `enterBatch` are computed over **delegable** nodes only — a
+  `main-session-gate` (#334) is never a batch member (the main session cannot run concurrently
+  with itself) and always runs on the single-node path.
 
 **Batch eligibility rules** (checked by `open-batch`, which first runs a `--resume-check` integrity
 gate and refuses `plan_integrity_failed` on a tampered/unfrozen plan — zero mutation):
@@ -384,6 +387,28 @@ delete manifest, re-enter `next-action`.
    in-plan sink bookkeeping; the Finalization phase's mechanical bookkeeping
    (`/kaola-workflow-finalize`) is still delegated to the `contractor` and is attested
    separately (`finalize_contractor_attested`).
+
+   **Special case — `role: main-session-gate` (#334, non-delegable):** like the `finalize`
+   sink, this role is never a dispatchable subagent — `resolve-agent-model main-session-gate`
+   returns an empty model and you do **not** call `Agent()`. The MAIN session performs the
+   node's acceptance procedure itself (the check the plan authored this gate for — e.g. a GPU /
+   visual true-black comparison, a device-in-hand verification, an explicit human sign-off).
+   When the check needs the user's eyes, surface the artifacts and WAIT for the user's explicit
+   confirmation — never infer a pass. Then record verdict evidence (column-0, lowercase):
+
+   ```bash
+   printf 'verdict: pass\nfindings_blocking: 0\n<one-line what-was-checked summary>\n' | \
+     node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-adaptive-node.js" record-evidence \
+       --project {project} --node-id {node-id} --stdin --json
+   ```
+
+   then `close-and-open-next` as for any node. The close REFUSES (`evidence_shape_failed`,
+   `missingTokenClass: verdict`) without a parseable `verdict: pass|fail` line, and an `n/a`
+   self-skip is refused for this role. Record an honest `verdict: fail` and close — blocking
+   happens at Finalization's `--verdict-check`/`--gate-verify` (G3); route the repair via the
+   bounded #279 controller / `reopen-node`, after which the gate re-runs (it is reset with the
+   reviewer gates). A `main-session-gate` node never joins a parallel batch — when it appears
+   in a ready frontier, run it on the single-node path.
 
    **For non-finalize roles, after the role returns, capture durable evidence immediately** — the
    step-3 close refuses

@@ -35,14 +35,16 @@ If `workflow_path: adaptive`:
   fi
   ```
   - `--gate-verify` proves every completed code/sensitive node is post-dominated by a
-    **completed** reviewer in the `## Node Ledger` (closes G1/H5).
+    **completed** reviewer in the `## Node Ledger` (closes G1/H5). **G3 (#334): a
+    non-delegable `main-session-gate` must be complete — never `n/a` — and post-dominate
+    completed code nodes.**
   - `--barrier-check` re-scans the files actually written (git diff vs the merge-base
     of HEAD and `origin/main`) and refuses a sensitive write with no `security-reviewer`
     node, or an out-of-allowlist production write (closes H1/H3). Any nonzero exit
     **blocks the merge**.
   - `--verdict-check` reads every completed gate-role node's `.cache/{node-id}.md` and
     requires `verdict: pass` with `findings_blocking: 0`. Any nonzero exit **blocks the
-    merge** — proves every code-reviewer/security-reviewer/adversarial-verifier node
+    merge** — proves every code-reviewer/security-reviewer/adversarial-verifier/main-session-gate node
     recorded a passing verdict.
   On any failure stop with a **typed refusal** (do not proceed):
   ```text

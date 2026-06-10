@@ -160,7 +160,9 @@ members and leaves the rest **queued**; `top-up` drains the queue by rolling bou
 **Deciding the unit:** the scheduler is **batch-aware** — `orient` signals `enterBatch:true` on a ≥2
 START frontier, and `close-and-open-next` returns `enterBatch:true` on a ≥2-wide downstream frontier
 so a fan-out is **never serialized**. `enterBatch:true` (or `readyPending.length >= 2`) → batch path;
-otherwise single-node path (steps 1–4, unchanged).
+otherwise single-node path (steps 1–4, unchanged). The frontier and `enterBatch` are computed over
+**delegable** nodes only — a `main-session-gate` (#334) is never a batch member and always runs on
+the single-node path.
 
 **Batch path:**
 - **(a) open-batch:** `node "$KAOLA_SCRIPTS/kaola-workflow-parallel-batch.js" open-batch --project {project} --json` — first runs a `--resume-check` integrity gate (refuse `plan_integrity_failed`, zero mutation); refuses a fresh open while a live `active-batch.json` exists (`active_batch_exists`) or an `opening` manifest needs repair (`reconcile_first`). Opens at most `FANOUT_CAP` members (the rest stay **queued** for `top-up`). For a write-role batch, checks isolated-worktree capability; when available, provisions one worktree per member, records N baselines, then performs a **crash-safe two-phase commit** — writes `active-batch.json` with `state:'opening'` BEFORE flipping the N ledger rows to `in_progress`, then promotes to `state:'open'`. **Degraded mode (serial fallback before dispatch, #320):** because this harness cannot FORCE a subagent's CWD (the `Working directory:` line is advisory), a write-role batch would leak edits to the parent worktree — so by DEFAULT `open-batch` serial-degrades a write-role frontier before any dispatch, returning `{result:'ok', degraded:true, reason:'cwd_unenforceable', opened:[], allDone:false}` with ZERO mutation (no ledger flip, no baseline, no manifest, no worktree). (The legacy `reason:'worktree_unavailable'` — host lacks worktree capability — uses the same shape.) On ANY `degraded:true`, the orchestrator MUST NOT concurrent-dispatch — it `log()`s the degradation and falls back to the single-node `open-next` path, opening write-role siblings one at a time (correctness preserved, wall-clock parallelism forgone — design §10.3). This is also why a frozen coarse-area-overlapping write antichain never hits a runtime `not_disjoint` refusal (the serial degrade fires first; the disjointness gate applies only in the opt-in `KAOLA_BATCH_CWD_ENFORCED` mode). Read-only batches are unaffected (no worktrees ever provisioned, never degraded).
@@ -237,6 +239,29 @@ whose UNSEALED `members` set matches the `in_progress` set; otherwise a typed re
    certify a dispatch the sink contract forbids. This row covers ONLY the in-plan sink bookkeeping;
    the Finalization phase's mechanical bookkeeping (`/kaola-workflow-finalize`) is still delegated to
    the `contractor` and is attested separately (`finalize_contractor_attested`).
+
+   **Special case — `role: main-session-gate` (#334, non-delegable):** like the `finalize`
+   sink, this role is never a dispatchable subagent — `kaola-workflow-resolve-agent-model.js
+   main-session-gate` returns an empty model and you do **not** delegate to an agent profile.
+   The MAIN session performs the node's acceptance procedure itself (the check the plan authored
+   this gate for — e.g. a GPU / visual true-black comparison, a device-in-hand verification, an
+   explicit human sign-off). When the check needs the user's eyes, surface the artifacts and WAIT
+   for the user's explicit confirmation — never infer a pass. Then record verdict evidence
+   (column-0, lowercase):
+
+   ```bash
+   printf 'verdict: pass\nfindings_blocking: 0\n<one-line what-was-checked summary>\n' | \
+     node "$KAOLA_SCRIPTS/kaola-workflow-adaptive-node.js" record-evidence \
+       --project {project} --node-id {node-id} --stdin --json
+   ```
+
+   then `close-and-open-next` as for any node. The close REFUSES (`evidence_shape_failed`,
+   `missingTokenClass: verdict`) without a parseable `verdict: pass|fail` line, and an `n/a`
+   self-skip is refused for this role. Record an honest `verdict: fail` and close — blocking
+   happens at Finalization's `--verdict-check`/`--gate-verify` (G3); route the repair via the
+   bounded #279 controller / `reopen-node`, after which the gate re-runs (it is reset with the
+   reviewer gates). A `main-session-gate` node never joins a parallel batch — when it appears in a
+   ready frontier, run it on the single-node path.
 
    **For non-finalize roles, after the role returns, record durable evidence immediately** before
    step 3 — `close-and-open-next` refuses (`evidence_absent` if absent, `evidence_shape_failed` if malformed) when `.cache/{node-id}.md` is absent/malformed

@@ -685,4 +685,11 @@ assertIncludes('commands/kaola-workflow-plan-run.md', 'full accumulated root dif
     'uninstall.sh REQUIRED_AGENTS must match install.sh (#340) — a missing name orphans the installed agent on uninstall');
 }
 
+// #334: the non-delegable main-session-gate role token + its G3 freeze gate + authoring/dispatch
+// prose. Pinned so a re-vendor/refactor cannot silently drop the built-in gate role.
+assertIncludes('scripts/kaola-workflow-adaptive-schema.js', 'MAIN_SESSION_GATE_ROLE');
+assertIncludes('scripts/kaola-workflow-plan-validator.js', 'G3: main-session-gate');
+assertIncludes('commands/kaola-workflow-plan-run.md', 'main-session-gate');
+assertIncludes('agents/workflow-planner.md', 'main-session-gate');
+
 console.log('Workflow contract validation passed');

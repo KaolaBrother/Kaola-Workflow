@@ -186,6 +186,29 @@ function realNextActionShell(planPath) {
 }
 
 // ---------------------------------------------------------------------------
+// P2g (#334): deriveReadyPending EXCLUDES a main-session-gate node — the main session
+// runs it serially, never as a batch member (covers both open-batch and top-up, which
+// share this derivation). A gate mixed with read-only siblings drops only the gate; a
+// gate-only frontier yields an EMPTY frontier (→ the empty-frontier defer in open-batch).
+// ---------------------------------------------------------------------------
+{
+  const mixed = [
+    { id: 'vgate', role: 'main-session-gate', declared_write_set: '—' },
+    { id: 'ro1', role: 'tdd-guide', declared_write_set: 'scripts/ro1.js' },
+    { id: 'ro2', role: 'tdd-guide', declared_write_set: 'scripts/ro2.js' },
+  ];
+  const ledger = new Map([['vgate', 'pending'], ['ro1', 'pending'], ['ro2', 'pending']]);
+  const rp = deriveReadyPending(mixed, ledger);
+  assert(rp.map(n => n.id).join(',') === 'ro1,ro2', 'P2g: main-session-gate filtered out of the batch frontier (only ro1,ro2)');
+  assert(!rp.some(n => n.role === 'main-session-gate'), 'P2g: no gate role survives deriveReadyPending');
+
+  // gate-only frontier → empty (the existing empty-frontier defer fires)
+  const gateOnly = [{ id: 'vgate', role: 'main-session-gate', declared_write_set: '—' }];
+  const rpOnly = deriveReadyPending(gateOnly, new Map([['vgate', 'pending']]));
+  assert(rpOnly.length === 0, 'P2g: a gate-only frontier derives to empty (open-batch defers, orchestrator routes to open-next)');
+}
+
+// ---------------------------------------------------------------------------
 // P3: classifyBatchKind — all-read-only → read_only; all-write-role → write_role;
 //     MIXED → selects the read-only subset (NOT a refuse).
 // ---------------------------------------------------------------------------
@@ -345,6 +368,49 @@ function realNextActionShell(planPath) {
   // 2 baselines recorded (one commit-node --start per member).
   assert(baselineCalls.length === 2, 'I1: 2 baselines recorded (commit-node --start per member)');
   assert(baselineCalls.includes('v1') && baselineCalls.includes('v2'), 'I1: baselines for v1 and v2');
+
+  cleanup(root);
+}
+
+// ---------------------------------------------------------------------------
+// I1g (#334): open-batch over a frontier of [vgate(main-session-gate), v1, v2] opens
+// ONLY v1,v2 — the non-delegable gate is filtered out of the batch frontier and is left
+// pending for the serial open-next path. Drives REAL next-action against a frozen plan.
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan(
+    [
+      '| a        | code-explorer     | —          | — | 1 | sequence       |',
+      '| vgate    | main-session-gate | a          | — | 1 | sequence       |',
+      '| v1       | knowledge-lookup  | a          | — | 1 | fanout(verify) |',
+      '| v2       | knowledge-lookup  | a          | — | 1 | fanout(verify) |',
+      '| finalize | finalize          | vgate,v1,v2| — | 1 | sequence       |',
+    ],
+    [
+      '| a        | complete |  |',
+      '| vgate    | pending  |  |',
+      '| v1       | pending  |  |',
+      '| v2       | pending  |  |',
+      '| finalize | pending  |  |',
+    ]
+  );
+  const { root, planPath, statePath, cacheDir } = makeProjectDir(plan);
+  const io = makeIo();
+  const manifestPath = path.join(cacheDir, 'active-batch.json');
+  const shell = realNextActionShell(planPath);
+
+  const r = runOpenBatch({
+    planPath, statePath, cacheDir, manifestPath, project: 'test-project',
+    max: null, fanoutCap: 4, shell, ...io,
+  });
+
+  assert(r.result === 'ok', 'I1g: open-batch with a gate in the frontier → ok');
+  assert(Array.isArray(r.members) && r.members.length === 2, 'I1g: only the 2 delegable siblings opened (gate excluded)');
+  assert(!r.members.some(m => m.id === 'vgate'), 'I1g: the main-session-gate is NOT a batch member');
+  const writtenPlan = fs.readFileSync(planPath, 'utf8');
+  assert(/\|\s*vgate\s*\|\s*pending\s*\|/.test(writtenPlan), 'I1g: the gate is left PENDING (opens serially via open-next, not batched)');
+  assert(/\|\s*v1\s*\|\s*in_progress\s*\|/.test(writtenPlan) && /\|\s*v2\s*\|\s*in_progress\s*\|/.test(writtenPlan),
+    'I1g: v1,v2 flipped to in_progress');
 
   cleanup(root);
 }

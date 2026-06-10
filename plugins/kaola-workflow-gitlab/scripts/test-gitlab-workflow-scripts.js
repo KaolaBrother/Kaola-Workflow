@@ -3802,6 +3802,24 @@ function testGitlabCompactResume266() {
     assert.ok(lines1[6].includes('completed: 2') && lines1[6].includes('in_progress: 1'),
       '#266 gl case4: task mirror must show correct counts, got ' + lines1[6]);
 
+    // --- #334 case4b: a pending main-session-gate must appear in the pending-gates packet line.
+    // Separate root + small fixture (NOT GITLAB_FIXTURE_PLAN, whose hash is asserted elsewhere).
+    // RED before the GATE_VERDICT_ROLES edit: the role was not in the set → the line read 'none'.
+    { const root334 = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-334-compact-'));
+      try {
+        const pj = 'issue-334-vgate';
+        const pd = path.join(root334, 'kaola-workflow', pj);
+        fs.mkdirSync(pd, { recursive: true });
+        fs.writeFileSync(path.join(pd, 'workflow-state.md'), ['# State', '', '## Project', 'name: ' + pj, 'status: active', '', '## Sink', 'branch: workflow/issue-334', 'issue_number: 334', 'next_command: /kaola-workflow-plan-run', 'next_skill: kaola-workflow-next', ''].join('\n'));
+        fs.writeFileSync(path.join(pd, 'workflow-plan.md'), ['# Plan', '', '## Nodes', '', '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|', '| impl | implementer | — | lib/foo.js | 1 | sequence |', '| rv | code-reviewer | impl | — | 1 | sequence |', '| vgate | main-session-gate | rv | — | 1 | sequence |', '| done | finalize | vgate | — | 1 | sequence |', '', '## Node Ledger', '', '| id | status |', '|---|---|', '| impl | complete |', '| rv | complete |', '| vgate | pending |', '| done | pending |', ''].join('\n'));
+        const r334 = spawnSync(process.execPath, [gitlabCompactResumeScript], { input: JSON.stringify({ cwd: root334 }), encoding: 'utf8' });
+        assert.strictEqual(r334.status, 0, '#334 gl case4b: compact-resume must exit 0, got ' + r334.status + '\n' + r334.stderr);
+        const gateLine = r334.stdout.trim().split('\n').find(l => l.startsWith('pending gates:'));
+        assert.ok(gateLine && /\bvgate\b/.test(gateLine),
+          '#334 gl case4b: a pending main-session-gate (vgate) must appear in the pending-gates line, got: ' + gateLine);
+      } finally { fs.rmSync(root334, { recursive: true, force: true }); }
+    }
+
     // --- Determinism: two runs → identical stdout ---
     const r2 = spawnSync(process.execPath, [gitlabCompactResumeScript],
       { input, encoding: 'utf8' });

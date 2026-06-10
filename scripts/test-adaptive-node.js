@@ -266,6 +266,44 @@ function makeState(opts) {
 }
 
 // ---------------------------------------------------------------------------
+// T8g (#334): checkEvidenceShape — main-session-gate requires a column-0 verdict and
+// REFUSES the universal 'n/a' self-skip (the inversion vs every other role).
+// ---------------------------------------------------------------------------
+{
+  // absent evidence → kind absent, missingTokenClass non-empty
+  const rAbsent = checkEvidenceShape('main-session-gate', 'vgate', null);
+  assert(rAbsent.ok === false, 'T8g-a: main-session-gate absent evidence → not ok');
+  assert(rAbsent.kind === 'absent', 'T8g-a: absent → kind absent');
+  assert(rAbsent.missingTokenClass === 'non-empty', 'T8g-a: absent → missingTokenClass non-empty');
+
+  const rEmpty = checkEvidenceShape('main-session-gate', 'vgate', '   ');
+  assert(rEmpty.ok === false && rEmpty.kind === 'absent', 'T8g-b: whitespace-only → absent');
+
+  // present but verdict-less → kind shape, missingTokenClass verdict
+  const rNoVerdict = checkEvidenceShape('main-session-gate', 'vgate', 'looked at the screen, looks fine\n');
+  assert(rNoVerdict.ok === false, 'T8g-c: verdict-less → not ok');
+  assert(rNoVerdict.kind === 'shape', 'T8g-c: verdict-less → kind shape');
+  assert(rNoVerdict.missingTokenClass === 'verdict', 'T8g-c: verdict-less → missingTokenClass verdict');
+
+  // 'n/a ...' content → REFUSED for this role (the inversion: every OTHER role would skip)
+  const rNa = checkEvidenceShape('main-session-gate', 'vgate', 'n/a — not a visual issue\n');
+  assert(rNa.ok === false, 'T8g-d: n/a content REFUSED for main-session-gate (inversion vs other roles)');
+  assert(rNa.kind === 'shape' && rNa.missingTokenClass === 'verdict', 'T8g-d: n/a content → shape/verdict');
+  // (sanity: the SAME n/a content passes for a non-gate role)
+  assert(checkEvidenceShape('code-reviewer', 'review', 'n/a — not a visual issue\n').ok === true,
+    'T8g-d: same n/a content is a legal skip for code-reviewer');
+
+  // verdict: pass / verdict: fail → ok (a fail verdict still CLOSES the node, parity with reviewers)
+  const rPass = checkEvidenceShape('main-session-gate', 'vgate', 'verdict: pass\nfindings_blocking: 0\nGPU true-black confirmed\n');
+  assert(rPass.ok === true, 'T8g-e: verdict: pass → ok');
+  const rFail = checkEvidenceShape('main-session-gate', 'vgate', 'verdict: fail\nfindings_blocking: 1\nblacks looked grey\n');
+  assert(rFail.ok === true, 'T8g-f: verdict: fail → ok (closes the node; blocking is at Finalization)');
+  // last-match-wins + case-insensitive
+  const rLast = checkEvidenceShape('main-session-gate', 'vgate', 'verdict: fail\nre-checked\nverdict: PASS\n');
+  assert(rLast.ok === true, 'T8g-g: last-match-wins + case-insensitive verdict → ok');
+}
+
+// ---------------------------------------------------------------------------
 // T9: runOrient — read-only; assert writeFile is never called
 // ---------------------------------------------------------------------------
 {
@@ -1684,6 +1722,153 @@ function makeState(opts) {
 }
 
 // ---------------------------------------------------------------------------
+// T23a (#334): runOrient enterBatch EXCLUDES a main-session-gate. Frontier [gate, x]
+// (delegable count 1) → enterBatch:false. Frontier [gate, x, y] (delegable count 2) →
+// enterBatch:true with the gate filtered OUT of the frontier.
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan([
+    '| vgate | pending | |', '| x | pending | |', '| review | pending | |',
+  ], [
+    '| vgate | main-session-gate | — | — | 1 | sequence |',
+    '| x | tdd-guide | — | xxx/1.js | 1 | sequence |',
+    '| review | code-reviewer | vgate,x | — | 1 | sequence |',
+  ]);
+  const shellStub = function(scriptPath) {
+    const base = path.basename(scriptPath);
+    if (base === 'kaola-workflow-plan-validator.js') return { exitCode: 0, ok: true, planHash: 'abc' };
+    if (base === 'kaola-workflow-next-action.js') {
+      const gate = { id: 'vgate', role: 'main-session-gate', model: '', declared_write_set: '—', dependsOn: [] };
+      const x = { id: 'x', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'xxx/1.js', dependsOn: [] };
+      return { exitCode: 0, result: 'ok', readySet: [gate, x], nextNode: gate, readyPending: [gate, x], active: [], allDone: false };
+    }
+    return { exitCode: 1, result: 'refuse' };
+  };
+  const res = runOrient({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project', shell: shellStub,
+    readFile: (f) => { if (f.endsWith('workflow-plan.md')) return plan; if (f.endsWith('workflow-state.md')) return makeState(); throw new Error('ENOENT ' + f); },
+    writeFile: () => {}, cacheExists: () => false,
+  });
+  assert(res.result === 'ok', 'T23a: orient [gate, x] result ok');
+  assert(res.enterBatch === false, 'T23a: [gate, x] → enterBatch false (delegable count 1, the gate is excluded)');
+  assert(Array.isArray(res.frontier) && res.frontier.length === 0, 'T23a: enterBatch false → empty frontier');
+}
+{
+  const plan = makePlan([
+    '| vgate | pending | |', '| x | pending | |', '| y | pending | |', '| review | pending | |',
+  ], [
+    '| vgate | main-session-gate | — | — | 1 | sequence |',
+    '| x | tdd-guide | — | xxx/1.js | 1 | fanout(impl) |',
+    '| y | tdd-guide | — | yyy/1.js | 1 | fanout(impl) |',
+    '| review | code-reviewer | vgate,x,y | — | 1 | sequence |',
+  ]);
+  const shellStub = function(scriptPath) {
+    const base = path.basename(scriptPath);
+    if (base === 'kaola-workflow-plan-validator.js') return { exitCode: 0, ok: true, planHash: 'abc' };
+    if (base === 'kaola-workflow-next-action.js') {
+      const gate = { id: 'vgate', role: 'main-session-gate', model: '', declared_write_set: '—', dependsOn: [] };
+      const x = { id: 'x', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'xxx/1.js', dependsOn: [] };
+      const y = { id: 'y', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'yyy/1.js', dependsOn: [] };
+      return { exitCode: 0, result: 'ok', readySet: [gate, x, y], nextNode: gate, readyPending: [gate, x, y], active: [], allDone: false };
+    }
+    return { exitCode: 1, result: 'refuse' };
+  };
+  const res = runOrient({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project', shell: shellStub,
+    readFile: (f) => { if (f.endsWith('workflow-plan.md')) return plan; if (f.endsWith('workflow-state.md')) return makeState(); throw new Error('ENOENT ' + f); },
+    writeFile: () => {}, cacheExists: () => false,
+  });
+  assert(res.enterBatch === true, 'T23b: [gate, x, y] → enterBatch true (2 delegable)');
+  assert(Array.isArray(res.frontier) && res.frontier.length === 2, 'T23b: frontier carries 2 siblings (gate excluded)');
+  assert(!res.frontier.some(n => n.id === 'vgate'), 'T23b: the gate is NOT in the batch frontier');
+}
+
+// ---------------------------------------------------------------------------
+// T23c (#334): runCloseAndOpenNext enterBatch EXCLUDES a main-session-gate from the
+// post-close frontier. Closing `prep` exposes [vgate, a, b]; only [a, b] are batched.
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan([
+    '| prep | in_progress | |', '| vgate | pending | |', '| a | pending | |', '| b | pending | |', '| review | pending | |',
+  ], [
+    '| prep | code-explorer | — | — | 1 | sequence |',
+    '| vgate | main-session-gate | prep | — | 1 | sequence |',
+    '| a | tdd-guide | prep | aaa/1.js | 1 | fanout(impl) |',
+    '| b | tdd-guide | prep | bbb/1.js | 1 | fanout(impl) |',
+    '| review | code-reviewer | vgate,a,b | — | 1 | sequence |',
+  ]);
+  let planContent = plan;
+  const writtenFiles = {};
+  const shellStub = function(scriptPath, args) {
+    const base = path.basename(scriptPath); const argsArr = args || [];
+    if (base === 'kaola-workflow-commit-node.js' && !argsArr.includes('--start')) {
+      return { exitCode: 0, result: 'ok', mode: 'per-node', nodeId: 'prep', overallOk: true, selectorCheck: { isSelector: false, ok: true }, barrierCheck: { exitCode: 0, result: 'pass' } };
+    }
+    if (base === 'kaola-workflow-commit-node.js' && argsArr.includes('--start')) return { exitCode: 0, result: 'ok', mode: 'per-node-start', overallOk: true };
+    if (base === 'kaola-workflow-next-action.js') {
+      const gate = { id: 'vgate', role: 'main-session-gate', model: '', declared_write_set: '—', dependsOn: ['prep'] };
+      const a = { id: 'a', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'aaa/1.js', dependsOn: ['prep'] };
+      const b = { id: 'b', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'bbb/1.js', dependsOn: ['prep'] };
+      return { exitCode: 0, result: 'ok', readySet: [gate, a, b], nextNode: gate, readyPending: [gate, a, b], active: [], allDone: false };
+    }
+    return { exitCode: 1, result: 'refuse', errors: ['stub: unexpected ' + base] };
+  };
+  const result = runCloseAndOpenNext({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project', nodeId: 'prep', shell: shellStub,
+    readFile: (f) => {
+      if (f.endsWith('workflow-plan.md')) return planContent;
+      if (f.endsWith('workflow-state.md')) return makeState();
+      if (f.endsWith('/.cache/prep.md')) return 'explored the area; findings recorded';
+      throw new Error('ENOENT: ' + f);
+    },
+    writeFile: (f, c) => { writtenFiles[f] = c; if (f.endsWith('workflow-plan.md')) planContent = c; },
+    cacheExists: (f) => f.endsWith('/.cache/prep.md'),
+  });
+  assert(result.result === 'ok', 'T23c: close result ok');
+  assert(result.enterBatch === true, 'T23c: [vgate, a, b] → enterBatch true (2 delegable a,b)');
+  assert(Array.isArray(result.frontier) && result.frontier.length === 2 && !result.frontier.some(n => n.id === 'vgate'),
+    'T23c: frontier batches [a, b], the gate excluded');
+}
+
+// ---------------------------------------------------------------------------
+// T23d (#334): runReopenNode resets a downstream COMPLETE main-session-gate and removes its
+// baseline — a plan-repair to implementation MUST re-run the visual check. Plan
+// a→impl→review(code-reviewer)→vgate(main-session-gate)→finalize, all complete.
+// ---------------------------------------------------------------------------
+{
+  const planNodes = [
+    '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| impl | tdd-guide | a | scripts/b.js | 1 | sequence |',
+    '| review | code-reviewer | impl | — | 1 | sequence |',
+    '| vgate | main-session-gate | review | — | 1 | sequence |',
+    '| finalize | finalize | vgate | — | 1 | sequence |',
+  ];
+  let planContent = makePlan([
+    '| a | complete | |', '| impl | complete | |', '| review | complete | |', '| vgate | complete | |', '| finalize | complete | |',
+  ], planNodes);
+  const removed = [];
+  const shelled = [];
+  const result = runReopenNode({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md', project: 'test-project', nodeId: 'impl',
+    shell: (scriptPath) => { shelled.push(path.basename(scriptPath)); return path.basename(scriptPath) === 'kaola-workflow-commit-node.js' ? { exitCode: 0, result: 'ok' } : { exitCode: 1 }; },
+    readFile: (f) => { if (f.endsWith('workflow-plan.md')) return planContent; throw new Error('ENOENT ' + f); },
+    writeFile: (f, c) => { if (f.endsWith('workflow-plan.md')) planContent = c; },
+    cacheExists: (f) => /barrier-base-/.test(f),
+    unlink: (f) => removed.push(path.basename(f)),
+  });
+  assert(result.result === 'ok', 'T23d: reopen result ok, got ' + JSON.stringify(result));
+  assert(/\|\s*vgate\s*\|\s*pending\s*\|/.test(planContent), 'T23d: downstream main-session-gate reset to pending (must re-run after repair)');
+  assert(result.gatesReset && result.gatesReset.includes('vgate') && result.gatesReset.includes('review'),
+    'T23d: gatesReset names the visual gate + reviewer, got ' + JSON.stringify(result.gatesReset));
+  assert(removed.includes('barrier-base-vgate'), 'T23d: stale visual-gate baseline removed, got ' + JSON.stringify(removed));
+}
+
 // ---------------------------------------------------------------------------
 // #308: runReopenNode — first-class plan-repair transaction. Reopens a COMPLETE
 // node N, resets its post-dominating gate(s) to pending, removes the stale

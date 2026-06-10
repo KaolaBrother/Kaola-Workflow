@@ -45,6 +45,12 @@ try { syncMeta = require('./validate-script-sync'); } catch (_) { /* forge/codex
 
 const TERMINAL_ROLE = 'finalize';
 
+// #334: the non-delegable main-session gate. Like TERMINAL_ROLE it is a BUILT-IN role
+// token, not an installed subagent — the closed-library check skips it. Read-only (not in
+// WRITE_ROLES), verdict-bearing (GATE_VERDICT_ROLES), shape `sequence` only, and covered
+// by its own post-dominance gate G3 (freeze) + G3 execution check (--gate-verify).
+const MAIN_SESSION_GATE = schema.MAIN_SESSION_GATE_ROLE;
+
 // The canonical roles that are ALWAYS installed (vendored). The validator unions
 // this baseline with any maintainer-added roles discovered under <root>/agents,
 // so the library is runtime-closed over the INSTALLED set (not the literal nine).
@@ -58,7 +64,11 @@ const CANONICAL_ROLES = [
 const WRITE_ROLES = new Set(['tdd-guide', 'build-error-resolver', 'doc-updater', 'security-reviewer', 'implementer']);
 const IMPLEMENT_ROLES = new Set(['tdd-guide', 'build-error-resolver', 'implementer']);
 // #251: roles that must emit a machine verdict block into their .cache evidence file.
-const GATE_VERDICT_ROLES = new Set(['code-reviewer', 'security-reviewer', 'adversarial-verifier']);
+// #334: MAIN_SESSION_GATE joins the set so a non-delegable gate gets per-node + whole-plan
+// verdict enforcement (verifyVerdictBlock sequence branch reads .cache/<id>.md, requires
+// verdict:pass / findings_blocking:0 / no unresolved in-scope fixes — the #279 contract) and
+// G-SEL-2 (a gate can never be a select arm) for free.
+const GATE_VERDICT_ROLES = new Set(['code-reviewer', 'security-reviewer', 'adversarial-verifier', MAIN_SESSION_GATE]);
 
 // Phase-5 sensitivity categories (phase5.md:45-46): auth, payments, user data,
 // filesystem access, external API calls, secrets. Over-approximated from the
@@ -412,6 +422,19 @@ function verifyGateExecution(content, opts) {
   if (sensitiveByLabel || sensitiveNodes.length) {
     checkGate(n => (sensitiveByLabel && producesCode(n)) || sensitiveNodes.includes(n), 'security-reviewer', 'G2');
   }
+  // #334 G3 execution: (a) a completed code-producing node must be post-dominated by a
+  // COMPLETED main-session-gate (same relabel discipline as G1/G2); (b) n/a-evasion — the
+  // ledger lives outside plan_hash, so a frozen non-delegable gate flipped to n/a would be
+  // invisible to --resume-check; it has no legal n/a route (never a select arm, G-SEL-2),
+  // so an n/a row is an unsatisfied gate outright.
+  if (nodes.some(n => n.role === MAIN_SESSION_GATE)) {
+    checkGate(producesCode, MAIN_SESSION_GATE, 'G3');
+    for (const n of nodes) {
+      if (n.role === MAIN_SESSION_GATE && ledger.get(n.id) === 'n/a') {
+        unsatisfied.push({ requirement: 'G3 gate execution', reason: `main-session-gate ${n.id} is marked n/a — a non-delegable gate cannot be skipped` });
+      }
+    }
+  }
   return { ok: unsatisfied.length === 0, unsatisfied };
 }
 
@@ -630,7 +653,9 @@ function validatePlan(content, opts) {
 
   // closed library (runtime-closed over the installed set)
   for (const n of nodes) {
-    if (n.role === TERMINAL_ROLE) continue;
+    // #334: MAIN_SESSION_GATE is a built-in non-subagent token (like the finalize sink) — skip
+    // the installed-library lookup (it has no agents/*.md profile and is never dispatched).
+    if (n.role === TERMINAL_ROLE || n.role === MAIN_SESSION_GATE) continue;
     if (!roles.has(n.role)) errors.push(`unknown role "${n.role}" not in installed library (node ${n.id})`);
   }
   // dangling deps
@@ -675,6 +700,11 @@ function validatePlan(content, opts) {
   let concurrentAmbiguousOverlap = false; // #232: inferred concurrent siblings with coarse/shared (non-exact) write overlap => ask
   for (const n of nodes) {
     if (n.shape.kind === 'invalid') errors.push(`node ${n.id} has invalid shape "${n.shape.raw}"`);
+    // #334: a non-delegable gate is run serially by the main session — it can never be a
+    // fan-out member or a loop body. (Select-arm membership is already refused by G-SEL-2.)
+    if (n.role === MAIN_SESSION_GATE && n.shape.kind !== 'sequence') {
+      errors.push(`main-session-gate node ${n.id} must be shape sequence — a non-delegable gate cannot be a fan-out member or loop`);
+    }
     if (n.shape.kind === 'fanout') {
       // audit B6 (#233): key by (label, fan-out origin), not label alone, so the same label in
       // two independent branches forms two separate groups. NUL separator can never collide with
@@ -866,6 +896,15 @@ function validatePlan(content, opts) {
       const g2 = gateUncovered(nodes, isTarget, 'security-reviewer', sink);
       if (g2.length) errors.push(`G2: security-reviewer does not post-dominate sensitive node(s): ${g2.join(', ')}`);
     }
+
+    // #334 G3: a declared non-delegable main-session gate is an ACCEPTANCE gate for the whole
+    // change — it must post-dominate every code-producing node, so a numerical-green implement
+    // path can never reach the sink without crossing the manual/visual decision (the #210
+    // bypass). Active ONLY when the role is present: existing plans never newly refuse.
+    if (nodes.some(n => n.role === MAIN_SESSION_GATE)) {
+      const g3 = gateUncovered(nodes, producesCode, MAIN_SESSION_GATE, sink);
+      if (g3.length) errors.push(`G3: main-session-gate does not post-dominate code-producing node(s): ${g3.join(', ')}`);
+    }
   }
 
   // #274 / #301: byte-identity write-set CO-OCCURRENCE gap. A frozen plan that edits one half of a
@@ -1016,7 +1055,8 @@ function revalidateForResume(content, opts) {
   const roles = opts.installedRoles || installedRoles(opts.root || process.cwd());
   const ids = new Set(nodes.map(n => n.id));
   for (const n of nodes) {
-    if (n.role !== TERMINAL_ROLE && !roles.has(n.role)) return { ok: false, reason: `unknown role "${n.role}" (node ${n.id})` };
+    // #334: MAIN_SESSION_GATE is a built-in token (like TERMINAL_ROLE) — never in the installed library.
+    if (n.role !== TERMINAL_ROLE && n.role !== MAIN_SESSION_GATE && !roles.has(n.role)) return { ok: false, reason: `unknown role "${n.role}" (node ${n.id})` };
     for (const d of n.dependsOn) if (!ids.has(d)) return { ok: false, reason: `node ${n.id} depends_on unknown "${d}"` };
   }
   if (hasCycle(nodes)) return { ok: false, reason: 'cycle detected' };
@@ -1150,7 +1190,7 @@ function printHelp() {
     '  --freeze       validate, then write the computed plan_hash into the plan file\n' +
     '  --freeze --repair  also reconcile the ## Node Ledger to ## Nodes (add missing rows as pending; never drop a status) before freezing\n' +
     '  --resume-check re-validate library + structure + hash only (not the gate rubric)\n' +
-    '  --gate-verify  verify gate EXECUTION over the ## Node Ledger (G1/G2 ran); exit 1 if a completed node is uncovered\n' +
+    '  --gate-verify  verify gate EXECUTION over the ## Node Ledger (G1/G2/G3 ran; G3 = a non-delegable main-session-gate is complete — never n/a — and post-dominates completed code nodes); exit 1 if a completed node is uncovered\n' +
     '  --record-base --node-id ID  snapshot the full worktree as node ID\'s per-instance baseline (.cache); run at node start.\n' +
     '                 Idempotent: reuses an existing baseline (resume-safe — a re-dispatch never launders a crashed attempt)\n' +
     '  --barrier-check re-scan ACTUAL writes and refuse a sensitive write with no security-reviewer, or an out-of-allowlist\n' +

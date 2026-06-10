@@ -41,12 +41,14 @@ fi
 - `--resume-check` proves `plan_hash` integrity + structure + closed library.
 - `--gate-verify` proves every completed code/sensitive node is post-dominated by a
   **completed** reviewer in the `## Node Ledger` — closing the G1/H5 leak where a
-  required reviewer node is silently marked `n/a` at runtime.
+  required reviewer node is silently marked `n/a` at runtime. **G3 (#334): a
+  non-delegable `main-session-gate` must be complete — never `n/a` — and post-dominate
+  completed code nodes.**
 - `--barrier-check` re-scans the files actually written (git diff vs the merge-base of
   HEAD and `origin/main`) and refuses a sensitive write with no `security-reviewer`
   node, or an out-of-allowlist production write — closing H1/H3.
-- `--verdict-check` reads every completed `code-reviewer`, `security-reviewer`, and
-  `adversarial-verifier` node's `.cache/{node-id}.md` and requires a machine-readable
+- `--verdict-check` reads every completed `code-reviewer`, `security-reviewer`,
+  `adversarial-verifier`, and `main-session-gate` node's `.cache/{node-id}.md` and requires a machine-readable
   `verdict: pass` with `findings_blocking: 0`. Any nonzero exit **blocks the merge** —
   this proves every gate-role node recorded a passing verdict before the plan closes.
 

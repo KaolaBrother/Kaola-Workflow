@@ -212,7 +212,11 @@ function parseWriteSet(cell) {
 // ---------------------------------------------------------------------------
 function deriveReadyPending(readySet, ledger) {
   const st = id => (ledger && ledger.get(id)) || 'pending';
-  return (readySet || []).filter(n => st(n.id) === 'pending');
+  // #334: a non-delegable main-session-gate node is never an openable BATCH member — the main
+  // session executes it serially (schema.MAIN_SESSION_GATE_ROLE). Filtering here covers both
+  // open-batch and top-up; a gate-only frontier falls into the existing empty-frontier defer
+  // (open-batch returns {result:'ok', opened: []} → orchestrator routes to open-next).
+  return (readySet || []).filter(n => st(n.id) === 'pending' && n.role !== 'main-session-gate');
 }
 
 // ---------------------------------------------------------------------------

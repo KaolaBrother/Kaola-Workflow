@@ -1220,6 +1220,45 @@ function testAdaptiveValidatorGovernance() {
       '| done | finalize | doc | — | 1 | sequence |',
     ], []);
     assert(v.result === 'refuse' && /G1/.test((v.errors||[]).join(';')), 'implementer without code-reviewer post-dominance must refuse (G1), got: ' + JSON.stringify(v));
+
+    // #334: in-grammar control — explore→impl→review→vgate(main-session-gate)→done auto-runs.
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| impl | implementer | explore | lib/foo.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| vgate | main-session-gate | review | — | 1 | sequence |',
+      '| done | finalize | vgate | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'in-grammar' && v.decision === 'auto-run', '#334: a main-session-gate post-dominating code must be in-grammar+auto-run, got: ' + JSON.stringify(v));
+
+    // #334 G3: a main-session-gate on a SIDE branch (does not post-dominate the implementer) → refuse /G3/.
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| impl | implementer | explore | lib/foo.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| vgate | main-session-gate | explore | — | 1 | sequence |',
+      '| done | finalize | review,vgate | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /G3/.test((v.errors||[]).join(';')), '#334: a side-branch main-session-gate must refuse (G3), got: ' + JSON.stringify(v));
+
+    // #334: a main-session-gate with a declared write set → read-only refusal.
+    v = validatePlanFixture(tmp, [
+      '| impl | implementer | — | lib/foo.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| vgate | main-session-gate | review | lib/bar.js | 1 | sequence |',
+      '| done | finalize | vgate | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /read-only role main-session-gate/.test((v.errors||[]).join(';')), '#334: a main-session-gate write set must refuse (read-only), got: ' + JSON.stringify(v));
+
+    // #334: a main-session-gate as a fan-out member → shape refusal (sequence only).
+    v = validatePlanFixture(tmp, [
+      '| impl | implementer | — | lib/foo.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| g1 | main-session-gate | review | — | 1 | fanout(gates) |',
+      '| g2 | main-session-gate | review | — | 1 | fanout(gates) |',
+      '| done | finalize | g1,g2 | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /main-session-gate node g1 must be shape sequence/.test((v.errors||[]).join(';')), '#334: a main-session-gate fan-out member must refuse (shape), got: ' + JSON.stringify(v));
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   console.log('testAdaptiveValidatorGovernance: PASSED');
 }
@@ -1460,6 +1499,47 @@ function testAdaptiveGateBarrierEnforcement() {
     assert(runNode(planValidatorScript, [gvPlan, '--gate-verify', '--json'], tmp).status === 1, '--gate-verify must exit 1 on an unsatisfied gate');
     fs.writeFileSync(gvPlan, mkLedgerPlan(['| impl | tdd-guide | — | lib/foo.js | 1 | sequence |', '| rv | code-reviewer | impl | — | 1 | sequence |', '| done | finalize | rv | — | 1 | sequence |'], ['| impl | complete |', '| rv | complete |', '| done | complete |']));
     assert(runNode(planValidatorScript, [gvPlan, '--gate-verify', '--json'], tmp).status === 0, '--gate-verify must exit 0 when gates executed');
+
+    // --- #334 G3 runtime gate execution (the regression scenario: impl complete, the
+    // non-delegable main-session-gate incomplete -> finalize MUST be blocked).
+    const g3Nodes = ['| impl | implementer | — | lib/foo.js | 1 | sequence |', '| rv | code-reviewer | impl | — | 1 | sequence |', '| vgate | main-session-gate | rv | — | 1 | sequence |', '| done | finalize | vgate | — | 1 | sequence |'];
+    // (a) impl+rv complete, vgate PENDING -> G3 unsatisfied (a completed code node has no completed gate).
+    let g3 = planValidator.verifyGateExecution(mkLedgerPlan(g3Nodes, ['| impl | complete |', '| rv | complete |', '| vgate | pending |', '| done | pending |']), {});
+    assert(g3.ok === false && /G3/.test(g3.unsatisfied.map(u => u.requirement).join(';')),
+      '#334 G3: impl complete + main-session-gate pending must be unsatisfied (the regression scenario), got: ' + JSON.stringify(g3));
+    // (b) vgate marked n/a (the n/a-evasion) -> still unsatisfied, "cannot be skipped".
+    g3 = planValidator.verifyGateExecution(mkLedgerPlan(g3Nodes, ['| impl | complete |', '| rv | complete |', '| vgate | n/a |', '| done | complete |']), {});
+    assert(g3.ok === false && /cannot be skipped/.test(g3.unsatisfied.map(u => u.reason).join(';')),
+      '#334 G3: a main-session-gate marked n/a is an unsatisfied gate (cannot be skipped), got: ' + JSON.stringify(g3));
+    // (c) all complete -> G3 satisfied.
+    g3 = planValidator.verifyGateExecution(mkLedgerPlan(g3Nodes, ['| impl | complete |', '| rv | complete |', '| vgate | complete |', '| done | complete |']), {});
+    assert(g3.ok === true, '#334 G3 control: all-complete (gate too) must verify ok, got: ' + JSON.stringify(g3));
+
+    // --- #334 --gate-verify + --verdict-check CLI exit codes over a project dir with a .cache.
+    const g3Proj = path.join(tmp, 'kaola-workflow', 'issue-334');
+    const g3Cache = path.join(g3Proj, '.cache');
+    fs.mkdirSync(g3Cache, { recursive: true });
+    const g3PlanPath = path.join(g3Proj, 'workflow-plan.md');
+    // impl complete, gate PENDING -> --gate-verify exit 1 (finalize blocked).
+    fs.writeFileSync(g3PlanPath, mkLedgerPlan(g3Nodes, ['| impl | complete |', '| rv | complete |', '| vgate | pending |', '| done | pending |']));
+    assert(runNode(planValidatorScript, [g3PlanPath, '--gate-verify', '--json'], tmp).status === 1,
+      '#334: --gate-verify must exit 1 when implementation is complete but the main-session-gate is incomplete');
+    // gate n/a -> --gate-verify exit 1.
+    fs.writeFileSync(g3PlanPath, mkLedgerPlan(g3Nodes, ['| impl | complete |', '| rv | complete |', '| vgate | n/a |', '| done | complete |']));
+    assert(runNode(planValidatorScript, [g3PlanPath, '--gate-verify', '--json'], tmp).status === 1,
+      '#334: --gate-verify must exit 1 when the main-session-gate is n/a (cannot be skipped)');
+    // gate complete + valid .cache verdicts for BOTH gate nodes -> --gate-verify AND --verdict-check exit 0.
+    fs.writeFileSync(g3PlanPath, mkLedgerPlan(g3Nodes, ['| impl | complete |', '| rv | complete |', '| vgate | complete |', '| done | complete |']));
+    fs.writeFileSync(path.join(g3Cache, 'rv.md'), 'verdict: pass\nfindings_blocking: 0\nreviewed\n');
+    fs.writeFileSync(path.join(g3Cache, 'vgate.md'), 'verdict: pass\nfindings_blocking: 0\nGPU true-black visual confirmation passed\n');
+    assert(runNode(planValidatorScript, [g3PlanPath, '--gate-verify', '--json'], tmp).status === 0,
+      '#334: --gate-verify must exit 0 when the main-session-gate is complete and post-dominates code');
+    assert(runNode(planValidatorScript, [g3PlanPath, '--verdict-check', '--json'], tmp).status === 0,
+      '#334: --verdict-check must exit 0 when the main-session-gate records verdict: pass');
+    // gate complete but NO .cache verdict for the gate -> --verdict-check exit 1.
+    fs.unlinkSync(path.join(g3Cache, 'vgate.md'));
+    assert(runNode(planValidatorScript, [g3PlanPath, '--verdict-check', '--json'], tmp).status === 1,
+      '#334: --verdict-check must exit 1 when the complete main-session-gate has no .cache verdict evidence');
 
     // --- --barrier-check CLI over a REAL git repo (verifies the merge-base git plumbing).
     const grepo = adaptiveTmp('barrier-git');

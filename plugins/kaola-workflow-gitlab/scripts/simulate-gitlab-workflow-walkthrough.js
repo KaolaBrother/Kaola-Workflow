@@ -471,6 +471,58 @@ function testGitlabAdaptive() {
     assert.strictEqual(fv.barrierCheck(perInst, ['aaa/x.js', 'bbb/y.js'], { nodeId: 'a' }).result, 'refuse', 'gitlab #239: per-node overflow into sibling lane must refuse');
     assert.strictEqual(fv.barrierCheck(perInst, ['aaa/x.js'], { nodeId: 'a' }).result, 'pass', 'gitlab #239: per-node own-lane must pass');
 
+    // #334: non-delegable main-session-gate on the FORK validator.
+    // in-grammar control: a post-dominating gate freezes.
+    assert.strictEqual(gateVal([
+      '| e | code-explorer | — | — | 1 | sequence |',
+      '| imp | implementer | e | lib/foo.js | 1 | sequence |',
+      '| rv | code-reviewer | imp | — | 1 | sequence |',
+      '| vgate | main-session-gate | rv | — | 1 | sequence |',
+      '| d | finalize | vgate | — | 1 | sequence |',
+    ], 'enhancement').result, 'in-grammar', 'gitlab #334: a post-dominating main-session-gate is in-grammar');
+    // G3 freeze refusal: a side-branch gate (does not post-dominate impl).
+    { const g3v = gateVal([
+        '| e | code-explorer | — | — | 1 | sequence |',
+        '| imp | implementer | e | lib/foo.js | 1 | sequence |',
+        '| rv | code-reviewer | imp | — | 1 | sequence |',
+        '| vgate | main-session-gate | e | — | 1 | sequence |',
+        '| d | finalize | rv,vgate | — | 1 | sequence |',
+      ], 'enhancement');
+      assert.strictEqual(g3v.result, 'refuse', 'gitlab #334: side-branch gate must refuse');
+      assert.ok(/G3/.test((g3v.errors || []).join(';')), 'gitlab #334: side-branch gate refusal names G3'); }
+    // read-only refusal: a gate declaring a write set.
+    assert.strictEqual(gateVal([
+      '| imp | implementer | — | lib/foo.js | 1 | sequence |',
+      '| rv | code-reviewer | imp | — | 1 | sequence |',
+      '| vgate | main-session-gate | rv | lib/bar.js | 1 | sequence |',
+      '| d | finalize | vgate | — | 1 | sequence |',
+    ], 'enhancement').result, 'refuse', 'gitlab #334: a main-session-gate write set must refuse (read-only)');
+    // shape refusal: a gate as a fan-out member.
+    assert.strictEqual(gateVal([
+      '| imp | implementer | — | lib/foo.js | 1 | sequence |',
+      '| rv | code-reviewer | imp | — | 1 | sequence |',
+      '| g1 | main-session-gate | rv | — | 1 | fanout(gates) |',
+      '| g2 | main-session-gate | rv | — | 1 | fanout(gates) |',
+      '| d | finalize | g1,g2 | — | 1 | sequence |',
+    ], 'enhancement').result, 'refuse', 'gitlab #334: a main-session-gate fan-out member must refuse (shape)');
+    // G3 runtime: impl complete + gate PENDING -> verifyGateExecution unsatisfied + --gate-verify exit 1.
+    const g3Nodes = ['| imp | implementer | — | lib/foo.js | 1 | sequence |', '| rv | code-reviewer | imp | — | 1 | sequence |', '| vgate | main-session-gate | rv | — | 1 | sequence |', '| d | finalize | vgate | — | 1 | sequence |'];
+    const g3Pending = mkL(g3Nodes, ['| imp | complete |', '| rv | complete |', '| vgate | pending |', '| d | pending |'], 'chore');
+    assert.strictEqual(fv.verifyGateExecution(g3Pending, {}).ok, false, 'gitlab #334: impl complete + gate pending must be unsatisfied (regression scenario)');
+    { const projDir = path.join(tmp, 'kaola-workflow', 'issue-334-gl'); fs.mkdirSync(path.join(projDir, '.cache'), { recursive: true });
+      const gp = path.join(projDir, 'workflow-plan.md');
+      fs.writeFileSync(gp, g3Pending);
+      assert.strictEqual(spawnNode(valScript, [gp, '--gate-verify', '--json'], tmp).status, 1, 'gitlab #334: --gate-verify exit 1 when gate pending');
+      // n/a -> exit 1.
+      fs.writeFileSync(gp, mkL(g3Nodes, ['| imp | complete |', '| rv | complete |', '| vgate | n/a |', '| d | complete |'], 'chore'));
+      assert.strictEqual(spawnNode(valScript, [gp, '--gate-verify', '--json'], tmp).status, 1, 'gitlab #334: --gate-verify exit 1 when gate n/a');
+      // pass control: gate complete + .cache verdicts -> --gate-verify AND --verdict-check exit 0.
+      fs.writeFileSync(gp, mkL(g3Nodes, ['| imp | complete |', '| rv | complete |', '| vgate | complete |', '| d | complete |'], 'chore'));
+      fs.writeFileSync(path.join(projDir, '.cache', 'rv.md'), 'verdict: pass\nfindings_blocking: 0\n');
+      fs.writeFileSync(path.join(projDir, '.cache', 'vgate.md'), 'verdict: pass\nfindings_blocking: 0\nvisual confirmed\n');
+      assert.strictEqual(spawnNode(valScript, [gp, '--gate-verify', '--json'], tmp).status, 0, 'gitlab #334: --gate-verify exit 0 when gate complete + post-dominates');
+      assert.strictEqual(spawnNode(valScript, [gp, '--verdict-check', '--json'], tmp).status, 0, 'gitlab #334: --verdict-check exit 0 when gate records verdict: pass'); }
+
     // M2 (#277): warn-first attestation — finalize must emit closure_receipt with
     // claim_planner_attested and finalize_contractor_attested; both 'missing' in offline test
     // (no dispatch-log), but closure_invariants.ok must still be true (warn-first contract).
