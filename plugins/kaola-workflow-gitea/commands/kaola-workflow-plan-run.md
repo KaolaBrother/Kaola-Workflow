@@ -113,10 +113,12 @@ The main session then **judges** the resume branch from the typed `resume_state`
   (#234; the Ledger marker is non-hashed and survives a lost/regenerated state
   file) — means a provisional auto-run was **revoked at the barrier**; surface the
   pending approval for the user's explicit yes and do NOT re-dispatch the
-  `in_progress` node. On the user's explicit approval, summon the contractor to REMOVE the
-  `consent_halt: pending` line from the `## Node Ledger` AND clear
-  `escalated_to_full: consent` from `workflow-state.md` in lockstep, then resume the
-  ready set — never re-ask an authorization already granted.
+  `in_progress` node. On the user's explicit approval, run the adaptive-node **`clear-halt
+  --project {project} --reason consent`** subcommand (#360) — ONE typed transaction that removes
+  the `consent_halt: pending` line from the `## Node Ledger` AND clears `escalated_to_full:
+  consent` (plus the coupled `escalated_to_full: security`) from `workflow-state.md`, replacing
+  the prior contractor lockstep (ADR 0004/0005). It refuses typed `no_halt_present` (zero
+  mutation) if there is no durable halt. Then resume the ready set — never re-ask an authorization already granted.
 - A node `in_progress` with **absent/partial** `.cache/{node-id}.md` → crash mid-node before the
   role finished; re-dispatch exactly that role node (mirrors phase4 `in_progress → delegate`). The
   advance bracket's `--record-base` is **idempotent** (#239) — the original node-start baseline is

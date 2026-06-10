@@ -88,8 +88,11 @@ The current session then **judges** the resume branch:
 - a consent-halt — EITHER `escalated_to_full: consent` in `workflow-state.md` OR
   `consent_halt: pending` in the plan's `## Node Ledger` (#234; non-hashed, survives a
   lost state file) → a provisional auto-run was **revoked at the barrier**; surface the
-  pending approval for the user's explicit yes, do NOT re-dispatch. On approval, have the contractor
-  REMOVE the Ledger marker AND clear `escalated_to_full: consent` in lockstep, then resume.
+  pending approval for the user's explicit yes, do NOT re-dispatch. On approval, run the adaptive-node
+  `clear-halt --project {project} --reason consent` subcommand (#360) — ONE typed transaction that
+  removes the Ledger `consent_halt: pending` marker AND clears `escalated_to_full: consent` (plus the
+  coupled `escalated_to_full: security`) from `workflow-state.md`, replacing the contractor lockstep
+  (refuses typed `no_halt_present`, zero mutation, when no halt is present), then resume.
 - a node `in_progress` with **absent/partial** `.cache/{node-id}.md` → crash mid-node before the role
   finished; re-dispatch exactly that role node. The advance bracket's `--record-base` is **idempotent**
   (#239) — the original baseline is reused, so a crashed attempt's writes stay visible to the barrier.

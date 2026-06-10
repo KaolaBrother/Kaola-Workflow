@@ -555,6 +555,10 @@ assertIncludes('commands/kaola-workflow-plan-run.md', 'main-session-direct');
 // DEFINED via the kaola_script() resolver before its first use — an undefined handle is
 // MODULE_NOT_FOUND in a consumer plugin install (no local scripts dir). Pin the resolver + the
 // assignment so removing either regresses the chain.
+// #360: the consent-halt clear path is the script-owned `clear-halt` subcommand, not a contractor
+// lockstep — pin its presence in the prose + the script so the prose mutation cannot return.
+assertIncludes('commands/kaola-workflow-plan-run.md', 'clear-halt');
+assertIncludes('scripts/kaola-workflow-adaptive-node.js', "subcommand === 'clear-halt'");
 assertIncludes('commands/kaola-workflow-plan-run.md', 'kaola_script(){');
 assertIncludes('commands/kaola-workflow-plan-run.md', 'KAOLA_SCRIPTS="$(dirname "$(kaola_script kaola-workflow-adaptive-node.js)")"');
 assertIncludes('scripts/kaola-workflow-claim.js', '--attest-contractor-spawn');

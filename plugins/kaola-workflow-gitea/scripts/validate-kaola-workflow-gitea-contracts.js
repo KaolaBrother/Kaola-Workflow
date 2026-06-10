@@ -614,6 +614,9 @@ assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-adaptive-node.js', 'w
 // #338: anti-drift pins — finalize sink row main-session-direct + contractor self-attest back-fill.
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-adaptive-node.js', 'main-session-direct');
 assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'main-session-direct');
+// #360: script-owned consent-halt clear (clear-halt subcommand) replaces the contractor lockstep.
+assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'clear-halt');
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-adaptive-node.js', "subcommand === 'clear-halt'");
 // #344: every adaptive lifecycle call is `node "$KAOLA_SCRIPTS/…"`; $KAOLA_SCRIPTS must be
 // DEFINED via the kaola_script() resolver before its first use — undefined in a consumer install.
 assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'kaola_script(){');

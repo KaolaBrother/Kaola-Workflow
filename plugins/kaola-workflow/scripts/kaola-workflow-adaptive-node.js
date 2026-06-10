@@ -15,6 +15,7 @@
 //   record-evidence --project P --node-id N --stdin   (MUTATES .cache)
 //   close-and-open-next --project P --node-id N       (MUTATES ledger + state)
 //   write-halt     --project P --node-id N --reason R (MUTATES state + ledger)
+//   clear-halt     --project P --reason consent|security (#360: MUTATES state + ledger; inverse of write-halt)
 //
 // Crash-safe write order (binding for all mutation subcommands):
 //   .cache evidence  →  ## Node Ledger row  →  workflow-state.md pointer LAST
@@ -36,6 +37,10 @@ const commitNodePath = path.join(__dirname, COMMIT_NODE);
 const nextActionPath = path.join(__dirname, NEXT_ACTION);
 const validatorPath  = path.join(__dirname, VALIDATOR);
 const taskMirrorPath = path.join(__dirname, TASK_MIRROR);
+
+// #360: the LEDGER-SCOPED durable consent-halt probe (fence-aware). adaptive-schema keeps the
+// same filename across every edition (byte-identical ×4), so this require is NOT forge-renamed.
+const { readDurableConsentHalt } = require('./kaola-workflow-adaptive-schema');
 
 // ---------------------------------------------------------------------------
 // getRoot — resolve the user-repo root via git rev-parse (cwd fallback).
@@ -538,7 +543,9 @@ function runOrient(opts) {
   let planContent = '';
   try { planContent = readFile(planPath); } catch (_) {}
 
-  const consentHalt = /consent_halt:\s*pending/.test(planContent);
+  // #360: ledger-scoped probe (was a whole-file regex) — a decoy `consent_halt: pending` line
+  // OUTSIDE the ## Node Ledger no longer forces a phantom halt in orient.
+  const consentHalt = readDurableConsentHalt(planContent);
 
   // Resolve per-node cache (.cache/{id}.md) presence — same check the single-node
   // resume path has always used.
@@ -1205,6 +1212,10 @@ function runWriteHalt(opts) {
   const stateMarkers = [];  // { key, value } pairs for workflow-state.md
   const planMarkers  = [];  // lines for ## Node Ledger (in plan)
 
+  // #360 (documented coupling): a consent halt escalates the run to the FULL path, and
+  // `escalated_to_full: security` is the marker that records that escalation — so a consent halt
+  // intentionally writes BOTH `escalated_to_full: consent` (the cause) and `escalated_to_full:
+  // security` (the full-escalation state). clear-halt --reason consent clears both in lockstep.
   if (reason === 'consent') {
     stateMarkers.push({ key: 'escalated_to_full', value: 'consent' });
     stateMarkers.push({ key: 'escalated_to_full', value: 'security' });
@@ -1244,7 +1255,9 @@ function runWriteHalt(opts) {
   // This line is placed below the ledger header, not as a row — it's a freeform marker.
   let planContent = readFile(planPath);
 
-  if (!planContent.includes('consent_halt: pending')) {
+  // #360: ledger-scoped idempotence (was a whole-file `includes`) — a decoy line outside the
+  // ledger no longer suppresses writing the real durable marker.
+  if (!readDurableConsentHalt(planContent)) {
     const ledgerMarker = '\n## Node Ledger';
     const ledgerIdx = planContent.indexOf(ledgerMarker);
     if (ledgerIdx >= 0) {
@@ -1282,6 +1295,71 @@ function runWriteHalt(opts) {
     halt: 'written',
     markers,
     taskTransitions: [buildTransition(nodeId, 'in_progress', 'write-halt', 'HALTED: ' + reason)],
+    taskMirror: refreshTaskMirror(project, shell),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// removeDurableConsentHalt (#360) — inverse of write-halt's insertion: strip a
+// `consent_halt: pending` line from WITHIN the ## Node Ledger section only (section-scoped,
+// mirroring readDurableConsentHalt), so a decoy line elsewhere is never touched.
+// ---------------------------------------------------------------------------
+function removeDurableConsentHalt(planContent) {
+  const ledgerMarker = '\n## Node Ledger';
+  const ledgerIdx = planContent.indexOf(ledgerMarker);
+  if (ledgerIdx < 0) return { content: planContent, changed: false };
+  const afterIdx = planContent.indexOf('\n## ', ledgerIdx + 1);
+  const head = planContent.slice(0, ledgerIdx);
+  const section = afterIdx >= 0 ? planContent.slice(ledgerIdx, afterIdx) : planContent.slice(ledgerIdx);
+  const tail = afterIdx >= 0 ? planContent.slice(afterIdx) : '';
+  const newSection = section.replace(/^consent_halt:[ \t]*pending[ \t]*\n?/m, '');
+  if (newSection === section) return { content: planContent, changed: false };
+  return { content: head + newSection + tail, changed: true };
+}
+
+// ---------------------------------------------------------------------------
+// runClearHalt (#360) — the script-owned inverse of write-halt. Removes the ledger
+// `consent_halt: pending` marker AND the matching `escalated_to_full` state marker(s) in ONE
+// typed transaction, replacing the prior two-file PROSE lockstep (contractor-driven) that ADR
+// 0004/0005 eliminated elsewhere. Typed refusal with ZERO mutation when no durable halt is present.
+// ---------------------------------------------------------------------------
+function runClearHalt(opts) {
+  const { planPath, statePath, project, reason, shell, readFile, writeFile } = opts;
+
+  const validReasons = ['consent', 'security'];
+  if (!validReasons.includes(reason)) {
+    return { result: 'refuse', reason: 'invalid_reason', validReasons };
+  }
+
+  let planContent = readFile(planPath);
+  // Ledger-scoped probe — refuse (zero mutation) when there is no real halt to clear.
+  if (!readDurableConsentHalt(planContent)) {
+    return { result: 'refuse', reason: 'no_halt_present', detail: 'no ledger-scoped consent_halt: pending marker to clear' };
+  }
+
+  // Remove the ledger consent_halt marker.
+  const removed = removeDurableConsentHalt(planContent);
+  planContent = removed.content;
+  writeFile(planPath, planContent);
+
+  // Remove the matching escalated_to_full marker(s). consent⇒security coupling (write-halt sets
+  // BOTH for a consent halt) → clearing consent clears both; clearing security clears security.
+  let stateContent = readFile(statePath);
+  if (reason === 'consent') {
+    stateContent = stateContent.replace(/^escalated_to_full:[ \t]*consent[ \t]*\n?/mg, '');
+    stateContent = stateContent.replace(/^escalated_to_full:[ \t]*security[ \t]*\n?/mg, '');
+  } else {
+    stateContent = stateContent.replace(/^escalated_to_full:[ \t]*security[ \t]*\n?/mg, '');
+  }
+  writeFile(statePath, stateContent);
+
+  // #373: best-effort telemetry — the halt was cleared.
+  appendNodeTiming(planPath, 'clear-halt', 'halt_cleared');
+
+  return {
+    result: 'ok',
+    halt: 'cleared',
+    reason,
     taskMirror: refreshTaskMirror(project, shell),
   };
 }
@@ -1624,6 +1702,12 @@ function main() {
     } else {
       result = runWriteHalt({ planPath, statePath, project, nodeId, reason, shell, readFile, writeFile });
     }
+  } else if (subcommand === 'clear-halt') {
+    if (!reason) {
+      result = { result: 'refuse', errors: ['--reason required for clear-halt (consent|security)'] };
+    } else {
+      result = runClearHalt({ planPath, statePath, project, reason, shell, readFile, writeFile });
+    }
   } else if (subcommand === 'reopen-node') {
     if (!nodeId) {
       result = { result: 'refuse', errors: ['--node-id required for reopen-node'] };
@@ -1658,6 +1742,7 @@ module.exports = {
   runRecordEvidence,
   runCloseAndOpenNext,
   runWriteHalt,
+  runClearHalt,
   runReopenNode,
   shellNode,
 };

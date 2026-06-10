@@ -482,6 +482,9 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'main-se
 // this repo. Pin the assignment + the cache probe so removal regresses the chain.
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'KAOLA_SCRIPTS="plugins/kaola-workflow/scripts"');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, "-path '*/kaola-workflow/*/scripts/kaola-workflow-adaptive-node.js'");
+// #360: script-owned consent-halt clear (clear-halt subcommand) replaces the contractor lockstep.
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'clear-halt');
+assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`, "subcommand === 'clear-halt'");
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, '--attest-contractor-spawn');
 // #347: pin the planner self-attest back-fill flag (the #280 producer) — codex ships the canonical
 // claim byte-for-byte; pinning here keeps the producer from regressing on this edition too.

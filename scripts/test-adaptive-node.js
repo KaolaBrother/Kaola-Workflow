@@ -17,8 +17,10 @@ const {
   runRecordEvidence,
   runCloseAndOpenNext,
   runWriteHalt,
+  runClearHalt,
   shellNode,
 } = require('./kaola-workflow-adaptive-node');
+const { readDurableConsentHalt } = require('./kaola-workflow-adaptive-schema');
 
 const {
   ORPHAN_LEGALITY_MANIFEST,
@@ -2863,6 +2865,66 @@ const STATE_NO_WT = '## Sink\nbranch: workflow/issue-335\n';
   assert(lines.some(l => l.node === 'impl-core' && l.event === 'closed'), 'T-373: closed event for impl-core, got ' + JSON.stringify(lines));
   assert(lines.some(l => l.node === 'impl-other' && l.event === 'opened'), 'T-373: opened event for impl-other (fused advance), got ' + JSON.stringify(lines));
   try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch (_) {}
+}
+
+// ---------------------------------------------------------------------------
+// T-360 (#360): clear-halt — the script-owned inverse of write-halt.
+//   (a) write-halt(consent) → durable halt present; clear-halt(consent) → halt gone +
+//       both escalated_to_full markers removed (consent⇒security coupling).
+//   (b) clear-halt with NO halt present → typed refuse no_halt_present, ZERO mutation.
+//   (c) a decoy `consent_halt: pending` OUTSIDE the ## Node Ledger is NOT a real halt:
+//       clear-halt refuses no_halt_present and leaves the decoy untouched.
+// ---------------------------------------------------------------------------
+{
+  // (a) round-trip
+  const files = {
+    '/p/workflow-plan.md': makePlan(['| impl-core | in_progress | |', '| finalize | pending | |']),
+    '/p/workflow-state.md': makeState(),
+  };
+  const rf = (f) => { if (files[f] !== undefined) return files[f]; throw new Error('ENOENT ' + f); };
+  const wf = (f, c) => { files[f] = c; };
+  const shellStub = () => ({ status: 'skipped' });
+
+  const wh = runWriteHalt({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', nodeId: 'impl-core', reason: 'consent', shell: shellStub, readFile: rf, writeFile: wf });
+  assert(wh.result === 'ok', 'T-360a: write-halt(consent) ok');
+  assert(readDurableConsentHalt(files['/p/workflow-plan.md']) === true, 'T-360a: durable consent_halt present after write-halt');
+  assert(/escalated_to_full:\s*consent/.test(files['/p/workflow-state.md']), 'T-360a: state has escalated_to_full: consent');
+  assert(/escalated_to_full:\s*security/.test(files['/p/workflow-state.md']), 'T-360a: state has escalated_to_full: security (coupling)');
+
+  const ch = runClearHalt({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', reason: 'consent', shell: shellStub, readFile: rf, writeFile: wf });
+  assert(ch.result === 'ok' && ch.halt === 'cleared', 'T-360a: clear-halt(consent) ok/cleared');
+  assert(readDurableConsentHalt(files['/p/workflow-plan.md']) === false, 'T-360a: durable consent_halt GONE after clear-halt');
+  assert(!/escalated_to_full:\s*consent/.test(files['/p/workflow-state.md']), 'T-360a: escalated_to_full: consent removed');
+  assert(!/escalated_to_full:\s*security/.test(files['/p/workflow-state.md']), 'T-360a: escalated_to_full: security removed (coupling)');
+}
+{
+  // (b) no halt present → typed refuse, zero mutation
+  let wrote = false;
+  const plan = makePlan(['| impl-core | in_progress | |', '| finalize | pending | |']);
+  const r = runClearHalt({
+    planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', reason: 'consent',
+    shell: () => ({ status: 'skipped' }),
+    readFile: (f) => f.endsWith('workflow-plan.md') ? plan : makeState(),
+    writeFile: () => { wrote = true; },
+  });
+  assert(r.result === 'refuse' && r.reason === 'no_halt_present', 'T-360b: clear-halt with no halt → refuse no_halt_present, got ' + JSON.stringify(r.reason));
+  assert(wrote === false, 'T-360b: NO mutation when there is no halt to clear');
+}
+{
+  // (c) decoy consent_halt OUTSIDE the ledger → not a real halt; clear-halt refuses + leaves it.
+  let wrote = false;
+  // Put a decoy line in the ## Meta section (before ## Node Ledger).
+  const plan = makePlan(['| impl-core | in_progress | |', '| finalize | pending | |'])
+    .replace('## Meta\n', '## Meta\nconsent_halt: pending\n');
+  assert(readDurableConsentHalt(plan) === false, 'T-360c: a decoy consent_halt outside the ledger is NOT a durable halt');
+  const r = runClearHalt({
+    planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', reason: 'consent',
+    shell: () => ({ status: 'skipped' }),
+    readFile: (f) => f.endsWith('workflow-plan.md') ? plan : makeState(),
+    writeFile: () => { wrote = true; },
+  });
+  assert(r.result === 'refuse' && r.reason === 'no_halt_present', 'T-360c: decoy line → refuse no_halt_present');
+  assert(wrote === false, 'T-360c: decoy line left untouched (no mutation)');
 }
 
 // Summary
