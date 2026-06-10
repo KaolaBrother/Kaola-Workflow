@@ -597,7 +597,10 @@ assertConcept('commands/kaola-workflow-plan-run.md', 'adaptive execution + gover
   'read-only', 'test_thrash', 'FANOUT_CAP',
   // #303 anti-drift: pin the rolling-dispatch + crash-repair + opening-lifecycle primitives so a
   // future edit cannot silently drop the parallel-fanout semantics from one edition.
-  'top-up', 'reconcile', 'opening'
+  'top-up', 'reconcile', 'opening',
+  // #335 anti-drift: pin the mechanical main→worktree project-folder mirror step so no edition
+  // can silently revert to the brittle prose `cp -R` seam.
+  'mirror-project'
 ]);
 // classifier exports the adaptive primitives
 assertIncludes('scripts/kaola-workflow-classifier.js', 'module.exports');

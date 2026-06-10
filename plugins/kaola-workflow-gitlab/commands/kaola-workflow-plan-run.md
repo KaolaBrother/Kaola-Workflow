@@ -54,12 +54,21 @@ before this change. The mirror below is SKIPPED in that case. If `worktree_path`
 directory no longer exists (e.g. it was pruned), the `-d` guard falls back to `$(pwd)` for safety.
 
 ```bash
-# One-time main→worktree project-folder mirror (mirror once at first entry; on resume the worktree copy is authoritative)
-if [ "$ACTIVE_WORKTREE_PATH" != "$(pwd)" ] && [ ! -f "$ACTIVE_WORKTREE_PATH/kaola-workflow/{project}/workflow-plan.md" ]; then
-  mkdir -p "$ACTIVE_WORKTREE_PATH/kaola-workflow/{project}/"
-  cp -R "kaola-workflow/{project}/." "$ACTIVE_WORKTREE_PATH/kaola-workflow/{project}/"
-fi
+# Mechanical main→worktree project-folder mirror (#335) — atomic + plan_hash-verified.
+# Idempotent: mirrors once at first entry, NEVER overwrites an existing worktree copy (on
+# resume the worktree copy is authoritative). Run it from anywhere — it resolves the MAIN
+# checkout via git-common-dir and the worktree from workflow-state.md. Do NOT hand-`cp`.
+node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-adaptive-node.js" mirror-project \
+  --project {project} --json
 ```
+
+Read the typed result and branch:
+- `status: mirrored | exists | skipped` → proceed to `orient`.
+- `result: refuse` → STOP and surface the typed refusal verbatim. `mirror_verify_failed` means
+  the copied plan failed `plan_hash` re-verification — do NOT hand-copy around it; investigate the
+  main-checkout plan. `source_plan_missing` → route to `/kaola-workflow-adapt {project}`.
+- If a later `orient` refuses `plan_not_mirrored`, run `mirror-project` again and re-run `orient` —
+  never hand-`cp`.
 
 This copies the project folder (workflow-plan.md + Node Ledger + `.cache/`) into the worktree once
 at start. From this point the orchestrator dispatches EVERY Agent() call below — all contractor

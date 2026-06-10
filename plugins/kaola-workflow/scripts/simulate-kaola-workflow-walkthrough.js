@@ -215,7 +215,58 @@ function testAC3AttestationSeeded() {
       'AC3 GREEN: finalize_contractor_attested must be "attested" when dispatch-log is seeded, got: ' +
       JSON.stringify(finalizeResult.closure_receipt && finalizeResult.closure_receipt.finalize_contractor_attested));
 
+    // #333: the archived state must not advertise an active resume command. startup seeds
+    // next_command: /kaola-workflow-phase1 issue-284; the archive must neutralize it.
+    const archived284 = fs.readdirSync(path.join(root, 'kaola-workflow', 'archive')).filter(n => n.startsWith('issue-284'));
+    assert(archived284.length === 1, '#333: finalize must archive issue-284');
+    const arch284State = fs.readFileSync(path.join(root, 'kaola-workflow', 'archive', archived284[0], 'workflow-state.md'), 'utf8');
+    assert(arch284State.includes('next_command: none (archived)'),
+      '#333: archived state next_command must be neutralized, got: ' + arch284State);
+    assert(!/next_command:.*(kaola-workflow-plan-run|kaola-workflow-phase)/.test(arch284State),
+      '#333: archived state must not retain an active plan-run/phase resume command');
+
     console.log('testAC3AttestationSeeded (#284 AC3): PASSED');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+// #333: keep-open partial-close archive stamp (codex edition). Plant an active project, finalize
+// with --keep-open, assert last_result: closed_keep_open + issue_disposition: kept-open.
+function testKeepOpenArchiveStamp333() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-333-keepopen-'));
+  try {
+    const projDir = path.join(root, 'kaola-workflow', 'issue-333');
+    fs.mkdirSync(projDir, { recursive: true });
+    fs.writeFileSync(path.join(projDir, 'workflow-state.md'), [
+      '# Kaola-Workflow State', '',
+      '## Project', 'name: issue-333', 'status: active', '',
+      '## Current Position',
+      'phase: adaptive', 'workflow_path: adaptive', 'step: start',
+      'next_command: /kaola-workflow-plan-run issue-333',
+      'next_skill: kaola-workflow-plan-run issue-333', '',
+      '## Pending Gates', '- workflow-plan', '',
+      '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
+      '## Last Updated', '2020-01-01T00:00:00.000Z', '',
+      '## Sink', 'branch: workflow/issue-333', 'issue_number: 333', 'sink: merge', ''
+    ].join('\n'));
+    plantRoadmap(root, 333, '');
+    const result = runClaim(['finalize', '--project', 'issue-333', '--keep-open'], root);
+    assert(result.status === 'closed', '#333: keep-open finalize should report closed');
+    assert(result.issue_disposition === 'kept-open',
+      '#333: JSON output issue_disposition must be kept-open, got: ' + JSON.stringify(result.issue_disposition));
+    const archived = fs.readdirSync(path.join(root, 'kaola-workflow', 'archive')).filter(n => n.startsWith('issue-333'));
+    assert(archived.length === 1, '#333: keep-open finalize should archive folder');
+    const st = fs.readFileSync(path.join(root, 'kaola-workflow', 'archive', archived[0], 'workflow-state.md'), 'utf8');
+    assert(st.includes('status: closed'), '#333: keep-open archived state must be closed');
+    assert(st.includes('last_result: closed_keep_open'),
+      '#333: keep-open archived last_result must be closed_keep_open, got: ' + st);
+    assert(st.includes('next_command: none (archived)'),
+      '#333: keep-open archived next_command must be neutralized');
+    assert(/^## Closure$/m.test(st), '#333: keep-open archived state must carry a ## Closure block');
+    assert(st.includes('issue_disposition: kept-open'),
+      '#333: keep-open archived ## Closure must record issue_disposition: kept-open');
+    console.log('testKeepOpenArchiveStamp333: PASSED');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -1182,6 +1233,7 @@ function main() {
     testAC1HooksJson();
     testUpdateHooksHardening325();
     testAC3AttestationSeeded();
+    testKeepOpenArchiveStamp333();   // #333
     testAC2CompactPlainStdout();
     testAC4SubagentDispatchLog();
 

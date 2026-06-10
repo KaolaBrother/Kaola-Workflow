@@ -101,6 +101,8 @@ function parseArgs(argv) {
     if (key === '--json') { args.json = true; continue; }
     if (key === '--force') { args.force = true; continue; }
     if (key === '--keep-worktree') { args.keepWorktree = true; continue; }
+    // #333: keep-open partial-close archive — stamp-only (lane mechanics deferred to #336).
+    if (key === '--keep-open') { args.keepOpen = true; continue; }
     if (key === '--execute') { args.execute = true; continue; }
     if (key === '--archive') { args.archive = true; continue; }
     if (key === '--export')  { args.export = true; continue; }
@@ -1041,7 +1043,60 @@ function cmdResume() {
   });
 }
 
-function archiveProjectDir(root, project, statusValue, suffix) {
+// #333: terminal-stamp the workflow-state CONTENT for an archive. Pure string transform.
+// statusValue: 'closed' | 'abandoned' (abandoned keeps mid-run state by design — #324).
+// planDir: directory containing workflow-plan.md (live src BEFORE rename, or the archive
+//          dest for the cmdFinalize backstop). Used to refresh plan_hash.
+// opts.keepOpen: true on a keep-open partial-close archive (finalize --keep-open).
+// Idempotent (every transform is a line-anchored replace) — safe to re-apply on crash-resume.
+function stampTerminalState(content, statusValue, planDir, opts) {
+  content = content.replace(/^status:\s*.*$/m, 'status: ' + statusValue);
+  if (!/^status:/m.test(content)) content += '\nstatus: ' + statusValue + '\n';
+  content = content.replace(/^step:\s*.*$/m, 'step: complete');
+  if (!/^step:/m.test(content)) content += '\nstep: complete\n';
+  if (statusValue !== 'closed') return content;   // discard/release keeps mid-run state (#324)
+  // #324: normalize the pre-run blocks that writeState seeded at claim time (## Pending Gates:
+  // - workflow-plan; last_command: startup / last_result: folder_claimed) so the archived state
+  // cannot read as self-contradictory terminal state (closed/complete yet "pending workflow-plan").
+  content = content.replace(/(^## Pending Gates\n)(?:[ \t]*-[ \t].*\n?)*/m, '$1- none\n');
+  content = content.replace(/^last_command:\s*.*$/m, 'last_command: finalize');
+  content = content.replace(/^last_result:\s*.*$/m,
+    'last_result: ' + (opts && opts.keepOpen ? 'closed_keep_open' : 'closed'));
+  // #333: an archived state must not advertise an active resume command.
+  content = content.replace(/^next_command:\s*.*$/m, 'next_command: none (archived)');
+  content = content.replace(/^next_skill:\s*.*$/m, 'next_skill: none (archived)');
+  // #333: refresh Planning Evidence plan_hash from the FINAL workflow-plan.md (a mid-run
+  // re-freeze re-stamps only the plan file's <!-- plan_hash --> comment; the state keeps the
+  // freeze-time hash). No-ops for non-adaptive projects (no plan file / no plan_hash line).
+  try {
+    const planContent = fs.readFileSync(path.join(planDir, adaptiveSchema.PLAN_FILE), 'utf8');
+    const hm = planContent.match(/<!--\s*plan_hash:\s*([0-9a-f]{64})\s*-->/);
+    if (hm) content = content.replace(/^plan_hash:\s*[0-9a-f]{64}\s*$/m, 'plan_hash: ' + hm[1]);
+  } catch (_) {}
+  // #333: refresh the ## Last Updated line to the archive timestamp.
+  content = content.replace(/(^## Last Updated\n)[^\n]*/m, '$1' + new Date().toISOString());
+  return content;
+}
+
+// #333: append a compact terminal receipt to the ARCHIVED state. Presence-guarded
+// (idempotent across crash-resume re-runs). Swallow-on-error.
+function appendClosureBlock(destDir, fields) {
+  try {
+    const p = path.join(destDir, 'workflow-state.md');
+    let s = fs.readFileSync(p, 'utf8');
+    if (/^## Closure$/m.test(s)) return false;
+    s = s.trimEnd() + '\n\n## Closure\n' +
+      'archived_at: ' + new Date().toISOString() + '\n' +
+      'issue_disposition: ' + fields.issueDisposition + '\n' +
+      'claim_label_removed: ' + fields.claimLabelRemoved + '\n' +
+      'worktree_removed: ' + fields.worktreeRemoved + '\n' +
+      'closure_invariants: ' + fields.closureInvariants + '\n';
+    fs.writeFileSync(p, s);
+    return true;
+  } catch (_) { return false; }
+}
+
+function archiveProjectDir(root, project, statusValue, suffix, opts) {
   assert(isSafeName(project), 'unsafe project name');
   const src = projectDir(root, project);
   if (!fs.existsSync(src)) return { skipped: 'source-missing' };
@@ -1053,19 +1108,9 @@ function archiveProjectDir(root, project, statusValue, suffix) {
     let content = fs.readFileSync(state, 'utf8');
     archiveIssueNumber = parseInt(field(content, 'issue_number'), 10);
     archiveIssueNumbersRaw = (field(content, 'issue_numbers') || '').trim();
-    content = content.replace(/^status:\s*.*$/m, 'status: ' + statusValue);
-    if (!/^status:/m.test(content)) content += '\nstatus: ' + statusValue + '\n';
-    content = content.replace(/^step:\s*.*$/m, 'step: complete');
-    if (!/^step:/m.test(content)) content += '\nstep: complete\n';
-    // #324: at CLOSED archive, normalize the pre-run blocks that writeState seeded at claim time
-    // (## Pending Gates: - workflow-plan; last_command: startup / last_result: folder_claimed) so the
-    // archived state cannot read as self-contradictory terminal state (closed/complete yet "pending
-    // workflow-plan" + "startup"). Only on closed — a discard/release legitimately keeps mid-run state.
-    if (statusValue === 'closed') {
-      content = content.replace(/(^## Pending Gates\n)(?:[ \t]*-[ \t].*\n?)*/m, '$1- none\n');
-      content = content.replace(/^last_command:\s*.*$/m, 'last_command: finalize');
-      content = content.replace(/^last_result:\s*.*$/m, 'last_result: closed');
-    }
+    // #333: status/step/#324-normalization/next_command/plan_hash/Last Updated all in one helper.
+    // (this port has NO removeLegacyStateBlocks — pass raw content directly.)
+    content = stampTerminalState(content, statusValue, src, opts);
     fs.writeFileSync(state, content);
   } catch (_) {}
   // #324: sanitize the archived finalization-summary's PRE-SINK sentinels so a later audit reading
@@ -1284,7 +1329,29 @@ function cmdFinalize() {
   assert(args.project, '--project required');
   const folder = activeByProject(root, args.project);
   const projectInfo = folder ? { full_name: folder.full_name, html_url: folder.project_html_url } : discoverProjectSafe();
-  const result = archiveProjectDir(root, args.project, 'closed');
+  const result = archiveProjectDir(root, args.project, 'closed', undefined, { keepOpen: !!args.keepOpen });
+  // #333: manual-archive backstop — live folder already gone but an archived copy exists with a
+  // non-terminal state (a manual `mv`/`git mv` bypassed archiveProjectDir). Stamp the archived
+  // state terminal in place. Idempotent; swallow-on-error like the archive writes.
+  // (port: stampTerminalState(raw, …) directly — NO removeLegacyStateBlocks in this edition.)
+  let archiveStateStamped = 'not_needed';
+  if (result.skipped === 'source-missing') {
+    try {
+      const destDir = path.join(root, 'kaola-workflow', 'archive', args.project);
+      const destState = path.join(destDir, 'workflow-state.md');
+      if (fs.existsSync(destState)) {
+        const raw = fs.readFileSync(destState, 'utf8');
+        const st = field(raw, 'status');
+        if (st !== 'closed' && st !== 'abandoned') {
+          fs.writeFileSync(destState,
+            stampTerminalState(raw, 'closed', destDir, { keepOpen: !!args.keepOpen }));
+          archiveStateStamped = 'repaired';
+        }
+        // lets the ## Closure append + invariants + issue_number fallback see the dir
+        result.dest = result.dest || destDir;
+      }
+    } catch (_) { archiveStateStamped = 'failed'; }
+  }
   let worktreeRemoved = 'failed';
   if (!args.keepWorktree) {
     try {
@@ -1294,23 +1361,9 @@ function cmdFinalize() {
       else if (wtResult && wtResult.removed === false) worktreeRemoved = 'failed';
     } catch (_) { worktreeRemoved = 'failed'; }
   } else {
+    // #333: the keep-worktree commit block is MOVED to the END of cmdFinalize (commit-last) so
+    // the ## Closure append + backstop writes land INSIDE the `chore: archive` commit.
     worktreeRemoved = 'kept';
-    let mainRoot2, linkedRoot2;
-    try {
-      mainRoot2 = fs.realpathSync(mainRootFromCoord(getCoordRoot(root)));
-      linkedRoot2 = fs.realpathSync(root);
-    } catch (_) { mainRoot2 = null; }
-    if (mainRoot2 && mainRoot2 !== linkedRoot2) {
-      try {
-        execFileSync('git', ['-C', root, 'add', '-A', 'kaola-workflow/'],
-          { encoding: 'utf8', stdio: 'inherit' });
-        execFileSync('git', ['-C', root, 'diff', '--cached', '--quiet'],
-          { stdio: 'ignore' });
-      } catch (_) {
-        execFileSync('git', ['-C', root, 'commit', '-m', 'chore: archive ' + args.project],
-          { encoding: 'utf8', stdio: 'inherit' });
-      }
-    }
   }
   let issueNumber = folder && folder.issue_iid;
   // #328: read bundle member array — from folder (live) or archive dest (null-folder fallback)
@@ -1356,7 +1409,12 @@ function cmdFinalize() {
   let remoteIssueClosed = 'skipped_offline';
   const closedIssues = [];       // members probed as closed
   const failedIssueClosures = []; // members whose probe threw/returned unavailable
-  if (!OFFLINE && issueNumbers.length > 0) {
+  // #333: under --keep-open the disposition is a DECISION, not an observation — skip the remote
+  // close probe entirely (leaves remote_issue_closed: 'skipped_offline'); issue_disposition records
+  // the kept-open decision below.
+  if (args.keepOpen) {
+    // skip probe
+  } else if (!OFFLINE && issueNumbers.length > 0) {
     // Bundle: probe each member (warning-first: unavailable probe -> failed_issue_closures)
     for (const n of issueNumbers) {
       const probe = probeIssueState(n);
@@ -1400,8 +1458,45 @@ function cmdFinalize() {
   const archiveCacheDir = result.dest ? path.join(result.dest, '.cache') : null;
   checkDispatchAttestations([archiveCacheDir, liveCacheDir], closureReceipt);
   const invariantResult = checkClosureInvariants(root, closureReceipt, result.dest);
+  // #333: disposition is DECISION-derived on cmdFinalize (the orchestrator closes the issue after
+  // sink-merge, so the default merge lane is honestly close-pending, never a false `closed`).
+  const issueDisposition = args.keepOpen ? 'kept-open'
+    : (remoteIssueClosed === 'already_closed' ? 'closed' : 'close-pending');
+  // #333: append the compact terminal receipt to the archived state (facts only known after the
+  // rename: claim/worktree disposition + issue disposition). Presence-guarded / idempotent.
+  if (result.dest) {
+    appendClosureBlock(result.dest, {
+      issueDisposition: issueDisposition,
+      claimLabelRemoved: claimLabelRemoved,
+      worktreeRemoved: worktreeRemoved,
+      closureInvariants: invariantResult.ok ? 'ok' : ('violations:' + invariantResult.violations.length)
+    });
+  }
+  // #333: keep-worktree commit block MOVED here (commit-last) — after the ## Closure append so the
+  // archive + roadmap removal + ## Closure all land in ONE `chore: archive` commit (the tree is then
+  // clean, which the #217 second-finalize no-new-commit + #296 B1 re-entry asserts depend on).
+  if (args.keepWorktree) {
+    let mainRoot2, linkedRoot2;
+    try {
+      mainRoot2 = fs.realpathSync(mainRootFromCoord(getCoordRoot(root)));
+      linkedRoot2 = fs.realpathSync(root);
+    } catch (_) { mainRoot2 = null; }
+    if (mainRoot2 && mainRoot2 !== linkedRoot2) {
+      try {
+        execFileSync('git', ['-C', root, 'add', '-A', 'kaola-workflow/'],
+          { encoding: 'utf8', stdio: 'inherit' });
+        execFileSync('git', ['-C', root, 'diff', '--cached', '--quiet'],
+          { stdio: 'ignore' });
+      } catch (_) {
+        execFileSync('git', ['-C', root, 'commit', '-m', 'chore: archive ' + args.project],
+          { encoding: 'utf8', stdio: 'inherit' });
+      }
+    }
+  }
   output(Object.assign({ status: 'closed' }, result, {
     claim_label_removed: claimLabelRemoved,
+    archive_state_stamped: archiveStateStamped,
+    issue_disposition: issueDisposition,
     closure_receipt: closureReceipt,
     closure_invariants: invariantResult
   }));
@@ -1718,11 +1813,17 @@ function watchMergeRequests(root, args) {
       } else {
         claimLabelStatus = clearAdvisoryClaim(folder.issue_iid, 'pr merged', { full_name: folder.full_name, html_url: folder.project_html_url }, folder.project);
       }
+      // #333: observe the primary issue's state at archive time (a merged PR does NOT imply a
+      // closed issue — no close keyword keeps the issue open, the keep-open PR-sink case). watch
+      // is online by construction (OFFLINE early-returns above); probeIssueState catches/degrades.
+      const dispProbe = probeIssueState(folder.issue_iid);
+      const issueDisposition = dispProbe.state === 'closed' ? 'closed'
+        : (dispProbe.state === 'open' ? 'kept-open' : 'unknown');
       const folderReceipt = buildClosureReceipt(folder.project, folder.issue_iid, {
         archive: archiveResult.skipped ? 'skipped' : (archiveResult.archived ? 'closed' : 'failed'),
         roadmap_source_removed: archiveResult ? archiveResult.roadmap_source_removed : 'failed',
         roadmap_regenerated: archiveResult ? archiveResult.roadmap_regenerated : 'failed',
-        remote_issue_closed: 'skipped_offline',
+        remote_issue_closed: dispProbe.state === 'closed' ? 'already_closed' : 'skipped_offline',
         claim_label_removed: claimLabelStatus,
         worktree_removed: worktreeRemoved,
         branch_removed: 'kept'
@@ -1736,6 +1837,17 @@ function watchMergeRequests(root, args) {
       const archiveCacheDir = archiveResult && archiveResult.dest ? path.join(archiveResult.dest, '.cache') : null;
       checkDispatchAttestations([archiveCacheDir, liveCacheDir], folderReceipt);
       const folderInvariants = checkClosureInvariants(root, folderReceipt, archiveResult ? archiveResult.dest : undefined);
+      // #333: append the terminal receipt to the archived state. watch archives into the MAIN
+      // working tree without committing; the append lands inside the untracked archive dir.
+      // Disposition is OBSERVATION-derived here (vs DECISION-derived on cmdFinalize).
+      if (archiveResult && archiveResult.dest) {
+        appendClosureBlock(archiveResult.dest, {
+          issueDisposition: issueDisposition,
+          claimLabelRemoved: claimLabelStatus,
+          worktreeRemoved: worktreeRemoved,
+          closureInvariants: folderInvariants.ok ? 'ok' : ('violations:' + folderInvariants.violations.length)
+        });
+      }
       cleanups.push({ folder: folder.project, claim_label_removed: claimLabelStatus, receipt: folderReceipt, closure_invariants: folderInvariants });
     } else if (state === 'closed') {
       const archiveResult = archiveProjectDir(root, folder.project, 'abandoned', '.discarded-' + new Date().toISOString().replace(/[:.]/g, '-'));

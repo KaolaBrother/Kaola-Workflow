@@ -18,7 +18,10 @@
 //               checklist:{ claim_acquired, plan_in_grammar, plan_frozen, resume_check_ok,
 //                           roadmap_staged },
 //               first_node:{ id, role, model, declared_write_set }  (ADVISORY — not yet opened),
-//               decision, risk }
+//               decision, risk,
+//               worktree_mirror:{ status:'mirrored'|'exists'|'skipped'|'failed'|'unknown',
+//                                 reason?, planHash?, path? }  (#335: best-effort; does NOT
+//                                 gate ready_to_run — provisioning is enforced at plan-run entry) }
 //   invalid: { handoff_status:'plan_invalid', result:'refuse', errors, validator_verdict }
 //            #337 decision-id preflight refusals carry errors prefixed
 //            'decision_id_conflict:' plus an additive `conflicts` field ([{id, hits}]).
@@ -34,7 +37,10 @@
 //   3. --resume-check    → integrity gate.
 //   4. next-action PURE  → first ready node (ADVISORY; not opened here — adaptive-node.js opens it).
 //   5. roadmap init-issue + git add (EEXIST-skips).
-//   6. workflow-state.md ## Planning Evidence insert — LAST (state pointer after all mutations).
+//   6. workflow-state.md ## Planning Evidence insert — LAST main-checkout mutation.
+//   7. mirror-project (#335) — main→worktree project-folder mirror; mutates ONLY
+//      the WORKTREE copy (after 6 so the copy carries the frozen plan + task mirror
+//      + PE-updated state). Best-effort: never flips handoff_status.
 // ---------------------------------------------------------------------------
 
 const path = require('path');
@@ -62,13 +68,15 @@ function getRoot() {
 // Sibling path constants — mirror commit-node pattern (resolve via __dirname).
 // Keep each constant on its own clearly-named line so forge ports are one-line edits.
 // ---------------------------------------------------------------------------
-const VALIDATOR    = 'kaola-gitea-workflow-plan-validator.js';
-const ROADMAP      = 'kaola-gitea-workflow-roadmap.js';
-const TASK_MIRROR  = 'kaola-gitea-workflow-task-mirror.js';
+const VALIDATOR     = 'kaola-gitea-workflow-plan-validator.js';
+const ROADMAP       = 'kaola-gitea-workflow-roadmap.js';
+const TASK_MIRROR   = 'kaola-gitea-workflow-task-mirror.js';
+const ADAPTIVE_NODE = 'kaola-gitea-workflow-adaptive-node.js';
 
-const validatorPath  = path.join(__dirname, VALIDATOR);
-const roadmapPath    = path.join(__dirname, ROADMAP);
-const taskMirrorPath = path.join(__dirname, TASK_MIRROR);
+const validatorPath    = path.join(__dirname, VALIDATOR);
+const roadmapPath      = path.join(__dirname, ROADMAP);
+const taskMirrorPath   = path.join(__dirname, TASK_MIRROR);
+const adaptiveNodePath = path.join(__dirname, ADAPTIVE_NODE);
 
 // ---------------------------------------------------------------------------
 // safeJsonParse — returns {} on any parse failure (fail-closed).
@@ -431,6 +439,18 @@ function runHandoff(opts) {
   writeFile(statePath, updatedState);
 
   // -------------------------------------------------------------------------
+  // Step 7 (#335): mechanical main→worktree project-folder mirror. The mirrored
+  // copy must include the frozen plan (step 2), the durable task mirror (step
+  // 3.5), and the PE-updated state (step 6), so this runs LAST. Mutates ONLY the
+  // WORKTREE copy (the main-checkout artifacts are already complete; a crash
+  // between 6 and 7 is repaired by the idempotent plan-run entry mirror).
+  // Best-effort, like roadmap_staged and the task-mirror call: a refuse/failure
+  // does NOT flip handoff_status (the plan IS valid — provisioning is enforced
+  // at plan-run entry + orient). Skipped cleanly on an in-place run (no worktree).
+  // -------------------------------------------------------------------------
+  const mirrorResult = shell(adaptiveNodePath, ['mirror-project', '--project', project, '--json']);
+
+  // -------------------------------------------------------------------------
   // Return — ready_to_run (plan-run owns node lifecycle incl. first node)
   // -------------------------------------------------------------------------
   return {
@@ -450,6 +470,13 @@ function runHandoff(opts) {
     },
     decision,
     risk,
+    worktree_mirror: {
+      status: mirrorResult.status
+        || (mirrorResult.exitCode === 0 ? 'unknown' : 'failed'),
+      ...(mirrorResult.reason   ? { reason:   mirrorResult.reason }   : {}),
+      ...(mirrorResult.planHash ? { planHash: mirrorResult.planHash } : {}),
+      ...(mirrorResult.dest     ? { path:     mirrorResult.dest }     : {}),
+    },
   };
 }
 

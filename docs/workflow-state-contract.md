@@ -56,6 +56,29 @@ here for the full contract.
   `discard`/`release` archive (non-`closed`) deliberately keeps mid-run state. The accurate
   validation-reuse boundary is stated by the agent per the finalize Validation De-Duplication
   guidance; the archive-time rewrite is only a mechanical backstop for the known phrase.
+- **Terminal stamp + closure receipt (#333):** the #324 normalization is extended (and extracted
+  into the pure `stampTerminalState` helper) so a `closed` archive is fully terminal. In addition
+  to the #324 rewrites, the archived `workflow-state.md` gets `next_command`/`next_skill` rewritten
+  to `none (archived)` (an archived run must not advertise an active resume command — an adaptive
+  archive would otherwise keep `/kaola-workflow-plan-run {project}` forever); the Planning Evidence
+  `plan_hash` refreshed from the FINAL `workflow-plan.md` frozen `<!-- plan_hash: … -->` comment (a
+  mid-run re-freeze re-stamps only the plan file, leaving the state on the claim-time hash); and the
+  `## Last Updated` line refreshed to the archive timestamp. After the rename, a compact `## Closure`
+  block is appended recording `archived_at`, `issue_disposition`, `claim_label_removed`,
+  `worktree_removed`, and `closure_invariants` (presence-guarded / idempotent). `issue_disposition`
+  enum: `kept-open | close-pending | closed | unknown`. On the `cmdFinalize` lane disposition is
+  DECISION-derived — the default merge lane is honestly `close-pending` because the orchestrator
+  closes the issue AFTER sink-merge, and `--keep-open` records `kept-open` + `last_result:
+  closed_keep_open`; on the `watch-pr`/`watch-mr` MERGED lane it is OBSERVATION-derived via
+  `probeIssueState` (a merged PR/MR does not imply a closed issue — `kept-open` when the probe sees
+  the issue open, `unknown` when the probe is unavailable). A **manual-archive backstop** in
+  `cmdFinalize` heals a state that was archived by a manual `mv`/`git mv` (live folder gone,
+  `status: active` in the archive): re-running `finalize` over it stamps it terminal in place and
+  reports `archive_state_stamped: repaired` (`not_needed` when already terminal, `failed` on error).
+  The keep-worktree commit choreography runs commit-last so the `## Closure` append + backstop
+  writes land inside the `chore: archive` commit. NOTE for out-of-repo tooling: a `next_command:
+  none (archived)` only ever appears under `kaola-workflow/archive/`; `resume`/`status`/`repair-state`
+  read active folders only and never see it.
 - Closure of a completed linked issue is governed by explicit invariants and an
   auditable receipt schema. See `docs/api.md` § Closure Contract for the nine
   closure invariants (seven hard-gating + two WARN-FIRST detection invariants added in #277),

@@ -160,6 +160,134 @@ function testFinalize(tmp) {
     '#324 AC3: archived final-validation.md must not retain the false-absolute "No files changed after those runs"');
   assert(archivedFinalVal.includes('Validation reuse covers'),
     '#324 AC3: archived final-validation.md states the actual reuse boundary instead of the false absolute');
+  // #333: an archived state must not advertise an active resume command. startup --runtime claude
+  // seeds next_command: /kaola-workflow-phase1 issue-164 / next_skill: kaola-workflow-research issue-164.
+  assert(archivedState.includes('next_command: none (archived)'),
+    '#333: archived state next_command must be neutralized to "none (archived)", got: ' + archivedState);
+  assert(archivedState.includes('next_skill: none (archived)'),
+    '#333: archived state next_skill must be neutralized to "none (archived)", got: ' + archivedState);
+  assert(!archivedState.includes('/kaola-workflow-phase1 issue-164'),
+    '#333: archived state must not retain the active /kaola-workflow-phase1 resume command');
+}
+
+// #333: a keep-open partial-close archive must be terminal+truthful. An adaptive run whose
+// ledger is all-complete and whose plan was re-frozen (state holds the claim-time plan_hash,
+// the plan file holds the later one) is archived through `finalize --keep-open`; the archived
+// state must read closed/complete, gates - none, last_result: closed_keep_open, refresh the
+// plan_hash from the FINAL plan file, refresh ## Last Updated, neutralize next_command, and
+// carry a ## Closure block with issue_disposition: kept-open.
+function testKeepOpenArchiveStamp() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-keepopen-')));
+  try {
+    const STALE_HASH = 'a'.repeat(64);
+    const FINAL_HASH = 'b'.repeat(64);
+    const STALE_UPDATED = '2020-01-01T00:00:00.000Z';
+    const dir = path.join(tmp, 'kaola-workflow', 'issue-333');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'workflow-state.md'), [
+      '# Kaola-Workflow State', '',
+      '## Project', 'name: issue-333', 'status: active', '',
+      '## Current Position',
+      'phase: adaptive', 'workflow_path: adaptive', 'step: start',
+      'next_command: /kaola-workflow-plan-run issue-333',
+      'next_skill: kaola-workflow-plan-run issue-333', '',
+      '## Pending Gates', '- workflow-plan', '',
+      '## Planning Evidence',
+      'plan_hash: ' + STALE_HASH,
+      'decision: ask', '',
+      '## Last Evidence',
+      'last_command: startup', 'last_result: folder_claimed', '',
+      '## Last Updated', STALE_UPDATED, '',
+      '## Sink', 'branch: workflow/issue-333', 'issue_number: 333', 'sink: merge', ''
+    ].join('\n'));
+    // workflow-plan.md whose ledger rows are all complete + a re-frozen plan_hash comment.
+    fs.writeFileSync(path.join(dir, 'workflow-plan.md'), [
+      '<!-- plan_hash: ' + FINAL_HASH + ' -->', '',
+      '# Workflow Plan', '',
+      '## Node Ledger', '', '| id | status |', '|---|---|',
+      '| n1 | complete |', '| n2 | complete |', ''
+    ].join('\n'));
+    plantRoadmapIssue(tmp, 333, '');
+
+    const result = json(runNode(claimScript, ['finalize', '--project', 'issue-333', '--keep-open'], tmp));
+    assert(result.status === 'closed', '#333: keep-open finalize should report closed');
+    assert(result.issue_disposition === 'kept-open',
+      '#333: JSON output issue_disposition must be kept-open, got: ' + JSON.stringify(result.issue_disposition));
+    const archived = fs.readdirSync(path.join(tmp, 'kaola-workflow', 'archive')).filter(n => n.startsWith('issue-333'));
+    assert(archived.length === 1, '#333: keep-open finalize should archive folder');
+    const st = read(path.join(tmp, 'kaola-workflow', 'archive', archived[0], 'workflow-state.md'));
+    assert(st.includes('status: closed'), '#333: keep-open archived state must be closed');
+    assert(st.includes('step: complete'), '#333: keep-open archived state must be complete');
+    assert(st.includes('- none'), '#333: keep-open archived Pending Gates normalized to "- none"');
+    assert(st.includes('last_result: closed_keep_open'),
+      '#333: keep-open archived last_result must be closed_keep_open, got: ' + st);
+    assert(!/next_command:.*kaola-workflow-plan-run/.test(st),
+      '#333: keep-open archived next_command must not advertise plan-run, got: ' + st);
+    assert(st.includes('next_command: none (archived)'),
+      '#333: keep-open archived next_command must be neutralized');
+    assert(st.includes('plan_hash: ' + FINAL_HASH),
+      '#333: keep-open archived plan_hash must be refreshed from the final plan file, got: ' + st);
+    assert(!st.includes('plan_hash: ' + STALE_HASH),
+      '#333: keep-open archived plan_hash must not keep the stale claim-time hash');
+    assert(!st.includes(STALE_UPDATED),
+      '#333: keep-open archived ## Last Updated must be refreshed, got: ' + st);
+    assert(/^## Closure$/m.test(st), '#333: keep-open archived state must carry a ## Closure block');
+    assert(st.includes('issue_disposition: kept-open'),
+      '#333: keep-open archived ## Closure must record issue_disposition: kept-open');
+    console.log('testKeepOpenArchiveStamp: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// #333: #210-class repro — a project archived MANUALLY (fs.renameSync bypassing the script)
+// keeps status: active forever. Re-running finalize over it must heal the archived state in
+// place (archive_state_stamped: repaired), and be idempotent (exactly one ## Closure block).
+function testManualArchiveBackstop() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-backstop-')));
+  try {
+    const dir = path.join(tmp, 'kaola-workflow', 'issue-210');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'workflow-state.md'), [
+      '# Kaola-Workflow State', '',
+      '## Project', 'name: issue-210', 'status: active', '',
+      '## Current Position',
+      'phase: adaptive', 'workflow_path: adaptive', 'step: start',
+      'next_command: /kaola-workflow-plan-run issue-210',
+      'next_skill: kaola-workflow-plan-run issue-210', '',
+      '## Pending Gates', '- workflow-plan', '',
+      '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
+      '## Last Updated', '2020-01-01T00:00:00.000Z', '',
+      '## Sink', 'branch: workflow/issue-210', 'issue_number: 210', 'sink: merge', ''
+    ].join('\n'));
+    // Manual archive: bypass archiveProjectDir entirely.
+    const archiveDest = path.join(tmp, 'kaola-workflow', 'archive', 'issue-210');
+    fs.mkdirSync(path.join(tmp, 'kaola-workflow', 'archive'), { recursive: true });
+    fs.renameSync(dir, archiveDest);
+
+    const result = json(runNode(claimScript, ['finalize', '--project', 'issue-210'], tmp));
+    assert(result.status === 'closed', '#333: backstop finalize should exit 0/report closed');
+    assert(result.archive_state_stamped === 'repaired',
+      '#333: backstop must report archive_state_stamped: repaired, got: ' + JSON.stringify(result.archive_state_stamped));
+    const st1 = read(path.join(archiveDest, 'workflow-state.md'));
+    assert(st1.includes('status: closed'), '#333: backstop must stamp manual archive status: closed, got: ' + st1);
+    assert(st1.includes('step: complete'), '#333: backstop must stamp manual archive step: complete');
+    assert(!/next_command:.*kaola-workflow-plan-run/.test(st1),
+      '#333: backstop must neutralize the manual archive next_command');
+    assert(/^## Closure$/m.test(st1), '#333: backstop must append a ## Closure block');
+
+    // Idempotency: a second finalize over the now-terminal archive must not re-stamp and must
+    // leave exactly one ## Closure block.
+    const result2 = json(runNode(claimScript, ['finalize', '--project', 'issue-210'], tmp));
+    assert(result2.archive_state_stamped === 'not_needed',
+      '#333: second backstop run must report not_needed (already terminal), got: ' + JSON.stringify(result2.archive_state_stamped));
+    const st2 = read(path.join(archiveDest, 'workflow-state.md'));
+    const closureCount = (st2.match(/^## Closure$/mg) || []).length;
+    assert(closureCount === 1, '#333: backstop must be idempotent — exactly one ## Closure block, got: ' + closureCount);
+    console.log('testManualArchiveBackstop: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 }
 
 function testRepair(tmp) {
@@ -4457,6 +4585,17 @@ function testE2EGitHubMergeFullChain() {
     assert(archiveInTree.status === 0,
       'kaola-workflow/archive/issue-850 must exist in feature branch HEAD after finalize --keep-worktree');
 
+    // #333: the ## Closure append must land INSIDE the `chore: archive` commit (commit-last
+    // ordering). After the FIRST finalize --keep-worktree the feature worktree must be clean —
+    // a dirty append would break the #217 second-finalize no-new-commit assert below.
+    const cleanAfterFinalize = spawnSync('git', ['status', '--porcelain'],
+      { cwd: wt850, encoding: 'utf8' }).stdout.trim();
+    assert(cleanAfterFinalize === '',
+      '#333: feature worktree must be clean after finalize --keep-worktree (## Closure append inside commit), got: ' + cleanAfterFinalize);
+    const archivedState850 = fs.readFileSync(path.join(wt850, 'kaola-workflow', 'archive', 'issue-850', 'workflow-state.md'), 'utf8');
+    assert(/^## Closure$/m.test(archivedState850),
+      '#333: archived state must carry a ## Closure block after finalize --keep-worktree');
+
     // issue #217: a second finalize --keep-worktree on a clean index must be a no-op (not crash)
     const headBefore2nd = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: wt850, encoding: 'utf8' }).stdout.trim();
     const finResult2 = spawnSync(process.execPath, [
@@ -4780,6 +4919,15 @@ function testE2EGitHubPrFullChain() {
       'active folder must be gone after watch-pr archives'
     );
     assert(!fs.existsSync(wt860), 'linked worktree must be removed by watch-pr');
+
+    // #333: the watch-pr MERGED lane disposition is PROBE-derived (the gh shim answers
+    // `issue view` with state: open), so a merged PR whose issue is still open archives as
+    // kept-open — never an unconditional `closed`. The ## Closure block records that.
+    const archivedState860 = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-860', 'workflow-state.md'), 'utf8');
+    assert(/^## Closure$/m.test(archivedState860),
+      '#333: watch-pr archived state must carry a ## Closure block');
+    assert(archivedState860.includes('issue_disposition: kept-open'),
+      '#333: watch-pr MERGED archive of an open issue must record issue_disposition: kept-open (probe-derived), got: ' + archivedState860);
 
     console.log('testE2EGitHubPrFullChain: PASSED');
   } finally {
@@ -9123,6 +9271,93 @@ function testAdaptiveWorktreeProvisionedE2E() {
   }
 }
 
+// ── NEW (#335): testAdaptiveWorktreeMirrorNoManualCopy ───────────────────────
+// AC1+AC3+AC4: a fresh adaptive worktree run — startup → author plan in MAIN →
+// REAL handoff (freezes + mirrors) → REAL orient from the WORKTREE — succeeds
+// with NO manual copy. The handoff's mirror-project step puts the frozen,
+// plan_hash-verified project folder into the worktree. AC2 negative leg: delete
+// the worktree project dir → orient refuses plan_not_mirrored → mirror-project
+// repairs → orient succeeds (proves the mechanical repair works from worktree cwd
+// via git-common-dir).
+function testAdaptiveWorktreeMirrorNoManualCopy() {
+  if (!claimSignal()) {
+    console.log('testAdaptiveWorktreeMirrorNoManualCopy: SKIPPED (adaptive worktree provisioning pending)');
+    return;
+  }
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-335-mirror-')));
+  const kwRoot = tmp + '.kw';
+  try {
+    initGitRepo(tmp);
+    const binDir = path.join(tmp, 'bin');
+    writeGhShimForStartup(binDir);
+
+    // Step 1: adaptive startup provisions a hidden-local worktree at .kw/worktrees/issue-935.
+    const sResult = runClaimOnlineLastJson(
+      ['startup', '--workflow-path', 'adaptive', '--target-issue', '935'],
+      tmp, binDir, { KAOLA_ENABLE_ADAPTIVE: '1' });
+    assert(sResult.claim === 'acquired', '#335: adaptive startup 935 should acquire');
+    if (!sResult.worktree_path) {
+      console.log('testAdaptiveWorktreeMirrorNoManualCopy: SKIPPED (worktree_path empty — provisioning suppressed)');
+      return;
+    }
+    const wt = sResult.worktree_path;
+    assert(fs.existsSync(wt), '#335: worktree dir must exist: ' + wt);
+    // The provisioned worktree must NOT yet contain the project folder (the bug premise).
+    const wtPlan = path.join(wt, 'kaola-workflow', 'issue-935', 'workflow-plan.md');
+    assert(!fs.existsSync(wtPlan), '#335: fresh worktree must NOT have the plan before the mirror');
+
+    // Step 2: author an UNFROZEN plan into the MAIN project folder (handoff freezes it).
+    const mainPlanPath = path.join(tmp, 'kaola-workflow', 'issue-935', 'workflow-plan.md');
+    fs.writeFileSync(mainPlanPath, ADAPTIVE_PLAN);
+
+    // Step 3: REAL handoff (cwd = main) — freezes + mirrors. No manual cp anywhere.
+    const hr = runNode(handoffScript, ['--project', 'issue-935', '--json'], tmp);
+    assert(hr.status === 0, '#335: handoff should exit 0\nstdout: ' + hr.stdout + '\nstderr: ' + hr.stderr);
+    const hjson = JSON.parse(hr.stdout.trim().split('\n').filter(l => l.trim().startsWith('{')).pop());
+    assert(hjson.handoff_status === 'ready_to_run', '#335: handoff_status===ready_to_run, got ' + JSON.stringify(hjson.handoff_status));
+    assert(hjson.worktree_mirror && hjson.worktree_mirror.status === 'mirrored',
+      '#335 AC1: worktree_mirror.status===mirrored, got ' + JSON.stringify(hjson.worktree_mirror));
+
+    // AC4: the worktree plan exists and its plan_hash is byte-equal to the main copy.
+    assert(fs.existsSync(wtPlan), '#335 AC1: worktree must contain the mirrored plan after the real handoff');
+    const mainHashM = fs.readFileSync(mainPlanPath, 'utf8').match(/<!--\s*plan_hash:\s*([0-9a-f]{64})\s*-->/);
+    const wtHashM = fs.readFileSync(wtPlan, 'utf8').match(/<!--\s*plan_hash:\s*([0-9a-f]{64})\s*-->/);
+    assert(mainHashM && wtHashM, '#335 AC4: both plans must carry a plan_hash');
+    assert(mainHashM[1] === wtHashM[1], '#335 AC4: worktree plan_hash must equal the main plan_hash');
+
+    // Step 4: REAL orient FROM THE WORKTREE — succeeds, no manual copy.
+    const o1 = runNode(adaptiveNodeScript, ['orient', '--project', 'issue-935', '--json'], wt);
+    assert(o1.status === 0, '#335 AC3: orient from worktree should exit 0\nstdout: ' + o1.stdout + '\nstderr: ' + o1.stderr);
+    const o1json = JSON.parse(o1.stdout.trim().split('\n').filter(l => l.trim().startsWith('{')).pop());
+    assert(o1json.resumeCheck && o1json.resumeCheck.ok === true, '#335 AC3: orient resumeCheck.ok===true, got ' + JSON.stringify(o1json.resumeCheck));
+
+    // AC2 negative leg: remove the worktree project dir → orient must refuse plan_not_mirrored.
+    fs.rmSync(path.join(wt, 'kaola-workflow', 'issue-935'), { recursive: true, force: true });
+    const o2 = runNode(adaptiveNodeScript, ['orient', '--project', 'issue-935', '--json'], wt);
+    assert(o2.status === 1, '#335 AC2: orient on an unmirrored worktree must exit 1, got ' + o2.status + '\nstdout: ' + o2.stdout);
+    const o2json = JSON.parse(o2.stdout.trim().split('\n').filter(l => l.trim().startsWith('{')).pop());
+    assert(o2json.result === 'refuse' && o2json.reason === 'plan_not_mirrored',
+      '#335 AC2: orient refuses plan_not_mirrored, got ' + JSON.stringify({ result: o2json.result, reason: o2json.reason }));
+    assert(/mirror-project/.test(o2json.repair || ''), '#335 AC2: repair names the mirror-project command');
+
+    // AC2 repair: mirror-project FROM THE WORKTREE cwd (resolves main via git-common-dir).
+    const mp = runNode(adaptiveNodeScript, ['mirror-project', '--project', 'issue-935', '--json'], wt);
+    assert(mp.status === 0, '#335 AC2: mirror-project from worktree should exit 0\nstdout: ' + mp.stdout + '\nstderr: ' + mp.stderr);
+    const mpjson = JSON.parse(mp.stdout.trim().split('\n').filter(l => l.trim().startsWith('{')).pop());
+    assert(mpjson.result === 'ok' && mpjson.status === 'mirrored',
+      '#335 AC2: mirror-project re-mirrors from the worktree, got ' + JSON.stringify({ result: mpjson.result, status: mpjson.status }));
+
+    // orient again → exit 0 (the mechanical repair restored the worktree copy).
+    const o3 = runNode(adaptiveNodeScript, ['orient', '--project', 'issue-935', '--json'], wt);
+    assert(o3.status === 0, '#335 AC2: orient after mirror-project repair should exit 0\nstdout: ' + o3.stdout + '\nstderr: ' + o3.stderr);
+
+    console.log('testAdaptiveWorktreeMirrorNoManualCopy: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
 // ── NEW: testSinkRefusesWorkflowOnlyBranch ───────────────────────────────────
 // AC7: sink-merge MUST exit 1 when the branch diff vs origin/main is all kaola-workflow/**
 // Signal = sinkSignal() → assert exit 1 with refusal message
@@ -9236,6 +9471,8 @@ async function main() {
   try {
     testClaimStatusRelease(tmp);
     testFinalize(tmp);
+    testKeepOpenArchiveStamp();      // #333
+    testManualArchiveBackstop();     // #333
     testRepair(tmp);
     testRepairFastPath(tmp);
     testRepairFastEscalation(tmp);
@@ -9420,6 +9657,8 @@ async function main() {
     testLegacyWorktreeCleanupDryRun();
     testLegacyWorktreeCleanupDirtySkip();
     testAdaptiveWorktreeProvisionedE2E();
+    // issue #335 — mechanical main→worktree project-folder mirror (no manual cp)
+    testAdaptiveWorktreeMirrorNoManualCopy();
     testSinkRefusesWorkflowOnlyBranch();
     testSinkAllowsMixedBranch();
     testPlanRunWiredForWorktree();

@@ -10,6 +10,7 @@
 //
 // Subcommands (all require --project P and --json; exit≠0 on refuse):
 //   orient         --project P                        (READ-ONLY)
+//   mirror-project --project P                        (#335: main→worktree mirror; READ-ONLY on ledger/state)
 //   open-next      --project P [--node-id N]          (MUTATES ledger + baseline)
 //   record-evidence --project P --node-id N --stdin   (MUTATES .cache)
 //   close-and-open-next --project P --node-id N       (MUTATES ledger + state)
@@ -47,6 +48,45 @@ function getRoot() {
     }).trim();
   } catch (_) {
     return process.cwd();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// getMainRoot — #335: resolve the MAIN checkout root even when cwd is a linked
+// worktree. Mirrors claim.js getCoordRoot/mainRootFromCoord (local re-impl per
+// repo convention — claim.js does not export them). When `root` IS the main
+// checkout, git-common-dir resolves to <root>/.git and the basename strip
+// returns `root` unchanged.
+// ---------------------------------------------------------------------------
+function getMainRoot(root) {
+  try {
+    const raw = execFileSync('git', ['rev-parse', '--git-common-dir'], {
+      cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    const coord = path.resolve(root, raw);
+    return path.basename(coord) === '.git' ? path.dirname(coord) : coord;
+  } catch (_) { return root; }
+}
+
+// ---------------------------------------------------------------------------
+// copyTree — #335: small recursive copy (readdirSync withFileTypes +
+// copyFileSync, skipping symlinks). Same shape as claim.js exportWorktreeDiff;
+// no fs.cpSync precedent in this repo. Parents of `dest` are created by the
+// caller (mkdirSync). Best-effort on directory entries; throws on file copy
+// errors so the caller's transaction fails closed.
+// ---------------------------------------------------------------------------
+function copyTree(src, dest, io) {
+  io.mkdirSync(dest, { recursive: true });
+  const entries = io.readdir(src);
+  for (const e of entries) {
+    const from = path.join(src, e.name);
+    const to = path.join(dest, e.name);
+    if (e.isSymbolicLink && e.isSymbolicLink()) continue;
+    if (e.isDirectory()) {
+      copyTree(from, to, io);
+    } else if (e.isFile()) {
+      io.copyFile(from, to);
+    }
   }
 }
 
@@ -410,6 +450,26 @@ function checkEvidenceShape(role, nodeId, evidence) {
 function runOrient(opts) {
   const { planPath, statePath, project, shell, readFile, cacheExists } = opts;
 
+  // #335: fail-closed when the plan file itself is absent. Distinguish an
+  // unmirrored worktree (the MAIN checkout has the frozen project folder) from a
+  // truly unauthored plan. The probe is CLI-wired; an absent probe (unit tests /
+  // legacy library callers) preserves the old tolerant behavior byte-for-byte.
+  if (opts.planProbe && !opts.planProbe.planExists) {
+    const unmirrored = opts.planProbe.isLinkedWorktree && opts.planProbe.mainPlanExists;
+    return {
+      result: 'refuse',
+      reason: unmirrored ? 'plan_not_mirrored' : 'plan_missing',
+      planPath,
+      mainPlanPath: unmirrored ? opts.planProbe.mainPlanPath : null,
+      repair: unmirrored
+        ? 'run: node kaola-workflow-adaptive-node.js mirror-project --project '
+          + project + ' --json (mirrors the frozen kaola-workflow/' + project
+          + '/ from the main checkout into this worktree, plan_hash-verified), then re-run orient'
+        : 'no workflow-plan.md for ' + project
+          + ' — author + freeze it via /kaola-workflow-adapt ' + project,
+    };
+  }
+
   const resumeCheck = shell(validatorPath, [planPath, '--resume-check', '--json']);
   const nextAction  = shell(nextActionPath, [planPath, '--json']);
 
@@ -611,6 +671,122 @@ function runOrient(opts) {
     frontier: enterBatch
       ? startReadyPending.map(n => ({ id: n.id, role: n.role, model: n.model, declared_write_set: n.declared_write_set }))
       : [],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// runMirrorProject — #335: ONE mechanical main→worktree project-folder mirror.
+//
+// A fresh adaptive worktree is provisioned at claim time (before any plan
+// exists) and the planner authors + freezes the plan in the MAIN checkout, so
+// the worktree never receives kaola-workflow/<project>/. This transaction
+// transports it deterministically: copy → plan_hash re-verify → atomic rename
+// promote. Read-only on the ledger and workflow-state.md; never touches a
+// per-node baseline (it runs strictly before any node is opened).
+//
+// Idempotent + safe at every plan-run entry: a worktree copy that already has a
+// workflow-plan.md is authoritative (#264 semantics) and is never overwritten.
+//
+// @param {object} opts
+//   project   {string}   project name (e.g. 'issue-335')
+//   mainRoot  {string}   the MAIN checkout root (resolved via getMainRoot)
+//   shell     {function} (scriptPath, args[]) → {exitCode,...parsedJson}
+//   io        {object}   { exists, readFile, copyTree, renameSync, rmSync, mkdirSync, readdir, copyFile }
+// @returns {object} typed result (refuse exits ≠ 0 via the CLI epilogue)
+// ---------------------------------------------------------------------------
+function runMirrorProject(opts) {
+  const { project, mainRoot, shell, io } = opts;
+
+  // 1. Source = the frozen project folder in the MAIN checkout.
+  const source = path.join(mainRoot, 'kaola-workflow', project);
+  const stateMain = path.join(source, 'workflow-state.md');
+  if (!io.exists(stateMain)) {
+    return {
+      result: 'refuse',
+      reason: 'state_missing',
+      repair: 'run claim/startup first — no workflow-state.md for ' + project + ' in the main checkout',
+    };
+  }
+
+  // 2. Parse worktree_path from the main state (same regex the plan-run docs use).
+  let stateContent = '';
+  try { stateContent = io.readFile(stateMain); } catch (_) { stateContent = ''; }
+  const m = stateContent.match(/^worktree_path:\s*(.+)$/m);
+  const worktreePath = m ? m[1].trim() : '';
+  if (!worktreePath) {
+    // In-place run (KAOLA_WORKTREE_NATIVE=0), offline, bundle lane — all legal.
+    return { result: 'ok', status: 'skipped', reason: 'no_worktree' };
+  }
+  if (!io.exists(worktreePath)) {
+    // Recorded but pruned — matches the plan-run doc's $(pwd) fallback semantics.
+    return { result: 'ok', status: 'skipped', reason: 'worktree_dir_missing', worktreePath };
+  }
+
+  // 3. Destination project folder in the worktree.
+  const dest = path.join(worktreePath, 'kaola-workflow', project);
+  const destPlan = path.join(dest, 'workflow-plan.md');
+  if (io.exists(destPlan)) {
+    // NEVER overwrite — on resume the worktree copy is authoritative (#264).
+    return { result: 'ok', status: 'exists', dest };
+  }
+
+  // 4. Source plan must exist (the planner authored + froze it in main).
+  const sourcePlan = path.join(source, 'workflow-plan.md');
+  if (!io.exists(sourcePlan)) {
+    return {
+      result: 'refuse',
+      reason: 'source_plan_missing',
+      source,
+      repair: 'author + freeze the plan via /kaola-workflow-adapt ' + project + ' first',
+    };
+  }
+
+  // 5. Atomic copy → verify → rename promote.
+  const tmp = path.join(worktreePath, 'kaola-workflow', '.mirror-tmp-' + project);
+  // Clean any crash leftover before copying.
+  try { io.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
+  try { io.mkdirSync(path.dirname(tmp), { recursive: true }); } catch (_) {}
+
+  try {
+    io.copyTree(source, tmp);
+  } catch (err) {
+    try { io.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
+    return { result: 'refuse', reason: 'mirror_failed', detail: (err && err.message) || String(err) };
+  }
+
+  // AC4: plan_hash re-verification on the COPIED plan before the promote.
+  const resumeCheck = shell(validatorPath, [path.join(tmp, 'workflow-plan.md'), '--resume-check', '--json']);
+  if (!resumeCheck || !resumeCheck.ok) {
+    try { io.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
+    return {
+      result: 'refuse',
+      reason: 'mirror_verify_failed',
+      detail: (resumeCheck && resumeCheck.reason) || 'resume-check failed on the copied plan',
+      source,
+      dest,
+    };
+  }
+
+  // Atomic same-filesystem promote.
+  try {
+    io.renameSync(tmp, dest);
+  } catch (err) {
+    if (err && (err.code === 'EEXIST' || err.code === 'ENOTEMPTY')) {
+      // Race: a concurrent entry promoted the dest first — the existing copy wins.
+      try { io.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
+      return { result: 'ok', status: 'exists', dest };
+    }
+    try { io.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
+    return { result: 'refuse', reason: 'mirror_failed', detail: (err && err.message) || String(err) };
+  }
+
+  return {
+    result: 'ok',
+    status: 'mirrored',
+    source,
+    dest,
+    planHash: resumeCheck.planHash,
+    verified: true,
   };
 }
 
@@ -1198,6 +1374,7 @@ function main() {
     process.stdout.write(
       'usage: kaola-workflow-adaptive-node.js <subcommand> --project P --json [options]\n' +
       '  orient              --project P\n' +
+      '  mirror-project      --project P\n' +
       '  open-next           --project P [--node-id N]\n' +
       '  record-evidence     --project P --node-id N --stdin\n' +
       '  close-and-open-next --project P --node-id N\n' +
@@ -1261,10 +1438,43 @@ function main() {
   const writeFile = (fpath, content) => fs.writeFileSync(fpath, content, 'utf8');
   const cacheExists = (fpath) => fs.existsSync(fpath);
 
+  // #335: resolve the MAIN checkout root even when cwd is a linked worktree.
+  // realpath both sides so a macOS /var vs /private/var divergence under
+  // os.tmpdir() never false-positives the linked-worktree comparison.
+  let realRepoRoot = repoRoot;
+  try { realRepoRoot = fs.realpathSync(repoRoot); } catch (_) {}
+  let mainRoot = getMainRoot(repoRoot);
+  try { mainRoot = fs.realpathSync(mainRoot); } catch (_) {}
+
   let result;
 
   if (subcommand === 'orient') {
-    result = runOrient({ planPath, statePath, project, shell, readFile, writeFile, cacheExists });
+    const mainPlanPath = path.join(mainRoot, 'kaola-workflow', project, 'workflow-plan.md');
+    const planProbe = {
+      planExists: fs.existsSync(planPath),
+      isLinkedWorktree: mainRoot !== realRepoRoot,
+      mainPlanExists: fs.existsSync(mainPlanPath),
+      mainPlanPath,
+    };
+    result = runOrient({ planPath, statePath, project, shell, readFile, writeFile, cacheExists, planProbe });
+  } else if (subcommand === 'mirror-project') {
+    result = runMirrorProject({
+      project,
+      mainRoot,
+      shell,
+      io: {
+        exists: (p) => fs.existsSync(p),
+        readFile,
+        copyTree: (src, dst) => copyTree(src, dst, {
+          mkdirSync: (d, o) => fs.mkdirSync(d, o),
+          readdir: (d) => fs.readdirSync(d, { withFileTypes: true }),
+          copyFile: (a, b) => fs.copyFileSync(a, b),
+        }),
+        renameSync: (a, b) => fs.renameSync(a, b),
+        rmSync: (p, o) => fs.rmSync(p, o),
+        mkdirSync: (d, o) => fs.mkdirSync(d, o),
+      },
+    });
   } else if (subcommand === 'open-next') {
     result = runOpenNext({ planPath, statePath, project, nodeId, shell, readFile, writeFile });
   } else if (subcommand === 'record-evidence') {
@@ -1322,6 +1532,7 @@ module.exports = {
   checkEvidenceShape,
   validateProjectName,
   runOrient,
+  runMirrorProject,
   runOpenNext,
   runRecordEvidence,
   runCloseAndOpenNext,

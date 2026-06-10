@@ -258,6 +258,8 @@ Manages the local roadmap mirror (`kaola-workflow/ROADMAP.md`) and per-issue met
 
 When an active workflow folder is finalized (`cmdFinalize`) or archived after a PR merge (`watch-pr` on MERGED status), the closure process automatically removes the corresponding `.roadmap/issue-{N}.md` file and regenerates `ROADMAP.md`. This ensures the local roadmap never contains stale entries for closed issues. The cleanup is scoped to closed-status archives only; abandoned folders leave the roadmap entry untouched (so the issue can be reopened if needed). When finalizing from a linked worktree, `cmdFinalize` stages only the finalized project's own paths — its `kaola-workflow/archive/<project>/` band, the `kaola-workflow/<project>/`→archive rename (recorded as a `git rm -r --cached` of the live folder plus a `git add` of the archive dest), `kaola-workflow/.roadmap/`, and `kaola-workflow/ROADMAP.md` — rather than a broad `git add -A kaola-workflow/`, so a stray foreign `kaola-workflow/archive/<other>/` is never swept into the finalize commit (issue #261).
 
+`cmdFinalize` accepts `--keep-open` for a keep-open partial-close run (the Closure Decision Gate kept the issue open). This is **stamp-only** in #333: it changes only what the archived `workflow-state.md` RECORDS (`last_result: closed_keep_open`, `issue_disposition: kept-open`, no active `next_command`, skips the remote close probe). It does NOT change roadmap-source removal or any closure invariant — the roadmap source for the still-open issue is still removed and `ROADMAP.md` regenerated, so the keep-open finalize procedure carries an interim copy-aside/restore caveat for `kaola-workflow/.roadmap/issue-N.md` (see `commands/kaola-workflow-finalize.md`). The full script-side keep-open sink lane (roadmap retention, guaranteed no-close, FF-push, claim/worktree cleanup) is owned by issue #336, which extends this same flag.
+
 ## Adaptive Plan Validation
 
 ### Script: `kaola-workflow-plan-validator.js`
@@ -643,6 +645,41 @@ freezing a stale number into durable history:
   CLI `main()` wires the default docs/CHANGELOG scanner).
 
 Full rationale: `docs/decisions/0003-adaptive-front-end-planner.md`.
+
+### Worktree project-folder mirror (#335)
+
+A fresh adaptive worktree is provisioned at claim time (before any plan exists) and the planner
+authors + freezes the plan in the MAIN checkout, so the linked worktree never receives the
+untracked `kaola-workflow/<project>/`. The `kaola-workflow-adaptive-node.js mirror-project`
+subcommand is the **one mechanical transaction** that transports it; it is shelled by the handoff
+(step 7) and re-run idempotently at every `/kaola-workflow-plan-run` entry. It is read-only on the
+ledger and `workflow-state.md` and runs strictly before any node baseline is recorded, so the
+mirrored files are part of every per-node baseline and never attributed as node writes.
+
+- **CLI:** `node kaola-workflow-adaptive-node.js mirror-project --project P --json` (exit ≠ 0 on
+  refuse; the `validateProjectName` #318 guard applies). It resolves the MAIN checkout via
+  `git rev-parse --git-common-dir` (so it works from a worktree cwd) and the worktree from the
+  main state's `worktree_path:`.
+- **`status: skipped`** (`result:'ok'`) — no `worktree_path` (in-place / offline / bundle lane:
+  `reason:'no_worktree'`) or the recorded worktree dir is gone (`reason:'worktree_dir_missing'`).
+- **`status: exists`** (`result:'ok'`) — the worktree already has a `workflow-plan.md`; NEVER
+  overwritten (on resume the worktree copy is authoritative, #264). This makes the subcommand
+  idempotent and safe to re-run at every entry.
+- **`status: mirrored`** (`result:'ok'`) — atomic **copy → `plan_hash` re-verify → rename promote**:
+  the source folder is copied to a `.mirror-tmp-<project>` dir, the validator `--resume-check`
+  re-derives and compares the `plan_hash` on the COPIED plan (AC4), and only on success is the tmp
+  dir `rename`d into place (same-filesystem atomic). The verified `planHash` is surfaced.
+- **Refusals (exit 1):** `state_missing` (run claim/startup first), `source_plan_missing` (route to
+  `/kaola-workflow-adapt`), `mirror_verify_failed` (the copied plan failed `plan_hash` re-verification
+  — destination left untouched, all-or-nothing), `mirror_failed` (fs error; best-effort tmp cleanup).
+- **Handoff packet field:** the handoff attaches `worktree_mirror:{ status, reason?, planHash?, path? }`
+  to the `ready_to_run` packet. It is **best-effort** — a mirror refuse/failure (`status:'failed'`)
+  does NOT flip `handoff_status` (the plan IS valid; provisioning is enforced at plan-run entry +
+  `orient`), mirroring the `roadmap_staged` and #282 task-mirror conventions.
+- **`orient` fail-closed:** when the worktree plan is absent, `orient` refuses
+  `plan_not_mirrored` (the MAIN checkout has the frozen folder — `repair` names the exact
+  `mirror-project` command) or `plan_missing` (truly unauthored — route to `/kaola-workflow-adapt`).
+  The probe is CLI-wired; library callers without it keep the prior tolerant behavior byte-for-byte.
 
 ---
 
@@ -1351,6 +1388,17 @@ complete a receipt step, `cmdWatchPr`/`cmdWatchMr` surface the failure via a
   }
 }
 ```
+
+`cmdFinalize` output also includes `archive_state_stamped` and `issue_disposition` (issue #333):
+
+```json
+{
+  "archive_state_stamped": "not_needed|repaired|failed",
+  "issue_disposition": "kept-open|close-pending|closed|unknown"
+}
+```
+
+`archive_state_stamped` reports the manual-archive backstop: `repaired` when `cmdFinalize` healed a state that had been archived MANUALLY (live folder absent, `status: active` in the archive — a `mv`/`git mv` that bypassed `archiveProjectDir`) by stamping it terminal in place; `not_needed` when no manual archive needed healing (the normal lane, or an already-terminal archive on re-run); `failed` on a swallowed error. `issue_disposition` records the issue's terminal disposition: on `cmdFinalize` it is DECISION-derived — `kept-open` under `--keep-open`, otherwise `closed` if the remote probe already observed the issue closed (a finalize re-run after sink-merge), else `close-pending` (the default merge lane — the orchestrator closes the issue AFTER sink-merge, so `cmdFinalize` never asserts a false `closed`). On the `cmdWatchPr`/`cmdWatchMr` MERGED lane the disposition (recorded only in the archived state's `## Closure` block, not the JSON receipt) is OBSERVATION-derived via `probeIssueState`: `closed` when the issue is observed closed, `kept-open` when observed open (a merged PR/MR with no close keyword), `unknown` when the probe is unavailable. On that lane the receipt's `remote_issue_closed` is likewise probe-informed (`already_closed` vs `skipped_offline`, both existing enum values — no closure-contract change). The archived `workflow-state.md` carries the same `issue_disposition` plus `archived_at`/`claim_label_removed`/`worktree_removed`/`closure_invariants` in a `## Closure` block; the closure receipt schema itself is unchanged.
 
 `cmdWatchPr`/`cmdWatchMr` emit a `cleanups` array with per-folder `claim_label_removed` status when label cleanup is attempted. As of issue #164 each entry also carries the full per-folder `receipt` (built via `buildClosureReceipt`) and its `closure_invariants`:
 

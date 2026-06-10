@@ -86,7 +86,12 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   `kaola-workflow-adaptive-node.js` (#272) is the third aggregator and owns the complete
   per-node lifecycle for `/kaola-workflow-plan-run`: the `orient` (read-only resume scan — it
   also reconciles the durable task mirror `workflow-tasks.json` on every resume by shelling the
-  task-mirror CLI, so the write stays out of `orient` itself, #282),
+  task-mirror CLI, so the write stays out of `orient` itself, #282; #335: it now fails closed
+  with a typed `plan_not_mirrored` / `plan_missing` refusal when the plan file is absent, instead
+  of swallowing the missing path), the `mirror-project` (#335: a main-direct transaction run at
+  plan-run entry that copies the frozen `kaola-workflow/<project>/` from the MAIN checkout into the
+  provisioned worktree — atomic copy → `plan_hash` re-verify → rename promote, idempotent and
+  never overwriting an existing worktree copy; read-only on the ledger/state),
   `open-next` (ledger `pending → in_progress` + baseline), `record-evidence` (`.cache` write),
   `close-and-open-next` (evidence-shape check → barrier → close + compliance row → selector
   routing → fused advance), `write-halt` (consent/security/test_thrash escalation), and

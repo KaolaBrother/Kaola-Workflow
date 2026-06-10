@@ -511,6 +511,26 @@ Do not reorganize roadmap entries that came from closure decision items until th
 
 Archive is performed atomically by `cmdFinalize` in Step 8b below. Do not perform a manual copy or git mv here.
 
+**Keep-open partial-close runs (#333).** If the Closure Decision Gate keeps the issue OPEN
+(partial implementation, residual follow-ups), still archive through the SAME `finalize`
+subcommand, adding `--keep-open`. It stamps the archived `workflow-state.md` terminal
+(`last_result: closed_keep_open`, `issue_disposition: kept-open`, no active `next_command`) so a
+later resume/audit cannot mistake the archived run for active work. Never archive by manual
+`mv`/`git mv` — a bypassed archive preserves claim-time state (`status: active`, pending gates)
+forever (a re-run of `finalize` over such a manual archive now heals it in place, but the
+supported path is `--keep-open`). On a keep-open run, do not pass `--issue` to `sink-merge`/`sink-mr`
+(it would close the issue).
+
+**Interim caveat until #336 lands (roadmap retention is #336's scope):** `finalize` — with or
+without `--keep-open` — still removes `kaola-workflow/.roadmap/issue-N.md` and regenerates
+`ROADMAP.md` WITHOUT the still-open issue. Per the Durable State Contract, closure may remove only
+a CLOSED issue's source file, so on a keep-open run you must preserve it: BEFORE running
+`finalize --keep-open`, copy the roadmap source aside (`cp kaola-workflow/.roadmap/issue-N.md
+"$TMPDIR"/`); AFTER finalize, copy it back and regenerate the mirror
+(`kaola-gitlab-workflow-roadmap.js generate`); on the keep-worktree lane include the restored file
++ mirror in the Step 8 implementation commit. #336 replaces this manual step with script-side
+retention; remove this caveat paragraph when #336 ships.
+
 Update `finalization-summary.md` with:
 
 - final GitLab issue state

@@ -85,6 +85,18 @@ choices, or ambiguity that blocks correctness.
 5. Closure decision: scan all phase files for deferred items or user decisions. Ask before reorganizing issues or roadmap.
 6. Refresh `kaola-workflow/ROADMAP.md`.
 7. Archive is performed atomically by `cmdFinalize` in step 8b below. Do not perform a manual copy or git mv here.
+
+   **Keep-open partial-close runs (#333).** If the Closure Decision Gate keeps the issue OPEN
+   (partial implementation, residual follow-ups), still archive through the SAME `finalize`
+   subcommand, adding `--keep-open`. It stamps the archived `workflow-state.md` terminal
+   (`last_result: closed_keep_open`, `issue_disposition: kept-open`, no active `next_command`) so a
+   later resume/audit cannot mistake the archived run for active work. Never archive by manual
+   `mv`/`git mv`. On a keep-open run, do not pass `--issue` to `sink-merge` (it would close the
+   issue). **Interim caveat until #336 lands:** `finalize` still removes
+   `kaola-workflow/.roadmap/issue-N.md` and regenerates `ROADMAP.md` without the still-open issue;
+   on a keep-open run, copy the roadmap source aside before `finalize --keep-open` and restore it +
+   regenerate the mirror afterward (include both in the keep-worktree commit). #336 replaces this
+   with script-side retention.
 8. Commit and push only approved files.
 
    ### Staging Guard

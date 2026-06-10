@@ -697,9 +697,20 @@ function testGiteaAdaptive() {
     // (no dispatch-log), but closure_invariants.ok must still be true (warn-first contract).
     const m2dir = path.join(tmp, 'kaola-workflow', 'issue-970');
     fs.mkdirSync(m2dir, { recursive: true });
+    // #333: seed an active next_command + a STALE Planning Evidence plan_hash so the archive
+    // must neutralize next_command and refresh the hash from the (re-frozen) plan file.
+    const STALE_HASH_970 = 'a'.repeat(64);
+    const FINAL_HASH_970 = 'b'.repeat(64);
     fs.writeFileSync(path.join(m2dir, 'workflow-state.md'),
-      '## Project\nname: issue-970\nstatus: active\nissue_number: 970\n## Sink\nbranch: workflow/issue-970\nsink: pr\n'
-      + '## Pending Gates\n- workflow-plan\n\n## Last Evidence\nlast_command: startup\nlast_result: folder_claimed\n');
+      '## Project\nname: issue-970\nstatus: active\nissue_number: 970\n'
+      + 'next_command: /kaola-workflow-plan-run issue-970\nnext_skill: kaola-workflow-plan-run issue-970\n'
+      + '## Planning Evidence\nplan_hash: ' + STALE_HASH_970 + '\ndecision: ask\n'
+      + '## Sink\nbranch: workflow/issue-970\nsink: pr\n'
+      + '## Pending Gates\n- workflow-plan\n\n## Last Evidence\nlast_command: startup\nlast_result: folder_claimed\n'
+      + '\n## Last Updated\n2020-01-01T00:00:00.000Z\n');
+    // #333: workflow-plan.md re-frozen with a DIFFERENT hash than the claim-time state hash.
+    fs.writeFileSync(path.join(m2dir, 'workflow-plan.md'),
+      '<!-- plan_hash: ' + FINAL_HASH_970 + ' -->\n\n# Workflow Plan\n\n## Node Ledger\n\n| id | status |\n|---|---|\n| n1 | complete |\n');
     // #324: seed a PRE-SINK finalization-summary carrying the terminal-mistakable sentinels.
     fs.writeFileSync(path.join(m2dir, 'finalization-summary.md'),
       '## Status\nREADY FOR FINAL GIT GATE\n\n## Commit And Push\nPending final git gate. Final hash reported after push.\n');
@@ -745,6 +756,49 @@ function testGiteaAdaptive() {
     assert.ok(!m2Summary.includes('READY FOR FINAL GIT GATE'), '#324: gitea archived summary neutralizes the pre-sink sentinel');
     const m2FinalVal = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'archive', m2Archived[0], '.cache', 'final-validation.md'), 'utf8');
     assert.ok(!m2FinalVal.includes('No files changed after those runs'), '#324 AC3: gitea archived final-validation neutralizes the false absolute');
+    // #333: archived state must not advertise an active resume command, and plan_hash + Last
+    // Updated must be refreshed from the (re-frozen) plan file.
+    assert.ok(m2State.includes('next_command: none (archived)'), '#333: gitea archived next_command neutralized to "none (archived)"');
+    assert.ok(!/next_command:.*kaola-workflow-plan-run/.test(m2State), '#333: gitea archived state drops the active plan-run resume command');
+    assert.ok(m2State.includes('plan_hash: ' + FINAL_HASH_970), '#333: gitea archived plan_hash refreshed from the final plan file, got: ' + m2State);
+    assert.ok(!m2State.includes('plan_hash: ' + STALE_HASH_970), '#333: gitea archived plan_hash drops the stale claim-time hash');
+    assert.ok(!m2State.includes('2020-01-01T00:00:00.000Z'), '#333: gitea archived ## Last Updated refreshed');
+
+    // #333: --keep-open stamp — last_result: closed_keep_open + issue_disposition: kept-open.
+    const koDir = path.join(tmp, 'kaola-workflow', 'issue-971');
+    fs.mkdirSync(koDir, { recursive: true });
+    fs.writeFileSync(path.join(koDir, 'workflow-state.md'),
+      '## Project\nname: issue-971\nstatus: active\nissue_number: 971\n'
+      + 'next_command: /kaola-workflow-plan-run issue-971\n'
+      + '## Sink\nbranch: workflow/issue-971\nsink: merge\n'
+      + '## Pending Gates\n- workflow-plan\n\n## Last Evidence\nlast_command: startup\nlast_result: folder_claimed\n');
+    fs.writeFileSync(path.join(roadmapM2Dir, 'issue-971.md'),
+      'issue: #971\ntitle: t\nstatus: open\nworkflow_project: issue-971\nnext_step: ready\n');
+    const koResult = JSON.parse(spawnNode(claimScript, ['finalize', '--project', 'issue-971', '--keep-open'], tmp).stdout);
+    assert.strictEqual(koResult.status, 'closed', '#333: gitea keep-open finalize returns status:closed');
+    assert.strictEqual(koResult.issue_disposition, 'kept-open', '#333: gitea keep-open JSON issue_disposition is kept-open');
+    const koArchived = fs.readdirSync(path.join(tmp, 'kaola-workflow', 'archive')).filter(n => n.startsWith('issue-971'));
+    const koState = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'archive', koArchived[0], 'workflow-state.md'), 'utf8');
+    assert.ok(koState.includes('last_result: closed_keep_open'), '#333: gitea keep-open archived last_result is closed_keep_open');
+    assert.ok(/^## Closure$/m.test(koState), '#333: gitea keep-open archived state carries a ## Closure block');
+    assert.ok(koState.includes('issue_disposition: kept-open'), '#333: gitea keep-open ## Closure records issue_disposition: kept-open');
+
+    // #333 (port gap 3/5): manual-archive backstop — a state archived MANUALLY (live folder
+    // absent) with status: active must be healed in place. This fails loudly (status stays
+    // active, archive_state_stamped: 'failed') if the port backstop ever leaks a
+    // removeLegacyStateBlocks call that throws a swallowed ReferenceError.
+    const bsArchiveDir = path.join(tmp, 'kaola-workflow', 'archive', 'issue-972');
+    fs.mkdirSync(bsArchiveDir, { recursive: true });
+    fs.writeFileSync(path.join(bsArchiveDir, 'workflow-state.md'),
+      '## Project\nname: issue-972\nstatus: active\nissue_number: 972\n'
+      + 'next_command: /kaola-workflow-plan-run issue-972\n'
+      + '## Sink\nbranch: workflow/issue-972\nsink: merge\n');
+    const bsResult = JSON.parse(spawnNode(claimScript, ['finalize', '--project', 'issue-972'], tmp).stdout);
+    assert.strictEqual(bsResult.status, 'closed', '#333: gitea backstop finalize returns status:closed');
+    assert.strictEqual(bsResult.archive_state_stamped, 'repaired', '#333: gitea backstop must report archive_state_stamped: repaired (port has no removeLegacyStateBlocks)');
+    const bsState = fs.readFileSync(path.join(bsArchiveDir, 'workflow-state.md'), 'utf8');
+    assert.ok(bsState.includes('status: closed'), '#333: gitea backstop must stamp manual archive status: closed, got: ' + bsState);
+    assert.ok(/^## Closure$/m.test(bsState), '#333: gitea backstop appends a ## Closure block');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

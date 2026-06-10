@@ -217,6 +217,8 @@ const PLAN_HASH_64 = ('a').repeat(64);
     'kaola-workflow-roadmap.js:init-issue': { exitCode: 0, created: true },
     // git add
     'git:add': { exitCode: 0 },
+    // #335 mirror-project (step 7) — best-effort; answers the new shell call.
+    'kaola-workflow-adaptive-node.js': { exitCode: 0, status: 'mirrored', planHash: PLAN_HASH_64, dest: '/wt/kaola-workflow/test-project' },
   });
 
   const result = runHandoff({
@@ -283,6 +285,7 @@ const PLAN_HASH_64 = ('a').repeat(64);
     'kaola-workflow-plan-validator.js:--resume-check': { exitCode: 0, ok: true, planHash: PLAN_HASH_64 },
     'kaola-workflow-roadmap.js:init-issue': { exitCode: 0, created: true },
     'git:add': { exitCode: 0 },
+    'kaola-workflow-adaptive-node.js': { exitCode: 0, status: 'mirrored', planHash: PLAN_HASH_64, dest: '/wt/kaola-workflow/test-project' },
   });
 
   const result = runHandoff({
@@ -446,6 +449,7 @@ const PLAN_HASH_64 = ('a').repeat(64);
     'kaola-workflow-plan-validator.js:--resume-check': { exitCode: 0, ok: true, planHash: HASH },
     'kaola-workflow-roadmap.js:init-issue': { exitCode: 0, skip: true }, // EEXIST-skip
     'git:add': { exitCode: 0 },
+    'kaola-workflow-adaptive-node.js': { exitCode: 0, status: 'exists', dest: '/wt/kaola-workflow/test-project' },
   });
 
   // Run 1: state has existing Planning Evidence; simulate what gets written.
@@ -599,6 +603,7 @@ const PLAN_HASH_64 = ('a').repeat(64);
     'kaola-workflow-plan-validator.js:--resume-check': { exitCode: 0, ok: true, planHash: HASH },
     'kaola-workflow-roadmap.js:init-issue': { exitCode: 0, skip: true },
     'git:add': { exitCode: 0 },
+    'kaola-workflow-adaptive-node.js': { exitCode: 0, status: 'exists', dest: '/wt/kaola-workflow/test-project' },
   });
 
   let currentState5b = eofState;
@@ -706,6 +711,7 @@ const PLAN_HASH_64 = ('a').repeat(64);
     'kaola-workflow-plan-validator.js:--resume-check': { exitCode: 0, ok: true, planHash: HASH },
     'kaola-workflow-roadmap.js:init-issue': { exitCode: 0, created: true },
     'git:add': { exitCode: 0 },
+    'kaola-workflow-adaptive-node.js': { exitCode: 0, status: 'mirrored', planHash: HASH, dest: '/wt/kaola-workflow/test-project' },
   });
 
   const result = runHandoff({
@@ -835,6 +841,7 @@ const PLAN_HASH_64 = ('a').repeat(64);
     'kaola-workflow-roadmap.js:init-issue': { exitCode: 0, created: true },
     'git:add': { exitCode: 0 },
     'kaola-workflow-task-mirror.js': { exitCode: 0 },
+    'kaola-workflow-adaptive-node.js': { exitCode: 0, status: 'mirrored', planHash: PLAN_HASH_64, dest: '/wt/kaola-workflow/test-project' },
   });
   const shellStub = (scriptPath, args) => { shelled.push(path.basename(scriptPath)); return inner(scriptPath, args); };
   const result = runHandoff({
@@ -902,6 +909,7 @@ function runDecisionIdCase(planContent, opts) {
     },
     'kaola-workflow-plan-validator.js:--resume-check': { exitCode: 0, ok: true, planHash: PLAN_HASH_64 },
     'kaola-workflow-task-mirror.js': { exitCode: 0 },
+    'kaola-workflow-adaptive-node.js': { exitCode: 0, status: 'mirrored', planHash: PLAN_HASH_64 },
   });
   const shellStub = (scriptPath, args) => {
     if (path.basename(scriptPath) === 'kaola-workflow-plan-validator.js' && (args || []).includes('--freeze')) {
@@ -1041,6 +1049,128 @@ function runDecisionIdCase(planContent, opts) {
     'T9f: D-210-NEXT placeholder never a candidate');
   assert(JSON.stringify(extractDecisionIdCandidates('')) === JSON.stringify([]),
     'T9f: empty content → no candidates');
+}
+
+// ---------------------------------------------------------------------------
+// #335 — handoff step 7 (mirror-project) integration: H1–H3 + T3/T7 re-verify.
+// ---------------------------------------------------------------------------
+
+// Helper: a ready-path runHandoff with the standard in-grammar/auto-run stub set
+// plus a recording shell that captures call order. opts.mirrorResponse overrides
+// the mirror-project canned response. Returns { result, order }.
+function runMirrorHandoffCase(mirrorResponse) {
+  const planContent = makeUnfrozenPlan('auto-run');
+  const stateContent = makeStateContent({ issueNumber: 99 });
+  let readCallCount = 0;
+  const frozenPlanContent = planContent.replace('# Workflow Plan', '<!-- plan_hash: ' + PLAN_HASH_64 + ' -->\n\n# Workflow Plan');
+  const order = [];
+  const inner = makeShellStub({
+    'kaola-workflow-plan-validator.js:--json': { exitCode: 0, result: 'in-grammar', decision: 'auto-run', planHash: PLAN_HASH_64, risk: {} },
+    'kaola-workflow-plan-validator.js:--freeze': { exitCode: 0, result: 'in-grammar', decision: 'auto-run', planHash: PLAN_HASH_64, frozen: true, risk: {} },
+    'kaola-workflow-plan-validator.js:--resume-check': { exitCode: 0, ok: true, planHash: PLAN_HASH_64 },
+    'kaola-workflow-roadmap.js:init-issue': { exitCode: 0, created: true },
+    'git:add': { exitCode: 0 },
+    'kaola-workflow-task-mirror.js': { exitCode: 0 },
+    'kaola-workflow-adaptive-node.js': mirrorResponse,
+  });
+  const shellStub = (scriptPath, args) => {
+    const b = path.basename(scriptPath);
+    if (b === 'kaola-workflow-adaptive-node.js') order.push('shell:mirror-project');
+    return inner(scriptPath, args);
+  };
+  const result = runHandoff({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project',
+    json: true,
+    shell: shellStub,
+    computeNextAction: require('./kaola-workflow-next-action').computeNextAction,
+    resolveModel: () => 'sonnet',
+    readFile: (fpath) => {
+      if (fpath.endsWith('workflow-plan.md')) { readCallCount++; return readCallCount <= 1 ? planContent : frozenPlanContent; }
+      if (fpath.endsWith('workflow-state.md')) return stateContent;
+      return '';
+    },
+    writeFile: (fpath) => { if (fpath.endsWith('workflow-state.md')) order.push('writeFile:state'); },
+    stateMtime: undefined,
+  });
+  return { result, order };
+}
+
+// H1: ready packet carries worktree_mirror echoing the stubbed mirror result.
+{
+  const { result } = runMirrorHandoffCase({ exitCode: 0, status: 'mirrored', planHash: PLAN_HASH_64, dest: '/wt/kaola-workflow/test-project' });
+  assert(result.handoff_status === 'ready_to_run', 'H1: ready_to_run');
+  assert(result.worktree_mirror && result.worktree_mirror.status === 'mirrored', 'H1: worktree_mirror.status===mirrored, got ' + JSON.stringify(result.worktree_mirror));
+  assert(result.worktree_mirror.planHash === PLAN_HASH_64, 'H1: worktree_mirror.planHash echoed');
+  assert(result.worktree_mirror.path === '/wt/kaola-workflow/test-project', 'H1: worktree_mirror.path echoed from dest');
+}
+
+// H1b: skipped (in-place run) → status:'skipped', no planHash/path.
+{
+  const { result } = runMirrorHandoffCase({ exitCode: 0, status: 'skipped', reason: 'no_worktree' });
+  assert(result.worktree_mirror.status === 'skipped' && result.worktree_mirror.reason === 'no_worktree', 'H1b: skipped/no_worktree echoed, got ' + JSON.stringify(result.worktree_mirror));
+}
+
+// H2: mirror shelled STRICTLY AFTER the workflow-state.md write (step 6 → step 7 order).
+{
+  const { order } = runMirrorHandoffCase({ exitCode: 0, status: 'mirrored', planHash: PLAN_HASH_64 });
+  const stateIdx = order.indexOf('writeFile:state');
+  const mirrorIdx = order.indexOf('shell:mirror-project');
+  assert(stateIdx >= 0 && mirrorIdx >= 0, 'H2: both state write and mirror shell happened, got ' + JSON.stringify(order));
+  assert(stateIdx < mirrorIdx, 'H2: mirror-project shelled AFTER the state write, got ' + JSON.stringify(order));
+}
+
+// H3: stubbed mirror REFUSE → handoff STILL ready_to_run (best-effort); status:'failed'.
+{
+  const { result } = runMirrorHandoffCase({ exitCode: 1, result: 'refuse', reason: 'mirror_verify_failed' });
+  assert(result.handoff_status === 'ready_to_run', 'H3: a mirror refuse does NOT flip handoff_status, got ' + result.handoff_status);
+  assert(result.worktree_mirror.status === 'failed', 'H3: worktree_mirror.status===failed on a non-zero mirror, got ' + JSON.stringify(result.worktree_mirror));
+  assert(result.worktree_mirror.reason === 'mirror_verify_failed', 'H3: failure reason surfaced');
+}
+
+// T3-#335: validator refuse → mirror-project NEVER shelled (refuse returns before step 7).
+{
+  let mirrorShelled = false;
+  const planContent = makeUnfrozenPlan('refuse');
+  const stateContent = makeStateContent({ issueNumber: 5 });
+  const result = runHandoff({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project',
+    json: true,
+    shell: (scriptPath) => {
+      if (path.basename(scriptPath) === 'kaola-workflow-adaptive-node.js') mirrorShelled = true;
+      return { exitCode: 1, result: 'refuse', errors: ['leak'], planHash: null };
+    },
+    computeNextAction: require('./kaola-workflow-next-action').computeNextAction,
+    resolveModel: () => 'sonnet',
+    readFile: (fpath) => { if (fpath.endsWith('workflow-state.md')) return stateContent; if (fpath.endsWith('workflow-plan.md')) return planContent; return ''; },
+    writeFile: () => {},
+    stateMtime: undefined,
+  });
+  assert(result.handoff_status === 'plan_invalid', 'T3-#335: plan_invalid on validator refuse');
+  assert(mirrorShelled === false, 'T3-#335: mirror-project NEVER shelled on a pre-step-7 refuse');
+  assert(result.worktree_mirror === undefined, 'T3-#335: no worktree_mirror field on the refuse packet');
+}
+
+// T7-#335: state missing → no shell at all (mirror-project never reached).
+{
+  let mirrorShelled = false;
+  const result = runHandoff({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project',
+    json: true,
+    shell: (scriptPath) => { if (path.basename(scriptPath) === 'kaola-workflow-adaptive-node.js') mirrorShelled = true; return { exitCode: 0 }; },
+    computeNextAction: require('./kaola-workflow-next-action').computeNextAction,
+    resolveModel: () => 'sonnet',
+    readFile: (fpath) => { if (fpath.endsWith('workflow-state.md')) throw new Error('ENOENT'); return ''; },
+    writeFile: () => {},
+    stateMtime: undefined,
+  });
+  assert(result.handoff_status === 'plan_invalid', 'T7-#335: plan_invalid on state missing');
+  assert(mirrorShelled === false, 'T7-#335: mirror-project never shelled when the precondition fails');
 }
 
 // Summary

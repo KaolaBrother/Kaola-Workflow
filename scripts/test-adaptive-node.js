@@ -11,6 +11,7 @@ const {
   checkEvidenceShape,
   validateProjectName,
   runOrient,
+  runMirrorProject,
   runOpenNext,
   runReopenNode,
   runRecordEvidence,
@@ -2182,6 +2183,178 @@ function makeBundleState(opts) {
   assert(Array.isArray(resultOrphan.issueNumbers) && resultOrphan.issueNumbers.length === 2, 'T-bundle-3: orphan refuse carries issueNumbers, got ' + JSON.stringify(resultOrphan.issueNumbers));
   assert(resultOrphan.closurePolicy === 'all_or_nothing', 'T-bundle-3: orphan refuse carries closurePolicy, got ' + resultOrphan.closurePolicy);
   assert(resultOrphan.primaryIssue === 10, 'T-bundle-3: orphan refuse carries primaryIssue, got ' + resultOrphan.primaryIssue);
+}
+
+// ---------------------------------------------------------------------------
+// #335 — runMirrorProject (M1–M6) + orient plan-probe refusals (O1–O3).
+// Pure-core tests with injected io/shell seams (no subprocess, no real fs).
+// ---------------------------------------------------------------------------
+
+// Build an io seam over an in-memory set of "existing" paths + a recorder.
+function makeMirrorIo(existing, calls, stateContent) {
+  const set = new Set(existing);
+  return {
+    set,
+    io: {
+      exists: (p) => { calls.push(['exists', p]); return set.has(p); },
+      readFile: (p) => {
+        calls.push(['readFile', p]);
+        if (p.endsWith('workflow-state.md')) return stateContent;
+        throw new Error('ENOENT ' + p);
+      },
+      copyTree: (src, dst) => { calls.push(['copyTree', src, dst]); set.add(dst); },
+      renameSync: (a, b) => { calls.push(['renameSync', a, b]); set.delete(a); set.add(b); },
+      rmSync: (p) => { calls.push(['rmSync', p]); set.delete(p); },
+      mkdirSync: (d) => { calls.push(['mkdirSync', d]); },
+    },
+  };
+}
+
+const MAIN = '/main';
+const WT = '/wt';
+const STATE_WITH_WT = '## Sink\nworktree_path: ' + WT + '\n';
+const STATE_NO_WT = '## Sink\nbranch: workflow/issue-335\n';
+
+// M1: no worktree_path → ok/skipped(no_worktree); copyTree NEVER called.
+{
+  const calls = [];
+  const { io } = makeMirrorIo([path.join(MAIN, 'kaola-workflow', 'issue-335', 'workflow-state.md')], calls, STATE_NO_WT);
+  const r = runMirrorProject({ project: 'issue-335', mainRoot: MAIN, shell: () => { throw new Error('shell must not run'); }, io });
+  assert(r.result === 'ok' && r.status === 'skipped' && r.reason === 'no_worktree', 'M1: ok/skipped/no_worktree, got ' + JSON.stringify(r));
+  assert(!calls.some(c => c[0] === 'copyTree'), 'M1: copyTree never called on no_worktree');
+}
+
+// M1b: worktree_path recorded but dir missing → ok/skipped(worktree_dir_missing).
+{
+  const calls = [];
+  const { io } = makeMirrorIo([path.join(MAIN, 'kaola-workflow', 'issue-335', 'workflow-state.md')], calls, STATE_WITH_WT);
+  const r = runMirrorProject({ project: 'issue-335', mainRoot: MAIN, shell: () => { throw new Error('no shell'); }, io });
+  assert(r.result === 'ok' && r.status === 'skipped' && r.reason === 'worktree_dir_missing', 'M1b: skipped/worktree_dir_missing, got ' + JSON.stringify(r));
+  assert(r.worktreePath === WT, 'M1b: worktreePath echoed');
+  assert(!calls.some(c => c[0] === 'copyTree'), 'M1b: no copyTree');
+}
+
+// M2: dest plan already present → ok/exists; no copy/rename.
+{
+  const calls = [];
+  const stateMain = path.join(MAIN, 'kaola-workflow', 'issue-335', 'workflow-state.md');
+  const destPlan = path.join(WT, 'kaola-workflow', 'issue-335', 'workflow-plan.md');
+  const { io } = makeMirrorIo([stateMain, WT, destPlan], calls, STATE_WITH_WT);
+  const r = runMirrorProject({ project: 'issue-335', mainRoot: MAIN, shell: () => { throw new Error('no shell'); }, io });
+  assert(r.result === 'ok' && r.status === 'exists', 'M2: ok/exists, got ' + JSON.stringify(r));
+  assert(!calls.some(c => c[0] === 'copyTree'), 'M2: no copyTree when dest exists');
+  assert(!calls.some(c => c[0] === 'renameSync'), 'M2: no renameSync when dest exists');
+}
+
+// M3: happy path — call order copyTree → shell(validator --resume-check) → renameSync.
+{
+  const calls = [];
+  const stateMain = path.join(MAIN, 'kaola-workflow', 'issue-335', 'workflow-state.md');
+  const sourcePlan = path.join(MAIN, 'kaola-workflow', 'issue-335', 'workflow-plan.md');
+  const { io } = makeMirrorIo([stateMain, WT, sourcePlan], calls, STATE_WITH_WT);
+  const shellCalls = [];
+  const shell = (sp, args) => { shellCalls.push([path.basename(sp), args]); return { exitCode: 0, ok: true, planHash: 'h'.repeat(64) }; };
+  const r = runMirrorProject({ project: 'issue-335', mainRoot: MAIN, shell, io });
+  assert(r.result === 'ok' && r.status === 'mirrored' && r.verified === true, 'M3: ok/mirrored/verified, got ' + JSON.stringify(r));
+  assert(r.planHash === 'h'.repeat(64), 'M3: planHash surfaced from resume-check');
+  const order = calls.filter(c => ['copyTree', 'renameSync'].includes(c[0])).map(c => c[0]);
+  assert(JSON.stringify(order) === JSON.stringify(['copyTree', 'renameSync']), 'M3: copyTree before renameSync, got ' + JSON.stringify(order));
+  assert(shellCalls.length === 1 && shellCalls[0][0] === 'kaola-workflow-plan-validator.js' && shellCalls[0][1].includes('--resume-check'), 'M3: shells validator --resume-check, got ' + JSON.stringify(shellCalls));
+  // resume-check ran on the TMP copy, BEFORE the promote.
+  const tmpPlan = path.join(WT, 'kaola-workflow', '.mirror-tmp-issue-335', 'workflow-plan.md');
+  assert(shellCalls[0][1][0] === tmpPlan, 'M3: resume-check targets the tmp copy plan, got ' + shellCalls[0][1][0]);
+}
+
+// M4: verify-fail — resume-check ok:false → refuse mirror_verify_failed, tmp rmSync'd, NO renameSync.
+{
+  const calls = [];
+  const stateMain = path.join(MAIN, 'kaola-workflow', 'issue-335', 'workflow-state.md');
+  const sourcePlan = path.join(MAIN, 'kaola-workflow', 'issue-335', 'workflow-plan.md');
+  const { io } = makeMirrorIo([stateMain, WT, sourcePlan], calls, STATE_WITH_WT);
+  const shell = () => ({ exitCode: 1, ok: false, reason: 'plan_hash mismatch — tampered' });
+  const r = runMirrorProject({ project: 'issue-335', mainRoot: MAIN, shell, io });
+  assert(r.result === 'refuse' && r.reason === 'mirror_verify_failed', 'M4: refuse/mirror_verify_failed, got ' + JSON.stringify(r));
+  assert(/mismatch/.test(r.detail), 'M4: detail carries the resume-check reason');
+  assert(!calls.some(c => c[0] === 'renameSync'), 'M4: renameSync NEVER called on verify-fail');
+  const tmp = path.join(WT, 'kaola-workflow', '.mirror-tmp-issue-335');
+  assert(calls.some(c => c[0] === 'rmSync' && c[1] === tmp), 'M4: tmp rmSync cleaned up');
+}
+
+// M5: source plan missing → refuse source_plan_missing.
+{
+  const calls = [];
+  const stateMain = path.join(MAIN, 'kaola-workflow', 'issue-335', 'workflow-state.md');
+  const { io } = makeMirrorIo([stateMain, WT], calls, STATE_WITH_WT);  // no source plan, WT exists, no dest plan
+  const r = runMirrorProject({ project: 'issue-335', mainRoot: MAIN, shell: () => { throw new Error('no shell'); }, io });
+  assert(r.result === 'refuse' && r.reason === 'source_plan_missing', 'M5: refuse/source_plan_missing, got ' + JSON.stringify(r));
+  assert(/kaola-workflow-adapt/.test(r.repair), 'M5: repair routes to /kaola-workflow-adapt');
+}
+
+// M6: state missing → refuse state_missing (read-only, no copy).
+{
+  const calls = [];
+  const { io } = makeMirrorIo([], calls, '');  // nothing exists
+  const r = runMirrorProject({ project: 'issue-335', mainRoot: MAIN, shell: () => { throw new Error('no shell'); }, io });
+  assert(r.result === 'refuse' && r.reason === 'state_missing', 'M6: refuse/state_missing, got ' + JSON.stringify(r));
+  assert(!calls.some(c => c[0] === 'copyTree'), 'M6: no copyTree on state_missing');
+}
+
+// O1: orient probe — unmirrored worktree → refuse plan_not_mirrored, repair names mirror-project,
+//     and NO shell calls (read-only short-circuit before the resume-check shell).
+{
+  let shellCalled = false;
+  const r = runOrient({
+    planPath: '/wt/kaola-workflow/issue-335/workflow-plan.md',
+    statePath: '/wt/kaola-workflow/issue-335/workflow-state.md',
+    project: 'issue-335',
+    shell: () => { shellCalled = true; return { exitCode: 0 }; },
+    readFile: () => { throw new Error('must not read'); },
+    cacheExists: () => false,
+    planProbe: { planExists: false, isLinkedWorktree: true, mainPlanExists: true, mainPlanPath: '/main/kaola-workflow/issue-335/workflow-plan.md' },
+  });
+  assert(r.result === 'refuse' && r.reason === 'plan_not_mirrored', 'O1: refuse/plan_not_mirrored, got ' + JSON.stringify(r));
+  assert(/mirror-project/.test(r.repair), 'O1: repair names mirror-project');
+  assert(r.mainPlanPath === '/main/kaola-workflow/issue-335/workflow-plan.md', 'O1: mainPlanPath surfaced');
+  assert(shellCalled === false, 'O1: NO shell calls (read-only short-circuit)');
+}
+
+// O2: orient probe — main plan also absent (truly unauthored) → refuse plan_missing.
+{
+  const r = runOrient({
+    planPath: '/wt/kaola-workflow/issue-335/workflow-plan.md',
+    statePath: '/wt/kaola-workflow/issue-335/workflow-state.md',
+    project: 'issue-335',
+    shell: () => { throw new Error('no shell'); },
+    readFile: () => { throw new Error('no read'); },
+    cacheExists: () => false,
+    planProbe: { planExists: false, isLinkedWorktree: true, mainPlanExists: false, mainPlanPath: '/main/kaola-workflow/issue-335/workflow-plan.md' },
+  });
+  assert(r.result === 'refuse' && r.reason === 'plan_missing', 'O2: refuse/plan_missing, got ' + JSON.stringify(r));
+  assert(r.mainPlanPath === null, 'O2: mainPlanPath null when not unmirrored');
+  assert(/kaola-workflow-adapt/.test(r.repair), 'O2: repair routes to author/freeze');
+}
+
+// O3 (regression): NO planProbe injected → legacy tolerant behavior unchanged (returns ok,
+//    shells the validator/next-action as before — proven by the existing orient tests staying
+//    green; here assert the absent-probe path does NOT short-circuit to a refuse).
+{
+  const plan = makePlan(['| impl-core | pending | |', '| impl-other | pending | |']);
+  const r = runOrient({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project',
+    shell: (sp) => {
+      const b = path.basename(sp);
+      if (b === 'kaola-workflow-plan-validator.js') return { exitCode: 0, ok: true };
+      if (b === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', readySet: [], readyPending: [], allDone: false };
+      return { exitCode: 0 };
+    },
+    readFile: (f) => { if (f.endsWith('workflow-plan.md')) return plan; if (f.endsWith('workflow-state.md')) return makeState(); throw new Error('ENOENT ' + f); },
+    writeFile: () => { throw new Error('orient must not write'); },
+    cacheExists: () => false,
+    // planProbe deliberately omitted
+  });
+  assert(r.result === 'ok', 'O3: absent probe preserves the old tolerant ok-result, got ' + JSON.stringify({ result: r.result, reason: r.reason }));
 }
 
 // Summary
