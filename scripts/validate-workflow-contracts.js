@@ -397,6 +397,17 @@ assertIncludes('commands/kaola-workflow-finalize.md', 'subagent_type="contractor
 assertIncludes('commands/kaola-workflow-finalize.md', 'issue_action');
 assertIncludes('commands/kaola-workflow-finalize.md', '--keep-issue-open');
 assertIncludes('commands/kaola-workflow-finalize.md', 'merge-sink-only');
+// #345: the adaptive four-gate merge barrier (the ONLY blocking pre-merge enforcement) must
+// resolve the validator via the kaola_script resolver and run all four gates. A bare
+// `node scripts/kaola-workflow-plan-validator.js …` path is MODULE_NOT_FOUND in a consumer
+// plugin install (no ./scripts dir) → false BLOCK at the most safety-critical seam. Pin the
+// resolved invocation + each gate flag, and ban the bare path so the regression fails the chain.
+assertIncludes('commands/kaola-workflow-finalize.md', 'VALIDATOR="$(kaola_script kaola-workflow-plan-validator.js)"');
+assertIncludes('commands/kaola-workflow-finalize.md', 'node "$VALIDATOR" "$PLAN" --resume-check');
+assertIncludes('commands/kaola-workflow-finalize.md', 'node "$VALIDATOR" "$PLAN" --gate-verify');
+assertIncludes('commands/kaola-workflow-finalize.md', 'node "$VALIDATOR" "$PLAN" --barrier-check');
+assertIncludes('commands/kaola-workflow-finalize.md', 'node "$VALIDATOR" "$PLAN" --verdict-check');
+assertNotIncludes('commands/kaola-workflow-finalize.md', 'node scripts/kaola-workflow-plan-validator.js "$PLAN" --resume-check');
 // #277 M3: assertBefore calls for 'commit -m "chore: finalize {project}"' and
 // 'node "$CLAIM_JS" finalize' DROPPED — those tokens relocated to agents/contractor.md;
 // cross-file ordering is not expressible via assertBefore (single-file only).
@@ -540,6 +551,12 @@ assertIncludes('scripts/kaola-workflow-adaptive-node.js', 'would_orphan_in_progr
 // and the contractor self-attest back-fill flag is wired through claim.js + the contractor profile.
 assertIncludes('scripts/kaola-workflow-adaptive-node.js', 'main-session-direct');
 assertIncludes('commands/kaola-workflow-plan-run.md', 'main-session-direct');
+// #344: every adaptive lifecycle call is `node "$KAOLA_SCRIPTS/…"`; $KAOLA_SCRIPTS must be
+// DEFINED via the kaola_script() resolver before its first use — an undefined handle is
+// MODULE_NOT_FOUND in a consumer plugin install (no local scripts dir). Pin the resolver + the
+// assignment so removing either regresses the chain.
+assertIncludes('commands/kaola-workflow-plan-run.md', 'kaola_script(){');
+assertIncludes('commands/kaola-workflow-plan-run.md', 'KAOLA_SCRIPTS="$(dirname "$(kaola_script kaola-workflow-adaptive-node.js)")"');
 assertIncludes('scripts/kaola-workflow-claim.js', '--attest-contractor-spawn');
 assertIncludes('agents/contractor.md', '--attest-contractor-spawn');
 assertIncludes('install.sh', 'kaola-workflow-plan-validator.js');

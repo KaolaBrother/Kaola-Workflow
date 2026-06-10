@@ -75,11 +75,15 @@ function assertCleanWorktree(mainRoot) {
   assert(!status, 'Worktree must be clean before sink-merge checks out the requested branch');
 }
 
-function assertNoLiveWorkflowFolder(mainRoot, project) {
+function assertNoLiveWorkflowFolder(mainRoot, project, branch) {
   const gitPath = 'kaola-workflow/' + project + '/workflow-state.md';
+  // #346: scope the probe to the BRANCH tip (was `HEAD:`) so this precondition can run BEFORE
+  // the destructive worktree removal + checkout. After checkout HEAD === branch, so `<branch>:`
+  // is equivalent to the old `HEAD:` form; before checkout it correctly inspects the branch.
+  const ref = (branch ? branch : 'HEAD') + ':' + gitPath;
   let committed = false;
   try {
-    execFileSync('git', ['-C', mainRoot, 'cat-file', '-e', 'HEAD:' + gitPath],
+    execFileSync('git', ['-C', mainRoot, 'cat-file', '-e', ref],
       { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
     committed = true;
   } catch (_) {
@@ -93,6 +97,40 @@ function assertNoLiveWorkflowFolder(mainRoot, project) {
       '    then git add kaola-workflow/ && git commit -m "chore: archive ' + project + '" on the feature branch\n' +
       '  Path B (worktree gone): git rm -r kaola-workflow/' + project + '/ on the feature branch, commit, then re-run sink-merge'
     );
+  }
+}
+
+// #346: refuse — with ZERO mutation — when the linked worktree that has `branch` checked out
+// carries uncommitted work. Step 0 used to `removeWorktree --force` BEFORE the preconditions, so a
+// sink that was about to refuse (dirty main root / live folder / unpushed) first DESTROYED the
+// worktree, taking any uncommitted work with it. This guard runs before the destructive removal so
+// a refused sink leaves the worktree (and its uncommitted file) intact.
+function assertWorktreeClean(mainRoot, branch) {
+  let list;
+  try {
+    list = execFileSync('git', ['-C', mainRoot, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' });
+  } catch (_) {
+    return; // no worktree info resolvable → nothing to guard
+  }
+  for (const block of list.split(/\n\n+/)) {
+    const pathLine = block.match(/^worktree (.+)$/m);
+    const branchLine = block.match(/^branch refs\/heads\/(.+)$/m);
+    if (!pathLine || !branchLine || branchLine[1] !== branch) continue;
+    const wt = pathLine[1];
+    let status = '';
+    try {
+      status = execFileSync('git', ['-C', wt, 'status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' }).trim();
+    } catch (_) {
+      status = ''; // worktree unreadable → not our data-loss case; leave to later steps
+    }
+    if (status) {
+      throw new Error(
+        'sink-merge refused: the linked worktree for branch ' + branch + ' (' + wt + ') has uncommitted changes.\n' +
+        'Removing it (Step 0) would destroy that work. Commit or discard the worktree changes, then re-run sink-merge.\n' +
+        'Uncommitted:\n  ' + status.split('\n').join('\n  ')
+      );
+    }
+    return;
   }
 }
 
@@ -365,7 +403,11 @@ function main() {
   assert(!args.keepIssueOpen || args.issue != null,
     'sink-merge: --keep-issue-open requires --issue N (there is no issue to keep open)');
 
-  // Step 0 — Remove worktree (if any) so the branch can be checked out below
+  // #346: resolve roots, then run ALL preconditions BEFORE the destructive worktree removal. The
+  // old Step 0 ran `removeWorktree --force` FIRST (for cwd-independence convenience), so a sink
+  // about to refuse (dirty main root / live folder / unpushed / dirty worktree) had already
+  // destroyed the worktree — taking any uncommitted work with it. Now the worktree is removed ONLY
+  // after every precondition proves the sink can proceed.
   const coordRoot = getCoordRoot();
   const mainRoot = mainRootFromCoord(coordRoot);
   let wtRemovedStatus = 'failed';
@@ -378,16 +420,32 @@ function main() {
       } catch (_) {}
     }
   });
-  {
-    // Pre-chdir to a path OUTSIDE any worktree before removeWorktree:
-    // `git worktree remove` refuses when cwd is inside the worktree being removed.
-    // We chdir to tmpdir (not mainRoot) so that every subsequent git call must
-    // pass `-C mainRoot` explicitly — otherwise it operates on a non-repo cwd
-    // and fails fast. Keeps the script's cwd-independence under test.
-    try { process.chdir(os.tmpdir()); } catch (e) {
-      process.stderr.write('sink-merge: could not chdir before worktree removal: ' + e.message + '\n');
-    }
 
+  // Pre-chdir to a path OUTSIDE any worktree: `git worktree remove` refuses when cwd is inside the
+  // worktree being removed, and chdir-to-tmpdir (not mainRoot) forces every git call to pass
+  // `-C mainRoot` explicitly — keeping the script's cwd-independence under test.
+  try { process.chdir(os.tmpdir()); } catch (e) {
+    process.stderr.write('sink-merge: could not chdir before worktree removal: ' + e.message + '\n');
+  }
+
+  // Step 1 — git fetch (skip if OFFLINE; fatal throw on error)
+  if (!OFFLINE) {
+    execFileSync('git', ['-C', mainRoot, 'fetch', 'origin'], { encoding: 'utf8' });
+  }
+
+  // Step 2 — preconditions, ALL run before any destructive step (#346). Each is checkout-independent
+  // (operates on mainRoot / the branch ref, not the working tree). Any failure throws → exit 1, ZERO
+  // mutation, worktree intact. assertWorktreeClean is the data-loss guard: it refuses if the linked
+  // worktree carries uncommitted work, so a refused sink never destroys that work.
+  assertCleanWorktree(mainRoot);
+  assertNoLiveWorkflowFolder(mainRoot, args.project, args.branch);
+  if (!OFFLINE) assertBranchPushedToUpstream(mainRoot, args.branch);
+  if (!OFFLINE) assertBranchHasNonWorkflowChanges(mainRoot, args.branch);
+  assertWorktreeClean(mainRoot, args.branch);
+
+  // Step 3 — Remove the worktree (only now that every precondition passed) so the branch can be
+  // checked out in the main root below.
+  {
     const folder = readActiveFolders(mainRoot, { excludeClosedIssues: false })
       .find(item => item.project === args.project);
     // Always attempt removeWorktree — even when folder is archived (not found in active folders),
@@ -402,16 +460,8 @@ function main() {
     }
   }
 
-  // Step 1 — git fetch (skip if OFFLINE; fatal throw on error)
-  if (!OFFLINE) {
-    execFileSync('git', ['-C', mainRoot, 'fetch', 'origin'], { encoding: 'utf8' });
-  }
-
-  assertCleanWorktree(mainRoot);
+  // Step 4 — check out the feature branch (worktree now removed, branch ref freed).
   execFileSync('git', ['-C', mainRoot, 'checkout', args.branch], { encoding: 'utf8' });
-  assertNoLiveWorkflowFolder(mainRoot, args.project);
-  if (!OFFLINE) assertBranchPushedToUpstream(mainRoot, args.branch);
-  if (!OFFLINE) assertBranchHasNonWorkflowChanges(mainRoot, args.branch);
 
   // Step 2 — Merge-base skip-check
   // If origin/main doesn't exist (e.g. no remote, or OFFLINE with no cached ref),

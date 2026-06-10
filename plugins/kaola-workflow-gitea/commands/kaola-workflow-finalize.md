@@ -26,10 +26,15 @@ If `workflow_path: adaptive`:
   DIRECTLY (never gate on a piped `| tail`, which masks failure):
   ```bash
   PLAN=kaola-workflow/{project}/workflow-plan.md
-  node scripts/kaola-gitea-workflow-plan-validator.js "$PLAN" --resume-check --json; RC=$?
-  node scripts/kaola-gitea-workflow-plan-validator.js "$PLAN" --gate-verify --json; GV=$?
-  node scripts/kaola-gitea-workflow-plan-validator.js "$PLAN" --barrier-check --json; BC=$?
-  node scripts/kaola-gitea-workflow-plan-validator.js "$PLAN" --verdict-check --json; VC=$?
+  # Resolve the validator via the kaola_script() resolver (#345): a bare relative
+  # validator path is MODULE_NOT_FOUND in a consumer plugin install (no local scripts
+  # dir), turning the only blocking pre-merge enforcement into a false BLOCK.
+  kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./plugins/kaola-workflow-gitea/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitea/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitea/scripts/$_n" "./plugins/kaola-workflow-gitea/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
+  VALIDATOR="$(kaola_script kaola-gitea-workflow-plan-validator.js)"
+  node "$VALIDATOR" "$PLAN" --resume-check --json; RC=$?
+  node "$VALIDATOR" "$PLAN" --gate-verify --json; GV=$?
+  node "$VALIDATOR" "$PLAN" --barrier-check --json; BC=$?
+  node "$VALIDATOR" "$PLAN" --verdict-check --json; VC=$?
   if [ "$RC" -ne 0 ] || [ "$GV" -ne 0 ] || [ "$BC" -ne 0 ] || [ "$VC" -ne 0 ]; then
     echo "BLOCKED: adaptive barrier failed (resume=$RC gate=$GV barrier=$BC verdict=$VC) — run /kaola-workflow-plan-run first"; exit 1
   fi

@@ -1261,7 +1261,7 @@ function runWriteHalt(opts) {
 //       the next barrier attributes ONLY the repair.
 // ---------------------------------------------------------------------------
 function runReopenNode(opts) {
-  const { planPath, project, nodeId, shell, readFile, writeFile, cacheExists, unlink } = opts;
+  const { planPath, project, nodeId, shell, readFile, writeFile, cacheExists, unlink, readdir } = opts;
   // #334: a downstream non-delegable main-session-gate is reset like the reviewer gates so a
   // plan-repair to implementation re-triggers the visual check (it post-dominates N and folds
   // complete|in_progress → pending; the orphan guard at (3b) tolerates it for the same reason).
@@ -1376,6 +1376,37 @@ function runReopenNode(opts) {
     }
   }
 
+  // (4b) #349: remove stale gate VERDICT evidence for the reset gates. A gate is folded back to
+  // pending precisely because its prior verdict no longer applies to the changed tree; leaving
+  // its `.cache/<gate-id>.md` in place lets a later close-without-fresh-dispatch (orchestrator
+  // error, resume confusion, or the no-op-close path) pass Finalization's blocking --verdict-check
+  // on a STALE `verdict: pass` / `findings_blocking: 0` — shipping repaired code unreviewed.
+  // record-evidence writes the file verbatim as `<nodeId>.md` (NOT sanitized like the baseline).
+  // For a fanout adversarial-verifier gate, the verdict-check globs `.cache/adversarial-verifier-*.md`
+  // per-instance siblings — purge those too (once).
+  const cacheDir = path.dirname(cacheBaseFile(nodeId));
+  const gateById = new Map(nodes.map(n => [n.id, n]));
+  const evidenceRemoved = [];
+  let fanoutSiblingsPurged = false;
+  for (const gid of gatesReset) {
+    const ev = path.join(cacheDir, gid + '.md');
+    if ((cacheExists ? cacheExists(ev) : false) && typeof unlink === 'function') {
+      unlink(ev);
+      evidenceRemoved.push(gid + '.md');
+    }
+    const g = gateById.get(gid);
+    if (g && g.role === 'adversarial-verifier' && g.shape && g.shape.kind === 'fanout'
+        && !fanoutSiblingsPurged && typeof readdir === 'function') {
+      for (const name of readdir(cacheDir)) {
+        if (typeof name === 'string' && /^adversarial-verifier-.*\.md$/.test(name) && typeof unlink === 'function') {
+          unlink(path.join(cacheDir, name));
+          evidenceRemoved.push(name);
+        }
+      }
+      fanoutSiblingsPurged = true;
+    }
+  }
+
   // Reopen N pending→in_progress, persist the plan (so commit-node --start sees the row),
   // then re-record the fresh baseline at the current merged state.
   const reopen = spliceLedgerNode(planContent, nodeId, 'in_progress', { allowFrom: ['pending'] });
@@ -1394,7 +1425,7 @@ function runReopenNode(opts) {
   reopenTransitions.push(buildTransition(nodeId, 'in_progress', 'reopen-node'));
 
   return {
-    result: 'ok', reopened: nodeId, gatesReset, gatesFolded, baselinesRemoved, baselineRecorded: true,
+    result: 'ok', reopened: nodeId, gatesReset, gatesFolded, baselinesRemoved, evidenceRemoved, baselineRecorded: true,
     taskTransitions: reopenTransitions,
     taskMirror: refreshTaskMirror(project, shell),
   };
@@ -1547,6 +1578,7 @@ function main() {
       result = runReopenNode({
         planPath, statePath, project, nodeId, shell, readFile, writeFile, cacheExists,
         unlink: (f) => { try { fs.unlinkSync(f); } catch (_) {} },
+        readdir: (d) => { try { return fs.readdirSync(d); } catch (_) { return []; } },
       });
     }
   } else {

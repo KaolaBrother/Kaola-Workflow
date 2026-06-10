@@ -477,6 +477,11 @@ assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`, 'would_o
 // #338: anti-drift pins — finalize sink row main-session-direct + contractor self-attest back-fill.
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`, 'main-session-direct');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'main-session-direct');
+// #344: the Codex plan-run SKILL references $KAOLA_SCRIPTS for every lifecycle call; it must
+// DEFINE KAOLA_SCRIPTS (plugin-cache find-fallback) before its first use — undefined outside
+// this repo. Pin the assignment + the cache probe so removal regresses the chain.
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'KAOLA_SCRIPTS="plugins/kaola-workflow/scripts"');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, "-path '*/kaola-workflow/*/scripts/kaola-workflow-adaptive-node.js'");
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, '--attest-contractor-spawn');
 assertIncludes(`${pluginRoot}/agents/contractor.toml`, '--attest-contractor-spawn');
 // #281: parallel-batch aggregator claude-plugin copy presence

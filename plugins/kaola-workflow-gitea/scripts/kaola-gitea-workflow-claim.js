@@ -130,9 +130,13 @@ function parseArgs(argv) {
   const envTargets = process.env.KAOLA_TARGET_ISSUES;
   if (args.targetIssues == null && envTargets) args.targetIssues = envTargets;
   if (typeof args.targetIssues === 'string') {
-    args.targetIssues = args.targetIssues.split(',')
-      .map(s => parseInt(s.trim(), 10))
-      .filter(n => Number.isFinite(n) && n > 0);
+    // #370: a token like '4x' must REFUSE, not silently coerce (parseInt('4x')===4) or drop.
+    const rawTokens = args.targetIssues.split(',').map(s => s.trim()).filter(s => s.length > 0);
+    const invalid = rawTokens.filter(t => !/^\d+$/.test(t) || parseInt(t, 10) <= 0);
+    if (invalid.length) args.targetIssuesInvalidTokens = invalid;
+    args.targetIssues = rawTokens
+      .filter(t => /^\d+$/.test(t) && parseInt(t, 10) > 0)
+      .map(t => parseInt(t, 10));
     // sort ascending + dedupe — load-bearing for bundle_id/collision detection
     args.targetIssues = Array.from(new Set(args.targetIssues)).sort((a, b) => a - b);
   }
@@ -667,7 +671,17 @@ function removeBundleLabel(issueIid, project) {
 function claimBundle(root, opts) {
   const { targets, project, branch } = opts;
   // applied: track what was provisioned so rollback can undo exactly what succeeded
-  const applied = { dir: false, worktree: false, worktreePath: '', labeled: [] };
+  const applied = { dir: false, worktree: false, worktreePath: '', labeled: [], inPlaceBranch: false, baseBranch: '' };
+
+  // #370: bundle runs now get the SAME provisioning hardening as single-issue claimProject.
+  // Dirty-tree gate (NATIVE=0 in-place mode): refuse BEFORE any mutation.
+  const headBranch = inPlaceHead(root);
+  const wouldInPlace = !OFFLINE && hasGitHistory(root) && !WORKTREE_NATIVE;
+  if (wouldInPlace && headBranch !== 'HEAD' && headBranch !== '' && treeDirty(root)) {
+    return { status: 'dirty_tree_refused', claim: 'none', issue: targets[0], issue_numbers: targets, project,
+      reasoning: 'working tree has uncommitted changes; refusing to create the in-place bundle feature branch (KAOLA_WORKTREE_NATIVE=0). Commit or stash, or use a worktree.' };
+  }
+
   let claimErr = null;
   try {
     // Step 2: mkdir projectDir (EEXIST + stateFile present -> conflict)
@@ -683,12 +697,44 @@ function claimBundle(root, opts) {
     }
     applied.dir = true;
 
-    // Step 3: provisionWorktree — bundle lane is adaptive-only, worktree suppressed (matches
-    // adaptive single-issue behavior). Do NOT provision for the adaptive path.
+    // Step 3 (#370): provision a worktree exactly like claimProject — the prior "matches adaptive
+    // single-issue" suppression was false (claimProject provisions for ALL paths incl. adaptive, #264).
     let worktreePath = '';
     let worktreeError = '';
+    if (!OFFLINE && WORKTREE_NATIVE && hasGitHistory(root)) {
+      try {
+        worktreePath = provisionWorktree(root, project, branch).path;
+        applied.worktree = true;
+        applied.worktreePath = worktreePath;
+      } catch (e) { worktreeError = (e && e.message) || String(e); }
+    }
 
-    // Step 4: writeState with primary + bundle fields
+    // In-place branch creation (NATIVE=0): create/checkout the bundle feature branch + record
+    // base_branch so cmdRelease's #260 restore can run (the prior path recorded branch but never created it).
+    let baseBranch = '';
+    let inPlaceNote = '';
+    if (wouldInPlace) {
+      if (headBranch === 'HEAD' || headBranch === '') {
+        inPlaceNote = 'detached HEAD: skipped in-place branch creation (record-only)';
+      } else {
+        try {
+          const existedBefore = branchExists(root, branch);
+          if (existedBefore) {
+            execFileSync('git', ['-C', root, 'checkout', branch], { stdio: ['ignore', 'ignore', 'ignore'] });
+          } else {
+            execFileSync('git', ['-C', root, 'checkout', '-b', branch], { stdio: ['ignore', 'ignore', 'ignore'] });
+          }
+          baseBranch = (headBranch && headBranch !== 'HEAD' && headBranch !== branch) ? headBranch : '';
+          applied.inPlaceBranch = !existedBefore;
+          applied.baseBranch = baseBranch;
+        } catch (e) {
+          inPlaceNote = 'in-place branch checkout failed: ' + ((e && e.message) || String(e));
+        }
+      }
+    }
+
+    // Step 4: writeState with primary + bundle fields (base_branch added per #370; writeState
+    // derives run_posture from worktree_path).
     const projectInfo = discoverProjectSafe();
     writeState(root, {
       project,
@@ -700,12 +746,24 @@ function claimBundle(root, opts) {
       sink: opts.sink || 'merge',
       worktree_path: worktreePath,
       worktree_error: worktreeError,
+      base_branch: baseBranch,
       workflow_path: 'adaptive',
       runtime: opts.runtime || 'claude',
       status: 'active',
       full_name: projectInfo.full_name,
       project_html_url: projectInfo.html_url
     });
+
+    // #370: planner self-attest back-fill on the bundle path (mirror of claimProject's #280 block).
+    if (opts.attestPlannerSpawn) {
+      try {
+        const cacheDir = path.join(root, 'kaola-workflow', project, '.cache');
+        fs.mkdirSync(cacheDir, { recursive: true });
+        const ts = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+        const entry = JSON.stringify({ ts, agent_type: 'workflow-planner', agent_id: 'claim-backfill', cwd: root });
+        fs.appendFileSync(path.join(cacheDir, 'dispatch-log.jsonl'), entry + '\n');
+      } catch (_) { /* fail-open: attestation is warn-first */ }
+    }
 
     // Step 5: per-member hard add-label (addBundleLabel throws on add-label failure,
     // enabling the catch block to drive all-or-nothing rollback).
@@ -716,7 +774,7 @@ function claimBundle(root, opts) {
       applied.labeled.push(n);
     }
 
-    return {
+    return Object.assign({
       status: 'acquired',
       verdict: 'green',
       claim: 'acquired',
@@ -726,7 +784,10 @@ function claimBundle(root, opts) {
       bundle_id: project,
       branch,
       worktree_path: worktreePath
-    };
+    },
+    worktreeError ? { worktree_error: worktreeError } : {},
+    baseBranch ? { base_branch: baseBranch } : {},
+    inPlaceNote ? { inPlaceNote } : {});
   } catch (err) {
     claimErr = err;
     // REVERSE-ORDER teardown
@@ -746,6 +807,17 @@ function claimBundle(root, opts) {
     if (applied.worktree) {
       try {
         removeWorktree(root, project, { worktree_path: applied.worktreePath });
+      } catch (_) {
+        rollbackOk = false;
+      }
+    }
+    // b2. (#370) Restore the in-place branch we created: checkout the base (or default) and delete
+    //     the bundle branch, so an all-or-nothing rollback leaves no orphan feature branch.
+    if (applied.inPlaceBranch) {
+      try {
+        const target = applied.baseBranch || defaultBranch(root);
+        execFileSync('git', ['-C', root, 'checkout', target], { stdio: ['ignore', 'ignore', 'ignore'] });
+        execFileSync('git', ['-C', root, 'branch', '-D', branch], { stdio: ['ignore', 'ignore', 'ignore'] });
       } catch (_) {
         rollbackOk = false;
       }
@@ -782,14 +854,21 @@ function claimBundle(root, opts) {
 // KAOLA_BUNDLE_MAX_ISSUES default 4; bundle lane is adaptive-only.
 function claimExplicitBundle(root, args) {
   const targets = args.targetIssues;
+  // Step 0 (#370): refuse malformed tokens (echo the offender) BEFORE the empty check.
+  if (Array.isArray(args.targetIssuesInvalidTokens) && args.targetIssuesInvalidTokens.length) {
+    return { status: 'target_set_invalid_token', claim: 'none', project: null, issue: null,
+      reasoning: '--target-issues contains invalid token(s): ' + args.targetIssuesInvalidTokens.join(', ') +
+        ' — each target must be a positive integer' };
+  }
   // Step 1: empty/missing
   if (!Array.isArray(targets) || targets.length === 0) {
     return { status: 'target_set_empty', claim: 'none', project: null, issue: null,
       reasoning: '--target-issues <A,B,...> required' };
   }
-  // Step 2: cap
+  // Step 2: cap. #370: clamp KAOLA_BUNDLE_MAX_ISSUES to a documented HARD ceiling.
+  const BUNDLE_HARD_CEILING = 10;
   const maxRaw = parseInt(process.env.KAOLA_BUNDLE_MAX_ISSUES || '4', 10);
-  const max = (Number.isFinite(maxRaw) && maxRaw > 0) ? maxRaw : 4;
+  const max = Math.min((Number.isFinite(maxRaw) && maxRaw > 0) ? maxRaw : 4, BUNDLE_HARD_CEILING);
   if (targets.length > max) {
     return { status: 'target_set_too_large', claim: 'none', project: null, issue: null,
       reasoning: 'bundle of ' + targets.length + ' exceeds KAOLA_BUNDLE_MAX_ISSUES=' + max };
@@ -859,7 +938,8 @@ function claimExplicitBundle(root, args) {
     project,
     branch,
     sink: args.sink || process.env.KAOLA_SINK || 'merge',
-    runtime: args.runtime || 'claude'
+    runtime: args.runtime || 'claude',
+    attestPlannerSpawn: args.attestPlannerSpawn // #370: honor the planner attest back-fill on the bundle path
   });
 }
 

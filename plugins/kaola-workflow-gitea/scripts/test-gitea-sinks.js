@@ -654,6 +654,31 @@ const sinkScript = path.join(__dirname, 'kaola-gitea-workflow-sink-merge.js');
   console.log('dirty-worktree guard subprocess test passed');
 }
 
+// #346: a refused sink must NOT destroy the linked worktree's uncommitted work. The old Step 0
+// `removeWorktree --force` ran BEFORE the preconditions, so a sink about to refuse first nuked the
+// worktree. Provision a linked worktree on the feature branch, dirty a TRACKED file in it, run
+// sink-merge → assert refusal + the worktree (and its uncommitted change) still present.
+{
+  const sinkScript = path.join(__dirname, 'kaola-gitea-workflow-sink-merge.js');
+  const project = 'test-gt-wt-dirty';
+  const { root, branch } = setupRealRepo('wt-dirty-gt-test', project);
+  const wtPath = path.join(path.dirname(root), path.basename(root) + '-linked-wt');
+  execFileSync('git', ['-C', root, 'worktree', 'add', wtPath, branch], { encoding: 'utf8' });
+  fs.writeFileSync(path.join(wtPath, 'feature.md'), 'precious uncommitted edit');
+  const result = spawnSync(process.execPath, [sinkScript, '--project', project, '--branch', branch], {
+    cwd: root,
+    env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' },
+    encoding: 'utf8'
+  });
+  assert(result.status !== 0, `#346 wt-dirty: expected refusal (nonzero), got ${result.status}. stderr: ${result.stderr}`);
+  assert((result.stderr || '').includes('uncommitted changes'),
+    `#346 wt-dirty: expected the linked-worktree-dirty refusal, got: ${result.stderr}`);
+  assert(fs.existsSync(wtPath) && fs.readFileSync(path.join(wtPath, 'feature.md'), 'utf8') === 'precious uncommitted edit',
+    '#346 wt-dirty: a refused sink MUST leave the worktree + its uncommitted change intact (zero destruction)');
+  execFileSync('git', ['-C', root, 'worktree', 'remove', '--force', wtPath], { encoding: 'utf8' });
+  console.log('#346 worktree-dirty preserves-worktree subprocess test passed');
+}
+
 // maybeAutoMergeFromConfig tests
 {
   let forgeArgs = null;

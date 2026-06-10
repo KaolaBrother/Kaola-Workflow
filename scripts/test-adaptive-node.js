@@ -1915,6 +1915,72 @@ function makeState(opts) {
   assert(shelled.includes('kaola-workflow-commit-node.js'), '#308 reopen: fresh baseline (commit-node --start) recorded for impl');
 }
 
+// #349: reopen-node purges stale GATE verdict evidence (.cache/<gate-id>.md) for each reset gate,
+// so a later close-without-fresh-dispatch cannot pass Finalization's --verdict-check on a STALE
+// `verdict: pass`. The reopened node's OWN evidence is left (it will be re-recorded on re-impl).
+{
+  const planNodes = [
+    '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| impl | tdd-guide | a | scripts/b.js | 1 | sequence |',
+    '| review | code-reviewer | impl | — | 1 | sequence |',
+    '| finalize | finalize | review | — | 1 | sequence |',
+  ];
+  let planContent = makePlan([
+    '| a | complete | |', '| impl | complete | |', '| review | complete | |', '| finalize | complete | |',
+  ], planNodes);
+  const removed = [];
+  // barrier-base baselines present AND the gate evidence review.md + node evidence impl.md present.
+  const present = new Set(['barrier-base-impl', 'barrier-base-review', 'review.md', 'impl.md']);
+  const result = runReopenNode({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    project: 'test-project', nodeId: 'impl',
+    shell: (sp) => (path.basename(sp) === 'kaola-workflow-commit-node.js' ? { exitCode: 0, result: 'ok' } : { exitCode: 1 }),
+    readFile: (f) => { if (f.endsWith('workflow-plan.md')) return planContent; throw new Error('ENOENT ' + f); },
+    writeFile: (f, c) => { if (f.endsWith('workflow-plan.md')) planContent = c; },
+    cacheExists: (f) => present.has(path.basename(f)),
+    unlink: (f) => removed.push(path.basename(f)),
+    readdir: () => [],
+  });
+  assert(result.result === 'ok', '#349: reopen ok, got ' + JSON.stringify(result));
+  assert(removed.includes('review.md'), '#349: stale gate evidence review.md deleted, got ' + JSON.stringify(removed));
+  assert(result.evidenceRemoved && result.evidenceRemoved.includes('review.md'),
+    '#349: result.evidenceRemoved names review.md, got ' + JSON.stringify(result.evidenceRemoved));
+  assert(!removed.includes('impl.md'),
+    "#349: the reopened node's OWN evidence (impl.md) is NOT purged — only reset GATES, got " + JSON.stringify(removed));
+}
+
+// #349: a reset FANOUT adversarial-verifier gate → purge the per-instance
+// .cache/adversarial-verifier-*.md siblings the fanout verdict-check globs (not keyed by node id).
+{
+  const planNodes = [
+    '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| impl | tdd-guide | a | scripts/b.js | 1 | sequence |',
+    '| av | adversarial-verifier | impl | — | 3 | fanout(verify) |',
+    '| finalize | finalize | av | — | 1 | sequence |',
+  ];
+  let planContent = makePlan([
+    '| a | complete | |', '| impl | complete | |', '| av | complete | |', '| finalize | complete | |',
+  ], planNodes);
+  const removed = [];
+  const present = new Set(['barrier-base-impl', 'barrier-base-av', 'av.md']);
+  const result = runReopenNode({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    project: 'test-project', nodeId: 'impl',
+    shell: (sp) => (path.basename(sp) === 'kaola-workflow-commit-node.js' ? { exitCode: 0, result: 'ok' } : { exitCode: 1 }),
+    readFile: (f) => { if (f.endsWith('workflow-plan.md')) return planContent; throw new Error('ENOENT ' + f); },
+    writeFile: (f, c) => { if (f.endsWith('workflow-plan.md')) planContent = c; },
+    cacheExists: (f) => present.has(path.basename(f)),
+    unlink: (f) => removed.push(path.basename(f)),
+    readdir: () => ['adversarial-verifier-0.md', 'adversarial-verifier-1.md', 'unrelated.md'],
+  });
+  assert(result.result === 'ok', '#349 fanout: reopen ok, got ' + JSON.stringify(result));
+  assert(result.gatesReset.includes('av'), '#349 fanout: av is the reset post-dominating gate, got ' + JSON.stringify(result.gatesReset));
+  assert(removed.includes('adversarial-verifier-0.md') && removed.includes('adversarial-verifier-1.md'),
+    '#349 fanout: per-instance adversarial-verifier-*.md siblings purged, got ' + JSON.stringify(removed));
+  assert(!removed.includes('unrelated.md'),
+    '#349 fanout: unrelated .cache files left untouched, got ' + JSON.stringify(removed));
+}
+
 // #308: runReopenNode refuses a non-complete node (only a complete node may be reopened).
 {
   const planNodes = [

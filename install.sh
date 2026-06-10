@@ -492,27 +492,24 @@ model_for_placeholder() {
 # to the resolver's next precedence step).
 emit_agent_model_manifest() {
   local manifest_file="$AGENTS_DIR/.kaola-agent-models.json"
-  local first=1
-  local json_body=""
+  local pairs=()
   for agent in "${REQUIRED_AGENTS[@]}"; do
     local model
     model="$(resolve_agent_model_for_install "$agent")"
     if [[ -z "$model" ]]; then
       continue
     fi
-    if [[ "$first" -eq 1 ]]; then
-      json_body="  \"$agent\": \"$model\""
-      first=0
-    else
-      json_body="$json_body,
-  \"$agent\": \"$model\""
-    fi
+    pairs+=("$agent" "$model")
   done
-  if [[ "$first" -eq 1 ]]; then
+  # #363: encode the manifest via node (guaranteed present — the product is node scripts) so a
+  # model value containing a quote or backslash yields VALID JSON. The prior string-concat builder
+  # had no escaping, so such a value corrupted ~/.claude/agents/.kaola-agent-models.json (consumed
+  # by the runtime resolve-agent-model chain).
+  if [[ "${#pairs[@]}" -eq 0 ]]; then
     # All agents resolved to inherit/empty — write empty object.
     printf '{}\n' > "$manifest_file"
   else
-    printf '{\n%s\n}\n' "$json_body" > "$manifest_file"
+    node -e 'const fs=require("fs");const out=process.argv[1];const a=process.argv.slice(2);const o={};for(let i=0;i<a.length;i+=2)o[a[i]]=a[i+1];fs.writeFileSync(out,JSON.stringify(o,null,2)+"\n");' "$manifest_file" "${pairs[@]}"
   fi
   echo "Installed agent model manifest: $manifest_file"
 }
@@ -545,9 +542,17 @@ render_command_file() {
     for placeholder in "${placeholders[@]}"; do
       if [[ "$rendered" == *"{$placeholder}"* ]]; then
         model="$(model_for_placeholder "$placeholder")"
-        if [[ -z "$model" && "$rendered" == *"model=\"{$placeholder}\""* ]]; then
-          skip_line=1
-          break
+        if [[ -z "$model" ]]; then
+          if [[ "$rendered" == *"model=\"{$placeholder}\""* ]]; then
+            # inherit/empty model in the frontmatter model="{X}" context → drop the line (intended).
+            skip_line=1
+            break
+          fi
+          # #363: an inherit/empty model in ANY OTHER context would silently empty the placeholder
+          # and corrupt prose. Fail loudly instead of producing a corrupted command file.
+          echo "Install error: placeholder {$placeholder} resolved to empty (inherit) in a non-model context in $(basename "$source_file"):" >&2
+          echo "  $line" >&2
+          exit 1
         fi
         rendered="${rendered//\{$placeholder\}/$model}"
       fi
@@ -590,46 +595,51 @@ fi
 mkdir -p "$SUPPORT_SCRIPTS_DIR"
 for script_name in "${SUPPORT_SCRIPT_NAMES[@]}"; do
   script_file="$SOURCE_SCRIPTS_DIR/$script_name"
-  if [[ -f "$script_file" ]]; then
-    cp "$script_file" "$SUPPORT_SCRIPTS_DIR/$script_name"
-    chmod +x "$SUPPORT_SCRIPTS_DIR/$script_name"
-    echo "Installed support script: $SUPPORT_SCRIPTS_DIR/$script_name"
+  # #363: fail CLOSED — an allowlisted name missing from source is a bug (the 5.4.0 incident class),
+  # not something to silently skip (which previously installed nothing yet verified green on forges).
+  if [[ ! -f "$script_file" ]]; then
+    echo "Install error: allowlisted support script missing from source: $script_file" >&2
+    exit 1
   fi
+  cp "$script_file" "$SUPPORT_SCRIPTS_DIR/$script_name"
+  chmod +x "$SUPPORT_SCRIPTS_DIR/$script_name"
+  echo "Installed support script: $SUPPORT_SCRIPTS_DIR/$script_name"
 done
 
 mkdir -p "$SUPPORT_HOOKS_DIR"
 for hook_name in "${SUPPORT_HOOK_NAMES[@]}"; do
   hook_file="$SOURCE_HOOKS_DIR/$hook_name"
-  if [[ -f "$hook_file" ]]; then
-    cp "$hook_file" "$SUPPORT_HOOKS_DIR/$hook_name"
-    chmod +x "$SUPPORT_HOOKS_DIR/$hook_name"
-    echo "Installed support hook: $SUPPORT_HOOKS_DIR/$hook_name"
+  # #363: fail CLOSED on a missing allowlisted hook source (same rationale as the support scripts).
+  if [[ ! -f "$hook_file" ]]; then
+    echo "Install error: allowlisted support hook missing from source: $hook_file" >&2
+    exit 1
   fi
+  cp "$hook_file" "$SUPPORT_HOOKS_DIR/$hook_name"
+  chmod +x "$SUPPORT_HOOKS_DIR/$hook_name"
+  echo "Installed support hook: $SUPPORT_HOOKS_DIR/$hook_name"
 done
 
 # Install hooks.json with $CLAUDE_PLUGIN_ROOT rewritten to absolute install path.
 # Manual install does not set CLAUDE_PLUGIN_ROOT, so the placeholder is replaced
 # with $SUPPORT_DIR (e.g. ~/.claude/kaola-workflow) at install time.
 if [[ -f "$SOURCE_HOOKS_DIR/hooks.json" ]]; then
-  python3 - "$SOURCE_HOOKS_DIR/hooks.json" "$SUPPORT_HOOKS_DIR/hooks.json" "$SUPPORT_DIR" <<'PY' 2>/dev/null || \
-    sed -e "s|\${CLAUDE_PLUGIN_ROOT}|$SUPPORT_DIR|g" \
-        -e "s|\$CLAUDE_PLUGIN_ROOT|$SUPPORT_DIR|g" \
-        "$SOURCE_HOOKS_DIR/hooks.json" > "$SUPPORT_HOOKS_DIR/hooks.json"
-import json, sys
-src, dst, root = sys.argv[1], sys.argv[2], sys.argv[3]
-with open(src) as f:
-    data = json.load(f)
-def rewrite(obj):
-    if isinstance(obj, dict):
-        return {k: rewrite(v) for k, v in obj.items()}
-    if isinstance(obj, list):
-        return [rewrite(x) for x in obj]
-    if isinstance(obj, str):
-        return obj.replace("${CLAUDE_PLUGIN_ROOT}", root).replace("$CLAUDE_PLUGIN_ROOT", root)
-    return obj
-with open(dst, "w") as f:
-    json.dump(rewrite(data), f, indent=2)
-PY
+  # #363: rewrite via node (guaranteed present) and FAIL LOUDLY. The prior python3 heredoc swallowed
+  # all errors (2>/dev/null) and fell back to a raw `sed` substitution that mangled JSON when
+  # $SUPPORT_DIR contained sed-special chars (| or &). node does proper JSON parse + string replace
+  # and exits non-zero on any failure (no silent corruption, no sed-metachar breakage).
+  node -e '
+    const fs = require("fs");
+    const [src, dst, root] = process.argv.slice(1);
+    const rewrite = (o) =>
+      Array.isArray(o) ? o.map(rewrite)
+      : (o && typeof o === "object") ? Object.fromEntries(Object.entries(o).map(([k, v]) => [k, rewrite(v)]))
+      : (typeof o === "string") ? o.split("${CLAUDE_PLUGIN_ROOT}").join(root).split("$CLAUDE_PLUGIN_ROOT").join(root)
+      : o;
+    fs.writeFileSync(dst, JSON.stringify(rewrite(JSON.parse(fs.readFileSync(src, "utf8"))), null, 2) + "\n");
+  ' "$SOURCE_HOOKS_DIR/hooks.json" "$SUPPORT_HOOKS_DIR/hooks.json" "$SUPPORT_DIR" || {
+    echo "Install error: failed to render $SUPPORT_HOOKS_DIR/hooks.json (node rewrite failed)" >&2
+    exit 1
+  }
   echo "Installed hooks config: $SUPPORT_HOOKS_DIR/hooks.json"
 fi
 
@@ -803,17 +813,15 @@ for agent in "${REQUIRED_AGENTS[@]}"; do
   verify_installed_file "$AGENTS_DIR/$agent.md" "agent" || verification_failed=1
 done
 
+# #363: verify fails CLOSED for ALL forges. The prior `continue` skipped verification for
+# gitlab/gitea when the SOURCE file was absent, so a typo'd allowlist entry installed nothing yet
+# verified green (only github failed closed). The copy loops above now error on a missing source,
+# so by here every allowlisted name must be present + executable on every forge.
 for script_name in "${SUPPORT_SCRIPT_NAMES[@]}"; do
-  if [[ ( "$FORGE" = "gitlab" || "$FORGE" = "gitea" ) && ! -f "$SOURCE_SCRIPTS_DIR/$script_name" ]]; then
-    continue
-  fi
   verify_executable_file "$SUPPORT_SCRIPTS_DIR/$script_name" "support script" || verification_failed=1
 done
 
 for hook_name in "${SUPPORT_HOOK_NAMES[@]}"; do
-  if [[ ( "$FORGE" = "gitlab" || "$FORGE" = "gitea" ) && ! -f "$SOURCE_HOOKS_DIR/$hook_name" ]]; then
-    continue
-  fi
   verify_executable_file "$SUPPORT_HOOKS_DIR/$hook_name" "support hook" || verification_failed=1
 done
 
