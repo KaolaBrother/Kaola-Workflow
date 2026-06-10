@@ -473,6 +473,8 @@ still be pairwise-disjoint); the executor runs at most `FANOUT_CAP` at once and 
 `top-up`. `test_thrash` ≥ 3, file overflow declared+1 / absolute backstop of 6, the static loop
 bound — enforced per node at the barrier.
 
+`KAOLA_FANOUT_CAP_READONLY` (default 8) is the **read-only** batch cap, separate from the write-side `FANOUT_CAP`: read-only members (verification/research fan-outs) are zero-blast-radius — no worktrees, no writes, evidence recorded parent-side — so `open-batch` and `top-up` pick the cap by batch kind and the cheap half of the system is not throttled to the conservative write cap. Write-role frontiers keep `FANOUT_CAP` (and serial-degrade today).
+
 ## Completion
 
 Completion begins only after the `finalize` sink row has been closed and `close-and-open-next`

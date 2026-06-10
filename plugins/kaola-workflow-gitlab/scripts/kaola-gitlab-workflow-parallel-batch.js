@@ -387,9 +387,27 @@ function listInProgress(ledger) {
 // 6. shell commit-node --node-id id --start per member (idempotent baseline).
 // 7. write manifest state:'open' LAST.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// appendBatchTiming (#373 / D1) — best-effort wall-clock telemetry sidecar (batch
+// member lifecycle). Appends ONE JSON line per transition to
+// kaola-workflow/{project}/.cache/node-timings.jsonl. Append-only; NEVER throws — a
+// timings write failure must never refuse or alter a transition.
+// ---------------------------------------------------------------------------
+function appendBatchTiming(planPath, node, event) {
+  try {
+    const fs = require('fs');
+    const cacheDir = path.join(path.dirname(planPath), '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.appendFileSync(
+      path.join(cacheDir, 'node-timings.jsonl'),
+      JSON.stringify({ node: node, event: event, ts: new Date().toISOString() }) + '\n'
+    );
+  } catch (_) { /* best-effort: telemetry never blocks a member transition */ }
+}
+
 function runOpenBatch(opts) {
   const {
-    planPath, manifestPath, max, fanoutCap, cwdEnforced, shell, readFile, writeFile, mkdirp, now,
+    planPath, manifestPath, max, fanoutCap, fanoutCapReadonly, cwdEnforced, shell, readFile, writeFile, mkdirp, now,
     project, projTag, repoRoot, worktreeAdd, worktreeRemove, snapshotMember: snapMember, anchorMergeRef: anchorRef,
   } = opts;
 
@@ -484,10 +502,12 @@ function runOpenBatch(opts) {
     }
   }
 
-  // Cap the member set. The frontier may be WIDER than fanoutCap (#303: planner fan-out width
-  // is uncapped at validation); we open at most fanoutCap members now and leave the remaining
+  // Cap the member set. The frontier may be WIDER than the cap (#303: planner fan-out width
+  // is uncapped at validation); we open at most cap members now and leave the remaining
   // ready-pending siblings as the implicit QUEUE that `top-up` drains by rolling dispatch.
-  const capped = capMembers(classified.members, { fanoutCap, max });
+  // #375 (D3): read-only batches use the higher read-only cap; write-role batches keep fanoutCap.
+  const effectiveCap = (kind === 'write_role') ? fanoutCap : (fanoutCapReadonly || fanoutCap);
+  const capped = capMembers(classified.members, { fanoutCap: effectiveCap, max });
 
   // WRITE-ROLE WORKTREE ACTIVATION + DEGRADED MODE (#292, D3/D4/D5).
   //
@@ -599,6 +619,9 @@ function runOpenBatch(opts) {
   // Promote the manifest → 'open' (the ledger now agrees with the intended member set).
   const manifest = { ...openingManifest, state: 'open' };
   writeFile(manifestPath, JSON.stringify(manifest, null, 2));
+
+  // #373: best-effort telemetry — every member opened.
+  for (const m of capped) appendBatchTiming(planPath, m.id, 'opened');
 
   // #317: every opened member flipped pending → in_progress; refresh the durable mirror
   // (AFTER the manifest is promoted to 'open') and return one in_progress transition per member
@@ -787,6 +810,9 @@ function runSealMember(opts) {
   writeFile(planPath, sealed.planContent);
   writeFile(manifestPath, JSON.stringify(sealed.manifest, null, 2));
 
+  // #373: best-effort telemetry — the member closed (sealed).
+  appendBatchTiming(planPath, nodeId, 'closed');
+
   // #317: the sealed member's ledger row → complete; refresh + return the transition.
   return { result: 'ok', sealed: nodeId, state: sealed.manifest.state, taskTransitions: [buildTransition(nodeId, 'complete', 'seal-member')], taskMirror: refreshTaskMirror(project, shell) };
 }
@@ -943,7 +969,7 @@ function runJoin(opts) {
 // ---------------------------------------------------------------------------
 function runTopUp(opts) {
   const {
-    planPath, manifestPath, max, fanoutCap, cwdEnforced, shell, readFile, writeFile, mkdirp, cacheExists,
+    planPath, manifestPath, max, fanoutCap, fanoutCapReadonly, cwdEnforced, shell, readFile, writeFile, mkdirp, cacheExists,
     project, projTag, repoRoot, worktreeAdd, worktreeRemove, snapshotMember: snapMember, anchorMergeRef: anchorRef,
   } = opts;
   const { spliceLedgerNode } = require(ADAPTIVE_NODE);
@@ -963,7 +989,9 @@ function runTopUp(opts) {
 
   // A member occupies a worker slot while UNSEALED (in_progress) and not mid-open (opening).
   const running = manifest.members.filter(m => !m.sealed && !m.opening).length;
-  const effFanout = (Number.isInteger(fanoutCap) && fanoutCap >= 1) ? fanoutCap : 4;
+  // #375 (D3): a read-only batch drains under the higher read-only cap; write-role keeps fanoutCap.
+  const kindCap = (manifest.kind === 'write_role') ? fanoutCap : (fanoutCapReadonly || fanoutCap);
+  const effFanout = (Number.isInteger(kindCap) && kindCap >= 1) ? kindCap : 4;
   let capacity = effFanout - running;
   if (Number.isInteger(max) && max >= 1) capacity = Math.min(capacity, max);
   if (capacity <= 0) return { result: 'ok', toppedUp: [], reason: 'at_capacity', running, cap: effFanout, taskTransitions: [] };
@@ -1056,6 +1084,9 @@ function runTopUp(opts) {
   // Clear the opening flags (the in-flight members are now fully open).
   manifest = { ...manifest, members: manifest.members.map(m => { if (!m.opening) return m; const c = { ...m }; delete c.opening; return c; }) };
   writeFile(manifestPath, JSON.stringify(manifest, null, 2));
+
+  // #373: best-effort telemetry — each topped-up member opened.
+  for (const m of newMembers) appendBatchTiming(planPath, m.id, 'opened');
 
   // #317: each topped-up member flipped pending → in_progress; refresh + return transitions.
   return {
@@ -1273,10 +1304,12 @@ function main() {
   const manifestPath = path.join(cacheDir, MANIFEST_NAME);
 
   const fs = require('fs');
-  const { resolveFanoutCap, resolveBatchCwdEnforced } = (function () {
+  const { resolveFanoutCap, resolveFanoutCapReadonly, resolveBatchCwdEnforced } = (function () {
     try { return require('./kaola-workflow-adaptive-schema'); } catch (_) { return {}; }
   })();
   const fanoutCap = (typeof resolveFanoutCap === 'function') ? resolveFanoutCap(process.env) : 4;
+  // #375 (D3): read-only batches use the higher read-only cap; write-role batches keep fanoutCap.
+  const fanoutCapReadonly = (typeof resolveFanoutCapReadonly === 'function') ? resolveFanoutCapReadonly(process.env) : 8;
   // #320: default FALSE — write-role batches degrade to serial before dispatch.
   const cwdEnforced = (typeof resolveBatchCwdEnforced === 'function') ? resolveBatchCwdEnforced(process.env) : false;
 
@@ -1356,7 +1389,7 @@ function main() {
   };
 
   const abort = args.includes('--abort');
-  const ctx = { planPath, statePath, cacheDir, manifestPath, project, projTag, repoRoot, fanoutCap, cwdEnforced, max, nodeId, abort, ...io };
+  const ctx = { planPath, statePath, cacheDir, manifestPath, project, projTag, repoRoot, fanoutCap, fanoutCapReadonly, cwdEnforced, max, nodeId, abort, ...io };
 
   let result;
   if (subcommand === 'open-batch') {

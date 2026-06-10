@@ -42,6 +42,11 @@ const LEDGER_STATUSES = Object.freeze(['pending', 'in_progress', 'complete', 'n/
 // LOOP_CAP static loop bound; FILE_CEILING absolute backstop of 6 (fast.md:63);
 // TEST_THRASH_LIMIT >= 3 consecutive failing cycles on the same test (fast.md:64).
 const DEFAULT_FANOUT_CAP = 4;
+// #375 (D3): read-only batch members are zero-blast-radius (no worktrees, no writes,
+// evidence recorded parent-side) — the harness comfortably runs ~8-16 concurrent agents,
+// so the cheap half of the system gets its own higher default. KAOLA_FANOUT_CAP stays the
+// WRITE-side cap (semantics unchanged).
+const DEFAULT_FANOUT_CAP_READONLY = 8;
 const LOOP_CAP = 5;
 const FILE_CEILING = 6;
 const TEST_THRASH_LIMIT = 3;
@@ -258,6 +263,7 @@ const CONFIG_REL_PATH = ['.config', 'kaola-workflow', 'config.json'];
 const ENABLE_ADAPTIVE_FIELD = 'enable_adaptive';
 const ENABLE_ADAPTIVE_ENV = 'KAOLA_ENABLE_ADAPTIVE';
 const FANOUT_CAP_ENV = 'KAOLA_FANOUT_CAP';
+const FANOUT_CAP_READONLY_ENV = 'KAOLA_FANOUT_CAP_READONLY';
 // #320: a write-role parallel batch only stays isolated if each member subagent
 // actually runs from its own member worktree. This harness cannot FORCE a
 // dispatched subagent's CWD (the `Working directory:` line is advisory prose), so
@@ -285,6 +291,15 @@ function resolveFanoutCap(env) {
   return Number.isInteger(n) && n >= 1 ? n : DEFAULT_FANOUT_CAP;
 }
 
+// #375 (D3): the READ-ONLY-batch fan-out cap (env override, else default 8), clamped to a
+// sane minimum. Mirrors resolveFanoutCap; used only for read-only batch kinds. Write-role
+// batches keep resolveFanoutCap (the conservative write-side cap).
+function resolveFanoutCapReadonly(env) {
+  const raw = (env || {})[FANOUT_CAP_READONLY_ENV];
+  const n = parseInt(raw, 10);
+  return Number.isInteger(n) && n >= 1 ? n : DEFAULT_FANOUT_CAP_READONLY;
+}
+
 // #320: resolve whether the runtime can force member-worktree CWD for batch
 // subagents. Fail-closed default FALSE — only an explicit 1/true/yes opts in.
 function resolveBatchCwdEnforced(env) {
@@ -309,6 +324,7 @@ module.exports = {
   LEDGER_HEADING,
   LEDGER_STATUSES,
   DEFAULT_FANOUT_CAP,
+  DEFAULT_FANOUT_CAP_READONLY,
   LOOP_CAP,
   FILE_CEILING,
   TEST_THRASH_LIMIT,
@@ -335,9 +351,11 @@ module.exports = {
   ENABLE_ADAPTIVE_FIELD,
   ENABLE_ADAPTIVE_ENV,
   FANOUT_CAP_ENV,
+  FANOUT_CAP_READONLY_ENV,
   BATCH_CWD_ENFORCED_ENV,
   resolveEnableAdaptive,
   resolveFanoutCap,
+  resolveFanoutCapReadonly,
   resolveBatchCwdEnforced,
   isLegalWorkflowPath,
 };

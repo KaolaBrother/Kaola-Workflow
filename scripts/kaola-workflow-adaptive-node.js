@@ -178,6 +178,26 @@ function buildTransition(id, ledgerStatus, reason, note) {
 }
 
 // ---------------------------------------------------------------------------
+// appendNodeTiming (#373 / D1) — best-effort wall-clock telemetry sidecar.
+// Appends ONE JSON line per node lifecycle transition to
+// kaola-workflow/{project}/.cache/node-timings.jsonl. Append-only; NEVER throws — a
+// timings write failure must never refuse or alter a transition. .cache/ is already a
+// barrier-exempt workflow band, so this adds no validator surface. The ledger/plan
+// formats are deliberately unchanged (the ledger has multiple parser consumers).
+// ---------------------------------------------------------------------------
+function appendNodeTiming(planPath, node, event) {
+  try {
+    const fs = require('fs');
+    const cacheDir = path.join(path.dirname(planPath), '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.appendFileSync(
+      path.join(cacheDir, 'node-timings.jsonl'),
+      JSON.stringify({ node: node, event: event, ts: new Date().toISOString() }) + '\n'
+    );
+  } catch (_) { /* best-effort: telemetry never blocks a lifecycle transition */ }
+}
+
+// ---------------------------------------------------------------------------
 // spliceLedgerNode — rewrite a single node row's status cell in ## Node Ledger.
 //
 // GUARD: flip ONLY when current status ∈ allowFrom.
@@ -881,6 +901,9 @@ function runOpenNext(opts) {
     };
   }
 
+  // #373: best-effort telemetry — the node opened.
+  appendNodeTiming(planPath, targetNode.id, 'opened');
+
   // #317: ledger row flipped pending → in_progress; refresh the durable mirror and
   // return the explicit UI transition for the orchestrator to apply.
   return {
@@ -929,6 +952,9 @@ function runRecordEvidence(opts) {
   if (mkdirp) mkdirp(cacheDir);
 
   writeFile(cachePath, stdinContent);
+
+  // #373: best-effort telemetry — evidence recorded for the node.
+  appendNodeTiming(planPath, nodeId, 'evidence');
 
   return {
     result: 'ok',
@@ -1001,9 +1027,22 @@ function runCloseAndOpenNext(opts) {
   // Re-read plan (baseline call in open-next may have written it).
   let currentPlan = readFile(planPath);
 
-  const newStatus = 'complete'; // (n/a handled via allowFrom extension if needed)
-  const closeResult = spliceLedgerNode(currentPlan, nodeId, newStatus, { allowFrom: ['in_progress', 'n/a'] });
+  const newStatus = 'complete';
+  // #348: close ONLY an in_progress node. Dropping 'n/a' from allowFrom means a skipped
+  // (n/a) node is never silently flipped to complete. The splice can be a NO-OP in two ways
+  // and BOTH must refuse with zero mutation — no compliance row, no plan write — so we never
+  // append a `Required Agent Compliance` row (or run the fused advance) over a node that was
+  // not actually closed. The reachable trigger is a #305-class crash interleaving: open-batch
+  // records a baseline BEFORE the ledger flip, so the barrier can pass while the row is still
+  // pending. alreadyAtTarget (row already 'complete') still proceeds — idempotent resume.
+  const closeResult = spliceLedgerNode(currentPlan, nodeId, newStatus, { allowFrom: ['in_progress'] });
 
+  if (!closeResult.found) {
+    return { result: 'refuse', reason: 'close_node_not_in_ledger', nodeId };
+  }
+  if (!closeResult.changed && !closeResult.alreadyAtTarget) {
+    return { result: 'refuse', reason: 'close_transition_disallowed', nodeId };
+  }
   if (closeResult.changed) {
     currentPlan = closeResult.content;
   }
@@ -1031,6 +1070,9 @@ function runCloseAndOpenNext(opts) {
 
   // Write the plan now (ledger + compliance — all non-state writes).
   writeFile(planPath, currentPlan);
+
+  // #373: best-effort telemetry — the node closed.
+  appendNodeTiming(planPath, nodeId, 'closed');
 
   // #317: the closed node → completed (every ok exit carries this).
   transitions.push(buildTransition(nodeId, 'complete', 'close-and-open-next'));
@@ -1121,6 +1163,9 @@ function runCloseAndOpenNext(opts) {
     planForAdvance = advanceSplice.content;
     writeFile(planPath, planForAdvance);
   }
+
+  // #373: best-effort telemetry — the fused advance opened the next node.
+  appendNodeTiming(planPath, nextNode.id, 'opened');
 
   // Record baseline for the newly opened node.
   const baselineResult = shell(commitNodePath, [planPath, '--node-id', nextNode.id, '--start', '--json']);
@@ -1218,6 +1263,9 @@ function runWriteHalt(opts) {
 
   // Write state markers LAST (state file is regenerated from plan on crash recovery).
   writeFile(statePath, stateContent);
+
+  // #373: best-effort telemetry — the node halted.
+  appendNodeTiming(planPath, nodeId, 'halted');
 
   // Build markers list for output.
   const markers = [];

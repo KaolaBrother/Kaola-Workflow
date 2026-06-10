@@ -501,6 +501,46 @@ function realNextActionShell(planPath) {
 }
 
 // ---------------------------------------------------------------------------
+// I3-375 (#375 / D3): a READ-ONLY batch opens up to the READ-ONLY cap (8), NOT the
+// write-side cap (4). 10 read-only pending siblings + fanoutCap 4 + fanoutCapReadonly 8
+// → 8 opened, 2 queued. Write-role behavior is unaffected (still the conservative cap).
+// ---------------------------------------------------------------------------
+{
+  const verifyRows = [];
+  const ledgerRows = ['| a        | complete |  |'];
+  const ids = [];
+  for (let i = 1; i <= 10; i++) {
+    const id = 'v' + i;
+    ids.push(id);
+    verifyRows.push('| ' + id.padEnd(8) + ' | tdd-guide     | a              | — | 1 | fanout(verify) |');
+    ledgerRows.push('| ' + id.padEnd(8) + ' | pending  |  |');
+  }
+  const plan = makePlan(
+    [
+      '| a        | code-explorer | —              | — | 1 | sequence       |',
+      ...verifyRows,
+      '| finalize | finalize      | ' + ids.join(',') + ' | — | 1 | sequence       |',
+    ],
+    [...ledgerRows, '| finalize | pending  |  |']
+  );
+  const { root, planPath, statePath, cacheDir } = makeProjectDir(plan);
+  const io = makeIo();
+  const manifestPath = path.join(cacheDir, 'active-batch.json');
+
+  const r = runOpenBatch({
+    planPath, statePath, cacheDir, manifestPath, project: 'test-project',
+    max: null, fanoutCap: 4, fanoutCapReadonly: 8, shell: realNextActionShell(planPath), ...io,
+  });
+
+  assert(r.result === 'ok', 'I3-375: read-only open-batch → ok');
+  assert(r.members.length === 8, 'I3-375: read-only batch opens 8 (read-only cap), NOT 4 (write cap), got ' + r.members.length);
+  const writtenPlan = fs.readFileSync(planPath, 'utf8');
+  assert(/\|\s*v9\s*\|\s*pending\s*\|/.test(writtenPlan) && /\|\s*v10\s*\|\s*pending\s*\|/.test(writtenPlan), 'I3-375: members 9 and 10 left pending (queued beyond the read-only cap of 8)');
+
+  cleanup(root);
+}
+
+// ---------------------------------------------------------------------------
 // I4: seal-member / seal — flips members to complete and transitions manifest to
 //     'sealed' only when ALL members are complete/n/a.
 // ---------------------------------------------------------------------------

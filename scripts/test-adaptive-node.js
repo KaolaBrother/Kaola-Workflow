@@ -949,6 +949,130 @@ function makeState(opts) {
 }
 
 // ---------------------------------------------------------------------------
+// T16-348a (#348): runCloseAndOpenNext — node id absent from the ledger →
+// refuse close_node_not_in_ledger, NO mutation (no compliance row, no plan write).
+// Evidence + barrier pass; only the ledger splice is a found:false no-op.
+// ---------------------------------------------------------------------------
+{
+  let writeFileCalled = false;
+
+  // impl-core IS in ## Nodes (role resolves) but ABSENT from the ## Node Ledger rows.
+  const plan = makePlan([
+    '| impl-other | pending | |',
+    '| review | pending | |',
+    '| finalize | pending | |',
+  ]);
+
+  const cacheFiles = {
+    '/fake/kaola-workflow/test-project/.cache/impl-core.md':
+      'RED: test failed as expected\nGREEN: test passed after implementation',
+  };
+  const shellStub = function() { return { exitCode: 0, result: 'ok', selectorCheck: { isSelector: false, ok: true } }; };
+
+  const result = runCloseAndOpenNext({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project',
+    nodeId: 'impl-core',
+    shell: shellStub,
+    readFile: (fpath) => {
+      if (fpath.endsWith('workflow-plan.md')) return plan;
+      if (fpath.endsWith('workflow-state.md')) return makeState();
+      if (cacheFiles[fpath]) return cacheFiles[fpath];
+      throw new Error('ENOENT');
+    },
+    writeFile: () => { writeFileCalled = true; },
+    cacheExists: (fpath) => !!cacheFiles[fpath],
+  });
+
+  assert(result.result === 'refuse', 'T16-348a: missing ledger row → refuse');
+  assert(result.reason === 'close_node_not_in_ledger', 'T16-348a: reason close_node_not_in_ledger, got ' + JSON.stringify(result.reason));
+  assert(writeFileCalled === false, 'T16-348a: NO mutation — writeFile not called (no compliance row over an unclosed node)');
+}
+
+// ---------------------------------------------------------------------------
+// T16-348b (#348): runCloseAndOpenNext — ledger row still PENDING (the #305-class
+// crash interleaving: baseline recorded before the in_progress flip) → refuse
+// close_transition_disallowed, NO mutation.
+// ---------------------------------------------------------------------------
+{
+  let writeFileCalled = false;
+
+  const plan = makePlan([
+    '| impl-core | pending | |',
+    '| impl-other | pending | |',
+    '| review | pending | |',
+    '| finalize | pending | |',
+  ]);
+  const cacheFiles = {
+    '/fake/kaola-workflow/test-project/.cache/impl-core.md':
+      'RED: test failed as expected\nGREEN: test passed after implementation',
+  };
+  const shellStub = function() { return { exitCode: 0, result: 'ok', selectorCheck: { isSelector: false, ok: true } }; };
+
+  const result = runCloseAndOpenNext({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project',
+    nodeId: 'impl-core',
+    shell: shellStub,
+    readFile: (fpath) => {
+      if (fpath.endsWith('workflow-plan.md')) return plan;
+      if (fpath.endsWith('workflow-state.md')) return makeState();
+      if (cacheFiles[fpath]) return cacheFiles[fpath];
+      throw new Error('ENOENT');
+    },
+    writeFile: () => { writeFileCalled = true; },
+    cacheExists: (fpath) => !!cacheFiles[fpath],
+  });
+
+  assert(result.result === 'refuse', 'T16-348b: pending row → refuse');
+  assert(result.reason === 'close_transition_disallowed', 'T16-348b: reason close_transition_disallowed, got ' + JSON.stringify(result.reason));
+  assert(writeFileCalled === false, 'T16-348b: NO mutation — writeFile not called over a still-pending node');
+}
+
+// ---------------------------------------------------------------------------
+// T16-348c (#348): runCloseAndOpenNext — ledger row is n/a (skipped) → refuse
+// close_transition_disallowed (n/a dropped from allowFrom; a skipped node must NOT
+// be flipped to complete).
+// ---------------------------------------------------------------------------
+{
+  let writeFileCalled = false;
+
+  const plan = makePlan([
+    '| impl-core | n/a | |',
+    '| impl-other | pending | |',
+    '| review | pending | |',
+    '| finalize | pending | |',
+  ]);
+  const cacheFiles = {
+    '/fake/kaola-workflow/test-project/.cache/impl-core.md':
+      'RED: test failed as expected\nGREEN: test passed after implementation',
+  };
+  const shellStub = function() { return { exitCode: 0, result: 'ok', selectorCheck: { isSelector: false, ok: true } }; };
+
+  const result = runCloseAndOpenNext({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project',
+    nodeId: 'impl-core',
+    shell: shellStub,
+    readFile: (fpath) => {
+      if (fpath.endsWith('workflow-plan.md')) return plan;
+      if (fpath.endsWith('workflow-state.md')) return makeState();
+      if (cacheFiles[fpath]) return cacheFiles[fpath];
+      throw new Error('ENOENT');
+    },
+    writeFile: () => { writeFileCalled = true; },
+    cacheExists: (fpath) => !!cacheFiles[fpath],
+  });
+
+  assert(result.result === 'refuse', 'T16-348c: n/a row → refuse');
+  assert(result.reason === 'close_transition_disallowed', 'T16-348c: n/a not flipped to complete, got ' + JSON.stringify(result.reason));
+  assert(writeFileCalled === false, 'T16-348c: NO mutation over an n/a node');
+}
+
+// ---------------------------------------------------------------------------
 // T17: runCloseAndOpenNext — selector arms → n/a written BEFORE fused advance
 // ---------------------------------------------------------------------------
 {
@@ -2682,6 +2806,62 @@ const STATE_NO_WT = '## Sink\nbranch: workflow/issue-335\n';
     // planProbe deliberately omitted
   });
   assert(r.result === 'ok', 'O3: absent probe preserves the old tolerant ok-result, got ' + JSON.stringify({ result: r.result, reason: r.reason }));
+}
+
+// ---------------------------------------------------------------------------
+// T-373 (#373 / D1): node-timings.jsonl — close-and-open-next appends a 'closed'
+// event for the closed node and an 'opened' event for the fused-advance node, using
+// a REAL temp dir so the best-effort fs.appendFileSync actually fires. Append-only,
+// parseable line-by-line; never alters the lifecycle result.
+// ---------------------------------------------------------------------------
+{
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-timings-'));
+  const projDir = path.join(tmpRoot, 'kaola-workflow', 'test-project');
+  const cacheDir = path.join(projDir, '.cache');
+  fs.mkdirSync(cacheDir, { recursive: true });
+  const planPath = path.join(projDir, 'workflow-plan.md');
+  const statePath = path.join(projDir, 'workflow-state.md');
+  fs.writeFileSync(planPath, makePlan([
+    '| impl-core | in_progress | |',
+    '| impl-other | pending | |',
+    '| review | pending | |',
+    '| finalize | pending | |',
+  ]));
+  fs.writeFileSync(statePath, makeState());
+  fs.writeFileSync(path.join(cacheDir, 'impl-core.md'), 'RED: failed\nGREEN: passed');
+
+  const shellStub = function(scriptPath, args) {
+    const base = path.basename(scriptPath);
+    const argsArr = args || [];
+    if (base.endsWith('commit-node.js') && !argsArr.includes('--start')) {
+      return { exitCode: 0, result: 'ok', mode: 'per-node', nodeId: 'impl-core', overallOk: true, selectorCheck: { isSelector: false, ok: true } };
+    }
+    if (base.endsWith('commit-node.js') && argsArr.includes('--start')) {
+      return { exitCode: 0, result: 'ok', mode: 'per-node-start', nodeId: 'impl-other', overallOk: true };
+    }
+    if (base.endsWith('next-action.js')) {
+      return { exitCode: 0, result: 'ok', readySet: [{ id: 'impl-other', role: 'implementer' }], nextNode: { id: 'impl-other', role: 'implementer', model: 'sonnet', declared_write_set: 'scripts/other.js' }, allDone: false };
+    }
+    if (base.endsWith('task-mirror.js')) return { exitCode: 0, result: 'ok' };
+    return { exitCode: 1, result: 'refuse', errors: ['stub: ' + base] };
+  };
+
+  const result = runCloseAndOpenNext({
+    planPath, statePath, project: 'test-project', nodeId: 'impl-core',
+    shell: shellStub,
+    readFile: (f) => fs.readFileSync(f, 'utf8'),
+    writeFile: (f, c) => fs.writeFileSync(f, c),
+    cacheExists: (f) => fs.existsSync(f),
+  });
+
+  assert(result.result === 'ok', 'T-373: close-and-open-next still succeeds with telemetry wired');
+  const timingsPath = path.join(cacheDir, 'node-timings.jsonl');
+  assert(fs.existsSync(timingsPath), 'T-373: node-timings.jsonl was written');
+  const lines = fs.readFileSync(timingsPath, 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l));
+  assert(lines.every(l => typeof l.node === 'string' && typeof l.event === 'string' && typeof l.ts === 'string'), 'T-373: every line parses to {node,event,ts}');
+  assert(lines.some(l => l.node === 'impl-core' && l.event === 'closed'), 'T-373: closed event for impl-core, got ' + JSON.stringify(lines));
+  assert(lines.some(l => l.node === 'impl-other' && l.event === 'opened'), 'T-373: opened event for impl-other (fused advance), got ' + JSON.stringify(lines));
+  try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch (_) {}
 }
 
 // Summary
