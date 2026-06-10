@@ -39,10 +39,46 @@ function firstPositiveInteger() {
   return null;
 }
 
+// #362: per-invocation memo of issue iid -> 'open'|'closed', shared by issueIsClosed +
+// probeIssueState, seeded from KAOLA_ISSUE_STATE_SNAPSHOT (parent->classifier handoff) and filled
+// by ONE batched forge.listIssues() prefetch instead of N per-issue forge.viewIssue() round-trips.
+const issueStateMemo = new Map();
+function rememberIssueState(num, state) {
+  if (num == null) return;
+  const k = Number(num);
+  if (Number.isFinite(k) && (state === 'open' || state === 'closed')) issueStateMemo.set(k, state);
+}
+(function seedIssueStateMemoFromEnv() {
+  const raw = process.env.KAOLA_ISSUE_STATE_SNAPSHOT;
+  if (!raw) return;
+  try { const obj = JSON.parse(raw); for (const [n, st] of Object.entries(obj || {})) rememberIssueState(n, st); }
+  catch (_) { /* malformed snapshot -> ignore */ }
+})();
+function getIssueStateSnapshot() {
+  const obj = {};
+  for (const [k, v] of issueStateMemo.entries()) obj[k] = v;
+  return obj;
+}
+function __resetIssueStateMemo() { issueStateMemo.clear(); }
+function prefetchIssueStates(iids) {
+  if (OFFLINE) return;
+  const want = [...new Set((iids || []).map(Number).filter(n => Number.isFinite(n) && n > 0 && !issueStateMemo.has(n)))];
+  if (want.length === 0) return;
+  try {
+    const list = forge.listIssues({ state: 'all', perPage: 200 });
+    if (!Array.isArray(list)) return;
+    for (const it of list) rememberIssueState(it.iid, it.state === 'closed' ? 'closed' : 'open');
+  } catch (_) { /* best-effort: per-issue fallback still runs */ }
+}
+
 function issueIsClosed(issueIid) {
   if (issueIid == null) return false;
+  const key = Number(issueIid);
+  if (issueStateMemo.has(key)) return issueStateMemo.get(key) === 'closed';
   try {
-    return forge.viewIssue(issueIid).state === 'closed';
+    const closed = forge.viewIssue(issueIid).state === 'closed';
+    rememberIssueState(key, closed ? 'closed' : 'open');
+    return closed;
   } catch (_) {
     return false;
   }
@@ -53,7 +89,10 @@ function probeIssueState(issueNumber) {
     return { state: 'open', reason: 'offline-or-null' };
   }
   try {
+    const key = Number(issueNumber);
+    if (issueStateMemo.has(key)) return { state: issueStateMemo.get(key), reason: 'memo' };
     const issue = forge.viewIssue(issueNumber);
+    rememberIssueState(key, issue.state === 'closed' ? 'closed' : (issue.state === 'open' ? 'open' : undefined));
     if (issue.state === 'closed') return { state: 'closed', reason: 'ok' };
     if (issue.state === 'open') return { state: 'open', reason: 'ok' };
     return { state: 'unavailable', reason: 'tea issue state unverified' };
@@ -103,6 +142,17 @@ function readActiveFolders(root, options) {
   const repoRoot = root || getRoot();
   const workflowDir = path.join(repoRoot, 'kaola-workflow');
   if (!fs.existsSync(workflowDir)) return [];
+  // #362: batch-prefetch every candidate folder's issue iid in ONE forge.listIssues() pre-scan.
+  if (opts.excludeClosedIssues) {
+    const iids = [];
+    for (const e of fs.readdirSync(workflowDir, { withFileTypes: true })) {
+      if (!e.isDirectory() || e.name === 'archive' || e.name.startsWith('.') || !isSafeName(e.name)) continue;
+      const sf = path.join(workflowDir, e.name, 'workflow-state.md');
+      if (!fs.existsSync(sf)) continue;
+      try { const st = parseStateFile(sf); if (st.issue_iid != null) iids.push(st.issue_iid); } catch (_) {}
+    }
+    prefetchIssueStates(iids);
+  }
   const result = [];
   for (const entry of fs.readdirSync(workflowDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
@@ -152,6 +202,9 @@ module.exports = {
   isSafeName,
   issueIsClosed,
   probeIssueState,
+  prefetchIssueStates,
+  getIssueStateSnapshot,
+  __resetIssueStateMemo,
   parseStateFile,
   readActiveFolders
 };

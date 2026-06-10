@@ -41,13 +41,72 @@ function ghExec(args, opts) {
   return execFileSync('gh', args, Object.assign({ encoding: 'utf8', timeout: REMOTE_TIMEOUT_MS }, opts || {})).trim();
 }
 
+// #362: per-invocation memo of issue number → 'open'|'closed'. issueIsClosed AND probeIssueState
+// share it, so a startup that probes the same issue from multiple code paths (claimProject calls
+// readActiveFolders up to twice; cmdStatus double-probes) pays ONE remote round-trip, not N.
+// Process-scoped (each script invocation is one process). Seeded from KAOLA_ISSUE_STATE_SNAPSHOT
+// so a parent (e.g. claim) can hand its snapshot to a spawned classifier subprocess — closing the
+// cross-process re-probe gap.
+const issueStateMemo = new Map(); // Number -> 'open' | 'closed'
+
+function rememberIssueState(num, state) {
+  if (num == null) return;
+  const k = Number(num);
+  if (Number.isFinite(k) && (state === 'open' || state === 'closed')) issueStateMemo.set(k, state);
+}
+
+(function seedIssueStateMemoFromEnv() {
+  const raw = process.env.KAOLA_ISSUE_STATE_SNAPSHOT;
+  if (!raw) return;
+  try {
+    const obj = JSON.parse(raw);
+    for (const [num, state] of Object.entries(obj || {})) rememberIssueState(num, state);
+  } catch (_) { /* malformed snapshot → ignore, fall back to live probes */ }
+})();
+
+// Serialize the memo for handoff to a child process via KAOLA_ISSUE_STATE_SNAPSHOT.
+function getIssueStateSnapshot() {
+  const obj = {};
+  for (const [k, v] of issueStateMemo.entries()) obj[k] = v;
+  return obj;
+}
+
+// Test-only: clear the per-invocation memo so a test process that exercises many probe scenarios
+// against reused issue numbers stays isolated (production never needs this — each invocation is one
+// process and the memo SHOULD persist within it).
+function __resetIssueStateMemo() { issueStateMemo.clear(); }
+
+// #362: ONE batched `gh issue list` covering the requested numbers (vs N per-issue `gh issue view`).
+// Best-effort: on any failure the per-issue fallbacks in issueIsClosed/probeIssueState still run.
+function prefetchIssueStates(issueNumbers) {
+  if (OFFLINE) return;
+  const want = [...new Set((issueNumbers || [])
+    .map(Number).filter(n => Number.isFinite(n) && n > 0 && !issueStateMemo.has(n)))];
+  if (want.length === 0) return;
+  try {
+    const raw = ghExec(['issue', 'list', '--state', 'all', '--limit', '200', '--json', 'number,state']);
+    if (!raw) return;
+    const list = JSON.parse(raw);
+    if (!Array.isArray(list)) return;
+    for (const it of list) {
+      rememberIssueState(it.number, String(it.state || '').toLowerCase() === 'closed' ? 'closed' : 'open');
+    }
+    // Numbers absent from the snapshot (beyond --limit, or a list miss) stay unmemoized → lazy
+    // per-issue fallback below.
+  } catch (_) { /* best-effort */ }
+}
+
 function issueIsClosed(issueNumber) {
   if (OFFLINE || issueNumber == null) return false;
+  const key = Number(issueNumber);
+  if (issueStateMemo.has(key)) return issueStateMemo.get(key) === 'closed';
   try {
     const raw = ghExec(['issue', 'view', String(issueNumber), '--json', 'state']);
     if (!raw) return false;
     const data = JSON.parse(raw);
-    return String(data.state || '').toLowerCase() === 'closed';
+    const closed = String(data.state || '').toLowerCase() === 'closed';
+    rememberIssueState(key, closed ? 'closed' : 'open');
+    return closed;
   } catch (_) {
     return false;
   }
@@ -55,11 +114,14 @@ function issueIsClosed(issueNumber) {
 
 function probeIssueState(issueNumber) {
   if (OFFLINE || issueNumber == null) return { state: 'open', reason: 'offline-or-null' };
+  const key = Number(issueNumber);
+  if (issueStateMemo.has(key)) return { state: issueStateMemo.get(key), reason: 'memo' };
   try {
     const raw = ghExec(['issue', 'view', String(issueNumber), '--json', 'state']);
     if (!raw) return { state: 'unavailable', reason: 'empty gh response' };
     const data = JSON.parse(raw);
     const state = String(data.state || '').toLowerCase() === 'closed' ? 'closed' : 'open';
+    rememberIssueState(key, state);
     return { state, reason: 'ok' };
   } catch (err) {
     if (err.killed === true || err.signal === 'SIGTERM' || err.code === 'ETIMEDOUT') {
@@ -104,7 +166,9 @@ function readActiveFolders(root, options) {
   const repoRoot = root || getRoot();
   const workflowDir = path.join(repoRoot, 'kaola-workflow');
   if (!fs.existsSync(workflowDir)) return [];
-  const result = [];
+
+  // First pass: parse every candidate folder's state (pure fs — no remote).
+  const candidates = [];
   for (const entry of fs.readdirSync(workflowDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     if (entry.name === 'archive' || entry.name.startsWith('.')) continue;
@@ -113,15 +177,23 @@ function readActiveFolders(root, options) {
     const stateFile = path.join(projectDir, 'workflow-state.md');
     if (!fs.existsSync(stateFile)) continue;
     let state;
-    try {
-      state = parseStateFile(stateFile);
-    } catch (_) {
-      continue;
-    }
+    try { state = parseStateFile(stateFile); } catch (_) { continue; }
     if (isInactiveStatus(state.status)) continue;
+    candidates.push({ name: entry.name, projectDir, stateFile, state });
+  }
+
+  // #362: batch-prefetch every candidate's issue number in ONE `gh issue list` before the
+  // per-folder closed-issue filter (was N per-folder `gh issue view` round-trips).
+  if (opts.excludeClosedIssues) {
+    prefetchIssueStates(candidates.map(c => c.state.issue_number).filter(n => n != null));
+  }
+
+  // Second pass: filter (issueIsClosed is now memo-backed → at most one extra probe per uncached issue).
+  const result = [];
+  for (const { name, projectDir, stateFile, state } of candidates) {
     if (opts.excludeClosedIssues && state.issue_number != null && issueIsClosed(state.issue_number)) continue;
     const item = {
-      project: entry.name,
+      project: name,
       project_dir: projectDir,
       state_file: stateFile,
       status: state.status,
@@ -150,6 +222,9 @@ module.exports = {
   isSafeName,
   issueIsClosed,
   probeIssueState,
+  prefetchIssueStates,
+  getIssueStateSnapshot,
+  __resetIssueStateMemo,
   readActiveFolders
 };
 

@@ -3032,6 +3032,7 @@ function testGitlabProbeResidualEmptyExit0() {
   const prevMock = process.env.KAOLA_GLAB_MOCK_SCRIPT;
   process.env.KAOLA_GLAB_MOCK_SCRIPT = path.join(binDir, 'glab.js');
   try {
+    active.__resetIssueStateMemo(); // #362: isolate from earlier probe memo
     const r = active.probeIssueState(42);
     assert.strictEqual(r.state, 'unavailable',
       'empty exit-0 must fail-closed to unavailable, got: ' + r.state + ' (' + r.reason + ')');
@@ -3053,6 +3054,7 @@ function testGitlabProbeResidualNonJsonExit0() {
   const prevMock = process.env.KAOLA_GLAB_MOCK_SCRIPT;
   process.env.KAOLA_GLAB_MOCK_SCRIPT = path.join(binDir, 'glab.js');
   try {
+    active.__resetIssueStateMemo(); // #362: isolate from earlier probe memo
     const r = active.probeIssueState(43);
     assert.strictEqual(r.state, 'unavailable',
       'non-JSON exit-0 must fail-closed to unavailable, got: ' + r.state + ' (' + r.reason + ')');

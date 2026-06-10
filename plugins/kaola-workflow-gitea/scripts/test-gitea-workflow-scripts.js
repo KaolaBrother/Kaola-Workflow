@@ -3046,6 +3046,7 @@ function testGiteaProbeResidualEmptyExit0() {
   const prevMock = process.env.KAOLA_TEA_MOCK_SCRIPT;
   process.env.KAOLA_TEA_MOCK_SCRIPT = path.join(binDir, 'tea.js');
   try {
+    active.__resetIssueStateMemo(); // #362: isolate from earlier probe memo
     const r = active.probeIssueState(42);
     assert.strictEqual(r.state, 'unavailable',
       'empty exit-0 must fail-closed to unavailable, got: ' + r.state + ' (' + r.reason + ')');
@@ -3067,6 +3068,7 @@ function testGiteaProbeResidualNonJsonExit0() {
   const prevMock = process.env.KAOLA_TEA_MOCK_SCRIPT;
   process.env.KAOLA_TEA_MOCK_SCRIPT = path.join(binDir, 'tea.js');
   try {
+    active.__resetIssueStateMemo(); // #362: isolate from earlier probe memo
     const r = active.probeIssueState(43);
     assert.strictEqual(r.state, 'unavailable',
       'non-JSON exit-0 must fail-closed to unavailable, got: ' + r.state + ' (' + r.reason + ')');

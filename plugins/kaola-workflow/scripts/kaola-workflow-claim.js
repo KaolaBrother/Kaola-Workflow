@@ -11,7 +11,8 @@ const {
   isSafeName,
   issueIsClosed,
   probeIssueState,
-  readActiveFolders
+  readActiveFolders,
+  getIssueStateSnapshot
 } = require('./kaola-workflow-active-folders');
 
 const roadmapModule = require('./kaola-workflow-roadmap');
@@ -520,7 +521,11 @@ function classifyIssue(root, issueNumber) {
       cwd: root,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: 30000
+      timeout: 30000,
+      // #362: hand the parent's issue-state snapshot to the classifier subprocess so it reuses
+      // what the parent already probed (active-folders seeds its memo from this env) instead of
+      // re-probing the same issue. Additive; an empty/malformed snapshot is ignored downstream.
+      env: Object.assign({}, process.env, { KAOLA_ISSUE_STATE_SNAPSHOT: JSON.stringify(getIssueStateSnapshot()) })
     }).trim();
     return raw ? JSON.parse(raw) : { verdict: 'target_unavailable', reasoning: 'classifier returned empty output (contract bug)' };
   } catch (e) {
