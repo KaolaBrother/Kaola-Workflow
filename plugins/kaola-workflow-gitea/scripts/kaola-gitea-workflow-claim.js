@@ -426,13 +426,16 @@ function updateState(root, project, updater) {
 }
 
 function postAdvisoryClaim(issueIid, project, projectInfo) {
-  if (issueIid == null) return;
-  if (!projectInfo || !projectInfo.full_name) return;
+  // #356: return a truthful footprint status (posted|failed|skipped_offline) so a zero-footprint claim is visible.
+  if (OFFLINE || issueIid == null) return 'skipped_offline';
+  if (!projectInfo || !projectInfo.full_name) return 'failed';
+  let labelAdded = false;
   try { forge.ensureLabel(projectInfo, { name: CLAIM_LABEL, color: '#e6b8a2' }); } catch (_) {}
-  try { forge.updateIssueLabels(projectInfo, issueIid, { add: [CLAIM_LABEL] }); } catch (_) {}
+  try { forge.updateIssueLabels(projectInfo, issueIid, { add: [CLAIM_LABEL] }); labelAdded = true; } catch (_) {}
   try {
     forge.createIssueComment(projectInfo, issueIid, '<!-- kw:claim project=' + project + ' -->\nKaola-Workflow started local Gitea work for `' + project + '`.');
   } catch (_) {}
+  return labelAdded ? 'posted' : 'failed';
 }
 
 function clearAdvisoryClaim(issueIid, reason, projectInfo, project) {
@@ -624,7 +627,7 @@ function claimProject(root, args) {
     full_name: projectInfo.full_name,
     project_html_url: projectInfo.html_url
   });
-  postAdvisoryClaim(issueIid, project, projectInfo);
+  const remoteClaim = postAdvisoryClaim(issueIid, project, projectInfo); // #356: surface footprint status
   // #280/#347: planner self-attest back-fill (mirror of the canonical claimProject block). The
   // SubagentStart dispatch-log hook cannot log the planner's OWN spawn (this claim creates the
   // .cache it would log to). When --attest-planner-spawn is supplied, back-fill a workflow-planner
@@ -640,7 +643,7 @@ function claimProject(root, args) {
     } catch (_) { /* fail-open: attestation is warn-first */ }
   }
   return Object.assign(
-    { status: 'acquired', verdict: 'green', claim: 'acquired', issue: issueIid, project, branch, worktree_path: worktreePath },
+    { status: 'acquired', verdict: 'green', claim: 'acquired', issue: issueIid, project, branch, worktree_path: worktreePath, remote_claim: remoteClaim },
     worktreeError ? { worktree_error: worktreeError } : {},
     baseBranch ? { base_branch: baseBranch } : {},
     inPlaceNote ? { inPlaceNote } : {}
@@ -1670,12 +1673,15 @@ function cmdFinalize() {
       linkedRoot2 = fs.realpathSync(root);
     } catch (_) { mainRoot2 = null; }
     if (mainRoot2 && mainRoot2 !== linkedRoot2) {
+      // #356: stage, then commit ONLY on an explicit staged-changes exit code.
       try {
         execFileSync('git', ['-C', root, 'add', '-A', 'kaola-workflow/'],
           { encoding: 'utf8', stdio: 'inherit' });
-        execFileSync('git', ['-C', root, 'diff', '--cached', '--quiet'],
-          { stdio: 'ignore' });
-      } catch (_) {
+      } catch (_) { /* staging failure — do NOT cascade into a commit */ }
+      let hasStaged = false;
+      try { execFileSync('git', ['-C', root, 'diff', '--cached', '--quiet'], { stdio: 'ignore' }); }
+      catch (e) { if (e && e.status === 1) hasStaged = true; }
+      if (hasStaged) {
         execFileSync('git', ['-C', root, 'commit', '-m', 'chore: archive ' + args.project],
           { encoding: 'utf8', stdio: 'inherit' });
       }

@@ -480,10 +480,16 @@ function updateState(root, project, updater) {
 }
 
 function postAdvisoryClaim(issueNumber, project) {
-  if (OFFLINE || issueNumber == null) return;
+  // #356: return a truthful status so a claim with ZERO remote footprint is visible (the prior
+  // void return silently swallowed every failure → cross-machine claim detection was defeated with
+  // no warning). 'posted' = the in-progress label landed (the load-bearing detection footprint);
+  // 'failed' = it did not; 'skipped_offline' = offline.
+  if (OFFLINE || issueNumber == null) return 'skipped_offline';
+  let labelAdded = false;
   try { ghExec(['label', 'create', CLAIM_LABEL, '--color', 'f9d0c4', '--description', 'Kaola-Workflow active work marker']); } catch (_) {}
-  try { ghExec(['issue', 'edit', String(issueNumber), '--add-label', CLAIM_LABEL]); } catch (_) {}
+  try { ghExec(['issue', 'edit', String(issueNumber), '--add-label', CLAIM_LABEL]); labelAdded = true; } catch (_) {}
   try { ghExec(['issue', 'comment', String(issueNumber), '--body', '<!-- kw:claim project=' + project + ' -->\nKaola-Workflow started local work for `' + project + '`.']); } catch (_) {}
+  return labelAdded ? 'posted' : 'failed';
 }
 
 function removeLegacyStateBlocks(content) {
@@ -669,7 +675,7 @@ function claimProject(root, args) {
     runtime: args.runtime || 'claude',
     status: 'active'
   });
-  postAdvisoryClaim(issueNumber, project);
+  const remoteClaim = postAdvisoryClaim(issueNumber, project); // #356: surface the real footprint status
   // M1 (#280): planner self-attest back-fill.
   // The SubagentStart hook logs dispatched agents to .cache/dispatch-log.jsonl but cannot
   // log the planner's OWN spawn (no project state file exists at that moment — this claim
@@ -688,7 +694,7 @@ function claimProject(root, args) {
     } catch (_) { /* fail-open: attestation is warn-first */ }
   }
   return Object.assign(
-    { status: 'acquired', verdict: 'green', claim: 'acquired', issue: issueNumber, project, branch, worktree_path: worktreePath },
+    { status: 'acquired', verdict: 'green', claim: 'acquired', issue: issueNumber, project, branch, worktree_path: worktreePath, remote_claim: remoteClaim },
     worktreeError ? { worktree_error: worktreeError } : {},
     baseBranch ? { base_branch: baseBranch } : {},
     inPlaceNote ? { inPlaceNote } : {}
@@ -1716,20 +1722,29 @@ function cmdFinalize() {
       linkedRoot2 = fs.realpathSync(root);
     } catch (_) { mainRoot2 = null; }
     if (mainRoot2 && mainRoot2 !== linkedRoot2) {
+      // #356: stage the archive bookkeeping, then commit ONLY on an explicit staged-changes
+      // exit-code check. The prior try/commit-as-catch fired the commit even when the `git
+      // rm`/`git add` THEMSELVES failed — committing whatever happened to be staged and discarding
+      // the real staging error. Staging failures are now isolated and never cascade into a commit.
       try {
         execFileSync('git', ['-C', root, 'rm', '-r', '--cached', '--ignore-unmatch', '--', 'kaola-workflow/' + args.project],
           { encoding: 'utf8', stdio: 'inherit' });
-        const candidatePaths = ['kaola-workflow/.roadmap', 'kaola-workflow/ROADMAP.md'];
-        if (result.dest) candidatePaths.unshift(path.relative(root, result.dest));
-        else if (result.skipped === 'source-missing') candidatePaths.unshift(path.join('kaola-workflow', 'archive', args.project));
-        const existingPaths = candidatePaths.filter(p => fs.existsSync(path.join(root, p)));
-        if (existingPaths.length > 0) {
+      } catch (_) { /* staging (rm) failure — do NOT cascade into a commit */ }
+      const candidatePaths = ['kaola-workflow/.roadmap', 'kaola-workflow/ROADMAP.md'];
+      if (result.dest) candidatePaths.unshift(path.relative(root, result.dest));
+      else if (result.skipped === 'source-missing') candidatePaths.unshift(path.join('kaola-workflow', 'archive', args.project));
+      const existingPaths = candidatePaths.filter(p => fs.existsSync(path.join(root, p)));
+      if (existingPaths.length > 0) {
+        try {
           execFileSync('git', ['-C', root, 'add', '-A', '--', ...existingPaths],
             { encoding: 'utf8', stdio: 'inherit' });
-        }
-        execFileSync('git', ['-C', root, 'diff', '--cached', '--quiet'],
-          { stdio: 'ignore' });
-      } catch (_) {
+        } catch (_) { /* staging (add) failure — do NOT cascade into a commit */ }
+      }
+      // Explicit exit-code check: `git diff --cached --quiet` exits 1 IFF there are staged changes.
+      let hasStaged = false;
+      try { execFileSync('git', ['-C', root, 'diff', '--cached', '--quiet'], { stdio: 'ignore' }); }
+      catch (e) { if (e && e.status === 1) hasStaged = true; /* other status = diff error → do not commit */ }
+      if (hasStaged) {
         execFileSync('git', ['-C', root, 'commit', '-m', 'chore: archive ' + args.project],
           { encoding: 'utf8', stdio: 'inherit' });
       }
@@ -2379,6 +2394,7 @@ module.exports = {
   ghExec,
   isSafeBranchArg,
   removeBranch,
+  postAdvisoryClaim,
   cmdAuditLabels,
   cmdLegacyWorktreeCleanup,
   cmdRepairLabels,

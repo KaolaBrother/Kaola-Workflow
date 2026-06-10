@@ -12,7 +12,7 @@ const path = require('path');
 process.env.KAOLA_GH_REMOTE_TIMEOUT_MS = '500';   // tiny cap for the hang test (set before require)
 delete process.env.KAOLA_WORKFLOW_OFFLINE;        // ensure ghExec actually shells the mock
 
-const { ghExec, isSafeBranchArg, removeBranch } = require('./kaola-workflow-claim.js');
+const { ghExec, isSafeBranchArg, removeBranch, postAdvisoryClaim } = require('./kaola-workflow-claim.js');
 
 let passed = 0, failed = 0;
 function assert(c, m) { if (c) passed++; else { failed++; console.error('FAIL: ' + m); } }
@@ -43,6 +43,26 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
   fs.rmSync(dir, { recursive: true, force: true });
   assert(threw, '#356: a hung gh mock makes ghExec throw (killed by the timeout), not hang');
   assert(elapsed < 4000, '#356: ghExec returned within the 500ms cap window (~' + elapsed + 'ms), not the 30s default hang');
+}
+
+// --- postAdvisoryClaim truthful status (#356) -------------------------------
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-pac-'));
+  // Mock gh: succeed everything → label added → 'posted'.
+  const okMock = path.join(dir, 'gh-ok.js');
+  fs.writeFileSync(okMock, "process.stdout.write(''); process.exit(0);");
+  // Mock gh: FAIL `issue edit` (the --add-label) → label NOT added → 'failed'.
+  const failMock = path.join(dir, 'gh-fail.js');
+  fs.writeFileSync(failMock, "const a=process.argv.slice(2); if(a[0]==='issue'&&a[1]==='edit'){process.exit(1);} process.exit(0);");
+
+  process.env.KAOLA_GH_MOCK_SCRIPT = okMock;
+  assert(postAdvisoryClaim(1, 'issue-1') === 'posted', '#356: a successful add-label → remote_claim:posted');
+  process.env.KAOLA_GH_MOCK_SCRIPT = failMock;
+  assert(postAdvisoryClaim(1, 'issue-1') === 'failed', '#356: a failed add-label → remote_claim:failed (zero-footprint claim is VISIBLE)');
+  delete process.env.KAOLA_GH_MOCK_SCRIPT;
+  fs.rmSync(dir, { recursive: true, force: true });
+  // (offline → 'skipped_offline' is covered by the OFFLINE-const guard; not unit-testable here
+  // because OFFLINE resolves at module load, before this test can set the env.)
 }
 
 if (failed > 0) {
