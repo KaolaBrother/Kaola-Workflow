@@ -25,11 +25,20 @@ function assert(condition, message) {
   if (!condition) throw new Error(message);
 }
 
-function runNode(script, args, cwd, extraEnv) {
+function runNode(script, args, cwd, extraEnv, opts) {
+  // Scrub inherited KAOLA_* vars from the parent shell — tests supply their own.
+  const baseEnv = Object.fromEntries(
+    Object.entries(process.env).filter(([k]) => !k.startsWith('KAOLA_'))
+  );
+  // Git isolation: prevent developer gpgsign/hooksPath from breaking fixture commits.
+  baseEnv.GIT_CONFIG_GLOBAL = '/dev/null';
+  baseEnv.GIT_CONFIG_NOSYSTEM = '1';
+  const timeout = (opts && opts.timeout != null) ? opts.timeout : 120000;
   const result = spawnSync(process.execPath, [script, ...args], {
     cwd,
     encoding: 'utf8',
-    env: { ...process.env, ...(extraEnv || {}), KAOLA_WORKFLOW_OFFLINE: '1' }
+    timeout,
+    env: { ...baseEnv, ...(extraEnv || {}), KAOLA_WORKFLOW_OFFLINE: '1' }
   });
   if (result.error) throw result.error;
   return result;
@@ -3162,27 +3171,42 @@ function writeBundleGhMockScript(binDir, opts) {
   fs.writeFileSync(path.join(binDir, 'gh.js'), script);
 }
 
+// Git isolation env: prevents developer commit.gpgsign / core.hooksPath from
+// breaking fixture commits regardless of the developer's global git config.
+const GIT_ISOLATION_ENV = {
+  GIT_CONFIG_GLOBAL: '/dev/null',
+  GIT_CONFIG_NOSYSTEM: '1'
+};
+
 function initGitRepo(tmp) {
-  spawnSync('git', ['init', '-b', 'main'], { cwd: tmp, encoding: 'utf8' });
-  spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tmp, encoding: 'utf8' });
-  spawnSync('git', ['config', 'user.name', 'Test User'], { cwd: tmp, encoding: 'utf8' });
+  const env = { ...process.env, ...GIT_ISOLATION_ENV };
+  spawnSync('git', ['init', '-b', 'main'], { cwd: tmp, encoding: 'utf8', env });
+  spawnSync('git', ['config', 'user.email', 'test@example.com'], { cwd: tmp, encoding: 'utf8', env });
+  spawnSync('git', ['config', 'user.name', 'Test User'], { cwd: tmp, encoding: 'utf8', env });
   fs.writeFileSync(path.join(tmp, 'README.md'), 'fixture\n');
-  spawnSync('git', ['add', 'README.md'], { cwd: tmp, encoding: 'utf8' });
-  spawnSync('git', ['commit', '-m', 'init'], { cwd: tmp, encoding: 'utf8' });
+  spawnSync('git', ['add', 'README.md'], { cwd: tmp, encoding: 'utf8', env });
+  spawnSync('git', ['commit', '-m', 'init'], { cwd: tmp, encoding: 'utf8', env });
 }
 
 function initGitRepoWithBareRemote(tmp) {
   initGitRepo(tmp);
   const remotePath = tmp + '-remote';
-  spawnSync('git', ['init', '--bare', remotePath]);
-  spawnSync('git', ['-C', tmp, 'remote', 'add', 'origin', remotePath]);
-  spawnSync('git', ['-C', tmp, 'push', '-u', 'origin', 'main']);
+  const env = { ...process.env, ...GIT_ISOLATION_ENV };
+  spawnSync('git', ['init', '--bare', remotePath], { env });
+  spawnSync('git', ['-C', tmp, 'remote', 'add', 'origin', remotePath], { env });
+  spawnSync('git', ['-C', tmp, 'push', '-u', 'origin', 'main'], { env });
   return remotePath;
 }
 
 function ghMockEnv(binDir) {
   const jsPath = path.join(binDir, 'gh.js');
-  return fs.existsSync(jsPath) ? { KAOLA_GH_MOCK_SCRIPT: jsPath } : {};
+  if (!fs.existsSync(jsPath)) {
+    throw new Error(
+      'ghMockEnv: shim file not found at ' + jsPath +
+      ' — call writeGhShimForStartup (or equivalent) before using ghMockEnv'
+    );
+  }
+  return { KAOLA_GH_MOCK_SCRIPT: jsPath };
 }
 
 function runClaimOnline(args, cwd, binDir, extraEnv) {
@@ -10198,235 +10222,441 @@ function testPlanRunWiredForWorktree() {
   console.log('testPlanRunWiredForWorktree: PASSED');
 }
 
+// ---------------------------------------------------------------------------
+// Harness self-check (RED→GREEN seam for issue #357)
+// Spawns THIS script with --list / --only to validate the registry features,
+// plus in-process checks for ghMockEnv throw and runNode env scrub.
+// ---------------------------------------------------------------------------
+function testHarnessSelfCheck() {
+  const thisScript = __filename;
+  const nodeExec = process.execPath;
+
+  // (1) --list exits 0 and prints a known scenario name without running anything.
+  {
+    const r = spawnSync(nodeExec, [thisScript, '--list'], { encoding: 'utf8', timeout: 30000 });
+    assert(r.status === 0, 'self-check: --list must exit 0, got ' + r.status + '\nstderr: ' + r.stderr);
+    assert(r.stdout.includes('testProbeTimeoutEnv'),
+      'self-check: --list output must include testProbeTimeoutEnv, got:\n' + r.stdout.slice(0, 500));
+    // --list must not run any tests (stdout contains only names + possible suffixes; no "PASSED" lines)
+    assert(!r.stdout.includes(': PASSED'),
+      'self-check: --list must not run any tests, found PASSED in output:\n' + r.stdout.slice(0, 500));
+  }
+
+  // (2) --only with a bogus token exits 1 with a clear message naming the token.
+  {
+    const r = spawnSync(nodeExec, [thisScript, '--only', 'noSuchScenarioXYZ'], {
+      encoding: 'utf8', timeout: 30000
+    });
+    assert(r.status === 1, 'self-check: --only bogus token must exit 1, got ' + r.status);
+    assert(/noSuchScenarioXYZ/.test(r.stderr + r.stdout),
+      'self-check: --only bogus token error must name the token, got:\n' + r.stderr + r.stdout);
+  }
+
+  // (3) --only a known fast self-contained scenario runs green.
+  {
+    const r = spawnSync(nodeExec, [thisScript, '--only', 'testProbeTimeoutEnv'], {
+      encoding: 'utf8', timeout: 30000
+    });
+    assert(r.status === 0,
+      'self-check: --only testProbeTimeoutEnv must exit 0, got ' + r.status + '\nstderr: ' + r.stderr);
+    assert(r.stdout.includes('testProbeTimeoutEnv') || r.stdout.includes('subset passed'),
+      'self-check: --only run must mention the scenario or print subset passed, got:\n' + r.stdout);
+  }
+
+  // (4) ghMockEnv with a missing shim must THROW (fail-closed).
+  {
+    let threw = false;
+    try {
+      ghMockEnv('/tmp/no-such-dir-kw-selfcheck-' + Date.now());
+    } catch (e) {
+      threw = true;
+      assert(/shim file not found/.test(e.message),
+        'self-check: ghMockEnv throw must mention "shim file not found", got: ' + e.message);
+    }
+    assert(threw, 'self-check: ghMockEnv with missing shim must throw');
+  }
+
+  // (5) runNode env scrub: a KAOLA_ var set in the parent must NOT reach the child.
+  {
+    const sentinel = 'KAOLA_TEST_SELFCHECK_SENTINEL_357';
+    const prev = process.env[sentinel];
+    process.env[sentinel] = 'should-be-scrubbed';
+    try {
+      // Run a trivial inline script that prints the env var (or empty string).
+      const inlineScript = path.join(os.tmpdir(), 'kw-selfcheck-envprobe-' + process.pid + '.js');
+      fs.writeFileSync(inlineScript,
+        'process.stdout.write(process.env["' + sentinel + '"] || "ABSENT");\n');
+      try {
+        const r = runNode(inlineScript, [], os.tmpdir());
+        assert(r.stdout === 'ABSENT',
+          'self-check: runNode must scrub inherited KAOLA_ vars, got: ' + r.stdout);
+      } finally {
+        try { fs.unlinkSync(inlineScript); } catch (_) {}
+      }
+    } finally {
+      if (prev === undefined) delete process.env[sentinel];
+      else process.env[sentinel] = prev;
+    }
+  }
+
+  // (6) runNode child env must carry GIT isolation vars.
+  {
+    const inlineScript = path.join(os.tmpdir(), 'kw-selfcheck-gitenv-' + process.pid + '.js');
+    fs.writeFileSync(inlineScript,
+      'process.stdout.write(JSON.stringify({g: process.env.GIT_CONFIG_GLOBAL, n: process.env.GIT_CONFIG_NOSYSTEM}));\n');
+    try {
+      const r = runNode(inlineScript, [], os.tmpdir());
+      const out = JSON.parse(r.stdout);
+      assert(out.g === '/dev/null',
+        'self-check: runNode child must have GIT_CONFIG_GLOBAL=/dev/null, got: ' + out.g);
+      assert(out.n === '1',
+        'self-check: runNode child must have GIT_CONFIG_NOSYSTEM=1, got: ' + out.n);
+    } finally {
+      try { fs.unlinkSync(inlineScript); } catch (_) {}
+    }
+  }
+
+  console.log('testHarnessSelfCheck: PASSED');
+}
+
+// ---------------------------------------------------------------------------
+// SCENARIO REGISTRY
+//
+// Ordered array of [name, fn] pairs preserving the exact execution order from
+// the original main(). The first 13 entries are marked sharedTmp:true — they
+// share a single tmp directory created by main() and are ordering-coupled (git
+// init in entry 1 affects later entries; roadmap tests rmSync shared dirs).
+// When --only selects any shared-tmp scenario the WHOLE shared-tmp group runs
+// in order. Self-contained entries (the vast majority) run truly standalone.
+//
+// Registry index: populated at module-load time by buildRegistry() below.
+// ---------------------------------------------------------------------------
+
+// Shared-tmp group runner: receives the already-created tmp dir and runs
+// the group in original order. Async because one entry is async.
+async function runSharedTmpGroup(tmp) {
+  testClaimStatusRelease(tmp);
+  testFinalize(tmp);
+  testRepair(tmp);
+  testRepairFastPath(tmp);
+  testRepairFastEscalation(tmp);
+  testHookSingleProjectGuard(tmp);
+  testRoadmapGenerateMissingSourceGuard(tmp);
+  testRoadmapGenerateAtomicReplace(tmp);
+  testRoadmapProjectRulesAppend(tmp);
+  await testRoadmapInitIssueConcurrentExclusive(tmp);
+  testRoadmapFilenameAuthorityMissingIssueField(tmp);
+  testRoadmapFilenameAuthorityMismatch(tmp);
+  testRoadmapMigrateRoundTripNoDoubleEscape(tmp);
+}
+
+// Shared-tmp member names in order (used for --list and --only matching).
+const SHARED_TMP_NAMES = [
+  'testClaimStatusRelease',
+  'testFinalize',
+  'testRepair',
+  'testRepairFastPath',
+  'testRepairFastEscalation',
+  'testHookSingleProjectGuard',
+  'testRoadmapGenerateMissingSourceGuard',
+  'testRoadmapGenerateAtomicReplace',
+  'testRoadmapProjectRulesAppend',
+  'testRoadmapInitIssueConcurrentExclusive',
+  'testRoadmapFilenameAuthorityMissingIssueField',
+  'testRoadmapFilenameAuthorityMismatch',
+  'testRoadmapMigrateRoundTripNoDoubleEscape',
+];
+
+// Build the ordered registry. Each entry is { name, fn, sharedTmp }.
+// sharedTmp:true entries are kept as individual names in the registry so
+// --list displays them, but the runner collapses the whole group when any
+// member is selected.
+function buildRegistry() {
+  const reg = [];
+  // Helper: add a self-contained (own-tmp) entry.
+  const add = (name, fn) => reg.push({ name, fn, sharedTmp: false });
+  // Helper: add a shared-tmp member (fn is ignored at run-time; the group runner is used).
+  const sharedTmpFn = () => { throw new Error('shared-tmp scenario must be run via the group'); };
+  for (const n of SHARED_TMP_NAMES) {
+    reg.push({ name: n, fn: sharedTmpFn, sharedTmp: true });
+  }
+  // Self-contained scenarios — exact order from the original main() call list:
+  add('testKeepOpenArchiveStamp',                         testKeepOpenArchiveStamp);
+  add('testManualArchiveBackstop',                        testManualArchiveBackstop);
+  add('testRepairFastNoArgSingle',                        testRepairFastNoArgSingle);
+  add('testRepairFastNoArgAmbiguous',                     testRepairFastNoArgAmbiguous);
+  add('testRepairFinalizationRoute',                      testRepairFinalizationRoute);
+  add('testSinkPrUsesFinalizationSummary',                testSinkPrUsesFinalizationSummary);
+  add('testHookGitDashCCommitGuard',                      testHookGitDashCCommitGuard);
+  add('testPhantomAdvisorHookGuard',                      testPhantomAdvisorHookGuard);
+  add('testSubagentDispatchHookExists',                   testSubagentDispatchHookExists);
+  add('testClassifierFolderOverlapRed',                   testClassifierFolderOverlapRed);
+  add('testClassifierFolderOverlapYellow',                testClassifierFolderOverlapYellow);
+  add('testClassifierClosedIssueResidueIgnored',          testClassifierClosedIssueResidueIgnored);
+  add('testClassifierReleasedFolderExcluded',             testClassifierReleasedFolderExcluded);
+  add('testClassifierFastScopeOverlapRed',                testClassifierFastScopeOverlapRed);
+  add('testClassifierFastScopeDisjointGreen',             testClassifierFastScopeDisjointGreen);
+  add('testClassifierDotPathOverlapRed',                  testClassifierDotPathOverlapRed);
+  add('testClassifierRootPathProseNoOverlap',             testClassifierRootPathProseNoOverlap);
+  add('testClassifierDotAreaOverlapRed',                  testClassifierDotAreaOverlapRed);
+  add('testClassifierCuratedRootOverlapYellow',           testClassifierCuratedRootOverlapYellow);
+  add('testClassifierCuratedRootProseClaimedYellow',      testClassifierCuratedRootProseClaimedYellow);
+  add('testClassifierCuratedRootProseNoOverlapGreen',     testClassifierCuratedRootProseNoOverlapGreen);
+  add('testClassifierCuratedRootStructuredLowercaseYellow', testClassifierCuratedRootStructuredLowercaseYellow);
+  add('testClassifierFastScopeSectionIsolationGreen',     testClassifierFastScopeSectionIsolationGreen);
+  add('testClassifierFastScopeFenceCommentRed',           testClassifierFastScopeFenceCommentRed);
+  add('testClassifierFastScopeFenceHeadingRed',           testClassifierFastScopeFenceHeadingRed);
+  add('testClassifierFastScopeFenceMixedMarkerRed',       testClassifierFastScopeFenceMixedMarkerRed);
+  add('testClassifierFastScopeFenceInFencePathRed',       testClassifierFastScopeFenceInFencePathRed);
+  add('testClassifierFastScopePreSectionUnclosedFenceRed', testClassifierFastScopePreSectionUnclosedFenceRed);
+  add('testClassifierDependsOnGate',                      testClassifierDependsOnGate);
+  add('testProbeIssueStateOffline',                       testProbeIssueStateOffline);
+  add('testProbeIssueStateNullIssue',                     testProbeIssueStateNullIssue);
+  add('testProbeIssueStateEmptyGhResponse',               testProbeIssueStateEmptyGhResponse);
+  add('testProbeIssueStateGhThrows',                      testProbeIssueStateGhThrows);
+  add('testStartupJsonAndHiddenLocalWorktrees',           testStartupJsonAndHiddenLocalWorktrees);
+  add('testWorktreeNativeDefaultOff',                     testWorktreeNativeDefaultOff);
+  add('testWorktreeNativeInPlaceIdempotentReclaim',        testWorktreeNativeInPlaceIdempotentReclaim);
+  add('testWorktreeNativeDirtyTreeRefusal',               testWorktreeNativeDirtyTreeRefusal);
+  add('testWorktreeNativeDetachedHeadRecordOnly',         testWorktreeNativeDetachedHeadRecordOnly);
+  add('testWorktreeNativeDiscardRestoresBase',            testWorktreeNativeDiscardRestoresBase);
+  add('testWorktreeNativeDiscardRestoresNonDefaultBase',  testWorktreeNativeDiscardRestoresNonDefaultBase);
+  add('testWorktreeNativeOfflineWins',                    testWorktreeNativeOfflineWins);
+  add('testWorktreeNativeSurfacesProvisionFailure',       testWorktreeNativeSurfacesProvisionFailure);
+  add('testWorktreeAdaptiveProvisioned',                  testWorktreeAdaptiveProvisioned);
+  add('testFastStartupState',                             testFastStartupState);
+  add('testResumeFastEmptyNextCommand',                   testResumeFastEmptyNextCommand);
+  add('testClassifierCurrentClaimMarkerBlocks',           testClassifierCurrentClaimMarkerBlocks);
+  add('testWatchPrArchivesClosedIssuePrFolder',           testWatchPrArchivesClosedIssuePrFolder);
+  add('testSinkFallbackSkipsArchivedProject',             testSinkFallbackSkipsArchivedProject);
+  add('testFinalizeReleaseCleansWorktree',                testFinalizeReleaseCleansWorktree);
+  add('testFinalizeFromLinkedWorktreeCleansMainCopy',     testFinalizeFromLinkedWorktreeCleansMainCopy);
+  add('testFinalizeNarrowStagingExcludesForeignArchive',  testFinalizeNarrowStagingExcludesForeignArchive);
+  add('testFinalizeFromMainRootNoSpuriousRemoval',        testFinalizeFromMainRootNoSpuriousRemoval);
+  add('testFinalizeCleansRoadmapEntry',                   testFinalizeCleansRoadmapEntry);
+  add('testFinalizeFromLinkedWorktreeCleansRoadmapEntry', testFinalizeFromLinkedWorktreeCleansRoadmapEntry);
+  add('testFinalizeFromLinkedWorktreeCleansMainStagedRoadmapSource', testFinalizeFromLinkedWorktreeCleansMainStagedRoadmapSource);
+  add('testFinalizeRoadmapCleanupFailureReceipt',         testFinalizeRoadmapCleanupFailureReceipt);
+  add('testWatchPrRoadmapCleanupWarning',                 testWatchPrRoadmapCleanupWarning);
+  add('testValidateRemoteOffline',                        testValidateRemoteOffline);
+  add('testReleaseFromLinkedWorktreeCleansMainCopy',      testReleaseFromLinkedWorktreeCleansMainCopy);
+  add('testSinkMergeFromLinkedWorktree',                  testSinkMergeFromLinkedWorktree);
+  add('testStatusShowsClosedIssueDrift',                  testStatusShowsClosedIssueDrift);
+  add('testStaleWorktreeCheck',                           testStaleWorktreeCheck);
+  add('testStaleWorktreeCleanup',                         testStaleWorktreeCleanup);
+  add('testNoTargetZeroActive',                           testNoTargetZeroActive);
+  add('testNoTargetOneActive',                            testNoTargetOneActive);
+  add('testNoTargetMultipleActive',                       testNoTargetMultipleActive);
+  add('testSoleActiveRoundTrip',                          testSoleActiveRoundTrip);
+  add('testSinkPrLeavesCleanWorktree',                    testSinkPrLeavesCleanWorktree);
+  add('testReadPriorityConfig',                           testReadPriorityConfig);
+  add('testE2EGitHubMergeFullChain',                      testE2EGitHubMergeFullChain);
+  add('testSinkMergeRefusesLiveFolder',                   testSinkMergeRefusesLiveFolder);
+  add('testSinkMergeBlocksUnpushedCommits',               testSinkMergeBlocksUnpushedCommits);
+  add('testSinkMergeAutoPushesWhenNoUpstream',            testSinkMergeAutoPushesWhenNoUpstream);
+  add('testSinkMergeOfflineSkipsPublishGuard',            testSinkMergeOfflineSkipsPublishGuard);
+  add('testFastE2EMergeFullChain',                        testFastE2EMergeFullChain);
+  add('testE2EGitHubPrFullChain',                         testE2EGitHubPrFullChain);
+  add('testParallelIssueIndependence',                    testParallelIssueIndependence);
+  add('testClassifierFailClosedOnRemoteError',            testClassifierFailClosedOnRemoteError);
+  add('testClassifierOfflineUnverifiedNoLocalEvidence',   testClassifierOfflineUnverifiedNoLocalEvidence);
+  add('testClassifierOfflineVerifiedRoadmapAcquires',     testClassifierOfflineVerifiedRoadmapAcquires);
+  add('testClassifierOfflineVerifiedOwnedFolderRoutes',   testClassifierOfflineVerifiedOwnedFolderRoutes);
+  add('testClassifierOfflineUnverifiedWithUnrelatedActiveFolder', testClassifierOfflineUnverifiedWithUnrelatedActiveFolder);
+  add('testStartupExplicitTargetRedRefuses',              testStartupExplicitTargetRedRefuses);
+  add('testClassifierTopLevelIssueFlag',                  testClassifierTopLevelIssueFlag);
+  add('testClaimProjectOwnedFolderFailingRemote',         testClaimProjectOwnedFolderFailingRemote);
+  add('testFinalizeRemovesClaimLabel',                    testFinalizeRemovesClaimLabel);
+  add('testFinalizeNullFolderFallbackReadsArchive',       testFinalizeNullFolderFallbackReadsArchive);
+  add('testFinalizeOfflineSkipsLabelInvariant',           testFinalizeOfflineSkipsLabelInvariant);
+  add('testWatchPrEmitsClaimLabelReceipt',                testWatchPrEmitsClaimLabelReceipt);
+  add('testAuditAndRepairLabels',                         testAuditAndRepairLabels);
+  add('testFinalizeClaimLabelFailedTriggersInvariant',    testFinalizeClaimLabelFailedTriggersInvariant);
+  add('testClearAdvisoryClaimDeletesMarkerComment',       testClearAdvisoryClaimDeletesMarkerComment);
+  add('testClearAdvisoryClaimDoesNotDeleteOtherProjectMarker', testClearAdvisoryClaimDoesNotDeleteOtherProjectMarker);
+  add('testClearAdvisoryClaimOfflineSkipsDelete',         testClearAdvisoryClaimOfflineSkipsDelete);
+  add('testSinkMergeEmitsClosureReceipt',                 testSinkMergeEmitsClosureReceipt);
+  add('testWatchPrMergedClosureReceipt',                  testWatchPrMergedClosureReceipt);
+  add('testFinalizeOfflineClosureReceiptSkipped',         testFinalizeOfflineClosureReceiptSkipped);
+  add('testSinkMergeMockabilityAndReceipt',               testSinkMergeMockabilityAndReceipt);
+  add('testSinkMergeCloseFailureWarning',                 testSinkMergeCloseFailureWarning);
+  add('testSinkMergeSkipsArchivedProjectPhantom',         testSinkMergeSkipsArchivedProjectPhantom);
+  add('testKeepOpenMergeFullChain',                       testKeepOpenMergeFullChain);
+  add('testKeepOpenFinalizeFlagAlias',                    testKeepOpenFinalizeFlagAlias);
+  add('testSinkMergeKeepOpenOnlineMock',                  testSinkMergeKeepOpenOnlineMock);
+  add('testSinkMergeKeepOpenRequiresIssue',               testSinkMergeKeepOpenRequiresIssue);
+  add('testSinkMergeKeepOpenArchivedStateGuard',          testSinkMergeKeepOpenArchivedStateGuard);
+  add('testClosureAuditKeepOpenExclusion',                testClosureAuditKeepOpenExclusion);
+  add('testKeepOpenInvariantUnit',                        testKeepOpenInvariantUnit);
+  add('testSinkPrKeepOpenRefusal',                        testSinkPrKeepOpenRefusal);
+  add('testClosureAuditOfflineRemoteClassesSkipped',      testClosureAuditOfflineRemoteClassesSkipped);
+  add('testClosureAuditClosedRemoteRoadmapSource',        testClosureAuditClosedRemoteRoadmapSource);
+  add('testClosureAuditArchiveClosedDrift',               testClosureAuditArchiveClosedDrift);
+  add('testClosureAuditDedupRoadmapAndArchive',           testClosureAuditDedupRoadmapAndArchive);
+  add('testClosureAuditArchiveOnlyNotProbed',             testClosureAuditArchiveOnlyNotProbed);
+  add('testClosureAuditMirrorListsClosedIssues',          testClosureAuditMirrorListsClosedIssues);
+  add('testClosureAuditStaleInProgressLabels',            testClosureAuditStaleInProgressLabels);
+  add('testClosureAuditActiveFolderForClosedIssueReportsDirty', testClosureAuditActiveFolderForClosedIssueReportsDirty);
+  add('testClosureAuditUnarchivedPrFolderMerged',         testClosureAuditUnarchivedPrFolderMerged);
+  add('testClosureAuditExecuteRepairsRoadmapAndLabels',   testClosureAuditExecuteRepairsRoadmapAndLabels);
+  add('testClosureAuditExecuteNeverTouchesActiveFolders', testClosureAuditExecuteNeverTouchesActiveFolders);
+  add('testClosureAuditDryRunNeverCallsRemoveLabel',      testClosureAuditDryRunNeverCallsRemoveLabel);
+  add('testClosureAuditStaleLabelsTimeout',               testClosureAuditStaleLabelsTimeout);
+  add('testClosureAuditUnresolvedClosedState',            testClosureAuditUnresolvedClosedState);
+  add('testClosureAuditProbeFailureUnresolved',           testClosureAuditProbeFailureUnresolved);
+  add('testClosureAuditTimeoutEnvInvalidFallsBack',       testClosureAuditTimeoutEnvInvalidFallsBack);
+  add('testClosureAuditTimeoutEnvOverCapFallsBack',       testClosureAuditTimeoutEnvOverCapFallsBack);
+  add('testClosureAuditExecuteDetectionTimeoutPropagates', testClosureAuditExecuteDetectionTimeoutPropagates);
+  add('testClosureAuditExecuteLabelRemovalTimeoutBreaks', testClosureAuditExecuteLabelRemovalTimeoutBreaks);
+  add('testClosureAuditExecuteLabelRemovalNonTimeoutFails', testClosureAuditExecuteLabelRemovalNonTimeoutFails);
+  add('testClosureAuditPrFolderTimeout',                  testClosureAuditPrFolderTimeout);
+  add('testProbeTimeoutEnv',                              testProbeTimeoutEnv);
+  add('testContractValidatorOfflineSkip',                 testContractValidatorOfflineSkip);
+  add('testContractValidatorReflowTolerant',              testContractValidatorReflowTolerant);
+  add('testContractValidatorMissingTag',                  testContractValidatorMissingTag);
+  add('testWatchPrAbandonedClosureInvariantsClean',       testWatchPrAbandonedClosureInvariantsClean);
+  add('testClaimReclaimsStatelessOrphanDir',              testClaimReclaimsStatelessOrphanDir);
+  add('testPatchBranchGuards',                            testPatchBranchGuards);
+  add('testAdaptiveOffStartupRefusal',                    testAdaptiveOffStartupRefusal);
+  add('testAdaptiveOffClaimRefusal',                      testAdaptiveOffClaimRefusal);
+  add('testAdaptiveOffPreservesTwoWay',                   testAdaptiveOffPreservesTwoWay);
+  add('testAdaptiveOnStartupAcquires',                    testAdaptiveOnStartupAcquires);
+  add('testAdaptiveResumeFromFrozenPlan',                 testAdaptiveResumeFromFrozenPlan);
+  add('testAdaptiveResumeTamperedTypedRefusal',           testAdaptiveResumeTamperedTypedRefusal);
+  add('testAdaptiveResumeUnparseableTypedRefusal',        testAdaptiveResumeUnparseableTypedRefusal);
+  add('testAdaptiveResumeAfterFlipOff',                   testAdaptiveResumeAfterFlipOff);
+  add('testAdaptiveConsentHaltSurfaces',                  testAdaptiveConsentHaltSurfaces);
+  add('testAdaptiveValidatorGovernance',                  testAdaptiveValidatorGovernance);
+  add('testAdaptiveFanoutGroupScoping',                   testAdaptiveFanoutGroupScoping);
+  add('testAdaptiveReadySetDisjointness',                 testAdaptiveReadySetDisjointness);
+  add('testAdaptiveGateBarrierEnforcement',               testAdaptiveGateBarrierEnforcement);
+  add('testAdaptivePerInstanceBarrier',                   testAdaptivePerInstanceBarrier);
+  add('testAdaptivePerInstanceBarrierHardening',          testAdaptivePerInstanceBarrierHardening);
+  add('testAdaptiveResumeReconcilesNextCommand',          testAdaptiveResumeReconcilesNextCommand);
+  add('testAdaptiveDurableConsentHalt',                   testAdaptiveDurableConsentHalt);
+  add('testAdaptiveAuthoringEntryGuard',                  testAdaptiveAuthoringEntryGuard);
+  add('testAdaptiveTier2Composition',                     testAdaptiveTier2Composition);
+  add('testAdaptiveAuditFixes',                           testAdaptiveAuditFixes);
+  add('testAdaptiveResumeHashDeletedTypedRefusal',        testAdaptiveResumeHashDeletedTypedRefusal);
+  add('testAdaptiveValidatorNodeCap',                     testAdaptiveValidatorNodeCap);
+  add('testAdaptiveCheapWinFixes',                        testAdaptiveCheapWinFixes);
+  add('testAdaptiveAuditCoverage',                        testAdaptiveAuditCoverage);
+  add('testAdaptiveSyncGroupGap',                         testAdaptiveSyncGroupGap);
+  add('testAdaptiveRegistrationAndForgePortGaps',         testAdaptiveRegistrationAndForgePortGaps);
+  add('testAdaptiveFreezeRepairReconcile',                testAdaptiveFreezeRepairReconcile);
+  add('testAdaptiveVerdictCheck',                         testAdaptiveVerdictCheck);
+  add('testAdaptivePatternLibrary',                       testAdaptivePatternLibrary);
+  add('testAdaptiveSelectComposition',                    testAdaptiveSelectComposition);
+  add('testAdaptiveSelectNaPropagation',                  testAdaptiveSelectNaPropagation);
+  add('testAdaptiveSelectResumeCheck',                    testAdaptiveSelectResumeCheck);
+  add('testAdaptiveSelectSelectorSourceFanoutMember',     testAdaptiveSelectSelectorSourceFanoutMember);
+  add('testAdaptiveHandoffInGrammarReady',                testAdaptiveHandoffInGrammarReady);
+  add('testAdaptiveHandoffAskFreezesNotApproval',         testAdaptiveHandoffAskFreezesNotApproval);
+  add('testAdaptiveHandoffRefuseNoMutation',              testAdaptiveHandoffRefuseNoMutation);
+  add('testAdaptiveHandoffIdempotentReRun',               testAdaptiveHandoffIdempotentReRun);
+  add('testAdaptiveHandoffProjectFlagResolvesRepoRoot',   testAdaptiveHandoffProjectFlagResolvesRepoRoot);
+  add('testAdaptiveHandoffDecisionIdConflict',            testAdaptiveHandoffDecisionIdConflict);
+  add('testGitignoreCoversKw',                            testGitignoreCoversKw);
+  add('testWorktreeHiddenLocalPath',                      testWorktreeHiddenLocalPath);
+  add('testLegacyWorktreeCleanupDryRun',                  testLegacyWorktreeCleanupDryRun);
+  add('testLegacyWorktreeCleanupDirtySkip',               testLegacyWorktreeCleanupDirtySkip);
+  add('testAdaptiveWorktreeProvisionedE2E',               testAdaptiveWorktreeProvisionedE2E);
+  add('testAdaptiveWorktreeMirrorNoManualCopy',           testAdaptiveWorktreeMirrorNoManualCopy);
+  add('testSinkRefusesWorkflowOnlyBranch',                testSinkRefusesWorkflowOnlyBranch);
+  add('testSinkAllowsMixedBranch',                        testSinkAllowsMixedBranch);
+  add('testPlanRunWiredForWorktree',                      testPlanRunWiredForWorktree);
+  add('testPlannerAttestFlagBackfillsDispatchLog',        testPlannerAttestFlagBackfillsDispatchLog);
+  add('testPlannerAttestFlagAbsentStaysMissing',          testPlannerAttestFlagAbsentStaysMissing);
+  add('testPlannerAttestFlagPresentInPlannerAgent',       testPlannerAttestFlagPresentInPlannerAgent);
+  add('testDispatchLogHookWorktreeAware338',              testDispatchLogHookWorktreeAware338);
+  add('testContractorAttestFlagBackfills338',             testContractorAttestFlagBackfills338);
+  add('testContractorAttestAbsentWarnsNonBlocking338',    testContractorAttestAbsentWarnsNonBlocking338);
+  add('testFinalizeIncompleteResumesCrashState',          testFinalizeIncompleteResumesCrashState);
+  add('testFinalizeIncompleteNegativeControlAlreadyDone', testFinalizeIncompleteNegativeControlAlreadyDone);
+  add('testFinalizeIncompleteNegativeControlRepoDirty',   testFinalizeIncompleteNegativeControlRepoDirty);
+  add('testFinalizeIncompleteWorktreeReentryFix',         testFinalizeIncompleteWorktreeReentryFix);
+  add('testBundleClaimCreatesOneFolder',                  testBundleClaimCreatesOneFolder);
+  add('testBundleRefusalLeavesNoFolder',                  testBundleRefusalLeavesNoFolder);
+  add('testBundleDuplicateIssueBlocking',                 testBundleDuplicateIssueBlocking);
+  add('testBundleAdaptiveResumeSurfacesBundleIdentity',   testBundleAdaptiveResumeSurfacesBundleIdentity);
+  add('testBundleFinalizeRoadmapCleanup',                 testBundleFinalizeRoadmapCleanup);
+  add('testBundleSingleIssueStateHasNoBundleFields',      testBundleSingleIssueStateHasNoBundleFields);
+  add('testHarnessSelfCheck',                             testHarnessSelfCheck);
+  return reg;
+}
+
+const SCENARIO_REGISTRY = buildRegistry();
+
 async function main() {
+  // ── CLI: parse --list and --only ──────────────────────────────────────────
+  const args = process.argv.slice(2);
+  const onlyTokens = [];
+  let listMode = false;
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--list') {
+      listMode = true;
+    } else if (args[i] === '--only') {
+      if (i + 1 >= args.length) {
+        process.stderr.write('Error: --only requires a token argument\n');
+        process.exitCode = 1;
+        return;
+      }
+      onlyTokens.push(args[++i]);
+    }
+  }
+
+  // ── --list: print all scenario names and exit 0 ──────────────────────────
+  if (listMode) {
+    for (const entry of SCENARIO_REGISTRY) {
+      const suffix = entry.sharedTmp ? '  [shared-tmp group]' : '';
+      process.stdout.write(entry.name + suffix + '\n');
+    }
+    return;
+  }
+
+  // ── --only: select subset (exact match OR prefix match, union of tokens) ─
+  let selectedEntries = null;
+  let needsSharedTmp = false;
+  if (onlyTokens.length > 0) {
+    selectedEntries = SCENARIO_REGISTRY.filter(entry =>
+      onlyTokens.some(tok => entry.name === tok || entry.name.startsWith(tok))
+    );
+    if (selectedEntries.length === 0) {
+      const msg = 'Error: --only matched no scenarios for token(s): ' +
+        onlyTokens.map(t => JSON.stringify(t)).join(', ') +
+        '\nRun with --list to see available scenario names.\n';
+      process.stderr.write(msg);
+      process.exitCode = 1;
+      return;
+    }
+    // If any selected entry is in the shared-tmp group, run the WHOLE group.
+    needsSharedTmp = selectedEntries.some(e => e.sharedTmp);
+  }
+
+  // ── Run scenarios ─────────────────────────────────────────────────────────
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-active-folders-'));
+  const fullRun = selectedEntries === null;
   try {
-    testClaimStatusRelease(tmp);
-    testFinalize(tmp);
-    testKeepOpenArchiveStamp();      // #333
-    testManualArchiveBackstop();     // #333
-    testRepair(tmp);
-    testRepairFastPath(tmp);
-    testRepairFastEscalation(tmp);
-    testRepairFastNoArgSingle();
-    testRepairFastNoArgAmbiguous();
-    testRepairFinalizationRoute();
-    testSinkPrUsesFinalizationSummary();
-    testHookSingleProjectGuard(tmp);
-    testHookGitDashCCommitGuard();
-    testPhantomAdvisorHookGuard();
-    testSubagentDispatchHookExists();
-    testRoadmapGenerateMissingSourceGuard(tmp);
-    testRoadmapGenerateAtomicReplace(tmp);
-    testRoadmapProjectRulesAppend(tmp);
-    await testRoadmapInitIssueConcurrentExclusive(tmp);
-    testRoadmapFilenameAuthorityMissingIssueField(tmp);
-    testRoadmapFilenameAuthorityMismatch(tmp);
-    testRoadmapMigrateRoundTripNoDoubleEscape(tmp);
-    testClassifierFolderOverlapRed();
-    testClassifierFolderOverlapYellow();
-    testClassifierClosedIssueResidueIgnored();
-    testClassifierReleasedFolderExcluded();
-    testClassifierFastScopeOverlapRed();
-    testClassifierFastScopeDisjointGreen();
-    testClassifierDotPathOverlapRed();
-    testClassifierRootPathProseNoOverlap();
-    testClassifierDotAreaOverlapRed();
-    testClassifierCuratedRootOverlapYellow();
-    testClassifierCuratedRootProseClaimedYellow();
-    testClassifierCuratedRootProseNoOverlapGreen();
-    testClassifierCuratedRootStructuredLowercaseYellow();
-    testClassifierFastScopeSectionIsolationGreen();
-    testClassifierFastScopeFenceCommentRed();
-    testClassifierFastScopeFenceHeadingRed();
-    testClassifierFastScopeFenceMixedMarkerRed();
-    testClassifierFastScopeFenceInFencePathRed();
-    testClassifierFastScopePreSectionUnclosedFenceRed();
-    testClassifierDependsOnGate();
-    testProbeIssueStateOffline();
-    testProbeIssueStateNullIssue();
-    testProbeIssueStateEmptyGhResponse();
-    testProbeIssueStateGhThrows();
-    testStartupJsonAndHiddenLocalWorktrees();
-    testWorktreeNativeDefaultOff();
-    testWorktreeNativeInPlaceIdempotentReclaim();
-    testWorktreeNativeDirtyTreeRefusal();
-    testWorktreeNativeDetachedHeadRecordOnly();
-    testWorktreeNativeDiscardRestoresBase();
-    testWorktreeNativeDiscardRestoresNonDefaultBase();
-    testWorktreeNativeOfflineWins();
-    testWorktreeNativeSurfacesProvisionFailure();
-    testWorktreeAdaptiveProvisioned();
-    testFastStartupState();
-    testResumeFastEmptyNextCommand();
-    testClassifierCurrentClaimMarkerBlocks();
-    testWatchPrArchivesClosedIssuePrFolder();
-    testSinkFallbackSkipsArchivedProject();
-    testFinalizeReleaseCleansWorktree();
-    testFinalizeFromLinkedWorktreeCleansMainCopy();
-    testFinalizeNarrowStagingExcludesForeignArchive();
-    testFinalizeFromMainRootNoSpuriousRemoval();
-    testFinalizeCleansRoadmapEntry();
-    testFinalizeFromLinkedWorktreeCleansRoadmapEntry();
-    testFinalizeFromLinkedWorktreeCleansMainStagedRoadmapSource(); // #297
-    testFinalizeRoadmapCleanupFailureReceipt();
-    testWatchPrRoadmapCleanupWarning();
-    testValidateRemoteOffline();
-    testReleaseFromLinkedWorktreeCleansMainCopy();
-    testSinkMergeFromLinkedWorktree();
-    testStatusShowsClosedIssueDrift();
-    testStaleWorktreeCheck();
-    testStaleWorktreeCleanup();
-    testNoTargetZeroActive();
-    testNoTargetOneActive();
-    testNoTargetMultipleActive();
-    testSoleActiveRoundTrip();
-    await testSinkPrLeavesCleanWorktree();
-    testReadPriorityConfig();
-    testE2EGitHubMergeFullChain();
-    testSinkMergeRefusesLiveFolder();
-    testSinkMergeBlocksUnpushedCommits();
-    testSinkMergeAutoPushesWhenNoUpstream();
-    testSinkMergeOfflineSkipsPublishGuard();
-    testFastE2EMergeFullChain();
-    testE2EGitHubPrFullChain();
-    testParallelIssueIndependence();
-    testClassifierFailClosedOnRemoteError();
-    testClassifierOfflineUnverifiedNoLocalEvidence();
-    testClassifierOfflineVerifiedRoadmapAcquires();
-    testClassifierOfflineVerifiedOwnedFolderRoutes();
-    testClassifierOfflineUnverifiedWithUnrelatedActiveFolder();
-    testStartupExplicitTargetRedRefuses();
-    testClassifierTopLevelIssueFlag();
-    testClaimProjectOwnedFolderFailingRemote();
-    testFinalizeRemovesClaimLabel();
-    testFinalizeNullFolderFallbackReadsArchive();
-    testFinalizeOfflineSkipsLabelInvariant();
-    testWatchPrEmitsClaimLabelReceipt();
-    testAuditAndRepairLabels();
-    testFinalizeClaimLabelFailedTriggersInvariant();
-    testClearAdvisoryClaimDeletesMarkerComment();
-    testClearAdvisoryClaimDoesNotDeleteOtherProjectMarker();
-    testClearAdvisoryClaimOfflineSkipsDelete();
-    testSinkMergeEmitsClosureReceipt();
-    testWatchPrMergedClosureReceipt();
-    testFinalizeOfflineClosureReceiptSkipped();
-    testSinkMergeMockabilityAndReceipt();
-    testSinkMergeCloseFailureWarning();
-    testSinkMergeSkipsArchivedProjectPhantom();
-    // #336: keep-open partial-close sink lane
-    testKeepOpenMergeFullChain();
-    testKeepOpenFinalizeFlagAlias();
-    testSinkMergeKeepOpenOnlineMock();
-    testSinkMergeKeepOpenRequiresIssue();
-    testSinkMergeKeepOpenArchivedStateGuard();
-    testClosureAuditKeepOpenExclusion();
-    testKeepOpenInvariantUnit();
-    testSinkPrKeepOpenRefusal();
-    testClosureAuditOfflineRemoteClassesSkipped();
-    testClosureAuditClosedRemoteRoadmapSource();
-    testClosureAuditArchiveClosedDrift();
-    testClosureAuditDedupRoadmapAndArchive();
-    testClosureAuditArchiveOnlyNotProbed();
-    testClosureAuditMirrorListsClosedIssues();
-    testClosureAuditStaleInProgressLabels();
-    testClosureAuditActiveFolderForClosedIssueReportsDirty();
-    testClosureAuditUnarchivedPrFolderMerged();
-    testClosureAuditExecuteRepairsRoadmapAndLabels();
-    testClosureAuditExecuteNeverTouchesActiveFolders();
-    testClosureAuditDryRunNeverCallsRemoveLabel();
-    testClosureAuditStaleLabelsTimeout();
-    testClosureAuditUnresolvedClosedState();
-    testClosureAuditProbeFailureUnresolved();
-    testClosureAuditTimeoutEnvInvalidFallsBack();
-    testClosureAuditTimeoutEnvOverCapFallsBack();
-    testClosureAuditExecuteDetectionTimeoutPropagates();
-    testClosureAuditExecuteLabelRemovalTimeoutBreaks();
-    testClosureAuditExecuteLabelRemovalNonTimeoutFails();
-    testClosureAuditPrFolderTimeout();
-    testProbeTimeoutEnv();
-    testContractValidatorOfflineSkip();
-    testContractValidatorReflowTolerant();
-    testContractValidatorMissingTag();
-    testWatchPrAbandonedClosureInvariantsClean();
-    testClaimReclaimsStatelessOrphanDir();
-    testPatchBranchGuards();
-    // issue #227 — adaptive path
-    testAdaptiveOffStartupRefusal();
-    testAdaptiveOffClaimRefusal();
-    testAdaptiveOffPreservesTwoWay();
-    testAdaptiveOnStartupAcquires();
-    testAdaptiveResumeFromFrozenPlan();
-    testAdaptiveResumeTamperedTypedRefusal();
-    testAdaptiveResumeUnparseableTypedRefusal();
-    testAdaptiveResumeAfterFlipOff();
-    testAdaptiveConsentHaltSurfaces();
-    testAdaptiveValidatorGovernance();
-    testAdaptiveFanoutGroupScoping();
-    testAdaptiveReadySetDisjointness();
-    testAdaptiveGateBarrierEnforcement();
-    testAdaptivePerInstanceBarrier();
-    testAdaptivePerInstanceBarrierHardening();
-    testAdaptiveResumeReconcilesNextCommand();
-    testAdaptiveDurableConsentHalt();
-    testAdaptiveAuthoringEntryGuard();
-    testAdaptiveTier2Composition();
-    testAdaptiveAuditFixes();
-    testAdaptiveResumeHashDeletedTypedRefusal();
-    testAdaptiveValidatorNodeCap();
-    testAdaptiveCheapWinFixes();
-    testAdaptiveAuditCoverage();
-    testAdaptiveSyncGroupGap();   // #274
-    testAdaptiveRegistrationAndForgePortGaps();   // #340
-    testAdaptiveFreezeRepairReconcile();   // #308
-    testAdaptiveVerdictCheck();
-    testAdaptivePatternLibrary();
-    // issue #267 — select() composition + runtime coverage
-    testAdaptiveSelectComposition();
-    testAdaptiveSelectNaPropagation();
-    testAdaptiveSelectResumeCheck();
-    testAdaptiveSelectSelectorSourceFanoutMember();
-    // issue #255 — adaptive handoff integration tests
-    testAdaptiveHandoffInGrammarReady();
-    testAdaptiveHandoffAskFreezesNotApproval();
-    testAdaptiveHandoffRefuseNoMutation();
-    testAdaptiveHandoffIdempotentReRun();
-    // issue #255 review BLOCKING-1: --project must resolve user-repo root via git rev-parse
-    testAdaptiveHandoffProjectFlagResolvesRepoRoot();
-    // issue #337 — decision-record id preflight (freeze-time-once, refuse pre-freeze)
-    testAdaptiveHandoffDecisionIdConflict();
-    // issue #264 — hidden-local worktree path, gitignore, legacy cleanup, sink guard
-    testGitignoreCoversKw();
-    testWorktreeHiddenLocalPath();
-    testLegacyWorktreeCleanupDryRun();
-    testLegacyWorktreeCleanupDirtySkip();
-    testAdaptiveWorktreeProvisionedE2E();
-    // issue #335 — mechanical main→worktree project-folder mirror (no manual cp)
-    testAdaptiveWorktreeMirrorNoManualCopy();
-    testSinkRefusesWorkflowOnlyBranch();
-    testSinkAllowsMixedBranch();
-    testPlanRunWiredForWorktree();
-    // issue #280 — closure attestation false-failures
-    testPlannerAttestFlagBackfillsDispatchLog();     // AC1: M1 back-fill + M2 sink-merge check
-    testPlannerAttestFlagAbsentStaysMissing();        // AC2: no-flag path stays not-attested
-    testPlannerAttestFlagPresentInPlannerAgent();     // contract guard
-    // issue #338 — false-negative producer (worktree-blind hook) + contractor self-attest
-    testDispatchLogHookWorktreeAware338();            // T3: hook dual-root capture
-    testContractorAttestFlagBackfills338();           // T4: --attest-contractor-spawn → attested
-    testContractorAttestAbsentWarnsNonBlocking338();  // T5: no flag → missing + warning (warn-first)
-    // issue #296 — worktree finalize crash-resumability
-    testFinalizeIncompleteResumesCrashState();
-    testFinalizeIncompleteNegativeControlAlreadyDone();
-    testFinalizeIncompleteNegativeControlRepoDirty();
-    testFinalizeIncompleteWorktreeReentryFix();
-    // issue #328 AC#14 — bundle-lane E2E integration tests
-    testBundleClaimCreatesOneFolder();
-    testBundleRefusalLeavesNoFolder();
-    testBundleDuplicateIssueBlocking();
-    testBundleAdaptiveResumeSurfacesBundleIdentity();
-    testBundleFinalizeRoadmapCleanup();
-    testBundleSingleIssueStateHasNoBundleFields();
-    console.log('Workflow walkthrough simulation passed');
+    if (fullRun) {
+      // Full run: same order as original main(), shared-tmp group first.
+      await runSharedTmpGroup(tmp);
+      for (const entry of SCENARIO_REGISTRY) {
+        if (entry.sharedTmp) continue; // already ran above
+        await entry.fn();
+      }
+      console.log('Workflow walkthrough simulation passed');
+    } else {
+      // Subset run.
+      if (needsSharedTmp) {
+        await runSharedTmpGroup(tmp);
+      }
+      // Run the non-shared-tmp selected entries (sharedTmp ones were run as a group above).
+      for (const entry of selectedEntries) {
+        if (entry.sharedTmp) continue;
+        await entry.fn();
+      }
+      console.log('Walkthrough --only subset passed (' + selectedEntries.length + ' scenarios)');
+    }
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -11349,5 +11579,16 @@ function testBundleSingleIssueStateHasNoBundleFields() {
 
 main().catch(err => {
   console.error(err && err.stack ? err.stack : String(err));
+  // Print tail of stdout/stderr from child-process errors (execFileSync/spawnSync attach them).
+  if (err && err.stdout) {
+    const lines = String(err.stdout).split('\n');
+    console.error('--- child stdout (last 30 lines) ---');
+    console.error(lines.slice(-30).join('\n'));
+  }
+  if (err && err.stderr) {
+    const lines = String(err.stderr).split('\n');
+    console.error('--- child stderr (last 30 lines) ---');
+    console.error(lines.slice(-30).join('\n'));
+  }
   process.exitCode = 1;
 });

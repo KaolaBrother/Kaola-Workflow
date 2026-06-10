@@ -13,12 +13,28 @@ const root = path.resolve(__dirname, '..', '..', '..');
 const sinkPr = require(path.join(root, 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-sink-pr'));
 const claimScript = path.join(root, 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js');
 
+function tail30(str) {
+  if (!str) return '';
+  const lines = str.split('\n');
+  return lines.slice(Math.max(0, lines.length - 30)).join('\n');
+}
+
 function run(script) {
-  execFileSync(process.execPath, [path.join(root, 'plugins/kaola-workflow-gitea/scripts', script)], {
-    cwd: root,
-    encoding: 'utf8',
-    stdio: 'pipe'
-  });
+  try {
+    execFileSync(process.execPath, [path.join(root, 'plugins/kaola-workflow-gitea/scripts', script)], {
+      cwd: root,
+      encoding: 'utf8',
+      stdio: 'pipe'
+    });
+  } catch (err) {
+    process.stderr.write('\n--- CHILD FAILURE: ' + script + ' ---\n');
+    const out = tail30(err.stdout);
+    if (out.trim()) process.stderr.write('stdout (last 30 lines):\n' + out + '\n');
+    const errOut = tail30(err.stderr);
+    if (errOut.trim()) process.stderr.write('stderr (last 30 lines):\n' + errOut + '\n');
+    process.stderr.write('--- END CHILD OUTPUT ---\n');
+    throw err;
+  }
 }
 
 function testFallbackGuardsAfterArchive() {
