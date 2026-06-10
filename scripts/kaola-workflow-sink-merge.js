@@ -3,10 +3,18 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { getCoordRoot, readActiveFolders, removeWorktree, buildClosureReceipt, checkClosureInvariants, checkDispatchAttestations } = require('./kaola-workflow-claim.js');
+const { getCoordRoot, readActiveFolders, removeWorktree, buildClosureReceipt, checkClosureInvariants, checkDispatchAttestations, defaultBranch } = require('./kaola-workflow-claim.js');
 
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
 const FORCE_FF_FAIL = parseInt(process.env.KAOLA_WORKFLOW_FORCE_FF_FAIL || '0', 10);
+// #350: test-only — skip the npm-test gate that doRebase / the FF-loop re-rebase run after a
+// rebase, so an integration test can exercise the re-rebase race without recursively invoking
+// the whole suite. Never set in production.
+const SKIP_TESTGATE = process.env.KAOLA_WORKFLOW_SKIP_TESTGATE === '1';
+// #350: test-only — a directory (a prepared clone) whose pending commit is pushed to
+// origin/<defBranch> ONCE before the first FF, simulating an origin advance mid-flight. Never
+// set in production; the operation is a fixed `git push`, not arbitrary exec.
+const FF_RACE_PUSH_DIR = process.env.KAOLA_WORKFLOW_FF_RACE_PUSH_DIR || '';
 const FORCE_MERGE_IMPOSSIBLE = process.env.KAOLA_WORKFLOW_FORCE_MERGE_IMPOSSIBLE || '';
 const REMOTE_TIMEOUT_MS = (() => {
   const n = parseInt(process.env.KAOLA_GH_REMOTE_TIMEOUT_MS || '30000', 10);
@@ -134,15 +142,16 @@ function assertWorktreeClean(mainRoot, branch) {
   }
 }
 
-function assertBranchHasNonWorkflowChanges(mainRoot, branch) {
-  // AC7 (#264): refuse a sink whose entire diff vs origin/main is kaola-workflow/** bookkeeping —
-  // the branch carries no implementation. Skip when origin/main is unresolvable (mirror
+function assertBranchHasNonWorkflowChanges(mainRoot, branch, defBranch) {
+  // AC7 (#264): refuse a sink whose entire diff vs origin/<defBranch> is kaola-workflow/**
+  // bookkeeping — the branch carries no implementation. Skip when the base is unresolvable (mirror
   // alreadyUpToDate: no integration base to diff against → cannot judge, do not block).
+  const baseRef = 'origin/' + defBranch;
   let base;
   try {
-    base = execFileSync('git', ['-C', mainRoot, 'rev-parse', '--verify', 'origin/main'],
+    base = execFileSync('git', ['-C', mainRoot, 'rev-parse', '--verify', baseRef],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-  } catch (_) { return; } // origin/main missing → skip (same posture as merge-base skip-check)
+  } catch (_) { return; } // base missing → skip (same posture as merge-base skip-check)
   let files;
   try {
     const out = execFileSync('git', ['-C', mainRoot, 'diff', '--name-only', base + '...' + branch],
@@ -197,58 +206,103 @@ function assertBranchPushedToUpstream(mainRoot, branch) {
   );
 }
 
-// Steps 3–4: rebase onto origin/main and run post-rebase tests.
-function doRebase(args, alreadyUpToDate, mainRoot) {
+// Step 4 — post-rebase validation gate. Skipped OFFLINE (callers own their own validation) or
+// under the #350 test-gate-skip hook (so an integration test can exercise the re-rebase race
+// without recursively running the whole suite).
+function runTestGate(mainRoot) {
+  if (!OFFLINE && !SKIP_TESTGATE) {
+    execFileSync('npm', ['test'], { cwd: mainRoot, encoding: 'utf8', stdio: 'inherit' });
+  }
+}
+
+// Steps 3–4: rebase onto origin/<defBranch> and run post-rebase tests.
+function doRebase(args, alreadyUpToDate, mainRoot, defBranch) {
   // Step 3 — Rebase (inline error message; no external file needed)
   if (!alreadyUpToDate) {
     try {
-      execFileSync('git', ['-C', mainRoot, 'rebase', 'origin/main'], { encoding: 'utf8' });
+      execFileSync('git', ['-C', mainRoot, 'rebase', 'origin/' + defBranch], { encoding: 'utf8' });
     } catch (e) {
       throw new Error(
         'Rebase failed: ' + e.message + '\n' +
         'Remediation:\n' +
         '  1. Run: git rebase --abort\n' +
         '  2. Resolve conflicts manually on the feature branch\n' +
-        '  3. Re-run: git rebase origin/main\n' +
+        '  3. Re-run: git rebase origin/' + defBranch + '\n' +
         '  4. Re-invoke sink-merge after conflicts are resolved\n' +
         'For further guidance, see the conflict remediation section in ' +
         'https://github.com/kaolabrother/Kaola-Workflow/blob/main/README.md'
       );
     }
-  }
-
-  // Step 4 — Post-rebase validation
-  // Skip when OFFLINE (mirrors Steps 1/5/7/8/9 — C-refined-A). Callers in OFFLINE mode own their own validation.
-  if (!alreadyUpToDate && !OFFLINE) {
-    execFileSync('npm', ['test'], { cwd: mainRoot, encoding: 'utf8', stdio: 'inherit' });
+    // Step 4 — Post-rebase validation (skipped OFFLINE / under the test-gate-skip hook).
+    runTestGate(mainRoot);
   }
 }
 
 // Steps 5–6: FF-only merge loop with retry on race. Returns false when retries exhausted.
-function ffMergeLoop(args, mainRoot) {
+// #350: the default branch is resolved (defBranch), not hardcoded as 'main', and on an FF
+// failure the feature branch is RE-REBASED onto the updated origin tip before retrying — the
+// only race that makes an FF fail is origin/<defBranch> advancing after the initial rebase, and
+// the pre-#350 loop retried the IDENTICAL ff-only merge without re-rebasing (so it could never
+// succeed for its own target race — the loop was dead weight). On final failure the main root is
+// restored to the default branch (the FF attempts leave it on the feature branch).
+function ffMergeLoop(args, mainRoot, defBranch) {
   let retries = 0;
   let forcedFailCount = 0;
+
+  const giveUp = () => {
+    process.stderr.write('FF race: exhausted ' + MAX_AUTOMERGE_RETRIES + ' retries. Aborting.\n');
+    process.stderr.write('Manual resolution: ensure no concurrent pushes to ' + defBranch + ' and re-run sink-merge.\n');
+    try { execFileSync('git', ['-C', mainRoot, 'checkout', defBranch], { encoding: 'utf8' }); } catch (_) {}
+    return false;
+  };
+
+  // Re-fetch + re-rebase the feature branch onto origin/<defBranch>, then re-run the test gate
+  // (the base moved). Returns false on a rebase conflict or a failed gate (caller gives up).
+  const reRebaseFeature = () => {
+    if (OFFLINE) return true; // no origin to re-rebase against — retry the FF as-is.
+    try {
+      execFileSync('git', ['-C', mainRoot, 'fetch', 'origin'], { encoding: 'utf8' });
+      execFileSync('git', ['-C', mainRoot, 'checkout', args.branch], { encoding: 'utf8' });
+      execFileSync('git', ['-C', mainRoot, 'rebase', 'origin/' + defBranch], { encoding: 'utf8' });
+    } catch (_) {
+      try { execFileSync('git', ['-C', mainRoot, 'rebase', '--abort'], { encoding: 'utf8' }); } catch (_) {}
+      process.stderr.write('FF race: re-rebase onto origin/' + defBranch + ' conflicted — manual resolution required.\n');
+      return false;
+    }
+    try { runTestGate(mainRoot); } catch (_) {
+      process.stderr.write('FF race: test gate failed after re-rebase onto origin/' + defBranch + '.\n');
+      return false;
+    }
+    return true;
+  };
+
+  let raceHookFired = false;
   while (true) {
-    // Step 5 — Pull latest main (skip if OFFLINE)
+    // #350 test-only: a one-shot mid-flight race hook — push a prepared clone's commit to
+    // origin/<defBranch> BEFORE the first pull/FF, deterministically reproducing "origin advanced
+    // after the initial rebase". Fixed operation (git push from a test-provided dir), never set in
+    // production. Lets the re-rebase recovery below be exercised as the load-bearing path.
+    if (FF_RACE_PUSH_DIR && !raceHookFired) {
+      raceHookFired = true;
+      try { execFileSync('git', ['-C', FF_RACE_PUSH_DIR, 'push', 'origin', defBranch], { encoding: 'utf8' }); } catch (_) {}
+    }
+    // Step 5 — Pull latest default branch (skip if OFFLINE)
     if (!OFFLINE) {
-      execFileSync('git', ['-C', mainRoot, 'checkout', 'main'], { encoding: 'utf8' });
+      execFileSync('git', ['-C', mainRoot, 'checkout', defBranch], { encoding: 'utf8' });
       execFileSync('git', ['-C', mainRoot, 'pull', '--ff-only'], { encoding: 'utf8' });
       execFileSync('git', ['-C', mainRoot, 'checkout', args.branch], { encoding: 'utf8' });
     }
 
-    // Step 6 — FF-only merge onto main
-    execFileSync('git', ['-C', mainRoot, 'checkout', 'main'], { encoding: 'utf8' });
+    // Step 6 — FF-only merge onto the default branch
+    execFileSync('git', ['-C', mainRoot, 'checkout', defBranch], { encoding: 'utf8' });
 
-    // FORCE_FF_FAIL: test-only — make first FORCE_FF_FAIL attempts fail without calling git merge
+    // FORCE_FF_FAIL: test-only — make first FORCE_FF_FAIL attempts fail without calling git merge.
     if (forcedFailCount < FORCE_FF_FAIL) {
       forcedFailCount++;
       retries++;
       execFileSync('git', ['-C', mainRoot, 'checkout', args.branch], { encoding: 'utf8' });
-      if (retries >= MAX_AUTOMERGE_RETRIES) {
-        process.stderr.write('FF race: exhausted ' + MAX_AUTOMERGE_RETRIES + ' retries. Aborting.\n');
-        process.stderr.write('Manual resolution: ensure no concurrent pushes to main and re-run sink-merge.\n');
-        return false;
-      }
+      if (retries >= MAX_AUTOMERGE_RETRIES) return giveUp();
+      if (!reRebaseFeature()) return giveUp();
       continue;
     }
 
@@ -259,11 +313,8 @@ function ffMergeLoop(args, mainRoot) {
     } catch (_) {
       retries++;
       execFileSync('git', ['-C', mainRoot, 'checkout', args.branch], { encoding: 'utf8' });
-      if (retries >= MAX_AUTOMERGE_RETRIES) {
-        process.stderr.write('FF race: exhausted ' + MAX_AUTOMERGE_RETRIES + ' retries. Aborting.\n');
-        process.stderr.write('Manual resolution: ensure no concurrent pushes to main and re-run sink-merge.\n');
-        return false;
-      }
+      if (retries >= MAX_AUTOMERGE_RETRIES) return giveUp();
+      if (!reRebaseFeature()) return giveUp();
       continue;
     }
 
@@ -271,14 +322,14 @@ function ffMergeLoop(args, mainRoot) {
   }
 }
 
-function postMergeCleanup(args, mainRoot, wtRemovedStatus) {
+function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch) {
   // Step 7 — Push (with merge-impossible auto-fallback)
   try {
     if (FORCE_MERGE_IMPOSSIBLE) {
       throw new Error('synthetic merge-impossible: ' + FORCE_MERGE_IMPOSSIBLE);
     }
     if (!OFFLINE) {
-      execFileSync('git', ['-C', mainRoot, 'push', 'origin', 'main'], { encoding: 'utf8' });
+      execFileSync('git', ['-C', mainRoot, 'push', 'origin', defBranch], { encoding: 'utf8' });
     }
   } catch (e) {
     const token = classifyMergeError(e.stderr || e.message || '');
@@ -291,7 +342,7 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus) {
     const archiveProjectDir = path.join(mainRoot, 'kaola-workflow', 'archive', args.project);
     const wasArchived = !fs.existsSync(liveProjectDir) && fs.existsSync(archiveProjectDir);
     try {
-      execFileSync('git', ['-C', mainRoot, 'reset', '--hard', 'origin/main'], { encoding: 'utf8' });
+      execFileSync('git', ['-C', mainRoot, 'reset', '--hard', 'origin/' + defBranch], { encoding: 'utf8' });
     } catch (_) {}
     if (wasArchived) {
       process.stderr.write('sink-merge: project archived (' + args.project + '), skipping receipt write\n');
@@ -410,6 +461,9 @@ function main() {
   // after every precondition proves the sink can proceed.
   const coordRoot = getCoordRoot();
   const mainRoot = mainRootFromCoord(coordRoot);
+  // #350: resolve the integration/default branch (origin/HEAD), falling back to 'main'. Repos
+  // whose default branch is master/other no longer break sink-merge.
+  const defBranch = defaultBranch(mainRoot);
   let wtRemovedStatus = 'failed';
   process.on('exit', () => {
     try { process.chdir(mainRoot); } catch (_) {}
@@ -440,7 +494,7 @@ function main() {
   assertCleanWorktree(mainRoot);
   assertNoLiveWorkflowFolder(mainRoot, args.project, args.branch);
   if (!OFFLINE) assertBranchPushedToUpstream(mainRoot, args.branch);
-  if (!OFFLINE) assertBranchHasNonWorkflowChanges(mainRoot, args.branch);
+  if (!OFFLINE) assertBranchHasNonWorkflowChanges(mainRoot, args.branch, defBranch);
   assertWorktreeClean(mainRoot, args.branch);
 
   // Step 3 — Remove the worktree (only now that every precondition passed) so the branch can be
@@ -464,28 +518,29 @@ function main() {
   execFileSync('git', ['-C', mainRoot, 'checkout', args.branch], { encoding: 'utf8' });
 
   // Step 2 — Merge-base skip-check
-  // If origin/main doesn't exist (e.g. no remote, or OFFLINE with no cached ref),
+  // If origin/<defBranch> doesn't exist (e.g. no remote, or OFFLINE with no cached ref),
   // treat as already up-to-date so the rebase is skipped.
+  const originRef = 'origin/' + defBranch;
   let alreadyUpToDate = false;
   try {
-    const mergeBase = execFileSync('git', ['-C', mainRoot, 'merge-base', 'HEAD', 'origin/main'],
+    const mergeBase = execFileSync('git', ['-C', mainRoot, 'merge-base', 'HEAD', originRef],
       { encoding: 'utf8' }).trim();
-    const originMain = execFileSync('git', ['-C', mainRoot, 'rev-parse', 'origin/main'],
+    const originHead = execFileSync('git', ['-C', mainRoot, 'rev-parse', originRef],
       { encoding: 'utf8' }).trim();
-    alreadyUpToDate = (mergeBase === originMain);
+    alreadyUpToDate = (mergeBase === originHead);
   } catch (_) {
-    // origin/main not resolvable — treat as up-to-date (no drift to rebase against)
+    // origin/<defBranch> not resolvable — treat as up-to-date (no drift to rebase against)
     alreadyUpToDate = true;
   }
 
-  doRebase(args, alreadyUpToDate, mainRoot);
+  doRebase(args, alreadyUpToDate, mainRoot, defBranch);
 
-  if (!ffMergeLoop(args, mainRoot)) {
+  if (!ffMergeLoop(args, mainRoot, defBranch)) {
     process.exitCode = 2;
     return;
   }
 
-  const cleanupResult = postMergeCleanup(args, mainRoot, wtRemovedStatus);
+  const cleanupResult = postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch);
   if (cleanupResult && cleanupResult.exitCode === 3) { process.exitCode = 3; return; }
 }
 

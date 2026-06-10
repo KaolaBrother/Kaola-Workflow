@@ -5003,6 +5003,82 @@ function testSinkMergeOfflineSkipsPublishGuard() {
   }
 }
 
+// #350: sink-merge resolves the default branch (origin/HEAD), not a hardcoded 'main'. A repo whose
+// default branch is `master` must merge to master — and must NOT fabricate a `main` branch.
+function testSinkMergeNonDefaultBranchMaster() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-master-')));
+  const remotePath = tmp + '-remote';
+  const env = { ...process.env, ...GIT_ISOLATION_ENV, GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' };
+  try {
+    spawnSync('git', ['init', '-b', 'master', tmp], { env });
+    fs.writeFileSync(path.join(tmp, 'README.md'), 'seed');
+    spawnSync('git', ['-C', tmp, 'add', '-A'], { env });
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'seed'], { env });
+    spawnSync('git', ['init', '--bare', '-b', 'master', remotePath], { env });
+    spawnSync('git', ['-C', tmp, 'remote', 'add', 'origin', remotePath], { env });
+    spawnSync('git', ['-C', tmp, 'push', '-u', 'origin', 'master'], { env });
+    spawnSync('git', ['-C', tmp, 'remote', 'set-head', 'origin', 'master'], { env }); // origin/HEAD → master (defaultBranch resolves it offline)
+    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-3502'], { env });
+    fs.writeFileSync(path.join(tmp, 'feat.txt'), 'impl');
+    spawnSync('git', ['-C', tmp, 'add', 'feat.txt'], { env });
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'feat: impl 3502'], { env });
+    const masterBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'master'], { encoding: 'utf8', env }).stdout.trim();
+    const result = spawnSync(process.execPath, [sinkMergeScript, '--project', 'issue-3502', '--branch', 'workflow/issue-3502'], {
+      cwd: tmp, encoding: 'utf8', env: { ...env, KAOLA_WORKFLOW_OFFLINE: '1' }
+    });
+    assert(result.status === 0, '#350: sink-merge merges on a master default branch (offline), got status ' + result.status + '\nstderr: ' + result.stderr);
+    const masterAfter = spawnSync('git', ['-C', tmp, 'rev-parse', 'master'], { encoding: 'utf8', env }).stdout.trim();
+    assert(masterBefore !== masterAfter, '#350: master (the resolved default branch) advanced via FF — not a hardcoded main');
+    const mainBranch = spawnSync('git', ['-C', tmp, 'branch', '--list', 'main'], { encoding: 'utf8', env }).stdout.trim();
+    assert(mainBranch === '', '#350: sink-merge did NOT fall back to / create a hardcoded main branch');
+    console.log('testSinkMergeNonDefaultBranchMaster: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(remotePath, { recursive: true, force: true });
+  }
+}
+
+// #350: on a mid-flight origin advance (origin/<defBranch> moves AFTER the initial rebase, the
+// only race that makes an FF fail), the FF loop re-rebases the feature branch onto the updated tip
+// and the retry succeeds. The pre-#350 loop retried the IDENTICAL ff-only merge without
+// re-rebasing → it could never win this race (3 futile retries → exit 2). The race is injected via
+// the test-only FF_RACE_PUSH_DIR hook (a fixed `git push` from a prepared clone before the FF).
+function testSinkMergeReRebasesOnFfRace() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-rerebase-')));
+  const remotePath = initGitRepoWithBareRemote(tmp);
+  const clone = tmp + '-clone';
+  const env = { ...process.env, ...GIT_ISOLATION_ENV, GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' };
+  try {
+    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-3501'], { env });
+    fs.writeFileSync(path.join(tmp, 'feat.txt'), 'impl');
+    spawnSync('git', ['-C', tmp, 'add', 'feat.txt'], { env });
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'feat: impl 3501'], { env });
+    spawnSync('git', ['-C', tmp, 'push', '-u', 'origin', 'workflow/issue-3501'], { env });
+    // Prepare a clone with a committed-but-unpushed advance to main (pushed mid-flight by the hook).
+    // (The bare remote's symbolic HEAD is 'master' under GIT_CONFIG_NOSYSTEM, so clone checks out no
+    // branch — explicitly materialize local 'main' from origin/main before committing to it.)
+    spawnSync('git', ['clone', remotePath, clone], { env });
+    spawnSync('git', ['-C', clone, 'checkout', '-B', 'main', 'origin/main'], { env });
+    fs.writeFileSync(path.join(clone, 'concurrent.txt'), 'x');
+    spawnSync('git', ['-C', clone, 'add', '-A'], { env });
+    spawnSync('git', ['-C', clone, 'commit', '-m', 'concurrent main advance'], { env });
+    const result = spawnSync(process.execPath, [sinkMergeScript, '--project', 'issue-3501', '--branch', 'workflow/issue-3501'], {
+      cwd: tmp, encoding: 'utf8',
+      env: { ...env, KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_WORKFLOW_SKIP_TESTGATE: '1', KAOLA_WORKFLOW_FF_RACE_PUSH_DIR: clone }
+    });
+    assert(result.status === 0, '#350: sink-merge recovers from a mid-flight origin advance via re-rebase, got status ' + result.status + '\nstderr: ' + result.stderr);
+    spawnSync('git', ['-C', tmp, 'fetch', '-q', 'origin'], { env }); // read the authoritative remote state, not the stale tracking ref
+    const log = spawnSync('git', ['-C', tmp, 'log', '--oneline', 'origin/main'], { encoding: 'utf8', env }).stdout;
+    assert(/impl 3501/.test(log), '#350: feature commit landed on origin/main after re-rebase, got log: ' + log);
+    assert(/concurrent main advance/.test(log), '#350: concurrent main advance preserved (feature rebased onto it)');
+    console.log('testSinkMergeReRebasesOnFfRace: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(remotePath, { recursive: true, force: true });
+    try { fs.rmSync(clone, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
 function testFastE2EMergeFullChain() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-e2e-fast-')));
   const kwRoot = tmp + '.kw';
@@ -10145,7 +10221,7 @@ function testSinkRefusesWorkflowOnlyBranch() {
     let threw = false;
     let thrownMsg = '';
     try {
-      assertBranchHasNonWorkflowChanges(tmp, 'workflow/issue-911');
+      assertBranchHasNonWorkflowChanges(tmp, 'workflow/issue-911', 'main');
     } catch (e) {
       threw = true;
       thrownMsg = e && e.message ? e.message : String(e);
@@ -10189,7 +10265,7 @@ function testSinkAllowsMixedBranch() {
     let threw = false;
     let thrownMsg = '';
     try {
-      assertBranchHasNonWorkflowChanges(tmp, 'workflow/issue-912');
+      assertBranchHasNonWorkflowChanges(tmp, 'workflow/issue-912', 'main');
     } catch (e) {
       threw = true;
       thrownMsg = e && e.message ? e.message : String(e);
@@ -10455,6 +10531,8 @@ function buildRegistry() {
   add('testSinkMergeBlocksUnpushedCommits',               testSinkMergeBlocksUnpushedCommits);
   add('testSinkMergeAutoPushesWhenNoUpstream',            testSinkMergeAutoPushesWhenNoUpstream);
   add('testSinkMergeOfflineSkipsPublishGuard',            testSinkMergeOfflineSkipsPublishGuard);
+  add('testSinkMergeNonDefaultBranchMaster',              testSinkMergeNonDefaultBranchMaster);
+  add('testSinkMergeReRebasesOnFfRace',                   testSinkMergeReRebasesOnFfRace);
   add('testFastE2EMergeFullChain',                        testFastE2EMergeFullChain);
   add('testE2EGitHubPrFullChain',                         testE2EGitHubPrFullChain);
   add('testParallelIssueIndependence',                    testParallelIssueIndependence);

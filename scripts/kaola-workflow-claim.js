@@ -2355,6 +2355,7 @@ module.exports = {
   claimExplicitTarget,
   claimProject,
   collectStale,
+  defaultBranch,
   cmdAuditLabels,
   cmdLegacyWorktreeCleanup,
   cmdRepairLabels,

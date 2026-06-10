@@ -2333,6 +2333,7 @@ module.exports = {
   cmdLegacyWorktreeCleanup,
   cmdRepairLabels,
   collectStale,
+  defaultBranch,
   cmdStaleWorktreeCleanup,
   deriveRunPosture,
   getCoordRoot,

@@ -6,12 +6,14 @@ const path = require('path');
 const os = require('os');
 const { execFileSync } = require('child_process');
 const forge = require('./kaola-gitea-forge');
-const { getCoordRoot, readActiveFolders, removeWorktree, buildClosureReceipt, checkClosureInvariants, checkDispatchAttestations } = require('./kaola-gitea-workflow-claim');
+const { getCoordRoot, readActiveFolders, removeWorktree, buildClosureReceipt, checkClosureInvariants, checkDispatchAttestations, defaultBranch } = require('./kaola-gitea-workflow-claim');
 
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
 
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
 const FORCE_FF_FAIL = parseInt(process.env.KAOLA_WORKFLOW_FORCE_FF_FAIL || '0', 10);
+const SKIP_TESTGATE = process.env.KAOLA_WORKFLOW_SKIP_TESTGATE === '1'; // #350 test-only
+const FF_RACE_PUSH_DIR = process.env.KAOLA_WORKFLOW_FF_RACE_PUSH_DIR || ''; // #350 test-only
 
 function isSafeName(name) {
   return typeof name === 'string' && name.length > 0 &&
@@ -136,13 +138,13 @@ function assertWorktreeClean(mainRoot, branch) {
   }
 }
 
-function assertBranchHasNonWorkflowChanges(mainRoot, branch) {
+function assertBranchHasNonWorkflowChanges(mainRoot, branch, defBranch) {
   // AC7 (#264): refuse a sink whose entire diff vs origin/main is kaola-workflow/** bookkeeping —
   // the branch carries no implementation. Skip when origin/main is unresolvable (mirror
   // alreadyUpToDate: no integration base to diff against → cannot judge, do not block).
   let base;
   try {
-    base = execFileSync('git', ['-C', mainRoot, 'rev-parse', '--verify', 'origin/main'],
+    base = execFileSync('git', ['-C', mainRoot, 'rev-parse', '--verify', 'origin/' + defBranch],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
   } catch (_) { return; } // origin/main missing → skip (same posture as merge-base skip-check)
   let files;
@@ -242,10 +244,17 @@ function classifyMergeError(e) {
 
 const MAX_AUTOMERGE_RETRIES = 3;
 
-function doRebase(args, alreadyUpToDate, mainRoot) {
+// #350: post-rebase test gate (skipped OFFLINE / under the test-gate-skip hook).
+function runTestGate(mainRoot) {
+  if (!OFFLINE && !SKIP_TESTGATE) {
+    execFileSync('npm', ['test'], { cwd: mainRoot, encoding: 'utf8', stdio: 'inherit' });
+  }
+}
+
+function doRebase(args, alreadyUpToDate, mainRoot, defBranch) {
   if (!alreadyUpToDate) {
     try {
-      execFileSync('git', ['-C', mainRoot, 'rebase', 'origin/main'], { encoding: 'utf8' });
+      execFileSync('git', ['-C', mainRoot, 'rebase', 'origin/' + defBranch], { encoding: 'utf8' });
     } catch (e) {
       try { execFileSync('git', ['-C', mainRoot, 'rebase', '--abort'], { encoding: 'utf8' }); } catch (_) {}
       throw new Error(
@@ -253,34 +262,61 @@ function doRebase(args, alreadyUpToDate, mainRoot) {
         'Remediation:\n' +
         '  1. Run: git rebase --abort\n' +
         '  2. Resolve conflicts manually on the feature branch\n' +
-        '  3. Re-run: git rebase origin/main\n' +
+        '  3. Re-run: git rebase origin/' + defBranch + '\n' +
         '  4. Re-invoke sink-merge after conflicts are resolved'
       );
     }
-  }
-  if (!alreadyUpToDate && !OFFLINE) {
-    execFileSync('npm', ['test'], { cwd: mainRoot, encoding: 'utf8', stdio: 'inherit' });
+    runTestGate(mainRoot);
   }
 }
 
-function ffMergeLoop(args, mainRoot) {
+function ffMergeLoop(args, mainRoot, defBranch) {
   let retries = 0;
   let forcedFailCount = 0;
+  const giveUp = () => {
+    process.stderr.write('FF race: exhausted ' + MAX_AUTOMERGE_RETRIES + ' retries. Aborting.\n');
+    try { execFileSync('git', ['-C', mainRoot, 'checkout', defBranch], { encoding: 'utf8' }); } catch (_) {}
+    return false;
+  };
+  // #350: re-fetch + re-rebase the feature branch onto the updated origin tip before retrying — the
+  // only race that makes an FF fail is origin/<defBranch> advancing after the initial rebase, and
+  // the pre-#350 loop retried the IDENTICAL ff-only merge without re-rebasing (dead weight).
+  const reRebaseFeature = () => {
+    if (OFFLINE) return true;
+    try {
+      execFileSync('git', ['-C', mainRoot, 'fetch', 'origin'], { encoding: 'utf8' });
+      execFileSync('git', ['-C', mainRoot, 'checkout', args.branch], { encoding: 'utf8' });
+      execFileSync('git', ['-C', mainRoot, 'rebase', 'origin/' + defBranch], { encoding: 'utf8' });
+    } catch (_) {
+      try { execFileSync('git', ['-C', mainRoot, 'rebase', '--abort'], { encoding: 'utf8' }); } catch (_) {}
+      process.stderr.write('FF race: re-rebase onto origin/' + defBranch + ' conflicted — manual resolution required.\n');
+      return false;
+    }
+    try { runTestGate(mainRoot); } catch (_) {
+      process.stderr.write('FF race: test gate failed after re-rebase onto origin/' + defBranch + '.\n');
+      return false;
+    }
+    return true;
+  };
+  let raceHookFired = false;
   while (true) {
+    // #350 test-only one-shot mid-flight race hook (fixed git push from a prepared clone dir).
+    if (FF_RACE_PUSH_DIR && !raceHookFired) {
+      raceHookFired = true;
+      try { execFileSync('git', ['-C', FF_RACE_PUSH_DIR, 'push', 'origin', defBranch], { encoding: 'utf8' }); } catch (_) {}
+    }
     if (!OFFLINE) {
-      execFileSync('git', ['-C', mainRoot, 'checkout', 'main'], { encoding: 'utf8' });
+      execFileSync('git', ['-C', mainRoot, 'checkout', defBranch], { encoding: 'utf8' });
       execFileSync('git', ['-C', mainRoot, 'pull', '--ff-only'], { encoding: 'utf8' });
       execFileSync('git', ['-C', mainRoot, 'checkout', args.branch], { encoding: 'utf8' });
     }
-    execFileSync('git', ['-C', mainRoot, 'checkout', 'main'], { encoding: 'utf8' });
+    execFileSync('git', ['-C', mainRoot, 'checkout', defBranch], { encoding: 'utf8' });
     if (forcedFailCount < FORCE_FF_FAIL) {
       forcedFailCount++;
       retries++;
       execFileSync('git', ['-C', mainRoot, 'checkout', args.branch], { encoding: 'utf8' });
-      if (retries >= MAX_AUTOMERGE_RETRIES) {
-        process.stderr.write('FF race: exhausted ' + MAX_AUTOMERGE_RETRIES + ' retries. Aborting.\n');
-        return false;
-      }
+      if (retries >= MAX_AUTOMERGE_RETRIES) return giveUp();
+      if (!reRebaseFeature()) return giveUp();
       continue;
     }
     try {
@@ -289,28 +325,26 @@ function ffMergeLoop(args, mainRoot) {
     } catch (_) {
       retries++;
       execFileSync('git', ['-C', mainRoot, 'checkout', args.branch], { encoding: 'utf8' });
-      if (retries >= MAX_AUTOMERGE_RETRIES) {
-        process.stderr.write('FF race: exhausted ' + MAX_AUTOMERGE_RETRIES + ' retries. Aborting.\n');
-        return false;
-      }
+      if (retries >= MAX_AUTOMERGE_RETRIES) return giveUp();
+      if (!reRebaseFeature()) return giveUp();
     }
   }
 }
 
-function postMergeCleanup(args, mainRoot, wtRemovedStatus) {
+function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch) {
   // Step 7 — Push (with merge-impossible fallback)
   try {
     if (process.env.KAOLA_WORKFLOW_FORCE_MERGE_IMPOSSIBLE) {
       throw new Error('synthetic merge-impossible: ' + process.env.KAOLA_WORKFLOW_FORCE_MERGE_IMPOSSIBLE);
     }
     if (!OFFLINE) {
-      execFileSync('git', ['-C', mainRoot, 'push', 'origin', 'main'], { encoding: 'utf8' });
+      execFileSync('git', ['-C', mainRoot, 'push', 'origin', defBranch], { encoding: 'utf8' });
     }
   } catch (e) {
     const token = classifyMergeError(e);
     if (token === null) throw e;
     try {
-      execFileSync('git', ['-C', mainRoot, 'reset', '--hard', 'origin/main'], { encoding: 'utf8' });
+      execFileSync('git', ['-C', mainRoot, 'reset', '--hard', 'origin/' + defBranch], { encoding: 'utf8' });
     } catch (_) {}
     // AND (same rationale as runDirectMerge early-exit): atomic rename means both dirs
     // cannot co-exist; defense-in-depth guard for the post-merge cleanup receipt write.
@@ -427,6 +461,7 @@ function runDirectMerge(args, opts) {
 
   // New pipeline
   const mainRoot = mainRootFromCoord(getCoordRoot(root));
+  const defBranch = defaultBranch(mainRoot); // #350: resolve origin/HEAD, not hardcoded main
 
   // Early-exit: if project is already archived, return exit 3 without touching git.
   // AND (not OR): live dir present means project is not yet archived; archiveProjectDir
@@ -467,7 +502,7 @@ function runDirectMerge(args, opts) {
   assert(!status, 'Worktree must be clean before direct merge sink runs');
   assertNoLiveWorkflowFolder(mainRoot, args.project, args.branch);
   if (!OFFLINE) assertBranchPushedToUpstream(mainRoot, args.branch);
-  if (!OFFLINE) assertBranchHasNonWorkflowChanges(mainRoot, args.branch);
+  if (!OFFLINE) assertBranchHasNonWorkflowChanges(mainRoot, args.branch, defBranch);
   assertWorktreeClean(mainRoot, args.branch);
 
   // Step 3 — Remove the worktree (only now that every precondition passed) so the branch can be
@@ -488,20 +523,20 @@ function runDirectMerge(args, opts) {
   // Step 2 — Merge-base skip-check (try-catch: if origin/main absent, treat as up-to-date)
   let alreadyUpToDate = false;
   try {
-    const mergeBase = execFileSync('git', ['-C', mainRoot, 'merge-base', 'HEAD', 'origin/main'], { encoding: 'utf8' }).trim();
-    const originMain = execFileSync('git', ['-C', mainRoot, 'rev-parse', 'origin/main'], { encoding: 'utf8' }).trim();
+    const mergeBase = execFileSync('git', ['-C', mainRoot, 'merge-base', 'HEAD', 'origin/' + defBranch], { encoding: 'utf8' }).trim();
+    const originMain = execFileSync('git', ['-C', mainRoot, 'rev-parse', 'origin/' + defBranch], { encoding: 'utf8' }).trim();
     alreadyUpToDate = (mergeBase === originMain);
   } catch (_) {
     alreadyUpToDate = true;
   }
 
-  doRebase(args, alreadyUpToDate, mainRoot);
+  doRebase(args, alreadyUpToDate, mainRoot, defBranch);
 
-  if (!ffMergeLoop(args, mainRoot)) {
+  if (!ffMergeLoop(args, mainRoot, defBranch)) {
     return { exitCode: 2 };
   }
 
-  const cleanupResult = postMergeCleanup(args, mainRoot, wtRemovedStatus);
+  const cleanupResult = postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch);
   if (cleanupResult && cleanupResult.exitCode === 3) {
     return { exitCode: 3 };
   }
