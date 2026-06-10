@@ -566,6 +566,11 @@ assertIncludes('scripts/kaola-workflow-claim.js', '--attest-contractor-spawn');
 // it surfaced cannot recur — the producer must exist on every edition that ships the consumer (#300).
 assertIncludes('scripts/kaola-workflow-claim.js', '--attest-planner-spawn');
 assertIncludes('agents/contractor.md', '--attest-contractor-spawn');
+// #359: the shape-gate evidence vocabulary must ORIGINATE in the producing agents' contracts
+// (emission-side pin, the #290 pattern) — so the orchestrator transcribes verbatim, not synthesizes.
+assertIncludes('agents/implementer.md', 'verification_tier');
+assertIncludes('agents/implementer.md', 'smoke-integration');
+assertIncludes('agents/tdd-guide.md', 'evidence block contains BOTH literal tokens');
 assertIncludes('install.sh', 'kaola-workflow-plan-validator.js');
 assertIncludes('install.sh', '--enable-adaptive');
 // #255: the adaptive-handoff script must be in install.sh's per-edition SUPPORT_SCRIPT_NAMES

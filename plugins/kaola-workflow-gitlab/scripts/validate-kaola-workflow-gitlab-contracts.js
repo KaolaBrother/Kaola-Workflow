@@ -620,6 +620,9 @@ assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js', '--attest
 // #347: the planner self-attest back-fill flag must be ported to the forge claim (the #280 producer
 // was canonical-only while #300 ported its consumer — without this pin the asymmetry is invisible).
 assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js', '--attest-planner-spawn');
+// #359: producer-attested evidence-token vocabulary in the forge agent profiles.
+assertIncludes(pluginRoot + '/agents/implementer.toml', 'verification_tier');
+assertIncludes(pluginRoot + '/agents/tdd-guide.toml', 'literal tokens RED');
 assertIncludes(pluginRoot + '/agents/contractor.toml', '--attest-contractor-spawn');
 
 // #340: registration-surface + forge-port parity checks and their authoring/dispatch prose

@@ -490,6 +490,9 @@ assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, '--attest-contra
 // claim byte-for-byte; pinning here keeps the producer from regressing on this edition too.
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, '--attest-planner-spawn');
 assertIncludes(`${pluginRoot}/agents/contractor.toml`, '--attest-contractor-spawn');
+// #359: producer-attested evidence-token vocabulary in the codex agent profiles.
+assertIncludes(`${pluginRoot}/agents/implementer.toml`, 'verification_tier');
+assertIncludes(`${pluginRoot}/agents/tdd-guide.toml`, 'literal tokens RED');
 // #281: parallel-batch aggregator claude-plugin copy presence
 assert(exists(`${pluginRoot}/scripts/kaola-workflow-parallel-batch.js`), '#281 parallel-batch aggregator missing from Codex plugin');
 assertConcept(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'adaptive execution + governance', [

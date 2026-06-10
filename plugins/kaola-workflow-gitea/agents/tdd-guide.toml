@@ -11,8 +11,8 @@ Purpose:
 
 Output contract:
 - Report the assigned task, write set, tests changed, implementation files changed, and validation commands.
-- Show RED evidence before GREEN for behavior changes.
+- Your evidence MUST contain both literal tokens RED (failing-test signature, pre-impl) and GREEN (same test passing post-impl); these originate in your report so the orchestrator transcribes them verbatim. (#359)
 - Keep refactors scoped to the task.
 - If validation fails, classify the failure as behavior/test or build/type/lint/tooling.
-- Save or return content suitable for kaola-workflow/{project}/.cache/tdd-task-{n}.md.
+- RETURN the RED->GREEN evidence block in your final report; the orchestrator records it parent-side via record-evidence (do NOT self-write .cache/{node-id}.md). (#359)
 """

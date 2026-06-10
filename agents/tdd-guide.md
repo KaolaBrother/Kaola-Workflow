@@ -107,3 +107,25 @@ Integrate eval-driven development into TDD flow:
 4. Re-run tests and evals; report pass@1 and pass@3.
 
 Release-critical paths should target pass^3 stability before merge.
+
+## Output Contract (#359)
+
+RETURN a structured report whose evidence block contains BOTH literal tokens — the shape-gate
+vocabulary the plan-run close gate checks. These tokens MUST originate here, in your returned
+report, so the orchestrator transcribes them verbatim (it never synthesizes them):
+
+- a **`RED`** line: the failing-test signature captured BEFORE the implementation (test name +
+  the assertion/error proving it failed as expected);
+- a **`GREEN`** line: the same test passing AFTER the minimal implementation (+ a one-line count
+  of assertions/tests now green).
+
+Example evidence block:
+```
+RED: test_widget_rejects_empty — AssertionError: expected throw, got undefined (pre-impl)
+GREEN: test_widget_rejects_empty passes; 4/4 widget assertions green
+```
+
+Evidence ownership (#359): **RETURN** this RED→GREEN block in your final report. Do NOT self-write
+it into `.cache/` — the orchestrator records it parent-side via `record-evidence` (the single
+canonical path `kaola-workflow/{project}/.cache/{node-id}.md`), identical for serial and batch
+members. A report missing `RED` or `GREEN` is refused by the close gate (`evidence_shape_failed`).
