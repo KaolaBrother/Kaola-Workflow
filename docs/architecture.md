@@ -91,8 +91,10 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   `close-and-open-next` (evidence-shape check → barrier → close + compliance row → selector
   routing → fused advance), `write-halt` (consent/security/test_thrash escalation), and
   `reopen-node` (#308 first-class plan-repair: reset an already-`complete` node and its
-  post-dominating gate(s) → `pending`, remove the stale `.cache/barrier-base-<id>` baselines,
-  reopen the node to `in_progress`, and re-record a fresh baseline at the current merged state)
+  post-dominating gate(s) → `pending` — including a gate still `in_progress` (the #343 mid-gate
+  repair); any other `in_progress` row is a typed `would_orphan_in_progress` refusal — remove
+  the stale `.cache/barrier-base-<id>` baselines, reopen the node to `in_progress`, and
+  re-record a fresh baseline at the current merged state)
   transactions. It is a pure composition layer: it shells `next-action.js` and `commit-node.js`
   via `child_process` and read-only-imports the validator's `parseNodes` parser; the engine
   scripts never call back into it (acyclic, recursion-safe). The main session in

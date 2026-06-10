@@ -95,6 +95,16 @@ Author the `## Nodes` table so the validator passes it. Each node is one row:
   `knowledge-lookup` node when the task depends on external library or API behavior, framework
   conventions, or open-web/expertise knowledge that cannot be confirmed from the local codebase
   alone. This mirrors the Phase 1 `knowledge-lookup` trigger.
+- **Decision-record numbering (#337):** before hardcoding a decision-record id
+  (`D-<issue>-NN`) into a write set or `## Plan Notes`, read the target repo's
+  existing records (`docs/decisions/`, plus mentions in docs/ and CHANGELOG.md)
+  and use the **next free** number — follow-up / partial-close cycles continue
+  the series (`D-<issue>-02`, `D-<issue>-03`, …). If the next number cannot be
+  known at authoring time, write the `D-<issue>-NEXT` placeholder and let the
+  doc-updater node resolve it after reading the records. Annotate a deliberate
+  mention of an already-shipped record as `D-<issue>-NN (existing)`. The handoff
+  refuses (`decision_id_conflict`) if an unfrozen plan hardcodes an id the repo
+  already records.
 
 **Author EFFICIENT DAGs, not merely valid DAGs.** Minimize the safe critical path; expose independent work as siblings (a shared ready frontier) so the executor can open them as one batch; serialize only for true dependencies, shared file lanes, selectors, loops, or gates. Read-only verification/research siblings are zero-blast-radius — prefer fanning them out. Write-role siblings must declare disjoint write sets to be batch-eligible.
 

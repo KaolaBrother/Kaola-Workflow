@@ -581,7 +581,7 @@ Findings marked `out_of_scope`, `pre_existing`, or `needs_user_decision` (or `ac
 `document`) do not block — but they MUST be recorded as **explicit, machine-readable** follow-ups /
 escalations (they remain in the evidence and surface at finalize), never silently dropped.
 
-### Re-opening an already-complete node (frozen-plan repair — #308)
+### Re-opening an already-complete node (frozen-plan repair — #308, mid-gate #343)
 
 The bounded controller above repairs a finding on the node that is *currently* `in_progress`. When
 a repair must reach a node already marked `complete` — a Finalization-surfaced barrier/verdict
@@ -597,10 +597,24 @@ node "$KAOLA_SCRIPTS/kaola-gitea-workflow-adaptive-node.js" reopen-node --projec
 `security-reviewer` / `adversarial-verifier`) from `complete → pending`, removes their stale
 `.cache/barrier-base-<id>` baselines, reopens N to `in_progress`, and re-records a fresh node-start
 baseline at the current merged state — so the re-run is barrier-clean and the gate MUST re-approve.
-It **refuses** over a live parallel batch / interrupted top-up (`member.opening: true`) and over a
-node that is not `complete` (reconcile first). Readiness is **transitive** (#308): a downstream sink
-whose own direct deps are still `complete` is correctly withheld until the reopened gate re-passes,
-so the plan cannot race ahead of the repair. After it returns, re-enter the per-node loop at the
+It **refuses** over a live parallel batch / interrupted top-up (`member.opening: true`), over a
+target node that is not `complete`, and — typed `would_orphan_in_progress` — when any
+`in_progress` row is NOT a post-dominating gate of N (close or quiesce that node first). A
+post-dominating gate that is itself still **`in_progress`** is NOT a refusal: it folds back to
+`pending` in the same transaction (#343), with its stale baseline removed. Readiness is
+**transitive** (#308): a downstream sink whose own direct deps are still `complete` is correctly
+withheld until the reopened gate re-passes, so the plan cannot race ahead of the repair.
+
+**Mid-gate repair (#343).** When a gate that is currently `in_progress` emits a blocking finding
+whose fix belongs to an already-`complete` upstream node N, do NOT close the failed gate and do
+NOT advance the DAG toward allDone on the known-broken tree. Run `reopen-node N` directly: the
+`in_progress` gate folds back to `pending`, N reopens with a fresh baseline, and after the repair
+lands `close-and-open-next N` re-opens the gate for a fresh re-review. (The previous workaround —
+close the failed gate and run the remaining nodes to allDone before reopening — worked only
+because the per-node `--verdict-check` is **informational**; the **blocking** verdict enforcement
+is at Finalization. That distinction still holds, but the allDone detour is no longer required.)
+
+After it returns, re-enter the per-node loop at the
 reopened node and reflect BOTH ledger transitions in the task list (N and its reset gate). If the
 ledger is missing a row for any node (a hand-authored or externally-edited plan),
 `kaola-gitea-workflow-plan-validator.js --freeze --repair` reconciles `## Node Ledger` to `## Nodes` — adding a

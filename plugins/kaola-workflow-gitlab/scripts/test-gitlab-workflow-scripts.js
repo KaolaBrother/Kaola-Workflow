@@ -3657,10 +3657,78 @@ function testGitlabForeignArchiveBarrier261() {
   console.log('testGitlabForeignArchiveBarrier261 (#261 forge-parity): PASSED');
 }
 
+// ---------------------------------------------------------------------------
+// #339: closure roadmap-mirror-clean is row-anchored — a legitimate cross-
+// reference to #N inside ANOTHER issue's row must not violate; an actual
+// active `| #N | ...` row still must. Direct checkClosureInvariants call.
+// ---------------------------------------------------------------------------
+function testGitlabMirrorCleanCrossRef339() {
+  const root = tempRoot('kw-gl-339-mirror-clean-');
+  try {
+    const kwDir = path.join(root, 'kaola-workflow');
+    fs.mkdirSync(kwDir, { recursive: true });
+
+    // Archive dest with a closed state file (so archive-state-closed passes)
+    const archiveDest = path.join(kwDir, 'archive', 'issue-562');
+    fs.mkdirSync(archiveDest, { recursive: true });
+    fs.writeFileSync(path.join(archiveDest, 'workflow-state.md'), [
+      '# Kaola-Workflow State',
+      'name: issue-562',
+      'status: closed',
+      'step: complete'
+    ].join('\n') + '\n');
+
+    // Single-issue receipt (no issue_numbers): issue #562 fully closed
+    const receipt = {
+      project: 'issue-562',
+      issue_number: 562,
+      archive: 'closed',
+      roadmap_source_removed: 'removed',
+      roadmap_regenerated: 'regenerated',
+      claim_label_removed: 'removed',
+      worktree_removed: 'missing',
+      branch_removed: 'kept',
+      warnings: []
+    };
+
+    const tableHeader =
+      '# Kaola-Workflow Roadmap\n\n' +
+      '| Issue | Title | Status | Project | Next Step |\n' +
+      '|-------|-------|--------|---------|----------|\n';
+
+    // Fixture A (AC1): the ONLY #562 mention is a legitimate cross-reference
+    // inside ANOTHER issue's row (next_step cell of the #485 row).
+    fs.writeFileSync(path.join(kwDir, 'ROADMAP.md'),
+      tableHeader +
+      '| #485 | layered rendering | open | issue-485 | place_inside (#562 opacity) |\n');
+    const resA = claim.checkClosureInvariants(root, receipt, archiveDest);
+    assert.strictEqual(resA.ok, true,
+      '#339 gl A: cross-reference-only mirror must pass closure invariants, got: ' + JSON.stringify(resA.violations));
+    assert.ok(!resA.violations.some(v => v.id === 'roadmap-mirror-clean'),
+      '#339 gl A: no roadmap-mirror-clean violation for a cross-reference inside another row');
+
+    // Fixture B (AC2): an actual active `| #562 | ...` row must still violate.
+    fs.writeFileSync(path.join(kwDir, 'ROADMAP.md'),
+      tableHeader +
+      '| #485 | layered rendering | open | issue-485 | place_inside (#562 opacity) |\n' +
+      '| #562 | opacity flag | active | issue-562 | TBD |\n');
+    const resB = claim.checkClosureInvariants(root, receipt, archiveDest);
+    assert.strictEqual(resB.ok, false,
+      '#339 gl B: mirror with an active #562 row must fail closure invariants');
+    assert.ok(resB.violations.some(v => v.id === 'roadmap-mirror-clean'),
+      '#339 gl B: roadmap-mirror-clean violation must fire for an active row, got: ' + JSON.stringify(resB.violations));
+
+    console.log('testGitlabMirrorCleanCrossRef339 (#339): PASSED');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
 testGitlabPreflight266();
 testGitlabTaskMirror266();
 testGitlabCompactResume266();
 testGitlabForeignArchiveBarrier261();
+testGitlabMirrorCleanCrossRef339();
 
 testGitLabRoadmapInitIssueExclusiveAndUpdate()
   .then(() => {

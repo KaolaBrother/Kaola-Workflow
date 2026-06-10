@@ -613,6 +613,35 @@ The agent runs these steps in order, then returns:
 - **Never dispatches a subagent.** A subagent cannot dispatch a subagent (governing harness
   constraint); the agent runs scripts (shells the handoff) and returns the packet to main.
 
+### Decision-record id preflight (#337)
+
+A **freeze-time-once** content check inside `kaola-workflow-adaptive-handoff.js` (step 1.5, after
+the validator's in-grammar verdict and BEFORE `--freeze`, so the no-mutation-on-refuse contract
+holds). When an **unfrozen** plan hardcodes a decision-record id (`D-<issue>-NN`, the
+consumer-project convention) that the target repo already records, the handoff refuses instead of
+freezing a stale number into durable history:
+
+- **Candidate:** any `D-<n>-<seq>` token in the plan file (write-set paths, `## Plan Notes`,
+  anywhere) **not** annotated with the literal suffix `(existing)` — e.g. `D-210-01 (existing)`
+  marks a deliberate reference to an already-shipped record and is exempt (the follow-up pattern:
+  "`D-210-01 (existing)` covered the first half; this cycle writes `D-210-02`").
+- **Conflict:** the candidate (word-bounded) appears in any `*.md` under the plan repo's `docs/`
+  (filename or content) or in its `CHANGELOG.md` (the partial-close pattern leaves shipped ids in
+  the changelog).
+- **Refusal shape:** `handoff_status:'plan_invalid'`, `result:'refuse'`, each error prefixed
+  `decision_id_conflict:` (naming the id, up to 3 hit paths, and the three remediations: renumber
+  to the next free `D-<issue>-NN`, use the `D-<issue>-NEXT` placeholder for the doc-updater node to
+  resolve, or annotate `(existing)`), plus an additive machine-readable `conflicts` field
+  (`[{id, hits}]`) and `validator_verdict` carrying the in-grammar step-1 verdict (the refusal is
+  handoff-level, not grammar-level). Exit non-zero; nothing mutated — the refusal feeds the
+  existing bounded planner repair loop.
+- **Non-goals (deliberate exemptions):** already-frozen plans are skipped (idempotent handoff
+  re-runs and post-execution resumes can never self-conflict with a record the run itself wrote),
+  and the validator's `--freeze`/`--resume-check` paths are untouched (mid-run plan-repairs go
+  through them directly). `D-<issue>-NEXT` placeholders never match. Pure-core callers that do not
+  inject the `findDecisionIdHits` seam keep exact prior behavior (fail-open by construction; the
+  CLI `main()` wires the default docs/CHANGELOG scanner).
+
 Full rationale: `docs/decisions/0003-adaptive-front-end-planner.md`.
 
 ---
@@ -1273,7 +1302,7 @@ last three local checks; the signature is now `checkClosureInvariants(root,
 receipt, archiveDest)`):
 
 - `roadmap-source-absent` — `kaola-workflow/.roadmap/issue-N.md` is gone after cleanup.
-- `roadmap-mirror-clean` — generated `kaola-workflow/ROADMAP.md` no longer lists `#N` as active work.
+- `roadmap-mirror-clean` — generated `kaola-workflow/ROADMAP.md` no longer lists `#N` as active work (row-anchored, issue #339: only an active table row `| #N | …` at line start violates; cross-references to `#N` inside other rows are allowed after closure).
 - `in-progress-label-removed` — `workflow:in-progress` label was removed from the remote issue. Skipped (not violated) when `KAOLA_WORKFLOW_OFFLINE=1` or when `claim_label_removed` is `'skipped_offline'`.
 - `active-folder-absent` — no live `kaola-workflow/{project}/` folder remains in active folders after archive (issue #164).
 - `archive-state-closed` — when `archiveDest` is provided, the archived `workflow-state.md` shows `status: closed` or `abandoned`; skipped (not violated) when `archiveDest` is absent (issue #164).

@@ -1734,6 +1734,151 @@ function makeState(opts) {
 }
 
 // ---------------------------------------------------------------------------
+// #343: runReopenNode MID-GATE fold — a post-dominating gate that is still
+// in_progress (it just emitted a blocking finding owned by N) folds back to
+// pending inside the same transaction, so the repair does NOT have to advance
+// the DAG to allDone on a known-broken tree. gatesReset stays STRUCTURAL;
+// the additive gatesFolded lists only the rows actually flipped, and the
+// transitions never claim a flip that did not happen (no fabricated entry for
+// an already-pending downstream gate). Exactly ONE in_progress row remains.
+// Plan a→impl→review(code-reviewer)→averify(adversarial-verifier)→finalize.
+// ---------------------------------------------------------------------------
+{
+  const planNodes = [
+    '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| impl | tdd-guide | a | scripts/b.js | 1 | sequence |',
+    '| review | code-reviewer | impl | — | 1 | sequence |',
+    '| averify | adversarial-verifier | review | — | 1 | sequence |',
+    '| finalize | finalize | averify | — | 1 | sequence |',
+  ];
+  let planContent = makePlan([
+    '| a | complete | |',
+    '| impl | complete | |',
+    '| review | in_progress | |',
+    '| averify | pending | |',
+    '| finalize | pending | |',
+  ], planNodes);
+  const removed = [];
+  const shelled = [];
+  const result = runReopenNode({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    project: 'test-project',
+    nodeId: 'impl',
+    shell: (scriptPath, args) => {
+      shelled.push({ base: path.basename(scriptPath), args: args || [] });
+      if (path.basename(scriptPath) === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok' };
+      return { exitCode: 1 };
+    },
+    readFile: (f) => { if (f.endsWith('workflow-plan.md')) return planContent; throw new Error('ENOENT ' + f); },
+    writeFile: (f, c) => { if (f.endsWith('workflow-plan.md')) planContent = c; },
+    // live baselines for impl + the in_progress gate; never-opened averify has none; NO active batch
+    cacheExists: (f) => /barrier-base-(impl|review)/.test(f),
+    unlink: (f) => removed.push(path.basename(f)),
+  });
+  assert(result.result === 'ok', '#343 fold: result ok, got ' + JSON.stringify(result));
+  assert(/\|\s*impl\s*\|\s*in_progress\s*\|/.test(planContent), '#343 fold: impl reopened to in_progress');
+  assert(/\|\s*review\s*\|\s*pending\s*\|/.test(planContent), '#343 fold: in_progress gate review folded to pending');
+  assert(/\|\s*averify\s*\|\s*pending\s*\|/.test(planContent), '#343 fold: downstream pending gate averify left pending');
+  assert(/\|\s*finalize\s*\|\s*pending\s*\|/.test(planContent), '#343 fold: sink finalize left pending');
+  assert(/\|\s*a\s*\|\s*complete\s*\|/.test(planContent), '#343 fold: upstream a left complete');
+  const inProgressRows = (planContent.match(/\|\s*in_progress\s*\|/g) || []).length;
+  assert(inProgressRows === 1, '#343 fold: exactly ONE in_progress row remains, got ' + inProgressRows);
+  assert(result.gatesReset && result.gatesReset.includes('review') && result.gatesReset.includes('averify'),
+    '#343 fold: gatesReset stays structural (review + averify), got ' + JSON.stringify(result.gatesReset));
+  assert(result.gatesFolded && result.gatesFolded.includes('review') && !result.gatesFolded.includes('averify'),
+    '#343 fold: gatesFolded lists only rows actually flipped (review, NOT averify), got ' + JSON.stringify(result.gatesFolded));
+  assert(removed.includes('barrier-base-impl') && removed.includes('barrier-base-review'),
+    '#343 fold: stale baselines for impl + the folded gate removed, got ' + JSON.stringify(removed));
+  const foldTransitions = (result.taskTransitions || []).map(t => t.id + ':' + t.ledger_status);
+  assert(foldTransitions.includes('review:pending') && foldTransitions.includes('impl:in_progress'),
+    '#343 fold: transitions carry review→pending + impl→in_progress, got ' + JSON.stringify(foldTransitions));
+  assert(!(result.taskTransitions || []).some(t => t.id === 'averify'),
+    '#343 fold: NO fabricated transition for the never-flipped averify, got ' + JSON.stringify(foldTransitions));
+  const commitCall = shelled.find(s => s.base === 'kaola-workflow-commit-node.js');
+  assert(commitCall && commitCall.args.includes('--start') && commitCall.args.includes('impl'),
+    '#343 fold: fresh baseline (commit-node --start) recorded for impl, got ' + JSON.stringify(shelled));
+}
+
+// ---------------------------------------------------------------------------
+// #343: runReopenNode fail-closed orphan guard — an in_progress row that is
+// NOT a post-dominating gate of N (here a parallel-branch implementer node)
+// refuses typed would_orphan_in_progress BEFORE any real side effect: zero
+// unlinks, zero writes (the stub throws if called), no baseline shelled.
+// ---------------------------------------------------------------------------
+{
+  const planNodes = [
+    '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| impl | tdd-guide | a | scripts/b.js | 1 | fanout(work) |',
+    '| docs | implementer | a | docs/x.md | 1 | fanout(work) |',
+    '| review | code-reviewer | impl,docs | — | 1 | sequence |',
+    '| finalize | finalize | review | — | 1 | sequence |',
+  ];
+  const planContent = makePlan([
+    '| a | complete | |',
+    '| impl | complete | |',
+    '| docs | in_progress | |',
+    '| review | pending | |',
+    '| finalize | pending | |',
+  ], planNodes);
+  const removed = [];
+  const shelled = [];
+  const result = runReopenNode({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    project: 'test-project',
+    nodeId: 'impl',
+    shell: (sp) => { shelled.push(path.basename(sp)); return { exitCode: 0, result: 'ok' }; },
+    readFile: (f) => { if (f.endsWith('workflow-plan.md')) return planContent; throw new Error('ENOENT ' + f); },
+    writeFile: () => { throw new Error('#343 guard: must not write on refusal'); },
+    cacheExists: (f) => /barrier-base-/.test(f),
+    unlink: (f) => removed.push(path.basename(f)),
+  });
+  assert(result.result === 'refuse' && result.reason === 'would_orphan_in_progress',
+    '#343 guard: refuses typed would_orphan_in_progress, got ' + JSON.stringify(result));
+  assert(JSON.stringify(result.inProgress) === JSON.stringify(['docs']),
+    '#343 guard: inProgress names the orphan row(s) [docs], got ' + JSON.stringify(result.inProgress));
+  assert(removed.length === 0, '#343 guard: zero unlinks on refusal (pure no-op), got ' + JSON.stringify(removed));
+  assert(!shelled.includes('kaola-workflow-commit-node.js'),
+    '#343 guard: no commit-node baseline shelled on refusal, got ' + JSON.stringify(shelled));
+}
+
+// ---------------------------------------------------------------------------
+// #343 INTEGRATION (mid-gate fold × transitive readiness): the COMPOSITION the
+// isolated tests miss. After the mid-gate reopen-node folds the in_progress
+// gate to pending and reopens N, the resulting ledger must drive the REAL
+// next-action to offer ONLY the reopened node — the folded gate, the downstream
+// pending gate, and the sink all stay withheld by transitive readiness.
+// ---------------------------------------------------------------------------
+{
+  const { computeNextAction } = require('./kaola-workflow-next-action');
+  const planNodes = [
+    '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| impl | tdd-guide | a | scripts/b.js | 1 | sequence |',
+    '| review | code-reviewer | impl | — | 1 | sequence |',
+    '| averify | adversarial-verifier | review | — | 1 | sequence |',
+    '| finalize | finalize | averify | — | 1 | sequence |',
+  ];
+  let planContent = makePlan([
+    '| a | complete | |',
+    '| impl | complete | |',
+    '| review | in_progress | |',
+    '| averify | pending | |',
+    '| finalize | pending | |',
+  ], planNodes);
+  const res = runReopenNode({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md', project: 'test-project', nodeId: 'impl',
+    shell: (sp) => path.basename(sp) === 'kaola-workflow-commit-node.js' ? { exitCode: 0, result: 'ok' } : { exitCode: 1 },
+    readFile: (f) => { if (f.endsWith('workflow-plan.md')) return planContent; throw new Error('ENOENT ' + f); },
+    writeFile: (f, c) => { if (f.endsWith('workflow-plan.md')) planContent = c; },
+    cacheExists: (f) => /barrier-base-(impl|review)/.test(f), unlink: () => {},
+  });
+  assert(res.result === 'ok', '#343 integ: mid-gate reopen-node ok, got ' + JSON.stringify(res));
+  const na = computeNextAction(planContent, { resolveModel: () => 'sonnet' });
+  const ready = na.readySet.map(n => n.id).sort();
+  assert(JSON.stringify(ready) === JSON.stringify(['impl']),
+    '#343 integ: after the mid-gate fold, next-action offers ONLY [impl] — folded gate + downstream gate + sink withheld, got ' + JSON.stringify(ready));
+}
+
+// ---------------------------------------------------------------------------
 // #282 (AC-2): orient reconciles the durable task mirror on every resume by
 // SHELLING the task-mirror CLI — while staying read-only (the injected writeFile
 // throws, proving orient never writes the plan/ledger/state itself).

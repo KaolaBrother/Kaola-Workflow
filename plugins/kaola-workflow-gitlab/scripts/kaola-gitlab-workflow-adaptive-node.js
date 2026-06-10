@@ -232,6 +232,31 @@ function spliceLedgerNode(content, nodeId, newStatus, opts) {
 }
 
 // ---------------------------------------------------------------------------
+// readLedgerStatuses — read-only id→status map from ## Node Ledger.
+// Same header-driven parsing as spliceLedgerNode; {} when no parseable ledger.
+// ---------------------------------------------------------------------------
+function readLedgerStatuses(content) {
+  const out = {};
+  const ledgerMarker = '\n## Node Ledger';
+  const ledgerIdx = content.indexOf(ledgerMarker);
+  if (ledgerIdx < 0) return out;
+  const afterLedger = content.indexOf('\n## ', ledgerIdx + 1);
+  const ledgerBlock = afterLedger >= 0 ? content.slice(ledgerIdx, afterLedger) : content.slice(ledgerIdx);
+  const rows = ledgerBlock.split('\n').filter(l => l.trim().startsWith('|'));
+  if (rows.length < 2) return out;
+  const header = rows[0].split('|').slice(1, -1).map(c => c.trim().toLowerCase());
+  const idIdx = header.indexOf('id');
+  const stIdx = header.indexOf('status');
+  if (idIdx < 0 || stIdx < 0) return out;
+  for (let i = 1; i < rows.length; i++) {
+    const cells = rows[i].split('|').slice(1, -1).map(c => c.trim());
+    const rowId = cells[idIdx] || '';
+    if (rowId && !/^[-\s]+$/.test(rowId)) out[rowId] = (cells[stIdx] || '').toLowerCase();
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // spliceComplianceRow — append a row to ## Required Agent Compliance section.
 // Creates the section below ## Node Ledger if absent (idempotent creation).
 // Format: | Requirement | Status | Evidence | Skip Reason |  (canonical repair-state.js shape)
@@ -1014,10 +1039,14 @@ function runWriteHalt(opts) {
 //   (2) Require N to be a `complete` ledger row (only a finished node is repairable).
 //   (3) Reset N's POST-DOMINATING gate(s) — code-reviewer / security-reviewer /
 //       adversarial-verifier nodes that every path from N to the unique sink passes
-//       through — complete→pending, and remove their stale .cache/barrier-base-<id>
-//       baselines, so they re-review after the repair. Downstream NON-gate nodes (incl.
-//       the sink) are left as-is: next-action's #308 transitive readiness withholds them
-//       while an upstream gate is non-terminal (no broad cascade needed).
+//       through — complete|in_progress → pending (#343 mid-gate repair: a gate that just
+//       emitted a blocking finding owned by N folds back without an allDone detour), and
+//       remove their stale .cache/barrier-base-<id> baselines, so they re-review after
+//       the repair. Any OTHER in_progress row (a non-gate node mid-flight, or a gate that
+//       does not post-dominate N) refuses typed `would_orphan_in_progress` BEFORE any
+//       real side effect. Downstream NON-gate nodes (incl. the sink) are left as-is:
+//       next-action's #308 transitive readiness withholds them while an upstream gate is
+//       non-terminal (no broad cascade needed).
 //   (4) Reopen N pending→in_progress, remove its stale baseline, persist the plan, then
 //       re-record a FRESH baseline at the current merged state (commit-node --start) so
 //       the next barrier attributes ONLY the repair.
@@ -1043,6 +1072,8 @@ function runReopenNode(opts) {
   }
 
   let planContent = readFile(planPath);
+  // (2-pre) #343: capture the PRE-mutation ledger statuses for the orphan guard below.
+  const ledgerStatuses = readLedgerStatuses(planContent);
   const nodes = parseNodesFromContent(planContent);
   if (!nodes.length) return { result: 'refuse', reason: 'no_parseable_nodes' };
   if (!nodes.some(n => n.id === nodeId)) return { result: 'refuse', reason: 'node_not_found', nodeId };
@@ -1089,9 +1120,36 @@ function runReopenNode(opts) {
   const gatesReset = nodes
     .filter(n => desc.has(n.id) && GATE_ROLES.has(n.role) && postDominates(n.id))
     .map(n => n.id);
+
+  // (3b) #343 fail-closed orphan guard: the ONLY in_progress rows tolerated at reopen time
+  // are post-dominating gates of N (they fold to pending below). Any other in_progress
+  // row would leave an orphan multi-in_progress ledger after the reopen — refuse BEFORE
+  // any real side effect (unlink/writeFile/baseline) so a refused call is a pure no-op.
+  // (id !== nodeId is defensive only — an in_progress N is already refused node_not_complete.)
+  const gateSet = new Set(gatesReset);
+  const orphans = Object.keys(ledgerStatuses)
+    .filter(id => ledgerStatuses[id] === 'in_progress' && id !== nodeId && !gateSet.has(id));
+  if (orphans.length) {
+    return {
+      result: 'refuse',
+      reason: 'would_orphan_in_progress',
+      nodeId,
+      inProgress: orphans,
+      detail: 'in_progress row(s) [' + orphans.join(', ') + '] are not post-dominating gates of '
+        + nodeId + ' — reopening would leave an orphan multi-in_progress ledger',
+      repair: 'close the listed node(s) via close-and-open-next (or reconcile/abort the batch) '
+        + 'first, then re-run reopen-node',
+    };
+  }
+
+  // (3c) Fold the post-dominating gates to pending. #343: an in_progress gate — the mid-gate
+  // repair case (the gate just emitted a blocking finding owned by N) — folds back to
+  // pending exactly like a complete one, so the repair does NOT have to advance the DAG
+  // to allDone on a known-broken tree. gatesFolded = the rows actually flipped.
+  const gatesFolded = [];
   for (const gid of gatesReset) {
-    const s = spliceLedgerNode(planContent, gid, 'pending', { allowFrom: ['complete'] });
-    if (s.changed) planContent = s.content;
+    const s = spliceLedgerNode(planContent, gid, 'pending', { allowFrom: ['complete', 'in_progress'] });
+    if (s.changed) { planContent = s.content; gatesFolded.push(gid); }
   }
 
   // (4) Remove stale per-node baselines for N + the reset gates.
@@ -1117,12 +1175,14 @@ function runReopenNode(opts) {
     return { result: 'refuse', reason: 'baseline_failed', nodeId, baselineResult: baseline, reopened: nodeId, gatesReset };
   }
 
-  // #317: post-dominating gates were reset complete → pending; the reopened node → in_progress.
-  const reopenTransitions = gatesReset.map(g => buildTransition(g, 'pending', 'reopen-node'));
+  // #317: post-dominating gates were folded → pending; the reopened node → in_progress.
+  // #343: transitions are built from gatesFolded (rows actually flipped), never the
+  // structural gatesReset — an already-pending downstream gate gets NO fabricated entry.
+  const reopenTransitions = gatesFolded.map(g => buildTransition(g, 'pending', 'reopen-node'));
   reopenTransitions.push(buildTransition(nodeId, 'in_progress', 'reopen-node'));
 
   return {
-    result: 'ok', reopened: nodeId, gatesReset, baselinesRemoved, baselineRecorded: true,
+    result: 'ok', reopened: nodeId, gatesReset, gatesFolded, baselinesRemoved, baselineRecorded: true,
     taskTransitions: reopenTransitions,
     taskMirror: refreshTaskMirror(project, shell),
   };

@@ -17,6 +17,9 @@
 //       source removed, receipt has NO bundle fields (or empty), invariants pass.
 //   (4) checkClosureInvariants per-issue: violation when a bundle member's .roadmap source
 //       still exists.
+//   (5) checkClosureInvariants roadmap-mirror-clean is row-anchored (#339): a legitimate
+//       cross-reference to #N inside ANOTHER issue's row does not violate; an actual
+//       active `| #N | ...` row still does.
 //
 // OFFLINE-safe strategy: same KAOLA_GH_MOCK_SCRIPT pattern as test-bundle-claim.js.
 // All fixtures are written to $TMPDIR — NOTHING is written inside the repo tree.
@@ -587,6 +590,77 @@ const { checkClosureInvariants } = require('./kaola-workflow-claim');
     fs.unlinkSync(path.join(tmpRoot, 'kaola-workflow', '.roadmap', 'issue-47.md'));
     const invariantResult2 = checkClosureInvariants(tmpRoot, receipt, archiveDest);
     assert(invariantResult2.ok === true, 'invariants pass after all member sources removed; violations: ' + JSON.stringify(invariantResult2.violations));
+
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+})();
+
+// ---------------------------------------------------------------------------
+// Test (5): roadmap-mirror-clean is row-anchored (#339) — cross-reference vs active row
+// ---------------------------------------------------------------------------
+
+(function testMirrorCleanCrossReference() {
+  console.log('Test (5): roadmap-mirror-clean (#339) — cross-reference to #N in another row passes; active | #N | row violates');
+  const tmpRoot = makeTmpRoot();
+  try {
+    initGitRepo(tmpRoot);
+
+    const roadmapDir = path.join(tmpRoot, 'kaola-workflow');
+    fs.mkdirSync(roadmapDir, { recursive: true });
+
+    // Archive dest with a closed state file (so archive-state-closed passes)
+    const archiveDest = path.join(tmpRoot, 'kaola-workflow', 'archive', 'issue-562');
+    fs.mkdirSync(archiveDest, { recursive: true });
+    fs.writeFileSync(path.join(archiveDest, 'workflow-state.md'), [
+      '# Kaola-Workflow State',
+      'name: issue-562',
+      'status: closed',
+      'step: complete'
+    ].join('\n') + '\n');
+
+    // Single-issue receipt (no issue_numbers): issue #562 fully closed
+    const receipt = {
+      project: 'issue-562',
+      issue_number: 562,
+      archive: 'closed',
+      roadmap_source_removed: 'removed',
+      roadmap_regenerated: 'regenerated',
+      remote_issue_closed: 'already_closed',
+      claim_label_removed: 'removed',
+      worktree_removed: 'missing',
+      branch_removed: 'kept',
+      claim_planner_attested: 'missing',
+      finalize_contractor_attested: 'missing',
+      warnings: []
+    };
+
+    const tableHeader =
+      '# Kaola-Workflow Roadmap\n\n' +
+      '| Issue | Title | Status | Project | Next Step |\n' +
+      '|-------|-------|--------|---------|----------|\n';
+
+    // Fixture A (AC1): the ONLY #562 mention is a legitimate cross-reference
+    // inside ANOTHER issue's row (next_step cell of the #485 row).
+    fs.writeFileSync(path.join(roadmapDir, 'ROADMAP.md'),
+      tableHeader +
+      '| #485 | layered rendering | open | issue-485 | place_inside (#562 opacity) |\n');
+    const resA = checkClosureInvariants(tmpRoot, receipt, archiveDest);
+    assert(resA.ok === true,
+      '#339 A: cross-reference-only mirror must pass closure invariants; violations: ' + JSON.stringify(resA.violations));
+    assert(!resA.violations.some(v => v.id === 'roadmap-mirror-clean'),
+      '#339 A: no roadmap-mirror-clean violation for a cross-reference inside another row');
+
+    // Fixture B (AC2): an actual active `| #562 | ...` row must still violate.
+    fs.writeFileSync(path.join(roadmapDir, 'ROADMAP.md'),
+      tableHeader +
+      '| #485 | layered rendering | open | issue-485 | place_inside (#562 opacity) |\n' +
+      '| #562 | opacity flag | active | issue-562 | TBD |\n');
+    const resB = checkClosureInvariants(tmpRoot, receipt, archiveDest);
+    assert(resB.ok === false,
+      '#339 B: mirror with an active #562 row must fail closure invariants');
+    assert(resB.violations.some(v => v.id === 'roadmap-mirror-clean'),
+      '#339 B: roadmap-mirror-clean violation fires for an active row; violations: ' + JSON.stringify(resB.violations));
 
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });

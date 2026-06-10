@@ -528,6 +528,7 @@ assertIncludes('scripts/simulate-workflow-walkthrough.js', 'Workflow walkthrough
 assert(exists('scripts/kaola-workflow-plan-validator.js'), 'adaptive plan validator is missing');
 assert(exists('scripts/kaola-workflow-adaptive-schema.js'), 'adaptive schema module is missing');
 assert(exists('scripts/kaola-workflow-adaptive-node.js'), '#272 adaptive-node aggregator missing');
+assertIncludes('scripts/kaola-workflow-adaptive-node.js', 'would_orphan_in_progress'); // #343 mid-gate reopen
 assertIncludes('install.sh', 'kaola-workflow-plan-validator.js');
 assertIncludes('install.sh', '--enable-adaptive');
 // #255: the adaptive-handoff script must be in install.sh's per-edition SUPPORT_SCRIPT_NAMES

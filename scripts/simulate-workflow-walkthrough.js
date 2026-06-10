@@ -8703,6 +8703,97 @@ function testAdaptiveHandoffProjectFlagResolvesRepoRoot() {
   console.log('testAdaptiveHandoffProjectFlagResolvesRepoRoot: PASSED');
 }
 
+// ---------------------------------------------------------------------------
+// testAdaptiveHandoffDecisionIdConflict — #337 regression fixture (both arms).
+// The repo already records decision id D-210-01 (a prior partial-close cycle:
+// docs/decisions/ file, filename + content). An UNFROZEN in-grammar plan whose
+// ## Plan Notes hardcodes D-210-01 must REFUSE pre-freeze (decision_id_conflict,
+// exit≠0, plan bytes UNCHANGED — no plan_hash stamped). Renumbering to the next
+// free D-210-02 with the deliberate reference annotated "D-210-01 (existing)"
+// must freeze (exit 0, ready_to_run). Drives the REAL subprocess + the REAL
+// default docs/CHANGELOG scanner seam (no injected stubs — #292 io-shim lesson).
+// ---------------------------------------------------------------------------
+function testAdaptiveHandoffDecisionIdConflict() {
+  const tmp = adaptiveTmp('handoff-decision-id');
+  try {
+    initGitRepo(tmp);
+
+    const projectName = 'issue-210-sim-decision-id';
+    const projectDir = path.join(tmp, 'kaola-workflow', projectName);
+    fs.mkdirSync(projectDir, { recursive: true });
+
+    // Prior partial-close cycle already shipped D-210-01.
+    const decisionsDir = path.join(tmp, 'docs', 'decisions');
+    fs.mkdirSync(decisionsDir, { recursive: true });
+    fs.writeFileSync(path.join(decisionsDir, 'D-210-01-prior-decision.md'),
+      '# D-210-01 — prior decision\n\nShipped in the first partial-close cycle (PR #233).\n');
+
+    const nodesRows = [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| impl | tdd-guide | explore | lib/foo.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ];
+    const ledgerRows = [
+      '| explore | pending |',
+      '| impl | pending |',
+      '| review | pending |',
+      '| done | pending |',
+    ];
+    const staleNotes = [
+      '', '## Plan Notes', '',
+      '- the docs follow-up records decision record D-210-01.', '',
+    ].join('\n');
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, makeHandoffPlan(nodesRows, ledgerRows) + staleNotes);
+    plantHandoffState(projectDir, projectName);
+
+    spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8' });
+    spawnSync('git', ['commit', '-m', 'decision-id fixture'], { cwd: tmp, encoding: 'utf8' });
+
+    const planBytesBefore = fs.readFileSync(planPath);
+
+    // Arm 1: stale id → typed refusal pre-freeze, no mutation.
+    const r1 = runNode(handoffScript, ['--plan', planPath, '--json'], tmp);
+    assert(r1.status !== 0,
+      'decision-id conflict handoff must exit non-zero, got ' + r1.status + '\nstdout: ' + r1.stdout);
+    const result1 = JSON.parse(r1.stdout);
+    assert(result1.handoff_status === 'plan_invalid',
+      'must be plan_invalid on stale decision id, got: ' + JSON.stringify(result1));
+    assert(result1.result === 'refuse', 'result must be refuse, got: ' + result1.result);
+    assert(Array.isArray(result1.errors) && (result1.errors[0] || '').includes('decision_id_conflict'),
+      'errors[0] must include decision_id_conflict, got: ' + JSON.stringify(result1.errors));
+    assert((result1.errors[0] || '').includes('docs/decisions/D-210-01-prior-decision.md'),
+      'errors[0] must name the repo hit path, got: ' + JSON.stringify(result1.errors));
+
+    // Plan must be byte-identical (no plan_hash stamped — refusal pre-freeze).
+    const planBytesAfter = fs.readFileSync(planPath);
+    assert(planBytesBefore.equals(planBytesAfter),
+      'plan must be byte-identical after decision-id refusal (no mutation)');
+    assert(!/plan_hash/.test(planBytesAfter.toString('utf8')),
+      'no plan_hash may be stamped on decision-id refusal');
+
+    // Arm 2: renumber to the next free id + annotate the deliberate reference.
+    const fixedNotes = [
+      '', '## Plan Notes', '',
+      '- D-210-01 (existing) covered the first half; this cycle records D-210-02.', '',
+    ].join('\n');
+    fs.writeFileSync(planPath, makeHandoffPlan(nodesRows, ledgerRows) + fixedNotes);
+
+    const r2 = runNode(handoffScript, ['--plan', planPath, '--json'], tmp);
+    assert(r2.status === 0,
+      'renumbered handoff must exit 0, got ' + r2.status + '\nstderr: ' + r2.stderr + '\nstdout: ' + r2.stdout);
+    const result2 = JSON.parse(r2.stdout);
+    assert(result2.handoff_status === 'ready_to_run',
+      'renumbered plan must be ready_to_run, got: ' + JSON.stringify(result2));
+    const frozenPlan = fs.readFileSync(planPath, 'utf8');
+    assert(/<!-- plan_hash: [0-9a-f]{64} -->/.test(frozenPlan),
+      'renumbered plan must be frozen (plan_hash stamped)');
+
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptiveHandoffDecisionIdConflict: PASSED');
+}
+
 // ===========================================================================
 // issue #264 — hidden-local worktree path, gitignore, legacy cleanup, sink guard
 // ===========================================================================
@@ -9321,6 +9412,8 @@ async function main() {
     testAdaptiveHandoffIdempotentReRun();
     // issue #255 review BLOCKING-1: --project must resolve user-repo root via git rev-parse
     testAdaptiveHandoffProjectFlagResolvesRepoRoot();
+    // issue #337 — decision-record id preflight (freeze-time-once, refuse pre-freeze)
+    testAdaptiveHandoffDecisionIdConflict();
     // issue #264 — hidden-local worktree path, gitignore, legacy cleanup, sink guard
     testGitignoreCoversKw();
     testWorktreeHiddenLocalPath();

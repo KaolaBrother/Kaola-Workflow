@@ -469,6 +469,7 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'ready_to_r
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'plan_invalid');
 assert(exists(`${pluginRoot}/scripts/kaola-workflow-adaptive-handoff.js`), '#255 adaptive handoff aggregator missing from Codex plugin');
 assert(exists(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`), '#272 adaptive node aggregator missing from Codex plugin');
+assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`, 'would_orphan_in_progress'); // #343 mid-gate reopen
 // #281: parallel-batch aggregator claude-plugin copy presence
 assert(exists(`${pluginRoot}/scripts/kaola-workflow-parallel-batch.js`), '#281 parallel-batch aggregator missing from Codex plugin');
 assertConcept(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'adaptive execution + governance', [

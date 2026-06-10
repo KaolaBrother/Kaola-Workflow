@@ -1265,7 +1265,12 @@ function checkClosureInvariants(root, receipt, archiveDest) {
       const roadmapMirror = path.join(root, 'kaola-workflow', 'ROADMAP.md');
       try {
         const content = fs.readFileSync(roadmapMirror, 'utf8');
-        if (content.includes('#' + n + ' ') || content.includes('#' + n + '\n') || content.includes('#' + n + ')')) {
+        // #339: an active row in the generated mirror is exactly `| #N | …` at
+        // line start (kaola-workflow-roadmap.js buildTableRow). A bare substring
+        // match also hits legitimate cross-references to #N inside OTHER rows
+        // (e.g. "place_inside (#562 opacity)" in a dependency note), so anchor
+        // on the row's issue column instead.
+        if (new RegExp('^\\| #' + n + ' \\|', 'm').test(content)) {
           const baseDesc2 = invMirrorClean ? invMirrorClean.description : 'ROADMAP.md still lists issue as active';
           violations.push({
             id: 'roadmap-mirror-clean',

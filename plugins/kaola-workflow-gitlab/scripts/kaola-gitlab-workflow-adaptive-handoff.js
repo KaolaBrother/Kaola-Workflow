@@ -20,12 +20,16 @@
 //               first_node:{ id, role, model, declared_write_set }  (ADVISORY — not yet opened),
 //               decision, risk }
 //   invalid: { handoff_status:'plan_invalid', result:'refuse', errors, validator_verdict }
+//            #337 decision-id preflight refusals carry errors prefixed
+//            'decision_id_conflict:' plus an additive `conflicts` field ([{id, hits}]).
 //
 // 2-state only: branch on validator --json `result` ('in-grammar'|'refuse'), NEVER on `decision`.
 // decision:ask is audit METADATA that freezes-and-proceeds — NO needs_user_approval, NO --authorized.
 //
 // Crash-safe write order (binding):
 //   1. validator --json  → branch on result. refuse → plan_invalid exit≠0, NO mutation; stop.
+//   1.5 decision-id preflight (#337) — read-only; refuse (decision_id_conflict) pre-freeze;
+//       skipped when the plan is already frozen or the findDecisionIdHits seam is absent.
 //   2. --freeze          → FIRST mutation.
 //   3. --resume-check    → integrity gate.
 //   4. next-action PURE  → first ready node (ADVISORY; not opened here — adaptive-node.js opens it).
@@ -113,6 +117,26 @@ function parseIssueNumber(stateContent) {
 }
 
 // ---------------------------------------------------------------------------
+// extractDecisionIdCandidates — #337: collect decision-record ids (D-<n>-<seq>)
+// hardcoded in the plan. An occurrence followed by the literal annotation
+// "(existing)" is a deliberate reference to an already-shipped record and is
+// NOT a candidate; any unannotated occurrence makes the id a candidate.
+// Pure; returns deduped ids in first-seen order.
+// ---------------------------------------------------------------------------
+function extractDecisionIdCandidates(planContent) {
+  const out = [];
+  const seen = new Set();
+  const re = /\bD-(\d+)-(\d+)\b/g;
+  const s = String(planContent || '');
+  let m;
+  while ((m = re.exec(s)) !== null) {
+    if (/^\s*\(existing\)/.test(s.slice(m.index + m[0].length))) continue;
+    if (!seen.has(m[0])) { seen.add(m[0]); out.push(m[0]); }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // parseProjectTitle — extract project name from ## Project section.
 // Returns string or fallback.
 // ---------------------------------------------------------------------------
@@ -186,6 +210,9 @@ function splicePlanningEvidence(content, fields, stateMtime) {
 //   readFile        {function} (path) → string (throws on missing)
 //   writeFile       {function} (path, content) → void
 //   stateMtime      {string|undefined} ISO timestamp → recorded_at field; omit when undefined
+//   findDecisionIdHits {function|undefined} OPTIONAL (#337): (ids: string[]) →
+//                   { [id]: string[] /* repo-relative hit paths */ }. Seam for the
+//                   step-1.5 decision-id preflight; absent ⇒ check skipped (fail-open).
 //
 // @returns {object} handoff result (2-state)
 // ---------------------------------------------------------------------------
@@ -234,6 +261,46 @@ function runHandoff(opts) {
       errors: validateResult.errors || ['validator refused'],
       validator_verdict: validateResult,
     };
+  }
+
+  // -------------------------------------------------------------------------
+  // Step 1.5 (#337): decision-record id preflight — freeze-time-once.
+  // Skipped when the plan is already frozen (idempotent re-run / resume: the
+  // run itself may have legitimately written the record by now) or when the
+  // findDecisionIdHits seam is not injected. Refusal happens BEFORE --freeze,
+  // so the no-mutation-on-refuse contract holds.
+  // -------------------------------------------------------------------------
+  if (typeof opts.findDecisionIdHits === 'function') {
+    let prePlan = null;
+    try { prePlan = readFile(planPath); } catch (_) { /* validator already vetted it */ }
+    const alreadyFrozen = /<!--\s*plan_hash:\s*[0-9a-f]{64}\s*-->/.test(prePlan || '');
+    if (prePlan && !alreadyFrozen) {
+      const candidates = extractDecisionIdCandidates(prePlan);
+      if (candidates.length) {
+        let hits = {};
+        try { hits = opts.findDecisionIdHits(candidates) || {}; } catch (_) { hits = {}; }
+        const conflicts = candidates
+          .map(id => ({ id, hits: Array.isArray(hits[id]) ? hits[id] : [] }))
+          .filter(c => c.hits.length > 0);
+        if (conflicts.length) {
+          return {
+            handoff_status: 'plan_invalid',
+            result: 'refuse',
+            errors: conflicts.map(c => {
+              const issue = (c.id.match(/^D-(\d+)-/) || [])[1] || 'NN';
+              const shown = c.hits.slice(0, 3).join(', ') + (c.hits.length > 3 ? ', …' : '');
+              return 'decision_id_conflict: plan hardcodes decision-record id "' + c.id +
+                '" but the repo already records it (' + shown + ') — renumber to the next free D-' +
+                issue + '-NN, use the D-' + issue + '-NEXT placeholder (the doc-updater node resolves it ' +
+                'after reading the existing decision records), or annotate a deliberate reference as "' +
+                c.id + ' (existing)"';
+            }),
+            conflicts,
+            validator_verdict: validateResult,
+          };
+        }
+      }
+    }
   }
 
   const decision = validateResult.decision || 'auto-run';
@@ -446,6 +513,43 @@ function main() {
     statePath = path.join(path.dirname(planPath), 'workflow-state.md');
   }
 
+  // #337: default decision-record scanner. Repo root is derived from the plan
+  // path (<root>/kaola-workflow/<project>/workflow-plan.md → 3 dirname hops),
+  // mirroring the roadmap-file derivation in runHandoff, so --plan invocations
+  // from a foreign cwd still scan the PLAN's repo. Scans docs/**/*.md (filename +
+  // content, word-bounded) and CHANGELOG.md. Fail-open on any FS error.
+  const findDecisionIdHits = ids => {
+    const out = {};
+    for (const id of ids) out[id] = [];
+    const planRepoRoot = path.dirname(path.dirname(path.dirname(planPath)));
+    const files = [];
+    const stack = [path.join(planRepoRoot, 'docs')];
+    while (stack.length) {
+      const dir = stack.pop();
+      let entries;
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch (_) { continue; }
+      for (const e of entries) {
+        if (e.name.startsWith('.') || e.name === 'node_modules') continue;
+        const p = path.join(dir, e.name);
+        if (e.isDirectory()) stack.push(p);
+        else if (/\.md$/i.test(e.name)) files.push(p);
+      }
+    }
+    const changelog = path.join(planRepoRoot, 'CHANGELOG.md');
+    if (fs.existsSync(changelog)) files.push(changelog);
+    for (const f of files) {
+      let content = '';
+      try { content = fs.readFileSync(f, 'utf8'); } catch (_) { continue; }
+      for (const id of ids) {
+        const re = new RegExp('\\b' + id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b');
+        if (re.test(path.basename(f)) || re.test(content)) {
+          out[id].push(path.relative(planRepoRoot, f));
+        }
+      }
+    }
+    return out;
+  };
+
   const resolveModel = role =>
     require('./kaola-workflow-resolve-agent-model').resolveAgentModel(role);
 
@@ -462,6 +566,7 @@ function main() {
     readFile:  fpath => fs.readFileSync(fpath, 'utf8'),
     writeFile: (fpath, content) => fs.writeFileSync(fpath, content, 'utf8'),
     stateMtime,
+    findDecisionIdHits,
   });
 
   process.stdout.write(JSON.stringify(result) + '\n');
@@ -474,4 +579,4 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { runHandoff, shellHandoff };
+module.exports = { runHandoff, shellHandoff, extractDecisionIdCandidates };

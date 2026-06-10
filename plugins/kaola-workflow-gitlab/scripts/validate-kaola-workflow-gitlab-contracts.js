@@ -522,6 +522,9 @@ assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js', 'workflow
 assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-repair-state.js', 'routeAdaptive');
 assertNotIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-repair-state.js', 'enable_adaptive');
 assertNotIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-plan-validator.js', 'enable_adaptive');
+// #343: mid-gate reopen fold + orphan guard must be carried by the GitLab adaptive-node port
+// (not byte-checked by validate-script-sync; this pin is the anti-drift guard).
+assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-adaptive-node.js', 'would_orphan_in_progress');
 
 // issue #290 / #288: pin the machine-readable findings-emission contract presence in all
 // reviewer agent bodies (GitLab edition — .toml bodies). Removing the emission section from

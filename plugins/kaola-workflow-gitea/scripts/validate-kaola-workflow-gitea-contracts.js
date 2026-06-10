@@ -527,6 +527,9 @@ assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'workflow_
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-repair-state.js', 'routeAdaptive');
 assertNotIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-repair-state.js', 'enable_adaptive');
 assertNotIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-plan-validator.js', 'enable_adaptive');
+// #343: mid-gate reopen fold + orphan guard must be carried by the Gitea adaptive-node port
+// (not byte-checked by validate-script-sync; this pin is the anti-drift guard).
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-adaptive-node.js', 'would_orphan_in_progress');
 
 // issue #290 / #288: pin the machine-readable findings-emission contract presence in all
 // reviewer agent bodies (Gitea edition — .toml bodies). Removing the emission section from
