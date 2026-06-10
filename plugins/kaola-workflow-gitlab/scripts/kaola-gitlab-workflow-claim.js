@@ -305,7 +305,13 @@ function exportWorktreeDiff(root, wtPath, issueNumber) {
   }
 }
 
+// #356: reject a leading-dash/NUL branch name so a malformed ref can't reach git as a flag.
+function isSafeBranchArg(branch) {
+  return typeof branch === 'string' && branch.length > 0 && !branch.startsWith('-') && !branch.includes('\0');
+}
+
 function removeBranch(root, branch) {
+  if (!isSafeBranchArg(branch)) return false;
   try {
     execFileSync('git', ['-C', root, 'branch', '-D', branch],
       { stdio: ['ignore', 'ignore', 'ignore'] });

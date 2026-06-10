@@ -32,6 +32,12 @@ function readAdaptiveConfig() {
 }
 
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
+// #356: bound every gh round-trip so a hung remote can never wedge a claim indefinitely (the
+// other lifecycle scripts already cap at this; claim's ghExec was the one uncapped copy).
+const REMOTE_TIMEOUT_MS = (() => {
+  const n = parseInt(process.env.KAOLA_GH_REMOTE_TIMEOUT_MS || '30000', 10);
+  return Number.isInteger(n) && n > 0 ? Math.min(n, 600000) : 30000;
+})();
 const WORKTREE_NATIVE = process.env.KAOLA_WORKTREE_NATIVE !== '0';
 const CLAIM_LABEL = 'workflow:in-progress';
 
@@ -151,8 +157,9 @@ function parseArgs(argv) {
 function ghExec(args, opts) {
   if (OFFLINE) return '';
   const mock = process.env.KAOLA_GH_MOCK_SCRIPT;
-  if (mock) return execFileSync(process.execPath, [mock, ...args], Object.assign({ encoding: 'utf8' }, opts || {})).trim();
-  return execFileSync('gh', args, Object.assign({ encoding: 'utf8' }, opts || {})).trim();
+  // #356: cap every gh call at REMOTE_TIMEOUT_MS (caller opts may still override).
+  if (mock) return execFileSync(process.execPath, [mock, ...args], Object.assign({ encoding: 'utf8', timeout: REMOTE_TIMEOUT_MS }, opts || {})).trim();
+  return execFileSync('gh', args, Object.assign({ encoding: 'utf8', timeout: REMOTE_TIMEOUT_MS }, opts || {})).trim();
 }
 
 function getCoordRoot(root) {
@@ -280,7 +287,15 @@ function exportWorktreeDiff(root, wtPath, issueNumber) {
   }
 }
 
+// #356: a branch name beginning with '-' (or carrying a NUL) would be parsed by git as a flag,
+// not a ref — guard it. execFileSync passes args without a shell so this is a parse-safety guard,
+// not a shell-injection one, but it keeps a malformed/hostile state-file branch from reaching git.
+function isSafeBranchArg(branch) {
+  return typeof branch === 'string' && branch.length > 0 && !branch.startsWith('-') && !branch.includes('\0');
+}
+
 function removeBranch(root, branch) {
+  if (!isSafeBranchArg(branch)) return false;
   try {
     execFileSync('git', ['-C', root, 'branch', '-D', branch],
       { stdio: ['ignore', 'ignore', 'ignore'] });
@@ -2361,6 +2376,9 @@ module.exports = {
   claimProject,
   collectStale,
   defaultBranch,
+  ghExec,
+  isSafeBranchArg,
+  removeBranch,
   cmdAuditLabels,
   cmdLegacyWorktreeCleanup,
   cmdRepairLabels,
