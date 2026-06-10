@@ -256,6 +256,14 @@ function readState(tmpRoot, project) {
     assert(/^closure_policy:\s*all_or_nothing\s*$/m.test(state), 'state has closure_policy: all_or_nothing');
     assert(/^workflow_path:\s*adaptive\s*$/m.test(state), 'state has workflow_path: adaptive');
 
+    // #370: with KAOLA_WORKTREE_NATIVE=1 the bundle now provisions a worktree (parity with
+    // single-issue claimProject; the prior "matches adaptive single-issue" suppression was false).
+    assert(typeof out.worktree_path === 'string' && out.worktree_path.length > 0,
+      '#370: bundle claim provisions a worktree (worktree_path non-empty), got ' + JSON.stringify(out && out.worktree_path));
+    assert(fs.existsSync(out.worktree_path), '#370: provisioned worktree directory exists at ' + out.worktree_path);
+    assert(/^worktree_path:\s*\S+\s*$/m.test(state), '#370: state records a non-empty worktree_path');
+    assert(/^run_posture:\s*worktree\s*$/m.test(state), '#370: state records run_posture: worktree');
+
     // Labels and comments applied per member via mock gh
     const calls = readLog(logFile);
     const labelsAdded = calls.filter(c => c.startsWith('label-added:'));
@@ -636,6 +644,82 @@ function readState(tmpRoot, project) {
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
+})();
+
+// ---------------------------------------------------------------------------
+// Test (#370): malformed --target-issues token refuses target_set_invalid_token (zero mutation)
+// ---------------------------------------------------------------------------
+(function testBundleInvalidToken() {
+  console.log('Test (#370): --target-issues 42,4x,53 → target_set_invalid_token naming 4x');
+  const tmpRoot = makeTmpRoot();
+  const binDir = path.join(tmpRoot, 'bin');
+  try {
+    initGitRepo(tmpRoot);
+    writeGhMockScript(binDir, { logFile: path.join(tmpRoot, 'gh.log'), openIssues: [42, 53] });
+    const result = runClaim(['startup', '--target-issues', '42,4x,53', '--workflow-path', 'adaptive'], tmpRoot, binDir);
+    const out = parseClaim(result);
+    assert(out && out.status === 'target_set_invalid_token',
+      '#370: 42,4x,53 → target_set_invalid_token, got ' + JSON.stringify(out && out.status));
+    assert(out && /4x/.test(out.reasoning || ''),
+      '#370: refusal echoes the offending token 4x, got ' + JSON.stringify(out && out.reasoning));
+    assert(!fs.existsSync(path.join(tmpRoot, 'kaola-workflow', 'bundle-42-53')),
+      '#370: invalid-token refusal creates no bundle folder (zero mutation)');
+    assert(!fs.existsSync(path.join(tmpRoot, 'kaola-workflow', 'bundle-4-42-53')),
+      '#370: 4x is NOT coerced to 4 (parseInt trap)');
+  } finally { fs.rmSync(tmpRoot, { recursive: true, force: true }); }
+})();
+
+// ---------------------------------------------------------------------------
+// Test (#370): --attest-planner-spawn back-fills the dispatch log on the bundle path
+// ---------------------------------------------------------------------------
+(function testBundleAttestPlannerSpawn() {
+  console.log('Test (#370): --attest-planner-spawn back-fills dispatch-log.jsonl on the bundle path');
+  const tmpRoot = makeTmpRoot();
+  const binDir = path.join(tmpRoot, 'bin');
+  try {
+    initGitRepo(tmpRoot);
+    writeRoadmapFile(tmpRoot, 42); writeRoadmapFile(tmpRoot, 47);
+    writeGhMockScript(binDir, { logFile: path.join(tmpRoot, 'gh.log'), openIssues: [42, 47] });
+    const result = runClaim(
+      ['startup', '--target-issues', '42,47', '--workflow-path', 'adaptive', '--attest-planner-spawn'],
+      tmpRoot, binDir
+    );
+    const out = parseClaim(result);
+    assert(out && out.claim === 'acquired', '#370 attest: claim acquired, got ' + JSON.stringify(out && out.status));
+    const logPath = path.join(tmpRoot, 'kaola-workflow', 'bundle-42-47', '.cache', 'dispatch-log.jsonl');
+    assert(fs.existsSync(logPath), '#370 attest: dispatch-log.jsonl back-filled on the bundle path');
+    assert(/workflow-planner/.test(fs.readFileSync(logPath, 'utf8')),
+      '#370 attest: dispatch log carries a workflow-planner entry');
+  } finally { fs.rmSync(tmpRoot, { recursive: true, force: true }); }
+})();
+
+// ---------------------------------------------------------------------------
+// Test (#370): NATIVE=0 bundle creates the in-place branch + records base_branch + run_posture
+// ---------------------------------------------------------------------------
+(function testBundleInPlaceBranch() {
+  console.log('Test (#370): NATIVE=0 bundle creates the in-place branch + records base_branch');
+  const tmpRoot = makeTmpRoot();
+  const binDir = path.join(tmpRoot, 'bin');
+  try {
+    initGitRepo(tmpRoot);
+    writeRoadmapFile(tmpRoot, 42); writeRoadmapFile(tmpRoot, 47);
+    writeGhMockScript(binDir, { logFile: path.join(tmpRoot, 'gh.log'), openIssues: [42, 47] });
+    // treeDirty includes untracked files (same gate as claimProject) — commit the fixture so the
+    // in-place dirty-gate sees a clean tree.
+    spawnSync('git', ['-C', tmpRoot, 'add', '-A'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmpRoot, 'commit', '-m', 'fixture'], { encoding: 'utf8' });
+    const result = runClaim(
+      ['startup', '--target-issues', '42,47', '--workflow-path', 'adaptive'],
+      tmpRoot, binDir, { KAOLA_WORKTREE_NATIVE: '0' }
+    );
+    const out = parseClaim(result);
+    assert(out && out.claim === 'acquired', '#370 in-place: claim acquired, got ' + JSON.stringify(out));
+    const state = readState(tmpRoot, 'bundle-42-47');
+    assert(/^run_posture:\s*in-place\s*$/m.test(state || ''), '#370 in-place: state records run_posture: in-place');
+    assert(/^base_branch:\s*main\s*$/m.test(state || ''), '#370 in-place: state records base_branch: main');
+    const cur = spawnSync('git', ['-C', tmpRoot, 'rev-parse', '--abbrev-ref', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    assert(cur === out.branch, '#370 in-place: HEAD is on the created bundle branch ' + out.branch + ', got ' + cur);
+  } finally { fs.rmSync(tmpRoot, { recursive: true, force: true }); }
 })();
 
 // ---------------------------------------------------------------------------
