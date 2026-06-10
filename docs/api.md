@@ -652,47 +652,69 @@ Three scripts harden the Codex edition against config drift, silent inline execu
 
 ### Script: `kaola-workflow-codex-preflight.js`
 
-Hard-gates Codex role-profile/config freshness before any `subagent-invoked` compliance row may be written. TRUE 4-tree byte-identical (all four editions share the same file, authored require-free of edition code — only `fs`/`path` and an inline TOML-block scanner).
+Hard-gates Codex role-profile/config freshness before any `subagent-invoked` compliance row may be written. TRUE 4-tree byte-identical (all four editions share the same file, authored require-free of edition code — only `fs`/`path`/`os` and an inline TOML-block scanner). Since #332 it also schema-validates each installed profile and detects stale/retired Kaola files; the small schema regexes + constants (`RETIRED_PROFILE_FILES`, `EFFORT_VALUES`, `MANIFEST_BASENAME`, `validateProfileText`) are deliberately mirrored from `install-codex-agent-profiles.js` (the claude `scripts/` tree has no installer to require).
 
 **CLI:**
 
 ```bash
 node scripts/kaola-workflow-codex-preflight.js --project-root <dir> [--plan <plan-path>] [--no-autofix] [--json]
+node scripts/kaola-workflow-codex-preflight.js --doctor [--project-root <dir>] [--home <dir>] [--json]
 ```
 
-**Behavior:**
+**Behavior (normal gate):**
 
-1. Resolves `--project-root` (or `process.cwd()`) and checks `.codex/agents/kaola-workflow/` for per-role `.toml` files.
-2. Reads `.codex/config.toml`, locates the managed block between `# BEGIN kaola-workflow agents` and `# END kaola-workflow agents`, and asserts every required role has an `[agents.{role}]` entry inside it.
+1. Resolves `--project-root` (or `process.cwd()`) and checks `.codex/agents/kaola-workflow/` for per-role `.toml` files, **schema-validating** each required profile (a non-empty top-level `name` matching the role, a legal `model_reasoning_effort`, a non-blank `developer_instructions`).
+2. Reads `.codex/config.toml`, locates the managed block between `# BEGIN kaola-workflow agents` and `# END kaola-workflow agents`, asserts every required role has an `[agents.{role}]` entry inside it, and flags any retired/foreign `[agents.*]` *inside* the markers.
 3. Required-role set: the union of (a) all roles in the bundled `config/agents.toml` template (read dynamically — no hardcoded count) and (b) the roles named in the frozen plan's `## Nodes` table when `--plan <path>` is supplied.
-4. **Auto-install when safe**: if the only problem is a stale or missing managed block, runs `install-codex-agent-profiles.js`, then re-verifies. On success, returns exit 0 with `autofixed: true`.
-5. **Typed refusal when unsafe**: if a conflicting `[agents.*]` table exists OUTSIDE the managed markers, the installer is unavailable/errors, or the plan names a role absent from the template entirely, exits non-zero with a typed-refusal JSON. `--no-autofix` forces the refusal path (useful in tests).
-6. **Never a silent `subagent-invoked`**: any non-`ok` status is a STOP for the caller. The caller must not write `subagent-invoked` compliance rows when preflight did not return `status:"ok"`.
+4. Stale/retired Kaola `.toml` files left in the target dir (listed in the local `.kaola-managed-profiles.json` manifest, or in the retired-files list `docs-lookup.toml`) are detected; unknown user-owned TOMLs are **reported, never deleted** (the `extra_unmanaged` field).
+5. **Auto-install when safe**: if the only problem is a stale/missing/malformed managed block, profile file, or stale Kaola file, runs `install-codex-agent-profiles.js`, then re-verifies ALL checks. On success, returns exit 0 with `autofixed: true`.
+6. **Typed refusal when unsafe**: if a conflicting `[agents.*]` table exists OUTSIDE the managed markers, the local manifest declares an unsupported (future) `schema_version`, the installer is unavailable/errors, or the plan names a role absent from the template, exits non-zero with a typed-refusal JSON. `--no-autofix` forces the refusal path (useful in tests).
+7. **Never a silent `subagent-invoked`**: any non-`ok` status is a STOP for the caller.
 
 **Exit codes:**
 
-| Exit code | Meaning |
-|-----------|---------|
-| `0` | Fresh (or auto-fixed-then-fresh). `status:"ok"` |
-| non-zero | Typed refusal — see `status` field |
+| Exit code | `status` | Meaning |
+|-----------|----------|---------|
+| `0` | `ok` | Fresh (or auto-fixed-then-fresh) |
+| `1` | `profiles_malformed` / `profiles_stale` / `profiles_missing` / `config_stale` / `managed_block_stale` | Stale (autofixable) — `--no-autofix` refusal |
+| `2` | `template_missing` | bundled `config/agents.toml` not found |
+| `3` | `role_not_in_template` | plan names a role absent from the template |
+| `4` | `autofix_unsafe` | hand-authored `[agents.*]` outside the managed markers |
+| `5` | `installer_failed` | installer missing / errored / still stale after re-verify |
+| `6` | `profile_schema_version_unsupported` | local manifest `schema_version` is newer than this installer supports — upgrade kaola-workflow |
 
 **JSON output (`--json`):**
 
 Success:
 ```json
-{ "status": "ok", "roles_checked": ["code-explorer", "..."], "autofixed": false }
+{ "status": "ok", "roles_checked": ["code-explorer", "..."], "extra_unmanaged": [], "autofixed": false }
 ```
 
-Typed refusals (non-zero exit):
-```json
-{
-  "status": "config_stale" | "profiles_missing" | "role_not_in_template" | "autofix_unsafe" | "installer_failed",
-  "missing_roles": ["role-name"],
-  "stale": true,
-  "repair": "run install-codex-agent-profiles.js --project-root <dir>",
-  "safe_autofix": false
-}
-```
+Typed refusals (non-zero exit) carry `status`, `stale: true`, `safe_autofix`, `repair`, and `extra_unmanaged`, plus a status-specific payload: `malformed: [{role, file, reasons}]` (`profiles_malformed`), `stale_files: [...]` (`profiles_stale`), `stale_roles_in_block: [...]` (`managed_block_stale`), `missing_roles: [...]` (`profiles_missing`/`config_stale`), or `conflicting_roles_outside_markers: [...]` (`autofix_unsafe`).
+
+**Doctor mode (`--doctor`)** — READ-ONLY, never runs the installer (even without `--no-autofix`). Reports freshness for three scopes:
+
+- `user` — `<home>/.codex` (`--home` overrides `os.homedir()`; a test/diagnostic hook);
+- `project` — `<project-root>/.codex`;
+- `plugin_cache` — cached source profiles under `<home>/.codex/plugins/cache/<marketplace>/<plugin>/<version>/agents`, schema-checked, `read_only: true`.
+
+`--json` emits `{ status: 'ok'|'stale', scopes: [{scope, codex_dir, exists, managed_block, profiles, missing_roles, malformed, stale_files, stale_roles_in_block, extra_unmanaged, manifest, read_only, repair}, ...] }`. Exit code is 0 when the `user` and `project` scopes are clean-or-absent and 1 when either is stale; `plugin_cache` findings are evidence-only and never set the exit code (they distinguish runtime/plugin-cache freshness from generated `.codex/` state). Each stale scope carries a concrete `repair` command.
+
+---
+
+### Script: `install-codex-agent-profiles.js`
+
+Installs the Codex-native role profiles into a project's `.codex/`. Ships in the **3 plugin trees only** (codex/gitlab/gitea), byte-identical (enforced by `validate-script-sync.js`). Run by the Codex `kaola-workflow-init` skill (NOT by `install.sh`). Default-on validate → install → prune → manifest → post-verify (no install flags):
+
+1. **Source schema wall** — `validateSourceProfiles(pluginRoot)`: every `config_file` resolves, every `agents/*.toml` is referenced by exactly one `[agents.*]` entry, and every profile passes `validateProfileText`. On failure, prints `profile_schema_error: ...` to stderr and exits 1 **before any write**.
+2. **Manifest guard** — if the target manifest declares a `schema_version` newer than supported, prints `manifest_schema_unsupported: ...` and exits 1 (never prunes against a future manifest).
+3. Copies each source profile via write-temp-then-rename (no torn profiles on crash), upserts the managed `[agents.*]` block, and merges the managed `.codex/hooks.json` entries (#325 semantics).
+4. **Prune** — removes target `.toml` files that are no longer current AND are either listed in the previous manifest (`stale-managed`) or in the retired list `docs-lookup.toml` (`retired`, works with no manifest). Unknown user TOMLs are left in place and reported as `unmanaged extra`.
+5. **Manifest** — writes `.codex/agents/kaola-workflow/.kaola-managed-profiles.json` (`schema_version: 1`, plugin name/version, ISO `installed_at`, `roles`, per-file `sha256`, `retired_files_removed`).
+6. **Post-verify** — re-reads every installed profile and asserts the managed block carries every template role; on failure prints `post_verify_failed: ...` and exits 1.
+7. Prints `status: ok` as the last line — the machine-checkable success sentinel.
+
+Exported helpers (require-safe; `require.main` guard means `require()` never runs the installer): `validateProfileText`, `validateSourceProfiles`, `pruneStaleProfiles`, `readManifest`, `writeManifest`, `buildManagedHooks`, `mergeHooks`, `updateHooks`, plus the constants `RETIRED_PROFILE_FILES`, `MANIFEST_BASENAME`, `EFFORT_VALUES`.
 
 ---
 

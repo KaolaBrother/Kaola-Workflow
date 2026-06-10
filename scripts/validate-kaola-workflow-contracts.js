@@ -502,4 +502,75 @@ for (const reviewerBody of [
   assertIncludes(reviewerBody, 'verdict: pass');
 }
 
+// issue #332: source agent-profile schema wall. require() the installer (the #325
+// require.main guard means require() never runs main()) and assert its source-tree
+// validator passes — every agents/*.toml has a matching non-empty top-level `name`,
+// a legal model_reasoning_effort, a non-blank developer_instructions, every
+// config_file resolves, and every toml is referenced by exactly one [agents.*] entry.
+// This is the AC2 wall: it FAILS on a tree that drifts a profile schema or leaves a
+// new role file (the issue-scout class) unregistered.
+const codexInstaller = require(path.join(root, pluginRoot, 'scripts', 'install-codex-agent-profiles.js'));
+const codexProfiles = codexInstaller.validateSourceProfiles(path.join(root, pluginRoot));
+assert(codexProfiles.ok,
+  'Codex source agent profiles fail schema validation:\n  - ' + codexProfiles.errors.join('\n  - '));
+
+// issue #332 (OWNER comment): README Codex role-catalog contract. Derive roles +
+// efforts from config/agents.toml + each agents/<role>.toml, then pin README to them:
+// the role-list block must equal the derived role set; the reasoning table must carry
+// the exact effort row for every role; and the retired `docs-lookup` must appear
+// nowhere. Nothing else fails when the README role catalog drifts from source.
+function deriveCodexRoleCatalog() {
+  const templateText = read(`${pluginRoot}/config/agents.toml`);
+  const roles = [];
+  const re = /^\[agents\.([a-z0-9-]+)\]/gm;
+  let m;
+  while ((m = re.exec(templateText)) !== null) roles.push(m[1]);
+  const efforts = {};
+  for (const role of roles) {
+    const toml = read(`${pluginRoot}/agents/${role}.toml`);
+    const em = toml.match(/^model_reasoning_effort\s*=\s*"([^"]+)"\s*$/m);
+    assert(em, `agents/${role}.toml missing model_reasoning_effort (README contract source)`);
+    efforts[role] = em[1];
+  }
+  return { roles, efforts };
+}
+
+const readmeText = read('README.md');
+const { roles: catalogRoles, efforts: catalogEfforts } = deriveCodexRoleCatalog();
+
+// Role-list block: the ```text block after the "installs Codex-native role profiles"
+// sentence must contain exactly the derived role set (set equality).
+const roleListAnchor = readmeText.indexOf('installs Codex-native role profiles');
+assert(roleListAnchor !== -1, 'README must contain the Codex role-profile catalog anchor sentence');
+const afterAnchor = readmeText.slice(roleListAnchor);
+const blockMatch = afterAnchor.match(/```text\n([\s\S]*?)\n```/);
+assert(blockMatch, 'README must contain the ```text role-list block after the catalog anchor');
+const listedRoles = blockMatch[1].split('\n').map(s => s.trim()).filter(Boolean);
+const missingFromReadme = catalogRoles.filter(r => !listedRoles.includes(r));
+const extraInReadme = listedRoles.filter(r => !catalogRoles.includes(r));
+assert(missingFromReadme.length === 0,
+  'README role list missing roles from config/agents.toml: ' + missingFromReadme.join(', '));
+assert(extraInReadme.length === 0,
+  'README role list has roles not in config/agents.toml: ' + extraInReadme.join(', '));
+
+// Reasoning table: an exact `| `<role>` | `<effort>` |` row for every role.
+// (the table header anchors the catalog region for the retired-role guard below.)
+const tableAnchor = readmeText.indexOf('| Role | Reasoning effort |');
+assert(tableAnchor !== -1, 'README must contain the Codex reasoning-effort table');
+for (const role of catalogRoles) {
+  const row = '| `' + role + '` | `' + catalogEfforts[role] + '` |';
+  assert(readmeText.includes(row),
+    'README reasoning table missing exact row: ' + row);
+}
+
+// Retired role guard: the retired `docs-lookup` role must not be presented as an
+// installable/active role inside the catalog region (role-list block through the
+// reasoning table). Documentation of docs-lookup as a *pruned/retired* file elsewhere
+// in README (the durable upgrade flow) is allowed — that is the opposite of catalog
+// drift, so the guard is scoped to the catalog region rather than the whole file.
+const tableEnd = readmeText.indexOf('\n\n', tableAnchor);
+const catalogRegion = readmeText.slice(roleListAnchor, tableEnd === -1 ? readmeText.length : tableEnd);
+assert(!catalogRegion.includes('docs-lookup'),
+  'README role catalog must not list the retired docs-lookup role');
+
 console.log('Kaola-Workflow Codex contract validation passed');

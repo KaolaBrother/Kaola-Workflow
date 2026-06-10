@@ -375,14 +375,31 @@ Use Kaola-Workflow Gitea for Codex in this repo.
 Run workflow-init for Kaola-Workflow Gitea for Codex.
 ```
 
-Update an existing Codex install:
+Update an existing Codex install (durable, stale-proof flow):
 
 ```bash
 cd ~/kaola-workflow
 git pull
+# Refresh the cached plugin bundle Codex actually loads. Prefer the marketplace
+# upgrade; fall back to remove+add when upgrade is unavailable or the cache is stale:
+codex plugin marketplace upgrade kaola-workflow
+#   or: codex plugin remove kaola-workflow@<marketplace> && codex plugin add kaola-workflow@<marketplace>
+# Re-run the agent-profile installer against the project (validates each profile
+# schema, prunes retired Kaola files like docs-lookup.toml, and writes the managed
+# manifest .codex/agents/kaola-workflow/.kaola-managed-profiles.json):
+node <plugin-root>/scripts/install-codex-agent-profiles.js <project-root>
+# Inspect user / project / plugin-cache scope freshness (read-only doctor):
+node <plugin-root>/scripts/kaola-workflow-codex-preflight.js --doctor --project-root <project-root> --json
 ```
 
 Restart Codex to pick up the updated plugin files.
+
+Updating the Codex CLI itself never repairs Kaola-generated `.codex/` state — the
+runtime and the generated role profiles / managed config block are separate
+surfaces. A schema-invalid profile (one missing a non-empty top-level `name`, which
+Codex >=0.138 silently ignores) or a retired profile left behind by an older install
+is only repaired by re-running `install-codex-agent-profiles.js`, which validates,
+prunes, and re-writes the managed manifest.
 
 To verify a project was initialized for Codex, check that `.codex/config.toml`
 contains a `# BEGIN kaola-workflow agents` managed block and that
@@ -414,15 +431,21 @@ knowledge-lookup
 planner
 code-architect
 tdd-guide
+implementer
 build-error-resolver
 code-reviewer
 security-reviewer
 doc-updater
 adversarial-verifier
+contractor
+workflow-planner
+issue-scout
 ```
 
 (`adversarial-verifier` is the read-only skeptic for the opt-in adaptive path; it is
-mirrored into the Codex editions for parity and is never a review gate.)
+mirrored into the Codex editions for parity and is never a review gate. `contractor`,
+`workflow-planner`, and `issue-scout` are the adaptive lean-orchestrator roles —
+bookkeeper, DAG front end, and read-only bundle-lane backlog scout.)
 
 The managed setup copies role configs into `.codex/agents/kaola-workflow/` and
 maintains a `# BEGIN kaola-workflow agents` block in `.codex/config.toml` while
@@ -444,11 +467,15 @@ through the user's active Codex configuration. They only set reasoning effort:
 | `planner` | `xhigh` |
 | `code-architect` | `high` |
 | `tdd-guide` | `medium` |
+| `implementer` | `medium` |
 | `build-error-resolver` | `medium` |
 | `code-reviewer` | `high` |
 | `security-reviewer` | `high` |
 | `doc-updater` | `low` |
 | `adversarial-verifier` | `high` |
+| `contractor` | `low` |
+| `workflow-planner` | `xhigh` |
+| `issue-scout` | `medium` |
 
 There is no separate Codex advisor role. Codex advisor gates use the strongest
 available expert model/profile for the current session, or the current session
@@ -834,9 +861,9 @@ evidence path.
 ### Codex lifecycle hooks
 
 Codex wires the same four hooks via a project-local `.codex/hooks.json` written by
-`install-codex-agent-profiles.js` (run automatically by `./install.sh`). The hooks
-are NOT in the Codex plugin manifest (`plugin.json`) — they live in the project's
-`.codex/` directory.
+`install-codex-agent-profiles.js` (run by the Codex `kaola-workflow-init` skill). The
+hooks are NOT in the Codex plugin manifest (`plugin.json`) — they live in the
+project's `.codex/` directory.
 
 | Hook ID | Event (matcher) | Purpose | Script |
 |---------|-----------------|---------|--------|

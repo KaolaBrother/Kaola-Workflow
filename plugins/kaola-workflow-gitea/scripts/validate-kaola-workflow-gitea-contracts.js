@@ -549,4 +549,30 @@ assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'frontier un
 // #281: efficient-DAG instruction in Gitea workflow-planner profile (added by planner-profile node)
 assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'EFFICIENT DAGs');
 
+// issue #332: source agent-profile schema wall (AC2). require() THIS tree's own
+// installer copy (require.main guard means require() never runs main()) and assert its
+// source-tree validator passes for the Gitea plugin tree — every agents/*.toml has a
+// matching non-empty top-level `name`, a legal model_reasoning_effort, a non-blank
+// developer_instructions, every config_file resolves, and every toml is referenced by
+// exactly one [agents.*] entry (catches the issue-scout class of omission forever).
+const giteaInstaller = require('./install-codex-agent-profiles.js');
+const giteaProfiles = giteaInstaller.validateSourceProfiles(path.join(root, pluginRoot));
+assert(giteaProfiles.ok,
+  'Gitea source agent profiles fail schema validation:\n  - ' + giteaProfiles.errors.join('\n  - '));
+
+// issue #332: edition byte-parity guard (the #291/#254 "edition port missed" class).
+// The agent role profiles + config/agents.toml are forge-neutral and MUST stay
+// byte-identical to the codex (plugins/kaola-workflow/) tree — a per-edition divergence
+// (e.g. the historical workflow-planner.toml #272 drift) is illegal. Reference = codex.
+function assertByteParity(relPath) {
+  const ours = fs.readFileSync(path.join(root, pluginRoot, relPath));
+  const ref = fs.readFileSync(path.join(root, 'plugins/kaola-workflow', relPath));
+  assert(ours.equals(ref),
+    'Gitea ' + relPath + ' must be byte-identical to the codex (plugins/kaola-workflow/) copy');
+}
+assertByteParity('config/agents.toml');
+for (const tomlFile of fs.readdirSync(path.join(root, pluginRoot, 'agents')).filter(f => f.endsWith('.toml')).sort()) {
+  assertByteParity(path.join('agents', tomlFile));
+}
+
 console.log('Kaola-Workflow Gitea contract validation passed');

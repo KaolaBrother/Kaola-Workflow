@@ -2034,10 +2034,17 @@ function testInstallProfilesFeaturesTableHandling() {
     assert.ok(freshConfig.includes('[features]'), 'fresh install should include managed [features]');
     assert.ok(freshConfig.includes('multi_agent = true'), 'fresh install should enable multi_agent');
     assert.ok(freshConfig.includes('# BEGIN kaola-workflow agents'), 'fresh install should include managed block');
+    // #332: the installer now also writes a .kaola-managed-profiles.json manifest into
+    // this dir, so count TOML entries only (raw readdir is 15 with the manifest dotfile).
+    const freshAgentsDir = path.join(fresh, '.codex', 'agents', 'kaola-workflow');
     assert.strictEqual(
-      fs.readdirSync(path.join(fresh, '.codex', 'agents', 'kaola-workflow')).length,
+      fs.readdirSync(freshAgentsDir).filter(f => f.endsWith('.toml')).length,
       14,
       'should install 14 agent TOML files'
+    );
+    assert.ok(
+      fs.existsSync(path.join(freshAgentsDir, '.kaola-managed-profiles.json')),
+      '#332: fresh install must write the managed-profiles manifest'
     );
 
     // #284: hooks.json assertions — 4 events, compact command, no token residue, /hooks trust line
@@ -3402,6 +3409,181 @@ function testGiteaPreflight266() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// #332: installer schema + prune + manifest (AC3-AC6) — Gitea edition mirror.
+// ---------------------------------------------------------------------------
+const GT_NAME_RE = /^name\s*=\s*"([^"]+)"\s*$/m;
+function giteaListTomls(dir) {
+  return fs.readdirSync(dir).filter(f => f.endsWith('.toml')).sort();
+}
+function testInstallSchemaPruneManifest332Gitea() {
+  const manifestBase = '.kaola-managed-profiles.json';
+
+  // AC3: fresh install — exactly 14 tomls, no docs-lookup, name on each, manifest, sentinel.
+  const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-332-install-fresh-'));
+  try {
+    const r = runInstallProfiles(fresh);
+    const agentsDir = path.join(fresh, '.codex', 'agents', 'kaola-workflow');
+    const tomls = giteaListTomls(agentsDir);
+    assert.strictEqual(tomls.length, 14, '#332 gt AC3: fresh install must place 14 *.toml');
+    assert.ok(!tomls.includes('docs-lookup.toml'), '#332 gt AC3: docs-lookup.toml must not be installed');
+    for (const f of tomls) {
+      const role = f.replace(/\.toml$/, '');
+      const m = fs.readFileSync(path.join(agentsDir, f), 'utf8').match(GT_NAME_RE);
+      assert.ok(m && m[1] === role, '#332 gt AC3: ' + f + ' must have name = "' + role + '"');
+    }
+    const manifest = JSON.parse(fs.readFileSync(path.join(agentsDir, manifestBase), 'utf8'));
+    assert.strictEqual(manifest.schema_version, 1, '#332 gt AC3: manifest schema_version 1');
+    assert.strictEqual(manifest.roles.length, 14, '#332 gt AC3: manifest must list 14 roles');
+    assert.strictEqual(r.stdout.trim().split('\n').pop(), 'status: ok', '#332 gt AC3: stdout must end with status: ok');
+  } finally {
+    fs.rmSync(fresh, { recursive: true, force: true });
+  }
+
+  // AC4 + AC9 write-path: upgrade-over-old-state repairs malformed + retired files.
+  const upgrade = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-332-install-upgrade-'));
+  try {
+    const agentsDir = path.join(upgrade, '.codex', 'agents', 'kaola-workflow');
+    fs.mkdirSync(agentsDir, { recursive: true });
+    fs.writeFileSync(path.join(agentsDir, 'code-explorer.toml'),
+      'model_reasoning_effort = "medium"\ndeveloper_instructions = """stale no-name body"""\n');
+    fs.writeFileSync(path.join(agentsDir, 'docs-lookup.toml'),
+      'model_reasoning_effort = "medium"\ndeveloper_instructions = """retired role body"""\n');
+    fs.writeFileSync(path.join(upgrade, '.codex', 'config.toml'), [
+      '# BEGIN kaola-workflow agents', '[features]', 'multi_agent = true',
+      '[agents.docs-lookup]', 'config_file = "./agents/kaola-workflow/docs-lookup.toml"',
+      '# END kaola-workflow agents', ''
+    ].join('\n'));
+    const r = runInstallProfiles(upgrade);
+    assert.ok(!fs.existsSync(path.join(agentsDir, 'docs-lookup.toml')), '#332 gt AC4: retired docs-lookup pruned');
+    const ce = fs.readFileSync(path.join(agentsDir, 'code-explorer.toml'), 'utf8');
+    assert.ok(GT_NAME_RE.test(ce) && ce.match(GT_NAME_RE)[1] === 'code-explorer', '#332 gt AC4: code-explorer rewritten with name');
+    const cfg = fs.readFileSync(path.join(upgrade, '.codex', 'config.toml'), 'utf8');
+    assert.ok(cfg.includes('[agents.knowledge-lookup]') && !cfg.includes('[agents.docs-lookup]'),
+      '#332 gt AC9: block must register knowledge-lookup and drop docs-lookup');
+    assert.ok(r.stdout.includes('docs-lookup.toml (retired)'), '#332 gt AC4: stdout reports retired prune');
+
+    // AC5: idempotency.
+    const m1 = JSON.parse(fs.readFileSync(path.join(agentsDir, manifestBase), 'utf8'));
+    runInstallProfiles(upgrade);
+    const m2 = JSON.parse(fs.readFileSync(path.join(agentsDir, manifestBase), 'utf8'));
+    assert.strictEqual(JSON.stringify(m1.files), JSON.stringify(m2.files), '#332 gt AC5: manifest.files stable');
+  } finally {
+    fs.rmSync(upgrade, { recursive: true, force: true });
+  }
+
+  // AC6: unknown user TOML preserved + reported.
+  const custom = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-332-install-custom-'));
+  try {
+    runInstallProfiles(custom);
+    const agentsDir = path.join(custom, '.codex', 'agents', 'kaola-workflow');
+    fs.writeFileSync(path.join(agentsDir, 'my-custom.toml'), 'name = "my-custom"\nmodel_reasoning_effort = "low"\ndeveloper_instructions = """x"""\n');
+    const r = runInstallProfiles(custom);
+    assert.ok(fs.existsSync(path.join(agentsDir, 'my-custom.toml')), '#332 gt AC6: user TOML survives');
+    assert.ok(r.stdout.includes('unmanaged extra profiles left in place: my-custom.toml'), '#332 gt AC6: stdout reports unmanaged extra');
+  } finally {
+    fs.rmSync(custom, { recursive: true, force: true });
+  }
+
+  console.log('testInstallSchemaPruneManifest332Gitea (#332 AC3-AC6,AC9-path): PASSED');
+}
+
+// ---------------------------------------------------------------------------
+// #332: preflight schema/stale/manifest/doctor (AC7-AC11) — Gitea edition mirror.
+// ---------------------------------------------------------------------------
+function testGiteaPreflight332() {
+  function pf(args) {
+    return spawnSync(process.execPath, [giteaPreflightScript, ...args], { encoding: 'utf8' });
+  }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-332-preflight-'));
+  try {
+    runInstallProfiles(root);
+    const agentsDir = path.join(root, '.codex', 'agents', 'kaola-workflow');
+    const ce = path.join(agentsDir, 'code-explorer.toml');
+    const savedCe = fs.readFileSync(ce, 'utf8');
+
+    // AC7a: malformed -> profiles_malformed under --no-autofix
+    fs.writeFileSync(ce, savedCe.replace(/^name = "code-explorer"\n/m, ''));
+    let r = pf(['--project-root', root, '--no-autofix', '--json']);
+    assert.notStrictEqual(r.status, 0, '#332 gt AC7a: malformed must refuse');
+    let j = JSON.parse(r.stdout);
+    assert.strictEqual(j.status, 'profiles_malformed', '#332 gt AC7a: status profiles_malformed');
+    assert.strictEqual(j.malformed[0].role, 'code-explorer', '#332 gt AC7a: malformed role correct');
+
+    // AC8: autofix repairs.
+    r = pf(['--project-root', root, '--json']);
+    assert.strictEqual(r.status, 0, '#332 gt AC8: autofix exits 0');
+    j = JSON.parse(r.stdout);
+    assert.ok(j.status === 'ok' && j.autofixed === true, '#332 gt AC8: ok autofixed');
+
+    // AC7b: stale docs-lookup -> profiles_stale.
+    fs.copyFileSync(ce, path.join(agentsDir, 'docs-lookup.toml'));
+    r = pf(['--project-root', root, '--no-autofix', '--json']);
+    j = JSON.parse(r.stdout);
+    assert.ok(r.status !== 0 && j.status === 'profiles_stale', '#332 gt AC7b: profiles_stale');
+    assert.ok(j.stale_files.includes('docs-lookup.toml'), '#332 gt AC7b: stale_files lists docs-lookup');
+    pf(['--project-root', root, '--json']);
+    assert.ok(!fs.existsSync(path.join(agentsDir, 'docs-lookup.toml')), '#332 gt AC7b: autofix prunes docs-lookup');
+
+    // AC9: [agents.docs-lookup] inside markers -> managed_block_stale.
+    const cfgPath = path.join(root, '.codex', 'config.toml');
+    fs.writeFileSync(cfgPath, fs.readFileSync(cfgPath, 'utf8').replace('# END kaola-workflow agents',
+      '[agents.docs-lookup]\nconfig_file = "./agents/kaola-workflow/docs-lookup.toml"\n\n# END kaola-workflow agents'));
+    r = pf(['--project-root', root, '--no-autofix', '--json']);
+    j = JSON.parse(r.stdout);
+    assert.ok(r.status !== 0 && j.status === 'managed_block_stale', '#332 gt AC9: managed_block_stale');
+    assert.ok(j.stale_roles_in_block.includes('docs-lookup'), '#332 gt AC9: stale_roles_in_block lists docs-lookup');
+    pf(['--project-root', root, '--json']);
+
+    // schema_version 2 -> exit 6.
+    const manifestPath = path.join(agentsDir, '.kaola-managed-profiles.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    manifest.schema_version = 2;
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    r = pf(['--project-root', root, '--json']);
+    j = JSON.parse(r.stdout);
+    assert.ok(r.status === 6 && j.status === 'profile_schema_version_unsupported', '#332 gt: exit 6 on future manifest');
+    manifest.schema_version = 1;
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+
+    // doctor AC10/AC11.
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-332-doctor-home-'));
+    const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-332-doctor-proj-'));
+    try {
+      runInstallProfiles(home);
+      runInstallProfiles(proj);
+      fs.copyFileSync(path.join(home, '.codex', 'agents', 'kaola-workflow', 'code-explorer.toml'),
+        path.join(home, '.codex', 'agents', 'kaola-workflow', 'docs-lookup.toml'));
+      r = pf(['--doctor', '--home', home, '--project-root', proj, '--json']);
+      assert.strictEqual(r.status, 1, '#332 gt AC10: doctor exit 1 on stale user scope');
+      j = JSON.parse(r.stdout);
+      const userScope = j.scopes.find(s => s.scope === 'user');
+      assert.ok(userScope.stale_files.includes('docs-lookup.toml'), '#332 gt AC10: user scope reports docs-lookup');
+      assert.ok(userScope.repair.includes('install-codex-agent-profiles.js'), '#332 gt AC10: repair command present');
+      fs.unlinkSync(path.join(home, '.codex', 'agents', 'kaola-workflow', 'docs-lookup.toml'));
+      runInstallProfiles(home);
+      r = pf(['--doctor', '--home', home, '--project-root', proj, '--json']);
+      assert.strictEqual(r.status, 0, '#332 gt AC10: doctor exit 0 when both clean');
+      const cacheAgents = path.join(home, '.codex', 'plugins', 'cache', 'm', 'p', '1.0.0', 'agents');
+      fs.mkdirSync(cacheAgents, { recursive: true });
+      fs.writeFileSync(path.join(cacheAgents, 'x.toml'), 'model_reasoning_effort = "medium"\ndeveloper_instructions = """x"""\n');
+      r = pf(['--doctor', '--home', home, '--project-root', proj, '--json']);
+      assert.strictEqual(r.status, 0, '#332 gt AC11: malformed plugin_cache must not change exit code');
+      j = JSON.parse(r.stdout);
+      const cacheScope = j.scopes.find(s => s.scope === 'plugin_cache');
+      assert.ok(cacheScope && cacheScope.read_only === true && cacheScope.malformed.length > 0, '#332 gt AC11: cache scope read_only + malformed evidence');
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+      fs.rmSync(proj, { recursive: true, force: true });
+    }
+
+    fs.writeFileSync(ce, savedCe);
+    console.log('testGiteaPreflight332 (#332 AC7-AC11): PASSED');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
 // Case 3: task-mirror regeneration (gitea edition)
 function testGiteaTaskMirror266() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-266-taskmirror-'));
@@ -3671,7 +3853,9 @@ function testGiteaMirrorCleanCrossRef339() {
   }
 }
 
+testInstallSchemaPruneManifest332Gitea();
 testGiteaPreflight266();
+testGiteaPreflight332();
 testGiteaTaskMirror266();
 testGiteaCompactResume266();
 testGiteaForeignArchiveBarrier261();

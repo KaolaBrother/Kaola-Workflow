@@ -65,3 +65,8 @@ nickname_candidates = ["Contractor", "Bookkeeper", "Scribe"]
 description = "Kaola-Workflow for Codex adaptive front end: claims the project + worktree and authors the workflow-plan.md DAG; never freezes, judges, asks, or dispatches."
 config_file = "./agents/kaola-workflow/workflow-planner.toml"
 nickname_candidates = ["Workflow Planner", "DAG Author", "Front End"]
+
+[agents.issue-scout]
+description = "Kaola-Workflow for Codex bundle-lane backlog scout: read-only same-scope issue-set recommender; never claims, writes, or dispatches."
+config_file = "./agents/kaola-workflow/issue-scout.toml"
+nickname_candidates = ["Scout", "Backlog", "Triage"]

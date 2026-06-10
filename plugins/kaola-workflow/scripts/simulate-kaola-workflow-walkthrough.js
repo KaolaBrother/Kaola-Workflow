@@ -552,7 +552,7 @@ function testCodexPreflight266() {
   // Build a fully-installed fixture to start from
   const root266 = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-266-preflight-'));
   try {
-    // Install all 13 profiles into the fixture
+    // Install all 14 profiles into the fixture
     const installResult = spawnSync(process.execPath, [installProfilesScript, root266], {
       cwd: repoRoot, encoding: 'utf8'
     });
@@ -650,6 +650,262 @@ function testCodexPreflight266() {
     console.log('testCodexPreflight266 (#266 cases 1,2,5): PASSED');
   } finally {
     fs.rmSync(root266, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// #332: installer schema + prune + manifest + sentinel (AC3-AC6).
+// ---------------------------------------------------------------------------
+const NAME_RE = /^name\s*=\s*"([^"]+)"\s*$/m;
+
+function listTomls(dir) {
+  return fs.readdirSync(dir).filter(f => f.endsWith('.toml')).sort();
+}
+
+function testInstallSchemaPruneManifest332() {
+  const manifestBase = '.kaola-managed-profiles.json';
+
+  // --- AC3: fresh install = current set, no docs-lookup, every profile has name,
+  //     manifest written, stdout ends with `status: ok` ---
+  const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-332-install-fresh-'));
+  try {
+    const r = runInstallProfiles(fresh);
+    const agentsDir = path.join(fresh, '.codex', 'agents', 'kaola-workflow');
+    const tomls = listTomls(agentsDir);
+    assert(tomls.length === 14, '#332 AC3: fresh install must place exactly 14 *.toml, got ' + tomls.length);
+    assert(!tomls.includes('docs-lookup.toml'), '#332 AC3: docs-lookup.toml must not be installed');
+    for (const f of tomls) {
+      const role = f.replace(/\.toml$/, '');
+      const m = fs.readFileSync(path.join(agentsDir, f), 'utf8').match(NAME_RE);
+      assert(m && m[1] === role, '#332 AC3: ' + f + ' must have name = "' + role + '"');
+    }
+    const manifestPath = path.join(agentsDir, manifestBase);
+    assert(fs.existsSync(manifestPath), '#332 AC3: manifest must be written');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    assert(manifest.schema_version === 1, '#332 AC3: manifest schema_version must be 1');
+    assert(Array.isArray(manifest.roles) && manifest.roles.length === 14, '#332 AC3: manifest must list 14 roles');
+    assert(manifest.files && Object.keys(manifest.files).length === 14
+      && Object.values(manifest.files).every(v => /^sha256:[0-9a-f]{64}$/.test(v)),
+      '#332 AC3: manifest.files must carry 14 sha256 entries');
+    const lastLine = r.stdout.trim().split('\n').pop();
+    assert(lastLine === 'status: ok', '#332 AC3: installer stdout must end with `status: ok`, got: ' + lastLine);
+  } finally {
+    fs.rmSync(fresh, { recursive: true, force: true });
+  }
+
+  // --- AC4 + AC9 write-path: upgrade-over-old-state repairs malformed/retired files ---
+  const upgrade = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-332-install-upgrade-'));
+  try {
+    const agentsDir = path.join(upgrade, '.codex', 'agents', 'kaola-workflow');
+    fs.mkdirSync(agentsDir, { recursive: true });
+    // seed a no-name code-explorer.toml + a retired docs-lookup.toml
+    fs.writeFileSync(path.join(agentsDir, 'code-explorer.toml'),
+      'model_reasoning_effort = "medium"\ndeveloper_instructions = """stale no-name body"""\n');
+    fs.writeFileSync(path.join(agentsDir, 'docs-lookup.toml'),
+      'model_reasoning_effort = "medium"\ndeveloper_instructions = """retired role body"""\n');
+    // seed an old managed block that registers the retired [agents.docs-lookup]
+    fs.mkdirSync(path.join(upgrade, '.codex'), { recursive: true });
+    fs.writeFileSync(path.join(upgrade, '.codex', 'config.toml'), [
+      '# BEGIN kaola-workflow agents',
+      '[features]',
+      'multi_agent = true',
+      '[agents.docs-lookup]',
+      'config_file = "./agents/kaola-workflow/docs-lookup.toml"',
+      '# END kaola-workflow agents',
+      ''
+    ].join('\n'));
+
+    const r = runInstallProfiles(upgrade);
+    assert(r.status === 0, '#332 AC4: upgrade reinstall must exit 0');
+    const tomls = listTomls(agentsDir);
+    assert(!tomls.includes('docs-lookup.toml'), '#332 AC4: retired docs-lookup.toml must be pruned');
+    const ce = fs.readFileSync(path.join(agentsDir, 'code-explorer.toml'), 'utf8');
+    assert(NAME_RE.test(ce) && ce.match(NAME_RE)[1] === 'code-explorer',
+      '#332 AC4: code-explorer.toml must be rewritten with name');
+    assert(fs.existsSync(path.join(agentsDir, manifestBase)), '#332 AC4: manifest must be written on upgrade');
+    const cfg = fs.readFileSync(path.join(upgrade, '.codex', 'config.toml'), 'utf8');
+    assert(cfg.includes('[agents.knowledge-lookup]'), '#332 AC9: block must now register knowledge-lookup');
+    assert(!cfg.includes('[agents.docs-lookup]'), '#332 AC9: block must no longer register docs-lookup');
+    assert(r.stdout.includes('docs-lookup.toml (retired)'), '#332 AC4: stdout must report the retired prune');
+
+    // --- AC5: double-run idempotency (toml set stable, manifest stable modulo installed_at) ---
+    const before = listTomls(agentsDir);
+    const m1 = JSON.parse(fs.readFileSync(path.join(agentsDir, manifestBase), 'utf8'));
+    runInstallProfiles(upgrade);
+    const after = listTomls(agentsDir);
+    assert(JSON.stringify(before) === JSON.stringify(after), '#332 AC5: toml set must be stable across reruns');
+    const m2 = JSON.parse(fs.readFileSync(path.join(agentsDir, manifestBase), 'utf8'));
+    assert(JSON.stringify(m1.files) === JSON.stringify(m2.files), '#332 AC5: manifest.files must be stable across reruns');
+    const cfg2 = fs.readFileSync(path.join(upgrade, '.codex', 'config.toml'), 'utf8');
+    assert(countOccurrences(cfg2, /# BEGIN kaola-workflow agents/g) === 1, '#332 AC5: exactly one managed block');
+  } finally {
+    fs.rmSync(upgrade, { recursive: true, force: true });
+  }
+
+  // --- AC6: unknown user TOML preserved + reported as unmanaged ---
+  const custom = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-332-install-custom-'));
+  try {
+    runInstallProfiles(custom);
+    const agentsDir = path.join(custom, '.codex', 'agents', 'kaola-workflow');
+    fs.writeFileSync(path.join(agentsDir, 'my-custom.toml'), 'name = "my-custom"\nmodel_reasoning_effort = "low"\ndeveloper_instructions = """x"""\n');
+    const r = runInstallProfiles(custom);
+    assert(fs.existsSync(path.join(agentsDir, 'my-custom.toml')), '#332 AC6: user TOML must survive install');
+    assert(r.stdout.includes('unmanaged extra profiles left in place: my-custom.toml'),
+      '#332 AC6: stdout must report the unmanaged extra');
+  } finally {
+    fs.rmSync(custom, { recursive: true, force: true });
+  }
+
+  // --- stale-managed prune via manifest (a non-retired ghost listed in the manifest) ---
+  const ghost = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-332-install-ghost-'));
+  try {
+    runInstallProfiles(ghost);
+    const agentsDir = path.join(ghost, '.codex', 'agents', 'kaola-workflow');
+    const manifestPath = path.join(agentsDir, manifestBase);
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    manifest.files['ghost.toml'] = 'sha256:' + '0'.repeat(64);
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    fs.writeFileSync(path.join(agentsDir, 'ghost.toml'), 'name = "ghost"\nmodel_reasoning_effort = "low"\ndeveloper_instructions = """x"""\n');
+    const r = runInstallProfiles(ghost);
+    assert(!fs.existsSync(path.join(agentsDir, 'ghost.toml')), '#332: manifest-listed ghost.toml must be pruned');
+    assert(r.stdout.includes('ghost.toml (stale-managed)'), '#332: stdout must report stale-managed prune');
+  } finally {
+    fs.rmSync(ghost, { recursive: true, force: true });
+  }
+
+  // --- manifest_schema_unsupported: a future schema_version refuses BEFORE any write ---
+  const future = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-332-install-future-'));
+  try {
+    runInstallProfiles(future);
+    const agentsDir = path.join(future, '.codex', 'agents', 'kaola-workflow');
+    const manifestPath = path.join(agentsDir, manifestBase);
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    manifest.schema_version = 2;
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    const r = spawnSync(process.execPath, [installProfilesScript, future], { cwd: repoRoot, encoding: 'utf8' });
+    assert(r.status === 1, '#332: future manifest schema must make installer exit 1, got ' + r.status);
+    assert(r.stderr.includes('manifest_schema_unsupported'), '#332: stderr must name manifest_schema_unsupported');
+  } finally {
+    fs.rmSync(future, { recursive: true, force: true });
+  }
+
+  console.log('testInstallSchemaPruneManifest332 (#332 AC3-AC6,AC9-path): PASSED');
+}
+
+// ---------------------------------------------------------------------------
+// #332: preflight schema/stale/manifest/doctor (AC7-AC11).
+// ---------------------------------------------------------------------------
+function testCodexPreflight332() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-332-preflight-'));
+  try {
+    runInstallProfiles(root);
+    const agentsDir = path.join(root, '.codex', 'agents', 'kaola-workflow');
+    const ce = path.join(agentsDir, 'code-explorer.toml');
+    const savedCe = fs.readFileSync(ce, 'utf8');
+
+    // AC7a: malformed (name stripped) → profiles_malformed under --no-autofix
+    fs.writeFileSync(ce, savedCe.replace(/^name = "code-explorer"\n/m, ''));
+    let r = runScript(preflightScript, ['--project-root', root, '--no-autofix', '--json'], {});
+    assert(r.status !== 0, '#332 AC7a: malformed profile must refuse');
+    let j = JSON.parse(r.stdout);
+    assert(j.status === 'profiles_malformed', '#332 AC7a: status must be profiles_malformed, got ' + j.status);
+    assert(j.malformed[0].role === 'code-explorer', '#332 AC7a: malformed[0].role must be code-explorer');
+
+    // AC8: same fixture WITHOUT --no-autofix → autofix repairs, status ok autofixed
+    r = runScript(preflightScript, ['--project-root', root, '--json'], {});
+    assert(r.status === 0, '#332 AC8: autofix must exit 0 after repair');
+    j = JSON.parse(r.stdout);
+    assert(j.status === 'ok' && j.autofixed === true, '#332 AC8: must be ok autofixed:true');
+    assert(NAME_RE.test(fs.readFileSync(ce, 'utf8')), '#332 AC8: code-explorer.toml must be repaired with name');
+
+    // AC7b: stale docs-lookup.toml in target → profiles_stale
+    fs.copyFileSync(ce, path.join(agentsDir, 'docs-lookup.toml'));
+    r = runScript(preflightScript, ['--project-root', root, '--no-autofix', '--json'], {});
+    j = JSON.parse(r.stdout);
+    assert(r.status !== 0 && j.status === 'profiles_stale', '#332 AC7b: status must be profiles_stale, got ' + j.status);
+    assert(j.stale_files.includes('docs-lookup.toml'), '#332 AC7b: stale_files must include docs-lookup.toml');
+    // autofix prunes it
+    r = runScript(preflightScript, ['--project-root', root, '--json'], {});
+    assert(r.status === 0, '#332 AC7b: autofix must prune docs-lookup and exit 0');
+    assert(!fs.existsSync(path.join(agentsDir, 'docs-lookup.toml')), '#332 AC7b: docs-lookup.toml must be pruned by autofix');
+
+    // AC9: full current set + [agents.docs-lookup] inside markers → managed_block_stale
+    const cfgPath = path.join(root, '.codex', 'config.toml');
+    const cfg = fs.readFileSync(cfgPath, 'utf8');
+    fs.writeFileSync(cfgPath, cfg.replace('# END kaola-workflow agents',
+      '[agents.docs-lookup]\nconfig_file = "./agents/kaola-workflow/docs-lookup.toml"\n\n# END kaola-workflow agents'));
+    r = runScript(preflightScript, ['--project-root', root, '--no-autofix', '--json'], {});
+    j = JSON.parse(r.stdout);
+    assert(r.status !== 0 && j.status === 'managed_block_stale', '#332 AC9: status must be managed_block_stale, got ' + j.status);
+    assert(j.stale_roles_in_block.includes('docs-lookup'), '#332 AC9: stale_roles_in_block must include docs-lookup');
+    // repair via autofix
+    runScript(preflightScript, ['--project-root', root, '--json'], {});
+
+    // schema_version 2 → exit 6, profile_schema_version_unsupported (autofix refused)
+    const manifestPath = path.join(agentsDir, '.kaola-managed-profiles.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    manifest.schema_version = 2;
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    r = runScript(preflightScript, ['--project-root', root, '--json'], {});
+    j = JSON.parse(r.stdout);
+    assert(r.status === 6 && j.status === 'profile_schema_version_unsupported',
+      '#332: future manifest must exit 6 / profile_schema_version_unsupported, got ' + r.status + '/' + j.status);
+    manifest.schema_version = 1;
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+
+    // AC6 field: extra unmanaged TOML keeps status ok + lists it
+    fs.writeFileSync(path.join(agentsDir, 'my-custom.toml'),
+      'name = "my-custom"\nmodel_reasoning_effort = "low"\ndeveloper_instructions = """x"""\n');
+    r = runScript(preflightScript, ['--project-root', root, '--no-autofix', '--json'], {});
+    j = JSON.parse(r.stdout);
+    assert(r.status === 0 && j.status === 'ok', '#332 AC6: extra unmanaged must keep status ok');
+    assert(j.extra_unmanaged.includes('my-custom.toml'), '#332 AC6: extra_unmanaged must list my-custom.toml');
+    fs.unlinkSync(path.join(agentsDir, 'my-custom.toml'));
+
+    // AC10 + AC11: doctor — stale user scope, clean project, cache evidence-only
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-332-doctor-home-'));
+    const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-332-doctor-proj-'));
+    try {
+      runInstallProfiles(home);
+      runInstallProfiles(proj);
+      // make user scope stale (seed docs-lookup)
+      fs.copyFileSync(path.join(home, '.codex', 'agents', 'kaola-workflow', 'code-explorer.toml'),
+        path.join(home, '.codex', 'agents', 'kaola-workflow', 'docs-lookup.toml'));
+      r = runScript(preflightScript, ['--doctor', '--home', home, '--project-root', proj, '--json'], {});
+      assert(r.status === 1, '#332 AC10: doctor must exit 1 when user scope is stale, got ' + r.status);
+      j = JSON.parse(r.stdout);
+      const userScope = j.scopes.find(s => s.scope === 'user');
+      const projScope = j.scopes.find(s => s.scope === 'project');
+      assert(userScope.stale_files.includes('docs-lookup.toml'), '#332 AC10: user scope must report docs-lookup');
+      assert(userScope.repair.includes('install-codex-agent-profiles.js'), '#332 AC10: user scope must carry a repair command');
+      assert(projScope.stale_files.length === 0 && projScope.malformed.length === 0, '#332 AC10: project scope must be clean');
+
+      // clean both → exit 0
+      fs.unlinkSync(path.join(home, '.codex', 'agents', 'kaola-workflow', 'docs-lookup.toml'));
+      runInstallProfiles(home);
+      r = runScript(preflightScript, ['--doctor', '--home', home, '--project-root', proj, '--json'], {});
+      assert(r.status === 0, '#332 AC10: doctor must exit 0 when both scopes clean, got ' + r.status);
+
+      // AC11: a malformed cached source profile is evidence-only (exit stays 0)
+      const cacheAgents = path.join(home, '.codex', 'plugins', 'cache', 'm', 'p', '1.0.0', 'agents');
+      fs.mkdirSync(cacheAgents, { recursive: true });
+      fs.writeFileSync(path.join(cacheAgents, 'x.toml'),
+        'model_reasoning_effort = "medium"\ndeveloper_instructions = """x"""\n');
+      r = runScript(preflightScript, ['--doctor', '--home', home, '--project-root', proj, '--json'], {});
+      assert(r.status === 0, '#332 AC11: malformed plugin_cache must NOT change exit code, got ' + r.status);
+      j = JSON.parse(r.stdout);
+      const cacheScope = j.scopes.find(s => s.scope === 'plugin_cache');
+      assert(cacheScope && cacheScope.read_only === true, '#332 AC11: plugin_cache scope must be read_only');
+      assert(cacheScope.malformed.length > 0, '#332 AC11: plugin_cache scope must report the malformed cached profile');
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+      fs.rmSync(proj, { recursive: true, force: true });
+    }
+
+    fs.writeFileSync(ce, savedCe);
+    console.log('testCodexPreflight332 (#332 AC7-AC11): PASSED');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 }
 
@@ -917,8 +1173,10 @@ function main() {
     assert(fs.existsSync(validator), 'Codex contract validator must exist');
 
     testInstallProfilesFeaturesTableHandling();
+    testInstallSchemaPruneManifest332();
     testCodexAdaptiveCuratedAndBarrier();
     testCodexPreflight266();
+    testCodexPreflight332();
     testCodexTaskMirror266();
     testCodexCompactResume266();
     testAC1HooksJson();

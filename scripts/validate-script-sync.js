@@ -138,6 +138,17 @@ const BYTE_IDENTICAL_GROUPS = [
       'plugins/kaola-workflow-gitea/scripts/kaola-workflow-codex-preflight.js',
     ],
   },
+  {
+    // issue #332: the Codex agent-profile installer ships in the 3 plugin trees only
+    // (no root copy) and must not fork — schema validation + prune + manifest logic
+    // is shared. Reference = codex tree.
+    label: 'codex agent-profile installer copies',
+    files: [
+      'plugins/kaola-workflow/scripts/install-codex-agent-profiles.js',
+      'plugins/kaola-workflow-gitlab/scripts/install-codex-agent-profiles.js',
+      'plugins/kaola-workflow-gitea/scripts/install-codex-agent-profiles.js',
+    ],
+  },
 ];
 
 function readOrNull(p) {
