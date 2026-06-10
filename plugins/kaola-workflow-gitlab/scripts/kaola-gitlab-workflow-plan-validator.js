@@ -45,6 +45,12 @@ try { syncMeta = require('./validate-script-sync'); } catch (_) { /* forge/codex
 
 const TERMINAL_ROLE = 'finalize';
 
+// #334: the non-delegable main-session gate. Like TERMINAL_ROLE it is a BUILT-IN role
+// token, not an installed subagent — the closed-library check skips it. Read-only (not in
+// WRITE_ROLES), verdict-bearing (GATE_VERDICT_ROLES), shape `sequence` only, and covered
+// by its own post-dominance gate G3 (freeze) + G3 execution check (--gate-verify).
+const MAIN_SESSION_GATE = schema.MAIN_SESSION_GATE_ROLE;
+
 // The canonical roles that are ALWAYS installed (vendored). The validator unions
 // this baseline with any maintainer-added roles discovered under <root>/agents,
 // so the library is runtime-closed over the INSTALLED set (not the literal nine).
@@ -58,7 +64,11 @@ const CANONICAL_ROLES = [
 const WRITE_ROLES = new Set(['tdd-guide', 'build-error-resolver', 'doc-updater', 'security-reviewer', 'implementer']);
 const IMPLEMENT_ROLES = new Set(['tdd-guide', 'build-error-resolver', 'implementer']);
 // #251: roles that must emit a machine verdict block into their .cache evidence file.
-const GATE_VERDICT_ROLES = new Set(['code-reviewer', 'security-reviewer', 'adversarial-verifier']);
+// #334: MAIN_SESSION_GATE joins the set so a non-delegable gate gets per-node + whole-plan
+// verdict enforcement (verifyVerdictBlock sequence branch reads .cache/<id>.md, requires
+// verdict:pass / findings_blocking:0 / no unresolved in-scope fixes — the #279 contract) and
+// G-SEL-2 (a gate can never be a select arm) for free.
+const GATE_VERDICT_ROLES = new Set(['code-reviewer', 'security-reviewer', 'adversarial-verifier', MAIN_SESSION_GATE]);
 
 // Phase-5 sensitivity categories (phase5.md:45-46): auth, payments, user data,
 // filesystem access, external API calls, secrets. Over-approximated from the
@@ -248,6 +258,83 @@ function hasCycle(nodes) {
   }
   return false;
 }
+// #340: transitive ancestor sets — Map<id, Set<ancestorIds>> over `dependsOn`. Memoized DFS;
+// the memo-before-recurse guard makes it terminate even on a cyclic graph (cycles are refused
+// separately by hasCycle; a partial set on an already-refusing plan is harmless). <= MAX_NODES.
+function transitiveDeps(nodes) {
+  const byId = new Map(nodes.map(n => [n.id, n]));
+  const memo = new Map();
+  function ancestors(id) {
+    if (memo.has(id)) return memo.get(id);
+    const acc = new Set();
+    memo.set(id, acc); // set BEFORE recursing so a cycle terminates on the in-progress entry
+    const node = byId.get(id);
+    if (!node) return acc;
+    for (const d of node.dependsOn) {
+      if (!byId.has(d)) continue;
+      acc.add(d);
+      for (const a of ancestors(d)) acc.add(a);
+    }
+    return acc;
+  }
+  for (const n of nodes) ancestors(n.id);
+  return memo;
+}
+// #340 mechanism 1: the registration surface of an agent-set delta. Each path either
+// holds an exact-match registry that REDS A CHAIN on any add/remove, or a by-name
+// enumeration whose omission ships a SILENT cross-edition divergence (config/agents.toml
+// codex dispatch tables, uninstall.sh REQUIRED_AGENTS — both missed by #328). All are
+// keyed on NO symbol of the new file, so the #306 symbol-grep cannot find them. All plugin-prefixed
+// strings are segment-joined so no `plugins/<root>/scripts` literal forms in the forge
+// plan-validator copies (forge contract validators forbid that token — see the existing
+// tmplPair/codexScriptsPrefix convention at the #274 block).
+function agentRegistrationSurface(name) {
+  const cx = ['plugins', 'kaola-workflow'].join('/');
+  const gl = ['plugins', 'kaola-workflow-gitlab'].join('/');
+  const ge = ['plugins', 'kaola-workflow-gitea'].join('/');
+  return [
+    'agents/' + name + '.md',
+    cx + '/agents/' + name + '.toml',
+    gl + '/agents/' + name + '.toml',
+    ge + '/agents/' + name + '.toml',
+    // codex-runtime dispatch registration ([agents.<name>] managed-block templates) —
+    // the #328 miss: profile copied, table absent => agent undispatchable in 3 editions.
+    cx + '/config/agents.toml',
+    gl + '/config/agents.toml',
+    ge + '/config/agents.toml',
+    ['scripts', 'validate-vendored-agents.js'].join('/'),
+    'install.sh',
+    'uninstall.sh', // REQUIRED_AGENTS enumeration drives managed-agent removal (uninstall.sh:8,:59-82)
+    ['scripts', 'kaola-workflow-resolve-agent-model.js'].join('/'),
+    [cx, 'scripts', 'kaola-workflow-resolve-agent-model.js'].join('/'),
+    [gl, 'scripts', 'kaola-workflow-resolve-agent-model.js'].join('/'),
+    [ge, 'scripts', 'kaola-workflow-resolve-agent-model.js'].join('/'),
+    ['scripts', 'kaola-workflow-plan-validator.js'].join('/'),
+    [cx, 'scripts', 'kaola-workflow-plan-validator.js'].join('/'),
+    [gl, 'scripts', 'kaola-gitlab-workflow-plan-validator.js'].join('/'),
+    [ge, 'scripts', 'kaola-gitea-workflow-plan-validator.js'].join('/'),
+    [gl, 'scripts', 'validate-kaola-workflow-gitlab-contracts.js'].join('/'),
+    [ge, 'scripts', 'validate-kaola-workflow-gitea-contracts.js'].join('/'),
+    [gl, 'scripts', 'test-gitlab-workflow-scripts.js'].join('/'),
+    [ge, 'scripts', 'test-gitea-workflow-scripts.js'].join('/'),
+  ];
+}
+// #340 mechanism 2 — forge-port mirror ordering. The canonical spec of a forge-port
+// mirror is the FULL ACCUMULATED root diff, which only exists after ALL root edits have
+// landed; a port node parallel to (or upstream of) a root edit mirrors a stale/partial
+// root. Pure graph+path check, no fs: inert in any repo that never declares these plugin paths.
+const FORGE_PORT_PREFIXES = [
+  ['plugins', 'kaola-workflow-gitlab', 'scripts', 'kaola-gitlab-workflow-'].join('/'),
+  ['plugins', 'kaola-workflow-gitea', 'scripts', 'kaola-gitea-workflow-'].join('/'),
+];
+function forgePortRootSource(p) {
+  for (const prefix of FORGE_PORT_PREFIXES) {
+    if (p.startsWith(prefix) && p.endsWith('.js')) {
+      return ['scripts', 'kaola-workflow-' + p.slice(prefix.length)].join('/');
+    }
+  }
+  return null;
+}
 // gate coverage via reachability-after-removal (== post-dominance over unique sink)
 function gateUncovered(nodes, isTarget, gateRole, sink) {
   const adj = adjacency(nodes);
@@ -334,6 +421,19 @@ function verifyGateExecution(content, opts) {
   const sensitiveNodes = nodes.filter(nodeIsSensitive);
   if (sensitiveByLabel || sensitiveNodes.length) {
     checkGate(n => (sensitiveByLabel && producesCode(n)) || sensitiveNodes.includes(n), 'security-reviewer', 'G2');
+  }
+  // #334 G3 execution: (a) a completed code-producing node must be post-dominated by a
+  // COMPLETED main-session-gate (same relabel discipline as G1/G2); (b) n/a-evasion — the
+  // ledger lives outside plan_hash, so a frozen non-delegable gate flipped to n/a would be
+  // invisible to --resume-check; it has no legal n/a route (never a select arm, G-SEL-2),
+  // so an n/a row is an unsatisfied gate outright.
+  if (nodes.some(n => n.role === MAIN_SESSION_GATE)) {
+    checkGate(producesCode, MAIN_SESSION_GATE, 'G3');
+    for (const n of nodes) {
+      if (n.role === MAIN_SESSION_GATE && ledger.get(n.id) === 'n/a') {
+        unsatisfied.push({ requirement: 'G3 gate execution', reason: `main-session-gate ${n.id} is marked n/a — a non-delegable gate cannot be skipped` });
+      }
+    }
   }
   return { ok: unsatisfied.length === 0, unsatisfied };
 }
@@ -553,7 +653,9 @@ function validatePlan(content, opts) {
 
   // closed library (runtime-closed over the installed set)
   for (const n of nodes) {
-    if (n.role === TERMINAL_ROLE) continue;
+    // #334: MAIN_SESSION_GATE is a built-in non-subagent token (like the finalize sink) — skip
+    // the installed-library lookup (it has no agents/*.md profile and is never dispatched).
+    if (n.role === TERMINAL_ROLE || n.role === MAIN_SESSION_GATE) continue;
     if (!roles.has(n.role)) errors.push(`unknown role "${n.role}" not in installed library (node ${n.id})`);
   }
   // dangling deps
@@ -598,6 +700,11 @@ function validatePlan(content, opts) {
   let concurrentAmbiguousOverlap = false; // #232: inferred concurrent siblings with coarse/shared (non-exact) write overlap => ask
   for (const n of nodes) {
     if (n.shape.kind === 'invalid') errors.push(`node ${n.id} has invalid shape "${n.shape.raw}"`);
+    // #334: a non-delegable gate is run serially by the main session — it can never be a
+    // fan-out member or a loop body. (Select-arm membership is already refused by G-SEL-2.)
+    if (n.role === MAIN_SESSION_GATE && n.shape.kind !== 'sequence') {
+      errors.push(`main-session-gate node ${n.id} must be shape sequence — a non-delegable gate cannot be a fan-out member or loop`);
+    }
     if (n.shape.kind === 'fanout') {
       // audit B6 (#233): key by (label, fan-out origin), not label alone, so the same label in
       // two independent branches forms two separate groups. NUL separator can never collide with
@@ -789,6 +896,15 @@ function validatePlan(content, opts) {
       const g2 = gateUncovered(nodes, isTarget, 'security-reviewer', sink);
       if (g2.length) errors.push(`G2: security-reviewer does not post-dominate sensitive node(s): ${g2.join(', ')}`);
     }
+
+    // #334 G3: a declared non-delegable main-session gate is an ACCEPTANCE gate for the whole
+    // change — it must post-dominate every code-producing node, so a numerical-green implement
+    // path can never reach the sink without crossing the manual/visual decision (the #210
+    // bypass). Active ONLY when the role is present: existing plans never newly refuse.
+    if (nodes.some(n => n.role === MAIN_SESSION_GATE)) {
+      const g3 = gateUncovered(nodes, producesCode, MAIN_SESSION_GATE, sink);
+      if (g3.length) errors.push(`G3: main-session-gate does not post-dominate code-producing node(s): ${g3.join(', ')}`);
+    }
   }
 
   // #274 / #301: byte-identity write-set CO-OCCURRENCE gap. A frozen plan that edits one half of a
@@ -842,6 +958,63 @@ function validatePlan(content, opts) {
     }
   }
 
+  // #340 mechanism 1 — agent-set delta registration completeness. An exact-match
+  // directory/registry assertion (validate-vendored-agents.js agents-listing, the forge
+  // agent-profile counts) breaks on ANY agent add, keyed on no symbol of the new file —
+  // invisible to #306 symbol scoping (the #328 issue-scout plan-repair). Anchor-gated to
+  // the Kaola-Workflow repo itself; inert in user installs (zero false positives).
+  const regRoot = opts.root || process.cwd();
+  if (fs.existsSync(path.join(regRoot, 'scripts', 'validate-vendored-agents.js'))) {
+    const union = new Set();
+    for (const n of nodes) for (const p of n.writeSet) union.add(p);
+    const pluginAgentDirs = [
+      ['plugins', 'kaola-workflow', 'agents'].join('/') + '/',
+      ['plugins', 'kaola-workflow-gitlab', 'agents'].join('/') + '/',
+      ['plugins', 'kaola-workflow-gitea', 'agents'].join('/') + '/',
+    ];
+    const newAgents = new Set();
+    for (const p of union) {
+      let name = null;
+      const mdMatch = /^agents\/([a-z0-9-]+)\.md$/.exec(p);
+      if (mdMatch) name = mdMatch[1];
+      else for (const dir of pluginAgentDirs) {
+        if (!p.startsWith(dir)) continue;
+        const tomlMatch = /^([a-z0-9-]+)\.toml$/.exec(p.slice(dir.length));
+        if (tomlMatch) { name = tomlMatch[1]; break; }
+      }
+      if (name && !fs.existsSync(path.join(regRoot, p))) newAgents.add(name);
+    }
+    for (const name of [...newAgents].sort()) {
+      for (const req of agentRegistrationSurface(name)) {
+        if (!union.has(req)) {
+          errors.push(`agent-registration gap: plan adds new agent "${name}" but no node declares "${req}" — an agent-set delta must carry its full registration surface (#340)`);
+        }
+      }
+    }
+  }
+
+  // #340 mechanism 2 — forge-port mirror ordering. A node whose write set contains a
+  // gitlab/gitea edition-named PORT of a root script must be a transitive descendant of
+  // every OTHER node that writes that root script — the canonical mirror spec is the FULL
+  // accumulated root diff, which only exists after all root edits land. Same-node co-writes
+  // (atomic mirror) and ports with no root writer (forge-only fix) are allowed. Pure graph
+  // check, fs-free: inert in any plan that declares no such port path.
+  {
+    const ancestorSets = transitiveDeps(nodes);
+    for (const n of nodes) {
+      for (const p of n.writeSet) {
+        const rootSrc = forgePortRootSource(p);
+        if (!rootSrc) continue;
+        for (const other of nodes) {
+          if (other.id === n.id || !other.writeSet.has(rootSrc)) continue;
+          if (!(ancestorSets.get(n.id) || new Set()).has(other.id)) {
+            errors.push(`forge-port ordering gap: node ${n.id} writes port "${p}" but node ${other.id} writes its root source "${rootSrc}" and is not upstream of ${n.id} — order forge-port mirror nodes after ALL root edits and mirror the full accumulated root diff (#340)`);
+          }
+        }
+      }
+    }
+  }
+
   const planHash = computePlanHash(content);
   if (errors.length) return { result: 'refuse', errors, planHash, sink };
 
@@ -882,7 +1055,8 @@ function revalidateForResume(content, opts) {
   const roles = opts.installedRoles || installedRoles(opts.root || process.cwd());
   const ids = new Set(nodes.map(n => n.id));
   for (const n of nodes) {
-    if (n.role !== TERMINAL_ROLE && !roles.has(n.role)) return { ok: false, reason: `unknown role "${n.role}" (node ${n.id})` };
+    // #334: MAIN_SESSION_GATE is a built-in token (like TERMINAL_ROLE) — never in the installed library.
+    if (n.role !== TERMINAL_ROLE && n.role !== MAIN_SESSION_GATE && !roles.has(n.role)) return { ok: false, reason: `unknown role "${n.role}" (node ${n.id})` };
     for (const d of n.dependsOn) if (!ids.has(d)) return { ok: false, reason: `node ${n.id} depends_on unknown "${d}"` };
   }
   if (hasCycle(nodes)) return { ok: false, reason: 'cycle detected' };
@@ -891,8 +1065,10 @@ function revalidateForResume(content, opts) {
 }
 
 // Freeze: validate, and if in-grammar, inject/update the plan_hash comment.
-function freezePlan(content) {
-  const v = validatePlan(content, {});
+// #340: opts thread the repo root so Check 1's anchor-gated agent-registration surface
+// resolves against the validated root (not process.cwd()); backward-compatible (opts optional).
+function freezePlan(content, opts) {
+  const v = validatePlan(content, opts || {});
   if (v.result !== 'in-grammar') return { ...v, frozen: false };
   const stamped = injectHash(content, v.planHash);
   return { ...v, frozen: true, content: stamped };
@@ -1014,7 +1190,7 @@ function printHelp() {
     '  --freeze       validate, then write the computed plan_hash into the plan file\n' +
     '  --freeze --repair  also reconcile the ## Node Ledger to ## Nodes (add missing rows as pending; never drop a status) before freezing\n' +
     '  --resume-check re-validate library + structure + hash only (not the gate rubric)\n' +
-    '  --gate-verify  verify gate EXECUTION over the ## Node Ledger (G1/G2 ran); exit 1 if a completed node is uncovered\n' +
+    '  --gate-verify  verify gate EXECUTION over the ## Node Ledger (G1/G2/G3 ran; G3 = a non-delegable main-session-gate is complete — never n/a — and post-dominates completed code nodes); exit 1 if a completed node is uncovered\n' +
     '  --record-base --node-id ID  snapshot the full worktree as node ID\'s per-instance baseline (.cache); run at node start.\n' +
     '                 Idempotent: reuses an existing baseline (resume-safe — a re-dispatch never launders a crashed attempt)\n' +
     '  --barrier-check re-scan ACTUAL writes and refuse a sensitive write with no security-reviewer, or an out-of-allowlist\n' +
@@ -1059,7 +1235,7 @@ function main() {
       toFreeze = rec.content;
       reconciledAdded = rec.added;
     }
-    const r = freezePlan(toFreeze);
+    const r = freezePlan(toFreeze, { root });
     if (r.frozen) fs.writeFileSync(planPath, r.content);
     process.stdout.write((json ? JSON.stringify({ result: r.result, decision: r.decision, planHash: r.planHash, frozen: r.frozen, risk: r.risk, errors: r.errors, reconciled: reconciledAdded }) : (r.frozen ? `frozen (${r.decision}) plan_hash=${r.planHash}${reconciledAdded.length ? ' reconciled=' + reconciledAdded.join(',') : ''}` : 'typed refusal: ' + (r.errors || []).join('; '))) + '\n');
     if (!r.frozen) process.exitCode = 1;

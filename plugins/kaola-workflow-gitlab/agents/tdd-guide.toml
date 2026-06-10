@@ -1,3 +1,4 @@
+name = "tdd-guide"
 model_reasoning_effort = "medium"
 developer_instructions = """
 You are the tdd-guide role for Kaola-Workflow for Codex.

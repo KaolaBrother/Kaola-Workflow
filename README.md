@@ -375,14 +375,31 @@ Use Kaola-Workflow Gitea for Codex in this repo.
 Run workflow-init for Kaola-Workflow Gitea for Codex.
 ```
 
-Update an existing Codex install:
+Update an existing Codex install (durable, stale-proof flow):
 
 ```bash
 cd ~/kaola-workflow
 git pull
+# Refresh the cached plugin bundle Codex actually loads. Prefer the marketplace
+# upgrade; fall back to remove+add when upgrade is unavailable or the cache is stale:
+codex plugin marketplace upgrade kaola-workflow
+#   or: codex plugin remove kaola-workflow@<marketplace> && codex plugin add kaola-workflow@<marketplace>
+# Re-run the agent-profile installer against the project (validates each profile
+# schema, prunes retired Kaola files like docs-lookup.toml, and writes the managed
+# manifest .codex/agents/kaola-workflow/.kaola-managed-profiles.json):
+node <plugin-root>/scripts/install-codex-agent-profiles.js <project-root>
+# Inspect user / project / plugin-cache scope freshness (read-only doctor):
+node <plugin-root>/scripts/kaola-workflow-codex-preflight.js --doctor --project-root <project-root> --json
 ```
 
 Restart Codex to pick up the updated plugin files.
+
+Updating the Codex CLI itself never repairs Kaola-generated `.codex/` state — the
+runtime and the generated role profiles / managed config block are separate
+surfaces. A schema-invalid profile (one missing a non-empty top-level `name`, which
+Codex >=0.138 silently ignores) or a retired profile left behind by an older install
+is only repaired by re-running `install-codex-agent-profiles.js`, which validates,
+prunes, and re-writes the managed manifest.
 
 To verify a project was initialized for Codex, check that `.codex/config.toml`
 contains a `# BEGIN kaola-workflow agents` managed block and that
@@ -414,15 +431,21 @@ knowledge-lookup
 planner
 code-architect
 tdd-guide
+implementer
 build-error-resolver
 code-reviewer
 security-reviewer
 doc-updater
 adversarial-verifier
+contractor
+workflow-planner
+issue-scout
 ```
 
 (`adversarial-verifier` is the read-only skeptic for the opt-in adaptive path; it is
-mirrored into the Codex editions for parity and is never a review gate.)
+mirrored into the Codex editions for parity and is never a review gate. `contractor`,
+`workflow-planner`, and `issue-scout` are the adaptive lean-orchestrator roles —
+bookkeeper, DAG front end, and read-only bundle-lane backlog scout.)
 
 The managed setup copies role configs into `.codex/agents/kaola-workflow/` and
 maintains a `# BEGIN kaola-workflow agents` block in `.codex/config.toml` while
@@ -444,11 +467,15 @@ through the user's active Codex configuration. They only set reasoning effort:
 | `planner` | `xhigh` |
 | `code-architect` | `high` |
 | `tdd-guide` | `medium` |
+| `implementer` | `medium` |
 | `build-error-resolver` | `medium` |
 | `code-reviewer` | `high` |
 | `security-reviewer` | `high` |
 | `doc-updater` | `low` |
 | `adversarial-verifier` | `high` |
+| `contractor` | `low` |
+| `workflow-planner` | `xhigh` |
+| `issue-scout` | `medium` |
 
 There is no separate Codex advisor role. Codex advisor gates use the strongest
 available expert model/profile for the current session, or the current session
@@ -557,7 +584,7 @@ This is Kaola-Workflow's primary design. For most issues — from a one-line fix
 KAOLA_PATH=adaptive /workflow-next   # force adaptive explicitly
 ```
 
-`/kaola-workflow-adapt` opens by dispatching the `workflow-planner` front-end subagent **once**: it claims/starts up (writes `workflow-state.md` and provisions a worktree at `.kw/worktrees/<project>/` — startup records `run_posture: worktree` in the `## Sink` block, derived from the actual worktree resolution; the planner authors the plan at repo-root and the executor operates inside the provisioned worktree), authors the plan as a `workflow-plan.md` (a `## Nodes` DAG plus an empty `## Node Ledger`), and runs `kaola-workflow-adaptive-handoff.js`. The plan must be **in-grammar**: roles drawn from the closed role library, one of four shapes (`sequence`, fan-out over pairwise-disjoint write sets, a bounded loop, or a selective-execution `select(<group>)` arm), a single unique `finalize` sink, and computed **post-dominance gates** (`code-reviewer` over every code-producing node, `security-reviewer` over every sensitive node). The handoff script branches on the plan-validator `--json` `result`: on `in-grammar` it freezes mechanically — writing a `plan_hash` inside `workflow-plan.md` (re-checked on every load, so post-freeze tampering is refused) — resume-checks, stages the roadmap, and writes `## Planning Evidence` into `workflow-state.md`, then returns `handoff_status: ready_to_run` with a checklist and advisory `first_node` metadata. The handoff does **not** open the first node or record its baseline. `decision:auto-run` vs `ask` is **audit metadata** recorded in the packet — the run proceeds either way with no user-approval gate. On `refuse` the handoff returns `plan_invalid` with no mutation; the orchestrator drives a bounded repair loop (re-dispatching the planner with validator errors) rather than silently looping. The main session routes directly to `/kaola-workflow-plan-run`, which opens and dispatches every node including the first via `kaola-workflow-adaptive-node.js` transactions, with per-node checkpoints; it is resume-safe and toggle-agnostic (a frozen plan finishes even if the switch is later turned off) and hands off to Finalization on an all-complete ledger.
+`/kaola-workflow-adapt` opens by dispatching the `workflow-planner` front-end subagent **once**: it claims/starts up (writes `workflow-state.md` and provisions a worktree at `.kw/worktrees/<project>/` — startup records `run_posture: worktree` in the `## Sink` block, derived from the actual worktree resolution; the planner authors the plan at repo-root and the executor operates inside the provisioned worktree), authors the plan as a `workflow-plan.md` (a `## Nodes` DAG plus an empty `## Node Ledger`), and runs `kaola-workflow-adaptive-handoff.js`. The plan must be **in-grammar**: roles drawn from the closed role library, one of four shapes (`sequence`, fan-out over pairwise-disjoint write sets, a bounded loop, or a selective-execution `select(<group>)` arm), a single unique `finalize` sink, and computed **post-dominance gates** (`code-reviewer` over every code-producing node, `security-reviewer` over every sensitive node). The handoff script branches on the plan-validator `--json` `result`: on `in-grammar` it freezes mechanically — writing a `plan_hash` inside `workflow-plan.md` (re-checked on every load, so post-freeze tampering is refused) — resume-checks, stages the roadmap, and writes `## Planning Evidence` into `workflow-state.md`, then returns `handoff_status: ready_to_run` with a checklist and advisory `first_node` metadata. As its last step the handoff also **mechanically mirrors** the frozen `kaola-workflow/<project>/` from the main checkout into the provisioned worktree (atomic copy → `plan_hash` re-verification → rename promote), surfaced in the packet as `worktree_mirror` (#335); `/kaola-workflow-plan-run` re-runs the idempotent `kaola-workflow-adaptive-node.js mirror-project` at entry, and `orient` fails closed with a typed `plan_not_mirrored` refusal (naming the exact mirror command) when run against an unmirrored worktree — there is no manual `cp` step. The handoff does **not** open the first node or record its baseline. `decision:auto-run` vs `ask` is **audit metadata** recorded in the packet — the run proceeds either way with no user-approval gate. On `refuse` the handoff returns `plan_invalid` with no mutation; the orchestrator drives a bounded repair loop (re-dispatching the planner with validator errors) rather than silently looping. The main session routes directly to `/kaola-workflow-plan-run`, which opens and dispatches every node including the first via `kaola-workflow-adaptive-node.js` transactions, with per-node checkpoints; it is resume-safe and toggle-agnostic (a frozen plan finishes even if the switch is later turned off) and hands off to Finalization on an all-complete ledger.
 
 The adaptive path adds one role — `adversarial-verifier`, a read-only, refute-by-default skeptic used in read-only verification fan-outs. It is never a review gate and touches zero repository files.
 
@@ -574,6 +601,7 @@ The four shapes (`sequence`, `fanout`, `loop`, `select`) are a *grammar*, not a 
 | **Generate-and-filter** | Generate several candidate approaches, filter to the best, then build it. | Read-only `fanout(gen)` of angled `planner` attempts → a `planner` reduce node (the rubric/filter that picks one) → a single `tdd-guide` implements the winner → `code-reviewer` gate → `finalize`. The "discard" is the reduce node's choice, not a grammar feature. | `auto-run` (read-only generators + one sequential implement) |
 | **Tournament** | Competing candidate plans reduced to a winner by pairwise judges. | Read-only `fanout(attempt)` of `planner` nodes → hand-wired pairwise `code-reviewer` judges (each `depends_on` two attempts) → a final judge → `finalize`. There is no native bracket shape — the bracket is ordinary `depends_on` wiring; feed the winner to a downstream `tdd-guide` to build it. | `auto-run` (read-only) |
 | **Classify-And-Act** | Routing to exactly one of several mutually-exclusive arms based on what a read-only classifier finds (e.g. "fix the CSV exporter **or** the HTML renderer, whichever is at fault"). | A read-only `code-explorer` classifier node writes `selector: <arm-id>` to its `.cache/<id>.md` evidence; each arm carries `shape: select(<group>)` and a `selector_source` pointing to the classifier. On the classifier's commit, `plan-validator --selector-check` reads the selector and **fail-closes (exit 1, blocking the commit) on a missing or foreign value** — the script-mechanical guarantee that neither "run all" nor "run none" can occur. It returns `armsToNa`; the contractor marks unselected arms `n/a` in the ledger, and `next-action.js` treats `n/a` arms as terminal so only the one selected arm becomes ready. Risk is assessed over the union of all arms; the selector is read-only (zero blast radius); `n/a` arms cannot smuggle unreviewed writes because they never execute. | `auto-run` (selector is read-only; write-role arms are mutually exclusive, not concurrent) |
+| **Non-delegable acceptance gate** (`main-session-gate`, #334) | A required acceptance check no subagent can perform — a GPU/visual confirmation, a device-in-hand verification, an explicit human sign-off. | A built-in `main-session-gate` node (no agent profile; the main session itself runs the check and records `verdict: pass\|fail` into `.cache/<id>.md`) placed **after** `code-reviewer` so it post-dominates every code-producing node (**G3**). It is read-only, shape `sequence` only, never a fan-out/select arm, and never a parallel-batch member. `--gate-verify`/`--verdict-check` block finalization until it is complete with a passing verdict — there is no legal `n/a` skip, so a numerical-green implement path can never reach the sink without crossing the manual decision. | `auto-run` (read-only gate) |
 | **Composed (multi-pattern)** | The realistic case — several patterns stacked in one DAG. The planner *composes*, it does not pick one. | e.g. a read-only multi-modal sweep (`fanout(sweep)` of `code-explorer` → `planner`) **then** a parallel implement (`fanout(impl)` of `tdd-guide` → `code-reviewer` gate) **then** an adversarial-verify skeptic fan-out → `finalize`: one 10-node plan in which `code-reviewer` still post-dominates **both** implement legs. Locked as a fixture in `testAdaptivePatternLibrary`. | `ask` (write-role fan-out present) |
 
 The first seven are building blocks; the last row stacks three of them. The two read-only design shapes (**Generate-and-filter**, **Tournament**) — they compare or select approaches and write nothing, so they carry zero blast radius and auto-run; the chosen approach then flows into an ordinary write-role implement under the same gates. Every plan, whatever its shape, still crosses the same non-removable walls: a single unique `finalize` sink, `code-reviewer` **post-dominating** every code-producing node, and `security-reviewer` post-dominating every sensitive node (re-derived from the files actually touched, not an author flag). A plan that routes a gate around itself is a typed refusal, not a silent pass.
@@ -834,9 +862,9 @@ evidence path.
 ### Codex lifecycle hooks
 
 Codex wires the same four hooks via a project-local `.codex/hooks.json` written by
-`install-codex-agent-profiles.js` (run automatically by `./install.sh`). The hooks
-are NOT in the Codex plugin manifest (`plugin.json`) — they live in the project's
-`.codex/` directory.
+`install-codex-agent-profiles.js` (run by the Codex `kaola-workflow-init` skill). The
+hooks are NOT in the Codex plugin manifest (`plugin.json`) — they live in the
+project's `.codex/` directory.
 
 | Hook ID | Event (matcher) | Purpose | Script |
 |---------|-----------------|---------|--------|
@@ -910,6 +938,10 @@ make the next command unsafe.
 
 Hook installation is covered in the [Hook policy](#hook-policy) section above —
 do not hand-merge entries into `~/.claude/settings.json`.
+
+## Keep-open partial-close sinks
+
+When a run is complete as a cycle but the issue must **stay open** (partial implementation, residual follow-ups), the main session writes `issue_action: comment_keep_open` into the `## Sink` block at the Closure Decision Gate (issue #336). Finalization then runs the full mechanical sink with **no manual FF-push cleanup**: `finalize --keep-open`/`--keep-issue-open` preserves the per-issue roadmap source (instead of deleting it) and regenerates `ROADMAP.md` still listing `#N`; `sink-merge --keep-issue-open` merges, pushes, removes the worktree/branch, and releases the claim exactly like a normal close, but posts a keep-open comment instead of closing the issue. Keep-open is **merge-sink-only** — a PR/MR sink would auto-close the issue via its `Closes #N` body, so the PR/MR sink (including the exit-3 merge-impossible auto-pivot) is refused with a typed BLOCKED, and the `sink-pr`/`sink-mr` scripts themselves refuse a project carrying `issue_action: comment_keep_open`.
 
 ## Multi-issue bundle lane (adaptive-only)
 

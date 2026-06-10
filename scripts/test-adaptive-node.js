@@ -11,6 +11,7 @@ const {
   checkEvidenceShape,
   validateProjectName,
   runOrient,
+  runMirrorProject,
   runOpenNext,
   runReopenNode,
   runRecordEvidence,
@@ -262,6 +263,44 @@ function makeState(opts) {
   const r4 = checkEvidenceShape('code-reviewer', 'review', '');
   assert(r4.ok === false, 'T8d: code-reviewer with empty evidence → not ok');
   assert(r4.kind === 'absent', 'T8d (#319): empty evidence → kind absent');
+}
+
+// ---------------------------------------------------------------------------
+// T8g (#334): checkEvidenceShape — main-session-gate requires a column-0 verdict and
+// REFUSES the universal 'n/a' self-skip (the inversion vs every other role).
+// ---------------------------------------------------------------------------
+{
+  // absent evidence → kind absent, missingTokenClass non-empty
+  const rAbsent = checkEvidenceShape('main-session-gate', 'vgate', null);
+  assert(rAbsent.ok === false, 'T8g-a: main-session-gate absent evidence → not ok');
+  assert(rAbsent.kind === 'absent', 'T8g-a: absent → kind absent');
+  assert(rAbsent.missingTokenClass === 'non-empty', 'T8g-a: absent → missingTokenClass non-empty');
+
+  const rEmpty = checkEvidenceShape('main-session-gate', 'vgate', '   ');
+  assert(rEmpty.ok === false && rEmpty.kind === 'absent', 'T8g-b: whitespace-only → absent');
+
+  // present but verdict-less → kind shape, missingTokenClass verdict
+  const rNoVerdict = checkEvidenceShape('main-session-gate', 'vgate', 'looked at the screen, looks fine\n');
+  assert(rNoVerdict.ok === false, 'T8g-c: verdict-less → not ok');
+  assert(rNoVerdict.kind === 'shape', 'T8g-c: verdict-less → kind shape');
+  assert(rNoVerdict.missingTokenClass === 'verdict', 'T8g-c: verdict-less → missingTokenClass verdict');
+
+  // 'n/a ...' content → REFUSED for this role (the inversion: every OTHER role would skip)
+  const rNa = checkEvidenceShape('main-session-gate', 'vgate', 'n/a — not a visual issue\n');
+  assert(rNa.ok === false, 'T8g-d: n/a content REFUSED for main-session-gate (inversion vs other roles)');
+  assert(rNa.kind === 'shape' && rNa.missingTokenClass === 'verdict', 'T8g-d: n/a content → shape/verdict');
+  // (sanity: the SAME n/a content passes for a non-gate role)
+  assert(checkEvidenceShape('code-reviewer', 'review', 'n/a — not a visual issue\n').ok === true,
+    'T8g-d: same n/a content is a legal skip for code-reviewer');
+
+  // verdict: pass / verdict: fail → ok (a fail verdict still CLOSES the node, parity with reviewers)
+  const rPass = checkEvidenceShape('main-session-gate', 'vgate', 'verdict: pass\nfindings_blocking: 0\nGPU true-black confirmed\n');
+  assert(rPass.ok === true, 'T8g-e: verdict: pass → ok');
+  const rFail = checkEvidenceShape('main-session-gate', 'vgate', 'verdict: fail\nfindings_blocking: 1\nblacks looked grey\n');
+  assert(rFail.ok === true, 'T8g-f: verdict: fail → ok (closes the node; blocking is at Finalization)');
+  // last-match-wins + case-insensitive
+  const rLast = checkEvidenceShape('main-session-gate', 'vgate', 'verdict: fail\nre-checked\nverdict: PASS\n');
+  assert(rLast.ok === true, 'T8g-g: last-match-wins + case-insensitive verdict → ok');
 }
 
 // ---------------------------------------------------------------------------
@@ -732,6 +771,82 @@ function makeState(opts) {
   assert(complianceSection.includes('| code-reviewer |'), 'T14b: compliance row uses BARE role string code-reviewer');
   const wrongFormat = complianceSection.includes('| code-reviewer (review) |');
   assert(wrongFormat === false, 'T14b: compliance row does NOT use role (id) format for code-reviewer');
+}
+
+// ---------------------------------------------------------------------------
+// T14c (#338): runCloseAndOpenNext — finalize SINK node → compliance row is
+// 'main-session-direct', NOT 'subagent-invoked'. The plan-run contract performs the
+// finalize sink bookkeeping main-session-direct (no Agent dispatch), so certifying it
+// as subagent-invoked would falsely claim a delegation that never happened.
+// ---------------------------------------------------------------------------
+{
+  let writtenFiles = {};
+
+  const nodes = [
+    '| impl-core | tdd-guide | — | scripts/adaptive-node.js | 1 | sequence |',
+    '| review | code-reviewer | impl-core | — | 1 | sequence |',
+    '| done | finalize | review | CHANGELOG.md | 1 | sequence |',
+  ];
+
+  const plan = makePlan([
+    '| impl-core | complete | |',
+    '| review | complete | |',
+    '| done | in_progress | |',
+  ], nodes);
+
+  const cacheContent = 'finalize bookkeeping: docs + state recorded.';
+  const cacheFiles = {
+    '/fake/kaola-workflow/test-project/.cache/done.md': cacheContent,
+  };
+
+  let planContent = plan;
+
+  const shellStub = function(scriptPath, args) {
+    const base = path.basename(scriptPath);
+    const argsArr = args || [];
+    if (base === 'kaola-workflow-commit-node.js' && !argsArr.includes('--start')) {
+      return {
+        exitCode: 0, result: 'ok', mode: 'per-node', nodeId: 'done',
+        overallOk: true,
+        selectorCheck: { isSelector: false, ok: true },
+      };
+    }
+    if (base === 'kaola-workflow-next-action.js') {
+      // The finalize sink post-dominates everything; after it closes, the DAG is done.
+      return { exitCode: 0, result: 'ok', readySet: [], nextNode: null, allDone: true };
+    }
+    return { exitCode: 1 };
+  };
+
+  const result = runCloseAndOpenNext({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project',
+    nodeId: 'done',
+    shell: shellStub,
+    readFile: (fpath) => {
+      if (fpath.endsWith('workflow-plan.md')) return planContent;
+      if (fpath.endsWith('workflow-state.md')) return makeState();
+      if (cacheFiles[fpath]) return cacheFiles[fpath];
+      throw new Error('ENOENT: ' + fpath);
+    },
+    writeFile: (fpath, content) => {
+      writtenFiles[fpath] = content;
+      if (fpath.endsWith('workflow-plan.md')) planContent = content;
+    },
+    cacheExists: (fpath) => !!cacheFiles[fpath],
+  });
+
+  assert(result.result === 'ok', 'T14c: finalize-sink close result===ok');
+  assert(result.allDone === true, 'T14c: allDone===true after the sink closes');
+
+  const writtenPlan = writtenFiles['/fake/kaola-workflow/test-project/workflow-plan.md'];
+  assert(writtenPlan !== undefined, 'T14c: plan written');
+  assert(writtenPlan.includes('## Required Agent Compliance'), 'T14c: compliance section written');
+  assert(writtenPlan.includes('| finalize (done) | main-session-direct |'),
+    'T14c: finalize sink row is main-session-direct');
+  assert(!writtenPlan.includes('| finalize (done) | subagent-invoked'),
+    'T14c: finalize sink row is NOT falsely certified subagent-invoked');
 }
 
 // ---------------------------------------------------------------------------
@@ -1607,6 +1722,153 @@ function makeState(opts) {
 }
 
 // ---------------------------------------------------------------------------
+// T23a (#334): runOrient enterBatch EXCLUDES a main-session-gate. Frontier [gate, x]
+// (delegable count 1) → enterBatch:false. Frontier [gate, x, y] (delegable count 2) →
+// enterBatch:true with the gate filtered OUT of the frontier.
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan([
+    '| vgate | pending | |', '| x | pending | |', '| review | pending | |',
+  ], [
+    '| vgate | main-session-gate | — | — | 1 | sequence |',
+    '| x | tdd-guide | — | xxx/1.js | 1 | sequence |',
+    '| review | code-reviewer | vgate,x | — | 1 | sequence |',
+  ]);
+  const shellStub = function(scriptPath) {
+    const base = path.basename(scriptPath);
+    if (base === 'kaola-workflow-plan-validator.js') return { exitCode: 0, ok: true, planHash: 'abc' };
+    if (base === 'kaola-workflow-next-action.js') {
+      const gate = { id: 'vgate', role: 'main-session-gate', model: '', declared_write_set: '—', dependsOn: [] };
+      const x = { id: 'x', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'xxx/1.js', dependsOn: [] };
+      return { exitCode: 0, result: 'ok', readySet: [gate, x], nextNode: gate, readyPending: [gate, x], active: [], allDone: false };
+    }
+    return { exitCode: 1, result: 'refuse' };
+  };
+  const res = runOrient({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project', shell: shellStub,
+    readFile: (f) => { if (f.endsWith('workflow-plan.md')) return plan; if (f.endsWith('workflow-state.md')) return makeState(); throw new Error('ENOENT ' + f); },
+    writeFile: () => {}, cacheExists: () => false,
+  });
+  assert(res.result === 'ok', 'T23a: orient [gate, x] result ok');
+  assert(res.enterBatch === false, 'T23a: [gate, x] → enterBatch false (delegable count 1, the gate is excluded)');
+  assert(Array.isArray(res.frontier) && res.frontier.length === 0, 'T23a: enterBatch false → empty frontier');
+}
+{
+  const plan = makePlan([
+    '| vgate | pending | |', '| x | pending | |', '| y | pending | |', '| review | pending | |',
+  ], [
+    '| vgate | main-session-gate | — | — | 1 | sequence |',
+    '| x | tdd-guide | — | xxx/1.js | 1 | fanout(impl) |',
+    '| y | tdd-guide | — | yyy/1.js | 1 | fanout(impl) |',
+    '| review | code-reviewer | vgate,x,y | — | 1 | sequence |',
+  ]);
+  const shellStub = function(scriptPath) {
+    const base = path.basename(scriptPath);
+    if (base === 'kaola-workflow-plan-validator.js') return { exitCode: 0, ok: true, planHash: 'abc' };
+    if (base === 'kaola-workflow-next-action.js') {
+      const gate = { id: 'vgate', role: 'main-session-gate', model: '', declared_write_set: '—', dependsOn: [] };
+      const x = { id: 'x', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'xxx/1.js', dependsOn: [] };
+      const y = { id: 'y', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'yyy/1.js', dependsOn: [] };
+      return { exitCode: 0, result: 'ok', readySet: [gate, x, y], nextNode: gate, readyPending: [gate, x, y], active: [], allDone: false };
+    }
+    return { exitCode: 1, result: 'refuse' };
+  };
+  const res = runOrient({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project', shell: shellStub,
+    readFile: (f) => { if (f.endsWith('workflow-plan.md')) return plan; if (f.endsWith('workflow-state.md')) return makeState(); throw new Error('ENOENT ' + f); },
+    writeFile: () => {}, cacheExists: () => false,
+  });
+  assert(res.enterBatch === true, 'T23b: [gate, x, y] → enterBatch true (2 delegable)');
+  assert(Array.isArray(res.frontier) && res.frontier.length === 2, 'T23b: frontier carries 2 siblings (gate excluded)');
+  assert(!res.frontier.some(n => n.id === 'vgate'), 'T23b: the gate is NOT in the batch frontier');
+}
+
+// ---------------------------------------------------------------------------
+// T23c (#334): runCloseAndOpenNext enterBatch EXCLUDES a main-session-gate from the
+// post-close frontier. Closing `prep` exposes [vgate, a, b]; only [a, b] are batched.
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan([
+    '| prep | in_progress | |', '| vgate | pending | |', '| a | pending | |', '| b | pending | |', '| review | pending | |',
+  ], [
+    '| prep | code-explorer | — | — | 1 | sequence |',
+    '| vgate | main-session-gate | prep | — | 1 | sequence |',
+    '| a | tdd-guide | prep | aaa/1.js | 1 | fanout(impl) |',
+    '| b | tdd-guide | prep | bbb/1.js | 1 | fanout(impl) |',
+    '| review | code-reviewer | vgate,a,b | — | 1 | sequence |',
+  ]);
+  let planContent = plan;
+  const writtenFiles = {};
+  const shellStub = function(scriptPath, args) {
+    const base = path.basename(scriptPath); const argsArr = args || [];
+    if (base === 'kaola-workflow-commit-node.js' && !argsArr.includes('--start')) {
+      return { exitCode: 0, result: 'ok', mode: 'per-node', nodeId: 'prep', overallOk: true, selectorCheck: { isSelector: false, ok: true }, barrierCheck: { exitCode: 0, result: 'pass' } };
+    }
+    if (base === 'kaola-workflow-commit-node.js' && argsArr.includes('--start')) return { exitCode: 0, result: 'ok', mode: 'per-node-start', overallOk: true };
+    if (base === 'kaola-workflow-next-action.js') {
+      const gate = { id: 'vgate', role: 'main-session-gate', model: '', declared_write_set: '—', dependsOn: ['prep'] };
+      const a = { id: 'a', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'aaa/1.js', dependsOn: ['prep'] };
+      const b = { id: 'b', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'bbb/1.js', dependsOn: ['prep'] };
+      return { exitCode: 0, result: 'ok', readySet: [gate, a, b], nextNode: gate, readyPending: [gate, a, b], active: [], allDone: false };
+    }
+    return { exitCode: 1, result: 'refuse', errors: ['stub: unexpected ' + base] };
+  };
+  const result = runCloseAndOpenNext({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project', nodeId: 'prep', shell: shellStub,
+    readFile: (f) => {
+      if (f.endsWith('workflow-plan.md')) return planContent;
+      if (f.endsWith('workflow-state.md')) return makeState();
+      if (f.endsWith('/.cache/prep.md')) return 'explored the area; findings recorded';
+      throw new Error('ENOENT: ' + f);
+    },
+    writeFile: (f, c) => { writtenFiles[f] = c; if (f.endsWith('workflow-plan.md')) planContent = c; },
+    cacheExists: (f) => f.endsWith('/.cache/prep.md'),
+  });
+  assert(result.result === 'ok', 'T23c: close result ok');
+  assert(result.enterBatch === true, 'T23c: [vgate, a, b] → enterBatch true (2 delegable a,b)');
+  assert(Array.isArray(result.frontier) && result.frontier.length === 2 && !result.frontier.some(n => n.id === 'vgate'),
+    'T23c: frontier batches [a, b], the gate excluded');
+}
+
+// ---------------------------------------------------------------------------
+// T23d (#334): runReopenNode resets a downstream COMPLETE main-session-gate and removes its
+// baseline — a plan-repair to implementation MUST re-run the visual check. Plan
+// a→impl→review(code-reviewer)→vgate(main-session-gate)→finalize, all complete.
+// ---------------------------------------------------------------------------
+{
+  const planNodes = [
+    '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| impl | tdd-guide | a | scripts/b.js | 1 | sequence |',
+    '| review | code-reviewer | impl | — | 1 | sequence |',
+    '| vgate | main-session-gate | review | — | 1 | sequence |',
+    '| finalize | finalize | vgate | — | 1 | sequence |',
+  ];
+  let planContent = makePlan([
+    '| a | complete | |', '| impl | complete | |', '| review | complete | |', '| vgate | complete | |', '| finalize | complete | |',
+  ], planNodes);
+  const removed = [];
+  const shelled = [];
+  const result = runReopenNode({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md', project: 'test-project', nodeId: 'impl',
+    shell: (scriptPath) => { shelled.push(path.basename(scriptPath)); return path.basename(scriptPath) === 'kaola-workflow-commit-node.js' ? { exitCode: 0, result: 'ok' } : { exitCode: 1 }; },
+    readFile: (f) => { if (f.endsWith('workflow-plan.md')) return planContent; throw new Error('ENOENT ' + f); },
+    writeFile: (f, c) => { if (f.endsWith('workflow-plan.md')) planContent = c; },
+    cacheExists: (f) => /barrier-base-/.test(f),
+    unlink: (f) => removed.push(path.basename(f)),
+  });
+  assert(result.result === 'ok', 'T23d: reopen result ok, got ' + JSON.stringify(result));
+  assert(/\|\s*vgate\s*\|\s*pending\s*\|/.test(planContent), 'T23d: downstream main-session-gate reset to pending (must re-run after repair)');
+  assert(result.gatesReset && result.gatesReset.includes('vgate') && result.gatesReset.includes('review'),
+    'T23d: gatesReset names the visual gate + reviewer, got ' + JSON.stringify(result.gatesReset));
+  assert(removed.includes('barrier-base-vgate'), 'T23d: stale visual-gate baseline removed, got ' + JSON.stringify(removed));
+}
+
 // ---------------------------------------------------------------------------
 // #308: runReopenNode — first-class plan-repair transaction. Reopens a COMPLETE
 // node N, resets its post-dominating gate(s) to pending, removes the stale
@@ -1731,6 +1993,151 @@ function makeState(opts) {
     '#308 integ: after reopen-node, next-action offers ONLY [impl] — gate + sink withheld, got ' + JSON.stringify(ready));
   assert(!na.readySet.some(n => n.id === 'finalize'),
     '#308 integ: finalize sink is NOT prematurely ready after the gate reset');
+}
+
+// ---------------------------------------------------------------------------
+// #343: runReopenNode MID-GATE fold — a post-dominating gate that is still
+// in_progress (it just emitted a blocking finding owned by N) folds back to
+// pending inside the same transaction, so the repair does NOT have to advance
+// the DAG to allDone on a known-broken tree. gatesReset stays STRUCTURAL;
+// the additive gatesFolded lists only the rows actually flipped, and the
+// transitions never claim a flip that did not happen (no fabricated entry for
+// an already-pending downstream gate). Exactly ONE in_progress row remains.
+// Plan a→impl→review(code-reviewer)→averify(adversarial-verifier)→finalize.
+// ---------------------------------------------------------------------------
+{
+  const planNodes = [
+    '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| impl | tdd-guide | a | scripts/b.js | 1 | sequence |',
+    '| review | code-reviewer | impl | — | 1 | sequence |',
+    '| averify | adversarial-verifier | review | — | 1 | sequence |',
+    '| finalize | finalize | averify | — | 1 | sequence |',
+  ];
+  let planContent = makePlan([
+    '| a | complete | |',
+    '| impl | complete | |',
+    '| review | in_progress | |',
+    '| averify | pending | |',
+    '| finalize | pending | |',
+  ], planNodes);
+  const removed = [];
+  const shelled = [];
+  const result = runReopenNode({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    project: 'test-project',
+    nodeId: 'impl',
+    shell: (scriptPath, args) => {
+      shelled.push({ base: path.basename(scriptPath), args: args || [] });
+      if (path.basename(scriptPath) === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok' };
+      return { exitCode: 1 };
+    },
+    readFile: (f) => { if (f.endsWith('workflow-plan.md')) return planContent; throw new Error('ENOENT ' + f); },
+    writeFile: (f, c) => { if (f.endsWith('workflow-plan.md')) planContent = c; },
+    // live baselines for impl + the in_progress gate; never-opened averify has none; NO active batch
+    cacheExists: (f) => /barrier-base-(impl|review)/.test(f),
+    unlink: (f) => removed.push(path.basename(f)),
+  });
+  assert(result.result === 'ok', '#343 fold: result ok, got ' + JSON.stringify(result));
+  assert(/\|\s*impl\s*\|\s*in_progress\s*\|/.test(planContent), '#343 fold: impl reopened to in_progress');
+  assert(/\|\s*review\s*\|\s*pending\s*\|/.test(planContent), '#343 fold: in_progress gate review folded to pending');
+  assert(/\|\s*averify\s*\|\s*pending\s*\|/.test(planContent), '#343 fold: downstream pending gate averify left pending');
+  assert(/\|\s*finalize\s*\|\s*pending\s*\|/.test(planContent), '#343 fold: sink finalize left pending');
+  assert(/\|\s*a\s*\|\s*complete\s*\|/.test(planContent), '#343 fold: upstream a left complete');
+  const inProgressRows = (planContent.match(/\|\s*in_progress\s*\|/g) || []).length;
+  assert(inProgressRows === 1, '#343 fold: exactly ONE in_progress row remains, got ' + inProgressRows);
+  assert(result.gatesReset && result.gatesReset.includes('review') && result.gatesReset.includes('averify'),
+    '#343 fold: gatesReset stays structural (review + averify), got ' + JSON.stringify(result.gatesReset));
+  assert(result.gatesFolded && result.gatesFolded.includes('review') && !result.gatesFolded.includes('averify'),
+    '#343 fold: gatesFolded lists only rows actually flipped (review, NOT averify), got ' + JSON.stringify(result.gatesFolded));
+  assert(removed.includes('barrier-base-impl') && removed.includes('barrier-base-review'),
+    '#343 fold: stale baselines for impl + the folded gate removed, got ' + JSON.stringify(removed));
+  const foldTransitions = (result.taskTransitions || []).map(t => t.id + ':' + t.ledger_status);
+  assert(foldTransitions.includes('review:pending') && foldTransitions.includes('impl:in_progress'),
+    '#343 fold: transitions carry review→pending + impl→in_progress, got ' + JSON.stringify(foldTransitions));
+  assert(!(result.taskTransitions || []).some(t => t.id === 'averify'),
+    '#343 fold: NO fabricated transition for the never-flipped averify, got ' + JSON.stringify(foldTransitions));
+  const commitCall = shelled.find(s => s.base === 'kaola-workflow-commit-node.js');
+  assert(commitCall && commitCall.args.includes('--start') && commitCall.args.includes('impl'),
+    '#343 fold: fresh baseline (commit-node --start) recorded for impl, got ' + JSON.stringify(shelled));
+}
+
+// ---------------------------------------------------------------------------
+// #343: runReopenNode fail-closed orphan guard — an in_progress row that is
+// NOT a post-dominating gate of N (here a parallel-branch implementer node)
+// refuses typed would_orphan_in_progress BEFORE any real side effect: zero
+// unlinks, zero writes (the stub throws if called), no baseline shelled.
+// ---------------------------------------------------------------------------
+{
+  const planNodes = [
+    '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| impl | tdd-guide | a | scripts/b.js | 1 | fanout(work) |',
+    '| docs | implementer | a | docs/x.md | 1 | fanout(work) |',
+    '| review | code-reviewer | impl,docs | — | 1 | sequence |',
+    '| finalize | finalize | review | — | 1 | sequence |',
+  ];
+  const planContent = makePlan([
+    '| a | complete | |',
+    '| impl | complete | |',
+    '| docs | in_progress | |',
+    '| review | pending | |',
+    '| finalize | pending | |',
+  ], planNodes);
+  const removed = [];
+  const shelled = [];
+  const result = runReopenNode({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    project: 'test-project',
+    nodeId: 'impl',
+    shell: (sp) => { shelled.push(path.basename(sp)); return { exitCode: 0, result: 'ok' }; },
+    readFile: (f) => { if (f.endsWith('workflow-plan.md')) return planContent; throw new Error('ENOENT ' + f); },
+    writeFile: () => { throw new Error('#343 guard: must not write on refusal'); },
+    cacheExists: (f) => /barrier-base-/.test(f),
+    unlink: (f) => removed.push(path.basename(f)),
+  });
+  assert(result.result === 'refuse' && result.reason === 'would_orphan_in_progress',
+    '#343 guard: refuses typed would_orphan_in_progress, got ' + JSON.stringify(result));
+  assert(JSON.stringify(result.inProgress) === JSON.stringify(['docs']),
+    '#343 guard: inProgress names the orphan row(s) [docs], got ' + JSON.stringify(result.inProgress));
+  assert(removed.length === 0, '#343 guard: zero unlinks on refusal (pure no-op), got ' + JSON.stringify(removed));
+  assert(!shelled.includes('kaola-workflow-commit-node.js'),
+    '#343 guard: no commit-node baseline shelled on refusal, got ' + JSON.stringify(shelled));
+}
+
+// ---------------------------------------------------------------------------
+// #343 INTEGRATION (mid-gate fold × transitive readiness): the COMPOSITION the
+// isolated tests miss. After the mid-gate reopen-node folds the in_progress
+// gate to pending and reopens N, the resulting ledger must drive the REAL
+// next-action to offer ONLY the reopened node — the folded gate, the downstream
+// pending gate, and the sink all stay withheld by transitive readiness.
+// ---------------------------------------------------------------------------
+{
+  const { computeNextAction } = require('./kaola-workflow-next-action');
+  const planNodes = [
+    '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
+    '| impl | tdd-guide | a | scripts/b.js | 1 | sequence |',
+    '| review | code-reviewer | impl | — | 1 | sequence |',
+    '| averify | adversarial-verifier | review | — | 1 | sequence |',
+    '| finalize | finalize | averify | — | 1 | sequence |',
+  ];
+  let planContent = makePlan([
+    '| a | complete | |',
+    '| impl | complete | |',
+    '| review | in_progress | |',
+    '| averify | pending | |',
+    '| finalize | pending | |',
+  ], planNodes);
+  const res = runReopenNode({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md', project: 'test-project', nodeId: 'impl',
+    shell: (sp) => path.basename(sp) === 'kaola-workflow-commit-node.js' ? { exitCode: 0, result: 'ok' } : { exitCode: 1 },
+    readFile: (f) => { if (f.endsWith('workflow-plan.md')) return planContent; throw new Error('ENOENT ' + f); },
+    writeFile: (f, c) => { if (f.endsWith('workflow-plan.md')) planContent = c; },
+    cacheExists: (f) => /barrier-base-(impl|review)/.test(f), unlink: () => {},
+  });
+  assert(res.result === 'ok', '#343 integ: mid-gate reopen-node ok, got ' + JSON.stringify(res));
+  const na = computeNextAction(planContent, { resolveModel: () => 'sonnet' });
+  const ready = na.readySet.map(n => n.id).sort();
+  assert(JSON.stringify(ready) === JSON.stringify(['impl']),
+    '#343 integ: after the mid-gate fold, next-action offers ONLY [impl] — folded gate + downstream gate + sink withheld, got ' + JSON.stringify(ready));
 }
 
 // ---------------------------------------------------------------------------
@@ -2037,6 +2444,178 @@ function makeBundleState(opts) {
   assert(Array.isArray(resultOrphan.issueNumbers) && resultOrphan.issueNumbers.length === 2, 'T-bundle-3: orphan refuse carries issueNumbers, got ' + JSON.stringify(resultOrphan.issueNumbers));
   assert(resultOrphan.closurePolicy === 'all_or_nothing', 'T-bundle-3: orphan refuse carries closurePolicy, got ' + resultOrphan.closurePolicy);
   assert(resultOrphan.primaryIssue === 10, 'T-bundle-3: orphan refuse carries primaryIssue, got ' + resultOrphan.primaryIssue);
+}
+
+// ---------------------------------------------------------------------------
+// #335 — runMirrorProject (M1–M6) + orient plan-probe refusals (O1–O3).
+// Pure-core tests with injected io/shell seams (no subprocess, no real fs).
+// ---------------------------------------------------------------------------
+
+// Build an io seam over an in-memory set of "existing" paths + a recorder.
+function makeMirrorIo(existing, calls, stateContent) {
+  const set = new Set(existing);
+  return {
+    set,
+    io: {
+      exists: (p) => { calls.push(['exists', p]); return set.has(p); },
+      readFile: (p) => {
+        calls.push(['readFile', p]);
+        if (p.endsWith('workflow-state.md')) return stateContent;
+        throw new Error('ENOENT ' + p);
+      },
+      copyTree: (src, dst) => { calls.push(['copyTree', src, dst]); set.add(dst); },
+      renameSync: (a, b) => { calls.push(['renameSync', a, b]); set.delete(a); set.add(b); },
+      rmSync: (p) => { calls.push(['rmSync', p]); set.delete(p); },
+      mkdirSync: (d) => { calls.push(['mkdirSync', d]); },
+    },
+  };
+}
+
+const MAIN = '/main';
+const WT = '/wt';
+const STATE_WITH_WT = '## Sink\nworktree_path: ' + WT + '\n';
+const STATE_NO_WT = '## Sink\nbranch: workflow/issue-335\n';
+
+// M1: no worktree_path → ok/skipped(no_worktree); copyTree NEVER called.
+{
+  const calls = [];
+  const { io } = makeMirrorIo([path.join(MAIN, 'kaola-workflow', 'issue-335', 'workflow-state.md')], calls, STATE_NO_WT);
+  const r = runMirrorProject({ project: 'issue-335', mainRoot: MAIN, shell: () => { throw new Error('shell must not run'); }, io });
+  assert(r.result === 'ok' && r.status === 'skipped' && r.reason === 'no_worktree', 'M1: ok/skipped/no_worktree, got ' + JSON.stringify(r));
+  assert(!calls.some(c => c[0] === 'copyTree'), 'M1: copyTree never called on no_worktree');
+}
+
+// M1b: worktree_path recorded but dir missing → ok/skipped(worktree_dir_missing).
+{
+  const calls = [];
+  const { io } = makeMirrorIo([path.join(MAIN, 'kaola-workflow', 'issue-335', 'workflow-state.md')], calls, STATE_WITH_WT);
+  const r = runMirrorProject({ project: 'issue-335', mainRoot: MAIN, shell: () => { throw new Error('no shell'); }, io });
+  assert(r.result === 'ok' && r.status === 'skipped' && r.reason === 'worktree_dir_missing', 'M1b: skipped/worktree_dir_missing, got ' + JSON.stringify(r));
+  assert(r.worktreePath === WT, 'M1b: worktreePath echoed');
+  assert(!calls.some(c => c[0] === 'copyTree'), 'M1b: no copyTree');
+}
+
+// M2: dest plan already present → ok/exists; no copy/rename.
+{
+  const calls = [];
+  const stateMain = path.join(MAIN, 'kaola-workflow', 'issue-335', 'workflow-state.md');
+  const destPlan = path.join(WT, 'kaola-workflow', 'issue-335', 'workflow-plan.md');
+  const { io } = makeMirrorIo([stateMain, WT, destPlan], calls, STATE_WITH_WT);
+  const r = runMirrorProject({ project: 'issue-335', mainRoot: MAIN, shell: () => { throw new Error('no shell'); }, io });
+  assert(r.result === 'ok' && r.status === 'exists', 'M2: ok/exists, got ' + JSON.stringify(r));
+  assert(!calls.some(c => c[0] === 'copyTree'), 'M2: no copyTree when dest exists');
+  assert(!calls.some(c => c[0] === 'renameSync'), 'M2: no renameSync when dest exists');
+}
+
+// M3: happy path — call order copyTree → shell(validator --resume-check) → renameSync.
+{
+  const calls = [];
+  const stateMain = path.join(MAIN, 'kaola-workflow', 'issue-335', 'workflow-state.md');
+  const sourcePlan = path.join(MAIN, 'kaola-workflow', 'issue-335', 'workflow-plan.md');
+  const { io } = makeMirrorIo([stateMain, WT, sourcePlan], calls, STATE_WITH_WT);
+  const shellCalls = [];
+  const shell = (sp, args) => { shellCalls.push([path.basename(sp), args]); return { exitCode: 0, ok: true, planHash: 'h'.repeat(64) }; };
+  const r = runMirrorProject({ project: 'issue-335', mainRoot: MAIN, shell, io });
+  assert(r.result === 'ok' && r.status === 'mirrored' && r.verified === true, 'M3: ok/mirrored/verified, got ' + JSON.stringify(r));
+  assert(r.planHash === 'h'.repeat(64), 'M3: planHash surfaced from resume-check');
+  const order = calls.filter(c => ['copyTree', 'renameSync'].includes(c[0])).map(c => c[0]);
+  assert(JSON.stringify(order) === JSON.stringify(['copyTree', 'renameSync']), 'M3: copyTree before renameSync, got ' + JSON.stringify(order));
+  assert(shellCalls.length === 1 && shellCalls[0][0] === 'kaola-workflow-plan-validator.js' && shellCalls[0][1].includes('--resume-check'), 'M3: shells validator --resume-check, got ' + JSON.stringify(shellCalls));
+  // resume-check ran on the TMP copy, BEFORE the promote.
+  const tmpPlan = path.join(WT, 'kaola-workflow', '.mirror-tmp-issue-335', 'workflow-plan.md');
+  assert(shellCalls[0][1][0] === tmpPlan, 'M3: resume-check targets the tmp copy plan, got ' + shellCalls[0][1][0]);
+}
+
+// M4: verify-fail — resume-check ok:false → refuse mirror_verify_failed, tmp rmSync'd, NO renameSync.
+{
+  const calls = [];
+  const stateMain = path.join(MAIN, 'kaola-workflow', 'issue-335', 'workflow-state.md');
+  const sourcePlan = path.join(MAIN, 'kaola-workflow', 'issue-335', 'workflow-plan.md');
+  const { io } = makeMirrorIo([stateMain, WT, sourcePlan], calls, STATE_WITH_WT);
+  const shell = () => ({ exitCode: 1, ok: false, reason: 'plan_hash mismatch — tampered' });
+  const r = runMirrorProject({ project: 'issue-335', mainRoot: MAIN, shell, io });
+  assert(r.result === 'refuse' && r.reason === 'mirror_verify_failed', 'M4: refuse/mirror_verify_failed, got ' + JSON.stringify(r));
+  assert(/mismatch/.test(r.detail), 'M4: detail carries the resume-check reason');
+  assert(!calls.some(c => c[0] === 'renameSync'), 'M4: renameSync NEVER called on verify-fail');
+  const tmp = path.join(WT, 'kaola-workflow', '.mirror-tmp-issue-335');
+  assert(calls.some(c => c[0] === 'rmSync' && c[1] === tmp), 'M4: tmp rmSync cleaned up');
+}
+
+// M5: source plan missing → refuse source_plan_missing.
+{
+  const calls = [];
+  const stateMain = path.join(MAIN, 'kaola-workflow', 'issue-335', 'workflow-state.md');
+  const { io } = makeMirrorIo([stateMain, WT], calls, STATE_WITH_WT);  // no source plan, WT exists, no dest plan
+  const r = runMirrorProject({ project: 'issue-335', mainRoot: MAIN, shell: () => { throw new Error('no shell'); }, io });
+  assert(r.result === 'refuse' && r.reason === 'source_plan_missing', 'M5: refuse/source_plan_missing, got ' + JSON.stringify(r));
+  assert(/kaola-workflow-adapt/.test(r.repair), 'M5: repair routes to /kaola-workflow-adapt');
+}
+
+// M6: state missing → refuse state_missing (read-only, no copy).
+{
+  const calls = [];
+  const { io } = makeMirrorIo([], calls, '');  // nothing exists
+  const r = runMirrorProject({ project: 'issue-335', mainRoot: MAIN, shell: () => { throw new Error('no shell'); }, io });
+  assert(r.result === 'refuse' && r.reason === 'state_missing', 'M6: refuse/state_missing, got ' + JSON.stringify(r));
+  assert(!calls.some(c => c[0] === 'copyTree'), 'M6: no copyTree on state_missing');
+}
+
+// O1: orient probe — unmirrored worktree → refuse plan_not_mirrored, repair names mirror-project,
+//     and NO shell calls (read-only short-circuit before the resume-check shell).
+{
+  let shellCalled = false;
+  const r = runOrient({
+    planPath: '/wt/kaola-workflow/issue-335/workflow-plan.md',
+    statePath: '/wt/kaola-workflow/issue-335/workflow-state.md',
+    project: 'issue-335',
+    shell: () => { shellCalled = true; return { exitCode: 0 }; },
+    readFile: () => { throw new Error('must not read'); },
+    cacheExists: () => false,
+    planProbe: { planExists: false, isLinkedWorktree: true, mainPlanExists: true, mainPlanPath: '/main/kaola-workflow/issue-335/workflow-plan.md' },
+  });
+  assert(r.result === 'refuse' && r.reason === 'plan_not_mirrored', 'O1: refuse/plan_not_mirrored, got ' + JSON.stringify(r));
+  assert(/mirror-project/.test(r.repair), 'O1: repair names mirror-project');
+  assert(r.mainPlanPath === '/main/kaola-workflow/issue-335/workflow-plan.md', 'O1: mainPlanPath surfaced');
+  assert(shellCalled === false, 'O1: NO shell calls (read-only short-circuit)');
+}
+
+// O2: orient probe — main plan also absent (truly unauthored) → refuse plan_missing.
+{
+  const r = runOrient({
+    planPath: '/wt/kaola-workflow/issue-335/workflow-plan.md',
+    statePath: '/wt/kaola-workflow/issue-335/workflow-state.md',
+    project: 'issue-335',
+    shell: () => { throw new Error('no shell'); },
+    readFile: () => { throw new Error('no read'); },
+    cacheExists: () => false,
+    planProbe: { planExists: false, isLinkedWorktree: true, mainPlanExists: false, mainPlanPath: '/main/kaola-workflow/issue-335/workflow-plan.md' },
+  });
+  assert(r.result === 'refuse' && r.reason === 'plan_missing', 'O2: refuse/plan_missing, got ' + JSON.stringify(r));
+  assert(r.mainPlanPath === null, 'O2: mainPlanPath null when not unmirrored');
+  assert(/kaola-workflow-adapt/.test(r.repair), 'O2: repair routes to author/freeze');
+}
+
+// O3 (regression): NO planProbe injected → legacy tolerant behavior unchanged (returns ok,
+//    shells the validator/next-action as before — proven by the existing orient tests staying
+//    green; here assert the absent-probe path does NOT short-circuit to a refuse).
+{
+  const plan = makePlan(['| impl-core | pending | |', '| impl-other | pending | |']);
+  const r = runOrient({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project',
+    shell: (sp) => {
+      const b = path.basename(sp);
+      if (b === 'kaola-workflow-plan-validator.js') return { exitCode: 0, ok: true };
+      if (b === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', readySet: [], readyPending: [], allDone: false };
+      return { exitCode: 0 };
+    },
+    readFile: (f) => { if (f.endsWith('workflow-plan.md')) return plan; if (f.endsWith('workflow-state.md')) return makeState(); throw new Error('ENOENT ' + f); },
+    writeFile: () => { throw new Error('orient must not write'); },
+    cacheExists: () => false,
+    // planProbe deliberately omitted
+  });
+  assert(r.result === 'ok', 'O3: absent probe preserves the old tolerant ok-result, got ' + JSON.stringify({ result: r.result, reason: r.reason }));
 }
 
 // Summary

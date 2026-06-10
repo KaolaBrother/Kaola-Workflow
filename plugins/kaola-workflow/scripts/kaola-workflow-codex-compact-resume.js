@@ -6,8 +6,8 @@
 const fs = require('fs');
 const path = require('path');
 
-// Gate-verdict roles per plan-validator GATE_VERDICT_ROLES.
-const GATE_VERDICT_ROLES = new Set(['code-reviewer', 'security-reviewer', 'adversarial-verifier']);
+// Gate-verdict roles per plan-validator GATE_VERDICT_ROLES (#334 adds the non-delegable main-session-gate).
+const GATE_VERDICT_ROLES = new Set(['code-reviewer', 'security-reviewer', 'adversarial-verifier', 'main-session-gate']);
 
 function readStdin() {
   try {
@@ -213,7 +213,7 @@ function main() {
   // Section 1: active project
   // Section 2: next skill/command
   // Section 3: in-progress node
-  // Section 4: pending gates (gate-verdict roles only: code-reviewer, security-reviewer, adversarial-verifier)
+  // Section 4: pending gates (gate-verdict roles only: code-reviewer, security-reviewer, adversarial-verifier, main-session-gate)
   // Section 5: consent-halt markers
   // Section 6: task-mirror summary
   const lines = [

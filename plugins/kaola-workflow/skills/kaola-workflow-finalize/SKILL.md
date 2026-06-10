@@ -41,12 +41,14 @@ fi
 - `--resume-check` proves `plan_hash` integrity + structure + closed library.
 - `--gate-verify` proves every completed code/sensitive node is post-dominated by a
   **completed** reviewer in the `## Node Ledger` — closing the G1/H5 leak where a
-  required reviewer node is silently marked `n/a` at runtime.
+  required reviewer node is silently marked `n/a` at runtime. **G3 (#334): a
+  non-delegable `main-session-gate` must be complete — never `n/a` — and post-dominate
+  completed code nodes.**
 - `--barrier-check` re-scans the files actually written (git diff vs the merge-base of
   HEAD and `origin/main`) and refuses a sensitive write with no `security-reviewer`
   node, or an out-of-allowlist production write — closing H1/H3.
-- `--verdict-check` reads every completed `code-reviewer`, `security-reviewer`, and
-  `adversarial-verifier` node's `.cache/{node-id}.md` and requires a machine-readable
+- `--verdict-check` reads every completed `code-reviewer`, `security-reviewer`,
+  `adversarial-verifier`, and `main-session-gate` node's `.cache/{node-id}.md` and requires a machine-readable
   `verdict: pass` with `findings_blocking: 0`. Any nonzero exit **blocks the merge** —
   this proves every gate-role node recorded a passing verdict before the plan closes.
 
@@ -85,6 +87,20 @@ choices, or ambiguity that blocks correctness.
 5. Closure decision: scan all phase files for deferred items or user decisions. Ask before reorganizing issues or roadmap.
 6. Refresh `kaola-workflow/ROADMAP.md`.
 7. Archive is performed atomically by `cmdFinalize` in step 8b below. Do not perform a manual copy or git mv here.
+
+   **Keep-open partial-close terminal (#333/#336).** If the Closure Decision Gate keeps the issue
+   OPEN (partial implementation, residual follow-ups), the durable signal is one optional line in
+   the `## Sink` block: `issue_action: comment_keep_open` (default when absent: close), written by
+   the main session at the gate with user approval. Still archive through the SAME `finalize`
+   subcommand, adding `--keep-open` (the contractor adds `--keep-issue-open` to `cmdFinalize` when
+   the field is present). It stamps the archived `workflow-state.md` terminal
+   (`last_result: closed_keep_open`, `issue_disposition: kept-open`, no active `next_command`),
+   PRESERVES `kaola-workflow/.roadmap/issue-N.md`, and regenerates `ROADMAP.md` still listing #N
+   (closure invariant `keep-open-roadmap-preserved` enforces it). Never archive by manual
+   `mv`/`git mv`. **Keep-open is merge-sink-only**: `sink-merge --keep-issue-open` comments WITHOUT
+   closing; a PR/MR sink would auto-close via its `Closes #N` body, so Step 9 refuses a non-merge
+   sink (and the exit-3 PR/MR auto-pivot) under keep-open, and `sink-pr.js`/`sink-mr.js` refuse a
+   project carrying `issue_action: comment_keep_open`.
 8. Commit and push only approved files.
 
    ### Staging Guard
@@ -108,6 +124,8 @@ choices, or ambiguity that blocks correctness.
    If the check fails, do not stage; split the commit or coordinate manually.
 
    The mechanical finalization below — the artifact mirror, the `cmdFinalize` archive + status close (with `--keep-worktree`, merge path only), roadmap refresh, and the `chore: finalize ${KAOLA_PROJECT}` commit gate — is deterministic bookkeeping. The `contractor` Codex agent role is the SOLE HOME of this procedure and the session MUST delegate it; the contractor runs the scripts and authors the durable bookkeeping but never dispatches a role, judges, or asks the user. Only if the `contractor` subagent tooling is genuinely unavailable may the session run it inline, and that fallback MUST be logged as `local-fallback-tool-unavailable` in the `## Required Agent Compliance` ledger. The current session keeps the sink dispatch and issue-close decision. Because a subagent runs in its own shell, capture the sink metadata (`SINK_BRANCH`, `SINK_KIND`, `SINK_ISSUE_FLAG`, `ACTIVE_WORKTREE_PATH`) in THIS session before delegating — they are reused at the sink step and do not cross the delegation boundary.
+
+   Attestation boundary (#338): the contractor's Step 8b passes `--attest-contractor-spawn` to `cmdFinalize`, so a genuinely delegated run back-fills its own dispatch marker and the closure receipt reads `finalize_contractor_attested: attested` even where the SubagentStart hook cannot fire (a contractor dispatched into a linked worktree, or a hookless harness) — the main session must never pass that flag on an inline run. The adaptive plan's `finalize (<node>)` Required Agent Compliance row is recorded `main-session-direct` (its in-plan sink bookkeeping is main-session-direct by the plan-run contract); that row neither requires nor replaces the contractor's delegation of mechanical finalization here. When the session legitimately runs the mechanical finalization inline (tooling unavailable), it records `local-fallback-tool-unavailable` with evidence and does NOT pass `--attest-contractor-spawn`; the resulting `finalize_contractor_attested: missing` plus the ATTESTATION WARNING is the truthful, expected, non-blocking outcome.
 
    Before mirroring artifacts, resolve the linked worktree and copy Finalization artifacts:
 
@@ -153,6 +171,11 @@ choices, or ambiguity that blocks correctness.
    SINK_KIND="${SINK_KIND:-merge}"
    SINK_ISSUE_FLAG=""
    [ -n "$SINK_ISSUE" ] && [ "$SINK_ISSUE" != "unset" ] && SINK_ISSUE_FLAG="--issue $SINK_ISSUE"
+   # #336: keep-open partial-close terminal — issue_action defaults to close when absent.
+   SINK_ISSUE_ACTION=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | grep '^issue_action:' | awk '{print $2}')
+   SINK_ISSUE_ACTION="${SINK_ISSUE_ACTION:-close}"
+   SINK_KEEP_OPEN_FLAG=""
+   [ "$SINK_ISSUE_ACTION" = "comment_keep_open" ] && SINK_KEEP_OPEN_FLAG="--keep-issue-open"
    ```
 
    If `SINK_KIND` is `merge`, run `cmdFinalize` from the linked worktree after the artifact mirror and before the commit gate:
@@ -163,7 +186,7 @@ choices, or ambiguity that blocks correctness.
    if [ "$SINK_KIND" = "merge" ]; then
      (cd "$ACTIVE_WORKTREE_PATH" && node "$claim_script" finalize \
        --project "$KAOLA_PROJECT" \
-       --keep-worktree)
+       --keep-worktree $SINK_KEEP_OPEN_FLAG)
    fi
    ```
 
@@ -199,14 +222,26 @@ choices, or ambiguity that blocks correctness.
    : "${SINK_BRANCH:?SINK_BRANCH must be captured before archive}"
    : "${SINK_KIND:=merge}"
    : "${SINK_ISSUE_FLAG:=}"
+   : "${SINK_KEEP_OPEN_FLAG:=}"
+   # #336: keep-open is merge-sink-only — refuse a PR sink before dispatch.
+   if [ "$SINK_KIND" != "merge" ] && [ -n "$SINK_KEEP_OPEN_FLAG" ]; then
+     echo "BLOCKED: issue_action: comment_keep_open is only supported on the merge sink. PR/MR sinks close via the merged PR; switch sink: merge or remove issue_action." >&2
+     exit 1
+   fi
    case "$SINK_KIND" in
      pr)
        node "$scripts_dir/kaola-workflow-sink-pr.js" --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG --project "$KAOLA_PROJECT"
        ;;
      merge|*)
-       node "$scripts_dir/kaola-workflow-sink-merge.js" --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG --project "$KAOLA_PROJECT"
+       node "$scripts_dir/kaola-workflow-sink-merge.js" --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG $SINK_KEEP_OPEN_FLAG --project "$KAOLA_PROJECT"
        _SINK_MERGE_EXIT=$?
        if [ "$_SINK_MERGE_EXIT" -eq 3 ]; then
+         # #336: keep-open is merge-sink-only — never auto-pivot to a PR sink (its Closes #N body
+         # would close the kept-open issue; watch-pr would delete the preserved roadmap source).
+         if [ -n "$SINK_KEEP_OPEN_FLAG" ]; then
+           echo "BLOCKED: sink-merge exited 3 (merge-impossible) on a keep-open run. Keep-open is merge-sink-only: the PR fallback body closes the issue on merge and watch-pr would delete the preserved roadmap source. Remediate the merge blocker (see .cache/sink-fallback.json) and re-run sink-merge; do not pivot to a PR sink." >&2
+           exit 1
+         fi
          node "$scripts_dir/kaola-workflow-claim.js" sink-fallback \
            --project "$KAOLA_PROJECT"
          node "$scripts_dir/kaola-workflow-sink-pr.js" --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG --project "$KAOLA_PROJECT"

@@ -33,12 +33,21 @@ very issue's own adaptive run which has `worktree_path: ''`), the fallback sets
 The mirror below is SKIPPED in that case.
 
 ```bash
-# One-time main→worktree project-folder mirror (skipped when paths are equal / repo-root run)
-if [ "$ACTIVE_WORKTREE_PATH" != "$(pwd)" ]; then
-  mkdir -p "$ACTIVE_WORKTREE_PATH/kaola-workflow/${KAOLA_PROJECT}/"
-  cp -R "kaola-workflow/${KAOLA_PROJECT}/." "$ACTIVE_WORKTREE_PATH/kaola-workflow/${KAOLA_PROJECT}/"
-fi
+# Mechanical main→worktree project-folder mirror (#335) — atomic + plan_hash-verified.
+# Idempotent: mirrors once at first entry, NEVER overwrites an existing worktree copy (on
+# resume the worktree copy is authoritative). Run it from anywhere — it resolves the MAIN
+# checkout via git-common-dir and the worktree from workflow-state.md. Do NOT hand-`cp`.
+node "$KAOLA_SCRIPTS/kaola-workflow-adaptive-node.js" mirror-project \
+  --project {project} --json
 ```
+
+Read the typed result and branch:
+- `status: mirrored | exists | skipped` → proceed to `orient`.
+- `result: refuse` → STOP and surface the typed refusal verbatim. `mirror_verify_failed` means
+  the copied plan failed `plan_hash` re-verification — do NOT hand-copy around it; investigate the
+  main-checkout plan. `source_plan_missing` → route to `/kaola-workflow-adapt {project}`.
+- If a later `orient` refuses `plan_not_mirrored`, run `mirror-project` again and re-run `orient` —
+  never hand-`cp`.
 
 This copies the project folder (workflow-plan.md + Node Ledger + `.cache/`) into the worktree once
 at start. From this point pass `Working directory: ${ACTIVE_WORKTREE_PATH}` to EVERY contractor and
@@ -151,7 +160,9 @@ members and leaves the rest **queued**; `top-up` drains the queue by rolling bou
 **Deciding the unit:** the scheduler is **batch-aware** — `orient` signals `enterBatch:true` on a ≥2
 START frontier, and `close-and-open-next` returns `enterBatch:true` on a ≥2-wide downstream frontier
 so a fan-out is **never serialized**. `enterBatch:true` (or `readyPending.length >= 2`) → batch path;
-otherwise single-node path (steps 1–4, unchanged).
+otherwise single-node path (steps 1–4, unchanged). The frontier and `enterBatch` are computed over
+**delegable** nodes only — a `main-session-gate` (#334) is never a batch member and always runs on
+the single-node path.
 
 **Batch path:**
 - **(a) open-batch:** `node "$KAOLA_SCRIPTS/kaola-workflow-parallel-batch.js" open-batch --project {project} --json` — first runs a `--resume-check` integrity gate (refuse `plan_integrity_failed`, zero mutation); refuses a fresh open while a live `active-batch.json` exists (`active_batch_exists`) or an `opening` manifest needs repair (`reconcile_first`). Opens at most `FANOUT_CAP` members (the rest stay **queued** for `top-up`). For a write-role batch, checks isolated-worktree capability; when available, provisions one worktree per member, records N baselines, then performs a **crash-safe two-phase commit** — writes `active-batch.json` with `state:'opening'` BEFORE flipping the N ledger rows to `in_progress`, then promotes to `state:'open'`. **Degraded mode (serial fallback before dispatch, #320):** because this harness cannot FORCE a subagent's CWD (the `Working directory:` line is advisory), a write-role batch would leak edits to the parent worktree — so by DEFAULT `open-batch` serial-degrades a write-role frontier before any dispatch, returning `{result:'ok', degraded:true, reason:'cwd_unenforceable', opened:[], allDone:false}` with ZERO mutation (no ledger flip, no baseline, no manifest, no worktree). (The legacy `reason:'worktree_unavailable'` — host lacks worktree capability — uses the same shape.) On ANY `degraded:true`, the orchestrator MUST NOT concurrent-dispatch — it `log()`s the degradation and falls back to the single-node `open-next` path, opening write-role siblings one at a time (correctness preserved, wall-clock parallelism forgone — design §10.3). This is also why a frozen coarse-area-overlapping write antichain never hits a runtime `not_disjoint` refusal (the serial degrade fires first; the disjointness gate applies only in the opt-in `KAOLA_BATCH_CWD_ENFORCED` mode). Read-only batches are unaffected (no worktrees ever provisioned, never degraded).
@@ -223,6 +234,35 @@ whose UNSEALED `members` set matches the `in_progress` set; otherwise a typed re
    `{allDone:true}` is the DAG complete and ready to route to Finalization. If the close refuses,
    stay in the per-node loop and fix or refuse as with any other node.
 
+   Because the sink runs main-session-direct by design, `close-and-open-next` records its Required
+   Agent Compliance row as `main-session-direct` — never `subagent-invoked`, which would falsely
+   certify a dispatch the sink contract forbids. This row covers ONLY the in-plan sink bookkeeping;
+   the Finalization phase's mechanical bookkeeping (`/kaola-workflow-finalize`) is still delegated to
+   the `contractor` and is attested separately (`finalize_contractor_attested`).
+
+   **Special case — `role: main-session-gate` (#334, non-delegable):** like the `finalize`
+   sink, this role is never a dispatchable subagent — `kaola-workflow-resolve-agent-model.js
+   main-session-gate` returns an empty model and you do **not** delegate to an agent profile.
+   The MAIN session performs the node's acceptance procedure itself (the check the plan authored
+   this gate for — e.g. a GPU / visual true-black comparison, a device-in-hand verification, an
+   explicit human sign-off). When the check needs the user's eyes, surface the artifacts and WAIT
+   for the user's explicit confirmation — never infer a pass. Then record verdict evidence
+   (column-0, lowercase):
+
+   ```bash
+   printf 'verdict: pass\nfindings_blocking: 0\n<one-line what-was-checked summary>\n' | \
+     node "$KAOLA_SCRIPTS/kaola-workflow-adaptive-node.js" record-evidence \
+       --project {project} --node-id {node-id} --stdin --json
+   ```
+
+   then `close-and-open-next` as for any node. The close REFUSES (`evidence_shape_failed`,
+   `missingTokenClass: verdict`) without a parseable `verdict: pass|fail` line, and an `n/a`
+   self-skip is refused for this role. Record an honest `verdict: fail` and close — blocking
+   happens at Finalization's `--verdict-check`/`--gate-verify` (G3); route the repair via the
+   bounded #279 controller / `reopen-node`, after which the gate re-runs (it is reset with the
+   reviewer gates). A `main-session-gate` node never joins a parallel batch — when it appears in a
+   ready frontier, run it on the single-node path.
+
    **For non-finalize roles, after the role returns, record durable evidence immediately** before
    step 3 — `close-and-open-next` refuses (`evidence_absent` if absent, `evidence_shape_failed` if malformed) when `.cache/{node-id}.md` is absent/malformed
    when it runs:
@@ -232,6 +272,34 @@ whose UNSEALED `members` set matches the `in_progress` set; otherwise a typed re
      node "$KAOLA_SCRIPTS/kaola-workflow-adaptive-node.js" record-evidence \
        --project {project} --node-id {node-id} --stdin --json
    ```
+
+   **Forge-port mirror nodes (#340):** when the dispatched node's declared write set contains a
+   gitlab/gitea edition-named port (`plugins/kaola-workflow-{gitlab,gitea}/scripts/kaola-{gitlab,gitea}-workflow-<x>.js`)
+   of a root script edited earlier in this run, the role delegation MUST state the canonical spec as
+   the **full accumulated root diff** — instruct the role: run `git diff <run-base>..HEAD --
+   scripts/kaola-workflow-<x>.js` and mirror EVERY hunk modulo forge nouns; do NOT work from a
+   summary of individual upstream nodes. A per-concern enumeration is how the #328 run shipped half a
+   mirror with all four chains green.
+
+   **Forge-touching node guard (#341):** when the opened node's declared write set touches the
+   edition plugin trees (`plugins/kaola-workflow*/` — i.e. the workspace is the Kaola-Workflow
+   repo itself), pin BOTH halves in the dispatch prompt: (a) plugin agent/command/skill prose
+   must stay **forge-neutral** — never name a forge-specific CLI binary or forge brand (no
+   CLI-example parentheticals copied from an issue spec; write "the forge CLI") — and the plugin
+   role-agent profiles (`plugins/*/agents/*.toml`) are byte-identical mirrors across the three
+   plugin editions; (b) the node verifies every changed edition file BEFORE `record-evidence`
+   with the standalone, count-independent forbidden-token check:
+
+   ```bash
+   node plugins/kaola-workflow-gitlab/scripts/validate-kaola-workflow-gitlab-contracts.js \
+     --forbidden-only <changed-file>...
+   node plugins/kaola-workflow-gitea/scripts/validate-kaola-workflow-gitea-contracts.js \
+     --forbidden-only <changed-file>...
+   ```
+
+   This catches a forge-CLI leak at the node that wrote it, even while the edition
+   agent/command counts are transiently stale mid-run (the full chains may legitimately be red
+   during a count bump — the #328 latent defect).
 
 3. **close-and-open-next (SCRIPT-ENFORCED typed transaction)** — run from `${ACTIVE_WORKTREE_PATH}`:
 
@@ -350,7 +418,7 @@ Findings marked `out_of_scope`, `pre_existing`, or `needs_user_decision` (or `ac
 `document`) do not block — but they MUST be recorded as **explicit, machine-readable** follow-ups /
 escalations (they remain in the evidence and surface at finalize), never silently dropped.
 
-### Re-opening an already-complete node (frozen-plan repair — #308)
+### Re-opening an already-complete node (frozen-plan repair — #308, mid-gate #343)
 
 The bounded controller above repairs a finding on the node that is *currently* `in_progress`. When
 a repair must reach a node already marked `complete` — a Finalization-surfaced barrier/verdict
@@ -366,10 +434,24 @@ node "$KAOLA_SCRIPTS/kaola-workflow-adaptive-node.js" reopen-node --project {pro
 `security-reviewer` / `adversarial-verifier`) from `complete → pending`, removes their stale
 `.cache/barrier-base-<id>` baselines, reopens N to `in_progress`, and re-records a fresh node-start
 baseline at the current merged state — so the re-run is barrier-clean and the gate MUST re-approve.
-It **refuses** over a live parallel batch / interrupted top-up (`member.opening: true`) and over a
-node that is not `complete` (reconcile first). Readiness is **transitive** (#308): a downstream sink
-whose own direct deps are still `complete` is correctly withheld until the reopened gate re-passes,
-so the plan cannot race ahead of the repair. After it returns, re-enter the per-node loop at the
+It **refuses** over a live parallel batch / interrupted top-up (`member.opening: true`), over a
+target node that is not `complete`, and — typed `would_orphan_in_progress` — when any
+`in_progress` row is NOT a post-dominating gate of N (close or quiesce that node first). A
+post-dominating gate that is itself still **`in_progress`** is NOT a refusal: it folds back to
+`pending` in the same transaction (#343), with its stale baseline removed. Readiness is
+**transitive** (#308): a downstream sink whose own direct deps are still `complete` is correctly
+withheld until the reopened gate re-passes, so the plan cannot race ahead of the repair.
+
+**Mid-gate repair (#343).** When a gate that is currently `in_progress` emits a blocking finding
+whose fix belongs to an already-`complete` upstream node N, do NOT close the failed gate and do
+NOT advance the DAG toward allDone on the known-broken tree. Run `reopen-node N` directly: the
+`in_progress` gate folds back to `pending`, N reopens with a fresh baseline, and after the repair
+lands `close-and-open-next N` re-opens the gate for a fresh re-review. (The previous workaround —
+close the failed gate and run the remaining nodes to allDone before reopening — worked only
+because the per-node `--verdict-check` is **informational**; the **blocking** verdict enforcement
+is at Finalization. That distinction still holds, but the allDone detour is no longer required.)
+
+After it returns, re-enter the per-node loop at the
 reopened node and reflect BOTH ledger transitions in the task list (N and its reset gate). If the
 ledger is missing a row for any node (a hand-authored or externally-edited plan),
 `kaola-workflow-plan-validator.js --freeze --repair` reconciles `## Node Ledger` to `## Nodes` — adding a

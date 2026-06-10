@@ -258,6 +258,8 @@ Manages the local roadmap mirror (`kaola-workflow/ROADMAP.md`) and per-issue met
 
 When an active workflow folder is finalized (`cmdFinalize`) or archived after a PR merge (`watch-pr` on MERGED status), the closure process automatically removes the corresponding `.roadmap/issue-{N}.md` file and regenerates `ROADMAP.md`. This ensures the local roadmap never contains stale entries for closed issues. The cleanup is scoped to closed-status archives only; abandoned folders leave the roadmap entry untouched (so the issue can be reopened if needed). When finalizing from a linked worktree, `cmdFinalize` stages only the finalized project's own paths — its `kaola-workflow/archive/<project>/` band, the `kaola-workflow/<project>/`→archive rename (recorded as a `git rm -r --cached` of the live folder plus a `git add` of the archive dest), `kaola-workflow/.roadmap/`, and `kaola-workflow/ROADMAP.md` — rather than a broad `git add -A kaola-workflow/`, so a stray foreign `kaola-workflow/archive/<other>/` is never swept into the finalize commit (issue #261).
 
+`cmdFinalize` accepts `--keep-open` (and `--keep-issue-open`) for a keep-open partial-close run (the Closure Decision Gate kept the issue open). Since issue #336 this is the full script-side keep-open sink lane, not the #333 stamp-only stub: it stamps the archived `workflow-state.md` (`last_result: closed_keep_open`, `issue_disposition: kept-open`, no active `next_command`), records `remote_issue_closed: kept_open` + `roadmap_source_removed: kept` in the receipt, and PRESERVES `kaola-workflow/.roadmap/issue-N.md` (`archiveProjectDir` skips the unlink) while still regenerating `ROADMAP.md` (which keeps listing `#N`). Keep-open is also derivable from the durable `## Sink` field `issue_action: comment_keep_open` (belt-and-suspenders: the flag OR the field triggers it, so a contractor that forgets the flag cannot silently close-mode the run). See the **Keep-open partial-close lane** subsection under § Closure Contract for the full behavior matrix and the merge-sink-only fence.
+
 ## Adaptive Plan Validation
 
 ### Script: `kaola-workflow-plan-validator.js`
@@ -275,14 +277,14 @@ kaola-workflow-plan-validator.js <workflow-plan.md> [--json] [--freeze [--repair
 - **default** — Validate and print the governance verdict. In-grammar prints `in-grammar: auto-run` or `in-grammar: ask — <reasons>`; out of grammar prints `typed refusal (out of grammar): <errors>`.
 - **`--freeze`** — Validate, and if in-grammar, compute the `plan_hash` and write it into the plan file as an HTML comment. Prints `frozen (<decision>) plan_hash=<sha256>` on success. After freeze the plan's `## Meta` + `## Nodes` are author-immutable. With **`--repair`** (issue #308), first reconcile the `## Node Ledger` to `## Nodes` — adding a `pending` row for any node present in `## Nodes` but missing from the ledger, **never** dropping or rewriting an existing status — then freeze. The reconcile cannot move `plan_hash` (the hash covers only `## Meta` + `## Nodes`), so a node added to a frozen plan can be re-frozen-with-repair to give it a schedulable ledger row without re-stamping. The JSON output adds `"reconciled": [<ids>]`.
 - **`--resume-check`** — Re-validate **only** closed-library membership, structural grammar, and `plan_hash` integrity — **not** the full gate rubric (re-running it would brick an in-flight plan if the rubric tightened after freeze). Prints `resume ok` or `typed refusal: <reason>`.
-- **`--gate-verify`** (issue #231) — Verify gate **execution** over the `## Node Ledger`: a *completed* `code-reviewer` must post-dominate every completed code-producing node (G1) and a *completed* `security-reviewer` every completed sensitive node (G2). A required reviewer left pending or marked `n/a` while a node it covers is `complete` is an unsatisfied gate. PURE + toggle-agnostic (reads parsed nodes + ledger only). Prints `gate execution verified` or `typed refusal: <unsatisfied>`. Surfaced non-blocking by `routeAdaptive` (as `pendingGates`) and enforced as a hard merge gate in Finalization.
+- **`--gate-verify`** (issue #231) — Verify gate **execution** over the `## Node Ledger`: a *completed* `code-reviewer` must post-dominate every completed code-producing node (G1), a *completed* `security-reviewer` every completed sensitive node (G2), and (issue #334) a *completed* `main-session-gate` every completed code-producing node when the plan declares one (**G3** — a non-delegable acceptance gate also has no legal `n/a` route, so an `n/a` gate row is an unsatisfied gate outright). A required gate left pending or marked `n/a` while a node it covers is `complete` is an unsatisfied gate. PURE + toggle-agnostic (reads parsed nodes + ledger only). Prints `gate execution verified` or `typed refusal: <unsatisfied>`. Surfaced non-blocking by `routeAdaptive` (as `pendingGates`) and enforced as a hard merge gate in Finalization.
 - **`--record-base --node-id ID`** (issue #239) — Snapshot the **full worktree** (tracked + untracked, honoring `.gitignore`) as node `ID`'s per-instance baseline at node start, via a throwaway index (`git add -A` into a temp `GIT_INDEX_FILE` outside the repo → `git write-tree`), and store the tree SHA in `.cache/barrier-base-<id>`. **Idempotent**: if a baseline already exists for the node it is *reused* (`reused: true`), so a crash + re-dispatch or a consent-halt re-entry never re-snapshots a now-dirty tree and launders the crashed attempt's writes. Refuses without `--node-id`. Prints `recorded base <tree> for node <id>` / `reused base …`.
 - **`--barrier-check [--node-id ID] [--base REF]`** (issue #231; per-node tree-diff #239) — Re-scan the files actually written and refuse on (a) a Phase-5 **sensitive** actual write when the plan has no `security-reviewer` node (closes H1), (b) an out-of-**allowlist** production write — a non-docs, non-test, non-`kaola-workflow/` write not in the allowlist (closes H3), or (c) a **foreign-project archive** write — an actual write under `kaola-workflow/archive/<X>/` whose `<X>` is neither the finalized project nor its `<project>.archived-<ts>` collision-rename (issue #261). Fix (c) scopes the otherwise-blanket `kaola-workflow/` artifact exemption so a stray cross-issue `archive/<other>/` folder cannot reach a protected branch undetected; the finalized project is `opts.project`, threaded from the validator's `projTag` (the basename of the directory holding `workflow-plan.md`), and the check is fail-closed (absent project ⇒ any archive write is treated as foreign). Two modes:
   - **Whole-plan** (no `--node-id`, the Finalization merge gate): `git diff --name-only` vs the merge-base of `HEAD` and `--base` (default `origin/main`; cumulative, so committed sensitive writes are not invisible), allowlist = the **union** of all declared write sets, plus the v3.20.1 ledger-consistency floor.
   - **Per-node** (`--node-id ID`): tree-diff (`git diff-tree`) the current full-worktree snapshot against the node's **recorded node-start snapshot** (`--record-base`), so it attributes **exactly this node's own changes** — new / modified / deleted, tracked or untracked — without over-attributing prior nodes' still-uncommitted source or pre-existing strays, and checks them against the node's **own** declared write set. `--base` is **rejected** here (the baseline is the recorded snapshot; honoring `--base HEAD` after a commit would empty the diff and neuter the gate); fail-closed if no base was recorded.
 
   PURE core (`barrierCheck(content, actualPaths, opts)`); only the CLI shells out to git, failing closed (typed refusal) on any git error. Prints `barrier ok` or `typed refusal: <errors>`.
-- **`--verdict-check [--node-id ID]`** (issue #251) — Verify that every completed gate-role node's `.cache` evidence file carries `verdict: pass` and `findings_blocking: 0`. Exit 1 on any failure. Per-node (`--node-id ID`): checks one node; non-gate roles self-skip (exit 0, `ok: true`). Whole-plan (no `--node-id`): checks all completed gate-role nodes in the ledger; an `adversarial-verifier` fan-out applies majority-refute over sibling per-instance `.cache/adversarial-verifier-*.md` files. PURE + toggle-agnostic. Wired informational per-node in `kaola-workflow-commit-node.js` and enforced as a hard merge gate in Finalization. Prints `verdict ok` or `typed refusal: verdict-check failed`.
+- **`--verdict-check [--node-id ID]`** (issue #251) — Verify that every completed gate-role node's `.cache` evidence file carries `verdict: pass` and `findings_blocking: 0`. The gate-role set is `code-reviewer`, `security-reviewer`, `adversarial-verifier`, and (issue #334) `main-session-gate`. Exit 1 on any failure. Per-node (`--node-id ID`): checks one node; non-gate roles self-skip (exit 0, `ok: true`). Whole-plan (no `--node-id`): checks all completed gate-role nodes in the ledger; an `adversarial-verifier` fan-out applies majority-refute over sibling per-instance `.cache/adversarial-verifier-*.md` files. PURE + toggle-agnostic. Wired informational per-node in `kaola-workflow-commit-node.js` and enforced as a hard merge gate in Finalization. Prints `verdict ok` or `typed refusal: verdict-check failed`.
 - **`--selector-check --node-id ID`** (issue #263) — Check which `select` arm the `selector_source` node chose and compute which arms to mark `n/a`. Requires `--node-id`. Non-selector nodes (not a `selector_source` of any group) return `{ ok: true, isSelector: false, armsToNa: [] }` and exit 0 — never false-blocks. A `selector_source` node with a missing or foreign `selector: <arm-id>` value in its `.cache/<id>.md` evidence returns `{ ok: false, isSelector: true, errors: [...] }` and exits 1 (fail-closed, blocking the commit). Success: `{ ok: true, isSelector: true, selected: "<arm-id>", group: "<group>", armsToNa: ["<arm-id>", ...] }`. The caller (contractor) transcribes `armsToNa` into `n/a` ledger rows; `next-action.js` treats `n/a` arms as terminal so only the selected arm becomes ready. Wired BLOCKING per-node in `kaola-workflow-commit-node.js`.
 - **`--json`** — Emit the machine-readable result object (below) instead of the human line; composes with any mode.
 - **`--help` / `-h` / no args** — Print usage and exit 0.
@@ -306,7 +308,7 @@ kaola-workflow-plan-validator.js <workflow-plan.md> [--json] [--freeze [--repair
   - **Unreadable plan path**: `{ "result": "refuse", "errors": ["cannot read plan: <path>"] }` — no `planHash`, no `sink`.
   - **No parseable `## Nodes` table** (early return before a sink can be computed): `{ "result": "refuse", "errors": ["plan has no parseable ## Nodes table"], "planHash": "<sha256>" }` — `planHash` present, `sink` omitted.
   - **Grammar / gate refusal** (library, structure, caps, disjointness, or a post-dominance gate failed): `{ "result": "refuse", "errors": ["..."], "planHash": "<sha256>", "sink": "<node-id>|null" }` — both present (`sink` is `null` when there is no unique `finalize` terminal).
-- `--freeze`: `{ "result", "decision", "planHash", "frozen": true|false, "risk", "errors" }` — sync-group gap refusals (see Grammar above) are among the typed refusals that prevent `frozen:true`; the check also runs on the default `--json` validate but not on `--resume-check`, `--gate-verify`, `--barrier-check`, or `--verdict-check`.
+- `--freeze`: `{ "result", "decision", "planHash", "frozen": true|false, "risk", "errors" }` — sync-group gap, **agent-registration gap (#340)**, and **forge-port ordering gap (#340)** refusals (see Grammar above) are among the typed refusals that prevent `frozen:true`; these checks also run on the default `--json` validate but not on `--resume-check`, `--gate-verify`, `--barrier-check`, or `--verdict-check`.
 - `--resume-check`: `{ "ok": true, "planHash": "<sha256>" }` or `{ "ok": false, "reason": "..." }`
 - `--gate-verify`: `{ "ok": true, "unsatisfied": [] }` or `{ "ok": false, "unsatisfied": [{ "requirement": "G1 gate execution", "reason": "..." }] }`
 - `--record-base`: `{ "result": "ok", "nodeId": "<id>", "base": "<tree-sha>" }` (fresh) or `{ ..., "reused": true }` (idempotent re-entry); `{ "result": "refuse", "errors": ["--record-base requires --node-id <id>"] }` without a node id.
@@ -317,13 +319,39 @@ kaola-workflow-plan-validator.js <workflow-plan.md> [--json] [--freeze [--repair
   - Selector with missing/foreign value (exit 1): `{ "ok": false, "isSelector": true, "errors": ["selector_source \"<id>\" produced no selector: line"] }`
   - Selector with valid selected arm: `{ "ok": true, "isSelector": true, "selected": "<arm-id>", "group": "<group>", "armsToNa": ["<arm-id>", ...] }`
 
-**Grammar (out of grammar ⇒ typed refusal):** every role drawn from the runtime-closed installed library (the eleven canonical roles — including `implementer`, which is an IMPLEMENT_ROLES member requiring `code-reviewer` post-dominance (G1) like `tdd-guide`, but for changes with no natural failing-unit-test — unioned with any maintainer-added `agents/*.md`); a single unique `finalize` sink; an acyclic DAG; exactly four node shapes — `sequence`, `fanout(<group>)` (homogeneous role, width ≤ `FANOUT_CAP` (default 4, env `KAOLA_FANOUT_CAP`), write-role members pairwise-disjoint), `loop(<cap>)` (cap ≤ `LOOP_CAP` = 5), and `select(<group>)` (issue #263: Classify-And-Act arm — see G-SEL rules below); read-only roles declare no write set; ≤ `FILE_CEILING` (6) files per node; and the two computed **post-dominance** gates — **G1** `code-reviewer` post-dominates every code-producing node (implement roles, plus any write role writing a non-docs file), **G2** `security-reviewer` post-dominates every sensitive node. Post-dominance is computed as reachability-after-gate-removal over the unique sink. The `## Nodes` `cardinality` column is **reserved/advisory** — parsed but neither validated nor used by the grammar or the gates (fan-out width is the count of nodes sharing a `fanout(<group>)` token; the loop bound is the `loop(<cap>)` cap), yet its text still contributes to `plan_hash` as part of `## Nodes`, so it must be present and stable. **G-SEL rules (Classify-And-Act, #263):** G-SEL-1: a select group needs ≥ 2 arms; all arms must name the same `selector_source` (which must exist in the plan, be read-only, and be listed in every arm's `depends_on`); every arm in a `select(<group>)` group MUST carry a non-empty `selector_source` value — a blank arm is a typed refusal: `G-SEL-1b: arm "<id>" in select group "<group>" has no selector_source declared` (issue #268; additive — no existing gate is relaxed); additionally, group names are a **global namespace** — if a name is shared by arms whose `selector_source` nodes differ, the validator emits a typed refusal: `G-SEL-1: select group name "<name>" used by arms with different selector_source nodes; use distinct group names for independent groups` (issue #271; additive — no existing gate is relaxed). Authoring rule: independent select groups MUST use distinct group names. G-SEL-2: gate roles (`code-reviewer`, `security-reviewer`, `adversarial-verifier`) cannot be select arms. G-SEL-3: no-op by design (G1/G2 post-dominance already applies to all nodes including arms). G-SEL-4: arm write sets must be pairwise disjoint-or-identical. **Sync-group gap (#274):** if any node's `declared_write_set` contains one half of a byte-identical sync pair — a `COMMON_SCRIPTS` member's `scripts/` ↔ `plugins/kaola-workflow/scripts/` mirror, or any member of a `BYTE_IDENTICAL_GROUPS` entry — without the peer(s) appearing in *some* node's write set, the validator emits a typed refusal: `sync-group gap: node <id> declares "<path>" without its byte-identical peer "<peer path>" (#274)` (group form appends the group label). The sync sets are read from `validate-script-sync.js`'s exported `COMMON_SCRIPTS`/`BYTE_IDENTICAL_GROUPS` and are a graceful no-op when that module is absent (Codex/GitLab/Gitea copies, installed user projects).
+**Grammar (out of grammar ⇒ typed refusal):** every role drawn from the runtime-closed installed library (the eleven canonical roles — including `implementer`, which is an IMPLEMENT_ROLES member requiring `code-reviewer` post-dominance (G1) like `tdd-guide`, but for changes with no natural failing-unit-test — unioned with any maintainer-added `agents/*.md`); a single unique `finalize` sink; an acyclic DAG; exactly four node shapes — `sequence`, `fanout(<group>)` (homogeneous role, width ≤ `FANOUT_CAP` (default 4, env `KAOLA_FANOUT_CAP`), write-role members pairwise-disjoint), `loop(<cap>)` (cap ≤ `LOOP_CAP` = 5), and `select(<group>)` (issue #263: Classify-And-Act arm — see G-SEL rules below); read-only roles declare no write set; ≤ `FILE_CEILING` (6) files per node; and the computed **post-dominance** gates — **G1** `code-reviewer` post-dominates every code-producing node (implement roles, plus any write role writing a non-docs file), **G2** `security-reviewer` post-dominates every sensitive node, and (issue #334, active only when present) **G3** a non-delegable `main-session-gate` post-dominates every code-producing node. Post-dominance is computed as reachability-after-gate-removal over the unique sink. **Non-delegable main-session gate (`main-session-gate`, #334):** a *built-in role token* (like the `finalize` sink — no `agents/*.md` profile, never dispatched as a subagent; the main session itself performs the acceptance check, e.g. a GPU/visual confirmation or human sign-off, and records `verdict: pass|fail` into `.cache/{id}.md`). It is read-only (declares no write set), shape `sequence` only (never a fan-out member, loop, or select arm — refused otherwise), a `GATE_VERDICT_ROLES` member (so `--verdict-check` requires its verdict and G-SEL-2 forbids it as a select arm), and excluded from parallel-batch membership. G3 (freeze) plus its runtime `--gate-verify` check (no legal `n/a` route) make finalization provably impossible until the gate is complete with a passing verdict. The `## Nodes` `cardinality` column is **reserved/advisory** — parsed but neither validated nor used by the grammar or the gates (fan-out width is the count of nodes sharing a `fanout(<group>)` token; the loop bound is the `loop(<cap>)` cap), yet its text still contributes to `plan_hash` as part of `## Nodes`, so it must be present and stable. **G-SEL rules (Classify-And-Act, #263):** G-SEL-1: a select group needs ≥ 2 arms; all arms must name the same `selector_source` (which must exist in the plan, be read-only, and be listed in every arm's `depends_on`); every arm in a `select(<group>)` group MUST carry a non-empty `selector_source` value — a blank arm is a typed refusal: `G-SEL-1b: arm "<id>" in select group "<group>" has no selector_source declared` (issue #268; additive — no existing gate is relaxed); additionally, group names are a **global namespace** — if a name is shared by arms whose `selector_source` nodes differ, the validator emits a typed refusal: `G-SEL-1: select group name "<name>" used by arms with different selector_source nodes; use distinct group names for independent groups` (issue #271; additive — no existing gate is relaxed). Authoring rule: independent select groups MUST use distinct group names. G-SEL-2: gate roles (`code-reviewer`, `security-reviewer`, `adversarial-verifier`) cannot be select arms. G-SEL-3: no-op by design (G1/G2 post-dominance already applies to all nodes including arms). G-SEL-4: arm write sets must be pairwise disjoint-or-identical. **Sync-group gap (#274):** if any node's `declared_write_set` contains one half of a byte-identical sync pair — a `COMMON_SCRIPTS` member's `scripts/` ↔ `plugins/kaola-workflow/scripts/` mirror, or any member of a `BYTE_IDENTICAL_GROUPS` entry — without the peer(s) appearing in *some* node's write set, the validator emits a typed refusal: `sync-group gap: node <id> declares "<path>" without its byte-identical peer "<peer path>" (#274)` (group form appends the group label). The sync sets are read from `validate-script-sync.js`'s exported `COMMON_SCRIPTS`/`BYTE_IDENTICAL_GROUPS` and are a graceful no-op when that module is absent (Codex/GitLab/Gitea copies, installed user projects). **Agent-registration gap (#340):** when the **union** of all nodes' write sets adds a new agent profile (`agents/<name>.md` or a plugin `agents/<name>.toml` that does not yet exist on disk) but omits any path in that agent's 22-path *registration surface* — the three sibling edition profiles, the three `config/agents.toml` codex-dispatch templates, `validate-vendored-agents.js`, `install.sh`/`uninstall.sh` `REQUIRED_AGENTS`, `resolve-agent-model.js` (×4), the plan-validator `CANONICAL_ROLES` (×4), the gitlab/gitea contract-validator agent counts, and the two forge `test-*-workflow-scripts.js` counts — the validator emits a typed refusal: `agent-registration gap: plan adds new agent "<name>" but no node declares "<req>" — an agent-set delta must carry its full registration surface (#340)`. These registries are exact-match (keyed on no symbol of the new file), so #306 symbol-grep cannot find them. The check is **anchor-gated** to the Kaola-Workflow repo itself (inert unless `<root>/scripts/validate-vendored-agents.js` exists), uses the **union** across nodes (the 22-path surface cannot fit `FILE_CEILING`=6 in one node), and fires on additions only — a role *removal* is indistinguishable from an edit in a declared write set (covered by the planner prose checklist + the derived parity guards in the contract validators). **Forge-port ordering gap (#340):** a node whose write set contains a gitlab/gitea **edition-named port** of a root script (`plugins/kaola-workflow-{gitlab,gitea}/scripts/kaola-{gitlab,gitea}-workflow-<x>.js` ↦ `scripts/kaola-workflow-<x>.js`) must be a **transitive descendant** of every *other* node that writes that root script — the canonical mirror spec is the full accumulated root diff, which only exists after all root edits land. Same-node root+port co-writes (atomic mirror) and a port with no root-writing node in the plan (forge-only fix) are allowed; otherwise the validator refuses: `forge-port ordering gap: node <id> writes port "<p>" but node <other> writes its root source "<rootSrc>" and is not upstream of <id> — order forge-port mirror nodes after ALL root edits and mirror the full accumulated root diff (#340)`.
 
 **Governance (in-grammar plans only):** `decision = ask` when risky, else `auto-run` — over-approximated and fail-closed (uncertain ⇒ risky). Risk is any **sensitivity** (frozen `## Meta` labels in a Phase-5 category, or a declared write set matching the auth / payments / user-data / filesystem / external-API / secrets patterns), any **blast-radius** (write-role fan-out N ≥ 2, a `SHARED_INFRA` touch, or a bounded loop), or **uncertainty** (frozen labels absent). An `auto-run` authorization is provisional and revocable at the per-node barrier, which is now **script-enforced** (issue #231): `--gate-verify` proves the required reviewers actually executed over the `## Node Ledger`, `--verdict-check` (#251) proves those reviewers actually *approved* (a parseable `verdict: pass` / `findings_blocking: 0`, majority-refute over an `adversarial-verifier` fan-out, fail-closed and blocking at the Finalization merge gate), and `--barrier-check` re-scans the files actually written and refuses a surprise sensitive or out-of-allowlist write. The static `auto-run` verdict is no longer the entire enforceable authorization boundary.
 
 **`plan_hash`:** SHA-256 over the whitespace-normalized author-immutable `## Meta` (frozen `labels:`) + `## Nodes` sections; the mutable `## Node Ledger` and the hash comment itself are excluded. Stored inside `workflow-plan.md` as `<!-- plan_hash: <64-hex> -->` and re-checked on every load — a mismatch is tampering and yields a typed refusal on `--resume-check`. The full `workflow-plan.md` artifact contract (`## Meta`, the `## Nodes` table schema, and the `## Node Ledger`) is documented in `docs/workflow-state-contract.md`. A barrier consent-halt is durable in BOTH `workflow-state.md` (`escalated_to_full: consent`) and the non-hashed `## Node Ledger` (`consent_halt: pending`, issue #234), so a lost/regenerated `workflow-state.md` cannot silently drop the halt.
 
 **Authoring-entry guard (`kaola-workflow-claim.js authoring-allowed`, issue #235):** the only switch-reading guard besides `claimProject` selection. `/kaola-workflow-adapt` runs `node kaola-workflow-claim.js authoring-allowed --project <p>` BEFORE authoring/freezing a plan; it returns `{ "status": "authoring_allowed", "allowed": true }` when the `enable_adaptive` switch is ON, else a typed `{ "status": "authoring_refused", "allowed": false, "reasoning": "...OFF...#44" }` (exit 0; the caller branches on `status`). The validator stays toggle-agnostic — the switch is read only here and in `claimProject`.
+
+## Forge Contract Validators (issue #341)
+
+`plugins/kaola-workflow-gitlab/scripts/validate-kaola-workflow-gitlab-contracts.js` and its gitea
+twin enforce forge-neutrality (`assertNoForbidden`) across every plugin command/skill/hook/agent/
+config file, scanning **before** any file-count assertion so a forge-CLI leak (`gh`/`glab`, a forge
+brand, a forge request noun) is never masked by a transiently-stale agent/command/skill count (the
+#328 latent defect). Each validator also exposes a standalone, count-independent mode for a
+forge-touching adaptive node to verify just its own changed files:
+
+```
+node plugins/kaola-workflow-gitlab/scripts/validate-kaola-workflow-gitlab-contracts.js --forbidden-only <file> [<file> ...]
+node plugins/kaola-workflow-gitea/scripts/validate-kaola-workflow-gitea-contracts.js  --forbidden-only <file> [<file> ...]
+```
+
+- **Path resolution:** each `<file>` is repo-root-relative or absolute. The root is anchored via
+  `__dirname` (three levels up from the script), so the check resolves correctly from any cwd —
+  including a `.kw/worktrees/<project>/` worktree running its own copy of the validator. Absolute
+  paths are normalized with `path.relative(root, file)`, so out-of-tree fixture files resolve too.
+- **Exit codes:** `0` on a clean scan (stdout sentinel `… forbidden-only check passed (<n> file(s))`);
+  `1` when a forbidden token is found (uncaught `assert`, message
+  `<file> contains forbidden reference: <regex>` — identical failure shape to the full chain); `2`
+  on a usage error (no files after `--forbidden-only`) or an unknown flag (fail closed, so a typo can
+  never silently degrade into running the full chain).
+- **Zero args preserves the full contract chain:** the `package.json` chains invoke each validator
+  with no arguments, which runs the complete per-edition validation exactly as before.
 
 ## Adaptive Executor Aggregators (issue #242 Part B, wired in Stage C)
 
@@ -613,7 +641,71 @@ The agent runs these steps in order, then returns:
 - **Never dispatches a subagent.** A subagent cannot dispatch a subagent (governing harness
   constraint); the agent runs scripts (shells the handoff) and returns the packet to main.
 
+### Decision-record id preflight (#337)
+
+A **freeze-time-once** content check inside `kaola-workflow-adaptive-handoff.js` (step 1.5, after
+the validator's in-grammar verdict and BEFORE `--freeze`, so the no-mutation-on-refuse contract
+holds). When an **unfrozen** plan hardcodes a decision-record id (`D-<issue>-NN`, the
+consumer-project convention) that the target repo already records, the handoff refuses instead of
+freezing a stale number into durable history:
+
+- **Candidate:** any `D-<n>-<seq>` token in the plan file (write-set paths, `## Plan Notes`,
+  anywhere) **not** annotated with the literal suffix `(existing)` — e.g. `D-210-01 (existing)`
+  marks a deliberate reference to an already-shipped record and is exempt (the follow-up pattern:
+  "`D-210-01 (existing)` covered the first half; this cycle writes `D-210-02`").
+- **Conflict:** the candidate (word-bounded) appears in any `*.md` under the plan repo's `docs/`
+  (filename or content) or in its `CHANGELOG.md` (the partial-close pattern leaves shipped ids in
+  the changelog).
+- **Refusal shape:** `handoff_status:'plan_invalid'`, `result:'refuse'`, each error prefixed
+  `decision_id_conflict:` (naming the id, up to 3 hit paths, and the three remediations: renumber
+  to the next free `D-<issue>-NN`, use the `D-<issue>-NEXT` placeholder for the doc-updater node to
+  resolve, or annotate `(existing)`), plus an additive machine-readable `conflicts` field
+  (`[{id, hits}]`) and `validator_verdict` carrying the in-grammar step-1 verdict (the refusal is
+  handoff-level, not grammar-level). Exit non-zero; nothing mutated — the refusal feeds the
+  existing bounded planner repair loop.
+- **Non-goals (deliberate exemptions):** already-frozen plans are skipped (idempotent handoff
+  re-runs and post-execution resumes can never self-conflict with a record the run itself wrote),
+  and the validator's `--freeze`/`--resume-check` paths are untouched (mid-run plan-repairs go
+  through them directly). `D-<issue>-NEXT` placeholders never match. Pure-core callers that do not
+  inject the `findDecisionIdHits` seam keep exact prior behavior (fail-open by construction; the
+  CLI `main()` wires the default docs/CHANGELOG scanner).
+
 Full rationale: `docs/decisions/0003-adaptive-front-end-planner.md`.
+
+### Worktree project-folder mirror (#335)
+
+A fresh adaptive worktree is provisioned at claim time (before any plan exists) and the planner
+authors + freezes the plan in the MAIN checkout, so the linked worktree never receives the
+untracked `kaola-workflow/<project>/`. The `kaola-workflow-adaptive-node.js mirror-project`
+subcommand is the **one mechanical transaction** that transports it; it is shelled by the handoff
+(step 7) and re-run idempotently at every `/kaola-workflow-plan-run` entry. It is read-only on the
+ledger and `workflow-state.md` and runs strictly before any node baseline is recorded, so the
+mirrored files are part of every per-node baseline and never attributed as node writes.
+
+- **CLI:** `node kaola-workflow-adaptive-node.js mirror-project --project P --json` (exit ≠ 0 on
+  refuse; the `validateProjectName` #318 guard applies). It resolves the MAIN checkout via
+  `git rev-parse --git-common-dir` (so it works from a worktree cwd) and the worktree from the
+  main state's `worktree_path:`.
+- **`status: skipped`** (`result:'ok'`) — no `worktree_path` (in-place / offline / bundle lane:
+  `reason:'no_worktree'`) or the recorded worktree dir is gone (`reason:'worktree_dir_missing'`).
+- **`status: exists`** (`result:'ok'`) — the worktree already has a `workflow-plan.md`; NEVER
+  overwritten (on resume the worktree copy is authoritative, #264). This makes the subcommand
+  idempotent and safe to re-run at every entry.
+- **`status: mirrored`** (`result:'ok'`) — atomic **copy → `plan_hash` re-verify → rename promote**:
+  the source folder is copied to a `.mirror-tmp-<project>` dir, the validator `--resume-check`
+  re-derives and compares the `plan_hash` on the COPIED plan (AC4), and only on success is the tmp
+  dir `rename`d into place (same-filesystem atomic). The verified `planHash` is surfaced.
+- **Refusals (exit 1):** `state_missing` (run claim/startup first), `source_plan_missing` (route to
+  `/kaola-workflow-adapt`), `mirror_verify_failed` (the copied plan failed `plan_hash` re-verification
+  — destination left untouched, all-or-nothing), `mirror_failed` (fs error; best-effort tmp cleanup).
+- **Handoff packet field:** the handoff attaches `worktree_mirror:{ status, reason?, planHash?, path? }`
+  to the `ready_to_run` packet. It is **best-effort** — a mirror refuse/failure (`status:'failed'`)
+  does NOT flip `handoff_status` (the plan IS valid; provisioning is enforced at plan-run entry +
+  `orient`), mirroring the `roadmap_staged` and #282 task-mirror conventions.
+- **`orient` fail-closed:** when the worktree plan is absent, `orient` refuses
+  `plan_not_mirrored` (the MAIN checkout has the frozen folder — `repair` names the exact
+  `mirror-project` command) or `plan_missing` (truly unauthored — route to `/kaola-workflow-adapt`).
+  The probe is CLI-wired; library callers without it keep the prior tolerant behavior byte-for-byte.
 
 ---
 
@@ -623,47 +715,69 @@ Three scripts harden the Codex edition against config drift, silent inline execu
 
 ### Script: `kaola-workflow-codex-preflight.js`
 
-Hard-gates Codex role-profile/config freshness before any `subagent-invoked` compliance row may be written. TRUE 4-tree byte-identical (all four editions share the same file, authored require-free of edition code — only `fs`/`path` and an inline TOML-block scanner).
+Hard-gates Codex role-profile/config freshness before any `subagent-invoked` compliance row may be written. TRUE 4-tree byte-identical (all four editions share the same file, authored require-free of edition code — only `fs`/`path`/`os` and an inline TOML-block scanner). Since #332 it also schema-validates each installed profile and detects stale/retired Kaola files; the small schema regexes + constants (`RETIRED_PROFILE_FILES`, `EFFORT_VALUES`, `MANIFEST_BASENAME`, `validateProfileText`) are deliberately mirrored from `install-codex-agent-profiles.js` (the claude `scripts/` tree has no installer to require).
 
 **CLI:**
 
 ```bash
 node scripts/kaola-workflow-codex-preflight.js --project-root <dir> [--plan <plan-path>] [--no-autofix] [--json]
+node scripts/kaola-workflow-codex-preflight.js --doctor [--project-root <dir>] [--home <dir>] [--json]
 ```
 
-**Behavior:**
+**Behavior (normal gate):**
 
-1. Resolves `--project-root` (or `process.cwd()`) and checks `.codex/agents/kaola-workflow/` for per-role `.toml` files.
-2. Reads `.codex/config.toml`, locates the managed block between `# BEGIN kaola-workflow agents` and `# END kaola-workflow agents`, and asserts every required role has an `[agents.{role}]` entry inside it.
+1. Resolves `--project-root` (or `process.cwd()`) and checks `.codex/agents/kaola-workflow/` for per-role `.toml` files, **schema-validating** each required profile (a non-empty top-level `name` matching the role, a legal `model_reasoning_effort`, a non-blank `developer_instructions`).
+2. Reads `.codex/config.toml`, locates the managed block between `# BEGIN kaola-workflow agents` and `# END kaola-workflow agents`, asserts every required role has an `[agents.{role}]` entry inside it, and flags any retired/foreign `[agents.*]` *inside* the markers.
 3. Required-role set: the union of (a) all roles in the bundled `config/agents.toml` template (read dynamically — no hardcoded count) and (b) the roles named in the frozen plan's `## Nodes` table when `--plan <path>` is supplied.
-4. **Auto-install when safe**: if the only problem is a stale or missing managed block, runs `install-codex-agent-profiles.js`, then re-verifies. On success, returns exit 0 with `autofixed: true`.
-5. **Typed refusal when unsafe**: if a conflicting `[agents.*]` table exists OUTSIDE the managed markers, the installer is unavailable/errors, or the plan names a role absent from the template entirely, exits non-zero with a typed-refusal JSON. `--no-autofix` forces the refusal path (useful in tests).
-6. **Never a silent `subagent-invoked`**: any non-`ok` status is a STOP for the caller. The caller must not write `subagent-invoked` compliance rows when preflight did not return `status:"ok"`.
+4. Stale/retired Kaola `.toml` files left in the target dir (listed in the local `.kaola-managed-profiles.json` manifest, or in the retired-files list `docs-lookup.toml`) are detected; unknown user-owned TOMLs are **reported, never deleted** (the `extra_unmanaged` field).
+5. **Auto-install when safe**: if the only problem is a stale/missing/malformed managed block, profile file, or stale Kaola file, runs `install-codex-agent-profiles.js`, then re-verifies ALL checks. On success, returns exit 0 with `autofixed: true`.
+6. **Typed refusal when unsafe**: if a conflicting `[agents.*]` table exists OUTSIDE the managed markers, the local manifest declares an unsupported (future) `schema_version`, the installer is unavailable/errors, or the plan names a role absent from the template, exits non-zero with a typed-refusal JSON. `--no-autofix` forces the refusal path (useful in tests).
+7. **Never a silent `subagent-invoked`**: any non-`ok` status is a STOP for the caller.
 
 **Exit codes:**
 
-| Exit code | Meaning |
-|-----------|---------|
-| `0` | Fresh (or auto-fixed-then-fresh). `status:"ok"` |
-| non-zero | Typed refusal — see `status` field |
+| Exit code | `status` | Meaning |
+|-----------|----------|---------|
+| `0` | `ok` | Fresh (or auto-fixed-then-fresh) |
+| `1` | `profiles_malformed` / `profiles_stale` / `profiles_missing` / `config_stale` / `managed_block_stale` | Stale (autofixable) — `--no-autofix` refusal |
+| `2` | `template_missing` | bundled `config/agents.toml` not found |
+| `3` | `role_not_in_template` | plan names a role absent from the template |
+| `4` | `autofix_unsafe` | hand-authored `[agents.*]` outside the managed markers |
+| `5` | `installer_failed` | installer missing / errored / still stale after re-verify |
+| `6` | `profile_schema_version_unsupported` | local manifest `schema_version` is newer than this installer supports — upgrade kaola-workflow |
 
 **JSON output (`--json`):**
 
 Success:
 ```json
-{ "status": "ok", "roles_checked": ["code-explorer", "..."], "autofixed": false }
+{ "status": "ok", "roles_checked": ["code-explorer", "..."], "extra_unmanaged": [], "autofixed": false }
 ```
 
-Typed refusals (non-zero exit):
-```json
-{
-  "status": "config_stale" | "profiles_missing" | "role_not_in_template" | "autofix_unsafe" | "installer_failed",
-  "missing_roles": ["role-name"],
-  "stale": true,
-  "repair": "run install-codex-agent-profiles.js --project-root <dir>",
-  "safe_autofix": false
-}
-```
+Typed refusals (non-zero exit) carry `status`, `stale: true`, `safe_autofix`, `repair`, and `extra_unmanaged`, plus a status-specific payload: `malformed: [{role, file, reasons}]` (`profiles_malformed`), `stale_files: [...]` (`profiles_stale`), `stale_roles_in_block: [...]` (`managed_block_stale`), `missing_roles: [...]` (`profiles_missing`/`config_stale`), or `conflicting_roles_outside_markers: [...]` (`autofix_unsafe`).
+
+**Doctor mode (`--doctor`)** — READ-ONLY, never runs the installer (even without `--no-autofix`). Reports freshness for three scopes:
+
+- `user` — `<home>/.codex` (`--home` overrides `os.homedir()`; a test/diagnostic hook);
+- `project` — `<project-root>/.codex`;
+- `plugin_cache` — cached source profiles under `<home>/.codex/plugins/cache/<marketplace>/<plugin>/<version>/agents`, schema-checked, `read_only: true`.
+
+`--json` emits `{ status: 'ok'|'stale', scopes: [{scope, codex_dir, exists, managed_block, profiles, missing_roles, malformed, stale_files, stale_roles_in_block, extra_unmanaged, manifest, read_only, repair}, ...] }`. Exit code is 0 when the `user` and `project` scopes are clean-or-absent and 1 when either is stale; `plugin_cache` findings are evidence-only and never set the exit code (they distinguish runtime/plugin-cache freshness from generated `.codex/` state). Each stale scope carries a concrete `repair` command.
+
+---
+
+### Script: `install-codex-agent-profiles.js`
+
+Installs the Codex-native role profiles into a project's `.codex/`. Ships in the **3 plugin trees only** (codex/gitlab/gitea), byte-identical (enforced by `validate-script-sync.js`). Run by the Codex `kaola-workflow-init` skill (NOT by `install.sh`). Default-on validate → install → prune → manifest → post-verify (no install flags):
+
+1. **Source schema wall** — `validateSourceProfiles(pluginRoot)`: every `config_file` resolves, every `agents/*.toml` is referenced by exactly one `[agents.*]` entry, and every profile passes `validateProfileText`. On failure, prints `profile_schema_error: ...` to stderr and exits 1 **before any write**.
+2. **Manifest guard** — if the target manifest declares a `schema_version` newer than supported, prints `manifest_schema_unsupported: ...` and exits 1 (never prunes against a future manifest).
+3. Copies each source profile via write-temp-then-rename (no torn profiles on crash), upserts the managed `[agents.*]` block, and merges the managed `.codex/hooks.json` entries (#325 semantics).
+4. **Prune** — removes target `.toml` files that are no longer current AND are either listed in the previous manifest (`stale-managed`) or in the retired list `docs-lookup.toml` (`retired`, works with no manifest). Unknown user TOMLs are left in place and reported as `unmanaged extra`.
+5. **Manifest** — writes `.codex/agents/kaola-workflow/.kaola-managed-profiles.json` (`schema_version: 1`, plugin name/version, ISO `installed_at`, `roles`, per-file `sha256`, `retired_files_removed`).
+6. **Post-verify** — re-reads every installed profile and asserts the managed block carries every template role; on failure prints `post_verify_failed: ...` and exits 1.
+7. Prints `status: ok` as the last line — the machine-checkable success sentinel.
+
+Exported helpers (require-safe; `require.main` guard means `require()` never runs the installer): `validateProfileText`, `validateSourceProfiles`, `pruneStaleProfiles`, `readManifest`, `writeManifest`, `buildManagedHooks`, `mergeHooks`, `updateHooks`, plus the constants `RETIRED_PROFILE_FILES`, `MANIFEST_BASENAME`, `EFFORT_VALUES`.
 
 ---
 
@@ -1182,10 +1296,26 @@ For a completed linked issue N:
 6. The remote issue does not have `workflow:in-progress` after closure.
 7. Any branch/worktree cleanup is either complete or explicitly reported by stale-worktree tooling.
 
+**Keep-open inversion (issue #336).** A tenth invariant, `keep-open-roadmap-preserved`, applies ONLY when the receipt carries `remote_issue_closed: kept_open` (a keep-open partial-close finalize). On a keep-open run, `checkClosureInvariants` REPLACES invariants 1 and 2 with their inverse: `kaola-workflow/.roadmap/issue-N.md` MUST be preserved and the regenerated `ROADMAP.md` MUST still list `#N`. A missing source or a mirror that dropped `#N` is the violation. Invariants 3, 4, 6, 7 apply unchanged (the project folder is still archived `status: closed`; only the issue-close step differs).
+
 **WARN-FIRST detection invariants (issue #277 M2):** The following two invariants are recorded in the receipt but do NOT affect `closure_invariants.ok`. Missing attestation adds a warning and sets the receipt field to `missing`; it never blocks closure. The detector is log-gated: if no `dispatch-log.jsonl` is found in the project `.cache/`, both fields are set to `missing` and a warning `'attestation: dispatch-log not found (SubagentStart hook not installed) — detector inactive'` is added — closure is not blocked.
 
 8. `claim-planner-attested` — A workflow-planner subagent spawn is recorded in the dispatch log (`.cache/dispatch-log.jsonl`) BEFORE the plan was frozen.
 9. `finalize-contractor-attested` — A contractor subagent spawn is recorded in the dispatch log during the finalize window.
+
+**Dual-root producer + contractor self-attest (issue #338).** The dispatch-log producer
+(`hooks/kaola-workflow-subagent-dispatch-log.sh`) resolves BOTH the hook's own cwd toplevel and
+the dispatched agent's `cwd` (`AGENT_CWD`) toplevel, appending to each distinct active project —
+so a contractor dispatched into a linked **worktree** is logged where `cmdFinalize` (run in the
+worktree) reads its `.cache/`. In-place runs are unchanged (one root, one append). Independently,
+`cmdFinalize --attest-contractor-spawn` back-fills a `contractor`/`finalize-backfill` entry into
+the archived `.cache/dispatch-log.jsonl` (mirror of the `--attest-planner-spawn` flag at the
+claim seam); the contractor profile's Step 8b passes it so `finalize_contractor_attested` reads
+`attested` even on hookless harnesses. The flag is gated: an inline main-session finalize that
+omits it still reads `missing` (the inline-bypass detector fires). On a **pr** sink the contractor
+skips Step 8b, so a pr-sink receipt may legitimately read `missing` — expected and non-blocking
+(warn-first). The flag was added ONLY to the contractor seam in the gitlab/gitea claim ports; the
+planner-flag parity gap in those ports is a separate follow-up.
 
 ### Closure receipt schema
 
@@ -1201,9 +1331,9 @@ unpopulated receipt reads as total failure, never silent success) and
   "project": "issue-N",
   "issue_number": "N",
   "archive": "closed|abandoned|skipped|failed",
-  "roadmap_source_removed": "removed|absent|failed",
+  "roadmap_source_removed": "removed|absent|kept|failed",
   "roadmap_regenerated": "regenerated|skipped|failed",
-  "remote_issue_closed": "closed|already_closed|skipped_offline|failed",
+  "remote_issue_closed": "closed|already_closed|kept_open|skipped_offline|failed",
   "claim_label_removed": "removed|already_absent|skipped_offline|failed",
   "worktree_removed": "removed|missing|kept|failed",
   "branch_removed": "removed|kept|failed",
@@ -1212,6 +1342,13 @@ unpopulated receipt reads as total failure, never silent success) and
   "warnings": []
 }
 ```
+
+**Keep-open partial-close lane (issue #336).** When the `## Sink` block carries `issue_action: comment_keep_open` (written by the main session at the Closure Decision Gate, default when absent: `close`), `cmdFinalize --keep-issue-open` and `sink-merge --keep-issue-open` run the keep-open terminal:
+
+- `remote_issue_closed` records the decision token `kept_open` (also under OFFLINE — the keep-open decision is local and known, and `checkClosureInvariants` keys on it). Truth still wins: when online and the issue is ALREADY closed on the forge, `cmdFinalize` records `already_closed` and pushes a warning. `sink-merge` posts a mechanical keep-open comment (no `close/fix/resolve #N` substring) instead of closing; the claim label is still removed in BOTH modes.
+- `roadmap_source_removed` records `kept` — `archiveProjectDir` skips the `.roadmap/issue-N.md` unlink, and `ROADMAP.md` is regenerated still listing `#N` (the `keep-open-roadmap-preserved` invariant enforces it). The closure-audit `archive_closed` stale-source class EXCLUDES a `status: closed` archive that carries `issue_action: comment_keep_open`, so a later `--execute` never deletes the preserved source; `closed_remote` still reaps a genuinely-closed issue.
+
+**Keep-open is merge-sink-only.** A PR/MR sink would auto-close the kept-open issue via its hard-coded `Closes #N` body, and `watch-pr`/`watch-mr`'s archive-on-merge (`archiveProjectDir 'closed'` with no `keepRoadmapSource`) would delete the preserved source. This is fenced at THREE layers: (1) the finalize prose refuses a non-merge sink under keep-open before the case statement; (2) on `sink-merge` exit 3 (merge-impossible) the in-arm PR/MR auto-pivot is a typed BLOCKED refusal requiring manual remediation of the merge blocker — never an auto-pivot to a `Closes #N` sink; (3) `sink-pr.js`/`sink-mr.js` themselves refuse (typed `merge-sink-only` assert) when the live OR archived state carries `issue_action: comment_keep_open`. `sink-merge` also re-reads the archived state and honors `issue_action: comment_keep_open` even if `--keep-issue-open` was not passed (defense-in-depth against the one irreversible step).
 
 **Bundle projects — additive receipt fields (issue #328):** On a bundle project, three additional fields are attached to the closure receipt AFTER `buildClosureReceipt()` returns. They are absent on single-issue receipts.
 
@@ -1259,7 +1396,7 @@ record is never silent on partial runs:
 
 ```json
 {
-  "roadmap_source_removed": "removed|absent|failed",
+  "roadmap_source_removed": "removed|absent|kept|failed",
   "roadmap_regenerated": "regenerated|skipped|failed",
   "closure_invariants": {
     "ok": true,
@@ -1272,8 +1409,8 @@ record is never silent on partial runs:
 last three local checks; the signature is now `checkClosureInvariants(root,
 receipt, archiveDest)`):
 
-- `roadmap-source-absent` — `kaola-workflow/.roadmap/issue-N.md` is gone after cleanup.
-- `roadmap-mirror-clean` — generated `kaola-workflow/ROADMAP.md` no longer lists `#N` as active work.
+- `roadmap-source-absent` — `kaola-workflow/.roadmap/issue-N.md` is gone after cleanup. On a keep-open run (`remote_issue_closed: kept_open`, issue #336) this is REPLACED by `keep-open-roadmap-preserved` — the source MUST survive and `ROADMAP.md` MUST still list `#N`.
+- `roadmap-mirror-clean` — generated `kaola-workflow/ROADMAP.md` no longer lists `#N` as active work (row-anchored, issue #339: only an active table row `| #N | …` at line start violates; cross-references to `#N` inside other rows are allowed after closure). Also REPLACED by `keep-open-roadmap-preserved` on a keep-open run.
 - `in-progress-label-removed` — `workflow:in-progress` label was removed from the remote issue. Skipped (not violated) when `KAOLA_WORKFLOW_OFFLINE=1` or when `claim_label_removed` is `'skipped_offline'`.
 - `active-folder-absent` — no live `kaola-workflow/{project}/` folder remains in active folders after archive (issue #164).
 - `archive-state-closed` — when `archiveDest` is provided, the archived `workflow-state.md` shows `status: closed` or `abandoned`; skipped (not violated) when `archiveDest` is absent (issue #164).
@@ -1300,6 +1437,17 @@ complete a receipt step, `cmdWatchPr`/`cmdWatchMr` surface the failure via a
   }
 }
 ```
+
+`cmdFinalize` output also includes `archive_state_stamped` and `issue_disposition` (issue #333):
+
+```json
+{
+  "archive_state_stamped": "not_needed|repaired|failed",
+  "issue_disposition": "kept-open|close-pending|closed|unknown"
+}
+```
+
+`archive_state_stamped` reports the manual-archive backstop: `repaired` when `cmdFinalize` healed a state that had been archived MANUALLY (live folder absent, `status: active` in the archive — a `mv`/`git mv` that bypassed `archiveProjectDir`) by stamping it terminal in place; `not_needed` when no manual archive needed healing (the normal lane, or an already-terminal archive on re-run); `failed` on a swallowed error. `issue_disposition` records the issue's terminal disposition: on `cmdFinalize` it is DECISION-derived — `kept-open` under `--keep-open`, otherwise `closed` if the remote probe already observed the issue closed (a finalize re-run after sink-merge), else `close-pending` (the default merge lane — the orchestrator closes the issue AFTER sink-merge, so `cmdFinalize` never asserts a false `closed`). On the `cmdWatchPr`/`cmdWatchMr` MERGED lane the disposition (recorded only in the archived state's `## Closure` block, not the JSON receipt) is OBSERVATION-derived via `probeIssueState`: `closed` when the issue is observed closed, `kept-open` when observed open (a merged PR/MR with no close keyword), `unknown` when the probe is unavailable. On that lane the receipt's `remote_issue_closed` is likewise probe-informed (`already_closed` vs `skipped_offline`, both existing enum values — no closure-contract change). The archived `workflow-state.md` carries the same `issue_disposition` plus `archived_at`/`claim_label_removed`/`worktree_removed`/`closure_invariants` in a `## Closure` block; the closure receipt schema itself is unchanged.
 
 `cmdWatchPr`/`cmdWatchMr` emit a `cleanups` array with per-folder `claim_label_removed` status when label cleanup is attempted. As of issue #164 each entry also carries the full per-folder `receipt` (built via `buildClosureReceipt`) and its `closure_invariants`:
 
@@ -1363,6 +1511,8 @@ merge-impossible fallback returns before any receipt is emitted; when the
 project was already archived before the failed push, `postMergeCleanup` skips
 the `.cache/sink-fallback.json` receipt write entirely (issue #216 guard). `sink-merge`'s `ghExec` now honors `KAOLA_GH_MOCK_SCRIPT`, matching
 `claim.js`, so the receipt path is testable without a live `gh` CLI.
+
+`sink-merge --keep-issue-open` (issue #336, requires `--issue`) runs the keep-open Step 8: it posts a mechanical keep-open comment instead of closing, records `remote_issue_closed: kept_open` and `roadmap_source_removed: kept` (the source survives), and still removes the claim label. It also re-reads the archived `workflow-state.md` and honors `issue_action: comment_keep_open` even if the flag was not passed (defense-in-depth — an accidental close is the one irreversible step). Everything else — Step 0 worktree removal, rebase, FF-merge loop, push, Step 9 branch deletion, attestation, invariants — is shared and unchanged, which is what eliminates the manual FF-push/worktree/branch cleanup a keep-open run previously needed.
 
 **`sink:pr` deferral**: `cmdSinkPr` does not emit a closure receipt — it leaves
 the active folder open. The authoritative closure receipt for a `sink:pr`

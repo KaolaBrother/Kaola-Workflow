@@ -215,7 +215,58 @@ function testAC3AttestationSeeded() {
       'AC3 GREEN: finalize_contractor_attested must be "attested" when dispatch-log is seeded, got: ' +
       JSON.stringify(finalizeResult.closure_receipt && finalizeResult.closure_receipt.finalize_contractor_attested));
 
+    // #333: the archived state must not advertise an active resume command. startup seeds
+    // next_command: /kaola-workflow-phase1 issue-284; the archive must neutralize it.
+    const archived284 = fs.readdirSync(path.join(root, 'kaola-workflow', 'archive')).filter(n => n.startsWith('issue-284'));
+    assert(archived284.length === 1, '#333: finalize must archive issue-284');
+    const arch284State = fs.readFileSync(path.join(root, 'kaola-workflow', 'archive', archived284[0], 'workflow-state.md'), 'utf8');
+    assert(arch284State.includes('next_command: none (archived)'),
+      '#333: archived state next_command must be neutralized, got: ' + arch284State);
+    assert(!/next_command:.*(kaola-workflow-plan-run|kaola-workflow-phase)/.test(arch284State),
+      '#333: archived state must not retain an active plan-run/phase resume command');
+
     console.log('testAC3AttestationSeeded (#284 AC3): PASSED');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+// #333: keep-open partial-close archive stamp (codex edition). Plant an active project, finalize
+// with --keep-open, assert last_result: closed_keep_open + issue_disposition: kept-open.
+function testKeepOpenArchiveStamp333() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-333-keepopen-'));
+  try {
+    const projDir = path.join(root, 'kaola-workflow', 'issue-333');
+    fs.mkdirSync(projDir, { recursive: true });
+    fs.writeFileSync(path.join(projDir, 'workflow-state.md'), [
+      '# Kaola-Workflow State', '',
+      '## Project', 'name: issue-333', 'status: active', '',
+      '## Current Position',
+      'phase: adaptive', 'workflow_path: adaptive', 'step: start',
+      'next_command: /kaola-workflow-plan-run issue-333',
+      'next_skill: kaola-workflow-plan-run issue-333', '',
+      '## Pending Gates', '- workflow-plan', '',
+      '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
+      '## Last Updated', '2020-01-01T00:00:00.000Z', '',
+      '## Sink', 'branch: workflow/issue-333', 'issue_number: 333', 'sink: merge', ''
+    ].join('\n'));
+    plantRoadmap(root, 333, '');
+    const result = runClaim(['finalize', '--project', 'issue-333', '--keep-open'], root);
+    assert(result.status === 'closed', '#333: keep-open finalize should report closed');
+    assert(result.issue_disposition === 'kept-open',
+      '#333: JSON output issue_disposition must be kept-open, got: ' + JSON.stringify(result.issue_disposition));
+    const archived = fs.readdirSync(path.join(root, 'kaola-workflow', 'archive')).filter(n => n.startsWith('issue-333'));
+    assert(archived.length === 1, '#333: keep-open finalize should archive folder');
+    const st = fs.readFileSync(path.join(root, 'kaola-workflow', 'archive', archived[0], 'workflow-state.md'), 'utf8');
+    assert(st.includes('status: closed'), '#333: keep-open archived state must be closed');
+    assert(st.includes('last_result: closed_keep_open'),
+      '#333: keep-open archived last_result must be closed_keep_open, got: ' + st);
+    assert(st.includes('next_command: none (archived)'),
+      '#333: keep-open archived next_command must be neutralized');
+    assert(/^## Closure$/m.test(st), '#333: keep-open archived state must carry a ## Closure block');
+    assert(st.includes('issue_disposition: kept-open'),
+      '#333: keep-open archived ## Closure must record issue_disposition: kept-open');
+    console.log('testKeepOpenArchiveStamp333: PASSED');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -497,6 +548,58 @@ function testCodexAdaptiveCuratedAndBarrier() {
       const rb2 = runVal([planPath, '--record-base', '--node-id', 'a', '--json'], grepo);
       assert(rb2.status === 0 && JSON.parse(rb2.stdout).reused === true, 'codex #239: re-record must reuse the baseline, got ' + rb2.stdout);
     } finally { cu(grepo); } }
+  // ---- #340 freeze-time write-set completeness (CODEX byte copy) ----
+  { const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-codex-340-'));
+    try {
+      const planAt = (rows) => { const p = path.join(tmp, 'plan.md'); fs.writeFileSync(p, ['# Plan', '', '## Meta', 'labels: enhancement', '', '## Nodes', '', '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|', ...rows, ''].join('\n')); return p; };
+      // A1-shaped: agent add omitting the surface, anchor planted -> refuse naming the surface.
+      fs.mkdirSync(path.join(tmp, 'scripts'), { recursive: true });
+      fs.writeFileSync(path.join(tmp, 'scripts', 'validate-vendored-agents.js'), '// anchor\n');
+      let r = runVal([planAt([
+        '| scout | implementer | ex | agents/new-scout.md | 1 | sequence |',
+        '| ex | code-explorer | — | — | 1 | sequence |',
+        '| rv | code-reviewer | scout | — | 1 | sequence |',
+        '| done | finalize | rv | — | 1 | sequence |',
+      ]), '--json'], tmp);
+      let out = JSON.parse(r.stdout);
+      assert(out.result === 'refuse' && /agent-registration gap:.*validate-vendored-agents\.js/.test((out.errors || []).join('\n')) && /agent-registration gap:.*uninstall\.sh/.test((out.errors || []).join('\n')),
+        'codex #340 A1: agent add omitting the surface must refuse naming validate-vendored-agents.js + uninstall.sh, got ' + r.stdout);
+      // A4-shaped: a port parallel to its root edit -> refuse (forge-port ordering gap; fs-free).
+      r = runVal([planAt([
+        '| ex | code-explorer | — | — | 1 | sequence |',
+        '| rootedit | tdd-guide | ex | scripts/kaola-workflow-claim.js, plugins/kaola-workflow/scripts/kaola-workflow-claim.js | 1 | sequence |',
+        '| port | implementer | ex | plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js | 1 | sequence |',
+        '| rv | code-reviewer | rootedit,port | — | 1 | sequence |',
+        '| done | finalize | rv | — | 1 | sequence |',
+      ]), '--json'], tmp);
+      out = JSON.parse(r.stdout);
+      assert(out.result === 'refuse' && /forge-port ordering gap/.test((out.errors || []).join('\n')),
+        'codex #340 A4: a port parallel to its root edit must refuse with forge-port ordering gap, got ' + r.stdout);
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
+  // ---- #334 non-delegable main-session-gate (CODEX byte copy) ----
+  { const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-codex-334-'));
+    try {
+      const g3Plan = (ledgerRows) => { const projDir = path.join(tmp, 'kaola-workflow', 'issue-334'); fs.mkdirSync(path.join(projDir, '.cache'), { recursive: true }); const p = path.join(projDir, 'workflow-plan.md'); fs.writeFileSync(p, ['# Plan', '', '## Meta', 'labels: chore', '', '## Nodes', '', '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|', '| impl | implementer | — | lib/foo.js | 1 | sequence |', '| rv | code-reviewer | impl | — | 1 | sequence |', '| vgate | main-session-gate | rv | — | 1 | sequence |', '| done | finalize | vgate | — | 1 | sequence |', '', '## Node Ledger', '', '| id | status |', '|---|---|', ...ledgerRows, ''].join('\n')); return { p, projDir }; };
+      // in-grammar control: a post-dominating main-session-gate freezes.
+      let r = runVal([g3Plan(['| impl | pending |', '| rv | pending |', '| vgate | pending |', '| done | pending |']).p, '--json'], tmp);
+      assert(JSON.parse(r.stdout).result === 'in-grammar', 'codex #334: post-dominating main-session-gate must be in-grammar, got ' + r.stdout);
+      // G3 freeze refusal: a side-branch gate (does not post-dominate impl) refuses /G3/.
+      { const p = path.join(tmp, 'g3side.md'); fs.writeFileSync(p, ['# Plan', '', '## Nodes', '', '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|', '| ex | code-explorer | — | — | 1 | sequence |', '| impl | implementer | ex | lib/foo.js | 1 | sequence |', '| rv | code-reviewer | impl | — | 1 | sequence |', '| vgate | main-session-gate | ex | — | 1 | sequence |', '| done | finalize | rv,vgate | — | 1 | sequence |', ''].join('\n'));
+        r = runVal([p, '--json'], tmp);
+        assert(JSON.parse(r.stdout).result === 'refuse' && /G3/.test((JSON.parse(r.stdout).errors || []).join(';')), 'codex #334: side-branch gate must refuse (G3), got ' + r.stdout); }
+      // --gate-verify: impl complete + gate PENDING -> exit 1 (the regression scenario).
+      assert(runVal([g3Plan(['| impl | complete |', '| rv | complete |', '| vgate | pending |', '| done | pending |']).p, '--gate-verify', '--json'], tmp).status === 1, 'codex #334: --gate-verify exit 1 when gate pending');
+      // --gate-verify: gate n/a -> exit 1 (cannot be skipped).
+      assert(runVal([g3Plan(['| impl | complete |', '| rv | complete |', '| vgate | n/a |', '| done | complete |']).p, '--gate-verify', '--json'], tmp).status === 1, 'codex #334: --gate-verify exit 1 when gate n/a');
+      // pass control: gate complete + .cache verdicts -> --gate-verify AND --verdict-check exit 0.
+      { const { p, projDir } = g3Plan(['| impl | complete |', '| rv | complete |', '| vgate | complete |', '| done | complete |']);
+        fs.writeFileSync(path.join(projDir, '.cache', 'rv.md'), 'verdict: pass\nfindings_blocking: 0\n');
+        fs.writeFileSync(path.join(projDir, '.cache', 'vgate.md'), 'verdict: pass\nfindings_blocking: 0\nGPU true-black confirmed\n');
+        assert(runVal([p, '--gate-verify', '--json'], tmp).status === 0, 'codex #334: --gate-verify exit 0 when gate complete + post-dominates');
+        assert(runVal([p, '--verdict-check', '--json'], tmp).status === 0, 'codex #334: --verdict-check exit 0 when gate records verdict: pass'); }
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
   console.log('Codex adaptive #238/#239 coverage: PASSED');
 }
 
@@ -552,7 +655,7 @@ function testCodexPreflight266() {
   // Build a fully-installed fixture to start from
   const root266 = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-266-preflight-'));
   try {
-    // Install all 13 profiles into the fixture
+    // Install all 14 profiles into the fixture
     const installResult = spawnSync(process.execPath, [installProfilesScript, root266], {
       cwd: repoRoot, encoding: 'utf8'
     });
@@ -650,6 +753,262 @@ function testCodexPreflight266() {
     console.log('testCodexPreflight266 (#266 cases 1,2,5): PASSED');
   } finally {
     fs.rmSync(root266, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// #332: installer schema + prune + manifest + sentinel (AC3-AC6).
+// ---------------------------------------------------------------------------
+const NAME_RE = /^name\s*=\s*"([^"]+)"\s*$/m;
+
+function listTomls(dir) {
+  return fs.readdirSync(dir).filter(f => f.endsWith('.toml')).sort();
+}
+
+function testInstallSchemaPruneManifest332() {
+  const manifestBase = '.kaola-managed-profiles.json';
+
+  // --- AC3: fresh install = current set, no docs-lookup, every profile has name,
+  //     manifest written, stdout ends with `status: ok` ---
+  const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-332-install-fresh-'));
+  try {
+    const r = runInstallProfiles(fresh);
+    const agentsDir = path.join(fresh, '.codex', 'agents', 'kaola-workflow');
+    const tomls = listTomls(agentsDir);
+    assert(tomls.length === 14, '#332 AC3: fresh install must place exactly 14 *.toml, got ' + tomls.length);
+    assert(!tomls.includes('docs-lookup.toml'), '#332 AC3: docs-lookup.toml must not be installed');
+    for (const f of tomls) {
+      const role = f.replace(/\.toml$/, '');
+      const m = fs.readFileSync(path.join(agentsDir, f), 'utf8').match(NAME_RE);
+      assert(m && m[1] === role, '#332 AC3: ' + f + ' must have name = "' + role + '"');
+    }
+    const manifestPath = path.join(agentsDir, manifestBase);
+    assert(fs.existsSync(manifestPath), '#332 AC3: manifest must be written');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    assert(manifest.schema_version === 1, '#332 AC3: manifest schema_version must be 1');
+    assert(Array.isArray(manifest.roles) && manifest.roles.length === 14, '#332 AC3: manifest must list 14 roles');
+    assert(manifest.files && Object.keys(manifest.files).length === 14
+      && Object.values(manifest.files).every(v => /^sha256:[0-9a-f]{64}$/.test(v)),
+      '#332 AC3: manifest.files must carry 14 sha256 entries');
+    const lastLine = r.stdout.trim().split('\n').pop();
+    assert(lastLine === 'status: ok', '#332 AC3: installer stdout must end with `status: ok`, got: ' + lastLine);
+  } finally {
+    fs.rmSync(fresh, { recursive: true, force: true });
+  }
+
+  // --- AC4 + AC9 write-path: upgrade-over-old-state repairs malformed/retired files ---
+  const upgrade = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-332-install-upgrade-'));
+  try {
+    const agentsDir = path.join(upgrade, '.codex', 'agents', 'kaola-workflow');
+    fs.mkdirSync(agentsDir, { recursive: true });
+    // seed a no-name code-explorer.toml + a retired docs-lookup.toml
+    fs.writeFileSync(path.join(agentsDir, 'code-explorer.toml'),
+      'model_reasoning_effort = "medium"\ndeveloper_instructions = """stale no-name body"""\n');
+    fs.writeFileSync(path.join(agentsDir, 'docs-lookup.toml'),
+      'model_reasoning_effort = "medium"\ndeveloper_instructions = """retired role body"""\n');
+    // seed an old managed block that registers the retired [agents.docs-lookup]
+    fs.mkdirSync(path.join(upgrade, '.codex'), { recursive: true });
+    fs.writeFileSync(path.join(upgrade, '.codex', 'config.toml'), [
+      '# BEGIN kaola-workflow agents',
+      '[features]',
+      'multi_agent = true',
+      '[agents.docs-lookup]',
+      'config_file = "./agents/kaola-workflow/docs-lookup.toml"',
+      '# END kaola-workflow agents',
+      ''
+    ].join('\n'));
+
+    const r = runInstallProfiles(upgrade);
+    assert(r.status === 0, '#332 AC4: upgrade reinstall must exit 0');
+    const tomls = listTomls(agentsDir);
+    assert(!tomls.includes('docs-lookup.toml'), '#332 AC4: retired docs-lookup.toml must be pruned');
+    const ce = fs.readFileSync(path.join(agentsDir, 'code-explorer.toml'), 'utf8');
+    assert(NAME_RE.test(ce) && ce.match(NAME_RE)[1] === 'code-explorer',
+      '#332 AC4: code-explorer.toml must be rewritten with name');
+    assert(fs.existsSync(path.join(agentsDir, manifestBase)), '#332 AC4: manifest must be written on upgrade');
+    const cfg = fs.readFileSync(path.join(upgrade, '.codex', 'config.toml'), 'utf8');
+    assert(cfg.includes('[agents.knowledge-lookup]'), '#332 AC9: block must now register knowledge-lookup');
+    assert(!cfg.includes('[agents.docs-lookup]'), '#332 AC9: block must no longer register docs-lookup');
+    assert(r.stdout.includes('docs-lookup.toml (retired)'), '#332 AC4: stdout must report the retired prune');
+
+    // --- AC5: double-run idempotency (toml set stable, manifest stable modulo installed_at) ---
+    const before = listTomls(agentsDir);
+    const m1 = JSON.parse(fs.readFileSync(path.join(agentsDir, manifestBase), 'utf8'));
+    runInstallProfiles(upgrade);
+    const after = listTomls(agentsDir);
+    assert(JSON.stringify(before) === JSON.stringify(after), '#332 AC5: toml set must be stable across reruns');
+    const m2 = JSON.parse(fs.readFileSync(path.join(agentsDir, manifestBase), 'utf8'));
+    assert(JSON.stringify(m1.files) === JSON.stringify(m2.files), '#332 AC5: manifest.files must be stable across reruns');
+    const cfg2 = fs.readFileSync(path.join(upgrade, '.codex', 'config.toml'), 'utf8');
+    assert(countOccurrences(cfg2, /# BEGIN kaola-workflow agents/g) === 1, '#332 AC5: exactly one managed block');
+  } finally {
+    fs.rmSync(upgrade, { recursive: true, force: true });
+  }
+
+  // --- AC6: unknown user TOML preserved + reported as unmanaged ---
+  const custom = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-332-install-custom-'));
+  try {
+    runInstallProfiles(custom);
+    const agentsDir = path.join(custom, '.codex', 'agents', 'kaola-workflow');
+    fs.writeFileSync(path.join(agentsDir, 'my-custom.toml'), 'name = "my-custom"\nmodel_reasoning_effort = "low"\ndeveloper_instructions = """x"""\n');
+    const r = runInstallProfiles(custom);
+    assert(fs.existsSync(path.join(agentsDir, 'my-custom.toml')), '#332 AC6: user TOML must survive install');
+    assert(r.stdout.includes('unmanaged extra profiles left in place: my-custom.toml'),
+      '#332 AC6: stdout must report the unmanaged extra');
+  } finally {
+    fs.rmSync(custom, { recursive: true, force: true });
+  }
+
+  // --- stale-managed prune via manifest (a non-retired ghost listed in the manifest) ---
+  const ghost = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-332-install-ghost-'));
+  try {
+    runInstallProfiles(ghost);
+    const agentsDir = path.join(ghost, '.codex', 'agents', 'kaola-workflow');
+    const manifestPath = path.join(agentsDir, manifestBase);
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    manifest.files['ghost.toml'] = 'sha256:' + '0'.repeat(64);
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    fs.writeFileSync(path.join(agentsDir, 'ghost.toml'), 'name = "ghost"\nmodel_reasoning_effort = "low"\ndeveloper_instructions = """x"""\n');
+    const r = runInstallProfiles(ghost);
+    assert(!fs.existsSync(path.join(agentsDir, 'ghost.toml')), '#332: manifest-listed ghost.toml must be pruned');
+    assert(r.stdout.includes('ghost.toml (stale-managed)'), '#332: stdout must report stale-managed prune');
+  } finally {
+    fs.rmSync(ghost, { recursive: true, force: true });
+  }
+
+  // --- manifest_schema_unsupported: a future schema_version refuses BEFORE any write ---
+  const future = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-332-install-future-'));
+  try {
+    runInstallProfiles(future);
+    const agentsDir = path.join(future, '.codex', 'agents', 'kaola-workflow');
+    const manifestPath = path.join(agentsDir, manifestBase);
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    manifest.schema_version = 2;
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    const r = spawnSync(process.execPath, [installProfilesScript, future], { cwd: repoRoot, encoding: 'utf8' });
+    assert(r.status === 1, '#332: future manifest schema must make installer exit 1, got ' + r.status);
+    assert(r.stderr.includes('manifest_schema_unsupported'), '#332: stderr must name manifest_schema_unsupported');
+  } finally {
+    fs.rmSync(future, { recursive: true, force: true });
+  }
+
+  console.log('testInstallSchemaPruneManifest332 (#332 AC3-AC6,AC9-path): PASSED');
+}
+
+// ---------------------------------------------------------------------------
+// #332: preflight schema/stale/manifest/doctor (AC7-AC11).
+// ---------------------------------------------------------------------------
+function testCodexPreflight332() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-332-preflight-'));
+  try {
+    runInstallProfiles(root);
+    const agentsDir = path.join(root, '.codex', 'agents', 'kaola-workflow');
+    const ce = path.join(agentsDir, 'code-explorer.toml');
+    const savedCe = fs.readFileSync(ce, 'utf8');
+
+    // AC7a: malformed (name stripped) → profiles_malformed under --no-autofix
+    fs.writeFileSync(ce, savedCe.replace(/^name = "code-explorer"\n/m, ''));
+    let r = runScript(preflightScript, ['--project-root', root, '--no-autofix', '--json'], {});
+    assert(r.status !== 0, '#332 AC7a: malformed profile must refuse');
+    let j = JSON.parse(r.stdout);
+    assert(j.status === 'profiles_malformed', '#332 AC7a: status must be profiles_malformed, got ' + j.status);
+    assert(j.malformed[0].role === 'code-explorer', '#332 AC7a: malformed[0].role must be code-explorer');
+
+    // AC8: same fixture WITHOUT --no-autofix → autofix repairs, status ok autofixed
+    r = runScript(preflightScript, ['--project-root', root, '--json'], {});
+    assert(r.status === 0, '#332 AC8: autofix must exit 0 after repair');
+    j = JSON.parse(r.stdout);
+    assert(j.status === 'ok' && j.autofixed === true, '#332 AC8: must be ok autofixed:true');
+    assert(NAME_RE.test(fs.readFileSync(ce, 'utf8')), '#332 AC8: code-explorer.toml must be repaired with name');
+
+    // AC7b: stale docs-lookup.toml in target → profiles_stale
+    fs.copyFileSync(ce, path.join(agentsDir, 'docs-lookup.toml'));
+    r = runScript(preflightScript, ['--project-root', root, '--no-autofix', '--json'], {});
+    j = JSON.parse(r.stdout);
+    assert(r.status !== 0 && j.status === 'profiles_stale', '#332 AC7b: status must be profiles_stale, got ' + j.status);
+    assert(j.stale_files.includes('docs-lookup.toml'), '#332 AC7b: stale_files must include docs-lookup.toml');
+    // autofix prunes it
+    r = runScript(preflightScript, ['--project-root', root, '--json'], {});
+    assert(r.status === 0, '#332 AC7b: autofix must prune docs-lookup and exit 0');
+    assert(!fs.existsSync(path.join(agentsDir, 'docs-lookup.toml')), '#332 AC7b: docs-lookup.toml must be pruned by autofix');
+
+    // AC9: full current set + [agents.docs-lookup] inside markers → managed_block_stale
+    const cfgPath = path.join(root, '.codex', 'config.toml');
+    const cfg = fs.readFileSync(cfgPath, 'utf8');
+    fs.writeFileSync(cfgPath, cfg.replace('# END kaola-workflow agents',
+      '[agents.docs-lookup]\nconfig_file = "./agents/kaola-workflow/docs-lookup.toml"\n\n# END kaola-workflow agents'));
+    r = runScript(preflightScript, ['--project-root', root, '--no-autofix', '--json'], {});
+    j = JSON.parse(r.stdout);
+    assert(r.status !== 0 && j.status === 'managed_block_stale', '#332 AC9: status must be managed_block_stale, got ' + j.status);
+    assert(j.stale_roles_in_block.includes('docs-lookup'), '#332 AC9: stale_roles_in_block must include docs-lookup');
+    // repair via autofix
+    runScript(preflightScript, ['--project-root', root, '--json'], {});
+
+    // schema_version 2 → exit 6, profile_schema_version_unsupported (autofix refused)
+    const manifestPath = path.join(agentsDir, '.kaola-managed-profiles.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    manifest.schema_version = 2;
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    r = runScript(preflightScript, ['--project-root', root, '--json'], {});
+    j = JSON.parse(r.stdout);
+    assert(r.status === 6 && j.status === 'profile_schema_version_unsupported',
+      '#332: future manifest must exit 6 / profile_schema_version_unsupported, got ' + r.status + '/' + j.status);
+    manifest.schema_version = 1;
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+
+    // AC6 field: extra unmanaged TOML keeps status ok + lists it
+    fs.writeFileSync(path.join(agentsDir, 'my-custom.toml'),
+      'name = "my-custom"\nmodel_reasoning_effort = "low"\ndeveloper_instructions = """x"""\n');
+    r = runScript(preflightScript, ['--project-root', root, '--no-autofix', '--json'], {});
+    j = JSON.parse(r.stdout);
+    assert(r.status === 0 && j.status === 'ok', '#332 AC6: extra unmanaged must keep status ok');
+    assert(j.extra_unmanaged.includes('my-custom.toml'), '#332 AC6: extra_unmanaged must list my-custom.toml');
+    fs.unlinkSync(path.join(agentsDir, 'my-custom.toml'));
+
+    // AC10 + AC11: doctor — stale user scope, clean project, cache evidence-only
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-332-doctor-home-'));
+    const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-332-doctor-proj-'));
+    try {
+      runInstallProfiles(home);
+      runInstallProfiles(proj);
+      // make user scope stale (seed docs-lookup)
+      fs.copyFileSync(path.join(home, '.codex', 'agents', 'kaola-workflow', 'code-explorer.toml'),
+        path.join(home, '.codex', 'agents', 'kaola-workflow', 'docs-lookup.toml'));
+      r = runScript(preflightScript, ['--doctor', '--home', home, '--project-root', proj, '--json'], {});
+      assert(r.status === 1, '#332 AC10: doctor must exit 1 when user scope is stale, got ' + r.status);
+      j = JSON.parse(r.stdout);
+      const userScope = j.scopes.find(s => s.scope === 'user');
+      const projScope = j.scopes.find(s => s.scope === 'project');
+      assert(userScope.stale_files.includes('docs-lookup.toml'), '#332 AC10: user scope must report docs-lookup');
+      assert(userScope.repair.includes('install-codex-agent-profiles.js'), '#332 AC10: user scope must carry a repair command');
+      assert(projScope.stale_files.length === 0 && projScope.malformed.length === 0, '#332 AC10: project scope must be clean');
+
+      // clean both → exit 0
+      fs.unlinkSync(path.join(home, '.codex', 'agents', 'kaola-workflow', 'docs-lookup.toml'));
+      runInstallProfiles(home);
+      r = runScript(preflightScript, ['--doctor', '--home', home, '--project-root', proj, '--json'], {});
+      assert(r.status === 0, '#332 AC10: doctor must exit 0 when both scopes clean, got ' + r.status);
+
+      // AC11: a malformed cached source profile is evidence-only (exit stays 0)
+      const cacheAgents = path.join(home, '.codex', 'plugins', 'cache', 'm', 'p', '1.0.0', 'agents');
+      fs.mkdirSync(cacheAgents, { recursive: true });
+      fs.writeFileSync(path.join(cacheAgents, 'x.toml'),
+        'model_reasoning_effort = "medium"\ndeveloper_instructions = """x"""\n');
+      r = runScript(preflightScript, ['--doctor', '--home', home, '--project-root', proj, '--json'], {});
+      assert(r.status === 0, '#332 AC11: malformed plugin_cache must NOT change exit code, got ' + r.status);
+      j = JSON.parse(r.stdout);
+      const cacheScope = j.scopes.find(s => s.scope === 'plugin_cache');
+      assert(cacheScope && cacheScope.read_only === true, '#332 AC11: plugin_cache scope must be read_only');
+      assert(cacheScope.malformed.length > 0, '#332 AC11: plugin_cache scope must report the malformed cached profile');
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+      fs.rmSync(proj, { recursive: true, force: true });
+    }
+
+    fs.writeFileSync(ce, savedCe);
+    console.log('testCodexPreflight332 (#332 AC7-AC11): PASSED');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 }
 
@@ -816,6 +1175,24 @@ function testCodexCompactResume266() {
     assert(lines1[6].includes('pending: 1'),
       '#266 case4: task mirror must show pending:1, got ' + lines1[6]);
 
+    // --- #334 case4b: a pending main-session-gate must appear in the pending-gates packet line.
+    // Separate root + small fixture (NOT FIXTURE_PLAN, whose hash is asserted elsewhere). RED before
+    // the GATE_VERDICT_ROLES edit: the role was not in the set → the line read 'none'.
+    { const root334 = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-334-compact-'));
+      try {
+        const pj = 'issue-334-vgate';
+        const pd = path.join(root334, 'kaola-workflow', pj);
+        fs.mkdirSync(pd, { recursive: true });
+        fs.writeFileSync(path.join(pd, 'workflow-state.md'), ['# State', '', '## Project', 'name: ' + pj, 'status: active', '', '## Sink', 'branch: workflow/issue-334', 'issue_number: 334', 'next_command: /kaola-workflow-plan-run', 'next_skill: kaola-workflow-next', ''].join('\n'));
+        fs.writeFileSync(path.join(pd, 'workflow-plan.md'), ['# Plan', '', '## Nodes', '', '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|', '| impl | implementer | — | lib/foo.js | 1 | sequence |', '| rv | code-reviewer | impl | — | 1 | sequence |', '| vgate | main-session-gate | rv | — | 1 | sequence |', '| done | finalize | vgate | — | 1 | sequence |', '', '## Node Ledger', '', '| id | status |', '|---|---|', '| impl | complete |', '| rv | complete |', '| vgate | pending |', '| done | pending |', ''].join('\n'));
+        const r334 = runScript(compactResumeScript, [], { input: JSON.stringify({ cwd: root334 }), encoding: 'utf8' });
+        assert(r334.status === 0, '#334 case4b: compact-resume must exit 0, got ' + r334.status + '\n' + r334.stderr);
+        const gateLine = r334.stdout.trim().split('\n').find(l => l.startsWith('pending gates:'));
+        assert(gateLine && /\bvgate\b/.test(gateLine),
+          '#334 case4b: a pending main-session-gate (vgate) must appear in the pending-gates line, got: ' + gateLine);
+      } finally { fs.rmSync(root334, { recursive: true, force: true }); }
+    }
+
     // --- Determinism: two runs → identical stdout ---
     const r2 = runScript(compactResumeScript, [], { input, encoding: 'utf8' });
     assert(r1.stdout === r2.stdout,
@@ -917,13 +1294,16 @@ function main() {
     assert(fs.existsSync(validator), 'Codex contract validator must exist');
 
     testInstallProfilesFeaturesTableHandling();
+    testInstallSchemaPruneManifest332();
     testCodexAdaptiveCuratedAndBarrier();
     testCodexPreflight266();
+    testCodexPreflight332();
     testCodexTaskMirror266();
     testCodexCompactResume266();
     testAC1HooksJson();
     testUpdateHooksHardening325();
     testAC3AttestationSeeded();
+    testKeepOpenArchiveStamp333();   // #333
     testAC2CompactPlainStdout();
     testAC4SubagentDispatchLog();
 

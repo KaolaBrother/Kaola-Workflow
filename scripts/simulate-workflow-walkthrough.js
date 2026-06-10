@@ -160,6 +160,147 @@ function testFinalize(tmp) {
     '#324 AC3: archived final-validation.md must not retain the false-absolute "No files changed after those runs"');
   assert(archivedFinalVal.includes('Validation reuse covers'),
     '#324 AC3: archived final-validation.md states the actual reuse boundary instead of the false absolute');
+  // #333: an archived state must not advertise an active resume command. startup --runtime claude
+  // seeds next_command: /kaola-workflow-phase1 issue-164 / next_skill: kaola-workflow-research issue-164.
+  assert(archivedState.includes('next_command: none (archived)'),
+    '#333: archived state next_command must be neutralized to "none (archived)", got: ' + archivedState);
+  assert(archivedState.includes('next_skill: none (archived)'),
+    '#333: archived state next_skill must be neutralized to "none (archived)", got: ' + archivedState);
+  assert(!archivedState.includes('/kaola-workflow-phase1 issue-164'),
+    '#333: archived state must not retain the active /kaola-workflow-phase1 resume command');
+}
+
+// #333: a keep-open partial-close archive must be terminal+truthful. An adaptive run whose
+// ledger is all-complete and whose plan was re-frozen (state holds the claim-time plan_hash,
+// the plan file holds the later one) is archived through `finalize --keep-open`; the archived
+// state must read closed/complete, gates - none, last_result: closed_keep_open, refresh the
+// plan_hash from the FINAL plan file, refresh ## Last Updated, neutralize next_command, and
+// carry a ## Closure block with issue_disposition: kept-open.
+function testKeepOpenArchiveStamp() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-keepopen-')));
+  try {
+    const STALE_HASH = 'a'.repeat(64);
+    const FINAL_HASH = 'b'.repeat(64);
+    const STALE_UPDATED = '2020-01-01T00:00:00.000Z';
+    const dir = path.join(tmp, 'kaola-workflow', 'issue-333');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'workflow-state.md'), [
+      '# Kaola-Workflow State', '',
+      '## Project', 'name: issue-333', 'status: active', '',
+      '## Current Position',
+      'phase: adaptive', 'workflow_path: adaptive', 'step: start',
+      'next_command: /kaola-workflow-plan-run issue-333',
+      'next_skill: kaola-workflow-plan-run issue-333', '',
+      '## Pending Gates', '- workflow-plan', '',
+      '## Planning Evidence',
+      'plan_hash: ' + STALE_HASH,
+      'decision: ask', '',
+      '## Last Evidence',
+      'last_command: startup', 'last_result: folder_claimed', '',
+      '## Last Updated', STALE_UPDATED, '',
+      '## Sink', 'branch: workflow/issue-333', 'issue_number: 333', 'sink: merge', ''
+    ].join('\n'));
+    // workflow-plan.md whose ledger rows are all complete + a re-frozen plan_hash comment.
+    fs.writeFileSync(path.join(dir, 'workflow-plan.md'), [
+      '<!-- plan_hash: ' + FINAL_HASH + ' -->', '',
+      '# Workflow Plan', '',
+      '## Node Ledger', '', '| id | status |', '|---|---|',
+      '| n1 | complete |', '| n2 | complete |', ''
+    ].join('\n'));
+    plantRoadmapIssue(tmp, 333, '');
+
+    const result = json(runNode(claimScript, ['finalize', '--project', 'issue-333', '--keep-open'], tmp));
+    assert(result.status === 'closed', '#333: keep-open finalize should report closed');
+    assert(result.issue_disposition === 'kept-open',
+      '#333: JSON output issue_disposition must be kept-open, got: ' + JSON.stringify(result.issue_disposition));
+    const archived = fs.readdirSync(path.join(tmp, 'kaola-workflow', 'archive')).filter(n => n.startsWith('issue-333'));
+    assert(archived.length === 1, '#333: keep-open finalize should archive folder');
+    const st = read(path.join(tmp, 'kaola-workflow', 'archive', archived[0], 'workflow-state.md'));
+    assert(st.includes('status: closed'), '#333: keep-open archived state must be closed');
+    assert(st.includes('step: complete'), '#333: keep-open archived state must be complete');
+    assert(st.includes('- none'), '#333: keep-open archived Pending Gates normalized to "- none"');
+    assert(st.includes('last_result: closed_keep_open'),
+      '#333: keep-open archived last_result must be closed_keep_open, got: ' + st);
+    assert(!/next_command:.*kaola-workflow-plan-run/.test(st),
+      '#333: keep-open archived next_command must not advertise plan-run, got: ' + st);
+    assert(st.includes('next_command: none (archived)'),
+      '#333: keep-open archived next_command must be neutralized');
+    assert(st.includes('plan_hash: ' + FINAL_HASH),
+      '#333: keep-open archived plan_hash must be refreshed from the final plan file, got: ' + st);
+    assert(!st.includes('plan_hash: ' + STALE_HASH),
+      '#333: keep-open archived plan_hash must not keep the stale claim-time hash');
+    assert(!st.includes(STALE_UPDATED),
+      '#333: keep-open archived ## Last Updated must be refreshed, got: ' + st);
+    assert(/^## Closure$/m.test(st), '#333: keep-open archived state must carry a ## Closure block');
+    assert(st.includes('issue_disposition: kept-open'),
+      '#333: keep-open archived ## Closure must record issue_disposition: kept-open');
+    // #336: keep-open now PRESERVES the roadmap source (was removed in #333) + records the decision tokens.
+    assert(fs.existsSync(path.join(tmp, 'kaola-workflow', '.roadmap', 'issue-333.md')),
+      '#336: keep-open finalize must PRESERVE kaola-workflow/.roadmap/issue-333.md, not unlink it');
+    assert(result.roadmap_source_removed === 'kept',
+      '#336: keep-open JSON roadmap_source_removed must be kept, got: ' + JSON.stringify(result.roadmap_source_removed));
+    assert(result.closure_receipt && result.closure_receipt.remote_issue_closed === 'kept_open',
+      '#336: keep-open receipt remote_issue_closed must be kept_open, got: ' + JSON.stringify(result.closure_receipt && result.closure_receipt.remote_issue_closed));
+    assert(result.closure_receipt.roadmap_source_removed === 'kept',
+      '#336: keep-open receipt roadmap_source_removed must be kept, got: ' + JSON.stringify(result.closure_receipt.roadmap_source_removed));
+    assert(result.closure_invariants && result.closure_invariants.ok === true,
+      '#336: keep-open closure_invariants.ok must be true (keep-open-roadmap-preserved holds), got: ' + JSON.stringify(result.closure_invariants));
+    assert(st.includes('last_result: closed_keep_open'),
+      '#336: keep-open archived last_result must remain closed_keep_open');
+    console.log('testKeepOpenArchiveStamp: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// #333: #210-class repro — a project archived MANUALLY (fs.renameSync bypassing the script)
+// keeps status: active forever. Re-running finalize over it must heal the archived state in
+// place (archive_state_stamped: repaired), and be idempotent (exactly one ## Closure block).
+function testManualArchiveBackstop() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-backstop-')));
+  try {
+    const dir = path.join(tmp, 'kaola-workflow', 'issue-210');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'workflow-state.md'), [
+      '# Kaola-Workflow State', '',
+      '## Project', 'name: issue-210', 'status: active', '',
+      '## Current Position',
+      'phase: adaptive', 'workflow_path: adaptive', 'step: start',
+      'next_command: /kaola-workflow-plan-run issue-210',
+      'next_skill: kaola-workflow-plan-run issue-210', '',
+      '## Pending Gates', '- workflow-plan', '',
+      '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
+      '## Last Updated', '2020-01-01T00:00:00.000Z', '',
+      '## Sink', 'branch: workflow/issue-210', 'issue_number: 210', 'sink: merge', ''
+    ].join('\n'));
+    // Manual archive: bypass archiveProjectDir entirely.
+    const archiveDest = path.join(tmp, 'kaola-workflow', 'archive', 'issue-210');
+    fs.mkdirSync(path.join(tmp, 'kaola-workflow', 'archive'), { recursive: true });
+    fs.renameSync(dir, archiveDest);
+
+    const result = json(runNode(claimScript, ['finalize', '--project', 'issue-210'], tmp));
+    assert(result.status === 'closed', '#333: backstop finalize should exit 0/report closed');
+    assert(result.archive_state_stamped === 'repaired',
+      '#333: backstop must report archive_state_stamped: repaired, got: ' + JSON.stringify(result.archive_state_stamped));
+    const st1 = read(path.join(archiveDest, 'workflow-state.md'));
+    assert(st1.includes('status: closed'), '#333: backstop must stamp manual archive status: closed, got: ' + st1);
+    assert(st1.includes('step: complete'), '#333: backstop must stamp manual archive step: complete');
+    assert(!/next_command:.*kaola-workflow-plan-run/.test(st1),
+      '#333: backstop must neutralize the manual archive next_command');
+    assert(/^## Closure$/m.test(st1), '#333: backstop must append a ## Closure block');
+
+    // Idempotency: a second finalize over the now-terminal archive must not re-stamp and must
+    // leave exactly one ## Closure block.
+    const result2 = json(runNode(claimScript, ['finalize', '--project', 'issue-210'], tmp));
+    assert(result2.archive_state_stamped === 'not_needed',
+      '#333: second backstop run must report not_needed (already terminal), got: ' + JSON.stringify(result2.archive_state_stamped));
+    const st2 = read(path.join(archiveDest, 'workflow-state.md'));
+    const closureCount = (st2.match(/^## Closure$/mg) || []).length;
+    assert(closureCount === 1, '#333: backstop must be idempotent — exactly one ## Closure block, got: ' + closureCount);
+    console.log('testManualArchiveBackstop: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 }
 
 function testRepair(tmp) {
@@ -1176,6 +1317,45 @@ function testAdaptiveValidatorGovernance() {
       '| done | finalize | doc | — | 1 | sequence |',
     ], []);
     assert(v.result === 'refuse' && /G1/.test((v.errors||[]).join(';')), 'implementer without code-reviewer post-dominance must refuse (G1), got: ' + JSON.stringify(v));
+
+    // #334: in-grammar control — explore→impl→review→vgate(main-session-gate)→done auto-runs.
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| impl | implementer | explore | lib/foo.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| vgate | main-session-gate | review | — | 1 | sequence |',
+      '| done | finalize | vgate | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'in-grammar' && v.decision === 'auto-run', '#334: a main-session-gate post-dominating code must be in-grammar+auto-run, got: ' + JSON.stringify(v));
+
+    // #334 G3: a main-session-gate on a SIDE branch (does not post-dominate the implementer) → refuse /G3/.
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| impl | implementer | explore | lib/foo.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| vgate | main-session-gate | explore | — | 1 | sequence |',
+      '| done | finalize | review,vgate | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /G3/.test((v.errors||[]).join(';')), '#334: a side-branch main-session-gate must refuse (G3), got: ' + JSON.stringify(v));
+
+    // #334: a main-session-gate with a declared write set → read-only refusal.
+    v = validatePlanFixture(tmp, [
+      '| impl | implementer | — | lib/foo.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| vgate | main-session-gate | review | lib/bar.js | 1 | sequence |',
+      '| done | finalize | vgate | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /read-only role main-session-gate/.test((v.errors||[]).join(';')), '#334: a main-session-gate write set must refuse (read-only), got: ' + JSON.stringify(v));
+
+    // #334: a main-session-gate as a fan-out member → shape refusal (sequence only).
+    v = validatePlanFixture(tmp, [
+      '| impl | implementer | — | lib/foo.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| g1 | main-session-gate | review | — | 1 | fanout(gates) |',
+      '| g2 | main-session-gate | review | — | 1 | fanout(gates) |',
+      '| done | finalize | g1,g2 | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /main-session-gate node g1 must be shape sequence/.test((v.errors||[]).join(';')), '#334: a main-session-gate fan-out member must refuse (shape), got: ' + JSON.stringify(v));
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   console.log('testAdaptiveValidatorGovernance: PASSED');
 }
@@ -1416,6 +1596,47 @@ function testAdaptiveGateBarrierEnforcement() {
     assert(runNode(planValidatorScript, [gvPlan, '--gate-verify', '--json'], tmp).status === 1, '--gate-verify must exit 1 on an unsatisfied gate');
     fs.writeFileSync(gvPlan, mkLedgerPlan(['| impl | tdd-guide | — | lib/foo.js | 1 | sequence |', '| rv | code-reviewer | impl | — | 1 | sequence |', '| done | finalize | rv | — | 1 | sequence |'], ['| impl | complete |', '| rv | complete |', '| done | complete |']));
     assert(runNode(planValidatorScript, [gvPlan, '--gate-verify', '--json'], tmp).status === 0, '--gate-verify must exit 0 when gates executed');
+
+    // --- #334 G3 runtime gate execution (the regression scenario: impl complete, the
+    // non-delegable main-session-gate incomplete -> finalize MUST be blocked).
+    const g3Nodes = ['| impl | implementer | — | lib/foo.js | 1 | sequence |', '| rv | code-reviewer | impl | — | 1 | sequence |', '| vgate | main-session-gate | rv | — | 1 | sequence |', '| done | finalize | vgate | — | 1 | sequence |'];
+    // (a) impl+rv complete, vgate PENDING -> G3 unsatisfied (a completed code node has no completed gate).
+    let g3 = planValidator.verifyGateExecution(mkLedgerPlan(g3Nodes, ['| impl | complete |', '| rv | complete |', '| vgate | pending |', '| done | pending |']), {});
+    assert(g3.ok === false && /G3/.test(g3.unsatisfied.map(u => u.requirement).join(';')),
+      '#334 G3: impl complete + main-session-gate pending must be unsatisfied (the regression scenario), got: ' + JSON.stringify(g3));
+    // (b) vgate marked n/a (the n/a-evasion) -> still unsatisfied, "cannot be skipped".
+    g3 = planValidator.verifyGateExecution(mkLedgerPlan(g3Nodes, ['| impl | complete |', '| rv | complete |', '| vgate | n/a |', '| done | complete |']), {});
+    assert(g3.ok === false && /cannot be skipped/.test(g3.unsatisfied.map(u => u.reason).join(';')),
+      '#334 G3: a main-session-gate marked n/a is an unsatisfied gate (cannot be skipped), got: ' + JSON.stringify(g3));
+    // (c) all complete -> G3 satisfied.
+    g3 = planValidator.verifyGateExecution(mkLedgerPlan(g3Nodes, ['| impl | complete |', '| rv | complete |', '| vgate | complete |', '| done | complete |']), {});
+    assert(g3.ok === true, '#334 G3 control: all-complete (gate too) must verify ok, got: ' + JSON.stringify(g3));
+
+    // --- #334 --gate-verify + --verdict-check CLI exit codes over a project dir with a .cache.
+    const g3Proj = path.join(tmp, 'kaola-workflow', 'issue-334');
+    const g3Cache = path.join(g3Proj, '.cache');
+    fs.mkdirSync(g3Cache, { recursive: true });
+    const g3PlanPath = path.join(g3Proj, 'workflow-plan.md');
+    // impl complete, gate PENDING -> --gate-verify exit 1 (finalize blocked).
+    fs.writeFileSync(g3PlanPath, mkLedgerPlan(g3Nodes, ['| impl | complete |', '| rv | complete |', '| vgate | pending |', '| done | pending |']));
+    assert(runNode(planValidatorScript, [g3PlanPath, '--gate-verify', '--json'], tmp).status === 1,
+      '#334: --gate-verify must exit 1 when implementation is complete but the main-session-gate is incomplete');
+    // gate n/a -> --gate-verify exit 1.
+    fs.writeFileSync(g3PlanPath, mkLedgerPlan(g3Nodes, ['| impl | complete |', '| rv | complete |', '| vgate | n/a |', '| done | complete |']));
+    assert(runNode(planValidatorScript, [g3PlanPath, '--gate-verify', '--json'], tmp).status === 1,
+      '#334: --gate-verify must exit 1 when the main-session-gate is n/a (cannot be skipped)');
+    // gate complete + valid .cache verdicts for BOTH gate nodes -> --gate-verify AND --verdict-check exit 0.
+    fs.writeFileSync(g3PlanPath, mkLedgerPlan(g3Nodes, ['| impl | complete |', '| rv | complete |', '| vgate | complete |', '| done | complete |']));
+    fs.writeFileSync(path.join(g3Cache, 'rv.md'), 'verdict: pass\nfindings_blocking: 0\nreviewed\n');
+    fs.writeFileSync(path.join(g3Cache, 'vgate.md'), 'verdict: pass\nfindings_blocking: 0\nGPU true-black visual confirmation passed\n');
+    assert(runNode(planValidatorScript, [g3PlanPath, '--gate-verify', '--json'], tmp).status === 0,
+      '#334: --gate-verify must exit 0 when the main-session-gate is complete and post-dominates code');
+    assert(runNode(planValidatorScript, [g3PlanPath, '--verdict-check', '--json'], tmp).status === 0,
+      '#334: --verdict-check must exit 0 when the main-session-gate records verdict: pass');
+    // gate complete but NO .cache verdict for the gate -> --verdict-check exit 1.
+    fs.unlinkSync(path.join(g3Cache, 'vgate.md'));
+    assert(runNode(planValidatorScript, [g3PlanPath, '--verdict-check', '--json'], tmp).status === 1,
+      '#334: --verdict-check must exit 1 when the complete main-session-gate has no .cache verdict evidence');
 
     // --- --barrier-check CLI over a REAL git repo (verifies the merge-base git plumbing).
     const grepo = adaptiveTmp('barrier-git');
@@ -4588,6 +4809,17 @@ function testE2EGitHubMergeFullChain() {
     assert(archiveInTree.status === 0,
       'kaola-workflow/archive/issue-850 must exist in feature branch HEAD after finalize --keep-worktree');
 
+    // #333: the ## Closure append must land INSIDE the `chore: archive` commit (commit-last
+    // ordering). After the FIRST finalize --keep-worktree the feature worktree must be clean —
+    // a dirty append would break the #217 second-finalize no-new-commit assert below.
+    const cleanAfterFinalize = spawnSync('git', ['status', '--porcelain'],
+      { cwd: wt850, encoding: 'utf8' }).stdout.trim();
+    assert(cleanAfterFinalize === '',
+      '#333: feature worktree must be clean after finalize --keep-worktree (## Closure append inside commit), got: ' + cleanAfterFinalize);
+    const archivedState850 = fs.readFileSync(path.join(wt850, 'kaola-workflow', 'archive', 'issue-850', 'workflow-state.md'), 'utf8');
+    assert(/^## Closure$/m.test(archivedState850),
+      '#333: archived state must carry a ## Closure block after finalize --keep-worktree');
+
     // issue #217: a second finalize --keep-worktree on a clean index must be a no-op (not crash)
     const headBefore2nd = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: wt850, encoding: 'utf8' }).stdout.trim();
     const finResult2 = spawnSync(process.execPath, [
@@ -4911,6 +5143,15 @@ function testE2EGitHubPrFullChain() {
       'active folder must be gone after watch-pr archives'
     );
     assert(!fs.existsSync(wt860), 'linked worktree must be removed by watch-pr');
+
+    // #333: the watch-pr MERGED lane disposition is PROBE-derived (the gh shim answers
+    // `issue view` with state: open), so a merged PR whose issue is still open archives as
+    // kept-open — never an unconditional `closed`. The ## Closure block records that.
+    const archivedState860 = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'archive', 'issue-860', 'workflow-state.md'), 'utf8');
+    assert(/^## Closure$/m.test(archivedState860),
+      '#333: watch-pr archived state must carry a ## Closure block');
+    assert(archivedState860.includes('issue_disposition: kept-open'),
+      '#333: watch-pr MERGED archive of an open issue must record issue_disposition: kept-open (probe-derived), got: ' + archivedState860);
 
     console.log('testE2EGitHubPrFullChain: PASSED');
   } finally {
@@ -6339,6 +6580,407 @@ function testSinkMergeMockabilityAndReceipt() {
   }
 }
 
+// ===== issue #336: keep-open partial-close sink lane =====
+
+// #336 full chain (OFFLINE) — exercises state-field derivation (NO --keep-open flag on finalize):
+// an adaptive-complete fixture with issue_action: comment_keep_open is finalized + merge-sinked,
+// asserting the roadmap source is PRESERVED on the branch HEAD/main and the receipts read kept_open.
+function testKeepOpenMergeFullChain() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-keepopen-chain-')));
+  const kwRoot = tmp + '.kw';
+  try {
+    initGitRepo(tmp);
+    const binDir = path.join(tmp, 'bin');
+    writeGhShimForStartup(binDir);
+
+    const s860 = runClaimOnline(['startup', '--target-issue', '860'], tmp, binDir);
+    assert(s860.claim === 'acquired', 'keep-open chain: startup 860 should acquire, got: ' + JSON.stringify(s860));
+    const wt860 = s860.worktree_path;
+
+    // Mark the run keep-open (durable field) + make it an adaptive-complete fixture. The live
+    // state folder is in MAIN until worktree-finalize copies it into the worktree, so patch MAIN.
+    const mainState = path.join(tmp, 'kaola-workflow', 'issue-860', 'workflow-state.md');
+    let stContent = fs.readFileSync(mainState, 'utf8');
+    stContent = stContent.replace(/^workflow_path:.*$/m, 'workflow_path: adaptive');
+    stContent = stContent.trimEnd() + '\nissue_action: comment_keep_open\n';
+    fs.writeFileSync(mainState, stContent);
+    fs.writeFileSync(path.join(tmp, 'kaola-workflow', 'issue-860', 'workflow-plan.md'), [
+      '<!-- plan_hash: ' + 'c'.repeat(64) + ' -->', '',
+      '# Workflow Plan', '',
+      '## Node Ledger', '', '| id | status |', '|---|---|',
+      '| n1 | complete |', '| n2 | complete |', ''
+    ].join('\n'));
+
+    // Roadmap source on the branch (so the keep-open preservation has something to keep on HEAD).
+    const wtRoadmapDir = path.join(wt860, 'kaola-workflow', '.roadmap');
+    fs.mkdirSync(wtRoadmapDir, { recursive: true });
+    fs.writeFileSync(path.join(wtRoadmapDir, 'issue-860.md'),
+      'issue: #860\ntitle: keep-open fixture\nstatus: open\nworkflow_project: issue-860\nnext_step: ready\n');
+    // A regenerated mirror that lists #860 as an active row (row-anchored matcher).
+    fs.writeFileSync(path.join(wt860, 'kaola-workflow', 'ROADMAP.md'),
+      '<!-- generated by scripts/kaola-workflow-roadmap.js — do not edit -->\n\n| #860 | keep-open fixture | open |\n');
+
+    // Feature commit + the roadmap source committed on the branch.
+    fs.writeFileSync(path.join(wt860, 'feature-860.txt'), 'feature\n');
+    spawnSync('git', ['-C', wt860, 'add', '-A'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', wt860, 'commit', '-m', 'feat: issue 860 + roadmap source'], {
+      encoding: 'utf8',
+      env: { ...process.env, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com' }
+    });
+
+    runClaimOnlineLastJson(['worktree-finalize', '--project', 'issue-860'], tmp, binDir);
+
+    // finalize --keep-worktree WITHOUT --keep-open: exercises state-field derivation (OFFLINE).
+    const finResult = spawnSync(process.execPath, [
+      claimScript, 'finalize', '--project', 'issue-860', '--keep-worktree'
+    ], { cwd: wt860, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
+    assert(finResult.status === 0, 'keep-open finalize must exit 0\nstderr: ' + finResult.stderr);
+    const finJson = JSON.parse(finResult.stdout.trim().split('\n').filter(Boolean).pop());
+    assert(finJson.issue_disposition === 'kept-open',
+      '#336: state-field derivation must yield issue_disposition kept-open, got: ' + JSON.stringify(finJson.issue_disposition));
+    assert(finJson.roadmap_source_removed === 'kept',
+      '#336: finalize roadmap_source_removed must be kept, got: ' + JSON.stringify(finJson.roadmap_source_removed));
+    assert(finJson.closure_receipt.remote_issue_closed === 'kept_open',
+      '#336: finalize receipt remote_issue_closed must be kept_open, got: ' + JSON.stringify(finJson.closure_receipt.remote_issue_closed));
+    assert(finJson.closure_invariants.ok === true,
+      '#336: finalize closure_invariants.ok must be true, got: ' + JSON.stringify(finJson.closure_invariants));
+    // The roadmap source must STILL exist in the worktree (preserved, not unlinked).
+    assert(fs.existsSync(path.join(wtRoadmapDir, 'issue-860.md')),
+      '#336: keep-open finalize must preserve kaola-workflow/.roadmap/issue-860.md in the worktree');
+    const archived860 = fs.readFileSync(path.join(wt860, 'kaola-workflow', 'archive', 'issue-860', 'workflow-state.md'), 'utf8');
+    assert(archived860.includes('last_result: closed_keep_open') && archived860.includes('issue_action: comment_keep_open'),
+      '#336: archived state must carry closed_keep_open + issue_action: comment_keep_open');
+
+    const featureHead = spawnSync('git', ['rev-parse', 'workflow/issue-860'], { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+
+    // sink-merge --keep-issue-open (OFFLINE).
+    const smResult = spawnSync(process.execPath, [
+      sinkMergeScript, '--project', 'issue-860', '--branch', 'workflow/issue-860', '--issue', '860', '--keep-issue-open'
+    ], { cwd: wt860, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
+    assert(smResult.status === 0, 'keep-open sink-merge must exit 0\nstdout: ' + smResult.stdout + '\nstderr: ' + smResult.stderr);
+    const mainAfter = spawnSync('git', ['rev-parse', 'main'], { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+    assert(mainAfter === featureHead, '#336: main must advance to feature HEAD after keep-open sink-merge');
+    assert(!fs.existsSync(wt860), '#336: keep-open sink-merge must remove the worktree');
+    const branchList = spawnSync('git', ['branch', '--list', 'workflow/issue-860'], { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+    assert(branchList === '', '#336: keep-open sink-merge must delete the branch');
+    // The preserved roadmap source must be on main's HEAD (committed on the branch, now merged).
+    const onHead = spawnSync('git', ['cat-file', '-e', 'HEAD:kaola-workflow/.roadmap/issue-860.md'], { cwd: tmp, encoding: 'utf8' });
+    assert(onHead.status === 0, '#336: kaola-workflow/.roadmap/issue-860.md must survive on main HEAD after keep-open sink-merge');
+    const smJson = JSON.parse(smResult.stdout.trim().split('\n').filter(Boolean).pop());
+    assert(smJson.closure_receipt.remote_issue_closed === 'kept_open',
+      '#336: sink-merge receipt remote_issue_closed must be kept_open, got: ' + JSON.stringify(smJson.closure_receipt.remote_issue_closed));
+    assert(smJson.closure_receipt.roadmap_source_removed === 'kept',
+      '#336: sink-merge receipt roadmap_source_removed must be kept, got: ' + JSON.stringify(smJson.closure_receipt.roadmap_source_removed));
+    assert(smJson.closure_invariants.ok === true,
+      '#336: sink-merge closure_invariants.ok must be true, got: ' + JSON.stringify(smJson.closure_invariants));
+    const mainStatus = spawnSync('git', ['status', '--porcelain', '--untracked-files=no'], { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+    assert(mainStatus === '', '#336: main worktree must be clean after keep-open sink-merge, got: ' + mainStatus);
+    console.log('testKeepOpenMergeFullChain: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
+// #336 — cmdFinalize MUST honor the --keep-issue-open FLAG as the sole keep-open signal.
+// Regression for the inert-flag false-green: every prose surface (contractor.md:156 passes ONLY
+// $SINK_KEEP_OPEN_FLAG, the crash-resume note at contractor.md:169 re-runs with --keep-issue-open
+// "since the live state is gone and state-field derivation is unavailable") dispatches
+// --keep-issue-open, but claim.js parseArgs only recognized --keep-open — the flag was a no-op.
+// This fixture OMITS the durable `issue_action` field, so the FLAG is the only thing that can
+// produce a keep-open terminal. Pre-alias this exits with close-mode (roadmap_source_removed
+// 'removed', remote_issue_closed not 'kept_open', invariants fail on roadmap-source-absent).
+function testKeepOpenFinalizeFlagAlias() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-keepopen-flag-')));
+  const kwRoot = tmp + '.kw';
+  try {
+    initGitRepo(tmp);
+    const binDir = path.join(tmp, 'bin');
+    writeGhShimForStartup(binDir);
+
+    const s861 = runClaimOnline(['startup', '--target-issue', '861'], tmp, binDir);
+    assert(s861.claim === 'acquired', 'keep-open flag: startup 861 should acquire, got: ' + JSON.stringify(s861));
+    const wt861 = s861.worktree_path;
+
+    // Adaptive-complete fixture, but DELIBERATELY no `issue_action` field — the flag is the
+    // ONLY keep-open signal (mirrors the crash-resume path where state-derivation is unavailable).
+    const mainState = path.join(tmp, 'kaola-workflow', 'issue-861', 'workflow-state.md');
+    let stContent = fs.readFileSync(mainState, 'utf8');
+    stContent = stContent.replace(/^workflow_path:.*$/m, 'workflow_path: adaptive');
+    assert(!/^issue_action:/m.test(stContent),
+      '#336: flag-alias fixture must NOT carry an issue_action field (the flag is the sole signal)');
+    fs.writeFileSync(mainState, stContent);
+    fs.writeFileSync(path.join(tmp, 'kaola-workflow', 'issue-861', 'workflow-plan.md'), [
+      '<!-- plan_hash: ' + 'd'.repeat(64) + ' -->', '',
+      '# Workflow Plan', '',
+      '## Node Ledger', '', '| id | status |', '|---|---|',
+      '| n1 | complete |', '| n2 | complete |', ''
+    ].join('\n'));
+
+    const wtRoadmapDir = path.join(wt861, 'kaola-workflow', '.roadmap');
+    fs.mkdirSync(wtRoadmapDir, { recursive: true });
+    fs.writeFileSync(path.join(wtRoadmapDir, 'issue-861.md'),
+      'issue: #861\ntitle: keep-open flag fixture\nstatus: open\nworkflow_project: issue-861\nnext_step: ready\n');
+    fs.writeFileSync(path.join(wt861, 'kaola-workflow', 'ROADMAP.md'),
+      '<!-- generated by scripts/kaola-workflow-roadmap.js — do not edit -->\n\n| #861 | keep-open flag fixture | open |\n');
+
+    fs.writeFileSync(path.join(wt861, 'feature-861.txt'), 'feature\n');
+    spawnSync('git', ['-C', wt861, 'add', '-A'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', wt861, 'commit', '-m', 'feat: issue 861 + roadmap source'], {
+      encoding: 'utf8',
+      env: { ...process.env, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com' }
+    });
+
+    runClaimOnlineLastJson(['worktree-finalize', '--project', 'issue-861'], tmp, binDir);
+
+    // finalize WITH the explicit --keep-issue-open flag, NO issue_action field → the flag must
+    // drive the keep-open terminal entirely on its own (OFFLINE).
+    const finResult = spawnSync(process.execPath, [
+      claimScript, 'finalize', '--project', 'issue-861', '--keep-worktree', '--keep-issue-open'
+    ], { cwd: wt861, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
+    assert(finResult.status === 0, '#336: keep-open flag finalize must exit 0\nstderr: ' + finResult.stderr);
+    const finJson = JSON.parse(finResult.stdout.trim().split('\n').filter(Boolean).pop());
+    assert(finJson.issue_disposition === 'kept-open',
+      '#336: --keep-issue-open FLAG must yield issue_disposition kept-open (flag was inert before the alias), got: ' + JSON.stringify(finJson.issue_disposition));
+    assert(finJson.roadmap_source_removed === 'kept',
+      '#336: --keep-issue-open FLAG must yield roadmap_source_removed kept, got: ' + JSON.stringify(finJson.roadmap_source_removed));
+    assert(finJson.closure_receipt.remote_issue_closed === 'kept_open',
+      '#336: --keep-issue-open FLAG must yield receipt remote_issue_closed kept_open, got: ' + JSON.stringify(finJson.closure_receipt.remote_issue_closed));
+    assert(finJson.closure_invariants.ok === true,
+      '#336: --keep-issue-open FLAG must yield ok closure invariants (no roadmap-source-absent false fire), got: ' + JSON.stringify(finJson.closure_invariants));
+    assert(fs.existsSync(path.join(wtRoadmapDir, 'issue-861.md')),
+      '#336: --keep-issue-open FLAG must preserve kaola-workflow/.roadmap/issue-861.md');
+    const archived861 = fs.readFileSync(path.join(wt861, 'kaola-workflow', 'archive', 'issue-861', 'workflow-state.md'), 'utf8');
+    assert(archived861.includes('last_result: closed_keep_open'),
+      '#336: --keep-issue-open FLAG must stamp last_result: closed_keep_open');
+    console.log('testKeepOpenFinalizeFlagAlias: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
+// #336 ONLINE-mock "must not close" proof — the load-bearing test: sink-merge Step 8's actual
+// gh-call branch is dead code under OFFLINE, so a token-only cheat would pass every OFFLINE test.
+// This drives the REAL gh shim with OFFLINE=0 and asserts the call stream contains 'issue comment'
+// (keep-open comment) + 'issue edit' (label removal) but NEVER 'issue close'.
+function testSinkMergeKeepOpenOnlineMock() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sm-keepopen-mock-')));
+  const remotePath = initGitRepoWithBareRemote(tmp);
+  const marker = path.join(tmp, 'gh-mock-called.marker');
+  try {
+    const binDir = path.join(tmp, 'bin');
+    fs.mkdirSync(binDir, { recursive: true });
+    writeShimFiles(path.join(binDir, 'gh'), [
+      "const fs = require('fs');",
+      "const a = process.argv.slice(2).join(' ');",
+      "fs.writeFileSync(" + JSON.stringify(marker) + ", a + '\\n', { flag: 'a' });",
+      "process.stdout.write('{}\\n');"
+    ]);
+    // Commit a roadmap source on main so the keep-open receipt has something to preserve.
+    fs.mkdirSync(path.join(tmp, 'kaola-workflow', '.roadmap'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'kaola-workflow', '.roadmap', 'issue-164.md'), 'issue: #164\nstatus: open\n');
+    spawnSync('git', ['-C', tmp, 'add', '-A'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'chore: roadmap source 164'], {
+      encoding: 'utf8',
+      env: { ...process.env, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com' }
+    });
+    spawnSync('git', ['-C', tmp, 'push', 'origin', 'main'], { encoding: 'utf8' });
+
+    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-164k'], { encoding: 'utf8' });
+    fs.writeFileSync(path.join(tmp, 'feature-164k.txt'), 'feature\n');
+    spawnSync('git', ['-C', tmp, 'add', 'feature-164k.txt'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'feat: issue 164k'], {
+      encoding: 'utf8',
+      env: { ...process.env, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com' }
+    });
+    spawnSync('git', ['-C', tmp, 'push', '-u', 'origin', 'workflow/issue-164k'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmp, 'checkout', 'main'], { encoding: 'utf8' });
+
+    const mockJs = path.join(binDir, 'gh.js');
+    const result = spawnSync(process.execPath, [
+      sinkMergeScript, '--project', 'issue-164k', '--branch', 'workflow/issue-164k', '--issue', '164', '--keep-issue-open'
+    ], {
+      cwd: tmp,
+      encoding: 'utf8',
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_GH_MOCK_SCRIPT: mockJs }
+    });
+    assert(result.status === 0, '#336: online-mock keep-open sink-merge must exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(fs.existsSync(marker), '#336: gh mock shim must be invoked');
+    const markerContent = fs.readFileSync(marker, 'utf8');
+    assert(markerContent.includes('issue comment'),
+      '#336: keep-open online-mock must post an issue comment, marker: ' + markerContent);
+    assert(markerContent.includes('issue edit'),
+      '#336: keep-open online-mock must still remove the claim label (issue edit), marker: ' + markerContent);
+    assert(!markerContent.includes('issue close'),
+      '#336: keep-open online-mock must NOT close the issue, marker: ' + markerContent);
+    const parsed = JSON.parse(result.stdout.trim().split('\n').filter(Boolean).pop());
+    assert(parsed.closure_receipt.remote_issue_closed === 'kept_open',
+      '#336: keep-open receipt remote_issue_closed must be kept_open, got: ' + parsed.closure_receipt.remote_issue_closed);
+    assert(parsed.closure_receipt.claim_label_removed === 'removed',
+      '#336: keep-open receipt claim_label_removed must be removed, got: ' + parsed.closure_receipt.claim_label_removed);
+    assert(parsed.closure_receipt.roadmap_source_removed === 'kept',
+      '#336: keep-open receipt roadmap_source_removed must be kept, got: ' + parsed.closure_receipt.roadmap_source_removed);
+    console.log('testSinkMergeKeepOpenOnlineMock: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    try { fs.rmSync(remotePath, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
+// #336 — --keep-issue-open requires --issue (typed refusal, non-zero exit).
+function testSinkMergeKeepOpenRequiresIssue() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sm-keepopen-noissue-')));
+  try {
+    initGitRepo(tmp);
+    const result = spawnSync(process.execPath, [
+      sinkMergeScript, '--project', 'issue-700', '--branch', 'workflow/issue-700', '--keep-issue-open'
+    ], { cwd: tmp, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
+    assert(result.status !== 0, '#336: --keep-issue-open without --issue must exit non-zero');
+    assert(/--keep-issue-open requires --issue/.test(result.stderr),
+      '#336: refusal message must explain --keep-issue-open requires --issue, got: ' + result.stderr);
+    console.log('testSinkMergeKeepOpenRequiresIssue: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// #336 — archived-state guard (OFFLINE): sink-merge WITHOUT the flag must honor an archived
+// issue_action: comment_keep_open and record kept_open + emit the honoring warning.
+function testSinkMergeKeepOpenArchivedStateGuard() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sm-keepopen-guard-')));
+  try {
+    initGitRepo(tmp);
+    // Feature branch with a non-workflow change so the all-workflow refusal does not fire.
+    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-545'], { encoding: 'utf8' });
+    fs.writeFileSync(path.join(tmp, 'feature-545.txt'), 'feature\n');
+    spawnSync('git', ['-C', tmp, 'add', 'feature-545.txt'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'feat: issue 545'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmp, 'checkout', 'main'], { encoding: 'utf8' });
+    // Archived state carrying the keep-open field (the FF merge would put it on HEAD; here we
+    // place it directly so postMergeCleanup can read it).
+    const archiveDir = path.join(tmp, 'kaola-workflow', 'archive', 'issue-545');
+    fs.mkdirSync(archiveDir, { recursive: true });
+    fs.writeFileSync(path.join(archiveDir, 'workflow-state.md'),
+      'status: closed\nstep: complete\nissue_number: 545\n\n## Sink\nbranch: workflow/issue-545\nissue_number: 545\nsink: merge\nissue_action: comment_keep_open\n');
+
+    const result = spawnSync(process.execPath, [
+      sinkMergeScript, '--project', 'issue-545', '--branch', 'workflow/issue-545', '--issue', '545'
+    ], { cwd: tmp, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
+    assert(result.status === 0, '#336: archived-guard sink-merge must exit 0\nstderr: ' + result.stderr);
+    assert(/honoring archived issue_action: comment_keep_open/.test(result.stderr),
+      '#336: archived-guard must emit the honoring warning, got: ' + result.stderr);
+    const parsed = JSON.parse(result.stdout.trim().split('\n').filter(Boolean).pop());
+    assert(parsed.closure_receipt.remote_issue_closed === 'kept_open',
+      '#336: archived-guard receipt remote_issue_closed must be kept_open (flag not passed), got: ' + parsed.closure_receipt.remote_issue_closed);
+    console.log('testSinkMergeKeepOpenArchivedStateGuard: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// #336 — closure-audit exclusion: a status:closed archive carrying issue_action: comment_keep_open
+// with a surviving roadmap source must NOT be flagged archive_closed (the --execute landmine).
+function testClosureAuditKeepOpenExclusion() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-ca-keepopen-'));
+  try {
+    initGitRepo(tmp);
+    // Keep-open archive: source MUST survive the audit.
+    plantRoadmapIssue(tmp, 720, '');
+    const keepDir = path.join(tmp, 'kaola-workflow', 'archive', 'issue-720');
+    fs.mkdirSync(keepDir, { recursive: true });
+    fs.writeFileSync(path.join(keepDir, 'workflow-state.md'),
+      'status: closed\nstep: complete\nissue_number: 720\nissue_action: comment_keep_open\n');
+    // Normal closed archive: source MUST still be flagged (regression).
+    plantRoadmapIssue(tmp, 721, '');
+    const normalDir = path.join(tmp, 'kaola-workflow', 'archive', 'issue-721');
+    fs.mkdirSync(normalDir, { recursive: true });
+    fs.writeFileSync(path.join(normalDir, 'workflow-state.md'),
+      'status: closed\nstep: complete\nissue_number: 721\n');
+
+    // OFFLINE: closed-set empty exercises only the archive_closed class (the landmine).
+    const result = runClosureAuditOffline([], tmp);
+    const sources = result.drift.stale_roadmap_sources;
+    assert(!sources.some(s => s.issue_number === 720),
+      '#336: keep-open archive (720) must NOT be flagged stale, got: ' + JSON.stringify(sources));
+    assert(sources.some(s => s.issue_number === 721 && s.reason === 'archive_closed'),
+      '#336: normal closed archive (721) must still be flagged archive_closed (regression), got: ' + JSON.stringify(sources));
+    console.log('testClosureAuditKeepOpenExclusion: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// #336 — invariant unit: a hand-built keep-open receipt with the source DELETED yields exactly
+// one violation keep-open-roadmap-preserved (the inverted preservation check).
+function testKeepOpenInvariantUnit() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-keepopen-inv-'));
+  try {
+    const claimMod = require(path.join(repoRoot, 'scripts', 'kaola-workflow-claim.js'));
+    const contract = require(path.join(repoRoot, 'scripts', 'kaola-workflow-closure-contract.js'));
+    // No .roadmap source on disk → the preservation check must fail.
+    const receipt = contract.emptyReceipt('issue-808', 808);
+    receipt.remote_issue_closed = 'kept_open';
+    receipt.roadmap_source_removed = 'kept';
+    receipt.claim_label_removed = 'removed';
+    receipt.worktree_removed = 'removed';
+    receipt.branch_removed = 'kept';
+    const inv = claimMod.checkClosureInvariants(tmp, receipt, null);
+    const keepViolations = inv.violations.filter(v => v.id === 'keep-open-roadmap-preserved');
+    assert(keepViolations.length === 1,
+      '#336: a keep-open receipt with no roadmap source must yield exactly one keep-open-roadmap-preserved violation, got: ' + JSON.stringify(inv.violations));
+    assert(!inv.violations.some(v => v.id === 'roadmap-source-absent' || v.id === 'roadmap-mirror-clean'),
+      '#336: keep-open must REPLACE roadmap-source-absent / roadmap-mirror-clean, got: ' + JSON.stringify(inv.violations));
+    console.log('testKeepOpenInvariantUnit: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// #336 — sink-pr keep-open refusal: a live OR archived state carrying issue_action:
+// comment_keep_open must make sink-pr refuse (merge-sink-only); without the field it exits 0.
+function testSinkPrKeepOpenRefusal() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sinkpr-keepopen-')));
+  try {
+    initGitRepo(tmp);
+    const runSinkPr = (project) => spawnSync(process.execPath, [
+      sinkPrScript, '--project', project, '--branch', 'workflow/' + project, '--issue', '900'
+    ], { cwd: tmp, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
+
+    // (a) LIVE state carrying the field → refuse.
+    const liveDir = path.join(tmp, 'kaola-workflow', 'issue-900a');
+    fs.mkdirSync(liveDir, { recursive: true });
+    fs.writeFileSync(path.join(liveDir, 'workflow-state.md'),
+      'status: active\n\n## Sink\nsink: pr\nissue_action: comment_keep_open\n');
+    const liveResult = runSinkPr('issue-900a');
+    assert(liveResult.status !== 0, '#336: sink-pr must refuse a live keep-open project');
+    assert(/merge-sink-only/.test(liveResult.stderr),
+      '#336: sink-pr live refusal must say merge-sink-only, got: ' + liveResult.stderr);
+
+    // (b) ARCHIVED state carrying the field (the real exit-3 fallback shape) → refuse.
+    const archDir = path.join(tmp, 'kaola-workflow', 'archive', 'issue-900b');
+    fs.mkdirSync(archDir, { recursive: true });
+    fs.writeFileSync(path.join(archDir, 'workflow-state.md'),
+      'status: closed\nstep: complete\nissue_number: 900\n\n## Sink\nsink: merge\nissue_action: comment_keep_open\n');
+    const archResult = runSinkPr('issue-900b');
+    assert(archResult.status !== 0, '#336: sink-pr must refuse an archived keep-open project');
+    assert(/merge-sink-only/.test(archResult.stderr),
+      '#336: sink-pr archived refusal must say merge-sink-only, got: ' + archResult.stderr);
+
+    // Regression: without the field, OFFLINE sink-pr exits 0.
+    const cleanDir = path.join(tmp, 'kaola-workflow', 'issue-900c');
+    fs.mkdirSync(cleanDir, { recursive: true });
+    fs.writeFileSync(path.join(cleanDir, 'workflow-state.md'),
+      'status: active\n\n## Sink\nsink: pr\n');
+    const cleanResult = runSinkPr('issue-900c');
+    assert(cleanResult.status === 0,
+      '#336: a non-keep-open sink-pr must still exit 0 OFFLINE\nstderr: ' + cleanResult.stderr);
+    console.log('testSinkPrKeepOpenRefusal: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 function testSinkMergeCloseFailureWarning() {
   // Verify AC#3: when closeIssue fails, sink-merge emits a stderr warning but still exits 0,
   // and the receipt reflects remote_issue_closed:failed while label removal succeeds.
@@ -7419,6 +8061,113 @@ function testAdaptiveSyncGroupGap() {
       '(f) #301: workflow-init template pair intra-node must be in-grammar, got: ' + JSON.stringify(v));
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   console.log('testAdaptiveSyncGroupGap: PASSED');
+}
+
+// issue #340: the two freeze-time write-set completeness checks — (mech 1) an agent-set delta
+// must carry its FULL 22-path registration surface (exact-match registries keyed on no symbol
+// of the new file, invisible to #306 symbol-grep), anchor-gated to the Kaola-Workflow repo;
+// (mech 2) a forge-port mirror node must be a transitive descendant of every node that writes
+// the port's root source (the canonical spec is the full accumulated root diff). Composes with
+// the #274/#301 byte-identity co-occurrence check.
+function testAdaptiveRegistrationAndForgePortGaps() {
+  const tmp = adaptiveTmp('reg-forgeport');
+  // Plant the anchor file so the mech-1 check is active (only the Kaola-Workflow repo has the
+  // registration surface). The same tmp serves all cases; A2 uses a fresh anchorless tmp.
+  const plantAnchor = () => {
+    fs.mkdirSync(path.join(tmp, 'scripts'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'scripts', 'validate-vendored-agents.js'), '// anchor\n');
+  };
+  // The full 22-path registration surface for an agent named `new-scout`, split across nodes
+  // under FILE_CEILING=6 (the byte-group co-occurrence forces resolve-agent-model ×4 and the
+  // plan-validator root↔codex pair into single nodes — satisfied here).
+  const SURFACE_NODES = (parents) => [
+    '| n1 | implementer | ' + parents + ' | agents/new-scout.md, plugins/kaola-workflow/agents/new-scout.toml, plugins/kaola-workflow-gitlab/agents/new-scout.toml, plugins/kaola-workflow-gitea/agents/new-scout.toml, install.sh, uninstall.sh | 1 | sequence |',
+    '| n2 | implementer | n1 | scripts/kaola-workflow-resolve-agent-model.js, plugins/kaola-workflow/scripts/kaola-workflow-resolve-agent-model.js, plugins/kaola-workflow-gitlab/scripts/kaola-workflow-resolve-agent-model.js, plugins/kaola-workflow-gitea/scripts/kaola-workflow-resolve-agent-model.js, scripts/validate-vendored-agents.js | 1 | sequence |',
+    '| n3 | implementer | n2 | scripts/kaola-workflow-plan-validator.js, plugins/kaola-workflow/scripts/kaola-workflow-plan-validator.js, plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-plan-validator.js, plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-plan-validator.js | 1 | sequence |',
+    '| n4 | implementer | n3 | plugins/kaola-workflow/config/agents.toml, plugins/kaola-workflow-gitlab/config/agents.toml, plugins/kaola-workflow-gitea/config/agents.toml, plugins/kaola-workflow-gitlab/scripts/validate-kaola-workflow-gitlab-contracts.js, plugins/kaola-workflow-gitea/scripts/validate-kaola-workflow-gitea-contracts.js | 1 | sequence |',
+    '| n5 | implementer | n4 | plugins/kaola-workflow-gitlab/scripts/test-gitlab-workflow-scripts.js, plugins/kaola-workflow-gitea/scripts/test-gitea-workflow-scripts.js | 1 | sequence |',
+  ];
+  try {
+    plantAnchor();
+    // A1 (mech-1 refusal — the issue's regression-fixture AC): an agent add whose write set
+    // declares only the root profile must refuse, naming representative paths from BOTH gap
+    // classes (the exact-match registry AND the by-name dispatch enumerations missed by #328).
+    let v = validatePlanFixture(tmp, [
+      '| scout | implementer | explore | agents/new-scout.md | 1 | sequence |',
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| review | code-reviewer | scout | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    const a1err = (v.errors || []).join('\n');
+    assert(v.result === 'refuse' && /agent-registration gap:.*validate-vendored-agents\.js/.test(a1err),
+      'A1: agent add omitting the surface must refuse naming validate-vendored-agents.js, got: ' + JSON.stringify(v));
+    assert(/agent-registration gap:.*config\/agents\.toml/.test(a1err),
+      'A1: refusal must name the config/agents.toml codex-dispatch registry (#328 miss), got: ' + a1err);
+    assert(/agent-registration gap:.*uninstall\.sh/.test(a1err),
+      'A1: refusal must name uninstall.sh REQUIRED_AGENTS (#328 miss), got: ' + a1err);
+
+    // A2 (anchor gating — no user-repo false positive): same plan rows, fresh tmp WITHOUT the
+    // anchor file -> in-grammar (the check is inert outside the Kaola-Workflow repo).
+    const tmp2 = adaptiveTmp('reg-noanchor');
+    try {
+      v = validatePlanFixture(tmp2, [
+        '| scout | implementer | explore | agents/new-scout.md | 1 | sequence |',
+        '| explore | code-explorer | — | — | 1 | sequence |',
+        '| review | code-reviewer | scout | — | 1 | sequence |',
+        '| done | finalize | review | — | 1 | sequence |',
+      ], []);
+      assert(v.result === 'in-grammar',
+        'A2: without the anchor file the mech-1 check must be inert (in-grammar), got: ' + JSON.stringify(v));
+    } finally { fs.rmSync(tmp2, { recursive: true, force: true }); }
+
+    // A3 (complete-surface positive, 22 paths / FILE_CEILING=6 -> 5 impl nodes): the full
+    // surface declared across 5 nodes (byte-group co-occurrence satisfied) -> in-grammar.
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      ...SURFACE_NODES('explore'),
+      '| review | code-reviewer | n5 | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'in-grammar',
+      'A3: the complete 22-path surface across 5 nodes must be in-grammar, got: ' + JSON.stringify(v));
+
+    // A3 drop-one variant: remove uninstall.sh from n1 -> must flip to refuse (guards against
+    // the surface silently shrinking).
+    const dropped = SURFACE_NODES('explore').map(r =>
+      r.startsWith('| n1 ') ? r.replace(', uninstall.sh', '') : r);
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      ...dropped,
+      '| review | code-reviewer | n5 | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /agent-registration gap:.*uninstall\.sh/.test((v.errors || []).join('\n')),
+      'A3-drop: dropping uninstall.sh from the surface must refuse, got: ' + JSON.stringify(v));
+
+    // A4 (mech-2 refusal): a port node PARALLEL to (not downstream of) the root-editing node ->
+    // refuse with forge-port ordering gap. Pure graph check (anchor irrelevant).
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| rootedit | tdd-guide | explore | scripts/kaola-workflow-claim.js, plugins/kaola-workflow/scripts/kaola-workflow-claim.js | 1 | sequence |',
+      '| port | implementer | explore | plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js | 1 | sequence |',
+      '| review | code-reviewer | rootedit,port | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /forge-port ordering gap/.test((v.errors || []).join('\n')),
+      'A4: a port parallel to its root edit must refuse with forge-port ordering gap, got: ' + JSON.stringify(v));
+
+    // A5 (mech-2 positive): same but the port depends_on the root-editing node -> in-grammar.
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| rootedit | tdd-guide | explore | scripts/kaola-workflow-claim.js, plugins/kaola-workflow/scripts/kaola-workflow-claim.js | 1 | sequence |',
+      '| port | implementer | rootedit | plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js | 1 | sequence |',
+      '| review | code-reviewer | port | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'in-grammar',
+      'A5: a port downstream of all its root edits must be in-grammar, got: ' + JSON.stringify(v));
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptiveRegistrationAndForgePortGaps: PASSED');
 }
 
 // issue #308: reconcileLedger (--freeze --repair) brings the ## Node Ledger into agreement
@@ -8834,6 +9583,97 @@ function testAdaptiveHandoffProjectFlagResolvesRepoRoot() {
   console.log('testAdaptiveHandoffProjectFlagResolvesRepoRoot: PASSED');
 }
 
+// ---------------------------------------------------------------------------
+// testAdaptiveHandoffDecisionIdConflict — #337 regression fixture (both arms).
+// The repo already records decision id D-210-01 (a prior partial-close cycle:
+// docs/decisions/ file, filename + content). An UNFROZEN in-grammar plan whose
+// ## Plan Notes hardcodes D-210-01 must REFUSE pre-freeze (decision_id_conflict,
+// exit≠0, plan bytes UNCHANGED — no plan_hash stamped). Renumbering to the next
+// free D-210-02 with the deliberate reference annotated "D-210-01 (existing)"
+// must freeze (exit 0, ready_to_run). Drives the REAL subprocess + the REAL
+// default docs/CHANGELOG scanner seam (no injected stubs — #292 io-shim lesson).
+// ---------------------------------------------------------------------------
+function testAdaptiveHandoffDecisionIdConflict() {
+  const tmp = adaptiveTmp('handoff-decision-id');
+  try {
+    initGitRepo(tmp);
+
+    const projectName = 'issue-210-sim-decision-id';
+    const projectDir = path.join(tmp, 'kaola-workflow', projectName);
+    fs.mkdirSync(projectDir, { recursive: true });
+
+    // Prior partial-close cycle already shipped D-210-01.
+    const decisionsDir = path.join(tmp, 'docs', 'decisions');
+    fs.mkdirSync(decisionsDir, { recursive: true });
+    fs.writeFileSync(path.join(decisionsDir, 'D-210-01-prior-decision.md'),
+      '# D-210-01 — prior decision\n\nShipped in the first partial-close cycle (PR #233).\n');
+
+    const nodesRows = [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| impl | tdd-guide | explore | lib/foo.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ];
+    const ledgerRows = [
+      '| explore | pending |',
+      '| impl | pending |',
+      '| review | pending |',
+      '| done | pending |',
+    ];
+    const staleNotes = [
+      '', '## Plan Notes', '',
+      '- the docs follow-up records decision record D-210-01.', '',
+    ].join('\n');
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, makeHandoffPlan(nodesRows, ledgerRows) + staleNotes);
+    plantHandoffState(projectDir, projectName);
+
+    spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8' });
+    spawnSync('git', ['commit', '-m', 'decision-id fixture'], { cwd: tmp, encoding: 'utf8' });
+
+    const planBytesBefore = fs.readFileSync(planPath);
+
+    // Arm 1: stale id → typed refusal pre-freeze, no mutation.
+    const r1 = runNode(handoffScript, ['--plan', planPath, '--json'], tmp);
+    assert(r1.status !== 0,
+      'decision-id conflict handoff must exit non-zero, got ' + r1.status + '\nstdout: ' + r1.stdout);
+    const result1 = JSON.parse(r1.stdout);
+    assert(result1.handoff_status === 'plan_invalid',
+      'must be plan_invalid on stale decision id, got: ' + JSON.stringify(result1));
+    assert(result1.result === 'refuse', 'result must be refuse, got: ' + result1.result);
+    assert(Array.isArray(result1.errors) && (result1.errors[0] || '').includes('decision_id_conflict'),
+      'errors[0] must include decision_id_conflict, got: ' + JSON.stringify(result1.errors));
+    assert((result1.errors[0] || '').includes('docs/decisions/D-210-01-prior-decision.md'),
+      'errors[0] must name the repo hit path, got: ' + JSON.stringify(result1.errors));
+
+    // Plan must be byte-identical (no plan_hash stamped — refusal pre-freeze).
+    const planBytesAfter = fs.readFileSync(planPath);
+    assert(planBytesBefore.equals(planBytesAfter),
+      'plan must be byte-identical after decision-id refusal (no mutation)');
+    assert(!/plan_hash/.test(planBytesAfter.toString('utf8')),
+      'no plan_hash may be stamped on decision-id refusal');
+
+    // Arm 2: renumber to the next free id + annotate the deliberate reference.
+    const fixedNotes = [
+      '', '## Plan Notes', '',
+      '- D-210-01 (existing) covered the first half; this cycle records D-210-02.', '',
+    ].join('\n');
+    fs.writeFileSync(planPath, makeHandoffPlan(nodesRows, ledgerRows) + fixedNotes);
+
+    const r2 = runNode(handoffScript, ['--plan', planPath, '--json'], tmp);
+    assert(r2.status === 0,
+      'renumbered handoff must exit 0, got ' + r2.status + '\nstderr: ' + r2.stderr + '\nstdout: ' + r2.stdout);
+    const result2 = JSON.parse(r2.stdout);
+    assert(result2.handoff_status === 'ready_to_run',
+      'renumbered plan must be ready_to_run, got: ' + JSON.stringify(result2));
+    const frozenPlan = fs.readFileSync(planPath, 'utf8');
+    assert(/<!-- plan_hash: [0-9a-f]{64} -->/.test(frozenPlan),
+      'renumbered plan must be frozen (plan_hash stamped)');
+
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptiveHandoffDecisionIdConflict: PASSED');
+}
+
 // ===========================================================================
 // issue #264 — hidden-local worktree path, gitignore, legacy cleanup, sink guard
 // ===========================================================================
@@ -9163,6 +10003,93 @@ function testAdaptiveWorktreeProvisionedE2E() {
   }
 }
 
+// ── NEW (#335): testAdaptiveWorktreeMirrorNoManualCopy ───────────────────────
+// AC1+AC3+AC4: a fresh adaptive worktree run — startup → author plan in MAIN →
+// REAL handoff (freezes + mirrors) → REAL orient from the WORKTREE — succeeds
+// with NO manual copy. The handoff's mirror-project step puts the frozen,
+// plan_hash-verified project folder into the worktree. AC2 negative leg: delete
+// the worktree project dir → orient refuses plan_not_mirrored → mirror-project
+// repairs → orient succeeds (proves the mechanical repair works from worktree cwd
+// via git-common-dir).
+function testAdaptiveWorktreeMirrorNoManualCopy() {
+  if (!claimSignal()) {
+    console.log('testAdaptiveWorktreeMirrorNoManualCopy: SKIPPED (adaptive worktree provisioning pending)');
+    return;
+  }
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-335-mirror-')));
+  const kwRoot = tmp + '.kw';
+  try {
+    initGitRepo(tmp);
+    const binDir = path.join(tmp, 'bin');
+    writeGhShimForStartup(binDir);
+
+    // Step 1: adaptive startup provisions a hidden-local worktree at .kw/worktrees/issue-935.
+    const sResult = runClaimOnlineLastJson(
+      ['startup', '--workflow-path', 'adaptive', '--target-issue', '935'],
+      tmp, binDir, { KAOLA_ENABLE_ADAPTIVE: '1' });
+    assert(sResult.claim === 'acquired', '#335: adaptive startup 935 should acquire');
+    if (!sResult.worktree_path) {
+      console.log('testAdaptiveWorktreeMirrorNoManualCopy: SKIPPED (worktree_path empty — provisioning suppressed)');
+      return;
+    }
+    const wt = sResult.worktree_path;
+    assert(fs.existsSync(wt), '#335: worktree dir must exist: ' + wt);
+    // The provisioned worktree must NOT yet contain the project folder (the bug premise).
+    const wtPlan = path.join(wt, 'kaola-workflow', 'issue-935', 'workflow-plan.md');
+    assert(!fs.existsSync(wtPlan), '#335: fresh worktree must NOT have the plan before the mirror');
+
+    // Step 2: author an UNFROZEN plan into the MAIN project folder (handoff freezes it).
+    const mainPlanPath = path.join(tmp, 'kaola-workflow', 'issue-935', 'workflow-plan.md');
+    fs.writeFileSync(mainPlanPath, ADAPTIVE_PLAN);
+
+    // Step 3: REAL handoff (cwd = main) — freezes + mirrors. No manual cp anywhere.
+    const hr = runNode(handoffScript, ['--project', 'issue-935', '--json'], tmp);
+    assert(hr.status === 0, '#335: handoff should exit 0\nstdout: ' + hr.stdout + '\nstderr: ' + hr.stderr);
+    const hjson = JSON.parse(hr.stdout.trim().split('\n').filter(l => l.trim().startsWith('{')).pop());
+    assert(hjson.handoff_status === 'ready_to_run', '#335: handoff_status===ready_to_run, got ' + JSON.stringify(hjson.handoff_status));
+    assert(hjson.worktree_mirror && hjson.worktree_mirror.status === 'mirrored',
+      '#335 AC1: worktree_mirror.status===mirrored, got ' + JSON.stringify(hjson.worktree_mirror));
+
+    // AC4: the worktree plan exists and its plan_hash is byte-equal to the main copy.
+    assert(fs.existsSync(wtPlan), '#335 AC1: worktree must contain the mirrored plan after the real handoff');
+    const mainHashM = fs.readFileSync(mainPlanPath, 'utf8').match(/<!--\s*plan_hash:\s*([0-9a-f]{64})\s*-->/);
+    const wtHashM = fs.readFileSync(wtPlan, 'utf8').match(/<!--\s*plan_hash:\s*([0-9a-f]{64})\s*-->/);
+    assert(mainHashM && wtHashM, '#335 AC4: both plans must carry a plan_hash');
+    assert(mainHashM[1] === wtHashM[1], '#335 AC4: worktree plan_hash must equal the main plan_hash');
+
+    // Step 4: REAL orient FROM THE WORKTREE — succeeds, no manual copy.
+    const o1 = runNode(adaptiveNodeScript, ['orient', '--project', 'issue-935', '--json'], wt);
+    assert(o1.status === 0, '#335 AC3: orient from worktree should exit 0\nstdout: ' + o1.stdout + '\nstderr: ' + o1.stderr);
+    const o1json = JSON.parse(o1.stdout.trim().split('\n').filter(l => l.trim().startsWith('{')).pop());
+    assert(o1json.resumeCheck && o1json.resumeCheck.ok === true, '#335 AC3: orient resumeCheck.ok===true, got ' + JSON.stringify(o1json.resumeCheck));
+
+    // AC2 negative leg: remove the worktree project dir → orient must refuse plan_not_mirrored.
+    fs.rmSync(path.join(wt, 'kaola-workflow', 'issue-935'), { recursive: true, force: true });
+    const o2 = runNode(adaptiveNodeScript, ['orient', '--project', 'issue-935', '--json'], wt);
+    assert(o2.status === 1, '#335 AC2: orient on an unmirrored worktree must exit 1, got ' + o2.status + '\nstdout: ' + o2.stdout);
+    const o2json = JSON.parse(o2.stdout.trim().split('\n').filter(l => l.trim().startsWith('{')).pop());
+    assert(o2json.result === 'refuse' && o2json.reason === 'plan_not_mirrored',
+      '#335 AC2: orient refuses plan_not_mirrored, got ' + JSON.stringify({ result: o2json.result, reason: o2json.reason }));
+    assert(/mirror-project/.test(o2json.repair || ''), '#335 AC2: repair names the mirror-project command');
+
+    // AC2 repair: mirror-project FROM THE WORKTREE cwd (resolves main via git-common-dir).
+    const mp = runNode(adaptiveNodeScript, ['mirror-project', '--project', 'issue-935', '--json'], wt);
+    assert(mp.status === 0, '#335 AC2: mirror-project from worktree should exit 0\nstdout: ' + mp.stdout + '\nstderr: ' + mp.stderr);
+    const mpjson = JSON.parse(mp.stdout.trim().split('\n').filter(l => l.trim().startsWith('{')).pop());
+    assert(mpjson.result === 'ok' && mpjson.status === 'mirrored',
+      '#335 AC2: mirror-project re-mirrors from the worktree, got ' + JSON.stringify({ result: mpjson.result, status: mpjson.status }));
+
+    // orient again → exit 0 (the mechanical repair restored the worktree copy).
+    const o3 = runNode(adaptiveNodeScript, ['orient', '--project', 'issue-935', '--json'], wt);
+    assert(o3.status === 0, '#335 AC2: orient after mirror-project repair should exit 0\nstdout: ' + o3.stdout + '\nstderr: ' + o3.stderr);
+
+    console.log('testAdaptiveWorktreeMirrorNoManualCopy: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
 // ── NEW: testSinkRefusesWorkflowOnlyBranch ───────────────────────────────────
 // AC7: sink-merge MUST exit 1 when the branch diff vs origin/main is all kaola-workflow/**
 // Signal = sinkSignal() → assert exit 1 with refusal message
@@ -9276,6 +10203,8 @@ async function main() {
   try {
     testClaimStatusRelease(tmp);
     testFinalize(tmp);
+    testKeepOpenArchiveStamp();      // #333
+    testManualArchiveBackstop();     // #333
     testRepair(tmp);
     testRepairFastPath(tmp);
     testRepairFastEscalation(tmp);
@@ -9385,6 +10314,15 @@ async function main() {
     testSinkMergeMockabilityAndReceipt();
     testSinkMergeCloseFailureWarning();
     testSinkMergeSkipsArchivedProjectPhantom();
+    // #336: keep-open partial-close sink lane
+    testKeepOpenMergeFullChain();
+    testKeepOpenFinalizeFlagAlias();
+    testSinkMergeKeepOpenOnlineMock();
+    testSinkMergeKeepOpenRequiresIssue();
+    testSinkMergeKeepOpenArchivedStateGuard();
+    testClosureAuditKeepOpenExclusion();
+    testKeepOpenInvariantUnit();
+    testSinkPrKeepOpenRefusal();
     testClosureAuditOfflineRemoteClassesSkipped();
     testClosureAuditClosedRemoteRoadmapSource();
     testClosureAuditArchiveClosedDrift();
@@ -9439,6 +10377,7 @@ async function main() {
     testAdaptiveCheapWinFixes();
     testAdaptiveAuditCoverage();
     testAdaptiveSyncGroupGap();   // #274
+    testAdaptiveRegistrationAndForgePortGaps();   // #340
     testAdaptiveFreezeRepairReconcile();   // #308
     testAdaptiveVerdictCheck();
     testAdaptivePatternLibrary();
@@ -9454,12 +10393,16 @@ async function main() {
     testAdaptiveHandoffIdempotentReRun();
     // issue #255 review BLOCKING-1: --project must resolve user-repo root via git rev-parse
     testAdaptiveHandoffProjectFlagResolvesRepoRoot();
+    // issue #337 — decision-record id preflight (freeze-time-once, refuse pre-freeze)
+    testAdaptiveHandoffDecisionIdConflict();
     // issue #264 — hidden-local worktree path, gitignore, legacy cleanup, sink guard
     testGitignoreCoversKw();
     testWorktreeHiddenLocalPath();
     testLegacyWorktreeCleanupDryRun();
     testLegacyWorktreeCleanupDirtySkip();
     testAdaptiveWorktreeProvisionedE2E();
+    // issue #335 — mechanical main→worktree project-folder mirror (no manual cp)
+    testAdaptiveWorktreeMirrorNoManualCopy();
     testSinkRefusesWorkflowOnlyBranch();
     testSinkAllowsMixedBranch();
     testPlanRunWiredForWorktree();
@@ -9467,6 +10410,10 @@ async function main() {
     testPlannerAttestFlagBackfillsDispatchLog();     // AC1: M1 back-fill + M2 sink-merge check
     testPlannerAttestFlagAbsentStaysMissing();        // AC2: no-flag path stays not-attested
     testPlannerAttestFlagPresentInPlannerAgent();     // contract guard
+    // issue #338 — false-negative producer (worktree-blind hook) + contractor self-attest
+    testDispatchLogHookWorktreeAware338();            // T3: hook dual-root capture
+    testContractorAttestFlagBackfills338();           // T4: --attest-contractor-spawn → attested
+    testContractorAttestAbsentWarnsNonBlocking338();  // T5: no flag → missing + warning (warn-first)
     // issue #296 — worktree finalize crash-resumability
     testFinalizeIncompleteResumesCrashState();
     testFinalizeIncompleteNegativeControlAlreadyDone();
@@ -9666,6 +10613,145 @@ function testPlannerAttestFlagPresentInPlannerAgent() {
     'contract guard (#280): agents/workflow-planner.md startup invocation must contain --attest-planner-spawn, got (excerpt): ' +
     plannerText.substring(plannerText.indexOf('startup'), plannerText.indexOf('startup') + 200));
   console.log('testPlannerAttestFlagPresentInPlannerAgent: PASSED');
+}
+
+// ── #338 T3: dispatch-log hook is worktree-aware (dual-root capture) ──────────
+// Producer-side false-negative fix: a contractor dispatched into a linked worktree must be
+// logged where the worktree's consumers (cmdFinalize) read .cache/dispatch-log.jsonl. The hook
+// runs with cwd=main but must ALSO resolve the dispatched agent's cwd (AGENT_CWD) toplevel and
+// append there. Also assert the in-place case (cwd==main, active project in main) logs once.
+function testDispatchLogHookWorktreeAware338() {
+  const hookPath = path.join(repoRoot, 'hooks', 'kaola-workflow-subagent-dispatch-log.sh');
+  // (a) WORKTREE case: active project ONLY in the linked worktree.
+  const main = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-338-wt-main-')));
+  try {
+    initGitRepo(main);
+    // git worktree add a linked worktree on a new branch
+    const wt = main + '-wt';
+    const wtAdd = spawnSync('git', ['worktree', 'add', '-b', 'wt338', wt], { cwd: main, encoding: 'utf8' });
+    assert(wtAdd.status === 0, '#338 T3: git worktree add must succeed: ' + wtAdd.stderr);
+    // Active project state file ONLY in the worktree.
+    const wtProj = path.join(wt, 'kaola-workflow', 'proj');
+    fs.mkdirSync(wtProj, { recursive: true });
+    fs.writeFileSync(path.join(wtProj, 'workflow-state.md'), '# State\nstatus: active\n');
+    // No active project in main → the old hook (hook-cwd only) would log nothing.
+    const payload = JSON.stringify({ agent_type: 'contractor', agent_id: 't', cwd: wt });
+    const hr = spawnSync('bash', [hookPath], { cwd: main, input: payload, encoding: 'utf8' });
+    assert(hr.status === 0, '#338 T3: hook must exit 0 (fail-open), got ' + hr.status);
+    const wtLog = path.join(wtProj, '.cache', 'dispatch-log.jsonl');
+    assert(fs.existsSync(wtLog),
+      '#338 T3: worktree-dispatched contractor must be logged under the WORKTREE project .cache/');
+    const wtLogContent = fs.readFileSync(wtLog, 'utf8');
+    assert(wtLogContent.includes('"agent_type":"contractor"'),
+      '#338 T3: worktree dispatch-log must contain a contractor entry, got: ' + wtLogContent);
+    try { spawnSync('git', ['worktree', 'remove', '--force', wt], { cwd: main, encoding: 'utf8' }); } catch (_) {}
+    try { fs.rmSync(wt, { recursive: true, force: true }); } catch (_) {}
+  } finally {
+    fs.rmSync(main, { recursive: true, force: true });
+  }
+
+  // (b) IN-PLACE case: active project in main, AGENT_CWD == main → exactly ONE line (no dup).
+  const inplace = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-338-inplace-')));
+  try {
+    initGitRepo(inplace);
+    const proj = path.join(inplace, 'kaola-workflow', 'proj');
+    fs.mkdirSync(proj, { recursive: true });
+    fs.writeFileSync(path.join(proj, 'workflow-state.md'), '# State\nstatus: active\n');
+    const payload = JSON.stringify({ agent_type: 'contractor', agent_id: 't', cwd: inplace });
+    const hr = spawnSync('bash', [hookPath], { cwd: inplace, input: payload, encoding: 'utf8' });
+    assert(hr.status === 0, '#338 T3: in-place hook must exit 0, got ' + hr.status);
+    const log = path.join(proj, '.cache', 'dispatch-log.jsonl');
+    assert(fs.existsSync(log), '#338 T3: in-place active project must still be logged');
+    const count = fs.readFileSync(log, 'utf8').split('\n').filter(Boolean).length;
+    assert(count === 1,
+      '#338 T3: in-place run (AGENT_ROOT==HOOK_ROOT) must log EXACTLY once, got ' + count);
+  } finally {
+    fs.rmSync(inplace, { recursive: true, force: true });
+  }
+  console.log('testDispatchLogHookWorktreeAware338: PASSED');
+}
+
+// ── #338 T4: cmdFinalize --attest-contractor-spawn → finalize_contractor_attested:attested ──
+// No hook, no planner flag: the contractor's own --attest-contractor-spawn back-fills its
+// dispatch marker so the closure receipt reads attested even where the hook cannot fire.
+function testContractorAttestFlagBackfills338() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-338-ac2-attest-')));
+  const kwRoot = tmp + '.kw';
+  try {
+    initGitRepo(tmp);
+    const binDir = path.join(tmp, 'bin');
+    writeGhShimForStartup(binDir);
+
+    const sResult = runClaimOnlineLastJson(['startup', '--target-issue', '338001'], tmp, binDir);
+    assert(sResult.claim === 'acquired', '#338 T4: startup must acquire');
+    const project = sResult.selected_project || 'issue-338001';
+
+    // No dispatch-log yet (no flag at claim, no hook in test env).
+    const dispatchLog = path.join(tmp, 'kaola-workflow', project, '.cache', 'dispatch-log.jsonl');
+    assert(!fs.existsSync(dispatchLog), '#338 T4: no dispatch-log before finalize back-fill');
+
+    const finResult = runClaimOnlineLastJson(
+      ['finalize', '--project', project, '--attest-contractor-spawn'], tmp, binDir);
+    assert(finResult.status === 'closed', '#338 T4: finalize must return status:closed, got: ' + JSON.stringify(finResult));
+    const finReceipt = finResult.closure_receipt;
+    assert(finReceipt, '#338 T4: finalize must emit closure_receipt');
+    assert(finReceipt.finalize_contractor_attested === 'attested',
+      '#338 T4: --attest-contractor-spawn must make finalize_contractor_attested attested, got: ' + finReceipt.finalize_contractor_attested);
+
+    // The archived dispatch-log must carry the finalize-backfill contractor marker.
+    const archiveLog = path.join(tmp, 'kaola-workflow', 'archive', project, '.cache', 'dispatch-log.jsonl');
+    assert(fs.existsSync(archiveLog), '#338 T4: archived dispatch-log must exist after back-fill');
+    const archiveContent = fs.readFileSync(archiveLog, 'utf8');
+    assert(archiveContent.includes('finalize-backfill'),
+      '#338 T4: archived dispatch-log must contain finalize-backfill entry, got: ' + archiveContent);
+    console.log('testContractorAttestFlagBackfills338: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
+// ── #338 T5: inline finalize bypass → contractor missing + ATTESTATION WARNING, NON-blocking ──
+// The exact false-positive scenario from the issue: the planner WAS dispatched (its back-fill
+// populates a dispatch-log), but the contractor finalize seam is run INLINE (no
+// --attest-contractor-spawn). The dispatch-log exists with a planner entry and no contractor
+// entry → the per-seam ATTESTATION WARNING fires and finalize_contractor_attested:missing.
+// Pins the explicit-fallback branch demanded by AC2: a future change must not make a missing
+// contractor attestation silently blocking, nor silently quiet.
+function testContractorAttestAbsentWarnsNonBlocking338() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-338-ac2-fallback-')));
+  const kwRoot = tmp + '.kw';
+  try {
+    initGitRepo(tmp);
+    const binDir = path.join(tmp, 'bin');
+    writeGhShimForStartup(binDir);
+
+    // Planner WAS dispatched (its back-fill writes a dispatch-log) — but no contractor entry.
+    const sResult = runClaimOnlineLastJson(
+      ['startup', '--target-issue', '338002', '--attest-planner-spawn'], tmp, binDir);
+    assert(sResult.claim === 'acquired', '#338 T5: startup must acquire');
+    const project = sResult.selected_project || 'issue-338002';
+    const dispatchLog = path.join(tmp, 'kaola-workflow', project, '.cache', 'dispatch-log.jsonl');
+    assert(fs.existsSync(dispatchLog), '#338 T5: planner back-fill must create a dispatch-log');
+
+    // finalize WITHOUT --attest-contractor-spawn → contractor seam run inline.
+    const finResult = runClaimOnlineLastJson(['finalize', '--project', project], tmp, binDir);
+    assert(finResult.status === 'closed',
+      '#338 T5: finalize must still return status:closed (warn-first, NEVER blocks), got: ' + JSON.stringify(finResult));
+    const finReceipt = finResult.closure_receipt;
+    assert(finReceipt, '#338 T5: finalize must emit closure_receipt');
+    assert(finReceipt.claim_planner_attested === 'attested',
+      '#338 T5: planner WAS dispatched → claim_planner_attested must be attested, got: ' + finReceipt.claim_planner_attested);
+    assert(finReceipt.finalize_contractor_attested === 'missing',
+      '#338 T5: inline finalize (no flag) → finalize_contractor_attested must be missing, got: ' + finReceipt.finalize_contractor_attested);
+    assert(Array.isArray(finReceipt.warnings) &&
+      finReceipt.warnings.some(w => w.includes('ATTESTATION WARNING: no contractor dispatch found in dispatch-log')),
+      '#338 T5: missing contractor attestation must surface the ATTESTATION WARNING, got: ' + JSON.stringify(finReceipt.warnings));
+    console.log('testContractorAttestAbsentWarnsNonBlocking338: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+  }
 }
 
 // ── #296: cmdResume crash-resume after archiveProjectDir ran but impl uncommitted ──

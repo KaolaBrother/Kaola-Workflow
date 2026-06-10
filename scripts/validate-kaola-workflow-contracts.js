@@ -155,6 +155,10 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'Documen
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'SINK_STATE_FILE="kaola-workflow/${KAOLA_PROJECT}/workflow-state.md"');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, '--keep-worktree');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'metadata captured before archive');
+// #336: keep-open partial-close sink lane (codex SKILL.md is the contractor seam — no command file).
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'issue_action');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, '--keep-issue-open');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'merge-sink-only');
 // #277 M3: contractor-dispatch HANDLE lock (Codex edition). Codex has no command file — the
 // finalize SKILL.md is the contractor seam. The node-4 rewrite made the contractor the SOLE HOME
 // of the mechanical finalization and requires the session to delegate it (inline only on a logged
@@ -469,14 +473,25 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'ready_to_r
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'plan_invalid');
 assert(exists(`${pluginRoot}/scripts/kaola-workflow-adaptive-handoff.js`), '#255 adaptive handoff aggregator missing from Codex plugin');
 assert(exists(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`), '#272 adaptive node aggregator missing from Codex plugin');
+assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`, 'would_orphan_in_progress'); // #343 mid-gate reopen
+// #338: anti-drift pins — finalize sink row main-session-direct + contractor self-attest back-fill.
+assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`, 'main-session-direct');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'main-session-direct');
+assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, '--attest-contractor-spawn');
+assertIncludes(`${pluginRoot}/agents/contractor.toml`, '--attest-contractor-spawn');
 // #281: parallel-batch aggregator claude-plugin copy presence
 assert(exists(`${pluginRoot}/scripts/kaola-workflow-parallel-batch.js`), '#281 parallel-batch aggregator missing from Codex plugin');
 assertConcept(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'adaptive execution + governance', [
   '## Node Ledger', 'plan_hash', 'post-dominate', 'auto-run', 'provisional', 'halt for consent',
   'escalated_to_full: consent', 'typed refusal', 'quorum', 'tally-fn', 'validateNodeOutput', 'test_thrash',
   // #303 anti-drift: pin the rolling-dispatch + crash-repair + opening-lifecycle primitives.
-  'top-up', 'reconcile', 'opening'
+  'top-up', 'reconcile', 'opening',
+  // #335 anti-drift: pin the mechanical main→worktree project-folder mirror step.
+  'mirror-project'
 ]);
+// #341: forge-neutral agent-profile authoring guidance pinned (planner toml + plan-run SKILL).
+assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'forge-neutral');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '--forbidden-only');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'workflow_path: adaptive');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'disjointWriteSets');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'readPlanNodes');
@@ -500,5 +515,113 @@ for (const reviewerBody of [
   // that --verdict-check reads at Finalization) so a Codex gate node always emits it.
   assertIncludes(reviewerBody, 'verdict: pass');
 }
+
+// issue #332: source agent-profile schema wall. require() the installer (the #325
+// require.main guard means require() never runs main()) and assert its source-tree
+// validator passes — every agents/*.toml has a matching non-empty top-level `name`,
+// a legal model_reasoning_effort, a non-blank developer_instructions, every
+// config_file resolves, and every toml is referenced by exactly one [agents.*] entry.
+// This is the AC2 wall: it FAILS on a tree that drifts a profile schema or leaves a
+// new role file (the issue-scout class) unregistered.
+const codexInstaller = require(path.join(root, pluginRoot, 'scripts', 'install-codex-agent-profiles.js'));
+const codexProfiles = codexInstaller.validateSourceProfiles(path.join(root, pluginRoot));
+assert(codexProfiles.ok,
+  'Codex source agent profiles fail schema validation:\n  - ' + codexProfiles.errors.join('\n  - '));
+
+// issue #332 (OWNER comment): README Codex role-catalog contract. Derive roles +
+// efforts from config/agents.toml + each agents/<role>.toml, then pin README to them:
+// the role-list block must equal the derived role set; the reasoning table must carry
+// the exact effort row for every role; and the retired `docs-lookup` must appear
+// nowhere. Nothing else fails when the README role catalog drifts from source.
+function deriveCodexRoleCatalog() {
+  const templateText = read(`${pluginRoot}/config/agents.toml`);
+  const roles = [];
+  const re = /^\[agents\.([a-z0-9-]+)\]/gm;
+  let m;
+  while ((m = re.exec(templateText)) !== null) roles.push(m[1]);
+  const efforts = {};
+  for (const role of roles) {
+    const toml = read(`${pluginRoot}/agents/${role}.toml`);
+    const em = toml.match(/^model_reasoning_effort\s*=\s*"([^"]+)"\s*$/m);
+    assert(em, `agents/${role}.toml missing model_reasoning_effort (README contract source)`);
+    efforts[role] = em[1];
+  }
+  return { roles, efforts };
+}
+
+const readmeText = read('README.md');
+const { roles: catalogRoles, efforts: catalogEfforts } = deriveCodexRoleCatalog();
+
+// Role-list block: the ```text block after the "installs Codex-native role profiles"
+// sentence must contain exactly the derived role set (set equality).
+const roleListAnchor = readmeText.indexOf('installs Codex-native role profiles');
+assert(roleListAnchor !== -1, 'README must contain the Codex role-profile catalog anchor sentence');
+const afterAnchor = readmeText.slice(roleListAnchor);
+const blockMatch = afterAnchor.match(/```text\n([\s\S]*?)\n```/);
+assert(blockMatch, 'README must contain the ```text role-list block after the catalog anchor');
+const listedRoles = blockMatch[1].split('\n').map(s => s.trim()).filter(Boolean);
+const missingFromReadme = catalogRoles.filter(r => !listedRoles.includes(r));
+const extraInReadme = listedRoles.filter(r => !catalogRoles.includes(r));
+assert(missingFromReadme.length === 0,
+  'README role list missing roles from config/agents.toml: ' + missingFromReadme.join(', '));
+assert(extraInReadme.length === 0,
+  'README role list has roles not in config/agents.toml: ' + extraInReadme.join(', '));
+
+// Reasoning table: an exact `| `<role>` | `<effort>` |` row for every role.
+// (the table header anchors the catalog region for the retired-role guard below.)
+const tableAnchor = readmeText.indexOf('| Role | Reasoning effort |');
+assert(tableAnchor !== -1, 'README must contain the Codex reasoning-effort table');
+for (const role of catalogRoles) {
+  const row = '| `' + role + '` | `' + catalogEfforts[role] + '` |';
+  assert(readmeText.includes(row),
+    'README reasoning table missing exact row: ' + row);
+}
+
+// Retired role guard: the retired `docs-lookup` role must not be presented as an
+// installable/active role inside the catalog region (role-list block through the
+// reasoning table). Documentation of docs-lookup as a *pruned/retired* file elsewhere
+// in README (the durable upgrade flow) is allowed — that is the opposite of catalog
+// drift, so the guard is scoped to the catalog region rather than the whole file.
+const tableEnd = readmeText.indexOf('\n\n', tableAnchor);
+const catalogRegion = readmeText.slice(roleListAnchor, tableEnd === -1 ? readmeText.length : tableEnd);
+assert(!catalogRegion.includes('docs-lookup'),
+  'README role catalog must not list the retired docs-lookup role');
+
+// #340: registration-surface + forge-port parity checks and their authoring/dispatch prose
+// (Codex edition surfaces). A dropped token reds this chain at the contract-validator step.
+assertIncludes(`${pluginRoot}/scripts/kaola-workflow-plan-validator.js`, 'agent-registration gap');
+assertIncludes(`${pluginRoot}/scripts/kaola-workflow-plan-validator.js`, 'forge-port ordering gap');
+assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'full accumulated root diff');
+assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'registration surface');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'full accumulated root diff');
+
+// #340 derived parity guard (enumeration-free): the codex-dispatch config/agents.toml must register
+// exactly the agent profiles present in agents/ — both directions. A profile copied without its
+// [agents.<name>] table is undispatchable (the #328 issue-scout miss); a table without its profile
+// dangles. Derives both sides (no hardcoded names/counts), so a future agent addition never edits it.
+{
+  const configNames = new Set();
+  const reCfg = /^\[agents\.([a-z0-9-]+)\]/gm;
+  let cm;
+  while ((cm = reCfg.exec(read(`${pluginRoot}/config/agents.toml`))) !== null) configNames.add(cm[1]);
+  const dirNames = new Set(
+    fs.readdirSync(path.join(root, pluginRoot, 'agents'))
+      .filter(f => f.endsWith('.toml'))
+      .map(f => f.slice(0, -5))
+  );
+  const missingTables = [...dirNames].filter(n => !configNames.has(n)).sort();
+  const danglingTables = [...configNames].filter(n => !dirNames.has(n)).sort();
+  assert(missingTables.length === 0 && danglingTables.length === 0,
+    'config/agents.toml must register exactly the agent profiles in agents/ (#340)' +
+    (missingTables.length ? ' — profiles missing a [agents.*] table: ' + missingTables.join(', ') : '') +
+    (danglingTables.length ? ' — [agents.*] tables with no profile: ' + danglingTables.join(', ') : ''));
+}
+
+// #334: the non-delegable main-session-gate role token + its G3 freeze gate + authoring/dispatch
+// prose, pinned in the codex copies (schema, validator, plan-run SKILL, planner TOML).
+assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-schema.js`, 'MAIN_SESSION_GATE_ROLE');
+assertIncludes(`${pluginRoot}/scripts/kaola-workflow-plan-validator.js`, 'G3: main-session-gate');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'main-session-gate');
+assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'main-session-gate');
 
 console.log('Kaola-Workflow Codex contract validation passed');

@@ -5,7 +5,7 @@
 // Hand-rolled assert + counter; repo style (no framework).
 // Most cases drive runHandoff with injected stub seams (no subprocess).
 
-const { runHandoff, shellHandoff } = require('./kaola-workflow-adaptive-handoff');
+const { runHandoff, shellHandoff, extractDecisionIdCandidates } = require('./kaola-workflow-adaptive-handoff');
 
 const fs = require('fs');
 const os = require('os');
@@ -217,6 +217,8 @@ const PLAN_HASH_64 = ('a').repeat(64);
     'kaola-workflow-roadmap.js:init-issue': { exitCode: 0, created: true },
     // git add
     'git:add': { exitCode: 0 },
+    // #335 mirror-project (step 7) — best-effort; answers the new shell call.
+    'kaola-workflow-adaptive-node.js': { exitCode: 0, status: 'mirrored', planHash: PLAN_HASH_64, dest: '/wt/kaola-workflow/test-project' },
   });
 
   const result = runHandoff({
@@ -283,6 +285,7 @@ const PLAN_HASH_64 = ('a').repeat(64);
     'kaola-workflow-plan-validator.js:--resume-check': { exitCode: 0, ok: true, planHash: PLAN_HASH_64 },
     'kaola-workflow-roadmap.js:init-issue': { exitCode: 0, created: true },
     'git:add': { exitCode: 0 },
+    'kaola-workflow-adaptive-node.js': { exitCode: 0, status: 'mirrored', planHash: PLAN_HASH_64, dest: '/wt/kaola-workflow/test-project' },
   });
 
   const result = runHandoff({
@@ -446,6 +449,7 @@ const PLAN_HASH_64 = ('a').repeat(64);
     'kaola-workflow-plan-validator.js:--resume-check': { exitCode: 0, ok: true, planHash: HASH },
     'kaola-workflow-roadmap.js:init-issue': { exitCode: 0, skip: true }, // EEXIST-skip
     'git:add': { exitCode: 0 },
+    'kaola-workflow-adaptive-node.js': { exitCode: 0, status: 'exists', dest: '/wt/kaola-workflow/test-project' },
   });
 
   // Run 1: state has existing Planning Evidence; simulate what gets written.
@@ -599,6 +603,7 @@ const PLAN_HASH_64 = ('a').repeat(64);
     'kaola-workflow-plan-validator.js:--resume-check': { exitCode: 0, ok: true, planHash: HASH },
     'kaola-workflow-roadmap.js:init-issue': { exitCode: 0, skip: true },
     'git:add': { exitCode: 0 },
+    'kaola-workflow-adaptive-node.js': { exitCode: 0, status: 'exists', dest: '/wt/kaola-workflow/test-project' },
   });
 
   let currentState5b = eofState;
@@ -706,6 +711,7 @@ const PLAN_HASH_64 = ('a').repeat(64);
     'kaola-workflow-plan-validator.js:--resume-check': { exitCode: 0, ok: true, planHash: HASH },
     'kaola-workflow-roadmap.js:init-issue': { exitCode: 0, created: true },
     'git:add': { exitCode: 0 },
+    'kaola-workflow-adaptive-node.js': { exitCode: 0, status: 'mirrored', planHash: HASH, dest: '/wt/kaola-workflow/test-project' },
   });
 
   const result = runHandoff({
@@ -835,6 +841,7 @@ const PLAN_HASH_64 = ('a').repeat(64);
     'kaola-workflow-roadmap.js:init-issue': { exitCode: 0, created: true },
     'git:add': { exitCode: 0 },
     'kaola-workflow-task-mirror.js': { exitCode: 0 },
+    'kaola-workflow-adaptive-node.js': { exitCode: 0, status: 'mirrored', planHash: PLAN_HASH_64, dest: '/wt/kaola-workflow/test-project' },
   });
   const shellStub = (scriptPath, args) => { shelled.push(path.basename(scriptPath)); return inner(scriptPath, args); };
   const result = runHandoff({
@@ -856,6 +863,314 @@ const PLAN_HASH_64 = ('a').repeat(64);
   assert(result.handoff_status === 'ready_to_run', '#282 AC-1: handoff still ready_to_run, got ' + JSON.stringify(result.handoff_status));
   assert(shelled.includes('kaola-workflow-task-mirror.js'),
     '#282 AC-1: handoff shells the task-mirror CLI after freeze, got ' + JSON.stringify(shelled));
+}
+
+// ---------------------------------------------------------------------------
+// #337 — decision-record id preflight (step 1.5): T9a–T9f.
+// An unfrozen plan that hardcodes a D-<n>-<seq> id the repo already records
+// must refuse (decision_id_conflict) BEFORE --freeze (no mutation). Frozen
+// plans, annotated "(existing)" references, placeholders, and absent-seam
+// callers are all exempt (freeze-time-once + fail-open by construction).
+// ---------------------------------------------------------------------------
+
+// Helper: in-grammar unfrozen plan + trailing ## Plan Notes prose.
+function makeDecisionIdPlan(notesLine) {
+  return makeUnfrozenPlan('auto-run') + [
+    '',
+    '## Plan Notes',
+    '',
+    notesLine,
+    '',
+  ].join('\n');
+}
+
+// Helper: drive runHandoff with the standard in-grammar/auto-run stub set,
+// spying on --freeze, writeFile, and the injected decision-id seam.
+// opts.seam     — function(ids) → hits map; wrapped to record calls. Omit → no seam injected.
+// Returns { result, spies }.
+function runDecisionIdCase(planContent, opts) {
+  opts = opts || {};
+  // No issue_number → roadmap stage skipped (hermetic).
+  const stateContent = makeStateContent({ issueNumber: null });
+  const spies = { freezeCalled: false, writeFileCalled: false, seamCalls: [] };
+  const alreadyFrozen = /plan_hash/.test(planContent);
+  const frozenPlanContent = alreadyFrozen
+    ? planContent
+    : planContent + '\n<!-- plan_hash: ' + PLAN_HASH_64 + ' -->\n';
+
+  const inner = makeShellStub({
+    'kaola-workflow-plan-validator.js:--json': {
+      exitCode: 0, result: 'in-grammar', decision: 'auto-run', planHash: PLAN_HASH_64,
+      risk: { sensitivity: false, blastRadius: false, uncertain: false, reasons: [] }
+    },
+    'kaola-workflow-plan-validator.js:--freeze': {
+      exitCode: 0, result: 'in-grammar', decision: 'auto-run', planHash: PLAN_HASH_64, frozen: true,
+      risk: { sensitivity: false, blastRadius: false, uncertain: false, reasons: [] }
+    },
+    'kaola-workflow-plan-validator.js:--resume-check': { exitCode: 0, ok: true, planHash: PLAN_HASH_64 },
+    'kaola-workflow-task-mirror.js': { exitCode: 0 },
+    'kaola-workflow-adaptive-node.js': { exitCode: 0, status: 'mirrored', planHash: PLAN_HASH_64 },
+  });
+  const shellStub = (scriptPath, args) => {
+    if (path.basename(scriptPath) === 'kaola-workflow-plan-validator.js' && (args || []).includes('--freeze')) {
+      spies.freezeCalled = true;
+    }
+    return inner(scriptPath, args);
+  };
+
+  const runOpts = {
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project',
+    json: true,
+    shell: shellStub,
+    computeNextAction: require('./kaola-workflow-next-action').computeNextAction,
+    resolveModel: () => 'sonnet',
+    readFile: (fpath) => {
+      if (fpath.endsWith('workflow-plan.md')) {
+        // Pre-freeze reads see the unfrozen plan; post-freeze reads see the frozen one.
+        return spies.freezeCalled ? frozenPlanContent : planContent;
+      }
+      if (fpath.endsWith('workflow-state.md')) return stateContent;
+      return '';
+    },
+    writeFile: () => { spies.writeFileCalled = true; },
+    stateMtime: undefined,
+  };
+  if (typeof opts.seam === 'function') {
+    runOpts.findDecisionIdHits = ids => { spies.seamCalls.push(ids); return opts.seam(ids); };
+  }
+  const result = runHandoff(runOpts);
+  return { result, spies };
+}
+
+// T9a (AC2 regression): unfrozen plan hardcodes D-210-01; repo records it →
+// plan_invalid/refuse with decision_id_conflict, remediation text, conflicts
+// field, NO --freeze shell call, NO writeFile call.
+{
+  const plan = makeDecisionIdPlan('- the docs follow-up node writes decision record D-210-01.');
+  const { result, spies } = runDecisionIdCase(plan, {
+    seam: () => ({ 'D-210-01': ['docs/decisions/D-210-01-prior.md'] }),
+  });
+  assert(result.handoff_status === 'plan_invalid',
+    'T9a: handoff_status===plan_invalid on stale decision id, got ' + JSON.stringify(result.handoff_status));
+  assert(result.result === 'refuse', 'T9a: result===refuse');
+  assert(Array.isArray(result.errors) && result.errors.length === 1,
+    'T9a: exactly one error, got ' + JSON.stringify(result.errors));
+  const t9aErr = ((result.errors || [])[0]) || '';
+  assert(t9aErr.indexOf('decision_id_conflict') === 0,
+    'T9a: errors[0] starts with decision_id_conflict, got ' + JSON.stringify(result.errors));
+  assert(t9aErr.includes('next free D-210-NN'),
+    'T9a: errors[0] carries renumber remediation (next free D-210-NN)');
+  assert(t9aErr.includes('D-210-NEXT'),
+    'T9a: errors[0] names the D-210-NEXT placeholder remediation');
+  assert(t9aErr.includes('docs/decisions/D-210-01-prior.md'),
+    'T9a: errors[0] names the repo hit path');
+  assert(Array.isArray(result.conflicts) && result.conflicts.length === 1 &&
+         result.conflicts[0].id === 'D-210-01',
+    'T9a: conflicts[0].id===D-210-01 (machine-readable), got ' + JSON.stringify(result.conflicts));
+  assert(result.validator_verdict && result.validator_verdict.result === 'in-grammar',
+    'T9a: validator_verdict carries the in-grammar step-1 verdict (refusal is handoff-level)');
+  assert(spies.freezeCalled === false, 'T9a: --freeze NOT called (refusal pre-freeze)');
+  assert(spies.writeFileCalled === false, 'T9a: writeFile NEVER called (no mutation)');
+}
+
+// T9b (no conflict): same plan, seam reports no hits → ready_to_run, freeze called.
+{
+  const plan = makeDecisionIdPlan('- the docs follow-up node writes decision record D-210-01.');
+  const { result, spies } = runDecisionIdCase(plan, {
+    seam: () => ({ 'D-210-01': [] }),
+  });
+  assert(result.handoff_status === 'ready_to_run', 'T9b: no repo hit → ready_to_run');
+  assert(spies.freezeCalled === true, 'T9b: --freeze called when no conflict');
+  assert(spies.seamCalls.length === 1 && spies.seamCalls[0][0] === 'D-210-01',
+    'T9b: seam consulted once with the candidate id');
+}
+
+// T9c (annotation escape): only occurrence is annotated "(existing)" → not a
+// candidate; seam never consulted; ready_to_run.
+{
+  const plan = makeDecisionIdPlan('- D-210-01 (existing) covered the first half of the issue.');
+  const { result, spies } = runDecisionIdCase(plan, {
+    seam: () => ({ 'D-210-01': ['docs/decisions/D-210-01-prior.md'] }),
+  });
+  assert(result.handoff_status === 'ready_to_run', 'T9c: annotated (existing) reference → ready_to_run');
+  assert(spies.seamCalls.length === 0, 'T9c: seam NOT consulted (no candidates)');
+}
+
+// T9d (freeze-time-once): plan already frozen + unannotated token + seam
+// reporting a hit → ready_to_run (skip on frozen; resume cannot self-conflict).
+{
+  const plan = makeFrozenInProgressPlan() + [
+    '', '## Plan Notes', '', '- this run already wrote decision record D-210-01.', '',
+  ].join('\n');
+  const { result, spies } = runDecisionIdCase(plan, {
+    seam: () => ({ 'D-210-01': ['docs/decisions/D-210-01-this-run.md'] }),
+  });
+  assert(result.handoff_status === 'ready_to_run', 'T9d: frozen plan → preflight skipped, ready_to_run');
+  assert(spies.seamCalls.length === 0, 'T9d: seam NOT consulted on a frozen plan');
+}
+
+// T9e (seam absent): conflicting plan, NO findDecisionIdHits in opts →
+// ready_to_run (back-compat fail-open).
+{
+  const plan = makeDecisionIdPlan('- the docs follow-up node writes decision record D-210-01.');
+  const { result, spies } = runDecisionIdCase(plan, {});
+  assert(result.handoff_status === 'ready_to_run', 'T9e: absent seam → check skipped, ready_to_run');
+  assert(spies.freezeCalled === true, 'T9e: --freeze still called (current behavior preserved)');
+}
+
+// T9f (placeholder + extractDecisionIdCandidates unit asserts).
+{
+  const plan = makeDecisionIdPlan('- the docs follow-up node writes decision record D-210-NEXT.');
+  const { result, spies } = runDecisionIdCase(plan, {
+    seam: () => ({}),
+  });
+  assert(result.handoff_status === 'ready_to_run', 'T9f: D-210-NEXT placeholder → ready_to_run');
+  assert(spies.seamCalls.length === 0, 'T9f: seam NOT consulted (placeholder is not a candidate)');
+
+  // Direct unit asserts on the pure helper.
+  assert(typeof extractDecisionIdCandidates === 'function',
+    'T9f: extractDecisionIdCandidates exported');
+  assert(JSON.stringify(extractDecisionIdCandidates('D-210-01 and again D-210-01')) ===
+         JSON.stringify(['D-210-01']),
+    'T9f: dedupe — repeated id collected once');
+  assert(JSON.stringify(extractDecisionIdCandidates('D-210-02 then D-210-01')) ===
+         JSON.stringify(['D-210-02', 'D-210-01']),
+    'T9f: first-seen order preserved');
+  assert(JSON.stringify(extractDecisionIdCandidates('D-210-01 (existing) yet later plain D-210-01')) ===
+         JSON.stringify(['D-210-01']),
+    'T9f: mixed annotated+unannotated occurrence is still a candidate');
+  assert(JSON.stringify(extractDecisionIdCandidates('see D-210-012 here')) ===
+         JSON.stringify(['D-210-012']),
+    'T9f: word boundary — D-210-012 is its own token, not D-210-01');
+  assert(JSON.stringify(extractDecisionIdCandidates('placeholder D-210-NEXT only')) ===
+         JSON.stringify([]),
+    'T9f: D-210-NEXT placeholder never a candidate');
+  assert(JSON.stringify(extractDecisionIdCandidates('')) === JSON.stringify([]),
+    'T9f: empty content → no candidates');
+}
+
+// ---------------------------------------------------------------------------
+// #335 — handoff step 7 (mirror-project) integration: H1–H3 + T3/T7 re-verify.
+// ---------------------------------------------------------------------------
+
+// Helper: a ready-path runHandoff with the standard in-grammar/auto-run stub set
+// plus a recording shell that captures call order. opts.mirrorResponse overrides
+// the mirror-project canned response. Returns { result, order }.
+function runMirrorHandoffCase(mirrorResponse) {
+  const planContent = makeUnfrozenPlan('auto-run');
+  const stateContent = makeStateContent({ issueNumber: 99 });
+  let readCallCount = 0;
+  const frozenPlanContent = planContent.replace('# Workflow Plan', '<!-- plan_hash: ' + PLAN_HASH_64 + ' -->\n\n# Workflow Plan');
+  const order = [];
+  const inner = makeShellStub({
+    'kaola-workflow-plan-validator.js:--json': { exitCode: 0, result: 'in-grammar', decision: 'auto-run', planHash: PLAN_HASH_64, risk: {} },
+    'kaola-workflow-plan-validator.js:--freeze': { exitCode: 0, result: 'in-grammar', decision: 'auto-run', planHash: PLAN_HASH_64, frozen: true, risk: {} },
+    'kaola-workflow-plan-validator.js:--resume-check': { exitCode: 0, ok: true, planHash: PLAN_HASH_64 },
+    'kaola-workflow-roadmap.js:init-issue': { exitCode: 0, created: true },
+    'git:add': { exitCode: 0 },
+    'kaola-workflow-task-mirror.js': { exitCode: 0 },
+    'kaola-workflow-adaptive-node.js': mirrorResponse,
+  });
+  const shellStub = (scriptPath, args) => {
+    const b = path.basename(scriptPath);
+    if (b === 'kaola-workflow-adaptive-node.js') order.push('shell:mirror-project');
+    return inner(scriptPath, args);
+  };
+  const result = runHandoff({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project',
+    json: true,
+    shell: shellStub,
+    computeNextAction: require('./kaola-workflow-next-action').computeNextAction,
+    resolveModel: () => 'sonnet',
+    readFile: (fpath) => {
+      if (fpath.endsWith('workflow-plan.md')) { readCallCount++; return readCallCount <= 1 ? planContent : frozenPlanContent; }
+      if (fpath.endsWith('workflow-state.md')) return stateContent;
+      return '';
+    },
+    writeFile: (fpath) => { if (fpath.endsWith('workflow-state.md')) order.push('writeFile:state'); },
+    stateMtime: undefined,
+  });
+  return { result, order };
+}
+
+// H1: ready packet carries worktree_mirror echoing the stubbed mirror result.
+{
+  const { result } = runMirrorHandoffCase({ exitCode: 0, status: 'mirrored', planHash: PLAN_HASH_64, dest: '/wt/kaola-workflow/test-project' });
+  assert(result.handoff_status === 'ready_to_run', 'H1: ready_to_run');
+  assert(result.worktree_mirror && result.worktree_mirror.status === 'mirrored', 'H1: worktree_mirror.status===mirrored, got ' + JSON.stringify(result.worktree_mirror));
+  assert(result.worktree_mirror.planHash === PLAN_HASH_64, 'H1: worktree_mirror.planHash echoed');
+  assert(result.worktree_mirror.path === '/wt/kaola-workflow/test-project', 'H1: worktree_mirror.path echoed from dest');
+}
+
+// H1b: skipped (in-place run) → status:'skipped', no planHash/path.
+{
+  const { result } = runMirrorHandoffCase({ exitCode: 0, status: 'skipped', reason: 'no_worktree' });
+  assert(result.worktree_mirror.status === 'skipped' && result.worktree_mirror.reason === 'no_worktree', 'H1b: skipped/no_worktree echoed, got ' + JSON.stringify(result.worktree_mirror));
+}
+
+// H2: mirror shelled STRICTLY AFTER the workflow-state.md write (step 6 → step 7 order).
+{
+  const { order } = runMirrorHandoffCase({ exitCode: 0, status: 'mirrored', planHash: PLAN_HASH_64 });
+  const stateIdx = order.indexOf('writeFile:state');
+  const mirrorIdx = order.indexOf('shell:mirror-project');
+  assert(stateIdx >= 0 && mirrorIdx >= 0, 'H2: both state write and mirror shell happened, got ' + JSON.stringify(order));
+  assert(stateIdx < mirrorIdx, 'H2: mirror-project shelled AFTER the state write, got ' + JSON.stringify(order));
+}
+
+// H3: stubbed mirror REFUSE → handoff STILL ready_to_run (best-effort); status:'failed'.
+{
+  const { result } = runMirrorHandoffCase({ exitCode: 1, result: 'refuse', reason: 'mirror_verify_failed' });
+  assert(result.handoff_status === 'ready_to_run', 'H3: a mirror refuse does NOT flip handoff_status, got ' + result.handoff_status);
+  assert(result.worktree_mirror.status === 'failed', 'H3: worktree_mirror.status===failed on a non-zero mirror, got ' + JSON.stringify(result.worktree_mirror));
+  assert(result.worktree_mirror.reason === 'mirror_verify_failed', 'H3: failure reason surfaced');
+}
+
+// T3-#335: validator refuse → mirror-project NEVER shelled (refuse returns before step 7).
+{
+  let mirrorShelled = false;
+  const planContent = makeUnfrozenPlan('refuse');
+  const stateContent = makeStateContent({ issueNumber: 5 });
+  const result = runHandoff({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project',
+    json: true,
+    shell: (scriptPath) => {
+      if (path.basename(scriptPath) === 'kaola-workflow-adaptive-node.js') mirrorShelled = true;
+      return { exitCode: 1, result: 'refuse', errors: ['leak'], planHash: null };
+    },
+    computeNextAction: require('./kaola-workflow-next-action').computeNextAction,
+    resolveModel: () => 'sonnet',
+    readFile: (fpath) => { if (fpath.endsWith('workflow-state.md')) return stateContent; if (fpath.endsWith('workflow-plan.md')) return planContent; return ''; },
+    writeFile: () => {},
+    stateMtime: undefined,
+  });
+  assert(result.handoff_status === 'plan_invalid', 'T3-#335: plan_invalid on validator refuse');
+  assert(mirrorShelled === false, 'T3-#335: mirror-project NEVER shelled on a pre-step-7 refuse');
+  assert(result.worktree_mirror === undefined, 'T3-#335: no worktree_mirror field on the refuse packet');
+}
+
+// T7-#335: state missing → no shell at all (mirror-project never reached).
+{
+  let mirrorShelled = false;
+  const result = runHandoff({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project',
+    json: true,
+    shell: (scriptPath) => { if (path.basename(scriptPath) === 'kaola-workflow-adaptive-node.js') mirrorShelled = true; return { exitCode: 0 }; },
+    computeNextAction: require('./kaola-workflow-next-action').computeNextAction,
+    resolveModel: () => 'sonnet',
+    readFile: (fpath) => { if (fpath.endsWith('workflow-state.md')) throw new Error('ENOENT'); return ''; },
+    writeFile: () => {},
+    stateMtime: undefined,
+  });
+  assert(result.handoff_status === 'plan_invalid', 'T7-#335: plan_invalid on state missing');
+  assert(mirrorShelled === false, 'T7-#335: mirror-project never shelled when the precondition fails');
 }
 
 // Summary

@@ -38,14 +38,16 @@ If `workflow_path: adaptive`:
   - `--resume-check` proves `plan_hash` integrity + structure + closed library.
   - `--gate-verify` proves every completed code/sensitive node is post-dominated
     by a **completed** reviewer in the `## Node Ledger` — closing the G1/H5 leak
-    where a required reviewer node is silently marked `n/a` at runtime.
+    where a required reviewer node is silently marked `n/a` at runtime. **G3 (#334):
+    a non-delegable `main-session-gate` must be complete — never `n/a` — and
+    post-dominate completed code nodes.**
   - `--barrier-check` re-scans the files actually written (git diff vs the
     merge-base of HEAD and `origin/main`) and refuses a sensitive write with no
     `security-reviewer` node, or an out-of-allowlist production write — closing
     H1/H3. Any nonzero exit **blocks the merge**: the script is the enforcement,
     not a prose obligation.
   - `--verdict-check` reads every completed `code-reviewer`, `security-reviewer`,
-    and `adversarial-verifier` node's `.cache/{node-id}.md` and requires a
+    `adversarial-verifier`, and `main-session-gate` node's `.cache/{node-id}.md` and requires a
     machine-readable `verdict: pass` with `findings_blocking: 0`. Any nonzero
     exit **blocks the merge** — this proves every gate-role node recorded a
     passing verdict before the plan is allowed to close.
@@ -496,6 +498,9 @@ or `issue_number` in `workflow-state.md` on the fast path):
   the implementation is complete
 - keep it open if follow-ups, partial implementation, or unresolved user
   decisions remain
+- for `issue_action: comment_keep_open` (keep-open partial-close terminal), do NOT
+  close; post the substantive partial-close comment listing the residual scope
+  instead (the mechanical keep-open comment is posted by `sink-merge`)
 - create/update follow-up issues only after user permission when the Closure
   Decision Gate found decision items
 - comment with validation evidence and the planned commit message; add the final
@@ -518,6 +523,16 @@ regenerated `ROADMAP.md` — with `git add`. It does not perform the delete or t
 Do not reorganize roadmap entries that came from closure decision items until the user has approved the advisor-backed next step.
 
 Archive is performed atomically by `cmdFinalize` in Step 8b below. Do not perform a manual copy or git mv here.
+
+**Keep-open partial-close runs (#333/#336).** If the Closure Decision Gate keeps the issue OPEN
+(partial implementation, residual follow-ups), still archive through the SAME `finalize`
+subcommand, adding `--keep-open`. It stamps the archived `workflow-state.md` terminal
+(`last_result: closed_keep_open`, `issue_disposition: kept-open`, no active `next_command`) so a
+later resume/audit cannot mistake the archived run for active work. Never archive by manual
+`mv`/`git mv` — a bypassed archive preserves claim-time state (`status: active`, pending gates)
+forever (a re-run of `finalize` over such a manual archive now heals it in place, but the
+supported path is `--keep-open`). See the **Keep-Open Terminal Mode** section below for the full
+script-side lane (roadmap retention, guaranteed no-close sink, merge-sink-only fence).
 
 Update `finalization-summary.md` with:
 
@@ -564,6 +579,41 @@ fi
 
 If the check fails, do not stage; split the commit or coordinate manually.
 
+## Keep-Open Terminal Mode (partial-close)
+
+A run can be **complete as a cycle** while the GitHub issue must **stay OPEN** as a residual
+vehicle (partial implementation, deferred follow-ups). The durable signal is one optional line
+in the `## Sink` block of `workflow-state.md`:
+
+```
+issue_action: comment_keep_open      # default when absent: close
+```
+
+This field is written by the **main session** when the keep-open decision is made — at the
+Closure Decision Gate, with user approval (the existing "agent owns reasoning; scripts own
+atomicity" split; no startup flag). Behavior under keep-open:
+
+- The GitHub issue is **NOT closed**. `sink-merge` posts a mechanical keep-open comment instead
+  of closing; the substantive partial-close comment listing the residual scope is main-session
+  issue governance in **Step 7** (do not duplicate it here).
+- The roadmap source `kaola-workflow/.roadmap/issue-N.md` is **preserved** (`finalize`/
+  `archiveProjectDir` skip the unlink) and `ROADMAP.md` is regenerated still listing #N. The
+  closure invariant `keep-open-roadmap-preserved` enforces the retention.
+- The claim is released (label + `kw:claim` marker cleared) and the worktree/branch are removed,
+  exactly like a normal close — only the issue-close step changes.
+- The archive is stamped `last_result: closed_keep_open` + `issue_disposition: kept-open`; the
+  closure receipt records `remote_issue_closed: kept_open` and `roadmap_source_removed: kept`.
+
+**Keep-open is merge-sink-only.** A PR/MR sink would auto-close the kept-open issue via its
+hard-coded `Closes #N` body, and `watch-pr`/`watch-mr`'s archive-on-merge would delete the
+preserved roadmap source. Step 9 therefore (1) refuses a non-merge sink under keep-open before
+the case statement, (2) refuses the exit-3 merge-impossible auto-pivot to a PR/MR sink with a
+typed BLOCKED (manual remediation, never auto-pivot), and (3) the `sink-pr.js`/`sink-mr.js`
+scripts themselves refuse when the live OR archived state carries `issue_action: comment_keep_open`.
+
+The Completion Contract still applies: keep-open is **one terminal** for the run, not a license
+to continue into the next issue.
+
 ## Sink Metadata Capture (before contractor dispatch)
 
 Capture sink metadata now, while `workflow-state.md` still exists. The contractor
@@ -580,6 +630,11 @@ SINK_KIND=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | grep '^sink:' | awk '{print 
 SINK_KIND=${SINK_KIND:-merge}
 SINK_ISSUE_FLAG=""
 [ -n "$SINK_ISSUE" ] && [ "$SINK_ISSUE" != "unset" ] && SINK_ISSUE_FLAG="--issue $SINK_ISSUE"
+# #336: keep-open partial-close terminal — issue_action defaults to close when absent.
+SINK_ISSUE_ACTION=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | grep '^issue_action:' | awk '{print $2}')
+SINK_ISSUE_ACTION=${SINK_ISSUE_ACTION:-close}
+SINK_KEEP_OPEN_FLAG=""
+[ "$SINK_ISSUE_ACTION" = "comment_keep_open" ] && SINK_KEEP_OPEN_FLAG="--keep-issue-open"
 ACTIVE_WORKTREE_PATH="$(pwd)"
 _WT_PRE="$(node -e "try{const fs=require('fs');const s=fs.readFileSync('kaola-workflow/{project}/workflow-state.md','utf8');const m=s.match(/^worktree_path:\\s*(.+)$/m);process.stdout.write(m?m[1].trim():'');}catch(e){}" 2>/dev/null)" || true
 [ -n "$_WT_PRE" ] && [ -d "$_WT_PRE" ] && ACTIVE_WORKTREE_PATH="$_WT_PRE"
@@ -597,9 +652,28 @@ Agent(
   subagent_type="contractor",
   model="{CONTRACTOR_MODEL}",
   description="Mechanical finalize {project}",
-  prompt="Run the mechanical finalization for {project} (sink kind SINK_KIND). Execute the full procedure in your contractor profile: Step 8a (artifact mirror), Step 8b (cmdFinalize archive + status close, --keep-worktree, merge path only), the Step 7 roadmap regen + git-add staging, and the Step 8 commit gate (chore: finalize {project}). Re-derive your own kaola_script/CLAIM_JS and re-read SINK_KIND from workflow-state.md (it exists until cmdFinalize archives it). Return a compact bookkeeping summary; do NOT run Step 9 (the sink), do NOT close the issue, do NOT judge."
+  prompt="Run the mechanical finalization for {project} (sink kind SINK_KIND, issue action SINK_ISSUE_ACTION). Execute the full procedure in your contractor profile: Step 8a (artifact mirror), Step 8b (cmdFinalize archive + status close, --keep-worktree, merge path only — add --keep-issue-open when SINK_ISSUE_ACTION is comment_keep_open), the Step 7 roadmap regen + git-add staging, and the Step 8 commit gate (chore: finalize {project}). Re-derive your own kaola_script/CLAIM_JS and re-read SINK_KIND/SINK_ISSUE_ACTION from workflow-state.md (it exists until cmdFinalize archives it). Return a compact bookkeeping summary; do NOT run Step 9 (the sink), do NOT close the issue, do NOT judge."
 )
 ```
+
+### Attestation boundary (closure receipt)
+
+The contractor's Step 8b passes `--attest-contractor-spawn` to `cmdFinalize`, so a genuinely
+delegated run back-fills its own dispatch marker and the closure receipt reads
+`finalize_contractor_attested: attested` even where the SubagentStart hook cannot fire (a
+contractor dispatched into a linked worktree, or a hookless harness). This back-fill is the
+contractor's; the main session must never pass the flag on an inline run.
+
+The adaptive plan's `finalize (<node>)` Required Agent Compliance row is recorded
+`main-session-direct` (the in-plan sink bookkeeping is, by the plan-run contract, performed by the
+main session). That row neither requires nor replaces the contractor's delegation of mechanical
+finalization here — they are two distinct contracts on two distinct steps.
+
+**Inline-fallback contract.** If the contractor tooling is genuinely unavailable and the session
+runs the mechanical finalization inline, it must (a) record `local-fallback-tool-unavailable` with
+evidence in Required Agent Compliance, and (b) NOT pass `--attest-contractor-spawn`. The resulting
+`finalize_contractor_attested: missing` plus the ATTESTATION WARNING is then the truthful, expected
+outcome — attestation is warn-first and never blocks finalization.
 
 ## Crash Recovery
 
@@ -635,6 +709,11 @@ _MAIN_ROOT="$(dirname "$_COORD_ROOT_RAW_SINK")"
 Dispatch based on `SINK_KIND`:
 
 ```bash
+# #336: keep-open is merge-sink-only — refuse a PR sink before dispatch.
+if [ "$SINK_KIND" != "merge" ] && [ -n "$SINK_KEEP_OPEN_FLAG" ]; then
+  echo "BLOCKED: issue_action: comment_keep_open is only supported on the merge sink. PR/MR sinks close via the merged PR; switch sink: merge or remove issue_action." >&2
+  exit 1
+fi
 case "$SINK_KIND" in
   pr)
     kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
@@ -650,9 +729,17 @@ case "$SINK_KIND" in
     node "$SINK_MERGE_JS" \
       --branch "$SINK_BRANCH" \
       $SINK_ISSUE_FLAG \
+      $SINK_KEEP_OPEN_FLAG \
       --project {project}
     _SINK_MERGE_EXIT=$?
     if [ "$_SINK_MERGE_EXIT" -eq 3 ]; then
+      # #336: keep-open is merge-sink-only — never auto-pivot to a PR/MR sink (its Closes #N
+      # body would close the kept-open issue and watch-pr would delete the preserved roadmap
+      # source). Refuse BEFORE claim sink-fallback so state never flips to sink: pr.
+      if [ -n "$SINK_KEEP_OPEN_FLAG" ]; then
+        echo "BLOCKED: sink-merge exited 3 (merge-impossible) on a keep-open run. Keep-open is merge-sink-only: the PR/MR fallback body closes the issue on merge and watch-pr would delete the preserved roadmap source. Remediate the merge blocker (see .cache/sink-fallback.json) and re-run sink-merge; do not pivot to a PR/MR sink." >&2
+        exit 1
+      fi
       cd "$_MAIN_ROOT"
       CLAIM_JS="$(kaola_script kaola-workflow-claim.js)"
       node "$CLAIM_JS" sink-fallback \
@@ -675,7 +762,7 @@ cd "$_MAIN_ROOT" 2>/dev/null || true
 - Exit 0: branch merged onto main, issue closed (online), local branch deleted. Confirm worktree is on main with `git status --short --branch`.
 - Exit 1: conflict or fatal error. Rebase conflict remediation printed to stderr. Re-run after resolving.
 - Exit 2: FF race exhausted after MAX_AUTOMERGE_RETRIES retries. Follow printed remediation instructions.
-- Exit 3: merge-impossible (branch protection, non-fast-forward, permission denied). Receipt written to `.cache/sink-fallback.json`. Finalization pivots to PR creation automatically.
+- Exit 3: merge-impossible (branch protection, non-fast-forward, permission denied). Receipt written to `.cache/sink-fallback.json`. Finalization pivots to PR creation automatically — except on keep-open runs (`SINK_KEEP_OPEN_FLAG` set), where exit 3 is a typed BLOCKED refusal requiring manual remediation of the merge blocker; keep-open is merge-sink-only.
 
 `sink-pr.js` exit codes:
 - Exit 0: branch pushed, PR opened, URL recorded in the `## Sink` block and committed in a metadata follow-up commit. If `pr_auto_merge: true` in config, auto-merge was requested.

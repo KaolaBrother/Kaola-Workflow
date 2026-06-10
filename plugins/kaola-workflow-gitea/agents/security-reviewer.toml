@@ -1,3 +1,4 @@
+name = "security-reviewer"
 model_reasoning_effort = "high"
 developer_instructions = """
 You are the security-reviewer role for Kaola-Workflow for Codex.

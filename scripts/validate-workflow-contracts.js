@@ -305,6 +305,7 @@ assertConcept('docs/api.md', 'closure contract invariants and receipt schema', [
   'remote_issue_closed',
   'claim_label_removed',
   'kaola-workflow-closure-contract.js',
+  'kept_open',
   '#162',
   '#163',
   '#164',
@@ -390,6 +391,12 @@ assertIncludes('commands/kaola-workflow-finalize.md', 'Use the sink metadata cap
 // #277 M3: contractor-dispatch HANDLE lock — the mechanical finalization body moved to
 // agents/contractor.md; the finalize command retains only the Agent(...) dispatch handle.
 assertIncludes('commands/kaola-workflow-finalize.md', 'subagent_type="contractor"');
+// #336: keep-open partial-close sink lane — pin the durable field, the sink-merge flag, and the
+// merge-sink-only refusal prose (the exit-3 in-arm BLOCKED guard is shell prose no walkthrough
+// executes, so this pin is its only mechanical enforcement).
+assertIncludes('commands/kaola-workflow-finalize.md', 'issue_action');
+assertIncludes('commands/kaola-workflow-finalize.md', '--keep-issue-open');
+assertIncludes('commands/kaola-workflow-finalize.md', 'merge-sink-only');
 // #277 M3: assertBefore calls for 'commit -m "chore: finalize {project}"' and
 // 'node "$CLAIM_JS" finalize' DROPPED — those tokens relocated to agents/contractor.md;
 // cross-file ordering is not expressible via assertBefore (single-file only).
@@ -528,6 +535,13 @@ assertIncludes('scripts/simulate-workflow-walkthrough.js', 'Workflow walkthrough
 assert(exists('scripts/kaola-workflow-plan-validator.js'), 'adaptive plan validator is missing');
 assert(exists('scripts/kaola-workflow-adaptive-schema.js'), 'adaptive schema module is missing');
 assert(exists('scripts/kaola-workflow-adaptive-node.js'), '#272 adaptive-node aggregator missing');
+assertIncludes('scripts/kaola-workflow-adaptive-node.js', 'would_orphan_in_progress'); // #343 mid-gate reopen
+// #338: anti-drift pins — the finalize sink row is main-session-direct (not subagent-invoked),
+// and the contractor self-attest back-fill flag is wired through claim.js + the contractor profile.
+assertIncludes('scripts/kaola-workflow-adaptive-node.js', 'main-session-direct');
+assertIncludes('commands/kaola-workflow-plan-run.md', 'main-session-direct');
+assertIncludes('scripts/kaola-workflow-claim.js', '--attest-contractor-spawn');
+assertIncludes('agents/contractor.md', '--attest-contractor-spawn');
 assertIncludes('install.sh', 'kaola-workflow-plan-validator.js');
 assertIncludes('install.sh', '--enable-adaptive');
 // #255: the adaptive-handoff script must be in install.sh's per-edition SUPPORT_SCRIPT_NAMES
@@ -596,7 +610,10 @@ assertConcept('commands/kaola-workflow-plan-run.md', 'adaptive execution + gover
   'read-only', 'test_thrash', 'FANOUT_CAP',
   // #303 anti-drift: pin the rolling-dispatch + crash-repair + opening-lifecycle primitives so a
   // future edit cannot silently drop the parallel-fanout semantics from one edition.
-  'top-up', 'reconcile', 'opening'
+  'top-up', 'reconcile', 'opening',
+  // #335 anti-drift: pin the mechanical main→worktree project-folder mirror step so no edition
+  // can silently revert to the brittle prose `cp -R` seam.
+  'mirror-project'
 ]);
 // classifier exports the adaptive primitives
 assertIncludes('scripts/kaola-workflow-classifier.js', 'module.exports');
@@ -640,5 +657,39 @@ assertIncludes('install.sh', 'kaola-workflow-parallel-batch.js');
 assertIncludes('commands/kaola-workflow-plan-run.md', 'frontier unit');
 // #281: efficient-DAG instruction in workflow-planner profile (added by planner-profile node)
 assertIncludes('agents/workflow-planner.md', 'EFFICIENT DAGs');
+
+// #341: forge-neutral agent-profile authoring guidance pinned in the planner profile +
+// plan-run executor surface (the #328 gh-leak class).
+assertIncludes('agents/workflow-planner.md', 'forge-neutral');
+assertIncludes('commands/kaola-workflow-plan-run.md', '--forbidden-only');
+
+// #340: registration-surface + forge-port parity checks and their authoring/dispatch prose
+assertIncludes('scripts/kaola-workflow-plan-validator.js', 'agent-registration gap');
+assertIncludes('scripts/kaola-workflow-plan-validator.js', 'forge-port ordering gap');
+assertIncludes('agents/workflow-planner.md', 'full accumulated root diff');
+assertIncludes('agents/workflow-planner.md', 'registration surface');
+assertIncludes('commands/kaola-workflow-plan-run.md', 'full accumulated root diff');
+
+// #340 derived parity guard (enumeration-free): uninstall.sh REQUIRED_AGENTS must match install.sh
+// exactly, or uninstalling orphans an installed managed agent. Both lists are extracted from the
+// single-line array literal — no hardcoded names/counts, so a future agent addition needs no edit here.
+{
+  const requiredAgentsList = (sh, label) => {
+    const m = /REQUIRED_AGENTS=\(([^)]*)\)/.exec(read(sh));
+    assert(m, label + ' must declare a REQUIRED_AGENTS=(...) array (#340)');
+    return (m[1].match(/"([^"]+)"/g) || []).map(s => s.slice(1, -1));
+  };
+  const installAgents = requiredAgentsList('install.sh', 'install.sh');
+  const uninstallAgents = requiredAgentsList('uninstall.sh', 'uninstall.sh');
+  assert(JSON.stringify(installAgents) === JSON.stringify(uninstallAgents),
+    'uninstall.sh REQUIRED_AGENTS must match install.sh (#340) — a missing name orphans the installed agent on uninstall');
+}
+
+// #334: the non-delegable main-session-gate role token + its G3 freeze gate + authoring/dispatch
+// prose. Pinned so a re-vendor/refactor cannot silently drop the built-in gate role.
+assertIncludes('scripts/kaola-workflow-adaptive-schema.js', 'MAIN_SESSION_GATE_ROLE');
+assertIncludes('scripts/kaola-workflow-plan-validator.js', 'G3: main-session-gate');
+assertIncludes('commands/kaola-workflow-plan-run.md', 'main-session-gate');
+assertIncludes('agents/workflow-planner.md', 'main-session-gate');
 
 console.log('Workflow contract validation passed');

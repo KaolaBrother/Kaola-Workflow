@@ -21,9 +21,9 @@ const CLOSURE_RECEIPT_FIELDS = {
   project: 'string',
   issue_number: 'number',
   archive: ['closed', 'abandoned', 'skipped', 'failed'],
-  roadmap_source_removed: ['removed', 'absent', 'failed'],
+  roadmap_source_removed: ['removed', 'absent', 'kept', 'failed'],
   roadmap_regenerated: ['regenerated', 'skipped', 'failed'],
-  remote_issue_closed: ['closed', 'already_closed', 'skipped_offline', 'failed'],
+  remote_issue_closed: ['closed', 'already_closed', 'kept_open', 'skipped_offline', 'failed'],
   claim_label_removed: ['removed', 'already_absent', 'skipped_offline', 'failed'],
   worktree_removed: ['removed', 'missing', 'kept', 'failed'],
   branch_removed: ['removed', 'kept', 'failed'],
@@ -33,11 +33,12 @@ const CLOSURE_RECEIPT_FIELDS = {
   warnings: 'string[]',
 };
 
-// The nine closure invariants for a completed linked issue N. `id` is a stable
+// The ten closure invariants for a completed linked issue N. `id` is a stable
 // machine token; `description` mirrors docs/api.md § Closure Contract.
 const CLOSURE_INVARIANTS = [
   { id: 'roadmap-source-absent', description: 'kaola-workflow/.roadmap/issue-N.md is absent.' },
   { id: 'roadmap-mirror-clean', description: 'Generated kaola-workflow/ROADMAP.md does not list #N as active work.' },
+  { id: 'keep-open-roadmap-preserved', description: 'Keep-open finalize (issue_action: comment_keep_open): kaola-workflow/.roadmap/issue-N.md is preserved and the regenerated ROADMAP.md still lists #N.' },
   { id: 'active-folder-absent', description: 'kaola-workflow/{project}/ is absent from active folders.' },
   { id: 'archive-state-closed', description: 'kaola-workflow/archive/{project}/workflow-state.md exists with status: closed and step: complete when local archive is available.' },
   { id: 'remote-closed-after-publish', description: 'The remote issue is closed only after acceptance criteria pass and implementation is published.' },

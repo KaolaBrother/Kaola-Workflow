@@ -111,6 +111,32 @@ function extractClaudeTemplate(file) {
   return text.slice(startIdx + START.length, endIdx).trim();
 }
 
+// issue #341: standalone, count-independent forbidden-token check. A forge-touching
+// node runs this on just its changed files so a forge-CLI leak is caught at the node
+// that wrote it, without the full contract chain (whose agent/command counts may be
+// transiently stale mid-run). Accepts repo-root-relative or absolute paths. Unknown
+// flags fail closed (exit 2) so a typo can never silently run the full chain instead.
+const cliArgs = process.argv.slice(2);
+if (cliArgs.length > 0) {
+  if (cliArgs[0] !== '--forbidden-only') {
+    console.error('unknown argument: ' + cliArgs[0]);
+    console.error('usage: node validate-kaola-workflow-gitea-contracts.js [--forbidden-only <file> ...]');
+    process.exit(2);
+  }
+  const forbiddenOnlyFiles = cliArgs.slice(1);
+  if (forbiddenOnlyFiles.length === 0) {
+    console.error('usage: node validate-kaola-workflow-gitea-contracts.js --forbidden-only <file> [<file> ...]');
+    process.exit(2);
+  }
+  for (const file of forbiddenOnlyFiles) {
+    const rel = path.isAbsolute(file) ? path.relative(root, file) : file;
+    assert(exists(rel), '--forbidden-only: file not found: ' + file);
+    assertNoForbidden(rel);
+  }
+  console.log('Kaola-Workflow Gitea forbidden-only check passed (' + forbiddenOnlyFiles.length + ' file(s))');
+  process.exit(0);
+}
+
 const pluginJson = parseJson(pluginRoot + '/.codex-plugin/plugin.json');
 assert(pluginJson.name === 'kaola-workflow-gitea', 'Gitea Codex plugin name mismatch');
 assert(pluginJson.skills === './skills/', 'Gitea Codex plugin must expose ./skills/');
@@ -132,6 +158,17 @@ const skillFiles = listSkillFiles();
 const hookFiles = listFiles(pluginRoot + '/hooks');
 const agentFiles = listFiles(pluginRoot + '/agents', file => file.endsWith('.toml'));
 
+// issue #341: the forbidden-token scan runs BEFORE any count assertion, so a forge
+// leak is never hidden behind a stale agent/command/skill count (the #328 latent
+// defect: a `gh` leak in issue-scout.toml was masked by `agentFiles.length === 13`
+// short-circuiting the chain until an unrelated count bump exposed it).
+for (const file of [
+  ...commandFiles, ...skillFiles, ...hookFiles, ...agentFiles,
+  ...(exists(pluginRoot + '/config/agents.toml') ? [pluginRoot + '/config/agents.toml'] : [])
+]) {
+  assertNoForbidden(file);
+}
+
 assert(commandFiles.length === 11, 'expected 11 Gitea command files, got ' + commandFiles.length);
 assert(skillFiles.length === 9, 'expected 9 Gitea skill files, got ' + skillFiles.length);
 assert(exists(pluginRoot + '/hooks/hooks.json'), 'Gitea hooks.json missing');
@@ -142,8 +179,22 @@ assert(hookFiles.some(file => file.endsWith('kaola-workflow-phantom-advisor.sh')
 assert(agentFiles.length === 14, 'expected 14 Gitea agent profiles, got ' + agentFiles.length);
 assert(exists(pluginRoot + '/config/agents.toml'), 'Gitea agents config missing');
 
-for (const file of [...commandFiles, ...skillFiles, ...hookFiles, ...agentFiles, pluginRoot + '/config/agents.toml']) {
-  assertNoForbidden(file);
+// #340 derived parity guard (enumeration-free): the dispatch config/agents.toml must register
+// exactly the agent profiles present in agents/ — both directions. A profile copied without its
+// [agents.<name>] table is undispatchable (the #328 issue-scout miss); a table without its profile
+// dangles. Derives both sides (no hardcoded names/counts), so a future agent addition never edits it.
+{
+  const configNames = new Set();
+  const reCfg = /^\[agents\.([a-z0-9-]+)\]/gm;
+  let cm;
+  while ((cm = reCfg.exec(read(pluginRoot + '/config/agents.toml'))) !== null) configNames.add(cm[1]);
+  const dirNames = new Set(agentFiles.map(f => path.basename(f, '.toml')));
+  const missingTables = [...dirNames].filter(n => !configNames.has(n)).sort();
+  const danglingTables = [...configNames].filter(n => !dirNames.has(n)).sort();
+  assert(missingTables.length === 0 && danglingTables.length === 0,
+    'config/agents.toml must register exactly the agent profiles in agents/ (#340)' +
+    (missingTables.length ? ' — profiles missing a [agents.*] table: ' + missingTables.join(', ') : '') +
+    (danglingTables.length ? ' — [agents.*] tables with no profile: ' + danglingTables.join(', ') : ''));
 }
 
 for (const file of commandFiles.filter(file => path.basename(file).startsWith('kaola-workflow-'))) {
@@ -240,6 +291,17 @@ assert(
   read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('metadata captured before archive'),
   'Gitea finalize skill must capture sink metadata before archive and preserve worktree for the final commit'
 );
+// #336: keep-open partial-close sink lane — command + skill must carry the durable field, the
+// sink-merge flag, and the merge-sink-only refusal prose (the exit-3 in-arm BLOCKED guard's only
+// mechanical enforcement).
+for (const f of ['/commands/kaola-workflow-finalize.md', '/skills/kaola-workflow-finalize/SKILL.md']) {
+  assert(
+    read(pluginRoot + f).includes('issue_action') &&
+    read(pluginRoot + f).includes('--keep-issue-open') &&
+    read(pluginRoot + f).includes('merge-sink-only'),
+    'Gitea ' + f + ' must document the keep-open partial-close lane (issue_action, --keep-issue-open, merge-sink-only)'
+  );
+}
 for (const skill of listFiles(pluginRoot + '/skills', file => file.endsWith('SKILL.md'))) {
   assert(!read(skill).includes('*/kaola-workflow/*/scripts/kaola-gitea'), skill + ' must use the Gitea Codex plugin cache path');
 }
@@ -518,7 +580,9 @@ assertConcept(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'adaptive exe
   '## Node Ledger', 'plan_hash', 'post-dominate', 'auto-run', 'provisional', 'halt for consent',
   'escalated_to_full: consent', 'typed refusal', 'quorum', 'tally-fn', 'validateNodeOutput', 'test_thrash',
   // #303 anti-drift: pin the rolling-dispatch + crash-repair + opening-lifecycle primitives.
-  'top-up', 'reconcile', 'opening'
+  'top-up', 'reconcile', 'opening',
+  // #335 anti-drift: pin the mechanical main→worktree project-folder mirror step.
+  'mirror-project'
 ]);
 assertIncludes(pluginRoot + '/commands/kaola-workflow-finalize.md', 'workflow_path: adaptive');
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-classifier.js', 'disjointWriteSets');
@@ -527,6 +591,29 @@ assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'workflow_
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-repair-state.js', 'routeAdaptive');
 assertNotIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-repair-state.js', 'enable_adaptive');
 assertNotIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-plan-validator.js', 'enable_adaptive');
+// #343: mid-gate reopen fold + orphan guard must be carried by the Gitea adaptive-node port
+// (not byte-checked by validate-script-sync; this pin is the anti-drift guard).
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-adaptive-node.js', 'would_orphan_in_progress');
+
+// #338: anti-drift pins — finalize sink row main-session-direct + contractor self-attest back-fill.
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-adaptive-node.js', 'main-session-direct');
+assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'main-session-direct');
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', '--attest-contractor-spawn');
+assertIncludes(pluginRoot + '/agents/contractor.toml', '--attest-contractor-spawn');
+
+// #340: registration-surface + forge-port parity checks and their authoring/dispatch prose
+// (Gitea edition surfaces). A dropped token reds this chain at the contract-validator step.
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-plan-validator.js', 'agent-registration gap');
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-plan-validator.js', 'forge-port ordering gap');
+assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'full accumulated root diff');
+assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'registration surface');
+assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'full accumulated root diff');
+
+// #334: the non-delegable main-session-gate role token + its G3 freeze gate + authoring/dispatch
+// prose, pinned in the Gitea edition surfaces (port validator, plan-run command, planner TOML).
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-plan-validator.js', 'G3: main-session-gate');
+assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'main-session-gate');
+assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'main-session-gate');
 
 // issue #290 / #288: pin the machine-readable findings-emission contract presence in all
 // reviewer agent bodies (Gitea edition — .toml bodies). Removing the emission section from
@@ -545,5 +632,35 @@ for (const reviewerBody of [
 assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'frontier unit');
 // #281: efficient-DAG instruction in Gitea workflow-planner profile (added by planner-profile node)
 assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'EFFICIENT DAGs');
+
+// #341: forge-neutral agent-profile authoring guidance pinned (planner toml + plan-run command).
+assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'forge-neutral');
+assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', '--forbidden-only');
+
+// issue #332: source agent-profile schema wall (AC2). require() THIS tree's own
+// installer copy (require.main guard means require() never runs main()) and assert its
+// source-tree validator passes for the Gitea plugin tree — every agents/*.toml has a
+// matching non-empty top-level `name`, a legal model_reasoning_effort, a non-blank
+// developer_instructions, every config_file resolves, and every toml is referenced by
+// exactly one [agents.*] entry (catches the issue-scout class of omission forever).
+const giteaInstaller = require('./install-codex-agent-profiles.js');
+const giteaProfiles = giteaInstaller.validateSourceProfiles(path.join(root, pluginRoot));
+assert(giteaProfiles.ok,
+  'Gitea source agent profiles fail schema validation:\n  - ' + giteaProfiles.errors.join('\n  - '));
+
+// issue #332: edition byte-parity guard (the #291/#254 "edition port missed" class).
+// The agent role profiles + config/agents.toml are forge-neutral and MUST stay
+// byte-identical to the codex (plugins/kaola-workflow/) tree — a per-edition divergence
+// (e.g. the historical workflow-planner.toml #272 drift) is illegal. Reference = codex.
+function assertByteParity(relPath) {
+  const ours = fs.readFileSync(path.join(root, pluginRoot, relPath));
+  const ref = fs.readFileSync(path.join(root, 'plugins/kaola-workflow', relPath));
+  assert(ours.equals(ref),
+    'Gitea ' + relPath + ' must be byte-identical to the codex (plugins/kaola-workflow/) copy');
+}
+assertByteParity('config/agents.toml');
+for (const tomlFile of fs.readdirSync(path.join(root, pluginRoot, 'agents')).filter(f => f.endsWith('.toml')).sort()) {
+  assertByteParity(path.join('agents', tomlFile));
+}
 
 console.log('Kaola-Workflow Gitea contract validation passed');

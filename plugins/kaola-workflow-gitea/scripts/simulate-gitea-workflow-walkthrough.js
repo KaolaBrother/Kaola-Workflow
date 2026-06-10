@@ -607,6 +607,49 @@ function testGiteaAdaptive() {
       '| d | finalize | r | — | 1 | sequence |',
     ], 'enhancement').result, 'in-grammar', 'gitea A3 control: independent branches with different files in the same area stay in-grammar');
 
+    // issue #340: the two freeze-time write-set completeness checks on the GITEA edition-named
+    // port (carries pre-existing #294 drift — port-level asserts are load-bearing). Mech 2 (A4/A5)
+    // is a pure graph check (no anchor); mech 1 (A1/A2) is anchor-gated to the repo.
+    // A4 (mech-2 refusal): a port parallel to its root-editing node must refuse.
+    assert.strictEqual(gateVal([
+      '| e | code-explorer | — | — | 1 | sequence |',
+      '| rootedit | tdd-guide | e | scripts/kaola-workflow-claim.js | 1 | sequence |',
+      '| port | implementer | e | plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js | 1 | sequence |',
+      '| rv | code-reviewer | rootedit,port | — | 1 | sequence |',
+      '| d | finalize | rv | — | 1 | sequence |',
+    ], 'enhancement').result, 'refuse', 'gitea #340 A4: a port parallel to its root edit must refuse (forge-port ordering gap)');
+    // A5 (mech-2 positive): the same port downstream of all its root edits is in-grammar.
+    assert.strictEqual(gateVal([
+      '| e | code-explorer | — | — | 1 | sequence |',
+      '| rootedit | tdd-guide | e | scripts/kaola-workflow-claim.js | 1 | sequence |',
+      '| port | implementer | rootedit | plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js | 1 | sequence |',
+      '| rv | code-reviewer | port | — | 1 | sequence |',
+      '| d | finalize | rv | — | 1 | sequence |',
+    ], 'enhancement').result, 'in-grammar', 'gitea #340 A5: a port downstream of all its root edits is in-grammar');
+    // A1 (mech-1 refusal): with the anchor planted, an agent add omitting the surface must refuse
+    // naming the surface; A2: without the anchor the check is inert (in-grammar).
+    {
+      fs.mkdirSync(path.join(tmp, 'scripts'), { recursive: true });
+      fs.writeFileSync(path.join(tmp, 'scripts', 'validate-vendored-agents.js'), '// anchor\n');
+      const a1 = gateVal([
+        '| scout | implementer | e | agents/new-scout.md | 1 | sequence |',
+        '| e | code-explorer | — | — | 1 | sequence |',
+        '| rv | code-reviewer | scout | — | 1 | sequence |',
+        '| d | finalize | rv | — | 1 | sequence |',
+      ], 'enhancement');
+      const a1err = (a1.errors || []).join('\n');
+      assert.ok(a1.result === 'refuse' && /agent-registration gap:.*validate-vendored-agents\.js/.test(a1err) && /agent-registration gap:.*uninstall\.sh/.test(a1err),
+        'gitea #340 A1: agent add omitting the surface must refuse naming validate-vendored-agents.js + uninstall.sh, got ' + JSON.stringify(a1));
+      fs.rmSync(path.join(tmp, 'scripts', 'validate-vendored-agents.js'));
+      const a2 = gateVal([
+        '| scout | implementer | e | agents/new-scout.md | 1 | sequence |',
+        '| e | code-explorer | — | — | 1 | sequence |',
+        '| rv | code-reviewer | scout | — | 1 | sequence |',
+        '| d | finalize | rv | — | 1 | sequence |',
+      ], 'enhancement');
+      assert.strictEqual(a2.result, 'in-grammar', 'gitea #340 A2: without the anchor the mech-1 check must be inert');
+    }
+
     // issue #234 E1: a stale phaseN next_command on an adaptive project must reconcile to plan-run.
     const e1dir = path.join(tmp, 'kaola-workflow', 'issue-940');
     fs.mkdirSync(e1dir, { recursive: true });
@@ -692,14 +735,77 @@ function testGiteaAdaptive() {
     assert.strictEqual(fv.barrierCheck(perInst, ['aaa/x.js', 'bbb/y.js'], { nodeId: 'a' }).result, 'refuse', 'gitea #239: per-node overflow into sibling lane must refuse');
     assert.strictEqual(fv.barrierCheck(perInst, ['aaa/x.js'], { nodeId: 'a' }).result, 'pass', 'gitea #239: per-node own-lane must pass');
 
+    // #334: non-delegable main-session-gate on the FORK validator.
+    // in-grammar control: a post-dominating gate freezes.
+    assert.strictEqual(gateVal([
+      '| e | code-explorer | — | — | 1 | sequence |',
+      '| imp | implementer | e | lib/foo.js | 1 | sequence |',
+      '| rv | code-reviewer | imp | — | 1 | sequence |',
+      '| vgate | main-session-gate | rv | — | 1 | sequence |',
+      '| d | finalize | vgate | — | 1 | sequence |',
+    ], 'enhancement').result, 'in-grammar', 'gitea #334: a post-dominating main-session-gate is in-grammar');
+    // G3 freeze refusal: a side-branch gate (does not post-dominate impl).
+    { const g3v = gateVal([
+        '| e | code-explorer | — | — | 1 | sequence |',
+        '| imp | implementer | e | lib/foo.js | 1 | sequence |',
+        '| rv | code-reviewer | imp | — | 1 | sequence |',
+        '| vgate | main-session-gate | e | — | 1 | sequence |',
+        '| d | finalize | rv,vgate | — | 1 | sequence |',
+      ], 'enhancement');
+      assert.strictEqual(g3v.result, 'refuse', 'gitea #334: side-branch gate must refuse');
+      assert.ok(/G3/.test((g3v.errors || []).join(';')), 'gitea #334: side-branch gate refusal names G3'); }
+    // read-only refusal: a gate declaring a write set.
+    assert.strictEqual(gateVal([
+      '| imp | implementer | — | lib/foo.js | 1 | sequence |',
+      '| rv | code-reviewer | imp | — | 1 | sequence |',
+      '| vgate | main-session-gate | rv | lib/bar.js | 1 | sequence |',
+      '| d | finalize | vgate | — | 1 | sequence |',
+    ], 'enhancement').result, 'refuse', 'gitea #334: a main-session-gate write set must refuse (read-only)');
+    // shape refusal: a gate as a fan-out member.
+    assert.strictEqual(gateVal([
+      '| imp | implementer | — | lib/foo.js | 1 | sequence |',
+      '| rv | code-reviewer | imp | — | 1 | sequence |',
+      '| g1 | main-session-gate | rv | — | 1 | fanout(gates) |',
+      '| g2 | main-session-gate | rv | — | 1 | fanout(gates) |',
+      '| d | finalize | g1,g2 | — | 1 | sequence |',
+    ], 'enhancement').result, 'refuse', 'gitea #334: a main-session-gate fan-out member must refuse (shape)');
+    // G3 runtime: impl complete + gate PENDING -> verifyGateExecution unsatisfied + --gate-verify exit 1.
+    const g3Nodes = ['| imp | implementer | — | lib/foo.js | 1 | sequence |', '| rv | code-reviewer | imp | — | 1 | sequence |', '| vgate | main-session-gate | rv | — | 1 | sequence |', '| d | finalize | vgate | — | 1 | sequence |'];
+    const g3Pending = mkL(g3Nodes, ['| imp | complete |', '| rv | complete |', '| vgate | pending |', '| d | pending |'], 'chore');
+    assert.strictEqual(fv.verifyGateExecution(g3Pending, {}).ok, false, 'gitea #334: impl complete + gate pending must be unsatisfied (regression scenario)');
+    { const projDir = path.join(tmp, 'kaola-workflow', 'issue-334-gt'); fs.mkdirSync(path.join(projDir, '.cache'), { recursive: true });
+      const gp = path.join(projDir, 'workflow-plan.md');
+      fs.writeFileSync(gp, g3Pending);
+      assert.strictEqual(spawnNode(valScript, [gp, '--gate-verify', '--json'], tmp).status, 1, 'gitea #334: --gate-verify exit 1 when gate pending');
+      // n/a -> exit 1.
+      fs.writeFileSync(gp, mkL(g3Nodes, ['| imp | complete |', '| rv | complete |', '| vgate | n/a |', '| d | complete |'], 'chore'));
+      assert.strictEqual(spawnNode(valScript, [gp, '--gate-verify', '--json'], tmp).status, 1, 'gitea #334: --gate-verify exit 1 when gate n/a');
+      // pass control: gate complete + .cache verdicts -> --gate-verify AND --verdict-check exit 0.
+      fs.writeFileSync(gp, mkL(g3Nodes, ['| imp | complete |', '| rv | complete |', '| vgate | complete |', '| d | complete |'], 'chore'));
+      fs.writeFileSync(path.join(projDir, '.cache', 'rv.md'), 'verdict: pass\nfindings_blocking: 0\n');
+      fs.writeFileSync(path.join(projDir, '.cache', 'vgate.md'), 'verdict: pass\nfindings_blocking: 0\nvisual confirmed\n');
+      assert.strictEqual(spawnNode(valScript, [gp, '--gate-verify', '--json'], tmp).status, 0, 'gitea #334: --gate-verify exit 0 when gate complete + post-dominates');
+      assert.strictEqual(spawnNode(valScript, [gp, '--verdict-check', '--json'], tmp).status, 0, 'gitea #334: --verdict-check exit 0 when gate records verdict: pass'); }
+
     // M2 (#277): warn-first attestation — finalize must emit closure_receipt with
     // claim_planner_attested and finalize_contractor_attested; both 'missing' in offline test
     // (no dispatch-log), but closure_invariants.ok must still be true (warn-first contract).
     const m2dir = path.join(tmp, 'kaola-workflow', 'issue-970');
     fs.mkdirSync(m2dir, { recursive: true });
+    // #333: seed an active next_command + a STALE Planning Evidence plan_hash so the archive
+    // must neutralize next_command and refresh the hash from the (re-frozen) plan file.
+    const STALE_HASH_970 = 'a'.repeat(64);
+    const FINAL_HASH_970 = 'b'.repeat(64);
     fs.writeFileSync(path.join(m2dir, 'workflow-state.md'),
-      '## Project\nname: issue-970\nstatus: active\nissue_number: 970\n## Sink\nbranch: workflow/issue-970\nsink: pr\n'
-      + '## Pending Gates\n- workflow-plan\n\n## Last Evidence\nlast_command: startup\nlast_result: folder_claimed\n');
+      '## Project\nname: issue-970\nstatus: active\nissue_number: 970\n'
+      + 'next_command: /kaola-workflow-plan-run issue-970\nnext_skill: kaola-workflow-plan-run issue-970\n'
+      + '## Planning Evidence\nplan_hash: ' + STALE_HASH_970 + '\ndecision: ask\n'
+      + '## Sink\nbranch: workflow/issue-970\nsink: pr\n'
+      + '## Pending Gates\n- workflow-plan\n\n## Last Evidence\nlast_command: startup\nlast_result: folder_claimed\n'
+      + '\n## Last Updated\n2020-01-01T00:00:00.000Z\n');
+    // #333: workflow-plan.md re-frozen with a DIFFERENT hash than the claim-time state hash.
+    fs.writeFileSync(path.join(m2dir, 'workflow-plan.md'),
+      '<!-- plan_hash: ' + FINAL_HASH_970 + ' -->\n\n# Workflow Plan\n\n## Node Ledger\n\n| id | status |\n|---|---|\n| n1 | complete |\n');
     // #324: seed a PRE-SINK finalization-summary carrying the terminal-mistakable sentinels.
     fs.writeFileSync(path.join(m2dir, 'finalization-summary.md'),
       '## Status\nREADY FOR FINAL GIT GATE\n\n## Commit And Push\nPending final git gate. Final hash reported after push.\n');
@@ -745,10 +851,421 @@ function testGiteaAdaptive() {
     assert.ok(!m2Summary.includes('READY FOR FINAL GIT GATE'), '#324: gitea archived summary neutralizes the pre-sink sentinel');
     const m2FinalVal = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'archive', m2Archived[0], '.cache', 'final-validation.md'), 'utf8');
     assert.ok(!m2FinalVal.includes('No files changed after those runs'), '#324 AC3: gitea archived final-validation neutralizes the false absolute');
+    // #333: archived state must not advertise an active resume command, and plan_hash + Last
+    // Updated must be refreshed from the (re-frozen) plan file.
+    assert.ok(m2State.includes('next_command: none (archived)'), '#333: gitea archived next_command neutralized to "none (archived)"');
+    assert.ok(!/next_command:.*kaola-workflow-plan-run/.test(m2State), '#333: gitea archived state drops the active plan-run resume command');
+    assert.ok(m2State.includes('plan_hash: ' + FINAL_HASH_970), '#333: gitea archived plan_hash refreshed from the final plan file, got: ' + m2State);
+    assert.ok(!m2State.includes('plan_hash: ' + STALE_HASH_970), '#333: gitea archived plan_hash drops the stale claim-time hash');
+    assert.ok(!m2State.includes('2020-01-01T00:00:00.000Z'), '#333: gitea archived ## Last Updated refreshed');
+
+    // #338: contractor self-attest back-fill — finalize --attest-contractor-spawn must make
+    // finalize_contractor_attested:attested even with no hook/dispatch-log present.
+    const csDir = path.join(tmp, 'kaola-workflow', 'issue-9701');
+    fs.mkdirSync(csDir, { recursive: true });
+    fs.writeFileSync(path.join(csDir, 'workflow-state.md'),
+      '## Project\nname: issue-9701\nstatus: active\nissue_number: 9701\n'
+      + 'next_command: /kaola-workflow-plan-run issue-9701\n'
+      + '## Sink\nbranch: workflow/issue-9701\nsink: merge\n'
+      + '## Pending Gates\n- workflow-plan\n\n## Last Evidence\nlast_command: startup\nlast_result: folder_claimed\n');
+    fs.writeFileSync(path.join(roadmapM2Dir, 'issue-9701.md'),
+      'issue: #9701\ntitle: t\nstatus: open\nworkflow_project: issue-9701\nnext_step: ready\n');
+    const csResult = JSON.parse(spawnNode(claimScript, ['finalize', '--project', 'issue-9701', '--attest-contractor-spawn'], tmp).stdout);
+    assert.strictEqual(csResult.status, 'closed', '#338: gitea finalize --attest-contractor-spawn returns status:closed');
+    assert.strictEqual(csResult.closure_receipt.finalize_contractor_attested, 'attested',
+      '#338: gitea --attest-contractor-spawn must make finalize_contractor_attested attested, got ' + csResult.closure_receipt.finalize_contractor_attested);
+    const csArchived = fs.readdirSync(path.join(tmp, 'kaola-workflow', 'archive')).filter(n => n.startsWith('issue-9701'));
+    const csLog = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'archive', csArchived[0], '.cache', 'dispatch-log.jsonl'), 'utf8');
+    assert.ok(csLog.includes('finalize-backfill'), '#338: gitea archived dispatch-log carries the finalize-backfill marker');
+
+    // #333: --keep-open stamp — last_result: closed_keep_open + issue_disposition: kept-open.
+    const koDir = path.join(tmp, 'kaola-workflow', 'issue-971');
+    fs.mkdirSync(koDir, { recursive: true });
+    fs.writeFileSync(path.join(koDir, 'workflow-state.md'),
+      '## Project\nname: issue-971\nstatus: active\nissue_number: 971\n'
+      + 'next_command: /kaola-workflow-plan-run issue-971\n'
+      + '## Sink\nbranch: workflow/issue-971\nsink: merge\n'
+      + '## Pending Gates\n- workflow-plan\n\n## Last Evidence\nlast_command: startup\nlast_result: folder_claimed\n');
+    fs.writeFileSync(path.join(roadmapM2Dir, 'issue-971.md'),
+      'issue: #971\ntitle: t\nstatus: open\nworkflow_project: issue-971\nnext_step: ready\n');
+    const koResult = JSON.parse(spawnNode(claimScript, ['finalize', '--project', 'issue-971', '--keep-open'], tmp).stdout);
+    assert.strictEqual(koResult.status, 'closed', '#333: gitea keep-open finalize returns status:closed');
+    assert.strictEqual(koResult.issue_disposition, 'kept-open', '#333: gitea keep-open JSON issue_disposition is kept-open');
+    const koArchived = fs.readdirSync(path.join(tmp, 'kaola-workflow', 'archive')).filter(n => n.startsWith('issue-971'));
+    const koState = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'archive', koArchived[0], 'workflow-state.md'), 'utf8');
+    assert.ok(koState.includes('last_result: closed_keep_open'), '#333: gitea keep-open archived last_result is closed_keep_open');
+    assert.ok(/^## Closure$/m.test(koState), '#333: gitea keep-open archived state carries a ## Closure block');
+    assert.ok(koState.includes('issue_disposition: kept-open'), '#333: gitea keep-open ## Closure records issue_disposition: kept-open');
+
+    // #333 (port gap 3/5): manual-archive backstop — a state archived MANUALLY (live folder
+    // absent) with status: active must be healed in place. This fails loudly (status stays
+    // active, archive_state_stamped: 'failed') if the port backstop ever leaks a
+    // removeLegacyStateBlocks call that throws a swallowed ReferenceError.
+    const bsArchiveDir = path.join(tmp, 'kaola-workflow', 'archive', 'issue-972');
+    fs.mkdirSync(bsArchiveDir, { recursive: true });
+    fs.writeFileSync(path.join(bsArchiveDir, 'workflow-state.md'),
+      '## Project\nname: issue-972\nstatus: active\nissue_number: 972\n'
+      + 'next_command: /kaola-workflow-plan-run issue-972\n'
+      + '## Sink\nbranch: workflow/issue-972\nsink: merge\n');
+    const bsResult = JSON.parse(spawnNode(claimScript, ['finalize', '--project', 'issue-972'], tmp).stdout);
+    assert.strictEqual(bsResult.status, 'closed', '#333: gitea backstop finalize returns status:closed');
+    assert.strictEqual(bsResult.archive_state_stamped, 'repaired', '#333: gitea backstop must report archive_state_stamped: repaired (port has no removeLegacyStateBlocks)');
+    const bsState = fs.readFileSync(path.join(bsArchiveDir, 'workflow-state.md'), 'utf8');
+    assert.ok(bsState.includes('status: closed'), '#333: gitea backstop must stamp manual archive status: closed, got: ' + bsState);
+    assert.ok(/^## Closure$/m.test(bsState), '#333: gitea backstop appends a ## Closure block');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
   console.log('testGiteaAdaptive: PASSED');
+}
+
+// ===========================================================================
+// issue #342: bundle-lane E2E behavioral coverage for the Gitea edition.
+// Mirrors the six root scenarios (simulate-workflow-walkthrough.js §#328) modulo
+// forge nouns, driving the REAL gitea edition CLIs via subprocess (no direct-call
+// shims — the #292 io-shim lesson). Reuses the existing _initGitRepo helper. Each
+// scenario uses its own mkdtempSync root + try/finally cleanup. Forbidden-token
+// discipline: the GitLab-CLI binary token must never appear here (the gitea
+// validator scans this file); we use tea.js / tea-calls.log.
+// ===========================================================================
+
+function gtPlantRoadmapIssue(tmp, n) {
+  const dir = path.join(tmp, 'kaola-workflow', '.roadmap');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'issue-' + n + '.md'),
+    ['issue: #' + n, 'title: bundle test issue ' + n, 'status: open',
+     'workflow_project: —', 'next_step: ready', ''].join('\n'));
+}
+
+function gtWriteProject(tmp, project, files) {
+  const dir = path.join(tmp, 'kaola-workflow', project);
+  fs.mkdirSync(dir, { recursive: true });
+  for (const [name, content] of Object.entries(files)) fs.writeFileSync(path.join(dir, name), content);
+}
+
+// Mirrors the root writeBundleGhMockScript with tea arg shapes (kaola-gitea-forge.js).
+// opts: { logFile, openIssues: number[], closedIssues: number[] }
+function writeBundleTeaMockScript(binDir, opts) {
+  const logFile = opts && opts.logFile ? JSON.stringify(opts.logFile) : 'null';
+  const openIssues = opts && opts.openIssues ? JSON.stringify(opts.openIssues) : '[]';
+  const closedIssues = opts && opts.closedIssues ? JSON.stringify(opts.closedIssues) : '[]';
+  fs.mkdirSync(binDir, { recursive: true });
+  const script = [
+    "'use strict';",
+    'const fs = require("fs");',
+    'const argv = process.argv.slice(2);',
+    'const a = argv.join(" ");',
+    'const logFile = ' + logFile + ';',
+    'const openIssues = new Set(' + openIssues + '.map(String));',
+    'const closedIssues = new Set(' + closedIssues + '.map(String));',
+    'function log(msg) { if (!logFile) return; try { fs.appendFileSync(logFile, msg + "\\n"); } catch(_) {} }',
+    // repo view → gitea project shape (full_name feeds discoverProject early-return + comment URLs).
+    // Required before any label call: addBundleLabel calls discoverProjectSafe() FIRST.
+    'if (a.includes("repo view")) { process.stdout.write(JSON.stringify({full_name:"owner/repo",html_url:"http://gt.invalid/owner/repo"}) + "\\n"); process.exit(0); }',
+    'const viewM = a.match(/issues view (\\d+)/);',
+    'if (viewM) {',
+    '  const n = viewM[1];',
+    '  const state = closedIssues.has(n) ? "closed" : "open";',
+    '  process.stdout.write(JSON.stringify({number:parseInt(n),state,title:"issue "+n,body:"",labels:[]}) + "\\n");',
+    '  process.exit(0);',
+    '}',
+    'if (a.includes("issues edit") && a.includes("--add-labels")) { const m = a.match(/issues edit (\\d+)/); log("label-added:" + (m ? m[1] : "?")); process.stdout.write("{}\\n"); process.exit(0); }',
+    'if (a.includes("issues edit") && a.includes("--remove-labels")) { const m = a.match(/issues edit (\\d+)/); log("label-removed:" + (m ? m[1] : "?")); process.stdout.write("{}\\n"); process.exit(0); }',
+    // POST/DELETE must precede the GET /comments check (all three contain /comments).
+    'if (a.includes("-X POST") && a.includes("/comments")) { log("comment:"); process.stdout.write("{}\\n"); process.exit(0); }',
+    'if (a.includes("-X DELETE")) { process.stdout.write("{}\\n"); process.exit(0); }',
+    'if (a.includes("/comments")) { process.stdout.write("[]\\n"); process.exit(0); }',
+    'if (a.includes("issues list")) { process.stdout.write("[]\\n"); process.exit(0); }',
+    'process.stdout.write("{}\\n"); process.exit(0);',
+  ].join('\n');
+  fs.writeFileSync(path.join(binDir, 'tea.js'), script);
+}
+
+// Online runner mirroring the root walkthrough's pattern: spawn the real edition CLI with
+// KAOLA_TEA_MOCK_SCRIPT routed at the mock and adaptive switch ON. Returns the full spawnSync
+// result so refusal scenarios can assert a non-zero exit (unlike _runClaimOnline which asserts 0).
+function gtSpawnBundle(args, cwd, binDir, extraEnv) {
+  return spawnSync(process.execPath, [claimScript, ...args], {
+    cwd, encoding: 'utf8', timeout: 60000,
+    env: Object.assign({}, process.env, {
+      KAOLA_WORKFLOW_OFFLINE: '0',
+      KAOLA_ENABLE_ADAPTIVE: '1',
+      KAOLA_TEA_MOCK_SCRIPT: path.join(binDir, 'tea.js'),
+    }, extraEnv || {})
+  });
+}
+
+function gtLastJson(stdout) {
+  const lines = (stdout || '').trim().split('\n').filter(l => l.trim().startsWith('{'));
+  assert(lines.length > 0, 'expected a JSON object line, got: ' + stdout);
+  return JSON.parse(lines[lines.length - 1]);
+}
+
+// S1: explicit bundle claim creates exactly ONE active folder + the three additive
+// bundle fields in workflow-state.md. AC#2 + AC#3 E2E guard.
+function testGiteaBundleClaimCreatesOneFolder() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-bundle-claim-')));
+  const binDir = path.join(tmp, 'bin');
+  const logFile = path.join(tmp, 'tea-calls.log');
+  try {
+    _initGitRepo(tmp);
+    gtPlantRoadmapIssue(tmp, 42);
+    gtPlantRoadmapIssue(tmp, 47);
+    gtPlantRoadmapIssue(tmp, 53);
+    writeBundleTeaMockScript(binDir, { logFile, openIssues: [42, 47, 53] });
+
+    const result = gtSpawnBundle(['startup', '--target-issues', '42,47,53', '--workflow-path', 'adaptive'], tmp, binDir);
+    assert.strictEqual(result.status, 0,
+      'gitea #342 S1: exit 0 expected, got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    const out = gtLastJson(result.stdout);
+    assert.strictEqual(out.claim, 'acquired', 'gitea #342 S1: claim must be acquired, got ' + JSON.stringify(out.claim));
+    assert.strictEqual(out.bundle_id, 'bundle-42-47-53', 'gitea #342 S1: bundle_id must be bundle-42-47-53, got ' + JSON.stringify(out.bundle_id));
+    assert.ok(Array.isArray(out.issue_numbers) && out.issue_numbers.length === 3,
+      'gitea #342 S1: issue_numbers must have 3 members, got ' + JSON.stringify(out.issue_numbers));
+
+    const kwDir = path.join(tmp, 'kaola-workflow');
+    const projects = fs.readdirSync(kwDir).filter(n => !n.startsWith('.') && n !== 'archive' && n !== 'ROADMAP.md');
+    assert.ok(projects.length === 1 && projects[0] === 'bundle-42-47-53',
+      'gitea #342 S1: exactly one active folder (bundle-42-47-53) expected, got ' + projects.join(','));
+
+    const state = fs.readFileSync(path.join(kwDir, 'bundle-42-47-53', 'workflow-state.md'), 'utf8');
+    assert.ok(/^issue_number:\s*42\s*$/m.test(state), 'gitea #342 S1: state must have issue_number: 42 (primary)');
+    assert.ok(/^issue_numbers:\s*42,47,53\s*$/m.test(state), 'gitea #342 S1: state must have issue_numbers: 42,47,53');
+    assert.ok(/^bundle_id:\s*bundle-42-47-53\s*$/m.test(state), 'gitea #342 S1: state must have bundle_id: bundle-42-47-53');
+    assert.ok(/^closure_policy:\s*all_or_nothing\s*$/m.test(state), 'gitea #342 S1: state must have closure_policy: all_or_nothing');
+    assert.ok(!/^closure_policy:/m.test(state.replace(/^closure_policy:\s*all_or_nothing\s*$/m, '')),
+      'gitea #342 S1: closure_policy must appear exactly once');
+    assert.ok(/^branch:\s*workflow\/gitea-bundle-42-47-53\s*$/m.test(state),
+      'gitea #342 S1: state must have branch: workflow/gitea-bundle-42-47-53');
+
+    const calls = fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8').split('\n').filter(Boolean) : [];
+    const added = calls.filter(c => c.startsWith('label-added:'));
+    assert.ok(added.includes('label-added:42'), 'gitea #342 S1: label added for member 42');
+    assert.ok(added.includes('label-added:47'), 'gitea #342 S1: label added for member 47');
+    assert.ok(added.includes('label-added:53'), 'gitea #342 S1: label added for member 53');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testGiteaBundleClaimCreatesOneFolder: PASSED');
+}
+
+// S2: a refused bundle claim (closed member #47) leaves NO active folder and applies
+// ZERO labels (pre-mutation refusal). AC#5 + AC#6 guard.
+function testGiteaBundleRefusalLeavesNoFolder() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-bundle-refuse-')));
+  const binDir = path.join(tmp, 'bin');
+  const logFile = path.join(tmp, 'tea-calls.log');
+  try {
+    _initGitRepo(tmp);
+    gtPlantRoadmapIssue(tmp, 42);
+    gtPlantRoadmapIssue(tmp, 47);
+    gtPlantRoadmapIssue(tmp, 53);
+    writeBundleTeaMockScript(binDir, { logFile, openIssues: [42, 53], closedIssues: [47] });
+
+    const result = gtSpawnBundle(['startup', '--target-issues', '42,47,53', '--workflow-path', 'adaptive'], tmp, binDir);
+    assert.strictEqual(result.status, 1,
+      'gitea #342 S2: exit 1 expected for closed member, got ' + result.status + '\nstdout: ' + result.stdout);
+    const out = gtLastJson(result.stdout);
+    assert.strictEqual(out.status, 'target_set_has_closed_issue',
+      'gitea #342 S2: status must be target_set_has_closed_issue, got ' + JSON.stringify(out.status));
+    assert.strictEqual(out.issue, 47, 'gitea #342 S2: refused on issue 47, got ' + JSON.stringify(out.issue));
+
+    assert.ok(!fs.existsSync(path.join(tmp, 'kaola-workflow', 'bundle-42-47-53')),
+      'gitea #342 S2: no bundle-42-47-53 folder must exist after refusal');
+    const calls = fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8').split('\n').filter(Boolean) : [];
+    const labelsAdded = calls.filter(c => c.startsWith('label-added:'));
+    assert.strictEqual(labelsAdded.length, 0,
+      'gitea #342 S2: no labels must be applied after pre-mutation refusal, got: ' + labelsAdded.join(', '));
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testGiteaBundleRefusalLeavesNoFolder: PASSED');
+}
+
+// S3: a live bundle [42,47,53] blocks (a) a direct single-issue claim of member 47 and
+// (b) an overlapping bundle claim [47,77]. Offline. AC#8 duplicate-block guard.
+function testGiteaBundleDuplicateIssueBlocking() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-bundle-dup-')));
+  try {
+    gtPlantRoadmapIssue(tmp, 47);
+    gtPlantRoadmapIssue(tmp, 77);
+    gtWriteProject(tmp, 'bundle-42-47-53', {
+      'workflow-state.md': [
+        'name: bundle-42-47-53', 'status: active', 'phase: adaptive',
+        'issue_number: 42', 'issue_numbers: 42,47,53',
+        'bundle_id: bundle-42-47-53', 'closure_policy: all_or_nothing',
+        'branch: workflow/gitea-bundle-42-47-53', 'sink: merge', ''
+      ].join('\n')
+    });
+
+    const offlineEnv = { KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_ENABLE_ADAPTIVE: '1' };
+    const r1 = spawnSync(process.execPath, [claimScript, 'startup', '--target-issue', '47'],
+      { cwd: tmp, encoding: 'utf8', env: Object.assign({}, process.env, offlineEnv) });
+    const o1 = JSON.parse(r1.stdout);
+    assert.ok(o1.claim === 'owned' || o1.claim === 'none',
+      'gitea #342 S3 (a): claim must be owned or none for live bundle member 47, got ' + JSON.stringify(o1.claim));
+    if (o1.claim === 'owned') {
+      assert.strictEqual(o1.project, 'bundle-42-47-53',
+        'gitea #342 S3 (a): owned claim must resolve to bundle-42-47-53, got ' + JSON.stringify(o1.project));
+    }
+
+    const r2 = spawnSync(process.execPath, [claimScript, 'startup', '--target-issues', '47,77', '--workflow-path', 'adaptive'],
+      { cwd: tmp, encoding: 'utf8', env: Object.assign({}, process.env, offlineEnv) });
+    assert.strictEqual(r2.status, 1,
+      'gitea #342 S3 (b): overlapping bundle [47,77] must exit 1, got ' + r2.status + '\nstdout: ' + r2.stdout);
+    const o2 = JSON.parse(r2.stdout);
+    assert.strictEqual(o2.status, 'target_set_conflicts_active_work',
+      'gitea #342 S3 (b): status must be target_set_conflicts_active_work, got ' + JSON.stringify(o2.status));
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testGiteaBundleDuplicateIssueBlocking: PASSED');
+}
+
+// S4: adaptive orient on a bundle project surfaces bundleId / issueNumbers / primaryIssue /
+// closurePolicy. Offline. AC#14 (orient surface) guard.
+function testGiteaBundleOrientSurfacesBundleIdentity() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-bundle-orient-'));
+  fs.mkdirSync(path.join(tmp, 'kaola-workflow'), { recursive: true });
+  const adaptiveNodeScript = path.join(root, 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-adaptive-node.js');
+  const valScript = path.join(root, 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-plan-validator.js');
+  try {
+    const project = 'bundle-42-47-53';
+    gtWriteProject(tmp, project, {
+      'workflow-state.md': [
+        '# Kaola-Workflow State', '',
+        '## Project', 'name: ' + project, 'status: active', '',
+        '## Current Position', 'phase: adaptive', 'workflow_path: adaptive',
+        'step: start', 'next_command: /kaola-workflow-plan-run ' + project, '',
+        '## Pending Gates', '- workflow-plan', '',
+        '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
+        '## Gitea', 'issue_number: 42', 'full_name: owner/repo', '',
+        '## Sink', 'branch: workflow/gitea-' + project,
+        'issue_number: 42', 'issue_numbers: 42,47,53',
+        'bundle_id: ' + project, 'closure_policy: all_or_nothing', 'sink: merge', ''
+      ].join('\n')
+    });
+
+    // Plant + freeze a 2-node adaptive plan with the EDITION validator (mirrors testGiteaAdaptive).
+    const planPath = path.join(tmp, 'kaola-workflow', project, 'workflow-plan.md');
+    fs.writeFileSync(planPath, [
+      '# Workflow Plan — ' + project, '',
+      '## Meta', 'labels: enhancement', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '|---|---|---|---|---|---|',
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| done | finalize | explore | — | 1 | sequence |', ''
+    ].join('\n'));
+    const fr = spawnSync(process.execPath, [valScript, planPath, '--freeze'],
+      { cwd: tmp, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
+    assert.strictEqual(fr.status, 0, 'gitea #342 S4: plan freeze must exit 0, stderr: ' + fr.stderr);
+
+    const result = spawnSync(process.execPath, [adaptiveNodeScript, 'orient', '--project', project, '--json'],
+      { cwd: tmp, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
+    assert.strictEqual(result.status, 0,
+      'gitea #342 S4: orient exit 0 expected, got ' + result.status + '\nstderr: ' + result.stderr);
+    const out = JSON.parse(result.stdout.trim().split('\n').filter(l => l.trim().startsWith('{')).pop());
+    assert.strictEqual(out.bundleId, 'bundle-42-47-53', 'gitea #342 S4: bundleId must be bundle-42-47-53, got ' + JSON.stringify(out.bundleId));
+    assert.ok(Array.isArray(out.issueNumbers) && out.issueNumbers.length === 3 &&
+      out.issueNumbers[0] === 42 && out.issueNumbers[1] === 47 && out.issueNumbers[2] === 53,
+      'gitea #342 S4: issueNumbers must be [42,47,53], got ' + JSON.stringify(out.issueNumbers));
+    assert.strictEqual(out.primaryIssue, 42, 'gitea #342 S4: primaryIssue must be 42, got ' + JSON.stringify(out.primaryIssue));
+    assert.strictEqual(out.closurePolicy, 'all_or_nothing', 'gitea #342 S4: closurePolicy must be all_or_nothing, got ' + JSON.stringify(out.closurePolicy));
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testGiteaBundleOrientSurfacesBundleIdentity: PASSED');
+}
+
+// S5: finalize on a bundle project removes ALL member .roadmap/issue-N.md files, regenerates
+// the mirror once, archives ONE folder, and the closure receipt carries the bundle fields.
+// THIS IS THE SCENARIO THAT WOULD HAVE CAUGHT THE #328 CR1 FORGE-FINALIZATION DEFECT.
+// AC#11 + AC#12 + AC#13 E2E guard.
+function testGiteaBundleFinalizeRoadmapCleanup() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-bundle-finalize-')));
+  const binDir = path.join(tmp, 'bin');
+  const project = 'bundle-42-47-53';
+  try {
+    _initGitRepo(tmp);
+    gtWriteProject(tmp, project, {
+      'workflow-state.md': [
+        '# Kaola-Workflow State', '',
+        '## Project', 'name: ' + project, 'status: active', '',
+        '## Current Position', 'phase: adaptive', 'workflow_path: adaptive',
+        'step: start', 'next_command: /kaola-workflow-plan-run ' + project, '',
+        '## Pending Gates', '- none', '',
+        '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
+        '## Last Updated', new Date().toISOString(), '',
+        '## Gitea', 'issue_number: 42', 'full_name: owner/repo', '',
+        '## Sink', 'branch: workflow/gitea-' + project,
+        'issue_number: 42', 'issue_numbers: 42,47,53',
+        'bundle_id: ' + project, 'closure_policy: all_or_nothing',
+        'sink: merge', 'run_posture: in-place', ''
+      ].join('\n')
+    });
+    gtPlantRoadmapIssue(tmp, 42);
+    gtPlantRoadmapIssue(tmp, 47);
+    gtPlantRoadmapIssue(tmp, 53);
+    fs.writeFileSync(path.join(tmp, 'kaola-workflow', 'ROADMAP.md'), [
+      '# Kaola-Workflow Roadmap', '',
+      '| Issue | Title | Status |', '|-------|-------|--------|',
+      '| #42 | Test 42 | active |', '| #47 | Test 47 | active |', '| #53 | Test 53 | active |', ''
+    ].join('\n'));
+    writeBundleTeaMockScript(binDir, { closedIssues: [42, 47, 53] });
+
+    const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', project], {
+      cwd: tmp, encoding: 'utf8', timeout: 60000,
+      env: Object.assign({}, process.env, {
+        KAOLA_WORKFLOW_OFFLINE: '0',
+        KAOLA_TEA_MOCK_SCRIPT: path.join(binDir, 'tea.js'),
+      })
+    });
+    assert.strictEqual(result.status, 0,
+      'gitea #342 S5: finalize exit 0 expected, got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    const out = gtLastJson(result.stdout);
+    assert.strictEqual(out.status, 'closed', 'gitea #342 S5: status must be closed, got ' + JSON.stringify(out.status));
+    assert.ok(out.closure_receipt && out.closure_receipt.roadmap_regenerated === 'regenerated',
+      'gitea #342 S5: receipt.roadmap_regenerated must be "regenerated", got ' +
+      JSON.stringify(out.closure_receipt && out.closure_receipt.roadmap_regenerated));
+
+    for (const n of [42, 47, 53]) {
+      assert.ok(!fs.existsSync(path.join(tmp, 'kaola-workflow', '.roadmap', 'issue-' + n + '.md')),
+        'gitea #342 S5: issue-' + n + '.md roadmap source must be removed after finalize');
+    }
+    assert.ok(out.dest && fs.existsSync(out.dest), 'gitea #342 S5: archive folder must exist at dest');
+    assert.ok(!fs.existsSync(path.join(tmp, 'kaola-workflow', project)),
+      'gitea #342 S5: live project folder must be gone after finalize');
+
+    const receipt = out.closure_receipt;
+    assert.ok(receipt != null, 'gitea #342 S5: closure_receipt must be present');
+    assert.ok(Array.isArray(receipt.roadmap_sources_removed) && receipt.roadmap_sources_removed.length === 3,
+      'gitea #342 S5: roadmap_sources_removed must have 3 entries, got ' + JSON.stringify(receipt.roadmap_sources_removed));
+    for (const n of [42, 47, 53]) {
+      assert.ok(receipt.roadmap_sources_removed.includes('issue-' + n + '.md'),
+        'gitea #342 S5: roadmap_sources_removed must include issue-' + n + '.md');
+    }
+    assert.ok(Array.isArray(receipt.closed_issues), 'gitea #342 S5: receipt must have closed_issues array');
+    assert.ok(Array.isArray(receipt.failed_issue_closures) && receipt.failed_issue_closures.length === 0,
+      'gitea #342 S5: failed_issue_closures must be empty when all probes succeed, got ' + JSON.stringify(receipt.failed_issue_closures));
+    assert.ok(Array.isArray(receipt.issue_numbers) && receipt.issue_numbers.length === 3,
+      'gitea #342 S5: receipt must have issue_numbers with 3 members, got ' + JSON.stringify(receipt.issue_numbers));
+
+    const inv = out.closure_invariants;
+    assert.ok(inv && inv.ok === true,
+      'gitea #342 S5: closure_invariants must pass; violations: ' + JSON.stringify(inv && inv.violations));
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testGiteaBundleFinalizeRoadmapCleanup: PASSED');
+}
+
+// S6: AC#1 contamination guard — a single-issue claim must NOT write the bundle fields. Offline.
+function testGiteaBundleSingleIssueStateHasNoBundleFields() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-bundle-single-'));
+  fs.mkdirSync(path.join(tmp, 'kaola-workflow'), { recursive: true });
+  try {
+    gtPlantRoadmapIssue(tmp, 601);
+    const r = spawnSync(process.execPath, [claimScript, 'startup', '--target-issue', '601'],
+      { cwd: tmp, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
+    const out = JSON.parse(r.stdout);
+    assert.strictEqual(out.claim, 'acquired', 'gitea #342 S6: single-issue startup must acquire, got ' + JSON.stringify(out.claim));
+    const state = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'issue-601', 'workflow-state.md'), 'utf8');
+    assert.ok(!/^issue_numbers:/m.test(state), 'gitea #342 S6: single-issue state must NOT contain issue_numbers line');
+    assert.ok(!/^bundle_id:/m.test(state), 'gitea #342 S6: single-issue state must NOT contain bundle_id line');
+    assert.ok(!/^closure_policy:/m.test(state), 'gitea #342 S6: single-issue state must NOT contain closure_policy line');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testGiteaBundleSingleIssueStateHasNoBundleFields: PASSED');
 }
 
 // issue #237: the leading-dot FILE_PATH_REGEX widening must hold on the FORK classifier too —
@@ -783,6 +1300,14 @@ function testGiteaDispatchHookExists() {
 testGiteaAdaptive();
 testGitea237DotPathExtraction();
 testGiteaDispatchHookExists();
+
+// issue #342: bundle-lane E2E behavioral coverage (mirrors root §#328 modulo forge nouns).
+testGiteaBundleClaimCreatesOneFolder();
+testGiteaBundleRefusalLeavesNoFolder();
+testGiteaBundleDuplicateIssueBlocking();
+testGiteaBundleOrientSurfacesBundleIdentity();
+testGiteaBundleFinalizeRoadmapCleanup();
+testGiteaBundleSingleIssueStateHasNoBundleFields();
 
 run('test-gitea-forge-helpers.js');
 run('test-gitea-workflow-scripts.js');

@@ -834,4 +834,85 @@ withForge({
   }
 }
 
+// #336: keep-open partial-close — runDirectMerge with keepIssueOpen MUST NOT close the issue.
+withForge({
+  createIssueNote(project, issueIid, body) {
+    assert(body.includes('kept open'), '#336: keep-open note body must mention kept open');
+    return { id: 9100 };
+  },
+  closeIssue() {
+    throw new Error('#336: closeIssue must NOT be called on a keep-open runDirectMerge');
+  },
+  updateIssue() { return null; }
+}, () => {
+  const root = tempRoot('kw-gl-keepopen-');
+  try {
+    writeWorkflow(root, 'keepopen-project', 88);
+    const result = sinkMerge.runDirectMerge(
+      { branch: 'feature-keepopen', project: 'keepopen-project', issue: 88, keepIssueOpen: true },
+      { root, skipGit: true }
+    );
+    assert.strictEqual(result.merged, true, '#336: keep-open runDirectMerge should still merge');
+    assert.strictEqual(result.close, null, '#336: keep-open runDirectMerge must not close the issue (close === null)');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// #336: --keep-issue-open requires --issue (typed refusal).
+{
+  const root = tempRoot('kw-gl-keepopen-noissue-');
+  try {
+    let err = null;
+    try { sinkMerge.runDirectMerge({ branch: 'feature-x', project: 'p', keepIssueOpen: true }, { root, skipGit: true }); }
+    catch (e) { err = e; }
+    assert.ok(err && /--keep-issue-open requires --issue/.test(err.message),
+      '#336: keep-open without --issue must refuse, got: ' + (err && err.message));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+// #336: sink-mr keep-open refusal — a live OR archived state carrying issue_action:
+// comment_keep_open must make sink-mr refuse (merge-sink-only) before the OFFLINE branch.
+{
+  const sinkMrScript = path.join(__dirname, 'kaola-gitlab-workflow-sink-mr.js');
+  // (a) live state
+  const rootA = tempRoot('kw-gl-mr-keepopen-live-');
+  try {
+    const dir = path.join(rootA, 'kaola-workflow', 'issue-900a');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'workflow-state.md'),
+      'status: active\n\n## Sink\nsink: mr\nissue_action: comment_keep_open\n');
+    const r = spawnSync(process.execPath, [sinkMrScript, '--project', 'issue-900a', '--branch', 'workflow/issue-900a', '--issue', '900'],
+      { cwd: rootA, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
+    assert.notStrictEqual(r.status, 0, '#336: sink-mr must refuse a live keep-open project');
+    assert.ok(/merge-sink-only/.test(r.stderr), '#336: sink-mr live refusal must say merge-sink-only, got: ' + r.stderr);
+  } finally {
+    fs.rmSync(rootA, { recursive: true, force: true });
+  }
+  // (b) archived state (the real exit-3 fallback shape) + regression leg
+  const rootB = tempRoot('kw-gl-mr-keepopen-arch-');
+  try {
+    const adir = path.join(rootB, 'kaola-workflow', 'archive', 'issue-900b');
+    fs.mkdirSync(adir, { recursive: true });
+    fs.writeFileSync(path.join(adir, 'workflow-state.md'),
+      'status: closed\nstep: complete\nissue_number: 900\n\n## Sink\nsink: merge\nissue_action: comment_keep_open\n');
+    const r = spawnSync(process.execPath, [sinkMrScript, '--project', 'issue-900b', '--branch', 'workflow/issue-900b', '--issue', '900'],
+      { cwd: rootB, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
+    assert.notStrictEqual(r.status, 0, '#336: sink-mr must refuse an archived keep-open project');
+    assert.ok(/merge-sink-only/.test(r.stderr), '#336: sink-mr archived refusal must say merge-sink-only, got: ' + r.stderr);
+    // Regression: a clean project (no field) exits 0 OFFLINE.
+    const cleanDir = path.join(rootB, 'kaola-workflow', 'issue-900c');
+    fs.mkdirSync(cleanDir, { recursive: true });
+    fs.writeFileSync(path.join(cleanDir, 'workflow-state.md'), 'status: active\n\n## Sink\nsink: mr\n');
+    const rc = spawnSync(process.execPath, [sinkMrScript, '--project', 'issue-900c', '--branch', 'workflow/issue-900c', '--issue', '900'],
+      { cwd: rootB, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
+    assert.strictEqual(rc.status, 0, '#336: a non-keep-open sink-mr must still exit 0 OFFLINE, got: ' + rc.stderr);
+  } finally {
+    fs.rmSync(rootB, { recursive: true, force: true });
+  }
+}
+console.log('GitLab keep-open (#336) tests passed');
+
 console.log('GitLab sink tests passed');

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 
 const pluginRoot = path.resolve(__dirname, '..');
 const projectRoot = path.resolve(process.argv[2] || process.cwd());
@@ -15,6 +16,24 @@ const beginMarker = '# BEGIN kaola-workflow agents';
 const endMarker = '# END kaola-workflow agents';
 const PLUGIN_ROOT_TOKEN = '__KW_PLUGIN_ROOT__';
 const MANAGED_HOOK_ID_PREFIX = 'kaola-workflow:';
+
+// issue #332: schema + prune + manifest constants.
+// MANIFEST_BASENAME — ownership record written inside the managed agents dir so a
+//   future installer can distinguish stale Kaola-generated files from user-owned ones.
+// RETIRED_PROFILE_FILES — Kaola-generated role files removed/renamed from source. The
+//   prune step removes these even with NO manifest present (repairs every pre-manifest
+//   machine). docs-lookup.toml was renamed to knowledge-lookup in #249 — the only Kaola
+//   role file ever retired. Append here whenever a role file is removed/renamed.
+// EFFORT_VALUES — the only legal model_reasoning_effort values; the source schema
+//   validator (validateProfileText) and the preflight's mirror both pin this set.
+// NOTE: kaola-workflow-codex-preflight.js DUPLICATES validateProfileText + these
+//   constants (the root scripts/ tree has no installer to require, and the preflight
+//   is a true 4-tree byte-identical script that may not require() edition code). Keep
+//   the two copies in lock-step when editing the schema rules.
+const MANIFEST_BASENAME = '.kaola-managed-profiles.json';
+const RETIRED_PROFILE_FILES = ['docs-lookup.toml'];
+const EFFORT_VALUES = ['low', 'medium', 'high', 'xhigh'];
+const MANIFEST_SCHEMA_VERSION = 1;
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -81,6 +100,213 @@ function upsertBlock(existing, block) {
   return `${existing}${separator}${block}\n`;
 }
 
+// ---------------------------------------------------------------------------
+// #332 schema validation — inline regex, no TOML lib (these files are Kaola-authored
+// with a fixed 3-key top-level shape: name / model_reasoning_effort /
+// developer_instructions). The top-level region is the text before the first ^[ table.
+// Returns [] when valid, or a list of human-readable reasons.
+// ---------------------------------------------------------------------------
+function validateProfileText(text, role) {
+  const reasons = [];
+  const firstTableIdx = text.search(/^\[/m);
+  const top = firstTableIdx === -1 ? text : text.slice(0, firstTableIdx);
+
+  const nameMatch = top.match(/^name\s*=\s*"([^"]*)"\s*$/m);
+  if (!nameMatch) {
+    reasons.push("missing or empty top-level 'name' (codex >=0.138 ignores the profile)");
+  } else if (nameMatch[1] === '') {
+    reasons.push("top-level 'name' is empty");
+  } else if (nameMatch[1] !== role) {
+    reasons.push(`top-level 'name' is "${nameMatch[1]}" but must equal the role "${role}"`);
+  }
+
+  const effortMatch = top.match(/^model_reasoning_effort\s*=\s*"([^"]*)"\s*$/m);
+  if (!effortMatch) {
+    reasons.push("missing top-level 'model_reasoning_effort'");
+  } else if (!EFFORT_VALUES.includes(effortMatch[1])) {
+    reasons.push(`model_reasoning_effort "${effortMatch[1]}" is not one of ${EFFORT_VALUES.join('/')}`);
+  }
+
+  const instrMatch = text.match(/^developer_instructions\s*=\s*"""([\s\S]*?)"""/m);
+  if (!instrMatch) {
+    reasons.push("missing top-level 'developer_instructions' triple-quoted block");
+  } else if (instrMatch[1].trim() === '') {
+    reasons.push("'developer_instructions' body is blank");
+  }
+
+  return reasons;
+}
+
+// Parse config/agents.toml for [agents.<role>] + its config_file line.
+// Returns [{ role, configFile, basename }].
+function parseTemplateEntries(templateText) {
+  const entries = [];
+  const lines = templateText.split(/\r?\n/);
+  let current = null;
+  for (const line of lines) {
+    const head = line.match(/^\[agents\.([a-z0-9-]+)\]\s*$/);
+    if (head) {
+      current = { role: head[1], configFile: null, basename: null };
+      entries.push(current);
+      continue;
+    }
+    if (current) {
+      const cf = line.match(/^config_file\s*=\s*"([^"]*)"\s*$/);
+      if (cf) {
+        current.configFile = cf[1];
+        current.basename = path.basename(cf[1]);
+      }
+    }
+  }
+  return entries;
+}
+
+// Source-tree schema wall (AC2): every config_file resolves to an existing
+// agents/<role>.toml, every agents/*.toml is referenced by exactly one entry, and
+// every profile passes validateProfileText. Pure — used by the validators too.
+function validateSourceProfiles(rootDir) {
+  const templatePath = path.join(rootDir, 'config', 'agents.toml');
+  const agentsDir = path.join(rootDir, 'agents');
+  const errors = [];
+
+  if (!fs.existsSync(templatePath)) {
+    return { ok: false, errors: [`missing config/agents.toml at ${templatePath}`], roles: [] };
+  }
+  if (!fs.existsSync(agentsDir)) {
+    return { ok: false, errors: [`missing agents/ directory at ${agentsDir}`], roles: [] };
+  }
+
+  const entries = parseTemplateEntries(read(templatePath));
+  const roles = entries.map(e => e.role);
+
+  const tomlFiles = fs.readdirSync(agentsDir)
+    .filter(f => f.endsWith('.toml'))
+    .sort();
+
+  // Every config_file resolves to an existing agents/<role>.toml.
+  const referenced = new Set();
+  for (const entry of entries) {
+    if (!entry.basename) {
+      errors.push(`agents.toml [agents.${entry.role}] has no config_file line`);
+      continue;
+    }
+    referenced.add(entry.basename);
+    const file = path.join(agentsDir, entry.basename);
+    if (!fs.existsSync(file)) {
+      errors.push(`agents/${entry.basename}: referenced by [agents.${entry.role}] but file is missing`);
+      continue;
+    }
+    const reasons = validateProfileText(read(file), entry.role);
+    for (const r of reasons) errors.push(`agents/${entry.basename}: ${r}`);
+  }
+
+  // Every agents/*.toml is referenced by exactly one entry (catches issue-scout class).
+  for (const file of tomlFiles) {
+    if (!referenced.has(file)) {
+      errors.push(`agents/${file}: not referenced by any [agents.*] entry in config/agents.toml`);
+    }
+  }
+
+  return { ok: errors.length === 0, errors, roles };
+}
+
+// ---------------------------------------------------------------------------
+// Manifest helpers (#332).
+// ---------------------------------------------------------------------------
+function sha256(buf) {
+  return 'sha256:' + crypto.createHash('sha256').update(buf).digest('hex');
+}
+
+function manifestPath(agentsDir) {
+  return path.join(agentsDir, MANIFEST_BASENAME);
+}
+
+// Returns the parsed manifest, or null on absent/corrupt.
+function readManifest(agentsDir) {
+  const p = manifestPath(agentsDir);
+  if (!fs.existsSync(p)) return null;
+  try {
+    const obj = JSON.parse(read(p));
+    if (!obj || typeof obj !== 'object') return null;
+    return obj;
+  } catch {
+    return null;
+  }
+}
+
+// Prune stale managed/retired profiles. Order (issue §3): for each *.toml in the
+// target dir not in currentFiles —
+//   listed in prevManifest.files  -> unlink (stale-managed)
+//   in RETIRED_PROFILE_FILES       -> unlink (retired; works with no manifest)
+//   otherwise                      -> keep, record in extraUnmanaged (never deleted)
+function pruneStaleProfiles(agentsDir, currentFiles, prevManifest) {
+  const removed = [];
+  const extraUnmanaged = [];
+  if (!fs.existsSync(agentsDir)) return { removed, extraUnmanaged };
+
+  const currentSet = new Set(currentFiles);
+  const prevFiles = (prevManifest && prevManifest.files && typeof prevManifest.files === 'object')
+    ? Object.keys(prevManifest.files)
+    : [];
+  const prevSet = new Set(prevFiles);
+
+  for (const name of fs.readdirSync(agentsDir)) {
+    if (!name.endsWith('.toml')) continue;
+    if (currentSet.has(name)) continue;
+    if (prevSet.has(name)) {
+      fs.unlinkSync(path.join(agentsDir, name));
+      removed.push({ file: name, reason: 'stale-managed' });
+    } else if (RETIRED_PROFILE_FILES.includes(name)) {
+      fs.unlinkSync(path.join(agentsDir, name));
+      removed.push({ file: name, reason: 'retired' });
+    } else {
+      extraUnmanaged.push(name);
+    }
+  }
+
+  removed.sort((a, b) => a.file.localeCompare(b.file));
+  extraUnmanaged.sort();
+  return { removed, extraUnmanaged };
+}
+
+function writeManifest(agentsDir, { pluginRoot: srcRoot, copiedFiles, removed }) {
+  let pluginName = path.basename(srcRoot);
+  let pluginVersion = null;
+  try {
+    const pj = JSON.parse(read(path.join(srcRoot, '.codex-plugin', 'plugin.json')));
+    if (pj && pj.name) pluginName = pj.name;
+    if (pj && pj.version) pluginVersion = pj.version;
+  } catch {
+    /* fall back to basename / null */
+  }
+
+  const files = {};
+  const roles = [];
+  for (const name of copiedFiles.slice().sort()) {
+    roles.push(name.replace(/\.toml$/, ''));
+    files[name] = sha256(fs.readFileSync(path.join(agentsDir, name)));
+  }
+
+  const manifest = {
+    schema_version: MANIFEST_SCHEMA_VERSION,
+    plugin: pluginName,
+    plugin_version: pluginVersion,
+    installed_at: new Date().toISOString(),
+    source_plugin_root: srcRoot,
+    roles,
+    files,
+    retired_files_removed: removed
+      .filter(r => r.reason === 'retired')
+      .map(r => r.file)
+      .sort(),
+  };
+
+  fs.writeFileSync(manifestPath(agentsDir), JSON.stringify(manifest, null, 2) + '\n');
+  return manifest;
+}
+
+// Copy each source profile via write-temp-then-rename so a crash mid-copy never
+// leaves a torn profile. Returns the sorted list of copied *.toml basenames.
 function copyAgentProfiles() {
   fs.mkdirSync(targetAgentsDir, { recursive: true });
   const copied = [];
@@ -89,8 +315,10 @@ function copyAgentProfiles() {
     if (!entry.isFile() || !entry.name.endsWith('.toml')) continue;
     const source = path.join(sourceAgentsDir, entry.name);
     const target = path.join(targetAgentsDir, entry.name);
-    fs.copyFileSync(source, target);
-    copied.push(path.relative(projectRoot, target));
+    const tmp = target + '.tmp-' + process.pid;
+    fs.writeFileSync(tmp, fs.readFileSync(source));
+    fs.renameSync(tmp, target);
+    copied.push(entry.name);
   }
 
   return copied.sort();
@@ -191,22 +419,100 @@ function updateHooks() {
   return 'unchanged';
 }
 
+// Post-verify (AC8 parity): re-read every installed profile + assert the managed
+// block carries an [agents.<role>] entry for every template role. Returns [] when
+// the install is sound, or a list of reasons.
+function postVerify(templateRoles) {
+  const problems = [];
+  for (const role of templateRoles) {
+    const file = path.join(targetAgentsDir, `${role}.toml`);
+    if (!fs.existsSync(file)) {
+      problems.push(`installed agents/kaola-workflow/${role}.toml is missing`);
+      continue;
+    }
+    const reasons = validateProfileText(read(file), role);
+    for (const r of reasons) problems.push(`installed ${role}.toml: ${r}`);
+  }
+
+  const configText = fs.existsSync(targetConfig) ? read(targetConfig) : '';
+  const beginIdx = configText.indexOf(beginMarker);
+  const endIdx = configText.indexOf(endMarker);
+  let blockBody = '';
+  if (beginIdx !== -1 && endIdx !== -1 && beginIdx < endIdx) {
+    blockBody = configText.slice(beginIdx + beginMarker.length, endIdx);
+  } else {
+    problems.push('managed block markers not found in .codex/config.toml after install');
+  }
+  for (const role of templateRoles) {
+    const re = new RegExp(`^\\[agents\\.${escapeRegExp(role)}\\]`, 'm');
+    if (!re.test(blockBody)) {
+      problems.push(`managed block missing [agents.${role}] after install`);
+    }
+  }
+
+  return problems;
+}
+
 function main() {
   assert(fs.existsSync(sourceAgentsDir), `missing source agents directory: ${sourceAgentsDir}`);
   assert(fs.existsSync(sourceTemplate), `missing source config template: ${sourceTemplate}`);
   assert(fs.existsSync(sourceHooksTemplate), `missing source hooks template: ${sourceHooksTemplate}`);
 
+  // 1. Source-schema wall — never write on a malformed source tree.
+  const sourceCheck = validateSourceProfiles(pluginRoot);
+  if (!sourceCheck.ok) {
+    for (const e of sourceCheck.errors) {
+      process.stderr.write(`profile_schema_error: ${e}\n`);
+    }
+    process.exit(1);
+  }
+  const templateRoles = sourceCheck.roles;
+
+  // 2. Refuse to prune against a future manifest schema.
+  const prevManifest = readManifest(targetAgentsDir);
+  if (prevManifest && typeof prevManifest.schema_version === 'number'
+      && prevManifest.schema_version > MANIFEST_SCHEMA_VERSION) {
+    process.stderr.write(
+      `manifest_schema_unsupported: ${manifestPath(targetAgentsDir)} has schema_version ${prevManifest.schema_version}; `
+      + `this installer supports ${MANIFEST_SCHEMA_VERSION} — upgrade kaola-workflow\n`
+    );
+    process.exit(1);
+  }
+
+  // 3-6. Install profiles + config + hooks.
   const copied = copyAgentProfiles();
   const configStatus = updateConfig();
   const hooksStatus = updateHooks();
 
+  // 7-8. Prune stale/retired profiles, then record the ownership manifest.
+  const { removed, extraUnmanaged } = pruneStaleProfiles(targetAgentsDir, copied, prevManifest);
+  writeManifest(targetAgentsDir, { pluginRoot, copiedFiles: copied, removed });
+
+  // 9. Post-verify before printing success.
+  const problems = postVerify(templateRoles);
+  if (problems.length > 0) {
+    for (const p of problems) process.stderr.write(`post_verify_failed: ${p}\n`);
+    process.exit(1);
+  }
+
+  // 10. Summary.
   console.log(`Kaola-Workflow agent profiles: copied ${copied.length} profiles`);
   console.log(`Kaola-Workflow agent profiles: config ${configStatus} at ${path.relative(projectRoot, targetConfig)}`);
   for (const file of copied) {
-    console.log(`- ${file}`);
+    console.log(`- ${path.relative(projectRoot, path.join(targetAgentsDir, file))}`);
   }
   console.log(`Kaola-Workflow Codex hooks: ${hooksStatus} at ${path.relative(projectRoot, targetHooks)}`);
   console.log(`run /hooks once in Codex to review and trust these command hooks (or codex exec --dangerously-bypass-hook-trust for automation)`);
+
+  console.log(`Kaola-Workflow agent profiles: removed ${removed.length} stale managed profile(s)`);
+  for (const r of removed) {
+    console.log(`- removed agents/kaola-workflow/${r.file} (${r.reason})`);
+  }
+  if (extraUnmanaged.length > 0) {
+    console.log(`Kaola-Workflow agent profiles: unmanaged extra profiles left in place: ${extraUnmanaged.join(', ')}`);
+  }
+  console.log(`Kaola-Workflow agent profiles: manifest written at ${path.relative(projectRoot, manifestPath(targetAgentsDir))}`);
+  console.log('status: ok');
 }
 
 // #325: export the pure helpers for unit tests; only run the installer when invoked directly
@@ -216,4 +522,16 @@ if (require.main === module) {
   main();
 }
 
-module.exports = { buildManagedHooks, mergeHooks, updateHooks };
+module.exports = {
+  buildManagedHooks,
+  mergeHooks,
+  updateHooks,
+  validateProfileText,
+  validateSourceProfiles,
+  pruneStaleProfiles,
+  readManifest,
+  writeManifest,
+  RETIRED_PROFILE_FILES,
+  MANIFEST_BASENAME,
+  EFFORT_VALUES,
+};

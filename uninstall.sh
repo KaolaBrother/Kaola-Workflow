@@ -5,7 +5,7 @@ FORGE=""
 AGENTS_DIR="${KAOLA_AGENT_DIR:-$HOME/.claude/agents}"
 AGENT_MANIFEST_FILE="$AGENTS_DIR/.kaola-workflow-agent-manifest"
 MANAGED_AGENT_MARKER="kaola-workflow-managed-agent: true"
-REQUIRED_AGENTS=("code-explorer" "knowledge-lookup" "planner" "code-architect" "tdd-guide" "implementer" "build-error-resolver" "code-reviewer" "security-reviewer" "doc-updater" "adversarial-verifier" "contractor" "workflow-planner")
+REQUIRED_AGENTS=("code-explorer" "knowledge-lookup" "planner" "code-architect" "tdd-guide" "implementer" "build-error-resolver" "code-reviewer" "security-reviewer" "doc-updater" "adversarial-verifier" "contractor" "workflow-planner" "issue-scout")
 
 usage() {
   echo "Usage: ./uninstall.sh [--forge=github|gitlab|gitea|all]"
@@ -258,6 +258,80 @@ if changed:
 PY
     :
   fi
+fi
+
+# issue #332: remove Kaola-Workflow-managed agent profiles + the managed
+# [agents.*] block from the project-local .codex written by
+# install-codex-agent-profiles.js. Same $PWD asymmetry as the hooks cleanup above.
+# Only manifest-listed + known-retired profile files are removed; unknown user TOMLs
+# are never touched.
+CODEX_AGENTS_DIR="$PWD/.codex/agents/kaola-workflow"
+CODEX_CONFIG_FILE="$PWD/.codex/config.toml"
+if { [[ -d "$CODEX_AGENTS_DIR" ]] || [[ -f "$CODEX_CONFIG_FILE" ]]; } && command -v python3 >/dev/null 2>&1; then
+  python3 - "$CODEX_AGENTS_DIR" "$CODEX_CONFIG_FILE" <<'PY'
+import json, os, sys
+
+agents_dir = sys.argv[1]
+config_file = sys.argv[2]
+
+MANIFEST_BASENAME = ".kaola-managed-profiles.json"
+RETIRED_PROFILE_FILES = ["docs-lookup.toml"]
+BEGIN_MARKER = "# BEGIN kaola-workflow agents"
+END_MARKER = "# END kaola-workflow agents"
+
+removed_files = []
+
+if os.path.isdir(agents_dir):
+    manifest_path = os.path.join(agents_dir, MANIFEST_BASENAME)
+    managed = []
+    if os.path.isfile(manifest_path):
+        try:
+            with open(manifest_path) as f:
+                manifest = json.load(f)
+            files = manifest.get("files")
+            if isinstance(files, dict):
+                managed = list(files.keys())
+        except (json.JSONDecodeError, OSError):
+            managed = []
+    # Remove manifest-listed + known-retired profile files (never unknown user TOMLs).
+    for name in sorted(set(managed) | set(RETIRED_PROFILE_FILES)):
+        p = os.path.join(agents_dir, name)
+        if os.path.isfile(p):
+            os.remove(p)
+            removed_files.append(name)
+    # Remove the manifest itself.
+    if os.path.isfile(manifest_path):
+        os.remove(manifest_path)
+        removed_files.append(MANIFEST_BASENAME)
+    # Remove the dir if now empty.
+    try:
+        if not os.listdir(agents_dir):
+            os.rmdir(agents_dir)
+    except OSError:
+        pass
+
+# Strip ONLY the managed [agents.*] block from .codex/config.toml; preserve all else.
+if os.path.isfile(config_file):
+    try:
+        with open(config_file) as f:
+            text = f.read()
+        b = text.find(BEGIN_MARKER)
+        e = text.find(END_MARKER)
+        if b != -1 and e != -1 and b < e:
+            e_end = e + len(END_MARKER)
+            # swallow a single trailing newline after the END marker, if present
+            if e_end < len(text) and text[e_end] == "\n":
+                e_end += 1
+            new_text = text[:b] + text[e_end:]
+            with open(config_file, "w") as f:
+                f.write(new_text)
+            print(f"Removed Kaola-Workflow managed agents block from {config_file}")
+    except OSError:
+        pass
+
+if removed_files:
+    print("Removed Kaola-Workflow managed agent profiles: " + ", ".join(removed_files))
+PY
 fi
 
 if [[ "$removed" -eq 0 ]]; then

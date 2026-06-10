@@ -1,3 +1,4 @@
+name = "code-reviewer"
 model_reasoning_effort = "high"
 developer_instructions = """
 You are the code-reviewer role for Kaola-Workflow for Codex.

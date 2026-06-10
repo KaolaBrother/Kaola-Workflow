@@ -10,6 +10,7 @@
 //
 // Subcommands (all require --project P and --json; exit≠0 on refuse):
 //   orient         --project P                        (READ-ONLY)
+//   mirror-project --project P                        (#335: main→worktree mirror; READ-ONLY on ledger/state)
 //   open-next      --project P [--node-id N]          (MUTATES ledger + baseline)
 //   record-evidence --project P --node-id N --stdin   (MUTATES .cache)
 //   close-and-open-next --project P --node-id N       (MUTATES ledger + state)
@@ -47,6 +48,45 @@ function getRoot() {
     }).trim();
   } catch (_) {
     return process.cwd();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// getMainRoot — #335: resolve the MAIN checkout root even when cwd is a linked
+// worktree. Mirrors claim.js getCoordRoot/mainRootFromCoord (local re-impl per
+// repo convention — claim.js does not export them). When `root` IS the main
+// checkout, git-common-dir resolves to <root>/.git and the basename strip
+// returns `root` unchanged.
+// ---------------------------------------------------------------------------
+function getMainRoot(root) {
+  try {
+    const raw = execFileSync('git', ['rev-parse', '--git-common-dir'], {
+      cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    const coord = path.resolve(root, raw);
+    return path.basename(coord) === '.git' ? path.dirname(coord) : coord;
+  } catch (_) { return root; }
+}
+
+// ---------------------------------------------------------------------------
+// copyTree — #335: small recursive copy (readdirSync withFileTypes +
+// copyFileSync, skipping symlinks). Same shape as claim.js exportWorktreeDiff;
+// no fs.cpSync precedent in this repo. Parents of `dest` are created by the
+// caller (mkdirSync). Best-effort on directory entries; throws on file copy
+// errors so the caller's transaction fails closed.
+// ---------------------------------------------------------------------------
+function copyTree(src, dest, io) {
+  io.mkdirSync(dest, { recursive: true });
+  const entries = io.readdir(src);
+  for (const e of entries) {
+    const from = path.join(src, e.name);
+    const to = path.join(dest, e.name);
+    if (e.isSymbolicLink && e.isSymbolicLink()) continue;
+    if (e.isDirectory()) {
+      copyTree(from, to, io);
+    } else if (e.isFile()) {
+      io.copyFile(from, to);
+    }
   }
 }
 
@@ -232,6 +272,31 @@ function spliceLedgerNode(content, nodeId, newStatus, opts) {
 }
 
 // ---------------------------------------------------------------------------
+// readLedgerStatuses — read-only id→status map from ## Node Ledger.
+// Same header-driven parsing as spliceLedgerNode; {} when no parseable ledger.
+// ---------------------------------------------------------------------------
+function readLedgerStatuses(content) {
+  const out = {};
+  const ledgerMarker = '\n## Node Ledger';
+  const ledgerIdx = content.indexOf(ledgerMarker);
+  if (ledgerIdx < 0) return out;
+  const afterLedger = content.indexOf('\n## ', ledgerIdx + 1);
+  const ledgerBlock = afterLedger >= 0 ? content.slice(ledgerIdx, afterLedger) : content.slice(ledgerIdx);
+  const rows = ledgerBlock.split('\n').filter(l => l.trim().startsWith('|'));
+  if (rows.length < 2) return out;
+  const header = rows[0].split('|').slice(1, -1).map(c => c.trim().toLowerCase());
+  const idIdx = header.indexOf('id');
+  const stIdx = header.indexOf('status');
+  if (idIdx < 0 || stIdx < 0) return out;
+  for (let i = 1; i < rows.length; i++) {
+    const cells = rows[i].split('|').slice(1, -1).map(c => c.trim());
+    const rowId = cells[idIdx] || '';
+    if (rowId && !/^[-\s]+$/.test(rowId)) out[rowId] = (cells[stIdx] || '').toLowerCase();
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // spliceComplianceRow — append a row to ## Required Agent Compliance section.
 // Creates the section below ## Node Ledger if absent (idempotent creation).
 // Format: | Requirement | Status | Evidence | Skip Reason |  (canonical repair-state.js shape)
@@ -332,6 +397,24 @@ function parseNodesFromContent(content) {
 function checkEvidenceShape(role, nodeId, evidence) {
   const content = evidence || '';
 
+  // #334: a non-delegable main-session gate can never self-skip ('n/a') and must record a
+  // machine verdict (column-0, last-match-wins, lowercase — mirrors schema.parseNodeVerdict).
+  // Placed BEFORE the universal n/a carve-out on purpose.
+  if (role === 'main-session-gate') {
+    if (!content.trim()) {
+      return { ok: false, kind: 'absent', missingTokenClass: 'non-empty',
+        reason: 'evidence missing for main-session-gate node ' + nodeId, expected: ['verdict: pass|fail'] };
+    }
+    const vm = content.match(/^verdict:[ \t]*([A-Za-z-]+)[ \t]*$/gm);
+    const last = vm ? vm[vm.length - 1].replace(/^verdict:[ \t]*/, '').trim().toLowerCase() : null;
+    if (last !== 'pass' && last !== 'fail') {
+      return { ok: false, kind: 'shape', missingTokenClass: 'verdict',
+        reason: 'main-session-gate ' + nodeId + ' evidence missing column-0 verdict: pass|fail line (an n/a skip is refused for a non-delegable gate)',
+        expected: ['verdict: pass|fail'] };
+    }
+    return { ok: true };
+  }
+
   // 'n/a' skip is universal.
   if (content.trim().startsWith('n/a')) {
     return { ok: true };
@@ -384,6 +467,26 @@ function checkEvidenceShape(role, nodeId, evidence) {
 // ---------------------------------------------------------------------------
 function runOrient(opts) {
   const { planPath, statePath, project, shell, readFile, cacheExists } = opts;
+
+  // #335: fail-closed when the plan file itself is absent. Distinguish an
+  // unmirrored worktree (the MAIN checkout has the frozen project folder) from a
+  // truly unauthored plan. The probe is CLI-wired; an absent probe (unit tests /
+  // legacy library callers) preserves the old tolerant behavior byte-for-byte.
+  if (opts.planProbe && !opts.planProbe.planExists) {
+    const unmirrored = opts.planProbe.isLinkedWorktree && opts.planProbe.mainPlanExists;
+    return {
+      result: 'refuse',
+      reason: unmirrored ? 'plan_not_mirrored' : 'plan_missing',
+      planPath,
+      mainPlanPath: unmirrored ? opts.planProbe.mainPlanPath : null,
+      repair: unmirrored
+        ? 'run: node kaola-workflow-adaptive-node.js mirror-project --project '
+          + project + ' --json (mirrors the frozen kaola-workflow/' + project
+          + '/ from the main checkout into this worktree, plan_hash-verified), then re-run orient'
+        : 'no workflow-plan.md for ' + project
+          + ' — author + freeze it via /kaola-workflow-adapt ' + project,
+    };
+  }
 
   const resumeCheck = shell(validatorPath, [planPath, '--resume-check', '--json']);
   const nextAction  = shell(nextActionPath, [planPath, '--json']);
@@ -565,7 +668,12 @@ function runOrient(opts) {
   // (mid-node / active batch) and when allDone.
   const startReadyPending = (nextAction.result === 'ok' && Array.isArray(nextAction.readyPending))
     ? nextAction.readyPending : [];
-  const enterBatch = !allDone && inProgressNodes.length === 0 && startReadyPending.length >= 2;
+  // #334: a main-session-gate is never an openable BATCH member (the main session cannot run
+  // concurrently with itself) — compute enterBatch/frontier over the delegable subset only. A
+  // [gate, x] frontier therefore drops to enterBatch=false (single-node path); [gate, x, y]
+  // batches [x, y] and the gate opens serially via open-next. Zero regression when absent.
+  const delegable = startReadyPending.filter(n => n.role !== 'main-session-gate');
+  const enterBatch = !allDone && inProgressNodes.length === 0 && delegable.length >= 2;
 
   return {
     result: 'ok',
@@ -584,8 +692,124 @@ function runOrient(opts) {
     allDone,
     enterBatch,
     frontier: enterBatch
-      ? startReadyPending.map(n => ({ id: n.id, role: n.role, model: n.model, declared_write_set: n.declared_write_set }))
+      ? delegable.map(n => ({ id: n.id, role: n.role, model: n.model, declared_write_set: n.declared_write_set }))
       : [],
+  };
+}
+
+// ---------------------------------------------------------------------------
+// runMirrorProject — #335: ONE mechanical main→worktree project-folder mirror.
+//
+// A fresh adaptive worktree is provisioned at claim time (before any plan
+// exists) and the planner authors + freezes the plan in the MAIN checkout, so
+// the worktree never receives kaola-workflow/<project>/. This transaction
+// transports it deterministically: copy → plan_hash re-verify → atomic rename
+// promote. Read-only on the ledger and workflow-state.md; never touches a
+// per-node baseline (it runs strictly before any node is opened).
+//
+// Idempotent + safe at every plan-run entry: a worktree copy that already has a
+// workflow-plan.md is authoritative (#264 semantics) and is never overwritten.
+//
+// @param {object} opts
+//   project   {string}   project name (e.g. 'issue-335')
+//   mainRoot  {string}   the MAIN checkout root (resolved via getMainRoot)
+//   shell     {function} (scriptPath, args[]) → {exitCode,...parsedJson}
+//   io        {object}   { exists, readFile, copyTree, renameSync, rmSync, mkdirSync, readdir, copyFile }
+// @returns {object} typed result (refuse exits ≠ 0 via the CLI epilogue)
+// ---------------------------------------------------------------------------
+function runMirrorProject(opts) {
+  const { project, mainRoot, shell, io } = opts;
+
+  // 1. Source = the frozen project folder in the MAIN checkout.
+  const source = path.join(mainRoot, 'kaola-workflow', project);
+  const stateMain = path.join(source, 'workflow-state.md');
+  if (!io.exists(stateMain)) {
+    return {
+      result: 'refuse',
+      reason: 'state_missing',
+      repair: 'run claim/startup first — no workflow-state.md for ' + project + ' in the main checkout',
+    };
+  }
+
+  // 2. Parse worktree_path from the main state (same regex the plan-run docs use).
+  let stateContent = '';
+  try { stateContent = io.readFile(stateMain); } catch (_) { stateContent = ''; }
+  const m = stateContent.match(/^worktree_path:\s*(.+)$/m);
+  const worktreePath = m ? m[1].trim() : '';
+  if (!worktreePath) {
+    // In-place run (KAOLA_WORKTREE_NATIVE=0), offline, bundle lane — all legal.
+    return { result: 'ok', status: 'skipped', reason: 'no_worktree' };
+  }
+  if (!io.exists(worktreePath)) {
+    // Recorded but pruned — matches the plan-run doc's $(pwd) fallback semantics.
+    return { result: 'ok', status: 'skipped', reason: 'worktree_dir_missing', worktreePath };
+  }
+
+  // 3. Destination project folder in the worktree.
+  const dest = path.join(worktreePath, 'kaola-workflow', project);
+  const destPlan = path.join(dest, 'workflow-plan.md');
+  if (io.exists(destPlan)) {
+    // NEVER overwrite — on resume the worktree copy is authoritative (#264).
+    return { result: 'ok', status: 'exists', dest };
+  }
+
+  // 4. Source plan must exist (the planner authored + froze it in main).
+  const sourcePlan = path.join(source, 'workflow-plan.md');
+  if (!io.exists(sourcePlan)) {
+    return {
+      result: 'refuse',
+      reason: 'source_plan_missing',
+      source,
+      repair: 'author + freeze the plan via /kaola-workflow-adapt ' + project + ' first',
+    };
+  }
+
+  // 5. Atomic copy → verify → rename promote.
+  const tmp = path.join(worktreePath, 'kaola-workflow', '.mirror-tmp-' + project);
+  // Clean any crash leftover before copying.
+  try { io.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
+  try { io.mkdirSync(path.dirname(tmp), { recursive: true }); } catch (_) {}
+
+  try {
+    io.copyTree(source, tmp);
+  } catch (err) {
+    try { io.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
+    return { result: 'refuse', reason: 'mirror_failed', detail: (err && err.message) || String(err) };
+  }
+
+  // AC4: plan_hash re-verification on the COPIED plan before the promote.
+  const resumeCheck = shell(validatorPath, [path.join(tmp, 'workflow-plan.md'), '--resume-check', '--json']);
+  if (!resumeCheck || !resumeCheck.ok) {
+    try { io.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
+    return {
+      result: 'refuse',
+      reason: 'mirror_verify_failed',
+      detail: (resumeCheck && resumeCheck.reason) || 'resume-check failed on the copied plan',
+      source,
+      dest,
+    };
+  }
+
+  // Atomic same-filesystem promote.
+  try {
+    io.renameSync(tmp, dest);
+  } catch (err) {
+    if (err && (err.code === 'EEXIST' || err.code === 'ENOTEMPTY')) {
+      // Race: a concurrent entry promoted the dest first — the existing copy wins.
+      try { io.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
+      return { result: 'ok', status: 'exists', dest };
+    }
+    try { io.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
+    return { result: 'refuse', reason: 'mirror_failed', detail: (err && err.message) || String(err) };
+  }
+
+  return {
+    result: 'ok',
+    status: 'mirrored',
+    source,
+    dest,
+    planHash: resumeCheck.planHash,
+    verified: true,
   };
 }
 
@@ -795,7 +1019,14 @@ function runCloseAndOpenNext(opts) {
     ? evidenceContent.split('\n')[0].slice(0, 80)
     : 'evidence present';
 
-  const complianceRow = '| ' + requirementCell + ' | subagent-invoked | ' + evidenceSummary + ' | |';
+  // #338: role 'finalize' is the mandatory DAG sink — the plan-run contract says the MAIN
+  // SESSION performs its bookkeeping directly (no Agent dispatch), so certifying it as
+  // subagent-invoked would be false. Record the truthful execution mode instead. This row
+  // is NOT part of the delegation vocabulary checked by repair-state (a 'finalize (id)'
+  // requirement matches none of DELEGATION_CONTROLLED_REQUIREMENTS) and does not require
+  // codex-preflight (no dispatch happens).
+  const complianceStatus = role === 'finalize' ? 'main-session-direct' : 'subagent-invoked';
+  const complianceRow = '| ' + requirementCell + ' | ' + complianceStatus + ' | ' + evidenceSummary + ' | |';
   currentPlan = spliceComplianceRow(currentPlan, complianceRow);
 
   // Write the plan now (ledger + compliance — all non-state writes).
@@ -856,7 +1087,10 @@ function runCloseAndOpenNext(opts) {
   // single-open one node (which would serialize an independent fan-out behind one member).
   // Signal enterBatch so the orchestrator routes to the bounded batch scheduler (open-batch
   // + rolling top-up). Linear chains (readyPending < 2) keep the serial single-open below.
-  const readyPending = nextAction.readyPending || [];
+  // #334: exclude a main-session-gate from the batch frontier (the main session cannot run
+  // concurrently with itself) — the gate opens serially via the single-node path below. A
+  // [gate, x] frontier therefore falls through to single-open; [gate, x, y] batches [x, y].
+  const readyPending = (nextAction.readyPending || []).filter(n => n.role !== 'main-session-gate');
   if (readyPending.length >= 2) {
     // #317: enterBatch carries ONLY the closed-node (and any selector arms) transitions —
     // open-batch owns the member in_progress flips; do not invent them here.
@@ -1014,17 +1248,24 @@ function runWriteHalt(opts) {
 //   (2) Require N to be a `complete` ledger row (only a finished node is repairable).
 //   (3) Reset N's POST-DOMINATING gate(s) — code-reviewer / security-reviewer /
 //       adversarial-verifier nodes that every path from N to the unique sink passes
-//       through — complete→pending, and remove their stale .cache/barrier-base-<id>
-//       baselines, so they re-review after the repair. Downstream NON-gate nodes (incl.
-//       the sink) are left as-is: next-action's #308 transitive readiness withholds them
-//       while an upstream gate is non-terminal (no broad cascade needed).
+//       through — complete|in_progress → pending (#343 mid-gate repair: a gate that just
+//       emitted a blocking finding owned by N folds back without an allDone detour), and
+//       remove their stale .cache/barrier-base-<id> baselines, so they re-review after
+//       the repair. Any OTHER in_progress row (a non-gate node mid-flight, or a gate that
+//       does not post-dominate N) refuses typed `would_orphan_in_progress` BEFORE any
+//       real side effect. Downstream NON-gate nodes (incl. the sink) are left as-is:
+//       next-action's #308 transitive readiness withholds them while an upstream gate is
+//       non-terminal (no broad cascade needed).
 //   (4) Reopen N pending→in_progress, remove its stale baseline, persist the plan, then
 //       re-record a FRESH baseline at the current merged state (commit-node --start) so
 //       the next barrier attributes ONLY the repair.
 // ---------------------------------------------------------------------------
 function runReopenNode(opts) {
   const { planPath, project, nodeId, shell, readFile, writeFile, cacheExists, unlink } = opts;
-  const GATE_ROLES = new Set(['code-reviewer', 'security-reviewer', 'adversarial-verifier']);
+  // #334: a downstream non-delegable main-session-gate is reset like the reviewer gates so a
+  // plan-repair to implementation re-triggers the visual check (it post-dominates N and folds
+  // complete|in_progress → pending; the orphan guard at (3b) tolerates it for the same reason).
+  const GATE_ROLES = new Set(['code-reviewer', 'security-reviewer', 'adversarial-verifier', 'main-session-gate']);
 
   // (1) Refuse over a live batch / interrupted top-up — mirror the #305 guards.
   const manifestPath = path.join(path.dirname(planPath), '.cache', 'active-batch.json');
@@ -1043,6 +1284,8 @@ function runReopenNode(opts) {
   }
 
   let planContent = readFile(planPath);
+  // (2-pre) #343: capture the PRE-mutation ledger statuses for the orphan guard below.
+  const ledgerStatuses = readLedgerStatuses(planContent);
   const nodes = parseNodesFromContent(planContent);
   if (!nodes.length) return { result: 'refuse', reason: 'no_parseable_nodes' };
   if (!nodes.some(n => n.id === nodeId)) return { result: 'refuse', reason: 'node_not_found', nodeId };
@@ -1089,9 +1332,36 @@ function runReopenNode(opts) {
   const gatesReset = nodes
     .filter(n => desc.has(n.id) && GATE_ROLES.has(n.role) && postDominates(n.id))
     .map(n => n.id);
+
+  // (3b) #343 fail-closed orphan guard: the ONLY in_progress rows tolerated at reopen time
+  // are post-dominating gates of N (they fold to pending below). Any other in_progress
+  // row would leave an orphan multi-in_progress ledger after the reopen — refuse BEFORE
+  // any real side effect (unlink/writeFile/baseline) so a refused call is a pure no-op.
+  // (id !== nodeId is defensive only — an in_progress N is already refused node_not_complete.)
+  const gateSet = new Set(gatesReset);
+  const orphans = Object.keys(ledgerStatuses)
+    .filter(id => ledgerStatuses[id] === 'in_progress' && id !== nodeId && !gateSet.has(id));
+  if (orphans.length) {
+    return {
+      result: 'refuse',
+      reason: 'would_orphan_in_progress',
+      nodeId,
+      inProgress: orphans,
+      detail: 'in_progress row(s) [' + orphans.join(', ') + '] are not post-dominating gates of '
+        + nodeId + ' — reopening would leave an orphan multi-in_progress ledger',
+      repair: 'close the listed node(s) via close-and-open-next (or reconcile/abort the batch) '
+        + 'first, then re-run reopen-node',
+    };
+  }
+
+  // (3c) Fold the post-dominating gates to pending. #343: an in_progress gate — the mid-gate
+  // repair case (the gate just emitted a blocking finding owned by N) — folds back to
+  // pending exactly like a complete one, so the repair does NOT have to advance the DAG
+  // to allDone on a known-broken tree. gatesFolded = the rows actually flipped.
+  const gatesFolded = [];
   for (const gid of gatesReset) {
-    const s = spliceLedgerNode(planContent, gid, 'pending', { allowFrom: ['complete'] });
-    if (s.changed) planContent = s.content;
+    const s = spliceLedgerNode(planContent, gid, 'pending', { allowFrom: ['complete', 'in_progress'] });
+    if (s.changed) { planContent = s.content; gatesFolded.push(gid); }
   }
 
   // (4) Remove stale per-node baselines for N + the reset gates.
@@ -1117,12 +1387,14 @@ function runReopenNode(opts) {
     return { result: 'refuse', reason: 'baseline_failed', nodeId, baselineResult: baseline, reopened: nodeId, gatesReset };
   }
 
-  // #317: post-dominating gates were reset complete → pending; the reopened node → in_progress.
-  const reopenTransitions = gatesReset.map(g => buildTransition(g, 'pending', 'reopen-node'));
+  // #317: post-dominating gates were folded → pending; the reopened node → in_progress.
+  // #343: transitions are built from gatesFolded (rows actually flipped), never the
+  // structural gatesReset — an already-pending downstream gate gets NO fabricated entry.
+  const reopenTransitions = gatesFolded.map(g => buildTransition(g, 'pending', 'reopen-node'));
   reopenTransitions.push(buildTransition(nodeId, 'in_progress', 'reopen-node'));
 
   return {
-    result: 'ok', reopened: nodeId, gatesReset, baselinesRemoved, baselineRecorded: true,
+    result: 'ok', reopened: nodeId, gatesReset, gatesFolded, baselinesRemoved, baselineRecorded: true,
     taskTransitions: reopenTransitions,
     taskMirror: refreshTaskMirror(project, shell),
   };
@@ -1138,6 +1410,7 @@ function main() {
     process.stdout.write(
       'usage: kaola-workflow-adaptive-node.js <subcommand> --project P --json [options]\n' +
       '  orient              --project P\n' +
+      '  mirror-project      --project P\n' +
       '  open-next           --project P [--node-id N]\n' +
       '  record-evidence     --project P --node-id N --stdin\n' +
       '  close-and-open-next --project P --node-id N\n' +
@@ -1201,10 +1474,43 @@ function main() {
   const writeFile = (fpath, content) => fs.writeFileSync(fpath, content, 'utf8');
   const cacheExists = (fpath) => fs.existsSync(fpath);
 
+  // #335: resolve the MAIN checkout root even when cwd is a linked worktree.
+  // realpath both sides so a macOS /var vs /private/var divergence under
+  // os.tmpdir() never false-positives the linked-worktree comparison.
+  let realRepoRoot = repoRoot;
+  try { realRepoRoot = fs.realpathSync(repoRoot); } catch (_) {}
+  let mainRoot = getMainRoot(repoRoot);
+  try { mainRoot = fs.realpathSync(mainRoot); } catch (_) {}
+
   let result;
 
   if (subcommand === 'orient') {
-    result = runOrient({ planPath, statePath, project, shell, readFile, writeFile, cacheExists });
+    const mainPlanPath = path.join(mainRoot, 'kaola-workflow', project, 'workflow-plan.md');
+    const planProbe = {
+      planExists: fs.existsSync(planPath),
+      isLinkedWorktree: mainRoot !== realRepoRoot,
+      mainPlanExists: fs.existsSync(mainPlanPath),
+      mainPlanPath,
+    };
+    result = runOrient({ planPath, statePath, project, shell, readFile, writeFile, cacheExists, planProbe });
+  } else if (subcommand === 'mirror-project') {
+    result = runMirrorProject({
+      project,
+      mainRoot,
+      shell,
+      io: {
+        exists: (p) => fs.existsSync(p),
+        readFile,
+        copyTree: (src, dst) => copyTree(src, dst, {
+          mkdirSync: (d, o) => fs.mkdirSync(d, o),
+          readdir: (d) => fs.readdirSync(d, { withFileTypes: true }),
+          copyFile: (a, b) => fs.copyFileSync(a, b),
+        }),
+        renameSync: (a, b) => fs.renameSync(a, b),
+        rmSync: (p, o) => fs.rmSync(p, o),
+        mkdirSync: (d, o) => fs.mkdirSync(d, o),
+      },
+    });
   } else if (subcommand === 'open-next') {
     result = runOpenNext({ planPath, statePath, project, nodeId, shell, readFile, writeFile });
   } else if (subcommand === 'record-evidence') {
@@ -1262,6 +1568,7 @@ module.exports = {
   checkEvidenceShape,
   validateProjectName,
   runOrient,
+  runMirrorProject,
   runOpenNext,
   runRecordEvidence,
   runCloseAndOpenNext,

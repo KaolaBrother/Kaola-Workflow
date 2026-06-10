@@ -87,6 +87,17 @@ function readDurableConsentHalt(planContent) {
   return /^consent_halt:[ \t]*pending[ \t]*$/m.test(body);
 }
 
+// #334: the NON-DELEGABLE main-session gate role. A first-class plan node that is NEVER
+// dispatched as a subagent: the main session itself performs the acceptance check (e.g. a
+// GPU/visual confirmation that needs human eyes or main-session-only tooling), records
+// column-0 `verdict: pass|fail` evidence into .cache/{node-id}.md via record-evidence, and
+// closes the node through the same close-and-open-next transaction as any other node.
+// Read-only by construction (never in the validator's WRITE_ROLES); a GATE_VERDICT_ROLES
+// member (verdict evidence required; never a select arm); excluded from parallel-batch
+// membership (the main session cannot run concurrently with itself); carries its own
+// freeze-time post-dominance gate (G3) and runtime execution check.
+const MAIN_SESSION_GATE_ROLE = 'main-session-gate';
+
 // #251: the mechanical verdict vocabulary a gate/skeptic role emits into its `.cache` evidence file.
 const VERDICT_PASS = 'pass';
 const VERDICT_FAIL = 'fail';
@@ -305,6 +316,7 @@ module.exports = {
   ESCALATION_MARKERS,
   CONSENT_HALT_MARKER,
   readDurableConsentHalt,
+  MAIN_SESSION_GATE_ROLE,
   VERDICT_PASS,
   VERDICT_FAIL,
   VERDICT_VOCABULARY,

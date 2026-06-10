@@ -2018,10 +2018,17 @@ function testInstallProfilesFeaturesTableHandling() {
     assert.ok(freshConfig.includes('[features]'), 'fresh install should include managed [features]');
     assert.ok(freshConfig.includes('multi_agent = true'), 'fresh install should enable multi_agent');
     assert.ok(freshConfig.includes('# BEGIN kaola-workflow agents'), 'fresh install should include managed block');
+    // #332: the installer now also writes a .kaola-managed-profiles.json manifest into
+    // this dir, so count TOML entries only (raw readdir is 15 with the manifest dotfile).
+    const freshAgentsDir = path.join(fresh, '.codex', 'agents', 'kaola-workflow');
     assert.strictEqual(
-      fs.readdirSync(path.join(fresh, '.codex', 'agents', 'kaola-workflow')).length,
+      fs.readdirSync(freshAgentsDir).filter(f => f.endsWith('.toml')).length,
       14,
       'should install 14 agent TOML files'
+    );
+    assert.ok(
+      fs.existsSync(path.join(freshAgentsDir, '.kaola-managed-profiles.json')),
+      '#332: fresh install must write the managed-profiles manifest'
     );
 
     // --- #284: hooks.json assertions (fresh install) ---
@@ -2599,6 +2606,35 @@ function testClosureAuditArchiveClosedDrift() {
   }
 }
 
+// #336: a status:closed archive carrying issue_action: comment_keep_open must NOT be flagged
+// archive_closed (the --execute landmine that would delete the preserved roadmap source).
+function testClosureAuditKeepOpenExclusion() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-ca-keepopen-')));
+  try {
+    initGitRepo(tmp);
+    plantClosureRoadmapSource(tmp, 720);
+    const keepDir = path.join(tmp, 'kaola-workflow', 'archive', 'issue-720');
+    fs.mkdirSync(keepDir, { recursive: true });
+    fs.writeFileSync(path.join(keepDir, 'workflow-state.md'),
+      'status: closed\nstep: complete\nissue_iid: 720\nissue_action: comment_keep_open\n');
+    plantClosureRoadmapSource(tmp, 721);
+    const normalDir = path.join(tmp, 'kaola-workflow', 'archive', 'issue-721');
+    fs.mkdirSync(normalDir, { recursive: true });
+    fs.writeFileSync(path.join(normalDir, 'workflow-state.md'),
+      'status: closed\nstep: complete\nissue_iid: 721\n');
+    // OFFLINE: closed-set empty exercises only the archive_closed class (the landmine).
+    const result = runClosureAuditOffline([], tmp);
+    const sources = result.drift.stale_roadmap_sources;
+    assert(!sources.some(s => s.issue_number === 720),
+      '#336: keep-open archive (720) must NOT be flagged stale, got: ' + JSON.stringify(sources));
+    assert(sources.some(s => s.issue_number === 721 && s.reason === 'archive_closed'),
+      '#336: normal closed archive (721) must still be flagged archive_closed (regression), got: ' + JSON.stringify(sources));
+    console.log('testClosureAuditKeepOpenExclusion: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 function testClosureAuditDedupRoadmapAndArchive() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-ca-dedup-')));
   const binDir = path.join(tmp, 'bin');
@@ -3078,6 +3114,7 @@ testStaleWorktreeCleanup();
 testClosureAuditOfflineRemoteClassesSkipped();
 testClosureAuditClosedRemoteRoadmapSource();
 testClosureAuditArchiveClosedDrift();
+testClosureAuditKeepOpenExclusion();
 testClosureAuditDedupRoadmapAndArchive();
 testClosureAuditArchiveOnlyNotProbed();
 testClosureAuditMirrorListsClosedIssues();
@@ -3490,6 +3527,181 @@ function testGitlabPreflight266() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// #332: installer schema + prune + manifest (AC3-AC6) — GitLab edition mirror.
+// ---------------------------------------------------------------------------
+const GL_NAME_RE = /^name\s*=\s*"([^"]+)"\s*$/m;
+function gitlabListTomls(dir) {
+  return fs.readdirSync(dir).filter(f => f.endsWith('.toml')).sort();
+}
+function testInstallSchemaPruneManifest332Gitlab() {
+  const manifestBase = '.kaola-managed-profiles.json';
+
+  // AC3: fresh install — exactly 14 tomls, no docs-lookup, name on each, manifest, sentinel.
+  const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-332-install-fresh-'));
+  try {
+    const r = runInstallProfiles(fresh);
+    const agentsDir = path.join(fresh, '.codex', 'agents', 'kaola-workflow');
+    const tomls = gitlabListTomls(agentsDir);
+    assert.strictEqual(tomls.length, 14, '#332 gl AC3: fresh install must place 14 *.toml');
+    assert.ok(!tomls.includes('docs-lookup.toml'), '#332 gl AC3: docs-lookup.toml must not be installed');
+    for (const f of tomls) {
+      const role = f.replace(/\.toml$/, '');
+      const m = fs.readFileSync(path.join(agentsDir, f), 'utf8').match(GL_NAME_RE);
+      assert.ok(m && m[1] === role, '#332 gl AC3: ' + f + ' must have name = "' + role + '"');
+    }
+    const manifest = JSON.parse(fs.readFileSync(path.join(agentsDir, manifestBase), 'utf8'));
+    assert.strictEqual(manifest.schema_version, 1, '#332 gl AC3: manifest schema_version 1');
+    assert.strictEqual(manifest.roles.length, 14, '#332 gl AC3: manifest must list 14 roles');
+    assert.strictEqual(r.stdout.trim().split('\n').pop(), 'status: ok', '#332 gl AC3: stdout must end with status: ok');
+  } finally {
+    fs.rmSync(fresh, { recursive: true, force: true });
+  }
+
+  // AC4 + AC9 write-path: upgrade-over-old-state repairs malformed + retired files.
+  const upgrade = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-332-install-upgrade-'));
+  try {
+    const agentsDir = path.join(upgrade, '.codex', 'agents', 'kaola-workflow');
+    fs.mkdirSync(agentsDir, { recursive: true });
+    fs.writeFileSync(path.join(agentsDir, 'code-explorer.toml'),
+      'model_reasoning_effort = "medium"\ndeveloper_instructions = """stale no-name body"""\n');
+    fs.writeFileSync(path.join(agentsDir, 'docs-lookup.toml'),
+      'model_reasoning_effort = "medium"\ndeveloper_instructions = """retired role body"""\n');
+    fs.writeFileSync(path.join(upgrade, '.codex', 'config.toml'), [
+      '# BEGIN kaola-workflow agents', '[features]', 'multi_agent = true',
+      '[agents.docs-lookup]', 'config_file = "./agents/kaola-workflow/docs-lookup.toml"',
+      '# END kaola-workflow agents', ''
+    ].join('\n'));
+    const r = runInstallProfiles(upgrade);
+    assert.ok(!fs.existsSync(path.join(agentsDir, 'docs-lookup.toml')), '#332 gl AC4: retired docs-lookup pruned');
+    const ce = fs.readFileSync(path.join(agentsDir, 'code-explorer.toml'), 'utf8');
+    assert.ok(GL_NAME_RE.test(ce) && ce.match(GL_NAME_RE)[1] === 'code-explorer', '#332 gl AC4: code-explorer rewritten with name');
+    const cfg = fs.readFileSync(path.join(upgrade, '.codex', 'config.toml'), 'utf8');
+    assert.ok(cfg.includes('[agents.knowledge-lookup]') && !cfg.includes('[agents.docs-lookup]'),
+      '#332 gl AC9: block must register knowledge-lookup and drop docs-lookup');
+    assert.ok(r.stdout.includes('docs-lookup.toml (retired)'), '#332 gl AC4: stdout reports retired prune');
+
+    // AC5: idempotency.
+    const m1 = JSON.parse(fs.readFileSync(path.join(agentsDir, manifestBase), 'utf8'));
+    runInstallProfiles(upgrade);
+    const m2 = JSON.parse(fs.readFileSync(path.join(agentsDir, manifestBase), 'utf8'));
+    assert.strictEqual(JSON.stringify(m1.files), JSON.stringify(m2.files), '#332 gl AC5: manifest.files stable');
+  } finally {
+    fs.rmSync(upgrade, { recursive: true, force: true });
+  }
+
+  // AC6: unknown user TOML preserved + reported.
+  const custom = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-332-install-custom-'));
+  try {
+    runInstallProfiles(custom);
+    const agentsDir = path.join(custom, '.codex', 'agents', 'kaola-workflow');
+    fs.writeFileSync(path.join(agentsDir, 'my-custom.toml'), 'name = "my-custom"\nmodel_reasoning_effort = "low"\ndeveloper_instructions = """x"""\n');
+    const r = runInstallProfiles(custom);
+    assert.ok(fs.existsSync(path.join(agentsDir, 'my-custom.toml')), '#332 gl AC6: user TOML survives');
+    assert.ok(r.stdout.includes('unmanaged extra profiles left in place: my-custom.toml'), '#332 gl AC6: stdout reports unmanaged extra');
+  } finally {
+    fs.rmSync(custom, { recursive: true, force: true });
+  }
+
+  console.log('testInstallSchemaPruneManifest332Gitlab (#332 AC3-AC6,AC9-path): PASSED');
+}
+
+// ---------------------------------------------------------------------------
+// #332: preflight schema/stale/manifest/doctor (AC7-AC11) — GitLab edition mirror.
+// ---------------------------------------------------------------------------
+function testGitlabPreflight332() {
+  function pf(args) {
+    return spawnSync(process.execPath, [gitlabPreflightScript, ...args], { encoding: 'utf8' });
+  }
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-332-preflight-'));
+  try {
+    runInstallProfiles(root);
+    const agentsDir = path.join(root, '.codex', 'agents', 'kaola-workflow');
+    const ce = path.join(agentsDir, 'code-explorer.toml');
+    const savedCe = fs.readFileSync(ce, 'utf8');
+
+    // AC7a: malformed -> profiles_malformed under --no-autofix
+    fs.writeFileSync(ce, savedCe.replace(/^name = "code-explorer"\n/m, ''));
+    let r = pf(['--project-root', root, '--no-autofix', '--json']);
+    assert.notStrictEqual(r.status, 0, '#332 gl AC7a: malformed must refuse');
+    let j = JSON.parse(r.stdout);
+    assert.strictEqual(j.status, 'profiles_malformed', '#332 gl AC7a: status profiles_malformed');
+    assert.strictEqual(j.malformed[0].role, 'code-explorer', '#332 gl AC7a: malformed role correct');
+
+    // AC8: autofix repairs.
+    r = pf(['--project-root', root, '--json']);
+    assert.strictEqual(r.status, 0, '#332 gl AC8: autofix exits 0');
+    j = JSON.parse(r.stdout);
+    assert.ok(j.status === 'ok' && j.autofixed === true, '#332 gl AC8: ok autofixed');
+
+    // AC7b: stale docs-lookup -> profiles_stale.
+    fs.copyFileSync(ce, path.join(agentsDir, 'docs-lookup.toml'));
+    r = pf(['--project-root', root, '--no-autofix', '--json']);
+    j = JSON.parse(r.stdout);
+    assert.ok(r.status !== 0 && j.status === 'profiles_stale', '#332 gl AC7b: profiles_stale');
+    assert.ok(j.stale_files.includes('docs-lookup.toml'), '#332 gl AC7b: stale_files lists docs-lookup');
+    pf(['--project-root', root, '--json']);
+    assert.ok(!fs.existsSync(path.join(agentsDir, 'docs-lookup.toml')), '#332 gl AC7b: autofix prunes docs-lookup');
+
+    // AC9: [agents.docs-lookup] inside markers -> managed_block_stale.
+    const cfgPath = path.join(root, '.codex', 'config.toml');
+    fs.writeFileSync(cfgPath, fs.readFileSync(cfgPath, 'utf8').replace('# END kaola-workflow agents',
+      '[agents.docs-lookup]\nconfig_file = "./agents/kaola-workflow/docs-lookup.toml"\n\n# END kaola-workflow agents'));
+    r = pf(['--project-root', root, '--no-autofix', '--json']);
+    j = JSON.parse(r.stdout);
+    assert.ok(r.status !== 0 && j.status === 'managed_block_stale', '#332 gl AC9: managed_block_stale');
+    assert.ok(j.stale_roles_in_block.includes('docs-lookup'), '#332 gl AC9: stale_roles_in_block lists docs-lookup');
+    pf(['--project-root', root, '--json']);
+
+    // schema_version 2 -> exit 6.
+    const manifestPath = path.join(agentsDir, '.kaola-managed-profiles.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    manifest.schema_version = 2;
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    r = pf(['--project-root', root, '--json']);
+    j = JSON.parse(r.stdout);
+    assert.ok(r.status === 6 && j.status === 'profile_schema_version_unsupported', '#332 gl: exit 6 on future manifest');
+    manifest.schema_version = 1;
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+
+    // doctor AC10/AC11.
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-332-doctor-home-'));
+    const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-332-doctor-proj-'));
+    try {
+      runInstallProfiles(home);
+      runInstallProfiles(proj);
+      fs.copyFileSync(path.join(home, '.codex', 'agents', 'kaola-workflow', 'code-explorer.toml'),
+        path.join(home, '.codex', 'agents', 'kaola-workflow', 'docs-lookup.toml'));
+      r = pf(['--doctor', '--home', home, '--project-root', proj, '--json']);
+      assert.strictEqual(r.status, 1, '#332 gl AC10: doctor exit 1 on stale user scope');
+      j = JSON.parse(r.stdout);
+      const userScope = j.scopes.find(s => s.scope === 'user');
+      assert.ok(userScope.stale_files.includes('docs-lookup.toml'), '#332 gl AC10: user scope reports docs-lookup');
+      assert.ok(userScope.repair.includes('install-codex-agent-profiles.js'), '#332 gl AC10: repair command present');
+      fs.unlinkSync(path.join(home, '.codex', 'agents', 'kaola-workflow', 'docs-lookup.toml'));
+      runInstallProfiles(home);
+      r = pf(['--doctor', '--home', home, '--project-root', proj, '--json']);
+      assert.strictEqual(r.status, 0, '#332 gl AC10: doctor exit 0 when both clean');
+      const cacheAgents = path.join(home, '.codex', 'plugins', 'cache', 'm', 'p', '1.0.0', 'agents');
+      fs.mkdirSync(cacheAgents, { recursive: true });
+      fs.writeFileSync(path.join(cacheAgents, 'x.toml'), 'model_reasoning_effort = "medium"\ndeveloper_instructions = """x"""\n');
+      r = pf(['--doctor', '--home', home, '--project-root', proj, '--json']);
+      assert.strictEqual(r.status, 0, '#332 gl AC11: malformed plugin_cache must not change exit code');
+      j = JSON.parse(r.stdout);
+      const cacheScope = j.scopes.find(s => s.scope === 'plugin_cache');
+      assert.ok(cacheScope && cacheScope.read_only === true && cacheScope.malformed.length > 0, '#332 gl AC11: cache scope read_only + malformed evidence');
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+      fs.rmSync(proj, { recursive: true, force: true });
+    }
+
+    fs.writeFileSync(ce, savedCe);
+    console.log('testGitlabPreflight332 (#332 AC7-AC11): PASSED');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
 // Case 3: task-mirror regeneration (gitlab edition)
 function testGitlabTaskMirror266() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-266-taskmirror-'));
@@ -3625,6 +3837,24 @@ function testGitlabCompactResume266() {
     assert.ok(lines1[6].includes('completed: 2') && lines1[6].includes('in_progress: 1'),
       '#266 gl case4: task mirror must show correct counts, got ' + lines1[6]);
 
+    // --- #334 case4b: a pending main-session-gate must appear in the pending-gates packet line.
+    // Separate root + small fixture (NOT GITLAB_FIXTURE_PLAN, whose hash is asserted elsewhere).
+    // RED before the GATE_VERDICT_ROLES edit: the role was not in the set → the line read 'none'.
+    { const root334 = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-334-compact-'));
+      try {
+        const pj = 'issue-334-vgate';
+        const pd = path.join(root334, 'kaola-workflow', pj);
+        fs.mkdirSync(pd, { recursive: true });
+        fs.writeFileSync(path.join(pd, 'workflow-state.md'), ['# State', '', '## Project', 'name: ' + pj, 'status: active', '', '## Sink', 'branch: workflow/issue-334', 'issue_number: 334', 'next_command: /kaola-workflow-plan-run', 'next_skill: kaola-workflow-next', ''].join('\n'));
+        fs.writeFileSync(path.join(pd, 'workflow-plan.md'), ['# Plan', '', '## Nodes', '', '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|', '| impl | implementer | — | lib/foo.js | 1 | sequence |', '| rv | code-reviewer | impl | — | 1 | sequence |', '| vgate | main-session-gate | rv | — | 1 | sequence |', '| done | finalize | vgate | — | 1 | sequence |', '', '## Node Ledger', '', '| id | status |', '|---|---|', '| impl | complete |', '| rv | complete |', '| vgate | pending |', '| done | pending |', ''].join('\n'));
+        const r334 = spawnSync(process.execPath, [gitlabCompactResumeScript], { input: JSON.stringify({ cwd: root334 }), encoding: 'utf8' });
+        assert.strictEqual(r334.status, 0, '#334 gl case4b: compact-resume must exit 0, got ' + r334.status + '\n' + r334.stderr);
+        const gateLine = r334.stdout.trim().split('\n').find(l => l.startsWith('pending gates:'));
+        assert.ok(gateLine && /\bvgate\b/.test(gateLine),
+          '#334 gl case4b: a pending main-session-gate (vgate) must appear in the pending-gates line, got: ' + gateLine);
+      } finally { fs.rmSync(root334, { recursive: true, force: true }); }
+    }
+
     // --- Determinism: two runs → identical stdout ---
     const r2 = spawnSync(process.execPath, [gitlabCompactResumeScript],
       { input, encoding: 'utf8' });
@@ -3692,10 +3922,213 @@ function testGitlabForeignArchiveBarrier261() {
   console.log('testGitlabForeignArchiveBarrier261 (#261 forge-parity): PASSED');
 }
 
+// ---------------------------------------------------------------------------
+// #339: closure roadmap-mirror-clean is row-anchored — a legitimate cross-
+// reference to #N inside ANOTHER issue's row must not violate; an actual
+// active `| #N | ...` row still must. Direct checkClosureInvariants call.
+// ---------------------------------------------------------------------------
+function testGitlabMirrorCleanCrossRef339() {
+  const root = tempRoot('kw-gl-339-mirror-clean-');
+  try {
+    const kwDir = path.join(root, 'kaola-workflow');
+    fs.mkdirSync(kwDir, { recursive: true });
+
+    // Archive dest with a closed state file (so archive-state-closed passes)
+    const archiveDest = path.join(kwDir, 'archive', 'issue-562');
+    fs.mkdirSync(archiveDest, { recursive: true });
+    fs.writeFileSync(path.join(archiveDest, 'workflow-state.md'), [
+      '# Kaola-Workflow State',
+      'name: issue-562',
+      'status: closed',
+      'step: complete'
+    ].join('\n') + '\n');
+
+    // Single-issue receipt (no issue_numbers): issue #562 fully closed
+    const receipt = {
+      project: 'issue-562',
+      issue_number: 562,
+      archive: 'closed',
+      roadmap_source_removed: 'removed',
+      roadmap_regenerated: 'regenerated',
+      claim_label_removed: 'removed',
+      worktree_removed: 'missing',
+      branch_removed: 'kept',
+      warnings: []
+    };
+
+    const tableHeader =
+      '# Kaola-Workflow Roadmap\n\n' +
+      '| Issue | Title | Status | Project | Next Step |\n' +
+      '|-------|-------|--------|---------|----------|\n';
+
+    // Fixture A (AC1): the ONLY #562 mention is a legitimate cross-reference
+    // inside ANOTHER issue's row (next_step cell of the #485 row).
+    fs.writeFileSync(path.join(kwDir, 'ROADMAP.md'),
+      tableHeader +
+      '| #485 | layered rendering | open | issue-485 | place_inside (#562 opacity) |\n');
+    const resA = claim.checkClosureInvariants(root, receipt, archiveDest);
+    assert.strictEqual(resA.ok, true,
+      '#339 gl A: cross-reference-only mirror must pass closure invariants, got: ' + JSON.stringify(resA.violations));
+    assert.ok(!resA.violations.some(v => v.id === 'roadmap-mirror-clean'),
+      '#339 gl A: no roadmap-mirror-clean violation for a cross-reference inside another row');
+
+    // Fixture B (AC2): an actual active `| #562 | ...` row must still violate.
+    fs.writeFileSync(path.join(kwDir, 'ROADMAP.md'),
+      tableHeader +
+      '| #485 | layered rendering | open | issue-485 | place_inside (#562 opacity) |\n' +
+      '| #562 | opacity flag | active | issue-562 | TBD |\n');
+    const resB = claim.checkClosureInvariants(root, receipt, archiveDest);
+    assert.strictEqual(resB.ok, false,
+      '#339 gl B: mirror with an active #562 row must fail closure invariants');
+    assert.ok(resB.violations.some(v => v.id === 'roadmap-mirror-clean'),
+      '#339 gl B: roadmap-mirror-clean violation must fire for an active row, got: ' + JSON.stringify(resB.violations));
+
+    console.log('testGitlabMirrorCleanCrossRef339 (#339): PASSED');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+// #338 (AC1): the finalize SINK node must be certified `main-session-direct`, not
+// `subagent-invoked` — the plan-run contract performs the sink bookkeeping inline, with no Agent
+// dispatch, so a `subagent-invoked` row would falsely certify a delegation that never happened.
+function testGitlabFinalizeRowMainDirect338() {
+  const adaptiveNode = require('./kaola-gitlab-workflow-adaptive-node');
+  const plan = [
+    '# Workflow Plan — gl-338',
+    '', '## Meta', 'labels: enhancement', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+    '| impl | implementer | — | src/x.js | 1 | sequence |',
+    '| review | code-reviewer | impl | — | 1 | sequence |',
+    '| done | finalize | review | CHANGELOG.md | 1 | sequence |',
+    '', '## Node Ledger', '',
+    '| id | status |', '|---|---|',
+    '| impl | complete |',
+    '| review | complete |',
+    '| done | in_progress |',
+    ''
+  ].join('\n') + '\n';
+
+  const cachePath = '/fake/kaola-workflow/gl-338/.cache/done.md';
+  const cacheContent = 'finalize bookkeeping: docs + state recorded.';
+  let planContent = plan;
+  const written = {};
+
+  const shellStub = function(scriptPath, args) {
+    const base = path.basename(scriptPath);
+    const argsArr = args || [];
+    if (base.includes('commit-node') && !argsArr.includes('--start')) {
+      return { exitCode: 0, result: 'ok', mode: 'per-node', nodeId: 'done', overallOk: true,
+        selectorCheck: { isSelector: false, ok: true } };
+    }
+    if (base.includes('next-action')) {
+      return { exitCode: 0, result: 'ok', readySet: [], nextNode: null, allDone: true };
+    }
+    return { exitCode: 1 };
+  };
+
+  const result = adaptiveNode.runCloseAndOpenNext({
+    planPath: '/fake/kaola-workflow/gl-338/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/gl-338/workflow-state.md',
+    project: 'gl-338',
+    nodeId: 'done',
+    shell: shellStub,
+    readFile: (fpath) => {
+      if (fpath.endsWith('workflow-plan.md')) return planContent;
+      if (fpath === cachePath) return cacheContent;
+      throw new Error('ENOENT: ' + fpath);
+    },
+    writeFile: (fpath, content) => {
+      written[fpath] = content;
+      if (fpath.endsWith('workflow-plan.md')) planContent = content;
+    },
+    cacheExists: (fpath) => fpath === cachePath,
+  });
+
+  assert.strictEqual(result.result, 'ok', '#338 gl: finalize-sink close result===ok');
+  assert.strictEqual(result.allDone, true, '#338 gl: allDone===true after the sink closes');
+  const writtenPlan = written['/fake/kaola-workflow/gl-338/workflow-plan.md'];
+  assert.ok(writtenPlan && writtenPlan.includes('| finalize (done) | main-session-direct |'),
+    '#338 gl: finalize sink row must be main-session-direct');
+  assert.ok(!writtenPlan.includes('| finalize (done) | subagent-invoked'),
+    '#338 gl: finalize sink row must NOT be falsely certified subagent-invoked');
+  console.log('testGitlabFinalizeRowMainDirect338 (#338): PASSED');
+}
+
+// #341: forge-neutrality guard for agent-profile authoring. Three behaviors are locked:
+//   (AC2) the forbidden-token scan loop runs BEFORE any file-count assertion, so a forge
+//         leak is never masked by a stale agent/command/skill count (the #328 latent defect);
+//   (AC1) a standalone `--forbidden-only <file>...` mode lets a forge-touching node verify its
+//         own changed files (exit 1 on a forbidden token, exit 0 on a clean file) without ever
+//         reaching the count assertions; usage/unknown-flag fails closed (exit 2).
+// The forbidden fixture token is built by string concatenation because the validator's own
+// plugin-script scan forbids a literal `\bgh\b` in any .js file (this test included).
+function testForbiddenOnly341() {
+  const validatorScript = path.join(__dirname, 'validate-kaola-workflow-gitlab-contracts.js');
+  const validatorSrc = fs.readFileSync(validatorScript, 'utf8');
+  const idx = (needle) => validatorSrc.indexOf(needle);
+
+  // (AC2) order pin: the forbidden-token scan loop call must precede every count assertion.
+  const scanIdx = idx('assertNoForbidden(file);');
+  assert.ok(scanIdx !== -1, '#341 gl: validator must contain the assertNoForbidden(file); scan loop');
+  // Needles carry the `assert(` prefix so they match the real count assertions, not the
+  // `agentFiles.length === 13` substring inside the #341 scan-loop comment.
+  for (const countNeedle of [
+    'assert(commandFiles.length ===', 'assert(skillFiles.length ===', 'assert(agentFiles.length ==='
+  ]) {
+    const countIdx = idx(countNeedle);
+    assert.ok(countIdx !== -1, '#341 gl: validator must contain count assert ' + countNeedle);
+    assert.ok(scanIdx < countIdx,
+      '#341 gl: forbidden scan must precede count assert ' + countNeedle);
+  }
+
+  // (AC1) dirty file → exit 1, message naming a forbidden reference.
+  const root = tempRoot('kw-gl-forbidden-');
+  try {
+    const dirty = path.join(root, 'dirty.toml');
+    fs.writeFileSync(dirty, 'Open issues via ' + 'g' + 'h' + ' issue list\n');
+    const dirtyRun = spawnSync(process.execPath, [validatorScript, '--forbidden-only', dirty], {
+      encoding: 'utf8'
+    });
+    assert.notStrictEqual(dirtyRun.status, 0, '#341 gl: forbidden token must exit non-zero');
+    assert.ok((dirtyRun.stderr || '').includes('contains forbidden reference'),
+      '#341 gl: forbidden-only must report "contains forbidden reference"');
+
+    // clean file → exit 0, sentinel. The #328-repaired issue-scout.toml doubles as a
+    // regression lock on the original leak. Root-relative path resolves from any cwd.
+    const cleanRun = spawnSync(process.execPath,
+      [validatorScript, '--forbidden-only', 'plugins/kaola-workflow-gitlab/agents/issue-scout.toml'],
+      { encoding: 'utf8' });
+    assert.strictEqual(cleanRun.status, 0,
+      '#341 gl: clean file must exit 0 (stderr: ' + (cleanRun.stderr || '') + ')');
+    assert.ok((cleanRun.stdout || '').includes('forbidden-only check passed'),
+      '#341 gl: clean run must print the forbidden-only sentinel');
+
+    // usage refusals → exit 2 (fail closed): no files, and an unknown flag.
+    const noFiles = spawnSync(process.execPath, [validatorScript, '--forbidden-only'], {
+      encoding: 'utf8'
+    });
+    assert.strictEqual(noFiles.status, 2, '#341 gl: --forbidden-only with no files must exit 2');
+    const unknownFlag = spawnSync(process.execPath,
+      [validatorScript, '--forbidden' + '_only'], { encoding: 'utf8' });
+    assert.strictEqual(unknownFlag.status, 2, '#341 gl: unknown flag must exit 2 (fail closed)');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+  console.log('testForbiddenOnly341 (#341): PASSED');
+}
+
+testGitlabFinalizeRowMainDirect338();
+testInstallSchemaPruneManifest332Gitlab();
 testGitlabPreflight266();
+testGitlabPreflight332();
 testGitlabTaskMirror266();
 testGitlabCompactResume266();
 testGitlabForeignArchiveBarrier261();
+testGitlabMirrorCleanCrossRef339();
+testForbiddenOnly341();
 
 testGitLabRoadmapInitIssueExclusiveAndUpdate()
   .then(() => {

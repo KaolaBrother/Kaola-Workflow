@@ -56,6 +56,29 @@ here for the full contract.
   `discard`/`release` archive (non-`closed`) deliberately keeps mid-run state. The accurate
   validation-reuse boundary is stated by the agent per the finalize Validation De-Duplication
   guidance; the archive-time rewrite is only a mechanical backstop for the known phrase.
+- **Terminal stamp + closure receipt (#333):** the #324 normalization is extended (and extracted
+  into the pure `stampTerminalState` helper) so a `closed` archive is fully terminal. In addition
+  to the #324 rewrites, the archived `workflow-state.md` gets `next_command`/`next_skill` rewritten
+  to `none (archived)` (an archived run must not advertise an active resume command — an adaptive
+  archive would otherwise keep `/kaola-workflow-plan-run {project}` forever); the Planning Evidence
+  `plan_hash` refreshed from the FINAL `workflow-plan.md` frozen `<!-- plan_hash: … -->` comment (a
+  mid-run re-freeze re-stamps only the plan file, leaving the state on the claim-time hash); and the
+  `## Last Updated` line refreshed to the archive timestamp. After the rename, a compact `## Closure`
+  block is appended recording `archived_at`, `issue_disposition`, `claim_label_removed`,
+  `worktree_removed`, and `closure_invariants` (presence-guarded / idempotent). `issue_disposition`
+  enum: `kept-open | close-pending | closed | unknown`. On the `cmdFinalize` lane disposition is
+  DECISION-derived — the default merge lane is honestly `close-pending` because the orchestrator
+  closes the issue AFTER sink-merge, and `--keep-open` records `kept-open` + `last_result:
+  closed_keep_open`; on the `watch-pr`/`watch-mr` MERGED lane it is OBSERVATION-derived via
+  `probeIssueState` (a merged PR/MR does not imply a closed issue — `kept-open` when the probe sees
+  the issue open, `unknown` when the probe is unavailable). A **manual-archive backstop** in
+  `cmdFinalize` heals a state that was archived by a manual `mv`/`git mv` (live folder gone,
+  `status: active` in the archive): re-running `finalize` over it stamps it terminal in place and
+  reports `archive_state_stamped: repaired` (`not_needed` when already terminal, `failed` on error).
+  The keep-worktree commit choreography runs commit-last so the `## Closure` append + backstop
+  writes land inside the `chore: archive` commit. NOTE for out-of-repo tooling: a `next_command:
+  none (archived)` only ever appears under `kaola-workflow/archive/`; `resume`/`status`/`repair-state`
+  read active folders only and never see it.
 - Closure of a completed linked issue is governed by explicit invariants and an
   auditable receipt schema. See `docs/api.md` § Closure Contract for the nine
   closure invariants (seven hard-gating + two WARN-FIRST detection invariants added in #277),
@@ -69,7 +92,7 @@ The `workflow-state.md` file contains several key blocks:
 - `## Current Position` — Active phase, step, workflow path, runtime, and next command or skill. Key fields:
   - **workflow_path** — Workflow execution path (`full`, `fast`, or `adaptive`). Persisted from the `KAOLA_PATH` environment variable (set `KAOLA_PATH=fast` to request the fast path), or the `--workflow-path` startup flag when supplied; defaults to `full`. `claimProject` whitelists the persisted value: `{fast, full}` when the adaptive switch is OFF, `{fast, full, adaptive}` when ON — any other value (including `adaptive` under an OFF switch) is a **typed refusal**, never a silent downgrade.
   - **runtime** — The runtime that claimed the folder (`claude` or `codex`). Persisted from the `--runtime` startup flag; defaults to `claude`.
-- `## Sink` — Issue number, sink mode (merge or pr), branch name, worktree path, and `run_posture` (`worktree` or `in-place`). `run_posture` is derived from the actual worktree resolution at startup via `deriveRunPosture(worktreePath)` in `kaola-workflow-claim.js`; it is never inherited from an environment variable. Adaptive runs always provision a worktree, so `run_posture: worktree` is the normal adaptive value.
+- `## Sink` — Issue number, sink mode (merge or pr), branch name, worktree path, and `run_posture` (`worktree` or `in-place`). `run_posture` is derived from the actual worktree resolution at startup via `deriveRunPosture(worktreePath)` in `kaola-workflow-claim.js`; it is never inherited from an environment variable. Adaptive runs always provision a worktree, so `run_posture: worktree` is the normal adaptive value. An optional `issue_action: close | comment_keep_open` line (default `close` when absent, issue #336) marks a keep-open partial-close terminal: the main session writes `comment_keep_open` at the Closure Decision Gate to keep the issue OPEN — `finalize`/`sink-merge` then preserve the roadmap source, comment instead of closing, and refuse a PR/MR sink (keep-open is merge-sink-only).
 - `## Lease` — (Legacy, deprecated) Coordination metadata; preserved for backward compatibility
 - `delegation_policy:` — Delegation mode for Codex workflows. Defaults to
   `delegate`, established without prompting the user; `local-authorized` is an
@@ -91,6 +114,17 @@ ledgers before crossing a phase boundary. Codex role rows must match the policy:
 `local-fallback-tool-unavailable`. Plain `invoked` remains reserved for
 non-Codex-role workflow gates such as advisor review, final validation,
 documentation docking, roadmap refresh, archive, and final commit.
+
+**Adaptive `finalize` sink row — `main-session-direct` (issue #338).** The adaptive plan's
+mandatory `finalize` DAG sink node is, by the plan-run contract, executed by the main session
+directly (no `Agent()` dispatch). Its Required Agent Compliance row therefore carries the status
+`main-session-direct` — a sink-node-only token that sits OUTSIDE the four-token delegation
+vocabulary above and is NOT delegation-controlled (a `finalize (<node>)` requirement matches none
+of repair-state's `DELEGATION_CONTROLLED_REQUIREMENTS`, so the token never trips a delegation
+check). It is deliberately NOT `local-fallback-*`: inline sink execution is the designed behavior,
+not a fallback. This row is distinct from the Finalization-phase mechanical bookkeeping, which is
+delegated to the `contractor` and attested separately via the closure receipt's
+`finalize_contractor_attested` field.
 
 ## Bundle Project State Fields (issue #328)
 
