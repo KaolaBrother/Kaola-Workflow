@@ -493,6 +493,103 @@ function testHookSingleProjectGuard(tmp) {
   assert(result.status === 2, 'pre-commit hook should block mixed project commits');
 }
 
+// issue #351 — pre-commit hook must recognise `git -C <path> commit` and
+// `git -c k=v commit` as commit commands, inspect staging in the correct repo,
+// and allow single-project commits regardless of flag form.
+function testHookGitDashCCommitGuard() {
+  // Helper: build the PreToolUse JSON payload Claude Code sends to the hook.
+  const payload = (cmd) => JSON.stringify({ tool_input: { command: cmd } });
+
+  // Create the "target" repo (simulating the worktree the contractor commits into).
+  const targetRepo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-hook-target-')));
+  // Create a second repo to serve as the hook's cwd (simulating kaola-workflow root).
+  const hookCwd = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-hook-cwd-')));
+  try {
+    // Initialise both repos.
+    spawnSync('git', ['init'], { cwd: targetRepo, encoding: 'utf8' });
+    spawnSync('git', ['init'], { cwd: hookCwd, encoding: 'utf8' });
+
+    // Stage cross-project kaola-workflow files in the TARGET repo.
+    writeProject(targetRepo, 'alpha', { 'workflow-state.md': 'status: active\n' });
+    writeProject(targetRepo, 'beta',  { 'workflow-state.md': 'status: active\n' });
+    spawnSync('git', ['add',
+      'kaola-workflow/alpha/workflow-state.md',
+      'kaola-workflow/beta/workflow-state.md'
+    ], { cwd: targetRepo, encoding: 'utf8' });
+
+    // (a) `git -C <repo> commit -m x` with cross-project staging → BLOCKED (exit 2).
+    // BUG: currently exits 0 because "git commit" is not a literal substring.
+    let r = spawnSync('bash', [hookScript], {
+      cwd: hookCwd,
+      input: payload('git -C ' + targetRepo + ' commit -m "wip"'),
+      encoding: 'utf8'
+    });
+    assert(r.status === 2,
+      '(a) git -C <repo> commit with cross-project staging must be BLOCKED (exit 2), got ' + r.status +
+      '\nstderr: ' + r.stderr);
+
+    // (b) `git -c user.name=x commit` with cross-project staging in hookCwd → BLOCKED.
+    // Stage the same cross-project files in hookCwd for this sub-case.
+    writeProject(hookCwd, 'alpha', { 'workflow-state.md': 'status: active\n' });
+    writeProject(hookCwd, 'beta',  { 'workflow-state.md': 'status: active\n' });
+    spawnSync('git', ['add',
+      'kaola-workflow/alpha/workflow-state.md',
+      'kaola-workflow/beta/workflow-state.md'
+    ], { cwd: hookCwd, encoding: 'utf8' });
+
+    r = spawnSync('bash', [hookScript], {
+      cwd: hookCwd,
+      input: payload('git -c user.name=Bot commit -m "wip"'),
+      encoding: 'utf8'
+    });
+    assert(r.status === 2,
+      '(b) git -c k=v commit with cross-project staging must be BLOCKED (exit 2), got ' + r.status +
+      '\nstderr: ' + r.stderr);
+
+    // (c) plain `git commit` with cross-project staging in hookCwd → still BLOCKED (regression).
+    r = spawnSync('bash', [hookScript], {
+      cwd: hookCwd,
+      input: payload('git commit -m "wip"'),
+      encoding: 'utf8'
+    });
+    assert(r.status === 2,
+      '(c) plain git commit with cross-project staging must be BLOCKED (exit 2), got ' + r.status +
+      '\nstderr: ' + r.stderr);
+
+    // (d) non-commit git command → exit 0 (untouched).
+    r = spawnSync('bash', [hookScript], {
+      cwd: hookCwd,
+      input: payload('git -C ' + targetRepo + ' status'),
+      encoding: 'utf8'
+    });
+    assert(r.status === 0,
+      '(d) non-commit git command must exit 0, got ' + r.status);
+
+    // (e) single-project commit via `git -C <repo>` → exit 0 (allowed).
+    // Stage only one project in the target repo.
+    const singleRepo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-hook-single-')));
+    spawnSync('git', ['init'], { cwd: singleRepo, encoding: 'utf8' });
+    writeProject(singleRepo, 'gamma', { 'workflow-state.md': 'status: active\n' });
+    spawnSync('git', ['add', 'kaola-workflow/gamma/workflow-state.md'],
+      { cwd: singleRepo, encoding: 'utf8' });
+
+    r = spawnSync('bash', [hookScript], {
+      cwd: hookCwd,
+      input: payload('git -C ' + singleRepo + ' commit -m "single project"'),
+      encoding: 'utf8'
+    });
+    assert(r.status === 0,
+      '(e) single-project git -C commit must be ALLOWED (exit 0), got ' + r.status +
+      '\nstderr: ' + r.stderr);
+
+    fs.rmSync(singleRepo, { recursive: true, force: true });
+  } finally {
+    fs.rmSync(targetRepo, { recursive: true, force: true });
+    fs.rmSync(hookCwd,    { recursive: true, force: true });
+  }
+  console.log('testHookGitDashCCommitGuard: PASSED');
+}
+
 function testPhantomAdvisorHookGuard() {
   // Behavioral coverage for the phantom-advisor PostToolUse hook. Regression guard
   // for the bugs that left it inert: it must read the payload on STDIN (not an env
@@ -9187,6 +9284,7 @@ async function main() {
     testRepairFinalizationRoute();
     testSinkPrUsesFinalizationSummary();
     testHookSingleProjectGuard(tmp);
+    testHookGitDashCCommitGuard();
     testPhantomAdvisorHookGuard();
     testSubagentDispatchHookExists();
     testRoadmapGenerateMissingSourceGuard(tmp);

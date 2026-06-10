@@ -9,6 +9,7 @@
 
 ### Fixed
 
+- **hooks: pre-commit guard now catches `git -C` / flag-bearing commit forms (#351).** The multi-project staging guard gated on a `*"git commit"*` substring, so the workflow's own contractor finalize commit (`git -C "$WT" commit …`) and `git -c k=v commit` variants bypassed it entirely. The hook now tokenizes the invoked command (global flags `-C <path>` / `-c <kv>` / `--long[=val]` recognized before the `commit` subcommand, command passed via env export — no interpolation/injection), inspects the `-C` target repo's staging, and preserves the plain/compound fast path and fail-open posture. Byte-identical ×4 editions; new `testHookGitDashCCommitGuard` walkthrough scenario; all four chains green. Known narrow residual (reviewer R2, documented): a `-C` path containing a space mis-tokenizes and fails open.
 - **init: hardcoded maintainer machine path removed from `workflow-init` (×3 editions) (#352).** `commands/workflow-init.md` (claude + gitlab/gitea forks) shipped the maintainer's absolute path `/Volumes/.../andrej-karpathy-skills/...` as the preferred Karpathy-skills source. The relative sibling discovery (`../andrej-karpathy-skills/...`) is now the first preference, with a `KARPATHY_SKILLS_PATH` env-var / ask-the-user fallback — no machine-specific absolute path ships in any edition. The rewritten block is byte-identical across the three command editions; the `kaola-workflow-init` SKILL partners and the byte-locked KW-CLAUDE-TEMPLATE region are untouched. All four edition chains green.
 
 ## [5.11.0] — 2026-06-09
