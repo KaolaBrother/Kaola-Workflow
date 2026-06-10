@@ -668,6 +668,33 @@ const { checkClosureInvariants } = require('./kaola-workflow-claim');
 })();
 
 // ---------------------------------------------------------------------------
+// Test (#371): cmdRelease bundle path — clears the advisory claim for EVERY member
+// (the per-member clearAdvisoryClaim loop had zero test references).
+// ---------------------------------------------------------------------------
+(function testReleaseBundleClearsEveryMember() {
+  console.log('Test (#371): release bundle clears the advisory claim for every member');
+  const tmpRoot = makeTmpRoot();
+  const binDir = path.join(tmpRoot, 'bin');
+  const logFile = path.join(tmpRoot, 'gh-calls.log');
+  try {
+    initGitRepo(tmpRoot);
+    writeBundleStateFile(tmpRoot, 'bundle-42-47-53', 42, [42, 47, 53]);
+    writeRoadmapFile(tmpRoot, 42); writeRoadmapFile(tmpRoot, 47); writeRoadmapFile(tmpRoot, 53);
+    writeGhMockScript(binDir, { logFile });
+
+    const result = runFinalize(['release', '--project', 'bundle-42-47-53'], tmpRoot, binDir);
+    assert(result.status === 0, '#371 release: exit 0, got ' + result.status + '\nstderr: ' + (result.stderr || ''));
+    const calls = readLog(logFile);
+    for (const n of [42, 47, 53]) {
+      assert(calls.includes('label-removed:' + n), '#371 release: advisory claim cleared for member ' + n + ', got: ' + JSON.stringify(calls));
+    }
+    // The active folder is gone (archived as discarded).
+    const active = fs.readdirSync(path.join(tmpRoot, 'kaola-workflow')).filter(n => n.startsWith('bundle-42-47-53'));
+    assert(active.length === 0, '#371 release: active bundle folder removed (discarded), got: ' + JSON.stringify(active));
+  } finally { fs.rmSync(tmpRoot, { recursive: true, force: true }); }
+})();
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 
