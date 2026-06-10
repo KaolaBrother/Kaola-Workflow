@@ -15,10 +15,9 @@ Use `$ARGUMENTS` as optional project context.
 
 Prefer the local Karpathy skills source when available:
 
-1. `/Volumes/WorkspaceA/ylminiserver/workspace/andrej-karpathy-skills/skills/karpathy-guidelines/SKILL.md`
-2. `../andrej-karpathy-skills/skills/karpathy-guidelines/SKILL.md`
+1. `../andrej-karpathy-skills/skills/karpathy-guidelines/SKILL.md` (relative sibling discovery)
 
-If neither exists, use the concise fallback in this command.
+If the sibling does not resolve, check the `KARPATHY_SKILLS_PATH` env var for an explicit path, or ask the user where their local clone lives. If neither resolves, use the concise fallback in this command.
 
 ---
 
