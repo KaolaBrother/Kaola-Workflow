@@ -129,6 +129,40 @@ function glabMockEnv(binDir) {
   return fs.existsSync(jsPath) ? { KAOLA_GLAB_MOCK_SCRIPT: jsPath } : {};
 }
 
+// probeTimeoutEnv — scales KAOLA_GH_REMOTE_TIMEOUT_MS for parallel test runs.
+// When TEST_PARALLEL=1 (4-chain concurrent load), raises the probe margin to 2000ms
+// (~6.7x) to absorb scheduling starvation; defaults to 300ms for serial runs.
+// Byte-verbatim across all three driver files (simulate-workflow-walkthrough.js,
+// test-gitlab-workflow-scripts.js, test-gitea-workflow-scripts.js).
+function probeTimeoutEnv() { return { KAOLA_GH_REMOTE_TIMEOUT_MS: process.env.TEST_PARALLEL === '1' ? '2000' : '300' }; }
+
+// testProbeTimeoutEnv — RED→GREEN seam: asserts probeTimeoutEnv() returns '2000' under
+// TEST_PARALLEL=1 and '300' otherwise (set/restore around the assertion).
+function testProbeTimeoutEnv() {
+  const prev = process.env.TEST_PARALLEL;
+  try {
+    process.env.TEST_PARALLEL = '1';
+    const r1 = probeTimeoutEnv();
+    if (r1.KAOLA_GH_REMOTE_TIMEOUT_MS !== '2000') {
+      throw new Error('probeTimeoutEnv must return "2000" under TEST_PARALLEL=1, got: ' + r1.KAOLA_GH_REMOTE_TIMEOUT_MS);
+    }
+    delete process.env.TEST_PARALLEL;
+    const r2 = probeTimeoutEnv();
+    if (r2.KAOLA_GH_REMOTE_TIMEOUT_MS !== '300') {
+      throw new Error('probeTimeoutEnv must return "300" when TEST_PARALLEL is unset, got: ' + r2.KAOLA_GH_REMOTE_TIMEOUT_MS);
+    }
+    process.env.TEST_PARALLEL = '0';
+    const r3 = probeTimeoutEnv();
+    if (r3.KAOLA_GH_REMOTE_TIMEOUT_MS !== '300') {
+      throw new Error('probeTimeoutEnv must return "300" when TEST_PARALLEL="0", got: ' + r3.KAOLA_GH_REMOTE_TIMEOUT_MS);
+    }
+  } finally {
+    if (prev === undefined) delete process.env.TEST_PARALLEL;
+    else process.env.TEST_PARALLEL = prev;
+  }
+  console.log('testProbeTimeoutEnv: PASSED');
+}
+
 // Run closure-audit online (mock glab via KAOLA_GLAB_MOCK_SCRIPT). Mirrors GitHub runClosureAudit.
 function runClosureAudit(args, cwd, binDir, extraEnv) {
   const result = spawnSync(process.execPath, [closureAuditScript, ...args], {
@@ -2822,7 +2856,7 @@ function testClosureAuditStaleLabelsTimeout() {
   try {
     initGitRepo(tmp);
     closureAuditShim(binDir, ['setInterval(() => {}, 1 << 30);']);
-    const result = runClosureAudit([], tmp, binDir, { KAOLA_GH_REMOTE_TIMEOUT_MS: '300' });
+    const result = runClosureAudit([], tmp, binDir, probeTimeoutEnv());
     assert.strictEqual(
       result.drift.stale_in_progress_labels, 'skipped_timeout',
       'stale-labels hang must return "skipped_timeout", got: ' + JSON.stringify(result.drift.stale_in_progress_labels)
@@ -2844,7 +2878,7 @@ function testClosureAuditUnresolvedClosedState() {
     initGitRepo(tmp);
     plantClosureRoadmapSource(tmp, 920);
     closureAuditShim(binDir, ['setInterval(() => {}, 1 << 30);']);
-    const result = runClosureAudit([], tmp, binDir, { KAOLA_GH_REMOTE_TIMEOUT_MS: '300' });
+    const result = runClosureAudit([], tmp, binDir, probeTimeoutEnv());
     const unresolved = result.drift.unresolved_closed_state;
     assert(
       Array.isArray(unresolved) && unresolved.includes(920),
@@ -3002,7 +3036,7 @@ function testClosureAuditExecuteDetectionTimeoutPropagates() {
   try {
     initGitRepo(tmp);
     closureAuditShim(binDir, ['setInterval(() => {}, 1 << 30);']);
-    const result = runClosureAudit(['--execute'], tmp, binDir, { KAOLA_GH_REMOTE_TIMEOUT_MS: '300' });
+    const result = runClosureAudit(['--execute'], tmp, binDir, probeTimeoutEnv());
     assert.strictEqual(
       result.repaired.labels_skipped_reason, 'detection_timeout',
       '--execute with detection timeout must set labels_skipped_reason="detection_timeout", got: ' + JSON.stringify(result.repaired.labels_skipped_reason)
@@ -3025,7 +3059,7 @@ function testClosureAuditMrFolderTimeout() {
     writeState(tmp, 'issue-921', 921);
     makeMrSinkFolder(tmp, 'issue-921', 921);
     closureAuditShim(binDir, ['setInterval(() => {}, 1 << 30);']);
-    const result = runClosureAudit([], tmp, binDir, { KAOLA_GH_REMOTE_TIMEOUT_MS: '300' });
+    const result = runClosureAudit([], tmp, binDir, probeTimeoutEnv());
     assert.strictEqual(
       result.drift.unarchived_mr_folders, 'skipped_timeout',
       'MR-folder hang must return "skipped_timeout", got: ' + JSON.stringify(result.drift.unarchived_mr_folders)
@@ -3063,6 +3097,7 @@ testGitlabProbeResidualEmptyExit0();
 testGitlabProbeResidualNonJsonExit0();
 testClosureAuditExecuteDetectionTimeoutPropagates();
 testClosureAuditMrFolderTimeout();
+testProbeTimeoutEnv();
 
 // issue #230: classifyIssue / cmdClassify must fail-closed on degraded exit-0 forge response.
 // Empty stdout exit-0 and non-JSON exit-0 both produce state:'unknown' from normalizeIssue(parseJson(raw,{})),
