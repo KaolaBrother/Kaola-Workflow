@@ -295,6 +295,22 @@ for (const f of ['/commands/kaola-workflow-finalize.md', '/skills/kaola-workflow
     'GitLab ' + f + ' must document the keep-open partial-close lane (issue_action, --keep-issue-open, merge-sink-only)'
   );
 }
+// #345: the adaptive four-gate merge barrier in the Finalization COMMAND must resolve the
+// validator via the kaola_script resolver — a bare `node scripts/…` path is MODULE_NOT_FOUND
+// in a consumer plugin install (no ./scripts dir), turning the only blocking pre-merge
+// enforcement into a false BLOCK. (The finalize SKILL already used a find-fallback.)
+{
+  const finalizeCmd = read(pluginRoot + '/commands/kaola-workflow-finalize.md');
+  assert(
+    finalizeCmd.includes('VALIDATOR="$(kaola_script kaola-gitlab-workflow-plan-validator.js)"') &&
+    finalizeCmd.includes('node "$VALIDATOR" "$PLAN" --resume-check') &&
+    finalizeCmd.includes('node "$VALIDATOR" "$PLAN" --gate-verify') &&
+    finalizeCmd.includes('node "$VALIDATOR" "$PLAN" --barrier-check') &&
+    finalizeCmd.includes('node "$VALIDATOR" "$PLAN" --verdict-check') &&
+    !finalizeCmd.includes('node scripts/kaola-gitlab-workflow-plan-validator.js "$PLAN" --resume-check'),
+    'GitLab Finalization command must resolve the four-gate barrier validator via kaola_script (no bare scripts/ path) — #345'
+  );
+}
 for (const skill of listFiles(pluginRoot + '/skills', file => file.endsWith('SKILL.md'))) {
   assert(!read(skill).includes("*/kaola-workflow/*/scripts/kaola-gitlab"), skill + ' must use the GitLab Codex plugin cache path');
 }
