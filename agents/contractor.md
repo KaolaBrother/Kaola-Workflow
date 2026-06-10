@@ -110,6 +110,11 @@ if [ "$ACTIVE_WORKTREE_PATH" != "$(pwd)" ]; then
   cp -R "kaola-workflow/{project}/." "$ACTIVE_WORKTREE_PATH/kaola-workflow/{project}/"
   git status --porcelain | while IFS= read -r line; do
     f="${line:3}"
+    # #361: rename/copy entries are "R  old -> new" / "C  old -> new" — mirror the NEW path, not the
+    # literal "old -> new" string (which `cp` would fail on, silently skipping the renamed artifact).
+    case "$line" in R*|C*) f="${f##* -> }";; esac
+    # git quotes paths containing spaces/special chars as "..."; strip the surrounding quotes.
+    case "$f" in \"*\") f="${f#\"}"; f="${f%\"}";; esac
     case "$f" in kaola-workflow/*) continue;; esac
     if [ -f "$(pwd)/$f" ]; then
       mkdir -p "$ACTIVE_WORKTREE_PATH/$(dirname "$f")"
