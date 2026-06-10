@@ -1,0 +1,3 @@
+{"ts":"2026-06-10T11:19:35Z","agent_type":"workflow-planner","agent_id":"claim-backfill","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow"}
+{"ts":"2026-06-10T11:22:23Z","agent_type":"tdd-guide","agent_id":"a53f6c44cfc0839df","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/issue-351"}
+{"ts":"2026-06-10T11:31:25Z","agent_type":"code-reviewer","agent_id":"a38599c60fc97a48d","cwd":"/Volumes/WorkspaceA/ylminiserver/workspace/kaola-workflow/.kw/worktrees/issue-351"}
