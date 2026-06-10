@@ -41,7 +41,16 @@ const validatorPath = process.env.KAOLA_COMMIT_NODE_VALIDATOR || path.join(__dir
 // safeJsonParse — returns {} on any parse failure (fail-closed).
 // ---------------------------------------------------------------------------
 function safeJsonParse(str) {
-  try { return JSON.parse(str || ''); } catch (_) { return {}; }
+  const s = String(str || '');
+  // Fast path: the whole payload is one JSON document.
+  try { return JSON.parse(s); } catch (_) {}
+  // #355: otherwise parse the LAST line that is valid JSON — a stray log/debug/warning line
+  // emitted before the framed JSON must NOT turn a success into an empty {} (treated as a refusal).
+  const lines = s.split('\n').map(l => l.trim()).filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try { return JSON.parse(lines[i]); } catch (_) {}
+  }
+  return {};
 }
 
 // ---------------------------------------------------------------------------
@@ -57,11 +66,13 @@ function shellValidator(vPath, planPath, flags) {
   let stdout;
   try {
     stdout = execFileSync('node', [vPath, planPath, ...flags], { encoding: 'utf8' });
-    return { exitCode: 0, ...safeJsonParse(stdout) };
+    // #355: exitCode is a RESERVED key set LAST — a payload field named exitCode can never clobber
+    // the real process exit status.
+    return { ...safeJsonParse(stdout), exitCode: 0 };
   } catch (err) {
     // The validator writes valid JSON to stdout even on exit 1; read err.stdout.
     const status = (err.status == null) ? 1 : err.status; // fail-closed on signal kill
-    return { exitCode: status, ...safeJsonParse(err.stdout) };
+    return { ...safeJsonParse(err.stdout), exitCode: status };
   }
 }
 

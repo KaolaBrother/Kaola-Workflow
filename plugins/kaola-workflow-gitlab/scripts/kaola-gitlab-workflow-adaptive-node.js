@@ -121,7 +121,15 @@ function validateProjectName(project) {
 // safeJsonParse — returns {} on any parse failure (fail-closed).
 // ---------------------------------------------------------------------------
 function safeJsonParse(str) {
-  try { return JSON.parse(str || ''); } catch (_) { return {}; }
+  const s = String(str || '');
+  try { return JSON.parse(s); } catch (_) {}
+  // #355: parse the LAST line that is valid JSON — a stray log/warning line before the framed
+  // JSON must NOT turn a success into an empty {} (treated as a refusal by callers).
+  const lines = s.split('\n').map(l => l.trim()).filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try { return JSON.parse(lines[i]); } catch (_) {}
+  }
+  return {};
 }
 
 // ---------------------------------------------------------------------------
@@ -136,10 +144,11 @@ function shellNode(scriptPath, args) {
   let stdout;
   try {
     stdout = execFileSync('node', [scriptPath, ...(args || [])], { encoding: 'utf8' });
-    return { exitCode: 0, ...safeJsonParse(stdout) };
+    // #355: exitCode is a RESERVED key set LAST so a payload field named exitCode can never clobber it.
+    return { ...safeJsonParse(stdout), exitCode: 0 };
   } catch (err) {
     const status = (err.status == null) ? 1 : err.status;
-    return { exitCode: status, ...safeJsonParse(err.stdout) };
+    return { ...safeJsonParse(err.stdout), exitCode: status };
   }
 }
 

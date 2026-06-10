@@ -276,6 +276,39 @@ function assert(condition, message) {
 }
 
 // ---------------------------------------------------------------------------
+// Test 8 (#355): shellValidator last-line JSON framing + reserved-exitCode protection.
+//   (a) a stray log line BEFORE the framed JSON no longer collapses to {} (false refusal).
+//   (b) a payload field named exitCode cannot clobber the real process exit status.
+// ---------------------------------------------------------------------------
+{
+  const tmpDir = os.tmpdir();
+  // (a) log line then JSON on the LAST line.
+  const framedPath = path.join(tmpDir, 'stub-framed-' + process.pid + '.js');
+  try {
+    fs.writeFileSync(framedPath, [
+      "'use strict';",
+      "process.stdout.write('WARNING: advisor hook chatter\\n');",
+      "process.stdout.write(JSON.stringify({ result: 'pass', errors: [] }) + '\\n');",
+    ].join('\n'));
+    const r = shellValidator(framedPath, '/fake/plan.md', ['--barrier-check', '--json']);
+    assert(r.result === 'pass', 'test8a (#355): a stray log line before the JSON still parses (last-line framing), got ' + JSON.stringify(r.result));
+    assert(r.exitCode === 0, 'test8a: exitCode 0 on success');
+  } finally { try { fs.rmSync(framedPath); } catch (_) {} }
+
+  // (b) payload exitCode must NOT clobber the real status.
+  const clobberPath = path.join(tmpDir, 'stub-clobber-' + process.pid + '.js');
+  try {
+    fs.writeFileSync(clobberPath, [
+      "'use strict';",
+      "process.stdout.write(JSON.stringify({ result: 'pass', exitCode: 99 }) + '\\n');",
+    ].join('\n'));
+    const r = shellValidator(clobberPath, '/fake/plan.md', ['--barrier-check', '--json']);
+    assert(r.exitCode === 0, 'test8b (#355): a payload exitCode:99 cannot clobber the real exit status 0, got ' + r.exitCode);
+    assert(r.result === 'pass', 'test8b: the rest of the payload is preserved');
+  } finally { try { fs.rmSync(clobberPath); } catch (_) {} }
+}
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 if (failed > 0) {
