@@ -305,6 +305,7 @@ assertConcept('docs/api.md', 'closure contract invariants and receipt schema', [
   'remote_issue_closed',
   'claim_label_removed',
   'kaola-workflow-closure-contract.js',
+  'kept_open',
   '#162',
   '#163',
   '#164',
@@ -390,6 +391,12 @@ assertIncludes('commands/kaola-workflow-finalize.md', 'Use the sink metadata cap
 // #277 M3: contractor-dispatch HANDLE lock — the mechanical finalization body moved to
 // agents/contractor.md; the finalize command retains only the Agent(...) dispatch handle.
 assertIncludes('commands/kaola-workflow-finalize.md', 'subagent_type="contractor"');
+// #336: keep-open partial-close sink lane — pin the durable field, the sink-merge flag, and the
+// merge-sink-only refusal prose (the exit-3 in-arm BLOCKED guard is shell prose no walkthrough
+// executes, so this pin is its only mechanical enforcement).
+assertIncludes('commands/kaola-workflow-finalize.md', 'issue_action');
+assertIncludes('commands/kaola-workflow-finalize.md', '--keep-issue-open');
+assertIncludes('commands/kaola-workflow-finalize.md', 'merge-sink-only');
 // #277 M3: assertBefore calls for 'commit -m "chore: finalize {project}"' and
 // 'node "$CLAIM_JS" finalize' DROPPED — those tokens relocated to agents/contractor.md;
 // cross-file ordering is not expressible via assertBefore (single-file only).
@@ -650,6 +657,11 @@ assertIncludes('install.sh', 'kaola-workflow-parallel-batch.js');
 assertIncludes('commands/kaola-workflow-plan-run.md', 'frontier unit');
 // #281: efficient-DAG instruction in workflow-planner profile (added by planner-profile node)
 assertIncludes('agents/workflow-planner.md', 'EFFICIENT DAGs');
+
+// #341: forge-neutral agent-profile authoring guidance pinned in the planner profile +
+// plan-run executor surface (the #328 gh-leak class).
+assertIncludes('agents/workflow-planner.md', 'forge-neutral');
+assertIncludes('commands/kaola-workflow-plan-run.md', '--forbidden-only');
 
 // #340: registration-surface + forge-port parity checks and their authoring/dispatch prose
 assertIncludes('scripts/kaola-workflow-plan-validator.js', 'agent-registration gap');

@@ -258,7 +258,7 @@ Manages the local roadmap mirror (`kaola-workflow/ROADMAP.md`) and per-issue met
 
 When an active workflow folder is finalized (`cmdFinalize`) or archived after a PR merge (`watch-pr` on MERGED status), the closure process automatically removes the corresponding `.roadmap/issue-{N}.md` file and regenerates `ROADMAP.md`. This ensures the local roadmap never contains stale entries for closed issues. The cleanup is scoped to closed-status archives only; abandoned folders leave the roadmap entry untouched (so the issue can be reopened if needed). When finalizing from a linked worktree, `cmdFinalize` stages only the finalized project's own paths — its `kaola-workflow/archive/<project>/` band, the `kaola-workflow/<project>/`→archive rename (recorded as a `git rm -r --cached` of the live folder plus a `git add` of the archive dest), `kaola-workflow/.roadmap/`, and `kaola-workflow/ROADMAP.md` — rather than a broad `git add -A kaola-workflow/`, so a stray foreign `kaola-workflow/archive/<other>/` is never swept into the finalize commit (issue #261).
 
-`cmdFinalize` accepts `--keep-open` for a keep-open partial-close run (the Closure Decision Gate kept the issue open). This is **stamp-only** in #333: it changes only what the archived `workflow-state.md` RECORDS (`last_result: closed_keep_open`, `issue_disposition: kept-open`, no active `next_command`, skips the remote close probe). It does NOT change roadmap-source removal or any closure invariant — the roadmap source for the still-open issue is still removed and `ROADMAP.md` regenerated, so the keep-open finalize procedure carries an interim copy-aside/restore caveat for `kaola-workflow/.roadmap/issue-N.md` (see `commands/kaola-workflow-finalize.md`). The full script-side keep-open sink lane (roadmap retention, guaranteed no-close, FF-push, claim/worktree cleanup) is owned by issue #336, which extends this same flag.
+`cmdFinalize` accepts `--keep-open` (and `--keep-issue-open`) for a keep-open partial-close run (the Closure Decision Gate kept the issue open). Since issue #336 this is the full script-side keep-open sink lane, not the #333 stamp-only stub: it stamps the archived `workflow-state.md` (`last_result: closed_keep_open`, `issue_disposition: kept-open`, no active `next_command`), records `remote_issue_closed: kept_open` + `roadmap_source_removed: kept` in the receipt, and PRESERVES `kaola-workflow/.roadmap/issue-N.md` (`archiveProjectDir` skips the unlink) while still regenerating `ROADMAP.md` (which keeps listing `#N`). Keep-open is also derivable from the durable `## Sink` field `issue_action: comment_keep_open` (belt-and-suspenders: the flag OR the field triggers it, so a contractor that forgets the flag cannot silently close-mode the run). See the **Keep-open partial-close lane** subsection under § Closure Contract for the full behavior matrix and the merge-sink-only fence.
 
 ## Adaptive Plan Validation
 
@@ -326,6 +326,32 @@ kaola-workflow-plan-validator.js <workflow-plan.md> [--json] [--freeze [--repair
 **`plan_hash`:** SHA-256 over the whitespace-normalized author-immutable `## Meta` (frozen `labels:`) + `## Nodes` sections; the mutable `## Node Ledger` and the hash comment itself are excluded. Stored inside `workflow-plan.md` as `<!-- plan_hash: <64-hex> -->` and re-checked on every load — a mismatch is tampering and yields a typed refusal on `--resume-check`. The full `workflow-plan.md` artifact contract (`## Meta`, the `## Nodes` table schema, and the `## Node Ledger`) is documented in `docs/workflow-state-contract.md`. A barrier consent-halt is durable in BOTH `workflow-state.md` (`escalated_to_full: consent`) and the non-hashed `## Node Ledger` (`consent_halt: pending`, issue #234), so a lost/regenerated `workflow-state.md` cannot silently drop the halt.
 
 **Authoring-entry guard (`kaola-workflow-claim.js authoring-allowed`, issue #235):** the only switch-reading guard besides `claimProject` selection. `/kaola-workflow-adapt` runs `node kaola-workflow-claim.js authoring-allowed --project <p>` BEFORE authoring/freezing a plan; it returns `{ "status": "authoring_allowed", "allowed": true }` when the `enable_adaptive` switch is ON, else a typed `{ "status": "authoring_refused", "allowed": false, "reasoning": "...OFF...#44" }` (exit 0; the caller branches on `status`). The validator stays toggle-agnostic — the switch is read only here and in `claimProject`.
+
+## Forge Contract Validators (issue #341)
+
+`plugins/kaola-workflow-gitlab/scripts/validate-kaola-workflow-gitlab-contracts.js` and its gitea
+twin enforce forge-neutrality (`assertNoForbidden`) across every plugin command/skill/hook/agent/
+config file, scanning **before** any file-count assertion so a forge-CLI leak (`gh`/`glab`, a forge
+brand, a forge request noun) is never masked by a transiently-stale agent/command/skill count (the
+#328 latent defect). Each validator also exposes a standalone, count-independent mode for a
+forge-touching adaptive node to verify just its own changed files:
+
+```
+node plugins/kaola-workflow-gitlab/scripts/validate-kaola-workflow-gitlab-contracts.js --forbidden-only <file> [<file> ...]
+node plugins/kaola-workflow-gitea/scripts/validate-kaola-workflow-gitea-contracts.js  --forbidden-only <file> [<file> ...]
+```
+
+- **Path resolution:** each `<file>` is repo-root-relative or absolute. The root is anchored via
+  `__dirname` (three levels up from the script), so the check resolves correctly from any cwd —
+  including a `.kw/worktrees/<project>/` worktree running its own copy of the validator. Absolute
+  paths are normalized with `path.relative(root, file)`, so out-of-tree fixture files resolve too.
+- **Exit codes:** `0` on a clean scan (stdout sentinel `… forbidden-only check passed (<n> file(s))`);
+  `1` when a forbidden token is found (uncaught `assert`, message
+  `<file> contains forbidden reference: <regex>` — identical failure shape to the full chain); `2`
+  on a usage error (no files after `--forbidden-only`) or an unknown flag (fail closed, so a typo can
+  never silently degrade into running the full chain).
+- **Zero args preserves the full contract chain:** the `package.json` chains invoke each validator
+  with no arguments, which runs the complete per-edition validation exactly as before.
 
 ## Adaptive Executor Aggregators (issue #242 Part B, wired in Stage C)
 
@@ -1270,6 +1296,8 @@ For a completed linked issue N:
 6. The remote issue does not have `workflow:in-progress` after closure.
 7. Any branch/worktree cleanup is either complete or explicitly reported by stale-worktree tooling.
 
+**Keep-open inversion (issue #336).** A tenth invariant, `keep-open-roadmap-preserved`, applies ONLY when the receipt carries `remote_issue_closed: kept_open` (a keep-open partial-close finalize). On a keep-open run, `checkClosureInvariants` REPLACES invariants 1 and 2 with their inverse: `kaola-workflow/.roadmap/issue-N.md` MUST be preserved and the regenerated `ROADMAP.md` MUST still list `#N`. A missing source or a mirror that dropped `#N` is the violation. Invariants 3, 4, 6, 7 apply unchanged (the project folder is still archived `status: closed`; only the issue-close step differs).
+
 **WARN-FIRST detection invariants (issue #277 M2):** The following two invariants are recorded in the receipt but do NOT affect `closure_invariants.ok`. Missing attestation adds a warning and sets the receipt field to `missing`; it never blocks closure. The detector is log-gated: if no `dispatch-log.jsonl` is found in the project `.cache/`, both fields are set to `missing` and a warning `'attestation: dispatch-log not found (SubagentStart hook not installed) — detector inactive'` is added — closure is not blocked.
 
 8. `claim-planner-attested` — A workflow-planner subagent spawn is recorded in the dispatch log (`.cache/dispatch-log.jsonl`) BEFORE the plan was frozen.
@@ -1303,9 +1331,9 @@ unpopulated receipt reads as total failure, never silent success) and
   "project": "issue-N",
   "issue_number": "N",
   "archive": "closed|abandoned|skipped|failed",
-  "roadmap_source_removed": "removed|absent|failed",
+  "roadmap_source_removed": "removed|absent|kept|failed",
   "roadmap_regenerated": "regenerated|skipped|failed",
-  "remote_issue_closed": "closed|already_closed|skipped_offline|failed",
+  "remote_issue_closed": "closed|already_closed|kept_open|skipped_offline|failed",
   "claim_label_removed": "removed|already_absent|skipped_offline|failed",
   "worktree_removed": "removed|missing|kept|failed",
   "branch_removed": "removed|kept|failed",
@@ -1314,6 +1342,13 @@ unpopulated receipt reads as total failure, never silent success) and
   "warnings": []
 }
 ```
+
+**Keep-open partial-close lane (issue #336).** When the `## Sink` block carries `issue_action: comment_keep_open` (written by the main session at the Closure Decision Gate, default when absent: `close`), `cmdFinalize --keep-issue-open` and `sink-merge --keep-issue-open` run the keep-open terminal:
+
+- `remote_issue_closed` records the decision token `kept_open` (also under OFFLINE — the keep-open decision is local and known, and `checkClosureInvariants` keys on it). Truth still wins: when online and the issue is ALREADY closed on the forge, `cmdFinalize` records `already_closed` and pushes a warning. `sink-merge` posts a mechanical keep-open comment (no `close/fix/resolve #N` substring) instead of closing; the claim label is still removed in BOTH modes.
+- `roadmap_source_removed` records `kept` — `archiveProjectDir` skips the `.roadmap/issue-N.md` unlink, and `ROADMAP.md` is regenerated still listing `#N` (the `keep-open-roadmap-preserved` invariant enforces it). The closure-audit `archive_closed` stale-source class EXCLUDES a `status: closed` archive that carries `issue_action: comment_keep_open`, so a later `--execute` never deletes the preserved source; `closed_remote` still reaps a genuinely-closed issue.
+
+**Keep-open is merge-sink-only.** A PR/MR sink would auto-close the kept-open issue via its hard-coded `Closes #N` body, and `watch-pr`/`watch-mr`'s archive-on-merge (`archiveProjectDir 'closed'` with no `keepRoadmapSource`) would delete the preserved source. This is fenced at THREE layers: (1) the finalize prose refuses a non-merge sink under keep-open before the case statement; (2) on `sink-merge` exit 3 (merge-impossible) the in-arm PR/MR auto-pivot is a typed BLOCKED refusal requiring manual remediation of the merge blocker — never an auto-pivot to a `Closes #N` sink; (3) `sink-pr.js`/`sink-mr.js` themselves refuse (typed `merge-sink-only` assert) when the live OR archived state carries `issue_action: comment_keep_open`. `sink-merge` also re-reads the archived state and honors `issue_action: comment_keep_open` even if `--keep-issue-open` was not passed (defense-in-depth against the one irreversible step).
 
 **Bundle projects — additive receipt fields (issue #328):** On a bundle project, three additional fields are attached to the closure receipt AFTER `buildClosureReceipt()` returns. They are absent on single-issue receipts.
 
@@ -1361,7 +1396,7 @@ record is never silent on partial runs:
 
 ```json
 {
-  "roadmap_source_removed": "removed|absent|failed",
+  "roadmap_source_removed": "removed|absent|kept|failed",
   "roadmap_regenerated": "regenerated|skipped|failed",
   "closure_invariants": {
     "ok": true,
@@ -1374,8 +1409,8 @@ record is never silent on partial runs:
 last three local checks; the signature is now `checkClosureInvariants(root,
 receipt, archiveDest)`):
 
-- `roadmap-source-absent` — `kaola-workflow/.roadmap/issue-N.md` is gone after cleanup.
-- `roadmap-mirror-clean` — generated `kaola-workflow/ROADMAP.md` no longer lists `#N` as active work (row-anchored, issue #339: only an active table row `| #N | …` at line start violates; cross-references to `#N` inside other rows are allowed after closure).
+- `roadmap-source-absent` — `kaola-workflow/.roadmap/issue-N.md` is gone after cleanup. On a keep-open run (`remote_issue_closed: kept_open`, issue #336) this is REPLACED by `keep-open-roadmap-preserved` — the source MUST survive and `ROADMAP.md` MUST still list `#N`.
+- `roadmap-mirror-clean` — generated `kaola-workflow/ROADMAP.md` no longer lists `#N` as active work (row-anchored, issue #339: only an active table row `| #N | …` at line start violates; cross-references to `#N` inside other rows are allowed after closure). Also REPLACED by `keep-open-roadmap-preserved` on a keep-open run.
 - `in-progress-label-removed` — `workflow:in-progress` label was removed from the remote issue. Skipped (not violated) when `KAOLA_WORKFLOW_OFFLINE=1` or when `claim_label_removed` is `'skipped_offline'`.
 - `active-folder-absent` — no live `kaola-workflow/{project}/` folder remains in active folders after archive (issue #164).
 - `archive-state-closed` — when `archiveDest` is provided, the archived `workflow-state.md` shows `status: closed` or `abandoned`; skipped (not violated) when `archiveDest` is absent (issue #164).
@@ -1476,6 +1511,8 @@ merge-impossible fallback returns before any receipt is emitted; when the
 project was already archived before the failed push, `postMergeCleanup` skips
 the `.cache/sink-fallback.json` receipt write entirely (issue #216 guard). `sink-merge`'s `ghExec` now honors `KAOLA_GH_MOCK_SCRIPT`, matching
 `claim.js`, so the receipt path is testable without a live `gh` CLI.
+
+`sink-merge --keep-issue-open` (issue #336, requires `--issue`) runs the keep-open Step 8: it posts a mechanical keep-open comment instead of closing, records `remote_issue_closed: kept_open` and `roadmap_source_removed: kept` (the source survives), and still removes the claim label. It also re-reads the archived `workflow-state.md` and honors `issue_action: comment_keep_open` even if the flag was not passed (defense-in-depth — an accidental close is the one irreversible step). Everything else — Step 0 worktree removal, rebase, FF-merge loop, push, Step 9 branch deletion, attestation, invariants — is shared and unchanged, which is what eliminates the manual FF-push/worktree/branch cleanup a keep-open run previously needed.
 
 **`sink:pr` deferral**: `cmdSinkPr` does not emit a closure receipt — it leaves
 the active folder open. The authoritative closure receipt for a `sink:pr`

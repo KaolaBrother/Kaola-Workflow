@@ -118,6 +118,26 @@ function ensureMergeRequest(args, opts) {
 
   const root = options.root || getRoot();
 
+  // #336: keep-open is merge-sink-only — the MR body 'Closes #N' would auto-close the
+  // kept-open issue, and watch-mr's archive-on-merge would delete the preserved roadmap source.
+  // The ARCHIVED path is the one that fires in the real exit-3 fallback flow (the contractor
+  // finalize archives the project BEFORE the sink runs, so the live state file is already gone);
+  // the LIVE path covers a sink: mr project that gained issue_action by mistake. Guard sits
+  // BEFORE the OFFLINE early-return (mode-independent, OFFLINE-testable).
+  {
+    const keepOpenRe = /^issue_action:\s*comment_keep_open\s*$/m;
+    for (const f of [
+      path.join(root, 'kaola-workflow', args.project, 'workflow-state.md'),
+      path.join(root, 'kaola-workflow', 'archive', args.project, 'workflow-state.md')
+    ]) {
+      let s = ''; try { s = fs.readFileSync(f, 'utf8'); } catch (_) { continue; }
+      assert(!keepOpenRe.test(s),
+        'sink-mr: refusing: project ' + args.project + ' carries issue_action: comment_keep_open. ' +
+        'Keep-open is merge-sink-only (an MR would auto-close the issue on merge). ' +
+        'Remediate the merge sink and re-run sink-merge instead.');
+    }
+  }
+
   if (OFFLINE) {
     const mrUrl = 'OFFLINE_PLACEHOLDER';
     const mrIid = 0;

@@ -468,6 +468,26 @@ Agent(
    per-skeptic files are namespaced `.cache/adversarial-verifier-{claim-id}.md` because the
    validator's quorum check globs `.cache/adversarial-verifier-*.md` — a mechanically-supported
    exception, not free-form drift.
+
+   **Forge-touching node guard (#341):** when the opened node's declared write set touches the
+   edition plugin trees (`plugins/kaola-workflow*/` — i.e. the workspace is the Kaola-Workflow
+   repo itself), pin BOTH halves in the dispatch prompt: (a) plugin agent/command/skill prose
+   must stay **forge-neutral** — never name a forge-specific CLI binary or forge brand (no
+   CLI-example parentheticals copied from an issue spec; write "the forge CLI") — and the plugin
+   role-agent profiles (`plugins/*/agents/*.toml`) are byte-identical mirrors across the three
+   plugin editions; (b) the node verifies every changed edition file BEFORE `record-evidence`
+   with the standalone, count-independent forbidden-token check:
+
+   ```bash
+   node plugins/kaola-workflow-gitlab/scripts/validate-kaola-workflow-gitlab-contracts.js \
+     --forbidden-only <changed-file>...
+   node plugins/kaola-workflow-gitea/scripts/validate-kaola-workflow-gitea-contracts.js \
+     --forbidden-only <changed-file>...
+   ```
+
+   This catches a forge-CLI leak at the node that wrote it, even while the edition
+   agent/command counts are transiently stale mid-run (the full chains may legitimately be red
+   during a count bump — the #328 latent defect).
 3. **close-and-open-next (SCRIPT-ENFORCED typed transaction)** — after the role returns and
    evidence is recorded (step 2), run the fused close+advance from `${ACTIVE_WORKTREE_PATH}`:
 

@@ -103,6 +103,13 @@ function parseArgs(argv) {
     if (key === '--keep-worktree') { args.keepWorktree = true; continue; }
     // #333: keep-open partial-close archive — stamp-only (lane mechanics deferred to #336).
     if (key === '--keep-open') { args.keepOpen = true; continue; }
+    // #336: --keep-issue-open is the design-specified cmdFinalize keep-open flag; the
+    // implementation reuses args.keepOpen internally, so alias it here. Every prose surface
+    // (contractor.md/.toml ×3, finalize.md/SKILL.md ×6, README, SKILL.md) dispatches
+    // --keep-issue-open; without this alias it is an inert no-op on cmdFinalize and the
+    // crash-resume keep-open path (live state archived, state-derivation unavailable) silently
+    // close-modes — false-failed closure receipt + roadmap-source-absent invariant fire.
+    if (key === '--keep-issue-open') { args.keepOpen = true; continue; }
     if (key === '--execute') { args.execute = true; continue; }
     if (key === '--archive') { args.archive = true; continue; }
     if (key === '--export')  { args.export = true; continue; }
@@ -1194,11 +1201,20 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
     for (const issueN of archiveIssueNumbers) {
       const roadmapFilePath = path.join(root, 'kaola-workflow', '.roadmap', 'issue-' + issueN + '.md');
       let thisRemoved = 'absent';
-      try {
-        fs.unlinkSync(roadmapFilePath);
-        thisRemoved = 'removed';
-      } catch (e) {
-        thisRemoved = (e.code === 'ENOENT') ? 'absent' : 'failed';
+      // #336: keep-open partial-close — the issue stays open, so its roadmap source must be
+      // PRESERVED (do NOT unlink, do NOT push into removedSources). regenerateRoadmap below
+      // still runs (idempotent) and the surviving source keeps the mirror listing #N. The #297
+      // MAIN staged-orphan reconcile still runs (the FF merge restores the committed copy on
+      // main, so unstaging+unlinking the MAIN staged-ADD orphan is correct in BOTH modes).
+      if (opts && opts.keepRoadmapSource) {
+        thisRemoved = 'kept';
+      } else {
+        try {
+          fs.unlinkSync(roadmapFilePath);
+          thisRemoved = 'removed';
+        } catch (e) {
+          thisRemoved = (e.code === 'ENOENT') ? 'absent' : 'failed';
+        }
       }
       // Update scalar roadmap_source_removed for primary (first / single-issue) — keeps callers intact
       if (issueN === archiveIssueNumber) roadmapSourceRemoved = thisRemoved;
@@ -1256,34 +1272,53 @@ function checkClosureInvariants(root, receipt, archiveDest) {
   const memberNumbers = Array.isArray(receipt.issue_numbers) && receipt.issue_numbers.length
     ? receipt.issue_numbers
     : (Number.isInteger(issueNumber) && issueNumber > 0 ? [issueNumber] : []);
+  // #336: keep-open inverts the roadmap checks — the source MUST survive and the mirror MUST
+  // still list #N (the issue stays open). Key on the receipt decision token.
+  const keepOpen = receipt.remote_issue_closed === 'kept_open';
   if (!abandoned && memberNumbers.length > 0) {
     const invSourceAbsent = closureContract.CLOSURE_INVARIANTS.find(i => i.id === 'roadmap-source-absent');
     const invMirrorClean = closureContract.CLOSURE_INVARIANTS.find(i => i.id === 'roadmap-mirror-clean');
+    const invKeep = closureContract.CLOSURE_INVARIANTS.find(i => i.id === 'keep-open-roadmap-preserved');
     for (const n of memberNumbers) {
       const roadmapFile = path.join(root, 'kaola-workflow', '.roadmap', 'issue-' + n + '.md');
-      if (fs.existsSync(roadmapFile)) {
+      const roadmapMirror = path.join(root, 'kaola-workflow', 'ROADMAP.md');
+      // #339: an active row in the generated mirror is exactly `| #N | …` at
+      // line start (kaola-workflow-roadmap.js buildTableRow). A bare substring
+      // match also hits legitimate cross-references to #N inside OTHER rows
+      // (e.g. "place_inside (#562 opacity)" in a dependency note), so anchor
+      // on the row's issue column instead.
+      const sourceExists = fs.existsSync(roadmapFile);
+      let mirrorListsN = false;
+      try {
+        const content = fs.readFileSync(roadmapMirror, 'utf8');
+        mirrorListsN = new RegExp('^\\| #' + n + ' \\|', 'm').test(content);
+      } catch (_) {}
+      if (keepOpen) {
+        // Inverted preservation check: violation when the source is MISSING or the mirror
+        // no longer lists #N. One invariant id, member-suffixed like the bundle pattern.
+        if (!sourceExists || !mirrorListsN) {
+          const baseDescK = invKeep ? invKeep.description : 'keep-open roadmap source/mirror not preserved';
+          violations.push({
+            id: 'keep-open-roadmap-preserved',
+            description: memberNumbers.length > 1 ? (baseDescK + ' (issue #' + n + ')') : baseDescK
+          });
+        }
+        continue;
+      }
+      if (sourceExists) {
         const baseDesc = invSourceAbsent ? invSourceAbsent.description : 'roadmap source file still present';
         violations.push({
           id: 'roadmap-source-absent',
           description: memberNumbers.length > 1 ? (baseDesc + ' (issue #' + n + ')') : baseDesc
         });
       }
-      const roadmapMirror = path.join(root, 'kaola-workflow', 'ROADMAP.md');
-      try {
-        const content = fs.readFileSync(roadmapMirror, 'utf8');
-        // #339: an active row in the generated mirror is exactly `| #N | …` at
-        // line start (kaola-workflow-roadmap.js buildTableRow). A bare substring
-        // match also hits legitimate cross-references to #N inside OTHER rows
-        // (e.g. "place_inside (#562 opacity)" in a dependency note), so anchor
-        // on the row's issue column instead.
-        if (new RegExp('^\\| #' + n + ' \\|', 'm').test(content)) {
-          const baseDesc2 = invMirrorClean ? invMirrorClean.description : 'ROADMAP.md still lists issue as active';
-          violations.push({
-            id: 'roadmap-mirror-clean',
-            description: memberNumbers.length > 1 ? (baseDesc2 + ' (issue #' + n + ')') : baseDesc2
-          });
-        }
-      } catch (_) {}
+      if (mirrorListsN) {
+        const baseDesc2 = invMirrorClean ? invMirrorClean.description : 'ROADMAP.md still lists issue as active';
+        violations.push({
+          id: 'roadmap-mirror-clean',
+          description: memberNumbers.length > 1 ? (baseDesc2 + ' (issue #' + n + ')') : baseDesc2
+        });
+      }
     }
   }
   // outside issueNumber guard: 'skipped_offline' must not violate even when issueNumber is null
@@ -1347,7 +1382,18 @@ function cmdFinalize() {
   assert(args.project, '--project required');
   const folder = activeByProject(root, args.project);
   const projectInfo = folder ? { project_id: folder.project_id, path_with_namespace: folder.path_with_namespace } : discoverProjectSafe();
-  const result = archiveProjectDir(root, args.project, 'closed', undefined, { keepOpen: !!args.keepOpen });
+  // #336: keep-open terminal mode — explicit flag OR the durable ## Sink issue_action field.
+  // State-field derivation makes the durable record the source of truth (a contractor that
+  // forgets the flag cannot silently close-mode the run); the flag covers the crash-resume case
+  // where the live state file is already archived (archiveProjectDir returns source-missing
+  // without reading state).
+  let keepIssueOpen = !!args.keepOpen;
+  if (!keepIssueOpen) {
+    try {
+      keepIssueOpen = field(fs.readFileSync(stateFile(root, args.project), 'utf8'), 'issue_action') === 'comment_keep_open';
+    } catch (_) {}
+  }
+  const result = archiveProjectDir(root, args.project, 'closed', undefined, { keepOpen: keepIssueOpen, keepRoadmapSource: keepIssueOpen });
   // #333: manual-archive backstop — live folder already gone but an archived copy exists with a
   // non-terminal state (a manual `mv`/`git mv` bypassed archiveProjectDir). Stamp the archived
   // state terminal in place. Idempotent; swallow-on-error like the archive writes.
@@ -1362,7 +1408,7 @@ function cmdFinalize() {
         const st = field(raw, 'status');
         if (st !== 'closed' && st !== 'abandoned') {
           fs.writeFileSync(destState,
-            stampTerminalState(raw, 'closed', destDir, { keepOpen: !!args.keepOpen }));
+            stampTerminalState(raw, 'closed', destDir, { keepOpen: keepIssueOpen }));
           archiveStateStamped = 'repaired';
         }
         // lets the ## Closure append + invariants + issue_number fallback see the dir
@@ -1427,11 +1473,29 @@ function cmdFinalize() {
   let remoteIssueClosed = 'skipped_offline';
   const closedIssues = [];       // members probed as closed
   const failedIssueClosures = []; // members whose probe threw/returned unavailable
-  // #333: under --keep-open the disposition is a DECISION, not an observation — skip the remote
-  // close probe entirely (leaves remote_issue_closed: 'skipped_offline'); issue_disposition records
-  // the kept-open decision below.
-  if (args.keepOpen) {
-    // skip probe
+  const keepOpenWarnings = [];   // #336: probe-truth warnings under keep-open
+  // #336: under keep-open the disposition is a DECISION, not an observation — record the
+  // `kept_open` decision token (even under OFFLINE; the decision is local and known, and the
+  // invariant checker keys on it). Truth still wins: when online and the issue is ALREADY
+  // closed on the forge, record 'already_closed' + a warning so the receipt never falsely
+  // claims a closed issue was deliberately kept open.
+  if (keepIssueOpen) {
+    remoteIssueClosed = 'kept_open';
+    if (!OFFLINE) {
+      const probeNums = issueIids.length > 0 ? issueIids : (issueIid ? [issueIid] : []);
+      for (const n of probeNums) {
+        try {
+          const probe = probeIssueState(n);
+          if (probe.state === 'closed') {
+            closedIssues.push(n);
+            keepOpenWarnings.push('keep-open requested but the remote issue is already closed (issue #' + n + ')');
+          }
+        } catch (_) {}
+      }
+      if (closedIssues.length > 0 && (issueIids.length === 0 || closedIssues.length === issueIids.length)) {
+        remoteIssueClosed = 'already_closed';
+      }
+    }
   } else if (!OFFLINE && issueIids.length > 0) {
     // Bundle: probe each member (warning-first: unavailable probe -> failed_issue_closures)
     for (const n of issueIids) {
@@ -1468,6 +1532,10 @@ function cmdFinalize() {
     closureReceipt.failed_issue_closures = failedIssueClosures;
     closureReceipt.roadmap_sources_removed = result.roadmap_sources_removed || [];
   }
+  // #336: surface keep-open probe-truth warnings (issue already closed on the forge).
+  if (keepOpenWarnings.length > 0) {
+    closureReceipt.warnings = (closureReceipt.warnings || []).concat(keepOpenWarnings);
+  }
   // M2 (#277 Phase 2): WARN-FIRST attestation check.
   // archiveProjectDir runs first and renames the live folder to result.dest,
   // so the live cache is gone; check the archive candidate first, then live as fallback.
@@ -1492,7 +1560,7 @@ function cmdFinalize() {
   const invariantResult = checkClosureInvariants(root, closureReceipt, result.dest);
   // #333: disposition is DECISION-derived on cmdFinalize (the orchestrator closes the issue after
   // sink-merge, so the default merge lane is honestly close-pending, never a false `closed`).
-  const issueDisposition = args.keepOpen ? 'kept-open'
+  const issueDisposition = keepIssueOpen ? 'kept-open'
     : (remoteIssueClosed === 'already_closed' ? 'closed' : 'close-pending');
   // #333: append the compact terminal receipt to the archived state (facts only known after the
   // rename: claim/worktree disposition + issue disposition). Presence-guarded / idempotent.

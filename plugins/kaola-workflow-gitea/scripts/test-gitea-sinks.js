@@ -788,4 +788,82 @@ const sinkScript = path.join(__dirname, 'kaola-gitea-workflow-sink-merge.js');
   }
 }
 
+// #336: keep-open partial-close — runDirectMerge with keepIssueOpen MUST NOT close the issue.
+withForge({
+  createIssueComment(project, issueNum, body) {
+    assert(body.includes('kept open'), '#336: keep-open comment body must mention kept open');
+    return { id: 9100 };
+  },
+  closeIssue() {
+    throw new Error('#336: closeIssue must NOT be called on a keep-open runDirectMerge');
+  },
+  updateIssueLabels() { return {}; }
+}, () => {
+  const root = tempRoot('kw-gt-keepopen-');
+  try {
+    writeWorkflow(root, 'keepopen-project', 88);
+    const result = sinkMerge.runDirectMerge(
+      { branch: 'feature-keepopen', project: 'keepopen-project', issue: 88, keepIssueOpen: true },
+      { root, skipGit: true }
+    );
+    assert.strictEqual(result.merged, true, '#336: keep-open runDirectMerge should still merge');
+    assert.strictEqual(result.close, null, '#336: keep-open runDirectMerge must not close the issue (close === null)');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// #336: --keep-issue-open requires --issue (typed refusal).
+{
+  const root = tempRoot('kw-gt-keepopen-noissue-');
+  try {
+    let err = null;
+    try { sinkMerge.runDirectMerge({ branch: 'feature-x', project: 'p', keepIssueOpen: true }, { root, skipGit: true }); }
+    catch (e) { err = e; }
+    assert.ok(err && /--keep-issue-open requires --issue/.test(err.message),
+      '#336: keep-open without --issue must refuse, got: ' + (err && err.message));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+// #336: sink-pr keep-open refusal — a live OR archived state carrying issue_action:
+// comment_keep_open must make sink-pr refuse (merge-sink-only) before the OFFLINE branch.
+{
+  const sinkPrScriptKO = path.join(__dirname, 'kaola-gitea-workflow-sink-pr.js');
+  const rootA = tempRoot('kw-gt-pr-keepopen-live-');
+  try {
+    const dir = path.join(rootA, 'kaola-workflow', 'issue-900a');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'workflow-state.md'),
+      'status: active\n\n## Sink\nsink: pr\nissue_action: comment_keep_open\n');
+    const r = spawnSync(process.execPath, [sinkPrScriptKO, '--project', 'issue-900a', '--branch', 'workflow/issue-900a', '--issue', '900'],
+      { cwd: rootA, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
+    assert.notStrictEqual(r.status, 0, '#336: sink-pr must refuse a live keep-open project');
+    assert.ok(/merge-sink-only/.test(r.stderr), '#336: sink-pr live refusal must say merge-sink-only, got: ' + r.stderr);
+  } finally {
+    fs.rmSync(rootA, { recursive: true, force: true });
+  }
+  const rootB = tempRoot('kw-gt-pr-keepopen-arch-');
+  try {
+    const adir = path.join(rootB, 'kaola-workflow', 'archive', 'issue-900b');
+    fs.mkdirSync(adir, { recursive: true });
+    fs.writeFileSync(path.join(adir, 'workflow-state.md'),
+      'status: closed\nstep: complete\nissue_number: 900\n\n## Sink\nsink: merge\nissue_action: comment_keep_open\n');
+    const r = spawnSync(process.execPath, [sinkPrScriptKO, '--project', 'issue-900b', '--branch', 'workflow/issue-900b', '--issue', '900'],
+      { cwd: rootB, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
+    assert.notStrictEqual(r.status, 0, '#336: sink-pr must refuse an archived keep-open project');
+    assert.ok(/merge-sink-only/.test(r.stderr), '#336: sink-pr archived refusal must say merge-sink-only, got: ' + r.stderr);
+    const cleanDir = path.join(rootB, 'kaola-workflow', 'issue-900c');
+    fs.mkdirSync(cleanDir, { recursive: true });
+    fs.writeFileSync(path.join(cleanDir, 'workflow-state.md'), 'status: active\n\n## Sink\nsink: pr\n');
+    const rc = spawnSync(process.execPath, [sinkPrScriptKO, '--project', 'issue-900c', '--branch', 'workflow/issue-900c', '--issue', '900'],
+      { cwd: rootB, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
+    assert.strictEqual(rc.status, 0, '#336: a non-keep-open sink-pr must still exit 0 OFFLINE, got: ' + rc.stderr);
+  } finally {
+    fs.rmSync(rootB, { recursive: true, force: true });
+  }
+}
+console.log('Gitea keep-open (#336) tests passed');
+
 console.log('Gitea sink tests passed');

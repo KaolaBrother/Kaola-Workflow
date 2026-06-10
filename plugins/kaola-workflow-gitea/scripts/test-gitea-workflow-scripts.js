@@ -2486,6 +2486,35 @@ function testClosureAuditArchiveClosedDrift() {
   }
 }
 
+// #336: a status:closed archive carrying issue_action: comment_keep_open must NOT be flagged
+// archive_closed (the --execute landmine that would delete the preserved roadmap source).
+function testClosureAuditKeepOpenExclusion() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-ca-keepopen-')));
+  try {
+    initGitRepo(tmp);
+    plantClosureRoadmapSource(tmp, 720);
+    const keepDir = path.join(tmp, 'kaola-workflow', 'archive', 'issue-720');
+    fs.mkdirSync(keepDir, { recursive: true });
+    fs.writeFileSync(path.join(keepDir, 'workflow-state.md'),
+      'status: closed\nstep: complete\nissue_iid: 720\nissue_action: comment_keep_open\n');
+    plantClosureRoadmapSource(tmp, 721);
+    const normalDir = path.join(tmp, 'kaola-workflow', 'archive', 'issue-721');
+    fs.mkdirSync(normalDir, { recursive: true });
+    fs.writeFileSync(path.join(normalDir, 'workflow-state.md'),
+      'status: closed\nstep: complete\nissue_iid: 721\n');
+    // OFFLINE: closed-set empty exercises only the archive_closed class (the landmine).
+    const result = runClosureAuditOffline([], tmp);
+    const sources = result.drift.stale_roadmap_sources;
+    assert(!sources.some(s => s.issue_number === 720),
+      '#336: keep-open archive (720) must NOT be flagged stale, got: ' + JSON.stringify(sources));
+    assert(sources.some(s => s.issue_number === 721 && s.reason === 'archive_closed'),
+      '#336: normal closed archive (721) must still be flagged archive_closed (regression), got: ' + JSON.stringify(sources));
+    console.log('testClosureAuditKeepOpenExclusion: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 function testClosureAuditDedupRoadmapAndArchive() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-ca-dedup-')));
   const binDir = path.join(tmp, 'bin');
@@ -2956,6 +2985,7 @@ testGiteaOfflineBypassesFailClosed();
 testClosureAuditOfflineRemoteClassesSkipped();
 testClosureAuditClosedRemoteRoadmapSource();
 testClosureAuditArchiveClosedDrift();
+testClosureAuditKeepOpenExclusion();
 testClosureAuditDedupRoadmapAndArchive();
 testClosureAuditArchiveOnlyNotProbed();
 testClosureAuditMirrorListsClosedIssues();
@@ -3921,6 +3951,69 @@ function testGiteaFinalizeRowMainDirect338() {
   console.log('testGiteaFinalizeRowMainDirect338 (#338): PASSED');
 }
 
+// #341: forge-neutrality guard for agent-profile authoring. Three behaviors are locked:
+//   (AC2) the forbidden-token scan loop runs BEFORE any file-count assertion, so a forge
+//         leak is never masked by a stale agent/command/skill count (the #328 latent defect);
+//   (AC1) a standalone `--forbidden-only <file>...` mode lets a forge-touching node verify its
+//         own changed files (exit 1 on a forbidden token, exit 0 on a clean file) without ever
+//         reaching the count assertions; usage/unknown-flag fails closed (exit 2).
+// The forbidden fixture token is built by string concatenation because the validator's own
+// plugin-script scan forbids a literal `\bglab\b` in any .js file (this test included).
+function testForbiddenOnly341() {
+  const validatorScript = path.join(__dirname, 'validate-kaola-workflow-gitea-contracts.js');
+  const validatorSrc = fs.readFileSync(validatorScript, 'utf8');
+  const idx = (needle) => validatorSrc.indexOf(needle);
+
+  // (AC2) order pin: the forbidden-token scan loop call must precede every count assertion.
+  const scanIdx = idx('assertNoForbidden(file);');
+  assert.ok(scanIdx !== -1, '#341 gt: validator must contain the assertNoForbidden(file); scan loop');
+  // Needles carry the `assert(` prefix so they match the real count assertions, not the
+  // `agentFiles.length === 13` substring inside the #341 scan-loop comment.
+  for (const countNeedle of [
+    'assert(commandFiles.length ===', 'assert(skillFiles.length ===', 'assert(agentFiles.length ==='
+  ]) {
+    const countIdx = idx(countNeedle);
+    assert.ok(countIdx !== -1, '#341 gt: validator must contain count assert ' + countNeedle);
+    assert.ok(scanIdx < countIdx,
+      '#341 gt: forbidden scan must precede count assert ' + countNeedle);
+  }
+
+  // (AC1) dirty file → exit 1, message naming a forbidden reference.
+  const root = tempRoot('kw-gt-forbidden-');
+  try {
+    const dirty = path.join(root, 'dirty.toml');
+    fs.writeFileSync(dirty, 'Use ' + 'g' + 'lab' + ' to list issues\n');
+    const dirtyRun = spawnSync(process.execPath, [validatorScript, '--forbidden-only', dirty], {
+      encoding: 'utf8'
+    });
+    assert.notStrictEqual(dirtyRun.status, 0, '#341 gt: forbidden token must exit non-zero');
+    assert.ok((dirtyRun.stderr || '').includes('contains forbidden reference'),
+      '#341 gt: forbidden-only must report "contains forbidden reference"');
+
+    // clean file → exit 0, sentinel. The #328-repaired issue-scout.toml doubles as a
+    // regression lock on the original leak. Root-relative path resolves from any cwd.
+    const cleanRun = spawnSync(process.execPath,
+      [validatorScript, '--forbidden-only', 'plugins/kaola-workflow-gitea/agents/issue-scout.toml'],
+      { encoding: 'utf8' });
+    assert.strictEqual(cleanRun.status, 0,
+      '#341 gt: clean file must exit 0 (stderr: ' + (cleanRun.stderr || '') + ')');
+    assert.ok((cleanRun.stdout || '').includes('forbidden-only check passed'),
+      '#341 gt: clean run must print the forbidden-only sentinel');
+
+    // usage refusals → exit 2 (fail closed): no files, and an unknown flag.
+    const noFiles = spawnSync(process.execPath, [validatorScript, '--forbidden-only'], {
+      encoding: 'utf8'
+    });
+    assert.strictEqual(noFiles.status, 2, '#341 gt: --forbidden-only with no files must exit 2');
+    const unknownFlag = spawnSync(process.execPath,
+      [validatorScript, '--forbidden' + '_only'], { encoding: 'utf8' });
+    assert.strictEqual(unknownFlag.status, 2, '#341 gt: unknown flag must exit 2 (fail closed)');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+  console.log('testForbiddenOnly341 (#341): PASSED');
+}
+
 testGiteaFinalizeRowMainDirect338();
 testInstallSchemaPruneManifest332Gitea();
 testGiteaPreflight266();
@@ -3929,6 +4022,7 @@ testGiteaTaskMirror266();
 testGiteaCompactResume266();
 testGiteaForeignArchiveBarrier261();
 testGiteaMirrorCleanCrossRef339();
+testForbiddenOnly341();
 
 testGiteaRoadmapInitIssueExclusiveAndUpdate()
   .then(() => {

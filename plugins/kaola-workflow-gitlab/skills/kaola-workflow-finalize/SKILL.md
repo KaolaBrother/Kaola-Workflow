@@ -47,17 +47,19 @@ choices, or ambiguity that blocks correctness.
 6. Refresh `kaola-workflow/ROADMAP.md`.
 7. Archive is performed atomically by `cmdFinalize` in step 8b below. Do not perform a manual copy or git mv here.
 
-   **Keep-open partial-close runs (#333).** If the Closure Decision Gate keeps the issue OPEN
-   (partial implementation, residual follow-ups), still archive through the SAME `finalize`
-   subcommand, adding `--keep-open`. It stamps the archived `workflow-state.md` terminal
-   (`last_result: closed_keep_open`, `issue_disposition: kept-open`, no active `next_command`) so a
-   later resume/audit cannot mistake the archived run for active work. Never archive by manual
-   `mv`/`git mv`. On a keep-open run, do not pass `--issue` to `sink-merge`/`sink-mr` (it would
-   close the issue). **Interim caveat until #336 lands:** `finalize` still removes
-   `kaola-workflow/.roadmap/issue-N.md` and regenerates `ROADMAP.md` without the still-open issue;
-   on a keep-open run, copy the roadmap source aside before `finalize --keep-open` and restore it +
-   regenerate the mirror (`kaola-gitlab-workflow-roadmap.js generate`) afterward (include both in
-   the keep-worktree commit). #336 replaces this with script-side retention.
+   **Keep-open partial-close terminal (#333/#336).** If the Closure Decision Gate keeps the issue
+   OPEN (partial implementation, residual follow-ups), the durable signal is one optional line in
+   the `## Sink` block: `issue_action: comment_keep_open` (default when absent: close), written by
+   the main session at the gate with user approval. Still archive through the SAME `finalize`
+   subcommand, adding `--keep-open` (the contractor adds `--keep-issue-open` to `cmdFinalize` when
+   the field is present). It stamps the archived `workflow-state.md` terminal
+   (`last_result: closed_keep_open`, `issue_disposition: kept-open`, no active `next_command`),
+   PRESERVES `kaola-workflow/.roadmap/issue-N.md`, and regenerates `ROADMAP.md` still listing #N
+   (closure invariant `keep-open-roadmap-preserved` enforces it). Never archive by manual
+   `mv`/`git mv`. **Keep-open is merge-sink-only**: `sink-merge --keep-issue-open` notes WITHOUT
+   closing; an MR/PR sink would auto-close via its `Closes #N` body, so Step 9 refuses a non-merge
+   sink (and the exit-3 MR/PR auto-pivot) under keep-open, and `sink-mr.js`/`sink-pr.js` refuse a
+   project carrying `issue_action: comment_keep_open`.
 8. Commit and push only approved files.
 
    ### Staging Guard
@@ -131,10 +133,15 @@ choices, or ambiguity that blocks correctness.
    [ -z "$SINK_ISSUE" ] && SINK_ISSUE=$(grep '^issue_number:' "$SINK_STATE_FILE" | awk '{print $2}')
    SINK_ISSUE_FLAG=""
    [ -n "$SINK_ISSUE" ] && [ "$SINK_ISSUE" != "unset" ] && SINK_ISSUE_FLAG="--issue $SINK_ISSUE"
+   # #336: keep-open partial-close terminal — issue_action defaults to close when absent.
+   SINK_ISSUE_ACTION=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | grep '^issue_action:' | awk '{print $2}')
+   SINK_ISSUE_ACTION="${SINK_ISSUE_ACTION:-close}"
+   SINK_KEEP_OPEN_FLAG=""
+   [ "$SINK_ISSUE_ACTION" = "comment_keep_open" ] && SINK_KEEP_OPEN_FLAG="--keep-issue-open"
    if [ "$SINK_KIND" = "merge" ]; then
      (cd "$ACTIVE_WORKTREE_PATH" && node "$claim_script" finalize \
        --project "$KAOLA_PROJECT" \
-       --keep-worktree)
+       --keep-worktree $SINK_KEEP_OPEN_FLAG)
    fi
    ```
 
@@ -171,14 +178,26 @@ choices, or ambiguity that blocks correctness.
    : "${SINK_BRANCH:?SINK_BRANCH must be captured before archive}"
    : "${SINK_KIND:=merge}"
    : "${SINK_ISSUE_FLAG:=}"
+   : "${SINK_KEEP_OPEN_FLAG:=}"
+   # #336: keep-open is merge-sink-only — refuse an MR/PR sink before dispatch.
+   if [ "$SINK_KIND" != "merge" ] && [ -n "$SINK_KEEP_OPEN_FLAG" ]; then
+     echo "BLOCKED: issue_action: comment_keep_open is only supported on the merge sink. MR/PR sinks close via the merged MR; switch sink: merge or remove issue_action." >&2
+     exit 1
+   fi
    case "$SINK_KIND" in
      mr|pr)
        node "$scripts_dir/kaola-gitlab-workflow-sink-mr.js" --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG --project "$KAOLA_PROJECT"
        ;;
      merge|*)
-       node "$scripts_dir/kaola-gitlab-workflow-sink-merge.js" --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG --project "$KAOLA_PROJECT"
+       node "$scripts_dir/kaola-gitlab-workflow-sink-merge.js" --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG $SINK_KEEP_OPEN_FLAG --project "$KAOLA_PROJECT"
        _SINK_MERGE_EXIT=$?
        if [ "$_SINK_MERGE_EXIT" -eq 3 ]; then
+         # #336: keep-open is merge-sink-only — never auto-pivot to an MR sink (its Closes #N body
+         # would close the kept-open issue; watch-mr would delete the preserved roadmap source).
+         if [ -n "$SINK_KEEP_OPEN_FLAG" ]; then
+           echo "BLOCKED: sink-merge exited 3 (merge-impossible) on a keep-open run. Keep-open is merge-sink-only: the MR fallback body closes the issue on merge and watch-mr would delete the preserved roadmap source. Remediate the merge blocker (see .cache/sink-fallback.json) and re-run sink-merge; do not pivot to an MR sink." >&2
+           exit 1
+         fi
          node "$scripts_dir/kaola-gitlab-workflow-claim.js" sink-fallback \
            --project "$KAOLA_PROJECT"
          node "$scripts_dir/kaola-gitlab-workflow-sink-mr.js" --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG --project "$KAOLA_PROJECT"

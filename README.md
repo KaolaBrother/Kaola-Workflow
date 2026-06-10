@@ -938,6 +938,10 @@ make the next command unsafe.
 Hook installation is covered in the [Hook policy](#hook-policy) section above —
 do not hand-merge entries into `~/.claude/settings.json`.
 
+## Keep-open partial-close sinks
+
+When a run is complete as a cycle but the issue must **stay open** (partial implementation, residual follow-ups), the main session writes `issue_action: comment_keep_open` into the `## Sink` block at the Closure Decision Gate (issue #336). Finalization then runs the full mechanical sink with **no manual FF-push cleanup**: `finalize --keep-open`/`--keep-issue-open` preserves the per-issue roadmap source (instead of deleting it) and regenerates `ROADMAP.md` still listing `#N`; `sink-merge --keep-issue-open` merges, pushes, removes the worktree/branch, and releases the claim exactly like a normal close, but posts a keep-open comment instead of closing the issue. Keep-open is **merge-sink-only** — a PR/MR sink would auto-close the issue via its `Closes #N` body, so the PR/MR sink (including the exit-3 merge-impossible auto-pivot) is refused with a typed BLOCKED, and the `sink-pr`/`sink-mr` scripts themselves refuse a project carrying `issue_action: comment_keep_open`.
+
 ## Multi-issue bundle lane (adaptive-only)
 
 Issue #328 adds an additive bundle lane that lets N same-scope issues share one worktree, one branch, one `workflow-plan.md`, and one finalization that closes all N issues together. The single-issue path is byte-unchanged.

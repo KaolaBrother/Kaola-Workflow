@@ -45,6 +45,19 @@ The bundle lane (`--target-issues` / `KAOLA_TARGET_ISSUES` / `issue-scout`) span
 
 **Agent-set deltas carry an exact-match registration surface (#340).** Adding or removing an agent profile (root `agents/<name>.md` or a plugin `agents/<name>.toml`) breaks exact-match registries and by-name dispatch registrations that are **keyed on no symbol of the new file** — so a symbol-grep (#306) cannot find them. The full 22-path surface: the three sibling edition profiles; the three `config/agents.toml` codex-dispatch templates (the `[agents.<name>]` table — without it the agent is undispatchable in the codex/gitlab/gitea runtimes even though the profile installs); `validate-vendored-agents.js` (`localAgents` exact listing); `install.sh` **and** `uninstall.sh` `REQUIRED_AGENTS` (a missing uninstall name orphans the installed agent); `resolve-agent-model.js` (×4, byte-identical); the plan-validator `CANONICAL_ROLES` (×4); the gitlab/gitea contract-validator agent counts; and the two forge `test-*-workflow-scripts.js` counts. The adaptive plan validator refuses an addition omitting any of these at freeze (`agent-registration gap`); removals are not machine-detected on the plan side but the derived config↔dir and install↔uninstall parity guards in the contract validators red the affected chain. This is itself a cross-edition diff.
 
+## Forge-Neutral Plugin Agent Profiles (issue #341)
+
+- Plugin agent/command/skill prose is **forge-neutral**: never name a forge-specific CLI
+  binary (`gh`/`glab`), a forge brand, or forge-specific request nouns — write "the forge
+  CLI" / "the forge". The gitlab/gitea contract validators enforce this (`assertNoForbidden`),
+  scanning every plugin command/skill/hook/agent/config file BEFORE any count assertion.
+- The plugin role-agent profiles (`plugins/*/agents/*.toml`) are byte-identical mirrors across
+  the three plugin editions. The canonical spec for a new agent toml: name no CLI; mirror the
+  existing agents' edition-neutral style.
+- A forge-touching node verifies its changed files without the full chains (counts may be
+  transiently stale mid-run):
+  `node plugins/kaola-workflow-{gitlab,gitea}/scripts/validate-kaola-workflow-{gitlab,gitea}-contracts.js --forbidden-only <file>...`
+
 ## Release
 
 - Before merging a version bump, create the matching local git tag (`git tag kaola-workflow--v<version> <sha>`); `npm test` enforces the tag exists (unless `KAOLA_WORKFLOW_OFFLINE=1`).

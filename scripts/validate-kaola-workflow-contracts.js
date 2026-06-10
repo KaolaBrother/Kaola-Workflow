@@ -155,6 +155,10 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'Documen
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'SINK_STATE_FILE="kaola-workflow/${KAOLA_PROJECT}/workflow-state.md"');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, '--keep-worktree');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'metadata captured before archive');
+// #336: keep-open partial-close sink lane (codex SKILL.md is the contractor seam — no command file).
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'issue_action');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, '--keep-issue-open');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'merge-sink-only');
 // #277 M3: contractor-dispatch HANDLE lock (Codex edition). Codex has no command file — the
 // finalize SKILL.md is the contractor seam. The node-4 rewrite made the contractor the SOLE HOME
 // of the mechanical finalization and requires the session to delegate it (inline only on a logged
@@ -485,6 +489,9 @@ assertConcept(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'adaptive
   // #335 anti-drift: pin the mechanical main→worktree project-folder mirror step.
   'mirror-project'
 ]);
+// #341: forge-neutral agent-profile authoring guidance pinned (planner toml + plan-run SKILL).
+assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'forge-neutral');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '--forbidden-only');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'workflow_path: adaptive');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'disjointWriteSets');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'readPlanNodes');

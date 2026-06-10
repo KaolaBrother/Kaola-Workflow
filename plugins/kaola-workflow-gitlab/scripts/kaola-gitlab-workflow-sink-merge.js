@@ -36,6 +36,7 @@ function parseArgs(argv) {
     if (argv[i] === '--branch' && argv[i + 1]) { args.branch = argv[++i]; continue; }
     if (argv[i] === '--issue' && argv[i + 1]) { args.issue = parseInt(argv[++i], 10); continue; }
     if (argv[i] === '--project' && argv[i + 1]) { args.project = argv[++i]; continue; }
+    if (argv[i] === '--keep-issue-open') { args.keepIssueOpen = true; continue; } // #336
   }
   return args;
 }
@@ -299,12 +300,33 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus) {
   let branchRemoved = 'failed';
   const worktreeRemoved = wtRemovedStatus || 'failed';
 
-  // Step 8 — Close issue (GitLab-specific: forge API)
+  // Step 8 — Close issue (GitLab-specific: forge API) — or, on a keep-open run, note WITHOUT closing
+  // #336: keep-open consistency guard — never close an issue whose archived state says keep-open,
+  // even when the flag was not passed. The FF merge already put the archived state on main's
+  // HEAD/working tree, which is exactly where postMergeCleanup executes; an accidental close of a
+  // keep-open issue is the one irreversible step, hence defense-in-depth.
+  let keepIssueOpen = !!args.keepIssueOpen;
+  if (!keepIssueOpen && args.issue != null) {
+    try {
+      const archivedState = fs.readFileSync(path.join(mainRoot, 'kaola-workflow', 'archive', args.project, 'workflow-state.md'), 'utf8');
+      if (/^issue_action:\s*comment_keep_open\s*$/m.test(archivedState)) {
+        keepIssueOpen = true;
+        process.stderr.write('sink-merge: honoring archived issue_action: comment_keep_open (flag not passed) — issue ' + args.issue + ' will NOT be closed\n');
+      }
+    } catch (_) {}
+  }
+  if (keepIssueOpen) remoteIssueClosed = 'kept_open';
   if (!OFFLINE && args.issue != null) {
     const root = mainRoot; // mainRoot is used as root context
     const forgeOpts = { execOptions: { cwd: mainRoot } };
-    try { forge.createIssueNote(readProjectInfo(root, args.project), args.issue, 'Merged via GitLab direct merge sink.', forgeOpts); } catch (_) {}
-    try { forge.closeIssue(args.issue, forgeOpts); remoteIssueClosed = 'closed'; } catch (e) { remoteIssueClosed = 'failed'; process.stderr.write('sink-merge: WARNING: issue close failed for ' + args.issue + '; receipt.remote_issue_closed=failed. Manually run: glab issue close ' + args.issue + '\n'); }
+    if (keepIssueOpen) {
+      // #336: mechanical keep-open note. Body contains no close/fix/resolve #N substring.
+      try { forge.createIssueNote(readProjectInfo(root, args.project), args.issue, 'Merged via GitLab direct merge sink. Issue intentionally kept open (partial-close terminal); residual scope remains tracked here.', forgeOpts); } catch (_) {}
+    } else {
+      try { forge.createIssueNote(readProjectInfo(root, args.project), args.issue, 'Merged via GitLab direct merge sink.', forgeOpts); } catch (_) {}
+      try { forge.closeIssue(args.issue, forgeOpts); remoteIssueClosed = 'closed'; } catch (e) { remoteIssueClosed = 'failed'; process.stderr.write('sink-merge: WARNING: issue close failed for ' + args.issue + '; receipt.remote_issue_closed=failed. Manually run: glab issue close ' + args.issue + '\n'); }
+    }
+    // Claim-label removal runs in BOTH modes (claim release is wanted on keep-open).
     try { forge.updateIssue(args.issue, Object.assign({ unlabels: [forge.CLAIM_LABEL] }, forgeOpts)); claimLabelRemoved = 'removed'; } catch (_) { claimLabelRemoved = 'failed'; }
   }
   // Step 9 — Delete branch
@@ -317,7 +339,10 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus) {
   const archiveDest = path.join(mainRoot, 'kaola-workflow', 'archive', args.project);
   const archiveField = fs.existsSync(archiveDest) ? 'closed' : 'failed';
   const roadmapSourceFile = path.join(mainRoot, 'kaola-workflow', '.roadmap', 'issue-' + args.issue + '.md');
-  const roadmapSourceField = !fs.existsSync(roadmapSourceFile) ? 'absent' : 'failed';
+  // #336: keep-open inverts the existence test — the source MUST survive ('kept'), else 'failed'.
+  const roadmapSourceField = keepIssueOpen
+    ? (fs.existsSync(roadmapSourceFile) ? 'kept' : 'failed')
+    : (!fs.existsSync(roadmapSourceFile) ? 'absent' : 'failed');
 
   const receipt = buildClosureReceipt(args.project, args.issue, {
     archive: archiveField,
@@ -350,13 +375,17 @@ function runDirectMerge(args, opts) {
   );
   assert(args.project && isSafeName(args.project), '--project must be a safe folder name');
   if (args.issue != null) assert(Number.isFinite(args.issue) && args.issue > 0, '--issue must be a positive integer');
+  // #336: keep-open is meaningless without an issue to keep open.
+  assert(!args.keepIssueOpen || args.issue != null,
+    'sink-merge: --keep-issue-open requires --issue N (there is no issue to keep open)');
   const root = options.root || getRoot();
   assert(finalValidationPassed(root, args.project), 'Final validation evidence is required before direct merge sink runs');
 
   if (options.skipGit) {
     // Legacy path (existing tests use this)
     fastForwardMain(args, options);
-    const closeResult = closeLinkedIssue(root, args.project, args.issue, options);
+    // #336: keep-open — the legacy direct path must not close the linked issue either.
+    const closeResult = args.keepIssueOpen ? null : closeLinkedIssue(root, args.project, args.issue, options);
     return { merged: true, close: closeResult };
   }
 

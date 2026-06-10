@@ -91,6 +91,11 @@ function archiveClosedIssues(root) {
       content = fs.readFileSync(path.join(archiveBase, entry.name, 'workflow-state.md'), 'utf8');
     } catch (_) { continue; }
     if (field(content, 'status') !== 'closed') continue;
+    // #336: a keep-open partial-close archive deliberately preserves its roadmap source; it
+    // must never feed the archive_closed stale-source class (--execute would delete it).
+    // 'closed_remote' still wins: if the kept-open issue is later genuinely closed on the
+    // forge, that source becomes legitimately stale and the audit may remove it.
+    if (field(content, 'issue_action') === 'comment_keep_open') continue;
     // D4: Gitea archives write issue_iid; fall back to issue_number for safety.
     const n = parseInt(field(content, 'issue_iid') || field(content, 'issue_number'), 10);
     if (Number.isInteger(n) && n > 0) set.add(n);

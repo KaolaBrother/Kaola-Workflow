@@ -137,6 +137,11 @@ SINK_KIND=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | grep '^sink:' | awk '{print 
 SINK_KIND=${SINK_KIND:-merge}
 SINK_ISSUE_FLAG=""
 [ -n "$SINK_ISSUE" ] && [ "$SINK_ISSUE" != "unset" ] && SINK_ISSUE_FLAG="--issue $SINK_ISSUE"
+# #336: keep-open partial-close terminal — issue_action defaults to close when absent.
+SINK_ISSUE_ACTION=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | grep '^issue_action:' | awk '{print $2}')
+SINK_ISSUE_ACTION=${SINK_ISSUE_ACTION:-close}
+SINK_KEEP_OPEN_FLAG=""
+[ "$SINK_ISSUE_ACTION" = "comment_keep_open" ] && SINK_KEEP_OPEN_FLAG="--keep-issue-open"
 ```
 
 If `SINK_KIND` is `merge`, run `cmdFinalize` from the linked worktree context. This must run AFTER Step 8a (artifact mirror) and BEFORE Step 8 (git add/commit), because the rename needs to be detected by `git add`:
@@ -148,6 +153,7 @@ if [ "$SINK_KIND" = "merge" ]; then
   (cd "$ACTIVE_WORKTREE_PATH" && node "$CLAIM_JS" finalize \
     --project "{project}" \
     --keep-worktree \
+    $SINK_KEEP_OPEN_FLAG \
     --attest-contractor-spawn)
 fi
 ```
@@ -158,9 +164,9 @@ dispatched into a linked worktree) into `.cache/dispatch-log.jsonl` so the closu
 `finalize_contractor_attested: attested` (#338). Only the genuinely-dispatched contractor running
 this Step 8b passes it; the main session must NEVER pass it when finalize is run inline.
 
-When it runs, `cmdFinalize` atomically writes `status: closed` + `step: complete` to `workflow-state.md`, terminal-stamps the archived state (#333: neutralizes `next_command`/`next_skill` to `none (archived)`, refreshes the Planning Evidence `plan_hash` from the final plan + the `## Last Updated` line, and appends a `## Closure` receipt block), and renames `kaola-workflow/{project}/` → `kaola-workflow/archive/{project}/` in the linked worktree. The rename and the `## Closure` append are included in the Step 8 commit via git rename detection (the commit choreography runs commit-last so the append lands inside the `chore: archive` commit). Append `--keep-open` to the finalize command when the orchestrator's dispatch declares the closure decision as keep-open (partial-close) — it stamps `last_result: closed_keep_open` + `issue_disposition: kept-open` and skips the remote close probe; apply the keep-open roadmap-source preserve/restore caveat from the finalize procedure. `sink-merge` will refuse with exit 1 if `kaola-workflow/{project}/workflow-state.md` is still present on the branch HEAD when it runs; this is a safety guard that ensures finalize always precedes the merge.
+When it runs, `cmdFinalize` atomically writes `status: closed` + `step: complete` to `workflow-state.md`, terminal-stamps the archived state (#333: neutralizes `next_command`/`next_skill` to `none (archived)`, refreshes the Planning Evidence `plan_hash` from the final plan + the `## Last Updated` line, and appends a `## Closure` receipt block), and renames `kaola-workflow/{project}/` → `kaola-workflow/archive/{project}/` in the linked worktree. The rename and the `## Closure` append are included in the Step 8 commit via git rename detection (the commit choreography runs commit-last so the append lands inside the `chore: archive` commit). When `SINK_ISSUE_ACTION` is `comment_keep_open` (keep-open partial-close terminal), `$SINK_KEEP_OPEN_FLAG` adds `--keep-issue-open` to the finalize command — it stamps `last_result: closed_keep_open` + `issue_disposition: kept-open`, skips the remote close probe, and PRESERVES the per-issue roadmap source (no preserve/restore caveat needed: `archiveProjectDir` skips the unlink, so stage `kaola-workflow/.roadmap/` + `ROADMAP.md` at Step 7 without expecting a deletion). `sink-merge` will refuse with exit 1 if `kaola-workflow/{project}/workflow-state.md` is still present on the branch HEAD when it runs; this is a safety guard that ensures finalize always precedes the merge.
 
-**Crash recovery.** If the process crashes after `cmdFinalize` archives the folder but before Step 8's `git commit` runs, the finalize is resumable. Run `node "$CLAIM_JS" resume --project {project} --json` from the worktree: a result of `reason:'finalize_incomplete'` confirms the archive dir exists but is uncommitted. Re-run `cmdFinalize --keep-worktree --attest-contractor-spawn` (same command — it detects `source-missing` and stages the already-archived dir), then continue at Step 7.
+**Crash recovery.** If the process crashes after `cmdFinalize` archives the folder but before Step 8's `git commit` runs, the finalize is resumable. Run `node "$CLAIM_JS" resume --project {project} --json` from the worktree: a result of `reason:'finalize_incomplete'` confirms the archive dir exists but is uncommitted. Re-run `cmdFinalize --keep-worktree --attest-contractor-spawn` (same command — it detects `source-missing` and stages the already-archived dir; re-add `--keep-issue-open` when `SINK_ISSUE_ACTION` is `comment_keep_open`, since the live state is gone and state-field derivation is unavailable), then continue at Step 7.
 
 If `SINK_KIND` is `pr`: skip this step. Proceed to Step 8 (commit). The active folder remains open. `sink-pr.js` (Step 9) writes the PR URL into the active folder and then immediately creates a deliberate metadata follow-up commit (`chore: record PR metadata for {project}`) so the worktree is clean after sink. `watch-pr` (on the next `/workflow-next` startup) detects the merged or closed PR and archives the folder automatically.
 
@@ -175,6 +181,8 @@ Stage both the deleted per-issue file and the regenerated `ROADMAP.md` together 
 ```bash
 git add kaola-workflow/.roadmap/issue-N.md kaola-workflow/ROADMAP.md
 ```
+
+On a keep-open finalize (`SINK_ISSUE_ACTION` is `comment_keep_open`) the per-issue source is PRESERVED rather than deleted, so stage the roadmap directory + `ROADMAP.md` and do not expect a deletion (the same `git add` works — the file is modified/unchanged, not removed).
 
 The `<!-- generated by scripts/kaola-workflow-roadmap.js — do not edit -->` comment at the top of `ROADMAP.md` signals that the file is machine-managed.
 
