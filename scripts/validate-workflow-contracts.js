@@ -529,6 +529,12 @@ assert(exists('scripts/kaola-workflow-plan-validator.js'), 'adaptive plan valida
 assert(exists('scripts/kaola-workflow-adaptive-schema.js'), 'adaptive schema module is missing');
 assert(exists('scripts/kaola-workflow-adaptive-node.js'), '#272 adaptive-node aggregator missing');
 assertIncludes('scripts/kaola-workflow-adaptive-node.js', 'would_orphan_in_progress'); // #343 mid-gate reopen
+// #338: anti-drift pins — the finalize sink row is main-session-direct (not subagent-invoked),
+// and the contractor self-attest back-fill flag is wired through claim.js + the contractor profile.
+assertIncludes('scripts/kaola-workflow-adaptive-node.js', 'main-session-direct');
+assertIncludes('commands/kaola-workflow-plan-run.md', 'main-session-direct');
+assertIncludes('scripts/kaola-workflow-claim.js', '--attest-contractor-spawn');
+assertIncludes('agents/contractor.md', '--attest-contractor-spawn');
 assertIncludes('install.sh', 'kaola-workflow-plan-validator.js');
 assertIncludes('install.sh', '--enable-adaptive');
 // #255: the adaptive-handoff script must be in install.sh's per-edition SUPPORT_SCRIPT_NAMES
@@ -644,5 +650,27 @@ assertIncludes('install.sh', 'kaola-workflow-parallel-batch.js');
 assertIncludes('commands/kaola-workflow-plan-run.md', 'frontier unit');
 // #281: efficient-DAG instruction in workflow-planner profile (added by planner-profile node)
 assertIncludes('agents/workflow-planner.md', 'EFFICIENT DAGs');
+
+// #340: registration-surface + forge-port parity checks and their authoring/dispatch prose
+assertIncludes('scripts/kaola-workflow-plan-validator.js', 'agent-registration gap');
+assertIncludes('scripts/kaola-workflow-plan-validator.js', 'forge-port ordering gap');
+assertIncludes('agents/workflow-planner.md', 'full accumulated root diff');
+assertIncludes('agents/workflow-planner.md', 'registration surface');
+assertIncludes('commands/kaola-workflow-plan-run.md', 'full accumulated root diff');
+
+// #340 derived parity guard (enumeration-free): uninstall.sh REQUIRED_AGENTS must match install.sh
+// exactly, or uninstalling orphans an installed managed agent. Both lists are extracted from the
+// single-line array literal — no hardcoded names/counts, so a future agent addition needs no edit here.
+{
+  const requiredAgentsList = (sh, label) => {
+    const m = /REQUIRED_AGENTS=\(([^)]*)\)/.exec(read(sh));
+    assert(m, label + ' must declare a REQUIRED_AGENTS=(...) array (#340)');
+    return (m[1].match(/"([^"]+)"/g) || []).map(s => s.slice(1, -1));
+  };
+  const installAgents = requiredAgentsList('install.sh', 'install.sh');
+  const uninstallAgents = requiredAgentsList('uninstall.sh', 'uninstall.sh');
+  assert(JSON.stringify(installAgents) === JSON.stringify(uninstallAgents),
+    'uninstall.sh REQUIRED_AGENTS must match install.sh (#340) — a missing name orphans the installed agent on uninstall');
+}
 
 console.log('Workflow contract validation passed');

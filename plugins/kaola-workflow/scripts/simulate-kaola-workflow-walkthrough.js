@@ -548,6 +548,35 @@ function testCodexAdaptiveCuratedAndBarrier() {
       const rb2 = runVal([planPath, '--record-base', '--node-id', 'a', '--json'], grepo);
       assert(rb2.status === 0 && JSON.parse(rb2.stdout).reused === true, 'codex #239: re-record must reuse the baseline, got ' + rb2.stdout);
     } finally { cu(grepo); } }
+  // ---- #340 freeze-time write-set completeness (CODEX byte copy) ----
+  { const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-codex-340-'));
+    try {
+      const planAt = (rows) => { const p = path.join(tmp, 'plan.md'); fs.writeFileSync(p, ['# Plan', '', '## Meta', 'labels: enhancement', '', '## Nodes', '', '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|', ...rows, ''].join('\n')); return p; };
+      // A1-shaped: agent add omitting the surface, anchor planted -> refuse naming the surface.
+      fs.mkdirSync(path.join(tmp, 'scripts'), { recursive: true });
+      fs.writeFileSync(path.join(tmp, 'scripts', 'validate-vendored-agents.js'), '// anchor\n');
+      let r = runVal([planAt([
+        '| scout | implementer | ex | agents/new-scout.md | 1 | sequence |',
+        '| ex | code-explorer | — | — | 1 | sequence |',
+        '| rv | code-reviewer | scout | — | 1 | sequence |',
+        '| done | finalize | rv | — | 1 | sequence |',
+      ]), '--json'], tmp);
+      let out = JSON.parse(r.stdout);
+      assert(out.result === 'refuse' && /agent-registration gap:.*validate-vendored-agents\.js/.test((out.errors || []).join('\n')) && /agent-registration gap:.*uninstall\.sh/.test((out.errors || []).join('\n')),
+        'codex #340 A1: agent add omitting the surface must refuse naming validate-vendored-agents.js + uninstall.sh, got ' + r.stdout);
+      // A4-shaped: a port parallel to its root edit -> refuse (forge-port ordering gap; fs-free).
+      r = runVal([planAt([
+        '| ex | code-explorer | — | — | 1 | sequence |',
+        '| rootedit | tdd-guide | ex | scripts/kaola-workflow-claim.js, plugins/kaola-workflow/scripts/kaola-workflow-claim.js | 1 | sequence |',
+        '| port | implementer | ex | plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js | 1 | sequence |',
+        '| rv | code-reviewer | rootedit,port | — | 1 | sequence |',
+        '| done | finalize | rv | — | 1 | sequence |',
+      ]), '--json'], tmp);
+      out = JSON.parse(r.stdout);
+      assert(out.result === 'refuse' && /forge-port ordering gap/.test((out.errors || []).join('\n')),
+        'codex #340 A4: a port parallel to its root edit must refuse with forge-port ordering gap, got ' + r.stdout);
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
   console.log('Codex adaptive #238/#239 coverage: PASSED');
 }
 

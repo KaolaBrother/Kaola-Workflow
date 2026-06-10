@@ -142,6 +142,24 @@ assert(hookFiles.some(file => file.endsWith('kaola-workflow-phantom-advisor.sh')
 assert(agentFiles.length === 14, 'expected 14 Gitea agent profiles, got ' + agentFiles.length);
 assert(exists(pluginRoot + '/config/agents.toml'), 'Gitea agents config missing');
 
+// #340 derived parity guard (enumeration-free): the dispatch config/agents.toml must register
+// exactly the agent profiles present in agents/ — both directions. A profile copied without its
+// [agents.<name>] table is undispatchable (the #328 issue-scout miss); a table without its profile
+// dangles. Derives both sides (no hardcoded names/counts), so a future agent addition never edits it.
+{
+  const configNames = new Set();
+  const reCfg = /^\[agents\.([a-z0-9-]+)\]/gm;
+  let cm;
+  while ((cm = reCfg.exec(read(pluginRoot + '/config/agents.toml'))) !== null) configNames.add(cm[1]);
+  const dirNames = new Set(agentFiles.map(f => path.basename(f, '.toml')));
+  const missingTables = [...dirNames].filter(n => !configNames.has(n)).sort();
+  const danglingTables = [...configNames].filter(n => !dirNames.has(n)).sort();
+  assert(missingTables.length === 0 && danglingTables.length === 0,
+    'config/agents.toml must register exactly the agent profiles in agents/ (#340)' +
+    (missingTables.length ? ' — profiles missing a [agents.*] table: ' + missingTables.join(', ') : '') +
+    (danglingTables.length ? ' — [agents.*] tables with no profile: ' + danglingTables.join(', ') : ''));
+}
+
 for (const file of [...commandFiles, ...skillFiles, ...hookFiles, ...agentFiles, pluginRoot + '/config/agents.toml']) {
   assertNoForbidden(file);
 }
@@ -532,6 +550,20 @@ assertNotIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-plan-validator.js'
 // #343: mid-gate reopen fold + orphan guard must be carried by the Gitea adaptive-node port
 // (not byte-checked by validate-script-sync; this pin is the anti-drift guard).
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-adaptive-node.js', 'would_orphan_in_progress');
+
+// #338: anti-drift pins — finalize sink row main-session-direct + contractor self-attest back-fill.
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-adaptive-node.js', 'main-session-direct');
+assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'main-session-direct');
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', '--attest-contractor-spawn');
+assertIncludes(pluginRoot + '/agents/contractor.toml', '--attest-contractor-spawn');
+
+// #340: registration-surface + forge-port parity checks and their authoring/dispatch prose
+// (Gitea edition surfaces). A dropped token reds this chain at the contract-validator step.
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-plan-validator.js', 'agent-registration gap');
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-plan-validator.js', 'forge-port ordering gap');
+assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'full accumulated root diff');
+assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'registration surface');
+assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'full accumulated root diff');
 
 // issue #290 / #288: pin the machine-readable findings-emission contract presence in all
 // reviewer agent bodies (Gitea edition — .toml bodies). Removing the emission section from

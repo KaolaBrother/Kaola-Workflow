@@ -3906,6 +3906,75 @@ function testGitlabMirrorCleanCrossRef339() {
   }
 }
 
+// #338 (AC1): the finalize SINK node must be certified `main-session-direct`, not
+// `subagent-invoked` — the plan-run contract performs the sink bookkeeping inline, with no Agent
+// dispatch, so a `subagent-invoked` row would falsely certify a delegation that never happened.
+function testGitlabFinalizeRowMainDirect338() {
+  const adaptiveNode = require('./kaola-gitlab-workflow-adaptive-node');
+  const plan = [
+    '# Workflow Plan — gl-338',
+    '', '## Meta', 'labels: enhancement', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+    '| impl | implementer | — | src/x.js | 1 | sequence |',
+    '| review | code-reviewer | impl | — | 1 | sequence |',
+    '| done | finalize | review | CHANGELOG.md | 1 | sequence |',
+    '', '## Node Ledger', '',
+    '| id | status |', '|---|---|',
+    '| impl | complete |',
+    '| review | complete |',
+    '| done | in_progress |',
+    ''
+  ].join('\n') + '\n';
+
+  const cachePath = '/fake/kaola-workflow/gl-338/.cache/done.md';
+  const cacheContent = 'finalize bookkeeping: docs + state recorded.';
+  let planContent = plan;
+  const written = {};
+
+  const shellStub = function(scriptPath, args) {
+    const base = path.basename(scriptPath);
+    const argsArr = args || [];
+    if (base.includes('commit-node') && !argsArr.includes('--start')) {
+      return { exitCode: 0, result: 'ok', mode: 'per-node', nodeId: 'done', overallOk: true,
+        selectorCheck: { isSelector: false, ok: true } };
+    }
+    if (base.includes('next-action')) {
+      return { exitCode: 0, result: 'ok', readySet: [], nextNode: null, allDone: true };
+    }
+    return { exitCode: 1 };
+  };
+
+  const result = adaptiveNode.runCloseAndOpenNext({
+    planPath: '/fake/kaola-workflow/gl-338/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/gl-338/workflow-state.md',
+    project: 'gl-338',
+    nodeId: 'done',
+    shell: shellStub,
+    readFile: (fpath) => {
+      if (fpath.endsWith('workflow-plan.md')) return planContent;
+      if (fpath === cachePath) return cacheContent;
+      throw new Error('ENOENT: ' + fpath);
+    },
+    writeFile: (fpath, content) => {
+      written[fpath] = content;
+      if (fpath.endsWith('workflow-plan.md')) planContent = content;
+    },
+    cacheExists: (fpath) => fpath === cachePath,
+  });
+
+  assert.strictEqual(result.result, 'ok', '#338 gl: finalize-sink close result===ok');
+  assert.strictEqual(result.allDone, true, '#338 gl: allDone===true after the sink closes');
+  const writtenPlan = written['/fake/kaola-workflow/gl-338/workflow-plan.md'];
+  assert.ok(writtenPlan && writtenPlan.includes('| finalize (done) | main-session-direct |'),
+    '#338 gl: finalize sink row must be main-session-direct');
+  assert.ok(!writtenPlan.includes('| finalize (done) | subagent-invoked'),
+    '#338 gl: finalize sink row must NOT be falsely certified subagent-invoked');
+  console.log('testGitlabFinalizeRowMainDirect338 (#338): PASSED');
+}
+
+testGitlabFinalizeRowMainDirect338();
 testInstallSchemaPruneManifest332Gitlab();
 testGitlabPreflight266();
 testGitlabPreflight332();

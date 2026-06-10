@@ -343,6 +343,49 @@ function testGitlabAdaptive() {
       '| d | finalize | r | — | 1 | sequence |',
     ], 'enhancement').result, 'in-grammar', 'gitlab A3 control: independent branches with different files in the same area stay in-grammar');
 
+    // issue #340: the two freeze-time write-set completeness checks on the GITLAB edition-named
+    // port (carries pre-existing #294 drift — port-level asserts are load-bearing). Mech 2 (A4/A5)
+    // is a pure graph check (no anchor); mech 1 (A1/A2) is anchor-gated to the repo.
+    // A4 (mech-2 refusal): a port parallel to its root-editing node must refuse.
+    assert.strictEqual(gateVal([
+      '| e | code-explorer | — | — | 1 | sequence |',
+      '| rootedit | tdd-guide | e | scripts/kaola-workflow-claim.js | 1 | sequence |',
+      '| port | implementer | e | plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js | 1 | sequence |',
+      '| rv | code-reviewer | rootedit,port | — | 1 | sequence |',
+      '| d | finalize | rv | — | 1 | sequence |',
+    ], 'enhancement').result, 'refuse', 'gitlab #340 A4: a port parallel to its root edit must refuse (forge-port ordering gap)');
+    // A5 (mech-2 positive): the same port downstream of all its root edits is in-grammar.
+    assert.strictEqual(gateVal([
+      '| e | code-explorer | — | — | 1 | sequence |',
+      '| rootedit | tdd-guide | e | scripts/kaola-workflow-claim.js | 1 | sequence |',
+      '| port | implementer | rootedit | plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js | 1 | sequence |',
+      '| rv | code-reviewer | port | — | 1 | sequence |',
+      '| d | finalize | rv | — | 1 | sequence |',
+    ], 'enhancement').result, 'in-grammar', 'gitlab #340 A5: a port downstream of all its root edits is in-grammar');
+    // A1 (mech-1 refusal): with the anchor planted, an agent add omitting the surface must refuse
+    // naming the surface; A2: without the anchor the check is inert (in-grammar).
+    {
+      fs.mkdirSync(path.join(tmp, 'scripts'), { recursive: true });
+      fs.writeFileSync(path.join(tmp, 'scripts', 'validate-vendored-agents.js'), '// anchor\n');
+      const a1 = gateVal([
+        '| scout | implementer | e | agents/new-scout.md | 1 | sequence |',
+        '| e | code-explorer | — | — | 1 | sequence |',
+        '| rv | code-reviewer | scout | — | 1 | sequence |',
+        '| d | finalize | rv | — | 1 | sequence |',
+      ], 'enhancement');
+      const a1err = (a1.errors || []).join('\n');
+      assert.ok(a1.result === 'refuse' && /agent-registration gap:.*validate-vendored-agents\.js/.test(a1err) && /agent-registration gap:.*uninstall\.sh/.test(a1err),
+        'gitlab #340 A1: agent add omitting the surface must refuse naming validate-vendored-agents.js + uninstall.sh, got ' + JSON.stringify(a1));
+      fs.rmSync(path.join(tmp, 'scripts', 'validate-vendored-agents.js'));
+      const a2 = gateVal([
+        '| scout | implementer | e | agents/new-scout.md | 1 | sequence |',
+        '| e | code-explorer | — | — | 1 | sequence |',
+        '| rv | code-reviewer | scout | — | 1 | sequence |',
+        '| d | finalize | rv | — | 1 | sequence |',
+      ], 'enhancement');
+      assert.strictEqual(a2.result, 'in-grammar', 'gitlab #340 A2: without the anchor the mech-1 check must be inert');
+    }
+
     // issue #234 E1: a stale phaseN next_command on an adaptive project must reconcile to plan-run.
     const e1dir = path.join(tmp, 'kaola-workflow', 'issue-940');
     fs.mkdirSync(e1dir, { recursive: true });
@@ -499,6 +542,25 @@ function testGitlabAdaptive() {
     assert.ok(m2State.includes('plan_hash: ' + FINAL_HASH_970), '#333: gitlab archived plan_hash refreshed from the final plan file, got: ' + m2State);
     assert.ok(!m2State.includes('plan_hash: ' + STALE_HASH_970), '#333: gitlab archived plan_hash drops the stale claim-time hash');
     assert.ok(!m2State.includes('2020-01-01T00:00:00.000Z'), '#333: gitlab archived ## Last Updated refreshed');
+
+    // #338: contractor self-attest back-fill — finalize --attest-contractor-spawn must make
+    // finalize_contractor_attested:attested even with no hook/dispatch-log present.
+    const csDir = path.join(tmp, 'kaola-workflow', 'issue-9701');
+    fs.mkdirSync(csDir, { recursive: true });
+    fs.writeFileSync(path.join(csDir, 'workflow-state.md'),
+      '## Project\nname: issue-9701\nstatus: active\nissue_number: 9701\n'
+      + 'next_command: /kaola-workflow-plan-run issue-9701\n'
+      + '## Sink\nbranch: workflow/issue-9701\nsink: merge\n'
+      + '## Pending Gates\n- workflow-plan\n\n## Last Evidence\nlast_command: startup\nlast_result: folder_claimed\n');
+    fs.writeFileSync(path.join(roadmapM2Dir, 'issue-9701.md'),
+      'issue: #9701\ntitle: t\nstatus: open\nworkflow_project: issue-9701\nnext_step: ready\n');
+    const csResult = JSON.parse(spawnNode(claimScript, ['finalize', '--project', 'issue-9701', '--attest-contractor-spawn'], tmp).stdout);
+    assert.strictEqual(csResult.status, 'closed', '#338: gitlab finalize --attest-contractor-spawn returns status:closed');
+    assert.strictEqual(csResult.closure_receipt.finalize_contractor_attested, 'attested',
+      '#338: gitlab --attest-contractor-spawn must make finalize_contractor_attested attested, got ' + csResult.closure_receipt.finalize_contractor_attested);
+    const csArchived = fs.readdirSync(path.join(tmp, 'kaola-workflow', 'archive')).filter(n => n.startsWith('issue-9701'));
+    const csLog = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'archive', csArchived[0], '.cache', 'dispatch-log.jsonl'), 'utf8');
+    assert.ok(csLog.includes('finalize-backfill'), '#338: gitlab archived dispatch-log carries the finalize-backfill marker');
 
     // #333: --keep-open stamp — last_result: closed_keep_open + issue_disposition: kept-open.
     const koDir = path.join(tmp, 'kaola-workflow', 'issue-971');

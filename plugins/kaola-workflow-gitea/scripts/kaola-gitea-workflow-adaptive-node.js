@@ -996,7 +996,14 @@ function runCloseAndOpenNext(opts) {
     ? evidenceContent.split('\n')[0].slice(0, 80)
     : 'evidence present';
 
-  const complianceRow = '| ' + requirementCell + ' | subagent-invoked | ' + evidenceSummary + ' | |';
+  // #338: role 'finalize' is the mandatory DAG sink — the plan-run contract says the MAIN
+  // SESSION performs its bookkeeping directly (no Agent dispatch), so certifying it as
+  // subagent-invoked would be false. Record the truthful execution mode instead. This row
+  // is NOT part of the delegation vocabulary checked by repair-state (a 'finalize (id)'
+  // requirement matches none of DELEGATION_CONTROLLED_REQUIREMENTS) and does not require
+  // codex-preflight (no dispatch happens).
+  const complianceStatus = role === 'finalize' ? 'main-session-direct' : 'subagent-invoked';
+  const complianceRow = '| ' + requirementCell + ' | ' + complianceStatus + ' | ' + evidenceSummary + ' | |';
   currentPlan = spliceComplianceRow(currentPlan, complianceRow);
 
   // Write the plan now (ledger + compliance — all non-state writes).

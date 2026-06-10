@@ -147,13 +147,20 @@ If `SINK_KIND` is `merge`, run `cmdFinalize` from the linked worktree context. T
 if [ "$SINK_KIND" = "merge" ]; then
   (cd "$ACTIVE_WORKTREE_PATH" && node "$CLAIM_JS" finalize \
     --project "{project}" \
-    --keep-worktree)
+    --keep-worktree \
+    --attest-contractor-spawn)
 fi
 ```
 
+`--attest-contractor-spawn` is the contractor's self-attest back-fill: it lets `cmdFinalize`
+record this otherwise-unloggable spawn window (the SubagentStart hook can miss a contractor
+dispatched into a linked worktree) into `.cache/dispatch-log.jsonl` so the closure receipt reads
+`finalize_contractor_attested: attested` (#338). Only the genuinely-dispatched contractor running
+this Step 8b passes it; the main session must NEVER pass it when finalize is run inline.
+
 When it runs, `cmdFinalize` atomically writes `status: closed` + `step: complete` to `workflow-state.md`, terminal-stamps the archived state (#333: neutralizes `next_command`/`next_skill` to `none (archived)`, refreshes the Planning Evidence `plan_hash` from the final plan + the `## Last Updated` line, and appends a `## Closure` receipt block), and renames `kaola-workflow/{project}/` → `kaola-workflow/archive/{project}/` in the linked worktree. The rename and the `## Closure` append are included in the Step 8 commit via git rename detection (the commit choreography runs commit-last so the append lands inside the `chore: archive` commit). Append `--keep-open` to the finalize command when the orchestrator's dispatch declares the closure decision as keep-open (partial-close) — it stamps `last_result: closed_keep_open` + `issue_disposition: kept-open` and skips the remote close probe; apply the keep-open roadmap-source preserve/restore caveat from the finalize procedure. `sink-merge` will refuse with exit 1 if `kaola-workflow/{project}/workflow-state.md` is still present on the branch HEAD when it runs; this is a safety guard that ensures finalize always precedes the merge.
 
-**Crash recovery.** If the process crashes after `cmdFinalize` archives the folder but before Step 8's `git commit` runs, the finalize is resumable. Run `node "$CLAIM_JS" resume --project {project} --json` from the worktree: a result of `reason:'finalize_incomplete'` confirms the archive dir exists but is uncommitted. Re-run `cmdFinalize --keep-worktree` (same command — it detects `source-missing` and stages the already-archived dir), then continue at Step 7.
+**Crash recovery.** If the process crashes after `cmdFinalize` archives the folder but before Step 8's `git commit` runs, the finalize is resumable. Run `node "$CLAIM_JS" resume --project {project} --json` from the worktree: a result of `reason:'finalize_incomplete'` confirms the archive dir exists but is uncommitted. Re-run `cmdFinalize --keep-worktree --attest-contractor-spawn` (same command — it detects `source-missing` and stages the already-archived dir), then continue at Step 7.
 
 If `SINK_KIND` is `pr`: skip this step. Proceed to Step 8 (commit). The active folder remains open. `sink-pr.js` (Step 9) writes the PR URL into the active folder and then immediately creates a deliberate metadata follow-up commit (`chore: record PR metadata for {project}`) so the worktree is clean after sink. `watch-pr` (on the next `/workflow-next` startup) detects the merged or closed PR and archives the folder automatically.
 

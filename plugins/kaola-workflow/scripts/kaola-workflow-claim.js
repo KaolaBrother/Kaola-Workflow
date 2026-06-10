@@ -109,6 +109,8 @@ function parseArgs(argv) {
     if (key === '--keep-branch') { args.keepBranch = true; continue; }
     // M1 (#280): planner self-attest flag; a boolean flag like --json/--force.
     if (key === '--attest-planner-spawn') { args.attestPlannerSpawn = true; continue; }
+    // #338: contractor self-attest flag (mirror of --attest-planner-spawn) at the finalize seam.
+    if (key === '--attest-contractor-spawn') { args.attestContractorSpawn = true; continue; }
     if (key.startsWith('--') && val !== undefined && !val.startsWith('--')) {
       const name = key.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
       args[name] = val;
@@ -1494,6 +1496,21 @@ function cmdFinalize() {
   // so the live cache is gone; check the archive candidate first, then live as fallback.
   const liveCacheDir = path.join(root, 'kaola-workflow', args.project, '.cache');
   const archiveCacheDir = result.dest ? path.join(result.dest, '.cache') : null;
+  // #338: contractor self-attest back-fill (mirror of #280 --attest-planner-spawn).
+  // The SubagentStart hook can miss a contractor dispatched into a linked worktree, and some
+  // harnesses have no hook at all. When the contractor's OWN Step 8b invocation passes
+  // --attest-contractor-spawn, back-fill a contractor entry so checkDispatchAttestations sees
+  // it. Gated strictly on the flag: an inline main-session finalize (no flag) writes nothing —
+  // the inline-bypass detector still fires. Warn-first: must NEVER block finalize.
+  if (args.attestContractorSpawn) {
+    try {
+      const attestDir = archiveCacheDir || liveCacheDir; // archive rename already happened
+      fs.mkdirSync(attestDir, { recursive: true });
+      const ts = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+      const entry = JSON.stringify({ ts, agent_type: 'contractor', agent_id: 'finalize-backfill', cwd: root });
+      fs.appendFileSync(path.join(attestDir, 'dispatch-log.jsonl'), entry + '\n');
+    } catch (_) { /* fail-open: attestation is warn-first */ }
+  }
   checkDispatchAttestations([archiveCacheDir, liveCacheDir], closureReceipt);
   const invariantResult = checkClosureInvariants(root, closureReceipt, result.dest);
   // #333: disposition is DECISION-derived on cmdFinalize (the orchestrator closes the issue after

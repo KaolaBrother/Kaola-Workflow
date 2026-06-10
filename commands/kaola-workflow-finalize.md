@@ -622,6 +622,25 @@ Agent(
 )
 ```
 
+### Attestation boundary (closure receipt)
+
+The contractor's Step 8b passes `--attest-contractor-spawn` to `cmdFinalize`, so a genuinely
+delegated run back-fills its own dispatch marker and the closure receipt reads
+`finalize_contractor_attested: attested` even where the SubagentStart hook cannot fire (a
+contractor dispatched into a linked worktree, or a hookless harness). This back-fill is the
+contractor's; the main session must never pass the flag on an inline run.
+
+The adaptive plan's `finalize (<node>)` Required Agent Compliance row is recorded
+`main-session-direct` (the in-plan sink bookkeeping is, by the plan-run contract, performed by the
+main session). That row neither requires nor replaces the contractor's delegation of mechanical
+finalization here — they are two distinct contracts on two distinct steps.
+
+**Inline-fallback contract.** If the contractor tooling is genuinely unavailable and the session
+runs the mechanical finalization inline, it must (a) record `local-fallback-tool-unavailable` with
+evidence in Required Agent Compliance, and (b) NOT pass `--attest-contractor-spawn`. The resulting
+`finalize_contractor_attested: missing` plus the ATTESTATION WARNING is then the truthful, expected
+outcome — attestation is warn-first and never blocks finalization.
+
 ## Crash Recovery
 
 If the session crashes after `cmdFinalize` archives the project folder but before the Step 8 `git commit` runs, finalize is resumable.

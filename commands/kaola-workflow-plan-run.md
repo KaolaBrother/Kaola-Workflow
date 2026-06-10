@@ -378,6 +378,13 @@ delete manifest, re-enter `next-action`.
    `{allDone:true}` is the DAG complete and ready to route to Finalization. If the close
    refuses, stay in the per-node loop and fix or refuse as with any other node.
 
+   Because the sink runs main-session-direct by design, `close-and-open-next` records its
+   Required Agent Compliance row as `main-session-direct` — never `subagent-invoked`, which
+   would falsely certify a dispatch that the sink contract forbids. This row covers ONLY the
+   in-plan sink bookkeeping; the Finalization phase's mechanical bookkeeping
+   (`/kaola-workflow-finalize`) is still delegated to the `contractor` and is attested
+   separately (`finalize_contractor_attested`).
+
    **For non-finalize roles, after the role returns, capture durable evidence immediately** — the
    step-3 close refuses
    (`evidence_absent` if `.cache/{node-id}.md` is absent, `evidence_shape_failed` if present-but-malformed) when it runs:
@@ -416,6 +423,14 @@ Agent(
   prompt="Implement node {node-id}. Declared write set: {declared_write_set}. Change-type-appropriate verification required (record non_tdd_reason)."
 )
 ```
+
+   **Forge-port mirror nodes (#340):** when the node's declared write set contains a gitlab/gitea
+   edition-named port (`plugins/kaola-workflow-{gitlab,gitea}/scripts/kaola-{gitlab,gitea}-workflow-<x>.js`)
+   of a root script edited earlier in this run, the dispatch prompt MUST state the canonical spec as
+   the **full accumulated root diff** — append to the prompt:
+   `Canonical spec: run git diff <run-base>..HEAD -- scripts/kaola-workflow-<x>.js and mirror EVERY
+   hunk modulo forge nouns. Do NOT work from a summary of individual upstream nodes.`
+   A per-concern enumeration is how the #328 run shipped half a mirror with all four chains green.
 
    A review gate node:
 

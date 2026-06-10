@@ -16,9 +16,17 @@ AGENT_ID=$(printf '%s' "$HOOK_INPUT" | node -e \
 AGENT_CWD=$(printf '%s' "$HOOK_INPUT" | node -e \
   "const d=[];process.stdin.on('data',c=>d.push(c));process.stdin.on('end',()=>{try{const p=JSON.parse(d.join(''));process.stdout.write(p.cwd||'')}catch(e){}})" 2>/dev/null || true)
 
-# Resolve repo root; fail-open if not in a git repo
-REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
-[ -z "$REPO_ROOT" ] && exit 0
+# Resolve candidate repo roots: the hook's own cwd AND the dispatched agent's cwd.
+# #338: a subagent dispatched into a linked worktree must be logged where the worktree's
+# consumers (cmdFinalize / sink-merge attestation) read .cache/dispatch-log.jsonl. The hook
+# process cwd is the MAIN session's repo; AGENT_CWD is the dispatched agent's cwd, which for a
+# worktree run is the linked worktree toplevel that the hook-cwd scan never reaches.
+HOOK_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || HOOK_ROOT=""
+AGENT_ROOT=""
+if [ -n "$AGENT_CWD" ] && [ -d "$AGENT_CWD" ]; then
+  AGENT_ROOT=$(git -C "$AGENT_CWD" rev-parse --show-toplevel 2>/dev/null) || AGENT_ROOT=""
+fi
+[ -z "$HOOK_ROOT" ] && [ -z "$AGENT_ROOT" ] && exit 0
 
 # Build ISO8601 timestamp (portable BSD + Linux)
 TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -26,22 +34,33 @@ TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 # Export so node -e subshell can read via process.env
 export TS AGENT_TYPE AGENT_ID AGENT_CWD
 
-# For each active project, append one JSONL line to .cache/dispatch-log.jsonl
-for STATE_FILE in "$REPO_ROOT"/kaola-workflow/*/workflow-state.md; do
-  [ -f "$STATE_FILE" ] || continue
-  grep -q "^status: active" "$STATE_FILE" || continue
-  PROJECT_DIR=$(dirname "$STATE_FILE")
-  CACHE_DIR="$PROJECT_DIR/.cache"
-  mkdir -p "$CACHE_DIR"
-  # Build JSON line using node -e for correct escaping
-  LINE=$(node -e "
-    const ts = process.env.TS;
-    const at = process.env.AGENT_TYPE;
-    const ai = process.env.AGENT_ID;
-    const cw = process.env.AGENT_CWD;
-    process.stdout.write(JSON.stringify({ts: ts, agent_type: at, agent_id: ai, cwd: cw}));
-  " 2>/dev/null) || continue
-  printf '%s\n' "$LINE" >> "$CACHE_DIR/dispatch-log.jsonl"
-done
+# For each active project under a root, append one JSONL line to .cache/dispatch-log.jsonl
+append_for_root() {
+  ROOT="$1"
+  [ -n "$ROOT" ] || return 0
+  for STATE_FILE in "$ROOT"/kaola-workflow/*/workflow-state.md; do
+    [ -f "$STATE_FILE" ] || continue
+    grep -q "^status: active" "$STATE_FILE" || continue
+    PROJECT_DIR=$(dirname "$STATE_FILE")
+    CACHE_DIR="$PROJECT_DIR/.cache"
+    mkdir -p "$CACHE_DIR"
+    # Build JSON line using node -e for correct escaping
+    LINE=$(node -e "
+      const ts = process.env.TS;
+      const at = process.env.AGENT_TYPE;
+      const ai = process.env.AGENT_ID;
+      const cw = process.env.AGENT_CWD;
+      process.stdout.write(JSON.stringify({ts: ts, agent_type: at, agent_id: ai, cwd: cw}));
+    " 2>/dev/null) || continue
+    printf '%s\n' "$LINE" >> "$CACHE_DIR/dispatch-log.jsonl"
+  done
+}
+
+# In-place runs: AGENT_ROOT == HOOK_ROOT — single pass, byte-equivalent to prior behavior.
+# Worktree runs: also append under the worktree's active project .cache/.
+append_for_root "$HOOK_ROOT"
+if [ -n "$AGENT_ROOT" ] && [ "$AGENT_ROOT" != "$HOOK_ROOT" ]; then
+  append_for_root "$AGENT_ROOT"
+fi
 
 exit 0

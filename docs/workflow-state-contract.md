@@ -115,6 +115,17 @@ ledgers before crossing a phase boundary. Codex role rows must match the policy:
 non-Codex-role workflow gates such as advisor review, final validation,
 documentation docking, roadmap refresh, archive, and final commit.
 
+**Adaptive `finalize` sink row — `main-session-direct` (issue #338).** The adaptive plan's
+mandatory `finalize` DAG sink node is, by the plan-run contract, executed by the main session
+directly (no `Agent()` dispatch). Its Required Agent Compliance row therefore carries the status
+`main-session-direct` — a sink-node-only token that sits OUTSIDE the four-token delegation
+vocabulary above and is NOT delegation-controlled (a `finalize (<node>)` requirement matches none
+of repair-state's `DELEGATION_CONTROLLED_REQUIREMENTS`, so the token never trips a delegation
+check). It is deliberately NOT `local-fallback-*`: inline sink execution is the designed behavior,
+not a fallback. This row is distinct from the Finalization-phase mechanical bookkeeping, which is
+delegated to the `contractor` and attested separately via the closure receipt's
+`finalize_contractor_attested` field.
+
 ## Bundle Project State Fields (issue #328)
 
 On a bundle project, three additive fields are written to `workflow-state.md` alongside the existing `issue_number` field. **Single-issue projects retain only `issue_number` — these fields are absent on non-bundle projects (AC#1 invariant).**

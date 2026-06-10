@@ -470,6 +470,11 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'plan_inval
 assert(exists(`${pluginRoot}/scripts/kaola-workflow-adaptive-handoff.js`), '#255 adaptive handoff aggregator missing from Codex plugin');
 assert(exists(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`), '#272 adaptive node aggregator missing from Codex plugin');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`, 'would_orphan_in_progress'); // #343 mid-gate reopen
+// #338: anti-drift pins — finalize sink row main-session-direct + contractor self-attest back-fill.
+assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`, 'main-session-direct');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'main-session-direct');
+assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, '--attest-contractor-spawn');
+assertIncludes(`${pluginRoot}/agents/contractor.toml`, '--attest-contractor-spawn');
 // #281: parallel-batch aggregator claude-plugin copy presence
 assert(exists(`${pluginRoot}/scripts/kaola-workflow-parallel-batch.js`), '#281 parallel-batch aggregator missing from Codex plugin');
 assertConcept(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'adaptive execution + governance', [
@@ -574,5 +579,35 @@ const tableEnd = readmeText.indexOf('\n\n', tableAnchor);
 const catalogRegion = readmeText.slice(roleListAnchor, tableEnd === -1 ? readmeText.length : tableEnd);
 assert(!catalogRegion.includes('docs-lookup'),
   'README role catalog must not list the retired docs-lookup role');
+
+// #340: registration-surface + forge-port parity checks and their authoring/dispatch prose
+// (Codex edition surfaces). A dropped token reds this chain at the contract-validator step.
+assertIncludes(`${pluginRoot}/scripts/kaola-workflow-plan-validator.js`, 'agent-registration gap');
+assertIncludes(`${pluginRoot}/scripts/kaola-workflow-plan-validator.js`, 'forge-port ordering gap');
+assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'full accumulated root diff');
+assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'registration surface');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'full accumulated root diff');
+
+// #340 derived parity guard (enumeration-free): the codex-dispatch config/agents.toml must register
+// exactly the agent profiles present in agents/ — both directions. A profile copied without its
+// [agents.<name>] table is undispatchable (the #328 issue-scout miss); a table without its profile
+// dangles. Derives both sides (no hardcoded names/counts), so a future agent addition never edits it.
+{
+  const configNames = new Set();
+  const reCfg = /^\[agents\.([a-z0-9-]+)\]/gm;
+  let cm;
+  while ((cm = reCfg.exec(read(`${pluginRoot}/config/agents.toml`))) !== null) configNames.add(cm[1]);
+  const dirNames = new Set(
+    fs.readdirSync(path.join(root, pluginRoot, 'agents'))
+      .filter(f => f.endsWith('.toml'))
+      .map(f => f.slice(0, -5))
+  );
+  const missingTables = [...dirNames].filter(n => !configNames.has(n)).sort();
+  const danglingTables = [...configNames].filter(n => !dirNames.has(n)).sort();
+  assert(missingTables.length === 0 && danglingTables.length === 0,
+    'config/agents.toml must register exactly the agent profiles in agents/ (#340)' +
+    (missingTables.length ? ' — profiles missing a [agents.*] table: ' + missingTables.join(', ') : '') +
+    (danglingTables.length ? ' — [agents.*] tables with no profile: ' + danglingTables.join(', ') : ''));
+}
 
 console.log('Kaola-Workflow Codex contract validation passed');

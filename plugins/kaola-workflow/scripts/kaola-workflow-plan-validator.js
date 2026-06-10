@@ -248,6 +248,83 @@ function hasCycle(nodes) {
   }
   return false;
 }
+// #340: transitive ancestor sets — Map<id, Set<ancestorIds>> over `dependsOn`. Memoized DFS;
+// the memo-before-recurse guard makes it terminate even on a cyclic graph (cycles are refused
+// separately by hasCycle; a partial set on an already-refusing plan is harmless). <= MAX_NODES.
+function transitiveDeps(nodes) {
+  const byId = new Map(nodes.map(n => [n.id, n]));
+  const memo = new Map();
+  function ancestors(id) {
+    if (memo.has(id)) return memo.get(id);
+    const acc = new Set();
+    memo.set(id, acc); // set BEFORE recursing so a cycle terminates on the in-progress entry
+    const node = byId.get(id);
+    if (!node) return acc;
+    for (const d of node.dependsOn) {
+      if (!byId.has(d)) continue;
+      acc.add(d);
+      for (const a of ancestors(d)) acc.add(a);
+    }
+    return acc;
+  }
+  for (const n of nodes) ancestors(n.id);
+  return memo;
+}
+// #340 mechanism 1: the registration surface of an agent-set delta. Each path either
+// holds an exact-match registry that REDS A CHAIN on any add/remove, or a by-name
+// enumeration whose omission ships a SILENT cross-edition divergence (config/agents.toml
+// codex dispatch tables, uninstall.sh REQUIRED_AGENTS — both missed by #328). All are
+// keyed on NO symbol of the new file, so the #306 symbol-grep cannot find them. All plugin-prefixed
+// strings are segment-joined so no `plugins/<root>/scripts` literal forms in the forge
+// plan-validator copies (forge contract validators forbid that token — see the existing
+// tmplPair/codexScriptsPrefix convention at the #274 block).
+function agentRegistrationSurface(name) {
+  const cx = ['plugins', 'kaola-workflow'].join('/');
+  const gl = ['plugins', 'kaola-workflow-gitlab'].join('/');
+  const ge = ['plugins', 'kaola-workflow-gitea'].join('/');
+  return [
+    'agents/' + name + '.md',
+    cx + '/agents/' + name + '.toml',
+    gl + '/agents/' + name + '.toml',
+    ge + '/agents/' + name + '.toml',
+    // codex-runtime dispatch registration ([agents.<name>] managed-block templates) —
+    // the #328 miss: profile copied, table absent => agent undispatchable in 3 editions.
+    cx + '/config/agents.toml',
+    gl + '/config/agents.toml',
+    ge + '/config/agents.toml',
+    ['scripts', 'validate-vendored-agents.js'].join('/'),
+    'install.sh',
+    'uninstall.sh', // REQUIRED_AGENTS enumeration drives managed-agent removal (uninstall.sh:8,:59-82)
+    ['scripts', 'kaola-workflow-resolve-agent-model.js'].join('/'),
+    [cx, 'scripts', 'kaola-workflow-resolve-agent-model.js'].join('/'),
+    [gl, 'scripts', 'kaola-workflow-resolve-agent-model.js'].join('/'),
+    [ge, 'scripts', 'kaola-workflow-resolve-agent-model.js'].join('/'),
+    ['scripts', 'kaola-workflow-plan-validator.js'].join('/'),
+    [cx, 'scripts', 'kaola-workflow-plan-validator.js'].join('/'),
+    [gl, 'scripts', 'kaola-gitlab-workflow-plan-validator.js'].join('/'),
+    [ge, 'scripts', 'kaola-gitea-workflow-plan-validator.js'].join('/'),
+    [gl, 'scripts', 'validate-kaola-workflow-gitlab-contracts.js'].join('/'),
+    [ge, 'scripts', 'validate-kaola-workflow-gitea-contracts.js'].join('/'),
+    [gl, 'scripts', 'test-gitlab-workflow-scripts.js'].join('/'),
+    [ge, 'scripts', 'test-gitea-workflow-scripts.js'].join('/'),
+  ];
+}
+// #340 mechanism 2 — forge-port mirror ordering. The canonical spec of a forge-port
+// mirror is the FULL ACCUMULATED root diff, which only exists after ALL root edits have
+// landed; a port node parallel to (or upstream of) a root edit mirrors a stale/partial
+// root. Pure graph+path check, no fs: inert in any repo that never declares these plugin paths.
+const FORGE_PORT_PREFIXES = [
+  ['plugins', 'kaola-workflow-gitlab', 'scripts', 'kaola-gitlab-workflow-'].join('/'),
+  ['plugins', 'kaola-workflow-gitea', 'scripts', 'kaola-gitea-workflow-'].join('/'),
+];
+function forgePortRootSource(p) {
+  for (const prefix of FORGE_PORT_PREFIXES) {
+    if (p.startsWith(prefix) && p.endsWith('.js')) {
+      return ['scripts', 'kaola-workflow-' + p.slice(prefix.length)].join('/');
+    }
+  }
+  return null;
+}
 // gate coverage via reachability-after-removal (== post-dominance over unique sink)
 function gateUncovered(nodes, isTarget, gateRole, sink) {
   const adj = adjacency(nodes);
@@ -842,6 +919,63 @@ function validatePlan(content, opts) {
     }
   }
 
+  // #340 mechanism 1 — agent-set delta registration completeness. An exact-match
+  // directory/registry assertion (validate-vendored-agents.js agents-listing, the forge
+  // agent-profile counts) breaks on ANY agent add, keyed on no symbol of the new file —
+  // invisible to #306 symbol scoping (the #328 issue-scout plan-repair). Anchor-gated to
+  // the Kaola-Workflow repo itself; inert in user installs (zero false positives).
+  const regRoot = opts.root || process.cwd();
+  if (fs.existsSync(path.join(regRoot, 'scripts', 'validate-vendored-agents.js'))) {
+    const union = new Set();
+    for (const n of nodes) for (const p of n.writeSet) union.add(p);
+    const pluginAgentDirs = [
+      ['plugins', 'kaola-workflow', 'agents'].join('/') + '/',
+      ['plugins', 'kaola-workflow-gitlab', 'agents'].join('/') + '/',
+      ['plugins', 'kaola-workflow-gitea', 'agents'].join('/') + '/',
+    ];
+    const newAgents = new Set();
+    for (const p of union) {
+      let name = null;
+      const mdMatch = /^agents\/([a-z0-9-]+)\.md$/.exec(p);
+      if (mdMatch) name = mdMatch[1];
+      else for (const dir of pluginAgentDirs) {
+        if (!p.startsWith(dir)) continue;
+        const tomlMatch = /^([a-z0-9-]+)\.toml$/.exec(p.slice(dir.length));
+        if (tomlMatch) { name = tomlMatch[1]; break; }
+      }
+      if (name && !fs.existsSync(path.join(regRoot, p))) newAgents.add(name);
+    }
+    for (const name of [...newAgents].sort()) {
+      for (const req of agentRegistrationSurface(name)) {
+        if (!union.has(req)) {
+          errors.push(`agent-registration gap: plan adds new agent "${name}" but no node declares "${req}" — an agent-set delta must carry its full registration surface (#340)`);
+        }
+      }
+    }
+  }
+
+  // #340 mechanism 2 — forge-port mirror ordering. A node whose write set contains a
+  // gitlab/gitea edition-named PORT of a root script must be a transitive descendant of
+  // every OTHER node that writes that root script — the canonical mirror spec is the FULL
+  // accumulated root diff, which only exists after all root edits land. Same-node co-writes
+  // (atomic mirror) and ports with no root writer (forge-only fix) are allowed. Pure graph
+  // check, fs-free: inert in any plan that declares no such port path.
+  {
+    const ancestorSets = transitiveDeps(nodes);
+    for (const n of nodes) {
+      for (const p of n.writeSet) {
+        const rootSrc = forgePortRootSource(p);
+        if (!rootSrc) continue;
+        for (const other of nodes) {
+          if (other.id === n.id || !other.writeSet.has(rootSrc)) continue;
+          if (!(ancestorSets.get(n.id) || new Set()).has(other.id)) {
+            errors.push(`forge-port ordering gap: node ${n.id} writes port "${p}" but node ${other.id} writes its root source "${rootSrc}" and is not upstream of ${n.id} — order forge-port mirror nodes after ALL root edits and mirror the full accumulated root diff (#340)`);
+          }
+        }
+      }
+    }
+  }
+
   const planHash = computePlanHash(content);
   if (errors.length) return { result: 'refuse', errors, planHash, sink };
 
@@ -891,8 +1025,10 @@ function revalidateForResume(content, opts) {
 }
 
 // Freeze: validate, and if in-grammar, inject/update the plan_hash comment.
-function freezePlan(content) {
-  const v = validatePlan(content, {});
+// #340: opts thread the repo root so Check 1's anchor-gated agent-registration surface
+// resolves against the validated root (not process.cwd()); backward-compatible (opts optional).
+function freezePlan(content, opts) {
+  const v = validatePlan(content, opts || {});
   if (v.result !== 'in-grammar') return { ...v, frozen: false };
   const stamped = injectHash(content, v.planHash);
   return { ...v, frozen: true, content: stamped };
@@ -1059,7 +1195,7 @@ function main() {
       toFreeze = rec.content;
       reconciledAdded = rec.added;
     }
-    const r = freezePlan(toFreeze);
+    const r = freezePlan(toFreeze, { root });
     if (r.frozen) fs.writeFileSync(planPath, r.content);
     process.stdout.write((json ? JSON.stringify({ result: r.result, decision: r.decision, planHash: r.planHash, frozen: r.frozen, risk: r.risk, errors: r.errors, reconciled: reconciledAdded }) : (r.frozen ? `frozen (${r.decision}) plan_hash=${r.planHash}${reconciledAdded.length ? ' reconciled=' + reconciledAdded.join(',') : ''}` : 'typed refusal: ' + (r.errors || []).join('; '))) + '\n');
     if (!r.frozen) process.exitCode = 1;

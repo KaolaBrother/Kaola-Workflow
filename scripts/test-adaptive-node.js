@@ -736,6 +736,82 @@ function makeState(opts) {
 }
 
 // ---------------------------------------------------------------------------
+// T14c (#338): runCloseAndOpenNext — finalize SINK node → compliance row is
+// 'main-session-direct', NOT 'subagent-invoked'. The plan-run contract performs the
+// finalize sink bookkeeping main-session-direct (no Agent dispatch), so certifying it
+// as subagent-invoked would falsely claim a delegation that never happened.
+// ---------------------------------------------------------------------------
+{
+  let writtenFiles = {};
+
+  const nodes = [
+    '| impl-core | tdd-guide | — | scripts/adaptive-node.js | 1 | sequence |',
+    '| review | code-reviewer | impl-core | — | 1 | sequence |',
+    '| done | finalize | review | CHANGELOG.md | 1 | sequence |',
+  ];
+
+  const plan = makePlan([
+    '| impl-core | complete | |',
+    '| review | complete | |',
+    '| done | in_progress | |',
+  ], nodes);
+
+  const cacheContent = 'finalize bookkeeping: docs + state recorded.';
+  const cacheFiles = {
+    '/fake/kaola-workflow/test-project/.cache/done.md': cacheContent,
+  };
+
+  let planContent = plan;
+
+  const shellStub = function(scriptPath, args) {
+    const base = path.basename(scriptPath);
+    const argsArr = args || [];
+    if (base === 'kaola-workflow-commit-node.js' && !argsArr.includes('--start')) {
+      return {
+        exitCode: 0, result: 'ok', mode: 'per-node', nodeId: 'done',
+        overallOk: true,
+        selectorCheck: { isSelector: false, ok: true },
+      };
+    }
+    if (base === 'kaola-workflow-next-action.js') {
+      // The finalize sink post-dominates everything; after it closes, the DAG is done.
+      return { exitCode: 0, result: 'ok', readySet: [], nextNode: null, allDone: true };
+    }
+    return { exitCode: 1 };
+  };
+
+  const result = runCloseAndOpenNext({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project',
+    nodeId: 'done',
+    shell: shellStub,
+    readFile: (fpath) => {
+      if (fpath.endsWith('workflow-plan.md')) return planContent;
+      if (fpath.endsWith('workflow-state.md')) return makeState();
+      if (cacheFiles[fpath]) return cacheFiles[fpath];
+      throw new Error('ENOENT: ' + fpath);
+    },
+    writeFile: (fpath, content) => {
+      writtenFiles[fpath] = content;
+      if (fpath.endsWith('workflow-plan.md')) planContent = content;
+    },
+    cacheExists: (fpath) => !!cacheFiles[fpath],
+  });
+
+  assert(result.result === 'ok', 'T14c: finalize-sink close result===ok');
+  assert(result.allDone === true, 'T14c: allDone===true after the sink closes');
+
+  const writtenPlan = writtenFiles['/fake/kaola-workflow/test-project/workflow-plan.md'];
+  assert(writtenPlan !== undefined, 'T14c: plan written');
+  assert(writtenPlan.includes('## Required Agent Compliance'), 'T14c: compliance section written');
+  assert(writtenPlan.includes('| finalize (done) | main-session-direct |'),
+    'T14c: finalize sink row is main-session-direct');
+  assert(!writtenPlan.includes('| finalize (done) | subagent-invoked'),
+    'T14c: finalize sink row is NOT falsely certified subagent-invoked');
+}
+
+// ---------------------------------------------------------------------------
 // T15: runCloseAndOpenNext — barrier exit1 → refuse, NO close/advance
 // ---------------------------------------------------------------------------
 {

@@ -7438,6 +7438,113 @@ function testAdaptiveSyncGroupGap() {
   console.log('testAdaptiveSyncGroupGap: PASSED');
 }
 
+// issue #340: the two freeze-time write-set completeness checks — (mech 1) an agent-set delta
+// must carry its FULL 22-path registration surface (exact-match registries keyed on no symbol
+// of the new file, invisible to #306 symbol-grep), anchor-gated to the Kaola-Workflow repo;
+// (mech 2) a forge-port mirror node must be a transitive descendant of every node that writes
+// the port's root source (the canonical spec is the full accumulated root diff). Composes with
+// the #274/#301 byte-identity co-occurrence check.
+function testAdaptiveRegistrationAndForgePortGaps() {
+  const tmp = adaptiveTmp('reg-forgeport');
+  // Plant the anchor file so the mech-1 check is active (only the Kaola-Workflow repo has the
+  // registration surface). The same tmp serves all cases; A2 uses a fresh anchorless tmp.
+  const plantAnchor = () => {
+    fs.mkdirSync(path.join(tmp, 'scripts'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'scripts', 'validate-vendored-agents.js'), '// anchor\n');
+  };
+  // The full 22-path registration surface for an agent named `new-scout`, split across nodes
+  // under FILE_CEILING=6 (the byte-group co-occurrence forces resolve-agent-model ×4 and the
+  // plan-validator root↔codex pair into single nodes — satisfied here).
+  const SURFACE_NODES = (parents) => [
+    '| n1 | implementer | ' + parents + ' | agents/new-scout.md, plugins/kaola-workflow/agents/new-scout.toml, plugins/kaola-workflow-gitlab/agents/new-scout.toml, plugins/kaola-workflow-gitea/agents/new-scout.toml, install.sh, uninstall.sh | 1 | sequence |',
+    '| n2 | implementer | n1 | scripts/kaola-workflow-resolve-agent-model.js, plugins/kaola-workflow/scripts/kaola-workflow-resolve-agent-model.js, plugins/kaola-workflow-gitlab/scripts/kaola-workflow-resolve-agent-model.js, plugins/kaola-workflow-gitea/scripts/kaola-workflow-resolve-agent-model.js, scripts/validate-vendored-agents.js | 1 | sequence |',
+    '| n3 | implementer | n2 | scripts/kaola-workflow-plan-validator.js, plugins/kaola-workflow/scripts/kaola-workflow-plan-validator.js, plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-plan-validator.js, plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-plan-validator.js | 1 | sequence |',
+    '| n4 | implementer | n3 | plugins/kaola-workflow/config/agents.toml, plugins/kaola-workflow-gitlab/config/agents.toml, plugins/kaola-workflow-gitea/config/agents.toml, plugins/kaola-workflow-gitlab/scripts/validate-kaola-workflow-gitlab-contracts.js, plugins/kaola-workflow-gitea/scripts/validate-kaola-workflow-gitea-contracts.js | 1 | sequence |',
+    '| n5 | implementer | n4 | plugins/kaola-workflow-gitlab/scripts/test-gitlab-workflow-scripts.js, plugins/kaola-workflow-gitea/scripts/test-gitea-workflow-scripts.js | 1 | sequence |',
+  ];
+  try {
+    plantAnchor();
+    // A1 (mech-1 refusal — the issue's regression-fixture AC): an agent add whose write set
+    // declares only the root profile must refuse, naming representative paths from BOTH gap
+    // classes (the exact-match registry AND the by-name dispatch enumerations missed by #328).
+    let v = validatePlanFixture(tmp, [
+      '| scout | implementer | explore | agents/new-scout.md | 1 | sequence |',
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| review | code-reviewer | scout | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    const a1err = (v.errors || []).join('\n');
+    assert(v.result === 'refuse' && /agent-registration gap:.*validate-vendored-agents\.js/.test(a1err),
+      'A1: agent add omitting the surface must refuse naming validate-vendored-agents.js, got: ' + JSON.stringify(v));
+    assert(/agent-registration gap:.*config\/agents\.toml/.test(a1err),
+      'A1: refusal must name the config/agents.toml codex-dispatch registry (#328 miss), got: ' + a1err);
+    assert(/agent-registration gap:.*uninstall\.sh/.test(a1err),
+      'A1: refusal must name uninstall.sh REQUIRED_AGENTS (#328 miss), got: ' + a1err);
+
+    // A2 (anchor gating — no user-repo false positive): same plan rows, fresh tmp WITHOUT the
+    // anchor file -> in-grammar (the check is inert outside the Kaola-Workflow repo).
+    const tmp2 = adaptiveTmp('reg-noanchor');
+    try {
+      v = validatePlanFixture(tmp2, [
+        '| scout | implementer | explore | agents/new-scout.md | 1 | sequence |',
+        '| explore | code-explorer | — | — | 1 | sequence |',
+        '| review | code-reviewer | scout | — | 1 | sequence |',
+        '| done | finalize | review | — | 1 | sequence |',
+      ], []);
+      assert(v.result === 'in-grammar',
+        'A2: without the anchor file the mech-1 check must be inert (in-grammar), got: ' + JSON.stringify(v));
+    } finally { fs.rmSync(tmp2, { recursive: true, force: true }); }
+
+    // A3 (complete-surface positive, 22 paths / FILE_CEILING=6 -> 5 impl nodes): the full
+    // surface declared across 5 nodes (byte-group co-occurrence satisfied) -> in-grammar.
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      ...SURFACE_NODES('explore'),
+      '| review | code-reviewer | n5 | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'in-grammar',
+      'A3: the complete 22-path surface across 5 nodes must be in-grammar, got: ' + JSON.stringify(v));
+
+    // A3 drop-one variant: remove uninstall.sh from n1 -> must flip to refuse (guards against
+    // the surface silently shrinking).
+    const dropped = SURFACE_NODES('explore').map(r =>
+      r.startsWith('| n1 ') ? r.replace(', uninstall.sh', '') : r);
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      ...dropped,
+      '| review | code-reviewer | n5 | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /agent-registration gap:.*uninstall\.sh/.test((v.errors || []).join('\n')),
+      'A3-drop: dropping uninstall.sh from the surface must refuse, got: ' + JSON.stringify(v));
+
+    // A4 (mech-2 refusal): a port node PARALLEL to (not downstream of) the root-editing node ->
+    // refuse with forge-port ordering gap. Pure graph check (anchor irrelevant).
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| rootedit | tdd-guide | explore | scripts/kaola-workflow-claim.js, plugins/kaola-workflow/scripts/kaola-workflow-claim.js | 1 | sequence |',
+      '| port | implementer | explore | plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js | 1 | sequence |',
+      '| review | code-reviewer | rootedit,port | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /forge-port ordering gap/.test((v.errors || []).join('\n')),
+      'A4: a port parallel to its root edit must refuse with forge-port ordering gap, got: ' + JSON.stringify(v));
+
+    // A5 (mech-2 positive): same but the port depends_on the root-editing node -> in-grammar.
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| rootedit | tdd-guide | explore | scripts/kaola-workflow-claim.js, plugins/kaola-workflow/scripts/kaola-workflow-claim.js | 1 | sequence |',
+      '| port | implementer | rootedit | plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js | 1 | sequence |',
+      '| review | code-reviewer | port | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'in-grammar',
+      'A5: a port downstream of all its root edits must be in-grammar, got: ' + JSON.stringify(v));
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptiveRegistrationAndForgePortGaps: PASSED');
+}
+
 // issue #308: reconcileLedger (--freeze --repair) brings the ## Node Ledger into agreement
 // with ## Nodes — adds a pending row for a node missing from the ledger, never drops an
 // existing status, and (since plan_hash excludes the ledger) does not move the hash.
@@ -9634,6 +9741,7 @@ async function main() {
     testAdaptiveCheapWinFixes();
     testAdaptiveAuditCoverage();
     testAdaptiveSyncGroupGap();   // #274
+    testAdaptiveRegistrationAndForgePortGaps();   // #340
     testAdaptiveFreezeRepairReconcile();   // #308
     testAdaptiveVerdictCheck();
     testAdaptivePatternLibrary();
@@ -9666,6 +9774,10 @@ async function main() {
     testPlannerAttestFlagBackfillsDispatchLog();     // AC1: M1 back-fill + M2 sink-merge check
     testPlannerAttestFlagAbsentStaysMissing();        // AC2: no-flag path stays not-attested
     testPlannerAttestFlagPresentInPlannerAgent();     // contract guard
+    // issue #338 — false-negative producer (worktree-blind hook) + contractor self-attest
+    testDispatchLogHookWorktreeAware338();            // T3: hook dual-root capture
+    testContractorAttestFlagBackfills338();           // T4: --attest-contractor-spawn → attested
+    testContractorAttestAbsentWarnsNonBlocking338();  // T5: no flag → missing + warning (warn-first)
     // issue #296 — worktree finalize crash-resumability
     testFinalizeIncompleteResumesCrashState();
     testFinalizeIncompleteNegativeControlAlreadyDone();
@@ -9865,6 +9977,145 @@ function testPlannerAttestFlagPresentInPlannerAgent() {
     'contract guard (#280): agents/workflow-planner.md startup invocation must contain --attest-planner-spawn, got (excerpt): ' +
     plannerText.substring(plannerText.indexOf('startup'), plannerText.indexOf('startup') + 200));
   console.log('testPlannerAttestFlagPresentInPlannerAgent: PASSED');
+}
+
+// ── #338 T3: dispatch-log hook is worktree-aware (dual-root capture) ──────────
+// Producer-side false-negative fix: a contractor dispatched into a linked worktree must be
+// logged where the worktree's consumers (cmdFinalize) read .cache/dispatch-log.jsonl. The hook
+// runs with cwd=main but must ALSO resolve the dispatched agent's cwd (AGENT_CWD) toplevel and
+// append there. Also assert the in-place case (cwd==main, active project in main) logs once.
+function testDispatchLogHookWorktreeAware338() {
+  const hookPath = path.join(repoRoot, 'hooks', 'kaola-workflow-subagent-dispatch-log.sh');
+  // (a) WORKTREE case: active project ONLY in the linked worktree.
+  const main = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-338-wt-main-')));
+  try {
+    initGitRepo(main);
+    // git worktree add a linked worktree on a new branch
+    const wt = main + '-wt';
+    const wtAdd = spawnSync('git', ['worktree', 'add', '-b', 'wt338', wt], { cwd: main, encoding: 'utf8' });
+    assert(wtAdd.status === 0, '#338 T3: git worktree add must succeed: ' + wtAdd.stderr);
+    // Active project state file ONLY in the worktree.
+    const wtProj = path.join(wt, 'kaola-workflow', 'proj');
+    fs.mkdirSync(wtProj, { recursive: true });
+    fs.writeFileSync(path.join(wtProj, 'workflow-state.md'), '# State\nstatus: active\n');
+    // No active project in main → the old hook (hook-cwd only) would log nothing.
+    const payload = JSON.stringify({ agent_type: 'contractor', agent_id: 't', cwd: wt });
+    const hr = spawnSync('bash', [hookPath], { cwd: main, input: payload, encoding: 'utf8' });
+    assert(hr.status === 0, '#338 T3: hook must exit 0 (fail-open), got ' + hr.status);
+    const wtLog = path.join(wtProj, '.cache', 'dispatch-log.jsonl');
+    assert(fs.existsSync(wtLog),
+      '#338 T3: worktree-dispatched contractor must be logged under the WORKTREE project .cache/');
+    const wtLogContent = fs.readFileSync(wtLog, 'utf8');
+    assert(wtLogContent.includes('"agent_type":"contractor"'),
+      '#338 T3: worktree dispatch-log must contain a contractor entry, got: ' + wtLogContent);
+    try { spawnSync('git', ['worktree', 'remove', '--force', wt], { cwd: main, encoding: 'utf8' }); } catch (_) {}
+    try { fs.rmSync(wt, { recursive: true, force: true }); } catch (_) {}
+  } finally {
+    fs.rmSync(main, { recursive: true, force: true });
+  }
+
+  // (b) IN-PLACE case: active project in main, AGENT_CWD == main → exactly ONE line (no dup).
+  const inplace = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-338-inplace-')));
+  try {
+    initGitRepo(inplace);
+    const proj = path.join(inplace, 'kaola-workflow', 'proj');
+    fs.mkdirSync(proj, { recursive: true });
+    fs.writeFileSync(path.join(proj, 'workflow-state.md'), '# State\nstatus: active\n');
+    const payload = JSON.stringify({ agent_type: 'contractor', agent_id: 't', cwd: inplace });
+    const hr = spawnSync('bash', [hookPath], { cwd: inplace, input: payload, encoding: 'utf8' });
+    assert(hr.status === 0, '#338 T3: in-place hook must exit 0, got ' + hr.status);
+    const log = path.join(proj, '.cache', 'dispatch-log.jsonl');
+    assert(fs.existsSync(log), '#338 T3: in-place active project must still be logged');
+    const count = fs.readFileSync(log, 'utf8').split('\n').filter(Boolean).length;
+    assert(count === 1,
+      '#338 T3: in-place run (AGENT_ROOT==HOOK_ROOT) must log EXACTLY once, got ' + count);
+  } finally {
+    fs.rmSync(inplace, { recursive: true, force: true });
+  }
+  console.log('testDispatchLogHookWorktreeAware338: PASSED');
+}
+
+// ── #338 T4: cmdFinalize --attest-contractor-spawn → finalize_contractor_attested:attested ──
+// No hook, no planner flag: the contractor's own --attest-contractor-spawn back-fills its
+// dispatch marker so the closure receipt reads attested even where the hook cannot fire.
+function testContractorAttestFlagBackfills338() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-338-ac2-attest-')));
+  const kwRoot = tmp + '.kw';
+  try {
+    initGitRepo(tmp);
+    const binDir = path.join(tmp, 'bin');
+    writeGhShimForStartup(binDir);
+
+    const sResult = runClaimOnlineLastJson(['startup', '--target-issue', '338001'], tmp, binDir);
+    assert(sResult.claim === 'acquired', '#338 T4: startup must acquire');
+    const project = sResult.selected_project || 'issue-338001';
+
+    // No dispatch-log yet (no flag at claim, no hook in test env).
+    const dispatchLog = path.join(tmp, 'kaola-workflow', project, '.cache', 'dispatch-log.jsonl');
+    assert(!fs.existsSync(dispatchLog), '#338 T4: no dispatch-log before finalize back-fill');
+
+    const finResult = runClaimOnlineLastJson(
+      ['finalize', '--project', project, '--attest-contractor-spawn'], tmp, binDir);
+    assert(finResult.status === 'closed', '#338 T4: finalize must return status:closed, got: ' + JSON.stringify(finResult));
+    const finReceipt = finResult.closure_receipt;
+    assert(finReceipt, '#338 T4: finalize must emit closure_receipt');
+    assert(finReceipt.finalize_contractor_attested === 'attested',
+      '#338 T4: --attest-contractor-spawn must make finalize_contractor_attested attested, got: ' + finReceipt.finalize_contractor_attested);
+
+    // The archived dispatch-log must carry the finalize-backfill contractor marker.
+    const archiveLog = path.join(tmp, 'kaola-workflow', 'archive', project, '.cache', 'dispatch-log.jsonl');
+    assert(fs.existsSync(archiveLog), '#338 T4: archived dispatch-log must exist after back-fill');
+    const archiveContent = fs.readFileSync(archiveLog, 'utf8');
+    assert(archiveContent.includes('finalize-backfill'),
+      '#338 T4: archived dispatch-log must contain finalize-backfill entry, got: ' + archiveContent);
+    console.log('testContractorAttestFlagBackfills338: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
+// ── #338 T5: inline finalize bypass → contractor missing + ATTESTATION WARNING, NON-blocking ──
+// The exact false-positive scenario from the issue: the planner WAS dispatched (its back-fill
+// populates a dispatch-log), but the contractor finalize seam is run INLINE (no
+// --attest-contractor-spawn). The dispatch-log exists with a planner entry and no contractor
+// entry → the per-seam ATTESTATION WARNING fires and finalize_contractor_attested:missing.
+// Pins the explicit-fallback branch demanded by AC2: a future change must not make a missing
+// contractor attestation silently blocking, nor silently quiet.
+function testContractorAttestAbsentWarnsNonBlocking338() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-338-ac2-fallback-')));
+  const kwRoot = tmp + '.kw';
+  try {
+    initGitRepo(tmp);
+    const binDir = path.join(tmp, 'bin');
+    writeGhShimForStartup(binDir);
+
+    // Planner WAS dispatched (its back-fill writes a dispatch-log) — but no contractor entry.
+    const sResult = runClaimOnlineLastJson(
+      ['startup', '--target-issue', '338002', '--attest-planner-spawn'], tmp, binDir);
+    assert(sResult.claim === 'acquired', '#338 T5: startup must acquire');
+    const project = sResult.selected_project || 'issue-338002';
+    const dispatchLog = path.join(tmp, 'kaola-workflow', project, '.cache', 'dispatch-log.jsonl');
+    assert(fs.existsSync(dispatchLog), '#338 T5: planner back-fill must create a dispatch-log');
+
+    // finalize WITHOUT --attest-contractor-spawn → contractor seam run inline.
+    const finResult = runClaimOnlineLastJson(['finalize', '--project', project], tmp, binDir);
+    assert(finResult.status === 'closed',
+      '#338 T5: finalize must still return status:closed (warn-first, NEVER blocks), got: ' + JSON.stringify(finResult));
+    const finReceipt = finResult.closure_receipt;
+    assert(finReceipt, '#338 T5: finalize must emit closure_receipt');
+    assert(finReceipt.claim_planner_attested === 'attested',
+      '#338 T5: planner WAS dispatched → claim_planner_attested must be attested, got: ' + finReceipt.claim_planner_attested);
+    assert(finReceipt.finalize_contractor_attested === 'missing',
+      '#338 T5: inline finalize (no flag) → finalize_contractor_attested must be missing, got: ' + finReceipt.finalize_contractor_attested);
+    assert(Array.isArray(finReceipt.warnings) &&
+      finReceipt.warnings.some(w => w.includes('ATTESTATION WARNING: no contractor dispatch found in dispatch-log')),
+      '#338 T5: missing contractor attestation must surface the ATTESTATION WARNING, got: ' + JSON.stringify(finReceipt.warnings));
+    console.log('testContractorAttestAbsentWarnsNonBlocking338: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+  }
 }
 
 // ── #296: cmdResume crash-resume after archiveProjectDir ran but impl uncommitted ──
