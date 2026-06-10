@@ -25,6 +25,14 @@ worktree once so that all node dispatches operate with their working directory i
 # Resolve linked worktree path from workflow-state.md (Codex: uses KAOLA_PROJECT env var)
 ACTIVE_WORKTREE_PATH="$(node -e "try{const fs=require('fs');const s=fs.readFileSync('kaola-workflow/' + process.env.KAOLA_PROJECT + '/workflow-state.md','utf8');const m=s.match(/^worktree_path:\\s*(.+)$/m);process.stdout.write(m?m[1].trim():'');}catch(e){}" 2>/dev/null)" || true
 [ -z "$ACTIVE_WORKTREE_PATH" ] && ACTIVE_WORKTREE_PATH="$(pwd)"
+# Resolve the scripts dir for every adaptive lifecycle call below (#344). $KAOLA_SCRIPTS is
+# referenced by every node transaction but was never defined — outside this repo there is no
+# local plugins/ tree, so resolve via the Codex plugin-cache fallback (same probe pattern as the
+# finalize SKILL's $validator_script). Define it ONCE here, before the first use, and carry it.
+KAOLA_SCRIPTS="plugins/kaola-workflow/scripts"
+if [ ! -f "$KAOLA_SCRIPTS/kaola-workflow-adaptive-node.js" ]; then
+  KAOLA_SCRIPTS="$(dirname "$(find "$HOME/.codex/plugins/cache" -path '*/kaola-workflow/*/scripts/kaola-workflow-adaptive-node.js' -print -quit 2>/dev/null)")"
+fi
 ```
 
 When `worktree_path` is absent or empty (e.g. `KAOLA_WORKTREE_NATIVE=0`, offline, no-git, or this
