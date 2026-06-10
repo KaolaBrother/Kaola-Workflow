@@ -225,9 +225,10 @@ starting the next queued sibling as each running one finishes.
 **Batch eligibility rules** (checked by `open-batch`, which first runs a `--resume-check` integrity
 gate and refuses `plan_integrity_failed` on a tampered/unfrozen plan — zero mutation):
 - All-read-only (empty declared write sets): eligible; no worktree isolation required.
-- All-write-role over pairwise-disjoint declared write sets: eligible (disjointness re-confirmed at
-  `open-batch`, fail-closed on overlap).
-- Mixed read-only + write-role: open the read-only subset first; never mix in one batch.
+- Any write-role frontier (#364): serial-degrades — `open-batch` returns `degraded:true` with zero
+  mutation and the orchestrator opens the write siblings one at a time via `open-next` (the
+  member-worktree isolation path was excised; the harness cannot force a subagent's CWD).
+- Mixed read-only + write-role: open the read-only subset first (the write members serial-degrade).
 - An existing live `active-batch.json` blocks a fresh open (`active_batch_exists`); an `opening`
   manifest must be repaired first (`reconcile_first`). Re-opening the SAME live frontier is idempotent.
 
@@ -238,41 +239,32 @@ gate and refuses `plan_integrity_failed` on a tampered/unfrozen plan — zero mu
 node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-parallel-batch.js" open-batch \
   --project {project} --json
 ```
-`open-batch` opens at most `FANOUT_CAP` members of the frontier (a wider frontier leaves the rest
-**queued** for `top-up`). For a write-role batch, `kaola-gitlab-workflow-parallel-batch.js` first checks
-whether the host supports isolated git worktrees (required to give each write-role member its own
-working tree). When isolation is available, it provisions one worktree per member, records N baselines
-(idempotent, #239), then performs the **crash-safe two-phase commit**: it writes
-`kaola-workflow/{project}/.cache/active-batch.json` with `state: 'opening'` (the intended member set)
-**before** flipping the N ledger rows `pending → in_progress`, then promotes the manifest to
-`state: 'open'`. It returns `{result:'ok', batchId, state:'open', members:[{id, role, model, declared_write_set, kind, baseline, worktreePath}], allDone:false}`.
+`open-batch` opens at most `FANOUT_CAP` members of a **read-only** frontier (a wider frontier leaves
+the rest **queued** for `top-up`). It records N baselines (idempotent, #239), then performs the
+**crash-safe two-phase commit**: it writes `kaola-workflow/{project}/.cache/active-batch.json` with
+`state: 'opening'` (the intended member set) **before** flipping the N ledger rows
+`pending → in_progress`, then promotes the manifest to `state: 'open'`. It returns
+`{result:'ok', batchId, state:'open', members:[{id, role, model, declared_write_set, kind, baseline}], allDone:false}`.
 A crash between the two file writes leaves an `opening` manifest that `status`/`orient` flag as
 **reconcilable** (not an orphan) — run `parallel-batch reconcile` (roll-forward) or
 `reconcile --abort` (roll-back) to repair it.
 
-**Degraded mode (serial fallback before dispatch):** a write-role batch only stays isolated if each
-member subagent actually runs from its own member worktree. Because this harness cannot FORCE a
-dispatched subagent's working directory (the `Working directory:` line below is advisory prose), a
-write-role batch would leak its edits into the parent worktree (#320). So by default `open-batch`
-serial-degrades a write-role frontier BEFORE any dispatch, returning
+**Write-role frontiers serial-degrade (#364):** the member-worktree isolation path was excised — this
+harness cannot FORCE a dispatched subagent's working directory (the `Working directory:` line below is
+advisory prose), so a write-role batch would leak its edits into the parent worktree. `open-batch` (and
+`top-up`) therefore serial-degrade a write-role frontier UNCONDITIONALLY, returning
 `{result:'ok', degraded:true, reason:'cwd_unenforceable', opened:[], allDone:false}` with ZERO
-mutation — no ledger flip, no baseline, no manifest, no member worktree provisioned. (The legacy
-`reason:'worktree_unavailable'` degrade — host lacks isolated-worktree capability at all — uses the
-same zero-mutation shape.) On ANY `degraded:true`, the orchestrator MUST NOT attempt concurrent batch
-dispatch. It `log()`s the degradation (so the forgone parallelism is visible, never silent) and falls
-back to the single-node legacy path — opening the write-role siblings one at a time via `open-next`,
-same per-node lifecycle as today, correctness preserved, wall-clock parallelism forgone (the
-intentional degradation of design §10.3). This is also why a frozen coarse-area-overlapping write
-antichain (in-grammar/ask at freeze) never hits a runtime `not_disjoint` refusal — the serial degrade
-fires first; the disjointness gate applies only in the opt-in `KAOLA_BATCH_CWD_ENFORCED` mode (a
-future cwd-forcing harness) where true parallel isolation needs it. Read-only batches are unaffected —
-they never provision worktrees and are never degraded.
+mutation. On `degraded:true`, the orchestrator `log()`s the degradation (so the forgone parallelism is
+visible, never silent) and opens the write siblings one at a time via `open-next` — same per-node
+lifecycle as today, correctness preserved. This is also why a frozen coarse-area-overlapping write
+antichain (in-grammar/ask at freeze) never hits a runtime refusal — the serial degrade fires. The
+reintroduction condition (a real cwd/lane-enforcement primitive) is tracked by #376/#377; see
+`docs/decisions/0008-excise-write-role-batch-isolation.md`. Read-only batches are unaffected.
 
 **(b)** **Concurrent dispatch — the ONLY real concurrency:** the main session issues **MULTIPLE
 `Agent()` calls in ONE message**, one per batch member. Each call carries `subagent_type` = member
-role, `model` = per-member model, and:
-- Write-role members: `Working directory: <member isolated worktree>`.
-- Read-only members: `Working directory: ${ACTIVE_WORKTREE_PATH}` (shared worktree).
+role, `model` = per-member model, and `Working directory: ${ACTIVE_WORKTREE_PATH}` (the shared
+worktree — batch members are always read-only post-#364; write-role nodes run serially via `open-next`).
 
 **The script manages batch STATE; the orchestrator (main session) owns DISPATCH.
 `kaola-gitlab-workflow-parallel-batch.js` NEVER spawns an agent — the only concurrency is the main
@@ -282,11 +274,10 @@ session issuing multiple `Agent()` calls in one message.**
 
 **(c)** `record-evidence` per member — the **orchestrator** records each member's evidence
 PARENT-side, with one canonical path `.cache/{node-id}.md` (the same path the serial node uses, and
-the same path `seal`'s evidence-shape gate reads). Members do **not** self-write evidence into their
-isolated worktree — pipe the returned evidence through `record-evidence --project {project}` so it
-always lands in the parent `.cache`, regardless of where the member ran. The only documented exception
-is the adversarial-verifier fan-out, whose per-skeptic `.cache/adversarial-verifier-*.md` files feed
-the validator's quorum check.
+the same path `seal`'s evidence-shape gate reads). Pipe the returned evidence through
+`record-evidence --project {project}` so it always lands in the parent `.cache`. The only documented
+exception is the adversarial-verifier fan-out, whose per-skeptic `.cache/adversarial-verifier-*.md`
+files feed the validator's quorum check.
 
 **(c′) Rolling top-up — drain an over-cap frontier:** when a member completes, `record-evidence` +
 `seal-member` it, then run `top-up` to start the next queued sibling while the others keep running:
@@ -294,10 +285,10 @@ the validator's quorum check.
 node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-parallel-batch.js" top-up \
   --project {project} --json
 ```
-`top-up` opens up to (`FANOUT_CAP` − running) more **same-frontier** siblings (never a downstream node
-that merely became ready), records their baselines/worktrees, and appends them to the manifest. It
-returns `reason:'at_capacity'` when no slot is free and `reason:'frontier_drained'` once the queue is
-empty. Repeat dispatch → seal-member → top-up until drained. (At the **state** level this proves
+`top-up` opens up to (`FANOUT_CAP` − running) more **same-frontier** read-only siblings (never a
+downstream node that merely became ready), records their baselines, and appends them to the manifest.
+It returns `reason:'at_capacity'` when no slot is free and `reason:'frontier_drained'` once the queue
+is empty. Repeat dispatch → seal-member → top-up until drained. (At the **state** level this proves
 rolling bounded dispatch; wall-clock overlap depends on whether the harness can run subagents
 concurrently / in the background — the script never spawns agents, so it never overclaims.)
 
@@ -309,20 +300,17 @@ node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-parallel-batch.js" seal \
 For each member, `seal` applies the SAME gates as the serial path before closing it: the role-shaped
 **evidence-shape** check (#319: refuse `evidence_absent` when `.cache/{node-id}.md` is missing, or
 `evidence_shape_failed` — with the `missingTokenClass` naming the missing class, e.g. `change-type` —
-when present-but-malformed for the role), a write-role **non-empty-in-lane** check (refuse `empty_member` when the member worktree
-produced no declared changes — the no-op / parent-leak vacuity guard), then the per-node `commit-node`
-barrier. Manifest transitions to `state: 'sealed'` only when ALL members pass.
+when present-but-malformed for the role), then the per-node `commit-node` barrier (run against the
+parent plan). Manifest transitions to `state: 'sealed'` only when ALL members pass.
 
-**(e)** `parallel-batch join` (no-op for read-only; tree-aware merge for write-role):
+**(e)** `parallel-batch join` — transitions a fully-sealed manifest to `joined`:
 ```bash
 node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-parallel-batch.js" join \
   --project {project} --json
 ```
-For write-role batches: a **per-declared-path** merge into the parent — a path present in the member's
-sealed tree is checked out (addition/modification); a path absent from it is `git rm`'d (the member
-DELETED a declared file, or the old side of a declared rename). Disjoint sets → conflict-free;
-idempotent. For read-only batches: no-op. After join, the orchestrator deletes the manifest
-(`active-batch.json`).
+Batches are always read-only (#364), so `join` has nothing to merge — every member's evidence already
+lives parent-side. It just transitions `sealed → joined` (idempotent) so the `seal → join → advance`
+choreography terminates cleanly. After join, the orchestrator deletes the manifest (`active-batch.json`).
 
 **(f)** Re-enter `next-action` — the now-terminal batch members unblock downstream nodes
 (existing readiness semantics: `next-action` requires all `depends_on` to be TERMINAL before a
@@ -342,15 +330,14 @@ would refuse `no_active_batch`). `nextRoute:'reconcile'` → run `reconcile`; `n
 **Legality rule:** multiple `in_progress` ledger rows are legal ONLY when a valid `active-batch.json`
 exists whose UNSEALED `members` set matches the `in_progress` set. Any other configuration is a typed
 refusal (`orphan_multi_in_progress`). The batch lifecycle states are:
-`opening → open → sealed → joining → joined` (the dead `dispatched` state was removed in #303; the
-crash-safe `opening` transaction marker replaces it).
+`opening → open → sealed → joined` (the dead `dispatched` state was removed in #303; the crash-safe
+`opening` transaction marker replaces it; `joining` was removed in #364 with the write-role merge path).
 
 **Crash/resume:** the batch state is fully recoverable from durable artifacts. `opening` → run
 `reconcile` (roll-forward to `open`) or `reconcile --abort` (roll-back). `open` → re-dispatch any
 member whose evidence is absent (baselines idempotent); a member with present evidence but an
 `in_progress` ledger row → run `seal-member` only; if the frontier is not yet drained → `top-up`.
-`sealed` → run `join`. `joining` → re-run `join` (idempotent on already-merged members). `joined` →
-delete manifest, re-enter `next-action`.
+`sealed` → run `join` (idempotent). `joined` → delete manifest, re-enter `next-action`.
 
 1. **open-next — open the next ready node when none is `in_progress`** — run this to open the
    first node (handoff no longer pre-opens it), and on resume to open the next ready node

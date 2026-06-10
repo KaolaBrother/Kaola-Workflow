@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Removed
+
+- **adaptive/batch: excised the unreachable write-role isolation machinery from `parallel-batch` (#364).** The write-role batch isolation path — per-member `git worktree add --detach` + seeded snapshots + per-member plan copies + `memberDirty` in-lane porcelain + `mergeRef` capture + `join`'s checkout-from-member-tree (`snapshotMember`/`anchorMergeRef`/the worktree io seams) — was unreachable by default (since #320 `open-batch` serial-degraded any write-role frontier) and non-functional if force-enabled (the harness cannot force a dispatched subagent's CWD, so members wrote to the parent worktree and `seal` then refused `empty_member` after the work was done — a documented isolation leak). `open-batch`/`top-up` now serial-degrade a write-role frontier **unconditionally** (the existing `{degraded:true, reason:'cwd_unenforceable'}` zero-mutation shape is preserved for prose compatibility); read-only fan-out batches are byte-behavior-unchanged and serial write behavior is byte-identical to today's degrade path. `KAOLA_BATCH_CWD_ENFORCED`/`resolveBatchCwdEnforced` are retired from `kaola-workflow-adaptive-schema.js` (×4); the now-unreachable `joining` manifest state is removed (`opening → open → sealed → joined`); `runJoin` collapses to a manifest-only `sealed → joined` transition. Line delta: `kaola-workflow-parallel-batch.js` 1454 → 1177 (−277) per edition; `test-parallel-batch.js` 1893 → 1565 (dead E1/E2/E3 e2e-worktree, N6 seal-vacuity, N7 deletion-join, N8 rename-join, N9 malformed write-role evidence, resolver unit, and `cwdEnforced` control tests removed; E1 rewritten to assert the unconditional degrade). Plan-run worktree choreography prose trimmed on all four surfaces. Reintroduction condition recorded in `docs/decisions/0008-excise-write-role-batch-isolation.md` (a real harness cwd/lane-enforcement primitive — #376/#377). ×4 editions; four chains green.
+
 ## [5.13.0] — 2026-06-10
 
 Conflict-free 7-lane batch (#344, #345, #346, #349, #361, #363, #370) implemented in parallel with #357 and merged together. Each lane was gated by all four edition chains (`claude`/`codex`/`gitlab`/`gitea`).

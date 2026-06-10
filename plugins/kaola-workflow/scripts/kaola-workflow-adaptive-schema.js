@@ -264,14 +264,11 @@ const ENABLE_ADAPTIVE_FIELD = 'enable_adaptive';
 const ENABLE_ADAPTIVE_ENV = 'KAOLA_ENABLE_ADAPTIVE';
 const FANOUT_CAP_ENV = 'KAOLA_FANOUT_CAP';
 const FANOUT_CAP_READONLY_ENV = 'KAOLA_FANOUT_CAP_READONLY';
-// #320: a write-role parallel batch only stays isolated if each member subagent
-// actually runs from its own member worktree. This harness cannot FORCE a
-// dispatched subagent's CWD (the `Working directory:` line is advisory prose), so
-// write-role batches leak edits to the parent worktree. This env flag asserts that
-// the runtime CAN force member-worktree CWD; default FALSE means write-role batches
-// degrade to serial BEFORE dispatch instead of leaking. Set only by a future
-// harness that gains a real cwd-forcing primitive.
-const BATCH_CWD_ENFORCED_ENV = 'KAOLA_BATCH_CWD_ENFORCED';
+// #364: KAOLA_BATCH_CWD_ENFORCED + resolveBatchCwdEnforced were RETIRED with the write-role
+// member-worktree isolation machinery (parallel-batch.js). The harness cannot force a dispatched
+// subagent's CWD, so write-role frontiers serial-degrade unconditionally. The successor enforcement
+// primitive is the write-lane containment hook (#376, KAOLA_LANE_CONTAINMENT) + the per-node
+// running-set scheduler (#377). See docs/decisions/0008-excise-write-role-batch-isolation.md.
 
 // Resolve the adaptive switch with precedence env > config > default OFF.
 // The OFF guarantee rests on the STRICT `config.enable_adaptive === true` on-test
@@ -298,13 +295,6 @@ function resolveFanoutCapReadonly(env) {
   const raw = (env || {})[FANOUT_CAP_READONLY_ENV];
   const n = parseInt(raw, 10);
   return Number.isInteger(n) && n >= 1 ? n : DEFAULT_FANOUT_CAP_READONLY;
-}
-
-// #320: resolve whether the runtime can force member-worktree CWD for batch
-// subagents. Fail-closed default FALSE — only an explicit 1/true/yes opts in.
-function resolveBatchCwdEnforced(env) {
-  const raw = (env || {})[BATCH_CWD_ENFORCED_ENV];
-  return raw === '1' || raw === 'true' || raw === 'yes';
 }
 
 // #353: crash-safe durable-state write — tmp + fsync + atomic rename, so a crash mid-write can
@@ -382,11 +372,9 @@ module.exports = {
   ENABLE_ADAPTIVE_ENV,
   FANOUT_CAP_ENV,
   FANOUT_CAP_READONLY_ENV,
-  BATCH_CWD_ENFORCED_ENV,
   resolveEnableAdaptive,
   resolveFanoutCap,
   resolveFanoutCapReadonly,
-  resolveBatchCwdEnforced,
   writeFileAtomicReplace,
   isLegalWorkflowPath,
 };
