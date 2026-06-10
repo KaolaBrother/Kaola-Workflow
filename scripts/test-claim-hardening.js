@@ -13,6 +13,7 @@ process.env.KAOLA_GH_REMOTE_TIMEOUT_MS = '500';   // tiny cap for the hang test 
 delete process.env.KAOLA_WORKFLOW_OFFLINE;        // ensure ghExec actually shells the mock
 
 const { ghExec, isSafeBranchArg, removeBranch, postAdvisoryClaim } = require('./kaola-workflow-claim.js');
+const { writeFileAtomicReplace } = require('./kaola-workflow-adaptive-schema.js');
 
 let passed = 0, failed = 0;
 function assert(c, m) { if (c) passed++; else { failed++; console.error('FAIL: ' + m); } }
@@ -63,6 +64,23 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
   fs.rmSync(dir, { recursive: true, force: true });
   // (offline → 'skipped_offline' is covered by the OFFLINE-const guard; not unit-testable here
   // because OFFLINE resolves at module load, before this test can set the env.)
+}
+
+// --- writeFileAtomicReplace (#353) ------------------------------------------
+{
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-atomic-'));
+  const target = path.join(dir, 'sub', 'workflow-state.md'); // nested dir must be created
+  const wrote1 = writeFileAtomicReplace(target, 'alpha');
+  assert(wrote1 === true, '#353: first write returns true');
+  assert(fs.readFileSync(target, 'utf8') === 'alpha', '#353: content written');
+  const wrote2 = writeFileAtomicReplace(target, 'alpha');
+  assert(wrote2 === false, '#353: unchanged content → no rewrite (returns false)');
+  const wrote3 = writeFileAtomicReplace(target, 'beta');
+  assert(wrote3 === true && fs.readFileSync(target, 'utf8') === 'beta', '#353: changed content rewritten atomically');
+  // No leftover .tmp scratch in the directory (tmp + rename leaves no residue on success).
+  const residue = fs.readdirSync(path.dirname(target)).filter(n => n.includes('.tmp'));
+  assert(residue.length === 0, '#353: no leftover .tmp file after atomic replace, got ' + JSON.stringify(residue));
+  fs.rmSync(dir, { recursive: true, force: true });
 }
 
 if (failed > 0) {

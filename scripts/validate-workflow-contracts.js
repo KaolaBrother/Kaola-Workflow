@@ -566,6 +566,12 @@ assertIncludes('scripts/kaola-workflow-claim.js', '--attest-contractor-spawn');
 // it surfaced cannot recur — the producer must exist on every edition that ships the consumer (#300).
 assertIncludes('scripts/kaola-workflow-claim.js', '--attest-planner-spawn');
 assertIncludes('agents/contractor.md', '--attest-contractor-spawn');
+// #353: durable-state writes must route through the crash-safe atomic replace (no torn
+// workflow-plan.md/workflow-state.md/active-batch.json). Pin the helper + its adoption.
+assertIncludes('scripts/kaola-workflow-adaptive-schema.js', 'function writeFileAtomicReplace');
+assertIncludes('scripts/kaola-workflow-adaptive-node.js', 'writeFileAtomicReplace');
+assertIncludes('scripts/kaola-workflow-parallel-batch.js', 'writeFileAtomicReplace');
+assertIncludes('scripts/kaola-workflow-claim.js', 'writeFileAtomicReplace');
 // #359: the shape-gate evidence vocabulary must ORIGINATE in the producing agents' contracts
 // (emission-side pin, the #290 pattern) — so the orchestrator transcribes verbatim, not synthesizes.
 assertIncludes('agents/implementer.md', 'verification_tier');

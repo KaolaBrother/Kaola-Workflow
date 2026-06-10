@@ -40,7 +40,7 @@ const taskMirrorPath = path.join(__dirname, TASK_MIRROR);
 
 // #360: the LEDGER-SCOPED durable consent-halt probe (fence-aware). adaptive-schema keeps the
 // same filename across every edition (byte-identical ×4), so this require is NOT forge-renamed.
-const { readDurableConsentHalt } = require('./kaola-workflow-adaptive-schema');
+const { readDurableConsentHalt, writeFileAtomicReplace } = require('./kaola-workflow-adaptive-schema');
 
 // ---------------------------------------------------------------------------
 // getRoot — resolve the user-repo root via git rev-parse (cwd fallback).
@@ -1642,7 +1642,8 @@ function main() {
 
   const shell    = (scriptPath, scriptArgs) => shellNode(scriptPath, scriptArgs);
   const readFile = (fpath) => fs.readFileSync(fpath, 'utf8');
-  const writeFile = (fpath, content) => fs.writeFileSync(fpath, content, 'utf8');
+  // #353: route every durable-state write (plan/ledger) through the crash-safe atomic replace.
+  const writeFile = (fpath, content) => { writeFileAtomicReplace(fpath, content); };
   const cacheExists = (fpath) => fs.existsSync(fpath);
 
   // #335: resolve the MAIN checkout root even when cwd is a linked worktree.

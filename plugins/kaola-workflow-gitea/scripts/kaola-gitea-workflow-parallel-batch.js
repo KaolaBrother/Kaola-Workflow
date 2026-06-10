@@ -1313,7 +1313,7 @@ function main() {
   const manifestPath = path.join(cacheDir, MANIFEST_NAME);
 
   const fs = require('fs');
-  const { resolveFanoutCap, resolveFanoutCapReadonly, resolveBatchCwdEnforced } = (function () {
+  const { resolveFanoutCap, resolveFanoutCapReadonly, resolveBatchCwdEnforced, writeFileAtomicReplace } = (function () {
     try { return require('./kaola-workflow-adaptive-schema'); } catch (_) { return {}; }
   })();
   const fanoutCap = (typeof resolveFanoutCap === 'function') ? resolveFanoutCap(process.env) : 4;
@@ -1325,7 +1325,13 @@ function main() {
   const io = {
     shell: (scriptPath, scriptArgs) => shellNode(scriptPath, scriptArgs),
     readFile: (fpath) => fs.readFileSync(fpath, 'utf8'),
-    writeFile: (fpath, content) => fs.writeFileSync(fpath, content, 'utf8'),
+    // #353: route every durable-state write (active-batch.json manifest, plan/ledger) through the
+    // crash-safe atomic replace (tmp + fsync + rename). Falls back to a plain write if the schema
+    // helper is somehow unavailable.
+    writeFile: (fpath, content) => {
+      if (typeof writeFileAtomicReplace === 'function') writeFileAtomicReplace(fpath, content);
+      else fs.writeFileSync(fpath, content, 'utf8');
+    },
     cacheExists: (fpath) => fs.existsSync(fpath),
     mkdirp: (dir) => { try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {} },
     now: () => new Date().toISOString(),

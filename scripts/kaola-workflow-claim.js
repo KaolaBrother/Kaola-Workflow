@@ -405,6 +405,13 @@ function stateFile(root, project) {
 }
 
 function writeFile(file, content) {
+  // #353: crash-safe atomic replace (tmp + fsync + rename) for durable-state writes — a torn
+  // workflow-state.md is silently skipped by readActiveFolders (project goes invisible), so the
+  // write must be all-or-nothing. Falls back to a plain write only if the helper is unavailable.
+  if (adaptiveSchema && typeof adaptiveSchema.writeFileAtomicReplace === 'function') {
+    adaptiveSchema.writeFileAtomicReplace(file, content);
+    return;
+  }
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, content);
 }

@@ -307,6 +307,36 @@ function resolveBatchCwdEnforced(env) {
   return raw === '1' || raw === 'true' || raw === 'yes';
 }
 
+// #353: crash-safe durable-state write — tmp + fsync + atomic rename, so a crash mid-write can
+// never leave a TORN workflow-plan.md (plan_hash mismatch → --resume-check bricks the run with no
+// recovery) or workflow-state.md (a torn file is silently skipped by readActiveFolders → the
+// project goes invisible). Returns false when content is unchanged (no write). Mirrors roadmap.js's
+// primitive; placed here (the ×4 byte-anchor + a COMMON_SCRIPT) to avoid a new-file registration.
+function writeFileAtomicReplace(filePath, content) {
+  const fs = require('fs');
+  const path = require('path');
+  let existing = '';
+  try { existing = fs.readFileSync(filePath, 'utf8'); } catch (_) {}
+  if (existing === content) return false;
+  const dir = path.dirname(filePath);
+  fs.mkdirSync(dir, { recursive: true });
+  const tmp = path.join(dir, '.' + path.basename(filePath) + '.' + process.pid + '.' + Date.now() + '.' + Math.random().toString(16).slice(2) + '.tmp');
+  let fd;
+  try {
+    fd = fs.openSync(tmp, 'wx');
+    fs.writeFileSync(fd, content, 'utf8');
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = undefined;
+    fs.renameSync(tmp, filePath);
+  } catch (err) {
+    if (fd !== undefined) { try { fs.closeSync(fd); } catch (_) {} }
+    try { fs.unlinkSync(tmp); } catch (_) {}
+    throw err;
+  }
+  return true;
+}
+
 function isLegalWorkflowPath(value, adaptiveEnabled) {
   return (adaptiveEnabled ? WORKFLOW_PATHS : WORKFLOW_PATHS_NO_ADAPTIVE).includes(value);
 }
@@ -357,5 +387,6 @@ module.exports = {
   resolveFanoutCap,
   resolveFanoutCapReadonly,
   resolveBatchCwdEnforced,
+  writeFileAtomicReplace,
   isLegalWorkflowPath,
 };
