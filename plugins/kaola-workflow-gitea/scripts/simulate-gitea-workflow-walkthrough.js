@@ -1063,6 +1063,33 @@ function testGiteaBundleClaimCreatesOneFolder() {
   console.log('testGiteaBundleClaimCreatesOneFolder: PASSED');
 }
 
+// #347: --attest-planner-spawn on the forge claim back-fills the planner dispatch-log line (the
+// #280 producer, ported here). Without the flag-parse + back-fill the line is never written and the
+// forge sink-merge attestation (#300 consumer) is structurally dead on this edition. Behavioral
+// proof: a startup claim WITH the flag writes a workflow-planner entry to dispatch-log.jsonl.
+function testGiteaPlannerAttestBackfill() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-attest-')));
+  const binDir = path.join(tmp, 'bin');
+  const logFile = path.join(tmp, 'tea-calls.log');
+  try {
+    _initGitRepo(tmp);
+    gtPlantRoadmapIssue(tmp, 42);
+    gtPlantRoadmapIssue(tmp, 47);
+    gtPlantRoadmapIssue(tmp, 53);
+    writeBundleTeaMockScript(binDir, { logFile, openIssues: [42, 47, 53] });
+    const result = gtSpawnBundle(['startup', '--target-issues', '42,47,53', '--workflow-path', 'adaptive', '--attest-planner-spawn'], tmp, binDir);
+    assert.strictEqual(result.status, 0, 'gitea #347: exit 0 expected, got ' + result.status + '\nstderr: ' + result.stderr);
+    const out = gtLastJson(result.stdout);
+    assert.strictEqual(out.claim, 'acquired', 'gitea #347: claim must be acquired');
+    const dispatchLog = path.join(tmp, 'kaola-workflow', 'bundle-42-47-53', '.cache', 'dispatch-log.jsonl');
+    assert.ok(fs.existsSync(dispatchLog), 'gitea #347: --attest-planner-spawn must create dispatch-log.jsonl at ' + dispatchLog);
+    const lines = fs.readFileSync(dispatchLog, 'utf8').split('\n').filter(Boolean);
+    const plannerLine = lines.find(l => { try { return JSON.parse(l).agent_type === 'workflow-planner'; } catch (_) { return false; } });
+    assert.ok(plannerLine, 'gitea #347: dispatch-log must carry a workflow-planner back-fill entry, got: ' + lines.join('|'));
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testGiteaPlannerAttestBackfill: PASSED');
+}
+
 // S2: a refused bundle claim (closed member #47) leaves NO active folder and applies
 // ZERO labels (pre-mutation refusal). AC#5 + AC#6 guard.
 function testGiteaBundleRefusalLeavesNoFolder() {
@@ -1319,6 +1346,7 @@ testGiteaDispatchHookExists();
 
 // issue #342: bundle-lane E2E behavioral coverage (mirrors root §#328 modulo forge nouns).
 testGiteaBundleClaimCreatesOneFolder();
+testGiteaPlannerAttestBackfill();
 testGiteaBundleRefusalLeavesNoFolder();
 testGiteaBundleDuplicateIssueBlocking();
 testGiteaBundleOrientSurfacesBundleIdentity();

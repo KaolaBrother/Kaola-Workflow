@@ -483,6 +483,9 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'main-se
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'KAOLA_SCRIPTS="plugins/kaola-workflow/scripts"');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, "-path '*/kaola-workflow/*/scripts/kaola-workflow-adaptive-node.js'");
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, '--attest-contractor-spawn');
+// #347: pin the planner self-attest back-fill flag (the #280 producer) — codex ships the canonical
+// claim byte-for-byte; pinning here keeps the producer from regressing on this edition too.
+assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, '--attest-planner-spawn');
 assertIncludes(`${pluginRoot}/agents/contractor.toml`, '--attest-contractor-spawn');
 // #281: parallel-batch aggregator claude-plugin copy presence
 assert(exists(`${pluginRoot}/scripts/kaola-workflow-parallel-batch.js`), '#281 parallel-batch aggregator missing from Codex plugin');

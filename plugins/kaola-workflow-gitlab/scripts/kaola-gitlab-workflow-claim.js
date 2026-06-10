@@ -114,6 +114,9 @@ function parseArgs(argv) {
     if (key === '--archive') { args.archive = true; continue; }
     if (key === '--export')  { args.export = true; continue; }
     if (key === '--keep-branch') { args.keepBranch = true; continue; }
+    // #280/#347: planner self-attest back-fill flag (the planner's own claim creates the .cache
+    // the SubagentStart hook would log to, so the hook cannot catch it). Boolean flag.
+    if (key === '--attest-planner-spawn') { args.attestPlannerSpawn = true; continue; }
     // #338: contractor self-attest flag at the finalize seam; a boolean flag like --json/--force.
     if (key === '--attest-contractor-spawn') { args.attestContractorSpawn = true; continue; }
     if (key.startsWith('--') && val !== undefined && !val.startsWith('--')) {
@@ -613,6 +616,20 @@ function claimProject(root, args) {
     project_web_url: projectInfo.web_url
   });
   postAdvisoryClaim(issueIid, project, projectInfo);
+  // #280/#347: planner self-attest back-fill (mirror of the canonical claimProject block). The
+  // SubagentStart dispatch-log hook cannot log the planner's OWN spawn (this claim creates the
+  // .cache it would log to). When --attest-planner-spawn is supplied, back-fill a workflow-planner
+  // entry so the forge sink-merge attestation reads 'attested'. Gated on the flag; warn-first; the
+  // try/catch keeps attestation from EVER blocking the claim.
+  if (args.attestPlannerSpawn) {
+    try {
+      const cacheDir = path.join(root, 'kaola-workflow', project, '.cache');
+      fs.mkdirSync(cacheDir, { recursive: true });
+      const ts = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+      const entry = JSON.stringify({ ts, agent_type: 'workflow-planner', agent_id: 'claim-backfill', cwd: root });
+      fs.appendFileSync(path.join(cacheDir, 'dispatch-log.jsonl'), entry + '\n');
+    } catch (_) { /* fail-open: attestation is warn-first */ }
+  }
   return Object.assign(
     { status: 'acquired', verdict: 'green', claim: 'acquired', issue: issueIid, project, branch, worktree_path: worktreePath },
     worktreeError ? { worktree_error: worktreeError } : {},

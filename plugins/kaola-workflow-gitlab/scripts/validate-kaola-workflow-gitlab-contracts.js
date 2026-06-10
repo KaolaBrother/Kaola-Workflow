@@ -614,6 +614,9 @@ assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'main-sessio
 assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'kaola_script(){');
 assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'KAOLA_SCRIPTS="$(dirname "$(kaola_script kaola-gitlab-workflow-adaptive-node.js)")"');
 assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js', '--attest-contractor-spawn');
+// #347: the planner self-attest back-fill flag must be ported to the forge claim (the #280 producer
+// was canonical-only while #300 ported its consumer — without this pin the asymmetry is invisible).
+assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js', '--attest-planner-spawn');
 assertIncludes(pluginRoot + '/agents/contractor.toml', '--attest-contractor-spawn');
 
 // #340: registration-surface + forge-port parity checks and their authoring/dispatch prose

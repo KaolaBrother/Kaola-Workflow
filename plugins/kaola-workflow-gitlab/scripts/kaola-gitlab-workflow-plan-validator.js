@@ -1193,6 +1193,8 @@ function printHelp() {
     '  --gate-verify  verify gate EXECUTION over the ## Node Ledger (G1/G2/G3 ran; G3 = a non-delegable main-session-gate is complete — never n/a — and post-dominates completed code nodes); exit 1 if a completed node is uncovered\n' +
     '  --record-base --node-id ID  snapshot the full worktree as node ID\'s per-instance baseline (.cache); run at node start.\n' +
     '                 Idempotent: reuses an existing baseline (resume-safe — a re-dispatch never launders a crashed attempt)\n' +
+    '  --drop-base --node-id ID  delete node ID\'s baseline .cache file AND its anchored ref together (reopen/repair cleanup).\n' +
+    '                 Idempotent: a missing file/ref is a clean no-op. Prevents a dangling ref tripping barrier_base_mismatch.\n' +
     '  --barrier-check re-scan ACTUAL writes and refuse a sensitive write with no security-reviewer, or an out-of-allowlist\n' +
     '                 write; exit 1 on refusal. Whole-plan (no --node-id): union allowlist, diff vs merge-base of HEAD and\n' +
     '                 --base (default origin/main). Per-node (--node-id ID): the node\'s OWN allowlist, tree-diff vs its recorded\n' +
@@ -1280,6 +1282,23 @@ function main() {
     process.stdout.write((json ? JSON.stringify({ result: 'ok', nodeId, base: baseCommit }) : 'recorded base ' + baseCommit + ' for node ' + nodeId) + '\n');
     return;
   }
+  if (args.includes('--drop-base')) {
+    // #368: delete a node's baseline FILE and its anchored REF together so reopen/repair never
+    // leaves a dangling ref (which would later trip --barrier-check's barrier_base_mismatch) or a
+    // file pointing at a pruned commit. Idempotent: a missing file/ref is a clean no-op success.
+    const flagVal = name => { const i = args.indexOf(name); return i >= 0 && i + 1 < args.length ? args[i + 1] : null; };
+    const nodeId = flagVal('--node-id');
+    if (!nodeId) {
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', errors: ['--drop-base requires --node-id <id>'] }) : 'typed refusal: --drop-base requires --node-id') + '\n');
+      process.exitCode = 1; return;
+    }
+    let fileRemoved = false;
+    try { fs.unlinkSync(cacheBaseFile(nodeId)); fileRemoved = true; } catch (_) {}
+    let refRemoved = false;
+    try { execFileSync('git', ['-C', root, 'update-ref', '-d', barrierRef(nodeId)], { stdio: ['ignore', 'ignore', 'ignore'] }); refRemoved = true; } catch (_) {}
+    process.stdout.write((json ? JSON.stringify({ result: 'ok', nodeId, fileRemoved, refRemoved }) : 'dropped base for node ' + nodeId + ' (file=' + fileRemoved + ', ref=' + refRemoved + ')') + '\n');
+    return;
+  }
   if (args.includes('--barrier-check')) {
     const flagVal = name => { const i = args.indexOf(name); return i >= 0 && i + 1 < args.length ? args[i + 1] : null; };
     const nodeId = flagVal('--node-id');
@@ -1303,6 +1322,22 @@ function main() {
       try { base = fs.readFileSync(cacheBaseFile(nodeId), 'utf8').trim(); } catch (_) { base = ''; }
       if (!base) {
         process.stdout.write((json ? JSON.stringify({ result: 'refuse', errors: ['no recorded per-node base for "' + nodeId + '" (run --record-base --node-id at node start)'] }) : 'typed refusal: no recorded per-node base for ' + nodeId) + '\n');
+        process.exitCode = 1; return;
+      }
+      // #368: cross-check the .cache base file against the gc-anchored ref. --record-base writes
+      // BOTH (the file SHA and refs/kaola-workflow/barrier/<proj>/<id>). Overwriting the file with
+      // the SHA of a fresh current-tree snapshot would empty the node's diff and neuter the ONLY
+      // check that sees a node's actual writes — and unlike the warn-first dispatch log this gates a
+      // BLOCKING check. The cross-check is nearly free (the ref already exists). Refuse
+      // barrier_base_mismatch when the ref is missing while the file exists, or the SHAs disagree.
+      let refSha = '';
+      try { refSha = execFileSync('git', ['-C', root, 'rev-parse', '--verify', '--quiet', barrierRef(nodeId) + '^{commit}'], { encoding: 'utf8' }).trim(); } catch (_) { refSha = ''; }
+      if (!refSha) {
+        process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'barrier_base_mismatch', errors: ['anchored baseline ref missing for "' + nodeId + '" while a .cache base file exists — re-run --record-base'] }) : 'typed refusal: barrier_base_mismatch (anchored ref missing for ' + nodeId + ')') + '\n');
+        process.exitCode = 1; return;
+      }
+      if (refSha !== base) {
+        process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'barrier_base_mismatch', errors: ['.cache base SHA for "' + nodeId + '" does not match the anchored ref (file ' + base + ' != ref ' + refSha + ')'] }) : 'typed refusal: barrier_base_mismatch for ' + nodeId) + '\n');
         process.exitCode = 1; return;
       }
       const now = snapshotWorktree(root, nodeId + '-now');

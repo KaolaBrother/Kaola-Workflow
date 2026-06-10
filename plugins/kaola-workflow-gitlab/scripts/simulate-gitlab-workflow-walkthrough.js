@@ -809,6 +809,33 @@ function testGitlabBundleClaimCreatesOneFolder() {
   console.log('testGitlabBundleClaimCreatesOneFolder: PASSED');
 }
 
+// #347: --attest-planner-spawn on the forge claim back-fills the planner dispatch-log line (the
+// #280 producer, ported here). Without the flag-parse + back-fill the line is never written and the
+// forge sink-merge attestation (#300 consumer) is structurally dead on this edition. Behavioral
+// proof: a startup claim WITH the flag writes a workflow-planner entry to dispatch-log.jsonl.
+function testGitlabPlannerAttestBackfill() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-attest-')));
+  const binDir = path.join(tmp, 'bin');
+  const logFile = path.join(tmp, 'glab-calls.log');
+  try {
+    glInitGitRepo(tmp);
+    glPlantRoadmapIssue(tmp, 42);
+    glPlantRoadmapIssue(tmp, 47);
+    glPlantRoadmapIssue(tmp, 53);
+    writeBundleGlabMockScript(binDir, { logFile, openIssues: [42, 47, 53] });
+    const result = glSpawnBundle(['startup', '--target-issues', '42,47,53', '--workflow-path', 'adaptive', '--attest-planner-spawn'], tmp, binDir);
+    assert.strictEqual(result.status, 0, 'gitlab #347: exit 0 expected, got ' + result.status + '\nstderr: ' + result.stderr);
+    const out = glLastJson(result.stdout);
+    assert.strictEqual(out.claim, 'acquired', 'gitlab #347: claim must be acquired');
+    const dispatchLog = path.join(tmp, 'kaola-workflow', 'bundle-42-47-53', '.cache', 'dispatch-log.jsonl');
+    assert.ok(fs.existsSync(dispatchLog), 'gitlab #347: --attest-planner-spawn must create dispatch-log.jsonl at ' + dispatchLog);
+    const lines = fs.readFileSync(dispatchLog, 'utf8').split('\n').filter(Boolean);
+    const plannerLine = lines.find(l => { try { return JSON.parse(l).agent_type === 'workflow-planner'; } catch (_) { return false; } });
+    assert.ok(plannerLine, 'gitlab #347: dispatch-log must carry a workflow-planner back-fill entry, got: ' + lines.join('|'));
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testGitlabPlannerAttestBackfill: PASSED');
+}
+
 // S2: a refused bundle claim (closed member #47) leaves NO active folder and applies
 // ZERO labels (pre-mutation refusal). AC#5 + AC#6 guard.
 function testGitlabBundleRefusalLeavesNoFolder() {
@@ -1252,6 +1279,7 @@ testGitlabDispatchHookExists();
 
 // issue #342: bundle-lane E2E behavioral coverage (mirrors root §#328 modulo forge nouns).
 testGitlabBundleClaimCreatesOneFolder();
+testGitlabPlannerAttestBackfill();
 testGitlabBundleRefusalLeavesNoFolder();
 testGitlabBundleDuplicateIssueBlocking();
 testGitlabBundleOrientSurfacesBundleIdentity();

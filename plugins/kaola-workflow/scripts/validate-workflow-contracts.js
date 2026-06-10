@@ -558,6 +558,9 @@ assertIncludes('commands/kaola-workflow-plan-run.md', 'main-session-direct');
 assertIncludes('commands/kaola-workflow-plan-run.md', 'kaola_script(){');
 assertIncludes('commands/kaola-workflow-plan-run.md', 'KAOLA_SCRIPTS="$(dirname "$(kaola_script kaola-workflow-adaptive-node.js)")"');
 assertIncludes('scripts/kaola-workflow-claim.js', '--attest-contractor-spawn');
+// #347: pin the planner self-attest back-fill flag (the #280 producer) so the forge-port asymmetry
+// it surfaced cannot recur — the producer must exist on every edition that ships the consumer (#300).
+assertIncludes('scripts/kaola-workflow-claim.js', '--attest-planner-spawn');
 assertIncludes('agents/contractor.md', '--attest-contractor-spawn');
 assertIncludes('install.sh', 'kaola-workflow-plan-validator.js');
 assertIncludes('install.sh', '--enable-adaptive');

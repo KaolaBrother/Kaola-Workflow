@@ -2037,6 +2037,7 @@ function makeState(opts) {
   assert(removed.includes('barrier-base-impl') && removed.includes('barrier-base-review'),
     '#308 reopen: stale baselines for impl + gate removed, got ' + JSON.stringify(removed));
   assert(shelled.includes('kaola-workflow-commit-node.js'), '#308 reopen: fresh baseline (commit-node --start) recorded for impl');
+  assert(shelled.includes('kaola-workflow-plan-validator.js'), '#368 reopen: validator --drop-base shelled to delete the anchored baseline ref(s) (no dangling ref)');
 }
 
 // #349: reopen-node purges stale GATE verdict evidence (.cache/<gate-id>.md) for each reset gate,

@@ -1422,6 +1422,11 @@ function runReopenNode(opts) {
       unlink(bf);
       baselinesRemoved.push('barrier-base-' + String(id).replace(/[^A-Za-z0-9_-]/g, '_'));
     }
+    // #368: also drop the gc-anchored baseline REF (not just the .cache file). A dangling ref
+    // would otherwise survive the reopen and, paired with a re-recorded file, could trip
+    // --barrier-check's barrier_base_mismatch. --drop-base removes file+ref together and is
+    // idempotent (a missing file/ref is a clean no-op).
+    shell(validatorPath, [planPath, '--drop-base', '--node-id', id, '--json']);
   }
 
   // (4b) #349: remove stale gate VERDICT evidence for the reset gates. A gate is folded back to
