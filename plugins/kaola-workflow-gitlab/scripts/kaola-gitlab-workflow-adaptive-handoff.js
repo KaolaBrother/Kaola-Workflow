@@ -592,7 +592,10 @@ function main() {
     computeNextAction: require('./kaola-gitlab-workflow-next-action').computeNextAction,
     resolveModel,
     readFile:  fpath => fs.readFileSync(fpath, 'utf8'),
-    writeFile: (fpath, content) => fs.writeFileSync(fpath, content, 'utf8'),
+    // #389: the workflow-state.md Planning Evidence write must route through the crash-safe
+    // atomic replace (tmp + fsync + rename). #354 claimed "no torn workflow-state.md" after
+    // routing repair-state/sink-pr, but this handoff writer was never routed.
+    writeFile: (fpath, content) => require('./kaola-workflow-adaptive-schema').writeFileAtomicReplace(fpath, content),
     stateMtime,
     findDecisionIdHits,
   });

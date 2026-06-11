@@ -500,6 +500,11 @@ assertConcept(`${pluginRoot}/scripts/kaola-gitea-workflow-roadmap.js`, 'Gitea at
   'createFileExclusive',
   'updated: issue-'
 ]);
+// #389 (#353/#354 completion): the plan-validator --freeze writer (plan_hash stamp + mid-run repair
+// re-freeze carrying the ## Node Ledger) and the adaptive-handoff workflow-state Planning Evidence
+// writer route through the crash-safe atomic replace.
+assertIncludes(`${pluginRoot}/scripts/kaola-gitea-workflow-plan-validator.js`, 'writeFileAtomicReplace(planPath');
+assertIncludes(`${pluginRoot}/scripts/kaola-gitea-workflow-adaptive-handoff.js`, 'writeFileAtomicReplace(fpath');
 assertIncludes(`${pluginRoot}/scripts/kaola-gitea-workflow-roadmap.js`, "sub === 'validate-remote'");
 assertIncludes(`${pluginRoot}/scripts/kaola-gitea-workflow-roadmap.js`, 'function validateRemote');
 assertIncludes(`${pluginRoot}/scripts/kaola-gitea-workflow-roadmap.js`, 'cmdValidateRemote');

@@ -63,6 +63,14 @@ const CANONICAL_ROLES = [
 // security-reviewer is Write by manifest, review-only only by governance posture).
 const WRITE_ROLES = new Set(['tdd-guide', 'build-error-resolver', 'doc-updater', 'security-reviewer', 'implementer']);
 const IMPLEMENT_ROLES = new Set(['tdd-guide', 'build-error-resolver', 'implementer']);
+// #388: canonical node-id sanitizer. MUST stay byte-identical to the inline regex in
+// cacheBaseFile/barrierRef (the --record-base / --drop-base / --barrier-check .cache + ref keys)
+// so the freeze-time sanitize-collision check sees the SAME collisions the barrier keys do
+// (`a.b` and `a_b` both → `barrier-base-a_b`). Used ONLY at freeze (dup-id + collision wall) and
+// for the #385 freshness-token file name.
+function sanitizeNodeId(id) {
+  return String(id).replace(/[^A-Za-z0-9_-]/g, '_');
+}
 // #251: roles that must emit a machine verdict block into their .cache evidence file.
 // #334: MAIN_SESSION_GATE joins the set so a non-delegable gate gets per-node + whole-plan
 // verdict enforcement (verifyVerdictBlock sequence branch reads .cache/<id>.md, requires
@@ -654,6 +662,28 @@ function validatePlan(content, opts) {
   }
   const ids = new Set(nodes.map(n => n.id));
 
+  // #388 (FREEZE-ONLY): duplicate node ids + sanitize-collisions freeze in-grammar today (nodeCount
+  // counts both; barrierCheck's nodes.find judges the 2nd against the 1st's write set; parseLedger is
+  // last-wins; cacheBaseFile/barrierRef COLLIDE on `barrier-base-<sanitized>`). Refuse at the
+  // authoring gate. NOT added to revalidateForResume — a legacy frozen plan with a dup id must still
+  // resume-check (the #381 freeze-only landmine). O(n): a raw-id Set + a sanitized->rawid Map.
+  {
+    const seenRaw = new Set();
+    const seenSan = new Map();
+    for (const n of nodes) {
+      if (seenRaw.has(n.id)) {
+        errors.push(`duplicate node id "${n.id}" — node ids must be unique (the per-node barrier/ledger key on id; a duplicate is silently judged against the first row)`);
+      }
+      seenRaw.add(n.id);
+      const san = sanitizeNodeId(n.id);
+      if (seenSan.has(san) && seenSan.get(san) !== n.id) {
+        errors.push(`node ids "${seenSan.get(san)}" and "${n.id}" sanitize to the same barrier/ref key "${san}" — they would collide on .cache/barrier-base-${san}; rename one`);
+      } else if (!seenSan.has(san)) {
+        seenSan.set(san, n.id);
+      }
+    }
+  }
+
   // closed library (runtime-closed over the installed set)
   for (const n of nodes) {
     // #334: MAIN_SESSION_GATE is a built-in non-subagent token (like the finalize sink) — skip
@@ -690,11 +720,58 @@ function validatePlan(content, opts) {
     // to size 1, so the A2 fail-closed above does not fire). Freeze-only — revalidateForResume is NOT
     // touched, so an in-flight legacy plan frozen by a pre-#381 validator still resumes (its barrier
     // failure falls through to the unchanged write-halt --reason consent net).
+    // #388: freeze-wall round 2 — close the residual write-set shapes that freeze in-grammar
+    // (--json exit 0) yet die at the exact-path barrier (re-creating the #381 "mechanical artifact
+    // → maximally-expensive consent halt"). Freeze-only — revalidateForResume is NOT touched so a
+    // legacy in-flight plan never bricks. Backslash + bare-dir + case-collision below.
+    const freezeRoot = opts.root || process.cwd();
+    const lcSeen = new Map(); // sibling-only case-collision (NOT tree-wide)
     for (const tok of n.writeSet) {
-      if (tok.endsWith('/')) {
+      // #388 (c)/(d): a backslash-bearing token — `src\app.js` or the traversal evasion
+      // `..\notes.txt` (the #381 `..` wall split is `/`-only) — is dead at the POSIX exact-path
+      // barrier. Checked BEFORE the trailing-`/` check so a Windows-ism is reported as such.
+      if (tok.includes('\\')) {
+        errors.push(`node ${n.id} declared_write_set token "${tok}" contains a backslash (backslash_in_path) — declare POSIX in-repo file paths (a backslash never matches at the exact-path barrier)`);
+      } else if (tok.endsWith('/')) {
         errors.push(`node ${n.id} declared_write_set entry "${tok}" is directory-shaped — declare exact file paths (the barrier matches files exactly; a directory grant is dead at the per-node barrier)`);
       } else if (tok.split('/').indexOf('..') !== -1) {
         errors.push(`node ${n.id} declared_write_set token "${tok}" contains '..' — declare exact in-repo file paths`);
+      } else {
+        // #388 (a): a BARE directory name (no trailing slash) is indistinguishable from a
+        // root-file like `Dockerfile` to the string check, but the fs knows. statSync relative to
+        // the repo root: a real directory is dead at the exact-path barrier and must refuse at
+        // freeze. A statSync throw (a not-yet-created new file) is a clean skip — a new file is
+        // legitimate; a Dockerfile-style root FILE isDirectory()===false → green.
+        try {
+          if (fs.statSync(path.join(freezeRoot, tok)).isDirectory()) {
+            errors.push(`node ${n.id} declared_write_set entry "${tok}" resolves to an existing directory (directory_shaped_bare) — declare exact file paths (a directory grant is dead at the per-node barrier)`);
+          }
+        } catch (_) { /* path does not exist yet — a new file, legitimate */ }
+      }
+      // #388 (e): case-variant SIBLINGS in the SAME node (`SRC/app.js` + `src/app.js`) freeze
+      // in-grammar but the exact-string barrier is case-exact, and macOS is case-insensitive, so
+      // one write lands and the other silently never matches. Sibling-scoped only (NOT a tree
+      // walk) — the minimum AC the issue asks for.
+      const lc = tok.toLowerCase();
+      if (lcSeen.has(lc) && lcSeen.get(lc) !== tok) {
+        errors.push(`node ${n.id} declared_write_set has case-colliding siblings "${lcSeen.get(lc)}" and "${tok}" (case_collision) — the exact-path barrier is case-exact; one would never match on a case-insensitive filesystem`);
+      } else if (!lcSeen.has(lc)) {
+        lcSeen.set(lc, tok);
+      }
+    }
+    // #388 (minor): a multi-token cell silently drops a token that normalizes to empty (e.g.
+    // `src/app.js ./` froze green with the `./` grant vanished — the A2 fail-closed backstop is
+    // per-CELL, not per-token). Fail closed per token: split writeSetRaw the SAME way
+    // parseWriteSetCell does (/[\s,]+/) and refuse any non-sentinel token that parses to size 0.
+    {
+      const rawCell = (n.writeSetRaw || '').trim();
+      if (rawCell && rawCell !== '—' && rawCell !== '-') {
+        for (const rt of rawCell.split(/[\s,]+/)) {
+          if (rt === '' || rt === '—' || rt === '-') continue;
+          if (classifier.parseWriteSetCell(rt).size === 0) {
+            errors.push(`node ${n.id} declared_write_set token "${rt}" normalizes to empty (token_empty_normalized) — a grant would silently vanish; remove it or declare an exact path`);
+          }
+        }
       }
     }
     // #382: optional per-node model tier — minimal freeze-time validation. An absent/'—' cell parses
@@ -706,6 +783,12 @@ function validatePlan(content, opts) {
       }
       if (n.role === MAIN_SESSION_GATE) {
         errors.push(`node ${n.id} is a main-session-gate and must not declare a model (it is never dispatched as a subagent)`);
+      }
+      // #390(c): the finalize sink, like a main-session-gate, is never dispatched as a subagent
+      // (the main session runs Phase-6 finalize itself), so a model cell on it is meaningless.
+      // Refuse it at freeze for wall symmetry. Freeze-only (revalidateForResume untouched).
+      if (n.role === TERMINAL_ROLE) {
+        errors.push(`node ${n.id} is the finalize sink and must not declare a model (it is never dispatched as a subagent)`);
       }
     }
     if (n.writeSet.size > schema.FILE_CEILING) {
@@ -1270,7 +1353,11 @@ function main() {
       reconciledAdded = rec.added;
     }
     const r = freezePlan(toFreeze, { root });
-    if (r.frozen) fs.writeFileSync(planPath, r.content);
+    // #389: route the plan_hash-stamping freeze write (also the mid-run plan-repair re-freeze
+    // writer that carries a populated ## Node Ledger) through the crash-safe atomic replace.
+    // A torn workflow-plan.md would mismatch plan_hash and brick --resume-check with no recovery
+    // (#353's verbatim motivating scenario), and the ledger is not covered by any other artifact.
+    if (r.frozen) schema.writeFileAtomicReplace(planPath, r.content);
     process.stdout.write((json ? JSON.stringify({ result: r.result, decision: r.decision, planHash: r.planHash, frozen: r.frozen, risk: r.risk, errors: r.errors, reconciled: reconciledAdded }) : (r.frozen ? `frozen (${r.decision}) plan_hash=${r.planHash}${reconciledAdded.length ? ' reconciled=' + reconciledAdded.join(',') : ''}` : 'typed refusal: ' + (r.errors || []).join('; '))) + '\n');
     if (!r.frozen) process.exitCode = 1;
     return;
@@ -1287,6 +1374,14 @@ function main() {
   // project folder name (parent of the plan file).
   const projTag = path.basename(path.dirname(path.resolve(planPath))).replace(/[^A-Za-z0-9_-]/g, '_') || 'plan';
   const barrierRef = nid => 'refs/kaola-workflow/barrier/' + projTag + '/' + String(nid).replace(/[^A-Za-z0-9_-]/g, '_');
+  // #385: a freshness TOKEN file recording the HEAD that was current when this node's baseline was
+  // first recorded. The idempotent reuse branch (a crash re-dispatch, a consent-halt re-entry) must
+  // REUSE the original baseline — but a stale baseline whose HEAD has since advanced (an unrelated
+  // serial write node landed a tracked commit between this node's rollback and its reopen, the
+  // #281/#296 trap) silently mis-attributes those foreign writes. We WARN (never refuse) so the
+  // legitimate same-HEAD re-dispatch is not bricked. The scheduler drops the base on every rollback.
+  const openTokenFile = nid => path.join(path.dirname(path.resolve(planPath)), '.cache', 'barrier-open-' + sanitizeNodeId(nid));
+  const headNow = () => { try { return execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(); } catch (_) { return ''; } };
   if (args.includes('--record-base')) {
     // #239 (v3.21.0): snapshot the full landable worktree as a per-node baseline at NODE START via
     // snapshotWorktree(), anchor it under a ref (anchorBase) so `git gc` cannot prune it before the
@@ -1304,13 +1399,27 @@ function main() {
     let existing = '';
     try { existing = fs.readFileSync(cacheBaseFile(nodeId), 'utf8').trim(); } catch (_) {}
     if (existing) {
-      process.stdout.write((json ? JSON.stringify({ result: 'ok', nodeId, base: existing, reused: true }) : 'reused base ' + existing + ' for node ' + nodeId) + '\n');
+      // #385: REUSE the existing baseline (idempotent), but FLAG it stale when HEAD has advanced
+      // since it was recorded. A same-HEAD re-dispatch (a true crash re-entry) is NOT stale and
+      // must stay quiet so it is never bricked; a stale base whose token-HEAD !== current HEAD means
+      // an intervening tracked commit it would now wrongly attribute to this node. WARN, never
+      // refuse — the scheduler reads `reused.stale` and drops the base on every rollback.
+      let openHead = '';
+      try { openHead = fs.readFileSync(openTokenFile(nodeId), 'utf8').trim(); } catch (_) {}
+      const cur = headNow();
+      const stale = !!(openHead && cur && openHead !== cur);
+      const out = { result: 'ok', nodeId, base: existing, reused: true };
+      if (stale) { out.stale = true; out.staleReason = 'head_advanced'; out.recordedHead = openHead; out.currentHead = cur; }
+      process.stdout.write((json ? JSON.stringify(out) : 'reused base ' + existing + ' for node ' + nodeId + (stale ? ' (WARN: stale — head advanced ' + openHead + '->' + cur + ')' : '')) + '\n');
       return;
     }
     const baseTree = snapshotWorktree(root, nodeId);
     const baseCommit = anchorBase(root, barrierRef(nodeId), baseTree);
     fs.mkdirSync(path.dirname(cacheBaseFile(nodeId)), { recursive: true });
     fs.writeFileSync(cacheBaseFile(nodeId), baseCommit);
+    // #385: stamp the freshness token = the HEAD at first record. The reuse branch compares this
+    // against the live HEAD to detect a baseline that predates an intervening tracked commit.
+    fs.writeFileSync(openTokenFile(nodeId), headNow() + '\n');
     process.stdout.write((json ? JSON.stringify({ result: 'ok', nodeId, base: baseCommit }) : 'recorded base ' + baseCommit + ' for node ' + nodeId) + '\n');
     return;
   }
@@ -1328,6 +1437,9 @@ function main() {
     try { fs.unlinkSync(cacheBaseFile(nodeId)); fileRemoved = true; } catch (_) {}
     let refRemoved = false;
     try { execFileSync('git', ['-C', root, 'update-ref', '-d', barrierRef(nodeId)], { stdio: ['ignore', 'ignore', 'ignore'] }); refRemoved = true; } catch (_) {}
+    // #385: drop the freshness token too, so a fresh re-record after a rollback re-stamps the
+    // open-HEAD (and the next reuse compares against the NEW open event, not a stale one).
+    try { fs.unlinkSync(openTokenFile(nodeId)); } catch (_) {}
     process.stdout.write((json ? JSON.stringify({ result: 'ok', nodeId, fileRemoved, refRemoved }) : 'dropped base for node ' + nodeId + ' (file=' + fileRemoved + ', ref=' + refRemoved + ')') + '\n');
     return;
   }

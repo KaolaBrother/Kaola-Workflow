@@ -102,7 +102,15 @@ function normalizeRepoPath(raw) {
     // finding against the v3.20.1 #232/#233 exact-file fix.) `../` is left untouched on purpose
     // (resolving it changes meaning and is out of scope).
     .replace(/^(?:\.\/)+/, '')
-    .replace(/\/{2,}/g, '/');
+    .replace(/\/{2,}/g, '/')
+    // #388: collapse INNER `/./` segments so the SAME physical file compares equal everywhere.
+    // Without this, `src/./app.js` vs `src/app.js` are distinct strings — which froze in-grammar
+    // as independent antichain siblings yet die at the exact-path barrier, AND defeated the
+    // guaranteed-clobber refusal (~plan-validator disjointness compares normalized strings). NO
+    // refusal here and NOT exported — this is a pure canonicalization that closes the evasion for
+    // free; the trailing-`/` directory-shape semantics (the #381 refusal key) are preserved intact.
+    .replace(/\/\.\//g, '/')
+    .replace(/\/\.$/, '/');
 }
 
 function areaForPath(filePath) {

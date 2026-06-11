@@ -457,6 +457,50 @@ function makePlan(nodesRows, ledgerRows) {
 }
 
 // -----------------------------------------------------------------------
+// Test 14 (#390b): the per-node model tier is validated at the POINT OF USE.
+// A plan carrying an out-of-tier `model` (e.g. `haiku`, a real harness alias)
+// passes --resume-check (revalidateForResume is freeze-only, untouched) but
+// computeNextAction REFUSES it (model_invalid) so the dispatch prose never passes
+// it verbatim on Agent(model=…). opus/sonnet/absent must pass through unchanged.
+// Builds a 7-col ## Nodes table (the model column is the 7th cell).
+// -----------------------------------------------------------------------
+function makeModelPlan(nodesRows, ledgerRows) {
+  return [
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape | model |',
+    '|---|---|---|---|---|---|---|',
+    nodesRows.join('\n'), '',
+    '## Node Ledger', '',
+    '| id | status |', '|---|---|',
+    ledgerRows.join('\n'), '',
+  ].join('\n');
+}
+{
+  // (a) haiku → refuse model_invalid (does NOT reach readySet/nextNode emit).
+  const haiku = makeModelPlan(
+    ['| a | tdd-guide | — | scripts/foo.js | 1 | sequence | haiku |',
+     '| finalize | finalize | a | — | 1 | sequence | |'],
+    ['| a | pending |', '| finalize | pending |']);
+  const rh = computeNextAction(haiku, { resolveModel: stub });
+  assert(rh.result === 'refuse', 'test14 (#390b): haiku model must refuse, got ' + JSON.stringify(rh));
+  assert((rh.errors || []).join(';').includes('model_invalid'),
+    'test14 (#390b): refusal must name model_invalid, got ' + JSON.stringify(rh.errors));
+  assert(rh.errors.join(';').includes('node a'),
+    'test14 (#390b): refusal must name the offending node, got ' + JSON.stringify(rh.errors));
+
+  // (b) opus + sonnet + absent all pass through (no false refusal).
+  const ok = makeModelPlan(
+    ['| a | tdd-guide | — | scripts/foo.js | 1 | sequence | opus |',
+     '| b | tdd-guide | a | scripts/bar.js | 1 | sequence | sonnet |',
+     '| c | tdd-guide | b | scripts/baz.js | 1 | sequence | |',
+     '| finalize | finalize | c | — | 1 | sequence | |'],
+    ['| a | pending |', '| b | pending |', '| c | pending |', '| finalize | pending |']);
+  const ro = computeNextAction(ok, { resolveModel: stub });
+  assert(ro.result === 'ok', 'test14 (#390b): opus/sonnet/absent must pass, got ' + JSON.stringify(ro));
+  assert(ro.nextNode.model === 'opus', 'test14 (#390b): nextNode.model honors opus cell, got ' + JSON.stringify(ro.nextNode && ro.nextNode.model));
+}
+
+// -----------------------------------------------------------------------
 // Summary
 // -----------------------------------------------------------------------
 if (failed > 0) {

@@ -1173,6 +1173,60 @@ function runMirrorHandoffCase(mirrorResponse) {
   assert(mirrorShelled === false, 'T7-#335: mirror-project never shelled when the precondition fails');
 }
 
+// ---------------------------------------------------------------------------
+// #389: the workflow-state.md Planning Evidence write routes through the crash-safe
+// atomic replace (tmp + fsync + rename), so a torn write can never strand a partial
+// workflow-state.md. Drive runHandoff with the REAL atomic-replace seam (the one wired
+// into the CLI main()) against a real temp state file: the PE-updated content must land
+// fully intact and leave NO `.workflow-state.md.*.tmp` sidecar behind.
+// ---------------------------------------------------------------------------
+{
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'test-handoff-389-'));
+  try {
+    const proj = path.join(tmpDir, 'kaola-workflow', 'test-project');
+    fs.mkdirSync(proj, { recursive: true });
+    const planPath = path.join(proj, 'workflow-plan.md');
+    const statePath = path.join(proj, 'workflow-state.md');
+    const planContent = makeUnfrozenPlan('auto-run');
+    const stateContent = makeStateContent({ issueNumber: null }); // no issue → roadmap stage skipped
+    fs.writeFileSync(statePath, stateContent);
+    const frozenPlanContent = planContent + '<!-- plan_hash: ' + PLAN_HASH_64 + ' -->';
+    let readCallCount = 0;
+
+    const shellStub = makeShellStub({
+      'kaola-workflow-plan-validator.js:--json': { exitCode: 0, result: 'in-grammar', decision: 'auto-run', planHash: PLAN_HASH_64, risk: { sensitivity: false, blastRadius: false, uncertain: false, reasons: [] } },
+      'kaola-workflow-plan-validator.js:--freeze': { exitCode: 0, result: 'in-grammar', decision: 'auto-run', planHash: PLAN_HASH_64, frozen: true, risk: { sensitivity: false, blastRadius: false, uncertain: false, reasons: [] } },
+      'kaola-workflow-plan-validator.js:--resume-check': { exitCode: 0, ok: true, planHash: PLAN_HASH_64 },
+      'kaola-workflow-task-mirror.js': { exitCode: 0 },
+      'kaola-workflow-adaptive-node.js': { exitCode: 0, status: 'mirrored', planHash: PLAN_HASH_64 },
+    });
+
+    const result = runHandoff({
+      planPath, statePath, project: 'test-project', json: true,
+      shell: shellStub,
+      computeNextAction: require('./kaola-workflow-next-action').computeNextAction,
+      resolveModel: () => 'sonnet',
+      readFile: (fpath) => {
+        if (fpath.endsWith('workflow-plan.md')) { readCallCount++; return readCallCount <= 1 ? planContent : frozenPlanContent; }
+        if (fpath.endsWith('workflow-state.md')) return fs.readFileSync(fpath, 'utf8');
+        return '';
+      },
+      // REAL atomic-replace seam — identical to the CLI main() wiring.
+      writeFile: (fpath, content) => require('./kaola-workflow-adaptive-schema').writeFileAtomicReplace(fpath, content),
+      stateMtime: undefined,
+    });
+
+    assert(result.handoff_status === 'ready_to_run', '#389: handoff still ready_to_run with the atomic seam, got ' + JSON.stringify(result.handoff_status));
+    const landed = fs.readFileSync(statePath, 'utf8');
+    assert(landed.includes('## Planning Evidence') && landed.includes('plan_hash: ' + PLAN_HASH_64),
+      '#389: the atomic-replace seam must land the full PE-updated workflow-state.md intact');
+    const sidecars = fs.readdirSync(proj).filter(f => /^\.workflow-state\.md\..*\.tmp$/.test(f));
+    assert(sidecars.length === 0, '#389: the atomic-replace seam must leave no .tmp sidecar, got ' + JSON.stringify(sidecars));
+  } finally {
+    try { fs.rmSync(tmpDir, { recursive: true }); } catch (_) {}
+  }
+}
+
 // Summary
 // ---------------------------------------------------------------------------
 if (failed > 0) {

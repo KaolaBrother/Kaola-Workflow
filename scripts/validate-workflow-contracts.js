@@ -598,6 +598,11 @@ assertIncludes('scripts/kaola-workflow-claim.js', 'writeFileAtomicReplace');
 // #354 (#353-rest): the two remaining workflow-state writers route through the atomic replace too.
 assertIncludes('scripts/kaola-workflow-repair-state.js', 'writeFileAtomicReplace');
 assertIncludes('scripts/kaola-workflow-sink-pr.js', 'writeFileAtomicReplace');
+// #389 (#353/#354 completion): the two remaining bare durable writers route through the atomic
+// replace too — the plan-validator --freeze writer (plan_hash stamp + mid-run repair re-freeze
+// carrying the ## Node Ledger) and the adaptive-handoff workflow-state Planning Evidence writer.
+assertIncludes('scripts/kaola-workflow-plan-validator.js', 'writeFileAtomicReplace(planPath');
+assertIncludes('scripts/kaola-workflow-adaptive-handoff.js', 'writeFileAtomicReplace(fpath');
 // #369: bundle all-or-nothing closure — sink-merge closes every member; finalize passes the set.
 assertIncludes('scripts/kaola-workflow-sink-merge.js', '--issue-numbers');
 assertIncludes('commands/kaola-workflow-finalize.md', 'SINK_ISSUE_NUMBERS');

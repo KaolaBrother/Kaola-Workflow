@@ -25,7 +25,7 @@
 
 const fs = require('fs');
 const { parseNodes, parseLedger } = require('./kaola-workflow-plan-validator');
-const { LEDGER_STATUSES } = require('./kaola-workflow-adaptive-schema');
+const { LEDGER_STATUSES, NODE_MODEL_TIERS } = require('./kaola-workflow-adaptive-schema');
 
 // Terminal statuses: a node in either state counts as "done" for dependency
 // purposes, so an n/a node satisfies the depends_on of its successors.
@@ -59,6 +59,22 @@ function computeNextAction(content, opts) {
       return {
         result: 'refuse',
         errors: ['node ' + id + ' has out-of-enum ledger status "' + st + '"'],
+      };
+    }
+  }
+
+  // #390(b): validate the per-node model tier at the POINT OF USE. The freeze-time check
+  // (plan-validator computeNextAction-adjacent) only guards plans frozen by a #382-aware
+  // validator. A plan frozen pre-#382 (or hash-stamped via the exported computePlanHash/
+  // injectHash to dodge --freeze) passes --resume-check ok:true yet may carry `model: haiku` —
+  // a real harness alias the dispatch prose would pass verbatim on every Agent(model=…) call.
+  // revalidateForResume deliberately stays untouched (the #381 freeze-only landmine: a legacy
+  // plan must still resume-check), so the tier wall lives HERE, where the model is consumed.
+  for (const node of nodes) {
+    if (node.model && !NODE_MODEL_TIERS.includes(node.model)) {
+      return {
+        result: 'refuse',
+        errors: ['node ' + node.id + ' model "' + node.model + '" is not in NODE_MODEL_TIERS (model_invalid) — use one of: ' + NODE_MODEL_TIERS.join(', ')],
       };
     }
   }

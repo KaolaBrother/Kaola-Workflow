@@ -128,7 +128,12 @@ function normalizeRepoPath(raw) {
     // repeated slashes so `./lib/foo.js` / `lib//foo.js` compare equal to `lib/foo.js` (closes the
     // exact-file clobber / disjointness gap found adversarially). `../` left untouched on purpose.
     .replace(/^(?:\.\/)+/, '')
-    .replace(/\/{2,}/g, '/');
+    .replace(/\/{2,}/g, '/')
+    // #388: collapse INNER `/./` segments so the SAME physical file compares equal everywhere
+    // (`src/./app.js` === `src/app.js`) — closes the antichain/clobber evasion + the barrier-death
+    // shape. NO refusal here and NOT exported; trailing-`/` directory semantics (#381) preserved.
+    .replace(/\/\.\//g, '/')
+    .replace(/\/\.$/, '/');
 }
 
 function areaForPath(filePath) {

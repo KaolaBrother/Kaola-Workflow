@@ -389,6 +389,11 @@ assertConcept(`${pluginRoot}/scripts/kaola-workflow-roadmap.js`, 'atomic roadmap
   "fs.openSync(filePath, 'wx')",
   'fs.fsyncSync(fd)'
 ]);
+// #389 (#353/#354 completion): the plan-validator --freeze writer (plan_hash stamp + mid-run repair
+// re-freeze carrying the ## Node Ledger) and the adaptive-handoff workflow-state Planning Evidence
+// writer route through the crash-safe atomic replace.
+assertIncludes(`${pluginRoot}/scripts/kaola-workflow-plan-validator.js`, 'writeFileAtomicReplace(planPath');
+assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-handoff.js`, 'writeFileAtomicReplace(fpath');
 
 function extractRedirectBlock(file) {
   const text = read(file);

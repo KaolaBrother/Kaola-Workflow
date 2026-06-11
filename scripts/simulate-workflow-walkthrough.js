@@ -1497,6 +1497,144 @@ function testAdaptiveValidatorGovernance() {
     ]);
     assert(v.result === 'refuse' && /must not declare a model/.test((v.errors||[]).join(';')),
       '#382: a main-session-gate carrying a model must refuse, got: ' + JSON.stringify(v));
+
+    // #390(c): the finalize sink, like a main-session-gate, is never dispatched as a subagent — a
+    // model cell on it must refuse at freeze (wall symmetry). Freeze-only (resume-check untouched).
+    v = vModel([
+      '| impl | implementer | — | lib/foo.js | 1 | sequence | sonnet |',
+      '| review | code-reviewer | impl | — | 1 | sequence | |',
+      '| done | finalize | review | — | 1 | sequence | opus |',
+    ]);
+    assert(v.result === 'refuse' && /finalize sink and must not declare a model/.test((v.errors||[]).join(';')),
+      '#390(c): the finalize sink carrying a model must refuse at freeze, got: ' + JSON.stringify(v));
+
+    // #388: freeze-wall round 2 — residual write-set shapes that froze in-grammar yet die at the
+    // exact-path barrier. Each refused at the AUTHORING gate (freeze), never deferred to a halt.
+
+    // (a) inner `/./` is COLLAPSED by normalizeRepoPath, so `src/./app.js` is a clean exact path
+    // and freezes GREEN (it IS src/app.js — a new file, not a directory).
+    v = validatePlanFixture(tmp, [
+      '| impl | tdd-guide | — | src/./app.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'in-grammar',
+      '#388: inner /./ collapses to a clean exact path and freezes green, got: ' + JSON.stringify(v));
+
+    // (a-twin) the /./ collapse also restores the guaranteed-clobber refusal: two independent
+    // antichain siblings implA `src/./app.js` and implB `src/app.js` are the SAME physical file →
+    // refuse "both write". FLIPS to in-grammar if the /./ collapse is reverted (they'd be distinct
+    // strings, so neither the disjointness nor the clobber check would see the overlap).
+    v = validatePlanFixture(tmp, [
+      '| implA | tdd-guide | — | src/./app.js | 1 | sequence |',
+      '| implB | tdd-guide | — | src/app.js | 1 | sequence |',
+      '| review | code-reviewer | implA,implB | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /both write/.test((v.errors||[]).join(';')),
+      '#388: src/./app.js + src/app.js (same file) must refuse the guaranteed clobber, got: ' + JSON.stringify(v));
+
+    // (c) a backslash token `src\app.js` is dead at the POSIX exact-path barrier → backslash refusal.
+    v = validatePlanFixture(tmp, [
+      '| impl | tdd-guide | — | src\\app.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /backslash_in_path/.test((v.errors||[]).join(';')),
+      '#388: a backslash token (src\\app.js) must refuse at freeze, got: ' + JSON.stringify(v));
+
+    // (d) backslash traversal `..\notes.txt` — the #381 `..` wall split is `/`-only, so this evaded
+    // it; the backslash check now catches it.
+    v = validatePlanFixture(tmp, [
+      '| impl | tdd-guide | — | ..\\notes.txt | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /backslash_in_path/.test((v.errors||[]).join(';')),
+      '#388: a backslash traversal (..\\notes.txt) must refuse at freeze, got: ' + JSON.stringify(v));
+
+    // (e) case-variant SIBLINGS in the same node (`SRC/app.js` + `src/app.js`) → case_collision.
+    v = validatePlanFixture(tmp, [
+      '| impl | tdd-guide | — | SRC/app.js, src/app.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /case_collision/.test((v.errors||[]).join(';')),
+      '#388: case-colliding siblings (SRC/app.js + src/app.js) must refuse at freeze, got: ' + JSON.stringify(v));
+
+    // (minor) a multi-token cell with a token that normalizes to empty (`src/app.js ./`) →
+    // token_empty_normalized (the `./` grant must not silently vanish).
+    v = validatePlanFixture(tmp, [
+      '| impl | tdd-guide | — | src/app.js ./ | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /token_empty_normalized/.test((v.errors||[]).join(';')),
+      '#388: a token that normalizes to empty must refuse at freeze, got: ' + JSON.stringify(v));
+
+    // (a-fs) a BARE directory name (no trailing slash) that resolves to a REAL directory under the
+    // repo root → directory_shaped_bare. CONTROL: a Dockerfile-style root FILE (also slash-less)
+    // freezes GREEN — the fs distinguishes them where the string check cannot.
+    {
+      fs.mkdirSync(path.join(tmp, 'realsrc'), { recursive: true });
+      v = validatePlanFixture(tmp, [
+        '| impl | tdd-guide | — | realsrc | 1 | sequence |',
+        '| review | code-reviewer | impl | — | 1 | sequence |',
+        '| done | finalize | review | — | 1 | sequence |',
+      ], []);
+      assert(v.result === 'refuse' && /directory_shaped_bare/.test((v.errors||[]).join(';')),
+        '#388: a bare name resolving to a real directory must refuse at freeze, got: ' + JSON.stringify(v));
+      // CONTROL: a real root FILE (Dockerfile-style) freezes green.
+      fs.writeFileSync(path.join(tmp, 'Dockerfile'), 'FROM scratch\n');
+      v = validatePlanFixture(tmp, [
+        '| impl | tdd-guide | — | Dockerfile | 1 | sequence |',
+        '| review | code-reviewer | impl | — | 1 | sequence |',
+        '| done | finalize | review | — | 1 | sequence |',
+      ], []);
+      assert(v.result === 'in-grammar',
+        '#388 CONTROL: a real root FILE (Dockerfile) must freeze green (not directory_shaped_bare), got: ' + JSON.stringify(v));
+    }
+
+    // (dup-id) two `impl` rows freeze in-grammar today (nodeCount counts both; barrier judges the
+    // 2nd against the 1st) → duplicate node id refusal.
+    v = validatePlanFixture(tmp, [
+      '| impl | tdd-guide | — | lib/a.js | 1 | sequence |',
+      '| impl | tdd-guide | — | lib/b.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /duplicate node id/.test((v.errors||[]).join(';')),
+      '#388: a duplicate node id must refuse at freeze, got: ' + JSON.stringify(v));
+
+    // (sanitize-collision) distinct ids that sanitize identically (`a.b` vs `a_b` → barrier-base-a_b)
+    // collide on the per-node .cache/ref key → refuse.
+    v = validatePlanFixture(tmp, [
+      '| a.b | tdd-guide | — | lib/a.js | 1 | sequence |',
+      '| a_b | tdd-guide | — | lib/b.js | 1 | sequence |',
+      '| review | code-reviewer | a.b,a_b | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /sanitize to the same barrier/.test((v.errors||[]).join(';')),
+      '#388: ids that sanitize to the same barrier key (a.b vs a_b) must refuse at freeze, got: ' + JSON.stringify(v));
+
+    // #388 (FREEZE-ONLY / no-brick): a plan FROZEN by a pre-#388 validator carrying a dup id OR a
+    // backslash token must still PASS --resume-check (revalidateForResume is untouched) — only
+    // --freeze refuses. Mirrors the #381 freeze-only landmine.
+    {
+      const pv = require('./kaola-workflow-plan-validator');
+      const legacyDup = ['# Plan', '', '## Meta', 'labels: area:scripts', '', '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape |',
+        '|---|---|---|---|---|---|',
+        '| impl | tdd-guide | — | lib/a.js | 1 | sequence |',
+        '| impl | tdd-guide | — | lib/b.js | 1 | sequence |',
+        '| review | code-reviewer | impl | — | 1 | sequence |',
+        '| done | finalize | review | — | 1 | sequence |', ''].join('\n');
+      const frozenDup = '<!-- plan_hash: ' + pv.computePlanHash(legacyDup) + ' -->\n' + legacyDup;
+      assert(pv.revalidateForResume(frozenDup).ok === true,
+        '#388: a frozen legacy dup-id plan must PASS --resume-check (no brick), got: ' + JSON.stringify(pv.revalidateForResume(frozenDup)));
+      assert(pv.validatePlan(frozenDup).result === 'refuse',
+        '#388: the same dup-id content must REFUSE at --freeze, got: ' + JSON.stringify(pv.validatePlan(frozenDup).result));
+    }
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   console.log('testAdaptiveValidatorGovernance: PASSED');
 }
@@ -1966,6 +2104,11 @@ function testAdaptivePerInstanceBarrierHardening() {
     if (freeze) {
       const fr = runNode(planValidatorScript, [planPath, '--freeze'], grepo);
       assert(fr.status === 0, 'mkRepo --freeze should exit 0, got ' + fr.status + ' ' + fr.stderr);
+      // #389: the freeze write routes through writeFileAtomicReplace (tmp + fsync + rename), so it
+      // leaves NO `.workflow-plan.md.*.tmp` sidecar behind after a clean rename. A surviving sidecar
+      // (the old bare fs.writeFileSync, or a torn rename) would be caught here.
+      const sidecars = fs.readdirSync(proj).filter(f => /^\.workflow-plan\.md\..*\.tmp$/.test(f));
+      assert(sidecars.length === 0, '#389: --freeze must leave no .tmp sidecar (atomic replace), got ' + JSON.stringify(sidecars));
     }
     spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
     spawnSync('git', ['commit', '-m', 'plan'], { cwd: grepo, encoding: 'utf8' });
@@ -2108,6 +2251,51 @@ function testAdaptivePerInstanceBarrierHardening() {
       const r = bc(planPath, 'a', grepo);
       assert(r.status === 0 && JSON.parse(r.stdout).result === 'pass',
         'v3.21.0 (10): the ref-anchored base must survive `git gc --prune=now` (no brick), got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // (11) #385 FRESHNESS TOKEN — STALE branch: record node a's base at T0, then an UNRELATED tracked
+  // commit lands (a serial write node's legitimate work) advancing HEAD, then re-record a. The reuse
+  // must REUSE the original base (idempotent) AND flag it stale:true, staleReason:head_advanced — the
+  // #281/#296 trap where a rolled-back node's surviving baseline silently absorbs foreign writes.
+  { const { grepo, planPath } = mkRepo(PLAN, true);
+    try {
+      assert(rec(planPath, 'a', grepo).status === 0, '(11) record-base a @ T0');
+      w(grepo, 'unrelated/serial.js', 'serial work\n');     // a DIFFERENT node's legitimate landed work
+      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'unrelated serial commit'], { cwd: grepo, encoding: 'utf8' }); // HEAD advances
+      const rb = rec(planPath, 'a', grepo);
+      const parsed = JSON.parse(rb.stdout);
+      assert(rb.status === 0 && parsed.reused === true, '#385 (11): re-record must still REUSE the base (idempotent), got ' + rb.stdout);
+      assert(parsed.stale === true && parsed.staleReason === 'head_advanced',
+        '#385 (11): a baseline whose HEAD advanced since record must flag stale:true,head_advanced (WARN), got ' + rb.stdout);
+      assert(parsed.recordedHead && parsed.currentHead && parsed.recordedHead !== parsed.currentHead,
+        '#385 (11): the stale warning must carry recordedHead !== currentHead, got ' + rb.stdout);
+    } finally { cleanup(grepo); } }
+
+  // (12) #385 NO false-positive: a re-record with NO intervening commit (same HEAD) is NOT stale —
+  // the legitimate idempotent crash re-dispatch must stay quiet (refusing/flagging it would brick it).
+  { const { grepo, planPath } = mkRepo(PLAN, true);
+    try {
+      assert(rec(planPath, 'a', grepo).status === 0, '(12) record-base a');
+      w(grepo, 'aaa/x.js', 'x\n');                          // own-lane UNCOMMITTED work (HEAD unchanged)
+      const rb = rec(planPath, 'a', grepo);
+      const parsed = JSON.parse(rb.stdout);
+      assert(rb.status === 0 && parsed.reused === true && parsed.stale === undefined,
+        '#385 (12): a same-HEAD re-dispatch must REUSE without a stale flag, got ' + rb.stdout);
+    } finally { cleanup(grepo); } }
+
+  // (13) #385 SEAM — --drop-base removes BOTH the baseline file (barrier-base-<id>) and the freshness
+  // token (barrier-open-<id>), so a fresh re-record after a rollback re-stamps the open-HEAD cleanly.
+  { const { grepo, planPath } = mkRepo(PLAN, true);
+    try {
+      assert(rec(planPath, 'a', grepo).status === 0, '(13) record-base a');
+      const cacheDir = path.join(path.dirname(planPath), '.cache');
+      assert(fs.existsSync(path.join(cacheDir, 'barrier-base-a')), '#385 (13): barrier-base-a exists after record');
+      assert(fs.existsSync(path.join(cacheDir, 'barrier-open-a')), '#385 (13): barrier-open-a (freshness token) exists after record');
+      const dr = runNode(planValidatorScript, [planPath, '--drop-base', '--node-id', 'a', '--json'], grepo);
+      assert(dr.status === 0, '#385 (13): --drop-base exits 0, got ' + dr.status + ' ' + dr.stderr);
+      assert(!fs.existsSync(path.join(cacheDir, 'barrier-base-a')), '#385 (13): --drop-base removes barrier-base-a');
+      assert(!fs.existsSync(path.join(cacheDir, 'barrier-open-a')), '#385 (13): --drop-base ALSO removes barrier-open-a (the freshness token)');
     } finally { cleanup(grepo); } }
 
   console.log('testAdaptivePerInstanceBarrierHardening: PASSED');

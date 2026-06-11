@@ -62,7 +62,8 @@ Author the `## Nodes` table so the validator passes it. Each node is one row:
 `| id | role | depends_on | declared_write_set | cardinality | shape |`.
 
 - **role** must be in the installed library (the canonical roles plus any maintainer-installed role
-  such as `adversarial-verifier`). Never set a model — it comes only from `resolve-agent-model`.
+  such as `adversarial-verifier`). For the optional per-node `model` cell, see **"Model assignment
+  (#382)"** below — an absent/`—` cell falls back to the install profile (`resolve-agent-model`).
   Do **not** use `workflow-planner` or `contractor` as a node role; they are orchestration roles,
   not in-plan node roles.
 - **shape** is exactly one of three productions: `sequence`, `fanout(<group>)` (N instances of one

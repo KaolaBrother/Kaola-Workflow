@@ -493,6 +493,11 @@ assertConcept(`${pluginRoot}/scripts/kaola-gitlab-workflow-roadmap.js`, 'GitLab 
   'createFileExclusive',
   'updated: issue-'
 ]);
+// #389 (#353/#354 completion): the plan-validator --freeze writer (plan_hash stamp + mid-run repair
+// re-freeze carrying the ## Node Ledger) and the adaptive-handoff workflow-state Planning Evidence
+// writer route through the crash-safe atomic replace.
+assertIncludes(`${pluginRoot}/scripts/kaola-gitlab-workflow-plan-validator.js`, 'writeFileAtomicReplace(planPath');
+assertIncludes(`${pluginRoot}/scripts/kaola-gitlab-workflow-adaptive-handoff.js`, 'writeFileAtomicReplace(fpath');
 assertIncludes(`${pluginRoot}/scripts/kaola-gitlab-workflow-roadmap.js`, "sub === 'validate-remote'");
 assertIncludes(`${pluginRoot}/scripts/kaola-gitlab-workflow-roadmap.js`, 'function validateRemote');
 assertIncludes(`${pluginRoot}/scripts/kaola-gitlab-workflow-roadmap.js`, 'cmdValidateRemote');
