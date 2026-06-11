@@ -54,8 +54,8 @@ for (const forge of manifest.FORGES) {
   assert.ok(original.includes("'kaola-workflow-task-mirror.js',"),
     '#407: manifest must contain the task-mirror anchor used by the plant');
   const patched = original.replace(
-    "  'kaola-workflow-task-mirror.js',\n]);",
-    "  'kaola-workflow-task-mirror.js',\n  '" + planted + "',\n]);");
+    "  'kaola-workflow-ledger-compare.js',\n]);",
+    "  'kaola-workflow-ledger-compare.js',\n  '" + planted + "',\n]);");
   assert.notStrictEqual(patched, original, '#407: plant must modify SUPPORT_SCRIPTS');
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-407-plant-'));
@@ -110,4 +110,16 @@ for (const forge of manifest.FORGES) {
     '#407: install.sh must not retain a hand-maintained SUPPORT_HOOK_NAMES array literal');
 }
 
-console.log('test-install-manifest-single-source (#407): PASSED');
+// --- 4. #412: kaola-workflow-ledger-compare.js must be in supportScripts for ALL forges. ---
+// This guards against the #399 ledger-regression guard silently disarming on manual install.
+for (const forge of manifest.FORGES) {
+  const scripts = manifest.supportScripts(forge);
+  // ledger-compare is byte-identical across editions, so no forge-port rename — the canonical
+  // name must appear verbatim in every forge's support set.
+  assert.ok(
+    scripts.includes('kaola-workflow-ledger-compare.js'),
+    `#412: kaola-workflow-ledger-compare.js must be in supportScripts('${forge}') — got: [${scripts.join(', ')}]`
+  );
+}
+
+console.log('test-install-manifest-single-source (#407/#412): PASSED');

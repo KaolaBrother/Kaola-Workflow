@@ -1150,14 +1150,23 @@ function runRecordEvidence(opts) {
 // ---------------------------------------------------------------------------
 function runCloseAndOpenNext(opts) {
   const { planPath, statePath, project, nodeId, shell, readFile, writeFile, cacheExists } = opts;
+  // #411 BUG B: the per-node running-set path (mirror runCloseNode). The closing node is removed
+  // from it after the close write so the next orient does not see an orphan multi-in_progress
+  // mismatch (a serial close left the node in the set → reconcile-running-set no-ops `not_opening`).
+  const runningSetPath = path.join(path.dirname(planPath), '.cache', RUNNING_SET_NAME);
 
-  // == UNIFIED GUARD PROLOGUE (D1) — matrix: halt-fence:yes ONLY (#383d dedup lives in the body).
-  //    NO integrity, NO coordination refusal: close-and-open-next is the SERIAL close path and MUST
-  //    stay byte-identical to today under the serial-fallback conditions (the hard invariant). The
-  //    halt fence is the sole prologue layer; it is vacuously-pass when no consent_halt is durable, so
-  //    a normal linear-chain close is unchanged. (#391b: without the fence, close-and-advance survives
-  //    a halt and the marker becomes a phantom against a now-complete node.) ==
-  const guard = mutationGuardPrologue(opts, { halt: true });
+  // == UNIFIED GUARD PROLOGUE (D1) — matrix: halt-fence:yes / excl-batch:yes (#383d dedup lives in
+  //    the body). NO integrity, NO excl-serial/excl-scheduler: close-and-open-next is the SERIAL close
+  //    path and MUST stay byte-identical to today under the serial-fallback conditions (the hard
+  //    invariant). The halt fence is vacuously-pass when no consent_halt is durable, so a normal
+  //    linear-chain close is unchanged. (#391b: without the fence, close-and-advance survives a halt
+  //    and the marker becomes a phantom against a now-complete node.)
+  //    #411 BUG B (excl-batch): a LIVE batch (≥1 unsealed member) must fence this SERIAL close — the
+  //    serial path cannot close a node owned by a live parallel batch out-of-band (that is close-node's
+  //    job after seal/join). Without it, close-and-open-next would flip a still-running batch member to
+  //    complete + append its compliance row + fuse-advance, racing the batch scheduler. The layer is
+  //    vacuously-pass with no active-batch manifest, so the serial-fallback path stays byte-identical. ==
+  const guard = mutationGuardPrologue(opts, { halt: true, excl: ['batch'] });
   if (guard) return guard;
 
   // #317: accumulate the UI transitions as the ledger mutates so every ok exit returns
@@ -1287,6 +1296,22 @@ function runCloseAndOpenNext(opts) {
   // #317: the closed node → completed (every ok exit carries this).
   transitions.push(buildTransition(nodeId, 'complete', 'close-and-open-next'));
 
+  // #411 BUG B: remove the just-closed node from the running set (mirror runCloseNode step (e)).
+  // close-and-open-next was running-set-blind: on a serial chain (open-next added the node to the
+  // running set) the node stayed in the set after closing, so the next orient saw an in-progress
+  // mismatch (orphan_multi_in_progress) and reconcile-running-set no-op'd (`not_opening`) — a wedge.
+  // Done here (after the close write, before selector/advance) so every ok exit reflects the removal.
+  const running = readRunningSet(runningSetPath, cacheExists, readFile);
+  if (running) {
+    const remaining = (running.nodes || []).filter(n => n.id !== nodeId);
+    if (remaining.length === 0) {
+      if (opts.unlink) opts.unlink(runningSetPath);
+      else writeFile(runningSetPath, JSON.stringify({ state: 'open', nodes: [] }, null, 2));
+    } else {
+      writeFile(runningSetPath, JSON.stringify({ ...running, nodes: remaining }, null, 2));
+    }
+  }
+
   // -- (e) Selector routing (BEFORE fused advance) -----------------------
   const selectorCheck = barrierOut.selectorCheck || {};
 
@@ -1405,6 +1430,14 @@ function runCloseAndOpenNext(opts) {
       role: nextNode.role,
       model: nextNode.model,
       declared_write_set: nextNode.declared_write_set,
+      // #411 BUG A: surface the per-open evidence-binding nonce for the node the fused advance just
+      // opened, with the SAME derivation runOpenNext (~1098) and runOpenReady (~2228) use — the first
+      // 12 chars of commit-node --start's nested recordBase.base SHA. WITHOUT this, every caller that
+      // reads opened.nonce to bind the next node's evidence gets `undefined`, so on any serial chain
+      // with a dependent the SECOND close refuses evidence_stale (the on-disk nonce never matches the
+      // empty header). Read the SAME nested path (recordBase.base), NOT the top level.
+      nonce: (baselineResult.recordBase && baselineResult.recordBase.base)
+        ? String(baselineResult.recordBase.base).slice(0, 12) : null,
     },
     baselineRecorded: baselineResult.exitCode === 0,
     allDone: false,

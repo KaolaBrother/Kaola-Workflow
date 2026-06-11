@@ -265,13 +265,16 @@ wall-clock via node-timings.jsonl (#373); the cross-lane write+read overlap stay
    `Working directory: ${ACTIVE_WORKTREE_PATH}` to every role delegation so the relative plan path
    resolves inside the worktree.
 
-   **Evidence-binding nonce (#392):** pass the `nonce` from step 1's `open-next` (or the `nonce`
-   `open-ready` surfaces per opened member) into every role dispatch, and instruct the role to make
-   the FIRST line of its evidence file the header `evidence-binding: <node-id> <nonce>` (verbatim).
-   The close gate (`close-and-open-next` / `close-node`) reads the per-open nonce from disk and
-   refuses `evidence_unbound` (the header names a different node — evidence copied across nodes) or
+   **Evidence-binding nonce (#392):** pass the `nonce` from step 1's `open-next`, the `nonce`
+   `open-ready` surfaces per opened member, or the `nonce` in the fused `close-and-open-next`
+   `opened` payload into every role dispatch, and instruct the role to make the FIRST line of its
+   evidence file the header `evidence-binding: <node-id> <nonce>` (verbatim). The close gate
+   (`close-and-open-next` / `close-node`) reads the per-open nonce from disk and refuses
+   `evidence_unbound` (the header names a different node — evidence copied across nodes) or
    `evidence_stale` (the nonce is from a prior open — replayed/copied evidence). This binds the
-   evidence to THIS dispatch; a node closed without a fresh binding header is rejected.
+   evidence to THIS dispatch; a node closed without a fresh binding header is rejected. On
+   crash-resume, `open-next --node-id <id>` is idempotent and returns the reused nonce for the
+   already-open node — pass that reused nonce to the re-dispatch.
 
    **Special case — `role: finalize` sink:** `finalize` is the mandatory DAG sink, not a
    dispatchable subagent role. It is expected that
@@ -322,8 +325,8 @@ wall-clock via node-timings.jsonl (#373); the cross-lane write+read overlap stay
    **For non-finalize roles, after the role returns, record durable evidence immediately** before
    step 3 — `close-and-open-next` refuses (`evidence_absent` if absent, `evidence_shape_failed` if malformed) when `.cache/{node-id}.md` is absent/malformed
    when it runs. The evidence's FIRST line MUST be the `evidence-binding: <node-id> <nonce>` header
-   (#392; `<nonce>` is the value `open-next`/`open-ready` returned for this open) so the close gate can
-   verify the evidence was produced by THIS dispatch:
+   (#392; `<nonce>` is the value `open-next`, `open-ready`, or `close-and-open-next` returned for
+   this open) so the close gate can verify the evidence was produced by THIS dispatch:
 
    ```bash
    printf 'evidence-binding: {node-id} {nonce}\n%s\n' "<role-returned-evidence>" | \
@@ -394,9 +397,12 @@ wall-clock via node-timings.jsonl (#373); the cross-lane write+read overlap stay
 
    **(d)** Fused advance: ONLY IF barrier exit 0 and node now terminal — shells `next-action --json`;
    if a next ready node exists, opens it (`in_progress` + `commit-node --start`, idempotent #239).
-   Returns `{closed:{node-id}, opened:{id,role,model,...}|null, allDone}`. On failed barrier /
-   missing evidence / selector_invalid → typed refuse, NO advance. `test_thrash` ≥ 3 tally and
-   consent escalation DECISION stay session-owned; the script only transcribes via `write-halt`.
+   Returns `{closed:{node-id}, opened:{id,role,model,declared_write_set,nonce}|null, allDone}`. The
+   `nonce` in the `opened` payload is the per-open evidence-binding token for the newly-opened node —
+   pass it to the next dispatch exactly as you would the `nonce` from a standalone `open-next`. On
+   failed barrier / missing evidence / selector_invalid → typed refuse, NO advance. `test_thrash` ≥ 3
+   tally and consent escalation DECISION stay session-owned; the script only transcribes via
+   `write-halt`.
 
 4. **judge the barrier (current session — governance).** On `result: ok` + `opened:{...}` the node
    is `complete` and the next ready node is already open — dispatch it (back to step 2), or route to

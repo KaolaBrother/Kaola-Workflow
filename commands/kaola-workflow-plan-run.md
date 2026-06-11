@@ -427,11 +427,13 @@ member whose evidence is absent (baselines idempotent); a member with present ev
    #382 precedence (the plan's per-node `model` tier beats the install profile: `node.model` →
    manifest → role default), so a planner-assigned `opus`/`sonnet` tier reaches the subagent
    automatically (or resolved via `scripts/kaola-workflow-resolve-agent-model.js <role>` on resume).
-   **Pass the per-open `nonce` (#392) too** — from `open-next` (serial) or each `open-ready` opened
-   member — and instruct the role to make the FIRST line of its evidence the verbatim header
-   `evidence-binding: <node-id> <nonce>`. The close gate binds the evidence to THIS dispatch: it
-   refuses `evidence_unbound` (header names another node — evidence copied across nodes) or
-   `evidence_stale` (nonce from a prior open — replayed/copied evidence).
+   **Pass the per-open `nonce` (#392) too** — from `open-next` (serial), each `open-ready` opened
+   member, or the fused `close-and-open-next` `opened` payload — and instruct the role to make the
+   FIRST line of its evidence the verbatim header `evidence-binding: <node-id> <nonce>`. The close
+   gate binds the evidence to THIS dispatch: it refuses `evidence_unbound` (header names another node
+   — evidence copied across nodes) or `evidence_stale` (nonce from a prior open — replayed/copied
+   evidence). On crash-resume, `open-next --node-id <id>` is idempotent and returns the reused nonce
+   for the already-open node — pass that reused nonce to the re-dispatch.
    **Special case — `role: finalize` sink:** `finalize` is the mandatory DAG sink, not a
    dispatchable subagent role. It is expected that
    `scripts/kaola-workflow-resolve-agent-model.js finalize` returns an empty model. When the opened
@@ -627,7 +629,9 @@ Agent(
    **(d) Fused advance — ONLY IF barrier exit 0 and node now terminal:** shells `next-action --json`;
    if a next ready node exists, splices it to `in_progress` and records its baseline with
    `commit-node --node-id {next} --start --json` (idempotent, #239). Returns
-   `{closed:{node-id}, opened:{id,role,model,...}|null, allDone:true|false}`.
+   `{closed:{node-id}, opened:{id,role,model,declared_write_set,nonce}|null, allDone:true|false}`.
+   The `nonce` in the `opened` payload is the per-open evidence-binding token for the newly-opened
+   node — pass it to the next dispatch exactly as you would the `nonce` from a standalone `open-next`.
 
    On barrier fail / missing evidence / selector_invalid → typed refuse, NO advance, NO close. The
    `test_thrash` ≥ 3 tally and the consent escalation DECISION remain main-session–owned; the script

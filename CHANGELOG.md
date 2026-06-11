@@ -4,6 +4,16 @@
 
 ### Fixed
 
+- **adaptive/node: `close-and-open-next` now surfaces `nonce` in its `opened` payload — serial chains no longer get `evidence_stale` on the second close (#411 Bug A).** The fused-advance path omitted the `nonce` derivation present in `open-next` and `open-ready`; every caller binding the next node's evidence got `undefined`, causing a guaranteed `evidence_stale` refusal. Uses the same nested `recordBase.base` path as the other two open paths.
+
+- **adaptive/node: `close-and-open-next` removes the closing node from `running-set.json` and refuses to close an unsealed parallel-batch member (#411 Bug B).** Running-set blindness caused `reconcile-running-set` to no-op with `not_opening` (the just-closed node stayed in the set → next `orient` saw an `orphan_multi_in_progress` mismatch). An `excl: ['batch']` prologue guard prevents the serial close path from racing a live batch.
+
+- **install/manifest: `kaola-workflow-ledger-compare.js` added to `SUPPORT_SCRIPTS` — the #399 ledger-regression guard is no longer silently disarmed on manual install (#412).** The file was implemented in #399 but never registered; a fresh manual install omitted it, making the Step-8a staler-ledger guard unreachable.
+
+- **agents/codex: `workflow-planner.toml` ×3 gains #381/#404 exact-file write-set guidance; `contractor.toml` ×3 gains #399 sync-order guard reference — Codex and Claude editions now carry equivalent guidance (#413).**
+
+- **commands/skills: plan-run X6 surfaces updated with fused `close-and-open-next` as a third nonce source (#411 prose).** The #392 evidence-binding prose previously named only `open-next` (serial) and `open-ready` (batch) as nonce sources; the fused advance is now the documented third source across all 3 Claude commands and 3 Codex SKILLs.
+
 - **plan-validator: refuse absolute-path and drive-letter write-set tokens at freeze (typed reason: `absolute_path`) — guaranteed `write_set_overflow` at barrier prevented (#415).** The freeze wall accepted tokens such as `/abs/path` and `C:src/app.js` (drive-letter form); those tokens froze successfully but always triggered `write_set_overflow` at the per-node barrier because the barrier only resolves repo-relative paths. Added a pre-grammar check that recognises both forms (leading `/` and `[A-Za-z]:` drive prefix) and emits a typed `{ result:'refuse', reason:'absolute_path' }` refusal before writing the plan — the failure is now surfaced at authoring time rather than mid-run at the barrier.
 
 - **plan-validator: correct `barrier_base_mismatch` recovery hint at both sites to steer toward `--drop-base` + `--record-base` or ref-restore; adds laundering-warning (#416 Part A).** The two `barrier_base_mismatch` error sites both said "re-run `--record-base`", which cannot converge: the idempotent-reuse branch returns early without re-anchoring the ref when a base file already exists. Both hints now steer toward `--drop-base` then `--record-base` (or ref-restore for a genuine ref-only loss), and add an explicit note that re-recording after work is done would launder the crashed attempt.
