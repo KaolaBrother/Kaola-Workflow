@@ -121,6 +121,62 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
   assert(r2.keep_open_requested === true, '#396.3: keep_open_requested survives into the receipt');
 }
 
+// --- #416 probe-failure-classification (computeClosePendingFinalize + isProbeDegraded) ---------
+// TDD: write the FAILING test first before the helpers are extracted + the bug is fixed.
+{
+  const { computeClosePendingFinalize, isProbeDegraded } = require('./kaola-workflow-claim.js');
+  // When the online probe throws, remoteIssueClosed is set to 'skipped_offline' even though
+  // OFFLINE is false. The old closePendingFinalize expression evaluated to TRUE in that case
+  // (skipped_offline is not 'already_closed' or 'closed'), silently downgrading the
+  // remote-members-closed invariant.  The fix must exclude 'skipped_offline' so a probe
+  // failure is treated as "unknown" rather than "pending".
+
+  // Scenario 1: probe threw while ONLINE → must NOT be close_pending
+  assert(
+    computeClosePendingFinalize(false, false, 'skipped_offline') === false,
+    '#416: online probe failure (skipped_offline while !OFFLINE) must NOT classify as close_pending'
+  );
+  // Scenario 2: isProbeDegraded detects the ambiguous case (online but skipped_offline)
+  assert(
+    isProbeDegraded(false, 'skipped_offline') === true,
+    '#416: isProbeDegraded is true when remoteIssueClosed=skipped_offline and OFFLINE=false'
+  );
+  // Scenario 3: genuinely OFFLINE → isProbeDegraded is false (this is the expected OFFLINE token)
+  assert(
+    isProbeDegraded(true, 'skipped_offline') === false,
+    '#416: isProbeDegraded is false in the true OFFLINE path'
+  );
+  // Scenario 3b: genuinely OFFLINE → also not close_pending (offline never close-pends)
+  assert(
+    computeClosePendingFinalize(false, true, 'skipped_offline') === false,
+    '#416: offline path never yields close_pending'
+  );
+  // Scenario 4: normal online close_pending case (probe returned close_pending) → IS close_pending
+  assert(
+    computeClosePendingFinalize(false, false, 'close_pending') === true,
+    '#416: a real close_pending probe result (not skipped_offline) IS close_pending'
+  );
+  // Scenario 5: already_closed → not close_pending
+  assert(
+    computeClosePendingFinalize(false, false, 'already_closed') === false,
+    '#416: already_closed is not close_pending'
+  );
+  // Scenario 6: keepIssueOpen → not close_pending
+  assert(
+    computeClosePendingFinalize(true, false, 'close_pending') === false,
+    '#416: keep-open request is not close_pending'
+  );
+  // Scenario 7: isProbeDegraded is false for normal non-error states
+  assert(
+    isProbeDegraded(false, 'close_pending') === false,
+    '#416: isProbeDegraded is false when probe succeeded (close_pending token)'
+  );
+  assert(
+    isProbeDegraded(false, 'already_closed') === false,
+    '#416: isProbeDegraded is false when probe succeeded (already_closed token)'
+  );
+}
+
 if (failed > 0) {
   console.error('claim-hardening tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;
