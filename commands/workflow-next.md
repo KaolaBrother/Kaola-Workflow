@@ -19,7 +19,10 @@ Use `$ARGUMENTS` as either:
 ## Router Rules
 
 - Do not implement, review, fix, or finalize work in this router.
-- Do not invoke phase agents from this router.
+- Do not invoke phase agents from this router. (Exception — `issue-scout`: a pre-claim,
+  read-only backlog survey dispatched in Step 0 when the user did not name an issue. It
+  is not a phase agent — it claims nothing, writes nothing, and only recommends the next
+  target/bundle — so dispatching it does not break the router's dispatch-free contract, #380.)
 - Do not cross a phase boundary while any `Required Agent Compliance` row is
   `pending`, missing, or lacks evidence/skip reason.
 - Prefer `workflow-state.md` for exact resume position.
@@ -50,6 +53,21 @@ closure is still forbidden.
 
 Before calling the startup script, the agent must select a target issue. Scripts
 do not auto-pick; the agent owns this decision.
+
+**Branch first on whether the user named an issue (#380):**
+
+- **User named a specific issue** — `$ARGUMENTS` carries an issue number/project, or
+  the prompt names one (e.g. "work on #42") → use the single-issue selection
+  (steps 1–8 below), byte-unchanged.
+- **User did NOT name an issue** — the common "work on the next issue" / no-argument
+  case → this is the **auto-bundle entry**. Resolve the path intent first (Step 0a-1),
+  then dispatch the read-only **`issue-scout`** agent (Step 0c, *Auto-bundle entry*)
+  and adopt its recommendation: set `KAOLA_TARGET_ISSUES` for a high-confidence
+  same-scope bundle **when the resolved path is adaptive**, otherwise set
+  `KAOLA_TARGET_ISSUE` to the scout's `primary_issue` (single-issue, or any
+  medium/low-confidence outcome). STATE the selected set aloud, then continue to
+  validation (step 7) and startup. (Dispatching the scout here is explicitly
+  permitted — see Router Rules; it is a pre-claim read-only survey, not a phase agent.)
 
 1. Read `kaola-workflow/ROADMAP.md` for open unfinished issues.
 2. Fetch GitHub issue list if available (`gh issue list --limit 100 --json number,title,state,labels`).
@@ -100,30 +118,45 @@ multi-issue startup path. If BOTH are set, the script refuses with
 
 ### Auto-bundle entry (AC#5/AC#6)
 
-When the user asks to work broadly on a project without naming specific issues,
-dispatch the read-only **`issue-scout`** agent to inspect the backlog before
-claiming anything. The issue-scout surveys:
+This is the **no-issue-named branch of Step 0** (#380): whenever the user does not name
+a specific issue — including the everyday "work on the next issue" entry — dispatch the
+read-only **`issue-scout`** agent to inspect the backlog before claiming anything. The
+issue-scout surveys:
 
 - local roadmap sources (`kaola-workflow/.roadmap/issue-*.md`);
 - remote open issues, labels, and dependency labels (`depends-on:#N`);
 - active folders and recently archived summaries.
 
-It returns one recommended same-scope bundle (or none). **The main orchestrator
-STATES the selected issue set aloud before calling startup.** Scripts validate but
-never select or substitute issues (#44).
+It returns one recommended same-scope bundle **plus a `primary_issue` and a `confidence`**
+(or no bundle). **The main orchestrator STATES the selected issue set aloud before calling
+startup.** Scripts validate but never select or substitute issues (#44).
 
 issue-scout is read-only: it cannot claim issues, write repository files, author
 `workflow-plan.md`, close issues, or dispatch other agents.
 
-Auto-bundle mode fires only when:
+**Ordering — resolve the path BEFORE consuming a bundle (#380):** the bundle lane is
+adaptive-only, so resolve the adaptive switch / path intent (Step 0a-1) *before* acting on
+the scout's recommendation. A bundle is pursued ONLY when the resolved path is `adaptive`;
+under switch-OFF (or an explicit `KAOLA_PATH=fast`/`full`) the router takes only the scout's
+`primary_issue` (a bundle there would be refused at startup with `target_set_not_adaptive`).
+
+**Output → env wiring (#380):** map the scout's recommendation into the startup env exactly:
+- high-confidence same-scope bundle AND resolved path is adaptive → set
+  `KAOLA_TARGET_ISSUES` from `recommended_bundle.issues` (e.g. `KAOLA_TARGET_ISSUES=42,47,53`);
+- otherwise (single-issue recommendation, `confidence: medium`/`low`, or non-adaptive path)
+  → set `KAOLA_TARGET_ISSUE` to the scout's `primary_issue`.
+- Never set both (`target_ambiguity`).
+
+Auto-bundle mode emits a bundle only when:
 - all candidate issues are open and unclaimed;
 - no dependency is unresolved outside the bundle;
 - the issues share a coherent scope signal (same subsystem, same label, same
   failing area, or an explicit dependency relation);
 - issue count is at or below `KAOLA_BUNDLE_MAX_ISSUES` (default 4).
 
-**Fallback rule (AC#6):** when no high-confidence same-scope bundle exists, fall
-back to the existing single-issue selection behavior. Do not manufacture a bundle.
+**Fallback rule (AC#6):** when no high-confidence same-scope bundle exists, the scout
+returns a single `primary_issue` (or `confidence: low`) → fall back to single-issue
+selection via `KAOLA_TARGET_ISSUE`. Do not manufacture a bundle.
 
 ### Bundle closure
 
@@ -224,8 +257,10 @@ Path: full (switch OFF, ≥2 viable approaches — design choice)
 If `KAOLA_PATH=adaptive`, the **starting contract moves into the adaptive front end**: do NOT run
 the Step 0b inline startup for this path. The `workflow-planner` subagent — dispatched by
 `/kaola-workflow-adapt`, never by this router — runs the claim itself, so the router only selects +
-validates the issue (Step 0), then hands off. This keeps the router dispatch-free (Router Rules)
-while the Opus front end owns the claim + the DAG authoring:
+validates the issue (Step 0), then hands off. This keeps the router free of *phase-agent* and
+*claim* dispatch (Router Rules) — the only router-side dispatch is the pre-claim, read-only
+`issue-scout` survey in Step 0 (no-issue-named branch), which claims and writes nothing — while the
+Opus front end owns the claim + the DAG authoring:
 
 1. **Resume wins — never re-author a frozen plan.** If an active folder already exists for the
    target issue and contains `kaola-workflow/{project}/workflow-plan.md`, run `watch-pr` once, then

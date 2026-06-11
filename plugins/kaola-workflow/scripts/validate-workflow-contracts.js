@@ -182,6 +182,12 @@ assertIncludes('commands/workflow-next.md', '## Co-active Folders');
 assertIncludes('commands/workflow-next.md', '`fast-summary.md` file, or a `workflow-state.md`');
 // issue #203 (#201 regression lock): reconstruction ladder fast-summary rung (drift-guard B)
 assertIncludes('commands/workflow-next.md', 'fast-summary.md exists -> /kaola-workflow-fast');
+// #380: the issue-scout auto-bundle entry must stay REACHABLE — Step 0 branches on whether the
+// user named an issue, and the no-issue-named branch dispatches the scout (regression-locks the
+// #380 unreachable-entry defect). Pin the branch marker + the env-wiring contract.
+assertIncludes('commands/workflow-next.md', 'Branch first on whether the user named an issue');
+assertIncludes('commands/workflow-next.md', 'issue-scout');
+assertIncludes('commands/workflow-next.md', 'Output → env wiring');
 for (const token of retired) assertNotIncludes('commands/workflow-next.md', token);
 // #372: sweep the retired advisor-gate vocabulary over workflow-init.md too (the consult-mandate
 // bullet lived here, inside the byte-locked KW-CLAUDE-TEMPLATE region).

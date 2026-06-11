@@ -55,6 +55,19 @@ Do not re-ask during the session. Re-establish the default only if `workflow-sta
 Before calling the startup script, the agent must select a target issue. Scripts
 do not auto-pick; the agent owns this decision.
 
+**Branch first on whether the user named an issue (#380):**
+
+- **User named a specific issue** — `$ARGUMENTS` carries an issue number/project, or
+  the prompt names one → use the single-issue selection (steps below), byte-unchanged.
+- **User did NOT name an issue** — the common "work on the next issue" / no-argument
+  case → this is the **auto-bundle entry**. Resolve the path intent first
+  (Startup Step 0a-1), then dispatch the read-only **`issue-scout`** agent role
+  (*Auto-bundle entry* below) and adopt its recommendation: set `KAOLA_TARGET_ISSUES`
+  for a high-confidence same-scope bundle **when the resolved path is adaptive**,
+  otherwise set `KAOLA_TARGET_ISSUE` to the scout's `primary_issue`. STATE the selected
+  set aloud, then continue to validation and startup. (Dispatching the read-only scout
+  here is permitted — it is a pre-claim survey, not a phase agent role.)
+
 1. Read `kaola-workflow/ROADMAP.md` for open unfinished issues.
 2. Fetch GitHub issue list if available (`gh issue list --limit 100 --json number,title,state,labels`).
 3. Check active folders via `node "$claim_script" status 2>/dev/null`.
@@ -101,30 +114,44 @@ multi-issue startup path. If BOTH are set, the script refuses with
 
 ### Auto-bundle entry (AC#5/AC#6)
 
-When the user asks to work broadly on a project without naming specific issues,
-dispatch the read-only **`issue-scout`** agent to inspect the backlog before
+This is the **no-issue-named branch of Agent Issue Selection** (#380): whenever the user
+does not name a specific issue — including the everyday "work on the next issue" entry —
+dispatch the read-only **`issue-scout`** agent role to inspect the backlog before
 claiming anything. The issue-scout surveys:
 
 - local roadmap sources (`kaola-workflow/.roadmap/issue-*.md`);
 - remote open issues, labels, and dependency labels (`depends-on:#N`);
 - active folders and recently archived summaries.
 
-It returns one recommended same-scope bundle (or none). **The main orchestrator
-STATES the selected issue set aloud before calling startup.** Scripts validate but
-never select or substitute issues (#44).
+It returns one recommended same-scope bundle **plus a `primary_issue` and a `confidence`**
+(or no bundle). **The main orchestrator STATES the selected issue set aloud before calling
+startup.** Scripts validate but never select or substitute issues (#44).
 
 issue-scout is read-only: it cannot claim issues, write repository files, author
 `workflow-plan.md`, close issues, or dispatch other agents.
 
-Auto-bundle mode fires only when:
+**Ordering — resolve the path BEFORE consuming a bundle (#380):** the bundle lane is
+adaptive-only, so resolve the adaptive switch / path intent (Startup Step 0a-1) *before*
+acting on the scout's recommendation. Pursue a bundle ONLY when the resolved path is
+`adaptive`; under switch-OFF (or an explicit `KAOLA_PATH=fast`/`full`) take only the scout's
+`primary_issue` (a bundle there is refused at startup with `target_set_not_adaptive`).
+
+**Output → env wiring (#380):** map the scout's recommendation into the startup env exactly:
+- high-confidence same-scope bundle AND resolved path adaptive → set `KAOLA_TARGET_ISSUES`
+  from `recommended_bundle.issues` (e.g. `KAOLA_TARGET_ISSUES=42,47,53`);
+- otherwise (single-issue recommendation, `confidence: medium`/`low`, or non-adaptive path)
+  → set `KAOLA_TARGET_ISSUE` to the scout's `primary_issue`. Never set both (`target_ambiguity`).
+
+Auto-bundle mode emits a bundle only when:
 - all candidate issues are open and unclaimed;
 - no dependency is unresolved outside the bundle;
 - the issues share a coherent scope signal (same subsystem, same label, same
   failing area, or an explicit dependency relation);
 - issue count is at or below `KAOLA_BUNDLE_MAX_ISSUES` (default 4).
 
-**Fallback rule (AC#6):** when no high-confidence same-scope bundle exists, fall
-back to the existing single-issue selection behavior. Do not manufacture a bundle.
+**Fallback rule (AC#6):** when no high-confidence same-scope bundle exists, the scout
+returns a single `primary_issue` (or `confidence: low`) → fall back to single-issue
+selection via `KAOLA_TARGET_ISSUE`. Do not manufacture a bundle.
 
 ### Bundle closure
 
@@ -237,7 +264,9 @@ Path: full (switch OFF, ≥2 viable approaches — design choice)
 If `KAOLA_PATH=adaptive`, the **starting contract moves into the adaptive front end**: do NOT run
 the Startup transaction below for this path. The `workflow-planner` agent role — delegated by
 `kaola-workflow-adapt`, never by this router — runs the claim itself, so the router only selects +
-validates the issue, then hands off (keeping the router dispatch-free):
+validates the issue, then hands off (keeping the router free of phase-agent and claim dispatch — the
+only router-side dispatch is the pre-claim, read-only `issue-scout` survey in the no-issue-named
+branch, which claims and writes nothing, #380):
 
 1. **Resume wins — never re-author a frozen plan.** If an active folder already exists for the
    target issue and contains `kaola-workflow/{project}/workflow-plan.md`, run `watch-pr` once, then
