@@ -16,6 +16,11 @@ const {
   runOrient,
   runMirrorProject,
   runOpenNext,
+  runOpenReady,
+  runCloseNode,
+  runReconcileRunningSet,
+  readRunningSet,
+  isReadOnlyNode,
   runReopenNode,
   runRecordEvidence,
   runCloseAndOpenNext,
@@ -23,6 +28,7 @@ const {
   runClearHalt,
   shellNode,
 } = require('./kaola-workflow-adaptive-node');
+const { RUNNING_SET_NAME } = require('./kaola-workflow-adaptive-schema');
 const { readDurableConsentHalt, locateSection } = require('./kaola-workflow-adaptive-schema');
 
 const {
@@ -3035,6 +3041,267 @@ const STATE_NO_WT = '## Sink\nbranch: workflow/issue-335\n';
 
 // Summary
 // ---------------------------------------------------------------------------
+// ===========================================================================
+// #377 per-node running-set scheduler — open-ready / close-node / reconcile /
+// legality. State-level coverage of the acceptance scenarios.
+// ===========================================================================
+
+const RS_PLAN_PATH = '/p/workflow-plan.md';
+const RS_SET_PATH = '/p/.cache/' + RUNNING_SET_NAME;
+
+function rsHarness(initialFiles, shellStub) {
+  const files = Object.assign({}, initialFiles);
+  const shellCalls = [];
+  return {
+    files,
+    shellCalls,
+    shell: (scriptPath, args) => { shellCalls.push({ base: path.basename(scriptPath), args: (args || []).slice() }); return shellStub(path.basename(scriptPath), args || []); },
+    readFile: (fp) => { if (fp in files) return files[fp]; throw new Error('ENOENT ' + fp); },
+    writeFile: (fp, content) => { files[fp] = content; },
+    cacheExists: (fp) => fp in files,
+    mkdirp: () => {},
+    unlink: (fp) => { delete files[fp]; },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// R-isReadOnly: classification matches the canonical classifier (— / - / empty).
+// ---------------------------------------------------------------------------
+{
+  assert(isReadOnlyNode({ declared_write_set: '—' }) === true, 'R0: em-dash → read-only');
+  assert(isReadOnlyNode({ declared_write_set: '-' }) === true, 'R0: hyphen → read-only');
+  assert(isReadOnlyNode({ declared_write_set: '' }) === true, 'R0: empty → read-only');
+  assert(isReadOnlyNode({ declared_write_set: 'scripts/x.js' }) === false, 'R0: path → write');
+}
+
+// ---------------------------------------------------------------------------
+// R1: open-ready — READ-ONLY fan-out: two ready read-only nodes open concurrently.
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan([
+    '| rev-a | pending | |',
+    '| rev-b | pending | |',
+    '| finalize | pending | |',
+  ], [
+    '| rev-a | code-reviewer | — | — | 1 | sequence |',
+    '| rev-b | security-reviewer | — | — | 1 | sequence |',
+    '| finalize | finalize | rev-a rev-b | CHANGELOG.md | 1 | sequence |',
+  ]);
+  const h = rsHarness({ [RS_PLAN_PATH]: plan }, (base) => {
+    if (base === 'kaola-workflow-next-action.js') {
+      return { exitCode: 0, result: 'ok', allDone: false, readyPending: [
+        { id: 'rev-a', role: 'code-reviewer', declared_write_set: '—' },
+        { id: 'rev-b', role: 'security-reviewer', declared_write_set: '—' },
+      ] };
+    }
+    if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok' };
+    return { exitCode: 1, result: 'refuse' };
+  });
+  const r = runOpenReady({ planPath: RS_PLAN_PATH, project: 'p', max: null, fanoutCapReadonly: 8, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, mkdirp: h.mkdirp });
+  assert(r.result === 'ok' && r.kind === 'read', 'R1: ok + kind=read');
+  assert(r.opened.length === 2, 'R1: opened 2 read-only nodes, got ' + r.opened.length);
+  const set = JSON.parse(h.files[RS_SET_PATH]);
+  assert(set.state === 'open', 'R1: running-set promoted to open');
+  assert(set.nodes.length === 2 && set.nodes.every(n => !n.opening), 'R1: 2 nodes, opening flags cleared');
+  assert(h.files[RS_PLAN_PATH].includes('| rev-a | in_progress | |') && h.files[RS_PLAN_PATH].includes('| rev-b | in_progress | |'), 'R1: both ledger rows in_progress');
+  assert(h.shellCalls.filter(c => c.base === 'kaola-workflow-commit-node.js' && c.args.includes('--start')).length === 2, 'R1: two baselines recorded');
+}
+
+// ---------------------------------------------------------------------------
+// R2: open-ready — a WRITE node opens ALONE (serial fallback, containment off).
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan([
+    '| w1 | pending | |',
+    '| w2 | pending | |',
+  ], [
+    '| w1 | implementer | — | scripts/a.js | 1 | sequence |',
+    '| w2 | implementer | — | scripts/b.js | 1 | sequence |',
+  ]);
+  const h = rsHarness({ [RS_PLAN_PATH]: plan }, (base) => {
+    if (base === 'kaola-workflow-next-action.js') {
+      return { exitCode: 0, result: 'ok', allDone: false, readyPending: [
+        { id: 'w1', role: 'implementer', declared_write_set: 'scripts/a.js' },
+        { id: 'w2', role: 'implementer', declared_write_set: 'scripts/b.js' },
+      ] };
+    }
+    if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok' };
+    return { exitCode: 1, result: 'refuse' };
+  });
+  const r = runOpenReady({ planPath: RS_PLAN_PATH, project: 'p', max: null, fanoutCapReadonly: 8, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, mkdirp: h.mkdirp });
+  assert(r.result === 'ok' && r.kind === 'write', 'R2: ok + kind=write');
+  assert(r.opened.length === 1 && r.opened[0].id === 'w1', 'R2: exactly ONE write node opened (serial), got ' + JSON.stringify(r.opened.map(o=>o.id)));
+  assert(h.files[RS_PLAN_PATH].includes('| w1 | in_progress | |') && h.files[RS_PLAN_PATH].includes('| w2 | pending | |'), 'R2: w2 stays pending');
+}
+
+// ---------------------------------------------------------------------------
+// R3: open-ready — write-node exclusivity: a live write node blocks new opens.
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan(['| w1 | in_progress | |', '| rev | pending | |'], [
+    '| w1 | implementer | — | scripts/a.js | 1 | sequence |',
+    '| rev | code-reviewer | w1 | — | 1 | sequence |',
+  ]);
+  const existingSet = JSON.stringify({ state: 'open', nodes: [{ id: 'w1', role: 'implementer', kind: 'write', baseline: 'recorded' }] });
+  const h = rsHarness({ [RS_PLAN_PATH]: plan, [RS_SET_PATH]: existingSet }, (base) => {
+    if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readyPending: [{ id: 'rev', role: 'code-reviewer', declared_write_set: '—' }] };
+    return { exitCode: 0, result: 'ok' };
+  });
+  const r = runOpenReady({ planPath: RS_PLAN_PATH, project: 'p', max: null, fanoutCapReadonly: 8, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, mkdirp: h.mkdirp });
+  assert(r.result === 'ok' && r.opened.length === 0 && r.reason === 'write_node_exclusive', 'R3: live write node → opened:[] write_node_exclusive, got ' + JSON.stringify({o:r.opened,reason:r.reason}));
+}
+
+// ---------------------------------------------------------------------------
+// R4: open-ready — a crashed 'opening' running set refuses reconcile_first.
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan(['| a | pending | |']);
+  const crashed = JSON.stringify({ state: 'opening', nodes: [{ id: 'a', role: 'code-reviewer', kind: 'read', opening: true }] });
+  const h = rsHarness({ [RS_PLAN_PATH]: plan, [RS_SET_PATH]: crashed }, () => ({ exitCode: 0, result: 'ok' }));
+  const r = runOpenReady({ planPath: RS_PLAN_PATH, project: 'p', max: null, fanoutCapReadonly: 8, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, mkdirp: h.mkdirp });
+  assert(r.result === 'refuse' && r.detail === 'running_set_opening_incomplete', 'R4: opening set → refuse reconcile_first, got ' + JSON.stringify(r));
+}
+
+// ---------------------------------------------------------------------------
+// R5: close-node — evidence + barrier → complete + compliance + removed from set.
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan(['| rev-a | in_progress | |', '| rev-b | in_progress | |', '| finalize | pending | |'], [
+    '| rev-a | code-reviewer | — | — | 1 | sequence |',
+    '| rev-b | security-reviewer | — | — | 1 | sequence |',
+    '| finalize | finalize | rev-a rev-b | CHANGELOG.md | 1 | sequence |',
+  ]);
+  const startSet = JSON.stringify({ state: 'open', nodes: [
+    { id: 'rev-a', role: 'code-reviewer', kind: 'read', baseline: 'recorded' },
+    { id: 'rev-b', role: 'security-reviewer', kind: 'read', baseline: 'recorded' },
+  ] });
+  const h = rsHarness({ [RS_PLAN_PATH]: plan, [RS_SET_PATH]: startSet, '/p/.cache/rev-a.md': 'code-reviewer review\nverdict: pass\nfindings_blocking: 0' }, (base) => {
+    if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok', selectorCheck: {} };
+    if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readyPending: [{ id: 'rev-b', role: 'security-reviewer', declared_write_set: '—' }] };
+    return { exitCode: 1, result: 'refuse' };
+  });
+  const r = runCloseNode({ planPath: RS_PLAN_PATH, project: 'p', nodeId: 'rev-a', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, unlink: h.unlink });
+  assert(r.result === 'ok' && r.closed === 'rev-a', 'R5: closed rev-a');
+  assert(h.files[RS_PLAN_PATH].includes('| rev-a | complete | |'), 'R5: ledger row complete');
+  assert(/code-reviewer \| subagent-invoked/.test(h.files[RS_PLAN_PATH]), 'R5: compliance row appended (bare role)');
+  const set = JSON.parse(h.files[RS_SET_PATH]);
+  assert(set.nodes.length === 1 && set.nodes[0].id === 'rev-b', 'R5: rev-a removed from running set, rev-b remains');
+  assert(Array.isArray(r.newlyReady) && r.newlyReady.some(n => n.id === 'rev-b'), 'R5: newlyReady surfaced');
+}
+
+// ---------------------------------------------------------------------------
+// R6: close-node — last node closes → running-set file unlinked.
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan(['| rev | in_progress | |'], ['| rev | code-reviewer | — | — | 1 | sequence |']);
+  const startSet = JSON.stringify({ state: 'open', nodes: [{ id: 'rev', role: 'code-reviewer', kind: 'read', baseline: 'recorded' }] });
+  const h = rsHarness({ [RS_PLAN_PATH]: plan, [RS_SET_PATH]: startSet, '/p/.cache/rev.md': 'code-reviewer\nverdict: pass\nfindings_blocking: 0' }, (base) => {
+    if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok', selectorCheck: {} };
+    if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: true, readyPending: [] };
+    return { exitCode: 1, result: 'refuse' };
+  });
+  const r = runCloseNode({ planPath: RS_PLAN_PATH, project: 'p', nodeId: 'rev', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, unlink: h.unlink });
+  assert(r.result === 'ok' && r.allDone === true, 'R6: ok + allDone');
+  assert(!(RS_SET_PATH in h.files), 'R6: running-set file unlinked when last node closes');
+}
+
+// ---------------------------------------------------------------------------
+// R7: close-node — barrier failure → refuse, ledger row NOT closed.
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan(['| rev | in_progress | |'], ['| rev | code-reviewer | — | — | 1 | sequence |']);
+  const h = rsHarness({ [RS_PLAN_PATH]: plan, '/p/.cache/rev.md': 'code-reviewer\nverdict: pass\nfindings_blocking: 0' }, (base) => {
+    if (base === 'kaola-workflow-commit-node.js') return { exitCode: 1, result: 'refuse', reason: 'barrier_out_of_lane' };
+    return { exitCode: 1, result: 'refuse' };
+  });
+  const r = runCloseNode({ planPath: RS_PLAN_PATH, project: 'p', nodeId: 'rev', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, unlink: h.unlink });
+  assert(r.result === 'refuse' && r.reason === 'barrier_failed', 'R7: barrier fail → refuse');
+  assert(h.files[RS_PLAN_PATH].includes('| rev | in_progress | |'), 'R7: ledger row unchanged (no close)');
+}
+
+// ---------------------------------------------------------------------------
+// R8: reconcile-running-set — opening: flipped row kept, pending row dropped.
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan(['| a | in_progress | |', '| b | pending | |'], [
+    '| a | code-reviewer | — | — | 1 | sequence |',
+    '| b | security-reviewer | — | — | 1 | sequence |',
+  ]);
+  const crashed = JSON.stringify({ state: 'opening', nodes: [
+    { id: 'a', role: 'code-reviewer', kind: 'read', opening: true },
+    { id: 'b', role: 'security-reviewer', kind: 'read', opening: true },
+  ] });
+  const h = rsHarness({ [RS_PLAN_PATH]: plan, [RS_SET_PATH]: crashed }, () => ({ exitCode: 0, result: 'ok' }));
+  const r = runReconcileRunningSet({ planPath: RS_PLAN_PATH, project: 'p', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists });
+  assert(r.result === 'ok' && r.reconciled === true, 'R8: reconciled');
+  assert(r.rolledForward.length === 1 && r.rolledForward[0] === 'a', 'R8: a rolled forward (row flipped)');
+  assert(r.rolledBack.length === 1 && r.rolledBack[0] === 'b', 'R8: b rolled back (still pending)');
+  const set = JSON.parse(h.files[RS_SET_PATH]);
+  assert(set.state === 'open' && set.nodes.length === 1 && set.nodes[0].id === 'a', 'R8: promoted to open with survivor a only');
+}
+
+// ---------------------------------------------------------------------------
+// R9: orient legality — running-set matches multi-in_progress → OK, not orphan.
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan(['| a | in_progress | |', '| b | in_progress | |', '| finalize | pending | |'], [
+    '| a | code-reviewer | — | — | 1 | sequence |',
+    '| b | security-reviewer | — | — | 1 | sequence |',
+    '| finalize | finalize | a b | CHANGELOG.md | 1 | sequence |',
+  ]);
+  const runningSet = JSON.stringify({ state: 'open', nodes: [
+    { id: 'a', role: 'code-reviewer', kind: 'read' },
+    { id: 'b', role: 'security-reviewer', kind: 'read' },
+  ] });
+  const files = { [RS_PLAN_PATH]: plan, '/p/workflow-state.md': makeState(), [RS_SET_PATH]: runningSet };
+  const r = runOrient({
+    planPath: RS_PLAN_PATH, statePath: '/p/workflow-state.md', project: 'p',
+    shell: (sp, a) => { const b = path.basename(sp); if (b === 'kaola-workflow-plan-validator.js') return { exitCode: 0, ok: true }; if (b === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readySet: [], readyPending: [] }; return { exitCode: 0, result: 'ok' }; },
+    readFile: (fp) => { if (fp in files) return files[fp]; throw new Error('ENOENT ' + fp); },
+    writeFile: () => {},
+    cacheExists: (fp) => fp in files,
+  });
+  assert(r.result === 'ok', 'R9: multi-in_progress matching running-set is LEGAL (not orphan), got ' + JSON.stringify({ result: r.result, reason: r.reason }));
+  assert(r.batch === null, 'R9: batch stays null (running-set fan-out is not the batch machine)');
+  assert(r.runningSet && r.runningSet.nodes.length === 2, 'R9: runningSet surfaced');
+}
+
+// ---------------------------------------------------------------------------
+// R10: orient legality — a crashed 'opening' running set → reconcilable refusal.
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan(['| a | in_progress | |', '| b | pending | |'], [
+    '| a | code-reviewer | — | — | 1 | sequence |',
+    '| b | security-reviewer | — | — | 1 | sequence |',
+  ]);
+  const crashed = JSON.stringify({ state: 'opening', nodes: [{ id: 'a', opening: true }, { id: 'b', opening: true }] });
+  const files = { [RS_PLAN_PATH]: plan, '/p/workflow-state.md': makeState(), [RS_SET_PATH]: crashed };
+  const r = runOrient({
+    planPath: RS_PLAN_PATH, statePath: '/p/workflow-state.md', project: 'p',
+    shell: (sp) => { const b = path.basename(sp); if (b === 'kaola-workflow-plan-validator.js') return { exitCode: 0, ok: true }; if (b === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readySet: [], readyPending: [] }; return { exitCode: 0, result: 'ok' }; },
+    readFile: (fp) => { if (fp in files) return files[fp]; throw new Error('ENOENT ' + fp); },
+    writeFile: () => {},
+    cacheExists: (fp) => fp in files,
+  });
+  assert(r.result === 'refuse' && r.reason === 'running_set_opening_incomplete', 'R10: opening running-set → reconcilable refusal, got ' + JSON.stringify(r.reason));
+}
+
+// ---------------------------------------------------------------------------
+// R11: serial fallback unchanged — open-next still works with a running-set absent.
+// (Guards that the additive scheduler did not perturb the legacy single-node path.)
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan(['| impl-core | pending | |', '| impl-other | pending | |', '| review | pending | |', '| finalize | pending | |']);
+  let planContent = plan;
+  const r = runOpenNext({
+    planPath: RS_PLAN_PATH, statePath: '/p/workflow-state.md', project: 'p', nodeId: null,
+    shell: (sp) => { const b = path.basename(sp); if (b === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readySet: [{ id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js', dependsOn: [] }], nextNode: { id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js' } }; if (b === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok' }; return { exitCode: 0, result: 'ok' }; },
+    readFile: (fp) => fp.endsWith('workflow-plan.md') ? planContent : makeState(),
+    writeFile: (fp, c) => { if (fp.endsWith('workflow-plan.md')) planContent = c; },
+  });
+  assert(r.result === 'ok' && r.opened && r.opened.id === 'impl-core', 'R11: legacy open-next path intact (serial fallback)');
+}
+
 if (failed > 0) {
   console.error('adaptive-node tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;

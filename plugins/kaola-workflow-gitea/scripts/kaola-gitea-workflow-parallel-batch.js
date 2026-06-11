@@ -38,7 +38,7 @@ const { execFileSync } = require('child_process');
 // #354: the shared fence-aware compliance-section appender (single home for the section shape).
 // adaptive-schema.js is the byte-identical ×4 anchor (same filename across editions — NOT renamed),
 // so this require is identical in every port.
-const { spliceComplianceSection } = require('./kaola-workflow-adaptive-schema');
+const { spliceComplianceSection, RUNNING_SET_NAME } = require('./kaola-workflow-adaptive-schema');
 
 // ---------------------------------------------------------------------------
 // Sibling-script filename constants — the ONLY lines the forge forks rename.
@@ -288,8 +288,23 @@ function hasInflightOpening(manifest) {
 // in_progress row is legacy-valid regardless of the manifest — matching the
 // runOrient AC#5 gate (else if inProgressNodes.length > 1).
 // ---------------------------------------------------------------------------
-function crossCheckStatus(manifest, inProgressIds) {
+function crossCheckStatus(manifest, inProgressIds, runningSet) {
   const ip = (inProgressIds || []).slice().sort();
+
+  // #377: the per-node running-set.json is the post-#364 successor of active-batch.json. The #293
+  // legality invariant re-keys to it: when the in_progress rows match the running-set node set the
+  // multi-in_progress is a valid per-node fan-out. A crashed 'opening' running set (or an opening:true
+  // node) is RECONCILABLE (run `reconcile-running-set`), never an orphan — mirror the batch markers.
+  // Checked BEFORE the ≤1 legacy path so a partial flip is not masked as idle/single_in_progress.
+  if (runningSet && (runningSet.state === 'opening' || (runningSet.nodes || []).some(n => n.opening))) {
+    return { valid: false, orphan: false, reconcilable: true, reason: 'running_set_opening_incomplete' };
+  }
+  if (runningSet && ip.length >= 1) {
+    const rsIds = (runningSet.nodes || []).filter(n => !n.opening).map(n => n.id).slice().sort();
+    if (rsIds.length === ip.length && rsIds.every((id, i) => id === ip[i])) {
+      return { valid: true, orphan: false, reason: 'valid_running_set' };
+    }
+  }
 
   // #303 (gap #7): an 'opening' manifest is a crash-safe transaction marker — the open-batch
   // / top-up mutation did not finish (manifest written but the ledger flips, baselines, or
@@ -979,9 +994,10 @@ function runReconcile(opts) {
 // ---------------------------------------------------------------------------
 function recommendBatchRoute(manifest, crossCheck) {
   if (!manifest) {
-    // No active batch: an orphan (>1 in_progress, no manifest) needs repair;
-    // otherwise idle / single_in_progress / joined-and-cleared → re-orient.
-    return (crossCheck && crossCheck.orphan) ? 'reconcile' : 'orient';
+    // No active batch: an orphan (>1 in_progress, no manifest) needs repair, and a crashed
+    // running set (#377 reconcilable) also routes to reconcile; otherwise idle /
+    // single_in_progress / valid_running_set / joined-and-cleared → re-orient.
+    return (crossCheck && (crossCheck.orphan || crossCheck.reconcilable)) ? 'reconcile' : 'orient';
   }
   if (manifest.state === 'opening' || hasInflightOpening(manifest)) {
     return 'reconcile';
@@ -1011,11 +1027,18 @@ function runStatus(opts) {
   const inProgress = listInProgress(ledger);
 
   const manifest = readManifest(manifestPath, cacheExists, readFile);
-  const crossCheck = crossCheckStatus(manifest, inProgress);
+  // #377: also read the per-node running-set.json so a `status` call during a running-set fan-out
+  // cross-checks against it (valid_running_set / reconcilable) instead of mis-reporting an orphan.
+  const runningSetPath = path.join(path.dirname(manifestPath), RUNNING_SET_NAME);
+  let runningSet = null;
+  if (!cacheExists || cacheExists(runningSetPath)) {
+    try { const rp = safeJsonParse(readFile(runningSetPath)); if (rp && Array.isArray(rp.nodes)) runningSet = rp; } catch (_) {}
+  }
+  const crossCheck = crossCheckStatus(manifest, inProgress, runningSet);
   const nextRoute = recommendBatchRoute(manifest, crossCheck);
 
   if (!manifest) {
-    return { result: 'ok', active: false, inProgress, crossCheck, nextRoute };
+    return { result: 'ok', active: false, inProgress, runningSet, crossCheck, nextRoute };
   }
 
   return {

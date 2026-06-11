@@ -1605,6 +1605,36 @@ function spyMirrorShell(planPath, failMirror) {
   assert(resolveLaneContainment({ KAOLA_LANE_CONTAINMENT: 'maybe' }) === false, '#376: resolver false on junk');
 }
 
+// ---------------------------------------------------------------------------
+// #377: crossCheckStatus re-keys to the per-node running-set.json.
+//   - in_progress matches running-set node ids → valid_running_set (not orphan)
+//   - a crashed 'opening' running set → reconcilable (not orphan)
+//   - the 2-arg legacy form (no running-set) is byte-identical (regression guard)
+// ---------------------------------------------------------------------------
+{
+  const rs = { state: 'open', nodes: [{ id: 'a' }, { id: 'b' }] };
+  const v = crossCheckStatus(null, ['a', 'b'], rs);
+  assert(v.valid === true && v.orphan === false && v.reason === 'valid_running_set',
+    '#377: in_progress matching running-set → valid_running_set, got ' + JSON.stringify(v));
+
+  const opening = { state: 'opening', nodes: [{ id: 'a', opening: true }, { id: 'b', opening: true }] };
+  const o = crossCheckStatus(null, ['a'], opening);
+  assert(o.valid === false && o.orphan === false && o.reconcilable === true && o.reason === 'running_set_opening_incomplete',
+    '#377: crashed opening running-set → reconcilable, got ' + JSON.stringify(o));
+
+  const mismatch = crossCheckStatus(null, ['a', 'b', 'c'], rs);
+  assert(mismatch.orphan === true,
+    '#377: in_progress NOT matching running-set falls through to orphan, got ' + JSON.stringify(mismatch));
+
+  // Regression: the 2-arg form (no running-set) is unchanged.
+  const legacy = crossCheckStatus(null, ['x', 'y']);
+  assert(legacy.orphan === true && legacy.reason === 'orphan_multi_in_progress',
+    '#377: 2-arg legacy crossCheckStatus byte-identical (orphan), got ' + JSON.stringify(legacy));
+  const legacySingle = crossCheckStatus(null, ['x']);
+  assert(legacySingle.valid === true && legacySingle.reason === 'single_in_progress',
+    '#377: 2-arg legacy single in_progress unchanged, got ' + JSON.stringify(legacySingle));
+}
+
 if (failed > 0) {
   console.error('parallel-batch tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;

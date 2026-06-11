@@ -40,7 +40,7 @@ const taskMirrorPath = path.join(__dirname, TASK_MIRROR);
 
 // #360: the LEDGER-SCOPED durable consent-halt probe (fence-aware). adaptive-schema keeps the
 // same filename across every edition (byte-identical ×4), so this require is NOT forge-renamed.
-const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection } = require('./kaola-workflow-adaptive-schema');
+const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, resolveFanoutCapReadonly } = require('./kaola-workflow-adaptive-schema');
 
 // ---------------------------------------------------------------------------
 // getRoot — resolve the user-repo root via git rev-parse (cwd fallback).
@@ -561,6 +561,36 @@ function runOrient(opts) {
     }
   }
 
+  // #377: ALSO read the per-node running-set.json (the post-#364 successor of active-batch.json).
+  // The #293 multi-in_progress legality re-keys to it: in_progress rows are legal when they match
+  // EITHER the active-batch member set OR the running-set node set. Read-only fan-out opened by
+  // `open-ready` populates this manifest; orient reconstructs the live set from it on resume.
+  const runningSetPath = path.join(path.dirname(planPath), '.cache', RUNNING_SET_NAME);
+  let runningSet = null;
+  const runningSetPresent = cacheExists ? cacheExists(runningSetPath) : true;
+  if (runningSetPresent) {
+    let rraw = null;
+    try { rraw = readFile(runningSetPath); } catch (_) { rraw = null; }
+    if (rraw != null) {
+      const rparsed = safeJsonParse(rraw);
+      if (rparsed && Array.isArray(rparsed.nodes)) runningSet = rparsed;
+    }
+  }
+
+  // #377: a crashed open-ready leaves the running set in state:'opening' (or with an opening:true
+  // node). Like the batch top-up marker it is RECONCILABLE (run `reconcile-running-set`), never an
+  // orphan and never a dispatchable live set. Check it BEFORE the AC#5 legality gate.
+  if (runningSet && (runningSet.state === 'opening' || (runningSet.nodes || []).some(n => n.opening))) {
+    return {
+      result: 'refuse',
+      reason: 'running_set_opening_incomplete',
+      resumeCheck, nextAction, consentHalt, escalatedToFull,
+      bundleId, issueNumbers, closurePolicy, primaryIssue,
+      inProgressNode, cacheState: inProgressNode ? cacheState : null,
+      inProgressNodes, manifest, runningSet, batch: null, allDone: false,
+    };
+  }
+
   // #305: a member-level `opening:true` marker is an interrupted ROLLING TOP-UP (the manifest
   // stays whole-batch state 'open' while the in-flight member was appended but its ledger row /
   // baseline did not finish flipping). It is RECONCILABLE — route it to `reconcile`, the SAME
@@ -601,10 +631,16 @@ function runOrient(opts) {
   };
   const memberSetEquals = !!manifest && setsEqual(manifestMemberIds, inProgressNodes);
 
+  // #377: running-set node ids (non-opening) form the OTHER legal live set. When the in_progress
+  // rows match the running set, the multi-in_progress is a valid per-node fan-out (not an orphan).
+  const runningSetIds = runningSet ? (runningSet.nodes || []).filter(n => !n.opening).map(n => n.id) : [];
+  const runningSetEquals = !!runningSet && setsEqual(runningSetIds, inProgressNodes);
+
   // -- AC#5 legality gate --------------------------------------------------
   //  ≤1 in_progress (with or without a manifest) → legacy single-node path.
-  //  ≥1 in_progress AND manifest member-set EQUALS the in_progress set → valid batch.
-  //  >1 in_progress AND (no manifest OR member-set mismatch) → typed refusal.
+  //  ≥1 in_progress AND (active-batch member-set OR running-set node-set) EQUALS the in_progress
+  //     set → valid live set (batch or running-set fan-out).
+  //  >1 in_progress AND neither manifest matches → typed refusal (orphan).
   let batch = null;
 
   if (memberSetEquals && inProgressNodes.length >= 1) {
@@ -617,6 +653,10 @@ function runOrient(opts) {
         sealed: !!m.sealed,
       })),
     };
+  } else if (runningSetEquals && inProgressNodes.length >= 1) {
+    // #377: valid per-node running set — accept the multi-in_progress live set (no orphan refusal).
+    // `batch` stays null (running-set fan-out is not the batch-as-a-unit machine); the live set is
+    // surfaced via the additive `runningSet` field below.
   } else if (inProgressNodes.length > 1) {
     // Multiple in_progress rows with no valid active batch — orphan/repair state.
     return {
@@ -634,6 +674,7 @@ function runOrient(opts) {
       cacheState,
       inProgressNodes,
       manifest,
+      runningSet,
       batch: null,
       allDone: false,
     };
@@ -669,6 +710,7 @@ function runOrient(opts) {
     cacheState: inProgressNode ? cacheState : null,
     inProgressNodes,
     batch,
+    runningSet,
     allDone,
     enterBatch,
     frontier: enterBatch
@@ -1514,6 +1556,354 @@ function runReopenNode(opts) {
   };
 }
 
+// ===========================================================================
+// #377 per-node running-set scheduler (post-#364 successor of active-batch.json).
+//
+// The running set is the per-node analogue of the batch manifest: instead of a
+// batch-as-a-unit state machine, it tracks an INDIVIDUAL set of concurrently
+// in_progress nodes that the event-driven plan-run loop opens and closes one at
+// a time. `open-ready` adds ready nodes; `close-node` removes one and recomputes
+// the frontier so a DOWNSTREAM node unblocks PER NODE (not per whole frontier).
+//
+// SAFETY (the #364 reintroduction condition): with KAOLA_LANE_CONTAINMENT off
+// (the default + permanent serial fallback), the ONLY concurrency open-ready
+// creates is among READ-ONLY nodes — they share the parent tree and never write,
+// so they cannot race. A WRITE node always opens ALONE (one at a time, never
+// alongside a read or another write) — byte-identical to today's serial path. A
+// single in_progress write node is the legacy length<=1 single-node case, so the
+// #293 multi-in_progress legality concern only ever arises for safe read-only
+// fan-out. The cross-lane write+read overlap the design envisions is gated on a
+// real cwd-forcing primitive (#376 lane-containment worktrees) and stays DORMANT
+// here — documented, never silently engaged.
+//
+// State shape: { state:'opening'|'open', nodes:[{id,role,kind,baseline,opening?,
+// openedAt?}], updatedAt }. Two-phase write (opening -> flip ledger -> open)
+// mirrors open-batch's crash-safe ordering; `reconcile-running-set` rolls a
+// crashed 'opening' forward (kept rows) / back (un-flipped rows).
+// ===========================================================================
+
+// A node is read-only iff its declared write set is empty. Delegates to the SAME
+// classifier.parseWriteSetCell the batch classifier (classifyBatchKind) and the
+// plan_hash use, so read-only/write classification can never drift between paths
+// (em-dash `—`, `-`, and empty all parse to the empty set → read-only). Write
+// nodes serialize under containment-off (the permanent fallback).
+function isReadOnlyNode(node) {
+  const raw = node && (node.declared_write_set != null ? node.declared_write_set : node.writeSetRaw);
+  try {
+    const { parseWriteSetCell } = require('./kaola-gitlab-workflow-classifier');
+    return parseWriteSetCell(raw).size === 0;
+  } catch (_) {
+    const s = String(raw == null ? '' : raw).trim();
+    return !s || s === '—' || s === '-';
+  }
+}
+
+// readRunningSet — parse .cache/running-set.json or null (absent/corrupt/no nodes).
+function readRunningSet(runningSetPath, cacheExists, readFile) {
+  if (cacheExists && !cacheExists(runningSetPath)) return null;
+  let raw;
+  try { raw = readFile(runningSetPath); } catch (_) { return null; }
+  const parsed = safeJsonParse(raw);
+  return (parsed && Array.isArray(parsed.nodes)) ? parsed : null;
+}
+
+// ---------------------------------------------------------------------------
+// runOpenReady — MUTATES ledger + baselines + running-set.json.
+// Opens up to N ready-pending nodes (priority-ordered by next-action's
+// longest-path-to-sink). Read-only nodes fan out up to the read-only cap; a write
+// node opens alone only when the running set is empty. Two-phase crash-safe write.
+// ---------------------------------------------------------------------------
+function runOpenReady(opts) {
+  const {
+    planPath, project, max, fanoutCapReadonly, shell, readFile, writeFile, cacheExists, mkdirp, now,
+  } = opts;
+  const runningSetPath = path.join(path.dirname(planPath), '.cache', RUNNING_SET_NAME);
+
+  // Crash-safe precondition: an 'opening' running set (or any opening:true node) is an
+  // interrupted open-ready — refuse with a reconcile pointer (never silently overwrite).
+  const existing = readRunningSet(runningSetPath, cacheExists, readFile);
+  if (existing && (existing.state === 'opening' || (existing.nodes || []).some(n => n.opening))) {
+    return { result: 'refuse', reason: 'reconcile_first', state: existing.state || 'open', detail: 'running_set_opening_incomplete' };
+  }
+
+  const nextAction = shell(nextActionPath, [planPath, '--json']);
+  if (nextAction.exitCode !== 0 || nextAction.result !== 'ok') {
+    return { result: 'refuse', reason: 'next_action_failed', nextAction };
+  }
+  if (nextAction.allDone) {
+    return { result: 'ok', allDone: true, opened: [], taskTransitions: [] };
+  }
+
+  // The live set = nodes already in the running set (or, on a fresh start with no
+  // running-set file yet, the in_progress rows — but open-ready owns running-set.json,
+  // so a non-empty in_progress with no running set means a serial node is live: do not
+  // co-schedule against it).
+  const liveNodes = existing ? (existing.nodes || []) : [];
+  const liveIds = new Set(liveNodes.map(n => n.id));
+  const liveHasWrite = liveNodes.some(n => n.kind === 'write');
+
+  // A write node runs strictly alone: if one is live, open nothing until it closes.
+  if (liveHasWrite) {
+    return { result: 'ok', allDone: false, opened: [], reason: 'write_node_exclusive', taskTransitions: [] };
+  }
+
+  // Priority-ordered openable frontier (next-action orders readyPending by longest-path-to-sink).
+  // Exclude main-session-gate (the main session cannot run concurrently with itself) and any node
+  // already in the running set.
+  const frontier = (nextAction.readyPending || [])
+    .filter(n => n.role !== 'main-session-gate')
+    .filter(n => !liveIds.has(n.id));
+  if (frontier.length === 0) {
+    return { result: 'ok', allDone: false, opened: [], taskTransitions: [] };
+  }
+
+  const readOnly = frontier.filter(isReadOnlyNode);
+  const writeNodes = frontier.filter(n => !isReadOnlyNode(n));
+
+  // Selection (containment off — the permanent fallback):
+  //   read-only ready nodes  → fan out up to (readonlyCap - liveCount), bounded by --max.
+  //   else, running set empty → open exactly ONE write node (serial, isolated).
+  const cap = fanoutCapReadonly || 8;
+  let toOpen;
+  let openKind;
+  if (readOnly.length > 0) {
+    let slots = Math.max(0, cap - liveNodes.length);
+    if (Number.isInteger(max) && max >= 1) slots = Math.min(slots, max);
+    toOpen = readOnly.slice(0, slots);
+    openKind = 'read';
+  } else if (liveNodes.length === 0 && writeNodes.length > 0) {
+    toOpen = [writeNodes[0]];
+    openKind = 'write';
+  } else {
+    // Only write nodes are ready but the running set is non-empty (read-only members live):
+    // the write node must wait until they drain so it can run alone.
+    return { result: 'ok', allDone: false, opened: [], reason: 'write_awaits_drain', taskTransitions: [] };
+  }
+
+  if (toOpen.length === 0) {
+    return { result: 'ok', allDone: false, opened: [], reason: 'cap_reached', taskTransitions: [] };
+  }
+
+  const openedAt = (typeof now === 'function') ? now() : null;
+  const newNodes = toOpen.map(n => ({
+    id: n.id,
+    role: n.role,
+    kind: openKind,
+    declared_write_set: n.declared_write_set,
+    baseline: 'recorded',
+    opening: true,
+    ...(openedAt ? { openedAt } : {}),
+  }));
+
+  // -- Phase 1: write running-set.json in state:'opening' with the FULL intended node set
+  //    BEFORE flipping any ledger row. A crash here is reconcilable (never an orphan).
+  if (mkdirp) mkdirp(path.dirname(runningSetPath));
+  const openingSet = {
+    state: 'opening',
+    nodes: liveNodes.concat(newNodes),
+    ...(openedAt ? { updatedAt: openedAt } : {}),
+  };
+  writeFile(runningSetPath, JSON.stringify(openingSet, null, 2));
+
+  // -- Phase 2: per node, record baseline then flip the ledger row pending -> in_progress.
+  let planContent = readFile(planPath);
+  const transitions = [];
+  for (const n of toOpen) {
+    const baseline = shell(commitNodePath, [planPath, '--node-id', n.id, '--start', '--json']);
+    if (!(baseline.exitCode === 0 && baseline.result === 'ok')) {
+      return { result: 'refuse', reason: 'baseline_failed', nodeId: n.id, baselineResult: baseline };
+    }
+    const spliced = spliceLedgerNode(planContent, n.id, 'in_progress', { allowFrom: ['pending'] });
+    if (!spliced.found) {
+      return { result: 'refuse', reason: 'node_not_in_ledger', nodeId: n.id };
+    }
+    if (spliced.changed) planContent = spliced.content;
+    appendNodeTiming(planPath, n.id, 'opened');
+    transitions.push(buildTransition(n.id, 'in_progress', 'open-ready'));
+  }
+  writeFile(planPath, planContent);
+
+  // -- Phase 3: promote running-set.json -> 'open' (ledger now agrees), clearing opening flags.
+  const finalSet = {
+    state: 'open',
+    nodes: openingSet.nodes.map(n => { if (!n.opening) return n; const c = { ...n }; delete c.opening; return c; }),
+    ...(openedAt ? { updatedAt: openedAt } : {}),
+  };
+  writeFile(runningSetPath, JSON.stringify(finalSet, null, 2));
+
+  return {
+    result: 'ok',
+    allDone: false,
+    kind: openKind,
+    opened: newNodes.map(n => ({ id: n.id, role: n.role, model: undefined, kind: n.kind, declared_write_set: n.declared_write_set })),
+    runningSet: finalSet.nodes.map(n => n.id),
+    taskTransitions: transitions,
+    taskMirror: refreshTaskMirror(project, shell),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// runCloseNode — MUTATES ledger + compliance + running-set.json.
+// Closes ONE node (evidence-shape -> barrier -> ledger complete -> compliance ->
+// selector-arm) then removes it from the running set and recomputes the newly-ready
+// frontier. Does NOT auto-open (the loop calls open-ready). No worktree join
+// (containment dormant: read-only members + serial writes are all parent-side).
+// ---------------------------------------------------------------------------
+function runCloseNode(opts) {
+  const { planPath, project, nodeId, shell, readFile, writeFile, cacheExists } = opts;
+  const runningSetPath = path.join(path.dirname(planPath), '.cache', RUNNING_SET_NAME);
+  const transitions = [];
+
+  // -- (a) Evidence-shape PRESENCE check (same contract as close-and-open-next).
+  const planContent0 = readFile(planPath);
+  const nodes = parseNodesFromContent(planContent0);
+  const nodeInfo = nodes.find(n => n.id === nodeId);
+  const role = nodeInfo ? nodeInfo.role : 'unknown';
+
+  const cachePath = path.join(path.dirname(planPath), '.cache', nodeId + '.md');
+  let evidenceContent = null;
+  const evidencePresent = cacheExists ? cacheExists(cachePath) : (() => {
+    try { evidenceContent = readFile(cachePath); return true; } catch (_) { return false; }
+  })();
+  if (evidencePresent && evidenceContent === null) {
+    try { evidenceContent = readFile(cachePath); } catch (_) { evidenceContent = ''; }
+  }
+  const shapeCheck = checkEvidenceShape(role, nodeId, evidenceContent);
+  if (!evidencePresent || !shapeCheck.ok) {
+    const absent = !evidencePresent || shapeCheck.kind === 'absent';
+    return {
+      result: 'refuse',
+      reason: absent ? 'evidence_absent' : 'evidence_shape_failed',
+      missingTokenClass: shapeCheck.missingTokenClass || null,
+      nodeId, role,
+      expected: shapeCheck.expected || [],
+      detail: shapeCheck.reason || (evidencePresent ? 'shape invalid' : 'cache file absent'),
+    };
+  }
+
+  // -- (b) Per-node barrier (parent planPath — read-only/serial-write are parent-side).
+  const barrierOut = shell(commitNodePath, [planPath, '--node-id', nodeId, '--json']);
+  if (barrierOut.exitCode !== 0 || barrierOut.result !== 'ok') {
+    return { result: 'refuse', reason: 'barrier_failed', nodeId, barrierOut };
+  }
+
+  // -- (c) Close: ledger row in_progress -> complete (same #348 guard as close-and-open-next).
+  let currentPlan = readFile(planPath);
+  const closeResult = spliceLedgerNode(currentPlan, nodeId, 'complete', { allowFrom: ['in_progress'] });
+  if (!closeResult.found) {
+    return { result: 'refuse', reason: 'close_node_not_in_ledger', nodeId };
+  }
+  if (!closeResult.changed && !closeResult.alreadyAtTarget) {
+    return { result: 'refuse', reason: 'close_transition_disallowed', nodeId };
+  }
+  if (closeResult.changed) currentPlan = closeResult.content;
+
+  // Compliance row (bare-role string for review roles; truthful mode for finalize).
+  const bareRoles = ['code-reviewer', 'security-reviewer'];
+  const requirementCell = bareRoles.includes(role) ? role : role + ' (' + nodeId + ')';
+  const evidenceSummary = evidenceContent ? evidenceContent.split('\n')[0].slice(0, 80) : 'evidence present';
+  const complianceStatus = role === 'finalize' ? 'main-session-direct' : 'subagent-invoked';
+  currentPlan = spliceComplianceRow(currentPlan, '| ' + requirementCell + ' | ' + complianceStatus + ' | ' + evidenceSummary + ' | |');
+  writeFile(planPath, currentPlan);
+  appendNodeTiming(planPath, nodeId, 'closed');
+  transitions.push(buildTransition(nodeId, 'complete', 'close-node'));
+
+  // -- (d) Selector routing (mirror close-and-open-next: arm losing branches to n/a).
+  const selectorCheck = barrierOut.selectorCheck || {};
+  if (selectorCheck.isSelector === true) {
+    if (selectorCheck.ok === false) {
+      return { result: 'refuse', reason: 'selector_invalid', nodeId, selectorCheck };
+    }
+    let planForSelector = readFile(planPath);
+    for (const armId of (selectorCheck.armsToNa || [])) {
+      const armResult = spliceLedgerNode(planForSelector, armId, 'n/a', { allowFrom: ['pending', 'in_progress'] });
+      if (armResult.changed) planForSelector = armResult.content;
+      transitions.push(buildTransition(armId, 'n/a', 'selector-arm'));
+    }
+    writeFile(planPath, planForSelector);
+  }
+
+  // -- (e) Remove the closed node from the running set (delete the file if it empties).
+  const running = readRunningSet(runningSetPath, cacheExists, readFile);
+  if (running) {
+    const remaining = (running.nodes || []).filter(n => n.id !== nodeId);
+    if (remaining.length === 0) {
+      if (opts.unlink) opts.unlink(runningSetPath);
+      else writeFile(runningSetPath, JSON.stringify({ state: 'open', nodes: [] }, null, 2));
+    } else {
+      writeFile(runningSetPath, JSON.stringify({ ...running, nodes: remaining }, null, 2));
+    }
+  }
+
+  // -- (f) Fused readiness recompute — return the newly-ready frontier (the loop opens it).
+  const nextAction = shell(nextActionPath, [planPath, '--json']);
+  const allDone = !!(nextAction.result === 'ok' && nextAction.allDone);
+  const newlyReady = (nextAction.result === 'ok' && Array.isArray(nextAction.readyPending))
+    ? nextAction.readyPending.filter(n => n.role !== 'main-session-gate')
+        .map(n => ({ id: n.id, role: n.role, model: n.model, declared_write_set: n.declared_write_set }))
+    : [];
+
+  return {
+    result: 'ok',
+    closed: nodeId,
+    allDone,
+    newlyReady,
+    taskTransitions: transitions,
+    taskMirror: refreshTaskMirror(project, shell),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// runReconcileRunningSet — MUTATES running-set.json + (roll-back) ledger.
+// Repairs a crashed 'opening' running set: a node whose ledger row DID flip to
+// in_progress is kept (roll-forward, opening flag cleared); a node still 'pending'
+// did not open (roll-back, dropped from the set). Promotes state -> 'open'. A set
+// with no opening transaction is a no-op. Mirrors parallel-batch runReconcile.
+// ---------------------------------------------------------------------------
+function runReconcileRunningSet(opts) {
+  const { planPath, project, shell, readFile, writeFile, cacheExists } = opts;
+  const runningSetPath = path.join(path.dirname(planPath), '.cache', RUNNING_SET_NAME);
+
+  const running = readRunningSet(runningSetPath, cacheExists, readFile);
+  if (!running) {
+    return { result: 'ok', reconciled: false, reason: 'no_running_set', taskTransitions: [] };
+  }
+  const wholeOpening = running.state === 'opening';
+  const openingNodes = (running.nodes || []).filter(n => n.opening);
+  if (!wholeOpening && openingNodes.length === 0) {
+    return { result: 'ok', reconciled: false, reason: 'not_opening', state: running.state, taskTransitions: [] };
+  }
+
+  const ledger = readLedgerStatuses(readFile(planPath));
+  const target = wholeOpening ? (running.nodes || []) : openingNodes;
+  const kept = [];
+  const dropped = [];
+  for (const n of target) {
+    if (ledger[n.id] === 'in_progress') kept.push(n.id);
+    else dropped.push(n.id);
+  }
+  // Survivors = non-target nodes (already open) + target nodes whose row flipped.
+  const survivors = (running.nodes || [])
+    .filter(n => (!wholeOpening && !n.opening) || kept.includes(n.id))
+    .map(n => { if (!n.opening) return n; const c = { ...n }; delete c.opening; return c; });
+
+  if (survivors.length === 0) {
+    writeFile(runningSetPath, JSON.stringify({ state: 'open', nodes: [] }, null, 2));
+  } else {
+    writeFile(runningSetPath, JSON.stringify({ ...running, state: 'open', nodes: survivors }, null, 2));
+  }
+
+  return {
+    result: 'ok',
+    reconciled: true,
+    rolledForward: kept,
+    rolledBack: dropped,
+    state: 'open',
+    taskTransitions: [],
+    taskMirror: refreshTaskMirror(project, shell),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // CLI — thin wrapper; all process I/O lives here.
 // ---------------------------------------------------------------------------
@@ -1526,6 +1916,9 @@ function main() {
       '  orient              --project P\n' +
       '  mirror-project      --project P\n' +
       '  open-next           --project P [--node-id N]\n' +
+      '  open-ready          --project P [--max N]   (#377 running-set scheduler)\n' +
+      '  close-node          --project P --node-id N (#377 running-set scheduler)\n' +
+      '  reconcile-running-set --project P           (#377 crash roll-forward/back)\n' +
       '  record-evidence     --project P --node-id N --stdin\n' +
       '  close-and-open-next --project P --node-id N\n' +
       '  write-halt          --project P --node-id N --reason consent|security|test_thrash\n' +
@@ -1574,6 +1967,8 @@ function main() {
 
   const nodeId   = nodeIdIdx >= 0 ? args[nodeIdIdx + 1] : null;
   const reason   = reasonIdx >= 0 ? args[reasonIdx + 1] : null;
+  const maxIdx   = args.indexOf('--max');
+  const maxArg   = maxIdx >= 0 ? parseInt(args[maxIdx + 1], 10) : null;
 
   const repoRoot  = getRoot();
   const projectDir = path.join(repoRoot, 'kaola-workflow', project);
@@ -1628,6 +2023,26 @@ function main() {
     });
   } else if (subcommand === 'open-next') {
     result = runOpenNext({ planPath, statePath, project, nodeId, shell, readFile, writeFile });
+  } else if (subcommand === 'open-ready') {
+    result = runOpenReady({
+      planPath, project,
+      max: Number.isInteger(maxArg) && maxArg >= 1 ? maxArg : null,
+      fanoutCapReadonly: resolveFanoutCapReadonly(process.env),
+      shell, readFile, writeFile, cacheExists,
+      mkdirp: (dir) => { try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {} },
+      now: () => new Date().toISOString(),
+    });
+  } else if (subcommand === 'close-node') {
+    if (!nodeId) {
+      result = { result: 'refuse', errors: ['--node-id required for close-node'] };
+    } else {
+      result = runCloseNode({
+        planPath, project, nodeId, shell, readFile, writeFile, cacheExists,
+        unlink: (f) => { try { fs.unlinkSync(f); } catch (_) {} },
+      });
+    }
+  } else if (subcommand === 'reconcile-running-set') {
+    result = runReconcileRunningSet({ planPath, project, shell, readFile, writeFile, cacheExists });
   } else if (subcommand === 'record-evidence') {
     if (!nodeId) {
       result = { result: 'refuse', errors: ['--node-id required for record-evidence'] };
@@ -1695,6 +2110,11 @@ module.exports = {
   runOrient,
   runMirrorProject,
   runOpenNext,
+  runOpenReady,
+  runCloseNode,
+  runReconcileRunningSet,
+  readRunningSet,
+  isReadOnlyNode,
   runRecordEvidence,
   runCloseAndOpenNext,
   runWriteHalt,
