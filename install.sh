@@ -166,6 +166,7 @@ case "$FORGE" in
     SUPPORT_HOOK_NAMES=(
       kaola-workflow-pre-commit.sh
       kaola-workflow-subagent-dispatch-log.sh
+      kaola-workflow-write-lane.sh
     )
     ;;
   gitlab)
@@ -200,6 +201,7 @@ case "$FORGE" in
     SUPPORT_HOOK_NAMES=(
       kaola-workflow-pre-commit.sh
       kaola-workflow-subagent-dispatch-log.sh
+      kaola-workflow-write-lane.sh
     )
     ;;
   gitea)
@@ -234,6 +236,7 @@ case "$FORGE" in
     SUPPORT_HOOK_NAMES=(
       kaola-workflow-pre-commit.sh
       kaola-workflow-subagent-dispatch-log.sh
+      kaola-workflow-write-lane.sh
     )
     ;;
   *)

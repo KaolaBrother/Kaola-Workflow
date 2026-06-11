@@ -104,6 +104,16 @@ const BYTE_IDENTICAL_GROUPS = [
     ],
   },
   {
+    // #376: the write-lane containment hook is byte-identical across all four trees (forge-neutral).
+    label: 'write-lane hook copies',
+    files: [
+      'hooks/kaola-workflow-write-lane.sh',
+      'plugins/kaola-workflow/hooks/kaola-workflow-write-lane.sh',
+      'plugins/kaola-workflow-gitlab/hooks/kaola-workflow-write-lane.sh',
+      'plugins/kaola-workflow-gitea/hooks/kaola-workflow-write-lane.sh',
+    ],
+  },
+  {
     // issue #227: the adaptive-path cross-fork DRIFT ANCHOR. Forge-neutral constants
     // (path whitelist, plan-run command, caps, ledger enum, escalation markers, config
     // path) shared by claim/repair-state/plan-validator across all four trees. Because

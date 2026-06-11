@@ -216,6 +216,7 @@ Configuration files control workflow behavior and issue sorting.
 - `pr_auto_merge` — Enable automatic PR merge after creation (GitHub + Gitea editions; squash merge with source branch deletion; non-fatal if merge fails)
 - `mr_auto_merge` — Enable automatic MR merge after creation (GitLab edition; equivalent to `glab mr merge --auto-merge`; non-fatal if merge fails)
 - `enable_adaptive` — Opt-in switch for the adaptive workflow path (issue #227); default OFF. Written by `install.sh --enable-adaptive=yes` (read-modify-write, preserving `parallel_mode`); overridable per session by the `KAOLA_ENABLE_ADAPTIVE` environment variable (precedence: env > config > OFF). See `docs/workflow-state-contract.md` § Adaptive Path Switch
+- `KAOLA_LANE_CONTAINMENT` (#376) — fail-closed env flag (default false; only `1`/`true`/`yes` enables) that arms the write-lane containment PreToolUse hook (`hooks/kaola-workflow-write-lane.sh`). When ON and a `kaola-workflow/<project>/.cache/running-set.json` manifest of open write-nodes exists, the hook DENIES (exit 2) an out-of-lane `Write`/`Edit` — inside a member worktree outside its declared lane, or in the parent worktree matching an open node's lane. Fail-open (exit 0) on a missing flag/manifest, malformed stdin, or non-git cwd; dormant until the #377 scheduler produces the manifest. Successor of the retired #320 `KAOLA_BATCH_CWD_ENFORCED`.
 
 ### Agent model manifest (`~/.claude/agents/.kaola-agent-models.json`)
 

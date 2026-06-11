@@ -176,6 +176,8 @@ assertNotIncludes(pluginRoot + '/hooks/hooks.json', 'subagentStatusLine');
 assertNotIncludes(pluginRoot + '/hooks/hooks.json', 'kaola-workflow-subagent-statusline.js');
 assert(hookFiles.some(file => file.endsWith('kaola-workflow-pre-commit.sh')), 'Gitea pre-commit hook missing');
 assert(!hookFiles.some(file => file.endsWith('kaola-workflow-phantom-advisor.sh')), 'Gitea phantom-advisor hook must be removed (#372)');
+// #376: the write-lane containment hook ships in every edition (byte-identical, forge-neutral).
+assert(hookFiles.some(file => file.endsWith('kaola-workflow-write-lane.sh')), 'Gitea write-lane hook missing');
 assert(agentFiles.length === 14, 'expected 14 Gitea agent profiles, got ' + agentFiles.length);
 assert(exists(pluginRoot + '/config/agents.toml'), 'Gitea agents config missing');
 

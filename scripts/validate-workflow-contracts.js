@@ -275,6 +275,13 @@ assertNotIncludes('hooks/hooks.json', 'subagentStatusLine');
 assertNotIncludes('hooks/hooks.json', 'kaola-workflow-subagent-statusline.js');
 assertNotIncludes('hooks/hooks.json', 'session-env');
 assertIncludes('hooks/kaola-workflow-pre-commit.sh', 'multiple kaola-workflow projects staged');
+// #376: write-lane containment hook is registered (PreToolUse Write|Edit) + carries its load-bearing
+// flag gate. Anchors the successor enforcement primitive so it cannot silently disappear.
+assertIncludes('hooks/hooks.json', 'kaola-workflow:write-lane');
+assertIncludes('hooks/kaola-workflow-write-lane.sh', 'KAOLA_LANE_CONTAINMENT');
+assertIncludes('hooks/kaola-workflow-write-lane.sh', 'running-set.json');
+assertIncludes('scripts/kaola-workflow-adaptive-schema.js', 'function resolveLaneContainment');
+assertIncludes('install.sh', 'kaola-workflow-write-lane.sh');
 assertIncludes('install.sh', 'kaola-workflow-active-folders.js');
 assertIncludes('install.sh', 'kaola-workflow-resolve-agent-model.js');
 assertIncludes('uninstall.sh', 'subagentStatusLine');

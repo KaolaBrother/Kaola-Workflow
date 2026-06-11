@@ -177,6 +177,8 @@ assertNotIncludes(pluginRoot + '/hooks/hooks.json', 'subagentStatusLine');
 assertNotIncludes(pluginRoot + '/hooks/hooks.json', 'kaola-workflow-subagent-statusline.js');
 assert(hookFiles.some(file => file.endsWith('kaola-workflow-pre-commit.sh')), 'GitLab pre-commit hook missing');
 assert(!hookFiles.some(file => file.endsWith('kaola-workflow-phantom-advisor.sh')), 'GitLab phantom-advisor hook must be removed (#372)');
+// #376: the write-lane containment hook ships in every edition (byte-identical, forge-neutral).
+assert(hookFiles.some(file => file.endsWith('kaola-workflow-write-lane.sh')), 'GitLab write-lane hook missing');
 assert(agentFiles.length === 14, 'expected 14 GitLab agent profiles');
 assert(exists(pluginRoot + '/config/agents.toml'), 'GitLab agents config missing');
 

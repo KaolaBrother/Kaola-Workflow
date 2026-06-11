@@ -1591,6 +1591,20 @@ function spyMirrorShell(planPath, failMirror) {
 // ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// #376 resolveLaneContainment resolver unit: fail-closed default FALSE; explicit 1/true/yes opts in
+// (successor of the retired #320 resolveBatchCwdEnforced shape).
+// ---------------------------------------------------------------------------
+{
+  const { resolveLaneContainment } = require('./kaola-workflow-adaptive-schema');
+  assert(resolveLaneContainment({}) === false, '#376: resolver default FALSE (no env)');
+  assert(resolveLaneContainment({ KAOLA_LANE_CONTAINMENT: '1' }) === true, '#376: resolver true on "1"');
+  assert(resolveLaneContainment({ KAOLA_LANE_CONTAINMENT: 'true' }) === true, '#376: resolver true on "true"');
+  assert(resolveLaneContainment({ KAOLA_LANE_CONTAINMENT: 'yes' }) === true, '#376: resolver true on "yes"');
+  assert(resolveLaneContainment({ KAOLA_LANE_CONTAINMENT: '0' }) === false, '#376: resolver false on "0"');
+  assert(resolveLaneContainment({ KAOLA_LANE_CONTAINMENT: 'maybe' }) === false, '#376: resolver false on junk');
+}
+
 if (failed > 0) {
   console.error('parallel-batch tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;

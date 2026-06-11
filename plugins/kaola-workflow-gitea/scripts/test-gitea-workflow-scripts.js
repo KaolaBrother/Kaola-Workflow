@@ -2125,11 +2125,17 @@ function testInstallProfilesFeaturesTableHandling() {
     const existingHooksPath = path.join(existing, '.codex', 'hooks.json');
     assert.ok(fs.existsSync(existingHooksPath), 'existing install should have .codex/hooks.json after idempotent runs');
     const existingHooks = JSON.parse(fs.readFileSync(existingHooksPath, 'utf8'));
-    for (const event of requiredEvents) {
-      const entries = existingHooks.hooks[event] || [];
-      const managedCount = entries.filter(e => e.id && e.id.startsWith('kaola-workflow:')).length;
-      assert.strictEqual(managedCount, 1,
-        `idempotency: existing hooks.json must have exactly 1 managed entry for ${event} after 2 installs, got ${managedCount}`);
+    // #376: per-ID no-duplicate check (an event MAY carry >1 distinct managed id, e.g. PreToolUse
+    // holds both pre-commit-guard and the write-lane hook); each id must appear exactly once.
+    const idCounts = {};
+    for (const event of Object.keys(existingHooks.hooks || {})) {
+      for (const e of existingHooks.hooks[event]) {
+        if (e.id && e.id.startsWith('kaola-workflow:')) idCounts[e.id] = (idCounts[e.id] || 0) + 1;
+      }
+    }
+    for (const id of Object.keys(idCounts)) {
+      assert.strictEqual(idCounts[id], 1,
+        `idempotency: managed id ${id} must appear exactly once after 2 installs, got ${idCounts[id]}`);
     }
   } finally {
     fs.rmSync(fresh, { recursive: true, force: true });

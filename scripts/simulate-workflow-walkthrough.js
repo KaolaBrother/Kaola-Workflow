@@ -740,18 +740,17 @@ function testHookGitDashCCommitGuard() {
 }
 
 function testHookShapeNoPhantomAdvisor() {
-  // #372: the phantom-advisor PostToolUse hook is retired. hooks/hooks.json must carry exactly the
-  // three surviving kaola-workflow hooks (compact-context SessionStart, pre-commit-guard PreToolUse,
-  // subagent-dispatch-log SubagentStart) and NO PostToolUse / phantom-advisor entry. Replaces the
-  // deleted testPhantomAdvisorHookGuard with the new contract.
+  // #372: the phantom-advisor PostToolUse hook is retired — hooks.json must carry NO PostToolUse
+  // event. #376 added the PreToolUse write-lane hook, so the surviving id set is: compact-context
+  // (SessionStart), pre-commit-guard + write-lane (PreToolUse), subagent-dispatch-log (SubagentStart).
   const hooks = JSON.parse(fs.readFileSync(path.join(repoRoot, 'hooks', 'hooks.json'), 'utf8')).hooks;
   const events = Object.keys(hooks);
   assert(!events.includes('PostToolUse'), '#372: hooks.json must have NO PostToolUse event, got ' + events.join(','));
   const ids = [];
   for (const ev of events) for (const block of hooks[ev]) ids.push(block.id);
   ids.sort();
-  assert(JSON.stringify(ids) === JSON.stringify(['kaola-workflow:compact-context', 'kaola-workflow:pre-commit-guard', 'kaola-workflow:subagent-dispatch-log']),
-    '#372: exactly the 3 surviving hook ids, got ' + JSON.stringify(ids));
+  assert(JSON.stringify(ids) === JSON.stringify(['kaola-workflow:compact-context', 'kaola-workflow:pre-commit-guard', 'kaola-workflow:subagent-dispatch-log', 'kaola-workflow:write-lane']),
+    '#372/#376: expected hook id set (compact-context, pre-commit-guard, subagent-dispatch-log, write-lane), got ' + JSON.stringify(ids));
   const raw = fs.readFileSync(path.join(repoRoot, 'hooks', 'hooks.json'), 'utf8');
   assert(!/phantom-advisor/.test(raw), '#372: no phantom-advisor reference in hooks.json');
   assert(!fs.existsSync(path.join(repoRoot, 'hooks', 'kaola-workflow-phantom-advisor.sh')), '#372: phantom-advisor.sh deleted');
@@ -773,6 +772,59 @@ function testResumeCompatLegacyAdvisorGateRow() {
   const unresolved = repairState.unresolvedCompliance(legacy, '');
   assert(!unresolved.some(r => (r.requirement || '').toLowerCase().includes('advisor')),
     '#372 (AC10): a legacy `advisor … gate | pending` row must NOT be pending-blocking on resume, got ' + JSON.stringify(unresolved));
+}
+
+function testWriteLaneHookGuard() {
+  // #376: scripted harness for the write-lane PreToolUse containment hook (AC1 cannot fire on a real
+  // dispatched subagent in the walkthrough — this drives the hook binary directly with crafted
+  // PreToolUse stdin). Proves: fail-OPEN (flag off / no manifest / malformed stdin); DENY rule (a)
+  // (out-of-lane member-worktree write); DENY rule (b) (parent-worktree leak); in-lane + workflow-band
+  // ALLOW. Mutation-checked: against a hook with the deny branches removed, cases (4)/(6) go GREEN(0).
+  const writeLaneHook = path.join(repoRoot, 'hooks', 'kaola-workflow-write-lane.sh');
+  assert(fs.existsSync(writeLaneHook), '#376: write-lane hook exists');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-write-lane-'));
+  try {
+    spawnSync('git', ['init'], { cwd: tmp, encoding: 'utf8' });
+    const RR = spawnSync('git', ['-C', tmp, 'rev-parse', '--show-toplevel'], { encoding: 'utf8' }).stdout.trim();
+    const cacheDir = path.join(RR, 'kaola-workflow', 'proj', '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.mkdirSync(path.join(RR, '.kw', 'node', 'proj', 'n1', 'scripts'), { recursive: true });
+    fs.mkdirSync(path.join(RR, 'scripts'), { recursive: true });
+    const run = (fp, enforce) => spawnSync('bash', [writeLaneHook], {
+      cwd: RR, encoding: 'utf8',
+      input: JSON.stringify({ tool_input: { file_path: fp } }),
+      env: Object.assign({}, process.env, enforce ? { KAOLA_LANE_CONTAINMENT: '1' } : {}),
+    });
+    // (1) flag OFF -> fail-open exit 0
+    assert(run(path.join(RR, 'scripts/a.js'), false).status === 0, '#376: flag off -> exit 0 (fail-open)');
+    // (2) flag ON but NO manifest -> dormant exit 0
+    assert(run(path.join(RR, 'scripts/a.js'), true).status === 0, '#376: no running-set.json -> exit 0 (dormant)');
+    // Write a manifest of one open write-node.
+    fs.writeFileSync(path.join(cacheDir, 'running-set.json'),
+      JSON.stringify({ nodes: [{ id: 'n1', worktreePath: '.kw/node/proj/n1', declared_write_set: ['scripts/n1.js'] }] }));
+    // (3) in-lane member write -> allow
+    assert(run(path.join(RR, '.kw/node/proj/n1/scripts/n1.js'), true).status === 0, '#376: in-lane member write -> exit 0');
+    // (4) out-of-lane member write -> DENY (exit 2)
+    assert(run(path.join(RR, '.kw/node/proj/n1/scripts/other.js'), true).status === 2, '#376 AC3: out-of-lane member write -> exit 2');
+    // (5) parent-worktree leak matching n1 lane -> DENY (exit 2)
+    assert(run(path.join(RR, 'scripts/n1.js'), true).status === 2, '#376 AC4: parent-worktree leak -> exit 2');
+    // (6) unrelated parent write -> allow
+    assert(run(path.join(RR, 'scripts/unrelated.js'), true).status === 0, '#376: unrelated parent write -> exit 0');
+    // (7) malformed stdin -> fail-open
+    const bad = spawnSync('bash', [writeLaneHook], { cwd: RR, encoding: 'utf8', input: 'not json', env: Object.assign({}, process.env, { KAOLA_LANE_CONTAINMENT: '1' }) });
+    assert(bad.status === 0, '#376: malformed stdin -> exit 0 (fail-open)');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function testWriteLaneHookRegistered() {
+  // #376: the write-lane hook is registered as a PreToolUse(Write|Edit) entry with the expected id.
+  const hooks = JSON.parse(fs.readFileSync(path.join(repoRoot, 'hooks', 'hooks.json'), 'utf8')).hooks;
+  const pre = hooks.PreToolUse || [];
+  const wl = pre.find(e => e.id === 'kaola-workflow:write-lane');
+  assert(wl, '#376: hooks.json has a kaola-workflow:write-lane PreToolUse entry');
+  assert(wl && wl.matcher === 'Write|Edit', '#376: write-lane matcher is Write|Edit, got ' + (wl && wl.matcher));
 }
 
 function testSubagentDispatchHookExists() {
@@ -10446,6 +10498,8 @@ function buildRegistry() {
   add('testHookGitDashCCommitGuard',                      testHookGitDashCCommitGuard);
   add('testHookShapeNoPhantomAdvisor',                    testHookShapeNoPhantomAdvisor);
   add('testResumeCompatLegacyAdvisorGateRow',             testResumeCompatLegacyAdvisorGateRow);
+  add('testWriteLaneHookGuard',                           testWriteLaneHookGuard);
+  add('testWriteLaneHookRegistered',                      testWriteLaneHookRegistered);
   add('testSubagentDispatchHookExists',                   testSubagentDispatchHookExists);
   add('testClassifierFolderOverlapRed',                   testClassifierFolderOverlapRed);
   add('testClassifierFolderOverlapYellow',                testClassifierFolderOverlapYellow);

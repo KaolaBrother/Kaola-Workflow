@@ -2091,14 +2091,16 @@ function testInstallProfilesFeaturesTableHandling() {
     const existingHooksPath = path.join(existing, '.codex', 'hooks.json');
     assert.ok(fs.existsSync(existingHooksPath), 'existing dir: hooks.json must exist after install');
     const existingHooks = JSON.parse(fs.readFileSync(existingHooksPath, 'utf8'));
-    for (const event of ['SessionStart', 'PreToolUse', 'SubagentStart']) {
-      const entries = existingHooks.hooks[event] || [];
-      const managed = entries.filter(e => e.id && e.id.startsWith('kaola-workflow:'));
-      assert.strictEqual(
-        managed.length,
-        1,
-        `after double-run, event ${event} must have exactly 1 kaola-workflow: entry (got ${managed.length}) — idempotency violation`
-      );
+    // #376: per-ID no-duplicate check (an event MAY carry >1 distinct managed id, e.g. PreToolUse holds
+    // both pre-commit-guard and the write-lane hook); each kaola-workflow: id must appear exactly once.
+    const idCounts = {};
+    for (const event of Object.keys(existingHooks.hooks || {})) {
+      for (const e of existingHooks.hooks[event]) {
+        if (e.id && e.id.startsWith('kaola-workflow:')) idCounts[e.id] = (idCounts[e.id] || 0) + 1;
+      }
+    }
+    for (const id of Object.keys(idCounts)) {
+      assert.strictEqual(idCounts[id], 1, `after double-run, managed id ${id} must appear exactly once (got ${idCounts[id]}) — idempotency violation`);
     }
   } finally {
     fs.rmSync(fresh, { recursive: true, force: true });

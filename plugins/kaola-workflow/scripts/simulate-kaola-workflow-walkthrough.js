@@ -156,12 +156,17 @@ function testAC1HooksJson() {
     // Second install.
     runInstallProfiles(existing);
     const afterSecond = JSON.parse(fs.readFileSync(path.join(existing, '.codex', 'hooks.json'), 'utf8'));
-    // Assert exactly ONE managed entry per event (no duplicates).
-    for (const event of EVENTS) {
-      const entries = (afterSecond.hooks || {})[event] || [];
-      const managedCount = entries.filter(e => e.id && e.id.startsWith('kaola-workflow:')).length;
-      assert(managedCount === 1,
-        'AC1 idempotency: event ' + event + ' must have exactly 1 kaola-workflow: entry after 2nd install, got ' + managedCount);
+    // Assert NO DUPLICATE managed entries after the 2nd install: each kaola-workflow: id appears
+    // exactly once (an event MAY carry >1 distinct managed id — e.g. PreToolUse holds both
+    // pre-commit-guard and the #376 write-lane hook — so the check is per-id, not per-event count).
+    const idCounts = {};
+    for (const event of Object.keys(afterSecond.hooks || {})) {
+      for (const e of afterSecond.hooks[event]) {
+        if (e.id && e.id.startsWith('kaola-workflow:')) idCounts[e.id] = (idCounts[e.id] || 0) + 1;
+      }
+    }
+    for (const id of Object.keys(idCounts)) {
+      assert(idCounts[id] === 1, 'AC1 idempotency: managed id ' + id + ' must appear exactly once after 2nd install, got ' + idCounts[id]);
     }
     // Assert the user entry survived.
     const sessionStartAfter = (afterSecond.hooks || {}).SessionStart || [];

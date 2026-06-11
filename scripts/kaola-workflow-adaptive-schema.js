@@ -269,6 +269,12 @@ const FANOUT_CAP_READONLY_ENV = 'KAOLA_FANOUT_CAP_READONLY';
 // subagent's CWD, so write-role frontiers serial-degrade unconditionally. The successor enforcement
 // primitive is the write-lane containment hook (#376, KAOLA_LANE_CONTAINMENT) + the per-node
 // running-set scheduler (#377). See docs/decisions/0008-excise-write-role-batch-isolation.md.
+// #376: the successor flag. The write-lane PreToolUse hook (hooks/kaola-workflow-write-lane.sh) DENIES
+// an out-of-lane Write/Edit at write time — fail-closed default FALSE; the hook is dormant (fail-open)
+// until a real .cache/running-set.json manifest of open write-nodes exists (#377). Per-edition: set
+// only where the hook is registered AND a live deny-capability probe has passed (Codex deny semantics
+// may differ — keep it unset there until proven).
+const LANE_CONTAINMENT_ENV = 'KAOLA_LANE_CONTAINMENT';
 
 // Resolve the adaptive switch with precedence env > config > default OFF.
 // The OFF guarantee rests on the STRICT `config.enable_adaptive === true` on-test
@@ -295,6 +301,14 @@ function resolveFanoutCapReadonly(env) {
   const raw = (env || {})[FANOUT_CAP_READONLY_ENV];
   const n = parseInt(raw, 10);
   return Number.isInteger(n) && n >= 1 ? n : DEFAULT_FANOUT_CAP_READONLY;
+}
+
+// #376: resolve whether the write-lane containment hook should ENFORCE (deny out-of-lane writes).
+// Fail-closed default FALSE — only an explicit 1/true/yes opts in (successor of the retired #320
+// resolveBatchCwdEnforced shape). The hook is additionally dormant until a running-set.json exists.
+function resolveLaneContainment(env) {
+  const raw = (env || {})[LANE_CONTAINMENT_ENV];
+  return raw === '1' || raw === 'true' || raw === 'yes';
 }
 
 // #353: crash-safe durable-state write — tmp + fsync + atomic rename, so a crash mid-write can
@@ -442,9 +456,11 @@ module.exports = {
   ENABLE_ADAPTIVE_ENV,
   FANOUT_CAP_ENV,
   FANOUT_CAP_READONLY_ENV,
+  LANE_CONTAINMENT_ENV,
   resolveEnableAdaptive,
   resolveFanoutCap,
   resolveFanoutCapReadonly,
+  resolveLaneContainment,
   writeFileAtomicReplace,
   locateSection,
   spliceComplianceSection,

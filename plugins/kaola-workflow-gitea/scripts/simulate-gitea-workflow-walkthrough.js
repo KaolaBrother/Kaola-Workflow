@@ -1340,9 +1340,21 @@ function testGiteaDispatchHookExists() {
   console.log('testGiteaDispatchHookExists: PASSED');
 }
 
+function testGiteaWriteLaneHookExists() {
+  // #376: the write-lane containment hook ships + is registered (PreToolUse Write|Edit) in this edition.
+  const hooksDir = path.join(root, 'plugins/kaola-workflow-gitea/hooks');
+  assert.ok(fs.existsSync(path.join(hooksDir, 'kaola-workflow-write-lane.sh')), '#376: gitea hooks/kaola-workflow-write-lane.sh must exist');
+  const hooks = JSON.parse(fs.readFileSync(path.join(hooksDir, 'hooks.json'), 'utf8'));
+  const pre = (hooks.hooks && hooks.hooks.PreToolUse) || [];
+  const wl = pre.find(e => e.id === 'kaola-workflow:write-lane');
+  assert.ok(wl && wl.matcher === 'Write|Edit', '#376: gitea hooks.json must register kaola-workflow:write-lane on Write|Edit');
+  console.log('testGiteaWriteLaneHookExists: PASSED');
+}
+
 testGiteaAdaptive();
 testGitea237DotPathExtraction();
 testGiteaDispatchHookExists();
+testGiteaWriteLaneHookExists();
 
 // issue #342: bundle-lane E2E behavioral coverage (mirrors root §#328 modulo forge nouns).
 testGiteaBundleClaimCreatesOneFolder();
