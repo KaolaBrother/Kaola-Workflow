@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @generated from scripts/kaola-workflow-adaptive-node.js by `npm run sync:editions` (issue #365) — edit canonical and regenerate; do NOT hand-edit this forge port.
 'use strict';
 
 // ---------------------------------------------------------------------------
@@ -481,7 +482,7 @@ function runOrient(opts) {
       planPath,
       mainPlanPath: unmirrored ? opts.planProbe.mainPlanPath : null,
       repair: unmirrored
-        ? 'run: node kaola-workflow-adaptive-node.js mirror-project --project '
+        ? 'run: node kaola-gitea-workflow-adaptive-node.js mirror-project --project '
           + project + ' --json (mirrors the frozen kaola-workflow/' + project
           + '/ from the main checkout into this worktree, plan_hash-verified), then re-run orient'
         : 'no workflow-plan.md for ' + project
@@ -1912,7 +1913,7 @@ function main() {
 
   if (!args.length || args[0] === '--help' || args[0] === '-h') {
     process.stdout.write(
-      'usage: kaola-workflow-adaptive-node.js <subcommand> --project P --json [options]\n' +
+      'usage: kaola-gitea-workflow-adaptive-node.js <subcommand> --project P --json [options]\n' +
       '  orient              --project P\n' +
       '  mirror-project      --project P\n' +
       '  open-next           --project P [--node-id N]\n' +

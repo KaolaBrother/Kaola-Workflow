@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @generated from scripts/kaola-workflow-adaptive-handoff.js by `npm run sync:editions` (issue #365) — edit canonical and regenerate; do NOT hand-edit this forge port.
 'use strict';
 
 // ---------------------------------------------------------------------------
@@ -8,7 +9,7 @@
 // ONE mechanical transition. The workflow-planner RUNS this (never judges);
 // the orchestrator drives the bounded repair loop on plan_invalid.
 // After #272, /kaola-workflow-plan-run owns the entire node lifecycle (incl. the
-// FIRST node) via kaola-workflow-adaptive-node.js. This handoff no longer opens
+// FIRST node) via kaola-gitea-workflow-adaptive-node.js. This handoff no longer opens
 // node1 or records its baseline — it returns ready_to_run and routes to plan-run.
 //
 // CLI: node kaola-gitea-workflow-adaptive-handoff.js (--project NAME | --plan PATH) --json [--state-mtime ISO]
@@ -49,7 +50,7 @@ const { execFileSync } = require('child_process');
 // ---------------------------------------------------------------------------
 // getRoot — resolve the USER-REPO root via git rev-parse --show-toplevel
 // (process.cwd() fallback). Used ONLY for --project plan/state derivation.
-// Mirrors the exact convention in kaola-workflow-active-folders.js and
+// Mirrors the exact convention in kaola-gitea-workflow-active-folders.js and
 // kaola-gitea-workflow-roadmap.js so the user-repo root resolves correctly even
 // when this script is installed under $HOME/.claude/kaola-workflow/scripts/.
 // ---------------------------------------------------------------------------

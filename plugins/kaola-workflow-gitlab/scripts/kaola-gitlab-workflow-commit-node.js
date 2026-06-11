@@ -1,14 +1,15 @@
 #!/usr/bin/env node
+// @generated from scripts/kaola-workflow-commit-node.js by `npm run sync:editions` (issue #365) — edit canonical and regenerate; do NOT hand-edit this forge port.
 'use strict';
 
 // ---------------------------------------------------------------------------
-// kaola-workflow-commit-node.js (issue #242)
+// kaola-gitlab-workflow-commit-node.js (issue #242)
 //
 // Aggregator: per-node / whole-plan barrier entry point.
 // Composes the plan-validator subcommands into one auditable call — it SHELLS
 // the validator; it does NOT reimplement it.
 //
-// argv: node kaola-workflow-commit-node.js <plan-path> [--node-id <id>] [--start] --json
+// argv: node kaola-gitlab-workflow-commit-node.js <plan-path> [--node-id <id>] [--start] --json
 //
 // Modes:
 //   --node-id ID --start   per-node-start: record-base only (idempotent)
@@ -155,7 +156,7 @@ function main() {
   const args = process.argv.slice(2);
   if (!args.length || args[0] === '--help' || args[0] === '-h') {
     process.stdout.write(
-      'usage: kaola-workflow-commit-node.js <plan-path> [--node-id <id>] [--start] --json\n' +
+      'usage: kaola-gitlab-workflow-commit-node.js <plan-path> [--node-id <id>] [--start] --json\n' +
       '  --node-id ID --start  per-node-start: record-base only (idempotent)\n' +
       '  --node-id ID          per-node end:   barrier-check + gate-verify + verdict-check (all informational)\n' +
       '  (no --node-id)        whole-plan:     barrier-check + gate-verify + verdict-check (all blocking)\n'

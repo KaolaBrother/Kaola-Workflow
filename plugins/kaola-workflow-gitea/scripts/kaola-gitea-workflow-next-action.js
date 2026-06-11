@@ -1,14 +1,15 @@
 #!/usr/bin/env node
+// @generated from scripts/kaola-workflow-next-action.js by `npm run sync:editions` (issue #365) — edit canonical and regenerate; do NOT hand-edit this forge port.
 'use strict';
 
 // ---------------------------------------------------------------------------
-// kaola-workflow-next-action.js (issue #242)
+// kaola-gitea-workflow-next-action.js (issue #242)
 //
 // Aggregator: compute the ready-set / next node / resolved model for the
 // adaptive executor. Reads a frozen workflow-plan.md and returns the set of
 // nodes whose dependencies are satisfied and whose own status is non-terminal.
 //
-// argv: node kaola-workflow-next-action.js <plan-path> --json
+// argv: node kaola-gitea-workflow-next-action.js <plan-path> --json
 //
 // JSON output schema:
 //   ok:     { result:'ok', readySet:[{id,role,dependsOn,model,declared_write_set,shape}],
@@ -175,7 +176,7 @@ function main() {
   const args = process.argv.slice(2);
   if (!args.length || args[0] === '--help' || args[0] === '-h') {
     process.stdout.write(
-      'usage: kaola-workflow-next-action.js <plan-path> --json\n' +
+      'usage: kaola-gitea-workflow-next-action.js <plan-path> --json\n' +
       '  Computes the ready-set / next node / model for the adaptive executor.\n' +
       '  Exit 1 on refuse.\n'
     );

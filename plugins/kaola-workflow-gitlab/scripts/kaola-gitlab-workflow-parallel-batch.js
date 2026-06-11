@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @generated from scripts/kaola-workflow-parallel-batch.js by `npm run sync:editions` (issue #365) — edit canonical and regenerate; do NOT hand-edit this forge port.
 'use strict';
 
 // ---------------------------------------------------------------------------
@@ -1067,7 +1068,7 @@ function main() {
 
   if (!args.length || args[0] === '--help' || args[0] === '-h') {
     process.stdout.write(
-      'usage: kaola-workflow-parallel-batch.js <subcommand> --project P --json [options]\n' +
+      'usage: kaola-gitlab-workflow-parallel-batch.js <subcommand> --project P --json [options]\n' +
       '  open-batch   --project P [--max N]\n' +
       '  top-up       --project P [--max N]   (rolling bounded dispatch: fill freed slots)\n' +
       '  seal-member  --project P --node-id N\n' +
