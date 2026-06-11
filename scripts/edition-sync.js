@@ -175,8 +175,10 @@ function runWrite() {
     }
   }
   // (c) byte-identical groups: copy the group's first (source) file to every other path.
+  // validate-script-sync.js groups expose their member list as `.files` (the first entry is
+  // the canonical source); tolerate a bare-array group too.
   for (const group of BYTE_IDENTICAL_GROUPS) {
-    const paths = group.paths || group;
+    const paths = Array.isArray(group) ? group : group.files;
     if (!Array.isArray(paths) || paths.length < 2) continue;
     const src = readFile(paths[0]);
     for (let i = 1; i < paths.length; i++) {

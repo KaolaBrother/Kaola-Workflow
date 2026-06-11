@@ -23,6 +23,11 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { parseNodes, parseLedger, readStoredHash } = require('./kaola-gitea-workflow-plan-validator');
+// #355: the shared emit/refuse protocol. Refusals go to STDOUT (one compact JSON line)
+// so a caller that parses stdout still recovers the `reason` — the old stderr refusals
+// were invisible to adaptive-node's shellNode (which reads err.stdout). adaptive-schema is
+// byte-identical across every edition, so this require is NOT forge-renamed.
+const { emit, refuse } = require('./kaola-workflow-adaptive-schema');
 
 /**
  * Resolve the repository root using git, falling back to process.cwd().
@@ -108,8 +113,7 @@ if (require.main === module) {
   }
 
   if (!project) {
-    const refusal = { status: 'missing_arg', message: 'Usage: node kaola-workflow-task-mirror.js --project <name> [--now <iso>] [--json]' };
-    process.stderr.write(JSON.stringify(refusal, null, 2) + '\n');
+    emit(refuse('missing_arg', { status: 'missing_arg', message: 'Usage: node kaola-workflow-task-mirror.js --project <name> [--now <iso>] [--json]' }));
     process.exit(1);
   }
 
@@ -121,8 +125,7 @@ if (require.main === module) {
   try {
     planContent = fs.readFileSync(planPath, 'utf8');
   } catch (e) {
-    const refusal = { status: 'plan_not_found', path: planPath, message: e.message };
-    process.stderr.write(JSON.stringify(refusal, null, 2) + '\n');
+    emit(refuse('plan_not_found', { status: 'plan_not_found', path: planPath, message: e.message }));
     process.exit(1);
   }
 
@@ -132,7 +135,7 @@ if (require.main === module) {
   const result = generateMirror({ planContent, now });
 
   if (result.status === 'plan_not_frozen') {
-    process.stderr.write(JSON.stringify(result, null, 2) + '\n');
+    emit(refuse('plan_not_frozen', result));
     process.exit(1);
   }
 

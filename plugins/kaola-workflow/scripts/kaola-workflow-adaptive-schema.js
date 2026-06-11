@@ -419,6 +419,32 @@ function isLegalWorkflowPath(value, adaptiveEnabled) {
   return (adaptiveEnabled ? WORKFLOW_PATHS : WORKFLOW_PATHS_NO_ADAPTIVE).includes(value);
 }
 
+// ---------------------------------------------------------------------------
+// #355: unified emit / refuse protocol — the shared refusal envelope + framed-output
+// constructor for the adaptive scripts.
+//
+// emit(obj) writes EXACTLY ONE compact JSON line LAST (never pretty-printed): a caller
+// recovering the payload with the last-valid-JSON-line parser (safeJsonParse in the
+// aggregators) always round-trips it, even if the script logged a warning/debug line
+// before its result. A multi-line pretty JSON would NOT parse line-by-line, so emit is
+// deliberately single-line. The default stream is stdout (refusals belong on stdout too,
+// so a non-zero exit still carries a machine-readable reason — the task-mirror stderr bug
+// this protocol fixes); pass { stream: process.stderr } only for genuinely out-of-band logs.
+//
+// refuse(reason, extra) builds the canonical refusal envelope { result:'refuse', reason, ... }
+// shared across the adaptive scripts; callers branch on result === 'refuse' and read `reason`.
+// Per-subcommand payloads may carry extra fields (additive); pass backward-compat keys (e.g.
+// `status`, `errors`) via `extra` so existing consumers keep working.
+// ---------------------------------------------------------------------------
+function emit(obj, opts) {
+  const stream = (opts && opts.stream) || process.stdout;
+  stream.write(JSON.stringify(obj) + '\n');
+}
+
+function refuse(reason, extra) {
+  return Object.assign({ result: 'refuse', reason: reason }, extra || {});
+}
+
 module.exports = {
   WORKFLOW_PATHS,
   WORKFLOW_PATHS_NO_ADAPTIVE,
@@ -470,4 +496,6 @@ module.exports = {
   locateSection,
   spliceComplianceSection,
   isLegalWorkflowPath,
+  emit,
+  refuse,
 };

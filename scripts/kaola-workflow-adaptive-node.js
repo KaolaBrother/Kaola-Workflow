@@ -172,7 +172,11 @@ function refreshTaskMirror(project, shell) {
   let res;
   try { res = shell(taskMirrorPath, ['--project', project, '--json']); }
   catch (_) { return { status: 'failed', path: outPath }; }
-  return { status: (res && res.exitCode === 0) ? 'updated' : 'failed', path: outPath };
+  if (res && res.exitCode === 0) return { status: 'updated', path: outPath };
+  // #355: task-mirror now emits its refusal on STDOUT via the shared envelope, so the
+  // reason survives shellNode (which parses err.stdout). Surface it instead of the old
+  // catch-all 'failed' that discarded the diagnostic.
+  return { status: 'failed', path: outPath, reason: (res && res.reason) || null };
 }
 
 function buildTransition(id, ledgerStatus, reason, note) {

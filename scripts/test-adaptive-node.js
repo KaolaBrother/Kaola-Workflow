@@ -3302,6 +3302,39 @@ function rsHarness(initialFiles, shellStub) {
   assert(r.result === 'ok' && r.opened && r.opened.id === 'impl-core', 'R11: legacy open-next path intact (serial fallback)');
 }
 
+// ===========================================================================
+// #355 unified refusal/emit protocol — shared emit/refuse + task-mirror reason
+// now visible to adaptive-node callers (was lost on stderr).
+// ===========================================================================
+{
+  const { emit, refuse } = require('./kaola-workflow-adaptive-schema');
+
+  // S1: refuse() builds the canonical envelope; extra fields are additive.
+  const r = refuse('barrier_failed', { nodeId: 'n1', status: 'x' });
+  assert(r.result === 'refuse' && r.reason === 'barrier_failed' && r.nodeId === 'n1' && r.status === 'x',
+    'S1: refuse() → {result:refuse, reason, ...extra}');
+
+  // S2: emit() writes EXACTLY ONE compact JSON line (round-trips through the last-line parser).
+  let captured = '';
+  emit({ result: 'ok', a: 1 }, { stream: { write: s => { captured += s; } } });
+  assert(captured === '{"result":"ok","a":1}\n', 'S2: emit() writes one compact JSON line + newline, got ' + JSON.stringify(captured));
+  assert(captured.split('\n').filter(Boolean).length === 1, 'S2: emit() is single-line');
+
+  // S3: END-TO-END — task-mirror refusal reason now survives shellNode (the #355 bug:
+  // it used to print on stderr, which shellNode's err.stdout parse never saw).
+  const tmPath = path.join(__dirname, 'kaola-workflow-task-mirror.js');
+  const noArg = shellNode(tmPath, ['--json']); // no --project → missing_arg refusal
+  assert(noArg.exitCode === 1, 'S3: task-mirror missing --project exits 1');
+  assert(noArg.result === 'refuse' && noArg.reason === 'missing_arg',
+    'S3: task-mirror refusal reason recovered from STDOUT via shellNode, got ' + JSON.stringify({ result: noArg.result, reason: noArg.reason }));
+
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-355-'));
+  const badProj = shellNode(tmPath, ['--project', 'no-such-project-xyz', '--json']);
+  assert(badProj.exitCode === 1 && badProj.reason === 'plan_not_found',
+    'S3: task-mirror plan_not_found reason recovered via shellNode, got ' + JSON.stringify(badProj.reason));
+  try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch (_) {}
+}
+
 if (failed > 0) {
   console.error('adaptive-node tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;
