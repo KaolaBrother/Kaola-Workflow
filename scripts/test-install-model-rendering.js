@@ -166,27 +166,32 @@ try {
     } finally { fs.rmSync(ftmp, { recursive: true, force: true }); }
   }
 
-  // #363: verification fails CLOSED for forges. Plant a typo'd entry in the gitea
-  // SUPPORT_SCRIPT_NAMES (a temp copy IN the repo root so SCRIPT_DIR still resolves to the repo)
-  // and assert the install ABORTS — the prior code silently skipped the missing source and verified
-  // green (the 5.4.0 incident class).
+  // #363 / #407: verification fails CLOSED for forges. The SUPPORT_SCRIPT_NAMES list is now
+  // single-sourced from scripts/kaola-workflow-install-manifest.js (#407), so plant the bogus entry in
+  // a TEMP manifest copy (fed via KAOLA_INSTALL_MANIFEST so the in-repo manifest is never mutated) and
+  // assert the install ABORTS — the prior code silently skipped the missing source and verified green
+  // (the 5.4.0 incident class).
   {
-    const typoScript = path.join(root, '.kw-install-typo-test-363.sh');
+    const manifestSrc = path.join(root, 'scripts', 'kaola-workflow-install-manifest.js');
     const ttmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-typo-'));
+    const typoManifest = path.join(ttmp, 'typo-manifest.js');
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-typo-home-'));
     try {
-      const src = fs.readFileSync(path.join(root, 'install.sh'), 'utf8');
-      // inject a bogus name right after the first gitea allowlist entry.
-      const injected = src.replace('kaola-gitea-forge.js\n', 'kaola-gitea-forge.js\n      kaola-gitea-NONEXISTENT-typo-363.js\n');
-      assert(injected !== src, 'planted-typo test: failed to inject a bogus gitea allowlist entry');
-      fs.writeFileSync(typoScript, injected);
-      const result = require('child_process').spawnSync('bash', [typoScript, '--yes', '--forge=gitea', '--no-settings-merge'],
-        { cwd: root, env: { ...process.env, HOME: ttmp }, encoding: 'utf8' });
-      assert(result.status !== 0, '#363: a typo\'d gitea SUPPORT_SCRIPT_NAMES entry must FAIL the install, got exit ' + result.status);
+      const original = fs.readFileSync(manifestSrc, 'utf8');
+      // inject a bogus gitea-only support script into FORGE_ONLY_SCRIPTS.gitea.
+      const injected = original.replace(
+        "  gitea: ['kaola-gitea-forge.js',",
+        "  gitea: ['kaola-gitea-NONEXISTENT-typo-363.js', 'kaola-gitea-forge.js',");
+      assert(injected !== original, 'planted-typo test: failed to inject a bogus gitea manifest entry');
+      fs.writeFileSync(typoManifest, injected);
+      const result = require('child_process').spawnSync('bash', ['install.sh', '--yes', '--forge=gitea', '--no-settings-merge'],
+        { cwd: root, env: { ...process.env, HOME: home, KAOLA_INSTALL_MANIFEST: typoManifest, KAOLA_MANIFEST_REPO_ROOT: root }, encoding: 'utf8' });
+      assert(result.status !== 0, '#363/#407: a typo\'d gitea manifest support entry must FAIL the install, got exit ' + result.status);
       assert(/missing from source/.test((result.stderr || '') + (result.stdout || '')),
-        '#363: the install abort must name the missing source; got: ' + result.stderr);
+        '#363/#407: the install abort must name the missing source; got: ' + result.stderr);
     } finally {
-      fs.rmSync(typoScript, { force: true });
       fs.rmSync(ttmp, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
     }
   }
 

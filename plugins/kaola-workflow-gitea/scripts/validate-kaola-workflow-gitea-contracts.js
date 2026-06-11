@@ -178,7 +178,8 @@ assert(hookFiles.some(file => file.endsWith('kaola-workflow-pre-commit.sh')), 'G
 assert(!hookFiles.some(file => file.endsWith('kaola-workflow-phantom-advisor.sh')), 'Gitea phantom-advisor hook must be removed (#372)');
 // #376: the write-lane containment hook ships in every edition (byte-identical, forge-neutral).
 assert(hookFiles.some(file => file.endsWith('kaola-workflow-write-lane.sh')), 'Gitea write-lane hook missing');
-assert(agentFiles.length === 14, 'expected 14 Gitea agent profiles, got ' + agentFiles.length);
+// #405: 14 base roles + 6 generated <role>-max xhigh effort variants (OPUS_ELIGIBLE_ROLES) = 20.
+assert(agentFiles.length === 20, 'expected 20 Gitea agent profiles (14 base + 6 <role>-max #405), got ' + agentFiles.length);
 assert(exists(pluginRoot + '/config/agents.toml'), 'Gitea agents config missing');
 
 // #340 derived parity guard (enumeration-free): the dispatch config/agents.toml must register
@@ -197,6 +198,31 @@ assert(exists(pluginRoot + '/config/agents.toml'), 'Gitea agents config missing'
     'config/agents.toml must register exactly the agent profiles in agents/ (#340)' +
     (missingTables.length ? ' — profiles missing a [agents.*] table: ' + missingTables.join(', ') : '') +
     (danglingTables.length ? ' — [agents.*] tables with no profile: ' + danglingTables.join(', ') : ''));
+}
+
+// #405 (#382 deferred half): the <role>-max xhigh effort-variant derivation guard (gitea port). Each
+// committed agents/<role>-max.toml MUST byte-equal variantProfileText(base, role) for an
+// OPUS_ELIGIBLE_ROLE, every eligible role must have its -max file + [agents.<role>-max] table, and no
+// -max file may exist for a non-eligible role. Membership lives in the ×4 schema anchor.
+{
+  const { OPUS_ELIGIBLE_ROLES, variantProfileText } = require('./kaola-workflow-adaptive-schema.js');
+  const configText = read(pluginRoot + '/config/agents.toml');
+  for (const role of OPUS_ELIGIBLE_ROLES) {
+    const baseFile = pluginRoot + '/agents/' + role + '.toml';
+    const variantFile = pluginRoot + '/agents/' + role + '-max.toml';
+    assert(exists(baseFile), '#405 gt: OPUS_ELIGIBLE_ROLE base profile missing: ' + baseFile);
+    assert(exists(variantFile), '#405 gt: missing generated effort variant ' + variantFile + ' (--generate-variants)');
+    assert(read(variantFile) === variantProfileText(read(baseFile), role),
+      '#405 gt: ' + variantFile + ' is not the deterministic variantProfileText(' + role + ') derivation');
+    assert(new RegExp('^\\[agents\\.' + role + '-max\\]', 'm').test(configText),
+      '#405 gt: config/agents.toml missing [agents.' + role + '-max] table');
+  }
+  const strayMax = agentFiles
+    .map(f => path.basename(f, '.toml'))
+    .filter(n => n.endsWith('-max'))
+    .map(n => n.slice(0, -'-max'.length))
+    .filter(r => !OPUS_ELIGIBLE_ROLES.includes(r));
+  assert(strayMax.length === 0, '#405 gt: -max profile(s) for non-eligible roles: ' + strayMax.join(', '));
 }
 
 for (const file of commandFiles.filter(file => path.basename(file).startsWith('kaola-workflow-'))) {
@@ -245,7 +271,11 @@ const scriptFiles = [
 ];
 for (const script of scriptFiles) assert(exists(pluginRoot + '/scripts/' + script), script + ' missing');
 
-const installScript = read('install.sh');
+// #407: install.sh's per-forge SUPPORT_SCRIPT_NAMES is single-sourced from the install manifest
+// (no literal arrays remain in install.sh). Assert the manifest emits each required Gitea support
+// script for the gitea forge — same intent (this script ships in a manual install), correct source.
+const giteaInstallManifest = require(path.join(root, 'scripts', 'kaola-workflow-install-manifest.js'));
+const giteaManifestScripts = giteaInstallManifest.supportScripts('gitea');
 const installSupportScripts = [
   'kaola-gitea-forge.js',
   'kaola-gitea-workflow-active-folders.js',
@@ -266,7 +296,7 @@ const installSupportScripts = [
   'kaola-gitea-workflow-parallel-batch.js'
 ];
 for (const script of installSupportScripts) {
-  assert(installScript.includes(script), 'install.sh must install Gitea support script: ' + script);
+  assert(giteaManifestScripts.includes(script), 'install manifest must emit Gitea support script: ' + script);
 }
 
 const uninstallScript = read('uninstall.sh');

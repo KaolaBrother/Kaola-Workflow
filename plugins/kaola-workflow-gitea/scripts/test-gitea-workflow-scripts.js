@@ -2059,6 +2059,67 @@ function testUpdateHooksHardening325() {
   console.log('testUpdateHooksHardening325 (gitea): PASSED');
 }
 
+// #409: stable-home regression — install FROM a throwaway copy of the gitea plugin tree,
+// DELETE the copy, then assert every hooks.json command still resolves to an existing
+// executable in a version-less home (no install-source / version-pinned path), and that
+// reinstall sweeps a planted stale script. The gitea template references the edition-named
+// kaola-gitea-workflow-codex-compact-resume.js — hookReferencedRelPaths auto-adjusts.
+function test409StableHomeSurvivesDirDeletion() {
+  const recursiveCopyDir = (src, dst) => {
+    fs.mkdirSync(dst, { recursive: true });
+    for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+      const s = path.join(src, entry.name);
+      const d = path.join(dst, entry.name);
+      if (entry.isDirectory()) recursiveCopyDir(s, d);
+      else if (entry.isFile()) { fs.copyFileSync(s, d); fs.chmodSync(d, fs.statSync(s).mode); }
+    }
+  };
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-409-stable-home-'));
+  try {
+    const installSrc = path.join(work, 'ephemeral-src');
+    recursiveCopyDir(giteaPluginRoot, installSrc);
+    const srcInstaller = path.join(installSrc, 'scripts', 'install-codex-agent-profiles.js');
+    const target = path.join(work, 'target');
+    fs.mkdirSync(target, { recursive: true });
+
+    const first = spawnSync(process.execPath, [srcInstaller, target], { cwd: installSrc, encoding: 'utf8' });
+    if (first.error) throw first.error;
+    assert.ok(first.status === 0, '#409 gt: install from ephemeral source must succeed: ' + first.stderr);
+
+    fs.rmSync(installSrc, { recursive: true, force: true });
+
+    const hooks = JSON.parse(fs.readFileSync(path.join(target, '.codex', 'hooks.json'), 'utf8'));
+    let commandCount = 0;
+    for (const event of Object.keys(hooks.hooks || {})) {
+      for (const entry of (hooks.hooks[event] || [])) {
+        for (const h of (entry.hooks || [])) {
+          if (typeof h.command !== 'string') continue;
+          commandCount++;
+          const m = h.command.match(/"([^"]+)"/);
+          assert.ok(m, '#409 gt: hook command must carry a quoted script path: ' + h.command);
+          const scriptPath = m[1];
+          assert.ok(fs.existsSync(scriptPath), '#409 gt GREEN: hook script must exist after source deletion: ' + scriptPath);
+          assert.ok((fs.statSync(scriptPath).mode & 0o100) !== 0, '#409 gt: hook script must be executable: ' + scriptPath);
+          assert.ok(!scriptPath.includes('ephemeral-src'), '#409 gt: must NOT point at the deleted source: ' + scriptPath);
+          assert.ok(!/\/\d+\.\d+\.\d+\//.test(scriptPath), '#409 gt: hook path must NOT be version-pinned: ' + scriptPath);
+        }
+      }
+    }
+    assert.ok(commandCount >= 4, '#409 gt: expected the four managed hook commands, saw ' + commandCount);
+
+    const planted = path.join(target, '.codex', 'kaola-workflow', 'hooks', 'kaola-workflow-stale-orphan.sh');
+    fs.writeFileSync(planted, '#!/usr/bin/env bash\nexit 0\n');
+    const second = spawnSync(process.execPath, [installProfilesScript, target], { cwd: giteaPluginRoot, encoding: 'utf8' });
+    if (second.error) throw second.error;
+    assert.ok(second.status === 0, '#409 gt: reinstall must succeed: ' + second.stderr);
+    assert.ok(!fs.existsSync(planted), '#409 gt: reinstall must sweep the stale planted script');
+
+    console.log('test409StableHomeSurvivesDirDeletion (gitea): PASSED');
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+}
+
 function testInstallProfilesFeaturesTableHandling() {
   const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gitea-codex-install-fresh-'));
   const existing = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gitea-codex-install-existing-'));
@@ -2069,12 +2130,13 @@ function testInstallProfilesFeaturesTableHandling() {
     assert.ok(freshConfig.includes('multi_agent = true'), 'fresh install should enable multi_agent');
     assert.ok(freshConfig.includes('# BEGIN kaola-workflow agents'), 'fresh install should include managed block');
     // #332: the installer now also writes a .kaola-managed-profiles.json manifest into
-    // this dir, so count TOML entries only (raw readdir is 15 with the manifest dotfile).
+    // this dir, so count TOML entries only (raw readdir includes the manifest dotfile).
+    // #405: 14 base + 6 generated <role>-max effort variants = 20.
     const freshAgentsDir = path.join(fresh, '.codex', 'agents', 'kaola-workflow');
     assert.strictEqual(
       fs.readdirSync(freshAgentsDir).filter(f => f.endsWith('.toml')).length,
-      14,
-      'should install 14 agent TOML files'
+      20,
+      'should install 20 agent TOML files (14 base + 6 <role>-max #405)'
     );
     assert.ok(
       fs.existsSync(path.join(freshAgentsDir, '.kaola-managed-profiles.json')),
@@ -2442,6 +2504,7 @@ function testStaleWorktreeCleanup() {
 
 testInstallProfilesFeaturesTableHandling();
 testUpdateHooksHardening325();
+test409StableHomeSurvivesDirDeletion();   // #409
 testGiteaRoadmapValidateRemote();
 testStaleWorktreeCheck();
 testStaleWorktreeCleanup();
@@ -3498,7 +3561,7 @@ function testInstallSchemaPruneManifest332Gitea() {
     const r = runInstallProfiles(fresh);
     const agentsDir = path.join(fresh, '.codex', 'agents', 'kaola-workflow');
     const tomls = giteaListTomls(agentsDir);
-    assert.strictEqual(tomls.length, 14, '#332 gt AC3: fresh install must place 14 *.toml');
+    assert.strictEqual(tomls.length, 20, '#332/#405 gt AC3: fresh install must place 20 *.toml (14 base + 6 <role>-max)');
     assert.ok(!tomls.includes('docs-lookup.toml'), '#332 gt AC3: docs-lookup.toml must not be installed');
     for (const f of tomls) {
       const role = f.replace(/\.toml$/, '');
@@ -3507,7 +3570,7 @@ function testInstallSchemaPruneManifest332Gitea() {
     }
     const manifest = JSON.parse(fs.readFileSync(path.join(agentsDir, manifestBase), 'utf8'));
     assert.strictEqual(manifest.schema_version, 1, '#332 gt AC3: manifest schema_version 1');
-    assert.strictEqual(manifest.roles.length, 14, '#332 gt AC3: manifest must list 14 roles');
+    assert.strictEqual(manifest.roles.length, 20, '#332/#405 gt AC3: manifest must list 20 roles (14 base + 6 <role>-max)');
     assert.strictEqual(r.stdout.trim().split('\n').pop(), 'status: ok', '#332 gt AC3: stdout must end with status: ok');
   } finally {
     fs.rmSync(fresh, { recursive: true, force: true });

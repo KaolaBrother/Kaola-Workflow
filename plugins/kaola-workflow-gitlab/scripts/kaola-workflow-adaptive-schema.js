@@ -44,6 +44,39 @@ const LEDGER_STATUSES = Object.freeze(['pending', 'in_progress', 'complete', 'n/
 // ×4 byte-identical drift anchor) so the validator, the executor, and every edition share one list.
 const NODE_MODEL_TIERS = Object.freeze(['opus', 'sonnet']);
 
+// #405 (#382 deferred half): the node-dispatchable roles for which a `model: opus` tier earns a
+// dedicated Codex `<role>-max` xhigh effort-variant profile. Derived from the #382 planner rubric
+// (agents/workflow-planner.md: assign opus when output quality is bounded by *reasoning depth* —
+// architecture/design, adversarial gates, security review, root-cause of non-obvious bugs) ∩ the
+// CANONICAL node-role library, cross-checked against DEFAULT_AGENT_MODELS (resolve-agent-model.js:
+// planner is opus-default). The OTHER canonical roles (code-explorer, knowledge-lookup, doc-updater,
+// build-error-resolver, implementer, issue-scout) carry out an already-made decision, so a planner
+// `model: opus` on them degrades to base (no -max variant) with a visible note — never a hard error.
+// On Codex, `model: opus` on an eligible role dispatches `<role>-max` (model_reasoning_effort=xhigh);
+// `sonnet`/absent stays on the base profile. Defined HERE (the ×4 byte-identical drift anchor) so the
+// generator, the validator derivation-assert, and every edition share one membership list.
+const OPUS_ELIGIBLE_ROLES = Object.freeze([
+  'planner',
+  'code-architect',
+  'tdd-guide',
+  'code-reviewer',
+  'security-reviewer',
+  'adversarial-verifier',
+]);
+
+// #405: the deterministic Codex `<role>-max` variant text for a base profile. Pure string transform
+// over the base agents/<role>.toml: rewrite the top-level `name = "<role>"` to `"<role>-max"` and the
+// top-level `model_reasoning_effort = "..."` to `"xhigh"`, leaving developer_instructions (and every
+// other byte) verbatim. The generator writes this; the contract validators re-derive it and assert
+// each committed agents/<role>-max.toml === variantProfileText(read(base), role) — so a hand-edit to a
+// -max file (or a drifted base) reds the chain. Idempotent + name/effort-order-independent.
+function variantProfileText(baseText, role) {
+  let out = String(baseText);
+  out = out.replace(/^name\s*=\s*"[^"]*"\s*$/m, `name = "${role}-max"`);
+  out = out.replace(/^model_reasoning_effort\s*=\s*"[^"]*"\s*$/m, 'model_reasoning_effort = "xhigh"');
+  return out;
+}
+
 // Caps (verified first-party): FANOUT_CAP default 4 (env KAOLA_FANOUT_CAP);
 // LOOP_CAP static loop bound; FILE_CEILING absolute backstop of 6 (fast.md:63);
 // TEST_THRASH_LIMIT >= 3 consecutive failing cycles on the same test (fast.md:64).
@@ -464,6 +497,8 @@ module.exports = {
   LEDGER_HEADING,
   LEDGER_STATUSES,
   NODE_MODEL_TIERS,
+  OPUS_ELIGIBLE_ROLES,
+  variantProfileText,
   DEFAULT_FANOUT_CAP,
   DEFAULT_FANOUT_CAP_READONLY,
   RUNNING_SET_NAME,

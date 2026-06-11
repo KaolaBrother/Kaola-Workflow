@@ -69,6 +69,11 @@ const COMMON_SCRIPTS = [
   // validators forbid a `plugins/kaola-workflow/scripts/` cross-tree reference), so it must ship to
   // ALL FOUR trees. It lives in the 4-tree BYTE_IDENTICAL_GROUPS below (closure-contract pattern),
   // not here — the byte group already enforces the claude↔codex parity COMMON_SCRIPTS would.
+  // #407: install.sh SUPPORT_*_NAMES single-source manifest. Required by the byte-identical
+  // validate-workflow-contracts.js (claude↔codex), so the codex copy must carry it too — module
+  // load is side-effect-free (repoRoot is computed but no fs access until a function is called),
+  // and only the claude validator (run from repo-root scripts/) ever invokes its probes.
+  'kaola-workflow-install-manifest.js',
 ];
 
 const BYTE_IDENTICAL_GROUPS = [

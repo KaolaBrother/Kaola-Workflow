@@ -399,6 +399,151 @@ function testUpdateHooksHardening325() {
   console.log('testUpdateHooksHardening325: PASSED');
 }
 
+// #409: the LIVE-BUG regression test. Before the fix, install-codex-agent-profiles.js
+// substituted `path.resolve(__dirname,'..')` (the run-time install source) into
+// __KW_PLUGIN_ROOT__ and copied ZERO hook scripts to a stable home, so hooks.json
+// pointed straight back at the install source dir. When that dir was an ephemeral /tmp
+// worktree (purged) or a version-pinned plugin-cache dir (GC'd on the next release),
+// every hook fired exit 127. This test installs FROM a throwaway copy of the plugin
+// tree, DELETES that copy, then asserts every hooks.json command still resolves to an
+// existing executable script in a version-LESS home — and that reinstall sweeps a
+// planted stale script. It goes RED against the pre-#409 installer (commands point at
+// the deleted source) and GREEN against the stable-home fix.
+function recursiveCopyDir(src, dst) {
+  fs.mkdirSync(dst, { recursive: true });
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const s = path.join(src, entry.name);
+    const d = path.join(dst, entry.name);
+    if (entry.isDirectory()) recursiveCopyDir(s, d);
+    else if (entry.isFile()) { fs.copyFileSync(s, d); fs.chmodSync(d, fs.statSync(s).mode); }
+  }
+}
+
+function test409StableHomeSurvivesDirDeletion() {
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-409-stable-home-'));
+  try {
+    // 1. Copy the plugin tree into a throwaway install SOURCE, then run the installer
+    //    FROM that copy (so __dirname/.. resolves to the throwaway, exactly the live bug).
+    const installSrc = path.join(work, 'ephemeral-src');
+    recursiveCopyDir(pluginRoot, installSrc);
+    const srcInstaller = path.join(installSrc, 'scripts', 'install-codex-agent-profiles.js');
+    const target = path.join(work, 'target');
+    fs.mkdirSync(target, { recursive: true });
+
+    const first = spawnSync(process.execPath, [srcInstaller, target], { cwd: installSrc, encoding: 'utf8' });
+    if (first.error) throw first.error;
+    assert(first.status === 0, '#409: install from ephemeral source must succeed: ' + first.stderr);
+
+    // 2. DELETE the install source — the macOS /tmp-purge / version-bump scenario.
+    fs.rmSync(installSrc, { recursive: true, force: true });
+
+    // 3. Every hooks.json command must still resolve to an existing, executable file,
+    //    must NOT reference the deleted source, and must NOT be version-pinned.
+    const hooksPath = path.join(target, '.codex', 'hooks.json');
+    const hooks = JSON.parse(fs.readFileSync(hooksPath, 'utf8'));
+    let commandCount = 0;
+    for (const event of Object.keys(hooks.hooks || {})) {
+      for (const entry of (hooks.hooks[event] || [])) {
+        for (const h of (entry.hooks || [])) {
+          if (typeof h.command !== 'string') continue;
+          commandCount++;
+          // Extract the quoted script path argument (bash "..." / node "...").
+          const m = h.command.match(/"([^"]+)"/);
+          assert(m, '#409: hook command must carry a quoted script path: ' + h.command);
+          const scriptPath = m[1];
+          assert(fs.existsSync(scriptPath),
+            '#409 GREEN: hook script must exist after the install source is deleted: ' + scriptPath);
+          // Owner-executable bit must be set (we chmod 0o755 on copy).
+          assert((fs.statSync(scriptPath).mode & 0o100) !== 0,
+            '#409: hook script must be executable: ' + scriptPath);
+          assert(!scriptPath.includes('ephemeral-src'),
+            '#409: hook command must NOT point at the deleted install source: ' + scriptPath);
+          // No version-pinned `/3.` (or `/N.M.K/`) plugin-cache segment.
+          assert(!/\/\d+\.\d+\.\d+\//.test(scriptPath),
+            '#409: hook script path must NOT be version-pinned: ' + scriptPath);
+        }
+      }
+    }
+    assert(commandCount >= 4, '#409: expected the four managed hook commands, saw ' + commandCount);
+
+    // 4. Reinstall sweeps a planted stale script (no orphan left in the stable home).
+    const stableHooksDir = path.join(target, '.codex', 'kaola-workflow', 'hooks');
+    const planted = path.join(stableHooksDir, 'kaola-workflow-stale-orphan.sh');
+    fs.writeFileSync(planted, '#!/usr/bin/env bash\nexit 0\n');
+    assert(fs.existsSync(planted), '#409: planted stale script must exist before reinstall');
+    const second = spawnSync(process.execPath, [installProfilesScript, target], { cwd: repoRoot, encoding: 'utf8' });
+    if (second.error) throw second.error;
+    assert(second.status === 0, '#409: reinstall must succeed: ' + second.stderr);
+    assert(!fs.existsSync(planted),
+      '#409: reinstall must sweep the stale planted script from the stable home');
+
+    console.log('test409StableHomeSurvivesDirDeletion (#409): PASSED');
+  } finally {
+    fs.rmSync(work, { recursive: true, force: true });
+  }
+}
+
+// #405 (#382 deferred half): the <role>-max xhigh effort-variant profiles must be COMMITTED source
+// files (the bijection guard + codex-preflight regex require 1:1 file↔table), each the deterministic
+// variantProfileText(base) derivation, with name=<role>-max + effort=xhigh, and they must install
+// (copyAgentProfiles is unfiltered). Also asserts the generator is idempotent + name/effort-order
+// independent. Pure-helper assertions + a fresh-install black-box check.
+function test405MaxVariants() {
+  const schema = require(path.join(pluginRoot, 'scripts', 'kaola-workflow-adaptive-schema.js'));
+  const { variantProfileText, OPUS_ELIGIBLE_ROLES } = schema;
+  const installer = require(installProfilesScript);
+
+  assert(Array.isArray(OPUS_ELIGIBLE_ROLES) && OPUS_ELIGIBLE_ROLES.length === 6,
+    '#405: expected 6 OPUS_ELIGIBLE_ROLES, got ' + (OPUS_ELIGIBLE_ROLES || []).length);
+
+  // Each committed -max profile equals the deterministic derivation, validates, and carries the
+  // xhigh effort + the -max name.
+  for (const role of OPUS_ELIGIBLE_ROLES) {
+    const baseFile = path.join(pluginRoot, 'agents', role + '.toml');
+    const variantFile = path.join(pluginRoot, 'agents', role + '-max.toml');
+    assert(fs.existsSync(variantFile), '#405: missing committed variant agents/' + role + '-max.toml');
+    const variantText = fs.readFileSync(variantFile, 'utf8');
+    const baseText = fs.readFileSync(baseFile, 'utf8');
+    assert(variantText === variantProfileText(baseText, role),
+      '#405: agents/' + role + '-max.toml is not the deterministic variantProfileText(' + role + ') derivation');
+    // Schema-valid as a <role>-max profile.
+    const reasons = installer.validateProfileText(variantText, role + '-max');
+    assert(reasons.length === 0, '#405: ' + role + '-max.toml fails profile schema: ' + reasons.join('; '));
+    assert(variantText.includes('name = "' + role + '-max"'),
+      '#405: ' + role + '-max.toml must set name = "' + role + '-max"');
+    assert(variantText.includes('model_reasoning_effort = "xhigh"'),
+      '#405: ' + role + '-max.toml must set model_reasoning_effort = "xhigh"');
+  }
+
+  // Idempotent + name/effort-order independent: re-running variantProfileText on the variant is a no-op,
+  // and a base with effort line BEFORE name still produces the right variant.
+  const sample = OPUS_ELIGIBLE_ROLES[0];
+  const sampleVariant = fs.readFileSync(path.join(pluginRoot, 'agents', sample + '-max.toml'), 'utf8');
+  assert(variantProfileText(sampleVariant, sample) === sampleVariant, '#405: variantProfileText is idempotent');
+  const reordered = 'model_reasoning_effort = "low"\nname = "x"\ndeveloper_instructions = """body"""\n';
+  const rv = variantProfileText(reordered, 'x');
+  assert(rv.includes('name = "x-max"') && rv.includes('model_reasoning_effort = "xhigh"'),
+    '#405: variantProfileText handles effort-before-name ordering');
+
+  // Black-box: fresh install carries every -max profile + a registered [agents.<role>-max] block.
+  const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-405-install-'));
+  try {
+    runInstallProfiles(fresh);
+    const agentsDir = path.join(fresh, '.codex', 'agents', 'kaola-workflow');
+    const configText = fs.readFileSync(path.join(fresh, '.codex', 'config.toml'), 'utf8');
+    for (const role of OPUS_ELIGIBLE_ROLES) {
+      assert(fs.existsSync(path.join(agentsDir, role + '-max.toml')),
+        '#405: fresh install must place agents/kaola-workflow/' + role + '-max.toml');
+      assert(new RegExp('^\\[agents\\.' + role + '-max\\]', 'm').test(configText),
+        '#405: managed config block must register [agents.' + role + '-max]');
+    }
+  } finally {
+    fs.rmSync(fresh, { recursive: true, force: true });
+  }
+
+  console.log('test405MaxVariants (#405): PASSED');
+}
+
 // AC4 (#284): producer test — spawn the bash dispatch-log hook with valid JSON stdin and
 // assert it writes exactly one JSONL line containing "agent_type":"workflow-planner" to the
 // active project's .cache/dispatch-log.jsonl.  Also asserts exit 0 on empty stdin (fail-open).
@@ -783,7 +928,8 @@ function testInstallSchemaPruneManifest332() {
     const r = runInstallProfiles(fresh);
     const agentsDir = path.join(fresh, '.codex', 'agents', 'kaola-workflow');
     const tomls = listTomls(agentsDir);
-    assert(tomls.length === 14, '#332 AC3: fresh install must place exactly 14 *.toml, got ' + tomls.length);
+    // #405: 14 base + 6 generated <role>-max effort variants = 20.
+    assert(tomls.length === 20, '#332/#405 AC3: fresh install must place exactly 20 *.toml (14 base + 6 <role>-max), got ' + tomls.length);
     assert(!tomls.includes('docs-lookup.toml'), '#332 AC3: docs-lookup.toml must not be installed');
     for (const f of tomls) {
       const role = f.replace(/\.toml$/, '');
@@ -794,10 +940,10 @@ function testInstallSchemaPruneManifest332() {
     assert(fs.existsSync(manifestPath), '#332 AC3: manifest must be written');
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     assert(manifest.schema_version === 1, '#332 AC3: manifest schema_version must be 1');
-    assert(Array.isArray(manifest.roles) && manifest.roles.length === 14, '#332 AC3: manifest must list 14 roles');
-    assert(manifest.files && Object.keys(manifest.files).length === 14
+    assert(Array.isArray(manifest.roles) && manifest.roles.length === 20, '#332/#405 AC3: manifest must list 20 roles (14 base + 6 <role>-max)');
+    assert(manifest.files && Object.keys(manifest.files).length === 20
       && Object.values(manifest.files).every(v => /^sha256:[0-9a-f]{64}$/.test(v)),
-      '#332 AC3: manifest.files must carry 14 sha256 entries');
+      '#332/#405 AC3: manifest.files must carry 20 sha256 entries');
     const lastLine = r.stdout.trim().split('\n').pop();
     assert(lastLine === 'status: ok', '#332 AC3: installer stdout must end with `status: ok`, got: ' + lastLine);
   } finally {
@@ -1310,6 +1456,8 @@ function main() {
     testCodexCompactResume266();
     testAC1HooksJson();
     testUpdateHooksHardening325();
+    test409StableHomeSurvivesDirDeletion();   // #409
+    test405MaxVariants();                     // #405
     testAC3AttestationSeeded();
     testKeepOpenArchiveStamp333();   // #333
     testAC2CompactPlainStdout();

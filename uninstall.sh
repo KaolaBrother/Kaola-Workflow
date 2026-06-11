@@ -260,6 +260,16 @@ PY
   fi
 fi
 
+# issue #409: remove the version-less stable hook home written by
+# install-codex-agent-profiles.js (~/.codex/kaola-workflow/{hooks,scripts}). Same $PWD
+# asymmetry as the hooks-config cleanup above — only the dir under the current $PWD is
+# cleaned. Bounded to the Kaola-owned subtree; never touches anything else under .codex.
+CODEX_STABLE_HOME="$PWD/.codex/kaola-workflow"
+if [[ -d "$CODEX_STABLE_HOME" ]]; then
+  rm -rf "$CODEX_STABLE_HOME"
+  echo "Removed Kaola-Workflow Codex hook home: $CODEX_STABLE_HOME"
+fi
+
 # issue #332: remove Kaola-Workflow-managed agent profiles + the managed
 # [agents.*] block from the project-local .codex written by
 # install-codex-agent-profiles.js. Same $PWD asymmetry as the hooks cleanup above.
