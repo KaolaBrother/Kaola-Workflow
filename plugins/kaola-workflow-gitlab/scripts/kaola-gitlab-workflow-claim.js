@@ -101,6 +101,8 @@ function parseArgs(argv) {
     if (key === '--json') { args.json = true; continue; }
     if (key === '--force') { args.force = true; continue; }
     if (key === '--keep-worktree') { args.keepWorktree = true; continue; }
+    // #395.5 (D1): OPT-IN exit gate — cmdFinalize exits 4 on ok:false; DEFAULT stays exit 0.
+    if (key === '--strict') { args.strict = true; continue; }
     // #333: keep-open partial-close archive — stamp-only (lane mechanics deferred to #336).
     if (key === '--keep-open') { args.keepOpen = true; continue; }
     // #336: --keep-issue-open is the design-specified cmdFinalize keep-open flag; the
@@ -218,10 +220,24 @@ function treeDirty(root) {
 }
 
 function defaultBranch(root) {
+  // #397.3: probe chain (offline-safe). symbolic-ref (local) → remote show → ls-remote --symref →
+  // 'main'. The single origin/HEAD read is UNSET on a clone-of-empty-bare / `git remote add` repo.
   try {
     const ref = execFileSync('git', ['-C', root, 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-    return ref.replace(/^origin\//, '');
-  } catch (_) { return 'main'; }
+    if (ref) return ref.replace(/^origin\//, '');
+  } catch (_) {}
+  if (OFFLINE) return 'main';
+  try {
+    const out = execFileSync('git', ['-C', root, 'remote', 'show', 'origin'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 30000 });
+    const m = out.match(/^\s*HEAD branch:\s*(\S+)\s*$/m);
+    if (m && m[1] && m[1] !== '(unknown)') return m[1];
+  } catch (_) {}
+  try {
+    const out = execFileSync('git', ['-C', root, 'ls-remote', '--symref', 'origin', 'HEAD'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 30000 });
+    const m = out.match(/^ref:\s*refs\/heads\/(\S+)\s+HEAD\s*$/m);
+    if (m && m[1]) return m[1];
+  } catch (_) {}
+  return 'main';
 }
 
 function worktreeRegistered(root, wtPath) {
@@ -233,6 +249,8 @@ function worktreeRegistered(root, wtPath) {
 }
 
 function provisionWorktree(root, project, branch) {
+  // #398.1: guard the branch BEFORE `git worktree add -b <branch>`.
+  assertSafeBranchArg(branch, 'provisionWorktree');
   const mainRoot = mainRootFromCoord(getCoordRoot(root));
   const wtPath = worktreePathFor(root, project);
   fs.mkdirSync(path.dirname(wtPath), { recursive: true });
@@ -310,6 +328,35 @@ function isSafeBranchArg(branch) {
   return typeof branch === 'string' && branch.length > 0 && !branch.startsWith('-') && !branch.includes('\0');
 }
 
+// #398.1: THROW-on-unsafe guard for branch CREATION sites (worktree add -b / checkout -b / patch).
+function assertSafeBranchArg(branch, site) {
+  if (!isSafeBranchArg(branch)) {
+    throw new Error('refused: unsafe branch name' + (site ? ' at ' + site : '') +
+      ': a branch beginning with "-" or carrying a NUL would be parsed by git as a flag/ref injection.');
+  }
+  assertNoNewline(branch, 'branch');
+}
+
+// #398.2: refuse a newline/CR in any durable-state field value (state-file field injection).
+function assertNoNewline(value, fieldName) {
+  if (typeof value === 'string' && /[\n\r]/.test(value)) {
+    throw new Error('refused: ' + (fieldName || 'field') +
+      ' contains a newline/CR — durable-state field injection. Provide a single-line value.');
+  }
+}
+
+// #403.8: classify a raw worktree provisioning error into a stable single token.
+function classifyWorktreeError(message) {
+  const m = String(message || '');
+  if (!m) return '';
+  if (/already (exists|checked out|used by worktree)/i.test(m)) return 'already_exists';
+  if (/not a valid (object name|ref)|unknown revision|invalid reference/i.test(m)) return 'invalid_ref';
+  if (/permission denied|EACCES|read-only|EROFS/i.test(m)) return 'permission_denied';
+  if (/no space left|ENOSPC|disk/i.test(m)) return 'disk_full';
+  if (/not a git repository|fatal: this operation must be run in a work tree/i.test(m)) return 'not_a_repo';
+  return 'unclassified';
+}
+
 function removeBranch(root, branch) {
   if (!isSafeBranchArg(branch)) return false;
   try {
@@ -360,6 +407,11 @@ function discoverProjectSafe() {
 }
 
 function writeState(root, data) {
+  // #398.2: refuse a newline/CR in any durable field value BEFORE serializing (field injection).
+  assertNoNewline(data.branch, 'branch');
+  assertNoNewline(data.worktree_path, 'worktree_path');
+  assertNoNewline(data.base_branch, 'base_branch');
+  assertNoNewline(data.mr_url, 'mr_url');
   const workflowPath = data.workflow_path || 'full';
   const isFast = workflowPath === 'fast';
   // issue #227: adaptive runs resume via the plan-run executor, not the phaseN ladder.
@@ -412,12 +464,18 @@ function writeState(root, data) {
     'run_posture: ' + deriveRunPosture(data.worktree_path)
   ];
   if (data.worktree_path) lines.push('worktree_path: ' + data.worktree_path);
-  if (data.worktree_error) lines.push('worktree_error: ' + data.worktree_error);
+  if (data.worktree_error) {
+    // #403.8: collapse the multi-line git error to one safe field + add the classified token.
+    lines.push('worktree_error: ' + String(data.worktree_error).replace(/[\r\n]+/g, ' ').trim());
+    const wec = data.worktree_error_class || classifyWorktreeError(data.worktree_error);
+    if (wec) lines.push('worktree_error_class: ' + wec);
+  }
   if (data.base_branch) lines.push('base_branch: ' + data.base_branch);
   if (data.mr_url) lines.push('mr_url: ' + data.mr_url);
   if (data.mr_iid) lines.push('mr_iid: ' + data.mr_iid);
   // #328: bundle-only additive fields — ONLY written when present (single-issue path stays byte-identical)
-  if (Array.isArray(data.issue_numbers) && data.issue_numbers.length) {
+  // #393a: emit issue_numbers ONLY for a TRUE bundle (length > 1) — single-issue stays byte-identical.
+  if (Array.isArray(data.issue_numbers) && data.issue_numbers.length > 1) {
     lines.push('issue_numbers: ' + data.issue_numbers.join(','));
     lines.push('bundle_id: ' + data.bundle_id);
     lines.push('closure_policy: ' + (data.closure_policy || 'all_or_nothing'));
@@ -559,6 +617,8 @@ function claimProject(root, args) {
   // Hoist branch name computation before mkdir so the dirty-tree gate and in-place checkout block
   // can reference it without orphaning a created folder on refusal.
   const branch = buildBranchName(issueIid, project, args.branch);
+  // #398.1: guard the resolved branch at the front door (before mkdir / worktree / checkout -b).
+  assertSafeBranchArg(branch, 'claimProject');
 
   // Dirty-tree gate: refuse in-place branch creation if the working tree has uncommitted changes.
   // Fires ONLY when NATIVE=0 (in-place mode), online, with git history, and HEAD not detached.
@@ -647,7 +707,8 @@ function claimProject(root, args) {
   }
   return Object.assign(
     { status: 'acquired', verdict: 'green', claim: 'acquired', issue: issueIid, project, branch, worktree_path: worktreePath, remote_claim: remoteClaim },
-    worktreeError ? { worktree_error: worktreeError } : {},
+    // #403.8: classified worktree-error token alongside the raw message.
+    worktreeError ? { worktree_error: worktreeError, worktree_error_class: classifyWorktreeError(worktreeError) } : {},
     baseBranch ? { base_branch: baseBranch } : {},
     inPlaceNote ? { inPlaceNote } : {}
   );
@@ -700,6 +761,8 @@ function removeBundleLabel(issueIid, project) {
 // Applied steps are tracked in `applied` for safe teardown.
 function claimBundle(root, opts) {
   const { targets, project, branch } = opts;
+  // #398.1: guard the bundle branch BEFORE any provisioning.
+  assertSafeBranchArg(branch, 'claimBundle');
   // applied: track what was provisioned so rollback can undo exactly what succeeded
   const applied = { dir: false, worktree: false, worktreePath: '', labeled: [], inPlaceBranch: false, baseBranch: '' };
 
@@ -816,7 +879,8 @@ function claimBundle(root, opts) {
       branch,
       worktree_path: worktreePath
     },
-    worktreeError ? { worktree_error: worktreeError } : {},
+    // #403.8: classified worktree-error token alongside the raw message (bundle path mirror).
+    worktreeError ? { worktree_error: worktreeError, worktree_error_class: classifyWorktreeError(worktreeError) } : {},
     baseBranch ? { base_branch: baseBranch } : {},
     inPlaceNote ? { inPlaceNote } : {});
   } catch (err) {
@@ -1061,7 +1125,9 @@ function cmdStartup() {
   }
 
   if (!scalarTarget) {
-    output({ verdict: 'no_target', claim: 'none', project: null, issue: null }, 1);
+    // #403.2: carry a reasoning field (sibling-refusal uniformity).
+    output({ verdict: 'no_target', claim: 'none', project: null, issue: null,
+      reasoning: '--target-issue <N> (or --target-issues A,B,C) required; the workflow never auto-picks an issue (#44).' }, 1);
     return;
   }
   const result = claimExplicitTarget(root, Object.assign({}, args, { targetIssue: scalarTarget }));
@@ -1081,7 +1147,9 @@ function cmdPickNext() {
   const target = args.targetIssue || args.issue;
   // #328: bundle path — delegate to cmdStartup which handles both scalar and bundle
   if (target || (Array.isArray(args.targetIssues) && args.targetIssues.length)) return cmdStartup();
-  output({ verdict: 'no_target', claim: 'none', project: null, issue: null }, 1);
+  // #403.2: carry a reasoning field (sibling-refusal uniformity).
+  output({ verdict: 'no_target', claim: 'none', project: null, issue: null,
+    reasoning: '--target-issue <N> (or --target-issues A,B,C) required; the workflow never auto-picks an issue (#44).' }, 1);
 }
 
 function resumeFallbackCommand(root, folder) {
@@ -1233,6 +1301,63 @@ function appendClosureBlock(destDir, fields) {
   } catch (_) { return false; }
 }
 
+// #395.2: shared roadmap-removal + MAIN-orphan reconcile + regenerate, reused by archiveProjectDir's
+// close loop AND cmdFinalize's source-missing backstop so a crash-resume converges (the #395 fix).
+// #403.7: records the actual staged-orphan unstage (roadmap_staged_reconciled).
+function reconcileRoadmapForClosure(root, memberNumbers, primaryNumber, opts, mainRoot, linkedRoot) {
+  let roadmapSourceRemoved = 'absent';
+  let roadmapRegenerated = 'skipped';
+  const removedSources = [];
+  const stagedReconciled = [];
+  for (const issueN of memberNumbers) {
+    const roadmapFilePath = path.join(root, 'kaola-workflow', '.roadmap', 'issue-' + issueN + '.md');
+    let thisRemoved = 'absent';
+    if (opts && opts.keepRoadmapSource) {
+      thisRemoved = 'kept';
+    } else {
+      try {
+        fs.unlinkSync(roadmapFilePath);
+        thisRemoved = 'removed';
+      } catch (e) {
+        thisRemoved = (e.code === 'ENOENT') ? 'absent' : 'failed';
+      }
+    }
+    if (issueN === primaryNumber) roadmapSourceRemoved = thisRemoved;
+    if (thisRemoved === 'removed') removedSources.push('issue-' + issueN + '.md');
+    if (mainRoot && mainRoot !== linkedRoot) {
+      try {
+        const mainRoadmapRel = path.join('kaola-workflow', '.roadmap', 'issue-' + issueN + '.md');
+        let onHead = false;
+        try {
+          execFileSync('git', ['-C', mainRoot, 'cat-file', '-e', 'HEAD:' + mainRoadmapRel],
+            { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+          onHead = true;
+        } catch (_) { onHead = false; }
+        if (!onHead) {
+          let wasStaged = false;
+          try {
+            const staged = execFileSync('git', ['-C', mainRoot, 'diff', '--cached', '--name-only', '--', mainRoadmapRel],
+              { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+            wasStaged = staged.length > 0;
+          } catch (_) { wasStaged = false; }
+          execFileSync('git', ['-C', mainRoot, 'rm', '--cached', '--force', '--ignore-unmatch', mainRoadmapRel],
+            { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+          const mainRoadmapAbs = path.join(mainRoot, mainRoadmapRel);
+          try { fs.unlinkSync(mainRoadmapAbs); } catch (e2) { if (e2.code !== 'ENOENT') throw e2; }
+          if (wasStaged) stagedReconciled.push('issue-' + issueN + '.md');
+        }
+      } catch (_) {}
+    }
+  }
+  try {
+    roadmapModule.regenerateRoadmap(root);
+    roadmapRegenerated = 'regenerated';
+  } catch (_) {
+    roadmapRegenerated = 'failed';
+  }
+  return { roadmap_source_removed: roadmapSourceRemoved, roadmap_regenerated: roadmapRegenerated, roadmap_sources_removed: removedSources, roadmap_staged_reconciled: stagedReconciled };
+}
+
 function archiveProjectDir(root, project, statusValue, suffix, opts) {
   assert(isSafeName(project), 'unsafe project name');
   const src = projectDir(root, project);
@@ -1297,6 +1422,7 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
   let roadmapRegenerated = 'skipped';
   // #328: accumulate removed sources for bundle path (plural array)
   const removedSources = [];
+  let stagedReconciled = []; // #403.7: MAIN staged-ADD orphans actually unstaged (#297)
   if (statusValue === 'closed') {
     // #328: for a bundle project, use the pre-read member array (archiveIssueNumbersRaw was
     // captured BEFORE the renameSync so we can parse it now even though the file moved)
@@ -1309,69 +1435,20 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
     if (archiveIssueNumbers.length === 0 && Number.isInteger(archiveIssueNumber) && archiveIssueNumber > 0) {
       archiveIssueNumbers = [archiveIssueNumber];
     }
-    // Loop per-issue removal (single-issue: one iteration; bundle: N iterations)
-    for (const issueN of archiveIssueNumbers) {
-      const roadmapFilePath = path.join(root, 'kaola-workflow', '.roadmap', 'issue-' + issueN + '.md');
-      let thisRemoved = 'absent';
-      // #336: keep-open partial-close — the issue stays open, so its roadmap source must be
-      // PRESERVED (do NOT unlink, do NOT push into removedSources). regenerateRoadmap below
-      // still runs (idempotent) and the surviving source keeps the mirror listing #N. The #297
-      // MAIN staged-orphan reconcile still runs (the FF merge restores the committed copy on
-      // main, so unstaging+unlinking the MAIN staged-ADD orphan is correct in BOTH modes).
-      if (opts && opts.keepRoadmapSource) {
-        thisRemoved = 'kept';
-      } else {
-        try {
-          fs.unlinkSync(roadmapFilePath);
-          thisRemoved = 'removed';
-        } catch (e) {
-          thisRemoved = (e.code === 'ENOENT') ? 'absent' : 'failed';
-        }
-      }
-      // Update scalar roadmap_source_removed for primary (first / single-issue) — keeps callers intact
-      if (issueN === archiveIssueNumber) roadmapSourceRemoved = thisRemoved;
-      if (thisRemoved === 'removed') removedSources.push('issue-' + issueN + '.md');
-      // #297: reconcile MAIN-repo staged roadmap source. On a worktree run,
-      // adaptive-handoff Step 5 creates this file in MAIN and `git add`s it
-      // WITHOUT committing (worktree was forked before the file existed on HEAD).
-      // fs.unlinkSync above only touches the worktree-local path; the MAIN index
-      // still holds a staged ADD that trips sink-merge.js:73 clean check.
-      // Must be a git index operation — unlink alone leaves the staged add/delete.
-      // Gate: only fire when the file is NOT on MAIN's HEAD (staged-ADD-only orphan
-      // case). If it IS on HEAD, the worktree's own archive commit handles deletion
-      // on the feature branch; running `git rm --cached` against MAIN would stage a
-      // spurious D entry and trip the same sink-merge.js:73 clean check.
-      if (mainRoot && mainRoot !== linkedRoot) {
-        try {
-          const mainRoadmapRel = path.join('kaola-workflow', '.roadmap', 'issue-' + issueN + '.md');
-          let onHead = false;
-          try {
-            execFileSync('git', ['-C', mainRoot, 'cat-file', '-e', 'HEAD:' + mainRoadmapRel],
-              { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
-            onHead = true;
-          } catch (_) { onHead = false; }
-          if (!onHead) {
-            execFileSync('git', ['-C', mainRoot, 'rm', '--cached', '--force', '--ignore-unmatch', mainRoadmapRel],
-              { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
-            const mainRoadmapAbs = path.join(mainRoot, mainRoadmapRel);
-            try { fs.unlinkSync(mainRoadmapAbs); } catch (e2) { if (e2.code !== 'ENOENT') throw e2; }
-          }
-        } catch (_) {}
-      }
-    }
-    try {
-      roadmapModule.regenerateRoadmap(root);
-      roadmapRegenerated = 'regenerated';
-    } catch (_) {
-      roadmapRegenerated = 'failed';
-    }
+    // #395.2: shared helper (reused by the cmdFinalize source-missing backstop for crash-resume convergence).
+    const reconciled = reconcileRoadmapForClosure(root, archiveIssueNumbers, archiveIssueNumber, opts, mainRoot, linkedRoot);
+    roadmapSourceRemoved = reconciled.roadmap_source_removed;
+    roadmapRegenerated = reconciled.roadmap_regenerated;
+    for (const s of reconciled.roadmap_sources_removed) removedSources.push(s);
+    stagedReconciled = reconciled.roadmap_staged_reconciled || [];
   }
   return {
     archived: true,
     dest,
     roadmap_source_removed: roadmapSourceRemoved,
     roadmap_regenerated: roadmapRegenerated,
-    roadmap_sources_removed: removedSources
+    roadmap_sources_removed: removedSources,
+    roadmap_staged_reconciled: stagedReconciled
   };
 }
 
@@ -1385,8 +1462,11 @@ function checkClosureInvariants(root, receipt, archiveDest) {
     ? receipt.issue_numbers
     : (Number.isInteger(issueNumber) && issueNumber > 0 ? [issueNumber] : []);
   // #336: keep-open inverts the roadmap checks — the source MUST survive and the mirror MUST
-  // still list #N (the issue stays open). Key on the receipt decision token.
-  const keepOpen = receipt.remote_issue_closed === 'kept_open';
+  // still list #N (the issue stays open).
+  // #396.3: key on the RECORDED INTENT (keep_open_requested), not the mutable remote_issue_closed
+  // token (which flips to 'already_closed' on a forge auto-close). Fall back to the legacy token.
+  const keepOpen = (receipt.keep_open_requested === true) ||
+    (receipt.keep_open_requested === undefined && receipt.remote_issue_closed === 'kept_open');
   if (!abandoned && memberNumbers.length > 0) {
     const invSourceAbsent = closureContract.CLOSURE_INVARIANTS.find(i => i.id === 'roadmap-source-absent');
     const invMirrorClean = closureContract.CLOSURE_INVARIANTS.find(i => i.id === 'roadmap-mirror-clean');
@@ -1474,7 +1554,11 @@ function checkClosureInvariants(root, receipt, archiveDest) {
   const unclosedMembers = []
     .concat(Array.isArray(receipt.failed_issue_closures) ? receipt.failed_issue_closures : [])
     .concat(Array.isArray(receipt.open_issues) ? receipt.open_issues : []);
-  if (!abandoned && unclosedMembers.length > 0) {
+  // #396.4 (D2): cmdFinalize runs BEFORE the merge sink closes members → close_disposition:'close_pending'
+  // suppresses this premature alarm (the members WILL close at sink). The merge/MR sink + watch leave
+  // close_disposition unset, so the invariant fires there truthfully on a real partial close.
+  const closePending = receipt.close_disposition === 'close_pending';
+  if (!abandoned && !closePending && unclosedMembers.length > 0) {
     const invMc = closureContract.CLOSURE_INVARIANTS.find(function(i) { return i.id === 'remote-members-closed'; });
     violations.push({
       id: 'remote-members-closed',
@@ -1490,7 +1574,9 @@ function buildClosureReceipt(project, issueNumber, steps) {
   if (steps && typeof steps === 'object') {
     for (const key of Object.keys(steps)) {
       if (key === 'warnings') continue;
-      if (Object.prototype.hasOwnProperty.call(fields, key)) {
+      // #395.1: skip undefined so emptyReceipt()'s seeded 'failed' default survives when a stage
+      // didn't run (the receipt-field-survival root fix — fields must never vanish).
+      if (Object.prototype.hasOwnProperty.call(fields, key) && steps[key] !== undefined) {
         receipt[key] = steps[key];
       }
     }
@@ -1538,6 +1624,39 @@ function cmdFinalize() {
         }
         // lets the ## Closure append + invariants + issue_number fallback see the dir
         result.dest = result.dest || destDir;
+        // #395.4: worktree variant — clean a surviving MAIN-root live copy on re-run.
+        try {
+          const mainRoot4 = fs.realpathSync(mainRootFromCoord(getCoordRoot(root)));
+          const linkedRoot4 = fs.realpathSync(root);
+          if (mainRoot4 && mainRoot4 !== linkedRoot4) {
+            const mainLive = path.join(mainRoot4, 'kaola-workflow', args.project);
+            if (fs.existsSync(mainLive)) { fs.rmSync(mainLive, { recursive: true, force: true }); result.main_live_cleaned_on_resume = true; }
+          }
+        } catch (_) {}
+        // #395.2: non-convergent-recovery fix — when the archive is terminal-closed (not keep-open)
+        // and a member's roadmap source is still live (crash before the unlink loop), run the SAME
+        // reconcile helper so finalize re-run / resume routing converges. Idempotent.
+        if (!keepIssueOpen) {
+          const rawNums = (field(raw, 'issue_numbers') || '').trim();
+          let members = rawNums
+            ? rawNums.split(',').map(s => parseInt(s.trim(), 10)).filter(n => Number.isFinite(n) && n > 0)
+            : [];
+          const primaryN = parseInt(field(raw, 'issue_number'), 10);
+          if (members.length === 0 && Number.isFinite(primaryN) && primaryN > 0) members = [primaryN];
+          const sourceLive = members.some(n => fs.existsSync(path.join(root, 'kaola-workflow', '.roadmap', 'issue-' + n + '.md')));
+          if (sourceLive) {
+            let mainRoot3, linkedRoot3;
+            try {
+              mainRoot3 = fs.realpathSync(mainRootFromCoord(getCoordRoot(root)));
+              linkedRoot3 = fs.realpathSync(root);
+            } catch (_) { mainRoot3 = null; }
+            const rec = reconcileRoadmapForClosure(root, members, Number.isFinite(primaryN) ? primaryN : (members[0] || null), { keepRoadmapSource: false }, mainRoot3, linkedRoot3);
+            result.roadmap_source_removed = rec.roadmap_source_removed;
+            result.roadmap_regenerated = rec.roadmap_regenerated;
+            result.roadmap_sources_removed = rec.roadmap_sources_removed;
+            result.roadmap_reconciled_on_resume = true;
+          }
+        }
       }
     } catch (_) { archiveStateStamped = 'failed'; }
   }
@@ -1639,11 +1758,16 @@ function cmdFinalize() {
     // (never `skipped_offline`, the OFFLINE-only token).
     remoteIssueClosed = (closedIssues.length === issueIids.length) ? 'already_closed' : 'partial';
   } else if (!OFFLINE && issueIid) {
-    // Single-issue path (unchanged)
+    // #396.2: single-issue ONLINE path — already closed → 'already_closed'; otherwise the close is
+    // PENDING (the merge sink closes it) → 'close_pending' (was 'skipped_offline' while online).
     try {
-      remoteIssueClosed = issueIsClosed(issueIid) ? 'already_closed' : 'skipped_offline';
+      remoteIssueClosed = issueIsClosed(issueIid) ? 'already_closed' : 'close_pending';
     } catch (_) { remoteIssueClosed = 'skipped_offline'; }
   }
+  // #396.4 (D2): merge-lane finalize runs BEFORE the sink closes members → record close_disposition so
+  // checkClosureInvariants skips remote-members-closed (the members WILL close at sink).
+  const closePendingFinalize = !keepIssueOpen && !OFFLINE &&
+    remoteIssueClosed !== 'already_closed' && remoteIssueClosed !== 'closed';
   const closureReceipt = buildClosureReceipt(args.project, issueIid, {
     archive: result.skipped ? 'skipped' : (result.archived ? 'closed' : 'failed'),
     roadmap_source_removed: result.roadmap_source_removed,
@@ -1651,7 +1775,11 @@ function cmdFinalize() {
     remote_issue_closed: remoteIssueClosed,
     claim_label_removed: claimLabelRemoved,
     worktree_removed: worktreeRemoved,
-    branch_removed: 'kept'
+    branch_removed: 'kept',
+    // #396.3: record keep-open INTENT (checker keys on it, not the mutable token).
+    keep_open_requested: !!keepIssueOpen,
+    // #396.4 (D2): suppress the premature remote-members-closed alarm on the merge lane.
+    close_disposition: closePendingFinalize ? 'close_pending' : undefined
   });
   // #328: attach bundle receipt fields AFTER buildClosureReceipt (the builder filters by
   // CLOSURE_RECEIPT_FIELDS which does not include these new bundle keys — Decision-5 trap).
@@ -1662,6 +1790,14 @@ function cmdFinalize() {
     closureReceipt.failed_issue_closures = failedIssueClosures;
     closureReceipt.open_issues = openIssues; // #369: members still open while online (visible, never silent)
     closureReceipt.roadmap_sources_removed = result.roadmap_sources_removed || [];
+  }
+  // #403.7: record the #297 MAIN staged-ADD orphan unstage (was silent).
+  if (Array.isArray(result.roadmap_staged_reconciled) && result.roadmap_staged_reconciled.length > 0) {
+    closureReceipt.roadmap_staged_reconciled = result.roadmap_staged_reconciled;
+  }
+  // #395.2: surface a resume-time roadmap convergence.
+  if (result.roadmap_reconciled_on_resume) {
+    closureReceipt.roadmap_reconciled_on_resume = true;
   }
   // #336: surface keep-open probe-truth warnings (issue already closed on the forge).
   if (keepOpenWarnings.length > 0) {
@@ -1728,13 +1864,15 @@ function cmdFinalize() {
       }
     }
   }
+  // #395.5 (D1): OPT-IN exit gate — --strict makes the exit code reflect ok:false (exit 4); default 0.
+  const strictFailCode = (args.strict && invariantResult && invariantResult.ok === false) ? 4 : undefined;
   output(Object.assign({ status: 'closed' }, result, {
     claim_label_removed: claimLabelRemoved,
     archive_state_stamped: archiveStateStamped,
     issue_disposition: issueDisposition,
     closure_receipt: closureReceipt,
     closure_invariants: invariantResult
-  }));
+  }), strictFailCode);
 }
 
 function cwdInside(target) {
@@ -1783,15 +1921,31 @@ function cmdRelease() {
     } catch (_) { /* defensive: discard must not throw */ }
   }
 
-  // #328: for a bundle project, clear advisory claim for every member; single-issue falls through
+  // #396.1: capture the label-clear status (was discarded) — a FAILED remove prints released:true
+  // exit 0 with no label field while the "claim cleared" comment lies; surface + warn.
+  // #328: for a bundle project, clear advisory claim for every member; primary's status is canonical.
+  const piRel = { project_id: folder.project_id, path_with_namespace: folder.path_with_namespace };
+  let claimLabelRemoved;
   if (Array.isArray(folder.issue_numbers) && folder.issue_numbers.length > 0) {
     for (const n of folder.issue_numbers) {
-      clearAdvisoryClaim(n, args.reason || 'discarded', { project_id: folder.project_id, path_with_namespace: folder.path_with_namespace }, folder.project);
+      const s = clearAdvisoryClaim(n, args.reason || 'discarded', piRel, folder.project);
+      if (n === folder.issue_iid) claimLabelRemoved = s;
     }
+    if (claimLabelRemoved == null) claimLabelRemoved = 'failed';
   } else {
-    clearAdvisoryClaim(folder.issue_iid, args.reason || 'discarded', { project_id: folder.project_id, path_with_namespace: folder.path_with_namespace }, folder.project);
+    claimLabelRemoved = clearAdvisoryClaim(folder.issue_iid, args.reason || 'discarded', piRel, folder.project);
   }
-  output(Object.assign({ released: true, project: folder.project }, result, restoreNote ? { restore_note: restoreNote } : {}));
+  const releaseWarnings = [];
+  if (claimLabelRemoved !== 'removed' && claimLabelRemoved !== 'skipped_offline') {
+    releaseWarnings.push('claim label removal status: ' + claimLabelRemoved +
+      ' — the workflow:in-progress label may still be on the issue; the next claim could hit user_target_blocked.');
+  }
+  output(Object.assign(
+    { released: true, project: folder.project, claim_label_removed: claimLabelRemoved },
+    result,
+    restoreNote ? { restore_note: restoreNote } : {},
+    releaseWarnings.length ? { warnings: releaseWarnings } : {}
+  ));
 }
 
 // Partition active folders into current and drift (closed-issue) groups.
@@ -1818,6 +1972,9 @@ function cmdPatchBranch() {
   assert(args.project, '--project required');
   assert(args.branch, '--branch required');
   assert(isSafeName(args.project), 'unsafe project name');
+  // #398.1/#398.2: refuse an unsafe branch (flag-injection) or a newline-bearing value (durable-state
+  // field injection) BEFORE rewriting the persisted ## Sink branch field.
+  assertSafeBranchArg(args.branch, 'cmdPatchBranch');
   assert(activeByProject(root, args.project), 'patch-branch requires an existing active folder');
   updateState(root, args.project, content => {
     if (/^branch:/m.test(content)) return content.replace(/^branch:.*$/m, 'branch: ' + args.branch);
@@ -2017,14 +2174,22 @@ function watchMergeRequests(root, args) {
   let watched = 0;
   const warnings = [];
   const cleanups = [];
+  const probeErrors = []; // #396.6: visible probe errors (a viewMergeRequest failure was swallowed)
   for (const folder of readActiveFolders(root, { excludeClosedIssues: false })) {
-    if (args.issue && folder.issue_iid !== args.issue) continue;
+    // #396.6: bundle-aware --issue filter (match primary OR any bundle member, not the primary only).
+    if (args.issue && folder.issue_iid !== args.issue &&
+        !(Array.isArray(folder.issue_numbers) && folder.issue_numbers.includes(args.issue))) continue;
     if (folder.sink !== 'mr') continue;
     const mrIid = mrIidFromFolder(folder);
     if (!mrIid) continue;
-    watched++;
     let state = '';
-    try { state = forge.viewMergeRequest(mrIid).state || ''; } catch (_) { continue; }
+    try { state = forge.viewMergeRequest(mrIid).state || ''; }
+    catch (e) {
+      // #396.6: record the error and do NOT count this folder as watched (was a silent watched:1 lie).
+      probeErrors.push({ folder: folder.project, mr_iid: mrIid, error: (e && e.message) ? e.message : String(e) });
+      continue;
+    }
+    watched++;
     if (state === 'merged') {
       const archiveResult = archiveProjectDir(root, folder.project, 'closed');
       if (archiveResult && (archiveResult.roadmap_source_removed === 'failed' || archiveResult.roadmap_regenerated === 'failed')) {
@@ -2143,7 +2308,7 @@ function watchMergeRequests(root, args) {
       cleanups.push({ folder: folder.project, claim_label_removed: claimLabelStatus2, receipt: folderReceipt, closure_invariants: folderInvariants });
     }
   }
-  return { watched, warnings, cleanups };
+  return { watched, warnings, cleanups, probeErrors };
 }
 
 function cmdWatchMr() {
@@ -2151,10 +2316,11 @@ function cmdWatchMr() {
   const root = getRoot();
   const args = parseArgs(process.argv.slice(3));
   const result = watchMergeRequests(root, args);
-  const { watched, warnings, cleanups } = result;
+  const { watched, warnings, cleanups, probeErrors } = result;
   const emit = { watched };
   if (warnings && warnings.length > 0) emit.warnings = warnings;
   if (cleanups && cleanups.length > 0) emit.cleanups = cleanups;
+  if (probeErrors && probeErrors.length > 0) emit.probe_errors = probeErrors; // #396.6
   output(emit);
 }
 
@@ -2175,11 +2341,17 @@ function cmdWorktreeFinalize() {
   const folder = activeByProject(root, args.project);
   assert(folder && folder.worktree_path, 'worktree-finalize: active folder has no worktree_path');
   copyDir(folder.project_dir, path.join(folder.worktree_path, 'kaola-workflow', folder.project));
+  // #398.3: pathspec'd stage + commit (the prior inverted try/commit-as-catch swept a pre-staged
+  // UNRELATED file into the finalize commit). Stage only the project path; commit ONLY that pathspec.
+  const projectPathspec = 'kaola-workflow/' + folder.project + '/';
   try {
-    execFileSync('git', ['-C', folder.worktree_path, 'add', 'kaola-workflow/' + folder.project + '/'], { stdio: 'inherit' });
-    execFileSync('git', ['-C', folder.worktree_path, 'diff', '--cached', '--quiet'], { stdio: 'ignore' });
-  } catch (_) {
-    execFileSync('git', ['-C', folder.worktree_path, 'commit', '-m', 'chore: finalize ' + folder.project], { stdio: 'inherit' });
+    execFileSync('git', ['-C', folder.worktree_path, 'add', '--', projectPathspec], { stdio: 'inherit' });
+  } catch (_) { /* staging failure — do NOT cascade into a commit */ }
+  let hasStaged = false;
+  try { execFileSync('git', ['-C', folder.worktree_path, 'diff', '--cached', '--quiet', '--', projectPathspec], { stdio: 'ignore' }); }
+  catch (e) { if (e && e.status === 1) hasStaged = true; }
+  if (hasStaged) {
+    execFileSync('git', ['-C', folder.worktree_path, 'commit', '-m', 'chore: finalize ' + folder.project, '--', projectPathspec], { stdio: 'inherit' });
   }
   output({ finalized: true, project: folder.project, worktree_path: folder.worktree_path });
 }
@@ -2189,12 +2361,33 @@ function cmdSinkFallback() {
   const args = parseArgs(process.argv.slice(3));
   assert(args.project, '--project required');
   assert(isSafeName(args.project), 'unsafe project name');
+  const reason = args.reason || 'merge fallback';
   const archivePath = path.join(root, 'kaola-workflow', 'archive', args.project);
-  if (!fs.existsSync(projectDir(root, args.project)) || fs.existsSync(archivePath)) {
+  const liveExists = fs.existsSync(projectDir(root, args.project));
+  const archiveExists = fs.existsSync(archivePath);
+  // Transient/abnormal co-existence (live AND archive present, mid-archive) — keep the original
+  // no-op guard: the project is already being archived, do not touch the live state.
+  if (liveExists && archiveExists) {
     output({ updated: false, project: args.project, reason: 'project archived' });
     return;
   }
-  const reason = args.reason || 'merge fallback';
+  // #394: the STANDARD exit-3 lane archives the project BEFORE the sink runs — when the live folder is
+  // GONE but the archive is present, operate on the ARCHIVED state so the fallback chain can flip
+  // sink:mr there (the old `!live → no-op` broke the entire fallback). Only a truly-missing project
+  // (no live, no archive) keeps updated:false.
+  if (!liveExists) {
+    const archiveState = path.join(archivePath, 'workflow-state.md');
+    if (archiveExists && fs.existsSync(archiveState)) {
+      const updated = fs.readFileSync(archiveState, 'utf8')
+        .replace(/^sink:.*$/m, 'sink: mr')
+        .replace(/^last_result:.*$/m, 'last_result: sink_fallback: ' + reason);
+      writeFile(archiveState, updated);
+      output({ updated: true, archived: true, project: args.project, sink: 'mr', reason });
+      return;
+    }
+    output({ updated: false, project: args.project, reason: 'project archived' });
+    return;
+  }
   updateState(root, args.project, content => content
     .replace(/^sink:.*$/m, 'sink: mr')
     .replace(/^last_result:.*$/m, 'last_result: sink_fallback: ' + reason));

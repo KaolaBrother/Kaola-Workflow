@@ -36,6 +36,18 @@ function ghExec(args, opts) {
   return execFileSync('gh', args, Object.assign({ encoding: 'utf8', timeout: REMOTE_TIMEOUT_MS }, opts || {})).trim();
 }
 
+// #396.5: returns true iff issue N is already CLOSED on the forge. Used to classify a `gh issue
+// close` that exited 1 (idempotent re-run after a push→close crash): an already-closed issue is a
+// SUCCESS, not a failed closure. Any probe error returns false (fail toward 'failed' — never claim
+// a member closed without evidence).
+function probeIssueClosed(issueNumber, opts) {
+  if (OFFLINE || issueNumber == null) return false;
+  try {
+    const out = ghExec(['issue', 'view', String(issueNumber), '--json', 'state', '--jq', '.state'], opts);
+    return String(out || '').trim().toLowerCase() === 'closed';
+  } catch (_) { return false; }
+}
+
 function getRoot() {
   try {
     return execFileSync('git', ['rev-parse', '--show-toplevel'], {
@@ -69,8 +81,11 @@ function parseArgs(argv) {
     if (argv[i] === '--branch' && argv[i + 1]) { args.branch = argv[++i]; continue; }
     if (argv[i] === '--issue' && argv[i + 1]) { args.issue = parseInt(argv[++i], 10); continue; }
     // #369: bundle member set — all-or-nothing closure closes EVERY member, not just --issue.
+    // #396.5: dedupe (claim.js's parser dedupes; sink-merge's did not, so a duplicate member could
+    // land in TWO buckets). Sorted + unique, mirroring claim.js parseArgs.
     if (argv[i] === '--issue-numbers' && argv[i + 1]) {
-      args.issueNumbers = argv[++i].split(',').map(s => parseInt(s.trim(), 10)).filter(n => Number.isInteger(n) && n > 0);
+      const nums = argv[++i].split(',').map(s => parseInt(s.trim(), 10)).filter(n => Number.isInteger(n) && n > 0);
+      args.issueNumbers = Array.from(new Set(nums)).sort((a, b) => a - b);
       continue;
     }
     if (argv[i] === '--project' && argv[i + 1]) { args.project = argv[++i]; continue; }
@@ -206,7 +221,10 @@ function assertBranchPushedToUpstream(mainRoot, branch) {
     { encoding: 'utf8' }).trim();
   throw new Error(
     "Branch '" + branch + "' has " + ahead + " unpushed commit(s) ahead of '" + upstream + "'.\n" +
-    'Push before merging: git push origin ' + branch + '\n\n' +
+    // #397.2: after a conflict re-run, attempt 1 already pushed the PRE-rebase tip, so a plain
+    // `git push` is guaranteed a non-fast-forward rejection. The correct push is force-with-lease.
+    'Push before merging: git push --force-with-lease origin ' + branch + '\n' +
+    '(a plain `git push` is rejected non-fast-forward if attempt 1 already pushed a pre-rebase tip).\n\n' +
     'Unpushed commits:\n  ' + commits.split('\n').join('\n  ')
   );
 }
@@ -233,7 +251,11 @@ function doRebase(args, alreadyUpToDate, mainRoot, defBranch) {
         '  1. Run: git rebase --abort\n' +
         '  2. Resolve conflicts manually on the feature branch\n' +
         '  3. Re-run: git rebase origin/' + defBranch + '\n' +
-        '  4. Re-invoke sink-merge after conflicts are resolved\n' +
+        // #397.2: if attempt 1 already pushed (assertBranchPushedToUpstream self-heal / a prior run),
+        // the post-rebase push must be force-with-lease — a plain push is rejected non-fast-forward.
+        '  4. Push the rebased branch: git push --force-with-lease origin ' + args.branch + '\n' +
+        '  5. Re-invoke sink-merge after conflicts are resolved\n' +
+        '  Note: Step 0 already removed the linked worktree (often your cwd); resolve in ' + mainRoot + '.\n' +
         'For further guidance, see the conflict remediation section in ' +
         'https://github.com/kaolabrother/Kaola-Workflow/blob/main/README.md'
       );
@@ -271,7 +293,12 @@ function ffMergeLoop(args, mainRoot, defBranch) {
       execFileSync('git', ['-C', mainRoot, 'rebase', 'origin/' + defBranch], { encoding: 'utf8' });
     } catch (_) {
       try { execFileSync('git', ['-C', mainRoot, 'rebase', '--abort'], { encoding: 'utf8' }); } catch (_) {}
-      process.stderr.write('FF race: re-rebase onto origin/' + defBranch + ' conflicted — manual resolution required.\n');
+      // #397.2: state the worktree/cwd disposition. Step 0 already removed the linked worktree (often
+      // the operator's cwd), and main is left checked out on the feature branch mid-recovery. After
+      // resolving, push with --force-with-lease (a plain push is rejected non-fast-forward).
+      process.stderr.write('FF race: re-rebase onto origin/' + defBranch + ' conflicted — manual resolution required.\n' +
+        '  Note: the linked worktree was already removed (Step 0); resolve in ' + mainRoot + ' (now on branch ' + args.branch + ').\n' +
+        '  After resolving, run: git push --force-with-lease origin ' + args.branch + '\n');
       return false;
     }
     try { runTestGate(mainRoot); } catch (_) {
@@ -342,21 +369,26 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch) {
       // Transient / unclassified error — re-throw, caller exits 1
       throw e;
     }
-    // Classified merge-impossible: reset local main, write receipt (skipped when project was already archived), signal exit 3
+    // Classified merge-impossible: reset local main, write the fallback receipt, signal exit 3.
+    // #394: the STANDARD lane archives the project BEFORE sink-merge runs, so the LIVE .cache is
+    // gone and the old code "skipped receipt write" → the exit-3 choreography pointed the operator
+    // at a sink-fallback.json that never existed, claim.js sink-fallback no-op'd, and sink-pr.js
+    // crashed on the missing live folder (online, AFTER `gh pr create` → an orphaned open PR
+    // invisible to every tracking surface). Now: when archived, write the receipt to the ARCHIVE
+    // .cache so the fallback chain has a durable home; when live, keep writing to the live .cache.
     const liveProjectDir = path.join(mainRoot, 'kaola-workflow', args.project);
-    const archiveProjectDir = path.join(mainRoot, 'kaola-workflow', 'archive', args.project);
-    const wasArchived = !fs.existsSync(liveProjectDir) && fs.existsSync(archiveProjectDir);
+    const archiveDir = path.join(mainRoot, 'kaola-workflow', 'archive', args.project);
+    const wasArchived = !fs.existsSync(liveProjectDir) && fs.existsSync(archiveDir);
     try {
       execFileSync('git', ['-C', mainRoot, 'reset', '--hard', 'origin/' + defBranch], { encoding: 'utf8' });
     } catch (_) {}
+    const receiptPath = wasArchived
+      ? path.join(archiveDir, '.cache', 'sink-fallback.json')
+      : path.join(liveProjectDir, '.cache', 'sink-fallback.json');
     if (wasArchived) {
-      process.stderr.write('sink-merge: project archived (' + args.project + '), skipping receipt write\n');
-      return { exitCode: 3 };
+      // keep the operator-facing breadcrumb, but the receipt now exists (in the archive .cache).
+      process.stderr.write('sink-merge: project archived (' + args.project + ') — fallback receipt written to archive .cache\n');
     }
-    const receiptPath = path.join(
-      mainRoot,
-      'kaola-workflow', args.project, '.cache', 'sink-fallback.json'
-    );
     fs.mkdirSync(path.dirname(receiptPath), { recursive: true });
     fs.writeFileSync(
       receiptPath,
@@ -364,6 +396,11 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch) {
         project: args.project,
         branch: args.branch,
         issue_number: args.issue || null,
+        // #394: the fallback sink (sink-pr) needs the resolved default branch + the full member set,
+        // which it cannot re-derive once the live folder is archived.
+        resolved_default_branch: defBranch,
+        issue_numbers: Array.isArray(args.issueNumbers) && args.issueNumbers.length ? args.issueNumbers : (args.issue ? [args.issue] : []),
+        archived: wasArchived,
         reason: token,
         timestamp: new Date().toISOString()
       }, null, 2) + '\n'
@@ -401,10 +438,28 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch) {
       catch (_) { /* best-effort; decision token already recorded */ }
     } else {
       try { ghExec(['issue', 'close', String(args.issue), '--comment', 'Merged via sink-merge.'], forgeOpts); remoteIssueClosed = 'closed'; }
-      catch (e) { remoteIssueClosed = 'failed'; process.stderr.write('sink-merge: WARNING: issue close failed for ' + args.issue + '; receipt.remote_issue_closed=failed. Manually run: gh issue close ' + args.issue + '\n'); }
+      catch (e) {
+        // #396.5: a `gh issue close` on an ALREADY-CLOSED issue exits 1 (re-run after a push→close
+        // crash). Probe before declaring failure — an already-closed issue is a SUCCESS (idempotent),
+        // not a failed closure. Only a genuinely-still-open / unavailable issue is 'failed'.
+        if (probeIssueClosed(args.issue, forgeOpts)) { remoteIssueClosed = 'already_closed'; }
+        else { remoteIssueClosed = 'failed'; process.stderr.write('sink-merge: WARNING: issue close failed for ' + args.issue + '; receipt.remote_issue_closed=failed. Manually run: gh issue close ' + args.issue + '\n'); }
+      }
     }
     // Claim-label removal runs in BOTH modes (claim release is wanted on keep-open).
     try { ghExec(['issue', 'edit', String(args.issue), '--remove-label', 'workflow:in-progress'], forgeOpts); claimLabelRemoved = 'removed'; } catch (_) { claimLabelRemoved = 'failed'; }
+
+    // #403.6: keep-open BUNDLE arm. The close loop below is gated `!keepIssueOpen`, so on a keep-open
+    // bundle the NON-PRIMARY members got no comment and no member-label removal — the old code relied
+    // entirely on cmdFinalize's earlier per-member clearAdvisoryClaim. Make the keep-open arm
+    // explicitly per-member (comment + label removal) so the division of labor is not implicit.
+    if (keepIssueOpen && Array.isArray(args.issueNumbers) && args.issueNumbers.length > 1) {
+      for (const n of args.issueNumbers) {
+        if (n === args.issue) continue; // primary handled above
+        try { ghExec(['issue', 'comment', String(n), '--body', 'Merged via sink-merge (bundle member). Issue intentionally kept open (partial-close terminal); residual scope remains tracked here.'], forgeOpts); } catch (_) {}
+        try { ghExec(['issue', 'edit', String(n), '--remove-label', 'workflow:in-progress'], forgeOpts); } catch (_) {}
+      }
+    }
   }
 
   // #369 BUNDLE all-or-nothing closure: close EVERY member of issue_numbers, not just the primary.
@@ -427,8 +482,15 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch) {
         closed.push(n);
         try { ghExec(['issue', 'edit', String(n), '--remove-label', 'workflow:in-progress'], forgeOpts); } catch (_) {}
       } catch (e) {
-        failed.push(n);
-        process.stderr.write('sink-merge: WARNING: bundle member issue close failed for ' + n + '; recorded in failed_issue_closures. Manually run: gh issue close ' + n + '\n');
+        // #396.5: classify already-closed (idempotent re-run after a push→close crash) as a SUCCESS,
+        // not a failed closure — `gh issue close` exits 1 on a closed issue. Probe to disambiguate.
+        if (probeIssueClosed(n, forgeOpts)) {
+          closed.push(n);
+          try { ghExec(['issue', 'edit', String(n), '--remove-label', 'workflow:in-progress'], forgeOpts); } catch (_) {}
+        } else {
+          failed.push(n);
+          process.stderr.write('sink-merge: WARNING: bundle member issue close failed for ' + n + '; recorded in failed_issue_closures. Manually run: gh issue close ' + n + '\n');
+        }
       }
     }
     bundleBuckets = { closed_issues: closed.sort((a, b) => a - b), failed_issue_closures: failed.sort((a, b) => a - b), open_issues: [] };
@@ -436,10 +498,27 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch) {
     remoteIssueClosed = failed.length === 0 ? 'closed' : 'partial';
   }
   // Step 9 — Delete branch (worktree was removed in step 0)
-  try { execFileSync('git', ['-C', mainRoot, 'branch', '-d', '--', args.branch], { encoding: 'utf8' }); branchRemoved = 'removed'; } catch (_) { branchRemoved = 'failed'; }
+  // #397.1: after a re-rebase race recovery the LOCAL feature branch diverges from its upstream, so
+  // `git branch -d` refuses ("not fully merged to refs/remotes/origin/<branch>") on EVERY successful
+  // race recovery → branch_removed:'failed' + a spurious branch-worktree-resolved violation + a
+  // leftover local branch. Fix: (1) delete the REMOTE branch first (always succeeded before; the
+  // re-rebase doesn't affect it), then (2) verify the local branch is an ancestor of the resolved
+  // default branch (the work IS merged) and force-delete with `-D` — safe because we proved it's
+  // merged into defBranch, not relying on the upstream-tracking ref `-d` checks.
   if (!OFFLINE) {
     try { execFileSync('git', ['-C', mainRoot, 'push', 'origin', '--delete', '--', args.branch], { encoding: 'utf8' }); }
     catch (_) {}
+  }
+  let mergedIntoDefault = false;
+  try {
+    execFileSync('git', ['-C', mainRoot, 'merge-base', '--is-ancestor', args.branch, defBranch], { encoding: 'utf8' });
+    mergedIntoDefault = true; // exit 0 → branch tip is an ancestor of defBranch (fully merged)
+  } catch (_) { mergedIntoDefault = false; }
+  if (mergedIntoDefault) {
+    try { execFileSync('git', ['-C', mainRoot, 'branch', '-D', '--', args.branch], { encoding: 'utf8' }); branchRemoved = 'removed'; } catch (_) { branchRemoved = 'failed'; }
+  } else {
+    // Not provably merged — fall back to the safe `-d` (refuses on unmerged work).
+    try { execFileSync('git', ['-C', mainRoot, 'branch', '-d', '--', args.branch], { encoding: 'utf8' }); branchRemoved = 'removed'; } catch (_) { branchRemoved = 'failed'; }
   }
 
   // Emit closure receipt
@@ -476,7 +555,55 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch) {
     receipt.open_issues = bundleBuckets.open_issues;
   }
   const invariants = checkClosureInvariants(mainRoot, receipt, archiveDest);
-  process.stdout.write(JSON.stringify({ status: 'merged', closure_receipt: receipt, closure_invariants: invariants }) + '\n');
+  // #393a: surface where the member set came from (flag / state_fallback / none) so a caller can see
+  // that a flag-less bundle sink derived its members from state rather than silently closing only the
+  // primary.
+  const emit = { status: 'merged', closure_receipt: receipt, closure_invariants: invariants };
+  if (args.member_source) emit.member_source = args.member_source;
+  process.stdout.write(JSON.stringify(emit) + '\n');
+}
+
+// #393a: derive the bundle member set when --issue-numbers is ABSENT. The flag was caller-trust-only
+// — a bundle sink run WITHOUT it closed only the primary (the exact #369 "clean receipt over open
+// members" bug, reachable by flag omission). Read issue_numbers from the LIVE state, then the ARCHIVE
+// state (the standard finalize lane archives before sink-merge runs). Resolution:
+//   - flag present + state absent/equal  → flag wins (source 'flag')
+//   - flag absent + state present        → use state (source 'state_fallback')
+//   - flag present + state DIFFERS        → flag wins, but WARN (source 'flag', mismatch:true)
+//   - SINGLE-ISSUE (no issue_numbers line anywhere) → []  (source 'none') → the length>1 close-loop
+//     gate never trips → byte-identical single-issue output (no misfire).
+function readStateIssueNumbers(mainRoot, project) {
+  const candidates = [
+    path.join(mainRoot, 'kaola-workflow', project, 'workflow-state.md'),
+    path.join(mainRoot, 'kaola-workflow', 'archive', project, 'workflow-state.md'),
+  ];
+  for (const f of candidates) {
+    let raw = '';
+    try { raw = fs.readFileSync(f, 'utf8'); } catch (_) { continue; }
+    const m = raw.match(/^issue_numbers:\s*(.+)\s*$/m);
+    if (!m) continue;
+    const nums = m[1].split(',').map(s => parseInt(s.trim(), 10)).filter(n => Number.isInteger(n) && n > 0);
+    if (nums.length) return Array.from(new Set(nums)).sort((a, b) => a - b);
+  }
+  return null; // no issue_numbers line on any state → single-issue (or unknown)
+}
+
+function deriveMemberSet(mainRoot, project, cliIssueNumbers) {
+  const fromFlag = Array.isArray(cliIssueNumbers) && cliIssueNumbers.length ? cliIssueNumbers : null;
+  const fromState = readStateIssueNumbers(mainRoot, project);
+  if (fromFlag) {
+    if (fromState && fromState.join(',') !== fromFlag.join(',')) {
+      process.stderr.write('sink-merge: WARNING: --issue-numbers (' + fromFlag.join(',') +
+        ') differs from state issue_numbers (' + fromState.join(',') + ') — flag wins.\n');
+      return { members: fromFlag, source: 'flag', mismatch: true };
+    }
+    return { members: fromFlag, source: 'flag', mismatch: false };
+  }
+  if (fromState) {
+    process.stderr.write('sink-merge: --issue-numbers absent — derived bundle member set from state: ' + fromState.join(',') + '\n');
+    return { members: fromState, source: 'state_fallback', mismatch: false };
+  }
+  return { members: [], source: 'none', mismatch: false }; // single-issue: no misfire (length>1 gate never trips)
 }
 
 function main() {
@@ -502,6 +629,13 @@ function main() {
   // after every precondition proves the sink can proceed.
   const coordRoot = getCoordRoot();
   const mainRoot = mainRootFromCoord(coordRoot);
+  // #393a: derive the member set BEFORE the destructive worktree removal (the live/archive state is
+  // still readable). When --issue-numbers is absent, fall back to the state's issue_numbers so a
+  // bundle sink without the flag still closes every member. Single-issue (no issue_numbers line)
+  // returns [] → the length>1 close-loop gate never trips → byte-identical single-issue output.
+  const memberSet = deriveMemberSet(mainRoot, args.project, args.issueNumbers);
+  args.issueNumbers = memberSet.members;
+  args.member_source = memberSet.source;
   // #350: resolve the integration/default branch (origin/HEAD), falling back to 'main'. Repos
   // whose default branch is master/other no longer break sink-merge.
   const defBranch = defaultBranch(mainRoot);

@@ -6791,6 +6791,14 @@ function testSinkMergeEmitsClosureReceipt() {
       parsed.closure_invariants && parsed.closure_invariants.ok === true,
       'closure_invariants.ok must be true for offline receipt, got: ' + JSON.stringify(parsed.closure_invariants)
     );
+    // #393a SINGLE-ISSUE NO-MISFIRE: a single-issue sink with NO --issue-numbers flag and NO
+    // issue_numbers: line in the (archived) state must derive an EMPTY member set (member_source:'none')
+    // → the length>1 bundle close-loop never trips → the receipt carries NO bundle fields. This proves
+    // the #393a state-fallback adds zero divergence to the single-issue path.
+    assert(parsed.member_source === 'none',
+      '#393a: single-issue sink derives member_source:none (no issue_numbers line), got: ' + parsed.member_source);
+    assert(!('issue_numbers' in receipt) && !('closed_issues' in receipt) && !('failed_issue_closures' in receipt) && !('open_issues' in receipt),
+      '#393a: single-issue receipt carries NO bundle arrays (no misfire), got: ' + JSON.stringify(receipt));
     console.log('testSinkMergeEmitsClosureReceipt: PASSED');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });

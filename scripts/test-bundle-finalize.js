@@ -479,14 +479,18 @@ const { checkClosureInvariants } = require('./kaola-workflow-claim');
 })();
 
 // ---------------------------------------------------------------------------
-// Test (2b) #369: partial-closure truthfulness — a member probed STILL OPEN while online lands in
-// open_issues (never silently neither, AC2), the token is `partial` not `skipped_offline` (AC2),
-// and the remote-members-closed invariant flags it warn-first-but-VISIBLE (AC4). Mutation proof:
-// without #369 the open member vanished from every bucket and the token lied `skipped_offline`.
+// Test (2b) #369 + #396.4 (D2): partial-closure truthfulness at the cmdFinalize MERGE LANE — a member
+// probed STILL OPEN while online lands in open_issues (never silently neither, AC2) and the token is
+// `partial` not `skipped_offline` (AC2). BUT cmdFinalize runs BEFORE sink-merge closes members, so on
+// the NORMAL bundle merge-lane finalize every member is open → the old code fired remote-members-closed
+// (ok:false) on the HAPPY PATH (alarm fatigue, the #396.4/D2 bug). The fix: cmdFinalize tags its receipt
+// close_disposition:'close_pending' and checkClosureInvariants SKIPS remote-members-closed for it. The
+// bucket arrays + token stay truthful; only the premature ALARM is defused (it fires truthfully at
+// sink-merge/watch-pr, where close_disposition is unset — see Test (#371) watch-pr below + test-gitlab/gitea-sinks).
 // ---------------------------------------------------------------------------
 
 (function testBundleFinalizePartialOpenMember() {
-  console.log('Test (2b) #369: partial close — member 47 still OPEN online → open_issues + partial token + invariant flagged');
+  console.log('Test (2b) #369+#396.4 (D2): merge-lane finalize — member 47 open → open_issues + partial token, close_pending suppresses the premature alarm');
   const tmpRoot = makeTmpRoot();
   const binDir = path.join(tmpRoot, 'bin');
   const project = 'bundle-42-47-53';
@@ -512,11 +516,15 @@ const { checkClosureInvariants } = require('./kaola-workflow-claim');
       assert(!(receipt.failed_issue_closures || []).includes(47), '#369: 47 not in failed_issue_closures');
       assert(receipt.remote_issue_closed === 'partial',
         '#369 AC2: online partial close → remote_issue_closed === partial (never skipped_offline), got ' + receipt.remote_issue_closed);
+      // #396.4 (D2): the merge-lane finalize tags close_pending so the premature alarm is suppressed.
+      assert(receipt.close_disposition === 'close_pending',
+        '#396.4 (D2): merge-lane finalize tags close_disposition: close_pending, got ' + receipt.close_disposition);
     }
     const inv = out && out.closure_invariants;
-    assert(inv && inv.ok === false, '#369 AC4: closure_invariants.ok === false on a partial close');
-    assert(inv && Array.isArray(inv.violations) && inv.violations.some(v => v.id === 'remote-members-closed'),
-      '#369 AC4: remote-members-closed invariant flagged, got ' + JSON.stringify(inv && inv.violations));
+    // #396.4 (D2): remote-members-closed is SKIPPED at the close-pending merge lane (the members will
+    // close at sink). The invariant set is therefore clean for THIS reason — assert it is NOT flagged.
+    assert(inv && !(Array.isArray(inv.violations) && inv.violations.some(v => v.id === 'remote-members-closed')),
+      '#396.4 (D2): remote-members-closed is suppressed (close_pending) at the merge lane, got ' + JSON.stringify(inv && inv.violations));
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
   }

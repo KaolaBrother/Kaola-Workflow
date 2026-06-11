@@ -8,8 +8,32 @@ const { execFileSync, spawnSync } = require('child_process');
 const forge = require('./kaola-gitlab-forge');
 // #354 (#353-rest): crash-safe atomic durable-state write (tmp + fsync + rename).
 const adaptiveSchema = require('./kaola-workflow-adaptive-schema');
+// #394: resolve the default branch (offline-safe probe chain) so the fallback MR sink targets the
+// real default — the old hardcoded targetBranch:'main' broke master/other-default repos.
+const { defaultBranch } = require('./kaola-gitlab-workflow-claim');
 
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
+
+// #394: resolve the project folder — LIVE first, then the ARCHIVE folder (standard exit-3 lane).
+function resolveProjectDir(root, project) {
+  const live = path.join(root, 'kaola-workflow', project);
+  if (fs.existsSync(live)) return live;
+  const archived = path.join(root, 'kaola-workflow', 'archive', project);
+  if (fs.existsSync(archived)) return archived;
+  return live;
+}
+
+// #394: record mr_url to a DURABLE location BEFORE any throwable step after MR creation.
+function recordMrResult(projectDir, project, mrUrl, mrIid, branch) {
+  try {
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(cacheDir, 'sink-pr-result.json'),
+      JSON.stringify({ project, branch, mr_url: mrUrl, mr_iid: mrIid, timestamp: new Date().toISOString() }, null, 2) + '\n'
+    );
+  } catch (_) { /* best-effort durable record; never block the MR flow */ }
+}
 
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
 
@@ -165,10 +189,25 @@ function ensureMergeRequest(args, opts) {
   const gitExec = options.gitExec || execFileSync;
   if (!options.skipPush) gitExec('git', ['push', 'origin', args.branch], { encoding: 'utf8' });
 
+  // #394: resolve the MR target branch from the default branch (a sink-fallback.json receipt from
+  // sink-merge may carry the already-resolved branch; prefer it, else probe).
+  const projectFolder = resolveProjectDir(root, args.project);
+  let targetBranch = 'main';
+  try {
+    const fbPath = path.join(projectFolder, '.cache', 'sink-fallback.json');
+    if (fs.existsSync(fbPath)) {
+      const fb = JSON.parse(fs.readFileSync(fbPath, 'utf8'));
+      if (fb && typeof fb.resolved_default_branch === 'string' && fb.resolved_default_branch) targetBranch = fb.resolved_default_branch;
+    }
+  } catch (_) {}
+  if (targetBranch === 'main') {
+    try { targetBranch = defaultBranch(root) || 'main'; } catch (_) { targetBranch = 'main'; }
+  }
+
   const existing = findMergeRequestForBranch(args.branch);
   const mr = existing || forge.createMergeRequest({
     sourceBranch: args.branch,
-    targetBranch: 'main',
+    targetBranch: targetBranch,
     title: args.title || ('Workflow branch ' + args.branch),
     description: args.description || (args.issue ? 'Closes #' + args.issue : '')
   });
@@ -176,8 +215,12 @@ function ensureMergeRequest(args, opts) {
   assert(mr && mr.mr_iid, 'GitLab MR creation did not return an IID');
   assert(mr.mr_url || mr.web_url, 'GitLab MR creation did not return a URL');
 
-  const stateFile = path.join(root, 'kaola-workflow', args.project, 'workflow-state.md');
-  const summaryFile = path.join(root, 'kaola-workflow', args.project, 'finalization-summary.md');
+  // #394 RECORD-BEFORE-THROW: persist mr_url durably IMMEDIATELY after MR creation.
+  recordMrResult(projectFolder, args.project, mr.mr_url || mr.web_url, mr.mr_iid, args.branch);
+
+  // #394: target the resolved project folder (archive folder in the exit-3 lane) for durable writes.
+  const stateFile = path.join(projectFolder, 'workflow-state.md');
+  const summaryFile = path.join(projectFolder, 'finalization-summary.md');
   updateStateSinkBlock(stateFile, mr.mr_url || mr.web_url, mr.mr_iid);
   appendSummary(summaryFile, mr.mr_url || mr.web_url, mr.mr_iid);
   if (!skipMetadataCommit) {
