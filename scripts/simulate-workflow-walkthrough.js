@@ -1397,6 +1397,71 @@ function testAdaptiveValidatorGovernance() {
       '| done | finalize | g1,g2 | — | 1 | sequence |',
     ], []);
     assert(v.result === 'refuse' && /main-session-gate node g1 must be shape sequence/.test((v.errors||[]).join(';')), '#334: a main-session-gate fan-out member must refuse (shape), got: ' + JSON.stringify(v));
+
+    // #381: directory-shaped write-set entry → typed FREEZE refusal (dead-on-arrival at the
+    // exact-path barrier). Refused at freeze (the authoring gate), never deferred to a mid-run halt.
+    v = validatePlanFixture(tmp, [
+      '| impl | tdd-guide | — | src/ | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /directory-shaped/.test((v.errors||[]).join(';')),
+      '#381: a directory-shaped write-set entry (src/) must refuse at freeze, got: ' + JSON.stringify(v));
+
+    // #381: normalization variants (./src/, src//, backtick-wrapped) all collapse to src/ → refuse.
+    for (const ws of ['./src/', 'src//', '`src/`']) {
+      v = validatePlanFixture(tmp, [
+        '| impl | tdd-guide | — | ' + ws + ' | 1 | sequence |',
+        '| review | code-reviewer | impl | — | 1 | sequence |',
+        '| done | finalize | review | — | 1 | sequence |',
+      ], []);
+      assert(v.result === 'refuse' && /directory-shaped/.test((v.errors||[]).join(';')),
+        '#381: directory variant ' + JSON.stringify(ws) + ' must refuse at freeze, got: ' + JSON.stringify(v));
+    }
+
+    // #381: a `..` path-traversal token → typed FREEZE refusal (normalizeRepoPath leaves ../ intact).
+    v = validatePlanFixture(tmp, [
+      '| impl | tdd-guide | — | src/../b.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /contains '\.\.'/.test((v.errors||[]).join(';')),
+      "#381: a '..'-bearing write-set token must refuse at freeze, got: " + JSON.stringify(v));
+
+    // #381 (NO false-refusal): exact file paths — incl. a root-level file and dot-leading files —
+    // FREEZE GREEN. The shape check keys on a trailing '/' ONLY (never 'lacks a /' / 'starts with .').
+    v = validatePlanFixture(tmp, [
+      '| impl | tdd-guide | — | src/foo.js, Dockerfile, .github/workflows/deploy.yml | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'in-grammar',
+      '#381: exact files (incl Dockerfile + .github/...) must freeze green, got: ' + JSON.stringify(v));
+
+    // #381 (FREEZE-ONLY / no-brick): a plan FROZEN by a pre-#381 validator (legal then) carrying a
+    // `src/` entry must still PASS --resume-check (revalidateForResume is untouched) even though
+    // --freeze now REFUSES the same content — so an in-flight legacy plan resumes, never bricks.
+    {
+      const pv = require('./kaola-workflow-plan-validator');
+      const legacy = ['# Plan', '', '## Meta', 'labels: area:scripts', '', '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape |',
+        '|---|---|---|---|---|---|',
+        '| impl | tdd-guide | — | src/ | 1 | sequence |',
+        '| review | code-reviewer | impl | — | 1 | sequence |',
+        '| done | finalize | review | — | 1 | sequence |', ''].join('\n');
+      const frozenLegacy = '<!-- plan_hash: ' + pv.computePlanHash(legacy) + ' -->\n' + legacy;
+      const resume = pv.revalidateForResume(frozenLegacy);
+      assert(resume.ok === true, '#381: a frozen legacy src/ plan must PASS --resume-check (no brick), got: ' + JSON.stringify(resume));
+      const refreeze = pv.validatePlan(frozenLegacy);
+      assert(refreeze.result === 'refuse' && /directory-shaped/.test((refreeze.errors||[]).join(';')),
+        '#381: the same legacy content must REFUSE at --freeze, got: ' + JSON.stringify(refreeze));
+
+      // #381 (exact-barrier semantics PRESERVED): the barrier still refuses a real file write
+      // against a `src/` directory declaration — the fix lives at freeze, NOT by teaching the
+      // barrier to prefix-match (explicit non-goal).
+      const bc = pv.barrierCheck(frozenLegacy, ['src/foo.js'], { nodeId: 'impl' });
+      assert(bc && bc.result === 'refuse', '#381: barrierCheck still refuses src/foo.js vs a src/ declaration (exact semantics preserved), got: ' + JSON.stringify(bc));
+    }
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   console.log('testAdaptiveValidatorGovernance: PASSED');
 }

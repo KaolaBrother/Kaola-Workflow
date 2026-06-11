@@ -79,6 +79,13 @@ Author the `## Nodes` table so the validator passes it. Each node is one row:
 - A single unique **`finalize`** sink is mandatory and makes the gate checks decidable. The sink may
   only write docs/state (e.g. `CHANGELOG.md`); a non-docs write on the sink trips `code-reviewer`.
 - `FILE_CEILING` = 6 paths per node's `declared_write_set` (root-level + dot-leading paths count).
+  **Declare EXACT file paths, never directories.** The per-node barrier matches the write set by
+  exact membership, so a directory or trailing-slash entry (`src/`, `lib/auth/`) — or any token with
+  a `..` segment — is **refused at freeze** (`#381`: it would be dead-on-arrival at the barrier and
+  escalate a mechanical artifact to a consent halt). Enumerate the files the node actually writes.
+  **When a lane genuinely needs more than `FILE_CEILING` files, SPLIT it into sequenced same-role
+  nodes** (plain `sequence` shape), each within the ceiling and under the same gate coverage — never
+  widen scope with a directory grant. (Do not raise the ceiling or fold product code to fit it.)
 - **Gates are walls the validator finds in the graph, not flags:** `code-reviewer` must
   post-dominate every code-producing node (G1); `security-reviewer` must post-dominate every
   sensitive node (G2). Plan a `planner`/`code-architect` node above a non-trivial implement, and a

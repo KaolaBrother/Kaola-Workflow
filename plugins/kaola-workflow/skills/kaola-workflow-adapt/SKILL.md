@@ -45,7 +45,11 @@ executor opens up to `FANOUT_CAP` legs and drains the rest via rolling top-up (q
 top up as a slot frees). Author a fan-out as wide as the work is genuinely independent over disjoint
 write sets; the validator validates dependency shape / disjointness / gates / write-set safety, never
 width. `LOOP_CAP` (**5**; a loop must run at least once — `loop(0)` is a typed refusal), `FILE_CEILING`
-(**6** paths per node's write set; root-level + dot-leading paths count). The unique **`finalize`**
+(**6** paths per node's write set; root-level + dot-leading paths count). **Write sets are EXACT file
+paths, never directories:** a directory / trailing-slash entry (`src/`) or a `..`-bearing token is
+**refused at freeze** (`#381` — it is dead at the exact-match barrier); a lane needing more than
+`FILE_CEILING` files **splits into sequenced same-role nodes** (each ≤ ceiling, same gate coverage),
+never a directory grant. The unique **`finalize`**
 sink may only write docs/state (e.g. `CHANGELOG.md`); a non-docs write on the sink trips `code-reviewer`.
 
 ## A complete example (`workflow-plan.md`)

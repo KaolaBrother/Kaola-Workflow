@@ -677,6 +677,23 @@ function validatePlan(content, opts) {
     if (n.role !== TERMINAL_ROLE && !WRITE_ROLES.has(n.role) && n.writeSet.size) {
       errors.push(`read-only role ${n.role} (node ${n.id}) declares a write set`);
     }
+    // #381: directory-shaped or path-traversal write-set entries freeze in-grammar but are DEAD at
+    // the per-node barrier — barrierCheck matches EXACT file paths (declared.has(p)), so a directory
+    // grant like `src/` can never match a real write `src/foo.js` and is guaranteed to refuse mid-run,
+    // escalating a purely-mechanical authoring artifact to a maximally-expensive human consent halt.
+    // Refuse at FREEZE (the authoring gate) instead. The check runs on the normalized n.writeSet
+    // members: classifier.normalizeRepoPath preserves a trailing `/` and leaves `../` untouched.
+    // Placed BEFORE the FILE_CEILING check so a `src/` token is reported as a SHAPE error (it parses
+    // to size 1, so the A2 fail-closed above does not fire). Freeze-only — revalidateForResume is NOT
+    // touched, so an in-flight legacy plan frozen by a pre-#381 validator still resumes (its barrier
+    // failure falls through to the unchanged write-halt --reason consent net).
+    for (const tok of n.writeSet) {
+      if (tok.endsWith('/')) {
+        errors.push(`node ${n.id} declared_write_set entry "${tok}" is directory-shaped — declare exact file paths (the barrier matches files exactly; a directory grant is dead at the per-node barrier)`);
+      } else if (tok.split('/').indexOf('..') !== -1) {
+        errors.push(`node ${n.id} declared_write_set token "${tok}" contains '..' — declare exact in-repo file paths`);
+      }
+    }
     if (n.writeSet.size > schema.FILE_CEILING) {
       errors.push(`node ${n.id} declares ${n.writeSet.size} files > FILE_CEILING ${schema.FILE_CEILING}`);
     }
