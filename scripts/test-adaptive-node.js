@@ -274,14 +274,16 @@ function makeState(opts) {
 {
   const validator = require('./kaola-workflow-plan-validator');
   const classifier = require('./kaola-workflow-classifier');
+  // #382: the fixture carries the optional `model` column (opus / sonnet / absent) so the parity
+  // signature also pins `model` — validator.parseNodes and classifier.readPlanNodes must agree on it.
   const plan = [
     '## Meta', 'plan_hash: x', '',
     '## Nodes',
-    '| id | role | depends_on | declared_write_set | est | shape |',
-    '|----|------|-----------|--------------------|-----|-------|',
-    '| a | code-explorer | — | — | 1 | sequence |',
-    '| b | implementer | a | scripts/b.js | 1 | sequence |',
-    '| c | code-reviewer | b | — | 1 | sequence |',
+    '| id | role | depends_on | declared_write_set | est | shape | model |',
+    '|----|------|-----------|--------------------|-----|-------|-------|',
+    '| a | code-explorer | — | — | 1 | sequence | sonnet |',
+    '| b | implementer | a | scripts/b.js | 1 | sequence | opus |',
+    '| c | code-reviewer | b | — | 1 | sequence | |',
     '## Node Ledger', '| id | status |', '|----|--------|', '| a | pending |', '',
   ].join('\n');
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-nodes-parity-'));
@@ -289,13 +291,13 @@ function makeState(opts) {
   fs.writeFileSync(planPath, plan);
   const vNodes = validator.parseNodes(plan);
   const cNodes = classifier.readPlanNodes(planPath);
-  const sig = n => n.id + ':' + n.role + ':' + (n.dependsOn || []).join(',');
+  const sig = n => n.id + ':' + n.role + ':' + (n.dependsOn || []).join(',') + ':' + (n.model || '');
   const vSig = vNodes.map(sig).join('|');
   const cSig = cNodes.map(sig).join('|');
-  assert(vSig === 'a:code-explorer:|b:implementer:a|c:code-reviewer:b',
-    'T6b: validator.parseNodes id/role/deps as expected, got ' + vSig);
+  assert(vSig === 'a:code-explorer::sonnet|b:implementer:a:opus|c:code-reviewer:b:',
+    'T6b: validator.parseNodes id/role/deps/model as expected, got ' + vSig);
   assert(vSig === cSig,
-    'T6b (AC3): validator.parseNodes and classifier.readPlanNodes agree on id/role/deps (parity), v=' + vSig + ' c=' + cSig);
+    'T6b (AC3 / #382): validator.parseNodes and classifier.readPlanNodes agree on id/role/deps/model (parity), v=' + vSig + ' c=' + cSig);
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
 }
 
@@ -3300,6 +3302,40 @@ function rsHarness(initialFiles, shellStub) {
     writeFile: (fp, c) => { if (fp.endsWith('workflow-plan.md')) planContent = c; },
   });
   assert(r.result === 'ok' && r.opened && r.opened.id === 'impl-core', 'R11: legacy open-next path intact (serial fallback)');
+}
+
+// ---------------------------------------------------------------------------
+// R12 (#382): open-ready persists the per-node model tier — `opened` carries it (was
+// hardcoded model:undefined) and running-set.json members store it so a reconcile /
+// crash re-dispatch keeps the planner's tier.
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan([
+    '| rev-a | pending | |',
+    '| rev-b | pending | |',
+    '| finalize | pending | |',
+  ], [
+    '| rev-a | code-reviewer | — | — | 1 | sequence | opus |',
+    '| rev-b | security-reviewer | — | — | 1 | sequence | sonnet |',
+    '| finalize | finalize | rev-a rev-b | CHANGELOG.md | 1 | sequence | |',
+  ]);
+  const h = rsHarness({ [RS_PLAN_PATH]: plan }, (base) => {
+    if (base === 'kaola-workflow-next-action.js') {
+      return { exitCode: 0, result: 'ok', allDone: false, readyPending: [
+        { id: 'rev-a', role: 'code-reviewer', declared_write_set: '—', model: 'opus' },
+        { id: 'rev-b', role: 'security-reviewer', declared_write_set: '—', model: 'sonnet' },
+      ] };
+    }
+    if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok' };
+    return { exitCode: 1, result: 'refuse' };
+  });
+  const r = runOpenReady({ planPath: RS_PLAN_PATH, project: 'p', max: null, fanoutCapReadonly: 8, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, mkdirp: h.mkdirp });
+  assert(r.result === 'ok' && r.opened.length === 2, 'R12: open-ready opened 2 nodes');
+  const byId = Object.fromEntries(r.opened.map(o => [o.id, o.model]));
+  assert(byId['rev-a'] === 'opus' && byId['rev-b'] === 'sonnet', 'R12: opened carries per-node model (not undefined), got ' + JSON.stringify(byId));
+  const set = JSON.parse(h.files[RS_SET_PATH]);
+  const setById = Object.fromEntries(set.nodes.map(n => [n.id, n.model]));
+  assert(setById['rev-a'] === 'opus' && setById['rev-b'] === 'sonnet', 'R12: running-set.json persists per-node model, got ' + JSON.stringify(setById));
 }
 
 // ===========================================================================

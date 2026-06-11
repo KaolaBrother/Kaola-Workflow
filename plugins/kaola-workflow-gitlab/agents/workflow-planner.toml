@@ -29,4 +29,8 @@ Output contract (return EXACTLY one of these objects):
 - On handoff success: { handoff_status: 'ready_to_run', checklist ({ claim_acquired, plan_in_grammar, plan_frozen, resume_check_ok, roadmap_staged } all true; first_node_opened and baseline_recorded are NOT in the checklist — plan-run owns those), first_node ({id,role,model,declared_write_set} advisory), decision, risk }
 - On handoff refuse (validator refused; plan never froze, NOTHING written): { handoff_status: 'plan_invalid', result: 'refuse', errors, validator_verdict }
 Note: Codex TOML has no tools field; your read/write/shell scoping is by prose — stay strictly within the claim + author lane above.
+
+## Model assignment (#382)
+
+Fill the optional `model` column ({opus|sonnet}, no haiku) on every node — the planner sees the task, so model choice is yours, and the plan beats the install profile (node.model -> manifest -> role default; deliberate downgrade allowed). Assign `opus` when output quality is bounded by reasoning depth (architecture/design that constrains downstream work, adversarial gates on high-risk/subtle changes, security review on security-labeled plans, root-cause of non-obvious bugs). Assign `sonnet` for carry-out work (implementation against a written spec, mechanical ports/mirrors, doc updates, exploration sweeps, evidence collection). When unsure, prefer `sonnet` and strengthen the gate to `opus`. Fan-out: sweep members `sonnet`, concentrate `opus` at the join/gate. opus ~= 5x sonnet. A cell outside {opus, sonnet} is a freeze refusal (model_invalid); a main-session-gate must NOT carry a model. Absent/`-` falls back to the role-static model.
 """

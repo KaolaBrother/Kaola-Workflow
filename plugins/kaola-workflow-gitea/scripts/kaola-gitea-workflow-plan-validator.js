@@ -153,6 +153,9 @@ function parseNodes(content) {
       // #263: classifier node id this node is an arm of ('—'/'' => not an arm). Hash-covered
       // (lives in ## Nodes). Absent column => '' => treated as non-arm (back-compat).
       selectorSource: (() => { const v = get('selector_source'); return (v && v !== '—' && v !== '-') ? v : ''; })(),
+      // #382: optional per-node model tier ({opus|sonnet}). Hash-covered (lives in ## Nodes).
+      // Absent column / '—' => '' => today's role-static resolution (back-compat; old plans hash-stable).
+      model: (() => { const v = get('model'); return (v && v !== '—' && v !== '-') ? v.toLowerCase() : ''; })(),
     });
   }
   return nodes;
@@ -692,6 +695,17 @@ function validatePlan(content, opts) {
         errors.push(`node ${n.id} declared_write_set entry "${tok}" is directory-shaped — declare exact file paths (the barrier matches files exactly; a directory grant is dead at the per-node barrier)`);
       } else if (tok.split('/').indexOf('..') !== -1) {
         errors.push(`node ${n.id} declared_write_set token "${tok}" contains '..' — declare exact in-repo file paths`);
+      }
+    }
+    // #382: optional per-node model tier — minimal freeze-time validation. An absent/'—' cell parses
+    // to '' (role-static fallback, no check). A non-empty cell must be a closed tier token; a
+    // main-session-gate must never carry a model (it is never dispatched as a subagent).
+    if (n.model) {
+      if (schema.NODE_MODEL_TIERS.indexOf(n.model) === -1) {
+        errors.push(`node ${n.id} model "${n.model}" is not a valid tier (model_invalid) — use one of: ${schema.NODE_MODEL_TIERS.join(', ')}`);
+      }
+      if (n.role === MAIN_SESSION_GATE) {
+        errors.push(`node ${n.id} is a main-session-gate and must not declare a model (it is never dispatched as a subagent)`);
       }
     }
     if (n.writeSet.size > schema.FILE_CEILING) {

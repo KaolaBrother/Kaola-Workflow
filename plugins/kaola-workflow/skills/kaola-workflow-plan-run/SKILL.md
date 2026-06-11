@@ -104,6 +104,9 @@ The current session then **judges** the resume branch:
   {project}` to complete Govern + freeze (adapt re-enters at freeze), then resume here once frozen.
 - otherwise the ready set from `next-action` (each node carrying its resolved `model`) drives the loop:
   nodes whose `status != complete` and all of whose `depends_on` are `complete` with resolved compliance.
+  The resolved `model` reflects the #382 precedence — the plan's per-node `model` tier ({opus|sonnet})
+  beats the install profile. On Codex the tier currently selects the role's base profile (the dedicated
+  `<role>-max` xhigh effort-variant mapping is a tracked follow-up); the tier never breaks dispatch.
   When no node is `in_progress` (e.g. a crash between a node's commit and its fused advance left the next
   node unopened), **re-enter at step 1** to open the next ready node.
 

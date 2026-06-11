@@ -38,6 +38,12 @@ const LEDGER_HEADING = 'Node Ledger';
 // Node Ledger status enum (single authoritative table inside the plan artifact).
 const LEDGER_STATUSES = Object.freeze(['pending', 'in_progress', 'complete', 'n/a']);
 
+// #382: the closed vocabulary for the optional per-node `model` column in `## Nodes`. Two TIER
+// tokens only (no haiku) — Claude editions map them to the Agent(model=…) param; Codex maps them to
+// a reasoning-effort variant profile. `—`/absent ⇒ today's role-static resolution. Defined here (the
+// ×4 byte-identical drift anchor) so the validator, the executor, and every edition share one list.
+const NODE_MODEL_TIERS = Object.freeze(['opus', 'sonnet']);
+
 // Caps (verified first-party): FANOUT_CAP default 4 (env KAOLA_FANOUT_CAP);
 // LOOP_CAP static loop bound; FILE_CEILING absolute backstop of 6 (fast.md:63);
 // TEST_THRASH_LIMIT >= 3 consecutive failing cycles on the same test (fast.md:64).
@@ -457,6 +463,7 @@ module.exports = {
   NODES_HEADING,
   LEDGER_HEADING,
   LEDGER_STATUSES,
+  NODE_MODEL_TIERS,
   DEFAULT_FANOUT_CAP,
   DEFAULT_FANOUT_CAP_READONLY,
   RUNNING_SET_NAME,

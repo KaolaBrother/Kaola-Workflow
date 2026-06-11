@@ -1462,6 +1462,41 @@ function testAdaptiveValidatorGovernance() {
       const bc = pv.barrierCheck(frozenLegacy, ['src/foo.js'], { nodeId: 'impl' });
       assert(bc && bc.result === 'refuse', '#381: barrierCheck still refuses src/foo.js vs a src/ declaration (exact semantics preserved), got: ' + JSON.stringify(bc));
     }
+
+    // #382: optional per-node `model` column ({opus|sonnet}). Build 7-col plans (the column is the
+    // 7th cell) and validate via the CLI. A valid tier freezes green; an unknown tier or a
+    // main-session-gate carrying a model refuses at freeze; an absent column is back-compat.
+    const vModel = (rows) => {
+      const pth = path.join(tmp, 'plan-model.md');
+      fs.writeFileSync(pth, ['# Plan', '', '## Meta', 'labels: area:scripts', '', '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape | model |',
+        '|---|---|---|---|---|---|---|'].concat(rows).concat(['']).join('\n'));
+      return JSON.parse(runNode(planValidatorScript, [pth, '--json'], tmp).stdout);
+    };
+    v = vModel([
+      '| arch | code-architect | — | — | 1 | sequence | opus |',
+      '| impl | implementer | arch | lib/foo.js | 1 | sequence | sonnet |',
+      '| review | code-reviewer | impl | — | 1 | sequence | |',
+      '| done | finalize | review | — | 1 | sequence | |',
+    ]);
+    assert(v.result === 'in-grammar', '#382: valid {opus,sonnet} model tiers (+ absent) must freeze green, got: ' + JSON.stringify(v));
+
+    v = vModel([
+      '| impl | implementer | — | lib/foo.js | 1 | sequence | haiku |',
+      '| review | code-reviewer | impl | — | 1 | sequence | |',
+      '| done | finalize | review | — | 1 | sequence | |',
+    ]);
+    assert(v.result === 'refuse' && /model_invalid/.test((v.errors||[]).join(';')),
+      '#382: an unknown model tier must refuse with model_invalid, got: ' + JSON.stringify(v));
+
+    v = vModel([
+      '| impl | implementer | — | lib/foo.js | 1 | sequence | sonnet |',
+      '| review | code-reviewer | impl | — | 1 | sequence | |',
+      '| vgate | main-session-gate | review | — | 1 | sequence | opus |',
+      '| done | finalize | vgate | — | 1 | sequence | |',
+    ]);
+    assert(v.result === 'refuse' && /must not declare a model/.test((v.errors||[]).join(';')),
+      '#382: a main-session-gate carrying a model must refuse, got: ' + JSON.stringify(v));
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   console.log('testAdaptiveValidatorGovernance: PASSED');
 }

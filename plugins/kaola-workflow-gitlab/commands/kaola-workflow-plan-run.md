@@ -420,8 +420,12 @@ member whose evidence is absent (baselines idempotent); a member with present ev
    `allDone` is valid only after the mandatory `finalize` sink node itself has been closed.
    If `open-next` opens a node whose `role` is `finalize`, stay in the per-node loop and use
    the finalize sink contract below instead of routing to Finalization.
-2. **dispatch** the node's role (main session — see above). Use the `model` returned by `open-next`
-   for the node (or resolved via `scripts/kaola-workflow-resolve-agent-model.js <role>` on resume).
+2. **dispatch** the node's role (main session — see above). **Pass the returned `model` on the
+   `Agent(... model=…)` call for EVERY dispatch** — serial `open-next`, each `open-ready` member, and
+   each batch member — exactly as returned; never omit it. The returned `model` already encodes the
+   #382 precedence (the plan's per-node `model` tier beats the install profile: `node.model` →
+   manifest → role default), so a planner-assigned `opus`/`sonnet` tier reaches the subagent
+   automatically (or resolved via `scripts/kaola-workflow-resolve-agent-model.js <role>` on resume).
    **Special case — `role: finalize` sink:** `finalize` is the mandatory DAG sink, not a
    dispatchable subagent role. It is expected that
    `scripts/kaola-workflow-resolve-agent-model.js finalize` returns an empty model. When the opened

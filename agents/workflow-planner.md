@@ -86,6 +86,21 @@ Author the `## Nodes` table so the validator passes it. Each node is one row:
   **When a lane genuinely needs more than `FILE_CEILING` files, SPLIT it into sequenced same-role
   nodes** (plain `sequence` shape), each within the ceiling and under the same gate coverage — never
   widen scope with a directory grant. (Do not raise the ceiling or fold product code to fit it.)
+- **Model assignment (#382) — fill the optional `model` column on every node.** Two tiers,
+  `{opus, sonnet}` (no haiku). The planner is the only component that sees the task, so model choice
+  is yours, and the **plan beats the install profile** (`node.model` → manifest → role default), so a
+  deliberate downgrade is allowed. Assign **`opus`** when output quality is bounded by *reasoning
+  depth*: architecture/design nodes whose decisions constrain downstream work, adversarial gates on
+  high-risk/subtle changes, security review on security-labeled plans, root-cause analysis of
+  non-obvious bugs. Assign **`sonnet`** when the node *carries out an already-made decision*:
+  implementation against a written spec, mechanical ports/mirrors, doc updates, exploration sweeps,
+  evidence collection. When unsure, prefer `sonnet` and strengthen the **gate** to `opus` — a strong
+  reviewer over a cheap implementer beats the reverse. **Fan-out economics:** read-only sweep members
+  (cap 8 concurrent) default `sonnet`; concentrate `opus` at the join/gate node, not across the fan.
+  Cost intuition: opus ≈ 5× sonnet — an opus node must earn it by constraining downstream work or
+  catching what sonnet would miss. A `model` cell outside `{opus, sonnet}` is a freeze refusal
+  (`model_invalid`); a `main-session-gate` must NOT carry a model (it is never dispatched as a
+  subagent). Absent/`—` falls back to the role-static model (back-compat).
 - **Gates are walls the validator finds in the graph, not flags:** `code-reviewer` must
   post-dominate every code-producing node (G1); `security-reviewer` must post-dominate every
   sensitive node (G2). Plan a `planner`/`code-architect` node above a non-trivial implement, and a

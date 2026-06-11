@@ -1695,6 +1695,10 @@ function runOpenReady(opts) {
     role: n.role,
     kind: openKind,
     declared_write_set: n.declared_write_set,
+    // #382: persist the per-node model tier (next-action resolved it via node.model || role-static)
+    // so running-set.json carries it — a reconcile-running-set roll-forward / crash re-dispatch keeps
+    // the planner's tier instead of losing it. null when next-action returned no model.
+    model: n.model || null,
     baseline: 'recorded',
     opening: true,
     ...(openedAt ? { openedAt } : {}),
@@ -1740,7 +1744,7 @@ function runOpenReady(opts) {
     result: 'ok',
     allDone: false,
     kind: openKind,
-    opened: newNodes.map(n => ({ id: n.id, role: n.role, model: undefined, kind: n.kind, declared_write_set: n.declared_write_set })),
+    opened: newNodes.map(n => ({ id: n.id, role: n.role, model: n.model || null, kind: n.kind, declared_write_set: n.declared_write_set })),
     runningSet: finalSet.nodes.map(n => n.id),
     taskTransitions: transitions,
     taskMirror: refreshTaskMirror(project, shell),

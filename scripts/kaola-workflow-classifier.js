@@ -303,6 +303,8 @@ function readPlanNodes(planPath) {
       writeSet: parseWriteSetCell(get('declared_write_set')),
       cardinality: get('cardinality'),
       shape: get('shape'),
+      // #382: per-node model tier — parity with validator.parseNodes (absent/'—' => '').
+      model: (() => { const v = get('model'); return (v && v !== '—' && v !== '-') ? v.toLowerCase() : ''; })(),
     });
   }
   return nodes;

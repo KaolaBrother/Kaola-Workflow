@@ -102,7 +102,7 @@ function computeNextAction(content, opts) {
       id: node.id,
       role: node.role,
       dependsOn: node.dependsOn,
-      model: resolveModel(node.role),
+      model: node.model || resolveModel(node.role),
       declared_write_set: node.writeSetRaw,
       shape: node.shape.kind,
     }));
@@ -153,7 +153,7 @@ function computeNextAction(content, opts) {
       id: node.id,
       role: node.role,
       dependsOn: node.dependsOn,
-      model: resolveModel(node.role),
+      model: node.model || resolveModel(node.role),
       declared_write_set: node.writeSetRaw,
       shape: node.shape.kind,
     }));

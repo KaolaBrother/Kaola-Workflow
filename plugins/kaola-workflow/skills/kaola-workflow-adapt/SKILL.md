@@ -17,11 +17,17 @@ Startup Step 0a-1).
 ## The grammar (the closed envelope)
 
 Each node is one row of the `## Nodes` table:
-`| id | role | depends_on | declared_write_set | cardinality | shape |`.
+`| id | role | depends_on | declared_write_set | cardinality | shape | model |`.
 - **role** must be in the installed library (the nine canonical roles + any
   maintainer-installed role such as `adversarial-verifier`). The validator hard-rejects
-  an unknown role. The author **never** sets a model — on Codex it comes from the role's
-  `model_reasoning_effort` tier in its `agents/<role>.toml` profile (selected by role name).
+  an unknown role.
+- **model** (#382, optional) — the planner-assigned tier `{opus|sonnet}` (no haiku). Assign `opus`
+  to reasoning-bound nodes (architecture/design that constrains downstream work, adversarial gates on
+  high-risk changes, security review, root-cause of non-obvious bugs); `sonnet` to carry-out nodes
+  (implementation against a spec, mechanical ports, docs, sweeps, evidence). When unsure, prefer
+  `sonnet` and strengthen the gate to `opus`. The plan tier beats the install profile. An out-of-vocab
+  cell is a freeze refusal (`model_invalid`); a `main-session-gate` must not carry a model; absent/`—`
+  falls back to the role-static model (on Codex, the role's `model_reasoning_effort` profile tier).
 - **shape** is exactly one of three productions: `sequence`, `fanout(<group>)` (N
   instances of one role over pairwise-disjoint declared write sets — author N as wide as the
   subtasks are genuinely independent; `FANOUT_CAP` caps only *runtime concurrency*, not authored
