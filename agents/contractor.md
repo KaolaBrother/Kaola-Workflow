@@ -93,6 +93,28 @@ This section is the **sole home** of the mechanical finalization body. The orche
 (`commands/kaola-workflow-finalize.md`) holds only a thin dispatch handle; you execute
 the full procedure here.
 
+### Finalization recovery contract (tribal knowledge, #399)
+
+Three recovery rules were rediscovered the hard way across the #293/#254/#328 runs. They are
+binding here, not optional lore:
+
+1. **Sync order is worktree→main BEFORE the mirror.** On an adaptive worktree run the worktree
+   holds the *complete* ledger; the main checkout's `kaola-workflow/{project}/` is stale. Sync
+   worktree→main FIRST so the main copy is fresh, THEN run the Step-8a mirror. The mirror only
+   pushes Finalization artifacts (docs, CHANGELOG, roadmap) INTO the worktree — it must never
+   overwrite a complete worktree ledger with a staler main copy. The Step-8a guard below enforces
+   this mechanically (it refuses the `cp -R` when the main copy is staler), but the correct fix on
+   a refusal is to sync worktree→main first, not to bypass the guard.
+2. **The machinery never authors the implementation commit.** No script and no contractor step
+   commits the implementation work — that is always the operator/orchestrator's job. If, at
+   finalize, the implementation commit is missing (the diff is uncommitted or absent), SURFACE it
+   to the orchestrator and stop; do NOT cover for it by staging the impl yourself. You author only
+   the bookkeeping commit (`chore: finalize …`).
+3. **After a sink-merge rebase detour, repair the MAIN checkout.** When a sink-merge rebase fails
+   mid-flight, the failure leaves the MAIN checkout mid-rebase on the feature branch and the linked
+   worktree is already deleted. Repair the path named in the failure's `git -C <path>` line (the
+   MAIN checkout), never `cd` into the deleted worktree, and finish with `--force-with-lease`.
+
 ### Step 8a - Artifact Mirror
 
 Before staging, mirror Finalization artifacts from the main worktree into the linked worktree (if active):
@@ -106,6 +128,17 @@ ACTIVE_WORKTREE_PATH="$(pwd)"
 _WT="$(node -e "try{const fs=require('fs');const s=fs.readFileSync('kaola-workflow/{project}/workflow-state.md','utf8');const m=s.match(/^worktree_path:\\s*(.+)$/m);process.stdout.write(m?m[1].trim():'');}catch(e){}" 2>/dev/null)" || true
 [ -n "$_WT" ] && [ -d "$_WT" ] && ACTIVE_WORKTREE_PATH="$_WT"
 if [ "$ACTIVE_WORKTREE_PATH" != "$(pwd)" ]; then
+  # #399: ledger-regression guard. Refuse to copy a STALER main plan over a MORE-COMPLETE worktree
+  # plan (which would reset a finished run's ledger complete->pending). FAIL-OPEN on the first sync
+  # (dest absent/empty/no-ledger). The correct fix on a refusal is to sync worktree->main FIRST.
+  kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
+  LEDGER_COMPARE_JS="$(kaola_script kaola-workflow-ledger-compare.js)"
+  if [ -n "$LEDGER_COMPARE_JS" ] && ! node "$LEDGER_COMPARE_JS" \
+      --source "kaola-workflow/{project}/workflow-plan.md" \
+      --dest "$ACTIVE_WORKTREE_PATH/kaola-workflow/{project}/workflow-plan.md"; then
+    echo "REFUSED: main copy staler than the worktree ledger; sync worktree->main FIRST" >&2
+    exit 1
+  fi
   mkdir -p "$ACTIVE_WORKTREE_PATH/kaola-workflow/{project}/"
   cp -R "kaola-workflow/{project}/." "$ACTIVE_WORKTREE_PATH/kaola-workflow/{project}/"
   git status --porcelain | while IFS= read -r line; do

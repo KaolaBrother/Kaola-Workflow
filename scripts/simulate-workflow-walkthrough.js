@@ -10728,6 +10728,51 @@ function testPlanRunWiredForWorktree() {
 }
 
 // ---------------------------------------------------------------------------
+// #399: contractor Step-8a ledger-regression guard. The artifact mirror copies the main plan
+// over the worktree plan right before archive; run from the wrong direction it would reset a
+// finished worktree ledger complete->pending. The guard refuses that copy. Plant a SOURCE (main)
+// all-pending plan + a DEST (worktree) all-complete plan -> guard exits 3 (would_regress); the
+// inverse (complete source over pending dest) exits 0. First-sync (dest absent) fails open.
+// ---------------------------------------------------------------------------
+function testLedgerCompareGuard399() {
+  const ledgerCompareScript = path.join(repoRoot, 'scripts', 'kaola-workflow-ledger-compare.js');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-wt-ledger-guard-'));
+  try {
+    const ledger = (statuses) => {
+      let s = '## Node Ledger\n\n| id | status |\n|----|--------|\n';
+      statuses.forEach((st, i) => { s += '| n' + (i + 1) + ' | ' + st + ' |\n'; });
+      return s + '\n## Sink\n';
+    };
+    const mainPlan = path.join(tmp, 'main-plan.md');     // staler main copy (all pending)
+    const wtPlan = path.join(tmp, 'worktree-plan.md');   // finished worktree (all complete)
+    fs.writeFileSync(mainPlan, ledger(['pending', 'pending', 'pending']));
+    fs.writeFileSync(wtPlan, ledger(['complete', 'complete', 'complete']));
+
+    // Staler main source over a more-complete worktree dest -> REFUSED (exit 3).
+    const refused = runNode(ledgerCompareScript, ['--source', mainPlan, '--dest', wtPlan, '--json'], tmp);
+    assert(refused.status === 3,
+      'testLedgerCompareGuard399: staler main over complete worktree must exit 3, got ' + refused.status);
+    assert(/would_regress_complete_ledger/.test(refused.stdout),
+      'testLedgerCompareGuard399: refusal reason must be would_regress_complete_ledger, got: ' + refused.stdout);
+
+    // Inverse: fresh main source over a staler/equal worktree dest -> SAFE (exit 0).
+    const allowed = runNode(ledgerCompareScript, ['--source', wtPlan, '--dest', mainPlan, '--json'], tmp);
+    assert(allowed.status === 0,
+      'testLedgerCompareGuard399: fresher main over staler worktree must exit 0, got ' + allowed.status);
+
+    // First sync: dest absent -> fail open (exit 0).
+    const firstSync = runNode(ledgerCompareScript,
+      ['--source', wtPlan, '--dest', path.join(tmp, 'absent.md'), '--json'], tmp);
+    assert(firstSync.status === 0,
+      'testLedgerCompareGuard399: first sync (dest absent) must fail open exit 0, got ' + firstSync.status);
+
+    console.log('testLedgerCompareGuard399: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Harness self-check (RED→GREEN seam for issue #357)
 // Spawns THIS script with --list / --only to validate the registry features,
 // plus in-process checks for ghMockEnv throw and runNode env scrub.
@@ -11092,6 +11137,7 @@ function buildRegistry() {
   add('testBundleAdaptiveResumeSurfacesBundleIdentity',   testBundleAdaptiveResumeSurfacesBundleIdentity);
   add('testBundleFinalizeRoadmapCleanup',                 testBundleFinalizeRoadmapCleanup);
   add('testBundleSingleIssueStateHasNoBundleFields',      testBundleSingleIssueStateHasNoBundleFields);
+  add('testLedgerCompareGuard399',                        testLedgerCompareGuard399);
   add('testHarnessSelfCheck',                             testHarnessSelfCheck);
   return reg;
 }

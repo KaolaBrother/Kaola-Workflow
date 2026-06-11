@@ -589,6 +589,13 @@ assertIncludes('scripts/kaola-workflow-claim.js', '--attest-contractor-spawn');
 // it surfaced cannot recur — the producer must exist on every edition that ships the consumer (#300).
 assertIncludes('scripts/kaola-workflow-claim.js', '--attest-planner-spawn');
 assertIncludes('agents/contractor.md', '--attest-contractor-spawn');
+// #399: the Step-8a artifact mirror must run the ledger-regression guard (forge-neutral
+// kaola-workflow-ledger-compare.js) BEFORE its `cp -R`, and the finalization preamble must
+// carry the sync-order recovery phrase (worktree->main BEFORE the mirror). Pin both so a prose
+// mutation that drops the guard or the recovery note cannot silently return — the 2026-06-11
+// audit reproduced the clobber live.
+assertIncludes('agents/contractor.md', 'kaola-workflow-ledger-compare.js');
+assertIncludes('agents/contractor.md', 'sync worktree->main FIRST');
 // #353: durable-state writes must route through the crash-safe atomic replace (no torn
 // workflow-plan.md/workflow-state.md/active-batch.json). Pin the helper + its adoption.
 assertIncludes('scripts/kaola-workflow-adaptive-schema.js', 'function writeFileAtomicReplace');

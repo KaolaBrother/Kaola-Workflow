@@ -86,6 +86,16 @@ choices, or ambiguity that blocks correctness.
 
    Attestation boundary (#338): the contractor's Step 8b passes `--attest-contractor-spawn` to `cmdFinalize`, so a genuinely delegated run back-fills its own dispatch marker and the closure receipt reads `finalize_contractor_attested: attested` even where the SubagentStart hook cannot fire (a contractor dispatched into a linked worktree, or a hookless harness) — the main session must never pass that flag on an inline run. The adaptive plan's `finalize (<node>)` Required Agent Compliance row is recorded `main-session-direct` (its in-plan sink bookkeeping is main-session-direct by the plan-run contract); that row neither requires nor replaces the contractor's delegation of mechanical finalization here. When the session legitimately runs the mechanical finalization inline (tooling unavailable), it records `local-fallback-tool-unavailable` with evidence and does NOT pass `--attest-contractor-spawn`; the resulting `finalize_contractor_attested: missing` plus the ATTESTATION WARNING is the truthful, expected, non-blocking outcome.
 
+   **Finalization recovery contract (tribal knowledge, #399).** Three recovery rules are binding,
+   not optional lore: (1) **sync order is worktree→main BEFORE the mirror** — the worktree holds the
+   *complete* ledger and the main copy is stale, so sync worktree→main first; the mirror only pushes
+   Finalization artifacts INTO the worktree and must never overwrite a complete worktree ledger with
+   a staler main copy (the Step-8a guard below enforces this — on a refusal, sync worktree→main, do
+   not bypass it); (2) **the machinery never authors the implementation commit** — if it is missing
+   at finalize, surface it and stop, do not cover for it; (3) **after a sink-merge rebase detour,
+   repair the MAIN checkout** named in the failure's `git -C <path>` line, never `cd` the deleted
+   worktree, and finish with `--force-with-lease`.
+
    Before mirroring artifacts, resolve the linked worktree and copy Finalization artifacts:
 
    ```bash
@@ -97,6 +107,19 @@ choices, or ambiguity that blocks correctness.
    _WT="$(node -e "try{const fs=require('fs');const s=fs.readFileSync('kaola-workflow/' + process.env.KAOLA_PROJECT + '/workflow-state.md','utf8');const m=s.match(/^worktree_path:\\s*(.+)$/m);process.stdout.write(m?m[1].trim():'');}catch(e){}" 2>/dev/null)" || true
    [ -n "$_WT" ] && [ -d "$_WT" ] && ACTIVE_WORKTREE_PATH="$_WT"
    if [ "$ACTIVE_WORKTREE_PATH" != "$(pwd)" ]; then
+     # #399: ledger-regression guard. Refuse to copy a STALER main plan over a MORE-COMPLETE worktree
+     # plan (which would reset a finished run's ledger complete->pending). FAIL-OPEN on the first sync.
+     # The guard is forge-neutral (kaola-workflow-ledger-compare.js) but ships in this edition's tree.
+     ledger_compare_script="plugins/kaola-workflow-gitea/scripts/kaola-workflow-ledger-compare.js"
+     if [ ! -f "$ledger_compare_script" ]; then
+       ledger_compare_script="$(find "$HOME/.codex/plugins/cache" -path '*/kaola-workflow-gitea/*/scripts/kaola-workflow-ledger-compare.js' -print -quit 2>/dev/null)"
+     fi
+     if [ -n "$ledger_compare_script" ] && ! node "$ledger_compare_script" \
+         --source "kaola-workflow/${KAOLA_PROJECT}/workflow-plan.md" \
+         --dest "$ACTIVE_WORKTREE_PATH/kaola-workflow/${KAOLA_PROJECT}/workflow-plan.md"; then
+       echo "REFUSED: main copy staler than the worktree ledger; sync worktree->main FIRST" >&2
+       exit 1
+     fi
      mkdir -p "$ACTIVE_WORKTREE_PATH/kaola-workflow/${KAOLA_PROJECT}/"
      cp -R "kaola-workflow/${KAOLA_PROJECT}/." "$ACTIVE_WORKTREE_PATH/kaola-workflow/${KAOLA_PROJECT}/"
      git status --porcelain | while IFS= read -r line; do

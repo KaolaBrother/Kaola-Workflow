@@ -13,12 +13,6 @@ This command is a bootstrapper. It should preserve existing project instructions
 
 Use `$ARGUMENTS` as optional project context.
 
-Prefer the local Karpathy skills source when available:
-
-1. `../andrej-karpathy-skills/skills/karpathy-guidelines/SKILL.md` (relative sibling discovery)
-
-If the sibling does not resolve, check the `KARPATHY_SKILLS_PATH` env var for an explicit path, or ask the user where their local clone lives. If neither resolves, use the concise fallback in this command.
-
 ---
 
 ## Step 1 — Scan Project State
@@ -162,7 +156,7 @@ Append equivalent missing sections only. Treat headings with the same meaning as
 ```
 <!-- KW-CLAUDE-TEMPLATE-END -->
 
-Keep the Karpathy-style principles concise. If the local Karpathy skill file is available, use it only to confirm the short working-principle bullets; do not paste the long source into `CLAUDE.md`.
+Keep the working-principle bullets concise.
 
 If an existing `CLAUDE.md` is bloated or duplicates the sections above, do not silently replace it. Add a short `## Maintenance Note` with the proposed consolidation and ask before destructive rewriting.
 
