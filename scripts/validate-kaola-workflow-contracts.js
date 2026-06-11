@@ -733,4 +733,12 @@ assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'main-session-gate'
   assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'kaola-workflow-plan-run');
 }
 
+// #422.3: the agent-profile md↔toml token-pin test must be wired into the claude chain.
+{
+  const pkg = JSON.parse(read('package.json'));
+  const claudeChain = (pkg.scripts || {})['test:kaola-workflow:claude'] || '';
+  assert(claudeChain.includes('test-agent-profile-parity.js'),
+    '#422.3: scripts."test:kaola-workflow:claude" must run node scripts/test-agent-profile-parity.js');
+}
+
 console.log('Kaola-Workflow Codex contract validation passed');

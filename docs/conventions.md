@@ -64,6 +64,35 @@ The bundle lane (`--target-issues` / `KAOLA_TARGET_ISSUES` / `issue-scout`) span
   transiently stale mid-run):
   `node plugins/kaola-workflow-{gitlab,gitea}/scripts/validate-kaola-workflow-{gitlab,gitea}-contracts.js --forbidden-only <file>...`
 
+**Agent-profile md↔toml token-pin parity contract (#422, see `docs/decisions/D-422-01.md`).**
+Three-part machine-enforced contract:
+
+1. **`.toml` triple byte-identity** — `validate-script-sync.js` `BYTE_IDENTICAL_GROUPS`
+   includes a programmatic entry for every `plugins/kaola-workflow/agents/*.toml` file
+   (built via `readdirSync`), covering 14 base-role profiles and 6 `-max` model variants.
+   Any byte divergence between the three plugin-tree copies of a `.toml` reds the validation
+   run. A new profile added to the codex tree is auto-covered.
+
+2. **Feature-token mirroring** — `scripts/test-agent-profile-parity.js` enforces that any
+   token in the curated `FEATURE_TOKENS` list that is present in an `agents/<name>.md` MUST
+   also appear in all three `.toml` twins. Add a token to `FEATURE_TOKENS` only after it is
+   GREEN at HEAD (present in both the `.md` and all three `.toml` twins). A drift between the
+   `.md` and the twins reds the claude chain and is caught before the four-chain gate.
+
+3. **Chain pinning** — `test-agent-profile-parity.js` is wired into the claude chain and
+   pinned by all four `validate-*-contracts.js`, so a missing or renamed guard file reds
+   every chain.
+
+**Workflow:** When adding a feature paragraph to an `agents/<name>.md`, mirror the feature
+token(s) into all three `.toml` twins first, then pin the token in `FEATURE_TOKENS`.
+
+**`config/hooks.json` family (#418.1).** The three plugin-tree `config/hooks.json` files
+(`plugins/kaola-workflow/`, `plugins/kaola-workflow-gitlab/`, `plugins/kaola-workflow-gitea/`)
+are parity-checked by `validate-script-sync.js` `CONFIG_HOOKS_FAMILY` +
+`normalizeConfigHooks()`. The files differ only in the forge-renamed compact-resume script
+path (`kaola-workflow-codex-compact-resume` → `kaola-{forge}-workflow-codex-compact-resume`);
+any other divergence reds the validation run.
+
 ## Release
 
 - Before merging a version bump, create the matching local git tag (`git tag kaola-workflow--v<version> <sha>`); `npm test` enforces the tag exists (unless `KAOLA_WORKFLOW_OFFLINE=1`).

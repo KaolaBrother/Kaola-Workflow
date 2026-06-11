@@ -871,4 +871,12 @@ assertIncludes('agents/workflow-planner.md', 'main-session-gate');
   }
 }
 
+// #422.3: the md↔toml agent-profile token-pin contract (test-agent-profile-parity.js) must be wired
+// into the claude test chain (mirrors how test-route-reachability.js guards the route surface).
+{
+  const claudeChain = (packageJson.scripts || {})['test:kaola-workflow:claude'] || '';
+  assert(claudeChain.includes('test-agent-profile-parity.js'),
+    '#422.3: scripts."test:kaola-workflow:claude" must run node scripts/test-agent-profile-parity.js');
+}
+
 console.log('Workflow contract validation passed');

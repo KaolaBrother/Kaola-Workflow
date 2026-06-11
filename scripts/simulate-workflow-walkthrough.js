@@ -5589,6 +5589,62 @@ function testSinkMergeReRebasesOnFfRace() {
   }
 }
 
+// #414: ONLINE bare-remote sink — the #397.1 branch-delete choreography must fire in order
+// (push --delete BEFORE merge-base --is-ancestor BEFORE branch -D) and leave NO local branch and
+// NO spurious branch-worktree-resolved closure violation. We trace git's own order with a wrapper
+// `git` shim that logs each invocation, then assert the recorded order.
+function testSinkMergeBareRemoteDeleteOrder() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-bare-order-')));
+  const remotePath = initGitRepoWithBareRemote(tmp);
+  const traceLog = path.join(tmp + '-trace.log');
+  const binDir = path.join(tmp + '-bin');
+  fs.mkdirSync(binDir, { recursive: true });
+  // A `git` wrapper that appends its argv to traceLog then execs the real git. Placed first on PATH.
+  const realGit = spawnSync('which', ['git'], { encoding: 'utf8' }).stdout.trim() || '/usr/bin/git';
+  const shim = path.join(binDir, 'git');
+  fs.writeFileSync(shim,
+    '#!/bin/sh\n' +
+    'printf "%s\\n" "$*" >> "' + traceLog + '"\n' +
+    'exec "' + realGit + '" "$@"\n');
+  fs.chmodSync(shim, 0o755);
+  const env = { ...process.env, ...GIT_ISOLATION_ENV, PATH: binDir + ':' + process.env.PATH,
+    GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' };
+  try {
+    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-4140'], { env });
+    fs.writeFileSync(path.join(tmp, 'feat.txt'), 'impl');
+    spawnSync('git', ['-C', tmp, 'add', 'feat.txt'], { env });
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'feat: impl 4140'], { env });
+    spawnSync('git', ['-C', tmp, 'push', '-u', 'origin', 'workflow/issue-4140'], { env });
+    fs.writeFileSync(traceLog, ''); // reset the trace right before the sink call
+    const result = spawnSync(process.execPath, [sinkMergeScript, '--project', 'issue-4140', '--branch', 'workflow/issue-4140'], {
+      cwd: tmp, encoding: 'utf8',
+      env: { ...env, KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_WORKFLOW_SKIP_TESTGATE: '1' }
+    });
+    assert(result.status === 0, '#414: bare-remote sink must exit 0, got ' + result.status + '\nstderr: ' + result.stderr);
+    const trace = fs.readFileSync(traceLog, 'utf8');
+    const iDelete = trace.indexOf('push origin --delete');
+    const iAncestor = trace.indexOf('merge-base --is-ancestor');
+    const iBranchD = trace.search(/branch -D /);
+    assert(iDelete >= 0, '#414: sink must run `push origin --delete` on the online path, trace:\n' + trace);
+    assert(iAncestor >= 0, '#414: sink must run `merge-base --is-ancestor` verification, trace:\n' + trace);
+    assert(iBranchD >= 0, '#414: sink must force-delete the local branch with `branch -D`, trace:\n' + trace);
+    assert(iDelete < iAncestor, '#414: `push --delete` must fire BEFORE `merge-base --is-ancestor`');
+    assert(iAncestor < iBranchD, '#414: `merge-base --is-ancestor` must fire BEFORE `branch -D`');
+    // No spurious branch-worktree-resolved: the local feature branch is gone and the receipt's
+    // branch_removed is 'removed' (the #397.1 fix), so no closure violation is recorded.
+    const branchList = spawnSync('git', ['-C', tmp, 'branch', '--list', 'workflow/issue-4140'], { encoding: 'utf8', env }).stdout.trim();
+    assert(branchList === '', '#414: local feature branch must be deleted (no leftover → no branch-worktree-resolved alarm), got: ' + branchList);
+    assert(!/branch-worktree-resolved/.test(result.stdout + result.stderr),
+      '#414: no spurious branch-worktree-resolved violation, got:\n' + result.stdout + result.stderr);
+    console.log('testSinkMergeBareRemoteDeleteOrder: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(remotePath, { recursive: true, force: true });
+    try { fs.rmSync(binDir, { recursive: true, force: true }); } catch (_) {}
+    try { fs.rmSync(traceLog, { force: true }); } catch (_) {}
+  }
+}
+
 function testFastE2EMergeFullChain() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-e2e-fast-')));
   const kwRoot = tmp + '.kw';
@@ -11291,6 +11347,7 @@ function buildRegistry() {
   add('testSinkMergeOfflineSkipsPublishGuard',            testSinkMergeOfflineSkipsPublishGuard);
   add('testSinkMergeNonDefaultBranchMaster',              testSinkMergeNonDefaultBranchMaster);
   add('testSinkMergeReRebasesOnFfRace',                   testSinkMergeReRebasesOnFfRace);
+  add('testSinkMergeBareRemoteDeleteOrder',               testSinkMergeBareRemoteDeleteOrder);
   add('testFastE2EMergeFullChain',                        testFastE2EMergeFullChain);
   add('testE2EGitHubPrFullChain',                         testE2EGitHubPrFullChain);
   add('testParallelIssueIndependence',                    testParallelIssueIndependence);
