@@ -195,10 +195,28 @@ the manifest, `status` returns `active:false` / `nextRoute:'orient'` → route t
 likewise follow `nextRoute`.
 
 **Legality rule:** multiple `in_progress` ledger rows are legal ONLY with a valid `active-batch.json`
-whose UNSEALED `members` set matches the `in_progress` set; otherwise a typed refusal
+whose UNSEALED `members` set matches the `in_progress` set, **or** (#377) a valid `running-set.json`
+whose node set matches it; otherwise a typed refusal
 (`orphan_multi_in_progress`). Batch lifecycle states: `opening → open → sealed → joined`
 (the dead `dispatched` state was removed in #303; the crash-safe `opening` marker replaces it;
 `joining` was removed in #364 with the write-role merge path).
+
+**Per-node running-set scheduler (#377):** the post-#364 per-node successor to the batch path —
+opens/closes INDIVIDUAL nodes against `.cache/running-set.json` so a downstream node unblocks the
+moment ITS deps close (not per whole frontier). Additive + opt-in; serial behavior is byte-identical
+when `KAOLA_LANE_CONTAINMENT` is off (default). Loop: **`open-ready [--max N]`**
+(`node "$KAOLA_SCRIPTS/kaola-workflow-adaptive-node.js" open-ready --project {project} --json`) flips up
+to N ready nodes (priority-ordered by `longestPathToSink`), records per-node baselines, two-phase writes
+the manifest (`opening` → flip ledger → `open`) — read-only nodes fan out, a write node opens ALONE (the
+permanent serial fallback; `reason:'write_node_exclusive'`/`'write_awaits_drain'` means wait); dispatch
+each opened node `run_in_background` (#374); on each completion `record-evidence` → **`close-node
+--node-id {id}`** (same evidence-shape → `--barrier-check` → complete → compliance → selector-arm
+contract, removes the node, returns `newlyReady`) → `open-ready` again. A `main-session-gate` is never an
+`open-ready` member. Crash → `running-set.json` `state:'opening'` is **reconcilable**
+(`running_set_opening_incomplete`, never orphan) → **`reconcile-running-set`** rolls forward flipped rows
+/ back pending rows; `orient` reconstructs the live set from it. Honesty: state-level only — verify
+wall-clock via node-timings.jsonl (#373); the cross-lane write+read overlap stays dormant until
+`KAOLA_LANE_CONTAINMENT` is on (#376).
 
 **Crash/resume:** `opening` → run `reconcile` (roll-forward) or `reconcile --abort` (roll-back).
 `open` → re-dispatch any member whose evidence is absent (baselines idempotent); present evidence but

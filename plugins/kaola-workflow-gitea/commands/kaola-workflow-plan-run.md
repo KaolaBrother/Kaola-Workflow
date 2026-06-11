@@ -328,10 +328,69 @@ would refuse `no_active_batch`). `nextRoute:'reconcile'` → run `reconcile`; `n
 `join`.
 
 **Legality rule:** multiple `in_progress` ledger rows are legal ONLY when a valid `active-batch.json`
-exists whose UNSEALED `members` set matches the `in_progress` set. Any other configuration is a typed
+exists whose UNSEALED `members` set matches the `in_progress` set, **or** (#377) a valid
+`running-set.json` exists whose node set matches it. Any other configuration is a typed
 refusal (`orphan_multi_in_progress`). The batch lifecycle states are:
 `opening → open → sealed → joined` (the dead `dispatched` state was removed in #303; the crash-safe
 `opening` transaction marker replaces it; `joining` was removed in #364 with the write-role merge path).
+
+### Per-node running-set scheduler (#377) — event-driven cross-frontier parallelism
+
+The batch path above advances **one whole frontier at a time**: `top-up` only opens same-frontier
+siblings, so a downstream node waits for its entire frontier to drain. The **running-set scheduler**
+is the post-#364 per-node successor: it opens and closes **individual** nodes against
+`kaola-workflow/{project}/.cache/running-set.json`, so a downstream node unblocks the moment ITS deps
+close — even while a disjoint sibling is still `in_progress`. It is **additive and opt-in**: the
+single-node and batch paths above are unchanged, and the serial behavior is **byte-identical** when
+`KAOLA_LANE_CONTAINMENT` is off (the default). Prefer it when the harness supports `run_in_background`
+dispatch (#374) and the plan has independent lanes that would otherwise serialize behind a frontier.
+
+- **`open-ready [--max N]`** — flips up to N ready nodes (priority-ordered by `next-action`'s
+  `longestPathToSink`, so the critical path opens first), records per-node baselines, and two-phase
+  writes the manifest (`opening` → flip ledger → `open`). With containment **off**, it fans out
+  **read-only** nodes concurrently (they share the parent tree and never write) but opens a **write**
+  node ALONE (one at a time, never alongside a read or another write) — today's serial behavior, the
+  permanent fallback. Returns `{opened:[{id,role,kind,...}], runningSet:[...ids]}`; `opened:[]` with
+  `reason:'write_node_exclusive'`/`'write_awaits_drain'` means a write node must run alone — wait.
+  ```bash
+  node "$KAOLA_SCRIPTS/kaola-gitea-workflow-adaptive-node.js" open-ready \
+    --project {project} --json
+  ```
+- **dispatch** every opened node `run_in_background:true` (#374), one `Agent()` per node (`subagent_type`
+  = role, `model` from the returned descriptor, `Working directory: ${ACTIVE_WORKTREE_PATH}`).
+- on **each** completion notification: `record-evidence --project {project} --node-id {id}` (parent-side,
+  one canonical `.cache/{id}.md`), then **`close-node --node-id {id}`** — same evidence-shape →
+  `--barrier-check` → ledger-complete → compliance → selector-arm contract as the serial close, then it
+  removes the node from the running set and returns `{closed, newlyReady:[...], allDone}`. Then run
+  `open-ready` again to fill the freed slot and dispatch the newly-ready nodes. Loop until `allDone`.
+  ```bash
+  node "$KAOLA_SCRIPTS/kaola-gitea-workflow-adaptive-node.js" close-node \
+    --project {project} --node-id {id} --json
+  ```
+- **Drain points unchanged:** a `main-session-gate` (#334) is never an `open-ready` member (it opens on
+  the single-node path); consent/security/test_thrash halts and plan-repair stop new dispatch, drain the
+  running set, then proceed.
+- **Crash/resume:** a crash mid-`open-ready` leaves `running-set.json` in `state:'opening'`. `orient`
+  (and `parallel-batch status`) flag it **reconcilable** (`running_set_opening_incomplete`), never an
+  orphan — run **`reconcile-running-set`** to roll forward the rows that flipped to `in_progress` and
+  roll back those still `pending`, promoting the set to `open`. `orient` reconstructs the live set from
+  `running-set.json` on every resume.
+  ```bash
+  node "$KAOLA_SCRIPTS/kaola-gitea-workflow-adaptive-node.js" reconcile-running-set \
+    --project {project} --json
+  ```
+- **Honesty:** state-level transitions are all that the test suite proves. Wall-clock overlap depends on
+  real background dispatch — verify it on a real run via `node-timings.jsonl` (#373); the scripts never
+  spawn agents, so they never overclaim concurrency. The cross-lane **write+read** overlap the design
+  envisions requires the #376 lane-containment worktree primitive and stays **dormant** until
+  `KAOLA_LANE_CONTAINMENT` is enabled.
+
+**Crash/resume:** the batch state is fully recoverable from durable artifacts. `opening` → run
+`reconcile` (roll-forward to `open`) or `reconcile --abort` (roll-back). `open` → re-dispatch any
+member whose evidence is absent (baselines idempotent); a member with present evidence but an
+`in_progress` ledger row → run `seal-member` only; if the frontier is not yet drained → `top-up`.
+`sealed` → run `join` (idempotent). `joined` → delete manifest, re-enter `next-action`.
+
 
 **Crash/resume:** the batch state is fully recoverable from durable artifacts. `opening` → run
 `reconcile` (roll-forward to `open`) or `reconcile --abort` (roll-back). `open` → re-dispatch any

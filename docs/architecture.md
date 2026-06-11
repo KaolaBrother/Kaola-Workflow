@@ -167,6 +167,30 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   `--barrier-check` sees normal `complete` rows after `join`. Full design at
   `docs/investigations/2026-06-07-parallel-ready-set-execution-design.md`.
 
+  **Per-node running-set scheduler — parallelism v2 (issue #377).** The batch machine above
+  advances **one whole frontier at a time** (`top-up` opens only same-frontier siblings). The
+  running-set scheduler is the post-#364 **per-node** successor: `adaptive-node.js` gains
+  `open-ready [--max N]`, `close-node --node-id`, and `reconcile-running-set` subcommands that
+  open and close **individual** nodes against a `kaola-workflow/{project}/.cache/running-set.json`
+  manifest (`{state:'opening'|'open', nodes:[{id,role,kind,baseline,opening?,openedAt?}]}`), so a
+  downstream node unblocks the moment ITS dependencies close — even while a disjoint sibling is
+  still `in_progress`. `open-ready` flips ready nodes priority-ordered by `next-action`'s additive
+  `longestPathToSink` field (critical-path list scheduling), records per-node baselines, and
+  two-phase writes the manifest (`opening` → flip ledger → `open`) exactly like `open-batch`.
+  `close-node` runs the same evidence-shape → `commit-node` barrier → ledger-complete → compliance
+  → selector-arm contract as the serial close, removes the node, and returns the newly-ready
+  frontier. The scheduler is **additive and opt-in**: the single-node and batch paths are
+  unchanged, and the serial behavior is **byte-identical** when `KAOLA_LANE_CONTAINMENT` is off
+  (the default) — read-only nodes fan out (they share the parent tree and never write) while a
+  write node opens **alone** (the permanent serial fallback). The cross-lane write+read overlap
+  the design envisions stays **dormant**, gated on the #376 lane-containment worktree primitive.
+  The **AC#5 / #293 legality re-keys to the running set**: `crossCheckStatus` and `orient` accept
+  `in_progress` rows matching the running-set node set (`valid_running_set`) as well as the batch
+  member set, and route a crashed `opening` running set to `reconcile-running-set`
+  (`running_set_opening_incomplete`, never an orphan); `orient` reconstructs the live set from the
+  manifest on every resume. Wall-clock overlap is claimed only via `node-timings.jsonl` (#373) on
+  a real run — the scripts never spawn agents, so they never overclaim concurrency.
+
   **Enforcement boundary (script-enforced, #231).** The validator enforces gate
   *presence* statically at freeze: post-dominance proves a `code-reviewer` sits on
   every path from each code-producing node to the unique sink, and a `security-reviewer`
