@@ -8,7 +8,32 @@ const { execFileSync, spawnSync } = require('child_process');
 const forge = require('./kaola-gitea-forge');
 // #354 (#353-rest): crash-safe atomic durable-state write (tmp + fsync + rename).
 const adaptiveSchema = require('./kaola-workflow-adaptive-schema');
-const { getCoordRoot, readActiveFolders } = require('./kaola-gitea-workflow-claim');
+// #394: resolve the default branch (offline-safe probe chain) so the fallback PR sink targets the
+// real default — the old hardcoded targetBranch:'main' broke master/other-default repos.
+const { getCoordRoot, readActiveFolders, defaultBranch } = require('./kaola-gitea-workflow-claim');
+
+// #394: resolve the project folder — LIVE first, then the ARCHIVE folder (the standard exit-3 lane
+// archives before the fallback sink runs).
+function resolveProjectDir(root, project) {
+  const live = path.join(root, 'kaola-workflow', project);
+  if (fs.existsSync(live)) return live;
+  const archived = path.join(root, 'kaola-workflow', 'archive', project);
+  if (fs.existsSync(archived)) return archived;
+  return live;
+}
+
+// #394: record pr_url to a DURABLE location BEFORE any throwable step after PR creation, so a later
+// crash never leaves an orphaned open PR invisible to watch-pr.
+function recordPrResult(projectDir, project, prUrl, prNumber, branch) {
+  try {
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(cacheDir, 'sink-pr-result.json'),
+      JSON.stringify({ project, branch, pr_url: prUrl, pr_number: prNumber, timestamp: new Date().toISOString() }, null, 2) + '\n'
+    );
+  } catch (_) { /* best-effort durable record; never block the PR flow */ }
+}
 
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
 
@@ -176,10 +201,26 @@ function ensurePullRequest(args, opts) {
 
   const project = forge.discoverProject(options);
 
+  // #394: resolve the PR target branch from the default branch (a sink-fallback.json receipt from
+  // sink-merge may carry the already-resolved branch; prefer it, else probe). The prior hardcoded
+  // 'main' made the fallback PR sink fail on a master-default repo.
+  const projectFolder = resolveProjectDir(root, args.project);
+  let targetBranch = 'main';
+  try {
+    const fbPath = path.join(projectFolder, '.cache', 'sink-fallback.json');
+    if (fs.existsSync(fbPath)) {
+      const fb = JSON.parse(fs.readFileSync(fbPath, 'utf8'));
+      if (fb && typeof fb.resolved_default_branch === 'string' && fb.resolved_default_branch) targetBranch = fb.resolved_default_branch;
+    }
+  } catch (_) {}
+  if (targetBranch === 'main') {
+    try { targetBranch = defaultBranch(root) || 'main'; } catch (_) { targetBranch = 'main'; }
+  }
+
   const existing = findPullRequestForBranch(args.branch);
   const pr = existing || forge.createPullRequest({
     sourceBranch: args.branch,
-    targetBranch: 'main',
+    targetBranch: targetBranch,
     title: args.title || ('Workflow branch ' + args.branch),
     description: args.description || (args.issue ? 'Closes #' + args.issue : '')
   });
@@ -187,8 +228,13 @@ function ensurePullRequest(args, opts) {
   assert(pr && pr.pr_number, 'Gitea PR creation did not return a number');
   assert(pr.pr_url || pr.web_url, 'Gitea PR creation did not return a URL');
 
-  const stateFile = path.join(root, 'kaola-workflow', args.project, 'workflow-state.md');
-  const summaryFile = path.join(root, 'kaola-workflow', args.project, 'finalization-summary.md');
+  // #394 RECORD-BEFORE-THROW: persist pr_url durably IMMEDIATELY after PR creation, BEFORE the
+  // throwable updateStateSinkBlock / appendSummary / metadata commit+push.
+  recordPrResult(projectFolder, args.project, pr.pr_url || pr.web_url, pr.pr_number, args.branch);
+
+  // #394: target the resolved project folder (archive folder in the exit-3 lane) for durable writes.
+  const stateFile = path.join(projectFolder, 'workflow-state.md');
+  const summaryFile = path.join(projectFolder, 'finalization-summary.md');
   updateStateSinkBlock(stateFile, pr.pr_url || pr.web_url, pr.pr_number, project.full_name, project.html_url);
   appendSummary(summaryFile, pr.pr_url || pr.web_url, pr.pr_number);
   if (!skipMetadataCommit) {

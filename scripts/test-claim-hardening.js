@@ -83,6 +83,44 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// --- #398.1 assertSafeBranchArg (THROW at creation sites) / #398.2 / #403.8 --
+{
+  const { assertSafeBranchArg, assertNoNewline, classifyWorktreeError } = require('./kaola-workflow-claim.js');
+  let threw = false;
+  try { assertSafeBranchArg('-evil', 'test'); } catch (_) { threw = true; }
+  assert(threw, '#398.1: assertSafeBranchArg throws on a leading-dash branch');
+  threw = false;
+  try { assertSafeBranchArg('main\nworktree_path: /tmp/EVIL', 'test'); } catch (_) { threw = true; }
+  assert(threw, '#398.1: assertSafeBranchArg throws on a newline-bearing branch (field injection)');
+  let ok = true;
+  try { assertSafeBranchArg('workflow/issue-1', 'test'); } catch (_) { ok = false; }
+  assert(ok, '#398.1: assertSafeBranchArg accepts a normal branch');
+
+  threw = false;
+  try { assertNoNewline('a\nb', 'worktree_path'); } catch (_) { threw = true; }
+  assert(threw, '#398.2: assertNoNewline throws on a newline value');
+  threw = false;
+  try { assertNoNewline('safe-value', 'branch'); } catch (_) { threw = true; }
+  assert(!threw, '#398.2: assertNoNewline accepts a single-line value');
+
+  assert(classifyWorktreeError("fatal: 'wt' already exists") === 'already_exists', '#403.8: already_exists classified');
+  assert(classifyWorktreeError('fatal: not a valid object name') === 'invalid_ref', '#403.8: invalid_ref classified');
+  assert(classifyWorktreeError('') === '', '#403.8: empty error → empty class');
+  assert(classifyWorktreeError('some weird error') === 'unclassified', '#403.8: unknown error → unclassified');
+}
+
+// --- #395.1 buildClosureReceipt undefined-skip (receipt-field-survival) ------
+{
+  const { buildClosureReceipt } = require('./kaola-workflow-claim.js');
+  const r = buildClosureReceipt('proj', 7, { roadmap_source_removed: undefined, roadmap_regenerated: 'regenerated' });
+  assert(r.roadmap_source_removed === 'failed', '#395.1: undefined step keeps the seeded failed default (field never vanishes)');
+  assert(r.roadmap_regenerated === 'regenerated', '#395.1: a defined step still overwrites the default');
+  assert(!('close_disposition' in r), '#395.1/#396.4: undefined close_disposition is not emitted');
+  const r2 = buildClosureReceipt('proj', 7, { close_disposition: 'close_pending', keep_open_requested: true });
+  assert(r2.close_disposition === 'close_pending', '#396.4: a set close_disposition survives into the receipt');
+  assert(r2.keep_open_requested === true, '#396.3: keep_open_requested survives into the receipt');
+}
+
 if (failed > 0) {
   console.error('claim-hardening tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;

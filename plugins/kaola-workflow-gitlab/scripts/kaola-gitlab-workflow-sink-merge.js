@@ -38,14 +38,61 @@ function parseArgs(argv) {
     if (argv[i] === '--branch' && argv[i + 1]) { args.branch = argv[++i]; continue; }
     if (argv[i] === '--issue' && argv[i + 1]) { args.issue = parseInt(argv[++i], 10); continue; }
     // #369: bundle member set — all-or-nothing closure closes EVERY member, not just --issue.
+    // #396.5: dedupe (sorted + unique) so a duplicate member can't land in two buckets.
     if (argv[i] === '--issue-numbers' && argv[i + 1]) {
-      args.issueNumbers = argv[++i].split(',').map(s => parseInt(s.trim(), 10)).filter(n => Number.isInteger(n) && n > 0);
+      const nums = argv[++i].split(',').map(s => parseInt(s.trim(), 10)).filter(n => Number.isInteger(n) && n > 0);
+      args.issueNumbers = Array.from(new Set(nums)).sort((a, b) => a - b);
       continue;
     }
     if (argv[i] === '--project' && argv[i + 1]) { args.project = argv[++i]; continue; }
     if (argv[i] === '--keep-issue-open') { args.keepIssueOpen = true; continue; } // #336
   }
   return args;
+}
+
+// #396.5: returns true iff issue N is already CLOSED on the forge (classify a close that exited as a
+// failure during an idempotent re-run). Any probe error returns false (fail toward 'failed').
+function probeIssueClosed(issueNumber, opts) {
+  if (OFFLINE || issueNumber == null) return false;
+  try {
+    const st = forge.viewIssue(issueNumber, opts || {});
+    return String((st && st.state) || '').toLowerCase() === 'closed';
+  } catch (_) { return false; }
+}
+
+// #393a: derive the bundle member set when --issue-numbers is ABSENT (flag was caller-trust-only).
+function readStateIssueNumbers(mainRoot, project) {
+  const candidates = [
+    path.join(mainRoot, 'kaola-workflow', project, 'workflow-state.md'),
+    path.join(mainRoot, 'kaola-workflow', 'archive', project, 'workflow-state.md'),
+  ];
+  for (const f of candidates) {
+    let raw = '';
+    try { raw = fs.readFileSync(f, 'utf8'); } catch (_) { continue; }
+    const m = raw.match(/^issue_numbers:\s*(.+)\s*$/m);
+    if (!m) continue;
+    const nums = m[1].split(',').map(s => parseInt(s.trim(), 10)).filter(n => Number.isInteger(n) && n > 0);
+    if (nums.length) return Array.from(new Set(nums)).sort((a, b) => a - b);
+  }
+  return null;
+}
+
+function deriveMemberSet(mainRoot, project, cliIssueNumbers) {
+  const fromFlag = Array.isArray(cliIssueNumbers) && cliIssueNumbers.length ? cliIssueNumbers : null;
+  const fromState = readStateIssueNumbers(mainRoot, project);
+  if (fromFlag) {
+    if (fromState && fromState.join(',') !== fromFlag.join(',')) {
+      process.stderr.write('sink-merge: WARNING: --issue-numbers (' + fromFlag.join(',') +
+        ') differs from state issue_numbers (' + fromState.join(',') + ') — flag wins.\n');
+      return { members: fromFlag, source: 'flag', mismatch: true };
+    }
+    return { members: fromFlag, source: 'flag', mismatch: false };
+  }
+  if (fromState) {
+    process.stderr.write('sink-merge: --issue-numbers absent — derived bundle member set from state: ' + fromState.join(',') + '\n');
+    return { members: fromState, source: 'state_fallback', mismatch: false };
+  }
+  return { members: [], source: 'none', mismatch: false };
 }
 
 function field(content, name) {
@@ -201,24 +248,32 @@ function assertBranchPushedToUpstream(mainRoot, branch) {
     { encoding: 'utf8' }).trim();
   throw new Error(
     "Branch '" + branch + "' has " + ahead + " unpushed commit(s) ahead of '" + upstream + "'.\n" +
-    'Push before merging: git push origin ' + branch + '\n\n' +
+    // #397.2: after a conflict re-run, attempt 1 already pushed the PRE-rebase tip, so a plain push is
+    // rejected non-fast-forward. The correct push is force-with-lease.
+    'Push before merging: git push --force-with-lease origin ' + branch + '\n' +
+    '(a plain `git push` is rejected non-fast-forward if attempt 1 already pushed a pre-rebase tip).\n\n' +
     'Unpushed commits:\n  ' + commits.split('\n').join('\n  ')
   );
 }
 
+// #397.4: fastForwardMain is reached ONLY from the legacy `runDirectMerge({skipGit})` test path here
+// (the live merge path is the default-branch-resolved ffMergeLoop). Canonical has zero hardcoded
+// 'main'/'origin/main' literals post-#350; this port's hardcoded literals are removed too — the
+// default branch is resolved (opts.defBranch, falling back to defaultBranch). Under skipGit the
+// gitExec is a stub so the resolution is mocked, but the literals no longer drift from canonical.
 function fastForwardMain(args, opts) {
   const options = opts || {};
   const gitExec = options.gitExec || execFileSync;
   if (options.skipGit) return;
-  // single-pass merge (legacy only)
+  const defBranch = options.defBranch || defaultBranch(mainRootFromCoord(getCoordRoot(options.root || getRoot())));
   gitExec('git', ['fetch', 'origin'], { encoding: 'utf8' });
   assertCleanWorktree(gitExec);
   gitExec('git', ['checkout', args.branch], { encoding: 'utf8' });
-  gitExec('git', ['rebase', 'origin/main'], { encoding: 'utf8' });
-  gitExec('git', ['checkout', 'main'], { encoding: 'utf8' });
+  gitExec('git', ['rebase', 'origin/' + defBranch], { encoding: 'utf8' });
+  gitExec('git', ['checkout', defBranch], { encoding: 'utf8' });
   gitExec('git', ['pull', '--ff-only'], { encoding: 'utf8' });
   gitExec('git', ['merge', '--ff-only', '--', args.branch], { encoding: 'utf8' });
-  gitExec('git', ['push', 'origin', 'main'], { encoding: 'utf8' });
+  gitExec('git', ['push', 'origin', defBranch], { encoding: 'utf8' });
 }
 
 function closeLinkedIssue(root, project, issueIid, opts) {
@@ -268,7 +323,11 @@ function doRebase(args, alreadyUpToDate, mainRoot, defBranch) {
         '  1. Run: git rebase --abort\n' +
         '  2. Resolve conflicts manually on the feature branch\n' +
         '  3. Re-run: git rebase origin/' + defBranch + '\n' +
-        '  4. Re-invoke sink-merge after conflicts are resolved'
+        // #397.2: post-rebase push must be force-with-lease (a plain push is rejected non-fast-forward
+        // if attempt 1 already pushed a pre-rebase tip); Step 0 already removed the linked worktree.
+        '  4. Push the rebased branch: git push --force-with-lease origin ' + args.branch + '\n' +
+        '  5. Re-invoke sink-merge after conflicts are resolved\n' +
+        '  Note: Step 0 already removed the linked worktree (often your cwd); resolve in ' + mainRoot + '.'
       );
     }
     runTestGate(mainRoot);
@@ -294,7 +353,10 @@ function ffMergeLoop(args, mainRoot, defBranch) {
       execFileSync('git', ['-C', mainRoot, 'rebase', 'origin/' + defBranch], { encoding: 'utf8' });
     } catch (_) {
       try { execFileSync('git', ['-C', mainRoot, 'rebase', '--abort'], { encoding: 'utf8' }); } catch (_) {}
-      process.stderr.write('FF race: re-rebase onto origin/' + defBranch + ' conflicted — manual resolution required.\n');
+      // #397.2: state the worktree/cwd disposition + force-with-lease push.
+      process.stderr.write('FF race: re-rebase onto origin/' + defBranch + ' conflicted — manual resolution required.\n' +
+        '  Note: the linked worktree was already removed (Step 0); resolve in ' + mainRoot + ' (now on branch ' + args.branch + ').\n' +
+        '  After resolving, run: git push --force-with-lease origin ' + args.branch + '\n');
       return false;
     }
     try { runTestGate(mainRoot); } catch (_) {
@@ -351,20 +413,27 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch) {
     try {
       execFileSync('git', ['-C', mainRoot, 'reset', '--hard', 'origin/' + defBranch], { encoding: 'utf8' });
     } catch (_) {}
-    // AND (same rationale as runDirectMerge early-exit): atomic rename means both dirs
-    // cannot co-exist; defense-in-depth guard for the post-merge cleanup receipt write.
+    // #394: the STANDARD lane archives the project BEFORE sink-merge runs, so the LIVE .cache is gone.
+    // Write the fallback receipt to the ARCHIVE .cache when archived (was "skipping receipt write" →
+    // the broken exit-3 chain); keep the live .cache write when the folder is still live.
     const liveProjectDir = path.join(mainRoot, 'kaola-workflow', args.project);
-    const archiveProjectDir = path.join(mainRoot, 'kaola-workflow', 'archive', args.project);
-    if (!fs.existsSync(liveProjectDir) && fs.existsSync(archiveProjectDir)) {
-      process.stderr.write('sink-merge: project archived (' + args.project + '), skipping receipt write\n');
-      return { exitCode: 3 };
+    const archiveDir = path.join(mainRoot, 'kaola-workflow', 'archive', args.project);
+    const wasArchived = !fs.existsSync(liveProjectDir) && fs.existsSync(archiveDir);
+    const receiptPath = wasArchived
+      ? path.join(archiveDir, '.cache', 'sink-fallback.json')
+      : path.join(liveProjectDir, '.cache', 'sink-fallback.json');
+    if (wasArchived) {
+      process.stderr.write('sink-merge: project archived (' + args.project + ') — fallback receipt written to archive .cache\n');
     }
-    const receiptPath = path.join(liveProjectDir, '.cache', 'sink-fallback.json');
     fs.mkdirSync(path.dirname(receiptPath), { recursive: true });
     fs.writeFileSync(receiptPath, JSON.stringify({
       project: args.project,
       branch: args.branch,
       issue_number: args.issue != null ? args.issue : null,
+      // #394: the fallback sink (sink-mr) needs the resolved default branch + full member set.
+      resolved_default_branch: defBranch,
+      issue_numbers: Array.isArray(args.issueNumbers) && args.issueNumbers.length ? args.issueNumbers : (args.issue ? [args.issue] : []),
+      archived: wasArchived,
       reason: token,
       timestamp: new Date().toISOString()
     }, null, 2) + '\n');
@@ -400,10 +469,26 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch) {
       try { forge.createIssueNote(readProjectInfo(root, args.project), args.issue, 'Merged via GitLab direct merge sink. Issue intentionally kept open (partial-close terminal); residual scope remains tracked here.', forgeOpts); } catch (_) {}
     } else {
       try { forge.createIssueNote(readProjectInfo(root, args.project), args.issue, 'Merged via GitLab direct merge sink.', forgeOpts); } catch (_) {}
-      try { forge.closeIssue(args.issue, forgeOpts); remoteIssueClosed = 'closed'; } catch (e) { remoteIssueClosed = 'failed'; process.stderr.write('sink-merge: WARNING: issue close failed for ' + args.issue + '; receipt.remote_issue_closed=failed. Manually run: glab issue close ' + args.issue + '\n'); }
+      try { forge.closeIssue(args.issue, forgeOpts); remoteIssueClosed = 'closed'; }
+      catch (e) {
+        // #396.5: a close that exits as failure on an ALREADY-CLOSED issue (idempotent re-run) is a
+        // SUCCESS — probe before declaring failure.
+        if (probeIssueClosed(args.issue, forgeOpts)) { remoteIssueClosed = 'already_closed'; }
+        else { remoteIssueClosed = 'failed'; process.stderr.write('sink-merge: WARNING: issue close failed for ' + args.issue + '; receipt.remote_issue_closed=failed. Manually run: glab issue close ' + args.issue + '\n'); }
+      }
     }
     // Claim-label removal runs in BOTH modes (claim release is wanted on keep-open).
     try { forge.updateIssue(args.issue, Object.assign({ unlabels: [forge.CLAIM_LABEL] }, forgeOpts)); claimLabelRemoved = 'removed'; } catch (_) { claimLabelRemoved = 'failed'; }
+
+    // #403.6: keep-open BUNDLE arm — per-member note + label removal (the close loop is gated
+    // !keepIssueOpen, so non-primary keep-open members otherwise got nothing).
+    if (keepIssueOpen && Array.isArray(args.issueNumbers) && args.issueNumbers.length > 1) {
+      for (const n of args.issueNumbers) {
+        if (n === args.issue) continue;
+        try { forge.createIssueNote(readProjectInfo(root, args.project), n, 'Merged via GitLab direct merge sink (bundle member). Issue intentionally kept open (partial-close terminal); residual scope remains tracked here.', forgeOpts); } catch (_) {}
+        try { forge.updateIssue(n, Object.assign({ unlabels: [forge.CLAIM_LABEL] }, forgeOpts)); } catch (_) {}
+      }
+    }
   }
 
   // #369 BUNDLE all-or-nothing closure: close EVERY member of issue_numbers, not just the primary.
@@ -425,17 +510,35 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch) {
         closed.push(n);
         try { forge.updateIssue(n, Object.assign({ unlabels: [forge.CLAIM_LABEL] }, forgeOpts)); } catch (_) {}
       } catch (e) {
-        failed.push(n);
-        process.stderr.write('sink-merge: WARNING: bundle member issue close failed for ' + n + '; recorded in failed_issue_closures. Manually run: glab issue close ' + n + '\n');
+        // #396.5: classify already-closed (idempotent re-run) as SUCCESS, not a failed closure.
+        if (probeIssueClosed(n, forgeOpts)) {
+          closed.push(n);
+          try { forge.updateIssue(n, Object.assign({ unlabels: [forge.CLAIM_LABEL] }, forgeOpts)); } catch (_) {}
+        } else {
+          failed.push(n);
+          process.stderr.write('sink-merge: WARNING: bundle member issue close failed for ' + n + '; recorded in failed_issue_closures. Manually run: glab issue close ' + n + '\n');
+        }
       }
     }
     bundleBuckets = { closed_issues: closed.sort((a, b) => a - b), failed_issue_closures: failed.sort((a, b) => a - b), open_issues: [] };
     remoteIssueClosed = failed.length === 0 ? 'closed' : 'partial';
   }
   // Step 9 — Delete branch
-  try { execFileSync('git', ['-C', mainRoot, 'branch', '-d', '--', args.branch], { encoding: 'utf8' }); branchRemoved = 'removed'; } catch (_) { branchRemoved = 'failed'; }
+  // #397.1: delete the REMOTE branch first, then verify the local branch is merged into defBranch and
+  // force-delete with -D (the post-race-recovery local branch diverges from upstream → plain `-d`
+  // refuses on EVERY successful race recovery, leaving branch_removed:'failed' + a spurious violation).
   if (!OFFLINE) {
     try { execFileSync('git', ['-C', mainRoot, 'push', 'origin', '--delete', '--', args.branch], { encoding: 'utf8' }); } catch (_) {}
+  }
+  let mergedIntoDefault = false;
+  try {
+    execFileSync('git', ['-C', mainRoot, 'merge-base', '--is-ancestor', args.branch, defBranch], { encoding: 'utf8' });
+    mergedIntoDefault = true;
+  } catch (_) { mergedIntoDefault = false; }
+  if (mergedIntoDefault) {
+    try { execFileSync('git', ['-C', mainRoot, 'branch', '-D', '--', args.branch], { encoding: 'utf8' }); branchRemoved = 'removed'; } catch (_) { branchRemoved = 'failed'; }
+  } else {
+    try { execFileSync('git', ['-C', mainRoot, 'branch', '-d', '--', args.branch], { encoding: 'utf8' }); branchRemoved = 'removed'; } catch (_) { branchRemoved = 'failed'; }
   }
 
   // Emit closure receipt
@@ -471,7 +574,10 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch) {
     receipt.open_issues = bundleBuckets.open_issues;
   }
   const invariants = checkClosureInvariants(mainRoot, receipt, archiveDest);
-  process.stdout.write(JSON.stringify({ status: 'merged', closure_receipt: receipt, closure_invariants: invariants }) + '\n');
+  // #393a: surface the member-set source.
+  const emit = { status: 'merged', closure_receipt: receipt, closure_invariants: invariants };
+  if (args.member_source) emit.member_source = args.member_source;
+  process.stdout.write(JSON.stringify(emit) + '\n');
 }
 
 function runDirectMerge(args, opts) {
@@ -500,6 +606,11 @@ function runDirectMerge(args, opts) {
 
   // New pipeline
   const mainRoot = mainRootFromCoord(getCoordRoot(root));
+  // #393a: derive the member set BEFORE the destructive worktree removal — when --issue-numbers is
+  // absent, fall back to the state's issue_numbers so a flag-less bundle sink still closes every member.
+  const memberSet = deriveMemberSet(mainRoot, args.project, args.issueNumbers);
+  args.issueNumbers = memberSet.members;
+  args.member_source = memberSet.source;
   const defBranch = defaultBranch(mainRoot); // #350: resolve origin/HEAD, not hardcoded main
 
   // Early-exit: if project is already archived, return exit 3 without touching git.
@@ -508,7 +619,24 @@ function runDirectMerge(args, opts) {
   const _liveDir = path.join(mainRoot, 'kaola-workflow', args.project);
   const _archiveDir = path.join(mainRoot, 'kaola-workflow', 'archive', args.project);
   if (!fs.existsSync(_liveDir) && fs.existsSync(_archiveDir)) {
-    process.stderr.write('sink-merge: project archived (' + args.project + '), skipping merge\n');
+    process.stderr.write('sink-merge: project archived (' + args.project + ') — fallback receipt written to archive .cache\n');
+    // #394: write the durable fallback receipt to the ARCHIVE .cache so the exit-3 fallback chain
+    // (sink-fallback → sink-mr) has a home. The old early-exit returned exit 3 with NO receipt,
+    // breaking the chain on a project that finalize already archived (the STANDARD lane).
+    try {
+      const receiptPath = path.join(_archiveDir, '.cache', 'sink-fallback.json');
+      fs.mkdirSync(path.dirname(receiptPath), { recursive: true });
+      fs.writeFileSync(receiptPath, JSON.stringify({
+        project: args.project,
+        branch: args.branch,
+        issue_number: args.issue != null ? args.issue : null,
+        resolved_default_branch: defBranch,
+        issue_numbers: Array.isArray(args.issueNumbers) && args.issueNumbers.length ? args.issueNumbers : (args.issue ? [args.issue] : []),
+        archived: true,
+        reason: 'archived_before_sink',
+        timestamp: new Date().toISOString()
+      }, null, 2) + '\n');
+    } catch (_) {}
     return { exitCode: 3 };
   }
 

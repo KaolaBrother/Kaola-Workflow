@@ -25,7 +25,9 @@ const CLOSURE_RECEIPT_FIELDS = {
   roadmap_regenerated: ['regenerated', 'skipped', 'failed'],
   // #369: `partial` is the truthful ONLINE token for a bundle where some members closed and some
   // did not (online must never read `skipped_offline`). `skipped_offline` stays for the offline path.
-  remote_issue_closed: ['closed', 'already_closed', 'kept_open', 'partial', 'skipped_offline', 'failed'],
+  // #396 (D2): `close_pending` is the truthful token for the merge-lane finalize that runs BEFORE
+  // sink-merge closes members — the members are not yet closed, but not because of a partial failure.
+  remote_issue_closed: ['closed', 'already_closed', 'kept_open', 'partial', 'close_pending', 'skipped_offline', 'failed'],
   claim_label_removed: ['removed', 'already_absent', 'skipped_offline', 'failed'],
   worktree_removed: ['removed', 'missing', 'kept', 'failed'],
   branch_removed: ['removed', 'kept', 'failed'],
@@ -38,6 +40,17 @@ const CLOSURE_RECEIPT_FIELDS = {
   //   closed_issues:          numbers closed successfully (or already-closed)
   //   failed_issue_closures:  numbers whose remote close FAILED while online
   //   open_issues:            numbers probed STILL OPEN while online (recorded — never silently neither)
+  // #396 (D2) close-disposition qualifier (builder field so it SURVIVES into the receipt JSON):
+  //   close_disposition: 'close_pending' — set by cmdFinalize on the merge lane (members are not yet
+  //     closed because sink-merge runs AFTER finalize). checkClosureInvariants SKIPS the
+  //     remote-members-closed invariant when this is 'close_pending' (the members WILL close at sink).
+  //     sink-merge / watch-pr (post-sink) leave it UNSET, so the invariant fires there truthfully.
+  close_disposition: ['close_pending'],
+  // #396.3 keep-open intent (builder field). The archive side keys keep-open on args.keepOpen; the
+  // invariant checker must key on this RECORDED INTENT, not the mutable remote_issue_closed token
+  // (which flips to 'already_closed' when the issue was auto-closed on the forge — flipping the
+  // checker into the wrong branch). true = keep-open was REQUESTED for this finalize.
+  keep_open_requested: 'boolean',
 };
 
 // The ten closure invariants for a completed linked issue N. `id` is a stable

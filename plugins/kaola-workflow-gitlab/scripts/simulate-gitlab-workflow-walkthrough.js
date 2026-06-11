@@ -53,13 +53,13 @@ function testFallbackGuardsAfterArchive() {
     const archiveDest = path.join(tmpRoot, 'kaola-workflow', 'archive', 'fb-project');
     fs.renameSync(liveDir, archiveDest);
 
-    // Snapshot archive content before dispatch chain
-    const snapshot = {};
-    for (const f of fs.readdirSync(archiveDest)) {
-      snapshot[f] = fs.readFileSync(path.join(archiveDest, f), 'utf8');
-    }
+    // #394: snapshot the summary BEFORE the chain (the state file is now LEGITIMATELY mutated by
+    // sink-fallback — it flips sink:mr in the archive so the fallback chain has a home). The summary
+    // (and any other non-state file) must stay byte-unchanged.
+    const summarySnapshot = fs.readFileSync(path.join(archiveDest, 'finalization-summary.md'), 'utf8');
 
-    // Step 0: sink-merge on archived project — must exit 3, no live dir recreated
+    // Step 0: sink-merge on archived project — must exit 3, no live dir recreated.
+    // #394: it now writes a fallback receipt to the ARCHIVE .cache (was "skipping receipt write").
     const sinkScript = path.join(__dirname, 'kaola-gitlab-workflow-sink-merge.js');
     const smResult = spawnSync(process.execPath,
       [sinkScript, '--branch', 'workflow/fb-project', '--project', 'fb-project'],
@@ -67,29 +67,35 @@ function testFallbackGuardsAfterArchive() {
     assert.strictEqual(smResult.status, 3, 'sink-merge on archived project must exit 3');
     assert(!fs.existsSync(liveDir), 'sink-merge must not recreate live dir for archived project');
     assert((smResult.stderr || '').includes('project archived'), 'sink-merge stderr must mention project archived');
+    // #394: the fallback receipt now lives in the archive .cache (durable home for the exit-3 chain).
+    assert(fs.existsSync(path.join(archiveDest, '.cache', 'sink-fallback.json')),
+      '#394: sink-merge writes the fallback receipt to the archive .cache');
 
-    // Step 1: cmdSinkFallback — archived project should return updated: false
+    // Step 1: cmdSinkFallback — #394: archived project now OPERATES on the archived state (flips
+    // sink:mr there) instead of the old no-op, so the broken fallback chain converges. Returns
+    // updated:true + archived:true; the live dir is still never recreated.
     const fbResult = spawnSync(process.execPath,
       [claimScript, 'sink-fallback', '--project', 'fb-project'],
       { cwd: tmpRoot, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
     assert.strictEqual(fbResult.status, 0, 'sink-fallback should exit 0 on archived project');
     const fbParsed = JSON.parse(fbResult.stdout);
-    assert.strictEqual(fbParsed.updated, false, 'updated should be false');
-    assert.strictEqual(fbParsed.reason, 'project archived', 'reason should be project archived');
+    assert.strictEqual(fbParsed.updated, true, '#394: sink-fallback now updates the archived state');
+    assert.strictEqual(fbParsed.archived, true, '#394: sink-fallback reports it operated on the archive');
+    assert.strictEqual(fbParsed.sink, 'mr', '#394: sink flipped to mr in the archived state');
     assert(!fs.existsSync(liveDir), 'live dir must not be recreated by sink-fallback');
+    const archivedStateAfter = fs.readFileSync(path.join(archiveDest, 'workflow-state.md'), 'utf8');
+    assert(/^sink: mr$/m.test(archivedStateAfter), '#394: the archived state now reads sink: mr');
 
-    // Step 2: appendSummary on archived path — should return false, not recreate dir
+    // Step 2: appendSummary on the (absent) LIVE path — should return false, not recreate dir.
     const summaryFile = path.join(tmpRoot, 'kaola-workflow', 'fb-project', 'finalization-summary.md');
     const appendResult = sinkMr.appendSummary(summaryFile, 'https://gl.example/mr/99', 99);
-    assert.strictEqual(appendResult, false, 'appendSummary should return false on archived dir');
+    assert.strictEqual(appendResult, false, 'appendSummary should return false on absent live dir');
     assert(!fs.existsSync(path.join(tmpRoot, 'kaola-workflow', 'fb-project')),
       'appendSummary must not recreate live dir');
 
-    // Step 3: verify archive is byte-for-byte unchanged
-    for (const [f, originalContent] of Object.entries(snapshot)) {
-      const currentContent = fs.readFileSync(path.join(archiveDest, f), 'utf8');
-      assert.strictEqual(currentContent, originalContent, `archive file ${f} must be unchanged`);
-    }
+    // Step 3: the archived SUMMARY (and other non-state artifacts) stays byte-unchanged.
+    assert.strictEqual(fs.readFileSync(path.join(archiveDest, 'finalization-summary.md'), 'utf8'), summarySnapshot,
+      'archive finalization-summary.md must be unchanged (only workflow-state.md is the #394 fallback target)');
 
     console.log('testFallbackGuardsAfterArchive: PASSED');
   } finally {

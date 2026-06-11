@@ -594,7 +594,8 @@ withForge({
 }
 
 {
-  // Block 5: exit-3 with archived project — no live dir, no receipt written
+  // Block 5: exit-3 with archived project — #394: the fallback receipt is now written to the ARCHIVE
+  // .cache (was "no receipt written", which broke the exit-3 fallback chain). The live path stays clean.
   const sinkScript = path.join(__dirname, 'kaola-gitlab-workflow-sink-merge.js');
   const { root, branch } = setupRealRepo('exit3-archived-test', 'test-exit3-archived');
   const liveDir = path.join(root, 'kaola-workflow', 'test-exit3-archived');
@@ -609,7 +610,7 @@ withForge({
   assert(result.status === 3, `exit-3-archived test: expected exit 3, got ${result.status}. stderr: ${result.stderr}`);
   assert(!fs.existsSync(liveDir), 'exit-3-archived test: live dir must not be recreated');
   assert(!fs.existsSync(path.join(liveDir, '.cache', 'sink-fallback.json')), 'exit-3-archived test: receipt must not be at live path');
-  assert(!fs.existsSync(path.join(archiveDir, '.cache', 'sink-fallback.json')), 'exit-3-archived test: receipt must not be at archive path');
+  assert(fs.existsSync(path.join(archiveDir, '.cache', 'sink-fallback.json')), '#394: exit-3-archived receipt IS written to the archive .cache (durable fallback home)');
   assert((result.stderr || '').includes('project archived'), 'exit-3-archived test: stderr must mention project archived');
   console.log('exit-3-archived subprocess test passed');
 }

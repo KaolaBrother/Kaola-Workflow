@@ -6,6 +6,9 @@ const { execFileSync, spawnSync } = require('child_process');
 // #354 (#353-rest): crash-safe atomic durable-state write (tmp + fsync + rename) so a sink-block
 // rewrite can never leave a torn workflow-state.md (silently skipped by readActiveFolders).
 const adaptiveSchema = require('./kaola-workflow-adaptive-schema');
+// #394: resolve the default branch (origin/HEAD probe chain, offline-safe) so the fallback PR
+// sink targets master/other-default repos correctly — the old hardcoded `--base main` broke them.
+const { defaultBranch } = require('./kaola-workflow-claim.js');
 
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
 const CONFIG_PATH = path.join(os.homedir(), '.config', 'kaola-workflow', 'config.json');
@@ -97,7 +100,37 @@ function updateStateSinkBlock(stateFile, prUrl, prNumber) {
 }
 
 function appendSummary(summaryFile, prUrl, prNumber) {
+  // #394: guard — the STANDARD exit-3 lane archives the project before the fallback sink runs, so the
+  // live finalization-summary.md is gone. A raw appendFileSync then crashed with ENOENT AFTER the PR
+  // was created (the orphaned-open-PR bug). Skip silently when the parent dir is absent (the durable
+  // pr_url record is written separately, before any throwable step).
+  if (!fs.existsSync(path.dirname(summaryFile))) return;
   fs.appendFileSync(summaryFile, '\nPR URL: ' + prUrl + '\nPR number: ' + prNumber + '\n');
+}
+
+// #394: resolve the project folder — LIVE first, then the ARCHIVE folder (the standard exit-3 lane
+// archives before the fallback sink runs). Returns the dir that exists, or the live dir as the
+// default (callers presence-guard their writes).
+function resolveProjectDir(root, project) {
+  const live = path.join(root, 'kaola-workflow', project);
+  if (fs.existsSync(live)) return live;
+  const archived = path.join(root, 'kaola-workflow', 'archive', project);
+  if (fs.existsSync(archived)) return archived;
+  return live;
+}
+
+// #394: record pr_url to a DURABLE location BEFORE any step that can throw after PR creation, so a
+// later crash (metadata commit / push / appendSummary) never leaves an orphaned open PR invisible to
+// watch-pr. Written into the resolved project's .cache (archive folder in the standard exit-3 lane).
+function recordPrResult(projectDir, project, prUrl, prNumber, branch) {
+  try {
+    const cacheDir = path.join(projectDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(cacheDir, 'sink-pr-result.json'),
+      JSON.stringify({ project, branch, pr_url: prUrl, pr_number: prNumber, timestamp: new Date().toISOString() }, null, 2) + '\n'
+    );
+  } catch (_) { /* best-effort durable record; never block the PR flow */ }
 }
 
 function main() {
@@ -116,8 +149,13 @@ function main() {
 
   const root = getRoot();
   const config = readConfig();
-  const stateFile = path.join(root, 'kaola-workflow', args.project, 'workflow-state.md');
-  const summaryFile = path.join(root, 'kaola-workflow', args.project, 'finalization-summary.md');
+  // #394: resolve the project dir — LIVE first, then ARCHIVE (the standard exit-3 fallback lane
+  // archives before this sink runs). All durable writes target the resolved dir; appendSummary +
+  // updateStateSinkBlock presence-guard, and recordPrResult writes the pr_url there before any
+  // throwable step.
+  const projectFolder = resolveProjectDir(root, args.project);
+  const stateFile = path.join(projectFolder, 'workflow-state.md');
+  const summaryFile = path.join(projectFolder, 'finalization-summary.md');
 
   // #336: keep-open is merge-sink-only — the PR body 'Closes #N' would auto-close the
   // kept-open issue, and watch-pr's archive-on-merge would delete the preserved roadmap source.
@@ -158,11 +196,27 @@ function main() {
   // Step 3 — push branch
   execFileSync('git', ['push', 'origin', args.branch], { encoding: 'utf8' });
 
+  // #394: resolve the PR base from the default branch (origin/HEAD probe chain) — the prior
+  // hardcoded `--base main` made the fallback PR sink fail on a master-default repo (the #350
+  // resolution never reached this sink). A sink-fallback.json receipt (written by sink-merge) may
+  // carry the already-resolved branch; prefer it, else probe.
+  let baseBranch = 'main';
+  try {
+    const fbPath = path.join(projectFolder, '.cache', 'sink-fallback.json');
+    if (fs.existsSync(fbPath)) {
+      const fb = JSON.parse(fs.readFileSync(fbPath, 'utf8'));
+      if (fb && typeof fb.resolved_default_branch === 'string' && fb.resolved_default_branch) baseBranch = fb.resolved_default_branch;
+    }
+  } catch (_) {}
+  if (baseBranch === 'main') {
+    try { baseBranch = defaultBranch(root) || 'main'; } catch (_) { baseBranch = 'main'; }
+  }
+
   // Step 4 — create PR
   const prCreateArgs = [
     'pr', 'create',
     '--head', args.branch,
-    '--base', 'main',
+    '--base', baseBranch,
     '--fill',
   ];
   if (args.issue != null) {
@@ -177,6 +231,12 @@ function main() {
   // Step 6 — parse PR number
   const prNumMatch = prUrl.match(/\/pull\/(\d+)/);
   const prNumber = prNumMatch ? parseInt(prNumMatch[1], 10) : 0;
+
+  // #394 RECORD-BEFORE-THROW: persist pr_url to a durable location IMMEDIATELY after `gh pr create`,
+  // BEFORE updateStateSinkBlock / appendSummary / the metadata commit+push (any of which can throw).
+  // Without this, a crash after PR creation left an orphaned open PR with no durable pr_url — watch-pr
+  // never saw it. The record lives in the resolved project's .cache (archive folder in the exit-3 lane).
+  recordPrResult(projectFolder, args.project, prUrl, prNumber, args.branch);
 
   // Step 7 — update workflow-state.md Sink block
   updateStateSinkBlock(stateFile, prUrl, prNumber);
