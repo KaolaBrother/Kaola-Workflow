@@ -693,4 +693,44 @@ assertIncludes(`${pluginRoot}/scripts/kaola-workflow-plan-validator.js`, 'G3: ma
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'main-session-gate');
 assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'main-session-gate');
 
+// #400: registry-driven route-reachability contract. Every route/skill target a claim/startup/resume
+// receipt can emit MUST resolve to an installed surface — the Codex dead zone (#400) was the schema
+// emitting kaola-workflow-plan-run / kaola-workflow-adapt to skills that did not exist on the forge
+// plugins. require() the schema route constants (no hand-listed drift) + the static next_skill
+// fallbacks claim.js prints, and assert each resolves to a `skills/<name>/SKILL.md` dir. A missing
+// skill reds the chain with the unreachable target named.
+{
+  const schema = require(path.join(root, pluginRoot, 'scripts', 'kaola-workflow-adaptive-schema.js'));
+  // Skill targets emitted by claim.js next_skill (output()/resume): the adaptive route constants +
+  // the static fast/full fallbacks. Values are emitted as `<skill> {project}`; reachability is the
+  // bare skill name. (Commands are the Claude-edition surface, asserted in validate-workflow-contracts.)
+  const emittedSkillTargets = [
+    schema.PLAN_RUN_SKILL,
+    schema.ADAPT_SKILL,
+    'kaola-workflow-fast',      // isFast fallback (claim.js:520)
+    'kaola-workflow-research'   // full fallback (claim.js:520)
+  ];
+  const installedSkills = new Set(
+    fs.readdirSync(path.join(root, pluginRoot, 'skills'), { withFileTypes: true })
+      .filter(e => e.isDirectory())
+      .map(e => e.name)
+      .filter(name => exists(`${pluginRoot}/skills/${name}/SKILL.md`))
+  );
+  for (const target of emittedSkillTargets) {
+    assert(installedSkills.has(target),
+      `#400: route-reachability — receipt-emitted skill target "${target}" has no installed ` +
+      `skills/${target}/SKILL.md in ${pluginRoot} (broken route, the #400 dead zone)`);
+  }
+  // Content-reachability tier (catches #369/#380): an installed SKILL that mirrors a command must
+  // carry the command's route/wiring tokens, or the route resolves to a hollow surface. finalize
+  // SKILL must wire the bundle member-set flag (#369); next SKILL must carry the adaptive route +
+  // auto-bundle restructure (#380); plan-run/adapt must carry the executor/front-end route tokens.
+  assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'issue_numbers');
+  assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, '--issue-numbers');
+  assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'workflow-plan.md exists -> kaola-workflow-plan-run');
+  assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'auto-bundle');
+  assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'close-and-open-next');
+  assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'kaola-workflow-plan-run');
+}
+
 console.log('Kaola-Workflow Codex contract validation passed');

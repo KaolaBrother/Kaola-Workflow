@@ -67,6 +67,47 @@ if (!dispatchLogEntry) {
   );
 }
 
+// #400: adaptive-route scenario — the gitlab-codex edition ships the adaptive SKILL pack and a Codex
+// claim/startup/resume receipt routes to a SKILL that EXISTS (the pre-#400 dead zone was 0 adaptive
+// coverage here). Walk the schema-emitted route -> installed SKILL -> the inherited #405/#392/#369/#380
+// wiring tokens, exactly as a Codex runtime would resolve them.
+{
+  const skillsRoot = path.join(root, 'plugins/kaola-workflow-gitlab/skills');
+  const schema = require(path.join(root, 'plugins/kaola-workflow-gitlab/scripts/kaola-workflow-adaptive-schema.js'));
+  // The two adaptive route targets the byte-identical schema emits must resolve to installed SKILLs.
+  for (const skill of [schema.PLAN_RUN_SKILL, schema.ADAPT_SKILL]) {
+    const skillFile = path.join(skillsRoot, skill, 'SKILL.md');
+    if (!fs.existsSync(skillFile)) {
+      throw new Error('#400: gitlab-codex receipt routes to ' + skill + ' but ' + skillFile + ' is missing (the forge-codex dead zone)');
+    }
+  }
+  const planRun = fs.readFileSync(path.join(skillsRoot, 'kaola-workflow-plan-run/SKILL.md'), 'utf8');
+  // forge-renamed executor + #405 tier→profile inheritance + #392 evidence-binding nonce.
+  if (!planRun.includes('kaola-gitlab-workflow-adaptive-node.js')) {
+    throw new Error('#400: gitlab-codex plan-run SKILL must call the forge-renamed kaola-gitlab-workflow-adaptive-node.js');
+  }
+  if (!planRun.includes('model_variant_missing') || !planRun.includes('<role>-max')) {
+    throw new Error('#405: gitlab-codex plan-run SKILL must inherit the <role>-max tier→profile dispatch prose');
+  }
+  if (!planRun.includes('evidence-binding')) {
+    throw new Error('#392: gitlab-codex plan-run SKILL must inherit the evidence-binding nonce prose');
+  }
+  const adapt = fs.readFileSync(path.join(skillsRoot, 'kaola-workflow-adapt/SKILL.md'), 'utf8');
+  if (!adapt.includes('kaola-gitlab-workflow-claim.js') || !adapt.includes('kaola-workflow-plan-run')) {
+    throw new Error('#400: gitlab-codex adapt SKILL must claim via the forge port and hand off to kaola-workflow-plan-run');
+  }
+  // The next SKILL routes a frozen plan to plan-run and a fresh adaptive run to the adapt front end (#380).
+  const next = fs.readFileSync(path.join(skillsRoot, 'kaola-workflow-next/SKILL.md'), 'utf8');
+  if (!next.includes('workflow-plan.md exists -> kaola-workflow-plan-run') || !next.includes('auto-bundle')) {
+    throw new Error('#380: gitlab-codex next SKILL must carry the adaptive route + auto-bundle restructure');
+  }
+  // The finalize SKILL wires the #369 bundle member-set flag.
+  const finalize = fs.readFileSync(path.join(skillsRoot, 'kaola-workflow-finalize/SKILL.md'), 'utf8');
+  if (!finalize.includes('--issue-numbers') || !finalize.includes('issue_numbers')) {
+    throw new Error('#369: gitlab-codex finalize SKILL must wire the bundle member-set flag (--issue-numbers)');
+  }
+}
+
 run('validate-kaola-workflow-gitlab-contracts.js');
 run('test-gitlab-workflow-scripts.js');
 run('test-gitlab-sinks.js');

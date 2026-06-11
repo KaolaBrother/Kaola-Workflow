@@ -837,4 +837,38 @@ assertIncludes('scripts/kaola-workflow-plan-validator.js', 'G3: main-session-gat
 assertIncludes('commands/kaola-workflow-plan-run.md', 'main-session-gate');
 assertIncludes('agents/workflow-planner.md', 'main-session-gate');
 
+// #400: registry-driven route-reachability contract for the Claude command surface. Every
+// route/command target a claim/startup/resume receipt emits MUST resolve to an installed command
+// file in EACH Claude edition. require() the schema route constants (no hand-listed drift) + the
+// static next_command fallbacks claim.js prints, and assert each resolves to a commands/<name>.md.
+// The Codex twin lives in each validate-kaola-workflow-{,gitlab,gitea}-contracts.js (skills surface).
+{
+  const schema = require('./kaola-workflow-adaptive-schema.js');
+  // Route values are emitted as `/<command> {project}`; reachability is the bare basename `.md`.
+  const stripSlash = c => c.replace(/^\//, '');
+  const emittedCommandTargets = [
+    stripSlash(schema.PLAN_RUN_COMMAND),
+    stripSlash(schema.ADAPT_COMMAND),
+    'kaola-workflow-fast',      // isFast fallback (claim.js next_command)
+    'kaola-workflow-phase1'     // full fallback (claim.js next_command)
+  ];
+  const claudeCommandDirs = [
+    'commands',
+    'plugins/kaola-workflow-gitlab/commands',
+    'plugins/kaola-workflow-gitea/commands'
+  ];
+  for (const dir of claudeCommandDirs) {
+    const installed = new Set(
+      fs.readdirSync(path.join(root, dir))
+        .filter(f => f.endsWith('.md'))
+        .map(f => f.slice(0, -'.md'.length))
+    );
+    for (const target of emittedCommandTargets) {
+      assert(installed.has(target),
+        '#400: route-reachability — receipt-emitted command target "/' + target + '" has no installed ' +
+        dir + '/' + target + '.md (broken route)');
+    }
+  }
+}
+
 console.log('Workflow contract validation passed');
