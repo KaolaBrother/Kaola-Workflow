@@ -939,6 +939,52 @@ function testGiteaAdaptive() {
   console.log('testGiteaAdaptive: PASSED');
 }
 
+// #418.5: adaptive new-behavior smoke — the #408 fused freeze chain on the FORK validator.
+// --freeze-checked returns the planHash WITHOUT writing; a subsequent --freeze --governance-ack with
+// a STALE hash (plan mutated between the two spawns) must refuse governance_ack_stale and NOT write.
+function testGiteaAdaptiveFreezeChecked() {
+  const valScript = path.join(root, 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-plan-validator.js');
+  const PLAN = [
+    '# Workflow Plan', '', '## Meta', 'labels: enhancement', '', '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+    '| e | code-explorer | — | — | 1 | sequence |',
+    '| i | tdd-guide | e | lib/x.js | 1 | sequence |',
+    '| r | code-reviewer | i | — | 1 | sequence |',
+    '| d | finalize | r | — | 1 | sequence |', ''
+  ].join('\n');
+  function spawnNode(script, args, cwd, env) {
+    return spawnSync(process.execPath, [script, ...args], {
+      cwd, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }, env || {})
+    });
+  }
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-freeze-checked-'));
+  try {
+    const planPath = path.join(tmp, 'workflow-plan.md');
+    fs.writeFileSync(planPath, PLAN);
+    // SPAWN 1: --freeze-checked validates + returns planHash, does NOT write plan_hash into the file.
+    const checked = JSON.parse(spawnNode(valScript, [planPath, '--freeze-checked', '--json'], tmp).stdout);
+    assert.strictEqual(checked.result, 'in-grammar', 'gitea #418.5: --freeze-checked is in-grammar');
+    assert.strictEqual(checked.frozen, false, 'gitea #418.5: --freeze-checked does NOT freeze');
+    assert.ok(typeof checked.planHash === 'string' && checked.planHash.length > 0,
+      'gitea #418.5: --freeze-checked returns a planHash');
+    assert.ok(!fs.readFileSync(planPath, 'utf8').includes('plan_hash:'),
+      'gitea #418.5: --freeze-checked leaves the file unfrozen (no plan_hash stamped)');
+    // Mutate the plan AFTER governance (dodging the ack the operator approved).
+    fs.writeFileSync(planPath, fs.readFileSync(planPath, 'utf8').replace('lib/x.js', 'lib/z.js'));
+    // SPAWN 2: --freeze --governance-ack <stale hash> must refuse governance_ack_stale, no write.
+    const stale = JSON.parse(spawnNode(valScript, [planPath, '--freeze', '--governance-ack', checked.planHash, '--json'], tmp).stdout);
+    assert.strictEqual(stale.result, 'refuse', 'gitea #418.5: stale governance-ack must refuse');
+    assert.strictEqual(stale.reason, 'governance_ack_stale', 'gitea #418.5: refuse reason is governance_ack_stale');
+    assert.strictEqual(stale.frozen, false, 'gitea #418.5: governance_ack_stale must NOT write/freeze');
+    assert.ok(!fs.readFileSync(planPath, 'utf8').includes('plan_hash:'),
+      'gitea #418.5: governance_ack_stale leaves the plan unfrozen');
+    console.log('testGiteaAdaptiveFreezeChecked: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 // ===========================================================================
 // issue #342: bundle-lane E2E behavioral coverage for the Gitea edition.
 // Mirrors the six root scenarios (simulate-workflow-walkthrough.js §#328) modulo
@@ -1356,6 +1402,7 @@ function testGiteaWriteLaneHookExists() {
 }
 
 testGiteaAdaptive();
+testGiteaAdaptiveFreezeChecked();
 testGitea237DotPathExtraction();
 testGiteaDispatchHookExists();
 testGiteaWriteLaneHookExists();

@@ -1755,7 +1755,8 @@ function cmdFinalize() {
         openIssues.push(n); // 'open' while online — recorded, never silently dropped
       }
     }
-    // #369: truthful ONLINE token — all closed -> already_closed; any member open/failed -> partial.
+    // #369: truthful ONLINE token — all closed -> already_closed; any member open/failed -> partial
+    // (never `skipped_offline`, the OFFLINE-only token).
     remoteIssueClosed = (closedIssues.length === issueNumbers.length) ? 'already_closed' : 'partial';
   } else if (!OFFLINE && issueNumber) {
     // #396.2: single-issue ONLINE path — already closed → 'already_closed'; otherwise the close is

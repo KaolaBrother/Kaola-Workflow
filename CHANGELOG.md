@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+### Added
+
+- **scripts: `test-agent-profile-parity.js` — regression guard that goes RED when a feature token is added to an `agents/*.md` without mirroring it into all three `.toml` twins (#422).** Curated `FEATURE_TOKENS` list (currently `write_set_granularity`, `main-session-gate`); a token is only enforced for a profile when it appears in that `.md`, so unused tokens never cause a false RED. GREEN at HEAD; guards the #404 planner-gap class going forward.
+
+- **validate-script-sync.js: agent-profile `.toml` triple byte-group and `config/hooks.json` forge-port family (#422, #418.1).** Twenty `.toml` basenames (14 base agents + 6 `-max` variants) are now programmatically added to `BYTE_IDENTICAL_GROUPS` via `fs.readdirSync` on the codex agents tree — any new profile is auto-covered. A new `CONFIG_HOOKS_FAMILY` + `normalizeConfigHooks()` verifies the three plugin-tree `config/hooks.json` files are rename-normalized (identical except the `codex-compact-resume` session-start command path).
+
+- **validate-*-contracts.js ×4: pin `test-agent-profile-parity.js` into the claude test chain (#422).** All four contract validators now assert that `scripts."test:kaola-workflow:claude"` includes `test-agent-profile-parity.js`, mirroring how `test-route-reachability.js` guards the route surface.
+
+- **package.json: claude chain gains `test-parallel.js --self-test` and `test-agent-profile-parity.js` (#418.2, #422).** `test-parallel.js --self-test` (13 assertions) is appended after `test-parallel-batch.js`; `test-agent-profile-parity.js` runs before `validate-workflow-contracts.js` so the parity check precedes the validator that pins it.
+
+### Fixed
+
+- **tests: bare-remote sink branch-delete order is now asserted — `testSinkMergeBareRemoteDeleteOrder` in `simulate-workflow-walkthrough.js` (#414).** A git-shim wrapper traces invocation order and asserts `push origin --delete` fires before `merge-base --is-ancestor` before `branch -D`, plus verifies no spurious `branch-worktree-resolved` violation. Covers the #397.1 fix gap: zero test coverage for the ONLINE branch-delete choreography.
+
+- **tests: `defaultBranch` probe-chain unit added to `test-claim-hardening.js` (#414).** Two assertions cover the symbolic-ref hit (origin/HEAD set to `trunk` → returns `trunk`) and the hardcoded-main fallback (no origin, no remote → all probes fail → returns `main`).
+
+- **forge walkthroughs: adaptive `--freeze-checked` → `governance_ack_stale` smoke added to both gitlab and gitea walkthroughs (#418.5).** `testGitlabAdaptiveFreezeChecked` / `testGiteaAdaptiveFreezeChecked` run the fork plan-validator's SPAWN-1 (`--freeze-checked` validates without writing) and SPAWN-2 (`--freeze --governance-ack <stale-hash>` refuses with `governance_ack_stale`) contract against a mutated plan.
+
+- **install-manifest: intentional per-forge exclusions enumerated in comment (#418.2).** Both byte-paired copies of `kaola-workflow-install-manifest.js` now have a block comment enumerating every script intentionally absent from `SUPPORT_SCRIPTS` (edition-sync, fixtures-orphan-legality, fast-audit, install-manifest self, release-surface-drift, gitlab/gitea install-codex-agent-profiles, ledger-compare).
+
+- **gitea claim.js: #369 two-line clarifier comment restored at bundle-member-probe site (#418.4).** The gitlab twin carried both `// #369: truthful ONLINE token …` and `// (never \`skipped_offline\`, the OFFLINE-only token).`; the gitea twin was missing the second line. Now parity-matched.
+
 ### Fixed
 
 - **adaptive/node: `close-and-open-next` now surfaces `nonce` in its `opened` payload — serial chains no longer get `evidence_stale` on the second close (#411 Bug A).** The fused-advance path omitted the `nonce` derivation present in `open-next` and `open-ready`; every caller binding the next node's evidence got `undefined`, causing a guaranteed `evidence_stale` refusal. Uses the same nested `recordBase.base` path as the other two open paths.

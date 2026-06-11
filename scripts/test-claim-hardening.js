@@ -12,7 +12,7 @@ const path = require('path');
 process.env.KAOLA_GH_REMOTE_TIMEOUT_MS = '500';   // tiny cap for the hang test (set before require)
 delete process.env.KAOLA_WORKFLOW_OFFLINE;        // ensure ghExec actually shells the mock
 
-const { ghExec, isSafeBranchArg, removeBranch, postAdvisoryClaim } = require('./kaola-workflow-claim.js');
+const { ghExec, isSafeBranchArg, removeBranch, postAdvisoryClaim, defaultBranch } = require('./kaola-workflow-claim.js');
 const { writeFileAtomicReplace } = require('./kaola-workflow-adaptive-schema.js');
 
 let passed = 0, failed = 0;
@@ -175,6 +175,55 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     isProbeDegraded(false, 'already_closed') === false,
     '#416: isProbeDegraded is false when probe succeeded (already_closed token)'
   );
+}
+
+// --- #414.2 defaultBranch probe-chain (symbolic-ref → remote show → ls-remote --symref → main) ---
+{
+  const cp = require('child_process');
+  const GIT_ISO = { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+  const genv = { ...process.env, ...GIT_ISO, GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t',
+    GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' };
+  // (1) symbolic-ref hit: origin/HEAD set to 'trunk' → defaultBranch resolves 'trunk' (local, no net).
+  {
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-defbr-symref-')));
+    try {
+      cp.spawnSync('git', ['init', '-b', 'trunk', dir], { env: genv });
+      fs.writeFileSync(path.join(dir, 'r.md'), 'x');
+      cp.spawnSync('git', ['-C', dir, 'add', '-A'], { env: genv });
+      cp.spawnSync('git', ['-C', dir, 'commit', '-m', 's'], { env: genv });
+      const bare = dir + '-bare';
+      cp.spawnSync('git', ['init', '--bare', '-b', 'trunk', bare], { env: genv });
+      cp.spawnSync('git', ['-C', dir, 'remote', 'add', 'origin', bare], { env: genv });
+      cp.spawnSync('git', ['-C', dir, 'push', '-u', 'origin', 'trunk'], { env: genv });
+      cp.spawnSync('git', ['-C', dir, 'remote', 'set-head', 'origin', 'trunk'], { env: genv }); // sets refs/remotes/origin/HEAD
+      const saved = process.env.GIT_CONFIG_GLOBAL, saved2 = process.env.GIT_CONFIG_NOSYSTEM;
+      process.env.GIT_CONFIG_GLOBAL = '/dev/null'; process.env.GIT_CONFIG_NOSYSTEM = '1';
+      assert(defaultBranch(dir) === 'trunk',
+        '#414.2: symbolic-ref probe resolves the local origin/HEAD branch (trunk), got: ' + defaultBranch(dir));
+      if (saved === undefined) delete process.env.GIT_CONFIG_GLOBAL; else process.env.GIT_CONFIG_GLOBAL = saved;
+      if (saved2 === undefined) delete process.env.GIT_CONFIG_NOSYSTEM; else process.env.GIT_CONFIG_NOSYSTEM = saved2;
+      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(bare, { recursive: true, force: true });
+    } catch (e) { fs.rmSync(dir, { recursive: true, force: true }); throw e; }
+  }
+  // (2) hardcoded-main fallback: a repo with NO origin/HEAD and NO remote → all probes miss → 'main'.
+  {
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-defbr-fallback-')));
+    try {
+      cp.spawnSync('git', ['init', '-b', 'whatever', dir], { env: genv });
+      fs.writeFileSync(path.join(dir, 'r.md'), 'x');
+      cp.spawnSync('git', ['-C', dir, 'add', '-A'], { env: genv });
+      cp.spawnSync('git', ['-C', dir, 'commit', '-m', 's'], { env: genv });
+      // no remote, no origin/HEAD: symbolic-ref misses, remote show / ls-remote throw → fallback 'main'
+      const saved = process.env.GIT_CONFIG_GLOBAL, saved2 = process.env.GIT_CONFIG_NOSYSTEM;
+      process.env.GIT_CONFIG_GLOBAL = '/dev/null'; process.env.GIT_CONFIG_NOSYSTEM = '1';
+      assert(defaultBranch(dir) === 'main',
+        '#414.2: with no origin/HEAD and no remote, the chain falls back to hardcoded main, got: ' + defaultBranch(dir));
+      if (saved === undefined) delete process.env.GIT_CONFIG_GLOBAL; else process.env.GIT_CONFIG_GLOBAL = saved;
+      if (saved2 === undefined) delete process.env.GIT_CONFIG_NOSYSTEM; else process.env.GIT_CONFIG_NOSYSTEM = saved2;
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch (e) { fs.rmSync(dir, { recursive: true, force: true }); throw e; }
+  }
 }
 
 if (failed > 0) {

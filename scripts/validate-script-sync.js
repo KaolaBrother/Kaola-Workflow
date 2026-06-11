@@ -188,6 +188,19 @@ const BYTE_IDENTICAL_GROUPS = [
       'plugins/kaola-workflow-gitea/scripts/install-codex-agent-profiles.js',
     ],
   },
+  // #422.1: agent-profile .toml triples — each agent's three plugin-tree .toml files
+  // (codex/gitlab/gitea) must be byte-identical. Built programmatically from the codex tree's
+  // agents/ directory so a new profile is auto-covered. Includes the 6 -max model variants.
+  ...fs.readdirSync(path.join(repoRoot, 'plugins/kaola-workflow/agents'))
+    .filter(f => f.endsWith('.toml'))
+    .map(f => ({
+      label: 'agent-profile toml triple (' + f + ')',
+      files: [
+        'plugins/kaola-workflow/agents/' + f,
+        'plugins/kaola-workflow-gitlab/agents/' + f,
+        'plugins/kaola-workflow-gitea/agents/' + f,
+      ],
+    })),
 ];
 
 // issue #401 Part 3: SELF-CONTAINED rename-normalized families — forge ports that live at a
@@ -224,6 +237,27 @@ const RENAME_NORMALIZED_FAMILIES = [
     ],
   },
 ];
+
+// #418.1: the per-forge config/hooks.json (codex/gitlab/gitea plugin trees). These are
+// rename-normalized: identical EXCEPT the SessionStart compact-resume command path, which carries the
+// forge-renamed script base name (kaola-{forge}-workflow-codex-compact-resume.js). Every OTHER
+// kaola-workflow-* token in the JSON is a .sh hook that STAYS base-named across all forges, so the
+// generic renameNormalize() (which rewrites every kaola-workflow-<name>) cannot be used — we
+// normalize ONLY the codex-compact-resume token. Reference = codex tree (the base-named source).
+const CONFIG_HOOKS_FAMILY = {
+  label: 'config/hooks.json forge ports',
+  reference: 'plugins/kaola-workflow/config/hooks.json',
+  ports: [
+    { forge: 'gitlab', file: 'plugins/kaola-workflow-gitlab/config/hooks.json' },
+    { forge: 'gitea', file: 'plugins/kaola-workflow-gitea/config/hooks.json' },
+  ],
+};
+// Normalize ONLY the compact-resume script token (the sole forge-renamed string in config/hooks.json).
+function normalizeConfigHooks(referenceText, forge) {
+  return referenceText.replace(
+    /kaola-workflow-codex-compact-resume/g,
+    `kaola-${forge}-workflow-codex-compact-resume`);
+}
 
 // Normalize a base-named reference body into its forge-renamed form: every
 // `kaola-workflow-<NAME>` token becomes `kaola-<forge>-workflow-<NAME>`. Bounded by a
@@ -290,8 +324,29 @@ if (require.main === module) {
     }
   }
 
+  // #418.1: config/hooks.json forge ports (compact-resume token normalized; .sh tokens stay base).
+  {
+    const refText = readOrNull(path.join(repoRoot, CONFIG_HOOKS_FAMILY.reference));
+    if (refText === null) {
+      missing.push(CONFIG_HOOKS_FAMILY.reference);
+    } else {
+      const refStr = refText.toString('utf8');
+      for (const port of CONFIG_HOOKS_FAMILY.ports) {
+        const portText = readOrNull(path.join(repoRoot, port.file));
+        if (portText === null) {
+          missing.push(port.file);
+          continue;
+        }
+        const expected = normalizeConfigHooks(refStr, port.forge);
+        if (portText.toString('utf8') !== expected) {
+          drift.push(`${CONFIG_HOOKS_FAMILY.label}: ${port.file} differs from ${CONFIG_HOOKS_FAMILY.reference} (compact-resume-normalized for ${port.forge})`);
+        }
+      }
+    }
+  }
+
   if (missing.length === 0 && drift.length === 0) {
-    console.log(`OK: ${COMMON_SCRIPTS.length} common scripts, ${BYTE_IDENTICAL_GROUPS.length} byte-identical groups, and ${RENAME_NORMALIZED_FAMILIES.length} rename-normalized families in sync.`);
+    console.log(`OK: ${COMMON_SCRIPTS.length} common scripts, ${BYTE_IDENTICAL_GROUPS.length} byte-identical groups, ${RENAME_NORMALIZED_FAMILIES.length} rename-normalized families, and 1 config/hooks.json family in sync.`);
     process.exit(0);
   }
 
@@ -311,4 +366,4 @@ if (require.main === module) {
   process.exit(1);
 }
 
-module.exports = { COMMON_SCRIPTS, BYTE_IDENTICAL_GROUPS, RENAME_NORMALIZED_FAMILIES, renameNormalize };
+module.exports = { COMMON_SCRIPTS, BYTE_IDENTICAL_GROUPS, RENAME_NORMALIZED_FAMILIES, renameNormalize, CONFIG_HOOKS_FAMILY, normalizeConfigHooks };

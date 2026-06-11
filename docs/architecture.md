@@ -351,6 +351,26 @@ one finalization  →  close N issues  →  remove N .roadmap/issue-N.md files
 
 `issue-scout` is not a write role, not an implement role, and not a gate node. It is advisory input only.
 
+## Agent Profile Structure and Edition Sync
+
+**Profile layout.** Each role has a canonical `agents/<name>.md` (installed by `install.sh`
+for the Claude edition) and a `.toml` triple across the three plugin editions:
+`plugins/kaola-workflow/agents/<name>.toml` (codex),
+`plugins/kaola-workflow-gitlab/agents/<name>.toml`, and
+`plugins/kaola-workflow-gitea/agents/<name>.toml`. The current roster is 14 base-role
+profiles plus 6 `-max` model variants (20 files, 20 triples). All three `.toml` twins for
+a given profile are byte-identical (forge-neutral by the §341 contract — no CLI binaries,
+no forge brands).
+
+**md↔toml token-pin parity contract (#422).** Adding a feature paragraph to an
+`agents/<name>.md` requires mirroring the feature token into all three `.toml` twins before
+the token can be pinned in `scripts/test-agent-profile-parity.js` `FEATURE_TOKENS`. The
+regression guard (`test-agent-profile-parity.js`) checks every pinned token against every
+`.md`+triple pair and reds the claude chain on any drift. `validate-script-sync.js`
+`BYTE_IDENTICAL_GROUPS` programmatically enforces byte identity across each triple (auto-
+expands when a new `.toml` is added to the codex tree). See
+`docs/decisions/D-422-01.md` for the full contract and consequences.
+
 ## Model Resolution (Install-Time, Profile-Aware)
 
 **Model resolution for adaptive subagent nodes** is install-time and profile-aware. `install.sh` writes a manifest `~/.claude/agents/.kaola-agent-models.json` (path honoring `KAOLA_AGENT_DIR`) that maps each agent name to its install-selected model string (e.g. `{ "planner": "claude-opus-4-5", "code-writer": "claude-sonnet-4-5" }`). `uninstall.sh` removes the manifest.
