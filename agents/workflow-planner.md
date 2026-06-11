@@ -87,6 +87,14 @@ Author the `## Nodes` table so the validator passes it. Each node is one row:
   **When a lane genuinely needs more than `FILE_CEILING` files, SPLIT it into sequenced same-role
   nodes** (plain `sequence` shape), each within the ceiling and under the same gate coverage — never
   widen scope with a directory grant. (Do not raise the ceiling or fold product code to fit it.)
+  **The one shape the freeze wall cannot catch (#404):** a **bare token naming a path that does NOT
+  exist at freeze but becomes a DIRECTORY by write-time** — the staged *scaffold→extend* plan you are
+  most likely to author. The freeze-time bare-directory check (`#388`) `statSync`s the token and
+  skips a not-yet-created path as a legitimate new file, so a `mymod` token that an earlier node
+  turns into `mymod/` slips through and dies at the exact-path barrier as `write_set_granularity`
+  (`revalidateForResume` carries no shape checks — `statSync`/`isDirectory`/`directory_shaped` — so
+  resume never re-catches it). **Always declare the EXACT files a staged node will create
+  (`mymod/a.js`, `mymod/b.js`), never a bare dir-to-be.**
 - **Model assignment (#382) — fill the optional `model` column on every node.** Two tiers,
   `{opus, sonnet}` (no haiku). The planner is the only component that sees the task, so model choice
   is yours, and the **plan beats the install profile** (`node.model` → manifest → role default), so a

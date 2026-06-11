@@ -160,10 +160,13 @@ function makeStateContent(opts) {
 // Build a stub shell function keyed on (scriptBasename, discriminatingFlag).
 // Each entry in the map: { key: canned response object }
 // key = scriptBasename + ':' + discriminatingFlag (found anywhere in args[])
-// Checked in order: --freeze, --resume-check, --node-id, --json (most specific first).
+// Checked in order: --freeze-checked, --freeze, --resume-check, --node-id, --json (most specific first).
+// #408: the fused freeze chain is --freeze-checked (validate, no write) then --freeze --governance-ack
+// (write + folded resume-check); --freeze-checked is listed BEFORE --freeze so it matches its own stub.
 // For roadmap/git, base name alone is sufficient.
-const DISCRIMINATING_FLAGS = ['--freeze', '--resume-check', '--node-id', 'init-issue', 'add', '--json'];
+const DISCRIMINATING_FLAGS = ['--freeze-checked', '--freeze', '--resume-check', '--node-id', 'init-issue', 'add', '--json'];
 function makeShellStub(responses) {
+  const VALIDATOR = 'kaola-workflow-plan-validator.js';
   return function stubShell(scriptPath, args) {
     const base = path.basename(scriptPath);
     const argsArr = args || [];
@@ -173,7 +176,23 @@ function makeShellStub(responses) {
       if (argsArr.includes(f)) { firstFlag = f; break; }
     }
     const key = base + ':' + firstFlag;
-    if (responses[key] !== undefined) return responses[key];
+    // #408 back-compat: the fused --freeze folds --resume-check into resumeOk. A legacy --freeze stub
+    // that is `frozen:true` but omits resumeOk had a separate passing --resume-check stub in the old
+    // 3-spawn shape — treat it as resume-ok so the post-fusion handoff sees resumeOk===true.
+    if (responses[key] !== undefined) {
+      const resp = responses[key];
+      if (base === VALIDATOR && firstFlag === '--freeze' && resp && resp.frozen === true && resp.resumeOk === undefined) {
+        return Object.assign({}, resp, { resumeOk: true });
+      }
+      return resp;
+    }
+    // #408 back-compat: legacy stubs key the validate response under ':--json'. The fused chain
+    // (--freeze-checked, then --freeze --governance-ack) made --freeze-checked the validate spawn;
+    // synthesize it from the legacy --json response (forcing frozen:false — it does not write).
+    if (base === VALIDATOR && firstFlag === '--freeze-checked' && responses[VALIDATOR + ':--json'] !== undefined) {
+      const base0 = responses[VALIDATOR + ':--json'];
+      return Object.assign({}, base0, { frozen: false, governance: { decision: base0.decision, risk: base0.risk || {} } });
+    }
     // Fallback key without flag (catch-all per script)
     const fallback = responses[base];
     if (fallback !== undefined) return fallback;
@@ -197,21 +216,18 @@ const PLAN_HASH_64 = ('a').repeat(64);
   const frozenPlanContent = planContent.replace('# Workflow Plan', '<!-- plan_hash: ' + PLAN_HASH_64 + ' -->\n\n# Workflow Plan');
 
   const shellStub = makeShellStub({
-    // validator --json (default validate)
-    'kaola-workflow-plan-validator.js:--json': {
+    // #408 SPAWN 1: validator --freeze-checked --json (validate + governance payload, no write)
+    'kaola-workflow-plan-validator.js:--freeze-checked': {
       exitCode: 0, result: 'in-grammar', decision: 'ask',
-      planHash: PLAN_HASH_64,
+      planHash: PLAN_HASH_64, frozen: false,
+      governance: { decision: 'ask', risk: {} },
       risk: { sensitivity: false, blastRadius: true, uncertain: false, reasons: ['declared write set touches SHARED_INFRA'] }
     },
-    // validator --freeze --json
+    // #408 SPAWN 2: validator --freeze --governance-ack <hash> --json (write + folded resume-check)
     'kaola-workflow-plan-validator.js:--freeze': {
       exitCode: 0, result: 'in-grammar', decision: 'ask',
-      planHash: PLAN_HASH_64, frozen: true,
+      planHash: PLAN_HASH_64, frozen: true, resumeOk: true,
       risk: { sensitivity: false, blastRadius: true, uncertain: false, reasons: ['declared write set touches SHARED_INFRA'] }
-    },
-    // validator --resume-check --json
-    'kaola-workflow-plan-validator.js:--resume-check': {
-      exitCode: 0, ok: true, planHash: PLAN_HASH_64
     },
     // roadmap init-issue
     'kaola-workflow-roadmap.js:init-issue': { exitCode: 0, created: true },
@@ -272,17 +288,18 @@ const PLAN_HASH_64 = ('a').repeat(64);
   const frozenPlanContent = planContent + '<!-- plan_hash: ' + PLAN_HASH_64 + ' -->';
 
   const shellStub = makeShellStub({
-    'kaola-workflow-plan-validator.js:--json': {
+    // #408 SPAWN 1: --freeze-checked (validate, no write)
+    'kaola-workflow-plan-validator.js:--freeze-checked': {
       exitCode: 0, result: 'in-grammar', decision: 'auto-run',
-      planHash: PLAN_HASH_64,
+      planHash: PLAN_HASH_64, frozen: false, governance: { decision: 'auto-run', risk: {} },
       risk: { sensitivity: false, blastRadius: false, uncertain: false, reasons: [] }
     },
+    // #408 SPAWN 2: --freeze --governance-ack (write + folded resume-check via resumeOk)
     'kaola-workflow-plan-validator.js:--freeze': {
       exitCode: 0, result: 'in-grammar', decision: 'auto-run',
-      planHash: PLAN_HASH_64, frozen: true,
+      planHash: PLAN_HASH_64, frozen: true, resumeOk: true,
       risk: { sensitivity: false, blastRadius: false, uncertain: false, reasons: [] }
     },
-    'kaola-workflow-plan-validator.js:--resume-check': { exitCode: 0, ok: true, planHash: PLAN_HASH_64 },
     'kaola-workflow-roadmap.js:init-issue': { exitCode: 0, created: true },
     'git:add': { exitCode: 0 },
     'kaola-workflow-adaptive-node.js': { exitCode: 0, status: 'mirrored', planHash: PLAN_HASH_64, dest: '/wt/kaola-workflow/test-project' },
@@ -377,12 +394,16 @@ const PLAN_HASH_64 = ('a').repeat(64);
   const shellStub = function(scriptPath, args) {
     const base = path.basename(scriptPath);
     const argsArr = args || [];
-    if (base === 'kaola-workflow-plan-validator.js' && argsArr.includes('--freeze')) {
-      return { exitCode: 0, result: 'in-grammar', decision: 'auto-run', planHash: PLAN_HASH_64, frozen: true,
+    // #408 SPAWN 1: --freeze-checked (validate, no write) — checked BEFORE --freeze.
+    if (base === 'kaola-workflow-plan-validator.js' && argsArr.includes('--freeze-checked')) {
+      return { exitCode: 0, result: 'in-grammar', decision: 'auto-run', planHash: PLAN_HASH_64, frozen: false,
+               governance: { decision: 'auto-run', risk: {} },
                risk: { sensitivity: false, blastRadius: false, uncertain: false, reasons: [] } };
     }
-    if (base === 'kaola-workflow-plan-validator.js' && argsArr.includes('--resume-check')) {
-      return { exitCode: 0, ok: true, planHash: PLAN_HASH_64 };
+    // #408 SPAWN 2: --freeze --governance-ack (write + folded resume-check via resumeOk).
+    if (base === 'kaola-workflow-plan-validator.js' && argsArr.includes('--freeze')) {
+      return { exitCode: 0, result: 'in-grammar', decision: 'auto-run', planHash: PLAN_HASH_64, frozen: true, resumeOk: true,
+               risk: { sensitivity: false, blastRadius: false, uncertain: false, reasons: [] } };
     }
     if (base === 'kaola-workflow-plan-validator.js' && argsArr.includes('--json')) {
       return { exitCode: 0, result: 'in-grammar', decision: 'auto-run', planHash: PLAN_HASH_64,

@@ -656,6 +656,33 @@ Agent(
      `consent_halt: pending` into the plan's `## Node Ledger` (#234: a non-hashed section that
      survives a lost/regenerated state file; never write into `## Meta` / `## Nodes`). Then surface
      the pending approval. You decide; the script transcribes the consequence. Idempotent.
+
+     **Surface a PER-REASON actionable message** (#404/#406). Read the TYPED reason at
+     `barrierOut.barrierCheck.reason` (the validator classifies the refusal structurally — never
+     English-substring the `errors`) so the operator knows exactly what to fix instead of one opaque
+     ~45-min escalation. The five typed reasons (with `barrierOut.barrierCheck.{outOfAllow,
+     sensitiveHits, foreignArchiveHits, unattributed}`):
+     - **`write_set_granularity`** (a #404 mechanical artifact — every out-of-allow file is a strict
+       subtree of one of THIS node's OWN bare directory tokens): *"node {node-id} declared the bare
+       directory '{tok}' but wrote {outOfAllow files}; re-author the write set to the exact files
+       (X/a.js, X/b.js, …) and re-freeze."* The human does the one-line edit; the run does **NOT**
+       auto-repair (the auto-repair lane was proven unbuildable-safe — freeze is the only legitimacy
+       oracle and cannot re-check a plan it just re-stamped — and is permanently deferred).
+     - **`write_set_overflow`** (non-granularity residual — a glob/case token never matched, or a
+       foreign write is present): *"declared token(s) never matched the real writes {outOfAllow};
+       declare exact in-repo file paths and re-freeze."*
+     - **`sensitive_write_unreviewed`** (a Phase-5 sensitive production write with no
+       `security-reviewer` node): keep the revoke/escalate semantics, surfacing the typed reason +
+       `sensitiveHits` — add a security-reviewer to the plan and re-freeze, or revoke.
+     - **`foreign_archive`** (a write into another project's archive band): revoke/escalate,
+       surfacing `foreignArchiveHits` — a stray `archive/<other>/` must not be swept onto this branch.
+     - **`unattributed_write`** (a production write declared only by a non-complete node):
+       revoke/escalate, surfacing `unattributed` — the producer claims it did not run, so the write
+       is unreviewed.
+
+     In every case the `write-halt --reason consent` transaction is identical; only the surfaced
+     message differs. `write_set_granularity` / `write_set_overflow` are a one-line re-author +
+     re-freeze; the other three are genuine security/attribution escalations.
    - `test_thrash` ≥ 3 consecutive same-test RED→RED cycles → you escalate the same way:
      ```bash
      node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-adaptive-node.js" write-halt \

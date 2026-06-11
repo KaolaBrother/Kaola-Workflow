@@ -261,7 +261,11 @@ function runHandoff(opts) {
   // refuse → return plan_invalid, exit≠0, NO mutation; stop.
   // All shelled scripts take planPath as args[0] (mirror commit-node/next-action convention).
   // -------------------------------------------------------------------------
-  const validateResult = shell(validatorPath, [planPath, '--json']);
+  // #408 (#366 deferred): SPAWN 1 of the fused freeze chain (3→2). --freeze-checked validates AND
+  // returns the governance payload (decision/risk/planHash) WITHOUT writing — so the decision-record
+  // governance below runs off it, then SPAWN 2 (--freeze --governance-ack) re-validates + asserts the
+  // hash is unchanged + writes + folds resume-check. Same {result:'refuse',errors} on a refuse.
+  const validateResult = shell(validatorPath, [planPath, '--freeze-checked', '--json']);
   if (validateResult.result !== 'in-grammar') {
     return {
       handoff_status: 'plan_invalid',
@@ -315,30 +319,33 @@ function runHandoff(opts) {
   const risk     = validateResult.risk     || {};
 
   // -------------------------------------------------------------------------
-  // Step 2: --freeze (FIRST mutation). Writes plan_hash into the plan file.
-  // Idempotent: re-freeze returns same hash + frozen:true.
+  // Step 2 (#408): SPAWN 2 — --freeze --governance-ack <planHash> (FIRST mutation). Re-validates,
+  // asserts the planHash from SPAWN 1 still matches (the plan was not edited between governance and
+  // freeze — else refuse governance_ack_stale, NO write), writes plan_hash atomically, AND folds
+  // --resume-check into its emission (freezeResult.resumeOk). Idempotent: re-freeze returns the same
+  // hash + frozen:true. This collapses the former Step-2 (--freeze) + Step-3 (--resume-check) spawns.
   // -------------------------------------------------------------------------
-  const freezeResult = shell(validatorPath, [planPath, '--freeze', '--json']);
+  const freezeResult = shell(validatorPath, [planPath, '--freeze', '--governance-ack', validateResult.planHash, '--json']);
   if (!freezeResult.frozen) {
     return {
       handoff_status: 'plan_invalid',
       result: 'refuse',
-      errors: ['freeze failed (infra): frozen===false'],
+      errors: freezeResult.reason === 'governance_ack_stale'
+        ? (freezeResult.errors || ['governance_ack_stale: plan mutated between governance and freeze'])
+        : ['freeze failed (infra): frozen===false'],
       validator_verdict: freezeResult,
     };
   }
   const planHash = freezeResult.planHash;
 
-  // -------------------------------------------------------------------------
-  // Step 3: --resume-check (integrity gate on just-frozen plan).
-  // -------------------------------------------------------------------------
-  const resumeResult = shell(validatorPath, [planPath, '--resume-check', '--json']);
-  if (!resumeResult.ok) {
+  // Step 3 folded into Step 2: the freeze emission carries resumeOk (the freeze already computed the
+  // hash --resume-check would re-verify), so no separate --resume-check spawn is needed.
+  if (freezeResult.resumeOk !== true) {
     return {
       handoff_status: 'plan_invalid',
       result: 'refuse',
-      errors: ['resume-check failed (infra): ok===false — ' + (resumeResult.reason || '')],
-      validator_verdict: resumeResult,
+      errors: ['resume-check failed (infra): folded resumeOk!==true'],
+      validator_verdict: freezeResult,
     };
   }
 

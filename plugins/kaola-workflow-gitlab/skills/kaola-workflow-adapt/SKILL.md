@@ -55,7 +55,17 @@ width. `LOOP_CAP` (**5**; a loop must run at least once — `loop(0)` is a typed
 paths, never directories:** a directory / trailing-slash entry (`src/`) or a `..`-bearing token is
 **refused at freeze** (`#381` — it is dead at the exact-match barrier); a lane needing more than
 `FILE_CEILING` files **splits into sequenced same-role nodes** (each ≤ ceiling, same gate coverage),
-never a directory grant. The unique **`finalize`**
+never a directory grant.
+> **The one shape the freeze wall cannot catch (#404):** a **bare token naming a path that does NOT
+> exist at freeze but becomes a DIRECTORY by write-time** — the classic staged *scaffold→extend* plan
+> (the very shape the adaptive path is designed to author). The freeze-time bare-directory check
+> (`#388`) `statSync`s the token and skips a not-yet-created path as a legitimate new file, so a
+> `mymod` token that an earlier node turns into the directory `mymod/` slips through. It then dies at
+> the exact-path barrier as `write_set_granularity`, escalating a purely-mechanical artifact to a
+> consent halt (`revalidateForResume` carries **no** shape checks — no `statSync`/`isDirectory`/
+> `directory_shaped` — so resume can never re-catch it either). **Always declare the EXACT files a
+> staged node will create (`mymod/a.js`, `mymod/b.js`), never a bare dir-to-be.**
+The unique **`finalize`**
 sink may only write docs/state (e.g. `CHANGELOG.md`); a non-docs write on the sink trips `code-reviewer`.
 
 ## A complete example (`workflow-plan.md`)

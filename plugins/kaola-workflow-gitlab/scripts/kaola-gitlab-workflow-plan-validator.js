@@ -409,9 +409,12 @@ function verifyGateExecution(content, opts) {
   opts = opts || {};
   const unsatisfied = [];
   const nodes = parseNodes(content);
-  if (!nodes.length) return { ok: false, unsatisfied: [{ requirement: '## Nodes', reason: 'unparseable' }] };
+  // #406: DUAL-EMIT — add the canonical {result, reasonCode} envelope ALONGSIDE the established
+  // `ok` (and `unsatisfied`). Every consumer (commit-node gateVerify.ok) still reads `ok`; the typed
+  // fields are additive (back-compat shim, removal date in docs/api.md). result agrees with `ok`.
+  if (!nodes.length) return { ok: false, result: 'refuse', reasonCode: 'nodes_unparseable', unsatisfied: [{ requirement: '## Nodes', reason: 'unparseable' }] };
   const sink = uniqueSink(nodes);
-  if (!sink) return { ok: false, unsatisfied: [{ requirement: 'unique sink', reason: 'no unique finalize sink' }] };
+  if (!sink) return { ok: false, result: 'refuse', reasonCode: 'no_unique_sink', unsatisfied: [{ requirement: 'unique sink', reason: 'no unique finalize sink' }] };
   const ledger = parseLedger(content);
   const labels = parseLabels(classifier.sectionBody(content, 'Meta'));
   const done = id => ledger.get(id) === 'complete';
@@ -446,7 +449,7 @@ function verifyGateExecution(content, opts) {
       }
     }
   }
-  return { ok: unsatisfied.length === 0, unsatisfied };
+  return { ok: unsatisfied.length === 0, result: unsatisfied.length ? 'refuse' : 'pass', reasonCode: unsatisfied.length ? 'gate_unsatisfied' : null, unsatisfied };
 }
 
 // #251: Pure (no fs). Verify that every completed gate-role node's .cache evidence file carries a
@@ -459,7 +462,9 @@ function verifyVerdictBlock(content, opts) {
   const readCache = opts.readCache || (() => null);
   const globCache = opts.globCache || (() => []);
   const nodes = parseNodes(content);
-  if (!nodes.length) return { ok: false, failures: [{ nodeId: null, role: null, reason: 'unparseable ## Nodes' }], checked: [] };
+  // #406: DUAL-EMIT — {result, reasonCode} ADDED alongside the established `ok` on every return.
+  // Consumers (commit-node verdictCheck.ok) still read `ok`; the typed fields are additive shims.
+  if (!nodes.length) return { ok: false, result: 'refuse', reasonCode: 'nodes_unparseable', failures: [{ nodeId: null, role: null, reason: 'unparseable ## Nodes' }], checked: [] };
   function checkOne(node) {
     const role = node.role;
     if (!GATE_VERDICT_ROLES.has(role)) {
@@ -511,11 +516,13 @@ function verifyVerdictBlock(content, opts) {
           ? `gate role ${role} node ${node.id} verdict=pass but ${unresolvedFixes.length} unresolved in-scope action:fix finding(s): ${fixIds}`
           : `gate role ${role} node ${node.id} verdict=${v.verdict} findings_blocking=${blocking}`) };
   }
+  // #406: stamp the canonical {result, reasonCode} onto a top-level return alongside its `ok`.
+  const decorate = r => Object.assign({}, r, { result: r.ok ? 'pass' : 'refuse', reasonCode: r.ok ? null : 'verdict_not_pass' });
   if (opts.nodeId) {
     const node = nodes.find(n => n.id === opts.nodeId);
-    if (!node) return { ok: false, nodeId: opts.nodeId, role: null, verdict: null, findings_blocking: null, found: false,
+    if (!node) return { ok: false, result: 'refuse', reasonCode: 'node_not_found', nodeId: opts.nodeId, role: null, verdict: null, findings_blocking: null, found: false,
       reason: `--node-id "${opts.nodeId}" not found in the frozen plan` };
-    return checkOne(node);
+    return decorate(checkOne(node));
   }
   const ledger = parseLedger(content);
   const failures = [];
@@ -527,7 +534,28 @@ function verifyVerdictBlock(content, opts) {
     const r = checkOne(node);
     if (!r.ok) failures.push({ nodeId: node.id, role: node.role, reason: r.reason || 'verdict not pass' });
   }
-  return { ok: failures.length === 0, failures, checked };
+  return { ok: failures.length === 0, result: failures.length ? 'refuse' : 'pass', reasonCode: failures.length ? 'verdict_not_pass' : null, failures, checked };
+}
+
+// #404 (#381 Part C, build-smaller): STRUCTURAL detection of the write-set GRANULARITY artifact —
+// a per-node overflow whose out-of-allow files are ALL strict subtrees of one of the node's OWN
+// directory-shaped declared tokens. PURE (no fs): a "directory token" is one ending in `/` (the
+// #388-(b) trailing-slash shape) OR a bare segment that the operator meant as a directory (`src`);
+// both are normalized to `tok + '/'` for a literal-string subtree prefix. STRICT subtree = p starts
+// with `tok/` AND p !== tok (a directory grant can never equal a file write). True iff outOfAllow is
+// NON-EMPTY and EVERY member is covered by one of the node's own dir tokens — a single foreign
+// (non-subtree) write keeps it plain write_set_overflow. NO mutation, NO re-freeze, NO auto-repair:
+// the build-smaller scope (guards 3-7 / the auto-repair machine are documented-deferred).
+function isWriteSetGranularity(ownNode, outOfAllow) {
+  if (!ownNode || !outOfAllow || !outOfAllow.length) return false;
+  const dirTokens = [];
+  for (const tok of (ownNode.writeSet || [])) {
+    const t = String(tok || '').trim();
+    if (!t) continue;
+    dirTokens.push(t.endsWith('/') ? t : t + '/');
+  }
+  if (!dirTokens.length) return false;
+  return outOfAllow.every(p => dirTokens.some(d => p.startsWith(d) && p !== d.slice(0, -1)));
 }
 
 // The runtime BARRIER (audit H1/H3). Given the files a node (or the whole plan) ACTUALLY wrote
@@ -598,6 +626,7 @@ function barrierCheck(content, actualPaths, opts) {
   // `complete` puts it back into verifyGateExecution's G1/G2 target set, so --gate-verify (run
   // alongside --barrier-check at phase6) then enforces review — the two checks compose. A genuinely
   // skipped n/a node that wrote NOTHING is never flagged: its declared file is absent from the diff.
+  let unattributed = [];
   if (!opts.nodeId) {
     const ledger = parseLedger(content);
     const anyCompleteOwner = new Map();
@@ -605,12 +634,33 @@ function barrierCheck(content, actualPaths, opts) {
       if (!anyCompleteOwner.has(p)) anyCompleteOwner.set(p, false);
       if (ledger.get(n.id) === 'complete') anyCompleteOwner.set(p, true);
     }
-    const unattributed = production.filter(p => declared.has(p) && anyCompleteOwner.get(p) === false);
+    unattributed = production.filter(p => declared.has(p) && anyCompleteOwner.get(p) === false);
     if (unattributed.length) {
       errors.push(`actual writes (${unattributed.join(', ')}) are declared only by non-complete (n/a/pending) node(s) — the producing node claims it did not run, so the write is unreviewed`);
     }
   }
-  return { result: errors.length ? 'refuse' : 'pass', errors, sensitiveHits, outOfAllow };
+  // #406: a typed `reason` carrying the HIGHEST-precedence matched failure family, so consumers
+  // classify the refusal STRUCTURALLY (never by English-substring matching the `errors` strings).
+  // Precedence: foreign_archive(1) > sensitive_write_unreviewed(2) > write_set_overflow(3) >
+  // unattributed_write(4). `reason` is null when result==='pass'. ADDITIVE — no consumer reads
+  // barrierCheck.reason today; the new surfaced arrays (foreignArchiveHits, unattributed; sensitiveHits
+  // and outOfAllow were already returned) let #404's structural classifier read the families directly.
+  let reason = null;
+  if (foreignArchiveHits.length) reason = 'foreign_archive';
+  else if (sensitiveHits.length && !hasSecReviewer) reason = 'sensitive_write_unreviewed';
+  else if (outOfAllow.length) {
+    // #404 (#381 Part C, build-smaller): a per-node overflow whose EVERY out-of-allow path is a
+    // strict subtree of one of THIS node's OWN directory-shaped declared tokens (`src/` or bare
+    // `src`) is the mechanical granularity artifact — the operator authored a directory grant a
+    // pre-#381 freeze let through, and the exact-path barrier can never match the real files. It is
+    // a SUBTYPE of overflow (structural literal-string-prefix detection — NO mutation, NO re-freeze,
+    // NO auto-repair). Plan-run surfaces an actionable "enumerate the files + re-freeze" consent
+    // halt instead of the generic overflow halt. Per-node only (ownNode); a foreign (non-subtree)
+    // write in the set keeps it plain write_set_overflow.
+    reason = (ownNode && isWriteSetGranularity(ownNode, outOfAllow)) ? 'write_set_granularity' : 'write_set_overflow';
+  }
+  else if (unattributed.length) reason = 'unattributed_write';
+  return { result: errors.length ? 'refuse' : 'pass', reason, errors, sensitiveHits, outOfAllow, foreignArchiveHits, unattributed };
 }
 
 // --- plan hash --------------------------------------------------------------
@@ -1157,25 +1207,30 @@ function validatePlan(content, opts) {
 // if the rubric tightened after freeze). Structure + library are stable.
 function revalidateForResume(content, opts) {
   opts = opts || {};
+  // #406: DUAL-EMIT — every refuse return carries the canonical {result:'refuse', reasonCode}
+  // alongside the established `ok` and the HUMAN `reason` string (consumers echo `reason` on stderr:
+  // --resume-check, adaptive-handoff:340, adaptive-node:2051, parallel-batch:453 — and gate on `ok`).
+  // The typed token lives in the NEW `reasonCode` field, never by overwriting `reason`.
+  const refuse = (reasonCode, reason) => ({ ok: false, result: 'refuse', reasonCode, reason });
   const stored = readStoredHash(content);
   const computed = computePlanHash(content);
-  if (!stored) return { ok: false, reason: 'plan_hash missing — plan is not frozen' };
-  if (stored !== computed) return { ok: false, reason: 'plan_hash mismatch — workflow-plan.md tampered after freeze' };
+  if (!stored) return refuse('plan_not_frozen', 'plan_hash missing — plan is not frozen');
+  if (stored !== computed) return refuse('plan_hash_mismatch', 'plan_hash mismatch — workflow-plan.md tampered after freeze');
   const nodes = parseNodes(content);
-  if (!nodes.length) return { ok: false, reason: 'workflow-plan.md ## Nodes unparseable' };
+  if (!nodes.length) return refuse('nodes_unparseable', 'workflow-plan.md ## Nodes unparseable');
   // Same input-size backstop as validatePlan: the resume path also calls hasCycle, so an
   // oversized frozen plan must be refused before the DFS rather than overflow the stack.
-  if (nodes.length > schema.MAX_NODES) return { ok: false, reason: `plan has ${nodes.length} nodes > MAX_NODES ${schema.MAX_NODES} (out of grammar)` };
+  if (nodes.length > schema.MAX_NODES) return refuse('too_many_nodes', `plan has ${nodes.length} nodes > MAX_NODES ${schema.MAX_NODES} (out of grammar)`);
   const roles = opts.installedRoles || installedRoles(opts.root || process.cwd());
   const ids = new Set(nodes.map(n => n.id));
   for (const n of nodes) {
     // #334: MAIN_SESSION_GATE is a built-in token (like TERMINAL_ROLE) — never in the installed library.
-    if (n.role !== TERMINAL_ROLE && n.role !== MAIN_SESSION_GATE && !roles.has(n.role)) return { ok: false, reason: `unknown role "${n.role}" (node ${n.id})` };
-    for (const d of n.dependsOn) if (!ids.has(d)) return { ok: false, reason: `node ${n.id} depends_on unknown "${d}"` };
+    if (n.role !== TERMINAL_ROLE && n.role !== MAIN_SESSION_GATE && !roles.has(n.role)) return refuse('unknown_role', `unknown role "${n.role}" (node ${n.id})`);
+    for (const d of n.dependsOn) if (!ids.has(d)) return refuse('dangling_depends_on', `node ${n.id} depends_on unknown "${d}"`);
   }
-  if (hasCycle(nodes)) return { ok: false, reason: 'cycle detected' };
-  if (!uniqueSink(nodes)) return { ok: false, reason: 'no unique sink' };
-  return { ok: true, planHash: computed };
+  if (hasCycle(nodes)) return refuse('cycle', 'cycle detected');
+  if (!uniqueSink(nodes)) return refuse('no_unique_sink', 'no unique sink');
+  return { ok: true, result: 'pass', reasonCode: null, planHash: computed };
 }
 
 // Freeze: validate, and if in-grammar, inject/update the plan_hash comment.
@@ -1341,6 +1396,24 @@ function main() {
     if (!r.ok) process.exitCode = 1;
     return;
   }
+  if (args.includes('--freeze-checked')) {
+    // #408 (#366 deferred): SPAWN 1 of the fused handoff freeze chain (3→2). Validate and return
+    // the governance-relevant payload (decision/risk) PLUS the computed planHash, WITHOUT writing.
+    // The handoff runs its decision-record governance off this payload, then SPAWN 2
+    // (--freeze --governance-ack <planHash>) re-validates, asserts the hash is unchanged, writes
+    // atomically, and folds --resume-check into its emission. refuse → same {result:'refuse',errors}.
+    const v = validatePlan(content, { root });
+    if (v.result !== 'in-grammar') {
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', errors: v.errors }) : 'typed refusal (out of grammar): ' + (v.errors || []).join('; ')) + '\n');
+      process.exitCode = 1; return;
+    }
+    const out = {
+      result: 'in-grammar', decision: v.decision, risk: v.risk, planHash: v.planHash,
+      frozen: false, governance: { decision: v.decision, risk: v.risk },
+    };
+    process.stdout.write((json ? JSON.stringify(out) : `checked (${v.decision}) plan_hash=${v.planHash} (not yet frozen)`) + '\n');
+    return;
+  }
   if (args.includes('--freeze')) {
     // #308: --freeze --repair reconciles the ## Node Ledger to ## Nodes (adds missing rows
     // as pending, never drops a status) BEFORE freezing. plan_hash excludes the ledger, so
@@ -1352,13 +1425,40 @@ function main() {
       toFreeze = rec.content;
       reconciledAdded = rec.added;
     }
+    // #408 (#366 deferred): SPAWN 2 of the fused handoff chain. --governance-ack <planHash> asserts
+    // the plan has NOT mutated between SPAWN 1 (--freeze-checked) and the freeze — the planHash the
+    // handoff approved must still match the one this content computes. A mismatch (the plan was
+    // edited between the two spawns, dodging the governance the operator ack'd) refuses
+    // governance_ack_stale with NO write. The ack covers the SAME author-immutable Meta+Nodes the
+    // hash covers, so --repair's ledger-only reconcile (hash-neutral) is compatible.
+    const ackIdx = args.indexOf('--governance-ack');
+    const ackHash = ackIdx >= 0 && ackIdx + 1 < args.length ? args[ackIdx + 1] : null;
+    if (ackIdx >= 0) {
+      const computed = computePlanHash(toFreeze);
+      if (!ackHash || ackHash !== computed) {
+        const out = { result: 'refuse', reason: 'governance_ack_stale', frozen: false,
+          errors: ['--governance-ack ' + (ackHash || '(missing)') + ' does not match the plan\'s current hash ' + computed + ' — the plan mutated between governance and freeze; re-run --freeze-checked'] };
+        process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: governance_ack_stale (' + (ackHash || 'missing') + ' != ' + computed + ')') + '\n');
+        process.exitCode = 1; return;
+      }
+    }
     const r = freezePlan(toFreeze, { root });
     // #389: route the plan_hash-stamping freeze write (also the mid-run plan-repair re-freeze
     // writer that carries a populated ## Node Ledger) through the crash-safe atomic replace.
     // A torn workflow-plan.md would mismatch plan_hash and brick --resume-check with no recovery
     // (#353's verbatim motivating scenario), and the ledger is not covered by any other artifact.
     if (r.frozen) schema.writeFileAtomicReplace(planPath, r.content);
-    process.stdout.write((json ? JSON.stringify({ result: r.result, decision: r.decision, planHash: r.planHash, frozen: r.frozen, risk: r.risk, errors: r.errors, reconciled: reconciledAdded }) : (r.frozen ? `frozen (${r.decision}) plan_hash=${r.planHash}${reconciledAdded.length ? ' reconciled=' + reconciledAdded.join(',') : ''}` : 'typed refusal: ' + (r.errors || []).join('; '))) + '\n');
+    // #408: FOLD --resume-check into the freeze emission — the freeze already computed the hash it
+    // would re-verify, so the handoff's SPAWN 2 needs no separate --resume-check spawn. resumeOk is
+    // emitted ONLY when an ack was supplied (the fused handoff path); plain --freeze stays byte-stable.
+    let resumeOk;
+    if (r.frozen && ackIdx >= 0) {
+      const rr = revalidateForResume(r.content, { root });
+      resumeOk = !!rr.ok;
+    }
+    const payload = { result: r.result, decision: r.decision, planHash: r.planHash, frozen: r.frozen, risk: r.risk, errors: r.errors, reconciled: reconciledAdded };
+    if (resumeOk !== undefined) payload.resumeOk = resumeOk;
+    process.stdout.write((json ? JSON.stringify(payload) : (r.frozen ? `frozen (${r.decision}) plan_hash=${r.planHash}${reconciledAdded.length ? ' reconciled=' + reconciledAdded.join(',') : ''}${resumeOk !== undefined ? ' resumeOk=' + resumeOk : ''}` : 'typed refusal: ' + (r.errors || []).join('; '))) + '\n');
     if (!r.frozen) process.exitCode = 1;
     return;
   }
@@ -1578,23 +1678,27 @@ function main() {
   if (args.includes('--selector-check')) {
     // #263: mechanical n/a computation for Classify-And-Act selective execution.
     // Inputs: plan path, --node-id <selector_source-id>. Non-selector nodes return ok:true/isSelector:false
-    // (never false-blocks a normal commit). Missing/foreign selector => ok:false/exit 1 (fail-closed).
+    // (never false-blocks a normal commit). Missing/foreign selector => result:'refuse'/exit 1 (fail-closed).
+    // #406 Class-C: the standalone --selector-check REFUSE paths emit the canonical {result:'refuse',
+    // reason, errors} envelope (the only deliberate consumer change — the 2 walkthrough scJson.ok===false
+    // asserts flip to result==='refuse'). The SUCCESS shapes keep `ok:true` (commit-node's legacy-fallback
+    // selectorCheck.ok===true read), and the FUSED --node-end selectorCheckOut keeps `ok` too (unmigrated).
     const flagVal = name => { const i = args.indexOf(name); return i >= 0 && i + 1 < args.length ? args[i + 1] : null; };
     const nodeId = flagVal('--node-id');
     if (!nodeId) {
-      const out = { ok: false, errors: ['--selector-check requires --node-id <id>'] };
+      const out = { result: 'refuse', reason: 'missing_node_id', errors: ['--selector-check requires --node-id <id>'] };
       process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: --selector-check requires --node-id') + '\n');
       process.exitCode = 1; return;
     }
     const nodes = parseNodes(content);
     if (!nodes.length) {
-      const out = { ok: false, errors: ['plan has no parseable ## Nodes table'] };
+      const out = { result: 'refuse', reason: 'nodes_unparseable', errors: ['plan has no parseable ## Nodes table'] };
       process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: ' + out.errors[0]) + '\n');
       process.exitCode = 1; return;
     }
     const node = nodes.find(n => n.id === nodeId);
     if (!node) {
-      const out = { ok: false, errors: [`--node-id "${nodeId}" not found in the frozen plan`] };
+      const out = { result: 'refuse', reason: 'node_not_found', errors: [`--node-id "${nodeId}" not found in the frozen plan`] };
       process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: ' + out.errors[0]) + '\n');
       process.exitCode = 1; return;
     }
@@ -1614,7 +1718,7 @@ function main() {
     const parsed = schema.parseNodeSelector(cacheText || '');
     // FAIL-CLOSED: selector not found.
     if (!parsed.found) {
-      const out = { ok: false, isSelector: true, errors: [`selector_source "${nodeId}" produced no selector: line`] };
+      const out = { result: 'refuse', reason: 'no_selector_line', isSelector: true, errors: [`selector_source "${nodeId}" produced no selector: line`] };
       process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: ' + out.errors[0]) + '\n');
       process.exitCode = 1; return;
     }
@@ -1622,7 +1726,7 @@ function main() {
     const armIds = arms.map(a => a.id);
     // FAIL-CLOSED: selector names an id not among the arms (foreign).
     if (!armIds.includes(selected)) {
-      const out = { ok: false, isSelector: true, errors: [`selector "${selected}" is not an arm of select group "${group}" (${armIds.join(', ')})`] };
+      const out = { result: 'refuse', reason: 'foreign_selector', isSelector: true, errors: [`selector "${selected}" is not an arm of select group "${group}" (${armIds.join(', ')})`] };
       process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: ' + out.errors[0]) + '\n');
       process.exitCode = 1; return;
     }
@@ -1636,7 +1740,8 @@ function main() {
     const flagVal = name => { const i = args.indexOf(name); return i >= 0 && i + 1 < args.length ? args[i + 1] : null; };
     const nodeId = flagVal('--node-id');
     if (args.includes('--node-id') && !nodeId) {
-      process.stdout.write((json ? JSON.stringify({ ok: false, errors: ['--node-id requires a value'] }) : 'typed refusal: --node-id requires a value') + '\n');
+      // #406 Class-C: arg-error refuses with the canonical {result:'refuse', reason} envelope.
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'missing_node_id', errors: ['--node-id requires a value'] }) : 'typed refusal: --node-id requires a value') + '\n');
       process.exitCode = 1; return;
     }
     const cacheDir = path.join(path.dirname(path.resolve(planPath)), '.cache');

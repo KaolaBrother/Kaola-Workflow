@@ -1970,6 +1970,60 @@ function testAdaptiveGateBarrierEnforcement() {
     assert(planValidator.barrierCheck(naTargetCode, ['src/feature.js'], { nodeId: 'imp' }).result === 'pass',
       'Fix#1 control: per-node barrier (nodeId) must not run the whole-plan ledger-consistency check');
 
+    // --- #406: typed barrier `reason` (highest-precedence matched family) + surfaced arrays.
+    // Precedence: foreign_archive(1) > sensitive_write_unreviewed(2) > write_set_overflow(3) >
+    // unattributed_write(4); reason:null when pass. NO consumer reads it today — purely additive.
+    assert(planValidator.barrierCheck(noSec, ['lib/foo.js'], {}).reason === null,
+      '#406: a passing barrier carries reason:null');
+    const sensR = planValidator.barrierCheck(noSec, ['src/auth/login.js'], {});
+    assert(sensR.reason === 'sensitive_write_unreviewed' && Array.isArray(sensR.sensitiveHits) && sensR.sensitiveHits.length > 0,
+      '#406: a sensitive production write with no security-reviewer => reason:sensitive_write_unreviewed + surfaced sensitiveHits, got ' + JSON.stringify(sensR));
+    const ovR = planValidator.barrierCheck(noSec, ['src/surprise.js'], {});
+    assert(ovR.reason === 'write_set_overflow' && Array.isArray(ovR.outOfAllow) && ovR.outOfAllow.indexOf('src/surprise.js') >= 0,
+      '#406: a plain out-of-allowlist write => reason:write_set_overflow + surfaced outOfAllow, got ' + JSON.stringify(ovR));
+    const naR = planValidator.barrierCheck(naTargetCode, ['src/feature.js'], {});
+    assert(naR.reason === 'unattributed_write' && Array.isArray(naR.unattributed) && naR.unattributed.indexOf('src/feature.js') >= 0,
+      '#406: a write declared only by a non-complete node => reason:unattributed_write + surfaced unattributed, got ' + JSON.stringify(naR));
+    // foreign_archive has the HIGHEST precedence: a foreign-archive write that is ALSO out-of-allowlist
+    // must report foreign_archive (1), never write_set_overflow (3) — and surface foreignArchiveHits.
+    const faR = planValidator.barrierCheck(noSec, ['kaola-workflow/archive/other-proj/x.md', 'src/surprise.js'], { project: 'mine' });
+    assert(faR.reason === 'foreign_archive' && Array.isArray(faR.foreignArchiveHits) && faR.foreignArchiveHits.length > 0,
+      '#406 precedence: foreign-archive + overflow together => reason:foreign_archive (1 > 3) + surfaced foreignArchiveHits, got ' + JSON.stringify(faR));
+    // sensitive (2) > overflow (3): a sensitive write that is ALSO out-of-allowlist reports sensitive.
+    const sovR = planValidator.barrierCheck(noSec, ['src/auth/login.js', 'src/surprise.js'], {});
+    assert(sovR.reason === 'sensitive_write_unreviewed',
+      '#406 precedence: sensitive + overflow together => reason:sensitive_write_unreviewed (2 > 3), got ' + JSON.stringify(sovR));
+    // overflow (3) > unattributed (4): a whole-plan diff that is BOTH out-of-allowlist (foreign file)
+    // AND has an n/a-declared write reports overflow (the higher-precedence family).
+    const ovUnR = planValidator.barrierCheck(naTargetCode, ['src/feature.js', 'src/foreign.js'], {});
+    assert(ovUnR.reason === 'write_set_overflow',
+      '#406 precedence: overflow + unattributed together => reason:write_set_overflow (3 > 4), got ' + JSON.stringify(ovUnR));
+
+    // --- #404 (#381 Part C, build-smaller): write_set_granularity is a SUBTYPE of overflow — a
+    // per-node overflow whose EVERY out-of-allow path is a strict subtree of one of the node's OWN
+    // directory-shaped declared tokens. Iff subtree-covered; a foreign (non-subtree) write keeps it
+    // plain write_set_overflow. MUTATION: removing the subtree-prefix check would make granularity
+    // fire on the foreign-present case below (which asserts write_set_overflow) => RED.
+    const granPlan = ['# Plan', '', '## Meta', 'labels: area:scripts', '', '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
+      '| impl | tdd-guide | — | src/ | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |', ''].join('\n');
+    const granFrozen = '<!-- plan_hash: ' + planValidator.computePlanHash(granPlan) + ' -->\n' + granPlan;
+    const granR = planValidator.barrierCheck(granFrozen, ['src/a.js', 'src/b.js'], { nodeId: 'impl' });
+    assert(granR.result === 'refuse' && granR.reason === 'write_set_granularity',
+      '#404: outOfAllow all strict-subtree of own bare dir token "src/" => reason:write_set_granularity, got ' + JSON.stringify(granR));
+    // bare (no-trailing-slash) directory token form is also covered (normalized to `tok + "/"`).
+    const granBarePlan = granPlan.replace('| src/ |', '| src |');
+    const granBareFrozen = '<!-- plan_hash: ' + planValidator.computePlanHash(granBarePlan) + ' -->\n' + granBarePlan;
+    assert(planValidator.barrierCheck(granBareFrozen, ['src/a.js'], { nodeId: 'impl' }).reason === 'write_set_granularity',
+      '#404: a bare (slash-less) own dir token "src" also yields write_set_granularity, got ' + JSON.stringify(planValidator.barrierCheck(granBareFrozen, ['src/a.js'], { nodeId: 'impl' })));
+    // a FOREIGN (non-subtree) write present in the set keeps it plain write_set_overflow — the
+    // discriminator the granularity mutation would break (it would mis-classify this as granularity).
+    const granForeign = planValidator.barrierCheck(granFrozen, ['src/a.js', 'lib/foreign.js'], { nodeId: 'impl' });
+    assert(granForeign.result === 'refuse' && granForeign.reason === 'write_set_overflow',
+      '#404 discriminator: a foreign (non-subtree) write present => reason:write_set_overflow, not granularity, got ' + JSON.stringify(granForeign));
+
     // --- --gate-verify CLI exit codes.
     const gvPlan = path.join(tmp, 'gv.md');
     fs.writeFileSync(gvPlan, mkLedgerPlan(['| impl | tdd-guide | — | lib/foo.js | 1 | sequence |', '| rv | code-reviewer | impl | — | 1 | sequence |', '| done | finalize | rv | — | 1 | sequence |'], ['| impl | complete |', '| rv | n/a |', '| done | complete |']));
@@ -1991,6 +2045,21 @@ function testAdaptiveGateBarrierEnforcement() {
     // (c) all complete -> G3 satisfied.
     g3 = planValidator.verifyGateExecution(mkLedgerPlan(g3Nodes, ['| impl | complete |', '| rv | complete |', '| vgate | complete |', '| done | complete |']), {});
     assert(g3.ok === true, '#334 G3 control: all-complete (gate too) must verify ok, got: ' + JSON.stringify(g3));
+
+    // --- #406 Class-A DUAL-EMIT: verifyGateExecution + verifyVerdictBlock add {result,reasonCode}
+    // ALONGSIDE the established `ok` (every consumer still reads `ok`). result must AGREE with ok.
+    const gvFail = planValidator.verifyGateExecution(mkLedgerPlan(g3Nodes, ['| impl | complete |', '| rv | complete |', '| vgate | pending |', '| done | pending |']), {});
+    assert(gvFail.ok === false && gvFail.result === 'refuse' && gvFail.reasonCode === 'gate_unsatisfied',
+      '#406: verifyGateExecution unsatisfied => ok:false + result:refuse + reasonCode, got: ' + JSON.stringify({ ok: gvFail.ok, result: gvFail.result, reasonCode: gvFail.reasonCode }));
+    assert(g3.result === 'pass' && g3.reasonCode === null,
+      '#406: verifyGateExecution satisfied => result:pass + reasonCode:null (agrees with ok:true), got: ' + JSON.stringify({ result: g3.result, reasonCode: g3.reasonCode }));
+    const vcPlan = mkLedgerPlan(['| impl | tdd-guide | — | lib/foo.js | 1 | sequence |', '| rv | code-reviewer | impl | — | 1 | sequence |', '| done | finalize | rv | — | 1 | sequence |'], ['| impl | complete |', '| rv | complete |', '| done | complete |']);
+    const vcFail = planValidator.verifyVerdictBlock(vcPlan, { nodeId: 'rv', readCache: () => null });
+    assert(vcFail.ok === false && vcFail.result === 'refuse' && vcFail.reasonCode === 'verdict_not_pass',
+      '#406: verifyVerdictBlock per-node missing evidence => ok:false + result:refuse + reasonCode (agrees), got: ' + JSON.stringify({ ok: vcFail.ok, result: vcFail.result, reasonCode: vcFail.reasonCode }));
+    const vcSkip = planValidator.verifyVerdictBlock(vcPlan, { nodeId: 'impl', readCache: () => null });
+    assert(vcSkip.ok === true && vcSkip.result === 'pass' && vcSkip.reasonCode === null,
+      '#406: verifyVerdictBlock per-node non-gate self-skip => ok:true + result:pass + reasonCode:null, got: ' + JSON.stringify({ ok: vcSkip.ok, result: vcSkip.result, reasonCode: vcSkip.reasonCode }));
 
     // --- #334 --gate-verify + --verdict-check CLI exit codes over a project dir with a .cache.
     const g3Proj = path.join(tmp, 'kaola-workflow', 'issue-334');
@@ -9119,8 +9188,8 @@ function testAdaptiveVerdictCheck() {
     assert(cr.status === 1,
       '--selector-check --node-id classify (missing cache) must exit 1, got ' + cr.status + ' ' + cr.stdout);
     scJson = JSON.parse(cr.stdout);
-    assert(scJson.ok === false && scJson.isSelector === true,
-      '--selector-check missing cache: ok:false/isSelector:true, got ' + cr.stdout);
+    assert(scJson.result === 'refuse' && scJson.isSelector === true,
+      '--selector-check missing cache: result:refuse/isSelector:true, got ' + cr.stdout);
 
     // selector_source with valid selector -> exit 0, selected + armsToNa
     fs.writeFileSync(path.join(scCacheDir, 'classify.md'), 'selector: arm-csv\n');
@@ -9139,8 +9208,8 @@ function testAdaptiveVerdictCheck() {
     assert(cr.status === 1,
       '--selector-check --node-id classify (foreign selector) must exit 1, got ' + cr.status + ' ' + cr.stdout);
     scJson = JSON.parse(cr.stdout);
-    assert(scJson.ok === false && scJson.isSelector === true,
-      '--selector-check foreign selector: ok:false/isSelector:true, got ' + cr.stdout);
+    assert(scJson.result === 'refuse' && scJson.isSelector === true,
+      '--selector-check foreign selector: result:refuse/isSelector:true, got ' + cr.stdout);
 
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -10086,6 +10155,111 @@ function testAdaptiveHandoffIdempotentReRun() {
 
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   console.log('testAdaptiveHandoffIdempotentReRun: PASSED');
+}
+
+// ---------------------------------------------------------------------------
+// testAdaptiveHandoffFreezeChainTwoSpawns — #408 (#366 deferred): the handoff freeze chain
+// fuses 3 validator spawns (validate → freeze → resume-check) into 2 (--freeze-checked, then
+// --freeze --governance-ack <planHash> with resume-check folded in). Wrap the handoff `shell`
+// seam and assert EXACTLY 2 validator invocations, the second carrying --governance-ack with the
+// hash from the first, and NO standalone --resume-check spawn. Governance (decision/risk) still
+// flows from --freeze-checked. Stale-ack refusal stops pre-mutation (covered at the CLI level).
+// ---------------------------------------------------------------------------
+function testAdaptiveHandoffFreezeChainTwoSpawns() {
+  const handoff = require(path.join(repoRoot, 'scripts', 'kaola-workflow-adaptive-handoff.js'));
+  const planValidator = require(planValidatorScript);
+  const tmp = adaptiveTmp('handoff-2spawn');
+  try {
+    const projectName = 'issue-408-2spawn';
+    const projectDir = path.join(tmp, 'kaola-workflow', projectName);
+    fs.mkdirSync(projectDir, { recursive: true });
+    const planText = makeHandoffPlan([
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| impl | tdd-guide | explore | lib/foo.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], [
+      '| explore | pending |', '| impl | pending |', '| review | pending |', '| done | pending |',
+    ]);
+    const planPath = path.join(projectDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, planText);
+    plantHandoffState(projectDir, projectName);
+    const statePath = path.join(projectDir, 'workflow-state.md');
+    const realHash = planValidator.computePlanHash(planText);
+
+    // Count ONLY validator spawns (by the validator basename); other seams (task-mirror, roadmap,
+    // git add, mirror-project) are mocked to harmless successes so the chain reaches ready_to_run.
+    const validatorCalls = [];
+    const isValidator = sp => /kaola-workflow-plan-validator/.test(String(sp));
+    const shell = (scriptPath, scriptArgs) => {
+      if (isValidator(scriptPath)) {
+        validatorCalls.push(scriptArgs);
+        if (scriptArgs.includes('--freeze-checked')) {
+          return { result: 'in-grammar', decision: 'auto-run', risk: { sensitivity: false, blastRadius: false, uncertain: false, reasons: [] }, planHash: realHash, frozen: false, governance: { decision: 'auto-run', risk: {} }, exitCode: 0 };
+        }
+        if (scriptArgs.includes('--freeze')) {
+          // assert the ack hash matches what --freeze-checked returned (governance not stale).
+          const ai = scriptArgs.indexOf('--governance-ack');
+          const ack = ai >= 0 ? scriptArgs[ai + 1] : null;
+          if (ack !== realHash) return { result: 'refuse', reason: 'governance_ack_stale', frozen: false, errors: ['stale'], exitCode: 1 };
+          return { result: 'in-grammar', decision: 'auto-run', planHash: realHash, frozen: true, risk: {}, resumeOk: true, exitCode: 0 };
+        }
+        // ANY standalone --resume-check spawn would be the un-fused legacy 3rd spawn → fail.
+        return { ok: false, exitCode: 1, _unexpected: scriptArgs.join(' ') };
+      }
+      return { exitCode: 0 }; // task-mirror / roadmap / git add / mirror-project — harmless success
+    };
+    const result = handoff.runHandoff({
+      planPath, statePath, project: projectName, shell,
+      computeNextAction: () => ({ result: 'ok', nextNode: { id: 'explore', role: 'code-explorer', model: 'sonnet' } }),
+      resolveModel: () => 'sonnet',
+      readFile: p => fs.readFileSync(p, 'utf8'),
+      writeFile: (p, c) => fs.writeFileSync(p, c),
+      stateMtime: () => Date.now(),
+    });
+
+    assert(result.handoff_status === 'ready_to_run',
+      '#408: fused handoff must reach ready_to_run, got: ' + JSON.stringify(result));
+    assert(validatorCalls.length === 2,
+      '#408: handoff freeze chain must spawn the validator EXACTLY 2 times (was 3), got ' + validatorCalls.length + ': ' + JSON.stringify(validatorCalls));
+    assert(validatorCalls[0].includes('--freeze-checked'),
+      '#408: SPAWN 1 must be --freeze-checked (validate + governance payload, no write), got: ' + JSON.stringify(validatorCalls[0]));
+    assert(validatorCalls[1].includes('--freeze') && validatorCalls[1].includes('--governance-ack'),
+      '#408: SPAWN 2 must be --freeze --governance-ack (write + folded resume-check), got: ' + JSON.stringify(validatorCalls[1]));
+    const ackArg = validatorCalls[1][validatorCalls[1].indexOf('--governance-ack') + 1];
+    assert(ackArg === realHash,
+      '#408: SPAWN 2 must pass back the planHash from SPAWN 1 as the governance ack, got ' + ackArg);
+    assert(!validatorCalls.some(c => c.includes('--resume-check')),
+      '#408: NO standalone --resume-check spawn (folded into the freeze emission), got: ' + JSON.stringify(validatorCalls));
+    assert(result.checklist.resume_check_ok === true,
+      '#408: resume_check_ok must still be true (read from the folded freeze resumeOk), got: ' + JSON.stringify(result.checklist));
+
+    // --- decision:ask still rows + freezes (governance metadata flows from --freeze-checked).
+    const askCalls = [];
+    const askShell = (scriptPath, scriptArgs) => {
+      if (isValidator(scriptPath)) {
+        askCalls.push(scriptArgs);
+        if (scriptArgs.includes('--freeze-checked')) return { result: 'in-grammar', decision: 'ask', risk: { sensitivity: false, blastRadius: true, uncertain: false, reasons: ['write-role fan-out (N>=2)'] }, planHash: realHash, frozen: false, governance: { decision: 'ask', risk: {} }, exitCode: 0 };
+        if (scriptArgs.includes('--freeze')) return { result: 'in-grammar', decision: 'ask', planHash: realHash, frozen: true, risk: { blastRadius: true, reasons: ['write-role fan-out (N>=2)'] }, resumeOk: true, exitCode: 0 };
+        return { ok: false, exitCode: 1 };
+      }
+      return { exitCode: 0 };
+    };
+    fs.writeFileSync(planPath, planText); // reset to unfrozen for the ask sub-case
+    const askResult = handoff.runHandoff({
+      planPath, statePath, project: projectName, shell: askShell,
+      computeNextAction: () => ({ result: 'ok', nextNode: { id: 'explore', role: 'code-explorer', model: 'sonnet' } }),
+      resolveModel: () => 'sonnet', readFile: p => fs.readFileSync(p, 'utf8'), writeFile: (p, c) => fs.writeFileSync(p, c), stateMtime: () => Date.now(),
+    });
+    assert(askResult.handoff_status === 'ready_to_run' && askResult.decision === 'ask',
+      '#408: decision:ask must still freeze + proceed (ready_to_run), got: ' + JSON.stringify(askResult));
+    assert(askCalls.length === 2, '#408: ask path also spawns the validator exactly 2x, got ' + askCalls.length);
+    const askState = fs.readFileSync(statePath, 'utf8');
+    assert(/decision: ask/.test(askState),
+      '#408: decision:ask must still write the PE audit row, got state without it');
+
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testAdaptiveHandoffFreezeChainTwoSpawns: PASSED');
 }
 
 // ---------------------------------------------------------------------------
@@ -11144,6 +11318,7 @@ function buildRegistry() {
   add('testAdaptiveHandoffAskFreezesNotApproval',         testAdaptiveHandoffAskFreezesNotApproval);
   add('testAdaptiveHandoffRefuseNoMutation',              testAdaptiveHandoffRefuseNoMutation);
   add('testAdaptiveHandoffIdempotentReRun',               testAdaptiveHandoffIdempotentReRun);
+  add('testAdaptiveHandoffFreezeChainTwoSpawns',          testAdaptiveHandoffFreezeChainTwoSpawns);
   add('testAdaptiveHandoffProjectFlagResolvesRepoRoot',   testAdaptiveHandoffProjectFlagResolvesRepoRoot);
   add('testAdaptiveHandoffDecisionIdConflict',            testAdaptiveHandoffDecisionIdConflict);
   add('testGitignoreCoversKw',                            testGitignoreCoversKw);
