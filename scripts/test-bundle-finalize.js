@@ -465,6 +465,50 @@ const { checkClosureInvariants } = require('./kaola-workflow-claim');
 })();
 
 // ---------------------------------------------------------------------------
+// Test (2b) #369: partial-closure truthfulness — a member probed STILL OPEN while online lands in
+// open_issues (never silently neither, AC2), the token is `partial` not `skipped_offline` (AC2),
+// and the remote-members-closed invariant flags it warn-first-but-VISIBLE (AC4). Mutation proof:
+// without #369 the open member vanished from every bucket and the token lied `skipped_offline`.
+// ---------------------------------------------------------------------------
+
+(function testBundleFinalizePartialOpenMember() {
+  console.log('Test (2b) #369: partial close — member 47 still OPEN online → open_issues + partial token + invariant flagged');
+  const tmpRoot = makeTmpRoot();
+  const binDir = path.join(tmpRoot, 'bin');
+  const project = 'bundle-42-47-53';
+  try {
+    initGitRepo(tmpRoot);
+    writeBundleStateFile(tmpRoot, project, 42, [42, 47, 53]);
+    writeRoadmapFile(tmpRoot, 42);
+    writeRoadmapFile(tmpRoot, 47);
+    writeRoadmapFile(tmpRoot, 53);
+    writeRoadmapMirror(tmpRoot, [42, 47, 53]);
+    // 42 + 53 closed; 47 returns state:open (not in closedIssues, no throw).
+    writeGhMockScript(binDir, { closedIssues: [42, 53] });
+
+    const result = runFinalize(['finalize', '--project', project], tmpRoot, binDir);
+    const out = parseOutput(result);
+    assert(result.status === 0, 'partial finalize still exits 0 (warn-first); got ' + result.status);
+    const receipt = out && out.closure_receipt;
+    assert(receipt != null, 'receipt present');
+    if (receipt) {
+      assert(Array.isArray(receipt.open_issues) && receipt.open_issues.includes(47),
+        '#369 AC2: member 47 (open online) recorded in open_issues, got ' + JSON.stringify(receipt.open_issues));
+      assert(!(receipt.closed_issues || []).includes(47), '#369: 47 not in closed_issues');
+      assert(!(receipt.failed_issue_closures || []).includes(47), '#369: 47 not in failed_issue_closures');
+      assert(receipt.remote_issue_closed === 'partial',
+        '#369 AC2: online partial close → remote_issue_closed === partial (never skipped_offline), got ' + receipt.remote_issue_closed);
+    }
+    const inv = out && out.closure_invariants;
+    assert(inv && inv.ok === false, '#369 AC4: closure_invariants.ok === false on a partial close');
+    assert(inv && Array.isArray(inv.violations) && inv.violations.some(v => v.id === 'remote-members-closed'),
+      '#369 AC4: remote-members-closed invariant flagged, got ' + JSON.stringify(inv && inv.violations));
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+})();
+
+// ---------------------------------------------------------------------------
 // Test (3): Single-issue finalize regression (AC#1 / dogfooding)
 // ---------------------------------------------------------------------------
 

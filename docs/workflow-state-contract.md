@@ -140,7 +140,7 @@ closure_policy: all_or_nothing
 - **`issue_number`** — Primary issue (first in the sorted set). Preserved verbatim for all tooling that reads single-issue state (backward-compatible).
 - **`issue_numbers`** — Full comma-separated sorted set of issue numbers. Presence of this field identifies the project as a bundle project.
 - **`bundle_id`** — Canonical identifier for the bundle: `bundle-<N1>-<N2>-...` (issues in ascending numerical order). Used as the project folder name (`kaola-workflow/bundle-42-47-53/`) and as the branch name stem.
-- **`closure_policy`** — Always `all_or_nothing` for v1 bundle projects. Every issue in the set must be closeable before any issue is closed; partial closure is not a success state.
+- **`closure_policy`** — Always `all_or_nothing` for v1 bundle projects. Every issue in the set must be closeable before any issue is closed; partial closure is not a success state. Enforced (#369) by `sink-merge` closing every member of `issue_numbers` on the success path and by the `remote-members-closed` closure invariant, which flags (warn-first-but-VISIBLE) any member left unclosed while online — so a partial close trips `closure_invariants.ok = false` rather than reporting a clean success.
 
 ### Bundle project and branch naming
 

@@ -37,6 +37,11 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--branch' && argv[i + 1]) { args.branch = argv[++i]; continue; }
     if (argv[i] === '--issue' && argv[i + 1]) { args.issue = parseInt(argv[++i], 10); continue; }
+    // #369: bundle member set — all-or-nothing closure closes EVERY member, not just --issue.
+    if (argv[i] === '--issue-numbers' && argv[i + 1]) {
+      args.issueNumbers = argv[++i].split(',').map(s => parseInt(s.trim(), 10)).filter(n => Number.isInteger(n) && n > 0);
+      continue;
+    }
     if (argv[i] === '--project' && argv[i + 1]) { args.project = argv[++i]; continue; }
     if (argv[i] === '--keep-issue-open') { args.keepIssueOpen = true; continue; } // #336
   }
@@ -400,6 +405,34 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch) {
     // Claim-label removal runs in BOTH modes (claim release is wanted on keep-open).
     try { forge.updateIssueLabels(readProjectInfo(root, args.project), args.issue, Object.assign({ remove: [forge.CLAIM_LABEL] }, forgeOpts)); claimLabelRemoved = 'removed'; } catch (_) { claimLabelRemoved = 'failed'; }
   }
+
+  // #369 BUNDLE all-or-nothing closure: close EVERY member of issue_numbers, not just the primary.
+  // Gated on a real bundle (length > 1) so single-issue output is byte-unchanged (AC7). Each member
+  // lands in exactly ONE bucket (no silent-neither): closed_issues or failed_issue_closures.
+  let bundleBuckets = null;
+  if (!OFFLINE && !keepIssueOpen && Array.isArray(args.issueNumbers) && args.issueNumbers.length > 1) {
+    const forgeOpts = { execOptions: { cwd: mainRoot } };
+    const projectInfo = readProjectInfo(mainRoot, args.project);
+    const closed = [], failed = [];
+    if (args.issue != null) {
+      if (remoteIssueClosed === 'closed' || remoteIssueClosed === 'already_closed') closed.push(args.issue);
+      else failed.push(args.issue);
+    }
+    for (const n of args.issueNumbers) {
+      if (n === args.issue) continue; // primary handled above
+      try {
+        forge.createIssueComment(projectInfo, n, 'Merged via Gitea direct merge sink (bundle member).', forgeOpts);
+        forge.closeIssue(n, forgeOpts);
+        closed.push(n);
+        try { forge.updateIssueLabels(projectInfo, n, Object.assign({ remove: [forge.CLAIM_LABEL] }, forgeOpts)); } catch (_) {}
+      } catch (e) {
+        failed.push(n);
+        process.stderr.write('sink-merge: WARNING: bundle member issue close failed for ' + n + '; recorded in failed_issue_closures. Manually run: tea issues close ' + n + '\n');
+      }
+    }
+    bundleBuckets = { closed_issues: closed.sort((a, b) => a - b), failed_issue_closures: failed.sort((a, b) => a - b), open_issues: [] };
+    remoteIssueClosed = failed.length === 0 ? 'closed' : 'partial';
+  }
   // Step 9 — Delete branch
   try { execFileSync('git', ['-C', mainRoot, 'branch', '-d', '--', args.branch], { encoding: 'utf8' }); branchRemoved = 'removed'; } catch (_) { branchRemoved = 'failed'; }
   if (!OFFLINE) {
@@ -432,6 +465,12 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch) {
     path.join(archiveDest, '.cache'),
     path.join(mainRoot, 'kaola-workflow', args.project, '.cache')
   ], receipt);
+  // #369: post-attach the bundle per-member buckets BEFORE the invariant check.
+  if (bundleBuckets) {
+    receipt.closed_issues = bundleBuckets.closed_issues;
+    receipt.failed_issue_closures = bundleBuckets.failed_issue_closures;
+    receipt.open_issues = bundleBuckets.open_issues;
+  }
   const invariants = checkClosureInvariants(mainRoot, receipt, archiveDest);
   process.stdout.write(JSON.stringify({ status: 'merged', closure_receipt: receipt, closure_invariants: invariants }) + '\n');
 }

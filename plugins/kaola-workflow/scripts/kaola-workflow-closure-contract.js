@@ -23,7 +23,9 @@ const CLOSURE_RECEIPT_FIELDS = {
   archive: ['closed', 'abandoned', 'skipped', 'failed'],
   roadmap_source_removed: ['removed', 'absent', 'kept', 'failed'],
   roadmap_regenerated: ['regenerated', 'skipped', 'failed'],
-  remote_issue_closed: ['closed', 'already_closed', 'kept_open', 'skipped_offline', 'failed'],
+  // #369: `partial` is the truthful ONLINE token for a bundle where some members closed and some
+  // did not (online must never read `skipped_offline`). `skipped_offline` stays for the offline path.
+  remote_issue_closed: ['closed', 'already_closed', 'kept_open', 'partial', 'skipped_offline', 'failed'],
   claim_label_removed: ['removed', 'already_absent', 'skipped_offline', 'failed'],
   worktree_removed: ['removed', 'missing', 'kept', 'failed'],
   branch_removed: ['removed', 'kept', 'failed'],
@@ -31,6 +33,11 @@ const CLOSURE_RECEIPT_FIELDS = {
   claim_planner_attested: ['attested', 'missing', 'failed'],
   finalize_contractor_attested: ['attested', 'missing', 'failed'],
   warnings: 'string[]',
+  // #369 BUNDLE post-attached arrays (NOT builder fields — emptyReceipt does not seed them; the
+  // sink-merge / cmdFinalize close path attaches them only for a bundle with issue_numbers.length>1):
+  //   closed_issues:          numbers closed successfully (or already-closed)
+  //   failed_issue_closures:  numbers whose remote close FAILED while online
+  //   open_issues:            numbers probed STILL OPEN while online (recorded — never silently neither)
 };
 
 // The ten closure invariants for a completed linked issue N. `id` is a stable
@@ -42,6 +49,10 @@ const CLOSURE_INVARIANTS = [
   { id: 'active-folder-absent', description: 'kaola-workflow/{project}/ is absent from active folders.' },
   { id: 'archive-state-closed', description: 'kaola-workflow/archive/{project}/workflow-state.md exists with status: closed and step: complete when local archive is available.' },
   { id: 'remote-closed-after-publish', description: 'The remote issue is closed only after acceptance criteria pass and implementation is published.' },
+  // #369 BUNDLE all-or-nothing: every member of issue_numbers must be closed (or already closed).
+  // WARN-FIRST but VISIBLE — a member left in failed_issue_closures/open_issues while online flags
+  // this invariant (closure_invariants.ok becomes false) so a partial close is never a clean success.
+  { id: 'remote-members-closed', description: 'For a bundle (issue_numbers), every member is closed; none remains in failed_issue_closures or open_issues while online.' },
   { id: 'in-progress-label-removed', description: 'The remote issue does not have workflow:in-progress after closure.' },
   { id: 'branch-worktree-resolved', description: 'Any branch/worktree cleanup is either complete or explicitly reported by stale-worktree tooling.' },
   // WARN-FIRST detection invariants (#277 Phase 2 / M2) — recorded, not hard-blocking.

@@ -614,6 +614,11 @@ SINK_KIND=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | grep '^sink:' | awk '{print 
 SINK_KIND=${SINK_KIND:-merge}
 SINK_ISSUE_FLAG=""
 [ -n "$SINK_ISSUE" ] && [ "$SINK_ISSUE" != "unset" ] && SINK_ISSUE_FLAG="--issue $SINK_ISSUE"
+# #369: bundle member set — sink-merge closes EVERY member (all-or-nothing), not just the primary.
+SINK_ISSUE_NUMBERS=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | grep '^issue_numbers:' | awk '{print $2}')
+[ -z "$SINK_ISSUE_NUMBERS" ] && SINK_ISSUE_NUMBERS=$(grep '^issue_numbers:' "$SINK_STATE_FILE" | awk '{print $2}')
+SINK_ISSUE_NUMBERS_FLAG=""
+[ -n "$SINK_ISSUE_NUMBERS" ] && SINK_ISSUE_NUMBERS_FLAG="--issue-numbers $SINK_ISSUE_NUMBERS"
 # #336: keep-open partial-close terminal — issue_action defaults to close when absent.
 SINK_ISSUE_ACTION=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | grep '^issue_action:' | awk '{print $2}')
 SINK_ISSUE_ACTION=${SINK_ISSUE_ACTION:-close}
@@ -688,6 +693,7 @@ _MAIN_ROOT="$(dirname "$_COORD_ROOT_RAW_SINK")"
 : "${SINK_BRANCH:?SINK_BRANCH must be captured before Step 8b}"
 : "${SINK_KIND:=merge}"
 : "${SINK_ISSUE_FLAG:=}"
+: "${SINK_ISSUE_NUMBERS_FLAG:=}"
 ```
 
 Dispatch based on `SINK_KIND`:
@@ -713,6 +719,7 @@ case "$SINK_KIND" in
     node "$SINK_MERGE_JS" \
       --branch "$SINK_BRANCH" \
       $SINK_ISSUE_FLAG \
+      $SINK_ISSUE_NUMBERS_FLAG \
       $SINK_KEEP_OPEN_FLAG \
       --project {project}
     _SINK_MERGE_EXIT=$?

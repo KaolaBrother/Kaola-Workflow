@@ -591,6 +591,11 @@ assertIncludes('scripts/kaola-workflow-claim.js', 'writeFileAtomicReplace');
 // #354 (#353-rest): the two remaining workflow-state writers route through the atomic replace too.
 assertIncludes('scripts/kaola-workflow-repair-state.js', 'writeFileAtomicReplace');
 assertIncludes('scripts/kaola-workflow-sink-pr.js', 'writeFileAtomicReplace');
+// #369: bundle all-or-nothing closure — sink-merge closes every member; finalize passes the set.
+assertIncludes('scripts/kaola-workflow-sink-merge.js', '--issue-numbers');
+assertIncludes('commands/kaola-workflow-finalize.md', 'SINK_ISSUE_NUMBERS');
+assertIncludes('commands/kaola-workflow-finalize.md', '--issue-numbers');
+assertIncludes('scripts/kaola-workflow-closure-contract.js', 'remote-members-closed');
 // #354: the single fence-aware section slicer is the one home for all `## Node Ledger` /
 // `## Required Agent Compliance` access; readers/writers route through it (no fence-blind indexOf).
 assertIncludes('scripts/kaola-workflow-adaptive-schema.js', 'function locateSection');

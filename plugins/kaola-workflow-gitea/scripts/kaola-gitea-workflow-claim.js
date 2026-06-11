@@ -1452,6 +1452,19 @@ function checkClosureInvariants(root, receipt, archiveDest) {
     const invBw = closureContract.CLOSURE_INVARIANTS.find(function(i) { return i.id === 'branch-worktree-resolved'; });
     violations.push({ id: 'branch-worktree-resolved', description: invBw ? invBw.description : 'worktree or branch removal failed during closure' });
   }
+  // #369 remote-members-closed: for a bundle, a member left in failed_issue_closures or open_issues
+  // (recorded while online) flags this WARN-FIRST-but-VISIBLE invariant so a partial close is never
+  // a clean success. Single-issue receipts carry neither array, so this never fires for them (AC7).
+  const unclosedMembers = []
+    .concat(Array.isArray(receipt.failed_issue_closures) ? receipt.failed_issue_closures : [])
+    .concat(Array.isArray(receipt.open_issues) ? receipt.open_issues : []);
+  if (!abandoned && unclosedMembers.length > 0) {
+    const invMc = closureContract.CLOSURE_INVARIANTS.find(function(i) { return i.id === 'remote-members-closed'; });
+    violations.push({
+      id: 'remote-members-closed',
+      description: (invMc ? invMc.description : 'bundle member(s) not closed') + ' (unclosed: ' + unclosedMembers.sort(function(a, b){ return a - b; }).join(',') + ')'
+    });
+  }
   return { ok: violations.length === 0, violations };
 }
 
@@ -1569,6 +1582,7 @@ function cmdFinalize() {
   let remoteIssueClosed = 'skipped_offline';
   const closedIssues = [];       // members probed as closed
   const failedIssueClosures = []; // members whose probe threw/returned unavailable
+  const openIssues = [];          // #369: members probed STILL OPEN while online (never silent-neither)
   const keepOpenWarnings = [];   // #336: probe-truth warnings under keep-open
   // #336: under keep-open the disposition is a DECISION, not an observation — record the
   // `kept_open` decision token (even under OFFLINE; the decision is local and known, and the
@@ -1593,17 +1607,20 @@ function cmdFinalize() {
       }
     }
   } else if (!OFFLINE && issueNumbers.length > 0) {
-    // Bundle: probe each member (warning-first: unavailable probe -> failed_issue_closures)
+    // Bundle: probe each member. #369: every member lands in EXACTLY one bucket (no silent-neither) —
+    // closed -> closed_issues; unavailable -> failed_issue_closures; still-open-while-online -> open_issues.
     for (const n of issueNumbers) {
       const probe = probeIssueState(n);
       if (probe.state === 'closed') {
         closedIssues.push(n);
       } else if (probe.state === 'unavailable') {
         failedIssueClosures.push(n);
+      } else {
+        openIssues.push(n); // 'open' while online — recorded, never silently dropped
       }
-      // 'open' state: neither closed nor failed — just not closed yet
     }
-    remoteIssueClosed = (closedIssues.length === issueNumbers.length) ? 'already_closed' : 'skipped_offline';
+    // #369: truthful ONLINE token — all closed -> already_closed; any member open/failed -> partial.
+    remoteIssueClosed = (closedIssues.length === issueNumbers.length) ? 'already_closed' : 'partial';
   } else if (!OFFLINE && issueNumber) {
     // Single-issue path (unchanged)
     try {
@@ -1627,6 +1644,7 @@ function cmdFinalize() {
     closureReceipt.issue_numbers = issueNumbers;
     closureReceipt.closed_issues = closedIssues;
     closureReceipt.failed_issue_closures = failedIssueClosures;
+    closureReceipt.open_issues = openIssues; // #369: members still open while online (visible, never silent)
     closureReceipt.roadmap_sources_removed = result.roadmap_sources_removed || [];
   }
   // #336: surface keep-open probe-truth warnings (issue already closed on the forge).
@@ -2019,18 +2037,36 @@ function watchMergeRequests(root, args) {
       const dispProbe = probeIssueState(folder.issue_iid);
       const issueDisposition = dispProbe.state === 'closed' ? 'closed'
         : (dispProbe.state === 'open' ? 'kept-open' : 'unknown');
+      // #369: bundle-aware truthful receipt. watch is online by construction, so for a bundle probe
+      // EVERY member, bucket each (closed/unavailable/open — never silent-neither), derive a truthful
+      // token (all closed -> already_closed; else partial, never skipped_offline).
+      const isBundle = Array.isArray(folder.issue_numbers) && folder.issue_numbers.length > 0;
+      const mClosed = [], mFailed = [], mOpen = [];
+      let mergedRemoteToken = dispProbe.state === 'closed' ? 'already_closed' : 'skipped_offline';
+      if (isBundle) {
+        for (const n of folder.issue_numbers) {
+          const p = (n === folder.issue_iid) ? dispProbe : probeIssueState(n);
+          if (p.state === 'closed') mClosed.push(n);
+          else if (p.state === 'unavailable') mFailed.push(n);
+          else mOpen.push(n);
+        }
+        mergedRemoteToken = (mClosed.length === folder.issue_numbers.length) ? 'already_closed' : 'partial';
+      }
       const folderReceipt = buildClosureReceipt(folder.project, folder.issue_iid, {
         archive: archiveResult.skipped ? 'skipped' : (archiveResult.archived ? 'closed' : 'failed'),
         roadmap_source_removed: archiveResult ? archiveResult.roadmap_source_removed : 'failed',
         roadmap_regenerated: archiveResult ? archiveResult.roadmap_regenerated : 'failed',
-        remote_issue_closed: dispProbe.state === 'closed' ? 'already_closed' : 'skipped_offline',
+        remote_issue_closed: mergedRemoteToken,
         claim_label_removed: claimLabelStatus,
         worktree_removed: worktreeRemoved,
         branch_removed: 'kept'
       });
-      // #328: attach bundle receipt fields after builder (filter bypass)
-      if (Array.isArray(folder.issue_numbers) && folder.issue_numbers.length > 0) {
+      // #328/#369: attach bundle receipt fields after builder (filter bypass) — incl. per-member buckets
+      if (isBundle) {
         folderReceipt.issue_numbers = folder.issue_numbers;
+        folderReceipt.closed_issues = mClosed.sort(function(a, b){ return a - b; });
+        folderReceipt.failed_issue_closures = mFailed.sort(function(a, b){ return a - b; });
+        folderReceipt.open_issues = mOpen.sort(function(a, b){ return a - b; });
         folderReceipt.roadmap_sources_removed = archiveResult ? (archiveResult.roadmap_sources_removed || []) : [];
       }
       const liveCacheDir = path.join(root, 'kaola-workflow', folder.project, '.cache');

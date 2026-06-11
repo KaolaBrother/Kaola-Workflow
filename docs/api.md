@@ -1335,7 +1335,7 @@ unpopulated receipt reads as total failure, never silent success) and
   "archive": "closed|abandoned|skipped|failed",
   "roadmap_source_removed": "removed|absent|kept|failed",
   "roadmap_regenerated": "regenerated|skipped|failed",
-  "remote_issue_closed": "closed|already_closed|kept_open|skipped_offline|failed",
+  "remote_issue_closed": "closed|already_closed|kept_open|partial|skipped_offline|failed",
   "claim_label_removed": "removed|already_absent|skipped_offline|failed",
   "worktree_removed": "removed|missing|kept|failed",
   "branch_removed": "removed|kept|failed",
@@ -1358,13 +1358,21 @@ unpopulated receipt reads as total failure, never silent success) and
 {
   "closed_issues": [42, 47, 53],
   "failed_issue_closures": [],
+  "open_issues": [],
   "roadmap_sources_removed": ["issue-42.md", "issue-47.md", "issue-53.md"]
 }
 ```
 
-- `closed_issues` — issue numbers successfully closed on the forge during finalization.
-- `failed_issue_closures` — issue numbers whose remote close call failed (non-empty means partial failure; logged as a warning but does not suppress the receipt).
+- `closed_issues` — issue numbers successfully closed (or already closed) on the forge.
+- `failed_issue_closures` — issue numbers whose remote close call failed online.
+- `open_issues` (#369) — issue numbers probed STILL OPEN while online. Every bundle member lands in
+  EXACTLY one of these three arrays (no silent-neither); `sink-merge` closes every member on the
+  success path, so a member here means the close did not complete.
 - `roadmap_sources_removed` — `.roadmap/issue-N.md` filenames removed during finalization (one per issue in the bundle).
+- `remote_issue_closed` for a bundle is `closed` (all members closed) or `partial` (#369: some member
+  failed/open) when ONLINE — never `skipped_offline`, which is the offline-only token. A `partial`
+  close trips the `remote-members-closed` closure invariant (warn-first-but-VISIBLE), so a partial
+  bundle close is never reported as a clean success.
 
 `claim_planner_attested` and `finalize_contractor_attested` are WARN-FIRST detection fields (issue #277 M2). Both default to `'failed'` in `emptyReceipt()`. `checkDispatchAttestations` (called from the closure path in `kaola-workflow-claim.js`) reads `.cache/dispatch-log.jsonl`, sets each field to `attested` or `missing`, and pushes any warnings. It never modifies `closure_invariants.violations` — missing attestation is advisory only.
 
@@ -1417,6 +1425,10 @@ receipt, archiveDest)`):
 - `active-folder-absent` — no live `kaola-workflow/{project}/` folder remains in active folders after archive (issue #164).
 - `archive-state-closed` — when `archiveDest` is provided, the archived `workflow-state.md` shows `status: closed` or `abandoned`; skipped (not violated) when `archiveDest` is absent (issue #164).
 - `branch-worktree-resolved` — neither `worktree_removed` nor `branch_removed` is `failed` (issue #164).
+- `remote-members-closed` (#369) — for a bundle, every member of `issue_numbers` is closed; a member
+  left in `failed_issue_closures` or `open_issues` (recorded while online) is a violation (warn-first
+  but VISIBLE: `closure_invariants.ok` becomes `false`). Never fires for single-issue receipts (which
+  carry neither array).
 
 The `remote-closed-after-publish` invariant (closure invariant 5) is intentionally
 deferred to issue #165, where the `remote_issue_closed` field is unified across
