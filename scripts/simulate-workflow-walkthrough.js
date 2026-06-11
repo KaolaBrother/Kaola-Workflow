@@ -813,6 +813,23 @@ function testWriteLaneHookGuard() {
     // (7) malformed stdin -> fail-open
     const bad = spawnSync('bash', [writeLaneHook], { cwd: RR, encoding: 'utf8', input: 'not json', env: Object.assign({}, process.env, { KAOLA_LANE_CONTAINMENT: '1' }) });
     assert(bad.status === 0, '#376: malformed stdin -> exit 0 (fail-open)');
+
+    // (8) #386: an OPEN WRITE node (kind:write, no member worktree) writing its OWN declared lane in
+    // the PARENT worktree under enablement -> ALLOW (exit 0). This is the serial-fallback case the
+    // shipped hook bricked (rule (b) matched the node's only legal target). With the self-exempt the
+    // write node's own in-lane parent write passes; a non-write match still denies (case 5 above) and
+    // out-of-lane still denies (case 4). Mutation: remove the `kind === "write"` exemption -> RED (2).
+    fs.writeFileSync(path.join(cacheDir, 'running-set.json'),
+      JSON.stringify({ nodes: [{ id: 'w1', kind: 'write', declared_write_set: ['scripts/w1.js'] }] }));
+    assert(run(path.join(RR, 'scripts/w1.js'), true).status === 0,
+      '#386: open write node (kind:write) writes its OWN lane in the parent -> exit 0 (self-exempt)');
+    // (8b) a DIFFERENT parent write still allowed (no lane match).
+    assert(run(path.join(RR, 'scripts/other-x.js'), true).status === 0, '#386: out-of-lane parent write under write-node manifest -> exit 0');
+    // (8c) a READ node lane match in the parent is still a real leak -> DENY (kind!=='write').
+    fs.writeFileSync(path.join(cacheDir, 'running-set.json'),
+      JSON.stringify({ nodes: [{ id: 'r1', kind: 'read', declared_write_set: ['scripts/r1.js'] }] }));
+    assert(run(path.join(RR, 'scripts/r1.js'), true).status === 2,
+      '#386: a READ node lane match in the parent stays DENIED (only write self-exempts)');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -1271,6 +1288,90 @@ function testAdaptiveConsentHaltSurfaces() {
     assert(state.includes('consent-halt-surface'), 'consent-halt must be surfaced in the step, got:\n' + state);
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   console.log('testAdaptiveConsentHaltSurfaces: PASSED');
+}
+
+// ── (#383/#387/#391 walkthrough ×4 editions) — cross-surface mutual exclusion,
+//    plan-integrity gate, and durable-halt fence exercised end-to-end through the
+//    REAL adaptive-node CLI. The #386 AC already had a walkthrough scenario; this
+//    adds the missing canonical ones the #383/#387/#391 ACs call for. The
+//    production engine (adaptive-node.js) is byte-synced to codex and rename-rendered
+//    to gitlab/gitea by `npm run sync:editions`, so each edition's own walkthrough /
+//    contract chain exercises the SAME guarded code — giving the cross-edition
+//    coverage the ACs require.
+const CROSS_SURFACE_PLAN = [
+  '# Workflow Plan — issue #386', '',
+  '## Meta', 'labels: enhancement', '',
+  '## Nodes', '',
+  '| id | role | depends_on | declared_write_set | cardinality | shape |',
+  '|---|---|---|---|---|---|',
+  '| explore | code-explorer | — | — | 1 | sequence |',
+  '| impl | tdd-guide | explore | lib/foo.js | 1 | sequence |',
+  '| review | code-reviewer | impl | — | 1 | sequence |',
+  '| done | finalize | review | — | 1 | sequence |',
+  '',
+  '## Node Ledger', '',
+  '| id | status | notes |',
+  '| --- | --- | --- |',
+  '| explore | pending | |',
+  '| impl | pending | |',
+  '| review | pending | |',
+  '| done | pending | |',
+  ''
+].join('\n');
+
+function adaptiveNodeJson(res) {
+  return JSON.parse(res.stdout.trim().split('\n').filter(l => l.trim().startsWith('{')).pop());
+}
+
+function testAdaptiveCrossSurfaceMutexWalkthrough() {
+  // #383 — cross-surface mutual exclusion: open-ready over a LIVE serial in_progress
+  //         (no running set) must refuse serial_node_live (never co-schedule a read
+  //         fan-out against a live serial node).
+  {
+    const tmp = adaptiveTmp('xsurf-383');
+    try {
+      const planPath = plantFrozenPlan(tmp, 'issue-386', CROSS_SURFACE_PLAN);
+      // Make `impl` a live SERIAL in_progress row (one in_progress, NO running-set).
+      fs.writeFileSync(planPath, read(planPath).replace('| impl | pending |', '| impl | in_progress |'));
+      const r = runNode(adaptiveNodeScript, ['open-ready', '--project', 'issue-386', '--json'], tmp);
+      const j = adaptiveNodeJson(r);
+      assert(r.status === 1 && j.result === 'refuse' && j.reason === 'serial_node_live',
+        '#383: open-ready over a live serial in_progress must refuse serial_node_live, got ' + JSON.stringify({ status: r.status, result: j.result, reason: j.reason }));
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
+
+  // #387 — tampered plan: open-ready must refuse plan_integrity_failed (the scheduler
+  //         must never partially execute a post-freeze-tampered frozen plan).
+  {
+    const tmp = adaptiveTmp('xsurf-387');
+    try {
+      const planPath = plantFrozenPlan(tmp, 'issue-386', CROSS_SURFACE_PLAN);
+      // Mutate the declared_write_set AFTER freeze → plan_hash mismatch (resume-check fails).
+      fs.writeFileSync(planPath, read(planPath).replace('lib/foo.js', 'lib/bar.js'));
+      const r = runNode(adaptiveNodeScript, ['open-ready', '--project', 'issue-386', '--json'], tmp);
+      const j = adaptiveNodeJson(r);
+      assert(r.status === 1 && j.result === 'refuse' && j.reason === 'plan_integrity_failed',
+        '#387: open-ready over a tampered frozen plan must refuse plan_integrity_failed, got ' + JSON.stringify({ status: r.status, result: j.result, reason: j.reason }));
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
+
+  // #391 — durable consent_halt: a mutating subcommand (open-ready) must refuse
+  //         halt_pending while the durable halt marker is in the Node Ledger.
+  {
+    const tmp = adaptiveTmp('xsurf-391');
+    try {
+      const planPath = plantFrozenPlan(tmp, 'issue-386', CROSS_SURFACE_PLAN);
+      // Append a durable consent_halt INSIDE the Node Ledger (the only place it fences).
+      // revalidateForResume tolerates an appended halt line, so the plan stays hash-valid.
+      fs.writeFileSync(planPath, read(planPath).trimEnd() + '\nconsent_halt: pending\n');
+      const r = runNode(adaptiveNodeScript, ['open-ready', '--project', 'issue-386', '--json'], tmp);
+      const j = adaptiveNodeJson(r);
+      assert(r.status === 1 && j.result === 'refuse' && j.reason === 'halt_pending',
+        '#391: open-ready under a durable consent_halt must refuse halt_pending, got ' + JSON.stringify({ status: r.status, result: j.result, reason: j.reason }));
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
+
+  console.log('testAdaptiveCrossSurfaceMutexWalkthrough: PASSED');
 }
 
 // (j) validator governance: auto-run / ask / typed-refusal over real plan fixtures.
@@ -10927,6 +11028,7 @@ function buildRegistry() {
   add('testAdaptiveResumeUnparseableTypedRefusal',        testAdaptiveResumeUnparseableTypedRefusal);
   add('testAdaptiveResumeAfterFlipOff',                   testAdaptiveResumeAfterFlipOff);
   add('testAdaptiveConsentHaltSurfaces',                  testAdaptiveConsentHaltSurfaces);
+  add('testAdaptiveCrossSurfaceMutexWalkthrough',         testAdaptiveCrossSurfaceMutexWalkthrough);
   add('testAdaptiveValidatorGovernance',                  testAdaptiveValidatorGovernance);
   add('testAdaptiveFanoutGroupScoping',                   testAdaptiveFanoutGroupScoping);
   add('testAdaptiveReadySetDisjointness',                 testAdaptiveReadySetDisjointness);

@@ -46,9 +46,15 @@ function safeJsonParse(str) {
   try { return JSON.parse(s); } catch (_) {}
   // #355: otherwise parse the LAST line that is valid JSON — a stray log/debug/warning line
   // emitted before the framed JSON must NOT turn a success into an empty {} (treated as a refusal).
+  // #403.1: a trailing non-object JSON scalar (`true`/`42`/`null`) must NOT win and get spread into
+  // `{...scalar, exitCode:0}` (flattening a success into a refusal); only an object (non-null)
+  // payload is a valid framed result line — keep scanning past a scalar/array.
   const lines = s.split('\n').map(l => l.trim()).filter(Boolean);
   for (let i = lines.length - 1; i >= 0; i--) {
-    try { return JSON.parse(lines[i]); } catch (_) {}
+    try {
+      const parsed = JSON.parse(lines[i]);
+      if (typeof parsed === 'object' && parsed !== null) return parsed;
+    } catch (_) {}
   }
   return {};
 }

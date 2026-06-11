@@ -41,7 +41,7 @@ const taskMirrorPath = path.join(__dirname, TASK_MIRROR);
 
 // #360: the LEDGER-SCOPED durable consent-halt probe (fence-aware). adaptive-schema keeps the
 // same filename across every edition (byte-identical ×4), so this require is NOT forge-renamed.
-const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, resolveFanoutCapReadonly } = require('./kaola-workflow-adaptive-schema');
+const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, resolveFanoutCapReadonly, refuse } = require('./kaola-workflow-adaptive-schema');
 
 // ---------------------------------------------------------------------------
 // getRoot — resolve the user-repo root via git rev-parse (cwd fallback).
@@ -126,9 +126,15 @@ function safeJsonParse(str) {
   try { return JSON.parse(s); } catch (_) {}
   // #355: parse the LAST line that is valid JSON — a stray log/warning line before the framed
   // JSON must NOT turn a success into an empty {} (treated as a refusal by callers).
+  // #403.1: a trailing non-object JSON scalar (`true`/`42`/`null`) must NOT win and get spread
+  // into `{...scalar, exitCode:0}` (a success silently flattened to a refusal); only an object
+  // (non-null) payload is a valid framed result line — keep scanning past a scalar/array.
   const lines = s.split('\n').map(l => l.trim()).filter(Boolean);
   for (let i = lines.length - 1; i >= 0; i--) {
-    try { return JSON.parse(lines[i]); } catch (_) {}
+    try {
+      const parsed = JSON.parse(lines[i]);
+      if (typeof parsed === 'object' && parsed !== null) return parsed;
+    } catch (_) {}
   }
   return {};
 }
@@ -345,6 +351,31 @@ function spliceComplianceRow(content, row) {
 }
 
 // ---------------------------------------------------------------------------
+// complianceRowExists (#384/#391c) — true when the ## Required Agent Compliance section already
+// carries a row for this node's Requirement cell. spliceComplianceSection appends UNCONDITIONALLY,
+// so the idempotent re-close paths (close-and-open-next / close-node `alreadyAtTarget`, and the
+// reconcile close-direction re-run) would otherwise append a DUPLICATE row on every re-close.
+// Guard the append at the caller with this check. The Requirement cell uniquely identifies the row:
+// for review roles it is the bare role string (code-reviewer / security-reviewer), else `role (id)`.
+// Match the Requirement cell as the first table column (`| <cell> |`) within the compliance section
+// only — a same-text string elsewhere in the plan must not suppress the append.
+// ---------------------------------------------------------------------------
+function complianceRowExists(content, requirementCell, nodeId) {
+  const sec = locateSection(content, 'Required Agent Compliance');
+  if (sec.start < 0) return false;
+  const block = sec.next >= 0 ? content.slice(sec.start, sec.next) : content.slice(sec.start);
+  // Each compliance row is `| <requirementCell> | <status> | <evidence> | |`. Compare the trimmed
+  // first column against requirementCell exactly (cell text is plain, no regex metacharacters of
+  // concern here, but match column-structurally to avoid substring false-positives).
+  const rows = block.split('\n').filter(l => l.trim().startsWith('|'));
+  for (const row of rows) {
+    const cells = row.split('|').slice(1, -1).map(c => c.trim());
+    if (cells.length && cells[0] === requirementCell) return true;
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------------
 // spliceStateMarker — idempotently write "key: value" into workflow-state.md.
 // Inserts before ## Last Updated (if present), else appends.
 // ---------------------------------------------------------------------------
@@ -400,8 +431,38 @@ function parseNodesFromContent(content) {
 //   ('shape') evidence; `missingTokenClass` names the failed class
 //   ('non_tdd_reason' / 'change-type' / 'RED' / 'GREEN' / 'non-empty').
 // ---------------------------------------------------------------------------
-function checkEvidenceShape(role, nodeId, evidence) {
+function checkEvidenceShape(role, nodeId, evidence, opts) {
   const content = evidence || '';
+  opts = opts || {};
+
+  // #392: ANTI-REPLAY / ANTI-COPY binding. When the caller passes an expectedNonce (the per-open
+  // barrier-base SHA prefix the role agent could ONLY have received from THIS dispatch), the evidence
+  // MUST carry a `evidence-binding: <nodeId> <nonce>` header. A mismatched node id → evidence_unbound
+  // (copied from a DIFFERENT node); a mismatched nonce → evidence_stale (copied / replayed from a
+  // PRIOR open of the same node). ABSENT expectedNonce → SKIP entirely (backward-compatible: the ~40
+  // existing 3-arg callers and any path with no recorded baseline pass exactly as before).
+  if (opts.expectedNonce) {
+    const m = content.match(/^evidence-binding:[ \t]*([^\s]+)[ \t]+([^\s]+)[ \t]*$/m);
+    if (!m) {
+      return { ok: false, kind: 'shape', missingTokenClass: 'evidence-binding',
+        reason: role + ' ' + nodeId + ' evidence missing the `evidence-binding: <node-id> <nonce>` header (anti-copy binding)',
+        expected: ['evidence-binding: ' + (opts.expectedNodeId || nodeId) + ' ' + opts.expectedNonce] };
+    }
+    const boundNode = m[1];
+    const boundNonce = m[2];
+    if (opts.expectedNodeId && boundNode !== opts.expectedNodeId) {
+      return { ok: false, kind: 'shape', missingTokenClass: 'evidence_unbound',
+        reason: role + ' ' + nodeId + ' evidence-binding names node "' + boundNode + '" but this dispatch is for "' + opts.expectedNodeId + '" (evidence copied from another node)',
+        evidenceUnbound: true,
+        expected: ['evidence-binding: ' + opts.expectedNodeId + ' ' + opts.expectedNonce] };
+    }
+    if (boundNonce !== opts.expectedNonce) {
+      return { ok: false, kind: 'shape', missingTokenClass: 'evidence_stale',
+        reason: role + ' ' + nodeId + ' evidence-binding nonce "' + boundNonce + '" != this open\'s nonce "' + opts.expectedNonce + '" (stale / replayed evidence from a prior open)',
+        evidenceStale: true,
+        expected: ['evidence-binding: ' + (opts.expectedNodeId || nodeId) + ' ' + opts.expectedNonce] };
+    }
+  }
 
   // #334: a non-delegable main-session gate can never self-skip ('n/a') and must record a
   // machine verdict (column-0, last-match-wins, lowercase — mirrors schema.parseNodeVerdict).
@@ -461,6 +522,44 @@ function checkEvidenceShape(role, nodeId, evidence) {
     return { ok: false, kind: 'absent', missingTokenClass: 'non-empty', reason: role + ' ' + nodeId + ' evidence missing or empty', expected: ['non-empty evidence file'] };
   }
   return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// checkVerdictParse (#403.4) — for a verdict-bearing gate role, return a non-blocking
+// `verdict_unparsed` warning when the evidence carries a verdict-shaped line that the STRICT
+// finalize --verdict-check (schema.parseNodeVerdict) would NOT recognize as a clean pass|fail.
+//
+// The strict matcher is column-0, LOWERCASE `verdict:` key only (`/^verdict:[ \t]*([A-Za-z-]+)[ \t]*$/`
+// with the captured value lowercased). So the near-miss #403.4 describes — `Verdict: Pass` with a
+// CAPITAL key — is invisible to it (found:false → finalize fails `missing-verdict`), even though a
+// human reads it as a clear pass. We detect that with a LENIENT case-insensitive key probe and warn
+// when a verdict line is present but the strict parse yields neither 'pass' nor 'fail'.
+//
+// Informational ONLY — never refuses (per the #328 design): the failure would otherwise surface at
+// finalize --verdict-check, costing a reopen → re-evidence → re-close loop. Returns null when the role
+// is not verdict-bearing, no verdict line is present, or the strict parse already yields pass/fail.
+//
+// VERDICT_ROLES mirrors the gate vocabulary repair-state / verifyVerdictBlock check.
+// ---------------------------------------------------------------------------
+const VERDICT_ROLES = new Set(['code-reviewer', 'security-reviewer', 'adversarial-verifier', 'main-session-gate']);
+
+function checkVerdictParse(role, evidence) {
+  if (!VERDICT_ROLES.has(role)) return null;
+  const content = evidence || '';
+  // Lenient probe: any verdict-shaped line (case-insensitive key, any value) anywhere in column 0.
+  const lenient = content.match(/^[ \t]*verdict:[ \t]*([^\n]*?)[ \t]*$/gim);
+  if (!lenient) return null;
+  const rawLast = lenient[lenient.length - 1].replace(/^[ \t]*verdict:[ \t]*/i, '').trim();
+
+  // STRICT parse — exactly schema.parseNodeVerdict's matcher (lowercase `verdict:` key at column 0,
+  // value lowercased). If this yields a clean pass/fail, the close is fine and no warning fires.
+  let strict = null;
+  const sRe = /^verdict:[ \t]*([A-Za-z-]+)[ \t]*$/gm;
+  let sm;
+  while ((sm = sRe.exec(content)) !== null) { strict = sm[1].toLowerCase(); }
+  if (strict === 'pass' || strict === 'fail') return null;
+
+  return { verdict_unparsed: true, verdictRaw: rawLast };
 }
 
 // ---------------------------------------------------------------------------
@@ -593,6 +692,53 @@ function runOrient(opts) {
       bundleId, issueNumbers, closurePolicy, primaryIssue,
       inProgressNode, cacheState: inProgressNode ? cacheState : null,
       inProgressNodes, manifest, runningSet, batch: null, allDone: false,
+      // #383(e): name the concrete reconcile subcommand so the wedge has a scripted exit.
+      repair: 'reconcile-running-set',
+    };
+  }
+
+  // #384: a crash between runCloseNode's plan write and its running-set removal (or an unlocked RMW
+  // re-adding the member) leaves a ledger-TERMINAL (complete / n.a) member in an 'open' running set.
+  // The running-set node ids then no longer equal the in_progress rows, so the AC#5 gate below would
+  // mis-report orphan_multi_in_progress and the recommended repair would loop. Detect the stale
+  // terminal member FIRST and route it to reconcile-running-set (the close-direction drop), the SAME
+  // reconcilable shape as the open-direction crash above. Check BEFORE the AC#5 legality gate.
+  const TERMINAL_LEDGER = new Set(['complete', 'n/a', 'n.a', 'na']);
+  if (runningSet && (runningSet.nodes || []).some(n => TERMINAL_LEDGER.has(ledgerStatusMap[n.id]))) {
+    return {
+      result: 'refuse',
+      reason: 'running_set_close_incomplete',
+      resumeCheck, nextAction, consentHalt, escalatedToFull,
+      bundleId, issueNumbers, closurePolicy, primaryIssue,
+      inProgressNode, cacheState: inProgressNode ? cacheState : null,
+      inProgressNodes, manifest, runningSet, batch: null, allDone: false,
+      repair: 'reconcile-running-set',
+    };
+  }
+
+  // #293/S-fix: a STALE non-opening member. An 'open' (non-opening) running set holding a member whose
+  // ledger row is NEITHER terminal (#384 above) NOR `opening` (the top-up/open-direction markers below)
+  // NOR `in_progress` — e.g. a `pending` member while a DIFFERENT serial node is the real in_progress —
+  // is a stale/corrupt shape. Without this, open-next refuses scheduler_active (the running set claims a
+  // live fan-out) → reconcile-running-set, but the pre-fix reconcile returned not_opening (no-op): the
+  // exact #383(e)/#384 dead-end. Route it to reconcile-running-set (which now drops the stale member)
+  // so orient names a scripted exit instead of dead-ending at a bare `ok`. Suppressed when the running
+  // set is mid open-transaction (state:'opening' / opening:true), already handled above, and when its
+  // members exactly equal the in_progress rows (the valid #377 fan-out, AC#5) — a stale member by
+  // definition means the running set ⊄ the in_progress set, so this never fires on a valid live set.
+  const nonOpeningSet = !!runningSet && runningSet.state !== 'opening' && !(runningSet.nodes || []).some(n => n.opening);
+  if (nonOpeningSet && (runningSet.nodes || []).some(n => {
+    const st = ledgerStatusMap[n.id];
+    return st !== 'in_progress' && !TERMINAL_LEDGER.has(st);
+  })) {
+    return {
+      result: 'refuse',
+      reason: 'running_set_stale_member',
+      resumeCheck, nextAction, consentHalt, escalatedToFull,
+      bundleId, issueNumbers, closurePolicy, primaryIssue,
+      inProgressNode, cacheState: inProgressNode ? cacheState : null,
+      inProgressNodes, manifest, runningSet, batch: null, allDone: false,
+      repair: 'reconcile-running-set',
     };
   }
 
@@ -682,6 +828,10 @@ function runOrient(opts) {
       runningSet,
       batch: null,
       allDone: false,
+      // #383(e): name the concrete reconcile subcommand so the wedge is not a dead-end. A running-set
+      // present means the post-#377 scheduler owns the orphan → reconcile-running-set; otherwise the
+      // legacy batch/manual reconcile path.
+      repair: runningSet ? 'reconcile-running-set' : 'reconcile',
     };
   }
 
@@ -848,6 +998,15 @@ function runMirrorProject(opts) {
 function runOpenNext(opts) {
   const { planPath, statePath, project, nodeId: requestedId, shell, readFile, writeFile } = opts;
 
+  // == UNIFIED GUARD PROLOGUE (D1) — matrix: excl-scheduler:yes / excl-batch:yes / halt-fence:yes.
+  //    NO integrity (adversarial finding: orient already runs --resume-check on the documented resume
+  //    path; adding it to open-next risks a legacy-path behavioral diff) and NO serial-excl (open-next
+  //    IS the serial path — it cannot be mutually exclusive with itself). ==
+  // #383: never open a serial node while the #377 scheduler (running-set) or a batch is live (those
+  //   surfaces co-scheduling against a serial node is the #383(a)/(b) wedge). #391b: fence a halt.
+  const guard = mutationGuardPrologue(opts, { halt: true, excl: ['scheduler', 'batch'] });
+  if (guard) return guard;
+
   // Shell NEXT_ACTION.
   const nextAction = shell(nextActionPath, [planPath, '--json']);
 
@@ -923,6 +1082,22 @@ function runOpenNext(opts) {
       declared_write_set: targetNode.declared_write_set,
     },
     baselineRecorded: true,
+    // #403.3: surface the validator's anti-laundering baseline-reuse decision (was hidden). When the
+    // baseline already existed (a resume / re-open of an in_progress row), commit-node --start returns
+    // reused:true; make that decision visible to the caller instead of silently dropping it.
+    // FIELD-PATH FIX (S-fix): commit-node --start nests the validator's --record-base output under
+    // `recordBase` (see combineResults: { recordBase, ... }) — `base`/`reused` live at
+    // baselineResult.recordBase.*, NOT top-level. Reading the top-level (undefined) silently dropped
+    // both signals (reused always false; nonce always null → every node close refused on the missing
+    // evidence-binding header). Read the nested path.
+    baselineReused: (baselineResult.recordBase && baselineResult.recordBase.reused) || false,
+    // #392: surface the per-open evidence-binding nonce (the barrier-base SHA prefix). The orchestrator
+    // passes this to the role-node dispatch and the role echoes it in the `evidence-binding:` header so
+    // the close gate can verify the evidence was produced by THIS open (anti-copy / anti-replay). The
+    // prefix length (12) MUST equal readNonce's slice(0,12) so the open-side echo and the close-side
+    // on-disk comparison agree byte-for-byte.
+    nonce: (baselineResult.recordBase && baselineResult.recordBase.base)
+      ? String(baselineResult.recordBase.base).slice(0, 12) : null,
     taskTransitions: [buildTransition(targetNode.id, 'in_progress', 'open-next')],
     taskMirror: refreshTaskMirror(project, shell),
   };
@@ -976,6 +1151,16 @@ function runRecordEvidence(opts) {
 // ---------------------------------------------------------------------------
 function runCloseAndOpenNext(opts) {
   const { planPath, statePath, project, nodeId, shell, readFile, writeFile, cacheExists } = opts;
+
+  // == UNIFIED GUARD PROLOGUE (D1) — matrix: halt-fence:yes ONLY (#383d dedup lives in the body).
+  //    NO integrity, NO coordination refusal: close-and-open-next is the SERIAL close path and MUST
+  //    stay byte-identical to today under the serial-fallback conditions (the hard invariant). The
+  //    halt fence is the sole prologue layer; it is vacuously-pass when no consent_halt is durable, so
+  //    a normal linear-chain close is unchanged. (#391b: without the fence, close-and-advance survives
+  //    a halt and the marker becomes a phantom against a now-complete node.) ==
+  const guard = mutationGuardPrologue(opts, { halt: true });
+  if (guard) return guard;
+
   // #317: accumulate the UI transitions as the ledger mutates so every ok exit returns
   // the exact set the orchestrator must apply. The closed node is added after its close
   // write; selector n/a arms and any newly-opened node are appended at their mutation points.
@@ -999,17 +1184,24 @@ function runCloseAndOpenNext(opts) {
     try { evidenceContent = readFile(cachePath); } catch (_) { evidenceContent = ''; }
   }
 
-  const shapeCheck = checkEvidenceShape(role, nodeId, evidenceContent);
+  // #392: pass the per-open nonce (barrier-base SHA prefix on disk) so the evidence-binding header is
+  // verified. Absent on disk (no recorded baseline, e.g. a legacy path) → null → binding check skipped.
+  const expectedNonce = readNonce(planPath, nodeId, readFile);
+  const shapeCheck = checkEvidenceShape(role, nodeId, evidenceContent, { expectedNonce, expectedNodeId: nodeId });
 
   if (!evidencePresent || !shapeCheck.ok) {
     // #319: distinguish absent evidence from malformed (shape) evidence so the
     // refusal names the actual fault, and surface the missing token class so a
     // consumer (or the operator) knows exactly what to add — instead of the old
     // catch-all 'evidence_missing' that conflated absent and malformed.
+    // #392: a binding failure is reported with its specific reason (evidence_stale / evidence_unbound).
     const absent = !evidencePresent || shapeCheck.kind === 'absent';
+    const reason = shapeCheck.evidenceStale ? 'evidence_stale'
+      : shapeCheck.evidenceUnbound ? 'evidence_unbound'
+      : (absent ? 'evidence_absent' : 'evidence_shape_failed');
     return {
       result: 'refuse',
-      reason: absent ? 'evidence_absent' : 'evidence_shape_failed',
+      reason,
       missingTokenClass: shapeCheck.missingTokenClass || null,
       nodeId,
       role,
@@ -1017,6 +1209,12 @@ function runCloseAndOpenNext(opts) {
       detail: shapeCheck.reason || (evidencePresent ? 'shape invalid' : 'cache file absent'),
     };
   }
+
+  // #403.4: a verdict-bearing gate role whose evidence carries a near-miss `Verdict:` line
+  // (wrong case / typo, e.g. `Verdict: Pass`) closes here but would fail finalize --verdict-check.
+  // Emit a non-blocking warning at close time (informational, per #328) so the operator can fix it
+  // BEFORE finalize instead of paying a reopen → re-evidence → re-close loop. Never refuses.
+  const verdictWarn = checkVerdictParse(role, evidenceContent);
 
   // -- (b) Shell COMMIT_NODE per-node barrier ----------------------------
   const barrierOut = shell(commitNodePath, [planPath, '--node-id', nodeId, '--json']);
@@ -1073,7 +1271,13 @@ function runCloseAndOpenNext(opts) {
   // codex-preflight (no dispatch happens).
   const complianceStatus = role === 'finalize' ? 'main-session-direct' : 'subagent-invoked';
   const complianceRow = '| ' + requirementCell + ' | ' + complianceStatus + ' | ' + evidenceSummary + ' | |';
-  currentPlan = spliceComplianceRow(currentPlan, complianceRow);
+  // #384/#391c: spliceComplianceRow appends UNCONDITIONALLY, so the idempotent re-close paths (this
+  // node already complete via alreadyAtTarget — a serial close-and-open-next re-run, or the reconcile
+  // close-direction) would otherwise append a DUPLICATE `Required Agent Compliance` row each time.
+  // Guard the append: skip when a row for this Requirement cell already exists.
+  if (!complianceRowExists(currentPlan, requirementCell, nodeId)) {
+    currentPlan = spliceComplianceRow(currentPlan, complianceRow);
+  }
 
   // Write the plan now (ledger + compliance — all non-state writes).
   writeFile(planPath, currentPlan);
@@ -1122,13 +1326,14 @@ function runCloseAndOpenNext(opts) {
       opened: null,
       allDone: false,
       nextActionError: nextAction,
+      ...(verdictWarn || {}),
       taskTransitions: transitions,
       taskMirror: refreshTaskMirror(project, shell),
     };
   }
 
   if (nextAction.allDone) {
-    return { result: 'ok', closed: nodeId, opened: null, allDone: true, taskTransitions: transitions, taskMirror: refreshTaskMirror(project, shell) };
+    return { result: 'ok', closed: nodeId, opened: null, allDone: true, ...(verdictWarn || {}), taskTransitions: transitions, taskMirror: refreshTaskMirror(project, shell) };
   }
 
   // #303 (gap #2 / sub-gap C): SCHEDULER-AWARE fused advance. When closing this node
@@ -1152,15 +1357,28 @@ function runCloseAndOpenNext(opts) {
         id: n.id, role: n.role, model: n.model, declared_write_set: n.declared_write_set,
       })),
       allDone: false,
+      ...(verdictWarn || {}),
       taskTransitions: transitions,
       taskMirror: refreshTaskMirror(project, shell),
     };
   }
 
+  // #383(d): next-action's readySet includes in_progress nodes (the fused-advance splice is a
+  // silent no-op under allowFrom:['pending']), so a multi-in_progress ledger can surface an already
+  // -running node as `nextNode` — the orchestrator would then dispatch a SECOND agent for it. Guard
+  // in the CONSUMER: if the selected next node is already in_progress, report closed-only (opened:null)
+  // rather than re-announcing it as freshly opened. The serial linear chain (next node pending) is
+  // unaffected — byte-identical to today.
+  const nextNode0 = nextAction.nextNode;
+  const ledgerNow = readLedgerStatuses(readFile(planPath));
+  if (nextNode0 && ledgerNow[nextNode0.id] === 'in_progress') {
+    return { result: 'ok', closed: nodeId, opened: null, allDone: false, ...(verdictWarn || {}), taskTransitions: transitions, taskMirror: refreshTaskMirror(project, shell) };
+  }
+
   // Open the next ready node.
-  const nextNode = nextAction.nextNode;
+  const nextNode = nextNode0;
   if (!nextNode) {
-    return { result: 'ok', closed: nodeId, opened: null, allDone: false, taskTransitions: transitions, taskMirror: refreshTaskMirror(project, shell) };
+    return { result: 'ok', closed: nodeId, opened: null, allDone: false, ...(verdictWarn || {}), taskTransitions: transitions, taskMirror: refreshTaskMirror(project, shell) };
   }
 
   let planForAdvance = readFile(planPath);
@@ -1191,6 +1409,7 @@ function runCloseAndOpenNext(opts) {
     },
     baselineRecorded: baselineResult.exitCode === 0,
     allDone: false,
+    ...(verdictWarn || {}),
     taskTransitions: transitions,
     taskMirror: refreshTaskMirror(project, shell),
   };
@@ -1322,6 +1541,14 @@ function removeDurableConsentHalt(planContent) {
 // typed transaction, replacing the prior two-file PROSE lockstep (contractor-driven) that ADR
 // 0004/0005 eliminated elsewhere. Typed refusal with ZERO mutation when no durable halt is present.
 // ---------------------------------------------------------------------------
+// hasEscalatedMarker (#391a) — true when workflow-state.md carries a durable `escalated_to_full:`
+// line (column 0). The clear-halt gate widens to this so a crash that lost the ledger marker but
+// LEFT escalated_to_full in state is still re-runnable (the ledger probe alone would refuse
+// no_halt_present and strand the run).
+function hasEscalatedMarker(stateContent) {
+  return /^escalated_to_full:/m.test(String(stateContent || ''));
+}
+
 function runClearHalt(opts) {
   const { planPath, statePath, project, reason, shell, readFile, writeFile } = opts;
 
@@ -1331,19 +1558,20 @@ function runClearHalt(opts) {
   }
 
   let planContent = readFile(planPath);
-  // Ledger-scoped probe — refuse (zero mutation) when there is no real halt to clear.
-  if (!readDurableConsentHalt(planContent)) {
-    return { result: 'refuse', reason: 'no_halt_present', detail: 'no ledger-scoped consent_halt: pending marker to clear' };
+  let stateContent = readFile(statePath);
+  // #391a: WIDENED gate — refuse (zero mutation) only when NEITHER the ledger consent_halt marker NOR
+  // a durable escalated_to_full state marker is present. The old ledger-only gate stranded a halt when
+  // a crash between clear-halt's two writes removed the ledger marker but left escalated_to_full in
+  // state: a re-run then refused no_halt_present and only a hand-edit could finish the clear.
+  if (!readDurableConsentHalt(planContent) && !hasEscalatedMarker(stateContent)) {
+    return { result: 'refuse', reason: 'no_halt_present', detail: 'no ledger-scoped consent_halt: pending marker and no escalated_to_full state marker to clear' };
   }
 
-  // Remove the ledger consent_halt marker.
-  const removed = removeDurableConsentHalt(planContent);
-  planContent = removed.content;
-  writeFile(planPath, planContent);
-
-  // Remove the matching escalated_to_full marker(s). consent⇒security coupling (write-halt sets
-  // BOTH for a consent halt) → clearing consent clears both; clearing security clears security.
-  let stateContent = readFile(statePath);
+  // #391a: REORDER — write the STATE (escalated_to_full removal) FIRST, then the PLAN ledger marker
+  // LAST. The crash-safe ordering rule is plan-LAST so a crash between the two atomic writes leaves the
+  // ledger marker still present → a re-run sees the durable halt and finishes the clear (re-runnable),
+  // instead of the prior plan-first order which removed the ledger marker first and stranded
+  // escalated_to_full with no script recovery.
   if (reason === 'consent') {
     stateContent = stateContent.replace(/^escalated_to_full:[ \t]*consent[ \t]*\n?/mg, '');
     stateContent = stateContent.replace(/^escalated_to_full:[ \t]*security[ \t]*\n?/mg, '');
@@ -1351,6 +1579,11 @@ function runClearHalt(opts) {
     stateContent = stateContent.replace(/^escalated_to_full:[ \t]*security[ \t]*\n?/mg, '');
   }
   writeFile(statePath, stateContent);
+
+  // Remove the ledger consent_halt marker LAST.
+  const removed = removeDurableConsentHalt(planContent);
+  planContent = removed.content;
+  writeFile(planPath, planContent);
 
   // #373: best-effort telemetry — the halt was cleared.
   appendNodeTiming(planPath, 'clear-halt', 'halt_cleared');
@@ -1405,6 +1638,20 @@ function runReopenNode(opts) {
       if (live || opening) {
         return { result: 'refuse', reason: 'active_batch_exists', state: m.state || null, detail: 'reconcile/clear the active batch before a plan-repair reopen' };
       }
+    }
+  }
+
+  // (1b) #383: reopen-node refused over a live BATCH but not over a live RUNNING SET — the guard
+  // asymmetry the issue names. A plan-repair reopen must never fight a #377 scheduler fan-out either
+  // (it would create an orphan multi-in_progress ledger the same way a batch would). Add the missing
+  // arm: refuse scheduler_active over a live / opening running set. Mirrors the batch arm above.
+  const runningSetPath = path.join(path.dirname(planPath), '.cache', RUNNING_SET_NAME);
+  const runningSet = readRunningSet(runningSetPath, cacheExists, readFile);
+  if (runningSet) {
+    const rsOpening = runningSet.state === 'opening' || (runningSet.nodes || []).some(n => n.opening);
+    const rsLive = (runningSet.nodes || []).length > 0;
+    if (rsLive || rsOpening) {
+      return { result: 'refuse', reason: 'scheduler_active', detail: 'reconcile/close the active running-set fan-out before a plan-repair reopen', runningSet: (runningSet.nodes || []).map(n => n.id) };
     }
   }
 
@@ -1603,6 +1850,27 @@ function isReadOnlyNode(node) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// sanitizeNodeId / readNonce (#392) — the per-open evidence-binding nonce.
+//
+// The nonce = the first 12 chars of the per-node baseline SHA stored on disk at
+// .cache/barrier-base-<sanitizeNodeId(id)> by `commit-node --start` (the anchor commit the validator
+// recorded at node OPEN). It is per-open (a reopen re-records a fresh baseline) and already on disk —
+// the natural anti-replay token #392 calls for. sanitizeNodeId mirrors the validator's barrier/ref
+// key (cacheBaseFile @plan-validator) so a `.` / `/` in an id resolves to the SAME file both write.
+// ---------------------------------------------------------------------------
+function sanitizeNodeId(id) {
+  return String(id).replace(/[^A-Za-z0-9_-]/g, '_');
+}
+
+function readNonce(planPath, nodeId, readFile) {
+  const baseFile = path.join(path.dirname(planPath), '.cache', 'barrier-base-' + sanitizeNodeId(nodeId));
+  try {
+    const sha = String(readFile(baseFile) || '').trim();
+    return sha ? sha.slice(0, 12) : null;
+  } catch (_) { return null; }
+}
+
 // readRunningSet — parse .cache/running-set.json or null (absent/corrupt/no nodes).
 function readRunningSet(runningSetPath, cacheExists, readFile) {
   if (cacheExists && !cacheExists(runningSetPath)) return null;
@@ -1610,6 +1878,199 @@ function readRunningSet(runningSetPath, cacheExists, readFile) {
   try { raw = readFile(runningSetPath); } catch (_) { return null; }
   const parsed = safeJsonParse(raw);
   return (parsed && Array.isArray(parsed.nodes)) ? parsed : null;
+}
+
+// ===========================================================================
+// #383 CROSS-SURFACE MUTUAL EXCLUSION — the shared "live coordination state" probe.
+//
+// The three coordination surfaces (serial open-next/close-and-open-next, the batch manifest
+// active-batch.json, and the #377 running-set running-set.json) each enforced only their own
+// invariant. A mixed sequence — the documented resume path (open-next on resume) followed by the
+// scheduler (open-ready / open-batch) — could co-schedule a serial write node against a read fan-out
+// (a), make the batch + running-set manifests coexist and brick each other (b), or double-dispatch
+// an already-running node (d). readCoordinationState is the SINGLE pure probe every mutating
+// subcommand consults; probeCoordination is its fs wrapper.
+//
+// SERIAL FALLBACK BYTE-IDENTITY (the hard invariant): with no running-set, no active-batch, and
+// ≤1 in_progress row, serialLive is the only live-coordination signal and the scheduler/batch arms
+// are all FALSE — so each guard is vacuously-pass and the legacy serial path is byte-identical.
+// ===========================================================================
+
+// readCoordinationState (#383) — PURE derivation of the live coordination surfaces from already-read
+// content. Mirrors the crossCheckStatus / runOrient AC#5 legality vocabulary so the #293 orphan-
+// legality agreement holds: serialLive ⟺ crossCheckStatus single_in_progress for the same fixture.
+//
+// @param {string} planContent  the frozen plan (## Node Ledger source)
+// @param {{runningSet:object|null, manifest:object|null}} surfaces  the two parsed manifests
+// @returns {{serialLive, inProgressIds, runningSetLive, runningSetOpening, batchLive, batchOpening,
+//            collisions}}
+//   serialLive        exactly one in_progress row AND no live running set AND no live batch — the
+//                     legacy single-node case (a serial write/read node is live).
+//   runningSetLive    a non-opening running set with ≥1 node is live.
+//   runningSetOpening  the running set is mid-transaction (state:'opening' or any node opening:true).
+//   batchLive         an active (non-joined/aborted) batch manifest with ≥1 unsealed member.
+//   batchOpening      the batch is mid-transaction (state:'opening' or any member opening:true).
+//   collisions        the surfaces that COEXIST (≥2 of {serial,runningSet,batch}) — the union state
+//                     #383(b) must refuse at creation.
+function readCoordinationState(planContent, surfaces) {
+  surfaces = surfaces || {};
+  const runningSet = surfaces.runningSet || null;
+  const manifest = surfaces.manifest || null;
+
+  const ledger = readLedgerStatuses(planContent || '');
+  const inProgressIds = Object.keys(ledger).filter(id => ledger[id] === 'in_progress');
+
+  const runningSetOpening = !!(runningSet && (runningSet.state === 'opening' || (runningSet.nodes || []).some(n => n.opening)));
+  const runningSetLive = !!(runningSet && (runningSet.nodes || []).length > 0 && !runningSetOpening);
+
+  const batchOpening = !!(manifest && (manifest.state === 'opening' || (manifest.members || []).some(m => m.opening)));
+  const batchActiveState = !!(manifest && manifest.state && manifest.state !== 'joined' && manifest.state !== 'aborted');
+  const batchLive = !!(batchActiveState && (manifest.members || []).some(m => !m.sealed) && !batchOpening);
+
+  // serialLive = the legacy single-node case: exactly one in_progress row, no running set fan-out,
+  // no live batch. This MUST equal crossCheckStatus's single_in_progress verdict for the same fixture
+  // (the #293 cross-consistency invariant tested explicitly).
+  const serialLive = inProgressIds.length === 1 && !runningSetLive && !batchLive && !runningSetOpening && !batchOpening;
+
+  // collisions: which live surfaces coexist (a union state that none of the per-surface gates can
+  // represent). Used only for diagnostics in the refusal payload; the per-command guards refuse on
+  // the specific other-surface signal per the matrix.
+  const collisions = [];
+  const liveCount = [runningSetLive || runningSetOpening, batchLive || batchOpening, serialLive].filter(Boolean).length;
+  if (runningSetLive || runningSetOpening) collisions.push('running_set');
+  if (batchLive || batchOpening) collisions.push('batch');
+  if (serialLive) collisions.push('serial');
+
+  return {
+    serialLive,
+    inProgressIds,
+    runningSetLive,
+    runningSetOpening,
+    batchLive,
+    batchOpening,
+    collisions: liveCount >= 2 ? collisions : [],
+  };
+}
+
+// probeCoordination (#383) — the fs wrapper around readCoordinationState. Reads the plan, the batch
+// manifest, and the running set (all READ-ONLY, fail-closed to null) and returns the pure state plus
+// the raw surfaces (for the refusal payload's {inProgress,runningSet,batchState} context).
+//
+// @param {{planPath, readFile, cacheExists}} opts
+// @returns the readCoordinationState shape, augmented with { manifest, runningSet }.
+function probeCoordination(opts) {
+  const { planPath, readFile, cacheExists } = opts;
+  const dir = path.dirname(planPath);
+
+  let planContent = '';
+  try { planContent = readFile(planPath); } catch (_) {}
+
+  const manifestPath = path.join(dir, '.cache', 'active-batch.json');
+  let manifest = null;
+  if (!cacheExists || cacheExists(manifestPath)) {
+    let raw = null;
+    try { raw = readFile(manifestPath); } catch (_) { raw = null; }
+    if (raw != null) {
+      const parsed = safeJsonParse(raw);
+      if (parsed && Array.isArray(parsed.members)) manifest = parsed;
+    }
+  }
+
+  const runningSetPath = path.join(dir, '.cache', RUNNING_SET_NAME);
+  const runningSet = readRunningSet(runningSetPath, cacheExists, readFile);
+
+  const state = readCoordinationState(planContent, { runningSet, manifest });
+  return { ...state, manifest, runningSet };
+}
+
+// coordinationRefusal (#383) — build a typed mutual-exclusion refusal for a given guard layer. Returns
+// null when the relevant other-surface is not live (the guard is vacuously-pass). `excl` names which
+// surfaces THIS subcommand is mutually exclusive with: any subset of {serial, scheduler, batch}.
+// Reason codes: serial_node_live / scheduler_active / batch_active, each carrying the live-state
+// context + the concrete reconcile/close repair the operator should run.
+function coordinationRefusal(coord, excl) {
+  const want = new Set(excl || []);
+  // Order matters only for which single reason surfaces first; the matrix never lets two of these be
+  // simultaneously the EXCLUDED surface for one command without a deeper bug, but check deterministically.
+  if (want.has('scheduler') && (coord.runningSetLive || coord.runningSetOpening)) {
+    return refuse('scheduler_active', {
+      inProgress: coord.inProgressIds,
+      runningSet: (coord.runningSet && (coord.runningSet.nodes || []).map(n => n.id)) || [],
+      batchState: (coord.manifest && coord.manifest.state) || null,
+      repair: coord.runningSetOpening
+        ? 'reconcile-running-set (a crashed open-ready) then retry'
+        : 'close the live running-set nodes (close-node) or reconcile-running-set before this command',
+    });
+  }
+  if (want.has('batch') && (coord.batchLive || coord.batchOpening)) {
+    return refuse('batch_active', {
+      inProgress: coord.inProgressIds,
+      runningSet: (coord.runningSet && (coord.runningSet.nodes || []).map(n => n.id)) || [],
+      batchState: (coord.manifest && coord.manifest.state) || null,
+      repair: coord.batchOpening
+        ? 'reconcile (a crashed open-batch/top-up) then retry'
+        : 'seal + join the active batch (or reconcile --abort) before this command',
+    });
+  }
+  if (want.has('serial') && coord.serialLive) {
+    return refuse('serial_node_live', {
+      inProgress: coord.inProgressIds,
+      runningSet: (coord.runningSet && (coord.runningSet.nodes || []).map(n => n.id)) || [],
+      batchState: (coord.manifest && coord.manifest.state) || null,
+      repair: 'close the live serial node (close-and-open-next) before fanning out',
+    });
+  }
+  return null;
+}
+
+// mutationGuardPrologue (#383/#387/#391b) — the SINGLE layered guard prologue every mutating
+// subcommand runs BEFORE its body, in a fixed order. Returns a typed refusal (zero mutation) on the
+// first layer that trips, or null to proceed.
+//   Layer 1 INTEGRITY (#387): shell validator --resume-check; exitCode!==0 || ok!==true →
+//           refuse plan_integrity_failed.
+//   Layer 2 HALT FENCE (#391b): a durable consent_halt in the ledger → refuse halt_pending.
+//   Layer 3 LIVE-COORDINATION (#383): probeCoordination → refuse serial_node_live | scheduler_active
+//           | batch_active per the per-command exclusion set.
+//
+// SERIAL FALLBACK BYTE-IDENTITY: with KAOLA_LANE_CONTAINMENT off + no running-set + no active-batch +
+// ≤1 in_progress + no consent_halt marker, EVERY layer is vacuously-pass (integrity ok, no halt, no
+// other-surface live) so the guarded body runs exactly as today.
+//
+// @param {object} opts  the subcommand opts (planPath, shell, readFile, cacheExists)
+// @param {{integrity?:boolean, halt?:boolean, excl?:string[]}} cfg  which layers apply
+// @returns {object|null} a refusal envelope, or null to proceed.
+function mutationGuardPrologue(opts, cfg) {
+  const { planPath, shell, readFile, cacheExists } = opts;
+  cfg = cfg || {};
+
+  // Layer 1 — integrity (mirror open-batch 424-427). Only when configured (open-next DOES NOT add it:
+  // an adversarial finding showed orient already runs --resume-check on the documented resume path,
+  // and adding it to open-next risks a legacy-path behavioral diff).
+  if (cfg.integrity && typeof shell === 'function') {
+    const integrity = shell(validatorPath, [planPath, '--resume-check', '--json']);
+    if (integrity.exitCode !== 0 || integrity.ok !== true) {
+      return refuse('plan_integrity_failed', { detail: integrity.reason || null });
+    }
+  }
+
+  // Layer 2 — durable consent-halt fence (#391b). A halt exists precisely to STOP work; a resume/loop
+  // that skips orient must not sail through it. Read the plan ledger (fail-closed to '' → no halt).
+  if (cfg.halt) {
+    let planContent = '';
+    try { planContent = readFile(planPath); } catch (_) {}
+    if (readDurableConsentHalt(planContent)) {
+      return refuse('halt_pending', { detail: 'a durable consent_halt: pending marker is set in the ## Node Ledger — clear it (clear-halt) or resolve the halt before mutating' });
+    }
+  }
+
+  // Layer 3 — live-coordination mutual exclusion (#383).
+  if (cfg.excl && cfg.excl.length) {
+    const coord = probeCoordination({ planPath, readFile, cacheExists });
+    const r = coordinationRefusal(coord, cfg.excl);
+    if (r) return r;
+  }
+
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1623,6 +2084,16 @@ function runOpenReady(opts) {
     planPath, project, max, fanoutCapReadonly, shell, readFile, writeFile, cacheExists, mkdirp, now,
   } = opts;
   const runningSetPath = path.join(path.dirname(planPath), '.cache', RUNNING_SET_NAME);
+
+  // == UNIFIED GUARD PROLOGUE (D1) — matrix: integrity:yes / excl-serial:yes / excl-batch:yes /
+  //    halt-fence:yes (NO excl-scheduler — open-ready OWNS the running set). ==
+  // Layer 1 INTEGRITY (#387): mirror open-batch/top-up — a tampered/structurally-invalid frozen plan
+  // must not be partially executed by the scheduler. --resume-check covers hash-freeze + post-freeze
+  // tamper + cycle + unique-sink + role-library + depends_on resolvability. Any non-ok refuses with
+  // zero mutation. (Without this, an emptied write node's declared_write_set is reclassified read-only
+  // by isReadOnlyNode and fans out concurrently — the #387 repro.)
+  const guard = mutationGuardPrologue(opts, { integrity: true, halt: true, excl: ['serial', 'batch'] });
+  if (guard) return guard;
 
   // Crash-safe precondition: an 'opening' running set (or any opening:true node) is an
   // interrupted open-ready — refuse with a reconcile pointer (never silently overwrite).
@@ -1717,11 +2188,18 @@ function runOpenReady(opts) {
   // -- Phase 2: per node, record baseline then flip the ledger row pending -> in_progress.
   let planContent = readFile(planPath);
   const transitions = [];
+  // #392: per-opened-node evidence-binding nonce (barrier-base SHA prefix). open-ready opens a SET, so
+  // the orchestrator needs the right nonce for EACH role dispatch. Read it from the same nested
+  // recordBase the validator's --record-base returns (commit-node --start nests it under recordBase),
+  // and use the SAME slice(0,12) prefix readNonce produces on the close side so the echo matches.
+  const nonceById = {};
   for (const n of toOpen) {
     const baseline = shell(commitNodePath, [planPath, '--node-id', n.id, '--start', '--json']);
     if (!(baseline.exitCode === 0 && baseline.result === 'ok')) {
       return { result: 'refuse', reason: 'baseline_failed', nodeId: n.id, baselineResult: baseline };
     }
+    nonceById[n.id] = (baseline.recordBase && baseline.recordBase.base)
+      ? String(baseline.recordBase.base).slice(0, 12) : null;
     const spliced = spliceLedgerNode(planContent, n.id, 'in_progress', { allowFrom: ['pending'] });
     if (!spliced.found) {
       return { result: 'refuse', reason: 'node_not_in_ledger', nodeId: n.id };
@@ -1744,7 +2222,11 @@ function runOpenReady(opts) {
     result: 'ok',
     allDone: false,
     kind: openKind,
-    opened: newNodes.map(n => ({ id: n.id, role: n.role, model: n.model || null, kind: n.kind, declared_write_set: n.declared_write_set })),
+    // #392: each opened node carries its per-open evidence-binding `nonce` (read from THIS open's
+    // recordBase in Phase 2) so the orchestrator passes the right nonce to each role dispatch and the
+    // role echoes it in `evidence-binding: <id> <nonce>` for close-node to verify. null when no
+    // baseline SHA was returned (legacy/offline path → close-side binding check skipped, see readNonce).
+    opened: newNodes.map(n => ({ id: n.id, role: n.role, model: n.model || null, kind: n.kind, declared_write_set: n.declared_write_set, nonce: nonceById[n.id] || null })),
     runningSet: finalSet.nodes.map(n => n.id),
     taskTransitions: transitions,
     taskMirror: refreshTaskMirror(project, shell),
@@ -1763,6 +2245,15 @@ function runCloseNode(opts) {
   const runningSetPath = path.join(path.dirname(planPath), '.cache', RUNNING_SET_NAME);
   const transitions = [];
 
+  // == UNIFIED GUARD PROLOGUE (D1) — matrix: integrity:yes / halt-fence:yes (NO coordination refusal:
+  //    close-node closes one of its OWN live running-set members — it must not refuse over them). ==
+  // #387: the same --resume-check integrity gate open-batch/top-up run — never close (and append a
+  // compliance row + advance) against a tampered/invalid frozen plan.
+  // #391b: a durable consent_halt must fence the close path too (else close-and-advance survives the
+  // halt and the marker becomes a phantom against a now-complete node).
+  const guard = mutationGuardPrologue(opts, { integrity: true, halt: true });
+  if (guard) return guard;
+
   // -- (a) Evidence-shape PRESENCE check (same contract as close-and-open-next).
   const planContent0 = readFile(planPath);
   const nodes = parseNodesFromContent(planContent0);
@@ -1777,18 +2268,26 @@ function runCloseNode(opts) {
   if (evidencePresent && evidenceContent === null) {
     try { evidenceContent = readFile(cachePath); } catch (_) { evidenceContent = ''; }
   }
-  const shapeCheck = checkEvidenceShape(role, nodeId, evidenceContent);
+  // #392: verify the evidence-binding header against this open's nonce (skipped when none on disk).
+  const expectedNonce = readNonce(planPath, nodeId, readFile);
+  const shapeCheck = checkEvidenceShape(role, nodeId, evidenceContent, { expectedNonce, expectedNodeId: nodeId });
   if (!evidencePresent || !shapeCheck.ok) {
     const absent = !evidencePresent || shapeCheck.kind === 'absent';
+    const reason = shapeCheck.evidenceStale ? 'evidence_stale'
+      : shapeCheck.evidenceUnbound ? 'evidence_unbound'
+      : (absent ? 'evidence_absent' : 'evidence_shape_failed');
     return {
       result: 'refuse',
-      reason: absent ? 'evidence_absent' : 'evidence_shape_failed',
+      reason,
       missingTokenClass: shapeCheck.missingTokenClass || null,
       nodeId, role,
       expected: shapeCheck.expected || [],
       detail: shapeCheck.reason || (evidencePresent ? 'shape invalid' : 'cache file absent'),
     };
   }
+
+  // #403.4: non-blocking near-miss verdict warning (informational, per #328) — see runCloseAndOpenNext.
+  const verdictWarn = checkVerdictParse(role, evidenceContent);
 
   // -- (b) Per-node barrier (parent planPath — read-only/serial-write are parent-side).
   const barrierOut = shell(commitNodePath, [planPath, '--node-id', nodeId, '--json']);
@@ -1812,7 +2311,10 @@ function runCloseNode(opts) {
   const requirementCell = bareRoles.includes(role) ? role : role + ' (' + nodeId + ')';
   const evidenceSummary = evidenceContent ? evidenceContent.split('\n')[0].slice(0, 80) : 'evidence present';
   const complianceStatus = role === 'finalize' ? 'main-session-direct' : 'subagent-invoked';
-  currentPlan = spliceComplianceRow(currentPlan, '| ' + requirementCell + ' | ' + complianceStatus + ' | ' + evidenceSummary + ' | |');
+  // #384/#391c: idempotent compliance append — skip a duplicate row on the alreadyAtTarget re-close.
+  if (!complianceRowExists(currentPlan, requirementCell, nodeId)) {
+    currentPlan = spliceComplianceRow(currentPlan, '| ' + requirementCell + ' | ' + complianceStatus + ' | ' + evidenceSummary + ' | |');
+  }
   writeFile(planPath, currentPlan);
   appendNodeTiming(planPath, nodeId, 'closed');
   transitions.push(buildTransition(nodeId, 'complete', 'close-node'));
@@ -1857,6 +2359,7 @@ function runCloseNode(opts) {
     closed: nodeId,
     allDone,
     newlyReady,
+    ...(verdictWarn || {}),
     taskTransitions: transitions,
     taskMirror: refreshTaskMirror(project, shell),
   };
@@ -1879,11 +2382,38 @@ function runReconcileRunningSet(opts) {
   }
   const wholeOpening = running.state === 'opening';
   const openingNodes = (running.nodes || []).filter(n => n.opening);
-  if (!wholeOpening && openingNodes.length === 0) {
+
+  const ledger = readLedgerStatuses(readFile(planPath));
+
+  // #384: CLOSE direction. A crash between runCloseNode's plan write (ledger complete + compliance)
+  // and its running-set removal — OR a near-simultaneous unlocked RMW on running-set.json — leaves a
+  // ledger-TERMINAL (complete / n.a) member still in an already-'open' set. The OPEN-direction loop
+  // below only covers opening:true / state:'opening' transactions; a stale terminal member would
+  // otherwise fall through the not_opening dead-end and orient would loop forever (#384 repro). Detect
+  // it FIRST so a close-crash is a reconcilable state, not a no-op. (readLedgerStatuses lowercases the
+  // status; accept the 'n.a'/'na' spellings defensively alongside the canonical 'complete'/'n/a'.)
+  const TERMINAL_LEDGER = new Set(['complete', 'n/a', 'n.a', 'na']);
+  const closed = (running.nodes || []).filter(n => TERMINAL_LEDGER.has(ledger[n.id])).map(n => n.id);
+
+  // #293/S-fix: STALE direction. A member of an already-'open' (non-opening) running set whose ledger
+  // row is NEITHER terminal (the #384 close direction above) NOR `opening` (the open-direction
+  // roll-back below) NOR `in_progress` (a genuine live member) is a stale/corrupt shape — the set
+  // claims it is in flight while the ledger says it is `pending` (or some non-live status) and the
+  // real in_progress is a DIFFERENT (serial) node. Left in place it wedges orient/open-next forever:
+  // open-next refuses scheduler_active → reconcile-running-set, which (pre-fix) returned not_opening
+  // (no-op) — the exact #383(e)/#384 dead-end loop. Detect non-opening pending/non-live members and
+  // drop them (close direction's sibling). Only meaningful when NOT mid open-transaction (wholeOpening
+  // / opening:true members are the roll-forward/back machine and own those rows).
+  const NONLIVE_DROPPABLE = (status) => status !== 'in_progress' && !TERMINAL_LEDGER.has(status);
+  const stale = (!wholeOpening)
+    ? (running.nodes || []).filter(n => !n.opening && NONLIVE_DROPPABLE(ledger[n.id])).map(n => n.id)
+    : [];
+
+  // No opening transaction AND no stale terminal member AND no stale pending member → nothing to do.
+  if (!wholeOpening && openingNodes.length === 0 && closed.length === 0 && stale.length === 0) {
     return { result: 'ok', reconciled: false, reason: 'not_opening', state: running.state, taskTransitions: [] };
   }
 
-  const ledger = readLedgerStatuses(readFile(planPath));
   const target = wholeOpening ? (running.nodes || []) : openingNodes;
   const kept = [];
   const dropped = [];
@@ -1891,9 +2421,25 @@ function runReconcileRunningSet(opts) {
     if (ledger[n.id] === 'in_progress') kept.push(n.id);
     else dropped.push(n.id);
   }
-  // Survivors = non-target nodes (already open) + target nodes whose row flipped.
+
+  // #385 drop-side: every rolled-back (open-direction) / closed-out (close-direction) / stale
+  // (#293-direction) member is leaving the live set, so drop its per-node baseline
+  // (.cache/barrier-base-<id> + the gc-anchored ref) — the documented #281/#296 stale-baseline trap
+  // that runReopenNode already guards against. --drop-base removes file+ref together and is idempotent
+  // (a missing file/ref is a clean no-op). Mirrors runReopenNode ~1505. The roll-FORWARD survivors
+  // (kept) keep their fresh baselines.
+  const closedSet = new Set(closed);
+  const staleSet = new Set(stale);
+  if (typeof shell === 'function') {
+    for (const id of new Set([...dropped, ...closed, ...stale])) {
+      shell(validatorPath, [planPath, '--drop-base', '--node-id', id, '--json']);
+    }
+  }
+
+  // Survivors = non-target nodes (already open) + target nodes whose row flipped — MINUS any
+  // close-direction terminal member (#384) and any stale non-opening pending member (#293-direction).
   const survivors = (running.nodes || [])
-    .filter(n => (!wholeOpening && !n.opening) || kept.includes(n.id))
+    .filter(n => ((!wholeOpening && !n.opening) || kept.includes(n.id)) && !closedSet.has(n.id) && !staleSet.has(n.id))
     .map(n => { if (!n.opening) return n; const c = { ...n }; delete c.opening; return c; });
 
   if (survivors.length === 0) {
@@ -1907,6 +2453,16 @@ function runReconcileRunningSet(opts) {
     reconciled: true,
     rolledForward: kept,
     rolledBack: dropped,
+    // #384: members dropped because their ledger row was already terminal (close-crash recovery).
+    closedDropped: closed,
+    // #293/S-fix: members dropped because they were stale non-opening pending (or otherwise not-in-flight)
+    // members of an 'open' set while a DIFFERENT serial node is the real in_progress.
+    staleDropped: stale,
+    // Name the recovery so orient/operators see WHY the reconcile fired when there was no opening
+    // transaction. A pure stale-member drop (no terminal, no roll-forward/back) is named distinctly so
+    // the #293 dead-end is observably broken (was a not_opening no-op).
+    ...(!wholeOpening && openingNodes.length === 0 && closed.length === 0 && stale.length > 0 ? { reason: 'stale_member_dropped' }
+      : (!wholeOpening && openingNodes.length === 0 && closed.length > 0 ? { reason: 'closed_member_dropped' } : {})),
     state: 'open',
     taskTransitions: [],
     taskMirror: refreshTaskMirror(project, shell),
@@ -2031,7 +2587,7 @@ function main() {
       },
     });
   } else if (subcommand === 'open-next') {
-    result = runOpenNext({ planPath, statePath, project, nodeId, shell, readFile, writeFile });
+    result = runOpenNext({ planPath, statePath, project, nodeId, shell, readFile, writeFile, cacheExists });
   } else if (subcommand === 'open-ready') {
     result = runOpenReady({
       planPath, project,
@@ -2113,9 +2669,18 @@ module.exports = {
   spliceLedgerNode,
   readLedgerStatuses,
   spliceComplianceRow,
+  complianceRowExists,
   removeDurableConsentHalt,
   checkEvidenceShape,
+  checkVerdictParse,
+  readCoordinationState,
+  probeCoordination,
+  coordinationRefusal,
   validateProjectName,
+  // #392: exported so the round-trip test can assert the open-side returned nonce EQUALS the
+  // close-side on-disk nonce (same 12-char SHA prefix) — the field-path round-trip guard.
+  readNonce,
+  sanitizeNodeId,
   runOrient,
   runMirrorProject,
   runOpenNext,

@@ -10,8 +10,12 @@ const {
   spliceLedgerNode,
   readLedgerStatuses,
   spliceComplianceRow,
+  complianceRowExists,
   removeDurableConsentHalt,
   checkEvidenceShape,
+  checkVerdictParse,
+  readCoordinationState,
+  probeCoordination,
   validateProjectName,
   runOrient,
   runMirrorProject,
@@ -27,6 +31,7 @@ const {
   runWriteHalt,
   runClearHalt,
   shellNode,
+  readNonce,
 } = require('./kaola-workflow-adaptive-node');
 const { RUNNING_SET_NAME } = require('./kaola-workflow-adaptive-schema');
 const { readDurableConsentHalt, locateSection } = require('./kaola-workflow-adaptive-schema');
@@ -3051,13 +3056,32 @@ const STATE_NO_WT = '## Sink\nbranch: workflow/issue-335\n';
 const RS_PLAN_PATH = '/p/workflow-plan.md';
 const RS_SET_PATH = '/p/.cache/' + RUNNING_SET_NAME;
 
-function rsHarness(initialFiles, shellStub) {
+// rsHarness(initialFiles, shellStub, validatorStub?)
+//   shellStub(base, args)        → models next-action / commit-node / task-mirror.
+//   validatorStub(base, args)    → OPTIONAL #387/#385: models plan-validator --resume-check /
+//                                  --drop-base. When omitted (or returns null), the validator passes
+//                                  by DEFAULT (green frozen plan): --resume-check → {exitCode:0,ok:true},
+//                                  --drop-base → {exitCode:0,result:'ok'}. A test wanting a TAMPERED
+//                                  plan passes a validatorStub returning {exitCode:1,...} for --resume-check.
+function rsHarness(initialFiles, shellStub, validatorStub) {
   const files = Object.assign({}, initialFiles);
   const shellCalls = [];
   return {
     files,
     shellCalls,
-    shell: (scriptPath, args) => { shellCalls.push({ base: path.basename(scriptPath), args: (args || []).slice() }); return shellStub(path.basename(scriptPath), args || []); },
+    shell: (scriptPath, args) => {
+      const base = path.basename(scriptPath);
+      const a = args || [];
+      shellCalls.push({ base, args: a.slice() });
+      if (base === 'kaola-workflow-plan-validator.js') {
+        const override = validatorStub ? validatorStub(base, a) : null;
+        if (override !== undefined && override !== null) return override;
+        if (a.includes('--resume-check')) return { exitCode: 0, ok: true };
+        if (a.includes('--drop-base')) return { exitCode: 0, result: 'ok' };
+        return { exitCode: 0, result: 'ok' };
+      }
+      return shellStub(base, a);
+    },
     readFile: (fp) => { if (fp in files) return files[fp]; throw new Error('ENOENT ' + fp); },
     writeFile: (fp, content) => { files[fp] = content; },
     cacheExists: (fp) => fp in files,
@@ -3339,6 +3363,262 @@ function rsHarness(initialFiles, shellStub) {
 }
 
 // ===========================================================================
+// S-RT (#392 ROUND-TRIP, the false-green catcher): the per-open nonce that
+// open-next / open-ready RETURN must equal the on-disk nonce the close side reads
+// via readNonce, so evidence bound with the RETURNED nonce closes. The pre-fix bug
+// read commit-node --start's `base`/`reused` at the TOP level (they live under
+// `recordBase`) → returned nonce ALWAYS null → every node close refused on the
+// missing evidence-binding header. The existing #392 close-path tests inject the
+// on-disk nonce directly into the header and never exercise the RETURNED field, so
+// they stayed green over the broken open side. These tests drive the FULL
+// open→(returned-nonce)→close round-trip.
+//
+// MUTATION PROOF: revert FIX 1a (nonce: ... → nonce: null, or read the top-level
+// baselineResult.base) and S-RT1 goes RED ("close did not succeed with the returned
+// nonce" — the header now carries a null/empty nonce that never matches the on-disk
+// SHA). Revert the baselineReused line and S-RT5 goes RED. These bite specifically
+// because they consume the RETURNED nonce, not an injected one.
+// ===========================================================================
+
+// rtHarness — a REALISTIC open→close harness. commit-node --start returns the nested
+// `recordBase.base` SHA AND writes the on-disk .cache/barrier-base-<id> file (sanitized
+// id), exactly like the real validator --record-base. The close side then reads that
+// same SHA via readNonce. Per-node barrier + selector are modeled as pass.
+function rtHarness(initialFiles, opts) {
+  opts = opts || {};
+  const files = Object.assign({}, initialFiles);
+  const shellCalls = [];
+  const sanitize = (id) => String(id).replace(/[^A-Za-z0-9_-]/g, '_');
+  const shell = (scriptPath, args) => {
+    const base = path.basename(scriptPath);
+    const a = args || [];
+    shellCalls.push({ base, args: a.slice() });
+    if (base === 'kaola-workflow-plan-validator.js') {
+      if (a.includes('--resume-check')) return { exitCode: 0, ok: true };
+      if (a.includes('--drop-base')) return { exitCode: 0, result: 'ok' };
+      return { exitCode: 0, result: 'ok' };
+    }
+    if (base === 'kaola-workflow-commit-node.js' && a.includes('--start')) {
+      // The REAL shape: commit-node nests the validator's --record-base output under recordBase.
+      const idIdx = a.indexOf('--node-id');
+      const id = idIdx >= 0 ? a[idIdx + 1] : null;
+      const sha = (opts.shaFor && opts.shaFor(id)) || ('deadbeef' + sanitize(id) + 'cafef00d1234');
+      // Write the on-disk barrier-base file so readNonce reads the SAME SHA on the close side.
+      files['/p/.cache/barrier-base-' + sanitize(id)] = sha + '\n';
+      const reused = !!(opts.reusedFor && opts.reusedFor(id));
+      return { exitCode: 0, result: 'ok', mode: 'per-node-start', nodeId: id, overallOk: true, recordBase: { result: 'ok', nodeId: id, base: sha, ...(reused ? { reused: true } : {}) } };
+    }
+    if (base === 'kaola-workflow-commit-node.js') {
+      // Per-node barrier (close).
+      return { exitCode: 0, result: 'ok', mode: 'per-node', overallOk: true, selectorCheck: { isSelector: false, ok: true }, barrierCheck: { exitCode: 0, result: 'pass' } };
+    }
+    if (base === 'kaola-workflow-next-action.js') {
+      return opts.nextAction || { exitCode: 0, result: 'ok', allDone: true, readySet: [], readyPending: [] };
+    }
+    return { exitCode: 0, result: 'ok' };
+  };
+  return {
+    files, shellCalls, shell, sanitize,
+    readFile: (fp) => { if (fp in files) return files[fp]; throw new Error('ENOENT ' + fp); },
+    writeFile: (fp, c) => { files[fp] = c; },
+    cacheExists: (fp) => fp in files,
+    mkdirp: () => {}, unlink: (fp) => { delete files[fp]; },
+  };
+}
+
+// S-RT1 (open-next → returned nonce → close-and-open-next): evidence bound with the
+// RETURNED nonce closes SUCCESSFULLY (the binding-passes AC #392 claims). This is RED
+// against the pre-fix top-level read (returned nonce null → header nonce mismatches the
+// on-disk SHA → evidence_stale/missing refusal).
+{
+  const plan = makePlan([
+    '| impl-core | pending | |',
+    '| impl-other | pending | |',
+    '| review | pending | |',
+    '| finalize | pending | |',
+  ]);
+  const h = rtHarness({ '/p/workflow-plan.md': plan, '/p/workflow-state.md': makeState() }, {
+    nextAction: { exitCode: 0, result: 'ok', allDone: false,
+      readySet: [{ id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js', dependsOn: [] }],
+      nextNode: { id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js' } },
+  });
+  const open = runOpenNext({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', nodeId: null, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile });
+  assert(open.result === 'ok', 'S-RT1: open-next ok');
+  // THE field-path assertion: the RETURNED nonce is the real 12-char SHA prefix, NOT null.
+  assert(open.nonce && open.nonce.length === 12, 'S-RT1: open-next returns a non-null 12-char nonce (the recordBase fix), got ' + JSON.stringify(open.nonce));
+  assert(open.nonce === readNonce('/p/workflow-plan.md', 'impl-core', h.readFile), 'S-RT1: returned nonce EQUALS the on-disk readNonce value (open prefix == close prefix)');
+
+  // Build evidence carrying EXACTLY the returned binding header.
+  const evidence = 'evidence-binding: impl-core ' + open.nonce + '\nRED then GREEN\n3 assertions';
+  h.files['/p/.cache/impl-core.md'] = evidence;
+  // next-action for the close-side fused advance (impl-core complete → impl-other ready).
+  const hClose = h; // reuse files
+  const closeShell = (scriptPath, args) => {
+    const base = path.basename(scriptPath);
+    if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readySet: [{ id: 'impl-other', role: 'implementer', model: 'sonnet', declared_write_set: 'scripts/other.js', dependsOn: ['impl-core'] }], nextNode: { id: 'impl-other', role: 'implementer', model: 'sonnet', declared_write_set: 'scripts/other.js' } };
+    return h.shell(scriptPath, args);
+  };
+  const close = runCloseAndOpenNext({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', nodeId: 'impl-core', shell: closeShell, readFile: hClose.readFile, writeFile: hClose.writeFile, cacheExists: hClose.cacheExists });
+  assert(close.result === 'ok' && close.closed === 'impl-core', 'S-RT1: close SUCCEEDS with the RETURNED nonce (round-trip closes), got ' + JSON.stringify({ result: close.result, reason: close.reason, mtc: close.missingTokenClass }));
+}
+
+// S-RT2 (negative — no binding header → refuse): close with evidence lacking the
+// evidence-binding header refuses (binding enforced once a nonce is on disk).
+{
+  const plan = makePlan(['| impl-core | pending | |', '| impl-other | pending | |', '| review | pending | |', '| finalize | pending | |']);
+  const h = rtHarness({ '/p/workflow-plan.md': plan, '/p/workflow-state.md': makeState() }, {
+    nextAction: { exitCode: 0, result: 'ok', allDone: false, readySet: [{ id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js', dependsOn: [] }], nextNode: { id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js' } },
+  });
+  const open = runOpenNext({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', nodeId: null, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile });
+  assert(open.nonce && open.nonce.length === 12, 'S-RT2: open-next returns real nonce');
+  h.files['/p/.cache/impl-core.md'] = 'RED then GREEN\nno binding header here\n';
+  const close = runCloseAndOpenNext({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', nodeId: 'impl-core', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists });
+  assert(close.result === 'refuse' && close.missingTokenClass === 'evidence-binding', 'S-RT2: missing binding header → refuse (missingTokenClass evidence-binding), got ' + JSON.stringify({ result: close.result, mtc: close.missingTokenClass }));
+}
+
+// S-RT3 (negative — WRONG nonce → evidence_stale): close with a binding header that
+// carries a DIFFERENT (stale/prior-open) nonce.
+{
+  const plan = makePlan(['| impl-core | pending | |', '| impl-other | pending | |', '| review | pending | |', '| finalize | pending | |']);
+  const h = rtHarness({ '/p/workflow-plan.md': plan, '/p/workflow-state.md': makeState() }, {
+    nextAction: { exitCode: 0, result: 'ok', allDone: false, readySet: [{ id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js', dependsOn: [] }], nextNode: { id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js' } },
+  });
+  const open = runOpenNext({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', nodeId: null, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile });
+  h.files['/p/.cache/impl-core.md'] = 'evidence-binding: impl-core 000000000000\nRED then GREEN\n';
+  const close = runCloseAndOpenNext({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', nodeId: 'impl-core', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists });
+  assert(close.result === 'refuse' && close.reason === 'evidence_stale', 'S-RT3: wrong nonce → evidence_stale, got ' + JSON.stringify({ result: close.result, reason: close.reason }));
+  assert(open.nonce !== '000000000000', 'S-RT3: (guard) the real nonce is not the decoy');
+}
+
+// S-RT4 (negative — WRONG node id → evidence_unbound): binding header names a
+// different node (evidence copied from elsewhere).
+{
+  const plan = makePlan(['| impl-core | pending | |', '| impl-other | pending | |', '| review | pending | |', '| finalize | pending | |']);
+  const h = rtHarness({ '/p/workflow-plan.md': plan, '/p/workflow-state.md': makeState() }, {
+    nextAction: { exitCode: 0, result: 'ok', allDone: false, readySet: [{ id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js', dependsOn: [] }], nextNode: { id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js' } },
+  });
+  const open = runOpenNext({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', nodeId: null, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile });
+  h.files['/p/.cache/impl-core.md'] = 'evidence-binding: some-other-node ' + open.nonce + '\nRED then GREEN\n';
+  const close = runCloseAndOpenNext({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', nodeId: 'impl-core', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists });
+  assert(close.result === 'refuse' && close.reason === 'evidence_unbound', 'S-RT4: wrong node id → evidence_unbound, got ' + JSON.stringify({ result: close.result, reason: close.reason }));
+}
+
+// S-RT5 (baselineReused surfaced on a genuine re-open): commit-node --start returns
+// recordBase.reused:true on a re-open → open-next surfaces baselineReused:true. RED if
+// the reused line still reads the top-level baselineResult.reused (undefined → false).
+{
+  const plan = makePlan(['| impl-core | in_progress | |', '| impl-other | pending | |', '| review | pending | |', '| finalize | pending | |']);
+  const h = rtHarness({ '/p/workflow-plan.md': plan, '/p/workflow-state.md': makeState() }, {
+    reusedFor: () => true,
+    nextAction: { exitCode: 0, result: 'ok', allDone: false, readySet: [{ id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js', dependsOn: [] }], nextNode: { id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js' } },
+  });
+  const open = runOpenNext({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', nodeId: null, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile });
+  assert(open.result === 'ok', 'S-RT5: re-open ok');
+  assert(open.baselineReused === true, 'S-RT5: baselineReused surfaced TRUE on a genuine re-open (recordBase.reused), got ' + JSON.stringify(open.baselineReused));
+}
+
+// S-RT6 (open-ready → returned per-node nonce → close-node round-trip): the SET case.
+// Each opened node carries its own RETURNED nonce; evidence bound with it closes.
+{
+  const plan = makePlan([
+    '| rev-a | pending | |',
+    '| rev-b | pending | |',
+    '| finalize | pending | |',
+  ], [
+    '| rev-a | code-reviewer | — | — | 1 | sequence |',
+    '| rev-b | security-reviewer | — | — | 1 | sequence |',
+    '| finalize | finalize | rev-a rev-b | CHANGELOG.md | 1 | sequence |',
+  ]);
+  const h = rtHarness({ '/p/workflow-plan.md': plan, '/p/workflow-state.md': makeState() }, {
+    nextAction: { exitCode: 0, result: 'ok', allDone: false, readyPending: [
+      { id: 'rev-a', role: 'code-reviewer', declared_write_set: '—' },
+      { id: 'rev-b', role: 'security-reviewer', declared_write_set: '—' },
+    ] },
+  });
+  const open = runOpenReady({ planPath: '/p/workflow-plan.md', project: 'p', max: null, fanoutCapReadonly: 8, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, mkdirp: h.mkdirp });
+  assert(open.result === 'ok' && open.opened.length === 2, 'S-RT6: open-ready opened 2');
+  const byId = Object.fromEntries(open.opened.map(o => [o.id, o.nonce]));
+  assert(byId['rev-a'] && byId['rev-a'].length === 12, 'S-RT6: open-ready surfaces a real per-node nonce for rev-a (was absent), got ' + JSON.stringify(byId['rev-a']));
+  assert(byId['rev-a'] === readNonce('/p/workflow-plan.md', 'rev-a', h.readFile), 'S-RT6: rev-a returned nonce == on-disk readNonce');
+  assert(byId['rev-b'] === readNonce('/p/workflow-plan.md', 'rev-b', h.readFile), 'S-RT6: rev-b returned nonce == on-disk readNonce');
+
+  // Close rev-a with evidence bound to its RETURNED nonce → success.
+  h.files['/p/.cache/rev-a.md'] = 'evidence-binding: rev-a ' + byId['rev-a'] + '\ncode-reviewer\nverdict: pass\nfindings_blocking: 0';
+  const closeShell = (scriptPath, args) => {
+    const base = path.basename(scriptPath);
+    if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readyPending: [{ id: 'rev-b', role: 'security-reviewer', declared_write_set: '—' }] };
+    return h.shell(scriptPath, args);
+  };
+  const close = runCloseNode({ planPath: '/p/workflow-plan.md', project: 'p', nodeId: 'rev-a', shell: closeShell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, unlink: h.unlink });
+  assert(close.result === 'ok' && close.closed === 'rev-a', 'S-RT6: close-node SUCCEEDS with the open-ready RETURNED nonce, got ' + JSON.stringify({ result: close.result, reason: close.reason, mtc: close.missingTokenClass }));
+
+  // And the wrong-node-id negative through close-node (evidence_unbound).
+  h.files['/p/.cache/rev-b.md'] = 'evidence-binding: rev-a ' + byId['rev-b'] + '\nsecurity-reviewer\nverdict: pass\nfindings_blocking: 0';
+  const closeBad = runCloseNode({ planPath: '/p/workflow-plan.md', project: 'p', nodeId: 'rev-b', shell: closeShell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, unlink: h.unlink });
+  assert(closeBad.result === 'refuse' && closeBad.reason === 'evidence_unbound', 'S-RT6: close-node wrong-node binding → evidence_unbound, got ' + JSON.stringify({ result: closeBad.result, reason: closeBad.reason }));
+}
+
+// ===========================================================================
+// S-293 (#293/S-fix RECONCILE DEAD-END): 1 in_progress (serial node A) + an 'open'
+// (non-opening) running set holding a `pending` member B. crossCheckStatus stays
+// single_in_progress (unchanged read-side legacy verdict), but orient must NAME
+// reconcile-running-set (was a bare `ok` dead-end), and reconcile must DROP B (was a
+// not_opening no-op) so the loop reaches a dispatchable/clean state.
+//
+// MUTATION PROOF: revert the orient stale-member gate → S-293a goes RED (orient back
+// to bare ok, no repair). Revert the reconcile stale-drop → S-293b goes RED
+// (reconcile back to not_opening no-op, B never dropped).
+// ===========================================================================
+{
+  const plan = makePlan(['| node-a | in_progress | |', '| node-b | pending | |', '| finalize | pending | |'], [
+    '| node-a | implementer | — | scripts/a.js | 1 | sequence |',
+    '| node-b | code-reviewer | — | — | 1 | sequence |',
+    '| finalize | finalize | node-a node-b | CHANGELOG.md | 1 | sequence |',
+  ]);
+  // running set is state:'open' (NOT opening), holding member B whose ledger row is pending.
+  const staleSet = JSON.stringify({ state: 'open', nodes: [{ id: 'node-b', role: 'code-reviewer', kind: 'read', baseline: 'recorded' }] });
+
+  // (cc) crossCheckStatus is UNCHANGED — the #293 read-side legacy verdict stays single_in_progress.
+  {
+    const { crossCheckStatus } = require('./kaola-workflow-parallel-batch');
+    const cc = crossCheckStatus(null, ['node-a'], { state: 'open', nodes: [{ id: 'node-b' }] });
+    assert(cc.valid === true && cc.reason === 'single_in_progress', 'S-293cc: crossCheckStatus UNCHANGED (single_in_progress), got ' + JSON.stringify(cc));
+  }
+
+  // (a) orient NAMES reconcile-running-set (no dead-end bare ok).
+  {
+    const files = { [RS_PLAN_PATH]: plan, '/p/workflow-state.md': makeState(), [RS_SET_PATH]: staleSet };
+    const r = runOrient({
+      planPath: RS_PLAN_PATH, statePath: '/p/workflow-state.md', project: 'p',
+      shell: (sp) => { const b = path.basename(sp); if (b === 'kaola-workflow-plan-validator.js') return { exitCode: 0, ok: true }; if (b === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readySet: [], readyPending: [] }; return { exitCode: 0, result: 'ok' }; },
+      readFile: (fp) => { if (fp in files) return files[fp]; throw new Error('ENOENT ' + fp); },
+      writeFile: () => {},
+      cacheExists: (fp) => fp in files,
+    });
+    assert(r.result === 'refuse' && r.reason === 'running_set_stale_member', 'S-293a: orient routes stale member → refuse running_set_stale_member, got ' + JSON.stringify({ result: r.result, reason: r.reason }));
+    assert(r.repair === 'reconcile-running-set', 'S-293a: orient names reconcile-running-set as the repair (no dead-end), got ' + JSON.stringify(r.repair));
+  }
+
+  // (b) reconcile DROPS B and reaches a clean state (NOT a not_opening no-op).
+  {
+    const h = rsHarness({ [RS_PLAN_PATH]: plan, [RS_SET_PATH]: staleSet }, (base) => {
+      if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readyPending: [] };
+      return { exitCode: 0, result: 'ok' };
+    });
+    const r = runReconcileRunningSet({ planPath: RS_PLAN_PATH, project: 'p', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists });
+    assert(r.result === 'ok' && r.reconciled === true, 'S-293b: reconcile reconciled (NOT a not_opening no-op), got ' + JSON.stringify({ reconciled: r.reconciled, reason: r.reason }));
+    assert(Array.isArray(r.staleDropped) && r.staleDropped.includes('node-b'), 'S-293b: node-b dropped as stale, got ' + JSON.stringify(r.staleDropped));
+    assert(r.reason === 'stale_member_dropped', 'S-293b: reason stale_member_dropped, got ' + JSON.stringify(r.reason));
+    const set = JSON.parse(h.files[RS_SET_PATH]);
+    assert(set.nodes.length === 0, 'S-293b: running set emptied of the stale member (dispatchable/clean), got ' + JSON.stringify(set.nodes));
+    // The stale member's baseline was dropped (the #281/#296 stale-baseline guard).
+    assert(h.shellCalls.some(c => c.base === 'kaola-workflow-plan-validator.js' && c.args.includes('--drop-base') && c.args.includes('node-b')), 'S-293b: --drop-base node-b called');
+    // And node-a (the real in_progress serial node) is untouched.
+    assert(h.files[RS_PLAN_PATH].includes('| node-a | in_progress | |'), 'S-293b: node-a (real serial in_progress) untouched');
+  }
+}
+
+// ===========================================================================
 // #355 unified refusal/emit protocol — shared emit/refuse + task-mirror reason
 // now visible to adaptive-node callers (was lost on stderr).
 // ===========================================================================
@@ -3369,6 +3649,550 @@ function rsHarness(initialFiles, shellStub) {
   assert(badProj.exitCode === 1 && badProj.reason === 'plan_not_found',
     'S3: task-mirror plan_not_found reason recovered via shellNode, got ' + JSON.stringify(badProj.reason));
   try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch (_) {}
+}
+
+// ===========================================================================
+// CLUSTER S — mutual-exclusion spine (#383/#384/#385/#387/#391/#392/#403).
+// readCoordinationState (pure) + probeCoordination (fs) + the unified guard prologue.
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// S-CO1: readCoordinationState — serial fallback. One in_progress row, NO running set,
+// NO batch → serialLive=true, all scheduler/batch arms false (vacuous-pass guards).
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan(['| impl-core | in_progress | |', '| review | pending | |']);
+  const co = readCoordinationState(plan, { runningSet: null, manifest: null });
+  assert(co.serialLive === true, 'S-CO1: single in_progress + no manifests → serialLive');
+  assert(co.runningSetLive === false && co.runningSetOpening === false, 'S-CO1: no running set live');
+  assert(co.batchLive === false && co.batchOpening === false, 'S-CO1: no batch live');
+  assert(co.inProgressIds.length === 1 && co.inProgressIds[0] === 'impl-core', 'S-CO1: inProgressIds=[impl-core]');
+  assert(co.collisions.length === 0, 'S-CO1: no collisions in the serial case');
+}
+
+// ---------------------------------------------------------------------------
+// S-CO2: readCoordinationState — zero in_progress → NOT serialLive (idle, all arms false).
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan(['| impl-core | pending | |']);
+  const co = readCoordinationState(plan, {});
+  assert(co.serialLive === false && co.inProgressIds.length === 0, 'S-CO2: idle ledger → not serialLive');
+}
+
+// ---------------------------------------------------------------------------
+// S-CO3: readCoordinationState — a live running set → runningSetLive, serialLive false
+// even with one matching in_progress row (the running set OWNS that node).
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan(['| a | in_progress | |', '| b | in_progress | |']);
+  const runningSet = { state: 'open', nodes: [{ id: 'a', kind: 'read' }, { id: 'b', kind: 'read' }] };
+  const co = readCoordinationState(plan, { runningSet, manifest: null });
+  assert(co.runningSetLive === true && co.runningSetOpening === false, 'S-CO3: open running set → runningSetLive');
+  assert(co.serialLive === false, 'S-CO3: serialLive false when a running set is live');
+}
+
+// ---------------------------------------------------------------------------
+// S-CO4: readCoordinationState — a crashed 'opening' running set → runningSetOpening,
+// not runningSetLive.
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan(['| a | pending | |']);
+  const runningSet = { state: 'opening', nodes: [{ id: 'a', kind: 'read', opening: true }] };
+  const co = readCoordinationState(plan, { runningSet });
+  assert(co.runningSetOpening === true && co.runningSetLive === false, 'S-CO4: opening set → runningSetOpening, not live');
+}
+
+// ---------------------------------------------------------------------------
+// S-CO5: readCoordinationState — a live batch manifest → batchLive.
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan(['| a | in_progress | |', '| b | in_progress | |']);
+  const manifest = { state: 'open', kind: 'read', members: [{ id: 'a', sealed: false }, { id: 'b', sealed: false }] };
+  const co = readCoordinationState(plan, { manifest });
+  assert(co.batchLive === true && co.batchOpening === false, 'S-CO5: open batch → batchLive');
+  assert(co.serialLive === false, 'S-CO5: serialLive false when a batch is live');
+}
+
+// ---------------------------------------------------------------------------
+// S-CO6 (#383b): UNION state — batch + running set coexist → collisions captures both.
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan(['| a | in_progress | |', '| b | in_progress | |']);
+  const runningSet = { state: 'open', nodes: [{ id: 'a', kind: 'read' }] };
+  const manifest = { state: 'open', kind: 'read', members: [{ id: 'b', sealed: false }] };
+  const co = readCoordinationState(plan, { runningSet, manifest });
+  assert(co.collisions.includes('running_set') && co.collisions.includes('batch'), 'S-CO6: union state collisions = [running_set, batch], got ' + JSON.stringify(co.collisions));
+}
+
+// ---------------------------------------------------------------------------
+// S-CC (#293 CROSS-CONSISTENCY): readCoordinationState.serialLive ⟺ crossCheckStatus
+// single_in_progress for the SAME fixture (preserve the orphan-legality agreement).
+// ---------------------------------------------------------------------------
+{
+  const { crossCheckStatus } = require('./kaola-workflow-parallel-batch');
+  // Fixture 1: exactly one in_progress, no manifests → serialLive AND single_in_progress.
+  const plan1 = makePlan(['| n1 | in_progress | |', '| n2 | pending | |']);
+  const co1 = readCoordinationState(plan1, {});
+  const cc1 = crossCheckStatus(null, ['n1'], null);
+  assert(co1.serialLive === true && cc1.reason === 'single_in_progress',
+    'S-CC: 1 in_progress → serialLive ⟺ single_in_progress, got ' + JSON.stringify({ serialLive: co1.serialLive, cc: cc1.reason }));
+  // Fixture 2: zero in_progress → NOT serialLive AND 'idle'.
+  const plan2 = makePlan(['| n1 | pending | |']);
+  const co2 = readCoordinationState(plan2, {});
+  const cc2 = crossCheckStatus(null, [], null);
+  assert(co2.serialLive === false && cc2.reason === 'idle',
+    'S-CC: 0 in_progress → !serialLive ⟺ idle, got ' + JSON.stringify({ serialLive: co2.serialLive, cc: cc2.reason }));
+  // Fixture 3: a valid running-set fan-out (2 in_progress matching the set) → NOT serialLive AND
+  // crossCheckStatus valid_running_set (not single_in_progress, not orphan).
+  const plan3 = makePlan(['| a | in_progress | |', '| b | in_progress | |']);
+  const rs3 = { state: 'open', nodes: [{ id: 'a' }, { id: 'b' }] };
+  const co3 = readCoordinationState(plan3, { runningSet: rs3 });
+  const cc3 = crossCheckStatus(null, ['a', 'b'], rs3);
+  assert(co3.serialLive === false && co3.runningSetLive === true && cc3.reason === 'valid_running_set',
+    'S-CC: running-set fan-out → !serialLive + runningSetLive ⟺ valid_running_set, got ' + JSON.stringify({ co: co3, cc: cc3.reason }));
+}
+
+// ---------------------------------------------------------------------------
+// S-PC (#383): probeCoordination — fs wrapper reads plan + both manifests and surfaces them.
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan(['| a | in_progress | |', '| b | in_progress | |']);
+  const files = {
+    [RS_PLAN_PATH]: plan,
+    [RS_SET_PATH]: JSON.stringify({ state: 'open', nodes: [{ id: 'a' }, { id: 'b' }] }),
+  };
+  const probe = probeCoordination({
+    planPath: RS_PLAN_PATH,
+    readFile: (fp) => { if (fp in files) return files[fp]; throw new Error('ENOENT ' + fp); },
+    cacheExists: (fp) => fp in files,
+  });
+  assert(probe.runningSetLive === true && probe.runningSet && probe.runningSet.nodes.length === 2, 'S-PC: probe reads running set');
+  assert(probe.manifest === null, 'S-PC: probe returns null manifest when active-batch.json absent');
+}
+
+// ---------------------------------------------------------------------------
+// S-CR (#384/#391c): complianceRowExists — true only when the section already has a row for the cell.
+// ---------------------------------------------------------------------------
+{
+  const base = makePlan(['| a | complete | |']);
+  assert(complianceRowExists(base, 'code-reviewer', 'a') === false, 'S-CR: absent compliance row → false');
+  const withRow = spliceComplianceRow(base, '| code-reviewer | subagent-invoked | ok | |');
+  assert(complianceRowExists(withRow, 'code-reviewer', 'a') === true, 'S-CR: present row (bare role) → true');
+  assert(complianceRowExists(withRow, 'implementer (a)', 'a') === false, 'S-CR: different cell → false');
+  const withNode = spliceComplianceRow(base, '| implementer (impl-x) | subagent-invoked | ok | |');
+  assert(complianceRowExists(withNode, 'implementer (impl-x)', 'impl-x') === true, 'S-CR: present row (role (id)) → true');
+}
+
+// ---------------------------------------------------------------------------
+// S-VU (#403.4): checkVerdictParse — near-miss verdict for a verdict-bearing role.
+// ---------------------------------------------------------------------------
+{
+  // Clean column-0 lowercase `verdict:` (what finalize --verdict-check accepts) → no warning, even
+  // when the VALUE case varies (parseNodeVerdict lowercases the value).
+  assert(checkVerdictParse('code-reviewer', 'verdict: pass\nfindings_blocking: 0') === null, 'S-VU: clean lowercase pass → no warning');
+  assert(checkVerdictParse('code-reviewer', 'verdict: fail') === null, 'S-VU: clean fail → no warning');
+  assert(checkVerdictParse('code-reviewer', 'verdict: Pass') === null, 'S-VU: lowercase key + capital value still parses (value is lowercased) → no warning');
+  // The #403.4 near-miss: a CAPITAL `Verdict:` key is invisible to the strict column-0 matcher
+  // (finalize fails missing-verdict) → emit the non-blocking warning.
+  const w = checkVerdictParse('code-reviewer', 'Verdict: Pass\nfindings_blocking: 0');
+  assert(w && w.verdict_unparsed === true && w.verdictRaw === 'Pass', 'S-VU: capital-key Verdict: Pass → verdict_unparsed warning, got ' + JSON.stringify(w));
+  // A typo value that strict can't recognize → warning too.
+  const w2 = checkVerdictParse('security-reviewer', 'verdict: passs');
+  assert(w2 && w2.verdict_unparsed === true, 'S-VU: typo value → verdict_unparsed warning');
+  assert(checkVerdictParse('implementer', 'Verdict: Pass') === null, 'S-VU: non-verdict role → null (not verdict-bearing)');
+  assert(checkVerdictParse('code-reviewer', 'no verdict line here') === null, 'S-VU: no verdict line → null');
+}
+
+// ---------------------------------------------------------------------------
+// S383d: runCloseAndOpenNext NEVER reports `opened` for an already-in_progress node.
+// (next-action.readySet includes in_progress; the consumer must not re-announce it.)
+// ---------------------------------------------------------------------------
+{
+  // Ledger: closing 'rev' exposes nextNode 'next' which is ALREADY in_progress (a #383 wedge).
+  const plan = makePlan(['| rev | in_progress | |', '| next | in_progress | |', '| finalize | pending | |'], [
+    '| rev | code-reviewer | — | — | 1 | sequence |',
+    '| next | code-explorer | — | — | 1 | sequence |',
+    '| finalize | finalize | rev next | CHANGELOG.md | 1 | sequence |',
+  ]);
+  let planContent = plan;
+  const files = { [RS_PLAN_PATH]: plan, '/p/.cache/rev.md': 'code-reviewer\nverdict: pass\nfindings_blocking: 0' };
+  const r = runCloseAndOpenNext({
+    planPath: RS_PLAN_PATH, statePath: '/p/workflow-state.md', project: 'p', nodeId: 'rev',
+    shell: (sp) => { const b = path.basename(sp);
+      if (b === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok', selectorCheck: {} };
+      if (b === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false,
+        readyPending: [{ id: 'next', role: 'code-explorer', declared_write_set: '—' }],
+        nextNode: { id: 'next', role: 'code-explorer', declared_write_set: '—' } };
+      return { exitCode: 0, result: 'ok' };
+    },
+    readFile: (fp) => { if (fp in files) return files[fp]; if (fp === RS_PLAN_PATH) return planContent; throw new Error('ENOENT ' + fp); },
+    writeFile: (fp, c) => { files[fp] = c; if (fp === RS_PLAN_PATH) planContent = c; },
+    cacheExists: (fp) => fp in files,
+  });
+  assert(r.result === 'ok' && r.closed === 'rev', 'S383d: rev closed');
+  assert(r.opened === null, 'S383d: opened is null (the next node was already in_progress — no double dispatch), got ' + JSON.stringify(r.opened));
+}
+
+// ---------------------------------------------------------------------------
+// S383d-control: a NORMAL linear chain (next node PENDING) still opens it — byte-shape preserved.
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan(['| rev | in_progress | |', '| next | pending | |', '| finalize | pending | |'], [
+    '| rev | code-reviewer | — | — | 1 | sequence |',
+    '| next | code-explorer | rev | — | 1 | sequence |',
+    '| finalize | finalize | next | CHANGELOG.md | 1 | sequence |',
+  ]);
+  let planContent = plan;
+  const files = { [RS_PLAN_PATH]: plan, '/p/.cache/rev.md': 'code-reviewer\nverdict: pass\nfindings_blocking: 0' };
+  const r = runCloseAndOpenNext({
+    planPath: RS_PLAN_PATH, statePath: '/p/workflow-state.md', project: 'p', nodeId: 'rev',
+    shell: (sp) => { const b = path.basename(sp);
+      if (b === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok', selectorCheck: {} };
+      if (b === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false,
+        readyPending: [{ id: 'next', role: 'code-explorer', declared_write_set: '—' }],
+        nextNode: { id: 'next', role: 'code-explorer', declared_write_set: '—' } };
+      return { exitCode: 0, result: 'ok' };
+    },
+    readFile: (fp) => { if (fp in files) return files[fp]; if (fp === RS_PLAN_PATH) return planContent; throw new Error('ENOENT ' + fp); },
+    writeFile: (fp, c) => { files[fp] = c; if (fp === RS_PLAN_PATH) planContent = c; },
+    cacheExists: (fp) => fp in files,
+  });
+  assert(r.result === 'ok' && r.opened && r.opened.id === 'next', 'S383d-control: pending next node IS opened (linear chain unchanged)');
+}
+
+// ---------------------------------------------------------------------------
+// S387a (#387): open-ready refuses plan_integrity_failed on a tampered plan (validator
+// --resume-check fails) BEFORE opening any node — mirrors open-batch/top-up.
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan(['| rev-a | pending | |', '| rev-b | pending | |']);
+  const h = rsHarness(
+    { [RS_PLAN_PATH]: plan },
+    (base) => {
+      if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readyPending: [{ id: 'rev-a', role: 'code-reviewer', declared_write_set: '—' }] };
+      if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok' };
+      return { exitCode: 1, result: 'refuse' };
+    },
+    // tampered plan → --resume-check fails.
+    (base, a) => a.includes('--resume-check') ? { exitCode: 1, ok: false, reason: 'plan_hash mismatch' } : null
+  );
+  const r = runOpenReady({ planPath: RS_PLAN_PATH, project: 'p', max: null, fanoutCapReadonly: 8, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, mkdirp: h.mkdirp });
+  assert(r.result === 'refuse' && r.reason === 'plan_integrity_failed', 'S387a: open-ready refuses plan_integrity_failed on tampered plan, got ' + JSON.stringify({ result: r.result, reason: r.reason }));
+  assert(!(RS_SET_PATH in h.files), 'S387a: zero mutation — no running-set written');
+  assert(h.files[RS_PLAN_PATH].includes('| rev-a | pending | |'), 'S387a: ledger unchanged');
+}
+
+// ---------------------------------------------------------------------------
+// S387b (#387): close-node refuses plan_integrity_failed on a tampered plan BEFORE close.
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan(['| rev | in_progress | |'], ['| rev | code-reviewer | — | — | 1 | sequence |']);
+  const h = rsHarness(
+    { [RS_PLAN_PATH]: plan, '/p/.cache/rev.md': 'code-reviewer\nverdict: pass\nfindings_blocking: 0' },
+    (base) => { if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok', selectorCheck: {} }; if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readyPending: [] }; return { exitCode: 1, result: 'refuse' }; },
+    (base, a) => a.includes('--resume-check') ? { exitCode: 1, ok: false, reason: 'plan_hash mismatch' } : null
+  );
+  const r = runCloseNode({ planPath: RS_PLAN_PATH, project: 'p', nodeId: 'rev', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, unlink: h.unlink });
+  assert(r.result === 'refuse' && r.reason === 'plan_integrity_failed', 'S387b: close-node refuses plan_integrity_failed on tampered plan, got ' + JSON.stringify({ result: r.result, reason: r.reason }));
+  assert(h.files[RS_PLAN_PATH].includes('| rev | in_progress | |'), 'S387b: ledger row NOT closed');
+}
+
+// ---------------------------------------------------------------------------
+// S391b (#391b): the consent-halt fence — a durable consent_halt: pending in the ledger refuses
+// open-next / open-ready / close-and-open-next / close-node with halt_pending (zero mutation).
+// ---------------------------------------------------------------------------
+{
+  // Inject a durable consent_halt: pending into the ## Node Ledger (mirrors write-halt).
+  function haltPlan(rows, extra) {
+    const p = makePlan(rows, extra);
+    return p.replace('## Node Ledger\n', '## Node Ledger\nconsent_halt: pending\n');
+  }
+  assert(readDurableConsentHalt(haltPlan(['| a | pending | |'])) === true, 'S391b: fixture has durable halt');
+
+  // open-next
+  {
+    let planContent = haltPlan(['| impl-core | pending | |']);
+    const r = runOpenNext({
+      planPath: RS_PLAN_PATH, statePath: '/p/workflow-state.md', project: 'p', nodeId: null,
+      shell: (sp) => { const b = path.basename(sp); if (b === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readySet: [{ id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/x.js', dependsOn: [] }], nextNode: { id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/x.js' } }; return { exitCode: 0, result: 'ok' }; },
+      readFile: (fp) => fp.endsWith('workflow-plan.md') ? planContent : makeState(),
+      writeFile: (fp, c) => { if (fp.endsWith('workflow-plan.md')) planContent = c; },
+      cacheExists: () => false,
+    });
+    assert(r.result === 'refuse' && r.reason === 'halt_pending', 'S391b: open-next refuses halt_pending, got ' + JSON.stringify({ result: r.result, reason: r.reason }));
+    assert(planContent.includes('| impl-core | pending | |'), 'S391b: open-next made zero mutation under halt');
+  }
+  // open-ready
+  {
+    const plan = haltPlan(['| rev | pending | |'], ['| rev | code-reviewer | — | — | 1 | sequence |']);
+    const h = rsHarness({ [RS_PLAN_PATH]: plan }, (base) => { if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readyPending: [{ id: 'rev', role: 'code-reviewer', declared_write_set: '—' }] }; return { exitCode: 0, result: 'ok' }; });
+    const r = runOpenReady({ planPath: RS_PLAN_PATH, project: 'p', max: null, fanoutCapReadonly: 8, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, mkdirp: h.mkdirp });
+    assert(r.result === 'refuse' && r.reason === 'halt_pending', 'S391b: open-ready refuses halt_pending, got ' + JSON.stringify(r.reason));
+  }
+  // close-node
+  {
+    const plan = haltPlan(['| rev | in_progress | |'], ['| rev | code-reviewer | — | — | 1 | sequence |']);
+    const h = rsHarness({ [RS_PLAN_PATH]: plan, '/p/.cache/rev.md': 'code-reviewer\nverdict: pass\nfindings_blocking: 0' }, (base) => { if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok', selectorCheck: {} }; if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readyPending: [] }; return { exitCode: 1, result: 'refuse' }; });
+    const r = runCloseNode({ planPath: RS_PLAN_PATH, project: 'p', nodeId: 'rev', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, unlink: h.unlink });
+    assert(r.result === 'refuse' && r.reason === 'halt_pending', 'S391b: close-node refuses halt_pending, got ' + JSON.stringify(r.reason));
+    assert(h.files[RS_PLAN_PATH].includes('| rev | in_progress | |'), 'S391b: close-node made zero mutation under halt');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// S383-excl (#383): open-ready refuses serial_node_live over a live serial node, and
+// batch_active over a live batch manifest.
+// ---------------------------------------------------------------------------
+{
+  // serial_node_live: one in_progress row, NO running-set file (serial node live).
+  {
+    const plan = makePlan(['| impl-core | in_progress | |', '| rev | pending | |'], [
+      '| impl-core | implementer | — | scripts/a.js | 1 | sequence |',
+      '| rev | code-reviewer | impl-core | — | 1 | sequence |',
+    ]);
+    const h = rsHarness({ [RS_PLAN_PATH]: plan }, (base) => { if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readyPending: [{ id: 'rev', role: 'code-reviewer', declared_write_set: '—' }] }; return { exitCode: 0, result: 'ok' }; });
+    const r = runOpenReady({ planPath: RS_PLAN_PATH, project: 'p', max: null, fanoutCapReadonly: 8, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, mkdirp: h.mkdirp });
+    assert(r.result === 'refuse' && r.reason === 'serial_node_live', 'S383-excl: open-ready refuses serial_node_live over a live serial node, got ' + JSON.stringify(r.reason));
+  }
+  // batch_active: a live active-batch.json manifest.
+  {
+    const plan = makePlan(['| a | in_progress | |', '| rev | pending | |'], [
+      '| a | code-reviewer | — | — | 1 | sequence |',
+      '| rev | security-reviewer | a | — | 1 | sequence |',
+    ]);
+    const manifest = JSON.stringify({ batchId: 'batch-a', state: 'open', kind: 'read', members: [{ id: 'a', sealed: false }] });
+    const h = rsHarness({ [RS_PLAN_PATH]: plan, '/p/.cache/active-batch.json': manifest }, (base) => { if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readyPending: [{ id: 'rev', role: 'security-reviewer', declared_write_set: '—' }] }; return { exitCode: 0, result: 'ok' }; });
+    const r = runOpenReady({ planPath: RS_PLAN_PATH, project: 'p', max: null, fanoutCapReadonly: 8, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, mkdirp: h.mkdirp });
+    assert(r.result === 'refuse' && r.reason === 'batch_active', 'S383-excl: open-ready refuses batch_active over a live batch, got ' + JSON.stringify(r.reason));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// S-BYTE (HARD INVARIANT): serial-fallback byte-identity. With no running-set, no active-batch,
+// ≤1 in_progress, and no consent_halt marker, the guard prologue is vacuously-pass and open-next /
+// close-and-open-next produce the SAME result shape as the legacy serial path. This pins that the
+// added layers never perturb a normal linear chain.
+// ---------------------------------------------------------------------------
+{
+  // open-next on a clean linear chain: no manifests, no halt, 0 in_progress.
+  let planContent = makePlan(['| impl-core | pending | |', '| review | pending | |', '| finalize | pending | |'], [
+    '| impl-core | tdd-guide | — | scripts/x.js | 1 | sequence |',
+    '| review | code-reviewer | impl-core | — | 1 | sequence |',
+    '| finalize | finalize | review | CHANGELOG.md | 1 | sequence |',
+  ]);
+  const on = runOpenNext({
+    planPath: RS_PLAN_PATH, statePath: '/p/workflow-state.md', project: 'p', nodeId: null,
+    shell: (sp) => { const b = path.basename(sp); if (b === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readySet: [{ id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/x.js', dependsOn: [] }], nextNode: { id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/x.js' } }; if (b === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok' }; return { exitCode: 0, result: 'ok' }; },
+    readFile: (fp) => fp.endsWith('workflow-plan.md') ? planContent : makeState(),
+    writeFile: (fp, c) => { if (fp.endsWith('workflow-plan.md')) planContent = c; },
+    cacheExists: () => false,
+  });
+  assert(on.result === 'ok' && on.opened && on.opened.id === 'impl-core', 'S-BYTE: open-next legacy linear chain opens impl-core (serial fallback unchanged)');
+  assert(on.allDone === false && on.baselineRecorded === true, 'S-BYTE: open-next ok shape preserved');
+  assert(!('reason' in on), 'S-BYTE: open-next did NOT add a refusal reason on the serial path');
+
+  // close-and-open-next on the linear chain: close impl-core, open review (a PENDING next).
+  {
+    const files = { [RS_PLAN_PATH]: planContent, '/p/.cache/impl-core.md': 'RED then GREEN\nthe test ran' };
+    let pc = files[RS_PLAN_PATH];
+    const r = runCloseAndOpenNext({
+      planPath: RS_PLAN_PATH, statePath: '/p/workflow-state.md', project: 'p', nodeId: 'impl-core',
+      shell: (sp) => { const b = path.basename(sp);
+        if (b === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok', selectorCheck: {} };
+        if (b === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readyPending: [{ id: 'review', role: 'code-reviewer', declared_write_set: '—' }], nextNode: { id: 'review', role: 'code-reviewer', declared_write_set: '—' } };
+        return { exitCode: 0, result: 'ok' };
+      },
+      readFile: (fp) => { if (fp in files) return files[fp]; if (fp === RS_PLAN_PATH) return pc; throw new Error('ENOENT ' + fp); },
+      writeFile: (fp, c) => { files[fp] = c; if (fp === RS_PLAN_PATH) pc = c; },
+      cacheExists: (fp) => fp in files,
+    });
+    // The impl-core row was flipped to in_progress by open-next above; flip it so close has a target.
+    // (open-next above already set it; pc carries it.)
+    assert(r.result === 'ok' && r.closed === 'impl-core', 'S-BYTE: close-and-open-next closes impl-core (serial fallback)');
+    assert(r.opened && r.opened.id === 'review', 'S-BYTE: close-and-open-next opens the PENDING next node review (linear chain unchanged)');
+    assert(!('verdict_unparsed' in r), 'S-BYTE: no spurious verdict_unparsed on a tdd-guide close with no verdict line');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// S384 (#384): reconcile-running-set CLOSE direction — a ledger-TERMINAL member still in an 'open'
+// running set is DROPPED (close-crash recovery), and orient ROUTES the wedge there.
+// ---------------------------------------------------------------------------
+{
+  // A close-crash: rev-a is ledger-complete but still in an 'open' running set (the removal step
+  // crashed). No opening transaction. Today this was a not_opening dead-end; now it reconciles.
+  const plan = makePlan(['| rev-a | complete | |', '| rev-b | in_progress | |', '| finalize | pending | |'], [
+    '| rev-a | code-reviewer | — | — | 1 | sequence |',
+    '| rev-b | security-reviewer | — | — | 1 | sequence |',
+    '| finalize | finalize | rev-a rev-b | CHANGELOG.md | 1 | sequence |',
+  ]);
+  const staleSet = JSON.stringify({ state: 'open', nodes: [
+    { id: 'rev-a', role: 'code-reviewer', kind: 'read' },
+    { id: 'rev-b', role: 'security-reviewer', kind: 'read' },
+  ] });
+  const dropCalls = [];
+  const h = rsHarness(
+    { [RS_PLAN_PATH]: plan, [RS_SET_PATH]: staleSet },
+    () => ({ exitCode: 0, result: 'ok' }),
+    (base, a) => { if (a.includes('--drop-base')) { const i = a.indexOf('--node-id'); dropCalls.push(a[i + 1]); return { exitCode: 0, result: 'ok' }; } return null; }
+  );
+  const r = runReconcileRunningSet({ planPath: RS_PLAN_PATH, project: 'p', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists });
+  assert(r.result === 'ok' && r.reconciled === true && r.reason === 'closed_member_dropped', 'S384: reconcile drops the terminal member (closed_member_dropped), got ' + JSON.stringify({ reconciled: r.reconciled, reason: r.reason }));
+  assert(Array.isArray(r.closedDropped) && r.closedDropped.includes('rev-a'), 'S384: rev-a in closedDropped, got ' + JSON.stringify(r.closedDropped));
+  const set = JSON.parse(h.files[RS_SET_PATH]);
+  assert(set.nodes.length === 1 && set.nodes[0].id === 'rev-b', 'S384: rev-a removed, rev-b remains in the set');
+  assert(dropCalls.includes('rev-a'), 'S384 (#385): --drop-base shelled for the dropped terminal member, got ' + JSON.stringify(dropCalls));
+
+  // orient routes the close-crash wedge to reconcile-running-set (not orphan_multi_in_progress).
+  {
+    const files = { [RS_PLAN_PATH]: plan, '/p/workflow-state.md': makeState(), [RS_SET_PATH]: staleSet };
+    const ro = runOrient({
+      planPath: RS_PLAN_PATH, statePath: '/p/workflow-state.md', project: 'p',
+      shell: (sp) => { const b = path.basename(sp); if (b === 'kaola-workflow-plan-validator.js') return { exitCode: 0, ok: true }; if (b === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readySet: [], readyPending: [] }; return { exitCode: 0, result: 'ok' }; },
+      readFile: (fp) => { if (fp in files) return files[fp]; throw new Error('ENOENT ' + fp); },
+      writeFile: () => {},
+      cacheExists: (fp) => fp in files,
+    });
+    assert(ro.result === 'refuse' && ro.reason === 'running_set_close_incomplete' && ro.repair === 'reconcile-running-set',
+      'S384: orient routes the close-crash wedge to reconcile-running-set, got ' + JSON.stringify({ reason: ro.reason, repair: ro.repair }));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// S385-rollback (#385): reconcile-running-set OPEN-direction rollback drops the baseline of each
+// rolled-back member (the stale-baseline trap), mirroring runReopenNode.
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan(['| a | in_progress | |', '| b | pending | |'], [
+    '| a | code-reviewer | — | — | 1 | sequence |',
+    '| b | security-reviewer | — | — | 1 | sequence |',
+  ]);
+  const crashed = JSON.stringify({ state: 'opening', nodes: [
+    { id: 'a', role: 'code-reviewer', kind: 'read', opening: true },
+    { id: 'b', role: 'security-reviewer', kind: 'read', opening: true },
+  ] });
+  const dropCalls = [];
+  const h = rsHarness(
+    { [RS_PLAN_PATH]: plan, [RS_SET_PATH]: crashed },
+    () => ({ exitCode: 0, result: 'ok' }),
+    (base, a) => { if (a.includes('--drop-base')) { const i = a.indexOf('--node-id'); dropCalls.push(a[i + 1]); return { exitCode: 0, result: 'ok' }; } return null; }
+  );
+  const r = runReconcileRunningSet({ planPath: RS_PLAN_PATH, project: 'p', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists });
+  assert(r.rolledBack.includes('b') && !r.rolledBack.includes('a'), 'S385-rollback: b rolled back (still pending), a kept');
+  assert(dropCalls.includes('b'), 'S385-rollback: --drop-base shelled for the rolled-back member b, got ' + JSON.stringify(dropCalls));
+  assert(!dropCalls.includes('a'), 'S385-rollback: the kept (roll-forward) member a keeps its fresh baseline (NOT dropped)');
+}
+
+// ---------------------------------------------------------------------------
+// S391c (#391c/#384): idempotent compliance append — re-closing the SAME node (alreadyAtTarget
+// path) does NOT append a DUPLICATE Required Agent Compliance row.
+// ---------------------------------------------------------------------------
+{
+  function closeOnce(planContent, files) {
+    return runCloseAndOpenNext({
+      planPath: RS_PLAN_PATH, statePath: '/p/workflow-state.md', project: 'p', nodeId: 'rev',
+      shell: (sp) => { const b = path.basename(sp);
+        if (b === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok', selectorCheck: {} };
+        if (b === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: true, readyPending: [] };
+        return { exitCode: 0, result: 'ok' };
+      },
+      readFile: (fp) => { if (fp in files) return files[fp]; if (fp === RS_PLAN_PATH) return files[RS_PLAN_PATH]; throw new Error('ENOENT ' + fp); },
+      writeFile: (fp, c) => { files[fp] = c; },
+      cacheExists: (fp) => fp in files,
+    });
+  }
+  const plan = makePlan(['| rev | in_progress | |', '| finalize | pending | |'], [
+    '| rev | code-reviewer | — | — | 1 | sequence |',
+    '| finalize | finalize | rev | CHANGELOG.md | 1 | sequence |',
+  ]);
+  const files = { [RS_PLAN_PATH]: plan, '/p/.cache/rev.md': 'code-reviewer\nverdict: pass\nfindings_blocking: 0' };
+  const r1 = closeOnce(plan, files);
+  assert(r1.result === 'ok' && r1.closed === 'rev', 'S391c: first close ok');
+  const after1 = files[RS_PLAN_PATH];
+  const count1 = (after1.match(/\|\s*code-reviewer\s*\|\s*subagent-invoked\s*\|/g) || []).length;
+  assert(count1 === 1, 'S391c: exactly ONE code-reviewer compliance row after first close, got ' + count1);
+  // Re-close (alreadyAtTarget: row already complete) → no second row.
+  const r2 = closeOnce(after1, files);
+  assert(r2.result === 'ok', 'S391c: re-close still ok (idempotent)');
+  const count2 = (files[RS_PLAN_PATH].match(/\|\s*code-reviewer\s*\|\s*subagent-invoked\s*\|/g) || []).length;
+  assert(count2 === 1, 'S391c: STILL exactly ONE compliance row after re-close (idempotent append), got ' + count2);
+}
+
+// ---------------------------------------------------------------------------
+// S392 (#392): evidence-binding nonce.
+//   - 3-arg checkEvidenceShape (no opts) is byte-identical (BACKWARD-COMPAT: ~40 callers).
+//   - expectedNonce present + correct header → passes.
+//   - copied-from-another-node header → evidence_unbound.
+//   - stale/replayed nonce → evidence_stale.
+//   - missing header (under expectedNonce) → shape failure naming evidence-binding.
+// ---------------------------------------------------------------------------
+{
+  const goodTdd = 'evidence-binding: impl-x abc123def456\nRED then GREEN\nthe test ran for real';
+  // 3-arg call (no opts) — binding NOT checked (backward-compat).
+  assert(checkEvidenceShape('tdd-guide', 'impl-x', 'RED\nGREEN').ok === true, 'S392: 3-arg call ignores binding (byte-identical), passes on RED+GREEN');
+  assert(checkEvidenceShape('tdd-guide', 'impl-x', 'RED\nGREEN', {}).ok === true, 'S392: empty opts (no expectedNonce) skips binding');
+
+  // Correct nonce + node → passes (still must satisfy the role shape).
+  const ok = checkEvidenceShape('tdd-guide', 'impl-x', goodTdd, { expectedNonce: 'abc123def456', expectedNodeId: 'impl-x' });
+  assert(ok.ok === true, 'S392: correct evidence-binding header + RED/GREEN → ok, got ' + JSON.stringify(ok));
+
+  // Copied from another node → evidence_unbound.
+  const copiedNode = checkEvidenceShape('tdd-guide', 'impl-x', 'evidence-binding: OTHER-node abc123def456\nRED\nGREEN', { expectedNonce: 'abc123def456', expectedNodeId: 'impl-x' });
+  assert(copiedNode.ok === false && copiedNode.evidenceUnbound === true && copiedNode.missingTokenClass === 'evidence_unbound', 'S392: wrong node id → evidence_unbound, got ' + JSON.stringify(copiedNode));
+
+  // Stale / replayed nonce (e.g. "this was copied from another node") → evidence_stale.
+  const stale = checkEvidenceShape('tdd-guide', 'impl-x', 'evidence-binding: impl-x OLDNONCE0000\nthis was copied from another node\nRED\nGREEN', { expectedNonce: 'abc123def456', expectedNodeId: 'impl-x' });
+  assert(stale.ok === false && stale.evidenceStale === true && stale.missingTokenClass === 'evidence_stale', 'S392: wrong nonce → evidence_stale, got ' + JSON.stringify(stale));
+
+  // Missing header under expectedNonce → shape failure naming evidence-binding.
+  const noHeader = checkEvidenceShape('tdd-guide', 'impl-x', 'RED\nGREEN', { expectedNonce: 'abc123def456', expectedNodeId: 'impl-x' });
+  assert(noHeader.ok === false && noHeader.missingTokenClass === 'evidence-binding', 'S392: missing header under expectedNonce → evidence-binding shape failure, got ' + JSON.stringify(noHeader));
+}
+
+// ---------------------------------------------------------------------------
+// S392-close (#392): close-node reads the nonce from .cache/barrier-base-<id> and enforces it.
+//   - copied evidence (header for a DIFFERENT node) → close refuses evidence_unbound.
+//   - correctly-bound evidence → close proceeds.
+//   - NO barrier-base file (no nonce on disk) → binding skipped, legacy evidence passes (back-compat).
+// ---------------------------------------------------------------------------
+{
+  // SHA on disk; nonce = first 12 chars.
+  const sha = 'abc123def4567890abcdef1234567890abcdef12';
+  const nonce = sha.slice(0, 12); // 'abc123def456'
+  function mk(evidenceBody) {
+    const plan = makePlan(['| rev | in_progress | |'], ['| rev | code-reviewer | — | — | 1 | sequence |']);
+    return rsHarness({
+      [RS_PLAN_PATH]: plan,
+      ['/p/.cache/barrier-base-rev']: sha,
+      '/p/.cache/rev.md': evidenceBody,
+    }, (base) => { if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok', selectorCheck: {} }; if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readyPending: [] }; return { exitCode: 1, result: 'refuse' }; });
+  }
+  // Copied: header names another node.
+  {
+    const h = mk('evidence-binding: SOME-other-node ' + nonce + '\ncode-reviewer\nverdict: pass\nfindings_blocking: 0');
+    const r = runCloseNode({ planPath: RS_PLAN_PATH, project: 'p', nodeId: 'rev', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, unlink: h.unlink });
+    assert(r.result === 'refuse' && r.reason === 'evidence_unbound', 'S392-close: copied evidence (wrong node) → evidence_unbound, got ' + JSON.stringify({ result: r.result, reason: r.reason }));
+    assert(h.files[RS_PLAN_PATH].includes('| rev | in_progress | |'), 'S392-close: ledger NOT closed on evidence_unbound');
+  }
+  // Stale nonce.
+  {
+    const h = mk('evidence-binding: rev OLDNONCE0000\ncode-reviewer\nverdict: pass\nfindings_blocking: 0');
+    const r = runCloseNode({ planPath: RS_PLAN_PATH, project: 'p', nodeId: 'rev', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, unlink: h.unlink });
+    assert(r.result === 'refuse' && r.reason === 'evidence_stale', 'S392-close: stale nonce → evidence_stale, got ' + JSON.stringify(r.reason));
+  }
+  // Correctly bound → close proceeds.
+  {
+    const h = mk('evidence-binding: rev ' + nonce + '\ncode-reviewer\nverdict: pass\nfindings_blocking: 0');
+    const r = runCloseNode({ planPath: RS_PLAN_PATH, project: 'p', nodeId: 'rev', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, unlink: h.unlink });
+    assert(r.result === 'ok' && r.closed === 'rev', 'S392-close: correctly-bound evidence → close ok, got ' + JSON.stringify({ result: r.result, reason: r.reason }));
+  }
+  // No barrier-base file → no nonce → binding skipped → legacy evidence passes (back-compat).
+  {
+    const plan = makePlan(['| rev | in_progress | |'], ['| rev | code-reviewer | — | — | 1 | sequence |']);
+    const h = rsHarness({ [RS_PLAN_PATH]: plan, '/p/.cache/rev.md': 'code-reviewer\nverdict: pass\nfindings_blocking: 0' }, (base) => { if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok', selectorCheck: {} }; if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readyPending: [] }; return { exitCode: 1, result: 'refuse' }; });
+    const r = runCloseNode({ planPath: RS_PLAN_PATH, project: 'p', nodeId: 'rev', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, unlink: h.unlink });
+    assert(r.result === 'ok' && r.closed === 'rev', 'S392-close: no nonce on disk → binding skipped, legacy evidence passes (back-compat), got ' + JSON.stringify({ result: r.result, reason: r.reason }));
+  }
 }
 
 if (failed > 0) {

@@ -240,16 +240,27 @@ wall-clock via node-timings.jsonl (#373); the cross-lane write+read overlap stay
    `open-next` shells `next-action --json`, picks the next ready node (or validates a supplied
    `--node-id`), splices the ledger row to `in_progress`, and shells `commit-node --node-id N
    --start --json` to record the per-instance write baseline (idempotent, #239). Returns
-   `{opened:{id,role,model,declared_write_set}, baselineRecorded:true}`, or `{allDone:true}`.
-   On `allDone`, route to finalize. `allDone` is valid only after the mandatory `finalize` sink
-   node itself has been closed. If `open-next` opens a node whose `role` is `finalize`, stay in the
-   per-node loop and use the finalize sink contract below instead.
+   `{opened:{id,role,model,declared_write_set}, baselineRecorded:true, nonce:"<12-char>"}`, or
+   `{allDone:true}`. The **`nonce`** (#392) is the per-open evidence-binding token (the barrier-base
+   SHA prefix) — capture it and pass it to the dispatch in step 2 so the role can echo it in its
+   evidence header; the close gate verifies it (anti-copy / anti-replay). On `allDone`, route to
+   finalize. `allDone` is valid only after the mandatory `finalize` sink node itself has been closed.
+   If `open-next` opens a node whose `role` is `finalize`, stay in the per-node loop and use the
+   finalize sink contract below instead.
 
 2. **dispatch** the node's role (current session — Codex delegates to the matching agent profile by
    role name; the role's `model_reasoning_effort` tier in its `agents/<role>.toml` profile is the
    model signal). Pass
    `Working directory: ${ACTIVE_WORKTREE_PATH}` to every role delegation so the relative plan path
    resolves inside the worktree.
+
+   **Evidence-binding nonce (#392):** pass the `nonce` from step 1's `open-next` (or the `nonce`
+   `open-ready` surfaces per opened member) into every role dispatch, and instruct the role to make
+   the FIRST line of its evidence file the header `evidence-binding: <node-id> <nonce>` (verbatim).
+   The close gate (`close-and-open-next` / `close-node`) reads the per-open nonce from disk and
+   refuses `evidence_unbound` (the header names a different node — evidence copied across nodes) or
+   `evidence_stale` (the nonce is from a prior open — replayed/copied evidence). This binds the
+   evidence to THIS dispatch; a node closed without a fresh binding header is rejected.
 
    **Special case — `role: finalize` sink:** `finalize` is the mandatory DAG sink, not a
    dispatchable subagent role. It is expected that
@@ -299,10 +310,12 @@ wall-clock via node-timings.jsonl (#373); the cross-lane write+read overlap stay
 
    **For non-finalize roles, after the role returns, record durable evidence immediately** before
    step 3 — `close-and-open-next` refuses (`evidence_absent` if absent, `evidence_shape_failed` if malformed) when `.cache/{node-id}.md` is absent/malformed
-   when it runs:
+   when it runs. The evidence's FIRST line MUST be the `evidence-binding: <node-id> <nonce>` header
+   (#392; `<nonce>` is the value `open-next`/`open-ready` returned for this open) so the close gate can
+   verify the evidence was produced by THIS dispatch:
 
    ```bash
-   echo "<role-returned-evidence>" | \
+   printf 'evidence-binding: {node-id} {nonce}\n%s\n' "<role-returned-evidence>" | \
      node "$KAOLA_SCRIPTS/kaola-workflow-adaptive-node.js" record-evidence \
        --project {project} --node-id {node-id} --stdin --json
    ```

@@ -1635,6 +1635,81 @@ function spyMirrorShell(planPath, failMirror) {
     '#377: 2-arg legacy single in_progress unchanged, got ' + JSON.stringify(legacySingle));
 }
 
+// ===========================================================================
+// CLUSTER S — batch coordination guards (#383) + halt fence (#391b) + #385 drop-base.
+// (reuses makeReadOnlyFanout above: `a` complete + f1..fn pending depending on a.)
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// S385-abort (#385): reconcile --abort shells --drop-base per aborted member (the documented
+// stale-baseline trap). Mirror runReopenNode's --drop-base cleanup.
+// ---------------------------------------------------------------------------
+{
+  const { root, planPath, statePath, cacheDir } = makeProjectDir(makeReadOnlyFanout(2));
+  const io = makeIo();
+  const manifestPath = path.join(cacheDir, 'active-batch.json');
+  const dropCalls = [];
+  const shell = (function () {
+    const inner = realNextActionShell(planPath);
+    return function (scriptPath, args) {
+      const base = path.basename(scriptPath);
+      const a = args || [];
+      if (base === 'kaola-workflow-plan-validator.js' && a.includes('--drop-base')) {
+        const idx = a.indexOf('--node-id');
+        dropCalls.push(a[idx + 1]);
+        return { exitCode: 0, result: 'ok' };
+      }
+      return inner(scriptPath, a);
+    };
+  })();
+  const baseCtx = { planPath, statePath, cacheDir, manifestPath, project: 'test-project', max: null, fanoutCap: 4, shell, ...io };
+
+  // Flip both rows in_progress and write an 'opening' manifest so --abort rolls them back.
+  let plan = fs.readFileSync(planPath, 'utf8').replace(/\|\s*f1\s*\|\s*pending\s*\|/, '| f1 | in_progress |').replace(/\|\s*f2\s*\|\s*pending\s*\|/, '| f2 | in_progress |');
+  fs.writeFileSync(planPath, plan);
+  fs.writeFileSync(manifestPath, JSON.stringify({ batchId: 'batch-f1-f2', state: 'opening', kind: 'read_only', members: [{ id: 'f1', sealed: false }, { id: 'f2', sealed: false }], createdAt: '2026-06-08T00:00:00.000Z' }, null, 2));
+
+  const abort = runReconcile({ ...baseCtx, abort: true, unlink: (f) => fs.unlinkSync(f) });
+  assert(abort.result === 'ok' && abort.reconciled === true, 'S385-abort: reconcile --abort ok');
+  assert(dropCalls.includes('f1') && dropCalls.includes('f2'),
+    'S385-abort: --drop-base shelled for EACH aborted member, got ' + JSON.stringify(dropCalls));
+  cleanup(root);
+}
+
+// ---------------------------------------------------------------------------
+// S383-batch (#383): open-batch refuses scheduler_active over a live running set; top-up
+// refuses scheduler_active over a live running set.
+// ---------------------------------------------------------------------------
+{
+  const { root, planPath, statePath, cacheDir } = makeProjectDir(makeReadOnlyFanout(2));
+  const io = makeIo();
+  const manifestPath = path.join(cacheDir, 'active-batch.json');
+  const runningSetPath = path.join(cacheDir, 'running-set.json');
+  // A live running set (a #377 fan-out) → open-batch must refuse scheduler_active.
+  fs.writeFileSync(runningSetPath, JSON.stringify({ state: 'open', nodes: [{ id: 'f1', kind: 'read' }] }));
+  const shell = realNextActionShell(planPath);
+  const r = runOpenBatch({ planPath, statePath, cacheDir, manifestPath, project: 'test-project', max: null, fanoutCap: 4, shell, ...io });
+  assert(r.result === 'refuse' && r.reason === 'scheduler_active',
+    'S383-batch: open-batch refuses scheduler_active over a live running set, got ' + JSON.stringify({ result: r.result, reason: r.reason }));
+  assert(!fs.existsSync(manifestPath), 'S383-batch: open-batch made zero mutation (no manifest)');
+  cleanup(root);
+}
+
+// ---------------------------------------------------------------------------
+// S391b-batch (#391b): open-batch refuses halt_pending when a durable consent_halt is set.
+// ---------------------------------------------------------------------------
+{
+  let plan = makeReadOnlyFanout(2).replace('## Node Ledger\n', '## Node Ledger\nconsent_halt: pending\n');
+  const { root, planPath, statePath, cacheDir } = makeProjectDir(plan);
+  const io = makeIo();
+  const manifestPath = path.join(cacheDir, 'active-batch.json');
+  const shell = realNextActionShell(planPath);
+  const r = runOpenBatch({ planPath, statePath, cacheDir, manifestPath, project: 'test-project', max: null, fanoutCap: 4, shell, ...io });
+  assert(r.result === 'refuse' && r.reason === 'halt_pending',
+    'S391b-batch: open-batch refuses halt_pending under a durable consent_halt, got ' + JSON.stringify({ result: r.result, reason: r.reason }));
+  cleanup(root);
+}
+
 if (failed > 0) {
   console.error('parallel-batch tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;

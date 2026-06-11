@@ -90,3 +90,28 @@ See `docs/investigations/2026-06-10-parallelism-redesign.md` §D4/§D5.
   frontier opens its siblings one at a time via the single-node `open-next` path.
 - **No new env flags, no schema additions** — this is a pure removal under the existing
   serial-degrade contract.
+
+## Addendum (#386): write-lane hook self-exempt + Bash-bypass posture
+
+The #376 write-lane PreToolUse hook (`hooks/kaola-workflow-write-lane.sh`) could not be turned
+on with the shipped #377 scheduler: its parent-worktree deny rule (b) blocked **any** write
+matching an open node's declared lane — including the open WRITE node writing its OWN lane, the
+node's only legitimate target. With `KAOLA_LANE_CONTAINMENT` off-by-default a write node opens
+ALONE in the parent worktree (the permanent serial fallback), so its in-lane parent write IS the
+legitimate serial case, not a #320 leak.
+
+Resolution (architecture **(ii)** from the issue's catalog): rule (b) **self-exempts the open
+write node's own lane** — `if (nodes[j].kind === "write") process.exit(0)` after the lane match.
+The #320 leak shape is OTHER sessions/agents writing into an open lane; only those (and the
+member-worktree deny rule (a)) deny. A READ node's lane match in the parent still denies (a read
+node should write nothing in that lane). The member-worktree provisioner architecture (i) and the
+typed-refusal-at-open architecture (iii) were not chosen — (ii) makes the existing flag honest
+without a new primitive.
+
+**Bash-bypass posture (intentional).** The hook intercepts `Write|Edit` ONLY; a Bash-mediated
+write (`echo >`, `sed -i`, `git apply`) is not seen by it. This is deliberate honest layering: the
+hook is fast-fail containment, the **per-node `--barrier-check` own-lane allowlist + seal vacuity
+guard is the ground truth**. A Bash-bypassed out-of-lane write still fails the barrier at close
+time (the barrier tree-diffs ACTUAL writes against the declared lane), so containment cannot be
+silently defeated by routing through Bash — it just surfaces later (at the barrier) instead of at
+the write. The hook is a UX accelerant over the authoritative barrier, never a replacement.

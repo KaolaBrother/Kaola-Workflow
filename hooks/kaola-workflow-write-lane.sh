@@ -105,6 +105,15 @@ node -e '
   for (var j = 0; j < nodes.length; j++) {
     var set2 = declSet(nodes[j]);
     if (underDeclared(relRoot, set2)) {
+      // #386 (arch ii): SELF-EXEMPT the open WRITE node writing its OWN declared lane. With
+      // KAOLA_LANE_CONTAINMENT off-by-default (the permanent serial fallback) a write node opens
+      // ALONE in the parent worktree — its in-lane parent write IS the legitimate serial case, NOT a
+      // #320 leak. Without this carve-out, enabling the env var bricks every serial write node on its
+      // only legal target. The #320 leak shape is OTHER sessions/agents writing into an open lane;
+      // only those (and the member-worktree rule (a) above) should deny. The barrier (own-lane
+      // allowlist) remains the ground truth — see docs/decisions/0008. A non-write (read) lane match
+      // is still a real leak (a read node should write nothing in that lane) and stays denied.
+      if (nodes[j].kind === "write") process.exit(0);
       process.stderr.write("BLOCKED (write-lane #376): " + relRoot + " matches open node " + (nodes[j].id || "?") + " lane but is written in the PARENT worktree (#320 leak shape)\n");
       process.exit(2);
     }

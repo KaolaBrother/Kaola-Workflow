@@ -350,7 +350,10 @@ dispatch (#374) and the plan has independent lanes that would otherwise serializ
   writes the manifest (`opening` → flip ledger → `open`). With containment **off**, it fans out
   **read-only** nodes concurrently (they share the parent tree and never write) but opens a **write**
   node ALONE (one at a time, never alongside a read or another write) — today's serial behavior, the
-  permanent fallback. Returns `{opened:[{id,role,kind,...}], runningSet:[...ids]}`; `opened:[]` with
+  permanent fallback. Returns `{opened:[{id,role,kind,model,nonce}], runningSet:[...ids]}`; each
+  opened member carries its OWN per-open evidence-binding **`nonce`** (#392, the barrier-base SHA
+  prefix recorded for THAT node) — pass each member's `nonce` to ITS dispatch so the role echoes
+  `evidence-binding: <id> <nonce>` and `close-node` can verify it. `opened:[]` with
   `reason:'write_node_exclusive'`/`'write_awaits_drain'` means a write node must run alone — wait.
   ```bash
   node "$KAOLA_SCRIPTS/kaola-workflow-adaptive-node.js" open-ready \
@@ -359,9 +362,11 @@ dispatch (#374) and the plan has independent lanes that would otherwise serializ
 - **dispatch** every opened node `run_in_background:true` (#374), one `Agent()` per node (`subagent_type`
   = role, `model` from the returned descriptor, `Working directory: ${ACTIVE_WORKTREE_PATH}`).
 - on **each** completion notification: `record-evidence --project {project} --node-id {id}` (parent-side,
-  one canonical `.cache/{id}.md`), then **`close-node --node-id {id}`** — same evidence-shape →
-  `--barrier-check` → ledger-complete → compliance → selector-arm contract as the serial close, then it
-  removes the node from the running set and returns `{closed, newlyReady:[...], allDone}`. Then run
+  one canonical `.cache/{id}.md` — the evidence's FIRST line is that member's
+  `evidence-binding: <id> <nonce>` header), then **`close-node --node-id {id}`** — same evidence-shape →
+  `--barrier-check` → ledger-complete → compliance → selector-arm contract as the serial close (it
+  verifies the binding nonce against the on-disk baseline, refusing `evidence_unbound`/`evidence_stale`),
+  then it removes the node from the running set and returns `{closed, newlyReady:[...], allDone}`. Then run
   `open-ready` again to fill the freed slot and dispatch the newly-ready nodes. Loop until `allDone`.
   ```bash
   node "$KAOLA_SCRIPTS/kaola-workflow-adaptive-node.js" close-node \
@@ -407,7 +412,10 @@ member whose evidence is absent (baselines idempotent); a member with present ev
    `--node-id`), splices the ledger row to `in_progress`, and shells `commit-node --node-id N
    --start --json` to record the per-instance write baseline (idempotent, #239 — an end-time
    baseline would neuter the barrier). Returns `{opened:{id,role,model,declared_write_set},
-   baselineRecorded:true}`, or `{allDone:true}` when every ledger row is `complete`/`n/a`.
+   baselineRecorded:true, nonce:"<12-char>"}`, or `{allDone:true}` when every ledger row is
+   `complete`/`n/a`. The **`nonce`** (#392) is the per-open evidence-binding token (the barrier-base
+   SHA prefix) — pass it to the dispatch in step 2 so the role echoes it in its evidence header; the
+   close gate verifies it (anti-copy / anti-replay), refusing `evidence_unbound` / `evidence_stale`.
 
    On `allDone`, route to Finalization (Completion below) — there is no node to dispatch.
    `allDone` is valid only after the mandatory `finalize` sink node itself has been closed.
@@ -419,6 +427,11 @@ member whose evidence is absent (baselines idempotent); a member with present ev
    #382 precedence (the plan's per-node `model` tier beats the install profile: `node.model` →
    manifest → role default), so a planner-assigned `opus`/`sonnet` tier reaches the subagent
    automatically (or resolved via `scripts/kaola-workflow-resolve-agent-model.js <role>` on resume).
+   **Pass the per-open `nonce` (#392) too** — from `open-next` (serial) or each `open-ready` opened
+   member — and instruct the role to make the FIRST line of its evidence the verbatim header
+   `evidence-binding: <node-id> <nonce>`. The close gate binds the evidence to THIS dispatch: it
+   refuses `evidence_unbound` (header names another node — evidence copied across nodes) or
+   `evidence_stale` (nonce from a prior open — replayed/copied evidence).
    **Special case — `role: finalize` sink:** `finalize` is the mandatory DAG sink, not a
    dispatchable subagent role. It is expected that
    `scripts/kaola-workflow-resolve-agent-model.js finalize` returns an empty model. When the opened
@@ -467,10 +480,12 @@ member whose evidence is absent (baselines idempotent); a member with present ev
 
    **For non-finalize roles, after the role returns, capture durable evidence immediately** — the
    step-3 close refuses
-   (`evidence_absent` if `.cache/{node-id}.md` is absent, `evidence_shape_failed` if present-but-malformed) when it runs:
+   (`evidence_absent` if `.cache/{node-id}.md` is absent, `evidence_shape_failed` if present-but-malformed) when it runs.
+   The evidence's FIRST line MUST be the `evidence-binding: <node-id> <nonce>` header (#392, the
+   `<nonce>` this open returned) so the close gate can verify the evidence is bound to THIS dispatch:
 
    ```bash
-   echo "<role-returned-evidence>" | \
+   printf 'evidence-binding: {node-id} {nonce}\n%s\n' "<role-returned-evidence>" | \
      node "$KAOLA_SCRIPTS/kaola-workflow-adaptive-node.js" record-evidence \
        --project {project} --node-id {node-id} --stdin --json
    ```

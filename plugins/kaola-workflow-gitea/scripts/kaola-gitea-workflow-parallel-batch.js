@@ -380,6 +380,33 @@ function listInProgress(ledger) {
 }
 
 // ---------------------------------------------------------------------------
+// batchCoordinationGuard (#383/#391b) — the layered HALT-FENCE + LIVE-COORDINATION prologue for the
+// batch-scheduler subcommands (open-batch / top-up). Composes the SHARED adaptive-node probe so the
+// mutual-exclusion vocabulary (serial_node_live / scheduler_active / batch_active) and the #293
+// orphan-legality agreement never drift between the serial spine and the batch surface.
+//   excl: any subset of {serial, scheduler, batch}.
+// Returns a typed refusal (zero mutation) on the first tripped layer, or null to proceed. Vacuously-
+// pass under serial-fallback (no halt, no running set, ≤1 in_progress that the caller's own manifest
+// precondition then handles).
+// ---------------------------------------------------------------------------
+function batchCoordinationGuard(opts, excl) {
+  const { planPath, readFile, cacheExists } = opts;
+  const { readDurableConsentHalt } = require('./kaola-workflow-adaptive-schema');
+  const { probeCoordination, coordinationRefusal } = require(ADAPTIVE_NODE);
+
+  // Layer 2 — durable consent-halt fence (#391b).
+  let planContent = '';
+  try { planContent = readFile(planPath); } catch (_) {}
+  if (readDurableConsentHalt(planContent)) {
+    return { result: 'refuse', reason: 'halt_pending', detail: 'a durable consent_halt: pending marker is set in the ## Node Ledger — clear it (clear-halt) before scheduling a batch' };
+  }
+
+  // Layer 3 — live-coordination mutual exclusion (#383).
+  const coord = probeCoordination({ planPath, readFile, cacheExists });
+  return coordinationRefusal(coord, excl);
+}
+
+// ---------------------------------------------------------------------------
 // runOpenBatch — MUTATES ledger + baselines + manifest.
 //
 // 1. shell next-action; readyPending = openable frontier.
@@ -426,6 +453,13 @@ function runOpenBatch(opts) {
   if (integrity.exitCode !== 0 || integrity.ok !== true) {
     return { result: 'refuse', reason: 'plan_integrity_failed', detail: integrity.reason || null };
   }
+
+  // #391b HALT FENCE + #383 LIVE-COORDINATION (matrix: open-batch excl serial + scheduler). A durable
+  // consent_halt fences the scheduler too; a live serial node (open-next) or a live running-set fan-out
+  // (open-ready) must not be co-scheduled against by opening a batch (the #383(a)/(b) union wedge). The
+  // batch's OWN active-manifest precondition is checked just below — excl-batch is not applicable here.
+  const coGuard = batchCoordinationGuard(opts, ['serial', 'scheduler']);
+  if (coGuard) return coGuard;
 
   const nextAction = shell(nextActionPath, [planPath, '--json']);
   if (nextAction.exitCode !== 0 || nextAction.result !== 'ok') {
@@ -831,6 +865,13 @@ function runTopUp(opts) {
     return { result: 'refuse', reason: 'plan_integrity_failed', detail: integrity.reason || null };
   }
 
+  // #391b HALT FENCE + #383 LIVE-COORDINATION (matrix: top-up excl scheduler only). top-up drains the
+  // OWN batch's frontier, so it is mutually exclusive with a separate running-set fan-out but not with
+  // its own live batch (handled by the manifest state checks above) or a serial node (a top-up only
+  // runs WITH an active batch already present, so a serial node cannot legally coexist).
+  const coGuard = batchCoordinationGuard(opts, ['scheduler']);
+  if (coGuard) return coGuard;
+
   // A member occupies a worker slot while UNSEALED (in_progress) and not mid-open (opening).
   const running = manifest.members.filter(m => !m.sealed && !m.opening).length;
   // #375 (D3): a read-only batch drains under the higher read-only cap; write-role keeps fanoutCap.
@@ -949,6 +990,17 @@ function runReconcile(opts) {
       if (spliced.changed) planContent = spliced.content;
     }
     writeFile(planPath, planContent);
+    // #385 drop-side: each aborted member is rolled back to pending and leaves the live set, so drop
+    // its per-node baseline (.cache/barrier-base-<id> + the gc-anchored ref). Without this, a later
+    // re-open (open-batch/top-up/open-ready) finds a STALE T0 baseline (--record-base REUSES it) and
+    // the next barrier attributes foreign writes to the member — the documented #281/#296 stale-baseline
+    // trap. --drop-base removes file+ref together and is idempotent (a missing file/ref is a clean
+    // no-op). Mirrors adaptive-node runReopenNode / runReconcileRunningSet rollback.
+    if (typeof shell === 'function') {
+      for (const m of target) {
+        shell(validatorPath, [planPath, '--drop-base', '--node-id', m.id, '--json']);
+      }
+    }
     if (wholeOpening) {
       if (typeof unlink === 'function') unlink(manifestPath);
       else writeFile(manifestPath, JSON.stringify({ batchId: manifest.batchId, state: 'aborted', members: [] }, null, 2));
