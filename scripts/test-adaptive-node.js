@@ -3558,6 +3558,125 @@ function rtHarness(initialFiles, opts) {
   assert(closeBad.result === 'refuse' && closeBad.reason === 'evidence_unbound', 'S-RT6: close-node wrong-node binding → evidence_unbound, got ' + JSON.stringify({ result: closeBad.result, reason: closeBad.reason }));
 }
 
+// S-RT7 (#411 BUG A — fused-advance nonce round-trip, the serial-chain wedge):
+// the FULL two-close serial chain. open-next opens n1; close-and-open-next closes n1
+// AND (fused advance) opens n2 → the RETURNED opened.nonce must be the real on-disk
+// 12-char SHA prefix for n2 (the same derivation open-next/open-ready use). The pre-fix
+// fused-advance `opened` object OMITS .nonce, so the orchestrator binds n2's evidence to
+// `undefined` and the SECOND close refuses evidence_stale on every serial chain ≥2 nodes
+// with a dependent. RED on current code (opened.nonce undefined → second close refuses);
+// GREEN after the Bug A fix.
+{
+  const plan = makePlan([
+    '| impl-core | pending | |',
+    '| impl-other | pending | |',
+    '| review | pending | |',
+    '| finalize | pending | |',
+  ]);
+  const h = rtHarness({ '/p/workflow-plan.md': plan, '/p/workflow-state.md': makeState() }, {
+    nextAction: { exitCode: 0, result: 'ok', allDone: false,
+      readySet: [{ id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js', dependsOn: [] }],
+      nextNode: { id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js' } },
+  });
+  // (1) open n1.
+  const open = runOpenNext({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', nodeId: null, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile });
+  assert(open.result === 'ok' && open.nonce && open.nonce.length === 12, 'S-RT7: open-next opens n1 with a real nonce');
+  h.files['/p/.cache/impl-core.md'] = 'evidence-binding: impl-core ' + open.nonce + '\nRED then GREEN\n3 assertions';
+
+  // (2) close n1 → fused advance opens n2 (impl-other). next-action now surfaces impl-other.
+  const closeShell = (scriptPath, args) => {
+    const base = path.basename(scriptPath);
+    if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readySet: [{ id: 'impl-other', role: 'implementer', model: 'sonnet', declared_write_set: 'scripts/other.js', dependsOn: ['impl-core'] }], nextNode: { id: 'impl-other', role: 'implementer', model: 'sonnet', declared_write_set: 'scripts/other.js' } };
+    return h.shell(scriptPath, args);
+  };
+  const close1 = runCloseAndOpenNext({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', nodeId: 'impl-core', shell: closeShell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, unlink: h.unlink });
+  assert(close1.result === 'ok' && close1.closed === 'impl-core', 'S-RT7: first close ok, n1 closed');
+  assert(close1.opened && close1.opened.id === 'impl-other', 'S-RT7: fused advance opened impl-other');
+  // (3) THE Bug A assertion: the fused-advance opened object carries a real non-empty nonce.
+  assert(typeof close1.opened.nonce === 'string' && close1.opened.nonce.length === 12,
+    'S-RT7: fused-advance opened.nonce is a non-empty 12-char string (BUG A), got ' + JSON.stringify(close1.opened.nonce));
+  assert(close1.opened.nonce === readNonce('/p/workflow-plan.md', 'impl-other', h.readFile),
+    'S-RT7: fused-advance opened.nonce EQUALS the on-disk readNonce for impl-other (same derivation as open-next/open-ready)');
+
+  // (4) record n2 evidence bound to the RETURNED fused-advance nonce (implementer role → needs
+  // non_tdd_reason + a change-type token; the point under test is the BINDING, not the shape).
+  h.files['/p/.cache/impl-other.md'] = 'evidence-binding: impl-other ' + close1.opened.nonce + '\nnon_tdd_reason: mechanical port\nbuild-green: ok\n';
+
+  // (5) close n2 → must SUCCEED (not evidence_stale): the round-trip the binding promises.
+  const close2Shell = (scriptPath, args) => {
+    const base = path.basename(scriptPath);
+    if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readySet: [{ id: 'review', role: 'code-reviewer', declared_write_set: '—', dependsOn: ['impl-other'] }], nextNode: { id: 'review', role: 'code-reviewer', declared_write_set: '—' } };
+    return h.shell(scriptPath, args);
+  };
+  const close2 = runCloseAndOpenNext({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', nodeId: 'impl-other', shell: close2Shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, unlink: h.unlink });
+  assert(close2.result === 'ok' && close2.closed === 'impl-other',
+    'S-RT7: SECOND close SUCCEEDS with the fused-advance RETURNED nonce (not evidence_stale), got ' + JSON.stringify({ result: close2.result, reason: close2.reason, mtc: close2.missingTokenClass }));
+}
+
+// S-RT8 (#411 BUG B — running-set removal on the serial close path): close-and-open-next
+// must remove the closing node from running-set.json (mirror close-node step (e)) so the
+// next orient does not see an orphan multi-in_progress mismatch (the reconcile no-op wedge).
+// RED on current code (close-and-open-next is running-set-blind → impl-core stays in the set).
+{
+  const plan = makePlan([
+    '| impl-core | in_progress | |',
+    '| impl-other | pending | |',
+    '| review | pending | |',
+    '| finalize | pending | |',
+  ]);
+  const RS = '/p/.cache/' + RUNNING_SET_NAME;
+  const h = rtHarness({
+    '/p/workflow-plan.md': plan,
+    '/p/workflow-state.md': makeState(),
+    // a serial running set holding ONLY the closing node (the post-open-next state).
+    [RS]: JSON.stringify({ state: 'open', nodes: [{ id: 'impl-core', role: 'tdd-guide', kind: 'sequence' }] }, null, 2),
+    // on-disk nonce + bound evidence so close passes the binding gate.
+    '/p/.cache/barrier-base-impl-core': 'deadbeefimpl-corecafef00d1234\n',
+  }, {
+    nextAction: { exitCode: 0, result: 'ok', allDone: false, readySet: [{ id: 'impl-other', role: 'implementer', model: 'sonnet', declared_write_set: 'scripts/other.js', dependsOn: ['impl-core'] }], nextNode: { id: 'impl-other', role: 'implementer', model: 'sonnet', declared_write_set: 'scripts/other.js' } },
+  });
+  h.files['/p/.cache/impl-core.md'] = 'evidence-binding: impl-core ' + readNonce('/p/workflow-plan.md', 'impl-core', h.readFile) + '\nRED then GREEN\n';
+  const close = runCloseAndOpenNext({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', nodeId: 'impl-core', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, unlink: h.unlink });
+  assert(close.result === 'ok' && close.closed === 'impl-core', 'S-RT8: close ok');
+  const setAfter = readRunningSet(RS, h.cacheExists, h.readFile);
+  const stillThere = !!(setAfter && (setAfter.nodes || []).some(n => n.id === 'impl-core'));
+  assert(!stillThere, 'S-RT8: closed node REMOVED from running-set.json by close-and-open-next (BUG B), running set after = ' + JSON.stringify(setAfter));
+}
+
+// S-RT9 (#411 BUG B sibling — excl-batch guard on the serial close path): close-and-open-next
+// must REFUSE to close an unsealed parallel-batch member (the serial path cannot close a node
+// owned by a live batch — that is close-node's job after seal/join). RED on current code
+// (close-and-open-next has no excl-batch layer → it would close the member out-of-band).
+{
+  const plan = makePlan([
+    '| m-a | in_progress | |',
+    '| m-b | in_progress | |',
+    '| finalize | pending | |',
+  ], [
+    '| m-a | implementer | — | scripts/a.js | 1 | sequence |',
+    '| m-b | implementer | — | scripts/b.js | 1 | sequence |',
+    '| finalize | finalize | m-a m-b | CHANGELOG.md | 1 | sequence |',
+  ]);
+  const MANIFEST = '/p/.cache/active-batch.json';
+  const manifest = JSON.stringify({
+    state: 'open',
+    members: [
+      { id: 'm-a', sealed: false },
+      { id: 'm-b', sealed: false },
+    ],
+  }, null, 2);
+  const h = rtHarness({
+    '/p/workflow-plan.md': plan,
+    '/p/workflow-state.md': makeState(),
+    [MANIFEST]: manifest,
+    '/p/.cache/barrier-base-m-a': 'deadbeefm-acafef00d1234\n',
+  }, {});
+  h.files['/p/.cache/m-a.md'] = 'evidence-binding: m-a ' + readNonce('/p/workflow-plan.md', 'm-a', h.readFile) + '\nbuild-green: ok\n';
+  const close = runCloseAndOpenNext({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', nodeId: 'm-a', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, unlink: h.unlink });
+  assert(close.result === 'refuse' && close.reason === 'batch_active',
+    'S-RT9: close-and-open-next REFUSES an unsealed batch member (excl-batch guard, BUG B sibling), got ' + JSON.stringify({ result: close.result, reason: close.reason }));
+}
+
 // ===========================================================================
 // S-293 (#293/S-fix RECONCILE DEAD-END): 1 in_progress (serial node A) + an 'open'
 // (non-opening) running set holding a `pending` member B. crossCheckStatus stays
