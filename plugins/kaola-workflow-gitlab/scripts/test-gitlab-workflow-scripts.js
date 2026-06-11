@@ -1996,7 +1996,7 @@ function testUpdateHooksHardening325() {
   assert.strictEqual(mergeHooks({ $schema: 'user-schema', hooks: {} }, built).$schema, 'user-schema', '#325 R2: existing $schema wins');
   // R3
   const shrunk = { $schema: built.$schema, hooks: { SessionStart: built.hooks.SessionStart } };
-  const swept = mergeHooks({ hooks: { PostToolUse: [{ id: 'kaola-workflow:phantom-advisor' }, { id: 'user:keep' }] } }, shrunk);
+  const swept = mergeHooks({ hooks: { PostToolUse: [{ id: 'kaola-workflow:retired-orphan' }, { id: 'user:keep' }] } }, shrunk);
   assert.ok(!(swept.hooks.PostToolUse || []).some(e => e.id && e.id.startsWith('kaola-workflow:')), '#325 R3: orphan kaola-workflow: entry swept');
   assert.ok((swept.hooks.PostToolUse || []).some(e => e.id === 'user:keep'), '#325 R3: user entry preserved');
   // R2 black-box
@@ -2036,8 +2036,8 @@ function testInstallProfilesFeaturesTableHandling() {
     assert.ok(fs.existsSync(freshHooksPath), 'fresh install should create .codex/hooks.json');
     const freshHooks = JSON.parse(fs.readFileSync(freshHooksPath, 'utf8'));
 
-    // All four required events must be present, each with at least one kaola-workflow: entry
-    for (const event of ['SessionStart', 'PreToolUse', 'PostToolUse', 'SubagentStart']) {
+    // All three required events must be present, each with at least one kaola-workflow: entry
+    for (const event of ['SessionStart', 'PreToolUse', 'SubagentStart']) {
       const entries = freshHooks.hooks[event];
       assert.ok(Array.isArray(entries) && entries.length > 0,
         `hooks.json must have entries for event ${event}`);
@@ -2091,7 +2091,7 @@ function testInstallProfilesFeaturesTableHandling() {
     const existingHooksPath = path.join(existing, '.codex', 'hooks.json');
     assert.ok(fs.existsSync(existingHooksPath), 'existing dir: hooks.json must exist after install');
     const existingHooks = JSON.parse(fs.readFileSync(existingHooksPath, 'utf8'));
-    for (const event of ['SessionStart', 'PreToolUse', 'PostToolUse', 'SubagentStart']) {
+    for (const event of ['SessionStart', 'PreToolUse', 'SubagentStart']) {
       const entries = existingHooks.hooks[event] || [];
       const managed = entries.filter(e => e.id && e.id.startsWith('kaola-workflow:'));
       assert.strictEqual(

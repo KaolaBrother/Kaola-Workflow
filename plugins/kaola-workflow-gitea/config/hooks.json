@@ -29,20 +29,6 @@
         "id": "kaola-workflow:pre-commit-guard"
       }
     ],
-    "PostToolUse": [
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash \"__KW_PLUGIN_ROOT__/hooks/kaola-workflow-phantom-advisor.sh\"",
-            "timeout": 10
-          }
-        ],
-        "description": "Block unsupported advisor citations in workflow files (requires backing cache artifact)",
-        "id": "kaola-workflow:phantom-advisor"
-      }
-    ],
     "SubagentStart": [
       {
         "matcher": "*",

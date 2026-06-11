@@ -45,7 +45,6 @@ complete, route to:
 Otherwise detect the step:
 
 - `.cache/planner.md` missing -> `planner`
-- `.cache/advisor-ideation.md` missing -> `advisor-gate`
 - selected approach missing -> `internal-selection`
 - phase file missing -> `write-phase-file`
 
@@ -57,12 +56,10 @@ Update `workflow-state.md` before continuing.
 - If a required fact is missing, stop and return to Phase 1 with a focused
   `code-explorer` or `knowledge-lookup` request.
 - Use `planner` for deep approach analysis.
-- Save advisor output to `.cache/advisor-ideation.md`; do not keep it only in
-  conversation memory.
-- Do not stop for routine strategy selection. After planner/advisor review,
+- Do not stop for routine strategy selection. After reviewing the planner output,
   choose the recommended approach internally, apply it, and record the rationale.
-- Ask the user only when the choice is materially user-owned or the advisor
-  identifies ambiguity that blocks a correct technical decision.
+- Ask the user only when the choice is materially user-owned or you identify
+  ambiguity that blocks a correct technical decision.
 
 ## Step 1 - Planner
 
@@ -106,38 +103,19 @@ Write raw output to:
 kaola-workflow/{project}/.cache/planner.md
 ```
 
-## Step 2 - Advisor Gate
+## Step 2 - Internal Selection
 
-Consult the configured Claude Code advisor. If unavailable, stop and tell the
-user to enable an Opus advisor before continuing.
+Choose the recommended option. Record the selected approach, rationale, and any
+rejected alternatives in `phase2-ideation.md`. Do not ask the user to approve the
+strategy unless the decision is materially user-owned.
 
-Ask the advisor:
-
-- Any missed approaches?
-- Are risks accurate?
-- Is the recommendation sound?
-- Any gotchas that should change the decision?
-
-Write the advisor response to:
-
-```text
-kaola-workflow/{project}/.cache/advisor-ideation.md
-```
-
-## Step 3 - Internal Selection
-
-Choose the advisor-reviewed recommended option. Record the selected approach,
-rationale, and any rejected alternatives in `phase2-ideation.md`. Do not ask the
-user to approve the strategy unless the decision is materially user-owned.
-
-## Step 4 - Mechanical Ideation Finalization (delegated to the contractor)
+## Step 3 - Mechanical Ideation Finalization (delegated to the contractor)
 
 The **Selected Approach** (the chosen option + rationale + rejected alternatives)
-is the main session's **judgment**: Step 3 reads `.cache/planner.md` and
-`.cache/advisor-ideation.md`, picks the advisor-reviewed recommended option, and
-DECIDES the selection. The contractor never re-selects, never weighs approaches,
-and never judges risk — it only transcribes the selection the main session hands
-it, verbatim.
+is the main session's **judgment**: Step 2 reads `.cache/planner.md`, picks the
+recommended option, and DECIDES the selection. The contractor never re-selects,
+never weighs approaches, and never judges risk — it only transcribes the selection
+the main session hands it, verbatim.
 
 Once the approach is decided, summon the contractor to author `phase2-ideation.md`
 and advance the `workflow-state.md` pointer. Hand the decided **Selected Approach**
@@ -149,7 +127,7 @@ Agent(
   subagent_type="contractor",
   model="{CONTRACTOR_MODEL}",
   description="Mechanical ideation finalize {project}",
-  prompt="Run the mechanical ideation-finalization bookkeeping for {project}. Execute Step 4 below exactly as written in this command file: author kaola-workflow/{project}/phase2-ideation.md from the template, then update workflow-state.md (phase: 2 / step: complete / next_command: /kaola-workflow-phase3 {project}), PRESERVING any existing ## Sink block byte-for-byte. Write the Selected Approach EXACTLY as the orchestrator hands it to you — copy the selection and rationale verbatim into the ## Selected Approach section; do NOT re-select, re-rank, restate, soften, or judge it, and do NOT decide which approach wins. Transcribe the rest from the evidence the orchestrator names: the Approaches Evaluated (pros/cons/risk/complexity) and Out of Scope list from .cache/planner.md, the Advisor Findings from .cache/advisor-ideation.md, and the Required Agent Compliance rows. Return a compact bookkeeping summary; do NOT dispatch planner or any role, do NOT judge or assess risk, do NOT route, do NOT act as a gate, do NOT close the issue, and do NOT ask the user."
+  prompt="Run the mechanical ideation-finalization bookkeeping for {project}. Execute Step 3 below exactly as written in this command file: author kaola-workflow/{project}/phase2-ideation.md from the template, then update workflow-state.md (phase: 2 / step: complete / next_command: /kaola-workflow-phase3 {project}), PRESERVING any existing ## Sink block byte-for-byte. Write the Selected Approach EXACTLY as the orchestrator hands it to you — copy the selection and rationale verbatim into the ## Selected Approach section; do NOT re-select, re-rank, restate, soften, or judge it, and do NOT decide which approach wins. Transcribe the rest from the evidence the orchestrator names: the Approaches Evaluated (pros/cons/risk/complexity) and Out of Scope list from .cache/planner.md, and the Required Agent Compliance rows. Return a compact bookkeeping summary; do NOT dispatch planner or any role, do NOT judge or assess risk, do NOT route, do NOT act as a gate, do NOT close the issue, and do NOT ask the user."
 )
 ```
 
@@ -171,9 +149,6 @@ template exactly:
 ### Option B: [Name]
 ...
 
-## Advisor Findings
-[summary of .cache/advisor-ideation.md]
-
 ## Selected Approach
 [name + reason]
 
@@ -184,7 +159,6 @@ template exactly:
 | Requirement | Status | Evidence | Skip Reason |
 |-------------|--------|----------|-------------|
 | planner | invoked | .cache/planner.md | |
-| advisor ideation gate | invoked | .cache/advisor-ideation.md | |
 ```
 
 The contractor then updates `workflow-state.md` (preserving any existing `## Sink`

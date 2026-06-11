@@ -279,6 +279,11 @@ function unresolvedCompliance(content, stateContent) {
     return [{ requirement: 'Required Agent Compliance table', status: 'missing', evidence: '', skipReason: '' }];
   }
   const unresolved = rows.filter(row => {
+    // #372 (resume compat): the legacy advisor-gate rows are retired. A pre-#372 phase file may carry
+    // such a compliance row (its requirement contains both "advisor" and "gate"); map it forward as
+    // satisfied so an old in-flight project resumes without bricking — never pending-blocking.
+    const requirement = (row.requirement || '').toLowerCase();
+    if (requirement.includes('advisor') && requirement.includes('gate')) return false;
     const status = row.status.toLowerCase();
     if (!status || ['pending', 'missing', 'todo', 'unknown'].includes(status)) return true;
     if (status === 'invoked' && !row.evidence) return true;

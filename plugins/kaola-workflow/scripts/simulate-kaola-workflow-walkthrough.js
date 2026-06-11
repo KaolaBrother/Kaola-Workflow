@@ -120,7 +120,8 @@ function testAC1HooksJson() {
       'AC1 GREEN: installed hooks.json must NOT contain literal __KW_PLUGIN_ROOT__');
 
     const parsed = JSON.parse(installedRaw);
-    const EVENTS = ['SessionStart', 'PreToolUse', 'PostToolUse', 'SubagentStart'];
+    // #372: the PostToolUse phantom-advisor hook is retired — exactly 3 lifecycle events remain.
+    const EVENTS = ['SessionStart', 'PreToolUse', 'SubagentStart'];
     for (const event of EVENTS) {
       const entries = (parsed.hooks || {})[event];
       assert(Array.isArray(entries) && entries.length > 0,
@@ -129,6 +130,8 @@ function testAC1HooksJson() {
       assert(managed.length >= 1,
         'AC1: event ' + event + ' must have at least one kaola-workflow: managed entry');
     }
+    assert(!(parsed.hooks || {}).PostToolUse,
+      '#372: hooks.json must NOT carry a PostToolUse event (phantom-advisor retired)');
 
     // AC1: SessionStart entry with matcher "compact" must reference the compact-resume script.
     const sessionStart = (parsed.hooks || {}).SessionStart || [];
@@ -373,7 +376,7 @@ function testUpdateHooksHardening325() {
   // R3: a re-install after the managed-event set shrinks leaves no orphaned kaola-workflow: entry,
   // while preserving non-managed entries under that event.
   const shrunk = { $schema: built.$schema, hooks: { SessionStart: built.hooks.SessionStart } }; // PostToolUse no longer managed
-  const existingOrphan = { hooks: { PostToolUse: [{ id: 'kaola-workflow:phantom-advisor', matcher: 'Write' }, { id: 'user:keep', matcher: 'Edit' }] } };
+  const existingOrphan = { hooks: { PostToolUse: [{ id: 'kaola-workflow:retired-orphan', matcher: 'Write' }, { id: 'user:keep', matcher: 'Edit' }] } };
   const swept = mergeHooks(existingOrphan, shrunk);
   const post = swept.hooks.PostToolUse || [];
   assert(!post.some(e => e.id && e.id.startsWith('kaola-workflow:')), '#325 R3: orphaned kaola-workflow: entry under a now-unmanaged event is swept');

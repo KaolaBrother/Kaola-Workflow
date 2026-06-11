@@ -259,21 +259,13 @@ follow-ups, or decisions that need the user.
 
 If none exist, record the scan in `finalization-summary.md` and continue.
 
-If any exist:
+If any exist, route them directly to the USER:
 
-1. Consult the configured Claude Code advisor.
-2. Ask the advisor for the safest next step, whether the current item can close,
-   and how follow-up issues or roadmap entries should be organized.
-3. Save the response to:
-
-```text
-kaola-workflow/{project}/.cache/advisor-closure.md
-```
-
-4. Ask the user for permission before creating, closing, splitting, merging, or
+1. Summarize each deferred item, unresolved conflict, partial-implementation note,
+   open review follow-up, or decision that needs the user — with your own
+   recommendation for the safest next step and whether the current item can close.
+2. Ask the user for permission before creating, closing, splitting, merging, or
    reorganizing roadmap entries or Gitea issues.
-
-Do not treat advisor output as user approval.
 
 ## Step 1 - Final Validation
 
@@ -448,7 +440,7 @@ Create `kaola-workflow/{project}/finalization-summary.md`:
 [from Phase 5 and closure scan]
 
 ## Closure Decision
-[none needed/advisor consulted/user approved next steps]
+[none needed/user approved next steps]
 
 ## Commit And Push
 [pending final Git gate; final hash is reported after push and is not written back here]
@@ -467,7 +459,6 @@ Create `kaola-workflow/{project}/finalization-summary.md`:
 |-------------|--------|----------|-------------|
 | doc-updater | invoked/skipped | .cache/doc-updater.md or docs-impact check | [reason if skipped] |
 | documentation docking | invoked | .cache/doc-docking.md | |
-| closure advisor gate | invoked/N/A | .cache/advisor-closure.md or closure scan | [reason if N/A] |
 | final-validation fix executors | invoked/N/A | .cache/final-validation-fix-*.md | [reason if N/A] |
 | roadmap refresh | invoked | kaola-workflow/ROADMAP.md | |
 | archive completed folder | pending | | |
@@ -481,9 +472,8 @@ READY FOR FINAL GIT GATE
 
 Run the Closure Decision Gate described above.
 
-If deferred items, conflicts, partial work, or user-decision items exist, stop
-after saving `.cache/advisor-closure.md` and ask the user for permission before
-changing roadmap or issue organization.
+If deferred items, conflicts, partial work, or user-decision items exist, stop and
+ask the user for permission before changing roadmap or issue organization.
 
 If the user approves issue or roadmap reorganization, make those changes before
 the final Git gate.
@@ -516,7 +506,7 @@ deleted per-issue file and the regenerated `ROADMAP.md` — with `git add`. It d
 not re-run the delete or generate. This ensures the closure happens exactly once,
 owned solely by `cmdFinalize`.
 
-Do not reorganize roadmap entries that came from closure decision items until the user has approved the advisor-backed next step.
+Do not reorganize roadmap entries that came from closure decision items until the user has approved the next step.
 
 Archive is performed atomically by `cmdFinalize` in Step 8b below. Do not perform a manual copy or git mv here.
 

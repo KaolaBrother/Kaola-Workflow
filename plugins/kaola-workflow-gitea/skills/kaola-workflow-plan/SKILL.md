@@ -34,7 +34,7 @@ Write `kaola-workflow/{project}/phase3-plan.md` with:
 - safe parallel groups only when write sets are disjoint
 - explicit out-of-scope items
 
-Use the `code-architect` Codex agent role for the blueprint step. Record status as `subagent-invoked` in the compliance ledger if delegation occurred, `local-fallback-explicit` if the user explicitly authorized local execution, or `local-fallback-tool-unavailable` if the subagent tooling was unavailable. Consult the strongest available expert model/profile for the session or perform the same plan self-review locally, then save it to `.cache/advisor-plan.md`. If gaps are found, revise the blueprint before execution.
+Use the `code-architect` Codex agent role for the blueprint step. Record status as `subagent-invoked` in the compliance ledger if delegation occurred, `local-fallback-explicit` if the user explicitly authorized local execution, or `local-fallback-tool-unavailable` if the subagent tooling was unavailable. Then review the blueprint yourself for completeness; if you find gaps, revise the blueprint before execution.
 
 ## Task Template
 
@@ -53,18 +53,16 @@ Use the `code-architect` Codex agent role for the blueprint step. Record status 
 
 ## Required Agent Compliance
 
-Plain `invoked` is intentional for non-Codex-role workflow gates such as
-advisor plan review; delegation vocabulary applies only to Codex role rows like
-`code-architect`.
+Plain `invoked` is intentional for non-Codex-role workflow gates; delegation
+vocabulary applies only to Codex role rows like `code-architect`.
 
 ```markdown
 | Requirement | Status | Evidence | Skip Reason |
 |-------------|--------|----------|-------------|
 | code-architect | subagent-invoked/local-fallback-explicit/local-fallback-tool-unavailable | .cache/code-architect.md | |
-| advisor plan gate | invoked | .cache/advisor-plan.md | |
 | blueprint revisions | invoked/N/A | .cache/architect-revision-*.md | reason if N/A |
 ```
 
-The deterministic bookkeeping below — transcribing the advisor-reviewed `code-architect` blueprint and task list into `phase3-plan.md` (using the Blueprint Requirements and Task Template above) and the `workflow-state.md` checkpoint write (`next_skill: kaola-workflow-execute {project}`, preserving the `## Sink` block) — is delegated to the mechanical `contractor` Codex agent role when that subagent is available; it runs any scripts and authors the durable bookkeeping but never designs or re-plans, never dispatches `code-architect` or the advisor, never judges, and never changes the selected approach. The main session keeps approach selection, the `code-architect` dispatch, the advisor plan gate and the blueprint-complete judgment, and the revision decisions; it hands the judged-complete blueprint into the contractor, which transcribes the architect's evidence verbatim. This skill runs no `$KAOLA_SCRIPTS/...` script in the mechanical block — the work is pure file authoring — so re-derive a `kaola-gitea-workflow-*` script path only if one is actually needed; capture real exit codes and never gate on a piped `| tail`.
+The deterministic bookkeeping below — transcribing the `code-architect` blueprint and task list into `phase3-plan.md` (using the Blueprint Requirements and Task Template above) and the `workflow-state.md` checkpoint write (`next_skill: kaola-workflow-execute {project}`, preserving the `## Sink` block) — is delegated to the mechanical `contractor` Codex agent role when that subagent is available; it runs any scripts and authors the durable bookkeeping but never designs or re-plans, never dispatches `code-architect`, never judges, and never changes the selected approach. The main session keeps approach selection, the `code-architect` dispatch and the blueprint-complete judgment, and the revision decisions; it hands the judged-complete blueprint into the contractor, which transcribes the architect's evidence verbatim. This skill runs no `$KAOLA_SCRIPTS/...` script in the mechanical block — the work is pure file authoring — so re-derive a `kaola-gitea-workflow-*` script path only if one is actually needed; capture real exit codes and never gate on a piped `| tail`.
 
-Update `workflow-state.md` with `next_skill: kaola-workflow-execute {project}` after the advisor-reviewed plan is complete. Do not ask the user to approve routine internal workflow execution.
+Update `workflow-state.md` with `next_skill: kaola-workflow-execute {project}` after the plan is complete. Do not ask the user to approve routine internal workflow execution.

@@ -877,7 +877,7 @@ When `workflow-tasks.json` is absent, section 6 reads `task mirror: not generate
 ## Codex `.codex/hooks.json` managed-entry contract
 
 `install-codex-agent-profiles.js` (invoked by `./install.sh`) writes a project-local
-`.codex/hooks.json` containing the four managed Kaola-Workflow hook entries. The
+`.codex/hooks.json` containing the three managed Kaola-Workflow hook entries. The
 Codex plugin manifest (`plugin.json`) has no `hooks` key; this file is the sole
 wiring point for Codex lifecycle hooks.
 
@@ -901,16 +901,18 @@ The source template (`plugins/kaola-workflow/config/hooks.json`) uses the token
 directory at install time. Written command paths in `.codex/hooks.json` are therefore
 absolute and resolve correctly regardless of the working directory when Codex runs the hook.
 
-### The four managed entries
+### The three managed entries
 
 | Event | Matcher | id | Command script |
 |-------|---------|-----|----------------|
 | `SessionStart` | `compact` | `kaola-workflow:compact-context` | `scripts/kaola-workflow-codex-compact-resume.js` |
 | `PreToolUse` | `Bash` | `kaola-workflow:pre-commit-guard` | `hooks/kaola-workflow-pre-commit.sh` |
-| `PostToolUse` | `Write\|Edit` | `kaola-workflow:phantom-advisor` | `hooks/kaola-workflow-phantom-advisor.sh` |
 | `SubagentStart` | `*` | `kaola-workflow:subagent-dispatch-log` | `hooks/kaola-workflow-subagent-dispatch-log.sh` |
 
-All four entries carry a `timeout` field (5 or 10 seconds depending on the hook) and
+(The `PostToolUse` `kaola-workflow:phantom-advisor` entry was retired in #372 with the
+advisor gates; an upgrade install de-registers any stale copy from existing settings.)
+
+All three entries carry a `timeout` field (5 seconds) and
 a `description` field. These values come directly from the template; the installer
 does not add or modify them beyond the token substitution above.
 

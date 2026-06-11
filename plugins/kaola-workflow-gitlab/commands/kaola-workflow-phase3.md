@@ -20,7 +20,6 @@ kaola-workflow/{project}/workflow-state.md
 kaola-workflow/{project}/phase1-research.md
 kaola-workflow/{project}/phase2-ideation.md
 kaola-workflow/{project}/.cache/planner.md
-kaola-workflow/{project}/.cache/advisor-ideation.md
 ```
 
 ## Agent Model Badge
@@ -42,21 +41,20 @@ If `phase3-plan.md` exists with no pending compliance rows, route to:
 Otherwise detect:
 
 - `.cache/architect.md` missing -> `architect`
-- `.cache/advisor-plan.md` missing -> `advisor-gate`
-- advisor found gaps and `.cache/architect-revision-N.md` missing -> `architect-revision`
+- blueprint has gaps and `.cache/architect-revision-N.md` missing -> `architect-revision`
 - phase file missing -> `write-phase-file`
-- advisor-reviewed plan complete -> `phase4-ready`
+- blueprint complete -> `phase4-ready`
 
 ## Hard Gates
 
 - Do not implement code in Phase 3.
 - Do not silently change the selected Phase 2 approach.
-- If the advisor finds blueprint gaps, route the revision back to
-  `code-architect`; the main session may synthesize but must not become the
+- If you (the orchestrator) judge the blueprint has gaps, route the revision back
+  to `code-architect`; the main session may synthesize but must not become the
   architect.
-- Save every advisor and architect revision output under `.cache/`.
-- Continue to Phase 4 after the advisor-reviewed blueprint is complete. Ask the
-  user only for true external authorization or materially user-owned choices.
+- Save every architect revision output under `.cache/`.
+- Continue to Phase 4 after the blueprint is complete. Ask the user only for true
+  external authorization or materially user-owned choices.
 
 ## Step 1 - Code Architect
 
@@ -102,28 +100,16 @@ Write raw output to:
 kaola-workflow/{project}/.cache/architect.md
 ```
 
-## Step 2 - Advisor Gate
+## Step 2 - Architect Revision Loop
 
-Consult the configured Claude Code advisor. Ask:
-
-- Is the build sequence dependency-safe?
-- Are files or integration points missing?
-- Could a developer implement this from the plan alone?
-- Are edge cases or error paths missing?
-
-Write output to:
-
-```text
-kaola-workflow/{project}/.cache/advisor-plan.md
-```
-
-## Step 3 - Architect Revision Loop
-
-If the advisor finds gaps, invoke `code-architect` again with the same
-`CODE_ARCHITECT_MODEL` explicit model dispatch and:
+Evaluate the `code-architect` blueprint for completeness yourself (the orchestrator
+makes the gap judgment — is the build sequence dependency-safe? are files or
+integration points missing? could a developer implement this from the plan alone?
+are edge cases or error paths missing?). If you judge the blueprint has gaps,
+invoke `code-architect` again with the same `CODE_ARCHITECT_MODEL` explicit model
+dispatch and:
 
 - original `.cache/architect.md`
-- `.cache/advisor-plan.md`
 - the exact requested corrections
 
 Write each revision to:
@@ -135,13 +121,12 @@ kaola-workflow/{project}/.cache/architect-revision-{n}.md
 After three architect-revision attempts without a complete blueprint, stop and
 ask the user.
 
-## Step 4 - Write Phase File (delegated to the contractor)
+## Step 3 - Write Phase File (delegated to the contractor)
 
-The blueprint and task list are a mechanical transcription of the
-advisor-reviewed `code-architect` output. The main session has already judged the
-blueprint complete at the Step 2 advisor gate; the contractor only transcribes the
-architect's evidence into the durable phase file and records the completion
-checkpoint. It does not design, judge, or alter the selected approach.
+The blueprint and task list are a mechanical transcription of the `code-architect`
+output. The main session has already judged the blueprint complete; the contractor
+only transcribes the architect's evidence into the durable phase file and records
+the completion checkpoint. It does not design, judge, or alter the selected approach.
 
 Capture the resolved project name before delegating (shell variables do not cross
 the subagent boundary):
@@ -155,7 +140,7 @@ Agent(
   subagent_type="contractor",
   model="{CONTRACTOR_MODEL}",
   description="Mechanical plan write {project}",
-  prompt="Run the mechanical bookkeeping for Phase 3 of {project}. Author `kaola-workflow/{project}/phase3-plan.md` by transcribing the advisor-reviewed blueprint and task list from `.cache/architect.md` (plus any `.cache/architect-revision-*.md`) and `.cache/advisor-plan.md`, using the exact phase3-plan.md template and ## Required Agent Compliance table written below in this command file. The blueprint was already judged complete at the Step 2 advisor gate — do NOT design, re-plan, judge, or change the selected Phase 2 approach; transcribe the architect's evidence verbatim (files to create/modify, build sequence, parallelization, task write sets, validate commands). Then execute the Step 5 completion checkpoint: update `workflow-state.md` (phase: 3 / step: complete / next_command: /kaola-workflow-phase4 {project}), PRESERVING any existing ## Sink block byte-for-byte. Return a compact bookkeeping summary; do NOT dispatch code-architect or the advisor, do NOT implement code, do NOT route to Phase 4, do NOT ask the user."
+  prompt="Run the mechanical bookkeeping for Phase 3 of {project}. Author `kaola-workflow/{project}/phase3-plan.md` by transcribing the blueprint and task list from `.cache/architect.md` (plus any `.cache/architect-revision-*.md`), using the exact phase3-plan.md template and ## Required Agent Compliance table written below in this command file. The blueprint was already judged complete by the orchestrator — do NOT design, re-plan, judge, or change the selected Phase 2 approach; transcribe the architect's evidence verbatim (files to create/modify, build sequence, parallelization, task write sets, validate commands). Then execute the Step 4 completion checkpoint: update `workflow-state.md` (phase: 3 / step: complete / next_command: /kaola-workflow-phase4 {project}), PRESERVING any existing ## Sink block byte-for-byte. Return a compact bookkeeping summary; do NOT dispatch code-architect, do NOT implement code, do NOT route to Phase 4, do NOT ask the user."
 )
 ```
 
@@ -201,20 +186,16 @@ The contractor authors `kaola-workflow/{project}/phase3-plan.md` from this templ
 - Mirror: [pattern from phase1-research.md]
 - Validate: [exact command]
 
-## Advisor Notes
-[summary from .cache/advisor-plan.md]
-
 ## Required Agent Compliance
 | Requirement | Status | Evidence | Skip Reason |
 |-------------|--------|----------|-------------|
 | code-architect | invoked | .cache/architect.md | |
-| advisor plan gate | invoked | .cache/advisor-plan.md | |
 | architect revisions | invoked/N/A | .cache/architect-revision-*.md | [reason if N/A] |
 ```
 
-## Step 5 - Continue To Phase 4
+## Step 4 - Continue To Phase 4
 
-The contractor performs this completion checkpoint as part of the Step 4 dispatch,
+The contractor performs this completion checkpoint as part of the Step 3 dispatch,
 updating `workflow-state.md` and PRESERVING any existing `## Sink` block:
 
 ```text

@@ -117,7 +117,14 @@ const retired = [
   ['last', 'heart' + 'beat'].join('_'),
   '## ' + 'Lease',
   ['KAOLA', 'SESSION', 'ID'].join('_'),
-  ['target', 'mismatch'].join('_')
+  ['target', 'mismatch'].join('_'),
+  // #372: the retired advisor-gate vocabulary — once removed from the workflow prose it must never
+  // silently return. Concat-built (per house pattern) so this validator source carries no literal.
+  ['Advisor', 'Gate'].join(' '),
+  ['advisor', 'ideation', 'gate'].join(' '),
+  ['advisor', 'plan', 'gate'].join(' '),
+  ['advisor', 'critical', 'gate'].join(' '),
+  ['closure', 'advisor', 'gate'].join(' ')
 ];
 
 const phaseCommands = [
@@ -176,6 +183,9 @@ assertIncludes('commands/workflow-next.md', '`fast-summary.md` file, or a `workf
 // issue #203 (#201 regression lock): reconstruction ladder fast-summary rung (drift-guard B)
 assertIncludes('commands/workflow-next.md', 'fast-summary.md exists -> /kaola-workflow-fast');
 for (const token of retired) assertNotIncludes('commands/workflow-next.md', token);
+// #372: sweep the retired advisor-gate vocabulary over workflow-init.md too (the consult-mandate
+// bullet lived here, inside the byte-locked KW-CLAUDE-TEMPLATE region).
+for (const token of retired) assertNotIncludes('commands/workflow-init.md', token);
 
 // issue #198: fast-path widening — eligibility/hatch/review contract
 const fastFile198 = 'commands/kaola-workflow-fast.md';

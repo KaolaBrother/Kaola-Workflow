@@ -95,15 +95,6 @@ const BYTE_IDENTICAL_GROUPS = [
     ],
   },
   {
-    label: 'phantom-advisor hook copies',
-    files: [
-      'hooks/kaola-workflow-phantom-advisor.sh',
-      'plugins/kaola-workflow/hooks/kaola-workflow-phantom-advisor.sh',
-      'plugins/kaola-workflow-gitlab/hooks/kaola-workflow-phantom-advisor.sh',
-      'plugins/kaola-workflow-gitea/hooks/kaola-workflow-phantom-advisor.sh',
-    ],
-  },
-  {
     label: 'subagent-dispatch-log hook copies',
     files: [
       'hooks/kaola-workflow-subagent-dispatch-log.sh',

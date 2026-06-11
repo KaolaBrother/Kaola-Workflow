@@ -54,7 +54,13 @@ const retired = [
   ['session', 'id'].join('_'),
   ['last', 'heart' + 'beat'].join('_'),
   '## ' + 'Lease',
-  ['KAOLA', 'SESSION', 'ID'].join('_')
+  ['KAOLA', 'SESSION', 'ID'].join('_'),
+  // #372: retired advisor-gate vocabulary (concat-built; no literal in this source).
+  ['Advisor', 'Gate'].join(' '),
+  ['advisor', 'ideation', 'gate'].join(' '),
+  ['advisor', 'plan', 'gate'].join(' '),
+  ['advisor', 'critical', 'gate'].join(' '),
+  ['closure', 'advisor', 'gate'].join(' ')
 ];
 
 const pluginJson = parseJson(`${pluginRoot}/.codex-plugin/plugin.json`);
@@ -234,8 +240,10 @@ function assertPolicyBlocked(policy, rows, label) {
 
 assertPolicyAllowed('delegate', [
   ['code-explorer', 'subagent-invoked', '.cache/code-explorer.md', ''],
-  ['advisor ideation gate', 'invoked', '.cache/advisor-ideation.md', '']
-], 'delegated Codex role row with advisor gate');
+  // #372: a NON-Codex-role workflow gate row carrying plain `invoked` (delegationPolicyCompliance
+  // ignores non-role rows). Was the retired 'advisor ideation gate'; now a surviving non-role gate.
+  ['documentation docking', 'invoked', '.cache/doc-docking.md', '']
+], 'delegated Codex role row with a non-role workflow gate');
 assertPolicyAllowed('delegate', [
   ['code-explorer', 'local-fallback-tool-unavailable', '.cache/code-explorer.md', '']
 ], 'delegate policy with all role rows unavailable and evidenced');

@@ -165,7 +165,6 @@ case "$FORGE" in
     )
     SUPPORT_HOOK_NAMES=(
       kaola-workflow-pre-commit.sh
-      kaola-workflow-phantom-advisor.sh
       kaola-workflow-subagent-dispatch-log.sh
     )
     ;;
@@ -200,7 +199,6 @@ case "$FORGE" in
     )
     SUPPORT_HOOK_NAMES=(
       kaola-workflow-pre-commit.sh
-      kaola-workflow-phantom-advisor.sh
       kaola-workflow-subagent-dispatch-log.sh
     )
     ;;
@@ -235,7 +233,6 @@ case "$FORGE" in
     )
     SUPPORT_HOOK_NAMES=(
       kaola-workflow-pre-commit.sh
-      kaola-workflow-phantom-advisor.sh
       kaola-workflow-subagent-dispatch-log.sh
     )
     ;;
@@ -607,6 +604,9 @@ for script_name in "${SUPPORT_SCRIPT_NAMES[@]}"; do
 done
 
 mkdir -p "$SUPPORT_HOOKS_DIR"
+# #372: delete the stale installed phantom-advisor hook on upgrade (it was retired with the advisor
+# gates; it is no longer in SUPPORT_HOOK_NAMES, so a prior install's copy would otherwise linger).
+rm -f "$SUPPORT_HOOKS_DIR/kaola-workflow-phantom-advisor.sh"
 for hook_name in "${SUPPORT_HOOK_NAMES[@]}"; do
   hook_file="$SOURCE_HOOKS_DIR/$hook_name"
   # #363: fail CLOSED on a missing allowlisted hook source (same rationale as the support scripts).
@@ -715,6 +715,23 @@ for event, new_entries in incoming.items():
     cleaned = [e for e in existing if not is_managed(e)]
     cleaned.extend(new_entries)
     hooks[event] = cleaned
+
+# #372: de-register stale managed Kaola hook entries from events the installer NO LONGER ships
+# (e.g. the retired PostToolUse phantom-advisor). The merge loop above only visits events present
+# in `incoming`; without this sweep a dropped event keeps its stale managed entry forever (AC7).
+for event in list(hooks.keys()):
+    if event in incoming:
+        continue
+    entries = hooks.get(event) or []
+    if not isinstance(entries, list):
+        continue
+    remaining = [e for e in entries if not is_managed(e)]
+    if len(remaining) != len(entries):
+        if remaining:
+            hooks[event] = remaining
+        else:
+            hooks.pop(event, None)
+        print(f"De-registered stale Kaola-Workflow managed hook(s) under {event}.", file=sys.stderr)
 
 if is_managed_subagent_statusline(settings.get("subagentStatusLine")):
     settings.pop("subagentStatusLine", None)
@@ -842,7 +859,7 @@ if [[ -f "$SUPPORT_HOOKS_DIR/hooks.json" ]]; then
   echo "Hooks installed to: $SUPPORT_HOOKS_DIR/hooks.json"
   case "$SETTINGS_MERGE_RESULT" in
     merged)
-      echo "Kaola-Workflow hooks (compaction resume, pre-commit, phantom-advisor)"
+      echo "Kaola-Workflow hooks (compaction resume, pre-commit, subagent-dispatch-log)"
       echo "are now enabled in ~/.claude/settings.json."
       ;;
     skipped)
@@ -863,5 +880,3 @@ if [[ -f "$SUPPORT_HOOKS_DIR/hooks.json" ]]; then
   esac
   echo ""
 fi
-echo "For advisor gates, ensure your ~/.claude/settings.json includes:"
-echo '  "advisorModel": "opus"'

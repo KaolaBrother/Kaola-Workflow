@@ -219,12 +219,6 @@ Route findings:
 - HIGH -> delegate fix before Finalization
 - MEDIUM/LOW -> log as follow-up; does not block
 
-If CRITICAL findings exist, consult the configured Claude Code advisor and save:
-
-```text
-kaola-workflow/{project}/.cache/advisor-critical-review.md
-```
-
 Fix routing:
 
 - behavior, test coverage, implementation correction -> `tdd-guide`
@@ -296,7 +290,6 @@ Create `kaola-workflow/{project}/phase5-review.md`:
 | code-reviewer | invoked | .cache/code-reviewer.md | |
 | security-reviewer | invoked/N/A | .cache/security-reviewer.md or file-risk scan | [reason if N/A] |
 | review-fix executors | invoked/N/A | .cache/review-fix-*.md | [reason if N/A] |
-| advisor critical gate | invoked/N/A | .cache/advisor-critical-review.md or findings | [reason if N/A] |
 
 ## Fixes Applied
 [list]

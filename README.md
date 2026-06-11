@@ -77,11 +77,10 @@ objective, evidence, and `workflow-state.md` next pointer are complete.
 Routine workflow bookkeeping is autonomous. Generated project/folder names,
 collision suffixes such as `-2`, cache/artifact paths, and ordering that does
 not affect user intent should be chosen automatically and recorded. Essential
-technical decisions should consult the configured expert internally, then apply
-and record the chosen answer: Claude Code uses the advisor/Opus path, while
-Codex uses the strongest available expert model or agent profile for the
-session. Prompt the user only for true external authorization or materially
-user-owned choices, such as risky Git synchronization, destructive rewrites,
+technical decisions should be made with the orchestrator's own judgment, then
+applied and recorded. Prompt the user only for true external authorization or
+materially user-owned choices, such as risky Git synchronization, destructive
+rewrites,
 credential or deployment actions, or issue/roadmap reorganization.
 
 Each `/workflow-next` run targets one issue and ends at Finalization closure.
@@ -168,10 +167,6 @@ differs from the agent's frontmatter). **After installing or re-running
 >
 > The badge is a model-switch indicator: it renders when the subagent's model
 > differs from the session's default. This is by design in Claude Code.
-
-The Opus advisor gates in Phases 2, 3, and conditional Phase 5 require
-`"advisorModel": "opus"` in `~/.claude/settings.json` or an equivalent Claude
-Code advisor configuration.
 
 ## Installation
 
@@ -477,10 +472,6 @@ through the user's active Codex configuration. They only set reasoning effort:
 | `workflow-planner` | `xhigh` |
 | `issue-scout` | `medium` |
 
-There is no separate Codex advisor role. Codex advisor gates use the strongest
-available expert model/profile for the current session, or the current session
-performs the same review locally when no detached advisor profile is available.
-
 ## Release versioning
 
 Current official release versions:
@@ -643,7 +634,7 @@ The classic fixed sequence, reachable with `KAOLA_PATH=full /workflow-next` (and
 | # | Phase | What happens | Output file |
 |---|-------|-------------|-------------|
 | 1 | Research/Discovery | Facts only: requirement parsing → code-explorer maps affected code/patterns/tests/config → knowledge-lookup checks external docs when needed → completeness gate | `phase1-research.md` |
-| 2 | Ideation | Strategy only: planner generates 2–3 grounded approaches → advisor gate → user selects | `phase2-ideation.md` |
+| 2 | Ideation | Strategy only: planner generates 2–3 grounded approaches → orchestrator selects | `phase2-ideation.md` |
 | 3 | Plan | Blueprint only: code-architect turns selected approach into files, tasks, write sets, dependencies, parallel groups, and validation | `phase3-plan.md` |
 | 4 | Execute | Per-task TDD loop: tdd-guide executes RED → GREEN → REFACTOR; main session reviews, validates, and checkpoints | `phase4-progress.md` |
 | 5 | Review | code-reviewer always; security-reviewer conditional; review fixes delegated to tdd-guide/build-error-resolver | `phase5-review.md` |
@@ -856,12 +847,11 @@ evidence path.
 |---------|-----------------|---------|--------|
 | `kaola-workflow:compact-context` | `SessionStart` (`compact`) | After Claude Code's `/compact`, injects a resume hint (active project, current phase, current step, next command, fallback authorization) read from the most recent `workflow-state.md` | `scripts/kaola-workflow-compact-context.js` |
 | `kaola-workflow:pre-commit-guard` | `PreToolUse` (`Bash`) | Blocks `git commit` invocations whose staged files span more than one `kaola-workflow/{project}/` folder (archive, `.roadmap/`, and `ROADMAP.md` are exempt) | `hooks/kaola-workflow-pre-commit.sh` |
-| `kaola-workflow:phantom-advisor` | `PostToolUse` (`Write\|Edit`) | Blocks writes/edits to files under `kaola-workflow/{project}/` that cite the advisor without a backing `.cache/advisor-*.md` evidence file in the same project | `hooks/kaola-workflow-phantom-advisor.sh` |
 | `kaola-workflow:subagent-dispatch-log` | `SubagentStart` (`*`) | Records each subagent spawn (`agent_type`, `agent_id`, `cwd`) as one JSON line to `kaola-workflow/{project}/.cache/dispatch-log.jsonl` for WARN-FIRST closure attestation (#277 M1). Fail-open | `hooks/kaola-workflow-subagent-dispatch-log.sh` |
 
 ### Codex lifecycle hooks
 
-Codex wires the same four hooks via a project-local `.codex/hooks.json` written by
+Codex wires the same three hooks via a project-local `.codex/hooks.json` written by
 `install-codex-agent-profiles.js` (run by the Codex `kaola-workflow-init` skill). The
 hooks are NOT in the Codex plugin manifest (`plugin.json`) — they live in the
 project's `.codex/` directory.
@@ -870,7 +860,6 @@ project's `.codex/` directory.
 |---------|-----------------|---------|--------|
 | `kaola-workflow:compact-context` | `SessionStart` (`compact`) | After Codex context compaction, injects a resume packet (active project, next skill, in-progress node, pending gates, consent markers, task summary) from `kaola-workflow-codex-compact-resume.js`. Also still invokable on demand via stdin. | `scripts/kaola-workflow-codex-compact-resume.js` |
 | `kaola-workflow:pre-commit-guard` | `PreToolUse` (`Bash`) | Blocks `git commit` invocations whose staged files span more than one `kaola-workflow/{project}/` folder | `hooks/kaola-workflow-pre-commit.sh` |
-| `kaola-workflow:phantom-advisor` | `PostToolUse` (`Write\|Edit`) | Blocks writes/edits to workflow files that cite the advisor without a backing evidence file in `.cache/` | `hooks/kaola-workflow-phantom-advisor.sh` |
 | `kaola-workflow:subagent-dispatch-log` | `SubagentStart` (`*`) | Records each subagent spawn to `kaola-workflow/{project}/.cache/dispatch-log.jsonl`, making `checkDispatchAttestations` (closure attestation) live on Codex when `multi_agent` is enabled | `hooks/kaola-workflow-subagent-dispatch-log.sh` |
 
 **Caveats and preconditions:**
@@ -919,8 +908,8 @@ project's `.codex/` directory.
   present. User-owned status lines are preserved.
 
 Finalization still owns the final full validation gate. It also reconciles
-documentation with code changes and issue/roadmap state, consults the
-advisor before closing when deferred items or conflicts remain, and
+documentation with code changes and issue/roadmap state, routes deferred
+items or conflicts to the user before closing, and
 leaves commit-and-push as the final step on a clean, synced workspace.
 
 ## Resuming

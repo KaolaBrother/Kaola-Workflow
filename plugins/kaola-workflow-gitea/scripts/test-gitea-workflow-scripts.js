@@ -2046,7 +2046,7 @@ function testUpdateHooksHardening325() {
   assert.strictEqual(mergeHooks({ $schema: 'user-schema', hooks: {} }, built).$schema, 'user-schema', '#325 R2: existing $schema wins');
   // R3
   const shrunk = { $schema: built.$schema, hooks: { SessionStart: built.hooks.SessionStart } };
-  const swept = mergeHooks({ hooks: { PostToolUse: [{ id: 'kaola-workflow:phantom-advisor' }, { id: 'user:keep' }] } }, shrunk);
+  const swept = mergeHooks({ hooks: { PostToolUse: [{ id: 'kaola-workflow:retired-orphan' }, { id: 'user:keep' }] } }, shrunk);
   assert.ok(!(swept.hooks.PostToolUse || []).some(e => e.id && e.id.startsWith('kaola-workflow:')), '#325 R3: orphan kaola-workflow: entry swept');
   assert.ok((swept.hooks.PostToolUse || []).some(e => e.id === 'user:keep'), '#325 R3: user entry preserved');
   // R2 black-box
@@ -2081,11 +2081,11 @@ function testInstallProfilesFeaturesTableHandling() {
       '#332: fresh install must write the managed-profiles manifest'
     );
 
-    // #284: hooks.json assertions — 4 events, compact command, no token residue, /hooks trust line
+    // #284/#372: hooks.json assertions — 3 events (PostToolUse phantom-advisor retired), compact command, no token residue, /hooks trust line
     const freshHooksPath = path.join(fresh, '.codex', 'hooks.json');
     assert.ok(fs.existsSync(freshHooksPath), 'fresh install should create .codex/hooks.json');
     const freshHooks = JSON.parse(fs.readFileSync(freshHooksPath, 'utf8'));
-    const requiredEvents = ['SessionStart', 'PreToolUse', 'PostToolUse', 'SubagentStart'];
+    const requiredEvents = ['SessionStart', 'PreToolUse', 'SubagentStart'];
     for (const event of requiredEvents) {
       const entries = freshHooks.hooks[event];
       assert.ok(Array.isArray(entries) && entries.length > 0, `hooks.json must have entries for ${event}`);

@@ -37,8 +37,8 @@ Use `/goal` or equivalent prompt-based Stop-hook wording so the router and each
 phase keep going until the active phase objective and completion audit pass.
 Treat nonessential workflow bookkeeping as autonomous: generated project names,
 collision suffixes like `-2`, cache paths, and harmless ordering choices.
-Consult the configured advisor internally for essential technical decisions,
-apply the chosen answer, and record it under `.cache/` or the phase artifact.
+Decide essential technical decisions with your own judgment, apply the chosen
+answer, and record it under `.cache/` or the phase artifact.
 Ask only for true external authorization or materially user-owned choices.
 
 The `/goal` template must NOT use "next issue in line" or similar phrasing that

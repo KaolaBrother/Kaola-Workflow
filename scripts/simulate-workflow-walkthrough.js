@@ -19,7 +19,6 @@ const nextActionScript = path.join(repoRoot, 'scripts', 'kaola-workflow-next-act
 const handoffScript = path.join(repoRoot, 'scripts', 'kaola-workflow-adaptive-handoff.js'); // issue #255
 const adaptiveNodeScript = path.join(repoRoot, 'scripts', 'kaola-workflow-adaptive-node.js'); // issue #272 / #328
 const hookScript = path.join(repoRoot, 'hooks', 'kaola-workflow-pre-commit.sh');
-const phantomAdvisorHook = path.join(repoRoot, 'hooks', 'kaola-workflow-phantom-advisor.sh');
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -740,59 +739,40 @@ function testHookGitDashCCommitGuard() {
   console.log('testHookGitDashCCommitGuard: PASSED');
 }
 
-function testPhantomAdvisorHookGuard() {
-  // Behavioral coverage for the phantom-advisor PostToolUse hook. Regression guard
-  // for the bugs that left it inert: it must read the payload on STDIN (not an env
-  // var), parse tool_input.{file_path,content,new_string} (Write carries `content`,
-  // Edit carries `new_string`), fail OPEN outside a git repo (never a false block),
-  // and resolve the kaola-workflow/<project> segment from the LAST occurrence so a
-  // repo directory itself named 'kaola-workflow' does not shadow it.
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-phantom-advisor-'));
-  try {
-    // Repo dir literally named 'kaola-workflow' exercises the double-segment path.
-    const repo = path.join(tmp, 'kaola-workflow');
-    const projectDir = path.join(repo, 'kaola-workflow', 'issue-1');
-    fs.mkdirSync(projectDir, { recursive: true });
-    spawnSync('git', ['init'], { cwd: repo, encoding: 'utf8' });
-    const filePath = path.join(projectDir, 'phase5-review.md');
-    const run = (payload, cwd) => spawnSync('bash', [phantomAdvisorHook],
-      { cwd: cwd || repo, input: typeof payload === 'string' ? payload : JSON.stringify(payload), encoding: 'utf8' });
+function testHookShapeNoPhantomAdvisor() {
+  // #372: the phantom-advisor PostToolUse hook is retired. hooks/hooks.json must carry exactly the
+  // three surviving kaola-workflow hooks (compact-context SessionStart, pre-commit-guard PreToolUse,
+  // subagent-dispatch-log SubagentStart) and NO PostToolUse / phantom-advisor entry. Replaces the
+  // deleted testPhantomAdvisorHookGuard with the new contract.
+  const hooks = JSON.parse(fs.readFileSync(path.join(repoRoot, 'hooks', 'hooks.json'), 'utf8')).hooks;
+  const events = Object.keys(hooks);
+  assert(!events.includes('PostToolUse'), '#372: hooks.json must have NO PostToolUse event, got ' + events.join(','));
+  const ids = [];
+  for (const ev of events) for (const block of hooks[ev]) ids.push(block.id);
+  ids.sort();
+  assert(JSON.stringify(ids) === JSON.stringify(['kaola-workflow:compact-context', 'kaola-workflow:pre-commit-guard', 'kaola-workflow:subagent-dispatch-log']),
+    '#372: exactly the 3 surviving hook ids, got ' + JSON.stringify(ids));
+  const raw = fs.readFileSync(path.join(repoRoot, 'hooks', 'hooks.json'), 'utf8');
+  assert(!/phantom-advisor/.test(raw), '#372: no phantom-advisor reference in hooks.json');
+  assert(!fs.existsSync(path.join(repoRoot, 'hooks', 'kaola-workflow-phantom-advisor.sh')), '#372: phantom-advisor.sh deleted');
+}
 
-    // (a) Write citation, no backing advisor cache -> BLOCK (exit 2).
-    let r = run({ tool_input: { file_path: filePath, content: 'the advisor says proceed' } });
-    assert(r.status === 2, 'phantom-advisor must block an unbacked Write advisor citation, got ' + r.status);
-
-    // (b) Same citation with a backing artifact -> ALLOW. Also proves the segment
-    // resolves correctly under a repo dir named 'kaola-workflow'.
-    const cacheDir = path.join(projectDir, '.cache');
-    fs.mkdirSync(cacheDir, { recursive: true });
-    fs.writeFileSync(path.join(cacheDir, 'advisor-plan.md'), '# advisor\n');
-    r = run({ tool_input: { file_path: filePath, content: 'the advisor says proceed' } });
-    assert(r.status === 0, 'phantom-advisor must allow a citation backed by .cache/advisor-*.md, got ' + r.status);
-    fs.rmSync(path.join(cacheDir, 'advisor-plan.md'));
-
-    // (c) No citation -> ALLOW.
-    r = run({ tool_input: { file_path: filePath, content: 'ordinary phase notes' } });
-    assert(r.status === 0, 'phantom-advisor must allow non-citing content, got ' + r.status);
-
-    // (d) Edit citation in new_string (no `content` field) -> BLOCK.
-    r = run({ tool_input: { file_path: filePath, old_string: 'x', new_string: 'per the advisor we proceed' } });
-    assert(r.status === 2, 'phantom-advisor must scan Edit new_string and block an unbacked citation, got ' + r.status);
-
-    // (e) Empty stdin -> ALLOW (no payload).
-    r = run('');
-    assert(r.status === 0, 'phantom-advisor must no-op on empty stdin, got ' + r.status);
-
-    // (f) Non-workflow path with a citation -> ignore.
-    r = run({ tool_input: { file_path: path.join(repo, 'README.md'), content: 'the advisor says hi' } });
-    assert(r.status === 0, 'phantom-advisor must ignore non-workflow paths, got ' + r.status);
-
-    // (g) Outside any git repo -> fail OPEN (cwd is the un-init'd mkdtemp root).
-    r = run({ tool_input: { file_path: path.join(tmp, 'no-such', 'kaola-workflow', 'issue-9', 'phase5-review.md'), content: 'the advisor says proceed' } }, tmp);
-    assert(r.status === 0, 'phantom-advisor must fail open outside a git repo, got ' + r.status);
-  } finally {
-    fs.rmSync(tmp, { recursive: true, force: true });
-  }
+function testResumeCompatLegacyAdvisorGateRow() {
+  // #372 (AC10): a legacy in-flight phase file may carry a retired `advisor … gate` compliance row.
+  // unresolvedCompliance must map it forward as satisfied (never pending-blocking) so an old project
+  // resumes without bricking. Mutation guard: against pristine repair-state this row WOULD block.
+  const repairState = require(path.join(repoRoot, 'scripts', 'kaola-workflow-repair-state.js'));
+  const legacy = [
+    '## Required Agent Compliance',
+    '| Requirement | Status | Evidence | Skip Reason |',
+    '|-------------|--------|----------|-------------|',
+    '| code-architect | invoked | .cache/architect.md | |',
+    '| advisor plan gate | pending | | |',
+    '',
+  ].join('\n');
+  const unresolved = repairState.unresolvedCompliance(legacy, '');
+  assert(!unresolved.some(r => (r.requirement || '').toLowerCase().includes('advisor')),
+    '#372 (AC10): a legacy `advisor … gate | pending` row must NOT be pending-blocking on resume, got ' + JSON.stringify(unresolved));
 }
 
 function testSubagentDispatchHookExists() {
@@ -10464,7 +10444,8 @@ function buildRegistry() {
   add('testRepairFinalizationRoute',                      testRepairFinalizationRoute);
   add('testSinkPrUsesFinalizationSummary',                testSinkPrUsesFinalizationSummary);
   add('testHookGitDashCCommitGuard',                      testHookGitDashCCommitGuard);
-  add('testPhantomAdvisorHookGuard',                      testPhantomAdvisorHookGuard);
+  add('testHookShapeNoPhantomAdvisor',                    testHookShapeNoPhantomAdvisor);
+  add('testResumeCompatLegacyAdvisorGateRow',             testResumeCompatLegacyAdvisorGateRow);
   add('testSubagentDispatchHookExists',                   testSubagentDispatchHookExists);
   add('testClassifierFolderOverlapRed',                   testClassifierFolderOverlapRed);
   add('testClassifierFolderOverlapYellow',                testClassifierFolderOverlapYellow);

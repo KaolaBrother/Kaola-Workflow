@@ -176,7 +176,7 @@ assert(exists(pluginRoot + '/hooks/hooks.json'), 'GitLab hooks.json missing');
 assertNotIncludes(pluginRoot + '/hooks/hooks.json', 'subagentStatusLine');
 assertNotIncludes(pluginRoot + '/hooks/hooks.json', 'kaola-workflow-subagent-statusline.js');
 assert(hookFiles.some(file => file.endsWith('kaola-workflow-pre-commit.sh')), 'GitLab pre-commit hook missing');
-assert(hookFiles.some(file => file.endsWith('kaola-workflow-phantom-advisor.sh')), 'GitLab advisor hook missing');
+assert(!hookFiles.some(file => file.endsWith('kaola-workflow-phantom-advisor.sh')), 'GitLab phantom-advisor hook must be removed (#372)');
 assert(agentFiles.length === 14, 'expected 14 GitLab agent profiles');
 assert(exists(pluginRoot + '/config/agents.toml'), 'GitLab agents config missing');
 
@@ -205,6 +205,19 @@ for (const file of commandFiles.filter(file => path.basename(file).startsWith('k
   assertEveryDispatchHasModel(file);
   assertNotIncludes(file, 'Agent Model Badge Contract');
   assertNotIncludes(file, 'kaola_agent_model');
+}
+
+// #372: the advisor-gate vocabulary is retired — ban it across command + skill files so the
+// removed mandates cannot silently return (concat-built; no literal in this source).
+const advisorGateTokens372 = [
+  ['Advisor', 'Gate'].join(' '),
+  ['advisor', 'ideation', 'gate'].join(' '),
+  ['advisor', 'plan', 'gate'].join(' '),
+  ['advisor', 'critical', 'gate'].join(' '),
+  ['closure', 'advisor', 'gate'].join(' '),
+];
+for (const file of [...commandFiles, ...skillFiles]) {
+  for (const token of advisorGateTokens372) assertNotIncludes(file, token);
 }
 
 const scriptFiles = [
@@ -417,8 +430,8 @@ function assertPolicyBlocked(policy, rows, label) {
 
 assertPolicyAllowed('delegate', [
   ['code-explorer', 'subagent-invoked', '.cache/code-explorer.md', ''],
-  ['advisor ideation gate', 'invoked', '.cache/advisor-ideation.md', '']
-], 'delegated GitLab Codex role row with advisor gate');
+  ['documentation docking', 'invoked', '.cache/doc-docking.md', '']
+], 'delegated GitLab Codex role row with a non-role workflow gate');
 assertPolicyAllowed('delegate', [
   ['code-explorer', 'local-fallback-tool-unavailable', '.cache/code-explorer.md', '']
 ], 'delegate policy with all role rows unavailable and evidenced');
