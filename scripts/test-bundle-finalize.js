@@ -92,9 +92,13 @@ function writeRoadmapMirror(tmpRoot, issueNums) {
 }
 
 // Write a bundle workflow-state.md file for a given project/members.
-function writeBundleStateFile(tmpRoot, project, primaryIssue, memberIssues) {
+function writeBundleStateFile(tmpRoot, project, primaryIssue, memberIssues, opts) {
+  opts = opts || {};
   const dir = path.join(tmpRoot, 'kaola-workflow', project);
   fs.mkdirSync(dir, { recursive: true });
+  const sinkLines = opts.sink === 'pr'
+    ? ['sink: pr', 'pr_url: ' + (opts.prUrl || 'https://example.test/pr/1')]
+    : ['sink: merge'];
   const lines = [
     '# Kaola-Workflow State',
     '',
@@ -130,7 +134,7 @@ function writeBundleStateFile(tmpRoot, project, primaryIssue, memberIssues) {
     '## Sink',
     'branch: workflow/' + project,
     'issue_number: ' + primaryIssue,
-    'sink: merge',
+    ...sinkLines,
     'run_posture: in-place',
     'issue_numbers: ' + memberIssues.join(','),
     'bundle_id: ' + project,
@@ -194,6 +198,8 @@ function writeGhMockScript(binDir, opts) {
   const logFile = opts && opts.logFile ? JSON.stringify(opts.logFile) : 'null';
   const closedIssues = opts && opts.closedIssues ? JSON.stringify(opts.closedIssues) : '[]';
   const throwOnView = opts && opts.throwOnIssueView != null ? String(opts.throwOnIssueView) : 'null';
+  // #371: `pr view` route for cmdWatchPr coverage — configurable PR state (MERGED/CLOSED/OPEN).
+  const prState = opts && opts.prState ? JSON.stringify(opts.prState) : 'null';
 
   fs.mkdirSync(binDir, { recursive: true });
   const script = [
@@ -204,6 +210,7 @@ function writeGhMockScript(binDir, opts) {
     'const logFile = ' + logFile + ';',
     'const closedIssues = new Set(' + closedIssues + '.map(String));',
     'const throwOnView = ' + throwOnView + ';',
+    'const prState = ' + prState + ';',
     '',
     'function log(msg) {',
     '  if (!logFile) return;',
@@ -213,6 +220,13 @@ function writeGhMockScript(binDir, opts) {
     '// repo view',
     'if (a.includes("repo view")) {',
     '  process.stdout.write(JSON.stringify({owner:{login:"test"},name:"repo"}) + "\\n");',
+    '  process.exit(0);',
+    '}',
+    '',
+    '// #371: pr view <url> --json state,number',
+    'if (a.includes("pr view")) {',
+    '  log("pr-view");',
+    '  process.stdout.write(JSON.stringify({state: prState || "OPEN", number: 999}) + "\\n");',
     '  process.exit(0);',
     '}',
     '',
@@ -735,6 +749,149 @@ const { checkClosureInvariants } = require('./kaola-workflow-claim');
     // The active folder is gone (archived as discarded).
     const active = fs.readdirSync(path.join(tmpRoot, 'kaola-workflow')).filter(n => n.startsWith('bundle-42-47-53'));
     assert(active.length === 0, '#371 release: active bundle folder removed (discarded), got: ' + JSON.stringify(active));
+  } finally { fs.rmSync(tmpRoot, { recursive: true, force: true }); }
+})();
+
+// ---------------------------------------------------------------------------
+// Test (#371): cmdWatchPr bundle MERGED — per-member close buckets + truthful token.
+// The watch-pr bundle MERGED path (per-member probe + closed/open buckets + `partial`
+// token) had zero test references. This is also the planted-regression target: a
+// change that drops a member from the receipt buckets fails here.
+// ---------------------------------------------------------------------------
+(function testWatchPrBundleMergedReceipt() {
+  console.log('Test (#371): watch-pr bundle MERGED → per-member buckets + partial token');
+  const tmpRoot = makeTmpRoot();
+  const binDir = path.join(tmpRoot, 'bin');
+  const logFile = path.join(tmpRoot, 'gh-calls.log');
+  try {
+    initGitRepo(tmpRoot);
+    writeBundleStateFile(tmpRoot, 'bundle-42-47-53', 42, [42, 47, 53], { sink: 'pr', prUrl: 'https://example.test/pr/7' });
+    writeRoadmapFile(tmpRoot, 42); writeRoadmapFile(tmpRoot, 47); writeRoadmapFile(tmpRoot, 53);
+    // PR merged; members 42 + 53 closed online, 47 still OPEN → partial.
+    writeGhMockScript(binDir, { logFile, prState: 'MERGED', closedIssues: [42, 53] });
+
+    const result = runFinalize(['watch-pr'], tmpRoot, binDir);
+    assert(result.status === 0, '#371 watch-pr: exit 0, got ' + result.status + '\nstderr: ' + (result.stderr || ''));
+    const out = parseOutput(result);
+    assert(out && Array.isArray(out.cleanups) && out.cleanups.length === 1, '#371 watch-pr: one cleanup emitted, got ' + JSON.stringify(out && out.cleanups));
+    const r = out.cleanups[0].receipt;
+    assert(JSON.stringify(r.issue_numbers) === JSON.stringify([42, 47, 53]), '#371 watch-pr: receipt.issue_numbers=[42,47,53], got ' + JSON.stringify(r.issue_numbers));
+    assert(JSON.stringify(r.closed_issues) === JSON.stringify([42, 53]), '#371 watch-pr: closed_issues=[42,53], got ' + JSON.stringify(r.closed_issues));
+    assert(JSON.stringify(r.open_issues) === JSON.stringify([47]), '#371 watch-pr: open_issues=[47] (member still open never silently dropped), got ' + JSON.stringify(r.open_issues));
+    assert(r.remote_issue_closed === 'partial', '#371 watch-pr: truthful `partial` token (not skipped_offline), got ' + JSON.stringify(r.remote_issue_closed));
+    const calls = readLog(logFile);
+    for (const n of [42, 47, 53]) {
+      assert(calls.includes('label-removed:' + n), '#371 watch-pr: advisory claim cleared for member ' + n + ', got ' + JSON.stringify(calls));
+    }
+  } finally { fs.rmSync(tmpRoot, { recursive: true, force: true }); }
+})();
+
+// ---------------------------------------------------------------------------
+// Test (#371): cmdWatchPr bundle CLOSED (PR closed unmerged) — abandoned archive,
+// every member's advisory claim cleared, bundle receipt carries issue_numbers.
+// ---------------------------------------------------------------------------
+(function testWatchPrBundleClosed() {
+  console.log('Test (#371): watch-pr bundle CLOSED → abandoned archive + per-member label clear');
+  const tmpRoot = makeTmpRoot();
+  const binDir = path.join(tmpRoot, 'bin');
+  const logFile = path.join(tmpRoot, 'gh-calls.log');
+  try {
+    initGitRepo(tmpRoot);
+    writeBundleStateFile(tmpRoot, 'bundle-42-47-53', 42, [42, 47, 53], { sink: 'pr', prUrl: 'https://example.test/pr/8' });
+    writeRoadmapFile(tmpRoot, 42); writeRoadmapFile(tmpRoot, 47); writeRoadmapFile(tmpRoot, 53);
+    writeGhMockScript(binDir, { logFile, prState: 'CLOSED' });
+
+    const result = runFinalize(['watch-pr'], tmpRoot, binDir);
+    assert(result.status === 0, '#371 watch-pr CLOSED: exit 0, got ' + result.status + '\nstderr: ' + (result.stderr || ''));
+    const out = parseOutput(result);
+    assert(out && Array.isArray(out.cleanups) && out.cleanups.length === 1, '#371 watch-pr CLOSED: one cleanup, got ' + JSON.stringify(out && out.cleanups));
+    assert(JSON.stringify(out.cleanups[0].receipt.issue_numbers) === JSON.stringify([42, 47, 53]),
+      '#371 watch-pr CLOSED: receipt.issue_numbers preserved, got ' + JSON.stringify(out.cleanups[0].receipt.issue_numbers));
+    const calls = readLog(logFile);
+    for (const n of [42, 47, 53]) {
+      assert(calls.includes('label-removed:' + n), '#371 watch-pr CLOSED: claim cleared for member ' + n);
+    }
+    // Live folder discarded (archived abandoned).
+    const live = fs.readdirSync(path.join(tmpRoot, 'kaola-workflow')).filter(n => n === 'bundle-42-47-53');
+    assert(live.length === 0, '#371 watch-pr CLOSED: live bundle folder archived, got ' + JSON.stringify(live));
+  } finally { fs.rmSync(tmpRoot, { recursive: true, force: true }); }
+})();
+
+// ---------------------------------------------------------------------------
+// Test (#371) crash interleaving (a): kill mid-label-loop after writeState leaves a
+// live folder with partial labels; recovery via `release` must clear EVERY member's
+// advisory claim (idempotent — clears all, regardless of which were added pre-crash).
+// ---------------------------------------------------------------------------
+(function testCrashRecoveryReleaseClearsAllMembers() {
+  console.log('Test (#371) crash-a: release after a mid-claim crash clears every member');
+  const tmpRoot = makeTmpRoot();
+  const binDir = path.join(tmpRoot, 'bin');
+  const logFile = path.join(tmpRoot, 'gh-calls.log');
+  try {
+    initGitRepo(tmpRoot);
+    // Simulate the post-crash state: a live bundle folder exists (writeState ran) but
+    // assume the label loop only got partway — release must still clear ALL members.
+    writeBundleStateFile(tmpRoot, 'bundle-42-47-53', 42, [42, 47, 53]);
+    writeRoadmapFile(tmpRoot, 42); writeRoadmapFile(tmpRoot, 47); writeRoadmapFile(tmpRoot, 53);
+    writeGhMockScript(binDir, { logFile });
+
+    const result = runFinalize(['release', '--project', 'bundle-42-47-53'], tmpRoot, binDir);
+    assert(result.status === 0, '#371 crash-a: release exit 0, got ' + result.status + '\nstderr: ' + (result.stderr || ''));
+    const calls = readLog(logFile);
+    for (const n of [42, 47, 53]) {
+      assert(calls.includes('label-removed:' + n), '#371 crash-a: member ' + n + ' advisory claim cleared on recovery, got ' + JSON.stringify(calls));
+    }
+  } finally { fs.rmSync(tmpRoot, { recursive: true, force: true }); }
+})();
+
+// ---------------------------------------------------------------------------
+// Test (#371) crash interleaving (b): a finalize RE-RUN after a post-rename crash —
+// the live source folder is already archived, so the second run must NOT crash and
+// must NOT silently succeed-with-leaked-labels. Documents the actual recovery shape.
+// ---------------------------------------------------------------------------
+(function testCrashRecoveryFinalizeRerunAfterArchive() {
+  console.log('Test (#371) crash-b: finalize re-run after the source folder is already archived');
+  const tmpRoot = makeTmpRoot();
+  const binDir = path.join(tmpRoot, 'bin');
+  const logFile = path.join(tmpRoot, 'gh-calls.log');
+  try {
+    initGitRepo(tmpRoot);
+    writeBundleStateFile(tmpRoot, 'bundle-42-47-53', 42, [42, 47, 53]);
+    writeRoadmapFile(tmpRoot, 42); writeRoadmapFile(tmpRoot, 47); writeRoadmapFile(tmpRoot, 53);
+    writeGhMockScript(binDir, { logFile, closedIssues: [42, 47, 53] });
+
+    // First finalize: closes + archives the bundle.
+    const first = runFinalize(['finalize', '--project', 'bundle-42-47-53'], tmpRoot, binDir);
+    assert(first.status === 0, '#371 crash-b: first finalize exit 0, got ' + first.status + '\nstderr: ' + (first.stderr || ''));
+    const liveAfter = fs.readdirSync(path.join(tmpRoot, 'kaola-workflow')).filter(n => n === 'bundle-42-47-53');
+    assert(liveAfter.length === 0, '#371 crash-b: first finalize archived the live folder, got ' + JSON.stringify(liveAfter));
+
+    // Second finalize (the post-rename crash re-run): the live folder is gone. Must not crash
+    // (graceful no-active-folder refusal), never a stack trace.
+    const second = runFinalize(['finalize', '--project', 'bundle-42-47-53'], tmpRoot, binDir);
+    assert(second.status !== null, '#371 crash-b: finalize re-run did not crash/timeout');
+    assert(!/Error:|TypeError|at Object\.|at Module\./.test(second.stderr || ''),
+      '#371 crash-b: finalize re-run is a graceful refusal, not an uncaught exception, got stderr: ' + (second.stderr || '').slice(0, 300));
+  } finally { fs.rmSync(tmpRoot, { recursive: true, force: true }); }
+})();
+
+// ---------------------------------------------------------------------------
+// Test (#371): worktree-suppression posture — in-place (KAOLA_WORKTREE_NATIVE=0)
+// finalize leaves NO `.worktrees/` provisioned for the bundle (posture contract).
+// ---------------------------------------------------------------------------
+(function testBundleWorktreePostureInPlace() {
+  console.log('Test (#371): in-place finalize provisions no worktree for the bundle');
+  const tmpRoot = makeTmpRoot();
+  const binDir = path.join(tmpRoot, 'bin');
+  try {
+    initGitRepo(tmpRoot);
+    writeBundleStateFile(tmpRoot, 'bundle-42-47-53', 42, [42, 47, 53]);
+    writeRoadmapFile(tmpRoot, 42); writeRoadmapFile(tmpRoot, 47); writeRoadmapFile(tmpRoot, 53);
+    writeGhMockScript(binDir, { closedIssues: [42, 47, 53] });
+    runFinalize(['finalize', '--project', 'bundle-42-47-53'], tmpRoot, binDir);
+    const kwDir = path.join(tmpRoot, '.kw', 'worktrees');
+    const hasWorktrees = fs.existsSync(kwDir) && fs.readdirSync(kwDir).length > 0;
+    assert(!hasWorktrees, '#371 posture: NATIVE=0 in-place finalize provisions no worktree, got ' + (hasWorktrees ? fs.readdirSync(kwDir).join(',') : 'none'));
   } finally { fs.rmSync(tmpRoot, { recursive: true, force: true }); }
 })();
 
