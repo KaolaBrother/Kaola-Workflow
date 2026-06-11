@@ -35,6 +35,7 @@ const {
   runReconcile,
   runStatus,
   recommendBatchRoute,
+  appendComplianceRow,
 } = require('./kaola-workflow-parallel-batch');
 
 const {
@@ -168,6 +169,39 @@ function realNextActionShell(planPath) {
     'P1 (#364): BATCH_STATES === [opening,open,sealed,joined] (dispatched + joining removed)');
   assert(!BATCH_STATES.includes('dispatched'), 'P1 (#303): dead dispatched state removed');
   assert(!BATCH_STATES.includes('joining'), 'P1 (#364): dead joining state removed');
+}
+
+// ---------------------------------------------------------------------------
+// P1c (#354): appendComplianceRow delegates to the shared fence-aware spliceComplianceSection —
+// (a) bare-role + node-scoped requirement-cell formatting is preserved; (b) an UPSTREAM FENCED
+// `## Required Agent Compliance` / `## Node Ledger` decoy is NOT mutated and the row lands in the
+// REAL section (the dedup target — same helper adaptive-node.spliceComplianceRow uses).
+// ---------------------------------------------------------------------------
+{
+  // bare-role (code-reviewer) → no node id; non-review role → `role (id)`.
+  const base = '## Node Ledger\n| id | status |\n|----|--------|\n| a | complete |\n';
+  const r1 = appendComplianceRow(base, 'code-reviewer', 'rev', 'looks good');
+  assert(/\|\s*code-reviewer\s*\|\s*subagent-invoked\s*\|\s*looks good\s*\|/.test(r1),
+    'P1c: bare-role requirement cell (code-reviewer, no node id)');
+  const r2 = appendComplianceRow(base, 'tdd-guide', 'impl-x', 'tests pass');
+  assert(r2.includes('| tdd-guide (impl-x) | subagent-invoked | tests pass | |'),
+    'P1c: non-review role → "role (id)" requirement cell');
+  assert(r1.includes('## Required Agent Compliance'),
+    'P1c: section created below ## Node Ledger when absent');
+
+  // Decoy: an UPSTREAM FENCED compliance/ledger block must be left intact; the row lands in REAL section.
+  const decoy = [
+    '## Nodes', '| id |', '',
+    '```markdown', '## Required Agent Compliance', '| FAKE | x | y | z |', '```',
+    '## Node Ledger', '| id | status |', '|----|--------|', '| a | complete |',
+    '## Required Agent Compliance', '', '| Requirement | Status | Evidence | Skip Reason |',
+    '|-------------|--------|----------|-------------|', '',
+  ].join('\n');
+  const rd = appendComplianceRow(decoy, 'code-reviewer', 'rev', 'ok');
+  assert(/```markdown[\s\S]*\| FAKE \| x \| y \| z \|[\s\S]*```/.test(rd),
+    'P1c: the fenced decoy compliance block is byte-intact');
+  assert(rd.indexOf('| code-reviewer | subagent-invoked | ok | |') > rd.lastIndexOf('```'),
+    'P1c: the new row lands in the REAL compliance section (after the fenced decoy)');
 }
 
 // ---------------------------------------------------------------------------

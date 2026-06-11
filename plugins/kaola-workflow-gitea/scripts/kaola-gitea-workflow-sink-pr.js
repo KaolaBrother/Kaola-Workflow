@@ -6,6 +6,8 @@ const os = require('os');
 const path = require('path');
 const { execFileSync, spawnSync } = require('child_process');
 const forge = require('./kaola-gitea-forge');
+// #354 (#353-rest): crash-safe atomic durable-state write (tmp + fsync + rename).
+const adaptiveSchema = require('./kaola-workflow-adaptive-schema');
 const { getCoordRoot, readActiveFolders } = require('./kaola-gitea-workflow-claim');
 
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
@@ -80,7 +82,7 @@ function updateStateSinkBlock(stateFile, prUrl, prNumber, fullName, projectHtmlU
   updatedSection = replaceOrAppendLine(updatedSection, 'pr_number', prNumber);
   updatedSection = replaceOrAppendLine(updatedSection, 'full_name', fullName);
   updatedSection = replaceOrAppendLine(updatedSection, 'project_html_url', projectHtmlUrl);
-  fs.writeFileSync(stateFile, content.replace(section, updatedSection));
+  adaptiveSchema.writeFileAtomicReplace(stateFile, content.replace(section, updatedSection));
   return true;
 }
 

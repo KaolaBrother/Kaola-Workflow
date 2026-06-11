@@ -83,12 +83,12 @@ const CONSENT_HALT_MARKER = 'consent_halt: pending';
 // the classifier is renamed in the forks, which would break this file's cross-edition byte-identity).
 function readDurableConsentHalt(planContent) {
   const text = String(planContent || '');
-  const headRe = new RegExp('^##\\s+' + LEDGER_HEADING.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$', 'm');
-  const m = text.match(headRe);
-  if (!m) return false;
-  const after = text.slice(m.index + m[0].length);
-  const nextH2 = after.search(/^##\s/m);
-  const body = nextH2 < 0 ? after : after.slice(0, nextH2);
+  // #354: route through the shared fence-aware locator so an UPSTREAM FENCED `## Node Ledger`
+  // decoy heading cannot be mistaken for the real ledger (the prior `text.match(headRe)` took the
+  // first regex hit, fence-blind). Non-decoy behavior is byte-identical.
+  const { start, next } = locateSection(text, LEDGER_HEADING);
+  if (start < 0) return false;
+  const body = next < 0 ? text.slice(start) : text.slice(start, next);
   return /^consent_halt:[ \t]*pending[ \t]*$/m.test(body);
 }
 
@@ -327,6 +327,76 @@ function writeFileAtomicReplace(filePath, content) {
   return true;
 }
 
+// #354: the SINGLE fence-aware locator for a `## {heading}` markdown section — the one home for
+// ALL `## Node Ledger` / `## Required Agent Compliance` section access across readers/writers.
+// Returns char offsets matching the legacy `content.indexOf('\n## ' + heading)` /
+// `content.indexOf('\n## ', start + 1)` pair, but with FENCE TRACKING in the heading-locator loop so
+// (a) an UPSTREAM FENCED `## {heading}` decoy is skipped and (b) a fenced `## ` line INSIDE the
+// section does not prematurely end it. `start` = offset of the '\n' before the real heading line
+// (-1 when the section is absent, appears only fenced, or sits at file start with no leading '\n');
+// `next` = offset of the '\n' before the next fence-depth-0 `## ` heading after it (-1 → EOF).
+// PURE String ops only — NO classifier import, preserving the ×4 byte-identity contract (see the
+// readDurableConsentHalt note above). Prefix match mirrors the legacy indexOf semantics.
+function locateSection(content, heading) {
+  const lines = String(content).split('\n');
+  const prefix = '## ' + heading;
+  const fenceRe = /^(`{3,}|~{3,})/;
+  let inFence = false, fam = '';
+  let off = 0, start = -1, headingLine = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const ln = lines[i];
+    const fm = ln.trim().match(fenceRe);
+    if (fm) {
+      const f = fm[1][0];
+      if (!inFence) { inFence = true; fam = f; }
+      else if (f === fam) { inFence = false; fam = ''; }
+    } else if (!inFence && i > 0 && ln.startsWith(prefix)) {
+      start = off - 1; headingLine = i; break;
+    }
+    off += ln.length + 1; // +1 for the consumed '\n'
+  }
+  if (start < 0) return { start: -1, next: -1 };
+  let off2 = off + lines[headingLine].length + 1;
+  inFence = false; fam = '';
+  let next = -1;
+  for (let i = headingLine + 1; i < lines.length; i++) {
+    const ln = lines[i];
+    const fm = ln.trim().match(fenceRe);
+    if (fm) {
+      const f = fm[1][0];
+      if (!inFence) { inFence = true; fam = f; }
+      else if (f === fam) { inFence = false; fam = ''; }
+    } else if (!inFence && ln.startsWith('## ')) {
+      next = off2 - 1; break;
+    }
+    off2 += ln.length + 1;
+  }
+  return { start, next };
+}
+
+// #354: the canonical `## Required Agent Compliance` section shape — ONE home for the header/
+// separator/format string (was duplicated near-verbatim in adaptive-node.spliceComplianceRow and
+// parallel-batch.appendComplianceRow). Both now delegate the section-find/append to this helper;
+// the batch-specific row CONSTRUCTION stays in the caller.
+const COMPLIANCE_SECTION    = '## Required Agent Compliance';
+const COMPLIANCE_HEADER_ROW = '| Requirement | Status | Evidence | Skip Reason |';
+const COMPLIANCE_SEPARATOR  = '|-------------|--------|----------|-------------|';
+
+// spliceComplianceSection — append a pre-built row to `## Required Agent Compliance`, creating the
+// section below `## Node Ledger` if absent. Fence-aware (via locateSection). Idempotent creation.
+function spliceComplianceSection(content, row) {
+  const sec = locateSection(content, 'Required Agent Compliance');
+  if (sec.start >= 0) {
+    if (sec.next >= 0) return content.slice(0, sec.next) + '\n' + row + content.slice(sec.next);
+    return content.trimEnd() + '\n' + row + '\n';
+  }
+  // Section absent — create it below `## Node Ledger` (or at EOF if no ledger).
+  const led = locateSection(content, LEDGER_HEADING);
+  const newSection = '\n' + COMPLIANCE_SECTION + '\n\n' + COMPLIANCE_HEADER_ROW + '\n' + COMPLIANCE_SEPARATOR + '\n' + row + '\n';
+  if (led.next >= 0) return content.slice(0, led.next) + newSection + content.slice(led.next);
+  return content.trimEnd() + newSection;
+}
+
 function isLegalWorkflowPath(value, adaptiveEnabled) {
   return (adaptiveEnabled ? WORKFLOW_PATHS : WORKFLOW_PATHS_NO_ADAPTIVE).includes(value);
 }
@@ -376,5 +446,7 @@ module.exports = {
   resolveFanoutCap,
   resolveFanoutCapReadonly,
   writeFileAtomicReplace,
+  locateSection,
+  spliceComplianceSection,
   isLegalWorkflowPath,
 };

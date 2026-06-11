@@ -1099,10 +1099,11 @@ function reconcileLedger(content) {
   const missing = nodes.filter(n => !ledger.has(n.id));
   if (!missing.length) return { content, added: [] };
 
-  const marker = '\n## Node Ledger';
-  const ledgerIdx = content.indexOf(marker);
+  // #354: route through the shared fence-aware locator (was the lone fence-BLIND validator slicer)
+  // so an upstream fenced `## Node Ledger` decoy heading is skipped — parity with parseLedger which
+  // already uses the fence-aware classifier.sectionBody.
+  const { start: ledgerIdx, next: afterLedger } = schema.locateSection(content, schema.LEDGER_HEADING);
   if (ledgerIdx < 0) return { content, added: [] };
-  const afterLedger = content.indexOf('\n## ', ledgerIdx + 1);
   const sectionEnd = afterLedger >= 0 ? afterLedger : content.length;
   const section = content.slice(ledgerIdx, sectionEnd);
 

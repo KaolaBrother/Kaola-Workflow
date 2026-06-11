@@ -561,7 +561,7 @@ function migrateActiveLegacyFolder(workflowDir, project) {
     content = content.replace(/^(next_command:\s*)\/kaola-workflow-phase6(\s+)/m, '$1/kaola-workflow-finalize$2');
     changed = true;
   }
-  if (changed) { fs.writeFileSync(stateFile, content); }
+  if (changed) { adaptiveSchema.writeFileAtomicReplace(stateFile, content); }
 }
 
 function repair(projectArg, startDir) {
@@ -585,7 +585,7 @@ function repair(projectArg, startDir) {
     if (routeResult.project && routeResult.nextCommand &&
         routeResult.nextCommand !== field(existingContent, 'next_command')) {
       routeResult.root = location.root;
-      fs.writeFileSync(stateFilePath, stateContent(routeResult, existingContent), 'utf8');
+      adaptiveSchema.writeFileAtomicReplace(stateFilePath, stateContent(routeResult, existingContent));
       return { repaired: true, stale: true, project: selected.project, phase: routeResult.phase, next_skill: routeResult.nextSkill };
     }
 
@@ -601,7 +601,7 @@ function repair(projectArg, startDir) {
   const result = reconstruct(location.root, location.workflowDir, selected.project);
   if (!result.project) return Object.assign({ repaired: false, project: selected.project }, result);
   result.root = location.root;
-  fs.writeFileSync(stateFilePath, stateContent(result, existingContent), 'utf8');
+  adaptiveSchema.writeFileAtomicReplace(stateFilePath, stateContent(result, existingContent));
   return { repaired: true, project: selected.project, phase: result.phase, next_skill: result.nextSkill };
 }
 

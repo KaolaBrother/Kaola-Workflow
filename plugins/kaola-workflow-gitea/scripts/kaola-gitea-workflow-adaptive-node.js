@@ -40,7 +40,7 @@ const taskMirrorPath = path.join(__dirname, TASK_MIRROR);
 
 // #360: the LEDGER-SCOPED durable consent-halt probe (fence-aware). adaptive-schema keeps the
 // same filename across every edition (byte-identical ×4), so this require is NOT forge-renamed.
-const { readDurableConsentHalt, writeFileAtomicReplace } = require('./kaola-workflow-adaptive-schema');
+const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection } = require('./kaola-workflow-adaptive-schema');
 
 // ---------------------------------------------------------------------------
 // getRoot — resolve the user-repo root via git rev-parse (cwd fallback).
@@ -227,14 +227,14 @@ function appendNodeTiming(planPath, node, event) {
 function spliceLedgerNode(content, nodeId, newStatus, opts) {
   const allowFrom = (opts && Array.isArray(opts.allowFrom)) ? opts.allowFrom : ['pending'];
 
-  const ledgerMarker = '\n## Node Ledger';
-  const ledgerIdx = content.indexOf(ledgerMarker);
+  // #354: fence-aware section location (the single shared locator) — replaces the fence-blind
+  // content.indexOf('\n## Node Ledger') so an upstream fenced decoy heading is skipped.
+  const { start: ledgerIdx, next: afterLedger } = locateSection(content, LEDGER_HEADING);
   if (ledgerIdx < 0) {
     return { content, changed: false, found: false, alreadyAtTarget: false };
   }
 
   // Slice the ledger section from its heading to the next ## heading (or EOF).
-  const afterLedger = content.indexOf('\n## ', ledgerIdx + 1);
   const ledgerBlock = afterLedger >= 0
     ? content.slice(ledgerIdx, afterLedger)
     : content.slice(ledgerIdx);
@@ -311,10 +311,9 @@ function spliceLedgerNode(content, nodeId, newStatus, opts) {
 // ---------------------------------------------------------------------------
 function readLedgerStatuses(content) {
   const out = {};
-  const ledgerMarker = '\n## Node Ledger';
-  const ledgerIdx = content.indexOf(ledgerMarker);
+  // #354: shared fence-aware locator (was a fence-blind indexOf slice).
+  const { start: ledgerIdx, next: afterLedger } = locateSection(content, LEDGER_HEADING);
   if (ledgerIdx < 0) return out;
-  const afterLedger = content.indexOf('\n## ', ledgerIdx + 1);
   const ledgerBlock = afterLedger >= 0 ? content.slice(ledgerIdx, afterLedger) : content.slice(ledgerIdx);
   const rows = ledgerBlock.split('\n').filter(l => l.trim().startsWith('|'));
   if (rows.length < 2) return out;
@@ -332,44 +331,12 @@ function readLedgerStatuses(content) {
 
 // ---------------------------------------------------------------------------
 // spliceComplianceRow — append a row to ## Required Agent Compliance section.
-// Creates the section below ## Node Ledger if absent (idempotent creation).
-// Format: | Requirement | Status | Evidence | Skip Reason |  (canonical repair-state.js shape)
+// #354: delegates to the shared fence-aware spliceComplianceSection in adaptive-schema (the single
+// home for the section shape + find/append), collapsing the duplicate that lived here and in
+// parallel-batch.appendComplianceRow. Creates the section below ## Node Ledger if absent.
 // ---------------------------------------------------------------------------
 function spliceComplianceRow(content, row) {
-  const SECTION = '## Required Agent Compliance';
-  const HEADER_ROW = '| Requirement | Status | Evidence | Skip Reason |';
-  const SEPARATOR  = '|-------------|--------|----------|-------------|';
-  const newRow = row;
-
-  if (content.includes(SECTION)) {
-    // Append the row just before the next ## heading after the section, or at EOF.
-    const sectionIdx = content.indexOf('\n' + SECTION);
-    if (sectionIdx < 0) {
-      // The section is at the very start (unlikely but handle).
-      return content.trimEnd() + '\n' + newRow + '\n';
-    }
-    const nextSection = content.indexOf('\n## ', sectionIdx + 1);
-    if (nextSection >= 0) {
-      // Insert before the next section.
-      const insertAt = nextSection;
-      return content.slice(0, insertAt) + '\n' + newRow + content.slice(insertAt);
-    }
-    // Append at EOF.
-    return content.trimEnd() + '\n' + newRow + '\n';
-  }
-
-  // Section absent — create it below ## Node Ledger.
-  const ledgerMarker = '\n## Node Ledger';
-  const ledgerIdx = content.indexOf(ledgerMarker);
-  const afterLedger = ledgerIdx >= 0 ? content.indexOf('\n## ', ledgerIdx + 1) : -1;
-
-  const newSection = '\n' + SECTION + '\n\n' + HEADER_ROW + '\n' + SEPARATOR + '\n' + newRow + '\n';
-
-  if (afterLedger >= 0) {
-    return content.slice(0, afterLedger) + newSection + content.slice(afterLedger);
-  }
-  // No next ## heading after ledger — append at EOF.
-  return content.trimEnd() + newSection;
+  return spliceComplianceSection(content, row);
 }
 
 // ---------------------------------------------------------------------------
@@ -567,33 +534,10 @@ function runOrient(opts) {
   };
 
   // Enumerate ALL in_progress ledger rows (no early break — AC#5 batch awareness).
-  const ledgerMarker = '\n## Node Ledger';
-  const ledgerIdx = planContent.indexOf(ledgerMarker);
-  const inProgressNodes = [];
-
-  if (ledgerIdx >= 0) {
-    const afterLedger = planContent.indexOf('\n## ', ledgerIdx + 1);
-    const ledgerBlock = afterLedger >= 0
-      ? planContent.slice(ledgerIdx, afterLedger)
-      : planContent.slice(ledgerIdx);
-
-    const rows = ledgerBlock.split('\n').filter(l => l.trim().startsWith('|'));
-    if (rows.length >= 2) {
-      const header = rows[0].split('|').slice(1, -1).map(c => c.trim().toLowerCase());
-      const idIdx = header.indexOf('id');
-      const stIdx = header.indexOf('status');
-      if (idIdx >= 0 && stIdx >= 0) {
-        for (let i = 1; i < rows.length; i++) {
-          const cells = rows[i].split('|').slice(1, -1).map(c => c.trim());
-          const rowId = cells[idIdx] || '';
-          const rowSt = (cells[stIdx] || '').toLowerCase();
-          if (rowSt === 'in_progress') {
-            inProgressNodes.push(rowId);
-          }
-        }
-      }
-    }
-  }
+  // #354: reuse the shared readLedgerStatuses (now fence-aware via locateSection) instead of a
+  // duplicate fence-blind slice + row-walk; Object key order preserves document (row) order.
+  const ledgerStatusMap = readLedgerStatuses(planContent);
+  const inProgressNodes = Object.keys(ledgerStatusMap).filter(id => ledgerStatusMap[id] === 'in_progress');
 
   // Keep the existing single-node fields byte-for-byte unchanged: the first
   // (legacy: only) in_progress row + its cache state.
@@ -1267,8 +1211,8 @@ function runWriteHalt(opts) {
   // #360: ledger-scoped idempotence (was a whole-file `includes`) — a decoy line outside the
   // ledger no longer suppresses writing the real durable marker.
   if (!readDurableConsentHalt(planContent)) {
-    const ledgerMarker = '\n## Node Ledger';
-    const ledgerIdx = planContent.indexOf(ledgerMarker);
+    // #354: shared fence-aware locator (skips an upstream fenced decoy heading).
+    const { start: ledgerIdx } = locateSection(planContent, LEDGER_HEADING);
     if (ledgerIdx >= 0) {
       // Insert after the ## Node Ledger heading line.
       const afterHeading = planContent.indexOf('\n', ledgerIdx + 1);
@@ -1314,10 +1258,9 @@ function runWriteHalt(opts) {
 // mirroring readDurableConsentHalt), so a decoy line elsewhere is never touched.
 // ---------------------------------------------------------------------------
 function removeDurableConsentHalt(planContent) {
-  const ledgerMarker = '\n## Node Ledger';
-  const ledgerIdx = planContent.indexOf(ledgerMarker);
+  // #354: shared fence-aware locator (section-scoped, skips an upstream fenced decoy heading).
+  const { start: ledgerIdx, next: afterIdx } = locateSection(planContent, LEDGER_HEADING);
   if (ledgerIdx < 0) return { content: planContent, changed: false };
-  const afterIdx = planContent.indexOf('\n## ', ledgerIdx + 1);
   const head = planContent.slice(0, ledgerIdx);
   const section = afterIdx >= 0 ? planContent.slice(ledgerIdx, afterIdx) : planContent.slice(ledgerIdx);
   const tail = afterIdx >= 0 ? planContent.slice(afterIdx) : '';
@@ -1744,6 +1687,9 @@ if (require.main === module) {
 
 module.exports = {
   spliceLedgerNode,
+  readLedgerStatuses,
+  spliceComplianceRow,
+  removeDurableConsentHalt,
   checkEvidenceShape,
   validateProjectName,
   runOrient,

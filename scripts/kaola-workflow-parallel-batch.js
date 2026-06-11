@@ -35,6 +35,10 @@
 
 const path = require('path');
 const { execFileSync } = require('child_process');
+// #354: the shared fence-aware compliance-section appender (single home for the section shape).
+// adaptive-schema.js is the byte-identical ×4 anchor (same filename across editions — NOT renamed),
+// so this require is identical in every port.
+const { spliceComplianceSection } = require('./kaola-workflow-adaptive-schema');
 
 // ---------------------------------------------------------------------------
 // Sibling-script filename constants — the ONLY lines the forge forks rename.
@@ -624,31 +628,15 @@ function sealOne(member, ctx) {
 }
 
 // ---------------------------------------------------------------------------
-// appendComplianceRow — append a row to ## Required Agent Compliance (creating the
-// section below ## Node Ledger if absent). Bare-role string for review roles.
+// appendComplianceRow — build the batch member's compliance row (bare-role string for review
+// roles) then delegate the fence-aware section find/append to the shared spliceComplianceSection
+// (#354 dedup — the section shape + create-below-ledger logic lives once in adaptive-schema).
 // ---------------------------------------------------------------------------
 function appendComplianceRow(content, role, nodeId, summary) {
-  const SECTION = '## Required Agent Compliance';
-  const HEADER_ROW = '| Requirement | Status | Evidence | Skip Reason |';
-  const SEPARATOR  = '|-------------|--------|----------|-------------|';
   const bareRoles = ['code-reviewer', 'security-reviewer'];
   const requirementCell = bareRoles.includes(role) ? role : role + ' (' + nodeId + ')';
   const newRow = '| ' + requirementCell + ' | subagent-invoked | ' + summary + ' | |';
-
-  if (content.includes(SECTION)) {
-    const sectionIdx = content.indexOf('\n' + SECTION);
-    if (sectionIdx < 0) return content.trimEnd() + '\n' + newRow + '\n';
-    const nextSection = content.indexOf('\n## ', sectionIdx + 1);
-    if (nextSection >= 0) return content.slice(0, nextSection) + '\n' + newRow + content.slice(nextSection);
-    return content.trimEnd() + '\n' + newRow + '\n';
-  }
-
-  const ledgerMarker = '\n## Node Ledger';
-  const ledgerIdx = content.indexOf(ledgerMarker);
-  const afterLedger = ledgerIdx >= 0 ? content.indexOf('\n## ', ledgerIdx + 1) : -1;
-  const newSection = '\n' + SECTION + '\n\n' + HEADER_ROW + '\n' + SEPARATOR + '\n' + newRow + '\n';
-  if (afterLedger >= 0) return content.slice(0, afterLedger) + newSection + content.slice(afterLedger);
-  return content.trimEnd() + newSection;
+  return spliceComplianceSection(content, newRow);
 }
 
 // ---------------------------------------------------------------------------
@@ -1174,4 +1162,5 @@ module.exports = {
   runReconcile,
   runStatus,
   shellNode,
+  appendComplianceRow,
 };

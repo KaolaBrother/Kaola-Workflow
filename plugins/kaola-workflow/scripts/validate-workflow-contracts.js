@@ -572,6 +572,15 @@ assertIncludes('scripts/kaola-workflow-adaptive-schema.js', 'function writeFileA
 assertIncludes('scripts/kaola-workflow-adaptive-node.js', 'writeFileAtomicReplace');
 assertIncludes('scripts/kaola-workflow-parallel-batch.js', 'writeFileAtomicReplace');
 assertIncludes('scripts/kaola-workflow-claim.js', 'writeFileAtomicReplace');
+// #354 (#353-rest): the two remaining workflow-state writers route through the atomic replace too.
+assertIncludes('scripts/kaola-workflow-repair-state.js', 'writeFileAtomicReplace');
+assertIncludes('scripts/kaola-workflow-sink-pr.js', 'writeFileAtomicReplace');
+// #354: the single fence-aware section slicer is the one home for all `## Node Ledger` /
+// `## Required Agent Compliance` access; readers/writers route through it (no fence-blind indexOf).
+assertIncludes('scripts/kaola-workflow-adaptive-schema.js', 'function locateSection');
+assertIncludes('scripts/kaola-workflow-adaptive-schema.js', 'function spliceComplianceSection');
+assertIncludes('scripts/kaola-workflow-adaptive-node.js', 'locateSection');
+assertIncludes('scripts/kaola-workflow-parallel-batch.js', 'spliceComplianceSection');
 // #359: the shape-gate evidence vocabulary must ORIGINATE in the producing agents' contracts
 // (emission-side pin, the #290 pattern) — so the orchestrator transcribes verbatim, not synthesizes.
 assertIncludes('agents/implementer.md', 'verification_tier');

@@ -3,6 +3,9 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { execFileSync, spawnSync } = require('child_process');
+// #354 (#353-rest): crash-safe atomic durable-state write (tmp + fsync + rename) so a sink-block
+// rewrite can never leave a torn workflow-state.md (silently skipped by readActiveFolders).
+const adaptiveSchema = require('./kaola-workflow-adaptive-schema');
 
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
 const CONFIG_PATH = path.join(os.homedir(), '.config', 'kaola-workflow', 'config.json');
@@ -90,7 +93,7 @@ function updateStateSinkBlock(stateFile, prUrl, prNumber) {
   }
 
   const updated = content.replace(SINK_BLOCK_RE, sinkSection);
-  fs.writeFileSync(stateFile, updated);
+  adaptiveSchema.writeFileAtomicReplace(stateFile, updated);
 }
 
 function appendSummary(summaryFile, prUrl, prNumber) {

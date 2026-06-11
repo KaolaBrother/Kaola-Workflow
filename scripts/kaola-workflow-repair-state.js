@@ -756,7 +756,7 @@ function migrateActiveLegacyFolder(workflowDir, project) {
   }
 
   if (changed) {
-    fs.writeFileSync(stateFile, content);
+    adaptiveSchema.writeFileAtomicReplace(stateFile, content);
   }
 }
 
@@ -791,7 +791,7 @@ function main() {
 
       if (routeResult.nextCommand && routeResult.nextCommand !== field(content, 'next_command')) {
         routeResult.root = root;
-        fs.writeFileSync(stateFile, stateContent(routeResult, content));
+        adaptiveSchema.writeFileAtomicReplace(stateFile, stateContent(routeResult, content));
         printRoute(`Workflow state repair: repaired stale ${path.relative(root, stateFile)}`, routeResult);
         return;
       }
@@ -820,7 +820,7 @@ function main() {
 
   routeResult.root = root;
   const existingContent = exists(stateFile) ? readFile(stateFile) : '';
-  fs.writeFileSync(stateFile, stateContent(routeResult, existingContent));
+  adaptiveSchema.writeFileAtomicReplace(stateFile, stateContent(routeResult, existingContent));
   printRoute(`Workflow state repair: wrote ${path.relative(root, stateFile)}`, routeResult);
 }
 

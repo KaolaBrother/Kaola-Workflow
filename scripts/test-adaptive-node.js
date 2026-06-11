@@ -8,6 +8,9 @@
 // Require the module — will throw "Cannot find module" if not yet written.
 const {
   spliceLedgerNode,
+  readLedgerStatuses,
+  spliceComplianceRow,
+  removeDurableConsentHalt,
   checkEvidenceShape,
   validateProjectName,
   runOrient,
@@ -20,7 +23,7 @@ const {
   runClearHalt,
   shellNode,
 } = require('./kaola-workflow-adaptive-node');
-const { readDurableConsentHalt } = require('./kaola-workflow-adaptive-schema');
+const { readDurableConsentHalt, locateSection } = require('./kaola-workflow-adaptive-schema');
 
 const {
   ORPHAN_LEGALITY_MANIFEST,
@@ -185,6 +188,109 @@ function makeState(opts) {
   const r = spliceLedgerNode(plan, 'nonexistent-node', 'in_progress', { allowFrom: ['pending'] });
   assert(r.found === false, 'T5: found===false for absent node');
   assert(r.changed === false, 'T5: changed===false when not found');
+}
+
+// ---------------------------------------------------------------------------
+// T6 (#354): UPSTREAM-FENCED `## Node Ledger` decoy — the single fence-aware locateSection makes
+// every reader/writer target the REAL ledger, not a fenced decoy heading appearing earlier in the
+// file (strengthens beyond the existing decoy-outside / fenced-inside walkthrough scenarios, which
+// did not cover an upstream-fenced HEADING). Mutation-style: a fence-blind indexOf would target the
+// decoy and either mis-flip nothing or corrupt the fenced block.
+{
+  // A plan whose ## Nodes section contains a FENCED markdown example that itself has a
+  // `## Node Ledger` heading + `consent_halt: pending` line — upstream of the REAL ledger.
+  const decoyPlan = [
+    '# Plan',
+    '## Meta',
+    'plan_hash: x',
+    '## Nodes',
+    '| id | role | depends_on | declared_write_set | est | shape |',
+    '|----|------|-----------|--------------------|-----|-------|',
+    '| impl-core | tdd-guide | — | scripts/x.js | 1 | sequence |',
+    '',
+    'Example (illustrative, fenced — NOT the real ledger):',
+    '```markdown',
+    '## Node Ledger',
+    '| id | status |',
+    '| impl-core | complete |',
+    'consent_halt: pending',
+    '```',
+    '## Node Ledger',
+    '| id | status |',
+    '|----|--------|',
+    '| impl-core | pending |',
+    '## Required Agent Compliance',
+    '',
+    '| Requirement | Status | Evidence | Skip Reason |',
+    '|-------------|--------|----------|-------------|',
+    '',
+  ].join('\n');
+
+  // locateSection finds the REAL ledger (after the fence), not the decoy inside it.
+  const loc = locateSection(decoyPlan, 'Node Ledger');
+  assert(loc.start >= 0, 'T6: locateSection finds a ledger');
+  assert(decoyPlan.slice(loc.start, loc.next).includes('| impl-core | pending |'),
+    'T6: locateSection targets the REAL ledger (pending), not the fenced decoy (complete)');
+  assert(!decoyPlan.slice(loc.start, loc.next).includes('```'),
+    'T6: the located section excludes the fenced decoy block');
+
+  // readLedgerStatuses reads the REAL row (pending), ignoring the fenced decoy (complete).
+  const statuses = readLedgerStatuses(decoyPlan);
+  assert(statuses['impl-core'] === 'pending',
+    'T6: readLedgerStatuses reads the REAL row (pending), not the fenced decoy (complete), got ' + statuses['impl-core']);
+
+  // spliceLedgerNode flips the REAL row; the fenced decoy is untouched.
+  const flip = spliceLedgerNode(decoyPlan, 'impl-core', 'in_progress', { allowFrom: ['pending'] });
+  assert(flip.changed === true && flip.found === true, 'T6: spliceLedgerNode flips the real row');
+  assert(/```markdown[\s\S]*\| impl-core \| complete \|[\s\S]*```/.test(flip.content),
+    'T6: the fenced decoy block is left byte-intact (still shows complete)');
+  assert(readLedgerStatuses(flip.content)['impl-core'] === 'in_progress',
+    'T6: after flip, the REAL ledger row is in_progress');
+
+  // readDurableConsentHalt is NOT fooled by the fenced `consent_halt: pending` decoy (real ledger has none).
+  assert(readDurableConsentHalt(decoyPlan) === false,
+    'T6: readDurableConsentHalt ignores the fenced-decoy consent_halt (real ledger has none)');
+
+  // spliceComplianceRow appends to the REAL compliance section (after the real ledger).
+  const withRow = spliceComplianceRow(decoyPlan, '| code-reviewer | subagent-invoked | ok | |');
+  assert(withRow.includes('| code-reviewer | subagent-invoked | ok | |'),
+    'T6: spliceComplianceRow appended the row');
+  // exactly one real compliance heading (the fenced decoy has none here); row lands after the real ledger.
+  assert(withRow.indexOf('| code-reviewer | subagent-invoked | ok | |') > withRow.lastIndexOf('```'),
+    'T6: the compliance row lands in the REAL section (after the fenced decoy)');
+}
+
+// ---------------------------------------------------------------------------
+// T6b (#354, AC3): `## Nodes` row-walk PARITY — validator.parseNodes(content) and
+// classifier.readPlanNodes(path) must extract the same id/role/depends_on set (both delegate
+// section-slicing to the fence-aware classifier.sectionBody; this pins the row-walk against drift).
+// ---------------------------------------------------------------------------
+{
+  const validator = require('./kaola-workflow-plan-validator');
+  const classifier = require('./kaola-workflow-classifier');
+  const plan = [
+    '## Meta', 'plan_hash: x', '',
+    '## Nodes',
+    '| id | role | depends_on | declared_write_set | est | shape |',
+    '|----|------|-----------|--------------------|-----|-------|',
+    '| a | code-explorer | — | — | 1 | sequence |',
+    '| b | implementer | a | scripts/b.js | 1 | sequence |',
+    '| c | code-reviewer | b | — | 1 | sequence |',
+    '## Node Ledger', '| id | status |', '|----|--------|', '| a | pending |', '',
+  ].join('\n');
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-nodes-parity-'));
+  const planPath = path.join(tmp, 'workflow-plan.md');
+  fs.writeFileSync(planPath, plan);
+  const vNodes = validator.parseNodes(plan);
+  const cNodes = classifier.readPlanNodes(planPath);
+  const sig = n => n.id + ':' + n.role + ':' + (n.dependsOn || []).join(',');
+  const vSig = vNodes.map(sig).join('|');
+  const cSig = cNodes.map(sig).join('|');
+  assert(vSig === 'a:code-explorer:|b:implementer:a|c:code-reviewer:b',
+    'T6b: validator.parseNodes id/role/deps as expected, got ' + vSig);
+  assert(vSig === cSig,
+    'T6b (AC3): validator.parseNodes and classifier.readPlanNodes agree on id/role/deps (parity), v=' + vSig + ' c=' + cSig);
+  try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (_) {}
 }
 
 // ---------------------------------------------------------------------------
