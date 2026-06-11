@@ -25,6 +25,7 @@ const claimScript = path.join(__dirname, 'kaola-gitea-workflow-claim.js');
 const roadmapScript = path.join(__dirname, 'kaola-gitea-workflow-roadmap.js');
 const classifierScript = path.join(__dirname, 'kaola-gitea-workflow-classifier.js');
 const closureAuditScript = path.join(__dirname, 'kaola-gitea-workflow-closure-audit.js');
+const planValidatorScript = path.join(__dirname, 'kaola-gitea-workflow-plan-validator.js');
 
 function withForge(stubs, fn) {
   const originals = {};
@@ -4081,6 +4082,75 @@ function testGiteaFinalizeRowMainDirect338() {
 //   (AC1) a standalone `--forbidden-only <file>...` mode lets a forge-touching node verify its
 //         own changed files (exit 1 on a forbidden token, exit 0 on a clean file) without ever
 //         reaching the count assertions; usage/unknown-flag fails closed (exit 2).
+// #401 Part 1: a behavioral REFUSAL ANCHOR for the Gitea plan-validator port. The forge
+// walkthroughs exercise only --freeze happy paths, so a forge-side regression in the
+// #381/#382 write-set + model refusals would pass all four chains today (#347 drift class).
+// This drives the REAL forge plan-validator --json CLI over a refusal matrix and asserts the
+// typed refusal each time (runNodeRaw, NOT runNode — refusals exit 1), plus a green anchor
+// proving the matrix does not over-refuse a legitimate plan.
+function testGiteaPlanValidatorRefusalMatrix401() {
+  const root = tempRoot('kw-ge-planval-refuse-');
+  const planHeader = [
+    '# Workflow Plan', '', '## Meta', 'labels: enhancement', '', '## Nodes', ''
+  ];
+  const sixCol = (writeSet) => planHeader.concat([
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+    '| e | code-explorer | — | — | 1 | sequence |',
+    `| i | tdd-guide | e | ${writeSet} | 1 | sequence |`,
+    '| r | code-reviewer | i | — | 1 | sequence |',
+    '| d | finalize | r | — | 1 | sequence |', ''
+  ]).join('\n');
+  // 7-col plan carrying an invalid model tier (haiku) on the first node.
+  const sevenColModel = planHeader.concat([
+    '| id | role | depends_on | declared_write_set | cardinality | shape | model |',
+    '|---|---|---|---|---|---|---|',
+    '| e | code-explorer | — | — | 1 | sequence | haiku |',
+    '| i | tdd-guide | e | lib/x.js | 1 | sequence | — |',
+    '| r | code-reviewer | i | — | 1 | sequence | — |',
+    '| d | finalize | r | — | 1 | sequence | — |', ''
+  ]).join('\n');
+
+  const runJson = (planText) => {
+    const planPath = path.join(root, 'workflow-plan.md');
+    fs.writeFileSync(planPath, planText);
+    const r = runNodeRaw([planValidatorScript, planPath, '--json'], root);
+    return { status: r.status, parsed: JSON.parse(r.stdout) };
+  };
+
+  try {
+    // (a) directory-shaped write-set entry → refuse /directory-shaped/.
+    const dir = runJson(sixCol('src/'));
+    assert.strictEqual(dir.status, 1, '#401 ge: directory-shaped write-set must exit 1');
+    assert.strictEqual(dir.parsed.result, 'refuse', '#401 ge: directory-shaped must be a typed refusal');
+    assert.ok(/directory-shaped/.test(dir.parsed.errors.join('; ')),
+      '#401 ge: directory-shaped refusal message expected, got: ' + JSON.stringify(dir.parsed.errors));
+
+    // (b) path-traversal write-set entry → refuse /contains '..'/.
+    const trav = runJson(sixCol('src/../b.js'));
+    assert.strictEqual(trav.status, 1, "#401 ge: '..' write-set must exit 1");
+    assert.strictEqual(trav.parsed.result, 'refuse', "#401 ge: '..' must be a typed refusal");
+    assert.ok(/contains '\.\.'/.test(trav.parsed.errors.join('; ')),
+      "#401 ge: \"contains '..'\" refusal message expected, got: " + JSON.stringify(trav.parsed.errors));
+
+    // (c) invalid model tier (7-col) → refuse /model_invalid/.
+    const model = runJson(sevenColModel);
+    assert.strictEqual(model.status, 1, '#401 ge: invalid model tier must exit 1');
+    assert.strictEqual(model.parsed.result, 'refuse', '#401 ge: invalid model must be a typed refusal');
+    assert.ok(/model_invalid/.test(model.parsed.errors.join('; ')),
+      '#401 ge: model_invalid refusal message expected, got: ' + JSON.stringify(model.parsed.errors));
+
+    // green anchor: an exact-file plan must NOT be refused (no false-refusal regression).
+    const green = runJson(sixCol('lib/x.js'));
+    assert.strictEqual(green.status, 0, '#401 ge: a clean exact-file plan must exit 0 (no false refusal)');
+    assert.strictEqual(green.parsed.result, 'in-grammar',
+      '#401 ge: a clean exact-file plan must be in-grammar, got: ' + JSON.stringify(green.parsed.result));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+  console.log('testGiteaPlanValidatorRefusalMatrix401 (#401): PASSED');
+}
+
 // The forbidden fixture token is built by string concatenation because the validator's own
 // plugin-script scan forbids a literal `\bglab\b` in any .js file (this test included).
 function testForbiddenOnly341() {
@@ -4146,6 +4216,7 @@ testGiteaTaskMirror266();
 testGiteaCompactResume266();
 testGiteaForeignArchiveBarrier261();
 testGiteaMirrorCleanCrossRef339();
+testGiteaPlanValidatorRefusalMatrix401();
 testForbiddenOnly341();
 
 testGiteaRoadmapInitIssueExclusiveAndUpdate()

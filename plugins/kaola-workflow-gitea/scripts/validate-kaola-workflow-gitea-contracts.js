@@ -539,6 +539,8 @@ assertIncludes(`${pluginRoot}/scripts/kaola-gitea-workflow-roadmap.js`, "sub ===
 assertIncludes(`${pluginRoot}/scripts/kaola-gitea-workflow-roadmap.js`, 'function validateRemote');
 assertIncludes(`${pluginRoot}/scripts/kaola-gitea-workflow-roadmap.js`, 'cmdValidateRemote');
 assertIncludes(`${pluginRoot}/scripts/test-gitea-workflow-scripts.js`, 'testGiteaRoadmapValidateRemote');
+// #401 Part 1: the forge plan-validator refusal-matrix anchor must remain wired into the suite.
+assertIncludes(`${pluginRoot}/scripts/test-gitea-workflow-scripts.js`, 'testGiteaPlanValidatorRefusalMatrix401');
 
 // Gitea forge pair CLAUDE.md template must be byte-identical
 const giteaCmdTemplate = extractClaudeTemplate(`${pluginRoot}/commands/workflow-init.md`);

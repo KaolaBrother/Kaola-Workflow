@@ -65,3 +65,4 @@ The bundle lane (`--target-issues` / `KAOLA_TARGET_ISSUES` / `issue-scout`) span
 ## Release
 
 - Before merging a version bump, create the matching local git tag (`git tag kaola-workflow--v<version> <sha>`); `npm test` enforces the tag exists (unless `KAOLA_WORKFLOW_OFFLINE=1`).
+- Push the tag explicitly BEFORE `gh release create` (issue #402). An unpushed tag makes `gh release create` create the remote tag at the default-branch tip — a different commit than the local tag target. `npm test` also enforces the tag's commit is an ancestor of HEAD: a release stack rebased after tagging orphans the tag onto the pre-rebase commit, so re-point it (`git tag -f kaola-workflow--v<version> <new-sha>`) and force-push the moved tag (`git push --force origin kaola-workflow--v<version>`) after any rebase.

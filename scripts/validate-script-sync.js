@@ -21,11 +21,14 @@ const codexDir = path.join(repoRoot, 'plugins', 'kaola-workflow', 'scripts');
 //     roadmap sync). A previous "sync everything" pass (commit 308f747) clobbered
 //     the Codex variant with the Claude one; do not repeat that.
 //
-//   kaola-workflow-compact-context.js (Claude-only) —
-//     this implements the Claude Code compact-context hook that has no Codex equivalent.
-//     The Codex simulation invokes kaola-workflow-compact-context.js via a repo-root
-//     absolute path (see `plugins/kaola-workflow/scripts/simulate-kaola-workflow-walkthrough.js`),
-//     so no plugin-local copy is needed.
+//   kaola-workflow-compact-context.js — NOT Claude-only (issue #401 Part 3 corrected this
+//     formerly-stale rationale). A plugin-local copy EXISTS at
+//     plugins/kaola-workflow/scripts/kaola-workflow-compact-context.js and is byte-identical to
+//     the canonical script; the gitlab/gitea forges carry rename-normalized ports
+//     (kaola-{forge}-workflow-compact-context.js). The whole family is now covered: canonical
+//     <-> codex in the BYTE_IDENTICAL_GROUPS below, the forge ports in RENAME_NORMALIZED_FAMILIES.
+//     It is therefore NOT in COMMON_SCRIPTS to avoid duplicate enforcement (the byte group already
+//     enforces the claude<->codex parity COMMON_SCRIPTS would).
 //
 //   validate-kaola-workflow-contracts.js (Codex-only) — Codex contract validator;
 //     the Claude validator is validate-workflow-contracts.js (in the allowlist below).
@@ -117,6 +120,19 @@ const BYTE_IDENTICAL_GROUPS = [
     ],
   },
   {
+    // issue #401 Part 3: the compact-context hook's canonical<->codex pair. The script carries
+    // no forge identity strings, so the codex copy is byte-identical to canonical (the gitlab/gitea
+    // forge ports — kaola-{forge}-workflow-compact-context.js — are covered separately under
+    // RENAME_NORMALIZED_FAMILIES because they live at a forge-renamed PATH, not a renamed body).
+    // This closes the live drift where the forge ports carried backticked `fast-summary.md` that
+    // canonical+codex did not, and nothing guarded the family.
+    label: 'compact-context base-name copies',
+    files: [
+      'scripts/kaola-workflow-compact-context.js',
+      'plugins/kaola-workflow/scripts/kaola-workflow-compact-context.js',
+    ],
+  },
+  {
     label: 'subagent-dispatch-log hook copies',
     files: [
       'hooks/kaola-workflow-subagent-dispatch-log.sh',
@@ -174,6 +190,50 @@ const BYTE_IDENTICAL_GROUPS = [
   },
 ];
 
+// issue #401 Part 3: SELF-CONTAINED rename-normalized families — forge ports that live at a
+// forge-RENAMED path (kaola-{forge}-workflow-X.js) and are body-identical to a base-named
+// reference after the path-rename `kaola-workflow-` -> `kaola-{forge}-workflow-` is normalized
+// out. Deliberately NOT routed through edition-sync.js GENERATED_AGGREGATORS (the @generated /
+// regeneration class) — these are hand-ported NON-aggregator scripts, and promoting them into
+// edition generation would collide with the #407 install.sh single-source manifest plumbing and
+// the deferred plan-validator promotion (#401 Part 2). This check is whole-file: it normalizes the
+// reference's body for each forge and byte-compares against the committed port. `reference` is the
+// base-named source; each `port` declares its forge + on-disk path.
+const RENAME_NORMALIZED_FAMILIES = [
+  {
+    // compact-context forge ports: the script body carries no identity strings, so the
+    // rename is a no-op and the ports are byte-identical to canonical — but they live at a
+    // forge-renamed PATH, so they cannot ride the base-name BYTE_IDENTICAL_GROUP above.
+    label: 'compact-context forge ports',
+    reference: 'scripts/kaola-workflow-compact-context.js',
+    ports: [
+      { forge: 'gitlab', file: 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-compact-context.js' },
+      { forge: 'gitea', file: 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-compact-context.js' },
+    ],
+  },
+  {
+    // codex-compact-resume: a 3-tree family with NO root canonical. The codex copy is the
+    // reference; the gitlab/gitea ports are rename-normalized identical (the only identity
+    // string is the script's own base name in the header). Brought under coverage with no
+    // content edit (rename-normalized identical at HEAD).
+    label: 'codex-compact-resume forge ports',
+    reference: 'plugins/kaola-workflow/scripts/kaola-workflow-codex-compact-resume.js',
+    ports: [
+      { forge: 'gitlab', file: 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-codex-compact-resume.js' },
+      { forge: 'gitea', file: 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-codex-compact-resume.js' },
+    ],
+  },
+];
+
+// Normalize a base-named reference body into its forge-renamed form: every
+// `kaola-workflow-<NAME>` token becomes `kaola-<forge>-workflow-<NAME>`. Bounded by a
+// non-name-char lookahead so it never partial-matches a longer token or the
+// `kaola-workflow/` state directory (mirrors edition-sync.js renderForgePort's rename pass).
+function renameNormalize(referenceText, forge) {
+  return referenceText.replace(/kaola-workflow-([a-z0-9-]+)(?![a-zA-Z0-9-])/g,
+    (_m, name) => `kaola-${forge}-workflow-${name}`);
+}
+
 function readOrNull(p) {
   try { return fs.readFileSync(p); } catch { return null; }
 }
@@ -209,8 +269,29 @@ if (require.main === module) {
     }
   }
 
+  // issue #401 Part 3: rename-normalized forge-port families (self-contained; not edition-sync).
+  for (const fam of RENAME_NORMALIZED_FAMILIES) {
+    const referenceText = readOrNull(path.join(repoRoot, fam.reference));
+    if (referenceText === null) {
+      missing.push(fam.reference);
+      continue;
+    }
+    const refStr = referenceText.toString('utf8');
+    for (const port of fam.ports) {
+      const portText = readOrNull(path.join(repoRoot, port.file));
+      if (portText === null) {
+        missing.push(port.file);
+        continue;
+      }
+      const expected = renameNormalize(refStr, port.forge);
+      if (portText.toString('utf8') !== expected) {
+        drift.push(`${fam.label}: ${port.file} differs from ${fam.reference} (rename-normalized for ${port.forge})`);
+      }
+    }
+  }
+
   if (missing.length === 0 && drift.length === 0) {
-    console.log(`OK: ${COMMON_SCRIPTS.length} common scripts and ${BYTE_IDENTICAL_GROUPS.length} byte-identical file group in sync.`);
+    console.log(`OK: ${COMMON_SCRIPTS.length} common scripts, ${BYTE_IDENTICAL_GROUPS.length} byte-identical groups, and ${RENAME_NORMALIZED_FAMILIES.length} rename-normalized families in sync.`);
     process.exit(0);
   }
 
@@ -230,4 +311,4 @@ if (require.main === module) {
   process.exit(1);
 }
 
-module.exports = { COMMON_SCRIPTS, BYTE_IDENTICAL_GROUPS };
+module.exports = { COMMON_SCRIPTS, BYTE_IDENTICAL_GROUPS, RENAME_NORMALIZED_FAMILIES, renameNormalize };

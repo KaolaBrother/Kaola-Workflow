@@ -532,6 +532,8 @@ assertIncludes(`${pluginRoot}/scripts/kaola-gitlab-workflow-roadmap.js`, "sub ==
 assertIncludes(`${pluginRoot}/scripts/kaola-gitlab-workflow-roadmap.js`, 'function validateRemote');
 assertIncludes(`${pluginRoot}/scripts/kaola-gitlab-workflow-roadmap.js`, 'cmdValidateRemote');
 assertIncludes(`${pluginRoot}/scripts/test-gitlab-workflow-scripts.js`, 'testGitLabRoadmapValidateRemote');
+// #401 Part 1: the forge plan-validator refusal-matrix anchor must remain wired into the suite.
+assertIncludes(`${pluginRoot}/scripts/test-gitlab-workflow-scripts.js`, 'testGitlabPlanValidatorRefusalMatrix401');
 
 // GitLab forge pair CLAUDE.md template must be byte-identical
 const gitlabCmdTemplate = extractClaudeTemplate(`${pluginRoot}/commands/workflow-init.md`);

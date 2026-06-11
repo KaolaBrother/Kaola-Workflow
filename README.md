@@ -525,8 +525,23 @@ git tag kaola-workflow--v<X.Y.Z> <release-commit>
 #    (including Codex manifest versions) matches the tag.
 npm test
 
-# 4. Push only the new tag by name.
+# 4. Push the new tag by name — BEFORE `gh release create`. An unpushed tag
+#    makes `gh release create` create the REMOTE tag at the default-branch tip
+#    (a different commit than your local tag target). npm test enforces the tag
+#    is an ancestor of HEAD (issue #402), so a rebased-but-not-re-pointed tag reds.
 git push origin kaola-workflow--v<X.Y.Z>
+
+# 5. Only now publish the GitHub Release against the pushed tag.
+gh release create kaola-workflow--v<X.Y.Z> --latest --notes-from-tag
+```
+
+If the release stack is rebased after tagging (origin advanced), the tag is
+orphaned onto the pre-rebase commit. Re-point it onto the new release commit and
+force-push the moved tag before publishing:
+
+```bash
+git tag -f kaola-workflow--v<X.Y.Z> <new-release-commit>
+git push --force origin kaola-workflow--v<X.Y.Z>
 ```
 
 **Note:** the full `npm test` requires the release tag to exist **and** to match

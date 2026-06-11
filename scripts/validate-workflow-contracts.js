@@ -569,6 +569,26 @@ if (process.env.KAOLA_WORKFLOW_OFFLINE !== '1' && exists('.git')) {
       '). Create it locally with: git tag ' + tagName + ' <release-commit-sha>'
   );
 
+  // issue #402: the tag's commit must be an ANCESTOR of HEAD. A bare tag-existence
+  // check passes a tag orphaned by an origin-advance rebase of the release stack
+  // (the tag keeps pointing at the pre-rebase commit; post-rebase content is
+  // identical so the surface-drift check stays silent) — and a `gh release create`
+  // run on an UNPUSHED tag creates the remote tag at the default-branch tip, a
+  // different commit. Both are caught by requiring tag-target ⊆ HEAD's history.
+  // INERT when the tag is absent (handled above) or ancestry is indeterminate
+  // (shallow clone / git error); only a definitive "not an ancestor" reds.
+  const { tagAncestry } = require('./release-surface-drift');
+  const ancestry = tagAncestry(root, tagName, 'HEAD');
+  assert(
+    ancestry.ok,
+    'Release tag "' + tagName + '" points at ' + (ancestry.tagSha || '<unknown>') +
+      ', which is NOT an ancestor of HEAD (' + ancestry.reason + '). The release stack was ' +
+      'likely rebased after tagging, orphaning the tag. Re-point it onto the current release ' +
+      'commit with: git tag -f ' + tagName + ' <release-commit-sha>, and push the tag explicitly ' +
+      'BEFORE `gh release create` (an unpushed tag makes gh create the remote tag at the ' +
+      'default-branch tip, a different commit). After a rebase, force-push the re-pointed tag.'
+  );
+
   // issue #193 (Branch A): the root tag owns the entire release surface, including
   // the independently-numbered Codex manifest versions. Fail when a Codex manifest
   // version moved after the tag — that surface must ride a new root version + tag.

@@ -8354,6 +8354,39 @@ function testContractValidatorMissingTag() {
   }
 }
 
+// issue #402: the release-tag-is-ancestor-of-HEAD guard. Pure-function coverage
+// with injected git primitives (no real repo): an ancestor tag passes, an
+// orphaned (rebased) tag reds, an absent or indeterminate tag stays inert so a
+// legitimately-tagged release never false-fails.
+function testTagAncestorGuard402() {
+  const { tagAncestry } = require('./release-surface-drift');
+  // Ancestor tag -> ok:true reason ok.
+  const ok = tagAncestry('/repo', 'kaola-workflow--v1.0.0', 'HEAD', {
+    tagTarget: () => 'deadbee', isAncestor: () => true,
+  });
+  assert(ok.ok === true && ok.reason === 'ok',
+    '#402: an ancestor tag must pass, got ' + JSON.stringify(ok));
+  // Orphaned tag (rebase hazard) -> ok:false reason tag_not_ancestor_of_head.
+  const orphan = tagAncestry('/repo', 'kaola-workflow--v1.0.0', 'HEAD', {
+    tagTarget: () => 'orphan1', isAncestor: () => false,
+  });
+  assert(orphan.ok === false && orphan.reason === 'tag_not_ancestor_of_head',
+    '#402: an orphaned tag must red, got ' + JSON.stringify(orphan));
+  // Absent tag -> inert ok:true reason tag_absent (existing tag-existence assert owns absence).
+  const absent = tagAncestry('/repo', 'kaola-workflow--vNONE', 'HEAD', {
+    tagTarget: () => null, isAncestor: () => false,
+  });
+  assert(absent.ok === true && absent.reason === 'tag_absent',
+    '#402: an absent tag must stay inert, got ' + JSON.stringify(absent));
+  // Indeterminate ancestry (shallow clone / git error) -> inert ok:true.
+  const indet = tagAncestry('/repo', 'kaola-workflow--v1.0.0', 'HEAD', {
+    tagTarget: () => 'shallow', isAncestor: () => null,
+  });
+  assert(indet.ok === true && indet.reason === 'ancestry_indeterminate',
+    '#402: an indeterminate ancestry must stay inert, got ' + JSON.stringify(indet));
+  console.log('testTagAncestorGuard402: PASSED');
+}
+
 // ---------------------------------------------------------------------------
 // Issue #223 — three lifecycle fixes (tests written first, RED before fixes)
 // ---------------------------------------------------------------------------
@@ -11069,6 +11102,7 @@ function buildRegistry() {
   add('testContractValidatorOfflineSkip',                 testContractValidatorOfflineSkip);
   add('testContractValidatorReflowTolerant',              testContractValidatorReflowTolerant);
   add('testContractValidatorMissingTag',                  testContractValidatorMissingTag);
+  add('testTagAncestorGuard402',                          testTagAncestorGuard402);
   add('testWatchPrAbandonedClosureInvariantsClean',       testWatchPrAbandonedClosureInvariantsClean);
   add('testClaimReclaimsStatelessOrphanDir',              testClaimReclaimsStatelessOrphanDir);
   add('testPatchBranchGuards',                            testPatchBranchGuards);

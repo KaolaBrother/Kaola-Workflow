@@ -9,7 +9,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { detectCodexReleaseSurfaceDrift } = require('./release-surface-drift');
+const { detectCodexReleaseSurfaceDrift, tagAncestry } = require('./release-surface-drift');
 
 let passed = 0;
 function assert(cond, msg) {
@@ -42,4 +42,44 @@ assert(absent.length === 1 && absent[0].tagged == null,
   'a manifest absent at the tag must report drift with tagged=null');
 
 fs.rmSync(tmp, { recursive: true, force: true });
+
+// issue #402: tagAncestry — the release tag must point at an ancestor of HEAD.
+// Injected git primitives so the comparison runs without a real repo.
+
+// 4. Tag IS an ancestor of HEAD -> ok:true reason 'ok'.
+const ancestor = tagAncestry('/repo', 'kaola-workflow--v9.9.9', 'HEAD', {
+  tagTarget: () => 'aaaaaaa',
+  isAncestor: () => true,
+});
+assert(ancestor.ok === true && ancestor.reason === 'ok' && ancestor.tagSha === 'aaaaaaa',
+  'an ancestor tag must report ok:true reason:ok, got ' + JSON.stringify(ancestor));
+
+// 5. Tag is ORPHANED (present but not an ancestor — the rebase hazard) -> ok:false.
+const orphaned = tagAncestry('/repo', 'kaola-workflow--v9.9.9', 'HEAD', {
+  tagTarget: () => 'bbbbbbb',
+  isAncestor: () => false,
+});
+assert(orphaned.ok === false && orphaned.reason === 'tag_not_ancestor_of_head' && orphaned.tagSha === 'bbbbbbb',
+  'an orphaned tag must report ok:false reason:tag_not_ancestor_of_head, got ' + JSON.stringify(orphaned));
+
+// 6. Tag ABSENT (rev-list could not resolve it) -> inert ok:true reason 'tag_absent';
+//    isAncestor must never be consulted (the existing tag-existence assert owns absence).
+let ancestorProbed = false;
+const noTag = tagAncestry('/repo', 'kaola-workflow--vNONE', 'HEAD', {
+  tagTarget: () => null,
+  isAncestor: () => { ancestorProbed = true; return false; },
+});
+assert(noTag.ok === true && noTag.reason === 'tag_absent' && noTag.tagSha === null,
+  'an absent tag must be inert ok:true reason:tag_absent, got ' + JSON.stringify(noTag));
+assert(ancestorProbed === false,
+  'an absent tag must short-circuit before the ancestry probe');
+
+// 7. Ancestry INDETERMINATE (shallow clone / git error -> null) -> inert ok:true.
+const indeterminate = tagAncestry('/repo', 'kaola-workflow--v9.9.9', 'HEAD', {
+  tagTarget: () => 'ccccccc',
+  isAncestor: () => null,
+});
+assert(indeterminate.ok === true && indeterminate.reason === 'ancestry_indeterminate',
+  'an indeterminate ancestry must stay inert ok:true, got ' + JSON.stringify(indeterminate));
+
 console.log('Release-surface drift regression passed (' + passed + ' assertions)');
