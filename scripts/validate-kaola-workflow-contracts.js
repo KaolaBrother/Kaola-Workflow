@@ -565,7 +565,15 @@ function deriveCodexRoleCatalog() {
   const roles = [];
   const re = /^\[agents\.([a-z0-9-]+)\]/gm;
   let m;
-  while ((m = re.exec(templateText)) !== null) roles.push(m[1]);
+  // #405: the generated <role>-max xhigh effort variants are machine-derived dispatch profiles, not
+  // catalog roles — exclude them from the README role-list / reasoning-table contract (the README
+  // documents the base role set). The bijection guard below still pins every -max file 1:1 to a table,
+  // and the derivation guard below pins each -max file to variantProfileText(base) — so they stay
+  // fully covered without polluting the human-facing catalog.
+  while ((m = re.exec(templateText)) !== null) {
+    if (m[1].endsWith('-max')) continue;
+    roles.push(m[1]);
+  }
   const efforts = {};
   for (const role of roles) {
     const toml = read(`${pluginRoot}/agents/${role}.toml`);
@@ -643,6 +651,40 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'full ac
     (missingTables.length ? ' — profiles missing a [agents.*] table: ' + missingTables.join(', ') : '') +
     (danglingTables.length ? ' — [agents.*] tables with no profile: ' + danglingTables.join(', ') : ''));
 }
+
+// #405 (#382 deferred half): the <role>-max xhigh effort-variant derivation guard. Each committed
+// agents/<role>-max.toml MUST byte-equal variantProfileText(base, role) for an OPUS_ELIGIBLE_ROLE,
+// and EVERY OPUS_ELIGIBLE_ROLE must have its -max file + [agents.<role>-max] table. Pins the generated
+// profiles to their deterministic derivation: a hand-edit, a drifted base, or a missing/extra variant
+// reds this chain. Enumeration-free in the membership sense (membership lives in the ×4 schema anchor).
+{
+  const { OPUS_ELIGIBLE_ROLES, variantProfileText } = require(
+    path.join(root, pluginRoot, 'scripts', 'kaola-workflow-adaptive-schema.js'));
+  const configText = read(`${pluginRoot}/config/agents.toml`);
+  for (const role of OPUS_ELIGIBLE_ROLES) {
+    const baseFile = `${pluginRoot}/agents/${role}.toml`;
+    const variantFile = `${pluginRoot}/agents/${role}-max.toml`;
+    assert(exists(baseFile), `#405: OPUS_ELIGIBLE_ROLE base profile missing: ${baseFile}`);
+    assert(exists(variantFile), `#405: missing generated effort variant ${variantFile} (run install-codex-agent-profiles.js --generate-variants)`);
+    const expected = variantProfileText(read(baseFile), role);
+    assert(read(variantFile) === expected,
+      `#405: ${variantFile} is not the deterministic variantProfileText(${role}) derivation — regenerate via --generate-variants`);
+    assert(new RegExp(`^\\[agents\\.${role}-max\\]`, 'm').test(configText),
+      `#405: config/agents.toml missing [agents.${role}-max] table for the generated variant`);
+  }
+  // No -max profile may exist for a NON-eligible role (catches a stray generated file).
+  const strayMax = fs.readdirSync(path.join(root, pluginRoot, 'agents'))
+    .filter(f => f.endsWith('-max.toml'))
+    .map(f => f.slice(0, -'-max.toml'.length))
+    .filter(r => !OPUS_ELIGIBLE_ROLES.includes(r));
+  assert(strayMax.length === 0,
+    '#405: found -max profile(s) for non-OPUS_ELIGIBLE_ROLES: ' + strayMax.join(', '));
+}
+
+// #405: the plan-run SKILL must carry the tier→profile dispatch prose — `model: opus` on an
+// eligible role selects `<role>-max`, and a missing variant degrades to base with a visible note.
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '<role>-max');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'model_variant_missing');
 
 // #334: the non-delegable main-session-gate role token + its G3 freeze gate + authoring/dispatch
 // prose, pinned in the codex copies (schema, validator, plan-run SKILL, planner TOML).

@@ -105,8 +105,12 @@ The current session then **judges** the resume branch:
 - otherwise the ready set from `next-action` (each node carrying its resolved `model`) drives the loop:
   nodes whose `status != complete` and all of whose `depends_on` are `complete` with resolved compliance.
   The resolved `model` reflects the #382 precedence — the plan's per-node `model` tier ({opus|sonnet})
-  beats the install profile. On Codex the tier currently selects the role's base profile (the dedicated
-  `<role>-max` xhigh effort-variant mapping is a tracked follow-up); the tier never breaks dispatch.
+  beats the install profile. On Codex (#405) the tier maps to a reasoning-effort variant profile: a
+  node with `model: opus` on an OPUS_ELIGIBLE_ROLE (planner, code-architect, tdd-guide, code-reviewer,
+  security-reviewer, adversarial-verifier) dispatches the committed `<role>-max` xhigh effort variant;
+  `model: sonnet`/absent — or `opus` on a non-eligible role with no `-max` profile — stays on the base
+  profile (a missing variant degrades gracefully with a visible `model_variant_missing: <role>-max →
+  base` note). The tier never breaks dispatch.
   When no node is `in_progress` (e.g. a crash between a node's commit and its fused advance left the next
   node unopened), **re-enter at step 1** to open the next ready node.
 
@@ -250,7 +254,14 @@ wall-clock via node-timings.jsonl (#373); the cross-lane write+read overlap stay
 
 2. **dispatch** the node's role (current session — Codex delegates to the matching agent profile by
    role name; the role's `model_reasoning_effort` tier in its `agents/<role>.toml` profile is the
-   model signal). Pass
+   model signal). **Tier → profile selection (#405):** when the opened node's resolved `model` is
+   `opus` AND the role is an OPUS_ELIGIBLE_ROLE (planner, code-architect, tdd-guide, code-reviewer,
+   security-reviewer, adversarial-verifier), delegate to the `<role>-max` profile (the xhigh
+   effort variant) instead of the base `<role>` profile. When `model` is `sonnet`/absent, delegate to
+   the base `<role>` profile. If `model: opus` resolves for a role with no committed `<role>-max`
+   profile (a non-eligible role), delegate to the base profile and surface a visible
+   `model_variant_missing: <role>-max → base` note in the run log — degrade gracefully, never block.
+   Pass
    `Working directory: ${ACTIVE_WORKTREE_PATH}` to every role delegation so the relative plan path
    resolves inside the worktree.
 

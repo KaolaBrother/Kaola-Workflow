@@ -64,6 +64,11 @@ const COMMON_SCRIPTS = [
   // #266 AC-C: workflow-tasks.json generator (base-named claude↔codex pair; gitlab/gitea
   // are edition-named ports — kaola-{forge}-workflow-task-mirror.js — NOT byte-synced)
   'kaola-workflow-task-mirror.js',
+  // #407: install.sh SUPPORT_*_NAMES single-source manifest. Required by the byte-identical
+  // validate-workflow-contracts.js (claude↔codex), so the codex copy must carry it too — module
+  // load is side-effect-free (repoRoot is computed but no fs access until a function is called),
+  // and only the claude validator (run from repo-root scripts/) ever invokes its probes.
+  'kaola-workflow-install-manifest.js',
 ];
 
 const BYTE_IDENTICAL_GROUPS = [

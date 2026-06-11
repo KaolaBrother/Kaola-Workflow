@@ -22,6 +22,26 @@ function assertIncludes(file, needle) {
   assert(norm(read(file)).includes(norm(needle)), file + ' must include: ' + needle);
 }
 
+// #407: the per-forge install allowlist is single-sourced from the install manifest (install.sh no
+// longer carries literal SUPPORT_*_NAMES arrays). A script/hook is "in the install allowlist" iff the
+// manifest emits it for SOME forge. These helpers re-target the old `assertIncludes('install.sh', …)`
+// registration checks onto the manifest — same intent (this script ships in a manual install), correct
+// source. Also (surface-undercount close): every per-forge plugin scripts/ SHARED script must be
+// emitted by the manifest for that forge, so a new edition-named port can't dangle uninstalled.
+const installManifest = require('./kaola-workflow-install-manifest.js');
+function manifestEmitsScript(name) {
+  return installManifest.FORGES.some(f => installManifest.supportScripts(f).includes(name));
+}
+function manifestEmitsHook(name) {
+  return installManifest.FORGES.some(f => installManifest.supportHooks(f).includes(name));
+}
+function assertManifestScript(name) {
+  assert(manifestEmitsScript(name), 'install manifest must emit support script for some forge: ' + name);
+}
+function assertManifestHook(name) {
+  assert(manifestEmitsHook(name), 'install manifest must emit support hook for some forge: ' + name);
+}
+
 function assertNotIncludes(file, needle) {
   assert(!read(file).includes(needle), file + ' must not include: ' + needle);
 }
@@ -281,9 +301,9 @@ assertIncludes('hooks/hooks.json', 'kaola-workflow:write-lane');
 assertIncludes('hooks/kaola-workflow-write-lane.sh', 'KAOLA_LANE_CONTAINMENT');
 assertIncludes('hooks/kaola-workflow-write-lane.sh', 'running-set.json');
 assertIncludes('scripts/kaola-workflow-adaptive-schema.js', 'function resolveLaneContainment');
-assertIncludes('install.sh', 'kaola-workflow-write-lane.sh');
-assertIncludes('install.sh', 'kaola-workflow-active-folders.js');
-assertIncludes('install.sh', 'kaola-workflow-resolve-agent-model.js');
+assertManifestHook('kaola-workflow-write-lane.sh');           // #407: was install.sh literal
+assertManifestScript('kaola-workflow-active-folders.js');     // #407: was install.sh literal
+assertManifestScript('kaola-workflow-resolve-agent-model.js'); // #407: was install.sh literal
 assertIncludes('uninstall.sh', 'subagentStatusLine');
 assertNotIncludes('install.sh', 'kaola-workflow-session-env.js');
 assert(exists('scripts/kaola-workflow-resolve-agent-model.js'), 'agent model resolver is missing');
@@ -619,30 +639,29 @@ assertIncludes('scripts/kaola-workflow-parallel-batch.js', 'spliceComplianceSect
 assertIncludes('agents/implementer.md', 'verification_tier');
 assertIncludes('agents/implementer.md', 'smoke-integration');
 assertIncludes('agents/tdd-guide.md', 'evidence block contains BOTH literal tokens');
-assertIncludes('install.sh', 'kaola-workflow-plan-validator.js');
+assertManifestScript('kaola-workflow-plan-validator.js');   // #407: was install.sh literal
 assertIncludes('install.sh', '--enable-adaptive');
-// #255: the adaptive-handoff script must be in install.sh's per-edition SUPPORT_SCRIPT_NAMES
-// allowlist for every edition, or a manual (non-plugin) install omits it and the planner's
-// `--project` handoff invocation fails at `$HOME/.claude/.../scripts/`. Guards the 5.4.0 omission.
-assertIncludes('install.sh', 'kaola-workflow-adaptive-handoff.js');
-assertIncludes('install.sh', 'kaola-gitlab-workflow-adaptive-handoff.js');
-assertIncludes('install.sh', 'kaola-gitea-workflow-adaptive-handoff.js');
-// #272: the adaptive-node aggregator must be in install.sh per-edition SUPPORT_SCRIPT_NAMES
-// allowlist so a manual (non-plugin) install ships the per-node lifecycle script alongside
-// adaptive-handoff and the plan-validator.
-assertIncludes('install.sh', 'kaola-workflow-adaptive-node.js');
-assertIncludes('install.sh', 'kaola-gitlab-workflow-adaptive-node.js');
-assertIncludes('install.sh', 'kaola-gitea-workflow-adaptive-node.js');
-// #266: Codex harness scripts (preflight, task-mirror, compact-resume) must be in
-// install.sh per-edition SUPPORT_SCRIPT_NAMES allowlist. preflight is base-named (4-tree
-// byte-identical); task-mirror is base-named in github/codex, edition-named in gitlab/gitea;
-// compact-resume is codex-only (no claude scripts/ copy) — asserted in codex-only validator.
+// #255: the adaptive-handoff script must be in the install allowlist (now the #407 manifest) for
+// every edition, or a manual (non-plugin) install omits it and the planner's `--project` handoff
+// invocation fails at `$HOME/.claude/.../scripts/`. Guards the 5.4.0 omission. (#407: manifest-sourced.)
+assertManifestScript('kaola-workflow-adaptive-handoff.js');
+assertManifestScript('kaola-gitlab-workflow-adaptive-handoff.js');
+assertManifestScript('kaola-gitea-workflow-adaptive-handoff.js');
+// #272: the adaptive-node aggregator must be in the install allowlist (#407 manifest) so a manual
+// (non-plugin) install ships the per-node lifecycle script alongside adaptive-handoff and the
+// plan-validator.
+assertManifestScript('kaola-workflow-adaptive-node.js');
+assertManifestScript('kaola-gitlab-workflow-adaptive-node.js');
+assertManifestScript('kaola-gitea-workflow-adaptive-node.js');
+// #266: Codex harness scripts (preflight, task-mirror, compact-resume) must be in the install
+// allowlist (#407 manifest). preflight is base-named (4-tree byte-identical); task-mirror is
+// base-named in github/codex, edition-named in gitlab/gitea; compact-resume is codex-only.
 assert(exists('scripts/kaola-workflow-codex-preflight.js'), '#266 codex preflight script missing from scripts/');
 assert(exists('scripts/kaola-workflow-task-mirror.js'), '#266 task-mirror script missing from scripts/');
-assertIncludes('install.sh', 'kaola-workflow-codex-preflight.js');
-assertIncludes('install.sh', 'kaola-workflow-task-mirror.js');
-assertIncludes('install.sh', 'kaola-gitlab-workflow-task-mirror.js');
-assertIncludes('install.sh', 'kaola-gitea-workflow-task-mirror.js');
+assertManifestScript('kaola-workflow-codex-preflight.js');
+assertManifestScript('kaola-workflow-task-mirror.js');
+assertManifestScript('kaola-gitlab-workflow-task-mirror.js');
+assertManifestScript('kaola-gitea-workflow-task-mirror.js');
 // router 3-way selection: switch chooses branch AND default (adaptive is the default under ON;
 // fast/full are explicit escapes). OFF preserves 2-way fast/full with typed refusal on adaptive.
 assertConcept('commands/workflow-next.md', 'adaptive path selection', [
@@ -726,10 +745,32 @@ for (const reviewerBody of [
 ]) {
   assertIncludes(reviewerBody, 'finding: id=');
 }
-// #281: parallel-batch aggregator presence + install.sh registration
+// #281: parallel-batch aggregator presence + install allowlist registration (#407 manifest)
 assert(exists('scripts/kaola-workflow-parallel-batch.js'), '#281 parallel-batch aggregator missing from scripts/');
 assert(exists('plugins/kaola-workflow/scripts/kaola-workflow-parallel-batch.js'), '#281 parallel-batch aggregator missing from claude plugin');
-assertIncludes('install.sh', 'kaola-workflow-parallel-batch.js');
+assertManifestScript('kaola-workflow-parallel-batch.js');   // #407: was install.sh literal
+// #407 surface-undercount cross-check: every name the install manifest emits for a forge MUST be a
+// real file in that forge's source scripts dir — so the manifest can never list a phantom (which the
+// installer's fail-closed missing-source check would then abort on), and a renamed forge port that
+// the manifest claims is guaranteed to exist. Closes the surface-map-undercount class at validate-time.
+{
+  const forgeScriptsDir = (forge) => forge === 'github'
+    ? 'scripts'
+    : `plugins/kaola-workflow-${forge}/scripts`;
+  for (const forge of installManifest.FORGES) {
+    const dir = forgeScriptsDir(forge);
+    for (const name of installManifest.supportScripts(forge)) {
+      assert(exists(`${dir}/${name}`),
+        `#407: install manifest emits "${name}" for ${forge} but ${dir}/${name} does not exist`);
+    }
+    for (const hook of installManifest.supportHooks(forge)) {
+      const hookDir = forge === 'github' ? 'hooks' : `plugins/kaola-workflow-${forge}/hooks`;
+      assert(exists(`${hookDir}/${hook}`),
+        `#407: install manifest emits hook "${hook}" for ${forge} but ${hookDir}/${hook} does not exist`);
+    }
+  }
+}
+
 // #281: frontier-unit semantics in plan-run executor surface (added by plan-run-semantics node)
 assertIncludes('commands/kaola-workflow-plan-run.md', 'frontier unit');
 // #281: efficient-DAG instruction in workflow-planner profile (added by planner-profile node)

@@ -12,6 +12,18 @@ const targetCodexDir = path.join(projectRoot, '.codex');
 const targetAgentsDir = path.join(targetCodexDir, 'agents', 'kaola-workflow');
 const targetConfig = path.join(targetCodexDir, 'config.toml');
 const targetHooks = path.join(targetCodexDir, 'hooks.json');
+// #409: a stable, version-LESS Codex-owned home for the hook scripts that
+// hooks.json points at — mirrors install.sh L250's $SUPPORT_DIR/{hooks,scripts}
+// (~/.claude/kaola-workflow). Previously buildManagedHooks substituted `pluginRoot`
+// (= path.resolve(__dirname,'..'), the run-time install source) straight into
+// __KW_PLUGIN_ROOT__, so hooks.json pointed back at wherever the installer ran from
+// (a /tmp worktree purged by macOS, or a version-pinned plugin-cache dir GC'd on the
+// next release) → every hook fire exit 127. We now COPY the hook-referenced scripts
+// into this version-less home and substitute THIS dir into __KW_PLUGIN_ROOT__.
+// pluginRoot STAYS the read SOURCE (sourceAgentsDir / templates / manifest).
+const targetStableDir = path.join(targetCodexDir, 'kaola-workflow');
+const targetStableHooksDir = path.join(targetStableDir, 'hooks');
+const targetStableScriptsDir = path.join(targetStableDir, 'scripts');
 const beginMarker = '# BEGIN kaola-workflow agents';
 const endMarker = '# END kaola-workflow agents';
 const PLUGIN_ROOT_TOKEN = '__KW_PLUGIN_ROOT__';
@@ -34,6 +46,13 @@ const MANIFEST_BASENAME = '.kaola-managed-profiles.json';
 const RETIRED_PROFILE_FILES = ['docs-lookup.toml'];
 const EFFORT_VALUES = ['low', 'medium', 'high', 'xhigh'];
 const MANIFEST_SCHEMA_VERSION = 1;
+
+// #405 (#382 deferred half): the OPUS_ELIGIBLE_ROLES membership + variantProfileText transform live in
+// the ×4 byte-identical adaptive-schema (the single drift anchor). This installer require()s them only
+// for the AUTHORING-TIME `--generate-variants` subcommand — the per-node `model: opus` → `<role>-max`
+// dispatch is SKILL prose, and the committed agents/<role>-max.toml files install via copyAgentProfiles
+// unfiltered (no install-time generation), so a normal install never touches the schema.
+const { OPUS_ELIGIBLE_ROLES, variantProfileText } = require('./kaola-workflow-adaptive-schema.js');
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -357,6 +376,72 @@ function buildManagedHooks(templateText, root) {
   return managed;
 }
 
+// #409: parse the hooks template for every relative path a managed hook command
+// references via the __KW_PLUGIN_ROOT__ token. PARSE the JSON first (so each command is
+// a real, un-escaped string — never regex over raw JSON, where the closing `\"` would be
+// captured into the path) then pull `__KW_PLUGIN_ROOT__/<relpath>` from each command up to
+// the next whitespace or quote. Returns a sorted, de-duped relpath list (e.g.
+// ['hooks/kaola-workflow-pre-commit.sh', 'scripts/kaola-workflow-codex-compact-resume.js']).
+// Per-edition templates carry edition-named basenames (kaola-{gitlab,gitea}-workflow-
+// codex-compact-resume.js) → this auto-adjusts to whatever each template references.
+// Pure + exported for unit tests.
+function hookReferencedRelPaths(templateText) {
+  const parsed = JSON.parse(templateText);
+  const hooks = (parsed && parsed.hooks) || {};
+  const token = PLUGIN_ROOT_TOKEN + '/';
+  const re = new RegExp(escapeRegExp(token) + '([^"\\s]+)', 'g');
+  const found = new Set();
+  for (const event of Object.keys(hooks)) {
+    for (const entry of (hooks[event] || [])) {
+      for (const h of (entry.hooks || [])) {
+        if (typeof h.command !== 'string') continue;
+        let m;
+        while ((m = re.exec(h.command)) !== null) {
+          found.add(m[1]);
+        }
+      }
+    }
+  }
+  return [...found].sort();
+}
+
+// #409: copy every hook-referenced script from the read SOURCE (pluginRoot) into the
+// stable version-less home, so hooks.json can point at a Codex-owned path that survives
+// the install source vanishing. Sweep the prior stable {hooks,scripts} dirs first (so a
+// renamed/retired hook script leaves no orphan), then recreate + copy via
+// write-temp-then-rename (+ chmod 0o755) — the copyAgentProfiles crash-safety pattern.
+// Fails CLOSED (throws) on a missing source script, same as install.sh L600's hard fail.
+// Returns { copied: [...relpaths], removed: <count of swept files> }.
+function copyHookScripts(stableDir, relPaths) {
+  const hooksDir = path.join(stableDir, 'hooks');
+  const scriptsDir = path.join(stableDir, 'scripts');
+
+  // Sweep prior copies (recursive) so stale/renamed hook scripts never linger.
+  let removed = 0;
+  for (const dir of [hooksDir, scriptsDir]) {
+    if (fs.existsSync(dir)) {
+      removed += fs.readdirSync(dir).length;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+  fs.mkdirSync(hooksDir, { recursive: true });
+  fs.mkdirSync(scriptsDir, { recursive: true });
+
+  const copied = [];
+  for (const rel of relPaths) {
+    const source = path.join(pluginRoot, rel);
+    assert(fs.existsSync(source), `hook-referenced source script missing: ${source}`);
+    const target = path.join(stableDir, rel);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    const tmp = target + '.tmp-' + process.pid;
+    fs.writeFileSync(tmp, fs.readFileSync(source));
+    fs.chmodSync(tmp, 0o755);
+    fs.renameSync(tmp, target);
+    copied.push(rel);
+  }
+  return { copied: copied.sort(), removed };
+}
+
 // #325 R2/R3: merge managed hooks into the existing hooks.json.
 //   R2 — carry managed top-level keys ($schema editor hint) when absent on a fresh install, but an
 //        existing user value still wins (managed spread first, existing second).
@@ -384,12 +469,21 @@ function updateHooks() {
 
   // R1: build the managed hooks inside a WARN-first guard — a malformed template should WARN and
   // skip hooks, never abort copyAgentProfiles/updateConfig.
+  // #409: (a) copy the hook-referenced scripts into the version-less stable home and (b)
+  // substitute THAT home (not pluginRoot) into __KW_PLUGIN_ROOT__, so the installed commands
+  // resolve even after the install source dir is deleted / version-bumped. Both steps live
+  // inside the WARN-first guard: a malformed template or a missing source script WARNs and
+  // skips hooks rather than aborting the whole install.
   let managedHooks;
+  let stableCopy = { copied: [], removed: 0 };
   try {
-    managedHooks = buildManagedHooks(read(sourceHooksTemplate), pluginRoot);
+    const templateText = read(sourceHooksTemplate);
+    const relPaths = hookReferencedRelPaths(templateText);
+    stableCopy = copyHookScripts(targetStableDir, relPaths);
+    managedHooks = buildManagedHooks(templateText, targetStableDir);
   } catch (e) {
     console.warn(`Kaola-Workflow Codex hooks: could not build managed hooks template — skipping (${e.message})`);
-    return 'unchanged';
+    return { status: 'unchanged', stableCopy };
   }
 
   // Read existing hooks.json or default to empty; tolerate parse failures (WARN-first).
@@ -413,10 +507,10 @@ function updateHooks() {
 
   if (next !== current) {
     fs.writeFileSync(targetHooks, next);
-    return 'updated';
+    return { status: 'updated', stableCopy };
   }
 
-  return 'unchanged';
+  return { status: 'unchanged', stableCopy };
 }
 
 // Post-verify (AC8 parity): re-read every installed profile + assert the managed
@@ -453,7 +547,98 @@ function postVerify(templateRoles) {
   return problems;
 }
 
+// #405: extract the raw `[agents.<role>]` block text (header through the line before the next
+// top-level table or EOF) from config/agents.toml. Returns null when the role has no table.
+function extractConfigBlock(configText, role) {
+  const lines = configText.split(/\r?\n/);
+  const start = lines.findIndex(line => isTopLevelTable(line, `agents.${role}`));
+  if (start === -1) return null;
+  let end = start + 1;
+  while (end < lines.length && !isAnyTopLevelTable(lines[end])) end++;
+  // Drop a single trailing blank line so re-joins stay tidy.
+  while (end > start + 1 && lines[end - 1].trim() === '') end--;
+  return lines.slice(start, end).join('\n');
+}
+
+// #405: derive the `[agents.<role>-max]` config block from the base block — rename the header table,
+// point config_file at the -max.toml, and tag the description as the xhigh effort variant (the
+// nickname_candidates + other keys carry over verbatim). Deterministic text transform.
+function variantConfigBlock(baseBlock, role) {
+  return baseBlock
+    .replace(new RegExp(`^\\[agents\\.${escapeRegExp(role)}\\]`, 'm'), `[agents.${role}-max]`)
+    .replace(
+      new RegExp(`^(config_file\\s*=\\s*")([^"]*)("\\s*)$`, 'm'),
+      (_m, p1, p2, p3) => `${p1}${p2.replace(/\.toml$/, '-max.toml')}${p3}`
+    )
+    .replace(
+      /^(description\s*=\s*")([^"]*)("\s*)$/m,
+      (_m, p1, p2, p3) => `${p1}${p2} [xhigh effort variant — #382 model:opus tier]${p3}`
+    );
+}
+
+// #405 (#382 deferred half): materialize the committed Codex `<role>-max` xhigh effort-variant
+// profiles + their config/agents.toml registration blocks for every OPUS_ELIGIBLE_ROLE. Run at
+// AUTHORING time (the `--generate-variants` subcommand), NOT at install. Writes are idempotent (a
+// re-run reproduces byte-identical files/blocks), so they double as a drift-repair pass. The
+// committed -max files then install via copyAgentProfiles unfiltered + register via the managed
+// block. The contract validators independently re-derive these with variantProfileText and refuse on
+// drift, so a hand-edit can never sneak past. Returns { wroteFiles:[...], wroteBlocks:[...] }.
+function generateMaxVariants() {
+  assert(fs.existsSync(sourceAgentsDir), `missing source agents directory: ${sourceAgentsDir}`);
+  assert(fs.existsSync(sourceTemplate), `missing source config template: ${sourceTemplate}`);
+
+  const wroteFiles = [];
+  const wroteBlocks = [];
+
+  // 1. Variant .toml files.
+  for (const role of OPUS_ELIGIBLE_ROLES) {
+    const baseFile = path.join(sourceAgentsDir, `${role}.toml`);
+    assert(fs.existsSync(baseFile), `cannot generate ${role}-max: base profile missing at ${baseFile}`);
+    const variantText = variantProfileText(read(baseFile), role);
+    const variantFile = path.join(sourceAgentsDir, `${role}-max.toml`);
+    const tmp = variantFile + '.tmp-' + process.pid;
+    fs.writeFileSync(tmp, variantText);
+    fs.renameSync(tmp, variantFile);
+    wroteFiles.push(`${role}-max.toml`);
+  }
+
+  // 2. config/agents.toml [agents.<role>-max] blocks — append a missing block; refresh an existing
+  //    one in place. Appended in OPUS_ELIGIBLE_ROLES order at end of file.
+  let configText = read(sourceTemplate);
+  for (const role of OPUS_ELIGIBLE_ROLES) {
+    const baseBlock = extractConfigBlock(configText, role);
+    assert(baseBlock, `cannot generate [agents.${role}-max]: base block [agents.${role}] missing`);
+    const variantBlock = variantConfigBlock(baseBlock, role);
+    if (hasTopLevelTable(configText, `agents.${role}-max`)) {
+      const existing = extractConfigBlock(configText, `${role}-max`);
+      if (existing !== variantBlock) {
+        configText = configText.replace(existing, variantBlock);
+        wroteBlocks.push(`agents.${role}-max`);
+      }
+    } else {
+      const trimmed = configText.replace(/\s*$/, '');
+      configText = `${trimmed}\n\n${variantBlock}\n`;
+      wroteBlocks.push(`agents.${role}-max`);
+    }
+  }
+  const tmpCfg = sourceTemplate + '.tmp-' + process.pid;
+  fs.writeFileSync(tmpCfg, configText);
+  fs.renameSync(tmpCfg, sourceTemplate);
+
+  return { wroteFiles, wroteBlocks };
+}
+
 function main() {
+  // #405: authoring-time variant generator. `--generate-variants` materializes the committed
+  // <role>-max profiles + config blocks, then exits without running the installer.
+  if (process.argv.includes('--generate-variants')) {
+    const { wroteFiles, wroteBlocks } = generateMaxVariants();
+    console.log(`Kaola-Workflow Codex variants: wrote ${wroteFiles.length} <role>-max profile(s): ${wroteFiles.join(', ')}`);
+    console.log(`Kaola-Workflow Codex variants: registered/refreshed ${wroteBlocks.length} config block(s)`);
+    console.log('status: ok');
+    return;
+  }
+
   assert(fs.existsSync(sourceAgentsDir), `missing source agents directory: ${sourceAgentsDir}`);
   assert(fs.existsSync(sourceTemplate), `missing source config template: ${sourceTemplate}`);
   assert(fs.existsSync(sourceHooksTemplate), `missing source hooks template: ${sourceHooksTemplate}`);
@@ -482,7 +667,7 @@ function main() {
   // 3-6. Install profiles + config + hooks.
   const copied = copyAgentProfiles();
   const configStatus = updateConfig();
-  const hooksStatus = updateHooks();
+  const { status: hooksStatus, stableCopy } = updateHooks();
 
   // 7-8. Prune stale/retired profiles, then record the ownership manifest.
   const { removed, extraUnmanaged } = pruneStaleProfiles(targetAgentsDir, copied, prevManifest);
@@ -502,6 +687,8 @@ function main() {
     console.log(`- ${path.relative(projectRoot, path.join(targetAgentsDir, file))}`);
   }
   console.log(`Kaola-Workflow Codex hooks: ${hooksStatus} at ${path.relative(projectRoot, targetHooks)}`);
+  // #409: report the stable hook home so the user can see the version-less copy target.
+  console.log(`Kaola-Workflow Codex hooks: copied ${stableCopy.copied.length} hook script(s) into stable home ${path.relative(projectRoot, targetStableDir)} (swept ${stableCopy.removed} stale)`);
   console.log(`run /hooks once in Codex to review and trust these command hooks (or codex exec --dangerously-bypass-hook-trust for automation)`);
 
   console.log(`Kaola-Workflow agent profiles: removed ${removed.length} stale managed profile(s)`);
@@ -526,6 +713,9 @@ module.exports = {
   buildManagedHooks,
   mergeHooks,
   updateHooks,
+  hookReferencedRelPaths,
+  copyHookScripts,
+  generateMaxVariants,
   validateProfileText,
   validateSourceProfiles,
   pruneStaleProfiles,

@@ -141,103 +141,18 @@ case "$FORGE" in
     SOURCE_COMMANDS_DIR="$SCRIPT_DIR/commands"
     SOURCE_SCRIPTS_DIR="$SCRIPT_DIR/scripts"
     SOURCE_HOOKS_DIR="$SCRIPT_DIR/hooks"
-    SUPPORT_SCRIPT_NAMES=(
-      kaola-workflow-repair-state.js
-      kaola-workflow-claim.js
-      kaola-workflow-active-folders.js
-      kaola-workflow-closure-audit.js
-      kaola-workflow-closure-contract.js
-      kaola-workflow-compact-context.js
-      kaola-workflow-sink-merge.js
-      kaola-workflow-sink-pr.js
-      kaola-workflow-roadmap.js
-      kaola-workflow-classifier.js
-      kaola-workflow-plan-validator.js
-      kaola-workflow-next-action.js
-      kaola-workflow-commit-node.js
-      kaola-workflow-adaptive-handoff.js
-      kaola-workflow-adaptive-node.js
-      kaola-workflow-parallel-batch.js
-      kaola-workflow-adaptive-schema.js
-      kaola-workflow-resolve-agent-model.js
-      kaola-workflow-codex-preflight.js
-      kaola-workflow-task-mirror.js
-    )
-    SUPPORT_HOOK_NAMES=(
-      kaola-workflow-pre-commit.sh
-      kaola-workflow-subagent-dispatch-log.sh
-      kaola-workflow-write-lane.sh
-    )
     ;;
   gitlab)
     SUPPORT_DIR="$HOME/.claude/kaola-workflow-gitlab"
     SOURCE_COMMANDS_DIR="$SCRIPT_DIR/plugins/kaola-workflow-gitlab/commands"
     SOURCE_SCRIPTS_DIR="$SCRIPT_DIR/plugins/kaola-workflow-gitlab/scripts"
     SOURCE_HOOKS_DIR="$SCRIPT_DIR/plugins/kaola-workflow-gitlab/hooks"
-    SUPPORT_SCRIPT_NAMES=(
-      kaola-gitlab-forge.js
-      kaola-gitlab-workflow-active-folders.js
-      kaola-gitlab-workflow-claim.js
-      kaola-workflow-closure-contract.js
-      kaola-gitlab-workflow-classifier.js
-      kaola-gitlab-workflow-closure-audit.js
-      kaola-gitlab-workflow-compact-context.js
-      kaola-gitlab-workflow-plan-validator.js
-      kaola-gitlab-workflow-next-action.js
-      kaola-gitlab-workflow-commit-node.js
-      kaola-gitlab-workflow-adaptive-handoff.js
-      kaola-gitlab-workflow-adaptive-node.js
-      kaola-gitlab-workflow-parallel-batch.js
-      kaola-gitlab-workflow-repair-state.js
-      kaola-gitlab-workflow-roadmap.js
-      kaola-gitlab-workflow-sink-merge.js
-      kaola-gitlab-workflow-sink-mr.js
-      kaola-workflow-adaptive-schema.js
-      kaola-workflow-resolve-agent-model.js
-      kaola-workflow-codex-preflight.js
-      kaola-gitlab-workflow-task-mirror.js
-      kaola-gitlab-workflow-codex-compact-resume.js
-    )
-    SUPPORT_HOOK_NAMES=(
-      kaola-workflow-pre-commit.sh
-      kaola-workflow-subagent-dispatch-log.sh
-      kaola-workflow-write-lane.sh
-    )
     ;;
   gitea)
     SUPPORT_DIR="$HOME/.claude/kaola-workflow-gitea"
     SOURCE_COMMANDS_DIR="$SCRIPT_DIR/plugins/kaola-workflow-gitea/commands"
     SOURCE_SCRIPTS_DIR="$SCRIPT_DIR/plugins/kaola-workflow-gitea/scripts"
     SOURCE_HOOKS_DIR="$SCRIPT_DIR/plugins/kaola-workflow-gitea/hooks"
-    SUPPORT_SCRIPT_NAMES=(
-      kaola-gitea-forge.js
-      kaola-gitea-workflow-active-folders.js
-      kaola-gitea-workflow-claim.js
-      kaola-workflow-closure-contract.js
-      kaola-gitea-workflow-classifier.js
-      kaola-gitea-workflow-closure-audit.js
-      kaola-gitea-workflow-compact-context.js
-      kaola-gitea-workflow-plan-validator.js
-      kaola-gitea-workflow-next-action.js
-      kaola-gitea-workflow-commit-node.js
-      kaola-gitea-workflow-adaptive-handoff.js
-      kaola-gitea-workflow-adaptive-node.js
-      kaola-gitea-workflow-parallel-batch.js
-      kaola-gitea-workflow-repair-state.js
-      kaola-gitea-workflow-roadmap.js
-      kaola-gitea-workflow-sink-merge.js
-      kaola-gitea-workflow-sink-pr.js
-      kaola-workflow-adaptive-schema.js
-      kaola-workflow-resolve-agent-model.js
-      kaola-workflow-codex-preflight.js
-      kaola-gitea-workflow-task-mirror.js
-      kaola-gitea-workflow-codex-compact-resume.js
-    )
-    SUPPORT_HOOK_NAMES=(
-      kaola-workflow-pre-commit.sh
-      kaola-workflow-subagent-dispatch-log.sh
-      kaola-workflow-write-lane.sh
-    )
     ;;
   *)
     echo "Unknown forge: $FORGE" >&2
@@ -245,6 +160,33 @@ case "$FORGE" in
     exit 2
     ;;
 esac
+
+# #407 (#365 deferred half): SINGLE-SOURCE the per-forge SUPPORT_SCRIPT_NAMES / SUPPORT_HOOK_NAMES
+# from scripts/kaola-workflow-install-manifest.js (was 3 hand-maintained case-block arrays). The
+# manifest derives every forge's set from one canonical list + a rename-IFF-ported transform, so a
+# new shared support script is now registered in ≤2 places (the manifest, + a rename override only
+# if its forge port is content-renamed). Consumed via a PORTABLE `while read` loop (NOT mapfile —
+# the install target may run macOS bash 3.2; matches the #363 node shell-out pattern below). The
+# manifest exits non-zero (writing nothing) on an empty/invalid emission; the empty-array guard below
+# then fails LOUDLY (a process-substitution exit code can't reach the `while`, so we guard the result).
+# KAOLA_INSTALL_MANIFEST lets a test point at a temp manifest copy without mutating the in-repo one
+# (keeps the #363 planted-typo fail-closed test non-destructive); defaults to the repo manifest.
+INSTALL_MANIFEST="${KAOLA_INSTALL_MANIFEST:-$SCRIPT_DIR/scripts/kaola-workflow-install-manifest.js}"
+SUPPORT_SCRIPT_NAMES=()
+while IFS= read -r name || [[ -n "$name" ]]; do
+  [[ -n "$name" ]] && SUPPORT_SCRIPT_NAMES+=("$name")
+done < <(node "$INSTALL_MANIFEST" --forge="$FORGE" --scripts)
+SUPPORT_HOOK_NAMES=()
+while IFS= read -r name || [[ -n "$name" ]]; do
+  [[ -n "$name" ]] && SUPPORT_HOOK_NAMES+=("$name")
+done < <(node "$INSTALL_MANIFEST" --forge="$FORGE" --hooks)
+# A process-substitution exit code does not reach the `while`, so guard on the RESULT: the manifest
+# exits non-zero (writing nothing) on any error, leaving an empty array — fail LOUDLY on either empty
+# list rather than silently copying zero support files (the 5.4.0 silent-empty regression class).
+if [[ ${#SUPPORT_SCRIPT_NAMES[@]} -eq 0 || ${#SUPPORT_HOOK_NAMES[@]} -eq 0 ]]; then
+  echo "Install error: install manifest emitted an empty support list for forge $FORGE (node $INSTALL_MANIFEST --forge=$FORGE)" >&2
+  exit 1
+fi
 
 SUPPORT_SCRIPTS_DIR="$SUPPORT_DIR/scripts"
 SUPPORT_HOOKS_DIR="$SUPPORT_DIR/hooks"
