@@ -98,6 +98,31 @@ for (const base of GENERATED_AGGREGATORS) {
     'T6: @generated header on line 2 pointing at canonical source, got ' + JSON.stringify(lines[1]));
 }
 
+// ---------------------------------------------------------------------------
+// T7 (#401 Part 2): plan-validator's promotion into GENERATED_AGGREGATORS must NOT rename its 2 self-
+// referential agentRegistrationSurface entries (the canonical + codex registry surfaces, protected by
+// the `pv` segment-join indirection) — a naive rename would list two forge entries and DROP the
+// canonical+codex surfaces, the exact drift this registry exists to catch. The header comment + usage
+// string, by contrast, MUST render to the forge name (the item-4 cosmetic-identity fix). This locks the
+// indirection so a future regression turns the gitlab/gitea chains RED.
+// ---------------------------------------------------------------------------
+{
+  const base = 'kaola-workflow-plan-validator.js';
+  const out = renderForgePort(read('scripts/' + base), base, 'gitlab');
+  assert(out.includes("['scripts', pv].join('/')"),
+    'T7: the canonical plan-validator registry entry stays canonical (pv indirection NOT renamed)');
+  assert(out.includes("[cx, 'scripts', pv].join('/')"),
+    'T7: the codex plan-validator registry entry stays canonical (pv indirection NOT renamed)');
+  assert(!out.includes("['scripts', 'kaola-gitlab-workflow-plan-validator.js'].join('/')"),
+    'T7: no over-renamed canonical-surface registry entry (the #401 over-rename hazard)');
+  assert(out.includes("[gl, 'scripts', 'kaola-gitlab-workflow-plan-validator.js'].join('/')"),
+    'T7: the gitlab edition registry entry is present (already edition-named in canonical)');
+  assert(/^\/\/ kaola-gitlab-workflow-plan-validator\.js \(issue #227/m.test(out),
+    'T7: the header comment IS rendered to the forge name (item-4 cosmetic fix)');
+  assert(out.includes('usage: kaola-gitlab-workflow-plan-validator.js <workflow-plan.md>'),
+    'T7: the usage string IS rendered to the forge name (item-4 cosmetic fix)');
+}
+
 if (failed > 0) {
   console.error('edition-sync tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;

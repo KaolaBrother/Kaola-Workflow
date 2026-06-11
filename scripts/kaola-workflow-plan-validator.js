@@ -303,6 +303,14 @@ function agentRegistrationSurface(name) {
   const cx = ['plugins', 'kaola-workflow'].join('/');
   const gl = ['plugins', 'kaola-workflow-gitlab'].join('/');
   const ge = ['plugins', 'kaola-workflow-gitea'].join('/');
+  // #401 Part 2: plan-validator base name, segment-joined so edition-sync's renderForgePort rename
+  // regex (`kaola-workflow-plan-validator`) finds NO contiguous literal here. When THIS file is
+  // generated as a forge port (now in GENERATED_AGGREGATORS), the canonical + codex registry entries
+  // below MUST keep the canonical name — only the gl/ge entries are edition-renamed. A naive rename of
+  // 323-324 would list two forge entries and DROP the canonical+codex surfaces (the exact drift this
+  // registry exists to catch). The header comment + usage string keep the bare literal on purpose so
+  // renderForgePort DOES render them to the forge name (the #401 item-4 cosmetic-identity fix).
+  const pv = ['kaola', 'workflow', 'plan-validator.js'].join('-');
   return [
     'agents/' + name + '.md',
     cx + '/agents/' + name + '.toml',
@@ -320,8 +328,8 @@ function agentRegistrationSurface(name) {
     [cx, 'scripts', 'kaola-workflow-resolve-agent-model.js'].join('/'),
     [gl, 'scripts', 'kaola-workflow-resolve-agent-model.js'].join('/'),
     [ge, 'scripts', 'kaola-workflow-resolve-agent-model.js'].join('/'),
-    ['scripts', 'kaola-workflow-plan-validator.js'].join('/'),
-    [cx, 'scripts', 'kaola-workflow-plan-validator.js'].join('/'),
+    ['scripts', pv].join('/'),
+    [cx, 'scripts', pv].join('/'),
     [gl, 'scripts', 'kaola-gitlab-workflow-plan-validator.js'].join('/'),
     [ge, 'scripts', 'kaola-gitea-workflow-plan-validator.js'].join('/'),
     [gl, 'scripts', 'validate-kaola-workflow-gitlab-contracts.js'].join('/'),

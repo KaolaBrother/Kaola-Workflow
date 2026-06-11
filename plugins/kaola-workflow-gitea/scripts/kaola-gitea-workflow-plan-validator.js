@@ -1,8 +1,9 @@
 #!/usr/bin/env node
+// @generated from scripts/kaola-workflow-plan-validator.js by `npm run sync:editions` (issue #365) — edit canonical and regenerate; do NOT hand-edit this forge port.
 'use strict';
 
 // ---------------------------------------------------------------------------
-// kaola-workflow-plan-validator.js (issue #227 — adaptive path)
+// kaola-gitea-workflow-plan-validator.js (issue #227 — adaptive path)
 //
 // Validates a frozen `workflow-plan.md` against the closed grammar and computes
 // the auto-run / ask / typed-refusal governance decision. The agent freely
@@ -303,6 +304,14 @@ function agentRegistrationSurface(name) {
   const cx = ['plugins', 'kaola-workflow'].join('/');
   const gl = ['plugins', 'kaola-workflow-gitlab'].join('/');
   const ge = ['plugins', 'kaola-workflow-gitea'].join('/');
+  // #401 Part 2: plan-validator base name, segment-joined so edition-sync's renderForgePort rename
+  // regex (`kaola-gitea-workflow-plan-validator`) finds NO contiguous literal here. When THIS file is
+  // generated as a forge port (now in GENERATED_AGGREGATORS), the canonical + codex registry entries
+  // below MUST keep the canonical name — only the gl/ge entries are edition-renamed. A naive rename of
+  // 323-324 would list two forge entries and DROP the canonical+codex surfaces (the exact drift this
+  // registry exists to catch). The header comment + usage string keep the bare literal on purpose so
+  // renderForgePort DOES render them to the forge name (the #401 item-4 cosmetic-identity fix).
+  const pv = ['kaola', 'workflow', 'plan-validator.js'].join('-');
   return [
     'agents/' + name + '.md',
     cx + '/agents/' + name + '.toml',
@@ -320,8 +329,8 @@ function agentRegistrationSurface(name) {
     [cx, 'scripts', 'kaola-workflow-resolve-agent-model.js'].join('/'),
     [gl, 'scripts', 'kaola-workflow-resolve-agent-model.js'].join('/'),
     [ge, 'scripts', 'kaola-workflow-resolve-agent-model.js'].join('/'),
-    ['scripts', 'kaola-workflow-plan-validator.js'].join('/'),
-    [cx, 'scripts', 'kaola-workflow-plan-validator.js'].join('/'),
+    ['scripts', pv].join('/'),
+    [cx, 'scripts', pv].join('/'),
     [gl, 'scripts', 'kaola-gitlab-workflow-plan-validator.js'].join('/'),
     [ge, 'scripts', 'kaola-gitea-workflow-plan-validator.js'].join('/'),
     [gl, 'scripts', 'validate-kaola-workflow-gitlab-contracts.js'].join('/'),
@@ -1355,7 +1364,7 @@ function anchorBase(root, refName, tree) {
 }
 function printHelp() {
   process.stdout.write(
-    'usage: kaola-workflow-plan-validator.js <workflow-plan.md> [--json] [--freeze [--repair]] [--resume-check] [--gate-verify] [--barrier-check [--node-id ID] [--base REF]] [--verdict-check [--node-id ID]] [--selector-check --node-id ID]\n' +
+    'usage: kaola-gitea-workflow-plan-validator.js <workflow-plan.md> [--json] [--freeze [--repair]] [--resume-check] [--gate-verify] [--barrier-check [--node-id ID] [--base REF]] [--verdict-check [--node-id ID]] [--selector-check --node-id ID]\n' +
     '  default        validate + print the governance verdict; exit 1 on typed refusal\n' +
     '  --freeze       validate, then write the computed plan_hash into the plan file\n' +
     '  --freeze --repair  also reconcile the ## Node Ledger to ## Nodes (add missing rows as pending; never drop a status) before freezing\n' +
