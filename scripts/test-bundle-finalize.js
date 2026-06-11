@@ -531,6 +531,38 @@ const { checkClosureInvariants } = require('./kaola-workflow-claim');
 })();
 
 // ---------------------------------------------------------------------------
+// Test (2c) #396.4 (D2) FIRING DIRECTION — the post-sink partial-failure MUST still fire
+// remote-members-closed (close_disposition UNSET). Test (2b) proved the pre-sink merge lane
+// SUPPRESSES it; this proves the gate is not a blanket suppression. The contrast pair (same
+// receipt, only close_disposition differs) locks the gate exactly: a future bug that always
+// suppresses (or stamps close_pending on a post-sink receipt) breaks exactly one of the two.
+// Closes the R1 coverage gap the cluster-L adversarial review flagged (Test (2b) inverted the
+// only firing assertion with no replacement).
+// ---------------------------------------------------------------------------
+
+(function testRemoteMembersClosedFiresPostSink() {
+  console.log('Test (2c) #396.4 (D2): post-sink partial (close_disposition UNSET) FIRES remote-members-closed; close_pending suppresses the SAME receipt');
+  const tmpRoot = makeTmpRoot();
+  try {
+    const archiveDest = path.join(tmpRoot, 'kaola-workflow', 'archive', 'bundle-42-47-53');
+    fs.mkdirSync(archiveDest, { recursive: true });
+    // A post-sink partial: member 47 failed to close; sink-merge/watch-pr leave close_disposition UNSET.
+    const postSink = { issue_numbers: [42, 47, 53], closed_issues: [42, 53], failed_issue_closures: [47], remote_issue_closed: 'partial' };
+    const invFires = checkClosureInvariants(tmpRoot, postSink, archiveDest);
+    assert(invFires && Array.isArray(invFires.violations) && invFires.violations.some(function(v) { return v.id === 'remote-members-closed'; }),
+      '#396.4 (D2) FIRING: a post-sink partial (no close_disposition) MUST fire remote-members-closed, got ' + JSON.stringify(invFires && invFires.violations));
+    assert(invFires && invFires.ok === false, '#396.4 (D2) FIRING: ok===false on a real post-sink partial');
+    // The SAME receipt tagged close_pending (the pre-sink merge lane) suppresses it — the gate flips ONLY on the disposition.
+    const prePending = Object.assign({}, postSink, { close_disposition: 'close_pending' });
+    const invSuppressed = checkClosureInvariants(tmpRoot, prePending, archiveDest);
+    assert(invSuppressed && !(Array.isArray(invSuppressed.violations) && invSuppressed.violations.some(function(v) { return v.id === 'remote-members-closed'; })),
+      '#396.4 (D2): close_pending on the SAME receipt suppresses remote-members-closed, got ' + JSON.stringify(invSuppressed && invSuppressed.violations));
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+})();
+
+// ---------------------------------------------------------------------------
 // Test (3): Single-issue finalize regression (AC#1 / dogfooding)
 // ---------------------------------------------------------------------------
 
