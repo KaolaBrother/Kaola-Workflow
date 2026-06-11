@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **plan-validator: refuse absolute-path and drive-letter write-set tokens at freeze (typed reason: `absolute_path`) — guaranteed `write_set_overflow` at barrier prevented (#415).** The freeze wall accepted tokens such as `/abs/path` and `C:src/app.js` (drive-letter form); those tokens froze successfully but always triggered `write_set_overflow` at the per-node barrier because the barrier only resolves repo-relative paths. Added a pre-grammar check that recognises both forms (leading `/` and `[A-Za-z]:` drive prefix) and emits a typed `{ result:'refuse', reason:'absolute_path' }` refusal before writing the plan — the failure is now surfaced at authoring time rather than mid-run at the barrier.
+
+- **plan-validator: correct `barrier_base_mismatch` recovery hint at both sites to steer toward `--drop-base` + `--record-base` or ref-restore; adds laundering-warning (#416 Part A).** The two `barrier_base_mismatch` error sites both said "re-run `--record-base`", which cannot converge: the idempotent-reuse branch returns early without re-anchoring the ref when a base file already exists. Both hints now steer toward `--drop-base` then `--record-base` (or ref-restore for a genuine ref-only loss), and add an explicit note that re-recording after work is done would launder the crashed attempt.
+
+- **claim: exclude `skipped_offline` from `closePendingFinalize`; surface `probe_degraded` in receipt — forge-outage probe failure no longer silently downgrades `remote-members-closed` invariant (#416 Part B).** When `cmdFinalize` performed an online probe and the probe threw (forge outage), the `catch` branch recorded `'skipped_offline'` and then `closePendingFinalize` counted that as `close_pending`, silently downgrading the `remote-members-closed` invariant. `'skipped_offline'` is now excluded from the `close_pending` bucket; the finalise receipt surfaces `probe_degraded: true` so operators know a probe was attempted but the forge was unreachable.
+
 ## [5.15.0] — 2026-06-12
 
 ### Added

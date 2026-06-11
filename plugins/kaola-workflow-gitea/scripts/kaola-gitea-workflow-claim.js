@@ -1550,6 +1550,27 @@ function checkClosureInvariants(root, receipt, archiveDest) {
   return { ok: violations.length === 0, violations };
 }
 
+// #416: pure helpers — extracted so they are directly unit-testable.
+//
+// isProbeDegraded: true when the forge probe threw and set remoteIssueClosed='skipped_offline'
+// even though OFFLINE is false.  A probe outage while ONLINE is "unknown", not "pending"; the
+// caller should surface probe_degraded rather than treating the close as pending.
+function isProbeDegraded(offline, remoteIssueClosed) {
+  return !offline && remoteIssueClosed === 'skipped_offline';
+}
+//
+// computeClosePendingFinalize: Returns true only when the close is genuinely PENDING (online,
+// not keep-open, probe returned a non-error token).  The old inline expression treated a probe
+// failure ('skipped_offline' while ONLINE) as close_pending because 'skipped_offline' is neither
+// 'already_closed' nor 'closed' — silently downgrading the remote-members-closed invariant.
+// Exclude 'skipped_offline' here so a probe outage is treated as unknown rather than pending.
+function computeClosePendingFinalize(keepIssueOpen, offline, remoteIssueClosed) {
+  return !keepIssueOpen && !offline &&
+    remoteIssueClosed !== 'already_closed' &&
+    remoteIssueClosed !== 'closed' &&
+    remoteIssueClosed !== 'skipped_offline';
+}
+
 function buildClosureReceipt(project, issueNumber, steps) {
   const receipt = closureContract.emptyReceipt(project, issueNumber);
   const fields = closureContract.CLOSURE_RECEIPT_FIELDS;
@@ -1745,8 +1766,10 @@ function cmdFinalize() {
     } catch (_) { remoteIssueClosed = 'skipped_offline'; }
   }
   // #396.4 (D2): merge-lane finalize runs BEFORE the sink closes members → record close_disposition.
-  const closePendingFinalize = !keepIssueOpen && !OFFLINE &&
-    remoteIssueClosed !== 'already_closed' && remoteIssueClosed !== 'closed';
+  // #416: use computeClosePendingFinalize() which correctly excludes 'skipped_offline' (a probe
+  // outage while ONLINE must not masquerade as close_pending).
+  const closePendingFinalize = computeClosePendingFinalize(keepIssueOpen, OFFLINE, remoteIssueClosed);
+  const probeDegraded = isProbeDegraded(OFFLINE, remoteIssueClosed);
   const closureReceipt = buildClosureReceipt(args.project, issueNumber, {
     archive: result.skipped ? 'skipped' : (result.archived ? 'closed' : 'failed'),
     roadmap_source_removed: result.roadmap_source_removed,
@@ -1760,6 +1783,9 @@ function cmdFinalize() {
     // #396.4 (D2): suppress the premature remote-members-closed alarm on the merge lane.
     close_disposition: closePendingFinalize ? 'close_pending' : undefined
   });
+  // #416: attach probe_degraded AFTER buildClosureReceipt (the builder filters by
+  // CLOSURE_RECEIPT_FIELDS; probe_degraded is not in the schema yet, so attach post-build).
+  if (probeDegraded) closureReceipt.probe_degraded = true;
   // #328: attach bundle receipt fields AFTER buildClosureReceipt (the builder filters by
   // CLOSURE_RECEIPT_FIELDS which does not include these new bundle keys — Decision-5 trap).
   // Only attach when this is a bundle project (issueNumbers present).
@@ -2557,10 +2583,12 @@ module.exports = {
   cmdLegacyWorktreeCleanup,
   cmdRepairLabels,
   collectStale,
+  computeClosePendingFinalize,
   defaultBranch,
   cmdStaleWorktreeCleanup,
   deriveRunPosture,
   getCoordRoot,
+  isProbeDegraded,
   legacySiblingWorktreePathFor,
   listOpenIssues,
   partitionActiveAndDrift,

@@ -786,6 +786,14 @@ function validatePlan(content, opts) {
     const freezeRoot = opts.root || process.cwd();
     const lcSeen = new Map(); // sibling-only case-collision (NOT tree-wide)
     for (const tok of n.writeSet) {
+      // #415: an absolute-path token is never a valid in-repo relative path and would always
+      // fail the exact-path barrier. Two forms: Unix `/` prefix and Windows drive-letter `C:`.
+      // Checked BEFORE backslash so the typed reason is absolute_path, not backslash_in_path.
+      if (tok.startsWith('/')) {
+        errors.push(`node ${n.id} declared_write_set token "${tok}" is an absolute path (absolute_path) — declare relative in-repo file paths only`);
+      } else if (tok.match(/^[A-Za-z]:/)) {
+        errors.push(`node ${n.id} declared_write_set token "${tok}" is a Windows drive-letter path (absolute_path) — declare relative in-repo file paths only`);
+      } else
       // #388 (c)/(d): a backslash-bearing token — `src\app.js` or the traversal evasion
       // `..\notes.txt` (the #381 `..` wall split is `/`-only) — is dead at the POSIX exact-path
       // barrier. Checked BEFORE the trailing-`/` check so a Windows-ism is reported as such.
@@ -1586,11 +1594,11 @@ function main() {
       let refSha = '';
       try { refSha = execFileSync('git', ['-C', root, 'rev-parse', '--verify', '--quiet', barrierRef(nodeId) + '^{commit}'], { encoding: 'utf8' }).trim(); } catch (_) { refSha = ''; }
       if (!refSha) {
-        process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'barrier_base_mismatch', errors: ['anchored baseline ref missing for "' + nodeId + '" while a .cache base file exists — re-run --record-base'] }) : 'typed refusal: barrier_base_mismatch (anchored ref missing for ' + nodeId + ')') + '\n');
+        process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'barrier_base_mismatch', errors: ['anchored baseline ref missing for "' + nodeId + '" while a .cache base file exists — run --drop-base then --record-base, or restore the ref; note: a fresh re-record after work was done would launder the crashed attempt, so prefer ref-restore where work exists'] }) : 'typed refusal: barrier_base_mismatch (anchored ref missing for ' + nodeId + ')') + '\n');
         process.exitCode = 1; return;
       }
       if (refSha !== base) {
-        process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'barrier_base_mismatch', errors: ['.cache base SHA for "' + nodeId + '" does not match the anchored ref (file ' + base + ' != ref ' + refSha + ')'] }) : 'typed refusal: barrier_base_mismatch for ' + nodeId) + '\n');
+        process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'barrier_base_mismatch', errors: ['.cache base SHA for "' + nodeId + '" does not match the anchored ref (file ' + base + ' != ref ' + refSha + ') — run --drop-base then --record-base, or restore the ref; note: a fresh re-record after work was done would launder the crashed attempt, so prefer ref-restore where work exists'] }) : 'typed refusal: barrier_base_mismatch for ' + nodeId) + '\n');
         process.exitCode = 1; return;
       }
       const now = snapshotWorktree(root, nodeId + '-now');
@@ -1635,9 +1643,9 @@ function main() {
       let refSha = '';
       try { refSha = execFileSync('git', ['-C', root, 'rev-parse', '--verify', '--quiet', barrierRef(nodeId) + '^{commit}'], { encoding: 'utf8' }).trim(); } catch (_) { refSha = ''; }
       if (!refSha) {
-        barrierCheckOut = { result: 'refuse', reason: 'barrier_base_mismatch', errors: ['anchored baseline ref missing for "' + nodeId + '" while a .cache base file exists — re-run --record-base'] };
+        barrierCheckOut = { result: 'refuse', reason: 'barrier_base_mismatch', errors: ['anchored baseline ref missing for "' + nodeId + '" while a .cache base file exists — run --drop-base then --record-base, or restore the ref; note: a fresh re-record after work was done would launder the crashed attempt, so prefer ref-restore where work exists'] };
       } else if (refSha !== base) {
-        barrierCheckOut = { result: 'refuse', reason: 'barrier_base_mismatch', errors: ['.cache base SHA for "' + nodeId + '" does not match the anchored ref (file ' + base + ' != ref ' + refSha + ')'] };
+        barrierCheckOut = { result: 'refuse', reason: 'barrier_base_mismatch', errors: ['.cache base SHA for "' + nodeId + '" does not match the anchored ref (file ' + base + ' != ref ' + refSha + ') — run --drop-base then --record-base, or restore the ref; note: a fresh re-record after work was done would launder the crashed attempt, so prefer ref-restore where work exists'] };
       } else {
         const now = snapshotWorktree(root, nodeId + '-now');
         const diffOut = execFileSync('git', ['-C', root, 'diff-tree', '-r', '--name-only', base, now], { encoding: 'utf8' });

@@ -1718,6 +1718,26 @@ function testAdaptiveValidatorGovernance() {
     assert(v.result === 'refuse' && /sanitize to the same barrier/.test((v.errors||[]).join(';')),
       '#388: ids that sanitize to the same barrier key (a.b vs a_b) must refuse at freeze, got: ' + JSON.stringify(v));
 
+    // #415: absolute-path tokens in the write set must refuse at freeze (absolute_path).
+    // A Unix-style absolute path starting with `/` is never a valid in-repo relative path.
+    v = validatePlanFixture(tmp, [
+      '| impl | tdd-guide | — | /Users/repo/src/app.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /absolute_path/.test((v.errors||[]).join(';')),
+      '#415: a Unix absolute path (/Users/repo/src/app.js) must refuse at freeze, got: ' + JSON.stringify(v));
+
+    // #415 drive-letter variant: `C:\src\app.js` — note backslash already trips backslash_in_path,
+    // but `C:src/app.js` (forward-slash drive-letter) must also refuse as absolute_path.
+    v = validatePlanFixture(tmp, [
+      '| impl | tdd-guide | — | C:src/app.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /absolute_path/.test((v.errors||[]).join(';')),
+      '#415: a Windows drive-letter path (C:src/app.js) must refuse at freeze, got: ' + JSON.stringify(v));
+
     // #388 (FREEZE-ONLY / no-brick): a plan FROZEN by a pre-#388 validator carrying a dup id OR a
     // backslash token must still PASS --resume-check (revalidateForResume is untouched) — only
     // --freeze refuses. Mirrors the #381 freeze-only landmine.
