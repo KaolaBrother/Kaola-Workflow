@@ -10263,6 +10263,60 @@ function testAdaptiveHandoffFreezeChainTwoSpawns() {
 }
 
 // ---------------------------------------------------------------------------
+// testFreezeCheckedGovernanceAckStale — #408 anti-bypass guard, REAL validator CLI (wave-4 R1).
+// testAdaptiveHandoffFreezeChainTwoSpawns STUBS the validator, so the REAL governance_ack_stale guard
+// (plan-validator.js ~1438) had no biting test — a regression to it shipped green across all chains
+// (the wave-4 adversarial review proved `if(false)` at the stale check left every chain GREEN). Drive
+// the real CLI: SPAWN 1 (--freeze-checked) returns the planHash WITHOUT writing; SPAWN 2 with a STALE
+// --governance-ack must refuse governance_ack_stale, exit 1, and leave the plan UNWRITTEN; the matching
+// ack freezes (control). This is the assertion the design's own #408 test-plan named but omitted.
+// ---------------------------------------------------------------------------
+function testFreezeCheckedGovernanceAckStale() {
+  const PLAN = ['# Workflow Plan — issue #408', '', '## Meta', 'labels: enhancement', '', '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
+    '| ex | code-explorer | — | — | 1 | sequence |',
+    '| a | tdd-guide | ex | aaa/x.js | 1 | sequence |',
+    '| rv | code-reviewer | a | — | 1 | sequence |',
+    '| done | finalize | rv | — | 1 | sequence |', '',
+    '## Node Ledger', '', '| id | status |', '|---|---|',
+    '| ex | pending |', '| a | pending |', '| rv | pending |', '| done | pending |', ''].join('\n');
+  const grepo = adaptiveTmp('gov-ack-stale-git');
+  initGitRepoWithBareRemote(grepo);
+  const proj = path.join(grepo, 'kaola-workflow', 'issue-408');
+  fs.mkdirSync(proj, { recursive: true });
+  const planPath = path.join(proj, 'workflow-plan.md');
+  fs.writeFileSync(planPath, PLAN);
+  spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
+  spawnSync('git', ['commit', '-m', 'plan'], { cwd: grepo, encoding: 'utf8' });
+  try {
+    // SPAWN 1: --freeze-checked returns the governance payload + planHash, WITHOUT writing.
+    const fc = runNode(planValidatorScript, [planPath, '--freeze-checked', '--json'], grepo);
+    assert(fc.status === 0, '#408: --freeze-checked must exit 0, got ' + fc.status + ' ' + fc.stderr);
+    const fcOut = JSON.parse(fc.stdout);
+    assert(fcOut.planHash, '#408: --freeze-checked returns a planHash, got ' + fc.stdout);
+    assert(fcOut.frozen === false, '#408: --freeze-checked does NOT write (frozen:false), got ' + JSON.stringify(fcOut.frozen));
+    const before = fs.readFileSync(planPath, 'utf8');
+    assert(!/plan_hash:/.test(before), '#408: plan not yet frozen before SPAWN 2');
+    // SPAWN 2 with a STALE (wrong) ack hash → refuse governance_ack_stale, NO write.
+    const wrong = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef';
+    const fz = runNode(planValidatorScript, [planPath, '--freeze', '--governance-ack', wrong, '--json'], grepo);
+    assert(fz.status === 1, '#408: a stale --governance-ack must exit 1, got ' + fz.status + ' ' + fz.stdout);
+    const out = JSON.parse(fz.stdout);
+    assert(out.result === 'refuse' && out.reason === 'governance_ack_stale',
+      '#408: a stale --governance-ack must refuse governance_ack_stale, got ' + JSON.stringify(out));
+    assert(out.frozen === false, '#408: a stale ack must NOT freeze');
+    assert(fs.readFileSync(planPath, 'utf8') === before,
+      '#408: a stale --governance-ack must leave the plan UNWRITTEN (no torn freeze)');
+    // CONTROL: the MATCHING ack hash freezes (proves the refusal is the ack check, not a broken freeze).
+    const fz2 = runNode(planValidatorScript, [planPath, '--freeze', '--governance-ack', fcOut.planHash, '--json'], grepo);
+    assert(fz2.status === 0, '#408: a matching --governance-ack must freeze (exit 0), got ' + fz2.status + ' ' + fz2.stderr);
+    assert(JSON.parse(fz2.stdout).frozen === true, '#408: a matching ack writes the freeze, got ' + fz2.stdout);
+    assert(/plan_hash:/.test(fs.readFileSync(planPath, 'utf8')), '#408: the matching-ack freeze stamped plan_hash');
+  } finally { fs.rmSync(grepo, { recursive: true, force: true }); fs.rmSync(grepo + '-remote', { recursive: true, force: true }); }
+  console.log('testFreezeCheckedGovernanceAckStale: PASSED');
+}
+
+// ---------------------------------------------------------------------------
 // testAdaptiveHandoffProjectFlagResolvesRepoRoot — BLOCKING-1 regression (#255 review).
 //
 // In an install the handoff script lives at $HOME/.claude/kaola-workflow/scripts/
@@ -11319,6 +11373,7 @@ function buildRegistry() {
   add('testAdaptiveHandoffRefuseNoMutation',              testAdaptiveHandoffRefuseNoMutation);
   add('testAdaptiveHandoffIdempotentReRun',               testAdaptiveHandoffIdempotentReRun);
   add('testAdaptiveHandoffFreezeChainTwoSpawns',          testAdaptiveHandoffFreezeChainTwoSpawns);
+  add('testFreezeCheckedGovernanceAckStale',              testFreezeCheckedGovernanceAckStale);
   add('testAdaptiveHandoffProjectFlagResolvesRepoRoot',   testAdaptiveHandoffProjectFlagResolvesRepoRoot);
   add('testAdaptiveHandoffDecisionIdConflict',            testAdaptiveHandoffDecisionIdConflict);
   add('testGitignoreCoversKw',                            testGitignoreCoversKw);
