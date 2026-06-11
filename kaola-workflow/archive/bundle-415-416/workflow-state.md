@@ -1,0 +1,9 @@
+workflow_path: adaptive
+issue_number: 415
+issue_numbers: 415,416
+bundle_id: bundle-415-416
+closure_policy: all_or_nothing
+branch: workflow/bundle-415-416
+merge_commit: 86b7253
+archived: 2026-06-12
+closed_issues: 415,416
