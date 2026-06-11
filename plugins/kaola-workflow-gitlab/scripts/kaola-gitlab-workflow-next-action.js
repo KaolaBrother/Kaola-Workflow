@@ -127,7 +127,26 @@ function computeNextAction(content, opts) {
   //    multi-in_progress (batch) signal. readySet still includes in_progress
   //    nodes (only TERMINAL nodes are excluded), so nextNode = readySet[0] keeps
   //    working and a fully-in_progress frontier does NOT trip the stall refusal.
-  const readyPending = readySet.filter(n => st(n.id) === 'pending');
+  // #377: longest-path-to-sink PRIORITY for the running-set scheduler (additive; classic list
+  // scheduling on the frozen DAG). readySet/nextNode/allDone/active stay byte-unchanged — only
+  // readyPending gains a `longestPathToSink` field and is ordered by it (desc) so the critical path
+  // opens first; DOCUMENT order is the stable tiebreak. Cycle-guarded (fail-safe on a mid-repair plan).
+  const children = new Map(nodes.map(n => [n.id, []]));
+  for (const n of nodes) for (const d of n.dependsOn) { if (children.has(d)) children.get(d).push(n.id); }
+  const lpMemo = new Map();
+  const longestPathToSink = id => {
+    if (lpMemo.has(id)) return lpMemo.get(id);
+    lpMemo.set(id, 0); // provisional (cycle guard); a DAG never revisits, a mid-repair cycle stays finite
+    let best = 0;
+    for (const c of (children.get(id) || [])) best = Math.max(best, 1 + longestPathToSink(c));
+    lpMemo.set(id, best);
+    return best;
+  };
+  const docIndex = new Map(nodes.map((n, i) => [n.id, i]));
+  const readyPending = readySet
+    .filter(n => st(n.id) === 'pending')
+    .map(n => Object.assign({}, n, { longestPathToSink: longestPathToSink(n.id) }))
+    .sort((a, b) => (b.longestPathToSink - a.longestPathToSink) || (docIndex.get(a.id) - docIndex.get(b.id)));
   const active = nodes
     .filter(node => st(node.id) === 'in_progress')
     .map(node => ({

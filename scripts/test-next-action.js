@@ -424,6 +424,39 @@ function makePlan(nodesRows, ledgerRows) {
 }
 
 // -----------------------------------------------------------------------
+// test13 (#377): readyPending is ordered by longest-path-to-sink (critical path first); readySet
+// stays in DOCUMENT order. A deep chain dep must out-prioritize a shallow one even when the shallow
+// one appears earlier in the table.
+// -----------------------------------------------------------------------
+{
+  const stub = () => 'sonnet';
+  // shallow (q -> review -> finalize = lp 2) appears BEFORE deep (d1 -> d2 -> review -> finalize = lp 3)
+  const content = [
+    '## Meta', 'plan_hash: x', '',
+    '## Nodes',
+    '| id | role | depends_on | declared_write_set | est | shape |',
+    '|----|------|-----------|--------------------|-----|-------|',
+    '| a | code-explorer | — | — | 1 | sequence |',
+    '| q | code-explorer | a | — | 1 | sequence |',
+    '| d1 | tdd-guide | a | scripts/d1.js | 1 | sequence |',
+    '| d2 | tdd-guide | d1 | scripts/d2.js | 1 | sequence |',
+    '| review | code-reviewer | q,d2 | — | 1 | sequence |',
+    '| finalize | finalize | review | — | 1 | sequence |',
+    '## Node Ledger', '| id | status |', '|----|--------|',
+    '| a | complete |', '| q | pending |', '| d1 | pending |', '| d2 | pending |', '| review | pending |', '| finalize | pending |', '',
+  ].join('\n');
+  const r = computeNextAction(content, { resolveModel: stub });
+  // readyPending frontier after a completes = {q (lp2), d1 (lp3)}; d1 must come FIRST (longer path).
+  assert(r.readyPending.map(n => n.id).join(',') === 'd1,q',
+    'test13 (#377): readyPending ordered by longest-path-to-sink (d1 before q), got ' + JSON.stringify(r.readyPending.map(n => n.id)));
+  assert(r.readyPending[0].longestPathToSink === 3 && r.readyPending[1].longestPathToSink === 2,
+    'test13 (#377): longestPathToSink field present + correct (d1=3, q=2), got ' + JSON.stringify(r.readyPending.map(n => n.longestPathToSink)));
+  // readySet stays DOCUMENT order (q before d1) — byte-stable legacy field.
+  assert(r.readySet.map(n => n.id).join(',') === 'q,d1',
+    'test13 (#377): readySet stays document order (q,d1), got ' + JSON.stringify(r.readySet.map(n => n.id)));
+}
+
+// -----------------------------------------------------------------------
 // Summary
 // -----------------------------------------------------------------------
 if (failed > 0) {

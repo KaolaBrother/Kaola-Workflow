@@ -47,6 +47,10 @@ const DEFAULT_FANOUT_CAP = 4;
 // so the cheap half of the system gets its own higher default. KAOLA_FANOUT_CAP stays the
 // WRITE-side cap (semantics unchanged).
 const DEFAULT_FANOUT_CAP_READONLY = 8;
+// #377: the per-node running-set scheduler manifest (post-#364 successor of active-batch.json's
+// per-batch state) — `kaola-workflow/{project}/.cache/running-set.json`. Producer: adaptive-node
+// open-ready/close-node; consumer: the #376 write-lane containment hook + the #293 legality check.
+const RUNNING_SET_NAME = 'running-set.json';
 const LOOP_CAP = 5;
 const FILE_CEILING = 6;
 const TEST_THRASH_LIMIT = 3;
@@ -429,6 +433,7 @@ module.exports = {
   LEDGER_STATUSES,
   DEFAULT_FANOUT_CAP,
   DEFAULT_FANOUT_CAP_READONLY,
+  RUNNING_SET_NAME,
   LOOP_CAP,
   FILE_CEILING,
   TEST_THRASH_LIMIT,
