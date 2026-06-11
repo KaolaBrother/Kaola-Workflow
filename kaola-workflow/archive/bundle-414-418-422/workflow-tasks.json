@@ -1,0 +1,60 @@
+{
+  "source_plan_hash": "e4aa46193e3f2e4abe96be038d56e111ca499ff7281b77c433fc38a8c1024c6d",
+  "tasks": [
+    {
+      "id": "design",
+      "role": "code-architect",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "t414",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "t418-forge-smoke",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "t418-manifest-twin",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "parity-anchor",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "parity-validators",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "review",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "docs",
+      "role": "doc-updater",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "finalize",
+      "role": "finalize",
+      "status": "completed",
+      "ledger_status": "complete"
+    }
+  ],
+  "last_synced_from_ledger": "2026-06-11T22:58:48.088Z"
+}
