@@ -170,7 +170,8 @@ for (const file of [
 }
 
 assert(commandFiles.length === 11, 'expected 11 Gitea command files, got ' + commandFiles.length);
-assert(skillFiles.length === 9, 'expected 9 Gitea skill files, got ' + skillFiles.length);
+// #400: 9 base skills + kaola-workflow-adapt + kaola-workflow-plan-run (adaptive SKILL pack) = 11.
+assert(skillFiles.length === 11, 'expected 11 Gitea skill files, got ' + skillFiles.length);
 assert(exists(pluginRoot + '/hooks/hooks.json'), 'Gitea hooks.json missing');
 assertNotIncludes(pluginRoot + '/hooks/hooks.json', 'subagentStatusLine');
 assertNotIncludes(pluginRoot + '/hooks/hooks.json', 'kaola-workflow-subagent-statusline.js');
@@ -740,6 +741,46 @@ function assertByteParity(relPath) {
 assertByteParity('config/agents.toml');
 for (const tomlFile of fs.readdirSync(path.join(root, pluginRoot, 'agents')).filter(f => f.endsWith('.toml')).sort()) {
   assertByteParity(path.join('agents', tomlFile));
+}
+
+// #400: registry-driven route-reachability contract (the forge-codex dead zone). The schema emits
+// kaola-workflow-plan-run / kaola-workflow-adapt as resume/route targets and the forge claim.js
+// routes adaptive unconditionally — but the forge skills/ tree shipped neither SKILL, so the route
+// resolved to nothing. require() the schema route constants (no hand-listed drift) + the static
+// next_skill fallbacks gitea claim.js prints, and assert each resolves to an installed
+// skills/<name>/SKILL.md. listSkillFiles() only enumerates what EXISTS (a blind spot for an absent
+// REQUIRED skill); this is the required-target registry that closes it.
+{
+  const schema = require('./kaola-workflow-adaptive-schema.js');
+  const emittedSkillTargets = [
+    schema.PLAN_RUN_SKILL,
+    schema.ADAPT_SKILL,
+    'kaola-workflow-fast',
+    'kaola-workflow-research'
+  ];
+  const installedSkills = new Set(
+    fs.readdirSync(path.join(root, pluginRoot, 'skills'), { withFileTypes: true })
+      .filter(e => e.isDirectory())
+      .map(e => e.name)
+      .filter(name => exists(pluginRoot + '/skills/' + name + '/SKILL.md'))
+  );
+  for (const target of emittedSkillTargets) {
+    assert(installedSkills.has(target),
+      '#400: route-reachability — receipt-emitted skill target "' + target + '" has no installed ' +
+      pluginRoot + '/skills/' + target + '/SKILL.md (broken route, the forge-codex #400 dead zone)');
+  }
+  // Content-reachability tier (catches #369/#380): a mirrored SKILL must carry the command's
+  // route/wiring tokens or the route resolves to a hollow surface.
+  assertIncludes(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md', 'issue_numbers');
+  assertIncludes(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md', '--issue-numbers');
+  assertIncludes(pluginRoot + '/skills/kaola-workflow-next/SKILL.md', 'workflow-plan.md exists -> kaola-workflow-plan-run');
+  assertIncludes(pluginRoot + '/skills/kaola-workflow-next/SKILL.md', 'auto-bundle');
+  assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'close-and-open-next');
+  assertIncludes(pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md', 'kaola-workflow-plan-run');
+  // #405: the forge-codex plan-run SKILL inherits the tier→profile dispatch prose (the cluster-C
+  // #405 "all three codex editions" AC was blocked on this SKILL existing).
+  assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', '<role>-max');
+  assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'model_variant_missing');
 }
 
 console.log('Kaola-Workflow Gitea contract validation passed');

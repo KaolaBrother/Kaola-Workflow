@@ -67,6 +67,43 @@ if (!dispatchLogEntry) {
   );
 }
 
+// #400: adaptive-route scenario — the gitea-codex edition ships the adaptive SKILL pack and a Codex
+// claim/startup/resume receipt routes to a SKILL that EXISTS (the pre-#400 dead zone was 0 adaptive
+// coverage here). Walk the schema-emitted route -> installed SKILL -> the inherited #405/#392/#369/#380
+// wiring tokens, exactly as a Codex runtime would resolve them.
+{
+  const skillsRoot = path.join(root, 'plugins/kaola-workflow-gitea/skills');
+  const schema = require(path.join(root, 'plugins/kaola-workflow-gitea/scripts/kaola-workflow-adaptive-schema.js'));
+  for (const skill of [schema.PLAN_RUN_SKILL, schema.ADAPT_SKILL]) {
+    const skillFile = path.join(skillsRoot, skill, 'SKILL.md');
+    if (!fs.existsSync(skillFile)) {
+      throw new Error('#400: gitea-codex receipt routes to ' + skill + ' but ' + skillFile + ' is missing (the forge-codex dead zone)');
+    }
+  }
+  const planRun = fs.readFileSync(path.join(skillsRoot, 'kaola-workflow-plan-run/SKILL.md'), 'utf8');
+  if (!planRun.includes('kaola-gitea-workflow-adaptive-node.js')) {
+    throw new Error('#400: gitea-codex plan-run SKILL must call the forge-renamed kaola-gitea-workflow-adaptive-node.js');
+  }
+  if (!planRun.includes('model_variant_missing') || !planRun.includes('<role>-max')) {
+    throw new Error('#405: gitea-codex plan-run SKILL must inherit the <role>-max tier→profile dispatch prose');
+  }
+  if (!planRun.includes('evidence-binding')) {
+    throw new Error('#392: gitea-codex plan-run SKILL must inherit the evidence-binding nonce prose');
+  }
+  const adapt = fs.readFileSync(path.join(skillsRoot, 'kaola-workflow-adapt/SKILL.md'), 'utf8');
+  if (!adapt.includes('kaola-gitea-workflow-claim.js') || !adapt.includes('kaola-workflow-plan-run')) {
+    throw new Error('#400: gitea-codex adapt SKILL must claim via the forge port and hand off to kaola-workflow-plan-run');
+  }
+  const next = fs.readFileSync(path.join(skillsRoot, 'kaola-workflow-next/SKILL.md'), 'utf8');
+  if (!next.includes('workflow-plan.md exists -> kaola-workflow-plan-run') || !next.includes('auto-bundle')) {
+    throw new Error('#380: gitea-codex next SKILL must carry the adaptive route + auto-bundle restructure');
+  }
+  const finalize = fs.readFileSync(path.join(skillsRoot, 'kaola-workflow-finalize/SKILL.md'), 'utf8');
+  if (!finalize.includes('--issue-numbers') || !finalize.includes('issue_numbers')) {
+    throw new Error('#369: gitea-codex finalize SKILL must wire the bundle member-set flag (--issue-numbers)');
+  }
+}
+
 run('validate-kaola-workflow-gitea-contracts.js');
 run('test-gitea-workflow-scripts.js');
 run('test-gitea-sinks.js');

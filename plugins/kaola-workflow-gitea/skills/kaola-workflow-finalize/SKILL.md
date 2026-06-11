@@ -156,6 +156,10 @@ choices, or ambiguity that blocks correctness.
    [ -z "$SINK_ISSUE" ] && SINK_ISSUE=$(grep '^issue_number:' "$SINK_STATE_FILE" | awk '{print $2}')
    SINK_ISSUE_FLAG=""
    [ -n "$SINK_ISSUE" ] && [ "$SINK_ISSUE" != "unset" ] && SINK_ISSUE_FLAG="--issue $SINK_ISSUE"
+   SINK_ISSUE_NUMBERS=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | grep '^issue_numbers:' | awk '{print $2}')  # #369 bundle members
+   [ -z "$SINK_ISSUE_NUMBERS" ] && SINK_ISSUE_NUMBERS=$(grep '^issue_numbers:' "$SINK_STATE_FILE" | awk '{print $2}')
+   SINK_ISSUE_NUMBERS_FLAG=""
+   [ -n "$SINK_ISSUE_NUMBERS" ] && SINK_ISSUE_NUMBERS_FLAG="--issue-numbers $SINK_ISSUE_NUMBERS"
    # #336: keep-open partial-close terminal — issue_action defaults to close when absent.
    SINK_ISSUE_ACTION=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | grep '^issue_action:' | awk '{print $2}')
    SINK_ISSUE_ACTION="${SINK_ISSUE_ACTION:-close}"
@@ -201,6 +205,7 @@ choices, or ambiguity that blocks correctness.
    : "${SINK_BRANCH:?SINK_BRANCH must be captured before archive}"
    : "${SINK_KIND:=merge}"
    : "${SINK_ISSUE_FLAG:=}"
+   : "${SINK_ISSUE_NUMBERS_FLAG:=}"
    : "${SINK_KEEP_OPEN_FLAG:=}"
    # #336: keep-open is merge-sink-only — refuse a PR sink before dispatch.
    if [ "$SINK_KIND" != "merge" ] && [ -n "$SINK_KEEP_OPEN_FLAG" ]; then
@@ -212,7 +217,7 @@ choices, or ambiguity that blocks correctness.
        node "$scripts_dir/kaola-gitea-workflow-sink-pr.js" --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG --project "$KAOLA_PROJECT"
        ;;
      merge|*)
-       node "$scripts_dir/kaola-gitea-workflow-sink-merge.js" --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG $SINK_KEEP_OPEN_FLAG --project "$KAOLA_PROJECT"
+       node "$scripts_dir/kaola-gitea-workflow-sink-merge.js" --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG $SINK_ISSUE_NUMBERS_FLAG $SINK_KEEP_OPEN_FLAG --project "$KAOLA_PROJECT"
        _SINK_MERGE_EXIT=$?
        if [ "$_SINK_MERGE_EXIT" -eq 3 ]; then
          # #336: keep-open is merge-sink-only — never auto-pivot to a PR sink (its Closes #N body

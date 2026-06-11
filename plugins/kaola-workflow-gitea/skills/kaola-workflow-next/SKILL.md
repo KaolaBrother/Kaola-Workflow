@@ -55,6 +55,19 @@ Do not re-ask during the session. Re-establish the default only if `workflow-sta
 Before calling the startup script, the agent must select a target issue. Scripts
 do not auto-pick; the agent owns this decision.
 
+**Branch first on whether the user named an issue (#380):**
+
+- **User named a specific issue** — `$ARGUMENTS` carries an issue number/project, or
+  the prompt names one → use the single-issue selection (steps below), byte-unchanged.
+- **User did NOT name an issue** — the common "work on the next issue" / no-argument
+  case → this is the **auto-bundle entry**. Resolve the path intent first
+  (Startup Step 0a-1), then dispatch the read-only **`issue-scout`** agent role
+  (*Auto-bundle entry* below) and adopt its recommendation: set `KAOLA_TARGET_ISSUES`
+  for a high-confidence same-scope bundle **when the resolved path is adaptive**,
+  otherwise set `KAOLA_TARGET_ISSUE` to the scout's `primary_issue`. STATE the selected
+  set aloud, then continue to validation and startup. (Dispatching the read-only scout
+  here is permitted — it is a pre-claim survey, not a phase agent role.)
+
 1. Read `kaola-workflow/ROADMAP.md` for open unfinished issues.
 2. Fetch Gitea issue list if available (`tea issues list --limit 100 --output json`).
 3. Check active folders via `node "$claim_script" status 2>/dev/null`.
@@ -71,6 +84,81 @@ do not auto-pick; the agent owns this decision.
 7. State the selected issue number before calling startup.
 
 Set `KAOLA_TARGET_ISSUE` to the chosen issue number before calling startup.
+
+## Agent Issue Selection — Bundle Lane (Multi-Issue)
+
+The bundle lane is additive: `KAOLA_TARGET_ISSUE` / `--target-issue N` single-issue
+behavior is unchanged. Use the bundle lane only when the user explicitly names
+several issues or when auto-bundle mode identifies a high-confidence same-scope set
+(see below).
+
+### Explicit-bundle entry
+
+When the user names several issues together (e.g., "finish issues #42 #47 #53
+together"), route through the bundle lane:
+
+- Set `KAOLA_TARGET_ISSUES=42,47,53` (comma-separated, no spaces) before calling startup.
+- The startup script validates the exact set — it does NOT substitute or reorder issues (#44).
+- Project name and active folder: `bundle-42-47-53` (sorted ascending, deduplicated).
+- Branch: `workflow/bundle-42-47-53`.
+- Bundle lane is **adaptive-path only** (`workflow_path: adaptive` is required). A
+  bundle request under switch-OFF or with an explicit `KAOLA_PATH=fast`/`full` is
+  refused with `target_set_not_adaptive`; do not silently downgrade to a single issue.
+- In the startup call, pass `--target-issues 42,47,53` (instead of `--target-issue N`)
+  and `--workflow-path adaptive`.
+
+Compatibility rule: `KAOLA_TARGET_ISSUE` / `--target-issue` keep current one-issue
+behavior UNCHANGED. `KAOLA_TARGET_ISSUES` / `--target-issues` are the ONLY
+multi-issue startup path. If BOTH are set, the script refuses with
+`target_ambiguity`; never set both.
+
+### Auto-bundle entry (AC#5/AC#6)
+
+This is the **no-issue-named branch of Agent Issue Selection** (#380): whenever the user
+does not name a specific issue — including the everyday "work on the next issue" entry —
+dispatch the read-only **`issue-scout`** agent role to inspect the backlog before
+claiming anything. The issue-scout surveys:
+
+- local roadmap sources (`kaola-workflow/.roadmap/issue-*.md`);
+- remote open issues, labels, and dependency labels (`depends-on:#N`);
+- active folders and recently archived summaries.
+
+It returns one recommended same-scope bundle **plus a `primary_issue` and a `confidence`**
+(or no bundle). **The main orchestrator STATES the selected issue set aloud before calling
+startup.** Scripts validate but never select or substitute issues (#44).
+
+issue-scout is read-only: it cannot claim issues, write repository files, author
+`workflow-plan.md`, close issues, or dispatch other agents.
+
+**Ordering — resolve the path BEFORE consuming a bundle (#380):** the bundle lane is
+adaptive-only, so resolve the adaptive switch / path intent (Startup Step 0a-1) *before*
+acting on the scout's recommendation. Pursue a bundle ONLY when the resolved path is
+`adaptive`; under switch-OFF (or an explicit `KAOLA_PATH=fast`/`full`) take only the scout's
+`primary_issue` (a bundle there is refused at startup with `target_set_not_adaptive`).
+
+**Output → env wiring (#380):** map the scout's recommendation into the startup env exactly:
+- high-confidence same-scope bundle AND resolved path adaptive → set `KAOLA_TARGET_ISSUES`
+  from `recommended_bundle.issues` (e.g. `KAOLA_TARGET_ISSUES=42,47,53`);
+- otherwise (single-issue recommendation, `confidence: medium`/`low`, or non-adaptive path)
+  → set `KAOLA_TARGET_ISSUE` to the scout's `primary_issue`. Never set both (`target_ambiguity`).
+
+Auto-bundle mode emits a bundle only when:
+- all candidate issues are open and unclaimed;
+- no dependency is unresolved outside the bundle;
+- the issues share a coherent scope signal (same subsystem, same label, same
+  failing area, or an explicit dependency relation);
+- issue count is at or below `KAOLA_BUNDLE_MAX_ISSUES` (default 4).
+
+**Fallback rule (AC#6):** when no high-confidence same-scope bundle exists, the scout
+returns a single `primary_issue` (or `confidence: low`) → fall back to single-issue
+selection via `KAOLA_TARGET_ISSUE`. Do not manufacture a bundle.
+
+### Bundle closure
+
+A bundle run ends at ONE finalization that closes EVERY issue in the set
+(all-or-nothing). There is one merge/PR sink per bundle. The finalization step
+removes each corresponding `.roadmap/issue-N.md` source and regenerates
+`kaola-workflow/ROADMAP.md` once.
 
 ## Startup Step 0a — PR Intent Capture
 
@@ -94,12 +182,24 @@ agent-level prose detection, not a bash conditional.
 
 ## Startup Step 0a-1 — Path Intent
 
-Before the Startup transaction, pick fast or full and export `KAOLA_PATH` if fast.
-The agent owns this judgment; scripts do not auto-pick. Precedence top-down — first match wins.
+Before the Startup transaction, resolve the adaptive switch and pick the workflow path.
+The agent owns this judgment; scripts do not auto-pick. Read the switch first, then
+follow the matching branch — Branch A when OFF, Branch B when ON.
 
-1. If `KAOLA_PATH` is already exported, honor it.
-   (Rationale: KAOLA_PATH is an explicit shell override; inferred intent
-   from prompt prose should not silently overrule it.)
+**Switch resolution.** Read env `KAOLA_ENABLE_ADAPTIVE` (`1`/`0`); if unset, read
+`enable_adaptive` in `~/.config/kaola-workflow/config.json`; default OFF. The schema
+resolution floor is env > config > OFF — this step does NOT move it.
+
+---
+
+### Branch A — switch OFF (adaptive off the menu; unchanged)
+
+`adaptive` is removed from the menu entirely. `adaptive` can never fire when the
+switch is off. Evaluate only fast vs full, exactly as today. Precedence top-down — first match wins.
+
+1. If `KAOLA_PATH` is already exported, honor `fast` | `full` verbatim.
+   A `KAOLA_PATH=adaptive` under an OFF switch is a **typed refusal** in
+   `claimProject`, never a silent downgrade to full.
 2. Else sniff the user's initial prompt (case-insensitive):
    - fast triggers: "quick fix", "trivial", "one-line", "one line",
      "rename", "typo", "small change", "fast path", "fast mode"
@@ -117,19 +217,79 @@ The agent owns this judgment; scripts do not auto-pick. Precedence top-down — 
    missing CLI, auth failure, network error), default to full.
 5. Default `full`. When in doubt, full.
 
+---
+
+### Branch B — switch ON (adaptive is the default; fast/full are explicit escapes)
+
+Auto-fast is RETIRED under switch-ON: no verbal keyword ⇒ adaptive, even for a
+one-line fix. The automatic trivial-fix rubric only applies under Branch A (switch
+OFF). Adaptive failure ⇒ fall back to full — the 6-phase ladder is the safety floor.
+
+1. **Explicit `KAOLA_PATH`.** If already exported, honor `fast` | `full` | `adaptive`
+   verbatim (rubric not re-derived). An explicit `KAOLA_PATH=adaptive` under an OFF
+   switch would be a typed refusal (Branch A), but here the switch is ON.
+2. **Explicit path-naming verbal** (case-insensitive) — the ONLY keyword escapes:
+   - "fast path" / "fast mode" → export `KAOLA_PATH=fast`
+   - "full path" / "full mode" / "full review" / "all phases" → export `KAOLA_PATH=full`
+   Task descriptors ("typo", "one-line", "trivial", "quick fix", "rename", "small
+   change", "thorough", "carefully", "deep dive") are NOT path-name escapes under ON;
+   they hit the default → adaptive (the planner sizes the task).
+3. **Default → adaptive.** No matching path-name keyword and no explicit `KAOLA_PATH` →
+   `export KAOLA_PATH=adaptive` and proceed to the Adaptive front-end entry section. The
+   export is the action (it makes the Startup transaction skip and the adaptive front end
+   fire).
+   - **Adaptive fallback → full.** If the adaptive front end cannot fetch the issue,
+     cannot form a valid in-grammar DAG, or the validator returns a typed refusal,
+     re-export `KAOLA_PATH=full` and take the Branch-B full route. Never block on an
+     adaptive-specific failure.
+
 State the chosen path and one-line reason aloud before the Startup transaction:
 
 ```text
-Path: fast (mechanical, single-area, 4 files)
-Path: full (≥2 viable approaches — design choice)
-Path: full (default — rubric ambiguous; prefer safety)
+Path: adaptive (switch ON, no path-name escape — default)
+Path: fast (switch ON, explicit "fast path" escape)
+Path: full (switch ON, explicit "full review" escape)
+Path: full (switch ON, adaptive fallback — validator refused)
+Path: fast (switch OFF, mechanical, single-area, 4 files)
+Path: full (switch OFF, ≥2 viable approaches — design choice)
 ```
 
 Bias toward full when in doubt. Fast false positives escalate cleanly via the
 Fast Eligibility and Mid-Flight Escalation sections of `plugins/kaola-workflow-gitea/commands/kaola-workflow-fast.md`; false
 negatives only cost ceremony.
 
+## Startup — Adaptive front-end entry (path = adaptive only)
+
+If `KAOLA_PATH=adaptive`, the **starting contract moves into the adaptive front end**: do NOT run
+the Startup transaction below for this path. The `workflow-planner` agent role — delegated by
+`kaola-workflow-adapt`, never by this router — runs the claim itself, so the router only selects +
+validates the issue, then hands off (keeping the router free of phase-agent and claim dispatch — the
+only router-side dispatch is the pre-claim, read-only `issue-scout` survey in the no-issue-named
+branch, which claims and writes nothing, #380):
+
+1. **Resume wins — never re-author a frozen plan.** If an active folder already exists for the
+   target issue and contains `kaola-workflow/{project}/workflow-plan.md`, run `watch-pr` once, then
+   route to `kaola-workflow-plan-run {project}` and stop (the same `workflow-plan.md exists ->
+   kaola-workflow-plan-run` rule as resume reconstruction). The front end is for FRESH adaptive
+   work only.
+2. **Fresh adaptive.** Run `watch-pr` once, then route to `kaola-workflow-adapt $KAOLA_TARGET_ISSUE`.
+   The adapt skill's `workflow-planner` runs `kaola-gitea-workflow-claim.js startup --workflow-path
+   adaptive --target-issue $KAOLA_TARGET_ISSUE` (the claim + worktree + `workflow-state.md`);
+   git-freshness runs inside adapt against MAIN **before** the planner claims (so a dirty/behind main
+   never orphans a worktree); the roadmap check runs in adapt too. Do NOT run
+   the Startup transaction / git-freshness / roadmap steps in the router for this path.
+
+   **Bundle:** when `KAOLA_TARGET_ISSUES` is set (multi-issue bundle), route to
+   `kaola-workflow-adapt` with the full issue set — the planner uses
+   `--target-issues $KAOLA_TARGET_ISSUES` instead of `--target-issue N`. See
+   the Bundle Lane sections (above and in `kaola-workflow-adapt`) for the planner's claim contract.
+
+Non-adaptive paths (`fast` | `full`) fall through to the Startup transaction unchanged.
+
 ## Startup
+
+**Skip this transaction when `KAOLA_PATH=adaptive`** — the adaptive front end (above) claims via the
+`workflow-planner`, not here. It runs for the `fast` and `full` paths only.
 
 Run the startup transaction with the agent-selected target. Startup validates
 the explicit issue, refreshes PR-backed folders with `watch-pr`, and atomically
@@ -251,6 +411,7 @@ Manual reconstruction order:
 
 ```text
 finalization-summary.md exists -> workflow complete
+workflow-plan.md exists -> kaola-workflow-plan-run   (adaptive; ahead of the phaseN ladder, toggle-agnostic — a tampered/unparseable plan is a typed refusal, never a phaseN fallback)
 phase5-review.md exists -> kaola-workflow-finalize
 fast-summary.md status ESCALATED -> kaola-workflow-research
 fast-summary.md exists -> kaola-workflow-fast
@@ -273,13 +434,18 @@ Current phase: {phase or unknown}
 Current step: {step}
 Pending gates: {list or none}
 Branch: {branch from Sink block in workflow-state.md, or TBD if not yet claimed}
-Workflow path: {fast|full — from KAOLA_PATH or Step 0a-1 judgment}
+Workflow path: {fast|full when the adaptive switch is OFF; fast|full|adaptive when ON — from KAOLA_PATH or Step 0a-1 judgment}
 Parallel decision: {green|yellow|red|blocked|target_unavailable|target_unverified|skipped — classifier verdict or "skipped" if offline/unavailable}
 Next skill: {next_skill}
 ```
 
 ## Completion Contract
 
-Each kaola-workflow-next run implements exactly one issue. After kaola-workflow-finalize
-closes issue #N and releases the lease, the single-issue completion contract is satisfied.
-Stop and await explicit re-direction. Do not auto-route into the next issue in line.
+Each kaola-workflow-next run implements exactly one issue **or one explicitly selected
+same-scope bundle**. After kaola-workflow-finalize closes the issue (or every issue in
+the bundle) and releases the lease, the completion contract is satisfied. Stop and await
+explicit re-direction. Do not auto-route into the next issue in line.
+
+A bundle closure is all-or-nothing: finalization closes EVERY issue in `issue_numbers`,
+removes each `.roadmap/issue-N.md` source, regenerates `kaola-workflow/ROADMAP.md` once,
+archives one bundle folder, and then stops.
