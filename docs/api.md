@@ -47,6 +47,8 @@ The startup/claim path accepts a multi-issue bundle target alongside the existin
 | `target_set_unavailable` | Remote forge validation failed (unreachable; not offline mode) |
 | `target_set_unverified` | Offline with no local evidence for one or more targets |
 | `target_set_label_rollback_failed` | Claim succeeded but in-progress-label rollback on a partial failure itself failed |
+| `target_set_mismatch` | Bundle re-startup — persisted `issue_numbers` does not match the claimed `--target-issues` set (issue #430) |
+| `bundle_state_incoherent` | Handoff or orient — `bundle_id` is present in `workflow-state.md` but `issue_numbers` is absent or inconsistent with `bundle_id` (issue #430) |
 
 **All-or-nothing invariant:** `claimExplicitBundle` validates the complete set before mutating any state. If any single issue in the set fails validation the entire bundle is refused and no active folder is created.
 
@@ -1390,9 +1392,22 @@ unpopulated receipt reads as total failure, never silent success) and
   "project": "issue-N",
   "issue_number": "N",
   "archive": "closed|abandoned|skipped|failed",
+  "anchored_root": "/absolute/path/to/main/root",
   "roadmap_source_removed": "removed|absent|kept|failed",
   "roadmap_regenerated": "regenerated|skipped|failed",
+  "roadmap_removed": {
+    "/path/to/main/root": ["issue-42.md"],
+    "/path/to/worktree/root": ["issue-42.md"]
+  },
+  "roadmap_residue": [],
   "remote_issue_closed": "closed|already_closed|kept_open|partial|close_pending|skipped_offline|failed",
+  "closure": {
+    "attempted": [],
+    "closed": [],
+    "failed": [],
+    "skipped_offline": [],
+    "kept_open": []
+  },
   "claim_label_removed": "removed|already_absent|skipped_offline|failed",
   "worktree_removed": "removed|missing|kept|failed",
   "branch_removed": "removed|kept|failed",
@@ -1401,6 +1416,18 @@ unpopulated receipt reads as total failure, never silent success) and
   "warnings": []
 }
 ```
+
+**New receipt fields (issue #426/#427/#428):**
+
+- `anchored_root` (string) — the resolved main root path at finalize time. Absent on single-root (non-worktree) runs where the resolution is trivial. Added by issue #426 (copy-then-verify-then-delete); see D-426-01.
+- `roadmap_removed` (object) — per-root map of `.roadmap/issue-*.md` filenames removed during finalization. Keys are absolute root paths; values are filename arrays. Present on worktree runs with dual-root cleanup (issue #428). Single-root runs carry one key. Added by issue #428; see D-428-01.
+- `roadmap_residue` (array of string) — absolute paths of `.roadmap/issue-*.md` sources that could NOT be removed during finalization. Empty on a clean close; non-empty is a `roadmap-residue-clean` invariant violation. Added by issue #428; see D-428-01.
+- `closure` (object) — per-issue-close audit record. Added by issue #427; see D-427-01. All five sub-fields are arrays of issue numbers:
+  - `attempted` — issue numbers for which a close was attempted.
+  - `closed` — issue numbers successfully closed by this caller.
+  - `failed` — issue numbers whose close call failed.
+  - `skipped_offline` — issue numbers skipped because `KAOLA_WORKFLOW_OFFLINE=1`.
+  - `kept_open` — issue numbers skipped because `keepIssueOpen` was requested.
 
 **Pre-sink close-pending qualifier (issue #396, D2).** `cmdFinalize` runs BEFORE `sink-merge` closes the members, so on a NORMAL online finalize the member(s) are not yet closed — but not because of a partial FAILURE. Two builder fields disambiguate this from a real partial close:
 
@@ -1488,6 +1515,7 @@ receipt, archiveDest)`):
 
 - `roadmap-source-absent` — `kaola-workflow/.roadmap/issue-N.md` is gone after cleanup. On a keep-open run (`remote_issue_closed: kept_open`, issue #336) this is REPLACED by `keep-open-roadmap-preserved` — the source MUST survive and `ROADMAP.md` MUST still list `#N`.
 - `roadmap-mirror-clean` — generated `kaola-workflow/ROADMAP.md` no longer lists `#N` as active work (row-anchored, issue #339: only an active table row `| #N | …` at line start violates; cross-references to `#N` inside other rows are allowed after closure). Also REPLACED by `keep-open-roadmap-preserved` on a keep-open run.
+- `roadmap-residue-clean` (issue #428) — `roadmap_residue` is empty after `reconcileRoadmapForClosure` runs. A non-empty residue means a `.roadmap/issue-*.md` source survived finalization in one of the cleaned roots (main or worktree). Applies to linked worktree runs where dual-root cleanup is performed; on single-root runs the residue check still applies but the residue can only originate from the one root.
 - `in-progress-label-removed` — `workflow:in-progress` label was removed from the remote issue. Skipped (not violated) when `KAOLA_WORKFLOW_OFFLINE=1` or when `claim_label_removed` is `'skipped_offline'`.
 - `active-folder-absent` — no live `kaola-workflow/{project}/` folder remains in active folders after archive (issue #164).
 - `archive-state-closed` — when `archiveDest` is provided, the archived `workflow-state.md` shows `status: closed` or `abandoned`; skipped (not violated) when `archiveDest` is absent (issue #164).

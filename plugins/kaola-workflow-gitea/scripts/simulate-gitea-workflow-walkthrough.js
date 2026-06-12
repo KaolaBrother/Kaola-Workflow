@@ -1475,8 +1475,240 @@ testGiteaBundleOrientSurfacesBundleIdentity();
 testGiteaBundleFinalizeRoadmapCleanup();
 testGiteaBundleSingleIssueStateHasNoBundleFields();
 
+// bundle-426-427-428-430 regression tests (mirrors root walkthrough §testFinalizeArchiveVerifiesBeforeDelete etc.).
+testGiteaFinalizeArchiveVerifiesBeforeDelete();
+testGiteaFinalizeClosesIssueBundleMembers();
+testGiteaFinalizeRoadmapResidueDetection();
+testGiteaBundleStateIncoherent();
+
 run('test-gitea-forge-helpers.js');
 run('test-gitea-workflow-scripts.js');
 run('test-gitea-sinks.js');
 
 console.log('Gitea workflow walkthrough simulation passed');
+
+// ---------------------------------------------------------------------------
+// #426: verifyArchiveComplete + copy-then-verify-then-delete ordering.
+// Source dir must survive when archive is missing workflow-state.md.
+// ---------------------------------------------------------------------------
+function testGiteaFinalizeArchiveVerifiesBeforeDelete() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-archive-verify-')));
+  const kwRoot = tmp + '.kw';
+  try {
+    _initGitRepo(tmp);
+    const wtPath = path.join(kwRoot, 'issue-426gt');
+    fs.mkdirSync(kwRoot, { recursive: true });
+    spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-426gt', '--', wtPath, 'HEAD'], {
+      cwd: tmp, encoding: 'utf8'
+    });
+    // Project dir with NO workflow-state.md.
+    const projDir = path.join(wtPath, 'kaola-workflow', 'issue-426gt');
+    fs.mkdirSync(projDir, { recursive: true });
+    fs.writeFileSync(path.join(projDir, 'phase-note.md'), 'partial\n');
+
+    const claim = require(claimScript);
+    const result = claim.archiveProjectDir(wtPath, 'issue-426gt', 'closed', undefined, {});
+
+    assert.ok(
+      fs.existsSync(projDir),
+      'gitea #426: source dir must NOT be deleted when archive is incomplete'
+    );
+    assert.strictEqual(result.archive_incomplete, true,
+      'gitea #426: archiveProjectDir must return archive_incomplete:true, got: ' + JSON.stringify(result));
+    assert.ok(
+      Array.isArray(result.missing) && result.missing.includes('workflow-state.md'),
+      'gitea #426: missing must list workflow-state.md, got: ' + JSON.stringify(result.missing)
+    );
+    console.log('testGiteaFinalizeArchiveVerifiesBeforeDelete: PASSED');
+  } finally {
+    try { spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', wtPath], { encoding: 'utf8' }); } catch (_) {}
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(kwRoot, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// #427: finalize offline on a bundle project emits closure_receipt.closure.skipped_offline.
+// ---------------------------------------------------------------------------
+function testGiteaFinalizeClosesIssueBundleMembers() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-427-closure-')));
+  const project = 'bundle-42-47';
+  try {
+    _initGitRepo(tmp);
+    gtWriteProject(tmp, project, {
+      'workflow-state.md': [
+        '# Kaola-Workflow State', '',
+        '## Project', 'name: ' + project, 'status: active', '',
+        '## Current Position', 'phase: adaptive', 'workflow_path: adaptive',
+        'step: start', 'next_command: /kaola-workflow-plan-run ' + project, '',
+        '## Pending Gates', '- none', '',
+        '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
+        '## Last Updated', new Date().toISOString(), '',
+        '## Sink', 'branch: workflow/' + project,
+        'issue_number: 42',
+        'issue_numbers: 42,47',
+        'bundle_id: ' + project,
+        'closure_policy: all_or_nothing',
+        'sink: pr', 'run_posture: in-place', ''
+      ].join('\n')
+    });
+    gtPlantRoadmapIssue(tmp, 42);
+    gtPlantRoadmapIssue(tmp, 47);
+
+    const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', project], {
+      cwd: tmp, encoding: 'utf8', timeout: 60000,
+      env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_WORKTREE_NATIVE: '0' })
+    });
+
+    assert.strictEqual(result.status, 0,
+      'gitea #427 offline bundle close: exit 0 expected, got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    const lines = (result.stdout || '').trim().split('\n').filter(l => l.trim().startsWith('{'));
+    assert.ok(lines.length > 0, 'gitea #427 offline bundle close: expected JSON output');
+    const out = JSON.parse(lines[lines.length - 1]);
+    assert.strictEqual(out.status, 'closed',
+      'gitea #427 offline bundle close: status must be closed, got ' + JSON.stringify(out.status));
+    const closure = out.closure_receipt && out.closure_receipt.closure;
+    assert.ok(closure != null, 'gitea #427: closure_receipt.closure must be present');
+    assert.ok(
+      Array.isArray(closure.skipped_offline) && closure.skipped_offline.includes(42) && closure.skipped_offline.includes(47),
+      'gitea #427: closure.skipped_offline must include 42 and 47, got: ' + JSON.stringify(closure.skipped_offline)
+    );
+    assert.ok(
+      Array.isArray(closure.closed) && closure.closed.length === 0,
+      'gitea #427: closure.closed must be empty offline, got: ' + JSON.stringify(closure.closed)
+    );
+    console.log('testGiteaFinalizeClosesIssueBundleMembers: PASSED');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+}
+
+// ---------------------------------------------------------------------------
+// #428: closure_receipt carries roadmap_removed_by_root; source removed after finalize.
+// ---------------------------------------------------------------------------
+function testGiteaFinalizeRoadmapResidueDetection() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-428-residue-')));
+  try {
+    _initGitRepo(tmp);
+    gtWriteProject(tmp, 'issue-428gt', {
+      'workflow-state.md': [
+        '# Kaola-Workflow State', '',
+        '## Project', 'name: issue-428gt', 'status: active', '',
+        '## Sink', 'branch: workflow/issue-428gt', 'issue_number: 428', 'sink: pr', ''
+      ].join('\n')
+    });
+    gtPlantRoadmapIssue(tmp, 428);
+
+    const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', 'issue-428gt'], {
+      cwd: tmp, encoding: 'utf8', timeout: 60000,
+      env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
+    });
+
+    assert.strictEqual(result.status, 0,
+      'gitea #428 residue: exit 0 expected, got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    const lines = (result.stdout || '').trim().split('\n').filter(l => l.trim().startsWith('{'));
+    assert.ok(lines.length > 0, 'gitea #428 residue: expected JSON output');
+    const out = JSON.parse(lines[lines.length - 1]);
+    assert.strictEqual(out.status, 'closed', 'gitea #428 residue: status must be closed');
+    const receipt = out.closure_receipt;
+    assert.ok(receipt != null, 'gitea #428 residue: closure_receipt must be present');
+    assert.ok(
+      receipt.roadmap_removed !== undefined || receipt.roadmap_removed_by_root !== undefined,
+      'gitea #428 residue: closure_receipt must carry roadmap_removed or roadmap_removed_by_root'
+    );
+    assert.ok(
+      !fs.existsSync(path.join(tmp, 'kaola-workflow', '.roadmap', 'issue-428.md')),
+      'gitea #428 residue: .roadmap/issue-428.md must be removed after finalize'
+    );
+    console.log('testGiteaFinalizeRoadmapResidueDetection: PASSED');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+}
+
+// ---------------------------------------------------------------------------
+// #430: orient refuses with bundle_state_incoherent when bundle_id / issue_numbers mismatch.
+// ---------------------------------------------------------------------------
+function testGiteaBundleStateIncoherent() {
+  const adaptiveNodeScript = path.join(root, 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-adaptive-node.js');
+  const valScript = path.join(root, 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-plan-validator.js');
+  const minimalPlan = [
+    '## Meta', 'labels: chore', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+    '| explore | code-explorer | — | — | 1 | sequence |',
+    '| done | finalize | explore | — | 1 | sequence |', ''
+  ];
+
+  // (a) bundle_id present, issue_numbers absent.
+  { const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-430a-'));
+    fs.mkdirSync(path.join(tmp, 'kaola-workflow'), { recursive: true });
+    try {
+      const project = 'bundle-42-47';
+      gtWriteProject(tmp, project, {
+        'workflow-state.md': [
+          '# Kaola-Workflow State', '',
+          '## Project', 'name: ' + project, 'status: active', '',
+          '## Current Position', 'phase: adaptive', 'workflow_path: adaptive',
+          'step: start', 'next_command: /kaola-workflow-plan-run ' + project, '',
+          '## Pending Gates', '- workflow-plan', '',
+          '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
+          '## Sink', 'branch: workflow/' + project,
+          'issue_number: 42',
+          'bundle_id: ' + project,   // NO issue_numbers
+          'closure_policy: all_or_nothing', 'sink: pr', ''
+        ].join('\n')
+      });
+      const planPath = path.join(tmp, 'kaola-workflow', project, 'workflow-plan.md');
+      fs.writeFileSync(planPath, ['# Workflow Plan — ' + project, ''].concat(minimalPlan).join('\n'));
+      const fr = spawnSync(process.execPath, [valScript, planPath, '--freeze'],
+        { cwd: tmp, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
+      assert.strictEqual(fr.status, 0, 'gitea #430 (a): freeze exit 0, stderr: ' + fr.stderr);
+
+      const r = spawnSync(process.execPath, [adaptiveNodeScript, 'orient', '--project', project, '--json'],
+        { cwd: tmp, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
+      assert.ok(r.status !== 0,
+        'gitea #430 (a): orient must exit non-zero when bundle_id present but issue_numbers absent, got ' + r.status);
+      const o = JSON.parse(r.stdout);
+      assert.strictEqual(o.result, 'refuse', 'gitea #430 (a): result must be refuse, got ' + JSON.stringify(o.result));
+      assert.strictEqual(o.reason, 'bundle_state_incoherent',
+        'gitea #430 (a): reason must be bundle_state_incoherent, got ' + JSON.stringify(o.reason));
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
+
+  // (b) bundle_id mismatches issue_numbers.
+  { const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-430b-'));
+    fs.mkdirSync(path.join(tmp, 'kaola-workflow'), { recursive: true });
+    try {
+      const project = 'bundle-42-47';
+      gtWriteProject(tmp, project, {
+        'workflow-state.md': [
+          '# Kaola-Workflow State', '',
+          '## Project', 'name: ' + project, 'status: active', '',
+          '## Current Position', 'phase: adaptive', 'workflow_path: adaptive',
+          'step: start', 'next_command: /kaola-workflow-plan-run ' + project, '',
+          '## Pending Gates', '- workflow-plan', '',
+          '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
+          '## Sink', 'branch: workflow/' + project,
+          'issue_number: 42',
+          'issue_numbers: 42,53',      // says 42,53 → expected bundle-42-53
+          'bundle_id: bundle-42-47',   // MISMATCH
+          'closure_policy: all_or_nothing', 'sink: pr', ''
+        ].join('\n')
+      });
+      const planPath = path.join(tmp, 'kaola-workflow', project, 'workflow-plan.md');
+      fs.writeFileSync(planPath, ['# Workflow Plan — ' + project, ''].concat(minimalPlan).join('\n'));
+      const fr = spawnSync(process.execPath, [valScript, planPath, '--freeze'],
+        { cwd: tmp, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
+      assert.strictEqual(fr.status, 0, 'gitea #430 (b): freeze exit 0, stderr: ' + fr.stderr);
+
+      const r = spawnSync(process.execPath, [adaptiveNodeScript, 'orient', '--project', project, '--json'],
+        { cwd: tmp, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
+      assert.ok(r.status !== 0,
+        'gitea #430 (b): orient must exit non-zero when bundle_id mismatches issue_numbers, got ' + r.status);
+      const o = JSON.parse(r.stdout);
+      assert.strictEqual(o.result, 'refuse', 'gitea #430 (b): result must be refuse, got ' + JSON.stringify(o.result));
+      assert.strictEqual(o.reason, 'bundle_state_incoherent',
+        'gitea #430 (b): reason must be bundle_state_incoherent, got ' + JSON.stringify(o.reason));
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
+
+  console.log('testGiteaBundleStateIncoherent: PASSED');
+}

@@ -157,6 +157,22 @@ closure_policy: all_or_nothing
 - **`bundle_id`** — Canonical identifier for the bundle: `bundle-<N1>-<N2>-...` (issues in ascending numerical order). Used as the project folder name (`kaola-workflow/bundle-42-47-53/`) and as the branch name stem.
 - **`closure_policy`** — Always `all_or_nothing` for v1 bundle projects. Every issue in the set must be closeable before any issue is closed; partial closure is not a success state. Enforced (#369) by `sink-merge` closing every member of `issue_numbers` on the success path and by the `remote-members-closed` closure invariant, which flags (warn-first-but-VISIBLE) any member left unclosed while online — so a partial close trips `closure_invariants.ok = false` rather than reporting a clean success.
 
+### Bundle coherence invariant (issue #430)
+
+`bundle_id` and `issue_numbers` must be mutually consistent at all times:
+
+```
+bundle_id == "bundle-" + sorted(issue_numbers).join("-")
+```
+
+This invariant is enforced at three independent points:
+
+1. **Claim time (`cmdStartup`)** — a `target_set_mismatch` refusal fires if the `--target-issues` set does not match the persisted `issue_numbers`.
+2. **Handoff time (`adaptive-handoff.js runHandoff`)** — a `bundle_state_incoherent` refusal fires if `bundle_id` is present but `issue_numbers` is absent or the derived bundle ID from `issue_numbers` does not match `bundle_id`.
+3. **Orient time (`adaptive-node.js orient`)** — the same `bundle_state_incoherent` refusal fires at every plan-run entry.
+
+**Do not hand-edit `issue_numbers` or `bundle_id` independently.** If a repair is needed, update BOTH fields together so the invariant holds, then re-verify at the next startup or orient.
+
 ### Bundle project and branch naming
 
 | Artifact | Naming convention |

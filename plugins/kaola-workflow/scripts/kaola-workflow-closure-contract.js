@@ -51,9 +51,11 @@ const CLOSURE_RECEIPT_FIELDS = {
   // (which flips to 'already_closed' when the issue was auto-closed on the forge — flipping the
   // checker into the wrong branch). true = keep-open was REQUESTED for this finalize.
   keep_open_requested: 'boolean',
+  // #426: absolute path to main repo root this finalize operated against.
+  anchored_root: 'string',
 };
 
-// The ten closure invariants for a completed linked issue N. `id` is a stable
+// The closure invariants for a completed linked issue N. `id` is a stable
 // machine token; `description` mirrors docs/api.md § Closure Contract.
 const CLOSURE_INVARIANTS = [
   { id: 'roadmap-source-absent', description: 'kaola-workflow/.roadmap/issue-N.md is absent.' },
@@ -71,6 +73,7 @@ const CLOSURE_INVARIANTS = [
   // WARN-FIRST detection invariants (#277 Phase 2 / M2) — recorded, not hard-blocking.
   { id: 'claim-planner-attested', description: 'A workflow-planner subagent spawn is recorded in the dispatch log (.cache/dispatch-log.jsonl) BEFORE the plan was frozen.' },
   { id: 'finalize-contractor-attested', description: 'A contractor subagent spawn is recorded in the dispatch log during the finalize window.' },
+  { id: 'roadmap-residue-clean', description: 'No .roadmap/issue-N.md source survives in any tree after closure.' },
 ];
 
 // Returns a fresh receipt for the given project/issue with every status field

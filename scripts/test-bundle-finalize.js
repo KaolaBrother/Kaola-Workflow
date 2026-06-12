@@ -504,7 +504,9 @@ const { checkClosureInvariants } = require('./kaola-workflow-claim');
     // 42 + 53 closed; 47 returns state:open (not in closedIssues, no throw).
     writeGhMockScript(binDir, { closedIssues: [42, 53] });
 
-    const result = runFinalize(['finalize', '--project', project], tmpRoot, binDir);
+    // #427: merge-lane finalize uses --keep-worktree (sink-merge closes members later).
+    // Without --keep-worktree, #427's closeIssueIdempotent would close 47 here.
+    const result = runFinalize(['finalize', '--project', project, '--keep-worktree'], tmpRoot, binDir);
     const out = parseOutput(result);
     assert(result.status === 0, 'partial finalize still exits 0 (warn-first); got ' + result.status);
     const receipt = out && out.closure_receipt;

@@ -627,6 +627,33 @@ function runOrient(opts) {
   const m4 = stateContent.match(/^issue_number:\s*(\d+)$/m);
   const primaryIssue = m4 ? parseInt(m4[1], 10) : null;
 
+  // #430: bundle state coherence check (after state read, before main resume_state logic).
+  // Identical logic to the handoff coherence check (adaptive-handoff.js): if bundle_id is
+  // present, issue_numbers must be non-empty and the bundle_id must match sorted issue list.
+  // A hand-edited or silently-collapsed state (bundle_id set but issue_numbers missing, or
+  // mismatched) is caught here before any further processing.
+  if (bundleId) {
+    const rawNums = (stateContent.match(/^issue_numbers:\s*(.+)$/m) || [])[1] || '';
+    const parsedNums = rawNums.trim().split(',').map(s => parseInt(s.trim(), 10)).filter(n => Number.isFinite(n) && n > 0);
+    if (parsedNums.length === 0) {
+      return {
+        result: 'refuse',
+        reason: 'bundle_state_incoherent',
+        errors: ['bundle_id "' + bundleId + '" found but issue_numbers is absent or empty'],
+        resume_state: 'corrupt_incoherent_bundle',
+      };
+    }
+    const expectedId = 'bundle-' + parsedNums.slice().sort((a, b) => a - b).join('-');
+    if (bundleId !== expectedId) {
+      return {
+        result: 'refuse',
+        reason: 'bundle_state_incoherent',
+        errors: ['bundle_id "' + bundleId + '" does not match issue_numbers ' + JSON.stringify(parsedNums) + ' (expected "' + expectedId + '")'],
+        resume_state: 'corrupt_incoherent_bundle',
+      };
+    }
+  }
+
   // Read plan for consent_halt: pending in ## Node Ledger.
   let planContent = '';
   try { planContent = readFile(planPath); } catch (_) {}

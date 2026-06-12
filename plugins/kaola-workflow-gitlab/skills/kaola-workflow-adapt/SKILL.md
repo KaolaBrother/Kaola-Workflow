@@ -260,6 +260,7 @@ A bundle run ends at ONE finalization. The finalization step:
 | `target_set_unavailable` | member state probe failed (online) |
 | `target_set_unverified` | member unverifiable (offline, no local evidence) |
 | `target_set_label_rollback_failed` | partial claim could not be fully rolled back |
+| `target_set_mismatch` | persisted `issue_numbers` in `workflow-state.md` does not match the claimed `--target-issues` set — startup validated the claim but the persisted state is inconsistent |
 
 On any bundle claim refusal, treat it the same as a single-issue claim refusal:
 surface the typed code and STOP; do not retry with a different issue set.

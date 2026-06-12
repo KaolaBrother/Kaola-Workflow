@@ -257,6 +257,39 @@ function runHandoff(opts) {
   }
 
   // -------------------------------------------------------------------------
+  // #430: bundle state coherence check (before step 1, no mutation).
+  // A bundle project persists bundle_id + issue_numbers in workflow-state.md.
+  // Verify coherence: if bundle_id is set then issue_numbers must be present
+  // and non-empty (a silently-collapsed bundle would have bundle_id but no
+  // issue_numbers), and the bundle_id must match the sorted issue list.
+  // Complements the target_set_mismatch check in cmdStartup (#430 n5): the
+  // handoff runs AFTER startup, so a surviving incoherent state indicates a
+  // startup bug that wasn't caught. Refuse with plan_invalid (no mutation).
+  // -------------------------------------------------------------------------
+  const bundleId = (stateContent.match(/^bundle_id:\s*(.+)$/m) || [])[1]?.trim() || '';
+  if (bundleId) {
+    const rawNums = (stateContent.match(/^issue_numbers:\s*(.+)$/m) || [])[1]?.trim() || '';
+    const issueNums = rawNums.split(',').map(s => parseInt(s.trim(), 10)).filter(n => Number.isFinite(n) && n > 0);
+    if (issueNums.length === 0) {
+      return {
+        handoff_status: 'plan_invalid',
+        result: 'refuse',
+        errors: ['bundle_state_incoherent: bundle_id "' + bundleId + '" found in workflow-state.md but issue_numbers is absent or empty — startup may have silently collapsed the bundle (#430)'],
+        validator_verdict: null,
+      };
+    }
+    const expectedId = 'bundle-' + issueNums.slice().sort((a, b) => a - b).join('-');
+    if (bundleId !== expectedId) {
+      return {
+        handoff_status: 'plan_invalid',
+        result: 'refuse',
+        errors: ['bundle_state_incoherent: bundle_id "' + bundleId + '" does not match issue_numbers ' + JSON.stringify(issueNums) + ' (expected "' + expectedId + '") (#430)'],
+        validator_verdict: null,
+      };
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // Step 1: validator --json → branch on result.
   // refuse → return plan_invalid, exit≠0, NO mutation; stop.
   // All shelled scripts take planPath as args[0] (mirror commit-node/next-action convention).

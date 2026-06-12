@@ -437,13 +437,20 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch) {
       try { ghExec(['issue', 'comment', String(args.issue), '--body', 'Merged via sink-merge. Issue intentionally kept open (partial-close terminal); residual scope remains tracked here.'], forgeOpts); }
       catch (_) { /* best-effort; decision token already recorded */ }
     } else {
-      try { ghExec(['issue', 'close', String(args.issue), '--comment', 'Merged via sink-merge.'], forgeOpts); remoteIssueClosed = 'closed'; }
-      catch (e) {
-        // #396.5: a `gh issue close` on an ALREADY-CLOSED issue exits 1 (re-run after a push→close
-        // crash). Probe before declaring failure — an already-closed issue is a SUCCESS (idempotent),
-        // not a failed closure. Only a genuinely-still-open / unavailable issue is 'failed'.
-        if (probeIssueClosed(args.issue, forgeOpts)) { remoteIssueClosed = 'already_closed'; }
-        else { remoteIssueClosed = 'failed'; process.stderr.write('sink-merge: WARNING: issue close failed for ' + args.issue + '; receipt.remote_issue_closed=failed. Manually run: gh issue close ' + args.issue + '\n'); }
+      // #427: probe before attempting close — if cmdFinalize already closed the issue, skip the
+      // close call entirely (avoids a guaranteed exit-1 error in the normal finalize→sink flow).
+      if (probeIssueClosed(args.issue, forgeOpts)) {
+        remoteIssueClosed = 'already_closed';
+        process.stderr.write('sink-merge: Issue #' + args.issue + ' already closed by cmdFinalize, skipping close.\n');
+      } else {
+        try { ghExec(['issue', 'close', String(args.issue), '--comment', 'Merged via sink-merge.'], forgeOpts); remoteIssueClosed = 'closed'; }
+        catch (e) {
+          // #396.5: a `gh issue close` on an ALREADY-CLOSED issue exits 1 (re-run after a push→close
+          // crash). Probe before declaring failure — an already-closed issue is a SUCCESS (idempotent),
+          // not a failed closure. Only a genuinely-still-open / unavailable issue is 'failed'.
+          if (probeIssueClosed(args.issue, forgeOpts)) { remoteIssueClosed = 'already_closed'; }
+          else { remoteIssueClosed = 'failed'; process.stderr.write('sink-merge: WARNING: issue close failed for ' + args.issue + '; receipt.remote_issue_closed=failed. Manually run: gh issue close ' + args.issue + '\n'); }
+        }
       }
     }
     // Claim-label removal runs in BOTH modes (claim release is wanted on keep-open).

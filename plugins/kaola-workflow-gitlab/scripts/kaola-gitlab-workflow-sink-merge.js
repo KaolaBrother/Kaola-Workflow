@@ -468,13 +468,20 @@ function postMergeCleanup(args, mainRoot, wtRemovedStatus, defBranch) {
       // #336: mechanical keep-open note. Body contains no close/fix/resolve #N substring.
       try { forge.createIssueNote(readProjectInfo(root, args.project), args.issue, 'Merged via GitLab direct merge sink. Issue intentionally kept open (partial-close terminal); residual scope remains tracked here.', forgeOpts); } catch (_) {}
     } else {
-      try { forge.createIssueNote(readProjectInfo(root, args.project), args.issue, 'Merged via GitLab direct merge sink.', forgeOpts); } catch (_) {}
-      try { forge.closeIssue(args.issue, forgeOpts); remoteIssueClosed = 'closed'; }
-      catch (e) {
-        // #396.5: a close that exits as failure on an ALREADY-CLOSED issue (idempotent re-run) is a
-        // SUCCESS — probe before declaring failure.
-        if (probeIssueClosed(args.issue, forgeOpts)) { remoteIssueClosed = 'already_closed'; }
-        else { remoteIssueClosed = 'failed'; process.stderr.write('sink-merge: WARNING: issue close failed for ' + args.issue + '; receipt.remote_issue_closed=failed. Manually run: glab issue close ' + args.issue + '\n'); }
+      // #427: probe before attempting close — if cmdFinalize already closed the issue, skip the
+      // close call entirely (avoids a guaranteed exit-1 error in the normal finalize→sink flow).
+      if (probeIssueClosed(args.issue, forgeOpts)) {
+        remoteIssueClosed = 'already_closed';
+        process.stderr.write('sink-merge: Issue #' + args.issue + ' already closed by cmdFinalize, skipping close.\n');
+      } else {
+        try { forge.createIssueNote(readProjectInfo(root, args.project), args.issue, 'Merged via GitLab direct merge sink.', forgeOpts); } catch (_) {}
+        try { forge.closeIssue(args.issue, forgeOpts); remoteIssueClosed = 'closed'; }
+        catch (e) {
+          // #396.5: a close that exits as failure on an ALREADY-CLOSED issue (idempotent re-run) is a
+          // SUCCESS — probe before declaring failure.
+          if (probeIssueClosed(args.issue, forgeOpts)) { remoteIssueClosed = 'already_closed'; }
+          else { remoteIssueClosed = 'failed'; process.stderr.write('sink-merge: WARNING: issue close failed for ' + args.issue + '; receipt.remote_issue_closed=failed. Manually run: glab issue close ' + args.issue + '\n'); }
+        }
       }
     }
     // Claim-label removal runs in BOTH modes (claim release is wanted on keep-open).

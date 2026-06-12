@@ -112,5 +112,204 @@ run('validate-kaola-workflow-gitlab-contracts.js');
 run('test-gitlab-workflow-scripts.js');
 run('test-gitlab-sinks.js');
 
+// bundle-426-427-428-430 regression tests ported to gitlab-codex edition.
+const glClaimScript = path.join(root, 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js');
+const glAdaptiveNode = path.join(root, 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-adaptive-node.js');
+const glPlanVal = path.join(root, 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-plan-validator.js');
+const glMinimalPlan = [
+  '## Meta', 'labels: chore', '',
+  '## Nodes', '',
+  '| id | role | depends_on | declared_write_set | cardinality | shape |',
+  '|---|---|---|---|---|---|',
+  '| explore | code-explorer | — | — | 1 | sequence |',
+  '| done | finalize | explore | — | 1 | sequence |', ''
+].join('\n');
+const { spawnSync: glSpawn } = require('child_process');
+const glOs = require('os');
+
+// #426: verifyArchiveComplete returns archive_incomplete:true; source NOT deleted.
+{
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(glOs.tmpdir(), 'kw-glcx-426-')));
+  const kwRoot = tmp + '.kw';
+  try {
+    glSpawn('git', ['init', '-b', 'main'], { cwd: tmp, encoding: 'utf8' });
+    glSpawn('git', ['config', 'user.email', 't@t.t'], { cwd: tmp, encoding: 'utf8' });
+    glSpawn('git', ['config', 'user.name', 'T'], { cwd: tmp, encoding: 'utf8' });
+    fs.writeFileSync(path.join(tmp, 'README.md'), 'x');
+    glSpawn('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8' });
+    glSpawn('git', ['commit', '-m', 'init'], { cwd: tmp, encoding: 'utf8' });
+    const wtPath = path.join(kwRoot, 'issue-426glcx');
+    fs.mkdirSync(kwRoot, { recursive: true });
+    glSpawn('git', ['worktree', 'add', '-b', 'workflow/issue-426glcx', '--', wtPath, 'HEAD'],
+      { cwd: tmp, encoding: 'utf8' });
+    const projDir = path.join(wtPath, 'kaola-workflow', 'issue-426glcx');
+    fs.mkdirSync(projDir, { recursive: true });
+    fs.writeFileSync(path.join(projDir, 'phase-note.md'), 'partial\n');
+    const glClaim = require(glClaimScript);
+    const result = glClaim.archiveProjectDir(wtPath, 'issue-426glcx', 'closed', undefined, {});
+    if (!fs.existsSync(projDir)) throw new Error('gitlab-codex #426: source dir must NOT be deleted when archive incomplete');
+    if (result.archive_incomplete !== true) throw new Error('gitlab-codex #426: archive_incomplete must be true, got: ' + JSON.stringify(result));
+    if (!Array.isArray(result.missing) || !result.missing.includes('workflow-state.md')) throw new Error('gitlab-codex #426: missing must list workflow-state.md, got: ' + JSON.stringify(result.missing));
+  } finally {
+    try { glSpawn('git', ['-C', tmp, 'worktree', 'remove', '--force', wtPath], { encoding: 'utf8' }); } catch (_) {}
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(kwRoot, { recursive: true, force: true });
+  }
+  process.stdout.write('gitlab-codex testFinalizeArchiveVerifiesBeforeDelete: PASSED\n');
+}
+
+// #427: offline bundle finalize emits closure.skipped_offline with member issue numbers.
+{
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(glOs.tmpdir(), 'kw-glcx-427-')));
+  const project = 'bundle-42-47';
+  try {
+    glSpawn('git', ['init', '-b', 'main'], { cwd: tmp, encoding: 'utf8' });
+    glSpawn('git', ['config', 'user.email', 't@t.t'], { cwd: tmp, encoding: 'utf8' });
+    glSpawn('git', ['config', 'user.name', 'T'], { cwd: tmp, encoding: 'utf8' });
+    fs.writeFileSync(path.join(tmp, 'README.md'), 'x');
+    glSpawn('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8' });
+    glSpawn('git', ['commit', '-m', 'init'], { cwd: tmp, encoding: 'utf8' });
+    const dir = path.join(tmp, 'kaola-workflow', project);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'workflow-state.md'), [
+      '# Kaola-Workflow State', '', '## Project', 'name: ' + project, 'status: active', '',
+      '## Pending Gates', '- none', '', '## Last Updated', new Date().toISOString(), '',
+      '## GitLab', 'issue_iid: 42', 'path_with_namespace: test/repo', '',
+      '## Sink', 'branch: workflow/' + project,
+      'issue_number: 42', 'issue_numbers: 42,47', 'bundle_id: ' + project,
+      'closure_policy: all_or_nothing', 'sink: merge', 'run_posture: in-place', ''
+    ].join('\n'));
+    for (const n of [42, 47]) {
+      const rd = path.join(tmp, 'kaola-workflow', '.roadmap');
+      fs.mkdirSync(rd, { recursive: true });
+      fs.writeFileSync(path.join(rd, 'issue-' + n + '.md'),
+        'issue: #' + n + '\ntitle: t\nstatus: open\nworkflow_project: —\nnext_step: ready\n');
+    }
+    const r = glSpawn(process.execPath, [glClaimScript, 'finalize', '--project', project], {
+      cwd: tmp, encoding: 'utf8', timeout: 60000,
+      env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_WORKTREE_NATIVE: '0' })
+    });
+    if (r.status !== 0) throw new Error('gitlab-codex #427: finalize exit 0 expected, got ' + r.status + '\nstdout: ' + r.stdout + '\nstderr: ' + r.stderr);
+    const lines = (r.stdout || '').trim().split('\n').filter(l => l.trim().startsWith('{'));
+    if (!lines.length) throw new Error('gitlab-codex #427: expected JSON output');
+    const out = JSON.parse(lines[lines.length - 1]);
+    if (out.status !== 'closed') throw new Error('gitlab-codex #427: status must be closed, got ' + JSON.stringify(out.status));
+    const closure = out.closure_receipt && out.closure_receipt.closure;
+    if (!closure) throw new Error('gitlab-codex #427: closure_receipt.closure must be present');
+    if (!Array.isArray(closure.skipped_offline) || !closure.skipped_offline.includes(42) || !closure.skipped_offline.includes(47))
+      throw new Error('gitlab-codex #427: closure.skipped_offline must include 42 and 47, got: ' + JSON.stringify(closure.skipped_offline));
+    if (!Array.isArray(closure.closed) || closure.closed.length !== 0)
+      throw new Error('gitlab-codex #427: closure.closed must be empty, got: ' + JSON.stringify(closure.closed));
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  process.stdout.write('gitlab-codex testFinalizeClosesIssueBundleMembers: PASSED\n');
+}
+
+// #428: closure_receipt carries roadmap_removed_by_root; source file removed.
+{
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(glOs.tmpdir(), 'kw-glcx-428-')));
+  try {
+    glSpawn('git', ['init', '-b', 'main'], { cwd: tmp, encoding: 'utf8' });
+    glSpawn('git', ['config', 'user.email', 't@t.t'], { cwd: tmp, encoding: 'utf8' });
+    glSpawn('git', ['config', 'user.name', 'T'], { cwd: tmp, encoding: 'utf8' });
+    fs.writeFileSync(path.join(tmp, 'README.md'), 'x');
+    glSpawn('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8' });
+    glSpawn('git', ['commit', '-m', 'init'], { cwd: tmp, encoding: 'utf8' });
+    const dir = path.join(tmp, 'kaola-workflow', 'issue-428glcx');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'workflow-state.md'), [
+      '# Kaola-Workflow State', '', '## Project', 'name: issue-428glcx', 'status: active', '',
+      '## GitLab', 'issue_iid: 428', 'path_with_namespace: test/repo', '',
+      '## Sink', 'branch: workflow/issue-428glcx', 'issue_number: 428', 'sink: merge', ''
+    ].join('\n'));
+    const rd = path.join(tmp, 'kaola-workflow', '.roadmap');
+    fs.mkdirSync(rd, { recursive: true });
+    fs.writeFileSync(path.join(rd, 'issue-428.md'),
+      'issue: #428\ntitle: t\nstatus: open\nworkflow_project: —\nnext_step: ready\n');
+    const r = glSpawn(process.execPath, [glClaimScript, 'finalize', '--project', 'issue-428glcx'], {
+      cwd: tmp, encoding: 'utf8', timeout: 60000,
+      env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
+    });
+    if (r.status !== 0) throw new Error('gitlab-codex #428: finalize exit 0 expected, got ' + r.status + '\nstdout: ' + r.stdout + '\nstderr: ' + r.stderr);
+    const lines = (r.stdout || '').trim().split('\n').filter(l => l.trim().startsWith('{'));
+    if (!lines.length) throw new Error('gitlab-codex #428: expected JSON output');
+    const out = JSON.parse(lines[lines.length - 1]);
+    if (out.status !== 'closed') throw new Error('gitlab-codex #428: status must be closed');
+    const receipt = out.closure_receipt;
+    if (!receipt) throw new Error('gitlab-codex #428: closure_receipt must be present');
+    if (receipt.roadmap_removed === undefined && receipt.roadmap_removed_by_root === undefined)
+      throw new Error('gitlab-codex #428: closure_receipt must carry roadmap_removed or roadmap_removed_by_root');
+    if (fs.existsSync(path.join(tmp, 'kaola-workflow', '.roadmap', 'issue-428.md')))
+      throw new Error('gitlab-codex #428: .roadmap/issue-428.md must be removed after finalize');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  process.stdout.write('gitlab-codex testFinalizeRoadmapResidueDetection: PASSED\n');
+}
+
+// #430: orient refuses with bundle_state_incoherent when bundle_id / issue_numbers mismatch.
+{
+  // (a) issue_numbers absent
+  const tA = fs.mkdtempSync(path.join(glOs.tmpdir(), 'kw-glcx-430a-'));
+  fs.mkdirSync(path.join(tA, 'kaola-workflow'), { recursive: true });
+  try {
+    const project = 'bundle-42-47';
+    const dir = path.join(tA, 'kaola-workflow', project);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'workflow-state.md'), [
+      '# Kaola-Workflow State', '', '## Project', 'name: ' + project, 'status: active', '',
+      '## Current Position', 'phase: adaptive', 'workflow_path: adaptive',
+      'step: start', 'next_command: /kaola-workflow-plan-run ' + project, '',
+      '## Pending Gates', '- workflow-plan', '',
+      '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
+      '## GitLab', 'issue_iid: 42', 'path_with_namespace: test/repo', '',
+      '## Sink', 'branch: workflow/gitlab-' + project,
+      'issue_number: 42', 'bundle_id: ' + project,
+      'closure_policy: all_or_nothing', 'sink: merge', ''
+    ].join('\n'));
+    const planPath = path.join(dir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, '# Workflow Plan — ' + project + '\n' + glMinimalPlan);
+    const fr = glSpawn(process.execPath, [glPlanVal, planPath, '--freeze'],
+      { cwd: tA, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
+    if (fr.status !== 0) throw new Error('gitlab-codex #430 (a): freeze must exit 0, stderr: ' + fr.stderr);
+    const r = glSpawn(process.execPath, [glAdaptiveNode, 'orient', '--project', project, '--json'],
+      { cwd: tA, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
+    if (r.status === 0) throw new Error('gitlab-codex #430 (a): orient must exit non-zero, got 0\nstdout: ' + r.stdout);
+    const o = JSON.parse(r.stdout);
+    if (o.result !== 'refuse') throw new Error('gitlab-codex #430 (a): result must be refuse, got ' + JSON.stringify(o.result));
+    if (o.reason !== 'bundle_state_incoherent') throw new Error('gitlab-codex #430 (a): reason must be bundle_state_incoherent, got ' + JSON.stringify(o.reason));
+  } finally { fs.rmSync(tA, { recursive: true, force: true }); }
+
+  // (b) bundle_id mismatches issue_numbers
+  const tB = fs.mkdtempSync(path.join(glOs.tmpdir(), 'kw-glcx-430b-'));
+  fs.mkdirSync(path.join(tB, 'kaola-workflow'), { recursive: true });
+  try {
+    const project = 'bundle-42-47';
+    const dir = path.join(tB, 'kaola-workflow', project);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'workflow-state.md'), [
+      '# Kaola-Workflow State', '', '## Project', 'name: ' + project, 'status: active', '',
+      '## Current Position', 'phase: adaptive', 'workflow_path: adaptive',
+      'step: start', 'next_command: /kaola-workflow-plan-run ' + project, '',
+      '## Pending Gates', '- workflow-plan', '',
+      '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
+      '## GitLab', 'issue_iid: 42', 'path_with_namespace: test/repo', '',
+      '## Sink', 'branch: workflow/gitlab-' + project,
+      'issue_number: 42', 'issue_numbers: 42,53', 'bundle_id: bundle-42-47',
+      'closure_policy: all_or_nothing', 'sink: merge', ''
+    ].join('\n'));
+    const planPath = path.join(dir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, '# Workflow Plan — ' + project + '\n' + glMinimalPlan);
+    const fr = glSpawn(process.execPath, [glPlanVal, planPath, '--freeze'],
+      { cwd: tB, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
+    if (fr.status !== 0) throw new Error('gitlab-codex #430 (b): freeze must exit 0, stderr: ' + fr.stderr);
+    const r = glSpawn(process.execPath, [glAdaptiveNode, 'orient', '--project', project, '--json'],
+      { cwd: tB, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
+    if (r.status === 0) throw new Error('gitlab-codex #430 (b): orient must exit non-zero, got 0\nstdout: ' + r.stdout);
+    const o = JSON.parse(r.stdout);
+    if (o.result !== 'refuse') throw new Error('gitlab-codex #430 (b): result must be refuse, got ' + JSON.stringify(o.result));
+    if (o.reason !== 'bundle_state_incoherent') throw new Error('gitlab-codex #430 (b): reason must be bundle_state_incoherent, got ' + JSON.stringify(o.reason));
+  } finally { fs.rmSync(tB, { recursive: true, force: true }); }
+
+  process.stdout.write('gitlab-codex testBundleStateIncoherent: PASSED\n');
+}
+
 console.log('GitLab Codex workflow walkthrough simulation passed');
 

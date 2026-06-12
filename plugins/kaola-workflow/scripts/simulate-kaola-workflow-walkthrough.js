@@ -1567,11 +1567,255 @@ function main() {
     testKeepOpenArchiveStamp333();   // #333
     testAC2CompactPlainStdout();
     testAC4SubagentDispatchLog();
+    testCodexFinalizeArchiveVerifiesBeforeDelete();  // #426
+    testCodexFinalizeClosesIssueBundleMembers();      // #427
+    testCodexFinalizeRoadmapResidueDetection();       // #428
+    testCodexBundleStateIncoherent();                 // #430
 
     console.log('Kaola-Workflow walkthrough simulation passed');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
+}
+
+// ---------------------------------------------------------------------------
+// #426: verifyArchiveComplete returns archive_incomplete:true when copy is missing
+// workflow-state.md, and source directory is NOT deleted (copy-then-verify-then-delete).
+// Uses the codex-edition claim script exported archiveProjectDir.
+// ---------------------------------------------------------------------------
+function testCodexFinalizeArchiveVerifiesBeforeDelete() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-cx-archive-verify-')));
+  const kwRoot = tmp + '.kw';
+  try {
+    initGitRepo(tmp);
+    const wtPath = path.join(kwRoot, 'issue-426cx');
+    fs.mkdirSync(kwRoot, { recursive: true });
+    spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-426cx', '--', wtPath, 'HEAD'], {
+      cwd: tmp, encoding: 'utf8'
+    });
+    // Project dir with NO workflow-state.md — verifyArchiveComplete fails, source must survive.
+    const projDir = path.join(wtPath, 'kaola-workflow', 'issue-426cx');
+    fs.mkdirSync(projDir, { recursive: true });
+    fs.writeFileSync(path.join(projDir, 'phase-note.md'), 'partial\n');
+
+    const claim = require(claimScript);
+    const result = claim.archiveProjectDir(wtPath, 'issue-426cx', 'closed', undefined, {});
+
+    assert(
+      fs.existsSync(projDir),
+      'codex #426 verify-before-delete: source dir must NOT be deleted when archive is incomplete'
+    );
+    assert(
+      result.archive_incomplete === true,
+      'codex #426 verify-before-delete: archiveProjectDir must return archive_incomplete:true, got: ' + JSON.stringify(result)
+    );
+    assert(
+      Array.isArray(result.missing) && result.missing.includes('workflow-state.md'),
+      'codex #426 verify-before-delete: missing must list workflow-state.md, got: ' + JSON.stringify(result.missing)
+    );
+    console.log('testCodexFinalizeArchiveVerifiesBeforeDelete: PASSED');
+  } finally {
+    try { spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', wtPath], { encoding: 'utf8' }); } catch (_) {}
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(kwRoot, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// #427: finalize offline on a bundle project emits closure_receipt.closure.skipped_offline
+// containing the bundle member issue numbers (42,47). closure.closed is empty offline.
+// ---------------------------------------------------------------------------
+function testCodexFinalizeClosesIssueBundleMembers() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-cx-427-closure-')));
+  const project = 'bundle-42-47';
+  try {
+    initGitRepo(tmp);
+    const stateLines = [
+      '# Kaola-Workflow State', '',
+      '## Project', 'name: ' + project, 'status: active', '',
+      '## Current Position', 'phase: adaptive', 'workflow_path: adaptive',
+      'step: start', 'next_command: /kaola-workflow-plan-run ' + project, '',
+      '## Pending Gates', '- none', '',
+      '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
+      '## Last Updated', new Date().toISOString(), '',
+      '## Sink', 'branch: workflow/' + project,
+      'issue_number: 42',
+      'issue_numbers: 42,47',
+      'bundle_id: ' + project,
+      'closure_policy: all_or_nothing',
+      'sink: merge', 'run_posture: in-place', ''
+    ].join('\n');
+    const dir = path.join(tmp, 'kaola-workflow', project);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'workflow-state.md'), stateLines);
+    plantRoadmap(tmp, 42, '');
+    plantRoadmap(tmp, 47, '');
+
+    const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', project], {
+      cwd: tmp, encoding: 'utf8', timeout: 60000,
+      env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_WORKTREE_NATIVE: '0' })
+    });
+
+    assert(result.status === 0,
+      'codex #427 offline bundle close: exit 0 expected, got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    const lines = (result.stdout || '').trim().split('\n').filter(l => l.trim().startsWith('{'));
+    assert(lines.length > 0, 'codex #427 offline bundle close: expected JSON output');
+    const out = JSON.parse(lines[lines.length - 1]);
+    assert(out.status === 'closed',
+      'codex #427 offline bundle close: status must be closed, got ' + JSON.stringify(out.status));
+    const closure = out.closure_receipt && out.closure_receipt.closure;
+    assert(closure != null, 'codex #427 offline bundle close: closure_receipt.closure must be present');
+    assert(
+      Array.isArray(closure.skipped_offline) && closure.skipped_offline.includes(42) && closure.skipped_offline.includes(47),
+      'codex #427 offline bundle close: closure.skipped_offline must include 42 and 47, got: ' + JSON.stringify(closure.skipped_offline)
+    );
+    assert(
+      Array.isArray(closure.closed) && closure.closed.length === 0,
+      'codex #427 offline bundle close: closure.closed must be empty, got: ' + JSON.stringify(closure.closed)
+    );
+    console.log('testCodexFinalizeClosesIssueBundleMembers: PASSED');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+}
+
+// ---------------------------------------------------------------------------
+// #428: reconcileRoadmapForClosure emits roadmap_removed_by_root on the receipt.
+// After a successful in-place finalize the receipt carries the dual-root map field
+// and the roadmap source file is removed (no residue on disk).
+// ---------------------------------------------------------------------------
+function testCodexFinalizeRoadmapResidueDetection() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-cx-428-residue-')));
+  try {
+    initGitRepo(tmp);
+    plantFolder(tmp, 'issue-428cx', 428, null);
+    plantRoadmap(tmp, 428, '');
+
+    const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', 'issue-428cx'], {
+      cwd: tmp, encoding: 'utf8', timeout: 60000,
+      env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
+    });
+
+    assert(result.status === 0,
+      'codex #428 residue: exit 0 expected, got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    const lines = (result.stdout || '').trim().split('\n').filter(l => l.trim().startsWith('{'));
+    assert(lines.length > 0, 'codex #428 residue: expected JSON output');
+    const out = JSON.parse(lines[lines.length - 1]);
+    assert(out.status === 'closed', 'codex #428 residue: status must be closed, got ' + JSON.stringify(out.status));
+    const receipt = out.closure_receipt;
+    assert(receipt != null, 'codex #428 residue: closure_receipt must be present');
+    // The dual-root roadmap removal map must be present on the receipt.
+    assert(
+      receipt.roadmap_removed !== undefined || receipt.roadmap_removed_by_root !== undefined,
+      'codex #428 residue: closure_receipt must carry roadmap_removed or roadmap_removed_by_root field'
+    );
+    // The source must be removed (no residue on disk).
+    assert(
+      !fs.existsSync(path.join(tmp, 'kaola-workflow', '.roadmap', 'issue-428.md')),
+      'codex #428 residue: .roadmap/issue-428.md must be removed after finalize'
+    );
+    console.log('testCodexFinalizeRoadmapResidueDetection: PASSED');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+}
+
+// ---------------------------------------------------------------------------
+// #430: orient subcommand refuses with bundle_state_incoherent when bundle_id
+// is present but issue_numbers is absent or mismatches the bundle_id.
+// Uses the codex-edition adaptive-node script (same as root).
+// ---------------------------------------------------------------------------
+function testCodexBundleStateIncoherent() {
+  const codexAdaptiveNode = path.join(pluginRoot, 'scripts', 'kaola-workflow-adaptive-node.js');
+  const codexPlanVal = path.join(pluginRoot, 'scripts', 'kaola-workflow-plan-validator.js');
+
+  // (a) bundle_id present, issue_numbers absent.
+  { const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-cx-430a-'));
+    fs.mkdirSync(path.join(tmp, 'kaola-workflow'), { recursive: true });
+    try {
+      const project = 'bundle-42-47';
+      const dir = path.join(tmp, 'kaola-workflow', project);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'workflow-state.md'), [
+        '# Kaola-Workflow State', '',
+        '## Project', 'name: ' + project, 'status: active', '',
+        '## Current Position', 'phase: adaptive', 'workflow_path: adaptive',
+        'step: start', 'next_command: /kaola-workflow-plan-run ' + project, '',
+        '## Pending Gates', '- workflow-plan', '',
+        '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
+        '## Sink', 'branch: workflow/' + project,
+        'issue_number: 42',
+        'bundle_id: ' + project,   // NO issue_numbers line
+        'closure_policy: all_or_nothing', 'sink: merge', ''
+      ].join('\n'));
+      // Freeze a minimal plan for orient.
+      const planPath = path.join(dir, 'workflow-plan.md');
+      fs.writeFileSync(planPath, [
+        '# Workflow Plan — ' + project, '',
+        '## Meta', 'labels: chore', '',
+        '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape |',
+        '|---|---|---|---|---|---|',
+        '| explore | code-explorer | — | — | 1 | sequence |',
+        '| done | finalize | explore | — | 1 | sequence |', ''
+      ].join('\n'));
+      const fr = spawnSync(process.execPath, [codexPlanVal, planPath, '--freeze'],
+        { cwd: tmp, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
+      assert(fr.status === 0, 'codex #430 (a): plan freeze must exit 0, stderr: ' + fr.stderr);
+
+      const r = spawnSync(process.execPath, [codexAdaptiveNode, 'orient', '--project', project, '--json'],
+        { cwd: tmp, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
+      assert(r.status !== 0,
+        'codex #430 (a): orient must exit non-zero when bundle_id present but issue_numbers absent, got ' + r.status);
+      const o = JSON.parse(r.stdout);
+      assert(o.result === 'refuse', 'codex #430 (a): result must be refuse, got ' + JSON.stringify(o.result));
+      assert(o.reason === 'bundle_state_incoherent',
+        'codex #430 (a): reason must be bundle_state_incoherent, got ' + JSON.stringify(o.reason));
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
+
+  // (b) bundle_id mismatches issue_numbers.
+  { const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-cx-430b-'));
+    fs.mkdirSync(path.join(tmp, 'kaola-workflow'), { recursive: true });
+    try {
+      const project = 'bundle-42-47';
+      const dir = path.join(tmp, 'kaola-workflow', project);
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, 'workflow-state.md'), [
+        '# Kaola-Workflow State', '',
+        '## Project', 'name: ' + project, 'status: active', '',
+        '## Current Position', 'phase: adaptive', 'workflow_path: adaptive',
+        'step: start', 'next_command: /kaola-workflow-plan-run ' + project, '',
+        '## Pending Gates', '- workflow-plan', '',
+        '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
+        '## Sink', 'branch: workflow/' + project,
+        'issue_number: 42',
+        'issue_numbers: 42,53',      // says 42,53 → expected bundle-42-53
+        'bundle_id: bundle-42-47',   // MISMATCH
+        'closure_policy: all_or_nothing', 'sink: merge', ''
+      ].join('\n'));
+      const planPath = path.join(dir, 'workflow-plan.md');
+      fs.writeFileSync(planPath, [
+        '# Workflow Plan — ' + project, '',
+        '## Meta', 'labels: chore', '',
+        '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape |',
+        '|---|---|---|---|---|---|',
+        '| explore | code-explorer | — | — | 1 | sequence |',
+        '| done | finalize | explore | — | 1 | sequence |', ''
+      ].join('\n'));
+      const fr = spawnSync(process.execPath, [codexPlanVal, planPath, '--freeze'],
+        { cwd: tmp, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
+      assert(fr.status === 0, 'codex #430 (b): plan freeze must exit 0, stderr: ' + fr.stderr);
+
+      const r = spawnSync(process.execPath, [codexAdaptiveNode, 'orient', '--project', project, '--json'],
+        { cwd: tmp, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
+      assert(r.status !== 0,
+        'codex #430 (b): orient must exit non-zero when bundle_id mismatches issue_numbers, got ' + r.status);
+      const o = JSON.parse(r.stdout);
+      assert(o.result === 'refuse', 'codex #430 (b): result must be refuse, got ' + JSON.stringify(o.result));
+      assert(o.reason === 'bundle_state_incoherent',
+        'codex #430 (b): reason must be bundle_state_incoherent, got ' + JSON.stringify(o.reason));
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
+
+  console.log('testCodexBundleStateIncoherent: PASSED');
 }
 
 main();

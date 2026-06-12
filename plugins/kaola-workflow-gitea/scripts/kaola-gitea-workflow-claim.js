@@ -162,6 +162,20 @@ function buildBranchName(issueIid, project, fallback) {
   return Number.isFinite(issueIid) && issueIid > 0 ? 'workflow/gitea-issue-' + issueIid : 'workflow/gitea-' + project;
 }
 
+// #427: idempotent forge issue close — probe-before-close prevents double-close; label removal
+// is best-effort (ignore failure). Returns 'closed', 'already_closed', or 'failed'.
+function closeIssueIdempotent(n, opts) {
+  const probe = probeIssueState(n);
+  if (probe.state === 'closed') return 'already_closed';
+  if (probe.state === 'unavailable') return 'failed';
+  try {
+    forge.closeIssue(n, opts);
+    return 'closed';
+  } catch (e) {
+    return probeIssueState(n).state === 'closed' ? 'already_closed' : 'failed';
+  }
+}
+
 function getCoordRoot(root) {
   try {
     const raw = execFileSync('git', ['rev-parse', '--git-common-dir'], {
@@ -1113,6 +1127,40 @@ function cmdStartup() {
   // #328: bundle path
   if (bundleTargets) {
     const result = claimExplicitBundle(root, args);
+    // #430: post-claim assertion — verify persisted issue_numbers matches declared set.
+    // A writeState that silently drops/coerces a member (e.g. single-element "bundle" → no
+    // issue_numbers line) would pass result.status === 'acquired' while the durable state holds a
+    // different set. Belt-and-suspenders: re-read workflow-state.md so a stale in-memory array
+    // cannot mask the collapse. The #393a gate in writeState emits issue_numbers ONLY when
+    // length > 1 — a single-element "bundle" has no issue_numbers line, so parseStateFile reads
+    // it back as a scalar project; declared=[42], claimed=[] → mismatch → typed refusal.
+    if (result.status === 'acquired') {
+      const declared = (args.targetIssues || []).slice().sort((a, b) => a - b);
+      let claimed = Array.isArray(result.issue_numbers)
+        ? result.issue_numbers.slice().sort((a, b) => a - b)
+        : [];
+      try {
+        const sf = stateFile(root, result.project);
+        const persisted = (field(fs.readFileSync(sf, 'utf8'), 'issue_numbers') || '')
+          .split(',').map(s => parseInt(s.trim(), 10)).filter(n => Number.isFinite(n) && n > 0)
+          .sort((a, b) => a - b);
+        if (persisted.length > 0) claimed = persisted;
+      } catch (_) {}
+      const same = declared.length === claimed.length
+        && declared.every((n, i) => n === claimed[i]);
+      if (!same) {
+        output({
+          verdict: 'target_set_mismatch', status: 'target_set_mismatch', claim: 'none',
+          selected_project: result.project || null, selected_issue: null,
+          target_source: 'user_directed',
+          declared_set: declared, claimed_set: claimed,
+          reasoning: 'bundle claim persisted issue set ' + JSON.stringify(claimed) +
+            ' does not match the declared --target-issues ' + JSON.stringify(declared) +
+            '; refusing to proceed on a silently-collapsed bundle (#430).'
+        }, 1);
+        return;
+      }
+    }
     output(Object.assign({
       verdict: result.status === 'acquired' ? (result.verdict || 'green') : result.status,
       claim: result.status === 'acquired' ? 'acquired' : (result.status === 'owned' ? 'owned' : 'none'),
@@ -1291,7 +1339,9 @@ function reconcileRoadmapForClosure(root, memberNumbers, primaryNumber, opts, ma
   let roadmapSourceRemoved = 'absent';
   let roadmapRegenerated = 'skipped';
   const removedSources = [];
-  const stagedReconciled = [];
+  const stagedReconciled = []; // #403.7: MAIN staged-ADD orphans actually unstaged (#297) — recorded, not silent
+  const roadmapByRoot = {}; // #428: dual-root per-member removal map
+  const residue = [];       // #428: files that survived despite a removal attempt
   for (const issueN of memberNumbers) {
     const roadmapFilePath = path.join(root, 'kaola-workflow', '.roadmap', 'issue-' + issueN + '.md');
     let thisRemoved = 'absent';
@@ -1307,6 +1357,11 @@ function reconcileRoadmapForClosure(root, memberNumbers, primaryNumber, opts, ma
     }
     if (issueN === primaryNumber) roadmapSourceRemoved = thisRemoved;
     if (thisRemoved === 'removed') removedSources.push('issue-' + issueN + '.md');
+    // #428: track worktree-root removal state; main-root starts at same value (updated below).
+    let thisRemovedWorktree = thisRemoved;
+    let thisRemovedMain = (mainRoot && mainRoot !== linkedRoot) ? 'absent' : thisRemovedWorktree;
+    // #297/#428: reconcile the MAIN-repo roadmap source for a linked worktree run.
+    // #297 handled the staged-ADD orphan (file NOT on HEAD). #428 adds removal of committed files.
     if (mainRoot && mainRoot !== linkedRoot) {
       try {
         const mainRoadmapRel = path.join('kaola-workflow', '.roadmap', 'issue-' + issueN + '.md');
@@ -1328,8 +1383,46 @@ function reconcileRoadmapForClosure(root, memberNumbers, primaryNumber, opts, ma
           const mainRoadmapAbs = path.join(mainRoot, mainRoadmapRel);
           try { fs.unlinkSync(mainRoadmapAbs); } catch (e2) { if (e2.code !== 'ENOENT') throw e2; }
           if (wasStaged) stagedReconciled.push('issue-' + issueN + '.md');
+          thisRemovedMain = 'absent'; // was only a staged-ADD orphan, no committed copy
+        } else if (!(opts && opts.keepRoadmapSource)) {
+          // #428: file IS committed on main's HEAD — remove the working-tree copy and stage the deletion
+          // so the sink commit drops it from main.
+          // Exception: when keepWorktree is true, the archive commit on the feature branch will carry
+          // the deletion when it is merged to main at sink-merge time; don't stage on main now or it
+          // leaves main's index dirty (regression lock for #297 R1).
+          const mainRoadmapAbs = path.join(mainRoot, mainRoadmapRel);
+          if (!(opts && opts.keepWorktree)) {
+            // (1) remove the working-tree file in main
+            try { fs.unlinkSync(mainRoadmapAbs); thisRemovedMain = 'removed'; }
+            catch (e) { thisRemovedMain = (e.code === 'ENOENT') ? 'absent' : 'failed'; }
+            // (2) stage the deletion so the sink commit drops it from main's HEAD
+            try {
+              execFileSync('git', ['-C', mainRoot, 'rm', '--cached', '--force', '--ignore-unmatch', mainRoadmapRel],
+                { stdio: ['ignore', 'ignore', 'ignore'] });
+            } catch (_) {}
+          } else {
+            // keepWorktree: the file still exists on main; its deletion will come via sink-merge.
+            thisRemovedMain = 'kept';
+          }
         }
       } catch (_) {}
+    }
+    // #428: build per-member dual-root record
+    roadmapByRoot[issueN] = {
+      worktree: thisRemovedWorktree === 'removed' || thisRemovedWorktree === 'absent' || thisRemovedWorktree === 'kept',
+      main:     thisRemovedMain     === 'removed' || thisRemovedMain     === 'absent' || thisRemovedMain     === 'kept',
+    };
+    // #428: record residue (surviving files despite a removal attempt, or after a failed unlink)
+    if (!(opts && opts.keepRoadmapSource)) {
+      if (fs.existsSync(roadmapFilePath))
+        residue.push({ issue: issueN, root: 'worktree', path: roadmapFilePath, reason: 'unlink_failed' });
+      // For keepWorktree, the main-root file intentionally survives (will be removed at sink-merge),
+      // so don't flag it as residue.
+      if (mainRoot && mainRoot !== linkedRoot && !(opts && opts.keepWorktree)) {
+        const mainAbs = path.join(mainRoot, 'kaola-workflow', '.roadmap', 'issue-' + issueN + '.md');
+        if (fs.existsSync(mainAbs))
+          residue.push({ issue: issueN, root: 'main', path: mainAbs, reason: 'unlink_failed' });
+      }
     }
   }
   try {
@@ -1338,7 +1431,12 @@ function reconcileRoadmapForClosure(root, memberNumbers, primaryNumber, opts, ma
   } catch (_) {
     roadmapRegenerated = 'failed';
   }
-  return { roadmap_source_removed: roadmapSourceRemoved, roadmap_regenerated: roadmapRegenerated, roadmap_sources_removed: removedSources, roadmap_staged_reconciled: stagedReconciled };
+  // #428: also regenerate the MAIN roadmap when this is a linked worktree run.
+  // Skip when keepWorktree is true: the feature-branch merge will carry the deletion + regeneration.
+  if (mainRoot && mainRoot !== linkedRoot && !(opts && opts.keepRoadmapSource) && !(opts && opts.keepWorktree)) {
+    try { roadmapModule.regenerateRoadmap(mainRoot); } catch (_) {}
+  }
+  return { roadmap_source_removed: roadmapSourceRemoved, roadmap_regenerated: roadmapRegenerated, roadmap_sources_removed: removedSources, roadmap_staged_reconciled: stagedReconciled, roadmap_removed_by_root: roadmapByRoot, roadmap_residue: residue };
 }
 
 function archiveProjectDir(root, project, statusValue, suffix, opts) {
@@ -1387,19 +1485,46 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
       }
     } catch (_) {}
   }
-  const archiveBase = path.join(root, 'kaola-workflow', 'archive');
-  fs.mkdirSync(archiveBase, { recursive: true });
-  let dest = path.join(archiveBase, project + (suffix || ''));
-  if (fs.existsSync(dest)) dest += '.archived-' + new Date().toISOString().replace(/[:.]/g, '-');
-  fs.renameSync(src, dest);
+  // #426: resolve main/linked roots BEFORE any mutation so the archive lands in main first.
   let mainRoot, linkedRoot;
   try {
-    mainRoot = fs.realpathSync(mainRootFromCoord(getCoordRoot(root)));
+    mainRoot   = fs.realpathSync(mainRootFromCoord(getCoordRoot(root)));
     linkedRoot = fs.realpathSync(root);
   } catch (_) { mainRoot = null; }
-  if (mainRoot && mainRoot !== linkedRoot) {
+  const isLinkedRun = !!(mainRoot && mainRoot !== linkedRoot);
+
+  let dest;
+  if (isLinkedRun) {
+    // #426: branch on keepWorktree.
+    // - Non-keep-worktree: archive goes to MAIN first (durable before worktree removal).
+    // - Keep-worktree: archive goes to LINKED WORKTREE (worktree is kept + merged into main;
+    //   writing to main as untracked files would block sink-merge's git checkout).
+    const keepWorktree = !!(opts && opts.keepWorktree);
+    const archiveParent = keepWorktree ? linkedRoot : mainRoot;
+    const archiveBase = path.join(archiveParent, 'kaola-workflow', 'archive');
+    fs.mkdirSync(archiveBase, { recursive: true });
+    dest = path.join(archiveBase, project + (suffix || ''));
+    if (fs.existsSync(dest)) dest += '.archived-' + new Date().toISOString().replace(/[:.]/g, '-');
+    copyDir(src, dest);
+    // (c) verify archive completeness before any deletion.
+    const v = verifyArchiveComplete(dest, ['workflow-state.md']);
+    if (!v.ok) return { skipped: undefined, archived: false, archive_incomplete: true, missing: v.missing, dest };
+    // (d) delete BOTH live copies — only after copy+verify confirmed.
+    fs.rmSync(src, { recursive: true, force: true });          // worktree live folder
     const mainLive = path.join(mainRoot, 'kaola-workflow', project);
-    if (fs.existsSync(mainLive)) fs.rmSync(mainLive, { recursive: true, force: true });
+    if (fs.existsSync(mainLive)) {
+      try {
+        if (fs.realpathSync(mainLive) !== dest)
+          fs.rmSync(mainLive, { recursive: true, force: true }); // main live folder
+      } catch (_) {}
+    }
+  } else {
+    // in-place run: existing renameSync path unchanged.
+    const archiveBase = path.join(root, 'kaola-workflow', 'archive');
+    fs.mkdirSync(archiveBase, { recursive: true });
+    dest = path.join(archiveBase, project + (suffix || ''));
+    if (fs.existsSync(dest)) dest += '.archived-' + new Date().toISOString().replace(/[:.]/g, '-');
+    fs.renameSync(src, dest);
   }
   let roadmapSourceRemoved = 'absent';
   let roadmapRegenerated = 'skipped';
@@ -1424,6 +1549,17 @@ function archiveProjectDir(root, project, statusValue, suffix, opts) {
     roadmapRegenerated = reconciled.roadmap_regenerated;
     for (const s of reconciled.roadmap_sources_removed) removedSources.push(s);
     stagedReconciled = reconciled.roadmap_staged_reconciled || [];
+    // #428: surface dual-root removal map + residue so cmdFinalize can attach them to the receipt.
+    return {
+      archived: true,
+      dest,
+      roadmap_source_removed: roadmapSourceRemoved,
+      roadmap_regenerated: roadmapRegenerated,
+      roadmap_sources_removed: removedSources,
+      roadmap_staged_reconciled: stagedReconciled,
+      roadmap_removed_by_root: reconciled.roadmap_removed_by_root || {},
+      roadmap_residue: reconciled.roadmap_residue || [],
+    };
   }
   return {
     archived: true,
@@ -1606,7 +1742,14 @@ function cmdFinalize() {
       keepIssueOpen = field(fs.readFileSync(stateFile(root, args.project), 'utf8'), 'issue_action') === 'comment_keep_open';
     } catch (_) {}
   }
-  const result = archiveProjectDir(root, args.project, 'closed', undefined, { keepOpen: keepIssueOpen, keepRoadmapSource: keepIssueOpen });
+  const result = archiveProjectDir(root, args.project, 'closed', undefined, { keepOpen: keepIssueOpen, keepRoadmapSource: keepIssueOpen, keepWorktree: args.keepWorktree });
+  // #426: resolve main/linked roots in cmdFinalize scope for backstop + removeWorktree + anchored_root.
+  let cmdFinalizeMainRoot, cmdFinalizeLinkedRoot;
+  try {
+    cmdFinalizeMainRoot   = fs.realpathSync(mainRootFromCoord(getCoordRoot(root)));
+    cmdFinalizeLinkedRoot = fs.realpathSync(root);
+  } catch (_) { cmdFinalizeMainRoot = null; }
+  const cmdFinalizeIsLinkedRun = !!(cmdFinalizeMainRoot && cmdFinalizeMainRoot !== cmdFinalizeLinkedRoot);
   // #333: manual-archive backstop — live folder already gone but an archived copy exists with a
   // non-terminal state (a manual `mv`/`git mv` bypassed archiveProjectDir). Stamp the archived
   // state terminal in place. Idempotent; swallow-on-error like the archive writes.
@@ -1614,7 +1757,10 @@ function cmdFinalize() {
   let archiveStateStamped = 'not_needed';
   if (result.skipped === 'source-missing') {
     try {
-      const destDir = path.join(root, 'kaola-workflow', 'archive', args.project);
+      // #426: backstop destDir is worktree-aware — non-keep-worktree linked run archives to main;
+      // keep-worktree linked run archives to the linked worktree (will merge into main later).
+      const destRoot = (cmdFinalizeIsLinkedRun && !args.keepWorktree) ? cmdFinalizeMainRoot : root;
+      const destDir = path.join(destRoot, 'kaola-workflow', 'archive', args.project);
       const destState = path.join(destDir, 'workflow-state.md');
       if (fs.existsSync(destState)) {
         const raw = fs.readFileSync(destState, 'utf8');
@@ -1656,6 +1802,9 @@ function cmdFinalize() {
             result.roadmap_regenerated = rec.roadmap_regenerated;
             result.roadmap_sources_removed = rec.roadmap_sources_removed;
             result.roadmap_reconciled_on_resume = true;
+            // #428: surface dual-root removal map + residue from the resume reconcile path.
+            if (rec.roadmap_removed_by_root) result.roadmap_removed_by_root = rec.roadmap_removed_by_root;
+            if (rec.roadmap_residue) result.roadmap_residue = rec.roadmap_residue;
           }
         }
       }
@@ -1664,7 +1813,8 @@ function cmdFinalize() {
   let worktreeRemoved = 'failed';
   if (!args.keepWorktree) {
     try {
-      const wtResult = removeWorktree(root, args.project, folder);
+      // #426: run git-worktree-remove from mainRoot (not inside the worktree being removed).
+      const wtResult = removeWorktree(cmdFinalizeIsLinkedRun ? cmdFinalizeMainRoot : root, args.project, folder);
       if (wtResult && wtResult.removed === true) worktreeRemoved = 'removed';
       else if (wtResult && wtResult.removed === false && wtResult.reason === 'missing') worktreeRemoved = 'missing';
       else if (wtResult && wtResult.removed === false) worktreeRemoved = 'failed';
@@ -1766,6 +1916,39 @@ function cmdFinalize() {
       remoteIssueClosed = (probe.state === 'closed') ? 'already_closed' : 'close_pending';
     } catch (_) { remoteIssueClosed = 'skipped_offline'; }
   }
+  // #427: execute forge issue close for each open member. Probe-before-close: members already
+  // closed or probed-unavailable are handled without a double-close attempt.
+  // ONLY when online, ONLY when not keep-open, ONLY for finalize-only flows (not merge-lane
+  // keep-worktree, where sink-merge is responsible for closing). Runs AFTER archive+verify+delete.
+  if (!keepIssueOpen && !OFFLINE && !args.keepWorktree) {
+    const forgeOpts = cmdFinalizeIsLinkedRun ? { cwd: cmdFinalizeMainRoot } : undefined;
+    if (issueNumbers.length > 0) {
+      // Bundle: close each member that is still open (i.e. in openIssues bucket)
+      for (let i = openIssues.length - 1; i >= 0; i--) {
+        const n = openIssues[i];
+        const token = closeIssueIdempotent(n, forgeOpts);
+        if (token === 'closed' || token === 'already_closed') {
+          closedIssues.push(n);
+          openIssues.splice(i, 1);
+        } else {
+          failedIssueClosures.push(n);
+          openIssues.splice(i, 1);
+        }
+      }
+      // Recompute the token based on updated buckets
+      remoteIssueClosed = (closedIssues.length > 0 && closedIssues.length === (issueNumbers.length - failedIssueClosures.length))
+        ? (failedIssueClosures.length === 0 ? 'closed' : 'partial')
+        : (failedIssueClosures.length > 0 ? 'partial' : 'closed');
+      if (closedIssues.length === issueNumbers.length) remoteIssueClosed = 'closed';
+      if (closedIssues.length === 0 && failedIssueClosures.length > 0) remoteIssueClosed = 'failed';
+    } else if (issueNumber) {
+      // Single-issue: close if still open (remoteIssueClosed !== 'already_closed')
+      if (remoteIssueClosed !== 'already_closed') {
+        const token = closeIssueIdempotent(issueNumber, forgeOpts);
+        remoteIssueClosed = token; // 'closed', 'already_closed', or 'failed'
+      }
+    }
+  }
   // #396.4 (D2): merge-lane finalize runs BEFORE the sink closes members → record close_disposition.
   // #416: use computeClosePendingFinalize() which correctly excludes 'skipped_offline' (a probe
   // outage while ONLINE must not masquerade as close_pending).
@@ -1787,6 +1970,23 @@ function cmdFinalize() {
   // #416: attach probe_degraded AFTER buildClosureReceipt (the builder filters by
   // CLOSURE_RECEIPT_FIELDS; probe_degraded is not in the schema yet, so attach post-build).
   if (probeDegraded) closureReceipt.probe_degraded = true;
+  // #426: attach anchored_root post-build (added to CLOSURE_RECEIPT_FIELDS in n3; kept here
+  // so the receipt carries the durable main-root path independent of schema update).
+  if (closureReceipt) closureReceipt.anchored_root = cmdFinalizeIsLinkedRun ? cmdFinalizeMainRoot : root;
+  // #428: dual-root roadmap receipt
+  if (result.roadmap_removed_by_root) closureReceipt.roadmap_removed = result.roadmap_removed_by_root;
+  if (result.roadmap_residue && result.roadmap_residue.length > 0) closureReceipt.roadmap_residue = result.roadmap_residue;
+  // #427: structured closure roll-up (post-build — not a flat schema field; Decision-5 trap).
+  {
+    const issueSet = issueNumbers.length > 0 ? issueNumbers : (issueNumber ? [issueNumber] : []);
+    closureReceipt.closure = {
+      attempted:       issueSet,
+      closed:          closedIssues.slice(),
+      failed:          failedIssueClosures.slice(),
+      skipped_offline: OFFLINE ? issueSet : [],
+      kept_open:       keepIssueOpen ? issueSet : [],
+    };
+  }
   // #328: attach bundle receipt fields AFTER buildClosureReceipt (the builder filters by
   // CLOSURE_RECEIPT_FIELDS which does not include these new bundle keys — Decision-5 trap).
   // Only attach when this is a bundle project (issueNumbers present).
@@ -2336,6 +2536,16 @@ function copyDir(src, dest) {
     if (entry.isDirectory()) copyDir(s, d);
     else fs.copyFileSync(s, d);
   }
+}
+
+// #426: verify that a freshly-copied archive is complete before deleting the live source.
+function verifyArchiveComplete(dest, expectedFiles) {
+  const missing = [];
+  if (!fs.existsSync(dest)) return { ok: false, missing: ['<dest>'] };
+  for (const f of expectedFiles) {
+    if (!fs.existsSync(path.join(dest, f))) missing.push(f);
+  }
+  return { ok: missing.length === 0, missing };
 }
 
 function cmdWorktreeFinalize() {

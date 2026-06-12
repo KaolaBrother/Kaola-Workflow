@@ -216,6 +216,120 @@ const SINGLE_ISSUE_STATE = [
 })();
 
 // ---------------------------------------------------------------------------
+// Helpers for orient tests (d) and (e)
+// ---------------------------------------------------------------------------
+
+const adaptiveNodeScript = path.join(repoRoot, 'scripts', 'kaola-workflow-adaptive-node.js');
+
+function writeMinimalPlan(tmpRoot, project) {
+  // orient requires workflow-plan.md to exist (planProbe check); the content
+  // is minimal — validator/next-action will fail gracefully (shellNode catches
+  // errors) and the coherence check fires before the final result is built.
+  const dir = path.join(tmpRoot, 'kaola-workflow', project);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'workflow-plan.md'), '# Workflow Plan\n');
+}
+
+function runOrient(tmpRoot, project) {
+  const result = spawnSync(
+    process.execPath,
+    [adaptiveNodeScript, 'orient', '--project', project, '--json'],
+    {
+      cwd: tmpRoot,
+      encoding: 'utf8',
+      env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
+    }
+  );
+  if (result.error) throw result.error;
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Test (d): orient on bundle project with bundle_id set but issue_numbers missing
+// ---------------------------------------------------------------------------
+
+(function testOrientRefusesMissingIssueNumbers() {
+  console.log('Test (d): orient refuses bundle project with bundle_id set but issue_numbers missing');
+  const tmpRoot = makeTmpRoot();
+  try {
+    const project = 'bundle-42-47-53';
+    // State has bundle_id but NO issue_numbers line
+    const stateContent = [
+      'name: bundle-42-47-53',
+      'phase: 1',
+      'status: active',
+      'issue_number: 42',
+      'bundle_id: bundle-42-47-53',
+      'closure_policy: all_or_nothing',
+      'branch: workflow/bundle-42-47-53',
+      'sink: merge',
+      'next_command: /kaola-workflow-phase2',
+      ''
+    ].join('\n');
+    writeProject(tmpRoot, project, stateContent);
+    writeMinimalPlan(tmpRoot, project);
+
+    const result = runOrient(tmpRoot, project);
+    assert(result.status === 1, 'orient exits 1 (refuse) for missing issue_numbers, got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+
+    let parsed;
+    try { parsed = JSON.parse(result.stdout.trim()); }
+    catch (e) { assert(false, 'orient output is not valid JSON: ' + result.stdout); return; }
+
+    assert(parsed.result === 'refuse', 'result is "refuse", got: ' + parsed.result);
+    assert(parsed.reason === 'bundle_state_incoherent', 'reason is "bundle_state_incoherent", got: ' + parsed.reason);
+    assert(parsed.resume_state === 'corrupt_incoherent_bundle', 'resume_state is "corrupt_incoherent_bundle", got: ' + parsed.resume_state);
+    assert(Array.isArray(parsed.errors) && parsed.errors.length > 0, 'errors is a non-empty array');
+    assert(parsed.errors[0].includes('issue_numbers'), 'errors[0] mentions issue_numbers: ' + parsed.errors[0]);
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+})();
+
+// ---------------------------------------------------------------------------
+// Test (e): orient on bundle project with bundle_id that does NOT match issue_numbers
+// ---------------------------------------------------------------------------
+
+(function testOrientRefusesMismatchedBundleId() {
+  console.log('Test (e): orient refuses bundle project with bundle_id that does not match issue_numbers');
+  const tmpRoot = makeTmpRoot();
+  try {
+    const project = 'bundle-42-47-53';
+    // State has bundle_id that does NOT match sorted issue_numbers
+    const stateContent = [
+      'name: bundle-42-47-53',
+      'phase: 1',
+      'status: active',
+      'issue_number: 42',
+      'issue_numbers: 42,47,53',
+      'bundle_id: bundle-42-99',
+      'closure_policy: all_or_nothing',
+      'branch: workflow/bundle-42-47-53',
+      'sink: merge',
+      'next_command: /kaola-workflow-phase2',
+      ''
+    ].join('\n');
+    writeProject(tmpRoot, project, stateContent);
+    writeMinimalPlan(tmpRoot, project);
+
+    const result = runOrient(tmpRoot, project);
+    assert(result.status === 1, 'orient exits 1 (refuse) for mismatched bundle_id, got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+
+    let parsed;
+    try { parsed = JSON.parse(result.stdout.trim()); }
+    catch (e) { assert(false, 'orient output is not valid JSON: ' + result.stdout); return; }
+
+    assert(parsed.result === 'refuse', 'result is "refuse", got: ' + parsed.result);
+    assert(parsed.reason === 'bundle_state_incoherent', 'reason is "bundle_state_incoherent", got: ' + parsed.reason);
+    assert(parsed.resume_state === 'corrupt_incoherent_bundle', 'resume_state is "corrupt_incoherent_bundle", got: ' + parsed.resume_state);
+    assert(Array.isArray(parsed.errors) && parsed.errors.length > 0, 'errors is a non-empty array');
+    assert(parsed.errors[0].includes('bundle-42-99'), 'errors[0] mentions mismatched bundle_id: ' + parsed.errors[0]);
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+})();
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 

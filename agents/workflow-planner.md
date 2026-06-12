@@ -214,6 +214,12 @@ these reminders does not relax them.
      `user_target_closed`, `target_unavailable`, `target_unverified`, or `claim: none`) — no
      `workflow-state.md` is written. STOP and return the verdict + reasoning so the orchestrator
      decides (fail closed). Do not retry a different issue.
+   - **Bundle startup consistency (`target_set_mismatch`, #430):** after claim, `cmdStartup`
+     compares the `issue_numbers` persisted in `workflow-state.md` against the `--target-issues`
+     set passed at startup. If they differ, the script refuses with `target_set_mismatch`. This
+     indicates a stale or diverged state file — do NOT re-attempt startup with a different issue
+     set on this refusal. Surface it verbatim and stop; the orchestrator must resolve the
+     state inconsistency before retrying.
 2. **Author the plan.** Read the issue and the codebase, decide the roles / counts / shape that serve
    *this* task, and **Write** `kaola-workflow/{project}/workflow-plan.md` containing the `## Meta`
    `labels:` line, the `## Nodes` table, and an empty `## Node Ledger` (one row per node,
@@ -250,6 +256,12 @@ these reminders does not relax them.
    Evidence into `workflow-state.md` (preserving `## Sink`). It does NOT open node1 or record the
    node1 baseline — `/kaola-workflow-plan-run` owns the full node lifecycle including the first node.
    Returns a checklist-backed packet. You do NOT judge its `decision`/`risk` fields — audit metadata.
+   - **Bundle coherence guard (`bundle_state_incoherent`, #430):** before freezing, the handoff
+     checks that when `bundle_id` is present in `workflow-state.md` the `issue_numbers` field is
+     also present and matches the `bundle-N-M-K` pattern. If this invariant fails the handoff
+     returns `handoff_status: plan_invalid` with `reason: bundle_state_incoherent` — a sign that
+     the state file was hand-edited or corrupted. Return the packet verbatim without retrying;
+     the orchestrator must repair the state file before re-dispatching.
 5. **Return.** Hand the handoff packet back and stop. On `handoff_status:plan_invalid` (validator
    refuse) return the packet verbatim — the ORCHESTRATOR drives the bounded repair loop; you do not
    retry/redesign unasked.
