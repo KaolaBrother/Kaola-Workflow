@@ -1965,10 +1965,11 @@ function testStaleWorktreeCheck() {
 const gitlabPluginRoot = path.resolve(__dirname, '..');
 const installProfilesScript = path.join(gitlabPluginRoot, 'scripts', 'install-codex-agent-profiles.js');
 
-function runInstallProfiles(target) {
+function runInstallProfiles(target, extraEnv) {
   const result = spawnSync(process.execPath, [installProfilesScript, target], {
     cwd: gitlabPluginRoot,
-    encoding: 'utf8'
+    encoding: 'utf8',
+    env: extraEnv ? Object.assign({}, process.env, extraEnv) : process.env
   });
   if (result.error) throw result.error;
   assert.ok(result.status === 0, 'install profiles failed: ' + result.stderr);
@@ -2000,13 +2001,22 @@ function testUpdateHooksHardening325() {
   const swept = mergeHooks({ hooks: { PostToolUse: [{ id: 'kaola-workflow:retired-orphan' }, { id: 'user:keep' }] } }, shrunk);
   assert.ok(!(swept.hooks.PostToolUse || []).some(e => e.id && e.id.startsWith('kaola-workflow:')), '#325 R3: orphan kaola-workflow: entry swept');
   assert.ok((swept.hooks.PostToolUse || []).some(e => e.id === 'user:keep'), '#325 R3: user entry preserved');
-  // R2 black-box
+  // R2 black-box — #447: hooks land in temp HOME/.codex (global), not in the project dir
   const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-325-schema-'));
+  const tempHome325 = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-325-home-'));
   try {
-    runInstallProfiles(freshDir);
-    const installed = JSON.parse(fs.readFileSync(path.join(freshDir, '.codex', 'hooks.json'), 'utf8'));
+    runInstallProfiles(freshDir, { HOME: tempHome325, USERPROFILE: tempHome325 });
+    // #447 AC1: hooks land in the global ~/.codex, NOT in the project dir
+    const globalHooksPath = path.join(tempHome325, '.codex', 'hooks.json');
+    const projectHooksPath = path.join(freshDir, '.codex', 'hooks.json');
+    assert.ok(fs.existsSync(globalHooksPath), '#447 AC1: hooks.json must be written to global HOME/.codex, not found at: ' + globalHooksPath);
+    assert.ok(!fs.existsSync(projectHooksPath), '#447 AC5: no hooks.json must be written to project .codex, found at: ' + projectHooksPath);
+    const installed = JSON.parse(fs.readFileSync(globalHooksPath, 'utf8'));
     assert.ok(typeof installed.$schema === 'string' && installed.$schema.length > 0, '#325 R2 (black-box): fresh-install hooks.json carries $schema');
-  } finally { fs.rmSync(freshDir, { recursive: true, force: true }); }
+  } finally {
+    fs.rmSync(freshDir, { recursive: true, force: true });
+    fs.rmSync(tempHome325, { recursive: true, force: true });
+  }
   console.log('testUpdateHooksHardening325 (gitlab): PASSED');
 }
 
@@ -2026,6 +2036,9 @@ function test409StableHomeSurvivesDirDeletion() {
     }
   };
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-409-stable-home-'));
+  // #447: hooks + stable home go to global HOME/.codex; use a temp HOME so the test
+  // never writes to the real ~/.codex.
+  const tempHome409 = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-409-home-'));
   try {
     const installSrc = path.join(work, 'ephemeral-src');
     recursiveCopyDir(gitlabPluginRoot, installSrc);
@@ -2033,13 +2046,22 @@ function test409StableHomeSurvivesDirDeletion() {
     const target = path.join(work, 'target');
     fs.mkdirSync(target, { recursive: true });
 
-    const first = spawnSync(process.execPath, [srcInstaller, target], { cwd: installSrc, encoding: 'utf8' });
+    const homeEnv409 = { HOME: tempHome409, USERPROFILE: tempHome409 };
+    const first = spawnSync(process.execPath, [srcInstaller, target], {
+      cwd: installSrc, encoding: 'utf8',
+      env: Object.assign({}, process.env, homeEnv409)
+    });
     if (first.error) throw first.error;
     assert.ok(first.status === 0, '#409 gl: install from ephemeral source must succeed: ' + first.stderr);
 
     fs.rmSync(installSrc, { recursive: true, force: true });
 
-    const hooks = JSON.parse(fs.readFileSync(path.join(target, '.codex', 'hooks.json'), 'utf8'));
+    // #447 AC1: hooks land in global HOME/.codex, not in the project dir
+    const globalHooks409Path = path.join(tempHome409, '.codex', 'hooks.json');
+    assert.ok(fs.existsSync(globalHooks409Path), '#447/#409 gl: hooks.json must be in global HOME/.codex after install');
+    assert.ok(!fs.existsSync(path.join(target, '.codex', 'hooks.json')), '#447 AC5 gl: no hooks.json must be in project .codex');
+
+    const hooks = JSON.parse(fs.readFileSync(globalHooks409Path, 'utf8'));
     let commandCount = 0;
     for (const event of Object.keys(hooks.hooks || {})) {
       for (const entry of (hooks.hooks[event] || [])) {
@@ -2058,9 +2080,15 @@ function test409StableHomeSurvivesDirDeletion() {
     }
     assert.ok(commandCount >= 4, '#409 gl: expected the four managed hook commands, saw ' + commandCount);
 
-    const planted = path.join(target, '.codex', 'kaola-workflow', 'hooks', 'kaola-workflow-stale-orphan.sh');
+    // #447: stable home also lives in global HOME/.codex/kaola-workflow
+    const globalStableHome409 = path.join(tempHome409, '.codex', 'kaola-workflow');
+    const planted = path.join(globalStableHome409, 'hooks', 'kaola-workflow-stale-orphan.sh');
+    fs.mkdirSync(path.dirname(planted), { recursive: true });
     fs.writeFileSync(planted, '#!/usr/bin/env bash\nexit 0\n');
-    const second = spawnSync(process.execPath, [installProfilesScript, target], { cwd: gitlabPluginRoot, encoding: 'utf8' });
+    const second = spawnSync(process.execPath, [installProfilesScript, target], {
+      cwd: gitlabPluginRoot, encoding: 'utf8',
+      env: Object.assign({}, process.env, homeEnv409)
+    });
     if (second.error) throw second.error;
     assert.ok(second.status === 0, '#409 gl: reinstall must succeed: ' + second.stderr);
     assert.ok(!fs.existsSync(planted), '#409 gl: reinstall must sweep the stale planted script');
@@ -2068,14 +2096,20 @@ function test409StableHomeSurvivesDirDeletion() {
     console.log('test409StableHomeSurvivesDirDeletion (gitlab): PASSED');
   } finally {
     fs.rmSync(work, { recursive: true, force: true });
+    fs.rmSync(tempHome409, { recursive: true, force: true });
   }
 }
 
 function testInstallProfilesFeaturesTableHandling() {
   const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-codex-install-fresh-'));
   const existing = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-codex-install-existing-'));
+  // #447: use a temp HOME so hooks are never written to the real ~/.codex
+  const tempHomeFresh = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-codex-home-fresh-'));
+  const tempHomeExisting = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-codex-home-existing-'));
   try {
-    const freshResult = runInstallProfiles(fresh);
+    const freshHomeEnv = { HOME: tempHomeFresh, USERPROFILE: tempHomeFresh };
+    const existingHomeEnv = { HOME: tempHomeExisting, USERPROFILE: tempHomeExisting };
+    const freshResult = runInstallProfiles(fresh, freshHomeEnv);
     const freshConfig = fs.readFileSync(path.join(fresh, '.codex', 'config.toml'), 'utf8');
     assert.ok(freshConfig.includes('[features]'), 'fresh install should include managed [features]');
     assert.ok(freshConfig.includes('multi_agent = true'), 'fresh install should enable multi_agent');
@@ -2094,9 +2128,11 @@ function testInstallProfilesFeaturesTableHandling() {
       '#332: fresh install must write the managed-profiles manifest'
     );
 
-    // --- #284: hooks.json assertions (fresh install) ---
-    const freshHooksPath = path.join(fresh, '.codex', 'hooks.json');
-    assert.ok(fs.existsSync(freshHooksPath), 'fresh install should create .codex/hooks.json');
+    // --- #284/#447: hooks.json assertions (fresh install) ---
+    // #447 AC1: hooks land in global HOME/.codex, NOT in the project dir
+    const freshHooksPath = path.join(tempHomeFresh, '.codex', 'hooks.json');
+    assert.ok(fs.existsSync(freshHooksPath), '#447 AC1: fresh install must create HOME/.codex/hooks.json (global), not found at: ' + freshHooksPath);
+    assert.ok(!fs.existsSync(path.join(fresh, '.codex', 'hooks.json')), '#447 AC5: no hooks.json must be written to project .codex');
     const freshHooks = JSON.parse(fs.readFileSync(freshHooksPath, 'utf8'));
 
     // All three required events must be present, each with at least one kaola-workflow: entry
@@ -2139,8 +2175,8 @@ function testInstallProfilesFeaturesTableHandling() {
       '[features]', 'goals = true', '', '[projects."/tmp/example"]', 'trust_level = "trusted"', ''
     ].join('\n'));
 
-    runInstallProfiles(existing);
-    runInstallProfiles(existing);
+    runInstallProfiles(existing, existingHomeEnv);
+    runInstallProfiles(existing, existingHomeEnv);
     const updated = fs.readFileSync(existingConfigPath, 'utf8');
     assert.strictEqual(
       countOccurrences(updated, /^\[features\]$/gm),
@@ -2150,9 +2186,10 @@ function testInstallProfilesFeaturesTableHandling() {
     assert.ok(updated.includes('goals = true'), 'existing [features] content must be preserved');
     assert.ok(updated.includes('[agents.code-explorer]'), 'managed agent block should still be installed');
 
-    // --- #284: idempotency — exactly ONE managed entry per event after double-run ---
-    const existingHooksPath = path.join(existing, '.codex', 'hooks.json');
-    assert.ok(fs.existsSync(existingHooksPath), 'existing dir: hooks.json must exist after install');
+    // --- #284/#447: idempotency — hooks land in global HOME/.codex (not project); each id once ---
+    const existingHooksPath = path.join(tempHomeExisting, '.codex', 'hooks.json');
+    assert.ok(fs.existsSync(existingHooksPath), '#447: global HOME/.codex/hooks.json must exist after install');
+    assert.ok(!fs.existsSync(path.join(existing, '.codex', 'hooks.json')), '#447 AC5: no hooks.json in project .codex after double-run');
     const existingHooks = JSON.parse(fs.readFileSync(existingHooksPath, 'utf8'));
     // #376: per-ID no-duplicate check (an event MAY carry >1 distinct managed id, e.g. PreToolUse holds
     // both pre-commit-guard and the write-lane hook); each kaola-workflow: id must appear exactly once.
@@ -2168,6 +2205,8 @@ function testInstallProfilesFeaturesTableHandling() {
   } finally {
     fs.rmSync(fresh, { recursive: true, force: true });
     fs.rmSync(existing, { recursive: true, force: true });
+    fs.rmSync(tempHomeFresh, { recursive: true, force: true });
+    fs.rmSync(tempHomeExisting, { recursive: true, force: true });
   }
 }
 

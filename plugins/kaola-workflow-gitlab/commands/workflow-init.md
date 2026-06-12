@@ -156,6 +156,13 @@ Append equivalent missing sections only. Treat headings with the same meaning as
 ```
 <!-- KW-CLAUDE-TEMPLATE-END -->
 
+> **Codex hooks note:** Codex lifecycle hooks install **globally** into `~/.codex` (not
+> the project). Running `install-codex-agent-profiles.js "$PWD"` installs the project-local
+> agent profiles AND refreshes the global hooks in one pass — re-running it after an upgrade
+> force-refreshes the hooks without re-initing the repo. Trust hooks once via `/hooks`. If a
+> project-local `.codex/hooks.json` exists from a prior version, remove it (or run
+> `uninstall.sh`) to avoid double-firing.
+
 Keep the working-principle bullets concise.
 
 If an existing `CLAUDE.md` is bloated or duplicates the sections above, do not silently replace it. Add a short `## Maintenance Note` with the proposed consolidation and ask before destructive rewriting.

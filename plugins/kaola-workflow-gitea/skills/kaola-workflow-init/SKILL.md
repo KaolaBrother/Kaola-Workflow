@@ -126,6 +126,13 @@ This creates or refreshes `.codex/agents/kaola-workflow/*.toml` and a managed
 `# BEGIN kaola-workflow agents` block in `.codex/config.toml`. Preserve all
 unrelated `.codex/config.toml` content.
 
+Codex lifecycle hooks are installed **globally** into `~/.codex` (not the project).
+The same `install-codex-agent-profiles.js "$PWD"` step installs the project-local agent
+profiles AND refreshes the global hooks in one pass, so re-running it on init or after an
+upgrade force-refreshes the hooks — you never need to re-init a repo just to update hooks.
+Trust the hooks once with `/hooks` in Codex. If an older project-local `.codex/hooks.json`
+exists from a prior version, remove it (or run `uninstall.sh`) to avoid double-firing.
+
 6. Create only missing scaffold files:
 
 ```text

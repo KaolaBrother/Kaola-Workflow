@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 
@@ -8,10 +9,14 @@ const projectRoot = path.resolve(process.argv[2] || process.cwd());
 const sourceAgentsDir = path.join(pluginRoot, 'agents');
 const sourceTemplate = path.join(pluginRoot, 'config', 'agents.toml');
 const sourceHooksTemplate = path.join(pluginRoot, 'config', 'hooks.json');
+// project-local .codex — agents + config stay here (AC2: profiles unchanged)
 const targetCodexDir = path.join(projectRoot, '.codex');
 const targetAgentsDir = path.join(targetCodexDir, 'agents', 'kaola-workflow');
 const targetConfig = path.join(targetCodexDir, 'config.toml');
-const targetHooks = path.join(targetCodexDir, 'hooks.json');
+// #447: hooks install GLOBALLY into ~/.codex — one location for all projects,
+// force-refreshed on every install/upgrade (mirrors the Claude edition's global hooks).
+const globalCodexDir = path.join(os.homedir(), '.codex');
+const targetHooks = path.join(globalCodexDir, 'hooks.json');
 // #409: a stable, version-LESS Codex-owned home for the hook scripts that
 // hooks.json points at — mirrors install.sh L250's $SUPPORT_DIR/{hooks,scripts}
 // (~/.claude/kaola-workflow). Previously buildManagedHooks substituted `pluginRoot`
@@ -21,7 +26,8 @@ const targetHooks = path.join(targetCodexDir, 'hooks.json');
 // next release) → every hook fire exit 127. We now COPY the hook-referenced scripts
 // into this version-less home and substitute THIS dir into __KW_PLUGIN_ROOT__.
 // pluginRoot STAYS the read SOURCE (sourceAgentsDir / templates / manifest).
-const targetStableDir = path.join(targetCodexDir, 'kaola-workflow');
+// #447: the stable home also lives in the GLOBAL ~/.codex/kaola-workflow.
+const targetStableDir = path.join(globalCodexDir, 'kaola-workflow');
 const targetStableHooksDir = path.join(targetStableDir, 'hooks');
 const targetStableScriptsDir = path.join(targetStableDir, 'scripts');
 const beginMarker = '# BEGIN kaola-workflow agents';
@@ -465,7 +471,8 @@ function mergeHooks(existing, managed) {
 }
 
 function updateHooks() {
-  fs.mkdirSync(targetCodexDir, { recursive: true });
+  // #447: hooks live in the GLOBAL ~/.codex; ensure its parent dir exists.
+  fs.mkdirSync(globalCodexDir, { recursive: true });
 
   // R1: build the managed hooks inside a WARN-first guard — a malformed template should WARN and
   // skip hooks, never abort copyAgentProfiles/updateConfig.
@@ -686,9 +693,13 @@ function main() {
   for (const file of copied) {
     console.log(`- ${path.relative(projectRoot, path.join(targetAgentsDir, file))}`);
   }
-  console.log(`Kaola-Workflow Codex hooks: ${hooksStatus} at ${path.relative(projectRoot, targetHooks)}`);
+  // #447: hooks are global — show the global path (relative to HOME for readability).
+  const homeDir = os.homedir();
+  const hookPathDisplay = targetHooks.startsWith(homeDir) ? '~' + targetHooks.slice(homeDir.length) : targetHooks;
+  const stablePathDisplay = targetStableDir.startsWith(homeDir) ? '~' + targetStableDir.slice(homeDir.length) : targetStableDir;
+  console.log(`Kaola-Workflow Codex hooks: ${hooksStatus} at ${hookPathDisplay}`);
   // #409: report the stable hook home so the user can see the version-less copy target.
-  console.log(`Kaola-Workflow Codex hooks: copied ${stableCopy.copied.length} hook script(s) into stable home ${path.relative(projectRoot, targetStableDir)} (swept ${stableCopy.removed} stale)`);
+  console.log(`Kaola-Workflow Codex hooks: copied ${stableCopy.copied.length} hook script(s) into stable home ${stablePathDisplay} (swept ${stableCopy.removed} stale)`);
   console.log(`run /hooks once in Codex to review and trust these command hooks (or codex exec --dangerously-bypass-hook-trust for automation)`);
 
   console.log(`Kaola-Workflow agent profiles: removed ${removed.length} stale managed profile(s)`);

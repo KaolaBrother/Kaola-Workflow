@@ -201,13 +201,12 @@ PY
   fi
 fi
 
-# Strip Kaola-Workflow-managed hook entries from the project-local .codex/hooks.json
+# Strip Kaola-Workflow-managed hook entries from the GLOBAL ~/.codex/hooks.json
 # written by install-codex-agent-profiles.js.
 #
-# ASYMMETRY: install writes project-local .codex/hooks.json (relative to $PWD at
-# install time). uninstall.sh can only clean the hooks config in the directory it
-# is run from; if you installed in a different directory, clean that directory too.
-CODEX_HOOKS_FILE="$PWD/.codex/hooks.json"
+# #447: install writes hooks GLOBALLY into ~/.codex/hooks.json (not project-local).
+# Profiles and config stay project-local; only the hook cleanup targets $HOME/.codex.
+CODEX_HOOKS_FILE="$HOME/.codex/hooks.json"
 if [[ -f "$CODEX_HOOKS_FILE" ]] && command -v python3 >/dev/null 2>&1; then
   if python3 - "$CODEX_HOOKS_FILE" <<'PY'; then
 import json, os, sys
@@ -260,11 +259,11 @@ PY
   fi
 fi
 
-# issue #409: remove the version-less stable hook home written by
-# install-codex-agent-profiles.js (~/.codex/kaola-workflow/{hooks,scripts}). Same $PWD
-# asymmetry as the hooks-config cleanup above — only the dir under the current $PWD is
-# cleaned. Bounded to the Kaola-owned subtree; never touches anything else under .codex.
-CODEX_STABLE_HOME="$PWD/.codex/kaola-workflow"
+# issue #409/#447: remove the version-less stable hook home written by
+# install-codex-agent-profiles.js (~/.codex/kaola-workflow/{hooks,scripts}).
+# #447: the stable home is now GLOBAL (was $PWD/.codex, now $HOME/.codex).
+# Bounded to the Kaola-owned subtree; never touches anything else under .codex.
+CODEX_STABLE_HOME="$HOME/.codex/kaola-workflow"
 if [[ -d "$CODEX_STABLE_HOME" ]]; then
   rm -rf "$CODEX_STABLE_HOME"
   echo "Removed Kaola-Workflow Codex hook home: $CODEX_STABLE_HOME"

@@ -43,10 +43,11 @@ function assertNoLegacyCoordDirs(root) {
   }
 }
 
-function runInstallProfiles(target) {
+function runInstallProfiles(target, extraEnv) {
   const result = spawnSync(process.execPath, [installProfilesScript, target], {
     cwd: repoRoot,
-    encoding: 'utf8'
+    encoding: 'utf8',
+    env: extraEnv ? Object.assign({}, process.env, extraEnv) : process.env
   });
   if (result.error) throw result.error;
   assert(result.status === 0, 'install profiles failed: ' + result.stderr);
@@ -93,12 +94,19 @@ function testInstallProfilesFeaturesTableHandling() {
 
 // AC1 (#284): hooks.json assertions — events, ids, token resolution, trust-step stdout,
 // and idempotency with a pre-seeded user entry.
+// #447: hooks are now GLOBAL (installer writes to HOME/.codex/hooks.json, not project .codex/).
+// Both fresh and existing installs run under a temp HOME so the real ~/.codex is never touched.
 function testAC1HooksJson() {
   const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-284-hooks-fresh-'));
   const existing = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-284-hooks-existing-'));
+  const tempHomeFresh = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-284-home-fresh-'));
+  const tempHomeExisting = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-284-home-existing-'));
   try {
+    const freshHomeEnv = { HOME: tempHomeFresh, USERPROFILE: tempHomeFresh };
+    const existingHomeEnv = { HOME: tempHomeExisting, USERPROFILE: tempHomeExisting };
+
     // Install once to the fresh dir and capture stdout.
-    const freshResult = runInstallProfiles(fresh);
+    const freshResult = runInstallProfiles(fresh, freshHomeEnv);
 
     // AC1: trust-step line must be present in install stdout.
     // RED (transient demonstration): assert it does NOT exist in an empty string — that fails.
@@ -106,8 +114,11 @@ function testAC1HooksJson() {
     assert(freshResult.stdout.includes('/hooks'),
       'AC1: install stdout must contain the /hooks trust-step line');
 
-    const hooksPath = path.join(fresh, '.codex', 'hooks.json');
+    // #447 AC1: hooks land in the global HOME/.codex, NOT in the project dir.
+    const hooksPath = path.join(tempHomeFresh, '.codex', 'hooks.json');
     assert(fs.existsSync(hooksPath), 'AC1: hooks.json must exist after fresh install');
+    assert(!fs.existsSync(path.join(fresh, '.codex', 'hooks.json')),
+      '#447 AC5: no hooks.json must be written to project .codex');
 
     // AC1: no literal __KW_PLUGIN_ROOT__ token must survive in the installed file.
     // RED (transient demonstration): the source template DOES contain the token.
@@ -143,19 +154,25 @@ function testAC1HooksJson() {
       'AC1: SessionStart compact entry command must reference kaola-workflow-codex-compact-resume.js, got: ' + compactCmd);
 
     // AC1 idempotency: seed a user-owned entry in SessionStart, then install a second time.
-    // Existing target starts from a copy of the fresh install.
+    // #447: hooks land in the global HOME/.codex (tempHomeExisting), not in the project .codex.
     const existingCodexDir = path.join(existing, '.codex');
     fs.mkdirSync(existingCodexDir, { recursive: true });
     // First install.
-    runInstallProfiles(existing);
-    const afterFirst = JSON.parse(fs.readFileSync(path.join(existing, '.codex', 'hooks.json'), 'utf8'));
+    runInstallProfiles(existing, existingHomeEnv);
+    const globalHooksPath = path.join(tempHomeExisting, '.codex', 'hooks.json');
+    assert(fs.existsSync(globalHooksPath), '#447: global HOME/.codex/hooks.json must exist after first install');
+    assert(!fs.existsSync(path.join(existing, '.codex', 'hooks.json')),
+      '#447 AC5: no hooks.json in project .codex after first install');
+    const afterFirst = JSON.parse(fs.readFileSync(globalHooksPath, 'utf8'));
     // Seed a user entry (non-kaola id) into the SessionStart event.
     const USER_ENTRY = { id: 'user-custom-session-hook', matcher: '*', hooks: [{ type: 'command', command: 'echo user-custom' }] };
     afterFirst.hooks.SessionStart = (afterFirst.hooks.SessionStart || []).concat([USER_ENTRY]);
-    fs.writeFileSync(path.join(existing, '.codex', 'hooks.json'), JSON.stringify(afterFirst, null, 2) + '\n');
+    fs.writeFileSync(globalHooksPath, JSON.stringify(afterFirst, null, 2) + '\n');
     // Second install.
-    runInstallProfiles(existing);
-    const afterSecond = JSON.parse(fs.readFileSync(path.join(existing, '.codex', 'hooks.json'), 'utf8'));
+    runInstallProfiles(existing, existingHomeEnv);
+    assert(!fs.existsSync(path.join(existing, '.codex', 'hooks.json')),
+      '#447 AC5: no hooks.json in project .codex after double-run');
+    const afterSecond = JSON.parse(fs.readFileSync(globalHooksPath, 'utf8'));
     // Assert NO DUPLICATE managed entries after the 2nd install: each kaola-workflow: id appears
     // exactly once (an event MAY carry >1 distinct managed id — e.g. PreToolUse holds both
     // pre-commit-guard and the #376 write-lane hook — so the check is per-id, not per-event count).
@@ -178,6 +195,8 @@ function testAC1HooksJson() {
   } finally {
     fs.rmSync(fresh, { recursive: true, force: true });
     fs.rmSync(existing, { recursive: true, force: true });
+    fs.rmSync(tempHomeFresh, { recursive: true, force: true });
+    fs.rmSync(tempHomeExisting, { recursive: true, force: true });
   }
 }
 
@@ -387,14 +406,22 @@ function testUpdateHooksHardening325() {
   assert(!post.some(e => e.id && e.id.startsWith('kaola-workflow:')), '#325 R3: orphaned kaola-workflow: entry under a now-unmanaged event is swept');
   assert(post.some(e => e.id === 'user:keep'), '#325 R3: non-managed user entry under that event is preserved');
 
-  // R2 black-box: a fresh install writes .codex/hooks.json carrying $schema.
+  // R2 black-box: a fresh install writes hooks.json carrying $schema.
+  // #447: hooks land in global HOME/.codex, not in the project dir — use a temp HOME.
   const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-325-schema-'));
+  const tempHome325 = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-325-home-'));
   try {
-    runInstallProfiles(freshDir);
-    const installed = JSON.parse(fs.readFileSync(path.join(freshDir, '.codex', 'hooks.json'), 'utf8'));
+    runInstallProfiles(freshDir, { HOME: tempHome325, USERPROFILE: tempHome325 });
+    // #447 AC1: hooks land in the global HOME/.codex, NOT in the project dir.
+    const globalHooksPath = path.join(tempHome325, '.codex', 'hooks.json');
+    const projectHooksPath = path.join(freshDir, '.codex', 'hooks.json');
+    assert(fs.existsSync(globalHooksPath), '#447 AC1: hooks.json must be written to global HOME/.codex, not found at: ' + globalHooksPath);
+    assert(!fs.existsSync(projectHooksPath), '#447 AC5: no hooks.json must be written to project .codex, found at: ' + projectHooksPath);
+    const installed = JSON.parse(fs.readFileSync(globalHooksPath, 'utf8'));
     assert(typeof installed.$schema === 'string' && installed.$schema.length > 0, '#325 R2 (black-box): fresh-install hooks.json carries $schema');
   } finally {
     fs.rmSync(freshDir, { recursive: true, force: true });
+    fs.rmSync(tempHome325, { recursive: true, force: true });
   }
   console.log('testUpdateHooksHardening325: PASSED');
 }
@@ -421,6 +448,9 @@ function recursiveCopyDir(src, dst) {
 
 function test409StableHomeSurvivesDirDeletion() {
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-409-stable-home-'));
+  // #447: hooks + stable home go to global HOME/.codex; use a temp HOME so the test
+  // never writes to the real ~/.codex.
+  const tempHome409 = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-409-home-'));
   try {
     // 1. Copy the plugin tree into a throwaway install SOURCE, then run the installer
     //    FROM that copy (so __dirname/.. resolves to the throwaway, exactly the live bug).
@@ -430,17 +460,25 @@ function test409StableHomeSurvivesDirDeletion() {
     const target = path.join(work, 'target');
     fs.mkdirSync(target, { recursive: true });
 
-    const first = spawnSync(process.execPath, [srcInstaller, target], { cwd: installSrc, encoding: 'utf8' });
+    const homeEnv409 = { HOME: tempHome409, USERPROFILE: tempHome409 };
+    const first = spawnSync(process.execPath, [srcInstaller, target], {
+      cwd: installSrc, encoding: 'utf8',
+      env: Object.assign({}, process.env, homeEnv409)
+    });
     if (first.error) throw first.error;
     assert(first.status === 0, '#409: install from ephemeral source must succeed: ' + first.stderr);
 
     // 2. DELETE the install source — the macOS /tmp-purge / version-bump scenario.
     fs.rmSync(installSrc, { recursive: true, force: true });
 
-    // 3. Every hooks.json command must still resolve to an existing, executable file,
-    //    must NOT reference the deleted source, and must NOT be version-pinned.
-    const hooksPath = path.join(target, '.codex', 'hooks.json');
-    const hooks = JSON.parse(fs.readFileSync(hooksPath, 'utf8'));
+    // 3. #447 AC1: hooks land in global HOME/.codex, not in the project dir.
+    const globalHooks409Path = path.join(tempHome409, '.codex', 'hooks.json');
+    assert(fs.existsSync(globalHooks409Path), '#447/#409: hooks.json must be in global HOME/.codex after install');
+    assert(!fs.existsSync(path.join(target, '.codex', 'hooks.json')), '#447 AC5: no hooks.json must be in project .codex');
+
+    // Every hooks.json command must still resolve to an existing, executable file,
+    // must NOT reference the deleted source, and must NOT be version-pinned.
+    const hooks = JSON.parse(fs.readFileSync(globalHooks409Path, 'utf8'));
     let commandCount = 0;
     for (const event of Object.keys(hooks.hooks || {})) {
       for (const entry of (hooks.hooks[event] || [])) {
@@ -467,11 +505,16 @@ function test409StableHomeSurvivesDirDeletion() {
     assert(commandCount >= 4, '#409: expected the four managed hook commands, saw ' + commandCount);
 
     // 4. Reinstall sweeps a planted stale script (no orphan left in the stable home).
-    const stableHooksDir = path.join(target, '.codex', 'kaola-workflow', 'hooks');
-    const planted = path.join(stableHooksDir, 'kaola-workflow-stale-orphan.sh');
+    // #447: stable home lives in global HOME/.codex/kaola-workflow, not in the project .codex.
+    const globalStableHome409 = path.join(tempHome409, '.codex', 'kaola-workflow');
+    const planted = path.join(globalStableHome409, 'hooks', 'kaola-workflow-stale-orphan.sh');
+    fs.mkdirSync(path.dirname(planted), { recursive: true });
     fs.writeFileSync(planted, '#!/usr/bin/env bash\nexit 0\n');
     assert(fs.existsSync(planted), '#409: planted stale script must exist before reinstall');
-    const second = spawnSync(process.execPath, [installProfilesScript, target], { cwd: repoRoot, encoding: 'utf8' });
+    const second = spawnSync(process.execPath, [installProfilesScript, target], {
+      cwd: repoRoot, encoding: 'utf8',
+      env: Object.assign({}, process.env, homeEnv409)
+    });
     if (second.error) throw second.error;
     assert(second.status === 0, '#409: reinstall must succeed: ' + second.stderr);
     assert(!fs.existsSync(planted),
@@ -480,6 +523,7 @@ function test409StableHomeSurvivesDirDeletion() {
     console.log('test409StableHomeSurvivesDirDeletion (#409): PASSED');
   } finally {
     fs.rmSync(work, { recursive: true, force: true });
+    fs.rmSync(tempHome409, { recursive: true, force: true });
   }
 }
 

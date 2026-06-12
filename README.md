@@ -372,21 +372,31 @@ Run workflow-init for Kaola-Workflow Gitea for Codex.
 
 #### Trust the hooks (required — they stay inert until you do)
 
-`workflow-init` writes the lifecycle hooks to a **project-local** `.codex/hooks.json`
-and copies their scripts into the stable home `.codex/kaola-workflow/{hooks,scripts}`.
+`install-codex-agent-profiles.js` (run by the Codex `kaola-workflow-init` skill and
+re-run on every upgrade) installs the lifecycle hooks **globally** into
+`~/.codex/hooks.json` and copies their scripts into `~/.codex/kaola-workflow/{hooks,scripts}`.
+Because hooks land in `~/.codex` — not in a project-local `.codex/hooks.json` — a
+single install covers all projects on the machine and a plugin upgrade refreshes the
+global copy automatically; no per-repository re-init is needed to pick up hook changes.
+
+Agent profiles and `.codex/config.toml` remain **project-local** (written to
+`<project>/.codex/`); only the hook files are global.
+
 Codex (>= 0.139) will **not execute any command hook until you review and trust it** —
 trust is recorded against each hook's content hash and persisted per machine. So a
-freshly initialized project has the hook files on disk yet **no hook fires yet**; this
+freshly installed machine has the hook files on disk yet **no hook fires yet**; this
 is the usual cause of "the hooks were never added to Codex".
 
-To activate them, open a Codex session on the project and run:
+To activate them, open a Codex session and run:
 
 ```text
 /hooks
 ```
 
-Review the `kaola-workflow:` entries and trust them. This is a one-time step (editing a
-hook re-marks it untrusted, so re-run `/hooks` after an update that changes a hook).
+Review the `kaola-workflow:` entries and trust them. This is a one-time step per
+machine (trust survives across projects and upgrades as long as a hook's content does
+not change; editing a hook re-marks it untrusted, so re-run `/hooks` after an upgrade
+that changes a hook's content).
 There is **no config key, trust file, or CLI flag that persists trust
 non-interactively** — the only non-interactive option is
 `codex exec --dangerously-bypass-hook-trust`, which skips the check for that single run
@@ -404,8 +414,9 @@ git pull
 codex plugin marketplace upgrade kaola-workflow
 #   or: codex plugin remove kaola-workflow@<marketplace> && codex plugin add kaola-workflow@<marketplace>
 # Re-run the agent-profile installer against the project (validates each profile
-# schema, prunes retired Kaola files like docs-lookup.toml, and writes the managed
-# manifest .codex/agents/kaola-workflow/.kaola-managed-profiles.json):
+# schema, prunes retired Kaola files like docs-lookup.toml, writes the managed
+# manifest .codex/agents/kaola-workflow/.kaola-managed-profiles.json, and
+# refreshes the global hooks at ~/.codex/hooks.json + ~/.codex/kaola-workflow/):
 node <plugin-root>/scripts/install-codex-agent-profiles.js <project-root>
 # Inspect user / project / plugin-cache scope freshness (read-only doctor):
 node <plugin-root>/scripts/kaola-workflow-codex-preflight.js --doctor --project-root <project-root> --json
@@ -423,15 +434,16 @@ prunes, and re-writes the managed manifest.
 To verify a project was initialized for Codex, check that `.codex/config.toml`
 contains a `# BEGIN kaola-workflow agents` managed block, that
 `.codex/agents/kaola-workflow/` contains the role profile files, and that
-`.codex/hooks.json` plus the stable hook home `.codex/kaola-workflow/{hooks,scripts}`
+the global hook home `~/.codex/hooks.json` plus `~/.codex/kaola-workflow/{hooks,scripts}`
 exist — then trust the hooks via `/hooks` (see *Trust the hooks* above).
 
 The read-only `--doctor` report grades three scopes: `user`, `project`, and
-`plugin_cache`. Kaola-Workflow installs **project-local only**, so the `project` scope
-is the authoritative one and must read green (managed block present; no missing, stale,
-or malformed roles). A top-level `status: stale` that is driven **solely** by the
-`user` scope (managed block absent under `~/.codex`) is **expected and benign** — the
-user scope is intentionally empty, so do not "repair" it by installing into `~/.codex`.
+`plugin_cache`. Agent **profiles** are project-local, so the `project` scope
+is the authoritative one for profiles and must read green (managed block present; no
+missing, stale, or malformed roles). The **hooks** are global by design (`~/.codex`)
+and are not graded per-project scope — a `user`-scope row that reflects only profile
+absence is expected. A top-level `status: stale` driven solely by a missing profile
+managed-block in the `user` scope is benign; do not conflate it with a hook problem.
 
 The primary skills are:
 
@@ -903,14 +915,16 @@ evidence path.
 
 ### Codex lifecycle hooks
 
-Codex wires the same three hooks via a project-local `.codex/hooks.json` written by
-`install-codex-agent-profiles.js` (run by the Codex `kaola-workflow-init` skill). The
-hooks are NOT in the Codex plugin manifest (`plugin.json`) — they live in the
-project's `.codex/` directory. Since #409, hooks and their helper scripts have a
-stable install home at `.codex/kaola-workflow/hooks/` and
-`.codex/kaola-workflow/scripts/` respectively, which means `codex plugin add` (plugin
-upgrades) no longer overwrites local hook overrides — user customisations in those
-paths survive a plugin re-install.
+Codex wires the same three hooks via `install-codex-agent-profiles.js` (run by the
+Codex `kaola-workflow-init` skill and re-run on every upgrade). Since #447, hooks
+install **globally** into `~/.codex/hooks.json`; their scripts land in the stable,
+version-less home `~/.codex/kaola-workflow/{hooks,scripts}`. The hooks are NOT in the
+Codex plugin manifest (`plugin.json`) — they are separate from the plugin bundle.
+Installing into `~/.codex` means one install covers all projects on the machine and
+a plugin upgrade force-refreshes the global copy; no per-repository re-init is needed
+to pick up hook changes. The stable scripts home (`#409`) ensures hook commands
+survive plugin GC or a worktree purge — `codex plugin add` / upgrade never overwrites
+those paths.
 
 | Hook ID | Event (matcher) | Purpose | Script |
 |---------|-----------------|---------|--------|
@@ -928,10 +942,11 @@ paths survive a plugin re-install.
   reads `missing` — non-fatal, WARN-first (closure still succeeds).
 - **Matcher note:** the `PreToolUse`/`PostToolUse` matchers (`Bash`, `Write|Edit`)
   follow Claude Code tool names; if a Codex build uses different tool-event names the
-  matcher string in `.codex/hooks.json` may need adjustment.
-- **Uninstall scope:** `install-codex-agent-profiles.js` writes a
-  project-local `.codex/hooks.json` (relative to the install directory).
-  `uninstall.sh` cleans the managed hook entries only in the directory it is run from.
+  matcher string in `~/.codex/hooks.json` may need adjustment.
+- **Uninstall scope:** because hooks are global, `uninstall.sh` strips the managed
+  `kaola-workflow:` entries from `~/.codex/hooks.json` (not from a project-local file).
+  Agent profiles and the managed config block are removed from the project directory
+  you run `uninstall.sh` in.
 
 ### Installation and verification
 

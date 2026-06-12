@@ -210,6 +210,69 @@ try {
       assert(parsed.planner === 'op"us\\back', '#363: quote/backslash in a model value round-trips through valid JSON; got ' + JSON.stringify(parsed.planner));
     } finally { fs.rmSync(etmp, { recursive: true, force: true }); }
   }
+
+  // #447 AC1/AC5/AC2: codex installer global-hook invariant (claude chain).
+  // Hooks install GLOBALLY into <tempHOME>/.codex/hooks.json; agent profiles stay
+  // project-local. Run the codex installer directly (not install.sh) under a temp HOME
+  // so the test never touches the real ~/.codex.
+  {
+    const codexInstallerPath = path.join(root, 'plugins', 'kaola-workflow', 'scripts', 'install-codex-agent-profiles.js');
+    const cproj = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-codex-447-proj-'));
+    const chome = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-codex-447-home-'));
+    try {
+      execFileSync('node', [codexInstallerPath, cproj], {
+        cwd: path.join(root, 'plugins', 'kaola-workflow'),
+        env: { ...process.env, HOME: chome },
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe']
+      });
+
+      // AC1: global hooks.json is written to <tempHOME>/.codex/hooks.json
+      const globalHooksPath = path.join(chome, '.codex', 'hooks.json');
+      assert(fs.existsSync(globalHooksPath), '#447 AC1: hooks.json must be written to global HOME/.codex, not found at: ' + globalHooksPath);
+
+      // AC1: global hooks.json carries the four kaola-workflow: hook entries
+      const installedHooks = JSON.parse(fs.readFileSync(globalHooksPath, 'utf8'));
+      const managedIds = [];
+      for (const event of Object.keys(installedHooks.hooks || {})) {
+        for (const entry of (installedHooks.hooks[event] || [])) {
+          if (entry && entry.id && entry.id.startsWith('kaola-workflow:')) {
+            managedIds.push(entry.id);
+          }
+        }
+      }
+      assert(managedIds.length >= 4, '#447 AC1: global hooks.json must carry at least four kaola-workflow: entries; found ' + managedIds.length + ': ' + managedIds.join(', '));
+      const expectedIds = ['kaola-workflow:compact-context', 'kaola-workflow:pre-commit-guard', 'kaola-workflow:write-lane', 'kaola-workflow:subagent-dispatch-log'];
+      for (const id of expectedIds) {
+        assert(managedIds.includes(id), '#447 AC1: global hooks.json must carry hook id "' + id + '"; found: ' + managedIds.join(', '));
+      }
+
+      // AC1: stable home directories are populated under <tempHOME>/.codex/kaola-workflow
+      const globalStableHooksDir = path.join(chome, '.codex', 'kaola-workflow', 'hooks');
+      const globalStableScriptsDir = path.join(chome, '.codex', 'kaola-workflow', 'scripts');
+      assert(fs.existsSync(globalStableHooksDir), '#447 AC1: stable hooks dir must be written to HOME/.codex/kaola-workflow/hooks');
+      assert(fs.existsSync(globalStableScriptsDir), '#447 AC1: stable scripts dir must be written to HOME/.codex/kaola-workflow/scripts');
+
+      // AC5: no hooks.json is written to the project-local .codex directory
+      const projectHooksPath = path.join(cproj, '.codex', 'hooks.json');
+      assert(!fs.existsSync(projectHooksPath), '#447 AC5: no hooks.json must be written to project .codex, found at: ' + projectHooksPath);
+
+      // AC2: agent profiles are still written project-local
+      const projectAgentsDir = path.join(cproj, '.codex', 'agents', 'kaola-workflow');
+      assert(fs.existsSync(projectAgentsDir), '#447 AC2: project-local .codex/agents/kaola-workflow/ must be created');
+      const tomlFiles = fs.readdirSync(projectAgentsDir).filter(f => f.endsWith('.toml'));
+      assert(tomlFiles.length > 0, '#447 AC2: at least one agent profile .toml must be written project-local');
+
+      // AC2: managed [agents.*] block in project-local .codex/config.toml
+      const projectConfigPath = path.join(cproj, '.codex', 'config.toml');
+      assert(fs.existsSync(projectConfigPath), '#447 AC2: project-local .codex/config.toml must be written');
+      const configText = fs.readFileSync(projectConfigPath, 'utf8');
+      assert(configText.includes('# BEGIN kaola-workflow agents'), '#447 AC2: project config.toml must contain managed agents block');
+    } finally {
+      fs.rmSync(cproj, { recursive: true, force: true });
+      fs.rmSync(chome, { recursive: true, force: true });
+    }
+  }
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
 }
