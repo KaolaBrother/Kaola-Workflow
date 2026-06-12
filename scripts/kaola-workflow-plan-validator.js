@@ -87,6 +87,52 @@ function sanitizeNodeId(id) {
 // G-SEL-2 (a gate can never be a select arm) for free.
 const GATE_VERDICT_ROLES = new Set(['code-reviewer', 'security-reviewer', 'adversarial-verifier', MAIN_SESSION_GATE]);
 
+// #433 (D-433-01): the SINGLE-SOURCE role-token registry. Maps each role to its required evidence
+// token CLASSES. A class containing `|` is an ALTERNATION — ANY one of the alternatives satisfies it
+// (the implementer's `regression-green|build-green|smoke-integration` is the #359 verification-tier
+// vocabulary). This map is the ONE source for BOTH the evidence-shape GATE (the validator's reader)
+// and the open-time evidence SEED (adaptive-node.js's writer) — no second copy. Exported via
+// module.exports so adaptive-node.js imports the SAME object and the two never drift.
+const ROLE_TOKEN_REGISTRY = {
+  'tdd-guide':             ['evidence-binding', 'RED', 'GREEN'],
+  'implementer':          ['evidence-binding', 'non_tdd_reason', 'regression-green|build-green|smoke-integration'],
+  'code-reviewer':        ['evidence-binding', 'verdict', 'findings_blocking'],
+  'security-reviewer':    ['evidence-binding', 'verdict', 'findings_blocking'],
+  'adversarial-verifier': ['evidence-binding', 'verdict'],
+  'doc-updater':          ['evidence-binding'],
+  'main-session-gate':    ['evidence-binding', 'verdict', 'findings_blocking'],
+};
+
+// #424 (D-424-01): the NARROW `.md`/attribution allowband. A repo-root-relative path is
+// barrier-INVISIBLE (may be written by a node WITHOUT declaring it, and is `attributed` at finalize)
+// if and ONLY if it matches one of:
+//   - docs/**                       — the documentation tree (any depth).
+//   - CHANGELOG.md (repo root only) — release notes.
+//   - README.md    (repo root only) — project readme.
+//   - kaola-workflow/{project}/**   — the active project's workflow state + `.cache/` evidence
+//                                     (this clause preserves the #271 `.cache/{node-id}.md` carve-out).
+// This REPLACES the blanket suffix exemption (ANY `*.md` passed). Matching is path-SHAPE, not suffix:
+// a nested `plugins/.../README.md` is NOT at the repo root, so it is OUTSIDE the band; `agents/*.md`,
+// `commands/*.md`, `plugins/*/skills/**/*.md`, `plugins/*/agents/*.toml` are all behavioral and MUST
+// be declared. Pure (no fs). `project` is the active project folder name (the `## Meta` tag / plan
+// dir basename); when absent, the `kaola-workflow/{anything}/**` band is honored (the per-node barrier
+// already separately exempts the whole `kaola-workflow/` workflow-artifact band via isWorkflowArtifact).
+function isBarrierInvisible(p, project) {
+  const rel = String(p || '').trim().replace(/^\.\//, '');
+  if (!rel) return false;
+  if (rel === 'CHANGELOG.md') return true;          // repo-root only
+  if (rel === 'README.md') return true;             // repo-root only
+  if (/^docs\//.test(rel)) return true;             // docs/** (any depth)
+  if (project) {
+    if (rel === 'kaola-workflow/' + project) return true;
+    if (rel.startsWith('kaola-workflow/' + project + '/')) return true;
+    return false;
+  }
+  // No project context: honor the generic workflow-state band so the finalize sweep / barrier never
+  // false-flags any path under the active-project tree (isWorkflowArtifact covers the rest).
+  return /^kaola-workflow\/[^/]+\//.test(rel);
+}
+
 // Phase-5 sensitivity categories (phase5.md:45-46): auth, payments, user data,
 // filesystem access, external API calls, secrets. Over-approximated from the
 // declared write set + frozen labels (fail-closed); the strongest signal (a
@@ -635,12 +681,17 @@ function barrierCheck(content, actualPaths, opts) {
   };
   const isWorkflowArtifact = p => /^kaola-workflow\//.test(p) && !foreignArchive(p);
   const isTestPath = p => /(^|\/)(tests?|__tests__|spec)\//i.test(p) || /\.(test|spec)\.[A-Za-z0-9]+$/i.test(p);
-  // A "production" actual write is one that is NOT docs / tests / a workflow artifact — those bands
-  // never need the code/security gate. They are exempt from BOTH the sensitivity teeth and the
-  // allowlist (v3.20.1: the sensitivity scan previously lacked this exemption, so a docs/test path
-  // whose NAME matched a Phase-5 pattern — e.g. `test/login.test.js`, `docs/auth.md` — was wrongly
-  // refused at the merge gate, with no in-grammar escape).
-  const isExempt = p => isWorkflowArtifact(p) || isDocsPath(p) || isTestPath(p);
+  // A "production" actual write is one that is NOT in the narrow .md allowband / tests / a workflow
+  // artifact — those bands never need the code/security gate. They are exempt from BOTH the
+  // sensitivity teeth and the allowlist (v3.20.1: the sensitivity scan previously lacked this
+  // exemption, so a docs/test path whose NAME matched a Phase-5 pattern — e.g. `test/login.test.js`,
+  // `docs/auth.md` — was wrongly refused at the merge gate, with no in-grammar escape).
+  // #424 (D-424-01): the blanket `.md` suffix exemption (isDocsPath) is REPLACED by the NARROW
+  // allowband (isBarrierInvisible) — only docs/**, repo-root CHANGELOG.md/README.md, and
+  // kaola-workflow/{project}/** are invisible. Behavioral `.md`/`.toml` (agents/*.md, commands/*.md,
+  // plugins/*/skills/**/*.md, plugins/*/agents/*.toml, any nested non-root README.md) is now
+  // PRODUCTION and MUST be declared — the agents/workflow-planner.md live escape is closed.
+  const isExempt = p => isWorkflowArtifact(p) || isBarrierInvisible(p, archiveProj) || isTestPath(p);
   const production = real.filter(p => !isExempt(p) && !foreignArchive(p));
   // (AC3) foreign-archive refusal: a write to another project's archive band must be blocked.
   const foreignArchiveHits = real.filter(foreignArchive);
@@ -1523,7 +1574,11 @@ function printHelp() {
     '  --verdict-check verify that every completed gate-role node\'s .cache evidence file carries verdict:pass/findings_blocking:0;\n' +
     '                 exit 1 on any failure. Per-node (--node-id ID): check one node; non-gate roles self-skip (exit 0).\n' +
     '  --selector-check --node-id ID  check which select arm the selector_source node chose, and compute which arms to mark n/a.\n' +
-    '                 Non-selector nodes return ok:true/isSelector:false (never false-blocks). Missing/foreign selector => exit 1.\n'
+    '                 Non-selector nodes return ok:true/isSelector:false (never false-blocks). Missing/foreign selector => exit 1.\n' +
+    '  --finalize-check  the FINALIZE-TIME gate (#424/#432): (A) chain-receipt gate — a fresh, HEAD-bound, all-green\n' +
+    '                 .cache/chain-receipt.json must exist (chains_unverified > chains_stale > chains_red); then (B) attribution\n' +
+    '                 sweep — every `git diff <base>...HEAD` change must be in the .md allowband OR a `complete` node\'s declared\n' +
+    '                 write set, else unattributed_change. [--base REF (default main)] [--receipt PATH] [--head SHA]\n'
   );
 }
 function main() {
@@ -1689,6 +1744,15 @@ function main() {
       process.stdout.write((json ? JSON.stringify({ result: 'refuse', errors: ['--drop-base requires --node-id <id>'] }) : 'typed refusal: --drop-base requires --node-id') + '\n');
       process.exitCode = 1; return;
     }
+    // #424 (D-424-01) WINDOW-LOCK: --drop-base is honored ONLY pre-open (ledger status `pending`).
+    // Once the node is `in_progress`, dropping the baseline launders any write made since the open
+    // (the next --barrier-check sees an empty diff and passes vacuously). Refuse `drop_base_window_open`
+    // mid-node; the legal stale-baseline recovery is ledger-reset → `pending` → drop → fresh open.
+    const dropLedger = parseLedger(content);
+    if (dropLedger.get(nodeId) === 'in_progress') {
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'drop_base_window_open', errors: ['--drop-base refused: node "' + nodeId + '" is in_progress — dropping the baseline now would launder writes made since the open (vacuous-pass). Reset the node to pending before dropping (ledger-reset → pending → drop → fresh open).'] }) : 'typed refusal: drop_base_window_open (node ' + nodeId + ' is in_progress)') + '\n');
+      process.exitCode = 1; return;
+    }
     let fileRemoved = false;
     try { fs.unlinkSync(cacheBaseFile(nodeId)); fileRemoved = true; } catch (_) {}
     let refRemoved = false;
@@ -1706,6 +1770,22 @@ function main() {
     if (args.includes('--node-id') && !nodeId) {
       process.stdout.write((json ? JSON.stringify({ result: 'refuse', errors: ['--node-id requires a value'] }) : 'typed refusal: --node-id requires a value') + '\n');
       process.exitCode = 1; return;
+    }
+    // #424 (D-424-01) ROOT-PINNING: the write-set paths resolve repo-root-relative, but the barrier
+    // reads process.cwd()-relative git state. In a worktree whose CWD is not the repo toplevel the two
+    // diverge and a path is measured against the wrong root (silent mis-attribution). Refuse
+    // `root_mismatch` when process.cwd() !== `git rev-parse --show-toplevel`. Fails CLOSED: an empty /
+    // errored rev-parse is treated as a mismatch. Opt-out for tests/callers that resolve the plan from
+    // outside the repo CWD on purpose via --skip-root-pin (the per-node baseline is still ref-anchored).
+    if (!args.includes('--skip-root-pin')) {
+      let toplevel = '';
+      try { toplevel = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', cwd: process.cwd() }).trim(); } catch (_) { toplevel = ''; }
+      const cwdReal = (() => { try { return fs.realpathSync(process.cwd()); } catch (_) { return process.cwd(); } })();
+      const topReal = toplevel ? (() => { try { return fs.realpathSync(toplevel); } catch (_) { return toplevel; } })() : '';
+      if (!topReal || topReal !== cwdReal) {
+        process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'root_mismatch', errors: ['barrier root mismatch: process.cwd() "' + cwdReal + '" != git toplevel "' + (topReal || '(unresolved)') + '" — run the barrier from the repo toplevel so write-set paths and the baseline diff measure against ONE root'] }) : 'typed refusal: root_mismatch (cwd ' + cwdReal + ' != toplevel ' + (topReal || 'unresolved') + ')') + '\n');
+        process.exitCode = 1; return;
+      }
     }
     let actualPaths;
     if (nodeId) {
@@ -1758,6 +1838,75 @@ function main() {
     const r = barrierCheck(content, actualPaths, { nodeId: nodeId || undefined, root, project: projTag });
     process.stdout.write((json ? JSON.stringify(r) : (r.result === 'pass' ? 'barrier ok' : 'typed refusal: ' + r.errors.join('; '))) + '\n');
     if (r.result !== 'pass') process.exitCode = 1;
+    return;
+  }
+  if (args.includes('--finalize-check')) {
+    // #424 (D-424-01) part 3 + #432 (D-432-01) part 3: the FINALIZE-TIME gate. Runs ONLY at
+    // finalization (cmdFinalize), never per-node. Two coupled checks, precedence-ordered:
+    //   (A) chain-receipt gate (#432): a machine-verifiable `.cache/chain-receipt.json` bound to HEAD
+    //       must exist, be fresh, and be all-green-or-waived — prose "all four chains green" can no
+    //       longer pass.  chains_unverified > chains_stale > chains_red.
+    //   (B) attribution sweep (#424): every file changed since the branch diverged from main must be
+    //       either in the narrow allowband OR covered by a `complete` node's declared write set; an
+    //       orphan (crash residue, out-of-window edit) surfaces as `unattributed_change`.
+    // The chain-receipt gate runs FIRST (an unverified/stale/red chain set is the higher-precedence
+    // finalize blocker). `--base` overrides the integration branch (default main); `--receipt` and
+    // `--head` override the receipt path / current-HEAD probe (test seams).
+    const flagVal = name => { const i = args.indexOf(name); return i >= 0 && i + 1 < args.length ? args[i + 1] : null; };
+    const cacheDir = path.join(path.dirname(path.resolve(planPath)), '.cache');
+    // ---- (A) chain-receipt gate (#432) ----
+    const receiptPath = flagVal('--receipt') || path.join(cacheDir, 'chain-receipt.json');
+    let receiptRaw = null;
+    try { receiptRaw = fs.readFileSync(receiptPath, 'utf8'); } catch (_) { receiptRaw = null; }
+    if (receiptRaw == null) {
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'chains_unverified', errors: ['no chain receipt at ' + receiptPath + ' — run kaola-workflow-run-chains.js after the LAST commit so HEAD is covered; prose "all four chains green" cannot pass'] }) : 'typed refusal: chains_unverified (no ' + receiptPath + ')') + '\n');
+      process.exitCode = 1; return;
+    }
+    let receipt = null;
+    try { receipt = JSON.parse(receiptRaw); } catch (_) { receipt = null; }
+    if (!receipt || typeof receipt !== 'object') {
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'chains_unverified', errors: ['chain receipt at ' + receiptPath + ' is unparseable JSON — regenerate it'] }) : 'typed refusal: chains_unverified (unparseable receipt)') + '\n');
+      process.exitCode = 1; return;
+    }
+    const currentHead = flagVal('--head') || (() => { try { return execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(); } catch (_) { return ''; } })();
+    if (!currentHead || String(receipt.headSha || '').trim() !== currentHead) {
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'chains_stale', errors: ['chain receipt headSha "' + (receipt.headSha || '(missing)') + '" != current HEAD "' + (currentHead || '(unresolved)') + '" — the tree advanced since the chains ran; regenerate the receipt over HEAD'] }) : 'typed refusal: chains_stale (' + (receipt.headSha || 'missing') + ' != ' + (currentHead || 'unresolved') + ')') + '\n');
+      process.exitCode = 1; return;
+    }
+    const chains = Array.isArray(receipt.chains) ? receipt.chains : [];
+    const redChains = chains.filter(c => c && c.exitCode !== 0 && c.accepted_red !== true);
+    if (redChains.length) {
+      const names = redChains.map(c => c.name || '(unnamed)').join(', ');
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'chains_red', redChains: redChains.map(c => ({ name: c.name || null, exitCode: c.exitCode })), errors: ['chain(s) RED with no waiver: ' + names + ' — fix the chain or waive it explicitly (--accept-known-red <name>:<open-issue>)'] }) : 'typed refusal: chains_red (' + names + ')') + '\n');
+      process.exitCode = 1; return;
+    }
+    // ---- (B) attribution sweep (#424) ----
+    // Enumerate every file changed since the branch diverged from main (`git diff <base>...HEAD`).
+    const base = flagVal('--base') || 'main';
+    let changed = [];
+    try {
+      const diffOut = execFileSync('git', ['-C', root, 'diff', base + '...HEAD', '--name-only'], { encoding: 'utf8' });
+      changed = diffOut.split('\n').map(s => s.trim()).filter(Boolean);
+    } catch (e) {
+      // Fail CLOSED: a git failure (no such base, detached) is a refusal, not a silent pass.
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'unattributed_change', errors: ['attribution sweep could not enumerate `git diff ' + base + '...HEAD` (' + (e && e.message ? e.message.split('\n')[0] : 'git error') + ') — cannot prove every change is attributed'] }) : 'typed refusal: attribution sweep git error') + '\n');
+      process.exitCode = 1; return;
+    }
+    const nodes = parseNodes(content);
+    const ledger = parseLedger(content);
+    // A path is ATTRIBUTED if it is in the narrow allowband OR covered by a `complete` node's declared
+    // write set. The declared set unions only COMPLETE nodes (a pending/n-a node never ran).
+    const completeDeclared = new Set();
+    for (const n of nodes) {
+      if (ledger.get(n.id) === 'complete') for (const p of (n.writeSet || [])) completeDeclared.add(p);
+    }
+    const unattributed = changed.filter(p =>
+      !isBarrierInvisible(p, projTag) && !/^kaola-workflow\//.test(p) && !completeDeclared.has(p));
+    if (unattributed.length) {
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'unattributed_change', unattributed, errors: ['branch-level writes (' + unattributed.join(', ') + ') are neither in the .md allowband nor covered by any `complete` node\'s declared write set — crash residue or out-of-window edits; attribute them to a node or remove them'] }) : 'typed refusal: unattributed_change (' + unattributed.join(', ') + ')') + '\n');
+      process.exitCode = 1; return;
+    }
+    process.stdout.write((json ? JSON.stringify({ result: 'pass', checkedChanges: changed.length, chains: chains.map(c => ({ name: c.name || null, exitCode: c.exitCode, accepted_red: c.accepted_red === true })) }) : 'finalize ok (' + changed.length + ' changes attributed, ' + chains.length + ' chains verified)') + '\n');
     return;
   }
   if (args.includes('--node-end')) {
@@ -1947,4 +2096,6 @@ module.exports = {
   verifyVerdictBlock,
   barrierCheck,
   installedRoles,
+  ROLE_TOKEN_REGISTRY,
+  isBarrierInvisible,
 };

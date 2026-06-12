@@ -77,6 +77,9 @@ const COMMON_SCRIPTS = [
   // load is side-effect-free (repoRoot is computed but no fs access until a function is called),
   // and only the claude validator (run from repo-root scripts/) ever invokes its probes.
   'kaola-workflow-install-manifest.js',
+  // #432: multi-chain test runner (run-chains). Byte-identical claude↔codex; gitlab/gitea carry
+  // rename-normalized ports (kaola-{forge}-workflow-run-chains.js) in RENAME_NORMALIZED_FAMILIES.
+  'kaola-workflow-run-chains.js',
 ];
 
 const BYTE_IDENTICAL_GROUPS = [
@@ -234,6 +237,17 @@ const RENAME_NORMALIZED_FAMILIES = [
     ports: [
       { forge: 'gitlab', file: 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-codex-compact-resume.js' },
       { forge: 'gitea', file: 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-codex-compact-resume.js' },
+    ],
+  },
+  {
+    // #432: run-chains multi-chain test runner forge ports. The script carries no forge identity
+    // strings, so the rename-normalized ports are body-identical to canonical after the prefix
+    // transform. Reference = canonical scripts/ copy.
+    label: 'run-chains forge ports',
+    reference: 'scripts/kaola-workflow-run-chains.js',
+    ports: [
+      { forge: 'gitlab', file: 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-run-chains.js' },
+      { forge: 'gitea', file: 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-run-chains.js' },
     ],
   },
 ];

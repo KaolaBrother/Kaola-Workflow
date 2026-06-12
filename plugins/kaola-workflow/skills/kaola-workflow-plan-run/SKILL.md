@@ -276,6 +276,17 @@ wall-clock via node-timings.jsonl (#373); the cross-lane write+read overlap stay
    crash-resume, `open-next --node-id <id>` is idempotent and returns the reused nonce for the
    already-open node — pass that reused nonce to the re-dispatch.
 
+   **Open-time evidence seeding (#433):** `open-next` also seeds the evidence skeleton at open time.
+   The `opened` payload carries `evidence_file` (`.cache/{node-id}.md` — the seeded path) and
+   `required_tokens` (the token classes this role must supply). The seeded file's FIRST line is the
+   `evidence-binding:` header (framework-written at open); subsequent lines are stub placeholders
+   for each required token, with HTML-comment hints. When dispatching a role agent, pass the
+   `evidence_file` path and instruct the agent to:
+   - Read the seeded `.cache/{node-id}.md` to see the expected tokens (the binding header + per-role stubs).
+   - Fill in the token stubs with real evidence from its work.
+   - NEVER modify the `evidence-binding:` header line — it is set by the framework at open time; editing it breaks the barrier binding.
+   - Append any additional findings or notes AFTER the required tokens (the gate checks for token PRESENCE; trailing prose is allowed).
+
    **Special case — `role: finalize` sink:** `finalize` is the mandatory DAG sink, not a
    dispatchable subagent role. It is expected that
    `kaola-workflow-resolve-agent-model.js finalize` returns an empty model. When the opened node role
@@ -578,6 +589,21 @@ bound — enforced per node at the barrier.
 ## Completion
 
 Completion begins only after the `finalize` sink row has been closed and `close-and-open-next`
-returns `{allDone:true}`. At that point every ledger row is `complete` or `n/a`; route to
-`kaola-workflow-finalize {project}` (adaptive runs have no `phase5-review.md`; finalize anchors on
+returns `{allDone:true}`. At that point every ledger row is `complete` or `n/a`.
+
+**Chain-receipt verification (#432):** Before routing to Finalization, when all code-producing nodes
+are complete, run `kaola-workflow-run-chains.js` to produce `.cache/chain-receipt.json`. This receipt
+is required by the finalize gate — absent, stale, or red receipts produce typed refusals
+(`chains_unverified`, `chains_stale`, `chains_red`). Run it as the LAST step before entering
+finalization so the receipt's `headSha` matches the current HEAD commit:
+
+```bash
+node $KAOLA_SCRIPTS/kaola-workflow-run-chains.js
+```
+
+If any chain is known-failing with an open issue, use `--accept-known-red <name>:<issue-number>`
+(e.g. `--accept-known-red codex:234`). The receipt must be current (`headSha` matches HEAD) when
+you enter finalization — running chains before a subsequent commit yields `chains_stale`.
+
+Route to `kaola-workflow-finalize {project}` (adaptive runs have no `phase5-review.md`; finalize anchors on
 the all-complete plan).

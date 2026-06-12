@@ -81,6 +81,7 @@ const SUPPORT_SCRIPTS = Object.freeze([
   'kaola-workflow-codex-preflight.js',
   'kaola-workflow-task-mirror.js',
   'kaola-workflow-ledger-compare.js',
+  'kaola-workflow-run-chains.js',
 ]);
 
 // Hooks are forge-neutral (byte-identical across all four trees), so the same list serves

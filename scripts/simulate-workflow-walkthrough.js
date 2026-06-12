@@ -2673,6 +2673,117 @@ function testBundle424432433ValidatorGates() {
   console.log('testBundle424432433ValidatorGates: PASSED');
 }
 
+// bundle #424/#432/#433 n4-node-evidence + n9-walkthrough: evidence seeding (D-433-01 §2) and
+// doc-updater .md-target barrier (D-424-01 allowband). Scenarios 6 and 7 from the n9 plan spec.
+// RED phase: testBundle424432433NodeSeeding was absent → the registry add below failed the suite.
+// GREEN phase: function added + all assertions pass.
+function testBundle424432433NodeSeeding() {
+  const pv = require('./kaola-workflow-plan-validator');
+
+  // --- scenario 7: doc-updater .md targets (pure barrierCheck, no git required) -----------------
+  // A doc-updater declaring docs/** + README.md paths in its write set. Both are in the narrow
+  // allowband (isBarrierInvisible), so they are EXEMPT from the production check — the per-node
+  // barrier must PASS regardless of whether the node has a code-reviewer (docs-only doc-updater
+  // is in the trivial band; tested at the validator level by testAdaptiveTier2Composition, but
+  // the BARRIER is a separate gate and must also pass).
+  {
+    const PLAN_DOC = ['# Plan', '', '## Meta', 'labels: chore', '', '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
+      '| doc | doc-updater | — | docs/guide.md, README.md | 1 | sequence |',
+      '| done | finalize | doc | — | 1 | sequence |', '',
+      '## Node Ledger', '', '| id | status |', '|---|---|',
+      '| doc | in_progress |', '| done | pending |', ''].join('\n');
+
+    // (7a) Writing the declared docs/guide.md and README.md during the doc node window must PASS.
+    const r7a = pv.barrierCheck(PLAN_DOC, ['docs/guide.md', 'README.md'], { nodeId: 'doc' });
+    assert(r7a.result === 'pass',
+      '#424 (7a): doc-updater writing declared docs/guide.md + README.md must pass the barrier (allowband), got ' + JSON.stringify(r7a));
+
+    // (7b) A deeper docs path (docs/arch/design.md) is also in the allowband.
+    const r7b = pv.barrierCheck(PLAN_DOC, ['docs/arch/design.md'], { nodeId: 'doc' });
+    assert(r7b.result === 'pass',
+      '#424 (7b): doc-updater writing an undeclared docs/arch/design.md (allowband) must pass the barrier, got ' + JSON.stringify(r7b));
+
+    // (7c) MUTATION guard: a behavioral .md OUTSIDE the allowband (agents/workflow-planner.md) written
+    // by the doc node must REFUSE — confirms the allowband is a narrow gate, not a blanket pass.
+    const r7c = pv.barrierCheck(PLAN_DOC, ['agents/workflow-planner.md'], { nodeId: 'doc' });
+    assert(r7c.result === 'refuse' && r7c.reason === 'write_set_overflow',
+      '#424 (7c): doc-updater writing an out-of-band agents/*.md must refuse write_set_overflow, got ' + JSON.stringify(r7c));
+  }
+
+  // --- scenario 6: evidence seeding via open-next CLI (requires a git repo) -------------------
+  {
+    // Build the plan: an implementer-role node so we can verify role-specific stubs.
+    const SEED_PLAN = ['# Workflow Plan — issue #433-seed', '', '## Meta', 'labels: enhancement', '', '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
+      '| n1 | tdd-guide | — | lib/impl.js | 1 | sequence |',
+      '| rv | code-reviewer | n1 | — | 1 | sequence |',
+      '| done | finalize | rv | — | 1 | sequence |', '',
+      '## Node Ledger', '', '| id | status |', '|---|---|',
+      '| n1 | pending |', '| rv | pending |', '| done | pending |', ''].join('\n');
+
+    const grepo = adaptiveTmp('bundle433-seed-git');
+    initGitRepoWithBareRemote(grepo);
+    spawnSync('git', ['-C', grepo, 'checkout', '-b', 'workflow/issue-433-seed'], { encoding: 'utf8' });
+    const proj = path.join(grepo, 'kaola-workflow', 'issue-433-seed');
+    fs.mkdirSync(proj, { recursive: true });
+    const planPath = path.join(proj, 'workflow-plan.md');
+    fs.writeFileSync(planPath, SEED_PLAN);
+    // freeze the plan (stamps plan_hash so --resume-check passes)
+    const fz = runNode(planValidatorScript, [planPath, '--freeze'], grepo);
+    assert(fz.status === 0, '#433 (6): freeze should exit 0, got ' + fz.status + ' ' + fz.stderr);
+    spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
+    spawnSync('git', ['commit', '-m', 'frozen plan'], { cwd: grepo, encoding: 'utf8' });
+    const cacheDir = path.join(proj, '.cache');
+
+    try {
+      // (6a) open-next seeds .cache/n1.md with the evidence-binding header + role stubs.
+      const on = runNode(adaptiveNodeScript, ['open-next', '--project', 'issue-433-seed', '--json'], grepo);
+      assert(on.status === 0, '#433 (6a): open-next should exit 0, got ' + on.status + '\nstderr: ' + on.stderr + '\nstdout: ' + on.stdout);
+      const onOut = JSON.parse(on.stdout);
+      assert(onOut.result === 'ok', '#433 (6a): open-next result must be ok, got ' + JSON.stringify(onOut));
+      assert(onOut.opened && onOut.opened.id === 'n1', '#433 (6a): opened.id must be n1, got ' + JSON.stringify(onOut.opened));
+
+      // (6b) The seeded evidence file must exist with the expected structure.
+      const evidencePath = path.join(cacheDir, 'n1.md');
+      assert(fs.existsSync(evidencePath), '#433 (6b): open-next must create .cache/n1.md (evidence seeding)');
+      const evidenceContent = fs.readFileSync(evidencePath, 'utf8');
+      const firstLine = evidenceContent.split('\n')[0];
+      assert(/^evidence-binding: n1 [0-9a-f]{12}$/.test(firstLine),
+        '#433 (6b): first line must be "evidence-binding: n1 <12-hex-nonce>", got ' + JSON.stringify(firstLine));
+
+      // (6c) tdd-guide role stubs: RED and GREEN must be present as stub keys.
+      assert(/^RED: /m.test(evidenceContent) || /^<!-- RED/.test(evidenceContent),
+        '#433 (6c): tdd-guide evidence stub must contain RED token, got:\n' + evidenceContent);
+      assert(/^GREEN: /m.test(evidenceContent) || /^<!-- GREEN/.test(evidenceContent),
+        '#433 (6c): tdd-guide evidence stub must contain GREEN token, got:\n' + evidenceContent);
+
+      // (6d) The JSON response carries evidence_file + required_tokens metadata.
+      assert(onOut.opened.evidence_file === '.cache/n1.md',
+        '#433 (6d): opened.evidence_file must be .cache/n1.md, got ' + JSON.stringify(onOut.opened.evidence_file));
+      assert(Array.isArray(onOut.opened.required_tokens) && onOut.opened.required_tokens.includes('RED'),
+        '#433 (6d): opened.required_tokens must include RED for tdd-guide, got ' + JSON.stringify(onOut.opened.required_tokens));
+
+      // (6e) Idempotency: a second open-next (the node is now in_progress, should refuse node_not_ready
+      //      or node_not_in_ledger) — the evidence file must NOT be overwritten by a crash re-dispatch
+      //      on a different path; BUT the file itself must still exist unchanged.
+      const evidenceContentBefore = fs.readFileSync(evidencePath, 'utf8');
+      // Deliberately re-run open-next; it will either skip (alreadyAtTarget) or return ok(allDone).
+      // Either way, the evidence file content must not change.
+      runNode(adaptiveNodeScript, ['open-next', '--project', 'issue-433-seed', '--json'], grepo);
+      const evidenceContentAfter = fs.readFileSync(evidencePath, 'utf8');
+      assert(evidenceContentBefore === evidenceContentAfter,
+        '#433 (6e): a crash-resume open-next must NOT overwrite the seeded evidence file (idempotent seed)');
+
+    } finally {
+      fs.rmSync(grepo, { recursive: true, force: true });
+      try { fs.rmSync(grepo + '-remote', { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  console.log('testBundle424432433NodeSeeding: PASSED');
+}
+
 // issue #234 E1: resume must reconcile a persisted next_command against the project's true path
 // before trusting it. A stale phaseN on an adaptive project must resolve to plan-run; a consistent
 // full next_command is preserved; a stale full next_command falls back to phase-derived reconstruction.
@@ -11614,6 +11725,7 @@ function buildRegistry() {
   add('testAdaptivePerInstanceBarrier',                   testAdaptivePerInstanceBarrier);
   add('testAdaptivePerInstanceBarrierHardening',          testAdaptivePerInstanceBarrierHardening);
   add('testBundle424432433ValidatorGates',                testBundle424432433ValidatorGates);
+  add('testBundle424432433NodeSeeding',                   testBundle424432433NodeSeeding);
   add('testAdaptiveResumeReconcilesNextCommand',          testAdaptiveResumeReconcilesNextCommand);
   add('testAdaptiveDurableConsentHalt',                   testAdaptiveDurableConsentHalt);
   add('testAdaptiveAuthoringEntryGuard',                  testAdaptiveAuthoringEntryGuard);

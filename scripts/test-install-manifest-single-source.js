@@ -54,8 +54,8 @@ for (const forge of manifest.FORGES) {
   assert.ok(original.includes("'kaola-workflow-task-mirror.js',"),
     '#407: manifest must contain the task-mirror anchor used by the plant');
   const patched = original.replace(
-    "  'kaola-workflow-ledger-compare.js',\n]);",
-    "  'kaola-workflow-ledger-compare.js',\n  '" + planted + "',\n]);");
+    "  'kaola-workflow-run-chains.js',\n]);",
+    "  'kaola-workflow-run-chains.js',\n  '" + planted + "',\n]);");
   assert.notStrictEqual(patched, original, '#407: plant must modify SUPPORT_SCRIPTS');
 
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-407-plant-'));

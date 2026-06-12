@@ -66,6 +66,33 @@ If `workflow_path: full` (or absent):
   Phase 5 is not complete. Run /kaola-workflow-phase5 first.
   ```
 
+### Chain-Receipt Gate
+
+Finalization is **machine-gated** on a fresh, valid chain receipt (#432). Before
+proceeding past the prerequisite check, verify `.cache/chain-receipt.json` and
+stop with a typed refusal if any of the following are true (checked in
+precedence order):
+
+- **`chains_unverified`** — `.cache/chain-receipt.json` is absent. No chains have
+  been run through the gated runner; prose attestation is not accepted.
+  Remedy: run `node $KAOLA_SCRIPTS/kaola-workflow-run-chains.js` after the last
+  commit so the receipt is written and `headSha` matches HEAD.
+- **`chains_stale`** — the receipt's `headSha` does not equal the current
+  `git rev-parse HEAD`. The tree has advanced since the chains ran (a commit
+  landed, a rebase happened); the receipt no longer describes HEAD.
+  Remedy: re-run `node $KAOLA_SCRIPTS/kaola-workflow-run-chains.js` to regenerate
+  the receipt against HEAD.
+- **`chains_red`** — at least one chain has a non-zero exit code and
+  `accepted_red: false`. A real failing chain that has not been explicitly waived
+  blocks finalization.
+  Remedy: fix the failing chain, OR waive it with
+  `--accept-known-red <name>:<open-issue>` if it is a known-failing chain tracked
+  by an open issue (the waiver is recorded durably in the receipt and the other
+  chains still gate).
+
+These typed refusals are emitted by `cmdFinalize` / the plan-validator's
+finalize/verdict path and are classified structurally — do not match by string.
+
 Read:
 
 ```text

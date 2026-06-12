@@ -83,6 +83,11 @@ try {
   assert(bc3.exitCode === 1 && bc3.json.reason === 'barrier_base_mismatch', '#368 T4: anchored ref missing while file exists → barrier_base_mismatch');
 
   // T5: --drop-base removes file AND ref together; idempotent.
+  // #424 (D-424-01) WINDOW-LOCK: --drop-base is honored ONLY when the node's ledger status is
+  // `pending` (the legal stale-baseline recovery is ledger-reset → pending → drop → fresh open). The
+  // fixture above has n1 `in_progress` (so T1-T4 exercise a live baseline); reset n1 to `pending`
+  // here — the legal window — before exercising the mechanical file+ref deletion.
+  fs.writeFileSync(planPath, fs.readFileSync(planPath, 'utf8').replace('| n1 | in_progress |', '| n1 | pending |'));
   try { fs.unlinkSync(baseFile); } catch (_) {}
   const rb2 = val(repo, planPath, ['--record-base', '--node-id', 'n1', '--json']);
   assert(rb2.json.result === 'ok' && fs.existsSync(baseFile), '#368 T5 setup: re-record recreates file + ref');

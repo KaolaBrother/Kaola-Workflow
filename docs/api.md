@@ -248,6 +248,52 @@ Every mutating `adaptive-node.js` / `parallel-batch.js` subcommand runs a layere
   ```
   This makes the failure self-diagnosing: the operator is told the ledger section exists but its header lacks the `id` column, and can apply `plan-validator.js <plan> --freeze --repair` to normalize it before re-opening. When the ledger section is entirely absent (a genuinely missing entry), `diagnostic` is omitted and the refusal has its prior shape.
 - Non-blocking warnings (informational, do not refuse): **`verdict_unparsed`** (#403.4 — a verdict-bearing role's evidence has a `Verdict:` line the strict column-0 finalize check won't recognize, e.g. a capital key), and **`baselineReused`** (#403.3 — `open-next` surfaces the validator's anti-laundering baseline-reuse decision).
+- **Finalize-check typed refusals (#424):** `drop_base_window_open` (`--drop-base` called while a node is `in_progress`); `unattributed_change` (a file in the whole-plan diff is declared only by a non-complete node — attribution sweep); `root_mismatch` (plan-path root does not match the project root).
+- **Chain-receipt typed refusals (#432):** `chains_unverified` (no `.cache/chain-receipt.json` exists or is readable); `chains_stale` (the receipt's `headSha` does not match the current `HEAD`); `chains_red` (one or more chains recorded a non-zero exit code in the receipt — use `--accept-known-red name:issue` to register a waiver for a known-red chain with a tracking issue).
+
+### Script: `kaola-workflow-run-chains.js` (issue #432)
+
+Runs all four edition test chains via `spawnSync` with real process exit codes (no shell pipe tricks that mask failures) and produces a machine-verifiable chain receipt.
+
+**CLI:**
+
+```bash
+node scripts/kaola-workflow-run-chains.js [--accept-known-red <name>:<issue>] --project <P>
+```
+
+`--accept-known-red` may be repeated; each value registers a named chain as waived with a tracking issue reference. The contractor runs this at Finalization Step 8c and cites the receipt path as evidence.
+
+**Output artifact:** `.cache/chain-receipt.json`
+
+**Schema:**
+
+```json
+{
+  "headSha": "<git HEAD sha>",
+  "workTreeHash": "<working-tree hash>",
+  "startedAt": "<ISO 8601 timestamp>",
+  "chains": [
+    { "name": "claude",  "exit": 0 },
+    { "name": "codex",   "exit": 0 },
+    { "name": "gitlab",  "exit": 0 },
+    { "name": "gitea",   "exit": 0 }
+  ]
+}
+```
+
+`exit: 0` means the chain passed; any other value is a failure. The receipt is read by `--finalize-check` to enforce `chains_unverified`, `chains_stale`, and `chains_red` refusals.
+
+### Export: `ROLE_TOKEN_REGISTRY` (issue #433)
+
+Exported from `scripts/kaola-workflow-plan-validator.js`. The single source of truth for the evidence token vocabulary per role — the token shapes that `open-next`/`open-ready` seed into `.cache/<node-id>.md` stubs and that the close gate verifies.
+
+```js
+const { ROLE_TOKEN_REGISTRY } = require('./kaola-workflow-plan-validator');
+// ROLE_TOKEN_REGISTRY: { [role: string]: string[] }
+// e.g. { 'code-reviewer': ['verdict: pass', 'findings_blocking: 0'], ... }
+```
+
+Each entry is an array of token stubs the evidence file must contain (or have filled by the role agent). Consuming scripts (`kaola-workflow-adaptive-node.js`) import this export to seed `.cache/<node-id>.md` at open time and to validate token presence at close time without reimplementing the vocabulary.
 
 ## Configuration
 

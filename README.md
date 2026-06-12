@@ -641,6 +641,8 @@ KAOLA_PATH=adaptive /workflow-next   # force adaptive explicitly
 
 The adaptive path adds one role — `adversarial-verifier`, a read-only, refute-by-default skeptic used in read-only verification fan-outs. It is never a review gate and touches zero repository files.
 
+**Evidence seeding (#433):** When a node is opened (`open-next` / `open-ready` / fused advance), `kaola-workflow-adaptive-node.js` seeds `.cache/<node-id>.md` with a binding header (`evidence-binding: <node-id> <nonce>`) and role-specific token stubs drawn from `ROLE_TOKEN_REGISTRY` (exported from `kaola-workflow-plan-validator.js`). The `opened` payload carries `evidence_file` and `required_tokens`. The role agent fills the stubs; the close gate verifies the binding header. On `reopen-node`, the file is re-seeded with fresh stubs — stale evidence from a prior open cannot be replayed.
+
 #### Supported adaptive patterns
 
 The four shapes (`sequence`, `fanout`, `loop`, `select`) are a *grammar*, not a fixed menu — the planner composes them with `depends_on` edges and the right role on each node into a task-shaped DAG. The patterns below are **composable building blocks, not options to choose between**: the planner draws *several* into one DAG to fit the issue (the final **Composed** row stacks three at once). Each row is a real, in-grammar `workflow-plan.md` the validator accepts; the **Governance** column is the decision `kaola-workflow-plan-validator.js` returns (`auto-run` = proceeds immediately; `ask` = recorded as audit metadata by the handoff, which still freezes and proceeds — no approval gate — but the blast-radius reason is surfaced in the packet for the orchestrator).
@@ -731,6 +733,7 @@ when developing locally. Drift between `scripts/` and
 | `kaola-workflow-sink-pr.js` (GitHub) / `kaola-gitlab-workflow-sink-mr.js` (GitLab) / `kaola-gitea-workflow-sink-pr.js` (Gitea) | Finalization PR/MR sink: push the branch, open a PR via `gh pr create` (GitHub), `glab mr create` (GitLab), or `tea pr create` (Gitea), record the PR/MR URL, and optionally enable auto-merge. | Finalization |
 | `kaola-workflow-compact-context.js` | Wired to the `SessionStart` (`compact`) hook. Reads the most recent `workflow-state.md` and injects a resume hint into the post-`/compact` session. | Hook |
 | `kaola-workflow-fast-audit.js` | Read-only fast-path calibration audit: scans archived and active `fast-summary.md` files and reports status counts, escalation-reason histogram, file-count distribution, and review mode (delegated `code-reviewer` vs self-review). Human table by default; `--json` for machine-readable output. Always exits 0. | On demand / audit |
+| `kaola-workflow-run-chains.js` | Runs all four edition test chains (`claude`, `codex`, `gitlab`, `gitea`) via `spawnSync` with real exit codes and produces `.cache/chain-receipt.json` (`{headSha, workTreeHash, startedAt, chains:[{name, exit}]}`). Used by the contractor at Finalization (Step 8c) and gated by `--finalize-check` (`chains_unverified`, `chains_stale`, `chains_red`). `--accept-known-red name:issue` registers a waiver for a known-red chain. | Finalization |
 
 ### Validation and test scripts
 

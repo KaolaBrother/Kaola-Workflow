@@ -93,6 +93,20 @@ are parity-checked by `validate-script-sync.js` `CONFIG_HOOKS_FAMILY` +
 path (`kaola-workflow-codex-compact-resume` → `kaola-{forge}-workflow-codex-compact-resume`);
 any other divergence reds the validation run.
 
+## `.md` files as production surfaces (#424)
+
+`.md` files in the allowband — `docs/**`, `CHANGELOG.md`, `README.md`, `kaola-workflow/{project}/**` — may be declared in a node's `declared_write_set` and pass the `--barrier-check` without requiring explicit declaration beyond the node's write set. `.md` files **outside** this allowband are production surfaces: `agents/*.md`, `commands/*.md`, `plugins/*/agents/*.toml`, and any other `.md` outside the four allowband roots must appear explicitly in the node's write set. The blanket `.md` exemption that existed before #424 is removed; a non-allowband `.md` write not in any node's declared set fails the barrier with `write_set_overflow`.
+
+## Chain receipt is the only valid greenness evidence (#432)
+
+Prose assertions ("chains passed", "npm test is green") are insufficient evidence of test-chain greenness at Finalization. The contractor MUST:
+
+1. Run `node scripts/kaola-workflow-run-chains.js --project <P>` to produce `.cache/chain-receipt.json`.
+2. Cite the receipt path as evidence in the contractor summary.
+3. Never record a `chains_passed: true` prose attestation without the receipt artifact.
+
+The `--finalize-check` gate enforces this: `chains_unverified` (no receipt), `chains_stale` (receipt headSha mismatch), and `chains_red` (any non-zero exit) are all typed blocking refusals. A known-red chain may be waived with `--accept-known-red name:open-issue-N`; the waiver must reference a real open tracking issue.
+
 ## Release
 
 - Before merging a version bump, create the matching local git tag (`git tag kaola-workflow--v<version> <sha>`); `npm test` enforces the tag exists (unless `KAOLA_WORKFLOW_OFFLINE=1`).

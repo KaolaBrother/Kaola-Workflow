@@ -1860,7 +1860,7 @@ function main() {
     let receiptRaw = null;
     try { receiptRaw = fs.readFileSync(receiptPath, 'utf8'); } catch (_) { receiptRaw = null; }
     if (receiptRaw == null) {
-      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'chains_unverified', errors: ['no chain receipt at ' + receiptPath + ' — run kaola-workflow-run-chains.js after the LAST commit so HEAD is covered; prose "all four chains green" cannot pass'] }) : 'typed refusal: chains_unverified (no ' + receiptPath + ')') + '\n');
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'chains_unverified', errors: ['no chain receipt at ' + receiptPath + ' — run kaola-gitea-workflow-run-chains.js after the LAST commit so HEAD is covered; prose "all four chains green" cannot pass'] }) : 'typed refusal: chains_unverified (no ' + receiptPath + ')') + '\n');
       process.exitCode = 1; return;
     }
     let receipt = null;

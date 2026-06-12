@@ -1615,6 +1615,7 @@ function main() {
     testCodexFinalizeClosesIssueBundleMembers();      // #427
     testCodexFinalizeRoadmapResidueDetection();       // #428
     testCodexBundleStateIncoherent();                 // #430
+    testCodexBundle424432433NodeSeeding();            // #424/#432/#433 n9-walkthrough
 
     console.log('Kaola-Workflow walkthrough simulation passed');
   } finally {
@@ -1860,6 +1861,112 @@ function testCodexBundleStateIncoherent() {
   }
 
   console.log('testCodexBundleStateIncoherent: PASSED');
+}
+
+// ---------------------------------------------------------------------------
+// bundle #424/#432/#433 n4-node-evidence + n9-walkthrough (codex edition):
+// evidence seeding (D-433-01 §2) and doc-updater .md-target barrier (D-424-01 allowband).
+// Mirrors scripts/ testBundle424432433NodeSeeding with codex edition substitutions.
+// ---------------------------------------------------------------------------
+function testCodexBundle424432433NodeSeeding() {
+  const pvScript = path.join(pluginRoot, 'scripts', 'kaola-workflow-plan-validator.js');
+  const nodeScript = path.join(pluginRoot, 'scripts', 'kaola-workflow-adaptive-node.js');
+  const pv = require(pvScript);
+
+  // --- scenario 7: doc-updater .md targets (pure barrierCheck) -------
+  {
+    const PLAN_DOC = ['# Plan', '', '## Meta', 'labels: chore', '', '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
+      '| doc | doc-updater | — | docs/guide.md, README.md | 1 | sequence |',
+      '| done | finalize | doc | — | 1 | sequence |', '',
+      '## Node Ledger', '', '| id | status |', '|---|---|',
+      '| doc | in_progress |', '| done | pending |', ''].join('\n');
+
+    // (7a) declared docs/guide.md + README.md are in the allowband → barrier must PASS.
+    const r7a = pv.barrierCheck(PLAN_DOC, ['docs/guide.md', 'README.md'], { nodeId: 'doc' });
+    assert(r7a.result === 'pass',
+      'codex #424 (7a): doc-updater writing declared docs/guide.md + README.md must pass the barrier (allowband), got ' + JSON.stringify(r7a));
+
+    // (7b) undeclared docs/ depth still in allowband → pass.
+    const r7b = pv.barrierCheck(PLAN_DOC, ['docs/arch/design.md'], { nodeId: 'doc' });
+    assert(r7b.result === 'pass',
+      'codex #424 (7b): undeclared docs/arch/design.md (allowband) must pass the barrier, got ' + JSON.stringify(r7b));
+
+    // (7c) behavioral agents/*.md OUTSIDE allowband → write_set_overflow.
+    const r7c = pv.barrierCheck(PLAN_DOC, ['agents/workflow-planner.md'], { nodeId: 'doc' });
+    assert(r7c.result === 'refuse' && r7c.reason === 'write_set_overflow',
+      'codex #424 (7c): agents/*.md outside allowband must refuse write_set_overflow, got ' + JSON.stringify(r7c));
+  }
+
+  // --- scenario 6: evidence seeding via open-next CLI (requires a real git repo) ----
+  {
+    const SEED_PLAN = ['# Workflow Plan — issue #433-seed-cx', '', '## Meta', 'labels: enhancement', '', '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
+      '| n1 | tdd-guide | — | lib/impl.js | 1 | sequence |',
+      '| rv | code-reviewer | n1 | — | 1 | sequence |',
+      '| done | finalize | rv | — | 1 | sequence |', '',
+      '## Node Ledger', '', '| id | status |', '|---|---|',
+      '| n1 | pending |', '| rv | pending |', '| done | pending |', ''].join('\n');
+
+    const grepo = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-cx-433seed-'));
+    initGitRepo(grepo);
+    git(['checkout', '-b', 'workflow/issue-433-seed-cx'], grepo);
+    const proj = path.join(grepo, 'kaola-workflow', 'issue-433-seed-cx');
+    fs.mkdirSync(proj, { recursive: true });
+    const planPath = path.join(proj, 'workflow-plan.md');
+    fs.writeFileSync(planPath, SEED_PLAN);
+    const fz = spawnSync(process.execPath, [pvScript, planPath, '--freeze'],
+      { cwd: grepo, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
+    assert(fz.status === 0, 'codex #433 (6): freeze should exit 0, got ' + fz.status + ' ' + fz.stderr);
+    git(['add', '-A'], grepo);
+    git(['commit', '-m', 'frozen plan'], grepo);
+    const cacheDir = path.join(proj, '.cache');
+
+    try {
+      // (6a) open-next seeds .cache/n1.md with the evidence-binding header + role stubs.
+      const on = spawnSync(process.execPath,
+        [nodeScript, 'open-next', '--project', 'issue-433-seed-cx', '--json'],
+        { cwd: grepo, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
+      assert(on.status === 0, 'codex #433 (6a): open-next must exit 0, got ' + on.status + '\nstderr: ' + on.stderr + '\nstdout: ' + on.stdout);
+      const onOut = JSON.parse(on.stdout);
+      assert(onOut.result === 'ok', 'codex #433 (6a): open-next result must be ok, got ' + JSON.stringify(onOut));
+      assert(onOut.opened && onOut.opened.id === 'n1', 'codex #433 (6a): opened.id must be n1, got ' + JSON.stringify(onOut.opened));
+
+      // (6b) The seeded evidence file must exist with the expected binding line.
+      const evidencePath = path.join(cacheDir, 'n1.md');
+      assert(fs.existsSync(evidencePath), 'codex #433 (6b): open-next must create .cache/n1.md');
+      const evidenceContent = fs.readFileSync(evidencePath, 'utf8');
+      const firstLine = evidenceContent.split('\n')[0];
+      assert(/^evidence-binding: n1 [0-9a-f]{12}$/.test(firstLine),
+        'codex #433 (6b): first line must be "evidence-binding: n1 <12-hex-nonce>", got ' + JSON.stringify(firstLine));
+
+      // (6c) tdd-guide role stubs present.
+      assert(/^RED: /m.test(evidenceContent) || /^<!-- RED/.test(evidenceContent),
+        'codex #433 (6c): tdd-guide stub must contain RED token');
+      assert(/^GREEN: /m.test(evidenceContent) || /^<!-- GREEN/.test(evidenceContent),
+        'codex #433 (6c): tdd-guide stub must contain GREEN token');
+
+      // (6d) JSON response carries evidence_file + required_tokens.
+      assert(onOut.opened.evidence_file === '.cache/n1.md',
+        'codex #433 (6d): opened.evidence_file must be .cache/n1.md, got ' + JSON.stringify(onOut.opened.evidence_file));
+      assert(Array.isArray(onOut.opened.required_tokens) && onOut.opened.required_tokens.includes('RED'),
+        'codex #433 (6d): required_tokens must include RED for tdd-guide, got ' + JSON.stringify(onOut.opened.required_tokens));
+
+      // (6e) Crash-resume: a second open-next must not overwrite the evidence file.
+      const contentBefore = fs.readFileSync(evidencePath, 'utf8');
+      spawnSync(process.execPath,
+        [nodeScript, 'open-next', '--project', 'issue-433-seed-cx', '--json'],
+        { cwd: grepo, encoding: 'utf8', env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' }) });
+      const contentAfter = fs.readFileSync(evidencePath, 'utf8');
+      assert(contentBefore === contentAfter,
+        'codex #433 (6e): crash-resume open-next must NOT overwrite the seeded evidence file');
+    } finally {
+      fs.rmSync(grepo, { recursive: true, force: true });
+      try { fs.rmSync(grepo + '-remote', { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  console.log('testCodexBundle424432433NodeSeeding: PASSED');
 }
 
 main();

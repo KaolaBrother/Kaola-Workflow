@@ -222,6 +222,116 @@ function appendNodeTiming(planPath, node, event) {
 }
 
 // ---------------------------------------------------------------------------
+// appendProvenanceLog (#424 / D-424-01 §5) — best-effort lifecycle audit trail.
+// Appends ONE structured JSONL entry to kaola-workflow/{project}/.cache/provenance-log.jsonl
+// for each of: record-base, drop-base, open-next/open-ready (open), close-and-open-next/
+// close-node (close). Append-only JSONL — a crash mid-write loses at most the trailing
+// line, never corrupts prior entries. NEVER throws — a log write failure must NOT fail the
+// command. .cache/ is barrier-exempt (D-424-01 allowband), so this adds no validator surface.
+// ---------------------------------------------------------------------------
+function appendProvenanceLog(planPath, event, nodeId, nonce) {
+  try {
+    const fs = require('fs');
+    const cacheDir = path.join(path.dirname(planPath), '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.appendFileSync(
+      path.join(cacheDir, 'provenance-log.jsonl'),
+      JSON.stringify({
+        timestamp: new Date().toISOString(),
+        event: event,
+        nodeId: nodeId,
+        nonce: nonce || null,
+        by: 'adaptive-node',
+      }) + '\n'
+    );
+  } catch (_) { /* best-effort: provenance log never blocks a lifecycle transition */ }
+}
+
+// ---------------------------------------------------------------------------
+// seedEvidenceFile (#433 / D-433-01 §2) — open-time evidence seeding.
+// Writes .cache/{node-id}.md with a binding header (line 1) and role-specific stub
+// placeholders sourced from ROLE_TOKEN_REGISTRY in the plan-validator. Idempotent:
+// does NOT overwrite an existing file (crash-resume: the in-progress evidence is
+// authoritative). Returns the relative evidence_file path and required_tokens list.
+// NEVER throws — a seed failure must NOT fail open-next.
+//
+// @param {string} planPath      path to workflow-plan.md (used to locate .cache/)
+// @param {string} nodeId        the node id just opened
+// @param {string} nonce         the per-open evidence-binding nonce (12-char SHA prefix)
+// @param {string} role          the node's role string
+// @param {boolean} forceRotate  if true, RE-SEED the ENTIRE file (nonce rotation on reopen — stale body discarded)
+// @returns {{ evidence_file:string, required_tokens:string[], nonce_rotated?:boolean }}
+// ---------------------------------------------------------------------------
+function seedEvidenceFile(planPath, nodeId, nonce, role, forceRotate) {
+  try {
+    const fs = require('fs');
+    let ROLE_TOKEN_REGISTRY;
+    try {
+      ({ ROLE_TOKEN_REGISTRY } = require('./kaola-workflow-plan-validator'));
+    } catch (_) { ROLE_TOKEN_REGISTRY = {}; }
+
+    const tokens = (ROLE_TOKEN_REGISTRY[role] || ['evidence-binding']).slice();
+    // Remove 'evidence-binding' from the stub list — it becomes line 1 directly.
+    const stubTokens = tokens.filter(t => t !== 'evidence-binding');
+    const evidenceFile = '.cache/' + nodeId + '.md';
+    const cacheDir = path.join(path.dirname(planPath), '.cache');
+    const cachePath = path.join(cacheDir, nodeId + '.md');
+
+    fs.mkdirSync(cacheDir, { recursive: true });
+
+    const bindingLine = 'evidence-binding: ' + nodeId + ' ' + (nonce || '');
+
+    if (fs.existsSync(cachePath)) {
+      if (forceRotate) {
+        // Nonce rotation (reopen-node): RE-SEED the ENTIRE file with fresh binding + role stubs.
+        // Discarding the stale body is required so prior-attempt evidence (verdict: pass / GREEN /
+        // findings_blocking: 0) cannot survive into the new open and defeat the #392 anti-replay guard.
+        let freshContent = bindingLine + '\n';
+        for (const tokenClass of stubTokens) {
+          const firstAlt = tokenClass.split('|')[0];
+          if (tokenClass.includes('|')) {
+            freshContent += '<!-- ' + tokenClass + ' -->\n';
+            freshContent += firstAlt + ': \n';
+          } else {
+            freshContent += '<!-- ' + tokenClass + ': paste ' + tokenClass + ' here -->\n';
+            freshContent += tokenClass + ': \n';
+          }
+        }
+        fs.writeFileSync(cachePath, freshContent, 'utf8');
+        return { evidence_file: evidenceFile, required_tokens: tokens, nonce_rotated: true };
+      }
+      // Idempotent: file already exists (crash-resume), do NOT overwrite.
+      return { evidence_file: evidenceFile, required_tokens: tokens, nonce_rotated: false };
+    }
+
+    // Build the seeded content.
+    let content = bindingLine + '\n';
+    for (const tokenClass of stubTokens) {
+      // Alternation class: the first alternative becomes the stub key; comment shows all.
+      const firstAlt = tokenClass.split('|')[0];
+      if (tokenClass.includes('|')) {
+        content += '<!-- ' + tokenClass + ' -->\n';
+        content += firstAlt + ': \n';
+      } else {
+        content += '<!-- ' + tokenClass + ': paste ' + tokenClass + ' here -->\n';
+        content += tokenClass + ': \n';
+      }
+    }
+
+    fs.writeFileSync(cachePath, content, 'utf8');
+    return { evidence_file: evidenceFile, required_tokens: tokens, nonce_rotated: false };
+  } catch (_) {
+    // Best-effort: a seed failure returns the metadata but does not fail the open.
+    let required_tokens = ['evidence-binding'];
+    try {
+      const { ROLE_TOKEN_REGISTRY } = require('./kaola-workflow-plan-validator');
+      required_tokens = (ROLE_TOKEN_REGISTRY[role] || ['evidence-binding']).slice();
+    } catch (_2) {}
+    return { evidence_file: '.cache/' + nodeId + '.md', required_tokens };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // spliceLedgerNode — rewrite a single node row's status cell in ## Node Ledger.
 //
 // GUARD: flip ONLY when current status ∈ allowFrom.
@@ -1109,6 +1219,15 @@ function runOpenNext(opts) {
   // #373: best-effort telemetry — the node opened.
   appendNodeTiming(planPath, targetNode.id, 'opened');
 
+  // #424 (D-424-01 §5): provenance log entry — open event.
+  const openNonce = (baselineResult.recordBase && baselineResult.recordBase.base)
+    ? String(baselineResult.recordBase.base).slice(0, 12) : null;
+  appendProvenanceLog(planPath, 'open', targetNode.id, openNonce);
+
+  // #433 (D-433-01 §2): open-time evidence seeding — create .cache/{node-id}.md with
+  // binding header + role-specific stubs. Idempotent (does not overwrite on crash-resume).
+  const seedResult = seedEvidenceFile(planPath, targetNode.id, openNonce, targetNode.role, false);
+
   // #317: ledger row flipped pending → in_progress; refresh the durable mirror and
   // return the explicit UI transition for the orchestrator to apply.
   return {
@@ -1119,6 +1238,9 @@ function runOpenNext(opts) {
       role: targetNode.role,
       model: targetNode.model,
       declared_write_set: targetNode.declared_write_set,
+      // #433: evidence metadata for the dispatcher (seeded path + required token classes).
+      evidence_file: seedResult.evidence_file,
+      required_tokens: seedResult.required_tokens,
     },
     baselineRecorded: true,
     // #403.3: surface the validator's anti-laundering baseline-reuse decision (was hidden). When the
@@ -1135,8 +1257,7 @@ function runOpenNext(opts) {
     // the close gate can verify the evidence was produced by THIS open (anti-copy / anti-replay). The
     // prefix length (12) MUST equal readNonce's slice(0,12) so the open-side echo and the close-side
     // on-disk comparison agree byte-for-byte.
-    nonce: (baselineResult.recordBase && baselineResult.recordBase.base)
-      ? String(baselineResult.recordBase.base).slice(0, 12) : null,
+    nonce: openNonce,
     taskTransitions: [buildTransition(targetNode.id, 'in_progress', 'open-next')],
     taskMirror: refreshTaskMirror(project, shell),
   };
@@ -1333,6 +1454,9 @@ function runCloseAndOpenNext(opts) {
   // #373: best-effort telemetry — the node closed.
   appendNodeTiming(planPath, nodeId, 'closed');
 
+  // #424 (D-424-01 §5): provenance log entry — close event.
+  appendProvenanceLog(planPath, 'close', nodeId, readNonce(planPath, nodeId, readFile));
+
   // #317: the closed node → completed (every ok exit carries this).
   transitions.push(buildTransition(nodeId, 'complete', 'close-and-open-next'));
 
@@ -1459,6 +1583,14 @@ function runCloseAndOpenNext(opts) {
   // Record baseline for the newly opened node.
   const baselineResult = shell(commitNodePath, [planPath, '--node-id', nextNode.id, '--start', '--json']);
 
+  // #424 (D-424-01 §5): provenance log entry — open event for fused advance.
+  const fusedNonce = (baselineResult.recordBase && baselineResult.recordBase.base)
+    ? String(baselineResult.recordBase.base).slice(0, 12) : null;
+  appendProvenanceLog(planPath, 'open', nextNode.id, fusedNonce);
+
+  // #433 (D-433-01 §2): open-time evidence seeding for the fused-advance node.
+  const fusedSeed = seedEvidenceFile(planPath, nextNode.id, fusedNonce, nextNode.role, false);
+
   // #317: fused advance opened the next node → in_progress (in addition to the closed node).
   transitions.push(buildTransition(nextNode.id, 'in_progress', 'close-and-open-next'));
 
@@ -1476,8 +1608,10 @@ function runCloseAndOpenNext(opts) {
       // reads opened.nonce to bind the next node's evidence gets `undefined`, so on any serial chain
       // with a dependent the SECOND close refuses evidence_stale (the on-disk nonce never matches the
       // empty header). Read the SAME nested path (recordBase.base), NOT the top level.
-      nonce: (baselineResult.recordBase && baselineResult.recordBase.base)
-        ? String(baselineResult.recordBase.base).slice(0, 12) : null,
+      nonce: fusedNonce,
+      // #433: evidence metadata for the dispatcher.
+      evidence_file: fusedSeed.evidence_file,
+      required_tokens: fusedSeed.required_tokens,
     },
     baselineRecorded: baselineResult.exitCode === 0,
     allDone: false,
@@ -1867,6 +2001,17 @@ function runReopenNode(opts) {
     return { result: 'refuse', reason: 'baseline_failed', nodeId, baselineResult: baseline, reopened: nodeId, gatesReset };
   }
 
+  // #424 (D-424-01 §5): provenance log entry — open event (reopen generates a new nonce).
+  const reopenNonce = (baseline.recordBase && baseline.recordBase.base)
+    ? String(baseline.recordBase.base).slice(0, 12) : null;
+  appendProvenanceLog(planPath, 'open', nodeId, reopenNonce);
+
+  // #433 (D-433-01 §4) + #392 anti-replay: reopen generates a NEW nonce. RE-SEED the ENTIRE
+  // evidence file (if present) with fresh binding + role stubs, discarding the stale body so
+  // prior-attempt evidence cannot pass checkEvidenceShape on the new open. forceRotate=true.
+  const nodeRole = (nodes.find(n => n.id === nodeId) || {}).role || 'unknown';
+  const reopenSeed = seedEvidenceFile(planPath, nodeId, reopenNonce, nodeRole, true);
+
   // #317: post-dominating gates were folded → pending; the reopened node → in_progress.
   // #343: transitions are built from gatesFolded (rows actually flipped), never the
   // structural gatesReset — an already-pending downstream gate gets NO fabricated entry.
@@ -1875,6 +2020,10 @@ function runReopenNode(opts) {
 
   return {
     result: 'ok', reopened: nodeId, gatesReset, gatesFolded, baselinesRemoved, evidenceRemoved, baselineRecorded: true,
+    // #433: report nonce rotation and evidence metadata.
+    nonce_rotated: reopenSeed.nonce_rotated,
+    evidence_file: reopenSeed.evidence_file,
+    required_tokens: reopenSeed.required_tokens,
     taskTransitions: reopenTransitions,
     taskMirror: refreshTaskMirror(project, shell),
   };
@@ -2278,6 +2427,10 @@ function runOpenReady(opts) {
     }
     if (spliced.changed) planContent = spliced.content;
     appendNodeTiming(planPath, n.id, 'opened');
+    // #424 (D-424-01 §5): provenance log entry — open event.
+    appendProvenanceLog(planPath, 'open', n.id, nonceById[n.id]);
+    // #433 (D-433-01 §2): open-time evidence seeding for each opened node.
+    seedEvidenceFile(planPath, n.id, nonceById[n.id], n.role, false);
     transitions.push(buildTransition(n.id, 'in_progress', 'open-ready'));
   }
   writeFile(planPath, planContent);
@@ -2298,7 +2451,13 @@ function runOpenReady(opts) {
     // recordBase in Phase 2) so the orchestrator passes the right nonce to each role dispatch and the
     // role echoes it in `evidence-binding: <id> <nonce>` for close-node to verify. null when no
     // baseline SHA was returned (legacy/offline path → close-side binding check skipped, see readNonce).
-    opened: newNodes.map(n => ({ id: n.id, role: n.role, model: n.model || null, kind: n.kind, declared_write_set: n.declared_write_set, nonce: nonceById[n.id] || null })),
+    // #433: also carry evidence_file + required_tokens for the dispatcher (the seeded path + token classes).
+    opened: newNodes.map(n => {
+      let ROLE_TOKEN_REGISTRY = {};
+      try { ({ ROLE_TOKEN_REGISTRY } = require('./kaola-workflow-plan-validator')); } catch (_) {}
+      const required_tokens = (ROLE_TOKEN_REGISTRY[n.role] || ['evidence-binding']).slice();
+      return { id: n.id, role: n.role, model: n.model || null, kind: n.kind, declared_write_set: n.declared_write_set, nonce: nonceById[n.id] || null, evidence_file: '.cache/' + n.id + '.md', required_tokens };
+    }),
     runningSet: finalSet.nodes.map(n => n.id),
     taskTransitions: transitions,
     taskMirror: refreshTaskMirror(project, shell),
@@ -2389,6 +2548,8 @@ function runCloseNode(opts) {
   }
   writeFile(planPath, currentPlan);
   appendNodeTiming(planPath, nodeId, 'closed');
+  // #424 (D-424-01 §5): provenance log entry — close event.
+  appendProvenanceLog(planPath, 'close', nodeId, readNonce(planPath, nodeId, readFile));
   transitions.push(buildTransition(nodeId, 'complete', 'close-node'));
 
   // -- (d) Selector routing (mirror close-and-open-next: arm losing branches to n/a).
@@ -2542,10 +2703,132 @@ function runReconcileRunningSet(opts) {
 }
 
 // ---------------------------------------------------------------------------
+// runSelfTest (#433 / D-433-01) — inline self-test for evidence seeding + provenance log.
+// Triggered by `--self-test`. Tests:
+//   1. open-next seeds .cache/{node-id}.md with binding header + role-specific stubs.
+//   2. Second open-next (crash-resume, same node) does NOT overwrite the existing file.
+//   3. Nonce rotation (forceRotate=true) rewrites the ENTIRE file (binding + fresh stubs; stale body gone).
+//   4. Provenance log entry appears after open.
+//   5. opened payload includes evidence_file + required_tokens.
+// Returns { passed:number, failed:number, errors:string[] }.
+// ---------------------------------------------------------------------------
+function runSelfTest() {
+  const os = require('os');
+  const fs = require('fs');
+  const tmpDir = fs.mkdtempSync(os.tmpdir() + '/adaptive-node-self-test-');
+  let passed = 0;
+  let failed = 0;
+  const errors = [];
+
+  function assert(cond, label) {
+    if (cond) { passed++; process.stdout.write('  PASS: ' + label + '\n'); }
+    else { failed++; errors.push(label); process.stdout.write('  FAIL: ' + label + '\n'); }
+  }
+
+  try {
+    const planPath = tmpDir + '/workflow-plan.md';
+    fs.writeFileSync(planPath, '# dummy plan\n', 'utf8');
+
+    // Test 1: seed creates the file with binding header as line 1 + role stubs.
+    const r1 = seedEvidenceFile(planPath, 'n1-impl', 'abc123def456', 'tdd-guide', false);
+    assert(r1.evidence_file === '.cache/n1-impl.md', 'T1 evidence_file correct path');
+    assert(Array.isArray(r1.required_tokens), 'T1 required_tokens is array');
+    assert(r1.required_tokens.includes('RED'), 'T1 required_tokens includes RED');
+    assert(r1.required_tokens.includes('GREEN'), 'T1 required_tokens includes GREEN');
+    const seededPath = tmpDir + '/.cache/n1-impl.md';
+    assert(fs.existsSync(seededPath), 'T1 seeded file exists');
+    const seededContent = fs.readFileSync(seededPath, 'utf8');
+    const firstLine = seededContent.split('\n')[0];
+    assert(firstLine === 'evidence-binding: n1-impl abc123def456', 'T1 binding header is line 1');
+    assert(/RED:/.test(seededContent), 'T1 RED stub present');
+    assert(/GREEN:/.test(seededContent), 'T1 GREEN stub present');
+
+    // Test 2: second call (crash-resume) does NOT overwrite the existing file.
+    // Write custom content to simulate in-progress evidence.
+    fs.writeFileSync(seededPath, 'evidence-binding: n1-impl abc123def456\nRED: some test output\nGREEN: tests pass\n', 'utf8');
+    const r2 = seedEvidenceFile(planPath, 'n1-impl', 'newNonce999', 'tdd-guide', false);
+    assert(r2.nonce_rotated === false, 'T2 crash-resume nonce_rotated false');
+    const afterContent = fs.readFileSync(seededPath, 'utf8');
+    assert(afterContent.includes('RED: some test output'), 'T2 existing evidence preserved');
+    assert(!afterContent.includes('newNonce999'), 'T2 new nonce NOT written on crash-resume');
+
+    // Test 3: nonce rotation (reopen-node): REWRITE ENTIRE FILE (binding + fresh stubs).
+    // forceRotate=true must discard the old evidence body so stale evidence cannot pass
+    // checkEvidenceShape on a re-opened node (#392 anti-replay guard).
+    const r3 = seedEvidenceFile(planPath, 'n1-impl', 'rotated456789', 'tdd-guide', true);
+    assert(r3.nonce_rotated === true, 'T3 reopen nonce_rotated true');
+    const rotatedContent = fs.readFileSync(seededPath, 'utf8');
+    const rotatedFirstLine = rotatedContent.split('\n')[0];
+    assert(rotatedFirstLine === 'evidence-binding: n1-impl rotated456789', 'T3 line 1 rewritten with new nonce');
+    assert(!rotatedContent.includes('RED: some test output'), 'T3 stale evidence body GONE after forceRotate');
+    assert(/RED:/.test(rotatedContent), 'T3 fresh RED stub present after forceRotate');
+    assert(/GREEN:/.test(rotatedContent), 'T3 fresh GREEN stub present after forceRotate');
+
+    // Test 4: provenance log entry appears after an open event.
+    appendProvenanceLog(planPath, 'open', 'n2-check', 'deadbeef1234');
+    const logPath = tmpDir + '/.cache/provenance-log.jsonl';
+    assert(fs.existsSync(logPath), 'T4 provenance-log.jsonl created');
+    const logLines = fs.readFileSync(logPath, 'utf8').trim().split('\n');
+    const lastEntry = JSON.parse(logLines[logLines.length - 1]);
+    assert(lastEntry.event === 'open', 'T4 event is open');
+    assert(lastEntry.nodeId === 'n2-check', 'T4 nodeId correct');
+    assert(lastEntry.nonce === 'deadbeef1234', 'T4 nonce correct');
+    assert(lastEntry.by === 'adaptive-node', 'T4 by field correct');
+    assert(typeof lastEntry.timestamp === 'string', 'T4 timestamp present');
+
+    // Test 5: implementer role gets correct stubs.
+    const r5 = seedEvidenceFile(planPath, 'n3-impl', 'impl99999999', 'implementer', false);
+    assert(r5.required_tokens.includes('non_tdd_reason'), 'T5 implementer has non_tdd_reason token');
+    const implPath = tmpDir + '/.cache/n3-impl.md';
+    const implContent = fs.readFileSync(implPath, 'utf8');
+    assert(implContent.split('\n')[0] === 'evidence-binding: n3-impl impl99999999', 'T5 implementer binding header');
+    assert(/non_tdd_reason:/.test(implContent), 'T5 implementer non_tdd_reason stub');
+    // The alternation class regression-green|build-green|smoke-integration seeds the FIRST alternative.
+    assert(/regression-green:/.test(implContent), 'T5 implementer regression-green stub (first alt)');
+
+    // Test 6: seedEvidenceFile is advisory — a failure must not throw.
+    try {
+      seedEvidenceFile('/no/such/path/workflow-plan.md', 'nx', 'nonce', 'unknown-role', false);
+      assert(true, 'T6 seedEvidenceFile on bad path does not throw');
+    } catch (_) {
+      assert(false, 'T6 seedEvidenceFile on bad path must not throw');
+    }
+
+    // Test 7: appendProvenanceLog is advisory — a failure must not throw.
+    try {
+      appendProvenanceLog('/no/such/path/workflow-plan.md', 'open', 'n1', 'abc');
+      assert(true, 'T7 appendProvenanceLog on bad path does not throw');
+    } catch (_) {
+      assert(false, 'T7 appendProvenanceLog on bad path must not throw');
+    }
+
+  } finally {
+    // Cleanup.
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
+  }
+
+  return { passed, failed, errors };
+}
+
+// ---------------------------------------------------------------------------
 // CLI — thin wrapper; all process I/O lives here.
 // ---------------------------------------------------------------------------
 function main() {
   const args = process.argv.slice(2);
+
+  if (args[0] === '--self-test') {
+    // #433 inline self-test: exercise evidence seeding + provenance log.
+    process.stdout.write('adaptive-node --self-test: evidence seeding + provenance log\n');
+    const { passed, failed, errors } = runSelfTest();
+    process.stdout.write('Results: ' + passed + ' passed, ' + failed + ' failed\n');
+    if (failed > 0) {
+      process.stdout.write('FAILED tests: ' + errors.join(', ') + '\n');
+      process.exitCode = 1;
+    } else {
+      process.stdout.write('All ' + passed + ' self-tests passed\n');
+    }
+    return;
+  }
 
   if (!args.length || args[0] === '--help' || args[0] === '-h') {
     process.stdout.write(
@@ -2753,6 +3036,9 @@ module.exports = {
   // close-side on-disk nonce (same 12-char SHA prefix) — the field-path round-trip guard.
   readNonce,
   sanitizeNodeId,
+  // #424/#433: exported for testing the provenance log + evidence seeding.
+  appendProvenanceLog,
+  seedEvidenceFile,
   runOrient,
   runMirrorProject,
   runOpenNext,

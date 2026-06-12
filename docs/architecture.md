@@ -259,6 +259,16 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   marginal benefit; the principled containment for a bad frozen plan is the per-tier
   runtime `--barrier-check` (#231), not a binary kill-switch.
 
+  **`.md` allowband — narrow, not blanket (#424).** `.md` files are no longer blanket-exempt from the `--barrier-check`. The declared allowband is: `docs/**`, `CHANGELOG.md`, `README.md`, `kaola-workflow/{project}/**`. `.md` files outside this band — including `agents/*.md`, `commands/*.md`, `plugins/*/agents/*.toml` — are treated as production surfaces and must appear in a node's `declared_write_set`. Plans frozen before #424 that relied on the blanket exemption will classify non-allowband `.md` writes as `write_set_overflow` at barrier time.
+
+  **Barrier attribution sweep and new finalize-check refusals (#424).** At Finalization `--finalize-check`, an attribution sweep verifies that every file in the diff vs `origin/main` is attributed to a `complete` node's write set. Files declared only by a non-complete (`n/a` or `pending`) node yield the typed refusal `unattributed_change`. Two further finalize-check refusals: `drop_base_window_open` (`--drop-base` is forbidden while any node is `in_progress`) and `root_mismatch` (the plan-path root does not match the expected project root).
+
+  **Evidence seeding lifecycle (#433).** When a node is opened (`open-next` / `open-ready` / fused advance), `kaola-workflow-adaptive-node.js` seeds `.cache/<node-id>.md` with a binding header (`evidence-binding: <node-id> <nonce>`) and role-specific token stubs drawn from `ROLE_TOKEN_REGISTRY` (the single vocabulary source, exported from `kaola-workflow-plan-validator.js`). The `opened` payload carries `evidence_file` and `required_tokens` so the dispatched role agent knows exactly what to fill. The close gate verifies the binding header against the per-open nonce. On `reopen-node`, the evidence file is re-seeded entirely with fresh stubs and the prior body is discarded — preventing stale evidence from a prior open being replayed as current evidence.
+
+  **Provenance log (`.cache/provenance-log.jsonl`).** Each `open-next` / `open-ready` append a provenance entry (node-id, opened-at, nonce, evidence-file path) to `.cache/provenance-log.jsonl` — an append-only audit artifact that survives plan-repair and reopen cycles. Not hashed by `plan_hash`; barrier-exempt.
+
+  **Chain receipt (`.cache/chain-receipt.json`, #432).** `kaola-workflow-run-chains.js` runs all four edition test chains via `spawnSync` (real exit codes) and writes `.cache/chain-receipt.json` (`{headSha, workTreeHash, startedAt, chains:[{name, exit}]}`). The Finalization `--finalize-check` gate reads this artifact and refuses with `chains_unverified` (no receipt), `chains_stale` (headSha mismatch), or `chains_red` (any chain exited non-zero). The contractor runs this script at Step 8c and cites the receipt path as evidence, replacing prose attestation. A `--accept-known-red name:issue` waiver acknowledges a known-red chain with an issue reference.
+
 ## Finalization and Sink Flow
 
 Finalization delivers completed work through one of two sink paths:
