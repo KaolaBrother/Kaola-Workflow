@@ -38,11 +38,26 @@ here for the full contract.
   the Evidence column only. The barrier commit order is `.cache` evidence → Node
   Ledger row → `workflow-state.md` pointer LAST, so a crash mid-node is recoverable.
 - `.cache/` files under an active project hold supporting evidence referenced by
-  phase artifacts or summaries. `.cache/dispatch-log.jsonl` is written by the
-  `kaola-workflow-subagent-dispatch-log.sh` SubagentStart hook; each line is a
-  JSON object recording a subagent spawn (`ts`, `agent_type`, `agent_id`, `cwd`).
-  This file is used by `checkDispatchAttestations` at closure time for WARN-FIRST
-  subagent-seam attestation (see `docs/api.md` § Closure Contract).
+  phase artifacts or summaries. Key `.cache/` entries:
+  - `dispatch-log.jsonl` — written by the `kaola-workflow-subagent-dispatch-log.sh`
+    SubagentStart hook; each line is a JSON object recording a subagent spawn
+    (`ts`, `agent_type`, `agent_id`, `cwd`). Used by `checkDispatchAttestations`
+    at closure time for WARN-FIRST subagent-seam attestation (see `docs/api.md` § Closure Contract).
+  - `running-set.json` — tracks which nodes are currently in the running set
+    (state: `'opening'|'open'`; members list with per-node `id`, `role`, `kind`,
+    `baseline`, optional `opening` marker and `openedAt`). Prevents double-open;
+    a crashed `opening` state routes to `reconcile-running-set`.
+  - `active-batch.json` — parallel-batch manifest with `state: 'opening'|'open'|'sealed'|'joined'`
+    (crash-safe two-phase: written with `opening` before any ledger row flips, then
+    promoted to `open`). Reconcilable via the `reconcile` subcommand.
+  - `barrier-base-<id>` — per-node baseline commit tree SHA recorded by `--record-base`
+    at node-open time. Used by `--barrier-check --node-id <id>` to tree-diff exactly
+    that node's own writes. Idempotent (reused on re-entry, never re-snapshotting a
+    dirty tree). Dropped by `--drop-base` on rollback/close-direction reconcile.
+  - `barrier-open-<id>` — freshness token recording the HEAD SHA at node-open time;
+    used to detect `stale:head_advanced` (the worktree advanced between baseline
+    recording and the barrier check). Absent on disk → binding check is skipped
+    (backward-compatible).
 - `kaola-workflow/archive/{project}/` keeps completed, abandoned, or stale
   project folders after finalize or discard.
 - **Closure normalization (#324):** when `archiveProjectDir` archives a project with

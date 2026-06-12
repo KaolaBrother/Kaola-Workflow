@@ -472,6 +472,8 @@ through the user's active Codex configuration. They only set reasoning effort:
 | `workflow-planner` | `xhigh` |
 | `issue-scout` | `medium` |
 
+When a node's resolved `model` is `opus`, the Codex dispatch selects the `<role>-max` profile variant (e.g. `planner-max`, `code-reviewer-max`) which carries `reasoning_effort: xhigh` — the highest-effort profile available (shipped in #405). Non-opus nodes use the standard profiles above unchanged.
+
 ## Release versioning
 
 Current official release versions:
@@ -625,6 +627,8 @@ The executor runs **one FRONTIER UNIT at a time** rather than strictly one node 
 **`parallel-batch.js`** is pure composition over `next-action.js`, `commit-node.js`, and `plan-validator.js`, mirroring the pattern `adaptive-node.js` uses. It adds no new barrier or gate surface — `seal-member` calls the unchanged `commit-node --node-id N` barrier for each member; Finalization `--barrier-check` sees normal `complete` rows in the ledger after `join`.
 
 **`workflow-planner` now authors efficient DAGs**: expose independent work as siblings (a shared ready frontier) so the executor can open them as one batch; serialize only for true dependencies, shared file lanes, selectors, loops, or gates.
+
+**Running-set scheduler (#377):** Since #377, the executor tracks a *running set* — the set of nodes currently open and executing. Serial execution is simply `RUNNING_SET_MAX=1`; the parallel-batch path raises the cap to the frontier width. The running-set model unifies both paths: `open-ready` enters a node into the running set, `close-node` removes it, and `reconcile-running-set` repairs the set after a crash. There is no separate "serial mode" — serial is just the running-set scheduler with a cap of one.
 
 For the full design, see `docs/investigations/2026-06-07-parallel-ready-set-execution-design.md`.
 
@@ -869,7 +873,11 @@ evidence path.
 Codex wires the same three hooks via a project-local `.codex/hooks.json` written by
 `install-codex-agent-profiles.js` (run by the Codex `kaola-workflow-init` skill). The
 hooks are NOT in the Codex plugin manifest (`plugin.json`) — they live in the
-project's `.codex/` directory.
+project's `.codex/` directory. Since #409, hooks and their helper scripts have a
+stable install home at `.codex/kaola-workflow/hooks/` and
+`.codex/kaola-workflow/scripts/` respectively, which means `codex plugin add` (plugin
+upgrades) no longer overwrites local hook overrides — user customisations in those
+paths survive a plugin re-install.
 
 | Hook ID | Event (matcher) | Purpose | Script |
 |---------|-----------------|---------|--------|

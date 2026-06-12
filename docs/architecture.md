@@ -383,3 +383,5 @@ The resolver (`resolve-agent-model`) uses this precedence chain:
 4. **`''`** — empty string, letting the orchestrator's model inherit (last resort).
 
 **Effect on adaptive nodes:** Dynamically dispatched nodes now resolve to their correct profile-aware model and render the model badge in the dispatch call. Previously, agents with `model: inherit` frontmatter resolved to `''` and silently inherited Opus regardless of the installed profile. Frontmatter remains `inherit` (the install-emitted manifest is the authoritative source); the dispatch carries an explicit `model=` so the badge is always visible.
+
+**Runtime per-node override:** At RUNTIME, the per-node `model` column in `workflow-plan.md` beats install-time profile selection — see the #382 per-node model tier. A node's `model` cell (`opus` or `sonnet`) is sealed at freeze and surfaced by `next-action.js` in every ready-set item; `open-next`/`open-ready` thread it into the running-set manifest for crash/reconcile re-dispatch.
