@@ -2491,6 +2491,188 @@ function testAdaptivePerInstanceBarrierHardening() {
   console.log('testAdaptivePerInstanceBarrierHardening: PASSED');
 }
 
+// bundle #424/#432/#433 (D-424-01 / D-432-01 / D-433-01): the n2-validator node. Five barrier-
+// attribution upgrades + the chain-receipt finalize gate + the single-source role-token registry.
+// Every assertion flips if its production line is reverted (RED → GREEN).
+function testBundle424432433ValidatorGates() {
+  const pv = require('./kaola-workflow-plan-validator');
+
+  // --- #424 (1) NARROW .md ALLOWBAND: a behavioral .md OUTSIDE the band, undeclared, must REFUSE
+  //     (the blanket suffix exemption let it pass). agents/*.md is production now.
+  const PLAN_MD = ['# Plan', '', '## Meta', 'labels: enhancement', '', '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
+    '| impl | implementer | — | lib/foo.js | 1 | sequence |',
+    '| rv | code-reviewer | impl | — | 1 | sequence |',
+    '| done | finalize | rv | — | 1 | sequence |', '',
+    '## Node Ledger', '', '| id | status |', '|---|---|',
+    '| impl | in_progress |', '| rv | pending |', '| done | pending |', ''].join('\n');
+  {
+    const r = pv.barrierCheck(PLAN_MD, ['agents/workflow-planner.md'], { nodeId: 'impl' });
+    assert(r && r.result === 'refuse' && r.reason === 'write_set_overflow',
+      '#424 (1): an undeclared behavioral agents/*.md OUTSIDE the allowband must refuse write_set_overflow, got ' + JSON.stringify(r));
+  }
+  // --- #424 (2) IN-band undeclared .md passes: repo-root CHANGELOG.md + docs/** are invisible.
+  {
+    assert(pv.barrierCheck(PLAN_MD, ['CHANGELOG.md'], { nodeId: 'impl' }).result === 'pass',
+      '#424 (2): an undeclared repo-root CHANGELOG.md is in the allowband and must pass');
+    assert(pv.barrierCheck(PLAN_MD, ['docs/architecture.md'], { nodeId: 'impl' }).result === 'pass',
+      '#424 (2): an undeclared docs/** path is in the allowband and must pass');
+    assert(pv.barrierCheck(PLAN_MD, ['README.md'], { nodeId: 'impl' }).result === 'pass',
+      '#424 (2): an undeclared repo-root README.md is in the allowband and must pass');
+    // boundary: a NESTED non-root README.md is OUTSIDE the band.
+    const nested = pv.barrierCheck(PLAN_MD, ['plugins/kaola-workflow/README.md'], { nodeId: 'impl' });
+    assert(nested.result === 'refuse',
+      '#424 (2 boundary): a nested non-root README.md is OUTSIDE the band and must refuse, got ' + JSON.stringify(nested));
+  }
+  // --- #424 isBarrierInvisible exported predicate (the shared source for the finalize sweep).
+  {
+    assert(typeof pv.isBarrierInvisible === 'function', '#424: isBarrierInvisible must be exported');
+    assert(pv.isBarrierInvisible('docs/x.md') === true, '#424: docs/** is invisible');
+    assert(pv.isBarrierInvisible('CHANGELOG.md') === true, '#424: root CHANGELOG.md is invisible');
+    assert(pv.isBarrierInvisible('agents/x.md') === false, '#424: agents/*.md is NOT invisible');
+    assert(pv.isBarrierInvisible('plugins/p/README.md') === false, '#424: nested README.md is NOT invisible');
+    assert(pv.isBarrierInvisible('kaola-workflow/issue-1/x.md', 'issue-1') === true,
+      '#424: a path under the active project tree is invisible');
+  }
+
+  // --- #433 (5) ROLE_TOKEN_REGISTRY export + shape.
+  {
+    const reg = pv.ROLE_TOKEN_REGISTRY;
+    assert(reg && typeof reg === 'object', '#433 (5): ROLE_TOKEN_REGISTRY must be exported as an object');
+    const expect = {
+      'tdd-guide':             ['evidence-binding', 'RED', 'GREEN'],
+      'implementer':          ['evidence-binding', 'non_tdd_reason', 'regression-green|build-green|smoke-integration'],
+      'code-reviewer':        ['evidence-binding', 'verdict', 'findings_blocking'],
+      'security-reviewer':    ['evidence-binding', 'verdict', 'findings_blocking'],
+      'adversarial-verifier': ['evidence-binding', 'verdict'],
+      'doc-updater':          ['evidence-binding'],
+      'main-session-gate':    ['evidence-binding', 'verdict', 'findings_blocking'],
+    };
+    for (const role of Object.keys(expect)) {
+      assert(JSON.stringify(reg[role]) === JSON.stringify(expect[role]),
+        '#433 (5): ROLE_TOKEN_REGISTRY[' + role + '] must equal ' + JSON.stringify(expect[role]) + ', got ' + JSON.stringify(reg[role]));
+    }
+  }
+
+  // --- CLI-integration scenarios over a real git repo (root-pin, drop-base window-lock, finalize gate).
+  const FPLAN = ['# Workflow Plan — issue #424', '', '## Meta', 'labels: enhancement', '', '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
+    '| a | implementer | — | aaa/x.js | 1 | sequence |',
+    '| rv | code-reviewer | a | — | 1 | sequence |',
+    '| done | finalize | rv | — | 1 | sequence |', '',
+    '## Node Ledger', '', '| id | status |', '|---|---|'].join('\n');
+  const ledgerRows = st => ['', '| a | ' + st.a + ' |', '| rv | ' + st.rv + ' |', '| done | ' + st.done + ' |', ''].join('\n');
+  const mkRepo = (ledger) => {
+    const grepo = adaptiveTmp('bundle424-git');
+    initGitRepoWithBareRemote(grepo);
+    // Branch off main BEFORE the plan commit so the finalize sweep's `git diff main...HEAD` reflects
+    // the real diverged-feature-branch topology (the plan + every node/orphan commit is on the branch).
+    spawnSync('git', ['-C', grepo, 'checkout', '-b', 'workflow/issue-424'], { encoding: 'utf8' });
+    const proj = path.join(grepo, 'kaola-workflow', 'issue-424');
+    fs.mkdirSync(proj, { recursive: true });
+    const planPath = path.join(proj, 'workflow-plan.md');
+    fs.writeFileSync(planPath, FPLAN + ledgerRows(ledger));
+    spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
+    spawnSync('git', ['commit', '-m', 'plan'], { cwd: grepo, encoding: 'utf8' });
+    return { grepo, planPath, proj };
+  };
+  const cleanup = g => { fs.rmSync(g, { recursive: true, force: true }); fs.rmSync(g + '-remote', { recursive: true, force: true }); };
+  const headOf = g => spawnSync('git', ['-C', g, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+  const writeReceipt = (proj, obj) => {
+    fs.mkdirSync(path.join(proj, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(proj, '.cache', 'chain-receipt.json'), JSON.stringify(obj));
+  };
+
+  // --- #424 (3) DROP-BASE WINDOW-LOCK: --drop-base on an in_progress node must refuse.
+  { const { grepo, planPath } = mkRepo({ a: 'in_progress', rv: 'pending', done: 'pending' });
+    try {
+      const dr = runNode(planValidatorScript, [planPath, '--drop-base', '--node-id', 'a', '--json'], grepo);
+      assert(dr.status === 1 && JSON.parse(dr.stdout).reason === 'drop_base_window_open',
+        '#424 (3): --drop-base on an in_progress node must refuse drop_base_window_open, got status ' + dr.status + ' ' + dr.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- #424 (4) DROP-BASE on a PENDING node is allowed (pre-open is the only legal window).
+  { const { grepo, planPath } = mkRepo({ a: 'pending', rv: 'pending', done: 'pending' });
+    try {
+      const dr = runNode(planValidatorScript, [planPath, '--drop-base', '--node-id', 'a', '--json'], grepo);
+      assert(dr.status === 0 && JSON.parse(dr.stdout).result === 'ok',
+        '#424 (4): --drop-base on a pending node must be allowed (idempotent no-op ok), got status ' + dr.status + ' ' + dr.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- #424 ROOT-PINNING: a barrier-check whose cwd != git toplevel must refuse root_mismatch.
+  { const { grepo, planPath } = mkRepo({ a: 'in_progress', rv: 'pending', done: 'pending' });
+    try {
+      // run with cwd = a SUBDIR of the repo (not the toplevel) → root_mismatch (no --skip-root-pin).
+      const sub = path.join(grepo, 'kaola-workflow');
+      const r = runNode(planValidatorScript, [planPath, '--barrier-check', '--node-id', 'a', '--json'], sub);
+      assert(r.status === 1 && JSON.parse(r.stdout).reason === 'root_mismatch',
+        '#424: a barrier-check run from a non-toplevel cwd must refuse root_mismatch, got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- #432 (6) FINALIZE: missing receipt → chains_unverified.
+  { const { grepo, planPath } = mkRepo({ a: 'complete', rv: 'complete', done: 'complete' });
+    try {
+      const r = runNode(planValidatorScript, [planPath, '--finalize-check', '--json'], grepo);
+      assert(r.status === 1 && JSON.parse(r.stdout).reason === 'chains_unverified',
+        '#432 (6): finalize with no chain receipt must refuse chains_unverified, got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- #432 (7) FINALIZE: stale receipt (headSha != HEAD) → chains_stale.
+  { const { grepo, planPath, proj } = mkRepo({ a: 'complete', rv: 'complete', done: 'complete' });
+    try {
+      writeReceipt(proj, { headSha: 'deadbeef00000000000000000000000000000000',
+        chains: [{ name: 'claude', exitCode: 0, accepted_red: false }] });
+      const r = runNode(planValidatorScript, [planPath, '--finalize-check', '--json'], grepo);
+      assert(r.status === 1 && JSON.parse(r.stdout).reason === 'chains_stale',
+        '#432 (7): finalize with a stale receipt headSha must refuse chains_stale, got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- #432 (8) FINALIZE: red chain, no waiver → chains_red.
+  { const { grepo, planPath, proj } = mkRepo({ a: 'complete', rv: 'complete', done: 'complete' });
+    try {
+      writeReceipt(proj, { headSha: headOf(grepo), chains: [
+        { name: 'claude', exitCode: 0, accepted_red: false },
+        { name: 'codex', exitCode: 1, accepted_red: false }] });
+      const r = runNode(planValidatorScript, [planPath, '--finalize-check', '--json'], grepo);
+      assert(r.status === 1 && JSON.parse(r.stdout).reason === 'chains_red',
+        '#432 (8): finalize with a red, unwaived chain must refuse chains_red, got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- #432 (9) FINALIZE: red chain WITH a waiver → passes the chain gate (and clean sweep → pass).
+  { const { grepo, planPath, proj } = mkRepo({ a: 'complete', rv: 'complete', done: 'complete' });
+    try {
+      // node a's only branch change (aaa/x.js) is covered by complete node a → sweep clean.
+      fs.mkdirSync(path.join(grepo, 'aaa'), { recursive: true });
+      fs.writeFileSync(path.join(grepo, 'aaa', 'x.js'), 'x\n');
+      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'impl a'], { cwd: grepo, encoding: 'utf8' });
+      writeReceipt(proj, { headSha: headOf(grepo), chains: [
+        { name: 'claude', exitCode: 0, accepted_red: false },
+        { name: 'codex', exitCode: 1, accepted_red: true, accepted_red_issue: '234' }] });
+      const r = runNode(planValidatorScript, [planPath, '--finalize-check', '--json'], grepo);
+      assert(r.status === 0 && JSON.parse(r.stdout).result === 'pass',
+        '#432 (9): finalize with a WAIVED red chain + clean attribution sweep must pass, got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- #424 (3, finalize sweep) UNATTRIBUTED_CHANGE: a branch change owned by NO complete node and
+  //     outside the allowband must surface as unattributed_change.
+  { const { grepo, planPath, proj } = mkRepo({ a: 'complete', rv: 'complete', done: 'complete' });
+    try {
+      // orphan production write covered by no node's declared set, outside the band.
+      fs.mkdirSync(path.join(grepo, 'orphan'), { recursive: true });
+      fs.writeFileSync(path.join(grepo, 'orphan', 'residue.js'), 'crash residue\n');
+      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'orphan residue'], { cwd: grepo, encoding: 'utf8' });
+      writeReceipt(proj, { headSha: headOf(grepo), chains: [{ name: 'claude', exitCode: 0, accepted_red: false }] });
+      const r = runNode(planValidatorScript, [planPath, '--finalize-check', '--json'], grepo);
+      const out = JSON.parse(r.stdout);
+      assert(r.status === 1 && out.reason === 'unattributed_change' && /orphan\/residue\.js/.test(JSON.stringify(out)),
+        '#424 (sweep): an orphan branch change must refuse unattributed_change naming the path, got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  console.log('testBundle424432433ValidatorGates: PASSED');
+}
+
 // issue #234 E1: resume must reconcile a persisted next_command against the project's true path
 // before trusting it. A stale phaseN on an adaptive project must resolve to plan-run; a consistent
 // full next_command is preserved; a stale full next_command falls back to phase-derived reconstruction.
@@ -11431,6 +11613,7 @@ function buildRegistry() {
   add('testAdaptiveGateBarrierEnforcement',               testAdaptiveGateBarrierEnforcement);
   add('testAdaptivePerInstanceBarrier',                   testAdaptivePerInstanceBarrier);
   add('testAdaptivePerInstanceBarrierHardening',          testAdaptivePerInstanceBarrierHardening);
+  add('testBundle424432433ValidatorGates',                testBundle424432433ValidatorGates);
   add('testAdaptiveResumeReconcilesNextCommand',          testAdaptiveResumeReconcilesNextCommand);
   add('testAdaptiveDurableConsentHalt',                   testAdaptiveDurableConsentHalt);
   add('testAdaptiveAuthoringEntryGuard',                  testAdaptiveAuthoringEntryGuard);
