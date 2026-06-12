@@ -1,0 +1,42 @@
+{
+  "source_plan_hash": "c43e1560307bff5cc667870b0b88bc7c38f022a84fa2dff5a2cc1164e55bdf26",
+  "tasks": [
+    {
+      "id": "n1-survey",
+      "role": "doc-updater",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n2-adr-driver",
+      "role": "doc-updater",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n3-adr-mechanical",
+      "role": "doc-updater",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n4-design-review",
+      "role": "adversarial-verifier",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n5-doc-index",
+      "role": "doc-updater",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n6-finalize",
+      "role": "finalize",
+      "status": "completed",
+      "ledger_status": "complete"
+    }
+  ],
+  "last_synced_from_ledger": "2026-06-12T04:12:17.149Z"
+}
