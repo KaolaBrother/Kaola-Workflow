@@ -12,6 +12,10 @@
 
 - **adaptive/validator: `generated_port_split` freeze-wall (#431).** `validatePlan()` (×4 editions): a per-node write-set wall (after FILE_CEILING) refuses `generated_port_split` when a node declares `scripts/<base>` where `<base>` ∈ `GENERATED_AGGREGATORS` (from `scripts/edition-sync.js`) without also declaring the codex twin and both forge ports in the same node. Anchor-gated: silently inert when `edition-sync.js` is absent (forge/codex/consumer installs). `agents/workflow-planner.md` + 3 `.toml` mirrors: adds the aggregator-coupling rule subsection (correct declaration example included). `commands/kaola-workflow-plan-run.md` + 3 Codex SKILL packs (×4, #400): adds the "Generated-aggregator forge ports in the diff" paragraph explaining why a node that edits a canonical GENERATED_AGGREGATOR generates forge-port diffs at review time. All four walkthrough editions: `testAdaptiveGeneratedPortSplit431` + codex/gitlab/gitea equivalents assert split-shape refusal and bundled-shape pass. Three decision records: `docs/decisions/D-423-01.md`, `docs/decisions/D-425-01.md`, `docs/decisions/D-431-01.md`. `docs/api.md`: two new freeze-wall error code entries + `node_not_in_ledger` diagnostic field entry.
 
+### Changed
+
+- **docs(README): Codex hook activation is now a prominent, required install step, and the benign `--doctor` `status: stale` (empty `user` scope) is documented.** The *Install* section gains a "Trust the hooks" subsection: `workflow-init` writes a project-local `.codex/hooks.json` (scripts under `.codex/kaola-workflow/{hooks,scripts}`) whose command hooks stay **inert until trusted via `/hooks`** — trust is content-hashed and persisted per machine, and there is no non-interactive persist path (only `codex exec --dangerously-bypass-hook-trust` for one-off automation, which does not persist). The verification guidance now also checks `.codex/hooks.json` + the stable hook home and clarifies that the `project` scope is authoritative while a `user`-scope-only `stale` from `--doctor` is expected. Closes the documentation gap where a complete on-disk install left hooks silently inactive.
+
 ## [5.16.0] — 2026-06-12
 
 ### Added

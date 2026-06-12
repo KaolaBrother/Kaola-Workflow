@@ -370,6 +370,30 @@ Use Kaola-Workflow Gitea for Codex in this repo.
 Run workflow-init for Kaola-Workflow Gitea for Codex.
 ```
 
+#### Trust the hooks (required — they stay inert until you do)
+
+`workflow-init` writes the lifecycle hooks to a **project-local** `.codex/hooks.json`
+and copies their scripts into the stable home `.codex/kaola-workflow/{hooks,scripts}`.
+Codex (>= 0.139) will **not execute any command hook until you review and trust it** —
+trust is recorded against each hook's content hash and persisted per machine. So a
+freshly initialized project has the hook files on disk yet **no hook fires yet**; this
+is the usual cause of "the hooks were never added to Codex".
+
+To activate them, open a Codex session on the project and run:
+
+```text
+/hooks
+```
+
+Review the `kaola-workflow:` entries and trust them. This is a one-time step (editing a
+hook re-marks it untrusted, so re-run `/hooks` after an update that changes a hook).
+There is **no config key, trust file, or CLI flag that persists trust
+non-interactively** — the only non-interactive option is
+`codex exec --dangerously-bypass-hook-trust`, which skips the check for that single run
+**without** persisting trust (use it only for automation that already vets the hook
+sources). Until the hooks are trusted, compaction-resume, the commit-lane guard, and
+subagent dispatch logging do not fire.
+
 Update an existing Codex install (durable, stale-proof flow):
 
 ```bash
@@ -397,8 +421,17 @@ is only repaired by re-running `install-codex-agent-profiles.js`, which validate
 prunes, and re-writes the managed manifest.
 
 To verify a project was initialized for Codex, check that `.codex/config.toml`
-contains a `# BEGIN kaola-workflow agents` managed block and that
-`.codex/agents/kaola-workflow/` contains the role profile files.
+contains a `# BEGIN kaola-workflow agents` managed block, that
+`.codex/agents/kaola-workflow/` contains the role profile files, and that
+`.codex/hooks.json` plus the stable hook home `.codex/kaola-workflow/{hooks,scripts}`
+exist — then trust the hooks via `/hooks` (see *Trust the hooks* above).
+
+The read-only `--doctor` report grades three scopes: `user`, `project`, and
+`plugin_cache`. Kaola-Workflow installs **project-local only**, so the `project` scope
+is the authoritative one and must read green (managed block present; no missing, stale,
+or malformed roles). A top-level `status: stale` that is driven **solely** by the
+`user` scope (managed block absent under `~/.codex`) is **expected and benign** — the
+user scope is intentionally empty, so do not "repair" it by installing into `~/.codex`.
 
 The primary skills are:
 
