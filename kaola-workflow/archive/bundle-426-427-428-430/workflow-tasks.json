@@ -1,0 +1,96 @@
+{
+  "source_plan_hash": "58397ec580ba1b4994f25226987ea9fff19c67fdae085697c35e8bdb6db4bbe4",
+  "tasks": [
+    {
+      "id": "n1-architect-finalize-contract",
+      "role": "code-architect",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n2-impl-finalize-426",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n3-impl-closure-427",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n4-impl-roadmap-428",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n5-impl-claimguard-430",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n5b-forge-port-claim",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n6-impl-handoff-430",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n7-impl-orient-430",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n8a-prose-planner-430",
+      "role": "doc-updater",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n8b-prose-adapt-430",
+      "role": "doc-updater",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n9-impl-sink-idem-427",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n10-tests-walkthrough",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n11-code-review",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n12-docs",
+      "role": "doc-updater",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n13-finalize",
+      "role": "finalize",
+      "status": "completed",
+      "ledger_status": "complete"
+    }
+  ],
+  "last_synced_from_ledger": "2026-06-12T15:55:24.343Z"
+}
