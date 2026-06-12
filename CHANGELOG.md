@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **tests: `test-bash-block-guards.js` red on main since 58ffd81 — fixture repaired and no-plan scenario added (#423).** Scenario-A fixture now writes a minimal `## Node Ledger` (with `| id | status |` header) after `workflow-state.md` so the Step-8a `ledger-compare` guard finds a parseable `--source` plan and exits 0. New Scenario-D asserts the Step-8a block exits 0 and still mirrors staged renames when no `workflow-plan.md` is present (full/fast-path projects). `agents/contractor.md` + 3 `.toml` mirrors: added a `[ -f "$PLAN_PATH" ]` presence-check around the ledger-compare call so the guard is a no-op on full/fast-path projects (emits `ledger_compare_skipped: no_plan` and continues); 17/17 assertions pass; all four `npm run test:kaola-workflow:*` chains green.
+
+### Added
+
+- **adaptive/validator: `ledger_header_invalid` freeze-wall + `--repair` normalization (#425).** `validatePlan()` in `kaola-workflow-plan-validator.js` (×4 editions) now refuses a plan whose `## Node Ledger` section is present but whose header row lacks `id`/`status` columns (aliases `node`, `node_id`, `node-id`, `state` detected) with typed error `ledger_header_invalid`, naming the found columns. `reconcileLedger()` normalizes aliases to canonical `id`/`status` under `--repair` and reports `header_normalized: true` (hash-safe: ledger is outside `plan_hash`). Freeze-only — in-flight plans are never bricked retroactively. `kaola-workflow-adaptive-node.js` (×4 editions): `spliceLedgerNode` emits a structured `diagnostic` field on `node_not_in_ledger` when the `## Node Ledger` section is present but lacks the `id` column, surfacing `detected_columns`, `required_columns`, and a remediation hint. `agents/workflow-planner.md` + 3 `.toml` mirrors: pins the `| id | status |` ledger header template with an explicit rule naming `ledger_header_invalid`. All four walkthrough editions: `testAdaptiveLedgerHeaderInvalid425` + `testCodexLedgerHeaderInvalid425` + gitlab/gitea equivalents assert the freeze-wall and `--repair` normalization.
+
+- **adaptive/validator: `generated_port_split` freeze-wall (#431).** `validatePlan()` (×4 editions): a per-node write-set wall (after FILE_CEILING) refuses `generated_port_split` when a node declares `scripts/<base>` where `<base>` ∈ `GENERATED_AGGREGATORS` (from `scripts/edition-sync.js`) without also declaring the codex twin and both forge ports in the same node. Anchor-gated: silently inert when `edition-sync.js` is absent (forge/codex/consumer installs). `agents/workflow-planner.md` + 3 `.toml` mirrors: adds the aggregator-coupling rule subsection (correct declaration example included). `commands/kaola-workflow-plan-run.md` + 3 Codex SKILL packs (×4, #400): adds the "Generated-aggregator forge ports in the diff" paragraph explaining why a node that edits a canonical GENERATED_AGGREGATOR generates forge-port diffs at review time. All four walkthrough editions: `testAdaptiveGeneratedPortSplit431` + codex/gitlab/gitea equivalents assert split-shape refusal and bundled-shape pass. Three decision records: `docs/decisions/D-423-01.md`, `docs/decisions/D-425-01.md`, `docs/decisions/D-431-01.md`. `docs/api.md`: two new freeze-wall error code entries + `node_not_in_ledger` diagnostic field entry.
+
 ## [5.16.0] — 2026-06-12
 
 ### Added

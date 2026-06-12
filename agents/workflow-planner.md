@@ -134,6 +134,36 @@ Author the `## Nodes` table so the validator passes it. Each node is one row:
   `knowledge-lookup` node when the task depends on external library or API behavior, framework
   conventions, or open-web/expertise knowledge that cannot be confirmed from the local codebase
   alone. This mirrors the Phase 1 `knowledge-lookup` trigger.
+- **Node Ledger header MUST be canonical (#425).** The `## Node Ledger` section you write into
+  `workflow-plan.md` must use EXACTLY this header format:
+
+  ```markdown
+  ## Node Ledger
+
+  | id | status |
+  | --- | --- |
+  | n1-<role> | pending |
+  | ... | ... |
+  ```
+
+  The column header row must be `| id | status |` — not `| node |`, `| node_id |`, or any alias.
+  Any plan with a different ledger header will fail the freeze-wall with `ledger_header_invalid`.
+  The `--repair` flag can normalize a bad header to canonical form.
+- **Aggregator-coupling rule — `generated_port_split` (#431).** When a node's declared write set
+  includes `scripts/<base>` where `<base>` is a GENERATED_AGGREGATOR (e.g.,
+  `kaola-workflow-plan-validator.js`, `kaola-workflow-adaptive-node.js`), the SAME node must ALSO
+  declare all four edition files for that base:
+  - `plugins/kaola-workflow/scripts/<base>` (codex twin)
+  - `plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-<base>.js` (gitlab forge port)
+  - `plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-<base>.js` (gitea forge port)
+
+  Splitting a canonical aggregator and its ports across separate nodes is
+  `write_set_overflow`-by-construction (the #291 defect pattern). Plans that split them will fail
+  freeze with `generated_port_split`. Example of CORRECT declaration:
+
+  ```
+  | n1-validator | tdd-guide | — | scripts/kaola-workflow-plan-validator.js, plugins/kaola-workflow/scripts/kaola-workflow-plan-validator.js, plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-plan-validator.js, plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-plan-validator.js | 4 | sequence | opus |
+  ```
 - **Decision-record numbering (#337):** before hardcoding a decision-record id
   (`D-<issue>-NN`) into a write set or `## Plan Notes`, read the target repo's
   existing records (`docs/decisions/`, plus mentions in docs/ and CHANGELOG.md)

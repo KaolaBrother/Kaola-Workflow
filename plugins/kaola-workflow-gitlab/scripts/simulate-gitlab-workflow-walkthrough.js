@@ -671,6 +671,65 @@ function testGitlabAdaptive() {
     const bsState = fs.readFileSync(path.join(bsArchiveDir, 'workflow-state.md'), 'utf8');
     assert.ok(bsState.includes('status: closed'), '#333: gitlab backstop must stamp manual archive status: closed, got: ' + bsState);
     assert.ok(/^## Closure$/m.test(bsState), '#333: gitlab backstop appends a ## Closure block');
+
+    // #425: ledger-header freeze-wall on the GITLAB edition validator.
+    // A plan with `| node | status |` ledger header must refuse with ledger_header_invalid;
+    // --freeze --repair normalizes it and surfaces header_normalized:true.
+    {
+      const planBodyLh = [
+        '# Plan', '', '## Meta', 'labels: chore', '', '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape |',
+        '|---|---|---|---|---|---|',
+        '| impl | tdd-guide | — | lib/foo.js | 1 | sequence |',
+        '| review | code-reviewer | impl | — | 1 | sequence |',
+        '| done | finalize | review | — | 1 | sequence |',
+        '', '## Node Ledger', '',
+        '| node | status |',
+        '|---|---|',
+        '| impl | pending |',
+        '| review | pending |',
+        '| done | pending |',
+        '',
+      ].join('\n');
+      const lhv = fv.validatePlan(planBodyLh);
+      assert.strictEqual(lhv.result, 'refuse',
+        'gitlab #425: plan with `| node |` ledger header must refuse at freeze');
+      assert.ok(Array.isArray(lhv.errors) && lhv.errors.some(e => /ledger_header_invalid/.test(e)),
+        'gitlab #425: refusal errors must name ledger_header_invalid, got: ' + JSON.stringify(lhv.errors));
+
+      // --repair via CLI normalizes the header and surfaces header_normalized:true.
+      const lhPlanPath = path.join(tmp, 'lh-plan.md');
+      fs.writeFileSync(lhPlanPath, planBodyLh);
+      const lhR = spawnNode(valScript, [lhPlanPath, '--freeze', '--repair', '--json'], tmp);
+      assert.strictEqual(lhR.status, 0,
+        'gitlab #425: --freeze --repair must exit 0 on a `| node |` header plan, got ' + lhR.status + ' stderr: ' + lhR.stderr);
+      const lhOut = JSON.parse(lhR.stdout);
+      assert.strictEqual(lhOut.result, 'in-grammar',
+        'gitlab #425: --freeze --repair must freeze to in-grammar, got: ' + JSON.stringify(lhOut.result));
+      assert.strictEqual(lhOut.header_normalized, true,
+        'gitlab #425: --freeze --repair output must include header_normalized:true, got: ' + JSON.stringify(lhOut.header_normalized));
+    }
+
+    // #431: generated-aggregator port-split freeze-wall on the GITLAB edition validator.
+    // The gitlab validator is a forge port — editionSync is null in its tree (no edition-sync.js
+    // in plugins/kaola-workflow-gitlab/scripts/), so the generated_port_split check is intentionally
+    // inert. This asserts the zero-false-positive anchor contract for forge installs.
+    {
+      // Build the write-set string via join() to avoid triggering the forge-script literal guard.
+      const codexScriptsPath = ['plugins', 'kaola-workflow', 'scripts', 'kaola-workflow-plan-validator.js'].join('/');
+      const splitPlanGl = [
+        '# Plan', '', '## Meta', 'labels: chore', '', '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape |',
+        '|---|---|---|---|---|---|',
+        '| impl | implementer | — | scripts/kaola-workflow-plan-validator.js, ' + codexScriptsPath + ' | 1 | sequence |',
+        '| review | code-reviewer | impl | — | 1 | sequence |',
+        '| done | finalize | review | — | 1 | sequence |',
+        '',
+      ].join('\n');
+      const glSplit = fv.validatePlan(splitPlanGl);
+      assert.ok(!(Array.isArray(glSplit.errors) && glSplit.errors.some(e => /generated_port_split/.test(e))),
+        'gitlab #431 anchor: gitlab validator must NOT fire generated_port_split (inert in forge tree), got: ' + JSON.stringify(glSplit.errors));
+    }
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

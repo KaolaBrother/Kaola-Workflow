@@ -11479,6 +11479,8 @@ function buildRegistry() {
   add('testBundleFinalizeRoadmapCleanup',                 testBundleFinalizeRoadmapCleanup);
   add('testBundleSingleIssueStateHasNoBundleFields',      testBundleSingleIssueStateHasNoBundleFields);
   add('testLedgerCompareGuard399',                        testLedgerCompareGuard399);
+  add('testAdaptiveLedgerHeaderInvalid425',               testAdaptiveLedgerHeaderInvalid425);
+  add('testAdaptiveGeneratedPortSplit431',                testAdaptiveGeneratedPortSplit431);
   add('testHarnessSelfCheck',                             testHarnessSelfCheck);
   return reg;
 }
@@ -12473,6 +12475,107 @@ function testBundleSingleIssueStateHasNoBundleFields() {
       '#328 AC#1: single-issue state must NOT contain closure_policy line');
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   console.log('testBundleSingleIssueStateHasNoBundleFields: PASSED');
+}
+
+// #425: ledger-header freeze-wall — a ## Node Ledger whose header row uses `| node |` / `| node_id |`
+// instead of `| id |` must refuse at freeze with a typed error naming `ledger_header_invalid`; the
+// same plan processed with --repair must normalize the header to `| id | status |` and surface
+// header_normalized:true in the output.
+function testAdaptiveLedgerHeaderInvalid425() {
+  const pv = require(planValidatorScript);
+  // A minimal in-grammar plan body with a `| node | status |` ledger header (alias for `id`).
+  const planBody = [
+    '# Plan', '',
+    '## Meta', 'labels: chore', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+    '| impl | tdd-guide | — | lib/foo.js | 1 | sequence |',
+    '| review | code-reviewer | impl | — | 1 | sequence |',
+    '| done | finalize | review | — | 1 | sequence |',
+    '',
+    '## Node Ledger', '',
+    '| node | status |',
+    '|---|---|',
+    '| impl | pending |',
+    '| review | pending |',
+    '| done | pending |',
+    '',
+  ].join('\n');
+
+  // (1) validatePlan must refuse with ledger_header_invalid.
+  const v = pv.validatePlan(planBody);
+  assert(v.result === 'refuse',
+    '#425: plan with `| node |` ledger header must refuse at freeze, got: ' + JSON.stringify(v.result));
+  assert(Array.isArray(v.errors) && v.errors.some(e => /ledger_header_invalid/.test(e)),
+    '#425: refusal errors must name ledger_header_invalid, got: ' + JSON.stringify(v.errors));
+
+  // (2) --repair via CLI: --freeze --repair must normalize the header and surface header_normalized:true.
+  const tmp = adaptiveTmp('425-header-repair');
+  try {
+    const planPath = path.join(tmp, 'plan.md');
+    fs.writeFileSync(planPath, planBody);
+    const r = runNode(planValidatorScript, [planPath, '--freeze', '--repair', '--json'], tmp);
+    assert(r.status === 0,
+      '#425: --freeze --repair on a `| node |` header plan must exit 0, got ' + r.status + ' stderr: ' + r.stderr);
+    const out = JSON.parse(r.stdout);
+    assert(out.result === 'in-grammar',
+      '#425: --freeze --repair must freeze to in-grammar after header normalization, got: ' + JSON.stringify(out.result));
+    assert(out.header_normalized === true,
+      '#425: --freeze --repair output must include header_normalized:true, got: ' + JSON.stringify(out.header_normalized));
+    // Verify the file was actually rewritten with the canonical `id` header.
+    const rewritten = fs.readFileSync(planPath, 'utf8');
+    assert(/\|\s*id\s*\|\s*status\s*\|/.test(rewritten),
+      '#425: rewritten plan must have canonical `| id | status |` ledger header, got: ' + rewritten.slice(rewritten.indexOf('## Node Ledger'), rewritten.indexOf('## Node Ledger') + 60));
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+
+  console.log('testAdaptiveLedgerHeaderInvalid425: PASSED');
+}
+
+// #431: generated-aggregator port-split freeze-wall — a plan where a node declares the canonical
+// GENERATED_AGGREGATOR (e.g. scripts/kaola-workflow-plan-validator.js) together with its codex
+// twin but WITHOUT the forge ports must refuse at freeze with `generated_port_split`; a plan that
+// declares all 4 edition files in the same node must freeze in-grammar.
+function testAdaptiveGeneratedPortSplit431() {
+  const pv = require(planValidatorScript);
+
+  // Split plan: canonical + codex only — missing both forge ports.
+  const splitPlan = [
+    '# Plan', '',
+    '## Meta', 'labels: chore', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+    '| impl | implementer | — | scripts/kaola-workflow-plan-validator.js, plugins/kaola-workflow/scripts/kaola-workflow-plan-validator.js | 1 | sequence |',
+    '| review | code-reviewer | impl | — | 1 | sequence |',
+    '| done | finalize | review | — | 1 | sequence |',
+    '',
+  ].join('\n');
+
+  // (1) split plan must refuse with generated_port_split.
+  const vs = pv.validatePlan(splitPlan);
+  assert(vs.result === 'refuse',
+    '#431: split plan (canonical+codex only) must refuse at freeze, got: ' + JSON.stringify(vs.result));
+  assert(Array.isArray(vs.errors) && vs.errors.some(e => /generated_port_split/.test(e)),
+    '#431: refusal errors must name generated_port_split, got: ' + JSON.stringify(vs.errors));
+
+  // (2) bundled plan: all 4 editions in the same node — must freeze in-grammar.
+  const bundledPlan = [
+    '# Plan', '',
+    '## Meta', 'labels: chore', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+    '| impl | implementer | — | scripts/kaola-workflow-plan-validator.js, plugins/kaola-workflow/scripts/kaola-workflow-plan-validator.js, plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-plan-validator.js, plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-plan-validator.js | 1 | sequence |',
+    '| review | code-reviewer | impl | — | 1 | sequence |',
+    '| done | finalize | review | — | 1 | sequence |',
+    '',
+  ].join('\n');
+  const vb = pv.validatePlan(bundledPlan);
+  assert(vb.result === 'in-grammar',
+    '#431: bundled plan (all 4 editions in one node) must freeze in-grammar, got: ' + JSON.stringify(vb.result));
+
+  console.log('testAdaptiveGeneratedPortSplit431: PASSED');
 }
 
 main().catch(err => {

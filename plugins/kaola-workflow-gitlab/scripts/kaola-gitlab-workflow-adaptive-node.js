@@ -259,7 +259,16 @@ function spliceLedgerNode(content, nodeId, newStatus, opts) {
   const idIdx = header.indexOf('id');
   const stIdx = header.indexOf('status');
   if (idIdx < 0 || stIdx < 0) {
-    return { content, changed: false, found: false, alreadyAtTarget: false };
+    // #425: emit a structured diagnostic when the ledger is present but non-canonical.
+    // The caller (open-next) surfaces this to the orchestrator so it knows exactly why the
+    // node was not found — not just "found:false" with no context.
+    const diagnostic = {
+      ledger_present: true,
+      detected_columns: header,
+      required_columns: ['id', 'status'],
+      hint: "Run --repair to normalize the ledger header, or author with '| id | status |'",
+    };
+    return { content, changed: false, found: false, alreadyAtTarget: false, diagnostic };
   }
 
   let found = false;
@@ -1044,7 +1053,11 @@ function runOpenNext(opts) {
   const spliceResult = spliceLedgerNode(planContent, targetNode.id, 'in_progress', { allowFrom: ['pending'] });
 
   if (!spliceResult.found) {
-    return { result: 'refuse', reason: 'node_not_in_ledger', nodeId: targetNode.id };
+    // #425: surface the structured diagnostic when the ledger header is non-canonical so the
+    // orchestrator knows exactly why the node was not found (not a generic "node missing" error).
+    const refusal = { result: 'refuse', reason: 'node_not_in_ledger', nodeId: targetNode.id };
+    if (spliceResult.diagnostic) refusal.diagnostic = spliceResult.diagnostic;
+    return refusal;
   }
 
   // Write updated plan (ledger row updated).

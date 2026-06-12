@@ -39,10 +39,19 @@ const { execFileSync } = require('child_process'); // #231: ONLY the --barrier-c
 const classifier = require('./kaola-gitlab-workflow-classifier');
 const schema = require('./kaola-workflow-adaptive-schema');
 // #274: byte-identity / sync-group write-set gap check. Root-only module (no plugin
-// copy) — resolves in the Claude scripts/ tree; throws+caught (null) in Codex/GitLab/
-// Gitea trees, where the gap check below becomes a graceful no-op (zero false positives).
+// copy) — resolves in the Claude scripts/ tree; throws+caught (null) in the forge/codex
+// edition trees, where the gap check below becomes a graceful no-op (zero false positives).
 let syncMeta = null;
 try { syncMeta = require('./validate-script-sync'); } catch (_) { /* forge/codex/user install: no sync module */ }
+// #431: the generated-aggregator port-split freeze-wall reads the DECLARED generated-aggregator set
+// (and the canonical->forge rename mapping) from edition-sync.js — the single source of truth for
+// which canonical scripts are byte-/rename-generated into the four edition trees. Root-only module
+// (no plugin copy): resolves in the Claude scripts/ tree; throws+caught (null) in the forge/codex
+// edition trees, where the split-wall below becomes a graceful no-op. The check is ADDITIONALLY anchor-gated
+// at call time on scripts/edition-sync.js existing under the validated root, so a consumer install
+// that vendors the module (but not the repo tree) still never false-refuses.
+let editionSync = null;
+try { editionSync = require('./edition-sync'); } catch (_) { /* forge/codex/user install: no edition-sync module */ }
 
 const TERMINAL_ROLE = 'finalize';
 
@@ -194,6 +203,31 @@ function parseLedger(content) {
     if (id) ledger.set(id, (cells[stIdx] || '').toLowerCase());
   }
   return ledger;
+}
+
+// #425: the alias sets the planner mis-authors for the two required ledger columns. `| node |`,
+// `| node_id |`, `| node-id |` all mean `id`; `| state |` means `status`. A ledger with such a
+// header passes freeze today (parseLedger silently returns an empty Map) then bricks open-next
+// with node_not_in_ledger. The freeze-wall (validatePlan) refuses it; --repair (reconcileLedger)
+// normalizes the alias to the canonical column name (hash-safe — the ledger is outside plan_hash).
+const LEDGER_ID_ALIASES = new Set(['id', 'node', 'node_id', 'node-id', 'nodeid']);
+const LEDGER_STATUS_ALIASES = new Set(['status', 'state']);
+
+// #425: inspect a PRESENT ## Node Ledger's header row. Returns null when the section is absent or
+// has no header row (nothing to validate). Otherwise returns { cells, hasId, hasStatus } where
+// `cells` is the lower-cased header column list, hasId/hasStatus are the canonical-column presence
+// flags. Fence-aware via the same sectionBody reader parseLedger uses.
+function ledgerHeaderInfo(content) {
+  if (schema.locateSection(content, schema.LEDGER_HEADING).start < 0) return null;
+  const body = classifier.sectionBody(content, schema.LEDGER_HEADING);
+  const rows = body.split('\n').map(l => l.trim()).filter(l => l.startsWith('|'));
+  if (!rows.length) return null;
+  const cells = rows[0].split('|').slice(1, -1).map(c => c.trim().toLowerCase());
+  return {
+    cells,
+    hasId: cells.indexOf('id') >= 0,
+    hasStatus: cells.indexOf('status') >= 0,
+  };
 }
 
 // --- graph helpers ----------------------------------------------------------
@@ -757,6 +791,19 @@ function validatePlan(content, opts) {
   // unique sink
   const sink = uniqueSink(nodes);
   if (!sink) errors.push('no unique finalize sink (need exactly one terminal node)');
+  // #425: ledger-header freeze-wall. A PRESENT ## Node Ledger whose header row lacks the required
+  // `id` and/or `status` columns (the planner authored `| node |` / `| node_id |` / `| state |`)
+  // passes freeze today — parseLedger silently returns an empty Map — then bricks open-next with
+  // node_not_in_ledger mid-run. Refuse it at the authoring gate with a typed error naming the
+  // columns found. Freeze-only (revalidateForResume is NOT touched) so a legacy in-flight plan
+  // never bricks; --repair (reconcileLedger) normalizes the alias header hash-safely.
+  {
+    const hdr = ledgerHeaderInfo(content);
+    if (hdr && (!hdr.hasId || !hdr.hasStatus)) {
+      const missing = [!hdr.hasId ? 'id' : null, !hdr.hasStatus ? 'status' : null].filter(Boolean).join(', ');
+      errors.push(`## Node Ledger header is missing required column(s) "${missing}" (ledger_header_invalid) — header columns found: [${hdr.cells.join(', ')}]; the ledger must declare \`id\` and \`status\` (run --freeze --repair to normalize \`node\`/\`node_id\`/\`state\` aliases)`);
+    }
+  }
   // read-only roles must not declare a write set; file ceiling per node
   for (const n of nodes) {
     // audit A2: fail closed if a non-empty declared_write_set parses to no recognizable path.
@@ -860,6 +907,35 @@ function validatePlan(content, opts) {
     }
     if (n.writeSet.size > schema.FILE_CEILING) {
       errors.push(`node ${n.id} declares ${n.writeSet.size} files > FILE_CEILING ${schema.FILE_CEILING}`);
+    }
+  }
+
+  // #431: generated-aggregator port-split freeze-wall. A canonical script in GENERATED_AGGREGATORS
+  // (scripts/<base>) is byte-/rename-generated into the codex twin + both forge ports by
+  // edition-sync.js. A plan that declares the canonical WITHOUT its full sibling set in the SAME node
+  // splits a canonical aggregator from its ports across nodes — the exact #291 defect where a
+  // canonical edit lands and its forge ports drift (caught only post-merge by `edition-sync --check`,
+  // forcing a mid-run plan-repair). Refuse it at the authoring gate naming the missing siblings.
+  // Anchor-gated on scripts/edition-sync.js existing under the validated root AND the module being
+  // require()-able (forge/codex/user installs: editionSync === null) — silently inert otherwise, so
+  // zero false positives where the generated mapping does not exist. Freeze-only (not in
+  // revalidateForResume) so a legacy in-flight plan never bricks.
+  if (editionSync && Array.isArray(editionSync.GENERATED_AGGREGATORS) && typeof editionSync.forgeRel === 'function') {
+    const portWallRoot = opts.root || process.cwd();
+    if (fs.existsSync(path.join(portWallRoot, 'scripts', 'edition-sync.js'))) {
+      const codexRel = base => ['plugins', 'kaola-workflow', 'scripts'].join('/') + '/' + base;
+      for (const n of nodes) {
+        for (const base of editionSync.GENERATED_AGGREGATORS) {
+          const canon = 'scripts/' + base;
+          if (!n.writeSet.has(canon)) continue;
+          // The SAME node must declare the full sibling set: codex twin + both forge ports.
+          const siblings = [codexRel(base), editionSync.forgeRel(base, 'gitlab'), editionSync.forgeRel(base, 'gitea')];
+          const missing = siblings.filter(s => !n.writeSet.has(s));
+          if (missing.length) {
+            errors.push(`generated_port_split: node ${n.id} declares the generated aggregator "${canon}" without its sibling port(s) "${missing.join('", "')}" in the same node — a generated aggregator and its codex twin + forge ports must be edited atomically (a split ships forge-port drift, the #291/#431 defect)`);
+          }
+        }
+      }
     }
   }
 
@@ -1280,21 +1356,30 @@ function injectHash(content, hash) {
 // does NOT move the hash. Returns { content, added:[...ids] }; a no-op when nothing is
 // missing or the ledger section/header is unparseable (fail-safe — never corrupts).
 function reconcileLedger(content) {
+  // #425: FIRST normalize a mis-authored ## Node Ledger header (`| node |`/`| node_id |`/`| state |`
+  // -> `| id |`/`| status |`) so the missing-row reconcile below — and the executor's open-next —
+  // can read the ledger. The header is rewritten in place via a single cell substitution per aliased
+  // column; the row/rule lines and statuses are untouched. plan_hash excludes the ledger, so the
+  // rewrite is hash-safe. Reports header_normalized so --freeze --repair can surface it.
+  const norm = normalizeLedgerHeader(content);
+  content = norm.content;
+  const headerNormalized = norm.normalized;
+
   const nodes = parseNodes(content);
   const ledger = parseLedger(content);
   const missing = nodes.filter(n => !ledger.has(n.id));
-  if (!missing.length) return { content, added: [] };
+  if (!missing.length) return { content, added: [], header_normalized: headerNormalized };
 
   // #354: route through the shared fence-aware locator (was the lone fence-BLIND validator slicer)
   // so an upstream fenced `## Node Ledger` decoy heading is skipped — parity with parseLedger which
   // already uses the fence-aware classifier.sectionBody.
   const { start: ledgerIdx, next: afterLedger } = schema.locateSection(content, schema.LEDGER_HEADING);
-  if (ledgerIdx < 0) return { content, added: [] };
+  if (ledgerIdx < 0) return { content, added: [], header_normalized: headerNormalized };
   const sectionEnd = afterLedger >= 0 ? afterLedger : content.length;
   const section = content.slice(ledgerIdx, sectionEnd);
 
   const rowLines = section.split('\n').filter(l => l.trim().startsWith('|'));
-  if (rowLines.length < 1) return { content, added: [] };
+  if (rowLines.length < 1) return { content, added: [], header_normalized: headerNormalized };
   const headerCells = rowLines[0].split('|').slice(1, -1).map(c => c.trim());
   const lower = headerCells.map(c => c.toLowerCase());
   const idIdx = lower.indexOf('id');
@@ -1316,7 +1401,57 @@ function reconcileLedger(content) {
   const lastOffsetInSection = section.lastIndexOf(lastRow);
   const insertAt = ledgerIdx + lastOffsetInSection + lastRow.length;
   const updated = content.slice(0, insertAt) + '\n' + newRows + content.slice(insertAt);
-  return { content: updated, added: missing.map(n => n.id) };
+  return { content: updated, added: missing.map(n => n.id), header_normalized: headerNormalized };
+}
+
+// #425: rewrite a mis-authored ## Node Ledger header's column names to the canonical `id`/`status`.
+// Operates ONLY on the header row's cells, leaving the rule line and data rows byte-identical (the
+// data rows are positional — only the column LABELS change). Returns { content, normalized } where
+// `normalized` is true iff at least one alias label was rewritten. A no-op (returns the original
+// content, normalized:false) when the ledger is absent, has no header, or already declares the
+// canonical columns. Fence-aware via the shared locateSection slicer (parity with reconcileLedger).
+function normalizeLedgerHeader(content) {
+  const { start: ledgerIdx, next: afterLedger } = schema.locateSection(content, schema.LEDGER_HEADING);
+  if (ledgerIdx < 0) return { content, normalized: false };
+  const sectionEnd = afterLedger >= 0 ? afterLedger : content.length;
+  const section = content.slice(ledgerIdx, sectionEnd);
+
+  // Find the first table row (the header) within the section, preserving its exact source text so
+  // the splice offsets stay byte-accurate.
+  const sectionLines = section.split('\n');
+  let headerLine = null;
+  for (const ln of sectionLines) {
+    if (ln.trim().startsWith('|')) { headerLine = ln; break; }
+  }
+  if (headerLine === null) return { content, normalized: false };
+
+  const lower = headerLine.split('|').slice(1, -1).map(c => c.trim().toLowerCase());
+  const hasId = lower.indexOf('id') >= 0;
+  const hasStatus = lower.indexOf('status') >= 0;
+  if (hasId && hasStatus) return { content, normalized: false };
+
+  // Rewrite each cell whose trimmed/lower-cased label is an id/status alias to the canonical name,
+  // preserving the cell's surrounding whitespace. Only rename the FIRST occurrence of each canonical
+  // target so two alias cells can't both collapse onto `id`.
+  let renamedId = hasId, renamedStatus = hasStatus, changed = false;
+  const cells = headerLine.split('|');
+  const newCells = cells.map((cell, idx) => {
+    if (idx === 0 || idx === cells.length - 1) return cell; // table-edge empties
+    const m = cell.match(/^(\s*)(.*?)(\s*)$/);
+    const lead = m[1], label = m[2], trail = m[3];
+    const lc = label.toLowerCase();
+    if (!renamedId && LEDGER_ID_ALIASES.has(lc)) { renamedId = true; changed = true; return lead + 'id' + trail; }
+    if (!renamedStatus && LEDGER_STATUS_ALIASES.has(lc)) { renamedStatus = true; changed = true; return lead + 'status' + trail; }
+    return cell;
+  });
+  if (!changed) return { content, normalized: false };
+  const newHeaderLine = newCells.join('|');
+
+  // Splice the rewritten header back at its exact source offset.
+  const headerOffsetInSection = section.indexOf(headerLine);
+  const absStart = ledgerIdx + headerOffsetInSection;
+  const updated = content.slice(0, absStart) + newHeaderLine + content.slice(absStart + headerLine.length);
+  return { content: updated, normalized: true };
 }
 
 // --- CLI --------------------------------------------------------------------
@@ -1375,7 +1510,7 @@ function printHelp() {
     'usage: kaola-gitlab-workflow-plan-validator.js <workflow-plan.md> [--json] [--freeze [--repair]] [--resume-check] [--gate-verify] [--barrier-check [--node-id ID] [--base REF]] [--verdict-check [--node-id ID]] [--selector-check --node-id ID]\n' +
     '  default        validate + print the governance verdict; exit 1 on typed refusal\n' +
     '  --freeze       validate, then write the computed plan_hash into the plan file\n' +
-    '  --freeze --repair  also reconcile the ## Node Ledger to ## Nodes (add missing rows as pending; never drop a status) before freezing\n' +
+    '  --freeze --repair  also reconcile the ## Node Ledger to ## Nodes (add missing rows as pending; never drop a status) AND normalize a mis-authored ledger header (node/node_id/state -> id/status) before freezing\n' +
     '  --resume-check re-validate library + structure + hash only (not the gate rubric)\n' +
     '  --gate-verify  verify gate EXECUTION over the ## Node Ledger (G1/G2/G3 ran; G3 = a non-delegable main-session-gate is complete — never n/a — and post-dominates completed code nodes); exit 1 if a completed node is uncovered\n' +
     '  --record-base --node-id ID  snapshot the full worktree as node ID\'s per-instance baseline (.cache); run at node start.\n' +
@@ -1437,10 +1572,15 @@ function main() {
     // the reconcile never moves the hash; plain --freeze stays byte-stable.
     let toFreeze = content;
     let reconciledAdded = [];
+    let headerNormalized = false;
     if (args.includes('--repair')) {
       const rec = reconcileLedger(content);
       toFreeze = rec.content;
       reconciledAdded = rec.added;
+      // #425: --repair also normalizes a mis-authored ledger header (`node`/`node_id`/`state` -> the
+      // canonical `id`/`status`); hash-safe (the ledger is outside plan_hash). Surface it so the
+      // operator sees the alias was fixed (the plan would otherwise have bricked open-next).
+      headerNormalized = !!rec.header_normalized;
     }
     // #408 (#366 deferred): SPAWN 2 of the fused handoff chain. --governance-ack <planHash> asserts
     // the plan has NOT mutated between SPAWN 1 (--freeze-checked) and the freeze — the planHash the
@@ -1473,7 +1613,7 @@ function main() {
       const rr = revalidateForResume(r.content, { root });
       resumeOk = !!rr.ok;
     }
-    const payload = { result: r.result, decision: r.decision, planHash: r.planHash, frozen: r.frozen, risk: r.risk, errors: r.errors, reconciled: reconciledAdded };
+    const payload = { result: r.result, decision: r.decision, planHash: r.planHash, frozen: r.frozen, risk: r.risk, errors: r.errors, reconciled: reconciledAdded, header_normalized: headerNormalized };
     if (resumeOk !== undefined) payload.resumeOk = resumeOk;
     process.stdout.write((json ? JSON.stringify(payload) : (r.frozen ? `frozen (${r.decision}) plan_hash=${r.planHash}${reconciledAdded.length ? ' reconciled=' + reconciledAdded.join(',') : ''}${resumeOk !== undefined ? ' resumeOk=' + resumeOk : ''}` : 'typed refusal: ' + (r.errors || []).join('; '))) + '\n');
     if (!r.frozen) process.exitCode = 1;

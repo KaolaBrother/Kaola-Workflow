@@ -62,6 +62,11 @@ function git(cwd, args) { return execFileSync('git', ['-C', cwd, ...args], { enc
     const wt = path.join(tmp, 'wt');
     fs.writeFileSync(path.join(repo, 'kaola-workflow', proj, 'workflow-state.md'),
       'project: ' + proj + '\nworktree_path: ' + wt + '\n');
+    // #423: the Step-8a ledger-compare guard requires the --source plan to exist and be readable.
+    // Add a minimal workflow-plan.md with a ## Node Ledger section so the guard can parse it.
+    // Using a pending row (not complete) ensures sourceComplete=0, destComplete=0 => fail-open/safe.
+    fs.writeFileSync(path.join(repo, 'kaola-workflow', proj, 'workflow-plan.md'),
+      '# Workflow Plan\n\n## Node Ledger\n\n| id | status |\n|---|---|\n| n1 | pending |\n');
     git(repo, ['add', '-A']);
     git(repo, ['commit', '-m', 'init']);
     git(repo, ['branch', 'workflow/' + proj]);
@@ -133,6 +138,58 @@ for (const ed of [
       'C (#345): ' + ed.file + ' resolves the validator via kaola_script');
     assert(!block.includes('node scripts/' + ed.name + ' "$PLAN" --resume-check'),
       'C (#345): ' + ed.file + ' carries NO bare validator path');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Test D (#423): negative scenario — full/fast-path project (no workflow-plan.md, no ledger-compare
+// script available). The Step-8a block must exit 0 and still mirror renames. When kaola_script
+// cannot locate kaola-workflow-ledger-compare.js (LEDGER_COMPARE_JS is empty), the `[ -n ... ]`
+// guard short-circuits and the block proceeds without a refusal.
+// ---------------------------------------------------------------------------
+{
+  const block = extractBashBlocks(read('agents/contractor.md'), 'git status --porcelain | while')[0];
+  assert(!!block, 'D: contractor Step-8a artifact-mirror bash block is extractable for no-plan scenario');
+  if (block) {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-bashblock-stepa-noplan-'));
+    const repo = path.join(tmp, 'repo');
+    // Hermetic HOME: ensures kaola_script finds nothing in ~/.claude/kaola-workflow/
+    const fakeHome = path.join(tmp, 'home');
+    fs.mkdirSync(repo, { recursive: true });
+    fs.mkdirSync(fakeHome, { recursive: true });
+    git(repo, ['init', '-b', 'main']);
+    git(repo, ['config', 'user.email', 't@t.com']);
+    git(repo, ['config', 'user.name', 'T']);
+    // committed file we will rename
+    fs.mkdirSync(path.join(repo, 'docs'), { recursive: true });
+    fs.writeFileSync(path.join(repo, 'docs', 'old-name.md'), 'artifact body');
+    // project state with worktree_path but NO workflow-plan.md (full/fast-path project)
+    const proj = 'issue-800';
+    fs.mkdirSync(path.join(repo, 'kaola-workflow', proj), { recursive: true });
+    const wt = path.join(tmp, 'wt2');
+    fs.writeFileSync(path.join(repo, 'kaola-workflow', proj, 'workflow-state.md'),
+      'project: ' + proj + '\nworktree_path: ' + wt + '\n');
+    // Deliberately NO workflow-plan.md — simulates full/fast-path
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '-m', 'init']);
+    git(repo, ['branch', 'workflow/' + proj]);
+    git(repo, ['worktree', 'add', wt, 'workflow/' + proj]);
+    // STAGE a rename
+    git(repo, ['mv', 'docs/old-name.md', 'docs/new-name.md']);
+
+    const script = block.replace(/\{project\}/g, proj);
+    const sp = path.join(tmp, 'stepa-noplan.sh');
+    fs.writeFileSync(sp, script);
+    // Run with a hermetic HOME (no ~/.claude/...) and unset CLAUDE_PLUGIN_ROOT so kaola_script
+    // cannot find ledger-compare.js → LEDGER_COMPARE_JS is empty → guard is skipped → exit 0.
+    const env = Object.assign({}, process.env, { HOME: fakeHome, CLAUDE_PLUGIN_ROOT: '' });
+    const res = spawnSync('bash', [sp], { cwd: repo, encoding: 'utf8', env });
+    assert(res.status === 0,
+      'D (#423): Step-8a exits 0 when no workflow-plan.md and no ledger-compare available; stderr: ' + res.stderr);
+    // Renames must still be mirrored even without the ledger guard
+    assert(fs.existsSync(path.join(wt, 'docs', 'new-name.md')),
+      'D (#423): renamed file is mirrored to worktree by its NEW path even when no plan present');
+    fs.rmSync(tmp, { recursive: true, force: true });
   }
 }
 

@@ -756,6 +756,109 @@ function testCodexAdaptiveCuratedAndBarrier() {
   console.log('Codex adaptive #238/#239 coverage: PASSED');
 }
 
+// #425/#431 (codex byte copy): ledger-header freeze-wall + generated-aggregator port-split
+// freeze-wall on the CODEX copy of the plan-validator. Exercises the byte-identical copy to
+// confirm the freeze-wall behaviors are present in the codex edition.
+function testCodexLedgerHeaderInvalid425() {
+  const pv = require(codexValidator);
+  const planBody = [
+    '# Plan', '',
+    '## Meta', 'labels: chore', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+    '| impl | tdd-guide | — | lib/foo.js | 1 | sequence |',
+    '| review | code-reviewer | impl | — | 1 | sequence |',
+    '| done | finalize | review | — | 1 | sequence |',
+    '',
+    '## Node Ledger', '',
+    '| node | status |',
+    '|---|---|',
+    '| impl | pending |',
+    '| review | pending |',
+    '| done | pending |',
+    '',
+  ].join('\n');
+
+  // (1) validatePlan must refuse with ledger_header_invalid.
+  const v = pv.validatePlan(planBody);
+  assert(v.result === 'refuse',
+    'codex #425: plan with `| node |` ledger header must refuse at freeze, got: ' + JSON.stringify(v.result));
+  assert(Array.isArray(v.errors) && v.errors.some(e => /ledger_header_invalid/.test(e)),
+    'codex #425: refusal errors must name ledger_header_invalid, got: ' + JSON.stringify(v.errors));
+
+  // (2) --repair via CLI: --freeze --repair must normalize and surface header_normalized:true.
+  const repairTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-codex-425-'));
+  try {
+    const planPath = path.join(repairTmp, 'plan.md');
+    fs.writeFileSync(planPath, planBody);
+    const r = spawnSync(process.execPath, [codexValidator, planPath, '--freeze', '--repair', '--json'], {
+      cwd: repairTmp, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }
+    });
+    assert(r.status === 0,
+      'codex #425: --freeze --repair must exit 0, got ' + r.status + ' stderr: ' + r.stderr);
+    const out = JSON.parse(r.stdout);
+    assert(out.result === 'in-grammar',
+      'codex #425: --freeze --repair must freeze to in-grammar, got: ' + JSON.stringify(out.result));
+    assert(out.header_normalized === true,
+      'codex #425: --freeze --repair must surface header_normalized:true, got: ' + JSON.stringify(out.header_normalized));
+  } finally { fs.rmSync(repairTmp, { recursive: true, force: true }); }
+
+  console.log('testCodexLedgerHeaderInvalid425: PASSED');
+}
+
+function testCodexGeneratedPortSplit431() {
+  // The codex copy of plan-validator loads `editionSync = null` (edition-sync.js is a root-only
+  // module not copied to plugin trees), so the generated_port_split check is intentionally inert
+  // in the codex validator. This test verifies the correct anchoring behaviour:
+  // (a) codex copy is inert (split plan passes — zero false positives in codex installs), and
+  // (b) the canonical root copy fires the split-wall (root is where edition-sync.js lives).
+  const codexPv = require(codexValidator);
+  const rootPv = require(path.join(repoRoot, 'scripts', 'kaola-workflow-plan-validator.js'));
+
+  const splitPlan = [
+    '# Plan', '',
+    '## Meta', 'labels: chore', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+    '| impl | implementer | — | scripts/kaola-workflow-plan-validator.js, plugins/kaola-workflow/scripts/kaola-workflow-plan-validator.js | 1 | sequence |',
+    '| review | code-reviewer | impl | — | 1 | sequence |',
+    '| done | finalize | review | — | 1 | sequence |',
+    '',
+  ].join('\n');
+
+  // (a) codex copy is inert for generated_port_split: must NOT refuse on missing forge ports.
+  const codexResult = codexPv.validatePlan(splitPlan);
+  assert(!(Array.isArray(codexResult.errors) && codexResult.errors.some(e => /generated_port_split/.test(e))),
+    'codex #431 anchor: codex validator must NOT fire generated_port_split (inert in codex tree), got: ' + JSON.stringify(codexResult.errors));
+
+  // (b) canonical root copy fires the split-wall with repoRoot as the anchor.
+  const splitResult = rootPv.validatePlan(splitPlan, { root: repoRoot });
+  assert(splitResult.result === 'refuse',
+    'codex #431 root: split plan (canonical+codex only) must refuse via root validator, got: ' + JSON.stringify(splitResult.result));
+  assert(Array.isArray(splitResult.errors) && splitResult.errors.some(e => /generated_port_split/.test(e)),
+    'codex #431 root: root validator refusal must name generated_port_split, got: ' + JSON.stringify(splitResult.errors));
+
+  // (c) bundled plan (all 4 editions) must freeze in-grammar via root validator.
+  const bundledPlan = [
+    '# Plan', '',
+    '## Meta', 'labels: chore', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+    '| impl | implementer | — | scripts/kaola-workflow-plan-validator.js, plugins/kaola-workflow/scripts/kaola-workflow-plan-validator.js, plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-plan-validator.js, plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-plan-validator.js | 1 | sequence |',
+    '| review | code-reviewer | impl | — | 1 | sequence |',
+    '| done | finalize | review | — | 1 | sequence |',
+    '',
+  ].join('\n');
+  const bundledResult = rootPv.validatePlan(bundledPlan, { root: repoRoot });
+  assert(bundledResult.result === 'in-grammar',
+    'codex #431 root: bundled plan (all 4 editions) must freeze in-grammar, got: ' + JSON.stringify(bundledResult.result));
+
+  console.log('testCodexGeneratedPortSplit431: PASSED');
+}
+
 // ---------------------------------------------------------------------------
 // AC-7 (#266): RED-first regression tests for the 3 new scripts.
 // Each case proves discriminating RED (wrong fixture → typed refusal / wrong JSON)
@@ -1450,6 +1553,8 @@ function main() {
     testInstallProfilesFeaturesTableHandling();
     testInstallSchemaPruneManifest332();
     testCodexAdaptiveCuratedAndBarrier();
+    testCodexLedgerHeaderInvalid425();
+    testCodexGeneratedPortSplit431();
     testCodexPreflight266();
     testCodexPreflight332();
     testCodexTaskMirror266();

@@ -132,12 +132,17 @@ if [ "$ACTIVE_WORKTREE_PATH" != "$(pwd)" ]; then
   # plan (which would reset a finished run's ledger complete->pending). FAIL-OPEN on the first sync
   # (dest absent/empty/no-ledger). The correct fix on a refusal is to sync worktree->main FIRST.
   kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n" "$HOME/.claude/kaola-workflow-gitea/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
+  PLAN_PATH="kaola-workflow/{project}/workflow-plan.md"
   LEDGER_COMPARE_JS="$(kaola_script kaola-workflow-ledger-compare.js)"
-  if [ -n "$LEDGER_COMPARE_JS" ] && ! node "$LEDGER_COMPARE_JS" \
-      --source "kaola-workflow/{project}/workflow-plan.md" \
-      --dest "$ACTIVE_WORKTREE_PATH/kaola-workflow/{project}/workflow-plan.md"; then
-    echo "REFUSED: main copy staler than the worktree ledger; sync worktree->main FIRST" >&2
-    exit 1
+  if [ -f "$PLAN_PATH" ]; then
+    if [ -n "$LEDGER_COMPARE_JS" ] && ! node "$LEDGER_COMPARE_JS" \
+        --source "$PLAN_PATH" \
+        --dest "$ACTIVE_WORKTREE_PATH/kaola-workflow/{project}/workflow-plan.md"; then
+      echo "REFUSED: main copy staler than the worktree ledger; sync worktree->main FIRST" >&2
+      exit 1
+    fi
+  else
+    echo "ledger_compare_skipped: no_plan"
   fi
   mkdir -p "$ACTIVE_WORKTREE_PATH/kaola-workflow/{project}/"
   cp -R "kaola-workflow/{project}/." "$ACTIVE_WORKTREE_PATH/kaola-workflow/{project}/"

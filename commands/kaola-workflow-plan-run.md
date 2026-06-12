@@ -585,6 +585,22 @@ Agent(
    This catches a forge-CLI leak at the node that wrote it, even while the edition
    agent/command counts are transiently stale mid-run (the full chains may legitimately be red
    during a count bump — the #328 latent defect).
+
+   **Generated-aggregator forge ports in the diff (#431):** when the opened node's declared
+   write set includes `scripts/<base>` where `<base>` is a GENERATED_AGGREGATOR (e.g.
+   `kaola-workflow-adaptive-node.js`, `kaola-workflow-plan-validator.js`), the edition-sync
+   process generates the forge ports deterministically from canonical. Plans reaching plan-run
+   have **already passed the `generated_port_split` freeze-wall** — the freeze validator
+   enforces that the canonical-editing node declared all four edition files (canonical +
+   codex twin + both forge ports) in a single write set, so the atomic edit is locked in
+   before the run begins. During the node's execution, running
+   `node scripts/edition-sync.js --write` regenerates the codex twin (byte-identical) and
+   both forge ports (rename-normalized). The code-reviewer gate **should expect** the forge
+   ports in the diff — they are NOT unexpected writes; they are the expected result of the
+   edition-sync from the declared canonical edit. A `write_set_overflow` barrier refusal at
+   this node is a plan authoring error (the ports were not declared alongside canonical);
+   the repair is to add them to the write set and re-freeze, not to suppress the sync.
+
 3. **close-and-open-next (SCRIPT-ENFORCED typed transaction)** — after the role returns and
    evidence is recorded (step 2), run the fused close+advance from `${ACTIVE_WORKTREE_PATH}`:
 
