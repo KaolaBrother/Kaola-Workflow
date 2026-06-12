@@ -478,12 +478,12 @@ When a node's resolved `model` is `opus`, the Codex dispatch selects the `<role>
 
 Current official release versions:
 
-- Claude Code command install, GitHub edition: `5.15.0`
-- Claude Code command install, GitLab edition: `5.15.0`
-- Claude Code command install, Gitea edition: `5.15.0`
-- Codex `kaola-workflow` plugin manifest: `3.15.0`
-- Codex `kaola-workflow-gitlab` plugin manifest: `3.15.0`
-- Codex `kaola-workflow-gitea` plugin manifest: `3.15.0`
+- Claude Code command install, GitHub edition: `5.16.0`
+- Claude Code command install, GitLab edition: `5.16.0`
+- Claude Code command install, Gitea edition: `5.16.0`
+- Codex `kaola-workflow` plugin manifest: `3.16.0`
+- Codex `kaola-workflow-gitlab` plugin manifest: `3.16.0`
+- Codex `kaola-workflow-gitea` plugin manifest: `3.16.0`
 
 The root `package.json` version is the official repository and Claude Code
 command-install release version. The GitLab Claude command pack follows that
