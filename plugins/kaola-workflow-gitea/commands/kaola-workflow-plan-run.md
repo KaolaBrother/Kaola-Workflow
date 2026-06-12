@@ -1,5 +1,5 @@
 ---
-description: Kaola-Workflow Adaptive Executor. Runs a frozen workflow-plan.md by traversing its DAG + Node Ledger, dispatching one frontier unit at a time with per-node checkpoints. Resume-safe.
+description: Kaola-Workflow Adaptive Executor. Executes a frozen workflow-plan.md via a running-set scheduler; each frontier unit dispatched when its dependencies complete. Resume-safe.
 argument-hint: <project name>
 ---
 
@@ -270,7 +270,7 @@ worktree — batch members are always read-only post-#364; write-role nodes run 
 `kaola-gitea-workflow-parallel-batch.js` NEVER spawns an agent — the only concurrency is the main
 session issuing multiple `Agent()` calls in one message.**
 
-**(b′)** **Background dispatch (#374, design D2) — make rolling `top-up` actually roll:** when the harness supports `run_in_background: true` on `Agent()` (current Claude Code) with completion notifications, dispatch each opened member with `run_in_background: true` instead of blocking on one multi-call message. On EACH member's completion notification, immediately run `record-evidence` → `seal-member` → `top-up` (only while `parallel-batch status --json` reports `nextRoute:'top-up'`, per #322) and dispatch the newly opened sibling — so a finished member's slot is refilled while the rest keep running (the rolling bounded dispatch #303 designed, finally reachable). The gang form in (b) — all `Agent()` calls in ONE message — remains the documented FALLBACK for harnesses without background dispatch (correct, but realizes wave not rolling concurrency). No script changes: the aggregators are pure state machines and `top-up` was built for exactly this loop. Honesty: state-level tests never claim wall-clock overlap — verify it on a real run via node-timings.jsonl (#373).
+**(b′)** **Background dispatch (#374, design D2) — make rolling `top-up` actually roll:** when the harness supports background subagent dispatch with completion notifications, dispatch each opened member with `run_in_background: true` instead of blocking on one multi-call message. On EACH member's completion notification, immediately run `record-evidence` → `seal-member` → `top-up` (only while `parallel-batch status --json` reports `nextRoute:'top-up'`, per #322) and dispatch the newly opened sibling — so a finished member's slot is refilled while the rest keep running (the rolling bounded dispatch #303 designed, finally reachable). The gang form in (b) — all `Agent()` calls in ONE message — remains the documented FALLBACK for harnesses without background dispatch (correct, but realizes wave not rolling concurrency). No script changes: the aggregators are pure state machines and `top-up` was built for exactly this loop. Honesty: state-level tests never claim wall-clock overlap — verify it on a real run via node-timings.jsonl (#373).
 
 **(c)** `record-evidence` per member — the **orchestrator** records each member's evidence
 PARENT-side, with one canonical path `.cache/{node-id}.md` (the same path the serial node uses, and
