@@ -1,0 +1,54 @@
+{
+  "source_plan_hash": "8fc6b3e62b6b72e86f751d7e90e571a91c7022bb686357eda7435a7f1e6f11bf",
+  "tasks": [
+    {
+      "id": "schema",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "validator",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "planner-profile",
+      "role": "doc-updater",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "adapt-skills",
+      "role": "doc-updater",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "docs",
+      "role": "doc-updater",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "review",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "adversarial",
+      "role": "adversarial-verifier",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "done",
+      "role": "finalize",
+      "status": "completed",
+      "ledger_status": "complete"
+    }
+  ],
+  "last_synced_from_ledger": "2026-06-13T18:17:16.833Z"
+}
