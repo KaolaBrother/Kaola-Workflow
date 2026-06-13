@@ -445,6 +445,93 @@ const repo10 = makeFixtureRepo({
 fs.rmSync(repo10, { recursive: true, force: true });
 
 // ---------------------------------------------------------------------------
+// T11 (issue #449 regression): stale-receipt cross-version fabricated-pass.
+// Running --cut 5.1.0 followed by --cut 5.2.0 in the SAME workspace WITHOUT
+// clearing the receipt MUST NOT fabricate result:ok while package.json still
+// says 5.1.0 and the 5.2.0 tag does not exist.  Either:
+//   (a) the 5.2.0 release is genuinely executed (tag+package.json+CHANGELOG all
+//       reflect 5.2.0), OR
+//   (b) the script cleanly refuses with stale_receipt or version_mismatch.
+// Fabricated-pass (result:ok + package.json@5.1.0 + no 5.2.0 tag) MUST FAIL.
+// ---------------------------------------------------------------------------
+const repo11 = makeFixtureRepo({
+  version: '5.0.0',
+  changelogUnreleased: '## [Unreleased]\n\n### Added\n\n- Fix bug (#500)\n',
+  tagVersion: '5.0.0',
+  extraCommitMessages: ['fix: bug (#500)'],
+});
+{
+  const cutDate = '2026-06-13';
+  const g11 = (gitArgs) => execFileSync('git', ['-C', repo11, ...gitArgs], {
+    encoding: 'utf8',
+    env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' },
+  }).trim();
+
+  // Step 1: --cut 5.1.0 — must succeed fully.
+  const r1 = run(repo11, ['--cut', '--version', '5.1.0', '--json', '--issues-closed', '500'], {
+    KAOLA_RELEASE_DATE: cutDate,
+  });
+  assert(r1.json !== null, 'T11: first --cut 5.1.0 produces parseable JSON; stderr=' + (r1.stderr || ''));
+  assert(
+    r1.json && r1.json.result === 'ok',
+    'T11: first --cut 5.1.0 must return ok; got result=' + (r1.json && r1.json.result) + ' reason=' + (r1.json && r1.json.reason)
+  );
+
+  if (r1.json && r1.json.result === 'ok') {
+    // Step 2: Reset CHANGELOG to have a new [Unreleased] section for 5.2.0,
+    // because the 5.1.0 cut already consumed the old [Unreleased] section.
+    // We also bump the fixture to version 5.1.0 consistent with what cut did.
+    // BUT: we do NOT clear the receipt — this is the cross-version stale-receipt scenario.
+    const changelog11 = fs.readFileSync(path.join(repo11, 'CHANGELOG.md'), 'utf8');
+    // Prepend a new [Unreleased] section on top.
+    const updated11 = '# Changelog\n\n## [Unreleased]\n\n### Added\n\n- Another fix (#501)\n\n' +
+      changelog11.replace(/^# Changelog\n\n/, '');
+    fs.writeFileSync(path.join(repo11, 'CHANGELOG.md'), updated11);
+    // Add commit so #501 appears in git log.
+    fs.appendFileSync(path.join(repo11, 'seed.txt'), 'fix: another fix (#501)\n');
+    g11(['add', '.']);
+    g11(['commit', '-q', '-m', 'fix: another fix (#501)']);
+    // Confirm receipt is still present (not cleared).
+    const receiptFile = path.join(repo11, '.cache', 'release-receipt.jsonl');
+    assert(fs.existsSync(receiptFile), 'T11: receipt from 5.1.0 cut must still exist before 5.2.0 cut');
+
+    // Step 3: --cut 5.2.0 WITHOUT clearing the receipt.
+    const r2 = run(repo11, ['--cut', '--version', '5.2.0', '--json', '--issues-closed', '500,501'], {
+      KAOLA_RELEASE_DATE: cutDate,
+    });
+    assert(r2.json !== null, 'T11: second --cut 5.2.0 produces parseable JSON; stderr=' + (r2.stderr || ''));
+
+    if (r2.json !== null) {
+      if (r2.json.result === 'ok') {
+        // If it claims success, verify it actually did the work — fabricated-pass is a FAIL.
+        const tag52 = g11(['tag', '-l', 'kaola-workflow--v5.2.0']);
+        const pkg52 = JSON.parse(fs.readFileSync(path.join(repo11, 'package.json'), 'utf8'));
+        const cl52 = fs.readFileSync(path.join(repo11, 'CHANGELOG.md'), 'utf8');
+        assert(
+          tag52 === 'kaola-workflow--v5.2.0',
+          'T11: result:ok claimed but 5.2.0 tag is absent — fabricated-pass detected; tags=' + JSON.stringify(tag52)
+        );
+        assert(
+          pkg52.version === '5.2.0',
+          'T11: result:ok claimed but package.json still at ' + pkg52.version + ' — fabricated-pass detected'
+        );
+        assert(
+          cl52.includes('[5.2.0]'),
+          'T11: result:ok claimed but CHANGELOG does not contain [5.2.0] — fabricated-pass detected'
+        );
+      } else {
+        // A clean refuse (stale_receipt, version_mismatch, etc.) is also acceptable.
+        assert(
+          r2.json.result === 'refuse',
+          'T11: second --cut must return ok (with real work done) or refuse; got ' + r2.json.result
+        );
+      }
+    }
+  }
+}
+fs.rmSync(repo11, { recursive: true, force: true });
+
+// ---------------------------------------------------------------------------
 // Done
 // ---------------------------------------------------------------------------
 if (failed > 0) {

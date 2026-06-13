@@ -244,8 +244,8 @@ function readReceipt(root) {
   }).filter(Boolean);
 }
 
-function isStepDone(receipt, step) {
-  return receipt.some(r => r.step === step && r.status === 'done');
+function isStepDone(receipt, step, version) {
+  return receipt.some(r => r.step === step && r.status === 'done' && r.version === version);
 }
 
 function appendReceipt(root, entry) {
@@ -446,7 +446,7 @@ function runCut(root, opts) {
   const date = releaseDate || new Date().toISOString().slice(0, 10);
 
   // Step 1: Rename CHANGELOG [Unreleased] -> [X.Y.Z] - <date>
-  if (!isStepDone(receipt, 'changelog')) {
+  if (!isStepDone(receipt, 'changelog', version)) {
     const changelogPath = path.join(root, 'CHANGELOG.md');
     const current = fs.readFileSync(changelogPath, 'utf8');
     if (!hasUnreleasedSection(current)) {
@@ -464,7 +464,7 @@ function runCut(root, opts) {
   }
 
   // Step 2: Bump package.json
-  if (!isStepDone(receipt, 'package_json')) {
+  if (!isStepDone(receipt, 'package_json', version)) {
     const pkgPath = path.join(root, 'package.json');
     const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
     pkg.version = version;
@@ -476,7 +476,7 @@ function runCut(root, opts) {
   for (let i = 0; i < CODEX_MANIFEST_RELPATHS.length; i++) {
     const rel = CODEX_MANIFEST_RELPATHS[i];
     const stepKey = 'codex_manifest_' + i;
-    if (!isStepDone(receipt, stepKey)) {
+    if (!isStepDone(receipt, stepKey, version)) {
       const p = path.join(root, rel);
       const manifest = JSON.parse(fs.readFileSync(p, 'utf8'));
       manifest.version = version;
@@ -486,7 +486,7 @@ function runCut(root, opts) {
   }
 
   // Step 4: Update README codex version assertions
-  if (!isStepDone(receipt, 'readme')) {
+  if (!isStepDone(receipt, 'readme', version)) {
     const readmePath = path.join(root, 'README.md');
     if (fs.existsSync(readmePath)) {
       let readme = fs.readFileSync(readmePath, 'utf8');
@@ -502,13 +502,13 @@ function runCut(root, opts) {
   }
 
   // Step 5: Create local git tag
-  if (!isStepDone(receipt, 'git_tag')) {
+  if (!isStepDone(receipt, 'git_tag', version)) {
     const tagName = RELEASE_TAG_PREFIX + version;
     // Stage all bumped files so the tag points at the right state
     // (we use git tag on the current HEAD — files are written but may not be committed in fixture;
     //  for tests with a temp repo we just tag HEAD; in real usage the commit is made separately)
     gitExec(root, ['tag', tagName]);
-    appendReceipt(root, { step: 'git_tag', status: 'done', tag: tagName });
+    appendReceipt(root, { step: 'git_tag', status: 'done', tag: tagName, version });
   }
 
   const result = {
