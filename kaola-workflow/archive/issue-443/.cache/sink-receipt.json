@@ -7,7 +7,7 @@
   ],
   "resolved_default_branch": "main",
   "started_at": "2026-06-13T13:37:10.015Z",
-  "updated_at": "2026-06-13T13:42:09.498Z",
+  "updated_at": "2026-06-13T13:42:12.347Z",
   "stash_ref": null,
   "removed_duplicates": [],
   "steps": {
@@ -18,7 +18,7 @@
     "finalize": "done",
     "closure": "done",
     "stash_restore": "done",
-    "archive_commit": "pending",
-    "push_main": "pending"
+    "archive_commit": "done",
+    "push_main": "done"
   }
 }
