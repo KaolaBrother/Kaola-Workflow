@@ -1,0 +1,30 @@
+{
+  "source_plan_hash": "efd568fd348739075e656c371954d3b6942a1dee481db09c54d1992cb6765d61",
+  "tasks": [
+    {
+      "id": "n1-version-key-isstepdone",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n2-code-review",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n3-changelog",
+      "role": "doc-updater",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "finalize",
+      "role": "finalize",
+      "status": "completed",
+      "ledger_status": "complete"
+    }
+  ],
+  "last_synced_from_ledger": "2026-06-13T05:14:01.695Z"
+}
