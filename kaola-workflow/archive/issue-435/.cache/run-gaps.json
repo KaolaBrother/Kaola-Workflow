@@ -1,0 +1,20 @@
+{
+  "project": "issue-435",
+  "sweptClasses": [
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n4-registration",
+      "count": 2
+    },
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n8-contractor-prose",
+      "count": 1
+    },
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n9-review",
+      "count": 1
+    }
+  ]
+}

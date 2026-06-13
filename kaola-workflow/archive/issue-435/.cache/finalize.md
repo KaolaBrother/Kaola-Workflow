@@ -1,0 +1,4 @@
+evidence-binding: finalize ead5733f3092
+FINALIZE SINK (main-session-direct). CHANGELOG.md [Unreleased] #435 entry was written by n10-docs (finalize node's CHANGELOG work front-loaded there).
+CROSS-EDITION GATE (#307) — all four chains GREEN via kaola-workflow-run-chains.js (real spawnSync exit codes), result:pass failed:[]: claude/codex/gitlab/gitea all exitCode 0. (Transient worktree-root .cache/chain-receipt.json removed post-gate; sink scripts do not consume it.)
+DAG complete: n1-design (contract, anti-fabrication correction) n2-script (gap-sweep.js scanner+gate, 38 assertions) n3-port-mirror (codex+forge ports) n4-registration (COMMON_SCRIPTS+manifest+package.json; R1 manifest-order repair) n5-forge-validators n6-finalize-prose (gaps_unswept gate ×6) n7-goal-prose (follow-up rule ×6) n8-contractor-prose (Step 8c.2) n9-review (G1 PASS after R1 repair) n10-docs (D-435-01 + docs) all complete.
