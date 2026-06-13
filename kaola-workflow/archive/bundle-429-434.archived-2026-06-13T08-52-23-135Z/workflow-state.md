@@ -2,29 +2,29 @@
 
 ## Project
 name: bundle-429-434
-status: active
+status: closed
 
 ## Current Position
 phase: adaptive
 phase_name: Adaptive
 workflow_path: adaptive
 runtime: claude
-step: start
-next_command: /kaola-workflow-plan-run bundle-429-434
-next_skill: kaola-workflow-plan-run bundle-429-434
+step: complete
+next_command: none (archived)
+next_skill: none (archived)
 main_session_role: orchestrator
 implementation_owner: N/A
 fix_owner: N/A
 inline_emergency_fallback_authorized: no
 
 ## Pending Gates
-- workflow-plan
+- none
 
 ## Last Evidence
 phase_file: N/A
 cache_file: N/A
-last_command: startup
-last_result: folder_claimed
+last_command: finalize
+last_result: closed
 
 ## Planning Evidence
 plan_hash: 5e798e35ef33be1f09ddad73239d1ddb79a9fb318cdf0656e8ec59f0a04a26ae
@@ -34,7 +34,7 @@ first_node_id: n1_design
 first_node_role: code-architect
 
 ## Last Updated
-2026-06-13T05:39:35.489Z
+2026-06-13T08:52:23.125Z
 
 ## Sink
 branch: workflow/bundle-429-434
