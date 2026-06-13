@@ -269,7 +269,8 @@ const scriptFiles = [
   'kaola-gitlab-workflow-task-mirror.js',
   'kaola-gitlab-workflow-codex-compact-resume.js',
   'kaola-gitlab-workflow-parallel-batch.js',
-  'kaola-gitlab-workflow-run-chains.js'
+  'kaola-gitlab-workflow-run-chains.js',
+  'kaola-gitlab-workflow-gap-sweep.js'
 ];
 for (const script of scriptFiles) assert(exists(pluginRoot + '/scripts/' + script), script + ' missing');
 
@@ -295,7 +296,8 @@ const installSupportScripts = [
   'kaola-gitlab-workflow-task-mirror.js',
   'kaola-gitlab-workflow-codex-compact-resume.js',
   'kaola-gitlab-workflow-parallel-batch.js',
-  'kaola-gitlab-workflow-run-chains.js'
+  'kaola-gitlab-workflow-run-chains.js',
+  'kaola-gitlab-workflow-gap-sweep.js'
 ];
 for (const script of installSupportScripts) {
   assert(gitlabManifestScripts.includes(script), 'install manifest must emit GitLab support script: ' + script);

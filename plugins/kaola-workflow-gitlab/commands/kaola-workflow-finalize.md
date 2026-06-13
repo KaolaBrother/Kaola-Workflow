@@ -61,6 +61,28 @@ If `workflow_path: full` (or absent):
   Phase 5 is not complete. Run /kaola-workflow-phase5 first.
   ```
 
+### Run-Gap Sweep Gate
+
+Finalization is **machine-gated** on a clean run-gap sweep (#435). Before
+proceeding past the prerequisite check, verify `.cache/run-gaps.json` and
+`finalization-summary.md`'s `## Run gaps` section and stop with a typed
+refusal if the following is true:
+
+- **`gaps_unswept`** — emitted by
+  `kaola_script kaola-gitlab-workflow-gap-sweep.js --check` (using the
+  edition's `kaola_script()` resolver above) when `.cache/run-gaps.json`
+  contains a swept reason class with no matching entry in the `## Run gaps`
+  section of `finalization-summary.md`, or when that section is absent while
+  swept classes exist.
+  Remedy: for each real run-discovered defect (`in_run_repair`,
+  `deferred_red_chain`, or `manual:<slug>`), file a follow-up issue with the
+  forge and record `filed: #N` in the `## Run gaps` section. If the item is
+  not a product defect (upstream flake, tool-environment noise, or an
+  already-filed and tracked waiver), record `noise: <one-line justification>`
+  instead.
+
+This typed refusal is classified structurally — do not string-match.
+
 Read:
 
 ```text

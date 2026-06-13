@@ -269,7 +269,8 @@ const scriptFiles = [
   'kaola-gitea-workflow-task-mirror.js',
   'kaola-gitea-workflow-codex-compact-resume.js',
   'kaola-gitea-workflow-parallel-batch.js',
-  'kaola-gitea-workflow-run-chains.js'
+  'kaola-gitea-workflow-run-chains.js',
+  'kaola-gitea-workflow-gap-sweep.js'
 ];
 for (const script of scriptFiles) assert(exists(pluginRoot + '/scripts/' + script), script + ' missing');
 
@@ -296,7 +297,8 @@ const installSupportScripts = [
   'kaola-gitea-workflow-task-mirror.js',
   'kaola-gitea-workflow-codex-compact-resume.js',
   'kaola-gitea-workflow-parallel-batch.js',
-  'kaola-gitea-workflow-run-chains.js'
+  'kaola-gitea-workflow-run-chains.js',
+  'kaola-gitea-workflow-gap-sweep.js'
 ];
 for (const script of installSupportScripts) {
   assert(giteaManifestScripts.includes(script), 'install manifest must emit Gitea support script: ' + script);

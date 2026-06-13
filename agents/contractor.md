@@ -250,6 +250,23 @@ node "$RUN_CHAINS_JS"
 Capture the real exit code. If the exit is non-zero, surface it to the
 orchestrator and stop — do not proceed to Step 8 with a red or missing receipt.
 
+### Step 8c.2 - Run-gap sweep
+
+Before the final commit, sweep run-discovered gaps and gate on their disposition.
+Run `kaola-workflow-gap-sweep.js` twice: first with `--json` to write
+`.cache/run-gaps.json`, then with `--check` as the gate.
+
+```bash
+: "${GAP_SWEEP_JS:=$(kaola_script kaola-workflow-gap-sweep.js)}"
+node "$GAP_SWEEP_JS" --project {project} --json   # writes .cache/run-gaps.json
+node "$GAP_SWEEP_JS" --project {project} --check   # gate; non-zero = gaps_unswept
+```
+
+Capture the real exit code. On `gaps_unswept`, surface the unmapped gap list to the
+orchestrator and stop — do not proceed to Step 8 with unswept gaps. Every swept
+reason class must be mapped to `filed: #N` or `noise: <justification>` in the
+`## Run gaps` section of `finalization-summary.md` before `--check` will pass.
+
 ### Step 8 - Commit Gate
 
 The sink must only receive committed work. Before dispatching to `sink-merge`

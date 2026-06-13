@@ -24,6 +24,18 @@ decisions, consult the strongest available expert model/profile for the session,
 apply the chosen answer directly, and record it under `.cache/` or the phase
 artifact.
 
+## Run-Gap Capture (Goal Completion Rule)
+
+**Finishing an issue INCLUDES capturing its run-discovered defects.** A run that
+surfaces a defect — a reviewer finding deferred to follow-up, an in-run
+repair/reopen, a deferred or waived chain, a flake — is not "done" until each
+such gap is either FILED as a follow-up issue (recorded `filed: #N` in
+`finalization-summary.md`'s `## Run gaps` section) or explicitly justified as
+`noise: <reason>`. Filing the follow-up SATISFIES the goal; silently deferring a
+known defect without filing or justifying it VIOLATES the goal, and the
+`gaps_unswept` finalize gate will refuse. "Loop until criteria pass" includes
+this capture step. Use the forge's issue tracker to file follow-ups.
+
 ## Delegation Contract
 
 Codex subagent delegation is the default. The session delegation policy defaults to `delegate` and is established without prompting the user; the workflow complies with its delegated-role contract automatically rather than asking the user to choose.

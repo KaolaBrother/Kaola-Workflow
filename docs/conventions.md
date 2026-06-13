@@ -107,6 +107,36 @@ Prose assertions ("chains passed", "npm test is green") are insufficient evidenc
 
 The `--finalize-check` gate enforces this: `chains_unverified` (no receipt), `chains_stale` (receipt headSha mismatch), and `chains_red` (any non-zero exit) are all typed blocking refusals. A known-red chain may be waived with `--accept-known-red name:open-issue-N`; the waiver must reference a real open tracking issue.
 
+## Run-gap capture is gated at finalize (#435)
+
+Prose assertions about "no defects found" or "gaps addressed" are insufficient evidence of
+run-gap coverage at Finalization. The contractor MUST:
+
+1. Run `node scripts/kaola-workflow-gap-sweep.js --project <P> --json` to produce
+   `.cache/run-gaps.json`. The scanner reads only `kaola-workflow/<P>/.cache/` (scope guard —
+   no archive bleed). It sweeps three machine-reliable signal sources: `provenance-log.jsonl`
+   (nodeIds with more than one `open` event = `in_run_repair`), `chain-receipt.json`
+   (`accepted_red:true` entries = `deferred_red_chain`), and the optional
+   `.cache/run-gaps-manual.md` (`gap: <class> — <text>` lines = `manual:<slug>`). Items are
+   deduplicated by `(reasonClass, sample)`.
+2. Populate the `## Run gaps` section of `finalization-summary.md` — one line per swept
+   `(reasonClass, sample)` tuple — in exactly one of two forms:
+   - `- <reasonClass> (<sample>): filed: #N` — gap tracked by an open issue.
+   - `- <reasonClass> (<sample>): noise: <one-line justification>` — gap justified as not
+     worth tracking.
+3. Run `node scripts/kaola-workflow-gap-sweep.js --project <P> --check` as the gate. A
+   vacuous pass is returned when `sweptClasses` is empty (no section required). When any
+   class is swept and not mapped, the gate emits
+   `{ result: 'refuse', reason: 'gaps_unswept', unmapped: [{reasonClass, sample}] }` and
+   exits 1; this blocks finalization until the section is complete.
+4. Cite the gate exit code as evidence in the contractor summary. Never record a
+   `gaps_addressed: true` prose attestation without a passing `--check` invocation.
+
+The `--check` gate is the ONLY valid run-gap evidence; classify its result structurally by the
+typed `reason` field (`gaps_unswept`), never by string-matching error text.
+
+Decision record: `docs/decisions/D-435-01.md`.
+
 ## Release
 
 - Before merging a version bump, create the matching local git tag (`git tag kaola-workflow--v<version> <sha>`); `npm test` enforces the tag exists (unless `KAOLA_WORKFLOW_OFFLINE=1`).

@@ -81,6 +81,7 @@ const SUPPORT_SCRIPTS = Object.freeze([
   'kaola-workflow-codex-preflight.js',
   'kaola-workflow-task-mirror.js',
   'kaola-workflow-ledger-compare.js',
+  'kaola-workflow-gap-sweep.js',
   'kaola-workflow-run-chains.js',
 ]);
 

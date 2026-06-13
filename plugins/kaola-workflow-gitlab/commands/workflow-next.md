@@ -49,6 +49,16 @@ implies cross-issue continuation. Each run targets exactly one issue or one
 explicitly selected same-scope bundle; auto-routing to an unselected issue after
 closure is still forbidden.
 
+**Finishing an issue INCLUDES capturing its run-discovered defects.** A run that
+surfaces a defect — a reviewer finding deferred to follow-up, an in-run
+repair/reopen, a deferred or waived chain, a flake — is not "done" until each
+such gap is either FILED as a follow-up issue (recorded `filed: #N` in
+`finalization-summary.md`'s `## Run gaps` section) or explicitly justified as
+`noise: <reason>`. Filing the follow-up SATISFIES the goal; silently deferring a
+known defect without filing or justifying it VIOLATES the goal, and the
+`gaps_unswept` finalize gate will refuse. "Loop until criteria pass" includes
+this capture step. Use the forge's issue tracker to file follow-ups.
+
 ## Startup Step 0 - Agent Issue Selection (Required Before Startup)
 
 Before calling the startup script, the agent must select a target issue. Scripts

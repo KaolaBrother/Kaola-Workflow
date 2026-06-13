@@ -83,6 +83,9 @@ const COMMON_SCRIPTS = [
   // #442: release aggregator CLI. Byte-identical claude↔codex; gitlab/gitea carry
   // rename-normalized ports (kaola-{forge}-workflow-release.js) in RENAME_NORMALIZED_FAMILIES.
   'kaola-workflow-release.js',
+  // #435: run-gap capture gate. Byte-identical claude↔codex; gitlab/gitea carry
+  // rename-normalized ports (kaola-{forge}-workflow-gap-sweep.js) in RENAME_NORMALIZED_FAMILIES.
+  'kaola-workflow-gap-sweep.js',
 ];
 
 const BYTE_IDENTICAL_GROUPS = [
@@ -262,6 +265,17 @@ const RENAME_NORMALIZED_FAMILIES = [
     ports: [
       { forge: 'gitlab', file: 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-release.js' },
       { forge: 'gitea', file: 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-release.js' },
+    ],
+  },
+  {
+    // #435: run-gap capture gate forge ports. The script carries no forge-specific tokens,
+    // so the rename-normalized ports are body-identical to canonical after the prefix transform.
+    // Reference = canonical scripts/ copy.
+    label: 'gap-sweep forge ports',
+    reference: 'scripts/kaola-workflow-gap-sweep.js',
+    ports: [
+      { forge: 'gitlab', file: 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-gap-sweep.js' },
+      { forge: 'gitea', file: 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-gap-sweep.js' },
     ],
   },
 ];
