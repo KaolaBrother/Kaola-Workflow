@@ -39,6 +39,8 @@ const {
   // #434: repair primitives
   runRevertOverflow,
   runRepairNode,
+  // #440: triage classifier
+  computeTriage,
 } = require('./kaola-workflow-adaptive-node');
 const { RUNNING_SET_NAME } = require('./kaola-workflow-adaptive-schema');
 const { readDurableConsentHalt, locateSection } = require('./kaola-workflow-adaptive-schema');
@@ -5337,6 +5339,203 @@ function rtHarness(initialFiles, opts) {
   assert(orientPresent.result === 'ok', '#434-c: orient ok with present evidence');
   assert(!orientPresent.requires_redispatch,
     '#434-c: orient does NOT set requires_redispatch when evidence present, got ' + JSON.stringify(orientPresent));
+}
+
+// ---------------------------------------------------------------------------
+// T-440-A: write-halt with barrierOut carries triage.class in result (#440)
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan([
+    '| impl-core | in_progress | |',
+    '| impl-other | pending | |',
+    '| review | pending | |',
+    '| finalize | pending | |',
+  ]);
+  const state = makeState();
+
+  let planContent = plan;
+  let stateContent = state;
+
+  // Simulate write-halt triggered with a barrierOut (write_set_overflow reason).
+  const barrierOut440a = {
+    result: 'refuse',
+    reason: 'write_set_overflow',
+    outOfAllow: ['scripts/foo.js'],
+    errors: ['actual writes outside the declared allowlist'],
+  };
+
+  const result440a = runWriteHalt({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project',
+    nodeId: 'impl-core',
+    reason: 'consent',
+    barrierOut: barrierOut440a,
+    readFile: (fpath) => {
+      if (fpath.endsWith('workflow-plan.md')) return planContent;
+      if (fpath.endsWith('workflow-state.md')) return stateContent;
+      throw new Error('ENOENT');
+    },
+    writeFile: (fpath, content) => {
+      if (fpath.endsWith('workflow-plan.md')) planContent = content;
+      if (fpath.endsWith('workflow-state.md')) stateContent = content;
+    },
+  });
+
+  assert(result440a.result === 'ok', 'T-440-A: write-halt ok');
+  assert(typeof result440a.triage === 'object' && result440a.triage !== null,
+    'T-440-A: result.triage is present, got ' + JSON.stringify(result440a.triage));
+  assert(result440a.triage.class === 'write_set_overflow',
+    'T-440-A: triage.class === write_set_overflow, got ' + result440a.triage.class);
+  assert(Array.isArray(result440a.triage.proposed_repair && result440a.triage.proposed_repair.paths),
+    'T-440-A: proposed_repair.paths is an array');
+  assert(result440a.triage.proposed_repair.kind === 'revert_overflow',
+    'T-440-A: proposed_repair.kind === revert_overflow for write_set_overflow, got ' + result440a.triage.proposed_repair.kind);
+}
+
+// ---------------------------------------------------------------------------
+// T-440-B: barrier_failed envelope carries triage (#440)
+// close-and-open-next barrier failure → refuse with triage
+// ---------------------------------------------------------------------------
+{
+  const plan440b = makePlan(
+    [
+      '| impl-core | in_progress | |',
+      '| impl-other | pending | |',
+      '| review | pending | |',
+      '| finalize | pending | |',
+    ],
+    [
+      '| impl-core | implementer | — | scripts/adaptive-node.js | 1 | sequence |',
+      '| impl-other | implementer | impl-core | scripts/other.js | 1 | sequence |',
+      '| review | code-reviewer | impl-other | — | 1 | sequence |',
+      '| finalize | finalize | review | CHANGELOG.md | 1 | sequence |',
+    ]
+  );
+  const state440b = makeState();
+  let planContent440b = plan440b;
+  const cacheFile440b = '/fake/kaola-workflow/test-project/.cache/impl-core.md';
+  // implementer evidence: evidence-binding (no nonce = no baseline), non_tdd_reason, build-green.
+  const evidence440b = 'evidence-binding: impl-core\nnon_tdd_reason: refactored\nbuild-green: yes\n';
+
+  const result440b = runCloseAndOpenNext({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project',
+    nodeId: 'impl-core',
+    shell: () => ({
+      exitCode: 1,
+      result: 'refuse',
+      reason: 'write_set_overflow',
+      barrierCheck: {
+        result: 'refuse',
+        reason: 'write_set_overflow',
+        outOfAllow: ['scripts/foo.js'],
+        errors: ['actual writes outside the declared allowlist'],
+      },
+    }),
+    readFile: (fpath) => {
+      if (fpath.endsWith('workflow-plan.md')) return planContent440b;
+      if (fpath.endsWith('workflow-state.md')) return state440b;
+      if (fpath === cacheFile440b) return evidence440b;
+      throw new Error('ENOENT: ' + fpath);
+    },
+    writeFile: (fpath, content) => {
+      if (fpath.endsWith('workflow-plan.md')) planContent440b = content;
+    },
+    cacheExists: (fpath) => fpath === cacheFile440b,
+  });
+
+  assert(result440b.result === 'refuse', 'T-440-B: close-and-open-next refuses on barrier failure');
+  assert(result440b.reason === 'barrier_failed', 'T-440-B: reason=barrier_failed, got ' + result440b.reason);
+  assert(typeof result440b.triage === 'object' && result440b.triage !== null,
+    'T-440-B: barrier_failed envelope carries triage, got ' + JSON.stringify(result440b.triage));
+  assert(typeof result440b.triage.class === 'string',
+    'T-440-B: triage.class is a string, got ' + JSON.stringify(result440b.triage));
+}
+
+// ---------------------------------------------------------------------------
+// T-440-C: unknown barrier reason degrades to class: 'unclassified' (#440)
+// ---------------------------------------------------------------------------
+{
+  const plan440c = makePlan([
+    '| impl-core | in_progress | |',
+    '| impl-other | pending | |',
+    '| review | pending | |',
+    '| finalize | pending | |',
+  ]);
+  const state440c = makeState();
+  let planContent440c = plan440c;
+  let stateContent440c = state440c;
+
+  // Pass a barrierOut with an unknown/unclassifiable reason.
+  const barrierOut440c = {
+    result: 'refuse',
+    reason: 'some_totally_unknown_reason',
+    errors: ['something unexpected'],
+  };
+
+  const result440c = runWriteHalt({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project',
+    nodeId: 'impl-core',
+    reason: 'consent',
+    barrierOut: barrierOut440c,
+    readFile: (fpath) => {
+      if (fpath.endsWith('workflow-plan.md')) return planContent440c;
+      if (fpath.endsWith('workflow-state.md')) return stateContent440c;
+      throw new Error('ENOENT');
+    },
+    writeFile: (fpath, content) => {
+      if (fpath.endsWith('workflow-plan.md')) planContent440c = content;
+      if (fpath.endsWith('workflow-state.md')) stateContent440c = content;
+    },
+  });
+
+  assert(result440c.result === 'ok', 'T-440-C: write-halt still ok with unknown barrier reason');
+  assert(typeof result440c.triage === 'object' && result440c.triage !== null,
+    'T-440-C: triage present even for unknown reason');
+  assert(result440c.triage.class === 'unclassified',
+    'T-440-C: triage.class === unclassified for unknown reason, got ' + JSON.stringify(result440c.triage));
+}
+
+// ---------------------------------------------------------------------------
+// T-440-D: computeTriage — known subtype labels (#440)
+// ---------------------------------------------------------------------------
+{
+  // lockfile_write: barrierOut with that reason
+  const triageLock = computeTriage(
+    { result: 'refuse', reason: 'lockfile_write', outOfAllow: ['package-lock.json'] },
+    '/fake/kaola-workflow/test-project/.cache',
+    'impl-core',
+    () => { throw new Error('ENOENT'); }
+  );
+  assert(triageLock.class === 'lockfile_write', 'T-440-D: lockfile_write class, got ' + triageLock.class);
+  assert(triageLock.proposed_repair && triageLock.proposed_repair.kind === 'add_to_write_set',
+    'T-440-D: lockfile_write → add_to_write_set, got ' + JSON.stringify(triageLock.proposed_repair));
+
+  // mirror_write
+  const triageMirror = computeTriage(
+    { result: 'refuse', reason: 'mirror_write', outOfAllow: ['plugins/kaola-workflow/scripts/kaola-workflow-adaptive-schema.js'] },
+    '/fake/.cache', 'impl-core', () => { throw new Error('ENOENT'); }
+  );
+  assert(triageMirror.class === 'mirror_write', 'T-440-D: mirror_write class, got ' + triageMirror.class);
+  assert(triageMirror.proposed_repair && triageMirror.proposed_repair.kind === 'add_to_write_set',
+    'T-440-D: mirror_write → add_to_write_set');
+
+  // count_bump
+  const triageCount = computeTriage(
+    { result: 'refuse', reason: 'count_bump', outOfAllow: ['scripts/validate-workflow-contracts.js'] },
+    '/fake/.cache', 'impl-core', () => { throw new Error('ENOENT'); }
+  );
+  assert(triageCount.class === 'count_bump', 'T-440-D: count_bump class, got ' + triageCount.class);
+  assert(triageCount.proposed_repair && triageCount.proposed_repair.kind === 'write_set_swap',
+    'T-440-D: count_bump → write_set_swap');
+
+  // null barrierOut → unclassified without throwing
+  const triageNull = computeTriage(null, '/fake/.cache', 'impl-core', () => {});
+  assert(triageNull.class === 'unclassified', 'T-440-D: null barrierOut → unclassified');
 }
 
 if (failed > 0) {

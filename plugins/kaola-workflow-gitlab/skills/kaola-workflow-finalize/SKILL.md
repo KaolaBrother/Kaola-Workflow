@@ -63,6 +63,32 @@ refusal if the following is true (checked after the Chain-Receipt Gate above):
 
 This typed refusal is classified structurally — do not string-match.
 
+### Goal Attestation (advisory, v1)
+
+`cmdFinalize` emits a `goal_check` field in the closure receipt:
+
+```
+goal_check: satisfied | absent
+```
+
+- **`satisfied`** — `KAOLA_GOAL` was set (non-empty) when `cmdFinalize` ran, OR the
+  `workflow-plan.md` contains a `goal:` line in its Meta block.
+- **`absent`** — neither source was present at close time.
+- **`unsatisfied`** is reserved for future enforcement; it is not emitted in v1.
+
+`goal_check` is **advisory in v1**: it is recorded in the closure receipt for audit
+purposes but does NOT block finalization regardless of its value.
+
+**How to supply goal context.** Export `KAOLA_GOAL` before the finalization run:
+
+```bash
+export KAOLA_GOAL="harden the finalize flow and close the goal-attestation gap"
+```
+
+Alternatively, include a `goal:` line in the adaptive plan's Meta block — the
+planner writes this at authoring time and `cmdFinalize` reads it from the archived
+plan. Both paths produce `goal_check: satisfied`.
+
 ## Goal Contract
 
 Continue until final validation, acceptance audit, documentation docking,

@@ -29,6 +29,8 @@ const {
 } = require('./kaola-gitlab-workflow-active-folders');
 const roadmapModule = require('./kaola-gitlab-workflow-roadmap');
 const closureContract = require('./kaola-workflow-closure-contract');
+// #441: parseGoal — reads the `goal:` line from ## Meta in workflow-plan.md.
+const { parseGoal } = require('./kaola-gitlab-workflow-plan-validator');
 
 const CLAIM_LABEL = forge.CLAIM_LABEL || 'workflow:in-progress';
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
@@ -1745,6 +1747,29 @@ function buildClosureReceipt(project, issueNumber, steps) {
   return receipt;
 }
 
+// #441: Compute goal_check for the finalize closure receipt.
+// Advisory only — never throws, never blocks finalize.
+// planDirs: ordered array of directories to search for workflow-plan.md (archive dest first,
+//   then live). Returns 'satisfied', 'absent'. 'unsatisfied' is reserved for future use.
+// v1 rule: KAOLA_GOAL set + non-empty → 'satisfied'; else plan goal: line present → 'satisfied';
+//   otherwise → 'absent'.
+function computeGoalCheck(planDirs) {
+  const envGoal = (process.env.KAOLA_GOAL || '').trim();
+  if (envGoal) return 'satisfied';
+  // Probe each planDir for a workflow-plan.md with a goal: line.
+  for (const dir of (planDirs || [])) {
+    if (!dir) continue;
+    try {
+      const planPath = path.join(dir, adaptiveSchema.PLAN_FILE);
+      if (!fs.existsSync(planPath)) continue;
+      const content = fs.readFileSync(planPath, 'utf8');
+      const { goal } = parseGoal(content);
+      if (goal) return 'satisfied';
+    } catch (_) {}
+  }
+  return 'absent';
+}
+
 function cmdFinalize() {
   const root = getRoot();
   const args = parseArgs(process.argv.slice(3));
@@ -2051,6 +2076,12 @@ function cmdFinalize() {
     } catch (_) { /* fail-open: attestation is warn-first */ }
   }
   checkDispatchAttestations([archiveCacheDir, liveCacheDir], closureReceipt);
+  // #441: advisory goal_check — probe archive-dest first (plan was already renamed there),
+  // then live location as fallback (crash-resume where archive did not complete).
+  closureReceipt.goal_check = computeGoalCheck([
+    result.dest,
+    path.join(root, 'kaola-workflow', args.project)
+  ]);
   const invariantResult = checkClosureInvariants(root, closureReceipt, result.dest);
   // #333: disposition is DECISION-derived on cmdFinalize (the orchestrator closes the issue after
   // sink-merge, so the default merge lane is honestly close-pending, never a false `closed`).

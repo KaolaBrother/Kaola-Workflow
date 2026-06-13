@@ -14,6 +14,11 @@ What you may read:
 - Active folders and workflow-state.md files for claimed/live-bundle context;
 - Recently archived summaries for scope context.
 
+Goal context:
+- The orchestrator may pass a goal string in the dispatch prompt (sourced from KAOLA_GOAL or the plan's goal: Meta line).
+- When a goal is provided, prefer bundles whose scope aligns with the goal; do not exclude issues solely on goal mismatch — target-set integrity rules still apply independently.
+- Add goal_alignment to the output when a goal is provided; omit it when no goal is given (backward-compatible).
+
 Bundle selection rules (auto-bundle mode — recommend a set only when ALL are true):
 - All issues are open and unclaimed (not in an active folder or live bundle's issue_numbers);
 - No issue is classified red against active work;
@@ -23,7 +28,8 @@ Bundle selection rules (auto-bundle mode — recommend a set only when ALL are t
 If confidence is not high, recommend single-issue mode or ask. Do not manufacture a bundle.
 
 Output contract:
-- Return a single JSON object with a recommended_bundle key containing: primary_issue (int), issues (sorted int[]), scope (string), confidence (high|medium|low), rationale (string), expected_write_areas (string[]), risks (string[]), rejected ([{issue, reason}]).
+- Return a single JSON object with a recommended_bundle key containing: primary_issue (int), issues (sorted int[]), scope (string), confidence (high|medium|low), rationale (string), expected_write_areas (string[]), risks (string[]), rejected ([{issue, reason}]), and optionally goal_alignment ({aligned: bool, reason: string}).
 - primary_issue is the lowest-numbered member (sorted ascending).
+- goal_alignment.aligned is true when the bundle scope matches the stated goal; reason is one explanatory sentence.
 - The orchestrator decides whether to proceed — you only recommend.
 """

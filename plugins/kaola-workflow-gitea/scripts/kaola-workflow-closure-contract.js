@@ -53,6 +53,9 @@ const CLOSURE_RECEIPT_FIELDS = {
   keep_open_requested: 'boolean',
   // #426: absolute path to main repo root this finalize operated against.
   anchored_root: 'string',
+  // #441: advisory goal-check field. 'satisfied' = AC verified; 'unsatisfied' = AC failed;
+  // 'absent' = no AC defined. null in emptyReceipt() (not yet evaluated). Non-blocking in v1.
+  goal_check: ['satisfied', 'unsatisfied', 'absent'],
 };
 
 // The closure invariants for a completed linked issue N. `id` is a stable
@@ -94,6 +97,8 @@ function emptyReceipt(project, issueNumber) {
     claim_planner_attested: 'failed',
     finalize_contractor_attested: 'failed',
     warnings: [],
+    // #441: advisory goal-check — null until evaluated.
+    goal_check: null,
   };
 }
 

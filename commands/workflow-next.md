@@ -144,6 +144,18 @@ startup.** Scripts validate but never select or substitute issues (#44).
 issue-scout is read-only: it cannot claim issues, write repository files, author
 `workflow-plan.md`, close issues, or dispatch other agents.
 
+**Goal context (`KAOLA_GOAL`).** If `KAOLA_GOAL` is set, pass the value to the
+issue-scout in the dispatch prompt. The scout treats it as a soft filter — it
+prefers bundles whose scope, area labels, and expected write areas align with the
+goal, but never excludes issues solely on goal mismatch (target-set integrity rules
+apply independently). When a goal is provided the scout includes a `goal_alignment`
+field in its output (`aligned: true|false` plus a one-line `reason`); when no goal
+is provided the field is omitted and the output is backward-compatible.
+
+`KAOLA_GOAL` also flows into `cmdFinalize`: it produces `goal_check: satisfied` in
+the closure receipt (see `commands/kaola-workflow-finalize.md` § Goal Attestation).
+Export it once before `/workflow-next` and it propagates to both touchpoints.
+
 **Ordering — resolve the path BEFORE consuming a bundle (#380):** the bundle lane is
 adaptive-only, so resolve the adaptive switch / path intent (Step 0a-1) *before* acting on
 the scout's recommendation. A bundle is pursued ONLY when the resolved path is `adaptive`;

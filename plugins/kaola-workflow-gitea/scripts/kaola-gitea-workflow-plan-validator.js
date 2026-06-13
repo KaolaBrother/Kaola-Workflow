@@ -186,6 +186,18 @@ function parseLabels(content) {
   if (!m) return null;
   return m[1].split(',').map(s => s.trim()).filter(Boolean);
 }
+// #441 (D-441-01 decision 1): the operator's bundle goal lives in `## Meta` as a single
+// `goal: <prose>` line — additive, hash-covered for free (computePlanHash already normalizes the
+// WHOLE `## Meta` body), READER-ONLY (no goal GATE; freeze accepts goal-absent plans unchanged).
+// Decoy-immune by construction: the read is SCOPED to the hash-covered `## Meta` section via the
+// SAME `classifier.sectionBody(content, 'Meta')` reader parseLabels is fed (the #B1 audit scoping),
+// so a stray `goal:` line elsewhere in the plan cannot override the frozen value. Returns
+// { goal: <string> } when present, { goal: null } when absent.
+function parseGoal(content) {
+  const meta = classifier.sectionBody(content, 'Meta');
+  const m = String(meta || '').match(/^goal:[ \t]*(.*)$/m);
+  return { goal: m ? m[1].trim() : null };
+}
 // Parse the plan into validator-shaped nodes. Parity with the executor's reader is
 // load-bearing: section slicing is delegated to classifier.sectionBody (FENCE-AWARE) and
 // write-set parsing to classifier.parseWriteSetCell, so the validator, the plan_hash, and
@@ -647,6 +659,31 @@ function isWriteSetGranularity(ownNode, outOfAllow) {
   return outOfAllow.every(p => dirTokens.some(d => p.startsWith(d) && p !== d.slice(0, -1)));
 }
 
+// #440 (D-440-01 decisions 1 + 6): NARROW write_set_overflow into one of three mechanical
+// subtypes — lockfile_write / mirror_write / count_bump — when EVERY out-of-allow path matches a
+// SINGLE subtype's literal-pattern table. The table lives in adaptive-schema.js (the byte-identical
+// forge-neutral home — decision 1) so a path classifies identically across all four editions. These
+// are LABELS under write_set_overflow, NEVER a fifth precedence family (decision 6 / D-419-02
+// [INV-13] do-not-fork-the-taxonomy): a path matching none stays plain write_set_overflow, and paths
+// spanning MULTIPLE subtypes (no single narrowing) also stay plain write_set_overflow. PURE: a
+// literal-pattern test over outOfAllow (no fs, no mutation, no re-freeze), exactly as #404's
+// granularity classifier is. Returns the subtype key string, or null when there is no single match.
+function classifyOverflowSubtype(outOfAllow) {
+  if (!outOfAllow || !outOfAllow.length) return null;
+  const table = schema.WRITE_SET_OVERFLOW_SUBTYPES;
+  let matched = null;
+  for (const p of outOfAllow) {
+    let hit = null;
+    for (const key of Object.keys(table)) {
+      if (table[key].patterns.some(re => re.test(p))) { hit = key; break; }
+    }
+    if (!hit) return null;                 // a path matching no subtype => plain write_set_overflow
+    if (matched === null) matched = hit;
+    else if (matched !== hit) return null; // paths span multiple subtypes => plain write_set_overflow
+  }
+  return matched;
+}
+
 // The runtime BARRIER (audit H1/H3). Given the files a node (or the whole plan) ACTUALLY wrote
 // (the CLI supplies them from `git diff`; this function is PURE), refuse on:
 //   (a) a SENSITIVITY hit — an actual write matches a Phase-5 SENSITIVE_PATTERN — when the frozen
@@ -767,7 +804,15 @@ function barrierCheck(content, actualPaths, opts) {
     // NO auto-repair). Plan-run surfaces an actionable "enumerate the files + re-freeze" consent
     // halt instead of the generic overflow halt. Per-node only (ownNode); a foreign (non-subtree)
     // write in the set keeps it plain write_set_overflow.
-    reason = (ownNode && isWriteSetGranularity(ownNode, outOfAllow)) ? 'write_set_granularity' : 'write_set_overflow';
+    // #440 (D-440-01): granularity (the per-node directory-grant artifact) is checked FIRST; if the
+    // overflow is NOT that artifact, classify it against the lockfile/mirror/count_bump subtype table
+    // (a single matched subtype narrows the label; multiple or none stays plain write_set_overflow).
+    // All three are LABELS under write_set_overflow — the precedence family is unchanged (decision 6).
+    if (ownNode && isWriteSetGranularity(ownNode, outOfAllow)) {
+      reason = 'write_set_granularity';
+    } else {
+      reason = classifyOverflowSubtype(outOfAllow) || 'write_set_overflow';
+    }
   }
   else if (unattributed.length) reason = 'unattributed_write';
   return { result: errors.length ? 'refuse' : 'pass', reason, errors, sensitiveHits, outOfAllow, foreignArchiveHits, unattributed };
@@ -2233,6 +2278,7 @@ module.exports = {
   readStoredHash,
   parseNodes,
   parseLabels,
+  parseGoal,
   parseLedger,
   uniqueSink,
   gateUncovered,

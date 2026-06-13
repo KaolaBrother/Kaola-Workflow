@@ -97,6 +97,26 @@ any other divergence reds the validation run.
 
 `.md` files in the allowband — `docs/**`, `CHANGELOG.md`, `README.md`, `kaola-workflow/{project}/**` — may be declared in a node's `declared_write_set` and pass the `--barrier-check` without requiring explicit declaration beyond the node's write set. `.md` files **outside** this allowband are production surfaces: `agents/*.md`, `commands/*.md`, `plugins/*/agents/*.toml`, and any other `.md` outside the four allowband roots must appear explicitly in the node's write set. The blanket `.md` exemption that existed before #424 is removed; a non-allowband `.md` write not in any node's declared set fails the barrier with `write_set_overflow`.
 
+## Barrier and write-halt triage payload (#440)
+
+When a `write_set_overflow` barrier failure is raised — either at close time (`barrier_failed`) or via a `write-halt` escalation — the return envelope carries a structured `triage` payload: `{ class, offending paths, proposed_repair?, testDelta? }`. Three mechanical subtypes narrow `write_set_overflow`:
+
+- `lockfile_write` — the overflowing path is a lockfile (e.g. `package-lock.json`).
+- `mirror_write` — the overflowing path is a byte-identical mirror target (e.g. a codex-synced script port).
+- `count_bump` — the overflowing path contains a validator count assertion affected by the change.
+
+A path matching none of these stays plain `write_set_overflow`. The classification table lives in `kaola-workflow-adaptive-schema.js` (byte-identical across all four editions — never a forge token). The `barrier_failed` close and the `write-halt` escalation carry the SAME `triage` shape; callers classify one structure regardless of channel, never by string-matching the reason field. For the overflow family, `proposed_repair` is a structured `{ kind, node, paths }` object using the #434 sanctioned-repair-primitives vocabulary (`write_set_swap`, `add_to_write_set`, `revert_overflow`, `repair_node`). For `sensitive_write_unreviewed` or `foreign_archive` classes, no `proposed_repair` is offered. The diagnosis is threaded — `write-halt --triage-json <barrierOut>` consumes the `barrierOut` envelope the close already returns; `barrierCheck` in `plan-validator.js` remains the single source of the offending-paths arrays and is never re-run. See `docs/decisions/D-440-01.md`.
+
+## Goal-conditioned bundles — `KAOLA_GOAL` and `goal_check` (#441)
+
+Plans may include an optional `goal: <text>` prose line in `## Meta`. Key properties:
+
+- **Reader-only, no gate** — `parseGoal` reads `^goal:[ \t]*(.*)$` from the `sectionBody('Meta')` region, the same decoy-immune scoping `parseLabels` uses. No validator gate is added; goal-absent plans stay valid and hash-stable.
+- **Hash-covered for free** — `computePlanHash` already hashes the entire `## Meta` body, so the `goal:` line is covered with no code change. Tampering the goal after freeze trips `plan_hash_mismatch` on `--resume-check`.
+- **Operator entry** — `KAOLA_GOAL` is the operator-side env var for the goal text. Because subagent shells do NOT inherit env vars across the spawn boundary, the goal text ALSO travels in the scout/planner dispatch prompts — the orchestrator owns placing it in both.
+- **Scout integration** — the `issue-scout` reads the goal as clustering context and surfaces a `goal_alignment` note in its recommendation. Goal alignment narrows which issues cluster together; it does not relax the D-430-01 bundle-coherence / target-set-integrity guards.
+- **Advisory attestation** — `cmdFinalize` in `kaola-workflow-claim.js` writes `goal_check: satisfied|unsatisfied|absent` into the closure receipt. In v1 this is informational metadata only and does NOT block claim or finalize. Flip-to-blocking is deferred to the #429 follow-up. See `docs/decisions/D-441-01.md`.
+
 ## Chain receipt is the only valid greenness evidence (#432)
 
 Prose assertions ("chains passed", "npm test is green") are insufficient evidence of test-chain greenness at Finalization. The contractor MUST:

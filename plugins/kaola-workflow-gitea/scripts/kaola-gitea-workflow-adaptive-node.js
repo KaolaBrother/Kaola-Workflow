@@ -42,7 +42,7 @@ const taskMirrorPath = path.join(__dirname, TASK_MIRROR);
 
 // #360: the LEDGER-SCOPED durable consent-halt probe (fence-aware). adaptive-schema keeps the
 // same filename across every edition (byte-identical ×4), so this require is NOT forge-renamed.
-const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, resolveFanoutCapReadonly, resolveLaneContainment, refuse } = require('./kaola-workflow-adaptive-schema');
+const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, resolveFanoutCapReadonly, resolveLaneContainment, refuse, WRITE_SET_OVERFLOW_SUBTYPES } = require('./kaola-workflow-adaptive-schema');
 
 // ---------------------------------------------------------------------------
 // getRoot — resolve the user-repo root via git rev-parse (cwd fallback).
@@ -1584,11 +1584,14 @@ function runCloseAndOpenNext(opts) {
   const barrierOut = shell(commitNodePath, [planPath, '--node-id', nodeId, '--json']);
 
   if (barrierOut.exitCode !== 0 || barrierOut.result !== 'ok') {
+    // #440: attach triage to the barrier_failed envelope so callers can classify + propose repair.
+    const cacheDir440 = path.join(path.dirname(planPath), '.cache');
     return {
       result: 'refuse',
       reason: 'barrier_failed',
       nodeId,
       barrierOut,
+      triage: computeTriage(barrierOut, cacheDir440, nodeId, readFile),
     };
   }
 
@@ -1831,11 +1834,98 @@ function runCloseAndOpenNext(opts) {
 }
 
 // ---------------------------------------------------------------------------
+// computeTriage (#440) — derive a triage object from a barrierCheck result.
+//
+// The `class` is derived from the barrierOut.reason field (or the nested
+// barrierOut.barrierCheck.reason if the top-level reason is absent):
+//   lockfile_write / mirror_write / count_bump  → use directly (narrowed subtypes)
+//   write_set_overflow                          → use directly
+//   anything else                               → 'unclassified'
+//
+// testDelta: try to read chain-receipt.json then fall back to the node evidence.
+// proposed_repair: computed from class + overflow paths.
+// Degrades gracefully on any error — never throws.
+// ---------------------------------------------------------------------------
+function computeTriage(barrierOut, cacheDir, nodeId, readFile) {
+  try {
+    if (!barrierOut || typeof barrierOut !== 'object') {
+      return { class: 'unclassified' };
+    }
+
+    // Extract the narrowed reason: the top-level reason may be 'barrier_failed'
+    // (from adaptive-node), so drill into the nested barrierCheck if needed.
+    const topReason = barrierOut.reason;
+    const nestedReason = (barrierOut.barrierCheck && barrierOut.barrierCheck.reason) || null;
+    const barrierReason = (topReason === 'barrier_failed' ? nestedReason : topReason) || null;
+
+    // Classify.
+    const KNOWN_SUBTYPES = Object.keys(WRITE_SET_OVERFLOW_SUBTYPES);
+    let cls;
+    if (KNOWN_SUBTYPES.includes(barrierReason)) {
+      cls = barrierReason;
+    } else if (barrierReason === 'write_set_overflow') {
+      cls = 'write_set_overflow';
+    } else {
+      cls = 'unclassified';
+    }
+
+    const triage = { class: cls };
+
+    // testDelta: try chain-receipt then evidence file.
+    if (cacheDir && nodeId && readFile) {
+      try {
+        const receiptPath = path.join(cacheDir, 'chain-receipt.json');
+        const receiptRaw = readFile(receiptPath);
+        const receipt = JSON.parse(receiptRaw);
+        if (receipt && (receipt.red || receipt.green)) {
+          triage.testDelta = [receipt.red, receipt.green].filter(Boolean).join(' / ');
+        }
+      } catch (_) {
+        // fall through to evidence file
+        try {
+          const evidencePath = path.join(cacheDir, nodeId + '.md');
+          const ev = readFile(evidencePath);
+          const redMatch = ev.match(/^RED:[ \t]*(.+)$/m);
+          const greenMatch = ev.match(/^GREEN:[ \t]*(.+)$/m);
+          if (redMatch || greenMatch) {
+            const parts = [];
+            if (redMatch) parts.push('RED: ' + redMatch[1].trim());
+            if (greenMatch) parts.push('GREEN: ' + greenMatch[1].trim());
+            triage.testDelta = parts.join(' / ');
+          }
+        } catch (_) {
+          // omit testDelta
+        }
+      }
+    }
+
+    // proposed_repair: based on class + overflow paths.
+    const overflowPaths = (barrierOut.outOfAllow ||
+      (barrierOut.barrierCheck && barrierOut.barrierCheck.outOfAllow) || []);
+
+    if (cls === 'count_bump') {
+      triage.proposed_repair = { kind: 'write_set_swap', node: nodeId || '', paths: overflowPaths };
+    } else if (cls === 'lockfile_write') {
+      triage.proposed_repair = { kind: 'add_to_write_set', node: nodeId || '', paths: overflowPaths };
+    } else if (cls === 'mirror_write') {
+      triage.proposed_repair = { kind: 'add_to_write_set', node: nodeId || '', paths: overflowPaths };
+    } else if (cls === 'write_set_overflow' && overflowPaths.length) {
+      triage.proposed_repair = { kind: 'revert_overflow', node: nodeId || '', paths: overflowPaths };
+    }
+    // unclassified or no overflow paths → no proposed_repair
+
+    return triage;
+  } catch (_) {
+    return { class: 'unclassified' };
+  }
+}
+
+// ---------------------------------------------------------------------------
 // runWriteHalt — MUTATES state + ledger.
 // Writes escalated_to_full + consent_halt markers. Idempotent.
 // ---------------------------------------------------------------------------
 function runWriteHalt(opts) {
-  const { planPath, statePath, project, nodeId, reason, shell, readFile, writeFile } = opts;
+  const { planPath, statePath, project, nodeId, reason, shell, readFile, writeFile, barrierOut } = opts;
 
   const validReasons = ['consent', 'security', 'test_thrash'];
   if (!validReasons.includes(reason)) {
@@ -1924,10 +2014,16 @@ function runWriteHalt(opts) {
 
   // #317: the halted node STAYS in_progress (write-halt adds a consent_halt marker, no ledger
   // flip); surface that with a halt note + refresh the mirror (AC4 lists write-halt).
+
+  // #440: attach triage when a barrierOut is provided (--triage-json path or caller-injected).
+  const cacheDir = path.join(path.dirname(planPath), '.cache');
+  const triage = computeTriage(barrierOut || null, cacheDir, nodeId, readFile);
+
   return {
     result: 'ok',
     halt: 'written',
     markers,
+    triage,
     taskTransitions: [buildTransition(nodeId, 'in_progress', 'write-halt', 'HALTED: ' + reason)],
     taskMirror: refreshTaskMirror(project, shell),
   };
@@ -3228,7 +3324,9 @@ function runCloseNode(opts) {
   // -- (b) Per-node barrier (parent planPath — read-only/serial-write are parent-side).
   const barrierOut = shell(commitNodePath, [planPath, '--node-id', nodeId, '--json']);
   if (barrierOut.exitCode !== 0 || barrierOut.result !== 'ok') {
-    return { result: 'refuse', reason: 'barrier_failed', nodeId, barrierOut };
+    // #440: attach triage to the barrier_failed envelope so callers can classify + propose repair.
+    const cacheDir440b = path.join(path.dirname(planPath), '.cache');
+    return { result: 'refuse', reason: 'barrier_failed', nodeId, barrierOut, triage: computeTriage(barrierOut, cacheDir440b, nodeId, readFile) };
   }
 
   // -- (c) Close: ledger row in_progress -> complete (same #348 guard as close-and-open-next).
@@ -3751,12 +3849,13 @@ function main() {
     return;
   }
 
-  const subcommand  = args[0];
-  const hasJson     = args.includes('--json');
-  const projectIdx  = args.indexOf('--project');
-  const nodeIdIdx   = args.indexOf('--node-id');
-  const reasonIdx   = args.indexOf('--reason');
-  const hasStdin    = args.includes('--stdin');
+  const subcommand    = args[0];
+  const hasJson       = args.includes('--json');
+  const projectIdx    = args.indexOf('--project');
+  const nodeIdIdx     = args.indexOf('--node-id');
+  const reasonIdx     = args.indexOf('--reason');
+  const hasStdin      = args.includes('--stdin');
+  const triageJsonIdx = args.indexOf('--triage-json');
 
   if (!hasJson) {
     process.stdout.write('{"result":"refuse","errors":["--json is required"]}\n');
@@ -3899,7 +3998,16 @@ function main() {
     } else if (!reason) {
       result = { result: 'refuse', errors: ['--reason required for write-halt'] };
     } else {
-      result = runWriteHalt({ planPath, statePath, project, nodeId, reason, shell, readFile, writeFile });
+      // #440: --triage-json <path|-> reads a barrierOut envelope for triage classification.
+      let triageBarrierOut = null;
+      if (triageJsonIdx >= 0 && triageJsonIdx + 1 < args.length) {
+        const tjArg = args[triageJsonIdx + 1];
+        try {
+          const raw = tjArg === '-' ? require('fs').readFileSync(0, 'utf8') : readFile(tjArg);
+          triageBarrierOut = JSON.parse(raw);
+        } catch (_) { /* omit triage on parse error — degrade gracefully */ }
+      }
+      result = runWriteHalt({ planPath, statePath, project, nodeId, reason, shell, readFile, writeFile, barrierOut: triageBarrierOut });
     }
   } else if (subcommand === 'clear-halt') {
     if (!reason) {
@@ -3988,4 +4096,6 @@ module.exports = {
   buildDispatch,
   deriveGuards,
   runVerifyEvidence,
+  // #440: triage classifier exported for direct testing.
+  computeTriage,
 };

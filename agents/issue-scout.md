@@ -83,6 +83,16 @@ Auto-bundle mode should only recommend a set when ALL of the following are true:
 
 If confidence is not high, recommend single-issue mode or ask the orchestrator. Do not manufacture a bundle.
 
+## Goal Context
+
+The orchestrator may pass a `goal` string in the dispatch prompt (sourced from `KAOLA_GOAL` or the plan's `goal:` Meta line). When a goal is provided:
+
+- Treat it as a soft filter: prefer bundles whose scope, area labels, and expected write areas align with the stated goal;
+- Do not exclude issues solely because they do not match the goal — target-set integrity (#430) still applies (all bundle rules must pass independently of goal alignment);
+- Add a `goal_alignment` field to your output (see Output Format below).
+
+When no goal is provided, omit `goal_alignment` from the output entirely — the field is optional and backward-compatible.
+
 ## Output Format
 
 Return a single JSON object:
@@ -99,7 +109,11 @@ Return a single JSON object:
     "risks": ["cross-edition script sync", "finalization contract changes"],
     "rejected": [
       { "issue": 61, "reason": "external dependency not included in bundle" }
-    ]
+    ],
+    "goal_alignment": {
+      "aligned": true,
+      "reason": "bundle targets the finalization subsystem, which matches the stated goal of hardening the finalize flow"
+    }
   }
 }
 ```
@@ -113,6 +127,9 @@ Fields:
 - `rationale`: one sentence explaining why this set is coherent;
 - `expected_write_areas`: file paths or directories the bundle is likely to touch;
 - `risks`: brief list of implementation risks or coordination concerns;
-- `rejected`: issues considered but excluded, each with a `reason`.
+- `rejected`: issues considered but excluded, each with a `reason`;
+- `goal_alignment` _(optional — omit when no goal was provided)_: object with:
+  - `aligned`: `true` if the recommended bundle's scope aligns with the stated goal, `false` otherwise;
+  - `reason`: one sentence explaining the alignment or misalignment.
 
 When confidence is not `"high"`, set `issues` to a single-element array and note the reason in `rationale`. The orchestrator decides whether to proceed with the recommended set, adjust it, or fall back to single-issue mode — you only recommend.
