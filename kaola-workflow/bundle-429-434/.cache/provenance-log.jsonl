@@ -17,3 +17,4 @@
 {"timestamp":"2026-06-13T07:58:06.849Z","event":"open","nodeId":"n_decisions","nonce":"38a65f17c0e0","by":"adaptive-node"}
 {"timestamp":"2026-06-13T08:02:04.107Z","event":"close","nodeId":"n_decisions","nonce":"38a65f17c0e0","by":"adaptive-node"}
 {"timestamp":"2026-06-13T08:02:04.388Z","event":"open","nodeId":"n8_finalize","nonce":"74b8e211216d","by":"adaptive-node"}
+{"timestamp":"2026-06-13T08:17:52.835Z","event":"close","nodeId":"n8_finalize","nonce":"74b8e211216d","by":"adaptive-node"}

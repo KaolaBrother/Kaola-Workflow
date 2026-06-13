@@ -51,7 +51,7 @@ conflict_note: |
 | n7_doc_contractor | complete |
 | n_review | complete |
 | n_decisions | complete |
-| n8_finalize | in_progress |
+| n8_finalize | complete |
 ## Required Agent Compliance
 
 | Requirement | Status | Evidence | Skip Reason |
@@ -65,3 +65,4 @@ conflict_note: |
 | doc-updater (n7_doc_contractor) | subagent-invoked | evidence-binding: n7_doc_contractor e0829e5474aa | |
 | code-reviewer | subagent-invoked | evidence-binding: n_review 2b5922824354 | |
 | doc-updater (n_decisions) | subagent-invoked | evidence-binding: n_decisions 38a65f17c0e0 | |
+| finalize (n8_finalize) | main-session-direct | evidence-binding: n8_finalize 74b8e211216d | |
