@@ -19,6 +19,7 @@ const root = path.resolve(__dirname, '..');
 const FEATURE_TOKENS = [
   'write_set_granularity',
   'main-session-gate',
+  'simulate-kaola-workflow-walkthrough.js',
 ];
 
 // codex tree is the canonical agents/ source for the toml triple.
