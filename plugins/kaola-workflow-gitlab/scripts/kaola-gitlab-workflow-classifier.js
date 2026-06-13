@@ -162,8 +162,8 @@ function extractFilePaths(text) {
 // be parsed structurally, not with the prose-oriented extractFilePaths() path-finder. That
 // finder requires a "/" AND a non-dot first segment, which SILENTLY DROPS root-level files
 // (Dockerfile, Makefile, secrets.yaml, build.env) and any dot-leading path (a "."-prefixed
-// CI or config directory). Those drops let code / secret / CI writes evade the G1/G2 gates and the
-// FILE_CEILING. Here every non-empty normalized token counts (fail-closed: an author who
+// CI or config directory). Those drops let code / secret / CI writes evade the G1/G2 gates. Here
+// every non-empty normalized token counts (fail-closed: an author who
 // declares a write is taken at their word). The empty / dash markers preserve the read-only
 // carve-out (no declared writes => trivially disjoint).
 function parseWriteSetCell(cell) {
