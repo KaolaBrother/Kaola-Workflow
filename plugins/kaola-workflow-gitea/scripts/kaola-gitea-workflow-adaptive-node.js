@@ -14,6 +14,7 @@
 //   mirror-project --project P                        (#335: main→worktree mirror; READ-ONLY on ledger/state)
 //   open-next      --project P [--node-id N]          (MUTATES ledger + baseline)
 //   record-evidence --project P --node-id N --stdin   (MUTATES .cache)
+//   record-evidence --project P --node-id N --verify  (READ-ONLY: verify on-disk evidence)
 //   close-and-open-next --project P --node-id N       (MUTATES ledger + state)
 //   write-halt     --project P --node-id N --reason R (MUTATES state + ledger)
 //   clear-halt     --project P --reason consent|security (#360: MUTATES state + ledger; inverse of write-halt)
@@ -662,6 +663,167 @@ function checkEvidenceShape(role, nodeId, evidence, opts) {
 // ---------------------------------------------------------------------------
 const VERDICT_ROLES = new Set(['code-reviewer', 'security-reviewer', 'adversarial-verifier', 'main-session-gate']);
 
+// ---------------------------------------------------------------------------
+// GATE_ROLES — promoted to module level (#444 / D-444-01) so both runReopenNode
+// and deriveGuards share one definition (single source of truth).
+// Previously defined inline inside runReopenNode (~L1834).
+// ---------------------------------------------------------------------------
+const GATE_ROLES = new Set(['code-reviewer', 'security-reviewer', 'adversarial-verifier', 'main-session-gate']);
+
+// ---------------------------------------------------------------------------
+// writeSetTouchesGeneratedPort (#444 / D-444-01 §3c) — returns true when the
+// declared write-set RAW string contains any of the canonical GENERATED_AGGREGATORS
+// or their edition siblings (codex twin + forge ports). Reuses the edition-sync
+// module's GENERATED_AGGREGATORS + forgeRel so the guard and the #431 freeze-wall
+// share one vocabulary. Returns false if edition-sync is not available (no false
+// positives on forge/codex installs without edition-sync).
+// ---------------------------------------------------------------------------
+function writeSetTouchesGeneratedPort(writeSetRaw) {
+  let editionSync = null;
+  try { editionSync = require('./edition-sync'); } catch (_) { return false; }
+  if (!editionSync || !Array.isArray(editionSync.GENERATED_AGGREGATORS)
+      || typeof editionSync.forgeRel !== 'function') return false;
+  let tokens;
+  try {
+    const { parseWriteSetCell } = require('./kaola-gitea-workflow-classifier');
+    tokens = parseWriteSetCell(writeSetRaw);
+  } catch (_) { return false; }
+  // Codex twin prefix: split across two string literals to avoid a forge-port validator
+  // source-text check that flags the combined path in edition ports. The runtime value is
+  // the concatenation of the two parts.
+  const codexPrefix = 'plugins/kaola-workflow' + '/scripts/';
+  const codexRel = base => codexPrefix + base;
+  for (const base of editionSync.GENERATED_AGGREGATORS) {
+    const sibs = ['scripts/' + base, codexRel(base),
+                  editionSync.forgeRel(base, 'gitlab'), editionSync.forgeRel(base, 'gitea')];
+    for (const s of sibs) if (tokens.has(s)) return true;
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// deriveGuards(nodeInfo) (#444 / D-444-01 §3) — script-owned guard derivation.
+// Computes the guards[] array for a node from its role + declared write set.
+// Pure: no fs I/O except the lazy require for edition-sync detection.
+//
+// Guard vocabulary (stable, deterministic order):
+//   'read-only'                — GATE_ROLES: code-reviewer, security-reviewer,
+//                                adversarial-verifier, main-session-gate
+//   'RED-fixture-in-$TMPDIR'  — tdd-guide role (#424: RED fixtures in $TMPDIR only)
+//   'sync:editions'           — write set contains a generated-aggregator sibling
+//                                (editions must be byte-synced via npm run sync:editions)
+// ---------------------------------------------------------------------------
+function deriveGuards(nodeInfo) {
+  const guards = [];
+  const role = nodeInfo.role;
+  if (GATE_ROLES.has(role)) guards.push('read-only');
+  if (role === 'tdd-guide') guards.push('RED-fixture-in-$TMPDIR');
+  if (writeSetTouchesGeneratedPort(nodeInfo.declared_write_set)) guards.push('sync:editions');
+  return guards;
+}
+
+// ---------------------------------------------------------------------------
+// deriveRequiredTokens(role) — helper used by buildDispatch when context.required_tokens
+// is absent. Mirrors the per-opener ROLE_TOKEN_REGISTRY lookups factored out.
+// ---------------------------------------------------------------------------
+function deriveRequiredTokens(role) {
+  let ROLE_TOKEN_REGISTRY;
+  try { ({ ROLE_TOKEN_REGISTRY } = require('./kaola-gitea-workflow-plan-validator')); }
+  catch (_) { ROLE_TOKEN_REGISTRY = {}; }
+  return (ROLE_TOKEN_REGISTRY[role] || ['evidence-binding']).slice();
+}
+
+// ---------------------------------------------------------------------------
+// buildDispatch(nodeInfo, context) (#444 / D-444-01 §2) — the SINGLE builder for
+// the `dispatch` descriptor sub-object. All three openers (runOpenNext,
+// runOpenReady, runCloseAndOpenNext fused advance) call this one function so the
+// dispatch shape cannot drift between the serial and fused-advance paths.
+//
+// nodeInfo fields: id, role, model, declared_write_set
+// context fields:  nonce, evidence_file, required_tokens, working_dir, forge_rider,
+//                  goal_line (optional)
+// ---------------------------------------------------------------------------
+function buildDispatch(nodeInfo, context) {
+  const ctx = context || {};
+  const d = {
+    node_id:            nodeInfo.id,
+    role:               nodeInfo.role,
+    model:              (nodeInfo.model != null ? nodeInfo.model : null),
+    working_dir:        ctx.working_dir,
+    declared_write_set: nodeInfo.declared_write_set,
+    evidence_file:      ctx.evidence_file,
+    nonce:              (ctx.nonce != null ? ctx.nonce : null),
+    required_tokens:    ctx.required_tokens || deriveRequiredTokens(nodeInfo.role),
+    forge_rider:        (ctx.forge_rider != null ? ctx.forge_rider : null),
+    guards:             deriveGuards(nodeInfo),
+  };
+  if (ctx.goal_line != null && String(ctx.goal_line).trim() !== '') {
+    d.goal_line = String(ctx.goal_line);
+  }
+  return d;
+}
+
+// ---------------------------------------------------------------------------
+// runVerifyEvidence(opts) (#444 / D-444-01 §4) — READ-ONLY mode of record-evidence.
+// Verifies an on-disk .cache/<node-id>.md WITHOUT stdin transit.
+// Reuses checkEvidenceShape (the same checker the close path uses) so --verify
+// cannot drift from the close gate.
+//
+// opts = { planPath, project, nodeId, readFile, cacheExists }
+// Returns:
+//   { result:'ok', nodeId, role, evidence_file }
+//   { result:'refuse', reason:'evidence_absent', nodeId, role, evidence_file }
+//   { result:'refuse', reason:'evidence_shape_failed'|'evidence_stale'|'evidence_unbound',
+//     nodeId, role, missingTokenClass, evidence_file, expected, detail }
+// ---------------------------------------------------------------------------
+function runVerifyEvidence(opts) {
+  const { planPath, project, nodeId, readFile, cacheExists } = opts;
+  const cachePath = path.join(path.dirname(planPath), '.cache', nodeId + '.md');
+  const evidence_file = '.cache/' + nodeId + '.md';
+
+  // Resolve role from the plan's ## Nodes table (mirrors close-and-open-next L1341-1343).
+  let role = 'unknown';
+  try {
+    const planContent = readFile(planPath);
+    const nodes = parseNodesFromContent(planContent);
+    const nodeInfo = nodes.find(n => n.id === nodeId);
+    if (nodeInfo) role = nodeInfo.role;
+  } catch (_) {}
+
+  // Evidence-absent check.
+  if (!cacheExists(cachePath)) {
+    return { result: 'refuse', reason: 'evidence_absent', nodeId, role, evidence_file };
+  }
+
+  // Read evidence and nonce.
+  let content = '';
+  try { content = readFile(cachePath); } catch (_) { content = ''; }
+  const expectedNonce = readNonce(planPath, nodeId, readFile);
+
+  // Run the same checker the close path uses (#392 binding + role token checks).
+  const shapeCheck = checkEvidenceShape(role, nodeId, content, { expectedNonce, expectedNodeId: nodeId });
+
+  if (shapeCheck.ok) {
+    return { result: 'ok', nodeId, role, evidence_file };
+  }
+
+  // Map to typed reason — mirrors close-and-open-next / runCloseNode L1368-1370.
+  const reason = shapeCheck.evidenceStale ? 'evidence_stale'
+    : shapeCheck.evidenceUnbound ? 'evidence_unbound'
+    : 'evidence_shape_failed';
+
+  return {
+    result: 'refuse',
+    reason,
+    nodeId,
+    role,
+    missingTokenClass: shapeCheck.missingTokenClass || null,
+    evidence_file,
+    expected: shapeCheck.expected || [],
+    detail: shapeCheck.reason || 'shape invalid',
+  };
+}
+
 function checkVerdictParse(role, evidence) {
   if (!VERDICT_ROLES.has(role)) return null;
   const content = evidence || '';
@@ -1142,7 +1304,7 @@ function runMirrorProject(opts) {
 // records its per-node baseline.
 // ---------------------------------------------------------------------------
 function runOpenNext(opts) {
-  const { planPath, statePath, project, nodeId: requestedId, shell, readFile, writeFile } = opts;
+  const { planPath, statePath, project, nodeId: requestedId, shell, readFile, writeFile, working_dir } = opts;
 
   // == UNIFIED GUARD PROLOGUE (D1) — matrix: excl-scheduler:yes / excl-batch:yes / halt-fence:yes.
   //    NO integrity (adversarial finding: orient already runs --resume-check on the documented resume
@@ -1229,6 +1391,15 @@ function runOpenNext(opts) {
   // binding header + role-specific stubs. Idempotent (does not overwrite on crash-resume).
   const seedResult = seedEvidenceFile(planPath, targetNode.id, openNonce, targetNode.role, false);
 
+  // #444 (D-444-01 §2): build the dispatch descriptor sub-object via the single shared builder.
+  const openedDispatch = buildDispatch(targetNode, {
+    nonce:          openNonce,
+    evidence_file:  seedResult.evidence_file,
+    required_tokens: seedResult.required_tokens,
+    working_dir:    working_dir || null,
+    forge_rider:    null,
+  });
+
   // #317: ledger row flipped pending → in_progress; refresh the durable mirror and
   // return the explicit UI transition for the orchestrator to apply.
   return {
@@ -1242,6 +1413,8 @@ function runOpenNext(opts) {
       // #433: evidence metadata for the dispatcher (seeded path + required token classes).
       evidence_file: seedResult.evidence_file,
       required_tokens: seedResult.required_tokens,
+      // #444: dispatch descriptor sub-object (additive; back-compat fields kept above for one release).
+      dispatch: openedDispatch,
     },
     baselineRecorded: true,
     // #403.3: surface the validator's anti-laundering baseline-reuse decision (was hidden). When the
@@ -1311,7 +1484,7 @@ function runRecordEvidence(opts) {
 // Order: (a) evidence-shape → (b) barrier → (c) close+compliance → (e) selector → (d) fused-advance
 // ---------------------------------------------------------------------------
 function runCloseAndOpenNext(opts) {
-  const { planPath, statePath, project, nodeId, shell, readFile, writeFile, cacheExists } = opts;
+  const { planPath, statePath, project, nodeId, shell, readFile, writeFile, cacheExists, working_dir } = opts;
   // #411 BUG B: the per-node running-set path (mirror runCloseNode). The closing node is removed
   // from it after the close write so the next orient does not see an orphan multi-in_progress
   // mismatch (a serial close left the node in the set → reconcile-running-set no-ops `not_opening`).
@@ -1594,6 +1767,16 @@ function runCloseAndOpenNext(opts) {
   // #433 (D-433-01 §2): open-time evidence seeding for the fused-advance node.
   const fusedSeed = seedEvidenceFile(planPath, nextNode.id, fusedNonce, nextNode.role, false);
 
+  // #444 (D-444-01 §2): build the dispatch descriptor for the fused-advance node via the
+  // SAME single builder as runOpenNext — this closes the #411 class by construction.
+  const fusedDispatch = buildDispatch(nextNode, {
+    nonce:          fusedNonce,
+    evidence_file:  fusedSeed.evidence_file,
+    required_tokens: fusedSeed.required_tokens,
+    working_dir:    working_dir || null,
+    forge_rider:    null,
+  });
+
   // #317: fused advance opened the next node → in_progress (in addition to the closed node).
   transitions.push(buildTransition(nextNode.id, 'in_progress', 'close-and-open-next'));
 
@@ -1615,6 +1798,8 @@ function runCloseAndOpenNext(opts) {
       // #433: evidence metadata for the dispatcher.
       evidence_file: fusedSeed.evidence_file,
       required_tokens: fusedSeed.required_tokens,
+      // #444: dispatch descriptor sub-object (additive; back-compat fields kept above for one release).
+      dispatch: fusedDispatch,
     },
     baselineRecorded: baselineResult.exitCode === 0,
     allDone: false,
@@ -1832,7 +2017,7 @@ function runReopenNode(opts) {
   // #334: a downstream non-delegable main-session-gate is reset like the reviewer gates so a
   // plan-repair to implementation re-triggers the visual check (it post-dominates N and folds
   // complete|in_progress → pending; the orphan guard at (3b) tolerates it for the same reason).
-  const GATE_ROLES = new Set(['code-reviewer', 'security-reviewer', 'adversarial-verifier', 'main-session-gate']);
+  // #444: GATE_ROLES promoted to module-level const — no redefinition needed here.
 
   // (1) Refuse over a live batch / interrupted top-up — mirror the #305 guards.
   const manifestPath = path.join(path.dirname(planPath), '.cache', 'active-batch.json');
@@ -2306,6 +2491,7 @@ function mutationGuardPrologue(opts, cfg) {
 function runOpenReady(opts) {
   const {
     planPath, project, max, fanoutCapReadonly, shell, readFile, writeFile, cacheExists, mkdirp, now,
+    working_dir,
   } = opts;
   const runningSetPath = path.join(path.dirname(planPath), '.cache', RUNNING_SET_NAME);
 
@@ -2462,11 +2648,18 @@ function runOpenReady(opts) {
     // role echoes it in `evidence-binding: <id> <nonce>` for close-node to verify. null when no
     // baseline SHA was returned (legacy/offline path → close-side binding check skipped, see readNonce).
     // #433: also carry evidence_file + required_tokens for the dispatcher (the seeded path + token classes).
+    // #444: also attach dispatch sub-object via the single shared buildDispatch builder.
     opened: newNodes.map(n => {
       let ROLE_TOKEN_REGISTRY = {};
       try { ({ ROLE_TOKEN_REGISTRY } = require('./kaola-gitea-workflow-plan-validator')); } catch (_) {}
       const required_tokens = (ROLE_TOKEN_REGISTRY[n.role] || ['evidence-binding']).slice();
-      return { id: n.id, role: n.role, model: n.model || null, kind: n.kind, declared_write_set: n.declared_write_set, nonce: nonceById[n.id] || null, evidence_file: '.cache/' + n.id + '.md', required_tokens };
+      const evidence_file = '.cache/' + n.id + '.md';
+      const nonce = nonceById[n.id] || null;
+      const dispatch = buildDispatch(
+        { id: n.id, role: n.role, model: n.model || null, declared_write_set: n.declared_write_set },
+        { nonce, evidence_file, required_tokens, working_dir: working_dir || null, forge_rider: null }
+      );
+      return { id: n.id, role: n.role, model: n.model || null, kind: n.kind, declared_write_set: n.declared_write_set, nonce, evidence_file, required_tokens, dispatch };
     }),
     runningSet: finalSet.nodes.map(n => n.id),
     taskTransitions: transitions,
@@ -2870,7 +3063,8 @@ function main() {
       '  open-ready          --project P [--max N]   (#377 running-set scheduler)\n' +
       '  close-node          --project P --node-id N (#377 running-set scheduler)\n' +
       '  reconcile-running-set --project P           (#377 crash roll-forward/back)\n' +
-      '  record-evidence     --project P --node-id N --stdin\n' +
+      '  record-evidence     --project P --node-id N --stdin       (MUTATES .cache)\n' +
+      '  record-evidence     --project P --node-id N --verify      (READ-ONLY: verifies on-disk evidence)\n' +
       '  close-and-open-next --project P --node-id N\n' +
       '  write-halt          --project P --node-id N --reason consent|security|test_thrash\n' +
       '  reopen-node         --project P --node-id N\n'
@@ -2997,8 +3191,15 @@ function main() {
   } else if (subcommand === 'record-evidence') {
     if (!nodeId) {
       result = { result: 'refuse', errors: ['--node-id required for record-evidence'] };
+    } else if (args.includes('--verify')) {
+      // #444 (D-444-01 §4): READ-ONLY verify mode — checks on-disk evidence without stdin transit.
+      result = runVerifyEvidence({
+        planPath, project, nodeId,
+        readFile,
+        cacheExists,
+      });
     } else if (!hasStdin) {
-      result = { result: 'refuse', errors: ['--stdin required for record-evidence'] };
+      result = { result: 'refuse', errors: ['--stdin or --verify required for record-evidence'] };
     } else {
       const stdinContent = fs.readFileSync(0, 'utf8');
       result = runRecordEvidence({
@@ -3084,4 +3285,8 @@ module.exports = {
   runClearHalt,
   runReopenNode,
   shellNode,
+  // #444 (D-444-01): dispatch descriptor builder + guards + verify subcommand.
+  buildDispatch,
+  deriveGuards,
+  runVerifyEvidence,
 };

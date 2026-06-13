@@ -295,6 +295,48 @@ const { ROLE_TOKEN_REGISTRY } = require('./kaola-workflow-plan-validator');
 
 Each entry is an array of token stubs the evidence file must contain (or have filled by the role agent). Consuming scripts (`kaola-workflow-adaptive-node.js`) import this export to seed `.cache/<node-id>.md` at open time and to validate token presence at close time without reimplementing the vocabulary.
 
+### `opened` payload — `dispatch` sub-object (issue #444 / D-444-01)
+
+All three openers (`open-next`, `open-ready`, and the fused advance in `close-and-open-next`) now produce an `opened.dispatch` sub-object assembled by a single shared `buildDispatch(nodeInfo, context)` function. This closes the #411-class drift: one producer means the three call sites cannot diverge. The pre-existing sibling fields on `opened` (`id`, `role`, `model`, etc.) remain for one release (back-compat), then can be removed.
+
+Stable field set:
+
+```
+dispatch: {
+  node_id:            string,           // node identifier
+  role:               string,           // role token (e.g. 'code-reviewer')
+  model:              string|null,      // plan-tier ('opus'|'sonnet') or null
+  working_dir:        string|undefined, // active worktree path (null until #444 P3)
+  declared_write_set: string,           // RAW write-set cell (byte-fidelity)
+  evidence_file:      string,           // '.cache/<node-id>.md'
+  nonce:              string|null,      // per-open binding nonce (barrier-base SHA prefix)
+  required_tokens:    string[],         // from ROLE_TOKEN_REGISTRY (or deriveRequiredTokens)
+  forge_rider:        string|null,      // null until a concrete rider is supplied
+  guards:             string[],         // computed by deriveGuards (see below)
+  goal_line?:         string,           // optional; key absent when no goal_line was supplied
+}
+```
+
+**`deriveGuards(nodeInfo)`** computes the `guards[]` array deterministically from the node's role and declared write set. Guard vocabulary (stable order):
+
+- `'read-only'` — GATE_ROLES: `code-reviewer`, `security-reviewer`, `adversarial-verifier`, `main-session-gate`.
+- `'RED-fixture-in-$TMPDIR'` — `tdd-guide` role (#424: RED fixtures must not be written to the worktree).
+- `'sync:editions'` — write set contains a GENERATED_AGGREGATORS sibling (any of canonical + codex + forge ports); anchor-gated on `edition-sync.js` availability (inert when absent).
+
+### `record-evidence --verify` (issue #444 / D-444-01 §4)
+
+New READ-ONLY mode of the `record-evidence` subcommand. Verifies on-disk `.cache/<node-id>.md` without stdin transit — enables proactive pre-close evidence validation with no side effects.
+
+**CLI:** `node kaola-workflow-adaptive-node.js record-evidence --project P --node-id N --verify`
+
+**Returns (JSON):**
+
+- `{ result: 'ok', nodeId, role, evidence_file }` — evidence present, binding header valid, all role tokens found.
+- `{ result: 'refuse', reason: 'evidence_absent', nodeId, role, evidence_file }` — `.cache/<node-id>.md` does not exist.
+- `{ result: 'refuse', reason: 'evidence_stale'|'evidence_unbound'|'evidence_shape_failed', nodeId, role, missingTokenClass, evidence_file, expected, detail }` — same reason vocabulary as the close gate (#392).
+
+`--verify` uses `checkEvidenceShape` (the same checker the `close-node` / `close-and-open-next` gate uses), so the two cannot drift. `--verify` writes nothing. `--stdin` and `--verify` are mutually exclusive.
+
 ## Configuration
 
 Configuration files control workflow behavior and issue sorting.

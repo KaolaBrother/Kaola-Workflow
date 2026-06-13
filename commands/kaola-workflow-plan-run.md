@@ -476,6 +476,8 @@ member whose evidence is absent (baselines idempotent); a member with present ev
    - NEVER modify the `evidence-binding:` header line — it is set by the framework at open time; editing it breaks the barrier binding.
    - Append any additional findings or notes AFTER the required tokens (the gate checks for token PRESENCE; trailing prose is allowed).
 
+   **Script-emitted `dispatch` descriptor (#444):** The `open-next` (and `open-ready`, `close-and-open-next`) response now includes a script-emitted `dispatch` sub-object within the `opened` payload. Pass this `dispatch` object verbatim to the role subagent — it contains: `node_id`, `role`, `model`, `working_dir`, `declared_write_set`, `evidence_file`, `nonce`, `required_tokens`, `forge_rider`, `guards`. The `nonce` from `dispatch.nonce` is still the evidence-binding token to pass to the role; the `dispatch` object supersedes per-field manual assembly.
+
    **Special case — `role: finalize` sink:** `finalize` is the mandatory DAG sink, not a
    dispatchable subagent role. It is expected that
    `scripts/kaola-workflow-resolve-agent-model.js finalize` returns an empty model. When the opened

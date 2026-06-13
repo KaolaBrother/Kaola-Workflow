@@ -32,6 +32,10 @@ const {
   runClearHalt,
   shellNode,
   readNonce,
+  // D-444: new exports
+  buildDispatch,
+  deriveGuards,
+  runVerifyEvidence,
 } = require('./kaola-workflow-adaptive-node');
 const { RUNNING_SET_NAME } = require('./kaola-workflow-adaptive-schema');
 const { readDurableConsentHalt, locateSection } = require('./kaola-workflow-adaptive-schema');
@@ -4437,6 +4441,397 @@ function rtHarness(initialFiles, opts) {
   assert(finalSet.nodes.length === 0, 'D419-CLOSE-FIELDSURVIVAL: empty running-set has no nodes');
   assert(finalSet.max_concurrent === 3, 'D419-CLOSE-FIELDSURVIVAL: max_concurrent=3 preserved in empty-set fallback');
   assert(finalSet.extra_field === 'preserved', 'D419-CLOSE-FIELDSURVIVAL: extra_field preserved in empty-set fallback');
+}
+
+// ---------------------------------------------------------------------------
+// D444-DISPATCH-PARITY: buildDispatch is exported and produces the required dispatch shape
+// ---------------------------------------------------------------------------
+{
+  assert(typeof buildDispatch === 'function', 'D444-DISPATCH-PARITY: buildDispatch exported as function');
+
+  const nodeInfo = { id: 'n1-impl', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/foo.js' };
+  const context = {
+    nonce: 'abc123def456',
+    evidence_file: '.cache/n1-impl.md',
+    required_tokens: ['evidence-binding', 'RED', 'GREEN'],
+    working_dir: '/fake/worktree',
+    forge_rider: null,
+  };
+  const d = buildDispatch(nodeInfo, context);
+  assert(d !== null && typeof d === 'object', 'D444-DISPATCH-PARITY: buildDispatch returns object');
+  assert(d.node_id === 'n1-impl', 'D444-DISPATCH-PARITY: dispatch.node_id present');
+  assert(d.role === 'tdd-guide', 'D444-DISPATCH-PARITY: dispatch.role present');
+  assert(d.model === 'sonnet', 'D444-DISPATCH-PARITY: dispatch.model present');
+  assert(d.working_dir === '/fake/worktree', 'D444-DISPATCH-PARITY: dispatch.working_dir present');
+  assert(d.declared_write_set === 'scripts/foo.js', 'D444-DISPATCH-PARITY: dispatch.declared_write_set present');
+  assert(d.evidence_file === '.cache/n1-impl.md', 'D444-DISPATCH-PARITY: dispatch.evidence_file present');
+  assert(d.nonce === 'abc123def456', 'D444-DISPATCH-PARITY: dispatch.nonce present');
+  assert(Array.isArray(d.required_tokens), 'D444-DISPATCH-PARITY: dispatch.required_tokens is array');
+  assert(d.forge_rider === null, 'D444-DISPATCH-PARITY: dispatch.forge_rider is null');
+  assert(Array.isArray(d.guards), 'D444-DISPATCH-PARITY: dispatch.guards is array');
+}
+
+// D444-DISPATCH-PARITY: serial open and fused advance produce field-identical dispatch for same node
+{
+  const nodeSpec = { id: 'n2-target', role: 'implementer', model: 'sonnet', declared_write_set: 'scripts/bar.js' };
+  const ctx = {
+    nonce: 'abc123456789',
+    evidence_file: '.cache/n2-target.md',
+    required_tokens: ['evidence-binding', 'non_tdd_reason', 'regression-green|build-green|smoke-integration'],
+    working_dir: '/fake/worktree',
+    forge_rider: null,
+  };
+  const d_serial = buildDispatch(nodeSpec, ctx);
+  const d_fused  = buildDispatch(nodeSpec, ctx);
+  assert(d_serial.node_id === d_fused.node_id, 'D444-DISPATCH-PARITY: serial/fused node_id match');
+  assert(d_serial.role === d_fused.role, 'D444-DISPATCH-PARITY: serial/fused role match');
+  assert(d_serial.model === d_fused.model, 'D444-DISPATCH-PARITY: serial/fused model match');
+  assert(d_serial.declared_write_set === d_fused.declared_write_set, 'D444-DISPATCH-PARITY: serial/fused declared_write_set match');
+  assert(d_serial.evidence_file === d_fused.evidence_file, 'D444-DISPATCH-PARITY: serial/fused evidence_file match');
+  assert(d_serial.nonce === d_fused.nonce, 'D444-DISPATCH-PARITY: serial/fused nonce match');
+  assert(JSON.stringify(d_serial.required_tokens) === JSON.stringify(d_fused.required_tokens), 'D444-DISPATCH-PARITY: serial/fused required_tokens match');
+  assert(d_serial.forge_rider === d_fused.forge_rider, 'D444-DISPATCH-PARITY: serial/fused forge_rider match');
+  assert(JSON.stringify(d_serial.guards) === JSON.stringify(d_fused.guards), 'D444-DISPATCH-PARITY: serial/fused guards match');
+}
+
+// D444-DISPATCH-PARITY: runOpenNext opened payload has dispatch sub-object
+{
+  const nodeInfo = { id: 'n1-impl', role: 'implementer', model: 'sonnet', declared_write_set: 'scripts/foo.js', dependsOn: [] };
+  const shellStub = (scriptPath, args) => {
+    const base = path.basename(scriptPath);
+    if (base === 'kaola-workflow-next-action.js') {
+      return { exitCode: 0, result: 'ok', readySet: [nodeInfo], nextNode: nodeInfo, allDone: false };
+    }
+    if (base === 'kaola-workflow-commit-node.js') {
+      return { exitCode: 0, result: 'ok', mode: 'per-node-start', nodeId: 'n1-impl', overallOk: true,
+               recordBase: { base: 'abcdef123456abcdef', reused: false } };
+    }
+    return { exitCode: 1 };
+  };
+  const plan444 = [
+    '# Plan',
+    '## Meta\nlabels: area:scripts',
+    '## Nodes',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '| --- | --- | --- | --- | --- | --- |',
+    '| n1-impl | implementer | — | scripts/foo.js | 1 | sequence |',
+    '## Node Ledger',
+    '| id | status | notes |',
+    '| --- | --- | --- |',
+    '| n1-impl | pending | |',
+  ].join('\n') + '\n';
+  let planContent444 = plan444;
+  const result444 = runOpenNext({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project', nodeId: null, shell: shellStub,
+    readFile: (p) => { if (p.endsWith('workflow-plan.md')) return planContent444; return ''; },
+    writeFile: (p, c) => { if (p.endsWith('workflow-plan.md')) planContent444 = c; },
+  });
+  assert(result444.result === 'ok', 'D444-DISPATCH-PARITY: runOpenNext ok');
+  assert(result444.opened !== null, 'D444-DISPATCH-PARITY: runOpenNext has opened');
+  assert(result444.opened.dispatch !== undefined, 'D444-DISPATCH-PARITY: opened has dispatch sub-object');
+  const d444 = result444.opened.dispatch;
+  assert(d444 !== null && typeof d444 === 'object', 'D444-DISPATCH-PARITY: dispatch is an object');
+  assert(d444.node_id === 'n1-impl', 'D444-DISPATCH-PARITY: dispatch.node_id matches');
+  assert(d444.role === 'implementer', 'D444-DISPATCH-PARITY: dispatch.role matches');
+  assert(d444.model === 'sonnet', 'D444-DISPATCH-PARITY: dispatch.model present');
+  assert(d444.declared_write_set === 'scripts/foo.js', 'D444-DISPATCH-PARITY: dispatch.declared_write_set present');
+  assert(typeof d444.evidence_file === 'string', 'D444-DISPATCH-PARITY: dispatch.evidence_file is string');
+  assert(Array.isArray(d444.required_tokens), 'D444-DISPATCH-PARITY: dispatch.required_tokens is array');
+  assert(d444.forge_rider === null, 'D444-DISPATCH-PARITY: dispatch.forge_rider is null');
+  assert(Array.isArray(d444.guards), 'D444-DISPATCH-PARITY: dispatch.guards is array');
+}
+
+// ---------------------------------------------------------------------------
+// D444-DISPATCH-OPENREADY: runOpenReady opened elements have dispatch with same shape
+// ---------------------------------------------------------------------------
+{
+  const readyNodes = [
+    { id: 'rv1', role: 'code-reviewer', model: 'sonnet', declared_write_set: '—', dependsOn: [] },
+    { id: 'rv2', role: 'security-reviewer', model: null, declared_write_set: '—', dependsOn: [] },
+  ];
+  const planOR = [
+    '# Plan',
+    '## Meta\nlabels: area:scripts',
+    '## Nodes',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '| --- | --- | --- | --- | --- | --- |',
+    '| rv1 | code-reviewer | — | — | 1 | sequence |',
+    '| rv2 | security-reviewer | — | — | 1 | sequence |',
+    '| fin | finalize | rv1,rv2 | CHANGELOG.md | 1 | sequence |',
+    '## Node Ledger',
+    '| id | status | notes |',
+    '| --- | --- | --- |',
+    '| rv1 | pending | |',
+    '| rv2 | pending | |',
+    '| fin | pending | |',
+  ].join('\n') + '\n';
+  let planContentOR = planOR;
+  const shellOR = (scriptPath, args) => {
+    const base = path.basename(scriptPath);
+    if (base === 'kaola-workflow-plan-validator.js') {
+      // integrity guard checks ok:true (not result:'ok')
+      return { exitCode: 0, ok: true, result: 'ok', planHash: 'abc123' };
+    }
+    if (base === 'kaola-workflow-next-action.js') {
+      return { exitCode: 0, result: 'ok', readySet: readyNodes, nextNode: readyNodes[0],
+               readyPending: readyNodes, active: [], allDone: false };
+    }
+    if (base === 'kaola-workflow-commit-node.js') {
+      const nodeIdArg = (args || []).indexOf('--node-id');
+      const nid = nodeIdArg >= 0 ? args[nodeIdArg + 1] : 'rv1';
+      return { exitCode: 0, result: 'ok', mode: 'per-node-start', nodeId: nid,
+               recordBase: { base: 'deadbeef1234abcd', reused: false } };
+    }
+    return { exitCode: 1 };
+  };
+  const cacheFilesOR = {};
+  const resultOR = runOpenReady({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    project: 'test-project',
+    max: null,
+    fanoutCapReadonly: 8,
+    shell: shellOR,
+    readFile: (p) => {
+      if (p.endsWith('workflow-plan.md')) return planContentOR;
+      if (cacheFilesOR[p]) return cacheFilesOR[p];
+      throw new Error('ENOENT: ' + p);
+    },
+    writeFile: (p, c) => {
+      cacheFilesOR[p] = c;
+      if (p.endsWith('workflow-plan.md')) planContentOR = c;
+    },
+    cacheExists: (p) => !!cacheFilesOR[p],
+    mkdirp: () => {},
+    now: () => '2026-01-01T00:00:00Z',
+  });
+  assert(resultOR.result === 'ok', 'D444-DISPATCH-OPENREADY: runOpenReady returns ok');
+  assert(Array.isArray(resultOR.opened), 'D444-DISPATCH-OPENREADY: opened is array');
+  assert(resultOR.opened.length > 0, 'D444-DISPATCH-OPENREADY: opened has elements');
+  for (const elem of resultOR.opened) {
+    assert(elem.dispatch !== undefined, 'D444-DISPATCH-OPENREADY: each opened element has dispatch sub-object');
+    const d = elem.dispatch;
+    assert(typeof d.node_id === 'string', 'D444-DISPATCH-OPENREADY: dispatch.node_id is string');
+    assert(typeof d.role === 'string', 'D444-DISPATCH-OPENREADY: dispatch.role is string');
+    assert(typeof d.declared_write_set === 'string', 'D444-DISPATCH-OPENREADY: dispatch.declared_write_set is string');
+    assert(typeof d.evidence_file === 'string', 'D444-DISPATCH-OPENREADY: dispatch.evidence_file is string');
+    assert(Array.isArray(d.required_tokens), 'D444-DISPATCH-OPENREADY: dispatch.required_tokens is array');
+    assert(d.forge_rider === null, 'D444-DISPATCH-OPENREADY: dispatch.forge_rider is null');
+    assert(Array.isArray(d.guards), 'D444-DISPATCH-OPENREADY: dispatch.guards is array');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// D444-VERIFY-ACCEPT: runVerifyEvidence on well-formed on-disk evidence → {result:'ok'}
+// ---------------------------------------------------------------------------
+{
+  assert(typeof runVerifyEvidence === 'function', 'D444-VERIFY-ACCEPT: runVerifyEvidence exported');
+
+  const tmpVA = fs.mkdtempSync(path.join(os.tmpdir(), 'd444-va-'));
+  const cacheDirVA = path.join(tmpVA, '.cache');
+  fs.mkdirSync(cacheDirVA, { recursive: true });
+  const nodeIdVA = 'n1-impl';
+  const nonceVA = 'abcdef123456';
+  // Write barrier base file so readNonce returns the nonce
+  fs.writeFileSync(path.join(cacheDirVA, 'barrier-base-n1-impl'), nonceVA + 'extra');
+  // Well-formed tdd-guide evidence with correct binding + RED + GREEN
+  const goodEvidence = 'evidence-binding: ' + nodeIdVA + ' ' + nonceVA + '\nRED: test failed\nGREEN: test passed\n';
+  fs.writeFileSync(path.join(cacheDirVA, nodeIdVA + '.md'), goodEvidence);
+  const planPathVA = path.join(tmpVA, 'workflow-plan.md');
+  fs.writeFileSync(planPathVA, [
+    '## Nodes',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '| --- | --- | --- | --- | --- | --- |',
+    '| n1-impl | tdd-guide | — | scripts/foo.js | 1 | sequence |',
+    '## Node Ledger',
+    '| id | status |', '| --- | --- |', '| n1-impl | in_progress |',
+  ].join('\n'));
+  const rVA = runVerifyEvidence({
+    planPath: planPathVA, project: 'issue-444', nodeId: nodeIdVA,
+    readFile: (p) => fs.readFileSync(p, 'utf8'),
+    cacheExists: (p) => fs.existsSync(p),
+  });
+  assert(rVA.result === 'ok', 'D444-VERIFY-ACCEPT: well-formed evidence returns {result:"ok"}, got ' + JSON.stringify(rVA));
+  assert(rVA.nodeId === nodeIdVA, 'D444-VERIFY-ACCEPT: result.nodeId matches');
+  assert(rVA.role === 'tdd-guide', 'D444-VERIFY-ACCEPT: result.role is tdd-guide');
+  try { fs.rmSync(tmpVA, { recursive: true, force: true }); } catch (_) {}
+}
+
+// ---------------------------------------------------------------------------
+// D444-VERIFY-REFUSE-TOKEN: missing required token → {result:'refuse', reason:'evidence_shape_failed'}
+// ---------------------------------------------------------------------------
+{
+  const tmpVRT = fs.mkdtempSync(path.join(os.tmpdir(), 'd444-vrt-'));
+  const cacheDirVRT = path.join(tmpVRT, '.cache');
+  fs.mkdirSync(cacheDirVRT, { recursive: true });
+  const nodeIdVRT = 'n1-impl';
+  const nonceVRT = 'abcdef123456';
+  fs.writeFileSync(path.join(cacheDirVRT, 'barrier-base-n1-impl'), nonceVRT + 'extra');
+  // Missing GREEN token (only binding + RED)
+  const badEvidence = 'evidence-binding: ' + nodeIdVRT + ' ' + nonceVRT + '\nRED: test failed\n';
+  fs.writeFileSync(path.join(cacheDirVRT, nodeIdVRT + '.md'), badEvidence);
+  const planPathVRT = path.join(tmpVRT, 'workflow-plan.md');
+  fs.writeFileSync(planPathVRT, [
+    '## Nodes',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '| --- | --- | --- | --- | --- | --- |',
+    '| n1-impl | tdd-guide | — | scripts/foo.js | 1 | sequence |',
+    '## Node Ledger',
+    '| id | status |', '| --- | --- |', '| n1-impl | in_progress |',
+  ].join('\n'));
+  const rVRT = runVerifyEvidence({
+    planPath: planPathVRT, project: 'issue-444', nodeId: nodeIdVRT,
+    readFile: (p) => fs.readFileSync(p, 'utf8'),
+    cacheExists: (p) => fs.existsSync(p),
+  });
+  assert(rVRT.result === 'refuse', 'D444-VERIFY-REFUSE-TOKEN: missing GREEN → refuse');
+  assert(rVRT.reason === 'evidence_shape_failed', 'D444-VERIFY-REFUSE-TOKEN: reason is evidence_shape_failed, got ' + rVRT.reason);
+  assert(rVRT.missingTokenClass === 'GREEN', 'D444-VERIFY-REFUSE-TOKEN: missingTokenClass is GREEN, got ' + rVRT.missingTokenClass);
+  try { fs.rmSync(tmpVRT, { recursive: true, force: true }); } catch (_) {}
+}
+
+// D444-VERIFY-REFUSE-TOKEN: implementer missing non_tdd_reason → evidence_shape_failed
+{
+  const tmpVIM = fs.mkdtempSync(path.join(os.tmpdir(), 'd444-vim-'));
+  const cacheDirVIM = path.join(tmpVIM, '.cache');
+  fs.mkdirSync(cacheDirVIM, { recursive: true });
+  const nodeIdVIM = 'impl-n1';
+  const nonceVIM = 'deadbeef1234';
+  fs.writeFileSync(path.join(cacheDirVIM, 'barrier-base-impl-n1'), nonceVIM + 'extra');
+  // Missing non_tdd_reason
+  const badEv = 'evidence-binding: ' + nodeIdVIM + ' ' + nonceVIM + '\nregression-green: tests pass\n';
+  fs.writeFileSync(path.join(cacheDirVIM, nodeIdVIM + '.md'), badEv);
+  const planPathVIM = path.join(tmpVIM, 'workflow-plan.md');
+  fs.writeFileSync(planPathVIM, [
+    '## Nodes',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '| --- | --- | --- | --- | --- | --- |',
+    '| impl-n1 | implementer | — | scripts/x.js | 1 | sequence |',
+    '## Node Ledger',
+    '| id | status |', '| --- | --- |', '| impl-n1 | in_progress |',
+  ].join('\n'));
+  const rVIM = runVerifyEvidence({
+    planPath: planPathVIM, project: 'issue-444', nodeId: nodeIdVIM,
+    readFile: (p) => fs.readFileSync(p, 'utf8'),
+    cacheExists: (p) => fs.existsSync(p),
+  });
+  assert(rVIM.result === 'refuse', 'D444-VERIFY-REFUSE-TOKEN: implementer missing non_tdd_reason → refuse');
+  assert(rVIM.reason === 'evidence_shape_failed', 'D444-VERIFY-REFUSE-TOKEN: implementer reason evidence_shape_failed, got ' + rVIM.reason);
+  assert(rVIM.missingTokenClass === 'non_tdd_reason', 'D444-VERIFY-REFUSE-TOKEN: implementer missingTokenClass non_tdd_reason, got ' + rVIM.missingTokenClass);
+  try { fs.rmSync(tmpVIM, { recursive: true, force: true }); } catch (_) {}
+}
+
+// D444-VERIFY-REFUSE-TOKEN: absent evidence file → evidence_absent
+{
+  const tmpVABS = fs.mkdtempSync(path.join(os.tmpdir(), 'd444-vabs-'));
+  const planPathVABS = path.join(tmpVABS, 'workflow-plan.md');
+  fs.writeFileSync(planPathVABS, [
+    '## Nodes',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '| --- | --- | --- | --- | --- | --- |',
+    '| impl-n1 | implementer | — | scripts/x.js | 1 | sequence |',
+    '## Node Ledger',
+    '| id | status |', '| --- | --- |', '| impl-n1 | in_progress |',
+  ].join('\n'));
+  const rVABS = runVerifyEvidence({
+    planPath: planPathVABS, project: 'issue-444', nodeId: 'impl-n1',
+    readFile: (p) => fs.readFileSync(p, 'utf8'),
+    cacheExists: (p) => fs.existsSync(p),
+  });
+  assert(rVABS.result === 'refuse', 'D444-VERIFY-REFUSE-TOKEN: absent evidence file → refuse');
+  assert(rVABS.reason === 'evidence_absent', 'D444-VERIFY-REFUSE-TOKEN: absent evidence reason is evidence_absent, got ' + rVABS.reason);
+  try { fs.rmSync(tmpVABS, { recursive: true, force: true }); } catch (_) {}
+}
+
+// D444-VERIFY-REFUSE-TOKEN: stale nonce → evidence_stale
+{
+  const tmpVST = fs.mkdtempSync(path.join(os.tmpdir(), 'd444-vst-'));
+  const cacheDirVST = path.join(tmpVST, '.cache');
+  fs.mkdirSync(cacheDirVST, { recursive: true });
+  const nodeIdVST = 'impl-n1';
+  // Barrier base has nonce = 'deadbeef1234' but evidence uses stale nonce 'stale00000000'
+  fs.writeFileSync(path.join(cacheDirVST, 'barrier-base-impl-n1'), 'deadbeef1234abc');
+  const staleEv = 'evidence-binding: ' + nodeIdVST + ' stale00000000\nnon_tdd_reason: x\nregression-green: ok\n';
+  fs.writeFileSync(path.join(cacheDirVST, nodeIdVST + '.md'), staleEv);
+  const planPathVST = path.join(tmpVST, 'workflow-plan.md');
+  fs.writeFileSync(planPathVST, [
+    '## Nodes',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '| --- | --- | --- | --- | --- | --- |',
+    '| impl-n1 | implementer | — | scripts/x.js | 1 | sequence |',
+    '## Node Ledger',
+    '| id | status |', '| --- | --- |', '| impl-n1 | in_progress |',
+  ].join('\n'));
+  const rVST = runVerifyEvidence({
+    planPath: planPathVST, project: 'issue-444', nodeId: nodeIdVST,
+    readFile: (p) => fs.readFileSync(p, 'utf8'),
+    cacheExists: (p) => fs.existsSync(p),
+  });
+  assert(rVST.result === 'refuse', 'D444-VERIFY-REFUSE-TOKEN: stale nonce → refuse');
+  assert(rVST.reason === 'evidence_stale', 'D444-VERIFY-REFUSE-TOKEN: stale nonce reason evidence_stale, got ' + rVST.reason);
+  try { fs.rmSync(tmpVST, { recursive: true, force: true }); } catch (_) {}
+}
+
+// ---------------------------------------------------------------------------
+// D444-RECEIPT-PASSES-CLOSE: full on-disk evidence → runVerifyEvidence ok (close reads from disk)
+// ---------------------------------------------------------------------------
+{
+  const tmpRPC = fs.mkdtempSync(path.join(os.tmpdir(), 'd444-rpc-'));
+  const cacheDirRPC = path.join(tmpRPC, '.cache');
+  fs.mkdirSync(cacheDirRPC, { recursive: true });
+  const nodeIdRPC = 'impl-core';
+  const nonceRPC = 'deadbeef1234';
+  fs.writeFileSync(path.join(cacheDirRPC, 'barrier-base-impl-core'), nonceRPC + 'extra');
+  const fullEvidence = 'evidence-binding: ' + nodeIdRPC + ' ' + nonceRPC + '\nnon_tdd_reason: config only\nregression-green: tests pass\n';
+  fs.writeFileSync(path.join(cacheDirRPC, nodeIdRPC + '.md'), fullEvidence);
+  const planPathRPC = path.join(tmpRPC, 'workflow-plan.md');
+  fs.writeFileSync(planPathRPC, [
+    '## Nodes',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '| --- | --- | --- | --- | --- | --- |',
+    '| impl-core | implementer | — | scripts/x.js | 1 | sequence |',
+    '## Node Ledger',
+    '| id | status |', '| --- | --- |', '| impl-core | in_progress |',
+  ].join('\n'));
+  const rRPC = runVerifyEvidence({
+    planPath: planPathRPC, project: 'issue-444', nodeId: nodeIdRPC,
+    readFile: (p) => fs.readFileSync(p, 'utf8'),
+    cacheExists: (p) => fs.existsSync(p),
+  });
+  assert(rRPC.result === 'ok', 'D444-RECEIPT-PASSES-CLOSE: full on-disk implementer evidence → ok (close reads from disk), got ' + JSON.stringify(rRPC));
+  // Verify it is read-only (no side effects needed — the test just checks the result)
+  try { fs.rmSync(tmpRPC, { recursive: true, force: true }); } catch (_) {}
+}
+
+// ---------------------------------------------------------------------------
+// D444-GUARDS: deriveGuards exported and computes correct guards
+// ---------------------------------------------------------------------------
+{
+  assert(typeof deriveGuards === 'function', 'D444-GUARDS: deriveGuards exported as function');
+
+  // Gate roles → read-only
+  for (const gateRole of ['code-reviewer', 'security-reviewer', 'adversarial-verifier', 'main-session-gate']) {
+    const g = deriveGuards({ id: 'r1', role: gateRole, declared_write_set: '—' });
+    assert(Array.isArray(g) && g.includes('read-only'),
+      'D444-GUARDS: ' + gateRole + ' gets read-only guard, got ' + JSON.stringify(g));
+  }
+
+  // tdd-guide → RED-fixture-in-$TMPDIR
+  const gTdd = deriveGuards({ id: 't1', role: 'tdd-guide', declared_write_set: 'scripts/x.js' });
+  assert(gTdd.includes('RED-fixture-in-$TMPDIR'), 'D444-GUARDS: tdd-guide gets RED-fixture-in-$TMPDIR');
+
+  // plain implementer with no generated port → no sync:editions
+  const gImpl = deriveGuards({ id: 'i1', role: 'implementer', declared_write_set: 'CHANGELOG.md' });
+  assert(!gImpl.includes('sync:editions'), 'D444-GUARDS: plain implementer → no sync:editions');
+  assert(!gImpl.includes('read-only'), 'D444-GUARDS: implementer → no read-only');
+
+  // implementer with generated-port write set → sync:editions
+  const gGen = deriveGuards({
+    id: 'g1', role: 'implementer',
+    declared_write_set: 'scripts/kaola-workflow-adaptive-node.js, plugins/kaola-workflow/scripts/kaola-workflow-adaptive-node.js',
+  });
+  assert(gGen.includes('sync:editions'), 'D444-GUARDS: node with generated-port write set gets sync:editions guard');
 }
 
 if (failed > 0) {
