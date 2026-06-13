@@ -36,6 +36,9 @@ const {
   buildDispatch,
   deriveGuards,
   runVerifyEvidence,
+  // #434: repair primitives
+  runRevertOverflow,
+  runRepairNode,
 } = require('./kaola-workflow-adaptive-node');
 const { RUNNING_SET_NAME } = require('./kaola-workflow-adaptive-schema');
 const { readDurableConsentHalt, locateSection } = require('./kaola-workflow-adaptive-schema');
@@ -5133,6 +5136,207 @@ function rtHarness(initialFiles, opts) {
     assert(!rs || !rs.lane_group, 'D437-MUTATION-GUARD-NOT-VACUOUS: no lane_group flag-OFF — the group path is guarded, not vacuous');
     cleanup(repoRoot);
   }
+}
+
+// ---------------------------------------------------------------------------
+// #434 Fixture (a) — revert-overflow: runRevertOverflow clears outOfAllow paths.
+// RED: fails because runRevertOverflow is not yet exported.
+// ---------------------------------------------------------------------------
+{
+  const planNodes = [
+    '| impl | implementer | — | scripts/a.js | 1 | sequence |',
+    '| review | code-reviewer | impl | — | 1 | sequence |',
+    '| finalize | finalize | review | — | 1 | sequence |',
+  ];
+  let planContent = makePlan([
+    '| impl | in_progress | |',
+    '| review | pending | |',
+    '| finalize | pending | |',
+  ], planNodes);
+
+  // Barrier check: impl overflowed — wrote scripts/b.js (not in write set).
+  // Fake a barrier result: pass on second call (after revert), fail on first.
+  let barrierCallCount = 0;
+  const reverted = [];
+  const provenanceEntries = [];
+
+  const result = runRevertOverflow({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    project: 'test-project',
+    nodeId: 'impl',
+    // Shell seam: --barrier-check returns outOfAllow=['scripts/b.js'] first, then passes.
+    shell: (scriptPath, args) => {
+      const base = path.basename(scriptPath);
+      if (base === 'kaola-workflow-commit-node.js') {
+        // Simulate barrier-check: first call overflowed, second call passes after revert.
+        barrierCallCount++;
+        if (barrierCallCount === 1) {
+          return { exitCode: 1, result: 'refuse', reason: 'write_set_overflow', outOfAllow: ['scripts/b.js'] };
+        }
+        return { exitCode: 0, result: 'pass', outOfAllow: [] };
+      }
+      return { exitCode: 0, result: 'pass', outOfAllow: [] };
+    },
+    // gitCheckout seam: records reverted paths.
+    gitCheckout: (barrierRoot, sha, filePaths) => {
+      for (const p of filePaths) reverted.push(p);
+      return { exitCode: 0 };
+    },
+    readFile: (f) => {
+      if (f.endsWith('workflow-plan.md')) return planContent;
+      if (f.endsWith('barrier-base-impl')) return 'deadbeef1234567890ab\n';
+      throw new Error('ENOENT ' + f);
+    },
+    writeFile: (f, c) => { if (f.endsWith('workflow-plan.md')) planContent = c; },
+    cacheExists: (f) => f.endsWith('barrier-base-impl'),
+    appendLog: (entry) => provenanceEntries.push(entry),
+  });
+
+  assert(result !== undefined, '#434-a RED: runRevertOverflow exported (would be undefined/throw if missing)');
+  assert(result && result.result === 'ok', '#434-a: revert-overflow returns ok, got ' + JSON.stringify(result));
+  assert(reverted.includes('scripts/b.js'), '#434-a: outOfAllow path scripts/b.js reverted');
+  assert(result.revertedPaths && result.revertedPaths.includes('scripts/b.js'),
+    '#434-a: result.revertedPaths includes scripts/b.js, got ' + JSON.stringify(result));
+  assert(result.barrierClearedAfterRevert === true,
+    '#434-a: barrierClearedAfterRevert true after revert, got ' + JSON.stringify(result));
+}
+
+// ---------------------------------------------------------------------------
+// #434 Fixture (b) — repair-node: runRepairNode reopens writer with ORIGINAL barrier-base.
+// RED: fails because runRepairNode is not yet exported.
+// ---------------------------------------------------------------------------
+{
+  const planNodes = [
+    '| impl | implementer | — | scripts/a.js | 1 | sequence |',
+    '| review | code-reviewer | impl | — | 1 | sequence |',
+    '| finalize | finalize | review | — | 1 | sequence |',
+  ];
+  // State: impl complete (writer finished), review in_progress (reviewer found a problem).
+  let planContent = makePlan([
+    '| impl | complete | |',
+    '| review | in_progress | |',
+    '| finalize | pending | |',
+  ], planNodes);
+
+  const removedBaselines = [];
+  const shelled = [];
+
+  const result = runRepairNode({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    project: 'test-project',
+    nodeId: 'impl',   // the writer node to repair
+    shell: (scriptPath, args) => {
+      shelled.push(path.basename(scriptPath));
+      // commit-node is NOT called for repair-node (no re-snapshot)
+      return { exitCode: 0, result: 'ok' };
+    },
+    readFile: (f) => {
+      if (f.endsWith('workflow-plan.md')) return planContent;
+      // barrier-base-impl EXISTS (original baseline to keep)
+      if (f.endsWith('barrier-base-impl')) return 'originalbasehash12\n';
+      throw new Error('ENOENT ' + f);
+    },
+    writeFile: (f, c) => { if (f.endsWith('workflow-plan.md')) planContent = c; },
+    cacheExists: (f) => f.endsWith('barrier-base-impl') || f.endsWith('barrier-base-review'),
+    unlink: (f) => removedBaselines.push(path.basename(f)),
+  });
+
+  assert(result !== undefined, '#434-b RED: runRepairNode exported');
+  assert(result && result.result === 'ok', '#434-b: repair-node returns ok, got ' + JSON.stringify(result));
+  assert(result.baselineReused === true, '#434-b: baselineReused true (original baseline kept, no re-snapshot)');
+  // Writer impl must be in_progress, reviewer reset to pending
+  assert(/\|\s*impl\s*\|\s*in_progress\s*\|/.test(planContent),
+    '#434-b: impl reopened to in_progress');
+  assert(/\|\s*review\s*\|\s*pending\s*\|/.test(planContent),
+    '#434-b: review gate reset to pending');
+  // Original barrier-base-impl must NOT be removed (it is REUSED, not re-snapshotted)
+  assert(!removedBaselines.includes('barrier-base-impl'),
+    '#434-b: barrier-base-impl NOT removed (original baseline kept), removed=' + JSON.stringify(removedBaselines));
+  // Downstream baselines (review) must be deleted
+  assert(removedBaselines.includes('barrier-base-review') || result.deletedDownstreamBaselines,
+    '#434-b: downstream review baseline removed or tracked in deletedDownstreamBaselines');
+  // commit-node must NOT be shelled (no re-snapshot)
+  assert(!shelled.includes('kaola-workflow-commit-node.js'),
+    '#434-b: commit-node NOT shelled for repair-node (original baseline reused, no re-snapshot)');
+
+  // REFUSE on complete node
+  const planComplete = makePlan([
+    '| impl | complete | |',
+    '| review | complete | |',
+    '| finalize | complete | |',
+  ], planNodes);
+  const refuseResult = runRepairNode({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    project: 'test-project',
+    nodeId: 'impl',
+    shell: () => ({ exitCode: 0, result: 'ok' }),
+    readFile: (f) => { if (f.endsWith('workflow-plan.md')) return planComplete; throw new Error('ENOENT ' + f); },
+    writeFile: () => { throw new Error('must not write on refusal'); },
+    cacheExists: () => false,
+    unlink: () => {},
+  });
+  assert(refuseResult && refuseResult.result === 'refuse',
+    '#434-b: repair-node refuses on a complete node (no writer+reviewer in_progress pair), got ' + JSON.stringify(refuseResult));
+}
+
+// ---------------------------------------------------------------------------
+// #434 Fixture (c) — requires_redispatch: orient emits requires_redispatch when
+// an in_progress node has absent/incomplete evidence.
+// RED: fails because orient does not yet emit requires_redispatch.
+// ---------------------------------------------------------------------------
+{
+  const planNodes = [
+    '| impl | implementer | — | scripts/a.js | 1 | sequence |',
+    '| review | code-reviewer | impl | — | 1 | sequence |',
+    '| finalize | finalize | review | — | 1 | sequence |',
+  ];
+  const planContent = makePlan([
+    '| impl | in_progress | |',
+    '| review | pending | |',
+    '| finalize | pending | |',
+  ], planNodes);
+
+  // Case 1: evidence file ABSENT → requires_redispatch
+  const orientAbsent = runOrient({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project',
+    shell: (sp, args) => {
+      if (args && args.includes('--resume-check')) return { exitCode: 0, result: 'ok', resumable: true };
+      if (args && args.includes('--json') && !args.includes('--resume-check')) return { exitCode: 0, result: 'ok', readySet: [], allDone: false, readyPending: [] };
+      return { exitCode: 0, result: 'ok' };
+    },
+    readFile: (f) => {
+      if (f.endsWith('workflow-plan.md')) return planContent;
+      if (f.endsWith('workflow-state.md')) return makeState();
+      throw new Error('ENOENT ' + f);
+    },
+    cacheExists: (f) => false, // evidence absent
+  });
+  assert(orientAbsent.result === 'ok', '#434-c: orient ok with absent evidence, got ' + JSON.stringify(orientAbsent));
+  assert(orientAbsent.requires_redispatch === true,
+    '#434-c: orient emits requires_redispatch=true when evidence absent, got ' + JSON.stringify(orientAbsent));
+
+  // Case 2: evidence file PRESENT with evidence-binding token → NO requires_redispatch
+  const orientPresent = runOrient({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project',
+    shell: (sp, args) => {
+      if (args && args.includes('--resume-check')) return { exitCode: 0, result: 'ok', resumable: true };
+      return { exitCode: 0, result: 'ok', readySet: [], allDone: false, readyPending: [] };
+    },
+    readFile: (f) => {
+      if (f.endsWith('workflow-plan.md')) return planContent;
+      if (f.endsWith('workflow-state.md')) return makeState();
+      if (f.endsWith('impl.md')) return 'evidence-binding: impl deadbeef1234\nbuild-green: yes\n';
+      throw new Error('ENOENT ' + f);
+    },
+    cacheExists: (f) => f.endsWith('impl.md'), // evidence present
+  });
+  assert(orientPresent.result === 'ok', '#434-c: orient ok with present evidence');
+  assert(!orientPresent.requires_redispatch,
+    '#434-c: orient does NOT set requires_redispatch when evidence present, got ' + JSON.stringify(orientPresent));
 }
 
 if (failed > 0) {

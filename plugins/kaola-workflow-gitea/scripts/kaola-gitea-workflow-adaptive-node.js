@@ -1159,6 +1159,25 @@ function runOrient(opts) {
   const delegable = startReadyPending.filter(n => n.role !== 'main-session-gate');
   const enterBatch = !allDone && inProgressNodes.length === 0 && delegable.length >= 2;
 
+  // #434 (D-434-01): requires_redispatch — an in_progress node whose evidence file is absent
+  // or does not contain the `evidence-binding` token was either never dispatched (crash before
+  // dispatch) or ran inline without proper attestation. Surface this so the orchestrator re-
+  // dispatches the role agent with the SAME nonce rather than treating it as normally in-flight.
+  let requires_redispatch = false;
+  if (inProgressNode) {
+    const evPath = path.join(path.dirname(planPath), '.cache', inProgressNode + '.md');
+    const evPresent = cacheExists ? cacheExists(evPath) : (() => { try { readFile(evPath); return true; } catch (_) { return false; } })();
+    if (!evPresent) {
+      requires_redispatch = true;
+    } else {
+      let evContent = '';
+      try { evContent = readFile(evPath); } catch (_) { evContent = ''; }
+      if (!evContent || !evContent.includes('evidence-binding')) {
+        requires_redispatch = true;
+      }
+    }
+  }
+
   return {
     result: 'ok',
     resumeCheck,
@@ -1176,6 +1195,8 @@ function runOrient(opts) {
     runningSet,
     allDone,
     enterBatch,
+    // #434: present only when an in_progress node needs re-dispatch (absent or incomplete evidence).
+    ...(requires_redispatch ? { requires_redispatch: true } : {}),
     frontier: enterBatch
       ? delegable.map(n => ({ id: n.id, role: n.role, model: n.model, declared_write_set: n.declared_write_set }))
       : [],
@@ -2213,6 +2234,311 @@ function runReopenNode(opts) {
     evidence_file: reopenSeed.evidence_file,
     required_tokens: reopenSeed.required_tokens,
     taskTransitions: reopenTransitions,
+    taskMirror: refreshTaskMirror(project, shell),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// runRevertOverflow (#434 / D-434-01) — reverts outOfAllow (overflow) writes to their
+// baseline state so the subsequent barrier-check passes.
+//
+// Steps:
+//   (1) Shell commit-node --barrier-check --json (per-node) to read the current outOfAllow list.
+//   (2) For each outOfAllow path, restore the baseline state via gitCheckout seam.
+//   (3) Append a provenance log entry recording the revert.
+//   (4) Re-run barrier-check to confirm all overflows cleared.
+//
+// gitCheckout seam: opts.gitCheckout(barrierRoot, baseSha, filePaths) — injectable for tests.
+// Falls back to real execFileSync when not provided.
+//
+// @param {object} opts
+//   planPath   {string}   path to workflow-plan.md
+//   project    {string}   project name
+//   nodeId     {string}   the in_progress node whose barrier overflowed
+//   shell      {function} (scriptPath, args[]) → {exitCode,...}  (commit-node)
+//   gitCheckout {function} (barrierRoot, sha, filePaths) → {exitCode}  (injectable seam)
+//   readFile   {function} (path) → string
+//   writeFile  {function} (path, content) → void
+//   cacheExists {function} (path) → boolean
+//   appendLog  {function} (entry) → void  (optional; defaults to appendProvenanceLog)
+// ---------------------------------------------------------------------------
+function runRevertOverflow(opts) {
+  const { planPath, project, nodeId, shell, readFile, writeFile, cacheExists } = opts;
+  const gitCheckoutSeam = opts.gitCheckout || null;
+  const appendLogFn = opts.appendLog || null;
+
+  if (!nodeId) return { result: 'refuse', errors: ['--node-id required for revert-overflow'] };
+
+  // (1) Run per-node barrier-check to get outOfAllow list.
+  const barrierResult = shell(commitNodePath, [planPath, '--node-id', nodeId, '--barrier-check', '--json']);
+  const outOfAllow = (barrierResult && Array.isArray(barrierResult.outOfAllow))
+    ? barrierResult.outOfAllow
+    : [];
+
+  if (!outOfAllow.length) {
+    // Nothing to revert — barrier already passes (or no overflow detected).
+    return { result: 'ok', revertedPaths: [], barrierClearedAfterRevert: true, detail: 'no outOfAllow paths — barrier is already clean' };
+  }
+
+  // (2) Read the barrier-base SHA for this node.
+  const cacheDir = path.join(path.dirname(planPath), '.cache');
+  const baseFile = path.join(cacheDir, 'barrier-base-' + sanitizeNodeId(nodeId));
+  let baseSha = null;
+  try {
+    const baseContent = readFile(baseFile);
+    baseSha = (baseContent || '').trim().split('\n')[0].trim();
+  } catch (_) {
+    return { result: 'refuse', reason: 'barrier_base_missing', nodeId, detail: 'cannot read barrier-base for ' + nodeId + ' — run open-next first' };
+  }
+  if (!baseSha) {
+    return { result: 'refuse', reason: 'barrier_base_empty', nodeId };
+  }
+
+  // Determine the barrier root (directory containing workflow-plan.md's project folder).
+  // The barrier root is the repo root (the git checkout from which paths are relative).
+  const barrierRoot = getRoot();
+
+  // (2) Restore each outOfAllow path to its baseline state.
+  const revertedPaths = [];
+  if (gitCheckoutSeam) {
+    const r = gitCheckoutSeam(barrierRoot, baseSha, outOfAllow);
+    if (r && r.exitCode !== 0) {
+      return { result: 'refuse', reason: 'git_checkout_failed', nodeId, outOfAllow, detail: 'gitCheckout seam returned non-zero' };
+    }
+    revertedPaths.push(...outOfAllow);
+  } else {
+    // Real git checkout path.
+    try {
+      execFileSync('git', ['checkout', baseSha, '--', ...outOfAllow], {
+        cwd: barrierRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      revertedPaths.push(...outOfAllow);
+    } catch (e) {
+      return { result: 'refuse', reason: 'git_checkout_failed', nodeId, outOfAllow, detail: String(e.message || e) };
+    }
+  }
+
+  // (3) Append provenance log entry for the revert.
+  if (typeof appendLogFn === 'function') {
+    appendLogFn({ event: 'revert-overflow', nodeId, revertedPaths, baseSha });
+  } else {
+    appendProvenanceLog(planPath, 'revert-overflow', nodeId, baseSha ? baseSha.slice(0, 12) : null);
+  }
+
+  // (4) Re-run barrier-check to confirm cleared.
+  const barrierAfter = shell(commitNodePath, [planPath, '--node-id', nodeId, '--barrier-check', '--json']);
+  const barrierClearedAfterRevert = !!(barrierAfter && (barrierAfter.result === 'pass' || barrierAfter.exitCode === 0));
+
+  return {
+    result: 'ok',
+    revertedPaths,
+    baseSha: baseSha ? baseSha.slice(0, 12) : null,
+    barrierClearedAfterRevert,
+    barrierAfter,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// runRepairNode (#434 / D-434-01) — plan-repair for an in_progress writer whose
+// reviewer found a blocking issue. Reopens the WRITER node back to in_progress
+// for re-dispatch WITHOUT re-snapshotting the baseline (the critical
+// anti-laundering invariant: the original barrier-base is KEPT so the repair
+// diff is scoped to exactly what changed after the original open).
+//
+// Differs from runReopenNode:
+//   - runReopenNode: node must be COMPLETE; it re-records a FRESH baseline (commit-node --start).
+//   - runRepairNode: writer must be COMPLETE (writer finished, reviewer found a problem);
+//     it KEEPS the ORIGINAL barrier-base and does NOT shell commit-node at all.
+//     Result always carries baselineReused:true (the anti-laundering signal).
+//
+// Steps:
+//   (1) Refuse over a live batch or running set.
+//   (2) Require the writer node to be a COMPLETE ledger row (the reviewer is in_progress).
+//   (3) Reset the post-dominating gate(s) of the writer to pending (same logic as reopen-node).
+//   (4) Delete their stale barrier-base files (downstream baselines; NOT the writer's own).
+//   (5) Transition the writer back to in_progress (pending→in_progress via complete→pending).
+//   (6) Write the updated plan.
+//   (7) Return { result:'ok', baselineReused:true, deletedDownstreamBaselines:[...] }.
+//
+// The original barrier-base-{nodeId} is NEVER removed. commit-node is NEVER shelled.
+// ---------------------------------------------------------------------------
+function runRepairNode(opts) {
+  const { planPath, project, nodeId, shell, readFile, writeFile, cacheExists, unlink } = opts;
+
+  if (!nodeId) return { result: 'refuse', errors: ['--node-id required for repair-node'] };
+
+  // (1) Refuse over a live batch / interrupted top-up.
+  const manifestPath = path.join(path.dirname(planPath), '.cache', 'active-batch.json');
+  const manifestPresent = cacheExists ? cacheExists(manifestPath) : false;
+  if (manifestPresent) {
+    let raw = null;
+    try { raw = readFile(manifestPath); } catch (_) { raw = null; }
+    const m = raw != null ? safeJsonParse(raw) : null;
+    if (m && Array.isArray(m.members)) {
+      const live = m.state && m.state !== 'joined' && m.state !== 'aborted';
+      const opening = m.members.some(x => x.opening);
+      if (live || opening) {
+        return { result: 'refuse', reason: 'active_batch_exists', state: m.state || null, detail: 'reconcile/clear the active batch before a plan-repair reopen' };
+      }
+    }
+  }
+
+  const runningSetPath = path.join(path.dirname(planPath), '.cache', RUNNING_SET_NAME);
+  const runningSet = readRunningSet(runningSetPath, cacheExists, readFile);
+  if (runningSet) {
+    const rsLive = (runningSet.nodes || []).length > 0;
+    const rsOpening = runningSet.state === 'opening' || (runningSet.nodes || []).some(n => n.opening);
+    if (rsLive || rsOpening) {
+      return { result: 'refuse', reason: 'scheduler_active', detail: 'reconcile/close the active running-set fan-out before a plan-repair reopen', runningSet: (runningSet.nodes || []).map(n => n.id) };
+    }
+  }
+
+  let planContent = readFile(planPath);
+  const ledgerStatuses = readLedgerStatuses(planContent);
+  const nodes = parseNodesFromContent(planContent);
+  if (!nodes.length) return { result: 'refuse', reason: 'no_parseable_nodes' };
+  if (!nodes.some(n => n.id === nodeId)) return { result: 'refuse', reason: 'node_not_found', nodeId };
+
+  // (2) Writer node must be COMPLETE — only a finished writer can be repair-reopened.
+  const writerStatus = ledgerStatuses[nodeId];
+  if (writerStatus !== 'complete') {
+    return {
+      result: 'refuse',
+      reason: 'node_not_complete',
+      nodeId,
+      detail: 'repair-node requires the writer node to be complete (a reviewer must have flagged it); current status: ' + writerStatus,
+    };
+  }
+
+  // (2b) Safe-point check: at least one downstream gate-role node must be in_progress.
+  // repair-node is only valid when a reviewer has flagged the writer and is actively in_progress.
+  // When no downstream gate is in_progress, the plan has no active blocker — refuse.
+  const downstreamGateInProgress = nodes.some(n =>
+    GATE_ROLES.has(n.role) &&
+    ledgerStatuses[n.id] === 'in_progress'
+  );
+  if (!downstreamGateInProgress) {
+    return {
+      result: 'refuse',
+      reason: 'no_active_reviewer',
+      nodeId,
+      detail: 'repair-node requires an in_progress downstream gate (reviewer/verifier) that flagged a blocking issue; no such reviewer is currently in_progress',
+    };
+  }
+
+  // (3) Compute post-dominating gate(s) of nodeId (same algorithm as reopen-node).
+  const fwd = new Map(nodes.map(n => [n.id, []]));
+  for (const n of nodes) for (const d of n.dependsOn) if (fwd.has(d)) fwd.get(d).push(n.id);
+  const descendantsOf = start => {
+    const visited = new Set();
+    const q = [start];
+    while (q.length) {
+      const cur = q.shift();
+      if (visited.has(cur)) continue;
+      visited.add(cur);
+      (fwd.get(cur) || []).forEach(c => q.push(c));
+    }
+    visited.delete(start);
+    return visited;
+  };
+  const desc = descendantsOf(nodeId);
+  const sinkId = nodes.find(n => n.shape === 'sink' || (n.id && desc.has(n.id) && !nodes.some(m => descendantsOf(n.id).size > 0 && m.dependsOn && m.dependsOn.includes(n.id))));
+  // Compute the real unique sink (same as reopen-node).
+  let uniqueSink = null;
+  for (const n of nodes) {
+    const d = descendantsOf(n.id);
+    if (d.size === 0) { uniqueSink = n.id; break; }
+  }
+  // Compute nodes through which ALL paths from nodeId to the sink pass (post-dominators).
+  const pathsFromNodeToSink = desc;
+  const gatesReset = [];
+  for (const did of pathsFromNodeToSink) {
+    const dn = nodes.find(n => n.id === did);
+    if (dn && GATE_ROLES.has(dn.role)) {
+      // Check that all paths from nodeId to sink pass through this gate.
+      // A gate post-dominates nodeId iff removing it disconnects all paths from nodeId to sink.
+      // Simple check: all descendants of nodeId either ARE did or have did as an ancestor.
+      const descWithoutGate = new Set();
+      const q2 = [nodeId];
+      const visitedG = new Set([did]);
+      while (q2.length) {
+        const cur = q2.shift();
+        if (visitedG.has(cur)) continue;
+        visitedG.add(cur);
+        (fwd.get(cur) || []).forEach(c => q2.push(c));
+        if (cur !== nodeId) descWithoutGate.add(cur);
+      }
+      // If the sink is not reachable when excluding `did`, it post-dominates.
+      if (uniqueSink && !descWithoutGate.has(uniqueSink)) {
+        gatesReset.push(did);
+      }
+    }
+  }
+
+  // (3b) Fail-closed orphan guard (mirrors reopen-node).
+  const gateSet = new Set(gatesReset);
+  const orphans = Object.keys(ledgerStatuses)
+    .filter(id => ledgerStatuses[id] === 'in_progress' && id !== nodeId && !gateSet.has(id));
+  if (orphans.length) {
+    return {
+      result: 'refuse',
+      reason: 'would_orphan_in_progress',
+      nodeId,
+      inProgress: orphans,
+      detail: 'in_progress row(s) [' + orphans.join(', ') + '] are not post-dominating gates of '
+        + nodeId + ' — repair-node would leave an orphan multi-in_progress ledger',
+    };
+  }
+
+  // (4) Fold gates back to pending.
+  const gatesFolded = [];
+  for (const gid of gatesReset) {
+    const s = spliceLedgerNode(planContent, gid, 'pending', { allowFrom: ['complete', 'in_progress'] });
+    if (s.changed) { planContent = s.content; gatesFolded.push(gid); }
+  }
+
+  // (4b) Delete stale barrier-base files for the DOWNSTREAM gates only.
+  // The writer's own barrier-base-{nodeId} is KEPT (the anti-laundering invariant).
+  const cacheBaseFile = nid => path.join(path.dirname(planPath), '.cache', 'barrier-base-' + String(nid).replace(/[^A-Za-z0-9_-]/g, '_'));
+  const deletedDownstreamBaselines = [];
+  for (const gid of gatesReset) {
+    const bf = cacheBaseFile(gid);
+    const present = cacheExists ? cacheExists(bf) : true;
+    if (present && typeof unlink === 'function') {
+      unlink(bf);
+      deletedDownstreamBaselines.push('barrier-base-' + String(gid).replace(/[^A-Za-z0-9_-]/g, '_'));
+    }
+  }
+
+  // (5) Transition writer: complete→pending→in_progress.
+  const resetWriter = spliceLedgerNode(planContent, nodeId, 'pending', { allowFrom: ['complete'] });
+  if (!resetWriter.changed) {
+    return { result: 'refuse', reason: 'ledger_splice_failed', nodeId, detail: 'could not reset writer to pending' };
+  }
+  planContent = resetWriter.content;
+
+  const reopenWriter = spliceLedgerNode(planContent, nodeId, 'in_progress', { allowFrom: ['pending'] });
+  if (reopenWriter.changed) planContent = reopenWriter.content;
+
+  // (6) Persist the updated plan.
+  writeFile(planPath, planContent);
+
+  // Provenance log entry for the repair.
+  appendProvenanceLog(planPath, 'repair-node', nodeId, null);
+
+  // (7) Return the repair contract — baselineReused:true is the critical anti-laundering signal.
+  return {
+    result: 'ok',
+    repaired: nodeId,
+    gatesReset,
+    gatesFolded,
+    deletedDownstreamBaselines,
+    // The CRITICAL anti-laundering invariant: the original barrier-base is reused, NOT re-snapshotted.
+    baselineReused: true,
+    taskTransitions: [
+      ...gatesFolded.map(g => buildTransition(g, 'pending', 'repair-node')),
+      buildTransition(nodeId, 'in_progress', 'repair-node'),
+    ],
     taskMirror: refreshTaskMirror(project, shell),
   };
 }
@@ -3591,6 +3917,23 @@ function main() {
         readdir: (d) => { try { return fs.readdirSync(d); } catch (_) { return []; } },
       });
     }
+  } else if (subcommand === 'revert-overflow') {
+    if (!nodeId) {
+      result = { result: 'refuse', errors: ['--node-id required for revert-overflow'] };
+    } else {
+      result = runRevertOverflow({
+        planPath, project, nodeId, shell, readFile, writeFile, cacheExists,
+      });
+    }
+  } else if (subcommand === 'repair-node') {
+    if (!nodeId) {
+      result = { result: 'refuse', errors: ['--node-id required for repair-node'] };
+    } else {
+      result = runRepairNode({
+        planPath, project, nodeId, shell, readFile, writeFile, cacheExists,
+        unlink: (f) => { try { fs.unlinkSync(f); } catch (_) {} },
+      });
+    }
   } else {
     result = { result: 'refuse', errors: ['unknown subcommand: ' + subcommand] };
   }
@@ -3637,6 +3980,9 @@ module.exports = {
   runWriteHalt,
   runClearHalt,
   runReopenNode,
+  // #434 (D-434-01): repair primitives.
+  runRevertOverflow,
+  runRepairNode,
   shellNode,
   // #444 (D-444-01): dispatch descriptor builder + guards + verify subcommand.
   buildDispatch,
