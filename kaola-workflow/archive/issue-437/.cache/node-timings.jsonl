@@ -1,0 +1,17 @@
+{"node":"n1-design","event":"opened","ts":"2026-06-13T02:12:07.621Z"}
+{"node":"n1-design","event":"closed","ts":"2026-06-13T02:20:10.176Z"}
+{"node":"n2-validator","event":"opened","ts":"2026-06-13T02:20:10.217Z"}
+{"node":"n2-validator","event":"closed","ts":"2026-06-13T02:41:17.669Z"}
+{"node":"n3-scheduler","event":"opened","ts":"2026-06-13T02:41:17.698Z"}
+{"node":"n3-scheduler","event":"closed","ts":"2026-06-13T03:10:02.978Z"}
+{"node":"n4-batch","event":"opened","ts":"2026-06-13T03:10:03.008Z"}
+{"node":"n4-batch","event":"closed","ts":"2026-06-13T03:26:34.618Z"}
+{"node":"n5-review","event":"opened","ts":"2026-06-13T03:26:34.657Z"}
+{"node":"n5-review","event":"closed","ts":"2026-06-13T03:40:59.514Z"}
+{"node":"n6-security","event":"opened","ts":"2026-06-13T03:40:59.569Z"}
+{"node":"n6-security","event":"closed","ts":"2026-06-13T03:55:32.464Z"}
+{"node":"n7-docs","event":"opened","ts":"2026-06-13T03:55:32.499Z"}
+{"node":"n7-docs","event":"closed","ts":"2026-06-13T04:02:23.483Z"}
+{"node":"n8-finalize","event":"opened","ts":"2026-06-13T04:02:23.515Z"}
+{"node":"n8-finalize","event":"evidence","ts":"2026-06-13T04:02:40.443Z"}
+{"node":"n8-finalize","event":"closed","ts":"2026-06-13T04:02:43.907Z"}
