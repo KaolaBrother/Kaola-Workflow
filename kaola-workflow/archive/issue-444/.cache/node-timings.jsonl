@@ -1,0 +1,11 @@
+{"node":"n1-design-descriptor-contract","event":"opened","ts":"2026-06-13T00:38:02.597Z"}
+{"node":"n1-design-descriptor-contract","event":"closed","ts":"2026-06-13T00:42:42.435Z"}
+{"node":"n2-impl-descriptor-and-verify","event":"opened","ts":"2026-06-13T00:42:42.467Z"}
+{"node":"n2-impl-descriptor-and-verify","event":"closed","ts":"2026-06-13T01:14:17.707Z"}
+{"node":"n3-code-review","event":"opened","ts":"2026-06-13T01:14:17.756Z"}
+{"node":"n3-code-review","event":"closed","ts":"2026-06-13T01:33:08.885Z"}
+{"node":"n4-prose-pass","event":"opened","ts":"2026-06-13T01:33:08.939Z"}
+{"node":"n4-prose-pass","event":"closed","ts":"2026-06-13T01:36:59.895Z"}
+{"node":"finalize","event":"opened","ts":"2026-06-13T01:36:59.929Z"}
+{"node":"finalize","event":"evidence","ts":"2026-06-13T01:38:15.809Z"}
+{"node":"finalize","event":"closed","ts":"2026-06-13T01:38:19.928Z"}

@@ -1,0 +1,36 @@
+{
+  "source_plan_hash": "fa8d36f9a11dc8c8d5d543c685d622e558857054859953d3ef72a3fb7867b34b",
+  "tasks": [
+    {
+      "id": "n1-design-descriptor-contract",
+      "role": "code-architect",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n2-impl-descriptor-and-verify",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n3-code-review",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n4-prose-pass",
+      "role": "doc-updater",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "finalize",
+      "role": "finalize",
+      "status": "completed",
+      "ledger_status": "complete"
+    }
+  ],
+  "last_synced_from_ledger": "2026-06-13T01:38:19.991Z"
+}

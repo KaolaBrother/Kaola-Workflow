@@ -1,0 +1,326 @@
+# Final Validation — issue-444
+
+## walkthrough
+command: node scripts/simulate-workflow-walkthrough.js
+exit: 0
+output:
+testKeepOpenArchiveStamp: PASSED
+testManualArchiveBackstop: PASSED
+testRepairFinalizationRoute: PASSED
+testSinkPrUsesFinalizationSummary: PASSED
+testHookGitDashCCommitGuard: PASSED
+testSubagentDispatchHookExists: PASSED
+testClassifierFastScopeOverlapRed: PASSED
+testClassifierFastScopeDisjointGreen: PASSED
+testClassifierDotPathOverlapRed: PASSED
+testClassifierRootPathProseNoOverlap: PASSED
+testClassifierDotAreaOverlapRed: PASSED
+testClassifierCuratedRootOverlapYellow: PASSED
+testClassifierCuratedRootProseClaimedYellow: PASSED
+testClassifierCuratedRootProseNoOverlapGreen: PASSED
+testClassifierCuratedRootStructuredLowercaseYellow: PASSED
+testClassifierFastScopeSectionIsolationGreen: PASSED
+testClassifierFastScopeFenceCommentRed: PASSED
+testClassifierFastScopeFenceHeadingRed: PASSED
+testClassifierFastScopeFenceMixedMarkerRed: PASSED
+testClassifierFastScopeFenceInFencePathRed: PASSED
+testClassifierFastScopePreSectionUnclosedFenceRed: PASSED
+testClassifierDependsOnGate: PASSED
+testStartupJsonAndHiddenLocalWorktrees: PASSED
+testWorktreeAdaptiveProvisioned: PASSED
+testFinalizeNarrowStagingExcludesForeignArchive: PASSED
+testFinalizeFromLinkedWorktreeCleansMainStagedRoadmapSource: PASSED
+testFinalizeRoadmapCleanupFailureReceipt: PASSED
+testWatchPrRoadmapCleanupWarning: PASSED
+testStaleWorktreeCheck: PASSED
+testStaleWorktreeCleanup: PASSED
+testReadPriorityConfig: PASSED
+testE2EGitHubMergeFullChain: PASSED
+testSinkMergeRefusesLiveFolder: PASSED
+testSinkMergeBlocksUnpushedCommits: PASSED
+testSinkMergeAutoPushesWhenNoUpstream: PASSED
+testSinkMergeOfflineSkipsPublishGuard: PASSED
+testSinkMergeNonDefaultBranchMaster: PASSED
+testSinkMergeReRebasesOnFfRace: PASSED
+testSinkMergeBareRemoteDeleteOrder: PASSED
+testFastE2EMergeFullChain: PASSED
+testE2EGitHubPrFullChain: PASSED
+testParallelIssueIndependence: PASSED
+testClassifierFailClosedOnRemoteError: PASSED
+testClassifierOfflineUnverifiedNoLocalEvidence: PASSED
+testClassifierOfflineVerifiedRoadmapAcquires: PASSED
+testClassifierOfflineVerifiedOwnedFolderRoutes: PASSED
+testClassifierOfflineUnverifiedWithUnrelatedActiveFolder: PASSED
+testStartupExplicitTargetRedRefuses: PASSED
+testClassifierTopLevelIssueFlag: PASSED
+testClaimProjectOwnedFolderFailingRemote: PASSED
+testFinalizeRemovesClaimLabel: PASSED
+testFinalizeNullFolderFallbackReadsArchive: PASSED
+testFinalizeOfflineSkipsLabelInvariant: PASSED
+testWatchPrEmitsClaimLabelReceipt: PASSED
+testAuditAndRepairLabels: PASSED
+testFinalizeClaimLabelFailedTriggersInvariant: PASSED
+testClearAdvisoryClaimDeletesMarkerComment: PASSED
+testClearAdvisoryClaimDoesNotDeleteOtherProjectMarker: PASSED
+testClearAdvisoryClaimOfflineSkipsDelete: PASSED
+testSinkMergeEmitsClosureReceipt: PASSED
+testWatchPrMergedClosureReceipt: PASSED
+testFinalizeOfflineClosureReceiptSkipped: PASSED
+testSinkMergeMockabilityAndReceipt: PASSED
+testSinkMergeCloseFailureWarning: PASSED
+testSinkMergeSkipsArchivedProjectPhantom: PASSED
+testKeepOpenMergeFullChain: PASSED
+testKeepOpenFinalizeFlagAlias: PASSED
+testSinkMergeKeepOpenOnlineMock: PASSED
+testSinkMergeKeepOpenRequiresIssue: PASSED
+testSinkMergeKeepOpenArchivedStateGuard: PASSED
+testClosureAuditKeepOpenExclusion: PASSED
+testKeepOpenInvariantUnit: PASSED
+testSinkPrKeepOpenRefusal: PASSED
+testClosureAuditOfflineRemoteClassesSkipped: PASSED
+testClosureAuditClosedRemoteRoadmapSource: PASSED
+testClosureAuditArchiveClosedDrift: PASSED
+testClosureAuditDedupRoadmapAndArchive: PASSED
+testClosureAuditArchiveOnlyNotProbed: PASSED
+testClosureAuditMirrorListsClosedIssues: PASSED
+testClosureAuditStaleInProgressLabels: PASSED
+testClosureAuditActiveFolderForClosedIssueReportsDirty: PASSED
+testClosureAuditUnarchivedPrFolderMerged: PASSED
+testClosureAuditExecuteRepairsRoadmapAndLabels: PASSED
+testClosureAuditExecuteNeverTouchesActiveFolders: PASSED
+testClosureAuditDryRunNeverCallsRemoveLabel: PASSED
+testClosureAuditStaleLabelsTimeout: PASSED
+testClosureAuditUnresolvedClosedState: PASSED
+testClosureAuditProbeFailureUnresolved: PASSED
+testClosureAuditTimeoutEnvInvalidFallsBack: PASSED
+testClosureAuditTimeoutEnvOverCapFallsBack: PASSED
+testClosureAuditExecuteDetectionTimeoutPropagates: PASSED
+testClosureAuditExecuteLabelRemovalTimeoutBreaks: PASSED
+testClosureAuditExecuteLabelRemovalNonTimeoutFails: PASSED
+testClosureAuditPrFolderTimeout: PASSED
+testProbeTimeoutEnv: PASSED
+testContractValidatorOfflineSkip: PASSED
+testContractValidatorReflowTolerant: PASSED
+testContractValidatorMissingTag: PASSED
+testTagAncestorGuard402: PASSED
+testWatchPrAbandonedClosureInvariantsClean: PASSED
+testClaimReclaimsStatelessOrphanDir: PASSED
+testPatchBranchGuards: PASSED
+testAdaptiveOffStartupRefusal: PASSED
+testAdaptiveOffClaimRefusal: PASSED
+testAdaptiveOffPreservesTwoWay: PASSED
+testAdaptiveOnStartupAcquires: PASSED
+testAdaptiveResumeFromFrozenPlan: PASSED
+testAdaptiveResumeTamperedTypedRefusal: PASSED
+testAdaptiveResumeUnparseableTypedRefusal: PASSED
+testAdaptiveResumeAfterFlipOff: PASSED
+testAdaptiveConsentHaltSurfaces: PASSED
+testAdaptiveCrossSurfaceMutexWalkthrough: PASSED
+testAdaptiveValidatorGovernance: PASSED
+testAdaptiveFanoutGroupScoping: PASSED
+testAdaptiveReadySetDisjointness: PASSED
+testAdaptiveGateBarrierEnforcement: PASSED
+testAdaptivePerInstanceBarrier: PASSED
+testAdaptivePerInstanceBarrierHardening: PASSED
+testBundle424432433ValidatorGates: PASSED
+testBundle424432433NodeSeeding: PASSED
+testAdaptiveResumeReconcilesNextCommand: PASSED
+testAdaptiveDurableConsentHalt: PASSED
+testAdaptiveAuthoringEntryGuard: PASSED
+testAdaptiveTier2Composition: PASSED
+testAdaptiveAuditFixes: PASSED
+testAdaptiveResumeHashDeletedTypedRefusal: PASSED
+testAdaptiveValidatorNodeCap: PASSED
+testAdaptiveCheapWinFixes: PASSED
+testAdaptiveAuditCoverage: PASSED
+testAdaptiveSyncGroupGap: PASSED
+testAdaptiveRegistrationAndForgePortGaps: PASSED
+testAdaptiveFreezeRepairReconcile: PASSED
+testAdaptiveVerdictCheck: PASSED
+testAdaptivePatternLibrary: PASSED
+testAdaptiveSelectComposition: PASSED
+testAdaptiveSelectNaPropagation: PASSED
+testAdaptiveSelectResumeCheck: PASSED
+testAdaptiveSelectSelectorSourceFanoutMember: PASSED
+testAdaptiveHandoffInGrammarReady: PASSED
+testAdaptiveHandoffAskFreezesNotApproval: PASSED
+testAdaptiveHandoffRefuseNoMutation: PASSED
+testAdaptiveHandoffIdempotentReRun: PASSED
+testAdaptiveHandoffFreezeChainTwoSpawns: PASSED
+testFreezeCheckedGovernanceAckStale: PASSED
+testAdaptiveHandoffProjectFlagResolvesRepoRoot: PASSED
+testAdaptiveHandoffDecisionIdConflict: PASSED
+testGitignoreCoversKw: PASSED
+testWorktreeHiddenLocalPath: PASSED
+testLegacyWorktreeCleanupDryRun: PASSED
+testLegacyWorktreeCleanupDirtySkip: PASSED
+testAdaptiveWorktreeProvisionedE2E: PASSED
+testAdaptiveWorktreeMirrorNoManualCopy: PASSED
+testSinkRefusesWorkflowOnlyBranch: PASSED
+testSinkAllowsMixedBranch: PASSED
+testPlanRunWiredForWorktree: PASSED
+testPlannerAttestFlagBackfillsDispatchLog: PASSED
+testPlannerAttestFlagAbsentStaysMissing: PASSED
+testPlannerAttestFlagPresentInPlannerAgent: PASSED
+testDispatchLogHookWorktreeAware338: PASSED
+testContractorAttestFlagBackfills338: PASSED
+testContractorAttestAbsentWarnsNonBlocking338: PASSED
+testFinalizeIncompleteResumesCrashState: PASSED
+testFinalizeIncompleteNegativeControlAlreadyDone: PASSED
+testFinalizeIncompleteNegativeControlRepoDirty: PASSED
+testFinalizeIncompleteWorktreeReentryFix: PASSED
+testBundleClaimCreatesOneFolder: PASSED
+testBundleRefusalLeavesNoFolder: PASSED
+testBundleDuplicateIssueBlocking: PASSED
+testBundleAdaptiveResumeSurfacesBundleIdentity: PASSED
+testBundleFinalizeRoadmapCleanup: PASSED
+testBundleSingleIssueStateHasNoBundleFields: PASSED
+testLedgerCompareGuard399: PASSED
+testAdaptiveLedgerHeaderInvalid425: PASSED
+testAdaptiveGeneratedPortSplit431: PASSED
+testFinalizeArchiveVerifiesBeforeDelete: PASSED
+testFinalizeClosesIssueBundleMembers: PASSED
+testFinalizeRoadmapResidueDetection: PASSED
+testStartupRefusesTargetSetMismatch: PASSED
+testHarnessSelfCheck: PASSED
+Workflow walkthrough simulation passed
+
+## four-chain
+command: npm run test:kaola-workflow:claude && npm run test:kaola-workflow:codex && npm run test:kaola-workflow:gitlab && npm run test:kaola-workflow:gitea
+exit: 0
+chain-claude: pass
+chain-codex: pass
+chain-gitlab: pass
+chain-gitea: pass
+output:
+--- chain-claude ---
+OK: 20 common scripts, 30 byte-identical groups, 3 rename-normalized families, and 1 config/hooks.json family in sync.
+Vendored agent validation passed for 14 agents at 922d2d8f8b64f4e50936e24465cb3bcac81ac0e1
+Agent model resolver tests passed
+Install model rendering tests passed
+Install upgrade rewrite tests passed
+test-install-manifest-single-source (#407/#412): PASSED
+Install adaptive-config tests passed
+next-action tests passed (77 assertions)
+commit-node tests passed (44 assertions)
+barrier-base-integrity tests passed (10 assertions)
+issue-probe-memo tests passed (10 assertions)
+claim-hardening tests passed (41 assertions)
+adaptive-handoff tests passed (107 assertions)
+adaptive-node tests passed (503 assertions)
+test-plan-run: all 20 assertions passed (#344 script-handle resolution)
+test-bundle-state: all 37 tests passed
+test-bundle-claim: all 78 tests passed
+test-bundle-finalize: all 102 tests passed
+parallel-batch tests passed (205 assertions)
+self-test: 13 assertions passed, 0 failed
+test-parallel self-test passed
+edition-sync tests passed (29 assertions)
+Release-surface drift regression passed (9 assertions)
+Ledger-compare guard regression passed (18 assertions)
+Route-reachability test passed (32 assertions).
+agent-profile parity tests passed (6 assertions)
+Workflow contract validation passed
+Fast-audit regression passed (45 assertions)
+test-bash-block-guards: all 17 assertions passed (#361 bash-block execution)
+[...all walkthrough tests PASSED...]
+Workflow walkthrough simulation passed
+EXIT: 0
+
+--- chain-codex ---
+OK: 20 common scripts, 30 byte-identical groups, 3 rename-normalized families, and 1 config/hooks.json family in sync.
+Kaola-Workflow Codex contract validation passed
+testInstallSchemaPruneManifest332 (#332 AC3-AC6,AC9-path): PASSED
+Codex adaptive #238/#239 coverage: PASSED
+testCodexLedgerHeaderInvalid425: PASSED
+testCodexGeneratedPortSplit431: PASSED
+testCodexPreflight266 (#266 cases 1,2,5): PASSED
+testCodexPreflight332 (#332 AC7-AC11): PASSED
+testCodexTaskMirror266 (#266 case 3): PASSED
+testCodexCompactResume266 (#266 case 4): PASSED
+testAC1HooksJson (#284 AC1): PASSED
+testUpdateHooksHardening325: PASSED
+test409StableHomeSurvivesDirDeletion (#409): PASSED
+test405MaxVariants (#405): PASSED
+testAC3AttestationSeeded (#284 AC3): PASSED
+testKeepOpenArchiveStamp333: PASSED
+testAC2CompactPlainStdout (#284 AC2): PASSED
+testAC4SubagentDispatchLog (#284 AC4): PASSED
+testCodexFinalizeArchiveVerifiesBeforeDelete: PASSED
+testCodexFinalizeClosesIssueBundleMembers: PASSED
+testCodexFinalizeRoadmapResidueDetection: PASSED
+testCodexBundleStateIncoherent: PASSED
+testCodexBundle424432433NodeSeeding: PASSED
+Kaola-Workflow walkthrough simulation passed
+EXIT: 0
+
+--- chain-gitlab ---
+Vendored agent validation passed for 14 agents at 922d2d8f8b64f4e50936e24465cb3bcac81ac0e1
+edition-sync: 12 forge aggregator ports in rename-normalized parity with canonical.
+Kaola-Workflow GitLab contract validation passed
+testFallbackGuardsAfterArchive: PASSED
+testAuditAndRepairLabels: PASSED
+testRepairFastEscalation: PASSED
+testRepairFinalizationRoute: PASSED
+testSinkMrUsesFinalizationSummary: PASSED
+testGitlabAdaptive: PASSED
+testGitlabAdaptiveFreezeChecked: PASSED
+testGitlab237DotPathExtraction: PASSED
+testGitlabDispatchHookExists: PASSED
+testGitlabWriteLaneHookExists: PASSED
+testGitlabBundleClaimCreatesOneFolder: PASSED
+testGitlabPlannerAttestBackfill: PASSED
+testGitlabBundleRefusalLeavesNoFolder: PASSED
+testGitlabBundleDuplicateIssueBlocking: PASSED
+testGitlabBundleOrientSurfacesBundleIdentity: PASSED
+testGitlabBundleFinalizeRoadmapCleanup: PASSED
+testGitlabBundleSingleIssueStateHasNoBundleFields: PASSED
+testGitlabFinalizeArchiveVerifiesBeforeDelete: PASSED
+testGitlabFinalizeClosesIssueBundleMembers: PASSED
+testGitlabFinalizeRoadmapResidueDetection: PASSED
+testGitlabBundleStateIncoherent: PASSED
+testGitlabBundle424432433NodeSeeding: PASSED
+GitLab workflow walkthrough simulation passed
+gitlab-codex testFinalizeArchiveVerifiesBeforeDelete: PASSED
+gitlab-codex testFinalizeClosesIssueBundleMembers: PASSED
+gitlab-codex testFinalizeRoadmapResidueDetection: PASSED
+gitlab-codex testBundleStateIncoherent: PASSED
+GitLab Codex workflow walkthrough simulation passed
+EXIT: 0
+
+--- chain-gitea ---
+Vendored agent validation passed for 14 agents at 922d2d8f8b64f4e50936e24465cb3bcac81ac0e1
+edition-sync: 12 forge aggregator ports in rename-normalized parity with canonical.
+Kaola-Workflow Gitea contract validation passed
+testFallbackGuardsAfterArchive: PASSED
+testAuditAndRepairLabels: PASSED
+testRepairFastEscalation: PASSED
+testRepairFinalizationRoute: PASSED
+testSinkPrUsesFinalizationSummary: PASSED
+testGiteaAdaptive: PASSED
+testGiteaAdaptiveFreezeChecked: PASSED
+testGitea237DotPathExtraction: PASSED
+testGiteaDispatchHookExists: PASSED
+testGiteaWriteLaneHookExists: PASSED
+testGiteaBundleClaimCreatesOneFolder: PASSED
+testGiteaPlannerAttestBackfill: PASSED
+testGiteaBundleRefusalLeavesNoFolder: PASSED
+testGiteaBundleDuplicateIssueBlocking: PASSED
+testGiteaBundleOrientSurfacesBundleIdentity: PASSED
+testGiteaBundleFinalizeRoadmapCleanup: PASSED
+testGiteaBundleSingleIssueStateHasNoBundleFields: PASSED
+testGiteaFinalizeArchiveVerifiesBeforeDelete: PASSED
+testGiteaFinalizeClosesIssueBundleMembers: PASSED
+testGiteaFinalizeRoadmapResidueDetection: PASSED
+testGiteaBundleStateIncoherent: PASSED
+testGiteaBundle424432433NodeSeeding: PASSED
+Gitea workflow walkthrough simulation passed
+gitea-codex testFinalizeArchiveVerifiesBeforeDelete: PASSED
+gitea-codex testFinalizeClosesIssueBundleMembers: PASSED
+gitea-codex testFinalizeRoadmapResidueDetection: PASSED
+gitea-codex testBundleStateIncoherent: PASSED
+Gitea Codex workflow walkthrough simulation passed
+EXIT: 0
+
+## verdict
+all-pass: true
