@@ -1,0 +1,16 @@
+{"node":"n3_impl_repair","event":"evidence","ts":"2026-06-13T07:04:10.730Z"}
+{"node":"n1_design","event":"opened","ts":"2026-06-13T07:06:00.128Z"}
+{"node":"n3_impl_repair","event":"closed","ts":"2026-06-13T07:08:05.232Z"}
+{"node":"n_pins","event":"opened","ts":"2026-06-13T07:08:05.272Z"}
+{"node":"n_pins","event":"closed","ts":"2026-06-13T07:19:59.726Z"}
+{"node":"n5_doc_planrun","event":"opened","ts":"2026-06-13T07:19:59.758Z"}
+{"node":"n5_doc_planrun","event":"closed","ts":"2026-06-13T07:24:57.917Z"}
+{"node":"n6_doc_finalize","event":"opened","ts":"2026-06-13T07:24:57.952Z"}
+{"node":"n6_doc_finalize","event":"closed","ts":"2026-06-13T07:28:09.732Z"}
+{"node":"n7_doc_contractor","event":"opened","ts":"2026-06-13T07:28:09.763Z"}
+{"node":"n7_doc_contractor","event":"closed","ts":"2026-06-13T07:30:05.543Z"}
+{"node":"n_review","event":"opened","ts":"2026-06-13T07:30:05.576Z"}
+{"node":"n_review","event":"closed","ts":"2026-06-13T07:58:06.554Z"}
+{"node":"n_decisions","event":"opened","ts":"2026-06-13T07:58:06.606Z"}
+{"node":"n_decisions","event":"closed","ts":"2026-06-13T08:02:04.107Z"}
+{"node":"n8_finalize","event":"opened","ts":"2026-06-13T08:02:04.140Z"}

@@ -95,9 +95,16 @@ The current session then **judges** the resume branch:
   removes the Ledger `consent_halt: pending` marker AND clears `escalated_to_full: consent` (plus the
   coupled `escalated_to_full: security`) from `workflow-state.md`, replacing the contractor lockstep
   (refuses typed `no_halt_present`, zero mutation, when no halt is present), then resume.
-- a node `in_progress` with **absent/partial** `.cache/{node-id}.md` → crash mid-node before the role
-  finished; re-dispatch exactly that role node. The advance bracket's `--record-base` is **idempotent**
-  (#239) — the original baseline is reused, so a crashed attempt's writes stay visible to the barrier.
+- a node `in_progress` with **absent/partial** `.cache/{node-id}.md` AND `orient` returns
+  **`requires_redispatch: true`** → the role did not complete evidence (absent or incomplete); this
+  is the canonical crash-before-finish signal. Re-dispatch exactly that role node. This is distinct
+  from the complete-evidence crash path below: `requires_redispatch` fires when evidence is
+  **absent/incomplete**; the complete-evidence path fires when `.cache/{node-id}.md` is present
+  and fully formed but the commit bracket did not yet run. The advance bracket's `--record-base` is
+  **idempotent** (#239) — the original baseline is reused, so a crashed attempt's writes stay visible
+  to the barrier.
+- a node `in_progress` with **absent/partial** `.cache/{node-id}.md` without `requires_redispatch`
+  set → same path: re-dispatch the role node; the idempotent baseline anchors the barrier diff.
 - a node `in_progress` with **complete** `.cache/{node-id}.md` but the barrier not yet run / the node not
   yet marked `complete` → crash AFTER the role finished but before the commit bracket: **re-run the commit
   bracket only — do NOT re-dispatch the role** (which would redo non-idempotent writes).
@@ -115,6 +122,38 @@ The current session then **judges** the resume branch:
   base` note). The tier never breaks dispatch.
   When no node is `in_progress` (e.g. a crash between a node's commit and its fused advance left the next
   node unopened), **re-enter at step 1** to open the next ready node.
+
+**Barrier-overflow recovery (#434):** When a barrier refusal is `write_set_overflow` or
+`write_set_granularity` and the node wrote files outside its declared allowlist, run
+`revert-overflow` instead of dropping and re-recording evidence from scratch:
+
+```bash
+node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-adaptive-node.js" revert-overflow \
+  --project {project} --node-id {id} --json
+```
+
+`revert-overflow` reads the barrier's `outOfAllow` list, runs `git checkout <baseline> -- <exact
+paths>` for each overflow path (reverting them to their baseline state), logs the revert to
+provenance, and re-runs the barrier. After a clean barrier, re-run the commit bracket (step 3) to
+close the node — do NOT re-dispatch the role (the role's writes inside the allowlist are intact).
+
+**Repair-node recovery (#434):** When a complete node needs to be re-run because its evidence is
+absent or incomplete after a crash and the baseline must be preserved, use `repair-node`:
+
+```bash
+node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-adaptive-node.js" repair-node \
+  --project {project} --node-id {id} --json
+```
+
+`repair-node` transitions the writer node back to `in_progress` using the ORIGINAL `barrier-base`
+(no re-snapshot). It also deletes downstream baselines so downstream nodes re-baseline cleanly after
+the repair. Re-dispatch the role after this call.
+
+**Anti-laundering invariant (#434):** Never use `reopen-node` to recover from a barrier overflow.
+`reopen-node` re-snapshots the baseline at the current merged state, which launders the overflow
+writes into the new baseline — the barrier will then pass vacuously on a diff that includes the
+overflow. Use `revert-overflow` instead: it clears the overflow while keeping the original baseline
+intact, so the barrier diffs against the true node-start state.
 
 ## Governance — a frozen in-grammar plan RUNS; `decision:ask` is audit metadata, not an approval gate
 

@@ -622,6 +622,12 @@ assertIncludes('commands/kaola-workflow-plan-run.md', 'main-session-direct');
 // lockstep — pin its presence in the prose + the script so the prose mutation cannot return.
 assertIncludes('commands/kaola-workflow-plan-run.md', 'clear-halt');
 assertIncludes('scripts/kaola-workflow-adaptive-node.js', "subcommand === 'clear-halt'");
+// #434: revert-overflow + repair-node subcommands + their output tokens (anti-laundering signal +
+// orient requires_redispatch field for absent-evidence detection).
+assertIncludes('scripts/kaola-workflow-adaptive-node.js', "subcommand === 'revert-overflow'");
+assertIncludes('scripts/kaola-workflow-adaptive-node.js', "subcommand === 'repair-node'");
+assertIncludes('scripts/kaola-workflow-adaptive-node.js', 'requires_redispatch');
+assertIncludes('scripts/kaola-workflow-adaptive-node.js', 'baselineReused');
 assertIncludes('commands/kaola-workflow-plan-run.md', 'kaola_script(){');
 assertIncludes('commands/kaola-workflow-plan-run.md', 'KAOLA_SCRIPTS="$(dirname "$(kaola_script kaola-workflow-adaptive-node.js)")"');
 assertIncludes('scripts/kaola-workflow-claim.js', '--attest-contractor-spawn');
@@ -655,6 +661,10 @@ assertIncludes('scripts/kaola-workflow-sink-merge.js', '--issue-numbers');
 assertIncludes('commands/kaola-workflow-finalize.md', 'SINK_ISSUE_NUMBERS');
 assertIncludes('commands/kaola-workflow-finalize.md', '--issue-numbers');
 assertIncludes('scripts/kaola-workflow-closure-contract.js', 'remote-members-closed');
+// #429: resumable --sink transaction — step-receipt based pipeline, structured sink_blocked refusal.
+assertIncludes('scripts/kaola-workflow-sink-merge.js', 'isSinkMode');
+assertIncludes('scripts/kaola-workflow-sink-merge.js', 'sink-receipt.json');
+assertIncludes('scripts/kaola-workflow-sink-merge.js', 'sink_blocked');
 // #354: the single fence-aware section slicer is the one home for all `## Node Ledger` /
 // `## Required Agent Compliance` access; readers/writers route through it (no fence-blind indexOf).
 assertIncludes('scripts/kaola-workflow-adaptive-schema.js', 'function locateSection');

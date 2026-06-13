@@ -811,6 +811,34 @@ esac
 cd "$_MAIN_ROOT" 2>/dev/null || true
 ```
 
+### Script-owned worktree sink (`--sink` mode, #429)
+
+When the branch carries a worktree run (recorded `run_posture: worktree`), use the `--sink` flag to
+replace the manual 8-step choreography:
+
+```bash
+node "$SINK_MERGE_JS" \
+  --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG $SINK_ISSUE_NUMBERS_FLAG \
+  $SINK_KEEP_OPEN_FLAG \
+  --project {project} \
+  --sink --json
+```
+
+`--sink` mode runs a single resumable transaction:
+1. **Preflight** — refuses `sink_blocked` with `blocked_paths` listing any foreign dirt; zero mutation on refusal.
+   Auto-stashes the claim-time `.roadmap/issue-N.md` if present.
+2. **Push branch** — `git push -u origin {branch}` (creates upstream if absent)
+3. **Rebase** — rebases onto `origin/main` (`--force-with-lease` on branch)
+4. **Test** — runs `npm test` (four-chain gate for cross-edition diffs)
+5. **FF-merge** — fast-forward merges branch into main
+6. **Push main** — `git push origin main`
+7. **Close issue** — idempotent (probe-before-close)
+8. **Archive** — via `cmdFinalize` internals
+9. **Cleanup** — stash restore, remove worktree
+
+**Crash-resume**: a step-receipt at `kaola-workflow/{project}/.cache/sink-receipt.json` tracks each step.
+Re-running the command after a crash resumes from the last incomplete step — no double-apply.
+
 `sink-merge.js` exit codes:
 - Exit 0: branch merged onto main, issue closed (online), local branch deleted. Confirm worktree is on main with `git status --short --branch`.
 - Exit 1: conflict or fatal error. Rebase conflict remediation printed to stderr. Re-run after resolving.

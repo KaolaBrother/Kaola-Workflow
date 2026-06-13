@@ -162,6 +162,14 @@ if [ "$ACTIVE_WORKTREE_PATH" != "$(pwd)" ]; then
 fi
 ```
 
+**`inline_execution_suspected` verifier note (#434).** When reading the `.cache` evidence for
+a prior node, check whether the adaptive-node `close-and-open-next` response carries
+`inline_execution_suspected: true`. If it does, note it explicitly in your output under
+"Evidence Transcribed". This is an informational quality flag — it indicates the role agent
+completed the node's work inline (without a dispatched subagent). It does NOT block
+finalization, but it is logged for audit purposes and must appear in the contractor summary so
+the orchestrator can assess dispatch health.
+
 ### Step 8b - Finalize (Archive + Status Close)
 
 This step runs **only when `sink: merge`**. For `sink: pr`, skip to Step 8 — the active folder must remain open. `sink-pr.js` (Step 9) writes `pr_url` into the active folder and creates a deliberate metadata follow-up commit so the worktree is clean. `watch-pr` archives the folder when the PR merges or closes.
@@ -212,6 +220,15 @@ When it runs, `cmdFinalize` atomically writes `status: closed` + `step: complete
 **Crash recovery.** If the process crashes after `cmdFinalize` archives the folder but before Step 8's `git commit` runs, the finalize is resumable. Run `node "$CLAIM_JS" resume --project {project} --json` from the worktree: a result of `reason:'finalize_incomplete'` confirms the archive dir exists but is uncommitted. Re-run `cmdFinalize --keep-worktree --attest-contractor-spawn` (same command — it detects `source-missing` and stages the already-archived dir; re-add `--keep-issue-open` when `SINK_ISSUE_ACTION` is `comment_keep_open`, since the live state is gone and state-field derivation is unavailable), then continue at Step 7.
 
 If `SINK_KIND` is `pr`: skip this step. Proceed to Step 8 (commit). The active folder remains open. `sink-pr.js` (Step 9) writes the PR URL into the active folder and then immediately creates a deliberate metadata follow-up commit (`chore: record PR metadata for {project}`) so the worktree is clean after sink. `watch-pr` (on the next `/workflow-next` startup) detects the merged or closed PR and archives the folder automatically.
+
+### Step 8b — Sink routing for worktree runs (#429)
+
+After the contractor commits the finalization artifacts (Step 8b), check `run_posture` in
+`workflow-state.md`. If `run_posture: worktree`, route the orchestrator to use
+`kaola-workflow-sink-merge.js --sink` (script-owned transaction) rather than the manual
+8-step sink choreography. The `--sink` flag handles push, test, merge, close, archive, and
+cleanup in one resumable operation. Do not attempt the manual choreography when
+`run_posture: worktree`; surface the `--sink` route to the orchestrator and stop.
 
 ### Step 7 - Roadmap git-add Staging
 
