@@ -718,8 +718,259 @@ function runDirectMerge(args, opts) {
   return { merged: true };
 }
 
+// ---------------------------------------------------------------------------
+// #429: --sink transaction — resumable step-receipt based merge pipeline (GitLab port)
+// ---------------------------------------------------------------------------
+
+const SINK_ABORT_AFTER = process.env.KAOLA_WORKFLOW_SINK_ABORT_AFTER || '';
+const SINK_STEPS = ['preflight', 'push_upstream', 'merge', 'worktree_sync', 'finalize', 'closure', 'stash_restore', 'archive_commit', 'push_main'];
+
+function writeSinkReceipt(receiptPath, receipt) {
+  fs.mkdirSync(path.dirname(receiptPath), { recursive: true });
+  const tmp2 = receiptPath + '.tmp.' + process.pid;
+  fs.writeFileSync(tmp2, JSON.stringify(receipt, null, 2) + '\n');
+  fs.renameSync(tmp2, receiptPath);
+}
+
+function resolveSinkReceiptPath(mainRoot, project) {
+  const live = path.join(mainRoot, 'kaola-workflow', project, '.cache', 'sink-receipt.json');
+  const archive = path.join(mainRoot, 'kaola-workflow', 'archive', project, '.cache', 'sink-receipt.json');
+  if (fs.existsSync(live)) return live;
+  if (fs.existsSync(archive)) return archive;
+  const liveDir = path.join(mainRoot, 'kaola-workflow', project);
+  if (fs.existsSync(liveDir)) return live;
+  return archive;
+}
+
+function loadOrInitReceipt(mainRoot, project, branch, issueNumber, issueNumbers, defBranch) {
+  const receiptPath = resolveSinkReceiptPath(mainRoot, project);
+  if (fs.existsSync(receiptPath)) {
+    try {
+      const r = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
+      if (r && r.steps) return { receipt: r, receiptPath };
+    } catch (_) {}
+  }
+  const steps = {};
+  for (const s of SINK_STEPS) steps[s] = 'pending';
+  const receipt = {
+    project, branch, issue_number: issueNumber || null,
+    issue_numbers: issueNumbers && issueNumbers.length ? issueNumbers : (issueNumber ? [issueNumber] : []),
+    resolved_default_branch: defBranch,
+    started_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    stash_ref: null, removed_duplicates: [], steps
+  };
+  return { receipt, receiptPath };
+}
+
+function sinkCopyDir(src, dest) {
+  fs.mkdirSync(dest, { recursive: true });
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    const s = path.join(src, entry.name);
+    const d = path.join(dest, entry.name);
+    if (entry.isDirectory()) sinkCopyDir(s, d);
+    else fs.copyFileSync(s, d);
+  }
+}
+
+function sinkPreflight(mainRoot, project, branch, issueNumbers) {
+  const porcelain = execFileSync('git', ['-C', mainRoot, 'status', '--porcelain', '-uall'], { encoding: 'utf8' });
+  const lines = porcelain.split('\n').filter(Boolean);
+  const worktreePaths = new Set();
+  try {
+    const list = execFileSync('git', ['-C', mainRoot, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' });
+    for (const block of list.split(/\n\n+/)) {
+      const m = block.match(/^worktree (.+)$/m);
+      if (m) {
+        try {
+          const rel = path.relative(mainRoot, m[1]);
+          if (!rel.startsWith('..')) worktreePaths.add(rel.replace(/\\/g, '/'));
+        } catch (_) {}
+      }
+    }
+  } catch (_) {}
+  const issueSet = new Set((issueNumbers || []).map(n => String(n)));
+  const roadmapSources = [], projDuplicates = [], foreignDirt = [];
+  for (const line of lines) {
+    const xy = line.slice(0, 2);
+    let filePath = line.slice(3).trim();
+    if (filePath.includes(' -> ')) filePath = filePath.split(' -> ')[1].trim();
+    const roadmapMatch = filePath.match(/^kaola-workflow\/\.roadmap\/issue-(\d+)\.md$/);
+    if (roadmapMatch && issueSet.has(roadmapMatch[1])) { roadmapSources.push(filePath); continue; }
+    const projStateFiles = [
+      'kaola-workflow/' + project + '/workflow-plan.md', 'kaola-workflow/' + project + '/workflow-state.md',
+      'kaola-workflow/' + project + '/workflow-tasks.json', 'kaola-workflow/' + project + '/.cache/dispatch-log.jsonl'
+    ];
+    if (xy === '??' && projStateFiles.includes(filePath)) {
+      let branchHas = false;
+      try { execFileSync('git', ['-C', mainRoot, 'cat-file', '-e', branch + ':' + filePath], { stdio: 'ignore' }); branchHas = true; } catch (_) {}
+      if (branchHas) { projDuplicates.push(filePath); continue; }
+    }
+    const isWorktreePath = worktreePaths.has(filePath) || Array.from(worktreePaths).some(wt => filePath === wt + '/' || filePath.startsWith(wt + '/'));
+    if (isWorktreePath) continue;
+    foreignDirt.push(filePath);
+  }
+  if (foreignDirt.length > 0) {
+    return { ok: false, reason: 'sink_blocked', foreign_dirt: foreignDirt, detail: 'main checkout carries changes not owned by this sink; resolve before re-running. This sink never touches another project\'s files.' };
+  }
+  let stashRef = null;
+  if (roadmapSources.length > 0) {
+    try {
+      execFileSync('git', ['-C', mainRoot, 'stash', 'push', '-m', 'kw-sink-' + project, '--', ...roadmapSources], { encoding: 'utf8' });
+      try {
+        const stashList = execFileSync('git', ['-C', mainRoot, 'stash', 'list', '--format=%gd %gs'], { encoding: 'utf8' });
+        const stashLine = stashList.split('\n').find(l => l.includes('kw-sink-' + project));
+        if (stashLine) stashRef = stashLine.split(' ')[0];
+      } catch (_) { stashRef = 'stash@{0}'; }
+    } catch (_) {}
+  }
+  const removedDuplicates = [];
+  for (const dup of projDuplicates) {
+    try { fs.unlinkSync(path.join(mainRoot, dup)); removedDuplicates.push(dup); } catch (_) {}
+  }
+  return { ok: true, stashRef, removedDuplicates };
+}
+
+function runSinkTransaction(args, mainRoot, defBranch) {
+  const { receipt, receiptPath } = loadOrInitReceipt(mainRoot, args.project, args.branch, args.issue, args.issueNumbers, defBranch);
+  const stepDone = (step) => {
+    receipt.steps[step] = 'done'; receipt.updated_at = new Date().toISOString();
+    writeSinkReceipt(receiptPath, receipt);
+    if (SINK_ABORT_AFTER && SINK_ABORT_AFTER === step) {
+      process.stderr.write('[TEST ONLY] KAOLA_WORKFLOW_SINK_ABORT_AFTER=' + step + ' — aborting sink transaction\n');
+      process.exitCode = 99; process.exit(99);
+    }
+  };
+  for (const step of SINK_STEPS) {
+    if (receipt.steps[step] === 'done') continue;
+    if (step === 'preflight') {
+      const memberSet = deriveMemberSet(mainRoot, args.project, args.issueNumbers);
+      args.issueNumbers = memberSet.members; args.member_source = memberSet.source;
+      const preResult = sinkPreflight(mainRoot, args.project, args.branch, args.issueNumbers);
+      if (!preResult.ok) {
+        process.stdout.write(JSON.stringify({ result: 'refuse', reason: 'sink_blocked', foreign_dirt: preResult.foreign_dirt, detail: preResult.detail }) + '\n');
+        process.exitCode = 1; return;
+      }
+      if (preResult.stashRef) receipt.stash_ref = preResult.stashRef;
+      if (preResult.removedDuplicates) receipt.removed_duplicates = preResult.removedDuplicates;
+      stepDone('preflight'); continue;
+    }
+    if (step === 'push_upstream') {
+      if (!OFFLINE) { try { execFileSync('git', ['-C', mainRoot, 'push', '-u', 'origin', args.branch], { encoding: 'utf8' }); } catch (_) {} }
+      stepDone('push_upstream'); continue;
+    }
+    if (step === 'merge') {
+      try {
+        const folder = readActiveFolders(mainRoot, { excludeClosedIssues: false }).find(f => f.project === args.project);
+        removeWorktree(mainRoot, args.project, folder);
+      } catch (_) {}
+      const originRef = 'origin/' + defBranch;
+      let alreadyUpToDate = false;
+      try {
+        const mergeBase = execFileSync('git', ['-C', mainRoot, 'merge-base', 'HEAD', originRef], { encoding: 'utf8' }).trim();
+        const originHead = execFileSync('git', ['-C', mainRoot, 'rev-parse', originRef], { encoding: 'utf8' }).trim();
+        alreadyUpToDate = (mergeBase === originHead);
+      } catch (_) { alreadyUpToDate = true; }
+      execFileSync('git', ['-C', mainRoot, 'checkout', args.branch], { encoding: 'utf8' });
+      doRebase(args, alreadyUpToDate, mainRoot, defBranch);
+      if (!ffMergeLoop(args, mainRoot, defBranch)) { process.stderr.write('sink-merge --sink: FF merge failed\n'); process.exitCode = 2; return; }
+      stepDone('merge'); continue;
+    }
+    if (step === 'worktree_sync') {
+      let wtPath = null;
+      try {
+        const list = execFileSync('git', ['-C', mainRoot, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' });
+        for (const block of list.split(/\n\n+/)) {
+          const pL = block.match(/^worktree (.+)$/m); const bL = block.match(/^branch refs\/heads\/(.+)$/m);
+          if (pL && bL && bL[1] === args.branch) { wtPath = pL[1]; break; }
+        }
+      } catch (_) {}
+      if (wtPath) {
+        const wtProjDir = path.join(wtPath, 'kaola-workflow', args.project);
+        const mainProjDir = path.join(mainRoot, 'kaola-workflow', args.project);
+        if (fs.existsSync(wtProjDir) && !fs.existsSync(mainProjDir)) sinkCopyDir(wtProjDir, mainProjDir);
+      }
+      stepDone('worktree_sync'); continue;
+    }
+    if (step === 'finalize') {
+      try { const { archiveProjectDir } = require('./kaola-gitlab-workflow-claim'); archiveProjectDir(mainRoot, args.project, 'closed', undefined, { keepWorktree: false }); } catch (_) {}
+      stepDone('finalize'); continue;
+    }
+    if (step === 'closure') {
+      // GitLab: use forge.closeIssue / forge.updateIssue (glab/MR nouns, not GitHub CLI)
+      if (!OFFLINE && args.issue != null && !args.keepIssueOpen) {
+        try {
+          if (!probeIssueClosed(args.issue, {})) {
+            try { forge.closeIssue(args.issue, {}); } catch (e) {
+              if (!probeIssueClosed(args.issue, {})) process.stderr.write('sink-merge --sink: WARNING: merge request/issue close failed for ' + args.issue + '\n');
+            }
+          }
+          try { forge.updateIssue(args.issue, { unlabels: [forge.CLAIM_LABEL] }); } catch (_) {}
+          if (Array.isArray(args.issueNumbers) && args.issueNumbers.length > 1) {
+            for (const n of args.issueNumbers) {
+              if (n === args.issue) continue;
+              if (!probeIssueClosed(n, {})) { try { forge.closeIssue(n, {}); } catch (_) {} }
+              try { forge.updateIssue(n, { unlabels: [forge.CLAIM_LABEL] }); } catch (_) {}
+            }
+          }
+        } catch (_) {}
+      }
+      stepDone('closure'); continue;
+    }
+    if (step === 'stash_restore') {
+      if (receipt.stash_ref) {
+        try {
+          const stashList = execFileSync('git', ['-C', mainRoot, 'stash', 'list', '--format=%gd %gs'], { encoding: 'utf8' });
+          if (stashList.split('\n').some(l => l.includes('kw-sink-' + args.project))) {
+            execFileSync('git', ['-C', mainRoot, 'stash', 'pop', receipt.stash_ref], { encoding: 'utf8' });
+          }
+        } catch (_) {}
+      }
+      stepDone('stash_restore'); continue;
+    }
+    if (step === 'archive_commit') {
+      const archiveDir = path.join(mainRoot, 'kaola-workflow', 'archive', args.project);
+      if (fs.existsSync(archiveDir)) {
+        const ps = 'kaola-workflow/archive/' + args.project + '/';
+        try { execFileSync('git', ['-C', mainRoot, 'add', '--', ps], { encoding: 'utf8' }); } catch (_) {}
+        let hasStaged = false;
+        try { execFileSync('git', ['-C', mainRoot, 'diff', '--cached', '--quiet', '--', ps], { stdio: 'ignore' }); }
+        catch (e) { if (e && e.status === 1) hasStaged = true; }
+        if (hasStaged) { try { execFileSync('git', ['-C', mainRoot, 'commit', '-m', 'chore: archive ' + args.project + ' [sink]', '--', ps], { encoding: 'utf8' }); } catch (_) {} }
+      }
+      const archRcptPath = path.join(mainRoot, 'kaola-workflow', 'archive', args.project, '.cache', 'sink-receipt.json');
+      if (!fs.existsSync(receiptPath) && fs.existsSync(path.dirname(archRcptPath))) writeSinkReceipt(archRcptPath, receipt);
+      stepDone('archive_commit'); continue;
+    }
+    if (step === 'push_main') {
+      if (!OFFLINE) { try { execFileSync('git', ['-C', mainRoot, 'push', 'origin', defBranch], { encoding: 'utf8' }); } catch (e) { process.stderr.write('sink-merge --sink: push main failed: ' + (e.message || String(e)) + '\n'); } }
+      stepDone('push_main'); continue;
+    }
+  }
+  // Cleanup: remove worktree + branch
+  try { const folder = readActiveFolders(mainRoot, { excludeClosedIssues: false }).find(f => f.project === args.project); removeWorktree(mainRoot, args.project, folder); } catch (_) {}
+  if (!OFFLINE) { try { execFileSync('git', ['-C', mainRoot, 'push', 'origin', '--delete', '--', args.branch], { encoding: 'utf8' }); } catch (_) {} }
+  try {
+    execFileSync('git', ['-C', mainRoot, 'merge-base', '--is-ancestor', args.branch, defBranch], { stdio: 'ignore' });
+    try { execFileSync('git', ['-C', mainRoot, 'branch', '-D', '--', args.branch], { encoding: 'utf8' }); } catch (_) {}
+  } catch (_) { try { execFileSync('git', ['-C', mainRoot, 'branch', '-d', '--', args.branch], { encoding: 'utf8' }); } catch (_) {} }
+  const finalReceipt = JSON.parse(fs.existsSync(receiptPath) ? fs.readFileSync(receiptPath, 'utf8') : JSON.stringify(receipt));
+  process.stdout.write(JSON.stringify({ result: 'ok', status: 'sinked', receipt: finalReceipt }) + '\n');
+}
+
 function main() {
-  const args = parseArgs(process.argv.slice(2));
+  const rawArgv = process.argv.slice(2);
+  const isSinkMode = rawArgv.includes('--sink');
+  const args = parseArgs(rawArgv);
+  if (isSinkMode) {
+    const root = getRoot();
+    const mainRoot = mainRootFromCoord(getCoordRoot(root));
+    const defBranch = defaultBranch(mainRoot);
+    try { process.chdir(os.tmpdir()); } catch (_) {}
+    const memberSet = deriveMemberSet(mainRoot, args.project, args.issueNumbers);
+    args.issueNumbers = memberSet.members; args.member_source = memberSet.source;
+    runSinkTransaction(args, mainRoot, defBranch);
+    return;
+  }
   const result = runDirectMerge(args);
   if (result && result.exitCode != null) {
     process.exitCode = result.exitCode;

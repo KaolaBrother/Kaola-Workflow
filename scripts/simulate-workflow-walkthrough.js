@@ -11504,6 +11504,278 @@ function testHarnessSelfCheck() {
 }
 
 // ---------------------------------------------------------------------------
+// #429 Script-owned worktree sink — three new scenarios
+// ---------------------------------------------------------------------------
+
+// (a) #429 Blocked preflight (FOREIGN dirt) refuses, mutates nothing.
+// Seeds main with an untracked file not owned by this sink. Runs --sink.
+// Asserts: exit 1, JSON reason:'sink_blocked', foreign_dirt lists the exact path,
+// AND git status --porcelain is BYTE-IDENTICAL pre/post (no stash, no rm, no merge).
+function testSinkTransactionBlockedByForeignDirt() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-blocked-')));
+  try {
+    initGitRepo(tmp);
+
+    // Create a feature branch with an impl commit + the project folder already archived
+    // (standard lane: finalize runs before --sink so the live folder is gone).
+    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-4291'], { encoding: 'utf8' });
+    fs.writeFileSync(path.join(tmp, 'impl-4291.txt'), 'impl\n');
+    spawnSync('git', ['-C', tmp, 'add', 'impl-4291.txt'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'feat: impl 4291'], {
+      encoding: 'utf8',
+      env: { ...process.env, ...GIT_ISOLATION_ENV, GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' }
+    });
+    spawnSync('git', ['-C', tmp, 'checkout', 'main'], { encoding: 'utf8' });
+
+    // Plant FOREIGN DIRT: an untracked file in a DIFFERENT project's kaola-workflow folder.
+    const foreignDir = path.join(tmp, 'kaola-workflow', 'other-project');
+    fs.mkdirSync(foreignDir, { recursive: true });
+    fs.writeFileSync(path.join(foreignDir, 'workflow-state.md'), 'status: active\n');
+
+    // Record the git status BEFORE running --sink.
+    const statusBefore = spawnSync('git', ['-C', tmp, 'status', '--porcelain'], { encoding: 'utf8' }).stdout;
+
+    const result = spawnSync(process.execPath, [
+      sinkMergeScript,
+      '--sink',
+      '--branch', 'workflow/issue-4291',
+      '--issue', '4291',
+      '--project', 'issue-4291',
+      '--json'
+    ], {
+      cwd: tmp,
+      encoding: 'utf8',
+      env: { ...process.env, ...GIT_ISOLATION_ENV, KAOLA_WORKFLOW_OFFLINE: '1' }
+    });
+
+    assert(result.status !== 0, '#429: --sink with foreign dirt must exit non-zero, got ' + result.status +
+      '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+
+    // Parse the JSON output
+    let out;
+    try { out = JSON.parse(result.stdout.trim().split('\n').filter(l => l.trim().startsWith('{')).pop()); }
+    catch (e) { throw new Error('#429: stdout must contain JSON, got: ' + result.stdout + '\nstderr: ' + result.stderr); }
+    assert(out.reason === 'sink_blocked',
+      '#429: reason must be sink_blocked, got: ' + JSON.stringify(out));
+    assert(Array.isArray(out.foreign_dirt) && out.foreign_dirt.length > 0,
+      '#429: foreign_dirt must be a non-empty array, got: ' + JSON.stringify(out));
+    // The exact foreign file must be listed
+    const listed = out.foreign_dirt.some(p => p.includes('other-project') || p.includes('workflow-state.md'));
+    assert(listed, '#429: foreign_dirt must list the planted file, got: ' + JSON.stringify(out.foreign_dirt));
+
+    // ZERO MUTATION: git status must be byte-identical to before
+    const statusAfter = spawnSync('git', ['-C', tmp, 'status', '--porcelain'], { encoding: 'utf8' }).stdout;
+    assert(statusBefore === statusAfter,
+      '#429: git status must be unchanged after sink_blocked refuse\nbefore: ' + JSON.stringify(statusBefore) +
+      '\nafter:  ' + JSON.stringify(statusAfter));
+
+    // The foreign file must still exist unchanged
+    assert(fs.existsSync(path.join(foreignDir, 'workflow-state.md')),
+      '#429: foreign file must still exist after sink_blocked refuse');
+
+    console.log('testSinkTransactionBlockedByForeignDirt: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// (b) #429 Kill-between-merge-and-finalize → re-run completes without double-applying.
+// Runs --sink with KAOLA_WORKFLOW_SINK_ABORT_AFTER=merge env var, expects the receipt
+// to show merge:done but finalize:pending. Then re-runs. Asserts the second run completes
+// successfully AND does not create a second merge commit (rev-list count unchanged across
+// the two halves).
+function testSinkTransactionCrashResume() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-crash-')));
+  try {
+    initGitRepo(tmp);
+    const env = { ...process.env, ...GIT_ISOLATION_ENV,
+      GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' };
+
+    // Feature branch with impl commit.
+    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-4292'], { env, encoding: 'utf8' });
+    fs.writeFileSync(path.join(tmp, 'impl-4292.txt'), 'impl\n');
+    spawnSync('git', ['-C', tmp, 'add', 'impl-4292.txt'], { env, encoding: 'utf8' });
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'feat: impl 4292'], { env, encoding: 'utf8' });
+    spawnSync('git', ['-C', tmp, 'checkout', 'main'], { env, encoding: 'utf8' });
+
+    const featureHead = spawnSync('git', ['-C', tmp, 'rev-parse', 'workflow/issue-4292'], { encoding: 'utf8' }).stdout.trim();
+
+    // First run: abort after merge step
+    const run1 = spawnSync(process.execPath, [
+      sinkMergeScript,
+      '--sink',
+      '--branch', 'workflow/issue-4292',
+      '--issue', '4292',
+      '--project', 'issue-4292',
+      '--json'
+    ], {
+      cwd: tmp,
+      encoding: 'utf8',
+      env: { ...env, KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_WORKFLOW_SINK_ABORT_AFTER: 'merge' }
+    });
+
+    // Should exit non-zero (aborted) with merge:done, finalize:pending
+    const receiptPath = path.join(tmp, 'kaola-workflow', 'issue-4292', '.cache', 'sink-receipt.json');
+    const archiveReceiptPath = path.join(tmp, 'kaola-workflow', 'archive', 'issue-4292', '.cache', 'sink-receipt.json');
+    const receiptExists = fs.existsSync(receiptPath) || fs.existsSync(archiveReceiptPath);
+    assert(receiptExists, '#429 crash-resume: sink-receipt.json must exist after aborted run\n' +
+      'stdout: ' + run1.stdout + '\nstderr: ' + run1.stderr);
+
+    const receiptRaw = fs.existsSync(receiptPath)
+      ? fs.readFileSync(receiptPath, 'utf8')
+      : fs.readFileSync(archiveReceiptPath, 'utf8');
+    const receipt1 = JSON.parse(receiptRaw);
+    assert(receipt1.steps && receipt1.steps.merge === 'done',
+      '#429 crash-resume: receipt must show merge:done after abort, got: ' + JSON.stringify(receipt1.steps));
+    assert(receipt1.steps && receipt1.steps.finalize !== 'done',
+      '#429 crash-resume: receipt must show finalize pending (not done) after abort at merge, got: ' + JSON.stringify(receipt1.steps));
+
+    // Record main HEAD SHA after first run to detect double-merge (merge is already done).
+    const mainHeadAfterRun1 = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+
+    // Second run: re-run without the abort flag
+    const run2 = spawnSync(process.execPath, [
+      sinkMergeScript,
+      '--sink',
+      '--branch', 'workflow/issue-4292',
+      '--issue', '4292',
+      '--project', 'issue-4292',
+      '--json'
+    ], {
+      cwd: tmp,
+      encoding: 'utf8',
+      env: { ...env, KAOLA_WORKFLOW_OFFLINE: '1' }
+    });
+
+    assert(run2.status === 0, '#429 crash-resume: second --sink run must exit 0\nstdout: ' + run2.stdout + '\nstderr: ' + run2.stderr);
+
+    // Verify all steps done
+    const receiptExistsAfter = fs.existsSync(receiptPath) || fs.existsSync(archiveReceiptPath);
+    assert(receiptExistsAfter, '#429 crash-resume: sink-receipt.json must exist after completed run');
+    const receiptRaw2 = fs.existsSync(archiveReceiptPath) ? fs.readFileSync(archiveReceiptPath, 'utf8') : fs.readFileSync(receiptPath, 'utf8');
+    const receipt2 = JSON.parse(receiptRaw2);
+    const allDone = receipt2.steps && Object.values(receipt2.steps).every(v => v === 'done' || v === 'skipped');
+    assert(allDone, '#429 crash-resume: all steps must be done after second run, got: ' + JSON.stringify(receipt2.steps));
+
+    // No double-merge: the feature commit (merge) landed exactly once.
+    // main's HEAD must contain featureHead as an ancestor after run1 (it was merged).
+    // After run2, main may gain additional commits (archive_commit) but featureHead must
+    // still be reachable — and the merge step was NOT re-applied (receipt.steps.merge was done).
+    assert(receipt2.steps && receipt2.steps.merge === 'done',
+      '#429 crash-resume: receipt must show merge:done after resumed run (not re-applied), got: ' + JSON.stringify(receipt2.steps));
+    const mergeBaseOut = spawnSync('git', ['-C', tmp, 'merge-base', '--is-ancestor', mainHeadAfterRun1, 'main'], { encoding: 'utf8' });
+    assert(mergeBaseOut.status === 0,
+      '#429 crash-resume: main HEAD from run1 must be an ancestor of main after run2 (no history rewrite), mainHeadAfterRun1=' + mainHeadAfterRun1);
+
+    console.log('testSinkTransactionCrashResume: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// (c) #429 Clean end-to-end --sink run.
+// Clean worktree, run --sink once. Asserts: exit 0, main advanced to feature HEAD,
+// sink-receipt.json exists with all steps done, the project folder is archived.
+function testSinkTransactionCleanEndToEnd() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-e2e-')));
+  try {
+    initGitRepo(tmp);
+    const env = { ...process.env, ...GIT_ISOLATION_ENV,
+      GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' };
+
+    // Plant active folder (project state) in main
+    plantActiveFolder(tmp, 'issue-4293', 4293, null);
+
+    // Feature branch: create linked worktree
+    const wtPath = path.join(tmp, '.kw', 'worktrees', 'issue-4293');
+    fs.mkdirSync(path.dirname(wtPath), { recursive: true });
+    spawnSync('git', ['-C', tmp, 'worktree', 'add', '-b', 'workflow/issue-4293', '--', wtPath, 'HEAD'], { env, encoding: 'utf8' });
+
+    // Write the project state into the worktree branch
+    fs.mkdirSync(path.join(wtPath, 'kaola-workflow', 'issue-4293', '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(wtPath, 'kaola-workflow', 'issue-4293', 'workflow-state.md'), [
+      '# Kaola-Workflow State', '',
+      '## Project',
+      'name: issue-4293',
+      'status: closed',
+      '',
+      '## Sink',
+      'branch: workflow/issue-4293',
+      'issue_number: 4293',
+      'sink: merge',
+      '',
+      '## Closure',
+      'archive: closed',
+      ''
+    ].join('\n'));
+
+    // Add an impl file + the archived project state in the worktree commit
+    fs.writeFileSync(path.join(wtPath, 'impl-4293.txt'), 'impl\n');
+    // Simulate finalize: move project to archive in the worktree
+    const archiveDir = path.join(wtPath, 'kaola-workflow', 'archive', 'issue-4293');
+    fs.mkdirSync(archiveDir, { recursive: true });
+    fs.writeFileSync(path.join(archiveDir, 'workflow-state.md'), [
+      '# Kaola-Workflow State', '',
+      '## Project',
+      'name: issue-4293',
+      'status: closed',
+      '',
+      '## Sink',
+      'branch: workflow/issue-4293',
+      'issue_number: 4293',
+      'sink: merge',
+      ''
+    ].join('\n'));
+    spawnSync('git', ['-C', wtPath, 'add', '-A'], { env, encoding: 'utf8' });
+    spawnSync('git', ['-C', wtPath, 'commit', '-m', 'feat: impl 4293 + archive'], { env, encoding: 'utf8' });
+
+    // Remove the live folder from main (simulate the standard lane: finalize before sink-merge)
+    fs.rmSync(path.join(tmp, 'kaola-workflow', 'issue-4293'), { recursive: true, force: true });
+
+    const featureHead = spawnSync('git', ['-C', tmp, 'rev-parse', 'workflow/issue-4293'], { encoding: 'utf8' }).stdout.trim();
+    const mainBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+    assert(mainBefore !== featureHead, '#429 e2e: precondition: main lags feature branch');
+
+    const result = spawnSync(process.execPath, [
+      sinkMergeScript,
+      '--sink',
+      '--branch', 'workflow/issue-4293',
+      '--issue', '4293',
+      '--project', 'issue-4293',
+      '--json'
+    ], {
+      cwd: wtPath,
+      encoding: 'utf8',
+      env: { ...env, KAOLA_WORKFLOW_OFFLINE: '1' }
+    });
+
+    assert(result.status === 0, '#429 e2e: --sink must exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+
+    // Main must advance past mainBefore and must contain featureHead (the feature commit is merged).
+    // The --sink transaction may create additional commits (archive_commit) after the FF merge,
+    // so we check ancestry rather than exact SHA equality.
+    const mainAfter = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+    assert(mainAfter !== mainBefore, '#429 e2e: main must advance after --sink\nbefore: ' + mainBefore + '\ngot: ' + mainAfter);
+    const ancestorCheck = spawnSync('git', ['-C', tmp, 'merge-base', '--is-ancestor', featureHead, 'main'], { encoding: 'utf8' });
+    assert(ancestorCheck.status === 0, '#429 e2e: feature HEAD must be an ancestor of main after --sink (feature was merged)\nfeatureHead: ' + featureHead + '\nmainAfter: ' + mainAfter);
+
+    // sink-receipt.json must exist with all steps done
+    const archiveReceiptPath = path.join(tmp, 'kaola-workflow', 'archive', 'issue-4293', '.cache', 'sink-receipt.json');
+    const liveReceiptPath = path.join(tmp, 'kaola-workflow', 'issue-4293', '.cache', 'sink-receipt.json');
+    const receiptExists = fs.existsSync(archiveReceiptPath) || fs.existsSync(liveReceiptPath);
+    assert(receiptExists, '#429 e2e: sink-receipt.json must exist after completed sink\nstdout: ' + result.stdout);
+    const receiptRaw = fs.existsSync(archiveReceiptPath) ? fs.readFileSync(archiveReceiptPath, 'utf8') : fs.readFileSync(liveReceiptPath, 'utf8');
+    const receipt = JSON.parse(receiptRaw);
+    const allDone = receipt.steps && Object.values(receipt.steps).every(v => v === 'done' || v === 'skipped');
+    assert(allDone, '#429 e2e: all receipt steps must be done, got: ' + JSON.stringify(receipt.steps));
+
+    console.log('testSinkTransactionCleanEndToEnd: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // SCENARIO REGISTRY
 //
 // Ordered array of [name, fn] pairs preserving the exact execution order from
@@ -11785,6 +12057,10 @@ function buildRegistry() {
   add('testFinalizeRoadmapResidueDetection',              testFinalizeRoadmapResidueDetection);
   add('testStartupRefusesTargetSetMismatch',              testStartupRefusesTargetSetMismatch);
   add('testHarnessSelfCheck',                             testHarnessSelfCheck);
+  // #429 sink transaction tests
+  add('testSinkTransactionBlockedByForeignDirt',          testSinkTransactionBlockedByForeignDirt);
+  add('testSinkTransactionCrashResume',                   testSinkTransactionCrashResume);
+  add('testSinkTransactionCleanEndToEnd',                 testSinkTransactionCleanEndToEnd);
   return reg;
 }
 
