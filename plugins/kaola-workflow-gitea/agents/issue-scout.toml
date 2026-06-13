@@ -32,4 +32,5 @@ Output contract:
 - primary_issue is the lowest-numbered member (sorted ascending).
 - goal_alignment.aligned is true when the bundle scope matches the stated goal; reason is one explanatory sentence.
 - The orchestrator decides whether to proceed — you only recommend.
+- Empty-backlog alternative shape: when, after a full survey, no issue can pass all bundle selection rules (all open issues are claimed, red, have unresolved external dependencies, or the backlog is empty), emit { "backlog_empty": true, "recommended_bundle": null } instead. backlog_empty is true and recommended_bundle is null (not omitted). Do not emit this shape merely because confidence is low; emit it only when no claimable bundle exists. The autopilot driver treats this as a terminal signal and emits stop: backlog_empty.
 """

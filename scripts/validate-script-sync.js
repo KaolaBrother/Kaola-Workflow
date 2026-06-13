@@ -86,6 +86,9 @@ const COMMON_SCRIPTS = [
   // #435: run-gap capture gate. Byte-identical claude↔codex; gitlab/gitea carry
   // rename-normalized ports (kaola-{forge}-workflow-gap-sweep.js) in RENAME_NORMALIZED_FAMILIES.
   'kaola-workflow-gap-sweep.js',
+  // #443: autopilot driver CLI. Byte-identical claude↔codex; gitlab/gitea carry
+  // rename-normalized ports (kaola-{forge}-workflow-autopilot.js) in RENAME_NORMALIZED_FAMILIES.
+  'kaola-workflow-autopilot.js',
 ];
 
 const BYTE_IDENTICAL_GROUPS = [
@@ -276,6 +279,17 @@ const RENAME_NORMALIZED_FAMILIES = [
     ports: [
       { forge: 'gitlab', file: 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-gap-sweep.js' },
       { forge: 'gitea', file: 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-gap-sweep.js' },
+    ],
+  },
+  {
+    // #443: autopilot driver CLI forge ports. The script carries no forge-specific tokens,
+    // so the rename-normalized ports are body-identical to canonical after the prefix transform.
+    // Reference = canonical scripts/ copy.
+    label: 'autopilot forge ports',
+    reference: 'scripts/kaola-workflow-autopilot.js',
+    ports: [
+      { forge: 'gitlab', file: 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-autopilot.js' },
+      { forge: 'gitea', file: 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-autopilot.js' },
     ],
   },
 ];

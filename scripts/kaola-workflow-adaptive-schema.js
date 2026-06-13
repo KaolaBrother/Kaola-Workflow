@@ -29,6 +29,10 @@ const PLAN_RUN_COMMAND = '/kaola-workflow-plan-run';
 const PLAN_RUN_SKILL = 'kaola-workflow-plan-run';
 const ADAPT_COMMAND = '/kaola-workflow-adapt';
 const ADAPT_SKILL = 'kaola-workflow-adapt';
+// #443: the autopilot driver command + skill (forge-neutral; identical across all editions —
+// NOT rename-normalized). Used by the autopilot next descriptor and the route-reachability pins.
+const AUTO_COMMAND = '/kaola-workflow-auto';
+const AUTO_SKILL = 'kaola-workflow-auto';
 
 // The frozen-plan artifact (the fast-summary.md analogue) + its inner ledger heading.
 const PLAN_FILE = 'workflow-plan.md';
@@ -541,6 +545,8 @@ module.exports = {
   PLAN_RUN_SKILL,
   ADAPT_COMMAND,
   ADAPT_SKILL,
+  AUTO_COMMAND,
+  AUTO_SKILL,
   PLAN_FILE,
   NODES_HEADING,
   LEDGER_HEADING,

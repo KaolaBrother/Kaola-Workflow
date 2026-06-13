@@ -455,6 +455,82 @@ one finalization  →  close N issues  →  remove N .roadmap/issue-N.md files
 
 `issue-scout` is not a write role, not an implement role, and not a gate node. It is advisory input only.
 
+## Autopilot Driver (`kaola-workflow-autopilot.js`, issue #443 — D-420 P1)
+
+`kaola-workflow-autopilot.js` is a **forge-neutral stage state-machine aggregator** that automates
+the multi-bundle loop (scout → claim → plan → run → finalize) by reading merged receipt contracts.
+It is exposed as the `/kaola-workflow-auto` command (×6 surfaces: 3 Claude commands + 3 Codex
+SKILLs; ×4 script editions: canonical + byte-identical Codex twin + two edition-named forge ports).
+
+**Lean-orchestrator boundary (#44).** The driver sequences stages and records receipts; it never
+dispatches agents, invokes forge CLIs, or mutates the plan. The agent owns issue selection,
+consent decisions, and dispatch; the script owns stage atomicity and the digest receipt.
+
+**Subcommands.**
+
+- `next --goal <text> [--project <name>] [--scout-result <path>] [--json]` — stateless function
+  of goal, project, on-disk receipts, and optional scout JSON. Reads the last digest line + the
+  relevant stage receipt and emits either a stage descriptor
+  (`{stage, action, project, goal, inputs:{…}, receipt_path, repair?:{kind,node,paths}}`) or a
+  typed stop payload (`{stop, stage, project, details:{…}, receipt_path}`). Exit 0 on a clean
+  descriptor or stop; exit 1 on an internal or argument error.
+- `digest --project <name> --stage <s> --result <r> [--receipt-path <path>] [--repair <json>] [--json]`
+  — appends one JSONL transition line to
+  `kaola-workflow/<project>/.cache/autopilot-digest.jsonl`.
+
+**Digest crash-resume.** The digest is append-only (never rewritten). On a restart, `next` reads
+the last non-empty JSON line to determine the current stage position and re-emits the next
+descriptor without re-executing already-completed stages.
+
+**Receipt seams.** The driver gates on four merged contracts:
+
+| Receipt | Field / check | Meaning |
+|---------|---------------|---------|
+| `kaola-workflow/<project>/.cache/sink-receipt.json` (#429) | `steps.push_main === 'done'` | Finalize-complete witness (terminal sink step) |
+| `.cache/chain-receipt.json` (#432) | every chain `exitCode === 0 \|\| accepted_red === true` | Tests-green witness |
+| cmdFinalize stdout `closure_receipt` (#441) | `goal_check === 'satisfied'` | Goal-satisfied terminal condition |
+| `.cache/barrier-failed.json` (#440) | `triage.class` + `proposed_repair` | Barrier-failure triage for repair routing |
+
+**Six typed stop reasons** (all driven by ground-truth fields, never prose):
+
+| Stop | Ground-truth binding |
+|------|----------------------|
+| `goal_satisfied` | `closure_receipt.goal_check === 'satisfied'` (cmdFinalize stdout, #441) |
+| `backlog_empty` | scout JSON `backlog_empty === true && recommended_bundle === null` |
+| `consent_halt` | `escalated_to_full: consent` in state, OR `consent_halt: pending` in ledger (#440) |
+| `security_halt` | `escalated_to_full: security` in state WITHOUT concurrent consent marker (#440) |
+| `typed_refusal` | `barrier_failed` envelope carrying #440 triage; OR claim/handoff/validator `{result:'refuse',reason}` |
+| `repair_limit` | two same-node `barrier_failed` events after a `repair_applied` digest entry under `auto` mode |
+
+**Repair consent (`KAOLA_AUTOPILOT_REPAIR ∈ {ask(default), auto}`).**
+Mechanical-class = exactly `{add_to_write_set, write_set_swap}` — these two `proposed_repair.kind`
+values are auto-applicable under `auto` mode, bounded to 1 repair per node (2nd same-node
+failure → `repair_limit`). `revert_overflow` and `unclassified` always halt even under `auto`.
+The driver surfaces a `repair` descriptor in the next descriptor for the orchestrator to apply; it
+never edits the plan itself. `ask` mode (the default) stops on ANY `barrier_failed` envelope with
+a `typed_refusal` stop.
+
+**`backlog_empty` output shape.** `agents/issue-scout.md` + 3 TOML twins accept an alternative
+top-level envelope `{backlog_empty: true, recommended_bundle: null}` in addition to the standard
+`{recommended_bundle: {…}}` shape. The driver gates on this field; any `backlog_empty === true`
+at the scout stage emits a `stop:'backlog_empty'` payload (exit 0).
+
+**`readPlanAllDone` ledger-last fix.** The section-boundary regex uses `$(?![\s\S])` (not `\Z`)
+to correctly capture the last `## Node Ledger` section in the JS engine. All ledger rows
+`status === 'done'` with at least one data row → `allDone: true` → advances to `finalize` stage.
+
+**One-bundle-per-invocation.** A successful finalize with `goal_check !== 'satisfied'` emits
+`result:'goal_progress'` (plus the scout's next recommendation) and exits; the operator re-invokes
+for the next bundle. No in-process chaining between bundles.
+
+**Edition strategy.** Forge-neutral (zero forge-CLI tokens). Byte-identical claude↔codex
+(`scripts/` === `plugins/kaola-workflow/scripts/`); body-identical prefix-rename gitlab/gitea
+ports. Registered in `COMMON_SCRIPTS`, `RENAME_NORMALIZED_FAMILIES`, and the install-manifest
+`SUPPORT_SCRIPTS`. Route-reachability enforced via `test-route-reachability.js` + 4
+`validate-*-contracts.js` pin ×6 (#400). `kaola-workflow-adaptive-schema.js` (×4) exports
+`AUTO_COMMAND='/kaola-workflow-auto'` and `AUTO_SKILL='kaola-workflow-auto'`. Decision record:
+`docs/decisions/D-443-01.md`.
+
 ## Agent Profile Structure and Edition Sync
 
 **Profile layout.** Each role has a canonical `agents/<name>.md` (installed by `install.sh`

@@ -707,6 +707,7 @@ assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'main-session-gate'
   const emittedSkillTargets = [
     schema.PLAN_RUN_SKILL,
     schema.ADAPT_SKILL,
+    schema.AUTO_SKILL,
     'kaola-workflow-fast',      // isFast fallback (claim.js:520)
     'kaola-workflow-research'   // full fallback (claim.js:520)
   ];

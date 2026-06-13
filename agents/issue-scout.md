@@ -133,3 +133,13 @@ Fields:
   - `reason`: one sentence explaining the alignment or misalignment.
 
 When confidence is not `"high"`, set `issues` to a single-element array and note the reason in `rationale`. The orchestrator decides whether to proceed with the recommended set, adjust it, or fall back to single-issue mode — you only recommend.
+
+### Empty-Backlog Alternative Shape
+
+When, after completing the full survey, there is no claimable, unblocked, same-scope bundle to recommend — because all open issues are already claimed, classified red, have unresolved external dependencies, or the backlog contains no open issues at all — emit the following shape instead of the standard `recommended_bundle` object:
+
+```json
+{ "backlog_empty": true, "recommended_bundle": null }
+```
+
+`backlog_empty` is `true` and `recommended_bundle` is `null` (not omitted). Do not emit this shape merely because confidence is low or the available bundles are suboptimal; emit it only when no issue can pass all bundle selection rules. The autopilot driver treats this shape as a terminal signal and emits `stop: backlog_empty` without proceeding to claim.

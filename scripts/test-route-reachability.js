@@ -36,12 +36,14 @@ const stripSlash = c => c.replace(/^\//, '');
 const emittedSkillTargets = [
   schema.PLAN_RUN_SKILL,
   schema.ADAPT_SKILL,
+  schema.AUTO_SKILL,
   'kaola-workflow-fast',
   'kaola-workflow-research'
 ];
 const emittedCommandTargets = [
   stripSlash(schema.PLAN_RUN_COMMAND),
   stripSlash(schema.ADAPT_COMMAND),
+  stripSlash(schema.AUTO_COMMAND),
   'kaola-workflow-fast',
   'kaola-workflow-phase1'
 ];
