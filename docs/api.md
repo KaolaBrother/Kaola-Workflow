@@ -1072,7 +1072,7 @@ Installs the Codex-native role profiles into a project's `.codex/`. Ships in the
 
 1. **Source schema wall** — `validateSourceProfiles(pluginRoot)`: every `config_file` resolves, every `agents/*.toml` is referenced by exactly one `[agents.*]` entry, and every profile passes `validateProfileText`. On failure, prints `profile_schema_error: ...` to stderr and exits 1 **before any write**.
 2. **Manifest guard** — if the target manifest declares a `schema_version` newer than supported, prints `manifest_schema_unsupported: ...` and exits 1 (never prunes against a future manifest).
-3. Copies each source profile via write-temp-then-rename (no torn profiles on crash), upserts the managed `[agents.*]` block, and merges the managed `.codex/hooks.json` entries (#325 semantics).
+3. Copies each source profile via write-temp-then-rename (no torn profiles on crash), upserts the managed `[agents.*]` block, copies hook scripts into the global stable home, and merges the managed entries into `~/.codex/hooks.json` (#325/#447 semantics).
 4. **Prune** — removes target `.toml` files that are no longer current AND are either listed in the previous manifest (`stale-managed`) or in the retired list `docs-lookup.toml` (`retired`, works with no manifest). Unknown user TOMLs are left in place and reported as `unmanaged extra`.
 5. **Manifest** — writes `.codex/agents/kaola-workflow/.kaola-managed-profiles.json` (`schema_version: 1`, plugin name/version, ISO `installed_at`, `roles`, per-file `sha256`, `retired_files_removed`).
 6. **Post-verify** — re-reads every installed profile and asserts the managed block carries every template role; on failure prints `post_verify_failed: ...` and exits 1.
@@ -1139,7 +1139,7 @@ const { generateMirror, mapLedgerStatus } = require('./kaola-workflow-task-mirro
 
 The Codex compact/resume entrypoint. A self-contained stdin/stdout filter that reads durable workflow artifacts and emits a deterministic resume packet. Edition-named ×3 (codex: `kaola-workflow-codex-compact-resume.js`, gitlab: `kaola-gitlab-workflow-codex-compact-resume.js`, gitea: `kaola-gitea-workflow-codex-compact-resume.js`); only the filename comment differs across editions.
 
-**Note:** The Codex plugin manifest (`plugin.json`) has no `hooks` key. The lifecycle wiring lives in the project-local `.codex/hooks.json` written by `install-codex-agent-profiles.js`: this script is registered as a `SessionStart` (`compact`) hook (id `kaola-workflow:compact-context`) there. It is also invokable on demand via stdin (see invocation below).
+**Note:** The Codex plugin manifest (`plugin.json`) has no `hooks` key. The lifecycle wiring lives in the global `~/.codex/hooks.json` written by `install-codex-agent-profiles.js`: this script is registered as a `SessionStart` (`compact`) hook (id `kaola-workflow:compact-context`) there, with the hook script copied into `~/.codex/kaola-workflow/scripts`. It is also invokable on demand via stdin (see invocation below).
 
 **Invocation (on demand):**
 
@@ -1175,12 +1175,14 @@ When `workflow-tasks.json` is absent, section 6 reads `task mirror: not generate
 
 ---
 
-## Codex `.codex/hooks.json` managed-entry contract
+## Codex `~/.codex/hooks.json` managed-entry contract
 
-`install-codex-agent-profiles.js` (invoked by `./install.sh`) writes a project-local
-`.codex/hooks.json` containing the three managed Kaola-Workflow hook entries. The
-Codex plugin manifest (`plugin.json`) has no `hooks` key; this file is the sole
-wiring point for Codex lifecycle hooks.
+`install-codex-agent-profiles.js` (invoked by the Codex `kaola-workflow-init` skill)
+writes the global `~/.codex/hooks.json` containing the three managed
+Kaola-Workflow hook entries. Agent profiles and the managed `[agents.*]` config block
+remain project-local under `<project>/.codex/`; hook entries and hook scripts are
+machine-global. The Codex plugin manifest (`plugin.json`) has no `hooks` key;
+`~/.codex/hooks.json` is the sole wiring point for Codex lifecycle hooks.
 
 ### Managed-entry identification
 
@@ -1191,16 +1193,18 @@ identifies managed entries by that prefix and uses an idempotent merge-by-id str
   `kaola-workflow:` are dropped and the managed entries are appended.
 - User entries (no `id`, or a non-`kaola-workflow:` id) are preserved untouched.
 - Events not present in the managed template are left entirely unchanged.
-- If the existing `.codex/hooks.json` is missing or malformed JSON, it is treated as
+- If the existing `~/.codex/hooks.json` is missing or malformed JSON, it is treated as
   empty with a warning printed to stderr (WARN-first; the install proceeds).
 
 ### Template token substitution
 
 The source template (`plugins/kaola-workflow/config/hooks.json`) uses the token
-`__KW_PLUGIN_ROOT__` in every command path. The installer replaces ALL occurrences
-(using `split/join`, not `String.replace`) with the absolute path to the plugin root
-directory at install time. Written command paths in `.codex/hooks.json` are therefore
-absolute and resolve correctly regardless of the working directory when Codex runs the hook.
+`__KW_PLUGIN_ROOT__` in every command path. The installer copies all hook-referenced
+scripts into the version-less stable home `~/.codex/kaola-workflow/{hooks,scripts}`
+and replaces ALL token occurrences (using `split/join`, not `String.replace`) with
+that stable home, not the versioned plugin-cache path. Written command paths in
+`~/.codex/hooks.json` are therefore absolute and survive plugin-cache garbage
+collection, throwaway install trees, and project worktree changes.
 
 ### The three managed entries
 
@@ -1222,7 +1226,8 @@ does not add or modify them beyond the token substitution above.
 The installer prints:
 
 ```
-Kaola-Workflow Codex hooks: updated at .codex/hooks.json
+Kaola-Workflow Codex hooks: updated at ~/.codex/hooks.json
+Kaola-Workflow Codex hooks: copied <n> hook script(s) into stable home ~/.codex/kaola-workflow (swept <n> stale)
 run /hooks once in Codex to review and trust these command hooks (or codex exec --dangerously-bypass-hook-trust for automation)
 ```
 
@@ -1239,11 +1244,12 @@ run /hooks once in Codex to review and trust these command hooks (or codex exec 
   non-fatal, WARN-first (closure still succeeds).
 - **Matcher caveat:** the `PreToolUse`/`PostToolUse` matchers (`Bash`, `Write|Edit`)
   follow Claude Code tool names. If a Codex build uses different tool-event names the
-  matcher string in `.codex/hooks.json` may need adjustment.
-- **Uninstall scope:** `uninstall.sh` strips the managed entries from the
-  `.codex/hooks.json` in the directory it is run from. Because the file is
-  project-local (not global), running `uninstall.sh` from a different directory
-  leaves any copy written there intact.
+  matcher string in `~/.codex/hooks.json` may need adjustment.
+- **Uninstall scope:** `uninstall.sh` strips the managed entries from the global
+  `~/.codex/hooks.json` and removes the global `~/.codex/kaola-workflow` hook home.
+  Agent profiles and the managed config block are removed from the project directory
+  where `uninstall.sh` is run. Older project-local `.codex/hooks.json` files from
+  pre-#447 installs should be removed to avoid double-firing.
 
 ---
 
