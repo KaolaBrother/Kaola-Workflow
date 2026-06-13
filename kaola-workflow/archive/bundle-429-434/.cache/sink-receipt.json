@@ -1,0 +1,25 @@
+{
+  "project": "bundle-429-434",
+  "branch": "workflow/bundle-429-434",
+  "issue_number": 429,
+  "issue_numbers": [
+    429,
+    434
+  ],
+  "resolved_default_branch": "main",
+  "started_at": "2026-06-13T08:28:59.243Z",
+  "updated_at": "2026-06-13T08:52:35.050Z",
+  "stash_ref": null,
+  "removed_duplicates": [],
+  "steps": {
+    "preflight": "done",
+    "push_upstream": "done",
+    "merge": "done",
+    "worktree_sync": "done",
+    "finalize": "done",
+    "closure": "done",
+    "stash_restore": "done",
+    "archive_commit": "pending",
+    "push_main": "pending"
+  }
+}
