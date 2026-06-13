@@ -19,7 +19,7 @@
 //   - a single unique `finalize` sink; acyclic DAG (loops are annotated single nodes)
 //   - G1 code-reviewer post-dominates every implement node (trivial-docs exemption)
 //   - G2 security-reviewer post-dominates every sensitive node (when sensitive)
-//   - caps: FANOUT_CAP, FILE_CEILING per node, LOOP_CAP
+//   - caps: FANOUT_CAP, LOOP_CAP
 //   - read-only roles declare no write set
 //
 // Post-dominance is computed as reachability-after-removal (equivalent over a
@@ -988,8 +988,8 @@ function validatePlan(content, opts) {
     // escalating a purely-mechanical authoring artifact to a maximally-expensive human consent halt.
     // Refuse at FREEZE (the authoring gate) instead. The check runs on the normalized n.writeSet
     // members: classifier.normalizeRepoPath preserves a trailing `/` and leaves `../` untouched.
-    // Placed BEFORE the FILE_CEILING check so a `src/` token is reported as a SHAPE error (it parses
-    // to size 1, so the A2 fail-closed above does not fire). Freeze-only — revalidateForResume is NOT
+    // Placed ahead of the remaining write-set shape checks so a `src/` token is reported as a
+    // SHAPE error (it parses to size 1). Freeze-only — revalidateForResume is NOT
     // touched, so an in-flight legacy plan frozen by a pre-#381 validator still resumes (its barrier
     // failure falls through to the unchanged write-halt --reason consent net).
     // #388: freeze-wall round 2 — close the residual write-set shapes that freeze in-grammar
@@ -1070,9 +1070,6 @@ function validatePlan(content, opts) {
       if (n.role === TERMINAL_ROLE) {
         errors.push(`node ${n.id} is the finalize sink and must not declare a model (it is never dispatched as a subagent)`);
       }
-    }
-    if (n.writeSet.size > schema.FILE_CEILING) {
-      errors.push(`node ${n.id} declares ${n.writeSet.size} files > FILE_CEILING ${schema.FILE_CEILING}`);
     }
   }
 

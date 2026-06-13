@@ -82,7 +82,7 @@ function variantProfileText(baseText, role) {
 }
 
 // Caps (verified first-party): FANOUT_CAP default 4 (env KAOLA_FANOUT_CAP);
-// LOOP_CAP static loop bound; FILE_CEILING absolute backstop of 6 (fast.md:63);
+// LOOP_CAP static loop bound;
 // TEST_THRASH_LIMIT >= 3 consecutive failing cycles on the same test (fast.md:64).
 const DEFAULT_FANOUT_CAP = 4;
 // #375 (D3): read-only batch members are zero-blast-radius (no worktrees, no writes,
@@ -95,7 +95,6 @@ const DEFAULT_FANOUT_CAP_READONLY = 8;
 // open-ready/close-node; consumer: the #376 write-lane containment hook + the #293 legality check.
 const RUNNING_SET_NAME = 'running-set.json';
 const LOOP_CAP = 5;
-const FILE_CEILING = 6;
 const TEST_THRASH_LIMIT = 3;
 
 // Absolute node-count backstop for the plan grammar (DoS / stack-overflow guard).
@@ -558,7 +557,6 @@ module.exports = {
   DEFAULT_FANOUT_CAP_READONLY,
   RUNNING_SET_NAME,
   LOOP_CAP,
-  FILE_CEILING,
   TEST_THRASH_LIMIT,
   MAX_NODES,
   ESCALATION_MARKERS,

@@ -3062,14 +3062,15 @@ function testAdaptiveAuditFixes() {
     assert(v.result === 'refuse' && /G1/.test((v.errors || []).join(';')),
       'A2′: dot-leading path must be captured and require code-reviewer (G1), got: ' + JSON.stringify(v));
 
-    // A2 (FILE_CEILING): root-level files now count toward the per-node ceiling.
+    // A2: a cohesive write-role node may declare a large exact-file set (> 6) and freeze
+    // in-grammar — the per-node FILE_CEILING was retired (#453); other write-safety walls still apply.
     v = validatePlanFixture(tmp, [
-      '| impl | tdd-guide | — | Dockerfile, Makefile, build.env, a.txt, b.txt, c.txt, d.txt | 1 | sequence |',
+      '| impl | tdd-guide | — | src/a.js, src/b.js, src/c.js, src/d.js, src/e.js, src/f.js, src/g.js, src/h.js, src/i.js, src/j.js, src/k.js, src/l.js | 1 | sequence |',
       '| review | code-reviewer | impl | — | 1 | sequence |',
       '| done | finalize | review | — | 1 | sequence |',
     ], ['chore']);
-    assert(v.result === 'refuse' && /FILE_CEILING/.test((v.errors || []).join(';')),
-      'A2: root files must count toward FILE_CEILING, got: ' + JSON.stringify(v));
+    assert(v.result === 'in-grammar',
+      'A2: a large cohesive write-role node (12 files) must freeze in-grammar after FILE_CEILING removal, got: ' + JSON.stringify(v));
 
     // B1: a decoy `labels:` line OUTSIDE ## Meta (not covered by plan_hash) must not override the
     // real labels and drop G2. Label-only-sensitive plan with no security-reviewer must refuse.
@@ -9082,7 +9083,7 @@ function testAdaptiveRegistrationAndForgePortGaps() {
     fs.writeFileSync(path.join(tmp, 'scripts', 'validate-vendored-agents.js'), '// anchor\n');
   };
   // The full 22-path registration surface for an agent named `new-scout`, split across nodes
-  // under FILE_CEILING=6 (the byte-group co-occurrence forces resolve-agent-model ×4 and the
+  // (the byte-group co-occurrence forces resolve-agent-model ×4 and the
   // plan-validator root↔codex pair into single nodes — satisfied here).
   const SURFACE_NODES = (parents) => [
     '| n1 | implementer | ' + parents + ' | agents/new-scout.md, plugins/kaola-workflow/agents/new-scout.toml, plugins/kaola-workflow-gitlab/agents/new-scout.toml, plugins/kaola-workflow-gitea/agents/new-scout.toml, install.sh, uninstall.sh | 1 | sequence |',
@@ -9124,8 +9125,8 @@ function testAdaptiveRegistrationAndForgePortGaps() {
         'A2: without the anchor file the mech-1 check must be inert (in-grammar), got: ' + JSON.stringify(v));
     } finally { fs.rmSync(tmp2, { recursive: true, force: true }); }
 
-    // A3 (complete-surface positive, 22 paths / FILE_CEILING=6 -> 5 impl nodes): the full
-    // surface declared across 5 nodes (byte-group co-occurrence satisfied) -> in-grammar.
+    // A3 (complete-surface positive, 22 paths / 5 impl nodes by byte-group co-occurrence +
+    // forge-port ordering): the full surface declared across 5 nodes -> in-grammar.
     v = validatePlanFixture(tmp, [
       '| explore | code-explorer | — | — | 1 | sequence |',
       ...SURFACE_NODES('explore'),
