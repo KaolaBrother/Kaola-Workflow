@@ -204,6 +204,26 @@ The adaptive scripts share a framed-output + refusal contract so a caller can al
 - **Framed output (last-line JSON).** A shelled script's result is the **last line of stdout that parses as JSON** (`safeJsonParse` in `commit-node.js` / `adaptive-node.js` tries the whole payload first, then the last valid JSON line). A stray log/debug/warning line emitted *before* the framed result therefore no longer collapses a success into an empty `{}` (a false refusal). The `shellNode` seam returns `{ ...parsed, exitCode }` with **`exitCode` set LAST** — a payload field named `exitCode` can never clobber the real process exit status.
 - **Refusal envelope.** The canonical refusal shape is `{ result: 'refuse', reason, ... }`; callers branch on `result === 'refuse'` and read `reason` (a snake_case token). Per-subcommand payloads may carry **extra** fields (e.g. `nodeId`, `errors`, `status`) — additive, never required. The shared constructors live in `kaola-workflow-adaptive-schema.js` (the ×4 byte-identical anchor): `refuse(reason, extra)` builds the envelope, and `emit(obj)` writes **exactly one compact JSON line** (single-line so the last-line parser always round-trips it; pass `{ stream: process.stderr }` only for genuine out-of-band logs).
 - **Refusals go to stdout.** A non-zero exit still carries its reason on **stdout** (not stderr). `kaola-workflow-task-mirror.js` previously printed its refusals on stderr while `shellNode` parsed `err.stdout` only — so the reason was always lost and `refreshTaskMirror` degraded to a bare `'failed'`. Its `missing_arg` / `plan_not_found` / `plan_not_frozen` refusals now emit the envelope on stdout (exit 1 preserved, the legacy `status` key kept for backward compat), and `refreshTaskMirror` surfaces the recovered `reason`.
+- **`operator_hint` field (issue #445 / D-445-01).** Every typed outcome that carries a `reason` (`result: refuse`, `result: halt`, `result: warn`) now also carries a top-level `operator_hint: string` field — a one-sentence human-readable remediation hint generated at emit time from a per-aggregator `OPERATOR_HINT_REGISTRY`. The `operator_hint` field is at the SAME level as `result`/`reason` (never nested inside `triage` or `proposed_repair`). A success envelope with no `reason` carries no `operator_hint`; its presence is itself the signal that there is a next step.
+
+  ```json
+  {
+    "result": "refuse",
+    "reason": "write_set_overflow",
+    "operator_hint": "Node n4 wrote outside its declared set. Run: node scripts/kaola-workflow-adaptive-node.js revert-overflow --node-id n4",
+    "nodeId": "n4"
+  }
+  ```
+
+  **Vocabulary contract (D-445-01 §3):** `write_set_overflow` family hints MUST reference `revert-overflow`, NEVER `drop-base`. A crash-repair / reopen-writer hint MUST reference `repair-node`. NO hint string in any aggregator contains a forge CLI token (`gh` / `glab` / `tea`) — hints are forge-neutral and ship in all four editions. The four aggregators hosting `OPERATOR_HINT_REGISTRY` are `adaptive-node.js`, `commit-node.js`, `plan-validator.js`, and `parallel-batch.js`; the registry lives INSIDE each script (co-located with its emit sites, no shared import). The human channel (`operator_hint`) and the machine channel (`proposed_repair`, D-440-01) name the SAME #424/#434 primitives.
+
+  **`--summary` mode (issue #446 / D-446-01 §4).** When `--summary` is passed to `adaptive-node.js`, the subcommand prints ONE line instead of full JSON:
+
+  ```
+  summary: <result> [| reason: <reason>] [| hint: <operator_hint>]
+  ```
+
+  `result` is always present; `| reason: <reason>` appears only when a `reason` is set; `| hint: <operator_hint>` appears only when an `operator_hint` is present. The full envelope JSON is simultaneously written to `.cache/<op>-envelope.json`, where `<op>` is the subcommand name (e.g. `.cache/close-and-open-next-envelope.json`). On `result: refuse` the interactive loop reads `.cache/<op>-envelope.json` for full detail; on success the one-line summary is sufficient. **Default output (no `--summary`) is byte-unchanged full JSON** — `--summary` is purely additive and opt-in. All orchestration scripts and tests that parse full-JSON stdout are unaffected.
 
 ### Validator subcommand emit/refuse (issue #406 — the #355 follow-up)
 
@@ -322,6 +342,53 @@ dispatch: {
 - `'read-only'` — GATE_ROLES: `code-reviewer`, `security-reviewer`, `adversarial-verifier`, `main-session-gate`.
 - `'RED-fixture-in-$TMPDIR'` — `tdd-guide` role (#424: RED fixtures must not be written to the worktree).
 - `'sync:editions'` — write set contains a GENERATED_AGGREGATORS sibling (any of canonical + codex + forge ports); anchor-gated on `edition-sync.js` availability (inert when absent).
+
+### `route-findings` subcommand (issue #446 / D-446-01)
+
+New subcommand on `scripts/kaola-workflow-adaptive-node.js`. Parses a gate node's evidence file (`.cache/{node-id}.md`) `finding:` lines into a structured routing table at `.cache/findings-route.json`. It is a **subcommand, not a new script** — it inherits the existing install-manifest registration of `adaptive-node.js` (no new `SUPPORT_SCRIPT_NAMES` or install-manifest entry required).
+
+**CLI:**
+
+```bash
+node scripts/kaola-workflow-adaptive-node.js route-findings --project P --node-id N
+```
+
+**Behavior:**
+
+- Reads `.cache/{node-id}.md`, parses each `finding:` line.
+- Resolves each finding's `file` against the frozen plan's declared write sets to determine `owning_node`.
+- Writes `.cache/findings-route.json` as an array of routing objects (one per parsed `finding:` line).
+- Returns `{ result: 'refuse', errors: [...] }` when `--node-id` is missing.
+
+**`.cache/findings-route.json` schema:**
+
+```json
+[
+  {
+    "finding_id": "F1",
+    "file": "scripts/kaola-workflow-adaptive-node.js",
+    "owning_node": "n4",
+    "fix_role": "implementer",
+    "status": "open"
+  }
+]
+```
+
+Field contract:
+
+| Field | Type | Description |
+|---|---|---|
+| `finding_id` | `string` | The finding's identifier from the evidence file (`F1`, `F2`, …) |
+| `file` | `string` | The file the finding concerns, parsed from the `finding:` line |
+| `owning_node` | `string \| null` | The frozen-plan node whose declared write set contains `file`. **`null` = plan-repair signal**: no node declared the file, so the orchestrator must widen a write set or add a node before a writer can fix it |
+| `fix_role` | `string` | Inferred role to route the fix: (1) `security` in finding text → `security-reviewer`; (2) last code-producing node that declared `file` → `implementer`; (3) no producing node → `code-reviewer` |
+| `status` | `"open" \| "n/a"` | `open` for an actionable finding; `n/a` for an explicitly dismissed/non-blocking line |
+
+**Auto-invoke on gate-node close.** `close-and-open-next` automatically invokes `route-findings` when the closing node's role is in the `VERDICT_ROLES` set (`code-reviewer`, `security-reviewer`, `adversarial-verifier`, `main-session-gate`). The auto-invoke is **silent and non-blocking**: any error is logged to stderr and NEVER blocks the node advance. A gate node closing clean still produces a `findings-route.json` (possibly an empty array); a gate node with findings produces the routing table as a side effect with no extra operator step. Non-`VERDICT_ROLES` closes do NOT invoke `route-findings`.
+
+**Install surface:** unchanged — `route-findings` is a subcommand of `adaptive-node.js`, which is already in `COMMON_SCRIPTS` and all three `install.sh` `SUPPORT_SCRIPT_NAMES` blocks. No new manifest entry.
+
+---
 
 ### `record-evidence --verify` (issue #444 / D-444-01 §4)
 

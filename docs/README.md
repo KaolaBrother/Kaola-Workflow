@@ -15,5 +15,11 @@
   - [D-440-01 — Consent-halt triage payloads: `triage: { class, proposed_repair?, testDelta? }` on `write-halt` and `barrier_failed`; three `write_set_overflow` subtypes (`lockfile_write`, `mirror_write`, `count_bump`); classification table in `adaptive-schema.js`; structured `proposed_repair` using #434 primitives vocabulary; one shape on both channels (D-420 Part 2, issue #440)](decisions/D-440-01.md)
   - [D-441-01 — Goal-conditioned bundles: optional `goal:` prose line in `## Meta`; `parseGoal` reader; hash-covered for free; `KAOLA_GOAL` env var; `issue-scout` `goal_alignment` note; advisory `goal_check: satisfied|unsatisfied|absent` in closure receipt (D-420 Part 3, issue #441)](decisions/D-441-01.md)
   - [D-442-01 — `kaola-workflow-release.js` release aggregator: envelope, architecture, closed-issue derivation, explicit `--version`, lockstep Codex-manifest bump, `--push` forge-neutral gate, step-receipt crash-resume, `COMMON_SCRIPTS`-only registration](decisions/D-442-01.md)
+- [Plan-Run Cards](plan-run-cards/) — Per-situation adaptive plan-run reference cards (rare-branch recovery; pointed at by the plan-run skeleton `<!-- CARD: <name> -->` markers)
+  - [resume.md](plan-run-cards/resume.md) — Crash/interrupt resume
+  - [governance.md](plan-run-cards/governance.md) — Planner freeze/governance-ack handshake
+  - [repair-routing.md](plan-run-cards/repair-routing.md) — `route-findings` consumption, `revert-overflow` / `repair-node` choice, plan-repair
+  - [reopen-complete-node.md](plan-run-cards/reopen-complete-node.md) — Reopening a `complete` writer
+  - [frontier-batch.md](plan-run-cards/frontier-batch.md) — Parallel frontier fan-out / batch subcommands
 - [Investigations](investigations/) — Investigation notes and analysis documents
 - [Changelog](../CHANGELOG.md)

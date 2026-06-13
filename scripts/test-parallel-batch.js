@@ -1847,6 +1847,80 @@ function spyMirrorShell(planPath, failMirror) {
   cleanup(root);
 }
 
+// ---------------------------------------------------------------------------
+// T-batch-hint (#445): operator_hint is present on the known typed-refuse
+//   envelopes that parallel-batch emits. Table-driven; uses seam-injected io.
+//
+// Note: the scheduler_active refusal path from coordinationRefusal (via
+//   batchCoordinationGuard) does NOT carry operator_hint — that function is a
+//   shared primitive from adaptive-node that builds a plain refuse() envelope.
+//   Only the paths that parallel-batch.js builds DIRECTLY are tested here.
+// ---------------------------------------------------------------------------
+{
+  // Table: each entry drives a refuse path that parallel-batch builds with
+  // an explicit operator_hint field, and asserts its presence.
+  const hintCases = [];
+
+  // (a) runOpenBatch — halt_pending: plan has consent_halt in the ledger.
+  //     batchCoordinationGuard layer-2 adds operator_hint explicitly.
+  {
+    const haltPlan = makeReadOnlyFanout(2).replace(
+      '## Node Ledger\n',
+      '## Node Ledger\nconsent_halt: pending\n'
+    );
+    const { root, planPath, statePath, cacheDir } = makeProjectDir(haltPlan);
+    const io = makeIo();
+    const manifestPath = path.join(cacheDir, 'active-batch.json');
+    const shell = realNextActionShell(planPath);
+    hintCases.push({
+      label: 'halt_pending (open-batch)',
+      run: () => runOpenBatch({ planPath, statePath, cacheDir, manifestPath, project: 'test-project', max: null, fanoutCap: 4, shell, ...io }),
+      cleanup: () => cleanup(root),
+    });
+  }
+
+  // (b) runSealMember — no_active_batch: no manifest file present.
+  //     runSealMember builds the refuse directly with operator_hint.
+  {
+    const { root, planPath, statePath, cacheDir } = makeProjectDir(makeReadOnlyFanout(2));
+    const io = makeIo();
+    const manifestPath = path.join(cacheDir, 'active-batch.json');
+    const shell = realNextActionShell(planPath);
+    hintCases.push({
+      label: 'no_active_batch (seal-member)',
+      run: () => runSealMember({ planPath, statePath, cacheDir, manifestPath, project: 'test-project', nodeId: 'f1', max: null, fanoutCap: 4, shell, ...io }),
+      cleanup: () => cleanup(root),
+    });
+  }
+
+  // (c) runSeal — no_active_batch: no manifest file present.
+  //     runSeal is another parallel-batch subcommand that builds the refuse directly.
+  {
+    const { root, planPath, statePath, cacheDir } = makeProjectDir(makeReadOnlyFanout(2));
+    const io = makeIo();
+    const manifestPath = path.join(cacheDir, 'active-batch.json');
+    const shell = realNextActionShell(planPath);
+    hintCases.push({
+      label: 'no_active_batch (seal)',
+      run: () => runSeal({ planPath, statePath, cacheDir, manifestPath, project: 'test-project', max: null, fanoutCap: 4, shell, ...io }),
+      cleanup: () => cleanup(root),
+    });
+  }
+
+  for (const tc of hintCases) {
+    let r;
+    try { r = tc.run(); } catch (e) { r = { result: 'error', error: String(e.message) }; }
+    finally { if (tc.cleanup) tc.cleanup(); }
+
+    assert(r.result === 'refuse',
+      'T-batch-hint[' + tc.label + ']: expected result=refuse, got ' + r.result);
+    assert(
+      typeof r.operator_hint === 'string' && r.operator_hint.length > 0,
+      'T-batch-hint[' + tc.label + ']: operator_hint must be a non-empty string, got ' + JSON.stringify(r.operator_hint)
+    );
+  }
+}
+
 if (failed > 0) {
   console.error('parallel-batch tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;

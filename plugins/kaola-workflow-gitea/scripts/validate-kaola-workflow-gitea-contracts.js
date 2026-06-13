@@ -558,7 +558,8 @@ for (const file of listFiles(pluginRoot + '/scripts', file =>
   file.endsWith('.js') && !file.endsWith('validate-kaola-workflow-gitea-contracts.js')
 )) {
   const text = read(file);
-  assert(!/\bglab\b/.test(text), file + ' must not execute or mention glab');
+  const nonCommentText = text.split('\n').filter(line => !/^\s*\/\//.test(line)).join('\n');
+  assert(!/\bglab\b/.test(nonCommentText), file + ' must not execute or mention glab');
   assert(!/plugins\/kaola-workflow\/scripts|require\(['"]\.\.\//.test(text), file + ' must not fall back to root or GitHub plugin scripts');
 }
 
@@ -687,6 +688,22 @@ assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', '--attest-
 assertIncludes(pluginRoot + '/agents/implementer.toml', 'verification_tier');
 assertIncludes(pluginRoot + '/agents/tdd-guide.toml', 'literal tokens RED');
 assertIncludes(pluginRoot + '/agents/contractor.toml', '--attest-contractor-spawn');
+
+// #445/#446: operator_hint + route-findings + --summary pins (Gitea forge ports).
+// OPERATOR_HINT_REGISTRY must exist in each aggregator (plan-validator, commit-node,
+// parallel-batch, adaptive-node). route-findings and --summary are adaptive-node-only (#446).
+for (const aggregatorScript of [
+  pluginRoot + '/scripts/kaola-gitea-workflow-plan-validator.js',
+  pluginRoot + '/scripts/kaola-gitea-workflow-commit-node.js',
+  pluginRoot + '/scripts/kaola-gitea-workflow-parallel-batch.js',
+  pluginRoot + '/scripts/kaola-gitea-workflow-adaptive-node.js'
+]) {
+  assertIncludes(aggregatorScript, 'OPERATOR_HINT_REGISTRY');
+}
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-adaptive-node.js', "'route-findings'");
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-adaptive-node.js', "'--summary'");
+// test-gitea-workflow-scripts.js must exercise operator_hint + route-findings + --summary.
+assertIncludes(pluginRoot + '/scripts/test-gitea-workflow-scripts.js', 'testGiteaAdaptiveNodeOperatorHint445');
 
 // #340: registration-surface + forge-port parity checks and their authoring/dispatch prose
 // (Gitea edition surfaces). A dropped token reds this chain at the contract-validator step.

@@ -52,6 +52,61 @@ try { syncMeta = require('./validate-script-sync'); } catch (_) { /* forge/codex
 let editionSync = null;
 try { editionSync = require('./edition-sync'); } catch (_) { /* forge/codex/user install: no edition-sync module */ }
 
+// #445 (D-445-01): per-aggregator operator hint registry. One entry per typed reason this
+// script can emit; generated at emit time (never stored). Forge-neutral: no gh/glab/tea tokens.
+// Vocabulary contract (D-445-01 §3): write_set_overflow family → revert-overflow (the laundering anti-pattern is excluded);
+// crash-repair → repair-node; no forge CLI tokens in any hint.
+const OPERATOR_HINT_REGISTRY = {
+  nodes_unparseable: () => 'Plan has no parseable ## Nodes table. Check the Markdown table syntax and re-freeze.',
+  no_unique_sink: () => 'Plan has no unique finalize sink node. Add exactly one `finalize` role node and re-freeze.',
+  gate_unsatisfied: (ctx) => `Gate check failed: ${ctx.reason || 'a required reviewer did not complete'}. Ensure all code nodes are post-dominated by a completed reviewer.`,
+  verdict_not_pass: (ctx) => `Verdict check failed for node ${ctx.nodeId || '(unknown)'}. Check .cache/${ctx.nodeId || '<node-id>'}.md for verdict: pass and findings_blocking: 0.`,
+  node_not_found: (ctx) => `Node "${ctx.nodeId || '(unknown)'}" not found in the frozen plan. Check the node ID.`,
+  governance_ack_stale: () => 'Plan hash changed after governance-ack was recorded. Re-run --freeze-checked to get a fresh hash, then --freeze --governance-ack <newHash>.',
+  overlapping_write_sets: (ctx) => `Nodes ${(ctx.nodes || []).join(', ')} have overlapping write sets — they cannot co-schedule. Adjust the plan so parallel nodes have disjoint write sets.`,
+  missing_nodes: () => '--parallel-safe requires --nodes A,B[,C] with at least 2 node IDs.',
+  too_few_nodes: () => '--parallel-safe needs >= 2 node IDs.',
+  drop_base_window_open: (ctx) => `Cannot drop baseline for in_progress node "${ctx.nodeId || '(unknown)'}". Reset the node to pending first (ledger-reset → pending → drop → fresh open).`,
+  root_mismatch: () => 'Run the barrier from the repo root so write-set paths and the baseline diff measure against one root.',
+  write_set_overflow: (ctx) => `Node ${ctx.nodeId || '(unknown)'} wrote files outside its declared write set. Run: node scripts/kaola-workflow-adaptive-node.js revert-overflow --project <project> --node-id ${ctx.nodeId || '<node-id>'} --json`,
+  write_set_granularity: (ctx) => `Node ${ctx.nodeId || '(unknown)'} wrote files outside its declared write set (granularity). Run: node scripts/kaola-workflow-adaptive-node.js revert-overflow --project <project> --node-id ${ctx.nodeId || '<node-id>'} --json`,
+  lockfile_write: (ctx) => `Node ${ctx.nodeId || '(unknown)'} wrote a lockfile outside its declared write set. Add the lockfile to the write set or run revert-overflow.`,
+  mirror_write: (ctx) => `Node ${ctx.nodeId || '(unknown)'} wrote a mirror file outside its declared write set. Add the mirror to the write set or run revert-overflow.`,
+  count_bump: (ctx) => `Node ${ctx.nodeId || '(unknown)'} wrote a count-bump file outside its declared write set. Add the file or run revert-overflow.`,
+  foreign_archive: () => 'A file from a foreign archive was written. This is never allowed — revert the archive write.',
+  sensitive_write_unreviewed: () => 'A sensitive file was written without a completed security-reviewer node. Add a security-reviewer gate to the plan.',
+  unattributed_write: (ctx) => `File "${ctx.file || '(unknown)'}" was written but not attributed to any node\'s write set. Add it to a node\'s declared write set.`,
+  unattributed_change: () => 'A file changed on this branch is not attributed to any complete node\'s write set. Attribute the file to a node or run revert-overflow.',
+  barrier_base_mismatch: (ctx) => `Barrier baseline mismatch for node "${ctx.nodeId || '(unknown)'}". Use repair-node to restore the baseline ref, or reset the node to pending and re-open to record a fresh baseline.`,
+  no_group_base: (ctx) => `No recorded group baseline for "${ctx.nodeId || '(unknown)'}". Run --record-base --node-id <group_id> at group open.`,
+  running_set_unreadable: () => 'Cannot read running-set.json — the group barrier needs the live lane_group. Check the file exists and is valid JSON.',
+  group_not_found: (ctx) => `No live lane_group "${ctx.nodeId || '(unknown)'}" in running-set.json. Ensure the group was opened before running the group barrier.`,
+  chains_unverified: () => 'No chain receipt found. Run kaola-workflow-run-chains.js after the last commit so HEAD is covered.',
+  chains_stale: () => 'Chain receipt is stale — the tree advanced since the chains ran. Regenerate the receipt over HEAD.',
+  chains_red: () => 'One or more chains are RED with no waiver. Fix the failing chain or waive it explicitly (--accept-known-red <name>:<open-issue>).',
+  plan_not_frozen: () => 'plan_hash missing — the plan is not frozen. Run --freeze to stamp the hash.',
+  plan_hash_mismatch: () => 'plan_hash mismatch — workflow-plan.md was modified after freeze. Re-run --freeze to re-stamp.',
+  unknown_role: (ctx) => `Unknown role "${ctx.role || '(unknown)'}" (node ${ctx.nodeId || '?'}) is not in the installed library. Check agents/ and re-freeze.`,
+  dangling_depends_on: (ctx) => `Node ${ctx.nodeId || '(unknown)'} depends_on a node that does not exist. Fix the depends_on reference and re-freeze.`,
+  cycle: () => 'Cycle detected in the plan DAG. Bounded loops are annotated single nodes, not DAG cycles. Fix the dependency edges and re-freeze.',
+  too_many_nodes: () => `Plan exceeds MAX_NODES. Reduce the plan size and re-freeze.`,
+  no_selector_line: (ctx) => `selector_source "${ctx.nodeId || '(unknown)'}" produced no selector: line in its evidence. Write a selector: <arm-id> line to .cache/${ctx.nodeId || '<node-id>'}.md.`,
+  foreign_selector: (ctx) => `selector "${ctx.selector || '(unknown)'}" is not a valid arm of the select group. Use one of the declared arm IDs.`,
+  missing_node_id: () => 'This subcommand requires --node-id <id>. Provide the node ID.',
+  plan_invalid: () => 'Plan is out of grammar. Fix the listed errors and re-freeze.',
+  plan_unreadable: () => 'Cannot read the plan file. Check the path and file permissions.',
+  invalid_args: () => 'Invalid argument combination. Check the command usage (--help).',
+  no_barrier_base: (ctx) => `No recorded baseline for node "${ctx.nodeId || '(unknown)'}". Run: node scripts/kaola-workflow-plan-validator.js <plan> --record-base --node-id ${ctx.nodeId || '<node-id>'} before dispatching the node.`,
+  missing_group_id: () => '--group-barrier requires --group-id <id>. Provide the lane group ID.',
+  internal_error: () => 'Validator encountered an unexpected internal error. Check the plan file for malformed Markdown and re-run.',
+};
+
+function getOperatorHint(reason, ctx) {
+  const fn = OPERATOR_HINT_REGISTRY[reason];
+  if (fn) return fn(ctx || {});
+  return `Operation refused (reason: ${reason}). Check the plan and evidence files, then consult docs/plan-run-cards/.`;
+}
+
 const TERMINAL_ROLE = 'finalize';
 
 // #334: the non-delegable main-session gate. Like TERMINAL_ROLE it is a BUILT-IN role
@@ -512,9 +567,9 @@ function verifyGateExecution(content, opts) {
   // #406: DUAL-EMIT — add the canonical {result, reasonCode} envelope ALONGSIDE the established
   // `ok` (and `unsatisfied`). Every consumer (commit-node gateVerify.ok) still reads `ok`; the typed
   // fields are additive (back-compat shim, removal date in docs/api.md). result agrees with `ok`.
-  if (!nodes.length) return { ok: false, result: 'refuse', reasonCode: 'nodes_unparseable', unsatisfied: [{ requirement: '## Nodes', reason: 'unparseable' }] };
+  if (!nodes.length) return { ok: false, result: 'refuse', reasonCode: 'nodes_unparseable', operator_hint: getOperatorHint('nodes_unparseable'), unsatisfied: [{ requirement: '## Nodes', reason: 'unparseable' }] };
   const sink = uniqueSink(nodes);
-  if (!sink) return { ok: false, result: 'refuse', reasonCode: 'no_unique_sink', unsatisfied: [{ requirement: 'unique sink', reason: 'no unique finalize sink' }] };
+  if (!sink) return { ok: false, result: 'refuse', reasonCode: 'no_unique_sink', operator_hint: getOperatorHint('no_unique_sink'), unsatisfied: [{ requirement: 'unique sink', reason: 'no unique finalize sink' }] };
   const ledger = parseLedger(content);
   const labels = parseLabels(classifier.sectionBody(content, 'Meta'));
   const done = id => ledger.get(id) === 'complete';
@@ -549,7 +604,7 @@ function verifyGateExecution(content, opts) {
       }
     }
   }
-  return { ok: unsatisfied.length === 0, result: unsatisfied.length ? 'refuse' : 'pass', reasonCode: unsatisfied.length ? 'gate_unsatisfied' : null, unsatisfied };
+  return { ok: unsatisfied.length === 0, result: unsatisfied.length ? 'refuse' : 'pass', reasonCode: unsatisfied.length ? 'gate_unsatisfied' : null, operator_hint: unsatisfied.length ? getOperatorHint('gate_unsatisfied', { reason: unsatisfied[0] && unsatisfied[0].reason }) : undefined, unsatisfied };
 }
 
 // #251: Pure (no fs). Verify that every completed gate-role node's .cache evidence file carries a
@@ -564,7 +619,7 @@ function verifyVerdictBlock(content, opts) {
   const nodes = parseNodes(content);
   // #406: DUAL-EMIT — {result, reasonCode} ADDED alongside the established `ok` on every return.
   // Consumers (commit-node verdictCheck.ok) still read `ok`; the typed fields are additive shims.
-  if (!nodes.length) return { ok: false, result: 'refuse', reasonCode: 'nodes_unparseable', failures: [{ nodeId: null, role: null, reason: 'unparseable ## Nodes' }], checked: [] };
+  if (!nodes.length) return { ok: false, result: 'refuse', reasonCode: 'nodes_unparseable', operator_hint: getOperatorHint('nodes_unparseable'), failures: [{ nodeId: null, role: null, reason: 'unparseable ## Nodes' }], checked: [] };
   function checkOne(node) {
     const role = node.role;
     if (!GATE_VERDICT_ROLES.has(role)) {
@@ -617,10 +672,10 @@ function verifyVerdictBlock(content, opts) {
           : `gate role ${role} node ${node.id} verdict=${v.verdict} findings_blocking=${blocking}`) };
   }
   // #406: stamp the canonical {result, reasonCode} onto a top-level return alongside its `ok`.
-  const decorate = r => Object.assign({}, r, { result: r.ok ? 'pass' : 'refuse', reasonCode: r.ok ? null : 'verdict_not_pass' });
+  const decorate = r => Object.assign({}, r, { result: r.ok ? 'pass' : 'refuse', reasonCode: r.ok ? null : 'verdict_not_pass', operator_hint: r.ok ? undefined : getOperatorHint('verdict_not_pass', { nodeId: r.nodeId }) });
   if (opts.nodeId) {
     const node = nodes.find(n => n.id === opts.nodeId);
-    if (!node) return { ok: false, result: 'refuse', reasonCode: 'node_not_found', nodeId: opts.nodeId, role: null, verdict: null, findings_blocking: null, found: false,
+    if (!node) return { ok: false, result: 'refuse', reasonCode: 'node_not_found', operator_hint: getOperatorHint('node_not_found', { nodeId: opts.nodeId }), nodeId: opts.nodeId, role: null, verdict: null, findings_blocking: null, found: false,
       reason: `--node-id "${opts.nodeId}" not found in the frozen plan` };
     return decorate(checkOne(node));
   }
@@ -634,7 +689,7 @@ function verifyVerdictBlock(content, opts) {
     const r = checkOne(node);
     if (!r.ok) failures.push({ nodeId: node.id, role: node.role, reason: r.reason || 'verdict not pass' });
   }
-  return { ok: failures.length === 0, result: failures.length ? 'refuse' : 'pass', reasonCode: failures.length ? 'verdict_not_pass' : null, failures, checked };
+  return { ok: failures.length === 0, result: failures.length ? 'refuse' : 'pass', reasonCode: failures.length ? 'verdict_not_pass' : null, operator_hint: failures.length ? getOperatorHint('verdict_not_pass', { nodeId: failures[0] && failures[0].nodeId }) : undefined, failures, checked };
 }
 
 // #404 (#381 Part C, build-smaller): STRUCTURAL detection of the write-set GRANULARITY artifact —
@@ -696,10 +751,10 @@ function barrierCheck(content, actualPaths, opts) {
   opts = opts || {};
   const errors = [];
   const nodes = parseNodes(content);
-  if (!nodes.length) return { result: 'refuse', errors: ['plan has no parseable ## Nodes table'] };
+  if (!nodes.length) return { result: 'refuse', reason: 'nodes_unparseable', operator_hint: getOperatorHint('nodes_unparseable'), errors: ['plan has no parseable ## Nodes table'] };
   const ownNode = opts.nodeId ? nodes.find(n => n.id === opts.nodeId) : null;
   if (opts.nodeId && !ownNode) {
-    return { result: 'refuse', errors: [`--node-id "${opts.nodeId}" not found in the frozen plan`] };
+    return { result: 'refuse', reason: 'node_not_found', operator_hint: getOperatorHint('node_not_found', { nodeId: opts.nodeId }), errors: [`--node-id "${opts.nodeId}" not found in the frozen plan`] };
   }
   // #239: per-instance allowlist. In PER-NODE mode the allowlist is the node's OWN declared write set
   // (so a fan-out instance writing into a SIBLING's declared lane refuses — the per-instance overflow
@@ -814,7 +869,7 @@ function barrierCheck(content, actualPaths, opts) {
     }
   }
   else if (unattributed.length) reason = 'unattributed_write';
-  return { result: errors.length ? 'refuse' : 'pass', reason, errors, sensitiveHits, outOfAllow, foreignArchiveHits, unattributed };
+  return { result: errors.length ? 'refuse' : 'pass', reason, operator_hint: (errors.length && reason) ? getOperatorHint(reason, { nodeId: opts.nodeId, file: unattributed[0] }) : undefined, errors, sensitiveHits, outOfAllow, foreignArchiveHits, unattributed };
 }
 
 // --- plan hash --------------------------------------------------------------
@@ -856,13 +911,13 @@ function validatePlan(content, opts) {
   const wideFanouts = [];
 
   if (!nodes.length) {
-    return { result: 'refuse', errors: ['plan has no parseable ## Nodes table'], planHash: computePlanHash(content) };
+    return { result: 'refuse', reason: 'nodes_unparseable', operator_hint: getOperatorHint('nodes_unparseable'), errors: ['plan has no parseable ## Nodes table'], planHash: computePlanHash(content) };
   }
   // Input-size backstop: refuse an oversized plan as OUT OF GRAMMAR before any graph
   // algorithm runs (a multi-thousand-node depends_on chain would otherwise blow the DFS
   // stack — a crash, not a typed refusal). 200 is ~28x the largest realistic plan.
   if (nodes.length > schema.MAX_NODES) {
-    return { result: 'refuse', errors: [`plan has ${nodes.length} nodes > MAX_NODES ${schema.MAX_NODES} (out of grammar)`], planHash: computePlanHash(content) };
+    return { result: 'refuse', reason: 'too_many_nodes', operator_hint: getOperatorHint('too_many_nodes'), errors: [`plan has ${nodes.length} nodes > MAX_NODES ${schema.MAX_NODES} (out of grammar)`], planHash: computePlanHash(content) };
   }
   const ids = new Set(nodes.map(n => n.id));
 
@@ -1384,7 +1439,7 @@ function validatePlan(content, opts) {
   }
 
   const planHash = computePlanHash(content);
-  if (errors.length) return { result: 'refuse', errors, planHash, sink };
+  if (errors.length) return { result: 'refuse', reason: 'plan_invalid', operator_hint: getOperatorHint('plan_invalid'), errors, planHash, sink };
 
   // --- risk assessment (in-grammar): auto-run vs ask, over-approximated, fail-closed ---
   const reasons = [];
@@ -1415,7 +1470,7 @@ function revalidateForResume(content, opts) {
   // alongside the established `ok` and the HUMAN `reason` string (consumers echo `reason` on stderr:
   // --resume-check, adaptive-handoff:340, adaptive-node:2051, parallel-batch:453 — and gate on `ok`).
   // The typed token lives in the NEW `reasonCode` field, never by overwriting `reason`.
-  const refuse = (reasonCode, reason) => ({ ok: false, result: 'refuse', reasonCode, reason });
+  const refuse = (reasonCode, reason, ctx) => ({ ok: false, result: 'refuse', reasonCode, reason, operator_hint: getOperatorHint(reasonCode, ctx || {}) });
   const stored = readStoredHash(content);
   const computed = computePlanHash(content);
   if (!stored) return refuse('plan_not_frozen', 'plan_hash missing — plan is not frozen');
@@ -1429,8 +1484,8 @@ function revalidateForResume(content, opts) {
   const ids = new Set(nodes.map(n => n.id));
   for (const n of nodes) {
     // #334: MAIN_SESSION_GATE is a built-in token (like TERMINAL_ROLE) — never in the installed library.
-    if (n.role !== TERMINAL_ROLE && n.role !== MAIN_SESSION_GATE && !roles.has(n.role)) return refuse('unknown_role', `unknown role "${n.role}" (node ${n.id})`);
-    for (const d of n.dependsOn) if (!ids.has(d)) return refuse('dangling_depends_on', `node ${n.id} depends_on unknown "${d}"`);
+    if (n.role !== TERMINAL_ROLE && n.role !== MAIN_SESSION_GATE && !roles.has(n.role)) return refuse('unknown_role', `unknown role "${n.role}" (node ${n.id})`, { role: n.role, nodeId: n.id });
+    for (const d of n.dependsOn) if (!ids.has(d)) return refuse('dangling_depends_on', `node ${n.id} depends_on unknown "${d}"`, { nodeId: n.id });
   }
   if (hasCycle(nodes)) return refuse('cycle', 'cycle detected');
   if (!uniqueSink(nodes)) return refuse('no_unique_sink', 'no unique sink');
@@ -1657,7 +1712,7 @@ function main() {
   let content;
   try { content = fs.readFileSync(planPath, 'utf8'); }
   catch (_) {
-    const out = { result: 'refuse', errors: [`cannot read plan: ${planPath}`] };
+    const out = { result: 'refuse', reason: 'plan_unreadable', operator_hint: getOperatorHint('plan_unreadable'), errors: [`cannot read plan: ${planPath}`] };
     process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: ' + out.errors[0]) + '\n');
     process.exitCode = 1;
     return;
@@ -1680,13 +1735,13 @@ function main() {
     const flagVal = name => { const i = args.indexOf(name); return i >= 0 && i + 1 < args.length ? args[i + 1] : null; };
     const nodesArg = flagVal('--nodes');
     if (!nodesArg) {
-      const out = { result: 'refuse', reason: 'missing_nodes', errors: ['--parallel-safe requires --nodes A,B[,C]'] };
+      const out = { result: 'refuse', reason: 'missing_nodes', operator_hint: getOperatorHint('missing_nodes'), errors: ['--parallel-safe requires --nodes A,B[,C]'] };
       process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: ' + out.errors[0]) + '\n');
       process.exitCode = 1; return;
     }
     const ids = nodesArg.split(',').map(s => s.trim()).filter(Boolean);
     if (ids.length < 2) {
-      const out = { result: 'refuse', reason: 'too_few_nodes', nodes: ids, errors: ['--parallel-safe needs >= 2 node ids (got ' + ids.length + ')'] };
+      const out = { result: 'refuse', reason: 'too_few_nodes', operator_hint: getOperatorHint('too_few_nodes'), nodes: ids, errors: ['--parallel-safe needs >= 2 node ids (got ' + ids.length + ')'] };
       process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: ' + out.errors[0]) + '\n');
       process.exitCode = 1; return;
     }
@@ -1694,7 +1749,7 @@ function main() {
     const sel = ids.map(id => allNodes.find(n => n.id === id));
     const missing = ids.filter((id, i) => !sel[i]);
     if (missing.length) {
-      const out = { result: 'refuse', reason: 'node_not_found', nodes: ids, errors: ['unknown node ids: ' + missing.join(',')] };
+      const out = { result: 'refuse', reason: 'node_not_found', operator_hint: getOperatorHint('node_not_found', { nodeId: missing[0] }), nodes: ids, errors: ['unknown node ids: ' + missing.join(',')] };
       process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: ' + out.errors[0]) + '\n');
       process.exitCode = 1; return;
     }
@@ -1713,7 +1768,7 @@ function main() {
     }
     const ok = overlapping.length === 0;
     const out = { result: ok ? 'ok' : 'refuse', nodes: ids, overlapping };
-    if (!ok) out.reason = 'overlapping_write_sets';
+    if (!ok) { out.reason = 'overlapping_write_sets'; out.operator_hint = getOperatorHint('overlapping_write_sets', { nodes: ids }); }
     process.stdout.write((json ? JSON.stringify(out) : (ok ? 'parallel-safe ok: ' + ids.join(',') : 'typed refusal: overlapping_write_sets (' + overlapping.map(o => o.a + '/' + o.b + ':' + o.kind).join(', ') + ')')) + '\n');
     if (!ok) process.exitCode = 1;
     return;
@@ -1726,7 +1781,7 @@ function main() {
     // atomically, and folds --resume-check into its emission. refuse → same {result:'refuse',errors}.
     const v = validatePlan(content, { root });
     if (v.result !== 'in-grammar') {
-      process.stdout.write((json ? JSON.stringify({ result: 'refuse', errors: v.errors }) : 'typed refusal (out of grammar): ' + (v.errors || []).join('; ')) + '\n');
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'plan_invalid', operator_hint: getOperatorHint('plan_invalid'), errors: v.errors }) : 'typed refusal (out of grammar): ' + (v.errors || []).join('; ')) + '\n');
       process.exitCode = 1; return;
     }
     const out = {
@@ -1763,7 +1818,7 @@ function main() {
     if (ackIdx >= 0) {
       const computed = computePlanHash(toFreeze);
       if (!ackHash || ackHash !== computed) {
-        const out = { result: 'refuse', reason: 'governance_ack_stale', frozen: false,
+        const out = { result: 'refuse', reason: 'governance_ack_stale', operator_hint: getOperatorHint('governance_ack_stale'), frozen: false,
           errors: ['--governance-ack ' + (ackHash || '(missing)') + ' does not match the plan\'s current hash ' + computed + ' — the plan mutated between governance and freeze; re-run --freeze-checked'] };
         process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: governance_ack_stale (' + (ackHash || 'missing') + ' != ' + computed + ')') + '\n');
         process.exitCode = 1; return;
@@ -1817,7 +1872,7 @@ function main() {
     const flagVal = name => { const i = args.indexOf(name); return i >= 0 && i + 1 < args.length ? args[i + 1] : null; };
     const nodeId = flagVal('--node-id');
     if (!nodeId) {
-      process.stdout.write((json ? JSON.stringify({ result: 'refuse', errors: ['--record-base requires --node-id <id>'] }) : 'typed refusal: --record-base requires --node-id') + '\n');
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'missing_node_id', operator_hint: getOperatorHint('missing_node_id'), errors: ['--record-base requires --node-id <id>'] }) : 'typed refusal: --record-base requires --node-id') + '\n');
       process.exitCode = 1; return;
     }
     // Idempotent (critic-2): if a baseline already exists for this node (a crash + re-dispatch, or a
@@ -1857,7 +1912,7 @@ function main() {
     const flagVal = name => { const i = args.indexOf(name); return i >= 0 && i + 1 < args.length ? args[i + 1] : null; };
     const nodeId = flagVal('--node-id');
     if (!nodeId) {
-      process.stdout.write((json ? JSON.stringify({ result: 'refuse', errors: ['--drop-base requires --node-id <id>'] }) : 'typed refusal: --drop-base requires --node-id') + '\n');
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'missing_node_id', operator_hint: getOperatorHint('missing_node_id'), errors: ['--drop-base requires --node-id <id>'] }) : 'typed refusal: --drop-base requires --node-id') + '\n');
       process.exitCode = 1; return;
     }
     // #424 (D-424-01) WINDOW-LOCK: --drop-base is honored ONLY pre-open (ledger status `pending`).
@@ -1866,7 +1921,7 @@ function main() {
     // mid-node; the legal stale-baseline recovery is ledger-reset → `pending` → drop → fresh open.
     const dropLedger = parseLedger(content);
     if (dropLedger.get(nodeId) === 'in_progress') {
-      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'drop_base_window_open', errors: ['--drop-base refused: node "' + nodeId + '" is in_progress — dropping the baseline now would launder writes made since the open (vacuous-pass). Reset the node to pending before dropping (ledger-reset → pending → drop → fresh open).'] }) : 'typed refusal: drop_base_window_open (node ' + nodeId + ' is in_progress)') + '\n');
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'drop_base_window_open', operator_hint: getOperatorHint('drop_base_window_open', { nodeId }), errors: ['--drop-base refused: node "' + nodeId + '" is in_progress — dropping the baseline now would launder writes made since the open (vacuous-pass). Reset the node to pending before dropping (ledger-reset → pending → drop → fresh open).'] }) : 'typed refusal: drop_base_window_open (node ' + nodeId + ' is in_progress)') + '\n');
       process.exitCode = 1; return;
     }
     let fileRemoved = false;
@@ -1884,7 +1939,7 @@ function main() {
     const nodeId = flagVal('--node-id');
     // Robustness: a PRESENT but empty `--node-id` is a malformed per-node invocation, not whole-plan.
     if (args.includes('--node-id') && !nodeId) {
-      process.stdout.write((json ? JSON.stringify({ result: 'refuse', errors: ['--node-id requires a value'] }) : 'typed refusal: --node-id requires a value') + '\n');
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'missing_node_id', operator_hint: getOperatorHint('missing_node_id'), errors: ['--node-id requires a value'] }) : 'typed refusal: --node-id requires a value') + '\n');
       process.exitCode = 1; return;
     }
     // #424 (D-424-01) ROOT-PINNING: the write-set paths resolve repo-root-relative, but the barrier
@@ -1899,7 +1954,7 @@ function main() {
       const cwdReal = (() => { try { return fs.realpathSync(process.cwd()); } catch (_) { return process.cwd(); } })();
       const topReal = toplevel ? (() => { try { return fs.realpathSync(toplevel); } catch (_) { return toplevel; } })() : '';
       if (!topReal || topReal !== cwdReal) {
-        process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'root_mismatch', errors: ['barrier root mismatch: process.cwd() "' + cwdReal + '" != git toplevel "' + (topReal || '(unresolved)') + '" — run the barrier from the repo toplevel so write-set paths and the baseline diff measure against ONE root'] }) : 'typed refusal: root_mismatch (cwd ' + cwdReal + ' != toplevel ' + (topReal || 'unresolved') + ')') + '\n');
+        process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'root_mismatch', operator_hint: getOperatorHint('root_mismatch'), errors: ['barrier root mismatch: process.cwd() "' + cwdReal + '" != git toplevel "' + (topReal || '(unresolved)') + '" — run the barrier from the repo toplevel so write-set paths and the baseline diff measure against ONE root'] }) : 'typed refusal: root_mismatch (cwd ' + cwdReal + ' != toplevel ' + (topReal || 'unresolved') + ')') + '\n');
         process.exitCode = 1; return;
       }
     }
@@ -1911,13 +1966,13 @@ function main() {
       // caller --base (e.g. `--base HEAD` after the node committed) would empty the diff and neuter
       // the gate. The whole-plan / phase-6 branch keeps --base.
       if (args.includes('--base')) {
-        process.stdout.write((json ? JSON.stringify({ result: 'refuse', errors: ['--base is not allowed with --node-id (per-node diffs vs the recorded node-start snapshot)'] }) : 'typed refusal: --base is not allowed with --node-id') + '\n');
+        process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'invalid_args', operator_hint: getOperatorHint('invalid_args'), errors: ['--base is not allowed with --node-id (per-node diffs vs the recorded node-start snapshot)'] }) : 'typed refusal: --base is not allowed with --node-id') + '\n');
         process.exitCode = 1; return;
       }
       let base = '';
       try { base = fs.readFileSync(cacheBaseFile(nodeId), 'utf8').trim(); } catch (_) { base = ''; }
       if (!base) {
-        process.stdout.write((json ? JSON.stringify({ result: 'refuse', errors: ['no recorded per-node base for "' + nodeId + '" (run --record-base --node-id at node start)'] }) : 'typed refusal: no recorded per-node base for ' + nodeId) + '\n');
+        process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'no_barrier_base', operator_hint: getOperatorHint('no_barrier_base', { nodeId }), errors: ['no recorded per-node base for "' + nodeId + '" (run --record-base --node-id at node start)'] }) : 'typed refusal: no recorded per-node base for ' + nodeId) + '\n');
         process.exitCode = 1; return;
       }
       // #368: cross-check the .cache base file against the gc-anchored ref. --record-base writes
@@ -1929,11 +1984,11 @@ function main() {
       let refSha = '';
       try { refSha = execFileSync('git', ['-C', root, 'rev-parse', '--verify', '--quiet', barrierRef(nodeId) + '^{commit}'], { encoding: 'utf8' }).trim(); } catch (_) { refSha = ''; }
       if (!refSha) {
-        process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'barrier_base_mismatch', errors: ['anchored baseline ref missing for "' + nodeId + '" while a .cache base file exists — run --drop-base then --record-base, or restore the ref; note: a fresh re-record after work was done would launder the crashed attempt, so prefer ref-restore where work exists'] }) : 'typed refusal: barrier_base_mismatch (anchored ref missing for ' + nodeId + ')') + '\n');
+        process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'barrier_base_mismatch', operator_hint: getOperatorHint('barrier_base_mismatch', { nodeId }), errors: ['anchored baseline ref missing for "' + nodeId + '" while a .cache base file exists — run --drop-base then --record-base, or restore the ref; note: a fresh re-record after work was done would launder the crashed attempt, so prefer ref-restore where work exists'] }) : 'typed refusal: barrier_base_mismatch (anchored ref missing for ' + nodeId + ')') + '\n');
         process.exitCode = 1; return;
       }
       if (refSha !== base) {
-        process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'barrier_base_mismatch', errors: ['.cache base SHA for "' + nodeId + '" does not match the anchored ref (file ' + base + ' != ref ' + refSha + ') — run --drop-base then --record-base, or restore the ref; note: a fresh re-record after work was done would launder the crashed attempt, so prefer ref-restore where work exists'] }) : 'typed refusal: barrier_base_mismatch for ' + nodeId) + '\n');
+        process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'barrier_base_mismatch', operator_hint: getOperatorHint('barrier_base_mismatch', { nodeId }), errors: ['.cache base SHA for "' + nodeId + '" does not match the anchored ref (file ' + base + ' != ref ' + refSha + ') — run --drop-base then --record-base, or restore the ref; note: a fresh re-record after work was done would launder the crashed attempt, so prefer ref-restore where work exists'] }) : 'typed refusal: barrier_base_mismatch for ' + nodeId) + '\n');
         process.exitCode = 1; return;
       }
       const now = snapshotWorktree(root, nodeId + '-now');
@@ -1968,7 +2023,7 @@ function main() {
     const flagVal = name => { const i = args.indexOf(name); return i >= 0 && i + 1 < args.length ? args[i + 1] : null; };
     const groupId = flagVal('--group-id');
     if (!groupId) {
-      process.stdout.write((json ? JSON.stringify({ result: 'refuse', errors: ['--group-barrier requires --group-id <id>'] }) : 'typed refusal: --group-barrier requires --group-id') + '\n');
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'missing_group_id', operator_hint: getOperatorHint('missing_group_id'), errors: ['--group-barrier requires --group-id <id>'] }) : 'typed refusal: --group-barrier requires --group-id') + '\n');
       process.exitCode = 1; return;
     }
     // ROOT-PINNING (same fail-closed guard as --barrier-check): the write-set paths resolve
@@ -1980,7 +2035,7 @@ function main() {
       const cwdReal = (() => { try { return fs.realpathSync(process.cwd()); } catch (_) { return process.cwd(); } })();
       const topReal = toplevel ? (() => { try { return fs.realpathSync(toplevel); } catch (_) { return toplevel; } })() : '';
       if (!topReal || topReal !== cwdReal) {
-        process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'root_mismatch', errors: ['barrier root mismatch: process.cwd() "' + cwdReal + '" != git toplevel "' + (topReal || '(unresolved)') + '" — run the group barrier from the repo toplevel so write-set paths and the baseline diff measure against ONE root'] }) : 'typed refusal: root_mismatch (cwd ' + cwdReal + ' != toplevel ' + (topReal || 'unresolved') + ')') + '\n');
+        process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'root_mismatch', operator_hint: getOperatorHint('root_mismatch'), errors: ['barrier root mismatch: process.cwd() "' + cwdReal + '" != git toplevel "' + (topReal || '(unresolved)') + '" — run the group barrier from the repo toplevel so write-set paths and the baseline diff measure against ONE root'] }) : 'typed refusal: root_mismatch (cwd ' + cwdReal + ' != toplevel ' + (topReal || 'unresolved') + ')') + '\n');
         process.exitCode = 1; return;
       }
     }
@@ -1989,12 +2044,12 @@ function main() {
     let rs = null;
     try { rs = JSON.parse(fs.readFileSync(rsPath, 'utf8')); } catch (_) { rs = null; }
     if (!rs || typeof rs !== 'object') {
-      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'running_set_unreadable', errors: ['cannot read/parse running-set.json at ' + rsPath + ' — the group barrier needs the live lane_group'] }) : 'typed refusal: running_set_unreadable') + '\n');
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'running_set_unreadable', operator_hint: getOperatorHint('running_set_unreadable'), errors: ['cannot read/parse running-set.json at ' + rsPath + ' — the group barrier needs the live lane_group'] }) : 'typed refusal: running_set_unreadable') + '\n');
       process.exitCode = 1; return;
     }
     const lg = rs.lane_group;
     if (!lg || lg.group_id !== groupId) {
-      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'group_not_found', errors: ['no live lane_group "' + groupId + '" in running-set.json (found: ' + (lg ? lg.group_id : 'none') + ')'] }) : 'typed refusal: group_not_found (' + groupId + ')') + '\n');
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'group_not_found', operator_hint: getOperatorHint('group_not_found', { nodeId: groupId }), errors: ['no live lane_group "' + groupId + '" in running-set.json (found: ' + (lg ? lg.group_id : 'none') + ')'] }) : 'typed refusal: group_not_found (' + groupId + ')') + '\n');
       process.exitCode = 1; return;
     }
     // Members for the union allowlist = the lane_group members (the LAST-member close runs the barrier
@@ -2002,7 +2057,7 @@ function main() {
     // explicit --member fallback (for the alternate "remove-then-barrier" ordering).
     const members = Array.from(new Set([...(Array.isArray(lg.members) ? lg.members : []), flagVal('--member')].filter(Boolean)));
     if (!members.length) {
-      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'group_not_found', errors: ['lane_group "' + groupId + '" has no members'] }) : 'typed refusal: group_not_found (no members)') + '\n');
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'group_not_found', operator_hint: getOperatorHint('group_not_found', { nodeId: groupId }), errors: ['lane_group "' + groupId + '" has no members'] }) : 'typed refusal: group_not_found (no members)') + '\n');
       process.exitCode = 1; return;
     }
     // Group baseline: the shared SHA recorded at open via --record-base --node-id <group_id>. Same
@@ -2011,13 +2066,13 @@ function main() {
     let base = '';
     try { base = fs.readFileSync(cacheBaseFile(groupId), 'utf8').trim(); } catch (_) { base = ''; }
     if (!base) {
-      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'no_group_base', errors: ['no recorded group baseline for "' + groupId + '" (run --record-base --node-id <group_id> at group open)'] }) : 'typed refusal: no_group_base for ' + groupId) + '\n');
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'no_group_base', operator_hint: getOperatorHint('no_group_base', { nodeId: groupId }), errors: ['no recorded group baseline for "' + groupId + '" (run --record-base --node-id <group_id> at group open)'] }) : 'typed refusal: no_group_base for ' + groupId) + '\n');
       process.exitCode = 1; return;
     }
     let refSha = '';
     try { refSha = execFileSync('git', ['-C', root, 'rev-parse', '--verify', '--quiet', barrierRef(groupId) + '^{commit}'], { encoding: 'utf8' }).trim(); } catch (_) { refSha = ''; }
     if (!refSha || refSha !== base) {
-      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'barrier_base_mismatch', errors: ['group baseline for "' + groupId + '" mismatches the anchored ref (file ' + base + ' != ref ' + (refSha || '(missing)') + ') — run --drop-base then --record-base for the group, or restore the ref'] }) : 'typed refusal: barrier_base_mismatch for group ' + groupId) + '\n');
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'barrier_base_mismatch', operator_hint: getOperatorHint('barrier_base_mismatch', { nodeId: groupId }), errors: ['group baseline for "' + groupId + '" mismatches the anchored ref (file ' + base + ' != ref ' + (refSha || '(missing)') + ') — run --drop-base then --record-base for the group, or restore the ref'] }) : 'typed refusal: barrier_base_mismatch for group ' + groupId) + '\n');
       process.exitCode = 1; return;
     }
     const now = snapshotWorktree(root, groupId + '-now');
@@ -2047,25 +2102,25 @@ function main() {
     let receiptRaw = null;
     try { receiptRaw = fs.readFileSync(receiptPath, 'utf8'); } catch (_) { receiptRaw = null; }
     if (receiptRaw == null) {
-      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'chains_unverified', errors: ['no chain receipt at ' + receiptPath + ' — run kaola-workflow-run-chains.js after the LAST commit so HEAD is covered; prose "all four chains green" cannot pass'] }) : 'typed refusal: chains_unverified (no ' + receiptPath + ')') + '\n');
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'chains_unverified', operator_hint: getOperatorHint('chains_unverified'), errors: ['no chain receipt at ' + receiptPath + ' — run kaola-workflow-run-chains.js after the LAST commit so HEAD is covered; prose "all four chains green" cannot pass'] }) : 'typed refusal: chains_unverified (no ' + receiptPath + ')') + '\n');
       process.exitCode = 1; return;
     }
     let receipt = null;
     try { receipt = JSON.parse(receiptRaw); } catch (_) { receipt = null; }
     if (!receipt || typeof receipt !== 'object') {
-      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'chains_unverified', errors: ['chain receipt at ' + receiptPath + ' is unparseable JSON — regenerate it'] }) : 'typed refusal: chains_unverified (unparseable receipt)') + '\n');
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'chains_unverified', operator_hint: getOperatorHint('chains_unverified'), errors: ['chain receipt at ' + receiptPath + ' is unparseable JSON — regenerate it'] }) : 'typed refusal: chains_unverified (unparseable receipt)') + '\n');
       process.exitCode = 1; return;
     }
     const currentHead = flagVal('--head') || (() => { try { return execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(); } catch (_) { return ''; } })();
     if (!currentHead || String(receipt.headSha || '').trim() !== currentHead) {
-      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'chains_stale', errors: ['chain receipt headSha "' + (receipt.headSha || '(missing)') + '" != current HEAD "' + (currentHead || '(unresolved)') + '" — the tree advanced since the chains ran; regenerate the receipt over HEAD'] }) : 'typed refusal: chains_stale (' + (receipt.headSha || 'missing') + ' != ' + (currentHead || 'unresolved') + ')') + '\n');
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'chains_stale', operator_hint: getOperatorHint('chains_stale'), errors: ['chain receipt headSha "' + (receipt.headSha || '(missing)') + '" != current HEAD "' + (currentHead || '(unresolved)') + '" — the tree advanced since the chains ran; regenerate the receipt over HEAD'] }) : 'typed refusal: chains_stale (' + (receipt.headSha || 'missing') + ' != ' + (currentHead || 'unresolved') + ')') + '\n');
       process.exitCode = 1; return;
     }
     const chains = Array.isArray(receipt.chains) ? receipt.chains : [];
     const redChains = chains.filter(c => c && c.exitCode !== 0 && c.accepted_red !== true);
     if (redChains.length) {
       const names = redChains.map(c => c.name || '(unnamed)').join(', ');
-      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'chains_red', redChains: redChains.map(c => ({ name: c.name || null, exitCode: c.exitCode })), errors: ['chain(s) RED with no waiver: ' + names + ' — fix the chain or waive it explicitly (--accept-known-red <name>:<open-issue>)'] }) : 'typed refusal: chains_red (' + names + ')') + '\n');
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'chains_red', operator_hint: getOperatorHint('chains_red'), redChains: redChains.map(c => ({ name: c.name || null, exitCode: c.exitCode })), errors: ['chain(s) RED with no waiver: ' + names + ' — fix the chain or waive it explicitly (--accept-known-red <name>:<open-issue>)'] }) : 'typed refusal: chains_red (' + names + ')') + '\n');
       process.exitCode = 1; return;
     }
     // ---- (B) attribution sweep (#424) ----
@@ -2077,7 +2132,7 @@ function main() {
       changed = diffOut.split('\n').map(s => s.trim()).filter(Boolean);
     } catch (e) {
       // Fail CLOSED: a git failure (no such base, detached) is a refusal, not a silent pass.
-      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'unattributed_change', errors: ['attribution sweep could not enumerate `git diff ' + base + '...HEAD` (' + (e && e.message ? e.message.split('\n')[0] : 'git error') + ') — cannot prove every change is attributed'] }) : 'typed refusal: attribution sweep git error') + '\n');
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'unattributed_change', operator_hint: getOperatorHint('unattributed_change'), errors: ['attribution sweep could not enumerate `git diff ' + base + '...HEAD` (' + (e && e.message ? e.message.split('\n')[0] : 'git error') + ') — cannot prove every change is attributed'] }) : 'typed refusal: attribution sweep git error') + '\n');
       process.exitCode = 1; return;
     }
     const nodes = parseNodes(content);
@@ -2091,7 +2146,7 @@ function main() {
     const unattributed = changed.filter(p =>
       !isBarrierInvisible(p, projTag) && !/^kaola-workflow\//.test(p) && !completeDeclared.has(p));
     if (unattributed.length) {
-      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'unattributed_change', unattributed, errors: ['branch-level writes (' + unattributed.join(', ') + ') are neither in the .md allowband nor covered by any `complete` node\'s declared write set — crash residue or out-of-window edits; attribute them to a node or remove them'] }) : 'typed refusal: unattributed_change (' + unattributed.join(', ') + ')') + '\n');
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'unattributed_change', operator_hint: getOperatorHint('unattributed_change'), unattributed, errors: ['branch-level writes (' + unattributed.join(', ') + ') are neither in the .md allowband nor covered by any `complete` node\'s declared write set — crash residue or out-of-window edits; attribute them to a node or remove them'] }) : 'typed refusal: unattributed_change (' + unattributed.join(', ') + ')') + '\n');
       process.exitCode = 1; return;
     }
     process.stdout.write((json ? JSON.stringify({ result: 'pass', checkedChanges: changed.length, chains: chains.map(c => ({ name: c.name || null, exitCode: c.exitCode, accepted_red: c.accepted_red === true })) }) : 'finalize ok (' + changed.length + ' changes attributed, ' + chains.length + ' chains verified)') + '\n');
@@ -2106,7 +2161,7 @@ function main() {
     const flagVal = name => { const i = args.indexOf(name); return i >= 0 && i + 1 < args.length ? args[i + 1] : null; };
     const nodeId = flagVal('--node-id');
     if (!nodeId) {
-      process.stdout.write((json ? JSON.stringify({ result: 'refuse', errors: ['--node-end requires --node-id <id>'] }) : 'typed refusal: --node-end requires --node-id') + '\n');
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'missing_node_id', operator_hint: getOperatorHint('missing_node_id'), errors: ['--node-end requires --node-id <id>'] }) : 'typed refusal: --node-end requires --node-id') + '\n');
       process.exitCode = 1; return;
     }
     // (1) per-node barrier — same logic + #368 cross-check as --barrier-check --node-id.
@@ -2114,14 +2169,14 @@ function main() {
     let base = '';
     try { base = fs.readFileSync(cacheBaseFile(nodeId), 'utf8').trim(); } catch (_) { base = ''; }
     if (!base) {
-      barrierCheckOut = { result: 'refuse', errors: ['no recorded per-node base for "' + nodeId + '" (run --record-base --node-id at node start)'] };
+      barrierCheckOut = { result: 'refuse', reason: 'no_barrier_base', operator_hint: getOperatorHint('no_barrier_base', { nodeId }), errors: ['no recorded per-node base for "' + nodeId + '" (run --record-base --node-id at node start)'] };
     } else {
       let refSha = '';
       try { refSha = execFileSync('git', ['-C', root, 'rev-parse', '--verify', '--quiet', barrierRef(nodeId) + '^{commit}'], { encoding: 'utf8' }).trim(); } catch (_) { refSha = ''; }
       if (!refSha) {
-        barrierCheckOut = { result: 'refuse', reason: 'barrier_base_mismatch', errors: ['anchored baseline ref missing for "' + nodeId + '" while a .cache base file exists — run --drop-base then --record-base, or restore the ref; note: a fresh re-record after work was done would launder the crashed attempt, so prefer ref-restore where work exists'] };
+        barrierCheckOut = { result: 'refuse', reason: 'barrier_base_mismatch', operator_hint: getOperatorHint('barrier_base_mismatch', { nodeId }), errors: ['anchored baseline ref missing for "' + nodeId + '" while a .cache base file exists — run --drop-base then --record-base, or restore the ref; note: a fresh re-record after work was done would launder the crashed attempt, so prefer ref-restore where work exists'] };
       } else if (refSha !== base) {
-        barrierCheckOut = { result: 'refuse', reason: 'barrier_base_mismatch', errors: ['.cache base SHA for "' + nodeId + '" does not match the anchored ref (file ' + base + ' != ref ' + refSha + ') — run --drop-base then --record-base, or restore the ref; note: a fresh re-record after work was done would launder the crashed attempt, so prefer ref-restore where work exists'] };
+        barrierCheckOut = { result: 'refuse', reason: 'barrier_base_mismatch', operator_hint: getOperatorHint('barrier_base_mismatch', { nodeId }), errors: ['.cache base SHA for "' + nodeId + '" does not match the anchored ref (file ' + base + ' != ref ' + refSha + ') — run --drop-base then --record-base, or restore the ref; note: a fresh re-record after work was done would launder the crashed attempt, so prefer ref-restore where work exists'] };
       } else {
         const now = snapshotWorktree(root, nodeId + '-now');
         const diffOut = execFileSync('git', ['-C', root, 'diff-tree', '-r', '--name-only', base, now], { encoding: 'utf8' });
@@ -2179,19 +2234,19 @@ function main() {
     const flagVal = name => { const i = args.indexOf(name); return i >= 0 && i + 1 < args.length ? args[i + 1] : null; };
     const nodeId = flagVal('--node-id');
     if (!nodeId) {
-      const out = { result: 'refuse', reason: 'missing_node_id', errors: ['--selector-check requires --node-id <id>'] };
+      const out = { result: 'refuse', reason: 'missing_node_id', operator_hint: getOperatorHint('missing_node_id'), errors: ['--selector-check requires --node-id <id>'] };
       process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: --selector-check requires --node-id') + '\n');
       process.exitCode = 1; return;
     }
     const nodes = parseNodes(content);
     if (!nodes.length) {
-      const out = { result: 'refuse', reason: 'nodes_unparseable', errors: ['plan has no parseable ## Nodes table'] };
+      const out = { result: 'refuse', reason: 'nodes_unparseable', operator_hint: getOperatorHint('nodes_unparseable'), errors: ['plan has no parseable ## Nodes table'] };
       process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: ' + out.errors[0]) + '\n');
       process.exitCode = 1; return;
     }
     const node = nodes.find(n => n.id === nodeId);
     if (!node) {
-      const out = { result: 'refuse', reason: 'node_not_found', errors: [`--node-id "${nodeId}" not found in the frozen plan`] };
+      const out = { result: 'refuse', reason: 'node_not_found', operator_hint: getOperatorHint('node_not_found', { nodeId }), errors: [`--node-id "${nodeId}" not found in the frozen plan`] };
       process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: ' + out.errors[0]) + '\n');
       process.exitCode = 1; return;
     }
@@ -2211,7 +2266,7 @@ function main() {
     const parsed = schema.parseNodeSelector(cacheText || '');
     // FAIL-CLOSED: selector not found.
     if (!parsed.found) {
-      const out = { result: 'refuse', reason: 'no_selector_line', isSelector: true, errors: [`selector_source "${nodeId}" produced no selector: line`] };
+      const out = { result: 'refuse', reason: 'no_selector_line', operator_hint: getOperatorHint('no_selector_line', { nodeId }), isSelector: true, errors: [`selector_source "${nodeId}" produced no selector: line`] };
       process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: ' + out.errors[0]) + '\n');
       process.exitCode = 1; return;
     }
@@ -2219,7 +2274,7 @@ function main() {
     const armIds = arms.map(a => a.id);
     // FAIL-CLOSED: selector names an id not among the arms (foreign).
     if (!armIds.includes(selected)) {
-      const out = { result: 'refuse', reason: 'foreign_selector', isSelector: true, errors: [`selector "${selected}" is not an arm of select group "${group}" (${armIds.join(', ')})`] };
+      const out = { result: 'refuse', reason: 'foreign_selector', operator_hint: getOperatorHint('foreign_selector', { selector: selected }), isSelector: true, errors: [`selector "${selected}" is not an arm of select group "${group}" (${armIds.join(', ')})`] };
       process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: ' + out.errors[0]) + '\n');
       process.exitCode = 1; return;
     }
@@ -2234,7 +2289,7 @@ function main() {
     const nodeId = flagVal('--node-id');
     if (args.includes('--node-id') && !nodeId) {
       // #406 Class-C: arg-error refuses with the canonical {result:'refuse', reason} envelope.
-      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'missing_node_id', errors: ['--node-id requires a value'] }) : 'typed refusal: --node-id requires a value') + '\n');
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'missing_node_id', operator_hint: getOperatorHint('missing_node_id'), errors: ['--node-id requires a value'] }) : 'typed refusal: --node-id requires a value') + '\n');
       process.exitCode = 1; return;
     }
     const cacheDir = path.join(path.dirname(path.resolve(planPath)), '.cache');
@@ -2262,7 +2317,7 @@ if (require.main === module) {
     // validatePlanFixture which JSON.parses stdout) would otherwise crash on the empty parse.
     // Detect --json from argv here since we are outside main().
     const json = process.argv.includes('--json');
-    const out = { result: 'refuse', errors: ['validator internal error: ' + err.message] };
+    const out = { result: 'refuse', reason: 'internal_error', operator_hint: getOperatorHint('internal_error'), errors: ['validator internal error: ' + err.message] };
     process.stdout.write((json ? JSON.stringify(out) : 'typed refusal (out of grammar): ' + out.errors[0]) + '\n');
     process.exitCode = 1;
   }

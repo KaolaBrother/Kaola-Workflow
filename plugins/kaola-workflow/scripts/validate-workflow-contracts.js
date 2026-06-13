@@ -629,6 +629,16 @@ assertIncludes('scripts/kaola-workflow-adaptive-node.js', "subcommand === 'rever
 assertIncludes('scripts/kaola-workflow-adaptive-node.js', "subcommand === 'repair-node'");
 assertIncludes('scripts/kaola-workflow-adaptive-node.js', 'requires_redispatch');
 assertIncludes('scripts/kaola-workflow-adaptive-node.js', 'baselineReused');
+// #446 (D-446-01): operator_hint registry + route-findings subcommand + --summary flag +
+// findings-route.json output + VERDICT_ROLES table must be present in the aggregators.
+assertIncludes('scripts/kaola-workflow-plan-validator.js', 'OPERATOR_HINT_REGISTRY');
+assertIncludes('scripts/kaola-workflow-commit-node.js', 'OPERATOR_HINT_REGISTRY');
+assertIncludes('scripts/kaola-workflow-parallel-batch.js', 'OPERATOR_HINT_REGISTRY');
+assertIncludes('scripts/kaola-workflow-adaptive-node.js', 'OPERATOR_HINT_REGISTRY');
+assertIncludes('scripts/kaola-workflow-adaptive-node.js', "'route-findings'");
+assertIncludes('scripts/kaola-workflow-adaptive-node.js', "'--summary'");
+assertIncludes('scripts/kaola-workflow-adaptive-node.js', "'findings-route.json'");
+assertIncludes('scripts/kaola-workflow-adaptive-node.js', 'VERDICT_ROLES');
 assertIncludes('commands/kaola-workflow-plan-run.md', 'kaola_script(){');
 assertIncludes('commands/kaola-workflow-plan-run.md', 'KAOLA_SCRIPTS="$(dirname "$(kaola_script kaola-workflow-adaptive-node.js)")"');
 assertIncludes('scripts/kaola-workflow-claim.js', '--attest-contractor-spawn');

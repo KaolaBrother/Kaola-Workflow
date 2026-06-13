@@ -93,6 +93,35 @@ are parity-checked by `validate-script-sync.js` `CONFIG_HOOKS_FAMILY` +
 path (`kaola-workflow-codex-compact-resume` → `kaola-{forge}-workflow-codex-compact-resume`);
 any other divergence reds the validation run.
 
+## Operator hints on typed refusals (#445 / D-445-01)
+
+Every typed refusal/halt/warn envelope emitted by the four aggregators (`adaptive-node.js`, `commit-node.js`, `plan-validator.js`, `parallel-batch.js`) carries a top-level `operator_hint: string` field — a one-sentence human-readable remediation hint generated at emit time from a per-aggregator `OPERATOR_HINT_REGISTRY`. The hint is a new optional field; existing consumers that read only `result`/`reason` are unaffected.
+
+**Vocabulary rules (binding for all four aggregators and all four editions):**
+
+- The `write_set_overflow` family (including `write_set_granularity`, `lockfile_write`, `mirror_write`, `count_bump`) MUST reference `revert-overflow` — NEVER `drop-base` (`drop-base` is the laundering anti-pattern locked by D-424-01).
+- A crash-repair / reopen-writer hint MUST reference `repair-node` (the anti-laundering primitive that preserves the original baseline).
+- NO hint string contains a forge CLI token (`gh` / `glab` / `tea`) — hints name `node scripts/…` workflow commands only; they are forge-neutral and ship byte-aligned in all four editions.
+
+The human channel (`operator_hint`) and the machine channel (`proposed_repair`, D-440-01) name the SAME #424/#434 primitives — one vocabulary, two channels.
+
+## Plan-run skeleton and reference cards (#445 / D-445-01 §4–5)
+
+The adaptive plan-run command surfaces (×6: 3 Claude commands + 3 Codex SKILL packs, per the #400 six-surface rule) are reduced to a ~150-line LOOP SKELETON. Rare-branch prose (resume, governance, repair-routing, reopen-complete-node, frontier-batch) lives ONCE under `docs/plan-run-cards/` and is NOT replicated across the six surfaces.
+
+- **What the skeleton retains resident:** the common path (orient → open → dispatch → record evidence → close-and-advance), the `<!-- PIN: frontier unit -->` anchor followed immediately by the `frontier unit` literal (required by `scripts/test-route-reachability.js` and all four `validate-*-contracts.js`), `--summary` mode consumption (D-446-01), and `<!-- CARD: <name> -->` markers before each rare-branch stub.
+- **The five cards** live under `docs/plan-run-cards/` and are NOT six-surface-replicated; they are reference material pointed at by the skeleton's card markers:
+
+  | Card | Covers |
+  |---|---|
+  | `resume.md` | Crash/interrupt resume — `--resume-check`, reconcile-running-set, baseline re-open |
+  | `governance.md` | Planner freeze/governance-ack handshake, `governance_ack_stale`, risk-assessment |
+  | `repair-routing.md` | `route-findings` consumption (D-446-01), `revert-overflow` / `repair-node` choice, plan-repair via `--freeze` |
+  | `reopen-complete-node.md` | Reopening a `complete` writer — `repair-node` vs `reopen-node`, baseline-reuse rules, the reopen-needs-allDone trap |
+  | `frontier-batch.md` | Parallel frontier fan-out — `open-batch` / `top-up` / `seal-member` / `seal` / `reconcile`, serial-degrade |
+
+**Propagation rule:** the skeleton (not the cards) is a six-surface surface and obeys the §Routing / adaptive prose rule above. A change to the skeleton's interactive loop, the `frontier unit` literal, or a `<!-- CARD: -->` or `<!-- PIN: -->` marker is an adaptive-prose change and must propagate to all six surfaces and pass all four chains.
+
 ## `.md` files as production surfaces (#424)
 
 `.md` files in the allowband — `docs/**`, `CHANGELOG.md`, `README.md`, `kaola-workflow/{project}/**` — may be declared in a node's `declared_write_set` and pass the `--barrier-check` without requiring explicit declaration beyond the node's write set. `.md` files **outside** this allowband are production surfaces: `agents/*.md`, `commands/*.md`, `plugins/*/agents/*.toml`, and any other `.md` outside the four allowband roots must appear explicitly in the node's write set. The blanket `.md` exemption that existed before #424 is removed; a non-allowband `.md` write not in any node's declared set fails the barrier with `write_set_overflow`.

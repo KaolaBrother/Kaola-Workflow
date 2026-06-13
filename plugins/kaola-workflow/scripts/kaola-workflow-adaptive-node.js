@@ -44,6 +44,213 @@ const taskMirrorPath = path.join(__dirname, TASK_MIRROR);
 const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, resolveFanoutCapReadonly, resolveLaneContainment, refuse, WRITE_SET_OVERFLOW_SUBTYPES } = require('./kaola-workflow-adaptive-schema');
 
 // ---------------------------------------------------------------------------
+// OPERATOR_HINT_REGISTRY (#445 / D-445-01 §1-3) — per-aggregator map of typed
+// reason → templateFn(ctx). Each entry returns ONE actionable sentence + (where
+// applicable) the exact next workflow command, materialized at EMIT time by
+// getOperatorHint (decisions 1-2). The registry lives INSIDE this aggregator (no
+// shared module / no new import edge) so it stays auditable against the reasons
+// THIS script actually emits.
+//
+// VOCABULARY CONTRACT (D-445-01 §3, binding):
+//   - the write_set_overflow family (write_set_overflow / write_set_granularity /
+//     lockfile_write / mirror_write / count_bump) references `revert-overflow`,
+//     NEVER `drop-base` (the D-424-01 laundering anti-pattern).
+//   - a crash-repair / reopen-writer situation references `repair-node` (the
+//     anti-laundering primitive that keeps the original baseline).
+//   - NO forge CLI token (`gh` / `glab` / `tea`) appears in any hint — the hints
+//     name `node scripts/...` workflow commands only (the script NAME is
+//     forge-renamed by edition-sync; the hint text itself is forge-neutral).
+//
+// ctx fields the templates may read (all optional): nodeId, reason, detail,
+// project, repair.
+// ---------------------------------------------------------------------------
+const ADAPTIVE_NODE_SCRIPT = 'node scripts/kaola-workflow-adaptive-node.js';
+
+const OPERATOR_HINT_REGISTRY = {
+  // --- guard prologue (#383/#387/#391b) ---
+  plan_integrity_failed: (ctx) =>
+    'The frozen plan failed --resume-check (' + (ctx.detail || 'plan_hash / structure tamper') + '). Re-freeze the plan via /kaola-workflow-adapt or restore the untampered workflow-plan.md before retrying.',
+  halt_pending: () =>
+    'A durable consent_halt: pending marker is set in the ## Node Ledger. Resolve the halt, then clear it: ' + ADAPTIVE_NODE_SCRIPT + ' clear-halt --project <P> --reason consent|security --json.',
+  serial_node_live: (ctx) =>
+    'A serial node is still in_progress (' + ((ctx.inProgress || []).join(', ') || 'see inProgress') + '). Close it (close-and-open-next) before fanning out.',
+  scheduler_active: (ctx) =>
+    'A running-set fan-out is live (' + ((ctx.runningSet || []).join(', ') || 'see runningSet') + '). Close its nodes (close-node) or run ' + ADAPTIVE_NODE_SCRIPT + ' reconcile-running-set --project <P> --json before this command.',
+  batch_active: () =>
+    'An active parallel batch is live. Seal + join it (or reconcile --abort) before running this serial command.',
+
+  // --- orient (#328/#335/#377/#384/#430) ---
+  plan_missing: (ctx) =>
+    'No workflow-plan.md for this project. ' + (ctx.repair || 'Author + freeze it via /kaola-workflow-adapt <project>.'),
+  plan_not_mirrored: (ctx) =>
+    'The frozen plan exists in the main checkout but not this worktree. ' + (ctx.repair || 'Run ' + ADAPTIVE_NODE_SCRIPT + ' mirror-project --project <P> --json, then re-run orient.'),
+  bundle_state_incoherent: () =>
+    'workflow-state.md has a bundle_id that disagrees with issue_numbers (hand-edit / partial write). Reconcile the bundle identity fields before resuming.',
+  running_set_opening_incomplete: () =>
+    'A crashed open-ready left the running set mid-open. Run ' + ADAPTIVE_NODE_SCRIPT + ' reconcile-running-set --project <P> --json to roll it forward/back, then re-run orient.',
+  running_set_close_incomplete: () =>
+    'A terminal ledger node is stuck in the open running set (close crashed before removal). Run ' + ADAPTIVE_NODE_SCRIPT + ' reconcile-running-set --project <P> --json, then re-run orient.',
+  running_set_stale_member: () =>
+    'The running set holds a stale member (neither in_progress, terminal, nor opening). Run ' + ADAPTIVE_NODE_SCRIPT + ' reconcile-running-set --project <P> --json to drop it.',
+  batch_topup_incomplete: () =>
+    'A rolling top-up was interrupted (member appended, ledger/baseline unfinished). Run reconcile to roll it forward, then re-run orient.',
+  orphan_multi_in_progress: (ctx) =>
+    'Multiple in_progress rows with no matching live set (' + ((ctx.inProgressNodes || []).join(', ') || 'see inProgressNodes') + '). Run ' + ADAPTIVE_NODE_SCRIPT + ' ' + (ctx.repair || 'reconcile-running-set') + ' --project <P> --json.',
+
+  // --- mirror-project (#335) ---
+  state_missing: () =>
+    'No workflow-state.md for this project in the main checkout. Run claim/startup first.',
+  source_plan_missing: () =>
+    'The main checkout has no frozen plan to mirror. Author + freeze it via /kaola-workflow-adapt <project> first.',
+  mirror_failed: (ctx) =>
+    'The main→worktree project-folder mirror failed (' + (ctx.detail || 'copy/rename error') + '). Clear any .mirror-tmp leftover and retry mirror-project.',
+  mirror_verify_failed: (ctx) =>
+    'The copied plan failed plan_hash re-verification (' + (ctx.detail || 'resume-check failed') + '). Re-freeze the source plan, then re-run mirror-project.',
+
+  // --- open-next / fused advance (#272/#411) ---
+  next_action_failed: () =>
+    'next-action could not compute a ready set (stalled / corrupt DAG). Run orient to inspect the plan + ledger state.',
+  node_not_ready: (ctx) =>
+    'Node ' + (ctx.nodeId || '<id>') + ' is not in the current ready set (its dependencies are not all complete). Open the ready frontier next-action reports instead.',
+  no_ready_node: () =>
+    'No ready node to open (all are blocked or done). Run orient to confirm whether the plan is complete or wedged.',
+  node_not_in_ledger: (ctx) =>
+    'Node ' + (ctx.nodeId || '<id>') + ' is not present in the ## Node Ledger. Check the node id, or re-freeze the plan so the ledger carries every node.',
+  baseline_failed: (ctx) =>
+    'Recording the per-node baseline for ' + (ctx.nodeId || '<id>') + ' failed. Re-run open-next; if it persists, inspect commit-node --start output for this node.',
+  nested_cache_path: (ctx) =>
+    'The resolved cache path for ' + (ctx.nodeId || '<id>') + ' is illegal/nested. Fix the --project segment (it must be issue-N, never the reserved literal kaola-workflow).',
+
+  // --- write-set overflow family (#424/#434 / D-434-01 §1) — ALWAYS revert-overflow, NEVER
+  //     drop-base. These are the narrowed barrier subtypes that can surface as a top-level reason
+  //     (e.g. when a caller drills the nested barrierCheck.reason out of a barrier_failed envelope). ---
+  write_set_overflow: (ctx) =>
+    'Node ' + (ctx.nodeId || '<id>') + ' wrote outside its declared write set. Run: ' + ADAPTIVE_NODE_SCRIPT + ' revert-overflow --node-id ' + (ctx.nodeId || '<id>') + ' --project <P> --json.',
+  write_set_granularity: (ctx) =>
+    'Node ' + (ctx.nodeId || '<id>') + ' wrote at a coarser granularity than its declared set allows. Narrow the write set (re-freeze) or run ' + ADAPTIVE_NODE_SCRIPT + ' revert-overflow --node-id ' + (ctx.nodeId || '<id>') + ' --project <P> --json.',
+  lockfile_write: (ctx) =>
+    'Node ' + (ctx.nodeId || '<id>') + ' wrote an undeclared lockfile. Add the lockfile to its write set (plan-repair) or run ' + ADAPTIVE_NODE_SCRIPT + ' revert-overflow --node-id ' + (ctx.nodeId || '<id>') + ' --project <P> --json.',
+  mirror_write: (ctx) =>
+    'Node ' + (ctx.nodeId || '<id>') + ' wrote the cross-edition mirror anchor (adaptive-schema). Add it to the write set (plan-repair) or run ' + ADAPTIVE_NODE_SCRIPT + ' revert-overflow --node-id ' + (ctx.nodeId || '<id>') + ' --project <P> --json.',
+  count_bump: (ctx) =>
+    'Node ' + (ctx.nodeId || '<id>') + ' wrote a count-bump contract/test file not in its declared set. Swap the write set to include it (plan-repair) or run ' + ADAPTIVE_NODE_SCRIPT + ' revert-overflow --node-id ' + (ctx.nodeId || '<id>') + ' --project <P> --json.',
+
+  // --- close paths (#272/#303/#348/#437) ---
+  barrier_failed: (ctx) =>
+    'The per-node barrier rejected ' + (ctx.nodeId || '<id>') + ' (writes outside its declared set). Review the offending paths, then ' + ADAPTIVE_NODE_SCRIPT + ' revert-overflow --node-id ' + (ctx.nodeId || '<id>') + ' --project <P> --json, or repair-node the writer.',
+  close_node_not_in_ledger: (ctx) =>
+    'Node ' + (ctx.nodeId || '<id>') + ' has no ## Node Ledger row to close. Confirm the node id matches the frozen plan.',
+  close_transition_disallowed: (ctx) =>
+    'Node ' + (ctx.nodeId || '<id>') + ' is not in_progress, so it cannot be closed to complete. Open it (open-next) first, or reconcile a stale ledger row.',
+  selector_invalid: (ctx) =>
+    'The selector routing for ' + (ctx.nodeId || '<id>') + ' is invalid (no winning arm / ambiguous). Fix the selector node in the plan and re-freeze before closing.',
+  member_vacuity: (ctx) =>
+    'Lane-group member ' + (ctx.nodeId || '<id>') + ' touched none of its declared files and declared no no_op: reason. Make the in-lane change or record a no_op: in evidence before closing.',
+  group_barrier_failed: (ctx) =>
+    'The lane-group barrier rejected the union of members (group ' + (ctx.group_id || '<gid>') + '). Review the offending paths, then revert-overflow / repair-node the offending member before the last-member close.',
+
+  // --- evidence (#319/#359/#392) ---
+  evidence_absent: (ctx) =>
+    'No evidence file for ' + (ctx.nodeId || '<id>') + ' (' + (ctx.role || 'role') + '). Have the role agent write ' + (ctx.evidence_file || '.cache/<node-id>.md') + ' with the required tokens, then re-run record-evidence --verify.',
+  evidence_shape_failed: (ctx) =>
+    'Evidence for ' + (ctx.nodeId || '<id>') + ' is missing a required token' + (ctx.missingTokenClass ? ' (' + ctx.missingTokenClass + ')' : '') + '. Add the missing token(s) — expected: ' + ((ctx.expected || []).join(', ') || 'see expected') + '.',
+  evidence_stale: (ctx) =>
+    'Evidence for ' + (ctx.nodeId || '<id>') + ' carries a stale evidence-binding nonce (replayed from a prior open). Re-author the evidence with this open\'s nonce — expected: ' + ((ctx.expected || []).join(', ') || 'see expected') + '.',
+  evidence_unbound: (ctx) =>
+    'Evidence for ' + (ctx.nodeId || '<id>') + ' is bound to a DIFFERENT node id (copied across nodes). Re-author it with this node\'s evidence-binding header — expected: ' + ((ctx.expected || []).join(', ') || 'see expected') + '.',
+
+  // --- halt (#391/#360) ---
+  invalid_reason: (ctx) =>
+    'Invalid --reason. Use one of: ' + ((ctx.validReasons || []).join(', ') || 'consent, security, test_thrash') + '.',
+  no_halt_present: () =>
+    'No durable consent_halt: pending marker and no escalated_to_full state marker to clear — there is nothing to clear.',
+  halt_written: (ctx) =>
+    'A consent/security/test_thrash halt is set for ' + (ctx.nodeId || '<id>') + '. Resolve the cause, then clear-halt --reason consent|security to resume.',
+  write_halt_invalid_reason: (ctx) =>
+    'Invalid write-halt --reason. Use one of: ' + ((ctx.validReasons || []).join(', ') || 'consent, security, test_thrash') + '.',
+
+  // --- reopen / repair primitives (#434 / D-434-01) ---
+  active_batch_exists: () =>
+    'An active batch blocks a plan-repair reopen. Reconcile/clear the active batch first.',
+  no_parseable_nodes: () =>
+    'The plan has no parseable ## Nodes. Restore / re-freeze a valid workflow-plan.md before reopening.',
+  node_not_found: (ctx) =>
+    'Node ' + (ctx.nodeId || '<id>') + ' is not in the plan\'s ## Nodes. Check the node id against the frozen plan.',
+  node_not_complete: (ctx) =>
+    'Only a complete node can be reopened for repair; ' + (ctx.nodeId || '<id>') + ' is not complete. Run to allDone first, then reopen.',
+  would_orphan_in_progress: () =>
+    'Reopening this node would orphan an in_progress sibling. Close the in_progress node(s) first, then reopen.',
+  no_active_reviewer: () =>
+    'No active reviewer node to attach the repair to. Open the reviewer gate before repair-node.',
+  ledger_splice_failed: (ctx) =>
+    'Could not reset the writer ' + (ctx.nodeId || '<id>') + ' to pending (ledger splice failed). Inspect the ## Node Ledger for a malformed row.',
+  barrier_base_missing: (ctx) =>
+    'No barrier-base recorded for ' + (ctx.nodeId || '<id>') + '. Run open-next first so a baseline exists, then retry revert-overflow.',
+  barrier_base_empty: (ctx) =>
+    'The barrier-base for ' + (ctx.nodeId || '<id>') + ' is empty. Re-open the node to record a fresh baseline before revert-overflow.',
+  git_checkout_failed: (ctx) =>
+    'Reverting the out-of-allow paths for ' + (ctx.nodeId || '<id>') + ' failed at the git checkout seam (' + (ctx.detail || 'non-zero') + '). Resolve the working-tree state and retry revert-overflow.',
+  group_baseline_failed: (ctx) =>
+    'Recording the lane-group baseline failed (group ' + (ctx.group_id || '<gid>') + '). Re-run open-ready; if it persists, reconcile the running set.',
+
+  // --- open-ready scheduler (#377) ---
+  reconcile_first: () =>
+    'A crashed open-ready left the running set in opening state. Run ' + ADAPTIVE_NODE_SCRIPT + ' reconcile-running-set --project <P> --json before opening more.',
+  overlapping_write_sets: () =>
+    'The write frontier members have overlapping declared sets — they cannot co-open as a lane group. The scheduler degrades to a serial open automatically.',
+
+  // --- main() arg validation ---
+  invalid_project: (ctx) =>
+    'The --project segment is reserved/illegal (' + (ctx.detail || 'must be issue-N, never the literal kaola-workflow') + '). Pass a valid project name.',
+};
+
+// ---------------------------------------------------------------------------
+// getOperatorHint(reason, ctx) (#445 / D-445-01 §1-2) — the single emit-time
+// accessor. Looks up `reason` in OPERATOR_HINT_REGISTRY, calls the template with
+// the emit context, and returns the one-sentence string. A reason with no
+// registered template (or a template that throws / returns empty) falls back to
+// a documented GENERIC hint — never an empty string. Hints are generated at emit
+// time, not stored, so the string is always consistent with the reason it
+// accompanies.
+// ---------------------------------------------------------------------------
+function getOperatorHint(reason, ctx) {
+  const safeCtx = ctx || {};
+  const fallback = 'Refusal reason: ' + (reason || 'unknown')
+    + (safeCtx.nodeId ? ' (node ' + safeCtx.nodeId + ')' : '')
+    + '. Run orient to inspect the plan + ledger state and the relevant plan-run recovery card.';
+  const tmpl = OPERATOR_HINT_REGISTRY[reason];
+  if (typeof tmpl !== 'function') return fallback;
+  try {
+    const out = tmpl(safeCtx);
+    return (typeof out === 'string' && out.trim()) ? out : fallback;
+  } catch (_) {
+    return fallback;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// decorateOperatorHint(envelope) (#445 / D-445-01 §2) — additive emit-time
+// decoration applied at the SINGLE output point in main(). Adds a top-level
+// `operator_hint` string (sibling of result/reason) to every actionable typed
+// outcome — result: refuse / halt / warn — that carries a `reason`. A success
+// envelope (result: ok / ready_to_run with no reason) gets nothing: presence of
+// operator_hint is itself the "there is a next step" signal. Existing consumers
+// reading result/reason are unaffected (purely additive). Idempotent: never
+// overwrites an operator_hint a callee already set.
+// ---------------------------------------------------------------------------
+function decorateOperatorHint(envelope) {
+  if (!envelope || typeof envelope !== 'object') return envelope;
+  const actionable = envelope.result === 'refuse'
+    || envelope.result === 'halt'
+    || envelope.result === 'warn';
+  if (!actionable) return envelope;
+  if (!envelope.reason) return envelope;
+  if (typeof envelope.operator_hint === 'string' && envelope.operator_hint) return envelope;
+  envelope.operator_hint = getOperatorHint(envelope.reason, envelope);
+  return envelope;
+}
+
+// ---------------------------------------------------------------------------
 // getRoot — resolve the user-repo root via git rev-parse (cwd fallback).
 // ---------------------------------------------------------------------------
 function getRoot() {
@@ -1657,6 +1864,20 @@ function runCloseAndOpenNext(opts) {
   // #317: the closed node → completed (every ok exit carries this).
   transitions.push(buildTransition(nodeId, 'complete', 'close-and-open-next'));
 
+  // #446 (D-446-01 Decision 3): a GATE node close auto-invokes route-findings — the routing
+  // table (.cache/findings-route.json) is most valuable EXACTLY when a gate closes (findings
+  // exist, a repair must be routed). SILENT + NON-BLOCKING: any error is logged to stderr, never
+  // raised; a route-findings failure must NOT block the node advance (routing is a convenience
+  // artifact, never a gate). The node is confirmed closed at this point (ledger flipped + written),
+  // so every downstream return path (allDone / partial / enterBatch / fused-advance) carries it.
+  if (VERDICT_ROLES.has(role)) {
+    try {
+      runRouteFindings({ nodeId, planPath, readFile, writeFile }, project);
+    } catch (e) {
+      process.stderr.write('route-findings: ' + ((e && e.message) || String(e)) + '\n');
+    }
+  }
+
   // #411 BUG B: remove the just-closed node from the running set (mirror runCloseNode step (e)).
   // close-and-open-next was running-set-blind: on a serial chain (open-next added the node to the
   // running set) the node stayed in the set after closing, so the next orient saw an in-progress
@@ -2023,6 +2244,9 @@ function runWriteHalt(opts) {
     halt: 'written',
     markers,
     triage,
+    // #445 (D-445-01 §2): a halt is an actionable outcome — surface the one-sentence operator
+    // pointer at the top level even though the write itself succeeded (result: ok).
+    operator_hint: getOperatorHint('halt_written', { nodeId, reason }),
     taskTransitions: [buildTransition(nodeId, 'in_progress', 'write-halt', 'HALTED: ' + reason)],
     taskMirror: refreshTaskMirror(project, shell),
   };
@@ -3811,6 +4035,145 @@ function runSelfTest() {
 }
 
 // ---------------------------------------------------------------------------
+// parseFindingLine (#446 / D-446-01 §2) — parse ONE `finding:` line into its
+// routing fields. Returns null when the line carries no usable finding id.
+//
+// Accepted shapes (free-prose from a code-reviewer / security-reviewer /
+// adversarial-verifier evidence file `.cache/{node-id}.md`):
+//   finding: F1 — scripts/foo.js — missing validation
+//   finding: F2 - scripts/bar.js - security: missing auth check
+//   finding: F3 — no file — non-blocking nit
+//
+// Parse approach: strip the `finding:` prefix, split on ` — ` (em dash) or ` - `
+// (hyphen-spaces), take the FIRST token as the finding_id (F1, F2, …), the FIRST
+// path-like token (contains `/` or ends/contains `.js`) as `file`, and the rest
+// as `text`. `status` is 'n/a' when the line mentions `n/a` or `non-blocking`,
+// else 'open'. The `security` keyword anywhere in the line marks securityFlag.
+// ---------------------------------------------------------------------------
+function parseFindingLine(line) {
+  const m = /^finding:\s*(.+)$/i.exec(String(line || '').trim());
+  if (!m) return null;
+  const body = m[1].trim();
+  if (!body) return null;
+
+  // Split on em-dash or hyphen surrounded by spaces (both delimiters in the wild).
+  const parts = body.split(/\s+—\s+|\s+-\s+/).map(s => s.trim()).filter(Boolean);
+  if (!parts.length) return null;
+
+  const finding_id = parts[0];
+  // First path-like token: contains a path separator or a .js extension.
+  const isPathLike = (tok) => /\//.test(tok) || /\.js\b/.test(tok) || /\.[a-z0-9]+$/i.test(tok);
+  let file = null;
+  for (let i = 1; i < parts.length; i++) {
+    if (isPathLike(parts[i])) { file = parts[i]; break; }
+  }
+  const text = parts.slice(1).join(' — ');
+  const lower = body.toLowerCase();
+  const securityFlag = /\bsecurity\b/.test(lower);
+  const status = (/\bn\/a\b/.test(lower) || /\bnon-blocking\b/.test(lower)) ? 'n/a' : 'open';
+
+  return { finding_id, file, text, securityFlag, status };
+}
+
+// ---------------------------------------------------------------------------
+// resolveOwningNode (#446 / D-446-01 §2) — write-set lookup over the frozen plan
+// nodes: which node's declared_write_set contains `file`? Returns that node id,
+// or null (the plan-repair signal: the finding concerns a file no node owns).
+// ---------------------------------------------------------------------------
+function resolveOwningNode(file, nodes) {
+  if (!file) return null;
+  let parseWriteSetCell = null;
+  try { ({ parseWriteSetCell } = require('./kaola-workflow-classifier')); } catch (_) {}
+  for (const n of nodes) {
+    const raw = (n.declared_write_set != null ? n.declared_write_set : n.writeSetRaw);
+    if (raw == null) continue;
+    let tokens;
+    if (parseWriteSetCell) {
+      try { tokens = parseWriteSetCell(raw); } catch (_) { tokens = null; }
+    }
+    if (tokens) {
+      if (tokens.has ? tokens.has(file) : Array.from(tokens).includes(file)) return n.id;
+    } else {
+      const toks = String(raw).split(/[\s,]+/).filter(Boolean);
+      if (toks.includes(file)) return n.id;
+    }
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// runRouteFindings (#446 / D-446-01 Decisions 1-3) — SUBCOMMAND (not a new
+// script). Reads a gate node's evidence file `.cache/{node-id}.md`, parses its
+// `finding:` lines, resolves each finding's owning node via a write-set lookup
+// over the frozen plan, infers a fix_role, and writes `.cache/findings-route.json`
+// (an array of { finding_id, file, owning_node, fix_role, status }).
+//
+// fix_role precedence (D-446-01 §2):
+//   1. `security` in the finding text → 'security-reviewer'.
+//   2. else a node DECLARES the file (owning_node resolved) → 'implementer'.
+//   3. else (no producing/declaring node) → 'code-reviewer'.
+//
+// owning_node === null is the plan-repair signal (the file no node owns).
+//
+// @param {object} opts  { nodeId, planPath, readFile, writeFile, cacheExists }
+// @returns {{ result:'ok', count:number, file:string, findings:array }}
+//        | {{ result:'refuse', reason:string, ... }}
+// ---------------------------------------------------------------------------
+function runRouteFindings(opts, project) {
+  const { nodeId } = opts;
+  const fs = opts.fs || require('fs');
+  const readFile = opts.readFile || ((p) => fs.readFileSync(p, 'utf8'));
+  const repoRoot = opts.repoRoot || getRoot();
+  const planPath = opts.planPath
+    || path.join(repoRoot, 'kaola-workflow', project, 'workflow-plan.md');
+  const cacheDir = path.dirname(planPath) + path.sep + '.cache';
+  const evidencePath = path.join(cacheDir, nodeId + '.md');
+  const outRel = '.cache/findings-route.json';
+  const outPath = path.join(cacheDir, 'findings-route.json');
+
+  // 1. read the gate node's evidence.
+  let evidence = '';
+  try { evidence = readFile(evidencePath); }
+  catch (_) {
+    return { result: 'refuse', reason: 'evidence_absent', nodeId, evidence_file: '.cache/' + nodeId + '.md' };
+  }
+
+  // 2-3. parse `finding:` lines into routing rows.
+  let planContent = '';
+  try { planContent = readFile(planPath); } catch (_) { planContent = ''; }
+  const nodes = parseNodesFromContent(planContent);
+
+  const findings = [];
+  for (const line of String(evidence).split('\n')) {
+    const parsed = parseFindingLine(line);
+    if (!parsed) continue;
+    // 4. write-set lookup → owning_node (or null = plan-repair signal).
+    const owning_node = resolveOwningNode(parsed.file, nodes);
+    // 5. fix_role precedence.
+    const fix_role = parsed.securityFlag ? 'security-reviewer'
+      : (owning_node ? 'implementer' : 'code-reviewer');
+    findings.push({
+      finding_id: parsed.finding_id,
+      file: parsed.file,
+      owning_node,
+      fix_role,
+      status: parsed.status,
+    });
+  }
+
+  // 7. write .cache/findings-route.json (array). Best-effort dir create.
+  const out = JSON.stringify(findings, null, 2) + '\n';
+  if (opts.writeFile) {
+    opts.writeFile(outPath, out);
+  } else {
+    try { fs.mkdirSync(cacheDir, { recursive: true }); } catch (_) {}
+    fs.writeFileSync(outPath, out, 'utf8');
+  }
+
+  return { result: 'ok', count: findings.length, file: outRel, findings };
+}
+
+// ---------------------------------------------------------------------------
 // CLI — thin wrapper; all process I/O lives here.
 // ---------------------------------------------------------------------------
 function main() {
@@ -3843,7 +4206,10 @@ function main() {
       '  record-evidence     --project P --node-id N --verify      (READ-ONLY: verifies on-disk evidence)\n' +
       '  close-and-open-next --project P --node-id N\n' +
       '  write-halt          --project P --node-id N --reason consent|security|test_thrash\n' +
-      '  reopen-node         --project P --node-id N\n'
+      '  reopen-node         --project P --node-id N\n' +
+      '  route-findings      --project P --node-id N (#446: gate-evidence finding: lines → .cache/findings-route.json)\n' +
+      '\n' +
+      '  --summary           collapse the envelope to ONE line + cache full JSON at .cache/<op>-envelope.json (#446)\n'
     );
     return;
   }
@@ -3855,6 +4221,11 @@ function main() {
   const reasonIdx     = args.indexOf('--reason');
   const hasStdin      = args.includes('--stdin');
   const triageJsonIdx = args.indexOf('--triage-json');
+  // #446 (D-446-01 Decisions 4-5): --summary collapses the routine FULL-JSON envelope to ONE line
+  // and caches the full envelope at .cache/<op>-envelope.json for drill-in on result: refuse.
+  // PURELY ADDITIVE: default (no --summary) output is byte-unchanged FULL JSON, so every
+  // orchestration script / test that parses full JSON is unaffected.
+  const summaryMode   = args.includes('--summary');
 
   if (!hasJson) {
     process.stdout.write('{"result":"refuse","errors":["--json is required"]}\n');
@@ -3877,11 +4248,12 @@ function main() {
   // kaola-workflow/kaola-workflow/ directory.
   const projectValid = validateProjectName(project);
   if (!projectValid.ok) {
-    const out = {
+    const out = decorateOperatorHint({
       result: 'refuse',
       reason: 'invalid_project',
+      detail: 'must be issue-N, never the literal kaola-workflow',
       errors: ['project segment is reserved/illegal: ' + JSON.stringify(project)],
-    };
+    });
     process.stdout.write(JSON.stringify(out) + '\n');
     process.exitCode = 1;
     return;
@@ -4041,11 +4413,36 @@ function main() {
         unlink: (f) => { try { fs.unlinkSync(f); } catch (_) {} },
       });
     }
+  } else if (subcommand === 'route-findings') {
+    // #446 (D-446-01 Decision 1): route-findings is a SUBCOMMAND (no new install-manifest entry).
+    if (!nodeId) {
+      result = { result: 'refuse', errors: ['--node-id required for route-findings'] };
+    } else {
+      result = runRouteFindings({ nodeId, planPath, repoRoot, readFile, writeFile }, project);
+    }
   } else {
     result = { result: 'refuse', errors: ['unknown subcommand: ' + subcommand] };
   }
 
-  process.stdout.write(JSON.stringify(result) + '\n');
+  // #445 (D-445-01 §2): additive operator_hint decoration at the SINGLE output point — adds a
+  // top-level operator_hint to every actionable typed outcome (refuse/halt/warn) that carries a
+  // reason. Success envelopes (no reason) are untouched.
+  result = decorateOperatorHint(result);
+
+  if (summaryMode) {
+    // #446 (D-446-01 Decision 4): ONE-line summary + cached full envelope at .cache/<op>-envelope.json.
+    let line = 'summary: ' + (result.result != null ? result.result : 'unknown');
+    if (result.reason) line += ' | reason: ' + result.reason;
+    if (result.operator_hint) line += ' | hint: ' + result.operator_hint;
+    // Cache the FULL envelope (named by the subcommand) for drill-in on refuse.
+    try {
+      fs.mkdirSync(cacheDir, { recursive: true });
+      fs.writeFileSync(path.join(cacheDir, subcommand + '-envelope.json'), JSON.stringify(result) + '\n', 'utf8');
+    } catch (_) { /* best-effort: caching the envelope must never alter the exit outcome */ }
+    process.stdout.write(line + '\n');
+  } else {
+    process.stdout.write(JSON.stringify(result) + '\n');
+  }
   if (result.result === 'refuse') {
     process.exitCode = 1;
   }
@@ -4097,4 +4494,12 @@ module.exports = {
   runVerifyEvidence,
   // #440: triage classifier exported for direct testing.
   computeTriage,
+  // #445 (D-445-01): operator-hint registry + emit-time accessor + decoration.
+  OPERATOR_HINT_REGISTRY,
+  getOperatorHint,
+  decorateOperatorHint,
+  // #446 (D-446-01): route-findings subcommand + parse helpers.
+  runRouteFindings,
+  parseFindingLine,
+  resolveOwningNode,
 };

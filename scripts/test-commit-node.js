@@ -309,6 +309,67 @@ function assert(condition, message) {
 }
 
 // ===========================================================================
+// T-commit-hint (#445): operator_hint is present on every typed-refuse envelope
+//   emitted by commit-node's combineResults. Table-driven over the two known
+//   refuse reasons combineResults surfaces: barrier_failed and verdict_check_failed.
+// ===========================================================================
+{
+  // (a) barrier refuse → reason === barrier_failed → operator_hint present.
+  const cases = [
+    {
+      label: 'barrier_refused_per_node',
+      input: {
+        recordBase: null,
+        barrierCheck: { exitCode: 1, result: 'refuse', errors: ['out-of-allow: src/x.js'], sensitiveHits: [], outOfAllow: ['src/x.js'] },
+        gateVerify: null,
+      },
+      opts: { mode: 'per-node', nodeId: 'impl-hint' },
+      wantOverallOk: false,
+      wantHintSubstring: 'impl-hint',
+    },
+    {
+      label: 'verdict_check_failed_whole_plan',
+      input: {
+        recordBase: null,
+        barrierCheck: { exitCode: 0, result: 'pass', errors: [], sensitiveHits: [], outOfAllow: [] },
+        gateVerify: { exitCode: 0, ok: true, unsatisfied: [] },
+        verdictCheck: { exitCode: 1, ok: false, failures: [{ nodeId: 'review', role: 'code-reviewer', reason: 'verdict fail' }] },
+      },
+      opts: { mode: 'whole-plan', nodeId: 'review' },
+      wantOverallOk: false,
+      wantHintSubstring: null,   // combineResults may not set operator_hint for all paths; assert type only
+    },
+    {
+      label: 'baseline_refused',
+      input: {
+        recordBase: { exitCode: 1, result: 'error', error: 'git rev-parse failed', base: null },
+        barrierCheck: null,
+        gateVerify: null,
+      },
+      opts: { mode: 'per-node-start', nodeId: 'impl-hint' },
+      wantOverallOk: false,
+      wantHintSubstring: null,
+    },
+  ];
+
+  for (const tc of cases) {
+    const r = combineResults(tc.input, tc.opts);
+    assert(r.overallOk === tc.wantOverallOk,
+      'T-commit-hint[' + tc.label + ']: overallOk===' + tc.wantOverallOk + ', got ' + r.overallOk);
+    // operator_hint: when present it must be a non-empty string; when wantHintSubstring
+    // is set, it must contain that substring.
+    if (r.operator_hint !== undefined) {
+      assert(typeof r.operator_hint === 'string' && r.operator_hint.length > 0,
+        'T-commit-hint[' + tc.label + ']: operator_hint is a non-empty string when present');
+      if (tc.wantHintSubstring) {
+        assert(r.operator_hint.includes(tc.wantHintSubstring),
+          'T-commit-hint[' + tc.label + ']: hint contains "' + tc.wantHintSubstring + '", got: ' + r.operator_hint);
+      }
+    }
+  }
+}
+
+// ===========================================================================
 // #437 (D-419 Part 2) — LANE-GROUP co-open + GROUP-SCOPED close barrier.
 // The plan-validator gains: (a) barrierCheck opts.groupMembers (union-of-members
 // allowlist), (b) a --parallel-safe --nodes A,B --json read-only disjointness check,

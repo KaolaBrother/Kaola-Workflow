@@ -80,6 +80,54 @@ const BATCH_STATES = Object.freeze(['opening', 'open', 'sealed', 'joined']);
 const MANIFEST_NAME = 'active-batch.json';
 
 // ---------------------------------------------------------------------------
+// OPERATOR_HINT_REGISTRY — per-reason template functions (D-445-01 §1).
+// One entry per typed reason this aggregator can emit. Templates receive a ctx
+// object that MAY carry: nodeId, batchId, state, subcommand.
+// Vocabulary contract (D-445-01 §3): overflow family → revert-overflow (NEVER
+// drop-base); crash-repair → repair-node; NO forge tokens (gh / glab / tea).
+// ---------------------------------------------------------------------------
+const OPERATOR_HINT_REGISTRY = {
+  halt_pending: () =>
+    'A durable consent-halt is set in the Node Ledger. Run: node scripts/kaola-gitlab-workflow-adaptive-node.js clear-halt --project <P> --json to lift it before scheduling a batch.',
+  plan_integrity_failed: () =>
+    'The frozen plan failed its integrity check (hash tamper or cycle). Run: node scripts/kaola-gitlab-workflow-plan-validator.js <planPath> --resume-check --json for details.',
+  next_action_failed: () =>
+    'next-action could not resolve the ready set. Run: node scripts/kaola-gitlab-workflow-next-action.js <planPath> --json for the raw error.',
+  reconcile_first: (ctx) =>
+    'A crash-interrupted open/top-up transaction is pending (state: ' + (ctx.state || 'opening') + '). Run: node scripts/kaola-gitlab-workflow-parallel-batch.js reconcile --project <P> --json to repair it before retrying.',
+  active_batch_exists: (ctx) =>
+    'A live batch (' + (ctx.batchId || 'unknown') + ', state: ' + (ctx.state || '?') + ') is already open. Seal and join it before opening a new one.',
+  baseline_failed: (ctx) =>
+    'Baseline recording failed for node ' + (ctx.nodeId || '?') + '. Run: node scripts/kaola-gitlab-workflow-adaptive-node.js repair-node --project <P> --node-id ' + (ctx.nodeId || '<id>') + ' --json to repair the writer.',
+  node_not_in_ledger: (ctx) =>
+    'Node ' + (ctx.nodeId || '?') + ' was not found in the Node Ledger. Verify the plan and run: node scripts/kaola-gitlab-workflow-adaptive-node.js repair-node --project <P> --node-id ' + (ctx.nodeId || '<id>') + ' --json.',
+  evidence_absent: (ctx) =>
+    'Evidence file kaola-workflow/<P>/.cache/' + (ctx.nodeId || '<id>') + '.md is absent. The agent must record evidence via: node scripts/kaola-gitlab-workflow-adaptive-node.js record-evidence --project <P> --node-id ' + (ctx.nodeId || '<id>') + ' --json.',
+  evidence_shape_failed: (ctx) =>
+    'Evidence file for node ' + (ctx.nodeId || '?') + ' is present but failed the shape check. Correct the evidence tokens and re-run seal.',
+  barrier_failed: (ctx) =>
+    'Barrier check failed for node ' + (ctx.nodeId || '?') + '. The node wrote outside its declared write set. Run: node scripts/kaola-gitlab-workflow-adaptive-node.js revert-overflow --project <P> --node-id ' + (ctx.nodeId || '<id>') + ' --json, then re-seal.',
+  no_active_batch: () =>
+    'No active batch manifest found. Run open-batch first to open a parallel frontier.',
+  not_a_member: (ctx) =>
+    'Node ' + (ctx.nodeId || '?') + ' is not a member of the active batch. Verify the node id or run status to see the live member set.',
+  not_all_sealed: (ctx) =>
+    'Batch is in state \'' + (ctx.state || 'open') + '\' — not all members are sealed yet. Seal every member (seal-member / seal) before joining.',
+  cwd_unenforceable: () =>
+    'Write-role frontiers cannot be isolated in this harness — the batch has degraded to serial execution. Proceed with open-next for this node instead.',
+};
+
+// getOperatorHint — emit-time accessor. Looks up reason in the registry and
+// calls the template with ctx. Returns a safe generic fallback string when no
+// template is registered for a reason (never returns null/undefined).
+function getOperatorHint(reason, ctx) {
+  const fn = OPERATOR_HINT_REGISTRY[reason];
+  if (typeof fn === 'function') return fn(ctx || {});
+  if (reason) return 'Run: node scripts/kaola-gitlab-workflow-adaptive-node.js repair-node --project <P> --node-id <id> --json to investigate reason: ' + reason + '.';
+  return 'Check the workflow state and run status for next steps.';
+}
+
+// ---------------------------------------------------------------------------
 // safeJsonParse — returns {} on any parse failure (fail-closed).
 // ---------------------------------------------------------------------------
 function safeJsonParse(str) {
@@ -398,7 +446,7 @@ function batchCoordinationGuard(opts, excl) {
   let planContent = '';
   try { planContent = readFile(planPath); } catch (_) {}
   if (readDurableConsentHalt(planContent)) {
-    return { result: 'refuse', reason: 'halt_pending', detail: 'a durable consent_halt: pending marker is set in the ## Node Ledger — clear it (clear-halt) before scheduling a batch' };
+    return { result: 'refuse', reason: 'halt_pending', detail: 'a durable consent_halt: pending marker is set in the ## Node Ledger — clear it (clear-halt) before scheduling a batch', operator_hint: getOperatorHint('halt_pending', {}) };
   }
 
   // Layer 3 — live-coordination mutual exclusion (#383).
@@ -451,7 +499,7 @@ function runOpenBatch(opts) {
   // (full graph integrity, not just the hash). Fail-closed: any non-ok refuses with zero mutation.
   const integrity = shell(validatorPath, [planPath, '--resume-check', '--json']);
   if (integrity.exitCode !== 0 || integrity.ok !== true) {
-    return { result: 'refuse', reason: 'plan_integrity_failed', detail: integrity.reason || null };
+    return { result: 'refuse', reason: 'plan_integrity_failed', detail: integrity.reason || null, operator_hint: getOperatorHint('plan_integrity_failed', {}) };
   }
 
   // #391b HALT FENCE + #383 LIVE-COORDINATION (matrix: open-batch excl serial + scheduler). A durable
@@ -463,7 +511,7 @@ function runOpenBatch(opts) {
 
   const nextAction = shell(nextActionPath, [planPath, '--json']);
   if (nextAction.exitCode !== 0 || nextAction.result !== 'ok') {
-    return { result: 'refuse', reason: 'next_action_failed', nextAction };
+    return { result: 'refuse', reason: 'next_action_failed', nextAction, operator_hint: getOperatorHint('next_action_failed', {}) };
   }
   if (nextAction.allDone) {
     return { result: 'ok', allDone: true, opened: [], taskTransitions: [] };
@@ -482,12 +530,12 @@ function runOpenBatch(opts) {
   const existing = readManifest(manifestPath, opts.cacheExists, readFile);
   if (existing && existing.state !== 'joined') {
     if (existing.state === 'opening') {
-      return { result: 'refuse', reason: 'reconcile_first', state: 'opening', batchId: existing.batchId };
+      return { result: 'refuse', reason: 'reconcile_first', state: 'opening', batchId: existing.batchId, operator_hint: getOperatorHint('reconcile_first', { state: 'opening' }) };
     }
     // #305: a member.opening:true marker (interrupted top-up; state still 'open') must be
     // reconciled before a fresh open, not mis-reported as active_batch_exists below.
     if (hasInflightOpening(existing)) {
-      return { result: 'refuse', reason: 'reconcile_first', state: existing.state, batchId: existing.batchId, detail: 'member_opening_incomplete' };
+      return { result: 'refuse', reason: 'reconcile_first', state: existing.state, batchId: existing.batchId, detail: 'member_opening_incomplete', operator_hint: getOperatorHint('reconcile_first', { state: existing.state }) };
     }
     const liveIds = (existing.members || []).filter(m => !m.sealed).map(m => m.id).slice().sort();
     const ipSorted = listInProgress(ledger).slice().sort();
@@ -505,7 +553,7 @@ function runOpenBatch(opts) {
         taskMirror: refreshTaskMirror(project, shell),
       };
     }
-    return { result: 'refuse', reason: 'active_batch_exists', state: existing.state, batchId: existing.batchId };
+    return { result: 'refuse', reason: 'active_batch_exists', state: existing.state, batchId: existing.batchId, operator_hint: getOperatorHint('active_batch_exists', { state: existing.state, batchId: existing.batchId }) };
   }
 
   const frontier = deriveReadyPending(nextAction.readySet || [], ledger);
@@ -531,7 +579,7 @@ function runOpenBatch(opts) {
     // it serially; neither refuses). The `degraded:true` shape is preserved for prose compatibility.
     // Reintroduction condition: a real harness cwd-forcing primitive (#376 lane-containment hook +
     // #377 per-node running-set scheduler). See docs/decisions/0008-excise-write-role-batch-isolation.md.
-    return { result: 'ok', degraded: true, reason: 'cwd_unenforceable', opened: [], allDone: false, taskTransitions: [] };
+    return { result: 'ok', degraded: true, reason: 'cwd_unenforceable', opened: [], allDone: false, taskTransitions: [], operator_hint: getOperatorHint('cwd_unenforceable', {}) };
   }
 
   // Cap the member set. The frontier may be WIDER than the cap (#303: planner fan-out width
@@ -555,7 +603,7 @@ function runOpenBatch(opts) {
     const baselineOk = baseline.exitCode === 0 && baseline.result === 'ok';
     if (!baselineOk) {
       // No ledger/manifest mutation has happened yet — refuse leaves zero orphans.
-      return { result: 'refuse', reason: 'baseline_failed', nodeId: m.id, baselineResult: baseline };
+      return { result: 'refuse', reason: 'baseline_failed', nodeId: m.id, baselineResult: baseline, operator_hint: getOperatorHint('baseline_failed', { nodeId: m.id }) };
     }
     members.push({
       id: m.id,
@@ -583,7 +631,7 @@ function runOpenBatch(opts) {
   for (const m of capped) {
     const spliced = spliceLedgerNode(planContent, m.id, 'in_progress', { allowFrom: ['pending'] });
     if (!spliced.found) {
-      return { result: 'refuse', reason: 'node_not_in_ledger', nodeId: m.id };
+      return { result: 'refuse', reason: 'node_not_in_ledger', nodeId: m.id, operator_hint: getOperatorHint('node_not_in_ledger', { nodeId: m.id }) };
     }
     if (spliced.changed) planContent = spliced.content;
   }
@@ -641,12 +689,14 @@ function sealOne(member, ctx) {
     // missing token class, so a seal refusal names the actual fault instead of the
     // old catch-all 'evidence_missing' (which forced manual build-green patching).
     const absent = !evidence || !evidence.trim() || shapeCheck.kind === 'absent';
+    const evidenceReason = absent ? 'evidence_absent' : 'evidence_shape_failed';
     return {
       ok: false,
-      reason: absent ? 'evidence_absent' : 'evidence_shape_failed',
+      reason: evidenceReason,
       missingTokenClass: shapeCheck.missingTokenClass || null,
       detail: shapeCheck.reason || 'cache file absent',
       expected: shapeCheck.expected || [],
+      operator_hint: getOperatorHint(evidenceReason, { nodeId: member.id }),
       manifest, planContent,
     };
   }
@@ -656,7 +706,7 @@ function sealOne(member, ctx) {
   // against the PARENT planPath (an out-of-lane write refuses barrier_failed).
   const barrierOut = shell(commitNodePath, [planPath, '--node-id', member.id, '--json']);
   if (barrierOut.exitCode !== 0 || barrierOut.result !== 'ok') {
-    return { ok: false, reason: 'barrier_failed', barrierOut, manifest, planContent };
+    return { ok: false, reason: 'barrier_failed', barrierOut, operator_hint: getOperatorHint('barrier_failed', { nodeId: member.id }), manifest, planContent };
   }
 
   // Close: ledger row → complete (allowFrom ['in_progress','n/a']).
@@ -701,15 +751,15 @@ function runSealMember(opts) {
 
   const manifest = readManifest(manifestPath, cacheExists, readFile);
   if (!manifest) {
-    return { result: 'refuse', reason: 'no_active_batch' };
+    return { result: 'refuse', reason: 'no_active_batch', operator_hint: getOperatorHint('no_active_batch', {}) };
   }
   // #305: refuse over an interrupted top-up (member.opening:true) until reconciled.
   if (hasInflightOpening(manifest)) {
-    return { result: 'refuse', reason: 'reconcile_first', state: manifest.state, detail: 'member_opening_incomplete' };
+    return { result: 'refuse', reason: 'reconcile_first', state: manifest.state, detail: 'member_opening_incomplete', operator_hint: getOperatorHint('reconcile_first', { state: manifest.state }) };
   }
   const member = manifest.members.find(m => m.id === nodeId);
   if (!member) {
-    return { result: 'refuse', reason: 'not_a_member', nodeId };
+    return { result: 'refuse', reason: 'not_a_member', nodeId, operator_hint: getOperatorHint('not_a_member', { nodeId }) };
   }
 
   if (member.sealed) {
@@ -721,7 +771,7 @@ function runSealMember(opts) {
     planPath, cacheDir, shell, readFile, manifest, planContent, project,
   });
   if (!sealed.ok) {
-    return { result: 'refuse', reason: sealed.reason, missingTokenClass: sealed.missingTokenClass || null, nodeId, barrierOut: sealed.barrierOut };
+    return { result: 'refuse', reason: sealed.reason, missingTokenClass: sealed.missingTokenClass || null, nodeId, barrierOut: sealed.barrierOut, operator_hint: sealed.operator_hint || getOperatorHint(sealed.reason, { nodeId }) };
   }
 
   // Persist plan (ledger + compliance) then manifest.
@@ -747,11 +797,11 @@ function runSeal(opts) {
 
   let manifest = readManifest(manifestPath, cacheExists, readFile);
   if (!manifest) {
-    return { result: 'refuse', reason: 'no_active_batch' };
+    return { result: 'refuse', reason: 'no_active_batch', operator_hint: getOperatorHint('no_active_batch', {}) };
   }
   // #305: refuse over an interrupted top-up (member.opening:true) until reconciled.
   if (hasInflightOpening(manifest)) {
-    return { result: 'refuse', reason: 'reconcile_first', state: manifest.state, detail: 'member_opening_incomplete' };
+    return { result: 'refuse', reason: 'reconcile_first', state: manifest.state, detail: 'member_opening_incomplete', operator_hint: getOperatorHint('reconcile_first', { state: manifest.state }) };
   }
 
   let planContent = readFile(planPath);
@@ -785,8 +835,12 @@ function runSeal(opts) {
 
   // #317: every genuinely-sealed member's ledger row is now complete (true even on a partial
   // seal that still has failures) — refresh the mirror and return one completed transition each.
-  return {
-    result: failures.length === 0 ? 'ok' : 'refuse',
+  const sealResult = failures.length === 0 ? 'ok' : 'refuse';
+  const sealHint = failures.length > 0
+    ? 'One or more batch members failed to seal. Check the failures array for per-member reasons, then repair each member and retry seal.'
+    : undefined;
+  const sealOut = {
+    result: sealResult,
     state: manifest.state,
     sealed: sealedIds,
     pending,
@@ -794,6 +848,8 @@ function runSeal(opts) {
     taskTransitions: sealedIds.map(id => buildTransition(id, 'complete', 'seal')),
     taskMirror: refreshTaskMirror(project, shell),
   };
+  if (sealHint) sealOut.operator_hint = sealHint;
+  return sealOut;
 }
 
 // ---------------------------------------------------------------------------
@@ -810,18 +866,18 @@ function runJoin(opts) {
 
   let manifest = readManifest(manifestPath, cacheExists, readFile);
   if (!manifest) {
-    return { result: 'refuse', reason: 'no_active_batch' };
+    return { result: 'refuse', reason: 'no_active_batch', operator_hint: getOperatorHint('no_active_batch', {}) };
   }
   // #305: refuse over an interrupted top-up (member.opening:true) until reconciled — a clearer
   // typed reason than the not_all_sealed that the open-state precondition below would emit.
   if (hasInflightOpening(manifest)) {
-    return { result: 'refuse', reason: 'reconcile_first', state: manifest.state, detail: 'member_opening_incomplete' };
+    return { result: 'refuse', reason: 'reconcile_first', state: manifest.state, detail: 'member_opening_incomplete', operator_hint: getOperatorHint('reconcile_first', { state: manifest.state }) };
   }
 
   // Precondition: refuse ONLY when not yet sealed. {sealed,joined} proceed (joined makes a
   // repeat call idempotent). An 'opening' manifest is a crash-in-progress to reconcile, not join.
   if (manifest.state === 'open' || manifest.state === 'opening') {
-    return { result: 'refuse', reason: 'not_all_sealed', state: manifest.state };
+    return { result: 'refuse', reason: 'not_all_sealed', state: manifest.state, operator_hint: getOperatorHint('not_all_sealed', { state: manifest.state }) };
   }
 
   // All members are read-only — nothing to merge into the parent tree.
@@ -853,16 +909,16 @@ function runTopUp(opts) {
   const { spliceLedgerNode } = require(ADAPTIVE_NODE);
 
   let manifest = readManifest(manifestPath, cacheExists, readFile);
-  if (!manifest) return { result: 'refuse', reason: 'no_active_batch' };
-  if (manifest.state === 'opening') return { result: 'refuse', reason: 'reconcile_first', state: 'opening' };
+  if (!manifest) return { result: 'refuse', reason: 'no_active_batch', operator_hint: getOperatorHint('no_active_batch', {}) };
+  if (manifest.state === 'opening') return { result: 'refuse', reason: 'reconcile_first', state: 'opening', operator_hint: getOperatorHint('reconcile_first', { state: 'opening' }) };
   // #305: an interrupted top-up (member.opening:true) must be reconciled before another top-up.
-  if (hasInflightOpening(manifest)) return { result: 'refuse', reason: 'reconcile_first', state: manifest.state, detail: 'member_opening_incomplete' };
+  if (hasInflightOpening(manifest)) return { result: 'refuse', reason: 'reconcile_first', state: manifest.state, detail: 'member_opening_incomplete', operator_hint: getOperatorHint('reconcile_first', { state: manifest.state }) };
   if (manifest.state !== 'open') return { result: 'ok', toppedUp: [], reason: 'batch_not_open', state: manifest.state, taskTransitions: [] };
 
   // Same integrity gate as open-batch: never schedule against a tampered/invalid plan.
   const integrity = shell(validatorPath, [planPath, '--resume-check', '--json']);
   if (integrity.exitCode !== 0 || integrity.ok !== true) {
-    return { result: 'refuse', reason: 'plan_integrity_failed', detail: integrity.reason || null };
+    return { result: 'refuse', reason: 'plan_integrity_failed', detail: integrity.reason || null, operator_hint: getOperatorHint('plan_integrity_failed', {}) };
   }
 
   // #391b HALT FENCE + #383 LIVE-COORDINATION (matrix: top-up excl scheduler only). top-up drains the
@@ -885,7 +941,7 @@ function runTopUp(opts) {
   const ledger = parseLedgerMap(planContent);
   const nextAction = shell(nextActionPath, [planPath, '--json']);
   if (nextAction.exitCode !== 0 || nextAction.result !== 'ok') {
-    return { result: 'refuse', reason: 'next_action_failed', nextAction };
+    return { result: 'refuse', reason: 'next_action_failed', nextAction, operator_hint: getOperatorHint('next_action_failed', {}) };
   }
   const readyPending = deriveReadyPending(nextAction.readySet || [], ledger);
   const memberIds = new Set(manifest.members.map(m => m.id));
@@ -893,7 +949,7 @@ function runTopUp(opts) {
   // #364: a write-role manifest can no longer be created (open-batch serial-degrades write
   // frontiers), but defend against a legacy/corrupt manifest — never roll one forward, since the
   // member-worktree isolation it would need was excised. Degrade with the preserved shape.
-  if (isWriteRole) return { result: 'ok', degraded: true, reason: 'cwd_unenforceable', toppedUp: [], taskTransitions: [] };
+  if (isWriteRole) return { result: 'ok', degraded: true, reason: 'cwd_unenforceable', toppedUp: [], taskTransitions: [], operator_hint: getOperatorHint('cwd_unenforceable', {}) };
   // A top-up candidate is a CURRENT-FRONTIER SIBLING — same kind as the live batch and NOT already
   // a member — that does NOT depend on any current batch member. The dependency guard is what keeps
   // top-up from advancing to the NEXT node (e.g. a downstream review gate that becomes ready once
@@ -910,7 +966,7 @@ function runTopUp(opts) {
   for (const m of toOpen) {
     const baseline = shell(commitNodePath, [planPath, '--node-id', m.id, '--start', '--json']);
     if (!(baseline.exitCode === 0 && baseline.result === 'ok')) {
-      return { result: 'refuse', reason: 'baseline_failed', nodeId: m.id, baselineResult: baseline };
+      return { result: 'refuse', reason: 'baseline_failed', nodeId: m.id, baselineResult: baseline, operator_hint: getOperatorHint('baseline_failed', { nodeId: m.id }) };
     }
     newMembers.push({
       id: m.id, role: m.role, model: m.model, declared_write_set: m.declared_write_set, kind: manifest.kind,
@@ -927,7 +983,7 @@ function runTopUp(opts) {
 
   for (const m of newMembers) {
     const spliced = spliceLedgerNode(planContent, m.id, 'in_progress', { allowFrom: ['pending'] });
-    if (!spliced.found) return { result: 'refuse', reason: 'node_not_in_ledger', nodeId: m.id };
+    if (!spliced.found) return { result: 'refuse', reason: 'node_not_in_ledger', nodeId: m.id, operator_hint: getOperatorHint('node_not_in_ledger', { nodeId: m.id }) };
     if (spliced.changed) planContent = spliced.content;
   }
   writeFile(planPath, planContent);
@@ -1017,7 +1073,7 @@ function runReconcile(opts) {
   for (const m of target) {
     const baseline = shell(commitNodePath, [planPath, '--node-id', m.id, '--start', '--json']);
     if (!(baseline.exitCode === 0 && baseline.result === 'ok')) {
-      return { result: 'refuse', reason: 'baseline_failed', nodeId: m.id, baselineResult: baseline };
+      return { result: 'refuse', reason: 'baseline_failed', nodeId: m.id, baselineResult: baseline, operator_hint: getOperatorHint('baseline_failed', { nodeId: m.id }) };
     }
     const spliced = spliceLedgerNode(planContent, m.id, 'in_progress', { allowFrom: ['pending', 'in_progress'] });
     if (spliced.changed) planContent = spliced.content;
@@ -1151,12 +1207,12 @@ function main() {
   const maxIdx     = args.indexOf('--max');
 
   if (!hasJson) {
-    process.stdout.write('{"result":"refuse","errors":["--json is required"]}\n');
+    process.stdout.write('{"result":"refuse","errors":["--json is required"],"operator_hint":"Add --json flag to your command."}\n');
     process.exitCode = 1;
     return;
   }
   if (!(projectIdx >= 0 && projectIdx + 1 < args.length)) {
-    process.stdout.write(JSON.stringify({ result: 'refuse', errors: ['--project is required'] }) + '\n');
+    process.stdout.write(JSON.stringify({ result: 'refuse', errors: ['--project is required'], operator_hint: 'Add --project <name> flag to your command.' }) + '\n');
     process.exitCode = 1;
     return;
   }
@@ -1211,7 +1267,7 @@ function main() {
   } else if (subcommand === 'top-up') {
     result = runTopUp(ctx);
   } else if (subcommand === 'seal-member') {
-    if (!nodeId) result = { result: 'refuse', errors: ['--node-id required for seal-member'] };
+    if (!nodeId) result = { result: 'refuse', errors: ['--node-id required for seal-member'], operator_hint: 'Add --node-id <id> flag to your seal-member command.' };
     else result = runSealMember(ctx);
   } else if (subcommand === 'seal') {
     result = runSeal(ctx);
@@ -1222,7 +1278,7 @@ function main() {
   } else if (subcommand === 'status') {
     result = runStatus(ctx);
   } else {
-    result = { result: 'refuse', errors: ['unknown subcommand: ' + subcommand] };
+    result = { result: 'refuse', errors: ['unknown subcommand: ' + subcommand], operator_hint: 'Valid subcommands: open-batch, top-up, seal-member, seal, join, reconcile, status.' };
   }
 
   process.stdout.write(JSON.stringify(result) + '\n');

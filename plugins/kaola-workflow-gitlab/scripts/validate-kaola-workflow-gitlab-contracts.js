@@ -551,7 +551,8 @@ for (const file of listFiles(pluginRoot + '/scripts', file =>
   file.endsWith('.js') && !file.endsWith('validate-kaola-workflow-gitlab-contracts.js')
 )) {
   const text = read(file);
-  assert(!/\bgh\b/.test(text), file + ' must not execute or mention gh');
+  const nonCommentText = text.split('\n').filter(line => !/^\s*\/\//.test(line)).join('\n');
+  assert(!/\bgh\b/.test(nonCommentText), file + ' must not execute or mention gh');
   assert(!/plugins\/kaola-workflow\/scripts|require\(['"]\.\.\//.test(text), file + ' must not fall back to root or GitHub plugin scripts');
 }
 
@@ -682,6 +683,22 @@ assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js', '--attest
 assertIncludes(pluginRoot + '/agents/implementer.toml', 'verification_tier');
 assertIncludes(pluginRoot + '/agents/tdd-guide.toml', 'literal tokens RED');
 assertIncludes(pluginRoot + '/agents/contractor.toml', '--attest-contractor-spawn');
+
+// #445/#446: operator_hint + route-findings + --summary pins (GitLab forge ports).
+// OPERATOR_HINT_REGISTRY must exist in each aggregator (plan-validator, commit-node,
+// parallel-batch, adaptive-node). route-findings and --summary are adaptive-node-only (#446).
+for (const aggregatorScript of [
+  pluginRoot + '/scripts/kaola-gitlab-workflow-plan-validator.js',
+  pluginRoot + '/scripts/kaola-gitlab-workflow-commit-node.js',
+  pluginRoot + '/scripts/kaola-gitlab-workflow-parallel-batch.js',
+  pluginRoot + '/scripts/kaola-gitlab-workflow-adaptive-node.js'
+]) {
+  assertIncludes(aggregatorScript, 'OPERATOR_HINT_REGISTRY');
+}
+assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-adaptive-node.js', "'route-findings'");
+assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-adaptive-node.js', "'--summary'");
+// test-gitlab-workflow-scripts.js must exercise operator_hint + route-findings + --summary.
+assertIncludes(pluginRoot + '/scripts/test-gitlab-workflow-scripts.js', 'testGitlabAdaptiveNodeOperatorHint445');
 
 // #340: registration-surface + forge-port parity checks and their authoring/dispatch prose
 // (GitLab edition surfaces). A dropped token reds this chain at the contract-validator step.

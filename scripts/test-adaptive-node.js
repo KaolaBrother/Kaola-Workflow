@@ -41,6 +41,14 @@ const {
   runRepairNode,
   // #440: triage classifier
   computeTriage,
+  // #445: operator_hint registry + accessors
+  OPERATOR_HINT_REGISTRY,
+  getOperatorHint,
+  decorateOperatorHint,
+  // #446: route-findings subcommand + parse helpers
+  runRouteFindings,
+  parseFindingLine,
+  resolveOwningNode,
 } = require('./kaola-workflow-adaptive-node');
 const { RUNNING_SET_NAME } = require('./kaola-workflow-adaptive-schema');
 const { readDurableConsentHalt, locateSection } = require('./kaola-workflow-adaptive-schema');
@@ -5536,6 +5544,379 @@ function rtHarness(initialFiles, opts) {
   // null barrierOut → unclassified without throwing
   const triageNull = computeTriage(null, '/fake/.cache', 'impl-core', () => {});
   assert(triageNull.class === 'unclassified', 'T-440-D: null barrierOut → unclassified');
+}
+
+// ---------------------------------------------------------------------------
+// T-445/446 table-driven: operator_hint, route-findings, --summary (#445/#446)
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// T-445-A: decorateOperatorHint — table of refuse envelopes with known reasons
+//   Each entry: { reason, ctx, wantHintSubstring }
+//   The decorated envelope must carry operator_hint that contains wantHintSubstring.
+// ---------------------------------------------------------------------------
+{
+  const cases = [
+    { reason: 'plan_missing',       ctx: {},                              wantHintSubstring: 'workflow-plan.md' },
+    { reason: 'barrier_failed',     ctx: { nodeId: 'impl-x' },           wantHintSubstring: 'impl-x' },
+    { reason: 'evidence_absent',    ctx: { nodeId: 'n1', role: 'tdd-guide' }, wantHintSubstring: 'n1' },
+    { reason: 'halt_pending',       ctx: {},                              wantHintSubstring: 'clear-halt' },
+    { reason: 'write_set_overflow', ctx: { nodeId: 'writer' },           wantHintSubstring: 'revert-overflow' },
+    { reason: 'invalid_project',    ctx: { detail: 'must be issue-N' },  wantHintSubstring: 'issue-N' },
+  ];
+
+  for (const tc of cases) {
+    const envelope = { result: 'refuse', reason: tc.reason, ...tc.ctx };
+    const decorated = decorateOperatorHint(envelope);
+    assert(
+      typeof decorated.operator_hint === 'string' && decorated.operator_hint.length > 0,
+      'T-445-A[' + tc.reason + ']: operator_hint is a non-empty string'
+    );
+    assert(
+      decorated.operator_hint.includes(tc.wantHintSubstring),
+      'T-445-A[' + tc.reason + ']: hint contains "' + tc.wantHintSubstring + '", got: ' + decorated.operator_hint
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// T-445-B: decorateOperatorHint — must NOT mutate a success envelope (result: ok)
+// ---------------------------------------------------------------------------
+{
+  const ok = { result: 'ok', nodeId: 'n1' };
+  const out = decorateOperatorHint(ok);
+  assert(out.operator_hint === undefined, 'T-445-B: success envelope must NOT gain operator_hint');
+}
+
+// ---------------------------------------------------------------------------
+// T-445-C: decorateOperatorHint — idempotent: never overwrites an existing hint
+// ---------------------------------------------------------------------------
+{
+  const env = { result: 'refuse', reason: 'halt_pending', operator_hint: 'custom-hint-do-not-overwrite' };
+  const out = decorateOperatorHint(env);
+  assert(out.operator_hint === 'custom-hint-do-not-overwrite', 'T-445-C: existing operator_hint must not be overwritten');
+}
+
+// ---------------------------------------------------------------------------
+// T-445-D: getOperatorHint — unknown reason falls back to a non-empty generic string
+// ---------------------------------------------------------------------------
+{
+  const hint = getOperatorHint('some_completely_unknown_reason_xyz', {});
+  assert(typeof hint === 'string' && hint.length > 0, 'T-445-D: unknown reason produces a non-empty fallback hint');
+  assert(hint.includes('some_completely_unknown_reason_xyz') || hint.includes('orient'),
+    'T-445-D: fallback hint contains reason or "orient": ' + hint);
+}
+
+// ---------------------------------------------------------------------------
+// T-445-E: OPERATOR_HINT_REGISTRY coverage — every reason that adaptive-node
+//   emits (refuse with reason) has a registered template (not the generic fallback).
+//   This is a table of known reasons asserted present in the registry.
+// ---------------------------------------------------------------------------
+{
+  const knownReasons = [
+    'plan_missing', 'plan_not_mirrored', 'plan_integrity_failed', 'halt_pending',
+    'serial_node_live', 'scheduler_active', 'batch_active',
+    'next_action_failed', 'node_not_ready', 'no_ready_node',
+    'barrier_failed', 'evidence_absent', 'evidence_shape_failed',
+    'write_set_overflow', 'lockfile_write', 'mirror_write', 'count_bump',
+    'invalid_project',
+  ];
+  for (const r of knownReasons) {
+    assert(
+      typeof OPERATOR_HINT_REGISTRY[r] === 'function',
+      'T-445-E: OPERATOR_HINT_REGISTRY[' + r + '] must be a function (template registered)'
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// T-446-A: parseFindingLine — table-driven (#446)
+//   Covers em-dash separator, hyphen separator, security keyword, n/a status,
+//   and missing-file (no path-like token) shapes.
+// ---------------------------------------------------------------------------
+{
+  const pfCases = [
+    {
+      line: 'finding: F1 — scripts/foo.js — missing validation',
+      wantId: 'F1', wantFile: 'scripts/foo.js', wantStatus: 'open', wantSecurity: false,
+    },
+    {
+      line: 'finding: F2 - scripts/bar.js - security: missing auth check',
+      wantId: 'F2', wantFile: 'scripts/bar.js', wantStatus: 'open', wantSecurity: true,
+    },
+    {
+      line: 'finding: F3 — no file — non-blocking nit',
+      wantId: 'F3', wantFile: null, wantStatus: 'n/a', wantSecurity: false,
+    },
+    {
+      line: 'finding: F4 — scripts/validate-contracts.js — n/a already fixed',
+      wantId: 'F4', wantFile: 'scripts/validate-contracts.js', wantStatus: 'n/a', wantSecurity: false,
+    },
+    {
+      line: 'not a finding line at all',
+      wantNull: true,
+    },
+    {
+      line: '',
+      wantNull: true,
+    },
+  ];
+
+  for (const tc of pfCases) {
+    const r = parseFindingLine(tc.line);
+    if (tc.wantNull) {
+      assert(r === null, 'T-446-A[' + JSON.stringify(tc.line) + ']: must return null');
+    } else {
+      assert(r !== null, 'T-446-A[' + tc.wantId + ']: must return non-null for a finding line');
+      assert(r.finding_id === tc.wantId, 'T-446-A[' + tc.wantId + ']: finding_id, got ' + r.finding_id);
+      assert(r.file === tc.wantFile, 'T-446-A[' + tc.wantId + ']: file, got ' + r.file);
+      assert(r.status === tc.wantStatus, 'T-446-A[' + tc.wantId + ']: status, got ' + r.status);
+      assert(r.securityFlag === tc.wantSecurity, 'T-446-A[' + tc.wantId + ']: securityFlag, got ' + r.securityFlag);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// T-446-B: resolveOwningNode — table of nodes + file → expected owning id
+// ---------------------------------------------------------------------------
+{
+  const nodes = [
+    { id: 'impl-a', declared_write_set: 'scripts/foo.js' },
+    { id: 'impl-b', declared_write_set: 'scripts/bar.js scripts/baz.js' },
+    { id: 'review', declared_write_set: null },
+  ];
+
+  const roCases = [
+    { file: 'scripts/foo.js',  wantNode: 'impl-a' },
+    { file: 'scripts/bar.js',  wantNode: 'impl-b' },
+    { file: 'scripts/baz.js',  wantNode: 'impl-b' },
+    { file: 'scripts/other.js',wantNode: null },
+    { file: null,              wantNode: null },
+  ];
+
+  for (const tc of roCases) {
+    const got = resolveOwningNode(tc.file, nodes);
+    assert(
+      got === tc.wantNode,
+      'T-446-B[' + tc.file + ']: resolveOwningNode → ' + tc.wantNode + ', got ' + got
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// T-446-C: runRouteFindings — pure-fn with injected readFile/writeFile (#446)
+//   Exercises the fix_role precedence: security → 'security-reviewer',
+//   owned file → 'implementer', unowned → 'code-reviewer'.
+// ---------------------------------------------------------------------------
+{
+  const planContent446c = makePlan([
+    '| impl-core | in_progress | |',
+    '| review    | pending | |',
+    '| finalize  | pending | |',
+  ], [
+    '| impl-core | tdd-guide    | — | scripts/foo.js | 1 | sequence |',
+    '| review    | code-reviewer| impl-core | — | 1 | sequence |',
+    '| finalize  | finalize     | review | CHANGELOG.md | 1 | sequence |',
+  ]);
+
+  // Evidence file with three findings:
+  //  F1 — scripts/foo.js (impl-core owns it) → implementer
+  //  F2 — scripts/bar.js (nobody owns it) → code-reviewer
+  //  F3 — scripts/baz.js — security flag → security-reviewer
+  const evidence446c = [
+    'evidence-binding: review abc123',
+    '',
+    'finding: F1 — scripts/foo.js — wrong logic',
+    'finding: F2 — scripts/bar.js — unused import',
+    'finding: F3 — scripts/baz.js — security: missing auth',
+    '',
+    'verdict: pass',
+    'findings_blocking: 0',
+  ].join('\n') + '\n';
+
+  const fakeCache = '/fake/kaola-workflow/test-project/.cache';
+  const written446c = {};
+
+  const r446c = runRouteFindings({
+    nodeId: 'review',
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    repoRoot: '/fake',
+    readFile: (fpath) => {
+      if (fpath.endsWith('review.md')) return evidence446c;
+      if (fpath.endsWith('workflow-plan.md')) return planContent446c;
+      throw new Error('ENOENT: ' + fpath);
+    },
+    writeFile: (fpath, content) => { written446c[fpath] = content; },
+  }, 'test-project');
+
+  assert(r446c.result === 'ok', 'T-446-C: runRouteFindings returns ok');
+  assert(r446c.count === 3, 'T-446-C: count=3 findings, got ' + r446c.count);
+  assert(Array.isArray(r446c.findings), 'T-446-C: findings is array');
+
+  const f1 = r446c.findings.find(f => f.finding_id === 'F1');
+  const f2 = r446c.findings.find(f => f.finding_id === 'F2');
+  const f3 = r446c.findings.find(f => f.finding_id === 'F3');
+
+  assert(f1 && f1.owning_node === 'impl-core', 'T-446-C[F1]: owning_node=impl-core, got ' + (f1 && f1.owning_node));
+  assert(f1 && f1.fix_role === 'implementer', 'T-446-C[F1]: fix_role=implementer, got ' + (f1 && f1.fix_role));
+  assert(f2 && f2.owning_node === null, 'T-446-C[F2]: owning_node=null (unowned), got ' + (f2 && f2.owning_node));
+  assert(f2 && f2.fix_role === 'code-reviewer', 'T-446-C[F2]: fix_role=code-reviewer, got ' + (f2 && f2.fix_role));
+  assert(f3 && f3.fix_role === 'security-reviewer', 'T-446-C[F3]: fix_role=security-reviewer (security flag), got ' + (f3 && f3.fix_role));
+
+  // Verify .cache/findings-route.json was written with the correct shape.
+  const outPath = Object.keys(written446c).find(k => k.includes('findings-route.json'));
+  assert(outPath !== undefined, 'T-446-C: writeFile called for findings-route.json');
+  if (outPath) {
+    const parsed446c = JSON.parse(written446c[outPath]);
+    assert(Array.isArray(parsed446c) && parsed446c.length === 3,
+      'T-446-C: written JSON is an array of 3, got ' + parsed446c.length);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// T-446-D: runRouteFindings — evidence_absent refuse when evidence file is missing
+// ---------------------------------------------------------------------------
+{
+  const r446d = runRouteFindings({
+    nodeId: 'review',
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    repoRoot: '/fake',
+    readFile: () => { throw new Error('ENOENT'); },
+    writeFile: () => {},
+  }, 'test-project');
+
+  assert(r446d.result === 'refuse', 'T-446-D: missing evidence → refuse');
+  assert(r446d.reason === 'evidence_absent', 'T-446-D: reason=evidence_absent, got ' + r446d.reason);
+  assert(r446d.nodeId === 'review', 'T-446-D: nodeId echoed in refusal');
+}
+
+// ---------------------------------------------------------------------------
+// T-446-E: --summary mode — subprocess test (real CLI invocation in $TMPDIR)
+//   Runs adaptive-node.js orient --project nonexistent-zyx --json --summary
+//   via a temp project dir in $TMPDIR. Asserts:
+//     (a) stdout is exactly ONE line starting with "summary: "
+//     (b) .cache/orient-envelope.json is written (full envelope cache)
+// ---------------------------------------------------------------------------
+{
+  const { execFileSync } = require('child_process');
+  const ADAPTIVE_NODE = path.join(__dirname, 'kaola-workflow-adaptive-node.js');
+
+  // Stand up a minimal git repo + project dir in TMPDIR.
+  const tmpRoot446e = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-summary-'));
+  try {
+    const g = (args) => {
+      try {
+        execFileSync('git', ['-C', tmpRoot446e, ...args], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+      } catch (_) {}
+    };
+    g(['init']);
+    g(['config', 'user.email', 'kw@test']);
+    g(['config', 'user.name', 'kw']);
+    g(['config', 'commit.gpgsign', 'false']);
+    // No project dir → orient will refuse with plan_missing.
+
+    let stdout446e = '';
+    try {
+      stdout446e = execFileSync(process.execPath, [
+        ADAPTIVE_NODE, 'orient', '--project', 'nonexistent-zyx', '--json', '--summary',
+      ], { cwd: tmpRoot446e, encoding: 'utf8' });
+    } catch (err) {
+      stdout446e = String(err.stdout || '');
+    }
+
+    const lines446e = stdout446e.split('\n').filter(l => l.length > 0);
+    assert(lines446e.length === 1, 'T-446-E: --summary produces exactly 1 output line, got ' + lines446e.length + ': ' + JSON.stringify(lines446e));
+    assert(lines446e[0].startsWith('summary: '), 'T-446-E: the single line starts with "summary: ", got: ' + lines446e[0]);
+
+    // .cache/ for the project: cacheDir = <root>/kaola-workflow/nonexistent-zyx/.cache
+    const projCacheDir446e = path.join(tmpRoot446e, 'kaola-workflow', 'nonexistent-zyx', '.cache');
+    const envelopePath446e = path.join(projCacheDir446e, 'orient-envelope.json');
+    assert(fs.existsSync(envelopePath446e), 'T-446-E: orient-envelope.json must be written to .cache/');
+    if (fs.existsSync(envelopePath446e)) {
+      let env446e = {};
+      try { env446e = JSON.parse(fs.readFileSync(envelopePath446e, 'utf8')); } catch (_) {}
+      assert(typeof env446e.result === 'string', 'T-446-E: cached envelope has result field');
+    }
+  } finally {
+    try { fs.rmSync(tmpRoot446e, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
+// ---------------------------------------------------------------------------
+// T-446-F: route-findings subprocess — recognized subcommand (real CLI) (#446)
+//   Runs adaptive-node.js route-findings --project test-project --node-id review --json
+//   against a TMPDIR project. With an evidence file present, it should return ok
+//   with the findings array. With no evidence file, it refuses evidence_absent
+//   (NOT unknown subcommand — proving route-findings is a recognized subcommand).
+// ---------------------------------------------------------------------------
+{
+  const { execFileSync } = require('child_process');
+  const ADAPTIVE_NODE = path.join(__dirname, 'kaola-workflow-adaptive-node.js');
+
+  const tmpRoot446f = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-route-'));
+  try {
+    const g = (args) => {
+      try {
+        execFileSync('git', ['-C', tmpRoot446f, ...args], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+      } catch (_) {}
+    };
+    g(['init']);
+    g(['config', 'user.email', 'kw@test']);
+    g(['config', 'user.name', 'kw']);
+    g(['config', 'commit.gpgsign', 'false']);
+
+    // Create a minimal project structure.
+    const projDir446f = path.join(tmpRoot446f, 'kaola-workflow', 'test-project-446f');
+    const cacheDir446f = path.join(projDir446f, '.cache');
+    fs.mkdirSync(cacheDir446f, { recursive: true });
+
+    // Write a minimal plan.
+    fs.writeFileSync(path.join(projDir446f, 'workflow-plan.md'), makePlan([
+      '| impl | in_progress | |',
+      '| review | pending | |',
+      '| finalize | pending | |',
+    ]));
+    fs.writeFileSync(path.join(projDir446f, 'workflow-state.md'), makeState());
+
+    // Write evidence for the review node.
+    fs.writeFileSync(path.join(cacheDir446f, 'review.md'), [
+      'evidence-binding: review abc456',
+      '',
+      'finding: F1 — scripts/other.js — wrong logic',
+      '',
+      'verdict: pass',
+      'findings_blocking: 0',
+    ].join('\n') + '\n');
+
+    let out446f = '';
+    try {
+      out446f = execFileSync(process.execPath, [
+        ADAPTIVE_NODE, 'route-findings', '--project', 'test-project-446f', '--node-id', 'review', '--json',
+      ], { cwd: tmpRoot446f, encoding: 'utf8' });
+    } catch (err) {
+      out446f = String(err.stdout || '');
+    }
+
+    let parsed446f = {};
+    try { parsed446f = JSON.parse(out446f.trim().split('\n').pop()); } catch (_) {}
+
+    // Key assertion: must NOT be "unknown subcommand".
+    assert(
+      !(parsed446f.errors && parsed446f.errors.join('').includes('unknown subcommand')),
+      'T-446-F: route-findings is a recognized subcommand (must not return unknown subcommand)'
+    );
+    // It found the evidence → ok with findings array.
+    assert(parsed446f.result === 'ok', 'T-446-F: ok result when evidence present, got ' + parsed446f.result);
+    assert(Array.isArray(parsed446f.findings), 'T-446-F: findings array returned');
+    assert(parsed446f.count === 1, 'T-446-F: 1 finding parsed, got ' + parsed446f.count);
+
+    // findings-route.json must be written.
+    const routePath446f = path.join(cacheDir446f, 'findings-route.json');
+    assert(fs.existsSync(routePath446f), 'T-446-F: .cache/findings-route.json written by route-findings');
+
+  } finally {
+    try { fs.rmSync(tmpRoot446f, { recursive: true, force: true }); } catch (_) {}
+  }
 }
 
 if (failed > 0) {

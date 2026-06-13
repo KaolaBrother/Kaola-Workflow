@@ -498,6 +498,16 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, "-path '
 // #360: script-owned consent-halt clear (clear-halt subcommand) replaces the contractor lockstep.
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'clear-halt');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`, "subcommand === 'clear-halt'");
+// #446 (D-446-01): operator_hint registry + route-findings subcommand + --summary flag +
+// findings-route.json output + VERDICT_ROLES table must be present in the Codex aggregators.
+assertIncludes(`${pluginRoot}/scripts/kaola-workflow-plan-validator.js`, 'OPERATOR_HINT_REGISTRY');
+assertIncludes(`${pluginRoot}/scripts/kaola-workflow-commit-node.js`, 'OPERATOR_HINT_REGISTRY');
+assertIncludes(`${pluginRoot}/scripts/kaola-workflow-parallel-batch.js`, 'OPERATOR_HINT_REGISTRY');
+assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`, 'OPERATOR_HINT_REGISTRY');
+assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`, "'route-findings'");
+assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`, "'--summary'");
+assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`, "'findings-route.json'");
+assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`, 'VERDICT_ROLES');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, '--attest-contractor-spawn');
 // #347: pin the planner self-attest back-fill flag (the #280 producer) — codex ships the canonical
 // claim byte-for-byte; pinning here keeps the producer from regressing on this edition too.

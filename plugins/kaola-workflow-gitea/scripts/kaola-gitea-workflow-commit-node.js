@@ -33,6 +33,40 @@ const { execFileSync } = require('child_process');
 // Keep on its own clearly-named line so the port is a one-line edit.
 const VALIDATOR = 'kaola-gitea-workflow-plan-validator.js';
 
+// ---------------------------------------------------------------------------
+// OPERATOR_HINT_REGISTRY — per-aggregator map of typed reason → hint templateFn.
+// Each entry is a function of ctx: { nodeId, mode } → one-sentence string.
+// Vocabulary contract (D-445-01 §3):
+//   - overflow family → reference revert-overflow, NEVER drop-base
+//   - crash-repair    → reference repair-node
+//   - NO forge tokens (gh / glab / tea)
+// ---------------------------------------------------------------------------
+const OPERATOR_HINT_REGISTRY = {
+  barrier_failed: (ctx) =>
+    `Barrier rejected node ${ctx.nodeId || '(unknown)'}. Review the offending paths in .cache/, then run: node scripts/kaola-gitea-workflow-adaptive-node.js revert-overflow --project <project> --node-id ${ctx.nodeId || '<node-id>'} --json if overflow; otherwise check the evidence file for the specific barrier failure.`,
+  gate_failed: (ctx) =>
+    `Gate verify failed for node ${ctx.nodeId || '(unknown)'}. Ensure all code nodes are post-dominated by a completed reviewer. Check the plan\'s ## Node Ledger and review node status.`,
+  verdict_failed: (ctx) =>
+    `Verdict check failed for node ${ctx.nodeId || '(unknown)'}. The reviewer node verdict is missing or not passing. Ensure the reviewer node has completed with verdict: pass before closing this node.`,
+  selector_failed: (ctx) =>
+    `Selector check failed for node ${ctx.nodeId || '(unknown)'}. The selector_source node is missing or has a foreign selector. Check the .cache/ evidence for the selector node.`,
+  baseline_missing: (ctx) =>
+    `No baseline recorded for node ${ctx.nodeId || '(unknown)'}. Run open-next first, or run: node scripts/kaola-gitea-workflow-adaptive-node.js repair-node --project <project> --node-id ${ctx.nodeId || '<node-id>'} --json to recover a crashed node.`,
+  invalid_args: (_ctx) =>
+    'Correct the command arguments and retry. See usage: node scripts/kaola-gitea-workflow-commit-node.js --help',
+};
+
+// ---------------------------------------------------------------------------
+// getOperatorHint — emit-time accessor: looks up reason in OPERATOR_HINT_REGISTRY,
+// calls the template with ctx, returns a one-sentence string.
+// Falls back to a safe generic when no entry is registered for the reason.
+// ---------------------------------------------------------------------------
+function getOperatorHint(reason, ctx) {
+  const fn = OPERATOR_HINT_REGISTRY[reason];
+  if (typeof fn === 'function') return fn(ctx || {});
+  return `Unexpected refusal (reason: ${reason || 'unknown'}). Check the plan and node state, then retry or run repair-node to recover.`;
+}
+
 // Resolve validator path relative to this script's own directory (so forge ports
 // under plugins/…/scripts/ find their forge-named sibling correctly).
 // #366: test-only validator-path override so a spawn-count test can point at a logging stub.
@@ -142,7 +176,26 @@ function combineResults(steps, opts) {
     vcOut = verdictCheck;
   }
 
-  return {
+  // Derive a typed reason for the refusal so operator_hint can be specific.
+  let refuseReason = null;
+  if (!overallOk) {
+    if (mode === 'per-node-start') {
+      // record-base failed — baseline could not be written
+      refuseReason = 'baseline_missing';
+    } else {
+      // Precedence: barrier > selector > gate > verdict (most-actionable first)
+      const barrierFailed = !(barrierCheck && barrierCheck.exitCode === 0 && barrierCheck.result === 'pass');
+      const selectorFailed = selectorCheck != null && !(selectorCheck.exitCode === 0 && selectorCheck.ok === true);
+      const gateFailed = gateVerify != null && !(gateVerify.exitCode === 0 && gateVerify.ok === true);
+      const verdictFailed = verdictCheck != null && !(verdictCheck.exitCode === 0 && verdictCheck.ok === true);
+      if (barrierFailed) refuseReason = 'barrier_failed';
+      else if (selectorFailed) refuseReason = 'selector_failed';
+      else if (gateFailed) refuseReason = 'gate_failed';
+      else if (verdictFailed) refuseReason = 'verdict_failed';
+    }
+  }
+
+  const base = {
     result: overallOk ? 'ok' : 'refuse',
     mode,
     nodeId,
@@ -153,6 +206,11 @@ function combineResults(steps, opts) {
     selectorCheck: (selectorCheck !== undefined) ? selectorCheck : null,
     overallOk,
   };
+  if (refuseReason !== null) {
+    base.reason = refuseReason;
+    base.operator_hint = getOperatorHint(refuseReason, { nodeId, mode });
+  }
+  return base;
 }
 
 // ---------------------------------------------------------------------------
@@ -181,7 +239,7 @@ function main() {
 
   // Early-refuse: --start without --node-id
   if (hasStart && !hasNodeIdFlag) {
-    const out = { result: 'refuse', mode: null, nodeId: null, recordBase: null, barrierCheck: null, gateVerify: null, overallOk: false, errors: ['--start requires --node-id'] };
+    const out = { result: 'refuse', reason: 'invalid_args', operator_hint: getOperatorHint('invalid_args', {}), mode: null, nodeId: null, recordBase: null, barrierCheck: null, gateVerify: null, overallOk: false, errors: ['--start requires --node-id'] };
     process.stdout.write(JSON.stringify(out) + '\n');
     process.exitCode = 1;
     return;
@@ -189,7 +247,7 @@ function main() {
 
   // Early-refuse: --node-id flag present but value is missing or starts with '--'
   if (hasNodeIdFlag && (!nodeIdValue || nodeIdValue.startsWith('--'))) {
-    const out = { result: 'refuse', mode: null, nodeId: null, recordBase: null, barrierCheck: null, gateVerify: null, overallOk: false, errors: ['--node-id requires a value'] };
+    const out = { result: 'refuse', reason: 'invalid_args', operator_hint: getOperatorHint('invalid_args', {}), mode: null, nodeId: null, recordBase: null, barrierCheck: null, gateVerify: null, overallOk: false, errors: ['--node-id requires a value'] };
     process.stdout.write(JSON.stringify(out) + '\n');
     process.exitCode = 1;
     return;

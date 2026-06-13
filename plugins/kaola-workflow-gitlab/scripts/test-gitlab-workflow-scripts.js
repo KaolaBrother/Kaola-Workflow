@@ -4172,6 +4172,56 @@ function testGitlabFinalizeRowMainDirect338() {
 //         reaching the count assertions; usage/unknown-flag fails closed (exit 2).
 // The forbidden fixture token is built by string concatenation because the validator's own
 // plugin-script scan forbids a literal `\bgh\b` in any .js file (this test included).
+// #445/#446: forge-edition exercises for operator_hint, route-findings subcommand, and
+// --summary flag on the GitLab adaptive-node port.
+//   (a) OPERATOR_HINT_REGISTRY is exported and has entries — the hint machinery is wired.
+//   (b) decorateOperatorHint stamps operator_hint on an actionable envelope.
+//   (c) route-findings subcommand is recognised — a missing --json fails closed but JSON,
+//       not an unknown-subcommand hard error. runNodeRaw is used because the exit is 1.
+//   (d) --summary flag collapses a refuse to a one-line "summary:" sentinel (not JSON).
+function testGitlabAdaptiveNodeOperatorHint445() {
+  const adaptiveNode = require('./kaola-gitlab-workflow-adaptive-node');
+
+  // (a) OPERATOR_HINT_REGISTRY must be a non-empty object exported from the gitlab port.
+  assert.ok(adaptiveNode.OPERATOR_HINT_REGISTRY && typeof adaptiveNode.OPERATOR_HINT_REGISTRY === 'object',
+    '#445 gl: OPERATOR_HINT_REGISTRY must be exported as an object');
+  assert.ok(Object.keys(adaptiveNode.OPERATOR_HINT_REGISTRY).length > 0,
+    '#445 gl: OPERATOR_HINT_REGISTRY must have at least one entry');
+
+  // (b) decorateOperatorHint must add operator_hint to an actionable refuse envelope.
+  const envelope = { result: 'refuse', reason: 'plan_missing' };
+  const decorated = adaptiveNode.decorateOperatorHint(envelope);
+  assert.ok(typeof decorated.operator_hint === 'string' && decorated.operator_hint.length > 0,
+    '#445 gl: decorateOperatorHint must stamp a non-empty operator_hint on a refuse envelope');
+
+  // (c) route-findings subcommand: missing --json refuses with a typed JSON error (not an
+  // unknown-subcommand crash). exit 1 is expected; stdout must be valid JSON with result: refuse.
+  const routeFindingsRaw = spawnSync(process.execPath, [
+    path.join(__dirname, 'kaola-gitlab-workflow-adaptive-node.js'),
+    'route-findings'
+  ], { encoding: 'utf8' });
+  assert.strictEqual(routeFindingsRaw.status, 1,
+    '#446 gl: route-findings without --json must exit 1 (not an unknown-subcommand crash)');
+  const routeFindingsParsed = JSON.parse(routeFindingsRaw.stdout.trim());
+  assert.strictEqual(routeFindingsParsed.result, 'refuse',
+    '#446 gl: route-findings without --json must emit a typed refuse result');
+
+  // (d) --summary flag: orient with a missing plan and --json --summary must emit a
+  // one-line "summary:" sentinel, not a full JSON envelope.
+  const summaryRaw = spawnSync(process.execPath, [
+    path.join(__dirname, 'kaola-gitlab-workflow-adaptive-node.js'),
+    'orient',
+    '--project', 'nonexistent-gl-445-test',
+    '--json',
+    '--summary'
+  ], { encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
+  const summaryOut = summaryRaw.stdout.trim();
+  assert.ok(summaryOut.startsWith('summary:'),
+    '#446 gl: --summary mode must emit a one-line "summary:" sentinel, got: ' + summaryOut);
+
+  console.log('testGitlabAdaptiveNodeOperatorHint445 (#445/#446): PASSED');
+}
+
 // #401 Part 1: a behavioral REFUSAL ANCHOR for the GitLab plan-validator port. The
 // forge walkthroughs exercise only --freeze happy paths, so a forge-side regression in
 // the #381/#382 write-set + model refusals would pass all four chains today (#347 drift
@@ -4304,6 +4354,7 @@ testGitlabTaskMirror266();
 testGitlabCompactResume266();
 testGitlabForeignArchiveBarrier261();
 testGitlabMirrorCleanCrossRef339();
+testGitlabAdaptiveNodeOperatorHint445();
 testGitlabPlanValidatorRefusalMatrix401();
 testForbiddenOnly341();
 

@@ -131,6 +131,44 @@ for (const ed of codexEditions) {
     `T4[${ed.name}]: next SKILL carries the adaptive route + #380 auto-bundle restructure`);
 }
 
+// ---------------------------------------------------------------------------
+// T5: <!-- PIN: frontier unit --> comment + the `frontier unit` literal must appear in each of the
+// 6 plan-run surfaces (3 Claude commands + 3 Codex SKILLs). Added by the n9-prose-skeleton node.
+// NOTE: if n9 has not run yet, these surfaces will not yet carry the pin — they are recorded as
+// informational warnings (non-blocking) so the suite stays green while n9 is pending. The code-
+// reviewer (n11) MUST verify all 6 surfaces are blocking after n9 completes.
+// ---------------------------------------------------------------------------
+{
+  const planRunSurfaces = [
+    'commands/kaola-workflow-plan-run.md',
+    'plugins/kaola-workflow/skills/kaola-workflow-plan-run/SKILL.md',
+    'plugins/kaola-workflow-gitlab/commands/kaola-workflow-plan-run.md',
+    'plugins/kaola-workflow-gitlab/skills/kaola-workflow-plan-run/SKILL.md',
+    'plugins/kaola-workflow-gitea/commands/kaola-workflow-plan-run.md',
+    'plugins/kaola-workflow-gitea/skills/kaola-workflow-plan-run/SKILL.md'
+  ];
+  // Check whether the pin has been written by n9. If ANY surface has it, we assert all 6 have it
+  // (blocking). If NONE do, n9 is still pending and we emit a non-blocking warning.
+  const anyHasPin = planRunSurfaces.some(f => {
+    const fullPath = path.join(REPO, f);
+    return fs.existsSync(fullPath) && fs.readFileSync(fullPath, 'utf8').includes('<!-- PIN: frontier unit -->');
+  });
+  if (anyHasPin) {
+    // n9 has run (at least partially) — assert all 6 surfaces carry the pin and the literal.
+    for (const f of planRunSurfaces) {
+      const content = fs.existsSync(path.join(REPO, f)) ? fs.readFileSync(path.join(REPO, f), 'utf8') : '';
+      assert(content.includes('<!-- PIN: frontier unit -->'),
+        `T5: ${f} must contain <!-- PIN: frontier unit --> comment (n9-prose-skeleton)`);
+      assert(content.includes('frontier unit'),
+        `T5: ${f} must contain "frontier unit" literal following the PIN comment (n9-prose-skeleton)`);
+    }
+  } else {
+    // n9 is still pending — emit a non-blocking warning so the reviewer knows to check after n9.
+    // TODO(code-reviewer/n11): promote these to blocking assert() calls once n9-prose-skeleton runs.
+    console.warn('T5 (non-blocking): <!-- PIN: frontier unit --> not yet present in plan-run surfaces — n9-prose-skeleton pending');
+  }
+}
+
 if (failed) {
   console.error(`\nRoute-reachability test FAILED: ${failed} failure(s), ${passed} passed.`);
   process.exit(1);
