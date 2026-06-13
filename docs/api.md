@@ -337,6 +337,160 @@ New READ-ONLY mode of the `record-evidence` subcommand. Verifies on-disk `.cache
 
 `--verify` uses `checkEvidenceShape` (the same checker the `close-node` / `close-and-open-next` gate uses), so the two cannot drift. `--verify` writes nothing. `--stdin` and `--verify` are mutually exclusive.
 
+### Lane-group co-open and group-scoped close barrier (issue #437, D-419 P2)
+
+When `KAOLA_LANE_CONTAINMENT=1`, `open-ready` can co-open ≥2 pairwise-disjoint write nodes
+as a lane group. The group state is tracked inside `running-set.json` and the barrier is
+deferred to the last member's close.
+
+#### `running-set.json` — `lane_group` extension
+
+An optional top-level key `lane_group` is added to `running-set.json`
+(`kaola-workflow/{project}/.cache/running-set.json`). Absent when flag OFF; absent after the
+group clears (last member close + barrier pass).
+
+```json
+{
+  "state": "open",
+  "max_concurrent": 8,
+  "lane_group": {
+    "group_id": "lg-n2a-n2b",
+    "members": ["n2a", "n2b"],
+    "closed_members": [],
+    "baseline": "<commit-sha>",
+    "write_union": ["scripts/x.js", "scripts/y.js"],
+    "openedAt": "2026-06-13T10:12:00.000Z"
+  },
+  "nodes": [
+    { "id": "n2a", "group_id": "lg-n2a-n2b", "role": "implementer", "kind": "write",
+      "declared_write_set": "scripts/x.js", "model": "opus", "baseline": "recorded" }
+  ]
+}
+```
+
+Field contract:
+
+| field | type | description |
+|---|---|---|
+| `group_id` | string | `'lg-' + sortedMemberIds.join('-')`, sanitized for file/ref keys |
+| `members` | string[] | FULL bare member id list — STABLE during group lifetime (never shrunk) |
+| `closed_members` | string[] | accumulates each member id as it closes; last-member = every other id is in this set |
+| `baseline` | string | shared group baseline SHA, recorded via `--record-base --node-id <group_id>` at open time |
+| `write_union` | string[] | union of each member's `declared_write_set` (convenience snapshot; barrier re-reads the plan) |
+| `openedAt` | ISO 8601 | set at open time |
+
+Each node entry inside `nodes` gains an optional `group_id` string field (the lane group it
+belongs to). Serial / read-only nodes have no `group_id` field.
+
+#### `--parallel-safe --nodes A,B[,C] --json` (plan-validator.js)
+
+READ-ONLY check exposing the existing antichain pair-loop predicates (exact-file overlap +
+`classifier.disjointWriteSets`). No fs writes, no baseline, no git diff. Called by
+`tryFormLaneGroup` (adaptive-node.js L2522) before forming a co-open group.
+
+**CLI:**
+```bash
+node scripts/kaola-workflow-plan-validator.js <planPath> --parallel-safe --nodes A,B --json
+```
+
+**Success response:**
+```json
+{ "result": "ok", "nodes": ["A", "B"], "overlapping": [] }
+```
+
+**Refuse response (overlap):**
+```json
+{
+  "result": "refuse",
+  "reason": "overlapping_write_sets",
+  "nodes": ["A", "B"],
+  "overlapping": [{ "a": "A", "b": "B", "kind": "exact", "path": "scripts/x.js" }]
+}
+```
+
+`overlapping[].kind` is `'exact'` (exact-file clash) or the classifier verdict string (e.g.
+`'yellow'`) for coarse/shared-infra overlap.
+
+**Other typed refusals:**
+
+| reason | condition |
+|---|---|
+| `missing_nodes` | `--nodes` flag absent |
+| `too_few_nodes` | fewer than 2 node ids supplied |
+| `node_not_found` | one or more named ids are not in the frozen plan |
+
+#### `--group-barrier --group-id <id> [--member <id>] [--skip-root-pin] --json` (plan-validator.js)
+
+The GROUP-scoped close barrier. Invoked once at the LAST group member's close. Diffs the group
+baseline → a now-snapshot and calls `barrierCheck` with `opts.groupMembers` (the UNION
+allowlist). An out-of-union path hits the EXISTING rank-4 `unattributed_write` /
+`write_set_overflow` arm — no new reason code.
+
+**CLI:**
+```bash
+node scripts/kaola-workflow-plan-validator.js <planPath> \
+  --group-barrier --group-id lg-n2a-n2b --json
+```
+
+**Success response** (barrierCheck envelope):
+```json
+{ "result": "pass", "errors": [] }
+```
+
+**Typed refusals:**
+
+| reason | condition |
+|---|---|
+| `write_set_overflow` / `unattributed_write` | a diff path belongs to no member's declared set |
+| `running_set_unreadable` | cannot read/parse `running-set.json` |
+| `group_not_found` | named `group_id` absent or mismatched in `running-set.json`; or `lane_group.members` is empty |
+| `no_group_base` | no recorded baseline for `<group_id>` |
+| `barrier_base_mismatch` | `.cache` SHA ≠ gc-anchored ref SHA (anti-laundering guard, #368) |
+| `root_mismatch` | barrier called outside the repo toplevel (suppress with `--skip-root-pin`) |
+
+Reads `running-set.json` from beside the plan to learn `lane_group.members` and the baseline.
+The `--member <id>` flag supplements `lg.members` in the alternate ordering where the last
+member is removed before the barrier runs (not required under the preferred ordering).
+
+#### `open-ready` response — `laneGroup` field
+
+When a co-open forms a lane group, the `open-ready` response carries an additive `laneGroup`
+field (absent on the serial/read path):
+
+```json
+{
+  "result": "ok",
+  "kind": "write",
+  "opened": [{ "id": "n2a", ... }, { "id": "n2b", ... }],
+  "laneGroup": {
+    "group_id": "lg-n2a-n2b",
+    "members": ["n2a", "n2b"],
+    "baseline": "<sha>",
+    "write_union": ["scripts/x.js", "scripts/y.js"]
+  },
+  "taskTransitions": [...]
+}
+```
+
+On the serial/read path (`laneGroup` absent) the response shape is byte-identical to pre-#437.
+
+#### `close-node` response — `barrier` field extension
+
+For a group member, `close-node` extends the `barrier` field beyond the per-node shape:
+
+| `barrier` value | condition |
+|---|---|
+| `'deferred_to_group'` | non-last member; diff barrier deferred; compliance row carries this literal |
+| `'group_passed'` | last member; group barrier ran and passed; `lane_group` cleared |
+
+On the serial path the `barrier` field is absent (unchanged from pre-#437). Typed refusals
+gained for group members:
+
+| reason | condition |
+|---|---|
+| `member_vacuity` | in-lane `git status --porcelain` returned no changes and evidence has no `no_op: <reason>` line |
+| `group_barrier_failed` | the group barrier refused (passthrough of the validator's reason) |
+
 ## Configuration
 
 Configuration files control workflow behavior and issue sorting.

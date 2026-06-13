@@ -1636,6 +1636,143 @@ function spyMirrorShell(planPath, failMirror) {
 }
 
 // ===========================================================================
+// CLUSTER LG (#437 D-419 P2 / n4-batch) — parallel-batch lane-group AWARENESS.
+//
+// The lane-group co-open + group-scoped close barrier are owned ENTIRELY by
+// adaptive-node's running-set scheduler (open-ready / close-node) and the validator
+// (--parallel-safe / --group-barrier). The batch (fan-out) machine NEVER co-opens a
+// write group: a write-role frontier serial-degrades unconditionally (#364), and
+// parallel-batch ONLY READS running-set.json (in runStatus) and ONLY WRITES the
+// active-batch.json manifest + the plan — it never writes running-set.json, so it
+// cannot destroy a live lane_group on reconcile.
+//
+// This cluster asserts the ONE additive change: `status --json` surfaces a `laneGroup`
+// diagnostics field when running-set.json carries a `lane_group` key, AND is byte-
+// identical (no laneGroup field) when it does not (flag-OFF / serial running set).
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// LG1 (#437): status surfaces laneGroup when running-set.json carries lane_group.
+//   A live write lane group (members co-opened by open-ready) appears in the per-node
+//   running-set.json as a `lane_group` key. `status` is the diagnostics surface, so it
+//   must echo the lane group (group_id, members, baseline) for the orchestrator/operator.
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan(
+    [
+      '| wa | implementer | — | wa.js | 1 | fanout(execute) |',
+      '| wb | implementer | — | wb.js | 1 | fanout(execute) |',
+    ],
+    [
+      '| wa | in_progress |  |',
+      '| wb | in_progress |  |',
+    ]
+  );
+  const { root, planPath, statePath, cacheDir } = makeProjectDir(plan);
+  const io = makeIo();
+  const manifestPath = path.join(cacheDir, 'active-batch.json');
+  const runningSetPath = path.join(cacheDir, 'running-set.json');
+  // A running-set produced by open-ready's co-open arm: two in_progress write members + a lane_group.
+  fs.writeFileSync(runningSetPath, JSON.stringify({
+    state: 'open',
+    max_concurrent: 8,
+    lane_group: {
+      group_id: 'lg-wa-wb',
+      members: ['wa', 'wb'],
+      baseline: 'deadbeefcafef00d',
+      write_union: ['wa.js', 'wb.js'],
+      openedAt: '2026-06-13T00:00:00.000Z',
+    },
+    nodes: [
+      { id: 'wa', role: 'implementer', kind: 'write', group_id: 'lg-wa-wb', declared_write_set: 'wa.js', baseline: 'recorded' },
+      { id: 'wb', role: 'implementer', kind: 'write', group_id: 'lg-wa-wb', declared_write_set: 'wb.js', baseline: 'recorded' },
+    ],
+  }, null, 2));
+  const r = runStatus({
+    planPath, statePath, cacheDir, manifestPath, project: 'test-project',
+    shell: realNextActionShell(planPath), ...io,
+  });
+  assert(r.result === 'ok', 'LG1: status ok over a live lane_group running set');
+  assert(r.laneGroup && r.laneGroup.group_id === 'lg-wa-wb',
+    'LG1: status surfaces laneGroup.group_id, got ' + JSON.stringify(r.laneGroup));
+  assert(Array.isArray(r.laneGroup.members) && r.laneGroup.members.join(',') === 'wa,wb',
+    'LG1: laneGroup.members echoed, got ' + JSON.stringify(r.laneGroup && r.laneGroup.members));
+  assert(r.laneGroup.baseline === 'deadbeefcafef00d',
+    'LG1: laneGroup.baseline echoed, got ' + JSON.stringify(r.laneGroup && r.laneGroup.baseline));
+  // The running-set cross-check still routes correctly (valid_running_set, not orphan).
+  assert(r.crossCheck && r.crossCheck.reason === 'valid_running_set',
+    'LG1: running-set in_progress set matches → valid_running_set, got ' + JSON.stringify(r.crossCheck));
+  cleanup(root);
+}
+
+// ---------------------------------------------------------------------------
+// LG2 (#437) — FLAG-OFF byte-identity: a running-set WITHOUT a lane_group key (the
+// serial/read fan-out shape) yields NO laneGroup field. The additive surface is
+// invisible whenever no group is live, so the flag-OFF status payload is unchanged.
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan(
+    [
+      '| f1 | code-explorer | — | — | 1 | fanout(scan) |',
+      '| f2 | code-explorer | — | — | 1 | fanout(scan) |',
+    ],
+    [
+      '| f1 | in_progress |  |',
+      '| f2 | in_progress |  |',
+    ]
+  );
+  const { root, planPath, statePath, cacheDir } = makeProjectDir(plan);
+  const io = makeIo();
+  const manifestPath = path.join(cacheDir, 'active-batch.json');
+  const runningSetPath = path.join(cacheDir, 'running-set.json');
+  // A serial/read running set — NO lane_group key (the flag-OFF shape).
+  fs.writeFileSync(runningSetPath, JSON.stringify({
+    state: 'open', nodes: [{ id: 'f1', kind: 'read' }, { id: 'f2', kind: 'read' }],
+  }, null, 2));
+  const r = runStatus({
+    planPath, statePath, cacheDir, manifestPath, project: 'test-project',
+    shell: realNextActionShell(planPath), ...io,
+  });
+  assert(r.result === 'ok', 'LG2: status ok over a no-lane_group running set');
+  assert(!('laneGroup' in r),
+    'LG2 (INV-6): NO laneGroup field when running-set has no lane_group, got ' + JSON.stringify(Object.keys(r)));
+  cleanup(root);
+}
+
+// ---------------------------------------------------------------------------
+// LG3 (#437) — status surfaces laneGroup even with an ACTIVE manifest present
+// (a read-only fan-out manifest can coexist with a running-set diagnostically;
+// the active:true branch must also echo the lane group, not drop it).
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan(
+    [ '| wa | implementer | — | wa.js | 1 | fanout(execute) |' ],
+    [ '| wa | in_progress |  |' ]
+  );
+  const { root, planPath, statePath, cacheDir } = makeProjectDir(plan);
+  const io = makeIo();
+  const manifestPath = path.join(cacheDir, 'active-batch.json');
+  const runningSetPath = path.join(cacheDir, 'running-set.json');
+  fs.writeFileSync(manifestPath, JSON.stringify({
+    batchId: 'b-lg3', state: 'open', kind: 'read_only',
+    members: [{ id: 'wa' }], createdAt: '2026-06-13T00:00:00.000Z',
+  }, null, 2));
+  fs.writeFileSync(runningSetPath, JSON.stringify({
+    state: 'open', max_concurrent: 8,
+    lane_group: { group_id: 'lg-wa', members: ['wa'], baseline: 'abc123', write_union: ['wa.js'] },
+    nodes: [{ id: 'wa', role: 'implementer', kind: 'write', group_id: 'lg-wa', declared_write_set: 'wa.js' }],
+  }, null, 2));
+  const r = runStatus({
+    planPath, statePath, cacheDir, manifestPath, project: 'test-project',
+    shell: realNextActionShell(planPath), ...io,
+  });
+  assert(r.active === true, 'LG3: active:true (manifest present)');
+  assert(r.laneGroup && r.laneGroup.group_id === 'lg-wa',
+    'LG3: active:true status STILL surfaces laneGroup, got ' + JSON.stringify(r.laneGroup));
+  cleanup(root);
+}
+
+// ===========================================================================
 // CLUSTER S — batch coordination guards (#383) + halt fence (#391b) + #385 drop-base.
 // (reuses makeReadOnlyFanout above: `a` complete + f1..fn pending depending on a.)
 // ===========================================================================

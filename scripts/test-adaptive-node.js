@@ -4834,6 +4834,307 @@ function rtHarness(initialFiles, opts) {
   assert(gGen.includes('sync:editions'), 'D444-GUARDS: node with generated-port write set gets sync:editions guard');
 }
 
+// ===========================================================================
+// #437-LANE-GROUP (D-419 Part 2) — open-ready co-open + close-node group barrier.
+//
+// Under KAOLA_LANE_CONTAINMENT, open-ready co-opens a ≥2 disjoint write frontier as a
+// LANE GROUP (a lane_group key in running-set.json + a shared group baseline), and
+// close-node DEFERS the per-member barrier to a single GROUP barrier at the last close.
+// Tests drive the REAL adaptive-node + plan-validator subprocesses in a REAL git repo
+// under $TMPDIR (#292 io-shim trap: a direct-call test with an injected git is a false-green).
+// ===========================================================================
+{
+  const { execFileSync } = require('child_process');
+  const NODE_CLI = path.join(__dirname, 'kaola-workflow-adaptive-node.js');
+  const VALIDATOR = path.join(__dirname, 'kaola-workflow-plan-validator.js');
+
+  // Build a frozen plan with a 2-write antichain frontier A(decl aSet) B(decl bSet) under a real git
+  // repo: a `seed` (complete) so A,B are both ready-pending, a code-reviewer gate, a finalize sink.
+  // Returns { repoRoot, project, planPath, projDir, cacheDir, g }.
+  function makeLaneRepo(opts) {
+    opts = opts || {};
+    const aSet = opts.aSet || 'ax.js';
+    const bSet = opts.bSet || 'by.js';
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'd437-lane-'));
+    const project = 'test-project';
+    const projDir = path.join(repoRoot, 'kaola-workflow', project);
+    const cacheDir = path.join(projDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const planPath = path.join(projDir, 'workflow-plan.md');
+    const plan = [
+      '# Workflow Plan — test-project', '',
+      '## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| seed     | code-explorer | —     | —     | 1 | sequence |',
+      '| A        | tdd-guide     | seed  | ' + aSet + ' | 1 | sequence |',
+      '| B        | tdd-guide     | seed  | ' + bSet + ' | 1 | sequence |',
+      '| review   | code-reviewer | A,B   | —     | 1 | sequence |',
+      '| finalize | finalize      | review| —     | 1 | sequence |', '',
+      '## Node Ledger', '',
+      '| id | status |', '| --- | --- |',
+      '| seed | complete |',
+      '| A | pending |',
+      '| B | pending |',
+      '| review | pending |',
+      '| finalize | pending |', '',
+    ].join('\n') + '\n';
+    fs.writeFileSync(planPath, plan);
+    fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n');
+    const g = (args) => execFileSync('git', ['-C', repoRoot, ...args], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+    g(['init']);
+    g(['config', 'user.email', 'kw@test']);
+    g(['config', 'user.name', 'kw']);
+    g(['config', 'commit.gpgsign', 'false']);
+    // Freeze in place so plan_hash exists (open-ready's integrity --resume-check needs a valid freeze).
+    // An overlapping fixture (T-OR-2) cannot freeze (the antichain pair-loop refuses two siblings
+    // writing the same file) — those tests serial-degrade BEFORE the group barrier, so a freeze failure
+    // there is non-fatal (handled in the test).
+    try { execFileSync('node', [VALIDATOR, planPath, '--freeze', '--repair', '--json'], { cwd: repoRoot, encoding: 'utf8' }); } catch (_) {}
+    fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
+    g(['add', '-A']);
+    g(['commit', '-m', 'init']);
+    return { repoRoot, project, planPath, projDir, cacheDir, g };
+  }
+
+  // Run the adaptive-node CLI as a REAL subprocess rooted at repoRoot. env carries the toggle.
+  function runNode(repoRoot, subArgs, extraEnv) {
+    const env = Object.assign({}, process.env, extraEnv || {});
+    try {
+      const stdout = execFileSync('node', [NODE_CLI, ...subArgs], { cwd: repoRoot, encoding: 'utf8', env });
+      let parsed = {};
+      try { parsed = JSON.parse(stdout.trim().split('\n').pop()); } catch (_) {}
+      return { exitCode: 0, ...parsed };
+    } catch (err) {
+      const status = (err.status == null) ? 1 : err.status;
+      let parsed = {};
+      try { parsed = JSON.parse(String(err.stdout || '').trim().split('\n').pop()); } catch (_) {}
+      return { exitCode: status, ...parsed };
+    }
+  }
+
+  function readRS(cacheDir) {
+    try { return JSON.parse(fs.readFileSync(path.join(cacheDir, 'running-set.json'), 'utf8')); } catch (_) { return null; }
+  }
+  function ledgerStatus(planPath, id) {
+    const txt = fs.readFileSync(planPath, 'utf8');
+    // Scope to the ## Node Ledger section so the 6-column ## Nodes row (| A | tdd-guide | ...) is not
+    // mistaken for the 2-column ledger row (| A | in_progress |).
+    const start = txt.indexOf('## Node Ledger');
+    const body = start >= 0 ? txt.slice(start) : txt;
+    const re = new RegExp('^\\|\\s*' + id + '\\s*\\|\\s*(\\S+)\\s*\\|', 'm');
+    const m = body.match(re);
+    return m ? m[1] : null;
+  }
+  // Write an evidence file for a tdd-guide node carrying its open-time nonce (barrier-base SHA prefix)
+  // + the RED/GREEN token classes its role requires (so the close-side evidence-shape check passes).
+  function writeEvidence(cacheDir, id, extraLines) {
+    const baseFile = path.join(cacheDir, 'barrier-base-' + String(id).replace(/[^A-Za-z0-9_-]/g, '_'));
+    let nonce = '';
+    try { nonce = fs.readFileSync(baseFile, 'utf8').trim().slice(0, 12); } catch (_) { nonce = ''; }
+    const lines = [
+      'evidence-binding: ' + id + ' ' + nonce,
+      'RED: test_x — AssertionError: expected throw (pre-impl)',
+      'GREEN: test_x passes; 1/1 assertions green',
+    ];
+    if (extraLines) lines.push(...extraLines);
+    fs.writeFileSync(path.join(cacheDir, id + '.md'), lines.join('\n') + '\n');
+  }
+  function cleanup(root) { try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) {} }
+  const ON = { KAOLA_LANE_CONTAINMENT: '1' };
+  const OFF = { KAOLA_LANE_CONTAINMENT: '0' };
+
+  // -------------------------------------------------------------------------
+  // D437-OPEN-READY-GROUP: flag ON, two disjoint write nodes → laneGroup descriptor + running-set
+  //   lane_group with members [A,B], a baseline sha, write_union [ax.js,by.js]; both ledger in_progress.
+  // -------------------------------------------------------------------------
+  {
+    const { repoRoot, cacheDir, planPath } = makeLaneRepo();
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], ON);
+    assert(r.result === 'ok', 'D437-OPEN-READY-GROUP: open-ready ok, got ' + JSON.stringify(r));
+    assert(r.laneGroup && Array.isArray(r.laneGroup.members), 'D437-OPEN-READY-GROUP: laneGroup descriptor returned, got ' + JSON.stringify(r.laneGroup));
+    assert(r.laneGroup && r.laneGroup.members.includes('A') && r.laneGroup.members.includes('B'),
+      'D437-OPEN-READY-GROUP: laneGroup members include A and B');
+    assert(r.laneGroup && typeof r.laneGroup.baseline === 'string' && r.laneGroup.baseline.length > 0,
+      'D437-OPEN-READY-GROUP: laneGroup carries a baseline sha, got ' + (r.laneGroup && r.laneGroup.baseline));
+    const rs = readRS(cacheDir);
+    assert(rs && rs.lane_group && rs.lane_group.members.includes('A') && rs.lane_group.members.includes('B'),
+      'D437-OPEN-READY-GROUP: running-set lane_group has members [A,B]');
+    assert(rs && rs.lane_group && Array.isArray(rs.lane_group.write_union) &&
+      rs.lane_group.write_union.includes('ax.js') && rs.lane_group.write_union.includes('by.js'),
+      'D437-OPEN-READY-GROUP: write_union is [ax.js,by.js], got ' + JSON.stringify(rs && rs.lane_group && rs.lane_group.write_union));
+    assert(ledgerStatus(planPath, 'A') === 'in_progress', 'D437-OPEN-READY-GROUP: A ledger in_progress');
+    assert(ledgerStatus(planPath, 'B') === 'in_progress', 'D437-OPEN-READY-GROUP: B ledger in_progress');
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
+  // D437-OPEN-READY-SERIAL-DEGRADE-OVERLAP: flag ON, two OVERLAPPING write nodes → serial degrade
+  //   (one write opened, NO lane_group). (Overlapping plan cannot freeze; open-ready still degrades.)
+  // -------------------------------------------------------------------------
+  {
+    const { repoRoot, cacheDir } = makeLaneRepo({ aSet: 'ax.js', bSet: 'ax.js' });
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], ON);
+    // The overlapping fixture fails to freeze, so open-ready's integrity gate may refuse; if it opens,
+    // it must DEGRADE to a single serial write with NO lane_group. Assert no co-open either way.
+    assert(!r.laneGroup, 'D437-OPEN-READY-SERIAL-DEGRADE-OVERLAP: NO laneGroup on overlap, got ' + JSON.stringify(r.laneGroup));
+    const rs = readRS(cacheDir);
+    assert(!rs || !rs.lane_group, 'D437-OPEN-READY-SERIAL-DEGRADE-OVERLAP: running-set has no lane_group');
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
+  // D437-OPEN-READY-FLAG-OFF: flag OFF, two write nodes → exact same single-serial write_node path as
+  //   today; NO lane_group, NO laneGroup descriptor. Opens exactly ONE write node.
+  // -------------------------------------------------------------------------
+  {
+    const { repoRoot, cacheDir, planPath } = makeLaneRepo();
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], OFF);
+    assert(r.result === 'ok', 'D437-OPEN-READY-FLAG-OFF: open-ready ok, got ' + JSON.stringify(r));
+    assert(!r.laneGroup, 'D437-OPEN-READY-FLAG-OFF: NO laneGroup descriptor flag-OFF');
+    assert(Array.isArray(r.opened) && r.opened.length === 1, 'D437-OPEN-READY-FLAG-OFF: exactly ONE write opened (serial), got ' + JSON.stringify(r.opened && r.opened.map(n => n.id)));
+    const rs = readRS(cacheDir);
+    assert(!rs || !rs.lane_group, 'D437-OPEN-READY-FLAG-OFF: running-set has no lane_group key');
+    // The single opened node is in_progress; the other write stays pending (serial).
+    const openedId = r.opened[0].id;
+    assert(ledgerStatus(planPath, openedId) === 'in_progress', 'D437-OPEN-READY-FLAG-OFF: the one opened write is in_progress');
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
+  // D437-CLOSE-NODE-DEFERRED: after a co-open, write A's evidence + a real in-lane edit; close A
+  //   (non-last) → barrier:'deferred_to_group', A complete, compliance row carries deferred_to_group,
+  //   NO group barrier ran (B still open, lane_group retained with A in closed_members).
+  // -------------------------------------------------------------------------
+  {
+    const { repoRoot, cacheDir, planPath, g } = makeLaneRepo();
+    runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], ON);
+    writeEvidence(cacheDir, 'A');
+    fs.writeFileSync(path.join(repoRoot, 'ax.js'), '// A wrote here\n');
+    const r = runNode(repoRoot, ['close-node', '--node-id', 'A', '--project', 'test-project', '--json'], ON);
+    assert(r.result === 'ok', 'D437-CLOSE-NODE-DEFERRED: close A ok, got ' + JSON.stringify(r));
+    assert(r.barrier === 'deferred_to_group', 'D437-CLOSE-NODE-DEFERRED: barrier deferred_to_group, got ' + r.barrier);
+    assert(ledgerStatus(planPath, 'A') === 'complete', 'D437-CLOSE-NODE-DEFERRED: A ledger complete');
+    const planTxt = fs.readFileSync(planPath, 'utf8');
+    assert(/deferred_to_group/.test(planTxt), 'D437-CLOSE-NODE-DEFERRED: compliance row carries deferred_to_group literal');
+    const rs = readRS(cacheDir);
+    assert(rs && rs.lane_group, 'D437-CLOSE-NODE-DEFERRED: lane_group retained (B still open)');
+    assert(rs && rs.lane_group && Array.isArray(rs.lane_group.closed_members) && rs.lane_group.closed_members.includes('A'),
+      'D437-CLOSE-NODE-DEFERRED: A recorded in closed_members, got ' + JSON.stringify(rs && rs.lane_group && rs.lane_group.closed_members));
+    assert(ledgerStatus(planPath, 'B') === 'in_progress', 'D437-CLOSE-NODE-DEFERRED: B still in_progress (no group barrier ran)');
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
+  // D437-CLOSE-NODE-GROUP-PASS: close A (deferred) then close B (last) → group barrier runs over
+  //   union(A,B), both complete, lane_group CLEARED, group baseline dropped, barrier:'group_passed'.
+  // -------------------------------------------------------------------------
+  {
+    const { repoRoot, cacheDir, planPath, g } = makeLaneRepo();
+    const open = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], ON);
+    const groupId = open.laneGroup.group_id;
+    writeEvidence(cacheDir, 'A');
+    writeEvidence(cacheDir, 'B');
+    fs.writeFileSync(path.join(repoRoot, 'ax.js'), '// A in-lane\n');
+    fs.writeFileSync(path.join(repoRoot, 'by.js'), '// B in-lane\n');
+    const rA = runNode(repoRoot, ['close-node', '--node-id', 'A', '--project', 'test-project', '--json'], ON);
+    assert(rA.result === 'ok' && rA.barrier === 'deferred_to_group', 'D437-CLOSE-NODE-GROUP-PASS: A deferred ok');
+    const rB = runNode(repoRoot, ['close-node', '--node-id', 'B', '--project', 'test-project', '--json'], ON);
+    assert(rB.result === 'ok', 'D437-CLOSE-NODE-GROUP-PASS: close B (last) ok, got ' + JSON.stringify(rB));
+    assert(rB.barrier === 'group_passed', 'D437-CLOSE-NODE-GROUP-PASS: B barrier group_passed, got ' + rB.barrier);
+    assert(ledgerStatus(planPath, 'A') === 'complete' && ledgerStatus(planPath, 'B') === 'complete',
+      'D437-CLOSE-NODE-GROUP-PASS: both A and B complete');
+    const rs = readRS(cacheDir);
+    assert(!rs || !rs.lane_group, 'D437-CLOSE-NODE-GROUP-PASS: lane_group cleared from running-set');
+    // Group baseline dropped: the .cache base file for the group id is gone.
+    const groupBase = path.join(cacheDir, 'barrier-base-' + String(groupId).replace(/[^A-Za-z0-9_-]/g, '_'));
+    assert(!fs.existsSync(groupBase), 'D437-CLOSE-NODE-GROUP-PASS: group baseline dropped');
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
+  // D437-CLOSE-NODE-VACUITY-REFUSE: non-last close with evidence but NO file change and NO no_op:
+  //   line → refuse member_vacuity. Then add a no_op: line → close A → ok deferred.
+  // -------------------------------------------------------------------------
+  {
+    const { repoRoot, cacheDir, planPath } = makeLaneRepo();
+    runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], ON);
+    writeEvidence(cacheDir, 'A'); // evidence present, NO in-lane edit, NO no_op
+    const r1 = runNode(repoRoot, ['close-node', '--node-id', 'A', '--project', 'test-project', '--json'], ON);
+    assert(r1.result === 'refuse', 'D437-CLOSE-NODE-VACUITY-REFUSE: close A with no writes → refuse, got ' + JSON.stringify(r1));
+    assert(r1.reason === 'member_vacuity', 'D437-CLOSE-NODE-VACUITY-REFUSE: reason member_vacuity, got ' + r1.reason);
+    assert(ledgerStatus(planPath, 'A') === 'in_progress', 'D437-CLOSE-NODE-VACUITY-REFUSE: A NOT closed (still in_progress)');
+    // Now declare a no_op: in A's evidence → close A → ok deferred (no file change required).
+    writeEvidence(cacheDir, 'A', ['no_op: A had nothing to change this run']);
+    const r2 = runNode(repoRoot, ['close-node', '--node-id', 'A', '--project', 'test-project', '--json'], ON);
+    assert(r2.result === 'ok' && r2.barrier === 'deferred_to_group',
+      'D437-CLOSE-NODE-VACUITY-REFUSE: A with no_op: declaration → ok deferred, got ' + JSON.stringify(r2));
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
+  // D437-CLOSE-NODE-CROSS-LANE-STRAY: edit ax.js, by.js AND z.js (undeclared). Close A (deferred ok),
+  //   then close B (last) → group barrier REFUSES (z.js in NEITHER set's union) via the rank-4
+  //   write_set_overflow / unattributed_write arm; B NOT closed, lane_group NOT cleared.
+  // -------------------------------------------------------------------------
+  {
+    const { repoRoot, cacheDir, planPath } = makeLaneRepo();
+    runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], ON);
+    writeEvidence(cacheDir, 'A');
+    writeEvidence(cacheDir, 'B');
+    fs.writeFileSync(path.join(repoRoot, 'ax.js'), '// A in-lane\n');
+    fs.writeFileSync(path.join(repoRoot, 'by.js'), '// B in-lane\n');
+    fs.writeFileSync(path.join(repoRoot, 'z.js'), '// nobody declared this cross-lane stray\n');
+    const rA = runNode(repoRoot, ['close-node', '--node-id', 'A', '--project', 'test-project', '--json'], ON);
+    assert(rA.result === 'ok' && rA.barrier === 'deferred_to_group', 'D437-CLOSE-NODE-CROSS-LANE-STRAY: A deferred ok (no diff barrier — z.js invisible at A)');
+    const rB = runNode(repoRoot, ['close-node', '--node-id', 'B', '--project', 'test-project', '--json'], ON);
+    assert(rB.result === 'refuse', 'D437-CLOSE-NODE-CROSS-LANE-STRAY: last close refuses on cross-lane stray, got ' + JSON.stringify(rB));
+    assert(rB.reason === 'write_set_overflow' || rB.reason === 'unattributed_write',
+      'D437-CLOSE-NODE-CROSS-LANE-STRAY: reason is the EXISTING overflow/unattributed arm (NO new reason), got ' + rB.reason);
+    assert(ledgerStatus(planPath, 'B') === 'in_progress', 'D437-CLOSE-NODE-CROSS-LANE-STRAY: B NOT closed');
+    const rs = readRS(cacheDir);
+    assert(rs && rs.lane_group, 'D437-CLOSE-NODE-CROSS-LANE-STRAY: lane_group NOT cleared after refuse');
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
+  // D437-CLOSE-NODE-FLAG-OFF-SERIAL: flag OFF → close-node runs the normal per-node barrier path
+  //   (no deferred/group). With a serial single open under flag OFF, closing the one node returns the
+  //   serial shape (no `barrier` field set to deferred/group).
+  // -------------------------------------------------------------------------
+  {
+    const { repoRoot, cacheDir, planPath } = makeLaneRepo();
+    const open = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], OFF);
+    const openedId = open.opened[0].id;
+    writeEvidence(cacheDir, openedId);
+    fs.writeFileSync(path.join(repoRoot, openedId === 'A' ? 'ax.js' : 'by.js'), '// serial in-lane\n');
+    const r = runNode(repoRoot, ['close-node', '--node-id', openedId, '--project', 'test-project', '--json'], OFF);
+    assert(r.result === 'ok', 'D437-CLOSE-NODE-FLAG-OFF-SERIAL: serial close ok, got ' + JSON.stringify(r));
+    assert(r.barrier !== 'deferred_to_group' && r.barrier !== 'group_passed',
+      'D437-CLOSE-NODE-FLAG-OFF-SERIAL: NO deferred/group barrier marker on the serial path, got ' + r.barrier);
+    assert(r.closed === openedId, 'D437-CLOSE-NODE-FLAG-OFF-SERIAL: serial close returns closed id');
+    assert(ledgerStatus(planPath, openedId) === 'complete', 'D437-CLOSE-NODE-FLAG-OFF-SERIAL: node complete via serial per-node barrier');
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
+  // D437-MUTATION-GUARD-NOT-VACUOUS: the SAME group-pass scenario WITHOUT the KAOLA_LANE_CONTAINMENT
+  //   env must NOT take the group path — it falls back to SERIAL behavior (a serial open of one write,
+  //   and a per-node serial close), proving the toggle guard is not vacuous. Concretely: open-ready
+  //   flag-OFF opens exactly ONE write (no co-open), so the second write never enters a group.
+  // -------------------------------------------------------------------------
+  {
+    const { repoRoot, cacheDir } = makeLaneRepo();
+    const open = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], OFF);
+    assert(!open.laneGroup, 'D437-MUTATION-GUARD-NOT-VACUOUS: flag-OFF open-ready does NOT co-open a group');
+    assert(Array.isArray(open.opened) && open.opened.length === 1, 'D437-MUTATION-GUARD-NOT-VACUOUS: flag-OFF opens exactly one write (serial)');
+    const rs = readRS(cacheDir);
+    assert(!rs || !rs.lane_group, 'D437-MUTATION-GUARD-NOT-VACUOUS: no lane_group flag-OFF — the group path is guarded, not vacuous');
+    cleanup(repoRoot);
+  }
+}
+
 if (failed > 0) {
   console.error('adaptive-node tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;

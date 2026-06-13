@@ -1090,8 +1090,19 @@ function runStatus(opts) {
   const crossCheck = crossCheckStatus(manifest, inProgress, runningSet);
   const nextRoute = recommendBatchRoute(manifest, crossCheck);
 
+  // #437 (D-419 P2 / n4-batch): ADDITIVE diagnostics — when a WRITE LANE GROUP is live, the
+  // running-set.json carries a `lane_group` key (written by adaptive-node's open-ready co-open
+  // arm; parallel-batch only READS it and never writes running-set.json). Surface it on `status`
+  // so the orchestrator/operator can see the co-opened group (members + shared baseline) without
+  // re-reading the file. Flag-OFF byte-identity (INV-6): a serial/read running set has NO
+  // `lane_group` key, so `laneGroup` is omitted entirely and the payload is unchanged.
+  const laneGroup = (runningSet && runningSet.lane_group) ? runningSet.lane_group : null;
+
   if (!manifest) {
-    return { result: 'ok', active: false, inProgress, runningSet, crossCheck, nextRoute };
+    return {
+      result: 'ok', active: false, inProgress, runningSet, crossCheck, nextRoute,
+      ...(laneGroup ? { laneGroup } : {}),
+    };
   }
 
   return {
@@ -1109,6 +1120,7 @@ function runStatus(opts) {
     inProgress,
     crossCheck,
     nextRoute,
+    ...(laneGroup ? { laneGroup } : {}),
   };
 }
 

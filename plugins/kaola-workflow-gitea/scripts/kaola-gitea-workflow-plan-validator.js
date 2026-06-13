@@ -668,8 +668,19 @@ function barrierCheck(content, actualPaths, opts) {
   // #239: per-instance allowlist. In PER-NODE mode the allowlist is the node's OWN declared write set
   // (so a fan-out instance writing into a SIBLING's declared lane refuses — the per-instance overflow
   // the union check could not see); in WHOLE-PLAN mode it is the union over all nodes (the floor).
+  // #437 (D-419 P2): GROUP mode — opts.groupMembers is a SUBSET of node ids (the co-opened lane group);
+  // the allowlist is the UNION over JUST those members' write sets. A path in the union ⇒ attributed to
+  // its (by-construction-unique, disjoint) member; a path in NO member's set ⇒ the EXISTING rank-4
+  // out-of-allowlist arm refuses it (no new reason code). This arm is reached ONLY when an explicit
+  // opts.groupMembers is passed (the --group-barrier CLI path); every existing caller (per-node and
+  // whole-plan, which never pass groupMembers) is byte-identical — the new branch is skipped.
   const declared = new Set();
-  if (ownNode) { for (const p of ownNode.writeSet) declared.add(p); }
+  if (opts.groupMembers && opts.groupMembers.length) {
+    for (const id of opts.groupMembers) {
+      const n = nodes.find(x => x.id === id);
+      if (n) for (const p of n.writeSet) declared.add(p);
+    }
+  } else if (ownNode) { for (const p of ownNode.writeSet) declared.add(p); }
   else { for (const n of nodes) for (const p of n.writeSet) declared.add(p); }
   const real = (actualPaths || []).map(p => String(p || '').trim()).filter(Boolean);
   const archiveProj = opts.project || null;
@@ -720,8 +731,13 @@ function barrierCheck(content, actualPaths, opts) {
   // `complete` puts it back into verifyGateExecution's G1/G2 target set, so --gate-verify (run
   // alongside --barrier-check at phase6) then enforces review — the two checks compose. A genuinely
   // skipped n/a node that wrote NOTHING is never flagged: its declared file is absent from the diff.
+  // #437: GROUP mode (opts.groupMembers) ALSO skips this whole-plan ledger floor — exactly as per-node
+  // does. When the LAST group member closes, the barrier runs BEFORE that member is marked `complete`
+  // (steps 1-2 then barrier then complete), so its in-lane writes are declared only by an `in_progress`
+  // owner; running the floor here would false-refuse the group's own legitimate writes. The group's
+  // attribution gate is the union allowlist (the rank-4 outOfAllow arm) — the same teeth, group-scoped.
   let unattributed = [];
-  if (!opts.nodeId) {
+  if (!opts.nodeId && !(opts.groupMembers && opts.groupMembers.length)) {
     const ledger = parseLedger(content);
     const anyCompleteOwner = new Map();
     for (const n of nodes) for (const p of n.writeSet) {
@@ -1579,7 +1595,13 @@ function printHelp() {
     '  --finalize-check  the FINALIZE-TIME gate (#424/#432): (A) chain-receipt gate — a fresh, HEAD-bound, all-green\n' +
     '                 .cache/chain-receipt.json must exist (chains_unverified > chains_stale > chains_red); then (B) attribution\n' +
     '                 sweep — every `git diff <base>...HEAD` change must be in the .md allowband OR a `complete` node\'s declared\n' +
-    '                 write set, else unattributed_change. [--base REF (default main)] [--receipt PATH] [--head SHA]\n'
+    '                 write set, else unattributed_change. [--base REF (default main)] [--receipt PATH] [--head SHA]\n' +
+    '  --parallel-safe --nodes A,B[,C]  read-only check (#437): are the named nodes\' declared write sets pairwise-disjoint\n' +
+    '                 (safe to co-open as a lane group)? Exposes the antichain pair-loop (exact-file + classifier disjointness).\n' +
+    '                 result:ok | refuse(reason:overlapping_write_sets,overlapping[]). No fs/git writes.\n' +
+    '  --group-barrier --group-id ID [--member ID] [--skip-root-pin]  the GROUP-scoped close barrier (#437): diff the group\n' +
+    '                 baseline (recorded via --record-base --node-id ID) -> now over the UNION of the lane_group members\'\n' +
+    '                 write sets (read from running-set.json); an out-of-union stray refuses via the rank-4 overflow arm.\n'
   );
 }
 function main() {
@@ -1601,6 +1623,55 @@ function main() {
     const r = revalidateForResume(content, { root });
     process.stdout.write((json ? JSON.stringify(r) : (r.ok ? 'resume ok' : 'typed refusal: ' + r.reason)) + '\n');
     if (!r.ok) process.exitCode = 1;
+    return;
+  }
+  if (args.includes('--parallel-safe')) {
+    // #437 (D-419 P2, Settlement 3): a READ-ONLY pairwise-disjointness check over a NAMED subset of
+    // plan nodes, EXPOSING the EXISTING antichain pair-loop predicates (the exact-file rule at
+    // plan-validator.js's antichain loop + classifier.disjointWriteSets for coarse/shared-infra). No
+    // fs writes, no baseline, no git diff; pure over the parsed plan + the classifier. Called by
+    // adaptive-node open-ready (under KAOLA_LANE_CONTAINMENT) BEFORE co-opening a write lane group:
+    // result:'ok' ⇒ the members are safe to co-open; result:'refuse' ⇒ open-ready degrades to a single
+    // serial write open. Toggle-agnostic (it does not read the install switch — the caller gates it).
+    const flagVal = name => { const i = args.indexOf(name); return i >= 0 && i + 1 < args.length ? args[i + 1] : null; };
+    const nodesArg = flagVal('--nodes');
+    if (!nodesArg) {
+      const out = { result: 'refuse', reason: 'missing_nodes', errors: ['--parallel-safe requires --nodes A,B[,C]'] };
+      process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: ' + out.errors[0]) + '\n');
+      process.exitCode = 1; return;
+    }
+    const ids = nodesArg.split(',').map(s => s.trim()).filter(Boolean);
+    if (ids.length < 2) {
+      const out = { result: 'refuse', reason: 'too_few_nodes', nodes: ids, errors: ['--parallel-safe needs >= 2 node ids (got ' + ids.length + ')'] };
+      process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: ' + out.errors[0]) + '\n');
+      process.exitCode = 1; return;
+    }
+    const allNodes = parseNodes(content);
+    const sel = ids.map(id => allNodes.find(n => n.id === id));
+    const missing = ids.filter((id, i) => !sel[i]);
+    if (missing.length) {
+      const out = { result: 'refuse', reason: 'node_not_found', nodes: ids, errors: ['unknown node ids: ' + missing.join(',')] };
+      process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: ' + out.errors[0]) + '\n');
+      process.exitCode = 1; return;
+    }
+    // Pair-loop: exact-file overlap (the antichain RED rule) OR coarse/shared-infra non-green
+    // (classifier.disjointWriteSets — the antichain ASK rule). Either ⇒ NOT parallel-safe.
+    const overlapping = [];
+    for (let i = 0; i < sel.length; i++) {
+      for (let j = i + 1; j < sel.length; j++) {
+        const A = sel[i], B = sel[j];
+        let exact = null;
+        for (const p of A.writeSet) if (B.writeSet.has(p)) { exact = p; break; }
+        if (exact) { overlapping.push({ a: A.id, b: B.id, kind: 'exact', path: exact }); continue; }
+        const dj = classifier.disjointWriteSets([A.writeSet, B.writeSet]);
+        if (dj.verdict !== 'green') overlapping.push({ a: A.id, b: B.id, kind: dj.verdict, reasoning: dj.reasoning });
+      }
+    }
+    const ok = overlapping.length === 0;
+    const out = { result: ok ? 'ok' : 'refuse', nodes: ids, overlapping };
+    if (!ok) out.reason = 'overlapping_write_sets';
+    process.stdout.write((json ? JSON.stringify(out) : (ok ? 'parallel-safe ok: ' + ids.join(',') : 'typed refusal: overlapping_write_sets (' + overlapping.map(o => o.a + '/' + o.b + ':' + o.kind).join(', ') + ')')) + '\n');
+    if (!ok) process.exitCode = 1;
     return;
   }
   if (args.includes('--freeze-checked')) {
@@ -1838,6 +1909,78 @@ function main() {
     }
     const r = barrierCheck(content, actualPaths, { nodeId: nodeId || undefined, root, project: projTag });
     process.stdout.write((json ? JSON.stringify(r) : (r.result === 'pass' ? 'barrier ok' : 'typed refusal: ' + r.errors.join('; '))) + '\n');
+    if (r.result !== 'pass') process.exitCode = 1;
+    return;
+  }
+  if (args.includes('--group-barrier')) {
+    // #437 (D-419 P2, Settlement 4): the GROUP-SCOPED close barrier. Runs ONCE at the LAST group
+    // member's close (adaptive-node close-node, under KAOLA_LANE_CONTAINMENT). Mirrors the per-node
+    // --barrier-check mechanics (root-pin + ref-anchored baseline + #368 mismatch cross-check + tree
+    // diff) but keyed by a GROUP id and scoped to the UNION over the group members' write sets. Reads
+    // running-set.json to learn the lane_group's members + the group baseline SHA. The barrier diffs
+    // the group baseline → now and refuses any path in NO member's set via the EXISTING rank-4
+    // outOfAllow arm (no new reason code). Toggle-agnostic — invoked only because adaptive-node (under
+    // the flag) chose to call it.
+    const flagVal = name => { const i = args.indexOf(name); return i >= 0 && i + 1 < args.length ? args[i + 1] : null; };
+    const groupId = flagVal('--group-id');
+    if (!groupId) {
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', errors: ['--group-barrier requires --group-id <id>'] }) : 'typed refusal: --group-barrier requires --group-id') + '\n');
+      process.exitCode = 1; return;
+    }
+    // ROOT-PINNING (same fail-closed guard as --barrier-check): the write-set paths resolve
+    // repo-root-relative while git state is process.cwd()-relative; run from the repo toplevel so they
+    // measure against ONE root. Opt out with --skip-root-pin for callers resolving the plan externally.
+    if (!args.includes('--skip-root-pin')) {
+      let toplevel = '';
+      try { toplevel = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', cwd: process.cwd() }).trim(); } catch (_) { toplevel = ''; }
+      const cwdReal = (() => { try { return fs.realpathSync(process.cwd()); } catch (_) { return process.cwd(); } })();
+      const topReal = toplevel ? (() => { try { return fs.realpathSync(toplevel); } catch (_) { return toplevel; } })() : '';
+      if (!topReal || topReal !== cwdReal) {
+        process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'root_mismatch', errors: ['barrier root mismatch: process.cwd() "' + cwdReal + '" != git toplevel "' + (topReal || '(unresolved)') + '" — run the group barrier from the repo toplevel so write-set paths and the baseline diff measure against ONE root'] }) : 'typed refusal: root_mismatch (cwd ' + cwdReal + ' != toplevel ' + (topReal || 'unresolved') + ')') + '\n');
+        process.exitCode = 1; return;
+      }
+    }
+    // Read running-set.json (project-local .cache, beside the plan) to learn the live lane_group.
+    const rsPath = path.join(path.dirname(path.resolve(planPath)), '.cache', schema.RUNNING_SET_NAME);
+    let rs = null;
+    try { rs = JSON.parse(fs.readFileSync(rsPath, 'utf8')); } catch (_) { rs = null; }
+    if (!rs || typeof rs !== 'object') {
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'running_set_unreadable', errors: ['cannot read/parse running-set.json at ' + rsPath + ' — the group barrier needs the live lane_group'] }) : 'typed refusal: running_set_unreadable') + '\n');
+      process.exitCode = 1; return;
+    }
+    const lg = rs.lane_group;
+    if (!lg || lg.group_id !== groupId) {
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'group_not_found', errors: ['no live lane_group "' + groupId + '" in running-set.json (found: ' + (lg ? lg.group_id : 'none') + ')'] }) : 'typed refusal: group_not_found (' + groupId + ')') + '\n');
+      process.exitCode = 1; return;
+    }
+    // Members for the union allowlist = the lane_group members (the LAST-member close runs the barrier
+    // while lg.members STILL holds the full set, per the design ordering), UNIONed with an optional
+    // explicit --member fallback (for the alternate "remove-then-barrier" ordering).
+    const members = Array.from(new Set([...(Array.isArray(lg.members) ? lg.members : []), flagVal('--member')].filter(Boolean)));
+    if (!members.length) {
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'group_not_found', errors: ['lane_group "' + groupId + '" has no members'] }) : 'typed refusal: group_not_found (no members)') + '\n');
+      process.exitCode = 1; return;
+    }
+    // Group baseline: the shared SHA recorded at open via --record-base --node-id <group_id>. Same
+    // #368 cross-check as the per-node barrier — the .cache file SHA must match the gc-anchored ref, or
+    // a fresh re-record would launder writes made since open into an empty diff (vacuous pass).
+    let base = '';
+    try { base = fs.readFileSync(cacheBaseFile(groupId), 'utf8').trim(); } catch (_) { base = ''; }
+    if (!base) {
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'no_group_base', errors: ['no recorded group baseline for "' + groupId + '" (run --record-base --node-id <group_id> at group open)'] }) : 'typed refusal: no_group_base for ' + groupId) + '\n');
+      process.exitCode = 1; return;
+    }
+    let refSha = '';
+    try { refSha = execFileSync('git', ['-C', root, 'rev-parse', '--verify', '--quiet', barrierRef(groupId) + '^{commit}'], { encoding: 'utf8' }).trim(); } catch (_) { refSha = ''; }
+    if (!refSha || refSha !== base) {
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'barrier_base_mismatch', errors: ['group baseline for "' + groupId + '" mismatches the anchored ref (file ' + base + ' != ref ' + (refSha || '(missing)') + ') — run --drop-base then --record-base for the group, or restore the ref'] }) : 'typed refusal: barrier_base_mismatch for group ' + groupId) + '\n');
+      process.exitCode = 1; return;
+    }
+    const now = snapshotWorktree(root, groupId + '-now');
+    const diffOut = execFileSync('git', ['-C', root, 'diff-tree', '-r', '--name-only', base, now], { encoding: 'utf8' });
+    const actualPaths = diffOut.split('\n').map(s => s.trim()).filter(Boolean);
+    const r = barrierCheck(content, actualPaths, { groupMembers: members, root, project: projTag });
+    process.stdout.write((json ? JSON.stringify(r) : (r.result === 'pass' ? 'group barrier ok' : 'typed refusal: ' + r.errors.join('; '))) + '\n');
     if (r.result !== 'pass') process.exitCode = 1;
     return;
   }

@@ -308,6 +308,285 @@ function assert(condition, message) {
   } finally { try { fs.rmSync(clobberPath); } catch (_) {} }
 }
 
+// ===========================================================================
+// #437 (D-419 Part 2) — LANE-GROUP co-open + GROUP-SCOPED close barrier.
+// The plan-validator gains: (a) barrierCheck opts.groupMembers (union-of-members
+// allowlist), (b) a --parallel-safe --nodes A,B --json read-only disjointness check,
+// (c) a --group-barrier --group-id <id> --json CLI mode (reads running-set.json's
+// lane_group + group baseline, diffs baseline→now over the member union).
+// Tests drive the REAL validator subprocess in a REAL git repo (#292 io-shim trap:
+// a direct-call test with an injected git would be a false-green).
+// ===========================================================================
+{
+  const { execFileSync } = require('child_process');
+  const VALIDATOR = path.join(__dirname, 'kaola-workflow-plan-validator.js');
+
+  // Build a frozen 2-write-member plan A(decl ax.js) B(decl by.js) under a real git repo.
+  // Returns { repoRoot, project, planPath, cacheDir, g }.
+  function makeGroupRepo(opts) {
+    opts = opts || {};
+    const aSet = opts.aSet || 'ax.js';
+    const bSet = opts.bSet || 'by.js';
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gb-e2e-'));
+    const project = 'test-project';
+    const projDir = path.join(repoRoot, 'kaola-workflow', project);
+    const cacheDir = path.join(projDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const planPath = path.join(projDir, 'workflow-plan.md');
+    const plan = [
+      '# Workflow Plan — test-project', '',
+      '## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| seed     | code-explorer | —     | —     | 1 | sequence        |',
+      '| A        | tdd-guide     | seed  | ' + aSet + ' | 1 | sequence |',
+      '| B        | tdd-guide     | seed  | ' + bSet + ' | 1 | sequence |',
+      '| review   | code-reviewer | A,B   | —     | 1 | sequence        |',
+      '| finalize | finalize      | review| —     | 1 | sequence        |', '',
+      '## Node Ledger', '',
+      '| id | status |', '| --- | --- |',
+      '| seed | complete |',
+      '| A | in_progress |',
+      '| B | in_progress |',
+      '| review | pending |',
+      '| finalize | pending |', '',
+    ].join('\n') + '\n';
+    fs.writeFileSync(planPath, plan);
+    fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n');
+    const g = (args) => execFileSync('git', ['-C', repoRoot, ...args], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+    g(['init']);
+    g(['config', 'user.email', 'kw@test']);
+    g(['config', 'user.name', 'kw']);
+    g(['config', 'commit.gpgsign', 'false']);
+    // Freeze in place so plan_hash exists (parseNodes reads writeSet regardless, but keep parity).
+    // An intentionally-overlapping fixture (T-PS-2) CANNOT freeze (the antichain pair-loop refuses
+    // two siblings writing the same exact file) — that is expected; --parallel-safe + --group-barrier
+    // read parseNodes directly (no frozen-hash requirement), so a freeze failure is non-fatal here.
+    try { execFileSync('node', [VALIDATOR, planPath, '--freeze', '--repair', '--json'], { cwd: repoRoot, encoding: 'utf8' }); } catch (_) {}
+    fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
+    g(['add', '-A']);
+    g(['commit', '-m', 'init']);
+    return { repoRoot, project, planPath, cacheDir, g };
+  }
+
+  // Run the validator CLI as a REAL subprocess rooted at repoRoot. Returns { exitCode, ...json }.
+  function runValidator(repoRoot, subArgs, extraEnv) {
+    const env = extraEnv ? Object.assign({}, process.env, extraEnv) : process.env;
+    try {
+      const stdout = execFileSync('node', [VALIDATOR, ...subArgs], { cwd: repoRoot, encoding: 'utf8', env });
+      let parsed = {};
+      try { parsed = JSON.parse(stdout.trim().split('\n').pop()); } catch (_) {}
+      return { exitCode: 0, ...parsed };
+    } catch (err) {
+      const status = (err.status == null) ? 1 : err.status;
+      let parsed = {};
+      try { parsed = JSON.parse(String(err.stdout || '').trim().split('\n').pop()); } catch (_) {}
+      return { exitCode: status, ...parsed };
+    }
+  }
+
+  function cleanup(root) { try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) {} }
+
+  // -------------------------------------------------------------------------
+  // GB-PURE: barrierCheck opts.groupMembers — UNION-of-members allowlist (pure fn).
+  // A is decl ax.js only, B is decl by.js only. With groupMembers:[A,B] BOTH lane
+  // writes are in-allowlist (union) even though neither node alone declares the other's
+  // file; a path in NEITHER set (z.js) is the rank-4 unattributed_write overflow.
+  // -------------------------------------------------------------------------
+  {
+    const unionPlan = [
+      '# Workflow Plan — issue #437', '', '## Meta', 'labels: area:scripts', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '|---|---|---|---|---|---|',
+      '| A | tdd-guide | — | ax.js | 1 | sequence |',
+      '| B | tdd-guide | — | by.js | 1 | sequence |',
+      '| review | code-reviewer | A,B | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |', '',
+      '## Node Ledger', '', '| id | status |', '|---|---|',
+      '| A | complete |', '| B | complete |', '| review | complete |', '| done | complete |', '',
+    ].join('\n');
+
+    // GB-PURE-a: both members' lane writes ∈ union → PASS.
+    {
+      const r = planValidator.barrierCheck(unionPlan, ['ax.js', 'by.js'], { groupMembers: ['A', 'B'] });
+      assert(r.result === 'pass', 'GB-PURE-a: union(A,B) allowlist passes both ax.js+by.js (RED→GREEN groupMembers arm)');
+    }
+    // GB-PURE-b: a cross-lane stray in NEITHER set → rank-4 unattributed_write overflow refuse.
+    {
+      const r = planValidator.barrierCheck(unionPlan, ['ax.js', 'by.js', 'z.js'], { groupMembers: ['A', 'B'] });
+      assert(r.result === 'refuse', 'GB-PURE-b: cross-lane stray z.js refuses under group union');
+      assert(r.reason === 'write_set_overflow', 'GB-PURE-b: reason is the EXISTING write_set_overflow (no NEW reason code), got ' + r.reason);
+      assert(Array.isArray(r.outOfAllow) && r.outOfAllow.includes('z.js'), 'GB-PURE-b: z.js named in outOfAllow');
+      assert(r.errors.join(' ').includes('z.js'), 'GB-PURE-b: error text names z.js');
+    }
+    // GB-PURE-c: groupMembers is SUBSET-scoped — naming only [A] makes by.js out-of-allowlist.
+    {
+      const r = planValidator.barrierCheck(unionPlan, ['ax.js', 'by.js'], { groupMembers: ['A'] });
+      assert(r.result === 'refuse', 'GB-PURE-c: groupMembers:[A] only allows ax.js → by.js overflows');
+      assert(r.outOfAllow.includes('by.js'), 'GB-PURE-c: by.js named out-of-allowlist for single-member group');
+    }
+    // GB-PURE-d (INV-6 flag-OFF byte-identity): absent groupMembers === whole-plan union behavior.
+    // With no opts, the whole-plan union (ax.js,by.js) allows both; an undeclared z.js overflows.
+    {
+      const r0 = planValidator.barrierCheck(unionPlan, ['ax.js', 'by.js'], {});
+      assert(r0.result === 'pass', 'GB-PURE-d: NO groupMembers → existing whole-plan union path UNCHANGED (passes)');
+      const r1 = planValidator.barrierCheck(unionPlan, ['ax.js', 'by.js', 'z.js'], {});
+      assert(r1.result === 'refuse' && r1.outOfAllow.includes('z.js'),
+        'GB-PURE-d: NO groupMembers → whole-plan overflow on z.js UNCHANGED');
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // T-PS: --parallel-safe --nodes A,B --json (read-only disjointness CLI).
+  // -------------------------------------------------------------------------
+  // T-PS-1 disjoint: A(ax.js) B(by.js) → ok, overlapping [].
+  {
+    const { repoRoot } = makeGroupRepo();
+    const r = runValidator(repoRoot, [path.join(repoRoot, 'kaola-workflow', 'test-project', 'workflow-plan.md'), '--parallel-safe', '--nodes', 'A,B', '--json']);
+    assert(r.result === 'ok', 'T-PS-1: disjoint A,B → result ok, got ' + JSON.stringify(r));
+    assert(r.exitCode === 0, 'T-PS-1: exit 0 on disjoint');
+    assert(Array.isArray(r.overlapping) && r.overlapping.length === 0, 'T-PS-1: overlapping is empty');
+    cleanup(repoRoot);
+  }
+  // T-PS-2 exact overlap: A,B both decl ax.js → refuse overlapping_write_sets, kind exact.
+  {
+    const { repoRoot } = makeGroupRepo({ aSet: 'ax.js', bSet: 'ax.js' });
+    const r = runValidator(repoRoot, [path.join(repoRoot, 'kaola-workflow', 'test-project', 'workflow-plan.md'), '--parallel-safe', '--nodes', 'A,B', '--json']);
+    assert(r.result === 'refuse', 'T-PS-2: exact overlap → refuse, got ' + JSON.stringify(r));
+    assert(r.reason === 'overlapping_write_sets', 'T-PS-2: reason overlapping_write_sets');
+    assert(r.exitCode === 1, 'T-PS-2: exit 1 on overlap');
+    assert(Array.isArray(r.overlapping) && r.overlapping.length >= 1 && r.overlapping[0].kind === 'exact',
+      'T-PS-2: overlapping[0].kind === exact, got ' + JSON.stringify(r.overlapping));
+    assert(r.overlapping[0].path === 'ax.js', 'T-PS-2: overlapping[0].path names the shared file ax.js');
+    cleanup(repoRoot);
+  }
+  // T-PS-3 missing --nodes value → refuse missing_nodes.
+  {
+    const { repoRoot } = makeGroupRepo();
+    const r = runValidator(repoRoot, [path.join(repoRoot, 'kaola-workflow', 'test-project', 'workflow-plan.md'), '--parallel-safe', '--json']);
+    assert(r.result === 'refuse', 'T-PS-3: --parallel-safe without --nodes → refuse');
+    assert(r.reason === 'missing_nodes', 'T-PS-3: reason missing_nodes, got ' + r.reason);
+    cleanup(repoRoot);
+  }
+  // T-PS-4 <2 nodes → refuse too_few_nodes.
+  {
+    const { repoRoot } = makeGroupRepo();
+    const r = runValidator(repoRoot, [path.join(repoRoot, 'kaola-workflow', 'test-project', 'workflow-plan.md'), '--parallel-safe', '--nodes', 'A', '--json']);
+    assert(r.result === 'refuse', 'T-PS-4: --nodes A (one) → refuse');
+    assert(r.reason === 'too_few_nodes', 'T-PS-4: reason too_few_nodes, got ' + r.reason);
+    cleanup(repoRoot);
+  }
+  // T-PS-5 unknown node id → refuse node_not_found.
+  {
+    const { repoRoot } = makeGroupRepo();
+    const r = runValidator(repoRoot, [path.join(repoRoot, 'kaola-workflow', 'test-project', 'workflow-plan.md'), '--parallel-safe', '--nodes', 'A,NOPE', '--json']);
+    assert(r.result === 'refuse', 'T-PS-5: unknown node → refuse');
+    assert(r.reason === 'node_not_found', 'T-PS-5: reason node_not_found, got ' + r.reason);
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
+  // T-GB: --group-barrier --group-id <id> --json — group baseline diff over the
+  //       member union, reading running-set.json's lane_group.
+  // Setup helper: record the GROUP baseline, write running-set.json's lane_group,
+  // then make REAL edits, then run --group-barrier.
+  // -------------------------------------------------------------------------
+  function setupGroup(repoRoot, cacheDir, planPath) {
+    // Record the shared group baseline keyed by the group id (reuses --record-base).
+    const groupId = 'lg-A-B';
+    const rb = runValidator(repoRoot, [planPath, '--record-base', '--node-id', groupId, '--json']);
+    assert(rb.result === 'ok' && rb.base, 'T-GB setup: group baseline recorded for ' + groupId + ', got ' + JSON.stringify(rb));
+    const runningSet = {
+      state: 'open',
+      max_concurrent: 8,
+      lane_group: {
+        group_id: groupId,
+        members: ['A', 'B'],
+        baseline: rb.base,
+        write_union: ['ax.js', 'by.js'],
+        openedAt: '2026-06-13T10:12:00.000Z',
+      },
+      nodes: [
+        { id: 'A', role: 'tdd-guide', kind: 'write', group_id: groupId, declared_write_set: 'ax.js', baseline: 'recorded' },
+        { id: 'B', role: 'tdd-guide', kind: 'write', group_id: groupId, declared_write_set: 'by.js', baseline: 'recorded' },
+      ],
+    };
+    fs.writeFileSync(path.join(cacheDir, 'running-set.json'), JSON.stringify(runningSet, null, 2));
+    return groupId;
+  }
+
+  // T-GB-1 group pass: edit ax.js (A's lane) + by.js (B's lane) → both ∈ union → pass.
+  {
+    const { repoRoot, cacheDir, planPath } = makeGroupRepo();
+    const groupId = setupGroup(repoRoot, cacheDir, planPath);
+    fs.writeFileSync(path.join(repoRoot, 'ax.js'), '// A wrote here\n');
+    fs.writeFileSync(path.join(repoRoot, 'by.js'), '// B wrote here\n');
+    const r = runValidator(repoRoot, [planPath, '--group-barrier', '--group-id', groupId, '--json']);
+    assert(r.result === 'pass', 'T-GB-1: in-union edits ax.js+by.js → group barrier pass, got ' + JSON.stringify(r));
+    assert(r.exitCode === 0, 'T-GB-1: exit 0 on group pass');
+    cleanup(repoRoot);
+  }
+  // T-GB-2 cross-lane stray (NEITHER set): also edit z.js → refuse, names z.js, rank-4 overflow.
+  {
+    const { repoRoot, cacheDir, planPath } = makeGroupRepo();
+    const groupId = setupGroup(repoRoot, cacheDir, planPath);
+    fs.writeFileSync(path.join(repoRoot, 'ax.js'), '// A wrote here\n');
+    fs.writeFileSync(path.join(repoRoot, 'by.js'), '// B wrote here\n');
+    fs.writeFileSync(path.join(repoRoot, 'z.js'), '// nobody declared this\n');
+    const r = runValidator(repoRoot, [planPath, '--group-barrier', '--group-id', groupId, '--json']);
+    assert(r.result === 'refuse', 'T-GB-2: cross-lane stray z.js → group barrier refuse, got ' + JSON.stringify(r));
+    assert(r.exitCode === 1, 'T-GB-2: exit 1 on refuse');
+    assert(r.errors.join(' ').includes('z.js'), 'T-GB-2: refusal text names z.js');
+    assert(r.reason === 'write_set_overflow' || r.reason === 'unattributed_write',
+      'T-GB-2: reason is the EXISTING overflow/unattributed arm (NO new reason code), got ' + r.reason);
+    assert(Array.isArray(r.outOfAllow) && r.outOfAllow.includes('z.js'), 'T-GB-2: z.js in outOfAllow');
+    cleanup(repoRoot);
+  }
+  // T-GB-3 in-union both-member edits pass even though A decl ONLY ax.js / B ONLY by.js
+  //         (proves UNION allowlist, not per-node — a per-node barrier of A would refuse by.js).
+  {
+    const { repoRoot, cacheDir, planPath } = makeGroupRepo();
+    const groupId = setupGroup(repoRoot, cacheDir, planPath);
+    // Only B's lane file is touched, but the group union still allows it (B is a member).
+    fs.writeFileSync(path.join(repoRoot, 'by.js'), '// B-only edit, attributed via union\n');
+    const r = runValidator(repoRoot, [planPath, '--group-barrier', '--group-id', groupId, '--json']);
+    assert(r.result === 'pass', 'T-GB-3: by.js alone passes under union(A,B) — UNION not per-node, got ' + JSON.stringify(r));
+    cleanup(repoRoot);
+  }
+  // T-GB-4 group_not_found: --group-id names a group not present in running-set.json.
+  {
+    const { repoRoot, cacheDir, planPath } = makeGroupRepo();
+    setupGroup(repoRoot, cacheDir, planPath);
+    const r = runValidator(repoRoot, [planPath, '--group-barrier', '--group-id', 'lg-WRONG', '--json']);
+    assert(r.result === 'refuse', 'T-GB-4: unknown group id → refuse');
+    assert(r.reason === 'group_not_found', 'T-GB-4: reason group_not_found, got ' + r.reason);
+    cleanup(repoRoot);
+  }
+  // T-GB-5 --group-barrier without --group-id → refuse.
+  {
+    const { repoRoot, cacheDir, planPath } = makeGroupRepo();
+    setupGroup(repoRoot, cacheDir, planPath);
+    const r = runValidator(repoRoot, [planPath, '--group-barrier', '--json']);
+    assert(r.result === 'refuse', 'T-GB-5: --group-barrier without --group-id → refuse');
+    cleanup(repoRoot);
+  }
+  // T-GB-6 (MUTATION CHECK — proves the test BITES): the cross-lane stray MUST refuse via the
+  //         REAL subprocess. If the group barrier were short-circuited (always pass), T-GB-2 would
+  //         flip to pass and this assert would fail. We re-assert the refuse here independently to
+  //         lock the no-false-green property.
+  {
+    const { repoRoot, cacheDir, planPath } = makeGroupRepo();
+    const groupId = setupGroup(repoRoot, cacheDir, planPath);
+    fs.writeFileSync(path.join(repoRoot, 'z.js'), '// undeclared stray\n');
+    const r = runValidator(repoRoot, [planPath, '--group-barrier', '--group-id', groupId, '--json']);
+    assert(r.result === 'refuse' && r.exitCode === 1,
+      'T-GB-6 (mutation): a lone undeclared stray z.js MUST refuse — a vacuous/short-circuit pass is impossible');
+    cleanup(repoRoot);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------

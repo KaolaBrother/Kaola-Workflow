@@ -48,7 +48,39 @@ here for the full contract.
     `baseline`, optional `opening` marker and `openedAt`). `max_concurrent` is set at
     `open-ready` time (`min(cap, --max || cap)`) and read by `reconcile-running-set` to
     cap roll-forward re-opens; absence implies 1 (fail-closed). Prevents double-open;
-    a crashed `opening` state routes to `reconcile-running-set`.
+    a crashed `opening` state routes to `reconcile-running-set`. See the **`lane_group` extension** below.
+
+    **`lane_group` key (issue #437, `KAOLA_LANE_CONTAINMENT` ON only).**
+    When `open-ready` forms a write lane group, an optional top-level `lane_group` key is added to
+    `running-set.json`. Its full schema is documented in `docs/api.md` § Lane-group co-open. State
+    contract notes:
+
+    - **Absent when flag OFF.** With `KAOLA_LANE_CONTAINMENT` unset (the permanent default),
+      `running-set.json` is never written with a `lane_group` key. A serial or read-only run's
+      `running-set.json` is byte-identical to pre-#437 regardless of the key's presence
+      (absent `lane_group` ⟹ `null` ⟹ `closeGroupMember` is never entered).
+    - **Absent when no group is live.** The key is cleared (the whole key is deleted, not set to
+      `null`) when the last group member passes the group barrier and the group is dissolved.
+    - **Outside `plan_hash`.** `lane_group` is a runtime scheduler artifact, not plan structure.
+      It is written into `running-set.json` (a non-hashed `.cache/` artifact), not into
+      `workflow-plan.md`. The `plan_hash` covers only `## Meta` and `## Nodes` — `lane_group`
+      changes never invalidate the frozen plan hash.
+    - **Two-phase crash-safety.** The group open follows the same crash-safe two-phase pattern as
+      the single-node open: `running-set.json` is first written with `state:'opening'` AND `lane_group`
+      present BEFORE any ledger row flips; then promoted to `state:'open'` after all baselines and
+      ledger flips succeed. A crash with `state:'opening'` routes to `reconcile-running-set`.
+    - **Group baseline co-residence.** The group baseline is stored in `.cache/barrier-base-<group_id>`
+      and anchored at `refs/kaola-workflow/barrier-base/<sanitized-group_id>` — the same mechanism
+      as per-node baselines, keyed by `group_id`. It is recorded BEFORE the `opening` manifest write
+      (orphan-baseline direction is safe). It is dropped via `--drop-base --node-id <group_id>` after
+      a barrier pass, or during reconcile rollback when all members roll back.
+    - **`closed_members` vs `members`.** `members` is the FULL bare id list, stable during the group
+      lifetime. `closed_members` is an accumulating id list updated at each non-last-member close.
+      The last-member detector reads `closed_members` (not the ledger) so a group-barrier invocation
+      can safely run while the last member's ledger row is still `in_progress`.
+    - **Reconcile-running-set.** The `#437` block in `reconcile-running-set` carries forward group
+      survival logic: `lane_group` survives if ≥1 member id is in `survivorIds`; if all members roll
+      back, `lane_group` is deleted and the group baseline is dropped.
   - `active-batch.json` — parallel-batch manifest with `state: 'opening'|'open'|'sealed'|'joined'`
     (crash-safe two-phase: written with `opening` before any ledger row flips, then
     promoted to `open`). Reconcilable via the `reconcile` subcommand.

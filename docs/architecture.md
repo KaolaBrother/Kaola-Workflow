@@ -232,6 +232,41 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
 
   **Canonical spec: `docs/decisions/D-419-01.md`** (Part 1).
 
+  **Lane-group co-open and group-scoped close barrier — D-419 Part 2 implementation (issue #437).**
+  `KAOLA_LANE_CONTAINMENT=1` activates lane-attributed disjoint write co-open. When the flag is
+  ON, `runOpenReady` (`adaptive-node.js` L2550) no longer unconditionally enforces
+  `write_node_exclusive`; instead it calls `tryFormLaneGroup` (`adaptive-node.js` L2522) to
+  attempt a co-open of the entire ≥2 disjoint write frontier as a **lane group**. The formation
+  is gated on a `--parallel-safe` disjointness check (plan-validator.js L1627) over the frontier
+  node ids; an overlap result degrades immediately to single serial write. A successful group
+  open records ONE shared group baseline (keyed by `group_id`, reusing the per-node
+  `--record-base` machinery), writes `lane_group` into `running-set.json`, and stamps each
+  member's node entry with `group_id`. The running-set schema is additive: `lane_group` is an
+  optional top-level key; absent ⟹ flag-OFF serial behavior (byte-identical, INV-6).
+
+  The close side (`runCloseNode` L2838 → `closeGroupMember` L2996) detects group membership from
+  `running-set.json` at close time. A non-last member runs evidence-shape and per-member in-lane
+  vacuity (`memberInLaneChanges`, ~L2826) only — the diff barrier is DEFERRED; the compliance
+  row carries the literal `deferred_to_group` marker. The LAST member (every other member in
+  `closed_members`) shells `--group-barrier --group-id <id>` (plan-validator.js L1914), which
+  diffs the group baseline → now against the UNION of all members' declared write sets via
+  `barrierCheck` with `opts.groupMembers`. Out-of-union paths land in the EXISTING rank-4
+  `unattributed_write` / `write_set_overflow` arm — no new reason code. A barrier pass clears
+  `lane_group` and drops the group baseline; a refuse is a typed refusal with no ledger advance.
+
+  **Cross-lane runtime protection** is advisory: while co-open writers share the parent worktree,
+  nothing prevents A writing into B's declared lane at runtime. Enforcement is retrospective:
+  (a) the group barrier at the last close, and (b) the `--finalize-check` attribution sweep
+  (#424). The `KAOLA_LANE_CONTAINMENT` `PreToolUse` hook (#376) emits warnings but is fail-open.
+
+  **Flag-OFF invariant (INV-6).** With `KAOLA_LANE_CONTAINMENT` unset (the permanent default),
+  `resolveLaneContainment(process.env)` returns `false`. The `if (containment && writeNodes.length >= 2)`
+  guard in `runOpenReady` and the `if (containment && lg && lg.members.includes(nodeId))` guard in
+  `runCloseNode` are both dead. The existing `else { toOpen=[writeNodes[0]]; openKind='write'; }`
+  serial path and the existing `commit-node --node-id` per-node barrier run verbatim. The ×4
+  walkthroughs (which never set the flag) are the flag-OFF byte-identity assertion. Canonical
+  spec: `docs/decisions/D-437-01.md`.
+
   **Parallelism v3 design (issue #419).** Two decision records define the v3 design built
   on the v2 running-set foundation: `docs/decisions/D-419-01.md` (Part 1: one coordination
   kernel — serial = running-set `max_concurrent=1` by subsumption, not deletion; Part 3:

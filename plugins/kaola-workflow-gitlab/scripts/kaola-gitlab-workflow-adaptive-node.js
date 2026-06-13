@@ -42,7 +42,7 @@ const taskMirrorPath = path.join(__dirname, TASK_MIRROR);
 
 // #360: the LEDGER-SCOPED durable consent-halt probe (fence-aware). adaptive-schema keeps the
 // same filename across every edition (byte-identical ×4), so this require is NOT forge-renamed.
-const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, resolveFanoutCapReadonly, refuse } = require('./kaola-workflow-adaptive-schema');
+const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, resolveFanoutCapReadonly, resolveLaneContainment, refuse } = require('./kaola-workflow-adaptive-schema');
 
 // ---------------------------------------------------------------------------
 // getRoot — resolve the user-repo root via git rev-parse (cwd fallback).
@@ -2483,10 +2483,70 @@ function mutationGuardPrologue(opts, cfg) {
 }
 
 // ---------------------------------------------------------------------------
+// laneGroupId / laneWriteUnion (#437 D-419 P2) — pure helpers for the lane group.
+//
+// laneGroupId: the deterministic 'lg-<sorted-member-ids-joined-by-dash>' id (see
+// n1-design §1.1). Sorting makes the id stable across a crash-resume (same members ⇒
+// same id ⇒ same baseline ref/file key). Sanitization for the ref/file key is the SAME
+// String(x).replace(/[^A-Za-z0-9_-]/g,'_') the validator's cacheBaseFile/barrierRef apply.
+// laneWriteUnion: the union of every member's parsed declared_write_set (the convenience
+// snapshot — the group barrier RE-READS the plan rows for attribution, so a tampered union
+// here can never weaken the gate).
+// ---------------------------------------------------------------------------
+function laneGroupId(memberIds) {
+  return 'lg-' + memberIds.slice().sort().join('-');
+}
+
+function laneWriteUnion(writeNodes) {
+  let parse;
+  try { ({ parseWriteSetCell: parse } = require('./kaola-gitlab-workflow-classifier')); } catch (_) { parse = null; }
+  const union = new Set();
+  for (const n of writeNodes) {
+    const raw = n.declared_write_set != null ? n.declared_write_set : n.writeSetRaw;
+    if (parse) { for (const p of parse(raw)) union.add(p); }
+    else { for (const p of String(raw || '').split(/[\s,]+/).filter(Boolean)) union.add(p); }
+  }
+  return Array.from(union);
+}
+
+// ---------------------------------------------------------------------------
+// tryFormLaneGroup (#437 D-419 P2 §1.3) — attempt a co-open lane group from the
+// write frontier. The frontier is already a next-action ready antichain; the
+// validator's `--parallel-safe` flag re-checks pairwise disjointness AUTHORITATIVELY
+// (belt-and-suspenders). On overlap (result:'refuse') the caller DEGRADES to opening a
+// single write node serially — exactly the flag-OFF path. Reached only under
+// resolveLaneContainment(env) === true (the caller's guard); never invoked flag-OFF.
+//
+// @returns { ok:true, members:string[], group_id, write_union:string[] }
+//        | { ok:false, reason:'overlapping_write_sets', overlapping? }
+// ---------------------------------------------------------------------------
+function tryFormLaneGroup(writeNodes, planPath, shell) {
+  const ids = writeNodes.map(n => n.id);
+  if (ids.length < 2) return { ok: false, reason: 'too_few_write_nodes' };
+  const ps = shell(validatorPath, [planPath, '--parallel-safe', '--nodes', ids.join(','), '--json']);
+  if (!(ps.exitCode === 0 && ps.result === 'ok')) {
+    return { ok: false, reason: 'overlapping_write_sets', overlapping: ps.overlapping || [] };
+  }
+  const sorted = ids.slice().sort();
+  return {
+    ok: true,
+    members: sorted,
+    group_id: laneGroupId(ids),
+    write_union: laneWriteUnion(writeNodes),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // runOpenReady — MUTATES ledger + baselines + running-set.json.
 // Opens up to N ready-pending nodes (priority-ordered by next-action's
 // longest-path-to-sink). Read-only nodes fan out up to the read-only cap; a write
 // node opens alone only when the running set is empty. Two-phase crash-safe write.
+//
+// #437 (D-419 P2): under KAOLA_LANE_CONTAINMENT, a ≥2 disjoint write frontier co-opens
+// as a LANE GROUP (a `lane_group` key in running-set.json + a shared group baseline) so
+// the close barrier is GROUP-scoped (deferred per-member, run once at the last close).
+// Flag OFF ⇒ the containment guard is false ⇒ the existing single-write serial open runs
+// byte-identically (INV-6); no `lane_group`, no group baseline, no new code path.
 // ---------------------------------------------------------------------------
 function runOpenReady(opts) {
   const {
@@ -2552,14 +2612,46 @@ function runOpenReady(opts) {
   const cap = fanoutCapReadonly || 8;
   let toOpen;
   let openKind;
+  // #437 (D-419 P2): the lane-group descriptor when ≥2 disjoint writes co-open under
+  // containment. undefined ⇒ the serial/read path (the running-set writer skips lane_group).
+  let groupForm;
   if (readOnly.length > 0) {
     let slots = Math.max(0, cap - liveNodes.length);
     if (Number.isInteger(max) && max >= 1) slots = Math.min(slots, max);
     toOpen = readOnly.slice(0, slots);
     openKind = 'read';
   } else if (liveNodes.length === 0 && writeNodes.length > 0) {
-    toOpen = [writeNodes[0]];
-    openKind = 'write';
+    // #437 (D-419 P2 §1.2): under KAOLA_LANE_CONTAINMENT, attempt a co-open lane group from a
+    // ≥2 disjoint write frontier; on overlap (or flag OFF) DEGRADE to a single serial write.
+    const containment = resolveLaneContainment(process.env);
+    if (containment && writeNodes.length >= 2) {
+      const grp = tryFormLaneGroup(writeNodes, planPath, shell);
+      if (grp.ok) {
+        // #437 §1.3 cap: a write lane group respects the WRITE cap (resolveFanoutCap, not the read
+        // cap) AND --max as a single unit. The members are already pairwise-disjoint (parallel-safe
+        // verified); take a disjoint prefix up to the ceiling. The frontier is sorted by
+        // longest-path-to-sink; the group_id/union are recomputed for the chosen subset.
+        let writeCap;
+        try { ({ resolveFanoutCap: writeCap } = require('./kaola-workflow-adaptive-schema')); } catch (_) { writeCap = null; }
+        let groupCeiling = writeCap ? writeCap(process.env) : grp.members.length;
+        if (Number.isInteger(max) && max >= 1) groupCeiling = Math.min(groupCeiling, max);
+        groupCeiling = Math.max(2, groupCeiling);
+        const chosen = writeNodes.filter(n => grp.members.includes(n.id)).slice(0, groupCeiling);
+        toOpen = chosen;
+        openKind = 'write';
+        groupForm = {
+          group_id: laneGroupId(chosen.map(n => n.id)),
+          members: chosen.map(n => n.id).slice().sort(),
+          write_union: laneWriteUnion(chosen),
+        };
+      } else {
+        toOpen = [writeNodes[0]];
+        openKind = 'write';
+      }
+    } else {
+      toOpen = [writeNodes[0]];
+      openKind = 'write';
+    }
   } else {
     // Only write nodes are ready but the running set is non-empty (read-only members live):
     // the write node must wait until they drain so it can run alone.
@@ -2582,8 +2674,25 @@ function runOpenReady(opts) {
     model: n.model || null,
     baseline: 'recorded',
     opening: true,
+    // #437 (D-419 P2 §1.1): stamp each lane-group member with its group_id so close-node knows it is
+    // a member (and which group). undefined ⇒ a serial/read node (no group).
+    ...(groupForm ? { group_id: groupForm.group_id } : {}),
     ...(openedAt ? { openedAt } : {}),
   }));
+
+  // #437 (D-419 P2 §1.2): record the SHARED group baseline ONCE, BEFORE the per-member baselines,
+  // keyed by the group_id (reuses --record-base; the sanitizer is byte-compatible with a group id).
+  // The group baseline is the diff anchor for the close barrier; the per-member baselines are kept
+  // only for reconcile rollback cleanup. Recorded inside Phase 1 so a crash never leaves the
+  // lane_group manifest referencing a baseline that was never anchored.
+  let groupBaselineSha = null;
+  if (groupForm) {
+    const gb = shell(commitNodePath, [planPath, '--node-id', groupForm.group_id, '--start', '--json']);
+    if (!(gb.exitCode === 0 && gb.result === 'ok')) {
+      return { result: 'refuse', reason: 'group_baseline_failed', group_id: groupForm.group_id, baselineResult: gb };
+    }
+    groupBaselineSha = (gb.recordBase && gb.recordBase.base) ? gb.recordBase.base : (gb.base || null);
+  }
 
   // -- Phase 1: write running-set.json in state:'opening' with the FULL intended node set
   //    BEFORE flipping any ledger row. A crash here is reconcilable (never an orphan).
@@ -2592,9 +2701,21 @@ function runOpenReady(opts) {
   // reconcile-running-set can honor the ceiling on crash-resume. NEVER written at freeze
   // time or into plan_hash. Absent --max falls back to cap (the full fanout ceiling).
   const maxConcurrent = Number.isInteger(max) && max >= 1 ? Math.min(cap, max) : cap;
+  // #437 (D-419 P2 §1.2): the lane_group descriptor, written into running-set.json BEFORE any ledger
+  // flip (so a crash mid-open is reconcilable). Carries the shared baseline SHA + the write_union
+  // (convenience snapshot; the group barrier re-reads the plan rows for attribution). Absent when no
+  // group formed (the serial/read path) ⇒ no lane_group key ⇒ flag-OFF byte-identical.
+  const laneGroupEntry = groupForm ? {
+    group_id: groupForm.group_id,
+    members: groupForm.members,
+    baseline: groupBaselineSha,
+    write_union: groupForm.write_union,
+    ...(openedAt ? { openedAt } : {}),
+  } : null;
   const openingSet = {
     state: 'opening',
     max_concurrent: maxConcurrent,
+    ...(laneGroupEntry ? { lane_group: laneGroupEntry } : {}),
     nodes: liveNodes.concat(newNodes),
     ...(openedAt ? { updatedAt: openedAt } : {}),
   };
@@ -2662,9 +2783,44 @@ function runOpenReady(opts) {
       return { id: n.id, role: n.role, model: n.model || null, kind: n.kind, declared_write_set: n.declared_write_set, nonce, evidence_file, required_tokens, dispatch };
     }),
     runningSet: finalSet.nodes.map(n => n.id),
+    // #437 (D-419 P2 §1.2): surface the formed lane group descriptor so the orchestrator/tests can
+    // observe a co-open. Absent (undefined) on the serial/read path — the flag-OFF byte-identical shape.
+    ...(laneGroupEntry ? { laneGroup: laneGroupEntry } : {}),
     taskTransitions: transitions,
     taskMirror: refreshTaskMirror(project, shell),
   };
+}
+
+// ---------------------------------------------------------------------------
+// memberInLaneChanges (#437 D-419 P2 §2.1) — the per-member in-lane vacuity probe. Scope a
+// `git status --porcelain` to the member's DECLARED write set (parsed via the classifier) at the
+// repo root and return the non-empty change lines. NON-empty ⇒ the member wrote in-lane (pass);
+// empty ⇒ the caller checks the evidence for a `no_op:` declaration. This is intentionally an
+// in-lane PRESENCE check, NOT the full diff barrier (the diff barrier is DEFERRED to the group).
+// Returns { changed:boolean, lines:string[] }. Fail-OPEN to changed:false on a git error (the
+// caller then requires the no_op: declaration — the conservative direction).
+// ---------------------------------------------------------------------------
+function memberInLaneChanges(declaredRaw) {
+  let parse;
+  try { ({ parseWriteSetCell: parse } = require('./kaola-gitlab-workflow-classifier')); } catch (_) { parse = null; }
+  const paths = parse ? Array.from(parse(declaredRaw)) : String(declaredRaw || '').split(/[\s,]+/).filter(Boolean);
+  if (!paths.length) return { changed: false, lines: [] };
+  let root;
+  try { root = getRoot(); } catch (_) { root = process.cwd(); }
+  let out = '';
+  try {
+    out = execFileSync('git', ['-C', root, 'status', '--porcelain', '--', ...paths], {
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+    });
+  } catch (_) { return { changed: false, lines: [] }; }
+  const lines = String(out).split('\n').map(s => s.trim()).filter(Boolean);
+  return { changed: lines.length > 0, lines };
+}
+
+// #437 (D-419 P2 §2.1): a declared no-op escape for the vacuity guard — the evidence file carries a
+// column-0 `no_op: <reason>` line. PURE multiline regex (mirrors the schema's parse-* discipline).
+function evidenceDeclaresNoOp(evidenceContent) {
+  return /^no_op:[ \t]*\S/m.test(String(evidenceContent || ''));
 }
 
 // ---------------------------------------------------------------------------
@@ -2673,6 +2829,12 @@ function runOpenReady(opts) {
 // selector-arm) then removes it from the running set and recomputes the newly-ready
 // frontier. Does NOT auto-open (the loop calls open-ready). No worktree join
 // (containment dormant: read-only members + serial writes are all parent-side).
+//
+// #437 (D-419 P2 §2): under KAOLA_LANE_CONTAINMENT, a node that is a live lane_group MEMBER takes
+// the GROUP-scoped close path: evidence-shape + per-member in-lane vacuity, then either DEFER the
+// barrier (non-last member ⇒ `barrier: deferred_to_group`) or run the GROUP barrier ONCE (last
+// member ⇒ `barrier: group_passed`, clear lane_group, drop the group baseline). Flag OFF (or a
+// non-member serial node) ⇒ the existing per-node serial close runs byte-identically (INV-6).
 // ---------------------------------------------------------------------------
 function runCloseNode(opts) {
   const { planPath, project, nodeId, shell, readFile, writeFile, cacheExists } = opts;
@@ -2722,6 +2884,20 @@ function runCloseNode(opts) {
 
   // #403.4: non-blocking near-miss verdict warning (informational, per #328) — see runCloseAndOpenNext.
   const verdictWarn = checkVerdictParse(role, evidenceContent);
+
+  // -- (a.5) #437 (D-419 P2 §2): LANE-GROUP MEMBER close path. Gated on KAOLA_LANE_CONTAINMENT AND
+  //    this node being a live lane_group member. Flag OFF / a serial node (no lane_group) ⇒ lg is null
+  //    ⇒ this whole branch is skipped and the existing serial close runs verbatim (INV-6).
+  const containment = resolveLaneContainment(process.env);
+  const running0 = readRunningSet(runningSetPath, cacheExists, readFile);
+  const lg = (containment && running0 && running0.lane_group) ? running0.lane_group : null;
+  const isMember = !!(lg && Array.isArray(lg.members) && lg.members.includes(nodeId));
+  if (isMember) {
+    return closeGroupMember({
+      opts, nodeId, role, evidenceContent, verdictWarn, nodeInfo, lg, running0,
+      planPath, project, runningSetPath, shell, readFile, writeFile, cacheExists, transitions,
+    });
+  }
 
   // -- (b) Per-node barrier (parent planPath — read-only/serial-write are parent-side).
   const barrierOut = shell(commitNodePath, [planPath, '--node-id', nodeId, '--json']);
@@ -2795,6 +2971,165 @@ function runCloseNode(opts) {
   return {
     result: 'ok',
     closed: nodeId,
+    allDone,
+    newlyReady,
+    ...(verdictWarn || {}),
+    taskTransitions: transitions,
+    taskMirror: refreshTaskMirror(project, shell),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// closeGroupMember (#437 D-419 P2 §2) — the LANE-GROUP member close path. Invoked by runCloseNode
+// ONLY under KAOLA_LANE_CONTAINMENT when the closing node is a live lane_group member. The evidence-
+// shape PRESENCE check already passed in runCloseNode (step a); this performs:
+//   1. PER-MEMBER in-lane vacuity guard (member's declared set must have changes OR evidence declares
+//      a no_op:) — restores the #283 anti-vacuity check in lane form.
+//   2a. NON-LAST member: DEFER the diff barrier (record `barrier: deferred_to_group`), close the
+//       ledger row, append a compliance row carrying the `deferred_to_group` marker, mark the member
+//       closed:true in lane_group.members, return barrier:'deferred_to_group'.
+//   2b. LAST member: run the GROUP BARRIER ONCE over the union of all members (shell the validator's
+//       --group-barrier while lane_group.members STILL holds the full set, per the design ordering).
+//       Pass ⇒ close the row, compliance `barrier: group_passed`, CLEAR lane_group, drop the group
+//       baseline. Refuse ⇒ typed refusal, NO ledger advance, lane_group untouched.
+// "Last member" = every OTHER member already carries closed:true in lane_group.members.
+// ---------------------------------------------------------------------------
+function closeGroupMember(ctx) {
+  const {
+    opts, nodeId, role, evidenceContent, verdictWarn, nodeInfo, lg,
+    planPath, project, runningSetPath, shell, readFile, writeFile, cacheExists, transitions,
+  } = ctx;
+
+  // -- (1) PER-MEMBER in-lane vacuity guard. Empty in-lane changes AND no `no_op:` ⇒ member_vacuity.
+  // parseNodes returns `writeSetRaw` (the running-set carries `declared_write_set`); accept either.
+  const declaredRaw = nodeInfo
+    ? (nodeInfo.declared_write_set != null ? nodeInfo.declared_write_set : nodeInfo.writeSetRaw)
+    : null;
+  const inLane = memberInLaneChanges(declaredRaw);
+  if (!inLane.changed && !evidenceDeclaresNoOp(evidenceContent)) {
+    return {
+      result: 'refuse',
+      reason: 'member_vacuity',
+      nodeId, role,
+      group_id: lg.group_id,
+      detail: 'declared set has no changes and evidence declares no no_op:<reason>',
+    };
+  }
+
+  // Member roster: lane_group.members is the FULL bare-id string[] (kept stable so the validator's
+  // --group-barrier — which reads lg.members for the union allowlist via nodes.find(x=>x.id===id) —
+  // always sees plain ids, per n1-design §1.1). Per-member close state lives in a PARALLEL
+  // `closed_members` id[] so members stays string[]. "Last member" = every OTHER member id is in
+  // closed_members.
+  const allMemberIds = (Array.isArray(lg.members) ? lg.members : []).map(m => (typeof m === 'string' ? m : (m.nodeId || m.id)));
+  const closedBefore = new Set(Array.isArray(lg.closed_members) ? lg.closed_members : []);
+  const otherIds = allMemberIds.filter(id => id !== nodeId);
+  const isLast = otherIds.length > 0 && otherIds.every(id => closedBefore.has(id));
+  const isOnly = allMemberIds.length === 1; // a 1-member group degenerates to last-member immediately.
+  const lastMember = isLast || isOnly;
+
+  if (!lastMember) {
+    // -- (2a) NON-LAST member: DEFER the barrier. Close the ledger row, record deferred_to_group.
+    let currentPlan = readFile(planPath);
+    const closeResult = spliceLedgerNode(currentPlan, nodeId, 'complete', { allowFrom: ['in_progress'] });
+    if (!closeResult.found) return { result: 'refuse', reason: 'close_node_not_in_ledger', nodeId };
+    if (!closeResult.changed && !closeResult.alreadyAtTarget) {
+      return { result: 'refuse', reason: 'close_transition_disallowed', nodeId };
+    }
+    if (closeResult.changed) currentPlan = closeResult.content;
+    // Compliance row carrying the literal `deferred_to_group` marker in the Evidence cell (grep/audit).
+    const requirementCell = role + ' (' + nodeId + ')';
+    if (!complianceRowExists(currentPlan, requirementCell, nodeId)) {
+      currentPlan = spliceComplianceRow(currentPlan, '| ' + requirementCell + ' | subagent-invoked | deferred_to_group | |');
+    }
+    writeFile(planPath, currentPlan);
+    appendNodeTiming(planPath, nodeId, 'closed');
+    appendProvenanceLog(planPath, 'close', nodeId, readNonce(planPath, nodeId, readFile));
+    transitions.push(buildTransition(nodeId, 'complete', 'close-node'));
+
+    // Record this member in lane_group.closed_members (KEEP lane_group + members string[]; ≥1 member
+    // remains open). ALSO remove the node from running_set.nodes (§2.1 step 7) so the live set reflects
+    // the close. members stays the FULL bare-id list so the last-member group barrier reads it intact.
+    const running = readRunningSet(runningSetPath, cacheExists, readFile);
+    if (running && running.lane_group) {
+      const prevClosed = Array.isArray(running.lane_group.closed_members) ? running.lane_group.closed_members : [];
+      const closed_members = Array.from(new Set([...prevClosed, nodeId]));
+      const updatedLg = { ...running.lane_group, closed_members };
+      const remaining = (running.nodes || []).filter(n => n.id !== nodeId);
+      writeFile(runningSetPath, JSON.stringify({ ...running, lane_group: updatedLg, nodes: remaining }, null, 2));
+    }
+
+    const nextAction = shell(nextActionPath, [planPath, '--json']);
+    const allDone = !!(nextAction.result === 'ok' && nextAction.allDone);
+    return {
+      result: 'ok',
+      closed: nodeId,
+      barrier: 'deferred_to_group',
+      group_id: lg.group_id,
+      allDone,
+      ...(verdictWarn || {}),
+      taskTransitions: transitions,
+      taskMirror: refreshTaskMirror(project, shell),
+    };
+  }
+
+  // -- (2b) LAST member: run the GROUP BARRIER ONCE over union(all members), BEFORE closing/removing
+  //    this member (so lane_group.members still holds the full set the validator reads). The validator
+  //    --group-barrier path reads running-set.json's lane_group + the group baseline itself.
+  const groupBarrier = shell(validatorPath, [planPath, '--group-barrier', '--group-id', lg.group_id, '--json']);
+  if (groupBarrier.exitCode !== 0 || groupBarrier.result !== 'pass') {
+    // Typed refusal: NO ledger advance, lane_group untouched, group baseline retained.
+    return {
+      result: 'refuse',
+      reason: groupBarrier.reason || 'group_barrier_failed',
+      nodeId, role,
+      group_id: lg.group_id,
+      groupBarrier,
+    };
+  }
+
+  // Group barrier passed: close this member, append compliance `group_passed`, clear lane_group,
+  // drop the group baseline.
+  let currentPlan = readFile(planPath);
+  const closeResult = spliceLedgerNode(currentPlan, nodeId, 'complete', { allowFrom: ['in_progress'] });
+  if (!closeResult.found) return { result: 'refuse', reason: 'close_node_not_in_ledger', nodeId };
+  if (!closeResult.changed && !closeResult.alreadyAtTarget) {
+    return { result: 'refuse', reason: 'close_transition_disallowed', nodeId };
+  }
+  if (closeResult.changed) currentPlan = closeResult.content;
+  const requirementCell = role + ' (' + nodeId + ')';
+  if (!complianceRowExists(currentPlan, requirementCell, nodeId)) {
+    currentPlan = spliceComplianceRow(currentPlan, '| ' + requirementCell + ' | subagent-invoked | group_passed | |');
+  }
+  writeFile(planPath, currentPlan);
+  appendNodeTiming(planPath, nodeId, 'closed');
+  appendProvenanceLog(planPath, 'close', nodeId, readNonce(planPath, nodeId, readFile));
+  transitions.push(buildTransition(nodeId, 'complete', 'close-node'));
+
+  // Clear lane_group entirely + remove the member from running_set.nodes.
+  const running = readRunningSet(runningSetPath, cacheExists, readFile);
+  if (running) {
+    const remaining = (running.nodes || []).filter(n => n.id !== nodeId);
+    const cleared = { ...running, nodes: remaining };
+    delete cleared.lane_group;
+    if (remaining.length === 0 && opts.unlink) opts.unlink(runningSetPath);
+    else writeFile(runningSetPath, JSON.stringify({ ...cleared, state: 'open' }, null, 2));
+  }
+  // Drop the group baseline (idempotent; a group_id has no ledger row so the #424 window-lock permits it).
+  shell(validatorPath, [planPath, '--drop-base', '--node-id', lg.group_id, '--json']);
+
+  const nextAction = shell(nextActionPath, [planPath, '--json']);
+  const allDone = !!(nextAction.result === 'ok' && nextAction.allDone);
+  const newlyReady = (nextAction.result === 'ok' && Array.isArray(nextAction.readyPending))
+    ? nextAction.readyPending.filter(n => n.role !== 'main-session-gate')
+        .map(n => ({ id: n.id, role: n.role, model: n.model, declared_write_set: n.declared_write_set }))
+    : [];
+
+  return {
+    result: 'ok',
+    closed: nodeId,
+    barrier: 'group_passed',
+    group_id: lg.group_id,
     allDone,
     newlyReady,
     ...(verdictWarn || {}),
@@ -2897,12 +3232,30 @@ function runReconcileRunningSet(opts) {
     .filter(n => ((!wholeOpening && !n.opening) || kept.includes(n.id)) && !closedSet.has(n.id) && !staleSet.has(n.id) && !cappedOutSet.has(n.id))
     .map(n => { if (!n.opening) return n; const c = { ...n }; delete c.opening; return c; });
 
+  // #437 (D-419 P2 §10 crash-safety): handle a crashed lane group open/close. The group is consistent
+  // with the node set: a group survives iff ≥1 of its member nodes survives (rolled forward / already
+  // live). When NO member survives (all rolled back, or the close-crash drained them), DROP the
+  // lane_group key AND its group baseline (--drop-base --node-id <group_id>). A surviving group keeps
+  // the SAME baseline (it is the diff anchor for the eventual group barrier). Flag-OFF running sets
+  // have no lane_group key ⇒ this whole block is a no-op (byte-identical).
+  let laneGroupSurvives = false;
+  if (running.lane_group && Array.isArray(running.lane_group.members)) {
+    const survivorIds = new Set(survivors.map(n => n.id));
+    const memberIds = running.lane_group.members.map(m => (typeof m === 'string' ? m : (m.nodeId || m.id)));
+    laneGroupSurvives = memberIds.some(id => survivorIds.has(id));
+    if (!laneGroupSurvives && typeof shell === 'function') {
+      shell(validatorPath, [planPath, '--drop-base', '--node-id', running.lane_group.group_id, '--json']);
+    }
+  }
+  const reconciledTop = { ...running, state: 'open' };
+  if (running.lane_group && !laneGroupSurvives) delete reconciledTop.lane_group;
+
   if (survivors.length === 0) {
     // #436 D-419-01: spread existing top-level fields so max_concurrent (and any other
     // unknown fields) survive the empty-set fallback rewrite.
-    writeFile(runningSetPath, JSON.stringify({ ...running, state: 'open', nodes: [] }, null, 2));
+    writeFile(runningSetPath, JSON.stringify({ ...reconciledTop, nodes: [] }, null, 2));
   } else {
-    writeFile(runningSetPath, JSON.stringify({ ...running, state: 'open', nodes: survivors }, null, 2));
+    writeFile(runningSetPath, JSON.stringify({ ...reconciledTop, nodes: survivors }, null, 2));
   }
 
   return {
