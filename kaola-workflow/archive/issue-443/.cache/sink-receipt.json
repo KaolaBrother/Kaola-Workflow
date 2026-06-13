@@ -1,0 +1,24 @@
+{
+  "project": "issue-443",
+  "branch": "workflow/issue-443",
+  "issue_number": 443,
+  "issue_numbers": [
+    443
+  ],
+  "resolved_default_branch": "main",
+  "started_at": "2026-06-13T13:37:10.015Z",
+  "updated_at": "2026-06-13T13:42:09.498Z",
+  "stash_ref": null,
+  "removed_duplicates": [],
+  "steps": {
+    "preflight": "done",
+    "push_upstream": "done",
+    "merge": "done",
+    "worktree_sync": "done",
+    "finalize": "done",
+    "closure": "done",
+    "stash_restore": "done",
+    "archive_commit": "pending",
+    "push_main": "pending"
+  }
+}
