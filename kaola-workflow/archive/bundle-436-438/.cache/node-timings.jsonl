@@ -1,0 +1,13 @@
+{"node":"n1","event":"opened","ts":"2026-06-12T23:17:40.564Z"}
+{"node":"n1","event":"closed","ts":"2026-06-12T23:47:02.774Z"}
+{"node":"n2","event":"opened","ts":"2026-06-12T23:47:17.287Z"}
+{"node":"n2","event":"closed","ts":"2026-06-12T23:49:08.342Z"}
+{"node":"n3","event":"opened","ts":"2026-06-12T23:49:14.769Z"}
+{"node":"n3","event":"closed","ts":"2026-06-12T23:53:48.517Z"}
+{"node":"n4","event":"opened","ts":"2026-06-12T23:53:48.555Z"}
+{"node":"n4","event":"closed","ts":"2026-06-12T23:56:12.571Z"}
+{"node":"n5","event":"opened","ts":"2026-06-12T23:56:12.601Z"}
+{"node":"n5","event":"closed","ts":"2026-06-13T00:09:36.457Z"}
+{"node":"n6","event":"opened","ts":"2026-06-13T00:09:36.531Z"}
+{"node":"n6","event":"evidence","ts":"2026-06-13T00:10:23.401Z"}
+{"node":"n6","event":"closed","ts":"2026-06-13T00:10:27.175Z"}
