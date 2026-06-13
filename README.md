@@ -557,6 +557,8 @@ Use SemVer for both versions:
 - `PATCH`: compatible bug fixes, validation fixes, documentation-only updates,
   or small install clarifications.
 
+`scripts/kaola-workflow-release.js` scripts this checklist. Run `--verify` first (changelog completeness + chain-receipt greenness check), then `--cut --version X.Y.Z` to rename `[Unreleased]`, bump `package.json` and the three Codex manifests in lockstep, and create the local tag in one crash-resumable transaction. Run `--push` last to receive forge-neutral guidance for pushing the tag and publishing the forge release; no forge CLI is invoked by the script itself. See `docs/conventions.md` § "Release cutting" and `docs/decisions/D-442-01.md` for the full contract.
+
 Official release checklist (run the steps in order). `npm test` requires the
 release tag to exist, so the tag is created **before** the test run:
 

@@ -12,5 +12,6 @@
   - [D-419-02 — Parallelism v3 Part 2: lane-attributed disjoint write parallelism (#376 graduation); Part 4: consent-gated speculative gate overlap](decisions/D-419-02.md)
   - [D-420-01 — Goal-Driven Automation Part 1: autopilot loop (scout→claim→plan→run→finalize, confidence-threshold gating, typed stop conditions); Part 3: goal-conditioned bundles (optional `goal:` in `## Meta`, hash-covered, finalize AC-vs-goal check)](decisions/D-420-01.md)
   - [D-420-02 — Goal-Driven Automation Part 2: enriched consent-halt payload (offending paths, mechanical class, plan-repair diff); Part 4: release aggregator (`kaola-workflow-release.js --verify/--cut`, forge-neutral publish)](decisions/D-420-02.md)
+  - [D-442-01 — `kaola-workflow-release.js` release aggregator: envelope, architecture, closed-issue derivation, explicit `--version`, lockstep Codex-manifest bump, `--push` forge-neutral gate, step-receipt crash-resume, `COMMON_SCRIPTS`-only registration](decisions/D-442-01.md)
 - [Investigations](investigations/) — Investigation notes and analysis documents
 - [Changelog](../CHANGELOG.md)

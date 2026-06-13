@@ -80,6 +80,9 @@ const COMMON_SCRIPTS = [
   // #432: multi-chain test runner (run-chains). Byte-identical claude↔codex; gitlab/gitea carry
   // rename-normalized ports (kaola-{forge}-workflow-run-chains.js) in RENAME_NORMALIZED_FAMILIES.
   'kaola-workflow-run-chains.js',
+  // #442: release aggregator CLI. Byte-identical claude↔codex; gitlab/gitea carry
+  // rename-normalized ports (kaola-{forge}-workflow-release.js) in RENAME_NORMALIZED_FAMILIES.
+  'kaola-workflow-release.js',
 ];
 
 const BYTE_IDENTICAL_GROUPS = [
@@ -248,6 +251,17 @@ const RENAME_NORMALIZED_FAMILIES = [
     ports: [
       { forge: 'gitlab', file: 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-run-chains.js' },
       { forge: 'gitea', file: 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-run-chains.js' },
+    ],
+  },
+  {
+    // #442: release aggregator CLI forge ports. The script carries no forge-specific CLI tokens,
+    // so the rename-normalized ports are body-identical to canonical after the prefix transform.
+    // Reference = canonical scripts/ copy.
+    label: 'release forge ports',
+    reference: 'scripts/kaola-workflow-release.js',
+    ports: [
+      { forge: 'gitlab', file: 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-release.js' },
+      { forge: 'gitea', file: 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-release.js' },
     ],
   },
 ];
