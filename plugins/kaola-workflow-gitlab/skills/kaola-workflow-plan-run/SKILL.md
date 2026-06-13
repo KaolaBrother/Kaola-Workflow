@@ -1,13 +1,15 @@
 ---
 name: kaola-workflow-plan-run
-description: Use when executing a frozen adaptive workflow-plan.md — executes via a running-set scheduler; each frontier unit dispatched when its dependencies complete. Resume-safe. Mirror of commands/kaola-workflow-plan-run.md for Codex runtime.
+description: Use when executing a frozen adaptive workflow-plan.md — executes via a running-set scheduler; each frontier unit dispatched concurrently up to the fan-out cap (critical-path-first), with serial as the degraded fallback for write nodes or when lane containment is off. Resume-safe. Mirror of commands/kaola-workflow-plan-run.md for Codex runtime.
 ---
 
 # Skill: kaola-workflow-plan-run
 
 Adaptive executor. Runs a frozen `workflow-plan.md` (`workflow_path: adaptive`) by
 traversing its DAG + `## Node Ledger` instead of the fixed phaseN ladder, dispatching
-one frontier unit at a time and checkpointing between calls. Mirror of
+the ready frontier unit concurrently up to the fan-out cap, topping up as nodes close,
+and checkpointing between calls; serial when a write node is live or lane containment
+is off. Mirror of
 `commands/kaola-workflow-plan-run.md` for the Codex runtime. Reads and updates
 `kaola-workflow/{project}/workflow-state.md` throughout.
 
@@ -174,6 +176,33 @@ unchanged) or a batch of ready siblings when `next-action`'s `readyPending.lengt
 when the subtasks are genuinely independent. `FANOUT_CAP` is a **runtime concurrency limit** (max
 concurrently-running subagents), NOT a planning validity cap. `open-batch` opens at most `FANOUT_CAP`
 members and leaves the rest **queued**; `top-up` drains the queue by rolling bounded dispatch.
+
+**Scheduler-default posture (D-419 P3).** The running-set scheduler is the
+**documented default executor**: the planner authors the best logical DAG; the
+scheduler dispatches the ready frontier unit concurrently up to the fan-out cap,
+critical-path-first (highest `longestPathToSink` first), and tops up as nodes
+close. **Serial** (`max_concurrent = 1`) is the **degraded mode**, active in ANY
+of these cases: a write node is live AND lane containment is off
+(`KAOLA_LANE_CONTAINMENT != true`, the permanent default); a write node's write
+set OVERLAPS a candidate's even with containment on (`parallel_safe: false`);
+`KAOLA_LANE_CONTAINMENT` is off generally; a `main-session-gate` node; a
+frontier with only one ready node (degenerate); or any guard-prologue trip
+(STOP, never silent degrade). "Scheduler-default" means reads fan out by
+default; WRITE parallelism requires `KAOLA_LANE_CONTAINMENT=true` AND
+validator-stamped `parallel_safe` write sets — it is OFF by default.
+
+**Planner rubric (D-419 P3 — rewards overlap, never instructs `parallel_safe`):**
+Prefer a WIDE ready frontier over a long serial chain when nodes are independent:
+author parallel read-only analysis/review nodes (they fan out to the read cap) and
+parallel write nodes with DISJOINT declared write sets (they co-schedule under lane
+containment). The scheduler opens highest `longest-path-to-sink` nodes first
+(critical-path-first list scheduling), so place the longest dependency chain on the
+critical path and let short independent branches overlap it. Do NOT serialize
+independent work behind a single chain merely for ordering simplicity — every
+serialized independent node adds its full duration to the makespan; every overlapped
+node hides behind the critical path for free. The `parallel_safe` annotation is
+VALIDATOR-DERIVED (stamped at freeze from declared write sets); the planner authors
+TOPOLOGY (dep edges) and DISJOINT write sets — never hand-stamps `parallel_safe`.
 
 **Deciding the unit:** the scheduler is **batch-aware** — `orient` signals `enterBatch:true` on a ≥2
 START frontier, and `close-and-open-next` returns `enterBatch:true` on a ≥2-wide downstream frontier

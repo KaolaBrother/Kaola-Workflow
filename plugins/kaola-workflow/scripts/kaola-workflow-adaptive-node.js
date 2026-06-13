@@ -1470,7 +1470,9 @@ function runCloseAndOpenNext(opts) {
     const remaining = (running.nodes || []).filter(n => n.id !== nodeId);
     if (remaining.length === 0) {
       if (opts.unlink) opts.unlink(runningSetPath);
-      else writeFile(runningSetPath, JSON.stringify({ state: 'open', nodes: [] }, null, 2));
+      // #436 D-419-01: spread existing top-level fields so max_concurrent (and any other
+      // unknown fields) survive the empty-set fallback rewrite.
+      else writeFile(runningSetPath, JSON.stringify({ ...running, state: 'open', nodes: [] }, null, 2));
     } else {
       writeFile(runningSetPath, JSON.stringify({ ...running, nodes: remaining }, null, 2));
     }
@@ -2399,8 +2401,13 @@ function runOpenReady(opts) {
   // -- Phase 1: write running-set.json in state:'opening' with the FULL intended node set
   //    BEFORE flipping any ledger row. A crash here is reconcilable (never an orphan).
   if (mkdirp) mkdirp(path.dirname(runningSetPath));
+  // #436 D-419-01: record max_concurrent at open time as min(cap, --max || cap) so
+  // reconcile-running-set can honor the ceiling on crash-resume. NEVER written at freeze
+  // time or into plan_hash. Absent --max falls back to cap (the full fanout ceiling).
+  const maxConcurrent = Number.isInteger(max) && max >= 1 ? Math.min(cap, max) : cap;
   const openingSet = {
     state: 'opening',
+    max_concurrent: maxConcurrent,
     nodes: liveNodes.concat(newNodes),
     ...(openedAt ? { updatedAt: openedAt } : {}),
   };
@@ -2436,7 +2443,9 @@ function runOpenReady(opts) {
   writeFile(planPath, planContent);
 
   // -- Phase 3: promote running-set.json -> 'open' (ledger now agrees), clearing opening flags.
+  // #436 D-419-01: spread openingSet so max_concurrent and any other top-level fields survive.
   const finalSet = {
+    ...openingSet,
     state: 'open',
     nodes: openingSet.nodes.map(n => { if (!n.opening) return n; const c = { ...n }; delete c.opening; return c; }),
     ...(openedAt ? { updatedAt: openedAt } : {}),
@@ -2573,7 +2582,9 @@ function runCloseNode(opts) {
     const remaining = (running.nodes || []).filter(n => n.id !== nodeId);
     if (remaining.length === 0) {
       if (opts.unlink) opts.unlink(runningSetPath);
-      else writeFile(runningSetPath, JSON.stringify({ state: 'open', nodes: [] }, null, 2));
+      // #436 D-419-01: spread existing top-level fields so max_concurrent (and any other
+      // unknown fields) survive the empty-set fallback rewrite.
+      else writeFile(runningSetPath, JSON.stringify({ ...running, state: 'open', nodes: [] }, null, 2));
     } else {
       writeFile(runningSetPath, JSON.stringify({ ...running, nodes: remaining }, null, 2));
     }
@@ -2648,35 +2659,54 @@ function runReconcileRunningSet(opts) {
   }
 
   const target = wholeOpening ? (running.nodes || []) : openingNodes;
-  const kept = [];
+  const keptAll = [];
   const dropped = [];
   for (const n of target) {
-    if (ledger[n.id] === 'in_progress') kept.push(n.id);
+    if (ledger[n.id] === 'in_progress') keptAll.push(n.id);
     else dropped.push(n.id);
   }
 
+  // #436 D-419-01: cap roll-forward re-opens at (max_concurrent - live) so a crashed
+  // open-ready that partially flipped ledger rows cannot leave MORE nodes in_progress than
+  // the ceiling allows. `live` = stable non-opening in_progress members that survive
+  // regardless (they are already confirmed running). Absent max_concurrent → ceiling = 1
+  // (fail-closed, legacy open-next default).
+  const closedSet = new Set(closed);
+  const staleSet = new Set(stale);
+  const liveStable = (running.nodes || []).filter(
+    n => !n.opening && !closedSet.has(n.id) && !staleSet.has(n.id) && ledger[n.id] === 'in_progress'
+  );
+  const ceiling = (Number.isInteger(running.max_concurrent) && running.max_concurrent >= 1)
+    ? running.max_concurrent : 1;
+  const budget = Math.max(0, ceiling - liveStable.length);
+  const kept = keptAll.slice(0, budget);
+  // Nodes in keptAll that exceed the budget are also dropped (capped out).
+  const cappedOut = keptAll.slice(budget);
+
   // #385 drop-side: every rolled-back (open-direction) / closed-out (close-direction) / stale
-  // (#293-direction) member is leaving the live set, so drop its per-node baseline
+  // (#293-direction) / capped-out member is leaving the live set, so drop its per-node baseline
   // (.cache/barrier-base-<id> + the gc-anchored ref) — the documented #281/#296 stale-baseline trap
   // that runReopenNode already guards against. --drop-base removes file+ref together and is idempotent
   // (a missing file/ref is a clean no-op). Mirrors runReopenNode ~1505. The roll-FORWARD survivors
   // (kept) keep their fresh baselines.
-  const closedSet = new Set(closed);
-  const staleSet = new Set(stale);
   if (typeof shell === 'function') {
-    for (const id of new Set([...dropped, ...closed, ...stale])) {
+    for (const id of new Set([...dropped, ...cappedOut, ...closed, ...stale])) {
       shell(validatorPath, [planPath, '--drop-base', '--node-id', id, '--json']);
     }
   }
 
-  // Survivors = non-target nodes (already open) + target nodes whose row flipped — MINUS any
-  // close-direction terminal member (#384) and any stale non-opening pending member (#293-direction).
+  // Survivors = non-target nodes (already open) + target nodes whose row flipped AND under cap —
+  // MINUS any close-direction terminal member (#384), stale non-opening pending member (#293-direction),
+  // or capped-out opening member (D-419-01).
+  const cappedOutSet = new Set(cappedOut);
   const survivors = (running.nodes || [])
-    .filter(n => ((!wholeOpening && !n.opening) || kept.includes(n.id)) && !closedSet.has(n.id) && !staleSet.has(n.id))
+    .filter(n => ((!wholeOpening && !n.opening) || kept.includes(n.id)) && !closedSet.has(n.id) && !staleSet.has(n.id) && !cappedOutSet.has(n.id))
     .map(n => { if (!n.opening) return n; const c = { ...n }; delete c.opening; return c; });
 
   if (survivors.length === 0) {
-    writeFile(runningSetPath, JSON.stringify({ state: 'open', nodes: [] }, null, 2));
+    // #436 D-419-01: spread existing top-level fields so max_concurrent (and any other
+    // unknown fields) survive the empty-set fallback rewrite.
+    writeFile(runningSetPath, JSON.stringify({ ...running, state: 'open', nodes: [] }, null, 2));
   } else {
     writeFile(runningSetPath, JSON.stringify({ ...running, state: 'open', nodes: survivors }, null, 2));
   }

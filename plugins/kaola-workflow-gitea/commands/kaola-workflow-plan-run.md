@@ -1,5 +1,5 @@
 ---
-description: Kaola-Workflow Adaptive Executor. Executes a frozen workflow-plan.md via a running-set scheduler; each frontier unit dispatched when its dependencies complete. Resume-safe.
+description: Kaola-Workflow Adaptive Executor. Executes a frozen workflow-plan.md via a running-set scheduler; each frontier unit dispatched concurrently up to the fan-out cap (critical-path-first), with serial as the degraded fallback for write nodes or when lane containment is off. Resume-safe.
 argument-hint: <project name>
 ---
 
@@ -8,8 +8,10 @@ argument-hint: <project name>
 Executes a frozen `workflow-plan.md` for an adaptive project (`workflow_path:
 adaptive`). The plan — authored by `/kaola-workflow-adapt` and frozen by the
 validator — is the spine: the executor traverses its DAG + `## Node Ledger`
-instead of the fixed phaseN ladder, dispatching one frontier unit at a time and
-checkpointing between calls. This is the Branch-A substrate: the agent freely
+instead of the fixed phaseN ladder, dispatching the ready frontier unit
+concurrently up to the fan-out cap, topping up as nodes close, and
+checkpointing between calls; serial when a write node is live or lane
+containment is off. This is the Branch-A substrate: the agent freely
 designed the *shape*; the harness owns the lifecycle frame, the computed gates,
 and the durable resume contract.
 
@@ -210,6 +212,34 @@ single node (the legacy serial path, unchanged) or a batch of ready siblings whe
 validity cap. `open-batch` opens at most `FANOUT_CAP` members of an over-cap frontier and leaves the
 rest **queued** (ready-but-pending); `top-up` drains the queue by **rolling bounded dispatch** —
 starting the next queued sibling as each running one finishes.
+
+**Scheduler-default posture (D-419 P3).** The running-set scheduler is the
+**documented default executor**: the planner authors the best logical DAG; the
+scheduler dispatches the ready frontier unit concurrently up to the fan-out cap,
+critical-path-first (highest `longestPathToSink` first), and tops up as nodes
+close. **Serial** (`max_concurrent = 1`) is the **degraded mode**, not the
+default, and is active in ANY of these cases:
+- A write node is live AND lane containment is off (`KAOLA_LANE_CONTAINMENT != true`) — the
+  permanent default; write nodes open ALONE until lane containment is enabled.
+- A write node's declared write set OVERLAPS a candidate's, even with containment on — overlapping
+  writes never co-schedule (`parallel_safe: false`).
+- `KAOLA_LANE_CONTAINMENT` is off generally — no write parallelism; read fan-out still applies.
+- A `main-session-gate` node — excluded from fan-out; always runs on the single-node path.
+- A frontier with only one ready node — trivially `max=1` for that step (degenerate, not a mode switch).
+- Any guard-prologue trip (integrity / halt / cross-surface refusal) — STOP, never silent serial degrade.
+
+**Planner rubric (D-419 P3 — rewards overlap, never instructs `parallel_safe`):**
+Prefer a WIDE ready frontier over a long serial chain when nodes are independent:
+author parallel read-only analysis/review nodes (they fan out to the read cap) and
+parallel write nodes with DISJOINT declared write sets (they co-schedule under lane
+containment). The scheduler opens highest `longest-path-to-sink` nodes first
+(critical-path-first list scheduling), so place the longest dependency chain on the
+critical path and let short independent branches overlap it. Do NOT serialize
+independent work behind a single chain merely for ordering simplicity — every
+serialized independent node adds its full duration to the makespan; every overlapped
+node hides behind the critical path for free. The `parallel_safe` annotation is
+VALIDATOR-DERIVED (stamped at freeze from declared write sets); the planner authors
+TOPOLOGY (dep edges) and DISJOINT write sets — never hand-stamps `parallel_safe`.
 
 **Deciding the unit:** read `readyPending` from `orient`/`close-and-open-next`:
 - The scheduler is **batch-aware**: `orient` signals `enterBatch:true` when the START frontier has

@@ -191,6 +191,47 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   manifest on every resume. Wall-clock overlap is claimed only via `node-timings.jsonl` (#373) on
   a real run — the scripts never spawn agents, so they never overclaim concurrency.
 
+  **Coordination kernel — serial = running-set `max_concurrent = 1` (D-419-01 Part 1).**
+  The serial loop and the running-set scheduler are two surfaces of ONE coordination kernel.
+  Serial is not a separate code path — it is the scheduler operating with `max_concurrent = 1`.
+  The two kernel entry points are:
+
+  - **`open-next` / `close-and-open-next`** — the `max = 1` serial aliases. These are
+    RETAINED as the degenerate case of the kernel; they are NOT deprecated and do NOT write
+    a `running-set.json`. The absence of `running-set.json` is itself the `max = 1` witness
+    for the legacy path ([INV-1]).
+  - **`open-ready [--max N]`** — the `max = N` scheduler entry point. When `--max 1` is
+    passed the behavior is functionally equivalent to the serial path with the exception that
+    a `running-set.json` IS written (distinct on-disk footprint).
+
+  The unification is **by SUBSUMPTION, not deletion**. The runtime code paths are preserved
+  byte-for-byte; what changes is the conceptual model and documentation. The hard
+  byte-identity invariant ([INV-2]) is: with `KAOLA_LANE_CONTAINMENT` off + no
+  `running-set.json` + no active-batch + ≤ 1 `in_progress` row, every guard-prologue layer
+  is vacuously-pass and the serial path is byte-identical to pre-#383 behavior. Any refactor
+  that makes `open-next` begin writing a `running-set.json` violates [INV-2] and is rejected.
+
+  **`max_concurrent` in `running-set.json`.** `open-ready` writes an optional `max_concurrent`
+  integer into the manifest at open time:
+  `{ state: 'opening'|'open', max_concurrent?: number, nodes: [...], updatedAt }`.
+  Absence of the field is read as `max_concurrent = 1` — fail-closed, never "unbounded."
+  The field is set at OPEN time (a runtime resource limit), NOT at freeze time, so it does
+  NOT enter the frozen plan body or `plan_hash`. Its role is crash-resume continuity:
+  `reconcile-running-set` re-reads `max_concurrent` to cap how many nodes it rolls forward
+  (budget = `max_concurrent` − count-of-already-live nodes), so a crash during a multi-node
+  open is never reconciled into a state that exceeds the original concurrency ceiling.
+  The persisted value is the WITNESS, not the source of truth — the env-resolved cap
+  (`min(KAOLA_FANOUT_CAP_READONLY, --max)`) is always re-derived at the next `open-ready`
+  call and overwrites the manifest ([INV-3]).
+
+  **Guard refusal taxonomy is three-armed (not collapsed).** The emit-envelope reason
+  contract (#406) requires callers to classify failures structurally by stable `reason` code.
+  `serial_node_live`, `scheduler_active`, and `batch_active` carry different repair pointers
+  and MUST NOT be merged into fewer arms, even though the kernel model unifies serial and
+  scheduler conceptually.
+
+  **Canonical spec: `docs/decisions/D-419-01.md`** (Part 1).
+
   **Parallelism v3 design (issue #419).** Two decision records define the v3 design built
   on the v2 running-set foundation: `docs/decisions/D-419-01.md` (Part 1: one coordination
   kernel — serial = running-set `max_concurrent=1` by subsumption, not deletion; Part 3:

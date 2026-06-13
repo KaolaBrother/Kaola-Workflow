@@ -4314,6 +4314,131 @@ function rtHarness(initialFiles, opts) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// D419-INV2: [INV-2] open-next MUST NOT write running-set.json.
+// The serial open-next path is the legacy single-node path: it NEVER begins writing
+// a running-set.json. After a successful open-next, no running-set.json file must exist.
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan([
+    '| impl-core | pending | |',
+    '| impl-other | pending | |',
+    '| review | pending | |',
+    '| finalize | pending | |',
+  ]);
+  const state = makeState();
+  const writtenFiles = {};
+  const shellStub = function(scriptPath, args) {
+    const base = path.basename(scriptPath);
+    if (base === 'kaola-workflow-next-action.js') {
+      return { exitCode: 0, result: 'ok', readySet: [{ id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/x.js', dependsOn: [] }], nextNode: { id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/x.js' }, allDone: false };
+    }
+    if (base === 'kaola-workflow-commit-node.js') {
+      return { exitCode: 0, result: 'ok', recordBase: { base: 'abc123def4567890', reused: false } };
+    }
+    return { exitCode: 1, result: 'refuse' };
+  };
+  let planContent = plan;
+  const result = runOpenNext({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project',
+    nodeId: null,
+    shell: shellStub,
+    readFile: (fpath) => {
+      if (fpath.endsWith('workflow-plan.md')) return planContent;
+      if (fpath.endsWith('workflow-state.md')) return state;
+      throw new Error('ENOENT: ' + fpath);
+    },
+    writeFile: (fpath, content) => {
+      writtenFiles[fpath] = content;
+      if (fpath.endsWith('workflow-plan.md')) planContent = content;
+    },
+  });
+  assert(result.result === 'ok', 'D419-INV2: open-next result===ok');
+  // The hard invariant: running-set.json must NOT have been written.
+  const rsWritten = Object.keys(writtenFiles).some(f => f.endsWith(RUNNING_SET_NAME));
+  assert(rsWritten === false, 'D419-INV2: open-next must NOT write running-set.json (serial fallback byte-identity)');
+}
+
+// ---------------------------------------------------------------------------
+// D419-INV7: [INV-7] reconcile-running-set honors max_concurrent ceiling.
+// When max_concurrent is present in running-set.json, reconcile must not re-open
+// more nodes than (max_concurrent - count_of_currently_live_nodes).
+// Scenario: max_concurrent=2, a is stable live (1 live), b+c both have opening:true
+// and both are in_progress in the ledger. Budget = ceiling - live = 2 - 1 = 1.
+// The cap means only ONE of b/c should be rolled forward (priority: ledger order).
+// Without the cap, both b AND c roll forward → total=3 > ceiling=2 (the bug).
+// ---------------------------------------------------------------------------
+{
+  // Plan: a + b + c all in_progress, d pending. running-set: state:opening, max_concurrent:2,
+  // nodes: [{id:'a',stable}, {id:'b',opening}, {id:'c',opening}].
+  // 'a' is stable live; 'b' and 'c' both have opening:true AND ledger in_progress.
+  // ceiling=2, live (stable, non-opening)=1 → budget=1 → only 1 opening node rolls forward.
+  const plan = makePlan([
+    '| a | in_progress | |',
+    '| b | in_progress | |',
+    '| c | in_progress | |',
+    '| finalize | pending | |',
+  ], [
+    '| a | code-reviewer | — | — | 1 | sequence |',
+    '| b | security-reviewer | — | — | 1 | sequence |',
+    '| c | code-reviewer | — | — | 1 | sequence |',
+    '| finalize | finalize | a b c | CHANGELOG.md | 1 | sequence |',
+  ]);
+  const crashedSet = JSON.stringify({
+    state: 'opening',
+    max_concurrent: 2,
+    nodes: [
+      { id: 'a', role: 'code-reviewer', kind: 'read' },
+      { id: 'b', role: 'security-reviewer', kind: 'read', opening: true },
+      { id: 'c', role: 'code-reviewer', kind: 'read', opening: true },
+    ],
+  }, null, 2);
+  const h = rsHarness({ [RS_PLAN_PATH]: plan, [RS_SET_PATH]: crashedSet }, () => ({ exitCode: 0, result: 'ok' }));
+  const r = runReconcileRunningSet({ planPath: RS_PLAN_PATH, project: 'p', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists });
+  assert(r.result === 'ok' && r.reconciled === true, 'D419-INV7: reconcile-running-set with max_concurrent succeeds');
+  const finalSet = JSON.parse(h.files[RS_SET_PATH]);
+  assert(finalSet.state === 'open', 'D419-INV7: running-set promoted to open');
+  // max_concurrent must survive the reconcile rewrite.
+  assert(finalSet.max_concurrent === 2, 'D419-INV7: max_concurrent=2 survives reconcile rewrite');
+  // The ceiling cap: live nodes must NOT exceed max_concurrent=2.
+  assert(finalSet.nodes.length <= 2, 'D419-INV7: live node count (' + finalSet.nodes.length + ') must not exceed max_concurrent=2 (budget=ceiling-live=2-1=1)');
+}
+
+// ---------------------------------------------------------------------------
+// D419-CLOSE-FIELDSURVIVAL: runCloseNode empty-set fallback preserves unknown fields.
+// When the last node is removed from the running set, the empty-set fallback must
+// SPREAD the existing top-level fields (including max_concurrent and other unknowns)
+// rather than creating a bare { state:'open', nodes:[] } that drops them.
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan(['| rev | in_progress | |'], ['| rev | code-reviewer | — | — | 1 | sequence |']);
+  const startSet = JSON.stringify({
+    state: 'open',
+    max_concurrent: 3,
+    extra_field: 'preserved',
+    nodes: [{ id: 'rev', role: 'code-reviewer', kind: 'read' }],
+  }, null, 2);
+  const h = rsHarness({
+    [RS_PLAN_PATH]: plan,
+    [RS_SET_PATH]: startSet,
+    '/p/.cache/rev.md': 'code-reviewer\nverdict: pass\nfindings_blocking: 0',
+  }, (base) => {
+    if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok', selectorCheck: {} };
+    if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readyPending: [] };
+    return { exitCode: 1, result: 'refuse' };
+  });
+  const r = runCloseNode({ planPath: RS_PLAN_PATH, project: 'p', nodeId: 'rev', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, unlink: null });
+  assert(r.result === 'ok', 'D419-CLOSE-FIELDSURVIVAL: close-node with single-node running-set ok');
+  // When the running set is emptied, the written file must preserve max_concurrent and extra_field.
+  const finalSet = JSON.parse(h.files[RS_SET_PATH]);
+  assert(finalSet.state === 'open', 'D419-CLOSE-FIELDSURVIVAL: empty running-set state=open');
+  assert(finalSet.nodes.length === 0, 'D419-CLOSE-FIELDSURVIVAL: empty running-set has no nodes');
+  assert(finalSet.max_concurrent === 3, 'D419-CLOSE-FIELDSURVIVAL: max_concurrent=3 preserved in empty-set fallback');
+  assert(finalSet.extra_field === 'preserved', 'D419-CLOSE-FIELDSURVIVAL: extra_field preserved in empty-set fallback');
+}
+
 if (failed > 0) {
   console.error('adaptive-node tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;

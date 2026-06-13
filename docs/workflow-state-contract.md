@@ -44,8 +44,10 @@ here for the full contract.
     (`ts`, `agent_type`, `agent_id`, `cwd`). Used by `checkDispatchAttestations`
     at closure time for WARN-FIRST subagent-seam attestation (see `docs/api.md` § Closure Contract).
   - `running-set.json` — tracks which nodes are currently in the running set
-    (state: `'opening'|'open'`; members list with per-node `id`, `role`, `kind`,
-    `baseline`, optional `opening` marker and `openedAt`). Prevents double-open;
+    (`{ state: 'opening'|'open', max_concurrent?: number, nodes: [...], updatedAt }`; per-node fields: `id`, `role`, `kind`,
+    `baseline`, optional `opening` marker and `openedAt`). `max_concurrent` is set at
+    `open-ready` time (`min(cap, --max || cap)`) and read by `reconcile-running-set` to
+    cap roll-forward re-opens; absence implies 1 (fail-closed). Prevents double-open;
     a crashed `opening` state routes to `reconcile-running-set`.
   - `active-batch.json` — parallel-batch manifest with `state: 'opening'|'open'|'sealed'|'joined'`
     (crash-safe two-phase: written with `opening` before any ledger row flips, then
