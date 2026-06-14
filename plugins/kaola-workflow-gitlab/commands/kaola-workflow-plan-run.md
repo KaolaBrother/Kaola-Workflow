@@ -129,6 +129,10 @@ token). Instruct the role to:
 - Serial (`max_concurrent=1`) is the degraded mode; write parallelism requires
   `KAOLA_LANE_CONTAINMENT=true`. `opening` marker + `reconcile` handle batch crash-resume.
 - `test_thrash` ≥ 3: escalate via `write-halt --reason test_thrash`.
+- `merge_conflict` (#463 write-overlap): an unresolvable write-leg convergence (the synthesizer
+  commit barrier) after the bounded-repair cap escalates via `write-halt --reason merge_conflict`.
+  Unlike `test_thrash`, it is a RESUMABLE consent-style halt — resolve the conflict, then
+  `clear-halt --reason consent` to resume adaptively.
 
 Record durable evidence after the role returns:
 
