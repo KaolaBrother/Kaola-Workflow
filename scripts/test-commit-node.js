@@ -388,29 +388,36 @@ function assert(condition, message) {
     opts = opts || {};
     const aSet = opts.aSet || 'ax.js';
     const bSet = opts.bSet || 'by.js';
+    const legRole = opts.legRole || 'tdd-guide'; // #463: doc-updater legs exercise the docs-only vacuous-gate case
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'gb-e2e-'));
     const project = 'test-project';
     const projDir = path.join(repoRoot, 'kaola-workflow', project);
     const cacheDir = path.join(projDir, '.cache');
     fs.mkdirSync(cacheDir, { recursive: true });
     const planPath = path.join(projDir, 'workflow-plan.md');
+    // #463: opts.policy injects a write_overlap_policy line; opts.noGate drops the code-reviewer.
+    const metaRows = ['## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md'];
+    if (opts.policy) metaRows.push('write_overlap_policy: ' + opts.policy);
+    metaRows.push('');
+    const reviewDep = opts.noGate ? null : '| review   | code-reviewer | A,B   | —     | 1 | sequence        |';
+    const finalizeDep = opts.noGate ? 'A,B' : 'review';
     const plan = [
       '# Workflow Plan — test-project', '',
-      '## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md', '',
+      ...metaRows,
       '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |',
       '| --- | --- | --- | --- | --- | --- |',
       '| seed     | code-explorer | —     | —     | 1 | sequence        |',
-      '| A        | tdd-guide     | seed  | ' + aSet + ' | 1 | sequence |',
-      '| B        | tdd-guide     | seed  | ' + bSet + ' | 1 | sequence |',
-      '| review   | code-reviewer | A,B   | —     | 1 | sequence        |',
-      '| finalize | finalize      | review| —     | 1 | sequence        |', '',
+      '| A        | ' + legRole + ' | seed  | ' + aSet + ' | 1 | sequence |',
+      '| B        | ' + legRole + ' | seed  | ' + bSet + ' | 1 | sequence |',
+      ...(reviewDep ? [reviewDep] : []),
+      '| finalize | finalize      | ' + finalizeDep + '| —     | 1 | sequence        |', '',
       '## Node Ledger', '',
       '| id | status |', '| --- | --- |',
       '| seed | complete |',
       '| A | in_progress |',
       '| B | in_progress |',
-      '| review | pending |',
+      ...(opts.noGate ? [] : ['| review | pending |']),
       '| finalize | pending |', '',
     ].join('\n') + '\n';
     fs.writeFileSync(planPath, plan);
@@ -546,6 +553,94 @@ function assert(condition, message) {
     assert(r.result === 'refuse', 'T-PS-5: unknown node → refuse');
     assert(r.reason === 'node_not_found', 'T-PS-5: reason node_not_found, got ' + r.reason);
     cleanup(repoRoot);
+  }
+
+  // =========================================================================
+  // #463 (D-419 write-overlap): the gated PREVENT→DETECT relaxation at --parallel-safe (the original
+  // #463 AC: a coarse-area-overlapping but EXACT-FILE-DISJOINT write frontier is no longer refused when
+  // write_overlap_policy authorizes it + per-run consent + a post-dominating code-reviewer gate). The
+  // safety FLOOR holds at every off/no-consent/no-gate/exact/PROTECTED case (byte-identical to today).
+  // crates/a/x.rs vs crates/b/y.rs share the coarse area "crates" but are exact-file-disjoint.
+  // =========================================================================
+  const COARSE_A = 'crates/a/x.rs', COARSE_B = 'crates/b/y.rs';
+  // T463-AC: the original #463 AC — coarse-disjoint + policy:disjoint + consent + gate → ok (relaxed).
+  {
+    const { repoRoot, planPath } = makeGroupRepo({ aSet: COARSE_A, bSet: COARSE_B, policy: 'disjoint' });
+    const r = runValidator(repoRoot, [planPath, '--parallel-safe', '--nodes', 'A,B', '--write-overlap-consent', '--json']);
+    assert(r.result === 'ok', 'T463-AC: coarse-disjoint relaxes to ok at disjoint+consent+gate, got ' + JSON.stringify(r));
+    assert(Array.isArray(r.relaxed) && r.relaxed.some(x => x.kind === 'coarse'), 'T463-AC: surfaces relaxed[] with kind coarse, got ' + JSON.stringify(r.relaxed));
+    cleanup(repoRoot);
+  }
+  // T463-FLOOR-consent: SAME plan, NO --write-overlap-consent → refuse (consent is mandatory).
+  {
+    const { repoRoot, planPath } = makeGroupRepo({ aSet: COARSE_A, bSet: COARSE_B, policy: 'disjoint' });
+    const r = runValidator(repoRoot, [planPath, '--parallel-safe', '--nodes', 'A,B', '--json']);
+    assert(r.result === 'refuse' && r.reason === 'overlapping_write_sets', 'T463-FLOOR-consent: no consent → refuse, got ' + JSON.stringify(r));
+    cleanup(repoRoot);
+  }
+  // T463-FLOOR-off (default-off byte-identity): SAME plan WITHOUT write_overlap_policy + consent → refuse.
+  {
+    const { repoRoot, planPath } = makeGroupRepo({ aSet: COARSE_A, bSet: COARSE_B }); // no policy ⇒ off
+    const r = runValidator(repoRoot, [planPath, '--parallel-safe', '--nodes', 'A,B', '--write-overlap-consent', '--json']);
+    assert(r.result === 'refuse' && r.reason === 'overlapping_write_sets', 'T463-FLOOR-off: policy:off refuses even with consent (byte-identity), got ' + JSON.stringify(r));
+    assert(!r.relaxed, 'T463-FLOOR-off: nothing relaxed at off');
+    cleanup(repoRoot);
+  }
+  // T463-FLOOR-gate: coarse-disjoint + policy + consent but NO code-reviewer gate → refuse.
+  {
+    const { repoRoot, planPath } = makeGroupRepo({ aSet: COARSE_A, bSet: COARSE_B, policy: 'disjoint', noGate: true });
+    const r = runValidator(repoRoot, [planPath, '--parallel-safe', '--nodes', 'A,B', '--write-overlap-consent', '--json']);
+    assert(r.result === 'refuse', 'T463-FLOOR-gate: no post-dominating code-reviewer gate → not relaxed, got ' + JSON.stringify(r));
+    cleanup(repoRoot);
+  }
+  // T463-FLOOR-docsgate (adversarial-verifier R1): DOCS-ONLY legs (doc-updater) whose declared writes do
+  // NOT produce code, with NO post-dominating code-reviewer, must NOT relax — a WHOLE-PLAN producesCode
+  // gate check would be vacuously-empty (no code nodes ⇒ gatePresent true) and wrongly relax. The
+  // leg-scoped gate check (each --nodes leg must reach the sink only through a code-reviewer) refuses.
+  {
+    const { repoRoot, planPath } = makeGroupRepo({ aSet: 'docs/a.md', bSet: 'docs/b.md', policy: 'disjoint', noGate: true, legRole: 'doc-updater' });
+    const r = runValidator(repoRoot, [planPath, '--parallel-safe', '--nodes', 'A,B', '--write-overlap-consent', '--json']);
+    assert(r.result === 'refuse', 'T463-FLOOR-docsgate: docs-only legs with no post-dominating reviewer do NOT relax (no vacuous gate), got ' + JSON.stringify(r));
+    cleanup(repoRoot);
+  }
+  // T463-FLOOR-exact: EXACT-file overlap + policy:disjoint + consent + gate → refuse (exact never relaxes).
+  {
+    const { repoRoot, planPath } = makeGroupRepo({ aSet: 'crates/a/x.rs', bSet: 'crates/a/x.rs', policy: 'disjoint' });
+    const r = runValidator(repoRoot, [planPath, '--parallel-safe', '--nodes', 'A,B', '--write-overlap-consent', '--json']);
+    assert(r.result === 'refuse', 'T463-FLOOR-exact: exact-file overlap never relaxes, got ' + JSON.stringify(r));
+    assert((r.overlapping || []).some(o => o.kind === 'exact'), 'T463-FLOOR-exact: overlapping names the exact kind');
+    cleanup(repoRoot);
+  }
+  // T463-FLOOR-protected: a PROTECTED concrete file (CHANGELOG.md) in a coarse-disjoint pair → refuse.
+  {
+    const { repoRoot, planPath } = makeGroupRepo({ aSet: 'crates/a/CHANGELOG.md', bSet: COARSE_B, policy: 'disjoint' });
+    const r = runValidator(repoRoot, [planPath, '--parallel-safe', '--nodes', 'A,B', '--write-overlap-consent', '--json']);
+    assert(r.result === 'refuse', 'T463-FLOOR-protected: a PROTECTED file blocks at every tier, got ' + JSON.stringify(r));
+    cleanup(repoRoot);
+  }
+  // T463-FREEZE: write_overlap_policy:exact is refused at freeze (deferred); disjoint/off are legal.
+  {
+    const { repoRoot, planPath } = makeGroupRepo({ aSet: 'a.js', bSet: 'b.js', policy: 'exact' });
+    const r = runValidator(repoRoot, [planPath, '--freeze', '--json']);
+    assert(r.result === 'refuse' && (r.errors || []).join(' ').includes('write_overlap_policy'),
+      'T463-FREEZE: write_overlap_policy:exact refused at freeze, got ' + JSON.stringify(r.errors || r));
+    cleanup(repoRoot);
+  }
+  // T463-PURITY (AC13): disjointWriteSets adds `kind` but its VERDICT is UNCHANGED — the pure callers
+  // (scanClaimedOverlap / antichain / G-SEL-4) read verdict and ignore kind.
+  {
+    const exact = planValidator ? null : null; // (use the classifier directly)
+    const classifier = require('./kaola-workflow-classifier');
+    const ex = classifier.disjointWriteSets([new Set(['x.js']), new Set(['x.js'])]);
+    assert(ex.verdict === 'red' && ex.kind === 'exact', 'T463-PURITY: exact → verdict red (unchanged) + kind exact');
+    const co = classifier.disjointWriteSets([new Set(['crates/a/x.rs']), new Set(['crates/b/y.rs'])]);
+    assert(co.verdict === 'red' && co.kind === 'coarse', 'T463-PURITY: coarse → verdict red (unchanged) + kind coarse');
+    const sh = classifier.disjointWriteSets([new Set(['scripts/a.js']), new Set(['scripts/b.js'])]);
+    assert(sh.verdict === 'yellow' && sh.kind === 'shared-infra', 'T463-PURITY: shared-infra → verdict yellow (unchanged) + kind shared-infra');
+    const gr = classifier.disjointWriteSets([new Set(['p/a.js']), new Set(['q/b.js'])]);
+    assert(gr.verdict === 'green' && gr.kind === null, 'T463-PURITY: disjoint → verdict green (unchanged) + kind null');
+    assert(classifier.isProtected('CHANGELOG.md') === true && classifier.isProtected('crates/a/x.rs') === false,
+      'T463-PURITY: isProtected true for CHANGELOG.md, false for an ordinary file');
   }
 
   // -------------------------------------------------------------------------

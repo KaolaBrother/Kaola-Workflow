@@ -60,6 +60,7 @@ const OPERATOR_HINT_REGISTRY = {
   nodes_unparseable: () => 'Plan has no parseable ## Nodes table. Check the Markdown table syntax and re-freeze.',
   no_unique_sink: () => 'Plan has no unique finalize sink node. Add exactly one `finalize` role node and re-freeze.',
   speculative_policy_unsupported: (ctx) => `speculative_open_policy: "${ctx.value || '(value)'}" is not supported at freeze. Use off (default) or consent — auto (speculative WRITE overlap) is designed-but-deferred. Edit ## Meta and re-freeze.`,
+  write_overlap_policy_unsupported: (ctx) => `write_overlap_policy: "${ctx.value || '(value)'}" is not supported at freeze. Use off (default), disjoint, or coarse — exact (exact-file optimism) is designed-but-deferred. Edit ## Meta and re-freeze.`,
   gate_unsatisfied: (ctx) => `Gate check failed: ${ctx.reason || 'a required reviewer did not complete'}. Ensure all code nodes are post-dominated by a completed reviewer.`,
   verdict_not_pass: (ctx) => `Verdict check failed for node ${ctx.nodeId || '(unknown)'}. Check .cache/${ctx.nodeId || '<node-id>'}.md for verdict: pass and findings_blocking: 0.`,
   node_not_found: (ctx) => `Node "${ctx.nodeId || '(unknown)'}" not found in the frozen plan. Check the node ID.`,
@@ -261,6 +262,16 @@ function parseSpeculativePolicy(content) {
   const meta = classifier.sectionBody(content, 'Meta');
   const m = String(meta || '').match(/^speculative_open_policy:[ \t]*(\S+)[ \t]*$/m);
   return m ? m[1].trim() : schema.SPECULATIVE_OPEN_POLICY_DEFAULT;
+}
+// #463 (D-419 write-overlap): the per-plan `write_overlap_policy` lives in `## Meta` as a single
+// `write_overlap_policy: off | disjoint | coarse` line — hash-covered + Meta-scoped (same discipline as
+// parseSpeculativePolicy). Absent => default 'off' (the permanent PREVENT fallback). `exact` (exact-file
+// optimism) and any other token are refused at freeze (validatePlan). Distinct field from #439's read-side
+// speculative_open_policy.
+function parseWriteOverlapPolicy(content) {
+  const meta = classifier.sectionBody(content, 'Meta');
+  const m = String(meta || '').match(/^write_overlap_policy:[ \t]*(\S+)[ \t]*$/m);
+  return m ? m[1].trim() : schema.WRITE_OVERLAP_POLICY_DEFAULT;
 }
 // Parse the plan into validator-shaped nodes. Parity with the executor's reader is
 // load-bearing: section slicing is delegated to classifier.sectionBody (FENCE-AWARE) and
@@ -529,6 +540,26 @@ function gateUncovered(nodes, isTarget, gateRole, sink) {
     if (reaches) violations.push(n.id);
   }
   return violations;
+}
+
+// #463 (D-419 write-overlap): the SINGLE relaxation predicate — is an overlapping write pair safe to
+// DOWNGRADE from red/yellow to ok under the active write_overlap_policy? ALL of these must hold:
+//   (1) per-run consent present (the never-persisted carrier) AND a synthesizer/code-reviewer gate
+//       post-dominates the legs (gatePresent — the caller proves it via gateUncovered);
+//   (2) the overlap CLASS is relaxable for the tier: `coarse` (non-shared, exact-file-disjoint) relaxes
+//       at disjoint+ ; `shared-infra` relaxes only at coarse. An `exact` overlap NEVER relaxes here
+//       (real reconciliation is the runtime merge_conflict barrier's job, deferred);
+//   (3) NEITHER set contains a PROTECTED concrete file (lockfiles / CHANGELOG / ROADMAP / manifests /
+//       archive artifacts / the ×4 schema anchor stay blocking at EVERY tier, even when the area relaxes).
+// Default off ⇒ this returns false for every pair ⇒ today's PREVENT verdict stands verbatim.
+function writeOverlapRelaxable(dj, setA, setB, policy, consent, gatePresent) {
+  if (policy === 'off' || !consent || !gatePresent) return false;
+  if (!dj || !dj.kind) return false;
+  for (const p of setA) if (classifier.isProtected(p)) return false;
+  for (const p of setB) if (classifier.isProtected(p)) return false;
+  if (dj.kind === 'coarse') return policy === 'disjoint' || policy === 'coarse';
+  if (dj.kind === 'shared-infra') return policy === 'coarse';
+  return false; // exact (or any future class) never relaxes at this seam
 }
 
 // --- sensitivity ------------------------------------------------------------
@@ -917,6 +948,13 @@ function validatePlan(content, opts) {
   const specPolicy = parseSpeculativePolicy(content);
   if (!schema.SPECULATIVE_OPEN_POLICY_LEGAL.includes(specPolicy)) {
     return { result: 'refuse', reason: 'speculative_policy_unsupported', operator_hint: getOperatorHint('speculative_policy_unsupported', { value: specPolicy }), errors: ['speculative_open_policy: "' + specPolicy + '" is not supported at freeze (legal: ' + schema.SPECULATIVE_OPEN_POLICY_LEGAL.join('|') + '; auto is deferred with speculative write-overlap)'], planHash: computePlanHash(content) };
+  }
+  // #463 (D-419 write-overlap): write_overlap_policy is off|disjoint|coarse (default off). `exact`
+  // (exact-file optimism) is DESIGNED-but-refused at freeze; any other value is out of grammar. Distinct
+  // field from #439's speculative_open_policy. Cheap Meta read, before the graph algorithms.
+  const writePolicy = parseWriteOverlapPolicy(content);
+  if (!schema.WRITE_OVERLAP_POLICY_LEGAL.includes(writePolicy)) {
+    return { result: 'refuse', reason: 'write_overlap_policy_unsupported', operator_hint: getOperatorHint('write_overlap_policy_unsupported', { value: writePolicy }), errors: ['write_overlap_policy: "' + writePolicy + '" is not supported at freeze (legal: ' + schema.WRITE_OVERLAP_POLICY_LEGAL.join('|') + '; exact is deferred)'], planHash: computePlanHash(content) };
   }
   const roles = opts.installedRoles || installedRoles(opts.root || process.cwd());
   const fanoutCap = Number.isInteger(opts.fanoutCap) ? opts.fanoutCap : schema.resolveFanoutCap(process.env);
@@ -1767,9 +1805,26 @@ function main() {
       process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: ' + out.errors[0]) + '\n');
       process.exitCode = 1; return;
     }
+    // #463 (D-419 write-overlap): the gated PREVENT→DETECT relaxation context. policy = the plan's
+    // write_overlap_policy (default off); consent = the per-run --write-overlap-consent carrier;
+    // gatePresent = a code-reviewer gate post-dominates THE RELAXED LEGS THEMSELVES (each --nodes member
+    // reaches the unique sink ONLY through a code-reviewer). This is LEG-SCOPED on purpose: a WHOLE-PLAN
+    // producesCode check returns vacuously-empty for docs-only legs (no code-producing nodes ⇒ no
+    // gateUncovered targets), which would relax a docs-only frontier with NO reviewer covering it
+    // (adversarial-verifier finding R1). Targeting the leg ids makes the gate cover exactly the nodes
+    // being downgraded, regardless of whether they produce code. At off / no-consent / no-gate, NOTHING
+    // relaxes ⇒ byte-identical to today.
+    const writePolicy = parseWriteOverlapPolicy(content);
+    const writeConsent = args.includes('--write-overlap-consent');
+    const planSink = uniqueSink(allNodes);
+    const legIdSet = new Set(ids);
+    const gatePresent = !!planSink && gateUncovered(allNodes, n => legIdSet.has(n.id), 'code-reviewer', planSink).length === 0;
     // Pair-loop: exact-file overlap (the antichain RED rule) OR coarse/shared-infra non-green
-    // (classifier.disjointWriteSets — the antichain ASK rule). Either ⇒ NOT parallel-safe.
+    // (classifier.disjointWriteSets — the antichain ASK rule). Either ⇒ NOT parallel-safe — UNLESS the
+    // #463 relaxation predicate downgrades a coarse/shared-infra (exact-file-disjoint, non-PROTECTED)
+    // overlap under the active policy + consent + a post-dominating gate. An EXACT overlap never relaxes.
     const overlapping = [];
+    const relaxed = [];
     for (let i = 0; i < sel.length; i++) {
       for (let j = i + 1; j < sel.length; j++) {
         const A = sel[i], B = sel[j];
@@ -1777,11 +1832,18 @@ function main() {
         for (const p of A.writeSet) if (B.writeSet.has(p)) { exact = p; break; }
         if (exact) { overlapping.push({ a: A.id, b: B.id, kind: 'exact', path: exact }); continue; }
         const dj = classifier.disjointWriteSets([A.writeSet, B.writeSet]);
-        if (dj.verdict !== 'green') overlapping.push({ a: A.id, b: B.id, kind: dj.verdict, reasoning: dj.reasoning });
+        if (dj.verdict === 'green') continue;
+        if (writeOverlapRelaxable(dj, A.writeSet, B.writeSet, writePolicy, writeConsent, gatePresent)) {
+          relaxed.push({ a: A.id, b: B.id, kind: dj.kind, policy: writePolicy });
+          continue; // #463: relaxed → NOT counted as overlapping (the original AC delta)
+        }
+        overlapping.push({ a: A.id, b: B.id, kind: dj.verdict, reasoning: dj.reasoning });
       }
     }
     const ok = overlapping.length === 0;
     const out = { result: ok ? 'ok' : 'refuse', nodes: ids, overlapping };
+    // #463: surface what was relaxed (and under which policy) so the caller/audit can see the downgrade.
+    if (relaxed.length) out.relaxed = relaxed;
     if (!ok) { out.reason = 'overlapping_write_sets'; out.operator_hint = getOperatorHint('overlapping_write_sets', { nodes: ids }); }
     process.stdout.write((json ? JSON.stringify(out) : (ok ? 'parallel-safe ok: ' + ids.join(',') : 'typed refusal: overlapping_write_sets (' + overlapping.map(o => o.a + '/' + o.b + ':' + o.kind).join(', ') + ')')) + '\n');
     if (!ok) process.exitCode = 1;
@@ -2349,6 +2411,7 @@ module.exports = {
   parseGoal,
   parseLedger,
   parseSpeculativePolicy,
+  parseWriteOverlapPolicy,
   uniqueSink,
   gateUncovered,
   verifyGateExecution,

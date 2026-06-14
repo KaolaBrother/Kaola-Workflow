@@ -154,6 +154,22 @@ const SPECULATIVE_OPEN_POLICY_DEFAULT = 'off';
 const SPECULATIVE_OPEN_POLICY_LEGAL = Object.freeze(['off', 'consent']);
 const SPECULATIVE_OPEN_POLICY_REFUSED_AT_FREEZE = Object.freeze(['auto']);
 
+// #463 (D-419 write-overlap): the per-plan `## Meta` field `write_overlap_policy` — the WRITE-side knob,
+// DISTINCT from #439's read-side speculative_open_policy (writes clobber where reads do not, so they are
+// gated with AT LEAST as much; overloading the read field would be a category error). Hash-covered;
+// default `off` = today's PREVENT behavior byte-for-byte (no co-open of an overlapping write frontier).
+// `disjoint` relaxes a non-shared coarse-area overlap when the concrete files are exact-disjoint and none
+// is PROTECTED (the original #463 AC). `coarse` additionally relaxes a shared-infra AREA overlap (still
+// exact-disjoint, no PROTECTED file). `exact` (exact-file / overlapping-region optimism) is DESIGNED-but-
+// refused at freeze (deferred). Relaxation beyond `off` ALSO requires the per-run, never-persisted
+// write-side consent carrier (the `--write-overlap-consent` flag — the write analogue of #439's
+// `--speculative-consent`) AND a code-reviewer gate post-dominating the relaxed legs (validator-confirmed,
+// leg-scoped). Mirrors speculative_open_policy's shape (Meta, hash-covered, default off, a
+// parseSpeculativePolicy-style freeze check).
+const WRITE_OVERLAP_POLICY_DEFAULT = 'off';
+const WRITE_OVERLAP_POLICY_LEGAL = Object.freeze(['off', 'disjoint', 'coarse']);
+const WRITE_OVERLAP_POLICY_REFUSED_AT_FREEZE = Object.freeze(['exact']);
+
 // PURE (no fs): parse a gate/skeptic role's `.cache/{node-id}.md` for its machine verdict. Native
 // multiline regex ONLY (no classifier — cross-edition byte-identity). FENCE-BLIND BY ANCHOR: a verdict
 // line is recognised ONLY at column 0 (`^verdict:` no leading whitespace). findings_blocking optional
@@ -569,6 +585,9 @@ module.exports = {
   SPECULATIVE_OPEN_POLICY_DEFAULT,
   SPECULATIVE_OPEN_POLICY_LEGAL,
   SPECULATIVE_OPEN_POLICY_REFUSED_AT_FREEZE,
+  WRITE_OVERLAP_POLICY_DEFAULT,
+  WRITE_OVERLAP_POLICY_LEGAL,
+  WRITE_OVERLAP_POLICY_REFUSED_AT_FREEZE,
   parseNodeVerdict,
   parseNodeSelector,
   FINDING_SCOPE_VOCABULARY,
