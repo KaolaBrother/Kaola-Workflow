@@ -40,6 +40,12 @@
 // FORGE-NEUTRAL: this file carries no forge-specific CLI tokens and makes no
 // forge API calls. The codex plugin copy is byte-identical; the gitlab/gitea
 // ports are rename-normalised identical.
+//
+// SELF-HOST-ONLY (#475): this producer runs the built-in npm edition chains for the
+// Kaola-Workflow self-host. A consumer (non-npm) product repo does NOT run it — its
+// finalize gate is the agent-recorded `.cache/final-validation.md` evidence, enforced
+// by `plan-validator --finalize-check` (consumer mode). The v6.2.0 `kaola-workflow/chains.json`
+// consumer escape hatch is retired (Pure option A — no opt-in middle-ground).
 // ---------------------------------------------------------------------------
 
 const fs = require('fs');
@@ -78,50 +84,19 @@ function getWorkTreeHash(cwd) {
   return crypto.createHash('sha256').update(diff).digest('hex');
 }
 
-// #464: resolve the validation chain command set for THIS repo, so Kaola-Workflow's
-// finalization receipt works in non-npm product repos (e.g. a Swift/Xcode app), not just
-// in the Kaola-Workflow self-host. Precedence:
-//   1. Repo-local config `kaola-workflow/chains.json` (`{ "chains": [{name, command}, ...] }`)
-//      — wins whenever it declares at least one valid {name, command} entry.
-//   2. The built-in npm edition chains, but ONLY for the KNOWN_CHAINS whose
-//      `test:kaola-workflow:<name>` script is actually declared in `package.json` (so the
-//      Kaola-Workflow self-host keeps its four chains, and a `--chains claude` subset works).
-//   3. Otherwise a typed refusal `chains_config_missing` — instead of running `npm run` against
-//      scripts that cannot exist and writing a receipt full of meaningless 254s.
-// The config path uses a slash (`kaola-workflow/`), never a `kaola-workflow-` token, so the
-// file stays forge-neutral (rename-normalize cannot touch it) across all four editions.
+// #475 (supersedes the #464 consumer escape hatch): run-chains.js is now SELF-HOST-only.
+// The v6.2.0 per-repo `kaola-workflow/chains.json` consumer contract is RETIRED — there is no
+// opt-in middle-ground (Pure option A). A consumer (non-npm) product repo no longer authors
+// chains.json + re-runs a suite to produce a chain receipt; its finalize gate is the agent's
+// recorded `.cache/final-validation.md` evidence ("Agent Owns Reasoning; Scripts Own Atomicity",
+// #44), enforced by `plan-validator --finalize-check` in consumer mode. resolveChains therefore
+// resolves ONLY the built-in npm edition chains for the KNOWN_CHAINS whose `test:kaola-workflow:<name>`
+// script is declared in package.json (the self-host); otherwise a typed `chains_config_missing`
+// refusal (a consumer repo simply never runs this producer).
 function readJsonOr(p, dflt) {
   try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch (_) { return dflt; }
 }
 function resolveChains(cwd) {
-  const configPath = path.join(cwd, 'kaola-workflow', 'chains.json');
-  if (fs.existsSync(configPath)) {
-    // The file exists, so it is a deliberate config attempt: validate it STRICTLY and fail
-    // closed (chains_config_invalid) on any problem — never silently drop a malformed entry
-    // (that would run fewer chains than the operator declared and pass finalize green) and
-    // never fall through to the npm defaults (which would mask a broken config).
-    let config;
-    try { config = JSON.parse(fs.readFileSync(configPath, 'utf8')); }
-    catch (e) { return { error: 'chains_config_invalid', detail: 'kaola-workflow/chains.json is not parseable JSON: ' + (e && e.message ? e.message.split('\n')[0] : 'parse error') }; }
-    if (!config || typeof config !== 'object' || !Array.isArray(config.chains)) {
-      return { error: 'chains_config_invalid', detail: 'kaola-workflow/chains.json must be an object with a "chains" array of {name, command}' };
-    }
-    const commands = {};
-    const names = [];
-    for (const c of config.chains) {
-      const ok = c && typeof c === 'object' && typeof c.name === 'string' && typeof c.command === 'string' && c.name.trim() && c.command.trim();
-      if (!ok) {
-        return { error: 'chains_config_invalid', detail: 'kaola-workflow/chains.json has an entry missing a non-empty {name, command}: ' + JSON.stringify(c) };
-      }
-      const n = c.name.trim();
-      if (!Object.prototype.hasOwnProperty.call(commands, n)) names.push(n);
-      commands[n] = c.command.trim();
-    }
-    if (!names.length) {
-      return { error: 'chains_config_invalid', detail: 'kaola-workflow/chains.json declares an empty "chains" array — add at least one {name, command}' };
-    }
-    return { source: 'repo-config', commands, names };
-  }
   const pkg = readJsonOr(path.join(cwd, 'package.json'), null);
   const scripts = (pkg && pkg.scripts && typeof pkg.scripts === 'object') ? pkg.scripts : {};
   const npmNames = KNOWN_CHAINS.filter(n => typeof scripts['test:kaola-workflow:' + n] === 'string');
@@ -132,7 +107,7 @@ function resolveChains(cwd) {
   }
   return {
     error: 'chains_config_missing',
-    detail: 'no kaola-workflow/chains.json and package.json declares no test:kaola-workflow:* scripts — this repo cannot run the default npm edition chains',
+    detail: 'package.json declares no test:kaola-workflow:* scripts — this repo cannot run the npm edition chains. A consumer (non-npm) repo gates finalize on the agent-recorded .cache/final-validation.md (#475), not a chain receipt.',
   };
 }
 
@@ -174,8 +149,8 @@ function main(argv) {
         );
         return 1;
       }
-      // Chain-name validity is checked AFTER chain resolution (a repo-config chain name
-      // like "build" is valid even though it is not in KNOWN_CHAINS).
+      // Chain-name validity is checked AFTER chain resolution (against the resolved npm-default
+      // edition names + any --mock-chain name), not against a hardcoded list.
       waivers[name] = issue;
     } else if (a === '--output') {
       outputPath = path.resolve(process.cwd(), args[++i]);
@@ -206,15 +181,18 @@ function main(argv) {
 
   const cwd = process.cwd();
 
-  // #464: resolve the chain command set for this repo (repo-config > npm-default > refuse).
+  // #475: resolve the npm edition chain set for this repo (npm-default > chains_config_missing refuse).
+  // The chains.json repo-config tier is retired (consumer repos gate on final-validation.md).
   // `--mock-chain` (a test hook) supplies a command for a name directly, so a mocked name is
   // available even when no config/npm exists — the refusal only fires when there is nothing to run.
   const resolved = resolveChains(cwd);
   const mockNames = Object.keys(mocks);
   if (resolved.error && mockNames.length === 0) {
-    const hint = resolved.error === 'chains_config_missing'
-      ? 'Add kaola-workflow/chains.json with a "chains" array of {name, command} (e.g. {"name":"build","command":"xcodebuild test ..."}) for a non-npm repo, or declare the test:kaola-workflow:* scripts in package.json.'
-      : 'Fix kaola-workflow/chains.json so its "chains" array has at least one {name, command} entry.';
+    // #475: run-chains.js is self-host-only. A consumer (non-npm) repo does NOT run this producer —
+    // its finalize gate is the agent-recorded .cache/final-validation.md, enforced by
+    // plan-validator --finalize-check in consumer mode. So the only refusal is chains_config_missing
+    // (this repo declares no edition test scripts), and the hint points at the consumer contract.
+    const hint = 'This repo declares no test:kaola-workflow:* scripts, so it cannot run the npm edition chains. Only the Kaola-Workflow self-host runs these; a consumer (non-npm) repo does NOT run run-chains.js — finalize gates on the agent-recorded .cache/final-validation.md (#475).';
     if (asJson) {
       process.stdout.write(JSON.stringify({ result: 'refuse', reason: resolved.error, operator_hint: hint, errors: [resolved.detail] }) + '\n');
     } else {
@@ -235,7 +213,7 @@ function main(argv) {
   // `--chains ","` (splits/filters to []) or a config that resolves to nothing.
   if (chains.length === 0) {
     if (asJson) {
-      process.stdout.write(JSON.stringify({ result: 'refuse', reason: 'no_chains', operator_hint: 'No chains to run. Pass --chains with at least one valid chain name, or declare chains in kaola-workflow/chains.json.' }) + '\n');
+      process.stdout.write(JSON.stringify({ result: 'refuse', reason: 'no_chains', operator_hint: 'No chains to run. Pass --chains with at least one valid edition chain name (a declared `test:kaola-workflow:*` script). A consumer (non-npm) repo does not run chains — finalize gates on the agent-recorded .cache/final-validation.md (#475).' }) + '\n');
     } else {
       process.stderr.write('run-chains: no chains to run — the resolved/requested chain set is empty\n');
     }

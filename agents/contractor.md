@@ -267,6 +267,13 @@ node "$RUN_CHAINS_JS"
 Capture the real exit code. If the exit is non-zero, surface it to the
 orchestrator and stop — do not proceed to Step 8 with a red or missing receipt.
 
+**Consumer (non-npm) repos (#475).** In a product repo without `test:kaola-workflow:*`
+scripts, `kaola-workflow-run-chains.js` refuses `chains_config_missing` — it is **self-host-only**,
+and that refusal is EXPECTED, not a failure. A consumer repo's finalize gate is the
+agent-recorded `.cache/final-validation.md` (a column-0 `verdict: pass`), enforced by
+`--finalize-check` in consumer mode. Skip the chain receipt and confirm that validation evidence
+exists before Step 8; do NOT author a `kaola-workflow/chains.json` (the v6.2.0 opt-in is retired).
+
 ### Step 8c.2 - Run-gap sweep
 
 Before the final commit, sweep run-discovered gaps and gate on their disposition.

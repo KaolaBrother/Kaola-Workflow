@@ -87,6 +87,9 @@ const OPERATOR_HINT_REGISTRY = {
   chains_unverified: () => 'No chain receipt found. Run kaola-gitlab-workflow-run-chains.js after the last commit so HEAD is covered.',
   chains_stale: () => 'Chain receipt is stale — the tree advanced since the chains ran. Regenerate the receipt over HEAD.',
   chains_red: () => 'One or more chains are RED with no waiver. Fix the failing chain or waive it explicitly (--accept-known-red <name>:<open-issue>).',
+  // #475: consumer (non-npm) finalize gate — the agent's recorded validation IS the gate (no chain receipt).
+  final_validation_unverified: () => 'No agent validation evidence at .cache/final-validation.md. In a consumer (non-npm) repo the agent owns verification (#44): record .cache/final-validation.md with the validation result + a column-0 `verdict: pass` before finalize.',
+  final_validation_failed: () => '.cache/final-validation.md is present but does not record `verdict: pass` (column 0). The agent\'s own validation did not pass — remediate and re-record, or fix the failing checks before finalize.',
   plan_not_frozen: () => 'plan_hash missing — the plan is not frozen. Run --freeze to stamp the hash.',
   plan_hash_mismatch: () => 'plan_hash mismatch — workflow-plan.md was modified after freeze. Re-run --freeze to re-stamp.',
   unknown_role: (ctx) => `Unknown role "${ctx.role || '(unknown)'}" (node ${ctx.nodeId || '?'}) is not in the installed library. Check agents/ and re-freeze.`,
@@ -1744,10 +1747,13 @@ function printHelp() {
     '                 exit 1 on any failure. Per-node (--node-id ID): check one node; non-gate roles self-skip (exit 0).\n' +
     '  --selector-check --node-id ID  check which select arm the selector_source node chose, and compute which arms to mark n/a.\n' +
     '                 Non-selector nodes return ok:true/isSelector:false (never false-blocks). Missing/foreign selector => exit 1.\n' +
-    '  --finalize-check  the FINALIZE-TIME gate (#424/#432): (A) chain-receipt gate — a fresh, HEAD-bound, all-green\n' +
-    '                 .cache/chain-receipt.json must exist (chains_unverified > chains_stale > chains_red); then (B) attribution\n' +
-    '                 sweep — every `git diff <base>...HEAD` change must be in the .md allowband OR a `complete` node\'s declared\n' +
-    '                 write set, else unattributed_change. [--base REF (default main)] [--receipt PATH] [--head SHA]\n' +
+    '  --finalize-check  the FINALIZE-TIME gate (#424/#432/#475): (A) validation gate, DUAL-MODE by repo kind —\n' +
+    '                 SELF-HOST (package.json declares test:kaola-workflow:*): a fresh HEAD-bound all-green\n' +
+    '                 .cache/chain-receipt.json (chains_unverified > chains_stale > chains_red); CONSUMER (non-npm):\n' +
+    '                 the agent-recorded .cache/final-validation.md with a column-0 `verdict: pass` (final_validation_unverified\n' +
+    '                 > final_validation_failed). Then (B) attribution sweep — every `git diff <base>...HEAD` change must be in\n' +
+    '                 the .md allowband OR a `complete` node\'s declared write set, else unattributed_change.\n' +
+    '                 [--base REF (default main)] [--receipt PATH (self-host)] [--head SHA (self-host)]\n' +
     '  --parallel-safe --nodes A,B[,C]  read-only check (#437): are the named nodes\' declared write sets pairwise-disjoint\n' +
     '                 (safe to co-open as a lane group)? Exposes the antichain pair-loop (exact-file + classifier disjointness).\n' +
     '                 result:ok | refuse(reason:overlapping_write_sets,overlapping[]). No fs/git writes.\n' +
@@ -2161,44 +2167,85 @@ function main() {
     return;
   }
   if (args.includes('--finalize-check')) {
-    // #424 (D-424-01) part 3 + #432 (D-432-01) part 3: the FINALIZE-TIME gate. Runs ONLY at
+    // #424 (D-424-01) part 3 + #432 (D-432-01) part 3 + #475: the FINALIZE-TIME gate. Runs ONLY at
     // finalization (cmdFinalize), never per-node. Two coupled checks, precedence-ordered:
-    //   (A) chain-receipt gate (#432): a machine-verifiable `.cache/chain-receipt.json` bound to HEAD
-    //       must exist, be fresh, and be all-green-or-waived — prose "all four chains green" can no
-    //       longer pass.  chains_unverified > chains_stale > chains_red.
+    //   (A) validation gate — DUAL-MODE by repo kind (#475 Pure option A):
+    //       • SELF-HOST (npm): a machine-verifiable `.cache/chain-receipt.json` bound to HEAD must
+    //         exist, be fresh, and be all-green-or-waived (#432). chains_unverified > chains_stale >
+    //         chains_red. UNCHANGED.
+    //       • CONSUMER (non-npm product repo, e.g. Swift/Xcode): the agent OWNS verification (#44), so
+    //         the gate is the agent's recorded `.cache/final-validation.md` (presence + a column-0
+    //         `verdict: pass`) — NOT a re-executed chain receipt. A script that re-ran the suite the
+    //         `final-validation` node already ran is the over-engineering #475 removes.
+    //         final_validation_unverified > final_validation_failed.
     //   (B) attribution sweep (#424): every file changed since the branch diverged from main must be
     //       either in the narrow allowband OR covered by a `complete` node's declared write set; an
-    //       orphan (crash residue, out-of-window edit) surfaces as `unattributed_change`.
-    // The chain-receipt gate runs FIRST (an unverified/stale/red chain set is the higher-precedence
-    // finalize blocker). `--base` overrides the integration branch (default main); `--receipt` and
-    // `--head` override the receipt path / current-HEAD probe (test seams).
+    //       orphan (crash residue, out-of-window edit) surfaces as `unattributed_change`. This sweep is
+    //       the allowband-aware freshness check for BOTH modes (a non-allowband change with no
+    //       attributing node is caught here), so the consumer gate needs no separate staleness probe.
+    // The validation gate runs FIRST. `--base` overrides the integration branch (default main);
+    // `--receipt`/`--head` override the receipt path / current-HEAD probe (self-host test seams).
     const flagVal = name => { const i = args.indexOf(name); return i >= 0 && i + 1 < args.length ? args[i + 1] : null; };
     const cacheDir = path.join(path.dirname(path.resolve(planPath)), '.cache');
-    // ---- (A) chain-receipt gate (#432) ----
-    const receiptPath = flagVal('--receipt') || path.join(cacheDir, 'chain-receipt.json');
-    let receiptRaw = null;
-    try { receiptRaw = fs.readFileSync(receiptPath, 'utf8'); } catch (_) { receiptRaw = null; }
-    if (receiptRaw == null) {
-      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'chains_unverified', operator_hint: getOperatorHint('chains_unverified'), errors: ['no chain receipt at ' + receiptPath + ' — run kaola-gitlab-workflow-run-chains.js after the LAST commit so HEAD is covered; prose "all four chains green" cannot pass'] }) : 'typed refusal: chains_unverified (no ' + receiptPath + ')') + '\n');
-      process.exitCode = 1; return;
-    }
-    let receipt = null;
-    try { receipt = JSON.parse(receiptRaw); } catch (_) { receipt = null; }
-    if (!receipt || typeof receipt !== 'object') {
-      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'chains_unverified', operator_hint: getOperatorHint('chains_unverified'), errors: ['chain receipt at ' + receiptPath + ' is unparseable JSON — regenerate it'] }) : 'typed refusal: chains_unverified (unparseable receipt)') + '\n');
-      process.exitCode = 1; return;
-    }
-    const currentHead = flagVal('--head') || (() => { try { return execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(); } catch (_) { return ''; } })();
-    if (!currentHead || String(receipt.headSha || '').trim() !== currentHead) {
-      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'chains_stale', operator_hint: getOperatorHint('chains_stale'), errors: ['chain receipt headSha "' + (receipt.headSha || '(missing)') + '" != current HEAD "' + (currentHead || '(unresolved)') + '" — the tree advanced since the chains ran; regenerate the receipt over HEAD'] }) : 'typed refusal: chains_stale (' + (receipt.headSha || 'missing') + ' != ' + (currentHead || 'unresolved') + ')') + '\n');
-      process.exitCode = 1; return;
-    }
-    const chains = Array.isArray(receipt.chains) ? receipt.chains : [];
-    const redChains = chains.filter(c => c && c.exitCode !== 0 && c.accepted_red !== true);
-    if (redChains.length) {
-      const names = redChains.map(c => c.name || '(unnamed)').join(', ');
-      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'chains_red', operator_hint: getOperatorHint('chains_red'), redChains: redChains.map(c => ({ name: c.name || null, exitCode: c.exitCode })), errors: ['chain(s) RED with no waiver: ' + names + ' — fix the chain or waive it explicitly (--accept-known-red <name>:<open-issue>)'] }) : 'typed refusal: chains_red (' + names + ')') + '\n');
-      process.exitCode = 1; return;
+    // #475 DISCRIMINATOR — self-host (npm) iff package.json declares an EDITION chain script
+    // `test:kaola-workflow:<claude|codex|gitlab|gitea>` — the EXACT predicate run-chains.js
+    // resolveChains uses (KNOWN_CHAINS membership, not a loose prefix), so the producer and the gate
+    // never disagree about the repo kind. Read package.json at the GIT TOP-LEVEL (the true repo root),
+    // not findRepoRoot's `root`: an intermediate `agents/` dir can make findRepoRoot stop early
+    // (e.g. at `kaola-workflow/`), which would misclassify a real self-host as a consumer and skip the
+    // chain-receipt gate — a fail-OPEN. The git top-level is unambiguous; fall back to `root` if git
+    // cannot resolve it.
+    let selfHostNpm = false;
+    try {
+      let pkgRoot = root;
+      try { pkgRoot = execFileSync('git', ['-C', root, 'rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim() || root; } catch (_) { pkgRoot = root; }
+      const pkg = JSON.parse(fs.readFileSync(path.join(pkgRoot, 'package.json'), 'utf8'));
+      const scripts = (pkg && pkg.scripts && typeof pkg.scripts === 'object') ? pkg.scripts : {};
+      selfHostNpm = ['claude', 'codex', 'gitlab', 'gitea'].some(n => typeof scripts['test:kaola-workflow:' + n] === 'string');
+    } catch (_) { selfHostNpm = false; }
+    let chains = [];
+    const validationMode = selfHostNpm ? 'chain-receipt' : 'final-validation';
+    if (selfHostNpm) {
+      // ---- (A) chain-receipt gate (#432) — SELF-HOST only; behavior UNCHANGED ----
+      const receiptPath = flagVal('--receipt') || path.join(cacheDir, 'chain-receipt.json');
+      let receiptRaw = null;
+      try { receiptRaw = fs.readFileSync(receiptPath, 'utf8'); } catch (_) { receiptRaw = null; }
+      if (receiptRaw == null) {
+        process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'chains_unverified', operator_hint: getOperatorHint('chains_unverified'), errors: ['no chain receipt at ' + receiptPath + ' — run kaola-gitlab-workflow-run-chains.js after the LAST commit so HEAD is covered; prose "all four chains green" cannot pass'] }) : 'typed refusal: chains_unverified (no ' + receiptPath + ')') + '\n');
+        process.exitCode = 1; return;
+      }
+      let receipt = null;
+      try { receipt = JSON.parse(receiptRaw); } catch (_) { receipt = null; }
+      if (!receipt || typeof receipt !== 'object') {
+        process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'chains_unverified', operator_hint: getOperatorHint('chains_unverified'), errors: ['chain receipt at ' + receiptPath + ' is unparseable JSON — regenerate it'] }) : 'typed refusal: chains_unverified (unparseable receipt)') + '\n');
+        process.exitCode = 1; return;
+      }
+      const currentHead = flagVal('--head') || (() => { try { return execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(); } catch (_) { return ''; } })();
+      if (!currentHead || String(receipt.headSha || '').trim() !== currentHead) {
+        process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'chains_stale', operator_hint: getOperatorHint('chains_stale'), errors: ['chain receipt headSha "' + (receipt.headSha || '(missing)') + '" != current HEAD "' + (currentHead || '(unresolved)') + '" — the tree advanced since the chains ran; regenerate the receipt over HEAD'] }) : 'typed refusal: chains_stale (' + (receipt.headSha || 'missing') + ' != ' + (currentHead || 'unresolved') + ')') + '\n');
+        process.exitCode = 1; return;
+      }
+      chains = Array.isArray(receipt.chains) ? receipt.chains : [];
+      const redChains = chains.filter(c => c && c.exitCode !== 0 && c.accepted_red !== true);
+      if (redChains.length) {
+        const names = redChains.map(c => c.name || '(unnamed)').join(', ');
+        process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'chains_red', operator_hint: getOperatorHint('chains_red'), redChains: redChains.map(c => ({ name: c.name || null, exitCode: c.exitCode })), errors: ['chain(s) RED with no waiver: ' + names + ' — fix the chain or waive it explicitly (--accept-known-red <name>:<open-issue>)'] }) : 'typed refusal: chains_red (' + names + ')') + '\n');
+        process.exitCode = 1; return;
+      }
+    } else {
+      // ---- (A') agent-validation gate (#475) — CONSUMER (non-npm) repo: presence + column-0 verdict ----
+      const fvPath = path.join(cacheDir, 'final-validation.md');
+      let fvRaw = null;
+      try { fvRaw = fs.readFileSync(fvPath, 'utf8'); } catch (_) { fvRaw = null; }
+      if (fvRaw == null || !fvRaw.trim()) {
+        process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'final_validation_unverified', operator_hint: getOperatorHint('final_validation_unverified'), errors: ['no agent validation evidence at ' + fvPath + ' — a consumer (non-npm) repo gates finalize on the agent-recorded .cache/final-validation.md (with a column-0 `verdict: pass`), not a chain receipt'] }) : 'typed refusal: final_validation_unverified (no ' + fvPath + ')') + '\n');
+        process.exitCode = 1; return;
+      }
+      const fv = schema.parseNodeVerdict(fvRaw);
+      if (!fv.found || fv.verdict !== 'pass') {
+        process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'final_validation_failed', operator_hint: getOperatorHint('final_validation_failed'), errors: ['.cache/final-validation.md does not record `verdict: pass` (column 0) — the agent\'s own validation did not pass (found verdict: ' + (fv.found ? fv.verdict : '(none)') + ')'] }) : 'typed refusal: final_validation_failed (verdict: ' + (fv.found ? fv.verdict : 'none') + ')') + '\n');
+        process.exitCode = 1; return;
+      }
     }
     // ---- (B) attribution sweep (#424) ----
     // Enumerate every file changed since the branch diverged from main (`git diff <base>...HEAD`).
@@ -2226,7 +2273,7 @@ function main() {
       process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'unattributed_change', operator_hint: getOperatorHint('unattributed_change'), unattributed, errors: ['branch-level writes (' + unattributed.join(', ') + ') are neither in the .md allowband nor covered by any `complete` node\'s declared write set — crash residue or out-of-window edits; attribute them to a node or remove them'] }) : 'typed refusal: unattributed_change (' + unattributed.join(', ') + ')') + '\n');
       process.exitCode = 1; return;
     }
-    process.stdout.write((json ? JSON.stringify({ result: 'pass', checkedChanges: changed.length, chains: chains.map(c => ({ name: c.name || null, exitCode: c.exitCode, accepted_red: c.accepted_red === true })) }) : 'finalize ok (' + changed.length + ' changes attributed, ' + chains.length + ' chains verified)') + '\n');
+    process.stdout.write((json ? JSON.stringify({ result: 'pass', mode: validationMode, checkedChanges: changed.length, chains: chains.map(c => ({ name: c.name || null, exitCode: c.exitCode, accepted_red: c.accepted_red === true })) }) : 'finalize ok (' + changed.length + ' changes attributed, ' + (validationMode === 'chain-receipt' ? chains.length + ' chains verified' : 'agent validation verified') + ')') + '\n');
     return;
   }
   if (args.includes('--node-end')) {

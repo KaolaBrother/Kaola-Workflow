@@ -83,6 +83,15 @@ precedence order):
 These typed refusals are emitted by `cmdFinalize` / the plan-validator's
 finalize/verdict path and are classified structurally — do not match by string.
 
+**Consumer product repos (#475).** The Chain-Receipt Gate above is the **self-host (npm)** mode.
+A consumer repo whose validation is not npm-based (no `test:kaola-workflow:*` scripts in
+`package.json`) does **NOT** run `kaola-workflow-run-chains.js` — the agent owns verification
+(#44). It records `.cache/final-validation.md` with a column-0 **`verdict: pass`**, and
+`--finalize-check` (consumer mode, auto-detected by the absent npm scripts) gates on that file:
+`final_validation_unverified` if it is absent, `final_validation_failed` if it lacks `verdict: pass`.
+The attribution sweep runs for **both** repo kinds. The v6.2.0 `kaola-workflow/chains.json` opt-in
+is **retired** — there is no middle-ground; a consumer repo finalizes on the agent's evidence.
+
 ### Run-Gap Sweep Gate
 
 Finalization is **machine-gated** on a clean run-gap sweep (#435). Before

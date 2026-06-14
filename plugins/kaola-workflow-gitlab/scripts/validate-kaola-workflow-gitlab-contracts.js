@@ -344,6 +344,12 @@ assert(
   read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('metadata captured before archive'),
   'GitLab finalize skill must capture sink metadata before archive and preserve worktree for the final commit'
 );
+// #475: the consumer (non-npm) finalize gate prose (final-validation.md) must not drift out of the SKILL.
+assert(
+  read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('final-validation.md') &&
+  read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('final_validation_unverified'),
+  'GitLab finalize skill must document the consumer (non-npm) final-validation.md gate (#475)'
+);
 // #336: keep-open partial-close sink lane — command + skill must carry the durable field, the
 // sink-merge flag, and the merge-sink-only refusal prose (the exit-3 in-arm BLOCKED guard's only
 // mechanical enforcement).

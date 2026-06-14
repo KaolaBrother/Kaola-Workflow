@@ -2562,9 +2562,22 @@ function testBundle424432433ValidatorGates() {
     '| done | finalize | rv | — | 1 | sequence |', '',
     '## Node Ledger', '', '| id | status |', '|---|---|'].join('\n');
   const ledgerRows = st => ['', '| a | ' + st.a + ' |', '| rv | ' + st.rv + ' |', '| done | ' + st.done + ' |', ''].join('\n');
-  const mkRepo = (ledger) => {
+  const mkRepo = (ledger, opts) => {
+    opts = opts || {};
     const grepo = adaptiveTmp('bundle424-git');
     initGitRepoWithBareRemote(grepo);
+    // #475: SELF-HOST marker. The finalize discriminator classifies a repo as self-host (chain-receipt
+    // gate) iff package.json declares any `test:kaola-workflow:*` script. Declare them on MAIN (before
+    // the feature branch) so the repo is self-host AND the file never appears in `git diff main...HEAD`
+    // (the attribution sweep). A consumer-repo test passes { consumer: true } to OMIT it, exercising the
+    // final-validation gate instead.
+    if (!opts.consumer) {
+      fs.writeFileSync(path.join(grepo, 'package.json'), JSON.stringify({ scripts: {
+        'test:kaola-workflow:claude': 'true', 'test:kaola-workflow:codex': 'true',
+        'test:kaola-workflow:gitlab': 'true', 'test:kaola-workflow:gitea': 'true' } }) + '\n');
+      spawnSync('git', ['-C', grepo, 'add', 'package.json'], { encoding: 'utf8' });
+      spawnSync('git', ['-C', grepo, 'commit', '-m', 'self-host package.json'], { encoding: 'utf8' });
+    }
     // Branch off main BEFORE the plan commit so the finalize sweep's `git diff main...HEAD` reflects
     // the real diverged-feature-branch topology (the plan + every node/orphan commit is on the branch).
     spawnSync('git', ['-C', grepo, 'checkout', '-b', 'workflow/issue-424'], { encoding: 'utf8' });
@@ -2668,6 +2681,77 @@ function testBundle424432433ValidatorGates() {
       const out = JSON.parse(r.stdout);
       assert(r.status === 1 && out.reason === 'unattributed_change' && /orphan\/residue\.js/.test(JSON.stringify(out)),
         '#424 (sweep): an orphan branch change must refuse unattributed_change naming the path, got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // #475: CONSUMER-REPO finalize gate. A non-npm repo (no test:kaola-workflow:* in package.json)
+  // gates finalize on the agent-recorded .cache/final-validation.md (presence + column-0 `verdict: pass`),
+  // NOT a chain receipt. The agent owns verification (#44). Fail-closed on absent/not-pass.
+  const writeFinalValidation = (proj, body) => {
+    fs.mkdirSync(path.join(proj, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(proj, '.cache', 'final-validation.md'), body);
+  };
+
+  // --- #475 (a) consumer + valid final-validation.md (verdict: pass) + clean sweep → PASS.
+  { const { grepo, planPath, proj } = mkRepo({ a: 'complete', rv: 'complete', done: 'complete' }, { consumer: true });
+    try {
+      // node a's only branch change (aaa/x.js) is covered by complete node a → sweep clean.
+      fs.mkdirSync(path.join(grepo, 'aaa'), { recursive: true });
+      fs.writeFileSync(path.join(grepo, 'aaa', 'x.js'), 'x\n');
+      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'impl a'], { cwd: grepo, encoding: 'utf8' });
+      writeFinalValidation(proj, 'verdict: pass\nfindings_blocking: 0\nxcodebuild test: exit 0 (126 + 74 tests).\n');
+      const r = runNode(planValidatorScript, [planPath, '--finalize-check', '--json'], grepo);
+      const out = JSON.parse(r.stdout);
+      assert(r.status === 0 && out.result === 'pass' && out.mode === 'final-validation',
+        '#475 (a): consumer repo with verdict: pass final-validation + clean sweep must pass in final-validation mode, got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- #475 (b) consumer + ABSENT final-validation.md → final_validation_unverified, ZERO mutation.
+  { const { grepo, planPath } = mkRepo({ a: 'complete', rv: 'complete', done: 'complete' }, { consumer: true });
+    try {
+      const r = runNode(planValidatorScript, [planPath, '--finalize-check', '--json'], grepo);
+      assert(r.status === 1 && JSON.parse(r.stdout).reason === 'final_validation_unverified',
+        '#475 (b): consumer repo with NO final-validation.md must refuse final_validation_unverified, got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- #475 (c) consumer + present final-validation.md but NO `verdict: pass` → final_validation_failed.
+  { const { grepo, planPath, proj } = mkRepo({ a: 'complete', rv: 'complete', done: 'complete' }, { consumer: true });
+    try {
+      writeFinalValidation(proj, 'Ran the build. Some checks did not pass.\nverdict: fail\nfindings_blocking: 2\n');
+      const r = runNode(planValidatorScript, [planPath, '--finalize-check', '--json'], grepo);
+      assert(r.status === 1 && JSON.parse(r.stdout).reason === 'final_validation_failed',
+        '#475 (c): consumer repo with final-validation.md lacking verdict: pass must refuse final_validation_failed, got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- #475 (d) consumer + valid final-validation.md but an ORPHAN code change → attribution sweep
+  //     STILL fires (the allowband-aware freshness check runs for the consumer path too).
+  { const { grepo, planPath, proj } = mkRepo({ a: 'complete', rv: 'complete', done: 'complete' }, { consumer: true });
+    try {
+      fs.mkdirSync(path.join(grepo, 'orphan'), { recursive: true });
+      fs.writeFileSync(path.join(grepo, 'orphan', 'residue.js'), 'crash residue\n');
+      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'orphan residue'], { cwd: grepo, encoding: 'utf8' });
+      writeFinalValidation(proj, 'verdict: pass\nfindings_blocking: 0\n');
+      const r = runNode(planValidatorScript, [planPath, '--finalize-check', '--json'], grepo);
+      assert(r.status === 1 && JSON.parse(r.stdout).reason === 'unattributed_change',
+        '#475 (d): consumer repo attribution sweep still catches an orphan code change, got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- #475 (e) DISCRIMINATOR FAIL-OPEN regression: a SELF-HOST repo whose plan dir has an intermediate
+  //     `kaola-workflow/agents/` directory makes findRepoRoot stop early (at kaola-workflow/, no
+  //     package.json there). The discriminator reads package.json at the GIT TOP-LEVEL, so the repo is
+  //     STILL classified self-host and a RED chain receipt STILL refuses chains_red — it does NOT fall
+  //     through to the consumer final-validation gate (which would FAIL-OPEN past a red chain set).
+  { const { grepo, planPath, proj } = mkRepo({ a: 'complete', rv: 'complete', done: 'complete' });
+    try {
+      fs.mkdirSync(path.join(grepo, 'kaola-workflow', 'agents'), { recursive: true }); // make findRepoRoot stop early
+      writeReceipt(proj, { headSha: headOf(grepo), chains: [
+        { name: 'claude', exitCode: 0, accepted_red: false },
+        { name: 'codex', exitCode: 1, accepted_red: false }] });
+      writeFinalValidation(proj, 'verdict: pass\nfindings_blocking: 0\n'); // a pass FV must NOT rescue a red self-host
+      const r = runNode(planValidatorScript, [planPath, '--finalize-check', '--json'], grepo);
+      assert(r.status === 1 && JSON.parse(r.stdout).reason === 'chains_red',
+        '#475 (e): a self-host repo with an intermediate kaola-workflow/agents/ dir must STILL be gated as self-host (git-toplevel discriminator), refusing chains_red — not fail-open to the consumer gate; got status ' + r.status + ' ' + r.stdout);
     } finally { cleanup(grepo); } }
 
   console.log('testBundle424432433ValidatorGates: PASSED');

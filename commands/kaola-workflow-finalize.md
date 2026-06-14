@@ -66,10 +66,18 @@ If `workflow_path: full` (or absent):
   Phase 5 is not complete. Run /kaola-workflow-phase5 first.
   ```
 
-### Chain-Receipt Gate
+### Validation Gate (dual-mode by repo kind, #475)
 
-Finalization is **machine-gated** on a fresh, valid chain receipt (#432). Before
-proceeding past the prerequisite check, verify `.cache/chain-receipt.json` and
+`--finalize-check` enforces a validation gate whose mode is auto-detected by repo kind:
+a **self-host (npm)** repo (its `package.json` declares the `test:kaola-workflow:*` scripts)
+is gated on a machine-verifiable chain receipt; a **consumer (non-npm)** product repo is
+gated on the agent's recorded `.cache/final-validation.md` (see *Consumer product repos*
+below). Either way the attribution sweep runs.
+
+#### Self-host (npm): Chain-Receipt Gate
+
+In the self-host, finalization is **machine-gated** on a fresh, valid chain receipt (#432).
+Before proceeding past the prerequisite check, verify `.cache/chain-receipt.json` and
 stop with a typed refusal if any of the following are true (checked in
 precedence order):
 
@@ -93,17 +101,27 @@ precedence order):
 These typed refusals are emitted by `cmdFinalize` / the plan-validator's
 finalize/verdict path and are classified structurally — do not match by string.
 
-**Non-npm product repos (#464).** `kaola-workflow-run-chains.js` runs the npm
-edition chains only when `package.json` declares the `test:kaola-workflow:*`
-scripts (the Kaola-Workflow self-host). A product repo whose validation is not
-npm-based (a Swift/Xcode app, a Makefile project) declares its validation chains
-in a repo-local **`kaola-workflow/chains.json`** — a `chains` array of
-`{ name, command }` (e.g. `{ "name": "build", "command": "xcodebuild test ..." }`).
-The runner uses those instead of the npm defaults and the receipt records them;
-the chain-receipt gate is name-agnostic, so any configured chain set gates the same
-way. With neither a `chains.json` nor the npm scripts, the runner refuses
-`chains_config_missing` (no receipt is written) rather than emit a meaningless
-all-red npm receipt — configure `chains.json` to proceed.
+#### Consumer product repos (#475): the agent's validation IS the gate
+
+A consumer product repo whose validation is **not** npm-based (a Swift/Xcode app, a
+Makefile project) does **NOT** run `kaola-workflow-run-chains.js` at all. The agent
+**owns verification** ("Agent Owns Reasoning; Scripts Own Atomicity", #44) — a script
+that re-ran the suite the validation node already ran is the over-engineering this path
+removes. Instead, the agent records its validation result in **`.cache/final-validation.md`**
+with a column-0 **`verdict: pass`** line, and `--finalize-check` (consumer mode, auto-detected
+by the absence of the `test:kaola-workflow:*` scripts) gates on that file:
+
+- **`final_validation_unverified`** — `.cache/final-validation.md` is absent (or empty). The
+  agent must record its validation evidence before finalize.
+- **`final_validation_failed`** — the file is present but does not carry a column-0 `verdict: pass`.
+  The agent's own validation did not pass; remediate and re-record.
+
+The attribution sweep (below) runs for **both** repo kinds, so an un-attributed code change
+since `main` is still caught (the allowband-aware freshness check). The v6.2.0
+`kaola-workflow/chains.json` opt-in is **retired** — there is no middle-ground; a consumer
+repo finalizes on the agent's recorded evidence, full stop. Recorded tradeoff: this trusts
+agent-recorded evidence (presence + the agent's own `verdict`), and `final-validation` may run
+a focused test set rather than the full suite — the accepted #44 trade (the agent owns verification).
 
 ### Run-Gap Sweep Gate
 
