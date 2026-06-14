@@ -70,13 +70,25 @@ a scheduler failure.
 
 ## 2. Root cause
 
-Two compounding layers.
+Two distinct concerns with different owners — and only the second is a defect.
 
-### 2.1 Authoring — the parallel read frontier is rarely created (§1.1)
+### 2.1 Width is the planner's judgment, sized to scope — NOT a default to force (§1.1)
 
-Even though the planner profile (post-#438 / D-419-01) explicitly instructs *"author parallel
-read-only analysis nodes … prefer fanning them out,"* issues seldom decompose into ≥2 genuinely
-independent read tasks, and the planner conservatively chains explorer→architect.
+How many read agents to fan out is a *planning* decision, owned by the workflow-planner and sized to
+the genuine scope of the work: fan out exactly as wide as the task decomposes into independent parts,
+no wider. If exploration spans, say, four distinct surfaces (scheduler / validator / prose / tests),
+four focused explorers is right — each owns one part, so its findings come back concise, on-topic, and
+free of cross-contamination, and no agent burns its context budget holding the whole surface. If the
+work is small and coherent, one explorer (or none) is right; over-fanning fragments a task one agent
+could hold, multiplies tokens, and forces a synthesis step that *adds* noise.
+
+So the §1.1 observation — read antichains are rarely authored — is **not inherently a defect**. A
+single `design` root, or a deliberate `explorer → architect` chain, is the *correct* shape when the
+work does not decompose. The only planner-side concern is rubric quality: D-419-01's headline
+*"prefer a WIDE ready frontier"* tilts the bias toward width; it should read *"size the frontier to
+genuine independence — as wide as the work decomposes, no wider"* (right-sizing in **both**
+directions). That is a small rubric-tuning note, owned by the planner, and is **out of scope** for the
+executor fix below — which is purely about faithfully running whatever width the planner *did* author.
 
 ### 2.2 Dispatch — concurrency is structurally advisory; nothing forces it (**the crucial gap**)
 
@@ -101,10 +113,11 @@ The adversarial probe searched for any mechanism that forces concurrent dispatch
   (`36142628`). The current tree has **zero** `run_in_background` / background-dispatch wiring. The
   barrier was never mechanically removed.
 
-Net: even a perfect plan with a genuine read antichain serializes by default, because the executor has
-no primitive that converts scheduler state (`enterBatch` / `open-ready`) into concurrent dispatches.
-It is left to model discretion against a skeleton that models serial iteration — and telemetry shows
-the model picks serial 100% of the time.
+Net: this is a **fidelity** defect. Even a plan that *correctly* authored a genuine read antichain
+serializes by default, because the executor has no primitive that converts scheduler state
+(`enterBatch` / `open-ready`) into concurrent dispatches — it fails to run what the planner authored as
+parallel. It is left to model discretion against a skeleton that models serial iteration, and
+telemetry shows the model picks serial 100% of the time.
 
 ---
 
@@ -130,8 +143,9 @@ The risk: **#463 builds elaborate parallel-*write* machinery on top of the same 
 has produced 0% real concurrency in 21 runs.** If the orchestrator dispatches the write legs serially
 (as it always has), #463's worktree isolation and synthesizer barrier execute correctly but the legs
 **never actually overlap** — paying all the isolation complexity for the same serial makespan. The
-**dispatch primitive is the shared prerequisite both axes need** to deliver measured wall-clock
-speedup, and it is #463's measurement precondition.
+**dispatch-fidelity seam is the shared prerequisite both axes need**: faithful concurrent dispatch of
+an authored-parallel frontier (read or write) at its authored width. It is #463's precondition for the
+parallelism it is designed to deliver.
 
 Collision note: a read-axis dispatch fix shares files with #463 — `adaptive-node.js`
 (`open-ready`/`close-node`/`reconcile-running-set`), the six plan-run prose surfaces, and
@@ -145,14 +159,17 @@ concurrently with it.
 
 1. **Do not attempt a read-axis code fix now** — it collides with in-flight #463 on shared files with
    no disjoint lane.
-2. **Track the dispatch primitive as the shared dependency** of both the read and write axes (and as
-   #463's measured-speedup precondition): an executor-side seam that converts `enterBatch` /
-   `open-ready` N-`in_progress` state into a single-message concurrent dispatch (e.g. an
-   `open-ready` → "dispatch these N now, in one message" contract the skeleton makes the **default**
-   at a ≥2 frontier, or background `run_in_background` dispatch with a join barrier — the #374 intent,
-   actually wired this time).
-3. **Add runtime telemetry that records wall-clock overlap** so "parallel works" is provable, not
-   assumed — every prior closure asserted capability without a concurrency trace.
+2. **Track the dispatch-FIDELITY seam as the shared dependency** of both axes: an executor-side
+   primitive that runs the planner-authored frontier *at its authored width* (1..N) concurrently —
+   when the planner authored N independent nodes, dispatch all N in one message; when it authored one
+   node or a chain, run serially. The fix is the executor faithfully executing the plan — **not** a
+   minimum width and **not** a "prefer wide" default; width stays the planner's scope-driven call
+   (§2.1). Concretely: an `open-ready` → "dispatch these N now, in one message" contract the skeleton
+   routes to *whenever the planner authored an independent frontier* (of any width ≥2), or background
+   `run_in_background` dispatch with a join barrier (the #374 intent, actually wired this time).
+3. **Add runtime telemetry that records simultaneous-open count** so "the authored width actually ran
+   concurrently" is provable, not assumed — every prior closure asserted capability without a trace.
 
-This is a wiring + default-posture-enforcement gap, not a rewrite: the scheduler already exists; what
-is missing is the one seam that makes its output actually dispatch concurrently.
+This is a dispatch-fidelity gap, not a rewrite and not a width mandate: the scheduler already exists;
+what is missing is the one seam that makes it dispatch the authored frontier concurrently, at whatever
+width the planner chose.
