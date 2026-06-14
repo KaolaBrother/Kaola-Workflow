@@ -57,7 +57,7 @@ Every subagent dispatch below includes an explicit `model=` line. Always pass it
 exactly as written — it is what makes Claude Code show the model badge on the
 subagent card. The installer fills each `model="{...}"` placeholder with the
 agent's frontmatter model (for example `model="sonnet"`); never omit the `model=` line.
-You MUST pass `model="{CONTRACTOR_MODEL}"` in this Agent call exactly as shown — do not omit the `model=` line.
+You MUST pass `model="{...}"` in every role Agent call in this command exactly as shown — do not omit the `model=` line.
 
 ## Validation Delegation Policy
 

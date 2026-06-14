@@ -183,6 +183,16 @@ assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-review/SKILL.md`, 'otherw
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-review/SKILL.md`, 'or perform the same security review locally');
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'subagents are available; otherwise update docs');
 
+// #459: contractor-free routing enforcement (Codex github edition). The fast (#456) and full
+// Phase 1-5 + Phase 4 (#457/#458) mechanical transitions are script-owned (ADR 0004); only
+// Finalization stays contractor-owned. The migrated research/ideation/plan/review/execute SKILLs
+// must be fully contractor-free; the fast SKILL keeps a finalize-exception boundary note, so we
+// forbid only the handoff phrasing there (not the bare word).
+for (const sk of ['research', 'ideation', 'plan', 'review', 'execute']) {
+  assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-${sk}/SKILL.md`, 'contractor');
+}
+assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-fast/SKILL.md`, 'delegated to the contractor');
+
 // Issue #77: typed-acknowledgement delegation gate — require new status vocabulary in all phase skills + next
 const delegationSkills = [
   'kaola-workflow-research',

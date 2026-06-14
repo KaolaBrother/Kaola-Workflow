@@ -304,6 +304,32 @@ Field rules:
 
 See `docs/api.md` § Codex Harness Scripts for the generator CLI and the full `ledger_status → status` mapping table.
 
+## Script-Owned Mechanical Transitions (issues #456 / #457 / #458 / #272)
+
+Every mechanical transition that mutates `workflow-state.md` or a phase file is owned
+by a typed transaction script the main session runs directly (ADR 0004) — the
+`contractor` subagent is no longer in the per-phase loop. Each writes in crash-safe
+order (`.cache`/phase file first, the `workflow-state.md` pointer last), is idempotent
+on resume, and preserves any `## Sink` block byte-for-byte.
+
+| Path | Script | Owns |
+|------|--------|------|
+| Fast | `kaola-workflow-fast-advance.js` (#456) | `.cache`/`fast-summary.md` + `## Status` lifecycle + the fast `step` pointer |
+| Full Phase 1/2/3/5 | `kaola-workflow-full-advance.js` (#457) | the per-phase checkpoint + `phase{2,3,5}-*.md` authoring |
+| Full Phase 4 | `kaola-workflow-phase4-advance.js` (#458) | `phase4-progress.md` (Tasks / Failure Routing Ledger / compliance rows) + the per-task `step`/`task` pointer |
+| Adaptive per-node | `kaola-workflow-adaptive-node.js` (#272) | the `## Node Ledger` per-node lifecycle |
+| Finalization (Phase 6) | `contractor` subagent | the archive, roadmap-mirror regen, `chore: finalize` staging commit (SOLE remaining contractor-owned transition) |
+
+The full/Phase-4 scripts author each phase file's `## Required Agent Compliance` table
+with RESOLVED rows whose status is `delegation_policy`-aware (a `delegate` project gets
+`subagent-invoked`, etc.) and self-validate the rendered file against
+`repair-state.unresolvedCompliance(content, stateContent)` before writing, so a phase
+file can never advance the pointer into a boundary the resume/finalize router would
+reject. The packets handed to these scripts on stdin (the Selected Approach, blueprint,
+review verdict, per-task outcome) are transient inputs, not durable state fields. The
+#459 contract validators forbid a contractor dispatch from returning to any migrated
+surface.
+
 ## Generated Mirrors
 
 - `kaola-workflow/ROADMAP.md` is generated from
