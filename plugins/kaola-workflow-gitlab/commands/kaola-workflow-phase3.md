@@ -121,30 +121,44 @@ kaola-workflow/{project}/.cache/architect-revision-{n}.md
 After three architect-revision attempts without a complete blueprint, stop and
 ask the user.
 
-## Step 3 - Write Phase File (delegated to the contractor)
+## Step 3 - Write Phase File (script-owned transaction)
 
 The blueprint and task list are a mechanical transcription of the `code-architect`
-output. The main session has already judged the blueprint complete; the contractor
+output. The main session has already judged the blueprint complete; this script
 only transcribes the architect's evidence into the durable phase file and records
 the completion checkpoint. It does not design, judge, or alter the selected approach.
 
-Capture the resolved project name before delegating (shell variables do not cross
-the subagent boundary):
+The mechanical bookkeeping — authoring `phase3-plan.md` from the orchestrator's
+verbatim content and advancing the `workflow-state.md` pointer — is owned by the
+full-path transaction script `kaola-gitlab-workflow-full-advance.js` (ADR 0004), not a
+subagent. The main session runs it directly, handing the blueprint and task list
+(transcribed verbatim from `.cache/architect.md` plus any
+`.cache/architect-revision-*.md`) as a JSON packet on stdin; the script renders the
+phase file (with a RESOLVED `## Required Agent Compliance` table) and advances the
+pointer in crash-safe order, idempotent on resume.
+
+Resolve `$KAOLA_SCRIPTS` once, then run the transaction:
 
 ```bash
-PLAN_PROJECT="{project}"
+kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./plugins/kaola-workflow-gitlab/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n" "./plugins/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
+KAOLA_SCRIPTS="$(dirname "$(kaola_script kaola-gitlab-workflow-full-advance.js)")"
+
+node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-full-advance.js" phase3-finalize \
+  --project {project} --stdin --json <<'PACKET'
+{
+  "blueprint": "<Blueprint body: Files to Create/Modify, Build Sequence, Parallelization Plan, External Dependencies>",
+  "task_list": "<Task List body: one ### Task N block per task, each with a `- Write Set:` line>",
+  "compliance": [
+    { "requirement": "code-architect", "status": "invoked", "evidence": ".cache/architect.md" },
+    { "requirement": "architect revisions", "status": "n/a", "skip_reason": "no revision needed" }
+  ]
+}
+PACKET
 ```
 
-```text
-Agent(
-  subagent_type="contractor",
-  model="{CONTRACTOR_MODEL}",
-  description="Mechanical plan write {project}",
-  prompt="Run the mechanical bookkeeping for Phase 3 of {project}. Author `kaola-workflow/{project}/phase3-plan.md` by transcribing the blueprint and task list from `.cache/architect.md` (plus any `.cache/architect-revision-*.md`), using the exact phase3-plan.md template and ## Required Agent Compliance table written below in this command file. The blueprint was already judged complete by the orchestrator — do NOT design, re-plan, judge, or change the selected Phase 2 approach; transcribe the architect's evidence verbatim (files to create/modify, build sequence, parallelization, task write sets, validate commands). Then execute the Step 4 completion checkpoint: update `workflow-state.md` (phase: 3 / step: complete / next_command: /kaola-workflow-phase4 {project}), PRESERVING any existing ## Sink block byte-for-byte. Return a compact bookkeeping summary; do NOT dispatch code-architect, do NOT implement code, do NOT route to Phase 4, do NOT ask the user."
-)
-```
-
-The contractor authors `kaola-workflow/{project}/phase3-plan.md` from this template:
+The `task_list` MUST keep one `- Write Set:` line per task — the parallel-overlap
+classifier reads those declared paths. The script writes
+`kaola-workflow/{project}/phase3-plan.md` in this shape (rendered from the packet):
 
 ```markdown
 # Phase 3 - Plan: {project}
@@ -195,15 +209,17 @@ The contractor authors `kaola-workflow/{project}/phase3-plan.md` from this templ
 
 ## Step 4 - Continue To Phase 4
 
-The contractor performs this completion checkpoint as part of the Step 3 dispatch,
-updating `workflow-state.md` and PRESERVING any existing `## Sink` block:
+The script performs this completion checkpoint as part of the `phase3-finalize`
+transaction, updating `workflow-state.md` and PRESERVING any existing `## Sink`
+block byte-for-byte:
 
 ```text
 phase: 3
 step: complete
 next_command: /kaola-workflow-phase4 {project}
+next_skill: kaola-workflow-execute {project}
 ```
 
-Once the contractor returns its bookkeeping summary and the phase file plus
-compliance rows are complete, the main session continues to Phase 4. Do not ask
-the user to confirm internal workflow execution.
+Once the script reports `result: ok` and the phase file plus compliance rows are
+complete, the main session continues to Phase 4. Do not ask the user to confirm
+internal workflow execution.

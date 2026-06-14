@@ -75,7 +75,38 @@ X/10
 | knowledge-lookup | invoked/N/A | .cache/knowledge-lookup.md or docs-impact check | reason if N/A |
 ```
 
-The deterministic bookkeeping below — the `workflow-state.md` checkpoint write (preserving the `## Sink` block) and the per-issue roadmap `init-issue` creation/staging — is delegated to the mechanical `contractor` Codex agent role when that subagent is available; it runs the scripts and authors the durable bookkeeping but never authors the `phase1-research.md` synthesis, never invokes code-explorer/knowledge-lookup, and never judges. The current session keeps requirement parsing, the research dispatches, the completeness gate, the `phase1-research.md` synthesis, and the branch decision.
+## Mechanical Checkpoint (script-owned transaction)
+
+`phase1-research.md` is the current session's research synthesis — already written on
+disk above (this script never authors or edits it). The deterministic bookkeeping —
+the `workflow-state.md` checkpoint write — is owned by the full-path transaction
+script `kaola-workflow-full-advance.js` (ADR 0004), not a subagent. The current
+session runs it directly; it refuses if `phase1-research.md` is absent (typed
+refusal, zero mutation) and is idempotent on resume. The current session keeps
+requirement parsing, the research dispatches, the completeness gate, the
+`phase1-research.md` synthesis, the verdict, and the branch decision; the script
+only transcribes the checkpoint it is handed and never authors the
+`phase1-research.md` synthesis, never invokes code-explorer/knowledge-lookup, and
+never judges.
+
+Resolve `$KAOLA_SCRIPTS` once, then run the checkpoint (no stdin packet —
+`phase1-complete` is a checkpoint only):
+
+```bash
+KAOLA_SCRIPTS="plugins/kaola-workflow/scripts"
+if [ ! -f "$KAOLA_SCRIPTS/kaola-workflow-full-advance.js" ]; then
+  KAOLA_SCRIPTS="$(dirname "$(find "$HOME/.codex/plugins/cache" -path '*/kaola-workflow/*/scripts/kaola-workflow-full-advance.js' -print -quit 2>/dev/null)")"
+fi
+
+node "$KAOLA_SCRIPTS/kaola-workflow-full-advance.js" phase1-complete \
+  --project {project} --json
+```
+
+This advances the state pointer to phase `1` / step `complete` with
+`next_skill: kaola-workflow-ideation {project}`, PRESERVING any existing `## Sink`
+block byte-for-byte. The per-issue roadmap `init-issue` creation/staging (Step 8)
+and the `patch-branch` Sink backfill (Step 9) below stay the current session's own
+separate direct script calls — they are not part of this checkpoint transaction.
 
 8. If a GitHub issue is linked, run `init-issue` to create the roadmap tracking file:
 

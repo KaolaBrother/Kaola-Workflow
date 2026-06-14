@@ -36,9 +36,61 @@ kaola-workflow/{project}/.cache/code-explorer.md
 5. Select the recommended approach internally and record the rationale. Do not ask the user to approve routine technical strategy selection.
 6. Author `phase2-ideation.md` after internal selection (delegated below).
 
-## Mechanical Ideation Finalization
+## Mechanical Ideation Finalization (script-owned transaction)
 
-The deterministic bookkeeping below — authoring `phase2-ideation.md` from the template and advancing the `workflow-state.md` pointer (`next_skill: kaola-workflow-plan {project}`, preserving any existing `## Sink` block byte-for-byte) — is delegated to the mechanical `contractor` Codex agent role when that subagent is available; it runs any needed script (re-deriving its own `node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-claim.js"` path, capturing real exit codes and never gating on a piped `| tail`) and authors the durable bookkeeping but never dispatches `planner` or any role, never weighs approaches, never assesses risk, never routes, never acts as a gate, never closes the issue, and never asks the user. The current session keeps the `planner` dispatch, and the **Selected Approach** verdict decision. Because the verdict is the current session's judgment, decide the selected approach (name + reason + rejected alternatives) first — reading `.cache/planner.md` and picking the recommended option — then hand it into the contractor so it transcribes the text verbatim into the `## Selected Approach` section; the contractor copies the selection as given and does not re-select, re-rank, restate, soften, or judge it, and transcribes the Approaches Evaluated, Out of Scope, and `## Required Agent Compliance` rows from the evidence the current session names.
+The **Selected Approach** (the chosen option + rationale + rejected alternatives)
+is the current session's **judgment**: decide the selected approach first — reading
+`.cache/planner.md`, picking the recommended option, and DECIDING the selection.
+This script never re-selects, never re-ranks, never weighs approaches, and never
+judges risk — it only transcribes the selection the current session hands it,
+verbatim.
+
+The deterministic bookkeeping below — authoring `phase2-ideation.md` from the
+template and advancing the `workflow-state.md` pointer (`next_skill:
+kaola-workflow-plan {project}`, preserving any existing `## Sink` block
+byte-for-byte) — is owned by the full-path transaction script
+`kaola-gitlab-workflow-full-advance.js` (ADR 0004), not a subagent. The current
+session keeps the `planner` dispatch and the **Selected Approach** verdict, then
+runs the script directly, handing the decided content as a JSON packet on stdin;
+the script renders the phase file (with a RESOLVED `## Required Agent Compliance`
+table) and advances the state pointer in crash-safe order (phase file first, state
+pointer last), idempotent on resume. The script never dispatches `planner` or any
+role, never weighs approaches, never assesses risk, never routes, never acts as a
+gate, never closes the issue, and never asks the user; it copies the selection as
+given and does not re-select, re-rank, restate, soften, or judge it.
+
+Resolve `$KAOLA_SCRIPTS` once, then run the transaction, piping the decided
+Selected Approach (verbatim), the Approaches Evaluated and Out of Scope from
+`.cache/planner.md`, and the compliance rows:
+
+```bash
+KAOLA_SCRIPTS="plugins/kaola-workflow-gitlab/scripts"
+if [ ! -f "$KAOLA_SCRIPTS/kaola-gitlab-workflow-full-advance.js" ]; then
+  KAOLA_SCRIPTS="$(dirname "$(find "$HOME/.codex/plugins/cache" -path '*/kaola-workflow-gitlab/*/scripts/kaola-gitlab-workflow-full-advance.js' -print -quit 2>/dev/null)")"
+fi
+
+node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-full-advance.js" phase2-finalize \
+  --project {project} --stdin --json <<'PACKET'
+{
+  "selected_approach": "<chosen option + reason + rejected alternatives, verbatim>",
+  "approaches_evaluated": "<Approaches Evaluated body from .cache/planner.md>",
+  "out_of_scope": "<Out of Scope list>",
+  "compliance": [
+    { "requirement": "planner", "status": "invoked", "evidence": ".cache/planner.md" }
+  ]
+}
+PACKET
+```
+
+The script writes `kaola-workflow/{project}/phase2-ideation.md` in the
+`## Phase File` shape below (rendered from the packet, with a RESOLVED
+`## Required Agent Compliance` table) and updates `workflow-state.md`
+(phase: 2 / step: complete / `next_skill: kaola-workflow-plan {project}`),
+PRESERVING any existing `## Sink` block byte-for-byte. The `compliance` rows are
+the current session's hand-off and must be RESOLVED (`invoked` with an evidence
+path, or `n/a` with a skip reason). The script refuses a non-array `compliance`
+(typed refusal, zero mutation) and does not re-select, weigh, route, or act as a
+gate.
 
 ## Phase File
 

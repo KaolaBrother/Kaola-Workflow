@@ -36,9 +36,37 @@ kaola-workflow/{project}/phase4-progress.md
 5. Route CRITICAL/HIGH findings back to implementation before Finalization. MEDIUM/LOW findings may become follow-ups. Behavior/test fixes route to the `tdd-guide` Codex agent role; build/type/lint/tooling fixes route to the `build-error-resolver` Codex agent role; save each fix-agent output to `.cache/review-fix-*.md`.
 6. Save raw review output to `.cache/code-reviewer.md` and `.cache/security-reviewer.md` when used.
 
-## Mechanical Review Finalization
+## Mechanical Review Finalization (script-owned transaction)
 
-The deterministic bookkeeping below — authoring `phase5-review.md` from the template and advancing the `workflow-state.md` pointer (`next_skill: kaola-workflow-finalize {project}`, preserving the `## Sink` block byte-for-byte) — is delegated to the mechanical `contractor` Codex agent role when that subagent is available; it runs any needed script (re-deriving its own `node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-claim.js"` path, capturing real exit codes and never gating on a piped `| tail`) and authors the durable bookkeeping but never dispatches code-reviewer/security-reviewer/tdd-guide/build-error-resolver or any role, never judges severity, never triages or routes findings, never acts as a review gate, and never asks the user. The current session keeps the review dispatches, the CRITICAL/HIGH triage, the review-fix routing, and the **Review Status** verdict decision. Because the verdict is the current session's judgment, decide the `PASSED` / `PASSED WITH FOLLOW-UPS` status and the resolved CRITICAL/HIGH/MEDIUM/LOW finding lists first, then hand them into the contractor so it transcribes them verbatim into the **Review Status** line and the `## Required Agent Compliance` rows — the contractor copies the verdict as given and does not restate, soften, upgrade, or re-grade it.
+The deterministic bookkeeping below — authoring `phase5-review.md` from the template and advancing the `workflow-state.md` pointer (`next_skill: kaola-workflow-finalize {project}`, preserving the `## Sink` block byte-for-byte) — is owned by the full-path transaction script `kaola-gitlab-workflow-full-advance.js` (ADR 0004), not a subagent. The script authors the durable bookkeeping but never dispatches code-reviewer/security-reviewer/tdd-guide/build-error-resolver or any role, never judges severity, never triages or routes findings, never acts as a review gate, and never asks the user. The current session keeps the review dispatches, the CRITICAL/HIGH triage, the review-fix routing, and the **Review Status** verdict decision. Because the verdict is the current session's judgment, decide the `PASSED` / `PASSED WITH FOLLOW-UPS` status and the resolved CRITICAL/HIGH/MEDIUM/LOW finding lists first, then hand them to the script so it transcribes them verbatim into the **Review Status** line and the `## Required Agent Compliance` rows — the script copies the verdict as given and does not restate, soften, upgrade, or re-grade it. It refuses a `review_status` that is not `PASSED` or `PASSED WITH FOLLOW-UPS` (typed refusal, zero mutation).
+
+Resolve `$KAOLA_SCRIPTS` once, then run the transaction:
+
+```bash
+KAOLA_SCRIPTS="plugins/kaola-workflow-gitlab/scripts"
+if [ ! -f "$KAOLA_SCRIPTS/kaola-gitlab-workflow-full-advance.js" ]; then
+  KAOLA_SCRIPTS="$(dirname "$(find "$HOME/.codex/plugins/cache" -path '*/kaola-workflow-gitlab/*/scripts/kaola-gitlab-workflow-full-advance.js' -print -quit 2>/dev/null)")"
+fi
+
+node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-full-advance.js" phase5-finalize \
+  --project {project} --stdin --json <<'PACKET'
+{
+  "review_status": "PASSED",
+  "code_review_findings": "### CRITICAL\nnone\n### HIGH\nnone\n### MEDIUM/LOW\n<list>",
+  "security_review": "ran: yes/no and reason\n### Findings\n<list or none>",
+  "fixes_applied": "<list or none>",
+  "validation_evidence": "<commands run/delegated/cited, result, evidence path>",
+  "followups": "<MEDIUM/LOW deferred or none>",
+  "compliance": [
+    { "requirement": "code-reviewer", "status": "invoked", "evidence": ".cache/code-reviewer.md" },
+    { "requirement": "security-reviewer", "status": "n/a", "skip_reason": "no security-sensitive files in write set" },
+    { "requirement": "review-fix executors", "status": "n/a", "skip_reason": "no CRITICAL/HIGH findings" }
+  ]
+}
+PACKET
+```
+
+The script renders `kaola-workflow/{project}/phase5-review.md` (with a RESOLVED `## Required Agent Compliance` table) from the packet, then advances the `workflow-state.md` pointer (phase: 5 / step: complete / next_command: /kaola-workflow-finalize {project} / next_skill: kaola-workflow-finalize {project}), PRESERVING any existing `## Sink` block byte-for-byte. The transcription order is crash-safe and idempotent on resume.
 
 ## Phase File
 

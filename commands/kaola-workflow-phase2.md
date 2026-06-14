@@ -109,30 +109,48 @@ Choose the recommended option. Record the selected approach, rationale, and any
 rejected alternatives in `phase2-ideation.md`. Do not ask the user to approve the
 strategy unless the decision is materially user-owned.
 
-## Step 3 - Mechanical Ideation Finalization (delegated to the contractor)
+## Step 3 - Mechanical Ideation Finalization (script-owned transaction)
 
 The **Selected Approach** (the chosen option + rationale + rejected alternatives)
 is the main session's **judgment**: Step 2 reads `.cache/planner.md`, picks the
-recommended option, and DECIDES the selection. The contractor never re-selects,
-never weighs approaches, and never judges risk — it only transcribes the selection
-the main session hands it, verbatim.
+recommended option, and DECIDES the selection. This script never re-selects, never
+weighs approaches, and never judges risk — it only transcribes the selection the
+main session hands it, verbatim.
 
-Once the approach is decided, summon the contractor to author `phase2-ideation.md`
-and advance the `workflow-state.md` pointer. Hand the decided **Selected Approach**
-text (name + reason + rejected alternatives) into the prompt; the contractor writes
-it exactly as given.
+The mechanical bookkeeping — authoring `phase2-ideation.md` from the orchestrator's
+verbatim content and advancing the `workflow-state.md` pointer — is owned by the
+full-path transaction script `kaola-workflow-full-advance.js` (ADR 0004), not a
+subagent. The main session runs it directly, handing the decided content as a JSON
+packet on stdin; the script renders the phase file (with a RESOLVED
+`## Required Agent Compliance` table) and advances the state pointer in crash-safe
+order (phase file first, state pointer last), idempotent on resume.
 
-```text
-Agent(
-  subagent_type="contractor",
-  model="{CONTRACTOR_MODEL}",
-  description="Mechanical ideation finalize {project}",
-  prompt="Run the mechanical ideation-finalization bookkeeping for {project}. Execute Step 3 below exactly as written in this command file: author kaola-workflow/{project}/phase2-ideation.md from the template, then update workflow-state.md (phase: 2 / step: complete / next_command: /kaola-workflow-phase3 {project}), PRESERVING any existing ## Sink block byte-for-byte. Write the Selected Approach EXACTLY as the orchestrator hands it to you — copy the selection and rationale verbatim into the ## Selected Approach section; do NOT re-select, re-rank, restate, soften, or judge it, and do NOT decide which approach wins. Transcribe the rest from the evidence the orchestrator names: the Approaches Evaluated (pros/cons/risk/complexity) and Out of Scope list from .cache/planner.md, and the Required Agent Compliance rows. Return a compact bookkeeping summary; do NOT dispatch planner or any role, do NOT judge or assess risk, do NOT route, do NOT act as a gate, do NOT close the issue, and do NOT ask the user."
-)
+Resolve `$KAOLA_SCRIPTS` once, then run the transaction, piping the decided
+Selected Approach (verbatim), the Approaches Evaluated and Out of Scope from
+`.cache/planner.md`, and the compliance rows:
+
+```bash
+kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
+KAOLA_SCRIPTS="$(dirname "$(kaola_script kaola-workflow-full-advance.js)")"
+
+node "$KAOLA_SCRIPTS/kaola-workflow-full-advance.js" phase2-finalize \
+  --project {project} --stdin --json <<'PACKET'
+{
+  "selected_approach": "<chosen option + reason + rejected alternatives, verbatim>",
+  "approaches_evaluated": "<Approaches Evaluated body from .cache/planner.md>",
+  "out_of_scope": "<Out of Scope list>",
+  "compliance": [
+    { "requirement": "planner", "status": "invoked", "evidence": ".cache/planner.md" }
+  ]
+}
+PACKET
 ```
 
-The contractor writes `kaola-workflow/{project}/phase2-ideation.md` from this
-template exactly:
+The script writes `kaola-workflow/{project}/phase2-ideation.md` in this shape
+(rendered from the packet) and updates `workflow-state.md` (phase: 2 / step:
+complete / next_command: /kaola-workflow-phase3 {project} / next_skill:
+kaola-workflow-plan {project}), PRESERVING any existing `## Sink` block
+byte-for-byte:
 
 ```markdown
 # Phase 2 - Ideation: {project}
@@ -161,14 +179,10 @@ template exactly:
 | planner | invoked | .cache/planner.md | |
 ```
 
-The contractor then updates `workflow-state.md` (preserving any existing `## Sink`
-block byte-for-byte):
+The `compliance` rows are the orchestrator's hand-off and must be RESOLVED
+(`invoked` with an evidence path, or `n/a` with a skip reason); if omitted the
+script falls back to the resolved `planner | invoked | .cache/planner.md` default.
+The script refuses a non-array `compliance` (typed refusal, zero mutation) and does
+not re-select, weigh, route, or act as a gate.
 
-```text
-phase: 2
-step: complete
-next_command: /kaola-workflow-phase3 {project}
-```
-
-Continue to Phase 3 once the contractor reports the phase file and compliance rows
-are written.
+Continue to Phase 3 once the script reports `result: ok`.

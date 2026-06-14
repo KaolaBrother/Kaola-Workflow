@@ -75,7 +75,39 @@ X/10
 | knowledge-lookup | invoked/N/A | .cache/knowledge-lookup.md or docs-impact check | reason if N/A |
 ```
 
-The deterministic bookkeeping below — the `workflow-state.md` checkpoint write (preserving the `## Sink` block) and the per-issue roadmap `init-issue` creation/staging — is delegated to the mechanical `contractor` Codex agent role when that subagent is available; it runs the scripts and authors the durable bookkeeping but never authors the `phase1-research.md` synthesis, never invokes code-explorer/knowledge-lookup, and never judges. The current session keeps requirement parsing, the research dispatches, the completeness gate, the `phase1-research.md` synthesis, and the branch decision.
+## Mechanical Checkpoint (script-owned transaction)
+
+`phase1-research.md` is the orchestrator's research synthesis — already written on
+disk by step 7 (this script never authors or edits it). The deterministic
+`workflow-state.md` checkpoint write is owned by the full-path transaction script
+`kaola-gitlab-workflow-full-advance.js` (ADR 0004), not a subagent. The main session
+runs it directly; it refuses if `phase1-research.md` is absent (typed refusal, zero
+mutation) and is idempotent on resume. The script authors only the durable
+checkpoint — it never authors the `phase1-research.md` synthesis, never invokes
+code-explorer/knowledge-lookup, and never judges. The current session keeps
+requirement parsing, the research dispatches, the completeness gate, the
+`phase1-research.md` synthesis, and the branch decision.
+
+Resolve `$KAOLA_SCRIPTS` once, then run the checkpoint (phase1-complete is a
+checkpoint only — there is no stdin packet):
+
+```bash
+KAOLA_SCRIPTS="plugins/kaola-workflow-gitlab/scripts"
+if [ ! -f "$KAOLA_SCRIPTS/kaola-gitlab-workflow-full-advance.js" ]; then
+  KAOLA_SCRIPTS="$(dirname "$(find "$HOME/.codex/plugins/cache" -path '*/kaola-workflow-gitlab/*/scripts/kaola-gitlab-workflow-full-advance.js' -print -quit 2>/dev/null)")"
+fi
+
+node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-full-advance.js" phase1-complete \
+  --project {project} --json
+```
+
+The script updates `workflow-state.md`, PRESERVING any existing `## Sink` block
+byte-for-byte, and advances the state pointer (phase: 1 / step: complete /
+`next_skill: kaola-workflow-ideation {project}`).
+
+Then run the per-issue roadmap `init-issue` step below (a separate direct script
+call the session still owns), and continue to Phase 2 when Phase 1 evidence and
+compliance rows are complete.
 
 8. If a GitLab issue is linked, run `init-issue` to create the roadmap tracking file:
 
