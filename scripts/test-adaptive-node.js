@@ -49,6 +49,8 @@ const {
   runRouteFindings,
   parseFindingLine,
   resolveOwningNode,
+  // #472: dispatch-fidelity concurrency derivation
+  deriveMaxSimultaneousOpen,
 } = require('./kaola-workflow-adaptive-node');
 const { RUNNING_SET_NAME } = require('./kaola-workflow-adaptive-schema');
 const { readDurableConsentHalt, locateSection } = require('./kaola-workflow-adaptive-schema');
@@ -6362,6 +6364,102 @@ function rtHarness(initialFiles, opts) {
     assert(r.result === 'ok' && r.speculative_review_required && (r.speculative_review_required.speculative || []).includes('docs'),
       'T439-10: after the guard held docs, the gate verdict:fail surfaces speculative_review_required naming docs, got ' + JSON.stringify(r.speculative_review_required));
     rm439(repoRoot);
+  }
+}
+
+// ===========================================================================
+// #472 (dispatch fidelity): open-next does NOT silently single-open an INDEPENDENT ≥2 frontier — it
+// signals enterBatch so the skeleton routes to a concurrent ONE-MESSAGE dispatch; a width-1 frontier
+// stays serial (width is the planner's call — no forced minimum). deriveMaxSimultaneousOpen proves
+// everConcurrent from the durable opened/closed telemetry.
+// ===========================================================================
+{
+  // T472-DIVERT: auto-pick open-next at a ≥2 independent read frontier → enterBatch (no single-open).
+  {
+    let planContent = makePlan(['| a | pending | |', '| b | pending | |', '| review | pending | |', '| finalize | pending | |']);
+    const shellStub = (sp) => {
+      if (path.basename(sp) === 'kaola-workflow-next-action.js') return {
+        exitCode: 0, result: 'ok',
+        readySet: [{ id: 'a', role: 'code-explorer', model: 'sonnet', declared_write_set: '—', dependsOn: [] }, { id: 'b', role: 'code-explorer', model: 'sonnet', declared_write_set: '—', dependsOn: [] }],
+        readyPending: [{ id: 'a', role: 'code-explorer', model: 'sonnet', declared_write_set: '—' }, { id: 'b', role: 'code-explorer', model: 'sonnet', declared_write_set: '—' }],
+        nextNode: { id: 'a', role: 'code-explorer', model: 'sonnet', declared_write_set: '—' }, allDone: false,
+      };
+      return { exitCode: 1 };
+    };
+    const r = runOpenNext({ planPath: '/fake/kaola-workflow/test-project/workflow-plan.md', statePath: '/fake/kaola-workflow/test-project/workflow-state.md', project: 'test-project', nodeId: null, shell: shellStub, readFile: (f) => f.endsWith('workflow-plan.md') ? planContent : makeState(), writeFile: (f, c) => { if (f.endsWith('workflow-plan.md')) planContent = c; } });
+    assert(r.result === 'ok' && r.enterBatch === true, 'T472-DIVERT: open-next at a ≥2 independent frontier signals enterBatch, got ' + JSON.stringify(r));
+    assert(r.opened === null, 'T472-DIVERT: open-next does NOT single-open a ≥2 frontier (opened:null)');
+    assert(Array.isArray(r.frontier) && r.frontier.map(n => n.id).sort().join(',') === 'a,b', 'T472-DIVERT: frontier carries both authored nodes, got ' + JSON.stringify(r.frontier));
+    assert(!planContent.includes('| a | in_progress'), 'T472-DIVERT: NO ledger row was flipped (zero single-open mutation)');
+  }
+  // T472-SERIAL: width-1 frontier → open-next single-opens serially (no enterBatch — no forced width).
+  {
+    let planContent = makePlan(['| solo | pending | |', '| review | pending | |', '| finalize | pending | |']);
+    const shellStub = (sp) => {
+      const base = path.basename(sp);
+      if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', readySet: [{ id: 'solo', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'a.js', dependsOn: [] }], readyPending: [{ id: 'solo', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'a.js' }], nextNode: { id: 'solo', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'a.js' }, allDone: false };
+      if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok', mode: 'per-node-start', nodeId: 'solo', overallOk: true };
+      if (base === 'kaola-workflow-task-mirror.js') return { exitCode: 0, status: 'ok' };
+      return { exitCode: 1 };
+    };
+    const r = runOpenNext({ planPath: '/fake/kaola-workflow/test-project/workflow-plan.md', statePath: '/fake/kaola-workflow/test-project/workflow-state.md', project: 'test-project', nodeId: null, shell: shellStub, readFile: (f) => f.endsWith('workflow-plan.md') ? planContent : makeState(), writeFile: (f, c) => { if (f.endsWith('workflow-plan.md')) planContent = c; } });
+    assert(r.result === 'ok' && !r.enterBatch, 'T472-SERIAL: width-1 frontier does NOT enterBatch (no forced width), got ' + JSON.stringify(r));
+    assert(r.opened && r.opened.id === 'solo', 'T472-SERIAL: width-1 single-opens serially, got ' + JSON.stringify(r.opened));
+  }
+  // T472-NODEID: an explicit --node-id at a ≥2 frontier is EXEMPT (the operator asked for one node).
+  {
+    let planContent = makePlan(['| a | pending | |', '| b | pending | |', '| review | pending | |', '| finalize | pending | |']);
+    const shellStub = (sp) => {
+      const base = path.basename(sp);
+      if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', readySet: [{ id: 'a', role: 'code-explorer', model: 'sonnet', declared_write_set: '—', dependsOn: [] }, { id: 'b', role: 'code-explorer', model: 'sonnet', declared_write_set: '—', dependsOn: [] }], readyPending: [{ id: 'a' }, { id: 'b' }], nextNode: { id: 'a' }, allDone: false };
+      if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok', mode: 'per-node-start', nodeId: 'a', overallOk: true };
+      if (base === 'kaola-workflow-task-mirror.js') return { exitCode: 0, status: 'ok' };
+      return { exitCode: 1 };
+    };
+    const r = runOpenNext({ planPath: '/fake/kaola-workflow/test-project/workflow-plan.md', statePath: '/fake/kaola-workflow/test-project/workflow-state.md', project: 'test-project', nodeId: 'a', shell: shellStub, readFile: (f) => f.endsWith('workflow-plan.md') ? planContent : makeState(), writeFile: (f, c) => { if (f.endsWith('workflow-plan.md')) planContent = c; } });
+    assert(r.result === 'ok' && !r.enterBatch && r.opened && r.opened.id === 'a', 'T472-NODEID: explicit --node-id single-opens (exempt from the divert), got ' + JSON.stringify(r));
+  }
+  // T472-TELEMETRY: deriveMaxSimultaneousOpen proves everConcurrent from the durable opened/closed events.
+  {
+    const concurrent = [
+      JSON.stringify({ node: 'a', event: 'opened', ts: '2026-06-14T10:00:00.000Z' }),
+      JSON.stringify({ node: 'b', event: 'opened', ts: '2026-06-14T10:00:01.000Z' }),
+      JSON.stringify({ node: 'a', event: 'closed', ts: '2026-06-14T10:00:05.000Z' }),
+      JSON.stringify({ node: 'b', event: 'closed', ts: '2026-06-14T10:00:06.000Z' }),
+    ].join('\n') + '\n';
+    const dc = deriveMaxSimultaneousOpen(concurrent);
+    assert(dc.maxSimultaneousOpen === 2 && dc.everConcurrent === true, 'T472-TELEMETRY: overlapping opens → max 2 + everConcurrent true, got ' + JSON.stringify(dc));
+    const serial = [
+      JSON.stringify({ node: 'a', event: 'opened', ts: '2026-06-14T10:00:00.000Z' }),
+      JSON.stringify({ node: 'a', event: 'closed', ts: '2026-06-14T10:00:01.000Z' }),
+      JSON.stringify({ node: 'b', event: 'opened', ts: '2026-06-14T10:00:02.000Z' }),
+      JSON.stringify({ node: 'b', event: 'closed', ts: '2026-06-14T10:00:03.000Z' }),
+    ].join('\n') + '\n';
+    const ds = deriveMaxSimultaneousOpen(serial);
+    assert(ds.maxSimultaneousOpen === 1 && ds.everConcurrent === false, 'T472-TELEMETRY: serial opens → max 1 + everConcurrent false (the 100%-serial signature), got ' + JSON.stringify(ds));
+    const handoff = [
+      JSON.stringify({ node: 'a', event: 'opened', ts: '2026-06-14T10:00:00.000Z' }),
+      JSON.stringify({ node: 'a', event: 'closed', ts: '2026-06-14T10:00:01.000Z' }),
+      JSON.stringify({ node: 'b', event: 'opened', ts: '2026-06-14T10:00:01.000Z' }),
+      JSON.stringify({ node: 'b', event: 'closed', ts: '2026-06-14T10:00:02.000Z' }),
+    ].join('\n') + '\n';
+    assert(deriveMaxSimultaneousOpen(handoff).everConcurrent === false, 'T472-TELEMETRY: same-ts close→open hand-off is NOT counted as concurrent (conservative)');
+    // SPOOF guard: a crash-resume re-open of ONE node (two `opened`, no intervening `closed` — appendNode-
+    // Timing appends unconditionally) must NOT inflate to everConcurrent (distinct-node-id tracking).
+    const dupOpen = [
+      JSON.stringify({ node: 'a', event: 'opened', ts: '2026-06-14T10:00:00.000Z' }),
+      JSON.stringify({ node: 'a', event: 'opened', ts: '2026-06-14T10:00:02.000Z' }),
+      JSON.stringify({ node: 'a', event: 'closed', ts: '2026-06-14T10:00:05.000Z' }),
+    ].join('\n') + '\n';
+    const dd = deriveMaxSimultaneousOpen(dupOpen);
+    assert(dd.maxSimultaneousOpen === 1 && dd.everConcurrent === false, 'T472-TELEMETRY: a single-node re-open does NOT spoof everConcurrent (distinct node-ids), got ' + JSON.stringify(dd));
+    // Genuine 3-wide concurrency (incl. a never-closed node) is still counted.
+    const wide = [
+      JSON.stringify({ node: 'a', event: 'opened', ts: '2026-06-14T10:00:00.000Z' }),
+      JSON.stringify({ node: 'b', event: 'opened', ts: '2026-06-14T10:00:01.000Z' }),
+      JSON.stringify({ node: 'c', event: 'opened', ts: '2026-06-14T10:00:02.000Z' }),
+    ].join('\n') + '\n';
+    assert(deriveMaxSimultaneousOpen(wide).maxSimultaneousOpen === 3, 'T472-TELEMETRY: 3 distinct concurrent opens (none closed) → max 3');
   }
 }
 

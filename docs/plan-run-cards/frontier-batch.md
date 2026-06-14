@@ -171,8 +171,14 @@ to the parent worktree, which must be caught before the join contaminates shared
 | Overlapping or unknown write sets | Serial (treat as write-role frontier) |
 | `depends-on-member` relationship | Serial within the dependency chain; parallel across independent chains |
 
-When in doubt, use serial. The plan-run is correct with serial execution; parallel is an
-optimization for disjoint frontiers, not a requirement.
+**Dispatch fidelity (#472): run the frontier at its AUTHORED width.** When the planner authored an
+independent ≥2 frontier (`enterBatch: true`), dispatch it concurrently — that is the default, not an
+optional optimization. The serial fallback is for the *degraded* cases only (write-role frontiers
+without lane containment, overlapping/unknown write sets, a dependency chain — the rows above), NOT a
+"when in doubt, serialize" default: silently serializing an authored-parallel read frontier is the
+dispatch-fidelity defect #472 fixes. Width itself stays the planner's scope-driven call (a width-1
+frontier simply never sets `enterBatch`); the executor's job is to run whatever width was authored, no
+wider and no narrower.
 
 ---
 
