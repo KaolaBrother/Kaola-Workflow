@@ -117,6 +117,9 @@ above (session effort = `dispatch.codex_reasoning_effort` when non-null). Pass `
   frontiers. `KAOLA_FANOUT_CAP_READONLY` (default 8) applies to read-only batches.
 - Serial (`max_concurrent=1`) is the degraded mode; `opening` marker + `reconcile` handle
   batch crash-resume. `test_thrash` ≥ 3: escalate via `write-halt --reason test_thrash`.
+- `merge_conflict` (#463 write-overlap): an unresolvable write-leg convergence (the synthesizer
+  commit barrier) after the bounded-repair cap escalates via `write-halt --reason merge_conflict`
+  — a RESUMABLE consent-style halt (resolve, then `clear-halt --reason consent`), unlike `test_thrash`.
 
 Record durable evidence after the role returns:
 

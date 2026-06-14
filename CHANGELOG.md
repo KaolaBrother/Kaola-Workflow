@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **adaptive: `merge_conflict` typed HALT reason (#463, sequencing step 2 of the write-overlap mechanism).** Enumerates the fourth `ESCALATION_MARKERS` member (`kaola-workflow-adaptive-schema.js`, byte-identical ×4) — the typed, fail-closed outcome for an unresolvable write-leg convergence that the upcoming per-leg synthesizer commit barrier (steps 3–4) will raise after its bounded-repair cap. Unlike `test_thrash` (a one-way escalation to the full path), `merge_conflict` is a **resumable consent-style halt**: `write-halt --reason merge_conflict` flows through the generic escalation branch (records `escalated_to_full: merge_conflict` + the durable `consent_halt: pending` marker, so the run's halt fence catches it exactly like a consent halt), and `clear-halt --reason consent` now strips **both** the ledger marker **and** the `merge_conflict` cause, so a resolved conflict resumes adaptively with clean state (no lingering escalation marker). Audited every `ESCALATION_MARKERS`/escalation reader — `autopilot` (`checkRunHalts` already surfaces it via the `consent_halt` ledger marker), `repair-state` (`routeAdaptive`'s OR-combined `readDurableConsentHalt` already surfaces it as `consent-halt-surface`), and `fast-advance`/`fast-audit` (whose fast-path `ESCALATION_TRIGGERS` list is consumed independently of `ESCALATION_MARKERS` and never carries `merge_conflict`, an adaptive-only outcome) need no change. The `merge_conflict` token is propagated to all SIX (#400) plan-run prose surfaces — the three edition `kaola-workflow-plan-run.md` commands (top-level + gitlab + gitea) and the three Codex `kaola-workflow-plan-run/SKILL.md` — and machine-pinned by **every** contract validator that pins `test_thrash` (`validate-workflow-contracts.js` + its Codex byte-mirror, `validate-kaola-workflow-contracts.js`, and the forge `validate-kaola-workflow-{gitlab,gitea}-contracts.js`), so the cross-edition (#307) parity is self-guarding. The runtime that *raises* `merge_conflict` (the scheduler legs + synthesizer) and the live-harness probe remain the OPEN remainder of #463.
+
 ## [6.2.0] - 2026-06-14
 
 ### Added

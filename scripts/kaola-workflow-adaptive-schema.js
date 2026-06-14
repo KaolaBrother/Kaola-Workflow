@@ -92,11 +92,17 @@ const MAX_NODES = 200;
 // Barrier escalation markers written durably to workflow-state.md. `security` forces
 // security-reviewer post-dominance; `consent` halts a provisional auto-run for the
 // user's explicit yes (surfaced on resume, never blindly re-dispatched); `test_thrash`
-// escalates a thrashing loop to full.
+// escalates a thrashing loop to full. `merge_conflict` (#463 write-overlap) is the typed
+// HALT for an unresolvable write-leg convergence (the synthesizer commit barrier): after
+// the bounded-repair cap it raises a consent-style halt (reuses `consent_halt: pending`),
+// cleared via `clear-halt --reason consent` and RESUMED adaptively — unlike `test_thrash`,
+// which is a one-way escalation to the full path. The runtime that RAISES it (the per-leg
+// scheduler + synthesizer) lands in a later #463 sequencing step; this enumerates the marker.
 const ESCALATION_MARKERS = Object.freeze({
   security: 'security',
   consent: 'consent',
   test_thrash: 'test_thrash',
+  merge_conflict: 'merge_conflict',
 });
 
 // E2 (#234): a SECOND, durable source of truth for a barrier consent-halt, written into the plan's

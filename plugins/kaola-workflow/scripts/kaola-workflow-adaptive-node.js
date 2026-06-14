@@ -200,13 +200,13 @@ const OPERATOR_HINT_REGISTRY = {
 
   // --- halt (#391/#360) ---
   invalid_reason: (ctx) =>
-    'Invalid --reason. Use one of: ' + ((ctx.validReasons || []).join(', ') || 'consent, security, test_thrash') + '.',
+    'Invalid --reason. Use one of: ' + ((ctx.validReasons || []).join(', ') || 'consent, security, test_thrash, merge_conflict') + '.',
   no_halt_present: () =>
     'No durable consent_halt: pending marker and no escalated_to_full state marker to clear — there is nothing to clear.',
   halt_written: (ctx) =>
-    'A consent/security/test_thrash halt is set for ' + (ctx.nodeId || '<id>') + '. Resolve the cause, then clear-halt --reason consent|security to resume.',
+    'A ' + (ctx.reason ? ctx.reason : 'consent/security/test_thrash/merge_conflict') + ' halt is set for ' + (ctx.nodeId || '<id>') + '. Resolve the cause, then clear-halt --reason consent|security to resume.',
   write_halt_invalid_reason: (ctx) =>
-    'Invalid write-halt --reason. Use one of: ' + ((ctx.validReasons || []).join(', ') || 'consent, security, test_thrash') + '.',
+    'Invalid write-halt --reason. Use one of: ' + ((ctx.validReasons || []).join(', ') || 'consent, security, test_thrash, merge_conflict') + '.',
 
   // --- reopen / repair primitives (#434 / D-434-01) ---
   active_batch_exists: () =>
@@ -2281,7 +2281,10 @@ function computeTriage(barrierOut, cacheDir, nodeId, readFile) {
 function runWriteHalt(opts) {
   const { planPath, statePath, project, nodeId, reason, shell, readFile, writeFile, barrierOut } = opts;
 
-  const validReasons = ['consent', 'security', 'test_thrash'];
+  // #463 (write-overlap): `merge_conflict` joins the allowlist. It flows through the generic
+  // `else` branch below (escalated_to_full: merge_conflict + consent_halt: pending) — a consent-
+  // style, resumable halt, NOT the consent dual-marker escalation.
+  const validReasons = ['consent', 'security', 'test_thrash', 'merge_conflict'];
   if (!validReasons.includes(reason)) {
     return { result: 'refuse', reason: 'invalid_reason', validReasons };
   }
@@ -2443,6 +2446,11 @@ function runClearHalt(opts) {
   if (reason === 'consent') {
     stateContent = stateContent.replace(/^escalated_to_full:[ \t]*consent[ \t]*\n?/mg, '');
     stateContent = stateContent.replace(/^escalated_to_full:[ \t]*security[ \t]*\n?/mg, '');
+    // #463: a `merge_conflict` halt is a RESUMABLE consent-style halt (it raises
+    // consent_halt: pending, cleared here via --reason consent). Strip its cause marker too,
+    // so the run resumes ADAPTIVELY with clean state — it did NOT escalate to the full path.
+    // (Contrast test_thrash, a one-way full escalation deliberately left in place.)
+    stateContent = stateContent.replace(/^escalated_to_full:[ \t]*merge_conflict[ \t]*\n?/mg, '');
   } else {
     stateContent = stateContent.replace(/^escalated_to_full:[ \t]*security[ \t]*\n?/mg, '');
   }
@@ -4506,7 +4514,7 @@ function main() {
       '  record-evidence     --project P --node-id N --stdin       (MUTATES .cache)\n' +
       '  record-evidence     --project P --node-id N --verify      (READ-ONLY: verifies on-disk evidence)\n' +
       '  close-and-open-next --project P --node-id N\n' +
-      '  write-halt          --project P --node-id N --reason consent|security|test_thrash\n' +
+      '  write-halt          --project P --node-id N --reason consent|security|test_thrash|merge_conflict\n' +
       '  reopen-node         --project P --node-id N\n' +
       '  route-findings      --project P --node-id N (#446: gate-evidence finding: lines → .cache/findings-route.json)\n' +
       '\n' +

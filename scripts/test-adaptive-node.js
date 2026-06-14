@@ -3065,6 +3065,53 @@ const STATE_NO_WT = '## Sink\nbranch: workflow/issue-335\n';
   assert(wrote === false, 'T-360c: decoy line left untouched (no mutation)');
 }
 
+// ---------------------------------------------------------------------------
+// T-MC (#463 step 2): write-halt --reason merge_conflict — a RESUMABLE consent-style halt.
+//   (a) write-halt(merge_conflict) records escalated_to_full: merge_conflict (the cause, NOT the
+//       consent dual markers) + the durable consent_halt: pending marker, so the run's halt fence
+//       catches it exactly like a consent halt (readDurableConsentHalt true).
+//   (b) clear-halt(consent) removes BOTH the ledger consent_halt AND escalated_to_full:
+//       merge_conflict, so the run resumes ADAPTIVELY with clean state — contrast test_thrash,
+//       a one-way full escalation whose marker is deliberately left in place.
+//   (c) merge_conflict is in the write-halt validReasons allowlist; an unknown reason still refuses.
+// ---------------------------------------------------------------------------
+{
+  // (a) write-halt(merge_conflict) → resumable consent-style halt
+  const files = {
+    '/p/workflow-plan.md': makePlan(['| impl-a | in_progress | |', '| finalize | pending | |']),
+    '/p/workflow-state.md': makeState(),
+  };
+  const rf = (f) => { if (files[f] !== undefined) return files[f]; throw new Error('ENOENT ' + f); };
+  const wf = (f, c) => { files[f] = c; };
+  const shellStub = () => ({ status: 'skipped' });
+
+  const wh = runWriteHalt({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', nodeId: 'impl-a', reason: 'merge_conflict', shell: shellStub, readFile: rf, writeFile: wf });
+  assert(wh.result === 'ok' && wh.halt === 'written', 'T-MC-a: write-halt(merge_conflict) ok/written');
+  assert(readDurableConsentHalt(files['/p/workflow-plan.md']) === true, 'T-MC-a: durable consent_halt present (the halt fence catches a merge_conflict halt)');
+  assert(/escalated_to_full:\s*merge_conflict/.test(files['/p/workflow-state.md']), 'T-MC-a: state has escalated_to_full: merge_conflict (the cause)');
+  assert(!/escalated_to_full:\s*consent/.test(files['/p/workflow-state.md']), 'T-MC-a: merge_conflict does NOT write escalated_to_full: consent (single-cause, not the consent escalation)');
+  assert(!/escalated_to_full:\s*security/.test(files['/p/workflow-state.md']), 'T-MC-a: merge_conflict does NOT write escalated_to_full: security');
+  assert(Array.isArray(wh.markers) && wh.markers.includes('escalated_to_full:merge_conflict') && wh.markers.includes('consent_halt:pending'), 'T-MC-a: markers list reflects the merge_conflict halt');
+
+  // (b) clear-halt(consent) → fully resumable: clears the ledger marker AND the merge_conflict cause
+  const ch = runClearHalt({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', reason: 'consent', shell: shellStub, readFile: rf, writeFile: wf });
+  assert(ch.result === 'ok' && ch.halt === 'cleared', 'T-MC-b: clear-halt(consent) ok/cleared');
+  assert(readDurableConsentHalt(files['/p/workflow-plan.md']) === false, 'T-MC-b: durable consent_halt GONE after clear-halt');
+  assert(!/escalated_to_full:\s*merge_conflict/.test(files['/p/workflow-state.md']), 'T-MC-b: escalated_to_full: merge_conflict GONE — run resumes adaptively with clean state');
+  assert(!/^escalated_to_full:/m.test(files['/p/workflow-state.md']), 'T-MC-b: NO escalation marker lingers after a resolved merge_conflict halt');
+}
+{
+  // (c) merge_conflict is an accepted write-halt reason; an unknown reason still refuses.
+  const files = {
+    '/p/workflow-plan.md': makePlan(['| impl-a | in_progress | |']),
+    '/p/workflow-state.md': makeState(),
+  };
+  const rf = (f) => { if (files[f] !== undefined) return files[f]; throw new Error('ENOENT ' + f); };
+  const bad = runWriteHalt({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', nodeId: 'impl-a', reason: 'banana', shell: () => ({ status: 'skipped' }), readFile: rf, writeFile: (f, c) => { files[f] = c; } });
+  assert(bad.result === 'refuse' && bad.reason === 'invalid_reason', 'T-MC-c: an unknown write-halt reason still refuses invalid_reason');
+  assert(Array.isArray(bad.validReasons) && bad.validReasons.includes('merge_conflict'), 'T-MC-c: validReasons includes merge_conflict');
+}
+
 // Summary
 // ---------------------------------------------------------------------------
 // ===========================================================================
