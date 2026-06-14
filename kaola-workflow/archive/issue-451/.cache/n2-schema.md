@@ -1,0 +1,5 @@
+evidence-binding: n2-schema 523694bad903
+
+RED: original adaptive-schema.js (git show HEAD) — require().dispatchEffort === undefined; OPUS_ELIGIBLE_ROLES present. The new dispatchEffort behavior had no implementation.
+GREEN: replaced OPUS_ELIGIBLE_ROLES + variantProfileText (+ stale #405 comments + exports) with dispatchEffort(model) resolver across all 4 byte-identical adaptive-schema copies. Unit proof (node -e): dispatchEffort('opus')={xhigh,planner_model}, dispatchEffort('sonnet')={null,role_default}, dispatchEffort(null)={null,role_default}; OPUS_ELIGIBLE_ROLES & variantProfileText now undefined. validate-script-sync exit 0 (4 copies byte-identical). Downstream consumers (installer/validators) now reference the removed exports — fixed by n4/n7. Consumer descriptor test is n3's test-adaptive-node.js.
+write_set: scripts/kaola-workflow-adaptive-schema.js, plugins/kaola-workflow/scripts/kaola-workflow-adaptive-schema.js, plugins/kaola-workflow-gitlab/scripts/kaola-workflow-adaptive-schema.js, plugins/kaola-workflow-gitea/scripts/kaola-workflow-adaptive-schema.js

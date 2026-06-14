@@ -1,0 +1,18 @@
+evidence-binding: n1-architect baa07eb810ea
+
+code-architect (read-only) — design ratified (settled across two prior architecture passes; mechanism + per-node spec are final).
+
+MECHANISM: Codex 0.139 has no per-spawn effort field. OMIT model_reasoning_effort from base profiles → spawned agent inherits parent SESSION effort; PR #14807 (in 0.139) makes agent-config win over project-profile. Per-node effort is session-scoped (codex plan-run sets session effort per the descriptor). AC6 satisfied by this authoritative version-pinned docs evidence (no live observation required). AC4's "preserve base tuned effort" is OBSOLETE (D-451-01 records the deviation): base profiles OMIT effort so per-node opus→xhigh works via session control.
+
+PER-NODE:
+- n2-schema (tdd-guide): adaptive-schema.js ×4 byte-identical — DELETE OPUS_ELIGIBLE_ROLES + variantProfileText + their exports + stale #405 comment; ADD+export dispatchEffort(model) = model==='opus'?{codex_reasoning_effort:'xhigh',codex_reasoning_effort_source:'planner_model'}:{codex_reasoning_effort:null,codex_reasoning_effort_source:'role_default'}. RED→GREEN via a node -e unit check on dispatchEffort (the consumer test lives in n3).
+- n3-dispatch (tdd-guide): adaptive-node.js quad (root+codex byte-pair + 2 forge-renamed ports) — buildDispatch(:952) emits agent_type:nodeInfo.role + ...dispatchEffort(nodeInfo.model). + test-adaptive-node.js D451-DISPATCH-EFFORT (opus→xhigh/planner_model; sonnet & null→null/role_default; agent_type=role) RED→GREEN.
+- n4-codexinstall (implementer): install-codex-agent-profiles.js ×3 + codex-preflight.js ×4 — make model_reasoning_effort OPTIONAL in validateProfileText (only validate value vs EFFORT_VALUES when PRESENT; name+developer_instructions required); remove the OPUS_ELIGIBLE_ROLES/variantProfileText require + generateMaxVariants + --generate-variants branch + the 2 dead helpers; ADD the 6 -max filenames to RETIRED_PROFILE_FILES (pruneStaleProfiles removes them, preserving user-owned via the extraUnmanaged else-branch — NEVER blanket-glob *-max); count 20→14.
+- n5-deletions (implementer): delete the 18 <role>-max.toml (6 roles × 3 editions, role-triple atomic) + remove the 6 [agents.<role>-max] tables from config/agents.toml ×3.
+- n6-stripeffort (implementer): strip the `model_reasoning_effort = "..."` line from the 14 base agents/<role>.toml × 3 editions = 42 files (keep editions byte-synced). REQUIRED for the feature to not ship inert.
+- n7-validators (implementer): the 3 STANDALONE forge contract validators (validate-kaola-workflow-contracts.js [no byte-mirror twin] + gitlab/gitea) — drop the -max derivation guard + SKILL -max pin; ADD forbid (0 *-max.toml, 0 [agents.*-max]); count 20→14.
+- n8-walkthroughs (implementer): github-codex simulate-kaola-workflow-walkthrough.js (delete #405 max-variant test + count 20→14); the 2 forge test-{gitlab,gitea}-workflow-scripts.js (flip count 20→14 at the AC3/#405 asserts); the 2 forge-codex walkthroughs (drop inline model_variant_missing/-max asserts).
+- n9-skills (implementer): 3 plan-run SKILLs — drop -max/model_variant_missing/OPUS_ELIGIBLE; "spawn dispatch.agent_type (base role); if codex_reasoning_effort non-null ensure session effort=it before spawning; else standing session effort"; forge-neutral.
+- n10 review (G1) → n11 docs (README/api/architecture + D-451-01 deviation + the 3 adapt SKILL stale model_reasoning_effort prose lines) → n12 finalize (CHANGELOG + 4-chain #307 evidence).
+
+OUT OF SCOPE (clean): CANONICAL_ROLES, validate-vendored-agents, install.sh/uninstall.sh REQUIRED_AGENTS, resolve-agent-model, 3 Claude plan-run COMMANDS, scripts/simulate-workflow-walkthrough.js, validate-workflow-contracts.js (asserts only root agents/*.md Claude prose).
