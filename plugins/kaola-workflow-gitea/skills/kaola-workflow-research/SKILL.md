@@ -75,7 +75,44 @@ X/10
 | knowledge-lookup | invoked/N/A | .cache/knowledge-lookup.md or docs-impact check | reason if N/A |
 ```
 
-The deterministic bookkeeping below — the `workflow-state.md` checkpoint write (preserving the `## Sink` block) and the per-issue roadmap `init-issue` creation/staging — is delegated to the mechanical `contractor` Codex agent role when that subagent is available; it runs the scripts and authors the durable bookkeeping but never authors the `phase1-research.md` synthesis, never invokes code-explorer/knowledge-lookup, and never judges. The current session keeps requirement parsing, the research dispatches, the completeness gate, the `phase1-research.md` synthesis, and the branch decision.
+### Mechanical Checkpoint (script-owned transaction)
+
+`phase1-research.md` is the orchestrator's research synthesis — already written on
+disk above (this script never authors or edits it). The deterministic bookkeeping
+— the `workflow-state.md` checkpoint write, preserving the `## Sink` block — is
+owned by the full-path transaction script `kaola-gitea-workflow-full-advance.js`
+(ADR 0004), not a subagent. The main session runs it directly; it runs the script
+and authors the durable bookkeeping but never authors the `phase1-research.md`
+synthesis, never invokes code-explorer/knowledge-lookup, and never judges. The
+current session keeps requirement parsing, the research dispatches, the
+completeness gate, the `phase1-research.md` synthesis, and the branch decision.
+
+Resolve `$KAOLA_SCRIPTS` once, then run the checkpoint:
+
+```bash
+kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./plugins/kaola-workflow-gitea/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitea/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitea/scripts/$_n" "./plugins/kaola-workflow-gitea/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
+KAOLA_SCRIPTS="$(dirname "$(kaola_script kaola-gitea-workflow-full-advance.js)")"
+
+node "$KAOLA_SCRIPTS/kaola-gitea-workflow-full-advance.js" phase1-complete \
+  --project {project} --json
+```
+
+This is a checkpoint only — there is no stdin packet; `phase1-research.md` is
+pre-authored above by the session and the script refuses (typed refusal, zero
+mutation) if that file is absent, and is idempotent on resume. It updates
+`workflow-state.md`, PRESERVING any existing `## Sink` block byte-for-byte, and
+advances the state pointer:
+
+```text
+phase: 1
+step: complete
+next_command: /kaola-workflow-phase2 {project}
+next_skill: kaola-workflow-ideation {project}
+```
+
+Then run Step 8 (the per-issue roadmap `init-issue`) below — a separate direct
+script call — and continue to Phase 2 when Phase 1 evidence and compliance rows
+are complete.
 
 8. If a Gitea issue is linked, run `init-issue` to create the roadmap tracking file:
 

@@ -240,33 +240,53 @@ Validation Delegation Policy and Validation De-Duplication rules.
 
 After three fix-and-re-review iterations without convergence, stop and ask.
 
-## Mechanical Review Finalization (delegated to the contractor)
+## Mechanical Review Finalization (script-owned transaction)
 
 The **Review Status** verdict (`PASSED` / `PASSED WITH FOLLOW-UPS`) and the
 CRITICAL/HIGH triage are the main session's **judgment**: the main session reads
 `.cache/code-reviewer.md`, `.cache/security-reviewer.md`, and every
 `.cache/review-fix-*.md`, decides whether any CRITICAL or HIGH finding remains
-unresolved, and DECIDES the verdict. The contractor never judges severity, never
-grades the review, and never gates Finalization — it only transcribes the verdict the
-main session hands it, verbatim.
+unresolved, and DECIDES the verdict. This script never judges severity, never
+grades the review, and never gates Finalization — it only transcribes the verdict
+the main session hands it, verbatim. It refuses a `review_status` that is not
+`PASSED` or `PASSED WITH FOLLOW-UPS` (typed refusal, zero mutation).
 
-Once the verdict is decided, summon the contractor to author `phase5-review.md`
-and advance the `workflow-state.md` pointer. Hand the decided **Review Status**
-string and the resolved CRITICAL/HIGH/MEDIUM/LOW finding lists into the prompt;
-the contractor writes them exactly as given.
+The mechanical bookkeeping — authoring `phase5-review.md` from the orchestrator's
+verbatim content and advancing the `workflow-state.md` pointer — is owned by the
+full-path transaction script `kaola-workflow-full-advance.js` (ADR 0004), not a
+subagent. The main session runs it directly, handing the decided Review Status and
+the resolved CRITICAL/HIGH/MEDIUM/LOW finding lists as a JSON packet on stdin; the
+script renders the phase file (with a RESOLVED `## Required Agent Compliance` table)
+and advances the pointer in crash-safe order, idempotent on resume.
 
-```text
-Agent(
-  subagent_type="contractor",
-  model="{CONTRACTOR_MODEL}",
-  description="Mechanical review finalize {project}",
-  prompt="Run the mechanical review-finalization bookkeeping for {project}. Execute Step 4 below exactly as written in this command file: author kaola-workflow/{project}/phase5-review.md from the template, then update workflow-state.md (phase: 5 / step: complete / next_command: /kaola-workflow-finalize {project}), PRESERVING any existing ## Sink block byte-for-byte. Write the Review Status verdict, the CRITICAL/HIGH/MEDIUM/LOW finding lists, the Required Agent Compliance rows, fixes-applied, validation evidence, and follow-up items EXACTLY as the orchestrator hands them to you — copy the verdict verbatim; do NOT restate, soften, upgrade, or re-grade it, and do NOT decide severity or whether the review passed. Read the .cache evidence paths the orchestrator names only to transcribe file lists and evidence paths. Return a compact bookkeeping summary; do NOT dispatch code-reviewer/security-reviewer/tdd-guide/build-error-resolver or any role, do NOT judge or triage findings, do NOT route or apply fixes, do NOT act as a review gate, do NOT close the issue, and do NOT ask the user."
-)
+Resolve `$KAOLA_SCRIPTS` once, then run the transaction:
+
+```bash
+kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
+KAOLA_SCRIPTS="$(dirname "$(kaola_script kaola-workflow-full-advance.js)")"
+
+node "$KAOLA_SCRIPTS/kaola-workflow-full-advance.js" phase5-finalize \
+  --project {project} --stdin --json <<'PACKET'
+{
+  "review_status": "PASSED",
+  "code_review_findings": "### CRITICAL\nnone\n### HIGH\nnone\n### MEDIUM/LOW\n<list>",
+  "security_review": "ran: yes/no and reason\n### Findings\n<list or none>",
+  "fixes_applied": "<list or none>",
+  "validation_evidence": "<commands run/delegated/cited, result, evidence path>",
+  "followups": "<MEDIUM/LOW deferred or none>",
+  "compliance": [
+    { "requirement": "code-reviewer", "status": "invoked", "evidence": ".cache/code-reviewer.md" },
+    { "requirement": "security-reviewer", "status": "n/a", "skip_reason": "no security-sensitive files in write set" },
+    { "requirement": "review-fix executors", "status": "n/a", "skip_reason": "no CRITICAL/HIGH findings" }
+  ]
+}
+PACKET
 ```
 
 ## Step 4 - Write Phase File
 
-Create `kaola-workflow/{project}/phase5-review.md`:
+The script writes `kaola-workflow/{project}/phase5-review.md` in this shape
+(rendered from the packet):
 
 ```markdown
 # Phase 5 - Review: {project}
@@ -304,7 +324,9 @@ Create `kaola-workflow/{project}/phase5-review.md`:
 PASSED | PASSED WITH FOLLOW-UPS
 ```
 
-Update `workflow-state.md`:
+It then updates `workflow-state.md` (phase: 5 / step: complete / next_command:
+/kaola-workflow-finalize {project} / next_skill: kaola-workflow-finalize
+{project}), PRESERVING any existing `## Sink` block byte-for-byte:
 
 ```text
 phase: 5

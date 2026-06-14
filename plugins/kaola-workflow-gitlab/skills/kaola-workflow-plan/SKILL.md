@@ -63,6 +63,61 @@ vocabulary applies only to Codex role rows like `code-architect`.
 | blueprint revisions | invoked/N/A | .cache/architect-revision-*.md | reason if N/A |
 ```
 
-The deterministic bookkeeping below — authoring `phase3-plan.md` by transcribing the blueprint and per-task write sets, recording the `## Required Agent Compliance` rows, and the `workflow-state.md` checkpoint write with `next_skill: kaola-workflow-execute {project}` (preserving any existing `## Sink` block) — is delegated to the mechanical `contractor` Codex agent role when that subagent is available; it authors the durable bookkeeping but never dispatches the `code-architect` role, designs, re-plans, judges, or asks the user. The blueprint was already judged complete; the contractor transcribes the architect's evidence verbatim and does not change the selected approach. The current session keeps the `code-architect` dispatch, the blueprint-complete judgment, and the revision-routing decision.
+## Write Phase File (script-owned transaction)
 
-Update `workflow-state.md` with `next_skill: kaola-workflow-execute {project}` after the plan is complete. Do not ask the user to approve routine internal workflow execution.
+The deterministic bookkeeping below — authoring `phase3-plan.md` by transcribing the
+blueprint and per-task write sets, recording the `## Required Agent Compliance`
+rows, and the `workflow-state.md` checkpoint write
+(`next_skill: kaola-workflow-execute {project}`, preserving any existing `## Sink`
+block byte-for-byte) — is owned by the full-path transaction script
+`kaola-gitlab-workflow-full-advance.js` (ADR 0004), not a subagent. The script runs
+the durable bookkeeping but never invokes `code-architect`, never designs or
+re-plans, and never judges, asks the user, or changes the selected Phase 2 approach.
+The current session keeps the `code-architect` dispatch, the revision decision, and
+the blueprint-completeness judgment, then hands the judged-complete evidence (the
+blueprint and task list transcribed verbatim from `.cache/code-architect.md` plus
+any `.cache/architect-revision-*.md`) to the script for verbatim transcription.
+
+Resolve `$KAOLA_SCRIPTS` once, then run the transaction:
+
+```bash
+KAOLA_SCRIPTS="plugins/kaola-workflow-gitlab/scripts"
+if [ ! -f "$KAOLA_SCRIPTS/kaola-gitlab-workflow-full-advance.js" ]; then
+  KAOLA_SCRIPTS="$(dirname "$(find "$HOME/.codex/plugins/cache" -path '*/kaola-workflow-gitlab/*/scripts/kaola-gitlab-workflow-full-advance.js' -print -quit 2>/dev/null)")"
+fi
+
+node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-full-advance.js" phase3-finalize \
+  --project {project} --stdin --json <<'PACKET'
+{
+  "blueprint": "<Blueprint body: Files to Create/Modify, Build Sequence, Parallelization Plan, External Dependencies>",
+  "task_list": "<Task List body: one ### Task N block per task, each with a `- Write Set:` line>",
+  "compliance": [
+    { "requirement": "code-architect", "status": "invoked", "evidence": ".cache/architect.md" },
+    { "requirement": "architect revisions", "status": "n/a", "skip_reason": "no revision needed" }
+  ]
+}
+PACKET
+```
+
+The `task_list` MUST keep one `- Write Set:` line per task (using the Task Template
+above) — the parallel-overlap classifier reads those declared paths. The script
+renders `kaola-workflow/{project}/phase3-plan.md` from the packet (with a RESOLVED
+`## Required Agent Compliance` table) and advances the state pointer in crash-safe
+order, idempotent on resume. It PRESERVES any existing `## Sink` block in
+`workflow-state.md` byte-for-byte and stamps the completion checkpoint:
+
+```text
+phase: 3
+step: complete
+next_command: /kaola-workflow-phase4 {project}
+next_skill: kaola-workflow-execute {project}
+```
+
+Override a compliance row (for example to record the real Codex delegation status —
+`subagent-invoked`, `local-fallback-explicit`, or `local-fallback-tool-unavailable`
+for the `code-architect` row) by setting that object's `status` in the packet's
+`compliance` array.
+
+Once the script reports `result: ok` and the phase file plus compliance rows are
+complete, the session continues to Phase 4. Do not ask the user to approve routine
+internal workflow execution.

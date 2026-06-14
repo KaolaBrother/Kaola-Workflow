@@ -223,28 +223,37 @@ RESEARCH_PROJECT="{project-name}"
 RESEARCH_ISSUE=$(grep '^issue_number:' "kaola-workflow/{project-name}/workflow-state.md" | awk '{print $2}')
 ```
 
-## Mechanical Checkpoint (delegated to the contractor)
+## Mechanical Checkpoint (script-owned transaction)
 
-```text
-Agent(
-  subagent_type="contractor",
-  model="{CONTRACTOR_MODEL}",
-  description="Mechanical checkpoint {project-name}",
-  prompt="Run the mechanical bookkeeping for Phase 1 of {project-name}. phase1-research.md is already written on disk (do NOT author or edit it — the research synthesis is the orchestrator's). Execute the Step 5 workflow-state.md checkpoint update (phase: 1 / step: complete / next_command: /kaola-workflow-phase2 {project-name}), PRESERVING any existing ## Sink block byte-for-byte, and Step 5b (the per-issue roadmap init-issue + git add kaola-workflow/.roadmap/issue-N.md staging), exactly as written below in this command file. Return a compact bookkeeping summary; do NOT cut the feature branch (Step 6), do NOT invoke code-explorer/knowledge-lookup, do NOT judge or interpret findings."
-)
+`phase1-research.md` is the orchestrator's research synthesis — already written on
+disk by Step 5 (this script never authors or edits it). The mechanical bookkeeping
+— the `workflow-state.md` checkpoint — is owned by the full-path transaction script
+`kaola-workflow-full-advance.js` (ADR 0004), not a subagent. The main session runs
+it directly; it refuses if `phase1-research.md` is absent (typed refusal, zero
+mutation) and is idempotent on resume.
+
+Resolve `$KAOLA_SCRIPTS` once, then run the checkpoint:
+
+```bash
+kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
+KAOLA_SCRIPTS="$(dirname "$(kaola_script kaola-workflow-full-advance.js)")"
+
+node "$KAOLA_SCRIPTS/kaola-workflow-full-advance.js" phase1-complete \
+  --project {project-name} --json
 ```
 
-Update `workflow-state.md`:
+This updates `workflow-state.md`, PRESERVING any existing `## Sink` block
+byte-for-byte:
 
 ```text
 phase: 1
 step: complete
 next_command: /kaola-workflow-phase2 {project-name}
+next_skill: kaola-workflow-ideation {project-name}
 ```
 
-Preserve any existing `## Sink` blocks during this update.
-
-Continue to Phase 2 when Phase 1 evidence and compliance rows are complete.
+Then run Step 5b (the per-issue roadmap init-issue) below, and continue to Phase 2
+when Phase 1 evidence and compliance rows are complete.
 
 ## Step 5b - Per-Issue Roadmap File (Conditional)
 

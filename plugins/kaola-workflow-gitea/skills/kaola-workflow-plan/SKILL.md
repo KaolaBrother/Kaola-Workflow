@@ -63,6 +63,27 @@ vocabulary applies only to Codex role rows like `code-architect`.
 | blueprint revisions | invoked/N/A | .cache/architect-revision-*.md | reason if N/A |
 ```
 
-The deterministic bookkeeping below — transcribing the `code-architect` blueprint and task list into `phase3-plan.md` (using the Blueprint Requirements and Task Template above) and the `workflow-state.md` checkpoint write (`next_skill: kaola-workflow-execute {project}`, preserving the `## Sink` block) — is delegated to the mechanical `contractor` Codex agent role when that subagent is available; it runs any scripts and authors the durable bookkeeping but never designs or re-plans, never dispatches `code-architect`, never judges, and never changes the selected approach. The main session keeps approach selection, the `code-architect` dispatch and the blueprint-complete judgment, and the revision decisions; it hands the judged-complete blueprint into the contractor, which transcribes the architect's evidence verbatim. This skill runs no `$KAOLA_SCRIPTS/...` script in the mechanical block — the work is pure file authoring — so re-derive a `kaola-gitea-workflow-*` script path only if one is actually needed; capture real exit codes and never gate on a piped `| tail`.
+### Mechanical Bookkeeping (script-owned transaction)
 
-Update `workflow-state.md` with `next_skill: kaola-workflow-execute {project}` after the plan is complete. Do not ask the user to approve routine internal workflow execution.
+The deterministic bookkeeping below — transcribing the `code-architect` blueprint and task list into `phase3-plan.md` (using the Blueprint Requirements and Task Template above) and the `workflow-state.md` checkpoint write (`next_skill: kaola-workflow-execute {project}`, preserving the `## Sink` block) — is owned by the full-path transaction script `kaola-gitea-workflow-full-advance.js` (ADR 0004), not a subagent; this script runs the scripted transition and authors the durable bookkeeping but never designs or re-plans, never dispatches `code-architect`, never judges, and never changes the selected approach. The main session keeps approach selection, the `code-architect` dispatch and the blueprint-complete judgment, and the revision decisions; it hands the judged-complete blueprint into the script, which transcribes the architect's evidence verbatim. The script only transcribes — capture real exit codes from its typed JSON and never gate on a piped `| tail`.
+
+Resolve `$KAOLA_SCRIPTS` once, then run the transaction:
+
+```bash
+kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./plugins/kaola-workflow-gitea/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitea/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitea/scripts/$_n" "./plugins/kaola-workflow-gitea/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
+KAOLA_SCRIPTS="$(dirname "$(kaola_script kaola-gitea-workflow-full-advance.js)")"
+
+node "$KAOLA_SCRIPTS/kaola-gitea-workflow-full-advance.js" phase3-finalize \
+  --project {project} --stdin --json <<'PACKET'
+{
+  "blueprint": "<Blueprint body: Files to Create/Modify, Build Sequence, Parallelization Plan, External Dependencies>",
+  "task_list": "<Task List body: one ### Task N block per task, each with a `- Write Set:` line>",
+  "compliance": [
+    { "requirement": "code-architect", "status": "invoked", "evidence": ".cache/architect.md" },
+    { "requirement": "architect revisions", "status": "n/a", "skip_reason": "no revision needed" }
+  ]
+}
+PACKET
+```
+
+The `task_list` MUST keep one `- Write Set:` line per task — the parallel-overlap classifier reads those declared paths. The script renders `phase3-plan.md` in the shape of the Task Template and `## Required Agent Compliance` table above (with a RESOLVED compliance table), then advances the state pointer in crash-safe order, idempotent on resume: it writes the `next_skill: kaola-workflow-execute {project}` checkpoint (`phase: 3`, `step: complete`) and PRESERVES any existing `## Sink` block byte-for-byte. Do not ask the user to approve routine internal workflow execution.
