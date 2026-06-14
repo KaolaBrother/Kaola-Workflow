@@ -469,6 +469,42 @@ function appendNodeTiming(planPath, node, event) {
 }
 
 // ---------------------------------------------------------------------------
+// deriveMaxSimultaneousOpen (#472) — derive the MAX simultaneous-open count + everConcurrent from the
+// durable node-timings.jsonl `opened`/`closed` events (the EXISTING telemetry — no redundant counter;
+// recording "open-ready opened N" would be near-circular since open-ready opens N by definition). A pure
+// event-sweep: +1 per `opened`, −1 per `closed`, tracking the running maximum. `everConcurrent` (max ≥ 2)
+// is the load-bearing PROOF that an authored-parallel frontier actually RAN concurrently — not merely
+// that the scheduler marked N ready. This is the dispatch-fidelity trace the investigation derived from
+// the same events: a green chain proves the seam exists; only a real-run trace with everConcurrent:true
+// proves the authored width dispatched concurrently (the live gate #472 stays OPEN for).
+// @param {string} timingsContent  raw node-timings.jsonl
+// @returns {{ maxSimultaneousOpen:number, everConcurrent:boolean }}
+function deriveMaxSimultaneousOpen(timingsContent) {
+  const events = [];
+  for (const line of String(timingsContent || '').split('\n')) {
+    const s = line.trim();
+    if (!s) continue;
+    let e; try { e = JSON.parse(s); } catch (_) { continue; }
+    if (e && (e.event === 'opened' || e.event === 'closed') && typeof e.ts === 'string') events.push(e);
+  }
+  // Stable sort by ts; on a tie, process `closed` BEFORE `opened` so a same-ts close→open hand-off does
+  // not inflate the count (conservative — never over-reports concurrency).
+  events.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : (a.event === 'closed' ? -1 : 1)));
+  // Track DISTINCT currently-open node ids (a Set), NOT an integer counter — `appendNodeTiming` appends
+  // unconditionally, so a crash-resume re-open of ONE node emits a second `opened` with no intervening
+  // `closed`; an integer would inflate that lone node to 2 (a spoofed everConcurrent). The Set makes a
+  // duplicate `opened` for an already-open node a no-op, so only GENUINELY-distinct concurrent nodes
+  // raise the max — the load-bearing property, since everConcurrent is #472's eventual close-criterion.
+  const openIds = new Set();
+  let max = 0;
+  for (const e of events) {
+    if (e.event === 'opened') { openIds.add(e.node); if (openIds.size > max) max = openIds.size; }
+    else { openIds.delete(e.node); }
+  }
+  return { maxSimultaneousOpen: max, everConcurrent: max >= 2 };
+}
+
+// ---------------------------------------------------------------------------
 // appendProvenanceLog (#424 / D-424-01 §5) — best-effort lifecycle audit trail.
 // Appends ONE structured JSONL entry to kaola-workflow/{project}/.cache/provenance-log.jsonl
 // for each of: record-base, drop-base, open-next/open-ready (open), close-and-open-next/
@@ -1623,6 +1659,25 @@ function runOpenNext(opts) {
       };
     }
   } else {
+    // #472 (dispatch fidelity): at a fresh INDEPENDENT ≥2 delegable frontier, do NOT silently
+    // single-open readySet[0] — that serializes a frontier the planner authored as parallel (the
+    // dispatch-fidelity defect: every traced run ran serial because open-next single-opened here). Mirror
+    // orient + close-and-open-next: signal `enterBatch` + the frontier so the skeleton routes to
+    // open-ready + a ONE-MESSAGE concurrent dispatch (the script now ENFORCES fidelity instead of leaving
+    // it to a voluntary card). This is NOT a width mandate — width 1 / a dependency chain (delegable < 2)
+    // falls through to the serial single-open below; an explicit `--node-id` (the requestedId branch
+    // above) is exempt (the operator asked for exactly one node). open-ready serial-degrades any write in
+    // the mix (the #463/#437 write axis is untouched).
+    const delegable472 = (nextAction.readyPending || []).filter(n => n.role !== 'main-session-gate');
+    if (delegable472.length >= 2) {
+      return {
+        result: 'ok',
+        opened: null,
+        enterBatch: true,
+        frontier: delegable472.map(n => ({ id: n.id, role: n.role, model: n.model, declared_write_set: n.declared_write_set })),
+        taskTransitions: [],
+      };
+    }
     targetNode = nextAction.nextNode;
     if (!targetNode) {
       return { result: 'refuse', reason: 'no_ready_node', nextAction };
@@ -4762,6 +4817,8 @@ module.exports = {
   // #424/#433: exported for testing the provenance log + evidence seeding.
   appendProvenanceLog,
   seedEvidenceFile,
+  // #472: dispatch-fidelity concurrency derivation over the durable node-timings.jsonl events.
+  deriveMaxSimultaneousOpen,
   runOrient,
   runMirrorProject,
   runOpenNext,

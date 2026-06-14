@@ -98,6 +98,18 @@ when no node is `in_progress` (first node, or orphan from a crash between commit
 
 Apply returned `taskTransitions` to the task list after every ledger-mutating call.
 
+**Dispatch fidelity (#472) — concurrent dispatch is the DEFAULT, not an option.** `open-next` (and
+`orient` / `close-and-open-next`) return `enterBatch: true` + a `frontier: [...]` whenever the planner
+authored an INDEPENDENT frontier of width ≥2 — that is authored parallelism, and you MUST run it as
+authored. On `enterBatch: true`: run `open-ready` (it marks the whole frontier `in_progress`), then
+dispatch the returned nodes' role agents **in ONE assistant message** — multiple `Agent` calls in a
+single turn. The single-message dispatch is the *only* thing that yields real concurrency; dispatching
+one agent per turn is itself a serial barrier and silently serializes a frontier the planner authored as
+parallel. Do NOT `open-next`-then-single-dispatch a ≥2 frontier (the script now refuses to single-open
+it). **Width stays the planner's scope-driven call:** a width-1 frontier or a dependency chain returns
+NO `enterBatch` and runs serially (the normal single-dispatch path) — never force a minimum width, a
+"default to ≥2," or a "prefer wide" posture.
+
 ### 3. Dispatch the role agent
 
 Dispatch the agent whose `role` matches `dispatch.role`. Pass `model=dispatch.model` (the `model`
@@ -154,7 +166,9 @@ On reopening a complete node: `docs/plan-run-cards/reopen-complete-node.md`
 `test_thrash` escalation; `validateNodeOutput` absent-but-never-script-enforced note)
 
 <!-- CARD: frontier-batch -->
-On `enterBatch: true` (frontier fan-out):
+On `enterBatch: true` the concurrent one-message dispatch above is the DEFAULT (not optional); this card
+covers only the batch MECHANICS (crash-safe open/seal/join, write-role serial-degrade) for each frontier
+unit:
 
 <!-- PIN: frontier unit -->
 frontier unit
