@@ -284,6 +284,39 @@ function isSharedInfra(area) {
   return SHARED_INFRA.has(area);
 }
 
+// #463 (D-419 write-overlap): PROTECTED concrete files — these STAY BLOCKING at EVERY write_overlap_policy
+// tier even when their coarse area relaxes. PROTECTED is a CONCRETE-FILE concept (a specific path / a
+// basename pattern), DISTINCT from the SHARED_INFRA *area* set: a file under a relaxable area is still
+// refused if it is PROTECTED. The set: dependency lockfiles, the generated roadmap mirror, the changelog,
+// install manifests, finalization/archive artifacts, and the byte-identical-×4 anchor
+// kaola-workflow-adaptive-schema.js (relaxing it would let two legs diverge the cross-edition anchor).
+const PROTECTED_BASENAMES = new Set([
+  'package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml',
+  'Cargo.lock', 'poetry.lock', 'Gemfile.lock', 'composer.lock', 'go.sum',
+  'CHANGELOG.md', 'ROADMAP.md',
+  'kaola-workflow-install-manifest.js', 'kaola-workflow-adaptive-schema.js',
+]);
+// Path SUBSTRINGS that mark a file PROTECTED regardless of basename (generated mirror + archive trees +
+// the closure/finalization receipts that finalization owns and a parallel leg must never co-write).
+const PROTECTED_PATH_MARKERS = [
+  'kaola-workflow/ROADMAP.md',
+  'kaola-workflow/.roadmap/',
+  'kaola-workflow/archive/',
+  '.archived-',
+];
+
+// isProtected(filePath) — true iff a CONCRETE file is PROTECTED (blocking at every tier). Pure string
+// logic (basename match OR a path-marker substring); no fs. Forge-neutral (the markers carry no forge
+// vocabulary, so the rename-normalized forge classifier ports are body-identical here).
+function isProtected(filePath) {
+  const p = String(filePath || '').trim();
+  if (!p) return false;
+  const base = p.split('/').pop();
+  if (PROTECTED_BASENAMES.has(base)) return true;
+  for (const marker of PROTECTED_PATH_MARKERS) { if (p.indexOf(marker) !== -1) return true; }
+  return false;
+}
+
 // issue #227 (adaptive path): parse the `## Nodes` table of a frozen workflow-plan.md
 // into node objects. Tolerant to column reorder (maps by header name). The
 // declared_write_set cell is parsed structurally with parseWriteSetCell() so root-level
@@ -324,6 +357,12 @@ function readPlanNodes(planPath) {
 // areaForPath + SHARED_INFRA: exact-path RED > non-shared coarse-area RED >
 // shared-infra YELLOW > GREEN. Empty / role-namespaced sets are trivially
 // disjoint by construction (read-only fan-out carve-out → GREEN/PASS).
+// #463 (D-419 write-overlap): an ADDITIVE `kind ∈ {exact, coarse, shared-infra}` field accompanies the
+// UNCHANGED verdict/reasoning, so the caller can distinguish the overlap CLASS for the gated PREVENT→
+// DETECT relaxation WITHOUT this function's verdict ever changing. The verdict stays PURE — scanClaimed-
+// Overlap (claim-time), the #232 antichain loop, and the G-SEL-4 select-arm check all keep reading
+// `verdict` and behave identically (they ignore `kind`). The downgrade lives at the three write-decision
+// callsites in plan-validator.js, never here.
 function disjointWriteSets(nodeWriteSets) {
   const sets = (nodeWriteSets || []).map(s => (s instanceof Set ? s : new Set(s || [])));
   for (let i = 0; i < sets.length; i++) {
@@ -331,7 +370,7 @@ function disjointWriteSets(nodeWriteSets) {
       const a = sets[i], b = sets[j];
       if (a.size === 0 || b.size === 0) continue; // read-only carve-out: PASS on empty
       for (const p of a) {
-        if (b.has(p)) return { verdict: 'red', reasoning: 'exact file path overlap at "' + p + '" between nodes ' + i + ' and ' + j };
+        if (b.has(p)) return { verdict: 'red', kind: 'exact', reasoning: 'exact file path overlap at "' + p + '" between nodes ' + i + ' and ' + j };
       }
       const areasB = new Set();
       for (const p of b) areasB.add(areaForPath(p));
@@ -339,14 +378,14 @@ function disjointWriteSets(nodeWriteSets) {
       for (const p of a) {
         const area = areaForPath(p);
         if (areasB.has(area)) {
-          if (!SHARED_INFRA.has(area)) return { verdict: 'red', reasoning: 'coarse-area overlap at "' + area + '" between nodes ' + i + ' and ' + j };
+          if (!SHARED_INFRA.has(area)) return { verdict: 'red', kind: 'coarse', reasoning: 'coarse-area overlap at "' + area + '" between nodes ' + i + ' and ' + j };
           if (!sharedHit) sharedHit = area;
         }
       }
-      if (sharedHit) return { verdict: 'yellow', reasoning: 'shared-infra area "' + sharedHit + '" overlap between nodes ' + i + ' and ' + j };
+      if (sharedHit) return { verdict: 'yellow', kind: 'shared-infra', reasoning: 'shared-infra area "' + sharedHit + '" overlap between nodes ' + i + ' and ' + j };
     }
   }
-  return { verdict: 'green', reasoning: 'node write sets are pairwise disjoint' };
+  return { verdict: 'green', kind: null, reasoning: 'node write sets are pairwise disjoint' };
 }
 
 function scanClaimedOverlap(candidatePaths, candidateAreas, candidateAreaLabels, candidateCuratedRoot, activeFolders, root) {
@@ -621,6 +660,10 @@ module.exports = {
   areaForPath,
   SHARED_INFRA,
   isSharedInfra,
+  // #463 (D-419 write-overlap): PROTECTED concrete-file guard (blocking at every tier).
+  PROTECTED_BASENAMES,
+  PROTECTED_PATH_MARKERS,
+  isProtected,
   readPlanNodes,
   disjointWriteSets,
 };
