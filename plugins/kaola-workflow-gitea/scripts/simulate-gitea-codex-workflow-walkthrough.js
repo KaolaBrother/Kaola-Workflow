@@ -84,9 +84,6 @@ if (!dispatchLogEntry) {
   if (!planRun.includes('kaola-gitea-workflow-adaptive-node.js')) {
     throw new Error('#400: gitea-codex plan-run SKILL must call the forge-renamed kaola-gitea-workflow-adaptive-node.js');
   }
-  if (!planRun.includes('model_variant_missing') || !planRun.includes('<role>-max')) {
-    throw new Error('#405: gitea-codex plan-run SKILL must inherit the <role>-max tier→profile dispatch prose');
-  }
   if (!planRun.includes('evidence-binding')) {
     throw new Error('#392: gitea-codex plan-run SKILL must inherit the evidence-binding nonce prose');
   }

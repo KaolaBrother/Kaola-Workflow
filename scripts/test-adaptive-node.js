@@ -5919,6 +5919,53 @@ function rtHarness(initialFiles, opts) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// D451-DISPATCH-EFFORT: buildDispatch includes agent_type and dispatchEffort fields
+// ---------------------------------------------------------------------------
+{
+  // Case 1: opus model → xhigh effort
+  const opusNode = { id: 'n1-planner', role: 'code-reviewer', model: 'opus', declared_write_set: 'scripts/foo.js' };
+  const opusCtx = {
+    nonce: 'abc123def456',
+    evidence_file: '.cache/n1-planner.md',
+    required_tokens: ['evidence-binding', 'RED', 'GREEN'],
+    working_dir: '/fake/worktree',
+    forge_rider: null,
+  };
+  const dOpus = buildDispatch(opusNode, opusCtx);
+  assert(dOpus.agent_type === 'code-reviewer', 'D451-DISPATCH-EFFORT: opus agent_type equals base role');
+  assert(dOpus.codex_reasoning_effort === 'xhigh', 'D451-DISPATCH-EFFORT: opus codex_reasoning_effort is xhigh');
+  assert(dOpus.codex_reasoning_effort_source === 'planner_model', 'D451-DISPATCH-EFFORT: opus codex_reasoning_effort_source is planner_model');
+
+  // Case 2: sonnet model → role_default
+  const sonnetNode = { id: 'n2-impl', role: 'code-reviewer', model: 'sonnet', declared_write_set: 'scripts/bar.js' };
+  const sonnetCtx = {
+    nonce: 'def456abc123',
+    evidence_file: '.cache/n2-impl.md',
+    required_tokens: ['evidence-binding'],
+    working_dir: '/fake/worktree',
+    forge_rider: null,
+  };
+  const dSonnet = buildDispatch(sonnetNode, sonnetCtx);
+  assert(dSonnet.agent_type === 'code-reviewer', 'D451-DISPATCH-EFFORT: sonnet agent_type equals base role');
+  assert(dSonnet.codex_reasoning_effort === null, 'D451-DISPATCH-EFFORT: sonnet codex_reasoning_effort is null');
+  assert(dSonnet.codex_reasoning_effort_source === 'role_default', 'D451-DISPATCH-EFFORT: sonnet codex_reasoning_effort_source is role_default');
+
+  // Case 3: null model → role_default
+  const nullModelNode = { id: 'n3-review', role: 'code-reviewer', model: null, declared_write_set: '—' };
+  const nullCtx = {
+    nonce: 'xyz789',
+    evidence_file: '.cache/n3-review.md',
+    required_tokens: ['evidence-binding'],
+    working_dir: '/fake/worktree',
+    forge_rider: null,
+  };
+  const dNull = buildDispatch(nullModelNode, nullCtx);
+  assert(dNull.agent_type === 'code-reviewer', 'D451-DISPATCH-EFFORT: null-model agent_type equals base role');
+  assert(dNull.codex_reasoning_effort === null, 'D451-DISPATCH-EFFORT: null-model codex_reasoning_effort is null');
+  assert(dNull.codex_reasoning_effort_source === 'role_default', 'D451-DISPATCH-EFFORT: null-model codex_reasoning_effort_source is role_default');
+}
+
 if (failed > 0) {
   console.error('adaptive-node tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;

@@ -70,33 +70,3 @@ nickname_candidates = ["Workflow Planner", "DAG Author", "Front End"]
 description = "Kaola-Workflow for Codex bundle-lane backlog scout: read-only same-scope issue-set recommender; never claims, writes, or dispatches."
 config_file = "./agents/kaola-workflow/issue-scout.toml"
 nickname_candidates = ["Scout", "Backlog", "Triage"]
-
-[agents.planner-max]
-description = "Kaola-Workflow for Codex Phase 2 strategist: compares grounded implementation approaches and scope tradeoffs. [xhigh effort variant — #382 model:opus tier]"
-config_file = "./agents/kaola-workflow/planner-max.toml"
-nickname_candidates = ["Planner", "Strategist", "Options"]
-
-[agents.code-architect-max]
-description = "Kaola-Workflow for Codex Phase 3 architect: produces dependency-safe blueprints, write sets, task order, and validation commands. [xhigh effort variant — #382 model:opus tier]"
-config_file = "./agents/kaola-workflow/code-architect-max.toml"
-nickname_candidates = ["Architect", "Blueprint", "Designer"]
-
-[agents.tdd-guide-max]
-description = "Kaola-Workflow for Codex Phase 4 executor: implements assigned tasks with RED -> GREEN -> REFACTOR evidence. [xhigh effort variant — #382 model:opus tier]"
-config_file = "./agents/kaola-workflow/tdd-guide-max.toml"
-nickname_candidates = ["TDD", "Executor", "Builder"]
-
-[agents.code-reviewer-max]
-description = "Kaola-Workflow for Codex Phase 5 reviewer: performs detached correctness, scope, maintainability, and test coverage review. [xhigh effort variant — #382 model:opus tier]"
-config_file = "./agents/kaola-workflow/code-reviewer-max.toml"
-nickname_candidates = ["Reviewer", "Critic", "Inspector"]
-
-[agents.security-reviewer-max]
-description = "Kaola-Workflow for Codex conditional Phase 5 security reviewer: audits sensitive changes without editing files. [xhigh effort variant — #382 model:opus tier]"
-config_file = "./agents/kaola-workflow/security-reviewer-max.toml"
-nickname_candidates = ["Security", "Audit", "Threat"]
-
-[agents.adversarial-verifier-max]
-description = "Kaola-Workflow for Codex adaptive-path falsifier: tries to disprove a recorded claim (refute-if-uncertain); read-only, never a gate. [xhigh effort variant — #382 model:opus tier]"
-config_file = "./agents/kaola-workflow/adversarial-verifier-max.toml"
-nickname_candidates = ["Adversary", "Refuter", "Breaker"]

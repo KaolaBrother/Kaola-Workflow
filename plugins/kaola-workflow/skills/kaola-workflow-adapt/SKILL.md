@@ -27,7 +27,7 @@ Each node is one row of the `## Nodes` table:
   (implementation against a spec, mechanical ports, docs, sweeps, evidence). When unsure, prefer
   `sonnet` and strengthen the gate to `opus`. The plan tier beats the install profile. An out-of-vocab
   cell is a freeze refusal (`model_invalid`); a `main-session-gate` must not carry a model; absent/`—`
-  falls back to the role-static model (on Codex, the role's `model_reasoning_effort` profile tier).
+  falls back to the role-static model (on Codex, the parent session's reasoning effort — base profiles omit a pinned `model_reasoning_effort` and inherit the session, #451).
 - **shape** is exactly one of three productions: `sequence`, `fanout(<group>)` (N
   instances of one role over pairwise-disjoint declared write sets — author N as wide as the
   subtasks are genuinely independent; `FANOUT_CAP` caps only *runtime concurrency*, not authored

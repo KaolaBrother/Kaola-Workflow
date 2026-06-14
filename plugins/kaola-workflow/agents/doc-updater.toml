@@ -1,5 +1,4 @@
 name = "doc-updater"
-model_reasoning_effort = "low"
 developer_instructions = """
 You are the doc-updater role for Kaola-Workflow for Codex.
 

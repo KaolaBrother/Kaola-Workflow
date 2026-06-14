@@ -498,26 +498,17 @@ When the role profiles are absent the workflow auto-detects this, keeps the
 locally under `local-authorized` only when you explicitly disable delegation.
 
 Codex profiles intentionally do not pin model names, so model upgrades can flow
-through the user's active Codex configuration. They only set reasoning effort:
+through the user's active Codex configuration. As of #451 the base role profiles
+also omit `model_reasoning_effort` entirely: a spawned role agent **inherits the
+parent Codex session's reasoning effort** (Codex 0.139 has no per-spawn effort
+override, and agent-config wins over the project profile — PR #14807).
 
-| Role | Reasoning effort |
-| --- | --- |
-| `code-explorer` | `medium` |
-| `knowledge-lookup` | `medium` |
-| `planner` | `xhigh` |
-| `code-architect` | `high` |
-| `tdd-guide` | `medium` |
-| `implementer` | `medium` |
-| `build-error-resolver` | `medium` |
-| `code-reviewer` | `high` |
-| `security-reviewer` | `high` |
-| `doc-updater` | `low` |
-| `adversarial-verifier` | `high` |
-| `contractor` | `low` |
-| `workflow-planner` | `xhigh` |
-| `issue-scout` | `medium` |
-
-When a node's resolved `model` is `opus`, the Codex dispatch selects the `<role>-max` profile variant (e.g. `planner-max`, `code-reviewer-max`) which carries `reasoning_effort: xhigh` — the highest-effort profile available (shipped in #405). Non-opus nodes use the standard profiles above unchanged.
+The adaptive planner's per-node `model` tier drives that effort. When a node's
+resolved `model` is `opus`, the plan-run executor raises the Codex session
+reasoning effort to `xhigh` before dispatching that node (the dispatch descriptor
+carries `codex_reasoning_effort: "xhigh"`); `sonnet`/absent nodes leave the
+standing session effort untouched. The `<role>-max` xhigh effort-variant profiles
+shipped in #405 are retired — see `docs/decisions/D-451-01.md`.
 
 ## Release versioning
 

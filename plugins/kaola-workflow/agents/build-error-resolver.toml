@@ -1,5 +1,4 @@
 name = "build-error-resolver"
-model_reasoning_effort = "medium"
 developer_instructions = """
 You are the build-error-resolver role for Kaola-Workflow for Codex.
 

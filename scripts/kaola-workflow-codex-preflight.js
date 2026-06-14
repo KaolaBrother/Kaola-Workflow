@@ -7,8 +7,8 @@
 // Hard-gates Codex agent-profile freshness BEFORE any subagent-invoked compliance
 // is claimed. Verifies:
 //   (a) .codex/agents/kaola-workflow/<role>.toml exists for every REQUIRED role
-//       AND is schema-valid (top-level non-empty `name` matching the role, a legal
-//       model_reasoning_effort, a non-blank developer_instructions block) — codex
+//       AND is schema-valid (top-level non-empty `name` matching the role, an OPTIONAL
+//       model_reasoning_effort (#451), a non-blank developer_instructions block) - codex
 //       >=0.138 silently ignores a profile without a non-empty `name` (#332).
 //   (b) .codex/config.toml contains the managed block with an [agents.{role}] entry
 //       for every REQUIRED role, and NO retired/foreign [agents.*] inside the block.
@@ -52,7 +52,17 @@ const END_MARKER = '# END kaola-workflow agents';
 
 // #332 schema constants — MIRROR of install-codex-agent-profiles.js. Keep in sync.
 const MANIFEST_BASENAME = '.kaola-managed-profiles.json';
-const RETIRED_PROFILE_FILES = ['docs-lookup.toml'];
+const RETIRED_PROFILE_FILES = [
+  'docs-lookup.toml',
+  // #451: the six `<role>-max` xhigh effort-variant profiles are retired - a surviving copy reads as
+  // stale here (repaired by the installer). NEVER blanket-glob `*-max` (a user may own one).
+  'planner-max.toml',
+  'code-architect-max.toml',
+  'tdd-guide-max.toml',
+  'code-reviewer-max.toml',
+  'security-reviewer-max.toml',
+  'adversarial-verifier-max.toml',
+];
 const EFFORT_VALUES = ['low', 'medium', 'high', 'xhigh'];
 const MANIFEST_SCHEMA_VERSION = 1;
 
@@ -106,9 +116,10 @@ function validateProfileText(text, role) {
   }
 
   const effortMatch = top.match(/^model_reasoning_effort\s*=\s*"([^"]*)"\s*$/m);
-  if (!effortMatch) {
-    reasons.push("missing top-level 'model_reasoning_effort'");
-  } else if (!EFFORT_VALUES.includes(effortMatch[1])) {
+  // #451: model_reasoning_effort is OPTIONAL - base profiles OMIT it (the spawned agent inherits the
+  // parent Codex session effort; agent-config wins over project-profile, PR #14807). A pinned value
+  // (user override) must still be legal; an absent one is fine.
+  if (effortMatch && !EFFORT_VALUES.includes(effortMatch[1])) {
     reasons.push(`model_reasoning_effort "${effortMatch[1]}" is not one of ${EFFORT_VALUES.join('/')}`);
   }
 

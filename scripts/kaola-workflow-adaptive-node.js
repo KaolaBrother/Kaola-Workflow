@@ -41,7 +41,7 @@ const taskMirrorPath = path.join(__dirname, TASK_MIRROR);
 
 // #360: the LEDGER-SCOPED durable consent-halt probe (fence-aware). adaptive-schema keeps the
 // same filename across every edition (byte-identical ×4), so this require is NOT forge-renamed.
-const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, resolveFanoutCapReadonly, resolveLaneContainment, refuse, WRITE_SET_OVERFLOW_SUBTYPES } = require('./kaola-workflow-adaptive-schema');
+const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, resolveFanoutCapReadonly, resolveLaneContainment, refuse, WRITE_SET_OVERFLOW_SUBTYPES, dispatchEffort } = require('./kaola-workflow-adaptive-schema');
 
 // ---------------------------------------------------------------------------
 // OPERATOR_HINT_REGISTRY (#445 / D-445-01 §1-3) — per-aggregator map of typed
@@ -962,6 +962,8 @@ function buildDispatch(nodeInfo, context) {
     required_tokens:    ctx.required_tokens || deriveRequiredTokens(nodeInfo.role),
     forge_rider:        (ctx.forge_rider != null ? ctx.forge_rider : null),
     guards:             deriveGuards(nodeInfo),
+    agent_type:         nodeInfo.role,
+    ...dispatchEffort(nodeInfo.model),
   };
   if (ctx.goal_line != null && String(ctx.goal_line).trim() !== '') {
     d.goal_line = String(ctx.goal_line);

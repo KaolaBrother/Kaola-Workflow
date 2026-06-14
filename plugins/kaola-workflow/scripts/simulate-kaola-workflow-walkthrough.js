@@ -527,67 +527,6 @@ function test409StableHomeSurvivesDirDeletion() {
   }
 }
 
-// #405 (#382 deferred half): the <role>-max xhigh effort-variant profiles must be COMMITTED source
-// files (the bijection guard + codex-preflight regex require 1:1 file↔table), each the deterministic
-// variantProfileText(base) derivation, with name=<role>-max + effort=xhigh, and they must install
-// (copyAgentProfiles is unfiltered). Also asserts the generator is idempotent + name/effort-order
-// independent. Pure-helper assertions + a fresh-install black-box check.
-function test405MaxVariants() {
-  const schema = require(path.join(pluginRoot, 'scripts', 'kaola-workflow-adaptive-schema.js'));
-  const { variantProfileText, OPUS_ELIGIBLE_ROLES } = schema;
-  const installer = require(installProfilesScript);
-
-  assert(Array.isArray(OPUS_ELIGIBLE_ROLES) && OPUS_ELIGIBLE_ROLES.length === 6,
-    '#405: expected 6 OPUS_ELIGIBLE_ROLES, got ' + (OPUS_ELIGIBLE_ROLES || []).length);
-
-  // Each committed -max profile equals the deterministic derivation, validates, and carries the
-  // xhigh effort + the -max name.
-  for (const role of OPUS_ELIGIBLE_ROLES) {
-    const baseFile = path.join(pluginRoot, 'agents', role + '.toml');
-    const variantFile = path.join(pluginRoot, 'agents', role + '-max.toml');
-    assert(fs.existsSync(variantFile), '#405: missing committed variant agents/' + role + '-max.toml');
-    const variantText = fs.readFileSync(variantFile, 'utf8');
-    const baseText = fs.readFileSync(baseFile, 'utf8');
-    assert(variantText === variantProfileText(baseText, role),
-      '#405: agents/' + role + '-max.toml is not the deterministic variantProfileText(' + role + ') derivation');
-    // Schema-valid as a <role>-max profile.
-    const reasons = installer.validateProfileText(variantText, role + '-max');
-    assert(reasons.length === 0, '#405: ' + role + '-max.toml fails profile schema: ' + reasons.join('; '));
-    assert(variantText.includes('name = "' + role + '-max"'),
-      '#405: ' + role + '-max.toml must set name = "' + role + '-max"');
-    assert(variantText.includes('model_reasoning_effort = "xhigh"'),
-      '#405: ' + role + '-max.toml must set model_reasoning_effort = "xhigh"');
-  }
-
-  // Idempotent + name/effort-order independent: re-running variantProfileText on the variant is a no-op,
-  // and a base with effort line BEFORE name still produces the right variant.
-  const sample = OPUS_ELIGIBLE_ROLES[0];
-  const sampleVariant = fs.readFileSync(path.join(pluginRoot, 'agents', sample + '-max.toml'), 'utf8');
-  assert(variantProfileText(sampleVariant, sample) === sampleVariant, '#405: variantProfileText is idempotent');
-  const reordered = 'model_reasoning_effort = "low"\nname = "x"\ndeveloper_instructions = """body"""\n';
-  const rv = variantProfileText(reordered, 'x');
-  assert(rv.includes('name = "x-max"') && rv.includes('model_reasoning_effort = "xhigh"'),
-    '#405: variantProfileText handles effort-before-name ordering');
-
-  // Black-box: fresh install carries every -max profile + a registered [agents.<role>-max] block.
-  const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-405-install-'));
-  try {
-    runInstallProfiles(fresh);
-    const agentsDir = path.join(fresh, '.codex', 'agents', 'kaola-workflow');
-    const configText = fs.readFileSync(path.join(fresh, '.codex', 'config.toml'), 'utf8');
-    for (const role of OPUS_ELIGIBLE_ROLES) {
-      assert(fs.existsSync(path.join(agentsDir, role + '-max.toml')),
-        '#405: fresh install must place agents/kaola-workflow/' + role + '-max.toml');
-      assert(new RegExp('^\\[agents\\.' + role + '-max\\]', 'm').test(configText),
-        '#405: managed config block must register [agents.' + role + '-max]');
-    }
-  } finally {
-    fs.rmSync(fresh, { recursive: true, force: true });
-  }
-
-  console.log('test405MaxVariants (#405): PASSED');
-}
-
 // AC4 (#284): producer test — spawn the bash dispatch-log hook with valid JSON stdin and
 // assert it writes exactly one JSONL line containing "agent_type":"workflow-planner" to the
 // active project's .cache/dispatch-log.jsonl.  Also asserts exit 0 on empty stdin (fail-open).
@@ -1075,8 +1014,8 @@ function testInstallSchemaPruneManifest332() {
     const r = runInstallProfiles(fresh);
     const agentsDir = path.join(fresh, '.codex', 'agents', 'kaola-workflow');
     const tomls = listTomls(agentsDir);
-    // #405: 14 base + 6 generated <role>-max effort variants = 20.
-    assert(tomls.length === 20, '#332/#405 AC3: fresh install must place exactly 20 *.toml (14 base + 6 <role>-max), got ' + tomls.length);
+    // #451: 14 base role profiles (the <role>-max effort variants are retired).
+    assert(tomls.length === 14, '#451 AC3: fresh install must place exactly 14 *.toml (14 base; <role>-max retired), got ' + tomls.length);
     assert(!tomls.includes('docs-lookup.toml'), '#332 AC3: docs-lookup.toml must not be installed');
     for (const f of tomls) {
       const role = f.replace(/\.toml$/, '');
@@ -1087,10 +1026,10 @@ function testInstallSchemaPruneManifest332() {
     assert(fs.existsSync(manifestPath), '#332 AC3: manifest must be written');
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     assert(manifest.schema_version === 1, '#332 AC3: manifest schema_version must be 1');
-    assert(Array.isArray(manifest.roles) && manifest.roles.length === 20, '#332/#405 AC3: manifest must list 20 roles (14 base + 6 <role>-max)');
-    assert(manifest.files && Object.keys(manifest.files).length === 20
+    assert(Array.isArray(manifest.roles) && manifest.roles.length === 14, '#451 AC3: manifest must list 14 roles (14 base)');
+    assert(manifest.files && Object.keys(manifest.files).length === 14
       && Object.values(manifest.files).every(v => /^sha256:[0-9a-f]{64}$/.test(v)),
-      '#332/#405 AC3: manifest.files must carry 20 sha256 entries');
+      '#451 AC3: manifest.files must carry 14 sha256 entries');
     const lastLine = r.stdout.trim().split('\n').pop();
     assert(lastLine === 'status: ok', '#332 AC3: installer stdout must end with `status: ok`, got: ' + lastLine);
   } finally {
@@ -1606,7 +1545,6 @@ function main() {
     testAC1HooksJson();
     testUpdateHooksHardening325();
     test409StableHomeSurvivesDirDeletion();   // #409
-    test405MaxVariants();                     // #405
     testAC3AttestationSeeded();
     testKeepOpenArchiveStamp333();   // #333
     testAC2CompactPlainStdout();

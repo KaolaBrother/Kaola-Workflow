@@ -82,12 +82,9 @@ if (!dispatchLogEntry) {
     }
   }
   const planRun = fs.readFileSync(path.join(skillsRoot, 'kaola-workflow-plan-run/SKILL.md'), 'utf8');
-  // forge-renamed executor + #405 tier→profile inheritance + #392 evidence-binding nonce.
+  // forge-renamed executor + #392 evidence-binding nonce (#405 -max dispatch retired).
   if (!planRun.includes('kaola-gitlab-workflow-adaptive-node.js')) {
     throw new Error('#400: gitlab-codex plan-run SKILL must call the forge-renamed kaola-gitlab-workflow-adaptive-node.js');
-  }
-  if (!planRun.includes('model_variant_missing') || !planRun.includes('<role>-max')) {
-    throw new Error('#405: gitlab-codex plan-run SKILL must inherit the <role>-max tier→profile dispatch prose');
   }
   if (!planRun.includes('evidence-binding')) {
     throw new Error('#392: gitlab-codex plan-run SKILL must inherit the evidence-binding nonce prose');

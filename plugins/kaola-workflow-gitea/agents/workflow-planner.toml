@@ -1,5 +1,4 @@
 name = "workflow-planner"
-model_reasoning_effort = "xhigh"
 developer_instructions = """
 You are the workflow-planner role for Kaola-Workflow for Codex.
 

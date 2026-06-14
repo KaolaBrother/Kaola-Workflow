@@ -38,12 +38,14 @@ node "$KAOLA_SCRIPTS/kaola-gitea-workflow-adaptive-node.js" mirror-project \
 
 ## Dispatch
 
-Tier → profile selection (#405): when the opened node's resolved `model` is `opus` AND the role
-is OPUS_ELIGIBLE (planner, code-architect, tdd-guide, code-reviewer, security-reviewer,
-adversarial-verifier), delegate to the `<role>-max` profile (the xhigh effort variant). When
-`model` is `sonnet`/absent, delegate to the base `<role>` profile. A role with no committed
-`<role>-max` profile (non-eligible) degrades to base with a visible `model_variant_missing:
-<role>-max → base` note — never blocks. Pass `Working directory: ${ACTIVE_WORKTREE_PATH}` to
+Reasoning effort (#451, supersedes #405): the xhigh effort-variant profiles are retired — always
+delegate to the base `dispatch.agent_type` profile (= the node's role). Codex 0.139 has no per-spawn
+reasoning-effort override, so effort rides the parent SESSION: when `dispatch.codex_reasoning_effort`
+is non-null (the planner gave the node `model: opus` → `xhigh`), ensure the Codex session reasoning
+effort equals it BEFORE spawning; when null (`sonnet`/absent → `role_default`), leave the standing
+session effort untouched. Base profiles OMIT `model_reasoning_effort`, so the spawned agent inherits
+the session (agent-config wins over project-profile, PR #14807). Never append a max-effort profile
+suffix and never emit a variant-missing note. Pass `Working directory: ${ACTIVE_WORKTREE_PATH}` to
 every role delegation.
 
 ## Loop Skeleton
@@ -83,8 +85,9 @@ when no node is `in_progress`.
 
 ### 3. Dispatch the role agent
 
-Delegate to the role profile matching `dispatch.role`. Pass `model` per the tier→`<role>-max`
-rule above. Pass `dispatch.nonce` (evidence-binding token). Instruct the role to:
+Delegate to the base role profile matching `dispatch.agent_type`. Apply the reasoning-effort rule
+above (session effort = `dispatch.codex_reasoning_effort` when non-null). Pass `dispatch.nonce`
+(evidence-binding token). Instruct the role to:
 - Read the seeded `.cache/{node-id}.md` (`dispatch.evidence_file`) for required tokens.
 - Fill in token stubs; NEVER modify the `evidence-binding:` header line.
 - `finalize` sink and `main-session-gate` are non-delegable — run `main-session-direct`.

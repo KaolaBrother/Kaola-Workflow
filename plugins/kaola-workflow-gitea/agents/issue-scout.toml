@@ -1,5 +1,4 @@
 name = "issue-scout"
-model_reasoning_effort = "medium"
 developer_instructions = """
 You are the issue-scout role for Kaola-Workflow for Codex.
 

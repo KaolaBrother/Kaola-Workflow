@@ -1,5 +1,4 @@
 name = "adversarial-verifier"
-model_reasoning_effort = "high"
 developer_instructions = """
 You are the adversarial-verifier role for Kaola-Workflow for Codex.
 

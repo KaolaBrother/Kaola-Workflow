@@ -40,8 +40,8 @@ const MANAGED_HOOK_ID_PREFIX = 'kaola-workflow:';
 //   future installer can distinguish stale Kaola-generated files from user-owned ones.
 // RETIRED_PROFILE_FILES — Kaola-generated role files removed/renamed from source. The
 //   prune step removes these even with NO manifest present (repairs every pre-manifest
-//   machine). docs-lookup.toml was renamed to knowledge-lookup in #249 — the only Kaola
-//   role file ever retired. Append here whenever a role file is removed/renamed.
+//   machine). docs-lookup.toml was renamed to knowledge-lookup in #249; the six `<role>-max`
+//   effort variants were retired in #451. Append here whenever a role file is removed/renamed.
 // EFFORT_VALUES — the only legal model_reasoning_effort values; the source schema
 //   validator (validateProfileText) and the preflight's mirror both pin this set.
 // NOTE: kaola-workflow-codex-preflight.js DUPLICATES validateProfileText + these
@@ -49,16 +49,25 @@ const MANAGED_HOOK_ID_PREFIX = 'kaola-workflow:';
 //   is a true 4-tree byte-identical script that may not require() edition code). Keep
 //   the two copies in lock-step when editing the schema rules.
 const MANIFEST_BASENAME = '.kaola-managed-profiles.json';
-const RETIRED_PROFILE_FILES = ['docs-lookup.toml'];
+const RETIRED_PROFILE_FILES = [
+  'docs-lookup.toml',
+  // #451: the six `<role>-max` xhigh effort-variant profiles are retired - pruned on upgrade so a
+  // machine that installed #405 loses them. NEVER blanket-glob `*-max` (a user may own one); list
+  // only the Kaola-generated names.
+  'planner-max.toml',
+  'code-architect-max.toml',
+  'tdd-guide-max.toml',
+  'code-reviewer-max.toml',
+  'security-reviewer-max.toml',
+  'adversarial-verifier-max.toml',
+];
 const EFFORT_VALUES = ['low', 'medium', 'high', 'xhigh'];
 const MANIFEST_SCHEMA_VERSION = 1;
 
-// #405 (#382 deferred half): the OPUS_ELIGIBLE_ROLES membership + variantProfileText transform live in
-// the ×4 byte-identical adaptive-schema (the single drift anchor). This installer require()s them only
-// for the AUTHORING-TIME `--generate-variants` subcommand — the per-node `model: opus` → `<role>-max`
-// dispatch is SKILL prose, and the committed agents/<role>-max.toml files install via copyAgentProfiles
-// unfiltered (no install-time generation), so a normal install never touches the schema.
-const { OPUS_ELIGIBLE_ROLES, variantProfileText } = require('./kaola-workflow-adaptive-schema.js');
+// #451 (supersedes #405): the `<role>-max` xhigh effort-variant matrix is retired. Codex 0.139 has
+// no per-spawn reasoning-effort override, so base role profiles now OMIT `model_reasoning_effort`
+// and a spawned agent inherits the parent Codex session effort (agent-config wins over
+// project-profile, PR #14807). No install-time variant generation; no adaptive-schema require here.
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -127,8 +136,8 @@ function upsertBlock(existing, block) {
 
 // ---------------------------------------------------------------------------
 // #332 schema validation — inline regex, no TOML lib (these files are Kaola-authored
-// with a fixed 3-key top-level shape: name / model_reasoning_effort /
-// developer_instructions). The top-level region is the text before the first ^[ table.
+// with a fixed top-level shape: required name + developer_instructions and an OPTIONAL
+// model_reasoning_effort (#451). The top-level region is the text before the first ^[ table.
 // Returns [] when valid, or a list of human-readable reasons.
 // ---------------------------------------------------------------------------
 function validateProfileText(text, role) {
@@ -146,9 +155,10 @@ function validateProfileText(text, role) {
   }
 
   const effortMatch = top.match(/^model_reasoning_effort\s*=\s*"([^"]*)"\s*$/m);
-  if (!effortMatch) {
-    reasons.push("missing top-level 'model_reasoning_effort'");
-  } else if (!EFFORT_VALUES.includes(effortMatch[1])) {
+  // #451: model_reasoning_effort is OPTIONAL - base profiles OMIT it (the spawned agent inherits the
+  // parent Codex session effort; agent-config wins over project-profile, PR #14807). A pinned value
+  // (user override) must still be legal; an absent one is fine.
+  if (effortMatch && !EFFORT_VALUES.includes(effortMatch[1])) {
     reasons.push(`model_reasoning_effort "${effortMatch[1]}" is not one of ${EFFORT_VALUES.join('/')}`);
   }
 
@@ -554,97 +564,7 @@ function postVerify(templateRoles) {
   return problems;
 }
 
-// #405: extract the raw `[agents.<role>]` block text (header through the line before the next
-// top-level table or EOF) from config/agents.toml. Returns null when the role has no table.
-function extractConfigBlock(configText, role) {
-  const lines = configText.split(/\r?\n/);
-  const start = lines.findIndex(line => isTopLevelTable(line, `agents.${role}`));
-  if (start === -1) return null;
-  let end = start + 1;
-  while (end < lines.length && !isAnyTopLevelTable(lines[end])) end++;
-  // Drop a single trailing blank line so re-joins stay tidy.
-  while (end > start + 1 && lines[end - 1].trim() === '') end--;
-  return lines.slice(start, end).join('\n');
-}
-
-// #405: derive the `[agents.<role>-max]` config block from the base block — rename the header table,
-// point config_file at the -max.toml, and tag the description as the xhigh effort variant (the
-// nickname_candidates + other keys carry over verbatim). Deterministic text transform.
-function variantConfigBlock(baseBlock, role) {
-  return baseBlock
-    .replace(new RegExp(`^\\[agents\\.${escapeRegExp(role)}\\]`, 'm'), `[agents.${role}-max]`)
-    .replace(
-      new RegExp(`^(config_file\\s*=\\s*")([^"]*)("\\s*)$`, 'm'),
-      (_m, p1, p2, p3) => `${p1}${p2.replace(/\.toml$/, '-max.toml')}${p3}`
-    )
-    .replace(
-      /^(description\s*=\s*")([^"]*)("\s*)$/m,
-      (_m, p1, p2, p3) => `${p1}${p2} [xhigh effort variant — #382 model:opus tier]${p3}`
-    );
-}
-
-// #405 (#382 deferred half): materialize the committed Codex `<role>-max` xhigh effort-variant
-// profiles + their config/agents.toml registration blocks for every OPUS_ELIGIBLE_ROLE. Run at
-// AUTHORING time (the `--generate-variants` subcommand), NOT at install. Writes are idempotent (a
-// re-run reproduces byte-identical files/blocks), so they double as a drift-repair pass. The
-// committed -max files then install via copyAgentProfiles unfiltered + register via the managed
-// block. The contract validators independently re-derive these with variantProfileText and refuse on
-// drift, so a hand-edit can never sneak past. Returns { wroteFiles:[...], wroteBlocks:[...] }.
-function generateMaxVariants() {
-  assert(fs.existsSync(sourceAgentsDir), `missing source agents directory: ${sourceAgentsDir}`);
-  assert(fs.existsSync(sourceTemplate), `missing source config template: ${sourceTemplate}`);
-
-  const wroteFiles = [];
-  const wroteBlocks = [];
-
-  // 1. Variant .toml files.
-  for (const role of OPUS_ELIGIBLE_ROLES) {
-    const baseFile = path.join(sourceAgentsDir, `${role}.toml`);
-    assert(fs.existsSync(baseFile), `cannot generate ${role}-max: base profile missing at ${baseFile}`);
-    const variantText = variantProfileText(read(baseFile), role);
-    const variantFile = path.join(sourceAgentsDir, `${role}-max.toml`);
-    const tmp = variantFile + '.tmp-' + process.pid;
-    fs.writeFileSync(tmp, variantText);
-    fs.renameSync(tmp, variantFile);
-    wroteFiles.push(`${role}-max.toml`);
-  }
-
-  // 2. config/agents.toml [agents.<role>-max] blocks — append a missing block; refresh an existing
-  //    one in place. Appended in OPUS_ELIGIBLE_ROLES order at end of file.
-  let configText = read(sourceTemplate);
-  for (const role of OPUS_ELIGIBLE_ROLES) {
-    const baseBlock = extractConfigBlock(configText, role);
-    assert(baseBlock, `cannot generate [agents.${role}-max]: base block [agents.${role}] missing`);
-    const variantBlock = variantConfigBlock(baseBlock, role);
-    if (hasTopLevelTable(configText, `agents.${role}-max`)) {
-      const existing = extractConfigBlock(configText, `${role}-max`);
-      if (existing !== variantBlock) {
-        configText = configText.replace(existing, variantBlock);
-        wroteBlocks.push(`agents.${role}-max`);
-      }
-    } else {
-      const trimmed = configText.replace(/\s*$/, '');
-      configText = `${trimmed}\n\n${variantBlock}\n`;
-      wroteBlocks.push(`agents.${role}-max`);
-    }
-  }
-  const tmpCfg = sourceTemplate + '.tmp-' + process.pid;
-  fs.writeFileSync(tmpCfg, configText);
-  fs.renameSync(tmpCfg, sourceTemplate);
-
-  return { wroteFiles, wroteBlocks };
-}
-
 function main() {
-  // #405: authoring-time variant generator. `--generate-variants` materializes the committed
-  // <role>-max profiles + config blocks, then exits without running the installer.
-  if (process.argv.includes('--generate-variants')) {
-    const { wroteFiles, wroteBlocks } = generateMaxVariants();
-    console.log(`Kaola-Workflow Codex variants: wrote ${wroteFiles.length} <role>-max profile(s): ${wroteFiles.join(', ')}`);
-    console.log(`Kaola-Workflow Codex variants: registered/refreshed ${wroteBlocks.length} config block(s)`);
-    console.log('status: ok');
-    return;
-  }
 
   assert(fs.existsSync(sourceAgentsDir), `missing source agents directory: ${sourceAgentsDir}`);
   assert(fs.existsSync(sourceTemplate), `missing source config template: ${sourceTemplate}`);
@@ -726,7 +646,6 @@ module.exports = {
   updateHooks,
   hookReferencedRelPaths,
   copyHookScripts,
-  generateMaxVariants,
   validateProfileText,
   validateSourceProfiles,
   pruneStaleProfiles,

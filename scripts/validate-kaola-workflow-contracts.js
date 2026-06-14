@@ -556,7 +556,7 @@ for (const reviewerBody of [
 // issue #332: source agent-profile schema wall. require() the installer (the #325
 // require.main guard means require() never runs main()) and assert its source-tree
 // validator passes — every agents/*.toml has a matching non-empty top-level `name`,
-// a legal model_reasoning_effort, a non-blank developer_instructions, every
+// an optional model_reasoning_effort, a non-blank developer_instructions, every
 // config_file resolves, and every toml is referenced by exactly one [agents.*] entry.
 // This is the AC2 wall: it FAILS on a tree that drifts a profile schema or leaves a
 // new role file (the issue-scout class) unregistered.
@@ -565,37 +565,26 @@ const codexProfiles = codexInstaller.validateSourceProfiles(path.join(root, plug
 assert(codexProfiles.ok,
   'Codex source agent profiles fail schema validation:\n  - ' + codexProfiles.errors.join('\n  - '));
 
-// issue #332 (OWNER comment): README Codex role-catalog contract. Derive roles +
-// efforts from config/agents.toml + each agents/<role>.toml, then pin README to them:
-// the role-list block must equal the derived role set; the reasoning table must carry
-// the exact effort row for every role; and the retired `docs-lookup` must appear
-// nowhere. Nothing else fails when the README role catalog drifts from source.
+// issue #332 (OWNER comment): README Codex role-catalog contract. Derive the role set from
+// config/agents.toml, then pin README to it: the role-list block must equal the derived role set,
+// and the retired `docs-lookup` must appear nowhere in that block. #451 retired the per-role
+// reasoning-effort table (effort is session-inherited now), so there is no effort row to pin.
 function deriveCodexRoleCatalog() {
   const templateText = read(`${pluginRoot}/config/agents.toml`);
   const roles = [];
   const re = /^\[agents\.([a-z0-9-]+)\]/gm;
   let m;
-  // #405: the generated <role>-max xhigh effort variants are machine-derived dispatch profiles, not
-  // catalog roles — exclude them from the README role-list / reasoning-table contract (the README
-  // documents the base role set). The bijection guard below still pins every -max file 1:1 to a table,
-  // and the derivation guard below pins each -max file to variantProfileText(base) — so they stay
-  // fully covered without polluting the human-facing catalog.
+  // #451: the <role>-max effort variants are retired (no -max tables remain). Base profiles no
+  // longer carry model_reasoning_effort (it is OPTIONAL — a Codex-spawned agent inherits the parent
+  // session effort), so the catalog derives the role SET only; the README effort table is gone.
   while ((m = re.exec(templateText)) !== null) {
-    if (m[1].endsWith('-max')) continue;
     roles.push(m[1]);
   }
-  const efforts = {};
-  for (const role of roles) {
-    const toml = read(`${pluginRoot}/agents/${role}.toml`);
-    const em = toml.match(/^model_reasoning_effort\s*=\s*"([^"]+)"\s*$/m);
-    assert(em, `agents/${role}.toml missing model_reasoning_effort (README contract source)`);
-    efforts[role] = em[1];
-  }
-  return { roles, efforts };
+  return { roles };
 }
 
 const readmeText = read('README.md');
-const { roles: catalogRoles, efforts: catalogEfforts } = deriveCodexRoleCatalog();
+const { roles: catalogRoles } = deriveCodexRoleCatalog();
 
 // Role-list block: the ```text block after the "installs Codex-native role profiles"
 // sentence must contain exactly the derived role set (set equality).
@@ -612,24 +601,15 @@ assert(missingFromReadme.length === 0,
 assert(extraInReadme.length === 0,
   'README role list has roles not in config/agents.toml: ' + extraInReadme.join(', '));
 
-// Reasoning table: an exact `| `<role>` | `<effort>` |` row for every role.
-// (the table header anchors the catalog region for the retired-role guard below.)
-const tableAnchor = readmeText.indexOf('| Role | Reasoning effort |');
-assert(tableAnchor !== -1, 'README must contain the Codex reasoning-effort table');
-for (const role of catalogRoles) {
-  const row = '| `' + role + '` | `' + catalogEfforts[role] + '` |';
-  assert(readmeText.includes(row),
-    'README reasoning table missing exact row: ' + row);
-}
+// #451: the per-role reasoning-effort table is retired (effort is session-inherited now, not a
+// per-role pin), so the README no longer carries a `| Role | Reasoning effort |` table — there is
+// nothing to pin here anymore.
 
-// Retired role guard: the retired `docs-lookup` role must not be presented as an
-// installable/active role inside the catalog region (role-list block through the
-// reasoning table). Documentation of docs-lookup as a *pruned/retired* file elsewhere
-// in README (the durable upgrade flow) is allowed — that is the opposite of catalog
-// drift, so the guard is scoped to the catalog region rather than the whole file.
-const tableEnd = readmeText.indexOf('\n\n', tableAnchor);
-const catalogRegion = readmeText.slice(roleListAnchor, tableEnd === -1 ? readmeText.length : tableEnd);
-assert(!catalogRegion.includes('docs-lookup'),
+// Retired role guard: the retired `docs-lookup` role must not be presented as an installable/active
+// role inside the role-list catalog block. Documentation of docs-lookup as a *pruned/retired* file
+// elsewhere in README (the durable upgrade flow) is allowed — that is the opposite of catalog drift,
+// so the guard is scoped to the role-list block rather than the whole file.
+assert(!blockMatch[1].includes('docs-lookup'),
   'README role catalog must not list the retired docs-lookup role');
 
 // #340: registration-surface + forge-port parity checks and their authoring/dispatch prose
@@ -662,39 +642,25 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'full ac
     (danglingTables.length ? ' — [agents.*] tables with no profile: ' + danglingTables.join(', ') : ''));
 }
 
-// #405 (#382 deferred half): the <role>-max xhigh effort-variant derivation guard. Each committed
-// agents/<role>-max.toml MUST byte-equal variantProfileText(base, role) for an OPUS_ELIGIBLE_ROLE,
-// and EVERY OPUS_ELIGIBLE_ROLE must have its -max file + [agents.<role>-max] table. Pins the generated
-// profiles to their deterministic derivation: a hand-edit, a drifted base, or a missing/extra variant
-// reds this chain. Enumeration-free in the membership sense (membership lives in the ×4 schema anchor).
+// #451 (supersedes #405): the <role>-max xhigh effort-variant matrix is RETIRED. The per-node tier
+// now drives a session reasoning-effort signal (the dispatch descriptor), so NO generated -max
+// profile files and NO [agents.<role>-max] tables may survive in the source tree. Forbid both —
+// a leftover -max artifact (a bad merge, a stale generator) reds this chain.
 {
-  const { OPUS_ELIGIBLE_ROLES, variantProfileText } = require(
-    path.join(root, pluginRoot, 'scripts', 'kaola-workflow-adaptive-schema.js'));
-  const configText = read(`${pluginRoot}/config/agents.toml`);
-  for (const role of OPUS_ELIGIBLE_ROLES) {
-    const baseFile = `${pluginRoot}/agents/${role}.toml`;
-    const variantFile = `${pluginRoot}/agents/${role}-max.toml`;
-    assert(exists(baseFile), `#405: OPUS_ELIGIBLE_ROLE base profile missing: ${baseFile}`);
-    assert(exists(variantFile), `#405: missing generated effort variant ${variantFile} (run install-codex-agent-profiles.js --generate-variants)`);
-    const expected = variantProfileText(read(baseFile), role);
-    assert(read(variantFile) === expected,
-      `#405: ${variantFile} is not the deterministic variantProfileText(${role}) derivation — regenerate via --generate-variants`);
-    assert(new RegExp(`^\\[agents\\.${role}-max\\]`, 'm').test(configText),
-      `#405: config/agents.toml missing [agents.${role}-max] table for the generated variant`);
-  }
-  // No -max profile may exist for a NON-eligible role (catches a stray generated file).
-  const strayMax = fs.readdirSync(path.join(root, pluginRoot, 'agents'))
+  const strayMaxFiles = fs.readdirSync(path.join(root, pluginRoot, 'agents'))
     .filter(f => f.endsWith('-max.toml'))
-    .map(f => f.slice(0, -'-max.toml'.length))
-    .filter(r => !OPUS_ELIGIBLE_ROLES.includes(r));
-  assert(strayMax.length === 0,
-    '#405: found -max profile(s) for non-OPUS_ELIGIBLE_ROLES: ' + strayMax.join(', '));
+    .sort();
+  assert(strayMaxFiles.length === 0,
+    '#451: retired -max profile file(s) must be removed from agents/: ' + strayMaxFiles.join(', '));
+  const maxTables = (read(`${pluginRoot}/config/agents.toml`).match(/^\[agents\.[a-z0-9-]+-max\]/gm) || []);
+  assert(maxTables.length === 0,
+    '#451: config/agents.toml must not register any [agents.<role>-max] table: ' + maxTables.join(', '));
 }
 
-// #405: the plan-run SKILL must carry the tier→profile dispatch prose — `model: opus` on an
-// eligible role selects `<role>-max`, and a missing variant degrades to base with a visible note.
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '<role>-max');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'model_variant_missing');
+// #451: the plan-run SKILL no longer selects a `<role>-max` variant. The per-node tier maps to a
+// session reasoning-effort signal carried on the dispatch descriptor (agent_type = base role; opus
+// asks the session for xhigh before the spawn). The retired `<role>-max` / model_variant_missing
+// pins are gone — n9 owns the rewritten dispatch prose.
 
 // #334: the non-delegable main-session-gate role token + its G3 freeze gate + authoring/dispatch
 // prose, pinned in the codex copies (schema, validator, plan-run SKILL, planner TOML).

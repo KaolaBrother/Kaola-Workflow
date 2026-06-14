@@ -1,5 +1,4 @@
 name = "implementer"
-model_reasoning_effort = "medium"
 developer_instructions = """
 You are the implementer role for Kaola-Workflow for Codex.
 

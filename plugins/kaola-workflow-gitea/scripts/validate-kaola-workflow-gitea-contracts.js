@@ -180,8 +180,8 @@ assert(hookFiles.some(file => file.endsWith('kaola-workflow-pre-commit.sh')), 'G
 assert(!hookFiles.some(file => file.endsWith('kaola-workflow-phantom-advisor.sh')), 'Gitea phantom-advisor hook must be removed (#372)');
 // #376: the write-lane containment hook ships in every edition (byte-identical, forge-neutral).
 assert(hookFiles.some(file => file.endsWith('kaola-workflow-write-lane.sh')), 'Gitea write-lane hook missing');
-// #405: 14 base roles + 6 generated <role>-max xhigh effort variants (OPUS_ELIGIBLE_ROLES) = 20.
-assert(agentFiles.length === 20, 'expected 20 Gitea agent profiles (14 base + 6 <role>-max #405), got ' + agentFiles.length);
+// #451: 14 base role profiles (the 6 <role>-max xhigh effort variants are retired).
+assert(agentFiles.length === 14, 'expected 14 Gitea agent profiles (14 base; <role>-max retired #451), got ' + agentFiles.length);
 assert(exists(pluginRoot + '/config/agents.toml'), 'Gitea agents config missing');
 
 // #340 derived parity guard (enumeration-free): the dispatch config/agents.toml must register
@@ -202,29 +202,15 @@ assert(exists(pluginRoot + '/config/agents.toml'), 'Gitea agents config missing'
     (danglingTables.length ? ' — [agents.*] tables with no profile: ' + danglingTables.join(', ') : ''));
 }
 
-// #405 (#382 deferred half): the <role>-max xhigh effort-variant derivation guard (gitea port). Each
-// committed agents/<role>-max.toml MUST byte-equal variantProfileText(base, role) for an
-// OPUS_ELIGIBLE_ROLE, every eligible role must have its -max file + [agents.<role>-max] table, and no
-// -max file may exist for a non-eligible role. Membership lives in the ×4 schema anchor.
+// #451 (supersedes #405): the <role>-max xhigh effort-variant matrix is RETIRED (gitea port). No
+// generated -max profile files and no [agents.<role>-max] tables may survive — the per-node tier
+// drives a session reasoning-effort signal instead. Forbid both.
 {
-  const { OPUS_ELIGIBLE_ROLES, variantProfileText } = require('./kaola-workflow-adaptive-schema.js');
   const configText = read(pluginRoot + '/config/agents.toml');
-  for (const role of OPUS_ELIGIBLE_ROLES) {
-    const baseFile = pluginRoot + '/agents/' + role + '.toml';
-    const variantFile = pluginRoot + '/agents/' + role + '-max.toml';
-    assert(exists(baseFile), '#405 gt: OPUS_ELIGIBLE_ROLE base profile missing: ' + baseFile);
-    assert(exists(variantFile), '#405 gt: missing generated effort variant ' + variantFile + ' (--generate-variants)');
-    assert(read(variantFile) === variantProfileText(read(baseFile), role),
-      '#405 gt: ' + variantFile + ' is not the deterministic variantProfileText(' + role + ') derivation');
-    assert(new RegExp('^\\[agents\\.' + role + '-max\\]', 'm').test(configText),
-      '#405 gt: config/agents.toml missing [agents.' + role + '-max] table');
-  }
-  const strayMax = agentFiles
-    .map(f => path.basename(f, '.toml'))
-    .filter(n => n.endsWith('-max'))
-    .map(n => n.slice(0, -'-max'.length))
-    .filter(r => !OPUS_ELIGIBLE_ROLES.includes(r));
-  assert(strayMax.length === 0, '#405 gt: -max profile(s) for non-eligible roles: ' + strayMax.join(', '));
+  const strayMaxFiles = agentFiles.map(f => path.basename(f)).filter(n => n.endsWith('-max.toml')).sort();
+  assert(strayMaxFiles.length === 0, '#451 gt: retired -max profile file(s) must be removed: ' + strayMaxFiles.join(', '));
+  const maxTables = (configText.match(/^\[agents\.[a-z0-9-]+-max\]/gm) || []);
+  assert(maxTables.length === 0, '#451 gt: config/agents.toml must not register [agents.<role>-max] tables: ' + maxTables.join(', '));
 }
 
 for (const file of commandFiles.filter(file => path.basename(file).startsWith('kaola-workflow-'))) {
@@ -744,7 +730,7 @@ assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', '--forbidden
 // issue #332: source agent-profile schema wall (AC2). require() THIS tree's own
 // installer copy (require.main guard means require() never runs main()) and assert its
 // source-tree validator passes for the Gitea plugin tree — every agents/*.toml has a
-// matching non-empty top-level `name`, a legal model_reasoning_effort, a non-blank
+// matching non-empty top-level `name`, an optional model_reasoning_effort, a non-blank
 // developer_instructions, every config_file resolves, and every toml is referenced by
 // exactly one [agents.*] entry (catches the issue-scout class of omission forever).
 const giteaInstaller = require('./install-codex-agent-profiles.js');
@@ -802,10 +788,9 @@ for (const tomlFile of fs.readdirSync(path.join(root, pluginRoot, 'agents')).fil
   assertIncludes(pluginRoot + '/skills/kaola-workflow-next/SKILL.md', 'auto-bundle');
   assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'close-and-open-next');
   assertIncludes(pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md', 'kaola-workflow-plan-run');
-  // #405: the forge-codex plan-run SKILL inherits the tier→profile dispatch prose (the cluster-C
-  // #405 "all three codex editions" AC was blocked on this SKILL existing).
-  assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', '<role>-max');
-  assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'model_variant_missing');
+  // #451: the forge-codex plan-run SKILL no longer selects a `<role>-max` variant — the per-node
+  // tier maps to a session reasoning-effort signal on the dispatch descriptor. The retired
+  // `<role>-max` / model_variant_missing pins are gone (n9 owns the rewritten dispatch prose).
 }
 
 // #422.3: the agent-profile md↔toml token-pin test must be wired into the claude chain.

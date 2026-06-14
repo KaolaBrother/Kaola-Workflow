@@ -2166,12 +2166,12 @@ function testInstallProfilesFeaturesTableHandling() {
     assert.ok(freshConfig.includes('# BEGIN kaola-workflow agents'), 'fresh install should include managed block');
     // #332: the installer now also writes a .kaola-managed-profiles.json manifest into
     // this dir, so count TOML entries only (raw readdir includes the manifest dotfile).
-    // #405: 14 base + 6 generated <role>-max effort variants = 20.
+    // #451: 14 base role profiles (the <role>-max effort variants are retired).
     const freshAgentsDir = path.join(fresh, '.codex', 'agents', 'kaola-workflow');
     assert.strictEqual(
       fs.readdirSync(freshAgentsDir).filter(f => f.endsWith('.toml')).length,
-      20,
-      'should install 20 agent TOML files (14 base + 6 <role>-max #405)'
+      14,
+      'should install 14 agent TOML files (14 base; <role>-max retired #451)'
     );
     assert.ok(
       fs.existsSync(path.join(freshAgentsDir, '.kaola-managed-profiles.json')),
@@ -3600,7 +3600,7 @@ function testInstallSchemaPruneManifest332Gitea() {
     const r = runInstallProfiles(fresh);
     const agentsDir = path.join(fresh, '.codex', 'agents', 'kaola-workflow');
     const tomls = giteaListTomls(agentsDir);
-    assert.strictEqual(tomls.length, 20, '#332/#405 gt AC3: fresh install must place 20 *.toml (14 base + 6 <role>-max)');
+    assert.strictEqual(tomls.length, 14, '#451 gt AC3: fresh install must place 14 *.toml (14 base; <role>-max retired)');
     assert.ok(!tomls.includes('docs-lookup.toml'), '#332 gt AC3: docs-lookup.toml must not be installed');
     for (const f of tomls) {
       const role = f.replace(/\.toml$/, '');
@@ -3609,7 +3609,7 @@ function testInstallSchemaPruneManifest332Gitea() {
     }
     const manifest = JSON.parse(fs.readFileSync(path.join(agentsDir, manifestBase), 'utf8'));
     assert.strictEqual(manifest.schema_version, 1, '#332 gt AC3: manifest schema_version 1');
-    assert.strictEqual(manifest.roles.length, 20, '#332/#405 gt AC3: manifest must list 20 roles (14 base + 6 <role>-max)');
+    assert.strictEqual(manifest.roles.length, 14, '#451 gt AC3: manifest must list 14 roles (14 base)');
     assert.strictEqual(r.stdout.trim().split('\n').pop(), 'status: ok', '#332 gt AC3: stdout must end with status: ok');
   } finally {
     fs.rmSync(fresh, { recursive: true, force: true });
