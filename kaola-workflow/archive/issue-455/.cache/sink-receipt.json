@@ -1,0 +1,24 @@
+{
+  "project": "issue-455",
+  "branch": "workflow/issue-455",
+  "issue_number": 455,
+  "issue_numbers": [
+    455
+  ],
+  "resolved_default_branch": "main",
+  "started_at": "2026-06-14T03:28:29.899Z",
+  "updated_at": "2026-06-14T03:42:34.833Z",
+  "stash_ref": null,
+  "removed_duplicates": [],
+  "steps": {
+    "preflight": "done",
+    "push_upstream": "done",
+    "merge": "done",
+    "worktree_sync": "done",
+    "finalize": "done",
+    "closure": "done",
+    "stash_restore": "done",
+    "archive_commit": "pending",
+    "push_main": "pending"
+  }
+}
