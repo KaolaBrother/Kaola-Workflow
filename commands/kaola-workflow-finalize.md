@@ -93,6 +93,18 @@ precedence order):
 These typed refusals are emitted by `cmdFinalize` / the plan-validator's
 finalize/verdict path and are classified structurally — do not match by string.
 
+**Non-npm product repos (#464).** `kaola-workflow-run-chains.js` runs the npm
+edition chains only when `package.json` declares the `test:kaola-workflow:*`
+scripts (the Kaola-Workflow self-host). A product repo whose validation is not
+npm-based (a Swift/Xcode app, a Makefile project) declares its validation chains
+in a repo-local **`kaola-workflow/chains.json`** — a `chains` array of
+`{ name, command }` (e.g. `{ "name": "build", "command": "xcodebuild test ..." }`).
+The runner uses those instead of the npm defaults and the receipt records them;
+the chain-receipt gate is name-agnostic, so any configured chain set gates the same
+way. With neither a `chains.json` nor the npm scripts, the runner refuses
+`chains_config_missing` (no receipt is written) rather than emit a meaningless
+all-red npm receipt — configure `chains.json` to proceed.
+
 ### Run-Gap Sweep Gate
 
 Finalization is **machine-gated** on a clean run-gap sweep (#435). Before
