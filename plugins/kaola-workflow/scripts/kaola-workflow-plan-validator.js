@@ -59,6 +59,7 @@ try { editionSync = require('./edition-sync'); } catch (_) { /* forge/codex/user
 const OPERATOR_HINT_REGISTRY = {
   nodes_unparseable: () => 'Plan has no parseable ## Nodes table. Check the Markdown table syntax and re-freeze.',
   no_unique_sink: () => 'Plan has no unique finalize sink node. Add exactly one `finalize` role node and re-freeze.',
+  speculative_policy_unsupported: (ctx) => `speculative_open_policy: "${ctx.value || '(value)'}" is not supported at freeze. Use off (default) or consent — auto (speculative WRITE overlap) is designed-but-deferred. Edit ## Meta and re-freeze.`,
   gate_unsatisfied: (ctx) => `Gate check failed: ${ctx.reason || 'a required reviewer did not complete'}. Ensure all code nodes are post-dominated by a completed reviewer.`,
   verdict_not_pass: (ctx) => `Verdict check failed for node ${ctx.nodeId || '(unknown)'}. Check .cache/${ctx.nodeId || '<node-id>'}.md for verdict: pass and findings_blocking: 0.`,
   node_not_found: (ctx) => `Node "${ctx.nodeId || '(unknown)'}" not found in the frozen plan. Check the node ID.`,
@@ -251,6 +252,15 @@ function parseGoal(content) {
   const meta = classifier.sectionBody(content, 'Meta');
   const m = String(meta || '').match(/^goal:[ \t]*(.*)$/m);
   return { goal: m ? m[1].trim() : null };
+}
+// #439 (D-419 Part 4): the per-plan `speculative_open_policy` lives in `## Meta` as a single
+// `speculative_open_policy: off | consent` line — hash-covered for free (computePlanHash normalizes
+// the WHOLE `## Meta` body), Meta-SCOPED read (decoy-immune; same scoping as parseGoal/parseLabels).
+// Absent => default 'off' (the permanent fallback). `auto` is refused at freeze (validatePlan).
+function parseSpeculativePolicy(content) {
+  const meta = classifier.sectionBody(content, 'Meta');
+  const m = String(meta || '').match(/^speculative_open_policy:[ \t]*(\S+)[ \t]*$/m);
+  return m ? m[1].trim() : schema.SPECULATIVE_OPEN_POLICY_DEFAULT;
 }
 // Parse the plan into validator-shaped nodes. Parity with the executor's reader is
 // load-bearing: section slicing is delegated to classifier.sectionBody (FENCE-AWARE) and
@@ -901,6 +911,13 @@ function validatePlan(content, opts) {
   // plan_hash does not cover) could override the real labels and silently drop the G2 gate,
   // undetectable to --resume-check. Reader and hash now agree on where labels live.
   const labels = parseLabels(classifier.sectionBody(content, 'Meta'));
+  // #439 (D-419 Part 4): speculative_open_policy is off|consent (default off). `auto`
+  // (speculative WRITE overlap auto-eligibility) is DESIGNED-but-refused at freeze; any
+  // other value is out of grammar. Checked before the graph algorithms (cheap Meta read).
+  const specPolicy = parseSpeculativePolicy(content);
+  if (!schema.SPECULATIVE_OPEN_POLICY_LEGAL.includes(specPolicy)) {
+    return { result: 'refuse', reason: 'speculative_policy_unsupported', operator_hint: getOperatorHint('speculative_policy_unsupported', { value: specPolicy }), errors: ['speculative_open_policy: "' + specPolicy + '" is not supported at freeze (legal: ' + schema.SPECULATIVE_OPEN_POLICY_LEGAL.join('|') + '; auto is deferred with speculative write-overlap)'], planHash: computePlanHash(content) };
+  }
   const roles = opts.installedRoles || installedRoles(opts.root || process.cwd());
   const fanoutCap = Number.isInteger(opts.fanoutCap) ? opts.fanoutCap : schema.resolveFanoutCap(process.env);
   const errors = [];
@@ -2331,6 +2348,7 @@ module.exports = {
   parseLabels,
   parseGoal,
   parseLedger,
+  parseSpeculativePolicy,
   uniqueSink,
   gateUncovered,
   verifyGateExecution,

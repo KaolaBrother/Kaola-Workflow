@@ -137,6 +137,14 @@ const VERDICT_PASS = 'pass';
 const VERDICT_FAIL = 'fail';
 const VERDICT_VOCABULARY = Object.freeze([VERDICT_PASS, VERDICT_FAIL]);
 
+// #439 (D-419 Part 4): the canonical GATE vocabulary — the verdict-bearing roles that post-dominate code
+// nodes and emit a column-0 `verdict: pass|fail` into their `.cache` evidence. The speculative-read
+// kernel's eligibility check (next-action) keys on this set: a read node may speculatively jump ahead of
+// an UNSATISFIED dependency only when that dependency is one of these gates currently in_progress.
+// Mirrors adaptive-node's local GATE_ROLES/VERDICT_ROLES (the same four roles); centralized here as the
+// shared, byte-identical-×4 role vocabulary so next-action and adaptive-node classify gates identically.
+const GATE_VERDICT_ROLES = Object.freeze(['code-reviewer', 'security-reviewer', 'adversarial-verifier', MAIN_SESSION_GATE_ROLE]);
+
 // #439 (D-419 Part 4): the per-plan `## Meta` field `speculative_open_policy`. `off` (default,
 // permanent fallback) and `consent` are LEGAL at freeze; `auto` is DESIGNED-but-refused at freeze
 // (write-overlap auto-eligibility is deferred). The field is hash-covered (eligibility, not a runtime
@@ -557,6 +565,7 @@ module.exports = {
   VERDICT_PASS,
   VERDICT_FAIL,
   VERDICT_VOCABULARY,
+  GATE_VERDICT_ROLES,
   SPECULATIVE_OPEN_POLICY_DEFAULT,
   SPECULATIVE_OPEN_POLICY_LEGAL,
   SPECULATIVE_OPEN_POLICY_REFUSED_AT_FREEZE,

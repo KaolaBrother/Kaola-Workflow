@@ -501,6 +501,106 @@ function makeModelPlan(nodesRows, ledgerRows) {
 }
 
 // -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
+// #439 speculative-read eligibility (additive `speculativePending`, emitted ONLY at
+// speculative_open_policy:consent — omitted entirely at the default off).
+// -----------------------------------------------------------------------
+// specPlan prepends a ## Meta carrying speculative_open_policy:consent so eligibility is EMITTED.
+const specPlan = (nodes, ledger) => '## Meta\nspeculative_open_policy: consent\n\n' + makePlan(nodes, ledger);
+
+// SPEC-1: a read-only node whose only unsatisfied dep is an OPEN gate is speculative-eligible.
+{
+  const content = specPlan(
+    [
+      '| impl | tdd-guide     | —    | a.js       | 1 | sequence |',
+      '| gate | code-reviewer | impl | —          | 1 | sequence |',
+      '| docs | doc-updater   | gate | —          | 1 | sequence |',
+      '| sink | finalize      | docs | CHANGELOG.md | 1 | sequence |',
+    ],
+    ['| impl | complete |', '| gate | in_progress |', '| docs | pending |', '| sink | pending |']
+  );
+  const r = computeNextAction(content, { resolveModel: stub });
+  assert(Array.isArray(r.speculativePending), 'SPEC-1: speculativePending is an array at policy:consent');
+  assert(r.speculativePending.length === 1 && r.speculativePending[0].id === 'docs',
+    'SPEC-1: docs (read-only, only unsatisfied dep is the open gate) is speculative-eligible, got ' + JSON.stringify((r.speculativePending || []).map(n => n.id)));
+  assert(r.speculativePending[0].speculativeGate === 'gate', 'SPEC-1: speculativeGate names the open gate');
+  assert((r.readyPending || []).length === 0, 'SPEC-1: docs is NOT in readyPending (its gate dep is not terminal)');
+}
+
+// SPEC-2: when the gate is COMPLETE, the read node is a NORMAL ready node, NOT speculative.
+{
+  const content = specPlan(
+    [
+      '| impl | tdd-guide     | —    | a.js | 1 | sequence |',
+      '| gate | code-reviewer | impl | —    | 1 | sequence |',
+      '| docs | doc-updater   | gate | —    | 1 | sequence |',
+    ],
+    ['| impl | complete |', '| gate | complete |', '| docs | pending |']
+  );
+  const r = computeNextAction(content, { resolveModel: stub });
+  assert((r.speculativePending || []).length === 0, 'SPEC-2: no speculative node when the gate is complete');
+  assert((r.readyPending || []).some(n => n.id === 'docs'), 'SPEC-2: docs is a normal ready node when the gate is complete');
+}
+
+// SPEC-3: a WRITE node behind an open gate is NOT speculative-eligible (read-overlap only).
+{
+  const content = specPlan(
+    [
+      '| impl | tdd-guide     | —    | a.js | 1 | sequence |',
+      '| gate | code-reviewer | impl | —    | 1 | sequence |',
+      '| more | tdd-guide     | gate | b.js | 1 | sequence |',
+    ],
+    ['| impl | complete |', '| gate | in_progress |', '| more | pending |']
+  );
+  const r = computeNextAction(content, { resolveModel: stub });
+  assert((r.speculativePending || []).length === 0, 'SPEC-3: a write node behind an open gate is NOT speculative-eligible');
+}
+
+// SPEC-4: a read node with a SECOND unsatisfied (non-gate) dep is NOT speculative-eligible.
+{
+  const content = specPlan(
+    [
+      '| impl  | tdd-guide     | —          | a.js | 1 | sequence |',
+      '| other | tdd-guide     | —          | b.js | 1 | sequence |',
+      '| gate  | code-reviewer | impl       | —    | 1 | sequence |',
+      '| docs  | doc-updater   | gate,other | —    | 1 | sequence |',
+    ],
+    ['| impl | complete |', '| other | in_progress |', '| gate | in_progress |', '| docs | pending |']
+  );
+  const r = computeNextAction(content, { resolveModel: stub });
+  assert((r.speculativePending || []).length === 0, 'SPEC-4: a read node with a second unsatisfied non-gate dep is NOT eligible');
+}
+
+// SPEC-5: the unsatisfied dep must be a GATE role — a read node behind an open NON-gate node is not eligible.
+{
+  const content = specPlan(
+    [
+      '| impl | tdd-guide   | —    | a.js | 1 | sequence |',
+      '| mid  | tdd-guide   | impl | b.js | 1 | sequence |',
+      '| docs | doc-updater | mid  | —    | 1 | sequence |',
+    ],
+    ['| impl | complete |', '| mid | in_progress |', '| docs | pending |']
+  );
+  const r = computeNextAction(content, { resolveModel: stub });
+  assert((r.speculativePending || []).length === 0, 'SPEC-5: a read node behind an open NON-gate (write) node is NOT speculative-eligible');
+}
+
+// SPEC-6 (byte-identity at default off): the SAME plan WITHOUT speculative_open_policy (policy off)
+// OMITS the speculativePending key ENTIRELY — next-action output is byte-identical to pre-#439.
+{
+  const nodes = [
+    '| impl | tdd-guide     | —    | a.js | 1 | sequence |',
+    '| gate | code-reviewer | impl | —    | 1 | sequence |',
+    '| docs | doc-updater   | gate | —    | 1 | sequence |',
+  ];
+  const ledger = ['| impl | complete |', '| gate | in_progress |', '| docs | pending |'];
+  const offR = computeNextAction(makePlan(nodes, ledger), { resolveModel: stub });   // no ## Meta ⇒ policy off
+  assert(!('speculativePending' in offR), 'SPEC-6: speculativePending key is OMITTED at policy:off (byte-identity)');
+  const onR = computeNextAction(specPlan(nodes, ledger), { resolveModel: stub });    // policy consent
+  assert(Array.isArray(onR.speculativePending) && onR.speculativePending.length === 1,
+    'SPEC-6: the SAME plan at policy:consent DOES emit speculativePending (the only delta is the policy field)');
+}
+
 // Summary
 // -----------------------------------------------------------------------
 if (failed > 0) {

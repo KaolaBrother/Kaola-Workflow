@@ -41,7 +41,7 @@ const taskMirrorPath = path.join(__dirname, TASK_MIRROR);
 
 // #360: the LEDGER-SCOPED durable consent-halt probe (fence-aware). adaptive-schema keeps the
 // same filename across every edition (byte-identical ×4), so this require is NOT forge-renamed.
-const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, resolveFanoutCapReadonly, resolveLaneContainment, refuse, WRITE_SET_OVERFLOW_SUBTYPES, dispatchEffort } = require('./kaola-workflow-adaptive-schema');
+const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, resolveFanoutCapReadonly, resolveLaneContainment, refuse, WRITE_SET_OVERFLOW_SUBTYPES, dispatchEffort, parseNodeVerdict } = require('./kaola-workflow-adaptive-schema');
 
 // ---------------------------------------------------------------------------
 // OPERATOR_HINT_REGISTRY (#445 / D-445-01 §1-3) — per-aggregator map of typed
@@ -75,7 +75,21 @@ const SPLIT_GUARDED_SUBCOMMANDS = new Set([
   'open-next', 'open-ready', 'close-node', 'close-and-open-next',
   'reconcile-running-set', 'write-halt', 'clear-halt',
   'reopen-node', 'revert-overflow', 'repair-node', 'route-findings',
+  // #439: the speculative-read discard is a mutating lifecycle transaction (ledger reset + baseline
+  // drop + running-set removal) and must run from the worktree like every other mutator.
+  'discard-speculative',
 ]);
+
+// #439 (D-419 Part 4): resolve the per-plan `speculative_open_policy` from the frozen plan content.
+// Lazily requires the same-edition plan-validator's `parseSpeculativePolicy` (the Meta-scoped, hash-
+// covered parser the freeze check uses) so adaptive-node and the validator never drift. Fails safe to
+// 'off' (the schema default — the permanent serial fallback) if the parser is unavailable.
+function resolveSpeculativePolicy(content) {
+  try {
+    const { parseSpeculativePolicy } = require('./kaola-workflow-plan-validator');
+    return parseSpeculativePolicy(content) || 'off';
+  } catch (_) { return 'off'; }
+}
 
 const OPERATOR_HINT_REGISTRY = {
   // --- guard prologue (#383/#387/#391b) ---
@@ -135,6 +149,16 @@ const OPERATOR_HINT_REGISTRY = {
     'Recording the per-node baseline for ' + (ctx.nodeId || '<id>') + ' failed. Re-run open-next; if it persists, inspect commit-node --start output for this node.',
   nested_cache_path: (ctx) =>
     'The resolved cache path for ' + (ctx.nodeId || '<id>') + ' is illegal/nested. Fix the --project segment (it must be issue-N, never the reserved literal kaola-workflow).',
+
+  // --- speculative-read kernel (#439 D-419 Part 4) ---
+  gate_not_complete: (ctx) =>
+    'Node ' + (ctx.nodeId || '<id>') + ' is blocked only by an open gate' + (ctx.speculativeGate ? ' (' + ctx.speculativeGate + ')' : '') + '. It is speculative-eligible: it is NOT opened serially via open-next. To run it ahead of the gate (betting the gate passes), set speculative_open_policy: consent in the plan ## Meta and run ' + ADAPTIVE_NODE_SCRIPT + ' open-ready --project <P> --speculative-consent --json; otherwise wait for the gate to complete.',
+  speculative_review_required: (ctx) =>
+    'Gate ' + (ctx.gate || '<gate>') + ' closed with a FAILING verdict, so the speculative read node(s) that bet on it (' + ((ctx.speculative || []).join(', ') || 'see speculative') + ') ran on an unproven assumption. Review their evidence: KEEP if still valid, or discard each via ' + ADAPTIVE_NODE_SCRIPT + ' discard-speculative --project <P> --node-id <id> --json (resets it to pending + drops its baseline so it re-opens cleanly).',
+  not_speculative: (ctx) =>
+    'Node ' + (ctx.nodeId || '<id>') + ' is not a speculative running-set member, so discard-speculative does not apply. Close it normally (close-and-open-next), or run reconcile-running-set if the set is wedged.',
+  not_in_running_set: (ctx) =>
+    'Node ' + (ctx.nodeId || '<id>') + ' is not a live running-set member. discard-speculative targets an open speculative node; run orient to inspect the live set.',
 
   // --- write-set overflow family (#424/#434 / D-434-01 §1) — ALWAYS revert-overflow, NEVER
   //     drop-base. These are the narrowed barrier subtypes that can surface as a top-level reason
@@ -1577,6 +1601,20 @@ function runOpenNext(opts) {
   if (requestedId) {
     targetNode = readySet.find(n => n.id === requestedId);
     if (!targetNode) {
+      // #439 (D-419 Part 4, settlement 5): if the node is not ready ONLY because its sole unsatisfied
+      // dependency is a currently-OPEN gate (it is speculative-eligible), refuse with the more specific
+      // `gate_not_complete` — evaluated in the dependency-unsatisfied slot, before lane/exclusivity. This
+      // is the fail-closed floor: a speculative open is NOT done serially via open-next; it requires
+      // `open-ready --speculative-consent` (policy permitting). Absent eligibility, today's node_not_ready.
+      const spec = (nextAction.speculativePending || []).find(n => n.id === requestedId);
+      if (spec) {
+        return {
+          result: 'refuse',
+          reason: 'gate_not_complete',
+          nodeId: requestedId,
+          speculativeGate: spec.speculativeGate,
+        };
+      }
       return {
         result: 'refuse',
         reason: 'node_not_ready',
@@ -1801,7 +1839,10 @@ function runCloseAndOpenNext(opts) {
   // (wrong case / typo, e.g. `Verdict: Pass`) closes here but would fail finalize --verdict-check.
   // Emit a non-blocking warning at close time (informational, per #328) so the operator can fix it
   // BEFORE finalize instead of paying a reopen → re-evidence → re-close loop. Never refuses.
-  const verdictWarn = checkVerdictParse(role, evidenceContent);
+  // #439: `let` (not const) — a gate close with verdict:fail + speculative dependents merges
+  // speculative_review_required into verdictWarn below, so EVERY post-close success return (which all
+  // spread `...(verdictWarn || {})`) carries the review pointer without editing each return.
+  let verdictWarn = checkVerdictParse(role, evidenceContent);
 
   // -- (b) Shell COMMIT_NODE per-node barrier ----------------------------
   const barrierOut = shell(commitNodePath, [planPath, '--node-id', nodeId, '--json']);
@@ -1816,6 +1857,16 @@ function runCloseAndOpenNext(opts) {
       barrierOut,
       triage: computeTriage(barrierOut, cacheDir440, nodeId, readFile),
     };
+  }
+
+  // #439 (D-419 Part 4): close-time speculative guard (mirror runCloseNode) — a speculative member
+  // cannot commit to complete until its gate resolves (else its review pointer + discard handle are
+  // lost). Fires only for a speculative:true member whose gate is not yet complete; never for a normal
+  // node. Precedes the close mutation → zero mutation on refuse.
+  {
+    const running439 = readRunningSet(runningSetPath, cacheExists, readFile);
+    const specGuard = speculativeCloseGuard(nodeId, running439, readLedgerStatuses(readFile(planPath)));
+    if (specGuard) return specGuard;
   }
 
   // -- (c) Close: spliceLedgerNode + compliance row ----------------------
@@ -1901,6 +1952,17 @@ function runCloseAndOpenNext(opts) {
   // mismatch (orphan_multi_in_progress) and reconcile-running-set no-op'd (`not_opening`) — a wedge.
   // Done here (after the close write, before selector/advance) so every ok exit reflects the removal.
   const running = readRunningSet(runningSetPath, cacheExists, readFile);
+  // #439 (D-419 Part 4, settlement 3): on a GATE close with verdict:fail, surface the speculative
+  // dependents (held in `running` by the close-time guard) for keep-or-discard. Computed from the
+  // PRE-removal snapshot (this close removed only THIS gate). reviewExtra is spread into every
+  // post-close success return below so the fused path matches close-node. null/empty ⇒ {} (no change).
+  const speculativeReview = speculativeReviewOnGateClose(role, nodeId, evidenceContent, running, currentPlan);
+  if (speculativeReview) {
+    verdictWarn = Object.assign({}, verdictWarn || {}, {
+      speculative_review_required: speculativeReview,
+      operator_hint: getOperatorHint('speculative_review_required', speculativeReview),
+    });
+  }
   if (running) {
     const remaining = (running.nodes || []).filter(n => n.id !== nodeId);
     if (remaining.length === 0) {
@@ -3199,6 +3261,134 @@ function tryFormLaneGroup(writeNodes, planPath, shell) {
 }
 
 // ---------------------------------------------------------------------------
+// speculativeCloseGuard (#439 D-419 Part 4) — a speculative node cannot COMMIT to `complete` until its
+// bet resolves: its post-dominating gate must be `complete` first. Without this, a speculative node that
+// closes BEFORE its gate vanishes from the running set, so a later gate `verdict:fail` could no longer
+// surface speculative_review_required nor be discard-speculative'd — the coherence the review + discard
+// mechanism (settlements 3+4) depends on. This is NOT a general blocking-gate semantic (#328 per-node
+// verdicts stay informational for NORMAL nodes): it fires ONLY for a `speculative:true` member whose own
+// `speculativeGate` is not yet complete, and it NEVER deadlocks (the gate is an UPSTREAM dependency that
+// closes independently). Returns a typed gate_not_complete refusal, or null to proceed.
+// ---------------------------------------------------------------------------
+function speculativeCloseGuard(nodeId, running, ledgerStatuses) {
+  const member = running && (running.nodes || []).find(n => n.id === nodeId && n.speculative);
+  if (!member) return null;
+  const gateId = member.speculativeGate;
+  if (gateId && ledgerStatuses && ledgerStatuses[gateId] !== 'complete') {
+    return {
+      result: 'refuse', reason: 'gate_not_complete', nodeId, speculativeGate: gateId,
+      detail: 'a speculative node cannot close until its gate completes; if the gate fails, discard-speculative it',
+    };
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// speculativeReviewOnGateClose (#439 D-419 Part 4, settlement 3) — when a GATE closes with a FAILING
+// verdict, return { gate, gate_verdict:'fail', speculative:[ids] } naming the speculative members that
+// bet on it (still in the running set, because speculativeCloseGuard held them there), so the operator
+// KEEPs or discard-speculative's each. null otherwise. NON-blocking (the gate close itself is legit; the
+// recorded verdict:fail is still caught at finalize by verifyVerdictBlock). Used by BOTH close paths.
+// ---------------------------------------------------------------------------
+function speculativeReviewOnGateClose(role, nodeId, evidenceContent, running, planContent) {
+  if (!GATE_ROLES.has(role)) return null;
+  const v = parseNodeVerdict(evidenceContent);
+  if (!v || v.verdict !== 'fail') return null;
+  const deps = new Map();
+  try { for (const n of parseNodesFromContent(planContent)) deps.set(n.id, n.dependsOn || []); } catch (_) {}
+  const atRisk = (running ? (running.nodes || []) : [])
+    .filter(n => n.speculative && (deps.get(n.id) || []).includes(nodeId))
+    .map(n => n.id);
+  return atRisk.length ? { gate: nodeId, gate_verdict: 'fail', speculative: atRisk } : null;
+}
+
+// ---------------------------------------------------------------------------
+// runDiscardSpeculative (#439 D-419 Part 4, settlement 4) — MUTATES ledger + baseline + running-set.json.
+// Rolls back a speculatively-opened read node when its gate's bet fails (the operator's choice after a
+// `speculative_review_required`). The discard ORDER is GC-safe and composes with #424's
+// drop_base_window_open lock + #434's no-re-snapshot posture:
+//   (a) ledger reset in_progress -> pending FIRST (so --drop-base is not window-locked by #424);
+//   (b) revert the node's in-lane DECLARED writes to the ANCHORED baseline SHA (read from .cache BEFORE
+//       any drop). For a #439 READ node the declared set is empty ⇒ a no-op; this revert is the SHARED
+//       primitive #463's write-leg rollback reuses;
+//   (c) --drop-base (remove the anchored ref + file together; idempotent);
+//   (d) remove the node from running-set.json.
+// Refuses (zero mutation) unless the node is a live `speculative: true` running-set member. NOT a
+// laundering path: it keeps the anchored baseline as the revert target and only drops it AFTER reverting;
+// the node returns to pending and re-opens normally once the gate closes.
+//
+// @param opts { planPath, project, nodeId, shell, readFile, writeFile, cacheExists, gitCheckout? }
+// ---------------------------------------------------------------------------
+function runDiscardSpeculative(opts) {
+  const { planPath, nodeId, shell, readFile, writeFile, cacheExists } = opts;
+  const gitCheckoutSeam = opts.gitCheckout || null;
+  if (!nodeId) return { result: 'refuse', errors: ['--node-id required for discard-speculative'] };
+
+  const runningSetPath = path.join(path.dirname(planPath), '.cache', RUNNING_SET_NAME);
+  const running = readRunningSet(runningSetPath, cacheExists, readFile);
+  const member = running && (running.nodes || []).find(n => n.id === nodeId);
+  if (!member) {
+    return { result: 'refuse', reason: 'not_in_running_set', nodeId, detail: 'discard-speculative targets a live running-set member' };
+  }
+  if (!member.speculative) {
+    return { result: 'refuse', reason: 'not_speculative', nodeId, detail: 'only a speculative: true member may be discarded via discard-speculative' };
+  }
+
+  // Read the anchored baseline SHA BEFORE any drop (the revert target).
+  const cacheDir = path.join(path.dirname(planPath), '.cache');
+  const baseFile = path.join(cacheDir, 'barrier-base-' + sanitizeNodeId(nodeId));
+  let baseSha = null;
+  try { baseSha = (readFile(baseFile) || '').trim().split('\n')[0].trim() || null; } catch (_) { baseSha = null; }
+
+  // (a) Ledger reset in_progress -> pending FIRST (so --drop-base is not #424 window-locked).
+  let planContent = readFile(planPath);
+  const reset = spliceLedgerNode(planContent, nodeId, 'pending', { allowFrom: ['in_progress'] });
+  if (!reset.found) return { result: 'refuse', reason: 'node_not_in_ledger', nodeId };
+  if (reset.changed) { planContent = reset.content; writeFile(planPath, planContent); }
+
+  // (b) Revert the node's in-lane DECLARED writes to the anchored baseline (read nodes: empty ⇒ no-op).
+  let revertedPaths = [];
+  let declared = [];
+  try {
+    const { parseWriteSetCell } = require('./kaola-workflow-classifier');
+    declared = Array.from(parseWriteSetCell(member.declared_write_set));
+  } catch (_) { declared = []; }
+  if (declared.length && baseSha) {
+    let root; try { root = getRoot(); } catch (_) { root = process.cwd(); }
+    if (gitCheckoutSeam) {
+      const r = gitCheckoutSeam(root, baseSha, declared);
+      if (r && r.exitCode !== 0) return { result: 'refuse', reason: 'git_checkout_failed', nodeId, declared };
+      revertedPaths = declared.slice();
+    } else {
+      try {
+        execFileSync('git', ['checkout', baseSha, '--', ...declared], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+        revertedPaths = declared.slice();
+      } catch (e) { return { result: 'refuse', reason: 'git_checkout_failed', nodeId, declared, detail: String(e.message || e) }; }
+    }
+  }
+
+  // (c) Drop the anchored baseline (ref + file together; idempotent).
+  shell(validatorPath, [planPath, '--drop-base', '--node-id', nodeId, '--json']);
+
+  // (d) Remove the node from running-set.json.
+  const remaining = (running.nodes || []).filter(n => n.id !== nodeId);
+  writeFile(runningSetPath, JSON.stringify({ ...running, nodes: remaining }, null, 2));
+
+  appendProvenanceLog(planPath, 'discard-speculative', nodeId, baseSha ? String(baseSha).slice(0, 12) : null);
+
+  return {
+    result: 'ok',
+    nodeId,
+    discarded: true,
+    ledgerReset: 'pending',
+    revertedPaths,
+    baseDropped: true,
+    runningSet: remaining.map(n => n.id),
+    taskTransitions: [buildTransition(nodeId, 'pending', 'discard-speculative')],
+  };
+}
+
+// ---------------------------------------------------------------------------
 // runOpenReady — MUTATES ledger + baselines + running-set.json.
 // Opens up to N ready-pending nodes (priority-ordered by next-action's
 // longest-path-to-sink). Read-only nodes fan out up to the read-only cap; a write
@@ -3258,9 +3448,28 @@ function runOpenReady(opts) {
   // Priority-ordered openable frontier (next-action orders readyPending by longest-path-to-sink).
   // Exclude main-session-gate (the main session cannot run concurrently with itself) and any node
   // already in the running set.
-  const frontier = (nextAction.readyPending || [])
+  let frontier = (nextAction.readyPending || [])
     .filter(n => n.role !== 'main-session-gate')
     .filter(n => !liveIds.has(n.id));
+
+  // #439 (D-419 Part 4): SPECULATIVE-read fallback. When the NORMAL frontier is empty — the only thing
+  // blocking forward progress is an open gate — AND the per-run consent flag is present AND the frozen
+  // plan's speculative_open_policy authorizes it, fan out the speculative-eligible read nodes
+  // (next-action's speculativePending): read-only nodes betting that the open gate will pass. They open
+  // exactly like a read frontier, but each running-set entry is stamped `speculative: true` ([INV-25])
+  // so orient / reconcile / close treat them as the optimistic set. Default policy:off (or no consent
+  // flag) ⇒ this branch is inert ⇒ byte-identical to today. Never co-runs with a live write
+  // (liveHasWrite already returned above). Consent is per-run (the flag), never persisted in the plan.
+  let openingSpeculative = false;
+  if (frontier.length === 0 && opts.speculativeConsent && resolveSpeculativePolicy(readFile(planPath)) === 'consent') {
+    const specFrontier = (nextAction.speculativePending || [])
+      .filter(n => n.role !== 'main-session-gate')
+      .filter(n => !liveIds.has(n.id));
+    if (specFrontier.length > 0) {
+      frontier = specFrontier;
+      openingSpeculative = true;
+    }
+  }
   if (frontier.length === 0) {
     return { result: 'ok', allDone: false, opened: [], taskTransitions: [] };
   }
@@ -3339,6 +3548,11 @@ function runOpenReady(opts) {
     // #437 (D-419 P2 §1.1): stamp each lane-group member with its group_id so close-node knows it is
     // a member (and which group). undefined ⇒ a serial/read node (no group).
     ...(groupForm ? { group_id: groupForm.group_id } : {}),
+    // #439 (D-419 Part 4): the [INV-25] marker — a speculatively-opened read node betting on an open
+    // gate. orient / reconcile-running-set / close treat the speculative set uniformly; discard-speculative
+    // rolls it back if the gate's verdict fails. `speculativeGate` records the bet (the open gate id) so
+    // the close-time guard can hold the member until its gate resolves. Absent on the normal/serial path.
+    ...(openingSpeculative ? { speculative: true, speculativeGate: n.speculativeGate || null } : {}),
     ...(openedAt ? { openedAt } : {}),
   }));
 
@@ -3552,6 +3766,13 @@ function runCloseNode(opts) {
   //    ⇒ this whole branch is skipped and the existing serial close runs verbatim (INV-6).
   const containment = resolveLaneContainment(process.env);
   const running0 = readRunningSet(runningSetPath, cacheExists, readFile);
+
+  // #439 (D-419 Part 4): close-time speculative guard — a speculative member cannot commit to complete
+  // until its gate resolves (else its review pointer + discard handle would be lost). Fires only for a
+  // speculative:true member whose gate is not yet complete; never for a normal node (INV-6 preserved).
+  const specGuard = speculativeCloseGuard(nodeId, running0, readLedgerStatuses(readFile(planPath)));
+  if (specGuard) return specGuard;
+
   const lg = (containment && running0 && running0.lane_group) ? running0.lane_group : null;
   const isMember = !!(lg && Array.isArray(lg.members) && lg.members.includes(nodeId));
   if (isMember) {
@@ -3632,12 +3853,20 @@ function runCloseNode(opts) {
         .map(n => ({ id: n.id, role: n.role, model: n.model, declared_write_set: n.declared_write_set }))
     : [];
 
+  // #439 (D-419 Part 4, settlement 3): a GATE closing verdict:fail surfaces the speculative members that
+  // bet on it (held in the running set by the close-time guard) for keep-or-discard. running0 is the
+  // pre-removal snapshot (this close removed only THIS gate, never a speculative dependent).
+  const speculativeReview = speculativeReviewOnGateClose(role, nodeId, evidenceContent, running0, readFile(planPath));
+
   return {
     result: 'ok',
     closed: nodeId,
     allDone,
     newlyReady,
     ...(verdictWarn || {}),
+    // #439: informational — present ONLY when a gate closed verdict:fail with speculative dependents.
+    // operator_hint(speculative_review_required) names the discard path; result stays 'ok' (non-blocking).
+    ...(speculativeReview ? { speculative_review_required: speculativeReview, operator_hint: getOperatorHint('speculative_review_required', speculativeReview) } : {}),
     taskTransitions: transitions,
     taskMirror: refreshTaskMirror(project, shell),
   };
@@ -4373,6 +4602,10 @@ function main() {
       planPath, project,
       max: Number.isInteger(maxArg) && maxArg >= 1 ? maxArg : null,
       fanoutCapReadonly: resolveFanoutCapReadonly(process.env),
+      // #439 (D-419 Part 4): the per-run speculative-read consent carrier — NEVER persisted in the
+      // frozen plan (orthogonal to the hash-covered speculative_open_policy Meta field). Both must hold
+      // for a speculative fan-out: the plan authorizes (policy:consent) AND this run opted in (the flag).
+      speculativeConsent: args.includes('--speculative-consent'),
       shell, readFile, writeFile, cacheExists,
       mkdirp: (dir) => { try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {} },
       now: () => new Date().toISOString(),
@@ -4464,6 +4697,13 @@ function main() {
         unlink: (f) => { try { fs.unlinkSync(f); } catch (_) {} },
       });
     }
+  } else if (subcommand === 'discard-speculative') {
+    // #439 (D-419 Part 4, settlement 4): roll back a speculatively-opened read node whose gate bet failed.
+    if (!nodeId) {
+      result = { result: 'refuse', errors: ['--node-id required for discard-speculative'] };
+    } else {
+      result = runDiscardSpeculative({ planPath, project, nodeId, shell, readFile, writeFile, cacheExists });
+    }
   } else if (subcommand === 'route-findings') {
     // #446 (D-446-01 Decision 1): route-findings is a SUBCOMMAND (no new install-manifest entry).
     if (!nodeId) {
@@ -4538,6 +4778,8 @@ module.exports = {
   // #434 (D-434-01): repair primitives.
   runRevertOverflow,
   runRepairNode,
+  // #439 (D-419 Part 4): speculative-read discard primitive.
+  runDiscardSpeculative,
   shellNode,
   // #444 (D-444-01): dispatch descriptor builder + guards + verify subcommand.
   buildDispatch,

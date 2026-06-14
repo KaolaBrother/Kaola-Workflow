@@ -24,8 +24,9 @@
 // ---------------------------------------------------------------------------
 
 const fs = require('fs');
-const { parseNodes, parseLedger } = require('./kaola-workflow-plan-validator');
-const { LEDGER_STATUSES, NODE_MODEL_TIERS } = require('./kaola-workflow-adaptive-schema');
+const { parseNodes, parseLedger, parseSpeculativePolicy } = require('./kaola-workflow-plan-validator');
+const { parseWriteSetCell } = require('./kaola-workflow-classifier');
+const { LEDGER_STATUSES, NODE_MODEL_TIERS, GATE_VERDICT_ROLES } = require('./kaola-workflow-adaptive-schema');
 
 // Terminal statuses: a node in either state counts as "done" for dependency
 // purposes, so an n/a node satisfies the depends_on of its successors.
@@ -174,6 +175,50 @@ function computeNextAction(content, opts) {
       shape: node.shape.kind,
     }));
 
+  // #439 (D-419 Part 4): SPECULATIVE-read eligibility (additive; mechanical, never authored). A node is
+  // speculative-eligible iff (a) it is read-only (declared write set empty), (b) its OWN status is still
+  // pending, (c) it is NOT already a normal ready node (it has ≥1 non-terminal ancestor), and (d) its
+  // ONLY unsatisfied DIRECT dependency is a currently-OPEN gate (a GATE_VERDICT_ROLES node whose ledger
+  // status is in_progress). The bet: the gate will pass. Because an in_progress gate's own ancestors are
+  // already terminal, "single unsatisfied direct dep == that gate" implies the full unsatisfied closure
+  // is exactly the gate. Descriptor shape mirrors readyPending, plus `speculativeGate:<gate-id>`.
+  //
+  // EMITTED ONLY WHEN the plan's speculative_open_policy authorizes it (`consent`). At the default `off`
+  // the `speculativePending` key is OMITTED ENTIRELY, so next-action's output is byte-identical to
+  // pre-#439 (the flag-off invariant) and the open-next gate_not_complete branch — which keys on this
+  // set — never fires off-policy. The per-run consent flag is still additionally required to ACT on it
+  // (open-ready --speculative-consent). The eligibility rule itself stays mechanical; only its emission
+  // is policy-keyed, so a non-speculative plan sees zero behavioral or output-shape change.
+  let speculativePending;
+  if (parseSpeculativePolicy(content) === 'consent') {
+    const isReadOnly = node => {
+      try { return parseWriteSetCell(node.writeSetRaw).size === 0; }
+      catch (_) { const s = String(node.writeSetRaw == null ? '' : node.writeSetRaw).trim(); return !s || s === '—' || s === '-'; }
+    };
+    const gateRoleSet = new Set(GATE_VERDICT_ROLES);
+    speculativePending = nodes
+      .filter(node => {
+        if (st(node.id) !== 'pending') return false;        // only a not-yet-opened node is speculatively openable
+        if (allAncestorsTerminal(node.id)) return false;    // already a NORMAL ready node — not speculative
+        if (!isReadOnly(node)) return false;                // read-overlap ONLY (write-overlap is #463)
+        const unsatisfied = node.dependsOn.filter(d => !TERMINAL.has(st(d)));
+        if (unsatisfied.length !== 1) return false;         // exactly ONE unsatisfied dependency
+        const gate = byId.get(unsatisfied[0]);
+        return !!gate && gateRoleSet.has(gate.role) && st(gate.id) === 'in_progress';  // ...an OPEN gate
+      })
+      .map(node => ({
+        id: node.id,
+        role: node.role,
+        dependsOn: node.dependsOn,
+        model: node.model || resolveModel(node.role),
+        declared_write_set: node.writeSetRaw,
+        shape: node.shape.kind,
+        speculativeGate: node.dependsOn.filter(d => !TERMINAL.has(st(d)))[0],
+        longestPathToSink: longestPathToSink(node.id),
+      }))
+      .sort((a, b) => (b.longestPathToSink - a.longestPathToSink) || (docIndex.get(a.id) - docIndex.get(b.id)));
+  }
+
   return {
     result: 'ok',
     readySet,
@@ -181,6 +226,8 @@ function computeNextAction(content, opts) {
     allDone,
     readyPending,
     active,
+    // #439: present ONLY at speculative_open_policy:consent (omitted at off ⇒ byte-identical pre-#439).
+    ...(speculativePending ? { speculativePending } : {}),
   };
 }
 

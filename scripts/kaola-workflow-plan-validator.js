@@ -2348,6 +2348,7 @@ module.exports = {
   parseLabels,
   parseGoal,
   parseLedger,
+  parseSpeculativePolicy,
   uniqueSink,
   gateUncovered,
   verifyGateExecution,
