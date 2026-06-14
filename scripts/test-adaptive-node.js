@@ -6156,6 +6156,215 @@ function rtHarness(initialFiles, opts) {
   }
 }
 
+// ===========================================================================
+// #439 (D-419 Part 4) — speculative-READ kernel runtime. open-ready --speculative-consent opens a
+// read node behind an OPEN gate (marked speculative:true); open-next refuses gate_not_complete;
+// discard-speculative rolls it back; a gate closing verdict:fail surfaces speculative_review_required.
+// Driven as REAL subprocesses in a REAL git repo (the lifecycle reads git + fs).
+// ===========================================================================
+{
+  const { execFileSync } = require('child_process');
+  const NODE_CLI_439 = path.join(__dirname, 'kaola-workflow-adaptive-node.js');
+  const VALIDATOR_439 = path.join(__dirname, 'kaola-workflow-plan-validator.js');
+
+  // impl(tdd-guide,a.js) → gate(code-reviewer) → docs(doc-updater, read) → sink(finalize). impl complete.
+  function make439Repo(policy) {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-439-'));
+    const project = 'issue-439';
+    const projDir = path.join(repoRoot, 'kaola-workflow', project);
+    const cacheDir = path.join(projDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const planPath = path.join(projDir, 'workflow-plan.md');
+    const meta = ['## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md'];
+    if (policy) meta.push('speculative_open_policy: ' + policy);
+    const plan = [
+      '# Workflow Plan — issue-439', '',
+      ...meta, '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| impl | tdd-guide     | —    | a.js         | 1 | sequence |',
+      '| gate | code-reviewer | impl | —            | 1 | sequence |',
+      '| docs | doc-updater   | gate | —            | 1 | sequence |',
+      '| sink | finalize      | docs | CHANGELOG.md | 1 | sequence |', '',
+      '## Node Ledger', '',
+      '| id | status |', '| --- | --- |',
+      '| impl | complete |', '| gate | pending |', '| docs | pending |', '| sink | pending |', '',
+    ].join('\n') + '\n';
+    fs.writeFileSync(planPath, plan);
+    fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n');
+    fs.writeFileSync(path.join(repoRoot, 'a.js'), '// impl\n');
+    const g = (a) => execFileSync('git', ['-C', repoRoot, ...a], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+    g(['init']); g(['config', 'user.email', 'kw@test']); g(['config', 'user.name', 'kw']); g(['config', 'commit.gpgsign', 'false']);
+    try { execFileSync('node', [VALIDATOR_439, planPath, '--freeze', '--repair', '--json'], { cwd: repoRoot, encoding: 'utf8' }); } catch (_) {}
+    fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
+    g(['add', '-A']); g(['commit', '-m', 'init']);
+    return { repoRoot, project, projDir, cacheDir, planPath, g };
+  }
+  function run439(repoRoot, subArgs) {
+    try {
+      const stdout = execFileSync('node', [NODE_CLI_439, ...subArgs], { cwd: repoRoot, encoding: 'utf8' });
+      let p = {}; try { p = JSON.parse(stdout.trim().split('\n').pop()); } catch (_) {}
+      return { exitCode: 0, ...p };
+    } catch (err) {
+      const status = (err.status == null) ? 1 : err.status;
+      let p = {}; try { p = JSON.parse(String(err.stdout || '').trim().split('\n').pop()); } catch (_) {}
+      return { exitCode: status, ...p };
+    }
+  }
+  function readRS439(cacheDir) { try { return JSON.parse(fs.readFileSync(path.join(cacheDir, 'running-set.json'), 'utf8')); } catch (_) { return null; } }
+  function ledgerStatus439(planPath, id) {
+    const txt = fs.readFileSync(planPath, 'utf8');
+    const body = txt.slice(txt.indexOf('## Node Ledger'));
+    const m = body.match(new RegExp('^\\|\\s*' + id + '\\s*\\|\\s*(\\S+)\\s*\\|', 'm'));
+    return m ? m[1] : null;
+  }
+  // Open the gate via the REAL scheduler so it has a recorded baseline, then return the gate's nonce.
+  function openGate439(repoRoot, cacheDir) {
+    const r = run439(repoRoot, ['open-ready', '--project', 'issue-439', '--json']);  // opens gate (ready)
+    const gateEntry = (r.opened || []).find(n => n.id === 'gate');
+    return gateEntry ? gateEntry.nonce : null;
+  }
+  function rm439(p) { try { fs.rmSync(p, { recursive: true, force: true }); } catch (_) {} }
+
+  // T439-1: open-ready --speculative-consent opens docs speculatively (policy:consent, gate open).
+  {
+    const { repoRoot, cacheDir } = make439Repo('consent');
+    openGate439(repoRoot, cacheDir);
+    const r = run439(repoRoot, ['open-ready', '--project', 'issue-439', '--speculative-consent', '--json']);
+    assert(r.result === 'ok' && (r.opened || []).some(n => n.id === 'docs'),
+      'T439-1: open-ready --speculative-consent opens docs, got ' + JSON.stringify((r.opened || []).map(n => n.id)));
+    const rs = readRS439(cacheDir);
+    const docsEntry = rs && (rs.nodes || []).find(n => n.id === 'docs');
+    assert(docsEntry && docsEntry.speculative === true, 'T439-1: docs running-set entry is marked speculative:true');
+    rm439(repoRoot);
+  }
+
+  // T439-2: open-ready WITHOUT --speculative-consent opens nothing speculative (consent is per-run).
+  {
+    const { repoRoot, cacheDir } = make439Repo('consent');
+    openGate439(repoRoot, cacheDir);
+    const r = run439(repoRoot, ['open-ready', '--project', 'issue-439', '--json']);
+    assert((r.opened || []).every(n => n.id !== 'docs'), 'T439-2: no speculative open without the consent flag, got ' + JSON.stringify((r.opened || []).map(n => n.id)));
+    rm439(repoRoot);
+  }
+
+  // T439-3: policy:off (default) + consent flag → NO speculative open (the plan must authorize too).
+  {
+    const { repoRoot, cacheDir } = make439Repo(null);  // no speculative_open_policy ⇒ default off
+    openGate439(repoRoot, cacheDir);
+    const r = run439(repoRoot, ['open-ready', '--project', 'issue-439', '--speculative-consent', '--json']);
+    assert((r.opened || []).every(n => n.id !== 'docs'), 'T439-3: policy:off refuses speculative open even with the consent flag');
+    rm439(repoRoot);
+  }
+
+  // T439-4: with the gate open SERIALLY (no running-set), open-next of the gate-blocked read node
+  // refuses gate_not_complete (evaluated after the scheduler/batch guard passes — no running-set is
+  // live on the serial path). When the gate is instead live in the running-set, open-next refuses
+  // scheduler_active first; the speculative open then goes through open-ready --speculative-consent.
+  {
+    const { repoRoot } = make439Repo('consent');
+    run439(repoRoot, ['open-next', '--project', 'issue-439', '--json']);  // serially opens the gate (no running-set)
+    const r = run439(repoRoot, ['open-next', '--project', 'issue-439', '--node-id', 'docs', '--json']);
+    assert(r.result === 'refuse' && r.reason === 'gate_not_complete',
+      'T439-4: open-next of a gate-blocked read node refuses gate_not_complete, got ' + JSON.stringify(r));
+    assert(r.speculativeGate === 'gate', 'T439-4: gate_not_complete names the open gate');
+    rm439(repoRoot);
+  }
+
+  // T439-5: discard-speculative docs → ledger pending + removed from running-set.
+  {
+    const { repoRoot, cacheDir, planPath } = make439Repo('consent');
+    openGate439(repoRoot, cacheDir);
+    run439(repoRoot, ['open-ready', '--project', 'issue-439', '--speculative-consent', '--json']);
+    assert(ledgerStatus439(planPath, 'docs') === 'in_progress', 'T439-5: docs is in_progress after speculative open');
+    const r = run439(repoRoot, ['discard-speculative', '--project', 'issue-439', '--node-id', 'docs', '--json']);
+    assert(r.result === 'ok' && r.ledgerReset === 'pending', 'T439-5: discard-speculative ok + ledger reset to pending, got ' + JSON.stringify(r));
+    assert(ledgerStatus439(planPath, 'docs') === 'pending', 'T439-5: docs ledger is pending after discard');
+    const rs = readRS439(cacheDir);
+    assert(rs && (rs.nodes || []).every(n => n.id !== 'docs'), 'T439-5: docs removed from running-set after discard');
+    rm439(repoRoot);
+  }
+
+  // T439-6: discard-speculative on a NON-speculative member (the gate) → not_speculative refuse.
+  {
+    const { repoRoot, cacheDir } = make439Repo('consent');
+    openGate439(repoRoot, cacheDir);
+    const r = run439(repoRoot, ['discard-speculative', '--project', 'issue-439', '--node-id', 'gate', '--json']);
+    assert(r.result === 'refuse' && r.reason === 'not_speculative',
+      'T439-6: discard-speculative on a non-speculative node refuses not_speculative, got ' + JSON.stringify(r));
+    rm439(repoRoot);
+  }
+
+  // T439-7: close gate with verdict:FAIL → speculative_review_required names docs.
+  {
+    const { repoRoot, cacheDir, projDir } = make439Repo('consent');
+    const gateNonce = openGate439(repoRoot, cacheDir);
+    run439(repoRoot, ['open-ready', '--project', 'issue-439', '--speculative-consent', '--json']);
+    fs.writeFileSync(path.join(cacheDir, 'gate.md'),
+      'evidence-binding: gate ' + (gateNonce || '') + '\nverdict: fail\nfindings_blocking: 1\nfinding: id=x scope=in-scope severity=high status=open desc=bad\n');
+    const r = run439(repoRoot, ['close-node', '--project', 'issue-439', '--node-id', 'gate', '--json']);
+    assert(r.result === 'ok', 'T439-7: gate close succeeds (the gate close itself is legitimate), got ' + JSON.stringify(r));
+    assert(r.speculative_review_required && r.speculative_review_required.gate === 'gate' &&
+      (r.speculative_review_required.speculative || []).includes('docs'),
+      'T439-7: a verdict:fail gate surfaces speculative_review_required naming docs, got ' + JSON.stringify(r.speculative_review_required));
+    rm439(repoRoot);
+  }
+
+  // T439-8: close gate with verdict:PASS → NO speculative_review_required (the bet held).
+  {
+    const { repoRoot, cacheDir } = make439Repo('consent');
+    const gateNonce = openGate439(repoRoot, cacheDir);
+    run439(repoRoot, ['open-ready', '--project', 'issue-439', '--speculative-consent', '--json']);
+    fs.writeFileSync(path.join(cacheDir, 'gate.md'),
+      'evidence-binding: gate ' + (gateNonce || '') + '\nverdict: pass\nfindings_blocking: 0\n');
+    const r = run439(repoRoot, ['close-node', '--project', 'issue-439', '--node-id', 'gate', '--json']);
+    assert(r.result === 'ok', 'T439-8: gate close succeeds on a pass verdict');
+    assert(!r.speculative_review_required, 'T439-8: a verdict:pass gate does NOT surface speculative_review_required');
+    rm439(repoRoot);
+  }
+
+  // T439-9: CLOSE-TIME guard — a speculative node CANNOT close while its gate is still in_progress
+  // (else its review pointer + discard handle would vanish). The work ran concurrently (the win); only
+  // the formal complete is held until the bet resolves.
+  {
+    const { repoRoot, cacheDir, planPath } = make439Repo('consent');
+    openGate439(repoRoot, cacheDir);
+    run439(repoRoot, ['open-ready', '--project', 'issue-439', '--speculative-consent', '--json']);
+    // docs has valid evidence + nonce, but its gate is still in_progress.
+    let docsNonce = '';
+    try { docsNonce = fs.readFileSync(path.join(cacheDir, 'barrier-base-docs'), 'utf8').trim().slice(0, 12); } catch (_) {}
+    fs.writeFileSync(path.join(cacheDir, 'docs.md'), 'evidence-binding: docs ' + docsNonce + '\n');
+    const r = run439(repoRoot, ['close-node', '--project', 'issue-439', '--node-id', 'docs', '--json']);
+    assert(r.result === 'refuse' && r.reason === 'gate_not_complete',
+      'T439-9: closing a speculative node while its gate is open refuses gate_not_complete, got ' + JSON.stringify(r));
+    assert(ledgerStatus439(planPath, 'docs') === 'in_progress', 'T439-9: docs stays in_progress (held, not completed)');
+    rm439(repoRoot);
+  }
+
+  // T439-10: the close-time guard makes the review REACHABLE — docs is held in the running set, so when
+  // the gate later closes verdict:fail, speculative_review_required still names docs (the coherence the
+  // review + discard mechanism depends on; without the guard docs would have vanished on early close).
+  {
+    const { repoRoot, cacheDir } = make439Repo('consent');
+    const gateNonce = openGate439(repoRoot, cacheDir);
+    run439(repoRoot, ['open-ready', '--project', 'issue-439', '--speculative-consent', '--json']);
+    // docs tries to close first but is HELD (gate open) — proving the held state precedes the gate close.
+    let docsNonce = '';
+    try { docsNonce = fs.readFileSync(path.join(cacheDir, 'barrier-base-docs'), 'utf8').trim().slice(0, 12); } catch (_) {}
+    fs.writeFileSync(path.join(cacheDir, 'docs.md'), 'evidence-binding: docs ' + docsNonce + '\n');
+    const held = run439(repoRoot, ['close-node', '--project', 'issue-439', '--node-id', 'docs', '--json']);
+    assert(held.reason === 'gate_not_complete', 'T439-10: docs is held before the gate resolves');
+    // Now the gate closes verdict:fail → review names docs (still in the running set).
+    fs.writeFileSync(path.join(cacheDir, 'gate.md'),
+      'evidence-binding: gate ' + (gateNonce || '') + '\nverdict: fail\nfindings_blocking: 1\nfinding: id=x scope=in-scope severity=high status=open desc=bad\n');
+    const r = run439(repoRoot, ['close-node', '--project', 'issue-439', '--node-id', 'gate', '--json']);
+    assert(r.result === 'ok' && r.speculative_review_required && (r.speculative_review_required.speculative || []).includes('docs'),
+      'T439-10: after the guard held docs, the gate verdict:fail surfaces speculative_review_required naming docs, got ' + JSON.stringify(r.speculative_review_required));
+    rm439(repoRoot);
+  }
+}
+
 if (failed > 0) {
   console.error('adaptive-node tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;
