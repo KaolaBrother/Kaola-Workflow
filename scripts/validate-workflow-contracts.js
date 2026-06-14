@@ -435,6 +435,31 @@ assertIncludes('commands/kaola-workflow-finalize.md', 'Use the sink metadata cap
 // #277 M3: contractor-dispatch HANDLE lock — the mechanical finalization body moved to
 // agents/contractor.md; the finalize command retains only the Agent(...) dispatch handle.
 assertIncludes('commands/kaola-workflow-finalize.md', 'subagent_type="contractor"');
+
+// #459: contractor-free routing enforcement. The fast path (#456) and the full path's
+// Phase 1-5 + Phase 4 mechanical transitions (#457/#458) are script-owned (ADR 0004); the
+// `contractor` must NOT return to those migrated command surfaces. Finalization (asserted
+// positively just above + agents/contractor.md) remains the SOLE contractor-owned transition.
+// We forbid the contractor DISPATCH (`subagent_type="contractor"`), not the bare word, so a
+// legitimate finalize-exception prose mention (e.g. fast.md's "the final transition still owned
+// by `contractor`, handled by /kaola-workflow-finalize") is deliberately allowed. Scoped to the
+// explicit migrated file list — never a repo-wide grep — so finalize.md / contractor.md /
+// historical references are untouched. The forge command mirrors and the Codex SKILL packs are
+// pinned by the per-edition contract validators (validate-kaola-workflow-{,gitlab,gitea}-contracts.js).
+for (const cmd of ['fast', 'phase1', 'phase2', 'phase3', 'phase4', 'phase5']) {
+  assertNotIncludes('commands/kaola-workflow-' + cmd + '.md', 'subagent_type="contractor"');
+}
+// Registration coverage: every full/fast transaction script (+ its forge-renamed ports) must
+// be emitted by the install manifest, or a manual (non-plugin) install omits it and the
+// migrated mechanics fall back to a now-nonexistent contractor handoff. Fails with the missing
+// script name.
+assertManifestScript('kaola-workflow-fast-advance.js');
+assertManifestScript('kaola-workflow-full-advance.js');
+assertManifestScript('kaola-gitlab-workflow-full-advance.js');
+assertManifestScript('kaola-gitea-workflow-full-advance.js');
+assertManifestScript('kaola-workflow-phase4-advance.js');
+assertManifestScript('kaola-gitlab-workflow-phase4-advance.js');
+assertManifestScript('kaola-gitea-workflow-phase4-advance.js');
 // #336: keep-open partial-close sink lane — pin the durable field, the sink-merge flag, and the
 // merge-sink-only refusal prose (the exit-3 in-arm BLOCKED guard is shell prose no walkthrough
 // executes, so this pin is its only mechanical enforcement).

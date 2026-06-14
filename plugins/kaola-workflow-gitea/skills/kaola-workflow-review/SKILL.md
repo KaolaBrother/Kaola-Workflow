@@ -113,6 +113,15 @@ ran yes/no and reason
 | security review | subagent-invoked/local-fallback-explicit/local-fallback-tool-unavailable/N/A | .cache/security-reviewer.md or file-risk scan | reason if N/A |
 | review-fix executors | subagent-invoked/local-fallback-explicit/local-fallback-tool-unavailable/N/A | .cache/review-fix-*.md | reason if N/A |
 
+## Fixes Applied
+[list]
+
+## Validation Evidence
+[commands run/delegated/cited, result, evidence path]
+
+## Follow-Up Items
+[MEDIUM/LOW deferred]
+
 ## Review Status
 PASSED | PASSED WITH FOLLOW-UPS
 ```

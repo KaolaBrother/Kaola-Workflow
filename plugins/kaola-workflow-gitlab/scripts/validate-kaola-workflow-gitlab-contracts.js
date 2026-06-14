@@ -311,6 +311,29 @@ assert(
   read(pluginRoot + '/commands/kaola-workflow-finalize.md').includes('subagent_type="contractor"'),
   'GitLab Finalization command must dispatch the mechanical finalization to the contractor subagent'
 );
+// #459: contractor-free routing enforcement (GitLab edition). The fast path (#456) and the full
+// path's Phase 1-5 + Phase 4 mechanical transitions (#457/#458) are script-owned (ADR 0004); the
+// contractor DISPATCH must not return to those migrated command surfaces. We forbid the dispatch
+// (`subagent_type="contractor"`), not the bare word, so the allowed finalize-exception prose note
+// is untouched. Finalization (asserted just above) stays the SOLE contractor-owned transition.
+for (const cmd of ['fast', 'phase1', 'phase2', 'phase3', 'phase4', 'phase5']) {
+  assert(
+    !read(pluginRoot + '/commands/kaola-workflow-' + cmd + '.md').includes('subagent_type="contractor"'),
+    'GitLab ' + cmd + ' command must not dispatch the contractor for migrated mechanics (script-owned per #456/#457/#458)'
+  );
+}
+// Migrated Codex SKILLs: research/ideation/plan/review/execute must be fully contractor-free; the
+// fast SKILL keeps a finalize-exception boundary note, so forbid only the handoff phrasing there.
+for (const sk of ['research', 'ideation', 'plan', 'review', 'execute']) {
+  assert(
+    !read(pluginRoot + '/skills/kaola-workflow-' + sk + '/SKILL.md').includes('contractor'),
+    'GitLab ' + sk + ' skill must be contractor-free (script-owned per #457/#458)'
+  );
+}
+assert(
+  !read(pluginRoot + '/skills/kaola-workflow-fast/SKILL.md').includes('delegated to the contractor'),
+  'GitLab fast skill must not delegate mechanics to the contractor (script-owned per #456)'
+);
 assert(
   read(pluginRoot + '/skills/kaola-workflow-finalize/SKILL.md').includes('mr|pr)'),
   'GitLab finalize skill must dispatch canonical mr sink plus pr compatibility alias'

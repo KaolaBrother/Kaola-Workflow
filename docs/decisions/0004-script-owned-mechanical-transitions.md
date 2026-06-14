@@ -138,3 +138,29 @@ true:
 
 If a workflow procedure is deterministic enough to specify in a contractor
 prompt, it is deterministic enough to become a script.
+
+## Status update (2026-06-14, #459)
+
+The migration this ADR set out has landed for every non-finalization seam:
+
+- **Fast path (#456)** — `kaola-workflow-fast-advance.js` owns plan/execute/review/summary
+  mechanics (`orient` / `plan-setup` / `plan-capture` / `execute-setup` /
+  `acceptance-run` / `acceptance-consequence` / `summary-write`).
+- **Full path Phase 1/2/3/5 (#457)** — `kaola-workflow-full-advance.js` owns the
+  checkpoint + phase-file authoring (`phase1-complete` / `phase2-finalize` /
+  `phase3-finalize` / `phase5-finalize`, with self-validation against the real
+  `repair-state.unresolvedCompliance` boundary gate).
+- **Full path Phase 4 (#458)** — `kaola-workflow-phase4-advance.js` owns the
+  per-task execute loop (`init-progress` / `open-task` / `record-failure` /
+  `close-task`).
+- **Adaptive per-node loop (#272)** was already script-owned by
+  `kaola-workflow-adaptive-node.js`.
+
+**Phase 6 (Finalization) remains the SOLE contractor-owned transition** (the §
+Lock exception above stands: no finalization transaction script exists yet). #459
+adds the machine enforcement that prevents regression — the four contract
+validators forbid a `subagent_type="contractor"` dispatch from returning to any
+migrated fast/full command surface and forbid contractor delegation prose from the
+migrated Codex SKILLs, while explicitly allowing the finalize command/SKILL +
+`agents/contractor.md` + historical text. Once a finalization transaction script
+lands, the contractor profile can retire entirely.
