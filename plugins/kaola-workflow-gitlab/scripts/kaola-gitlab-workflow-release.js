@@ -396,10 +396,30 @@ function runCut(root, opts) {
     const expectedTag = RELEASE_TAG_PREFIX + version;
     const tagDone = earlyReceipt.some(r => r.step === 'git_tag' && r.status === 'done' && r.tag === expectedTag);
     if (tagDone) {
+      // #460: shape-consistency with the normal --cut success envelope — backfill
+      // codex_version/codex_version_source from the #455 codex_resolution receipt
+      // entry for this version. A caller reading codex_version from a re-run of an
+      // already-completed cut must not see undefined. Falls back to the on-disk codex
+      // baseline for a legacy pre-#455 receipt that has no codex_resolution step.
+      const codexRes = earlyReceipt.find(
+        r => r.step === 'codex_resolution' && r.status === 'done' && r.version === version
+      );
+      let scCodexVersion;
+      let scCodexVersionSource;
+      if (codexRes) {
+        scCodexVersion = codexRes.codexVersion;
+        scCodexVersionSource = codexRes.source;
+      } else {
+        const ls = checkLockstep(root);
+        scCodexVersion = ls.ok ? ls.baseline : null;
+        scCodexVersionSource = 'persisted';
+      }
       const result = {
         result: 'ok',
         idempotent: true,
         version,
+        codex_version: scCodexVersion,
+        codex_version_source: scCodexVersionSource,
         tag: expectedTag,
         steps_completed: earlyReceipt.map(r => r.step),
       };

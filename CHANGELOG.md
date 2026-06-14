@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **scripts/release: `kaola-workflow-release.js --cut` idempotent short-circuit envelope now carries `codex_version` / `codex_version_source` (#460).** After #455 the normal `--cut` success envelope reports `codex_version` and `codex_version_source` (`derived`/`explicit`), but the full-completion idempotent short-circuit (`runCut` returns early when the terminal `git_tag` step is already done for the requested version) omitted them — so a caller re-running an already-completed cut and reading `codex_version` from the `--json` result got `undefined`, even though the Codex manifests on disk were correctly at their resolved version. The short-circuit now backfills both fields from the `codex_resolution` receipt entry (added in #455) for the requested root version, falling back to the on-disk Codex baseline (`source: "persisted"`) for a legacy pre-#455 receipt that has no `codex_resolution` step, so the idempotent and normal success envelopes are shape-consistent. Observability/consistency only — no release mutation changes; the early path predates #455 (from #442). Propagated to all four edition release scripts; `scripts/test-release.js` adds T5d asserting the idempotent re-run envelope carries `codex_version`/`codex_version_source`. All four `npm run test:kaola-workflow:{claude,codex,gitlab,gitea}` chains green.
+
 ## [6.1.0] — 2026-06-14
 
 ### Removed

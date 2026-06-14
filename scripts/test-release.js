@@ -327,6 +327,22 @@ const repo5 = makeFixtureRepo({
       'T5: r.json.codex_version must be 3.1.0; got=' + r.json.codex_version);
     assert(r.json.codex_version_source === 'derived',
       'T5: r.json.codex_version_source must be "derived"; got=' + r.json.codex_version_source);
+
+    // T5d (#460): re-running an already-completed cut hits the idempotent
+    // short-circuit; its envelope must be shape-consistent with the normal
+    // success envelope and carry codex_version + codex_version_source (not undefined).
+    const r2 = run(repo5, ['--cut', '--version', '5.1.0', '--json', '--issues-closed', '100'], {
+      KAOLA_RELEASE_DATE: cutDate,
+    });
+    assert(r2.json !== null, 'T5d: idempotent re-run produces parseable JSON; stderr=' + (r2.stderr || ''));
+    if (r2.json !== null) {
+      assert(r2.json.result === 'ok', 'T5d: idempotent re-run must return ok; got ' + r2.json.result);
+      assert(r2.json.idempotent === true, 'T5d: re-run must be flagged idempotent; got ' + r2.json.idempotent);
+      assert(r2.json.codex_version === '3.1.0',
+        'T5d: idempotent envelope must carry codex_version 3.1.0 (not undefined); got=' + r2.json.codex_version);
+      assert(r2.json.codex_version_source === 'derived',
+        'T5d: idempotent envelope must carry codex_version_source "derived"; got=' + r2.json.codex_version_source);
+    }
   }
 }
 fs.rmSync(repo5, { recursive: true, force: true });
