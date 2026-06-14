@@ -428,6 +428,10 @@ assert(exists('commands/kaola-workflow-finalize.md'),
 assertIncludes('commands/kaola-workflow-finalize.md', 'kaola-workflow-sink-merge.js');
 assertIncludes('commands/kaola-workflow-finalize.md', 'kaola-workflow-sink-pr.js');
 assertIncludes('commands/kaola-workflow-finalize.md', 'SINK_STATE_FILE="kaola-workflow/{project}/workflow-state.md"');
+// #475: the consumer (non-npm) finalize gate must be documented — the agent's .cache/final-validation.md
+// is the gate (not a chain receipt). Pin the distinctive typed refusal so the dual-mode prose cannot drift.
+assertIncludes('commands/kaola-workflow-finalize.md', 'final-validation.md');
+assertIncludes('commands/kaola-workflow-finalize.md', 'final_validation_unverified');
 // #277 M3: --keep-worktree procedure relocated from phase6 inline body to agents/contractor.md;
 // still asserted in the dispatch prompt string inside finalize.md (pass-through reference).
 assertIncludes('commands/kaola-workflow-finalize.md', '--keep-worktree');
