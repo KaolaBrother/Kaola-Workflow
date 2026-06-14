@@ -26,9 +26,31 @@ correctness.
 - Route build/type/lint/tooling failures to `build-error-resolver`.
 - Record every command, result, and evidence path.
 
-## Progress File
+## Setup
 
-Create or update `kaola-workflow/{project}/phase4-progress.md`:
+Resolve `$KAOLA_SCRIPTS` once before the first transaction call:
+
+```bash
+kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./plugins/kaola-workflow-gitea/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitea/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitea/scripts/$_n" "./plugins/kaola-workflow-gitea/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
+KAOLA_SCRIPTS="$(dirname "$(kaola_script kaola-gitea-workflow-phase4-advance.js)")"
+```
+
+## Progress File (script-owned transaction)
+
+Authoring `kaola-workflow/{project}/phase4-progress.md` is mechanical bookkeeping
+owned by the full-path Phase 4 transaction script
+`kaola-gitea-workflow-phase4-advance.js` (ADR 0004), not a role agent: it stamps
+the template from `phase3-plan.md` (one `## Tasks` row and one `## Required Agent
+Compliance` `tdd-guide executor task N` row per Phase 3 task, all status
+`pending`). The session owns no judgment here. Run it once, when the file is
+missing; it is create-only (idempotent — it skips if the file already exists):
+
+```bash
+node "$KAOLA_SCRIPTS/kaola-gitea-workflow-phase4-advance.js" init-progress \
+  --project {project} --json
+```
+
+The script stamps this template:
 
 ```markdown
 # Phase 4 - Progress: {project}
@@ -38,6 +60,9 @@ Create or update `kaola-workflow/{project}/phase4-progress.md`:
 |---|------|--------|----------------|-------|
 | 1 | name | pending | | |
 
+## Build Status
+clean
+
 ## Failure Routing Ledger
 | Task | Failing Command | Classification | Routed To | Evidence | Status |
 |------|-----------------|----------------|-----------|----------|--------|
@@ -46,25 +71,69 @@ Create or update `kaola-workflow/{project}/phase4-progress.md`:
 | Requirement | Status | Evidence | Skip Reason |
 |-------------|--------|----------|-------------|
 | tdd-guide executor task 1 | pending | | |
+
+## Last Updated
+[ISO-8601 UTC]
 ```
 
 ## Per-Task Loop
 
-1. Update `workflow-state.md`: `phase: 4`, `step: red`, `task: N`, `next_skill: kaola-workflow-execute {project}`.
-2. RED: write or update the focused test first, then run it and capture the expected failure.
-3. GREEN: implement the minimal change and run the same test until it passes.
+The session owns every **judgment** in this loop; the mechanical
+`workflow-state.md` pointer move, the Failure Routing Ledger row, and the task
+completion are direct transaction-script calls.
+
+1. Open the task. The pointer move (`phase: 4`, `step: red`, `task: N`,
+   `next_skill: kaola-workflow-execute {project}`, preserving any `## Sink` block
+   byte-for-byte) is a mechanical write owned by the script:
+
+   ```bash
+   node "$KAOLA_SCRIPTS/kaola-gitea-workflow-phase4-advance.js" open-task \
+     --task {n} --project {project} --json
+   ```
+
+   Then invoke the `tdd-guide` Codex agent role for the task (a subagent cannot
+   dispatch a subagent, so the session keeps the dispatch).
+2. RED: the role writes or updates the focused test first, then runs it and
+   captures the expected failure.
+3. GREEN: the role implements the minimal change and runs the same test until it
+   passes.
 4. REFACTOR: clean only within scope while tests stay green.
 5. Run the exact validation command from `phase3-plan.md`.
 6. Save raw evidence to `.cache/tdd-task-{n}.md`.
-7. Mark the task complete only after validation passes.
+7. Only after the session has **judged** that validation passed, record the task
+   completion via the script — it marks the task `complete`, fills Files Modified,
+   flips the `tdd-guide executor task {n}` compliance row to the delegation status
+   the session recorded, sets Build Status and `Last Updated`, and advances
+   `workflow-state.md` to the next task or review (preserving any `## Sink` block
+   byte-for-byte). Pass the verified result on stdin (the modified-file list from
+   the verified `tdd-guide` evidence, the build status, and optionally the evidence
+   path; `compliance_status` is optional):
 
-If validation fails after GREEN or REFACTOR, classify the failure in the Failure
-Routing Ledger:
+   ```bash
+   echo '{"files_modified":["<path>"],"build_status":"clean","evidence":".cache/tdd-task-{n}.md"}' | \
+     node "$KAOLA_SCRIPTS/kaola-gitea-workflow-phase4-advance.js" close-task \
+     --task {n} --project {project} --stdin --json
+   ```
+
+If validation fails after GREEN or REFACTOR, the session **classifies** the
+failure and **decides** the route, then records the mechanical Failure Routing
+Ledger row directly via the script before invoking the fix agent. The
+classification and routing decision are the session's; the script only
+transcribes the row verbatim (`failing_command` / `classification` / `routed_to`
+required; the row is deduped on re-run):
+
+```bash
+echo '{"failing_command":"<cmd>","classification":"<class>","routed_to":"<agent>","evidence":"<path>","status":"open"}' | \
+  node "$KAOLA_SCRIPTS/kaola-gitea-workflow-phase4-advance.js" record-failure \
+  --task {n} --project {project} --stdin --json
+```
+
+Routing (the session's decision):
 
 - behavior, regression, coverage, or acceptance failure -> `tdd-guide`
 - build, type, lint, dependency, formatting, or tooling failure -> `build-error-resolver`
 
-## Mechanical Bookkeeping (delegated to the contractor)
+## Mechanical Bookkeeping (script-owned transaction)
 
 The per-task **judgment** stays with the current session: it dispatches the
 `tdd-guide` role agent (a subagent cannot dispatch a subagent), reviews the
@@ -76,20 +145,24 @@ made, the deterministic bookkeeping around them — stamping
 row and one `## Required Agent Compliance` `tdd-guide executor task N` row per
 Phase 3 task, all `pending`); moving the `workflow-state.md` pointer to open each
 task (`step: red`, `task: N`, preserving any `## Sink` block byte-for-byte);
-transcribing the orchestrator-decided Failing Command / Classification / Routed To
-/ Evidence / Status into a `## Failure Routing Ledger` row; and, only after the
+transcribing the session-decided Failing Command / Classification / Routed To /
+Evidence / Status into a `## Failure Routing Ledger` row; and, only after the
 current session has judged validation PASSED, marking the task `complete`,
 recording Files Modified, flipping its compliance row to the delegation status the
-session recorded, and advancing `workflow-state.md` — is delegated to the
-mechanical `contractor` Codex agent role when that subagent is available. The
-contractor runs the scripts and authors the durable bookkeeping but never
-dispatches `tdd-guide`/`build-error-resolver` or any role, never classifies a
-failure, never chooses a route, never judges whether validation passed, and never
-asks the user; it transcribes the verdicts and lists the session hands it verbatim.
-Capture the task result (task number, modified-file list, evidence path, validation
-verdict) in THIS session before delegating — shell state does not cross the
-delegation boundary. Re-derive any needed forge script as
-`$KAOLA_SCRIPTS/kaola-gitea-workflow-*.js`, capture real exit codes, and never gate
-on a piped `| tail`.
+session recorded, and advancing `workflow-state.md` — is owned by the full-path
+Phase 4 transaction script `kaola-gitea-workflow-phase4-advance.js` (ADR 0004), not
+a role agent. The transaction runs the scripted state/progress writes and authors
+the durable bookkeeping but never dispatches `tdd-guide`/`build-error-resolver` or
+any role, never classifies a failure, never chooses a route, never judges whether
+validation passed, and never asks the user; it transcribes the verdicts and lists
+the session hands it verbatim. The four mechanical writes map to the four
+subcommands: `init-progress` (stamp the progress template, create-only),
+`open-task` (the per-task pointer move), `record-failure --stdin` (one Failure
+Routing Ledger row), and `close-task --stdin` (mark the task complete). Capture the
+task result (task number, modified-file list, evidence path, validation verdict) in
+THIS session before each call — shell state does not cross a process boundary.
+Re-derive the script path once via `$KAOLA_SCRIPTS` (Setup above), capture real
+exit codes from each call's typed JSON, and never gate on a piped `| tail`.
 
-When all tasks are complete, set `next_skill: kaola-workflow-review {project}`.
+When the last task's `close-task` completes, `workflow-state.md` points to
+`next_skill: kaola-workflow-review {project}`.

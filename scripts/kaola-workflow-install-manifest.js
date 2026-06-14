@@ -86,6 +86,7 @@ const SUPPORT_SCRIPTS = Object.freeze([
   'kaola-workflow-run-chains.js',
   'kaola-workflow-fast-advance.js',
   'kaola-workflow-full-advance.js',
+  'kaola-workflow-phase4-advance.js',
 ]);
 
 // Hooks are forge-neutral (byte-identical across all four trees), so the same list serves

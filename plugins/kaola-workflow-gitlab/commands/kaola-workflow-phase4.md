@@ -163,9 +163,9 @@ Anything else is routed to `tdd-guide` or `build-error-resolver`.
 
 ## Resume Detection
 
-If `phase4-progress.md` is missing, the main session delegates its creation from
-`phase3-plan.md` to the contractor (see Progress File Initialization below). The
-resume branch the file selects is the main session's judgment.
+If `phase4-progress.md` is missing, the main session stamps it from
+`phase3-plan.md` via the transaction script (see Progress File Initialization
+below). The resume branch the file selects is the main session's judgment.
 
 If present:
 
@@ -179,24 +179,28 @@ If present:
 
 If ambiguous, stop and ask. Do not guess.
 
-## Progress File Initialization (delegated to the contractor)
+## Progress File Initialization (script-owned transaction)
 
-Authoring `phase4-progress.md` is mechanical bookkeeping: the contractor stamps
-the template from `phase3-plan.md` (one `## Tasks` / `## Required Agent Compliance`
-row per Phase 3 task). The main session owns no judgment here — it only confirms
-the file exists before the per-task loop. Run this once, when Resume Detection
-finds the file missing.
+Authoring `phase4-progress.md` is mechanical bookkeeping owned by the full-path
+Phase 4 transaction script `kaola-gitlab-workflow-phase4-advance.js` (ADR 0004), not a
+subagent: it stamps the template from `phase3-plan.md` (one `## Tasks` row and one
+`## Required Agent Compliance` `tdd-guide executor task N` row per Phase 3
+`### Task N:` block, all status `pending`; Build Status `clean`; empty Failure
+Routing Ledger). The main session owns no judgment here. Run this once, when
+Resume Detection finds the file missing; it is create-only (idempotent — it skips
+if the file already exists).
 
-```text
-Agent(
-  subagent_type="contractor",
-  model="{CONTRACTOR_MODEL}",
-  description="Init phase4 progress {project}",
-  prompt="Create kaola-workflow/{project}/phase4-progress.md for {project} from kaola-workflow/{project}/phase3-plan.md, using the Progress File template exactly as written below in this command file. Emit one ## Tasks row and one ## Required Agent Compliance `tdd-guide executor task N` row per Phase 3 task, all status `pending`; set Build Status `clean`, an empty Failure Routing Ledger, and Last Updated to the current ISO-8601 UTC timestamp. Do NOT dispatch a role, classify failures, judge, or run any task. Return a compact bookkeeping summary."
-)
+Resolve `$KAOLA_SCRIPTS` once per command invocation, then run the transaction:
+
+```bash
+kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./plugins/kaola-workflow-gitlab/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n" "./plugins/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
+KAOLA_SCRIPTS="$(dirname "$(kaola_script kaola-gitlab-workflow-phase4-advance.js)")"
+
+node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-phase4-advance.js" init-progress \
+  --project {project} --json
 ```
 
-The template the contractor stamps:
+The script stamps this template:
 
 ```markdown
 # Phase 4 - Progress: {project}
@@ -250,21 +254,18 @@ clean
 
 ### Step 1 - Delegate Task
 
-Before invoking the role agent, the main session delegates the open-the-task
-state write to the contractor (a mechanical `workflow-state.md` pointer move — no
-judgment). The main session keeps the `tdd-guide` dispatch itself, since a
-subagent cannot dispatch a subagent.
+Before invoking the role agent, the main session runs the open-the-task state
+write directly via the transaction script (a mechanical `workflow-state.md`
+pointer move — no judgment), then keeps the `tdd-guide` dispatch itself (a subagent
+cannot dispatch a subagent). Resolve `$KAOLA_SCRIPTS` once per command invocation
+(the resolver is shown in Progress File Initialization above), then:
 
-```text
-Agent(
-  subagent_type="contractor",
-  model="{CONTRACTOR_MODEL}",
-  description="Open task {n} {project}",
-  prompt="Open task {n} for {project}. Update kaola-workflow/{project}/workflow-state.md to phase: 4 / phase_name: Execute / step: delegate-task / task: {n} / next_command: /kaola-workflow-phase4 {project} / inline_emergency_fallback_authorized: no, PRESERVING any existing ## Sink block byte-for-byte. Do NOT dispatch tdd-guide or any role, classify, judge, or run the task. Return a compact bookkeeping summary."
-)
+```bash
+node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-phase4-advance.js" open-task \
+  --task {n} --project {project} --json
 ```
 
-The pointer the contractor writes:
+The pointer the script writes (PRESERVING any existing `## Sink` block byte-for-byte):
 
 ```text
 phase: 4
@@ -307,9 +308,9 @@ Write raw output to:
 kaola-workflow/{project}/.cache/tdd-task-{n}.md
 ```
 
-The `tdd-guide executor task {n}` compliance row is flipped to `invoked` with
-that evidence path by the contractor in the Step 4 close-the-task bracket — the
-main session writes no durable progress rows itself.
+The `tdd-guide executor task {n}` compliance row is flipped to a resolved status
+with that evidence path by the `close-task` transaction in Step 4 — the main
+session writes no durable progress rows itself.
 
 ### Step 2 - Verify Agent Result
 
@@ -335,17 +336,16 @@ kaola-workflow/{project}/.cache/validation-task-{n}.md
 ```
 
 If validation fails, the main session **classifies** the failure and **decides**
-the route, then delegates the mechanical `Failure Routing Ledger` row write to the
-contractor before invoking the fix agent. The classification and routing decision
-are the main session's; only the row transcription is the contractor's.
+the route, then records the mechanical `Failure Routing Ledger` row directly via
+the transaction script before invoking the fix agent. The classification and
+routing decision are the main session's; the script only transcribes the row
+(verbatim — `failing_command` / `classification` / `routed_to` are required; the
+row is deduped on re-run):
 
-```text
-Agent(
-  subagent_type="contractor",
-  model="{CONTRACTOR_MODEL}",
-  description="Ledger row task {n} {project}",
-  prompt="Append one row to the ## Failure Routing Ledger in kaola-workflow/{project}/phase4-progress.md for task {n}, transcribing verbatim the values the orchestrator hands you: Failing Command, Classification, Routed To, Evidence path, Status (open). Do NOT classify, choose the route, dispatch the fix agent, judge, or alter any other row. Return a compact bookkeeping summary."
-)
+```bash
+echo '{"failing_command":"<cmd>","classification":"<class>","routed_to":"<agent>","evidence":"<path>","status":"open"}' | \
+  node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-phase4-advance.js" record-failure \
+  --task {n} --project {project} --stdin --json
 ```
 
 Routing (the main session's decision):
@@ -368,27 +368,30 @@ kaola-workflow/{project}/.cache/tdd-task-{n}-fix-{m}.md
 Re-run validation after the routed fix. Keep the task `in_progress` until
 validation passes.
 
-### Step 4 - Update Progress (delegated to the contractor)
+### Step 4 - Update Progress (script-owned transaction)
 
 Only after the main session has **judged** that validation passed for the task,
-it delegates the per-task post-dispatch bookkeeping to the contractor. The
-"validation passed" verdict is the main session's and is handed into the prompt;
-the contractor only transcribes the completion rows. It marks the task `complete`,
-records modified files, updates Build Status, `Last Updated`, and moves the
-`workflow-state.md` pointer to the next task or Phase 5.
+it records the per-task post-dispatch bookkeeping directly via the transaction
+script. The "validation passed" verdict is the main session's; the script only
+transcribes the completion — it marks the task `complete`, fills its Files
+Modified column, flips its `## Required Agent Compliance` `tdd-guide executor task
+{n}` row to a RESOLVED status (delegation-policy-aware: `subagent-invoked` under
+`delegate`, `local-fallback-explicit` under `local-authorized`, etc., else
+`invoked`) with the evidence path, sets Build Status and `Last Updated`, and moves
+the `workflow-state.md` pointer to the next task or Phase 5, PRESERVING any
+existing `## Sink` block byte-for-byte. When closing the LAST task it
+self-validates the whole compliance table against the real phase 4→5 boundary gate
+and refuses (`unresolved_compliance`, zero mutation) rather than advance into a
+crossing the resume/finalize router would reject.
 
-Capture the task result before delegating (shell variables do not cross the
-subagent boundary): the task number `{n}`, the modified-file list (from the
-verified `tdd-guide` evidence), the `tdd-task-{n}.md` evidence path, and the
-build status (`clean`, or the failure detail if the build surfaced one).
+Pass the verified task result on stdin: the modified-file list (from the verified
+`tdd-guide` evidence), the build status (`clean`, or the failure detail), and
+optionally the evidence path (defaults to `.cache/tdd-task-{n}.md`):
 
-```text
-Agent(
-  subagent_type="contractor",
-  model="{CONTRACTOR_MODEL}",
-  description="Close task {n} {project}",
-  prompt="Record the completion of task {n} for {project}; the orchestrator has already judged validation PASSED — transcribe, do not re-judge. In kaola-workflow/{project}/phase4-progress.md: mark task {n} `complete` in ## Tasks and fill its Files Modified column from the file list the orchestrator hands you; flip its ## Required Agent Compliance `tdd-guide executor task {n}` row to `invoked` with Evidence `.cache/tdd-task-{n}.md`; set Build Status to the value handed you (default `clean`); set Last Updated to the current ISO-8601 UTC timestamp. Then update kaola-workflow/{project}/workflow-state.md to point at the next task (or step: complete / next_command: /kaola-workflow-phase5 {project} when this was the last task), PRESERVING any existing ## Sink block byte-for-byte. Do NOT dispatch a role, classify, judge sufficiency, run validation, or close the issue. Return a compact bookkeeping summary."
-)
+```bash
+echo '{"files_modified":["<path>"],"build_status":"clean","evidence":".cache/tdd-task-{n}.md"}' | \
+  node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-phase4-advance.js" close-task \
+  --task {n} --project {project} --stdin --json
 ```
 
 ## Completion
