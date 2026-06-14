@@ -17,13 +17,46 @@ Complete a single-pass Plan+Execute+Review cycle for the named project and
 write a `PASSED` `fast-summary.md` that Finalization accepts as a full-workflow
 substitute. Stop if scope exceeds fast-path bounds.
 
+## Boundary: main session decides, the script mutates
+
+This command follows the same boundary as the adaptive path (ADR 0004): the main
+session (orchestrator) owns ALL judgment — fast eligibility, approach ambiguity,
+PROCEED vs ESCALATE, acceptance sufficiency, and the review verdict — and the
+deterministic mechanical transitions (cache/state/`fast-summary.md` writes) are
+owned by the fast transaction script `kaola-workflow-fast-advance.js`. The script
+emits typed JSON only; it never dispatches a role, asks the user, judges severity,
+chooses escalation, or invents write sets. Phase 6 finalization is the only
+transition still owned by `contractor` (handled by `/kaola-workflow-finalize`).
+
 ## Agent Model Badge
 
-Every subagent dispatch below includes an explicit `model=` line. Always pass it
-exactly as written — it is what makes Claude Code show the model badge on the
+Every role subagent dispatch below includes an explicit `model=` line. Always pass
+it exactly as written — it is what makes Claude Code show the model badge on the
 subagent card. The installer fills each `model="{...}"` placeholder with the
 agent's frontmatter model (for example `model="sonnet"`); never omit the `model=` line.
-You MUST pass `model="{CONTRACTOR_MODEL}"` in this Agent call exactly as shown — do not omit the `model=` line.
+You MUST pass `model="{PLANNER_MODEL}"` / `model="{TDD_GUIDE_MODEL}"` /
+`model="{CODE_REVIEWER_MODEL}"` in the respective role Agent calls exactly as shown.
+
+## Setup
+
+Resolve `$KAOLA_SCRIPTS` once before the first transaction call:
+
+```bash
+kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
+KAOLA_SCRIPTS="$(dirname "$(kaola_script kaola-workflow-fast-advance.js)")"
+```
+
+Every transaction call also accepts `orient` to (re)derive the current fast step
+without mutating anything:
+
+```bash
+node "$KAOLA_SCRIPTS/kaola-workflow-fast-advance.js" orient --project {project} --json
+```
+
+`orient` is read-only: it reports `fast_step` (plan | execute | review | finalize |
+escalated) derived from `fast-summary.md`, the actual `state_step`, and a
+`state_pointer_stale` flag. A corrupt `## Status` returns a typed refusal instead
+of guessing.
 
 ## Resume Detection
 
@@ -33,7 +66,7 @@ If `fast-summary.md` exists with status `PASSED`, fast path is complete. Route t
 /kaola-workflow-finalize {project}
 ```
 
-Otherwise detect step:
+Otherwise detect step (this is what `orient` reports):
 
 - `fast-summary.md` absent → `plan`
 - `fast-summary.md` has status `IN_PROGRESS` → `execute`
@@ -71,45 +104,47 @@ during Plan, Execute, or Review:
 - a dependency on another in-flight issue is discovered
 - the implementation requires new external packages
 
-On escalation:
+On escalation, the orchestrator hands the decided trigger + detail to the
+transaction script, which writes the durable consequence (it does NOT decide to
+escalate):
 
-1. Rewrite `workflow-state.md` with `workflow_path: full`, `next_command: /kaola-workflow-phase1 {project}`, `next_skill: kaola-workflow-research {project}` so `/workflow-next` routes correctly on resume.
-2. Write `escalated_to_full: <trigger> — <detail>` to `workflow-state.md`, where `<trigger>` is one of `approach_ambiguity`, `file_overflow`, `test_thrash`, `security`, `architecture`, `breaking_change`, `dependency`, `new_package`. Use the literal " — " (em-dash with spaces) before the detail so the fast-path audit parses the trigger cleanly.
-3. Write a brief escalation note to `fast-summary.md` with status `ESCALATED`.
-4. Stop and tell the user to re-run `/workflow-next {project}`.
+```bash
+echo '{"trigger":"<trigger>","detail":"<short detail>"}' | \
+  node "$KAOLA_SCRIPTS/kaola-workflow-fast-advance.js" acceptance-consequence \
+  --project {project} --decision escalate --stdin --json
+```
 
-Do not continue fast-path execution after writing the escalation field.
+where `<trigger>` is one of `approach_ambiguity`, `file_overflow`, `test_thrash`,
+`security`, `architecture`, `breaking_change`, `dependency`, `new_package`. The
+script rewrites `workflow-state.md` with `workflow_path: full`,
+`next_command: /kaola-workflow-phase1 {project}`,
+`next_skill: kaola-workflow-research {project}`, and the
+`escalated_to_full: <trigger> — <detail>` field (literal " — " em-dash spacing so
+the fast-path audit parses the trigger cleanly), and sets `fast-summary.md` status
+`ESCALATED`, preserving any existing `## Sink` block byte-for-byte.
+
+After escalation, stop and tell the user to re-run `/workflow-next {project}`. Do
+not continue fast-path execution.
 
 ## Step 1 - Plan (planner)
 
-### Mechanical Plan Setup (delegated to the contractor)
+### Mechanical Plan Setup (script-owned)
 
 The orchestrator dispatches the `planner` (below) and judges its plan; the
 mechanical bracket — making the cache dir and stamping the `step: plan`
-checkpoint — is deterministic bookkeeping the contractor owns.
+checkpoint — is owned by the transaction script:
 
-```text
-Agent(
-  subagent_type="contractor",
-  model="{CONTRACTOR_MODEL}",
-  description="Mechanical fast plan-setup {project}",
-  prompt="Run the Step 1 mechanical setup for the fast path of {project}: create the cache dir (`mkdir -p kaola-workflow/{project}/.cache`) and write the `step: plan` checkpoint into `kaola-workflow/{project}/workflow-state.md` exactly as the block below in this command file specifies (phase: fast / phase_name: Fast / step: plan / workflow_path: fast / next_command: /kaola-workflow-fast {project} / main_session_role: orchestrator / implementation_owner: planner / inline_emergency_fallback_authorized: no), PRESERVING any existing `## Sink` block byte-for-byte. Return a compact bookkeeping summary; do NOT dispatch the planner or any role, do NOT judge the plan, do NOT escalate, do NOT close the issue, do NOT ask the user."
-)
+```bash
+node "$KAOLA_SCRIPTS/kaola-workflow-fast-advance.js" plan-setup \
+  --project {project} --json
 ```
 
-This makes the cache dir (`mkdir -p kaola-workflow/{project}/.cache`) and writes
-`workflow-state.md`:
-
-```text
-phase: fast
-phase_name: Fast
-step: plan
-workflow_path: fast
-next_command: /kaola-workflow-fast {project}
-main_session_role: orchestrator
-implementation_owner: planner
-inline_emergency_fallback_authorized: no
-```
+This creates `kaola-workflow/{project}/.cache/` and writes the `step: plan`
+checkpoint into `kaola-workflow/{project}/workflow-state.md` (phase: fast /
+phase_name: Fast / step: plan / workflow_path: fast / next_command:
+/kaola-workflow-fast {project} / main_session_role: orchestrator /
+implementation_owner: planner / inline_emergency_fallback_authorized: no),
+preserving any existing `## Sink` block byte-for-byte. It is idempotent on resume.
 
 Invoke the Claude Code agent `planner` with the linked
 GitHub issue body and `phase1-research.md` / `phase2-ideation.md` excerpts if
@@ -142,48 +177,43 @@ If the planner reports the change exceeds ≤ 5 files, or reports ≥ 2
 materially-different viable approaches, escalate per Mid-Flight Escalation above.
 That eligibility judgment is the orchestrator's.
 
+### Mechanical Plan Capture (script-owned)
+
 The `planner` agent does not write files itself (Read/Grep/Glob tools only), so
 the orchestrator (main session) captures the planner's raw output to
 `.cache/planner.md` and reads its declared write set. Once the orchestrator has
-judged the plan eligible, it hands the declared write set into the contractor,
-which writes the `fast-summary.md` stub.
+judged the plan eligible, it hands the declared write set and acceptance command
+to the transaction script, which writes the `fast-summary.md` `IN_PROGRESS` stub
+and advances the state pointer to execute:
 
-### Mechanical Plan Capture (delegated to the contractor)
-
-```text
-Agent(
-  subagent_type="contractor",
-  model="{CONTRACTOR_MODEL}",
-  description="Mechanical fast plan-capture {project}",
-  prompt="Capture the orchestrator-judged plan for the fast path of {project} into the durable `fast-summary.md` stub. Read `.cache/planner.md` for the plan detail. Write `kaola-workflow/{project}/fast-summary.md` with `## Status` line `IN_PROGRESS`, and in `## Scope` record the declared write set the orchestrator hands you as the `- Write Set:` line using the real repository paths exactly as given (so the parallel-overlap classifier can see this fast project's in-flight files), plus the acceptance check command on the `- Acceptance:` line. Fill the remaining sections per the `## Write fast-summary.md` template below in this command file (Plan from `.cache/planner.md`; Implementation Evidence / Review left as pending placeholders at this stage). Return a compact bookkeeping summary; do NOT dispatch a role, do NOT judge eligibility or the plan, do NOT decide the status verdict, do NOT escalate, do NOT close the issue, do NOT ask the user."
-)
+```bash
+echo '{"write_set":["path/to/file","path/to/test-file"],"acceptance_command":"<acceptance check command>","plan":"<brief plan>"}' | \
+  node "$KAOLA_SCRIPTS/kaola-workflow-fast-advance.js" plan-capture \
+  --project {project} --stdin --json
 ```
+
+The packet records the orchestrator-approved declared write set as the `## Scope`
+`- Write Set:` line using the real repository paths exactly as given (so the
+parallel-overlap classifier can see this fast project's in-flight files), plus the
+acceptance check command on the `- Acceptance:` line. The script refuses a missing
+write set or acceptance command (typed refusal, zero mutation). It does not parse
+freeform planner prose or judge eligibility.
 
 ## Step 2 - Execute (tdd-guide)
 
-### Mechanical Execute Setup (delegated to the contractor)
+### Mechanical Execute Setup (script-owned)
 
-```text
-Agent(
-  subagent_type="contractor",
-  model="{CONTRACTOR_MODEL}",
-  description="Mechanical fast execute-setup {project}",
-  prompt="Write the `step: execute` checkpoint into `kaola-workflow/{project}/workflow-state.md` exactly as the block below in this command file specifies (phase: fast / phase_name: Fast / step: execute / workflow_path: fast / next_command: /kaola-workflow-fast {project} / main_session_role: orchestrator / implementation_owner: tdd-guide / inline_emergency_fallback_authorized: no), PRESERVING any existing `## Sink` block byte-for-byte. Return a compact bookkeeping summary; do NOT dispatch the tdd-guide or any role, do NOT run the acceptance check, do NOT judge, do NOT escalate, do NOT close the issue, do NOT ask the user."
-)
+```bash
+node "$KAOLA_SCRIPTS/kaola-workflow-fast-advance.js" execute-setup \
+  --project {project} --json
 ```
 
-This writes `workflow-state.md`:
-
-```text
-phase: fast
-phase_name: Fast
-step: execute
-workflow_path: fast
-next_command: /kaola-workflow-fast {project}
-main_session_role: orchestrator
-implementation_owner: tdd-guide
-inline_emergency_fallback_authorized: no
-```
+This writes the `step: execute` checkpoint into `workflow-state.md` (phase: fast /
+phase_name: Fast / step: execute / workflow_path: fast / next_command:
+/kaola-workflow-fast {project} / main_session_role: orchestrator /
+implementation_owner: tdd-guide / inline_emergency_fallback_authorized: no),
+preserving any existing `## Sink` block byte-for-byte, and returns a `dispatch`
+descriptor for the implementation role. It is idempotent on resume.
 
 Invoke the Claude Code agent `tdd-guide` with the
 planner-produced plan and explicit constraints:
@@ -210,47 +240,45 @@ kaola-workflow/{project}/.cache/tdd-guide.md
 
 The `tdd-guide` agent does not write workflow bookkeeping itself, so after it
 returns the orchestrator captures its raw output to `.cache/tdd-guide.md`. The
-acceptance-check RUN is mechanical and is delegated to the contractor, which
-runs it and reports — then STOPS. The orchestrator JUDGES the acceptance result
-and the `test_thrash` count, DECIDES whether to PROCEED or escalate, and only
-then summons the contractor again to write the decided consequence verbatim.
-The run and the consequence-write straddle the orchestrator's judgment; they are
-two separate contractor summons, never one.
+acceptance-check RUN and the consequence WRITE straddle the orchestrator's
+judgment; they are two separate transaction calls, never one.
 
-### Mechanical Acceptance Run (delegated to the contractor)
+### Mechanical Acceptance Run (script-owned)
 
-```text
-Agent(
-  subagent_type="contractor",
-  model="{CONTRACTOR_MODEL}",
-  description="Mechanical fast acceptance {project}",
-  prompt="Run the acceptance-check command for the fast path of {project} (read it from the `- Acceptance:` line of `kaola-workflow/{project}/fast-summary.md`, or as the orchestrator hands it in) and STOP — write no consequence. Capture its real exit code and a short output tail; never gate on a piped | tail. Report whether the acceptance check passed (its real exit code) and the `test_thrash` count (consecutive same-test RED→RED cycles) you read from `.cache/tdd-guide.md`. Return a compact report of the exit code + thrash count and nothing more; do NOT dispatch a role, do NOT judge the acceptance result, do NOT decide PROCEED vs escalate, do NOT write any `workflow-state.md` or `fast-summary.md` consequence, do NOT close the issue, do NOT ask the user."
-)
+```bash
+node "$KAOLA_SCRIPTS/kaola-workflow-fast-advance.js" acceptance-run \
+  --project {project} --json
 ```
 
-The orchestrator JUDGES the contractor's report. If the acceptance check passed
-and `test_thrash` is below threshold, the decision is PROCEED. If the
+The script reads the acceptance-check command from the `- Acceptance:` line of
+`fast-summary.md`, runs it, captures its real exit code and an output tail to
+`.cache/acceptance-run.log`, and returns the run facts only: `exit_code`,
+`passed`, `evidence_path`, and a `repeat_count` (a resume-safe count of acceptance
+runs — a thrash proxy). It writes NO consequence to `workflow-state.md` or
+`fast-summary.md` and does not choose PROCEED vs ESCALATE.
+
+The orchestrator JUDGES the returned facts. If the acceptance check passed and the
+`test_thrash` count (consecutive same-test RED→RED cycles, read from
+`.cache/tdd-guide.md`) is below threshold, the decision is PROCEED. If the
 `test_thrash` threshold is hit (≥ 3 consecutive RED→RED cycles on the same test),
-the orchestrator DECIDES to escalate. Either way the orchestrator then hands the
-decided consequence into the contractor below, which writes it verbatim.
+the orchestrator DECIDES to escalate.
 
-### Mechanical Acceptance Consequence (delegated to the contractor)
+### Mechanical Acceptance Consequence (script-owned)
 
-```text
-Agent(
-  subagent_type="contractor",
-  model="{CONTRACTOR_MODEL}",
-  description="Mechanical fast acceptance-consequence {project}",
-  prompt="Write the single durable consequence the orchestrator has decided for the fast path of {project}, and ONLY that one — the orchestrator made the judgment; you transcribe it. If the orchestrator hands you PROCEED: write the `step: review` checkpoint into `kaola-workflow/{project}/workflow-state.md` (phase: fast / phase_name: Fast / step: review / workflow_path: fast / next_command: /kaola-workflow-fast {project} / main_session_role: orchestrator / implementation_owner: code-reviewer / inline_emergency_fallback_authorized: no) and set `fast-summary.md` `## Status` to `REVIEW`. If the orchestrator hands you ESCALATE: write the `escalated_to_full: <trigger> — <detail>` field (with the literal ` — ` em-dash spacing) plus the `workflow_path: full` / `next_command: /kaola-workflow-phase1 {project}` / `next_skill: kaola-workflow-research {project}` routing into `workflow-state.md` and set `fast-summary.md` `## Status` to `ESCALATED`, exactly as the Mid-Flight Escalation section above specifies. PRESERVE any existing `## Sink` block byte-for-byte. Return a compact bookkeeping summary; do NOT dispatch a role, do NOT judge the acceptance result, do NOT decide the status verdict or whether to escalate, do NOT close the issue, do NOT ask the user."
-)
+On PROCEED, the orchestrator hands the decision to the transaction script, which
+stamps the `step: review` checkpoint and sets `fast-summary.md` status `REVIEW`:
+
+```bash
+node "$KAOLA_SCRIPTS/kaola-workflow-fast-advance.js" acceptance-consequence \
+  --project {project} --decision proceed --json
 ```
 
-This same consequence bracket is the one the orchestrator summons whenever it
-DECIDES an escalation at Plan (`approach_ambiguity` / `file_overflow`) or Review
-(a security/architecture/breaking-change concern, or a BLOCK that is not a
-Trivial Inline Edit): the orchestrator makes the call and hands in the ESCALATE
-consequence; the contractor writes the escalation field + `fast-summary.md`
-status `ESCALATED` verbatim.
+On ESCALATE (from this acceptance check, or decided at Plan via
+`approach_ambiguity` / `file_overflow`, or at Review via a security / architecture /
+breaking-change concern that is not a Trivial Inline Edit), use the escalate form
+shown in Mid-Flight Escalation above. The orchestrator makes the call; the script
+writes the escalation field + `workflow_path: full` routing + `fast-summary.md`
+status `ESCALATED` verbatim, preserving any existing `## Sink` block byte-for-byte.
 
 ## Step 3 - Review (code-reviewer)
 
@@ -261,8 +289,8 @@ markdown edit. The Trivial Inline Edit exemption below (applying a one-line
 reviewer fix) is unchanged.
 
 The `step: review` checkpoint in `workflow-state.md` was already stamped by the
-contractor on the PROCEED path of the Step 2 acceptance run (the canonical block
-it writes):
+PROCEED path of the Step 2 acceptance consequence (the canonical block the script
+writes):
 
 ```text
 phase: fast
@@ -309,26 +337,31 @@ code-reviewer, which has Read-only tools) applies the fix, re-runs the
 acceptance check, and records `implementation_owner: orchestrator-trivial-fix`
 in workflow-state.md for that touch.
 
+### Mechanical Summary Write (script-owned)
+
 The fast-summary `## Status` verdict (`PASSED` on a clean review, `ESCALATED`
 otherwise) is the orchestrator's JUDGMENT. Once the orchestrator has decided the
-verdict, it hands it into the contractor, which writes the final `fast-summary.md`
-verbatim.
+verdict, it hands it + the `.cache` evidence to the transaction script, which
+writes the final `fast-summary.md` exactly once:
 
-### Mechanical Summary Write (delegated to the contractor)
-
-```text
-Agent(
-  subagent_type="contractor",
-  model="{CONTRACTOR_MODEL}",
-  description="Mechanical fast summary {project}",
-  prompt="Author the final `kaola-workflow/{project}/fast-summary.md` for the fast path of {project} from the orchestrator-judged review verdict and the `.cache` evidence. Write the `## Status` line EXACTLY as the orchestrator hands it in (`PASSED` on a clean review) — do not restate, soften, or upgrade it. Fill the file per the `## Write fast-summary.md` template below in this command file: keep the `## Scope` `- Write Set:` / `- Acceptance:` lines from the stub; transcribe Implementation Evidence from `.cache/tdd-guide.md` (commands run, test-output summary), Review from `.cache/code-reviewer.md`, and the `## Required Agent Compliance` rows (planner / tdd-guide / code-reviewer, each `invoked` with its `.cache/<role>.md` evidence path); set `## Escalation` to N/A on the PASSED path. Return a compact bookkeeping summary; do NOT dispatch a role, do NOT judge the review or decide the status verdict, do NOT escalate, do NOT close the issue, do NOT ask the user."
-)
+```bash
+echo '{"implementation_evidence":"<commands run, test output summary>","review":"<review result>","plan":"<brief plan>"}' | \
+  node "$KAOLA_SCRIPTS/kaola-workflow-fast-advance.js" summary-write \
+  --project {project} --verdict PASSED --stdin --json
 ```
 
-This writes `fast-summary.md` with the orchestrator-decided `## Status` (e.g.
-`PASSED`) verbatim.
+The script keeps the `## Scope` `- Write Set:` / `- Acceptance:` lines from the
+stub, transcribes Implementation Evidence and Review from the packet, writes the
+`## Required Agent Compliance` rows (planner / tdd-guide / code-reviewer, each
+`invoked` with its `.cache/<role>.md` evidence path), sets `## Escalation` to N/A
+on the PASSED path, writes the `## Status` line EXACTLY as the orchestrator hands
+it in (it does not restate, soften, or upgrade it), and routes to
+`/kaola-workflow-finalize {project}`. Pass `--verdict ESCALATED` (with a
+`{"trigger":...,"detail":...}` packet) for a terminal escalation at Review.
 
 ## Write fast-summary.md
+
+The script renders this format; it is reproduced here as the durable contract:
 
 ```markdown
 # Fast Summary: {project}

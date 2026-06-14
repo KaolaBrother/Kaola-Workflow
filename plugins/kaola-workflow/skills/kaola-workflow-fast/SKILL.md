@@ -18,11 +18,45 @@ substitute. Stop if scope exceeds fast-path bounds.
 
 Fast applies only to mechanical, single-area changes of ≤ 5 files with exactly one sensible approach; ≥ 2 materially-different viable approaches is a design choice that stays on full. Escalate (`escalated_to_full: <trigger> — <detail>`) on `approach_ambiguity`, scope past the declared write set by >1 file or the absolute backstop of 6, `test_thrash` (≥3), security/architecture/breaking-change, discovered dependency, or new external package.
 
+## Boundary: the session decides, the script mutates
+
+This skill follows the same boundary as the adaptive path (ADR 0004): the current
+session owns ALL judgment — fast eligibility, approach ambiguity, PROCEED vs
+ESCALATE, acceptance sufficiency, and the review verdict — and the deterministic
+mechanical transitions (cache/state/`fast-summary.md` writes) are owned by the
+fast transaction script `kaola-workflow-fast-advance.js`. The script emits typed
+JSON only; it never dispatches a role, asks the user, judges severity, chooses
+escalation, or invents write sets. Phase 6 finalization is the only transition
+still owned by the `contractor` (handled by the `kaola-workflow-finalize` skill).
+
+## Setup
+
+Resolve `$KAOLA_SCRIPTS` once before the first transaction call:
+
+```bash
+KAOLA_SCRIPTS="plugins/kaola-workflow/scripts"
+if [ ! -f "$KAOLA_SCRIPTS/kaola-workflow-fast-advance.js" ]; then
+  KAOLA_SCRIPTS="$(dirname "$(find "$HOME/.codex/plugins/cache" -path '*/kaola-workflow/*/scripts/kaola-workflow-fast-advance.js' -print -quit 2>/dev/null)")"
+fi
+```
+
+Every transaction call also accepts `orient` to (re)derive the current fast step
+without mutating anything:
+
+```bash
+node "$KAOLA_SCRIPTS/kaola-workflow-fast-advance.js" orient --project {project} --json
+```
+
+`orient` is read-only: it reports `fast_step` (plan | execute | review | finalize |
+escalated) derived from `fast-summary.md`, the actual `state_step`, and a
+`state_pointer_stale` flag. A corrupt `## Status` returns a typed refusal instead
+of guessing.
+
 ## Resume Detection
 
 If `fast-summary.md` exists with status `PASSED`, fast path is complete. Route to `kaola-workflow-finalize {project}`.
 
-Otherwise detect step:
+Otherwise detect step (this is what `orient` reports):
 
 - `fast-summary.md` absent → `plan`
 - `fast-summary.md` has status `IN_PROGRESS` → `execute`
@@ -35,54 +69,76 @@ The escalation **decision** — which `<trigger>` fired (`approach_ambiguity`,
 `file_overflow`, `test_thrash`, security/architecture/breaking-change,
 discovered dependency, or new external package) and the `<detail>` — is the
 current session's **judgment**, made at Plan, Execute, or Review. Once the
-session decides to escalate, the mechanical escalation writes below are
-delegated to the mechanical `contractor` Codex agent role when that subagent is
-available; it writes the durable bookkeeping files but copies the decided
-trigger and detail exactly as the session hands them — it never decides whether
-to escalate, never chooses the trigger, never dispatches a role, and never asks
-the user. It re-derives its own `$KAOLA_SCRIPTS` path if any script is needed,
-captures real exit codes, and never gates on a piped `| tail`.
+session decides to escalate, it hands the decided trigger + detail to the
+transaction script, which writes the durable consequence (it does NOT decide to
+escalate, choose the trigger, dispatch a role, or ask the user):
 
-On escalation the contractor:
+```bash
+echo '{"trigger":"<trigger>","detail":"<short detail>"}' | \
+  node "$KAOLA_SCRIPTS/kaola-workflow-fast-advance.js" acceptance-consequence \
+  --project {project} --decision escalate --stdin --json
+```
+
+where `<trigger>` is one of `approach_ambiguity`, `file_overflow`, `test_thrash`,
+`security`, `architecture`, `breaking_change`, `dependency`, `new_package`. The
+script:
 
 1. Rewrites `workflow-state.md` with `workflow_path: full`, `next_command: /kaola-workflow-phase1 {project}`, `next_skill: kaola-workflow-research {project}` so `/workflow-next` routes correctly on resume (preserving any existing `## Sink` block byte-for-byte).
-2. Writes `escalated_to_full: <trigger> — <detail>` to `workflow-state.md`.
-3. Writes a brief escalation note to `fast-summary.md`, setting its `## Status` to the bare verdict `status ESCALATED` exactly as the session decided it.
+2. Writes `escalated_to_full: <trigger> — <detail>` to `workflow-state.md` (literal " — " em-dash spacing so the fast-path audit parses the trigger cleanly).
+3. Sets `fast-summary.md` `## Status` to the bare verdict `ESCALATED` exactly as the session decided it.
 4. Stops; the session then tells the user to re-run `kaola-workflow-next {project}`.
 
-Do not continue fast-path execution after the escalation field is written. If
-the subagent tooling is unavailable, the current session runs these same writes
-inline.
+Do not continue fast-path execution after the escalation field is written.
 
 ## Step 1 - Plan (planner)
 
-The deterministic bookkeeping in this step — making the cache dir
-(`mkdir -p kaola-workflow/{project}/.cache`) and stamping the `step: plan`
+The session dispatches the `planner` (below) and judges its plan; the mechanical
+bracket — making the cache dir and stamping the `step: plan` checkpoint — is owned
+by the transaction script:
+
+```bash
+node "$KAOLA_SCRIPTS/kaola-workflow-fast-advance.js" plan-setup \
+  --project {project} --json
+```
+
+This creates `kaola-workflow/{project}/.cache/` and stamps the `step: plan`
 checkpoint into `workflow-state.md` (`main_session_role: orchestrator`,
 `implementation_owner: planner`, `inline_emergency_fallback_authorized: no`,
-preserving any existing `## Sink` block byte-for-byte) — is delegated to the
-mechanical `contractor` Codex agent role when that subagent is available; it
-re-derives its own `$KAOLA_SCRIPTS` path if any script is needed, captures real
-exit codes, never gates on a piped `| tail`, and never dispatches `planner`,
-judges the plan, escalates, or asks the user. If the subagent tooling is
-unavailable, the current session runs these writes inline.
+preserving any existing `## Sink` block byte-for-byte). It is idempotent on resume.
 
 Invoke the `planner` Codex agent role with the linked GitHub issue body and phase1/phase2 excerpts if they exist. Ask for: files to touch (the declared write set — ≤ 5 files in a single area), whether the approach is mechanical with exactly one sensible way or has ≥ 2 materially-different viable approaches, exact change per file, acceptance check command, out-of-scope items.
 
 Write raw output to `kaola-workflow/{project}/.cache/planner.md`.
 
-If planner reports > 5 files or ≥ 2 materially-different viable approaches (`approach_ambiguity`), escalate — that eligibility judgment is the current session's, not the contractor's. Once the session has judged the plan eligible, it hands the planner's declared write set to the contractor, which captures the returned plan into `fast-summary.md` with status `IN_PROGRESS`, recording that declared write set as the `## Scope` `- Write Set:` line with the real repository paths exactly as the session hands them (so the parallel-overlap classifier can see this fast project's in-flight files; planner has Read-only tools) plus the acceptance check command on the `- Acceptance:` line. The contractor copies the write set verbatim and never judges eligibility or the plan.
+If planner reports the change exceeds ≤ 5 files or reports ≥ 2 materially-different viable approaches (`approach_ambiguity`), escalate per Mid-Flight Escalation above — that eligibility judgment is the current session's. Once the session has judged the plan eligible, it hands the planner's declared write set and acceptance command to the transaction script, which writes the `fast-summary.md` `IN_PROGRESS` stub and advances the state pointer to execute:
+
+```bash
+echo '{"write_set":["path/to/file","path/to/test-file"],"acceptance_command":"<acceptance check command>","plan":"<brief plan>"}' | \
+  node "$KAOLA_SCRIPTS/kaola-workflow-fast-advance.js" plan-capture \
+  --project {project} --stdin --json
+```
+
+The packet records the session-approved declared write set as the `## Scope`
+`- Write Set:` line using the real repository paths exactly as given (so the
+parallel-overlap classifier can see this fast project's in-flight files; planner
+has Read-only tools), plus the acceptance check command on the `- Acceptance:`
+line. The script refuses a missing write set or acceptance command (typed refusal,
+zero mutation). It does not parse freeform planner prose or judge eligibility.
 
 ## Step 2 - Execute (tdd-guide)
 
-The `step: execute` checkpoint write (`main_session_role: orchestrator`,
-`implementation_owner: tdd-guide`, `inline_emergency_fallback_authorized: no`,
-preserving any existing `## Sink` block byte-for-byte) is delegated to the
-mechanical `contractor` Codex agent role when that subagent is available; it
-re-derives its own `$KAOLA_SCRIPTS` path, captures real exit codes, never gates
-on a piped `| tail`, and never dispatches `tdd-guide`, judges, or asks the user.
-If the subagent tooling is unavailable, the current session runs the write
-inline.
+The mechanical bracket — stamping the `step: execute` checkpoint
+(`main_session_role: orchestrator`, `implementation_owner: tdd-guide`,
+`inline_emergency_fallback_authorized: no`, preserving any existing `## Sink`
+block byte-for-byte) and returning a dispatch descriptor for the implementation
+role — is owned by the transaction script:
+
+```bash
+node "$KAOLA_SCRIPTS/kaola-workflow-fast-advance.js" execute-setup \
+  --project {project} --json
+```
+
+It is idempotent on resume.
 
 Invoke the `tdd-guide` Codex agent role with the planner plan and constraints:
 
@@ -93,35 +149,66 @@ Invoke the `tdd-guide` Codex agent role with the planner plan and constraints:
 
 Write raw output to `kaola-workflow/{project}/.cache/tdd-guide.md`.
 
-The acceptance-check **run** is mechanical and is delegated to the contractor:
-after `tdd-guide` returns, the contractor runs the acceptance-check command,
-captures its real exit code and a short output tail (never gating on a piped
-`| tail`), reports that exit code plus the `test_thrash` count (consecutive
-same-test RED→RED cycles read from `.cache/tdd-guide.md`), and **stops** — it
-writes no consequence. The current session **judges** that report: a passing
-check below threshold is PROCEED; hitting the `test_thrash` threshold (≥ 3
-consecutive RED→RED cycles on the same test) is a decision to escalate. The run
-and the consequence-write straddle the session's judgment as two separate
-contractor summons, never one.
+The acceptance-check RUN and the consequence WRITE straddle the session's
+judgment; they are two separate transaction calls, never one. After `tdd-guide`
+returns, the session captures its raw output to `.cache/tdd-guide.md`, then runs
+the acceptance check via the script:
 
-Once the session decides PROCEED, the contractor writes the single decided
-consequence verbatim: the `step: review` checkpoint (`implementation_owner:
-code-reviewer`, preserving the `## Sink` block) and `fast-summary.md` status
-`REVIEW`. On an escalate decision it instead writes the Mid-Flight Escalation
-fields above from the session-decided trigger. The contractor never judges the
-acceptance result, decides PROCEED vs escalate, or chooses the verdict.
+```bash
+node "$KAOLA_SCRIPTS/kaola-workflow-fast-advance.js" acceptance-run \
+  --project {project} --json
+```
+
+The script reads the acceptance-check command from the `- Acceptance:` line of
+`fast-summary.md`, runs it, captures its real exit code and an output tail to
+`.cache/acceptance-run.log`, and returns the run facts only: `exit_code`,
+`passed`, `evidence_path`, and a `repeat_count` (a resume-safe count of acceptance
+runs — a thrash proxy). It writes NO consequence and does not choose PROCEED vs
+ESCALATE.
+
+The session JUDGES the returned facts. If the acceptance check passed and the
+`test_thrash` count (consecutive same-test RED→RED cycles, read from
+`.cache/tdd-guide.md`) is below threshold, the decision is PROCEED. If the
+`test_thrash` threshold is hit (≥ 3 consecutive RED→RED cycles on the same test),
+the session DECIDES to escalate.
+
+On PROCEED, the session hands the decision to the transaction script, which stamps
+the `step: review` checkpoint and sets `fast-summary.md` status `REVIEW`:
+
+```bash
+node "$KAOLA_SCRIPTS/kaola-workflow-fast-advance.js" acceptance-consequence \
+  --project {project} --decision proceed --json
+```
+
+On an escalate decision (from this acceptance check, or decided at Plan via
+`approach_ambiguity` / `file_overflow`, or at Review via a security / architecture /
+breaking-change concern that is not a Trivial Inline Edit), use the escalate form
+shown in Mid-Flight Escalation above. The session makes the call; the script writes
+the escalation field + `workflow_path: full` routing + `fast-summary.md` status
+`ESCALATED` verbatim, preserving any existing `## Sink` block byte-for-byte. It
+never judges the acceptance result, decides PROCEED vs escalate, or chooses the
+verdict.
 
 ## Step 3 - Review (code-reviewer)
 
-The `step: review` checkpoint (`main_session_role: orchestrator`,
-`implementation_owner: code-reviewer`, `inline_emergency_fallback_authorized: no`)
-was already stamped by the contractor on the PROCEED path of Step 2; if it is
-not yet stamped, that mechanical write — preserving any existing `## Sink` block
-byte-for-byte — is delegated to the contractor.
+Delegated `code-reviewer` is mandatory whenever the change touches > 1 file or any production-path file (anything outside `docs/`, `*.md`, `tests/`); self-review only for the trivial band (a single docs/comment/markdown edit). The Trivial Inline Edit exemption below is unchanged.
 
-Delegated `code-reviewer` is mandatory for any change touching > 1 file or any production-path file (outside `docs/`, `*.md`, `tests/`); self-review only for the trivial band (single docs/comment/markdown edit).
+The `step: review` checkpoint in `workflow-state.md` was already stamped by the
+PROCEED path of the Step 2 acceptance consequence (the canonical block the script
+writes):
 
-Invoke the `code-reviewer` Codex agent role on modified files. Ask it to check:
+```text
+phase: fast
+phase_name: Fast
+step: review
+workflow_path: fast
+next_command: /kaola-workflow-fast {project}
+main_session_role: orchestrator
+implementation_owner: code-reviewer
+inline_emergency_fallback_authorized: no
+```
+
+Invoke the `code-reviewer` Codex agent role on the modified files from Step 2. Ask it to check:
 
 - all acceptance check commands pass
 - no new CRITICAL or HIGH security concerns
@@ -130,23 +217,32 @@ Invoke the `code-reviewer` Codex agent role on modified files. Ask it to check:
 
 Write raw output to `kaola-workflow/{project}/.cache/code-reviewer.md`.
 
-On BLOCK or CRITICAL/HIGH finding, escalate unless Trivial Inline Edit — that triage is the current session's **judgment**. In that exempted case, the orchestrator (not `code-reviewer`, which is Read-only) applies the one-line fix and records `implementation_owner: orchestrator-trivial-fix`.
+On BLOCK or any CRITICAL/HIGH finding, escalate per Mid-Flight Escalation above unless it qualifies as a Trivial Inline Edit (one-line mechanical fix) — that triage is the current session's **judgment**. In that exempted case, the orchestrator (not `code-reviewer`, which is Read-only) applies the one-line fix, re-runs the acceptance check, and records `implementation_owner: orchestrator-trivial-fix` in `workflow-state.md` for that touch.
 
-The `## Status` verdict (`PASSED` on a clean review, `ESCALATED` otherwise) is
-the current session's judgment. Once the session decides the verdict, the
-deterministic bookkeeping — authoring the final `fast-summary.md` from the
-template (the `## Status` line, the `## Scope` `- Write Set:` / `- Acceptance:`
-lines carried from the stub, Implementation Evidence from `.cache/tdd-guide.md`,
-Review from `.cache/code-reviewer.md`, and the `## Required Agent Compliance`
-rows) — is delegated to the mechanical `contractor` Codex agent role when that
-subagent is available; it writes the `## Status` line exactly as the session
-hands it (`PASSED` on a clean review) and never restates, softens, upgrades, or
-re-grades the verdict, never dispatches a role, never escalates on its own, and
-never asks the user. It re-derives its own `$KAOLA_SCRIPTS` path if any script
-is needed, captures real exit codes, and never gates on a piped `| tail`. If the
-subagent tooling is unavailable, the current session authors the file inline.
+The `## Status` verdict (`PASSED` on a clean review, `ESCALATED` otherwise) is the
+current session's judgment. Once the session decides the verdict, it hands it + the
+`.cache` evidence to the transaction script, which writes the final
+`fast-summary.md` exactly once:
+
+```bash
+echo '{"implementation_evidence":"<commands run, test output summary>","review":"<review result>","plan":"<brief plan>"}' | \
+  node "$KAOLA_SCRIPTS/kaola-workflow-fast-advance.js" summary-write \
+  --project {project} --verdict PASSED --stdin --json
+```
+
+The script keeps the `## Scope` `- Write Set:` / `- Acceptance:` lines from the
+stub, transcribes Implementation Evidence and Review from the packet, writes the
+`## Required Agent Compliance` rows (planner / tdd-guide / code-reviewer, each
+`invoked` with its `.cache/<role>.md` evidence path — override per row with an
+optional `compliance` array in the packet), sets `## Escalation` to N/A on the
+PASSED path, writes the `## Status` line EXACTLY as the session hands it in (it
+does not restate, soften, upgrade, or re-grade it), and routes to
+`kaola-workflow-finalize {project}`. Pass `--verdict ESCALATED` (with a
+`{"trigger":...,"detail":...}` packet) for a terminal escalation at Review.
 
 ## fast-summary.md Format
+
+The script renders this format; it is reproduced here as the durable contract:
 
 ```markdown
 # Fast Summary: {project}
@@ -170,9 +266,9 @@ PASSED | IN_PROGRESS | REVIEW | ESCALATED
 ## Required Agent Compliance
 | Requirement | Status | Evidence | Skip Reason |
 |-------------|--------|----------|-------------|
-| planner | subagent-invoked/local-fallback-explicit/local-fallback-tool-unavailable | .cache/planner.md | |
-| tdd-guide | subagent-invoked/local-fallback-explicit/local-fallback-tool-unavailable | .cache/tdd-guide.md | |
-| code-reviewer | subagent-invoked/local-fallback-explicit/local-fallback-tool-unavailable/N/A | .cache/code-reviewer.md | N/A only for trivial band (single docs/comment/markdown edit) self-review |
+| planner | invoked | .cache/planner.md | |
+| tdd-guide | invoked | .cache/tdd-guide.md | |
+| code-reviewer | invoked | .cache/code-reviewer.md | |
 
 ## Escalation
 [escalated_to_full: <trigger> or N/A]
@@ -180,7 +276,20 @@ PASSED | IN_PROGRESS | REVIEW | ESCALATED
 
 ## Delegation Vocabulary
 
-The `planner`, `tdd-guide`, and `code-reviewer` rows are Codex role rows: record their Status with the delegation vocabulary — `subagent-invoked` when the role was delegated to the Codex subagent, `local-fallback-explicit` when you executed locally with explicit user authorization, or `local-fallback-tool-unavailable` when subagent tooling was unavailable. `code-reviewer` may be `N/A` (with a skip reason) only in the trivial band (a single docs/comment/markdown edit) where self-review applies; any change touching more than one file or a production-path file (outside `docs/`, `*.md`, `tests/`) requires a delegated review status.
+The `planner`, `tdd-guide`, and `code-reviewer` rows are Codex role rows: each role
+is still delegated to its Codex subagent (only the mechanical bookkeeping moved to
+the transaction script). Record each row's Status with the delegation vocabulary —
+`subagent-invoked` when the role was delegated to the Codex subagent,
+`local-fallback-explicit` when you executed locally with explicit user
+authorization, or `local-fallback-tool-unavailable` when subagent tooling was
+unavailable. The `summary-write` script renders each row as `invoked` by default;
+to record the real delegation status, override that row by passing a `compliance`
+array in the `summary-write` packet (one `{requirement,status,evidence,skip_reason}`
+object per row, the Status field set to the vocabulary value above). `code-reviewer`
+may be `N/A` (with a skip reason) only in the trivial band (a single
+docs/comment/markdown edit) where self-review applies; any change touching more than
+one file or a production-path file (outside `docs/`, `*.md`, `tests/`) requires a
+delegated review status.
 
 ## Continue
 
