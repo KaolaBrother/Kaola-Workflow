@@ -5966,6 +5966,196 @@ function rtHarness(initialFiles, opts) {
   assert(dNull.codex_reasoning_effort_source === 'role_default', 'D451-DISPATCH-EFFORT: null-model codex_reasoning_effort_source is role_default');
 }
 
+// ===========================================================================
+// #466 — worktree-authority split guard. The adaptive lifecycle resolves the
+// project folder (plan / ledger / .cache / baselines) cwd-relative via getRoot().
+// When a linked worktree is recorded for the project but a MUTATING lifecycle
+// command is invoked from the MAIN repo root (cwd === main, NOT the worktree),
+// the ledger/evidence/baselines would diverge from where the role agents write —
+// silent until finalize. The guard refuses loud (zero mutation) and points the
+// operator into the worktree. Read-only (orient, record-evidence --verify) and
+// the legitimately main-root copy (mirror-project) are EXEMPT. Native posture
+// (no worktree_path recorded) is UNGUARDED. Driven as REAL subprocesses in a
+// REAL git repo (the guard reads git + fs — a direct-call test would be a
+// false-green per the #292 io-shim trap).
+// ===========================================================================
+{
+  const { execFileSync } = require('child_process');
+  const NODE_CLI_466 = path.join(__dirname, 'kaola-workflow-adaptive-node.js');
+  const VALIDATOR_466 = path.join(__dirname, 'kaola-workflow-plan-validator.js');
+
+  function make466Repo(stateExtra) {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-466-'));
+    const project = 'issue-466';
+    const projDir = path.join(repoRoot, 'kaola-workflow', project);
+    const cacheDir = path.join(projDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const planPath = path.join(projDir, 'workflow-plan.md');
+    const plan = [
+      '# Workflow Plan — issue-466', '',
+      '## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| seed     | code-explorer | —     | —     | 1 | sequence |',
+      '| A        | tdd-guide     | seed  | ax.js | 1 | sequence |',
+      '| review   | code-reviewer | A     | —     | 1 | sequence |',
+      '| finalize | finalize      | review| —     | 1 | sequence |', '',
+      '## Node Ledger', '',
+      '| id | status |', '| --- | --- |',
+      '| seed | complete |',
+      '| A | pending |',
+      '| review | pending |',
+      '| finalize | pending |', '',
+    ].join('\n') + '\n';
+    fs.writeFileSync(planPath, plan);
+    fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n' + (stateExtra || ''));
+    const g = (a) => execFileSync('git', ['-C', repoRoot, ...a], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+    g(['init']);
+    g(['config', 'user.email', 'kw@test']);
+    g(['config', 'user.name', 'kw']);
+    g(['config', 'commit.gpgsign', 'false']);
+    // Freeze in place so plan_hash exists (mutating subcommands run an integrity --resume-check; we
+    // want the ONLY refusal under test to be the #466 split guard, which precedes the dispatch).
+    try { execFileSync('node', [VALIDATOR_466, planPath, '--freeze', '--repair', '--json'], { cwd: repoRoot, encoding: 'utf8' }); } catch (_) {}
+    fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
+    g(['add', '-A']);
+    g(['commit', '-m', 'init']);
+    return { repoRoot, project, projDir, cacheDir, planPath, g };
+  }
+  function run466(cwd, subArgs) {
+    try {
+      const stdout = execFileSync('node', [NODE_CLI_466, ...subArgs], { cwd, encoding: 'utf8' });
+      let parsed = {}; try { parsed = JSON.parse(stdout.trim().split('\n').pop()); } catch (_) {}
+      return { exitCode: 0, ...parsed };
+    } catch (err) {
+      const status = (err.status == null) ? 1 : err.status;
+      let parsed = {}; try { parsed = JSON.parse(String(err.stdout || '').trim().split('\n').pop()); } catch (_) {}
+      return { exitCode: status, ...parsed };
+    }
+  }
+  function rm466(p) { try { fs.rmSync(p, { recursive: true, force: true }); } catch (_) {} }
+
+  // T466-1: open-ready (MUTATING) from MAIN root with a recorded+existing worktree → refuse split.
+  {
+    const wt = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-466-wt-'));
+    const { repoRoot, planPath, projDir } = make466Repo('worktree_path: ' + wt + '\n');
+    const r = run466(repoRoot, ['open-ready', '--project', 'issue-466', '--json']);
+    assert(r.result === 'refuse' && r.reason === 'worktree_authority_split',
+      'T466-1: open-ready from main root with a recorded worktree refuses worktree_authority_split, got ' + JSON.stringify(r));
+    assert(r.exitCode === 1, 'T466-1: the split refusal exits non-zero');
+    assert(r.worktreePath === wt, 'T466-1: refusal carries the recorded worktreePath, got ' + JSON.stringify(r.worktreePath));
+    assert(typeof r.operator_hint === 'string' && /worktree/i.test(r.operator_hint),
+      'T466-1: operator_hint points into the worktree, got ' + JSON.stringify(r.operator_hint));
+    // ZERO-MUTATION: the refused open-ready wrote nothing to the main-root project folder — the
+    // ## Node Ledger still shows A pending and no task-mirror was created (the RED run flipped A to
+    // in_progress AND wrote workflow-tasks.json, so this locks the early-return invariant).
+    const ledgerAfter = fs.readFileSync(planPath, 'utf8');
+    const ledgerBody = ledgerAfter.slice(ledgerAfter.indexOf('## Node Ledger'));
+    assert(/\|\s*A\s*\|\s*pending\s*\|/.test(ledgerBody), 'T466-1: ledger A still pending after refuse (zero mutation)');
+    assert(!fs.existsSync(path.join(projDir, 'workflow-tasks.json')), 'T466-1: no task-mirror written on refuse');
+    rm466(repoRoot); rm466(wt);
+  }
+
+  // T466-2: open-next (MUTATING) from main root with a recorded worktree → also refuses.
+  {
+    const wt = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-466-wt-'));
+    const { repoRoot } = make466Repo('worktree_path: ' + wt + '\n');
+    const r = run466(repoRoot, ['open-next', '--project', 'issue-466', '--json']);
+    assert(r.reason === 'worktree_authority_split',
+      'T466-2: open-next from main root with a recorded worktree refuses split, got ' + JSON.stringify(r));
+    rm466(repoRoot); rm466(wt);
+  }
+
+  // T466-3: record-evidence --stdin (MUTATING) from main root with a recorded worktree → refuses.
+  {
+    const wt = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-466-wt-'));
+    const { repoRoot } = make466Repo('worktree_path: ' + wt + '\n');
+    let r;
+    try {
+      const stdout = execFileSync('node', [NODE_CLI_466, 'record-evidence', '--node-id', 'A', '--stdin', '--project', 'issue-466', '--json'],
+        { cwd: repoRoot, encoding: 'utf8', input: 'evidence-binding: A 000000000000\n' });
+      r = JSON.parse(stdout.trim().split('\n').pop());
+    } catch (err) {
+      try { r = JSON.parse(String(err.stdout || '').trim().split('\n').pop()); } catch (_) { r = {}; }
+    }
+    assert(r.reason === 'worktree_authority_split',
+      'T466-3: record-evidence --stdin from main root with a recorded worktree refuses split, got ' + JSON.stringify(r));
+    rm466(repoRoot); rm466(wt);
+  }
+
+  // T466-4: NATIVE posture (no worktree_path recorded) → guard NEVER fires (open-ready proceeds).
+  {
+    const { repoRoot } = make466Repo('');
+    const r = run466(repoRoot, ['open-ready', '--project', 'issue-466', '--json']);
+    assert(r.reason !== 'worktree_authority_split',
+      'T466-4: native posture (no worktree_path) is NOT split-guarded, got ' + JSON.stringify(r));
+    rm466(repoRoot);
+  }
+
+  // T466-5: EXEMPT read-only orient — recorded worktree at main root does NOT trip the split guard.
+  {
+    const wt = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-466-wt-'));
+    const { repoRoot } = make466Repo('worktree_path: ' + wt + '\n');
+    const r = run466(repoRoot, ['orient', '--project', 'issue-466', '--json']);
+    assert(r.reason !== 'worktree_authority_split', 'T466-5: orient (read-only) is exempt, got ' + JSON.stringify(r));
+    rm466(repoRoot); rm466(wt);
+  }
+
+  // T466-6: EXEMPT mirror-project — legitimately runs from the main root (it IS the main→worktree copy).
+  {
+    const wt = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-466-wt-'));
+    const { repoRoot } = make466Repo('worktree_path: ' + wt + '\n');
+    const r = run466(repoRoot, ['mirror-project', '--project', 'issue-466', '--json']);
+    assert(r.reason !== 'worktree_authority_split', 'T466-6: mirror-project is exempt, got ' + JSON.stringify(r));
+    rm466(repoRoot); rm466(wt);
+  }
+
+  // T466-7: EXEMPT record-evidence --verify (read-only) — not split-guarded.
+  {
+    const wt = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-466-wt-'));
+    const { repoRoot } = make466Repo('worktree_path: ' + wt + '\n');
+    const r = run466(repoRoot, ['record-evidence', '--node-id', 'A', '--verify', '--project', 'issue-466', '--json']);
+    assert(r.reason !== 'worktree_authority_split', 'T466-7: record-evidence --verify is exempt, got ' + JSON.stringify(r));
+    rm466(repoRoot); rm466(wt);
+  }
+
+  // T466-8: recorded worktree_path that does NOT exist on disk → guard does NOT fire (cannot be authoritative).
+  {
+    const { repoRoot } = make466Repo('worktree_path: /nonexistent/kw-466-ghost-dir\n');
+    const r = run466(repoRoot, ['open-ready', '--project', 'issue-466', '--json']);
+    assert(r.reason !== 'worktree_authority_split',
+      'T466-8: a recorded-but-missing worktree dir does not trip the guard, got ' + JSON.stringify(r));
+    rm466(repoRoot);
+  }
+
+  // T466-9: real linked-worktree posture — a lifecycle command RUN FROM the worktree is NOT guarded,
+  // EVEN WITH worktree_path recorded in the MAIN state. This is the load-bearing exemption branch: the
+  // guard short-circuits on `realRepoRoot === mainRoot`, so a worktree run must proceed. Recording
+  // worktree_path in main state ensures the `if (recordedWorktree)` check is NOT what makes it pass —
+  // a regression that broke the cwd discriminator (always-true) WOULD fire here and be caught.
+  {
+    const { repoRoot, projDir, g } = make466Repo('');
+    const wt = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-466-realwt-'));
+    rm466(wt); // `git worktree add` requires a non-existent path
+    let added = true;
+    try { g(['worktree', 'add', wt, '-b', 'kw466wt']); } catch (_) { added = false; }
+    if (added) {
+      // Record the real worktree in the MAIN state (the file the guard reads via mainRoot).
+      fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\nworktree_path: ' + wt + '\n');
+      const r = run466(wt, ['open-ready', '--project', 'issue-466', '--json']);
+      assert(r.reason !== 'worktree_authority_split',
+        'T466-9: a lifecycle command run FROM the worktree (worktree_path recorded) is not split-guarded, got ' + JSON.stringify(r));
+      assert(r.result === 'ok',
+        'T466-9: in-worktree open-ready actually PROCEEDS (not refused for any reason), got ' + JSON.stringify(r));
+      try { g(['worktree', 'remove', '--force', wt]); } catch (_) { rm466(wt); }
+    } else {
+      assert(true, 'T466-9: skipped (git worktree add unavailable in this environment)');
+    }
+    rm466(repoRoot);
+  }
+}
+
 if (failed > 0) {
   console.error('adaptive-node tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;
