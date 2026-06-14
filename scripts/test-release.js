@@ -47,12 +47,14 @@ function makeGitRepo(version) {
   return dir;
 }
 
-// Write a minimal fixture repo with CHANGELOG, package.json, codex manifests, and README.
+// Write a minimal fixture repo with CHANGELOG, package.json, codex manifests, README,
+// and optionally .claude-plugin manifests.
 function makeFixtureRepo(opts) {
   const {
     version = '5.0.0',
     changelogUnreleased = '## [Unreleased]\n\n### Added\n\n- Nothing yet\n',
     codexVersions = ['3.0.0', '3.0.0', '3.0.0'],
+    claudeVersion = version, // version for .claude-plugin manifests (gitlab + gitea)
     readmeCodexVersions = null, // null = auto-derive from codexVersions[0]
     extraCommitMessages = [],
     tagVersion = version, // create a tag at this version (null to skip)
@@ -72,12 +74,15 @@ function makeFixtureRepo(opts) {
   const changelogContent = '# Changelog\n\n' + changelogUnreleased + '\n## [' + version + '] — 2026-01-01\n\n- Initial release\n';
   fs.writeFileSync(path.join(dir, 'CHANGELOG.md'), changelogContent);
 
-  // Write README.md with codex version lines
+  // Write README.md with codex version lines AND the 3 claude-install lines
   const cv0 = readmeCodexVersions ? readmeCodexVersions[0] : codexVersions[0];
   const cv1 = readmeCodexVersions ? readmeCodexVersions[1] : codexVersions[1];
   const cv2 = readmeCodexVersions ? readmeCodexVersions[2] : codexVersions[2];
   const readmeContent = '# Kaola-Workflow\n\n' +
     'Some text\n\n' +
+    '- Claude Code command install, GitHub edition: `' + claudeVersion + '`\n' +
+    '- Claude Code command install, GitLab edition: `' + claudeVersion + '`\n' +
+    '- Claude Code command install, Gitea edition: `' + claudeVersion + '`\n' +
     '- Codex `kaola-workflow` plugin manifest: `' + cv0 + '`\n' +
     '- Codex `kaola-workflow-gitlab` plugin manifest: `' + cv1 + '`\n' +
     '- Codex `kaola-workflow-gitea` plugin manifest: `' + cv2 + '`\n';
@@ -95,6 +100,19 @@ function makeFixtureRepo(opts) {
     fs.writeFileSync(
       path.join(dir, codexManifestPaths[i]),
       JSON.stringify({ name: codexNames[i], version: codexVersions[i] }) + '\n'
+    );
+  }
+
+  // Write two .claude-plugin manifests (gitlab + gitea only; no github-base manifest)
+  const claudeManifests = [
+    { path: 'plugins/kaola-workflow-gitlab/.claude-plugin/plugin.json', name: 'kaola-workflow-gitlab' },
+    { path: 'plugins/kaola-workflow-gitea/.claude-plugin/plugin.json', name: 'kaola-workflow-gitea' },
+  ];
+  for (const { path: rel, name } of claudeManifests) {
+    fs.mkdirSync(path.join(dir, path.dirname(rel)), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, rel),
+      JSON.stringify({ name, version: claudeVersion }) + '\n'
     );
   }
 
@@ -222,11 +240,14 @@ const repo4 = makeFixtureRepo({
 fs.rmSync(repo4, { recursive: true, force: true });
 
 // ---------------------------------------------------------------------------
-// T5: cut-without-push -> local tag/bumps land, no remote mutation
+// T5: cut-without-push -> local tag/bumps land; codex derived by bump-kind (minor)
+// root 5.0.0 / codex 3.0.0 -> cut 5.1.0 -> codex must be 3.1.0 (NOT 5.1.0)
 // ---------------------------------------------------------------------------
 const repo5 = makeFixtureRepo({
   version: '5.0.0',
+  claudeVersion: '5.0.0',
   changelogUnreleased: '## [Unreleased]\n\n### Added\n\n- Fix bug (#100)\n',
+  codexVersions: ['3.0.0', '3.0.0', '3.0.0'],
   tagVersion: '5.0.0',
   extraCommitMessages: ['fix: the bug (#100)'],
 });
@@ -261,11 +282,11 @@ const repo5 = makeFixtureRepo({
     assert(!changelog.includes('[Unreleased]') || changelog.indexOf('[5.1.0]') < changelog.indexOf('[Unreleased]'),
       'T5: [Unreleased] must be replaced by versioned heading in CHANGELOG');
 
-    // Verify package.json was bumped
+    // Verify package.json was bumped to ROOT version
     const pkg = JSON.parse(fs.readFileSync(path.join(repo5, 'package.json'), 'utf8'));
     assert(pkg.version === '5.1.0', 'T5: package.json version must be 5.1.0; got=' + pkg.version);
 
-    // Verify all three codex manifests were bumped
+    // Verify all three codex manifests were bumped to CODEX version (3.1.0, not 5.1.0)
     const codexPaths = [
       'plugins/kaola-workflow/.codex-plugin/plugin.json',
       'plugins/kaola-workflow-gitlab/.codex-plugin/plugin.json',
@@ -273,11 +294,161 @@ const repo5 = makeFixtureRepo({
     ];
     for (const cp of codexPaths) {
       const manifest = JSON.parse(fs.readFileSync(path.join(repo5, cp), 'utf8'));
-      assert(manifest.version === '5.1.0', 'T5: ' + cp + ' version must be 5.1.0; got=' + manifest.version);
+      assert(manifest.version === '3.1.0', 'T5: ' + cp + ' version must be 3.1.0 (codex derived minor); got=' + manifest.version);
     }
+
+    // Verify two .claude-plugin manifests were bumped to ROOT version (5.1.0)
+    const claudePaths = [
+      'plugins/kaola-workflow-gitlab/.claude-plugin/plugin.json',
+      'plugins/kaola-workflow-gitea/.claude-plugin/plugin.json',
+    ];
+    for (const cp of claudePaths) {
+      const manifest = JSON.parse(fs.readFileSync(path.join(repo5, cp), 'utf8'));
+      assert(manifest.version === '5.1.0', 'T5: ' + cp + ' version must be 5.1.0 (root); got=' + manifest.version);
+    }
+
+    // Verify README codex lines updated to 3.1.0
+    const readme = fs.readFileSync(path.join(repo5, 'README.md'), 'utf8');
+    assert(readme.includes('Codex `kaola-workflow` plugin manifest: `3.1.0`'),
+      'T5: README codex line must be 3.1.0; readme=' + readme.slice(0, 400));
+    assert(!readme.includes('Codex `kaola-workflow` plugin manifest: `5.1.0`'),
+      'T5: README codex line must NOT be 5.1.0 (wrong — that is root version)');
+
+    // Verify README claude-install lines updated to ROOT 5.1.0
+    assert(readme.includes('Claude Code command install, GitHub edition: `5.1.0`'),
+      'T5: README GitHub claude-install line must be 5.1.0; readme=' + readme.slice(0, 500));
+    assert(readme.includes('Claude Code command install, GitLab edition: `5.1.0`'),
+      'T5: README GitLab claude-install line must be 5.1.0');
+    assert(readme.includes('Claude Code command install, Gitea edition: `5.1.0`'),
+      'T5: README Gitea claude-install line must be 5.1.0');
+
+    // Verify JSON envelope carries codex_version + codex_version_source
+    assert(r.json.codex_version === '3.1.0',
+      'T5: r.json.codex_version must be 3.1.0; got=' + r.json.codex_version);
+    assert(r.json.codex_version_source === 'derived',
+      'T5: r.json.codex_version_source must be "derived"; got=' + r.json.codex_version_source);
   }
 }
 fs.rmSync(repo5, { recursive: true, force: true });
+
+// ---------------------------------------------------------------------------
+// T5b: derive-major — cut 6.0.0 from baseline 5.0.0 / codex 3.0.0 -> codex 4.0.0
+// ---------------------------------------------------------------------------
+const repo5b = makeFixtureRepo({
+  version: '5.0.0',
+  claudeVersion: '5.0.0',
+  changelogUnreleased: '## [Unreleased]\n\n### Added\n\n- Major (#101)\n',
+  codexVersions: ['3.0.0', '3.0.0', '3.0.0'],
+  tagVersion: '5.0.0',
+  extraCommitMessages: ['feat!: major release (#101)'],
+});
+{
+  const r = run(repo5b, ['--cut', '--version', '6.0.0', '--json', '--issues-closed', '101'], {
+    KAOLA_RELEASE_DATE: '2026-06-13',
+  });
+  assert(r.json !== null, 'T5b: --cut produces parseable JSON; stderr=' + (r.stderr || ''));
+  if (r.json && r.json.result === 'ok') {
+    assert(r.json.codex_version === '4.0.0',
+      'T5b: codex_version must be 4.0.0 (major derived); got=' + r.json.codex_version);
+    assert(r.json.codex_version_source === 'derived',
+      'T5b: codex_version_source must be "derived"; got=' + r.json.codex_version_source);
+    // Verify codex manifests are 4.0.0
+    const m = JSON.parse(fs.readFileSync(
+      path.join(repo5b, 'plugins/kaola-workflow/.codex-plugin/plugin.json'), 'utf8'));
+    assert(m.version === '4.0.0', 'T5b: codex manifest must be 4.0.0; got=' + m.version);
+    // Verify package.json is 6.0.0
+    const pkg = JSON.parse(fs.readFileSync(path.join(repo5b, 'package.json'), 'utf8'));
+    assert(pkg.version === '6.0.0', 'T5b: package.json must be 6.0.0; got=' + pkg.version);
+  } else {
+    assert(false, 'T5b: --cut must return ok for major bump; got result=' + (r.json && r.json.result) +
+      ' reason=' + (r.json && r.json.reason) + ' stderr=' + (r.stderr || ''));
+  }
+}
+fs.rmSync(repo5b, { recursive: true, force: true });
+
+// ---------------------------------------------------------------------------
+// T5c: explicit-override — cut 5.1.0 --codex-version 3.9.9 -> codex==3.9.9, source explicit
+// ---------------------------------------------------------------------------
+const repo5c = makeFixtureRepo({
+  version: '5.0.0',
+  claudeVersion: '5.0.0',
+  changelogUnreleased: '## [Unreleased]\n\n### Added\n\n- Override (#102)\n',
+  codexVersions: ['3.0.0', '3.0.0', '3.0.0'],
+  tagVersion: '5.0.0',
+  extraCommitMessages: ['fix: override (#102)'],
+});
+{
+  const r = run(repo5c, ['--cut', '--version', '5.1.0', '--codex-version', '3.9.9', '--json', '--issues-closed', '102'], {
+    KAOLA_RELEASE_DATE: '2026-06-13',
+  });
+  assert(r.json !== null, 'T5c: --cut with --codex-version produces parseable JSON; stderr=' + (r.stderr || ''));
+  if (r.json && r.json.result === 'ok') {
+    assert(r.json.codex_version === '3.9.9',
+      'T5c: codex_version must be 3.9.9 (explicit); got=' + r.json.codex_version);
+    assert(r.json.codex_version_source === 'explicit',
+      'T5c: codex_version_source must be "explicit"; got=' + r.json.codex_version_source);
+    const m = JSON.parse(fs.readFileSync(
+      path.join(repo5c, 'plugins/kaola-workflow/.codex-plugin/plugin.json'), 'utf8'));
+    assert(m.version === '3.9.9', 'T5c: codex manifest must be 3.9.9; got=' + m.version);
+  } else {
+    assert(false, 'T5c: --cut with --codex-version 3.9.9 must return ok; got result=' +
+      (r.json && r.json.result) + ' reason=' + (r.json && r.json.reason) + ' stderr=' + (r.stderr || ''));
+  }
+}
+fs.rmSync(repo5c, { recursive: true, force: true });
+
+// ---------------------------------------------------------------------------
+// T5d: non_monotonic_codex_version — cut 5.1.0 --codex-version 2.9.0 (<=baseline 3.0.0) -> refuse
+// ---------------------------------------------------------------------------
+const repo5d = makeFixtureRepo({
+  version: '5.0.0',
+  claudeVersion: '5.0.0',
+  changelogUnreleased: '## [Unreleased]\n\n### Added\n\n- Something (#103)\n',
+  codexVersions: ['3.0.0', '3.0.0', '3.0.0'],
+  tagVersion: '5.0.0',
+  extraCommitMessages: ['fix: something (#103)'],
+});
+{
+  const r = run(repo5d, ['--cut', '--version', '5.1.0', '--codex-version', '2.9.0', '--json', '--issues-closed', '103'], {
+    KAOLA_RELEASE_DATE: '2026-06-13',
+  });
+  assert(r.json !== null, 'T5d: --cut with non-monotonic codex-version produces parseable JSON; stderr=' + (r.stderr || ''));
+  if (r.json !== null) {
+    assert(r.json.result === 'refuse', 'T5d: must refuse non_monotonic_codex_version; got=' + r.json.result);
+    assert(r.json.reason === 'non_monotonic_codex_version',
+      'T5d: reason must be non_monotonic_codex_version; got=' + r.json.reason);
+  }
+}
+fs.rmSync(repo5d, { recursive: true, force: true });
+
+// ---------------------------------------------------------------------------
+// T5e: codex_version_underivable — no last root tag + no --codex-version -> refuse + NO mutation
+// ---------------------------------------------------------------------------
+const repo5e = makeFixtureRepo({
+  version: '5.0.0',
+  claudeVersion: '5.0.0',
+  changelogUnreleased: '## [Unreleased]\n\n### Added\n\n- Something (#104)\n',
+  codexVersions: ['3.0.0', '3.0.0', '3.0.0'],
+  tagVersion: null, // NO tag -> no lastVer -> cannot derive codex version
+  extraCommitMessages: ['fix: something (#104)'],
+});
+{
+  const r = run(repo5e, ['--cut', '--version', '5.1.0', '--json', '--issues-closed', '104'], {
+    KAOLA_RELEASE_DATE: '2026-06-13',
+  });
+  assert(r.json !== null, 'T5e: codex_version_underivable produces parseable JSON; stderr=' + (r.stderr || ''));
+  if (r.json !== null) {
+    assert(r.json.result === 'refuse', 'T5e: must refuse codex_version_underivable; got=' + r.json.result);
+    assert(r.json.reason === 'codex_version_underivable',
+      'T5e: reason must be codex_version_underivable; got=' + r.json.reason);
+    // Assert NO mutation: package.json must still be 5.0.0 and CHANGELOG must still have [Unreleased]
+    const pkg = JSON.parse(fs.readFileSync(path.join(repo5e, 'package.json'), 'utf8'));
+    assert(pkg.version === '5.0.0', 'T5e: package.json must NOT be mutated (still 5.0.0); got=' + pkg.version);
+    const cl = fs.readFileSync(path.join(repo5e, 'CHANGELOG.md'), 'utf8');
+    assert(cl.includes('[Unreleased]'), 'T5e: CHANGELOG must NOT be mutated ([Unreleased] must still be present)');
+  }
+}
+fs.rmSync(repo5e, { recursive: true, force: true });
 
 // ---------------------------------------------------------------------------
 // T6: --cut without --version is a typed refusal (missing_version)
@@ -530,6 +701,146 @@ const repo11 = makeFixtureRepo({
   }
 }
 fs.rmSync(repo11, { recursive: true, force: true });
+
+// ---------------------------------------------------------------------------
+// Crash-resume surgery helper: simulate a --cut that crashed AFTER the codex
+// manifests were bumped but BEFORE the git tag was created.
+//   - delete the local git tag
+//   - remove the 'git_tag' and 'readme' receipt lines (so they get redone)
+//   - reset the README codex lines back to the pre-bump baseline (visible redo)
+//   - LEAVE the codex manifests bumped (the live baseline has moved)
+//   - LEAVE the codex_resolution receipt present
+// ---------------------------------------------------------------------------
+function simulatePartialCrash(dir, rootVersion, codexBaselineBeforeBump) {
+  const g = (gitArgs) => execFileSync('git', ['-C', dir, ...gitArgs], {
+    encoding: 'utf8',
+    env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' },
+  }).trim();
+  // Delete the local tag (git_tag step did not durably complete)
+  g(['tag', '-d', 'kaola-workflow--v' + rootVersion]);
+  // Remove the git_tag and readme receipt lines (they must be redone on resume)
+  const receiptFile = path.join(dir, '.cache', 'release-receipt.jsonl');
+  const lines = fs.readFileSync(receiptFile, 'utf8').trim().split('\n').filter(Boolean);
+  const kept = lines.filter(line => {
+    let entry;
+    try { entry = JSON.parse(line); } catch (_) { return true; }
+    return entry.step !== 'git_tag' && entry.step !== 'readme';
+  });
+  fs.writeFileSync(receiptFile, kept.join('\n') + '\n');
+  // Reset README codex lines back to the pre-bump baseline so the readme step
+  // has visible work to redo. (The claude-install lines / root version untouched.)
+  let readme = fs.readFileSync(path.join(dir, 'README.md'), 'utf8');
+  readme = readme.replace(
+    /(Codex `kaola-workflow[^`]*` plugin manifest: `)[^`]*/g,
+    '$1' + codexBaselineBeforeBump
+  );
+  fs.writeFileSync(path.join(dir, 'README.md'), readme);
+}
+
+// ---------------------------------------------------------------------------
+// T12 (crash-resume regression, Face 1 — derived): a resume must reuse the
+// persisted codex resolution, NOT re-derive against the already-bumped live
+// baseline. baseline 3.0.0, first cut 5.1.0 -> codex 3.1.0. After partial
+// crash (manifests left at 3.1.0), re-cut 5.1.0 must keep codex at 3.1.0
+// EVERYWHERE (manifests, README, JSON envelope), NOT re-derive to 3.2.0.
+// ---------------------------------------------------------------------------
+const repo12 = makeFixtureRepo({
+  version: '5.0.0',
+  claudeVersion: '5.0.0',
+  changelogUnreleased: '## [Unreleased]\n\n### Added\n\n- Fix (#600)\n',
+  codexVersions: ['3.0.0', '3.0.0', '3.0.0'],
+  tagVersion: '5.0.0',
+  extraCommitMessages: ['fix: thing (#600)'],
+});
+{
+  const cutEnv = { KAOLA_RELEASE_DATE: '2026-06-13' };
+  // First cut — completes fully (codex 3.0.0 -> 3.1.0).
+  const r1 = run(repo12, ['--cut', '--version', '5.1.0', '--json', '--issues-closed', '600'], cutEnv);
+  assert(r1.json && r1.json.result === 'ok', 'T12: first --cut 5.1.0 must return ok; got=' +
+    (r1.json && r1.json.result) + ' reason=' + (r1.json && r1.json.reason) + ' stderr=' + (r1.stderr || ''));
+  assert(r1.json && r1.json.codex_version === '3.1.0', 'T12: first cut codex_version must be 3.1.0; got=' +
+    (r1.json && r1.json.codex_version));
+
+  if (r1.json && r1.json.result === 'ok') {
+    // Simulate a crash AFTER codex manifests bumped (3.1.0) but BEFORE git tag.
+    simulatePartialCrash(repo12, '5.1.0', '3.0.0');
+
+    // Resume: re-cut the SAME version. Must NOT re-derive 3.2.0.
+    const r2 = run(repo12, ['--cut', '--version', '5.1.0', '--json', '--issues-closed', '600'], cutEnv);
+    assert(r2.json !== null, 'T12: resume --cut produces parseable JSON; stderr=' + (r2.stderr || ''));
+    assert(r2.json && r2.json.result === 'ok', 'T12: resume --cut must return ok; got=' +
+      (r2.json && r2.json.result) + ' reason=' + (r2.json && r2.json.reason));
+
+    if (r2.json && r2.json.result === 'ok') {
+      // codex_version in the envelope must still be 3.1.0 (reused), not 3.2.0.
+      assert(r2.json.codex_version === '3.1.0',
+        'T12: resume codex_version must stay 3.1.0 (reused), NOT re-derived; got=' + r2.json.codex_version);
+      // The 3 codex manifests must still read 3.1.0.
+      const codexPaths = [
+        'plugins/kaola-workflow/.codex-plugin/plugin.json',
+        'plugins/kaola-workflow-gitlab/.codex-plugin/plugin.json',
+        'plugins/kaola-workflow-gitea/.codex-plugin/plugin.json',
+      ];
+      for (const cp of codexPaths) {
+        const m = JSON.parse(fs.readFileSync(path.join(repo12, cp), 'utf8'));
+        assert(m.version === '3.1.0', 'T12: ' + cp + ' must stay 3.1.0 on resume; got=' + m.version);
+      }
+      // The README codex line (re-done on resume) must read 3.1.0, NOT 3.2.0 —
+      // this is the README<->manifest mismatch the bug produces.
+      const readme = fs.readFileSync(path.join(repo12, 'README.md'), 'utf8');
+      assert(readme.includes('Codex `kaola-workflow` plugin manifest: `3.1.0`'),
+        'T12: README codex line must be 3.1.0 on resume (match manifests); readme=' + readme.slice(0, 400));
+      assert(!readme.includes('Codex `kaola-workflow` plugin manifest: `3.2.0`'),
+        'T12: README codex line must NOT be 3.2.0 (re-derived against bumped baseline = the bug)');
+    }
+  }
+}
+fs.rmSync(repo12, { recursive: true, force: true });
+
+// ---------------------------------------------------------------------------
+// T13 (crash-resume regression, Face 2 — explicit): a resume with an explicit
+// --codex-version that already landed must NOT refuse non_monotonic_codex_version
+// (the bug: live baseline == target -> semverCompare(==)=0 <= 0 -> refuse forever).
+// baseline 3.0.0, first cut 5.1.0 --codex-version 3.9.9 -> codex 3.9.9. After
+// partial crash, re-cut --version 5.1.0 --codex-version 3.9.9 must return ok.
+// ---------------------------------------------------------------------------
+const repo13 = makeFixtureRepo({
+  version: '5.0.0',
+  claudeVersion: '5.0.0',
+  changelogUnreleased: '## [Unreleased]\n\n### Added\n\n- Fix (#601)\n',
+  codexVersions: ['3.0.0', '3.0.0', '3.0.0'],
+  tagVersion: '5.0.0',
+  extraCommitMessages: ['fix: thing (#601)'],
+});
+{
+  const cutEnv = { KAOLA_RELEASE_DATE: '2026-06-13' };
+  // First cut with explicit override (codex 3.0.0 -> 3.9.9).
+  const r1 = run(repo13, ['--cut', '--version', '5.1.0', '--codex-version', '3.9.9', '--json', '--issues-closed', '601'], cutEnv);
+  assert(r1.json && r1.json.result === 'ok', 'T13: first --cut with --codex-version must return ok; got=' +
+    (r1.json && r1.json.result) + ' reason=' + (r1.json && r1.json.reason) + ' stderr=' + (r1.stderr || ''));
+  assert(r1.json && r1.json.codex_version === '3.9.9', 'T13: first cut codex_version must be 3.9.9; got=' +
+    (r1.json && r1.json.codex_version));
+
+  if (r1.json && r1.json.result === 'ok') {
+    // Simulate a crash AFTER codex manifests bumped (3.9.9) but BEFORE git tag.
+    simulatePartialCrash(repo13, '5.1.0', '3.0.0');
+
+    // Resume: re-cut SAME version + SAME explicit codex version. Must NOT refuse.
+    const r2 = run(repo13, ['--cut', '--version', '5.1.0', '--codex-version', '3.9.9', '--json', '--issues-closed', '601'], cutEnv);
+    assert(r2.json !== null, 'T13: resume --cut produces parseable JSON; stderr=' + (r2.stderr || ''));
+    assert(r2.json && r2.json.result === 'ok',
+      'T13: resume --cut with same explicit codex-version must return ok (NOT refuse non_monotonic_codex_version); got result=' +
+      (r2.json && r2.json.result) + ' reason=' + (r2.json && r2.json.reason));
+
+    if (r2.json && r2.json.result === 'ok') {
+      assert(r2.json.codex_version === '3.9.9', 'T13: resume codex_version must stay 3.9.9; got=' + r2.json.codex_version);
+      const m = JSON.parse(fs.readFileSync(
+        path.join(repo13, 'plugins/kaola-workflow/.codex-plugin/plugin.json'), 'utf8'));
+      assert(m.version === '3.9.9', 'T13: codex manifest must stay 3.9.9 on resume; got=' + m.version);
+    }
+  }
+}
+fs.rmSync(repo13, { recursive: true, force: true });
 
 // ---------------------------------------------------------------------------
 // Done

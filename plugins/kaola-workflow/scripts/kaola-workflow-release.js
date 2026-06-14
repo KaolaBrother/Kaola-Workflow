@@ -44,6 +44,12 @@ const CODEX_MANIFEST_RELPATHS = [
   PLUGIN_BASE + '-gitlab/.codex-plugin/plugin.json',
   PLUGIN_BASE + '-gitea/.codex-plugin/plugin.json',
 ];
+// .claude-plugin manifests: gitlab + gitea only (no github-base .claude-plugin manifest exists).
+// These track ROOT version (Claude Code command install version).
+const CLAUDE_MANIFEST_RELPATHS = [
+  PLUGIN_BASE + '-gitlab/.claude-plugin/plugin.json',
+  PLUGIN_BASE + '-gitea/.claude-plugin/plugin.json',
+];
 
 // Tag series prefix — built by concatenation so the mangleable literal token
 // never appears verbatim in source (the normalizer matches 'kaola-workflow-'
@@ -169,6 +175,37 @@ function semverCompare(a, b) {
     if (ai !== bi) return ai > bi ? 1 : -1;
   }
   return 0;
+}
+
+// ---------------------------------------------------------------------------
+// Codex version derivation helpers (issue #455)
+// ---------------------------------------------------------------------------
+
+// Determine the kind of semver bump: 'major' | 'minor' | 'patch' | null.
+// Compares fromVer and toVer component-by-component in precedence order.
+function bumpKind(fromVer, toVer) {
+  const parse = (v) => String(v).split('.').map(Number);
+  const from = parse(fromVer);
+  const to = parse(toVer);
+  if (to[0] !== from[0]) return 'major';
+  if (to[1] !== from[1]) return 'minor';
+  if (to[2] !== from[2]) return 'patch';
+  return null; // same version
+}
+
+// Given a codex baseline version and the bump kind applied to root,
+// return the new codex version (applying the same kind of bump).
+function deriveCodexVersion(codexBaseline, kind) {
+  const parse = (v) => String(v).split('.').map(Number);
+  const parts = parse(codexBaseline);
+  const maj = parts[0] || 0;
+  const min = parts[1] || 0;
+  const pat = parts[2] || 0;
+  if (kind === 'major') return (maj + 1) + '.0.0';
+  if (kind === 'minor') return maj + '.' + (min + 1) + '.0';
+  if (kind === 'patch') return maj + '.' + min + '.' + (pat + 1);
+  // same version (null kind) — no bump
+  return codexBaseline;
 }
 
 // ---------------------------------------------------------------------------
@@ -339,7 +376,7 @@ function runVerify(root, opts) {
 // Subcommand: --cut
 // ---------------------------------------------------------------------------
 function runCut(root, opts) {
-  const { jsonMode, version, injectedIssues, releaseDate } = opts;
+  const { jsonMode, version, injectedIssues, releaseDate, codexVersionOverride } = opts;
 
   // --version required
   if (!version) {
@@ -395,6 +432,78 @@ function runCut(root, opts) {
     if (jsonMode) process.stdout.write(JSON.stringify(result) + '\n');
     else process.stderr.write('cut: REFUSED lockstep_violation\n');
     return 1;
+  }
+
+  // Codex version resolution + guards (issue #455) — MUST be in the PRE-MUTATION block,
+  // after lockstep guard but BEFORE in-process re-verification and any writes,
+  // so a refused call never leaves the repo half-mutated.
+  //
+  // CRASH-RESUME IDEMPOTENCY: resolution is persisted to the receipt on the first
+  // run (after the guards pass, before any content mutation). On a resume, the live
+  // codex manifests may already be bumped, so re-deriving/re-guarding against the
+  // mutated live baseline is wrong (Face 1: re-derives 3.1.0->3.2.0 producing a
+  // README<->manifest mismatch; Face 2: live baseline == explicit target => the
+  // monotonic guard refuses forever). We therefore REUSE the persisted resolution
+  // on resume and skip BOTH the derive/override logic and the monotonic guard
+  // (already validated on the first run).
+  let codexVersion;
+  let codexVersionSource;
+  {
+    const priorReceipt = readReceipt(root);
+    const prior = priorReceipt.find(
+      r => r.step === 'codex_resolution' && r.status === 'done' && r.version === version
+    );
+    if (prior) {
+      // Resume: reuse the resolution validated on the first run.
+      codexVersion = prior.codexVersion;
+      codexVersionSource = prior.source;
+    } else {
+      // First run: derive/override + guards against the still-original live baseline.
+      const codexBaseline = lockstep.baseline; // current codex version (all three manifests agree)
+      if (codexVersionOverride) {
+        // Explicit override: use as-is
+        codexVersion = codexVersionOverride;
+        codexVersionSource = 'explicit';
+      } else {
+        // Derive by bump-kind: require a last root tag to determine the kind
+        if (lastVer === null) {
+          const result = {
+            result: 'refuse',
+            reason: 'codex_version_underivable',
+            detail: 'No last root tag found; cannot derive codex version. Provide --codex-version explicitly.',
+          };
+          if (jsonMode) process.stdout.write(JSON.stringify(result) + '\n');
+          else process.stderr.write('cut: REFUSED codex_version_underivable\n');
+          return 1;
+        }
+        const kind = bumpKind(lastVer, version);
+        codexVersion = deriveCodexVersion(codexBaseline, kind);
+        codexVersionSource = 'derived';
+      }
+      // Monotonic guard: codexVersion must be strictly greater than codexBaseline
+      if (semverCompare(codexVersion, codexBaseline) <= 0) {
+        const result = {
+          result: 'refuse',
+          reason: 'non_monotonic_codex_version',
+          requested_codex_version: codexVersion,
+          codex_baseline: codexBaseline,
+        };
+        if (jsonMode) process.stdout.write(JSON.stringify(result) + '\n');
+        else process.stderr.write('cut: REFUSED non_monotonic_codex_version ' + codexVersion + ' <= ' + codexBaseline + '\n');
+        return 1;
+      }
+      // Persist the resolution AFTER the guards pass and BEFORE any content mutation
+      // (Step 1 changelog). This keeps the refusals half-mutation-free on the first
+      // run and makes every subsequent resume deterministic.
+      appendReceipt(root, {
+        step: 'codex_resolution',
+        status: 'done',
+        version,
+        codexVersion,
+        source: codexVersionSource,
+        codexBaseline,
+      });
+    }
   }
 
   // In-process re-verification (read-only verify as first step)
@@ -472,28 +581,50 @@ function runCut(root, opts) {
     appendReceipt(root, { step: 'package_json', status: 'done', version });
   }
 
-  // Step 3: Bump three Codex manifests in lockstep
+  // Step 3: Bump three Codex manifests to codexVersion (not root version)
   for (let i = 0; i < CODEX_MANIFEST_RELPATHS.length; i++) {
     const rel = CODEX_MANIFEST_RELPATHS[i];
     const stepKey = 'codex_manifest_' + i;
     if (!isStepDone(receipt, stepKey, version)) {
       const p = path.join(root, rel);
       const manifest = JSON.parse(fs.readFileSync(p, 'utf8'));
-      manifest.version = version;
+      manifest.version = codexVersion;
       fs.writeFileSync(p, JSON.stringify(manifest, null, 2) + '\n');
-      appendReceipt(root, { step: stepKey, status: 'done', file: rel, version });
+      appendReceipt(root, { step: stepKey, status: 'done', file: rel, version, codexVersion });
     }
   }
 
-  // Step 4: Update README codex version assertions
+  // Step 3b: Bump the 2 .claude-plugin manifests to ROOT version
+  for (let i = 0; i < CLAUDE_MANIFEST_RELPATHS.length; i++) {
+    const rel = CLAUDE_MANIFEST_RELPATHS[i];
+    const stepKey = 'claude_manifest_' + i;
+    if (!isStepDone(receipt, stepKey, version)) {
+      const p = path.join(root, rel);
+      if (fs.existsSync(p)) {
+        const manifest = JSON.parse(fs.readFileSync(p, 'utf8'));
+        manifest.version = version;
+        fs.writeFileSync(p, JSON.stringify(manifest, null, 2) + '\n');
+        appendReceipt(root, { step: stepKey, status: 'done', file: rel, version });
+      }
+    }
+  }
+
+  // Step 4: Update README — codex plugin manifest lines -> codexVersion;
+  //          Claude Code command install lines -> ROOT version.
   if (!isStepDone(receipt, 'readme', version)) {
     const readmePath = path.join(root, 'README.md');
     if (fs.existsSync(readmePath)) {
       let readme = fs.readFileSync(readmePath, 'utf8');
-      // Replace all occurrences of the old codex manifest version lines
+      // Replace Codex manifest version lines (codex axis: codexVersion)
       // Pattern: Codex `kaola-workflow*` plugin manifest: `<version>`
       readme = readme.replace(
         /(Codex `kaola-workflow[^`]*` plugin manifest: `)[^`]*/g,
+        '$1' + codexVersion
+      );
+      // Replace Claude Code command install lines (root axis: version)
+      // Pattern: Claude Code command install, <edition> edition: `<version>`
+      readme = readme.replace(
+        /(Claude Code command install, [^:]+: `)[^`]*/g,
         '$1' + version
       );
       fs.writeFileSync(readmePath, readme);
@@ -514,12 +645,14 @@ function runCut(root, opts) {
   const result = {
     result: 'ok',
     version,
+    codex_version: codexVersion,
+    codex_version_source: codexVersionSource,
     date,
     tag: RELEASE_TAG_PREFIX + version,
     steps_completed: readReceipt(root).map(r => r.step),
   };
   if (jsonMode) process.stdout.write(JSON.stringify(result) + '\n');
-  else process.stdout.write('cut: ok — version ' + version + ' tagged locally\n');
+  else process.stdout.write('cut: ok — version ' + version + ' (codex ' + codexVersion + ') tagged locally\n');
   return 0;
 }
 
@@ -591,7 +724,8 @@ function main(argv) {
 
   if (hasFlag(args, '--cut')) {
     const version = flagVal(args, '--version');
-    process.exit(runCut(root, { jsonMode, version, injectedIssues, releaseDate }));
+    const codexVersionOverride = flagVal(args, '--codex-version');
+    process.exit(runCut(root, { jsonMode, version, injectedIssues, releaseDate, codexVersionOverride }));
   }
 
   if (hasFlag(args, '--push')) {
