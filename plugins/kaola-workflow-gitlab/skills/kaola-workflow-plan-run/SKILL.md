@@ -36,6 +36,22 @@ node "$KAOLA_SCRIPTS/kaola-gitlab-workflow-adaptive-node.js" mirror-project \
 
 `status: mirrored | exists | skipped` → proceed. `result: refuse` → STOP and surface verbatim.
 
+Then **enter the worktree** — every adaptive lifecycle call below runs from the worktree cwd:
+
+```bash
+[ -n "$ACTIVE_WORKTREE_PATH" ] && [ "$ACTIVE_WORKTREE_PATH" != "$(pwd)" ] && cd "$ACTIVE_WORKTREE_PATH"
+```
+
+**Worktree-cwd contract (#466):** the mutating lifecycle subcommands (`open-next` / `open-ready` /
+`record-evidence --stdin` / `close-and-open-next` / `close-node` / `reconcile-running-set` /
+`write-halt` / `clear-halt` / `reopen-node` / `revert-overflow` / `repair-node` / `route-findings`)
+resolve the project folder — `workflow-plan.md`, the `## Node Ledger`, `.cache/{node-id}.md` evidence,
+and the barrier baselines — **cwd-relative**. Run them ALL from the worktree so durable state lands
+where the role agents write. Running one from the main repo root while a worktree is linked refuses
+with `worktree_authority_split` (zero mutation) — `cd "$ACTIVE_WORKTREE_PATH"` and re-run. (`orient`
+and `record-evidence --verify` are read-only and exempt; `mirror-project` is the main→worktree copy
+and must run from the main root, above.)
+
 ## Dispatch
 
 Reasoning effort (#451, supersedes #405): the xhigh effort-variant profiles are retired — always

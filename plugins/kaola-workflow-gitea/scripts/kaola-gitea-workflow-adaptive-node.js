@@ -67,6 +67,17 @@ const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSe
 // ---------------------------------------------------------------------------
 const ADAPTIVE_NODE_SCRIPT = 'node scripts/kaola-gitea-workflow-adaptive-node.js';
 
+// #466 — the MUTATING lifecycle subcommands subject to the worktree-authority split guard. Each one
+// resolves the project folder (plan / ## Node Ledger / .cache evidence / barrier baselines) cwd-relative,
+// so running it from the MAIN root while a linked worktree is recorded silently diverges durable state
+// from where the role agents write. orient + mirror-project (read-only / legitimately the main→worktree
+// copy) and record-evidence --verify (read-only) are EXEMPT and intentionally absent from this set.
+const SPLIT_GUARDED_SUBCOMMANDS = new Set([
+  'open-next', 'open-ready', 'close-node', 'close-and-open-next',
+  'reconcile-running-set', 'write-halt', 'clear-halt',
+  'reopen-node', 'revert-overflow', 'repair-node', 'route-findings',
+]);
+
 const OPERATOR_HINT_REGISTRY = {
   // --- guard prologue (#383/#387/#391b) ---
   plan_integrity_failed: (ctx) =>
@@ -79,6 +90,10 @@ const OPERATOR_HINT_REGISTRY = {
     'A running-set fan-out is live (' + ((ctx.runningSet || []).join(', ') || 'see runningSet') + '). Close its nodes (close-node) or run ' + ADAPTIVE_NODE_SCRIPT + ' reconcile-running-set --project <P> --json before this command.',
   batch_active: () =>
     'An active parallel batch is live. Seal + join it (or reconcile --abort) before running this serial command.',
+  // #466: worktree-authority split — a mutating lifecycle call ran from the MAIN root while a linked
+  // worktree is recorded; the ledger/evidence/baselines would diverge from where the role agents write.
+  worktree_authority_split: (ctx) =>
+    'A linked worktree is recorded for this project (' + (ctx.worktreePath || 'see workflow-state.md worktree_path') + ') but this mutating lifecycle command is running from the MAIN repo root — the ## Node Ledger / .cache evidence / barrier baselines would diverge from where the role agents write. cd into the worktree first: cd "' + (ctx.worktreePath || '<worktree_path>') + '" && re-run the command (run ALL adaptive lifecycle calls from the worktree cwd).',
 
   // --- orient (#328/#335/#377/#384/#430) ---
   plan_missing: (ctx) =>
@@ -4288,6 +4303,40 @@ function main() {
   try { realRepoRoot = fs.realpathSync(repoRoot); } catch (_) {}
   let mainRoot = getMainRoot(repoRoot);
   try { mainRoot = fs.realpathSync(mainRoot); } catch (_) {}
+
+  // #466 — worktree-authority split guard (fail loud, ZERO mutation; precedes the dispatch). The
+  // adaptive lifecycle resolves the project folder cwd-relative via getRoot(); when a linked worktree
+  // is recorded for this project but a MUTATING lifecycle command is invoked from the MAIN root
+  // (realRepoRoot === mainRoot ⇒ NOT a linked worktree), the ## Node Ledger / .cache evidence / barrier
+  // baselines would be written under the main checkout while the role agents edit the worktree — a split
+  // that stays invisible until finalize. Refuse here and point the operator into the worktree. Native
+  // posture (no worktree_path) and the exempt read-only / main→worktree-copy subcommands fall through.
+  {
+    const guardedMutation = SPLIT_GUARDED_SUBCOMMANDS.has(subcommand)
+      || (subcommand === 'record-evidence' && !args.includes('--verify'));
+    if (guardedMutation && realRepoRoot === mainRoot) {
+      const splitStatePath = path.join(mainRoot, 'kaola-workflow', project, 'workflow-state.md');
+      let splitState = '';
+      try { splitState = fs.readFileSync(splitStatePath, 'utf8'); } catch (_) {}
+      const wtMatch = splitState.match(/^worktree_path:\s*(.+)$/m);
+      const recordedWorktree = wtMatch ? wtMatch[1].trim() : '';
+      if (recordedWorktree) {
+        let realWorktree = '';
+        try { realWorktree = fs.realpathSync(recordedWorktree); } catch (_) { realWorktree = ''; }
+        // Fires only when the recorded worktree EXISTS on disk (realpath resolved) and is a DISTINCT
+        // tree from the main checkout — a stale/missing worktree_path cannot be the authority.
+        if (realWorktree && realWorktree !== mainRoot) {
+          const out = decorateOperatorHint(refuse('worktree_authority_split', {
+            worktreePath: recordedWorktree,
+            detail: 'a linked worktree is recorded for this project but this mutating lifecycle command is running from the MAIN repo root — the ledger / .cache evidence / barrier baselines would diverge from where the role agents write',
+          }));
+          process.stdout.write(JSON.stringify(out) + '\n');
+          process.exitCode = 1;
+          return;
+        }
+      }
+    }
+  }
 
   let result;
 
