@@ -89,6 +89,9 @@ const COMMON_SCRIPTS = [
   // #443: autopilot driver CLI. Byte-identical claude↔codex; gitlab/gitea carry
   // rename-normalized ports (kaola-{forge}-workflow-autopilot.js) in RENAME_NORMALIZED_FAMILIES.
   'kaola-workflow-autopilot.js',
+  // #456: fast-path script-owned advance. Byte-identical claude↔codex; gitlab/gitea carry
+  // rename-normalized ports (kaola-{forge}-workflow-fast-advance.js) in RENAME_NORMALIZED_FAMILIES.
+  'kaola-workflow-fast-advance.js',
 ];
 
 const BYTE_IDENTICAL_GROUPS = [
@@ -290,6 +293,17 @@ const RENAME_NORMALIZED_FAMILIES = [
     ports: [
       { forge: 'gitlab', file: 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-autopilot.js' },
       { forge: 'gitea', file: 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-autopilot.js' },
+    ],
+  },
+  {
+    // #456: fast-advance fast-path transaction owner forge ports. The script carries no
+    // forge-specific tokens (command/skill route names are KW-split), so the rename-normalized
+    // ports are body-identical to canonical. Reference = canonical scripts/ copy.
+    label: 'fast-advance forge ports',
+    reference: 'scripts/kaola-workflow-fast-advance.js',
+    ports: [
+      { forge: 'gitlab', file: 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-fast-advance.js' },
+      { forge: 'gitea', file: 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-fast-advance.js' },
     ],
   },
 ];
