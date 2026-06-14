@@ -301,7 +301,19 @@ node scripts/kaola-workflow-run-chains.js [--accept-known-red <name>:<issue>] --
 }
 ```
 
-`exit: 0` means the chain passed; any other value is a failure. The receipt is read by `--finalize-check` to enforce `chains_unverified`, `chains_stale`, and `chains_red` refusals.
+`exit: 0` means the chain passed; any other value is a failure. The receipt is read by `--finalize-check` to enforce `chains_unverified`, `chains_stale`, and `chains_red` refusals. The receipt also records a `source` field (`repo-config` | `npm-default`). The `--finalize-check` chain gate is **name-agnostic** — it iterates whatever `chains[]` the receipt records and refuses if any is non-zero and unwaived, so a non-default chain set passes the gate the same way.
+
+**Repo-local chain config (#464) — non-npm product repos.** `kaola-workflow-run-chains.js` resolves the validation chain set with this precedence, so the finalization receipt works in a product repo whose validation is not npm-based (a Swift/Xcode app, a Makefile project, etc.), not only in the Kaola-Workflow self-host:
+
+1. **`kaola-workflow/chains.json`** (repo-local, workflow-owned) — wins when present. Shape:
+   ```json
+   { "chains": [
+       { "name": "build", "command": "xcodebuild test -scheme MyApp" },
+       { "name": "lint",  "command": "swiftlint" } ] }
+   ```
+   Each `{name, command}` is run via `spawnSync` (real exit code) and recorded in the receipt; `--chains` subsets these names and `--accept-known-red <name>:<issue>` waives one of them.
+2. **npm edition chains** — the built-in `npm run test:kaola-workflow:<name>`, but only for the `claude/codex/gitlab/gitea` whose script is actually declared in `package.json` (so the self-host keeps its four chains and a `--chains claude` subset works).
+3. Otherwise a **typed refusal `chains_config_missing`** (exit 1, `{result:"refuse", reason, operator_hint}`) — and **no receipt is written**, so a non-npm repo never gets a misleading four-`254` receipt. `--accept-known-red` is for genuinely known-red validations, not for an unsupported validation transport. The config path uses `kaola-workflow/` (a slash, not a `kaola-workflow-` token) so it is edition-neutral across all four editions.
 
 ### Export: `ROLE_TOKEN_REGISTRY` (issue #433)
 

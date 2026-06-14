@@ -216,6 +216,137 @@ try {
 }
 
 // ---------------------------------------------------------------------------
+// T8 (#464): a non-npm repo with kaola-workflow/chains.json runs the configured
+// chains and writes a gate-acceptable receipt (source: repo-config).
+// ---------------------------------------------------------------------------
+const repo8 = makeGitRepo();
+try {
+  const passMock = makeExitScript(repo8, 'pass.js', 0);
+  fs.mkdirSync(path.join(repo8, 'kaola-workflow'), { recursive: true });
+  // a Swift/Xcode-style repo: no package.json scripts; chains.json declares the validation set
+  fs.writeFileSync(path.join(repo8, 'kaola-workflow', 'chains.json'), JSON.stringify({
+    chains: [
+      { name: 'build', command: 'node ' + passMock },
+      { name: 'lint', command: 'node ' + passMock },
+    ],
+  }) + '\n');
+  const r8 = run(repo8, ['--json']);
+  assert(r8.exitCode === 0, 'T8: exit 0 when configured chains pass');
+  const rc = r8.receipt;
+  assert(rc !== null, 'T8: receipt written from repo-config');
+  if (rc) {
+    assert(rc.source === 'repo-config', 'T8: receipt records source repo-config; got ' + rc.source);
+    assert(Array.isArray(rc.chains) && rc.chains.length === 2, 'T8: receipt has the 2 configured chains');
+    assert(rc.chains.map(c => c.name).sort().join(',') === 'build,lint', 'T8: chain names from config');
+    // ROUND-TRIP: the receipt must satisfy the EXACT condition the real --finalize-check gate
+    // applies (plan-validator.js ~2116: chains.filter(c => c.exitCode !== 0 && c.accepted_red
+    // !== true) must be empty). The gate is name-agnostic and has NO chains.length guard — so the
+    // PRODUCER guarantees a non-empty set (run-chains refuses an empty effective chain set, T11)
+    // rather than relying on the gate to reject it.
+    const gateRed = rc.chains.filter(c => c && c.exitCode !== 0 && c.accepted_red !== true);
+    assert(gateRed.length === 0, 'T8: receipt is gate-acceptable (no red/unwaived chain)');
+    assert(rc.chains.length >= 1, 'T8: producer wrote a non-empty chain set (an empty receipt would falsely pass the name-agnostic gate)');
+  }
+} finally {
+  try { fs.rmSync(repo8, { recursive: true, force: true }); } catch (_) {}
+}
+
+// ---------------------------------------------------------------------------
+// T9 (#464): a non-npm repo with NO chains.json AND no test:kaola-workflow:* scripts
+// REFUSES (chains_config_missing) and writes NO receipt — not a 4-red npm receipt.
+// ---------------------------------------------------------------------------
+const repo9 = makeGitRepo();
+try {
+  // a bare product repo: no package.json scripts, no chains.json, no mocks
+  const r9 = run(repo9, ['--json']);
+  assert(r9.exitCode !== 0, 'T9: refuses (non-zero) when no config and no npm scripts');
+  let refusal = null;
+  try { refusal = JSON.parse(r9.stdout.trim().split('\n').filter(Boolean).pop()); } catch (_) {}
+  assert(refusal && refusal.result === 'refuse' && refusal.reason === 'chains_config_missing', 'T9: typed chains_config_missing refusal; got ' + JSON.stringify(refusal));
+  assert(typeof (refusal && refusal.operator_hint) === 'string' && refusal.operator_hint.includes('chains.json'), 'T9: operator_hint mentions chains.json');
+  assert(r9.receipt === null, 'T9: NO receipt written on refusal (no misleading 4-red receipt)');
+} finally {
+  try { fs.rmSync(repo9, { recursive: true, force: true }); } catch (_) {}
+}
+
+// ---------------------------------------------------------------------------
+// T10 (#464): resolveChains unit — repo-config > npm-default > missing; npm-default
+// keeps only the KNOWN_CHAINS whose script is declared (self-host behavior preserved).
+// ---------------------------------------------------------------------------
+{
+  const { resolveChains } = require('./kaola-workflow-run-chains.js');
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-resolve-'));
+  // npm-default: package.json declares 2 of the 4 chain scripts
+  fs.writeFileSync(path.join(d, 'package.json'), JSON.stringify({ scripts: { 'test:kaola-workflow:claude': 'x', 'test:kaola-workflow:codex': 'x' } }));
+  let res = resolveChains(d);
+  assert(res.source === 'npm-default' && res.names.sort().join(',') === 'claude,codex', 'T10: npm-default keeps only declared-script chains');
+  // missing: no package.json scripts, no chains.json
+  const d2 = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-resolve-'));
+  res = resolveChains(d2);
+  assert(res.error === 'chains_config_missing', 'T10: chains_config_missing when neither config nor npm scripts');
+  // repo-config wins over npm-default
+  fs.mkdirSync(path.join(d, 'kaola-workflow'), { recursive: true });
+  fs.writeFileSync(path.join(d, 'kaola-workflow', 'chains.json'), JSON.stringify({ chains: [{ name: 'build', command: 'xcodebuild test' }] }));
+  res = resolveChains(d);
+  assert(res.source === 'repo-config' && res.names.join(',') === 'build', 'T10: repo-config wins over npm-default');
+  // invalid config (empty chains) -> chains_config_invalid
+  fs.writeFileSync(path.join(d, 'kaola-workflow', 'chains.json'), JSON.stringify({ chains: [{ name: '', command: '' }] }));
+  res = resolveChains(d);
+  assert(res.error === 'chains_config_invalid', 'T10: chains_config_invalid on no valid entries');
+  // partial-invalid (one good + one missing command) -> STRICT refusal (no silent drop)
+  fs.writeFileSync(path.join(d, 'kaola-workflow', 'chains.json'), JSON.stringify({ chains: [{ name: 'build', command: 'true' }, { name: 'lint' }] }));
+  res = resolveChains(d);
+  assert(res.error === 'chains_config_invalid', 'T10: partial-invalid config refuses (no silent drop of the malformed entry)');
+  // non-array "chains" -> chains_config_invalid (a present-but-malformed config is not "missing")
+  fs.writeFileSync(path.join(d, 'kaola-workflow', 'chains.json'), JSON.stringify({ chains: 'build' }));
+  res = resolveChains(d);
+  assert(res.error === 'chains_config_invalid', 'T10: non-array chains -> chains_config_invalid (present config not treated as absent)');
+  // empty array -> chains_config_invalid
+  fs.writeFileSync(path.join(d, 'kaola-workflow', 'chains.json'), JSON.stringify({ chains: [] }));
+  res = resolveChains(d);
+  assert(res.error === 'chains_config_invalid', 'T10: empty chains array -> chains_config_invalid');
+  fs.rmSync(d, { recursive: true, force: true });
+  fs.rmSync(d2, { recursive: true, force: true });
+}
+
+// ---------------------------------------------------------------------------
+// T11 (#464): an EMPTY effective chain set (--chains ",") REFUSES with no receipt —
+// a zero-chains receipt would falsely pass the name-agnostic finalize gate.
+// ---------------------------------------------------------------------------
+const repo11 = makeGitRepo();
+try {
+  const passMock = makeExitScript(repo11, 'pass.js', 0);
+  fs.mkdirSync(path.join(repo11, 'kaola-workflow'), { recursive: true });
+  fs.writeFileSync(path.join(repo11, 'kaola-workflow', 'chains.json'), JSON.stringify({ chains: [{ name: 'build', command: 'node ' + passMock }] }) + '\n');
+  const r11 = run(repo11, ['--chains', ',', '--json']);
+  assert(r11.exitCode !== 0, 'T11: --chains "," refuses (non-zero)');
+  let refusal = null;
+  try { refusal = JSON.parse(r11.stdout.trim().split('\n').filter(Boolean).pop()); } catch (_) {}
+  assert(refusal && refusal.result === 'refuse' && refusal.reason === 'no_chains', 'T11: typed no_chains refusal; got ' + JSON.stringify(refusal));
+  assert(r11.receipt === null, 'T11: NO receipt written for an empty effective chain set (no false-green)');
+} finally {
+  try { fs.rmSync(repo11, { recursive: true, force: true }); } catch (_) {}
+}
+
+// ---------------------------------------------------------------------------
+// T12 (#464): a partial-invalid chains.json refuses chains_config_invalid with NO
+// receipt (the operator declared N chains; we never silently run fewer).
+// ---------------------------------------------------------------------------
+const repo12 = makeGitRepo();
+try {
+  fs.mkdirSync(path.join(repo12, 'kaola-workflow'), { recursive: true });
+  fs.writeFileSync(path.join(repo12, 'kaola-workflow', 'chains.json'), JSON.stringify({ chains: [{ name: 'build', command: 'true' }, { name: 'lint' }] }) + '\n');
+  const r12 = run(repo12, ['--json']);
+  assert(r12.exitCode !== 0, 'T12: partial-invalid config refuses');
+  let refusal = null;
+  try { refusal = JSON.parse(r12.stdout.trim().split('\n').filter(Boolean).pop()); } catch (_) {}
+  assert(refusal && refusal.reason === 'chains_config_invalid', 'T12: chains_config_invalid; got ' + JSON.stringify(refusal));
+  assert(r12.receipt === null, 'T12: NO receipt on chains_config_invalid');
+} finally {
+  try { fs.rmSync(repo12, { recursive: true, force: true }); } catch (_) {}
+}
+
+// ---------------------------------------------------------------------------
 // Final result
 // ---------------------------------------------------------------------------
 if (failed > 0) {
