@@ -3365,6 +3365,19 @@ function legPathFor(mainRoot, project, nodeId) {
   return path.join(mainRoot, '.kw', 'legs', sanitizeLegId(project), sanitizeLegId(nodeId));
 }
 
+// legBaseRef — the deterministic git ref anchoring a leg's BRANCH-POINT (#463 Slice 3). The per-leg
+// barrier resolves its base ONLY from this ref (never a caller-supplied --base — the #368 vacuous-pass
+// hole), so the base must be anchored at PROVISION and the validator's --leg-barrier reads the SAME ref
+// name. The ref name MUST stay byte-identical to the validator's inline builder
+// ('refs/kaola-workflow/leg-base/' + sanitize(project) + '/' + sanitize(id)); sanitizeLegId here is the
+// SAME [^A-Za-z0-9_-]→_ class the validator's legSan applies, so producer + consumer never drift (the
+// drift would surface as a silent no_leg_base, not a name error). Derivable from legBranch too:
+// legBranchFor → 'kw/legs/<p>/<id>' shares the '<p>/<id>' tail, so teardown rebuilds the ref from the
+// branch without threading project/id (see teardownLeg).
+function legBaseRef(project, nodeId) {
+  return 'refs/kaola-workflow/leg-base/' + sanitizeLegId(project) + '/' + sanitizeLegId(nodeId);
+}
+
 // assertSafeLegBranch — re-impl of claim.js assertSafeBranchArg locally (claim.js does not export it
 // for adaptive-node; repo convention is a local re-impl). Refuse a branch beginning with '-' (git
 // parses it as a flag) or carrying a NUL (ref injection). Throw on violation so a hostile/malformed
@@ -3434,6 +3447,14 @@ function teardownLeg(mainRoot, legPath, legBranch) {
   try {
     execFileSync('git', ['branch', '-D', legBranch], { cwd: mainRoot, stdio: ['ignore', 'ignore', 'ignore'] });
   } catch (_) { /* fail-soft: a missing/already-deleted branch is a clean no-op */ }
+  // #463 Slice 3: delete the leg-base ref anchored at provision. Derived from legBranch
+  // ('kw/legs/<p>/<id>' → 'refs/kaola-workflow/leg-base/<p>/<id>') so every teardown caller
+  // (close-node / reconcile / sweepOrphanLegs) drops the ref without threading project/id. Fail-soft.
+  try {
+    if (typeof legBranch === 'string' && legBranch.indexOf('kw/legs/') === 0) {
+      execFileSync('git', ['update-ref', '-d', 'refs/kaola-workflow/leg-base/' + legBranch.slice('kw/legs/'.length)], { cwd: mainRoot, stdio: ['ignore', 'ignore', 'ignore'] });
+    }
+  } catch (_) { /* fail-soft: a missing ref is a clean no-op */ }
 }
 
 // sweepOrphanLegs — `git worktree list --porcelain` (rooted at mainRoot), parse `worktree <path>`
@@ -3798,6 +3819,18 @@ function runOpenReady(opts) {
         for (const p of provisionedThisCall) teardownLeg(mainRoot, p.legPath, p.legBranch);
         return { result: 'refuse', reason: 'leg_provision_failed', nodeId: n.id, error: r.error || null, detail: r.detail || null };
       }
+      // #463 Slice 3: ANCHOR the leg's branch-point under a ref so the close-side --leg-barrier resolves
+      // its base from a tamper-resistant anchor (never a caller --base — the #368 vacuous-pass hole).
+      // Fail-CLOSED: a leg whose base ref did not anchor would later brick its --leg-barrier with
+      // no_leg_base, so roll back THIS leg + every earlier one and refuse (the no-dead-end contract).
+      // Producer ref name == the validator's consumer name (legBaseRef / legSan share the sanitizer).
+      let anchored = false;
+      try { execFileSync('git', ['update-ref', legBaseRef(project, n.id), baseRev], { cwd: mainRoot, stdio: ['ignore', 'ignore', 'ignore'] }); anchored = true; } catch (_) { anchored = false; }
+      if (!anchored) {
+        teardownLeg(mainRoot, legPath, legBranch);
+        for (const p of provisionedThisCall) teardownLeg(mainRoot, p.legPath, p.legBranch);
+        return { result: 'refuse', reason: 'leg_provision_failed', nodeId: n.id, error: 'leg_base_anchor_failed', detail: 'could not anchor leg-base ref ' + legBaseRef(project, n.id) };
+      }
       provisionedThisCall.push({ legPath, legBranch });
       legs[n.id] = { legPath, legBranch, baseline: baseRev };
       appendNodeTiming(planPath, n.id, 'leg_opened');
@@ -4144,6 +4177,32 @@ function closeGroupMember(ctx) {
       group_id: lg.group_id,
       detail: 'declared set has no changes and evidence declares no no_op:<reason>',
     };
+  }
+
+  // -- (1b) #463 Slice 3: PER-LEG barrier — PRE-WIRED. Runs ONLY when leg-isolation provisioned a leg for
+  // THIS closing member (running-set lane_group.legs[nodeId] present); a toggle-off / legless group has no
+  // leg entry ⇒ this block is SKIPPED ⇒ byte-identical. It snapshots the member's OWN leg worktree and
+  // refuses an out-of-declared write that landed in the leg (the write-ISOLATION check) — DISTINCT from
+  // the group/union barrier below (which measures the PARENT). --project is passed EXPLICITLY (mirrors the
+  // provision-side legBaseRef key) so the leg-base ref name never drifts into a silent no_leg_base.
+  // In S3 production legs stay EMPTY (write routing lands in S4), so on a real run this passes trivially
+  // (empty diff); the integration tests are what exercise it with REAL leg writes. First PRODUCTION
+  // exercise = S4 routing. Runs for EVERY member close (deferred + last); each checks its own leg.
+  {
+    const runningLeg = readRunningSet(runningSetPath, cacheExists, readFile);
+    const legEntry = runningLeg && runningLeg.lane_group && runningLeg.lane_group.legs && runningLeg.lane_group.legs[nodeId];
+    if (legEntry && legEntry.legPath) {
+      const legBarrier = shell(validatorPath, [planPath, '--leg-barrier', '--node-id', nodeId, '--project', project, '--leg-root', legEntry.legPath, '--expect-base', String(legEntry.baseline || ''), '--json']);
+      if (legBarrier.exitCode !== 0 || legBarrier.result !== 'pass') {
+        return {
+          result: 'refuse',
+          reason: legBarrier.reason || 'leg_barrier_failed',
+          nodeId, role,
+          group_id: lg.group_id,
+          legBarrier,
+        };
+      }
+    }
   }
 
   // Member roster: lane_group.members is the FULL bare-id string[] (kept stable so the validator's
@@ -5102,6 +5161,7 @@ module.exports = {
   sanitizeLegId,
   legBranchFor,
   legPathFor,
+  legBaseRef,
   assertSafeLegBranch,
   provisionLeg,
   teardownLeg,
