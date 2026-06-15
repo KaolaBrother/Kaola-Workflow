@@ -51,8 +51,10 @@ const {
   resolveOwningNode,
   // #472: dispatch-fidelity concurrency derivation
   deriveMaxSimultaneousOpen,
+  // #463 Slice 4/5: synthesizer execution (direct-call tests for the deferred-tier conflict bail)
+  synthesizeLevel,
 } = require('./kaola-workflow-adaptive-node');
-const { RUNNING_SET_NAME } = require('./kaola-workflow-adaptive-schema');
+const { RUNNING_SET_NAME, MERGE_CONFLICT_REPAIR_LIMIT } = require('./kaola-workflow-adaptive-schema');
 const { readDurableConsentHalt, locateSection } = require('./kaola-workflow-adaptive-schema');
 
 const {
@@ -5879,6 +5881,178 @@ function rtHarness(initialFiles, opts) {
     assert(rc.result === 'ok' && !rc.synthesized, 'SYNTH-SINGLETON: close runs the normal per-node barrier in the parent (no synthesizer), got ' + JSON.stringify(rc));
     cleanup(repoRoot);
   }
+
+  // =========================================================================
+  // #463-MERGE-CONFLICT (Slice 5) — the merge_conflict PRODUCERS + the bounded-repair envelope. The
+  // textual-conflict tier is FREEZE-REFUSED (a same-file overlap can't co-open in a valid frozen plan), so
+  // the octopus conflict bail is a DEFENSIVE catch exercised by calling synthesizeLevel directly (exactly the
+  // path S6's injected-conflict live probe drives). The close-node-reachable producer is the NO-OP leg.
+  // =========================================================================
+
+  // S5-MERGE-CONFLICT-BAIL (codifies the spike; AC10 producer): two legs write CONFLICTING regions of the
+  //   SAME file → synthesizeLevel's octopus BAILS → merge_conflict; the abort is CLEAN (HEAD unchanged, no
+  //   MERGE_HEAD, tracked tree clean of conflict markers); the leg branches SURVIVE (capture committed them →
+  //   recoverable for the repair). NO bad M lands on HEAD (the abort precedes any advance).
+  {
+    const { repoRoot, legA, legB, rs } = provisionedRepo();
+    const base = rs.lane_group.legs.A.baseline;
+    fs.writeFileSync(path.join(legA, 'conflict.txt'), 'AAA\nshared-2\nshared-3\n');
+    fs.writeFileSync(path.join(legB, 'conflict.txt'), 'BBB\nshared-2\nshared-3\n');
+    const synth = synthesizeLevel(repoRoot, rs.lane_group.legs, 'lg-A-B');
+    assert(synth && synth.ok === false && synth.reason === 'merge_conflict', 'S5-MERGE-CONFLICT-BAIL: a same-file conflict bails merge_conflict, got ' + JSON.stringify(synth));
+    assert(gitOut(repoRoot, ['rev-parse', 'HEAD']) === base, 'S5-MERGE-CONFLICT-BAIL: HEAD unchanged after the abort (no half-merge advance), got ' + gitOut(repoRoot, ['rev-parse', 'HEAD']) + ' vs base ' + base);
+    const gitDir = gitOut(repoRoot, ['rev-parse', '--git-dir']);
+    const mh = path.isAbsolute(gitDir) ? path.join(gitDir, 'MERGE_HEAD') : path.join(repoRoot, gitDir, 'MERGE_HEAD');
+    assert(!fs.existsSync(mh), 'S5-MERGE-CONFLICT-BAIL: no MERGE_HEAD left (abort cleaned merge state)');
+    // `git ls-files -u` (unmerged index entries) is the churn-independent clean-abort signal: a half-merge
+    // leaves unmerged entries; the abort clears them. (The plan/.cache workflow churn in the parent is
+    // expected — the run never commits per-node — so a porcelain check would false-fail here.)
+    assert(gitOut(repoRoot, ['ls-files', '-u']) === '', 'S5-MERGE-CONFLICT-BAIL: no unmerged index entries after abort (clean, no conflict state)');
+    assert(gitOut(repoRoot, ['rev-parse', 'kw/legs/test-project/A']) !== base && gitOut(repoRoot, ['rev-parse', 'kw/legs/test-project/B']) !== base, 'S5-MERGE-CONFLICT-BAIL: both leg branches survived past base (work recoverable for repair)');
+    cleanup(repoRoot);
+  }
+
+  // S5-NOOP-LEG-VACUITY (AC10 first-detection producer): a leg that produced NO changes is caught by the
+  //   leg-aware member_vacuity guard at THAT member's OWN close — BEFORE the last-member synthesis, where the
+  //   evidence (and a possible no_op: declaration) is visible. This IS the "a leg that produced no changes"
+  //   producer the AC names; merge_conflict is what it escalates TO after K=3 (NOT a new detector — a
+  //   synthesizeLevel detector there would false-positive a sanctioned no_op member). B stays in_progress.
+  {
+    const { repoRoot, cacheDir, legA } = provisionedRepo();
+    writeEvidence(cacheDir, 'A'); writeEvidence(cacheDir, 'B');
+    fs.writeFileSync(path.join(legA, 'ax.js'), '// A leg work\n');
+    // legB: untouched → no-op leg.
+    const rA = runNode(repoRoot, ['close-node', '--node-id', 'A', '--project', 'test-project', '--json'], LEG_ON);
+    assert(rA.result === 'ok' && rA.barrier === 'deferred_to_group', 'S5-NOOP-LEG: A deferred, got ' + JSON.stringify(rA));
+    const rB = runNode(repoRoot, ['close-node', '--node-id', 'B', '--project', 'test-project', '--json'], LEG_ON);
+    assert(rB.result === 'refuse' && rB.reason === 'member_vacuity', 'S5-NOOP-LEG: a no-op leg refuses member_vacuity at the member close (the no-op-leg producer), got ' + JSON.stringify(rB));
+    assert(ledgerStatus(planP(repoRoot), 'B') === 'in_progress', 'S5-NOOP-LEG: B stays in_progress on refusal');
+    cleanup(repoRoot);
+  }
+
+  // S5-NOOP-LEG-REPAIR-THEN-SUCCESS (the bounded-repair loop CLOSES): after a member_vacuity refuse the
+  //   orchestrator re-dispatches legB (writes its declared file); re-running close now defers, and the
+  //   last-member close synthesizes + advances. Proves the no-op producer is repairable, not a dead end.
+  {
+    const { repoRoot, cacheDir, legA, legB } = provisionedRepo();
+    writeEvidence(cacheDir, 'A'); writeEvidence(cacheDir, 'B');
+    fs.writeFileSync(path.join(legA, 'ax.js'), '// A leg work\n');
+    const rApre = runNode(repoRoot, ['close-node', '--node-id', 'A', '--project', 'test-project', '--json'], LEG_ON);
+    assert(rApre.result === 'ok', 'S5-NOOP-REPAIR: A deferred, got ' + JSON.stringify(rApre));
+    const refuse = runNode(repoRoot, ['close-node', '--node-id', 'B', '--project', 'test-project', '--json'], LEG_ON);
+    assert(refuse.result === 'refuse' && refuse.reason === 'member_vacuity', 'S5-NOOP-REPAIR: precondition member_vacuity, got ' + JSON.stringify(refuse));
+    // REPAIR: re-dispatch legB — it now writes its declared file.
+    fs.writeFileSync(path.join(legB, 'by.js'), '// B leg work (re-dispatched)\n');
+    const rB = runNode(repoRoot, ['close-node', '--node-id', 'B', '--project', 'test-project', '--json'], LEG_ON);
+    assert(rB.result === 'ok' && rB.barrier === 'group_passed' && rB.synthesized === true, 'S5-NOOP-REPAIR: after re-dispatch the last-member close synthesizes + advances, got ' + JSON.stringify(rB));
+    cleanup(repoRoot);
+  }
+
+  // S5-CAPTURE-UNCOMMITTED (synthesizeLevel robustness): a leg with UNCOMMITTED work (agent forgot to
+  //   commit) is CAPTURED (add -A + commit) before the octopus → the merge sees it. Proves the script-owned
+  //   capture is robust to an un-committing agent.
+  {
+    const { repoRoot, legA, legB, rs } = provisionedRepo();
+    fs.writeFileSync(path.join(legA, 'ax.js'), '// A uncommitted\n');
+    fs.writeFileSync(path.join(legB, 'by.js'), '// B uncommitted\n');
+    const synth = synthesizeLevel(repoRoot, rs.lane_group.legs, 'lg-A-B');
+    assert(synth && synth.ok === true && typeof synth.mergeCommit === 'string', 'S5-CAPTURE-UNCOMMITTED: uncommitted leg work is captured + merged, got ' + JSON.stringify(synth));
+    assert(gitOut(repoRoot, ['rev-parse', synth.mergeCommit + ':ax.js']) !== '' && gitOut(repoRoot, ['rev-parse', synth.mergeCommit + ':by.js']) !== '', 'S5-CAPTURE-UNCOMMITTED: M contains both captured files');
+    cleanup(repoRoot);
+  }
+
+  // S5-IDEMPOTENT-RESUME (codifies the spike; S4 carry-over): re-running synthesizeLevel over the SAME
+  //   already-merged disjoint legs (a crash after M committed but before the ledger advanced) is a NO-OP —
+  //   it returns the SAME mergeCommit with a STABLE HEAD, never a spurious second merge or merge_conflict.
+  {
+    const { repoRoot, legA, legB, rs } = provisionedRepo();
+    fs.writeFileSync(path.join(legA, 'ax.js'), '// a\n');
+    fs.writeFileSync(path.join(legB, 'by.js'), '// b\n');
+    const r1 = synthesizeLevel(repoRoot, rs.lane_group.legs, 'lg-A-B');
+    assert(r1 && r1.ok === true, 'S5-IDEMPOTENT-RESUME: first synth ok, got ' + JSON.stringify(r1));
+    const head1 = gitOut(repoRoot, ['rev-parse', 'HEAD']);
+    const r2 = synthesizeLevel(repoRoot, rs.lane_group.legs, 'lg-A-B');
+    assert(r2 && r2.ok === true && r2.mergeCommit === r1.mergeCommit, 'S5-IDEMPOTENT-RESUME: re-synth returns the SAME mergeCommit, got ' + JSON.stringify(r2) + ' vs ' + JSON.stringify(r1));
+    assert(gitOut(repoRoot, ['rev-parse', 'HEAD']) === head1, 'S5-IDEMPOTENT-RESUME: HEAD stable across re-synth (no spurious second merge)');
+    cleanup(repoRoot);
+  }
+
+  // S5-REPAIR-LIMIT-CONSTANT (contract): the K=3 cap is a schema constant (×4 byte, route-like-test_thrash)
+  //   and the merge_conflict operator_hint interpolates it (so the bound is operator-visible, not buried).
+  {
+    assert(MERGE_CONFLICT_REPAIR_LIMIT === 3, 'S5-REPAIR-LIMIT-CONSTANT: MERGE_CONFLICT_REPAIR_LIMIT === 3, got ' + MERGE_CONFLICT_REPAIR_LIMIT);
+    const hint = OPERATOR_HINT_REGISTRY.merge_conflict({ group_id: 'g1', nodeId: 'B' });
+    assert(hint.indexOf(String(MERGE_CONFLICT_REPAIR_LIMIT) + ' repair attempts') !== -1 && /write-halt/.test(hint), 'S5-REPAIR-LIMIT-CONSTANT: the merge_conflict hint names the K cap + the write-halt escalation, got ' + JSON.stringify(hint));
+  }
+
+  // S5-MULTI-LEVEL (AC7, S4 carry-over): TWO sequential fan-out levels. Level 1 {A,B} synthesizes → M1 (HEAD
+  //   advances); level 2 {C,D} then provisions its legs OFF M1 (their branch-point baseline == M1) and
+  //   synthesizes → M2 with M1 in its ancestry. The dependency-level commit chains: M2 descends from M1.
+  {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'd463-multilevel-'));
+    const projDir = path.join(repoRoot, 'kaola-workflow', 'test-project');
+    const cacheDir = path.join(projDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const planPath = path.join(projDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, [
+      '# Workflow Plan — test-project', '',
+      '## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| seed | code-explorer | — | — | 1 | sequence |',
+      '| A | tdd-guide | seed | ax.js | 1 | sequence |',
+      '| B | tdd-guide | seed | by.js | 1 | sequence |',
+      '| C | tdd-guide | A,B | cx.js | 1 | sequence |',
+      '| D | tdd-guide | A,B | dy.js | 1 | sequence |',
+      '| review | code-reviewer | C,D | — | 1 | sequence |',
+      '| finalize | finalize | review | — | 1 | sequence |', '',
+      '## Node Ledger', '',
+      '| id | status |', '| --- | --- |',
+      '| seed | complete |', '| A | pending |', '| B | pending |', '| C | pending |', '| D | pending |',
+      '| review | pending |', '| finalize | pending |', '',
+    ].join('\n') + '\n');
+    fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n');
+    const gs = (a) => execFileSync('git', ['-C', repoRoot, ...a], { stdio: ['ignore', 'ignore', 'ignore'] });
+    gs(['init']); gs(['config', 'user.email', 'kw@test']); gs(['config', 'user.name', 'kw']); gs(['config', 'commit.gpgsign', 'false']);
+    try { execFileSync('node', [VALIDATOR, planPath, '--freeze', '--repair', '--json'], { cwd: repoRoot, encoding: 'utf8' }); } catch (_) {}
+    fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
+    gs(['add', '-A']); gs(['commit', '-m', 'init']);
+    // LEVEL 1: open {A,B}, close both → M1.
+    const open1 = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON);
+    assert(open1.result === 'ok' && open1.laneGroup, 'S5-MULTI-LEVEL: level-1 {A,B} co-opens, got ' + JSON.stringify(open1));
+    const leg1A = path.join(repoRoot, '.kw', 'legs', 'test-project', 'A');
+    const leg1B = path.join(repoRoot, '.kw', 'legs', 'test-project', 'B');
+    writeEvidence(cacheDir, 'A'); writeEvidence(cacheDir, 'B');
+    fs.writeFileSync(path.join(leg1A, 'ax.js'), '// A1\n');
+    fs.writeFileSync(path.join(leg1B, 'by.js'), '// B1\n');
+    runNode(repoRoot, ['close-node', '--node-id', 'A', '--project', 'test-project', '--json'], LEG_ON);
+    const rB = runNode(repoRoot, ['close-node', '--node-id', 'B', '--project', 'test-project', '--json'], LEG_ON);
+    assert(rB.result === 'ok' && rB.barrier === 'group_passed', 'S5-MULTI-LEVEL: level-1 synthesizes, got ' + JSON.stringify(rB));
+    const M1 = gitOut(repoRoot, ['rev-parse', 'HEAD']);
+    assert(M1 === rB.mergeCommit, 'S5-MULTI-LEVEL: HEAD advanced to M1');
+    // LEVEL 2: open {C,D} — legs must branch OFF M1.
+    const open2 = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON);
+    assert(open2.result === 'ok' && open2.laneGroup, 'S5-MULTI-LEVEL: level-2 {C,D} co-opens off M1, got ' + JSON.stringify(open2));
+    const rs2 = readRS(cacheDir);
+    assert(rs2.lane_group.legs.C.baseline === M1 && rs2.lane_group.legs.D.baseline === M1, 'S5-MULTI-LEVEL: level-2 leg baselines == M1 (legs branch off the prior level\'s commit), got ' + JSON.stringify({ C: rs2.lane_group.legs.C.baseline, D: rs2.lane_group.legs.D.baseline, M1 }));
+    const leg2C = path.join(repoRoot, '.kw', 'legs', 'test-project', 'C');
+    const leg2D = path.join(repoRoot, '.kw', 'legs', 'test-project', 'D');
+    writeEvidence(cacheDir, 'C'); writeEvidence(cacheDir, 'D');
+    fs.writeFileSync(path.join(leg2C, 'cx.js'), '// C2\n');
+    fs.writeFileSync(path.join(leg2D, 'dy.js'), '// D2\n');
+    runNode(repoRoot, ['close-node', '--node-id', 'C', '--project', 'test-project', '--json'], LEG_ON);
+    const rD = runNode(repoRoot, ['close-node', '--node-id', 'D', '--project', 'test-project', '--json'], LEG_ON);
+    assert(rD.result === 'ok' && rD.barrier === 'group_passed', 'S5-MULTI-LEVEL: level-2 synthesizes → M2, got ' + JSON.stringify(rD));
+    const M2 = gitOut(repoRoot, ['rev-parse', 'HEAD']);
+    // `merge-base --is-ancestor` signals via EXIT CODE only (0 = ancestor, 1 = not) and emits NO stdout in
+    // either direction — so a `gitOut(...) === ''` (stdout) check would be a tautology (both directions →
+    // '' → always passes). Key on the exit code, exactly as the production validator does (plan-validator.js).
+    let m2DescendsM1 = false;
+    try { execFileSync('git', ['-C', repoRoot, 'merge-base', '--is-ancestor', M1, M2], STDIO_Q); m2DescendsM1 = true; } catch (_) { m2DescendsM1 = false; }
+    assert(m2DescendsM1, 'S5-MULTI-LEVEL: M2 descends from M1 (the dependency-level commit chain), got is-ancestor=false for M1=' + M1 + ' M2=' + M2);
+    cleanup(repoRoot);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -6353,6 +6527,8 @@ function rtHarness(initialFiles, opts) {
     'barrier_failed', 'evidence_absent', 'evidence_shape_failed',
     'write_set_overflow', 'lockfile_write', 'mirror_write', 'count_bump',
     'invalid_project',
+    // #463 Slice 5: synthesizer / write-overlap escalation envelope
+    'group_barrier_failed', 'leg_capture_failed', 'merge_conflict',
   ];
   for (const r of knownReasons) {
     assert(

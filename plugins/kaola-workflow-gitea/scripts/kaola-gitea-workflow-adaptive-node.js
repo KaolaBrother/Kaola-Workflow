@@ -42,7 +42,7 @@ const taskMirrorPath = path.join(__dirname, TASK_MIRROR);
 
 // #360: the LEDGER-SCOPED durable consent-halt probe (fence-aware). adaptive-schema keeps the
 // same filename across every edition (byte-identical ×4), so this require is NOT forge-renamed.
-const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, resolveFanoutCapReadonly, resolveLaneContainment, refuse, WRITE_SET_OVERFLOW_SUBTYPES, dispatchEffort, parseNodeVerdict } = require('./kaola-workflow-adaptive-schema');
+const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, resolveFanoutCapReadonly, resolveLaneContainment, refuse, WRITE_SET_OVERFLOW_SUBTYPES, dispatchEffort, parseNodeVerdict, MERGE_CONFLICT_REPAIR_LIMIT } = require('./kaola-workflow-adaptive-schema');
 
 // ---------------------------------------------------------------------------
 // OPERATOR_HINT_REGISTRY (#445 / D-445-01 §1-3) — per-aggregator map of typed
@@ -188,6 +188,18 @@ const OPERATOR_HINT_REGISTRY = {
     'Lane-group member ' + (ctx.nodeId || '<id>') + ' touched none of its declared files and declared no no_op: reason. Make the in-lane change or record a no_op: in evidence before closing.',
   group_barrier_failed: (ctx) =>
     'The lane-group barrier rejected the union of members (group ' + (ctx.group_id || '<gid>') + '). Review the offending paths, then revert-overflow / repair-node the offending member before the last-member close.',
+
+  // --- synthesizer / write-overlap escalation envelope (#463 Slice 5). merge_conflict is the TERMINAL
+  //     escalation after MERGE_CONFLICT_REPAIR_LIMIT (K=3) repair attempts on a level's FIRST-detection
+  //     refusal (member_vacuity for a no-op leg / write_set_overflow for an overflow / the Slice-4 octopus
+  //     bail for a real same-file conflict). It is routed exactly like test_thrash — a schema constant the
+  //     orchestrator applies, NO script counter on the adaptive path; the COMMIT-based union barrier on M —
+  //     not the attempt counter — is the fail-closed safety gate (a resumed run re-counts from zero; it can
+  //     never land unverified work). leg_capture_failed is a genuine synthesizeLevel git fault. ---
+  leg_capture_failed: (ctx) =>
+    'Capturing leg ' + (ctx.leg || ctx.nodeId || '<leg>') + '\'s working-tree state failed (' + (ctx.detail || 'git add/commit error') + '). Inspect the leg worktree under .kw/legs/, then re-run close-node for the last member.',
+  merge_conflict: (ctx) =>
+    'The write-leg level for group ' + (ctx.group_id || '<gid>') + ' did not reconcile (' + (ctx.detail || 'an unmergeable conflict / a first-detection refusal repair could not fix') + '). A real conflict is resolved by a synthesizer agent at the Opus reasoning floor; after ' + MERGE_CONFLICT_REPAIR_LIMIT + ' repair attempts escalate via ' + ADAPTIVE_NODE_SCRIPT + ' write-halt --project <P> --node-id ' + (ctx.nodeId || '<id>') + ' --reason merge_conflict (a RESUMABLE consent-style halt — resolve, then clear-halt --reason consent to resume).',
 
   // --- evidence (#319/#359/#392) ---
   evidence_absent: (ctx) =>
@@ -3537,9 +3549,16 @@ function synthesizeLevel(root, legs, groupId) {
       try {
         execFileSync('git', ['-C', leg.legPath, 'add', '-A'], QUIET);
         execFileSync('git', ['-C', leg.legPath, ...ID, 'commit', '-m', 'kw-leg: ' + id], QUIET);
-      } catch (e) { return { ok: false, reason: 'leg_capture_failed', nodeId: id, detail: String((e && e.message) || e) }; }
+      } catch (e) { return { ok: false, reason: 'leg_capture_failed', nodeId: id, leg: id, detail: String((e && e.message) || e) }; }
     }
   }
+  // #463 Slice 5 — NO no-op-leg detector here, deliberately. A leg that produced no changes is caught by the
+  // leg-aware `member_vacuity` guard at that member's OWN close (memberInLaneChanges, leg-aware since S4) —
+  // BEFORE the last-member synthesis — where the evidence is visible, so a member that legitimately declares
+  // `no_op:<reason>` is honored. A detector here cannot see that declaration and would FALSE-POSITIVE a
+  // sanctioned no_op member; an undeclared empty leg never reaches here (member_vacuity already fail-closed
+  // it). An empty leg that does arrive (legit no_op) contributes an empty diff to M — harmless. (#44: the
+  // producer lives where the evidence is.)
   // (2) octopus merge into the feature branch at root.
   const branches = ids.map(id => (legs[id] && legs[id].legBranch)).filter(Boolean);
   if (!branches.length) return { ok: false, reason: 'no_leg_branches' };
@@ -4385,7 +4404,10 @@ function closeGroupMember(ctx) {
     // legs + baseline are retained (durable, recoverable), NO ledger advance.
     const synth = synthesizeLevel(synthRoot, liveLegs, lg.group_id);
     if (!synth.ok) {
-      return { result: 'refuse', reason: synth.reason || 'merge_conflict', nodeId, role, group_id: lg.group_id, synth };
+      // #463 Slice 5: surface the offending leg + detail top-level so the operator_hint can name the leg
+      // (leg_capture_failed is PER-LEG and sets synth.leg; the closing member's nodeId is the last member, not
+      // the offending leg). merge_conflict is the level-wide reason. The decorator attaches the per-reason hint.
+      return { result: 'refuse', reason: synth.reason || 'merge_conflict', nodeId, role, group_id: lg.group_id, ...(synth.leg ? { leg: synth.leg } : {}), ...(synth.detail ? { detail: synth.detail } : {}), synth };
     }
     mergedCommit = synth.mergeCommit;
     appendNodeTiming(planPath, lg.group_id, 'level_merged');
