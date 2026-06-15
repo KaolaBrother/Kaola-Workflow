@@ -1059,6 +1059,33 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
     }
   }
 
+  // #484 FRESHNESS GUARD. A stale all-`done` sink-receipt resumed from the tracked
+  // archive/<project>/.cache/ fallback (resolveSinkReceiptPath) makes the step loop skip merge +
+  // push_main and fall through to status:sinked WITHOUT the branch ever landing on the default branch —
+  // main silently not advanced, the deliverable lost. Before any teardown or success emission, assert
+  // the branch tip IS an ancestor of the resolved default branch (the merge actually applied).
+  // OFFLINE-safe: the merge step merges into the LOCAL defBranch, so ancestry holds regardless of
+  // push_main. A non-ancestor (or a branch that no longer exists) is a stale / never-applied receipt →
+  // typed refusal stale_sink_receipt; never a false status:sinked.
+  {
+    let merged = false;
+    try {
+      execFileSync('git', ['-C', mainRoot, 'merge-base', '--is-ancestor', args.branch, defBranch], { encoding: 'utf8', stdio: 'ignore' });
+      merged = true;
+    } catch (_) { merged = false; }
+    if (!merged) {
+      process.stdout.write(JSON.stringify({
+        result: 'refuse',
+        reason: 'stale_sink_receipt',
+        branch: args.branch,
+        default_branch: defBranch,
+        detail: 'all sink steps report "done" but branch "' + args.branch + '" is NOT an ancestor of "' + defBranch + '" — the merge was never applied (a stale receipt resumed from kaola-workflow/archive/' + args.project + '/.cache/sink-receipt.json). Refusing to report status:sinked (main would silently not advance and the deliverable would be lost). Reset the receipt steps or remove the stale archived sink-receipt.json, then re-run --sink so the branch actually merges.',
+      }) + '\n');
+      process.exitCode = 1;
+      return;
+    }
+  }
+
   // All steps done — remove the worktree
   try {
     const { removeWorktree: removeWt, readActiveFolders: readAF } = require('./kaola-workflow-claim.js');

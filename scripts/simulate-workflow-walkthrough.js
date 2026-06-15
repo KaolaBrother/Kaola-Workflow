@@ -4991,6 +4991,89 @@ function testSinkMergeFromLinkedWorktree() {
   }
 }
 
+function testSinkRefusesStaleReceipt() {
+  // Regression for #484: a stale all-`done` sink-receipt committed into the tracked
+  // archive/<project>/.cache/ tree must NOT false-resume to status:sinked when the branch was never
+  // merged. resolveSinkReceiptPath falls back to that archived receipt, the step loop skips every
+  // `done` step, and the script would emit status:sinked exit 0 with main NEVER advanced + the
+  // deliverable lost. The fix asserts the branch IS an ancestor of the resolved default branch before
+  // emitting success → typed refusal stale_sink_receipt. Scenario B proves it is NOT a false-positive:
+  // a stale all-done receipt whose branch genuinely landed still sinks.
+  const project = 'issue-9484';
+  const branch = 'workflow/issue-9484';
+  const staleReceipt = (extra) => JSON.stringify(Object.assign({
+    project, branch, issue_number: 9484, issue_numbers: [9484],
+    resolved_default_branch: 'main',
+    started_at: '2026-06-14T12:14:18.462Z', updated_at: '2026-06-14T12:14:28.928Z',
+    stash_ref: null, removed_duplicates: [],
+    steps: { preflight: 'done', push_upstream: 'done', merge: 'done', worktree_sync: 'done', finalize: 'done', closure: 'done', stash_restore: 'done', archive_commit: 'done', push_main: 'done' },
+  }, extra || {}));
+  const runSink = (tmp) => spawnSync(process.execPath, [
+    sinkMergeScript, '--branch', branch, '--issue', '9484', '--project', project, '--sink', '--json',
+  ], { cwd: tmp, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
+  const parseLast = (out) => { try { return JSON.parse(String(out || '').trim().split('\n').pop()); } catch (_) { return {}; } };
+
+  // --- Scenario A (the bug): branch NOT merged → must refuse, main unchanged, deliverable not lost.
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-stale-')));
+    try {
+      initGitRepo(tmp);
+      const archiveCache = path.join(tmp, 'kaola-workflow', 'archive', project, '.cache');
+      fs.mkdirSync(archiveCache, { recursive: true });
+      fs.writeFileSync(path.join(archiveCache, 'sink-receipt.json'), staleReceipt());
+      spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'chore: record prior-slice sink receipt'], { cwd: tmp, encoding: 'utf8' });
+      // feature branch with a deliverable NOT merged to main
+      spawnSync('git', ['branch', branch], { cwd: tmp, encoding: 'utf8' });
+      spawnSync('git', ['switch', branch], { cwd: tmp, encoding: 'utf8' });
+      fs.writeFileSync(path.join(tmp, 'DELIVERABLE.txt'), 'deliverable\n');
+      spawnSync('git', ['add', 'DELIVERABLE.txt'], { cwd: tmp, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'feat: slice deliverable'], { cwd: tmp, encoding: 'utf8' });
+      spawnSync('git', ['switch', 'main'], { cwd: tmp, encoding: 'utf8' });
+      const mainBefore = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+
+      const result = runSink(tmp);
+      const parsed = parseLast(result.stdout);
+      assert(parsed.status !== 'sinked', '#484-A: stale unmerged receipt must NOT emit status:sinked, got ' + JSON.stringify(parsed));
+      assert(parsed.result === 'refuse' && parsed.reason === 'stale_sink_receipt', '#484-A: must refuse stale_sink_receipt, got ' + JSON.stringify(parsed));
+      assert(result.status !== 0, '#484-A: a stale_sink_receipt refusal must exit non-zero, got ' + result.status);
+      const mainAfter = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+      assert(mainAfter === mainBefore, '#484-A: main must NOT advance on a stale refusal');
+      assert(spawnSync('git', ['cat-file', '-e', 'main:DELIVERABLE.txt'], { cwd: tmp, encoding: 'utf8' }).status !== 0, '#484-A: the un-merged deliverable must NOT be on main');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+
+  // --- Scenario B (no false-positive): branch genuinely merged into main → stale all-done receipt still sinks.
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-merged-')));
+    try {
+      initGitRepo(tmp);
+      const archiveCache = path.join(tmp, 'kaola-workflow', 'archive', project, '.cache');
+      fs.mkdirSync(archiveCache, { recursive: true });
+      fs.writeFileSync(path.join(archiveCache, 'sink-receipt.json'), staleReceipt());
+      spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'chore: record prior-slice sink receipt'], { cwd: tmp, encoding: 'utf8' });
+      spawnSync('git', ['branch', branch], { cwd: tmp, encoding: 'utf8' });
+      spawnSync('git', ['switch', branch], { cwd: tmp, encoding: 'utf8' });
+      fs.writeFileSync(path.join(tmp, 'DELIVERABLE.txt'), 'deliverable\n');
+      spawnSync('git', ['add', 'DELIVERABLE.txt'], { cwd: tmp, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'feat: slice deliverable'], { cwd: tmp, encoding: 'utf8' });
+      spawnSync('git', ['switch', 'main'], { cwd: tmp, encoding: 'utf8' });
+      // the branch genuinely landed (a real prior merge)
+      spawnSync('git', ['merge', '--ff-only', branch], { cwd: tmp, encoding: 'utf8' });
+
+      const result = runSink(tmp);
+      const parsed = parseLast(result.stdout);
+      assert(parsed.result !== 'refuse' || parsed.reason !== 'stale_sink_receipt', '#484-B: a genuinely-merged branch must NOT be false-refused as stale, got ' + JSON.stringify(parsed));
+      assert(spawnSync('git', ['cat-file', '-e', 'main:DELIVERABLE.txt'], { cwd: tmp, encoding: 'utf8' }).status === 0, '#484-B: precondition — the deliverable is on main');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+}
+
 function testNoTargetZeroActive() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-no-target-zero-'));
   try {
@@ -11985,6 +12068,7 @@ function buildRegistry() {
   add('testValidateRemoteOffline',                        testValidateRemoteOffline);
   add('testReleaseFromLinkedWorktreeCleansMainCopy',      testReleaseFromLinkedWorktreeCleansMainCopy);
   add('testSinkMergeFromLinkedWorktree',                  testSinkMergeFromLinkedWorktree);
+  add('testSinkRefusesStaleReceipt',                      testSinkRefusesStaleReceipt);
   add('testStatusShowsClosedIssueDrift',                  testStatusShowsClosedIssueDrift);
   add('testStaleWorktreeCheck',                           testStaleWorktreeCheck);
   add('testStaleWorktreeCleanup',                         testStaleWorktreeCleanup);
