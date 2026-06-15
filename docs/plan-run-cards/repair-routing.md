@@ -174,6 +174,38 @@ After the repair action (revert-overflow, plan-repair, etc.):
 
 ---
 
+## 10. `merge_conflict` — the write-overlap escalation (#463)
+
+`reason: merge_conflict` is **not a first-detection refusal** — it is the **terminal escalation** a
+write-leg level reaches after `MERGE_CONFLICT_REPAIR_LIMIT` (**K=3**) bounded repairs of its
+*first-detection* refusal fail. The chain (AC10):
+
+1. **First detection** — the level's last-member `close-node` refuses with the *specific* reason:
+   - `member_vacuity` — a leg produced **no changes** (the no-op-leg producer; caught at the member's
+     own close, where its evidence / a `no_op:<reason>` declaration is visible).
+   - `write_set_overflow` — a leg wrote **outside** its declared set (§3 / §6).
+   - the synthesizer's **octopus bail** — a real **same-file** conflict (the deferred overlapping tier;
+     a same-file overlap cannot co-open in a frozen plan, so this is a defensive catch).
+2. **Bounded repair (K=3)** — repair each by its *own* recovery, re-running `close-node`:
+   - no-op leg → **re-dispatch** the leg's role so it writes its declared file;
+   - overflow → `revert-overflow` (NEVER `drop-base`);
+   - real conflict → dispatch a reasoning-class **Opus**-floor `synthesizer` agent to resolve **by
+     intent** (a non-reasoning tier is a dispatch refusal, never a silent downgrade; a clean agentic
+     merge is a weak signal — the union barrier on M is the landing gate, not the merge succeeding).
+3. **Escalate** — on the K-th failure: `write-halt --project {project} --node-id {nodeId} --reason
+   merge_conflict`. This is a **RESUMABLE** consent-style halt (unlike `test_thrash`'s one-way
+   escalation): resolve the cause, then `clear-halt --reason consent` to resume adaptively.
+
+**Routed exactly like `test_thrash`** — the cap is a schema constant the orchestrator applies; there is
+**no script counter** on the adaptive path. This is safe because the **COMMIT-based union barrier on the
+merge commit M** (`--group-barrier --merge-commit M`), *not* the attempt counter, is the fail-closed
+gate: an unmergeable / unverified / out-of-union result can never land, so a resumed run that re-counts
+attempts from zero only re-does work — it never lands bad work. No producer leaves a bad M on HEAD: the
+octopus bails **clean** (`merge --abort`, HEAD unchanged) before any advance, and `member_vacuity` /
+`write_set_overflow` fire **before** the merge.
+
+---
+
 ## Quick reference: reason → recovery
 
 | `reason` | Recovery |
@@ -182,5 +214,7 @@ After the repair action (revert-overflow, plan-repair, etc.):
 | `sensitive_write_unreviewed` | Add reviewer gate to plan OR remove sensitive write |
 | `unattributed_write` | `owning_node: null` in route-findings → plan-repair (add to write set) |
 | `barrier_failed` | Read `findings-route.json` → dispatch fix agent → close repair loop |
+| `member_vacuity` | No-op leg → re-dispatch the leg's role (or declare `no_op:` in evidence) |
+| `merge_conflict` | Terminal escalation after K=3 repairs → `write-halt --reason merge_conflict` (RESUMABLE) |
 | crash / mid-run failure | `repair-node` (keeps original baseline) |
 | `plan_hash_mismatch` | Plan tampered → re-run `--freeze-checked` → `--freeze` |

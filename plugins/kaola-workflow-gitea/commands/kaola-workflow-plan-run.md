@@ -129,10 +129,15 @@ token). Instruct the role to:
 - Serial (`max_concurrent=1`) is the degraded mode; write parallelism requires
   `KAOLA_LANE_CONTAINMENT=true`. `opening` marker + `reconcile` handle batch crash-resume.
 - `test_thrash` ≥ 3: escalate via `write-halt --reason test_thrash`.
-- `merge_conflict` (#463 write-overlap): an unresolvable write-leg convergence (the synthesizer
-  commit barrier) after the bounded-repair cap escalates via `write-halt --reason merge_conflict`.
-  Unlike `test_thrash`, it is a RESUMABLE consent-style halt — resolve the conflict, then
-  `clear-halt --reason consent` to resume adaptively.
+- `merge_conflict` (#463 write-overlap): a write-leg level whose FIRST-detection refusal —
+  `member_vacuity` (a no-op leg), `write_set_overflow` (an overflow), or the synthesizer's octopus
+  bail (a real same-file conflict) — survives `MERGE_CONFLICT_REPAIR_LIMIT` (K=3) bounded repairs.
+  Repair each first by its own recovery (re-dispatch the leg · `revert-overflow` · a reasoning-class
+  **Opus**-floor `synthesizer` agent resolves a real conflict by intent), re-running `close-node`; on
+  the K-th failure escalate via `write-halt --reason merge_conflict`. Routed exactly like `test_thrash`
+  (a schema constant the orchestrator applies — NO script counter on the adaptive path); the
+  COMMIT-based union barrier on M, never the counter, is the fail-closed gate, so a resumed run safely
+  re-counts from zero. RESUMABLE consent-style halt — resolve, then `clear-halt --reason consent`.
 
 Record durable evidence after the role returns:
 

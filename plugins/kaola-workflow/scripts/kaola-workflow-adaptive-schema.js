@@ -79,6 +79,14 @@ const DEFAULT_FANOUT_CAP_READONLY = 8;
 const RUNNING_SET_NAME = 'running-set.json';
 const LOOP_CAP = 5;
 const TEST_THRASH_LIMIT = 3;
+// #463 Slice 5 (write-overlap): the bounded-repair cap for a `merge_conflict`. A write-leg level that
+// does not reconcile (an unmergeable conflict the synthesizer cannot resolve, or a barrier overflow a
+// repair could not fix) is repaired up to K=3 attempts, then escalates to a `merge_conflict` consent-
+// style halt. Routed LIKE `test_thrash` (a schema constant the orchestrator applies — there is no script
+// counter on the adaptive path); a resumed run re-counts attempts from zero, because the COMMIT-based
+// union barrier on M — never the attempt counter — is the fail-closed safety gate (a miscounted or reset
+// loop only wastes work; it can never land an unverified merge). Byte-identical ×4 with TEST_THRASH_LIMIT.
+const MERGE_CONFLICT_REPAIR_LIMIT = 3;
 
 // Absolute node-count backstop for the plan grammar (DoS / stack-overflow guard).
 // Real plans are tiny (the walkthrough's largest fixture is 7 nodes; FANOUT_CAP=4,
@@ -96,8 +104,10 @@ const MAX_NODES = 200;
 // HALT for an unresolvable write-leg convergence (the synthesizer commit barrier): after
 // the bounded-repair cap it raises a consent-style halt (reuses `consent_halt: pending`),
 // cleared via `clear-halt --reason consent` and RESUMED adaptively — unlike `test_thrash`,
-// which is a one-way escalation to the full path. The runtime that RAISES it (the per-leg
-// scheduler + synthesizer) lands in a later #463 sequencing step; this enumerates the marker.
+// which is a one-way escalation to the full path. The synthesizer RAISES it: a real conflict bails
+// (Slice 4), and after the MERGE_CONFLICT_REPAIR_LIMIT bounded-repair cap the orchestrator escalates to
+// this halt (Slice 5). First-detection refusals (member_vacuity for a no-op leg / write_set_overflow / the
+// octopus bail) are repaired FIRST; merge_conflict is what they escalate TO after the cap.
 const ESCALATION_MARKERS = Object.freeze({
   security: 'security',
   consent: 'consent',
@@ -579,6 +589,7 @@ module.exports = {
   RUNNING_SET_NAME,
   LOOP_CAP,
   TEST_THRASH_LIMIT,
+  MERGE_CONFLICT_REPAIR_LIMIT,
   MAX_NODES,
   ESCALATION_MARKERS,
   CONSENT_HALT_MARKER,
