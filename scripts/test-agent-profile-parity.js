@@ -20,6 +20,10 @@ const FEATURE_TOKENS = [
   'write_set_granularity',
   'main-session-gate',
   'simulate-kaola-workflow-walkthrough.js',
+  // #463 Slice 6 (AC11 note): the synthesizer's non-lowerable reasoning floor — present in
+  // agents/synthesizer.md, so this enforces its three .toml twins carry it (md↔toml parity coverage
+  // for the new write-overlap convergence role).
+  'REASONING_FLOOR_ROLES',
 ];
 
 // codex tree is the canonical agents/ source for the toml triple.

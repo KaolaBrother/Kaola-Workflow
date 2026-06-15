@@ -2170,8 +2170,8 @@ function testInstallProfilesFeaturesTableHandling() {
     const freshAgentsDir = path.join(fresh, '.codex', 'agents', 'kaola-workflow');
     assert.strictEqual(
       fs.readdirSync(freshAgentsDir).filter(f => f.endsWith('.toml')).length,
-      14,
-      'should install 14 agent TOML files (14 base; <role>-max retired #451)'
+      15,
+      'should install 15 agent TOML files (14 base + synthesizer #463; <role>-max retired #451)'
     );
     assert.ok(
       fs.existsSync(path.join(freshAgentsDir, '.kaola-managed-profiles.json')),
@@ -3479,7 +3479,7 @@ const GITEA_FIXTURE_PLAN = [
 function testGiteaPreflight266() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-266-preflight-'));
   try {
-    // Install all 14 profiles into the fixture
+    // Install all 15 profiles into the fixture (14 base + synthesizer #463)
     const installResult = spawnSync(process.execPath, [installProfilesScript, root], {
       cwd: giteaPluginRoot, encoding: 'utf8'
     });
@@ -3594,13 +3594,13 @@ function giteaListTomls(dir) {
 function testInstallSchemaPruneManifest332Gitea() {
   const manifestBase = '.kaola-managed-profiles.json';
 
-  // AC3: fresh install — exactly 14 tomls, no docs-lookup, name on each, manifest, sentinel.
+  // AC3: fresh install — exactly 15 tomls (14 base + synthesizer #463), no docs-lookup, name on each, manifest, sentinel.
   const fresh = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-332-install-fresh-'));
   try {
     const r = runInstallProfiles(fresh);
     const agentsDir = path.join(fresh, '.codex', 'agents', 'kaola-workflow');
     const tomls = giteaListTomls(agentsDir);
-    assert.strictEqual(tomls.length, 14, '#451 gt AC3: fresh install must place 14 *.toml (14 base; <role>-max retired)');
+    assert.strictEqual(tomls.length, 15, '#463 gt AC: fresh install must place 15 *.toml (14 base + synthesizer; <role>-max retired)');
     assert.ok(!tomls.includes('docs-lookup.toml'), '#332 gt AC3: docs-lookup.toml must not be installed');
     for (const f of tomls) {
       const role = f.replace(/\.toml$/, '');
@@ -3609,7 +3609,7 @@ function testInstallSchemaPruneManifest332Gitea() {
     }
     const manifest = JSON.parse(fs.readFileSync(path.join(agentsDir, manifestBase), 'utf8'));
     assert.strictEqual(manifest.schema_version, 1, '#332 gt AC3: manifest schema_version 1');
-    assert.strictEqual(manifest.roles.length, 14, '#451 gt AC3: manifest must list 14 roles (14 base)');
+    assert.strictEqual(manifest.roles.length, 15, '#463 gt AC: manifest must list 15 roles (14 base + synthesizer)');
     assert.strictEqual(r.stdout.trim().split('\n').pop(), 'status: ok', '#332 gt AC3: stdout must end with status: ok');
   } finally {
     fs.rmSync(fresh, { recursive: true, force: true });

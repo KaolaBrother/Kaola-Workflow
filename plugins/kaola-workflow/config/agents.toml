@@ -56,6 +56,11 @@ description = "Kaola-Workflow for Codex adaptive-path falsifier: tries to dispro
 config_file = "./agents/kaola-workflow/adversarial-verifier.toml"
 nickname_candidates = ["Adversary", "Refuter", "Breaker"]
 
+[agents.synthesizer]
+description = "Kaola-Workflow for Codex adaptive write-convergence specialist: reconciles concurrent write legs by intent on a real merge conflict; reasoning-class (Opus), never invoked for cleanly-disjoint legs."
+config_file = "./agents/kaola-workflow/synthesizer.toml"
+nickname_candidates = ["Synthesizer", "Merger", "Reconciler"]
+
 [agents.contractor]
 description = "Kaola-Workflow for Codex lean-orchestrator bookkeeper: mechanically runs scripts and transcribes evidence into durable state; never dispatches a role and never judges."
 config_file = "./agents/kaola-workflow/contractor.toml"

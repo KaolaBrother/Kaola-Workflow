@@ -3534,12 +3534,15 @@ function sweepOrphanLegs(mainRoot, project, keepLegPaths) {
 // Returns { ok:true, mergeCommit } | { ok:false, reason, ... }. An explicit committer identity is passed
 // so the merge/commit never depends on ambient git config. Pure git over the shared object DB.
 // ---------------------------------------------------------------------------
-function synthesizeLevel(root, legs, groupId) {
+function synthesizeLevel(root, legs, groupId, planPath) {
   const ID = ['-c', 'user.email=kaola-workflow@local', '-c', 'user.name=kaola-workflow'];
   const QUIET = { stdio: ['ignore', 'ignore', 'ignore'] };
   const ids = Object.keys(legs || {});
   if (!ids.length) return { ok: false, reason: 'no_leg_branches' };
-  // (1) script-owned capture.
+  // (1) script-owned capture. Emits `leg_committed` per leg (AC17 telemetry: the leg-lifecycle event
+  // leg_opened → leg_committed → level_merged) when planPath is supplied — symmetric with leg_opened. A leg
+  // with work committed by its own agent (not dirty) still records the lifecycle event; an empty leg never
+  // reaches here (member_vacuity fail-closes it at the member close, #463 Slice 5).
   for (const id of ids) {
     const leg = legs[id];
     if (!leg || !leg.legPath) continue;
@@ -3551,6 +3554,7 @@ function synthesizeLevel(root, legs, groupId) {
         execFileSync('git', ['-C', leg.legPath, ...ID, 'commit', '-m', 'kw-leg: ' + id], QUIET);
       } catch (e) { return { ok: false, reason: 'leg_capture_failed', nodeId: id, leg: id, detail: String((e && e.message) || e) }; }
     }
+    if (planPath) { try { appendNodeTiming(planPath, id, 'leg_committed'); } catch (_) { /* telemetry is best-effort */ } }
   }
   // #463 Slice 5 — NO no-op-leg detector here, deliberately. A leg that produced no changes is caught by the
   // leg-aware `member_vacuity` guard at that member's OWN close (memberInLaneChanges, leg-aware since S4) —
@@ -4402,7 +4406,7 @@ function closeGroupMember(ctx) {
     // (ii) synthesizer execution — mechanical octopus merge of the disjoint legs → M. A real conflict
     // (the deferred overlapping tier) bails → merge_conflict (the Opus resolver + K=3 repair is Slice 5);
     // legs + baseline are retained (durable, recoverable), NO ledger advance.
-    const synth = synthesizeLevel(synthRoot, liveLegs, lg.group_id);
+    const synth = synthesizeLevel(synthRoot, liveLegs, lg.group_id, planPath);
     if (!synth.ok) {
       // #463 Slice 5: surface the offending leg + detail top-level so the operator_hint can name the leg
       // (leg_capture_failed is PER-LEG and sets synth.leg; the closing member's nodeId is the last member, not
