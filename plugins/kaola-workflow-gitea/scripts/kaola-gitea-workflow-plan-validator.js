@@ -110,6 +110,13 @@ const OPERATOR_HINT_REGISTRY = {
   leg_root_invalid: (ctx) => `--leg-root "${ctx.legRoot || '(unknown)'}" is not a git worktree toplevel. Pass the per-leg worktree path recorded in running-set.json lane_group.legs.<id>.legPath.`,
   no_leg_base: (ctx) => `No anchored leg-base ref for node "${ctx.nodeId || '(unknown)'}" (project "${ctx.project || '?'}"). The ref is anchored at leg provision (open-ready); a missing ref means the leg was not provisioned with leg-isolation, or the producer/consumer ref names disagree.`,
   leg_base_unreachable: (ctx) => `The anchored leg-base for node "${ctx.nodeId || '(unknown)'}" is not an ancestor of the leg HEAD — the base does not sit in this leg's history (a forward/unrelated ref). Re-provision the leg; do not pass a hand-rolled base.`,
+  // #463 Slice 4 — the synthesizer-resolved level commit barrier (parent-clean fence + union-on-COMMIT).
+  parent_dirty: (ctx) => `The parent (integration) worktree carries an out-of-allowband production change (${ctx.file || 'see paths'}) before the synthesizer merge. In a fan-out level ALL work belongs in legs; a floated own-lane slip (a relative-path write to the parent) is caught here fail-closed. Move the change into its leg, or route to repair.`,
+  missing_merge_commit: () => '--group-barrier --merge-commit requires a commit-ish M (the synthesizer merge result). Provide the merged SHA.',
+  merge_commit_invalid: (ctx) => `--merge-commit "${ctx.file || '(unknown)'}" does not resolve to a commit in this repo. Pass the SHA the synthesizer committed (git -C <root> rev-parse HEAD after the merge).`,
+  merge_base_unreachable: (ctx) => `The lane-group baseline is not an ancestor of the merge commit M — M does not descend from the pre-fan-out HEAD (an unrelated/forced commit). The union barrier measures base→M; a non-descendant M would mismeasure. Re-run the synthesizer from the recorded baseline.`,
+  leg_omitted_from_merge: (ctx) => `Leg "${ctx.nodeId || '(unknown)'}" (head ${ctx.file || '?'}) is NOT an ancestor of the merge commit M — its committed work did not make it into M, so teardown would silently lose it. The synthesizer must merge EVERY leg branch. Re-run the merge over the full leg set.`,
+  leg_baseline_split: (ctx) => `Lane-group legs disagree on their branch-point baseline (${ctx.file || 'see legs'}) — all legs of one fan-out level must branch from the SAME pre-fan-out HEAD for the union barrier to measure base→M coherently. Re-provision the level.`,
   internal_error: () => 'Validator encountered an unexpected internal error. Check the plan file for malformed Markdown and re-run.',
 };
 
@@ -208,6 +215,31 @@ function isBarrierInvisible(p, project) {
   // No project context: honor the generic workflow-state band so the finalize sweep / barrier never
   // false-flags any path under the active-project tree (isWorkflowArtifact covers the rest).
   return /^kaola-workflow\/[^/]+\//.test(rel);
+}
+
+// #463 Slice 4: the barrier exemption predicates, LIFTED to module scope (they were local consts in
+// barrierCheck) so the parent-clean fence (--parent-clean-check) classifies a dirty path with the
+// EXACT same carve-out the close barrier uses — a single source of truth (the advisor's #1: the fence
+// must reuse the allowband, not a hand-rolled copy, or it ships inert tripping on every plan/ledger
+// churn). foreignArchivePath: a write to ANOTHER project's archive band (not exempt — it must block).
+// isWorkflowArtifactPath: the whole `kaola-workflow/` band EXCEPT a foreign archive. isTestLikePath:
+// tests/spec (never need the code/security gate). barrierExemptPath unions them with isBarrierInvisible.
+function foreignArchivePath(p, project) {
+  const m = /^kaola-workflow\/archive\/([^/]+)\//.exec(String(p || ''));
+  if (!m) return false;
+  if (!project) return true;
+  const dir = m[1];
+  return dir !== project && !dir.startsWith(project + '.archived-');
+}
+function isWorkflowArtifactPath(p, project) {
+  return /^kaola-workflow\//.test(String(p || '')) && !foreignArchivePath(p, project);
+}
+function isTestLikePath(p) {
+  const s = String(p || '');
+  return /(^|\/)(tests?|__tests__|spec)\//i.test(s) || /\.(test|spec)\.[A-Za-z0-9]+$/i.test(s);
+}
+function barrierExemptPath(p, project) {
+  return isWorkflowArtifactPath(p, project) || isBarrierInvisible(p, project) || isTestLikePath(p);
 }
 
 // Phase-5 sensitivity categories (phase5.md:45-46): auth, payments, user data,
@@ -836,15 +868,11 @@ function barrierCheck(content, actualPaths, opts) {
   else { for (const n of nodes) for (const p of n.writeSet) declared.add(p); }
   const real = (actualPaths || []).map(p => String(p || '').trim()).filter(Boolean);
   const archiveProj = opts.project || null;
-  const foreignArchive = p => {
-    const m = /^kaola-workflow\/archive\/([^/]+)\//.exec(p);
-    if (!m) return false;
-    if (!archiveProj) return true;
-    const dir = m[1];
-    return dir !== archiveProj && !dir.startsWith(archiveProj + '.archived-');
-  };
-  const isWorkflowArtifact = p => /^kaola-workflow\//.test(p) && !foreignArchive(p);
-  const isTestPath = p => /(^|\/)(tests?|__tests__|spec)\//i.test(p) || /\.(test|spec)\.[A-Za-z0-9]+$/i.test(p);
+  // #463 Slice 4: delegate to the module-level predicates (lifted so --parent-clean-check reuses the
+  // EXACT same carve-out). Behavior is byte-identical to the prior local consts.
+  const foreignArchive = p => foreignArchivePath(p, archiveProj);
+  const isWorkflowArtifact = p => isWorkflowArtifactPath(p, archiveProj);
+  const isTestPath = p => isTestLikePath(p);
   // A "production" actual write is one that is NOT in the narrow .md allowband / tests / a workflow
   // artifact — those bands never need the code/security gate. They are exempt from BOTH the
   // sensitivity teeth and the allowlist (v3.20.1: the sensitivity scan previously lacked this
@@ -1773,9 +1801,15 @@ function printHelp() {
     '  --parallel-safe --nodes A,B[,C]  read-only check (#437): are the named nodes\' declared write sets pairwise-disjoint\n' +
     '                 (safe to co-open as a lane group)? Exposes the antichain pair-loop (exact-file + classifier disjointness).\n' +
     '                 result:ok | refuse(reason:overlapping_write_sets,overlapping[]). No fs/git writes.\n' +
-    '  --group-barrier --group-id ID [--member ID] [--skip-root-pin]  the GROUP-scoped close barrier (#437): diff the group\n' +
-    '                 baseline (recorded via --record-base --node-id ID) -> now over the UNION of the lane_group members\'\n' +
-    '                 write sets (read from running-set.json); an out-of-union stray refuses via the rank-4 overflow arm.\n' +
+    '  --group-barrier --group-id ID [--member ID] [--merge-commit M --project P] [--skip-root-pin]  the GROUP-scoped close\n' +
+    '                 barrier (#437/#463). DEFAULT (no --merge-commit): diff the group baseline (--record-base --node-id ID)\n' +
+    '                 -> a working-tree SNAPSHOT over the UNION of the lane_group members\' write sets (read from running-\n' +
+    '                 set.json); an out-of-union stray refuses via the rank-4 overflow arm. With --merge-commit M (#463 S4,\n' +
+    '                 the synthesizer path): the COMMIT-based union barrier — diff the legs\' shared branch-point (anchored\n' +
+    '                 ref, NOT the snapshot tree) -> M; assert base & every leg HEAD are ancestors of M (no silent loss).\n' +
+    '  --parent-clean-check [--project P] [--skip-root-pin]  #463 S4 the PARENT-CLEAN FENCE: refuse parent_dirty iff the\n' +
+    '                 parent worktree carries a NON-exempt (production) dirty path (the barrier allowband is reused, so\n' +
+    '                 plan/ledger/.cache churn never trips it) — the catch for a floated own-lane slip before the merge.\n' +
     '  --leg-barrier --node-id ID --project P --leg-root PATH [--expect-base SHA]  the PER-LEG write-isolation barrier (#463):\n' +
     '                 snapshot the leg worktree (--leg-root) and diff it against the leg branch-point (resolved ONLY from the\n' +
     '                 anchored ref refs/kaola-workflow/leg-base/<P>/<ID>, never a free --base) over node ID\'s OWN declared set;\n' +
@@ -2163,6 +2197,95 @@ function main() {
       process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'group_not_found', operator_hint: getOperatorHint('group_not_found', { nodeId: groupId }), errors: ['lane_group "' + groupId + '" has no members'] }) : 'typed refusal: group_not_found (no members)') + '\n');
       process.exitCode = 1; return;
     }
+    // #463 Slice 4 — the COMMIT-BASED union barrier (the B1 fix). When --merge-commit M is passed, the
+    // legs were routed-into + the synthesizer merged them into M; the barrier measures the merge COMMIT
+    // (diff base→M), NOT a working-tree snapshot. The spike (P2) proves a working-tree snapshot SWEEPS IN
+    // a floated own-lane slip that never made it into M (false-greening lost work); the commit diff
+    // measures ONLY-committed content. The base is the legs' shared BRANCH-POINT (a COMMIT, anchored in
+    // legBaseRef) — NOT the group's snapshotWorktree TREE baseline (which the snapshot path below uses):
+    // the ancestor checks (base∈ancestors(M), each legHead∈ancestors(M)) require commits, and the tree
+    // baseline is an object of the wrong type. Subset (diff⊆union) catches ESCAPES; the per-leg-head
+    // ancestor inclusion catches OMISSIONS (a dropped leg whose work is silently lost on teardown — the
+    // advisor's no-silent-loss bar). Anti-laundering (#368): base comes from the anchored ref, cross-
+    // checked against the manifest baseline; --project is EXPLICIT (mirrors --leg-barrier), never derived.
+    const mergeCommit = flagVal('--merge-commit');
+    if (mergeCommit) {
+      const legProject = flagVal('--project');
+      if (!legProject) {
+        process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'missing_project', operator_hint: getOperatorHint('missing_project'), errors: ['--group-barrier --merge-commit requires --project <project> (the leg-base ref key, never derived from the plan path)'] }) : 'typed refusal: missing_project') + '\n');
+        process.exitCode = 1; return;
+      }
+      const legSan = x => String(x).replace(/[^A-Za-z0-9_-]/g, '_');
+      const legs = (lg.legs && typeof lg.legs === 'object') ? lg.legs : null;
+      const legIds = legs ? Object.keys(legs) : [];
+      if (!legIds.length) {
+        process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'no_leg_base', operator_hint: getOperatorHint('no_leg_base', { nodeId: groupId, project: legProject }), errors: ['--merge-commit passed but lane_group "' + groupId + '" has no legs manifest — the synthesizer path requires provisioned legs'] }) : 'typed refusal: no_leg_base (no legs)') + '\n');
+        process.exitCode = 1; return;
+      }
+      // M must resolve to a real commit.
+      let mSha = '';
+      try { mSha = execFileSync('git', ['-C', root, 'rev-parse', '--verify', '--quiet', mergeCommit + '^{commit}'], { encoding: 'utf8' }).trim(); } catch (_) { mSha = ''; }
+      if (!mSha) {
+        process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'merge_commit_invalid', operator_hint: getOperatorHint('merge_commit_invalid', { file: mergeCommit }), errors: ['--merge-commit "' + mergeCommit + '" does not resolve to a commit'] }) : 'typed refusal: merge_commit_invalid') + '\n');
+        process.exitCode = 1; return;
+      }
+      // Resolve the shared branch-point base from the ANCHORED ref per leg + cross-check the manifest
+      // (#368). All legs of one level branch from the SAME HEAD; a split baseline is leg_baseline_split.
+      let baseRev = '';
+      const baseSeen = new Set();
+      for (const id of legIds) {
+        const refName = 'refs/kaola-workflow/leg-base/' + legSan(legProject) + '/' + legSan(id);
+        let refSha = '';
+        try { refSha = execFileSync('git', ['-C', root, 'rev-parse', '--verify', '--quiet', refName + '^{commit}'], { encoding: 'utf8' }).trim(); } catch (_) { refSha = ''; }
+        if (!refSha) {
+          process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'no_leg_base', operator_hint: getOperatorHint('no_leg_base', { nodeId: id, project: legProject }), errors: ['no anchored leg-base ref "' + refName + '" for leg "' + id + '"'] }) : 'typed refusal: no_leg_base for ' + id) + '\n');
+          process.exitCode = 1; return;
+        }
+        const manifestBase = String((legs[id] && legs[id].baseline) || '').trim();
+        if (manifestBase && manifestBase !== refSha) {
+          process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'barrier_base_mismatch', operator_hint: getOperatorHint('barrier_base_mismatch', { nodeId: id }), errors: ['leg "' + id + '" manifest baseline (' + manifestBase + ') != anchored ref ' + refName + ' (' + refSha + ') — a re-anchor after work would launder it'] }) : 'typed refusal: barrier_base_mismatch for ' + id) + '\n');
+          process.exitCode = 1; return;
+        }
+        baseSeen.add(refSha);
+        baseRev = refSha;
+      }
+      if (baseSeen.size !== 1) {
+        process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'leg_baseline_split', operator_hint: getOperatorHint('leg_baseline_split', { file: Array.from(baseSeen).join(', ') }), errors: ['legs disagree on branch-point baseline: ' + Array.from(baseSeen).join(', ')] }) : 'typed refusal: leg_baseline_split') + '\n');
+        process.exitCode = 1; return;
+      }
+      // base ∈ ancestors(M): M must descend from the pre-fan-out HEAD (else base→M mismeasures).
+      let baseAncestor = false;
+      try { execFileSync('git', ['-C', root, 'merge-base', '--is-ancestor', baseRev, mSha], { stdio: ['ignore', 'ignore', 'ignore'] }); baseAncestor = true; } catch (_) { baseAncestor = false; }
+      if (!baseAncestor) {
+        process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'merge_base_unreachable', operator_hint: getOperatorHint('merge_base_unreachable'), errors: ['lane-group baseline ' + baseRev + ' is not an ancestor of merge commit ' + mSha] }) : 'typed refusal: merge_base_unreachable') + '\n');
+        process.exitCode = 1; return;
+      }
+      // INCLUSION (no silent loss): every leg's committed HEAD must be an ancestor of M, or its work was
+      // dropped from the merge and teardown would lose it. legHead resolves from the leg branch.
+      for (const id of legIds) {
+        const legBranch = (legs[id] && legs[id].legBranch) ? legs[id].legBranch : ('kw/legs/' + legSan(legProject) + '/' + legSan(id));
+        let legHead = '';
+        try { legHead = execFileSync('git', ['-C', root, 'rev-parse', '--verify', '--quiet', legBranch + '^{commit}'], { encoding: 'utf8' }).trim(); } catch (_) { legHead = ''; }
+        if (!legHead) {
+          process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'leg_omitted_from_merge', operator_hint: getOperatorHint('leg_omitted_from_merge', { nodeId: id, file: '(unresolved branch ' + legBranch + ')' }), errors: ['leg "' + id + '" branch ' + legBranch + ' does not resolve — cannot confirm its work is in M'] }) : 'typed refusal: leg_omitted_from_merge for ' + id) + '\n');
+          process.exitCode = 1; return;
+        }
+        let included = false;
+        try { execFileSync('git', ['-C', root, 'merge-base', '--is-ancestor', legHead, mSha], { stdio: ['ignore', 'ignore', 'ignore'] }); included = true; } catch (_) { included = false; }
+        if (!included) {
+          process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'leg_omitted_from_merge', operator_hint: getOperatorHint('leg_omitted_from_merge', { nodeId: id, file: legHead }), errors: ['leg "' + id + '" head ' + legHead + ' is not an ancestor of merge commit ' + mSha + ' — its committed work is NOT in M (silent loss on teardown)'] }) : 'typed refusal: leg_omitted_from_merge for ' + id) + '\n');
+          process.exitCode = 1; return;
+        }
+      }
+      // The union diff: base→M, COMMIT to COMMIT (only-committed semantics).
+      const diffOut = execFileSync('git', ['-C', root, 'diff-tree', '-r', '--name-only', baseRev, mSha], { encoding: 'utf8' });
+      const actualPaths = diffOut.split('\n').map(s => s.trim()).filter(Boolean);
+      const r = barrierCheck(content, actualPaths, { groupMembers: members, root, project: projTag });
+      if (r.result === 'pass') { r.merge_commit = mSha; r.base = baseRev; }
+      process.stdout.write((json ? JSON.stringify(r) : (r.result === 'pass' ? 'group barrier ok (commit ' + mSha.slice(0, 8) + ')' : 'typed refusal: ' + r.errors.join('; '))) + '\n');
+      if (r.result !== 'pass') process.exitCode = 1;
+      return;
+    }
     // Group baseline: the shared SHA recorded at open via --record-base --node-id <group_id>. Same
     // #368 cross-check as the per-node barrier — the .cache file SHA must match the gc-anchored ref, or
     // a fresh re-record would launder writes made since open into an empty diff (vacuous pass).
@@ -2184,6 +2307,55 @@ function main() {
     const r = barrierCheck(content, actualPaths, { groupMembers: members, root, project: projTag });
     process.stdout.write((json ? JSON.stringify(r) : (r.result === 'pass' ? 'group barrier ok' : 'typed refusal: ' + r.errors.join('; '))) + '\n');
     if (r.result !== 'pass') process.exitCode = 1;
+    return;
+  }
+  if (args.includes('--parent-clean-check')) {
+    // #463 Slice 4 — the PARENT-CLEAN FENCE. Before the synthesizer merges a fan-out level, the parent
+    // (integration) worktree must hold NO out-of-allowband production change: in a fan-out level ALL work
+    // belongs in legs, so a floated own-lane slip (a relative-path write to the parent's launch cwd) is
+    // INVISIBLE to the per-leg barrier (it diffs the leg) and #386-self-exempt from the write-lane hook —
+    // the structural gap both miss. The fence catches it. It is NOT a blanket `git status --porcelain`
+    // empty (the run never commits per-node, so the plan/ledger/.cache churn keeps the parent perpetually
+    // dirty — a blanket fence trips on EVERY fanout and ships inert, the advisor's #1). It reuses the EXACT
+    // barrier allowband (barrierExemptPath): only a NON-exempt (production code) dirty path trips it.
+    const flagVal = name => { const i = args.indexOf(name); return i >= 0 && i + 1 < args.length ? args[i + 1] : null; };
+    const fenceProject = flagVal('--project') || projTag;
+    if (!args.includes('--skip-root-pin')) {
+      let toplevel = '';
+      try { toplevel = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', cwd: process.cwd() }).trim(); } catch (_) { toplevel = ''; }
+      const cwdReal = (() => { try { return fs.realpathSync(process.cwd()); } catch (_) { return process.cwd(); } })();
+      const topReal = toplevel ? (() => { try { return fs.realpathSync(toplevel); } catch (_) { return toplevel; } })() : '';
+      if (!topReal || topReal !== cwdReal) {
+        process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'root_mismatch', operator_hint: getOperatorHint('root_mismatch'), errors: ['parent-clean-check root mismatch: cwd "' + cwdReal + '" != git toplevel "' + (topReal || '(unresolved)') + '"'] }) : 'typed refusal: root_mismatch') + '\n');
+        process.exitCode = 1; return;
+      }
+    }
+    // --untracked-files=all is LOAD-BEARING (adversarial review caught this): the DEFAULT porcelain
+    // COLLAPSES a wholly-new untracked directory to a single `?? dir/` line, so a NON-exempt file hidden
+    // inside a new dir whose NAME is exempt — e.g. a foreign-archive write `kaola-workflow/archive/<other>/
+    // leak.js` masked by `?? kaola-workflow/`, or any production file under a freshly-created exempt-named
+    // dir — would be classified by the collapsed dir name and EVADE the fence. `-uall` lists every file
+    // individually so each path is classified precisely against barrierExemptPath.
+    let porcelain = '';
+    try { porcelain = execFileSync('git', ['-C', root, 'status', '--porcelain', '--untracked-files=all'], { encoding: 'utf8' }); } catch (_) { porcelain = ''; }
+    // Parse each porcelain line: 2 status cols + space, then the path. A rename shows `orig -> new`; take
+    // the NEW (working-tree) path. git quotes special-char paths in double-quotes; strip them.
+    const unq = s => (s.length >= 2 && s[0] === '"' && s[s.length - 1] === '"') ? s.slice(1, -1) : s;
+    const dirtyPaths = [];
+    for (const line of String(porcelain).split('\n')) {
+      if (!line.trim()) continue;
+      let p = line.slice(3);
+      const arrow = p.indexOf(' -> ');
+      if (arrow >= 0) p = p.slice(arrow + 4);
+      p = unq(p.trim());
+      if (p) dirtyPaths.push(p);
+    }
+    const production = dirtyPaths.filter(p => !barrierExemptPath(p, fenceProject));
+    if (production.length) {
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'parent_dirty', operator_hint: getOperatorHint('parent_dirty', { file: production.join(', ') }), errors: ['parent worktree carries out-of-allowband production change(s) before the synthesizer merge: ' + production.join(', ')], dirty: production }) : 'typed refusal: parent_dirty (' + production.join(', ') + ')') + '\n');
+      process.exitCode = 1; return;
+    }
+    process.stdout.write((json ? JSON.stringify({ result: 'pass', reason: null }) : 'parent clean') + '\n');
     return;
   }
   if (args.includes('--leg-barrier')) {

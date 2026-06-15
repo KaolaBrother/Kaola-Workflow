@@ -5389,12 +5389,15 @@ function rtHarness(initialFiles, opts) {
     assert(worktreePaths(repoRoot).filter(p => p.indexOf(path.join('.kw', 'legs')) !== -1).length === 2, 'LEG-CLEAN-COMPLETION-NO-LEAK: two legs provisioned at setup');
     writeEvidence(cacheDir, 'A');
     writeEvidence(cacheDir, 'B');
-    fs.writeFileSync(path.join(repoRoot, 'ax.js'), '// A in-lane\n');
-    fs.writeFileSync(path.join(repoRoot, 'by.js'), '// B in-lane\n');
+    // #463 Slice 4: routing is LIVE — each member's work lands in its OWN leg (not the parent). The
+    // synthesizer merges the legs at the last-member close → group_passed via the COMMIT-based union barrier.
+    fs.writeFileSync(path.join(repoRoot, '.kw', 'legs', 'test-project', 'A', 'ax.js'), '// A in-lane (leg)\n');
+    fs.writeFileSync(path.join(repoRoot, '.kw', 'legs', 'test-project', 'B', 'by.js'), '// B in-lane (leg)\n');
     const rA = runNode(repoRoot, ['close-node', '--node-id', 'A', '--project', 'test-project', '--json'], LEG_ON);
     assert(rA.result === 'ok' && rA.barrier === 'deferred_to_group', 'LEG-CLEAN-COMPLETION-NO-LEAK: A deferred ok, got ' + JSON.stringify(rA));
     const rB = runNode(repoRoot, ['close-node', '--node-id', 'B', '--project', 'test-project', '--json'], LEG_ON);
     assert(rB.result === 'ok' && rB.barrier === 'group_passed', 'LEG-CLEAN-COMPLETION-NO-LEAK: B group_passed, got ' + JSON.stringify(rB));
+    assert(rB.synthesized === true && typeof rB.mergeCommit === 'string' && rB.mergeCommit.length >= 7, 'LEG-CLEAN-COMPLETION-NO-LEAK: B reports the synthesizer merge commit, got ' + JSON.stringify(rB));
     assert(ledgerStatus(planPath, 'A') === 'complete' && ledgerStatus(planPath, 'B') === 'complete', 'LEG-CLEAN-COMPLETION-NO-LEAK: both complete');
     const wts = worktreePaths(repoRoot);
     assert(!wts.some(p => p.indexOf(path.join('.kw', 'legs')) !== -1), 'LEG-CLEAN-COMPLETION-NO-LEAK: NO leg worktree survives clean completion, got ' + JSON.stringify(wts));
@@ -5592,13 +5595,14 @@ function rtHarness(initialFiles, opts) {
     cleanup(repoRoot);
   }
 
-  // ★ LEG-BARRIER-CLOSE-PATH-GATES (the PRODUCTION wiring GATES): in-lane to the PARENT (passes the
-  //   vacuity guard, which inspects the parent) + an OVERFLOW into the leg → close-node REFUSES at the
-  //   pre-wired barrier (proves the wiring is not a vacuous empty-leg pass). Ledger stays in_progress.
+  // ★ LEG-BARRIER-CLOSE-PATH-GATES (the PRODUCTION wiring GATES): #463 S4 routing is live, so the member's
+  //   work lands in its LEG. An in-lane write (ax.js, satisfies the leg-aware vacuity guard) + an OVERFLOW
+  //   (zz.js, not declared) both in the leg → close-node REFUSES at the pre-wired per-leg barrier (proves
+  //   the wiring is not a vacuous empty-leg pass). Ledger stays in_progress.
   {
     const { repoRoot, cacheDir, legA } = provisionedRepo();
     writeEvidence(cacheDir, 'A');
-    fs.writeFileSync(path.join(repoRoot, 'ax.js'), '// A in-lane in PARENT (vacuity)\n');
+    fs.writeFileSync(path.join(legA, 'ax.js'), '// A in-lane in LEG (vacuity)\n');
     fs.writeFileSync(path.join(legA, 'zz.js'), '// OVERFLOW in A leg\n');
     const r = runNode(repoRoot, ['close-node', '--node-id', 'A', '--project', 'test-project', '--json'], LEG_ON);
     assert(r.result === 'refuse' && r.reason === 'write_set_overflow', 'LEG-BARRIER-CLOSE-PATH-GATES: close-node refuses a leg overflow via the pre-wired barrier, got ' + JSON.stringify(r));
@@ -5633,18 +5637,246 @@ function rtHarness(initialFiles, opts) {
   }
 
   // LEG-BARRIER-TEARDOWN-DROPS-REF: on clean group completion the leg-base refs are deleted alongside the
-  //   worktree + branch (no ref leak). Doubles as an end-to-end close-path run with empty (trivial-pass) legs.
+  //   worktree + branch (no ref leak). #463 S4: an end-to-end close-path run with REAL in-leg writes that
+  //   the synthesizer merges (group_passed via the commit-based union barrier), then teardown.
   {
-    const { repoRoot, cacheDir } = provisionedRepo();
+    const { repoRoot, cacheDir, legA, legB } = provisionedRepo();
     assert(refResolves(repoRoot, 'A') !== '' && refResolves(repoRoot, 'B') !== '', 'LEG-BARRIER-TEARDOWN-DROPS-REF: refs A,B anchored at provision');
     writeEvidence(cacheDir, 'A'); writeEvidence(cacheDir, 'B');
-    fs.writeFileSync(path.join(repoRoot, 'ax.js'), '// a\n');
-    fs.writeFileSync(path.join(repoRoot, 'by.js'), '// b\n');
+    fs.writeFileSync(path.join(legA, 'ax.js'), '// a (leg)\n');
+    fs.writeFileSync(path.join(legB, 'by.js'), '// b (leg)\n');
     const rA = runNode(repoRoot, ['close-node', '--node-id', 'A', '--project', 'test-project', '--json'], LEG_ON);
     assert(rA.result === 'ok', 'LEG-BARRIER-TEARDOWN-DROPS-REF: close A ok, got ' + JSON.stringify(rA));
     const rB = runNode(repoRoot, ['close-node', '--node-id', 'B', '--project', 'test-project', '--json'], LEG_ON);
     assert(rB.result === 'ok' && rB.barrier === 'group_passed', 'LEG-BARRIER-TEARDOWN-DROPS-REF: close B group_passed, got ' + JSON.stringify(rB));
     assert(refResolves(repoRoot, 'A') === '' && refResolves(repoRoot, 'B') === '', 'LEG-BARRIER-TEARDOWN-DROPS-REF: leg-base refs deleted on teardown (no ref leak)');
+    cleanup(repoRoot);
+  }
+
+  // =========================================================================
+  // #463-SYNTHESIZER (Slice 4) — the SYNTHESIZER execution + COMMIT-based union barrier + parent-clean
+  // fence + level commit barrier + singleton fast-path, in a REAL git repo (the unit walkthrough cannot
+  // touch worktrees/merges). The B1 fix is the load-bearing claim: the union barrier measures the merge
+  // COMMIT (diff base→M), NOT a working-tree snapshot, so a floated own-lane slip cannot false-green and a
+  // dropped leg (silent loss) is caught by per-leg-head ancestor inclusion. Disjoint merges are mechanical.
+  // =========================================================================
+
+  // SYNTH-DISJOINT-END-TO-END (AC6/AC9 core): two legs, disjoint declared files written IN the legs; close
+  //   A (deferred) then B (last) → the synthesizer octopus-merges both into the feature branch → M; the
+  //   commit-based union barrier passes; HEAD advanced to M; M contains BOTH files; legs torn down.
+  {
+    const { repoRoot, cacheDir, legA, legB, rs } = provisionedRepo();
+    const base = rs.lane_group.legs.A.baseline;
+    writeEvidence(cacheDir, 'A'); writeEvidence(cacheDir, 'B');
+    fs.writeFileSync(path.join(legA, 'ax.js'), '// A leg work\n');
+    fs.writeFileSync(path.join(legB, 'by.js'), '// B leg work\n');
+    const rA = runNode(repoRoot, ['close-node', '--node-id', 'A', '--project', 'test-project', '--json'], LEG_ON);
+    assert(rA.result === 'ok' && rA.barrier === 'deferred_to_group', 'SYNTH-DISJOINT: A deferred, got ' + JSON.stringify(rA));
+    const rB = runNode(repoRoot, ['close-node', '--node-id', 'B', '--project', 'test-project', '--json'], LEG_ON);
+    assert(rB.result === 'ok' && rB.barrier === 'group_passed' && rB.synthesized === true, 'SYNTH-DISJOINT: B group_passed + synthesized, got ' + JSON.stringify(rB));
+    const M = rB.mergeCommit;
+    assert(typeof M === 'string' && M.length >= 7, 'SYNTH-DISJOINT: B carries mergeCommit M, got ' + JSON.stringify(rB));
+    assert(gitOut(repoRoot, ['rev-parse', 'HEAD']) === M, 'SYNTH-DISJOINT: HEAD advanced to M (the dependency-level commit)');
+    const parents = gitOut(repoRoot, ['rev-list', '--parents', '-n', '1', M]).split(/\s+/).slice(1);
+    assert(parents.length >= 3, 'SYNTH-DISJOINT: M is the octopus merge (≥3 parents = feature + legA + legB), got ' + parents.length);
+    assert(gitOut(repoRoot, ['rev-parse', M + ':ax.js']) !== '' && gitOut(repoRoot, ['rev-parse', M + ':by.js']) !== '', 'SYNTH-DISJOINT: M contains BOTH legs\' files');
+    const mDiff = gitOut(repoRoot, ['diff-tree', '-r', '--name-only', base, M]).split('\n').map(s => s.trim()).filter(Boolean).sort();
+    assert(JSON.stringify(mDiff) === JSON.stringify(['ax.js', 'by.js']), 'SYNTH-DISJOINT: diff base→M == union(declared), got ' + JSON.stringify(mDiff));
+    const timings = fs.existsSync(path.join(cacheDir, 'node-timings.jsonl')) ? fs.readFileSync(path.join(cacheDir, 'node-timings.jsonl'), 'utf8') : '';
+    assert(/level_merged/.test(timings), 'SYNTH-DISJOINT: a level_merged telemetry event was recorded');
+    assert(worktreePaths(repoRoot).filter(p => p.indexOf(path.join('.kw', 'legs')) !== -1).length === 0, 'SYNTH-DISJOINT: legs torn down after the merge');
+    cleanup(repoRoot);
+  }
+
+  // SYNTH-PARENT-DIRTY-FENCE (AC4): a floated own-lane slip — a PRODUCTION file written to the PARENT (not
+  //   exempt) — is caught by the parent-clean fence at the last-member close, BEFORE the merge. parent_dirty;
+  //   no merge happened (HEAD unchanged); B stays in_progress.
+  {
+    const { repoRoot, cacheDir, legA, legB, rs } = provisionedRepo();
+    const base = rs.lane_group.legs.A.baseline;
+    writeEvidence(cacheDir, 'A'); writeEvidence(cacheDir, 'B');
+    fs.writeFileSync(path.join(legA, 'ax.js'), '// A leg work\n');
+    fs.writeFileSync(path.join(legB, 'by.js'), '// B leg work\n');
+    fs.writeFileSync(path.join(repoRoot, 'leaked.js'), '// FLOATED own-lane slip into the PARENT\n');
+    const rA = runNode(repoRoot, ['close-node', '--node-id', 'A', '--project', 'test-project', '--json'], LEG_ON);
+    assert(rA.result === 'ok' && rA.barrier === 'deferred_to_group', 'SYNTH-PARENT-DIRTY: A deferred, got ' + JSON.stringify(rA));
+    const rB = runNode(repoRoot, ['close-node', '--node-id', 'B', '--project', 'test-project', '--json'], LEG_ON);
+    assert(rB.result === 'refuse' && rB.reason === 'parent_dirty', 'SYNTH-PARENT-DIRTY: B refused parent_dirty (floated slip caught), got ' + JSON.stringify(rB));
+    assert(gitOut(repoRoot, ['rev-parse', 'HEAD']) === base, 'SYNTH-PARENT-DIRTY: HEAD NOT advanced (no merge on a dirty parent)');
+    assert(ledgerStatus(planP(repoRoot), 'B') === 'in_progress', 'SYNTH-PARENT-DIRTY: B stays in_progress on refusal');
+    cleanup(repoRoot);
+  }
+
+  // PARENT-CLEAN-CHECK-DIRECT: the fence reuses the EXACT barrier allowband — workflow churn (.cache /
+  //   running-set / plan) NEVER trips it (the advisor's #1: else it ships inert), only a production path does.
+  {
+    const { repoRoot } = provisionedRepo(); // open-ready left .cache churn dirty in the parent
+    const clean = runVal(repoRoot, [planP(repoRoot), '--parent-clean-check', '--project', 'test-project', '--json']);
+    assert(clean.result === 'pass', 'PARENT-CLEAN-DIRECT: workflow churn alone is clean (allowband reused), got ' + JSON.stringify(clean));
+    fs.writeFileSync(path.join(repoRoot, 'prod.js'), '// production dirty\n');
+    const dirty = runVal(repoRoot, [planP(repoRoot), '--parent-clean-check', '--project', 'test-project', '--json']);
+    assert(dirty.result === 'refuse' && dirty.reason === 'parent_dirty' && (dirty.dirty || []).indexOf('prod.js') !== -1, 'PARENT-CLEAN-DIRECT: a production dirty path trips parent_dirty, got ' + JSON.stringify(dirty));
+    cleanup(repoRoot);
+  }
+
+  // ★ PARENT-CLEAN-CHECK-UALL (adversarial review caught): a NON-exempt file inside a WHOLLY-NEW untracked
+  //   subdir whose name is exempt-by-prefix is MASKED by `git status --porcelain`'s dir-collapse (`??
+  //   kaola-workflow/archive/`) → classified by the collapsed dir name → EVADES the fence. The fence now
+  //   uses --untracked-files=all so each file is classified precisely. Concrete vector: a FOREIGN-archive
+  //   write into a fresh kaola-workflow/archive/<other>/ subdir (archive/ is new under the tracked
+  //   kaola-workflow/, so default porcelain collapses it; the full path is foreignArchive → NOT exempt).
+  {
+    const { repoRoot } = provisionedRepo();
+    fs.mkdirSync(path.join(repoRoot, 'kaola-workflow', 'archive', 'OTHER-PROJECT'), { recursive: true });
+    fs.writeFileSync(path.join(repoRoot, 'kaola-workflow', 'archive', 'OTHER-PROJECT', 'leak.js'), '// foreign-archive production leak masked by dir-collapse\n');
+    const r = runVal(repoRoot, [planP(repoRoot), '--parent-clean-check', '--project', 'test-project', '--json']);
+    assert(r.result === 'refuse' && r.reason === 'parent_dirty' && (r.dirty || []).some(p => /archive\/OTHER-PROJECT\/leak\.js/.test(p)), 'PARENT-CLEAN-UALL: a foreign-archive leak in a new collapsed subdir trips parent_dirty (RED without -uall: collapses to kaola-workflow/archive/ → exempt → false pass), got ' + JSON.stringify(r));
+    cleanup(repoRoot);
+  }
+
+  // ★ SYNTH-SERIAL-CLOSE-FENCED (adversarial review caught — silent-loss): close-and-open-next (the SERIAL
+  //   close path) has NO isMember routing — unlike close-node → closeGroupMember — so closing a live
+  //   lane-group member out-of-band here would skip the synthesizer + barriers and ORPHAN the leg's
+  //   committed work (the per-node barrier passes vacuously on the empty PARENT diff). The S4 scheduler
+  //   fence (excl:['scheduler']) makes it refuse scheduler_active fail-closed; the member stays in_progress.
+  {
+    const { repoRoot, cacheDir, legA } = provisionedRepo();
+    writeEvidence(cacheDir, 'A');
+    fs.writeFileSync(path.join(legA, 'ax.js'), '// A leg work that a serial close would orphan\n');
+    const r = runNode(repoRoot, ['close-and-open-next', '--node-id', 'A', '--project', 'test-project', '--json'], LEG_ON);
+    assert(r.result === 'refuse' && r.reason === 'scheduler_active', 'SYNTH-SERIAL-CLOSE-FENCED: close-and-open-next on a live lane-group member refuses scheduler_active (no out-of-band silent close), got ' + JSON.stringify(r));
+    assert(ledgerStatus(planP(repoRoot), 'A') === 'in_progress', 'SYNTH-SERIAL-CLOSE-FENCED: A stays in_progress (not silently closed), got ' + ledgerStatus(planP(repoRoot), 'A'));
+    cleanup(repoRoot);
+  }
+
+  // SYNTH-OMISSION (advisor #2, no-silent-loss): commit work in BOTH legs but merge ONLY legA → M. The
+  //   commit-based union barrier catches legB's omission via per-leg-head ancestor inclusion (subset alone
+  //   would FALSE-PASS — legA's files ⊆ union — and legB's committed work would be lost on teardown).
+  {
+    const { repoRoot, legA, legB } = provisionedRepo();
+    fs.writeFileSync(path.join(legA, 'ax.js'), '// a\n');
+    execFileSync('git', ['-C', legA, 'add', '-A'], STDIO_Q); execFileSync('git', ['-C', legA, 'commit', '-m', 'la'], STDIO_Q);
+    fs.writeFileSync(path.join(legB, 'by.js'), '// b\n');
+    execFileSync('git', ['-C', legB, 'add', '-A'], STDIO_Q); execFileSync('git', ['-C', legB, 'commit', '-m', 'lb'], STDIO_Q);
+    execFileSync('git', ['-C', repoRoot, 'merge', '--no-ff', '-m', 'partial: only legA', 'kw/legs/test-project/A'], STDIO_Q);
+    const M = gitOut(repoRoot, ['rev-parse', 'HEAD']);
+    const r = runVal(repoRoot, [planP(repoRoot), '--group-barrier', '--group-id', 'lg-A-B', '--merge-commit', M, '--project', 'test-project', '--json']);
+    assert(r.result === 'refuse' && r.reason === 'leg_omitted_from_merge', 'SYNTH-OMISSION: a dropped leg (legB not in M) is caught leg_omitted_from_merge, got ' + JSON.stringify(r));
+    cleanup(repoRoot);
+  }
+
+  // SYNTH-UNION-ESCAPE (B1 belt-and-suspenders): a COMMITTED out-of-union path in M is caught by the
+  //   commit diff (write_set_overflow) — the union barrier rejects an escape even if it slipped a per-leg gate.
+  {
+    const { repoRoot, legA, legB } = provisionedRepo();
+    fs.writeFileSync(path.join(legA, 'ax.js'), '// a\n');
+    fs.writeFileSync(path.join(legA, 'zz.js'), '// OUT OF UNION committed\n');
+    execFileSync('git', ['-C', legA, 'add', '-A'], STDIO_Q); execFileSync('git', ['-C', legA, 'commit', '-m', 'la+escape'], STDIO_Q);
+    fs.writeFileSync(path.join(legB, 'by.js'), '// b\n');
+    execFileSync('git', ['-C', legB, 'add', '-A'], STDIO_Q); execFileSync('git', ['-C', legB, 'commit', '-m', 'lb'], STDIO_Q);
+    execFileSync('git', ['-C', repoRoot, 'merge', '--no-ff', '-m', 'synth', 'kw/legs/test-project/A', 'kw/legs/test-project/B'], STDIO_Q);
+    const M = gitOut(repoRoot, ['rev-parse', 'HEAD']);
+    const r = runVal(repoRoot, [planP(repoRoot), '--group-barrier', '--group-id', 'lg-A-B', '--merge-commit', M, '--project', 'test-project', '--json']);
+    assert(r.result === 'refuse' && r.reason === 'write_set_overflow', 'SYNTH-UNION-ESCAPE: an out-of-union committed path in M refuses write_set_overflow, got ' + JSON.stringify(r));
+    cleanup(repoRoot);
+  }
+
+  // SYNTH-MERGE-COMMIT-ARG-VALIDATION: --merge-commit must resolve to a commit, must descend from base,
+  //   and requires --project.
+  {
+    const { repoRoot, legA, legB } = provisionedRepo();
+    fs.writeFileSync(path.join(legA, 'ax.js'), '// a\n');
+    execFileSync('git', ['-C', legA, 'add', '-A'], STDIO_Q); execFileSync('git', ['-C', legA, 'commit', '-m', 'la'], STDIO_Q);
+    fs.writeFileSync(path.join(legB, 'by.js'), '// b\n');
+    execFileSync('git', ['-C', legB, 'add', '-A'], STDIO_Q); execFileSync('git', ['-C', legB, 'commit', '-m', 'lb'], STDIO_Q);
+    const bad = runVal(repoRoot, [planP(repoRoot), '--group-barrier', '--group-id', 'lg-A-B', '--merge-commit', 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef', '--project', 'test-project', '--json']);
+    assert(bad.result === 'refuse' && bad.reason === 'merge_commit_invalid', 'SYNTH-ARG: a non-resolving --merge-commit refuses merge_commit_invalid, got ' + JSON.stringify(bad));
+    // an UNRELATED commit (legA head — not a descendant merging BOTH; base is its ancestor but legB isn't)
+    // exercises the leg inclusion path; an unrelated-to-base commit exercises merge_base_unreachable. Build
+    // a detached commit with no relation to base by committing on an orphan-ish state: use legB head as M —
+    // base IS its ancestor, but legA is NOT in it → leg_omitted_from_merge (the inclusion guard fires first).
+    const legBhead = gitOut(repoRoot, ['rev-parse', 'kw/legs/test-project/B']);
+    const omit = runVal(repoRoot, [planP(repoRoot), '--group-barrier', '--group-id', 'lg-A-B', '--merge-commit', legBhead, '--project', 'test-project', '--json']);
+    assert(omit.result === 'refuse' && omit.reason === 'leg_omitted_from_merge', 'SYNTH-ARG: legB head as M omits legA, got ' + JSON.stringify(omit));
+    const noProj = runVal(repoRoot, [planP(repoRoot), '--group-barrier', '--group-id', 'lg-A-B', '--merge-commit', legBhead, '--json']);
+    assert(noProj.result === 'refuse' && noProj.reason === 'missing_project', 'SYNTH-ARG: --merge-commit without --project refuses missing_project, got ' + JSON.stringify(noProj));
+    cleanup(repoRoot);
+  }
+
+  // SYNTH-MERGE-BASE-UNREACHABLE (adversarial review: covers a previously-untested fail-closed guard): an M
+  //   that does NOT descend from the legs' shared branch-point (a tamper/corruption M) → merge_base_unreachable.
+  {
+    const { repoRoot, legA, legB } = provisionedRepo();
+    fs.writeFileSync(path.join(legA, 'ax.js'), '// a\n');
+    execFileSync('git', ['-C', legA, 'add', '-A'], STDIO_Q); execFileSync('git', ['-C', legA, 'commit', '-m', 'la'], STDIO_Q);
+    fs.writeFileSync(path.join(legB, 'by.js'), '// b\n');
+    execFileSync('git', ['-C', legB, 'add', '-A'], STDIO_Q); execFileSync('git', ['-C', legB, 'commit', '-m', 'lb'], STDIO_Q);
+    // an ORPHAN commit (commit-tree with NO parent) — base is not an ancestor of it.
+    const tree = gitOut(repoRoot, ['write-tree']);
+    const orphan = execFileSync('git', ['-C', repoRoot, 'commit-tree', tree, '-m', 'orphan'], { encoding: 'utf8' }).trim();
+    const r = runVal(repoRoot, [planP(repoRoot), '--group-barrier', '--group-id', 'lg-A-B', '--merge-commit', orphan, '--project', 'test-project', '--json']);
+    assert(r.result === 'refuse' && r.reason === 'merge_base_unreachable', 'SYNTH-MERGE-BASE-UNREACHABLE: an M not descending from base refuses merge_base_unreachable, got ' + JSON.stringify(r));
+    cleanup(repoRoot);
+  }
+
+  // SYNTH-LEG-BASELINE-SPLIT (adversarial review: covers a previously-untested fail-closed guard): the legs
+  //   of one level must share ONE branch-point; if leg B's anchored ref + manifest baseline both diverge from
+  //   leg A's, the validator detects the split (legs branched from different HEADs) → leg_baseline_split.
+  {
+    const { repoRoot, cacheDir, legA, legB } = provisionedRepo();
+    fs.writeFileSync(path.join(legA, 'ax.js'), '// a\n');
+    execFileSync('git', ['-C', legA, 'add', '-A'], STDIO_Q); execFileSync('git', ['-C', legA, 'commit', '-m', 'la'], STDIO_Q);
+    fs.writeFileSync(path.join(legB, 'by.js'), '// b\n');
+    execFileSync('git', ['-C', legB, 'add', '-A'], STDIO_Q); execFileSync('git', ['-C', legB, 'commit', '-m', 'lb'], STDIO_Q);
+    const M = (() => { execFileSync('git', ['-C', repoRoot, 'merge', '--no-ff', '-m', 'synth', 'kw/legs/test-project/A', 'kw/legs/test-project/B'], STDIO_Q); return gitOut(repoRoot, ['rev-parse', 'HEAD']); })();
+    // make a DIVERGENT branch-point commit, re-anchor leg B's ref to it AND match its manifest baseline (so
+    // B's #368 cross-check passes) — now A's base (baseRev) != B's base → split. Leg A's head is a real
+    // commit != baseRev, so it serves as the divergent baseline for B.
+    const divergent = gitOut(repoRoot, ['rev-parse', 'kw/legs/test-project/A']);
+    execFileSync('git', ['-C', repoRoot, 'update-ref', legRefName('B'), divergent], STDIO_Q);
+    const rs = readRS(cacheDir);
+    rs.lane_group.legs.B.baseline = divergent;
+    fs.writeFileSync(path.join(cacheDir, 'running-set.json'), JSON.stringify(rs, null, 2));
+    const r = runVal(repoRoot, [planP(repoRoot), '--group-barrier', '--group-id', 'lg-A-B', '--merge-commit', M, '--project', 'test-project', '--json']);
+    assert(r.result === 'refuse' && r.reason === 'leg_baseline_split', 'SYNTH-LEG-BASELINE-SPLIT: legs disagreeing on branch-point refuse leg_baseline_split, got ' + JSON.stringify(r));
+    cleanup(repoRoot);
+  }
+
+  // SYNTH-SINGLETON-FAST-PATH (AC8): a single-write-node frontier forms NO lane group (tryFormLaneGroup
+  //   needs ≥2) → NO leg worktree → runs serial in the parent with the normal per-node barrier.
+  {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'd463-singleton-'));
+    const projDir = path.join(repoRoot, 'kaola-workflow', 'test-project');
+    const cacheDir = path.join(projDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const planPath = path.join(projDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, [
+      '# Workflow Plan — test-project', '',
+      '## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| seed | code-explorer | — | — | 1 | sequence |',
+      '| solo | tdd-guide | seed | solo.js | 1 | sequence |',
+      '| review | code-reviewer | solo | — | 1 | sequence |',
+      '| finalize | finalize | review | — | 1 | sequence |', '',
+      '## Node Ledger', '',
+      '| id | status |', '| --- | --- |',
+      '| seed | complete |', '| solo | pending |', '| review | pending |', '| finalize | pending |', '',
+    ].join('\n') + '\n');
+    fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n');
+    const gs = (a) => execFileSync('git', ['-C', repoRoot, ...a], { stdio: ['ignore', 'ignore', 'ignore'] });
+    gs(['init']); gs(['config', 'user.email', 'kw@test']); gs(['config', 'user.name', 'kw']); gs(['config', 'commit.gpgsign', 'false']);
+    try { execFileSync('node', [VALIDATOR, planPath, '--freeze', '--repair', '--json'], { cwd: repoRoot, encoding: 'utf8' }); } catch (_) {}
+    fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
+    gs(['add', '-A']); gs(['commit', '-m', 'init']);
+    const open = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON);
+    assert(open.result === 'ok' && !open.laneGroup, 'SYNTH-SINGLETON: a single write node forms NO lane group, got ' + JSON.stringify(open));
+    assert(worktreePaths(repoRoot).filter(p => p.indexOf(path.join('.kw', 'legs')) !== -1).length === 0, 'SYNTH-SINGLETON: NO leg worktree provisioned for a singleton');
+    writeEvidence(cacheDir, 'solo');
+    fs.writeFileSync(path.join(repoRoot, 'solo.js'), '// solo work in the PARENT (no leg)\n');
+    const rc = runNode(repoRoot, ['close-node', '--node-id', 'solo', '--project', 'test-project', '--json'], LEG_ON);
+    assert(rc.result === 'ok' && !rc.synthesized, 'SYNTH-SINGLETON: close runs the normal per-node barrier in the parent (no synthesizer), got ' + JSON.stringify(rc));
     cleanup(repoRoot);
   }
 }
