@@ -117,6 +117,15 @@ above (session effort = `dispatch.codex_reasoning_effort` when non-null). Pass `
   frontiers. `KAOLA_FANOUT_CAP_READONLY` (default 8) applies to read-only batches.
 - Serial (`max_concurrent=1`) is the degraded mode; `opening` marker + `reconcile` handle
   batch crash-resume. `test_thrash` ≥ 3: escalate via `write-halt --reason test_thrash`.
+- **Write-leg dispatch discipline (#463 AC3).** Isolation is **discipline-dependent, not transparent** —
+  the Agent tool has no cwd parameter and a provisioned `.kw/legs/<project>/<node>` leg does NOT auto-redirect
+  a leg agent's edits. Dispatch each leg with its **absolute `legPath`**: every `Edit`/`Write` uses an
+  absolute `<legPath>/...` path and every Bash uses `cd "<legPath>" &&` (the load-bearing instruction in the
+  leg brief). The failure mode is **fail-closed containment, not construction**: a relative-path own-lane slip
+  lands in the parent (invisible to the per-leg barrier, #386-exempt from the write-lane hook) and is caught by
+  the **parent-clean fence** before the merge → `merge_conflict`/repair, never silent cross-contamination or
+  silent loss. **Bounded thrash:** after **K = 2** repair nudges on an agent that keeps writing out-of-lane,
+  escalate to a `merge_conflict` halt rather than looping.
 - `merge_conflict` (#463 write-overlap): a write-leg level whose FIRST-detection refusal —
   `member_vacuity` (a no-op leg), `write_set_overflow` (an overflow), or the synthesizer's octopus
   bail (a real same-file conflict) — survives `MERGE_CONFLICT_REPAIR_LIMIT` (K=3) bounded repairs.

@@ -5686,6 +5686,9 @@ function rtHarness(initialFiles, opts) {
     assert(JSON.stringify(mDiff) === JSON.stringify(['ax.js', 'by.js']), 'SYNTH-DISJOINT: diff base→M == union(declared), got ' + JSON.stringify(mDiff));
     const timings = fs.existsSync(path.join(cacheDir, 'node-timings.jsonl')) ? fs.readFileSync(path.join(cacheDir, 'node-timings.jsonl'), 'utf8') : '';
     assert(/level_merged/.test(timings), 'SYNTH-DISJOINT: a level_merged telemetry event was recorded');
+    // #463 Slice 6 (AC17): the synthesizer emits leg_committed PER leg (the leg-lifecycle telemetry
+    // leg_opened → leg_committed → level_merged). The live AC18 probe caught its absence; this pins it.
+    assert((timings.match(/leg_committed/g) || []).length === 2, 'SYNTH-DISJOINT: leg_committed emitted once per leg (AC17), got ' + (timings.match(/leg_committed/g) || []).length);
     assert(worktreePaths(repoRoot).filter(p => p.indexOf(path.join('.kw', 'legs')) !== -1).length === 0, 'SYNTH-DISJOINT: legs torn down after the merge');
     cleanup(repoRoot);
   }

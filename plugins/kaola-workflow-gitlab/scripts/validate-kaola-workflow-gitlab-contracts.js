@@ -181,8 +181,8 @@ assert(hookFiles.some(file => file.endsWith('kaola-workflow-pre-commit.sh')), 'G
 assert(!hookFiles.some(file => file.endsWith('kaola-workflow-phantom-advisor.sh')), 'GitLab phantom-advisor hook must be removed (#372)');
 // #376: the write-lane containment hook ships in every edition (byte-identical, forge-neutral).
 assert(hookFiles.some(file => file.endsWith('kaola-workflow-write-lane.sh')), 'GitLab write-lane hook missing');
-// #451: 14 base role profiles (the 6 <role>-max xhigh effort variants are retired).
-assert(agentFiles.length === 14, 'expected 14 GitLab agent profiles (14 base; <role>-max retired #451)');
+// #451: 14 base role profiles (the 6 <role>-max xhigh effort variants are retired). #463: +synthesizer = 15.
+assert(agentFiles.length === 15, 'expected 15 GitLab agent profiles (14 base + synthesizer #463; <role>-max retired #451)');
 assert(exists(pluginRoot + '/config/agents.toml'), 'GitLab agents config missing');
 
 // #340 derived parity guard (enumeration-free): the dispatch config/agents.toml must register
@@ -673,6 +673,11 @@ assertConcept(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'adaptive exe
 assertIncludes(pluginRoot + '/commands/kaola-workflow-finalize.md', 'workflow_path: adaptive');
 assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-classifier.js', 'disjointWriteSets');
 assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-classifier.js', 'readPlanNodes');
+// #463 Slice 6 (AC11): token-pin the three write-overlap governance anchors (synthesizer reasoning floor,
+// policy field, PROTECTED set) in the GitLab edition tree.
+assertIncludes(pluginRoot + '/scripts/kaola-workflow-resolve-agent-model.js', 'REASONING_FLOOR_ROLES');
+assertIncludes(pluginRoot + '/scripts/kaola-workflow-adaptive-schema.js', 'WRITE_OVERLAP_POLICY_LEGAL');
+assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-classifier.js', 'PROTECTED_BASENAMES');
 assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js', 'workflow_path_refused');
 assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-repair-state.js', 'routeAdaptive');
 assertNotIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-repair-state.js', 'enable_adaptive');

@@ -513,12 +513,15 @@ adversarial-verifier
 contractor
 workflow-planner
 issue-scout
+synthesizer
 ```
 
 (`adversarial-verifier` is the read-only skeptic for the opt-in adaptive path; it is
 mirrored into the Codex editions for parity and is never a review gate. `contractor`,
 `workflow-planner`, and `issue-scout` are the adaptive lean-orchestrator roles —
-bookkeeper, DAG front end, and read-only bundle-lane backlog scout.)
+bookkeeper, DAG front end, and read-only bundle-lane backlog scout. `synthesizer` is the
+adaptive parallel-write convergence role (#463) — reasoning-class (Opus), dispatched only
+to reconcile concurrent write legs by intent on a real merge conflict.)
 
 The managed setup copies role configs into `.codex/agents/kaola-workflow/` and
 maintains a `# BEGIN kaola-workflow agents` block in `.codex/config.toml` while

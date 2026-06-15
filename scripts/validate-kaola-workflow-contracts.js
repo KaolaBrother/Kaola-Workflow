@@ -328,6 +328,11 @@ assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, '/kaola-workflow
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, 'removeLegacyStateBlocks');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'readActiveFolders');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'kw:claim\\s+(project|sess)=');
+// #463 Slice 6 (AC11): token-pin the three write-overlap governance anchors (synthesizer reasoning floor,
+// policy field, PROTECTED set) in the Codex plugin tree.
+assertIncludes(`${pluginRoot}/scripts/kaola-workflow-resolve-agent-model.js`, 'REASONING_FLOOR_ROLES');
+assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-schema.js`, 'WRITE_OVERLAP_POLICY_LEGAL');
+assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'PROTECTED_BASENAMES');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-sink-merge.js`, 'readActiveFolders');
 assertNotIncludes(`${pluginRoot}/scripts/kaola-workflow-sink-pr.js`, 'patchLockFile');
 

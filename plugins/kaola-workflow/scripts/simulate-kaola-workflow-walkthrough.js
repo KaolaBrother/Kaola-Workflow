@@ -894,7 +894,7 @@ function testCodexPreflight266() {
   // Build a fully-installed fixture to start from
   const root266 = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-266-preflight-'));
   try {
-    // Install all 14 profiles into the fixture
+    // Install all 15 profiles into the fixture (14 base + synthesizer #463)
     const installResult = spawnSync(process.execPath, [installProfilesScript, root266], {
       cwd: repoRoot, encoding: 'utf8'
     });
@@ -1015,7 +1015,7 @@ function testInstallSchemaPruneManifest332() {
     const agentsDir = path.join(fresh, '.codex', 'agents', 'kaola-workflow');
     const tomls = listTomls(agentsDir);
     // #451: 14 base role profiles (the <role>-max effort variants are retired).
-    assert(tomls.length === 14, '#451 AC3: fresh install must place exactly 14 *.toml (14 base; <role>-max retired), got ' + tomls.length);
+    assert(tomls.length === 15, '#463 AC: fresh install must place exactly 15 *.toml (14 base + synthesizer; <role>-max retired), got ' + tomls.length);
     assert(!tomls.includes('docs-lookup.toml'), '#332 AC3: docs-lookup.toml must not be installed');
     for (const f of tomls) {
       const role = f.replace(/\.toml$/, '');
@@ -1026,10 +1026,10 @@ function testInstallSchemaPruneManifest332() {
     assert(fs.existsSync(manifestPath), '#332 AC3: manifest must be written');
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     assert(manifest.schema_version === 1, '#332 AC3: manifest schema_version must be 1');
-    assert(Array.isArray(manifest.roles) && manifest.roles.length === 14, '#451 AC3: manifest must list 14 roles (14 base)');
-    assert(manifest.files && Object.keys(manifest.files).length === 14
+    assert(Array.isArray(manifest.roles) && manifest.roles.length === 15, '#463 AC: manifest must list 15 roles (14 base + synthesizer)');
+    assert(manifest.files && Object.keys(manifest.files).length === 15
       && Object.values(manifest.files).every(v => /^sha256:[0-9a-f]{64}$/.test(v)),
-      '#451 AC3: manifest.files must carry 14 sha256 entries');
+      '#463 AC: manifest.files must carry 15 sha256 entries (14 base + synthesizer)');
     const lastLine = r.stdout.trim().split('\n').pop();
     assert(lastLine === 'status: ok', '#332 AC3: installer stdout must end with `status: ok`, got: ' + lastLine);
   } finally {

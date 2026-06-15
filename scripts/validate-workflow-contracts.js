@@ -321,6 +321,11 @@ assertIncludes('hooks/hooks.json', 'kaola-workflow:write-lane');
 assertIncludes('hooks/kaola-workflow-write-lane.sh', 'KAOLA_LANE_CONTAINMENT');
 assertIncludes('hooks/kaola-workflow-write-lane.sh', 'running-set.json');
 assertIncludes('scripts/kaola-workflow-adaptive-schema.js', 'function resolveLaneContainment');
+// #463 Slice 6 (AC11): token-pin the three write-overlap governance anchors so a future edit cannot
+// silently drop the synthesizer reasoning floor, the policy field, or the PROTECTED set.
+assertIncludes('scripts/kaola-workflow-resolve-agent-model.js', 'REASONING_FLOOR_ROLES');
+assertIncludes('scripts/kaola-workflow-adaptive-schema.js', 'WRITE_OVERLAP_POLICY_LEGAL');
+assertIncludes('scripts/kaola-workflow-classifier.js', 'PROTECTED_BASENAMES');
 assertManifestHook('kaola-workflow-write-lane.sh');           // #407: was install.sh literal
 assertManifestScript('kaola-workflow-active-folders.js');     // #407: was install.sh literal
 assertManifestScript('kaola-workflow-resolve-agent-model.js'); // #407: was install.sh literal
