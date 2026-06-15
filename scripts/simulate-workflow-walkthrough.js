@@ -1760,6 +1760,51 @@ function testAdaptiveValidatorGovernance() {
   console.log('testAdaptiveValidatorGovernance: PASSED');
 }
 
+function testQuestionShaped486() {
+  // #486: the question-shaped / bug-shaped worked examples (the DAGs the new planner hints author) must
+  // validate IN-GRAMMAR against the CURRENT plan-validator with ZERO grammar changes — the AC's proof
+  // that the pattern is pure composition over existing roles/shapes, not a new mechanism.
+  const tmp = adaptiveTmp('question-shaped-486');
+  try {
+    // Case A — probe → assume → adversarially critique → converge (all read-only): in-grammar. No code
+    // node ⇒ no code-reviewer needed; the adversarial-verifier critiques the leading answer.
+    let v = validatePlanFixture(tmp, [
+      '| probe | code-explorer | — | — | 1 | sequence |',
+      '| assume | planner | probe | — | 1 | sequence |',
+      '| critique | adversarial-verifier | assume | — | 1 | sequence |',
+      '| converge | planner | critique | — | 1 | sequence |',
+      '| done | finalize | converge | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'in-grammar', '#486 Case A (probe→assume→critique→converge) must be in-grammar, got: ' + JSON.stringify(v));
+
+    // The read-only adversarial-verifier MAJORITY-REFUTE fan-out (#486 inherits #472's concurrent
+    // dispatch; rides the existing majority-refute barrier): in-grammar, zero blast radius.
+    v = validatePlanFixture(tmp, [
+      '| probe-a | code-explorer | — | — | 1 | sequence |',
+      '| probe-b | knowledge-lookup | — | — | 1 | sequence |',
+      '| assume | planner | probe-a,probe-b | — | 1 | sequence |',
+      '| crit1 | adversarial-verifier | assume | — | 1 | fanout(critics) |',
+      '| crit2 | adversarial-verifier | assume | — | 1 | fanout(critics) |',
+      '| crit3 | adversarial-verifier | assume | — | 1 | fanout(critics) |',
+      '| converge | planner | crit1,crit2,crit3 | — | 1 | sequence |',
+      '| done | finalize | converge | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'in-grammar', '#486 read-only critic fan-out (majority-refute) must be in-grammar, got: ' + JSON.stringify(v));
+
+    // Bug Case B FIX run (after the read-only diagnosis re-plans into a now-knowable shape): tdd-guide
+    // RED (the reproduction test) → fix → GREEN → code-reviewer → finalize — a normal build DAG, G1 met.
+    v = validatePlanFixture(tmp, [
+      '| repro | code-explorer | — | — | 1 | sequence |',
+      '| fix | tdd-guide | repro | lib/buggy.js | 1 | sequence |',
+      '| review | code-reviewer | fix | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'in-grammar', '#486 bug fix-run (tdd-guide RED→GREEN→review) must be in-grammar, got: ' + JSON.stringify(v));
+
+    console.log('testQuestionShaped486: PASSED');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+}
+
 // issue #233 (audit B6): fan-out groups are scoped by (label, fan-out origin), not label alone.
 // GAP: two topologically-independent branches that reuse the same label `impl` must NOT be summed
 // against FANOUT_CAP nor cross-checked for disjointness as one merged fan-out. CONTROL: a genuine
@@ -12160,6 +12205,7 @@ function buildRegistry() {
   add('testAdaptiveConsentHaltSurfaces',                  testAdaptiveConsentHaltSurfaces);
   add('testAdaptiveCrossSurfaceMutexWalkthrough',         testAdaptiveCrossSurfaceMutexWalkthrough);
   add('testAdaptiveValidatorGovernance',                  testAdaptiveValidatorGovernance);
+  add('testQuestionShaped486',                            testQuestionShaped486);
   add('testAdaptiveFanoutGroupScoping',                   testAdaptiveFanoutGroupScoping);
   add('testAdaptiveReadySetDisjointness',                 testAdaptiveReadySetDisjointness);
   add('testAdaptiveGateBarrierEnforcement',               testAdaptiveGateBarrierEnforcement);

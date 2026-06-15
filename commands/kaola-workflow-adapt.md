@@ -147,6 +147,10 @@ The full shaping guidance lives in `agents/workflow-planner.md`. One heuristic i
 
 - Author a `knowledge-lookup` node when the task depends on external library or API behavior, framework conventions, or open-web/expertise knowledge that cannot be confirmed from the local codebase alone. This mirrors the Phase 1 `knowledge-lookup` trigger.
 
+### Question-shaped & bug-shaped issues (#486)
+
+When the issue is a **question without a settled answer** ("which approach?", "is X viable?", "why does Y happen?"), the `workflow-planner` authors an **investigation**, not a build DAG around an unvalidated premise (which would launder the guess past the artifact-vs-plan verdict). The arc maps onto existing roles with **zero new grammar**: **probe → assume → adversarially critique → converge** — read-only `code-explorer`/`knowledge-lookup` probes (authored as a read-only fan-out, inheriting #472 concurrency) → `planner` proposes 2–3 candidate answers, each with an explicit falsification test → `adversarial-verifier` (a separate subagent; read-only but has Bash, so for a bug it **runs the existing reproduction**) tries to refute the leading answer → `planner`/`synthesizer` converges. **Freeze-once split:** Case A (shape knowable, answer not) authors the whole DAG up front (or `select(<group>)` for the enumerable version); Case B (shape depends on findings — e.g. a flaky-bug diagnosis) runs a short read-only shaping run, then RE-PLANS as a fresh run (new `plan_hash`, no in-place thaw). For a **bug**, the falsification criterion IS the reproduction ("root cause or symptom mask?"); cannot-reproduce-after-a-bounded-probe → the `consent`-halt valve (`write-halt --reason consent`), never a guess-fix. Escalate values, not facts; `decision:ask` stays advisory (no new gate). Full pattern: the `workflow-planner` profile.
+
 ## Bundle Lane — Multi-Issue Adaptive Claim
 
 When the router delivers a same-scope bundle (explicit-bundle or auto-bundle mode —

@@ -172,6 +172,25 @@ for (const file of phaseCommands) {
   for (const token of retired) assertNotIncludes(file, token);
 }
 
+// #486: the question-shaped / bug-shaped authoring hint must propagate to ALL SIX adapt routing
+// surfaces (#400) — the 3 edition `kaola-workflow-adapt.md` commands + the 3 Codex
+// `kaola-workflow-adapt/SKILL.md` packs. A drop on any surface (the 4-of-6 gap the route-reachability
+// contract guards against) fails here. The hint is forge-neutral (no script names / paths / CLI), so
+// the pinned tokens are byte-identical across all six. This block runs in the claude chain (and its
+// byte-mirror in the codex chain), reading every edition tree, so the whole 6-surface set is enforced.
+const adaptSurfaces486 = [
+  'commands/kaola-workflow-adapt.md',
+  'plugins/kaola-workflow-gitlab/commands/kaola-workflow-adapt.md',
+  'plugins/kaola-workflow-gitea/commands/kaola-workflow-adapt.md',
+  'plugins/kaola-workflow/skills/kaola-workflow-adapt/SKILL.md',
+  'plugins/kaola-workflow-gitlab/skills/kaola-workflow-adapt/SKILL.md',
+  'plugins/kaola-workflow-gitea/skills/kaola-workflow-adapt/SKILL.md',
+];
+for (const file of adaptSurfaces486) {
+  assertIncludes(file, 'Question-shaped & bug-shaped issues (#486)');
+  assertIncludes(file, 'root cause or symptom mask'); // the bug-flavor guardrail token
+}
+
 // issue-152: routed-fix Agent blocks must carry explicit model placeholders
 const routedFixFiles = [
   'commands/kaola-workflow-phase4.md',
