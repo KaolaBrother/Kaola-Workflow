@@ -95,11 +95,23 @@ function checkDispatchAttestations(logDirCandidates, receipt) {
   }
 }
 
+// #476: the closed allowlist of VALUE-taking flags (camelCase, as the generic branch stores them).
+// A `--flag value` whose name is NOT here is an UNRECOGNIZED flag — recorded for a typed unknown_flag
+// refusal in main() BEFORE any destructive side effect, never silently dropped. The boolean flags are
+// the explicit `--x` branches below (they `continue`); anything reaching the generic branch is either a
+// known value flag or unknown. (Keep this in sync with the value flags the subcommands read.)
+const KNOWN_VALUE_FLAGS = new Set([
+  'branch', 'issue', 'project', 'reason', 'runtime', 'sink',
+  'targetIssue', 'targetIssues', 'workflowPath', 'prNumber', 'issueNumbers',
+]);
+
 function parseArgs(argv) {
   const args = {};
   for (let i = 0; i < argv.length; i++) {
     const key = argv[i];
     const val = argv[i + 1];
+    // #476: --help/-h is a SAFE no-op (main() prints usage + exits 0 with zero side effects).
+    if (key === '--help' || key === '-h') { args.help = true; continue; }
     if (key === '--json') { args.json = true; continue; }
     if (key === '--force') { args.force = true; continue; }
     if (key === '--keep-worktree') { args.keepWorktree = true; continue; }
@@ -123,10 +135,24 @@ function parseArgs(argv) {
     if (key === '--attest-planner-spawn') { args.attestPlannerSpawn = true; continue; }
     // #338: contractor self-attest flag at the finalize seam; a boolean flag like --json/--force.
     if (key === '--attest-contractor-spawn') { args.attestContractorSpawn = true; continue; }
-    if (key.startsWith('--') && val !== undefined && !val.startsWith('--')) {
+    if (key.startsWith('--')) {
       const name = key.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
-      args[name] = val;
-      i++;
+      if (KNOWN_VALUE_FLAGS.has(name)) {
+        // A known value flag consumes the next token iff it exists and is not itself a flag (mirrors
+        // the historical generic-branch rule; a missing value leaves the flag undefined, not "unknown").
+        if (val !== undefined && !val.startsWith('--')) { args[name] = val; i++; }
+        continue;
+      }
+      // #476: an UNRECOGNIZED long flag (e.g. --help slipping past, --typo) — record it, do NOT drop
+      // it. main() turns a non-empty unknownFlags into a typed `unknown_flag` refusal with ZERO
+      // mutation, before any destructive subcommand body runs.
+      (args.unknownFlags || (args.unknownFlags = [])).push(key);
+      continue;
+    }
+    // #476: an unrecognized SHORT flag (e.g. -x). `-h` is handled above; a bare `-` is not a flag.
+    if (key.startsWith('-') && key.length > 1) {
+      (args.unknownFlags || (args.unknownFlags = [])).push(key);
+      continue;
     }
   }
   for (const key of ['issue', 'targetIssue', 'prNumber']) {
@@ -2782,9 +2808,31 @@ function cmdLegacyWorktreeCleanup() {
   }
 }
 
+const USAGE = 'usage: kaola-gitea-workflow-claim.js <claim|authoring-allowed|release|status|patch-branch|bootstrap|startup|finalize|pick-next|resume|worktree-status|worktree-finalize|sink-fallback|watch-pr|stale-worktree-check|stale-worktree-cleanup|legacy-worktree-cleanup|audit-labels|repair-labels>\n'
+  + '  flags: --project P [--json] [--force] [--strict] [--issue N] [--target-issue N] [--target-issues A,B] [--pr-number N]\n'
+  + '         [--branch B] [--reason R] [--runtime claude|codex] [--sink merge|mr|pr] [--workflow-path adaptive|full|fast]\n'
+  + '         [--keep-worktree] [--keep-open|--keep-issue-open] [--keep-branch] [--execute] [--archive] [--export]\n'
+  + '         [--attest-planner-spawn] [--attest-contractor-spawn]\n'
+  + '  --help, -h   print this usage and exit (no side effects).';
+
 function main() {
   const sub = process.argv[2];
-  assert(sub, 'usage: kaola-gitea-workflow-claim.js <claim|authoring-allowed|release|status|patch-branch|bootstrap|startup|finalize|pick-next|resume|worktree-status|worktree-finalize|sink-fallback|watch-pr|stale-worktree-check|stale-worktree-cleanup|legacy-worktree-cleanup|audit-labels|repair-labels>');
+  // #476: --help / -h is ALWAYS a safe no-op — print usage and exit 0 with ZERO side effects, even on
+  // a destructive subcommand (a help probe must never run a finalize+sink). Checked across the whole
+  // argv (the flag may sit in the subcommand slot, e.g. `claim.js --help`).
+  const rawArgs = process.argv.slice(2);
+  if (rawArgs.includes('--help') || rawArgs.includes('-h')) { process.stdout.write(USAGE + '\n'); return; }
+  // #476: reject UNRECOGNIZED flags with a typed `unknown_flag` refusal and ZERO mutation, BEFORE any
+  // subcommand body. An unknown flag (a typo, a deprecated flag) used to be silently dropped and the
+  // destructive subcommand ran to completion (the KaolaTerminal issue-85 orphan root cause).
+  const topArgs = parseArgs(process.argv.slice(3));
+  if (topArgs.unknownFlags && topArgs.unknownFlags.length) {
+    const hint = 'Unrecognized flag(s): ' + topArgs.unknownFlags.join(', ') + '. Refusing with zero side effects — run `--help` for usage. An unknown flag must never fall through to a destructive subcommand.';
+    if (topArgs.json) process.stdout.write(JSON.stringify({ result: 'refuse', reason: 'unknown_flag', unknownFlags: topArgs.unknownFlags, operator_hint: hint }) + '\n');
+    else process.stderr.write('kaola-gitea-workflow-claim: unknown_flag — ' + hint + '\n');
+    process.exitCode = 1; return;
+  }
+  assert(sub, USAGE);
   if (sub === 'claim') return cmdClaim();
   if (sub === 'authoring-allowed') return cmdAuthoringAllowed();
   if (sub === 'release' || sub === 'discard') return cmdRelease();

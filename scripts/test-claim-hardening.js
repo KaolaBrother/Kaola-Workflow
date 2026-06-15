@@ -226,6 +226,84 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
   }
 }
 
+// #476: --help is a SAFE no-op + unrecognized flags REFUSE with zero side effects, on the destructive
+// lifecycle scripts. Drives the REAL subprocess CLI (not the module) per the issue's acceptance, and
+// asserts no archive / no merge / no branch deletion occurred — the KaolaTerminal issue-85 orphan was
+// `finalize --help` and `sink-merge ... --help` running to completion.
+{
+  const { execFileSync } = require('child_process');
+  const CLAIM = path.join(__dirname, 'kaola-workflow-claim.js');
+  const SINK = path.join(__dirname, 'kaola-workflow-sink-merge.js');
+  const env476 = Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_GH_REMOTE_TIMEOUT_MS: '500' });
+  const run = (script, argv, cwd) => {
+    try { return { code: 0, out: execFileSync('node', [script, ...argv], { cwd, encoding: 'utf8', env: env476 }) }; }
+    catch (e) { return { code: (e.status == null ? 1 : e.status), out: String(e.stdout || '') + String(e.stderr || '') }; }
+  };
+  const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-476-')));
+  const proj = path.join(repo, 'kaola-workflow', 'issue-476t');
+  fs.mkdirSync(proj, { recursive: true });
+  fs.writeFileSync(path.join(proj, 'workflow-state.md'), '# State\nstatus: complete\nissue_number: 476\n');
+  const g = (a) => { try { execFileSync('git', ['-C', repo, ...a], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch (_) {} };
+  g(['init']); g(['config', 'user.email', 't@t']); g(['config', 'user.name', 't']); g(['config', 'commit.gpgsign', 'false']);
+  fs.writeFileSync(path.join(repo, '.gitignore'), '.kw/\n'); g(['add', '-A']); g(['commit', '-m', 'init']);
+  const archiveDir = path.join(repo, 'kaola-workflow', 'archive');
+
+  // (a) claim finalize --help → usage + exit 0 + NO archive (the destructive path did not run).
+  const a = run(CLAIM, ['finalize', '--project', 'issue-476t', '--help'], repo);
+  assert(a.code === 0 && /^usage:/m.test(a.out), '#476: claim finalize --help prints usage + exit 0 (got code ' + a.code + ')');
+  assert(!fs.existsSync(archiveDir), '#476: claim finalize --help did NOT archive (zero side effects)');
+
+  // (b) claim finalize --typo --json → unknown_flag refuse + exit 1 + NO archive.
+  const b = run(CLAIM, ['finalize', '--project', 'issue-476t', '--typo', '--json'], repo);
+  let bj = {}; try { bj = JSON.parse(b.out.trim().split('\n').pop()); } catch (_) {}
+  assert(b.code === 1 && bj.reason === 'unknown_flag' && (bj.unknownFlags || []).includes('--typo'),
+    '#476: claim finalize --typo → unknown_flag refuse exit 1 (got ' + b.out.trim() + ')');
+  assert(!fs.existsSync(archiveDir), '#476: claim finalize --typo did NOT archive (zero mutation)');
+
+  // (c) a VALID flag still works (no false-reject regression): status --json.
+  const c = run(CLAIM, ['status', '--project', 'issue-476t', '--json'], repo);
+  assert(c.code === 0 && /"count"/.test(c.out), '#476: a valid flag (status --json) is NOT false-rejected (got ' + c.out.trim() + ')');
+
+  // (d) sink-merge --help → usage + exit 0 + branch NOT merged/deleted.
+  g(['checkout', '-b', 'workflow/issue-476t']);
+  fs.writeFileSync(path.join(repo, 'x.txt'), 'x'); g(['add', '-A']); g(['commit', '-m', 'feat']);
+  g(['checkout', 'main']);
+  const headBefore = execFileSync('git', ['-C', repo, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  const d = run(SINK, ['--branch', 'workflow/issue-476t', '--project', 'issue-476t', '--help'], repo);
+  assert(d.code === 0 && /^usage:/m.test(d.out), '#476: sink-merge --help prints usage + exit 0 (got ' + d.out.trim() + ')');
+  const branchStill = execFileSync('git', ['-C', repo, 'branch', '--list', 'workflow/issue-476t'], { encoding: 'utf8' }).trim();
+  const headAfter = execFileSync('git', ['-C', repo, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+  assert(branchStill !== '' && headAfter === headBefore, '#476: sink-merge --help did NOT merge or delete the branch (zero side effects)');
+
+  // (e) sink-merge --bogus → unknown_flag refuse + exit 1.
+  const e = run(SINK, ['--branch', 'workflow/issue-476t', '--project', 'issue-476t', '--bogus'], repo);
+  let ej = {}; try { ej = JSON.parse(e.out.trim().split('\n').pop()); } catch (_) {}
+  assert(e.code === 1 && ej.reason === 'unknown_flag', '#476: sink-merge --bogus → unknown_flag refuse exit 1 (got ' + e.out.trim() + ')');
+
+  // (f) GREEDY-SWALLOW guard: a value flag must NOT swallow --help / an unknown flag positioned in its
+  // value slot (else the help/unknown gate never fires and the destructive transaction runs). This is
+  // the path the end-of-argv tests (a)/(d) do NOT exercise.
+  const f1 = run(SINK, ['--branch', 'workflow/issue-476t', '--project', '--help'], repo); // --help in --project's value slot
+  assert(f1.code === 0 && /^usage:/m.test(f1.out), '#476: sink-merge --project --help must STILL be caught as help (no swallow), got code ' + f1.code + ' ' + f1.out.trim());
+  const branchAfterSwallow = execFileSync('git', ['-C', repo, 'branch', '--list', 'workflow/issue-476t'], { encoding: 'utf8' }).trim();
+  assert(branchAfterSwallow !== '', '#476: the swallowed --help did NOT merge/delete the branch (zero side effects)');
+  const f2 = run(SINK, ['--branch', '--bogus', '--project', 'issue-476t'], repo); // --bogus in --branch's value slot
+  let f2j = {}; try { f2j = JSON.parse(f2.out.trim().split('\n').pop()); } catch (_) {}
+  assert(f2.code === 1 && f2j.reason === 'unknown_flag', '#476: sink-merge --branch --bogus must refuse unknown_flag (no swallow), got ' + f2.out.trim());
+  // claim.js is already swallow-safe (its value branch requires !val.startsWith("--")); confirm it.
+  const f3 = run(CLAIM, ['finalize', '--project', '--help'], repo);
+  assert(f3.code === 0 && /^usage:/m.test(f3.out), '#476: claim finalize --project --help must be caught as help (no swallow), got code ' + f3.code);
+
+  // (g) SHORT-flag (-h) swallow: a value flag must not swallow `-h` either (it is NOT --prefixed). The
+  // sink help gate scans the RAW argv before parseArgs, so `--issue-numbers -h` is still caught as help.
+  const g1 = run(SINK, ['--branch', 'workflow/issue-476t', '--project', 'issue-476t', '--issue-numbers', '-h'], repo);
+  assert(g1.code === 0 && /^usage:/m.test(g1.out), '#476: sink-merge --issue-numbers -h must STILL be caught as help (raw-argv scan, no -h swallow), got code ' + g1.code + ' ' + g1.out.trim());
+  const branchAfterG = execFileSync('git', ['-C', repo, 'branch', '--list', 'workflow/issue-476t'], { encoding: 'utf8' }).trim();
+  assert(branchAfterG !== '', '#476: the swallowed -h did NOT merge/delete the branch (zero side effects)');
+
+  fs.rmSync(repo, { recursive: true, force: true });
+}
+
 if (failed > 0) {
   console.error('claim-hardening tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;
