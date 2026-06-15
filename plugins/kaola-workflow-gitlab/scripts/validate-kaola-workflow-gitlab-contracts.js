@@ -664,7 +664,7 @@ assertIncludes(pluginRoot + '/commands/kaola-workflow-adapt.md', 'do not blind-r
 assertConcept(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'adaptive execution + governance', [
   '## Node Ledger', 'plan_hash', 'post-dominate', 'auto-run', 'provisional', 'halt for consent',
   'escalated_to_full: consent', 'typed refusal', 'quorum', 'tally-fn', 'validateNodeOutput', 'test_thrash',
-  'merge_conflict',
+  'merge_conflict', 'synthesizer',
   // #303 anti-drift: pin the rolling-dispatch + crash-repair + opening-lifecycle primitives.
   'top-up', 'reconcile', 'opening',
   // #335 anti-drift: pin the mechanical main→worktree project-folder mirror step.
@@ -812,6 +812,8 @@ for (const tomlFile of fs.readdirSync(path.join(root, pluginRoot, 'agents')).fil
   assertIncludes(pluginRoot + '/skills/kaola-workflow-next/SKILL.md', 'workflow-plan.md exists -> kaola-workflow-plan-run');
   assertIncludes(pluginRoot + '/skills/kaola-workflow-next/SKILL.md', 'auto-bundle');
   assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'close-and-open-next');
+  // #463 (AC11): pin the synthesizer role in the forge-codex SKILL too (the #400 dead-zone surface).
+  assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'synthesizer');
   assertIncludes(pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md', 'kaola-workflow-plan-run');
   // #451: the forge-codex plan-run SKILL no longer selects a `<role>-max` variant — the per-node
   // tier maps to a session reasoning-effort signal on the dispatch descriptor. The retired

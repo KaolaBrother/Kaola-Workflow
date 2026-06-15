@@ -780,7 +780,7 @@ assertIncludes('agents/workflow-planner.md', 'planner_control_boundary_violation
 assertConcept('commands/kaola-workflow-plan-run.md', 'adaptive execution + governance', [
   '## Node Ledger', 'plan_hash', 'post-dominate', 'auto-run', 'provisional', 'halt for consent',
   'escalated_to_full: consent', 'typed refusal', 'quorum', 'tally-fn', 'validateNodeOutput',
-  'read-only', 'test_thrash', 'merge_conflict', 'FANOUT_CAP',
+  'read-only', 'test_thrash', 'merge_conflict', 'synthesizer', 'FANOUT_CAP',
   // #303 anti-drift: pin the rolling-dispatch + crash-repair + opening-lifecycle primitives so a
   // future edit cannot silently drop the parallel-fanout semantics from one edition.
   'top-up', 'reconcile', 'opening',

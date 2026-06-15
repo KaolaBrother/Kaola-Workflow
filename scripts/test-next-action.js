@@ -601,6 +601,61 @@ const specPlan = (nodes, ledger) => '## Meta\nspeculative_open_policy: consent\n
     'SPEC-6: the SAME plan at policy:consent DOES emit speculativePending (the only delta is the policy field)');
 }
 
+// -----------------------------------------------------------------------
+// FLOOR-1..4 (#463 Slice 1 / AC14): the reasoning-class floor is ENFORCED on the dispatchable frontier.
+// A ready `synthesizer` (a REASONING_FLOOR_ROLES role) whose EFFECTIVE model is not reasoning-class is a
+// fail-closed `reasoning_floor_violation` refusal — the aggregator must not emit a silently-lowered
+// floor role for dispatch. This is the production seam the adversarial verifier proved was unguarded.
+{
+  // FLOOR-1: a ready synthesizer resolving to a non-reasoning model → refuse. (enforceReasoningFloor
+  // checks the EFFECTIVE model `node.model || resolveModel(role)`, so an authored sub-floor column would
+  // be caught the same way; here the resolved-default path is exercised via the stub.)
+  const content = makePlan(
+    [
+      '| synth    | synthesizer | —     | scripts/a.js | 1 | sequence |',
+      '| review   | code-reviewer | synth | —          | 1 | sequence |',
+      '| finalize | finalize    | review | —          | 1 | sequence |',
+    ],
+    [
+      '| synth | pending |',
+      '| review | pending |',
+      '| finalize | pending |',
+    ]
+  );
+  const rLowered = computeNextAction(content, { resolveModel: () => 'sonnet' });
+  assert(rLowered.result === 'refuse', 'FLOOR-1: a ready synthesizer resolving to a non-reasoning model refuses');
+  assert(rLowered.reason === 'reasoning_floor_violation', 'FLOOR-1: typed reason');
+  assert(rLowered.node === 'synth' && rLowered.role === 'synthesizer', 'FLOOR-1: names the offending node/role');
+  assert(rLowered.floor === 'opus', 'FLOOR-1: reports the floor');
+
+  // FLOOR-2: the SAME plan with the synthesizer resolving to opus → ok (the floor is satisfied).
+  const rOk = computeNextAction(content, { resolveModel: role => (role === 'synthesizer' ? 'opus' : 'sonnet') });
+  assert(rOk.result === 'ok', 'FLOOR-2: a reasoning-class synthesizer passes');
+  assert(rOk.readySet[0].id === 'synth' && rOk.readySet[0].model === 'opus', 'FLOOR-2: emits the opus synthesizer');
+
+  // FLOOR-3: a NON-floor role resolving to sonnet is never constrained (no false refusal).
+  const plainContent = makePlan(
+    ['| a | tdd-guide | — | scripts/a.js | 1 | sequence |', '| finalize | finalize | a | — | 1 | sequence |'],
+    ['| a | pending |', '| finalize | pending |']
+  );
+  assert(computeNextAction(plainContent, { resolveModel: () => 'sonnet' }).result === 'ok',
+    'FLOOR-3: a non-floor role on sonnet is not refused');
+
+  // FLOOR-4: a sub-floor synthesizer that is NOT yet ready (an unmet non-terminal dep) does NOT refuse
+  // — only the DISPATCHABLE frontier is gated.
+  const notReady = makePlan(
+    [
+      '| seed     | tdd-guide   | —     | scripts/s.js | 1 | sequence |',
+      '| synth    | synthesizer | seed  | scripts/a.js | 1 | sequence |',
+      '| finalize | finalize    | synth | —            | 1 | sequence |',
+    ],
+    ['| seed | pending |', '| synth | pending |', '| finalize | pending |']
+  );
+  const rNotReady = computeNextAction(notReady, { resolveModel: () => 'sonnet' });
+  assert(rNotReady.result === 'ok', 'FLOOR-4: a sub-floor synthesizer behind an unmet dep does not refuse (not yet dispatchable)');
+  assert(rNotReady.readySet.every(n => n.id !== 'synth'), 'FLOOR-4: the synthesizer is not in the ready frontier');
+}
+
 // Summary
 // -----------------------------------------------------------------------
 if (failed > 0) {

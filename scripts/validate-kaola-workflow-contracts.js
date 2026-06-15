@@ -534,7 +534,7 @@ assert(exists(`${pluginRoot}/scripts/kaola-workflow-parallel-batch.js`), '#281 p
 assertConcept(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'adaptive execution + governance', [
   '## Node Ledger', 'plan_hash', 'post-dominate', 'auto-run', 'provisional', 'halt for consent',
   'escalated_to_full: consent', 'typed refusal', 'quorum', 'tally-fn', 'validateNodeOutput', 'test_thrash',
-  'merge_conflict',
+  'merge_conflict', 'synthesizer',
   // #303 anti-drift: pin the rolling-dispatch + crash-repair + opening-lifecycle primitives.
   'top-up', 'reconcile', 'opening',
   // #335 anti-drift: pin the mechanical main→worktree project-folder mirror step.
