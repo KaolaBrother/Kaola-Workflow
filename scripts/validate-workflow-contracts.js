@@ -326,6 +326,11 @@ assertIncludes('scripts/kaola-workflow-adaptive-schema.js', 'function resolveLan
 assertIncludes('scripts/kaola-workflow-resolve-agent-model.js', 'REASONING_FLOOR_ROLES');
 assertIncludes('scripts/kaola-workflow-adaptive-schema.js', 'WRITE_OVERLAP_POLICY_LEGAL');
 assertIncludes('scripts/kaola-workflow-classifier.js', 'PROTECTED_BASENAMES');
+// #492: pin the shared write-set classification anchors so a forge classifier port (a forge-specific
+// SUPERSET, not a rename-normalized copy) cannot silently DROP a shared function. Body parity of the
+// shared logic is verified out-of-band (legitimate forge divergence in areaForPath's own-plugin path).
+assertIncludes('scripts/kaola-workflow-classifier.js', 'areaForPath');
+assertIncludes('scripts/kaola-workflow-classifier.js', 'SHARED_INFRA');
 assertManifestHook('kaola-workflow-write-lane.sh');           // #407: was install.sh literal
 assertManifestScript('kaola-workflow-active-folders.js');     // #407: was install.sh literal
 assertManifestScript('kaola-workflow-resolve-agent-model.js'); // #407: was install.sh literal

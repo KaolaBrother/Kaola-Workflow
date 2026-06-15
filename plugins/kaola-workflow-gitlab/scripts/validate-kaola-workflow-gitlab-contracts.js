@@ -678,6 +678,11 @@ assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-classifier.js', 'rea
 assertIncludes(pluginRoot + '/scripts/kaola-workflow-resolve-agent-model.js', 'REASONING_FLOOR_ROLES');
 assertIncludes(pluginRoot + '/scripts/kaola-workflow-adaptive-schema.js', 'WRITE_OVERLAP_POLICY_LEGAL');
 assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-classifier.js', 'PROTECTED_BASENAMES');
+// #492: pin the shared write-set classification anchors so a forge classifier port (a forge-specific
+// SUPERSET, not a rename-normalized copy) cannot silently DROP a shared function. Body parity of the
+// shared logic is verified out-of-band (legitimate forge divergence in areaForPath's own-plugin path).
+assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-classifier.js', 'areaForPath');
+assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-classifier.js', 'SHARED_INFRA');
 assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js', 'workflow_path_refused');
 assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-repair-state.js', 'routeAdaptive');
 assertNotIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-repair-state.js', 'enable_adaptive');
