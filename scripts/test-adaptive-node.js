@@ -5195,6 +5195,253 @@ function rtHarness(initialFiles, opts) {
     assert(!rs || !rs.lane_group, 'D437-MUTATION-GUARD-NOT-VACUOUS: no lane_group flag-OFF — the group path is guarded, not vacuous');
     cleanup(repoRoot);
   }
+
+  // =========================================================================
+  // #463-LEG-PROVISION (Slice 2) — DORMANT per-leg `.kw` worktree provisioning for the write-lane
+  // scheduler. Reuses the D-437 REAL-git harness above (makeLaneRepo / runNode / readRS / ledgerStatus
+  // / cleanup; makeLaneRepo seeds .gitignore with `.kw/` so snapshotWorktree's `git add -A` never
+  // stages a sibling leg). Legs are PROVISIONED (a real `git worktree add` per co-opened write member)
+  // + telemetered + reconcile/teardown-aware, but NOTHING is written into them (S2 dormant). The
+  // non-negotiable deliverable: legs require BOTH the KAOLA_LEG_ISOLATION toggle AND the per-run
+  // --write-overlap-consent flag AND a formed lane group; absent any ⇒ flag-OFF byte-identical.
+  // =========================================================================
+  const LEG_ON = { KAOLA_LANE_CONTAINMENT: '1', KAOLA_LEG_ISOLATION: '1' };
+  // Read `git worktree list --porcelain` at a repo and return the set of worktree paths.
+  function worktreePaths(repoRoot) {
+    let out = '';
+    try { out = execFileSync('git', ['-C', repoRoot, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' }); } catch (_) { return []; }
+    return String(out).split('\n').filter(l => l.indexOf('worktree ') === 0).map(l => l.slice('worktree '.length).trim());
+  }
+  function branchExists(repoRoot, branch) {
+    try { execFileSync('git', ['-C', repoRoot, 'rev-parse', '--verify', '--quiet', 'refs/heads/' + branch], { stdio: ['ignore', 'ignore', 'ignore'] }); return true; }
+    catch (_) { return false; }
+  }
+  function timingsHas(cacheDir, id, event) {
+    let txt = '';
+    try { txt = fs.readFileSync(path.join(cacheDir, 'node-timings.jsonl'), 'utf8'); } catch (_) { return false; }
+    for (const line of txt.split('\n')) {
+      const s = line.trim(); if (!s) continue;
+      let e; try { e = JSON.parse(s); } catch (_) { continue; }
+      if (e && e.node === id && e.event === event) return true;
+    }
+    return false;
+  }
+
+  // -------------------------------------------------------------------------
+  // LEG-PROVISION-ON: toggle + consent + a formed group ⇒ a real .kw leg per member (A,B), a kw/legs
+  //   branch per member, a running-set lane_group.legs manifest with {legPath,legBranch,baseline}, and
+  //   a `leg_opened` timing for each.  (RED-provable: drop the provisioning block ⇒ this block fails.)
+  // -------------------------------------------------------------------------
+  {
+    const { repoRoot, cacheDir } = makeLaneRepo();
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON);
+    assert(r.result === 'ok', 'LEG-PROVISION-ON: open-ready ok, got ' + JSON.stringify(r));
+    const wts = worktreePaths(repoRoot);
+    const legA = path.join('.kw', 'legs', 'test-project', 'A');
+    const legB = path.join('.kw', 'legs', 'test-project', 'B');
+    assert(wts.some(p => p.endsWith(legA)), 'LEG-PROVISION-ON: .kw/legs/test-project/A worktree provisioned, got ' + JSON.stringify(wts));
+    assert(wts.some(p => p.endsWith(legB)), 'LEG-PROVISION-ON: .kw/legs/test-project/B worktree provisioned, got ' + JSON.stringify(wts));
+    assert(branchExists(repoRoot, 'kw/legs/test-project/A'), 'LEG-PROVISION-ON: branch kw/legs/test-project/A exists');
+    assert(branchExists(repoRoot, 'kw/legs/test-project/B'), 'LEG-PROVISION-ON: branch kw/legs/test-project/B exists');
+    const rs = readRS(cacheDir);
+    assert(rs && rs.lane_group && rs.lane_group.legs, 'LEG-PROVISION-ON: running-set lane_group.legs present, got ' + JSON.stringify(rs && rs.lane_group));
+    for (const id of ['A', 'B']) {
+      const leg = rs.lane_group.legs[id];
+      assert(leg && typeof leg.legPath === 'string' && leg.legPath.length > 0, 'LEG-PROVISION-ON: legs.' + id + '.legPath present');
+      assert(leg && leg.legBranch === 'kw/legs/test-project/' + id, 'LEG-PROVISION-ON: legs.' + id + '.legBranch correct, got ' + (leg && leg.legBranch));
+      assert(leg && typeof leg.baseline === 'string' && leg.baseline.length > 0, 'LEG-PROVISION-ON: legs.' + id + '.baseline present');
+    }
+    assert(timingsHas(cacheDir, 'A', 'leg_opened'), 'LEG-PROVISION-ON: leg_opened timing for A');
+    assert(timingsHas(cacheDir, 'B', 'leg_opened'), 'LEG-PROVISION-ON: leg_opened timing for B');
+    // S2 dormant (FIX-2, RED-provable): working_dir STAYS parent-side. Assert directly that NO opened
+    // member's dispatch working_dir equals the leg path that WAS provisioned for that member (the real
+    // S3-regression guard — the prior `indexOf('.kw')` check was vacuous because working_dir is always
+    // null here). If a future edit set working_dir = legs[id].legPath, this fails.
+    const provisionedLegPaths = new Set(['A', 'B'].map(id => rs.lane_group.legs[id] && rs.lane_group.legs[id].legPath).filter(Boolean));
+    assert(provisionedLegPaths.size === 2, 'LEG-PROVISION-ON: two leg paths recorded for the dormancy guard');
+    for (const n of (r.opened || [])) {
+      const wd = n.dispatch && n.dispatch.working_dir;
+      assert(!(wd && provisionedLegPaths.has(wd)), 'LEG-PROVISION-ON: ' + n.id + ' dispatch working_dir is NOT its provisioned leg path (S2 dormant), got ' + JSON.stringify(wd));
+    }
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
+  // ★ LEG-FLAG-OFF-BYTE-IDENTITY (non-negotiable): legs require BOTH the toggle AND the consent flag.
+  //   Run the same repo/plan twice — (a) containment ONLY (no KAOLA_LEG_ISOLATION, no consent) and
+  //   (b) KAOLA_LEG_ISOLATION but NO --write-overlap-consent — and assert NEITHER provisions any leg:
+  //   no .kw/legs worktree, no lane_group.legs key (raw-string probe), no leg_opened timing.
+  // -------------------------------------------------------------------------
+  {
+    const cases = [
+      { label: 'containment-only (no toggle, no consent)', env: ON, args: ['open-ready', '--project', 'test-project', '--json'] },
+      { label: 'toggle but NO consent flag', env: LEG_ON, args: ['open-ready', '--project', 'test-project', '--json'] },
+      // FIX-3: the symmetric off-combo — consent flag present but the KAOLA_LEG_ISOLATION toggle ABSENT.
+      { label: 'consent flag but NO toggle', env: ON, args: ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'] },
+    ];
+    for (const c of cases) {
+      const { repoRoot, cacheDir } = makeLaneRepo();
+      const r = runNode(repoRoot, c.args, c.env);
+      assert(r.result === 'ok', 'LEG-FLAG-OFF [' + c.label + ']: open-ready ok, got ' + JSON.stringify(r));
+      const wts = worktreePaths(repoRoot);
+      assert(!wts.some(p => p.indexOf(path.join('.kw', 'legs')) !== -1), 'LEG-FLAG-OFF [' + c.label + ']: NO .kw/legs worktree provisioned, got ' + JSON.stringify(wts));
+      const rs = readRS(cacheDir);
+      // Raw-string probe: the byte-identity guarantee is "no `legs` key anywhere in running-set.json".
+      assert(JSON.stringify(rs).indexOf('"legs"') === -1, 'LEG-FLAG-OFF [' + c.label + ']: running-set.json carries NO "legs" key');
+      assert(!(rs && rs.lane_group && rs.lane_group.legs), 'LEG-FLAG-OFF [' + c.label + ']: lane_group has no legs manifest');
+      assert(!timingsHas(cacheDir, 'A', 'leg_opened') && !timingsHas(cacheDir, 'B', 'leg_opened'), 'LEG-FLAG-OFF [' + c.label + ']: no leg_opened timing');
+      cleanup(repoRoot);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // LEG-RECONCILE-TEARDOWN: provision legs (ON), then DROP one member from running-set (so reconcile
+  //   rolls it back) and run reconcile-running-set — assert the dropped member's worktree AND branch
+  //   are gone (strict-order teardown) and the survivor's leg remains.
+  // -------------------------------------------------------------------------
+  {
+    const { repoRoot, cacheDir } = makeLaneRepo();
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON);
+    assert(r.result === 'ok' && r.laneGroup, 'LEG-RECONCILE-TEARDOWN: setup co-open ok');
+    // Simulate a member drop: mark B's ledger row back to pending and flag B `opening` so reconcile
+    // treats the set as mid-open and rolls B back (its ledger no longer in_progress).
+    const planPath = path.join(repoRoot, 'kaola-workflow', 'test-project', 'workflow-plan.md');
+    let plan = fs.readFileSync(planPath, 'utf8');
+    const ledgerStart = plan.indexOf('## Node Ledger');
+    const head = plan.slice(0, ledgerStart), tail = plan.slice(ledgerStart);
+    plan = head + tail.replace(/^\|\s*B\s*\|\s*in_progress\s*\|/m, '| B | pending |');
+    fs.writeFileSync(planPath, plan);
+    const rs0 = readRS(cacheDir);
+    rs0.state = 'opening';
+    rs0.nodes = rs0.nodes.map(n => (n.id === 'B' ? { ...n, opening: true } : n));
+    fs.writeFileSync(path.join(cacheDir, 'running-set.json'), JSON.stringify(rs0, null, 2));
+    const rec = runNode(repoRoot, ['reconcile-running-set', '--project', 'test-project', '--json'], LEG_ON);
+    assert(rec.result === 'ok', 'LEG-RECONCILE-TEARDOWN: reconcile ok, got ' + JSON.stringify(rec));
+    const wts = worktreePaths(repoRoot);
+    assert(!wts.some(p => p.endsWith(path.join('.kw', 'legs', 'test-project', 'B'))), 'LEG-RECONCILE-TEARDOWN: B leg worktree torn down, got ' + JSON.stringify(wts));
+    assert(!branchExists(repoRoot, 'kw/legs/test-project/B'), 'LEG-RECONCILE-TEARDOWN: B leg branch -D (strict-order teardown)');
+    assert(wts.some(p => p.endsWith(path.join('.kw', 'legs', 'test-project', 'A'))), 'LEG-RECONCILE-TEARDOWN: survivor A leg worktree remains');
+    assert(branchExists(repoRoot, 'kw/legs/test-project/A'), 'LEG-RECONCILE-TEARDOWN: survivor A leg branch remains');
+    const rs1 = readRS(cacheDir);
+    assert(rs1 && rs1.lane_group && rs1.lane_group.legs && rs1.lane_group.legs.A && !rs1.lane_group.legs.B,
+      'LEG-RECONCILE-TEARDOWN: legs manifest keeps A, drops B, got ' + JSON.stringify(rs1 && rs1.lane_group && rs1.lane_group.legs));
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
+  // LEG-ORPHAN-SWEEP: provision legs (ON, healthy set), then manually `git worktree add` an extra
+  //   .kw/legs/test-project/orphan with NO running-set member; run reconcile and assert the orphan is
+  //   swept (worktree + branch gone) while the live legs A,B remain. (The sweep is HOISTED above the
+  //   not_opening early-return so it runs on a healthy set.)
+  // -------------------------------------------------------------------------
+  {
+    const { repoRoot, cacheDir } = makeLaneRepo();
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON);
+    assert(r.result === 'ok' && r.laneGroup, 'LEG-ORPHAN-SWEEP: setup co-open ok');
+    // Manually provision an orphan leg under the same band with no running-set member.
+    const orphanPath = path.join(repoRoot, '.kw', 'legs', 'test-project', 'orphan');
+    execFileSync('git', ['-C', repoRoot, 'worktree', 'add', '-b', 'kw/legs/test-project/orphan', '--', orphanPath, 'HEAD'], { stdio: ['ignore', 'ignore', 'ignore'] });
+    assert(worktreePaths(repoRoot).some(p => p.endsWith(path.join('.kw', 'legs', 'test-project', 'orphan'))), 'LEG-ORPHAN-SWEEP: orphan provisioned for the test');
+    const rec = runNode(repoRoot, ['reconcile-running-set', '--project', 'test-project', '--json'], LEG_ON);
+    assert(rec.result === 'ok', 'LEG-ORPHAN-SWEEP: reconcile ok, got ' + JSON.stringify(rec));
+    const wts = worktreePaths(repoRoot);
+    assert(!wts.some(p => p.endsWith(path.join('.kw', 'legs', 'test-project', 'orphan'))), 'LEG-ORPHAN-SWEEP: orphan leg worktree swept, got ' + JSON.stringify(wts));
+    assert(!branchExists(repoRoot, 'kw/legs/test-project/orphan'), 'LEG-ORPHAN-SWEEP: orphan leg branch swept');
+    assert(wts.some(p => p.endsWith(path.join('.kw', 'legs', 'test-project', 'A'))), 'LEG-ORPHAN-SWEEP: live leg A retained');
+    assert(wts.some(p => p.endsWith(path.join('.kw', 'legs', 'test-project', 'B'))), 'LEG-ORPHAN-SWEEP: live leg B retained');
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
+  // LEG-DANGLING-BRANCH-REUSE: provisionLeg must REUSE a dangling leg branch (worktree gone, branch
+  //   still present from a swallowed fail-soft `branch -D`) instead of refusing — the crash-resume
+  //   no-wedge guarantee. Simulate: provision A's branch + worktree, remove ONLY the worktree (leave
+  //   the branch), then re-provision the SAME leg via the exported provisionLeg seam.
+  // -------------------------------------------------------------------------
+  {
+    const { repoRoot } = makeLaneRepo();
+    const node = require(path.join(__dirname, 'kaola-workflow-adaptive-node.js'));
+    const legPath = path.join(repoRoot, '.kw', 'legs', 'test-project', 'A');
+    const legBranch = 'kw/legs/test-project/A';
+    const base = execFileSync('git', ['-C', repoRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    const first = node.provisionLeg(repoRoot, legPath, legBranch, base);
+    assert(first.ok, 'LEG-DANGLING-BRANCH-REUSE: first provision ok');
+    // Remove the worktree but leave the branch dangling (the swallowed `branch -D` scenario).
+    execFileSync('git', ['-C', repoRoot, 'worktree', 'remove', '--force', legPath], { stdio: ['ignore', 'ignore', 'ignore'] });
+    assert(branchExists(repoRoot, legBranch), 'LEG-DANGLING-BRANCH-REUSE: branch dangles after worktree-only removal');
+    const second = node.provisionLeg(repoRoot, legPath, legBranch, base);
+    assert(second.ok && second.reusedBranch, 'LEG-DANGLING-BRANCH-REUSE: re-provision REUSES the dangling branch (no wedge), got ' + JSON.stringify(second));
+    assert(worktreePaths(repoRoot).some(p => p.endsWith(path.join('.kw', 'legs', 'test-project', 'A'))), 'LEG-DANGLING-BRANCH-REUSE: worktree re-attached to the reused branch');
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
+  // ★ LEG-CLEAN-COMPLETION-NO-LEAK (FIX-1a, RED-provable): provision legs (ON), close A (deferred) then
+  //   close B (last → group_passed). On the clean group completion the lane_group key is cleared, so the
+  //   reconcile-gated sweep can never reclaim these legs — close-node MUST tear them down primarily.
+  //   Assert NO leg worktree AND NO kw/legs branch survives after the group completes. (RED-provable:
+  //   drop the close-node teardown ⇒ the leg worktrees/branches leak ⇒ this block fails.)
+  // -------------------------------------------------------------------------
+  {
+    const { repoRoot, cacheDir, planPath } = makeLaneRepo();
+    const open = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON);
+    assert(open.result === 'ok' && open.laneGroup, 'LEG-CLEAN-COMPLETION-NO-LEAK: setup co-open ok');
+    assert(worktreePaths(repoRoot).filter(p => p.indexOf(path.join('.kw', 'legs')) !== -1).length === 2, 'LEG-CLEAN-COMPLETION-NO-LEAK: two legs provisioned at setup');
+    writeEvidence(cacheDir, 'A');
+    writeEvidence(cacheDir, 'B');
+    fs.writeFileSync(path.join(repoRoot, 'ax.js'), '// A in-lane\n');
+    fs.writeFileSync(path.join(repoRoot, 'by.js'), '// B in-lane\n');
+    const rA = runNode(repoRoot, ['close-node', '--node-id', 'A', '--project', 'test-project', '--json'], LEG_ON);
+    assert(rA.result === 'ok' && rA.barrier === 'deferred_to_group', 'LEG-CLEAN-COMPLETION-NO-LEAK: A deferred ok, got ' + JSON.stringify(rA));
+    const rB = runNode(repoRoot, ['close-node', '--node-id', 'B', '--project', 'test-project', '--json'], LEG_ON);
+    assert(rB.result === 'ok' && rB.barrier === 'group_passed', 'LEG-CLEAN-COMPLETION-NO-LEAK: B group_passed, got ' + JSON.stringify(rB));
+    assert(ledgerStatus(planPath, 'A') === 'complete' && ledgerStatus(planPath, 'B') === 'complete', 'LEG-CLEAN-COMPLETION-NO-LEAK: both complete');
+    const wts = worktreePaths(repoRoot);
+    assert(!wts.some(p => p.indexOf(path.join('.kw', 'legs')) !== -1), 'LEG-CLEAN-COMPLETION-NO-LEAK: NO leg worktree survives clean completion, got ' + JSON.stringify(wts));
+    assert(!branchExists(repoRoot, 'kw/legs/test-project/A'), 'LEG-CLEAN-COMPLETION-NO-LEAK: A leg branch torn down on completion');
+    assert(!branchExists(repoRoot, 'kw/legs/test-project/B'), 'LEG-CLEAN-COMPLETION-NO-LEAK: B leg branch torn down on completion');
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
+  // LEG-CRASH-LOST-MANIFEST-RECLAIM (FIX-1b): provision legs (ON), then UNLINK running-set.json
+  //   entirely (a crash that lost the manifest). Run reconcile-running-set with the toggle ON; the
+  //   hoisted sweep — gated on resolveLegIsolation, NOT on a present manifest — reclaims the now-orphan
+  //   legs (no keep-paths to protect them). Assert both leg worktrees + branches are gone.
+  // -------------------------------------------------------------------------
+  {
+    const { repoRoot, cacheDir } = makeLaneRepo();
+    const open = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON);
+    assert(open.result === 'ok' && open.laneGroup, 'LEG-CRASH-LOST-MANIFEST-RECLAIM: setup co-open ok');
+    assert(worktreePaths(repoRoot).filter(p => p.indexOf(path.join('.kw', 'legs')) !== -1).length === 2, 'LEG-CRASH-LOST-MANIFEST-RECLAIM: two legs provisioned at setup');
+    // Crash: lose the running-set manifest entirely.
+    fs.unlinkSync(path.join(cacheDir, 'running-set.json'));
+    const rec = runNode(repoRoot, ['reconcile-running-set', '--project', 'test-project', '--json'], LEG_ON);
+    assert(rec.result === 'ok', 'LEG-CRASH-LOST-MANIFEST-RECLAIM: reconcile ok (no_running_set), got ' + JSON.stringify(rec));
+    assert(rec.reason === 'no_running_set', 'LEG-CRASH-LOST-MANIFEST-RECLAIM: reconcile returns no_running_set, got ' + rec.reason);
+    const wts = worktreePaths(repoRoot);
+    assert(!wts.some(p => p.indexOf(path.join('.kw', 'legs')) !== -1), 'LEG-CRASH-LOST-MANIFEST-RECLAIM: orphan legs reclaimed despite lost manifest, got ' + JSON.stringify(wts));
+    assert(!branchExists(repoRoot, 'kw/legs/test-project/A') && !branchExists(repoRoot, 'kw/legs/test-project/B'), 'LEG-CRASH-LOST-MANIFEST-RECLAIM: orphan leg branches reclaimed');
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
+  // LEG-CRASH-LOST-MANIFEST-FLAG-OFF (FIX-1b byte-identity): the SAME lost-manifest reconcile WITHOUT
+  //   the KAOLA_LEG_ISOLATION toggle must NOT sweep — the hoisted sweep is toggle-gated, so a flag-OFF
+  //   run does zero git worktree calls and the (manually planted) leg survives untouched.
+  // -------------------------------------------------------------------------
+  {
+    const { repoRoot, cacheDir } = makeLaneRepo();
+    // Plant a leg directly (simulating a leftover) without any running set.
+    const legPath = path.join(repoRoot, '.kw', 'legs', 'test-project', 'A');
+    execFileSync('git', ['-C', repoRoot, 'worktree', 'add', '-b', 'kw/legs/test-project/A', '--', legPath, 'HEAD'], { stdio: ['ignore', 'ignore', 'ignore'] });
+    try { fs.unlinkSync(path.join(cacheDir, 'running-set.json')); } catch (_) {}
+    const rec = runNode(repoRoot, ['reconcile-running-set', '--project', 'test-project', '--json'], ON); // containment only, no leg toggle
+    assert(rec.result === 'ok', 'LEG-CRASH-LOST-MANIFEST-FLAG-OFF: reconcile ok, got ' + JSON.stringify(rec));
+    assert(worktreePaths(repoRoot).some(p => p.endsWith(path.join('.kw', 'legs', 'test-project', 'A'))), 'LEG-CRASH-LOST-MANIFEST-FLAG-OFF: planted leg UNTOUCHED flag-OFF (no sweep), still present');
+    assert(branchExists(repoRoot, 'kw/legs/test-project/A'), 'LEG-CRASH-LOST-MANIFEST-FLAG-OFF: planted leg branch UNTOUCHED flag-OFF');
+    cleanup(repoRoot);
+  }
 }
 
 // ---------------------------------------------------------------------------

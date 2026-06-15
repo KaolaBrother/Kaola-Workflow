@@ -3324,6 +3324,142 @@ function tryFormLaneGroup(writeNodes, planPath, shell) {
 }
 
 // ---------------------------------------------------------------------------
+// #463 Slice 2 (D-419 P2 write-axis) — per-leg `.kw` git-worktree provisioning for the write-lane
+// scheduler. DORMANT in S2: legs are PROVISIONED (a real `git worktree add` per co-opened write
+// member) + telemetered + reconcile/teardown-aware, but NOTHING is written INTO them and the
+// dispatched member's working_dir STAYS parent-side (routing-into-legs is Slice 3). Provisioning
+// is gated by resolveLegIsolation(env) && opts.writeOverlapConsent && a formed lane group — when any
+// is false NO leg is provisioned, NO lane_group.legs key is written ⇒ flag-OFF byte-identical.
+//
+// resolveLegIsolation — boolean toggle mirroring resolveLaneContainment's exact truthiness logic
+// (only an explicit 1/true/yes opts in; fail-closed default FALSE). The new KAOLA_LEG_ISOLATION env.
+// ---------------------------------------------------------------------------
+const LEG_ISOLATION_ENV = 'KAOLA_LEG_ISOLATION';
+function resolveLegIsolation(env) {
+  const raw = (env || {})[LEG_ISOLATION_ENV];
+  return raw === '1' || raw === 'true' || raw === 'yes';
+}
+
+// sanitizeLegId — the SAME String(x).replace(/[^A-Za-z0-9_-]/g,'_') sanitizer the validator's
+// barrier-base ref/file key applies (mirrors sanitizeNodeId ~3058); a node id reaches a worktree
+// path SEGMENT + a branch name here, so the same byte-compatible class makes the leg path/branch
+// deterministic and shell-safe.
+function sanitizeLegId(id) {
+  return String(id).replace(/[^A-Za-z0-9_-]/g, '_');
+}
+
+// legBranchFor / legPathFor — the deterministic per-leg branch + worktree path. The path lives
+// strictly UNDER the gitignored `.kw/` band (legPathFor uses mainRoot/.kw/legs) so snapshotWorktree's
+// `git add -A` sweep never stages a sibling leg. mainRoot (NOT root) anchors both so a linked feature
+// worktree provisions its legs as SIBLINGS of the main checkout, not nested inside itself.
+// #463 Slice 2 (FIX-4): the PROJECT segment is sanitized too (sanitizeLegId) — a project name with a
+// '/' or other path metachar would otherwise inject extra path segments / a nested ref namespace and
+// break the sweepOrphanLegs filter-base match (which must use the SAME sanitized segment). validateProjectName
+// already rejects separator-bearing project names upstream, but sanitizing here keeps the leg path/branch
+// derivation self-consistent and the sweep filter exact.
+function legBranchFor(project, nodeId) {
+  return 'kw/legs/' + sanitizeLegId(project) + '/' + sanitizeLegId(nodeId);
+}
+
+function legPathFor(mainRoot, project, nodeId) {
+  return path.join(mainRoot, '.kw', 'legs', sanitizeLegId(project), sanitizeLegId(nodeId));
+}
+
+// assertSafeLegBranch — re-impl of claim.js assertSafeBranchArg locally (claim.js does not export it
+// for adaptive-node; repo convention is a local re-impl). Refuse a branch beginning with '-' (git
+// parses it as a flag) or carrying a NUL (ref injection). Throw on violation so a hostile/malformed
+// branch never reaches `git worktree add -b`.
+function assertSafeLegBranch(branch) {
+  if (typeof branch !== 'string' || branch.length === 0 || branch.startsWith('-') || branch.includes('\0')) {
+    throw new Error('refused: unsafe leg branch name: a branch beginning with "-" or carrying a NUL would be parsed by git as a flag/ref injection.');
+  }
+}
+
+// classifyLegError — map a raw `git worktree` error message to a stable single-token class (mirrors
+// claim.js classifyWorktreeError) so a caller routes structurally, not by string-match.
+function classifyLegError(message) {
+  const m = String(message || '');
+  if (!m) return '';
+  if (/already (exists|checked out|used by worktree)/i.test(m)) return 'already_exists';
+  if (/not a valid (object name|ref)|unknown revision|invalid reference/i.test(m)) return 'invalid_ref';
+  if (/permission denied|EACCES|read-only|EROFS/i.test(m)) return 'permission_denied';
+  if (/no space left|ENOSPC|disk/i.test(m)) return 'disk_full';
+  if (/not a git repository|fatal: this operation must be run in a work tree/i.test(m)) return 'not_a_repo';
+  return 'unclassified';
+}
+
+// legBranchExists — does refs/heads/<branch> resolve at mainRoot? (mirrors claim.js branchExists).
+function legBranchExists(mainRoot, branch) {
+  try {
+    execFileSync('git', ['show-ref', '--verify', '--quiet', 'refs/heads/' + branch], { cwd: mainRoot, stdio: ['ignore', 'ignore', 'ignore'] });
+    return true;
+  } catch (_) { return false; }
+}
+
+// provisionLeg — `git worktree add` rooted at mainRoot, per-leg. assertSafeLegBranch FIRST (fail-closed
+// before git). Idempotency mirrors claim.js provisionWorktree (claim.js:494-506):
+//   (1) legPath already exists ⇒ already provisioned (this/a prior run) ⇒ short-circuit ok;
+//   (2) legBranch already exists but the path does NOT (a prior fail-soft teardown removed the worktree
+//       but its `branch -D` was swallowed, leaving a dangling branch) ⇒ `git worktree add` WITHOUT `-b`
+//       to REUSE the branch — without this, a crash-resume re-provision hits `add -b <existing>` → fails
+//       → leg_provision_failed → wedge (the dead-end this codebase is built to avoid);
+//   (3) otherwise ⇒ `git worktree add -b <branch> -- <path> <baseRev>` (fresh branch + path).
+// mkdir the parent (.kw/legs/<project>/) before the add, like claim.js:493.
+// Returns { ok:true, alreadyProvisioned?, reusedBranch? } or { ok:false, error:<classify> }.
+function provisionLeg(mainRoot, legPath, legBranch, baseRev) {
+  const fs = require('fs');
+  try { assertSafeLegBranch(legBranch); } catch (e) { return { ok: false, error: 'unsafe_branch', detail: String(e.message || e) }; }
+  if (fs.existsSync(legPath)) return { ok: true, alreadyProvisioned: true };
+  try { fs.mkdirSync(path.dirname(legPath), { recursive: true }); } catch (_) {}
+  const reuseBranch = legBranchExists(mainRoot, legBranch);
+  const addArgs = reuseBranch
+    ? ['worktree', 'add', '--', legPath, legBranch]
+    : ['worktree', 'add', '-b', legBranch, '--', legPath, baseRev];
+  try {
+    execFileSync('git', addArgs, { cwd: mainRoot, stdio: ['ignore', 'ignore', 'ignore'] });
+    return reuseBranch ? { ok: true, reusedBranch: true } : { ok: true };
+  } catch (e) {
+    return { ok: false, error: classifyLegError(e.message || e), detail: String(e.message || e) };
+  }
+}
+
+// teardownLeg — STRICT ORDER, each step fail-soft in its own try/catch, NEVER throws:
+//   (1) git worktree remove --force <legPath>  THEN  (2) git branch -D <legBranch>.
+// Order is LOAD-BEARING: git refuses to delete a branch still checked out by a worktree, so the
+// worktree MUST be removed before the branch -D. Both rooted at mainRoot.
+function teardownLeg(mainRoot, legPath, legBranch) {
+  try {
+    execFileSync('git', ['worktree', 'remove', '--force', legPath], { cwd: mainRoot, stdio: ['ignore', 'ignore', 'ignore'] });
+  } catch (_) { /* fail-soft: a missing/already-removed worktree is a clean no-op */ }
+  try {
+    execFileSync('git', ['branch', '-D', legBranch], { cwd: mainRoot, stdio: ['ignore', 'ignore', 'ignore'] });
+  } catch (_) { /* fail-soft: a missing/already-deleted branch is a clean no-op */ }
+}
+
+// sweepOrphanLegs — `git worktree list --porcelain` (rooted at mainRoot), parse `worktree <path>`
+// lines, filter to paths under <mainRoot>/.kw/legs/<project>/, subtract keepLegPaths, teardownLeg
+// each remainder (its branch derived from the path basename via legBranchFor). Fail-soft — sweep
+// never throws. Cleans an orphan leg left by a crashed prior run (a leg with no running-set member).
+function sweepOrphanLegs(mainRoot, project, keepLegPaths) {
+  const keep = new Set((keepLegPaths || []).map(p => path.resolve(p)));
+  // #463 Slice 2 (FIX-4): the filter base uses the SAME sanitizeLegId(project) segment legPathFor
+  // produces, so a project name with a path metachar still matches its own provisioned legs.
+  const projLegDir = path.resolve(path.join(mainRoot, '.kw', 'legs', sanitizeLegId(project)));
+  let out = '';
+  try {
+    out = execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: mainRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+  } catch (_) { return; }
+  for (const line of String(out || '').split('\n')) {
+    if (line.indexOf('worktree ') !== 0) continue;
+    const wt = path.resolve(line.slice('worktree '.length).trim());
+    if (wt !== projLegDir && (wt + path.sep).indexOf(projLegDir + path.sep) !== 0) continue;
+    if (keep.has(wt)) continue;
+    const nodeId = path.basename(wt);
+    teardownLeg(mainRoot, wt, legBranchFor(project, nodeId));
+  }
+}
+
+// ---------------------------------------------------------------------------
 // speculativeCloseGuard (#439 D-419 Part 4) — a speculative node cannot COMMIT to `complete` until its
 // bet resolves: its post-dominating gate must be `complete` first. Without this, a speculative node that
 // closes BEFORE its gate vanishes from the running set, so a later gate `verdict:fail` could no longer
@@ -3633,6 +3769,41 @@ function runOpenReady(opts) {
     groupBaselineSha = (gb.recordBase && gb.recordBase.base) ? gb.recordBase.base : (gb.base || null);
   }
 
+  // #463 Slice 2: DORMANT per-leg `.kw` worktree provisioning. Gated by ALL THREE: resolveLegIsolation
+  // (the KAOLA_LEG_ISOLATION toggle) AND opts.writeOverlapConsent (the per-run, NEVER-persisted consent
+  // flag — mirrors opts.speculativeConsent) AND a formed lane group (groupForm). When any is false ⇒ NO
+  // leg is provisioned, `legs` stays empty ⇒ no lane_group.legs key (flag-OFF byte-identical). Provision
+  // a leg per co-opened write member INSIDE Phase 1, BEFORE the ledger flip, so a refusal here leaves a
+  // reconcilable state (no ledger row has flipped yet). working_dir STAYS parent-side (S2 dormant —
+  // routing-into-legs is S3). On any provisionLeg failure, teardown every leg already provisioned THIS
+  // call (clean rollback — no partial leg set) and refuse.
+  let legs = null;
+  if (groupForm && resolveLegIsolation(process.env) && opts.writeOverlapConsent) {
+    let root; try { root = getRoot(); } catch (_) { root = process.cwd(); }
+    const mainRoot = getMainRoot(root);
+    // baseRev = the feature-branch HEAD (the open-ready cwd is the feature worktree).
+    let baseRev = null;
+    try { baseRev = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch (_) { baseRev = null; }
+    if (!baseRev) {
+      return { result: 'refuse', reason: 'leg_provision_failed', detail: 'could not resolve base HEAD for leg provisioning' };
+    }
+    legs = {};
+    const provisionedThisCall = [];
+    for (const n of toOpen) {
+      const legPath = legPathFor(mainRoot, project, n.id);
+      const legBranch = legBranchFor(project, n.id);
+      const r = provisionLeg(mainRoot, legPath, legBranch, baseRev);
+      if (!r.ok) {
+        // Clean rollback: teardown every leg already provisioned this call (no partial leg set).
+        for (const p of provisionedThisCall) teardownLeg(mainRoot, p.legPath, p.legBranch);
+        return { result: 'refuse', reason: 'leg_provision_failed', nodeId: n.id, error: r.error || null, detail: r.detail || null };
+      }
+      provisionedThisCall.push({ legPath, legBranch });
+      legs[n.id] = { legPath, legBranch, baseline: baseRev };
+      appendNodeTiming(planPath, n.id, 'leg_opened');
+    }
+  }
+
   // -- Phase 1: write running-set.json in state:'opening' with the FULL intended node set
   //    BEFORE flipping any ledger row. A crash here is reconcilable (never an orphan).
   if (mkdirp) mkdirp(path.dirname(runningSetPath));
@@ -3649,6 +3820,9 @@ function runOpenReady(opts) {
     members: groupForm.members,
     baseline: groupBaselineSha,
     write_union: groupForm.write_union,
+    // #463 Slice 2: the per-leg manifest ({ <nodeId>: { legPath, legBranch, baseline } }). Present ONLY
+    // when leg-isolation + consent + a group all held; absent ⇒ no `legs` key ⇒ flag-OFF byte-identical.
+    ...(legs && Object.keys(legs).length ? { legs } : {}),
     ...(openedAt ? { openedAt } : {}),
   } : null;
   const openingSet = {
@@ -4065,6 +4239,19 @@ function closeGroupMember(ctx) {
   // Clear lane_group entirely + remove the member from running_set.nodes.
   const running = readRunningSet(runningSetPath, cacheExists, readFile);
   if (running) {
+    // #463 Slice 2 (FIX-1a): PRIMARY leg teardown on clean group completion. The lane_group key (and
+    // its legs manifest) is about to be deleted, so the reconcile-gated orphan sweep can never reclaim
+    // these legs afterward — tear them down HERE, before the delete. Fail-soft (teardownLeg never
+    // throws). Flag-OFF / legless groups have no `legs` key ⇒ this whole block is a no-op (byte-
+    // identical). Read the legs from the live running-set's lane_group (authoritative on disk), not lg.
+    const legsManifest = running.lane_group && running.lane_group.legs;
+    if (legsManifest && Object.keys(legsManifest).length) {
+      let mainRoot; try { mainRoot = getMainRoot(getRoot()); } catch (_) { mainRoot = process.cwd(); }
+      for (const id of Object.keys(legsManifest)) {
+        const leg = legsManifest[id];
+        if (leg && leg.legPath) teardownLeg(mainRoot, leg.legPath, leg.legBranch);
+      }
+    }
     const remaining = (running.nodes || []).filter(n => n.id !== nodeId);
     const cleared = { ...running, nodes: remaining };
     delete cleared.lane_group;
@@ -4106,9 +4293,29 @@ function runReconcileRunningSet(opts) {
   const runningSetPath = path.join(path.dirname(planPath), '.cache', RUNNING_SET_NAME);
 
   const running = readRunningSet(runningSetPath, cacheExists, readFile);
+
+  // #463 Slice 2 (FIX-1b): orphan-leg sweep, HOISTED ABOVE the no_running_set early-return below so a
+  // crashed run that LOST its running-set.json (no manifest at all) still gets its dangling legs
+  // reclaimed — the clean-completion leak's crash-path sibling. Gated on resolveLegIsolation
+  // (KAOLA_LEG_ISOLATION) ONLY, NOT on a present `legs` manifest: when the manifest is gone we cannot
+  // read keep-paths from it, so the toggle is the gate and keepLegPaths falls back to []. Flag-OFF runs
+  // (toggle absent) short-circuit with ZERO git calls (byte-identical, no behavior change). keepLegPaths
+  // = legs CURRENTLY referenced by the surviving manifest (empty when there is no running set / no legs);
+  // on the drop path below a soon-to-dropped member's leg is still in `keep` here and is torn down by the
+  // per-member teardown step instead (disjoint, no double-teardown). Fail-soft (sweepOrphanLegs never
+  // throws — reconcile must never throw).
+  if (resolveLegIsolation(process.env)) {
+    let mainRoot; try { mainRoot = getMainRoot(getRoot()); } catch (_) { mainRoot = process.cwd(); }
+    const keepLegPaths = (running && running.lane_group && running.lane_group.legs)
+      ? Object.values(running.lane_group.legs).map(l => l && l.legPath).filter(Boolean)
+      : [];
+    sweepOrphanLegs(mainRoot, project, keepLegPaths);
+  }
+
   if (!running) {
     return { result: 'ok', reconciled: false, reason: 'no_running_set', taskTransitions: [] };
   }
+
   const wholeOpening = running.state === 'opening';
   const openingNodes = (running.nodes || []).filter(n => n.opening);
 
@@ -4199,6 +4406,32 @@ function runReconcileRunningSet(opts) {
     const survivorIds = new Set(survivors.map(n => n.id));
     const memberIds = running.lane_group.members.map(m => (typeof m === 'string' ? m : (m.nodeId || m.id)));
     laneGroupSurvives = memberIds.some(id => survivorIds.has(id));
+    // #463 Slice 2: leg-aware reconcile teardown. Fail-soft (teardownLeg never throws). Flag-OFF /
+    // legless groups have no `legs` key ⇒ both branches no-op (byte-identical). mainRoot anchors the
+    // teardown at the MAIN checkout (where the leg worktrees were provisioned, SIBLINGS of any feature
+    // worktree). STRICT-ORDER (worktree-remove BEFORE branch-D) is inside teardownLeg.
+    const legsManifest = running.lane_group.legs;
+    if (legsManifest && Object.keys(legsManifest).length && typeof getMainRoot === 'function') {
+      let mainRoot; try { mainRoot = getMainRoot(getRoot()); } catch (_) { mainRoot = process.cwd(); }
+      if (!laneGroupSurvives) {
+        // Whole-group drop: teardown ALL legs before the lane_group key is deleted below.
+        for (const id of Object.keys(legsManifest)) {
+          const leg = legsManifest[id];
+          if (leg && leg.legPath) teardownLeg(mainRoot, leg.legPath, leg.legBranch);
+        }
+      } else {
+        // Surviving group: teardown each DROPPED member's leg and remove it from the manifest so the
+        // written lane_group.legs reflects only survivors.
+        const departing = new Set([...dropped, ...cappedOut, ...closed, ...stale]);
+        for (const id of departing) {
+          const leg = legsManifest[id];
+          if (leg && leg.legPath) {
+            teardownLeg(mainRoot, leg.legPath, leg.legBranch);
+            delete legsManifest[id];
+          }
+        }
+      }
+    }
     if (!laneGroupSurvives && typeof shell === 'function') {
       shell(validatorPath, [planPath, '--drop-base', '--node-id', running.lane_group.group_id, '--json']);
     }
@@ -4669,6 +4902,10 @@ function main() {
       // frozen plan (orthogonal to the hash-covered speculative_open_policy Meta field). Both must hold
       // for a speculative fan-out: the plan authorizes (policy:consent) AND this run opted in (the flag).
       speculativeConsent: args.includes('--speculative-consent'),
+      // #463 Slice 2: the per-run write-overlap consent carrier — NEVER persisted in the frozen plan
+      // (orthogonal to the hash-covered Meta fields). Mirrors --speculative-consent: BOTH the
+      // KAOLA_LEG_ISOLATION toggle AND this flag must hold for a leg to be provisioned.
+      writeOverlapConsent: args.includes('--write-overlap-consent'),
       shell, readFile, writeFile, cacheExists,
       mkdirp: (dir) => { try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {} },
       now: () => new Date().toISOString(),
@@ -4860,4 +5097,13 @@ module.exports = {
   runRouteFindings,
   parseFindingLine,
   resolveOwningNode,
+  // #463 Slice 2: DORMANT per-leg `.kw` worktree provisioning primitives (exported for direct testing).
+  resolveLegIsolation,
+  sanitizeLegId,
+  legBranchFor,
+  legPathFor,
+  assertSafeLegBranch,
+  provisionLeg,
+  teardownLeg,
+  sweepOrphanLegs,
 };
