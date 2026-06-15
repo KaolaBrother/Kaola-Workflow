@@ -1828,19 +1828,45 @@ function runCloseAndOpenNext(opts) {
   // mismatch (a serial close left the node in the set → reconcile-running-set no-ops `not_opening`).
   const runningSetPath = path.join(path.dirname(planPath), '.cache', RUNNING_SET_NAME);
 
-  // == UNIFIED GUARD PROLOGUE (D1) — matrix: halt-fence:yes / excl-batch:yes (#383d dedup lives in
-  //    the body). NO integrity, NO excl-serial/excl-scheduler: close-and-open-next is the SERIAL close
-  //    path and MUST stay byte-identical to today under the serial-fallback conditions (the hard
-  //    invariant). The halt fence is vacuously-pass when no consent_halt is durable, so a normal
-  //    linear-chain close is unchanged. (#391b: without the fence, close-and-advance survives a halt
-  //    and the marker becomes a phantom against a now-complete node.)
+  // == UNIFIED GUARD PROLOGUE (D1) — matrix: halt-fence:yes / excl-batch:yes (#383d dedup
+  //    lives in the body). NO integrity, NO excl-serial/excl-scheduler: close-and-open-next is the SERIAL close path and
+  //    MUST stay byte-identical to today under the serial-fallback conditions (the hard invariant). The
+  //    halt fence is vacuously-pass when no consent_halt is durable, so a normal linear-chain close is
+  //    unchanged. (#391b: without the fence, close-and-advance survives a halt and the marker becomes a
+  //    phantom against a now-complete node.)
   //    #411 BUG B (excl-batch): a LIVE batch (≥1 unsealed member) must fence this SERIAL close — the
   //    serial path cannot close a node owned by a live parallel batch out-of-band (that is close-node's
   //    job after seal/join). Without it, close-and-open-next would flip a still-running batch member to
-  //    complete + append its compliance row + fuse-advance, racing the batch scheduler. The layer is
-  //    vacuously-pass with no active-batch manifest, so the serial-fallback path stays byte-identical. ==
+  //    complete + append its compliance row + fuse-advance, racing the batch scheduler.
+  //    #463 Slice 4: a live lane_group member needs a SYMMETRIC fence (it must not close out-of-band here,
+  //    skipping the synthesizer), but a BROAD excl-scheduler is WRONG: close-and-open-next legitimately closes a #411
+  //    per-node running set, so runningSetLive must NOT fence it. That fence is therefore the NARROW
+  //    lane-group-member guard in the BODY below (keyed on lane_group membership), not an excl layer. ==
   const guard = mutationGuardPrologue(opts, { halt: true, excl: ['batch'] });
   if (guard) return guard;
+
+  // #463 Slice 4 — LANE-GROUP MEMBER FENCE (silent-loss catch). close-and-open-next has NO isMember
+  // routing (unlike runCloseNode, which routes a live lane_group member to closeGroupMember), so closing
+  // a live lane_group member out-of-band HERE would skip the synthesizer + per-leg/union barriers + leg
+  // teardown: the per-node barrier passes vacuously on the EMPTY parent diff (the member's work lives in
+  // its LEG), the member is marked complete, and the leg's COMMITTED work is orphaned = SILENT LOSS (a
+  // harmless barrier-skip before S4 routed writes into legs; committed-leg-loss now). Fail-closed: refuse
+  // scheduler_active so a lane-group member closes ONLY via close-node. NARROW (keyed on the node being a
+  // member of a LIVE lane_group, NOT on runningSetLive) so a plain #411 per-node running set — which
+  // close-and-open-next legitimately closes — is never false-fenced. Legless/toggle-off: no lane_group
+  // key, so this block is a no-op (byte-identical serial-fallback).
+  {
+    const running0 = readRunningSet(runningSetPath, cacheExists, readFile);
+    const lg0 = (running0 && running0.lane_group) ? running0.lane_group : null;
+    const isLaneMember = !!(lg0 && Array.isArray(lg0.members) && lg0.members.includes(nodeId));
+    if (isLaneMember) {
+      return refuse('scheduler_active', {
+        detail: 'node "' + nodeId + '" is a live lane_group ("' + (lg0.group_id || '?') + '") member — close it via close-node (the running-set scheduler path that runs the synthesizer + per-leg/union barriers), NOT the serial close-and-open-next (which would skip the synthesizer and orphan the leg\'s committed work)',
+        group_id: lg0.group_id || null,
+        repair: 'use close-node --node-id ' + nodeId + ' to close a lane-group member',
+      });
+    }
+  }
 
   // #317: accumulate the UI transitions as the ledger mutates so every ok exit returns
   // the exact set the orchestrator must apply. The closed node is added after its close
@@ -3482,6 +3508,54 @@ function sweepOrphanLegs(mainRoot, project, keepLegPaths) {
 }
 
 // ---------------------------------------------------------------------------
+// synthesizeLevel (#463 Slice 4) — the SYNTHESIZER execution: reconcile a fan-out level's legs into the
+// feature branch at `root` (the integration worktree). DISJOINT legs (the #463 core, write_overlap_policy
+// :disjoint) → a MECHANICAL octopus merge, NO agent (do not inflate the clean win). Steps:
+//   (1) SCRIPT-OWNED CAPTURE: commit each leg's uncommitted work on its own branch (the merge only sees
+//       commits; robust even if the agent forgot to commit — `add -A` then commit, mirroring the leg
+//       barrier's snapshotWorktree capture semantics).
+//   (2) OCTOPUS MERGE the leg branches into HEAD (`merge --no-ff` → one commit M, parents = HEAD + every
+//       leg head; the spike proved this for disjoint legs). The caller asserts the parent is CLEAN of
+//       production paths first (the parent-clean fence) so a floated own-lane slip fails closed BEFORE
+//       this, never lost from M. A real conflict (overlapping/same-file, the deferred tier) makes octopus
+//       BAIL → `merge --abort` + return merge_conflict (the Opus resolver + K=3 repair is Slice 5).
+// Returns { ok:true, mergeCommit } | { ok:false, reason, ... }. An explicit committer identity is passed
+// so the merge/commit never depends on ambient git config. Pure git over the shared object DB.
+// ---------------------------------------------------------------------------
+function synthesizeLevel(root, legs, groupId) {
+  const ID = ['-c', 'user.email=kaola-workflow@local', '-c', 'user.name=kaola-workflow'];
+  const QUIET = { stdio: ['ignore', 'ignore', 'ignore'] };
+  const ids = Object.keys(legs || {});
+  if (!ids.length) return { ok: false, reason: 'no_leg_branches' };
+  // (1) script-owned capture.
+  for (const id of ids) {
+    const leg = legs[id];
+    if (!leg || !leg.legPath) continue;
+    let dirty = '';
+    try { dirty = execFileSync('git', ['-C', leg.legPath, 'status', '--porcelain'], { encoding: 'utf8' }).trim(); } catch (_) { dirty = ''; }
+    if (dirty) {
+      try {
+        execFileSync('git', ['-C', leg.legPath, 'add', '-A'], QUIET);
+        execFileSync('git', ['-C', leg.legPath, ...ID, 'commit', '-m', 'kw-leg: ' + id], QUIET);
+      } catch (e) { return { ok: false, reason: 'leg_capture_failed', nodeId: id, detail: String((e && e.message) || e) }; }
+    }
+  }
+  // (2) octopus merge into the feature branch at root.
+  const branches = ids.map(id => (legs[id] && legs[id].legBranch)).filter(Boolean);
+  if (!branches.length) return { ok: false, reason: 'no_leg_branches' };
+  try {
+    execFileSync('git', ['-C', root, ...ID, 'merge', '--no-ff', '-m', 'kw-synth: ' + groupId, ...branches], QUIET);
+  } catch (e) {
+    try { execFileSync('git', ['-C', root, 'merge', '--abort'], QUIET); } catch (_) { /* fail-soft */ }
+    return { ok: false, reason: 'merge_conflict', detail: String((e && e.message) || e) };
+  }
+  let mergeCommit = '';
+  try { mergeCommit = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(); } catch (_) { mergeCommit = ''; }
+  if (!mergeCommit) return { ok: false, reason: 'merge_head_unresolved' };
+  return { ok: true, mergeCommit };
+}
+
+// ---------------------------------------------------------------------------
 // speculativeCloseGuard (#439 D-419 Part 4) — a speculative node cannot COMMIT to `complete` until its
 // bet resolves: its post-dominating gate must be `complete` first. Without this, a speculative node that
 // closes BEFORE its gate vanishes from the running set, so a later gate `verdict:fail` could no longer
@@ -3946,12 +4020,32 @@ function runOpenReady(opts) {
 // in-lane PRESENCE check, NOT the full diff barrier (the diff barrier is DEFERRED to the group).
 // Returns { changed:boolean, lines:string[] }. Fail-OPEN to changed:false on a git error (the
 // caller then requires the no_op: declaration — the conservative direction).
+//
+// #463 Slice 4: LEG-AWARE. When legCtx = { legPath, baseRev } is passed (routing live — the member's
+// work lands in its leg, not the parent), the probe targets the LEG worktree, and counts BOTH the
+// uncommitted working tree (`status --porcelain`) AND committed leg work (`diff baseRev..HEAD`, since
+// script-owned capture / the agent may have committed it). Without legCtx the parent-rooted behavior is
+// byte-identical (the legless serial-degrade path).
 // ---------------------------------------------------------------------------
-function memberInLaneChanges(declaredRaw) {
+function memberInLaneChanges(declaredRaw, legCtx) {
   let parse;
   try { ({ parseWriteSetCell: parse } = require('./kaola-gitlab-workflow-classifier')); } catch (_) { parse = null; }
   const paths = parse ? Array.from(parse(declaredRaw)) : String(declaredRaw || '').split(/[\s,]+/).filter(Boolean);
   if (!paths.length) return { changed: false, lines: [] };
+  if (legCtx && legCtx.legPath) {
+    const lines = [];
+    try {
+      const st = execFileSync('git', ['-C', legCtx.legPath, 'status', '--porcelain', '--', ...paths], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      for (const l of String(st).split('\n').map(s => s.trim()).filter(Boolean)) lines.push(l);
+    } catch (_) { /* fall through to committed probe */ }
+    if (legCtx.baseRev) {
+      try {
+        const d = execFileSync('git', ['-C', legCtx.legPath, 'diff', '--name-only', legCtx.baseRev, 'HEAD', '--', ...paths], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+        for (const l of String(d).split('\n').map(s => s.trim()).filter(Boolean)) lines.push(l);
+      } catch (_) { /* fail-open */ }
+    }
+    return { changed: lines.length > 0, lines };
+  }
   let root;
   try { root = getRoot(); } catch (_) { root = process.cwd(); }
   let out = '';
@@ -4164,12 +4258,21 @@ function closeGroupMember(ctx) {
     planPath, project, runningSetPath, shell, readFile, writeFile, cacheExists, transitions,
   } = ctx;
 
+  // #463 Slice 4: read THIS member's leg entry ONCE up front — it makes both the vacuity guard (which
+  // worktree to probe) and the per-leg barrier leg-aware. A legless / toggle-off group has no entry ⇒
+  // legCtx stays null ⇒ every check is byte-identical to the parent-rooted serial-degrade path.
+  const runningLeg = readRunningSet(runningSetPath, cacheExists, readFile);
+  const legEntry = runningLeg && runningLeg.lane_group && runningLeg.lane_group.legs && runningLeg.lane_group.legs[nodeId];
+  const legCtx = (legEntry && legEntry.legPath) ? { legPath: legEntry.legPath, baseRev: legEntry.baseline || null } : null;
+
   // -- (1) PER-MEMBER in-lane vacuity guard. Empty in-lane changes AND no `no_op:` ⇒ member_vacuity.
   // parseNodes returns `writeSetRaw` (the running-set carries `declared_write_set`); accept either.
+  // #463 S4: when routing is live the member's work lands in its LEG, so probe the leg (legCtx), not the
+  // parent — else legit leg work reads as vacuous and false-trips the no_op: requirement.
   const declaredRaw = nodeInfo
     ? (nodeInfo.declared_write_set != null ? nodeInfo.declared_write_set : nodeInfo.writeSetRaw)
     : null;
-  const inLane = memberInLaneChanges(declaredRaw);
+  const inLane = memberInLaneChanges(declaredRaw, legCtx);
   if (!inLane.changed && !evidenceDeclaresNoOp(evidenceContent)) {
     return {
       result: 'refuse',
@@ -4180,29 +4283,23 @@ function closeGroupMember(ctx) {
     };
   }
 
-  // -- (1b) #463 Slice 3: PER-LEG barrier — PRE-WIRED. Runs ONLY when leg-isolation provisioned a leg for
-  // THIS closing member (running-set lane_group.legs[nodeId] present); a toggle-off / legless group has no
-  // leg entry ⇒ this block is SKIPPED ⇒ byte-identical. It snapshots the member's OWN leg worktree and
-  // refuses an out-of-declared write that landed in the leg (the write-ISOLATION check) — DISTINCT from
-  // the group/union barrier below (which measures the PARENT). --project is passed EXPLICITLY (mirrors the
-  // provision-side legBaseRef key) so the leg-base ref name never drifts into a silent no_leg_base.
-  // In S3 production legs stay EMPTY (write routing lands in S4), so on a real run this passes trivially
-  // (empty diff); the integration tests are what exercise it with REAL leg writes. First PRODUCTION
-  // exercise = S4 routing. Runs for EVERY member close (deferred + last); each checks its own leg.
-  {
-    const runningLeg = readRunningSet(runningSetPath, cacheExists, readFile);
-    const legEntry = runningLeg && runningLeg.lane_group && runningLeg.lane_group.legs && runningLeg.lane_group.legs[nodeId];
-    if (legEntry && legEntry.legPath) {
-      const legBarrier = shell(validatorPath, [planPath, '--leg-barrier', '--node-id', nodeId, '--project', project, '--leg-root', legEntry.legPath, '--expect-base', String(legEntry.baseline || ''), '--json']);
-      if (legBarrier.exitCode !== 0 || legBarrier.result !== 'pass') {
-        return {
-          result: 'refuse',
-          reason: legBarrier.reason || 'leg_barrier_failed',
-          nodeId, role,
-          group_id: lg.group_id,
-          legBarrier,
-        };
-      }
+  // -- (1b) #463 Slice 3: PER-LEG barrier. Runs ONLY when leg-isolation provisioned a leg for THIS closing
+  // member (legCtx present); a toggle-off / legless group has no leg entry ⇒ this block is SKIPPED ⇒ byte-
+  // identical. It snapshots the member's OWN leg worktree and refuses an out-of-declared write that landed
+  // in the leg (the write-ISOLATION check) — DISTINCT from the group/union barrier below (which measures
+  // the merge COMMIT in S4). --project is passed EXPLICITLY (mirrors the provision-side legBaseRef key) so
+  // the leg-base ref name never drifts into a silent no_leg_base. Runs for EVERY member close (deferred +
+  // last); each checks its own leg. The S4 synthesizer (last-member) merges the legs this barrier cleared.
+  if (legCtx) {
+    const legBarrier = shell(validatorPath, [planPath, '--leg-barrier', '--node-id', nodeId, '--project', project, '--leg-root', legEntry.legPath, '--expect-base', String(legEntry.baseline || ''), '--json']);
+    if (legBarrier.exitCode !== 0 || legBarrier.result !== 'pass') {
+      return {
+        result: 'refuse',
+        reason: legBarrier.reason || 'leg_barrier_failed',
+        nodeId, role,
+        group_id: lg.group_id,
+        legBarrier,
+      };
     }
   }
 
@@ -4263,18 +4360,51 @@ function closeGroupMember(ctx) {
     };
   }
 
-  // -- (2b) LAST member: run the GROUP BARRIER ONCE over union(all members), BEFORE closing/removing
-  //    this member (so lane_group.members still holds the full set the validator reads). The validator
-  //    --group-barrier path reads running-set.json's lane_group + the group baseline itself.
-  const groupBarrier = shell(validatorPath, [planPath, '--group-barrier', '--group-id', lg.group_id, '--json']);
+  // -- (2b) LAST member: the close barrier over union(all members), BEFORE closing/removing this member
+  //    (so lane_group.members still holds the full set the validator reads).
+  //    #463 Slice 4 — the DEPENDENCY-LEVEL COMMIT BARRIER. When legs are LIVE (routing on), the
+  //    SYNTHESIZER reconciles the level: (i) the parent-clean fence catches a floated own-lane slip
+  //    BEFORE the merge (fail-closed); (ii) octopus-merge the disjoint legs into the feature branch
+  //    (mechanical, no agent) → commit M = the HEAD ADVANCE; (iii) the COMMIT-based union barrier on M
+  //    (the B1 fix: measure diff(base→M), only-committed, never a working-tree snapshot that would
+  //    false-green a floated slip). A legless group keeps the EXACT snapshot group barrier — byte-
+  //    identical serial-degrade. Drain→synthesize→commit→advance: the next level's legs branch off M.
+  const liveLegs = (runningLeg && runningLeg.lane_group && runningLeg.lane_group.legs && Object.keys(runningLeg.lane_group.legs).length)
+    ? runningLeg.lane_group.legs : null;
+  let groupBarrier;
+  let mergedCommit = null;
+  if (liveLegs) {
+    let synthRoot; try { synthRoot = getRoot(); } catch (_) { synthRoot = process.cwd(); }
+    // (i) parent-clean fence.
+    const fence = shell(validatorPath, [planPath, '--parent-clean-check', '--project', project, '--json']);
+    if (fence.exitCode !== 0 || fence.result !== 'pass') {
+      return { result: 'refuse', reason: fence.reason || 'parent_dirty', nodeId, role, group_id: lg.group_id, fence };
+    }
+    // (ii) synthesizer execution — mechanical octopus merge of the disjoint legs → M. A real conflict
+    // (the deferred overlapping tier) bails → merge_conflict (the Opus resolver + K=3 repair is Slice 5);
+    // legs + baseline are retained (durable, recoverable), NO ledger advance.
+    const synth = synthesizeLevel(synthRoot, liveLegs, lg.group_id);
+    if (!synth.ok) {
+      return { result: 'refuse', reason: synth.reason || 'merge_conflict', nodeId, role, group_id: lg.group_id, synth };
+    }
+    mergedCommit = synth.mergeCommit;
+    appendNodeTiming(planPath, lg.group_id, 'level_merged');
+    // (iii) the COMMIT-based union barrier on M (+ base & per-leg-head ancestor inclusion = no silent loss).
+    groupBarrier = shell(validatorPath, [planPath, '--group-barrier', '--group-id', lg.group_id, '--merge-commit', mergedCommit, '--project', project, '--json']);
+  } else {
+    groupBarrier = shell(validatorPath, [planPath, '--group-barrier', '--group-id', lg.group_id, '--json']);
+  }
   if (groupBarrier.exitCode !== 0 || groupBarrier.result !== 'pass') {
-    // Typed refusal: NO ledger advance, lane_group untouched, group baseline retained.
+    // Typed refusal: NO ledger advance, lane_group untouched, group baseline retained. (A merge that
+    // committed M before a union-barrier refuse leaves M on the branch — durable + recoverable; re-running
+    // the synthesizer is idempotent, and the escape is repaired before the barrier can pass.)
     return {
       result: 'refuse',
       reason: groupBarrier.reason || 'group_barrier_failed',
       nodeId, role,
       group_id: lg.group_id,
       groupBarrier,
+      ...(mergedCommit ? { mergeCommit: mergedCommit } : {}),
     };
   }
 
@@ -4333,6 +4463,7 @@ function closeGroupMember(ctx) {
     closed: nodeId,
     barrier: 'group_passed',
     group_id: lg.group_id,
+    ...(mergedCommit ? { mergeCommit: mergedCommit, synthesized: true } : {}),
     allDone,
     newlyReady,
     ...(verdictWarn || {}),
@@ -5167,4 +5298,6 @@ module.exports = {
   provisionLeg,
   teardownLeg,
   sweepOrphanLegs,
+  synthesizeLevel,
+  memberInLaneChanges,
 };
