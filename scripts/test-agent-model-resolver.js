@@ -105,4 +105,63 @@ try {
   fs.rmSync(tmpContractorManifest, { recursive: true, force: true });
 }
 
+// #463 Slice 1 (AC14): reasoning-class floor ENFORCEMENT. The synthesizer (a REASONING_FLOOR_ROLE)
+// resolves real write-leg merge conflicts BY INTENT — a reasoning-class task. A manifest/frontmatter
+// override that LOWERS the floor (or an explicit inherit) is a TYPED REFUSAL, never a silent downgrade.
+// A plan may RAISE but never LOWER this floor. The default path (opus) always passes.
+assert.strictEqual(typeof resolver.enforceReasoningFloor, 'function', 'enforceReasoningFloor is exported');
+
+// Default path: synthesizer -> opus default -> floor satisfied (with and without enforcement).
+const tmpFloorOk = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-agent-model-floor-ok-'));
+try {
+  assert.strictEqual(resolver.resolveAgentModel('synthesizer', { agentDir: tmpFloorOk }), 'opus');
+  assert.strictEqual(resolver.resolveAgentModel('synthesizer', { agentDir: tmpFloorOk, enforceFloor: true }), 'opus',
+    'enforceFloor passes the opus default through unchanged');
+  assert.strictEqual(resolver.enforceReasoningFloor('synthesizer', 'opus').ok, true, 'opus satisfies the synthesizer floor');
+  // A non-floor role is NEVER constrained by the floor.
+  assert.strictEqual(resolver.enforceReasoningFloor('code-reviewer', 'sonnet').ok, true, 'non-floor role unaffected');
+  assert.strictEqual(resolver.resolveAgentModel('code-reviewer', { agentDir: tmpFloorOk, enforceFloor: true }), 'sonnet',
+    'enforceFloor leaves non-floor roles alone');
+} finally {
+  fs.rmSync(tmpFloorOk, { recursive: true, force: true });
+}
+
+// A manifest override that LOWERS the synthesizer to a non-reasoning tier:
+//  - WITHOUT enforceFloor: the (wrong) lowered model still returns (back-compat unchanged)
+//  - WITH enforceFloor: resolveAgentModel THROWS a typed reasoning_floor_violation
+//  - enforceReasoningFloor reports ok:false with the typed reason
+const tmpFloorLower = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-agent-model-floor-lower-'));
+try {
+  writeManifest(tmpFloorLower, { synthesizer: 'sonnet' });
+  assert.strictEqual(resolver.resolveAgentModel('synthesizer', { agentDir: tmpFloorLower }), 'sonnet',
+    'back-compat: without enforceFloor a lowered synthesizer still returns');
+  const v = resolver.enforceReasoningFloor('synthesizer', 'sonnet');
+  assert.strictEqual(v.ok, false, 'enforceReasoningFloor refuses a lowered synthesizer');
+  assert.strictEqual(v.reason, 'reasoning_floor_violation', 'typed reason');
+  assert.strictEqual(v.floor, 'opus', 'reports the floor');
+  let threw = null;
+  try { resolver.resolveAgentModel('synthesizer', { agentDir: tmpFloorLower, enforceFloor: true }); }
+  catch (e) { threw = e; }
+  assert.ok(threw, 'enforceFloor throws on a lowered synthesizer');
+  assert.strictEqual(threw.reason, 'reasoning_floor_violation', 'typed reason on the thrown error');
+} finally {
+  fs.rmSync(tmpFloorLower, { recursive: true, force: true });
+}
+
+// An explicit inherit on a floor role is ALSO a violation under enforceFloor (inherit may resolve to a
+// non-reasoning session model — the floor must not be silently surrendered).
+const tmpFloorInherit = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-agent-model-floor-inherit-'));
+try {
+  writeManifest(tmpFloorInherit, { synthesizer: 'inherit' });
+  assert.strictEqual(resolver.resolveAgentModel('synthesizer', { agentDir: tmpFloorInherit }), '',
+    'inherit resolves to empty without enforcement');
+  assert.strictEqual(resolver.enforceReasoningFloor('synthesizer', '').ok, false, 'inherit (empty) violates the floor');
+  let threwI = null;
+  try { resolver.resolveAgentModel('synthesizer', { agentDir: tmpFloorInherit, enforceFloor: true }); }
+  catch (e) { threwI = e; }
+  assert.ok(threwI && threwI.reason === 'reasoning_floor_violation', 'enforceFloor throws on inherit for a floor role');
+} finally {
+  fs.rmSync(tmpFloorInherit, { recursive: true, force: true });
+}
+
 console.log('Agent model resolver tests passed');

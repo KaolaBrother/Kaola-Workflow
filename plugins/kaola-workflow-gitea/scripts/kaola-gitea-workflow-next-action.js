@@ -28,6 +28,7 @@ const fs = require('fs');
 const { parseNodes, parseLedger, parseSpeculativePolicy } = require('./kaola-gitea-workflow-plan-validator');
 const { parseWriteSetCell } = require('./kaola-gitea-workflow-classifier');
 const { LEDGER_STATUSES, NODE_MODEL_TIERS, GATE_VERDICT_ROLES } = require('./kaola-workflow-adaptive-schema');
+const { enforceReasoningFloor } = require('./kaola-workflow-resolve-agent-model');
 
 // Terminal statuses: a node in either state counts as "done" for dependency
 // purposes, so an n/a node satisfies the depends_on of its successors.
@@ -124,6 +125,27 @@ function computeNextAction(content, opts) {
       declared_write_set: node.writeSetRaw,
       shape: node.shape.kind,
     }));
+
+  // 4b. #463 Slice 1 (AC14): ENFORCE the reasoning-class floor on the dispatchable frontier — the
+  // production model-resolution seam. A ready node whose role is a REASONING_FLOOR_ROLES (e.g.
+  // `synthesizer`, which reconciles write-leg merge conflicts BY INTENT) but whose EFFECTIVE model
+  // (the authored `model` column OR the resolved default) is not reasoning-class is a fail-closed
+  // refusal — the aggregator never emits a silently-lowered floor role for dispatch. The EFFECTIVE
+  // model is checked (not just the resolved default), since an authored column bypasses resolveModel.
+  for (const n of readySet) {
+    const check = enforceReasoningFloor(n.role, n.model);
+    if (!check.ok) {
+      return {
+        result: 'refuse',
+        reason: check.reason,
+        node: n.id,
+        role: n.role,
+        model: check.model,
+        floor: check.floor,
+        errors: [check.operator_hint],
+      };
+    }
+  }
 
   // 5. allDone: every node is in a terminal state.
   const allDone = nodes.every(n => TERMINAL.has(st(n.id)));
