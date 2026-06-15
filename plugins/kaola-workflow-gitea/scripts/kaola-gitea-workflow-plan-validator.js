@@ -104,6 +104,12 @@ const OPERATOR_HINT_REGISTRY = {
   invalid_args: () => 'Invalid argument combination. Check the command usage (--help).',
   no_barrier_base: (ctx) => `No recorded baseline for node "${ctx.nodeId || '(unknown)'}". Run: node scripts/kaola-gitea-workflow-plan-validator.js <plan> --record-base --node-id ${ctx.nodeId || '<node-id>'} before dispatching the node.`,
   missing_group_id: () => '--group-barrier requires --group-id <id>. Provide the lane group ID.',
+  // #463 Slice 3 — the per-leg barrier (the WRITE-isolation check for a parallel write fan-out leg).
+  missing_leg_root: () => '--leg-barrier requires --leg-root <legPath> (the leg worktree to snapshot). Provide the per-leg worktree path.',
+  missing_project: () => '--leg-barrier requires --project <project> (the leg-base ref is keyed off the EXPLICIT project, never derived from the plan path). Provide the project.',
+  leg_root_invalid: (ctx) => `--leg-root "${ctx.legRoot || '(unknown)'}" is not a git worktree toplevel. Pass the per-leg worktree path recorded in running-set.json lane_group.legs.<id>.legPath.`,
+  no_leg_base: (ctx) => `No anchored leg-base ref for node "${ctx.nodeId || '(unknown)'}" (project "${ctx.project || '?'}"). The ref is anchored at leg provision (open-ready); a missing ref means the leg was not provisioned with leg-isolation, or the producer/consumer ref names disagree.`,
+  leg_base_unreachable: (ctx) => `The anchored leg-base for node "${ctx.nodeId || '(unknown)'}" is not an ancestor of the leg HEAD — the base does not sit in this leg's history (a forward/unrelated ref). Re-provision the leg; do not pass a hand-rolled base.`,
   internal_error: () => 'Validator encountered an unexpected internal error. Check the plan file for malformed Markdown and re-run.',
 };
 
@@ -1769,7 +1775,11 @@ function printHelp() {
     '                 result:ok | refuse(reason:overlapping_write_sets,overlapping[]). No fs/git writes.\n' +
     '  --group-barrier --group-id ID [--member ID] [--skip-root-pin]  the GROUP-scoped close barrier (#437): diff the group\n' +
     '                 baseline (recorded via --record-base --node-id ID) -> now over the UNION of the lane_group members\'\n' +
-    '                 write sets (read from running-set.json); an out-of-union stray refuses via the rank-4 overflow arm.\n'
+    '                 write sets (read from running-set.json); an out-of-union stray refuses via the rank-4 overflow arm.\n' +
+    '  --leg-barrier --node-id ID --project P --leg-root PATH [--expect-base SHA]  the PER-LEG write-isolation barrier (#463):\n' +
+    '                 snapshot the leg worktree (--leg-root) and diff it against the leg branch-point (resolved ONLY from the\n' +
+    '                 anchored ref refs/kaola-workflow/leg-base/<P>/<ID>, never a free --base) over node ID\'s OWN declared set;\n' +
+    '                 --expect-base cross-checks the manifest SHA against the ref (barrier_base_mismatch on tamper).\n'
   );
 }
 function main() {
@@ -2173,6 +2183,81 @@ function main() {
     const actualPaths = diffOut.split('\n').map(s => s.trim()).filter(Boolean);
     const r = barrierCheck(content, actualPaths, { groupMembers: members, root, project: projTag });
     process.stdout.write((json ? JSON.stringify(r) : (r.result === 'pass' ? 'group barrier ok' : 'typed refusal: ' + r.errors.join('; '))) + '\n');
+    if (r.result !== 'pass') process.exitCode = 1;
+    return;
+  }
+  if (args.includes('--leg-barrier')) {
+    // #463 Slice 3 — the PER-LEG barrier: the write-isolation check for ONE leg of a parallel write
+    // fan-out. Snapshots the leg worktree (--leg-root, NOT the plan-derived root) and tree-diffs it
+    // against the leg's BRANCH-POINT over the node's OWN declared write set (per-node mode). It answers
+    // "did THIS leg stay in its declared lane" and is DISTINCT from the group/union barrier (which
+    // measures the PARENT / the merge commit — the B1 fix in S4); the leg-barrier never substitutes for
+    // it. snapshotWorktree(legRoot) is the spike-proven leg-rooting mechanism (a leg is a linked worktree
+    // sharing the object DB + refs with main, so the anchored base ref + diff resolve from -C legRoot).
+    //
+    // ANTI-LAUNDERING (#368 pattern): a FREE --base is the vacuous-pass hole the per-node barrier refuses
+    // at the --base/--node-id guard above — feeding base = the leg's post-write tree empties the diff. So
+    // base comes ONLY from a ref ANCHORED AT PROVISION (refs/kaola-workflow/leg-base/<project>/<id>);
+    // --expect-base (the running-set manifest's claimed SHA) is CROSS-CHECKED against the ref and a
+    // disagreement is barrier_base_mismatch. The ancestor backstop (base ⊆ legHEAD history) catches a ref
+    // pointing forward/unrelated. --project is EXPLICIT (mirrors adaptive-node) — NEVER derived from the
+    // plan path — so the producer/consumer ref names cannot drift into a silent no_leg_base.
+    const flagVal = name => { const i = args.indexOf(name); return i >= 0 && i + 1 < args.length ? args[i + 1] : null; };
+    const nodeId = flagVal('--node-id');
+    const legRoot = flagVal('--leg-root');
+    const legProject = flagVal('--project');
+    const expectBase = flagVal('--expect-base');
+    if (!nodeId) {
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'missing_node_id', operator_hint: getOperatorHint('missing_node_id'), errors: ['--leg-barrier requires --node-id <id>'] }) : 'typed refusal: --leg-barrier requires --node-id') + '\n');
+      process.exitCode = 1; return;
+    }
+    if (!legRoot) {
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'missing_leg_root', operator_hint: getOperatorHint('missing_leg_root'), errors: ['--leg-barrier requires --leg-root <legPath>'] }) : 'typed refusal: --leg-barrier requires --leg-root') + '\n');
+      process.exitCode = 1; return;
+    }
+    if (!legProject) {
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'missing_project', operator_hint: getOperatorHint('missing_project'), errors: ['--leg-barrier requires --project <project>'] }) : 'typed refusal: --leg-barrier requires --project') + '\n');
+      process.exitCode = 1; return;
+    }
+    // --leg-root must be a real git worktree toplevel (it IS the root we snapshot + diff against).
+    let legTop = '';
+    try { legTop = execFileSync('git', ['-C', legRoot, 'rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim(); } catch (_) { legTop = ''; }
+    const legRootReal = (() => { try { return fs.realpathSync(legRoot); } catch (_) { return path.resolve(legRoot); } })();
+    const legTopReal = legTop ? (() => { try { return fs.realpathSync(legTop); } catch (_) { return legTop; } })() : '';
+    if (!legTopReal || legTopReal !== legRootReal) {
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'leg_root_invalid', operator_hint: getOperatorHint('leg_root_invalid', { legRoot }), errors: ['--leg-root "' + legRoot + '" is not a git worktree toplevel (rev-parse --show-toplevel "' + (legTop || '(unresolved)') + '")'] }) : 'typed refusal: leg_root_invalid') + '\n');
+      process.exitCode = 1; return;
+    }
+    // Resolve base ONLY from the anchored ref (shared object DB / refs; the leg shares them with main).
+    const legSan = x => String(x).replace(/[^A-Za-z0-9_-]/g, '_');
+    const legBaseRefName = 'refs/kaola-workflow/leg-base/' + legSan(legProject) + '/' + legSan(nodeId);
+    let baseSha = '';
+    try { baseSha = execFileSync('git', ['-C', legRoot, 'rev-parse', '--verify', '--quiet', legBaseRefName + '^{commit}'], { encoding: 'utf8' }).trim(); } catch (_) { baseSha = ''; }
+    if (!baseSha) {
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'no_leg_base', operator_hint: getOperatorHint('no_leg_base', { nodeId, project: legProject }), errors: ['no anchored leg-base ref "' + legBaseRefName + '" for node "' + nodeId + '"'] }) : 'typed refusal: no_leg_base for ' + nodeId) + '\n');
+      process.exitCode = 1; return;
+    }
+    // CROSS-CHECK the manifest-claimed base (--expect-base) against the ref (#368): mismatch ⇒ refuse.
+    if (expectBase && expectBase !== baseSha) {
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'barrier_base_mismatch', operator_hint: getOperatorHint('barrier_base_mismatch', { nodeId }), errors: ['leg-base manifest SHA (' + expectBase + ') for "' + nodeId + '" does not match the anchored ref ' + legBaseRefName + ' (' + baseSha + ') — a re-anchor after work would launder it; restore the ref or re-provision the leg'] }) : 'typed refusal: barrier_base_mismatch for ' + nodeId) + '\n');
+      process.exitCode = 1; return;
+    }
+    // ANCESTOR BACKSTOP: base must sit in the leg's history (ancestor-or-equal of legHEAD). A forward /
+    // unrelated ref (the only thing the cross-check leaves) is leg_base_unreachable.
+    let legHead = '';
+    try { legHead = execFileSync('git', ['-C', legRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(); } catch (_) { legHead = ''; }
+    let ancestorOk = false;
+    try { execFileSync('git', ['-C', legRoot, 'merge-base', '--is-ancestor', baseSha, legHead], { stdio: ['ignore', 'ignore', 'ignore'] }); ancestorOk = true; } catch (_) { ancestorOk = false; }
+    if (!ancestorOk) {
+      process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'leg_base_unreachable', operator_hint: getOperatorHint('leg_base_unreachable', { nodeId }), errors: ['anchored leg-base ' + baseSha + ' for "' + nodeId + '" is not an ancestor of leg HEAD ' + (legHead || '(unresolved)')] }) : 'typed refusal: leg_base_unreachable for ' + nodeId) + '\n');
+      process.exitCode = 1; return;
+    }
+    // Script-owned capture: snapshot the LEG worktree (NOT the plan-derived root) + tree-diff base -> now.
+    const now = snapshotWorktree(legRoot, nodeId + '-leg');
+    const diffOut = execFileSync('git', ['-C', legRoot, 'diff-tree', '-r', '--name-only', baseSha, now], { encoding: 'utf8' });
+    const actualPaths = diffOut.split('\n').map(s => s.trim()).filter(Boolean);
+    const r = barrierCheck(content, actualPaths, { nodeId, root: legRoot, project: legSan(legProject) });
+    process.stdout.write((json ? JSON.stringify(r) : (r.result === 'pass' ? 'leg barrier ok' : 'typed refusal: ' + r.errors.join('; '))) + '\n');
     if (r.result !== 'pass') process.exitCode = 1;
     return;
   }

@@ -5442,6 +5442,211 @@ function rtHarness(initialFiles, opts) {
     assert(branchExists(repoRoot, 'kw/legs/test-project/A'), 'LEG-CRASH-LOST-MANIFEST-FLAG-OFF: planted leg branch UNTOUCHED flag-OFF');
     cleanup(repoRoot);
   }
+
+  // =========================================================================
+  // #463-LEG-BARRIER (Slice 3) — the PER-LEG write-isolation barrier. Drives the REAL validator
+  // --leg-barrier subprocess + the close-path wiring in a REAL git repo with REAL leg writes (the unit
+  // walkthrough cannot touch worktrees). Producer (adaptive-node ref-anchor at provision) + consumer
+  // (validator --leg-barrier) land together; these prove the ref RESOLVES end-to-end (no silent
+  // no_leg_base — the advisor landmine), the in-lane/overflow gate, committed-in-leg detection, and the
+  // #368 anti-laundering cross-check + ancestor backstop. In S3 production legs stay EMPTY (routing is
+  // S4); these tests write into legs DIRECTLY to exercise the barrier — the S2 dormant-but-tested pattern.
+  // =========================================================================
+  const STDIO_Q = { stdio: ['ignore', 'ignore', 'ignore'] };
+  // Run the validator CLI as a REAL subprocess; parse the trailing JSON line like runNode.
+  function runVal(repoRoot, subArgs) {
+    try {
+      const stdout = execFileSync('node', [VALIDATOR, ...subArgs], { cwd: repoRoot, encoding: 'utf8' });
+      let parsed = {}; try { parsed = JSON.parse(stdout.trim().split('\n').pop()); } catch (_) {}
+      return { exitCode: 0, ...parsed };
+    } catch (err) {
+      const status = (err.status == null) ? 1 : err.status;
+      let parsed = {}; try { parsed = JSON.parse(String(err.stdout || '').trim().split('\n').pop()); } catch (_) {}
+      return { exitCode: status, ...parsed };
+    }
+  }
+  function gitOut(cwd, args) {
+    try { return execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8' }).trim(); } catch (_) { return ''; }
+  }
+  const legRefName = id => 'refs/kaola-workflow/leg-base/test-project/' + id;
+  const planP = repoRoot => path.join(repoRoot, 'kaola-workflow', 'test-project', 'workflow-plan.md');
+  function refResolves(repoRoot, id) { return gitOut(repoRoot, ['rev-parse', '--verify', '--quiet', legRefName(id) + '^{commit}']); }
+  // Provision legs (LEG_ON + consent) and return { repoRoot, cacheDir, legA, legB, rs }.
+  function provisionedRepo() {
+    const { repoRoot, cacheDir } = makeLaneRepo();
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON);
+    assert(r.result === 'ok' && r.laneGroup, 'LEG-BARRIER setup: co-open ok, got ' + JSON.stringify(r));
+    const rs = readRS(cacheDir);
+    return {
+      repoRoot, cacheDir, rs,
+      legA: path.join(repoRoot, '.kw', 'legs', 'test-project', 'A'),
+      legB: path.join(repoRoot, '.kw', 'legs', 'test-project', 'B'),
+    };
+  }
+
+  // LEG-BARRIER-REF-ANCHORED (advisor landmine: producer + consumer ref names must AGREE). The ref the
+  // provision side anchored must RESOLVE under the name the validator derives, and equal the manifest base.
+  {
+    const { repoRoot, rs } = provisionedRepo();
+    const refA = refResolves(repoRoot, 'A');
+    assert(refA && refA.length >= 7, 'LEG-BARRIER-REF-ANCHORED: leg-base ref for A RESOLVES (producer anchored it under the consumer name), got ' + JSON.stringify(refA));
+    assert(refA === rs.lane_group.legs.A.baseline, 'LEG-BARRIER-REF-ANCHORED: anchored ref A == manifest baseline (cross-check anchor agrees), got ref ' + refA + ' vs manifest ' + rs.lane_group.legs.A.baseline);
+    cleanup(repoRoot);
+  }
+
+  // LEG-BARRIER-IN-LANE (uncommitted): a declared write inside the leg → --leg-barrier passes.
+  {
+    const { repoRoot, legA, rs } = provisionedRepo();
+    fs.writeFileSync(path.join(legA, 'ax.js'), '// A in-lane leg write\n');
+    const r = runVal(repoRoot, [planP(repoRoot), '--leg-barrier', '--node-id', 'A', '--project', 'test-project', '--leg-root', legA, '--expect-base', rs.lane_group.legs.A.baseline, '--json']);
+    assert(r.result === 'pass', 'LEG-BARRIER-IN-LANE: in-lane leg write passes, got ' + JSON.stringify(r));
+    cleanup(repoRoot);
+  }
+
+  // LEG-BARRIER-OVERFLOW (uncommitted): an OUT-OF-declared write inside the leg → write_set_overflow.
+  {
+    const { repoRoot, legA, rs } = provisionedRepo();
+    fs.writeFileSync(path.join(legA, 'ax.js'), '// in-lane\n');
+    fs.writeFileSync(path.join(legA, 'zz.js'), '// OVERFLOW (not in A declared set {ax.js})\n');
+    const r = runVal(repoRoot, [planP(repoRoot), '--leg-barrier', '--node-id', 'A', '--project', 'test-project', '--leg-root', legA, '--expect-base', rs.lane_group.legs.A.baseline, '--json']);
+    assert(r.result === 'refuse' && r.reason === 'write_set_overflow', 'LEG-BARRIER-OVERFLOW: leg overflow refuses write_set_overflow, got ' + JSON.stringify(r));
+    cleanup(repoRoot);
+  }
+
+  // LEG-BARRIER-COMMITTED: COMMIT the writes IN the leg (not just uncommitted) — snapshotWorktree's
+  // read-tree HEAD path must still attribute them. In-lane commit → pass; an overflow commit → refuse.
+  {
+    const { repoRoot, legA, rs } = provisionedRepo();
+    fs.writeFileSync(path.join(legA, 'ax.js'), '// committed in leg\n');
+    execFileSync('git', ['-C', legA, 'add', '-A'], STDIO_Q);
+    execFileSync('git', ['-C', legA, 'commit', '-m', 'leg work'], STDIO_Q);
+    const rOk = runVal(repoRoot, [planP(repoRoot), '--leg-barrier', '--node-id', 'A', '--project', 'test-project', '--leg-root', legA, '--expect-base', rs.lane_group.legs.A.baseline, '--json']);
+    assert(rOk.result === 'pass', 'LEG-BARRIER-COMMITTED: committed in-lane leg write passes (read-tree HEAD path), got ' + JSON.stringify(rOk));
+    fs.writeFileSync(path.join(legA, 'zz.js'), '// committed overflow\n');
+    execFileSync('git', ['-C', legA, 'add', '-A'], STDIO_Q);
+    execFileSync('git', ['-C', legA, 'commit', '-m', 'leg overflow'], STDIO_Q);
+    const rBad = runVal(repoRoot, [planP(repoRoot), '--leg-barrier', '--node-id', 'A', '--project', 'test-project', '--leg-root', legA, '--expect-base', rs.lane_group.legs.A.baseline, '--json']);
+    assert(rBad.result === 'refuse' && rBad.reason === 'write_set_overflow', 'LEG-BARRIER-COMMITTED: committed overflow still refuses, got ' + JSON.stringify(rBad));
+    cleanup(repoRoot);
+  }
+
+  // ★ LEG-BARRIER-VACUOUS-BASE (adversarial, the #368 cross-check): the laundering attack is to claim
+  //   base = the leg's POST-WRITE tree so the diff empties. The validator resolves base from the ANCHORED
+  //   ref (so the diff can't empty), and the manifest --expect-base cross-check trips the tamper:
+  //   --expect-base = a post-write commit != the ref ⇒ barrier_base_mismatch.
+  {
+    const { repoRoot, legA, rs } = provisionedRepo();
+    fs.writeFileSync(path.join(legA, 'zz.js'), '// overflow a free base would launder\n');
+    execFileSync('git', ['-C', legA, 'add', '-A'], STDIO_Q);
+    execFileSync('git', ['-C', legA, 'commit', '-m', 'overflow committed'], STDIO_Q);
+    const postWrite = gitOut(legA, ['rev-parse', 'HEAD']);
+    assert(postWrite && postWrite !== rs.lane_group.legs.A.baseline, 'LEG-BARRIER-VACUOUS-BASE: post-write HEAD differs from the anchored base');
+    const r = runVal(repoRoot, [planP(repoRoot), '--leg-barrier', '--node-id', 'A', '--project', 'test-project', '--leg-root', legA, '--expect-base', postWrite, '--json']);
+    assert(r.result === 'refuse' && r.reason === 'barrier_base_mismatch', 'LEG-BARRIER-VACUOUS-BASE: a tampered (post-write) --expect-base refuses barrier_base_mismatch (the #368 cross-check defeats the laundering base), got ' + JSON.stringify(r));
+    cleanup(repoRoot);
+  }
+
+  // LEG-BARRIER-NO-REF: --leg-barrier with NO anchored leg-base ref → no_leg_base (not a silent pass).
+  {
+    const { repoRoot } = makeLaneRepo();
+    const legX = path.join(repoRoot, '.kw', 'legs', 'test-project', 'A');
+    execFileSync('git', ['-C', repoRoot, 'worktree', 'add', '-b', 'kw/legs/test-project/A', '--', legX, 'HEAD'], STDIO_Q);
+    const r = runVal(repoRoot, [planP(repoRoot), '--leg-barrier', '--node-id', 'A', '--project', 'test-project', '--leg-root', legX, '--json']);
+    assert(r.result === 'refuse' && r.reason === 'no_leg_base', 'LEG-BARRIER-NO-REF: missing anchored ref refuses no_leg_base (no vacuous pass), got ' + JSON.stringify(r));
+    cleanup(repoRoot);
+  }
+
+  // LEG-BARRIER-ANCESTOR-BACKSTOP: a ref re-pointed FORWARD (not an ancestor of legHEAD) → the diff base
+  //   does not sit in the leg's history → leg_base_unreachable (the backstop behind the cross-check).
+  {
+    const { repoRoot, legA } = provisionedRepo();
+    fs.writeFileSync(path.join(repoRoot, 'forward.txt'), 'f\n');
+    execFileSync('git', ['-C', repoRoot, 'add', '-A'], STDIO_Q);
+    execFileSync('git', ['-C', repoRoot, 'commit', '-m', 'forward'], STDIO_Q);
+    const forward = gitOut(repoRoot, ['rev-parse', 'HEAD']); // descendant of baseRev ⇒ NOT an ancestor of legHEAD(=baseRev)
+    execFileSync('git', ['-C', repoRoot, 'update-ref', legRefName('A'), forward], STDIO_Q);
+    const r = runVal(repoRoot, [planP(repoRoot), '--leg-barrier', '--node-id', 'A', '--project', 'test-project', '--leg-root', legA, '--expect-base', forward, '--json']);
+    assert(r.result === 'refuse' && r.reason === 'leg_base_unreachable', 'LEG-BARRIER-ANCESTOR-BACKSTOP: a forward (non-ancestor) base refuses leg_base_unreachable, got ' + JSON.stringify(r));
+    cleanup(repoRoot);
+  }
+
+  // LEG-BARRIER-ARG-VALIDATION: missing --node-id / --leg-root / --project → typed refusals.
+  {
+    const { repoRoot, legA } = provisionedRepo();
+    const noNode = runVal(repoRoot, [planP(repoRoot), '--leg-barrier', '--project', 'test-project', '--leg-root', legA, '--json']);
+    assert(noNode.result === 'refuse' && noNode.reason === 'missing_node_id', 'LEG-BARRIER-ARG: missing --node-id, got ' + JSON.stringify(noNode));
+    const noRoot = runVal(repoRoot, [planP(repoRoot), '--leg-barrier', '--node-id', 'A', '--project', 'test-project', '--json']);
+    assert(noRoot.result === 'refuse' && noRoot.reason === 'missing_leg_root', 'LEG-BARRIER-ARG: missing --leg-root, got ' + JSON.stringify(noRoot));
+    const noProj = runVal(repoRoot, [planP(repoRoot), '--leg-barrier', '--node-id', 'A', '--leg-root', legA, '--json']);
+    assert(noProj.result === 'refuse' && noProj.reason === 'missing_project', 'LEG-BARRIER-ARG: missing --project, got ' + JSON.stringify(noProj));
+    cleanup(repoRoot);
+  }
+
+  // LEG-BARRIER-LEG-ROOT-INVALID: --leg-root pointing at a non-worktree dir (its git toplevel != itself).
+  {
+    const { repoRoot } = makeLaneRepo();
+    const notWt = path.join(repoRoot, 'not-a-worktree');
+    fs.mkdirSync(notWt, { recursive: true });
+    const r = runVal(repoRoot, [planP(repoRoot), '--leg-barrier', '--node-id', 'A', '--project', 'test-project', '--leg-root', notWt, '--json']);
+    assert(r.result === 'refuse' && r.reason === 'leg_root_invalid', 'LEG-BARRIER-LEG-ROOT-INVALID: non-worktree leg-root refuses leg_root_invalid, got ' + JSON.stringify(r));
+    cleanup(repoRoot);
+  }
+
+  // ★ LEG-BARRIER-CLOSE-PATH-GATES (the PRODUCTION wiring GATES): in-lane to the PARENT (passes the
+  //   vacuity guard, which inspects the parent) + an OVERFLOW into the leg → close-node REFUSES at the
+  //   pre-wired barrier (proves the wiring is not a vacuous empty-leg pass). Ledger stays in_progress.
+  {
+    const { repoRoot, cacheDir, legA } = provisionedRepo();
+    writeEvidence(cacheDir, 'A');
+    fs.writeFileSync(path.join(repoRoot, 'ax.js'), '// A in-lane in PARENT (vacuity)\n');
+    fs.writeFileSync(path.join(legA, 'zz.js'), '// OVERFLOW in A leg\n');
+    const r = runNode(repoRoot, ['close-node', '--node-id', 'A', '--project', 'test-project', '--json'], LEG_ON);
+    assert(r.result === 'refuse' && r.reason === 'write_set_overflow', 'LEG-BARRIER-CLOSE-PATH-GATES: close-node refuses a leg overflow via the pre-wired barrier, got ' + JSON.stringify(r));
+    assert(ledgerStatus(planP(repoRoot), 'A') === 'in_progress', 'LEG-BARRIER-CLOSE-PATH-GATES: A ledger stays in_progress on refusal, got ' + ledgerStatus(planP(repoRoot), 'A'));
+    cleanup(repoRoot);
+  }
+
+  // LEG-BARRIER-CLOSE-PATH-CLEAN: in-lane to the PARENT (vacuity) + a REAL in-lane write to the LEG →
+  //   close-node A passes the leg-barrier (not just the empty-leg trivial pass) and defers to the group.
+  {
+    const { repoRoot, cacheDir, legA } = provisionedRepo();
+    writeEvidence(cacheDir, 'A');
+    fs.writeFileSync(path.join(repoRoot, 'ax.js'), '// parent in-lane (vacuity)\n');
+    fs.writeFileSync(path.join(legA, 'ax.js'), '// leg in-lane (declared)\n');
+    const r = runNode(repoRoot, ['close-node', '--node-id', 'A', '--project', 'test-project', '--json'], LEG_ON);
+    assert(r.result === 'ok' && r.barrier === 'deferred_to_group', 'LEG-BARRIER-CLOSE-PATH-CLEAN: close A passes the leg-barrier on a real in-lane leg write + defers, got ' + JSON.stringify(r));
+    cleanup(repoRoot);
+  }
+
+  // LEG-BARRIER-CLOSE-PATH-FLAG-OFF (byte-identity): legs OFF (containment only) ⇒ no leg entry ⇒ the
+  //   leg-barrier block is SKIPPED ⇒ close behaves exactly as pre-S3 (a leg overflow on disk is never
+  //   consulted — there is no leg).
+  {
+    const { repoRoot, cacheDir } = makeLaneRepo();
+    const open = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], ON);
+    assert(open.result === 'ok', 'LEG-BARRIER-CLOSE-PATH-FLAG-OFF: setup open ok, got ' + JSON.stringify(open));
+    writeEvidence(cacheDir, 'A');
+    fs.writeFileSync(path.join(repoRoot, 'ax.js'), '// in-lane parent\n');
+    const r = runNode(repoRoot, ['close-node', '--node-id', 'A', '--project', 'test-project', '--json'], ON);
+    assert(r.result === 'ok' && r.barrier === 'deferred_to_group', 'LEG-BARRIER-CLOSE-PATH-FLAG-OFF: close A ok with NO legs (leg-barrier skipped), got ' + JSON.stringify(r));
+    cleanup(repoRoot);
+  }
+
+  // LEG-BARRIER-TEARDOWN-DROPS-REF: on clean group completion the leg-base refs are deleted alongside the
+  //   worktree + branch (no ref leak). Doubles as an end-to-end close-path run with empty (trivial-pass) legs.
+  {
+    const { repoRoot, cacheDir } = provisionedRepo();
+    assert(refResolves(repoRoot, 'A') !== '' && refResolves(repoRoot, 'B') !== '', 'LEG-BARRIER-TEARDOWN-DROPS-REF: refs A,B anchored at provision');
+    writeEvidence(cacheDir, 'A'); writeEvidence(cacheDir, 'B');
+    fs.writeFileSync(path.join(repoRoot, 'ax.js'), '// a\n');
+    fs.writeFileSync(path.join(repoRoot, 'by.js'), '// b\n');
+    const rA = runNode(repoRoot, ['close-node', '--node-id', 'A', '--project', 'test-project', '--json'], LEG_ON);
+    assert(rA.result === 'ok', 'LEG-BARRIER-TEARDOWN-DROPS-REF: close A ok, got ' + JSON.stringify(rA));
+    const rB = runNode(repoRoot, ['close-node', '--node-id', 'B', '--project', 'test-project', '--json'], LEG_ON);
+    assert(rB.result === 'ok' && rB.barrier === 'group_passed', 'LEG-BARRIER-TEARDOWN-DROPS-REF: close B group_passed, got ' + JSON.stringify(rB));
+    assert(refResolves(repoRoot, 'A') === '' && refResolves(repoRoot, 'B') === '', 'LEG-BARRIER-TEARDOWN-DROPS-REF: leg-base refs deleted on teardown (no ref leak)');
+    cleanup(repoRoot);
+  }
 }
 
 // ---------------------------------------------------------------------------
