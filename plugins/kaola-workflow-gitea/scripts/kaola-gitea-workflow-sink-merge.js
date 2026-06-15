@@ -32,20 +32,37 @@ function getRoot() {
   }
 }
 
+// #476: the closed allowlist of recognized flags. A `-`-prefixed token outside this set is an
+// UNRECOGNIZED flag — recorded for a typed unknown_flag refusal (zero mutation) in main(), never
+// silently dropped (a dropped flag used to let this destructive script run a full merge+close+delete).
+const KNOWN_FLAGS = new Set(['--branch', '--issue', '--issue-numbers', '--project', '--keep-issue-open', '--sink', '--json', '--root', '--help', '-h']);
+
 function parseArgs(argv) {
   const args = {};
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--branch' && argv[i + 1]) { args.branch = argv[++i]; continue; }
-    if (argv[i] === '--issue' && argv[i + 1]) { args.issue = parseInt(argv[++i], 10); continue; }
+    // #476: --help/-h is a SAFE no-op (main() prints usage + exits 0 with zero side effects).
+    if (argv[i] === '--help' || argv[i] === '-h') { args.help = true; continue; }
+    // --sink (#429) is a boolean mode flag read by main() via rawArgv.includes; record it so it is a
+    // RECOGNIZED flag here too (else the unknown-flag guard below would false-reject the sink transaction).
+    if (argv[i] === '--sink') { args.sink = true; continue; }
+    if (argv[i] === '--branch' && argv[i + 1] && !argv[i + 1].startsWith('-')) { args.branch = argv[++i]; continue; }
+    if (argv[i] === '--issue' && argv[i + 1] && !argv[i + 1].startsWith('-')) { args.issue = parseInt(argv[++i], 10); continue; }
     // #369: bundle member set — all-or-nothing closure closes EVERY member, not just --issue.
     // #396.5: dedupe (sorted + unique) so a duplicate member can't land in two buckets.
-    if (argv[i] === '--issue-numbers' && argv[i + 1]) {
+    if (argv[i] === '--issue-numbers' && argv[i + 1] && !argv[i + 1].startsWith('-')) {
       const nums = argv[++i].split(',').map(s => parseInt(s.trim(), 10)).filter(n => Number.isInteger(n) && n > 0);
       args.issueNumbers = Array.from(new Set(nums)).sort((a, b) => a - b);
       continue;
     }
-    if (argv[i] === '--project' && argv[i + 1]) { args.project = argv[++i]; continue; }
+    if (argv[i] === '--project' && argv[i + 1] && !argv[i + 1].startsWith('-')) { args.project = argv[++i]; continue; }
     if (argv[i] === '--keep-issue-open') { args.keepIssueOpen = true; continue; } // #336
+    // #476: any other `-`-prefixed token that is NOT a recognized flag is unknown. A known flag missing
+    // its value (e.g. a bare `--branch`) is NOT flagged here (it is in KNOWN_FLAGS) — it fails its own
+    // validation later; only genuinely-unrecognized flags are recorded.
+    if (argv[i].startsWith('-') && argv[i] !== '-' && !KNOWN_FLAGS.has(argv[i])) {
+      (args.unknownFlags || (args.unknownFlags = [])).push(argv[i]);
+      continue;
+    }
   }
   return args;
 }
@@ -951,10 +968,27 @@ function runSinkTransaction(args, mainRoot, defBranch) {
   process.stdout.write(JSON.stringify({ result: 'ok', status: 'sinked', receipt: finalReceipt }) + '\n');
 }
 
+const SINK_USAGE = 'usage: kaola-gitea-workflow-sink-merge.js --branch B --project P [--issue N] [--issue-numbers A,B] [--keep-issue-open] [--sink]\n'
+  + '  --sink         run the full sink TRANSACTION (merge → close → delete branch → remove worktree).\n'
+  + '  --help, -h     print this usage and exit (no side effects).';
+
 function main() {
   const rawArgv = process.argv.slice(2);
-  const isSinkMode = rawArgv.includes('--sink');
+  // #476: --help/-h is a SAFE no-op — checked on the RAW argv BEFORE parseArgs (mirroring claim.js) so a
+  // value flag cannot SWALLOW the help token (`--issue-numbers -h` would otherwise consume -h as a value,
+  // bypassing the post-parse args.help gate). Print usage + exit 0 with ZERO side effects (this script's
+  // default action is a DESTRUCTIVE merge/close/delete; a help probe must never run it).
+  if (rawArgv.includes('--help') || rawArgv.includes('-h')) { process.stdout.write(SINK_USAGE + '\n'); return; }
   const args = parseArgs(rawArgv);
+  // #476: reject UNRECOGNIZED flags with a typed unknown_flag refusal and ZERO mutation, before any
+  // side effect — an unknown flag must never fall through into the destructive transaction.
+  if (args.unknownFlags && args.unknownFlags.length) {
+    const hint = 'Unrecognized flag(s): ' + args.unknownFlags.join(', ') + '. Refusing with zero side effects — run `--help` for usage.';
+    process.stdout.write(JSON.stringify({ result: 'refuse', reason: 'unknown_flag', unknownFlags: args.unknownFlags, operator_hint: hint }) + '\n');
+    process.exitCode = 1; return;
+  }
+  // #429: detect --sink flag before routing to the transaction.
+  const isSinkMode = rawArgv.includes('--sink');
   if (isSinkMode) {
     const root = getRoot();
     const mainRoot = mainRootFromCoord(getCoordRoot(root));
