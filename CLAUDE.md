@@ -12,6 +12,14 @@ Kaola-Workflow is a 6-phase workflow system built on top of GitHub issues and Cl
 
 ## Workflow Design Principles
 
+**Design theory.** Kaola-Workflow exists to enhance what agents do — more automation, less human toil, shorter wall-clock — **without ever sacrificing accuracy.** Every mechanism is a *means*, ordered by this precedence when they conflict:
+
+1. **Accuracy is non-negotiable** — never trade correctness for speed or cost; rework is the most expensive outcome of all.
+2. **Then automation & efficiency** — remove human steps and shorten makespan.
+3. **Then the cheapest sufficient mechanism** — parallelism, speculation, extra agents, and higher model tiers are means, not goals. Pick the simplest one that achieves 1–2; don't over-engineer, and don't spend tokens a smaller approach wouldn't. Size fan-out width, agent count, and model tier to the *genuine scope* of the work.
+
+Parallelism is one such means: powerful when work genuinely decomposes, wasteful when forced — over-fanning burns tokens and context for no accuracy or makespan gain.
+
 ### Agent Owns Reasoning; Scripts Own Atomicity (issue #44)
 
 Issue selection is an agent decision, not a hidden script decision.
@@ -20,6 +28,16 @@ Issue selection is an agent decision, not a hidden script decision.
 - **When user asks for "next issue"**: agent inspects local roadmap, GitHub issues, recent completed work, active folders, and user goal, then states the selected issue before claiming via `KAOLA_TARGET_ISSUE=N`.
 - **Startup scripts validate, not select**: `cmdStartup`, `cmdPickNext`, and `cmdBootstrap` now require explicit `--target-issue N` flag. They validate the target is unclaimed and green/yellow, then claim. They refuse auto-pick with typed refusals.
 - **Ambiguity handling**: When next issue is ambiguous or conflicts with active state, ask or stop. Do not let a script silently choose.
+
+### Maximize Workflow Efficiency by Faithful Decomposition (#472, #463, #439, #486)
+
+The objective is **minimum makespan and minimum wasted work at fixed correctness.** Efficiency comes from faithfully decomposing a task into its genuinely-independent units and running them at the highest *safe* concurrency — **not** from maximizing fan-out width (over-fanning fragments context and adds synthesis overhead — itself a cost), and **not** from cutting correctness gates (rework is the most expensive inefficiency of all). The adaptive path composes a task-shaped DAG for *any* shape of work; serve a new shape by composing existing roles, never a special-case lane.
+
+- **Decompose to genuine independence, then dispatch concurrently** — fan out exactly as wide as the task decomposes, no wider, no narrower (width is the planner's call, #472). Reserve `sequence` for true dependencies.
+- **Read frontiers run concurrently today** (shipped #472 seam — `code-explorer`, `knowledge-lookup`, `adversarial-verifier`; the `adversarial-verifier` majority-refute fan-out, `plan-validator.js:688-707`, is the parallel-skeptic shape). **Write** frontiers serial-degrade until per-leg isolation lands (#463) — the largest remaining makespan lever.
+- **Schedule critical-path-first; right-size the model tier** (don't spend Opus where Sonnet suffices — raise only at the reasoning floor); consider speculative-open (#439, `speculative_open_policy`) where a gate is very likely to pass.
+- **Correctness is efficiency.** Fail-closed gates + adversarial verify prevent the rework that dwarfs any parallelism win. Investigation composes as probe → assume → adversarial critique → converge (read phases fanned out; shape-first read-only then re-plan when the shape depends on findings, freeze-once). Question/bug-shaped handling is designed in **#486** (not yet shipped).
+- **Escalate values, not facts** — route value / standing / irreversible calls to the `consent`-halt valve; never bolt an approval gate onto the planner (planner-first, #44/#287).
 
 ## Key Scripts
 - `scripts/kaola-workflow-claim.js` — claim, release/discard, status, patch-branch, watch-pr, bootstrap/startup, pick-next, resume, finalize, worktree-status, worktree-finalize subcommands; explicit-target validation via `claimExplicitTarget()` helper

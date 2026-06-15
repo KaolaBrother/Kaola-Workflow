@@ -2,6 +2,39 @@
 
 An **adaptive**, multi-model development workflow for Claude Code and Codex. By default the agent composes a **task-shaped DAG of role nodes** sized to the issue — inside a locked claim → worktree → *free design* → Finalization frame — with durable per-node artifacts and full resumability across sessions and context resets. A fast single-pass path and the classic full phase sequence remain as optional alternatives.
 
+## Philosophy
+
+**Make coding agents do more — more automation, less manual toil, faster results — without ever trading away accuracy.**
+
+That creed sets a strict order of priorities. When they conflict, the higher one wins:
+
+1. **Accuracy is non-negotiable.** It is never traded for speed or cost. Redoing wrong work is the most expensive outcome there is.
+2. **Then automation and efficiency.** Reach the right answer with as little human toil as possible.
+3. **Then the simplest, cheapest mechanism** that achieves the first two. No clever machinery for its own sake.
+
+A few beliefs follow from that order.
+
+**Correctness *is* efficiency.** Independent, adversarial verification and **fail-closed** checkpoints catch mistakes before they compound. Preventing rework is the cheapest optimization there is.
+
+**Parallelism is a means, not a goal.** The agent runs genuinely independent work at the same time to save you time — but it never forces fan-out for its own sake. Over-parallelizing just burns tokens and context for no real gain. **Width is sized to the true shape of the task.**
+
+**One engine, not a mode per problem.** A single adaptive planner composes a task-shaped plan for *any* kind of work — building a feature, fixing a bug, or investigating an open question — from a small set of **reusable roles**. There's no separate pipeline to learn for each problem type.
+
+**Spend to match the work.** Parallel width, number of agents, and model strength all scale to the genuine scope of the issue. Small work stays small. Nothing is over-engineered.
+
+**Humans decide what only humans should.** The system investigates and resolves questions of **fact** on its own. It escalates genuine matters of **judgment, value, and taste** to you.
+
+### What you get
+
+- **Adaptive, task-shaped planning** sized to each issue — plus optional fast single-pass and full 6-phase paths.
+- **Multi-model** across Claude Code and Codex, right-sizing the model for each step.
+- **Parallel where it's safe, serial where it isn't** — concurrency only for genuinely independent work.
+- **Independent adversarial verification** plus fail-closed quality gates.
+- **Durable per-step artifacts** with full resumability across sessions and context resets.
+- A locked **claim → isolated worktree → free design → finalization** frame.
+- **Editions for GitHub, GitLab, and Gitea.**
+- **Goal-driven autonomy** via `/goal` — keep a session working toward one objective across many turns.
+
 ## Overview
 
 ```
