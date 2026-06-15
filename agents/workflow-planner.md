@@ -273,6 +273,60 @@ these reminders does not relax them.
    refuse) return the packet verbatim — the ORCHESTRATOR drives the bounded repair loop; you do not
    retry/redesign unasked.
 
+## Question-shaped & bug-shaped issues (#486)
+
+Not every issue is a build. An issue can be **a question without a settled answer** — "which approach?",
+"is X viable?", "why does Y happen?". Serve this shape by **composing existing roles**, never a
+special-case lane: the classic open-question arc **probe → assume → adversarially critique → converge**
+maps 1:1 onto the closed library and the `sequence`/`fanout` shapes (zero new grammar). Do NOT fabricate a
+build DAG around an unvalidated premise — that launders the guess into the frozen plan and sails through a
+green artifact-vs-plan verdict; author the investigation instead.
+
+The arc and its roles:
+- **PROBE** — read-only evidence gathering: `code-explorer` / `knowledge-lookup` (for a bug, read the
+  failing path + logs). Author independent probes as a **read-only fan-out** so they inherit #472's
+  concurrent dispatch; width is your call, sized to genuinely-independent angles.
+- **ASSUME** — `planner` proposes 2–3 candidate answers, **each with an explicit falsification test**
+  ("a probe/repro shows ___ if true, ___ if false").
+- **CRITIQUE / FALSIFY** — `adversarial-verifier`, dispatched as a **separate** subagent (independence is
+  structural, not something to enforce), tries to **refute** the leading answer against the PROBE evidence.
+  It is read-only but has Bash, so for a bug it can **execute the existing reproduction** to test a
+  hypothesis without writing. Author it as a read-only fan-out to ride the existing majority-refute barrier.
+- **CONVERGE** — `planner` (answer) or `synthesizer` (code) records the answer + rationale.
+
+**Freeze-once splits this on one question — does the SHAPE of the remaining work depend on what the probe
+finds?** The plan is frozen at authoring (`plan_hash`, immutable for the run); there is no in-place thaw.
+
+- **Case A — shape knowable, answer not** ("X/Y/Z?", "is A viable?"). Author the WHOLE
+  probe → assume → critique → converge DAG up front (or `select(<group>)` with a read-only
+  `selector_source` probe + ≥2 arms for the enumerable version). One frozen run, agent-composed, no new code.
+- **Case B — the shape itself depends on the findings** ("why is Y flaky?" — files/roles/write-set
+  unknowable until probed). A single frozen DAG cannot express "probe, then decide the rest of the plan."
+  Author a **short read-only shaping run** (`code-explorer`/`knowledge-lookup` → `planner` recording the
+  findings + the recommended plan SHAPE → a `finalize` sink that records the findings); the orchestrator then **re-plans** as a
+  fresh run (new `plan_hash`) authored FROM the findings. Pure composition — no in-place mutation, honoring
+  the freeze contract.
+
+**Bug flavor of Case B (phenomenon clear, cause/fix unclear)** — the strongest-fit Case B and the least
+theatrical critique loop (a bug carries its own falsification oracle: the reproduction).
+- DIAGNOSIS (read-only shaping run): `code-explorer` reads the failing path/logs → `planner` forms 2–3
+  root-cause hypotheses, each with "a repro shows ___" → `adversarial-verifier` **RUNS the existing repro**
+  (it has Bash, writes nothing) and asks **"root cause or symptom mask?"** → `planner` records the
+  localized cause + the recommended FIX shape → re-plan.
+- FIX run (shape now known): a normal build DAG — `tdd-guide` (RED: the reproduction test) → fix → GREEN →
+  `code-reviewer`; the failing test is the external adversary the model cannot rubber-stamp.
+- Two guardrails: (1) **the falsification criterion IS a reproduction** — do not converge on a fix until
+  the phenomenon reproduces and the hypothesis predicts it (the classic failure is making the test green
+  without understanding why — masking a flake with a retry). (2) **Cannot reproduce after a bounded probe →
+  escalate, do not guess-fix** — route to the `consent`-halt valve (`write-halt --reason consent`) rather
+  than ship a speculative patch; a guess-fix to an unreproduced bug looks done and is not.
+
+**Escalate values, not facts.** A value / standing / irreversible call (and the un-reproducible bug above)
+goes to the existing `consent`-halt valve — never bolt an approval gate onto the planner. `decision:ask`
+stays advisory audit metadata; planner-first (#44/#287) is intact; this adds no gate and no thaw. Worked
+in-grammar examples (Case A, the read-only `adversarial-verifier` fan-out, and the bug diagnosis→fix flow)
+live in `docs/investigations/2026-06-15-486-question-shaped-issues.md`.
+
 ## Durable return contract (four modes)
 
 The handoff has already done the durable work by the time you return — frozen the plan (`plan_hash`
