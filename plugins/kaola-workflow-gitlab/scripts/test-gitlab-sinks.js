@@ -943,4 +943,56 @@ withForge({
 }
 console.log('GitLab keep-open (#336) tests passed');
 
+// #484: the --sink TRANSACTION freshness guard — forge-port parity for the canonical
+// testSinkRefusesStaleReceipt (the forge runSinkTransaction had no --sink-path test). A stale all-`done`
+// receipt resumed from the tracked archive/<project>/.cache/ tree must NOT false-resume to status:sinked
+// when the branch was never merged; a genuinely-merged branch must still sink (no false-positive).
+{
+  const sinkScript = path.join(__dirname, 'kaola-gitlab-workflow-sink-merge.js');
+  const project = 'issue-9484';
+  const branch = 'workflow/issue-9484';
+  const staleReceipt = JSON.stringify({
+    project, branch, issue_number: 9484, issue_numbers: [9484], resolved_default_branch: 'main',
+    started_at: '2026-06-14T12:14:18.462Z', updated_at: '2026-06-14T12:14:28.928Z', stash_ref: null, removed_duplicates: [],
+    steps: { preflight: 'done', push_upstream: 'done', merge: 'done', worktree_sync: 'done', finalize: 'done', closure: 'done', stash_restore: 'done', archive_commit: 'done', push_main: 'done' },
+  });
+  const runSink = (root) => spawnSync(process.execPath, [sinkScript, '--branch', branch, '--issue', '9484', '--project', project, '--sink', '--json'], { cwd: root, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
+  const parseLast = (out) => { try { return JSON.parse(String(out || '').trim().split('\n').pop()); } catch (_) { return {}; } };
+  const mkRepo = (name) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), name));
+    const git = (...a) => execFileSync('git', a, { cwd: root, encoding: 'utf8' });
+    git('init', '-b', 'main'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't');
+    fs.writeFileSync(path.join(root, 'base.txt'), 'base'); git('add', '-A'); git('commit', '-m', 'base');
+    const ac = path.join(root, 'kaola-workflow', 'archive', project, '.cache'); fs.mkdirSync(ac, { recursive: true });
+    fs.writeFileSync(path.join(ac, 'sink-receipt.json'), staleReceipt);
+    git('add', '-A'); git('commit', '-m', 'chore: prior-slice receipt');
+    git('branch', branch); git('checkout', branch);
+    fs.writeFileSync(path.join(root, 'DELIVERABLE.txt'), 'deliverable'); git('add', '-A'); git('commit', '-m', 'feat: deliverable');
+    git('checkout', 'main');
+    return { root, git };
+  };
+  // Scenario A (the bug): branch un-merged → must refuse stale_sink_receipt, main unchanged.
+  {
+    const { root } = mkRepo('kw-gl-stale-A-');
+    try {
+      const before = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+      const r = runSink(root); const p = parseLast(r.stdout);
+      assert.notStrictEqual(p.status, 'sinked', '#484-gitlab-A: stale unmerged receipt must NOT emit status:sinked, got ' + JSON.stringify(p));
+      assert.strictEqual(p.reason, 'stale_sink_receipt', '#484-gitlab-A: must refuse stale_sink_receipt, got ' + JSON.stringify(p));
+      assert.notStrictEqual(r.status, 0, '#484-gitlab-A: refusal must exit non-zero');
+      assert.strictEqual(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(), before, '#484-gitlab-A: main must NOT advance');
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  }
+  // Scenario B (no false-positive): branch genuinely merged → stale all-done receipt still sinks.
+  {
+    const { root, git } = mkRepo('kw-gl-stale-B-');
+    try {
+      git('merge', '--ff-only', branch);
+      const r = runSink(root); const p = parseLast(r.stdout);
+      assert.ok(!(p.result === 'refuse' && p.reason === 'stale_sink_receipt'), '#484-gitlab-B: a genuinely-merged branch must NOT be false-refused, got ' + JSON.stringify(p));
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  }
+}
+console.log('GitLab #484 stale-sink-receipt guard tests passed');
+
 console.log('GitLab sink tests passed');
