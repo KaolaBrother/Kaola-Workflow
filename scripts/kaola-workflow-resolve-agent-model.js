@@ -19,8 +19,23 @@ const DEFAULT_AGENT_MODELS = {
   'adversarial-verifier': 'sonnet',
   'issue-scout': 'sonnet',
   contractor: 'sonnet',
-  'workflow-planner': 'opus'
+  'workflow-planner': 'opus',
+  // #463 (write-overlap): the synthesizer resolves real write-leg merge conflicts BY INTENT — a
+  // reasoning-class task. Its default is opus; a plan may RAISE but never LOWER this floor (see
+  // REASONING_FLOOR_ROLES). The post-G1 intent-verifier (adversarial-verifier on a merge) is held to
+  // the same floor when it is dispatched on a synthesizer's output.
+  synthesizer: 'opus'
 };
+
+// #463 (write-overlap): roles whose dispatch MUST resolve to a reasoning-class model (a non-reasoning
+// tier is a freeze/dispatch refusal, never a silent downgrade). The synthesizer's conflict-resolution
+// path reasons about intent; a non-reasoning tier would compose bytes without understanding them.
+// The FLOOR (the set + the isReasoningClass predicate) is established here; ENFORCEMENT (the refusal)
+// is wired at dispatch in the step-4 scheduler, where the synthesizer-agent is actually spawned.
+const REASONING_FLOOR_ROLES = new Set(['synthesizer']);
+function isReasoningClass(model) {
+  return String(model || '').trim().toLowerCase() === 'opus';
+}
 
 function homeDir() {
   return process.env.HOME || os.homedir();
@@ -136,6 +151,8 @@ if (require.main === module) main();
 
 module.exports = {
   DEFAULT_AGENT_MODELS,
+  REASONING_FLOOR_ROLES,
+  isReasoningClass,
   extractFrontmatterModel,
   formatAgentArgument,
   resolveAgentModel

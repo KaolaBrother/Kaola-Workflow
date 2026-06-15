@@ -128,10 +128,20 @@ const CANONICAL_ROLES = [
   'code-explorer', 'knowledge-lookup', 'planner', 'code-architect', 'tdd-guide',
   'build-error-resolver', 'code-reviewer', 'security-reviewer', 'doc-updater',
   'adversarial-verifier', 'implementer', 'issue-scout',
+  // #463 (write-overlap): the synthesizer is the WRITE convergence node that depends_on every leg of
+  // a parallel write fan-out, declares the UNION of the legs' write sets, and is post-dominated by a
+  // real code-reviewer (G1). It is NEVER a leg co-member (its union exact-overlaps every leg; depends_on
+  // makes the antichain disjointness loop skip those ordered pairs, so the overlap is legal only as a
+  // convergence node). Disjoint legs merge MECHANICALLY (no agent); a real conflict spawns a
+  // reasoning-class (Opus) synthesizer-agent.
+  'synthesizer',
 ];
 // Roles that may legitimately declare a repo write set (by TOOL MANIFEST; note
 // security-reviewer is Write by manifest, review-only only by governance posture).
-const WRITE_ROLES = new Set(['tdd-guide', 'build-error-resolver', 'doc-updater', 'security-reviewer', 'implementer']);
+// #463: synthesizer is WRITE (it commits the merged union) → producesCode() true → G1 required. It is
+// NOT in IMPLEMENT_ROLES (it reconciles, it does not originate) and NOT in GATE_VERDICT_ROLES (it is a
+// code-producing node post-dominated by a gate, never a gate itself).
+const WRITE_ROLES = new Set(['tdd-guide', 'build-error-resolver', 'doc-updater', 'security-reviewer', 'implementer', 'synthesizer']);
 const IMPLEMENT_ROLES = new Set(['tdd-guide', 'build-error-resolver', 'implementer']);
 // #388: canonical node-id sanitizer. MUST stay byte-identical to the inline regex in
 // cacheBaseFile/barrierRef (the --record-base / --drop-base / --barrier-check .cache + ref keys)

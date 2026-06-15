@@ -626,6 +626,78 @@ function assert(condition, message) {
       'T463-FREEZE: write_overlap_policy:exact refused at freeze, got ' + JSON.stringify(r.errors || r));
     cleanup(repoRoot);
   }
+  // AC11 (#463 step 3): synthesizer grammar. A WRITE convergence node (synthesizer, declaring the UNION
+  // of its legs' write sets) post-dominated by a real code-reviewer (G1) → FREEZES; proves the
+  // synthesizer is a legal convergence node (its union exact-overlaps both legs, but depends_on makes
+  // the antichain disjointness loop skip those pairs — were synth a leg co-member it would RED-refuse).
+  // The REFUSE case is constructed to DISCRIMINATE the synthesizer specifically: a code-reviewer covers
+  // the LEGS but NOT the synthesizer (no reviewer between synth and the sink) → gateUncovered names ONLY
+  // `synth`. If the synthesizer were NOT code-producing (not in WRITE_ROLES) this plan would FREEZE
+  // (nothing left uncovered), so the refusal pins `synthesizer ∈ WRITE_ROLES → producesCode → needs G1`.
+  {
+    // shape 'covered' (FREEZE): seed→[A,B legs]→synth(dep A,B, union)→review(code-reviewer)→finalize.
+    // shape 'synth-uncovered' (REFUSE): seed→[A,B legs]→reviewL(code-reviewer, covers the legs)→
+    //   synth(dep reviewL, union)→finalize — the legs are covered, ONLY synth is uncovered.
+    const mkSynthRepo = (shape) => {
+      const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ac11-synth-'));
+      const projDir = path.join(repoRoot, 'kaola-workflow', 'test-project');
+      fs.mkdirSync(path.join(projDir, '.cache'), { recursive: true });
+      const planPath = path.join(projDir, 'workflow-plan.md');
+      const covered = shape === 'covered';
+      const nodeRows = covered
+        ? [
+          '| A        | tdd-guide     | seed   | src/a.js          | 1 | sequence |',
+          '| B        | tdd-guide     | seed   | lib/b.js          | 1 | sequence |',
+          '| synth    | synthesizer   | A,B    | src/a.js lib/b.js | 1 | sequence |',
+          '| review   | code-reviewer | synth  | —                 | 1 | sequence |',
+          '| finalize | finalize      | review | —                 | 1 | sequence |',
+        ]
+        : [
+          '| A        | tdd-guide     | seed    | src/a.js          | 1 | sequence |',
+          '| B        | tdd-guide     | seed    | lib/b.js          | 1 | sequence |',
+          '| reviewL  | code-reviewer | A,B     | —                 | 1 | sequence |',
+          '| synth    | synthesizer   | reviewL | src/a.js lib/b.js | 1 | sequence |',
+          '| finalize | finalize      | synth   | —                 | 1 | sequence |',
+        ];
+      const ledgerRows = covered
+        ? ['| seed | pending |', '| A | pending |', '| B | pending |', '| synth | pending |', '| review | pending |', '| finalize | pending |']
+        : ['| seed | pending |', '| A | pending |', '| B | pending |', '| reviewL | pending |', '| synth | pending |', '| finalize | pending |'];
+      const plan = [
+        '# Workflow Plan — test-project', '',
+        '## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md', '',
+        '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape |',
+        '| --- | --- | --- | --- | --- | --- |',
+        '| seed     | code-explorer | —      | —                 | 1 | sequence |',
+        ...nodeRows, '',
+        '## Node Ledger', '',
+        '| id | status |', '| --- | --- |',
+        ...ledgerRows, '',
+      ].join('\n') + '\n';
+      fs.writeFileSync(planPath, plan);
+      fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n');
+      const g = (args) => execFileSync('git', ['-C', repoRoot, ...args], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+      g(['init']); g(['config', 'user.email', 'kw@test']); g(['config', 'user.name', 'kw']); g(['config', 'commit.gpgsign', 'false']);
+      fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
+      g(['add', '-A']); g(['commit', '-m', 'init']);
+      return { repoRoot, planPath };
+    };
+    // FREEZE: legs → synthesizer(union) → code-reviewer → finalize is in-grammar.
+    { const { repoRoot, planPath } = mkSynthRepo('covered');
+      const r = runValidator(repoRoot, [planPath, '--freeze', '--json']);
+      assert(r.exitCode === 0 && r.result !== 'refuse',
+        'AC11: legs→synthesizer(union)→code-reviewer→sink must FREEZE, got ' + JSON.stringify(r.errors || r));
+      cleanup(repoRoot); }
+    // REFUSE (synth-discriminating): legs covered by a reviewer, ONLY the synthesizer uncovered →
+    // gateUncovered must name `synth` specifically (a non-code synth would leave nothing uncovered).
+    { const { repoRoot, planPath } = mkSynthRepo('synth-uncovered');
+      const r = runValidator(repoRoot, [planPath, '--freeze', '--json']);
+      const errs = (r.errors || []).join(' ');
+      assert(r.result === 'refuse' && /\bsynth\b/.test(errs) && /code-reviewer|gate|post-dominat|uncovered/i.test(errs),
+        'AC11: a synthesizer with covered legs but NO reviewer after it must REFUSE naming synth (pins synth∈WRITE_ROLES→producesCode→G1), got ' + JSON.stringify(r.errors || r));
+      cleanup(repoRoot); }
+  }
+
   // T463-PURITY (AC13): disjointWriteSets adds `kind` but its VERDICT is UNCHANGED — the pure callers
   // (scanClaimedOverlap / antichain / G-SEL-4) read verdict and ignore kind.
   {

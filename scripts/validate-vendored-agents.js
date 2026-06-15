@@ -32,6 +32,7 @@ const localAgents = [
   'issue-scout',
   'knowledge-lookup',
   'security-reviewer',
+  'synthesizer',
   'workflow-planner',
 ];
 const allAgents = [...vendoredAgents, ...localAgents];
