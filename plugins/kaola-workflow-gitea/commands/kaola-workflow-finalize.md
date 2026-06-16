@@ -808,6 +808,44 @@ Re-running the command after a crash resumes from the last incomplete step — n
 
 After `sink-pr.js` exits 0, the active folder remains open. It is archived automatically when `watch-pr` detects the PR is MERGED or CLOSED on the next `/workflow-next` startup.
 
+<!-- PIN: closure-audit -->
+### Sink result handling and closure-audit reconciliation sweep (#496/#497)
+
+**Transactional catch (n1's `sink_incomplete` emit):** when `--sink --json` returns
+`result:"refuse"` with `reason:"sink_incomplete"`, the sink did NOT complete — do NOT treat it as
+success. Branch on `step`:
+
+- `step:"push_main"` + `push_main:"failed"` — the merge landed locally but the remote was NOT
+  advanced. The deliverable is not on the remote. Re-run `--sink` to resume (the receipt makes the
+  push step idempotent). Resolve any remote fault first.
+- `step:"closure"` + `remote_issue_closed:"partial"` + `failed_issue_closures:[...]` — the merge
+  is on the remote but one or more issues could not be closed. Close the listed issues manually
+  (`tea issue close N`) or resolve the forge fault, then re-run `--sink`.
+
+In either case, the receipt preserves the partial state so `--sink` resumes from the incomplete step
+without double-applying completed steps.
+
+**Reconciliation sweep (defense-in-depth):** after a successful sink, run `closure-audit.js` as the
+after-the-fact drift detector — it flags a closed issue still carrying `workflow:in-progress`, a
+stale roadmap source, or an un-archived merged-PR folder that escaped the inline catch.
+
+```bash
+kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./plugins/kaola-workflow-gitea/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitea/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitea/scripts/$_n" "./plugins/kaola-workflow-gitea/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
+CLOSURE_AUDIT_JS="$(kaola_script kaola-gitea-workflow-closure-audit.js)"
+node "$CLOSURE_AUDIT_JS"            # dry-run: JSON report (default)
+# node "$CLOSURE_AUDIT_JS" --execute  # repair safe local drift
+```
+
+Dry-run (default) reports findings as JSON without mutating state. Pass `--execute` to repair safe
+local drift (stale `.roadmap` sources, ROADMAP rows, `workflow:in-progress` label on closed issues).
+It never deletes folders or worktrees.
+
+**Two-mechanism rationale:** the inline `sink_incomplete` emit is the immediate transactional catch
+(fires at sink time, refuses the sinked status so the caller knows immediately). `closure-audit` is
+the periodic broad reconciliation sweep (runs after the fact, catches drift that the inline path
+cannot reach — e.g. a label left behind by a prior partial run or a folder not archived). Together
+they form the defense-in-depth complement: transactional catch + reconciliation sweep.
+
 ## Completion Contract
 
 This phase closes exactly one issue. After issue #N is closed and the active

@@ -389,6 +389,42 @@ choices, or ambiguity that blocks correctness.
    **Crash-resume**: a step-receipt at `kaola-workflow/{project}/.cache/sink-receipt.json` tracks each step.
    Re-running the command after a crash resumes from the last incomplete step — no double-apply.
 
+<!-- PIN: closure-audit -->
+### Sink result handling and closure-audit reconciliation sweep (#496/#497)
+
+**Transactional catch (n1's `sink_incomplete` emit):** when `--sink --json` returns
+`result:"refuse"` with `reason:"sink_incomplete"`, the sink did NOT complete — do NOT treat it as
+success. Branch on `step`:
+
+- `step:"push_main"` + `push_main:"failed"` — the merge landed locally but the remote was NOT
+  advanced. The deliverable is not on the remote. Re-run `--sink` to resume (the receipt makes the
+  push step idempotent). Resolve any remote fault first.
+- `step:"closure"` + `remote_issue_closed:"partial"` + `failed_issue_closures:[...]` — the merge
+  is on the remote but one or more issues could not be closed. Close the listed issues manually
+  (`gh issue close N`) or resolve the forge fault, then re-run `--sink`.
+
+In either case, the receipt preserves the partial state so `--sink` resumes from the incomplete step
+without double-applying completed steps.
+
+**Reconciliation sweep (defense-in-depth):** after a successful sink, run `closure-audit.js` as the
+after-the-fact drift detector — it flags a closed issue still carrying `workflow:in-progress`, a
+stale roadmap source, or an un-archived merged-PR folder that escaped the inline catch.
+
+```bash
+node "$scripts_dir/kaola-workflow-closure-audit.js"            # dry-run: JSON report (default)
+# node "$scripts_dir/kaola-workflow-closure-audit.js" --execute  # repair safe local drift
+```
+
+Dry-run (default) reports findings as JSON without mutating state. Pass `--execute` to repair safe
+local drift (stale `.roadmap` sources, ROADMAP rows, `workflow:in-progress` label on closed issues).
+It never deletes folders or worktrees.
+
+**Two-mechanism rationale:** the inline `sink_incomplete` emit is the immediate transactional catch
+(fires at sink time, refuses the sinked status so the caller knows immediately). `closure-audit` is
+the periodic broad reconciliation sweep (runs after the fact, catches drift that the inline path
+cannot reach — e.g. a label left behind by a prior partial run or a folder not archived). Together
+they form the defense-in-depth complement: transactional catch + reconciliation sweep.
+
 ## Summary File
 
 Plain `invoked` is intentional for non-Codex-role workflow gates such as final

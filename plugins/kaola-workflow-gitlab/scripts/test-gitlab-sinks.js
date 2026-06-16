@@ -995,4 +995,119 @@ console.log('GitLab keep-open (#336) tests passed');
 }
 console.log('GitLab #484 stale-sink-receipt guard tests passed');
 
+// #496/#497 forge-port parity: (#496) assertWorktreeClean fails CLOSED on a transient git-status
+// probe fault; (#497) the --sink transaction does NOT report status:sinked when push_main hard-fails.
+{
+  const sinkScript = path.join(__dirname, 'kaola-gitlab-workflow-sink-merge.js');
+  const parseLast = (out) => { try { return JSON.parse(String(out || '').trim().split('\n').pop()); } catch (_) { return {}; } };
+  // The forge runDirectMerge requires finalValidationPassed; provision it in the ARCHIVE folder
+  // (untracked on main) so the LIVE-folder guard (which keys on a COMMITTED workflow-state.md on the
+  // branch tip) does not fire while validation still passes.
+  const seedArchiveFinalization = (root, project) => {
+    const dir = path.join(root, 'kaola-workflow', 'archive', project);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'finalization-summary.md'), '# Finalization\n\n## Final Validation\n\n- `npm test`: pass\n');
+  };
+
+  // #496: probe fault → fail closed (refuse, worktree intact, main unchanged). Uses the non-`--sink`
+  // (runDirectMerge) path, where assertWorktreeClean is the data-loss guard.
+  {
+    const { root, branch } = setupRealRepo('kw-gl-wt-probe', 'gl-wt-probe-9496');
+    const project = 'gl-wt-probe-9496';
+    const wt = path.join(path.dirname(root), path.basename(root) + '-linked-wt');
+    try {
+      seedArchiveFinalization(root, project);
+      execFileSync('git', ['-C', root, 'worktree', 'add', wt, branch], { encoding: 'utf8' });
+      const before = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+      const r = spawnSync(process.execPath, [sinkScript, '--project', project, '--branch', branch, '--root', root], { cwd: root, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_WORKFLOW_FORCE_WT_STATUS_FAIL: '1' }, encoding: 'utf8' });
+      assert.notStrictEqual(r.status, 0, '#496-gitlab: an unprovable worktree-clean probe must refuse (fail closed), got status ' + r.status + '\nstderr: ' + r.stderr);
+      assert.ok(/(could not|cannot) (be )?verif|unprovable/i.test(r.stderr || ''), '#496-gitlab: refusal must name the unverifiable-clean cause, got: ' + r.stderr);
+      assert.ok(fs.existsSync(wt), '#496-gitlab: a probe-fault refusal must NOT remove the worktree');
+      assert.strictEqual(execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), before, '#496-gitlab: main must NOT advance on a probe-fault refusal');
+    } finally {
+      try { execFileSync('git', ['-C', root, 'worktree', 'remove', '--force', wt], { encoding: 'utf8' }); } catch (_) {}
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  // #497: hard push_main failure → NOT status:sinked, push_main not done, refusal surfaces the cause.
+  // Uses the `--sink` (runSinkTransaction) path. The repo carries NO untracked live folder (which the
+  // sink preflight would classify as foreign-dirt) — only a committed base + a feature branch + a
+  // bare remote, mirroring the #484 forge mkRepo.
+  {
+    const project = 'gl-pushfail-9497';
+    const branch = 'workflow/' + project;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-pushfail-'));
+    const remote = root + '-remote';
+    try {
+      const git = (...a) => execFileSync('git', a, { cwd: root, encoding: 'utf8' });
+      git('init', '-b', 'main'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't');
+      fs.writeFileSync(path.join(root, 'base.txt'), 'base'); git('add', '-A'); git('commit', '-m', 'base');
+      execFileSync('git', ['init', '--bare', remote], { encoding: 'utf8' });
+      git('remote', 'add', 'origin', remote); git('push', '-u', 'origin', 'main');
+      git('branch', branch); git('checkout', branch);
+      fs.writeFileSync(path.join(root, 'DELIVERABLE.txt'), 'deliverable'); git('add', '-A'); git('commit', '-m', 'feat: deliverable');
+      git('push', '-u', 'origin', branch); git('checkout', 'main');
+      const r = spawnSync(process.execPath, [sinkScript, '--branch', branch, '--project', project, '--sink', '--json'], { cwd: root, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_WORKFLOW_FORCE_PUSH_MAIN_FAIL: '1' }, encoding: 'utf8' });
+      const p = parseLast(r.stdout);
+      assert.notStrictEqual(p.status, 'sinked', '#497-gitlab: a hard push_main failure must NOT report status:sinked, got ' + JSON.stringify(p) + '\nstderr: ' + r.stderr);
+      assert.notStrictEqual(r.status, 0, '#497-gitlab: a hard push_main failure must exit non-zero');
+      assert.strictEqual(p.result, 'refuse', '#497-gitlab: a hard push_main failure must emit result:refuse, got ' + JSON.stringify(p));
+      const rp = [path.join(root, 'kaola-workflow', 'archive', project, '.cache', 'sink-receipt.json'), path.join(root, 'kaola-workflow', project, '.cache', 'sink-receipt.json')].find(x => fs.existsSync(x));
+      assert.ok(rp, '#497-gitlab: a sink-receipt must exist after the failed transaction');
+      const receipt = JSON.parse(fs.readFileSync(rp, 'utf8'));
+      assert.notStrictEqual(receipt.steps.push_main, 'done', '#497-gitlab: push_main must NOT be marked done after a hard push failure');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      fs.rmSync(remote, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    }
+  }
+
+  // #497 (closure arm): a HARD issue-CLOSE failure on the `--sink` path must NOT report status:sinked.
+  // The glab mock fails `issue close` (exit 1) and reports the issue still `opened` on `issue view` so
+  // probeIssueClosed returns false (genuine failure, not already-closed). The refuse returns BEFORE
+  // push_main → closure not done, push_main still pending.
+  {
+    const project = 'gl-closefail-9498';
+    const branch = 'workflow/' + project;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-closefail-'));
+    const remote = root + '-remote';
+    const mockScript = root + '-glab-mock.js';
+    fs.writeFileSync(mockScript, [
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.startsWith('issue view')) { process.stdout.write('{\"iid\":9498,\"state\":\"opened\",\"labels\":[]}\\n'); process.exit(0); }",
+      "if (a.startsWith('issue close')) { process.stderr.write('mock: close failed\\n'); process.exit(1); }",
+      "if (a.startsWith('issue update')) { process.stdout.write('{\"iid\":9498,\"state\":\"opened\",\"labels\":[]}\\n'); process.exit(0); }",
+      "if (a.startsWith('api')) { process.stdout.write('{\"id\":1}\\n'); process.exit(0); }",
+      "process.stdout.write('{}\\n'); process.exit(0);",
+    ].join('\n'));
+    try {
+      const git = (...a) => execFileSync('git', a, { cwd: root, encoding: 'utf8' });
+      git('init', '-b', 'main'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't');
+      fs.writeFileSync(path.join(root, 'base.txt'), 'base'); git('add', '-A'); git('commit', '-m', 'base');
+      execFileSync('git', ['init', '--bare', remote], { encoding: 'utf8' });
+      git('remote', 'add', 'origin', remote); git('push', '-u', 'origin', 'main');
+      git('branch', branch); git('checkout', branch);
+      fs.writeFileSync(path.join(root, 'DELIVERABLE.txt'), 'deliverable'); git('add', '-A'); git('commit', '-m', 'feat: deliverable');
+      git('push', '-u', 'origin', branch); git('checkout', 'main');
+      const r = spawnSync(process.execPath, [sinkScript, '--branch', branch, '--project', project, '--issue', '9498', '--sink', '--json'], { cwd: root, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_GLAB_MOCK_SCRIPT: mockScript }, encoding: 'utf8' });
+      const p = parseLast(r.stdout);
+      assert.notStrictEqual(p.status, 'sinked', '#497-close-gitlab: a hard close failure must NOT report status:sinked, got ' + JSON.stringify(p) + '\nstderr: ' + r.stderr);
+      assert.notStrictEqual(r.status, 0, '#497-close-gitlab: a hard close failure must exit non-zero');
+      assert.ok(p.result === 'refuse' && p.step === 'closure', '#497-close-gitlab: must emit result:refuse step:closure, got ' + JSON.stringify(p));
+      assert.ok(Array.isArray(p.failed_issue_closures) && p.failed_issue_closures.includes(9498), '#497-close-gitlab: must surface the failed closure (9498), got ' + JSON.stringify(p));
+      const rp = [path.join(root, 'kaola-workflow', 'archive', project, '.cache', 'sink-receipt.json'), path.join(root, 'kaola-workflow', project, '.cache', 'sink-receipt.json')].find(x => fs.existsSync(x));
+      assert.ok(rp, '#497-close-gitlab: a sink-receipt must exist after the failed transaction');
+      const receipt = JSON.parse(fs.readFileSync(rp, 'utf8'));
+      assert.notStrictEqual(receipt.steps.closure, 'done', '#497-close-gitlab: closure must NOT be marked done after a hard close failure');
+      assert.strictEqual(receipt.steps.push_main, 'pending', '#497-close-gitlab: push_main must still be pending (closure refuse returns before it)');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      fs.rmSync(remote, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      try { fs.rmSync(mockScript, { force: true }); } catch (_) {}
+    }
+  }
+}
+console.log('GitLab #496/#497 fail-closed sink guard tests passed');
+
 console.log('GitLab sink tests passed');

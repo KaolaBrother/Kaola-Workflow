@@ -5119,6 +5119,168 @@ function testSinkRefusesStaleReceipt() {
   }
 }
 
+// #496: assertWorktreeClean must FAIL CLOSED on a transient git-status probe fault. The guard is the
+// only gate before a destructive `git worktree remove --force`; treating an unprovable probe as
+// "clean" (the old `catch { status = '' }`) destroys uncommitted work on a flaky probe (index.lock /
+// EAGAIN / EMFILE). The fix: a probe that cannot PROVE the worktree clean refuses (treats unprovable
+// as dirty). KAOLA_WORKFLOW_FORCE_WT_STATUS_FAIL is a test-only injection of the probe fault.
+function testAssertWorktreeCleanFailsClosedOnProbeFault() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-wt-probe-fault-')));
+  try {
+    initGitRepo(tmp);
+    // Provision a CLEAN linked worktree on a feature branch (no uncommitted changes).
+    spawnSync('git', ['branch', 'workflow/issue-9496'], { cwd: tmp, encoding: 'utf8' });
+    const wt = path.join(tmp, '.kw', 'wt-9496');
+    spawnSync('git', ['worktree', 'add', wt, 'workflow/issue-9496'], { cwd: tmp, encoding: 'utf8' });
+    const mainBefore = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+
+    // Inject a probe fault: the worktree status probe throws. A fail-OPEN guard would treat this as
+    // clean and proceed to the destructive worktree removal; a fail-CLOSED guard must refuse.
+    const result = spawnSync(process.execPath, [
+      sinkMergeScript, '--project', 'issue-9496', '--branch', 'workflow/issue-9496',
+    ], {
+      cwd: tmp,
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_WORKFLOW_FORCE_WT_STATUS_FAIL: '1' },
+      encoding: 'utf8',
+    });
+    assert(result.status !== 0, '#496: an unprovable worktree-clean probe must refuse (fail closed), got status ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(/(could not|cannot) (be )?verif|unprovable/i.test(result.stderr || ''), '#496: refusal must name the unverifiable-clean cause, got stderr: ' + result.stderr);
+    // The worktree (and any work in it) must survive the refusal.
+    assert(fs.existsSync(wt), '#496: a probe-fault refusal must NOT remove the worktree, got removed: ' + wt);
+    const mainAfter = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+    assert(mainAfter === mainBefore, '#496: main must NOT advance on a probe-fault refusal');
+
+    // Guard A (not over-broad): a genuinely-CLEAN worktree with NO injected fault still proceeds past
+    // the clean guard (it must not now refuse every sink). We assert the run does not refuse with the
+    // probe-fault cause.
+    const ok = spawnSync(process.execPath, [
+      sinkMergeScript, '--project', 'issue-9496', '--branch', 'workflow/issue-9496',
+    ], {
+      cwd: tmp,
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' },
+      encoding: 'utf8',
+    });
+    assert(!/(could not|cannot) (be )?verif|unprovable/i.test(ok.stderr || ''), '#496: a clean worktree with no injected fault must NOT trip the fail-closed probe guard, got stderr: ' + ok.stderr);
+    console.log('testAssertWorktreeCleanFailsClosedOnProbeFault: PASSED');
+  } finally {
+    try { spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', path.join(tmp, '.kw', 'wt-9496')], { encoding: 'utf8' }); } catch (_) {}
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// #497: the --sink TRANSACTION must NOT report status:sinked when push_main (or closure) HARD-fails.
+// The old code wrapped push_main in a try whose catch only warned, then ran stepDone('push_main')
+// unconditionally; the #484 freshness guard checks branch ANCESTRY (which holds on a local FF merge
+// regardless of push), so the run fell through to status:sinked with the deliverable un-pushed. A
+// re-run then skips the already-`done` push step → it never retries. The fix: on a hard push/close
+// failure, do NOT stepDone, record the outcome in the receipt, and emit a non-sinked refusal so the
+// caller can detect + retry (branch preserved). KAOLA_WORKFLOW_FORCE_PUSH_MAIN_FAIL injects the fault.
+function testSinkRefusesOnPushMainFailure() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-pushfail-')));
+  const remotePath = initGitRepoWithBareRemote(tmp);
+  try {
+    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-9497'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmp, 'push', '-u', 'origin', 'workflow/issue-9497'], { encoding: 'utf8' });
+    fs.writeFileSync(path.join(tmp, 'DELIVERABLE.txt'), 'deliverable\n');
+    spawnSync('git', ['-C', tmp, 'add', 'DELIVERABLE.txt'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'feat: deliverable'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmp, 'push', 'origin', 'workflow/issue-9497'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmp, 'checkout', 'main'], { encoding: 'utf8' });
+
+    const result = spawnSync(process.execPath, [
+      sinkMergeScript, '--branch', 'workflow/issue-9497', '--project', 'issue-9497', '--sink', '--json',
+    ], {
+      cwd: tmp,
+      // OFFLINE=0 so push_main is attempted; FORCE_PUSH_MAIN_FAIL makes that push throw deterministically.
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_WORKFLOW_FORCE_PUSH_MAIN_FAIL: '1' },
+      encoding: 'utf8',
+    });
+    const parseLast = (out) => { try { return JSON.parse(String(out || '').trim().split('\n').pop()); } catch (_) { return {}; } };
+    const parsed = parseLast(result.stdout);
+    assert(parsed.status !== 'sinked', '#497: a hard push_main failure must NOT report status:sinked, got ' + JSON.stringify(parsed) + '\nstderr: ' + result.stderr);
+    assert(result.status !== 0, '#497: a hard push_main failure must exit non-zero, got ' + result.status);
+    // The emit must SURFACE the non-pushed outcome so the caller can detect + retry.
+    assert(parsed.result === 'refuse', '#497: a hard push_main failure must emit result:refuse, got ' + JSON.stringify(parsed));
+    assert(/push|main/i.test(JSON.stringify(parsed)), '#497: the refusal must surface the un-pushed push_main outcome, got ' + JSON.stringify(parsed));
+    // The receipt must NOT mark push_main done (else a re-run skips the retry).
+    const receiptPaths = [
+      path.join(tmp, 'kaola-workflow', 'archive', 'issue-9497', '.cache', 'sink-receipt.json'),
+      path.join(tmp, 'kaola-workflow', 'issue-9497', '.cache', 'sink-receipt.json'),
+    ];
+    const rp = receiptPaths.find(p => fs.existsSync(p));
+    assert(rp, '#497: a sink-receipt must exist after the failed transaction, looked in ' + receiptPaths.join(', '));
+    const receipt = JSON.parse(fs.readFileSync(rp, 'utf8'));
+    assert(receipt.steps.push_main !== 'done', '#497: push_main must NOT be marked done after a hard push failure (else re-run never retries), got ' + receipt.steps.push_main);
+    console.log('testSinkRefusesOnPushMainFailure: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(remotePath, { recursive: true, force: true });
+  }
+}
+
+// #497 (closure arm): the --sink transaction must NOT report status:sinked when a HARD issue-CLOSE
+// failure occurs. The old code only warned (and bundle members swallowed with a bare catch), then
+// ran stepDone('closure') unconditionally → fell through to status:sinked. The fix buckets each
+// member into closed/failed, records remote_issue_closed in the receipt, and on a genuine failure
+// emits a non-sinked refusal (step: 'closure') + leaves closure NOT done + returns BEFORE push_main.
+// A gh mock where `issue close`→exit 1 and `issue view … state`→open makes the close GENUINELY fail
+// (probeIssueClosed returns false = not already-closed) without any real network.
+function testSinkRefusesOnCloseFailure() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-closefail-')));
+  const remotePath = initGitRepoWithBareRemote(tmp);
+  // The gh mock lives OUTSIDE the repo root — a mock file inside the repo would be classified as
+  // foreign-dirt by the sink preflight and refuse before the closure step ever runs.
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-closemock-'));
+  fs.mkdirSync(binDir, { recursive: true });
+  // Mock gh: issue view → state open; issue close → exit 1 (genuine close failure); everything else ok.
+  fs.writeFileSync(path.join(binDir, 'gh.js'), [
+    "const a = process.argv.slice(2).join(' ');",
+    "if (/issue view \\d+/.test(a)) { process.stdout.write('open\\n'); process.exit(0); }",
+    "if (/issue close \\d+/.test(a)) { process.stderr.write('mock: close failed\\n'); process.exit(1); }",
+    "if (a.includes('repo view')) { process.stdout.write('{\"owner\":{\"login\":\"test\"},\"name\":\"repo\"}\\n'); process.exit(0); }",
+    "process.stdout.write('\\n'); process.exit(0);",
+  ].join('\n'));
+  try {
+    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-9498'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmp, 'push', '-u', 'origin', 'workflow/issue-9498'], { encoding: 'utf8' });
+    fs.writeFileSync(path.join(tmp, 'DELIVERABLE.txt'), 'deliverable\n');
+    spawnSync('git', ['-C', tmp, 'add', 'DELIVERABLE.txt'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'feat: deliverable'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmp, 'push', 'origin', 'workflow/issue-9498'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmp, 'checkout', 'main'], { encoding: 'utf8' });
+
+    const result = spawnSync(process.execPath, [
+      sinkMergeScript, '--branch', 'workflow/issue-9498', '--project', 'issue-9498', '--issue', '9498', '--sink', '--json',
+    ], {
+      cwd: tmp,
+      // OFFLINE=0 so the closure step runs; the gh mock makes `issue close` genuinely fail.
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_GH_MOCK_SCRIPT: path.join(binDir, 'gh.js') },
+      encoding: 'utf8',
+    });
+    const parseLast = (out) => { try { return JSON.parse(String(out || '').trim().split('\n').pop()); } catch (_) { return {}; } };
+    const parsed = parseLast(result.stdout);
+    assert(parsed.status !== 'sinked', '#497-close: a hard issue-close failure must NOT report status:sinked, got ' + JSON.stringify(parsed) + '\nstderr: ' + result.stderr);
+    assert(result.status !== 0, '#497-close: a hard close failure must exit non-zero, got ' + result.status);
+    assert(parsed.result === 'refuse' && parsed.step === 'closure', '#497-close: a hard close failure must emit result:refuse step:closure, got ' + JSON.stringify(parsed));
+    assert(Array.isArray(parsed.failed_issue_closures) && parsed.failed_issue_closures.includes(9498), '#497-close: the refusal must surface the failed closure (9498), got ' + JSON.stringify(parsed));
+    const receiptPaths = [
+      path.join(tmp, 'kaola-workflow', 'archive', 'issue-9498', '.cache', 'sink-receipt.json'),
+      path.join(tmp, 'kaola-workflow', 'issue-9498', '.cache', 'sink-receipt.json'),
+    ];
+    const rp = receiptPaths.find(p => fs.existsSync(p));
+    assert(rp, '#497-close: a sink-receipt must exist after the failed transaction, looked in ' + receiptPaths.join(', '));
+    const receipt = JSON.parse(fs.readFileSync(rp, 'utf8'));
+    assert(receipt.steps.closure !== 'done', '#497-close: closure must NOT be marked done after a hard close failure (else re-run never retries), got ' + receipt.steps.closure);
+    // The early return must fire BEFORE push_main — proving the close-fail short-circuit.
+    assert(receipt.steps.push_main === 'pending', '#497-close: push_main must still be pending (closure refuse returns before it), got ' + receipt.steps.push_main);
+    console.log('testSinkRefusesOnCloseFailure: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(remotePath, { recursive: true, force: true });
+    fs.rmSync(binDir, { recursive: true, force: true });
+  }
+}
+
 function testNoTargetZeroActive() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-no-target-zero-'));
   try {
@@ -12126,6 +12288,9 @@ function buildRegistry() {
   add('testE2EGitHubMergeFullChain',                      testE2EGitHubMergeFullChain);
   add('testSinkMergeRefusesLiveFolder',                   testSinkMergeRefusesLiveFolder);
   add('testSinkMergeBlocksUnpushedCommits',               testSinkMergeBlocksUnpushedCommits);
+  add('testAssertWorktreeCleanFailsClosedOnProbeFault',   testAssertWorktreeCleanFailsClosedOnProbeFault);
+  add('testSinkRefusesOnPushMainFailure',                 testSinkRefusesOnPushMainFailure);
+  add('testSinkRefusesOnCloseFailure',                    testSinkRefusesOnCloseFailure);
   add('testSinkMergeAutoPushesWhenNoUpstream',            testSinkMergeAutoPushesWhenNoUpstream);
   add('testSinkMergeOfflineSkipsPublishGuard',            testSinkMergeOfflineSkipsPublishGuard);
   add('testSinkMergeNonDefaultBranchMaster',              testSinkMergeNonDefaultBranchMaster);

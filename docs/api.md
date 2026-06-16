@@ -1983,6 +1983,63 @@ the active folder open. The authoritative closure receipt for a `sink:pr`
 project is emitted by `cmdWatchPr`/`cmdWatchMr` when the PR/MR merges. This is
 documented behavior, not a gap; no schema change is needed.
 
+**`sink_incomplete` refuse envelope (issue #497).** When a hard `push_main` or
+`closure` failure occurs, `sink-merge` emits a refuse envelope to stdout (exit 1)
+instead of `status:sinked`. There are two distinct shapes discriminated by
+`step`:
+
+`step:"push_main"` — the FF-merge landed locally but `git push origin <defBranch>`
+threw. The branch is preserved; re-run `--sink` after resolving the push fault.
+
+```json
+{
+  "result": "refuse",
+  "reason": "sink_incomplete",
+  "step": "push_main",
+  "push_main": "failed",
+  "branch": "<branch-name>",
+  "default_branch": "<defBranch>",
+  "detail": "..."
+}
+```
+
+`step:"closure"` — the merge landed and `push_main` succeeded, but at least one
+issue could not be closed on the forge (a bundle member or the primary issue).
+The `closure` step is left NOT done so a re-run retries it.
+
+```json
+{
+  "result": "refuse",
+  "reason": "sink_incomplete",
+  "step": "closure",
+  "remote_issue_closed": "partial",
+  "closed_issues": [N, ...],
+  "failed_issue_closures": [M, ...],
+  "branch": "<branch-name>",
+  "detail": "..."
+}
+```
+
+In both cases the **sink-receipt** (`.cache/sink-receipt.json`) is updated
+before the refuse emit:
+
+- `push_main: "failed"` is written to the receipt on the `push_main` failure
+  path (a new enum value for this field; the success path leaves the field
+  absent until `stepDone("push_main")` records it as `done`).
+- `remote_issue_closed: "partial"` and `failed_issue_closures: [M, ...]` are
+  written to the receipt on the `closure` failure path. `remote_issue_closed`
+  previously only held `"closed"` / `"failed"` / `"kept_open"` — `"partial"` is
+  a new value, used exclusively when at least one member of a bundle could not
+  be closed while others succeeded.
+
+`assertWorktreeClean` and transient probe faults (#496): `assertWorktreeClean`
+runs BEFORE any destructive sink mutation. On a transient `git status` probe
+failure (e.g. held `index.lock`), `assertWorktreeClean` **throws** (one bounded
+retry absorbs a momentary fault first). This is a thrown `Error`, not a JSON
+envelope — the caller sees exit 1 with a stderr message identifying the
+transient fault. Re-run `sink-merge` after resolving the fault (e.g. removing
+the stale lock file).
+
 ### `audit-labels` and `repair-labels` (issue #163; GitLab port #166, Gitea port #167)
 
 Two subcommands find and fix closed issues that still carry `workflow:in-progress`.

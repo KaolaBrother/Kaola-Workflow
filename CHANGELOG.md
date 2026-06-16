@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **sink: `assertWorktreeClean` is now fail-closed on a transient `git status` probe fault (#496).** Before this fix, if the `git status --porcelain` probe that guards `git worktree remove --force` threw (e.g. a held `index.lock`, `EAGAIN`, `EMFILE`), the exception was **silently swallowed** and the worktree was treated as clean — meaning destructive worktree removal could proceed and destroy uncommitted work. Fix: a transient probe fault is now treated as DIRTY (unprovable-clean ⇒ typed refusal). One bounded retry absorbs a momentary fault before refusing; a second consecutive failure throws with a clear operator message identifying the transient fault and instructing resolution before re-running `sink-merge`. Present in all four editions (canonical GitHub / Codex byte-identical twin + hand-ported divergent GitLab and Gitea sink ports).
+
+- **sink: hard `push_main` and `closure` failures no longer report `status:sinked` (#497).** Before this fix, if `git push origin <defBranch>` failed after a successful local FF-merge, or if issue-close failed for one or more members of a bundle, `sink-merge` only emitted a stderr warning and continued — recording the step as `done` in the receipt and falling through to `{result:"ok", status:"sinked"}` exit 0. A re-run then skipped the already-`done` step and never retried. The deliverable could be permanently un-pushed, or the issue permanently un-closed, while the receipt read success. Fix: on a hard `push_main` failure, `sink-merge` records `push_main:"failed"` in the receipt, does NOT `stepDone("push_main")`, and emits `{result:"refuse", reason:"sink_incomplete", step:"push_main", push_main:"failed", …}` with exit 1 (branch preserved for retry). On a hard `closure` failure (at least one issue genuinely could not be closed), it records `remote_issue_closed:"partial"` and `failed_issue_closures:[…]` in the receipt, does NOT `stepDone("closure")`, and emits `{result:"refuse", reason:"sink_incomplete", step:"closure", remote_issue_closed:"partial", closed_issues:[…], failed_issue_closures:[…], …}` with exit 1. A successful close path is byte-equivalent to the prior behavior. Present in all four editions.
+
+### Changed
+
+- **finalize: `closure-audit.js` is now wired into all six finalize-route surfaces as a defense-in-depth reconciliation sweep complementary to the #497 inline emit fix (D-497-01).** The inline fix catches failures at transaction time; `closure-audit` is the periodic broad sweep that catches drift across ALL archived runs — a closed issue whose label was never removed, a stale roadmap source, etc. The `<!-- PIN: closure-audit -->` token is machine-enforced by a fail-closed T6 assertion in `test-route-reachability.js` across all six surfaces (3 Claude finalize commands + 3 Codex finalize SKILLs). Wired by n2-wire-closure-audit; the canonical GitHub `kaola-workflow-finalize.md` command is the model surface (see `commands/kaola-workflow-finalize.md` § "Sink result handling and closure-audit reconciliation sweep").
+
 ## [6.3.0] - 2026-06-15
 
 ### Fixed

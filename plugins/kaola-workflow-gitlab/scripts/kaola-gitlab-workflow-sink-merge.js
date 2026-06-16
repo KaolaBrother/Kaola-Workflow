@@ -12,6 +12,9 @@ function assert(cond, msg) { if (!cond) throw new Error(msg); }
 
 const OFFLINE = process.env.KAOLA_WORKFLOW_OFFLINE === '1';
 const FORCE_FF_FAIL = parseInt(process.env.KAOLA_WORKFLOW_FORCE_FF_FAIL || '0', 10);
+// #496/#497: test-only fault injection — force the worktree-clean status probe / push_main to throw.
+const FORCE_WT_STATUS_FAIL = process.env.KAOLA_WORKFLOW_FORCE_WT_STATUS_FAIL === '1';
+const FORCE_PUSH_MAIN_FAIL = process.env.KAOLA_WORKFLOW_FORCE_PUSH_MAIN_FAIL === '1';
 const SKIP_TESTGATE = process.env.KAOLA_WORKFLOW_SKIP_TESTGATE === '1'; // #350 test-only
 const FF_RACE_PUSH_DIR = process.env.KAOLA_WORKFLOW_FF_RACE_PUSH_DIR || ''; // #350 test-only
 
@@ -190,11 +193,29 @@ function assertWorktreeClean(mainRoot, branch) {
     const branchLine = block.match(/^branch refs\/heads\/(.+)$/m);
     if (!pathLine || !branchLine || branchLine[1] !== branch) continue;
     const wt = pathLine[1];
+    // #496: the ONLY gate before a destructive worktree removal — fail CLOSED. A probe that cannot
+    // PROVE the worktree clean (transient git fault) is treated as DIRTY, never swallowed as clean.
+    // One bounded retry absorbs a momentary fault before refusing.
     let status = '';
-    try {
-      status = execFileSync('git', ['-C', wt, 'status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' }).trim();
-    } catch (_) {
-      status = '';
+    let probeErr = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        if (FORCE_WT_STATUS_FAIL) throw new Error('[TEST ONLY] KAOLA_WORKFLOW_FORCE_WT_STATUS_FAIL — status probe forced to fail');
+        status = execFileSync('git', ['-C', wt, 'status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' }).trim();
+        probeErr = null;
+        break;
+      } catch (e) {
+        probeErr = e;
+      }
+    }
+    if (probeErr) {
+      throw new Error(
+        'sink-merge refused: the worktree clean state for branch ' + branch + ' (' + wt + ') ' +
+        'could not be verified (git status probe failed). Treating an unverifiable worktree as DIRTY ' +
+        'to avoid destroying uncommitted work in a `git worktree remove --force`. Resolve the transient ' +
+        'fault (e.g. a held index.lock) and re-run sink-merge.\n' +
+        'Probe error: ' + (probeErr.message || String(probeErr))
+      );
     }
     if (status) {
       throw new Error(
@@ -914,22 +935,36 @@ function runSinkTransaction(args, mainRoot, defBranch) {
     }
     if (step === 'closure') {
       // GitLab: use forge.closeIssue / forge.updateIssue (glab/MR nouns, not GitHub CLI)
+      // #497: a HARD close failure (a member that genuinely won't close AND is not already-closed)
+      // must NOT report status:sinked. Bucket each member into closed/failed, record
+      // remote_issue_closed in the receipt, and on ANY genuine failure do NOT stepDone — emit a
+      // non-sinked refusal so the caller can retry.
       if (!OFFLINE && args.issue != null && !args.keepIssueOpen) {
-        try {
-          if (!probeIssueClosed(args.issue, {})) {
-            try { forge.closeIssue(args.issue, {}); } catch (e) {
-              if (!probeIssueClosed(args.issue, {})) process.stderr.write('sink-merge --sink: WARNING: merge request/issue close failed for ' + args.issue + '\n');
-            }
+        const closed = [];
+        const failed = [];
+        const closeOne = (n) => {
+          if (probeIssueClosed(n, {})) { closed.push(n); return; }
+          try { forge.closeIssue(n, {}); closed.push(n); }
+          catch (e) {
+            if (probeIssueClosed(n, {})) { closed.push(n); }
+            else { failed.push(n); process.stderr.write('sink-merge --sink: WARNING: merge request/issue close failed for ' + n + '\n'); }
           }
-          try { forge.updateIssue(args.issue, { unlabels: [forge.CLAIM_LABEL] }); } catch (_) {}
-          if (Array.isArray(args.issueNumbers) && args.issueNumbers.length > 1) {
-            for (const n of args.issueNumbers) {
-              if (n === args.issue) continue;
-              if (!probeIssueClosed(n, {})) { try { forge.closeIssue(n, {}); } catch (_) {} }
-              try { forge.updateIssue(n, { unlabels: [forge.CLAIM_LABEL] }); } catch (_) {}
-            }
+        };
+        closeOne(args.issue);
+        try { forge.updateIssue(args.issue, { unlabels: [forge.CLAIM_LABEL] }); } catch (_) {}
+        if (Array.isArray(args.issueNumbers) && args.issueNumbers.length > 1) {
+          for (const n of args.issueNumbers) {
+            if (n === args.issue) continue;
+            closeOne(n);
+            try { forge.updateIssue(n, { unlabels: [forge.CLAIM_LABEL] }); } catch (_) {}
           }
-        } catch (_) {}
+        }
+        // #497: only the FAILURE path records into the receipt + refuses — SUCCESS stays byte-equivalent.
+        if (failed.length > 0) {
+          receipt.remote_issue_closed = 'partial'; receipt.updated_at = new Date().toISOString(); writeSinkReceipt(receiptPath, receipt);
+          process.stdout.write(JSON.stringify({ result: 'refuse', reason: 'sink_incomplete', step: 'closure', remote_issue_closed: 'partial', closed_issues: closed.sort((a, b) => a - b), failed_issue_closures: failed.sort((a, b) => a - b), branch: args.branch, detail: 'the merge landed but ' + failed.length + ' issue(s) could not be closed on the forge (' + failed.join(', ') + '). Refusing to report status:sinked. The closure step is left NOT done so a re-run retries it. Manually close the issue(s) or resolve the forge fault, then re-run --sink.' }) + '\n');
+          process.exitCode = 1; return;
+        }
       }
       stepDone('closure'); continue;
     }
@@ -959,7 +994,21 @@ function runSinkTransaction(args, mainRoot, defBranch) {
       stepDone('archive_commit'); continue;
     }
     if (step === 'push_main') {
-      if (!OFFLINE) { try { execFileSync('git', ['-C', mainRoot, 'push', 'origin', defBranch], { encoding: 'utf8' }); } catch (e) { process.stderr.write('sink-merge --sink: push main failed: ' + (e.message || String(e)) + '\n'); } }
+      // #497: a HARD push failure must NOT report status:sinked (the deliverable advanced LOCALLY but
+      // never reached the remote; the #484 freshness guard checks branch ancestry, which holds on a
+      // local FF merge regardless of push). Record the outcome, do NOT stepDone, emit a non-sinked
+      // refusal so the caller can detect + retry. Branch is preserved (return before teardown).
+      if (!OFFLINE) {
+        try {
+          if (FORCE_PUSH_MAIN_FAIL) throw new Error('[TEST ONLY] KAOLA_WORKFLOW_FORCE_PUSH_MAIN_FAIL — push main forced to fail');
+          execFileSync('git', ['-C', mainRoot, 'push', 'origin', defBranch], { encoding: 'utf8' });
+        } catch (e) {
+          receipt.push_main = 'failed'; receipt.updated_at = new Date().toISOString(); writeSinkReceipt(receiptPath, receipt);
+          process.stderr.write('sink-merge --sink: push main failed: ' + (e.message || String(e)) + '\n');
+          process.stdout.write(JSON.stringify({ result: 'refuse', reason: 'sink_incomplete', step: 'push_main', push_main: 'failed', branch: args.branch, default_branch: defBranch, detail: 'the merge landed on the LOCAL ' + defBranch + ' but `git push origin ' + defBranch + '` failed — the deliverable is NOT on the remote. Refusing to report status:sinked (a transient push failure must not look like a completed sink). The push step is left NOT done so a re-run retries it. Resolve the push fault and re-run --sink.' }) + '\n');
+          process.exitCode = 1; return;
+        }
+      }
       stepDone('push_main'); continue;
     }
   }

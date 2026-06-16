@@ -169,6 +169,32 @@ for (const ed of codexEditions) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// T6: closure-audit pin — all 6 finalize-route surfaces (3 Claude commands + 3 Codex SKILLs)
+// must carry the <!-- PIN: closure-audit --> comment and the 'closure-audit' literal (#496/#497).
+// This is the machine-enforced contract that n2-wire-closure-audit wired the sink-result handling
+// and closure-audit reconciliation sweep into every finalize surface. Fail-closed: unconditional
+// assert() on every surface — do NOT use a non-blocking warn gate (unlike T5's self-disarmed
+// anyHasPin pattern, which is a known bug we do not replicate here).
+// ---------------------------------------------------------------------------
+{
+  const finalizeSurfaces = [
+    'commands/kaola-workflow-finalize.md',
+    'plugins/kaola-workflow/skills/kaola-workflow-finalize/SKILL.md',
+    'plugins/kaola-workflow-gitlab/commands/kaola-workflow-finalize.md',
+    'plugins/kaola-workflow-gitlab/skills/kaola-workflow-finalize/SKILL.md',
+    'plugins/kaola-workflow-gitea/commands/kaola-workflow-finalize.md',
+    'plugins/kaola-workflow-gitea/skills/kaola-workflow-finalize/SKILL.md',
+  ];
+  for (const f of finalizeSurfaces) {
+    const content = fs.readFileSync(path.join(REPO, f), 'utf8');
+    assert(content.includes('<!-- PIN: closure-audit -->'),
+      `T6: ${f} must contain <!-- PIN: closure-audit --> comment (n2-wire-closure-audit)`);
+    assert(content.includes('closure-audit'),
+      `T6: ${f} must contain "closure-audit" literal (n2-wire-closure-audit)`);
+  }
+}
+
 if (failed) {
   console.error(`\nRoute-reachability test FAILED: ${failed} failure(s), ${passed} passed.`);
   process.exit(1);
