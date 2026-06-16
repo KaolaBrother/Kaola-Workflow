@@ -27,6 +27,11 @@ const FEATURE_TOKENS = [
   // #495 (n3-result-routing-prose): indeterminate classifier verdict token — present in
   // agents/workflow-planner.md escalate-routing paragraph, enforces all three .toml twins carry it.
   'target_set_indeterminate',
+  // #513 (n1-impl-513-planner-heuristic): speculative-open-eligible shaping rubric — distinctive
+  // substring of the new authoring paragraph (set speculative_open_policy: consent for a read-only
+  // node behind a high-probability-pass gate). Present in agents/workflow-planner.md, so this
+  // enforces all three .toml twins carry the rubric (md↔toml parity for the #439 authoring lever).
+  'unsatisfied predecessor is a high-probability-pass gate',
 ];
 
 // codex tree is the canonical agents/ source for the toml triple.

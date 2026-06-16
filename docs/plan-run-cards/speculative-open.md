@@ -25,6 +25,26 @@ for your explicit consent.
 
 ---
 
+## Authoring (planner)
+
+The operator flow below only fires when the **plan** already carries
+`speculative_open_policy: consent`. That key is the planner's call at authoring time, not the
+operator's — see the **"Speculative-open-eligible shaping"** rubric in `agents/workflow-planner.md`
+(adjacent to the D-419-01 scheduler posture) for the full authoring criteria. In short, the planner
+sets the Meta key only when a READ-ONLY node's sole unsatisfied predecessor is a single in-progress
+gate that is high-probability-pass (a review over a small mechanical diff, a verification very likely
+to confirm) and the rework cost on a `verdict: fail` is low/bounded. It is NEVER set for a write
+node, and the planner never hand-adds a `speculative: true` annotation — the Meta key is the only
+authoring control; eligibility stays validator/runtime-derived.
+
+**Worked-example topology:** a read-only `adversarial-verifier` (or `code-explorer`) node that
+depends ONLY on a `code-reviewer` gate over a small mechanical change. With
+`## Meta` `speculative_open_policy: consent` set, that read node opens speculatively and overlaps the
+review (the operator flow below) instead of idling until the gate closes. Without the key the node
+just waits — §2 covers the absent/`off` case.
+
+---
+
 ## 2. Confirming the policy is set
 
 Before using `open-ready --speculative-consent`, verify the plan `## Meta` carries the key:

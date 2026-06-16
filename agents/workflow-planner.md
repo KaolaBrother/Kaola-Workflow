@@ -183,6 +183,36 @@ Author the `## Nodes` table so the validator passes it. Each node is one row:
 
 **D-419-01 scheduler-default posture (D-419-01, existing).** Prefer a WIDE ready frontier over a long serial chain when nodes are independent: author parallel read-only analysis/review nodes (they fan out to the read cap) and parallel write nodes with DISJOINT declared write sets (they co-schedule under lane containment). The scheduler opens highest `longest-path-to-sink` nodes first (critical-path-first list scheduling), so place the longest dependency chain on the critical path and let short independent branches overlap it. Do NOT serialize independent work behind a single chain merely for ordering simplicity — every serialized independent node adds its full duration to the makespan; every overlapped node hides behind the critical path for free. Serial is the DEGRADED fallback (write node live with lane containment off, overlapping write sets, or trivially single-ready frontier), not a design goal. Concrete heuristic: if two write nodes touch DISJOINT files and neither depends on the other, do not add a dep edge — leave them as an antichain so the validator derives `parallel_safe` and the scheduler overlaps them; only add a dep when write sets overlap. NEVER add `parallel_safe` to a node yourself — it is validator-derived ([INV-17]); adding it by hand produces an `invalid_annotation` refusal.
 
+**Speculative-open-eligible shaping — when to set `speculative_open_policy: consent` (#439, existing).**
+A READ-ONLY node whose SOLE unsatisfied predecessor is an in-progress GATE need not idle until that
+gate closes: when the gate is *very likely to pass*, the executor can open the node speculatively
+(betting the gate passes) and run it ahead, hiding its latency behind the gate — a makespan win on the
+critical path. Author this shape only where ALL of these hold:
+
+- **(a) the candidate node is read-only** (`declared_write_set: —`) — speculative open is NEVER
+  permitted for a write node;
+- **(b) its only unsatisfied predecessor is a single in-progress gate** (e.g. the `code-reviewer` /
+  `security-reviewer` it depends on), not multiple deps;
+- **(c) that gate is high-probability-pass** — a review over a small mechanical diff, a verification
+  very likely to confirm — not a genuinely uncertain gate.
+
+**How to author it:** set `speculative_open_policy: consent` in the plan `## Meta` block (the default
+is `off`). That makes `next-action` surface the node as speculative-pending and lets the executor run
+`open-ready --speculative-consent` to open it ahead of the gate. **Never hand-add a `speculative: true`
+annotation to a node row** — the Meta key is the ONLY authoring control; eligibility stays
+validator/runtime-derived (same INV-17 discipline as `parallel_safe` above). **When NOT to:** the
+speculative node runs while the gate is still `in_progress`, so on a gate `verdict: fail` the operator
+decides whether to keep or discard its output — author it ONLY where the gate is very likely to pass
+AND the rework cost on a fail is low/bounded. Do not set it when the gate is genuinely uncertain, when
+the candidate node writes (ineligible), or when no post-gate read-only node exists to benefit (the key
+is then a no-op).
+
+**Worked example (in-grammar):** a read-only `adversarial-verifier` (or `code-explorer`) node that
+depends ONLY on a `code-reviewer` gate over a small mechanical change → set
+`## Meta` `speculative_open_policy: consent` so that read node opens speculatively and overlaps the
+review instead of idling until the gate closes. (See `docs/plan-run-cards/speculative-open.md`.)
+Rule of thumb: author speculative_open_policy: consent only when a read-only node's sole unsatisfied predecessor is a high-probability-pass gate.
+
 Capture the frozen issue labels into a `## Meta` `labels:` line so the validator can derive
 sensitivity. If the validator refuses, read the typed refusal and fix the plan — never clamp around
 a gate.

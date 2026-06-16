@@ -258,7 +258,7 @@ for (const ed of codexEditions) {
 }
 
 // ---------------------------------------------------------------------------
-// T9: <!-- PIN: speculative-open --> comment + the `--speculative-consent` literal must appear
+// T9: <!-- CARD: speculative-open --> comment + the `--speculative-consent` literal must appear
 // in each of the 6 plan-run surfaces (3 Claude commands + 3 Codex SKILLs). Added by
 // n3-prose-wire (#500 L3); fail-closed: unconditional assert() per surface.
 // ---------------------------------------------------------------------------

@@ -3371,7 +3371,7 @@ function tryFormLaneGroup(writeNodes, planPath, shell, writeOverlapConsent) {
 // ---------------------------------------------------------------------------
 // #463 Slice 2 (D-419 P2 write-axis) — per-leg `.kw` git-worktree provisioning for the write-lane
 // scheduler (ADR-0010: containment, not construction — legs isolate write scope; they do not
-// redirect the dispatched member's working_dir, which stays parent-side until Slice 3). Legs are
+// redirect the dispatched member's working_dir, which stays parent-side (routing into legs landed in Slice 3, #463 AC18)). Legs are
 // PROVISIONED (a real `git worktree add` per co-opened write member) + telemetered +
 // reconcile/teardown-aware. Provisioning is gated by resolveLegIsolation(env) &&
 // opts.writeOverlapConsent && a formed lane group — when any is false NO leg is provisioned, NO
