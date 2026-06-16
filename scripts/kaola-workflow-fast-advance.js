@@ -36,6 +36,12 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
+// #504: fast-lane compliance backstop. Reuse the shared helper from repair-state
+// (full-path gate at full-advance.js:382) so both lanes call identical logic.
+// The require resolves to the edition-correct repair-state via the rename-normalizer
+// (kaola-workflow-repair-state -> kaola-{forge}-workflow-repair-state in gitlab/gitea).
+const repairState = require('./kaola-workflow-repair-state.js');
+
 // Forge-neutral command/skill prefix. Split so renameNormalize cannot see a
 // contiguous `kaola-workflow-` token (see header note). Runtime value is the
 // edition-independent `kaola-workflow-`.
@@ -66,6 +72,7 @@ const OPERATOR_HINT_REGISTRY = {
   invalid_verdict: () => 'summary-write requires --verdict PASSED|ESCALATED.',
   invalid_trigger: (ctx) => 'Escalation trigger must be one of ' + ESCALATION_TRIGGERS.join('/') + ' (got "' + (ctx.detail || '?') + '").',
   acceptance_unset: () => 'fast-summary.md ## Scope has no "- Acceptance:" command to run. Re-run plan-capture with acceptance_command set.',
+  fast_compliance_unresolved: (ctx) => 'summary-write PASSED refused: unresolved compliance row(s): ' + (ctx.detail || 'unknown') + '. Ensure every Required Agent Compliance row has a resolved status (e.g. subagent-invoked, local-fallback-explicit) with a real evidence path or skip_reason before writing PASSED.',
 };
 
 function getOperatorHint(reason, ctx) {
@@ -254,10 +261,13 @@ function renderSummary(project, parts) {
   const writeSetLine = Array.isArray(parts.write_set)
     ? parts.write_set.join(', ')
     : (parts.write_set || '');
+  // #504 (b): the default code-reviewer row must NOT fabricate a green status + fake evidence
+  // path — use 'pending' so the fast-lane backstop (runSummaryWrite) catches it as unresolved.
+  // Callers that actually completed code review must supply an explicit compliance array.
   const rows = (parts.compliance && parts.compliance.length) ? parts.compliance : [
     { requirement: 'planner', status: 'invoked', evidence: '.cache/planner.md', skip_reason: '' },
-    { requirement: 'tdd-guide', status: parts.tdd_status || 'invoked', evidence: parts.tdd_evidence || '.cache/tdd-guide.md', skip_reason: '' },
-    { requirement: 'code-reviewer', status: parts.reviewer_status || 'invoked', evidence: parts.reviewer_evidence || '.cache/code-reviewer.md', skip_reason: '' },
+    { requirement: 'tdd-guide', status: parts.tdd_status || 'pending', evidence: parts.tdd_evidence || '', skip_reason: '' },
+    { requirement: 'code-reviewer', status: parts.reviewer_status || 'pending', evidence: parts.reviewer_evidence || '', skip_reason: '' },
   ];
   return [
     '# Fast Summary: ' + project,
@@ -478,7 +488,10 @@ function runSummaryWrite(ctx, verdict, packet) {
   const writeSet = (summaryContent.match(/^\s*-\s*Write Set:\s*(.+)$/m) || [, ''])[1].trim();
   const acceptance = summaryAcceptance(summaryContent) || '';
   if (verdict === 'PASSED') {
-    const summary = renderSummary(ctx.project, {
+    // #504 (a): fast-lane compliance backstop — mirror the full-path gate (full-advance.js:382).
+    // Build the would-be summary first so unresolvedCompliance sees the final compliance table.
+    // If any row is unresolved, refuse fail-closed before any mutation.
+    const candidateSummary = renderSummary(ctx.project, {
       status: 'PASSED',
       write_set: writeSet,
       acceptance_command: acceptance,
@@ -488,12 +501,41 @@ function runSummaryWrite(ctx, verdict, packet) {
       compliance: packet.compliance,
       escalation: 'N/A',
     });
-    const sWrote = writeFileAtomic(ctx.summaryPath, summary);
+    const stateContent = readFileOr(ctx.statePath, null) || '';
+    const unresolved = repairState.unresolvedCompliance(candidateSummary, stateContent);
+    if (unresolved.length) {
+      return refuse('fast_compliance_unresolved', {
+        project: ctx.project,
+        detail: unresolved.map(r => r.requirement).join(', '),
+        unresolved_rows: unresolved,
+      });
+    }
+    // #504 (c): scope-aware delegation guard — when write_set has >1 file, the code-reviewer row
+    // MUST carry a delegation status (subagent-invoked / local-fallback-explicit /
+    // local-fallback-tool-unavailable). N/A, invoked-no-evidence, etc. are not sufficient because
+    // they do not prove adversarial review was performed on the multi-file change.
+    const FAST_DELEGATION_STATUSES = new Set([
+      'subagent-invoked', 'local-fallback-explicit', 'local-fallback-tool-unavailable',
+    ]);
+    const writeSetFiles = writeSet.split(',').map(s => s.trim()).filter(Boolean);
+    if (writeSetFiles.length > 1) {
+      const complianceRows = (packet.compliance && packet.compliance.length) ? packet.compliance : [];
+      const reviewerRow = complianceRows.find(r => /code-reviewer/i.test(r.requirement || ''));
+      if (!reviewerRow || !FAST_DELEGATION_STATUSES.has(reviewerRow.status || '')) {
+        const badReq = reviewerRow ? reviewerRow.requirement : 'code-reviewer';
+        return refuse('fast_compliance_unresolved', {
+          project: ctx.project,
+          detail: badReq + ' (write_set has ' + writeSetFiles.length + ' files; delegation status required)',
+          unresolved_rows: [reviewerRow || { requirement: 'code-reviewer', status: 'missing' }],
+        });
+      }
+    }
+    const sWrote = writeFileAtomic(ctx.summaryPath, candidateSummary);
     // route to Finalization (state + summary both agree)
     const fields = planFields(ctx.project, 'review', 'code-reviewer');
     fields.next_command = '/' + KW + 'finalize ' + ctx.project;
     fields.next_skill = KW + 'finalize ' + ctx.project;
-    const stWrote = writeFileAtomic(ctx.statePath, applyStateFields(readFileOr(ctx.statePath, null), fields));
+    const stWrote = writeFileAtomic(ctx.statePath, applyStateFields(stateContent, fields));
     return { result: 'ok', project: ctx.project, status: 'PASSED', summary_written: sWrote, state_written: stWrote, next_command: fields.next_command };
   }
   // ESCALATED terminal write

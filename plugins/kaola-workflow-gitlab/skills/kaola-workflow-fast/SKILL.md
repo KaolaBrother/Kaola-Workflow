@@ -223,6 +223,20 @@ restate, soften, upgrade, or re-grade it), and routes to `/kaola-workflow-finali
 Pass `--verdict ESCALATED` (with a `{"trigger":...,"detail":...}` packet) for a
 terminal escalation at Review.
 
+<!-- PIN: fast-compliance-backstop -->
+**Fast-lane compliance backstop (#504):** `summary-write --verdict PASSED` runs
+`unresolvedCompliance` on the would-be summary before writing anything. If any
+`## Required Agent Compliance` row is unresolved (status `pending`/`invoked`
+without evidence, or `N/A` without evidence or skip\_reason), the script refuses
+fail-closed with `fast_compliance_unresolved` and makes NO mutation. The
+mandatory-delegated code-reviewer rule applies: whenever the write set contains
+**> 1 file** or any production-path file, the `code-reviewer` row must carry a
+real delegation status (`subagent-invoked`, `local-fallback-explicit`, or
+`local-fallback-tool-unavailable`) with a real evidence path or skip\_reason.
+Self-review (`N/A` with a documented skip\_reason) is only valid for the trivial
+band (a single docs, comment, or markdown edit). Supply the resolved compliance
+array in the `compliance` key of the `--stdin` packet.
+
 ## fast-summary.md Format
 
 The script renders this format; it is reproduced here as the durable contract:

@@ -1309,6 +1309,15 @@ function detectFinalizeIncomplete(root, project) {
 function cmdResume() {
   const root = getRoot();
   const args = parseArgs(process.argv.slice(3));
+  // #503: refuse silently picking folder[0] when multiple active folders exist and --project is absent.
+  // Scripts validate+claim, never select under ambiguity (#44).
+  if (!args.project) {
+    const active = readActiveFolders(root);
+    if (active.length > 1) {
+      output({ resumed: false, reason: 'resume_ambiguous', candidates: active.map(f => f.project) }, 1);
+      return;
+    }
+  }
   const folder = args.project ? activeByProject(root, args.project) : readActiveFolders(root)[0];
   if (!folder) {
     if (args.project) {

@@ -440,12 +440,18 @@ On the fast path (`workflow_path: fast`), the Phase 1/3 artifacts do not exist �
 source the acceptance evidence from `fast-summary.md` instead: the deliverable and
 acceptance criteria from `## Scope`, the plan from `## Plan`, implementation
 evidence from `## Implementation Evidence`, and the review result from `## Review`.
+<!-- PIN: fast-compliance-backstop -->
 Also verify fast-path review compliance: in `## Required Agent Compliance`, the
 `code-reviewer` row status must be a delegation status (`subagent-invoked`,
-`local-fallback-explicit`, or `local-fallback-tool-unavailable`) — not `N/A` —
-whenever `## Scope` lists more than one changed file or any production-path file
-(outside `docs/`, `*.md`, `tests/`). `N/A` self-review is acceptable only for the
-trivial band (a single docs/comment/markdown edit).
+`local-fallback-explicit`, or `local-fallback-tool-unavailable`) with a real
+evidence path or skip\_reason — not `pending`, `invoked` without evidence, or
+bare `N/A` without a skip\_reason — whenever `## Scope` lists more than one
+changed file or any production-path file (outside `docs/`, `*.md`, `tests/`).
+`N/A` with a documented skip\_reason is acceptable only for the trivial band
+(a single docs/comment/markdown edit). The `fast_compliance_unresolved` script
+refusal (#504) enforces this fail-closed at `summary-write` time; Finalization
+is a second-line gate that verifies the written compliance table is clean before
+proceeding.
 
 ## Step 3 - Documentation Update
 

@@ -186,14 +186,22 @@ const STATE_WITH_SINK = [
   run(root, ['plan-capture', '--project', 'issue-1', '--stdin'], JSON.stringify({ write_set: ['a.js'], acceptance_command: 'true', plan: 'thread flag' }));
   run(root, ['acceptance-consequence', '--project', 'issue-1', '--decision', 'proceed']);
   const r = run(root, ['summary-write', '--project', 'issue-1', '--verdict', 'PASSED', '--stdin'],
-    JSON.stringify({ implementation_evidence: 'ran node test', review: 'clean, no findings' }));
+    JSON.stringify({
+      implementation_evidence: 'ran node test',
+      review: 'clean, no findings',
+      compliance: [
+        { requirement: 'planner', status: 'invoked', evidence: '.cache/planner.md', skip_reason: '' },
+        { requirement: 'tdd-guide', status: 'invoked', evidence: '.cache/tdd-guide.md', skip_reason: '' },
+        { requirement: 'code-reviewer', status: 'subagent-invoked', evidence: '.cache/code-reviewer.md', skip_reason: '' },
+      ],
+    }));
   assert(r.json && r.json.status === 'PASSED', 'T8: summary-write returns PASSED');
   assert(r.json.next_command === '/kaola-workflow-finalize issue-1', 'T8: summary-write routes to Finalization');
   const sum = fs.readFileSync(summaryPath(root, 'issue-1'), 'utf8');
   assert(/##\s+Status\nPASSED/.test(sum), 'T8: terminal fast-summary PASSED');
   assert(sum.includes('ran node test') && sum.includes('clean, no findings'), 'T8: evidence + review transcribed');
   assert(sum.includes('- Write Set: a.js'), 'T8: Scope Write Set preserved from stub');
-  assert(/code-reviewer \| invoked/.test(sum), 'T8: compliance row code-reviewer invoked (review mode delegated)');
+  assert(/code-reviewer \| subagent-invoked/.test(sum), 'T8: compliance row code-reviewer subagent-invoked with evidence');
   const st = fs.readFileSync(statePath(root, 'issue-1'), 'utf8');
   assert(/next_command: \/kaola-workflow-finalize issue-1/.test(st), 'T8: state routes to finalize');
   assert(st.includes(SINK_BLOCK), 'T8: ## Sink preserved on PASSED');
@@ -341,6 +349,113 @@ const STATE_WITH_SINK = [
   assert(/escalated_to_full: security — auth concern/.test(st), 'T14: escalate appends escalated_to_full field');
   assert((st.match(/^workflow_path:/gm) || []).length === 1, 'T14: no duplicate workflow_path field');
   fs.rmSync(root, { recursive: true, force: true });
+}
+
+// ---------------------------------------------------------------------------
+// T15: compliance backstop (#504) — summary-write PASSED with unresolved compliance MUST refuse
+//      fast_compliance_unresolved; the default (omitted compliance) also refuses because the
+//      default row is now pending (no fabricated green evidence path).
+// ---------------------------------------------------------------------------
+{
+  // T15a: explicit invoked row with no evidence on a >1-file write_set must refuse
+  const root15a = makeProject('issue-1', { 'workflow-state.md': STATE_WITH_SINK });
+  run(root15a, ['plan-capture', '--project', 'issue-1', '--stdin'],
+    JSON.stringify({ write_set: ['scripts/foo.js', 'scripts/test-foo.js'], acceptance_command: 'node test.js' }));
+  run(root15a, ['acceptance-consequence', '--project', 'issue-1', '--decision', 'proceed']);
+  const r15a = run(root15a, ['summary-write', '--project', 'issue-1', '--verdict', 'PASSED', '--stdin'],
+    JSON.stringify({
+      implementation_evidence: 'ran tests',
+      review: 'looked ok',
+      compliance: [
+        { requirement: 'planner', status: 'invoked', evidence: '.cache/planner.md', skip_reason: '' },
+        { requirement: 'tdd-guide', status: 'invoked', evidence: '.cache/tdd-guide.md', skip_reason: '' },
+        { requirement: 'code-reviewer', status: 'invoked', evidence: '', skip_reason: '' },
+      ],
+    }));
+  assert(r15a.status === 1, 'T15a: summary-write PASSED with invoked+no-evidence code-reviewer must exit 1');
+  assert(r15a.json && r15a.json.result === 'refuse', 'T15a: result is refuse');
+  assert(r15a.json && r15a.json.reason === 'fast_compliance_unresolved', 'T15a: reason is fast_compliance_unresolved; got: ' + (r15a.json && r15a.json.reason));
+  assert(r15a.json && typeof r15a.json.operator_hint === 'string' && r15a.json.operator_hint, 'T15a: refusal carries operator_hint');
+  // zero mutation: fast-summary NOT updated to PASSED
+  const sum15a = fs.readFileSync(summaryPath(root15a, 'issue-1'), 'utf8');
+  assert(!/##\s+Status\nPASSED/.test(sum15a), 'T15a: refused summary-write does not write PASSED to fast-summary');
+  fs.rmSync(root15a, { recursive: true, force: true });
+
+  // T15b: N/A row with no evidence and no skip_reason must refuse
+  const root15b = makeProject('issue-1', { 'workflow-state.md': STATE_WITH_SINK });
+  run(root15b, ['plan-capture', '--project', 'issue-1', '--stdin'],
+    JSON.stringify({ write_set: ['scripts/foo.js', 'scripts/test-foo.js'], acceptance_command: 'node test.js' }));
+  run(root15b, ['acceptance-consequence', '--project', 'issue-1', '--decision', 'proceed']);
+  const r15b = run(root15b, ['summary-write', '--project', 'issue-1', '--verdict', 'PASSED', '--stdin'],
+    JSON.stringify({
+      implementation_evidence: 'ran tests',
+      review: 'looked ok',
+      compliance: [
+        { requirement: 'planner', status: 'invoked', evidence: '.cache/planner.md', skip_reason: '' },
+        { requirement: 'tdd-guide', status: 'invoked', evidence: '.cache/tdd-guide.md', skip_reason: '' },
+        { requirement: 'code-reviewer', status: 'N/A', evidence: '', skip_reason: '' },
+      ],
+    }));
+  assert(r15b.status === 1, 'T15b: N/A code-reviewer with no evidence and no skip_reason must refuse');
+  assert(r15b.json && r15b.json.reason === 'fast_compliance_unresolved', 'T15b: reason is fast_compliance_unresolved');
+  fs.rmSync(root15b, { recursive: true, force: true });
+
+  // T15c: omitted compliance (default) must refuse because the default row is now pending
+  const root15c = makeProject('issue-1', { 'workflow-state.md': STATE_WITH_SINK });
+  run(root15c, ['plan-capture', '--project', 'issue-1', '--stdin'],
+    JSON.stringify({ write_set: ['scripts/foo.js', 'scripts/test-foo.js'], acceptance_command: 'node test.js' }));
+  run(root15c, ['acceptance-consequence', '--project', 'issue-1', '--decision', 'proceed']);
+  const r15c = run(root15c, ['summary-write', '--project', 'issue-1', '--verdict', 'PASSED', '--stdin'],
+    JSON.stringify({ implementation_evidence: 'ran tests', review: 'looked ok' }));
+  assert(r15c.status === 1, 'T15c: summary-write PASSED with default (omitted) compliance must refuse (default row now pending)');
+  assert(r15c.json && r15c.json.reason === 'fast_compliance_unresolved', 'T15c: reason is fast_compliance_unresolved');
+  // fast-summary NOT updated to PASSED on refusal
+  const sum15c = fs.readFileSync(summaryPath(root15c, 'issue-1'), 'utf8');
+  assert(!/##\s+Status\nPASSED/.test(sum15c), 'T15c: refused summary-write does not write PASSED');
+  fs.rmSync(root15c, { recursive: true, force: true });
+
+  // T15d: fully resolved compliance rows (subagent-invoked with evidence) MUST pass (no regression)
+  const root15d = makeProject('issue-1', { 'workflow-state.md': STATE_WITH_SINK });
+  run(root15d, ['plan-capture', '--project', 'issue-1', '--stdin'],
+    JSON.stringify({ write_set: ['scripts/foo.js', 'scripts/test-foo.js'], acceptance_command: 'node test.js' }));
+  run(root15d, ['acceptance-consequence', '--project', 'issue-1', '--decision', 'proceed']);
+  const r15d = run(root15d, ['summary-write', '--project', 'issue-1', '--verdict', 'PASSED', '--stdin'],
+    JSON.stringify({
+      implementation_evidence: 'ran tests',
+      review: 'clean',
+      compliance: [
+        { requirement: 'planner', status: 'invoked', evidence: '.cache/planner.md', skip_reason: '' },
+        { requirement: 'tdd-guide', status: 'invoked', evidence: '.cache/tdd-guide.md', skip_reason: '' },
+        { requirement: 'code-reviewer', status: 'subagent-invoked', evidence: '.cache/code-reviewer.md', skip_reason: '' },
+      ],
+    }));
+  assert(r15d.status === 0, 'T15d: resolved compliance rows (subagent-invoked+evidence) must pass');
+  assert(r15d.json && r15d.json.result === 'ok' && r15d.json.status === 'PASSED', 'T15d: result ok PASSED');
+  fs.rmSync(root15d, { recursive: true, force: true });
+
+  // T15e: N/A code-reviewer WITH skip_reason on >1-file scope must STILL refuse
+  // (scope-aware guard: code-reviewer MUST have a delegation status — N/A is not sufficient)
+  const root15e = makeProject('issue-1', { 'workflow-state.md': STATE_WITH_SINK });
+  run(root15e, ['plan-capture', '--project', 'issue-1', '--stdin'],
+    JSON.stringify({ write_set: ['scripts/foo.js', 'scripts/test-foo.js'], acceptance_command: 'node test.js' }));
+  run(root15e, ['acceptance-consequence', '--project', 'issue-1', '--decision', 'proceed']);
+  const r15e = run(root15e, ['summary-write', '--project', 'issue-1', '--verdict', 'PASSED', '--stdin'],
+    JSON.stringify({
+      implementation_evidence: 'ran tests',
+      review: 'ok',
+      compliance: [
+        { requirement: 'planner', status: 'invoked', evidence: '.cache/planner.md', skip_reason: '' },
+        { requirement: 'tdd-guide', status: 'invoked', evidence: '.cache/tdd-guide.md', skip_reason: '' },
+        { requirement: 'code-reviewer', status: 'N/A', evidence: '', skip_reason: 'self-reviewed, looked trivial' },
+      ],
+    }));
+  assert(r15e.status === 1, 'T15e: N/A code-reviewer with skip_reason on >1-file scope must exit 1 (scope-aware delegation guard)');
+  assert(r15e.json && r15e.json.result === 'refuse', 'T15e: result is refuse');
+  assert(r15e.json && r15e.json.reason === 'fast_compliance_unresolved', 'T15e: reason is fast_compliance_unresolved; got: ' + (r15e.json && r15e.json.reason));
+  // zero mutation guard
+  const sum15e = fs.readFileSync(summaryPath(root15e, 'issue-1'), 'utf8');
+  assert(!/##\s+Status\nPASSED/.test(sum15e), 'T15e: refused summary-write does not write PASSED to fast-summary');
+  fs.rmSync(root15e, { recursive: true, force: true });
 }
 
 if (failed > 0) {

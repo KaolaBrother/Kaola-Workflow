@@ -225,20 +225,33 @@ current session's judgment. Once the session decides the verdict, it hands it + 
 `fast-summary.md` exactly once:
 
 ```bash
-echo '{"implementation_evidence":"<commands run, test output summary>","review":"<review result>","plan":"<brief plan>"}' | \
+echo '{"implementation_evidence":"<commands run, test output summary>","review":"<review result>","plan":"<brief plan>","compliance":[{"requirement":"planner","status":"invoked","evidence":".cache/planner.md","skip_reason":""},{"requirement":"tdd-guide","status":"subagent-invoked","evidence":".cache/tdd-guide.md","skip_reason":""},{"requirement":"code-reviewer","status":"subagent-invoked","evidence":".cache/code-reviewer.md","skip_reason":""}]}' | \
   node "$KAOLA_SCRIPTS/kaola-workflow-fast-advance.js" summary-write \
   --project {project} --verdict PASSED --stdin --json
 ```
 
 The script keeps the `## Scope` `- Write Set:` / `- Acceptance:` lines from the
-stub, transcribes Implementation Evidence and Review from the packet, writes the
-`## Required Agent Compliance` rows (planner / tdd-guide / code-reviewer, each
-`invoked` with its `.cache/<role>.md` evidence path — override per row with an
-optional `compliance` array in the packet), sets `## Escalation` to N/A on the
-PASSED path, writes the `## Status` line EXACTLY as the session hands it in (it
-does not restate, soften, upgrade, or re-grade it), and routes to
-`kaola-workflow-finalize {project}`. Pass `--verdict ESCALATED` (with a
-`{"trigger":...,"detail":...}` packet) for a terminal escalation at Review.
+stub, transcribes Implementation Evidence and Review from the packet, transcribes
+the caller-supplied `compliance` array into the `## Required Agent Compliance`
+table, sets `## Escalation` to N/A on the PASSED path, writes the `## Status`
+line EXACTLY as the session hands it in (it does not restate, soften, upgrade, or
+re-grade it), and routes to `kaola-workflow-finalize {project}`. Pass
+`--verdict ESCALATED` (with a `{"trigger":...,"detail":...}` packet) for a
+terminal escalation at Review.
+
+<!-- PIN: fast-compliance-backstop -->
+**Fast-lane compliance backstop (#504):** `summary-write --verdict PASSED` runs
+`unresolvedCompliance` on the would-be summary before writing anything. If any
+`## Required Agent Compliance` row is unresolved (status `pending`/`invoked`
+without evidence, or `N/A` without evidence or skip\_reason), the script refuses
+fail-closed with `fast_compliance_unresolved` and makes NO mutation. The
+mandatory-delegated code-reviewer rule applies: whenever the write set contains
+**> 1 file** or any production-path file, the `code-reviewer` row must carry a
+real delegation status (`subagent-invoked`, `local-fallback-explicit`, or
+`local-fallback-tool-unavailable`) with a real evidence path or skip\_reason.
+Self-review (`N/A` with a documented skip\_reason) is only valid for the trivial
+band (a single docs, comment, or markdown edit). Supply the resolved compliance
+array in the `compliance` key of the `--stdin` packet.
 
 ## fast-summary.md Format
 
@@ -267,8 +280,8 @@ PASSED | IN_PROGRESS | REVIEW | ESCALATED
 | Requirement | Status | Evidence | Skip Reason |
 |-------------|--------|----------|-------------|
 | planner | invoked | .cache/planner.md | |
-| tdd-guide | invoked | .cache/tdd-guide.md | |
-| code-reviewer | invoked | .cache/code-reviewer.md | |
+| tdd-guide | subagent-invoked | .cache/tdd-guide.md | |
+| code-reviewer | subagent-invoked | .cache/code-reviewer.md | |
 
 ## Escalation
 [escalated_to_full: <trigger> or N/A]
@@ -282,14 +295,15 @@ the transaction script). Record each row's Status with the delegation vocabulary
 `subagent-invoked` when the role was delegated to the Codex subagent,
 `local-fallback-explicit` when you executed locally with explicit user
 authorization, or `local-fallback-tool-unavailable` when subagent tooling was
-unavailable. The `summary-write` script renders each row as `invoked` by default;
-to record the real delegation status, override that row by passing a `compliance`
-array in the `summary-write` packet (one `{requirement,status,evidence,skip_reason}`
-object per row, the Status field set to the vocabulary value above). `code-reviewer`
-may be `N/A` (with a skip reason) only in the trivial band (a single
-docs/comment/markdown edit) where self-review applies; any change touching more than
-one file or a production-path file (outside `docs/`, `*.md`, `tests/`) requires a
-delegated review status.
+unavailable. You MUST supply a `compliance` array in the `summary-write` packet
+(one `{requirement,status,evidence,skip_reason}` object per row, the Status field
+set to the vocabulary value above) — the script's default row for `code-reviewer`
+is `pending` (not a green status), so omitting the array will cause
+`fast_compliance_unresolved` refusal. `code-reviewer` may be `N/A` (with a
+documented skip\_reason) only in the trivial band (a single docs/comment/markdown
+edit) where self-review applies; any change touching more than one file or a
+production-path file (outside `docs/`, `*.md`, `tests/`) requires a delegated
+review status.
 
 ## Continue
 

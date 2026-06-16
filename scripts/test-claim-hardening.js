@@ -544,6 +544,86 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
   fs.rmSync(tmpB2Dir, { recursive: true, force: true });
 }
 
+// --- #503: resume_ambiguous refusal when multiple active folders, no --project --------
+// TDD RED: before fix, resume with no --project + two active folders silently returns folder[0].
+// TDD GREEN: after fix, emits { resumed: false, reason: 'resume_ambiguous', candidates: [...] } + exit 1.
+{
+  const { execFileSync } = require('child_process');
+  const CLAIM = path.join(__dirname, 'kaola-workflow-claim.js');
+
+  // Helper: run claim.js resume subcommand in a given repo dir, return { code, json }.
+  function runResume(argv, repoDir) {
+    const e = Object.assign({}, process.env, {
+      KAOLA_WORKFLOW_OFFLINE: '1',
+      KAOLA_GH_REMOTE_TIMEOUT_MS: '500'
+    });
+    try {
+      const out = execFileSync('node', [CLAIM, 'resume', ...argv], { cwd: repoDir, encoding: 'utf8', env: e });
+      const lines = out.trim().split('\n').filter(l => l.trim());
+      const last = lines[lines.length - 1];
+      return { code: 0, json: last ? JSON.parse(last) : null };
+    } catch (err) {
+      const out = String(err.stdout || '') + String(err.stderr || '');
+      const lines = out.trim().split('\n').filter(l => l.trim());
+      for (let i = lines.length - 1; i >= 0; i--) {
+        try { return { code: err.status || 1, json: JSON.parse(lines[i]) }; } catch (_) {}
+      }
+      return { code: err.status || 1, json: null, raw: out };
+    }
+  }
+
+  // Set up a minimal git repo with two active folders.
+  const repo503 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-503-')));
+  const g503 = (a) => { try { execFileSync('git', ['-C', repo503, ...a], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch (_) {} };
+  g503(['init']); g503(['config', 'user.email', 't@t']); g503(['config', 'user.name', 't']); g503(['config', 'commit.gpgsign', 'false']);
+  fs.writeFileSync(path.join(repo503, '.gitignore'), '.kw/\n'); g503(['add', '-A']); g503(['commit', '-m', 'init']);
+
+  // Two active folders — status: in_progress survives readActiveFolders (not released/closed/abandoned).
+  const proj63 = path.join(repo503, 'kaola-workflow', 'issue-63');
+  const proj65 = path.join(repo503, 'kaola-workflow', 'issue-65');
+  fs.mkdirSync(proj63, { recursive: true });
+  fs.mkdirSync(proj65, { recursive: true });
+  fs.writeFileSync(path.join(proj63, 'workflow-state.md'),
+    'name: issue-63\nissue_number: 63\nstatus: in_progress\nphase: 2\nnext_command: /kaola-workflow-phase2 issue-63\n');
+  fs.writeFileSync(path.join(proj65, 'workflow-state.md'),
+    'name: issue-65\nissue_number: 65\nstatus: in_progress\nphase: 3\nnext_command: /kaola-workflow-phase3 issue-65\n');
+
+  // Scenario A (ambiguous): two active folders + no --project → must refuse with reason: resume_ambiguous.
+  const rAmb = runResume([], repo503);
+  assert(rAmb.code === 1,
+    '#503(A): ambiguous resume must exit 1 (got code=' + rAmb.code + ', json=' + JSON.stringify(rAmb.json) + ')');
+  assert(rAmb.json && rAmb.json.reason === 'resume_ambiguous',
+    '#503(A): ambiguous resume must emit reason:resume_ambiguous (got ' + JSON.stringify(rAmb.json) + ')');
+  assert(rAmb.json && Array.isArray(rAmb.json.candidates) && rAmb.json.candidates.length === 2,
+    '#503(A): ambiguous resume must list both candidates (got ' + JSON.stringify(rAmb.json) + ')');
+  assert(rAmb.json && rAmb.json.candidates && rAmb.json.candidates.includes('issue-63'),
+    '#503(A): candidates must include issue-63 (got ' + JSON.stringify(rAmb.json) + ')');
+  assert(rAmb.json && rAmb.json.candidates && rAmb.json.candidates.includes('issue-65'),
+    '#503(A): candidates must include issue-65 (got ' + JSON.stringify(rAmb.json) + ')');
+
+  // Scenario B (single folder back-compat): remove issue-65, resume with no --project → resumes issue-63.
+  fs.rmSync(proj65, { recursive: true, force: true });
+  const rSingle = runResume([], repo503);
+  assert(rSingle.code === 0,
+    '#503(B): single-folder resume must exit 0 (got code=' + rSingle.code + ', json=' + JSON.stringify(rSingle.json) + ')');
+  assert(rSingle.json && rSingle.json.resumed === true,
+    '#503(B): single-folder resume must emit resumed:true (got ' + JSON.stringify(rSingle.json) + ')');
+  assert(rSingle.json && rSingle.json.project === 'issue-63',
+    '#503(B): single-folder resume must resolve to issue-63 (got ' + JSON.stringify(rSingle.json) + ')');
+
+  // Scenario C (explicit --project): two folders restored, explicit --project must still work.
+  fs.mkdirSync(proj65, { recursive: true });
+  fs.writeFileSync(path.join(proj65, 'workflow-state.md'),
+    'name: issue-65\nissue_number: 65\nstatus: in_progress\nphase: 3\nnext_command: /kaola-workflow-phase3 issue-65\n');
+  const rExplicit = runResume(['--project', 'issue-65'], repo503);
+  assert(rExplicit.code === 0,
+    '#503(C): explicit --project must exit 0 (got code=' + rExplicit.code + ', json=' + JSON.stringify(rExplicit.json) + ')');
+  assert(rExplicit.json && rExplicit.json.project === 'issue-65',
+    '#503(C): explicit --project issue-65 must resume issue-65 (got ' + JSON.stringify(rExplicit.json) + ')');
+
+  fs.rmSync(repo503, { recursive: true, force: true });
+}
+
 if (failed > 0) {
   console.error('claim-hardening tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;

@@ -111,14 +111,17 @@ function isGeneratedRoadmap(content) {
 }
 
 function guardAgainstMissingRoadmapSource(dir, outFile) {
-  if (fs.existsSync(dir) || !fs.existsSync(outFile)) return;
+  if (!fs.existsSync(outFile)) return;
   const existing = fs.readFileSync(outFile, 'utf8');
   if (!isGeneratedRoadmap(existing)) return;
   const activeRows = parseRoadmapTable(existing);
   if (activeRows.length === 0) return;
+  const sourceCount = readRoadmapIssues(dir).length;
+  if (sourceCount > 0) return;
   throw new Error(
     'Refusing to replace non-empty generated ROADMAP.md with no active work because ' +
-    'kaola-workflow/.roadmap is missing. Restore .roadmap or recreate per-issue source files before generate.'
+    'kaola-workflow/.roadmap is missing or contains no issue-*.md source files. ' +
+    'Restore .roadmap or recreate per-issue source files before generate.'
   );
 }
 
@@ -198,7 +201,19 @@ function regenerateRoadmap(root) {
   const repoRoot = root || getRoot();
   const dir = roadmapDir(repoRoot);
   const outFile = roadmapFile(repoRoot);
-  guardAgainstMissingRoadmapSource(dir, outFile);
+  // Narrow guard: refuse only when .roadmap/ dir is MISSING (not present-but-empty).
+  // An empty-but-present dir is the legitimate close-last-issue state and must still
+  // empty the mirror cleanly. Missing dir + active mirror rows = likely source loss.
+  if (!fs.existsSync(dir) && fs.existsSync(outFile)) {
+    const existing = fs.readFileSync(outFile, 'utf8');
+    if (isGeneratedRoadmap(existing) && parseRoadmapTable(existing).length > 0) {
+      throw new Error(
+        'Refusing to replace non-empty generated ROADMAP.md with no active work because ' +
+        'kaola-workflow/.roadmap is missing or contains no issue-*.md source files. ' +
+        'Restore .roadmap or recreate per-issue source files before generate.'
+      );
+    }
+  }
   const issues = readRoadmapIssues(dir);
   const content = buildRoadmapContent(issues, dir);
   const wrote = writeFileAtomicReplace(outFile, content);
@@ -206,7 +221,9 @@ function regenerateRoadmap(root) {
 }
 
 function cmdGenerate() {
-  process.stdout.write(regenerateRoadmap(getRoot()) + '\n');
+  const root = getRoot();
+  guardAgainstMissingRoadmapSource(roadmapDir(root), roadmapFile(root));
+  process.stdout.write(regenerateRoadmap(root) + '\n');
 }
 
 function cmdMigrate() {

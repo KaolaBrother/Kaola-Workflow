@@ -232,17 +232,32 @@ verdict, it hands it + the `.cache` evidence to the transaction script, which
 writes the final `fast-summary.md` exactly once:
 
 ```bash
-echo '{"implementation_evidence":"<commands run, test output summary>","review":"<review result>","plan":"<brief plan>"}' | \
+echo '{"implementation_evidence":"<commands run, test output summary>","review":"<review result>","plan":"<brief plan>","compliance":[{"requirement":"planner","status":"invoked","evidence":".cache/planner.md","skip_reason":""},{"requirement":"tdd-guide","status":"subagent-invoked","evidence":".cache/tdd-guide.md","skip_reason":""},{"requirement":"code-reviewer","status":"subagent-invoked","evidence":".cache/code-reviewer.md","skip_reason":""}]}' | \
   node "$KAOLA_SCRIPTS/kaola-gitea-workflow-fast-advance.js" summary-write \
   --project {project} --verdict PASSED --stdin --json
 ```
 
 The script keeps the `## Scope` `- Write Set:` / `- Acceptance:` lines from the
-stub, transcribes Implementation Evidence and Review from the packet, writes the
-`## Required Agent Compliance` rows, writes the `## Status` line EXACTLY as the
-orchestrator hands it in (it does not restate, soften, or upgrade it), and routes
-to `/kaola-workflow-finalize {project}`. Pass `--verdict ESCALATED` (with a
+stub, transcribes Implementation Evidence and Review from the packet, transcribes
+the caller-supplied `compliance` array into the `## Required Agent Compliance`
+rows, writes the `## Status` line EXACTLY as the orchestrator hands it in (it
+does not restate, soften, or upgrade it), and routes to
+`/kaola-workflow-finalize {project}`. Pass `--verdict ESCALATED` (with a
 `{"trigger":...,"detail":...}` packet) for a terminal escalation at Review.
+
+<!-- PIN: fast-compliance-backstop -->
+**Fast-lane compliance backstop (#504):** `summary-write --verdict PASSED` runs
+`unresolvedCompliance` on the would-be summary before writing anything. If any
+`## Required Agent Compliance` row is unresolved (status `pending`/`invoked`
+without evidence, or `N/A` without evidence or skip\_reason), the script refuses
+fail-closed with `fast_compliance_unresolved` and makes NO mutation. The
+mandatory-delegated code-reviewer rule applies: whenever the write set contains
+**> 1 file** or any production-path file, the `code-reviewer` row must carry a
+real delegation status (`subagent-invoked`, `local-fallback-explicit`, or
+`local-fallback-tool-unavailable`) with a real evidence path or skip\_reason.
+Self-review (`N/A` with a documented skip\_reason) is only valid for the trivial
+band (a single docs, comment, or markdown edit). Supply the resolved compliance
+array in the `compliance` key of the `--stdin` packet.
 
 ## Mechanical Bookkeeping (script-owned)
 

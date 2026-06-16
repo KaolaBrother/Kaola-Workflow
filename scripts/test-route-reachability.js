@@ -280,6 +280,37 @@ for (const ed of codexEditions) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// T10: <!-- PIN: fast-compliance-backstop --> must appear in all 12 fast+finalize surfaces
+// (6 fast + 6 finalize: 3 Claude commands + 3 Codex SKILLs each). Added by n3 (#504).
+// Fail-closed: unconditional assert() — do NOT use a non-blocking warn gate.
+// ---------------------------------------------------------------------------
+{
+  const fastComplianceBackstopSurfaces = [
+    // fast — 6 surfaces (3 Claude commands + 3 Codex SKILLs; no plugins/kaola-workflow/commands/fast)
+    'commands/kaola-workflow-fast.md',
+    'plugins/kaola-workflow-gitlab/commands/kaola-workflow-fast.md',
+    'plugins/kaola-workflow-gitea/commands/kaola-workflow-fast.md',
+    'plugins/kaola-workflow/skills/kaola-workflow-fast/SKILL.md',
+    'plugins/kaola-workflow-gitlab/skills/kaola-workflow-fast/SKILL.md',
+    'plugins/kaola-workflow-gitea/skills/kaola-workflow-fast/SKILL.md',
+    // finalize — 6 surfaces (3 Claude commands + 3 Codex SKILLs)
+    'commands/kaola-workflow-finalize.md',
+    'plugins/kaola-workflow-gitlab/commands/kaola-workflow-finalize.md',
+    'plugins/kaola-workflow-gitea/commands/kaola-workflow-finalize.md',
+    'plugins/kaola-workflow/skills/kaola-workflow-finalize/SKILL.md',
+    'plugins/kaola-workflow-gitlab/skills/kaola-workflow-finalize/SKILL.md',
+    'plugins/kaola-workflow-gitea/skills/kaola-workflow-finalize/SKILL.md',
+  ];
+  for (const f of fastComplianceBackstopSurfaces) {
+    const content = fs.readFileSync(path.join(REPO, f), 'utf8');
+    assert(content.includes('<!-- PIN: fast-compliance-backstop -->'),
+      `T10: ${f} must contain <!-- PIN: fast-compliance-backstop --> comment (n3-fast-compliance-backstop, #504)`);
+    assert(content.includes('fast_compliance_unresolved'),
+      `T10: ${f} must contain "fast_compliance_unresolved" literal (n3-fast-compliance-backstop, #504)`);
+  }
+}
+
 if (failed) {
   console.error(`\nRoute-reachability test FAILED: ${failed} failure(s), ${passed} passed.`);
   process.exit(1);
