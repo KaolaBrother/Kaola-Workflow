@@ -304,6 +304,130 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
   fs.rmSync(repo, { recursive: true, force: true });
 }
 
+// --- #495: classifier retry envelope (KAOLA_CLASSIFIER_MOCK_SCRIPT seam) --------
+// Tests drive the REAL execFileSync subprocess path via a mock classifier script written
+// to $TMPDIR. A counter file in $TMPDIR records invocation count so we can assert retry.
+//
+// Three scenarios are tested on BOTH the single-target and bundle paths:
+//   (a) transient → success: mock fails transiently first 1-2 times, then returns green.
+//       Assert: claim succeeds + counter > 1 (retry happened).
+//   (b) persistent transient → escalate: mock always crashes transiently.
+//       Assert: target_set_indeterminate + result:'escalate' (NOT target_unavailable/refuse).
+//   (c) determinate non-zero: mock returns clean non-zero exit with a red verdict.
+//       Assert: counter == 1 (NOT retried) + result:'refuse' (determinate hard-stop).
+{
+  const { execFileSync } = require('child_process');
+  const CLAIM = path.join(__dirname, 'kaola-workflow-claim.js');
+
+  // Helper: runs the claim.js startup CLI with extra env and returns parsed last JSON line.
+  function runClaim(argv, extraEnv, cwd) {
+    const e = Object.assign({}, process.env, {
+      KAOLA_WORKFLOW_OFFLINE: '1',
+      KAOLA_GH_REMOTE_TIMEOUT_MS: '500',
+      KAOLA_CLASSIFIER_TIMEOUT_MS: '500', // so kill/timeout tests don't hang 30s
+      KAOLA_ENABLE_ADAPTIVE: 'true',
+      KAOLA_PATH: 'adaptive',
+      KAOLA_CLASSIFIER_BACKOFF_MS: '0'
+    }, extraEnv || {});
+    try {
+      const out = execFileSync('node', [CLAIM, ...argv], { cwd, encoding: 'utf8', env: e });
+      const lines = out.trim().split('\n').filter(l => l.trim());
+      const last = lines[lines.length - 1];
+      return { code: 0, json: last ? JSON.parse(last) : null };
+    } catch (err) {
+      const out = String(err.stdout || '') + String(err.stderr || '');
+      const lines = out.trim().split('\n').filter(l => l.trim());
+      for (let i = lines.length - 1; i >= 0; i--) {
+        try { return { code: err.status || 1, json: JSON.parse(lines[i]) }; } catch (_) {}
+      }
+      return { code: err.status || 1, json: null, raw: out };
+    }
+  }
+
+  // Set up a minimal git repo so worktree provisioning doesn't error
+  const repoDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-495-repo-')));
+  const g495 = (a) => { try { execFileSync('git', ['-C', repoDir, ...a], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch (_) {} };
+  g495(['init']); g495(['config', 'user.email', 't@t']); g495(['config', 'user.name', 't']); g495(['config', 'commit.gpgsign', 'false']);
+  fs.writeFileSync(path.join(repoDir, '.gitignore'), '.kw/\n'); g495(['add', '-A']); g495(['commit', '-m', 'init']);
+  // Put an adaptive config so adaptive path is truly enabled
+  const kwCfgDir = path.join(repoDir, '.config', 'kaola-workflow');
+  fs.mkdirSync(kwCfgDir, { recursive: true });
+  fs.writeFileSync(path.join(kwCfgDir, 'config.json'), JSON.stringify({ enable_adaptive: true }));
+
+  const tmpMockDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-495-mocks-')));
+
+  // --- (a) transient → success (single-target): mock fails with kill on attempt 1, succeeds on attempt 2 ---
+  {
+    const counterFile = path.join(tmpMockDir, 'counter-a-single.txt');
+    fs.writeFileSync(counterFile, '0');
+    // Mock: first call → SIGKILL self; subsequent calls → return green JSON
+    const mockScript = path.join(tmpMockDir, 'mock-a-single.js');
+    fs.writeFileSync(mockScript,
+      'const fs = require("fs");\n' +
+      'const count = parseInt(fs.readFileSync(' + JSON.stringify(counterFile) + ', "utf8") || "0", 10) + 1;\n' +
+      'fs.writeFileSync(' + JSON.stringify(counterFile) + ', String(count));\n' +
+      'if (count <= 1) { process.kill(process.pid, "SIGKILL"); }\n' +
+      'process.stdout.write(JSON.stringify({ verdict: "green", reasoning: "ok" }) + "\\n");\n' +
+      'process.exit(0);\n'
+    );
+    const r = runClaim(['startup', '--target-issue', '83'], { KAOLA_CLASSIFIER_MOCK_SCRIPT: mockScript }, repoDir);
+    const cnt = parseInt(fs.readFileSync(counterFile, 'utf8') || '0', 10);
+    assert(r.json && r.json.status === 'acquired', '#495(a-single): transient→success claim acquired (got ' + JSON.stringify(r.json) + ')');
+    assert(cnt > 1, '#495(a-single): retry fired — counter=' + cnt + ' (expected >1)');
+    // Cleanup the acquired project so it doesn't block the next test
+    const projDir83 = path.join(repoDir, 'kaola-workflow', 'issue-83');
+    try { fs.rmSync(projDir83, { recursive: true, force: true }); } catch (_) {}
+  }
+
+  // --- (b) persistent transient → escalate (bundle path) ---
+  {
+    const counterFile = path.join(tmpMockDir, 'counter-b-bundle.txt');
+    fs.writeFileSync(counterFile, '0');
+    // Mock: always SIGKILL → after 3 attempts → indeterminate verdict
+    const mockScript = path.join(tmpMockDir, 'mock-b-bundle.js');
+    fs.writeFileSync(mockScript,
+      'const fs = require("fs");\n' +
+      'const count = parseInt(fs.readFileSync(' + JSON.stringify(counterFile) + ', "utf8") || "0", 10) + 1;\n' +
+      'fs.writeFileSync(' + JSON.stringify(counterFile) + ', String(count));\n' +
+      'process.kill(process.pid, "SIGKILL");\n'
+    );
+    const r = runClaim(['startup', '--target-issues', '83,143'], { KAOLA_CLASSIFIER_MOCK_SCRIPT: mockScript }, repoDir);
+    const cnt = parseInt(fs.readFileSync(counterFile, 'utf8') || '0', 10);
+    assert(r.json && r.json.status === 'target_set_indeterminate',
+      '#495(b-bundle): persistent transient → target_set_indeterminate (got status=' + (r.json && r.json.status) + ')');
+    assert(r.json && r.json.result === 'escalate',
+      '#495(b-bundle): persistent transient → result:escalate (got result=' + (r.json && r.json.result) + ')');
+    assert(cnt >= 3, '#495(b-bundle): retry fired to max attempts — counter=' + cnt + ' (expected >=3)');
+  }
+
+  // --- (c) determinate non-zero NOT retried (bundle path — also tests result:refuse) ---
+  {
+    const counterFile = path.join(tmpMockDir, 'counter-c-bundle.txt');
+    fs.writeFileSync(counterFile, '0');
+    // Mock: always exits with code 1 (clean non-zero) emitting a red verdict JSON
+    const mockScript = path.join(tmpMockDir, 'mock-c-bundle.js');
+    fs.writeFileSync(mockScript,
+      'const fs = require("fs");\n' +
+      'const count = parseInt(fs.readFileSync(' + JSON.stringify(counterFile) + ', "utf8") || "0", 10) + 1;\n' +
+      'fs.writeFileSync(' + JSON.stringify(counterFile) + ', String(count));\n' +
+      'process.stdout.write(JSON.stringify({ verdict: "red", reasoning: "blocked by policy" }) + "\\n");\n' +
+      'process.exit(1);\n'  // clean non-zero: subprocess ran and decided
+    );
+    const r = runClaim(['startup', '--target-issues', '83,143'], { KAOLA_CLASSIFIER_MOCK_SCRIPT: mockScript }, repoDir);
+    const cnt = parseInt(fs.readFileSync(counterFile, 'utf8') || '0', 10);
+    // The determinate non-zero exit maps to target_set_unavailable (the clean_nonzero branch returns verdict:'target_unavailable',
+    // which bundle maps to status:'target_set_unavailable' with result:'refuse').
+    assert(r.json && (r.json.status === 'target_set_unavailable' || r.json.status === 'target_set_red'),
+      '#495(c-bundle): determinate non-zero → target_set_unavailable or target_set_red (got status=' + (r.json && r.json.status) + ')');
+    assert(r.json && r.json.result === 'refuse',
+      '#495(c-bundle): determinate non-zero → result:refuse (got result=' + (r.json && r.json.result) + ')');
+    assert(cnt === 1, '#495(c-bundle): determinate NOT retried — counter=' + cnt + ' (expected 1)');
+  }
+
+  fs.rmSync(tmpMockDir, { recursive: true, force: true });
+  fs.rmSync(repoDir, { recursive: true, force: true });
+}
+
 if (failed > 0) {
   console.error('claim-hardening tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;

@@ -24,6 +24,9 @@ const FEATURE_TOKENS = [
   // agents/synthesizer.md, so this enforces its three .toml twins carry it (md↔toml parity coverage
   // for the new write-overlap convergence role).
   'REASONING_FLOOR_ROLES',
+  // #495 (n3-result-routing-prose): indeterminate classifier verdict token — present in
+  // agents/workflow-planner.md escalate-routing paragraph, enforces all three .toml twins carry it.
+  'target_set_indeterminate',
 ];
 
 // codex tree is the canonical agents/ source for the toml triple.

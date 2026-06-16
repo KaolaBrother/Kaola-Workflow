@@ -1036,7 +1036,7 @@ function claimExplicitBundle(root, args) {
     // 4a: check active folders (bundle-aware activeByIssue)
     const existing = activeByIssue(root, n);
     if (existing) {
-      return { status: 'target_set_conflicts_active_work', claim: 'none', issue: n,
+      return { status: 'target_set_conflicts_active_work', result: 'refuse', claim: 'none', issue: n,
         reasoning: '#' + n + ' is already claimed by project ' + existing.project };
     }
     // 4b: probe issue state FIRST so a closed member gets the dedicated code before
@@ -1044,27 +1044,40 @@ function claimExplicitBundle(root, args) {
     //     be unreachable if probe runs after classify).
     const probe = probeIssueState(n);
     if (probe.state === 'closed') {
-      return { status: 'target_set_has_closed_issue', claim: 'none', issue: n,
+      return { status: 'target_set_has_closed_issue', result: 'refuse', claim: 'none', issue: n,
         reasoning: '#' + n + ' is closed' };
     }
     if (!OFFLINE && probe.state === 'unavailable') {
-      return { status: 'target_set_unavailable', claim: 'none', issue: n,
+      return { status: 'target_set_unavailable', result: 'refuse', claim: 'none', issue: n,
         reasoning: '#' + n + ' state probe failed' };
     }
     // 4c: classify
     const classified = classifyIssue(root, n);
     if (classified.verdict === 'owned' || classified.verdict === 'blocked') {
-      return { status: 'target_set_conflicts_active_work', claim: 'none', issue: n,
+      return { status: 'target_set_conflicts_active_work', result: 'refuse', claim: 'none', issue: n,
         reasoning: classified.reasoning };
     }
     if (classified.verdict === 'red') {
-      return { status: 'target_set_red', claim: 'none', issue: n, reasoning: classified.reasoning };
+      return { status: 'target_set_red', result: 'refuse', claim: 'none', issue: n, reasoning: classified.reasoning };
     }
     if (classified.verdict === 'target_unavailable') {
-      return { status: 'target_set_unavailable', claim: 'none', issue: n, reasoning: classified.reasoning };
+      return { status: 'target_set_unavailable', result: 'refuse', claim: 'none', issue: n, reasoning: classified.reasoning };
     }
     if (classified.verdict === 'target_unverified') {
       return { status: 'target_set_unverified', claim: 'none', issue: n, reasoning: classified.reasoning };
+    }
+    // #495 forward-compat: the forge classifier is in-process (boundary-2 only) and does not yet
+    // emit 'indeterminate'; this mirrors root claim.js envelope parity and activates if the forge
+    // classifier's CLI-fetch catch is hardened to surface transient faults (follow-up).
+    if (classified.verdict === 'indeterminate') {
+      return {
+        status: 'target_set_indeterminate',
+        result: 'escalate',
+        claim: 'none',
+        issue: n,
+        reasoning_class: classified.reasoning_class || 'classifier_error',
+        reasoning: classified.reasoning
+      };
     }
   }
   // Step 5: derive project/branch — design §Naming: bundle_id = 'bundle-' + sorted targets
@@ -1094,7 +1107,7 @@ function claimExplicitTarget(root, args) {
     return { status: 'user_target_red', claim: 'none', issue: targetIssue, project: projectNameForIssue(root, targetIssue), reasoning: classified.reasoning };
   }
   if (classified.verdict === 'target_unavailable') {
-    return { status: 'target_unavailable', claim: 'none', issue: targetIssue, project: projectNameForIssue(root, targetIssue), reasoning: classified.reasoning };
+    return { status: 'target_unavailable', result: 'refuse', claim: 'none', issue: targetIssue, project: projectNameForIssue(root, targetIssue), reasoning: classified.reasoning };
   }
   if (classified.verdict === 'target_unverified') {
     return {
@@ -1102,6 +1115,20 @@ function claimExplicitTarget(root, args) {
       claim: 'none',
       issue: targetIssue,
       project: projectNameForIssue(root, targetIssue),
+      reasoning: classified.reasoning
+    };
+  }
+  // #495 forward-compat: the forge classifier is in-process (boundary-2 only) and does not yet
+  // emit 'indeterminate'; this mirrors root claim.js envelope parity and activates if the forge
+  // classifier's CLI-fetch catch is hardened to surface transient faults (follow-up).
+  if (classified.verdict === 'indeterminate') {
+    return {
+      status: 'target_indeterminate',
+      result: 'escalate',
+      claim: 'none',
+      issue: targetIssue,
+      project: projectNameForIssue(root, targetIssue),
+      reasoning_class: classified.reasoning_class || 'classifier_error',
       reasoning: classified.reasoning
     };
   }

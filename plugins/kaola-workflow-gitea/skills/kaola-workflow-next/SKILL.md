@@ -336,10 +336,15 @@ fi
 ```
 
 If `STARTUP_OUT` has `verdict: "owned"`, route that project. If startup returns
-`verdict: no_target`, the agent must select a target and re-run. If startup returns
-a typed refusal (`target_occupied`, `user_target_blocked`, `user_target_red`,
-`target_unavailable`, `target_unverified`), read the `reasoning` field and stop or
-select a different issue.
+`verdict: no_target`, the agent must select a target and re-run. <!-- PIN: claim-escalate -->
+If startup returns a typed refusal, read the `reasoning` field and classify by `result` (#495):
+- `result: refuse` (`target_occupied`, `user_target_blocked`, `user_target_red`,
+  `target_unavailable`, `target_unverified`): **HARD STOP** — the determinate RED is final; do
+  not blind-proceed to a different issue without explicit user direction.
+- `result: escalate` (`target_indeterminate` / `target_set_indeterminate`): the classifier
+  subprocess faulted and bounded retry is exhausted. **PAUSE and ASK THE USER** — offer to retry,
+  pick a different target, go offline, or abort. This is NOT an `adaptive-node write-halt`;
+  no plan/ledger exists yet at claim time.
 
 Before stopping, print the refusal diagnostics:
 

@@ -195,6 +195,44 @@ for (const ed of codexEditions) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// T7: <!-- PIN: claim-escalate --> comment + the `result: escalate` literal must appear in each of
+// the 18 claim/startup-refusal surfaces: adapt×6 + workflow-next×6 + auto×6.
+// Added by n3-result-routing-prose (#495); unconditional (n3 writes the prose AND this assertion together).
+// ---------------------------------------------------------------------------
+{
+  const claimEscalateSurfaces = [
+    // adapt — 6 surfaces
+    'commands/kaola-workflow-adapt.md',
+    'plugins/kaola-workflow/skills/kaola-workflow-adapt/SKILL.md',
+    'plugins/kaola-workflow-gitlab/commands/kaola-workflow-adapt.md',
+    'plugins/kaola-workflow-gitlab/skills/kaola-workflow-adapt/SKILL.md',
+    'plugins/kaola-workflow-gitea/commands/kaola-workflow-adapt.md',
+    'plugins/kaola-workflow-gitea/skills/kaola-workflow-adapt/SKILL.md',
+    // workflow-next — 6 surfaces
+    'commands/workflow-next.md',
+    'plugins/kaola-workflow/skills/kaola-workflow-next/SKILL.md',
+    'plugins/kaola-workflow-gitlab/commands/workflow-next.md',
+    'plugins/kaola-workflow-gitlab/skills/kaola-workflow-next/SKILL.md',
+    'plugins/kaola-workflow-gitea/commands/workflow-next.md',
+    'plugins/kaola-workflow-gitea/skills/kaola-workflow-next/SKILL.md',
+    // auto — 6 surfaces
+    'commands/kaola-workflow-auto.md',
+    'plugins/kaola-workflow/skills/kaola-workflow-auto/SKILL.md',
+    'plugins/kaola-workflow-gitlab/commands/kaola-workflow-auto.md',
+    'plugins/kaola-workflow-gitlab/skills/kaola-workflow-auto/SKILL.md',
+    'plugins/kaola-workflow-gitea/commands/kaola-workflow-auto.md',
+    'plugins/kaola-workflow-gitea/skills/kaola-workflow-auto/SKILL.md',
+  ];
+  for (const f of claimEscalateSurfaces) {
+    const content = fs.existsSync(path.join(REPO, f)) ? fs.readFileSync(path.join(REPO, f), 'utf8') : '';
+    assert(content.includes('<!-- PIN: claim-escalate -->'),
+      `T7: ${f} must contain <!-- PIN: claim-escalate --> comment (n3-result-routing-prose, #495)`);
+    assert(content.includes('result: escalate'),
+      `T7: ${f} must contain "result: escalate" literal following the PIN comment (n3-result-routing-prose, #495)`);
+  }
+}
+
 if (failed) {
   console.error(`\nRoute-reachability test FAILED: ${failed} failure(s), ${passed} passed.`);
   process.exit(1);

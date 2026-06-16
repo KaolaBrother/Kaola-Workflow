@@ -672,25 +672,92 @@ function clearAdvisoryClaim(issueNumber, reason, project) {
   return status;
 }
 
+// #495: classifier error classification helper — separates transient (retry-eligible) faults
+// from determinate clean-nonzero exits. Returns an error-class string:
+//   'spawn_fault'  — subprocess couldn't spawn (ENOENT/EAGAIN/EMFILE/ENOMEM, no e.status)
+//   'killed'       — subprocess was killed or timed out (e.killed===true or e.signal present)
+//   'clean_nonzero' — subprocess ran and exited non-zero (e.status present, not status===2)
+function classifySubprocessError(e) {
+  if (e.status === 2) return 'owned_exit'; // handled separately by caller
+  if (e.status != null) return 'clean_nonzero';
+  if (e.killed === true || e.signal) return 'killed';
+  if (e.code && ['ENOENT', 'EAGAIN', 'EMFILE', 'ENOMEM'].indexOf(e.code) !== -1) return 'spawn_fault';
+  return 'killed'; // unknown non-status fault — treat as transient
+}
+
+// #495: classifier retry timeout — overridable for tests so three 30s hangs don't block the suite.
+function classifierTimeoutMs() {
+  const v = parseInt(process.env.KAOLA_CLASSIFIER_TIMEOUT_MS || '', 10);
+  return (Number.isFinite(v) && v > 0) ? v : 30000;
+}
+
+// #495: synchronous sleep for retry backoff (Atomics.wait on a shared buffer — safe in sync path).
+function syncSleepMs(ms) {
+  if (ms <= 0) return;
+  try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch (_) {}
+}
+
 function classifyIssue(root, issueNumber) {
-  const classifier = path.join(__dirname, 'kaola-workflow-classifier.js');
-  if (!fs.existsSync(classifier)) return { verdict: 'target_unavailable', reasoning: 'classifier unavailable (packaging error)' };
-  try {
-    const raw = execFileSync(process.execPath, [classifier, 'classify', '--issue', String(issueNumber), '--json'], {
-      cwd: root,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-      timeout: 30000,
-      // #362: hand the parent's issue-state snapshot to the classifier subprocess so it reuses
-      // what the parent already probed (active-folders seeds its memo from this env) instead of
-      // re-probing the same issue. Additive; an empty/malformed snapshot is ignored downstream.
-      env: Object.assign({}, process.env, { KAOLA_ISSUE_STATE_SNAPSHOT: JSON.stringify(getIssueStateSnapshot()) })
-    }).trim();
-    return raw ? JSON.parse(raw) : { verdict: 'target_unavailable', reasoning: 'classifier returned empty output (contract bug)' };
-  } catch (e) {
-    if (e.status === 2) return { verdict: 'owned', reasoning: 'active local folder already exists' };
-    return { verdict: 'target_unavailable', reasoning: 'classifier failed (subprocess error)' };
+  // #495: KAOLA_CLASSIFIER_MOCK_SCRIPT — test seam mirroring KAOLA_GH_MOCK_SCRIPT precedent.
+  // When set, the mock script is invoked instead of the real classifier, so tests can drive
+  // the REAL execFileSync retry path with a controllable mock (crash/kill/clean-nonzero/green).
+  const classifierMock = process.env.KAOLA_CLASSIFIER_MOCK_SCRIPT;
+  const classifier = classifierMock || path.join(__dirname, 'kaola-workflow-classifier.js');
+  if (!classifierMock && !fs.existsSync(classifier)) return { verdict: 'target_unavailable', reasoning: 'classifier unavailable (packaging error)' };
+
+  const MAX_ATTEMPTS = 3; // ≤3 total (1 original + up to 2 retries)
+  // #495: small default backoff between retries — gives transient resource faults (EMFILE/EAGAIN)
+  // a moment to clear. Tests can set KAOLA_CLASSIFIER_BACKOFF_MS=0 to keep the suite fast.
+  const BACKOFF_MS_DEFAULT = 50;
+  const BACKOFF_MS = parseInt(process.env.KAOLA_CLASSIFIER_BACKOFF_MS || String(BACKOFF_MS_DEFAULT), 10);
+  const backoffMs = (Number.isFinite(BACKOFF_MS) && BACKOFF_MS >= 0) ? BACKOFF_MS : BACKOFF_MS_DEFAULT;
+  let lastErr = null;
+  let lastErrClass = '';
+
+  for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    if (attempt > 0) syncSleepMs(backoffMs);
+    try {
+      const raw = execFileSync(process.execPath, [classifier, 'classify', '--issue', String(issueNumber), '--json'], {
+        cwd: root,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: classifierTimeoutMs(),
+        // #362: hand the parent's issue-state snapshot to the classifier subprocess so it reuses
+        // what the parent already probed (active-folders seeds its memo from this env) instead of
+        // re-probing the same issue. Additive; an empty/malformed snapshot is ignored downstream.
+        env: Object.assign({}, process.env, { KAOLA_ISSUE_STATE_SNAPSHOT: JSON.stringify(getIssueStateSnapshot()) })
+      }).trim();
+      return raw ? JSON.parse(raw) : { verdict: 'target_unavailable', reasoning: 'classifier returned empty output (contract bug)' };
+    } catch (e) {
+      if (e.status === 2) return { verdict: 'owned', reasoning: 'active local folder already exists' };
+      lastErr = e;
+      lastErrClass = classifySubprocessError(e);
+      // #495: only transient classes (spawn_fault, killed) are retried; a clean non-zero exit is
+      // determinate — the subprocess ran and made a decision, so we don't retry.
+      if (lastErrClass === 'clean_nonzero') break;
+      // transient: loop for next attempt (up to MAX_ATTEMPTS total)
+    }
   }
+
+  // Retry exhausted (or clean_nonzero broke early). Classify the final outcome.
+  if (lastErrClass === 'clean_nonzero') {
+    // Determinate: subprocess ran and exited non-zero. Capture truncated stderr.
+    const stderrSnip = String((lastErr && lastErr.stderr) || '').slice(0, 200).trim();
+    return {
+      verdict: 'target_unavailable',
+      reasoning: 'classifier exited non-zero' + (stderrSnip ? ': ' + stderrSnip : ' (no stderr)')
+    };
+  }
+  // Transient failure persisted after retry — emit the new indeterminate verdict (#495).
+  const errCode = (lastErr && lastErr.code) || '';
+  const signal = (lastErr && lastErr.signal) || '';
+  return {
+    verdict: 'indeterminate',
+    reasoning_class: 'classifier_error',
+    reasoning: 'classifier subprocess fault after ' + MAX_ATTEMPTS + ' attempts' +
+      (errCode ? ' (code=' + errCode + ')' : '') +
+      (signal ? ' (signal=' + signal + ')' : '')
+  };
 }
 
 function activeByIssue(root, issueNumber) {
@@ -858,7 +925,7 @@ function claimExplicitTarget(root, args) {
     return { status: 'user_target_red', claim: 'none', issue: targetIssue, project: projectNameForIssue(root, targetIssue), reasoning: classified.reasoning };
   }
   if (classified.verdict === 'target_unavailable') {
-    return { status: 'target_unavailable', claim: 'none', issue: targetIssue, project: projectNameForIssue(root, targetIssue), reasoning: classified.reasoning };
+    return { status: 'target_unavailable', result: 'refuse', claim: 'none', issue: targetIssue, project: projectNameForIssue(root, targetIssue), reasoning: classified.reasoning };
   }
   if (classified.verdict === 'target_unverified') {
     return {
@@ -866,6 +933,18 @@ function claimExplicitTarget(root, args) {
       claim: 'none',
       issue: targetIssue,
       project: projectNameForIssue(root, targetIssue),
+      reasoning: classified.reasoning
+    };
+  }
+  // #495: indeterminate verdict — transient classifier fault after retry exhausted → escalate.
+  if (classified.verdict === 'indeterminate') {
+    return {
+      status: 'target_indeterminate',
+      result: 'escalate',
+      claim: 'none',
+      issue: targetIssue,
+      project: projectNameForIssue(root, targetIssue),
+      reasoning_class: classified.reasoning_class || 'classifier_error',
       reasoning: classified.reasoning
     };
   }
@@ -1153,7 +1232,7 @@ function claimExplicitBundle(root, args) {
     // 4a: check active folders (bundle-aware activeByIssue)
     const existing = activeByIssue(root, n);
     if (existing) {
-      return { status: 'target_set_conflicts_active_work', claim: 'none', issue: n,
+      return { status: 'target_set_conflicts_active_work', result: 'refuse', claim: 'none', issue: n,
         reasoning: '#' + n + ' is already claimed by project ' + existing.project };
     }
     // 4b: probe issue state FIRST so a closed member gets the dedicated code before
@@ -1161,27 +1240,38 @@ function claimExplicitBundle(root, args) {
     //     be unreachable if probe runs after classify).
     const probe = probeIssueState(n);
     if (probe.state === 'closed') {
-      return { status: 'target_set_has_closed_issue', claim: 'none', issue: n,
+      return { status: 'target_set_has_closed_issue', result: 'refuse', claim: 'none', issue: n,
         reasoning: '#' + n + ' is closed' };
     }
     if (!OFFLINE && probe.state === 'unavailable') {
-      return { status: 'target_set_unavailable', claim: 'none', issue: n,
+      return { status: 'target_set_unavailable', result: 'refuse', claim: 'none', issue: n,
         reasoning: '#' + n + ' state probe failed' };
     }
     // 4c: classify
     const classified = classifyIssue(root, n);
     if (classified.verdict === 'owned' || classified.verdict === 'blocked') {
-      return { status: 'target_set_conflicts_active_work', claim: 'none', issue: n,
+      return { status: 'target_set_conflicts_active_work', result: 'refuse', claim: 'none', issue: n,
         reasoning: classified.reasoning };
     }
     if (classified.verdict === 'red') {
-      return { status: 'target_set_red', claim: 'none', issue: n, reasoning: classified.reasoning };
+      return { status: 'target_set_red', result: 'refuse', claim: 'none', issue: n, reasoning: classified.reasoning };
     }
     if (classified.verdict === 'target_unavailable') {
-      return { status: 'target_set_unavailable', claim: 'none', issue: n, reasoning: classified.reasoning };
+      return { status: 'target_set_unavailable', result: 'refuse', claim: 'none', issue: n, reasoning: classified.reasoning };
     }
     if (classified.verdict === 'target_unverified') {
       return { status: 'target_set_unverified', claim: 'none', issue: n, reasoning: classified.reasoning };
+    }
+    // #495: indeterminate verdict — transient classifier fault after retry exhausted → escalate.
+    if (classified.verdict === 'indeterminate') {
+      return {
+        status: 'target_set_indeterminate',
+        result: 'escalate',
+        claim: 'none',
+        issue: n,
+        reasoning_class: classified.reasoning_class || 'classifier_error',
+        reasoning: classified.reasoning
+      };
     }
   }
   // Step 5: derive project/branch — design §Naming: bundle_id = 'bundle-' + sorted targets

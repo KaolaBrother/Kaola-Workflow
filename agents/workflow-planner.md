@@ -215,11 +215,17 @@ these reminders does not relax them.
      prompt is allowed ONLY when re-dispatching the planner after `handoff_status: plan_invalid`
      on an UNFROZEN plan, with the validator errors supplied as repair context; in every other case
      the planner refuses with `planner_control_boundary_violation`.
-   - **Refusal:** if startup returns any `claim_verdict` that is NOT `acquired`/`owned` — a typed
-     refusal (`workflow_path_refused`, `target_occupied`, `user_target_blocked`, `user_target_red`,
-     `user_target_closed`, `target_unavailable`, `target_unverified`, or `claim: none`) — no
-     `workflow-state.md` is written. STOP and return the verdict + reasoning so the orchestrator
-     decides (fail closed). Do not retry a different issue.
+   - **Refusal:** if startup returns any `claim_verdict` that is NOT `acquired`/`owned` — no
+     `workflow-state.md` is written. STOP and return the verdict + reasoning verbatim so the
+     orchestrator decides. Do not retry a different issue. Classify by `result` (#495):
+     - `result: refuse` — determinate fact (`workflow_path_refused`, `target_occupied`,
+       `user_target_blocked`, `user_target_red`, `user_target_closed`, `target_unavailable`,
+       `target_unverified`, or `claim: none`). Fail closed. The orchestrator does NOT push past this.
+     - `result: escalate` — indeterminate verdict (`target_indeterminate` /
+       `target_set_indeterminate`): the classifier subprocess faulted and bounded retry is exhausted.
+       Return the escalation packet verbatim; the orchestrator PAUSES and asks the user to retry,
+       pick a different target, go offline, or abort. This is NOT an `adaptive-node write-halt` — no
+       plan/ledger exists yet at claim time.
    - **Bundle startup consistency (`target_set_mismatch`, #430):** after claim, `cmdStartup`
      compares the `issue_numbers` persisted in `workflow-state.md` against the `--target-issues`
      set passed at startup. If they differ, the script refuses with `target_set_mismatch`. This

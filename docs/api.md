@@ -23,6 +23,16 @@ When the startup (`/workflow-next` → Startup Step 0) or explicit-target claim 
 - **Root cause**: Offline operation requires local roadmap evidence or an active folder. When neither exists, the target cannot be verified.
 - **Agent remedy**: Run online to validate the target exists on the forge, or create a `.roadmap/issue-N.md` entry offline with explicit scope.
 
+### Verdict: `target_indeterminate` (issue #495)
+
+- **Returned when**: The classifier subprocess spawned by `classifyIssue` in `claim.js` faults transiently (spawn error, signal kill, or timeout) and the fault persists through **all 3 attempts** (1 original + up to 2 retries). A clean non-zero exit from the subprocess is **not** retried — it is determinate (`target_unavailable`). `status === 2` from the subprocess means an active folder already exists and is returned immediately as `owned`, never reaching retry.
+- **Applies to**: `cmdStartup --target-issue N` and `cmdPickNext` (single-issue path only; see `target_set_indeterminate` for the bundle path)
+- **Distinct from**: `target_unavailable` (determinate: the classifier subprocess ran and made a decision — forge unreachable, or classifier exited non-zero); `target_unverified` (determinate: offline + no local evidence)
+- **`result` field**: `result: 'escalate'` — this is the only single-issue startup verdict that carries `result: escalate`. The determinate forge-unreachable verdict `target_unavailable` carries `result: 'refuse'`. Other determinate verdicts (`user_target_red`, `target_unverified`, etc.) do not carry a `result` field on the pre-#495 paths.
+- **Agent routing**: On `result: 'escalate'`, **pause and ask the user** whether to retry or abort. This is the front-door analog of the consent valve (#44/#287) — at claim time no plan or ledger exists, so there is no adaptive-node write-halt ledger marker; the escalation is a plain consent-halt asking a human to decide whether the transient fault has cleared.
+- **Impact**: No active folder is created; `claim: 'none'`; exit non-zero. The `reasoning` field names the error code and signal from the final failed attempt. The `reasoning_class` field is `'classifier_error'`.
+- **On `result: 'refuse'`**: Hard stop — do not retry; diagnose the underlying condition named by `reasoning`.
+
 ### Bundle claim: `--target-issues` / `KAOLA_TARGET_ISSUES` (issue #328)
 
 The startup/claim path accepts a multi-issue bundle target alongside the existing single-issue `--target-issue N` flag.
@@ -33,22 +43,25 @@ The startup/claim path accepts a multi-issue bundle target alongside the existin
 
 **Ambiguity gate (`target_ambiguity`):** If both `--target-issue` (or `KAOLA_TARGET_ISSUE`) and `--target-issues` (or `KAOLA_TARGET_ISSUES`) resolve to non-empty values simultaneously, `cmdStartup` refuses with `target_ambiguity` before any state is written. This gate fires regardless of which combination of flag vs env-var is used.
 
+**`result` field on bundle startup refusals (issue #495):** Determinate failure verdicts (`target_set_unavailable`, `target_set_red`, `target_set_conflicts_active_work`, `target_set_has_closed_issue`) carry `result: 'refuse'` — hard stop, do not retry. The new indeterminate verdict `target_set_indeterminate` carries `result: 'escalate'` — pause and ask the user whether to retry or abort (same consent-halt posture as the single-issue `target_indeterminate` path). Pre-#495 verdicts (e.g. `target_set_unverified`, `target_set_empty`, early validation gates) do not carry a `result` field and remain unchanged.
+
 **Typed refusal codes** returned by `claimExplicitBundle` (all exit non-zero; no mutation on refusal):
 
-| Code | Condition |
-|------|-----------|
-| `target_ambiguity` | Both scalar and multi-target provided simultaneously |
-| `target_set_empty` | Resolved issue list is empty after sort+dedup |
-| `target_set_too_large` | Bundle size exceeds `KAOLA_BUNDLE_MAX_ISSUES` (default 4) |
-| `target_set_not_adaptive` | Bundle requested but `workflow_path` is not `adaptive` |
-| `target_set_conflicts_active_work` | One or more targets overlap an already-claimed active folder |
-| `target_set_has_closed_issue` | One or more targets are already closed on the forge |
-| `target_set_red` | One or more targets are red per the overlap classifier |
-| `target_set_unavailable` | Remote forge validation failed (unreachable; not offline mode) |
-| `target_set_unverified` | Offline with no local evidence for one or more targets |
-| `target_set_label_rollback_failed` | Claim succeeded but in-progress-label rollback on a partial failure itself failed |
-| `target_set_mismatch` | Bundle re-startup — persisted `issue_numbers` does not match the claimed `--target-issues` set (issue #430) |
-| `bundle_state_incoherent` | Handoff or orient — `bundle_id` is present in `workflow-state.md` but `issue_numbers` is absent or inconsistent with `bundle_id` (issue #430) |
+| Code | `result` field | Condition |
+|------|----------------|-----------|
+| `target_ambiguity` | — | Both scalar and multi-target provided simultaneously |
+| `target_set_empty` | — | Resolved issue list is empty after sort+dedup |
+| `target_set_too_large` | — | Bundle size exceeds `KAOLA_BUNDLE_MAX_ISSUES` (default 4) |
+| `target_set_not_adaptive` | — | Bundle requested but `workflow_path` is not `adaptive` |
+| `target_set_conflicts_active_work` | `refuse` | One or more targets overlap an already-claimed active folder |
+| `target_set_has_closed_issue` | `refuse` | One or more targets are already closed on the forge |
+| `target_set_red` | `refuse` | One or more targets are red per the overlap classifier |
+| `target_set_unavailable` | `refuse` | Remote forge validation failed (unreachable; not offline mode) |
+| `target_set_indeterminate` | `escalate` | Classifier subprocess faulted transiently on one or more targets and exhausted all 3 attempts (issue #495); pause and ask the user |
+| `target_set_unverified` | — | Offline with no local evidence for one or more targets |
+| `target_set_label_rollback_failed` | — | Claim succeeded but in-progress-label rollback on a partial failure itself failed |
+| `target_set_mismatch` | — | Bundle re-startup — persisted `issue_numbers` does not match the claimed `--target-issues` set (issue #430) |
+| `bundle_state_incoherent` | — | Handoff or orient — `bundle_id` is present in `workflow-state.md` but `issue_numbers` is absent or inconsistent with `bundle_id` (issue #430) |
 
 **All-or-nothing invariant:** `claimExplicitBundle` validates the complete set before mutating any state. If any single issue in the set fails validation the entire bundle is refused and no active folder is created.
 

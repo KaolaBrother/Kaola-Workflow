@@ -171,10 +171,17 @@ Once main is clean, **delegate to the `workflow-planner`**: it runs `kaola-gitla
 KAOLA_PATH; add `--sink mr` only for a requested MR sink), authors the `## Meta` + `## Nodes` DAG +
 empty `## Node Ledger` into the project's `workflow-plan.md` via Write, runs the validator `--json`
 as a self-check (NOT `--freeze`, NOT `authoring-allowed`), then RUNS `kaola-gitlab-workflow-adaptive-handoff.js --project {project} --json` (freezes, resume-checks, stages roadmap, writes Planning Evidence; does NOT open node1 or record the node1 baseline — `kaola-workflow-plan-run` owns the full node lifecycle including the first node; decision:ask is recorded metadata, not a gate), and RETURNS the handoff packet. It never JUDGES risk or asks the user (decision:ask is recorded metadata); it RUNS the handoff, which freezes mechanically, and returns the packet; it never dispatches. If the project already has a
-`workflow-plan.md` it refuses-and-returns (never overwrite a frozen plan). On a claim refusal — any
-`claim_verdict` that is NOT `acquired`/`owned` — no `workflow-state.md` is written; surface
-`claim_reasoning` and STOP (**fail closed** — do not blind-read a missing state file), never retry a
-different issue.
+`workflow-plan.md` it refuses-and-returns (never overwrite a frozen plan). <!-- PIN: claim-escalate -->
+On a claim refusal — any `claim_verdict` that is NOT `acquired`/`owned` — no `workflow-state.md` is
+written. Surface `claim_reasoning` and classify by `result` (#495):
+- `result: refuse` (e.g. `workflow_path_refused`, `target_occupied`, `user_target_blocked`,
+  `user_target_red`, `user_target_closed`, `target_unavailable`, `target_unverified`, or
+  `claim: none`): **HARD STOP** (**fail closed** — do not retry a different issue, do not
+  blind-read a missing state file). The determinate RED is final.
+- `result: escalate` (`target_indeterminate` / `target_set_indeterminate`): the classifier
+  subprocess faulted and bounded retry is exhausted. **PAUSE and ASK THE USER** — offer to retry,
+  pick a different target, go offline, or abort. This is NOT an `adaptive-node write-halt`;
+  no plan/ledger exists yet at claim time.
 
 **Planner-first control boundary (issue #287).** The main session performs ONLY the allowed non-design preflight above (read repo/session rules, confirm target issue, authoring-allowed switch check, git freshness, non-design target availability), then dispatches `workflow-planner` immediately as the first issue-specific action. The main session MUST NOT pre-author the `## Nodes` DAG, choose role sequence/deps/shapes/write-sets, or pass a mandatory full DAG / `AUTHOR EXACTLY` / `do not redesign` prompt to the planner — the adaptive front-end design is the planner's to own, not the main session's. Doing so earns a typed refusal: `planner_control_boundary_violation`. The ONLY exception is in the bounded unfrozen-plan validator-repair loop (after `handoff_status: plan_invalid` on an UNFROZEN plan): the orchestrator MAY re-dispatch the planner with the verbatim validator errors + the prior plan as repair context, because the planner already owns that unfrozen draft.
 

@@ -82,8 +82,16 @@ when it cannot advance further:
 | `backlog_empty` | Scout JSON `backlog_empty === true && recommended_bundle === null` |
 | `consent_halt` | Workflow state `escalated_to_full: consent` or ledger `consent_halt: pending` |
 | `security_halt` | Workflow state `escalated_to_full: security` (security-only; no consent marker) |
-| `typed_refusal` | A `barrier_failed` envelope carrying triage, or a claim/handoff/validator `{result:'refuse', reason}` |
+| `typed_refusal` | A `barrier_failed` envelope carrying triage, or a claim/handoff/validator `{result:'refuse', reason}` (determinate RED — fail closed) |
 | `repair_limit` | `repair=auto` exhausted the bounded retry (1 mechanical repair/node; 2nd same-node barrier failure after auto-applied repair) |
+
+<!-- PIN: claim-escalate -->
+**Claim escalation** (#495): a claim/startup result: escalate (`target_indeterminate` /
+`target_set_indeterminate`) is NOT a `typed_refusal` — the classifier subprocess faulted and
+bounded retry is exhausted. **PAUSE and ASK THE OPERATOR** before advancing: offer to retry, pick a
+different target, go offline, or abort. This is NOT an `adaptive-node write-halt`; no plan/ledger
+exists yet at claim time. Only after the operator resolves the indeterminate state should the
+autopilot re-attempt the claim stage.
 
 ## Repair consent (KAOLA_AUTOPILOT_REPAIR)
 

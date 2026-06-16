@@ -339,10 +339,16 @@ stopping, print the refusal diagnostics:
 Startup refusal: verdict=$KAOLA_VERDICT reasoning=$KAOLA_REASONING
 ```
 
-If startup returns a typed refusal (`target_occupied`, `user_target_blocked`,
-`user_target_red`, `target_unavailable`, `target_unverified`),
-read the `reasoning` field and either stop, select a different issue, or
-escalate to the user. If startup is unavailable or malformed, stop for repair.
+<!-- PIN: claim-escalate -->
+If startup returns a typed refusal, read the `reasoning` field and classify by `result` (#495):
+- `result: refuse` (`target_occupied`, `user_target_blocked`, `user_target_red`,
+  `target_unavailable`, `target_unverified`): **HARD STOP** — the determinate RED is final; do
+  not blind-proceed to a different issue without explicit user direction.
+- `result: escalate` (`target_indeterminate` / `target_set_indeterminate`): the classifier
+  subprocess faulted and bounded retry is exhausted. **PAUSE and ASK THE USER** — offer to retry,
+  pick a different target, go offline, or abort. This is NOT an `adaptive-node write-halt`;
+  no plan/ledger exists yet at claim time.
+If startup is unavailable or malformed, stop for repair.
 On startup, also run `watch-pr` to archive PR folders for merged or closed PRs
 before selecting new work.
 If `KAOLA_PATH=fast` is set, startup records `workflow_path: fast`.

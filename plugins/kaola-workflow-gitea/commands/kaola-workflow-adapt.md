@@ -102,11 +102,17 @@ Agent(
 **Read the durable state, not the planner's prose.** The structured return is a thin pointer; the
 files are authoritative.
 
-- **Refusal — any `claim_verdict` that is NOT `acquired` or `owned`** (e.g. `workflow_path_refused`,
-  `target_occupied`, `user_target_blocked`, `user_target_red`, `user_target_closed`,
-  `target_unavailable`, `target_unverified`, or `claim: none`): NO `workflow-state.md` was written.
-  Surface `claim_reasoning` and STOP (**fail closed** — treat any non-`acquired`/`owned` verdict as a
-  refusal); do not blind-read a missing state file, and never retry a different issue.
+<!-- PIN: claim-escalate -->
+- **Refusal — any `claim_verdict` that is NOT `acquired` or `owned`**: NO `workflow-state.md` was
+  written. Surface `claim_reasoning` and classify by `result` (#495):
+  - `result: refuse` (e.g. `workflow_path_refused`, `target_occupied`, `user_target_blocked`,
+    `user_target_red`, `user_target_closed`, `target_unavailable`, `target_unverified`, or
+    `claim: none`): **HARD STOP** (**fail closed** — do not retry a different issue, do not
+    blind-read a missing state file). The determinate RED is final.
+  - `result: escalate` (`target_indeterminate` / `target_set_indeterminate`): the classifier
+    subprocess faulted and bounded retry is exhausted. **PAUSE and ASK THE USER** — offer to retry,
+    pick a different target, go offline, or abort. This is NOT an `adaptive-node write-halt`;
+    no plan/ledger exists yet at claim time.
 - **Plan already existed** (`plan_path: null` on an `owned` claim): route to
   `/kaola-workflow-plan-run {project}` — never re-author over a frozen plan.
 - **Success** (`acquired` | `owned`, plan authored): take `{project}` from the return, then re-read
