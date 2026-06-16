@@ -1,0 +1,8 @@
+{"node":"n1-impl","event":"opened","ts":"2026-06-16T12:44:34.475Z"}
+{"node":"n1-impl","event":"closed","ts":"2026-06-16T12:53:58.352Z"}
+{"node":"n2-docs","event":"opened","ts":"2026-06-16T12:54:10.588Z"}
+{"node":"n2-docs","event":"closed","ts":"2026-06-16T12:57:12.568Z"}
+{"node":"n3-review","event":"opened","ts":"2026-06-16T12:57:27.570Z"}
+{"node":"n3-review","event":"closed","ts":"2026-06-16T12:59:47.853Z"}
+{"node":"n4-finalize","event":"opened","ts":"2026-06-16T12:59:47.918Z"}
+{"node":"n4-finalize","event":"closed","ts":"2026-06-16T13:03:44.636Z"}
