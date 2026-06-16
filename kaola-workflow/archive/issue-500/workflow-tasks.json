@@ -1,0 +1,42 @@
+{
+  "source_plan_hash": "4c6881ca19c89292cd0d68906f903f957169a106e772696ad4d390fa2d9ee855",
+  "tasks": [
+    {
+      "id": "n1-probe-l1-write-overlap",
+      "role": "code-explorer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n2-probe-l2-leg-isolation",
+      "role": "code-explorer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n3-probe-l3-speculative-open",
+      "role": "code-explorer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n4-critique-l1-safety",
+      "role": "adversarial-verifier",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n5-converge-recommendation",
+      "role": "planner",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n6-finalize",
+      "role": "finalize",
+      "status": "completed",
+      "ledger_status": "complete"
+    }
+  ],
+  "last_synced_from_ledger": "2026-06-16T06:23:34.597Z"
+}

@@ -1,0 +1,10 @@
+{
+  "project": "issue-500",
+  "sweptClasses": [
+    {
+      "reasonClass": "deferred_red_chain",
+      "sample": "claude:512",
+      "count": 1
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{"timestamp":"2026-06-16T05:29:50.083Z","event":"open","nodeId":"n1-probe-l1-write-overlap","nonce":"75faa2939541","by":"adaptive-node"}
+{"timestamp":"2026-06-16T05:29:50.434Z","event":"open","nodeId":"n2-probe-l2-leg-isolation","nonce":"4f716663b522","by":"adaptive-node"}
+{"timestamp":"2026-06-16T05:29:50.770Z","event":"open","nodeId":"n3-probe-l3-speculative-open","nonce":"ef667b1d891e","by":"adaptive-node"}
+{"timestamp":"2026-06-16T05:48:20.488Z","event":"close","nodeId":"n1-probe-l1-write-overlap","nonce":"75faa2939541","by":"adaptive-node"}
+{"timestamp":"2026-06-16T05:48:21.232Z","event":"close","nodeId":"n2-probe-l2-leg-isolation","nonce":"4f716663b522","by":"adaptive-node"}
+{"timestamp":"2026-06-16T05:48:21.749Z","event":"close","nodeId":"n3-probe-l3-speculative-open","nonce":"ef667b1d891e","by":"adaptive-node"}
+{"timestamp":"2026-06-16T05:48:30.855Z","event":"open","nodeId":"n4-critique-l1-safety","nonce":"42bcc86ae2f1","by":"adaptive-node"}
+{"timestamp":"2026-06-16T06:07:57.819Z","event":"close","nodeId":"n4-critique-l1-safety","nonce":"42bcc86ae2f1","by":"adaptive-node"}
+{"timestamp":"2026-06-16T06:07:58.177Z","event":"open","nodeId":"n5-converge-recommendation","nonce":"7b2cdb1763e4","by":"adaptive-node"}
+{"timestamp":"2026-06-16T06:17:27.546Z","event":"close","nodeId":"n5-converge-recommendation","nonce":"7b2cdb1763e4","by":"adaptive-node"}
+{"timestamp":"2026-06-16T06:17:27.854Z","event":"open","nodeId":"n6-finalize","nonce":"5f0ff11db1d8","by":"adaptive-node"}
+{"timestamp":"2026-06-16T06:23:34.532Z","event":"close","nodeId":"n6-finalize","nonce":"5f0ff11db1d8","by":"adaptive-node"}

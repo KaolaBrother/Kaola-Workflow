@@ -1,0 +1,17 @@
+{
+  "headSha": "975028b14a5c33de5ea95f31005fda9efb9cf1ff",
+  "workTreeHash": "clean",
+  "startedAt": "2026-06-16T07:52:19.980Z",
+  "completedAt": "2026-06-16T08:02:03.761Z",
+  "source": "npm-default",
+  "chains": [
+    {
+      "name": "claude",
+      "exitCode": 0,
+      "command": "npm run test:kaola-workflow:claude",
+      "duration_ms": 583755,
+      "accepted_red": true,
+      "accepted_red_issue": "512"
+    }
+  ]
+}
