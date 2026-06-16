@@ -115,8 +115,24 @@ above (session effort = `dispatch.codex_reasoning_effort` when non-null). Pass `
   record evidence parent-side, `seal`, `join`.
 - `FANOUT_CAP` (default 4) is a runtime limit, not a planning cap; `top-up` drains wider
   frontiers. `KAOLA_FANOUT_CAP_READONLY` (default 8) applies to read-only batches.
-- Serial (`max_concurrent=1`) is the degraded mode; `opening` marker + `reconcile` handle
-  batch crash-resume. `test_thrash` ≥ 3: escalate via `write-halt --reason test_thrash`.
+- Serial (`max_concurrent=1`) is the degraded mode; write parallelism requires
+  `KAOLA_LANE_CONTAINMENT=true`. `opening` marker + `reconcile` handle batch crash-resume.
+  `test_thrash` ≥ 3: escalate via `write-halt --reason test_thrash`.
+
+<!-- PIN: leg-isolation-recipe -->
+**Write-parallelism activation recipe (#500 L2).** The per-leg isolation engine is COMPLETE
+and live (not dormant — #463 Closes, AC18 PASS). Three toggles together activate it:
+1. `KAOLA_LANE_CONTAINMENT=true` — enable the lane-containment scheduler.
+2. `KAOLA_LEG_ISOLATION=true` — provision a dedicated worktree leg for each write sibling.
+3. `open-ready --write-overlap-consent` — explicitly consent to the shared-infra co-open for
+   frontiers whose plan `## Meta` sets `write_overlap_policy: coarse`. Absent either `KAOLA_LEG_ISOLATION`
+   or `--write-overlap-consent`, the lane-group formation check short-circuits and the frontier
+   serial-degrades safely — no cross-contamination, no silent loss.
+
+<!-- CARD: speculative-open -->
+On `open-next` → `gate_not_complete` with a speculative gate (policy `speculative_open_policy:
+consent` in plan `## Meta`): `docs/plan-run-cards/speculative-open.md`
+(covers `open-ready --speculative-consent`, `discard-speculative`, gate verdict:fail rollback)
 - **Write-leg dispatch discipline (#463 AC3).** Isolation is **discipline-dependent, not transparent** —
   the Agent tool has no cwd parameter and a provisioned `.kw/legs/<project>/<node>` leg does NOT auto-redirect
   a leg agent's edits. Dispatch each leg with its **absolute `legPath`**: every `Edit`/`Write` uses an

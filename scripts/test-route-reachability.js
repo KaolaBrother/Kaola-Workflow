@@ -233,6 +233,53 @@ for (const ed of codexEditions) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// T8: <!-- PIN: leg-isolation-recipe --> comment + the `--write-overlap-consent` literal must
+// appear in each of the 6 plan-run surfaces (3 Claude commands + 3 Codex SKILLs). Added by
+// n3-prose-wire (#500 L2); fail-closed: unconditional assert() per surface — do NOT use the
+// self-disarming anyHasPin gate (T5 known-bug pattern we explicitly do not replicate here).
+// ---------------------------------------------------------------------------
+{
+  const planRunSurfaces = [
+    'commands/kaola-workflow-plan-run.md',
+    'plugins/kaola-workflow/skills/kaola-workflow-plan-run/SKILL.md',
+    'plugins/kaola-workflow-gitlab/commands/kaola-workflow-plan-run.md',
+    'plugins/kaola-workflow-gitlab/skills/kaola-workflow-plan-run/SKILL.md',
+    'plugins/kaola-workflow-gitea/commands/kaola-workflow-plan-run.md',
+    'plugins/kaola-workflow-gitea/skills/kaola-workflow-plan-run/SKILL.md',
+  ];
+  for (const f of planRunSurfaces) {
+    const content = fs.readFileSync(path.join(REPO, f), 'utf8');
+    assert(content.includes('<!-- PIN: leg-isolation-recipe -->'),
+      `T8: ${f} must contain <!-- PIN: leg-isolation-recipe --> comment (n3-prose-wire, #500 L2)`);
+    assert(content.includes('--write-overlap-consent'),
+      `T8: ${f} must contain "--write-overlap-consent" literal (n3-prose-wire, #500 L2)`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// T9: <!-- PIN: speculative-open --> comment + the `--speculative-consent` literal must appear
+// in each of the 6 plan-run surfaces (3 Claude commands + 3 Codex SKILLs). Added by
+// n3-prose-wire (#500 L3); fail-closed: unconditional assert() per surface.
+// ---------------------------------------------------------------------------
+{
+  const planRunSurfaces = [
+    'commands/kaola-workflow-plan-run.md',
+    'plugins/kaola-workflow/skills/kaola-workflow-plan-run/SKILL.md',
+    'plugins/kaola-workflow-gitlab/commands/kaola-workflow-plan-run.md',
+    'plugins/kaola-workflow-gitlab/skills/kaola-workflow-plan-run/SKILL.md',
+    'plugins/kaola-workflow-gitea/commands/kaola-workflow-plan-run.md',
+    'plugins/kaola-workflow-gitea/skills/kaola-workflow-plan-run/SKILL.md',
+  ];
+  for (const f of planRunSurfaces) {
+    const content = fs.readFileSync(path.join(REPO, f), 'utf8');
+    assert(content.includes('<!-- CARD: speculative-open -->'),
+      `T9: ${f} must contain <!-- CARD: speculative-open --> comment (n3-prose-wire, #500 L3)`);
+    assert(content.includes('--speculative-consent'),
+      `T9: ${f} must contain "--speculative-consent" literal (n3-prose-wire, #500 L3)`);
+  }
+}
+
 if (failed) {
   console.error(`\nRoute-reachability test FAILED: ${failed} failure(s), ${passed} passed.`);
   process.exit(1);

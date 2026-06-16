@@ -14,6 +14,7 @@ that situation.
 | [repair-routing.md](repair-routing.md) | Barrier refusal / route-findings / repair dispatch |
 | [reopen-complete-node.md](reopen-complete-node.md) | Reopening a complete writer node |
 | [frontier-batch.md](frontier-batch.md) | Parallel frontier fan-out (open-batch / top-up / seal) |
+| [speculative-open.md](speculative-open.md) | Speculative open (policy consent → open-ready --speculative-consent / discard-speculative) |
 
 ## How to use these cards
 

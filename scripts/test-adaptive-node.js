@@ -4927,7 +4927,9 @@ function rtHarness(initialFiles, opts) {
     const planPath = path.join(projDir, 'workflow-plan.md');
     const plan = [
       '# Workflow Plan — test-project', '',
-      '## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md', '',
+      '## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md',
+      ...(opts.writeOverlapPolicy ? ['write_overlap_policy: ' + opts.writeOverlapPolicy] : []),
+      '',
       '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |',
       '| --- | --- | --- | --- | --- | --- |',
@@ -6055,6 +6057,128 @@ function rtHarness(initialFiles, opts) {
     try { execFileSync('git', ['-C', repoRoot, 'merge-base', '--is-ancestor', M1, M2], STDIO_Q); m2DescendsM1 = true; } catch (_) { m2DescendsM1 = false; }
     assert(m2DescendsM1, 'S5-MULTI-LEVEL: M2 descends from M1 (the dependency-level commit chain), got is-ancestor=false for M1=' + M1 + ' M2=' + M2);
     cleanup(repoRoot);
+  }
+
+  // =========================================================================
+  // #500-SHARED-INFRA-COARSE (leg-couple wire) — shared-infra/coarse-policy co-open.
+  //
+  // The formation gate (tryFormLaneGroup) must forward --write-overlap-consent to the
+  // validator's --parallel-safe so a shared-infra pair can RELAX and co-open. The wire
+  // must be leg-COUPLED: gated on resolveLegIsolation(env) && consent TOGETHER — consent-
+  // alone (toggle OFF) must still serial-degrade (#283/#303 guard). Tests drive the REAL
+  // adaptive-node + plan-validator subprocesses in a REAL git repo.
+  // =========================================================================
+  {
+    // FIXTURE: scripts/aa.js + scripts/bb.js → both areaForPath === 'scripts' ∈ SHARED_INFRA
+    // → disjointWriteSets verdict:yellow/kind:'shared-infra'. Policy coarse → relaxable.
+    // Note: existing tests' plain makeLaneRepo() calls stay byte-identical (no writeOverlapPolicy).
+    const coarseRepo = () => makeLaneRepo({ writeOverlapPolicy: 'coarse', aSet: 'scripts/aa.js', bSet: 'scripts/bb.js' });
+
+    // -----------------------------------------------------------------------
+    // #500-DISCRIMINATOR: direct validator --parallel-safe probe (NOT in production code).
+    // Proves the RELAXATION path (writeOverlapRelaxable) — not the green short-circuit.
+    // Positive (with consent): result==='ok' AND out.relaxed[0].kind==='shared-infra'.
+    // Negative (without consent): result==='refuse' (not relaxed).
+    // -----------------------------------------------------------------------
+    {
+      const { repoRoot, planPath } = coarseRepo();
+      // Positive: with consent → relaxed, not refused.
+      const rPos = runVal(repoRoot, [planPath, '--parallel-safe', '--nodes', 'A,B', '--write-overlap-consent', '--json']);
+      assert(rPos.result === 'ok', '#500-DISCRIMINATOR positive: --parallel-safe ok with consent, got ' + JSON.stringify(rPos));
+      assert(Array.isArray(rPos.relaxed) && rPos.relaxed.length > 0 && rPos.relaxed[0].kind === 'shared-infra',
+        '#500-DISCRIMINATOR positive: relaxed[0].kind==="shared-infra" (relaxation path, not green short-circuit), got ' + JSON.stringify(rPos.relaxed));
+      // Negative: without consent → refuse.
+      const rNeg = runVal(repoRoot, [planPath, '--parallel-safe', '--nodes', 'A,B', '--json']);
+      assert(rNeg.result === 'refuse', '#500-DISCRIMINATOR negative: --parallel-safe refuses WITHOUT consent (shared-infra not relaxable), got ' + JSON.stringify(rNeg));
+      cleanup(repoRoot);
+    }
+
+    // -----------------------------------------------------------------------
+    // ★ #500-POSITIVE-E2E: toggle ON + consent ON (LEG_ON + --write-overlap-consent) →
+    //   shared-infra group FORMS via relaxation, legs provisioned, disjoint writes synthesized.
+    //   (Translated from SYNTH-DISJOINT with shared-infra fixture + scripts/ subdir.)
+    // -----------------------------------------------------------------------
+    {
+      const { repoRoot, cacheDir, planPath } = coarseRepo();
+      // Open: shared-infra pair co-opens with consent.
+      const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON);
+      assert(r.result === 'ok', '#500-POSITIVE-E2E: open-ready ok, got ' + JSON.stringify(r));
+      assert(r.laneGroup && Array.isArray(r.laneGroup.members), '#500-POSITIVE-E2E: laneGroup formed (shared-infra relaxed), got ' + JSON.stringify(r.laneGroup));
+      assert(r.laneGroup.members.includes('A') && r.laneGroup.members.includes('B'), '#500-POSITIVE-E2E: members [A,B]');
+      // Running-set: legs provisioned.
+      const rs = readRS(cacheDir);
+      assert(rs && rs.lane_group && rs.lane_group.legs, '#500-POSITIVE-E2E: running-set lane_group.legs present');
+      for (const id of ['A', 'B']) {
+        const leg = rs.lane_group.legs[id];
+        assert(leg && typeof leg.legPath === 'string', '#500-POSITIVE-E2E: legs.' + id + '.legPath present');
+        assert(leg && typeof leg.baseline === 'string', '#500-POSITIVE-E2E: legs.' + id + '.baseline present');
+      }
+      // Write declared files INTO legs (scripts/ subdir must exist under each leg).
+      const legA = rs.lane_group.legs.A.legPath;
+      const legB = rs.lane_group.legs.B.legPath;
+      fs.mkdirSync(path.join(legA, 'scripts'), { recursive: true });
+      fs.mkdirSync(path.join(legB, 'scripts'), { recursive: true });
+      writeEvidence(cacheDir, 'A');
+      writeEvidence(cacheDir, 'B');
+      fs.writeFileSync(path.join(legA, 'scripts', 'aa.js'), '// A shared-infra leg work\n');
+      fs.writeFileSync(path.join(legB, 'scripts', 'bb.js'), '// B shared-infra leg work\n');
+      const base = rs.lane_group.legs.A.baseline;
+      // Close A (non-last) → deferred.
+      const rA = runNode(repoRoot, ['close-node', '--node-id', 'A', '--project', 'test-project', '--json'], LEG_ON);
+      assert(rA.result === 'ok' && rA.barrier === 'deferred_to_group', '#500-POSITIVE-E2E: close A deferred, got ' + JSON.stringify(rA));
+      // Close B (last) → group_passed + synthesized.
+      const rB = runNode(repoRoot, ['close-node', '--node-id', 'B', '--project', 'test-project', '--json'], LEG_ON);
+      assert(rB.result === 'ok' && rB.barrier === 'group_passed' && rB.synthesized === true,
+        '#500-POSITIVE-E2E: close B group_passed + synthesized, got ' + JSON.stringify(rB));
+      const M = rB.mergeCommit;
+      assert(typeof M === 'string' && M.length >= 7, '#500-POSITIVE-E2E: B carries mergeCommit M, got ' + JSON.stringify(rB));
+      // HEAD advanced to M.
+      assert(gitOut(repoRoot, ['rev-parse', 'HEAD']) === M, '#500-POSITIVE-E2E: HEAD advanced to M');
+      // M contains BOTH files.
+      assert(gitOut(repoRoot, ['rev-parse', M + ':scripts/aa.js']) !== '' && gitOut(repoRoot, ['rev-parse', M + ':scripts/bb.js']) !== '',
+        '#500-POSITIVE-E2E: M contains BOTH scripts/aa.js and scripts/bb.js');
+      // diff base→M == exactly the two declared files.
+      const mDiff = gitOut(repoRoot, ['diff-tree', '-r', '--name-only', base, M]).split('\n').map(s => s.trim()).filter(Boolean).sort();
+      assert(JSON.stringify(mDiff) === JSON.stringify(['scripts/aa.js', 'scripts/bb.js']),
+        '#500-POSITIVE-E2E: diff base→M == union declared {scripts/aa.js, scripts/bb.js}, got ' + JSON.stringify(mDiff));
+      // Legs torn down.
+      const wts = worktreePaths(repoRoot);
+      assert(!wts.some(p => p.indexOf(path.join('.kw', 'legs')) !== -1),
+        '#500-POSITIVE-E2E: no .kw/legs worktree survives clean completion, got ' + JSON.stringify(wts));
+      cleanup(repoRoot);
+    }
+
+    // -----------------------------------------------------------------------
+    // ★ #500-NEGATIVE-A (THE #283/#303 COUPLING GUARD): toggle OFF, consent ON.
+    //   Old un-coupled call would forward consent → shared-infra FORMS → SKIP legs.
+    //   Leg-coupled fix: resolveLegIsolation(env)=false → forward=false → REFUSE → DEGRADE.
+    //   Assert: !r.laneGroup, !rs.lane_group, r.opened.length===1 (serial degrade).
+    // -----------------------------------------------------------------------
+    {
+      const { repoRoot, cacheDir } = coarseRepo();
+      // KAOLA_LANE_CONTAINMENT=1 only (no KAOLA_LEG_ISOLATION) — containment ON, leg toggle OFF.
+      const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], ON);
+      assert(!r.laneGroup, '#500-NEGATIVE-A: toggle OFF + consent ON → NO laneGroup (serial degrade, not co-open), got ' + JSON.stringify(r.laneGroup));
+      const rs = readRS(cacheDir);
+      assert(!rs || !rs.lane_group, '#500-NEGATIVE-A: running-set has no lane_group (toggle-gated)');
+      assert(Array.isArray(r.opened) && r.opened.length === 1, '#500-NEGATIVE-A: exactly ONE write opened (serial degrade), got ' + JSON.stringify(r.opened && r.opened.map(n => n.id)));
+      cleanup(repoRoot);
+    }
+
+    // -----------------------------------------------------------------------
+    // ★ #500-NEGATIVE-B: toggle ON, consent OFF → no relaxation → DEGRADE.
+    //   Assert: !r.laneGroup, !rs.lane_group, r.opened.length===1.
+    // -----------------------------------------------------------------------
+    {
+      const { repoRoot, cacheDir } = coarseRepo();
+      // LEG_ON (KAOLA_LANE_CONTAINMENT=1, KAOLA_LEG_ISOLATION=1), but NO --write-overlap-consent arg.
+      const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], LEG_ON);
+      assert(!r.laneGroup, '#500-NEGATIVE-B: toggle ON + consent OFF → NO laneGroup (no relaxation), got ' + JSON.stringify(r.laneGroup));
+      const rs = readRS(cacheDir);
+      assert(!rs || !rs.lane_group, '#500-NEGATIVE-B: running-set has no lane_group (consent-gated)');
+      assert(Array.isArray(r.opened) && r.opened.length === 1, '#500-NEGATIVE-B: exactly ONE write opened (serial degrade), got ' + JSON.stringify(r.opened && r.opened.map(n => n.id)));
+      cleanup(repoRoot);
+    }
   }
 }
 

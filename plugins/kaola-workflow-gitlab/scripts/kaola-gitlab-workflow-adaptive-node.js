@@ -3342,14 +3342,21 @@ function laneWriteUnion(writeNodes) {
 // (belt-and-suspenders). On overlap (result:'refuse') the caller DEGRADES to opening a
 // single write node serially — exactly the flag-OFF path. Reached only under
 // resolveLaneContainment(env) === true (the caller's guard); never invoked flag-OFF.
+// writeOverlapConsent (#500 leg-couple): forwarded ONLY when the caller's leg-coupled
+// conjunction (resolveLegIsolation && consent) holds — so a shared-infra group can only
+// form when legs WILL be provisioned (formation coupled to provisioning). Disjoint-green
+// pairs short-circuit at validator :1895 before writeOverlapRelaxable, so consent value
+// is irrelevant for them (byte-identical on the disjoint path).
 //
 // @returns { ok:true, members:string[], group_id, write_union:string[] }
 //        | { ok:false, reason:'overlapping_write_sets', overlapping? }
 // ---------------------------------------------------------------------------
-function tryFormLaneGroup(writeNodes, planPath, shell) {
+function tryFormLaneGroup(writeNodes, planPath, shell, writeOverlapConsent) {
   const ids = writeNodes.map(n => n.id);
   if (ids.length < 2) return { ok: false, reason: 'too_few_write_nodes' };
-  const ps = shell(validatorPath, [planPath, '--parallel-safe', '--nodes', ids.join(','), '--json']);
+  const vArgs = [planPath, '--parallel-safe', '--nodes', ids.join(','), '--json'];
+  if (writeOverlapConsent) vArgs.push('--write-overlap-consent');
+  const ps = shell(validatorPath, vArgs);
   if (!(ps.exitCode === 0 && ps.result === 'ok')) {
     return { ok: false, reason: 'overlapping_write_sets', overlapping: ps.overlapping || [] };
   }
@@ -3364,11 +3371,12 @@ function tryFormLaneGroup(writeNodes, planPath, shell) {
 
 // ---------------------------------------------------------------------------
 // #463 Slice 2 (D-419 P2 write-axis) — per-leg `.kw` git-worktree provisioning for the write-lane
-// scheduler. DORMANT in S2: legs are PROVISIONED (a real `git worktree add` per co-opened write
-// member) + telemetered + reconcile/teardown-aware, but NOTHING is written INTO them and the
-// dispatched member's working_dir STAYS parent-side (routing-into-legs is Slice 3). Provisioning
-// is gated by resolveLegIsolation(env) && opts.writeOverlapConsent && a formed lane group — when any
-// is false NO leg is provisioned, NO lane_group.legs key is written ⇒ flag-OFF byte-identical.
+// scheduler (ADR-0010: containment, not construction — legs isolate write scope; they do not
+// redirect the dispatched member's working_dir, which stays parent-side until Slice 3). Legs are
+// PROVISIONED (a real `git worktree add` per co-opened write member) + telemetered +
+// reconcile/teardown-aware. Provisioning is gated by resolveLegIsolation(env) &&
+// opts.writeOverlapConsent && a formed lane group — when any is false NO leg is provisioned, NO
+// lane_group.legs key is written ⇒ flag-OFF byte-identical.
 //
 // resolveLegIsolation — boolean toggle mirroring resolveLaneContainment's exact truthiness logic
 // (only an explicit 1/true/yes opts in; fail-closed default FALSE). The new KAOLA_LEG_ISOLATION env.
@@ -3814,7 +3822,7 @@ function runOpenReady(opts) {
     // ≥2 disjoint write frontier; on overlap (or flag OFF) DEGRADE to a single serial write.
     const containment = resolveLaneContainment(process.env);
     if (containment && writeNodes.length >= 2) {
-      const grp = tryFormLaneGroup(writeNodes, planPath, shell);
+      const grp = tryFormLaneGroup(writeNodes, planPath, shell, resolveLegIsolation(process.env) && opts.writeOverlapConsent);
       if (grp.ok) {
         // #437 §1.3 cap: a write lane group respects the WRITE cap (resolveFanoutCap, not the read
         // cap) AND --max as a single unit. The members are already pairwise-disjoint (parallel-safe
@@ -3888,14 +3896,15 @@ function runOpenReady(opts) {
     groupBaselineSha = (gb.recordBase && gb.recordBase.base) ? gb.recordBase.base : (gb.base || null);
   }
 
-  // #463 Slice 2: DORMANT per-leg `.kw` worktree provisioning. Gated by ALL THREE: resolveLegIsolation
-  // (the KAOLA_LEG_ISOLATION toggle) AND opts.writeOverlapConsent (the per-run, NEVER-persisted consent
-  // flag — mirrors opts.speculativeConsent) AND a formed lane group (groupForm). When any is false ⇒ NO
-  // leg is provisioned, `legs` stays empty ⇒ no lane_group.legs key (flag-OFF byte-identical). Provision
-  // a leg per co-opened write member INSIDE Phase 1, BEFORE the ledger flip, so a refusal here leaves a
-  // reconcilable state (no ledger row has flipped yet). working_dir STAYS parent-side (S2 dormant —
-  // routing-into-legs is S3). On any provisionLeg failure, teardown every leg already provisioned THIS
-  // call (clean rollback — no partial leg set) and refuse.
+  // #463 Slice 2: per-leg `.kw` worktree provisioning (ADR-0010: containment, not construction).
+  // Gated by ALL THREE: resolveLegIsolation (the KAOLA_LEG_ISOLATION toggle) AND
+  // opts.writeOverlapConsent (the per-run, NEVER-persisted consent flag — mirrors
+  // opts.speculativeConsent) AND a formed lane group (groupForm). When any is false ⇒ NO leg is
+  // provisioned, `legs` stays empty ⇒ no lane_group.legs key (flag-OFF byte-identical). Provision
+  // a leg per co-opened write member INSIDE Phase 1, BEFORE the ledger flip, so a refusal here
+  // leaves a reconcilable state (no ledger row has flipped yet). working_dir STAYS parent-side
+  // (Slice 3 routes into legs). On any provisionLeg failure, teardown every leg already
+  // provisioned THIS call (clean rollback — no partial leg set) and refuse.
   let legs = null;
   if (groupForm && resolveLegIsolation(process.env) && opts.writeOverlapConsent) {
     let root; try { root = getRoot(); } catch (_) { root = process.cwd(); }
