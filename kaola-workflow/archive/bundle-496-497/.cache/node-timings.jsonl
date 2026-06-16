@@ -1,0 +1,10 @@
+{"node":"n1-fix-sink-merge","event":"opened","ts":"2026-06-16T01:20:48.410Z"}
+{"node":"n1-fix-sink-merge","event":"closed","ts":"2026-06-16T02:37:07.821Z"}
+{"node":"n2-wire-closure-audit","event":"opened","ts":"2026-06-16T02:37:07.884Z"}
+{"node":"n2-wire-closure-audit","event":"closed","ts":"2026-06-16T03:05:57.261Z"}
+{"node":"n3-review","event":"opened","ts":"2026-06-16T03:05:57.324Z"}
+{"node":"n3-review","event":"closed","ts":"2026-06-16T03:22:16.024Z"}
+{"node":"n4-docs","event":"opened","ts":"2026-06-16T03:22:16.121Z"}
+{"node":"n4-docs","event":"closed","ts":"2026-06-16T03:37:10.413Z"}
+{"node":"n5-finalize","event":"opened","ts":"2026-06-16T03:37:10.479Z"}
+{"node":"n5-finalize","event":"closed","ts":"2026-06-16T03:50:47.367Z"}

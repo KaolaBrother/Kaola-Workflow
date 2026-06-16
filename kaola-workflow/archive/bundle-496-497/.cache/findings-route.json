@@ -1,0 +1,9 @@
+[
+  {
+    "finding_id": "id=R1 scope=pre_existing action=follow_up status=open severity=low fix_role=none rationale=outer-git-worktree-list-probe-in-assertWorktreeClean-retains-pre-existing-fail-open-catch-return-outside-#496-scope-non-blocking",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "n/a"
+  }
+]
