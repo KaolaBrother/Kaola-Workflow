@@ -269,7 +269,7 @@ function main(argv) {
       stdio: 'pipe',
       shell: false,
       encoding: 'utf8',
-      timeout: 600000,
+      timeout: resolveTimeoutMs(process.env),
     });
     const duration_ms = Date.now() - t0;
 
@@ -319,8 +319,15 @@ function main(argv) {
   return overallExitCode;
 }
 
+// #512: per-chain spawnSync timeout — overridable so a passing-but-slow chain (claude ~574s)
+// is captured, not killed. Default raised to 900000 (15 min) from the prior hardcoded 600000.
+function resolveTimeoutMs(env) {
+  const v = parseInt((env && env.KAOLA_RUN_CHAINS_TIMEOUT_MS) || '', 10);
+  return (Number.isFinite(v) && v > 0) ? v : 900000;
+}
+
 if (require.main === module) {
   process.exit(main(process.argv));
 }
 
-module.exports = { main, KNOWN_CHAINS, CHAIN_COMMANDS, resolveChains };
+module.exports = { main, KNOWN_CHAINS, CHAIN_COMMANDS, resolveChains, resolveTimeoutMs };

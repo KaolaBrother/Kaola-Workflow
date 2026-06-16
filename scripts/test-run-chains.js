@@ -301,6 +301,23 @@ try {
 }
 
 // ---------------------------------------------------------------------------
+// T12 (#512): resolveTimeoutMs unit — env override, default 900000, invalid fallback.
+// ---------------------------------------------------------------------------
+{
+  const { resolveTimeoutMs } = require('./kaola-workflow-run-chains.js');
+  // unset env → default 900000
+  assert(resolveTimeoutMs({}) === 900000, 'T12: unset env returns default 900000');
+  // valid override
+  assert(resolveTimeoutMs({ KAOLA_RUN_CHAINS_TIMEOUT_MS: '1200000' }) === 1200000, 'T12: valid override 1200000 is respected');
+  // invalid string → fallback
+  assert(resolveTimeoutMs({ KAOLA_RUN_CHAINS_TIMEOUT_MS: 'abc' }) === 900000, 'T12: "abc" falls back to 900000');
+  // zero → fallback (not > 0)
+  assert(resolveTimeoutMs({ KAOLA_RUN_CHAINS_TIMEOUT_MS: '0' }) === 900000, 'T12: "0" falls back to 900000');
+  // negative → fallback
+  assert(resolveTimeoutMs({ KAOLA_RUN_CHAINS_TIMEOUT_MS: '-5' }) === 900000, 'T12: "-5" falls back to 900000');
+}
+
+// ---------------------------------------------------------------------------
 // Final result
 // ---------------------------------------------------------------------------
 if (failed > 0) {

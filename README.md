@@ -794,6 +794,7 @@ The detailed durable-state map lives in `docs/workflow-state-contract.md`. Keep 
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `KAOLA_GH_REMOTE_TIMEOUT_MS` | `30000` | Timeout in milliseconds for GitHub/GitLab/Gitea API calls during closure audit, active-folder checks, remote validation, and sink-merge/sink-pr gh calls. Set lower in tests to simulate API hangs. Values above 600000ms (10 minutes) are clamped to 600000ms to prevent hang protection bypass (issue #185) |
+| `KAOLA_RUN_CHAINS_TIMEOUT_MS` | `900000` | Per-chain `spawnSync` kill ceiling in milliseconds for `kaola-workflow-run-chains.js`. Default 900000 (15 min), raised from the prior hardcoded 600000 because the claude chain runs ~574s standalone and was being false-killed. Invalid/zero/negative values fall back to the default. No upper clamp (local test suite, not a remote-hang risk). Receipt schema unchanged (issue #512) |
 | `KAOLA_WORKFLOW_OFFLINE` | `0` | Skip GitHub/GitLab/Gitea calls for local tests or air-gapped usage. When unset and remote validation fails, startup returns `target_unavailable` refusal instead of silently proceeding |
 | `KAOLA_WORKFLOW_DEBUG_CWD` | (unset) | DEV/TEST ONLY — when set, `sink-merge.js` writes its final cwd to this file |
 | `KAOLA_WORKFLOW_FORCE_FF_FAIL` | (unset) | DEV/TEST ONLY — fail first N fast-forward merge attempts (GitHub, GitLab, and Gitea) |

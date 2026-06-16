@@ -167,6 +167,8 @@ The Finalization sink is responsible for delivering completed work to the reposi
 
 - **`KAOLA_GH_REMOTE_TIMEOUT_MS`** (default 30000) — Timeout in milliseconds for all forge API calls made by `ghExec`, `glabExec`, and `teaExec`. Controls how long to wait for GitHub, GitLab, or Gitea API responses during issue state checks, closure audits, and label operations. When a call times out, affected operations return `unavailable` or `skipped_timeout` sentinels instead of failing hard. Set lower in tests to simulate API hangs (e.g., `KAOLA_GH_REMOTE_TIMEOUT_MS=300` to timeout after 300ms). Applies to all three forge editions (GitHub, GitLab, Gitea). Non-numeric, zero, or negative values fall back to the 30000ms default (issue #184). Values above 600000ms (10 minutes) are clamped to 600000ms; this cap prevents excessively large values from silently disabling the hang protection (issue #185).
 
+- **`KAOLA_RUN_CHAINS_TIMEOUT_MS`** (default 900000) — Per-chain `spawnSync` kill ceiling in milliseconds for `kaola-workflow-run-chains.js`. Raised from the prior hardcoded 600000 (10 min) to 900000 (15 min) because the claude chain was measured at ~574s standalone and was being false-killed at the old ceiling, producing spurious `chains_red` at finalize. Non-numeric, zero, or negative values fall back to the 900000ms default. **No upper clamp** — a long-running local test suite is not a remote-hang risk (contrast with `KAOLA_GH_REMOTE_TIMEOUT_MS`'s #185 clamp). The `.cache/chain-receipt.json` schema is unchanged; this knob governs only the kill ceiling (issue #512).
+
 ### Bundle Lane
 
 - **`KAOLA_TARGET_ISSUES`** — Comma-separated list of issue numbers for an explicit bundle claim (e.g. `KAOLA_TARGET_ISSUES=42,47,53`). Equivalent to `--target-issues 42,47,53`. Must not be set together with `KAOLA_TARGET_ISSUE` (triggers `target_ambiguity` refusal). Refused with `target_set_not_adaptive` on fast/full paths. Numbers are sorted and deduped before validation.
@@ -340,6 +342,8 @@ node scripts/kaola-workflow-run-chains.js [--accept-known-red <name>:<issue>] --
 ```
 
 `exit: 0` means the chain passed; any other value is a failure. The receipt is read by `--finalize-check` (self-host mode) to enforce `chains_unverified`, `chains_stale`, and `chains_red` refusals. The receipt records a `source` field (`npm-default`). The `--finalize-check` chain gate is **name-agnostic** — it iterates whatever `chains[]` the receipt records and refuses if any is non-zero and unwaived.
+
+**Configurable kill ceiling (#512).** The per-chain `spawnSync` timeout is configurable via `KAOLA_RUN_CHAINS_TIMEOUT_MS` (default 900000ms / 15 min; invalid/zero/negative → default; no upper clamp). The receipt schema is unchanged — only the kill ceiling is governed by this variable. See `resolveTimeoutMs(env)` exported from `kaola-workflow-run-chains.js`.
 
 **Dual-mode finalize gate (#475) — self-host vs consumer.** `--finalize-check` auto-detects the repo kind (by whether `package.json` declares any `test:kaola-workflow:*` script) and gates accordingly. `kaola-workflow-run-chains.js` is **self-host-only**:
 
