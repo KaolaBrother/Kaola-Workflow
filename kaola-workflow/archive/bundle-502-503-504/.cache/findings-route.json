@@ -1,0 +1,16 @@
+[
+  {
+    "finding_id": "id=R1 scope=in_scope action=fix status=resolved severity=high fix_role=implementer rationale=#502 in-process regenerateRoadmap regression resolved; narrow guard x4 + in-process callers catch + walkthrough Cases M/L",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R2 scope=in_scope action=follow_up status=deferred severity=low fix_role=none rationale=non-blocking; deferred per prior review",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "n/a"
+  }
+]

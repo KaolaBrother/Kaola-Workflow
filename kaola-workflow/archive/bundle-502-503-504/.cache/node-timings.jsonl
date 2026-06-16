@@ -1,0 +1,16 @@
+{"node":"n1-roadmap-empty-source-guard","event":"opened","ts":"2026-06-16T08:12:45.236Z"}
+{"node":"n1-roadmap-empty-source-guard","event":"closed","ts":"2026-06-16T08:43:02.872Z"}
+{"node":"n2-resume-ambiguity-guard","event":"opened","ts":"2026-06-16T08:43:13.178Z"}
+{"node":"n2-resume-ambiguity-guard","event":"closed","ts":"2026-06-16T08:58:26.268Z"}
+{"node":"n3-fast-compliance-backstop","event":"opened","ts":"2026-06-16T08:58:26.333Z"}
+{"node":"n3-fast-compliance-backstop","event":"closed","ts":"2026-06-16T09:59:22.852Z"}
+{"node":"n4-code-review","event":"opened","ts":"2026-06-16T09:59:22.941Z"}
+{"node":"n4-code-review","event":"closed","ts":"2026-06-16T10:17:05.654Z"}
+{"node":"n5-doc-update","event":"opened","ts":"2026-06-16T10:17:05.723Z"}
+{"node":"n4-code-review","event":"opened","ts":"2026-06-16T10:56:22.169Z"}
+{"node":"n4-code-review","event":"opened","ts":"2026-06-16T11:07:20.507Z"}
+{"node":"n4-code-review","event":"closed","ts":"2026-06-16T11:13:30.127Z"}
+{"node":"n5-doc-update","event":"opened","ts":"2026-06-16T11:13:30.216Z"}
+{"node":"n5-doc-update","event":"closed","ts":"2026-06-16T11:16:56.111Z"}
+{"node":"n6-finalize","event":"opened","ts":"2026-06-16T11:16:56.188Z"}
+{"node":"n6-finalize","event":"closed","ts":"2026-06-16T11:35:06.888Z"}
