@@ -1,0 +1,16 @@
+[
+  {
+    "finding_id": "id=R1 scope=out_of_scope action=follow_up status=open severity=medium fix_role=none rationale=boundary-2 CLI-fetch swallow is edition-uniform (root gh-catch + forge glab/tea catch) and surfaces transient faults as determinate target_unavailable; hardening it to emit indeterminate would activate the forge forward-compat handlers; explicitly out of #495 scope, file as follow-up",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R2 scope=in_scope action=none status=resolved severity=low fix_role=none rationale=classifySubprocessError returns 'owned_exit' for status===2 but the caller short-circuits to verdict:'owned' before consulting it; dead-defensive, harmless, not a defect",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  }
+]

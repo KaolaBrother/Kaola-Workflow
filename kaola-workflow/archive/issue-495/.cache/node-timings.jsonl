@@ -1,0 +1,14 @@
+{"node":"n1-claim-retry-envelope","event":"opened","ts":"2026-06-16T00:50:10.946Z"}
+{"node":"n1-claim-retry-envelope","event":"closed","ts":"2026-06-16T01:35:59.907Z"}
+{"node":"n2-forge-claim-ports","event":"opened","ts":"2026-06-16T01:36:20.641Z"}
+{"node":"n2-forge-claim-ports","event":"closed","ts":"2026-06-16T02:05:21.760Z"}
+{"node":"n4-adversarial-distinctness","event":"opened","ts":"2026-06-16T02:07:14.530Z"}
+{"node":"n4-adversarial-distinctness","event":"closed","ts":"2026-06-16T02:25:50.953Z"}
+{"node":"n3-result-routing-prose","event":"opened","ts":"2026-06-16T02:25:51.022Z"}
+{"node":"n3-result-routing-prose","event":"closed","ts":"2026-06-16T02:57:39.830Z"}
+{"node":"n5-code-review","event":"opened","ts":"2026-06-16T02:57:39.878Z"}
+{"node":"n5-code-review","event":"closed","ts":"2026-06-16T03:19:40.403Z"}
+{"node":"n6-docs","event":"opened","ts":"2026-06-16T03:19:40.474Z"}
+{"node":"n6-docs","event":"closed","ts":"2026-06-16T03:29:50.980Z"}
+{"node":"n7-finalize","event":"opened","ts":"2026-06-16T03:29:51.023Z"}
+{"node":"n7-finalize","event":"closed","ts":"2026-06-16T03:31:26.783Z"}

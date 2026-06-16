@@ -1,0 +1,14 @@
+{"timestamp":"2026-06-16T00:50:10.946Z","event":"open","nodeId":"n1-claim-retry-envelope","nonce":"f95ff6f883d7","by":"adaptive-node"}
+{"timestamp":"2026-06-16T01:35:59.907Z","event":"close","nodeId":"n1-claim-retry-envelope","nonce":"f95ff6f883d7","by":"adaptive-node"}
+{"timestamp":"2026-06-16T01:36:20.641Z","event":"open","nodeId":"n2-forge-claim-ports","nonce":"529990fd3536","by":"adaptive-node"}
+{"timestamp":"2026-06-16T02:05:21.761Z","event":"close","nodeId":"n2-forge-claim-ports","nonce":"529990fd3536","by":"adaptive-node"}
+{"timestamp":"2026-06-16T02:07:14.530Z","event":"open","nodeId":"n4-adversarial-distinctness","nonce":"d676a5ea94e7","by":"adaptive-node"}
+{"timestamp":"2026-06-16T02:25:50.957Z","event":"close","nodeId":"n4-adversarial-distinctness","nonce":"d676a5ea94e7","by":"adaptive-node"}
+{"timestamp":"2026-06-16T02:25:51.258Z","event":"open","nodeId":"n3-result-routing-prose","nonce":"5fc9c5b2fc43","by":"adaptive-node"}
+{"timestamp":"2026-06-16T02:57:39.830Z","event":"close","nodeId":"n3-result-routing-prose","nonce":"5fc9c5b2fc43","by":"adaptive-node"}
+{"timestamp":"2026-06-16T02:57:40.389Z","event":"open","nodeId":"n5-code-review","nonce":"f3761612d2cc","by":"adaptive-node"}
+{"timestamp":"2026-06-16T03:19:40.403Z","event":"close","nodeId":"n5-code-review","nonce":"f3761612d2cc","by":"adaptive-node"}
+{"timestamp":"2026-06-16T03:19:41.093Z","event":"open","nodeId":"n6-docs","nonce":"7860d84e0468","by":"adaptive-node"}
+{"timestamp":"2026-06-16T03:29:50.981Z","event":"close","nodeId":"n6-docs","nonce":"7860d84e0468","by":"adaptive-node"}
+{"timestamp":"2026-06-16T03:29:51.465Z","event":"open","nodeId":"n7-finalize","nonce":"303515e36cd7","by":"adaptive-node"}
+{"timestamp":"2026-06-16T03:31:26.783Z","event":"close","nodeId":"n7-finalize","nonce":"303515e36cd7","by":"adaptive-node"}
