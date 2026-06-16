@@ -1,0 +1,30 @@
+[
+  {
+    "finding_id": "id=R1 scope=needs_user_decision action=follow_up status=open severity=low fix_role=none rationale=JC3 cross-edition malformed-JSON-body asymmetry (forge target_unavailable vs root indeterminate); both-safe non-claiming verdicts; proper fix is in forge.js parseJson OUTSIDE the frozen write-set; file a #307-parity follow-up rather than expand the write-set or regress #507",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R2 scope=in_scope action=none status=resolved severity=info fix_role=none rationale=JC1 transient-fallback escalation is correct",
+    "file": "real gh/glab network faults set e.status (clean_nonzero, retry-free); the killed-fallback only fires on a genuinely indeterminate fault",
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R3 scope=in_scope action=none status=resolved severity=info fix_role=none rationale=JC2 determinate verdict-layer guarantee preserved by root b2-b + forge b2-b (status=1 -> target_unavailable, not retried) and gitlab empty/non-JSON exit-0 tests; changed pre-existing tests correctly reflect status-less-error reclassification",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R4 scope=out_of_scope action=follow_up status=open severity=low fix_role=none rationale=JC2 gitlab/gitea end-to-end claim-flow determinate-refuse assertion was repurposed to the indeterminate path and not re-pinned at the forge claim-flow layer for the determinate case; behavior is unchanged (claim.js mapping untouched; root #495(c) covers the flow end-to-end; forge verdict layer covered by b2-b)",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  }
+]
