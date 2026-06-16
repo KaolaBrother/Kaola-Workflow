@@ -1,0 +1,9 @@
+[
+  {
+    "finding_id": "id=R1-paren scope=in_scope action=none status=open severity=low fix_role=none rationale=reworded comment ends \"#463 AC18))\"",
+    "file": "second paren closes the outer \"scheduler (\" so parens are balanced and correct; visually dense but a // comment with zero behavior impact; byte-identical x4 (edition-sync green). Non-blocking, optional polish.",
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "n/a"
+  }
+]
