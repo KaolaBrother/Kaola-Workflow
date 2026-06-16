@@ -1,0 +1,16 @@
+[
+  {
+    "finding_id": "id=R1 scope=in_scope action=follow_up status=open severity=low fix_role=none rationale=stale \"until Slice 3\" fragment in reworded L2 comment at adaptive-node.js:3374 (+3 ports); Slice 3 shipped (AC18 PASS); zero-behavior comment wording",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R2 scope=in_scope action=follow_up status=open severity=low fix_role=none rationale=T9 block-header comment says PIN:speculative-open but assert correctly checks present CARD:speculative-open marker (test-route-reachability.js); cosmetic, assertion correct",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  }
+]
