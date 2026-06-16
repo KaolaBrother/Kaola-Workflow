@@ -430,6 +430,65 @@ function classify(issue, activeFolders) {
   return { verdict: 'green', reasoning: 'no file-set overlap, no dependency block; file sets are disjoint' };
 }
 
+// #507: boundary-2 fetch error classification — mirrors root classifier classifyFetchError.
+// Partitions the error from a glab/forge CLI fetch into three buckets:
+//   'spawn_fault'   — CLI never started (ENOENT/EAGAIN/EMFILE/ENOMEM; e.status is null, no signal)
+//   'killed'        — CLI was signalled or timed out (e.killed===true or e.signal present)
+//   'clean_nonzero' — CLI ran and exited non-zero (e.status is a non-null number); determinate
+function classifyFetchError(e) {
+  if (e.status != null) return 'clean_nonzero';
+  if (e.killed === true || e.signal) return 'killed';
+  if (e.code && ['ENOENT', 'EAGAIN', 'EMFILE', 'ENOMEM'].indexOf(e.code) !== -1) return 'spawn_fault';
+  return 'killed'; // unknown non-status fault — treat as transient
+}
+
+// #507: overridable backoff for boundary-2 retry. Tests set KAOLA_CLASSIFIER_BACKOFF_MS=0.
+function fetchBackoffMs() {
+  const v = parseInt(process.env.KAOLA_CLASSIFIER_BACKOFF_MS || '', 10);
+  return (Number.isFinite(v) && v >= 0) ? v : 50;
+}
+
+// #507: synchronous sleep for retry backoff (Atomics.wait — safe in sync path).
+function syncSleepFetch(ms) {
+  if (ms <= 0) return;
+  try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch (_) {}
+}
+
+// #507: shared fetch-with-retry logic used by both classifyIssue (in-process) and cmdClassify.
+// Returns { issue } on success; { error: 'target_unavailable'|'indeterminate', payload } on failure.
+function fetchIssueWithRetry(issueIid, forgeViewFn) {
+  const MAX_FETCH_ATTEMPTS = 3;
+  const backoffMs = fetchBackoffMs();
+  let lastFetchErr = null;
+  let lastFetchErrClass = '';
+  for (let attempt = 0; attempt < MAX_FETCH_ATTEMPTS; attempt++) {
+    if (attempt > 0) syncSleepFetch(backoffMs);
+    try {
+      const issue = forgeViewFn(issueIid);
+      return { issue };
+    } catch (e) {
+      lastFetchErr = e;
+      lastFetchErrClass = classifyFetchError(e);
+      if (lastFetchErrClass === 'clean_nonzero') break; // determinate — do not retry
+    }
+  }
+  if (lastFetchErrClass === 'clean_nonzero') {
+    return { error: 'target_unavailable', payload: { verdict: 'target_unavailable', reasoning: 'glab issue fetch failed; refusing to claim outside KAOLA_WORKFLOW_OFFLINE=1' } };
+  }
+  const errCode = (lastFetchErr && lastFetchErr.code) || '';
+  const signal = (lastFetchErr && lastFetchErr.signal) || '';
+  return {
+    error: 'indeterminate',
+    payload: {
+      verdict: 'indeterminate',
+      reasoning_class: 'classifier_error',
+      reasoning: 'glab issue fetch transient fault after ' + MAX_FETCH_ATTEMPTS + ' attempts' +
+        (errCode ? ' (code=' + errCode + ')' : '') +
+        (signal ? ' (signal=' + signal + ')' : '')
+    }
+  };
+}
+
 function classifyIssue(issueIid, root) {
   const config = readOrCreateConfig();
   if (config.parallel_mode !== 'auto') {
@@ -455,12 +514,10 @@ function classifyIssue(issueIid, root) {
     return classify(localRoadmapIssue(issueIid, repoRoot), activeFolders);
   }
 
-  let issue;
-  try {
-    issue = forge.viewIssue(issueIid);
-  } catch (_) {
-    return { verdict: 'target_unavailable', reasoning: 'glab issue fetch failed; refusing to claim outside KAOLA_WORKFLOW_OFFLINE=1' };
-  }
+  // #507: bounded retry on transient fetch faults; clean_nonzero is determinate and not retried.
+  const fetchResult = fetchIssueWithRetry(issueIid, forge.viewIssue.bind(forge));
+  if (fetchResult.error) return fetchResult.payload;
+  const issue = fetchResult.issue;
 
   const _st = (issue.state || '').toLowerCase();
   if (_st !== 'open' && _st !== 'closed') {
@@ -512,13 +569,13 @@ function cmdClassify() {
     return;
   }
 
-  let issue;
-  try {
-    issue = forge.viewIssue(args.issue);
-  } catch (_) {
-    process.stdout.write(JSON.stringify({ verdict: 'target_unavailable', reasoning: 'glab issue fetch failed; refusing to claim outside KAOLA_WORKFLOW_OFFLINE=1' }) + '\n');
+  // #507: bounded retry on transient fetch faults; clean_nonzero is determinate and not retried.
+  const fetchResult2 = fetchIssueWithRetry(args.issue, forge.viewIssue.bind(forge));
+  if (fetchResult2.error) {
+    process.stdout.write(JSON.stringify(fetchResult2.payload) + '\n');
     return;
   }
+  const issue = fetchResult2.issue;
 
   const _st2 = (issue.state || '').toLowerCase();
   if (_st2 !== 'open' && _st2 !== 'closed') {

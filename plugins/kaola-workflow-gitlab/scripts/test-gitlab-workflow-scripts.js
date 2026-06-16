@@ -2269,40 +2269,52 @@ function testInstallProfilesFeaturesTableHandling() {
   }
 }
 
-// --- Task 5: fail-open fix — classifier must return target_unavailable on forge failure ---
+// --- Task 5: fail-open fix — classifier must not silently pass on forge failure ---
+// #507 update: a generic/unknown forge error (no e.status/e.signal) is classified as transient
+// ('killed' fallback) and retried, then surfaces as verdict:indeterminate (not target_unavailable).
+// A clean-nonzero (e.status set) remains determinate → target_unavailable.
 
-// testGitLabClassifierFailClosed: in-process classifyIssue returns target_unavailable when forge throws
+// testGitLabClassifierFailClosed: in-process classifyIssue with transient error → indeterminate
+// #507: new behavior — a plain Error (no status/signal/code) → classifyFetchError fallback 'killed'
+// → transient → retried 3x → verdict:indeterminate. Old behavior was target_unavailable.
 withForge({
-  viewIssue() { throw new Error('network error'); }
+  viewIssue() { throw new Error('network error'); } // no status/signal → transient → indeterminate
 }, () => {
+  process.env.KAOLA_CLASSIFIER_BACKOFF_MS = '0';
   const root = tempRoot('kw-gl-t5-classify-fail-');
   try {
     const result = classifier.classifyIssue(200, root);
-    assert.strictEqual(result.verdict, 'target_unavailable',
-      'classifyIssue must return target_unavailable when forge.viewIssue throws, got: ' + result.verdict);
-    assert(/refusing to claim outside KAOLA_WORKFLOW_OFFLINE/.test(result.reasoning),
-      'classifyIssue reasoning must mention KAOLA_WORKFLOW_OFFLINE, got: ' + result.reasoning);
+    assert.strictEqual(result.verdict, 'indeterminate',
+      '#507: classifyIssue transient forge error → verdict:indeterminate (got: ' + result.verdict + ')');
+    assert.strictEqual(result.reasoning_class, 'classifier_error',
+      '#507: indeterminate must carry reasoning_class:classifier_error, got: ' + result.reasoning_class);
     console.log('testGitLabClassifierFailClosed: PASS');
   } finally {
+    delete process.env.KAOLA_CLASSIFIER_BACKOFF_MS;
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
-// testGitLabStartupFailClosed: claimExplicitTarget returns target_unavailable when forge throws
+// testGitLabStartupFailClosed: claimExplicitTarget with transient error → target_indeterminate/escalate
+// #507: new behavior — transient forge error → indeterminate → routes to result:escalate, not refuse.
 withForge({
-  viewIssue() { throw new Error('network error'); }
+  viewIssue() { throw new Error('network error'); } // no status/signal → transient → indeterminate
 }, () => {
+  process.env.KAOLA_CLASSIFIER_BACKOFF_MS = '0';
   const root = tempRoot('kw-gl-t5-startup-fail-');
   try {
     const result = claim.claimExplicitTarget(root, { targetIssue: 201 });
-    assert.strictEqual(result.status, 'target_unavailable',
-      'claimExplicitTarget must return status:target_unavailable when forge throws, got: ' + result.status);
+    assert.strictEqual(result.status, 'target_indeterminate',
+      '#507: claimExplicitTarget transient forge error → target_indeterminate (got: ' + result.status + ')');
+    assert.strictEqual(result.result, 'escalate',
+      '#507: claimExplicitTarget transient forge error → result:escalate (got: ' + result.result + ')');
     assert.strictEqual(result.claim, 'none',
-      'claimExplicitTarget must return claim:none on target_unavailable, got: ' + result.claim);
+      'claimExplicitTarget must return claim:none on forge failure, got: ' + result.claim);
     assert(!fs.existsSync(path.join(root, 'kaola-workflow', 'issue-201')),
-      'claimExplicitTarget must not create an active folder when target_unavailable');
+      'claimExplicitTarget must not create an active folder when forge fails');
     console.log('testGitLabStartupFailClosed: PASS');
   } finally {
+    delete process.env.KAOLA_CLASSIFIER_BACKOFF_MS;
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
@@ -4346,6 +4358,94 @@ function testForbiddenOnly341() {
   console.log('testForbiddenOnly341 (#341): PASSED');
 }
 
+// #507: boundary-2 classifier fetch-retry tests (gitlab edition)
+// Tests use withForge to inject a throwing viewIssue stub that records call count.
+// Tests are synchronous (classifyIssue is sync); they use assert from require('assert').
+function testGitlabBoundary2FetchRetry507() {
+  // (a) persistent transient (spawn_fault) → classifyIssue returns verdict:indeterminate
+  {
+    let callCount = 0;
+    const transientErr = new Error('spawn failed');
+    // spawn_fault: no e.status, no e.signal, ENOENT code
+    transientErr.code = 'ENOENT';
+    const root = tempRoot('kw-gl-b2a-root-');
+    const tempHome = tempRoot('kw-gl-b2a-home-');
+    try {
+      const result = withForge({ viewIssue: function() { callCount++; throw transientErr; } }, function() {
+        process.env.KAOLA_CLASSIFIER_BACKOFF_MS = '0';
+        try {
+          return classifier.classifyIssue(99, root);
+        } finally {
+          delete process.env.KAOLA_CLASSIFIER_BACKOFF_MS;
+        }
+      });
+      assert.strictEqual(result.verdict, 'indeterminate',
+        '#507(gl-b2a): persistent transient → verdict:indeterminate (got ' + result.verdict + ')');
+      assert.strictEqual(result.reasoning_class, 'classifier_error',
+        '#507(gl-b2a): indeterminate must carry reasoning_class:classifier_error');
+      assert.ok(callCount >= 3,
+        '#507(gl-b2a): transient retried to MAX_ATTEMPTS — callCount=' + callCount + ' (expected >=3)');
+    } finally {
+      try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) {}
+      try { fs.rmSync(tempHome, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  // (b) clean_nonzero (determinate) → verdict:target_unavailable, NOT retried (callCount===1)
+  {
+    let callCount = 0;
+    const cleanErr = new Error('glab exited 1');
+    cleanErr.status = 1; // clean non-zero: determinate
+    const root = tempRoot('kw-gl-b2b-root-');
+    try {
+      const result = withForge({ viewIssue: function() { callCount++; throw cleanErr; } }, function() {
+        process.env.KAOLA_CLASSIFIER_BACKOFF_MS = '0';
+        try {
+          return classifier.classifyIssue(99, root);
+        } finally {
+          delete process.env.KAOLA_CLASSIFIER_BACKOFF_MS;
+        }
+      });
+      assert.strictEqual(result.verdict, 'target_unavailable',
+        '#507(gl-b2b): clean_nonzero → verdict:target_unavailable (got ' + result.verdict + ')');
+      assert.strictEqual(callCount, 1,
+        '#507(gl-b2b): determinate NOT retried — callCount=' + callCount + ' (expected 1)');
+    } finally {
+      try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  // (c) forge claimExplicitTarget with transient classifyIssue → target_indeterminate result:escalate
+  // Exercises the #495 forward-compat handler in the gitlab claim.js.
+  {
+    const root = tempRoot('kw-gl-b2c-root-');
+    try {
+      fs.mkdirSync(path.join(root, 'kaola-workflow', '.roadmap'), { recursive: true });
+      const transientErr = new Error('spawn failed');
+      transientErr.code = 'ENOENT';
+      // Stub viewIssue on the forge module — classifier.classifyIssue calls forge.viewIssue,
+      // and claim.classifyIssue delegates to classifier.classifyIssue → routes through the
+      // #495 forward-compat indeterminate handler in claimExplicitTarget.
+      const result = withForge({ viewIssue: function() { throw transientErr; } }, function() {
+        process.env.KAOLA_CLASSIFIER_BACKOFF_MS = '0';
+        try {
+          return claim.claimExplicitTarget(root, { targetIssue: 99 });
+        } finally {
+          delete process.env.KAOLA_CLASSIFIER_BACKOFF_MS;
+        }
+      });
+      assert.strictEqual(result && result.status, 'target_indeterminate',
+        '#507(gl-b2c): forge claimExplicitTarget persistent transient → target_indeterminate (got ' + JSON.stringify(result) + ')');
+      assert.strictEqual(result && result.result, 'escalate',
+        '#507(gl-b2c): result must be escalate (got ' + JSON.stringify(result) + ')');
+    } finally {
+      try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  console.log('testGitlabBoundary2FetchRetry507 (#507): PASSED');
+}
+
 testGitlabFinalizeRowMainDirect338();
 testInstallSchemaPruneManifest332Gitlab();
 testGitlabPreflight266();
@@ -4357,6 +4457,7 @@ testGitlabMirrorCleanCrossRef339();
 testGitlabAdaptiveNodeOperatorHint445();
 testGitlabPlanValidatorRefusalMatrix401();
 testForbiddenOnly341();
+testGitlabBoundary2FetchRetry507();
 
 testGitLabRoadmapInitIssueExclusiveAndUpdate()
   .then(() => {

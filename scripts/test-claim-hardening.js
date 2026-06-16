@@ -428,6 +428,122 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
   fs.rmSync(repoDir, { recursive: true, force: true });
 }
 
+// --- #507: boundary-2 classifier CLI-fetch transient retry (KAOLA_GH_MOCK_SCRIPT seam) --------
+// boundary-2 = the classifier's own internal gh-fetch catch. Before this fix the catch discards
+// the error and always emits determinate target_unavailable, even for transient spawn faults.
+//
+// Tests drive the REAL classifier subprocess via KAOLA_GH_MOCK_SCRIPT to inject:
+//   (b2-a) transient spawn_fault (SIGKILL) → retried → indeterminate after MAX_ATTEMPTS
+//   (b2-b) clean_nonzero (determinate) → NOT retried (counter===1) → target_unavailable
+//   (b2-c) transient → success (retry succeeds on attempt 2) → verdict: green/yellow/etc.
+{
+  const { execFileSync } = require('child_process');
+  const CLASSIFIER = path.join(__dirname, 'kaola-workflow-classifier.js');
+
+  // Helper: run the classifier subprocess and return parsed stdout.
+  function runClassifier(extraEnv) {
+    const e = Object.assign({}, process.env, {
+      KAOLA_GH_REMOTE_TIMEOUT_MS: '500',
+      KAOLA_CLASSIFIER_BACKOFF_MS: '0',
+    }, extraEnv || {});
+    // use a temp dir as cwd so active-folders scanning doesn't see real state
+    const tmpCwd = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-b2cwd-')));
+    try {
+      const out = execFileSync('node', [CLASSIFIER, 'classify', '--issue', '99'], {
+        cwd: tmpCwd, encoding: 'utf8', env: e
+      });
+      const lines = out.trim().split('\n').filter(l => l.trim());
+      const last = lines[lines.length - 1];
+      return last ? JSON.parse(last) : null;
+    } catch (err) {
+      // non-zero exit: classifier emitted error JSON on stdout
+      const out = String(err.stdout || '');
+      const lines = out.trim().split('\n').filter(l => l.trim());
+      for (let i = lines.length - 1; i >= 0; i--) {
+        try { return JSON.parse(lines[i]); } catch (_) {}
+      }
+      return null;
+    } finally {
+      try { fs.rmSync(tmpCwd, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  const tmpB2Dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-507-b2-')));
+
+  // --- (b2-a) persistent transient gh-fetch fault → indeterminate (NOT target_unavailable) ---
+  // Pre-fix: the catch discards e, emits target_unavailable on first failure, counter stays 1.
+  // Post-fix: mock is called 3 times (MAX_ATTEMPTS), then emits indeterminate.
+  {
+    const counterFile = path.join(tmpB2Dir, 'counter-b2a.txt');
+    fs.writeFileSync(counterFile, '0');
+    // Mock gh: always SIGKILL → transient fault at the gh layer
+    const mockScript = path.join(tmpB2Dir, 'mock-b2a.js');
+    fs.writeFileSync(mockScript,
+      'const fs = require("fs");\n' +
+      'const c = parseInt(fs.readFileSync(' + JSON.stringify(counterFile) + ', "utf8") || "0", 10) + 1;\n' +
+      'fs.writeFileSync(' + JSON.stringify(counterFile) + ', String(c));\n' +
+      'process.kill(process.pid, "SIGKILL");\n'
+    );
+    const r = runClassifier({ KAOLA_GH_MOCK_SCRIPT: mockScript });
+    const cnt = parseInt(fs.readFileSync(counterFile, 'utf8') || '0', 10);
+    assert(r && r.verdict === 'indeterminate',
+      '#507(b2-a): persistent transient gh-fetch → verdict:indeterminate (got ' + JSON.stringify(r) + ')');
+    assert(r && r.reasoning_class === 'classifier_error',
+      '#507(b2-a): indeterminate must carry reasoning_class:classifier_error (got ' + JSON.stringify(r) + ')');
+    assert(cnt >= 3,
+      '#507(b2-a): transient retried to MAX_ATTEMPTS — counter=' + cnt + ' (expected >=3)');
+  }
+
+  // --- (b2-b) clean_nonzero (determinate) → target_unavailable, NOT retried ---
+  // Pre-fix: also emits target_unavailable with counter 1 (swallowed in catch).
+  // Post-fix: still emits target_unavailable (clean_nonzero is determinate) but classifier
+  //           explicitly does NOT retry it — counter must stay 1.
+  {
+    const counterFile = path.join(tmpB2Dir, 'counter-b2b.txt');
+    fs.writeFileSync(counterFile, '0');
+    // Mock gh: exits with code 1 (clean non-zero, genuine "issue gone" scenario)
+    const mockScript = path.join(tmpB2Dir, 'mock-b2b.js');
+    fs.writeFileSync(mockScript,
+      'const fs = require("fs");\n' +
+      'const c = parseInt(fs.readFileSync(' + JSON.stringify(counterFile) + ', "utf8") || "0", 10) + 1;\n' +
+      'fs.writeFileSync(' + JSON.stringify(counterFile) + ', String(c));\n' +
+      'process.stdout.write("error: issue not found\\n");\n' +
+      'process.exit(1);\n'  // clean non-zero: determinate
+    );
+    const r = runClassifier({ KAOLA_GH_MOCK_SCRIPT: mockScript });
+    const cnt = parseInt(fs.readFileSync(counterFile, 'utf8') || '0', 10);
+    assert(r && r.verdict === 'target_unavailable',
+      '#507(b2-b): clean_nonzero gh-fetch → verdict:target_unavailable (got ' + JSON.stringify(r) + ')');
+    assert(cnt === 1,
+      '#507(b2-b): determinate clean_nonzero must NOT be retried — counter=' + cnt + ' (expected 1)');
+  }
+
+  // --- (b2-c) transient → success on attempt 2 → yields real classify result (not indeterminate) ---
+  {
+    const counterFile = path.join(tmpB2Dir, 'counter-b2c.txt');
+    fs.writeFileSync(counterFile, '0');
+    // Mock gh: SIGKILL on first call, returns valid issue JSON on second
+    const mockScript = path.join(tmpB2Dir, 'mock-b2c.js');
+    fs.writeFileSync(mockScript,
+      'const fs = require("fs");\n' +
+      'const c = parseInt(fs.readFileSync(' + JSON.stringify(counterFile) + ', "utf8") || "0", 10) + 1;\n' +
+      'fs.writeFileSync(' + JSON.stringify(counterFile) + ', String(c));\n' +
+      'if (c <= 1) { process.kill(process.pid, "SIGKILL"); }\n' +
+      // Return a valid issue JSON (open, no blocking labels)
+      'process.stdout.write(JSON.stringify({ number: 99, title: "test", body: "", state: "OPEN", labels: [] }) + "\\n");\n' +
+      'process.exit(0);\n'
+    );
+    const r = runClassifier({ KAOLA_GH_MOCK_SCRIPT: mockScript });
+    const cnt = parseInt(fs.readFileSync(counterFile, 'utf8') || '0', 10);
+    assert(r && r.verdict !== 'indeterminate' && r.verdict !== 'target_unavailable',
+      '#507(b2-c): transient then success → real classify result, not indeterminate/unavailable (got ' + JSON.stringify(r) + ')');
+    assert(cnt >= 2,
+      '#507(b2-c): retry fired (count>1) — counter=' + cnt + ' (expected >=2)');
+  }
+
+  fs.rmSync(tmpB2Dir, { recursive: true, force: true });
+}
+
 if (failed > 0) {
   console.error('claim-hardening tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;

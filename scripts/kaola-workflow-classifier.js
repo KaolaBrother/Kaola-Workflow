@@ -34,6 +34,31 @@ function ghExec(args) {
   return execFileSync('gh', args, { encoding: 'utf8' }).trim();
 }
 
+// #507: boundary-2 fetch error classification — mirrors claim.js classifySubprocessError.
+// Partitions the error from a gh/forge CLI fetch into three buckets:
+//   'spawn_fault'   — CLI never started (ENOENT/EAGAIN/EMFILE/ENOMEM; e.status is null, no signal)
+//   'killed'        — CLI was signalled or timed out (e.killed===true or e.signal present)
+//   'clean_nonzero' — CLI ran and exited non-zero (e.status is a non-null number); determinate
+function classifyFetchError(e) {
+  if (e.status != null) return 'clean_nonzero';
+  if (e.killed === true || e.signal) return 'killed';
+  if (e.code && ['ENOENT', 'EAGAIN', 'EMFILE', 'ENOMEM'].indexOf(e.code) !== -1) return 'spawn_fault';
+  return 'killed'; // unknown non-status fault — treat as transient
+}
+
+// #507: overridable backoff for boundary-2 retry (mirrors claim.js classifierTimeoutMs pattern).
+// Tests set KAOLA_CLASSIFIER_BACKOFF_MS=0 to keep the suite fast.
+function fetchBackoffMs() {
+  const v = parseInt(process.env.KAOLA_CLASSIFIER_BACKOFF_MS || '', 10);
+  return (Number.isFinite(v) && v >= 0) ? v : 50;
+}
+
+// #507: synchronous sleep for retry backoff (Atomics.wait — safe in sync path).
+function syncSleepFetch(ms) {
+  if (ms <= 0) return;
+  try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch (_) {}
+}
+
 function getRepoOwnerName() {
   const raw = ghExec(['repo', 'view', '--json', 'owner,name']);
   if (!raw) return null;
@@ -603,14 +628,46 @@ function cmdClassify(argv) {
     return;
   }
 
-  // Online path
+  // Online path — #507: bounded retry on transient fetch faults (spawn_fault/killed).
+  // clean_nonzero is determinate (CLI ran and decided) and is NOT retried.
   let issue;
-  try {
-    const raw = ghExec(['issue', 'view', String(args.issue), '--json', 'number,title,body,labels,state']);
-    issue = JSON.parse(raw);
-  } catch (_) {
-    process.stdout.write(JSON.stringify({ verdict: 'target_unavailable', reasoning: 'gh issue fetch failed; refusing to claim outside KAOLA_WORKFLOW_OFFLINE=1' }) + '\n');
-    return;
+  {
+    const MAX_FETCH_ATTEMPTS = 3;
+    const backoffMs = fetchBackoffMs();
+    let lastFetchErr = null;
+    let lastFetchErrClass = '';
+    let fetchSucceeded = false;
+    for (let attempt = 0; attempt < MAX_FETCH_ATTEMPTS; attempt++) {
+      if (attempt > 0) syncSleepFetch(backoffMs);
+      try {
+        const raw = ghExec(['issue', 'view', String(args.issue), '--json', 'number,title,body,labels,state']);
+        issue = JSON.parse(raw);
+        fetchSucceeded = true;
+        break;
+      } catch (e) {
+        lastFetchErr = e;
+        lastFetchErrClass = classifyFetchError(e);
+        if (lastFetchErrClass === 'clean_nonzero') break; // determinate — do not retry
+        // transient: loop for next attempt
+      }
+    }
+    if (!fetchSucceeded) {
+      if (lastFetchErrClass === 'clean_nonzero') {
+        process.stdout.write(JSON.stringify({ verdict: 'target_unavailable', reasoning: 'gh issue fetch failed; refusing to claim outside KAOLA_WORKFLOW_OFFLINE=1' }) + '\n');
+        return;
+      }
+      // Persistent transient fault — emit indeterminate so callers can escalate (#507)
+      const errCode = (lastFetchErr && lastFetchErr.code) || '';
+      const signal = (lastFetchErr && lastFetchErr.signal) || '';
+      process.stdout.write(JSON.stringify({
+        verdict: 'indeterminate',
+        reasoning_class: 'classifier_error',
+        reasoning: 'gh issue fetch transient fault after ' + MAX_FETCH_ATTEMPTS + ' attempts' +
+          (errCode ? ' (code=' + errCode + ')' : '') +
+          (signal ? ' (signal=' + signal + ')' : '')
+      }) + '\n');
+      return;
+    }
   }
 
   if ((issue.state || '').toLowerCase() === 'closed') {

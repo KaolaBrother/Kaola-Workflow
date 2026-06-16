@@ -5168,6 +5168,56 @@ function testAssertWorktreeCleanFailsClosedOnProbeFault() {
   }
 }
 
+// #506: assertWorktreeClean must FAIL CLOSED on a transient `git worktree list` probe fault (the
+// OUTER probe — the one that enumerates linked worktrees, distinct from the #496 inner status probe).
+// A fault in the outer probe silently returned as 'nothing to guard', skipping the entire clean-check
+// before the destructive `git worktree remove --force`. The fix: a bounded retry, and if the probe
+// still fails, throw a descriptive refusal (unverifiable list → cannot prove safety → refuse).
+// KAOLA_WORKFLOW_FORCE_WT_LIST_FAIL is the test-only injection hook.
+function testAssertWorktreeCleanFailsClosedOnListProbeFault() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-wt-list-fault-')));
+  try {
+    initGitRepo(tmp);
+    // Provision a CLEAN linked worktree on a feature branch (no uncommitted changes).
+    spawnSync('git', ['branch', 'workflow/issue-9506'], { cwd: tmp, encoding: 'utf8' });
+    const wt = path.join(tmp, '.kw', 'wt-9506');
+    spawnSync('git', ['worktree', 'add', wt, 'workflow/issue-9506'], { cwd: tmp, encoding: 'utf8' });
+    const mainBefore = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+
+    // Inject a list-probe fault: `git worktree list` throws. A fail-OPEN guard returns silently
+    // as "nothing to guard"; a fail-CLOSED guard must refuse (cannot prove safety → reject).
+    const result = spawnSync(process.execPath, [
+      sinkMergeScript, '--project', 'issue-9506', '--branch', 'workflow/issue-9506',
+    ], {
+      cwd: tmp,
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_WORKFLOW_FORCE_WT_LIST_FAIL: '1' },
+      encoding: 'utf8',
+    });
+    assert(result.status !== 0, '#506: an unprovable worktree-list probe must refuse (fail closed), got status ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(/worktree list|enumerate worktree/i.test(result.stderr || ''), '#506: refusal must name the unverifiable worktree-list cause, got stderr: ' + result.stderr);
+    // The worktree (and any work in it) must survive the refusal.
+    assert(fs.existsSync(wt), '#506: a list-probe-fault refusal must NOT remove the worktree, got removed: ' + wt);
+    const mainAfter = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+    assert(mainAfter === mainBefore, '#506: main must NOT advance on a list-probe-fault refusal');
+
+    // Guard A (not over-broad): a genuinely-CLEAN worktree with NO injected fault still proceeds
+    // past the list guard (must not refuse every sink). Assert the run does not refuse with the
+    // list-probe-fault message.
+    const ok = spawnSync(process.execPath, [
+      sinkMergeScript, '--project', 'issue-9506', '--branch', 'workflow/issue-9506',
+    ], {
+      cwd: tmp,
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' },
+      encoding: 'utf8',
+    });
+    assert(!/worktree list|enumerate worktree/i.test(ok.stderr || ''), '#506: a clean worktree with no injected list fault must NOT trip the fail-closed list guard, got stderr: ' + ok.stderr);
+    console.log('testAssertWorktreeCleanFailsClosedOnListProbeFault: PASSED');
+  } finally {
+    try { spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', path.join(tmp, '.kw', 'wt-9506')], { encoding: 'utf8' }); } catch (_) {}
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 // #497: the --sink TRANSACTION must NOT report status:sinked when push_main (or closure) HARD-fails.
 // The old code wrapped push_main in a try whose catch only warned, then ran stepDone('push_main')
 // unconditionally; the #484 freshness guard checks branch ANCESTRY (which holds on a local FF merge
@@ -12289,6 +12339,7 @@ function buildRegistry() {
   add('testSinkMergeRefusesLiveFolder',                   testSinkMergeRefusesLiveFolder);
   add('testSinkMergeBlocksUnpushedCommits',               testSinkMergeBlocksUnpushedCommits);
   add('testAssertWorktreeCleanFailsClosedOnProbeFault',   testAssertWorktreeCleanFailsClosedOnProbeFault);
+  add('testAssertWorktreeCleanFailsClosedOnListProbeFault', testAssertWorktreeCleanFailsClosedOnListProbeFault);
   add('testSinkRefusesOnPushMainFailure',                 testSinkRefusesOnPushMainFailure);
   add('testSinkRefusesOnCloseFailure',                    testSinkRefusesOnCloseFailure);
   add('testSinkMergeAutoPushesWhenNoUpstream',            testSinkMergeAutoPushesWhenNoUpstream);

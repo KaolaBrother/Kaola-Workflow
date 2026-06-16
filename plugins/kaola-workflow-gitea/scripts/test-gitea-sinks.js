@@ -979,6 +979,27 @@ console.log('Gitea #484 stale-sink-receipt guard tests passed');
     }
   }
 
+  // #506: outer `git worktree list` probe fault → fail CLOSED (refuse, worktree intact, main unchanged).
+  // Symmetric hardening of #496: the outer enumeration probe is equally required to fail closed.
+  {
+    const { root, branch } = setupRealRepo('kw-gt-wt-list', 'gt-wt-list-9506');
+    const project = 'gt-wt-list-9506';
+    const wt = path.join(path.dirname(root), path.basename(root) + '-list-wt');
+    try {
+      seedArchiveFinalization(root, project);
+      execFileSync('git', ['-C', root, 'worktree', 'add', wt, branch], { encoding: 'utf8' });
+      const before = execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+      const r = spawnSync(process.execPath, [sinkScript, '--project', project, '--branch', branch, '--root', root], { cwd: root, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_WORKFLOW_FORCE_WT_LIST_FAIL: '1' }, encoding: 'utf8' });
+      assert.notStrictEqual(r.status, 0, '#506-gitea: an unprovable worktree-list probe must refuse (fail closed), got status ' + r.status + '\nstderr: ' + r.stderr);
+      assert.ok(/worktree list|enumerate worktree/i.test(r.stderr || ''), '#506-gitea: refusal must name the worktree-list cause, got: ' + r.stderr);
+      assert.ok(fs.existsSync(wt), '#506-gitea: a list-probe-fault refusal must NOT remove the worktree');
+      assert.strictEqual(execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), before, '#506-gitea: main must NOT advance on a list-probe-fault refusal');
+    } finally {
+      try { execFileSync('git', ['-C', root, 'worktree', 'remove', '--force', wt], { encoding: 'utf8' }); } catch (_) {}
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+
   // #497: hard push_main failure → NOT status:sinked, push_main not done, refusal surfaces the cause.
   // Uses the `--sink` (runSinkTransaction) path. The repo carries NO untracked live folder (which the
   // sink preflight would classify as foreign-dirt) — only a committed base + a feature branch + a
@@ -1056,6 +1077,6 @@ console.log('Gitea #484 stale-sink-receipt guard tests passed');
     }
   }
 }
-console.log('Gitea #496/#497 fail-closed sink guard tests passed');
+console.log('Gitea #496/#497/#506 fail-closed sink guard tests passed');
 
 console.log('Gitea sink tests passed');

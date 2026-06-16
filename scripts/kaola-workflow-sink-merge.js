@@ -20,6 +20,10 @@ const FORCE_MERGE_IMPOSSIBLE = process.env.KAOLA_WORKFLOW_FORCE_MERGE_IMPOSSIBLE
 // git-status fault (index.lock held / EAGAIN / EMFILE). Proves the guard fails CLOSED. Never set in
 // production; it only makes a probe we already run throw.
 const FORCE_WT_STATUS_FAIL = process.env.KAOLA_WORKFLOW_FORCE_WT_STATUS_FAIL === '1';
+// #506: test-only — force the assertWorktreeClean outer `git worktree list` probe to THROW,
+// simulating a transient fault in enumeration. Proves the outer guard fails CLOSED. Never set in
+// production; it only makes the probe we already run throw.
+const FORCE_WT_LIST_FAIL = process.env.KAOLA_WORKFLOW_FORCE_WT_LIST_FAIL === '1';
 // #497: test-only — force the push_main step to THROW, simulating a transient push failure. Proves
 // the --sink transaction does NOT false-report status:sinked when the deliverable never reached the
 // remote. Never set in production; it only makes the push we already run throw.
@@ -164,11 +168,27 @@ function assertNoLiveWorkflowFolder(mainRoot, project, branch) {
 // worktree, taking any uncommitted work with it. This guard runs before the destructive removal so
 // a refused sink leaves the worktree (and its uncommitted file) intact.
 function assertWorktreeClean(mainRoot, branch) {
-  let list;
-  try {
-    list = execFileSync('git', ['-C', mainRoot, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' });
-  } catch (_) {
-    return; // no worktree info resolvable → nothing to guard
+  // #506: the outer `git worktree list` probe is the first gate before the inner status probe.
+  // A transient fault here (e.g. corrupt worktree metadata, EAGAIN) must FAIL CLOSED — a probe
+  // that cannot enumerate worktrees cannot prove there is nothing to guard. One bounded retry
+  // absorbs a momentary fault before refusing.
+  let list = null;
+  let listErr = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      if (FORCE_WT_LIST_FAIL) throw new Error('[TEST ONLY] KAOLA_WORKFLOW_FORCE_WT_LIST_FAIL — worktree list probe forced to fail');
+      list = execFileSync('git', ['-C', mainRoot, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' });
+      listErr = null;
+      break;
+    } catch (e) { listErr = e; }
+  }
+  if (listErr) {
+    throw new Error(
+      'sink-merge refused: `git worktree list` for branch ' + branch + ' could not be executed (worktree list probe failed). ' +
+      'Cannot enumerate worktrees to verify the linked worktree is absent or clean before `git worktree remove --force`. ' +
+      'Resolve the transient fault and re-run sink-merge.\n' +
+      'Probe error: ' + (listErr.message || String(listErr))
+    );
   }
   for (const block of list.split(/\n\n+/)) {
     const pathLine = block.match(/^worktree (.+)$/m);
