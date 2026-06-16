@@ -1,0 +1,9 @@
+[
+  {
+    "finding_id": "id=R1 scope=out_of_scope action=follow_up status=open severity=low fix_role=none rationale=T11-comment-says-3-Claude-commands-but-lists-3-forge-command-editions-cosmetic-only",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  }
+]

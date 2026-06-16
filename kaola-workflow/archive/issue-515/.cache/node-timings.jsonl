@@ -1,0 +1,12 @@
+{"node":"n1-architect","event":"opened","ts":"2026-06-16T14:43:37.444Z"}
+{"node":"n1-architect","event":"closed","ts":"2026-06-16T14:57:59.256Z"}
+{"node":"n2-guard","event":"opened","ts":"2026-06-16T14:57:59.293Z"}
+{"node":"n2-guard","event":"closed","ts":"2026-06-16T16:30:52.911Z"}
+{"node":"n3-prose","event":"opened","ts":"2026-06-16T16:30:52.969Z"}
+{"node":"n3-prose","event":"closed","ts":"2026-06-16T16:42:26.542Z"}
+{"node":"n4-review","event":"opened","ts":"2026-06-16T16:42:26.574Z"}
+{"node":"n4-review","event":"closed","ts":"2026-06-16T17:02:49.830Z"}
+{"node":"n5-doc","event":"opened","ts":"2026-06-16T17:02:49.894Z"}
+{"node":"n5-doc","event":"closed","ts":"2026-06-16T17:07:36.493Z"}
+{"node":"n6-finalize","event":"opened","ts":"2026-06-16T17:07:36.524Z"}
+{"node":"n6-finalize","event":"closed","ts":"2026-06-16T17:11:11.292Z"}
