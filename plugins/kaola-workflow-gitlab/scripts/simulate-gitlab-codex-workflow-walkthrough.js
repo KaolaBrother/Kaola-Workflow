@@ -7,6 +7,16 @@ const path = require('path');
 
 const root = path.resolve(__dirname, '..', '..', '..');
 
+// #515: hermetic default — pin the adaptive switch OFF for the children this harness shells via
+// run()/execFileSync (no env override, so they inherit this process.env): test-gitlab-workflow-scripts.js,
+// test-gitlab-sinks.js, and the inline bundle-426-428 spawns. claim.js reads the HOME
+// ~/.config/kaola-workflow/config.json, which on a dev box with `install --enable-adaptive` is ON;
+// without this default a DEFAULTED fast/full startup/claim in a child would be refused by the #515
+// path_requires_explicit_opt_in guard. UNCONDITIONAL (not `=== undefined`-guarded): an ambient-exported
+// value would reintroduce the non-hermeticity this removes. Per-call env overrides spread AFTER
+// process.env in their Object.assign, so any explicit switch-ON sub-test still wins.
+process.env.KAOLA_ENABLE_ADAPTIVE = '0';
+
 function tail30(str) {
   if (!str) return '';
   const lines = str.split('\n');

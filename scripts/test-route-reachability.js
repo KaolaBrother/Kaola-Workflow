@@ -311,6 +311,38 @@ for (const ed of codexEditions) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// T11: <!-- PIN: adaptive-default-contract --> must appear in all 12 fast+full-entry surfaces
+// (6 fast + 6 full-entry: fast = 3 Claude commands + 3 Codex SKILLs;
+// full-entry = phase1 commands + research SKILLs, 3 each). Added by n3 (#515).
+// Fail-closed: unconditional assert() — do NOT use a non-blocking warn gate.
+// ---------------------------------------------------------------------------
+{
+  const adaptiveDefaultContractSurfaces = [
+    // fast — 6 surfaces (3 Claude commands + 3 Codex SKILLs)
+    'commands/kaola-workflow-fast.md',
+    'plugins/kaola-workflow-gitlab/commands/kaola-workflow-fast.md',
+    'plugins/kaola-workflow-gitea/commands/kaola-workflow-fast.md',
+    'plugins/kaola-workflow/skills/kaola-workflow-fast/SKILL.md',
+    'plugins/kaola-workflow-gitlab/skills/kaola-workflow-fast/SKILL.md',
+    'plugins/kaola-workflow-gitea/skills/kaola-workflow-fast/SKILL.md',
+    // full-entry — 6 surfaces (3 Claude commands + 3 Codex SKILLs)
+    'commands/kaola-workflow-phase1.md',
+    'plugins/kaola-workflow-gitlab/commands/kaola-workflow-phase1.md',
+    'plugins/kaola-workflow-gitea/commands/kaola-workflow-phase1.md',
+    'plugins/kaola-workflow/skills/kaola-workflow-research/SKILL.md',
+    'plugins/kaola-workflow-gitlab/skills/kaola-workflow-research/SKILL.md',
+    'plugins/kaola-workflow-gitea/skills/kaola-workflow-research/SKILL.md',
+  ];
+  for (const f of adaptiveDefaultContractSurfaces) {
+    const content = fs.readFileSync(path.join(REPO, f), 'utf8');
+    assert(content.includes('<!-- PIN: adaptive-default-contract -->'),
+      `T11: ${f} must contain <!-- PIN: adaptive-default-contract --> comment (n3-adaptive-default-contract, #515)`);
+    assert(content.includes('path_requires_explicit_opt_in'),
+      `T11: ${f} must contain "path_requires_explicit_opt_in" literal (n3-adaptive-default-contract, #515)`);
+  }
+}
+
 if (failed) {
   console.error(`\nRoute-reachability test FAILED: ${failed} failure(s), ${passed} passed.`);
   process.exit(1);

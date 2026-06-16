@@ -10,6 +10,17 @@ const assert = require('assert');
 
 const root = path.resolve(__dirname, '..', '..', '..');
 
+// #515: hermetic default — pin the adaptive switch OFF for every spawn that inherits
+// process.env (spawnNode + the inline spawnSync sites). claim.js reads the HOME
+// ~/.config/kaola-workflow/config.json, which on a dev box with `install --enable-adaptive`
+// is ON; without this default a DEFAULTED fast/full startup/claim would be refused by the
+// #515 path_requires_explicit_opt_in guard. Set at module top; every per-call env override
+// (e.g. KAOLA_ENABLE_ADAPTIVE:'1' in glSpawnBundle / the toggle sub-tests) spreads AFTER
+// process.env in its Object.assign, so the explicit switch-ON sub-tests still win.
+// UNCONDITIONAL (not guarded on `=== undefined`): an ambient-exported value would reintroduce the
+// non-hermeticity this removes; the harness must be deterministic regardless of the dev shell.
+process.env.KAOLA_ENABLE_ADAPTIVE = '0';
+
 const sinkMr = require(path.join(root, 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-sink-mr'));
 const claimScript = path.join(root, 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js');
 

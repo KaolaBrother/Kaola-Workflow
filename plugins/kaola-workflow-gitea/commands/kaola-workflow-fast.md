@@ -11,6 +11,9 @@ which Finalization reads when `workflow_path: fast`.
 
 Mid-flight escalation to full workflow is mandatory if scope grows unexpectedly.
 
+<!-- PIN: adaptive-default-contract -->
+**Switch-ON contract (#515).** When the adaptive switch is ON, **adaptive is the default and path selection is a non-decision** — do NOT orient, read sibling path skills, deliberate, advisor-consult, or self-route here on issue size. `fast`/`full` are explicit user escapes only (a "fast path"/"full path" verbal, or `KAOLA_PATH`/`--workflow-path`). Reaching this path under an ON switch without an explicit escape is refused at the claim front door (`path_requires_explicit_opt_in`). Under an OFF switch this path is the normal route.
+
 ## Goal Contract
 
 Complete a single-pass Plan+Execute+Review cycle for the named project and

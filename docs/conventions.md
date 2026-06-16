@@ -45,6 +45,46 @@ The repo ships four editions (claude / codex / gitlab / gitea), each with its ow
 
 - **Routing / adaptive prose propagates to SIX prose surfaces, not ×4 (issue #400).** Adaptive-path, routing, bundle-lane, or finalize-wiring PROSE lives on **six** surfaces — the three Claude **commands** plus the three Codex **SKILL packs**: (1) `commands/` (github-claude), (2) `plugins/kaola-workflow-gitlab/commands/`, (3) `plugins/kaola-workflow-gitea/commands/`, (4) `plugins/kaola-workflow/skills/` (github-codex), (5) `plugins/kaola-workflow-gitlab/skills/`, (6) `plugins/kaola-workflow-gitea/skills/`. A change landing on only 4 of the 6 (the recurring CHANGELOG **"×4"** wording is the symptom) leaves the two forge-codex SKILL packs as a **propagation dead zone** — exactly how #369 (`--issue-numbers`) and #380 (auto-bundle restructure) shipped reaching the commands + the github-codex SKILL but not the two forge SKILLs. Forge nouns differ per edition (gitlab = MR / `glab` / `kaola-gitlab-workflow-*.js`; gitea = PR / `tea` / `kaola-gitea-workflow-*.js`; the forge contract validators FORBID `plugins/kaola-workflow/scripts`, `\bgh\b`, `/pull request/i` in SKILLs — verify each with `--forbidden-only`). The **route-reachability contract** (`#400`, in all four `validate-*-contracts.js` + `scripts/test-route-reachability.js`) machine-enforces that every schema-emitted route target resolves to an installed surface AND that a mirrored SKILL carries the command's wiring tokens — so a missing-SKILL or hollow-SKILL dead zone reds the chain with the unreachable target named. Adaptive/routing prose changes are a cross-edition diff.
 
+## Switch-ON path guard — reciprocal `authoring-allowed` (issue #515)
+
+Under an ON adaptive switch, adaptive is the contract-determined default path; `fast`/`full` are
+explicit user escapes only (#254). The `authoring-allowed` guard (#235) already refuses adaptive-
+phase writes when the switch is OFF. Issue #515 added the **reciprocal guard** at the claim front
+door for the other direction.
+
+**How it works.** In `claimProject` (all four `claim.js` editions), immediately after the existing
+`workflow_path_refused` legality block, a new guard detects a *defaulted* path under an ON switch
+and refuses it:
+
+```
+status: 'path_requires_explicit_opt_in', claim: 'none'
+```
+
+**Defaulted-vs-explicit predicate.** `requestedPath = args.workflowPath || process.env.KAOLA_PATH || 'full'`.
+A path is defaulted when BOTH inputs are falsy: `const pathWasDefaulted = !args.workflowPath && !process.env.KAOLA_PATH`.
+A defaulted path ALWAYS collapses to `'full'`; `'fast'` requires a truthy explicit input and is
+unreachable from a defaulted state. The guard fires on `adaptiveEnabled && pathWasDefaulted` alone —
+no `requestedPath` membership test is needed.
+
+**Explicit escapes pass through.** A truthy `--workflow-path fast|full` or `KAOLA_PATH=fast|full`
+makes `pathWasDefaulted` false → guard skipped. The router (`workflow-next.md` Branch B) exports
+`KAOLA_PATH` on every switch-ON route so legitimate fast/full escapes always carry an explicit value.
+
+**Prose floor — T11.** The `path_requires_explicit_opt_in` typed token and a
+`<!-- PIN: adaptive-default-contract -->` comment appear on all 12 fast/full-entry prose surfaces
+(6-per-path × 2 paths: 3 Claude commands + 3 Codex SKILL packs, per the #400 six-surface rule).
+`scripts/test-route-reachability.js` T11 enforces this with a fail-closed `assert` (both PIN and
+literal must be present on every surface).
+
+**Reasoning string and forge neutrality.** The guard block is byte-identical across all four
+editions (no forge noun) and mirrors the `cmdAuthoringAllowed` body discipline (#341).
+
+**No planner gate.** The claim front door is the right enforcement point (#287 planner-first); the
+guard validates and refuses, but does not select a path (#44 Agent Owns Reasoning).
+
+See `docs/decisions/D-515-01.md` for boundaries (B1 switch-OFF intact, B2 explicit escapes allowed,
+B3 adaptive/bundle claims pass), predicate refinement rationale, and the harness hermeticity fix.
+
 ## Bundle Lane — Cross-Edition Requirement (issue #328)
 
 The bundle lane (`--target-issues` / `KAOLA_TARGET_ISSUES` / `issue-scout`) spans all four editions. Any change to bundle-related code — `claimExplicitBundle`, `claimBundle`, bundle state fields, bundle branch naming, bundle finalization, or the `issue-scout` agent file — is a **cross-edition diff** and MUST have all four `npm run test:kaola-workflow:{claude,codex,gitlab,gitea}` chains green before Finalization. The cross-edition validation rules from § Testing — Cross-Edition Validation apply without exception. The bundle lane's edition behavioral coverage lives in the gitlab/gitea walkthroughs (six scenarios each — claim / refusal-rollback / duplicate-block / orient / finalize-roadmap-cleanup / single-issue regression — mirroring `simulate-workflow-walkthrough.js` §#328; added by #342) — keep them in lockstep when bundle behavior changes (see § Testing — Cross-Edition Validation, Edition behavioral coverage).

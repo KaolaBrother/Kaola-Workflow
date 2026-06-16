@@ -7,6 +7,9 @@ description: Use when beginning Phase 1 of Kaola-Workflow for Codex, also called
 
 Phase 1 discovers facts only. Do not choose a solution or edit implementation files.
 
+<!-- PIN: adaptive-default-contract -->
+**Switch-ON contract (#515).** When the adaptive switch is ON, **adaptive is the default and path selection is a non-decision** — do NOT orient, read sibling path skills, deliberate, advisor-consult, or self-route here on issue size. `fast`/`full` are explicit user escapes only (a "fast path"/"full path" verbal, or `KAOLA_PATH`/`--workflow-path`). Reaching this path under an ON switch without an explicit escape is refused at the claim front door (`path_requires_explicit_opt_in`). Under an OFF switch this path is the normal route.
+
 ## Goal Contract
 
 Continue until Phase 1 has parsed requirements, recorded research evidence,

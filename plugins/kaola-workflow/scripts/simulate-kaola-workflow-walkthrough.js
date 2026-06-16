@@ -6,6 +6,16 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
+// #515: hermetic default — pin the adaptive switch OFF for every spawn that inherits
+// process.env (runClaim / runClaimRaw and any inline spawnSync). claim.js reads the HOME
+// ~/.config/kaola-workflow/config.json, which on a dev box with `install --enable-adaptive`
+// is ON; without this default a DEFAULTED fast/full startup/claim would be refused by the
+// #515 path_requires_explicit_opt_in guard. Set at module top BEFORE any per-call env spread,
+// so a sub-test that explicitly passes KAOLA_ENABLE_ADAPTIVE:'1' (none today) still wins.
+// UNCONDITIONAL (not guarded on `=== undefined`): an ambient-exported value would reintroduce the
+// non-hermeticity this removes; the harness must be deterministic regardless of the dev shell.
+process.env.KAOLA_ENABLE_ADAPTIVE = '0';
+
 const pluginRoot = path.resolve(__dirname, '..');
 const repoRoot = path.resolve(pluginRoot, '..', '..');
 const claimScript = path.join(pluginRoot, 'scripts', 'kaola-workflow-claim.js');

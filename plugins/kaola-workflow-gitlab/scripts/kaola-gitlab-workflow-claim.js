@@ -647,6 +647,29 @@ function claimProject(root, args) {
     };
   }
 
+  // issue #515: the reciprocal of cmdAuthoringAllowed — under an ON switch, adaptive is the
+  // contract-determined default and fast/full are EXPLICIT user escapes only (#254). A claim that
+  // resolved to fast/full by DEFAULT (no --workflow-path, no KAOLA_PATH) under an ON switch is the
+  // silent bypass: the `|| 'full'` collapse above turns "defaulted" into "explicit full". Refuse it
+  // here with ZERO mutation so the router cannot silently downgrade an ON-switch project to the
+  // phaseN ladder. An EXPLICIT fast/full (either input truthy) is a legitimate escape and passes.
+  // Defaulted ALWAYS resolves to 'full' (the fast branch is unreachable when defaulted), so the
+  // predicate alone is sufficient — no requestedPath membership test. Forge-neutral + byte-identical
+  // across all four editions (mirrors the cmdAuthoringAllowed body).
+  const pathWasDefaulted = !args.workflowPath && !process.env.KAOLA_PATH;
+  if (adaptiveEnabled && pathWasDefaulted) {
+    return {
+      status: 'path_requires_explicit_opt_in',
+      claim: 'none',
+      issue: issueIid,
+      project,
+      reasoning: 'adaptive switch is ON, so adaptive is the default path; "' + requestedPath +
+        '" was reached by default (no --workflow-path / KAOLA_PATH). fast/full are explicit escapes ' +
+        'only — pass --workflow-path fast|full (or export KAOLA_PATH) to opt in. Refusing to ' +
+        'silently downgrade to a non-adaptive path under an ON switch (#254/#44).'
+    };
+  }
+
   if (issueIid != null) {
     const probe = probeIssueState(issueIid);
     if (probe.state === 'closed') {
