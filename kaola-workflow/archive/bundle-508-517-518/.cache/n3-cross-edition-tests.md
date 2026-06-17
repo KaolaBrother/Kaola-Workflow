@@ -1,0 +1,5 @@
+evidence-binding: n3-cross-edition-tests 111098d64b88
+<!-- RED: paste RED here -->
+RED: testSinkRefusesStaleReceipt — AssertionError: #484-A: stale unmerged receipt must NOT emit status:sinked, got {"result":"ok","status":"sinked","receipt":{"project":"issue-9484","branch":"workflow/issue-9484","issue_number":9484,...}} (pre-edit: Scenario A assertion fired because #518 reinit now sinks the old-format receipt instead of refusing)
+<!-- GREEN: paste GREEN here -->
+GREEN: testSinkRefusesStaleReceipt passes (Scenarios A/B/C all green); testSinkMergePostPushReopenOnMock passes; testBundleFinalizeAllOpenCloseIsPending passes (vacuous close: assertion replaced with positive open_issues lock); parity tests added and green: testCodexBundleFinalizeAllOpenCloseIsPending, testGitlabBundleFinalizeAllOpenCloseIsPending, testGiteaBundleFinalizeAllOpenCloseIsPending; all 5 scripts exit 0 (claude: "Workflow walkthrough simulation passed"; codex: "Kaola-Workflow walkthrough simulation passed"; gitlab: "GitLab workflow walkthrough simulation passed"; gitea: "Gitea workflow walkthrough simulation passed"; claim-hardening: 87 assertions)
