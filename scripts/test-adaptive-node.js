@@ -520,6 +520,8 @@ function makeState(opts) {
     const argsArr = args || [];
     shellCalls.push({ base, args: argsArr.slice() });
 
+    // #499: open-next now runs the integrity layer (validator --resume-check); a clean frozen plan passes.
+    if (base === 'kaola-workflow-plan-validator.js' && argsArr.includes('--resume-check')) return { exitCode: 0, ok: true };
     if (base === 'kaola-workflow-next-action.js') {
       return {
         exitCode: 0,
@@ -580,6 +582,8 @@ function makeState(opts) {
   const shellStub = function(scriptPath, args) {
     const base = path.basename(scriptPath);
     shellCalls.push(base);
+    // #499: open-next integrity layer — a clean frozen plan passes --resume-check.
+    if (base === 'kaola-workflow-plan-validator.js' && (args || []).includes('--resume-check')) return { exitCode: 0, ok: true };
     if (base === 'kaola-workflow-next-action.js') {
       return {
         exitCode: 0,
@@ -626,6 +630,8 @@ function makeState(opts) {
 
   const shellStub = function(scriptPath, args) {
     const base = path.basename(scriptPath);
+    // #499: open-next integrity layer — a clean frozen plan passes --resume-check.
+    if (base === 'kaola-workflow-plan-validator.js' && (args || []).includes('--resume-check')) return { exitCode: 0, ok: true };
     if (base === 'kaola-workflow-next-action.js') {
       return {
         exitCode: 0,
@@ -2518,6 +2524,8 @@ function makeState(opts) {
   const shellStub = function (sp, args) {
     const base = path.basename(sp);
     shelled.push(base);
+    // #499: open-next integrity layer — a clean frozen plan passes --resume-check.
+    if (base === 'kaola-workflow-plan-validator.js' && (args || []).includes('--resume-check')) return { exitCode: 0, ok: true };
     if (base === 'kaola-workflow-next-action.js') {
       return { exitCode: 0, result: 'ok',
         readySet: [{ id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js', dependsOn: [] }],
@@ -3389,7 +3397,7 @@ function rsHarness(initialFiles, shellStub, validatorStub) {
   let planContent = plan;
   const r = runOpenNext({
     planPath: RS_PLAN_PATH, statePath: '/p/workflow-state.md', project: 'p', nodeId: null,
-    shell: (sp) => { const b = path.basename(sp); if (b === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readySet: [{ id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js', dependsOn: [] }], nextNode: { id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js' } }; if (b === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok' }; return { exitCode: 0, result: 'ok' }; },
+    shell: (sp, a) => { const b = path.basename(sp); if (b === 'kaola-workflow-plan-validator.js' && (a || []).includes('--resume-check')) return { exitCode: 0, ok: true }; if (b === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readySet: [{ id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js', dependsOn: [] }], nextNode: { id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js' } }; if (b === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok' }; return { exitCode: 0, result: 'ok' }; },
     readFile: (fp) => fp.endsWith('workflow-plan.md') ? planContent : makeState(),
     writeFile: (fp, c) => { if (fp.endsWith('workflow-plan.md')) planContent = c; },
   });
@@ -4070,6 +4078,101 @@ function rtHarness(initialFiles, opts) {
 }
 
 // ---------------------------------------------------------------------------
+// #499a (wiring): open-next refuses plan_integrity_failed on a tampered plan (validator
+// --resume-check fails) BEFORE opening any node — the serial resume / open-next path now carries
+// the SAME integrity gate the fused/batch (open-ready/open-batch/top-up) paths already carry.
+// Mirrors S387a (open-ready). Mock-shell proves the WIRING; #499b proves it bites the REAL path.
+// ---------------------------------------------------------------------------
+{
+  let planContent = makePlan(['| impl-core | pending | |']);
+  const shellCalls = [];
+  const r = runOpenNext({
+    planPath: RS_PLAN_PATH, statePath: '/p/workflow-state.md', project: 'p', nodeId: null,
+    shell: (sp, a) => {
+      const b = path.basename(sp); const args = a || []; shellCalls.push({ b, args: args.slice() });
+      // tampered plan → --resume-check fails (the integrity layer must run it and refuse).
+      if (b === 'kaola-workflow-plan-validator.js' && args.includes('--resume-check')) return { exitCode: 1, ok: false, reason: 'plan_hash mismatch' };
+      if (b === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readySet: [{ id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/x.js', dependsOn: [] }], nextNode: { id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/x.js' } };
+      return { exitCode: 0, result: 'ok' };
+    },
+    readFile: (fp) => fp.endsWith('workflow-plan.md') ? planContent : makeState(),
+    writeFile: (fp, c) => { if (fp.endsWith('workflow-plan.md')) planContent = c; },
+    cacheExists: () => false,
+  });
+  assert(r.result === 'refuse' && r.reason === 'plan_integrity_failed', '#499a: open-next refuses plan_integrity_failed on tampered plan, got ' + JSON.stringify({ result: r.result, reason: r.reason }));
+  assert(planContent.includes('| impl-core | pending | |'), '#499a: zero mutation — ledger row NOT opened');
+  // The integrity layer ran BEFORE next-action (fail-closed precedence): no node was opened.
+  assert(shellCalls.some(c => c.b === 'kaola-workflow-plan-validator.js' && c.args.includes('--resume-check')), '#499a: open-next shelled validator --resume-check (integrity layer wired)');
+  assert(!shellCalls.some(c => c.b === 'kaola-workflow-commit-node.js' && c.args.includes('--start')), '#499a: no baseline recorded — integrity refused before open');
+}
+
+// ---------------------------------------------------------------------------
+// #499b (REAL validator, false-green proof): freeze a plan in a REAL git repo, then TAMPER it with a
+// hash-defeating content edit that keeps the DAG acyclic/unique-sink (widen a declared_write_set). The
+// REAL plan-validator --resume-check detects the plan_hash mismatch. Unpatched open-next (no integrity
+// layer) OPENS the node despite the tamper; patched open-next REFUSES plan_integrity_failed with zero
+// mutation. Driving the real subprocess (not an injected ok:false stub) is the #292 anti-false-green
+// discipline: a stubbed integrity test passes even if the wiring is wrong; this bites only the real path.
+// ---------------------------------------------------------------------------
+{
+  const { execFileSync } = require('child_process');
+  const NODE_CLI = path.join(__dirname, 'kaola-workflow-adaptive-node.js');
+  const VALIDATOR = path.join(__dirname, 'kaola-workflow-plan-validator.js');
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'd499-resume-'));
+  const project = 'test-project';
+  const projDir = path.join(repoRoot, 'kaola-workflow', project);
+  fs.mkdirSync(path.join(projDir, '.cache'), { recursive: true });
+  const planPath = path.join(projDir, 'workflow-plan.md');
+  // A simple linear chain: a (ready, write) → review → finalize (sink). a is pending/ready ⇒ open-next opens it.
+  const plan = [
+    '# Workflow Plan — test-project', '',
+    '## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '| --- | --- | --- | --- | --- | --- |',
+    '| a        | tdd-guide     | —      | scripts/a.js | 1 | sequence |',
+    '| review   | code-reviewer | a      | —            | 1 | sequence |',
+    '| finalize | finalize      | review | —            | 1 | sequence |', '',
+    '## Node Ledger', '',
+    '| id | status |', '| --- | --- |',
+    '| a | pending |',
+    '| review | pending |',
+    '| finalize | pending |', '',
+  ].join('\n') + '\n';
+  fs.writeFileSync(planPath, plan);
+  fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n');
+  const g = (args) => execFileSync('git', ['-C', repoRoot, ...args], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+  g(['init']); g(['config', 'user.email', 'kw@test']); g(['config', 'user.name', 'kw']); g(['config', 'commit.gpgsign', 'false']);
+  // Freeze in place so plan_hash exists.
+  execFileSync('node', [VALIDATOR, planPath, '--freeze', '--repair', '--json'], { cwd: repoRoot, encoding: 'utf8' });
+  fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
+  g(['add', '-A']); g(['commit', '-m', 'init']);
+  // Sanity: the FROZEN plan passes --resume-check (control — proves the tamper, not a freeze bug, fails it).
+  let preCheck = {};
+  try { preCheck = JSON.parse(execFileSync('node', [VALIDATOR, planPath, '--resume-check', '--json'], { cwd: repoRoot, encoding: 'utf8' }).trim().split('\n').pop()); } catch (_) {}
+  assert(preCheck.ok === true, '#499b: control — the frozen plan passes --resume-check, got ' + JSON.stringify(preCheck));
+  // TAMPER: widen a's declared_write_set (a hash-defeating content edit that keeps the DAG valid).
+  const tampered = fs.readFileSync(planPath, 'utf8').replace('| a        | tdd-guide     | —      | scripts/a.js | 1 | sequence |', '| a        | tdd-guide     | —      | scripts/a.js scripts/b.js | 1 | sequence |');
+  fs.writeFileSync(planPath, tampered);
+  // The REAL validator now detects the mismatch.
+  let postCheck = {};
+  try { postCheck = JSON.parse(execFileSync('node', [VALIDATOR, planPath, '--resume-check', '--json'], { cwd: repoRoot, encoding: 'utf8' }).trim().split('\n').pop()); } catch (err) { try { postCheck = JSON.parse(String(err.stdout || '').trim().split('\n').pop()); } catch (_) {} }
+  assert(postCheck.ok !== true, '#499b: the tampered plan FAILS --resume-check (real validator detects the hash mismatch), got ' + JSON.stringify(postCheck));
+  // open-next on the tampered plan MUST refuse plan_integrity_failed (post-fix) with zero mutation.
+  let openOut = {};
+  let openExit = 0;
+  try { openOut = JSON.parse(execFileSync('node', [NODE_CLI, 'open-next', '--project', project, '--json'], { cwd: repoRoot, encoding: 'utf8' }).trim().split('\n').pop()); }
+  catch (err) { openExit = (err.status == null) ? 1 : err.status; try { openOut = JSON.parse(String(err.stdout || '').trim().split('\n').pop()); } catch (_) {} }
+  assert(openOut.result === 'refuse' && openOut.reason === 'plan_integrity_failed', '#499b: open-next REFUSES plan_integrity_failed on the tampered plan (the serial-resume integrity gate), got exit=' + openExit + ' ' + JSON.stringify(openOut));
+  // Zero mutation: a stays pending in the ledger (it was NOT opened).
+  const after = fs.readFileSync(planPath, 'utf8');
+  const ledgerStart = after.indexOf('## Node Ledger');
+  const ledgerBody = ledgerStart >= 0 ? after.slice(ledgerStart) : after;
+  assert(/^\|\s*a\s*\|\s*pending\s*\|/m.test(ledgerBody), '#499b: zero mutation — a stays pending (open-next did NOT open it through the tamper)');
+  try { fs.rmSync(repoRoot, { recursive: true, force: true }); } catch (_) {}
+}
+
+// ---------------------------------------------------------------------------
 // S387b (#387): close-node refuses plan_integrity_failed on a tampered plan BEFORE close.
 // ---------------------------------------------------------------------------
 {
@@ -4101,7 +4204,9 @@ function rtHarness(initialFiles, opts) {
     let planContent = haltPlan(['| impl-core | pending | |']);
     const r = runOpenNext({
       planPath: RS_PLAN_PATH, statePath: '/p/workflow-state.md', project: 'p', nodeId: null,
-      shell: (sp) => { const b = path.basename(sp); if (b === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readySet: [{ id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/x.js', dependsOn: [] }], nextNode: { id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/x.js' } }; return { exitCode: 0, result: 'ok' }; },
+      // #499: open-next integrity layer runs BEFORE the halt fence — a clean frozen plan passes
+      // --resume-check, so the halt_pending fence (Layer 2) is the one that fires here (precedence intact).
+      shell: (sp, a) => { const b = path.basename(sp); if (b === 'kaola-workflow-plan-validator.js' && (a || []).includes('--resume-check')) return { exitCode: 0, ok: true }; if (b === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readySet: [{ id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/x.js', dependsOn: [] }], nextNode: { id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/x.js' } }; return { exitCode: 0, result: 'ok' }; },
       readFile: (fp) => fp.endsWith('workflow-plan.md') ? planContent : makeState(),
       writeFile: (fp, c) => { if (fp.endsWith('workflow-plan.md')) planContent = c; },
       cacheExists: () => false,
@@ -4169,7 +4274,9 @@ function rtHarness(initialFiles, opts) {
   ]);
   const on = runOpenNext({
     planPath: RS_PLAN_PATH, statePath: '/p/workflow-state.md', project: 'p', nodeId: null,
-    shell: (sp) => { const b = path.basename(sp); if (b === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readySet: [{ id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/x.js', dependsOn: [] }], nextNode: { id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/x.js' } }; if (b === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok' }; return { exitCode: 0, result: 'ok' }; },
+    // #499: open-next now runs the integrity layer; a clean frozen plan passes --resume-check, so the
+    // serial fallback result SHAPE is preserved (the layer only adds a fail-closed gate, no happy-path diff).
+    shell: (sp, a) => { const b = path.basename(sp); if (b === 'kaola-workflow-plan-validator.js' && (a || []).includes('--resume-check')) return { exitCode: 0, ok: true }; if (b === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readySet: [{ id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/x.js', dependsOn: [] }], nextNode: { id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/x.js' } }; if (b === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok' }; return { exitCode: 0, result: 'ok' }; },
     readFile: (fp) => fp.endsWith('workflow-plan.md') ? planContent : makeState(),
     writeFile: (fp, c) => { if (fp.endsWith('workflow-plan.md')) planContent = c; },
     cacheExists: () => false,
@@ -4398,6 +4505,8 @@ function rtHarness(initialFiles, opts) {
   const writtenFiles = {};
   const shellStub = function(scriptPath, args) {
     const base = path.basename(scriptPath);
+    // #499: open-next integrity layer — a clean frozen plan passes --resume-check.
+    if (base === 'kaola-workflow-plan-validator.js' && (args || []).includes('--resume-check')) return { exitCode: 0, ok: true };
     if (base === 'kaola-workflow-next-action.js') {
       return { exitCode: 0, result: 'ok', readySet: [{ id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/x.js', dependsOn: [] }], nextNode: { id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/x.js' }, allDone: false };
     }
@@ -4563,6 +4672,8 @@ function rtHarness(initialFiles, opts) {
   const nodeInfo = { id: 'n1-impl', role: 'implementer', model: 'sonnet', declared_write_set: 'scripts/foo.js', dependsOn: [] };
   const shellStub = (scriptPath, args) => {
     const base = path.basename(scriptPath);
+    // #499: open-next integrity layer — a clean frozen plan passes --resume-check.
+    if (base === 'kaola-workflow-plan-validator.js' && (args || []).includes('--resume-check')) return { exitCode: 0, ok: true };
     if (base === 'kaola-workflow-next-action.js') {
       return { exitCode: 0, result: 'ok', readySet: [nodeInfo], nextNode: nodeInfo, allDone: false };
     }
@@ -4683,6 +4794,91 @@ function rtHarness(initialFiles, opts) {
     assert(Array.isArray(d.required_tokens), 'D444-DISPATCH-OPENREADY: dispatch.required_tokens is array');
     assert(d.forge_rider === null, 'D444-DISPATCH-OPENREADY: dispatch.forge_rider is null');
     assert(Array.isArray(d.guards), 'D444-DISPATCH-OPENREADY: dispatch.guards is array');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// #516-QUALIFIED-EVIDENCE-PATH: the open-next / open-ready DISPATCH packet emits a PROJECT-QUALIFIED
+//   evidence_file (kaola-workflow/<project>/.cache/<node-id>.md), NOT a bare cwd-relative .cache/<id>.md.
+//   A role-agent subagent dispatched INTO the worktree interprets a bare `.cache/...` relative to its cwd
+//   (the worktree root) → writes <worktree>/.cache/<id>.md, which does NOT match /^kaola-workflow\// →
+//   the per-node barrier treats it as a PRODUCTION write outside the allowlist → false write_set_overflow.
+//   Emitting the project-qualified path makes the subagent's literal-follow land in the barrier-exempt
+//   kaola-workflow/<project>/.cache/ location. The on-disk seed/record/verify resolution is UNCHANGED
+//   (it joins dirname(planPath)+'.cache'); only the dispatch HINT string is qualified. (RED against the
+//   unpatched code: dispatch.evidence_file === '.cache/<id>.md' → these blocks fail.)
+// ---------------------------------------------------------------------------
+{
+  // (a) open-next serial dispatch.
+  {
+    const nodeInfo = { id: 'n1-impl', role: 'implementer', model: 'sonnet', declared_write_set: 'scripts/foo.js', dependsOn: [] };
+    const shellStub = (sp, args) => {
+      const base = path.basename(sp);
+      if (base === 'kaola-workflow-plan-validator.js') return { exitCode: 0, ok: true, result: 'ok' };
+      if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', readySet: [nodeInfo], nextNode: nodeInfo, allDone: false };
+      if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok', mode: 'per-node-start', nodeId: 'n1-impl', overallOk: true, recordBase: { base: 'abcdef123456abcdef', reused: false } };
+      return { exitCode: 1 };
+    };
+    let plan = [
+      '# Plan', '## Meta\nlabels: area:scripts', '## Nodes',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| n1-impl | implementer | — | scripts/foo.js | 1 | sequence |',
+      '## Node Ledger', '| id | status | notes |', '| --- | --- | --- |', '| n1-impl | pending | |',
+    ].join('\n') + '\n';
+    const r = runOpenNext({
+      planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+      statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+      project: 'test-project', nodeId: null, shell: shellStub,
+      readFile: (p) => { if (p.endsWith('workflow-plan.md')) return plan; return ''; },
+      writeFile: (p, c) => { if (p.endsWith('workflow-plan.md')) plan = c; },
+    });
+    assert(r.result === 'ok' && r.opened, '#516-QUALIFIED-EVIDENCE-PATH (open-next): ok, got ' + JSON.stringify(r.result));
+    const want = 'kaola-workflow/test-project/.cache/n1-impl.md';
+    // The DISPATCH packet (what plan-run consumes — plan-run.md:118) carries the project-qualified path.
+    assert(r.opened.dispatch.evidence_file === want, '#516-QUALIFIED-EVIDENCE-PATH (open-next): dispatch.evidence_file is project-qualified, want ' + want + ', got ' + JSON.stringify(r.opened.dispatch.evidence_file));
+    // The top-level mirror stays the BARE on-disk relative path (the #444 back-compat vestige; not
+    // consumed for dispatch). It must match the local seed/record/verify resolution (dirname(planPath)+.cache).
+    assert(r.opened.evidence_file === '.cache/n1-impl.md', '#516-QUALIFIED-EVIDENCE-PATH (open-next): top-level mirror stays bare (vestige), got ' + JSON.stringify(r.opened.evidence_file));
+  }
+  // (b) open-ready scheduler dispatch (read fan-out).
+  {
+    const readyNodes = [
+      { id: 'rv1', role: 'code-reviewer', model: 'sonnet', declared_write_set: '—', dependsOn: [] },
+      { id: 'rv2', role: 'security-reviewer', model: null, declared_write_set: '—', dependsOn: [] },
+    ];
+    let plan = [
+      '# Plan', '## Meta\nlabels: area:scripts', '## Nodes',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| rv1 | code-reviewer | — | — | 1 | sequence |',
+      '| rv2 | security-reviewer | — | — | 1 | sequence |',
+      '| fin | finalize | rv1,rv2 | CHANGELOG.md | 1 | sequence |',
+      '## Node Ledger', '| id | status | notes |', '| --- | --- | --- |',
+      '| rv1 | pending | |', '| rv2 | pending | |', '| fin | pending | |',
+    ].join('\n') + '\n';
+    const cacheFiles = {};
+    const shellOR = (sp, args) => {
+      const base = path.basename(sp);
+      if (base === 'kaola-workflow-plan-validator.js') return { exitCode: 0, ok: true, result: 'ok' };
+      if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', readySet: readyNodes, nextNode: readyNodes[0], readyPending: readyNodes, active: [], allDone: false };
+      if (base === 'kaola-workflow-commit-node.js') { const i = (args || []).indexOf('--node-id'); const nid = i >= 0 ? args[i + 1] : 'rv1'; return { exitCode: 0, result: 'ok', mode: 'per-node-start', nodeId: nid, recordBase: { base: 'deadbeef1234abcd', reused: false } }; }
+      return { exitCode: 1 };
+    };
+    const r = runOpenReady({
+      planPath: '/fake/kaola-workflow/test-project/workflow-plan.md', project: 'test-project', max: null, fanoutCapReadonly: 8,
+      shell: shellOR,
+      readFile: (p) => { if (p.endsWith('workflow-plan.md')) return plan; if (cacheFiles[p]) return cacheFiles[p]; throw new Error('ENOENT: ' + p); },
+      writeFile: (p, c) => { cacheFiles[p] = c; if (p.endsWith('workflow-plan.md')) plan = c; },
+      cacheExists: (p) => !!cacheFiles[p], mkdirp: () => {}, now: () => '2026-01-01T00:00:00Z',
+    });
+    assert(r.result === 'ok' && Array.isArray(r.opened) && r.opened.length > 0, '#516-QUALIFIED-EVIDENCE-PATH (open-ready): ok with opened, got ' + JSON.stringify(r.result));
+    for (const elem of r.opened) {
+      const want = 'kaola-workflow/test-project/.cache/' + elem.id + '.md';
+      // DISPATCH packet → project-qualified (consumed by plan-run); top-level mirror → bare (vestige).
+      assert(elem.dispatch.evidence_file === want, '#516-QUALIFIED-EVIDENCE-PATH (open-ready): ' + elem.id + ' dispatch.evidence_file project-qualified, want ' + want + ', got ' + JSON.stringify(elem.dispatch.evidence_file));
+      assert(elem.evidence_file === '.cache/' + elem.id + '.md', '#516-QUALIFIED-EVIDENCE-PATH (open-ready): ' + elem.id + ' top-level mirror stays bare (vestige), got ' + JSON.stringify(elem.evidence_file));
+    }
   }
 }
 
@@ -5012,28 +5208,11 @@ function rtHarness(initialFiles, opts) {
   const OFF = { KAOLA_LANE_CONTAINMENT: '0' };
 
   // -------------------------------------------------------------------------
-  // D437-OPEN-READY-GROUP: flag ON, two disjoint write nodes → laneGroup descriptor + running-set
-  //   lane_group with members [A,B], a baseline sha, write_union [ax.js,by.js]; both ledger in_progress.
-  // -------------------------------------------------------------------------
-  {
-    const { repoRoot, cacheDir, planPath } = makeLaneRepo();
-    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], ON);
-    assert(r.result === 'ok', 'D437-OPEN-READY-GROUP: open-ready ok, got ' + JSON.stringify(r));
-    assert(r.laneGroup && Array.isArray(r.laneGroup.members), 'D437-OPEN-READY-GROUP: laneGroup descriptor returned, got ' + JSON.stringify(r.laneGroup));
-    assert(r.laneGroup && r.laneGroup.members.includes('A') && r.laneGroup.members.includes('B'),
-      'D437-OPEN-READY-GROUP: laneGroup members include A and B');
-    assert(r.laneGroup && typeof r.laneGroup.baseline === 'string' && r.laneGroup.baseline.length > 0,
-      'D437-OPEN-READY-GROUP: laneGroup carries a baseline sha, got ' + (r.laneGroup && r.laneGroup.baseline));
-    const rs = readRS(cacheDir);
-    assert(rs && rs.lane_group && rs.lane_group.members.includes('A') && rs.lane_group.members.includes('B'),
-      'D437-OPEN-READY-GROUP: running-set lane_group has members [A,B]');
-    assert(rs && rs.lane_group && Array.isArray(rs.lane_group.write_union) &&
-      rs.lane_group.write_union.includes('ax.js') && rs.lane_group.write_union.includes('by.js'),
-      'D437-OPEN-READY-GROUP: write_union is [ax.js,by.js], got ' + JSON.stringify(rs && rs.lane_group && rs.lane_group.write_union));
-    assert(ledgerStatus(planPath, 'A') === 'in_progress', 'D437-OPEN-READY-GROUP: A ledger in_progress');
-    assert(ledgerStatus(planPath, 'B') === 'in_progress', 'D437-OPEN-READY-GROUP: B ledger in_progress');
-    cleanup(repoRoot);
-  }
+  // RETIRED for #498: D437-OPEN-READY-GROUP asserted ON-alone (KAOLA_LANE_CONTAINMENT only) FORMS a lane
+  // group — the exact buggy behavior #498 removes. After the fix, co-open ⟺ legs provisioned (the full
+  // containment + leg-isolation + consent conjunction), so the ON-alone positive is migrated to
+  // #498-COOPEN-FULL-CONJUNCTION (below) and to LEG-PROVISION-ON (full leg manifest coverage). The
+  // ON-alone serial-degrade is now asserted by #498-COOPEN-REQUIRES-LEGS.
 
   // -------------------------------------------------------------------------
   // D437-OPEN-READY-SERIAL-DEGRADE-OVERLAP: flag ON, two OVERLAPPING write nodes → serial degrade
@@ -5069,100 +5248,72 @@ function rtHarness(initialFiles, opts) {
   }
 
   // -------------------------------------------------------------------------
-  // D437-CLOSE-NODE-DEFERRED: after a co-open, write A's evidence + a real in-lane edit; close A
-  //   (non-last) → barrier:'deferred_to_group', A complete, compliance row carries deferred_to_group,
-  //   NO group barrier ran (B still open, lane_group retained with A in closed_members).
+  // #498-COOPEN-REQUIRES-LEGS (regression guard, open-side): write co-open must engage on the FULL
+  //   leg-coupled conjunction (KAOLA_LANE_CONTAINMENT AND KAOLA_LEG_ISOLATION AND --write-overlap-consent),
+  //   NOT on containment alone. With containment-only (or leg-isolation but NO consent), co-open MUST
+  //   serial-degrade to ONE write node with NO lane_group — otherwise the close path falls to the
+  //   attribution-blind snapshot UNION barrier (`:4429`, liveLegs===null) which passes a cross-member
+  //   overwrite (a path written by the WRONG member is still in the union). Gating co-open on the SAME
+  //   conjunction that provisions legs makes co-open ⟺ legs ⟺ the safe (fence + commit-based) close path,
+  //   so the legless snapshot union barrier is never reached via co-open. Both off-combos are asserted:
+  //   the legIso-only-no-consent case is exactly what a "gate on leg-isolation only" half-fix would miss.
+  //   (RED-provable against the unpatched gate: ON-alone formed a group → these blocks fail.)
   // -------------------------------------------------------------------------
   {
-    const { repoRoot, cacheDir, planPath, g } = makeLaneRepo();
-    runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], ON);
-    writeEvidence(cacheDir, 'A');
-    fs.writeFileSync(path.join(repoRoot, 'ax.js'), '// A wrote here\n');
-    const r = runNode(repoRoot, ['close-node', '--node-id', 'A', '--project', 'test-project', '--json'], ON);
-    assert(r.result === 'ok', 'D437-CLOSE-NODE-DEFERRED: close A ok, got ' + JSON.stringify(r));
-    assert(r.barrier === 'deferred_to_group', 'D437-CLOSE-NODE-DEFERRED: barrier deferred_to_group, got ' + r.barrier);
-    assert(ledgerStatus(planPath, 'A') === 'complete', 'D437-CLOSE-NODE-DEFERRED: A ledger complete');
-    const planTxt = fs.readFileSync(planPath, 'utf8');
-    assert(/deferred_to_group/.test(planTxt), 'D437-CLOSE-NODE-DEFERRED: compliance row carries deferred_to_group literal');
-    const rs = readRS(cacheDir);
-    assert(rs && rs.lane_group, 'D437-CLOSE-NODE-DEFERRED: lane_group retained (B still open)');
-    assert(rs && rs.lane_group && Array.isArray(rs.lane_group.closed_members) && rs.lane_group.closed_members.includes('A'),
-      'D437-CLOSE-NODE-DEFERRED: A recorded in closed_members, got ' + JSON.stringify(rs && rs.lane_group && rs.lane_group.closed_members));
-    assert(ledgerStatus(planPath, 'B') === 'in_progress', 'D437-CLOSE-NODE-DEFERRED: B still in_progress (no group barrier ran)');
-    cleanup(repoRoot);
+    const offCombos = [
+      { label: 'containment-only (no leg-isolation, no consent)', env: ON, args: ['open-ready', '--project', 'test-project', '--json'] },
+      { label: 'leg-isolation but NO consent', env: { KAOLA_LANE_CONTAINMENT: '1', KAOLA_LEG_ISOLATION: '1' }, args: ['open-ready', '--project', 'test-project', '--json'] },
+    ];
+    for (const c of offCombos) {
+      const { repoRoot, cacheDir, planPath } = makeLaneRepo();
+      const r = runNode(repoRoot, c.args, c.env);
+      assert(r.result === 'ok', '#498-COOPEN-REQUIRES-LEGS [' + c.label + ']: open-ready ok, got ' + JSON.stringify(r));
+      assert(!r.laneGroup, '#498-COOPEN-REQUIRES-LEGS [' + c.label + ']: NO co-open without legs (serial-degrade), got ' + JSON.stringify(r.laneGroup));
+      assert(Array.isArray(r.opened) && r.opened.length === 1, '#498-COOPEN-REQUIRES-LEGS [' + c.label + ']: exactly ONE write opened (serial), got ' + JSON.stringify(r.opened && r.opened.map(n => n.id)));
+      const rs = readRS(cacheDir);
+      assert(!rs || !rs.lane_group, '#498-COOPEN-REQUIRES-LEGS [' + c.label + ']: running-set carries NO lane_group key');
+      // The one opened write is in_progress; the other stays pending (serial — never co-opened).
+      const openedId = r.opened[0].id;
+      const otherId = openedId === 'A' ? 'B' : 'A';
+      assert(ledgerStatus(planPath, openedId) === 'in_progress', '#498-COOPEN-REQUIRES-LEGS [' + c.label + ']: the one opened write is in_progress');
+      assert(ledgerStatus(planPath, otherId) === 'pending', '#498-COOPEN-REQUIRES-LEGS [' + c.label + ']: the other write stays pending (no co-open)');
+      cleanup(repoRoot);
+    }
   }
 
   // -------------------------------------------------------------------------
-  // D437-CLOSE-NODE-GROUP-PASS: close A (deferred) then close B (last) → group barrier runs over
-  //   union(A,B), both complete, lane_group CLEARED, group baseline dropped, barrier:'group_passed'.
+  // #498-COOPEN-FULL-CONJUNCTION (positive): with the FULL conjunction (containment + leg-isolation +
+  //   consent) a ≥2 disjoint write frontier DOES co-open as a lane group AND provisions legs — proving
+  //   the gate is a leg-coupled conjunction, not vacuously off. (The detailed leg manifest assertions
+  //   live in LEG-PROVISION-ON below; here we assert only the co-open ⟺ legs invariant directly.)
   // -------------------------------------------------------------------------
   {
-    const { repoRoot, cacheDir, planPath, g } = makeLaneRepo();
-    const open = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], ON);
-    const groupId = open.laneGroup.group_id;
-    writeEvidence(cacheDir, 'A');
-    writeEvidence(cacheDir, 'B');
-    fs.writeFileSync(path.join(repoRoot, 'ax.js'), '// A in-lane\n');
-    fs.writeFileSync(path.join(repoRoot, 'by.js'), '// B in-lane\n');
-    const rA = runNode(repoRoot, ['close-node', '--node-id', 'A', '--project', 'test-project', '--json'], ON);
-    assert(rA.result === 'ok' && rA.barrier === 'deferred_to_group', 'D437-CLOSE-NODE-GROUP-PASS: A deferred ok');
-    const rB = runNode(repoRoot, ['close-node', '--node-id', 'B', '--project', 'test-project', '--json'], ON);
-    assert(rB.result === 'ok', 'D437-CLOSE-NODE-GROUP-PASS: close B (last) ok, got ' + JSON.stringify(rB));
-    assert(rB.barrier === 'group_passed', 'D437-CLOSE-NODE-GROUP-PASS: B barrier group_passed, got ' + rB.barrier);
-    assert(ledgerStatus(planPath, 'A') === 'complete' && ledgerStatus(planPath, 'B') === 'complete',
-      'D437-CLOSE-NODE-GROUP-PASS: both A and B complete');
-    const rs = readRS(cacheDir);
-    assert(!rs || !rs.lane_group, 'D437-CLOSE-NODE-GROUP-PASS: lane_group cleared from running-set');
-    // Group baseline dropped: the .cache base file for the group id is gone.
-    const groupBase = path.join(cacheDir, 'barrier-base-' + String(groupId).replace(/[^A-Za-z0-9_-]/g, '_'));
-    assert(!fs.existsSync(groupBase), 'D437-CLOSE-NODE-GROUP-PASS: group baseline dropped');
-    cleanup(repoRoot);
-  }
-
-  // -------------------------------------------------------------------------
-  // D437-CLOSE-NODE-VACUITY-REFUSE: non-last close with evidence but NO file change and NO no_op:
-  //   line → refuse member_vacuity. Then add a no_op: line → close A → ok deferred.
-  // -------------------------------------------------------------------------
-  {
+    const LEG_ON_LOCAL = { KAOLA_LANE_CONTAINMENT: '1', KAOLA_LEG_ISOLATION: '1' };
     const { repoRoot, cacheDir, planPath } = makeLaneRepo();
-    runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], ON);
-    writeEvidence(cacheDir, 'A'); // evidence present, NO in-lane edit, NO no_op
-    const r1 = runNode(repoRoot, ['close-node', '--node-id', 'A', '--project', 'test-project', '--json'], ON);
-    assert(r1.result === 'refuse', 'D437-CLOSE-NODE-VACUITY-REFUSE: close A with no writes → refuse, got ' + JSON.stringify(r1));
-    assert(r1.reason === 'member_vacuity', 'D437-CLOSE-NODE-VACUITY-REFUSE: reason member_vacuity, got ' + r1.reason);
-    assert(ledgerStatus(planPath, 'A') === 'in_progress', 'D437-CLOSE-NODE-VACUITY-REFUSE: A NOT closed (still in_progress)');
-    // Now declare a no_op: in A's evidence → close A → ok deferred (no file change required).
-    writeEvidence(cacheDir, 'A', ['no_op: A had nothing to change this run']);
-    const r2 = runNode(repoRoot, ['close-node', '--node-id', 'A', '--project', 'test-project', '--json'], ON);
-    assert(r2.result === 'ok' && r2.barrier === 'deferred_to_group',
-      'D437-CLOSE-NODE-VACUITY-REFUSE: A with no_op: declaration → ok deferred, got ' + JSON.stringify(r2));
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON_LOCAL);
+    assert(r.result === 'ok', '#498-COOPEN-FULL-CONJUNCTION: open-ready ok, got ' + JSON.stringify(r));
+    assert(r.laneGroup && Array.isArray(r.laneGroup.members) && r.laneGroup.members.includes('A') && r.laneGroup.members.includes('B'),
+      '#498-COOPEN-FULL-CONJUNCTION: co-open forms a lane group [A,B] under the full conjunction, got ' + JSON.stringify(r.laneGroup));
+    const rs = readRS(cacheDir);
+    assert(rs && rs.lane_group && rs.lane_group.legs && rs.lane_group.legs.A && rs.lane_group.legs.B,
+      '#498-COOPEN-FULL-CONJUNCTION: co-open ⟺ legs provisioned (the safe close path), got ' + JSON.stringify(rs && rs.lane_group));
+    assert(ledgerStatus(planPath, 'A') === 'in_progress' && ledgerStatus(planPath, 'B') === 'in_progress',
+      '#498-COOPEN-FULL-CONJUNCTION: both A and B in_progress (co-opened)');
     cleanup(repoRoot);
   }
 
   // -------------------------------------------------------------------------
-  // D437-CLOSE-NODE-CROSS-LANE-STRAY: edit ax.js, by.js AND z.js (undeclared). Close A (deferred ok),
-  //   then close B (last) → group barrier REFUSES (z.js in NEITHER set's union) via the rank-4
-  //   write_set_overflow / unattributed_write arm; B NOT closed, lane_group NOT cleared.
-  // -------------------------------------------------------------------------
-  {
-    const { repoRoot, cacheDir, planPath } = makeLaneRepo();
-    runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], ON);
-    writeEvidence(cacheDir, 'A');
-    writeEvidence(cacheDir, 'B');
-    fs.writeFileSync(path.join(repoRoot, 'ax.js'), '// A in-lane\n');
-    fs.writeFileSync(path.join(repoRoot, 'by.js'), '// B in-lane\n');
-    fs.writeFileSync(path.join(repoRoot, 'z.js'), '// nobody declared this cross-lane stray\n');
-    const rA = runNode(repoRoot, ['close-node', '--node-id', 'A', '--project', 'test-project', '--json'], ON);
-    assert(rA.result === 'ok' && rA.barrier === 'deferred_to_group', 'D437-CLOSE-NODE-CROSS-LANE-STRAY: A deferred ok (no diff barrier — z.js invisible at A)');
-    const rB = runNode(repoRoot, ['close-node', '--node-id', 'B', '--project', 'test-project', '--json'], ON);
-    assert(rB.result === 'refuse', 'D437-CLOSE-NODE-CROSS-LANE-STRAY: last close refuses on cross-lane stray, got ' + JSON.stringify(rB));
-    assert(rB.reason === 'write_set_overflow' || rB.reason === 'unattributed_write',
-      'D437-CLOSE-NODE-CROSS-LANE-STRAY: reason is the EXISTING overflow/unattributed arm (NO new reason), got ' + rB.reason);
-    assert(ledgerStatus(planPath, 'B') === 'in_progress', 'D437-CLOSE-NODE-CROSS-LANE-STRAY: B NOT closed');
-    const rs = readRS(cacheDir);
-    assert(rs && rs.lane_group, 'D437-CLOSE-NODE-CROSS-LANE-STRAY: lane_group NOT cleared after refuse');
-    cleanup(repoRoot);
-  }
+  // RETIRED for #498: the legless (containment-only co-open) group close tests — D437-CLOSE-NODE-DEFERRED,
+  // D437-CLOSE-NODE-GROUP-PASS, D437-CLOSE-NODE-VACUITY-REFUSE, D437-CLOSE-NODE-CROSS-LANE-STRAY — and the
+  // ON-alone positive D437-OPEN-READY-GROUP. PREMISE NOW UNREACHABLE: after #498 co-open ⟺ legs provisioned,
+  // so a legless group is no longer a producible state via open-ready (containment-only / leg-isolation-only
+  // both serial-degrade — see #498-COOPEN-REQUIRES-LEGS). The snapshot union barrier (`:4429`,
+  // liveLegs===null) those tests exercised is now reachable only by manual running-set surgery; pinning it
+  // would test dead code on the out-of-scope plan-validator union barrier. No coverage lost:
+  //   - group OPEN under the full conjunction → LEG-PROVISION-ON / #498-COOPEN-FULL-CONJUNCTION
+  //   - group CLOSE (deferred + group_passed via the legs-live synthesizer) → LEG-CLEAN-COMPLETION-NO-LEAK
+  //   - the SERIAL close ON-alone now degrades into → D437-CLOSE-NODE-FLAG-OFF-SERIAL (ON-alone is now
+  //     byte-equivalent to OFF on the write axis).
 
   // -------------------------------------------------------------------------
   // D437-CLOSE-NODE-FLAG-OFF-SERIAL: flag OFF → close-node runs the normal per-node barrier path
@@ -5626,19 +5777,13 @@ function rtHarness(initialFiles, opts) {
     cleanup(repoRoot);
   }
 
-  // LEG-BARRIER-CLOSE-PATH-FLAG-OFF (byte-identity): legs OFF (containment only) ⇒ no leg entry ⇒ the
-  //   leg-barrier block is SKIPPED ⇒ close behaves exactly as pre-S3 (a leg overflow on disk is never
-  //   consulted — there is no leg).
-  {
-    const { repoRoot, cacheDir } = makeLaneRepo();
-    const open = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], ON);
-    assert(open.result === 'ok', 'LEG-BARRIER-CLOSE-PATH-FLAG-OFF: setup open ok, got ' + JSON.stringify(open));
-    writeEvidence(cacheDir, 'A');
-    fs.writeFileSync(path.join(repoRoot, 'ax.js'), '// in-lane parent\n');
-    const r = runNode(repoRoot, ['close-node', '--node-id', 'A', '--project', 'test-project', '--json'], ON);
-    assert(r.result === 'ok' && r.barrier === 'deferred_to_group', 'LEG-BARRIER-CLOSE-PATH-FLAG-OFF: close A ok with NO legs (leg-barrier skipped), got ' + JSON.stringify(r));
-    cleanup(repoRoot);
-  }
+  // RETIRED for #498: LEG-BARRIER-CLOSE-PATH-FLAG-OFF asserted that ON-alone (containment only) co-opens
+  // a group and the legless close returns barrier:'deferred_to_group'. PREMISE NOW UNREACHABLE: after #498
+  // co-open ⟺ legs provisioned, so ON-alone serial-degrades (opens ONE node, no group) — closing it takes
+  // the SERIAL per-node barrier path, not the group close. Its real intent (a legless close SKIPS the
+  // leg-barrier block, byte-identical to pre-S3) is covered by D437-CLOSE-NODE-FLAG-OFF-SERIAL (the legless
+  // serial close) and the leg-barrier itself by the real-leg LEG-BARRIER-IN-LANE / -OVERFLOW / -COMMITTED
+  // tests below. (Its body never planted a leg-overflow, so it never exercised its own skip claim anyway.)
 
   // LEG-BARRIER-TEARDOWN-DROPS-REF: on clean group completion the leg-base refs are deleted alongside the
   //   worktree + branch (no ref leak). #463 S4: an end-to-end close-path run with REAL in-leg writes that
@@ -7411,8 +7556,10 @@ function rtHarness(initialFiles, opts) {
   // T472-DIVERT: auto-pick open-next at a ≥2 independent read frontier → enterBatch (no single-open).
   {
     let planContent = makePlan(['| a | pending | |', '| b | pending | |', '| review | pending | |', '| finalize | pending | |']);
-    const shellStub = (sp) => {
-      if (path.basename(sp) === 'kaola-workflow-next-action.js') return {
+    const shellStub = (sp, a) => {
+      const base = path.basename(sp);
+      if (base === 'kaola-workflow-plan-validator.js' && (a || []).includes('--resume-check')) return { exitCode: 0, ok: true };
+      if (base === 'kaola-workflow-next-action.js') return {
         exitCode: 0, result: 'ok',
         readySet: [{ id: 'a', role: 'code-explorer', model: 'sonnet', declared_write_set: '—', dependsOn: [] }, { id: 'b', role: 'code-explorer', model: 'sonnet', declared_write_set: '—', dependsOn: [] }],
         readyPending: [{ id: 'a', role: 'code-explorer', model: 'sonnet', declared_write_set: '—' }, { id: 'b', role: 'code-explorer', model: 'sonnet', declared_write_set: '—' }],
@@ -7429,8 +7576,9 @@ function rtHarness(initialFiles, opts) {
   // T472-SERIAL: width-1 frontier → open-next single-opens serially (no enterBatch — no forced width).
   {
     let planContent = makePlan(['| solo | pending | |', '| review | pending | |', '| finalize | pending | |']);
-    const shellStub = (sp) => {
+    const shellStub = (sp, a) => {
       const base = path.basename(sp);
+      if (base === 'kaola-workflow-plan-validator.js' && (a || []).includes('--resume-check')) return { exitCode: 0, ok: true };
       if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', readySet: [{ id: 'solo', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'a.js', dependsOn: [] }], readyPending: [{ id: 'solo', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'a.js' }], nextNode: { id: 'solo', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'a.js' }, allDone: false };
       if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok', mode: 'per-node-start', nodeId: 'solo', overallOk: true };
       if (base === 'kaola-workflow-task-mirror.js') return { exitCode: 0, status: 'ok' };
@@ -7443,8 +7591,9 @@ function rtHarness(initialFiles, opts) {
   // T472-NODEID: an explicit --node-id at a ≥2 frontier is EXEMPT (the operator asked for one node).
   {
     let planContent = makePlan(['| a | pending | |', '| b | pending | |', '| review | pending | |', '| finalize | pending | |']);
-    const shellStub = (sp) => {
+    const shellStub = (sp, a) => {
       const base = path.basename(sp);
+      if (base === 'kaola-workflow-plan-validator.js' && (a || []).includes('--resume-check')) return { exitCode: 0, ok: true };
       if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', readySet: [{ id: 'a', role: 'code-explorer', model: 'sonnet', declared_write_set: '—', dependsOn: [] }, { id: 'b', role: 'code-explorer', model: 'sonnet', declared_write_set: '—', dependsOn: [] }], readyPending: [{ id: 'a' }, { id: 'b' }], nextNode: { id: 'a' }, allDone: false };
       if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok', mode: 'per-node-start', nodeId: 'a', overallOk: true };
       if (base === 'kaola-workflow-task-mirror.js') return { exitCode: 0, status: 'ok' };

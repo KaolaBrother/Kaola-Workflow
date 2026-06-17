@@ -1,5 +1,5 @@
 ---
-description: Kaola-Workflow Adaptive Executor. Executes a frozen workflow-plan.md via a running-set scheduler; each frontier unit dispatched concurrently up to the fan-out cap (critical-path-first), with serial as the degraded fallback for write nodes or when lane containment is off. Resume-safe.
+description: Kaola-Workflow Adaptive Executor. Executes a frozen workflow-plan.md via a running-set scheduler; each frontier unit dispatched concurrently up to the fan-out cap (critical-path-first), with serial as the degraded fallback for write nodes or when the write-parallelism conjunction is not met. Resume-safe.
 argument-hint: <project name>
 ---
 
@@ -126,8 +126,10 @@ on every Agent call. Pass `model=dispatch.model` (the `model` field from `dispat
   record evidence parent-side, `seal`, `join`.
 - `FANOUT_CAP` (default 4) is a runtime limit, not a planning cap; `top-up` drains wider
   frontiers. `KAOLA_FANOUT_CAP_READONLY` (default 8) applies to read-only batches.
-- Serial (`max_concurrent=1`) is the degraded mode; write parallelism requires
-  `KAOLA_LANE_CONTAINMENT=true`. `opening` marker + `reconcile` handle batch crash-resume.
+- Serial (`max_concurrent=1`) is the degraded mode; write parallelism requires the
+  full conjunction — `KAOLA_LANE_CONTAINMENT`, `KAOLA_LEG_ISOLATION`, and
+  `--write-overlap-consent` — see the activation recipe below. `opening` marker +
+  `reconcile` handle batch crash-resume.
 - `test_thrash` ≥ 3: escalate via `write-halt --reason test_thrash`.
 
 <!-- PIN: leg-isolation-recipe -->

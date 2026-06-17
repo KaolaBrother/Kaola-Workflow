@@ -1060,6 +1060,26 @@ function buildDispatch(nodeInfo, context) {
 }
 
 // ---------------------------------------------------------------------------
+// qualifiedEvidenceFile(project, nodeId) (#516) — the PROJECT-QUALIFIED evidence path emitted in a
+// dispatch packet's `evidence_file` hint: kaola-workflow/<project>/.cache/<node-id>.md.
+//
+// Why qualified, not the bare `.cache/<node-id>.md`: the executor's own record-evidence / barrier resolve
+// the on-disk file as path.join(dirname(planPath), '.cache', <id>.md) = kaola-workflow/<project>/.cache/…
+// — barrier-exempt via isWorkflowArtifactPath (/^kaola-workflow\//). But a role-agent subagent dispatched
+// INTO the worktree interprets a bare `.cache/<id>.md` relative to ITS cwd (the worktree root) and writes
+// <worktree>/.cache/<id>.md — which does NOT match /^kaola-workflow\// → the per-node barrier treats it as
+// a PRODUCTION write outside the declared allowlist → a false write_set_overflow with the evidence file as
+// the sole outOfAllow path (triage even proposes revert-overflow, which would DELETE the evidence).
+// Emitting the project-qualified path makes the subagent's literal-follow land in the exempt location.
+// On-disk seed/record/verify resolution is UNCHANGED — they join dirname(planPath); only this dispatch
+// HINT string is qualified. Falls back to the bare path when project is absent (legacy/offline).
+// ---------------------------------------------------------------------------
+function qualifiedEvidenceFile(project, nodeId) {
+  if (!project) return '.cache/' + nodeId + '.md';
+  return 'kaola-workflow/' + project + '/.cache/' + nodeId + '.md';
+}
+
+// ---------------------------------------------------------------------------
 // runVerifyEvidence(opts) (#444 / D-444-01 §4) — READ-ONLY mode of record-evidence.
 // Verifies an on-disk .cache/<node-id>.md WITHOUT stdin transit.
 // Reuses checkEvidenceShape (the same checker the close path uses) so --verify
@@ -1623,13 +1643,20 @@ function runMirrorProject(opts) {
 function runOpenNext(opts) {
   const { planPath, statePath, project, nodeId: requestedId, shell, readFile, writeFile, working_dir } = opts;
 
-  // == UNIFIED GUARD PROLOGUE (D1) — matrix: excl-scheduler:yes / excl-batch:yes / halt-fence:yes.
-  //    NO integrity (adversarial finding: orient already runs --resume-check on the documented resume
-  //    path; adding it to open-next risks a legacy-path behavioral diff) and NO serial-excl (open-next
-  //    IS the serial path — it cannot be mutually exclusive with itself). ==
+  // == UNIFIED GUARD PROLOGUE (D1) — matrix: integrity:yes / excl-scheduler:yes / excl-batch:yes /
+  //    halt-fence:yes. NO serial-excl (open-next IS the serial path — it cannot be mutually exclusive
+  //    with itself). ==
+  // #499: open-next NOW carries the integrity layer (matching open-ready/open-batch/top-up). The prior
+  //   omission left the documented SERIAL RESUME path (orient → open-next) with no plan_hash gate: a
+  //   post-freeze, hash-defeating content tamper that keeps the DAG acyclic/unique-sink (widen a
+  //   declared_write_set, swap a role, re-point depends_on) was dispatched with no integrity refusal,
+  //   because orient's --resume-check does NOT cover a tamper that lands BETWEEN orient and open-next (or
+  //   an open-next reached without orient). The plan_hash freeze guarantee must hold on the resume path
+  //   too — accuracy is non-negotiable. Layer 1 shells validator --resume-check; a mismatch refuses
+  //   plan_integrity_failed with zero mutation, BEFORE next-action / baseline / ledger flip.
   // #383: never open a serial node while the #377 scheduler (running-set) or a batch is live (those
   //   surfaces co-scheduling against a serial node is the #383(a)/(b) wedge). #391b: fence a halt.
-  const guard = mutationGuardPrologue(opts, { halt: true, excl: ['scheduler', 'batch'] });
+  const guard = mutationGuardPrologue(opts, { integrity: true, halt: true, excl: ['scheduler', 'batch'] });
   if (guard) return guard;
 
   // Shell NEXT_ACTION.
@@ -1740,11 +1767,15 @@ function runOpenNext(opts) {
   // #433 (D-433-01 §2): open-time evidence seeding — create .cache/{node-id}.md with
   // binding header + role-specific stubs. Idempotent (does not overwrite on crash-resume).
   const seedResult = seedEvidenceFile(planPath, targetNode.id, openNonce, targetNode.role, false);
+  // #516: the dispatch HINT path is PROJECT-QUALIFIED (seedResult.evidence_file is the bare on-disk
+  // relative path used for the local seed; the subagent gets the qualified path so its literal-follow
+  // lands in the barrier-exempt kaola-workflow/<project>/.cache/ location, not the worktree root).
+  const dispatchEvidenceFile = qualifiedEvidenceFile(project, targetNode.id);
 
   // #444 (D-444-01 §2): build the dispatch descriptor sub-object via the single shared builder.
   const openedDispatch = buildDispatch(targetNode, {
     nonce:          openNonce,
-    evidence_file:  seedResult.evidence_file,
+    evidence_file:  dispatchEvidenceFile,
     required_tokens: seedResult.required_tokens,
     working_dir:    working_dir || null,
     forge_rider:    null,
@@ -1761,6 +1792,9 @@ function runOpenNext(opts) {
       model: targetNode.model,
       declared_write_set: targetNode.declared_write_set,
       // #433: evidence metadata for the dispatcher (seeded path + required token classes).
+      // #516: the top-level mirror stays the BARE on-disk relative path (the #444 back-compat vestige;
+      // plan-run consumes dispatch.evidence_file, not this — see commands/kaola-workflow-plan-run.md:118).
+      // Only the dispatch HINT is project-qualified so a subagent's literal-follow lands project-locally.
       evidence_file: seedResult.evidence_file,
       required_tokens: seedResult.required_tokens,
       // #444: dispatch descriptor sub-object (additive; back-compat fields kept above for one release).
@@ -2183,12 +2217,14 @@ function runCloseAndOpenNext(opts) {
 
   // #433 (D-433-01 §2): open-time evidence seeding for the fused-advance node.
   const fusedSeed = seedEvidenceFile(planPath, nextNode.id, fusedNonce, nextNode.role, false);
+  // #516: project-qualified dispatch HINT path for the fused-advance node (same rationale as runOpenNext).
+  const fusedEvidenceFile = qualifiedEvidenceFile(project, nextNode.id);
 
   // #444 (D-444-01 §2): build the dispatch descriptor for the fused-advance node via the
   // SAME single builder as runOpenNext — this closes the #411 class by construction.
   const fusedDispatch = buildDispatch(nextNode, {
     nonce:          fusedNonce,
-    evidence_file:  fusedSeed.evidence_file,
+    evidence_file:  fusedEvidenceFile,
     required_tokens: fusedSeed.required_tokens,
     working_dir:    working_dir || null,
     forge_rider:    null,
@@ -2212,7 +2248,8 @@ function runCloseAndOpenNext(opts) {
       // with a dependent the SECOND close refuses evidence_stale (the on-disk nonce never matches the
       // empty header). Read the SAME nested path (recordBase.base), NOT the top level.
       nonce: fusedNonce,
-      // #433: evidence metadata for the dispatcher.
+      // #433: evidence metadata for the dispatcher. #516: top-level mirror stays the bare on-disk path
+      // (vestige); only fusedDispatch.evidence_file is project-qualified.
       evidence_file: fusedSeed.evidence_file,
       required_tokens: fusedSeed.required_tokens,
       // #444: dispatch descriptor sub-object (additive; back-compat fields kept above for one release).
@@ -2729,7 +2766,9 @@ function runReopenNode(opts) {
 
   return {
     result: 'ok', reopened: nodeId, gatesReset, gatesFolded, baselinesRemoved, evidenceRemoved, baselineRecorded: true,
-    // #433: report nonce rotation and evidence metadata.
+    // #433: report nonce rotation and evidence metadata. #516: this is the bare on-disk mirror (reopen
+    // returns no dispatch sub-object; the orchestrator re-dispatches the reopened node via a fresh
+    // open-next/open-ready whose dispatch.evidence_file IS project-qualified). Kept bare for vestige parity.
     nonce_rotated: reopenSeed.nonce_rotated,
     evidence_file: reopenSeed.evidence_file,
     required_tokens: reopenSeed.required_tokens,
@@ -3278,9 +3317,11 @@ function mutationGuardPrologue(opts, cfg) {
   const { planPath, shell, readFile, cacheExists } = opts;
   cfg = cfg || {};
 
-  // Layer 1 — integrity (mirror open-batch 424-427). Only when configured (open-next DOES NOT add it:
-  // an adversarial finding showed orient already runs --resume-check on the documented resume path,
-  // and adding it to open-next risks a legacy-path behavioral diff).
+  // Layer 1 — integrity (mirror open-batch 424-427). Applied when configured. #499: open-next NOW sets
+  // integrity:true (the serial resume path needs the plan_hash gate — orient's --resume-check does not
+  // cover a tamper between orient and open-next, or an open-next reached without orient). Every mutating
+  // opener (open-next / open-ready / open-batch / top-up) carries this layer; a mismatch refuses
+  // plan_integrity_failed with zero mutation.
   if (cfg.integrity && typeof shell === 'function') {
     const integrity = shell(validatorPath, [planPath, '--resume-check', '--json']);
     if (integrity.exitCode !== 0 || integrity.ok !== true) {
@@ -3812,6 +3853,11 @@ function runOpenReady(opts) {
   // #437 (D-419 P2): the lane-group descriptor when ≥2 disjoint writes co-open under
   // containment. undefined ⇒ the serial/read path (the running-set writer skips lane_group).
   let groupForm;
+  // #498: the leg-coupled conjunction (leg-isolation toggle AND per-run --write-overlap-consent).
+  // Computed ONCE at function scope and used at BOTH the co-open gate (below) and the leg-provisioning
+  // gate (:3908) so they can never drift. groupForm is set ONLY when legCoupled holds ⇒ groupForm ⟺
+  // legs provisioned ⟺ the safe close path (parent-clean fence + commit-based barrier).
+  const legCoupled = resolveLegIsolation(process.env) && opts.writeOverlapConsent;
   if (readOnly.length > 0) {
     let slots = Math.max(0, cap - liveNodes.length);
     if (Number.isInteger(max) && max >= 1) slots = Math.min(slots, max);
@@ -3820,9 +3866,19 @@ function runOpenReady(opts) {
   } else if (liveNodes.length === 0 && writeNodes.length > 0) {
     // #437 (D-419 P2 §1.2): under KAOLA_LANE_CONTAINMENT, attempt a co-open lane group from a
     // ≥2 disjoint write frontier; on overlap (or flag OFF) DEGRADE to a single serial write.
+    // #498: co-open MUST gate on the FULL leg-coupled conjunction — containment AND leg-isolation AND
+    //   --write-overlap-consent — the SAME conjunction that provisions legs below (:3908). The bug it
+    //   fixes: co-open on containment ALONE leaves legs=null (the conjunction at :3908 is unmet), so the
+    //   close path falls to the attribution-blind snapshot UNION barrier (:4429, liveLegs===null) which
+    //   passes a cross-member overwrite (a path written by the WRONG member is still in the union — the
+    //   corruption holds even under serial dispatch). Coupling co-open to leg-provisioning makes the
+    //   invariant groupForm ⟺ legs provisioned ⟺ the safe (parent-clean fence + commit-based barrier)
+    //   close path, so the legless union barrier is never reached via co-open. legCoupled is computed
+    //   ONCE and used at BOTH gates so they can never drift (a half-fix gating on leg-isolation only —
+    //   omitting consent — would still set groupForm while legs stays null).
     const containment = resolveLaneContainment(process.env);
-    if (containment && writeNodes.length >= 2) {
-      const grp = tryFormLaneGroup(writeNodes, planPath, shell, resolveLegIsolation(process.env) && opts.writeOverlapConsent);
+    if (containment && legCoupled && writeNodes.length >= 2) {
+      const grp = tryFormLaneGroup(writeNodes, planPath, shell, legCoupled);
       if (grp.ok) {
         // #437 §1.3 cap: a write lane group respects the WRITE cap (resolveFanoutCap, not the read
         // cap) AND --max as a single unit. The members are already pairwise-disjoint (parallel-safe
@@ -3832,15 +3888,22 @@ function runOpenReady(opts) {
         try { ({ resolveFanoutCap: writeCap } = require('./kaola-workflow-adaptive-schema')); } catch (_) { writeCap = null; }
         let groupCeiling = writeCap ? writeCap(process.env) : grp.members.length;
         if (Number.isInteger(max) && max >= 1) groupCeiling = Math.min(groupCeiling, max);
-        groupCeiling = Math.max(2, groupCeiling);
-        const chosen = writeNodes.filter(n => grp.members.includes(n.id)).slice(0, groupCeiling);
-        toOpen = chosen;
-        openKind = 'write';
-        groupForm = {
-          group_id: laneGroupId(chosen.map(n => n.id)),
-          members: chosen.map(n => n.id).slice().sort(),
-          write_union: laneWriteUnion(chosen),
-        };
+        // #498: do NOT floor the ceiling back up to 2 — that silently overrode an operator's explicit
+        //   KAOLA_FANOUT_CAP=1 / --max 1. When the effective cap resolves to <2, a group cannot legally
+        //   co-open: DEGRADE to a single serial write (the operator asked for serial concurrency 1).
+        if (groupCeiling < 2) {
+          toOpen = [writeNodes[0]];
+          openKind = 'write';
+        } else {
+          const chosen = writeNodes.filter(n => grp.members.includes(n.id)).slice(0, groupCeiling);
+          toOpen = chosen;
+          openKind = 'write';
+          groupForm = {
+            group_id: laneGroupId(chosen.map(n => n.id)),
+            members: chosen.map(n => n.id).slice().sort(),
+            write_union: laneWriteUnion(chosen),
+          };
+        }
       } else {
         toOpen = [writeNodes[0]];
         openKind = 'write';
@@ -3897,16 +3960,17 @@ function runOpenReady(opts) {
   }
 
   // #463 Slice 2: per-leg `.kw` worktree provisioning (ADR-0010: containment, not construction).
-  // Gated by ALL THREE: resolveLegIsolation (the KAOLA_LEG_ISOLATION toggle) AND
-  // opts.writeOverlapConsent (the per-run, NEVER-persisted consent flag — mirrors
-  // opts.speculativeConsent) AND a formed lane group (groupForm). When any is false ⇒ NO leg is
-  // provisioned, `legs` stays empty ⇒ no lane_group.legs key (flag-OFF byte-identical). Provision
-  // a leg per co-opened write member INSIDE Phase 1, BEFORE the ledger flip, so a refusal here
-  // leaves a reconcilable state (no ledger row has flipped yet). working_dir STAYS parent-side
-  // (Slice 3 routes into legs). On any provisionLeg failure, teardown every leg already
+  // Gated by groupForm AND legCoupled (the leg-isolation toggle AND the per-run --write-overlap-consent
+  // flag — mirrors opts.speculativeConsent). #498: legCoupled is the SAME local the co-open gate uses, so
+  // groupForm is already only set when legCoupled holds (groupForm ⟹ legCoupled); the conjunction is kept
+  // explicit here so the invariant is visible at the provisioning site and the two gates cannot drift.
+  // When either is false ⇒ NO leg is provisioned, `legs` stays empty ⇒ no lane_group.legs key (flag-OFF
+  // byte-identical). Provision a leg per co-opened write member INSIDE Phase 1, BEFORE the ledger flip, so
+  // a refusal here leaves a reconcilable state (no ledger row has flipped yet). working_dir STAYS
+  // parent-side (Slice 3 routes into legs). On any provisionLeg failure, teardown every leg already
   // provisioned THIS call (clean rollback — no partial leg set) and refuse.
   let legs = null;
-  if (groupForm && resolveLegIsolation(process.env) && opts.writeOverlapConsent) {
+  if (groupForm && legCoupled) {
     let root; try { root = getRoot(); } catch (_) { root = process.cwd(); }
     const mainRoot = getMainRoot(root);
     // baseRev = the feature-branch HEAD (the open-ready cwd is the feature worktree).
@@ -4027,11 +4091,15 @@ function runOpenReady(opts) {
       let ROLE_TOKEN_REGISTRY = {};
       try { ({ ROLE_TOKEN_REGISTRY } = require('./kaola-gitea-workflow-plan-validator')); } catch (_) {}
       const required_tokens = (ROLE_TOKEN_REGISTRY[n.role] || ['evidence-binding']).slice();
+      // #516: the dispatch HINT path is project-qualified (subagent resolves it project-locally, not at
+      // the worktree root — see qualifiedEvidenceFile); the top-level mirror stays the BARE on-disk path
+      // (the #444 back-compat vestige). On-disk seed/record/verify resolution is unchanged.
+      const dispatchEvidenceFile = qualifiedEvidenceFile(project, n.id);
       const evidence_file = '.cache/' + n.id + '.md';
       const nonce = nonceById[n.id] || null;
       const dispatch = buildDispatch(
         { id: n.id, role: n.role, model: n.model || null, declared_write_set: n.declared_write_set },
-        { nonce, evidence_file, required_tokens, working_dir: working_dir || null, forge_rider: null }
+        { nonce, evidence_file: dispatchEvidenceFile, required_tokens, working_dir: working_dir || null, forge_rider: null }
       );
       return { id: n.id, role: n.role, model: n.model || null, kind: n.kind, declared_write_set: n.declared_write_set, nonce, evidence_file, required_tokens, dispatch };
     }),

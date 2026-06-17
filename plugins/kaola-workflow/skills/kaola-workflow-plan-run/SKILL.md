@@ -1,6 +1,6 @@
 ---
 name: kaola-workflow-plan-run
-description: Use when executing a frozen adaptive workflow-plan.md — executes via a running-set scheduler; each frontier unit dispatched concurrently up to the fan-out cap (critical-path-first), with serial as the degraded fallback for write nodes or when lane containment is off. Resume-safe. Mirror of commands/kaola-workflow-plan-run.md for Codex runtime.
+description: Use when executing a frozen adaptive workflow-plan.md — executes via a running-set scheduler; each frontier unit dispatched concurrently up to the fan-out cap (critical-path-first), with serial as the degraded fallback for write nodes or when the write-parallelism conjunction is not met. Resume-safe. Mirror of commands/kaola-workflow-plan-run.md for Codex runtime.
 ---
 
 # Skill: kaola-workflow-plan-run
@@ -115,8 +115,10 @@ above (session effort = `dispatch.codex_reasoning_effort` when non-null). Pass `
   record evidence parent-side, `seal`, `join`.
 - `FANOUT_CAP` (default 4) is a runtime limit, not a planning cap; `top-up` drains wider
   frontiers. `KAOLA_FANOUT_CAP_READONLY` (default 8) applies to read-only batches.
-- Serial (`max_concurrent=1`) is the degraded mode; write parallelism requires
-  `KAOLA_LANE_CONTAINMENT=true`. `opening` marker + `reconcile` handle batch crash-resume.
+- Serial (`max_concurrent=1`) is the degraded mode; write parallelism requires the
+  full conjunction — `KAOLA_LANE_CONTAINMENT`, `KAOLA_LEG_ISOLATION`, and
+  `--write-overlap-consent` — see the activation recipe below. `opening` marker +
+  `reconcile` handle batch crash-resume.
   `test_thrash` ≥ 3: escalate via `write-halt --reason test_thrash`.
 
 <!-- PIN: leg-isolation-recipe -->
