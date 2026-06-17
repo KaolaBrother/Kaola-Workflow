@@ -39,6 +39,14 @@ The objective is **minimum makespan and minimum wasted work at fixed correctness
 - **Correctness is efficiency.** Fail-closed gates + adversarial verify prevent the rework that dwarfs any parallelism win. Investigation composes as probe → assume → adversarial critique → converge (read phases fanned out; shape-first read-only then re-plan when the shape depends on findings, freeze-once). Question/bug-shaped handling is designed in **#486** (not yet shipped).
 - **Escalate values, not facts** — route value / standing / irreversible calls to the `consent`-halt valve; never bolt an approval gate onto the planner (planner-first, #44/#287).
 
+### Self-Sufficient by Default; CI/CD Is Not a Gate (#501)
+
+Minimize **synergy** (coupling to systems the workflow does not own); maximize **independence**. A run must complete on a repo with **no CI/CD configured**, with no degradation.
+
+- **CI/CD is never a required gate** — not a plan node, not a finalization precondition, not something the orchestrator / `--sink` / finalize waits on or blocks on. Coupling correctness to an external pipeline assumes infrastructure that may not exist and hands the verdict to a system we don't own.
+- **Silent by default** — do not mention CI/CD in plans, prose, finalize output, roadmap, or suggestions **unless the user clearly states CI/CD is mandated** for that context. Default posture is CI/CD *absent*, not "optional"; only an explicit mandate flips it on.
+- **Accuracy still comes from inside** — this does not weaken precedence #1. Keep the internal self-contained gates (adversarial verify, fail-closed barriers, gate-role nodes, the four `npm` chains, `simulate-workflow-walkthrough.js`); reject only the *external pipeline as a gate*. Same direction as the consumer finalize gate (push validation inward to agent checks, retire external chain/CI receipts — #475/#464).
+
 ## Key Scripts
 - `scripts/kaola-workflow-claim.js` — claim, release/discard, status, patch-branch, watch-pr, bootstrap/startup, pick-next, resume, finalize, worktree-status, worktree-finalize subcommands; explicit-target validation via `claimExplicitTarget()` helper
 - `scripts/simulate-workflow-walkthrough.js` — integration test suite (hand-rolled assert, no framework)
