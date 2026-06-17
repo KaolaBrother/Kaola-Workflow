@@ -400,32 +400,175 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     assert(cnt >= 3, '#495(b-bundle): retry fired to max attempts — counter=' + cnt + ' (expected >=3)');
   }
 
-  // --- (c) determinate non-zero NOT retried (bundle path — also tests result:refuse) ---
+  // --- (c) determinate GENUINE-negative non-zero NOT retried (bundle path — result:refuse) ---
+  // #519 RECONCILE: the axis is now stderr-error-CLASS, not exit code. This pin must use a
+  // GENUINE-negative stderr (a real 404 "Could not resolve to an Issue") so it stays determinate-
+  // refuse under the corrected taxonomy. A generic exit-1 with no signature ALSO refuses (unrecognized
+  // → refuse), but a genuine 404 makes the intent explicit and proves the genuine arm stays refuse.
   {
     const counterFile = path.join(tmpMockDir, 'counter-c-bundle.txt');
     fs.writeFileSync(counterFile, '0');
-    // Mock: always exits with code 1 (clean non-zero) emitting a red verdict JSON
+    // Mock: emits a real GitHub 404 on STDERR (the genuine-negative signature) and exits 1.
     const mockScript = path.join(tmpMockDir, 'mock-c-bundle.js');
     fs.writeFileSync(mockScript,
       'const fs = require("fs");\n' +
       'const count = parseInt(fs.readFileSync(' + JSON.stringify(counterFile) + ', "utf8") || "0", 10) + 1;\n' +
       'fs.writeFileSync(' + JSON.stringify(counterFile) + ', String(count));\n' +
-      'process.stdout.write(JSON.stringify({ verdict: "red", reasoning: "blocked by policy" }) + "\\n");\n' +
-      'process.exit(1);\n'  // clean non-zero: subprocess ran and decided
+      'process.stderr.write("GraphQL: Could not resolve to an Issue with the number of 999. (repository.issue)\\n");\n' +
+      'process.exit(1);\n'  // clean non-zero with a GENUINE-negative stderr: determinate refuse
     );
     const r = runClaim(['startup', '--target-issues', '83,143'], { KAOLA_CLASSIFIER_MOCK_SCRIPT: mockScript }, repoDir);
     const cnt = parseInt(fs.readFileSync(counterFile, 'utf8') || '0', 10);
-    // The determinate non-zero exit maps to target_set_unavailable (the clean_nonzero branch returns verdict:'target_unavailable',
-    // which bundle maps to status:'target_set_unavailable' with result:'refuse').
     assert(r.json && (r.json.status === 'target_set_unavailable' || r.json.status === 'target_set_red'),
-      '#495(c-bundle): determinate non-zero → target_set_unavailable or target_set_red (got status=' + (r.json && r.json.status) + ')');
+      '#495(c-bundle): genuine-negative non-zero → target_set_unavailable or target_set_red (got status=' + (r.json && r.json.status) + ')');
     assert(r.json && r.json.result === 'refuse',
-      '#495(c-bundle): determinate non-zero → result:refuse (got result=' + (r.json && r.json.result) + ')');
-    assert(cnt === 1, '#495(c-bundle): determinate NOT retried — counter=' + cnt + ' (expected 1)');
+      '#495(c-bundle): genuine-negative non-zero → result:refuse (got result=' + (r.json && r.json.result) + ')');
+    assert(cnt === 1, '#495(c-bundle): determinate genuine NOT retried — counter=' + cnt + ' (expected 1)');
+  }
+
+  // --- #519(d-transient-stderr): a clean_nonzero exit carrying a TRANSIENT-INFRA stderr now ESCALATES ---
+  // This is the AXIS REPLACEMENT: pre-#519 ANY clean_nonzero refused; post-#519 a TLS-timeout /
+  // rate-limit / DNS signature in stderr flips it to transient → retried → target_set_indeterminate /
+  // result:escalate (the kaolaGIT live repro: the classifier subprocess exits non-zero but the root
+  // cause is an infra blip, NOT a genuine-gone target).
+  {
+    const counterFile = path.join(tmpMockDir, 'counter-d-transient.txt');
+    fs.writeFileSync(counterFile, '0');
+    const mockScript = path.join(tmpMockDir, 'mock-d-transient.js');
+    fs.writeFileSync(mockScript,
+      'const fs = require("fs");\n' +
+      'const count = parseInt(fs.readFileSync(' + JSON.stringify(counterFile) + ', "utf8") || "0", 10) + 1;\n' +
+      'fs.writeFileSync(' + JSON.stringify(counterFile) + ', String(count));\n' +
+      'process.stderr.write("error connecting to api.github.com: net/http: TLS handshake timeout\\n");\n' +
+      'process.exit(1);\n'  // clean non-zero, but stderr is a TRANSIENT-INFRA signature → escalate
+    );
+    const r = runClaim(['startup', '--target-issues', '83,143'], { KAOLA_CLASSIFIER_MOCK_SCRIPT: mockScript }, repoDir);
+    const cnt = parseInt(fs.readFileSync(counterFile, 'utf8') || '0', 10);
+    assert(r.json && r.json.status === 'target_set_indeterminate',
+      '#519(d-transient-stderr): clean_nonzero with TLS-timeout stderr → target_set_indeterminate (got status=' + (r.json && r.json.status) + ')');
+    assert(r.json && r.json.result === 'escalate',
+      '#519(d-transient-stderr): transient-infra stderr → result:escalate (got result=' + (r.json && r.json.result) + ')');
+    assert(cnt >= 3, '#519(d-transient-stderr): transient-infra clean_nonzero RETRIED to max — counter=' + cnt + ' (expected >=3)');
   }
 
   fs.rmSync(tmpMockDir, { recursive: true, force: true });
   fs.rmSync(repoDir, { recursive: true, force: true });
+}
+
+// --- #519: classifier gh-fetch stderr-error-class axis (the kaolaGIT live repro) ----------------
+// Drives the REAL classifier subprocess via KAOLA_GH_MOCK_SCRIPT. The mock partitions by the gh
+// subcommand so a transient can hit `gh repo view` (site 1), `gh issue view` (site 2), or both.
+// PRE-#519 the bare `gh repo view` in getRepoOwnerName crashed to exit 1 (clean_nonzero) — the
+// literal FIRST failure in the live repro. POST-#519 a transient on EITHER call routes to the
+// indeterminate emitter (verdict:indeterminate, reasoning_class:classifier_error).
+{
+  const { execFileSync } = require('child_process');
+  const CLASSIFIER = path.join(__dirname, 'kaola-workflow-classifier.js');
+
+  function runClassifier(extraEnv) {
+    const e = Object.assign({}, process.env, {
+      KAOLA_GH_REMOTE_TIMEOUT_MS: '500',
+      KAOLA_CLASSIFIER_BACKOFF_MS: '0',
+    }, extraEnv || {});
+    delete e.KAOLA_WORKFLOW_OFFLINE;
+    const tmpCwd = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-519cwd-')));
+    try {
+      const out = execFileSync('node', [CLASSIFIER, 'classify', '--issue', '77'], { cwd: tmpCwd, encoding: 'utf8', env: e });
+      const lines = out.trim().split('\n').filter(l => l.trim());
+      return lines.length ? JSON.parse(lines[lines.length - 1]) : null;
+    } catch (err) {
+      const out = String(err.stdout || '');
+      const lines = out.trim().split('\n').filter(l => l.trim());
+      for (let i = lines.length - 1; i >= 0; i--) { try { return JSON.parse(lines[i]); } catch (_) {} }
+      return null;
+    } finally {
+      try { fs.rmSync(tmpCwd, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  const dir519 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-519-')));
+
+  // (s1) TLS timeout on `gh repo view` (site 1, getRepoOwnerName) — pre-#519 the bare exec crashed
+  // to clean_nonzero (main() exit 1, no JSON); post-#519 → indeterminate. `gh issue view` returns a
+  // valid OPEN issue so the ONLY fault is the repo-view (claim-detection) call.
+  {
+    const mock = path.join(dir519, 'mock-s1.js');
+    fs.writeFileSync(mock,
+      'const a = process.argv.slice(2).join(" ");\n' +
+      'if (a.indexOf("repo view") !== -1) { process.stderr.write("error connecting to api.github.com: net/http: TLS handshake timeout\\n"); process.exit(1); }\n' +
+      'if (a.indexOf("issue view") !== -1) { process.stdout.write(JSON.stringify({ number: 77, title: "t", body: "", state: "OPEN", labels: [] }) + "\\n"); process.exit(0); }\n' +
+      'process.stdout.write("[]\\n"); process.exit(0);\n'
+    );
+    const r = runClassifier({ KAOLA_GH_MOCK_SCRIPT: mock });
+    assert(r && r.verdict === 'indeterminate',
+      '#519(s1): TLS timeout on gh repo view (site 1) → verdict:indeterminate (got ' + JSON.stringify(r) + ')');
+    assert(r && r.reasoning_class === 'classifier_error',
+      '#519(s1): site-1 transient must carry reasoning_class:classifier_error (got ' + JSON.stringify(r) + ')');
+  }
+
+  // (s2) TLS timeout on `gh issue view` (site 2) — clean_nonzero exit, transient stderr → retried →
+  // indeterminate (NOT target_unavailable, which the old exit-code-only axis would have returned).
+  {
+    const mock = path.join(dir519, 'mock-s2.js');
+    fs.writeFileSync(mock,
+      'const a = process.argv.slice(2).join(" ");\n' +
+      'if (a.indexOf("issue view") !== -1) { process.stderr.write("error connecting to api.github.com: net/http: TLS handshake timeout\\n"); process.exit(1); }\n' +
+      'if (a.indexOf("repo view") !== -1) { process.stdout.write(JSON.stringify({ owner: { login: "o" }, name: "r" }) + "\\n"); process.exit(0); }\n' +
+      'process.stdout.write("[]\\n"); process.exit(0);\n'
+    );
+    const r = runClassifier({ KAOLA_GH_MOCK_SCRIPT: mock });
+    assert(r && r.verdict === 'indeterminate',
+      '#519(s2): TLS timeout on gh issue view (site 2 clean_nonzero) → verdict:indeterminate (got ' + JSON.stringify(r) + ')');
+  }
+
+  // (s2-genuine) a GENUINE-negative 404 on `gh issue view` stays determinate-refuse → target_unavailable.
+  // Proves the genuine arm is UNCHANGED (the #511 character at the classifier level).
+  {
+    const mock = path.join(dir519, 'mock-s2g.js');
+    fs.writeFileSync(mock,
+      'const a = process.argv.slice(2).join(" ");\n' +
+      'if (a.indexOf("issue view") !== -1) { process.stderr.write("GraphQL: Could not resolve to an Issue with the number of 77. (repository.issue)\\n"); process.exit(1); }\n' +
+      'if (a.indexOf("repo view") !== -1) { process.stdout.write(JSON.stringify({ owner: { login: "o" }, name: "r" }) + "\\n"); process.exit(0); }\n' +
+      'process.stdout.write("[]\\n"); process.exit(0);\n'
+    );
+    const r = runClassifier({ KAOLA_GH_MOCK_SCRIPT: mock });
+    assert(r && r.verdict === 'target_unavailable',
+      '#519(s2-genuine): 404 on gh issue view → verdict:target_unavailable (determinate, got ' + JSON.stringify(r) + ')');
+  }
+
+  fs.rmSync(dir519, { recursive: true, force: true });
+}
+
+// --- #519: probeIssueState transient discriminant (non-breaking) -------------------------------
+// A TRANSIENT-infra probe fault sets { state:'unavailable', transient:true } (claim gates escalate);
+// a GENUINE/unknown fault keeps the plain { state:'unavailable' } (closure-audit/probe-memo read .state).
+{
+  const af = require('./kaola-workflow-active-folders');
+  const dirP = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-519-probe-')));
+  const prevMock = process.env.KAOLA_GH_MOCK_SCRIPT;
+  delete process.env.KAOLA_WORKFLOW_OFFLINE;
+  // transient: gh issue view exits 1 with a rate-limit stderr → transient:true
+  {
+    af.__resetIssueStateMemo();
+    const mock = path.join(dirP, 'mock-transient.js');
+    fs.writeFileSync(mock, 'process.stderr.write("API rate limit exceeded for user\\n"); process.exit(1);');
+    process.env.KAOLA_GH_MOCK_SCRIPT = mock;
+    const r = af.probeIssueState(701);
+    assert(r.state === 'unavailable', '#519(probe-transient): transient keeps state:unavailable (got ' + JSON.stringify(r) + ')');
+    assert(r.transient === true, '#519(probe-transient): rate-limit stderr sets transient:true (got ' + JSON.stringify(r) + ')');
+  }
+  // genuine: gh issue view exits 1 with a 404 stderr → NO transient discriminant
+  {
+    af.__resetIssueStateMemo();
+    const mock = path.join(dirP, 'mock-genuine.js');
+    fs.writeFileSync(mock, 'process.stderr.write("Could not resolve to an Issue with the number of 702.\\n"); process.exit(1);');
+    process.env.KAOLA_GH_MOCK_SCRIPT = mock;
+    const r = af.probeIssueState(702);
+    assert(r.state === 'unavailable', '#519(probe-genuine): genuine keeps state:unavailable (got ' + JSON.stringify(r) + ')');
+    assert(r.transient !== true, '#519(probe-genuine): 404 stderr must NOT set transient (got ' + JSON.stringify(r) + ')');
+  }
+  if (prevMock === undefined) delete process.env.KAOLA_GH_MOCK_SCRIPT; else process.env.KAOLA_GH_MOCK_SCRIPT = prevMock;
+  fs.rmSync(dirP, { recursive: true, force: true });
 }
 
 // --- #507: boundary-2 classifier CLI-fetch transient retry (KAOLA_GH_MOCK_SCRIPT seam) --------

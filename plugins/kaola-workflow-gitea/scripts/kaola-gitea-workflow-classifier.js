@@ -310,12 +310,24 @@ function issueHasWorkflowInProgressLabel(labels) {
   });
 }
 
+// #519 (site 5 equivalent): claim-DETECTION is best-effort. A no-CLI / spawn fault, a genuine
+// non-zero, or a malformed/swallowed body all stay a return-false (no detectable claim), UNCHANGED.
+// We re-throw a TransientFetchError ONLY when the exec stderr carries a KNOWN transient-infra
+// signature (TLS timeout / rate-limit / DNS) — that blip would otherwise conflate to "no claim". The
+// narrow signature predicate keeps the no-CLI / offline path returning false (not escalating).
+function isInfraTransientExec(e) {
+  if (e instanceof TransientFetchError || e.transient === true) return true;
+  const combined = String((e && e.stderr) || '') + '\n' + String((e && e.stdout) || '');
+  return isTransientFetchStderr(combined);
+}
+
 function issueHasRemoteClaimNotes(issueIid) {
   if (OFFLINE) return false;
   let project;
   try {
     project = forge.discoverProject();
-  } catch (_) {
+  } catch (e) {
+    if (isInfraTransientExec(e)) throw new TransientFetchError('tea repo view transient fault', e);
     return false;
   }
   if (!project || !project.full_name) return false;
@@ -326,7 +338,8 @@ function issueHasRemoteClaimNotes(issueIid) {
       if (!note.updated_at) return true;
       return Date.now() - new Date(note.updated_at).getTime() < 24 * 60 * 60 * 1000;
     });
-  } catch (_) {
+  } catch (e) {
+    if (isInfraTransientExec(e)) throw new TransientFetchError('tea api comments transient fault', e);
     return false;
   }
 }
@@ -442,6 +455,65 @@ function classifyFetchError(e) {
   return 'killed'; // unknown non-status fault — treat as transient
 }
 
+// #519: AXIS REPLACEMENT — partition a tea/forge CLI fetch error by its stderr ERROR-CLASS, not by
+// exit code alone. A clean_nonzero exit carrying a TRANSIENT-INFRA signature (TLS handshake timeout /
+// API rate-limit / DNS "Could not resolve host" / connection reset / ETIMEDOUT / 5xx) escalates like
+// a killed/spawn-fault; a genuine-negative (404 / "Could not resolve to an Issue" / closed) — and ANY
+// UNRECOGNIZED stderr — stays determinate-refuse (escalation requires positive infra evidence).
+const TRANSIENT_FETCH_STDERR = [
+  /\bTLS\b/i,
+  /handshake/i,
+  /\btimed?\s*out\b/i,
+  /\bETIMEDOUT\b/i,
+  /\bECONNRESET\b/i,
+  /connection reset/i,
+  /connection refused/i,
+  /\bECONNREFUSED\b/i,
+  /rate limit/i,
+  /\b429\b/,
+  /could not resolve host/i,
+  /\bEAI_AGAIN\b/i,
+  /temporary failure in name resolution/i,
+  /\bdial tcp\b/i,
+  /\b5\d\d\b\s*(?:internal|bad gateway|service unavailable|gateway timeout)?/i,
+  /internal server error/i,
+  /bad gateway/i,
+  /service unavailable/i,
+  /gateway time-?out/i,
+  /\bi\/o timeout\b/i,
+  /network is unreachable/i,
+  /\bEHOSTUNREACH\b/i,
+];
+
+// #519: true iff captured stderr/stdout carries a KNOWN transient-infra signature.
+function isTransientFetchStderr(text) {
+  const s = String(text || '');
+  if (!s) return false;
+  return TRANSIENT_FETCH_STDERR.some(re => re.test(s));
+}
+
+// #519: a typed transient-fetch fault — thrown when a transient-infra exec fault (e.g. discoverProject
+// / listIssueComments for claim-detection) must route to the indeterminate/escalate emitter instead of
+// silently catching to "no claim". Mirrors the root classifier's TransientFetchError.
+class TransientFetchError extends Error {
+  constructor(message, cause) {
+    super(message);
+    this.name = 'TransientFetchError';
+    this.transient = true;
+    this.cause = cause;
+    if (cause) { this.code = cause.code; this.signal = cause.signal; }
+  }
+}
+
+// #519: combine the exit-code class with the stderr error-class into a single transient verdict.
+// spawn_fault / killed → always transient; clean_nonzero → transient only on a known stderr signature.
+function isTransientFetchError(e) {
+  const cls = classifyFetchError(e);
+  if (cls !== 'clean_nonzero') return true;
+  const combined = String((e && e.stderr) || '') + '\n' + String((e && e.stdout) || '');
+  return isTransientFetchStderr(combined);
+}
+
 // #507: overridable backoff for boundary-2 retry. Tests set KAOLA_CLASSIFIER_BACKOFF_MS=0.
 function fetchBackoffMs() {
   const v = parseInt(process.env.KAOLA_CLASSIFIER_BACKOFF_MS || '', 10);
@@ -454,25 +526,31 @@ function syncSleepFetch(ms) {
   try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch (_) {}
 }
 
-// #507: shared fetch-with-retry logic used by both classifyIssue (in-process) and cmdClassify.
+// #507/#519: shared fetch-with-retry logic used by both classifyIssue (in-process) and cmdClassify.
+// The transient/genuine partition is by stderr ERROR-CLASS (isTransientFetchError), not exit code
+// alone (#519): a clean_nonzero carrying a transient-infra signature now retries + escalates; a
+// genuine-negative / unrecognized clean_nonzero stays determinate-refuse. (The #510 exit-0-degraded
+// case — empty/unparseable body swallowed by parseJson to {} — is handled by the _st guard in the
+// callers, mapped to indeterminate, so forge.viewIssue stays the single stubbable fetch seam.)
 // Returns { issue } on success; { error: 'target_unavailable'|'indeterminate', payload } on failure.
 function fetchIssueWithRetry(issueIid, forgeViewFn) {
+  const viewFn = forgeViewFn || forge.viewIssue.bind(forge);
   const MAX_FETCH_ATTEMPTS = 3;
   const backoffMs = fetchBackoffMs();
   let lastFetchErr = null;
-  let lastFetchErrClass = '';
+  let lastFetchTransient = false;
   for (let attempt = 0; attempt < MAX_FETCH_ATTEMPTS; attempt++) {
     if (attempt > 0) syncSleepFetch(backoffMs);
     try {
-      const issue = forgeViewFn(issueIid);
+      const issue = viewFn(issueIid);
       return { issue };
     } catch (e) {
       lastFetchErr = e;
-      lastFetchErrClass = classifyFetchError(e);
-      if (lastFetchErrClass === 'clean_nonzero') break; // determinate — do not retry
+      lastFetchTransient = isTransientFetchError(e);
+      if (!lastFetchTransient) break; // genuine-negative / unrecognized — determinate, do not retry
     }
   }
-  if (lastFetchErrClass === 'clean_nonzero') {
+  if (!lastFetchTransient) {
     return { error: 'target_unavailable', payload: { verdict: 'target_unavailable', reasoning: 'tea issue fetch failed; refusing to claim outside KAOLA_WORKFLOW_OFFLINE=1' } };
   }
   const errCode = (lastFetchErr && lastFetchErr.code) || '';
@@ -514,21 +592,45 @@ function classifyIssue(issueIid, root) {
     return classify(localRoadmapIssue(issueIid, repoRoot), activeFolders);
   }
 
-  // #507: bounded retry on transient fetch faults; clean_nonzero is determinate and not retried.
+  // #507/#519: bounded retry; transient/genuine by stderr-class. A genuine-negative clean_nonzero
+  // (e.g. 404) is determinate-refuse; a transient-infra fault retries → indeterminate.
   const fetchResult = fetchIssueWithRetry(issueIid, forge.viewIssue.bind(forge));
   if (fetchResult.error) return fetchResult.payload;
   const issue = fetchResult.issue;
 
+  // #510: an exit-0 unparseable/empty body is swallowed by parseJson(raw,{}) to {} → state 'unknown'.
+  // Under the corrected taxonomy this is a TRANSIENT degradation (escalate), NOT a determinate refuse:
+  // a malformed/empty response is an infra-degradation signal, not a genuine "issue gone".
   const _st = (issue.state || '').toLowerCase();
   if (_st !== 'open' && _st !== 'closed') {
-    return { verdict: 'target_unavailable', reasoning: 'tea issue fetch failed; refusing to claim outside KAOLA_WORKFLOW_OFFLINE=1' };
+    return { verdict: 'indeterminate', reasoning_class: 'classifier_error', reasoning: 'tea issue response unparseable/empty (exit 0); transient' };
   }
 
   if ((issue.state || '').toLowerCase() === 'closed') {
     return { verdict: 'red', reasoning: 'issue #' + issueIid + ' is already closed' };
   }
 
-  if (issueHasWorkflowInProgressLabel(issue.labels || []) || issueHasRemoteClaimNotes(issueIid)) {
+  // #519: issueHasRemoteClaimNotes can throw a TransientFetchError (site-5 equivalent) — route it to
+  // the indeterminate emitter rather than crashing or silently catching to "no remote claim". The
+  // label check runs FIRST and short-circuits (preserving the pre-#519 OR order) so the remote-claim
+  // probe is skipped — and cannot transient-fault — when the in-progress label already says blocked.
+  let blocked = issueHasWorkflowInProgressLabel(issue.labels || []);
+  if (!blocked) {
+    try {
+      blocked = issueHasRemoteClaimNotes(issueIid);
+    } catch (e) {
+      if (e instanceof TransientFetchError || e.transient === true) {
+        return {
+          verdict: 'indeterminate',
+          reasoning_class: 'classifier_error',
+          reasoning: 'tea remote-claim probe transient fault' +
+            (e.code ? ' (code=' + e.code + ')' : '') + (e.signal ? ' (signal=' + e.signal + ')' : '')
+        };
+      }
+      throw e;
+    }
+  }
+  if (blocked) {
     return { verdict: 'blocked', reasoning: 'issue #' + issueIid + ' has a remote workflow claim' };
   }
 
@@ -569,7 +671,8 @@ function cmdClassify() {
     return;
   }
 
-  // #507: bounded retry on transient fetch faults; clean_nonzero is determinate and not retried.
+  // #507/#519: bounded retry; transient/genuine by stderr-class. A genuine-negative clean_nonzero
+  // (e.g. 404) is determinate-refuse; a transient-infra fault retries → indeterminate.
   const fetchResult2 = fetchIssueWithRetry(args.issue, forge.viewIssue.bind(forge));
   if (fetchResult2.error) {
     process.stdout.write(JSON.stringify(fetchResult2.payload) + '\n');
@@ -577,9 +680,11 @@ function cmdClassify() {
   }
   const issue = fetchResult2.issue;
 
+  // #510: an exit-0 unparseable/empty body swallowed to {} → state 'unknown' is a TRANSIENT
+  // degradation (escalate), NOT a determinate refuse (mirrors classifyIssue above).
   const _st2 = (issue.state || '').toLowerCase();
   if (_st2 !== 'open' && _st2 !== 'closed') {
-    process.stdout.write(JSON.stringify({ verdict: 'target_unavailable', reasoning: 'tea issue fetch failed; refusing to claim outside KAOLA_WORKFLOW_OFFLINE=1' }) + '\n');
+    process.stdout.write(JSON.stringify({ verdict: 'indeterminate', reasoning_class: 'classifier_error', reasoning: 'tea issue response unparseable/empty (exit 0); transient' }) + '\n');
     return;
   }
 
@@ -588,7 +693,28 @@ function cmdClassify() {
     return;
   }
 
-  if (issueHasWorkflowInProgressLabel(issue.labels || []) || issueHasRemoteClaimNotes(args.issue)) {
+  // #519: issueHasRemoteClaimNotes can throw a TransientFetchError (site-5 equivalent) — route it to
+  // the indeterminate emitter rather than crashing or silently catching to "no remote claim". The
+  // label check runs FIRST and short-circuits (preserving the pre-#519 OR order) so the remote-claim
+  // probe is skipped — and cannot transient-fault — when the in-progress label already says blocked.
+  let blocked = issueHasWorkflowInProgressLabel(issue.labels || []);
+  if (!blocked) {
+    try {
+      blocked = issueHasRemoteClaimNotes(args.issue);
+    } catch (e) {
+      if (e instanceof TransientFetchError || e.transient === true) {
+        process.stdout.write(JSON.stringify({
+          verdict: 'indeterminate',
+          reasoning_class: 'classifier_error',
+          reasoning: 'tea remote-claim probe transient fault' +
+            (e.code ? ' (code=' + e.code + ')' : '') + (e.signal ? ' (signal=' + e.signal + ')' : '')
+        }) + '\n');
+        return;
+      }
+      throw e;
+    }
+  }
+  if (blocked) {
     process.stdout.write(JSON.stringify({ verdict: 'blocked', reasoning: 'issue #' + args.issue + ' has a remote workflow claim' }) + '\n');
     return;
   }

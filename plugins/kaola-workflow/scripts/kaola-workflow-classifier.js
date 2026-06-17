@@ -46,6 +46,61 @@ function classifyFetchError(e) {
   return 'killed'; // unknown non-status fault — treat as transient
 }
 
+// #519: AXIS REPLACEMENT — partition a gh/forge CLI fetch error by its stderr ERROR-CLASS,
+// not by exit code alone. A `clean_nonzero` exit (the CLI ran and exited non-zero) is no longer
+// blanket-determinate: a TRANSIENT-INFRA signature in stderr (TLS handshake timeout / API
+// rate-limit / DNS "Could not resolve host" / connection reset / ETIMEDOUT / 5xx) must escalate
+// like a killed/spawn-fault, NOT refuse. A genuine-negative (404 / "Could not resolve to an
+// Issue" / closed / assigned) — and ANY UNRECOGNIZED stderr — stays determinate-refuse: escalation
+// requires POSITIVE evidence of an infra fault; "can't tell" at a claim gate stays refuse so a
+// genuinely-gone target is never silently held for a human.
+//
+// KNOWN TRANSIENT-INFRA STDERR SIGNATURES (the ONLY patterns that flip clean_nonzero → transient).
+const TRANSIENT_FETCH_STDERR = [
+  /\bTLS\b/i,
+  /handshake/i,
+  /\btimed?\s*out\b/i,
+  /\bETIMEDOUT\b/i,
+  /\bECONNRESET\b/i,
+  /connection reset/i,
+  /connection refused/i,
+  /\bECONNREFUSED\b/i,
+  /rate limit/i,
+  /\b429\b/,
+  /could not resolve host/i,
+  /\bEAI_AGAIN\b/i,
+  /temporary failure in name resolution/i,
+  /\bdial tcp\b/i,
+  /\b5\d\d\b\s*(?:internal|bad gateway|service unavailable|gateway timeout)?/i,
+  /internal server error/i,
+  /bad gateway/i,
+  /service unavailable/i,
+  /gateway time-?out/i,
+  /\bi\/o timeout\b/i,
+  /network is unreachable/i,
+  /\bEHOSTUNREACH\b/i,
+];
+
+// #519: true iff the captured stderr/stdout text carries a KNOWN transient-infra signature.
+function isTransientFetchStderr(text) {
+  const s = String(text || '');
+  if (!s) return false;
+  return TRANSIENT_FETCH_STDERR.some(re => re.test(s));
+}
+
+// #519: combine the exit-code class with the stderr error-class into a single transient verdict.
+// Returns true iff the fault should ESCALATE (retry + indeterminate), false iff it should refuse.
+// - spawn_fault / killed → ALWAYS transient (the CLI never produced a determinate verdict).
+// - clean_nonzero → transient ONLY when stderr carries a known transient signature; else refuse.
+// A real gh error writes to STDERR, but the CLI mock seam may surface a signature on STDOUT, so
+// both streams are consulted (the execFileSync sites capture both).
+function isTransientFetchError(e) {
+  const cls = classifyFetchError(e);
+  if (cls !== 'clean_nonzero') return true; // spawn_fault / killed — transient by construction
+  const combined = String((e && e.stderr) || '') + '\n' + String((e && e.stdout) || '');
+  return isTransientFetchStderr(combined);
+}
+
 // #507: overridable backoff for boundary-2 retry (mirrors claim.js classifierTimeoutMs pattern).
 // Tests set KAOLA_CLASSIFIER_BACKOFF_MS=0 to keep the suite fast.
 function fetchBackoffMs() {
@@ -59,8 +114,36 @@ function syncSleepFetch(ms) {
   try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch (_) {}
 }
 
+// #519: a typed transient-fetch fault — thrown by a wrapped exec when the underlying gh/forge
+// fault carries a known transient-infra signature, so the cmdClassify catch can route it to the
+// EXISTING indeterminate/escalate emitter instead of crashing to clean_nonzero (the live repro).
+class TransientFetchError extends Error {
+  constructor(message, cause) {
+    super(message);
+    this.name = 'TransientFetchError';
+    this.transient = true;
+    this.cause = cause;
+    if (cause) { this.code = cause.code; this.signal = cause.signal; }
+  }
+}
+
+// #519: getRepoOwnerName was a BARE unwrapped ghExec — a transient `gh repo view` fault propagated
+// out of issueHasRemoteClaimComment (the throw is BEFORE that function's try) → out of cmdClassify →
+// main() catch → exit 1 (clean_nonzero, the literal first failure in the live repro). Wrap it: a
+// fault carrying a KNOWN transient-infra stderr signature (TLS timeout / rate-limit / DNS) re-throws
+// as a TransientFetchError (cmdClassify → indeterminate); ANY other fault (no-CLI spawn fault, not a
+// repo, genuine non-zero) returns null — best-effort, the caller proceeds (no remote identity is not
+// a claim-blocking condition). The narrow signature predicate keeps the no-CLI/offline test path
+// returning null instead of escalating, while still catching the live TLS-timeout repro.
 function getRepoOwnerName() {
-  const raw = ghExec(['repo', 'view', '--json', 'owner,name']);
+  let raw;
+  try {
+    raw = ghExec(['repo', 'view', '--json', 'owner,name']);
+  } catch (e) {
+    const combined = String((e && e.stderr) || '') + '\n' + String((e && e.stdout) || '');
+    if (isTransientFetchStderr(combined)) throw new TransientFetchError('gh repo view transient fault', e);
+    return null; // no-CLI / not-a-repo / genuine fault — no remote identity, not claim-blocking
+  }
   if (!raw) return null;
   try {
     const d = JSON.parse(raw);
@@ -269,12 +352,37 @@ function issueHasWorkflowInProgressLabel(labels) {
   });
 }
 
+// #519 (site 5): claim-DETECTION is best-effort by design — a no-CLI / spawn fault, a genuine
+// non-zero, or a malformed body all stay a return-false (no detectable claim), UNCHANGED. We re-throw
+// a TransientFetchError ONLY when the exec stderr carries a KNOWN transient-infra signature (TLS
+// timeout / rate-limit / DNS) — that specific blip would otherwise silently conflate to "no claim"
+// (a false-"unclaimed"), so it escalates. NOTE the narrower predicate (isTransientFetchStderr on the
+// captured stream) vs the target-fetch axis: a spawn_fault on claim-detection means "detection
+// unavailable" (best-effort false), NOT "must escalate" — only a positive infra signature escalates.
+function isInfraTransientExec(e) {
+  if (e instanceof TransientFetchError || e.transient === true) return true;
+  const combined = String((e && e.stderr) || '') + '\n' + String((e && e.stdout) || '');
+  return isTransientFetchStderr(combined);
+}
+
 function issueHasRemoteClaimComment(issueNum) {
   if (OFFLINE) return false;
-  const repo = getRepoOwnerName();
-  if (!repo) return false;
+  let repo;
   try {
-    const raw = ghExec(['api', 'repos/' + repo.owner + '/' + repo.name + '/issues/' + issueNum + '/comments']);
+    repo = getRepoOwnerName(); // re-throws TransientFetchError on an infra-signature repo-view fault
+  } catch (e) {
+    if (isInfraTransientExec(e)) throw new TransientFetchError('gh repo view transient fault', e);
+    return false; // no-CLI / genuine fault — claim-detection unavailable (best-effort false)
+  }
+  if (!repo) return false;
+  let raw;
+  try {
+    raw = ghExec(['api', 'repos/' + repo.owner + '/' + repo.name + '/issues/' + issueNum + '/comments']);
+  } catch (e) {
+    if (isInfraTransientExec(e)) throw new TransientFetchError('gh api comments transient fault', e);
+    return false; // no-CLI / genuine fault — no detectable remote claim
+  }
+  try {
     const comments = JSON.parse(raw || '[]');
     return comments.some(function(comment) {
       if (!comment || !comment.body || !/<!--\s*kw:claim\s+(project|sess)=/.test(comment.body)) return false;
@@ -282,7 +390,7 @@ function issueHasRemoteClaimComment(issueNum) {
       return Date.now() - new Date(comment.updated_at).getTime() < 24 * 60 * 60 * 1000;
     });
   } catch (_) {
-    return false;
+    return false; // malformed body — best-effort: treat as no detectable claim (unchanged)
   }
 }
 
@@ -628,35 +736,37 @@ function cmdClassify(argv) {
     return;
   }
 
-  // Online path — #507: bounded retry on transient fetch faults (spawn_fault/killed).
-  // clean_nonzero is determinate (CLI ran and decided) and is NOT retried.
+  // Online path — #507/#519: bounded retry on transient fetch faults. The transient/genuine
+  // partition is by stderr ERROR-CLASS (isTransientFetchError), not by exit code alone (#519): a
+  // clean_nonzero exit carrying a transient-infra signature (TLS timeout / rate-limit / DNS) now
+  // retries + escalates; a genuine-negative (or unrecognized) clean_nonzero stays determinate-refuse.
   let issue;
   {
     const MAX_FETCH_ATTEMPTS = 3;
     const backoffMs = fetchBackoffMs();
     let lastFetchErr = null;
-    let lastFetchErrClass = '';
+    let lastFetchTransient = false;
     let fetchSucceeded = false;
     for (let attempt = 0; attempt < MAX_FETCH_ATTEMPTS; attempt++) {
       if (attempt > 0) syncSleepFetch(backoffMs);
       try {
         const raw = ghExec(['issue', 'view', String(args.issue), '--json', 'number,title,body,labels,state']);
-        issue = JSON.parse(raw);
+        issue = JSON.parse(raw); // exit-0 unparseable body → SyntaxError → transient (no .status)
         fetchSucceeded = true;
         break;
       } catch (e) {
         lastFetchErr = e;
-        lastFetchErrClass = classifyFetchError(e);
-        if (lastFetchErrClass === 'clean_nonzero') break; // determinate — do not retry
-        // transient: loop for next attempt
+        lastFetchTransient = isTransientFetchError(e);
+        if (!lastFetchTransient) break; // genuine-negative / unrecognized — determinate, do not retry
+        // transient (spawn_fault / killed / transient-infra stderr): loop for next attempt
       }
     }
     if (!fetchSucceeded) {
-      if (lastFetchErrClass === 'clean_nonzero') {
+      if (!lastFetchTransient) {
         process.stdout.write(JSON.stringify({ verdict: 'target_unavailable', reasoning: 'gh issue fetch failed; refusing to claim outside KAOLA_WORKFLOW_OFFLINE=1' }) + '\n');
         return;
       }
-      // Persistent transient fault — emit indeterminate so callers can escalate (#507)
+      // Persistent transient fault — emit indeterminate so callers can escalate (#507/#519)
       const errCode = (lastFetchErr && lastFetchErr.code) || '';
       const signal = (lastFetchErr && lastFetchErr.signal) || '';
       process.stdout.write(JSON.stringify({
@@ -675,7 +785,32 @@ function cmdClassify(argv) {
     return;
   }
 
-  if (issueHasWorkflowInProgressLabel(issue.labels || []) || issueHasRemoteClaimComment(args.issue)) {
+  // #519: getRepoOwnerName / the comments `gh api` can throw a TransientFetchError (sites 1 + 5).
+  // Route it to the EXISTING indeterminate/escalate emitter rather than crashing to clean_nonzero
+  // (main()'s catch → exit 1) or silently catching to "no remote claim" → proceed. The label check
+  // runs FIRST and short-circuits (preserving the pre-#519 OR evaluation order) so the remote-claim
+  // probe is skipped — and cannot transient-fault — when the in-progress label already says blocked.
+  let blocked = issueHasWorkflowInProgressLabel(issue.labels || []);
+  if (!blocked) {
+    try {
+      blocked = issueHasRemoteClaimComment(args.issue);
+    } catch (e) {
+      if (e instanceof TransientFetchError || e.transient === true) {
+        const errCode = e.code || '';
+        const signal = e.signal || '';
+        process.stdout.write(JSON.stringify({
+          verdict: 'indeterminate',
+          reasoning_class: 'classifier_error',
+          reasoning: 'gh remote-claim probe transient fault' +
+            (errCode ? ' (code=' + errCode + ')' : '') +
+            (signal ? ' (signal=' + signal + ')' : '')
+        }) + '\n');
+        return;
+      }
+      throw e;
+    }
+  }
+  if (blocked) {
     process.stdout.write(JSON.stringify({ verdict: 'blocked', reasoning: 'issue #' + args.issue + ' has a remote workflow claim' }) + '\n');
     return;
   }
@@ -723,4 +858,9 @@ module.exports = {
   isProtected,
   readPlanNodes,
   disjointWriteSets,
+  // #519: stderr-error-class axis — transient-infra signature detection + the combined verdict.
+  classifyFetchError,
+  isTransientFetchStderr,
+  isTransientFetchError,
+  TransientFetchError,
 };

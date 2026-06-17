@@ -112,23 +112,84 @@ function issueIsClosed(issueNumber) {
   }
 }
 
+// #519: AXIS REPLACEMENT (mirror of classifier.isTransientFetchStderr) — KNOWN transient-infra
+// stderr signatures. A gh fetch fault carrying one of these is TRANSIENT (escalate), distinct from
+// a genuine-negative / unrecognized fault (refuse). Kept byte-aligned with the classifier + claim
+// copies so all four sites converge on the same verdict for the same fault.
+const TRANSIENT_FETCH_STDERR = [
+  /\bTLS\b/i,
+  /handshake/i,
+  /\btimed?\s*out\b/i,
+  /\bETIMEDOUT\b/i,
+  /\bECONNRESET\b/i,
+  /connection reset/i,
+  /connection refused/i,
+  /\bECONNREFUSED\b/i,
+  /rate limit/i,
+  /\b429\b/,
+  /could not resolve host/i,
+  /\bEAI_AGAIN\b/i,
+  /temporary failure in name resolution/i,
+  /\bdial tcp\b/i,
+  /\b5\d\d\b\s*(?:internal|bad gateway|service unavailable|gateway timeout)?/i,
+  /internal server error/i,
+  /bad gateway/i,
+  /service unavailable/i,
+  /gateway time-?out/i,
+  /\bi\/o timeout\b/i,
+  /network is unreachable/i,
+  /\bEHOSTUNREACH\b/i,
+];
+
+// #519: true iff captured stderr/stdout carries a KNOWN transient-infra signature.
+function isTransientFetchStderr(text) {
+  const s = String(text || '');
+  if (!s) return false;
+  return TRANSIENT_FETCH_STDERR.some(re => re.test(s));
+}
+
+// #519: true iff a gh fetch error is transient-infra (escalate) vs genuine-negative / unrecognized
+// (refuse). spawn_fault / killed / timeout are transient by construction; a clean_nonzero is
+// transient ONLY when its stderr carries a known transient signature.
+function probeErrIsTransient(err) {
+  if (err.killed === true || err.signal === 'SIGTERM' || err.code === 'ETIMEDOUT') return true;
+  if (err.status == null) return true; // spawn_fault / killed (no exit status) — transient
+  const combined = String(err.stderr || '') + '\n' + String(err.stdout || '');
+  return isTransientFetchStderr(combined);
+}
+
+// #519: probeIssueState NON-BREAKING discriminant contract. The genuine/unknown case STILL returns
+// { state: 'unavailable' } (so closure-audit.js + test-issue-probe-memo.js, which read only .state,
+// are unaffected). A TRANSIENT-infra fault ADDS { transient: true } beside state:'unavailable' so
+// ONLY the claim.js gates route it to escalate; closed/open returns are UNCHANGED. #519 also adds a
+// bounded retry on a transient fault (previously single-shot, no retry, no escalate).
 function probeIssueState(issueNumber) {
   if (OFFLINE || issueNumber == null) return { state: 'open', reason: 'offline-or-null' };
   const key = Number(issueNumber);
   if (issueStateMemo.has(key)) return { state: issueStateMemo.get(key), reason: 'memo' };
-  try {
-    const raw = ghExec(['issue', 'view', String(issueNumber), '--json', 'state']);
-    if (!raw) return { state: 'unavailable', reason: 'empty gh response' };
-    const data = JSON.parse(raw);
-    const state = String(data.state || '').toLowerCase() === 'closed' ? 'closed' : 'open';
-    rememberIssueState(key, state);
-    return { state, reason: 'ok' };
-  } catch (err) {
-    if (err.killed === true || err.signal === 'SIGTERM' || err.code === 'ETIMEDOUT') {
-      return { state: 'unavailable', reason: 'timeout' };
+  const MAX_PROBE_ATTEMPTS = 3;
+  let lastErr = null;
+  for (let attempt = 0; attempt < MAX_PROBE_ATTEMPTS; attempt++) {
+    try {
+      const raw = ghExec(['issue', 'view', String(issueNumber), '--json', 'state']);
+      if (!raw) return { state: 'unavailable', reason: 'empty gh response' };
+      const data = JSON.parse(raw); // exit-0 unparseable body → SyntaxError → transient (no .status)
+      const state = String(data.state || '').toLowerCase() === 'closed' ? 'closed' : 'open';
+      rememberIssueState(key, state);
+      return { state, reason: 'ok' };
+    } catch (err) {
+      lastErr = err;
+      if (!probeErrIsTransient(err)) {
+        return { state: 'unavailable', reason: 'gh issue fetch failed' };
+      }
+      // transient — retry (bounded); loop falls through to escalate signal after MAX_PROBE_ATTEMPTS
     }
-    return { state: 'unavailable', reason: 'gh issue fetch failed' };
   }
+  // Persistent transient fault — KEEP state:'unavailable' (non-breaking for .state-only readers) and
+  // ADD the transient discriminant so the claim.js gates escalate instead of refusing.
+  const reason = (lastErr && (lastErr.killed === true || lastErr.signal === 'SIGTERM' || lastErr.code === 'ETIMEDOUT'))
+    ? 'timeout' : 'gh issue fetch transient fault';
+  return { state: 'unavailable', reason, transient: true };
 }
 
 function parseStateFile(stateFile) {

@@ -84,24 +84,78 @@ function issueIsClosed(issueIid) {
   }
 }
 
+// #519: AXIS REPLACEMENT (mirror of root active-folders) — KNOWN transient-infra stderr signatures.
+// A tea fetch fault carrying one of these is TRANSIENT (escalate), distinct from a genuine-negative /
+// unrecognized fault (refuse). Kept byte-aligned (modulo forge nouns) with the root/classifier copies.
+const TRANSIENT_FETCH_STDERR = [
+  /\bTLS\b/i,
+  /handshake/i,
+  /\btimed?\s*out\b/i,
+  /\bETIMEDOUT\b/i,
+  /\bECONNRESET\b/i,
+  /connection reset/i,
+  /connection refused/i,
+  /\bECONNREFUSED\b/i,
+  /rate limit/i,
+  /\b429\b/,
+  /could not resolve host/i,
+  /\bEAI_AGAIN\b/i,
+  /temporary failure in name resolution/i,
+  /\bdial tcp\b/i,
+  /\b5\d\d\b\s*(?:internal|bad gateway|service unavailable|gateway timeout)?/i,
+  /internal server error/i,
+  /bad gateway/i,
+  /service unavailable/i,
+  /gateway time-?out/i,
+  /\bi\/o timeout\b/i,
+  /network is unreachable/i,
+  /\bEHOSTUNREACH\b/i,
+];
+
+function isTransientFetchStderr(text) {
+  const s = String(text || '');
+  if (!s) return false;
+  return TRANSIENT_FETCH_STDERR.some(re => re.test(s));
+}
+
+// #519: true iff a tea fetch error is transient-infra (escalate) vs genuine-negative / unrecognized
+// (refuse). killed / timeout / no-exit-status are transient by construction; a clean_nonzero is
+// transient ONLY when its stderr carries a known transient signature.
+function probeErrIsTransient(err) {
+  if (err.killed === true || err.signal === 'SIGTERM' || err.code === 'ETIMEDOUT') return true;
+  if (err.status == null) return true;
+  const combined = String(err.stderr || '') + '\n' + String(err.stdout || '');
+  return isTransientFetchStderr(combined);
+}
+
+// #519: probeIssueState NON-BREAKING discriminant — genuine/unknown keeps { state:'unavailable' }
+// (closure-audit + probe-memo read only .state); a TRANSIENT-infra fault ADDS { transient:true } so
+// ONLY the claim.js gates escalate. closed/open returns UNCHANGED. Adds a bounded retry on transient.
 function probeIssueState(issueNumber) {
   if (OFFLINE || issueNumber == null) {
     return { state: 'open', reason: 'offline-or-null' };
   }
-  try {
-    const key = Number(issueNumber);
-    if (issueStateMemo.has(key)) return { state: issueStateMemo.get(key), reason: 'memo' };
-    const issue = forge.viewIssue(issueNumber);
-    rememberIssueState(key, issue.state === 'closed' ? 'closed' : (issue.state === 'open' ? 'open' : undefined));
-    if (issue.state === 'closed') return { state: 'closed', reason: 'ok' };
-    if (issue.state === 'open') return { state: 'open', reason: 'ok' };
-    return { state: 'unavailable', reason: 'tea issue state unverified' };
-  } catch (err) {
-    if (err.killed === true || err.signal === 'SIGTERM' || err.code === 'ETIMEDOUT') {
-      return { state: 'unavailable', reason: 'timeout' };
+  const key = Number(issueNumber);
+  if (issueStateMemo.has(key)) return { state: issueStateMemo.get(key), reason: 'memo' };
+  const MAX_PROBE_ATTEMPTS = 3;
+  let lastErr = null;
+  for (let attempt = 0; attempt < MAX_PROBE_ATTEMPTS; attempt++) {
+    try {
+      const issue = forge.viewIssue(issueNumber);
+      rememberIssueState(key, issue.state === 'closed' ? 'closed' : (issue.state === 'open' ? 'open' : undefined));
+      if (issue.state === 'closed') return { state: 'closed', reason: 'ok' };
+      if (issue.state === 'open') return { state: 'open', reason: 'ok' };
+      return { state: 'unavailable', reason: 'tea issue state unverified' };
+    } catch (err) {
+      lastErr = err;
+      if (!probeErrIsTransient(err)) {
+        return { state: 'unavailable', reason: 'tea issue fetch failed' };
+      }
     }
-    return { state: 'unavailable', reason: 'tea issue fetch failed' };
   }
+  const reason = (lastErr && (lastErr.killed === true || lastErr.signal === 'SIGTERM' || lastErr.code === 'ETIMEDOUT'))
+    ? 'timeout' : 'tea issue fetch transient fault';
+  return { state: 'unavailable', reason, transient: true };
 }
 
 function parseStateFile(stateFile) {

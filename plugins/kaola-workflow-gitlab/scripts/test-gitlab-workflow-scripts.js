@@ -629,14 +629,36 @@ withForge({
   console.log('probeIssueState null: PASS');
 }
 
-// Case 2: forge.viewIssue throws → { state: 'unavailable', reason: 'glab issue fetch failed' }
+// Case 2a (#519 RECONCILE): a GENUINE-negative status-bearing throw (a real 404 stderr) → still
+// { state: 'unavailable' } with NO transient discriminant + reason 'glab issue fetch failed'. The
+// .state-only contract is preserved (closure-audit / probe-memo unaffected); the claim gates refuse.
 withForge({
-  viewIssue() { throw new Error('network error'); }
+  viewIssue() {
+    const e = new Error('glab exited 1');
+    e.status = 1;
+    e.stderr = 'GraphQL: Could not resolve to an Issue with the number of 42. (repository.issue)\n';
+    throw e;
+  }
 }, () => {
+  active.__resetIssueStateMemo();
   const result = active.probeIssueState(42);
-  assert.strictEqual(result.state, 'unavailable', 'probeIssueState throw must return state: unavailable');
-  assert.strictEqual(result.reason, 'glab issue fetch failed', 'probeIssueState throw must return expected reason');
-  console.log('probeIssueState throws: PASS');
+  assert.strictEqual(result.state, 'unavailable', '#519: genuine-negative throw → state: unavailable');
+  assert.strictEqual(result.transient, undefined, '#519: genuine-negative throw must NOT set transient (got ' + JSON.stringify(result) + ')');
+  assert.strictEqual(result.reason, 'glab issue fetch failed', '#519: genuine-negative reason');
+  console.log('probeIssueState genuine throw: PASS');
+});
+
+// Case 2b (#519): a TRANSIENT-infra throw (no exit status / TLS / rate-limit) → { state:'unavailable',
+// transient:true } so ONLY the claim gates escalate. A bare no-status Error is spawn/killed-class
+// (transient by construction) under the corrected exit-code+stderr axis.
+withForge({
+  viewIssue() { throw new Error('network error'); } // no status → killed-class → transient
+}, () => {
+  active.__resetIssueStateMemo();
+  const result = active.probeIssueState(420);
+  assert.strictEqual(result.state, 'unavailable', '#519: transient throw → state: unavailable');
+  assert.strictEqual(result.transient, true, '#519: no-status throw → transient:true (got ' + JSON.stringify(result) + ')');
+  console.log('probeIssueState transient throw: PASS');
 });
 
 // Case 3: forge.viewIssue returns { state: 'closed' } → { state: 'closed', reason: 'ok' }
@@ -3255,10 +3277,12 @@ testClosureAuditExecuteDetectionTimeoutPropagates();
 testClosureAuditMrFolderTimeout();
 testProbeTimeoutEnv();
 
-// issue #230: classifyIssue / cmdClassify must fail-closed on degraded exit-0 forge response.
-// Empty stdout exit-0 and non-JSON exit-0 both produce state:'unknown' from normalizeIssue(parseJson(raw,{})),
-// which the existing catch arm never fires for. The guard inserted after the try/catch must return
-// target_unavailable before classify() can return 'green'.
+// issue #230 / #510 / #519: classifyIssue / cmdClassify must fail-closed on a degraded exit-0 forge
+// response. #510 RECONCILE: under the corrected taxonomy an exit-0 unparseable/empty body is a
+// TRANSIENT fault (the strict-parse seam throws a SyntaxError → transient → indeterminate, mirroring
+// root's in-`try` JSON.parse). It is no longer a determinate target_unavailable — a malformed/empty
+// body is an infra-degradation signal, not a genuine "issue gone". (The old shared parseJson(raw,{})
+// SWALLOWED it to {} → state:'unknown'; the strictViewIssue seam now surfaces it.)
 
 function testGitlabClassifyIssueResidualEmptyExit0() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-classify-empty-')));
@@ -3275,10 +3299,10 @@ function testGitlabClassifyIssueResidualEmptyExit0() {
   process.env.USERPROFILE = tempHome;
   try {
     const result = classifier.classifyIssue(230, tmp);
-    assert.strictEqual(result.verdict, 'target_unavailable',
-      'empty exit-0 classifyIssue must return target_unavailable, got: ' + result.verdict + ' (' + result.reasoning + ')');
-    assert(/refusing to claim outside KAOLA_WORKFLOW_OFFLINE/.test(result.reasoning),
-      'empty exit-0 classifyIssue reasoning must mention refusing to claim outside KAOLA_WORKFLOW_OFFLINE, got: ' + result.reasoning);
+    assert.strictEqual(result.verdict, 'indeterminate',
+      '#510: empty exit-0 classifyIssue must return indeterminate (transient), got: ' + result.verdict + ' (' + result.reasoning + ')');
+    assert.strictEqual(result.reasoning_class, 'classifier_error',
+      '#510: empty exit-0 indeterminate must carry reasoning_class:classifier_error, got: ' + result.reasoning_class);
     console.log('testGitlabClassifyIssueResidualEmptyExit0: PASSED');
   } finally {
     if (prevMock === undefined) delete process.env.KAOLA_GLAB_MOCK_SCRIPT;
@@ -3306,10 +3330,10 @@ function testGitlabClassifyIssueResidualNonJsonExit0() {
   process.env.USERPROFILE = tempHome;
   try {
     const result = classifier.classifyIssue(230, tmp);
-    assert.strictEqual(result.verdict, 'target_unavailable',
-      'non-JSON exit-0 classifyIssue must return target_unavailable, got: ' + result.verdict + ' (' + result.reasoning + ')');
-    assert(/refusing to claim outside KAOLA_WORKFLOW_OFFLINE/.test(result.reasoning),
-      'non-JSON exit-0 classifyIssue reasoning must mention refusing to claim outside KAOLA_WORKFLOW_OFFLINE, got: ' + result.reasoning);
+    assert.strictEqual(result.verdict, 'indeterminate',
+      '#510: non-JSON exit-0 classifyIssue must return indeterminate (transient), got: ' + result.verdict + ' (' + result.reasoning + ')');
+    assert.strictEqual(result.reasoning_class, 'classifier_error',
+      '#510: non-JSON exit-0 indeterminate must carry reasoning_class:classifier_error, got: ' + result.reasoning_class);
     console.log('testGitlabClassifyIssueResidualNonJsonExit0: PASSED');
   } finally {
     if (prevMock === undefined) delete process.env.KAOLA_GLAB_MOCK_SCRIPT;
@@ -3343,8 +3367,8 @@ function testGitlabCmdClassifyResidualEmptyExit0() {
     assert.strictEqual(result.status, 0,
       'cmdClassify empty exit-0 must exit 0, got: ' + result.status + ' stderr: ' + result.stderr);
     const out = JSON.parse(result.stdout.trim());
-    assert.strictEqual(out.verdict, 'target_unavailable',
-      'cmdClassify empty exit-0 must return target_unavailable, got: ' + out.verdict + ' (' + out.reasoning + ')');
+    assert.strictEqual(out.verdict, 'indeterminate',
+      '#510: cmdClassify empty exit-0 must return indeterminate (transient), got: ' + out.verdict + ' (' + out.reasoning + ')');
     console.log('testGitlabCmdClassifyResidualEmptyExit0: PASSED');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -3372,8 +3396,8 @@ function testGitlabCmdClassifyResidualNonJsonExit0() {
     assert.strictEqual(result.status, 0,
       'cmdClassify non-JSON exit-0 must exit 0, got: ' + result.status + ' stderr: ' + result.stderr);
     const out = JSON.parse(result.stdout.trim());
-    assert.strictEqual(out.verdict, 'target_unavailable',
-      'cmdClassify non-JSON exit-0 must return target_unavailable, got: ' + out.verdict + ' (' + out.reasoning + ')');
+    assert.strictEqual(out.verdict, 'indeterminate',
+      '#510: cmdClassify non-JSON exit-0 must return indeterminate (transient), got: ' + out.verdict + ' (' + out.reasoning + ')');
     console.log('testGitlabCmdClassifyResidualNonJsonExit0: PASSED');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -4391,11 +4415,16 @@ function testGitlabBoundary2FetchRetry507() {
     }
   }
 
-  // (b) clean_nonzero (determinate) → verdict:target_unavailable, NOT retried (callCount===1)
+  // (b) clean_nonzero GENUINE-NEGATIVE (determinate) → verdict:target_unavailable, NOT retried.
+  // #519 RECONCILE: the axis is now stderr-error-CLASS. A clean_nonzero stays determinate-refuse ONLY
+  // when its stderr is genuine-negative / unrecognized — so this pin carries a real GitLab 404 stderr
+  // ("Could not resolve to an Issue") to prove the genuine arm refuses without retry (a transient-infra
+  // stderr would now ESCALATE — covered by (b-transient) below).
   {
     let callCount = 0;
     const cleanErr = new Error('glab exited 1');
     cleanErr.status = 1; // clean non-zero: determinate
+    cleanErr.stderr = 'GraphQL: Could not resolve to an Issue with the number of 99. (repository.issue)\n';
     const root = tempRoot('kw-gl-b2b-root-');
     try {
       const result = withForge({ viewIssue: function() { callCount++; throw cleanErr; } }, function() {
@@ -4407,9 +4436,35 @@ function testGitlabBoundary2FetchRetry507() {
         }
       });
       assert.strictEqual(result.verdict, 'target_unavailable',
-        '#507(gl-b2b): clean_nonzero → verdict:target_unavailable (got ' + result.verdict + ')');
+        '#519(gl-b2b): genuine-negative clean_nonzero → verdict:target_unavailable (got ' + result.verdict + ')');
       assert.strictEqual(callCount, 1,
-        '#507(gl-b2b): determinate NOT retried — callCount=' + callCount + ' (expected 1)');
+        '#519(gl-b2b): determinate genuine NOT retried — callCount=' + callCount + ' (expected 1)');
+    } finally {
+      try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  // (b-transient) clean_nonzero with a TRANSIENT-INFRA stderr now ESCALATES → indeterminate + RETRIED.
+  // The axis-replacement core: a non-zero exit whose stderr is a TLS timeout flips to transient.
+  {
+    let callCount = 0;
+    const root = tempRoot('kw-gl-b2t-root-');
+    try {
+      const result = withForge({ viewIssue: function() {
+        callCount++;
+        const e = new Error('glab exited 1');
+        e.status = 1;
+        e.stderr = 'error connecting to gitlab.com: net/http: TLS handshake timeout\n';
+        throw e;
+      } }, function() {
+        process.env.KAOLA_CLASSIFIER_BACKOFF_MS = '0';
+        try { return classifier.classifyIssue(99, root); }
+        finally { delete process.env.KAOLA_CLASSIFIER_BACKOFF_MS; }
+      });
+      assert.strictEqual(result.verdict, 'indeterminate',
+        '#519(gl-b2-transient): clean_nonzero TLS-timeout stderr → verdict:indeterminate (got ' + result.verdict + ')');
+      assert.strictEqual(callCount, 3,
+        '#519(gl-b2-transient): transient-infra clean_nonzero RETRIED to max — callCount=' + callCount + ' (expected 3)');
     } finally {
       try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) {}
     }
@@ -4443,7 +4498,35 @@ function testGitlabBoundary2FetchRetry507() {
     }
   }
 
-  console.log('testGitlabBoundary2FetchRetry507 (#507): PASSED');
+  // (#511) END-TO-END determinate-refuse: a GENUINE-negative forge fault (a real 404 "Could not
+  // resolve to an Issue" stderr) routes the FULL claim flow (claimExplicitTarget) to result:refuse /
+  // target_unavailable — NEVER escalate. This is the #511 pin: it MUST use a genuine-negative stderr,
+  // never a generic "glab exits 1" / bare network error (which now ESCALATES and would enshrine #519's
+  // bug). Proves the genuine arm survives the axis replacement at the claim-flow boundary.
+  {
+    const root = tempRoot('kw-gl-511-root-');
+    try {
+      fs.mkdirSync(path.join(root, 'kaola-workflow', '.roadmap'), { recursive: true });
+      const result = withForge({ viewIssue: function() {
+        const e = new Error('glab exited 1');
+        e.status = 1; // clean non-zero
+        e.stderr = 'GraphQL: Could not resolve to an Issue with the number of 99. (repository.issue)\n';
+        throw e;
+      } }, function() {
+        process.env.KAOLA_CLASSIFIER_BACKOFF_MS = '0';
+        try { return claim.claimExplicitTarget(root, { targetIssue: 99 }); }
+        finally { delete process.env.KAOLA_CLASSIFIER_BACKOFF_MS; }
+      });
+      assert.strictEqual(result && result.status, 'target_unavailable',
+        '#511(gl): genuine-negative 404 → claimExplicitTarget target_unavailable (got ' + JSON.stringify(result) + ')');
+      assert.strictEqual(result && result.result, 'refuse',
+        '#511(gl): genuine-negative 404 → result:refuse, NEVER escalate (got ' + JSON.stringify(result) + ')');
+    } finally {
+      try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  console.log('testGitlabBoundary2FetchRetry507 (#507/#511/#519): PASSED');
 }
 
 testGitlabFinalizeRowMainDirect338();

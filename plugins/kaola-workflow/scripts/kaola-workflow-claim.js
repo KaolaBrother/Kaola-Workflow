@@ -685,6 +685,42 @@ function classifySubprocessError(e) {
   return 'killed'; // unknown non-status fault — treat as transient
 }
 
+// #519: AXIS REPLACEMENT (mirror of classifier.isTransientFetchStderr) — KNOWN transient-infra
+// stderr signatures. A clean_nonzero subprocess exit whose captured stderr/stdout carries one of
+// these is treated as TRANSIENT (retry + escalate), not a determinate refuse. Kept byte-aligned
+// with the classifier copy so the four sites converge on the same verdict for the same fault.
+const TRANSIENT_FETCH_STDERR = [
+  /\bTLS\b/i,
+  /handshake/i,
+  /\btimed?\s*out\b/i,
+  /\bETIMEDOUT\b/i,
+  /\bECONNRESET\b/i,
+  /connection reset/i,
+  /connection refused/i,
+  /\bECONNREFUSED\b/i,
+  /rate limit/i,
+  /\b429\b/,
+  /could not resolve host/i,
+  /\bEAI_AGAIN\b/i,
+  /temporary failure in name resolution/i,
+  /\bdial tcp\b/i,
+  /\b5\d\d\b\s*(?:internal|bad gateway|service unavailable|gateway timeout)?/i,
+  /internal server error/i,
+  /bad gateway/i,
+  /service unavailable/i,
+  /gateway time-?out/i,
+  /\bi\/o timeout\b/i,
+  /network is unreachable/i,
+  /\bEHOSTUNREACH\b/i,
+];
+
+// #519: true iff captured stderr/stdout carries a KNOWN transient-infra signature.
+function isTransientFetchStderr(text) {
+  const s = String(text || '');
+  if (!s) return false;
+  return TRANSIENT_FETCH_STDERR.some(re => re.test(s));
+}
+
 // #495: classifier retry timeout — overridable for tests so three 30s hangs don't block the suite.
 function classifierTimeoutMs() {
   const v = parseInt(process.env.KAOLA_CLASSIFIER_TIMEOUT_MS || '', 10);
@@ -732,15 +768,23 @@ function classifyIssue(root, issueNumber) {
       if (e.status === 2) return { verdict: 'owned', reasoning: 'active local folder already exists' };
       lastErr = e;
       lastErrClass = classifySubprocessError(e);
-      // #495: only transient classes (spawn_fault, killed) are retried; a clean non-zero exit is
-      // determinate — the subprocess ran and made a decision, so we don't retry.
-      if (lastErrClass === 'clean_nonzero') break;
+      // #495/#519: transient classes (spawn_fault, killed) are retried; a clean non-zero exit is
+      // determinate ONLY when its stderr does NOT carry a transient-infra signature. A clean_nonzero
+      // whose stderr is a TLS timeout / rate-limit / DNS fault (the axis change) is transient → retry.
+      if (lastErrClass === 'clean_nonzero') {
+        const combined = String((e && e.stderr) || '') + '\n' + String((e && e.stdout) || '');
+        if (!isTransientFetchStderr(combined)) break; // genuine / unrecognized → determinate, do not retry
+        // transient-infra stderr on a clean_nonzero exit → fall through to retry
+      }
       // transient: loop for next attempt (up to MAX_ATTEMPTS total)
     }
   }
 
   // Retry exhausted (or clean_nonzero broke early). Classify the final outcome.
-  if (lastErrClass === 'clean_nonzero') {
+  // #519: a clean_nonzero is determinate-refuse ONLY when its stderr carries NO transient signature;
+  // a transient-infra clean_nonzero falls through to the indeterminate/escalate emitter below.
+  if (lastErrClass === 'clean_nonzero' &&
+      !isTransientFetchStderr(String((lastErr && lastErr.stderr) || '') + '\n' + String((lastErr && lastErr.stdout) || ''))) {
     // Determinate: subprocess ran and exited non-zero. Capture truncated stderr.
     const stderrSnip = String((lastErr && lastErr.stderr) || '').slice(0, 200).trim();
     return {
@@ -827,6 +871,13 @@ function claimProject(root, args) {
     const probe = probeIssueState(issueNumber);
     if (probe.state === 'closed') {
       return { status: 'user_target_closed', issue: issueNumber, project, reasoning: 'GitHub issue #' + issueNumber + ' is closed' };
+    }
+    // #519: a TRANSIENT-infra probe fault escalates (the operator/orchestrator can retry) instead of
+    // refusing — a TLS timeout / rate-limit / DNS blip must not be read as "target unavailable".
+    if (!OFFLINE && probe.state === 'unavailable' && probe.transient === true) {
+      return { status: 'target_indeterminate', result: 'escalate', claim: 'none', issue: issueNumber, project,
+        reasoning_class: 'classifier_error',
+        reasoning: 'gh issue #' + issueNumber + ' state probe transient fault (' + (probe.reason || 'transient') + '); escalate to retry' };
     }
     if (!OFFLINE && probe.state === 'unavailable') {
       return { status: 'target_unavailable', claim: 'none', issue: issueNumber, project, reasoning: 'gh issue #' + issueNumber + ' state probe failed; refusing to claim outside KAOLA_WORKFLOW_OFFLINE=1' };
@@ -1265,6 +1316,13 @@ function claimExplicitBundle(root, args) {
     if (probe.state === 'closed') {
       return { status: 'target_set_has_closed_issue', result: 'refuse', claim: 'none', issue: n,
         reasoning: '#' + n + ' is closed' };
+    }
+    // #519: a TRANSIENT-infra probe fault escalates the whole bundle (reach the existing
+    // target_set_indeterminate/escalate valve) instead of refusing on a TLS timeout / rate-limit / DNS blip.
+    if (!OFFLINE && probe.state === 'unavailable' && probe.transient === true) {
+      return { status: 'target_set_indeterminate', result: 'escalate', claim: 'none', issue: n,
+        reasoning_class: 'classifier_error',
+        reasoning: '#' + n + ' state probe transient fault (' + (probe.reason || 'transient') + '); escalate to retry' };
     }
     if (!OFFLINE && probe.state === 'unavailable') {
       return { status: 'target_set_unavailable', result: 'refuse', claim: 'none', issue: n,

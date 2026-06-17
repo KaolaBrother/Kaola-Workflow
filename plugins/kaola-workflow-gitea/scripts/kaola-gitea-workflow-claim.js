@@ -677,6 +677,13 @@ function claimProject(root, args) {
     if (probe.state === 'closed') {
       return { status: 'user_target_closed', issue: issueIid, project, reasoning: 'Gitea issue #' + issueIid + ' is closed' };
     }
+    // #519: a TRANSIENT-infra probe fault escalates (the operator/orchestrator can retry) instead of
+    // refusing — a TLS timeout / rate-limit / DNS blip must not be read as "target unavailable".
+    if (!OFFLINE && probe.state === 'unavailable' && probe.transient === true) {
+      return { status: 'target_indeterminate', result: 'escalate', claim: 'none', issue: issueIid, project,
+        reasoning_class: 'classifier_error',
+        reasoning: 'tea issue #' + issueIid + ' state probe transient fault (' + (probe.reason || 'transient') + '); escalate to retry' };
+    }
     if (!OFFLINE && probe.state === 'unavailable') {
       return { status: 'target_unavailable', claim: 'none', issue: issueIid, project, reasoning: 'tea issue #' + issueIid + ' state probe failed; refusing to claim outside KAOLA_WORKFLOW_OFFLINE=1' };
     }
@@ -1069,6 +1076,13 @@ function claimExplicitBundle(root, args) {
       return { status: 'target_set_has_closed_issue', result: 'refuse', claim: 'none', issue: n,
         reasoning: '#' + n + ' is closed' };
     }
+    // #519: a TRANSIENT-infra probe fault escalates the whole bundle instead of refusing on a TLS
+    // timeout / rate-limit / DNS blip (reaches the existing target_set_indeterminate/escalate valve).
+    if (!OFFLINE && probe.state === 'unavailable' && probe.transient === true) {
+      return { status: 'target_set_indeterminate', result: 'escalate', claim: 'none', issue: n,
+        reasoning_class: 'classifier_error',
+        reasoning: '#' + n + ' state probe transient fault (' + (probe.reason || 'transient') + '); escalate to retry' };
+    }
     if (!OFFLINE && probe.state === 'unavailable') {
       return { status: 'target_set_unavailable', result: 'refuse', claim: 'none', issue: n,
         reasoning: '#' + n + ' state probe failed' };
@@ -1088,9 +1102,9 @@ function claimExplicitBundle(root, args) {
     if (classified.verdict === 'target_unverified') {
       return { status: 'target_set_unverified', claim: 'none', issue: n, reasoning: classified.reasoning };
     }
-    // #495 forward-compat: the forge classifier is in-process (boundary-2 only) and does not yet
-    // emit 'indeterminate'; this mirrors root claim.js envelope parity and activates if the forge
-    // classifier's CLI-fetch catch is hardened to surface transient faults (follow-up).
+    // #519: the forge classifier now partitions a tea fetch fault by stderr ERROR-CLASS — a
+    // transient-infra fault (TLS timeout / rate-limit / DNS) surfaces 'indeterminate' (mirroring
+    // root), which this arm routes to result:escalate (a genuine-negative stays target_unavailable).
     if (classified.verdict === 'indeterminate') {
       return {
         status: 'target_set_indeterminate',
@@ -1140,9 +1154,9 @@ function claimExplicitTarget(root, args) {
       reasoning: classified.reasoning
     };
   }
-  // #495 forward-compat: the forge classifier is in-process (boundary-2 only) and does not yet
-  // emit 'indeterminate'; this mirrors root claim.js envelope parity and activates if the forge
-  // classifier's CLI-fetch catch is hardened to surface transient faults (follow-up).
+  // #519: the forge classifier now partitions a tea fetch fault by stderr ERROR-CLASS — a
+  // transient-infra fault (TLS timeout / rate-limit / DNS) surfaces 'indeterminate' (mirroring
+  // root), which this arm routes to result:escalate (a genuine-negative stays target_unavailable).
   if (classified.verdict === 'indeterminate') {
     return {
       status: 'target_indeterminate',
