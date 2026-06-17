@@ -1,0 +1,9 @@
+[
+  {
+    "finding_id": "id=R1 scope=in_scope action=none status=resolved severity=low fix_role=none rationale=all-asserts-bite-demonstrated-incl-codex-via-sync-gate-byte-perfect-restore",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  }
+]

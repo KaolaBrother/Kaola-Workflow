@@ -1,0 +1,5 @@
+{"timestamp":"2026-06-17T11:27:18.403Z","event":"open","nodeId":"n1-enforce-coverage","nonce":"3185c6a963ff","by":"adaptive-node"}
+{"timestamp":"2026-06-17T12:12:20.397Z","event":"close","nodeId":"n1-enforce-coverage","nonce":"3185c6a963ff","by":"adaptive-node"}
+{"timestamp":"2026-06-17T12:12:20.682Z","event":"open","nodeId":"n2-review-bite","nonce":"f148399b7997","by":"adaptive-node"}
+{"timestamp":"2026-06-17T12:43:02.325Z","event":"close","nodeId":"n2-review-bite","nonce":"f148399b7997","by":"adaptive-node"}
+{"timestamp":"2026-06-17T12:43:02.629Z","event":"open","nodeId":"n3-finalize","nonce":"f7d5bd7fb3f4","by":"adaptive-node"}
