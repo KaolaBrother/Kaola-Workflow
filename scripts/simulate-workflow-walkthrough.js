@@ -5176,16 +5176,24 @@ function testSinkMergeFromLinkedWorktree() {
 }
 
 function testSinkRefusesStaleReceipt() {
-  // Regression for #484: a stale all-`done` sink-receipt committed into the tracked
-  // archive/<project>/.cache/ tree must NOT false-resume to status:sinked when the branch was never
-  // merged. resolveSinkReceiptPath falls back to that archived receipt, the step loop skips every
-  // `done` step, and the script would emit status:sinked exit 0 with main NEVER advanced + the
-  // deliverable lost. The fix asserts the branch IS an ancestor of the resolved default branch before
-  // emitting success → typed refusal stale_sink_receipt. Scenario B proves it is NOT a false-positive:
-  // a stale all-done receipt whose branch genuinely landed still sinks.
+  // Regression for #484/#518:
+  // #484: a stale all-`done` sink-receipt committed into the tracked archive/<project>/.cache/ tree
+  // must NOT false-resume to status:sinked when the branch was never merged. The #484 ancestry
+  // backstop asserts the branch IS an ancestor of the resolved default branch before emitting success.
+  // #518: cycle-identity guard — receipt is stamped with branch_head at init; on resume, when the
+  // receipt has merge:'done' and branch_head is ABSENT or DIFFERS from the current tip (prior cycle,
+  // branch name reused), the receipt is REINITIALIZED so the merge runs fresh (no false refusal).
+  // Only when branch_head MATCHES the current tip does cycle-identity hold and the #484 ancestry
+  // backstop apply (verifying the merge actually landed).
+  // Scenario A: receipt without branch_head (old-format / prior cycle without stamp) → cycle-identity
+  // fires → reinit → merge runs fresh → status:sinked (deliverable lands on main).
+  // Scenario B: receipt WITH branch_head matching current tip, merge:done, branch NOT merged → the
+  // cycle-identity guard passes (same branch_head), but the #484 ancestry backstop still fires →
+  // refuse stale_sink_receipt. This regression-locks the ancestry backstop is NOT removed.
+  // Scenario C (no false-positive): branch genuinely merged → stale all-done receipt still sinks.
   const project = 'issue-9484';
   const branch = 'workflow/issue-9484';
-  const staleReceipt = (extra) => JSON.stringify(Object.assign({
+  const staleReceiptNoHead = (extra) => JSON.stringify(Object.assign({
     project, branch, issue_number: 9484, issue_numbers: [9484],
     resolved_default_branch: 'main',
     started_at: '2026-06-14T12:14:18.462Z', updated_at: '2026-06-14T12:14:28.928Z',
@@ -5197,17 +5205,19 @@ function testSinkRefusesStaleReceipt() {
   ], { cwd: tmp, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
   const parseLast = (out) => { try { return JSON.parse(String(out || '').trim().split('\n').pop()); } catch (_) { return {}; } };
 
-  // --- Scenario A (the bug): branch NOT merged → must refuse, main unchanged, deliverable not lost.
+  // --- Scenario A (#518 cycle-identity): receipt has no branch_head (old-format / prior cycle) →
+  // treated as new cycle → steps reinit → merge runs fresh → status:sinked, main advances.
   {
     const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-stale-')));
     try {
       initGitRepo(tmp);
       const archiveCache = path.join(tmp, 'kaola-workflow', 'archive', project, '.cache');
       fs.mkdirSync(archiveCache, { recursive: true });
-      fs.writeFileSync(path.join(archiveCache, 'sink-receipt.json'), staleReceipt());
+      // Write a stale receipt WITHOUT branch_head — simulates an old-cycle or pre-#518 receipt.
+      fs.writeFileSync(path.join(archiveCache, 'sink-receipt.json'), staleReceiptNoHead());
       spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8' });
       spawnSync('git', ['commit', '-m', 'chore: record prior-slice sink receipt'], { cwd: tmp, encoding: 'utf8' });
-      // feature branch with a deliverable NOT merged to main
+      // feature branch with a deliverable NOT yet merged to main
       spawnSync('git', ['branch', branch], { cwd: tmp, encoding: 'utf8' });
       spawnSync('git', ['switch', branch], { cwd: tmp, encoding: 'utf8' });
       fs.writeFileSync(path.join(tmp, 'DELIVERABLE.txt'), 'deliverable\n');
@@ -5216,27 +5226,65 @@ function testSinkRefusesStaleReceipt() {
       spawnSync('git', ['switch', 'main'], { cwd: tmp, encoding: 'utf8' });
       const mainBefore = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: tmp, encoding: 'utf8' }).stdout.trim();
 
+      // The cycle-identity check sees no branch_head → isNewCycle=true → reinit → merge runs fresh.
       const result = runSink(tmp);
       const parsed = parseLast(result.stdout);
-      assert(parsed.status !== 'sinked', '#484-A: stale unmerged receipt must NOT emit status:sinked, got ' + JSON.stringify(parsed));
-      assert(parsed.result === 'refuse' && parsed.reason === 'stale_sink_receipt', '#484-A: must refuse stale_sink_receipt, got ' + JSON.stringify(parsed));
-      assert(result.status !== 0, '#484-A: a stale_sink_receipt refusal must exit non-zero, got ' + result.status);
+      assert(parsed.status === 'sinked', '#518-A: absent branch_head must trigger cycle reinit → merge runs → status:sinked, got ' + JSON.stringify(parsed));
+      assert(result.status === 0, '#518-A: cycle reinit sink must exit 0, got ' + result.status);
       const mainAfter = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: tmp, encoding: 'utf8' }).stdout.trim();
-      assert(mainAfter === mainBefore, '#484-A: main must NOT advance on a stale refusal');
-      assert(spawnSync('git', ['cat-file', '-e', 'main:DELIVERABLE.txt'], { cwd: tmp, encoding: 'utf8' }).status !== 0, '#484-A: the un-merged deliverable must NOT be on main');
+      assert(mainAfter !== mainBefore, '#518-A: main must advance after cycle reinit sink');
+      assert(spawnSync('git', ['cat-file', '-e', 'main:DELIVERABLE.txt'], { cwd: tmp, encoding: 'utf8' }).status === 0, '#518-A: the deliverable must be on main after cycle reinit sink');
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   }
 
-  // --- Scenario B (no false-positive): branch genuinely merged into main → stale all-done receipt still sinks.
+  // --- Scenario B (#484 ancestry backstop survives): receipt WITH branch_head matching current tip,
+  // merge:done, but branch NOT an ancestor of main → the cycle-identity guard passes (head matches)
+  // but the #484 ancestry backstop fires → refuse stale_sink_receipt, exit non-zero.
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-backstop-')));
+    try {
+      initGitRepo(tmp);
+      // Create feature branch and capture its tip BEFORE writing the receipt.
+      spawnSync('git', ['branch', branch], { cwd: tmp, encoding: 'utf8' });
+      spawnSync('git', ['switch', branch], { cwd: tmp, encoding: 'utf8' });
+      fs.writeFileSync(path.join(tmp, 'DELIVERABLE.txt'), 'deliverable\n');
+      spawnSync('git', ['add', 'DELIVERABLE.txt'], { cwd: tmp, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'feat: slice deliverable'], { cwd: tmp, encoding: 'utf8' });
+      const featureTip = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+      // Switch back to main WITHOUT merging (branch is NOT an ancestor of main).
+      spawnSync('git', ['switch', 'main'], { cwd: tmp, encoding: 'utf8' });
+
+      // Write receipt with branch_head matching the CURRENT feature tip → cycle-identity passes.
+      const archiveCache = path.join(tmp, 'kaola-workflow', 'archive', project, '.cache');
+      fs.mkdirSync(archiveCache, { recursive: true });
+      fs.writeFileSync(path.join(archiveCache, 'sink-receipt.json'), staleReceiptNoHead({ branch_head: featureTip }));
+      spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'chore: record same-cycle sink receipt'], { cwd: tmp, encoding: 'utf8' });
+      // Capture mainBefore AFTER the receipt commit (that commit advanced main; sink must not further advance).
+      const mainBefore = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+
+      const result = runSink(tmp);
+      const parsed = parseLast(result.stdout);
+      assert(parsed.status !== 'sinked', '#484-B: same-tip unmerged receipt must NOT emit status:sinked, got ' + JSON.stringify(parsed));
+      assert(parsed.result === 'refuse' && parsed.reason === 'stale_sink_receipt', '#484-B: ancestry backstop must refuse stale_sink_receipt, got ' + JSON.stringify(parsed));
+      assert(result.status !== 0, '#484-B: ancestry backstop refusal must exit non-zero, got ' + result.status);
+      const mainAfter = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: tmp, encoding: 'utf8' }).stdout.trim();
+      assert(mainAfter === mainBefore, '#484-B: main must NOT advance on ancestry backstop refusal');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+
+  // --- Scenario C (no false-positive): branch genuinely merged into main → stale all-done receipt still sinks.
   {
     const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-merged-')));
     try {
       initGitRepo(tmp);
       const archiveCache = path.join(tmp, 'kaola-workflow', 'archive', project, '.cache');
       fs.mkdirSync(archiveCache, { recursive: true });
-      fs.writeFileSync(path.join(archiveCache, 'sink-receipt.json'), staleReceipt());
+      fs.writeFileSync(path.join(archiveCache, 'sink-receipt.json'), staleReceiptNoHead());
       spawnSync('git', ['add', '-A'], { cwd: tmp, encoding: 'utf8' });
       spawnSync('git', ['commit', '-m', 'chore: record prior-slice sink receipt'], { cwd: tmp, encoding: 'utf8' });
       spawnSync('git', ['branch', branch], { cwd: tmp, encoding: 'utf8' });
@@ -5250,8 +5298,8 @@ function testSinkRefusesStaleReceipt() {
 
       const result = runSink(tmp);
       const parsed = parseLast(result.stdout);
-      assert(parsed.result !== 'refuse' || parsed.reason !== 'stale_sink_receipt', '#484-B: a genuinely-merged branch must NOT be false-refused as stale, got ' + JSON.stringify(parsed));
-      assert(spawnSync('git', ['cat-file', '-e', 'main:DELIVERABLE.txt'], { cwd: tmp, encoding: 'utf8' }).status === 0, '#484-B: precondition — the deliverable is on main');
+      assert(parsed.result !== 'refuse' || parsed.reason !== 'stale_sink_receipt', '#484-C: a genuinely-merged branch must NOT be false-refused as stale, got ' + JSON.stringify(parsed));
+      assert(spawnSync('git', ['cat-file', '-e', 'main:DELIVERABLE.txt'], { cwd: tmp, encoding: 'utf8' }).status === 0, '#484-C: precondition — the deliverable is on main');
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
@@ -8361,6 +8409,162 @@ function testSinkMergeKeepOpenOnlineMock() {
     fs.rmSync(tmp, { recursive: true, force: true });
     try { fs.rmSync(remotePath, { recursive: true, force: true }); } catch (_) {}
   }
+}
+
+// #517 — post-push keep-open reopen: when --keep-issue-open is set and the forge auto-closed the
+// issue after push (a "close/fix/resolve #N" keyword in the commit body), sink-merge probes the
+// live issue state post-push, reopens it, and records remote_issue_closed:'reopened_after_autoclose'.
+// Uses a gh mock that returns "closed" for the post-push probe to simulate the auto-close.
+function testSinkMergePostPushReopenOnMock() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sm-517-reopen-')));
+  const remotePath = initGitRepoWithBareRemote(tmp);
+  const marker = path.join(tmp, 'gh-mock-calls.log');
+  try {
+    const binDir = path.join(tmp, 'bin');
+    fs.mkdirSync(binDir, { recursive: true });
+    // gh mock: returns "closed" for issue view (simulating GitHub auto-close post-push),
+    // accepts issue reopen (no-op), and handles repo view + issue edit (label removal).
+    writeShimFiles(path.join(binDir, 'gh'), [
+      "'use strict';",
+      "const fs = require('fs');",
+      "const a = process.argv.slice(2).join(' ');",
+      "fs.appendFileSync(" + JSON.stringify(marker) + ", a + '\\n');",
+      "if (a.includes('repo view')) { process.stdout.write(JSON.stringify({owner:{login:'test'},name:'repo'}) + '\\n'); process.exit(0); }",
+      "if (a.includes('issue view')) { process.stdout.write('closed\\n'); process.exit(0); }",
+      "if (a.includes('issue reopen') || a.includes('issue edit') || a.includes('issue comment') || a.includes('issue close')) { process.stdout.write('{}\\n'); process.exit(0); }",
+      "process.stdout.write('{}\\n'); process.exit(0);"
+    ]);
+
+    // Commit a roadmap source so the keep-open receipt has a source to preserve.
+    fs.mkdirSync(path.join(tmp, 'kaola-workflow', '.roadmap'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'kaola-workflow', '.roadmap', 'issue-517.md'), 'issue: #517\nstatus: open\n');
+    const gitEnv = { ...process.env, ...GIT_ISOLATION_ENV,
+      GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' };
+    spawnSync('git', ['-C', tmp, 'add', '-A'], { encoding: 'utf8', env: gitEnv });
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'chore: roadmap source 517'], { encoding: 'utf8', env: gitEnv });
+    spawnSync('git', ['-C', tmp, 'push', 'origin', 'main'], { encoding: 'utf8', env: gitEnv });
+
+    // Feature branch with deliverable.
+    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-517'], { encoding: 'utf8', env: gitEnv });
+    fs.writeFileSync(path.join(tmp, 'feature-517.txt'), 'feature\n');
+    spawnSync('git', ['-C', tmp, 'add', 'feature-517.txt'], { encoding: 'utf8', env: gitEnv });
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'feat: issue 517'], { encoding: 'utf8', env: gitEnv });
+    spawnSync('git', ['-C', tmp, 'push', '-u', 'origin', 'workflow/issue-517'], { encoding: 'utf8', env: gitEnv });
+
+    // Archive state (finalize ran first on keep-open lane).
+    const archiveDir = path.join(tmp, 'kaola-workflow', 'archive', 'issue-517');
+    fs.mkdirSync(archiveDir, { recursive: true });
+    fs.writeFileSync(path.join(archiveDir, 'workflow-state.md'),
+      'status: closed\nstep: complete\nissue_number: 517\n\n## Sink\nbranch: workflow/issue-517\nissue_number: 517\nsink: merge\nissue_action: comment_keep_open\n');
+    spawnSync('git', ['-C', tmp, 'add', '-A'], { encoding: 'utf8', env: gitEnv });
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'chore: finalize keep-open 517'], { encoding: 'utf8', env: gitEnv });
+
+    spawnSync('git', ['-C', tmp, 'checkout', 'main'], { encoding: 'utf8', env: gitEnv });
+
+    const mockJs = path.join(binDir, 'gh.js');
+    const result = spawnSync(process.execPath, [
+      sinkMergeScript, '--sink',
+      '--project', 'issue-517', '--branch', 'workflow/issue-517', '--issue', '517', '--keep-issue-open'
+    ], {
+      cwd: tmp,
+      encoding: 'utf8',
+      env: { ...gitEnv, KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_GH_MOCK_SCRIPT: mockJs }
+    });
+
+    assert(result.status === 0, '#517: keep-open sink with auto-close probe must exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+
+    const parsed = JSON.parse(result.stdout.trim().split('\n').filter(Boolean).pop());
+    assert(parsed.status === 'sinked', '#517: result must be status:sinked, got ' + JSON.stringify(parsed));
+    assert(parsed.receipt && parsed.receipt.remote_issue_closed === 'reopened_after_autoclose',
+      '#517: receipt.remote_issue_closed must be reopened_after_autoclose, got ' + JSON.stringify(parsed.receipt && parsed.receipt.remote_issue_closed));
+
+    // Verify the gh mock was called with issue reopen (the forge reopen happened).
+    const calls = fs.existsSync(marker) ? fs.readFileSync(marker, 'utf8') : '';
+    assert(calls.includes('issue reopen'),
+      '#517: gh mock must have been called with issue reopen, got: ' + calls);
+
+    console.log('testSinkMergePostPushReopenOnMock: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    try { fs.rmSync(remotePath, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
+// #508 — bundle finalize on merge-lane (--keep-worktree): when all bundle members probe as OPEN
+// online, the close is deferred to sink-merge and remote_issue_closed must be 'close_pending' (not
+// 'partial') and closed_issues must be []. This locks the token-vs-list consistency fix: reporting
+// 'partial' while closed_issues=[] was a disagreement — the token claimed "some closed" while the
+// list was empty.
+function testBundleFinalizeAllOpenCloseIsPending() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-508-bundle-fin-')));
+  const binDir = path.join(tmp, 'bin');
+  const logFile = path.join(tmp, 'gh-calls.log');
+  const project = 'bundle-508-61-62';
+  try {
+    initGitRepo(tmp);
+    // Bundle state file: merge-lane (sink: merge) so finalize runs with --keep-worktree semantics.
+    const stateLines = [
+      '# Kaola-Workflow State', '',
+      '## Project', 'name: ' + project, 'status: active', '',
+      '## Current Position', 'phase: adaptive', 'workflow_path: adaptive',
+      'step: start', 'next_command: /kaola-workflow-plan-run ' + project, '',
+      '## Pending Gates', '- none', '',
+      '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
+      '## Last Updated', new Date().toISOString(), '',
+      '## Sink', 'branch: workflow/' + project,
+      'issue_number: 61',
+      'issue_numbers: 61,62',
+      'bundle_id: ' + project,
+      'closure_policy: all_or_nothing',
+      'sink: merge', 'run_posture: in-place', ''
+    ].join('\n');
+    writeProject(tmp, project, { 'workflow-state.md': stateLines });
+
+    // Plant roadmap sources for both members.
+    plantRoadmapIssue(tmp, 61, '');
+    plantRoadmapIssue(tmp, 62, '');
+
+    // gh mock: both members probe as OPEN (not closed yet — close deferred to sink-merge).
+    writeBundleGhMockScript(binDir, { logFile, openIssues: [61, 62] });
+
+    // Run finalize WITH --keep-worktree (merge-lane: sink-merge handles closing).
+    const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', project, '--keep-worktree'], {
+      cwd: tmp,
+      encoding: 'utf8',
+      timeout: 60000,
+      env: Object.assign({}, process.env, {
+        KAOLA_WORKFLOW_OFFLINE: '0',
+        KAOLA_WORKTREE_NATIVE: '0',
+        KAOLA_GH_MOCK_SCRIPT: path.join(binDir, 'gh.js'),
+      })
+    });
+
+    assert(result.status === 0,
+      '#508 finalize: exit 0 expected, got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+
+    const lines = (result.stdout || '').trim().split('\n').filter(l => l.trim().startsWith('{'));
+    assert(lines.length > 0, '#508 finalize: expected JSON output');
+    const out = JSON.parse(lines[lines.length - 1]);
+    assert(out.status === 'closed', '#508 finalize: status must be closed, got ' + JSON.stringify(out.status));
+
+    const receipt = out.closure_receipt;
+    assert(receipt != null, '#508 finalize: closure_receipt must be present');
+    assert(receipt.remote_issue_closed === 'close_pending',
+      '#508 finalize: remote_issue_closed must be close_pending (all members open, deferred to sink-merge), got ' + JSON.stringify(receipt.remote_issue_closed));
+    assert(Array.isArray(receipt.closed_issues) && receipt.closed_issues.length === 0,
+      '#508 finalize: closed_issues must be [] (no pre-sink remote close), got ' + JSON.stringify(receipt.closed_issues));
+
+    // Verify no pre-sink remote issue close was called: both members must remain in open_issues.
+    // (writeBundleGhMockScript does not log 'issue close' calls, so a negative-log check would be
+    // vacuous; asserting receipt.open_issues = [61,62] is the real positive lock — any pre-sink close
+    // would move a member out of openIssues and into closedIssues, shrinking this array.)
+    assert(Array.isArray(receipt.open_issues) && receipt.open_issues.length === 2,
+      '#508 finalize: open_issues must contain both members (no pre-sink close fired), got ' + JSON.stringify(receipt.open_issues));
+    assert(receipt.open_issues.includes(61) && receipt.open_issues.includes(62),
+      '#508 finalize: open_issues must include both 61 and 62, got ' + JSON.stringify(receipt.open_issues));
+
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testBundleFinalizeAllOpenCloseIsPending: PASSED');
 }
 
 // #336 — --keep-issue-open requires --issue (typed refusal, non-zero exit).
@@ -12519,6 +12723,8 @@ function buildRegistry() {
   add('testKeepOpenMergeFullChain',                       testKeepOpenMergeFullChain);
   add('testKeepOpenFinalizeFlagAlias',                    testKeepOpenFinalizeFlagAlias);
   add('testSinkMergeKeepOpenOnlineMock',                  testSinkMergeKeepOpenOnlineMock);
+  add('testSinkMergePostPushReopenOnMock',                testSinkMergePostPushReopenOnMock);
+  add('testBundleFinalizeAllOpenCloseIsPending',          testBundleFinalizeAllOpenCloseIsPending);
   add('testSinkMergeKeepOpenRequiresIssue',               testSinkMergeKeepOpenRequiresIssue);
   add('testSinkMergeKeepOpenArchivedStateGuard',          testSinkMergeKeepOpenArchivedStateGuard);
   add('testClosureAuditKeepOpenExclusion',                testClosureAuditKeepOpenExclusion);

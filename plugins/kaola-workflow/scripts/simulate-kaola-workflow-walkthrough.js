@@ -1561,6 +1561,7 @@ function main() {
     testAC4SubagentDispatchLog();
     testCodexFinalizeArchiveVerifiesBeforeDelete();  // #426
     testCodexFinalizeClosesIssueBundleMembers();      // #427
+    testCodexBundleFinalizeAllOpenCloseIsPending();   // #508
     testCodexFinalizeRoadmapResidueDetection();       // #428
     testCodexBundleStateIncoherent();                 // #430
     testCodexBundle424432433NodeSeeding();            // #424/#432/#433 n9-walkthrough
@@ -1667,6 +1668,82 @@ function testCodexFinalizeClosesIssueBundleMembers() {
       'codex #427 offline bundle close: closure.closed must be empty, got: ' + JSON.stringify(closure.closed)
     );
     console.log('testCodexFinalizeClosesIssueBundleMembers: PASSED');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+}
+
+// ---------------------------------------------------------------------------
+// #508: bundle finalize on merge-lane (--keep-worktree): when all bundle members probe
+// as OPEN online, the close is deferred to sink-merge and remote_issue_closed must be
+// 'close_pending' (not 'partial') and closed_issues must be []. Parity test for the
+// codex edition (mirrors claude testBundleFinalizeAllOpenCloseIsPending).
+// ---------------------------------------------------------------------------
+function testCodexBundleFinalizeAllOpenCloseIsPending() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-cx-508-fin-')));
+  const binDir = path.join(tmp, 'bin');
+  const project = 'bundle-508-71-72';
+  try {
+    initGitRepo(tmp);
+    const stateLines = [
+      '# Kaola-Workflow State', '',
+      '## Project', 'name: ' + project, 'status: active', '',
+      '## Current Position', 'phase: adaptive', 'workflow_path: adaptive',
+      'step: start', 'next_command: /kaola-workflow-plan-run ' + project, '',
+      '## Pending Gates', '- none', '',
+      '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
+      '## Last Updated', new Date().toISOString(), '',
+      '## Sink', 'branch: workflow/' + project,
+      'issue_number: 71',
+      'issue_numbers: 71,72',
+      'bundle_id: ' + project,
+      'closure_policy: all_or_nothing',
+      'sink: merge', 'run_posture: in-place', ''
+    ].join('\n');
+    const dir = path.join(tmp, 'kaola-workflow', project);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'workflow-state.md'), stateLines);
+    plantRoadmap(tmp, 71, '');
+    plantRoadmap(tmp, 72, '');
+
+    // gh mock: both members probe as OPEN (not closed yet — close deferred to sink-merge).
+    fs.mkdirSync(binDir, { recursive: true });
+    const ghMockScript = [
+      "'use strict';",
+      "const a = process.argv.slice(2).join(' ');",
+      "if (a.includes('repo view')) { process.stdout.write(JSON.stringify({owner:{login:'test'},name:'repo'}) + '\\n'); process.exit(0); }",
+      "const m = a.match(/issue view (\\d+)/);",
+      "if (m) { process.stdout.write(JSON.stringify({number:parseInt(m[1]),state:'open',title:'issue '+m[1],body:'',labels:[]}) + '\\n'); process.exit(0); }",
+      "process.stdout.write('\\n'); process.exit(0);"
+    ].join('\n');
+    fs.writeFileSync(path.join(binDir, 'gh.js'), ghMockScript);
+
+    const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', project, '--keep-worktree'], {
+      cwd: tmp, encoding: 'utf8', timeout: 60000,
+      env: Object.assign({}, process.env, {
+        KAOLA_WORKFLOW_OFFLINE: '0',
+        KAOLA_WORKTREE_NATIVE: '0',
+        KAOLA_GH_MOCK_SCRIPT: path.join(binDir, 'gh.js'),
+      })
+    });
+
+    assert(result.status === 0,
+      'codex #508 finalize: exit 0 expected, got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    const lines = (result.stdout || '').trim().split('\n').filter(l => l.trim().startsWith('{'));
+    assert(lines.length > 0, 'codex #508 finalize: expected JSON output');
+    const out = JSON.parse(lines[lines.length - 1]);
+    assert(out.status === 'closed', 'codex #508 finalize: status must be closed, got ' + JSON.stringify(out.status));
+
+    const receipt = out.closure_receipt;
+    assert(receipt != null, 'codex #508 finalize: closure_receipt must be present');
+    assert(receipt.remote_issue_closed === 'close_pending',
+      'codex #508 finalize: remote_issue_closed must be close_pending (all members open, deferred to sink-merge), got ' + JSON.stringify(receipt.remote_issue_closed));
+    assert(Array.isArray(receipt.closed_issues) && receipt.closed_issues.length === 0,
+      'codex #508 finalize: closed_issues must be [] (no pre-sink remote close), got ' + JSON.stringify(receipt.closed_issues));
+    assert(Array.isArray(receipt.open_issues) && receipt.open_issues.length === 2,
+      'codex #508 finalize: open_issues must contain both members (no pre-sink close fired), got ' + JSON.stringify(receipt.open_issues));
+    assert(receipt.open_issues.includes(71) && receipt.open_issues.includes(72),
+      'codex #508 finalize: open_issues must include both 71 and 72, got ' + JSON.stringify(receipt.open_issues));
+
+    console.log('testCodexBundleFinalizeAllOpenCloseIsPending: PASSED');
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 }
 

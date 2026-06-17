@@ -715,14 +715,58 @@ function resolveSinkReceiptPath(mainRoot, project) {
 }
 
 // #429: load or initialize the sink receipt.
+// #518: cycle-identity guard — stamp branch_head at init; on resume, if steps.merge is 'done'
+// and branch_head diverges from the current tip (new cycle, same branch name reused), reinitialize
+// all steps to pending so the merge actually runs. Genuine mid-cycle resumes (branch_head matches
+// current tip) are NOT disturbed.
+// Returns { receipt, receiptPath, newCycle } where newCycle=true signals a stale-cycle reinit.
+// A newCycle receipt must NOT be written to disk before the merge-step git checkout — the stale
+// receipt may be a committed tracked file on both main and the feature branch; modifying it before
+// `git checkout <branch>` causes a checkout conflict. The first disk write is deferred to the
+// merge step, after which the checked-out content matches main and the overwrite is safe.
 function loadOrInitReceipt(mainRoot, project, branch, issueNumber, issueNumbers, defBranch) {
   const receiptPath = resolveSinkReceiptPath(mainRoot, project);
   if (fs.existsSync(receiptPath)) {
     try {
       const r = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
-      if (r && r.steps) return { receipt: r, receiptPath };
+      if (r && r.steps) {
+        // #518: cycle-identity check — only applies when merge is already recorded as done
+        // (the stale-receipt scenario: prior cycle completed, new cycle reuses same branch name).
+        if (r.steps.merge === 'done') {
+          let currentHead = null;
+          try { currentHead = execFileSync('git', ['-C', mainRoot, 'rev-parse', branch], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch (_) {}
+          const priorHead = r.branch_head || null;
+          const isNewCycle = !currentHead || !priorHead || currentHead !== priorHead;
+          if (isNewCycle) {
+            // Stale all-done receipt from a prior cycle — reinitialize steps to pending so
+            // the merge runs fresh. Return newCycle:true so runSinkTransaction defers the first
+            // disk write until after the merge-step checkout (the stale file remains on disk,
+            // unmodified, so git checkout <branch> does not abort with "local changes would be
+            // overwritten" when the receipt is a tracked file shared by both branches).
+            const freshSteps = {};
+            for (const s of SINK_STEPS) freshSteps[s] = 'pending';
+            const freshReceipt = {
+              project, branch,
+              issue_number: issueNumber || r.issue_number || null,
+              issue_numbers: issueNumbers && issueNumbers.length ? issueNumbers : (issueNumber ? [issueNumber] : (r.issue_numbers || [])),
+              resolved_default_branch: defBranch || r.resolved_default_branch,
+              branch_head: currentHead || null,
+              started_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+              stash_ref: null,
+              removed_duplicates: [],
+              steps: freshSteps
+            };
+            return { receipt: freshReceipt, receiptPath, newCycle: true };
+          }
+        }
+        return { receipt: r, receiptPath };
+      }
     } catch (_) {}
   }
+  // No existing receipt — initialize fresh. Stamp branch_head for future cycle-identity checks.
+  let branchHead = null;
+  try { branchHead = execFileSync('git', ['-C', mainRoot, 'rev-parse', branch], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch (_) {}
   const steps = {};
   for (const s of SINK_STEPS) steps[s] = 'pending';
   const receipt = {
@@ -731,6 +775,7 @@ function loadOrInitReceipt(mainRoot, project, branch, issueNumber, issueNumbers,
     issue_number: issueNumber || null,
     issue_numbers: issueNumbers && issueNumbers.length ? issueNumbers : (issueNumber ? [issueNumber] : []),
     resolved_default_branch: defBranch,
+    branch_head: branchHead,
     started_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
     stash_ref: null,
@@ -824,6 +869,17 @@ function sinkPreflight(mainRoot, project, branch, issueNumbers) {
       }
     }
 
+    // #518: the sink's own receipt file (live OR archive path) is sink-owned. It may appear as
+    // untracked (??) if the project is active, or as a tracked deletion (D ) if loadOrInitReceipt
+    // detected a stale prior-cycle receipt (and the stale receipt was committed by archive_commit
+    // in a prior sink). Either way it must NOT be treated as foreign dirt — the sink will overwrite
+    // it. We exempt it unconditionally here; the actual write is handled by writeSinkReceipt.
+    const sinkReceiptPaths = new Set([
+      'kaola-workflow/' + project + '/.cache/sink-receipt.json',
+      'kaola-workflow/archive/' + project + '/.cache/sink-receipt.json',
+    ]);
+    if (sinkReceiptPaths.has(filePath)) continue;
+
     // Exclude registered linked worktrees — they appear as untracked dirs in git status -uall
     // but are managed by git and not owned by any issue. Their presence is expected during a
     // parallel-issue sink and must NOT block the sink.
@@ -877,14 +933,23 @@ function sinkPreflight(mainRoot, project, branch, issueNumbers) {
 function runSinkTransaction(rawArgs, mainRoot, defBranch) {
   const args = rawArgs;
 
-  // Resolve the receipt path and load/init the receipt
-  const { receipt, receiptPath } = loadOrInitReceipt(mainRoot, args.project, args.branch,
+  // Resolve the receipt path and load/init the receipt.
+  // newCycle=true means loadOrInitReceipt detected a stale prior-cycle receipt and reinit'd — the
+  // stale file remains on disk (unmodified) so git checkout <branch> in the merge step does not
+  // abort; the first disk write is therefore deferred to stepDone('merge').
+  const { receipt, receiptPath, newCycle } = loadOrInitReceipt(mainRoot, args.project, args.branch,
     args.issue, args.issueNumbers, defBranch);
 
   // Helper: mark a step done and persist
   const stepDone = (step) => {
     receipt.steps[step] = 'done';
     receipt.updated_at = new Date().toISOString();
+    // #518: for a new-cycle reinit, skip writing the receipt at the preflight step.
+    // The stale receipt is a committed tracked file on both main and the feature branch.
+    // Writing it (with new content) before git checkout <branch> in the merge step would
+    // modify a tracked file that the feature branch also has, causing checkout to abort with
+    // "your local changes would be overwritten". First write is deferred to merge step.
+    if (step === 'preflight' && newCycle) return;
     writeSinkReceipt(receiptPath, receipt);
     // #429 test-only abort hook
     if (SINK_ABORT_AFTER && SINK_ABORT_AFTER === step) {
@@ -1148,6 +1213,20 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
         }
       }
       stepDone('push_main');
+      // #517: keep-open verification — if keepIssueOpen was set, the merge commit body may have
+      // contained a "close/fix/resolve #N" keyword that caused GitHub to auto-close the issue at
+      // push time. Post-push, probe the live issue state; if it is now CLOSED, reopen it and record
+      // the event in the receipt so callers can detect + audit it.
+      if (!OFFLINE && args.keepIssueOpen && args.issue != null) {
+        try {
+          if (probeIssueClosed(args.issue, {})) {
+            ghExec(['issue', 'reopen', String(args.issue)], {});
+            receipt.remote_issue_closed = 'reopened_after_autoclose';
+            receipt.updated_at = new Date().toISOString();
+            writeSinkReceipt(receiptPath, receipt);
+          }
+        } catch (_) {}
+      }
       continue;
     }
   }

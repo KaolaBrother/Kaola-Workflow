@@ -796,20 +796,58 @@ function resolveSinkReceiptPath(mainRoot, project) {
   return archive;
 }
 
+// #518: cycle-identity guard — stamp branch_head at init; on resume, if steps.merge is 'done'
+// and branch_head diverges from the current tip (new cycle, same branch name reused), reinitialize
+// all steps to pending so the merge actually runs. Genuine mid-cycle resumes (branch_head matches
+// current tip) are NOT disturbed.
 function loadOrInitReceipt(mainRoot, project, branch, issueNumber, issueNumbers, defBranch) {
   const receiptPath = resolveSinkReceiptPath(mainRoot, project);
   if (fs.existsSync(receiptPath)) {
     try {
       const r = JSON.parse(fs.readFileSync(receiptPath, 'utf8'));
-      if (r && r.steps) return { receipt: r, receiptPath };
+      if (r && r.steps) {
+        // #518: cycle-identity check — only applies when merge is already recorded as done
+        // (the stale-receipt scenario: prior cycle completed, new cycle reuses same branch name).
+        if (r.steps.merge === 'done') {
+          let currentHead = null;
+          try { currentHead = execFileSync('git', ['-C', mainRoot, 'rev-parse', branch], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch (_) {}
+          const priorHead = r.branch_head || null;
+          const isNewCycle = !currentHead || !priorHead || currentHead !== priorHead;
+          if (isNewCycle) {
+            // Stale all-done receipt from a prior cycle — reinitialize steps to pending so
+            // the merge runs fresh. Return newCycle:true so runSinkTransaction defers the first
+            // disk write until after the merge-step checkout (the stale file remains on disk,
+            // unmodified, so git checkout <branch> does not abort with "local changes would be
+            // overwritten" when the receipt is a tracked file shared by both branches).
+            const freshSteps = {};
+            for (const s of SINK_STEPS) freshSteps[s] = 'pending';
+            const freshReceipt = {
+              project, branch,
+              issue_number: issueNumber || r.issue_number || null,
+              issue_numbers: issueNumbers && issueNumbers.length ? issueNumbers : (issueNumber ? [issueNumber] : (r.issue_numbers || [])),
+              resolved_default_branch: defBranch || r.resolved_default_branch,
+              branch_head: currentHead || null,
+              started_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+              stash_ref: null, removed_duplicates: [],
+              steps: freshSteps
+            };
+            return { receipt: freshReceipt, receiptPath, newCycle: true };
+          }
+        }
+        return { receipt: r, receiptPath };
+      }
     } catch (_) {}
   }
+  // No existing receipt — initialize fresh. Stamp branch_head for future cycle-identity checks.
+  let branchHead = null;
+  try { branchHead = execFileSync('git', ['-C', mainRoot, 'rev-parse', branch], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim(); } catch (_) {}
   const steps = {};
   for (const s of SINK_STEPS) steps[s] = 'pending';
   const receipt = {
     project, branch, issue_number: issueNumber || null,
     issue_numbers: issueNumbers && issueNumbers.length ? issueNumbers : (issueNumber ? [issueNumber] : []),
     resolved_default_branch: defBranch,
+    branch_head: branchHead,
     started_at: new Date().toISOString(), updated_at: new Date().toISOString(),
     stash_ref: null, removed_duplicates: [], steps
   };
@@ -859,6 +897,13 @@ function sinkPreflight(mainRoot, project, branch, issueNumbers) {
       try { execFileSync('git', ['-C', mainRoot, 'cat-file', '-e', branch + ':' + filePath], { stdio: 'ignore' }); branchHas = true; } catch (_) {}
       if (branchHas) { projDuplicates.push(filePath); continue; }
     }
+    // #518: the sink's own receipt file (live OR archive path) is sink-owned — exempt it.
+    // It may appear as ?? (untracked) or D  (tracked deletion from a prior loadOrInitReceipt).
+    const sinkReceiptPaths = new Set([
+      'kaola-workflow/' + project + '/.cache/sink-receipt.json',
+      'kaola-workflow/archive/' + project + '/.cache/sink-receipt.json',
+    ]);
+    if (sinkReceiptPaths.has(filePath)) continue;
     const isWorktreePath = worktreePaths.has(filePath) || Array.from(worktreePaths).some(wt => filePath === wt + '/' || filePath.startsWith(wt + '/'));
     if (isWorktreePath) continue;
     foreignDirt.push(filePath);
@@ -885,9 +930,13 @@ function sinkPreflight(mainRoot, project, branch, issueNumbers) {
 }
 
 function runSinkTransaction(args, mainRoot, defBranch) {
-  const { receipt, receiptPath } = loadOrInitReceipt(mainRoot, args.project, args.branch, args.issue, args.issueNumbers, defBranch);
+  const { receipt, receiptPath, newCycle } = loadOrInitReceipt(mainRoot, args.project, args.branch, args.issue, args.issueNumbers, defBranch);
   const stepDone = (step) => {
     receipt.steps[step] = 'done'; receipt.updated_at = new Date().toISOString();
+    // #518: for a new-cycle reinit, skip writing the receipt at the preflight step —
+    // the stale receipt is a committed tracked file on both main and the feature branch;
+    // writing it before git checkout <branch> in the merge step causes a checkout conflict.
+    if (step === 'preflight' && newCycle) return;
     writeSinkReceipt(receiptPath, receipt);
     if (SINK_ABORT_AFTER && SINK_ABORT_AFTER === step) {
       process.stderr.write('[TEST ONLY] KAOLA_WORKFLOW_SINK_ABORT_AFTER=' + step + ' — aborting sink transaction\n');
@@ -1025,7 +1074,22 @@ function runSinkTransaction(args, mainRoot, defBranch) {
           process.exitCode = 1; return;
         }
       }
-      stepDone('push_main'); continue;
+      stepDone('push_main');
+      // #517: keep-open verification — if keepIssueOpen was set, the merge commit body may have
+      // contained a "close/fix/resolve #N" keyword that caused the forge to auto-close the issue at
+      // push time. Post-push, probe the live issue state; if it is now CLOSED, reopen it (glab issue
+      // reopen) and record the event in the receipt so callers can detect + audit it.
+      if (!OFFLINE && args.keepIssueOpen && args.issue != null) {
+        try {
+          if (probeIssueClosed(args.issue, {})) {
+            forge.glabExec(['issue', 'reopen', String(args.issue)], {});
+            receipt.remote_issue_closed = 'reopened_after_autoclose';
+            receipt.updated_at = new Date().toISOString();
+            writeSinkReceipt(receiptPath, receipt);
+          }
+        } catch (_) {}
+      }
+      continue;
     }
   }
   // #484 FRESHNESS GUARD: a stale all-`done` receipt resumed from the tracked archive/<project>/.cache/

@@ -134,6 +134,28 @@ here for the full contract.
   the receipt field/enum schema, and the flow mapping. The closure contract is
   implemented in `scripts/kaola-workflow-closure-contract.js`.
 
+  **Sink-receipt schema extensions (#517, #518):**
+
+  - **`branch_head`** (cycle-identity binding, #518) — the branch-tip SHA stamped into
+    `sink-receipt.json` at `loadOrInitReceipt` init time. At load time, a receipt whose
+    `branch_head` is absent (pre-#518), does not equal the current branch tip, AND is not
+    an ancestor of the current branch tip is treated as a stale prior-cycle receipt and
+    reinitialized (emits `stale_sink_receipt`). A receipt whose `branch_head` is an ancestor
+    of the current tip belongs to the current cycle and is resumed normally. The #484 ancestry
+    backstop (post-step-loop check that the feature branch tip is an ancestor of the default
+    branch) is preserved as a defense-in-depth layer. Absent in receipts written before #518;
+    conservatively treated as unbound at load time.
+
+  - **`remote_issue_closed: "reopened_after_autoclose"`** (post-push keep-open verification,
+    #517) — a new value in the `remote_issue_closed` enum, recorded when `keepIssueOpen` is
+    true and a post-`push_main` probe finds the issue was auto-closed by GitHub's commit-keyword
+    mechanism, and the workflow successfully reopened it. Distinguishes a corrected auto-close
+    event from the nominal `"kept_open"` path (no auto-close interference) and from the failure
+    `"failed"` path (reopen attempted but failed). The existing enum values are unchanged:
+    `"closed"` (workflow closed it), `"kept_open"` (bypassed and confirmed open),
+    `"partial"` (mixed bundle outcome), `"close_pending"` (deferred to sink-merge),
+    `"failed"` (close attempted and failed).
+
 ## Workflow State Fields
 
 The `workflow-state.md` file contains several key blocks:

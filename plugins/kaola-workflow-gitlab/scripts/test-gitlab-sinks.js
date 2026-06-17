@@ -943,15 +943,16 @@ withForge({
 }
 console.log('GitLab keep-open (#336) tests passed');
 
-// #484: the --sink TRANSACTION freshness guard — forge-port parity for the canonical
-// testSinkRefusesStaleReceipt (the forge runSinkTransaction had no --sink-path test). A stale all-`done`
-// receipt resumed from the tracked archive/<project>/.cache/ tree must NOT false-resume to status:sinked
-// when the branch was never merged; a genuinely-merged branch must still sink (no false-positive).
+// #484 / #518: the --sink TRANSACTION freshness guard + cycle-identity fix.
+// #518 adds branch_head stamp to receipts so a new cycle using the same branch name correctly
+// reinitializes (merge runs fresh) instead of stale-resuming to stale_sink_receipt.
+// The #484 guard still fires for the edge case where branch_head matches but merge was never applied.
 {
   const sinkScript = path.join(__dirname, 'kaola-gitlab-workflow-sink-merge.js');
   const project = 'issue-9484';
   const branch = 'workflow/issue-9484';
-  const staleReceipt = JSON.stringify({
+  // Stale receipt WITHOUT branch_head (old format, pre-#518) — simulates prior-cycle archive receipt
+  const staleReceiptNoBranchHead = JSON.stringify({
     project, branch, issue_number: 9484, issue_numbers: [9484], resolved_default_branch: 'main',
     started_at: '2026-06-14T12:14:18.462Z', updated_at: '2026-06-14T12:14:28.928Z', stash_ref: null, removed_duplicates: [],
     steps: { preflight: 'done', push_upstream: 'done', merge: 'done', worktree_sync: 'done', finalize: 'done', closure: 'done', stash_restore: 'done', archive_commit: 'done', push_main: 'done' },
@@ -962,25 +963,26 @@ console.log('GitLab keep-open (#336) tests passed');
     const root = fs.mkdtempSync(path.join(os.tmpdir(), name));
     const git = (...a) => execFileSync('git', a, { cwd: root, encoding: 'utf8' });
     git('init', '-b', 'main'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't');
+    // .gitignore: exclude archive/ and .cache/ so receipt files are untracked (not foreign dirt)
+    fs.writeFileSync(path.join(root, '.gitignore'), 'kaola-workflow/archive/\nkaola-workflow/*/.cache/\n');
     fs.writeFileSync(path.join(root, 'base.txt'), 'base'); git('add', '-A'); git('commit', '-m', 'base');
+    // Write the stale receipt in the archive path — NOT git-tracked (matches real-world scenario)
     const ac = path.join(root, 'kaola-workflow', 'archive', project, '.cache'); fs.mkdirSync(ac, { recursive: true });
-    fs.writeFileSync(path.join(ac, 'sink-receipt.json'), staleReceipt);
-    git('add', '-A'); git('commit', '-m', 'chore: prior-slice receipt');
+    fs.writeFileSync(path.join(ac, 'sink-receipt.json'), staleReceiptNoBranchHead);
     git('branch', branch); git('checkout', branch);
     fs.writeFileSync(path.join(root, 'DELIVERABLE.txt'), 'deliverable'); git('add', '-A'); git('commit', '-m', 'feat: deliverable');
     git('checkout', 'main');
     return { root, git };
   };
-  // Scenario A (the bug): branch un-merged → must refuse stale_sink_receipt, main unchanged.
+  // Scenario A (#518 fix): stale receipt (no branch_head) + unmerged branch → #518 reinitializes
+  // steps, merge runs fresh, result is status:sinked. The old behavior (stale_sink_receipt refusal)
+  // was the BUG — the fix makes the merge actually run.
   {
     const { root } = mkRepo('kw-gl-stale-A-');
     try {
-      const before = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
       const r = runSink(root); const p = parseLast(r.stdout);
-      assert.notStrictEqual(p.status, 'sinked', '#484-gitlab-A: stale unmerged receipt must NOT emit status:sinked, got ' + JSON.stringify(p));
-      assert.strictEqual(p.reason, 'stale_sink_receipt', '#484-gitlab-A: must refuse stale_sink_receipt, got ' + JSON.stringify(p));
-      assert.notStrictEqual(r.status, 0, '#484-gitlab-A: refusal must exit non-zero');
-      assert.strictEqual(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(), before, '#484-gitlab-A: main must NOT advance');
+      assert.strictEqual(p.status, 'sinked', '#518-gitlab-A: stale receipt (no branch_head) must reinitialize and sink, got ' + JSON.stringify(p));
+      assert.strictEqual(r.status, 0, '#518-gitlab-A: sink must exit 0 after reinit, got ' + r.status);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   }
   // Scenario B (no false-positive): branch genuinely merged → stale all-done receipt still sinks.
@@ -992,8 +994,105 @@ console.log('GitLab keep-open (#336) tests passed');
       assert.ok(!(p.result === 'refuse' && p.reason === 'stale_sink_receipt'), '#484-gitlab-B: a genuinely-merged branch must NOT be false-refused, got ' + JSON.stringify(p));
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   }
+  // Scenario C (#518): stale receipt WITH a mismatched branch_head → reinitializes → sinked.
+  {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-stale-C-'));
+    const git = (...a) => execFileSync('git', a, { cwd: root, encoding: 'utf8' });
+    try {
+      git('init', '-b', 'main'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't');
+      fs.writeFileSync(path.join(root, 'base.txt'), 'base'); git('add', '-A'); git('commit', '-m', 'base');
+      git('branch', branch); git('checkout', branch);
+      fs.writeFileSync(path.join(root, 'DELIVERABLE2.txt'), 'deliverable2'); git('add', '-A'); git('commit', '-m', 'feat: deliverable2');
+      git('checkout', 'main');
+      const branchHead = execFileSync('git', ['rev-parse', branch], { cwd: root, encoding: 'utf8' }).trim();
+      // Receipt with a DIFFERENT branch_head (old cycle SHA — mismatch triggers reinit)
+      const staleWithOldHead = JSON.stringify({
+        project, branch, issue_number: 9484, issue_numbers: [9484], resolved_default_branch: 'main',
+        branch_head: 'deadbeefdeadbeefdeadbeef0000000000000000', // wrong SHA
+        started_at: '2026-06-14T12:00:00.000Z', updated_at: '2026-06-14T12:00:00.000Z', stash_ref: null, removed_duplicates: [],
+        steps: { preflight: 'done', push_upstream: 'done', merge: 'done', worktree_sync: 'done', finalize: 'done', closure: 'done', stash_restore: 'done', archive_commit: 'done', push_main: 'done' },
+      });
+      const lc = path.join(root, 'kaola-workflow', project, '.cache'); fs.mkdirSync(lc, { recursive: true });
+      fs.writeFileSync(path.join(lc, 'sink-receipt.json'), staleWithOldHead);
+      // Don't commit the .cache/ file (gitignored in real projects)
+      const r = runSink(root); const p = parseLast(r.stdout);
+      assert.strictEqual(p.status, 'sinked', '#518-gitlab-C: mismatched branch_head must reinitialize and sink, got ' + JSON.stringify(p));
+      assert.strictEqual(r.status, 0, '#518-gitlab-C: must exit 0');
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  }
+  // Scenario D (#518): genuine mid-cycle resume (matching branch_head, merge NOT done) → resumes → sinked.
+  {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-stale-D-'));
+    const git = (...a) => execFileSync('git', a, { cwd: root, encoding: 'utf8' });
+    try {
+      git('init', '-b', 'main'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't');
+      fs.writeFileSync(path.join(root, 'base.txt'), 'base'); git('add', '-A'); git('commit', '-m', 'base');
+      git('branch', branch); git('checkout', branch);
+      fs.writeFileSync(path.join(root, 'DELIVERABLE3.txt'), 'deliverable3'); git('add', '-A'); git('commit', '-m', 'feat: deliverable3');
+      git('checkout', 'main');
+      const branchHead = execFileSync('git', ['rev-parse', branch], { cwd: root, encoding: 'utf8' }).trim();
+      // Mid-cycle receipt: preflight+push_upstream done, merge pending, branch_head = actual tip
+      const midCycleReceipt = JSON.stringify({
+        project, branch, issue_number: 9484, issue_numbers: [9484], resolved_default_branch: 'main',
+        branch_head: branchHead, // matches current tip → genuine resume
+        started_at: '2026-06-17T10:00:00.000Z', updated_at: '2026-06-17T10:00:00.000Z', stash_ref: null, removed_duplicates: [],
+        steps: { preflight: 'done', push_upstream: 'done', merge: 'pending', worktree_sync: 'pending', finalize: 'pending', closure: 'pending', stash_restore: 'pending', archive_commit: 'pending', push_main: 'pending' },
+      });
+      const lc = path.join(root, 'kaola-workflow', project, '.cache'); fs.mkdirSync(lc, { recursive: true });
+      fs.writeFileSync(path.join(lc, 'sink-receipt.json'), midCycleReceipt);
+      const r = runSink(root); const p = parseLast(r.stdout);
+      assert.strictEqual(p.status, 'sinked', '#518-gitlab-D: genuine mid-cycle resume must complete → sinked, got ' + JSON.stringify(p));
+      assert.strictEqual(r.status, 0, '#518-gitlab-D: must exit 0');
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  }
 }
-console.log('GitLab #484 stale-sink-receipt guard tests passed');
+console.log('GitLab #484/#518 stale-sink-receipt guard + cycle-identity tests passed');
+
+// #517: keep-open verification — forge-port parity. After push_main, if keepIssueOpen is set
+// and the issue was auto-closed by the forge (merge commit keyword), reopen it.
+{
+  const sinkScript = path.join(__dirname, 'kaola-gitlab-workflow-sink-merge.js');
+  const project = 'issue-9517';
+  const branch = 'workflow/issue-9517';
+  const parseLast = (out) => { try { return JSON.parse(String(out || '').trim().split('\n').pop()); } catch (_) { return {}; } };
+  // Mock glab: issue view → closed (autoclose), issue reopen → records flag
+  const reopenFlagPath = path.join(os.tmpdir(), 'reopen-gl-9517-' + process.pid + '.txt');
+  if (fs.existsSync(reopenFlagPath)) fs.unlinkSync(reopenFlagPath);
+  const mockGlabPath = path.join(os.tmpdir(), 'mock-glab-9517-' + process.pid + '.js');
+  fs.writeFileSync(mockGlabPath, `#!/usr/bin/env node
+'use strict';
+const args = process.argv.slice(2);
+const fs = require('fs');
+if (args[0] === 'issue' && args[1] === 'view') { process.stdout.write('{"iid":9517,"state":"closed"}\\n'); process.exit(0); }
+if (args[0] === 'issue' && args[1] === 'reopen') { fs.writeFileSync(${JSON.stringify(reopenFlagPath)}, 'reopened:' + args[2] + '\\n'); process.exit(0); }
+process.exit(0);
+`);
+  // Set up a repo with bare remote so push succeeds
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-517-'));
+  const git = (...a) => execFileSync('git', a, { cwd: root, encoding: 'utf8' });
+  try {
+    git('init', '-b', 'main'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't');
+    fs.writeFileSync(path.join(root, 'base.txt'), 'base'); git('add', '-A'); git('commit', '-m', 'base');
+    git('branch', branch); git('checkout', branch);
+    fs.writeFileSync(path.join(root, 'feat.md'), 'feat'); git('add', '-A');
+    git('commit', '-m', 'feat: fix\n\nCloses #9517');
+    git('checkout', 'main');
+    const remotePath = root + '-remote';
+    execFileSync('git', ['init', '--bare', remotePath], { encoding: 'utf8' });
+    execFileSync('git', ['remote', 'add', 'origin', remotePath], { cwd: root, encoding: 'utf8' });
+    execFileSync('git', ['push', '-u', 'origin', 'main'], { cwd: root, encoding: 'utf8' });
+    execFileSync('git', ['push', '-u', 'origin', branch], { cwd: root, encoding: 'utf8' });
+    execFileSync('git', ['branch', '--set-upstream-to=origin/' + branch, branch], { cwd: root, encoding: 'utf8' });
+    const r = spawnSync(process.execPath, [sinkScript, '--branch', branch, '--issue', '9517', '--project', project, '--keep-issue-open', '--sink'], {
+      cwd: root, encoding: 'utf8', env: { ...process.env, KAOLA_GLAB_MOCK_SCRIPT: mockGlabPath }
+    });
+    const p = parseLast(r.stdout);
+    assert.strictEqual(p.status, 'sinked', '#517-gitlab: expected status:sinked, got ' + JSON.stringify(p));
+    assert.ok(fs.existsSync(reopenFlagPath), '#517-gitlab: reopen must have been called after push_main');
+    assert.strictEqual(p.receipt && p.receipt.remote_issue_closed, 'reopened_after_autoclose', '#517-gitlab: receipt must record reopened_after_autoclose');
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+}
+console.log('GitLab #517 reopen-after-autoclose tests passed');
 
 // #496/#497 forge-port parity: (#496) assertWorktreeClean fails CLOSED on a transient git-status
 // probe fault; (#497) the --sink transaction does NOT report status:sinked when push_main hard-fails.

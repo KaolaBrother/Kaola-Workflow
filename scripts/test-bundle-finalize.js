@@ -938,6 +938,140 @@ const { checkClosureInvariants } = require('./kaola-workflow-claim');
 })();
 
 // ---------------------------------------------------------------------------
+// Test (#508): bundle merge-lane close-accounting — all-open case
+//
+// BUG: on the merge lane (--keep-worktree), when ALL members are open, the probe
+// loop at line ~2175 computes remote_issue_closed='partial' (because
+// closedIssues.length===0 !== issueNumbers.length===3, so the 'already_closed'
+// arm misses and falls to the else). But closed_issues is [], so the token
+// ('partial') disagrees with the list ([]): "some closed" vs "none".
+//
+// The #497 invariant: no remote member should be closed before sink-merge on the
+// merge lane. The no-close assertion (no `issue close` calls) must hold.
+//
+// FIX: extend the ternary to add a close_pending arm when closedIssues.length===0:
+//   closed_all → 'already_closed'
+//   none_closed → 'close_pending'   ← the fix
+//   some_closed → 'partial'          ← mixed, already-correct
+// ---------------------------------------------------------------------------
+
+(function testBundleMergeLaneAllOpenAccountingFix() {
+  console.log('Test (#508): merge-lane --keep-worktree all-open bundle → remote_issue_closed:close_pending + closed_issues:[] + zero close calls');
+  const tmpRoot = makeTmpRoot();
+  const binDir = path.join(tmpRoot, 'bin');
+  const logFile = path.join(tmpRoot, 'gh-calls.log');
+  const project = 'bundle-496-497';
+  try {
+    initGitRepo(tmpRoot);
+    writeBundleStateFile(tmpRoot, project, 496, [496, 497]);
+    writeRoadmapFile(tmpRoot, 496);
+    writeRoadmapFile(tmpRoot, 497);
+    writeRoadmapMirror(tmpRoot, [496, 497]);
+
+    // ALL members are OPEN on the forge (none in closedIssues).
+    // Write a custom mock that also logs `issue close N` calls so we can assert none happen
+    // on the --keep-worktree merge lane (#497 invariant: no pre-sink remote close).
+    const customScript = [
+      "'use strict';",
+      'const fs = require("fs");',
+      'const argv = process.argv.slice(2);',
+      'const a = argv.join(" ");',
+      'const logFile = ' + JSON.stringify(logFile) + ';',
+      'function log(msg) {',
+      '  try { fs.appendFileSync(logFile, msg + "\\n"); } catch(_) {}',
+      '}',
+      '// repo view',
+      'if (a.includes("repo view")) {',
+      '  process.stdout.write(JSON.stringify({owner:{login:"test"},name:"repo"}) + "\\n");',
+      '  process.exit(0);',
+      '}',
+      '// issue close N (must NOT be called on --keep-worktree merge lane)',
+      'if (a.match(/^issue close \\d+/)) {',
+      '  const m = a.match(/issue close (\\d+)/);',
+      '  const n = m ? m[1] : "?";',
+      '  log("issue-close:" + n);',
+      '  process.stdout.write("\\n");',
+      '  process.exit(0);',
+      '}',
+      '// issue view N → open (all members are open)',
+      'const viewM = a.match(/issue view (\\d+)/);',
+      'if (viewM) {',
+      '  const n = viewM[1];',
+      '  process.stdout.write(JSON.stringify({number:parseInt(n),state:"open",title:"issue "+n,body:"",labels:[]}) + "\\n");',
+      '  process.exit(0);',
+      '}',
+      '// issue edit N --remove-label',
+      'if (a.includes("issue edit") && a.includes("--remove-label")) {',
+      '  const em = a.match(/issue edit (\\d+)/);',
+      '  log("label-removed:" + (em ? em[1] : "?"));',
+      '  process.exit(0);',
+      '}',
+      '// issue edit N --add-label',
+      'if (a.includes("issue edit") && a.includes("--add-label")) { process.exit(0); }',
+      '// issue comment N --body ...',
+      'if (a.includes("issue comment")) {',
+      '  const cm = a.match(/issue comment (\\d+)/);',
+      '  log("comment:" + (cm ? cm[1] : "?"));',
+      '  process.exit(0);',
+      '}',
+      '// label create',
+      'if (a.includes("label create")) { process.exit(0); }',
+      '// api repos/.../issues/N/comments => []',
+      'if (a.includes("api") && a.includes("comments")) {',
+      '  process.stdout.write("[]\\n");',
+      '  process.exit(0);',
+      '}',
+      '// api --method DELETE',
+      'if (a.includes("api") && a.includes("DELETE")) { process.exit(0); }',
+      'process.stdout.write("\\n");',
+      'process.exit(0);',
+    ].join('\n');
+    fs.mkdirSync(binDir, { recursive: true });
+    fs.writeFileSync(path.join(binDir, 'gh.js'), customScript);
+
+    const result = runFinalize(
+      ['finalize', '--project', project, '--keep-worktree'],
+      tmpRoot, binDir
+    );
+    const out = parseOutput(result);
+
+    assert(result.status === 0, '#508 merge-lane finalize exits 0; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(out !== null, '#508 finalize emits JSON');
+
+    const receipt = out && out.closure_receipt;
+    assert(receipt != null, '#508 receipt present');
+    if (receipt) {
+      // THE BUG: pre-fix, remote_issue_closed is 'partial' even though closed_issues=[]
+      // POST-FIX: when all members are open (closed_issues=[]), token must be 'close_pending'
+      assert(receipt.remote_issue_closed === 'close_pending',
+        '#508: all-open merge-lane bundle must report remote_issue_closed=close_pending, got ' + JSON.stringify(receipt.remote_issue_closed));
+
+      // closed_issues must be empty — no member was closed before sink-merge
+      assert(Array.isArray(receipt.closed_issues) && receipt.closed_issues.length === 0,
+        '#508: closed_issues must be [] on merge lane (no pre-sink close), got ' + JSON.stringify(receipt.closed_issues));
+
+      // close_disposition must be close_pending (consistent with the token)
+      assert(receipt.close_disposition === 'close_pending',
+        '#508: close_disposition must be close_pending, got ' + JSON.stringify(receipt.close_disposition));
+
+      // closure.closed must be empty
+      const closure = out && out.closure_receipt && out.closure_receipt.closure;
+      assert(Array.isArray(closure && closure.closed) && closure.closed.length === 0,
+        '#508: closure.closed must be [] on merge lane, got ' + JSON.stringify(closure && closure.closed));
+    }
+
+    // #497 invariant: zero `issue close` calls (no pre-sink remote close)
+    const calls = readLog(logFile);
+    const closeCalls = calls.filter(c => c.startsWith('issue-close:'));
+    assert(closeCalls.length === 0,
+      '#508 #497-invariant: zero gh issue-close calls on --keep-worktree merge lane, got ' + JSON.stringify(closeCalls));
+
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+})();
+
+// ---------------------------------------------------------------------------
 // Summary
 // ---------------------------------------------------------------------------
 

@@ -2038,7 +2038,13 @@ function cmdFinalize() {
     }
     // #369: truthful ONLINE token — all closed -> already_closed; any member open/failed -> partial
     // (never `skipped_offline`, the OFFLINE-only token).
-    remoteIssueClosed = (closedIssues.length === issueIids.length) ? 'already_closed' : 'partial';
+    // #508: add close_pending arm for the all-open merge-lane case. When none are closed
+    // (closedIssues=[]), reporting 'partial' produces a token-vs-list disagreement: the token
+    // claims "some closed" while the list is empty. Mirror the single-issue semantics: when no
+    // members are closed yet the close is PENDING (deferred to sink-merge on the merge lane).
+    // The 'partial' arm still covers the genuinely mixed case (some already-closed on the forge).
+    remoteIssueClosed = (closedIssues.length === issueIids.length) ? 'already_closed'
+      : (closedIssues.length === 0 ? 'close_pending' : 'partial');
   } else if (!OFFLINE && issueIid) {
     // #396.2: single-issue ONLINE path — already closed → 'already_closed'; otherwise the close is
     // PENDING (the merge sink closes it) → 'close_pending' (was 'skipped_offline' while online).

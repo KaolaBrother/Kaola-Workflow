@@ -1489,6 +1489,7 @@ testGiteaBundleSingleIssueStateHasNoBundleFields();
 // bundle-426-427-428-430 regression tests (mirrors root walkthrough §testFinalizeArchiveVerifiesBeforeDelete etc.).
 testGiteaFinalizeArchiveVerifiesBeforeDelete();
 testGiteaFinalizeClosesIssueBundleMembers();
+testGiteaBundleFinalizeAllOpenCloseIsPending();  // #508
 testGiteaFinalizeRoadmapResidueDetection();
 testGiteaBundleStateIncoherent();
 
@@ -1593,6 +1594,68 @@ function testGiteaFinalizeClosesIssueBundleMembers() {
       'gitea #427: closure.closed must be empty offline, got: ' + JSON.stringify(closure.closed)
     );
     console.log('testGiteaFinalizeClosesIssueBundleMembers: PASSED');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+}
+
+// ---------------------------------------------------------------------------
+// #508: bundle finalize on merge-lane (--keep-worktree): when all bundle members probe
+// as OPEN online, the close is deferred to sink-merge and remote_issue_closed must be
+// 'close_pending' (not 'partial') and closed_issues must be []. Parity test for the
+// gitea edition (mirrors claude testBundleFinalizeAllOpenCloseIsPending).
+// ---------------------------------------------------------------------------
+function testGiteaBundleFinalizeAllOpenCloseIsPending() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-508-fin-')));
+  const binDir = path.join(tmp, 'bin');
+  const project = 'bundle-508-71-72';
+  try {
+    _initGitRepo(tmp);
+    gtWriteProject(tmp, project, {
+      'workflow-state.md': [
+        '# Kaola-Workflow State', '',
+        '## Project', 'name: ' + project, 'status: active', '',
+        '## Current Position', 'phase: adaptive', 'workflow_path: adaptive',
+        'step: start', 'next_command: /kaola-workflow-plan-run ' + project, '',
+        '## Pending Gates', '- none', '',
+        '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
+        '## Last Updated', new Date().toISOString(), '',
+        '## Gitea', 'issue_number: 71', 'full_name: owner/repo', '',
+        '## Sink', 'branch: workflow/gitea-' + project,
+        'issue_number: 71', 'issue_numbers: 71,72',
+        'bundle_id: ' + project, 'closure_policy: all_or_nothing',
+        'sink: merge', 'run_posture: in-place', ''
+      ].join('\n')
+    });
+    gtPlantRoadmapIssue(tmp, 71);
+    gtPlantRoadmapIssue(tmp, 72);
+    // Both members probe as OPEN (close deferred to sink-merge on merge-lane).
+    writeBundleTeaMockScript(binDir, { openIssues: [71, 72] });
+
+    const result = spawnSync(process.execPath, [claimScript, 'finalize', '--project', project, '--keep-worktree'], {
+      cwd: tmp, encoding: 'utf8', timeout: 60000,
+      env: Object.assign({}, process.env, {
+        KAOLA_WORKFLOW_OFFLINE: '0',
+        KAOLA_WORKTREE_NATIVE: '0',
+        KAOLA_TEA_MOCK_SCRIPT: path.join(binDir, 'tea.js'),
+      })
+    });
+
+    assert.strictEqual(result.status, 0,
+      'gitea #508 finalize: exit 0 expected, got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    const out = gtLastJson(result.stdout);
+    assert.strictEqual(out.status, 'closed', 'gitea #508 finalize: status must be closed, got ' + JSON.stringify(out.status));
+
+    const receipt = out.closure_receipt;
+    assert.ok(receipt != null, 'gitea #508 finalize: closure_receipt must be present');
+    assert.strictEqual(receipt.remote_issue_closed, 'close_pending',
+      'gitea #508 finalize: remote_issue_closed must be close_pending (all members open, deferred to sink-merge), got ' + JSON.stringify(receipt.remote_issue_closed));
+    assert.ok(Array.isArray(receipt.closed_issues) && receipt.closed_issues.length === 0,
+      'gitea #508 finalize: closed_issues must be [] (no pre-sink remote close), got ' + JSON.stringify(receipt.closed_issues));
+    assert.ok(Array.isArray(receipt.open_issues) && receipt.open_issues.length === 2,
+      'gitea #508 finalize: open_issues must contain both members (no pre-sink close fired), got ' + JSON.stringify(receipt.open_issues));
+    assert.ok(receipt.open_issues.includes(71) && receipt.open_issues.includes(72),
+      'gitea #508 finalize: open_issues must include both 71 and 72, got ' + JSON.stringify(receipt.open_issues));
+
+    console.log('testGiteaBundleFinalizeAllOpenCloseIsPending: PASSED');
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 }
 
