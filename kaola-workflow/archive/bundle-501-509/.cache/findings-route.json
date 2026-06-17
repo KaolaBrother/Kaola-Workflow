@@ -1,0 +1,30 @@
+[
+  {
+    "finding_id": "id=R1 scope=in_scope action=fix status=resolved severity=high fix_role=implementer rationale=PROPAGATION GAP. plugins/kaola-workflow-gitlab/commands/kaola-workflow-finalize.md:50-53 and plugins/kaola-workflow-gitea/commands/kaola-workflow-finalize.md:50-53 carry a stale --verdict-check description (\"requires verdict:pass ... proves every code-reviewer/security-reviewer/adversarial-verifier/main-session-gate node recorded a passing verdict ... blocks the merge\") with NO #509 exemption note. After #509 an investigation adversarial-verifier is exempt, so this contradicts shipped code. These two files are CONTRACT-DEFINED cross-edition finalize mirror surfaces (test-route-reachability.js:184,186,299,300 + validate-workflow-contracts.js:201,204) and are the peers of commands/kaola-workflow-finalize.md:55-61 which DID receive the exemption note. n2-prose declared write set omitted both forge command files. FIX: reopen n2-prose (doc-updater) with write set widened to both forge commands; append the same #509 exemption note as the Claude command. Route-reachability T6 only checks the closure-audit pin so it does NOT catch this. Breaks cross-edition fidelity + leaves #509 prose reconciliation incomplete.",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "security-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R2 scope=out_of_scope action=follow_up status=open severity=low fix_role=none rationale=docs/api.md:703,740 + docs/architecture.md:292-294 describe --verdict-check as covering every adversarial-verifier without the #509 investigation-exemption nuance. Reference/descriptive prose (NOT a route-mirror contract surface; not pinned for this text by any validator) and remains accurate at the role-set-membership level. Non-blocking accuracy follow-up only.",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "n/a"
+  },
+  {
+    "finding_id": "id=R3 scope=out_of_scope action=none status=open severity=low fix_role=none rationale=SENSITIVE_PATTERNS /\\.gitlab-ci\\.yml$/i is unanchored at start so foo.gitlab-ci.yml also matches (over-fire); safe direction (only adds the internal G2 gate, never weakens it); consistent with existing broad patterns; not a harmful false positive.",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R4 scope=out_of_scope action=none status=open severity=low fix_role=none rationale=/(^|\\/)Dockerfile$/i does not match Dockerfile.dev (slight under-coverage vs deploy surfaces); conservative anchor matching the issue's exact-Dockerfile scope; not a regression.",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  }
+]

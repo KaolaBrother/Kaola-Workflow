@@ -1,0 +1,9 @@
+{"node":"n1-fix","event":"opened","ts":"2026-06-17T08:59:02.512Z"}
+{"node":"n1-fix","event":"closed","ts":"2026-06-17T10:01:30.292Z"}
+{"node":"n2-prose","event":"opened","ts":"2026-06-17T10:01:30.327Z"}
+{"node":"n2-prose","event":"closed","ts":"2026-06-17T10:09:34.000Z"}
+{"node":"n3-review","event":"opened","ts":"2026-06-17T10:09:34.030Z"}
+{"node":"n2-prose","event":"closed","ts":"2026-06-17T10:38:14.838Z"}
+{"node":"n3-review","event":"opened","ts":"2026-06-17T10:38:14.869Z"}
+{"node":"n3-review","event":"closed","ts":"2026-06-17T10:47:26.026Z"}
+{"node":"n4-finalize","event":"opened","ts":"2026-06-17T10:47:26.102Z"}
