@@ -253,6 +253,13 @@ const SENSITIVE_PATTERNS = [
   // path-segment boundary ((^|/) ... /) so it matches fs/x.js, src/fs/x.js, ./fs/x.js
   // but NOT refs/, prefs/, dfs/, fsutil/, configs/fs.js, or a root file named fs.js.
   /filesystem/i, /(^|\/)fs\//i, /external-?api/i, /api-?key/i, /oauth/i, /session/i,
+  // #501: high-blast-radius surfaces the internal G2 security-reviewer post-dominator must cover.
+  // Pattern-list extension ONLY — it triggers the EXISTING internal security gate; it adds NO
+  // CI/CD process-gate, NO external dependency, and is explicitly consistent with the "CI/CD is
+  // not a required gate" principle. (1) Secret dotfiles (precedence #1: pure secret-leak
+  // prevention); (2) pipeline/deploy config (defense-in-depth: a high-blast-radius surface still
+  // gets the internal security gate, never an external pipeline as a gate).
+  /(^|\/)\.env(\.|$)/i, /(^|\/)\.github\/workflows\//i, /\.gitlab-ci\.yml$/i, /(^|\/)Dockerfile$/i,
 ];
 const SENSITIVE_LABELS = new Set(['security', 'auth', 'payments', 'secrets', 'user-data']);
 
@@ -644,6 +651,40 @@ function producesCode(node) {
   return false;
 }
 
+// #509 (D-509-01, Option A): is THIS adversarial-verifier node a CHANGE GATE rather than an
+// investigation skeptic? It is a change gate iff it LIES ON A PATH from SOME code-producing
+// (producesCode) or sensitive (nodeIsSensitive || sensitive labels) node to the unique sink — i.e.
+// some code/sensitive node can forward-reach this verifier AND this verifier can forward-reach the
+// sink. (A code/sensitive node's change therefore flows THROUGH this verifier on its way to the
+// sink, so the verifier's verdict gates that change.) An INVESTIGATION adversarial-verifier — one
+// that lies on no such path, e.g. a probe → assume → critique read frontier or the #486 read-only
+// majority-refute fanout, both of which hang off READ nodes — is NOT a change gate: its refutation
+// is analytical OUTPUT, not a finalize block, so it is exempt from --verdict-check. The gate STAYS
+// STRONG for change-gate verifiers. PURE (no fs): reuses the adjacency / forward-reachability
+// machinery (reachableSet). Keys on graph POSITION ALONE, so the exemption covers BOTH the sequence
+// critique and the read-only majority-refute FANOUT investigation shapes (a fanout MEMBER lies on a
+// code→member→sink path exactly when its group post-dominates the code node, so a code-gating fanout
+// stays fully checked) — deliberately generalizing the issue's "non-fanout" wording. `labels`
+// (frozen Meta labels) optional; when sensitive they widen the code/sensitive set to every
+// code-producing node, mirroring the G2 union at gateUncovered/checkGate.
+function advVerifierIsChangeGate(node, nodes, sink, labels) {
+  if (!node || node.role !== 'adversarial-verifier' || !sink) return false;
+  const fwd = adjacency(nodes);
+  // This verifier must be able to reach the sink at all (it lies "before" the sink on some path).
+  if (node.id !== sink && !reachableSet(fwd, node.id).has(sink)) return false;
+  const sensitiveByLabel = labelsAreSensitive(labels);
+  const isCodeOrSensitive = n =>
+    n.id !== node.id &&
+    (producesCode(n) || nodeIsSensitive(n) || (sensitiveByLabel && producesCode(n)));
+  // Lies on a path from a code/sensitive node iff some code/sensitive node forward-reaches this
+  // verifier (the verifier→sink leg is established above).
+  for (const n of nodes) {
+    if (!isCodeOrSensitive(n)) continue;
+    if (reachableSet(fwd, n.id).has(node.id)) return true;
+  }
+  return false;
+}
+
 // --- #231 runtime gate enforcement ------------------------------------------
 // verify gate EXECUTION over the runtime `## Node Ledger` — a static-presence gate (post-dominance
 // proven at freeze) does not prove the reviewer actually RAN. A target node that reached `complete`
@@ -713,10 +754,27 @@ function verifyVerdictBlock(content, opts) {
   // #406: DUAL-EMIT — {result, reasonCode} ADDED alongside the established `ok` on every return.
   // Consumers (commit-node verdictCheck.ok) still read `ok`; the typed fields are additive shims.
   if (!nodes.length) return { ok: false, result: 'refuse', reasonCode: 'nodes_unparseable', operator_hint: getOperatorHint('nodes_unparseable'), failures: [{ nodeId: null, role: null, reason: 'unparseable ## Nodes' }], checked: [] };
+  // #509: the verdict-check membership of an adversarial-verifier is SCOPED by post-dominance —
+  // an investigation skeptic (post-dominates no code/sensitive node) is exempt REGARDLESS of shape.
+  const vbSink = uniqueSink(nodes);
+  const vbLabels = parseLabels(classifier.sectionBody(content, 'Meta'));
   function checkOne(node) {
     const role = node.role;
     if (!GATE_VERDICT_ROLES.has(role)) {
       return { ok: true, nodeId: node.id, role, verdict: null, findings_blocking: null, found: false };
+    }
+    // #509 (Option A): exempt an INVESTIGATION adversarial-verifier from --verdict-check. The
+    // change-gate criterion (advVerifierIsChangeGate) is "lies on a code/sensitive→sink path" — a
+    // deliberate SUPERSET of post-dominance (every post-dominator also lies on such a path, so a real
+    // change gate is NEVER exempted; the superset additionally treats a verifier downstream of code
+    // that has a parallel non-AV path to the sink as a change gate — the safe direction). A verifier
+    // that lies on NO such path is an investigation skeptic: its refutation is analytical OUTPUT, not
+    // a finalize block, so it is exempt. Keys on graph POSITION ALONE, so BOTH the sequence critique
+    // and the #486 read-only majority-refute FANOUT investigation shapes are exempt. A change-gate
+    // adversarial-verifier falls through to the full verdict-check below (fanout majority-refute OR
+    // sequence pass/fail) — the gate stays strong. G1/G2 post-dominance are unchanged.
+    if (role === 'adversarial-verifier' && !advVerifierIsChangeGate(node, nodes, vbSink, vbLabels)) {
+      return { ok: true, nodeId: node.id, role, verdict: null, findings_blocking: null, found: false, exempt: 'investigation_adversarial_verifier' };
     }
     if (role === 'adversarial-verifier' && node.shape && node.shape.kind === 'fanout') {
       const files = globCache('adversarial-verifier-');

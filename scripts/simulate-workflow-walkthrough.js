@@ -1668,15 +1668,19 @@ function testAdaptiveValidatorGovernance() {
     assert(v.result === 'refuse' && /contains '\.\.'/.test((v.errors||[]).join(';')),
       "#381: a '..'-bearing write-set token must refuse at freeze, got: " + JSON.stringify(v));
 
-    // #381 (NO false-refusal): exact file paths — incl. a root-level file and dot-leading files —
-    // FREEZE GREEN. The shape check keys on a trailing '/' ONLY (never 'lacks a /' / 'starts with .').
+    // #381 (NO false-refusal): exact file paths — incl. a root-level slashless file and a dot-leading
+    // path with slashes — FREEZE GREEN. The shape check keys on a trailing '/' ONLY (never 'lacks a /'
+    // / 'starts with .'). (#501: this scenario uses NON-sensitive exact paths — `Makefile`, a
+    // dot-leading `.config/app/settings.json` — since its intent is purely exact-path-freeze; the
+    // sensitive surfaces Dockerfile / .github/workflows/ now require a G2 post-dominator and are
+    // exercised separately in the G1/G2 gate-coverage block.)
     v = validatePlanFixture(tmp, [
-      '| impl | tdd-guide | — | src/foo.js, Dockerfile, .github/workflows/deploy.yml | 1 | sequence |',
+      '| impl | tdd-guide | — | src/foo.js, Makefile, .config/app/settings.json | 1 | sequence |',
       '| review | code-reviewer | impl | — | 1 | sequence |',
       '| done | finalize | review | — | 1 | sequence |',
     ], []);
     assert(v.result === 'in-grammar',
-      '#381: exact files (incl Dockerfile + .github/...) must freeze green, got: ' + JSON.stringify(v));
+      '#381: exact files (incl a root-level slashless file + a dot-leading path) must freeze green, got: ' + JSON.stringify(v));
 
     // #381 (FREEZE-ONLY / no-brick): a plan FROZEN by a pre-#381 validator (legal then) carrying a
     // `src/` entry must still PASS --resume-check (revalidateForResume is untouched) even though
@@ -1813,8 +1817,10 @@ function testAdaptiveValidatorGovernance() {
       '#388: a token that normalizes to empty must refuse at freeze, got: ' + JSON.stringify(v));
 
     // (a-fs) a BARE directory name (no trailing slash) that resolves to a REAL directory under the
-    // repo root → directory_shaped_bare. CONTROL: a Dockerfile-style root FILE (also slash-less)
-    // freezes GREEN — the fs distinguishes them where the string check cannot.
+    // repo root → directory_shaped_bare. CONTROL: a root FILE (also slash-less) freezes GREEN — the
+    // fs distinguishes them where the string check cannot. (#501: the control uses a NON-sensitive
+    // root file `Makefile`; the once-used `Dockerfile` is now a sensitive surface requiring a G2
+    // post-dominator, which is unrelated to this directory-vs-file shape check.)
     {
       fs.mkdirSync(path.join(tmp, 'realsrc'), { recursive: true });
       v = validatePlanFixture(tmp, [
@@ -1824,15 +1830,15 @@ function testAdaptiveValidatorGovernance() {
       ], []);
       assert(v.result === 'refuse' && /directory_shaped_bare/.test((v.errors||[]).join(';')),
         '#388: a bare name resolving to a real directory must refuse at freeze, got: ' + JSON.stringify(v));
-      // CONTROL: a real root FILE (Dockerfile-style) freezes green.
-      fs.writeFileSync(path.join(tmp, 'Dockerfile'), 'FROM scratch\n');
+      // CONTROL: a real root FILE (Makefile, non-sensitive) freezes green.
+      fs.writeFileSync(path.join(tmp, 'Makefile'), 'all:\n\t@true\n');
       v = validatePlanFixture(tmp, [
-        '| impl | tdd-guide | — | Dockerfile | 1 | sequence |',
+        '| impl | tdd-guide | — | Makefile | 1 | sequence |',
         '| review | code-reviewer | impl | — | 1 | sequence |',
         '| done | finalize | review | — | 1 | sequence |',
       ], []);
       assert(v.result === 'in-grammar',
-        '#388 CONTROL: a real root FILE (Dockerfile) must freeze green (not directory_shaped_bare), got: ' + JSON.stringify(v));
+        '#388 CONTROL: a real root FILE (Makefile) must freeze green (not directory_shaped_bare), got: ' + JSON.stringify(v));
     }
 
     // (dup-id) two `impl` rows freeze in-grammar today (nodeCount counts both; barrier judges the
@@ -2290,6 +2296,65 @@ function testAdaptiveGateBarrierEnforcement() {
     fs.unlinkSync(path.join(g3Cache, 'vgate.md'));
     assert(runNode(planValidatorScript, [g3PlanPath, '--verdict-check', '--json'], tmp).status === 1,
       '#334: --verdict-check must exit 1 when the complete main-session-gate has no .cache verdict evidence');
+
+    // --- #509 (D-509-01, Option A): --verdict-check is SCOPED to CHANGE-GATE adversarial-verifiers.
+    // An INVESTIGATION adversarial-verifier (one that post-dominates NO code-producing / sensitive
+    // node) is exempt REGARDLESS of shape — its refutation is analytical OUTPUT, not a finalize block.
+    // BOTH directions are pinned: (a) the investigation verifier (sequence AND fanout) emitting a
+    // refuted verdict PASSES; (b) a change-gate verifier (post-dominates code/sensitive) emitting a
+    // refuted verdict STILL BLOCKS (proves the fix did NOT weaken the gate).
+    const av509 = path.join(tmp, 'kaola-workflow', 'issue-509');
+    const av509Cache = path.join(av509, '.cache');
+    fs.mkdirSync(av509Cache, { recursive: true });
+    const av509Plan = path.join(av509, 'workflow-plan.md');
+    // (a-seq) probe -> assume -> critique(adversarial-verifier) -> done: the critique post-dominates
+    // only read nodes (no code/sensitive). It emits verdict: refuted with blocking findings — that is
+    // analytical output, NOT a gate block, so --verdict-check must PASS (exit 0).
+    fs.writeFileSync(av509Plan, mkLedgerPlan(
+      ['| probe | code-explorer | — | — | 1 | sequence |',
+       '| assume | knowledge-lookup | probe | — | 1 | sequence |',
+       '| critique | adversarial-verifier | assume | — | 1 | sequence |',
+       '| done | finalize | critique | — | 1 | sequence |'],
+      ['| probe | complete |', '| assume | complete |', '| critique | complete |', '| done | complete |'],
+      'question'));
+    fs.writeFileSync(path.join(av509Cache, 'critique.md'), 'verdict: refuted\nfindings_blocking: 2\nthe leading answer is wrong\n');
+    assert(runNode(planValidatorScript, [av509Plan, '--verdict-check', '--json'], tmp).status === 0,
+      '#509(a-seq): an investigation adversarial-verifier (post-dominates no code/sensitive) emitting verdict: refuted must PASS --verdict-check (exit 0)');
+    // (a-fanout) the #486 read-only majority-refute FANOUT: assume -> {crit1,crit2,crit3} -> done.
+    // None post-dominate a code/sensitive node, so even a 2/3 majority-refute is analytical output and
+    // --verdict-check must PASS (a non-fanout-only exemption would leave this recommended shape false-blocking).
+    fs.rmSync(av509Cache, { recursive: true, force: true });
+    fs.mkdirSync(av509Cache, { recursive: true });
+    fs.writeFileSync(av509Plan, mkLedgerPlan(
+      ['| assume | knowledge-lookup | — | — | 1 | sequence |',
+       '| crit1 | adversarial-verifier | assume | — | 1 | fanout(critics) |',
+       '| crit2 | adversarial-verifier | assume | — | 1 | fanout(critics) |',
+       '| crit3 | adversarial-verifier | assume | — | 1 | fanout(critics) |',
+       '| done | finalize | crit1,crit2,crit3 | — | 1 | sequence |'],
+      ['| assume | complete |', '| crit1 | complete |', '| crit2 | complete |', '| crit3 | complete |', '| done | complete |'],
+      'question'));
+    fs.writeFileSync(path.join(av509Cache, 'adversarial-verifier-crit1.md'), 'verdict: refuted\nfindings_blocking: 1\n');
+    fs.writeFileSync(path.join(av509Cache, 'adversarial-verifier-crit2.md'), 'verdict: refuted\nfindings_blocking: 1\n');
+    fs.writeFileSync(path.join(av509Cache, 'adversarial-verifier-crit3.md'), 'verdict: pass\nfindings_blocking: 0\n');
+    assert(runNode(planValidatorScript, [av509Plan, '--verdict-check', '--json'], tmp).status === 0,
+      '#509(a-fanout): a read-only majority-refute investigation adversarial-verifier fanout (post-dominates no code/sensitive) must PASS --verdict-check (exit 0) — the exemption keys on post-dominance, not shape');
+    // (b) CHANGE-GATE adversarial-verifier: impl(tdd-guide) -> rv(code-reviewer) -> critique(av) -> done.
+    // The critique post-dominates a code-producing impl, so it IS a change gate and MUST keep full
+    // verdict-check coverage: a refuted verdict STILL BLOCKS (exit 1). This proves Option A did not
+    // collapse into "exempt all adversarial-verifiers".
+    fs.rmSync(av509Cache, { recursive: true, force: true });
+    fs.mkdirSync(av509Cache, { recursive: true });
+    fs.writeFileSync(av509Plan, mkLedgerPlan(
+      ['| impl | tdd-guide | — | lib/foo.js | 1 | sequence |',
+       '| rv | code-reviewer | impl | — | 1 | sequence |',
+       '| critique | adversarial-verifier | rv | — | 1 | sequence |',
+       '| done | finalize | critique | — | 1 | sequence |'],
+      ['| impl | complete |', '| rv | complete |', '| critique | complete |', '| done | complete |'],
+      'feature'));
+    fs.writeFileSync(path.join(av509Cache, 'rv.md'), 'verdict: pass\nfindings_blocking: 0\n');
+    fs.writeFileSync(path.join(av509Cache, 'critique.md'), 'verdict: refuted\nfindings_blocking: 3\nthe impl is broken\n');
+    assert(runNode(planValidatorScript, [av509Plan, '--verdict-check', '--json'], tmp).status === 1,
+      '#509(b): a CHANGE-GATE adversarial-verifier (post-dominates a code-producing node) emitting verdict: refuted must STILL BLOCK --verdict-check (exit 1) — the gate stays strong');
 
     // --- --barrier-check CLI over a REAL git repo (verifies the merge-base git plumbing).
     const grepo = adaptiveTmp('barrier-git');
@@ -3330,6 +3395,39 @@ function testAdaptiveAuditFixes() {
     assert(v.result === 'refuse' && /G1/.test((v.errors || []).join(';')),
       'A2′: dot-leading path must be captured and require code-reviewer (G1), got: ' + JSON.stringify(v));
 
+    // --- #501: high-blast-radius surfaces are SENSITIVE and require the internal G2 security-reviewer
+    // post-dominator (pattern-list extension only; triggers the EXISTING internal gate, NO CI/CD prose,
+    // NO external dependency). Each path on a NON-security-labeled plan with a code-reviewer but NO
+    // security-reviewer must REFUSE at freeze (G2). The control (same path WITH a security-reviewer
+    // post-dominator) freezes green. Both directions pinned so the extension cannot silently regress.
+    for (const sp of ['.env', '.env.local', 'Dockerfile', '.github/workflows/deploy.yml', '.gitlab-ci.yml']) {
+      v = validatePlanFixture(tmp, [
+        '| impl | tdd-guide | — | ' + sp + ' | 1 | sequence |',
+        '| review | code-reviewer | impl | — | 1 | sequence |',
+        '| done | finalize | review | — | 1 | sequence |',
+      ], ['chore']);
+      assert(v.result === 'refuse' && /G2/.test((v.errors || []).join(';')),
+        '#501: a node writing the sensitive surface "' + sp + '" with no security-reviewer post-dominator must refuse (G2), got: ' + JSON.stringify(v));
+      // CONTROL: the same sensitive path WITH a security-reviewer post-dominator freezes green.
+      v = validatePlanFixture(tmp, [
+        '| impl | tdd-guide | — | ' + sp + ' | 1 | sequence |',
+        '| review | code-reviewer | impl | — | 1 | sequence |',
+        '| sec | security-reviewer | review | — | 1 | sequence |',
+        '| done | finalize | sec | — | 1 | sequence |',
+      ], ['chore']);
+      assert(v.result === 'in-grammar',
+        '#501 CONTROL: the sensitive surface "' + sp + '" WITH a security-reviewer post-dominator must freeze green, got: ' + JSON.stringify(v));
+    }
+    // #501 NEG-CONTROL: lookalike benign paths must NOT be swept into G2 (anchors are precise) — no
+    // false positives. environment.js / Dockerfileutil.js / a docs .github-notes.md are ordinary code/docs.
+    v = validatePlanFixture(tmp, [
+      '| impl | tdd-guide | — | src/environment.js, lib/Dockerfileutil.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], ['chore']);
+    assert(v.result === 'in-grammar' && !/G2/.test((v.errors || []).join(';')),
+      '#501 NEG-CONTROL: benign environment.js / Dockerfileutil.js must NOT be flagged sensitive (no G2), got: ' + JSON.stringify(v));
+
     // A2: a cohesive write-role node may declare a large exact-file set (> 6) and freeze
     // in-grammar — the per-node FILE_CEILING was retired (#453); other write-safety walls still apply.
     v = validatePlanFixture(tmp, [
@@ -3734,7 +3832,8 @@ function testClassifierDotPathOverlapRed() {
       '|---|---|---|---|---|---|',
       '| ci | doc-updater | — | .github/workflows/deploy.yml | 1 | sequence |',
       '| review | code-reviewer | ci | — | 1 | sequence |',
-      '| done | finalize | review | — | 1 | sequence |',
+      '| sec | security-reviewer | review | — | 1 | sequence |',
+      '| done | finalize | sec | — | 1 | sequence |',
       ''
     ].join('\n'));
     plantRoadmapIssue(tmp, 301, 'body: this issue also rewrites .github/workflows/deploy.yml for CI');
@@ -3783,7 +3882,8 @@ function testClassifierDotAreaOverlapRed() {
       '|---|---|---|---|---|---|',
       '| ci | doc-updater | — | .github/workflows/deploy.yml | 1 | sequence |',
       '| review | code-reviewer | ci | — | 1 | sequence |',
-      '| done | finalize | review | — | 1 | sequence |',
+      '| sec | security-reviewer | review | — | 1 | sequence |',
+      '| done | finalize | sec | — | 1 | sequence |',
       ''
     ].join('\n'));
     plantRoadmapIssue(tmp, 321, 'body: this issue edits a different CI workflow .github/workflows/release.yml');
@@ -3814,7 +3914,8 @@ function testClassifierCuratedRootOverlapYellow() {
       '|---|---|---|---|---|---|',
       '| ci | doc-updater | — | Dockerfile | 1 | sequence |',
       '| review | code-reviewer | ci | — | 1 | sequence |',
-      '| done | finalize | review | — | 1 | sequence |',
+      '| sec | security-reviewer | review | — | 1 | sequence |',
+      '| done | finalize | sec | — | 1 | sequence |',
       ''
     ].join('\n'));
     // The candidate side is the ONLY detector for slashless ROOT files, so it must catch the same
@@ -3888,7 +3989,8 @@ function testClassifierCuratedRootStructuredLowercaseYellow() {
       '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
       '| ci | doc-updater | — | dockerfile | 1 | sequence |',
       '| review | code-reviewer | ci | — | 1 | sequence |',
-      '| done | finalize | review | — | 1 | sequence |', ''
+      '| sec | security-reviewer | review | — | 1 | sequence |',
+      '| done | finalize | sec | — | 1 | sequence |', ''
     ].join('\n'));
     plantRoadmapIssue(tmp, 371, 'body: this change also edits the Dockerfile to add a build stage');
     const result = runClassifierOffline(tmp, 371);
@@ -10126,14 +10228,17 @@ function testAdaptiveVerdictCheck() {
 
     // fanout adversarial-verifier: 1/3 refute -> pass (minority)
     // globCache returns filenames like 'adversarial-verifier-sk1.md'; readCache is called with those names.
+    // #509: these skeptics fan out from a CODE-PRODUCING impl (tdd-guide), so they POST-DOMINATE code
+    // and ARE change-gate adversarial-verifiers — the majority-refute branch applies (the exemption is
+    // for INVESTIGATION verifiers that post-dominate no code/sensitive node; tested separately above).
     const fanoutNodes = [
-      '| claim | code-explorer | — | — | 1 | sequence |',
-      '| sk1 | adversarial-verifier | claim | — | 1 | fanout(skeptics) |',
-      '| sk2 | adversarial-verifier | claim | — | 1 | fanout(skeptics) |',
-      '| sk3 | adversarial-verifier | claim | — | 1 | fanout(skeptics) |',
+      '| impl | tdd-guide | — | lib/foo.js | 1 | sequence |',
+      '| sk1 | adversarial-verifier | impl | — | 1 | fanout(skeptics) |',
+      '| sk2 | adversarial-verifier | impl | — | 1 | fanout(skeptics) |',
+      '| sk3 | adversarial-verifier | impl | — | 1 | fanout(skeptics) |',
       '| done | finalize | sk1,sk2,sk3 | — | 1 | sequence |',
     ];
-    const fanoutLedger = ['| claim | complete |', '| sk1 | complete |', '| sk2 | complete |', '| sk3 | complete |', '| done | complete |'];
+    const fanoutLedger = ['| impl | complete |', '| sk1 | complete |', '| sk2 | complete |', '| sk3 | complete |', '| done | complete |'];
     const fanoutGlob = (prefix) => prefix === 'adversarial-verifier-'
       ? ['adversarial-verifier-sk1.md', 'adversarial-verifier-sk2.md', 'adversarial-verifier-sk3.md']
       : [];

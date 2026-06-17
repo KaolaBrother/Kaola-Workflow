@@ -636,7 +636,8 @@ function testCodexAdaptiveCuratedAndBarrier() {
     try {
       plantFolder(tmp, 'curated-claimed', 330, null);
       const planPath = path.join(tmp, 'kaola-workflow', 'curated-claimed', 'workflow-plan.md');
-      fs.writeFileSync(planPath, ['# Plan', '', '## Meta', 'labels: chore', '', '## Nodes', '', '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|', '| ci | doc-updater | — | Dockerfile | 1 | sequence |', '| review | code-reviewer | ci | — | 1 | sequence |', '| done | finalize | review | — | 1 | sequence |', ''].join('\n'));
+      // #501: Dockerfile is now a sensitive surface requiring a G2 security-reviewer post-dominator.
+      fs.writeFileSync(planPath, ['# Plan', '', '## Meta', 'labels: chore', '', '## Nodes', '', '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|', '| ci | doc-updater | — | Dockerfile | 1 | sequence |', '| review | code-reviewer | ci | — | 1 | sequence |', '| sec | security-reviewer | review | — | 1 | sequence |', '| done | finalize | sec | — | 1 | sequence |', ''].join('\n'));
       assert(runVal([planPath, '--freeze'], tmp).status === 0, 'codex: freeze curated plan');
       for (const [num, body] of [[331, 'body: edits the Dockerfile. also src/server.js'], [332, 'body: tweak ./Dockerfile and src/server.js'], [333, 'body: edits the dockerfile. also src/server.js']]) {
         plantRoadmap(tmp, num, body);
@@ -744,6 +745,44 @@ function testCodexAdaptiveCuratedAndBarrier() {
         fs.writeFileSync(path.join(projDir, '.cache', 'vgate.md'), 'verdict: pass\nfindings_blocking: 0\nGPU true-black confirmed\n');
         assert(runVal([p, '--gate-verify', '--json'], tmp).status === 0, 'codex #334: --gate-verify exit 0 when gate complete + post-dominates');
         assert(runVal([p, '--verdict-check', '--json'], tmp).status === 0, 'codex #334: --verdict-check exit 0 when gate records verdict: pass'); }
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
+  // ---- #509 (CODEX byte copy): --verdict-check is SCOPED to CHANGE-GATE adversarial-verifiers ----
+  { const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-codex-509-'));
+    try {
+      const mkAv = (nodes, ledger, labels) => { const projDir = path.join(tmp, 'kaola-workflow', 'issue-509'); fs.rmSync(path.join(projDir, '.cache'), { recursive: true, force: true }); fs.mkdirSync(path.join(projDir, '.cache'), { recursive: true }); const p = path.join(projDir, 'workflow-plan.md'); fs.writeFileSync(p, ['# Plan', '', '## Meta', 'labels: ' + (labels || 'question'), '', '## Nodes', '', '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|', ...nodes, '', '## Node Ledger', '', '| id | status |', '|---|---|', ...ledger, ''].join('\n')); return { p, projDir }; };
+      // (a-seq) investigation adversarial-verifier (post-dominates no code/sensitive) emitting refuted -> PASS (exit 0).
+      let av = mkAv(['| probe | code-explorer | — | — | 1 | sequence |', '| assume | knowledge-lookup | probe | — | 1 | sequence |', '| critique | adversarial-verifier | assume | — | 1 | sequence |', '| done | finalize | critique | — | 1 | sequence |'], ['| probe | complete |', '| assume | complete |', '| critique | complete |', '| done | complete |']);
+      fs.writeFileSync(path.join(av.projDir, '.cache', 'critique.md'), 'verdict: refuted\nfindings_blocking: 2\nwrong\n');
+      assert(runVal([av.p, '--verdict-check', '--json'], tmp).status === 0, 'codex #509(a-seq): investigation adversarial-verifier (no code/sensitive post-dominance) emitting refuted must PASS --verdict-check (exit 0)');
+      // (a-fanout) read-only majority-refute investigation fanout -> PASS (exit 0, exempt regardless of shape).
+      av = mkAv(['| assume | knowledge-lookup | — | — | 1 | sequence |', '| crit1 | adversarial-verifier | assume | — | 1 | fanout(critics) |', '| crit2 | adversarial-verifier | assume | — | 1 | fanout(critics) |', '| crit3 | adversarial-verifier | assume | — | 1 | fanout(critics) |', '| done | finalize | crit1,crit2,crit3 | — | 1 | sequence |'], ['| assume | complete |', '| crit1 | complete |', '| crit2 | complete |', '| crit3 | complete |', '| done | complete |']);
+      fs.writeFileSync(path.join(av.projDir, '.cache', 'adversarial-verifier-crit1.md'), 'verdict: refuted\nfindings_blocking: 1\n');
+      fs.writeFileSync(path.join(av.projDir, '.cache', 'adversarial-verifier-crit2.md'), 'verdict: refuted\nfindings_blocking: 1\n');
+      fs.writeFileSync(path.join(av.projDir, '.cache', 'adversarial-verifier-crit3.md'), 'verdict: pass\nfindings_blocking: 0\n');
+      assert(runVal([av.p, '--verdict-check', '--json'], tmp).status === 0, 'codex #509(a-fanout): read-only majority-refute investigation fanout must PASS --verdict-check (exit 0) — exemption keys on post-dominance, not shape');
+      // (b) CHANGE-GATE adversarial-verifier (post-dominates a code-producing impl) emitting refuted -> STILL BLOCK (exit 1).
+      av = mkAv(['| impl | tdd-guide | — | lib/foo.js | 1 | sequence |', '| rv | code-reviewer | impl | — | 1 | sequence |', '| critique | adversarial-verifier | rv | — | 1 | sequence |', '| done | finalize | critique | — | 1 | sequence |'], ['| impl | complete |', '| rv | complete |', '| critique | complete |', '| done | complete |'], 'feature');
+      fs.writeFileSync(path.join(av.projDir, '.cache', 'rv.md'), 'verdict: pass\nfindings_blocking: 0\n');
+      fs.writeFileSync(path.join(av.projDir, '.cache', 'critique.md'), 'verdict: refuted\nfindings_blocking: 3\nbroken\n');
+      assert(runVal([av.p, '--verdict-check', '--json'], tmp).status === 1, 'codex #509(b): a CHANGE-GATE adversarial-verifier (post-dominates code) emitting refuted must STILL BLOCK --verdict-check (exit 1) — the gate stays strong');
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
+  // ---- #501 (CODEX byte copy): high-blast-radius surfaces require the internal G2 security-reviewer ----
+  { const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-codex-501-'));
+    try {
+      const mkSp = (writeSet, nodes) => { const p = path.join(tmp, 'sp.md'); fs.writeFileSync(p, ['# Plan', '', '## Meta', 'labels: chore', '', '## Nodes', '', '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|', ...nodes, ''].join('\n')); return p; };
+      for (const sp of ['.env', '.env.local', 'Dockerfile', '.github/workflows/deploy.yml', '.gitlab-ci.yml']) {
+        // no security-reviewer -> refuse (G2).
+        let r = runVal([mkSp(sp, ['| impl | tdd-guide | — | ' + sp + ' | 1 | sequence |', '| review | code-reviewer | impl | — | 1 | sequence |', '| done | finalize | review | — | 1 | sequence |']), '--json'], tmp);
+        assert(JSON.parse(r.stdout).result === 'refuse' && /G2/.test((JSON.parse(r.stdout).errors || []).join(';')), 'codex #501: sensitive surface "' + sp + '" with no security-reviewer must refuse (G2), got ' + r.stdout);
+        // CONTROL: with a security-reviewer post-dominator -> in-grammar.
+        r = runVal([mkSp(sp, ['| impl | tdd-guide | — | ' + sp + ' | 1 | sequence |', '| review | code-reviewer | impl | — | 1 | sequence |', '| sec | security-reviewer | review | — | 1 | sequence |', '| done | finalize | sec | — | 1 | sequence |']), '--json'], tmp);
+        assert(JSON.parse(r.stdout).result === 'in-grammar', 'codex #501 CONTROL: sensitive surface "' + sp + '" WITH a security-reviewer must freeze green, got ' + r.stdout);
+      }
+      // NEG-CONTROL: lookalike benign paths must NOT be swept into G2.
+      const rn = runVal([mkSp('x', ['| impl | tdd-guide | — | src/environment.js, lib/Dockerfileutil.js | 1 | sequence |', '| review | code-reviewer | impl | — | 1 | sequence |', '| done | finalize | review | — | 1 | sequence |']), '--json'], tmp);
+      assert(JSON.parse(rn.stdout).result === 'in-grammar' && !/G2/.test((JSON.parse(rn.stdout).errors || []).join(';')), 'codex #501 NEG-CONTROL: benign environment.js / Dockerfileutil.js must NOT be flagged sensitive (no G2), got ' + rn.stdout);
     } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   }
   console.log('Codex adaptive #238/#239 coverage: PASSED');

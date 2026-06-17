@@ -556,6 +556,34 @@ function testGitlabAdaptive() {
       assert.strictEqual(spawnNode(valScript, [gp, '--gate-verify', '--json'], tmp).status, 0, 'gitlab #334: --gate-verify exit 0 when gate complete + post-dominates');
       assert.strictEqual(spawnNode(valScript, [gp, '--verdict-check', '--json'], tmp).status, 0, 'gitlab #334: --verdict-check exit 0 when gate records verdict: pass'); }
 
+    // #509 (GITLAB port): --verdict-check is SCOPED to CHANGE-GATE adversarial-verifiers. An
+    // INVESTIGATION adversarial-verifier (post-dominates no code/sensitive node) is exempt REGARDLESS
+    // of shape; a change-gate adversarial-verifier (post-dominates code/sensitive) STILL blocks.
+    { const projDir = path.join(tmp, 'kaola-workflow', 'issue-509-gl');
+      const mkAv = (nodes, ledger, labels) => { fs.rmSync(path.join(projDir, '.cache'), { recursive: true, force: true }); fs.mkdirSync(path.join(projDir, '.cache'), { recursive: true }); const p = path.join(projDir, 'workflow-plan.md'); fs.writeFileSync(p, mkL(nodes, ledger, labels)); return p; };
+      // (a-seq) investigation adversarial-verifier emitting refuted -> PASS (exit 0).
+      let p = mkAv(['| probe | code-explorer | — | — | 1 | sequence |', '| assume | knowledge-lookup | probe | — | 1 | sequence |', '| critique | adversarial-verifier | assume | — | 1 | sequence |', '| done | finalize | critique | — | 1 | sequence |'], ['| probe | complete |', '| assume | complete |', '| critique | complete |', '| done | complete |'], 'question');
+      fs.writeFileSync(path.join(projDir, '.cache', 'critique.md'), 'verdict: refuted\nfindings_blocking: 2\nwrong\n');
+      assert.strictEqual(spawnNode(valScript, [p, '--verdict-check', '--json'], tmp).status, 0, 'gitlab #509(a-seq): investigation adversarial-verifier emitting refuted must PASS --verdict-check (exit 0)');
+      // (a-fanout) read-only majority-refute investigation fanout -> PASS (exit 0, exempt by shape-agnostic post-dominance).
+      p = mkAv(['| assume | knowledge-lookup | — | — | 1 | sequence |', '| crit1 | adversarial-verifier | assume | — | 1 | fanout(critics) |', '| crit2 | adversarial-verifier | assume | — | 1 | fanout(critics) |', '| crit3 | adversarial-verifier | assume | — | 1 | fanout(critics) |', '| done | finalize | crit1,crit2,crit3 | — | 1 | sequence |'], ['| assume | complete |', '| crit1 | complete |', '| crit2 | complete |', '| crit3 | complete |', '| done | complete |'], 'question');
+      fs.writeFileSync(path.join(projDir, '.cache', 'adversarial-verifier-crit1.md'), 'verdict: refuted\nfindings_blocking: 1\n');
+      fs.writeFileSync(path.join(projDir, '.cache', 'adversarial-verifier-crit2.md'), 'verdict: refuted\nfindings_blocking: 1\n');
+      fs.writeFileSync(path.join(projDir, '.cache', 'adversarial-verifier-crit3.md'), 'verdict: pass\nfindings_blocking: 0\n');
+      assert.strictEqual(spawnNode(valScript, [p, '--verdict-check', '--json'], tmp).status, 0, 'gitlab #509(a-fanout): read-only majority-refute investigation fanout must PASS --verdict-check (exit 0)');
+      // (b) change-gate adversarial-verifier (post-dominates code) emitting refuted -> STILL BLOCK (exit 1).
+      p = mkAv(['| imp | tdd-guide | — | lib/foo.js | 1 | sequence |', '| rv | code-reviewer | imp | — | 1 | sequence |', '| critique | adversarial-verifier | rv | — | 1 | sequence |', '| done | finalize | critique | — | 1 | sequence |'], ['| imp | complete |', '| rv | complete |', '| critique | complete |', '| done | complete |'], 'feature');
+      fs.writeFileSync(path.join(projDir, '.cache', 'rv.md'), 'verdict: pass\nfindings_blocking: 0\n');
+      fs.writeFileSync(path.join(projDir, '.cache', 'critique.md'), 'verdict: refuted\nfindings_blocking: 3\nbroken\n');
+      assert.strictEqual(spawnNode(valScript, [p, '--verdict-check', '--json'], tmp).status, 1, 'gitlab #509(b): a CHANGE-GATE adversarial-verifier (post-dominates code) emitting refuted must STILL BLOCK --verdict-check (exit 1)'); }
+
+    // #501 (GITLAB port): high-blast-radius surfaces require the internal G2 security-reviewer.
+    for (const sp of ['.env', '.env.local', 'Dockerfile', '.github/workflows/deploy.yml', '.gitlab-ci.yml']) {
+      assert.strictEqual(gateVal(['| impl | tdd-guide | — | ' + sp + ' | 1 | sequence |', '| review | code-reviewer | impl | — | 1 | sequence |', '| done | finalize | review | — | 1 | sequence |'], 'chore').result, 'refuse', 'gitlab #501: sensitive surface "' + sp + '" with no security-reviewer must refuse (G2)');
+      assert.strictEqual(gateVal(['| impl | tdd-guide | — | ' + sp + ' | 1 | sequence |', '| review | code-reviewer | impl | — | 1 | sequence |', '| sec | security-reviewer | review | — | 1 | sequence |', '| done | finalize | sec | — | 1 | sequence |'], 'chore').result, 'in-grammar', 'gitlab #501 CONTROL: the sensitive surface "' + sp + '" WITH a security-reviewer must freeze green');
+    }
+    assert.strictEqual(gateVal(['| impl | tdd-guide | — | src/environment.js, lib/Dockerfileutil.js | 1 | sequence |', '| review | code-reviewer | impl | — | 1 | sequence |', '| done | finalize | review | — | 1 | sequence |'], 'chore').result, 'in-grammar', 'gitlab #501 NEG-CONTROL: benign environment.js / Dockerfileutil.js must NOT be flagged sensitive (no G2)');
+
     // M2 (#277): warn-first attestation — finalize must emit closure_receipt with
     // claim_planner_attested and finalize_contractor_attested; both 'missing' in offline test
     // (no dispatch-log), but closure_invariants.ok must still be true (warn-first contract).

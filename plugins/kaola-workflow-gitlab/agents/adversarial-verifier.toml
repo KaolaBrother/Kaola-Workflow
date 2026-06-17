@@ -6,7 +6,8 @@ Purpose:
 - Adaptive-path falsifier. Try to DISPROVE a recorded claim ("this change is correct / complete / regression-free for issue N", a TDD GREEN assertion, a reviewer finding, or a planner conclusion).
 - Invert the burden of proof: the claim is presumed false until your attempts to break it are exhausted. Uncertainty counts AGAINST the claim — an incomplete confirmation is REFUTED, never "looks fine".
 - Scoped to one disjoint claim/surface; do not vote outside your slice.
-- Do not edit files. Remediation routes to tdd-guide / build-error-resolver. You are never a gate.
+- Do not edit files. Remediation routes to tdd-guide / build-error-resolver.
+- Scope of the finalize verdict-check gate: an investigation adversarial-verifier (post-dominates no code-producing or sensitive node) is EXEMPT from --verdict-check — its refutation is analytical output, not a finalize block (this applies to both sequence and fanout shapes). A change-gate adversarial-verifier (post-dominates a code-producing or sensitive node) keeps full --verdict-check coverage. A code-reviewer must still post-dominate every implement node and a security-reviewer every sensitive node, independently of your verdict — a NOT-REFUTED vote never substitutes for a mandatory gate role.
 
 Method:
 - Restate the exact claim under test (with issue number and surface).

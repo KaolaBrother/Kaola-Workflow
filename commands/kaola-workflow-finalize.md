@@ -55,7 +55,13 @@ If `workflow_path: adaptive`:
     `adversarial-verifier`, and `main-session-gate` node's `.cache/{node-id}.md` and requires a
     machine-readable `verdict: pass` with `findings_blocking: 0`. Any nonzero
     exit **blocks the merge** — this proves every gate-role node recorded a
-    passing verdict before the plan is allowed to close.
+    passing verdict before the plan is allowed to close. **Exception (#509):**
+    an *investigation* `adversarial-verifier` that post-dominates no
+    code-producing or sensitive node is exempt from this check — its refutation
+    is analytical output, not a finalize block (applies to both sequence and
+    fanout majority-refute shapes). A *change-gate* `adversarial-verifier`
+    (post-dominates a code-producing or sensitive node) keeps full
+    `--verdict-check` coverage.
   On any failure stop with a **typed refusal** (do not proceed):
   ```text
   Adaptive plan failed the script-enforced barrier. Run /kaola-workflow-plan-run first.
