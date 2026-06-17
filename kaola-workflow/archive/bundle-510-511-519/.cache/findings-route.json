@@ -1,0 +1,58 @@
+[
+  {
+    "finding_id": "id=R1 scope=in_scope action=none status=resolved severity=low fix_role=none rationale=axis-replacement-uniform-all-4-sites-all-4-editions-no-exit-code-only-survivor",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R2 scope=in_scope action=none status=resolved severity=low fix_role=none rationale=510-forge-classify-_st-guard-converges-both-forge-editions-on-indeterminate-escalate-complete",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R3 scope=in_scope action=none status=resolved severity=low fix_role=none rationale=511-forge-e2e-uses-genuine-negative-404-refuse-never-generic-exit1-both-editions",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R4 scope=in_scope action=none status=resolved severity=low fix_role=none rationale=probeIssueState-discriminant-non-breaking-state-only-readers-closure-audit-probe-memo-unaffected-10-assertions-green",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R5 scope=in_scope action=none status=resolved severity=low fix_role=none rationale=cross-edition-root-codex-byte-identical-validate-script-sync-green-forge-ports-full-mirror-modulo-nouns",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=F1 scope=out_of_scope action=follow_up status=open severity=low fix_role=none rationale=transient-stderr-denylist-could-widen-context-deadline-exceeded-EOF-broken-pipe-default-refuse-but-live-repro-TLS-covered-sound-conservative-boundary",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=F2 scope=out_of_scope action=follow_up status=open severity=low fix_role=none rationale=gitlab-510-test-comment-stale-references-reverted-strictViewIssue-seam-assertion-correct-comment-only",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=F3 scope=out_of_scope action=document status=open severity=low fix_role=none rationale=forge-probeIssueState-malformed-nonempty-exit0-refuses-while-root-escalates-both-fail-closed-unreachable-gh-input-conscious-call-D-519-01-should-record",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  }
+]
