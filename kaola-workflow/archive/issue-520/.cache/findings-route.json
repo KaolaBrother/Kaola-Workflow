@@ -1,0 +1,9 @@
+[
+  {
+    "finding_id": "id=R1 scope=in_scope action=follow_up status=deferred severity=low fix_role=tdd-guide rationale=#520 tests pass against an add-only half-fix because they run on a fresh repo where the journal was never previously tracked; add an already-tracked-journal case so the commit-side exclude regression bites.",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  }
+]
