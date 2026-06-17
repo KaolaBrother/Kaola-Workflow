@@ -193,6 +193,43 @@ for (const ed of [
   }
 }
 
+// ---------------------------------------------------------------------------
+// Test E (#505/#294): FOREIGN_ARCHIVE staging guard fail-closed. The guard in
+// `commands/kaola-workflow-finalize.md ## Staging Guard` must exit 1 when a foreign
+// project's archive band is staged. This tests the #294 class of fail-open bug on the
+// EXACT bash prose that npm test never executes otherwise.
+// ---------------------------------------------------------------------------
+{
+  const block = extractBashBlocks(read('commands/kaola-workflow-finalize.md'), 'FOREIGN_ARCHIVE')[0];
+  assert(!!block, 'E: Staging Guard bash block (FOREIGN_ARCHIVE) is extractable from kaola-workflow-finalize.md');
+  if (block) {
+    // Substitute {project} with the project being finalized ('issue-200')
+    const proj = 'issue-200';
+    const script = block.replace(/\{project\}/g, proj);
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-bashblock-staginggrd-'));
+    const repo = path.join(tmp, 'repo');
+    fs.mkdirSync(repo, { recursive: true });
+    git(repo, ['init', '-b', 'main']);
+    git(repo, ['config', 'user.email', 't@t.com']);
+    git(repo, ['config', 'user.name', 'T']);
+    // Create a committed file so the repo has a HEAD
+    fs.writeFileSync(path.join(repo, 'README.md'), 'repo');
+    git(repo, ['add', '-A']);
+    git(repo, ['commit', '-m', 'init']);
+    // Stage a FOREIGN archive file (different project: 'issue-999') — this must trigger exit 1
+    const foreignDir = path.join(repo, 'kaola-workflow', 'archive', 'issue-999');
+    fs.mkdirSync(foreignDir, { recursive: true });
+    fs.writeFileSync(path.join(foreignDir, 'workflow-state.md'), 'project: issue-999\n');
+    git(repo, ['add', path.join('kaola-workflow', 'archive', 'issue-999', 'workflow-state.md')]);
+    const sp = path.join(tmp, 'staginggrd.sh');
+    fs.writeFileSync(sp, script);
+    const res = spawnSync('bash', [sp], { cwd: repo, encoding: 'utf8' });
+    assert(res.status === 1,
+      'E (#505/#294): Staging Guard exits 1 when a foreign archive band (issue-999) is staged for project ' + proj + '; got exit ' + res.status + '; stderr: ' + res.stderr);
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 if (failed > 0) {
   console.error('test-bash-block-guards: ' + failed + ' failed, ' + passed + ' passed');
   process.exit(1);

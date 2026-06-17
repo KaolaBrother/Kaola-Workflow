@@ -843,4 +843,29 @@ for (const tomlFile of fs.readdirSync(path.join(root, pluginRoot, 'agents')).fil
     '#422.3: scripts."test:kaola-workflow:claude" must run node scripts/test-agent-profile-parity.js');
 }
 
+// #505 ITEM 1: pin the FOREIGN_ARCHIVE staging guard in the Gitea finalize command so a silent
+// drop (the #294 fail-open class) turns this chain RED. Pins own edition's file only.
+assertIncludes(pluginRoot + '/commands/kaola-workflow-finalize.md', 'FOREIGN_ARCHIVE=$(git diff --cached');
+assertIncludes(pluginRoot + '/commands/kaola-workflow-finalize.md', 'BLOCKED: a foreign project\'s archive band is staged');
+assertIncludes(pluginRoot + '/commands/kaola-workflow-finalize.md', '## Staging Guard');
+
+// #505 ITEM 3: forge shared-function-presence guard. The hand-ported claim/sink-merge/classifier/
+// roadmap/repair-state ports must carry the shared top-level functions that define the data layer.
+// Pinning by function name (the #492 assertIncludes approach) means a silent DROP turns chain RED.
+// Each validator pins its OWN edition's ports only.
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'closeIssueIdempotent');
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'buildBranchName');
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-claim.js', 'checkDispatchAttestations');
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-classifier.js', 'isSharedInfra');
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-classifier.js', 'isProtected');
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-classifier.js', 'readPlanNodes');
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-repair-state.js', 'isAdaptiveWorkflowState');
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-repair-state.js', 'adaptiveStateValid');
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-repair-state.js', 'isSafeName');
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-roadmap.js', 'readRoadmapIssues');
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-roadmap.js', 'roadmapDir');
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-sink-merge.js', 'deriveMemberSet');
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-sink-merge.js', 'readStateIssueNumbers');
+assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-sink-merge.js', 'probeIssueClosed');
+
 console.log('Kaola-Workflow Gitea contract validation passed');

@@ -959,4 +959,11 @@ assertIncludes('agents/workflow-planner.md', 'main-session-gate');
     '#422.3: scripts."test:kaola-workflow:claude" must run node scripts/test-agent-profile-parity.js');
 }
 
+// #505 ITEM 1: pin the FOREIGN_ARCHIVE staging guard in the finalize command so a silent drop
+// (the #294 fail-open class) turns the chain RED. npm test never executes the bash prose;
+// these pins are its only mechanical enforcement (the bash-block-guards Test E covers runtime).
+assertIncludes('commands/kaola-workflow-finalize.md', 'FOREIGN_ARCHIVE=$(git diff --cached');
+assertIncludes('commands/kaola-workflow-finalize.md', 'BLOCKED: a foreign project\'s archive band is staged');
+assertIncludes('commands/kaola-workflow-finalize.md', '## Staging Guard');
+
 console.log('Workflow contract validation passed');

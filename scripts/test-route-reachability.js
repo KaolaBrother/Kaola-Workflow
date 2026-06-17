@@ -163,9 +163,12 @@ for (const ed of codexEditions) {
         `T5: ${f} must contain "frontier unit" literal following the PIN comment (n9-prose-skeleton)`);
     }
   } else {
-    // n9 is still pending — emit a non-blocking warning so the reviewer knows to check after n9.
-    // TODO(code-reviewer/n11): promote these to blocking assert() calls once n9-prose-skeleton runs.
-    console.warn('T5 (non-blocking): <!-- PIN: frontier unit --> not yet present in plan-run surfaces — n9-prose-skeleton pending');
+    // #505 ITEM 2: harden the T5 else-branch to a HARD ASSERT so removing the pin from ALL six
+    // surfaces no longer passes silently. The pin is present on all 6 surfaces (n9-prose-skeleton
+    // has run); anyHasPin is true and this branch is unreachable under correct state. Flipping the
+    // warn to an assert means the self-disarm (dropping the pin from every surface) now REDs.
+    assert(anyHasPin,
+      'T5: <!-- PIN: frontier unit --> not found in any plan-run surface — pin must be present on all 6 surfaces (n9-prose-skeleton)');
   }
 }
 
