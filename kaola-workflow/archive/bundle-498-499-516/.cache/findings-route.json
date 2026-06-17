@@ -1,0 +1,37 @@
+[
+  {
+    "finding_id": "id=R1 scope=in_scope action=none status=resolved severity=high fix_role=none rationale=#498 gate-conjunction fix complete+non-vacuous; mutation (d) proven to bite via #500-NEGATIVE-A",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R2 scope=in_scope action=none status=resolved severity=high fix_role=none rationale=#499 integrity gate proven real (#499b drives real validator+real open-next subprocess on a real tamper, zero mutation) not a mock false-green",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R3 scope=in_scope action=none status=resolved severity=low fix_role=none rationale=#516 qualifies dispatch.evidence_file which plan-run:118 consumes; seed/record/verify unchanged",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R4 scope=in_scope action=none status=resolved severity=low fix_role=none rationale=cross-edition parity green (edition-sync --check) all 4 ports carry the fix",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R5 scope=in_scope action=none status=resolved severity=low fix_role=none rationale=6 retired group-close tests legitimately unreachable post-#498; coverage preserved by live LEG-PROVISION-ON/LEG-CLEAN-COMPLETION-NO-LEAK/D437-CLOSE-NODE-FLAG-OFF-SERIAL",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  }
+]
