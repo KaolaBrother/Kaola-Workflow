@@ -1048,11 +1048,14 @@ function runSinkTransaction(args, mainRoot, defBranch) {
       const archiveDir = path.join(mainRoot, 'kaola-workflow', 'archive', args.project);
       if (fs.existsSync(archiveDir)) {
         const ps = 'kaola-workflow/archive/' + args.project + '/';
-        try { execFileSync('git', ['-C', mainRoot, 'add', '--', ps], { encoding: 'utf8' }); } catch (_) {}
+        // #520: exclude crash-resume journals from staging (must persist on disk, must not be committed).
+        const exRcpt = ':(exclude)kaola-workflow/archive/' + args.project + '/.cache/sink-receipt.json';
+        const exFb = ':(exclude)kaola-workflow/archive/' + args.project + '/.cache/sink-fallback.json';
+        try { execFileSync('git', ['-C', mainRoot, 'add', '--', ps, exRcpt, exFb], { encoding: 'utf8' }); } catch (_) {}
         let hasStaged = false;
         try { execFileSync('git', ['-C', mainRoot, 'diff', '--cached', '--quiet', '--', ps], { stdio: 'ignore' }); }
         catch (e) { if (e && e.status === 1) hasStaged = true; }
-        if (hasStaged) { try { execFileSync('git', ['-C', mainRoot, 'commit', '-m', 'chore: archive ' + args.project + ' [sink]', '--', ps], { encoding: 'utf8' }); } catch (_) {} }
+        if (hasStaged) { try { execFileSync('git', ['-C', mainRoot, 'commit', '-m', 'chore: archive ' + args.project + ' [sink]', '--', ps, exRcpt, exFb], { encoding: 'utf8' }); } catch (_) {} }
       }
       const archRcptPath = path.join(mainRoot, 'kaola-workflow', 'archive', args.project, '.cache', 'sink-receipt.json');
       if (!fs.existsSync(receiptPath) && fs.existsSync(path.dirname(archRcptPath))) writeSinkReceipt(archRcptPath, receipt);

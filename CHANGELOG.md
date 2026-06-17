@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **sink: `archive_commit` no longer commits the transient crash-resume journals (`sink-receipt.json` / `sink-fallback.json`) into the default branch on every direct `--sink` cycle (#520).** The archive_commit step staged the whole archive band with a directory-wide pathspec (`git add -- 'kaola-workflow/archive/<project>/'`), sweeping the disposable transaction journals into `main` and forcing a recurring manual cleanup commit after each sink. These journals are crash-resume scratch paper — they must persist on disk (read off the working tree by the #429 crash-resume path and the #484 freshness guard) but must never be tracked. Fix: **both** the `git add` and the `git commit -- <pathspec>` in archive_commit now carry `:(exclude)kaola-workflow/archive/<project>/.cache/sink-receipt.json` and `:(exclude).../sink-fallback.json` pathspecs — the commit-side exclude is load-bearing because `git commit -- <pathspec>` re-sweeps an already-tracked, modified journal independently of the index. The on-disk journal is untouched, so crash-resume still works (`testSinkTransactionCrashResume` stays green). New RED→GREEN tracked-status coverage (after a clean sink, `git ls-files` shows no committed journal while the on-disk file survives) in `scripts/simulate-workflow-walkthrough.js` (`testSinkTransactionCleanEndToEnd`) plus the GitLab/Gitea sink tests. Cross-edition: applied byte-identically to the codex twin and rename-normalized to the GitLab/Gitea sink ports; all four `npm run test:kaola-workflow:{claude,codex,gitlab,gitea}` chains green (#307). A follow-up (#521) hardens the regression test to also bite an add-only half-fix (the commit-side exclude is presently uncovered by the fresh-repo test fixtures).
+
 ## [6.5.0] - 2026-06-17
 
 ### Fixed

@@ -12642,6 +12642,18 @@ function testSinkTransactionCleanEndToEnd() {
     const allDone = receipt.steps && Object.values(receipt.steps).every(v => v === 'done' || v === 'skipped');
     assert(allDone, '#429 e2e: all receipt steps must be done, got: ' + JSON.stringify(receipt.steps));
 
+    // #520: journals (sink-receipt.json, sink-fallback.json) must NOT be committed into main.
+    // Assert by tracked-status (git ls-files), not disk-existence — the on-disk files must still
+    // exist for crash-resume (#429) and the #484 freshness guard.
+    const lsFiles = spawnSync('git', ['-C', tmp, 'ls-files',
+      'kaola-workflow/archive/issue-4293/.cache/sink-receipt.json',
+      'kaola-workflow/archive/issue-4293/.cache/sink-fallback.json'
+    ], { encoding: 'utf8' }).stdout.trim();
+    assert(lsFiles === '', '#520: sink journals must NOT be tracked in git after --sink; got: ' + lsFiles);
+    // The receipt must still be on disk (crash-resume invariant)
+    assert(fs.existsSync(archiveReceiptPath) || fs.existsSync(liveReceiptPath),
+      '#520: sink-receipt.json must still exist on disk after --sink (crash-resume invariant)');
+
     console.log('testSinkTransactionCleanEndToEnd: PASSED');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });

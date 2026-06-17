@@ -1230,4 +1230,45 @@ console.log('GitLab #517 reopen-after-autoclose tests passed');
 }
 console.log('GitLab #496/#497/#506 fail-closed sink guard tests passed');
 
+// #520: archive_commit must NOT commit sink-receipt.json or sink-fallback.json into main.
+// Assert by tracked-status (git ls-files) after a clean --sink run: journals must be absent
+// from the tracked tree while still existing on disk (crash-resume invariant).
+{
+  const sinkScript = path.join(__dirname, 'kaola-gitlab-workflow-sink-merge.js');
+  const project = 'gl-520-journals';
+  const branch = 'workflow/' + project;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-520-'));
+  const git = (...a) => execFileSync('git', a, { cwd: root, encoding: 'utf8' });
+  try {
+    git('init', '-b', 'main'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't');
+    fs.writeFileSync(path.join(root, 'base.txt'), 'base'); git('add', '-A'); git('commit', '-m', 'base');
+    git('checkout', '-b', branch);
+    // Simulate finalize: commit an archive folder on the feature branch
+    const archiveDir = path.join(root, 'kaola-workflow', 'archive', project);
+    fs.mkdirSync(archiveDir, { recursive: true });
+    fs.writeFileSync(path.join(archiveDir, 'workflow-state.md'), '# State\nstatus: closed\n');
+    fs.writeFileSync(path.join(root, 'impl.txt'), 'impl');
+    git('add', '-A'); git('commit', '-m', 'feat: impl + archive');
+    git('checkout', 'main');
+    // Remove live folder so receipt resolves to archive path (matching production lane)
+    fs.rmSync(path.join(root, 'kaola-workflow', project), { recursive: true, force: true });
+    const r = spawnSync(process.execPath, [sinkScript, '--branch', branch, '--project', project, '--sink', '--json'],
+      { cwd: root, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
+    assert.strictEqual(r.status, 0, '#520-gitlab: --sink must exit 0\nstdout: ' + r.stdout + '\nstderr: ' + r.stderr);
+    // Journals must NOT be tracked in git after --sink
+    const lsFiles = spawnSync('git', ['-C', root, 'ls-files',
+      'kaola-workflow/archive/' + project + '/.cache/sink-receipt.json',
+      'kaola-workflow/archive/' + project + '/.cache/sink-fallback.json'
+    ], { encoding: 'utf8' }).stdout.trim();
+    assert.strictEqual(lsFiles, '', '#520-gitlab: sink journals must NOT be tracked in git after --sink; got: ' + lsFiles);
+    // Receipt must still exist on disk (crash-resume invariant)
+    const rcptOnDisk = fs.existsSync(path.join(root, 'kaola-workflow', 'archive', project, '.cache', 'sink-receipt.json')) ||
+      fs.existsSync(path.join(root, 'kaola-workflow', project, '.cache', 'sink-receipt.json'));
+    assert.ok(rcptOnDisk, '#520-gitlab: sink-receipt.json must still exist on disk after --sink');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+console.log('GitLab #520 journal-exclusion from archive_commit: PASSED');
+
 console.log('GitLab sink tests passed');

@@ -1156,8 +1156,13 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
       const archiveDir = path.join(mainRoot, 'kaola-workflow', 'archive', args.project);
       if (fs.existsSync(archiveDir)) {
         const projectPathspec = 'kaola-workflow/archive/' + args.project + '/';
+        // #520: exclude crash-resume journals from staging — they are disposable scratch files that
+        // must persist on disk for crash-resume (#429) and the #484 freshness guard, but must NEVER
+        // be committed into main (they pollute the tracked tree and require recurring manual cleanup).
+        const excludeReceipt = ':(exclude)kaola-workflow/archive/' + args.project + '/.cache/sink-receipt.json';
+        const excludeFallback = ':(exclude)kaola-workflow/archive/' + args.project + '/.cache/sink-fallback.json';
         try {
-          execFileSync('git', ['-C', mainRoot, 'add', '--', projectPathspec], { encoding: 'utf8' });
+          execFileSync('git', ['-C', mainRoot, 'add', '--', projectPathspec, excludeReceipt, excludeFallback], { encoding: 'utf8' });
         } catch (_) {}
         let hasStaged = false;
         try {
@@ -1167,7 +1172,7 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
         }
         if (hasStaged) {
           try {
-            execFileSync('git', ['-C', mainRoot, 'commit', '-m', 'chore: archive ' + args.project + ' [sink]', '--', projectPathspec],
+            execFileSync('git', ['-C', mainRoot, 'commit', '-m', 'chore: archive ' + args.project + ' [sink]', '--', projectPathspec, excludeReceipt, excludeFallback],
               { encoding: 'utf8' });
           } catch (_) {}
         }
