@@ -20,12 +20,13 @@ const RUN_CHAINS = path.join(__dirname, 'kaola-workflow-run-chains.js');
 // Spawn run-chains as a subprocess in repoDir with the given extra argv.
 // Reads and parses the receipt from outputPath (must be supplied explicitly
 // or the default .cache/chain-receipt.json will be used).
-function run(repoDir, extraArgs, receiptPath) {
+function run(repoDir, extraArgs, receiptPath, env) {
   const rp = receiptPath || path.join(repoDir, '.cache', 'chain-receipt.json');
   const r = spawnSync(process.execPath, [RUN_CHAINS, ...extraArgs], {
     cwd: repoDir,
     encoding: 'utf8',
     timeout: 30000,
+    env: env ? Object.assign({}, process.env, env) : process.env,
   });
   let receipt = null;
   try { receipt = JSON.parse(fs.readFileSync(rp, 'utf8')); } catch (_) {}
@@ -50,6 +51,16 @@ function makeExitScript(dir, name, exitCode) {
   const p = path.join(dir, name);
   fs.writeFileSync(p,
     '#!/usr/bin/env node\n\'use strict\';\nprocess.exit(' + exitCode + ');\n',
+    { mode: 0o755 });
+  return p;
+}
+
+// Write a tiny executable node script that sleeps `ms` then exits 0 (#529 — concurrency
+// timing/ordering mocks). Sleep is not CPU-bound, so concurrent sleeps overlap on any core count.
+function makeSleepScript(dir, name, ms) {
+  const p = path.join(dir, name);
+  fs.writeFileSync(p,
+    '#!/usr/bin/env node\n\'use strict\';\nsetTimeout(function(){ process.exit(0); }, ' + ms + ');\n',
     { mode: 0o755 });
   return p;
 }
@@ -316,6 +327,131 @@ try {
   // negative → fallback
   assert(resolveTimeoutMs({ KAOLA_RUN_CHAINS_TIMEOUT_MS: '-5' }) === 900000, 'T12: "-5" falls back to 900000');
 }
+
+// ---------------------------------------------------------------------------
+// T13 (#529): resolveConcurrency unit — core-count gating policy + env overrides.
+// ---------------------------------------------------------------------------
+{
+  const { resolveConcurrency } = require('./kaola-workflow-run-chains.js');
+  // auto: a constrained host (< 8 cores) stays SERIAL regardless of chain count (D-528-01 safety).
+  assert(resolveConcurrency({}, 2, 4) === 1, 'T13: 2 cores -> serial');
+  assert(resolveConcurrency({}, 4, 4) === 1, 'T13: 4 cores -> serial (the ≤4-core case)');
+  assert(resolveConcurrency({}, 7, 4) === 1, 'T13: 7 cores (< 8) -> serial');
+  // auto: ample cores -> bounded pool min(chainCount, floor(cores/2)).
+  assert(resolveConcurrency({}, 8, 4) === 4, 'T13: 8 cores, 4 chains -> 4');
+  assert(resolveConcurrency({}, 18, 4) === 4, 'T13: 18 cores, 4 chains -> 4 (capped at chainCount)');
+  assert(resolveConcurrency({}, 18, 2) === 2, 'T13: 18 cores, 2 chains -> 2');
+  assert(resolveConcurrency({}, 10, 4) === 4, 'T13: 10 cores -> floor(10/2)=5 capped to 4 chains');
+  assert(resolveConcurrency({}, 18, 1) === 1, 'T13: 1 chain -> serial (nothing to overlap)');
+  // env overrides.
+  assert(resolveConcurrency({ KAOLA_RUN_CHAINS_CONCURRENCY: 'serial' }, 18, 4) === 1, 'T13: env "serial" -> 1');
+  assert(resolveConcurrency({ KAOLA_RUN_CHAINS_CONCURRENCY: '1' }, 18, 4) === 1, 'T13: env "1" -> 1');
+  assert(resolveConcurrency({ KAOLA_RUN_CHAINS_CONCURRENCY: '4' }, 2, 4) === 4, 'T13: env "4" forces concurrency on a 2-core host');
+  assert(resolveConcurrency({ KAOLA_RUN_CHAINS_CONCURRENCY: '9' }, 18, 4) === 4, 'T13: env "9" clamped to chainCount 4');
+  assert(resolveConcurrency({ KAOLA_RUN_CHAINS_CONCURRENCY: 'auto' }, 18, 4) === 4, 'T13: env "auto" == unset');
+  assert(resolveConcurrency({ KAOLA_RUN_CHAINS_CONCURRENCY: 'garbage' }, 18, 4) === 4, 'T13: invalid env falls through to auto (never crashes the gate)');
+}
+
+// ---------------------------------------------------------------------------
+// T14 (#529): concurrent dispatch RE-SORTS out-of-order completion to canonical
+// KNOWN_CHAINS order in the receipt. Forced concurrency + reverse sleeps: chains
+// COMPLETE gitea->...->claude, but the receipt must read claude,codex,gitlab,gitea.
+// ---------------------------------------------------------------------------
+const repo14 = makeGitRepo();
+try {
+  const c  = makeSleepScript(repo14, 'c.js', 240);   // claude finishes LAST
+  const co = makeSleepScript(repo14, 'co.js', 160);
+  const gl = makeSleepScript(repo14, 'gl.js', 80);
+  const gt = makeSleepScript(repo14, 'gt.js', 20);    // gitea finishes FIRST
+  const r14 = run(repo14, [
+    '--chains', 'claude,codex,gitlab,gitea',
+    '--mock-chain', 'claude:' + c,
+    '--mock-chain', 'codex:' + co,
+    '--mock-chain', 'gitlab:' + gl,
+    '--mock-chain', 'gitea:' + gt,
+  ], null, { KAOLA_RUN_CHAINS_CONCURRENCY: '4' });
+  assert(r14.exitCode === 0, 'T14: exit 0 on all-pass concurrent run');
+  const rc = r14.receipt;
+  assert(rc !== null && Array.isArray(rc.chains) && rc.chains.length === 4, 'T14: 4 chain entries');
+  if (rc && rc.chains) {
+    assert(rc.chains.map(x => x.name).join(',') === 'claude,codex,gitlab,gitea',
+      'T14: receipt is canonical order despite reverse completion; got ' + rc.chains.map(x => x.name).join(','));
+    assert(rc.chains.every(x => x.exitCode === 0), 'T14: all chains exit 0');
+  }
+} finally { try { fs.rmSync(repo14, { recursive: true, force: true }); } catch (_) {} }
+
+// ---------------------------------------------------------------------------
+// T15 (#529): concurrency actually OVERLAPS — forced-concurrent makespan is far below
+// forced-serial for the same equal-sleep chains (sleep is not CPU-bound, so overlap holds
+// on any core count). Relative threshold self-calibrates to host speed (non-flaky).
+// ---------------------------------------------------------------------------
+const repo15 = makeGitRepo();
+try {
+  const mk = (n) => makeSleepScript(repo15, n, 300);
+  const baseArgs = [
+    '--chains', 'claude,codex,gitlab,gitea',
+    '--mock-chain', 'claude:' + mk('s1.js'),
+    '--mock-chain', 'codex:' + mk('s2.js'),
+    '--mock-chain', 'gitlab:' + mk('s3.js'),
+    '--mock-chain', 'gitea:' + mk('s4.js'),
+  ];
+  const span = (rc) => new Date(rc.completedAt).getTime() - new Date(rc.startedAt).getTime();
+  const serialRun = run(repo15, baseArgs.concat(['--output', '.cache/serial.json']),
+    path.join(repo15, '.cache', 'serial.json'), { KAOLA_RUN_CHAINS_CONCURRENCY: 'serial' });
+  const concRun = run(repo15, baseArgs.concat(['--output', '.cache/conc.json']),
+    path.join(repo15, '.cache', 'conc.json'), { KAOLA_RUN_CHAINS_CONCURRENCY: '4' });
+  assert(serialRun.exitCode === 0 && concRun.exitCode === 0, 'T15: both runs exit 0');
+  if (serialRun.receipt && concRun.receipt) {
+    const sSpan = span(serialRun.receipt), cSpan = span(concRun.receipt);
+    // 4 chains x 300ms: serial ~1200ms+, concurrent ~300ms+. Concurrent < 60% of serial.
+    assert(cSpan < sSpan * 0.6, 'T15: concurrent makespan (' + cSpan + 'ms) < 60% of serial (' + sSpan + 'ms) — chains overlapped');
+  }
+} finally { try { fs.rmSync(repo15, { recursive: true, force: true }); } catch (_) {} }
+
+// ---------------------------------------------------------------------------
+// T16 (#529): --accept-known-red waiver works UNDER CONCURRENCY. One chain fails
+// but is waived -> overall exit 0; receipt records the underlying exit + the waiver.
+// ---------------------------------------------------------------------------
+const repo16 = makeGitRepo();
+try {
+  const passS = makeExitScript(repo16, 'p.js', 0);
+  const failS = makeExitScript(repo16, 'f.js', 1);
+  const r16 = run(repo16, [
+    '--chains', 'claude,codex',
+    '--mock-chain', 'claude:' + passS,
+    '--mock-chain', 'codex:' + failS,
+    '--accept-known-red', 'codex:529',
+  ], null, { KAOLA_RUN_CHAINS_CONCURRENCY: '2' });
+  assert(r16.exitCode === 0, 'T16: waived failing chain -> exit 0 under concurrency');
+  const rc = r16.receipt;
+  if (rc && rc.chains) {
+    const codex = rc.chains.find(x => x.name === 'codex');
+    assert(!!codex && codex.exitCode === 1 && codex.accepted_red === true && codex.accepted_red_issue === '529',
+      'T16: codex records exit 1 + waived (accepted_red_issue 529)');
+    assert(rc.chains.map(x => x.name).join(',') === 'claude,codex', 'T16: canonical order under concurrency');
+  }
+} finally { try { fs.rmSync(repo16, { recursive: true, force: true }); } catch (_) {} }
+
+// ---------------------------------------------------------------------------
+// T17 (#529): forced SERIAL fallback on a multi-chain run still produces a correct,
+// canonical receipt (exercise the byte-equivalent serial path explicitly, not only via gating).
+// ---------------------------------------------------------------------------
+const repo17 = makeGitRepo();
+try {
+  const passS = makeExitScript(repo17, 'p.js', 0);
+  const r17 = run(repo17, [
+    '--chains', 'claude,codex,gitlab',
+    '--mock-chain', 'claude:' + passS,
+    '--mock-chain', 'codex:' + passS,
+    '--mock-chain', 'gitlab:' + passS,
+  ], null, { KAOLA_RUN_CHAINS_CONCURRENCY: 'serial' });
+  assert(r17.exitCode === 0, 'T17: forced-serial multi-chain exit 0');
+  const rc = r17.receipt;
+  if (rc && rc.chains) {
+    assert(rc.chains.map(x => x.name).join(',') === 'claude,codex,gitlab', 'T17: serial canonical order');
+    assert(rc.chains.length === 3 && rc.chains.every(x => x.exitCode === 0), 'T17: 3 chains all pass');
+  }
+} finally { try { fs.rmSync(repo17, { recursive: true, force: true }); } catch (_) {} }
 
 // ---------------------------------------------------------------------------
 // Final result
