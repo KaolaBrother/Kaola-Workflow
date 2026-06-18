@@ -1,0 +1,48 @@
+{
+  "source_plan_hash": "d0a59dadad69b04d2a58fa7f90cb3989c2de32043b8de739c6c76e0179bea69d",
+  "tasks": [
+    {
+      "id": "n1-probe-surface",
+      "role": "code-explorer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n1-probe-knowledge",
+      "role": "knowledge-lookup",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n2-assume",
+      "role": "planner",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n3-falsify",
+      "role": "adversarial-verifier",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n4-converge",
+      "role": "planner",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n5-record",
+      "role": "doc-updater",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n6-finalize",
+      "role": "finalize",
+      "status": "completed",
+      "ledger_status": "complete"
+    }
+  ],
+  "last_synced_from_ledger": "2026-06-18T09:10:37.774Z"
+}
