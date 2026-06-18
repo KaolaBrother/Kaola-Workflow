@@ -1,0 +1,1 @@
+{"result":"ok","closed":"n1-survey","allDone":false,"newlyReady":[],"taskTransitions":[{"id":"n1-survey","status":"completed","ledger_status":"complete","reason":"close-node"}],"taskMirror":{"status":"updated","path":"kaola-workflow/issue-528/workflow-tasks.json"}}
