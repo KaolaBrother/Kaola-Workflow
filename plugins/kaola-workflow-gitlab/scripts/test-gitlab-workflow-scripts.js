@@ -2006,8 +2006,9 @@ function countOccurrences(content, pattern) {
   return (content.match(pattern) || []).length;
 }
 
-// #325: updateHooks() hardening on the gitlab installer copy — R1 (metacharacter pluginRoot),
-// R2 ($schema carry / existing wins), R3 (sweep ALL events). Helpers are exported (require.main guard).
+// #325/#525: updateHooks() hardening on the gitlab installer copy — R1 (metacharacter pluginRoot),
+// R2 (output is { hooks } ONLY — no $schema; Codex's strict parser rejects unknown top-level keys, and
+// an existing $schema self-heals), R3 (sweep ALL events). Helpers are exported (require.main guard).
 function testUpdateHooksHardening325() {
   const { buildManagedHooks, mergeHooks } = require(installProfilesScript);
   const tmplText = JSON.stringify({
@@ -2019,11 +2020,13 @@ function testUpdateHooksHardening325() {
   const cmd = built.hooks.SessionStart[0].hooks[0].command;
   assert.strictEqual(cmd, 'node "C:\\plug"in/scripts/x.js"', '#325 R1: pluginRoot substituted verbatim');
   assert.doesNotThrow(() => JSON.parse(JSON.stringify(built)), '#325 R1: built hooks re-serialize to valid JSON');
-  // R2
-  assert.strictEqual(mergeHooks({ hooks: {} }, built).$schema, built.$schema, '#325 R2: fresh install carries $schema');
-  assert.strictEqual(mergeHooks({ $schema: 'user-schema', hooks: {} }, built).$schema, 'user-schema', '#325 R2: existing $schema wins');
+  // R2 (#525): output is { hooks } ONLY — Codex's parser rejects unknown top-level keys; an existing $schema self-heals.
+  const freshMerge = mergeHooks({ hooks: {} }, built);
+  assert.strictEqual(freshMerge.$schema, undefined, '#525: fresh-install merge carries NO $schema');
+  assert.strictEqual(Object.keys(freshMerge).join(','), 'hooks', '#525: merged output has only the hooks key');
+  assert.strictEqual(mergeHooks({ $schema: 'user-schema', hooks: {} }, built).$schema, undefined, '#525: an existing $schema is dropped (self-heal), not carried');
   // R3
-  const shrunk = { $schema: built.$schema, hooks: { SessionStart: built.hooks.SessionStart } };
+  const shrunk = { hooks: { SessionStart: built.hooks.SessionStart } };
   const swept = mergeHooks({ hooks: { PostToolUse: [{ id: 'kaola-workflow:retired-orphan' }, { id: 'user:keep' }] } }, shrunk);
   assert.ok(!(swept.hooks.PostToolUse || []).some(e => e.id && e.id.startsWith('kaola-workflow:')), '#325 R3: orphan kaola-workflow: entry swept');
   assert.ok((swept.hooks.PostToolUse || []).some(e => e.id === 'user:keep'), '#325 R3: user entry preserved');
@@ -2038,7 +2041,7 @@ function testUpdateHooksHardening325() {
     assert.ok(fs.existsSync(globalHooksPath), '#447 AC1: hooks.json must be written to global HOME/.codex, not found at: ' + globalHooksPath);
     assert.ok(!fs.existsSync(projectHooksPath), '#447 AC5: no hooks.json must be written to project .codex, found at: ' + projectHooksPath);
     const installed = JSON.parse(fs.readFileSync(globalHooksPath, 'utf8'));
-    assert.ok(typeof installed.$schema === 'string' && installed.$schema.length > 0, '#325 R2 (black-box): fresh-install hooks.json carries $schema');
+    assert.ok(installed.$schema === undefined && Object.keys(installed).join(',') === 'hooks', '#525 (black-box): fresh-install hooks.json has only the hooks key, no $schema');
   } finally {
     fs.rmSync(freshDir, { recursive: true, force: true });
     fs.rmSync(tempHome325, { recursive: true, force: true });

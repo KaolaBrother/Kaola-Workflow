@@ -380,8 +380,9 @@ function testAC2CompactPlainStdout() {
   }
 }
 
-// #325: updateHooks() hardening — R1 (metacharacter pluginRoot can't break JSON), R2 ($schema carry
-// on fresh install, existing wins), R3 (sweep ALL events for orphaned kaola-workflow: entries).
+// #325/#525: updateHooks() hardening — R1 (metacharacter pluginRoot can't break JSON), R2 (output is
+// { hooks } ONLY — no $schema; Codex's strict parser rejects unknown top-level keys, and an existing
+// $schema self-heals), R3 (sweep ALL events for orphaned kaola-workflow: entries).
 // pluginRoot derives from __dirname, not argv, so R1/R3 are exercised via the exported pure helpers.
 function testUpdateHooksHardening325() {
   const { buildManagedHooks, mergeHooks } = require(installProfilesScript);
@@ -403,20 +404,23 @@ function testUpdateHooksHardening325() {
   let round; try { round = JSON.parse(JSON.stringify(built)); } catch (e) { assert(false, '#325 R1: built hooks must re-serialize to valid JSON'); }
   assert(round.hooks.SessionStart[0].hooks[0].command === cmd, '#325 R1: command round-trips through JSON');
 
-  // R2: a fresh install carries the managed $schema; an existing user $schema still wins.
-  assert(mergeHooks({ hooks: {} }, built).$schema === built.$schema, '#325 R2: fresh install carries the template $schema');
-  assert(mergeHooks({ $schema: 'user-schema', hooks: {} }, built).$schema === 'user-schema', '#325 R2: existing user $schema wins');
+  // R2 (#525): output is { hooks } ONLY — no $schema (Codex's parser rejects unknown top-level keys),
+  // and an existing $schema is dropped (self-heal), not carried.
+  const freshMerge = mergeHooks({ hooks: {} }, built);
+  assert(freshMerge.$schema === undefined, '#525: fresh-install merge carries NO $schema');
+  assert(Object.keys(freshMerge).join(',') === 'hooks', '#525: merged output has only the hooks key');
+  assert(mergeHooks({ $schema: 'user-schema', hooks: {} }, built).$schema === undefined, '#525: an existing $schema is dropped (self-heal), not carried');
 
   // R3: a re-install after the managed-event set shrinks leaves no orphaned kaola-workflow: entry,
   // while preserving non-managed entries under that event.
-  const shrunk = { $schema: built.$schema, hooks: { SessionStart: built.hooks.SessionStart } }; // PostToolUse no longer managed
+  const shrunk = { hooks: { SessionStart: built.hooks.SessionStart } }; // PostToolUse no longer managed
   const existingOrphan = { hooks: { PostToolUse: [{ id: 'kaola-workflow:retired-orphan', matcher: 'Write' }, { id: 'user:keep', matcher: 'Edit' }] } };
   const swept = mergeHooks(existingOrphan, shrunk);
   const post = swept.hooks.PostToolUse || [];
   assert(!post.some(e => e.id && e.id.startsWith('kaola-workflow:')), '#325 R3: orphaned kaola-workflow: entry under a now-unmanaged event is swept');
   assert(post.some(e => e.id === 'user:keep'), '#325 R3: non-managed user entry under that event is preserved');
 
-  // R2 black-box: a fresh install writes hooks.json carrying $schema.
+  // R2 black-box (#525): a fresh install writes hooks.json with ONLY a hooks key, no $schema.
   // #447: hooks land in global HOME/.codex, not in the project dir — use a temp HOME.
   const freshDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-325-schema-'));
   const tempHome325 = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-325-home-'));
@@ -428,7 +432,7 @@ function testUpdateHooksHardening325() {
     assert(fs.existsSync(globalHooksPath), '#447 AC1: hooks.json must be written to global HOME/.codex, not found at: ' + globalHooksPath);
     assert(!fs.existsSync(projectHooksPath), '#447 AC5: no hooks.json must be written to project .codex, found at: ' + projectHooksPath);
     const installed = JSON.parse(fs.readFileSync(globalHooksPath, 'utf8'));
-    assert(typeof installed.$schema === 'string' && installed.$schema.length > 0, '#325 R2 (black-box): fresh-install hooks.json carries $schema');
+    assert(installed.$schema === undefined && Object.keys(installed).join(',') === 'hooks', '#525 (black-box): fresh-install hooks.json has only the hooks key, no $schema');
   } finally {
     fs.rmSync(freshDir, { recursive: true, force: true });
     fs.rmSync(tempHome325, { recursive: true, force: true });

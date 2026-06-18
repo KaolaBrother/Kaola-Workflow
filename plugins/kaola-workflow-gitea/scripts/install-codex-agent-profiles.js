@@ -458,9 +458,14 @@ function copyHookScripts(stableDir, relPaths) {
   return { copied: copied.sort(), removed };
 }
 
-// #325 R2/R3: merge managed hooks into the existing hooks.json.
-//   R2 — carry managed top-level keys ($schema editor hint) when absent on a fresh install, but an
-//        existing user value still wins (managed spread first, existing second).
+// #325 R3 / #525: merge managed hooks into the existing hooks.json.
+//   Output is exactly { hooks }. Codex's hooks-config parser is strict (serde
+//   deny_unknown_fields) and accepts ONLY a top-level `hooks` key — a `$schema` (or any
+//   other top-level key) makes it reject the WHOLE file, dropping every managed hook
+//   (latent since #284; the prior R2 "$schema editor-hint carry" was the bug). Emitting
+//   only { hooks } both stops introducing $schema AND self-heals a hooks.json a prior
+//   install wrote with $schema (existing top-level keys are intentionally dropped, not
+//   carried). Claude is unaffected: its hooks merge into settings.json, which accepts $schema.
 //   R3 — sweep EVERY event for kaola-workflow:-prefixed entries before re-adding, so an orphaned
 //        managed entry under a now-unmanaged event is cleaned too (not just the currently-managed
 //        set). Non-managed entries and unrelated events are preserved untouched.
@@ -468,16 +473,17 @@ function copyHookScripts(stableDir, relPaths) {
 function mergeHooks(existing, managed) {
   const ex = (existing && typeof existing === 'object') ? existing : { hooks: {} };
   const exHooks = (ex.hooks && typeof ex.hooks === 'object') ? ex.hooks : {};
-  const merged = Object.assign({}, managed, ex, { hooks: Object.assign({}, exHooks) });
+  const hooks = Object.assign({}, exHooks);
   // R3: strip managed-prefixed entries under ALL events (guard entries with no id).
-  for (const event of Object.keys(merged.hooks)) {
-    merged.hooks[event] = (merged.hooks[event] || []).filter(e => !(e && e.id && e.id.startsWith(MANAGED_HOOK_ID_PREFIX)));
+  for (const event of Object.keys(hooks)) {
+    hooks[event] = (hooks[event] || []).filter(e => !(e && e.id && e.id.startsWith(MANAGED_HOOK_ID_PREFIX)));
   }
   // Re-add the managed entries per managed event.
   for (const [event, managedEntries] of Object.entries((managed && managed.hooks) || {})) {
-    merged.hooks[event] = [...(merged.hooks[event] || []), ...managedEntries];
+    hooks[event] = [...(hooks[event] || []), ...managedEntries];
   }
-  return merged;
+  // Codex hooks config = { hooks } ONLY (no $schema / no other top-level key).
+  return { hooks };
 }
 
 function updateHooks() {
