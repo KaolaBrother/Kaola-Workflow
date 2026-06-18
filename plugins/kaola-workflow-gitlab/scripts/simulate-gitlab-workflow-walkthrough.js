@@ -587,6 +587,9 @@ function testGitlabAdaptive() {
     // M2 (#277): warn-first attestation — finalize must emit closure_receipt with
     // claim_planner_attested and finalize_contractor_attested; both 'missing' in offline test
     // (no dispatch-log), but closure_invariants.ok must still be true (warn-first contract).
+    // #522: init a git repo in tmp so the finalize gate's attribution sweep can resolve
+    // `git diff main...HEAD` (empty diff on main → sweep passes vacuously).
+    if (!fs.existsSync(path.join(tmp, '.git'))) glInitGitRepo(tmp);
     const m2dir = path.join(tmp, 'kaola-workflow', 'issue-970');
     fs.mkdirSync(m2dir, { recursive: true });
     // #333: seed an active next_command + a STALE Planning Evidence plan_hash so the archive
@@ -606,9 +609,13 @@ function testGitlabAdaptive() {
     // #324: seed a PRE-SINK finalization-summary carrying the terminal-mistakable sentinels.
     fs.writeFileSync(path.join(m2dir, 'finalization-summary.md'),
       '## Status\nREADY FOR FINAL GIT GATE\n\n## Commit And Push\nPending final git gate. Final hash reported after push.\n');
-    // #324 AC3: seed a false-absolute validation claim in the cache evidence.
+    // #522: seed final-validation.md with verdict: pass (consumer-mode gate). The prior fixture
+    // seeded a false-absolute ("chains run at n16.") to test #324 AC3 archive neutralization.
+    // With the #522 gate, cmdFinalize reads this BEFORE archiving, so the seed must pass the gate.
+    // The #324 AC3 assertion (archived copy does not contain 'No files changed after those runs')
+    // still passes because 'verdict: pass\n...' does not contain that string.
     fs.mkdirSync(path.join(m2dir, '.cache'), { recursive: true });
-    fs.writeFileSync(path.join(m2dir, '.cache', 'final-validation.md'), 'chains run at n16.\nNo files changed after those runs.\n');
+    fs.writeFileSync(path.join(m2dir, '.cache', 'final-validation.md'), 'verdict: pass\nfindings_blocking: 0\n');
     const roadmapM2Dir = path.join(tmp, 'kaola-workflow', '.roadmap');
     fs.mkdirSync(roadmapM2Dir, { recursive: true });
     fs.writeFileSync(path.join(roadmapM2Dir, 'issue-970.md'),

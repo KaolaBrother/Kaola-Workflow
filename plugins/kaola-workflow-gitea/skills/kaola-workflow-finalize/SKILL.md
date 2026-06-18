@@ -23,14 +23,15 @@ precedence order):
 
 - **`chains_unverified`** — `.cache/chain-receipt.json` is absent. No chains have
   been run through the gated runner; prose attestation is not accepted.
-  Remedy: run `kaola-workflow-run-chains.js` (resolved the same way as
-  `validator_script` above) after the last commit so the receipt is written and
-  `headSha` matches HEAD.
+  Remedy: the orchestrator (main session) must run `kaola-workflow-run-chains.js`
+  (resolved the same way as `validator_script` above) after the last commit so the
+  receipt is written and `headSha` matches HEAD. Do NOT delegate this to the contractor
+  subagent — the contractor only verifies.
 - **`chains_stale`** — the receipt's `headSha` does not equal the current HEAD
   sha. The tree has advanced since the chains ran (a commit landed, a rebase
   happened); the receipt no longer describes HEAD.
-  Remedy: re-run `kaola-workflow-run-chains.js` to regenerate the receipt against
-  HEAD.
+  Remedy: the orchestrator (main session) must re-run `kaola-workflow-run-chains.js`
+  to regenerate the receipt against HEAD. Do NOT delegate this to the contractor subagent.
 - **`chains_red`** — at least one chain has a non-zero exit code and
   `accepted_red: false`. A real failing chain that has not been explicitly waived
   blocks finalization.
@@ -166,6 +167,8 @@ choices, or ambiguity that blocks correctness.
    ```
 
    If the check fails, do not stage; split the commit or coordinate manually.
+
+   **Before delegating to the contractor**: run `kaola-workflow-run-chains.js` (main session) to produce `.cache/chain-receipt.json` bound to the current HEAD. The contractor only VERIFIES the receipt — it does not run the chains. `cmdFinalize` (Step 8b) enforces the finalize gate fail-closed before the archive rename; the contractor will return `finalize_gate_unverified` if the receipt is absent, stale, or red.
 
    The mechanical finalization below — the artifact mirror, the `cmdFinalize` archive + status close (with `--keep-worktree`, merge path only), roadmap refresh, and the `chore: finalize ${KAOLA_PROJECT}` commit gate — is deterministic bookkeeping. The `contractor` Codex agent role is the SOLE HOME of this procedure and the session MUST delegate it; the contractor runs the scripts and authors the durable bookkeeping but never dispatches a role, judges, or asks the user. Only if the `contractor` subagent tooling is genuinely unavailable may the session run it inline, and that fallback MUST be logged as `local-fallback-tool-unavailable` in the `## Required Agent Compliance` ledger. The current session keeps the sink dispatch and issue-close decision. Because a subagent runs in its own shell, capture the sink metadata (`SINK_BRANCH`, `SINK_KIND`, `SINK_ISSUE_FLAG`, `ACTIVE_WORKTREE_PATH`) in THIS session before delegating — they are reused at the sink step and do not cross the delegation boundary.
 

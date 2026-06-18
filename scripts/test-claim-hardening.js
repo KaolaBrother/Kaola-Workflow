@@ -911,6 +911,311 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
   fs.rmSync(tmpDir515, { recursive: true, force: true });
 }
 
+// --- #522: cmdFinalize gate — adaptive plans must be verified before the archive commit -------
+// TDD RED: before fix, cmdFinalize --keep-worktree commits the archive UNCONDITIONALLY even when
+// no chain-receipt.json exists. It must REFUSE (exit non-zero, typed finalize_gate_unverified)
+// and leave NO `chore: archive` commit on a self-host repo missing its chain receipt.
+//
+// Scenario A (RED): self-host repo, adaptive plan, --keep-worktree, NO chain-receipt → must refuse.
+// Scenario B (GREEN-gate): self-host repo, valid chain-receipt seeded → must pass (exit 0).
+// Scenario C (N/A gate): no workflow-plan.md → gate skipped, finalize succeeds.
+{
+  const { execFileSync: execFS522, spawnSync: spawnS522 } = require('child_process');
+  const CLAIM522 = path.join(__dirname, 'kaola-workflow-claim.js');
+  const PLAN_VALIDATOR522 = path.join(__dirname, 'kaola-workflow-plan-validator.js');
+
+  // Helper: init a minimal linked-worktree repo structure.
+  // Returns { mainRoot, wtRoot, project, planPath, cacheDir }.
+  function mkSelfHostRepo522(scenario) {
+    const mainRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-522-main-')));
+    const wtRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-522-wt-')));
+    const project = 'issue-522test';
+    const GIT_ENV = {
+      ...process.env,
+      GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
+      GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
+      GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1',
+    };
+    const g = (cwd, args) => {
+      try { execFS522('git', ['-C', cwd, ...args], { stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV }); }
+      catch (_) {}
+    };
+
+    // (1) Bootstrap main repo with a self-host package.json (so the finalize discriminator
+    //     selects chain-receipt mode). Commit on main BEFORE branching so the self-host marker
+    //     is NOT in `git diff main...HEAD`.
+    g(mainRoot, ['init', '-b', 'main']);
+    g(mainRoot, ['config', 'user.email', 't@t.com']);
+    g(mainRoot, ['config', 'user.name', 'Test']);
+    g(mainRoot, ['config', 'commit.gpgsign', 'false']);
+    fs.writeFileSync(path.join(mainRoot, 'package.json'), JSON.stringify({
+      scripts: {
+        'test:kaola-workflow:claude': 'true',
+        'test:kaola-workflow:codex': 'true',
+        'test:kaola-workflow:gitlab': 'true',
+        'test:kaola-workflow:gitea': 'true'
+      }
+    }) + '\n');
+    g(mainRoot, ['add', 'package.json']);
+    g(mainRoot, ['commit', '-m', 'chore: self-host package.json']);
+
+    // (2) Create the feature branch and set up the worktree to simulate it.
+    g(mainRoot, ['checkout', '-b', 'workflow/' + project]);
+    // Write project folder in the worktree (simulating worktree-finalize having already run).
+    const projDir = path.join(wtRoot, 'kaola-workflow', project);
+    fs.mkdirSync(projDir, { recursive: true });
+    const cacheDir = path.join(projDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+
+    // (3) Write a proper adaptive workflow-state.md in main (needed for activeByProject).
+    const mainProjDir = path.join(mainRoot, 'kaola-workflow', project);
+    fs.mkdirSync(mainProjDir, { recursive: true });
+    fs.writeFileSync(path.join(mainProjDir, 'workflow-state.md'), [
+      '# Kaola-Workflow State',
+      '',
+      '## Project',
+      'name: ' + project,
+      'status: active',
+      '',
+      '## Current Position',
+      'phase: adaptive',
+      'phase_name: Adaptive',
+      'workflow_path: adaptive',
+      'step: start',
+      'next_command: /kaola-workflow-plan-run ' + project,
+      'next_skill: kaola-workflow-plan-run ' + project,
+      '',
+      '## Pending Gates',
+      '- workflow-plan',
+      '',
+      '## Last Evidence',
+      'last_command: startup',
+      'last_result: folder_claimed',
+      '',
+      '## Last Updated',
+      new Date().toISOString(),
+      '',
+      '## Sink',
+      'branch: workflow/' + project,
+      'issue_number: 522',
+      'sink: merge',
+      'run_posture: worktree',
+      'worktree_path: ' + wtRoot
+    ].join('\n') + '\n');
+
+    // (4) Write a minimal valid workflow-plan.md with a complete node covering impl.txt.
+    //     This plan is committed on main at branch-creation (not on the feature branch) to keep
+    //     `git diff main...HEAD` clean of the plan file itself. The plan's write-set covers
+    //     impl.txt which IS committed on the feature branch below.
+    const planContent = [
+      '# Workflow Plan — ' + project,
+      '',
+      '## Meta',
+      'labels: enhancement',
+      '',
+      '## Nodes',
+      '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '|---|---|---|---|---|---|',
+      '| impl | implementer | — | impl.txt | 1 | sequence |',
+      '| rv | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | rv | — | 1 | sequence |',
+      '',
+      '## Node Ledger',
+      '',
+      '| id | status |',
+      '|---|---|',
+      '| impl | complete |',
+      '| rv | complete |',
+      '| done | complete |',
+      ''
+    ].join('\n');
+
+    // Freeze the plan to stamp a plan_hash (use validator --freeze).
+    // Write plan to main first, then freeze.
+    const planPath = path.join(mainProjDir, 'workflow-plan.md');
+    fs.writeFileSync(planPath, planContent);
+
+    // Freeze via plan-validator so plan_hash is stamped (needed for --finalize-check).
+    try {
+      execFS522('node', [PLAN_VALIDATOR522, planPath, '--freeze', '--json'],
+        { cwd: mainRoot, encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+    } catch (_) { /* freeze may fail in this minimal repo; gate still needs the plan */ }
+
+    // (5) Write the plan into the worktree project dir too.
+    const wtPlanPath = path.join(projDir, 'workflow-plan.md');
+    fs.writeFileSync(wtPlanPath, fs.readFileSync(planPath, 'utf8'));
+
+    // (6) Write workflow-state.md into the worktree project dir.
+    fs.writeFileSync(path.join(projDir, 'workflow-state.md'),
+      fs.readFileSync(path.join(mainProjDir, 'workflow-state.md'), 'utf8'));
+
+    // (7) Commit the plan + state + impl.txt onto the feature branch in main.
+    //     impl.txt is an attributed change (declared in `impl` node's write_set).
+    fs.writeFileSync(path.join(mainRoot, 'impl.txt'), 'implementation\n');
+    g(mainRoot, ['add', '-A']);
+    g(mainRoot, ['commit', '-m', 'feat: impl + plan for issue-522test']);
+
+    // (8) Point the worktree gitdir at main (simulate git worktree linkage).
+    //     For the gate we just need `git rev-parse HEAD` to resolve from the worktree.
+    //     We use --git-dir pointing to main's .git to simulate a linked worktree.
+    const mainGitDir = path.join(mainRoot, '.git');
+    // Write a .git FILE (not dir) in wtRoot to point to main's worktrees dir.
+    // This is a proper git worktree linkage simulation.
+    const wtGitLinkDir = path.join(mainGitDir, 'worktrees', 'kw-522-wt');
+    fs.mkdirSync(wtGitLinkDir, { recursive: true });
+    // Write commondir to link back
+    fs.writeFileSync(path.join(wtGitLinkDir, 'commondir'), '../..\n');
+    fs.writeFileSync(path.join(wtGitLinkDir, 'gitdir'), path.join(wtRoot, '.git') + '\n');
+    // Write the worktree HEAD to track same branch
+    const headSha = spawnS522('git', ['-C', mainRoot, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout.trim();
+    fs.writeFileSync(path.join(wtGitLinkDir, 'HEAD'), headSha + '\n');
+    // Write .git file in wt
+    fs.writeFileSync(path.join(wtRoot, '.git'), 'gitdir: ' + path.join(wtGitLinkDir) + '\n');
+
+    // In a real git linked worktree the working tree is a full checkout of the branch, so
+    // package.json (committed on main before branching) is present. Mirror that here so the
+    // finalize-check discriminator classifies this as a self-host (chain-receipt) repo.
+    fs.writeFileSync(path.join(wtRoot, 'package.json'), fs.readFileSync(path.join(mainRoot, 'package.json'), 'utf8'));
+    // Also write impl.txt to the worktree (the "checked-out" feature file).
+    fs.writeFileSync(path.join(wtRoot, 'impl.txt'), 'implementation\n');
+
+    return { mainRoot, wtRoot, project, planPath: wtPlanPath, cacheDir, headSha, wtGitLinkDir };
+  }
+
+  // Helper: run claim finalize from wtRoot.
+  function runFinalize522(wtRoot, project, extraArgs, extraEnv) {
+    const e = Object.assign({}, process.env, {
+      KAOLA_WORKFLOW_OFFLINE: '1',
+      KAOLA_GH_REMOTE_TIMEOUT_MS: '500',
+      KAOLA_WORKTREE_NATIVE: '0',
+    }, extraEnv || {});
+    const result = spawnS522(
+      process.execPath, [CLAIM522, 'finalize', '--project', project, '--keep-worktree', ...(extraArgs || [])],
+      { cwd: wtRoot, encoding: 'utf8', timeout: 30000, env: e }
+    );
+    let json = null;
+    try {
+      const lines = (result.stdout || '').trim().split('\n').filter(l => l.trim().startsWith('{'));
+      if (lines.length) json = JSON.parse(lines[lines.length - 1]);
+    } catch (_) {}
+    return { status: result.status, stdout: result.stdout, stderr: result.stderr, json };
+  }
+
+  // --- #522 Scenario A: adaptive plan + NO chain-receipt → finalize_gate_unverified (RED) ---
+  {
+    let fx;
+    try {
+      fx = mkSelfHostRepo522('no-receipt');
+      const headSha = fx.headSha;
+
+      const r = runFinalize522(fx.wtRoot, fx.project);
+
+      // Pre-fix: cmdFinalize returns exit 0 + no refusal. Post-fix: must refuse.
+      assert(r.status !== 0,
+        '#522(A): finalize without chain-receipt must exit non-zero (pre-fix: exit ' + r.status + ', no gate)');
+      assert(r.json && r.json.reason === 'finalize_gate_unverified',
+        '#522(A): finalize_gate_unverified reason required (got ' + JSON.stringify(r.json) + ')');
+
+      // No `chore: archive` commit must land (HEAD must still be the impl commit).
+      const headAfter = spawnS522('git', ['-C', fx.wtRoot, 'rev-parse', 'HEAD'],
+        { encoding: 'utf8' }).stdout.trim();
+      assert(headAfter === headSha,
+        '#522(A): NO archive commit must land when gate refuses (HEAD changed: ' + headSha + ' → ' + headAfter + ')');
+
+    } finally {
+      if (fx) {
+        try { fs.rmSync(fx.mainRoot, { recursive: true, force: true }); } catch (_) {}
+        try { fs.rmSync(fx.wtRoot, { recursive: true, force: true }); } catch (_) {}
+      }
+    }
+  }
+
+  // --- #522 Scenario B: valid chain-receipt seeded → gate passes, finalize succeeds ---
+  {
+    let fx;
+    try {
+      fx = mkSelfHostRepo522('with-receipt');
+      const headSha = fx.headSha;
+
+      // Seed a valid chain-receipt.json covering the current HEAD.
+      fs.writeFileSync(path.join(fx.cacheDir, 'chain-receipt.json'), JSON.stringify({
+        headSha,
+        chains: [
+          { name: 'claude', exitCode: 0, accepted_red: false },
+          { name: 'codex', exitCode: 0, accepted_red: false },
+          { name: 'gitlab', exitCode: 0, accepted_red: false },
+          { name: 'gitea', exitCode: 0, accepted_red: false }
+        ]
+      }));
+
+      const r = runFinalize522(fx.wtRoot, fx.project);
+
+      assert(r.status === 0,
+        '#522(B): finalize WITH valid chain-receipt must exit 0 (gate passes) (got ' + r.status + ', stderr: ' + (r.stderr || '').slice(0, 200) + ')');
+
+    } finally {
+      if (fx) {
+        try { fs.rmSync(fx.mainRoot, { recursive: true, force: true }); } catch (_) {}
+        try { fs.rmSync(fx.wtRoot, { recursive: true, force: true }); } catch (_) {}
+      }
+    }
+  }
+
+  // --- #522 Scenario C: no workflow-plan.md → gate is N/A, finalize succeeds ---
+  {
+    const tmpC = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-522c-')));
+    const project = 'issue-522c';
+    const GIT_ENV = {
+      ...process.env,
+      GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 't@t.com',
+      GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 't@t.com',
+    };
+    try {
+      execFS522('git', ['-C', tmpC, 'init', '-b', 'main'],
+        { stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV });
+      execFS522('git', ['-C', tmpC, 'config', 'user.email', 't@t.com'],
+        { stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV });
+      execFS522('git', ['-C', tmpC, 'config', 'user.name', 'Test'],
+        { stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV });
+      execFS522('git', ['-C', tmpC, 'config', 'commit.gpgsign', 'false'],
+        { stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV });
+      fs.writeFileSync(path.join(tmpC, 'README.md'), 'x\n');
+      execFS522('git', ['-C', tmpC, 'add', '-A'],
+        { stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV });
+      execFS522('git', ['-C', tmpC, 'commit', '-m', 'init'],
+        { stdio: ['ignore', 'ignore', 'ignore'], env: GIT_ENV });
+
+      // Project folder with NO workflow-plan.md (non-adaptive run).
+      const projDir = path.join(tmpC, 'kaola-workflow', project);
+      fs.mkdirSync(projDir, { recursive: true });
+      fs.writeFileSync(path.join(projDir, 'workflow-state.md'), [
+        '# Kaola-Workflow State',
+        '## Project', 'name: ' + project, 'status: active',
+        '## Current Position', 'phase: 2', 'phase_name: Implementation',
+        '## Sink', 'branch: workflow/' + project, 'issue_number: 522', 'sink: merge', 'run_posture: in-place'
+      ].join('\n') + '\n');
+
+      const r = spawnS522(process.execPath,
+        [CLAIM522, 'finalize', '--project', project],
+        {
+          cwd: tmpC, encoding: 'utf8', timeout: 30000,
+          env: Object.assign({}, process.env, {
+            KAOLA_WORKFLOW_OFFLINE: '1',
+            KAOLA_GH_REMOTE_TIMEOUT_MS: '500',
+            KAOLA_WORKTREE_NATIVE: '0',
+          })
+        });
+
+      assert(r.status === 0,
+        '#522(C): finalize with NO workflow-plan.md must succeed (gate N/A), got ' + r.status + '\nstderr: ' + (r.stderr || '').slice(0, 200));
+
+    } finally {
+      try { fs.rmSync(tmpC, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+}
+
 if (failed > 0) {
   console.error('claim-hardening tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;

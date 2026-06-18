@@ -12,6 +12,10 @@ const { spawn, spawnSync } = require('child_process');
 // during the classify-blocked and classify-red tests. Subprocesses that need OFFLINE set
 // do so explicitly via their own env option.
 delete process.env.KAOLA_WORKFLOW_OFFLINE;
+// #515: pin adaptive switch OFF so tests that call claimProject/claimExplicitTarget without
+// an explicit --workflow-path aren't broken by a system config that has enable_adaptive:true.
+// Tests that want ON behaviour must set KAOLA_ENABLE_ADAPTIVE explicitly in their subprocess env.
+process.env.KAOLA_ENABLE_ADAPTIVE = '0';
 
 const forge = require('./kaola-gitea-forge');
 const active = require('./kaola-gitea-workflow-active-folders');

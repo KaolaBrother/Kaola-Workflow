@@ -1866,6 +1866,45 @@ function cmdFinalize() {
       keepIssueOpen = field(fs.readFileSync(stateFile(root, args.project), 'utf8'), 'issue_action') === 'comment_keep_open';
     } catch (_) {}
   }
+  // #522: FINALIZE GATE — BEFORE any irreversible side effect (archive rename, worktree removal,
+  // issue close). When a workflow-plan.md is present (adaptive run), shell the plan-validator's
+  // --finalize-check which enforces the dual-mode validation gate:
+  //   SELF-HOST (npm): chain-receipt.json bound to HEAD must exist, be fresh, and be all-green.
+  //   CONSUMER (non-npm): .cache/final-validation.md with column-0 `verdict: pass` must exist.
+  // Both modes also run the attribution sweep (B). On any non-`pass` result, refuse to commit —
+  // exit non-zero with finalize_gate_unverified carrying the inner reason. Gate is UNCONDITIONAL
+  // for BOTH the --keep-worktree path and the in-place path, placed here (before archiveProjectDir)
+  // so no side effect has occurred on refusal. Plan-absent (non-adaptive run) → gate N/A, proceed.
+  {
+    const livePlanPath = path.join(root, 'kaola-workflow', args.project, adaptiveSchema.PLAN_FILE);
+    if (fs.existsSync(livePlanPath)) {
+      const validatorScript = path.join(__dirname, 'kaola-gitea-workflow-plan-validator.js');
+      let gateResult = null;
+      let gateError = null;
+      try {
+        const raw = execFileSync(process.execPath, [validatorScript, livePlanPath, '--finalize-check', '--json'],
+          { cwd: root, encoding: 'utf8', timeout: 120000 });
+        gateResult = JSON.parse(raw.trim());
+      } catch (e) {
+        // Non-zero exit from validator means a refusal — parse its JSON output.
+        const stdout = e && e.stdout ? String(e.stdout).trim() : '';
+        try { gateResult = JSON.parse(stdout); } catch (_) { gateError = stdout || String(e && e.message || e); }
+      }
+      if (!gateResult || gateResult.result !== 'pass') {
+        const innerReason = (gateResult && gateResult.reason) || gateError || 'validator_error';
+        const innerHint = (gateResult && gateResult.operator_hint) ||
+          'Resolve the inner refusal, then re-run finalize. No archive commit was made.';
+        output({
+          result: 'refuse',
+          reason: 'finalize_gate_unverified',
+          inner_reason: innerReason,
+          operator_hint: innerHint,
+          errors: (gateResult && gateResult.errors) || [innerReason]
+        }, 1);
+        return;
+      }
+    }
+  }
   const result = archiveProjectDir(root, args.project, 'closed', undefined, { keepOpen: keepIssueOpen, keepRoadmapSource: keepIssueOpen, keepWorktree: args.keepWorktree });
   // #426: resolve main/linked roots in cmdFinalize scope for backstop + removeWorktree + anchored_root.
   let cmdFinalizeMainRoot, cmdFinalizeLinkedRoot;

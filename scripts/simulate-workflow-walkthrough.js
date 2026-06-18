@@ -199,6 +199,9 @@ function testFinalize(tmp) {
 function testKeepOpenArchiveStamp() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-keepopen-')));
   try {
+    // #522: initGitRepo so the finalize gate's attribution sweep can resolve `git diff main...HEAD`.
+    // On a plain main branch with no feature branch, the diff is empty → no unattributed files.
+    initGitRepo(tmp);
     const STALE_HASH = 'a'.repeat(64);
     const FINAL_HASH = 'b'.repeat(64);
     const STALE_UPDATED = '2020-01-01T00:00:00.000Z';
@@ -227,6 +230,10 @@ function testKeepOpenArchiveStamp() {
       '## Node Ledger', '', '| id | status |', '|---|---|',
       '| n1 | complete |', '| n2 | complete |', ''
     ].join('\n'));
+    // #522: seed final-validation.md (consumer-mode repo — no package.json → final-validation gate).
+    // No feature branch here so git diff main...HEAD is empty → attribution sweep passes vacuously.
+    fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.cache', 'final-validation.md'), 'verdict: pass\nfindings_blocking: 0\n');
     plantRoadmapIssue(tmp, 333, '');
 
     const result = json(runNode(claimScript, ['finalize', '--project', 'issue-333', '--keep-open'], tmp));
@@ -8292,9 +8299,20 @@ function testKeepOpenMergeFullChain() {
     fs.writeFileSync(path.join(tmp, 'kaola-workflow', 'issue-860', 'workflow-plan.md'), [
       '<!-- plan_hash: ' + 'c'.repeat(64) + ' -->', '',
       '# Workflow Plan', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set |',
+      '|---|---|---|---|',
+      '| n1 | implementer | — | feature-860.txt |',
+      '| n2 | code-reviewer | n1 | — |',
+      '',
       '## Node Ledger', '', '| id | status |', '|---|---|',
       '| n1 | complete |', '| n2 | complete |', ''
     ].join('\n'));
+    // #522: seed final-validation.md (consumer-mode repo — no package.json → final-validation gate).
+    // Place it in MAIN's .cache now so worktree-finalize copies it to the worktree.
+    const cache860 = path.join(tmp, 'kaola-workflow', 'issue-860', '.cache');
+    fs.mkdirSync(cache860, { recursive: true });
+    fs.writeFileSync(path.join(cache860, 'final-validation.md'), 'verdict: pass\nfindings_blocking: 0\n');
 
     // Roadmap source on the branch (so the keep-open preservation has something to keep on HEAD).
     const wtRoadmapDir = path.join(wt860, 'kaola-workflow', '.roadmap');
@@ -8398,9 +8416,20 @@ function testKeepOpenFinalizeFlagAlias() {
     fs.writeFileSync(path.join(tmp, 'kaola-workflow', 'issue-861', 'workflow-plan.md'), [
       '<!-- plan_hash: ' + 'd'.repeat(64) + ' -->', '',
       '# Workflow Plan', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set |',
+      '|---|---|---|---|',
+      '| n1 | implementer | — | feature-861.txt |',
+      '| n2 | code-reviewer | n1 | — |',
+      '',
       '## Node Ledger', '', '| id | status |', '|---|---|',
       '| n1 | complete |', '| n2 | complete |', ''
     ].join('\n'));
+    // #522: seed final-validation.md (consumer-mode repo — no package.json → final-validation gate).
+    // Place it in MAIN's .cache now so worktree-finalize copies it to the worktree.
+    const cache861 = path.join(tmp, 'kaola-workflow', 'issue-861', '.cache');
+    fs.mkdirSync(cache861, { recursive: true });
+    fs.writeFileSync(path.join(cache861, 'final-validation.md'), 'verdict: pass\nfindings_blocking: 0\n');
 
     const wtRoadmapDir = path.join(wt861, 'kaola-workflow', '.roadmap');
     fs.mkdirSync(wtRoadmapDir, { recursive: true });
@@ -11984,20 +12013,25 @@ function testAdaptiveWorktreeProvisionedE2E() {
     const cacheDir = path.join(projDst, '.cache');
     fs.mkdirSync(cacheDir, { recursive: true });
 
-    // Minimal frozen workflow-plan.md with one node
+    // Minimal frozen workflow-plan.md with one node (table format for parseNodes; impl-test
+    // must be complete so the attribution sweep finds impl-test.txt declared).
     const planContent = [
       '# Workflow Plan — issue #530', '',
       '## Meta', 'labels: enhancement', 'plan_hash: abc123', '',
       '## Nodes', '',
-      '### Node impl-test', '- id: impl-test', '- depends_on: []', '- write_set: impl-test.txt',
-      '- workflow_path: adaptive', '',
+      '| id | role | depends_on | declared_write_set |',
+      '|---|---|---|---|',
+      '| impl-test | implementer | — | impl-test.txt |',
+      '',
       '## Node Ledger', '',
-      '| Node | Status | Started | Completed |',
-      '|------|--------|---------|-----------|',
-      '| impl-test | open | — | — |',
+      '| id | status |',
+      '|---|---|',
+      '| impl-test | complete |',
       ''
     ].join('\n');
     fs.writeFileSync(path.join(projDst, 'workflow-plan.md'), planContent);
+    // #522: seed final-validation.md (consumer-mode repo → final-validation gate).
+    fs.writeFileSync(path.join(cacheDir, 'final-validation.md'), 'verdict: pass\nfindings_blocking: 0\n');
 
     // Step 3: land an impl file in the worktree on the feature branch
     // The worktree is on workflow/issue-530 (created by claim)
