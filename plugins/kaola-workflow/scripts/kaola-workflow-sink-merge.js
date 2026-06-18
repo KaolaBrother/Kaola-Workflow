@@ -1171,6 +1171,13 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
           if (e && e.status === 1) hasStaged = true;
         }
         if (hasStaged) {
+          // #521: the COMMIT-side :(exclude) below is defensive against a state the live --sink flow
+          // cannot currently reach. `git commit -- <ps>` would re-sweep an already-tracked, modified
+          // journal even after an exclude-aware `git add` — but a pre-tracked archive band makes
+          // archiveProjectDir suffix the dest (.archived-<ts>), so no non-receipt change lands in
+          // this pathspec and the commit never fires with a tracked journal. Kept (do NOT drop as
+          // redundant) so the guard still holds if a future change ever modifies a tracked
+          // non-receipt band file at archive_commit. See #521 for the full reachability matrix.
           try {
             execFileSync('git', ['-C', mainRoot, 'commit', '-m', 'chore: archive ' + args.project + ' [sink]', '--', projectPathspec, excludeReceipt, excludeFallback],
               { encoding: 'utf8' });

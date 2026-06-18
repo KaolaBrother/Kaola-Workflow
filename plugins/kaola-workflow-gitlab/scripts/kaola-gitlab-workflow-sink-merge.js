@@ -1055,6 +1055,10 @@ function runSinkTransaction(args, mainRoot, defBranch) {
         let hasStaged = false;
         try { execFileSync('git', ['-C', mainRoot, 'diff', '--cached', '--quiet', '--', ps], { stdio: 'ignore' }); }
         catch (e) { if (e && e.status === 1) hasStaged = true; }
+        // #521: the COMMIT-side :(exclude) is defensive against a state the live --sink flow cannot
+        // currently reach (`git commit -- <ps>` would re-sweep an already-tracked, modified journal,
+        // but a pre-tracked band makes archiveProjectDir suffix the dest so the commit never fires
+        // with a tracked journal). Kept (do NOT drop as redundant). See #521 for the reachability matrix.
         if (hasStaged) { try { execFileSync('git', ['-C', mainRoot, 'commit', '-m', 'chore: archive ' + args.project + ' [sink]', '--', ps, exRcpt, exFb], { encoding: 'utf8' }); } catch (_) {} }
       }
       const archRcptPath = path.join(mainRoot, 'kaola-workflow', 'archive', args.project, '.cache', 'sink-receipt.json');
