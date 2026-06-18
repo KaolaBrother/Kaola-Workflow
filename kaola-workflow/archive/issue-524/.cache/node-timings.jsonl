@@ -1,0 +1,9 @@
+{"node":"n1-design","event":"opened","ts":"2026-06-18T05:21:34.888Z"}
+{"node":"n1-design","event":"closed","ts":"2026-06-18T05:25:14.216Z"}
+{"node":"n2-scout-impl","event":"opened","ts":"2026-06-18T05:25:14.250Z"}
+{"node":"n2-scout-impl","event":"closed","ts":"2026-06-18T05:30:32.690Z"}
+{"node":"n3-review","event":"opened","ts":"2026-06-18T05:30:32.721Z"}
+{"node":"n3-review","event":"closed","ts":"2026-06-18T05:43:36.383Z"}
+{"node":"n4-docs","event":"opened","ts":"2026-06-18T05:43:36.455Z"}
+{"node":"n4-docs","event":"closed","ts":"2026-06-18T05:47:19.038Z"}
+{"node":"n5-finalize","event":"opened","ts":"2026-06-18T05:47:19.069Z"}
