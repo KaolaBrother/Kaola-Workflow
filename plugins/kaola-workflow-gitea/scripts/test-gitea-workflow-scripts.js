@@ -4188,17 +4188,25 @@ function testGiteaAdaptiveNodeOperatorHint445() {
     '#446 gt: route-findings without --json must emit a typed refuse result');
 
   // (d) --summary flag: orient with a missing plan and --json --summary must emit a
-  // one-line "summary:" sentinel, not a full JSON envelope.
-  const summaryRaw = spawnSync(process.execPath, [
-    path.join(__dirname, 'kaola-gitea-workflow-adaptive-node.js'),
-    'orient',
-    '--project', 'nonexistent-gt-445-test',
-    '--json',
-    '--summary'
-  ], { encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
-  const summaryOut = summaryRaw.stdout.trim();
-  assert.ok(summaryOut.startsWith('summary:'),
-    '#446 gt: --summary mode must emit a one-line "summary:" sentinel, got: ' + summaryOut);
+  // one-line "summary:" sentinel, not a full JSON envelope. #527: orient is documented
+  // read-only but materializes kaola-workflow/<project>/.cache/orient-envelope.json even
+  // for a nonexistent project. Run the spawn in a $TMPDIR-rooted cwd so that scratch dir
+  // lands in tmp (cleaned in the finally below), never leaking into the repo working tree.
+  const summaryRoot = tempRoot('kw-gt-orient-summary-');
+  try {
+    const summaryRaw = spawnSync(process.execPath, [
+      path.join(__dirname, 'kaola-gitea-workflow-adaptive-node.js'),
+      'orient',
+      '--project', 'nonexistent-gt-445-test',
+      '--json',
+      '--summary'
+    ], { cwd: summaryRoot, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
+    const summaryOut = summaryRaw.stdout.trim();
+    assert.ok(summaryOut.startsWith('summary:'),
+      '#446 gt: --summary mode must emit a one-line "summary:" sentinel, got: ' + summaryOut);
+  } finally {
+    fs.rmSync(summaryRoot, { recursive: true, force: true });
+  }
 
   console.log('testGiteaAdaptiveNodeOperatorHint445 (#445/#446): PASSED');
 }
