@@ -550,12 +550,12 @@ shipped in #405 are retired — see `docs/decisions/D-451-01.md`.
 
 Current official release versions:
 
-- Claude Code command install, GitHub edition: `6.6.1`
-- Claude Code command install, GitLab edition: `6.6.1`
-- Claude Code command install, Gitea edition: `6.6.1`
-- Codex `kaola-workflow` plugin manifest: `4.6.1`
-- Codex `kaola-workflow-gitlab` plugin manifest: `4.6.1`
-- Codex `kaola-workflow-gitea` plugin manifest: `4.6.1`
+- Claude Code command install, GitHub edition: `6.6.2`
+- Claude Code command install, GitLab edition: `6.6.2`
+- Claude Code command install, Gitea edition: `6.6.2`
+- Codex `kaola-workflow` plugin manifest: `4.6.2`
+- Codex `kaola-workflow-gitlab` plugin manifest: `4.6.2`
+- Codex `kaola-workflow-gitea` plugin manifest: `4.6.2`
 
 The root `package.json` version is the official repository and Claude Code
 command-install release version. The GitLab Claude command pack follows that
