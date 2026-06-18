@@ -1,0 +1,10 @@
+{"node":"n1-finalize-gate","event":"opened","ts":"2026-06-18T00:25:19.980Z"}
+{"node":"n1-finalize-gate","event":"closed","ts":"2026-06-18T01:51:48.098Z"}
+{"node":"n2-finalize-prose","event":"opened","ts":"2026-06-18T01:51:48.142Z"}
+{"node":"n2-finalize-prose","event":"closed","ts":"2026-06-18T02:13:56.582Z"}
+{"node":"n3-review","event":"opened","ts":"2026-06-18T02:13:56.628Z"}
+{"node":"n3-review","event":"closed","ts":"2026-06-18T02:25:04.004Z"}
+{"node":"n4-docs","event":"opened","ts":"2026-06-18T02:25:04.066Z"}
+{"node":"n4-docs","event":"closed","ts":"2026-06-18T02:30:10.616Z"}
+{"node":"n5-finalize","event":"opened","ts":"2026-06-18T02:30:10.651Z"}
+{"node":"n5-finalize","event":"closed","ts":"2026-06-18T02:31:39.615Z"}
