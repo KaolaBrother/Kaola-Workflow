@@ -8,3 +8,7 @@ kaola-workflow/.tickers/
 .kw-env
 kaola-workflow/issue-55/
 .kw/
+# Repo-root transient cache (release-receipt.jsonl, ad-hoc run-chains receipts written to
+# cwd/.cache). Anchored to the repo root so the tracked per-project / archive
+# kaola-workflow/**/.cache/ evidence is unaffected.
+/.cache/
