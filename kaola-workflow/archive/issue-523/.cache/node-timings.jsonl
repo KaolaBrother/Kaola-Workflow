@@ -1,0 +1,16 @@
+{"node":"n1-survey","event":"opened","ts":"2026-06-18T03:34:21.682Z"}
+{"node":"n1-survey","event":"evidence","ts":"2026-06-18T03:48:53.595Z"}
+{"node":"n1-survey","event":"closed","ts":"2026-06-18T03:48:59.912Z"}
+{"node":"n2-profile","event":"opened","ts":"2026-06-18T03:48:59.954Z"}
+{"node":"n2-profile","event":"closed","ts":"2026-06-18T04:12:24.655Z"}
+{"node":"n3-assume","event":"opened","ts":"2026-06-18T04:12:24.789Z"}
+{"node":"n3-assume","event":"evidence","ts":"2026-06-18T04:16:09.183Z"}
+{"node":"n3-assume","event":"closed","ts":"2026-06-18T04:16:09.876Z"}
+{"node":"n4-falsify","event":"opened","ts":"2026-06-18T04:16:09.939Z"}
+{"node":"n4-falsify","event":"closed","ts":"2026-06-18T04:29:54.263Z"}
+{"node":"n5-converge","event":"opened","ts":"2026-06-18T04:29:54.418Z"}
+{"node":"n5-converge","event":"evidence","ts":"2026-06-18T04:32:57.958Z"}
+{"node":"n5-converge","event":"closed","ts":"2026-06-18T04:32:58.517Z"}
+{"node":"n6-finalize","event":"opened","ts":"2026-06-18T04:32:58.608Z"}
+{"node":"n6-finalize","event":"evidence","ts":"2026-06-18T04:34:34.593Z"}
+{"node":"n6-finalize","event":"closed","ts":"2026-06-18T04:34:35.146Z"}
