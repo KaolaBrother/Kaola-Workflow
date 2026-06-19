@@ -7145,6 +7145,21 @@ function rtHarness(initialFiles, opts) {
   assert(dNull.agent_type === 'code-reviewer', 'D451-DISPATCH-EFFORT: null-model agent_type equals base role');
   assert(dNull.codex_reasoning_effort === null, 'D451-DISPATCH-EFFORT: null-model codex_reasoning_effort is null');
   assert(dNull.codex_reasoning_effort_source === 'role_default', 'D451-DISPATCH-EFFORT: null-model codex_reasoning_effort_source is role_default');
+
+  // #382-opencode: the opencode effort twin (dispatchEffortOpencode). No provider in ctx →
+  // role_default (the agent's configured variant wins), so the cases above all carry null.
+  assert(dOpus.opencode_variant === null && dOpus.opencode_variant_source === 'role_default',
+    'D451-DISPATCH-EFFORT: opus (no provider) opencode_variant is null/role_default');
+  assert(dSonnet.opencode_variant === null && dSonnet.opencode_variant_source === 'role_default',
+    'D451-DISPATCH-EFFORT: sonnet (no provider) opencode_variant is null/role_default');
+  // Case 4: opus + opencode provider → the provider's TOP effort variant (mapTier).
+  const dOc = buildDispatch(opusNode, Object.assign({}, opusCtx, { opencode_provider: 'zhipuai-coding-plan' }));
+  assert(dOc.opencode_variant === 'max' && dOc.opencode_variant_source === 'planner_model',
+    'D451-DISPATCH-EFFORT: opus + zhipu provider → opencode_variant max (top), got ' + JSON.stringify(dOc.opencode_variant));
+  // Case 5: sonnet + opencode provider → the provider's SECOND effort variant.
+  const dOai = buildDispatch(sonnetNode, Object.assign({}, sonnetCtx, { opencode_provider: 'openai' }));
+  assert(dOai.opencode_variant === 'high' && dOai.opencode_variant_source === 'planner_model',
+    'D451-DISPATCH-EFFORT: sonnet + openai provider → opencode_variant high (second), got ' + JSON.stringify(dOai.opencode_variant));
 }
 
 // ===========================================================================

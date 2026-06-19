@@ -65,6 +65,83 @@ function dispatchEffort(model) {
     : { codex_reasoning_effort: null, codex_reasoning_effort_source: 'role_default' };
 }
 
+// #382-opencode: the GENERAL tier→effort mapping for provider-open runtimes (opencode).
+// Claude Code's {opus, sonnet} are reasoning-weight RANKS, not models; opencode is
+// provider-open, so the migration is a two-level compose that never assumes a provider:
+//   Level 1 (fixed):        opus → 'top' rank · sonnet → 'second' rank.
+//   Level 2 (per provider): rank → that provider's effort variant (top = highest,
+//                           second = 2nd-highest), per opencode's built-in variants.
+//   mapTier(tier, provider) = PROVIDER_EFFORT_TABLE[provider][ TIER_RANK[tier] ].
+// This is the provider-open generalization of dispatchEffort() above (the Codex-fixed
+// opus→xhigh translator). NODE_MODEL_TIERS stays the portable plan vocabulary; this
+// table only resolves a tier to a concrete effort at RUNTIME. Adaptive selection: the
+// planner still authors opus/sonnet per node by reasoning weight (#382); the runtime
+// resolves the effort per provider via mapTier.
+//   provider          opus (top)      sonnet (second)
+//   anthropic         max             high
+//   openai            xhigh           high
+//   google            high            low
+//   z.ai / zhipu GLM  max             high        ← GLM-5.2 ships High + Max
+// An unknown provider resolves to null (the runtime degrades to no effort pin). Pure
+// data + pure helpers (no I/O) — qualifies for this ×4 byte-identical drift anchor.
+const TIER_RANK = Object.freeze({ opus: 'top', sonnet: 'second' });
+
+// Each entry: { top: {variant, options}, second: {variant, options} }. `variant` is the
+// opencode variant NAME (referenced by agent.<role>.variant); `options` is the provider
+// model-options payload (passed through to the provider, e.g. reasoningEffort / thinking).
+const PROVIDER_EFFORT_TABLE = Object.freeze({
+  anthropic: Object.freeze({
+    top:    { variant: 'max',  options: { thinking: { type: 'enabled', budgetTokens: 32000 } } },
+    second: { variant: 'high', options: { thinking: { type: 'enabled', budgetTokens: 16000 } } },
+  }),
+  openai: Object.freeze({
+    top:    { variant: 'xhigh', options: { reasoningEffort: 'xhigh' } },
+    second: { variant: 'high',  options: { reasoningEffort: 'high' } },
+  }),
+  google: Object.freeze({
+    top:    { variant: 'high', options: { reasoningEffort: 'high' } },
+    second: { variant: 'low',  options: { reasoningEffort: 'low' } },
+  }),
+  'zhipuai-coding-plan': Object.freeze({
+    top:    { variant: 'max',  options: { reasoningEffort: 'max' } },
+    second: { variant: 'high', options: { reasoningEffort: 'high' } },
+  }),
+});
+
+// Resolve a provider id to its effort profile. Exact id first, then alias regexes so
+// common variants (zai, zhipu, glm, claude, gpt, gemini…) resolve without an exact key.
+function effortForProvider(providerId) {
+  const id = String(providerId || '');
+  if (PROVIDER_EFFORT_TABLE[id]) return PROVIDER_EFFORT_TABLE[id];
+  const lo = id.toLowerCase();
+  if (/zhipu|^zai|z-?ai|glm/.test(lo)) return PROVIDER_EFFORT_TABLE['zhipuai-coding-plan'];
+  if (/anthropic|claude/.test(lo)) return PROVIDER_EFFORT_TABLE.anthropic;
+  if (/openai|gpt|codex/.test(lo)) return PROVIDER_EFFORT_TABLE.openai;
+  if (/google|gemini/.test(lo)) return PROVIDER_EFFORT_TABLE.google;
+  return null;
+}
+
+// The general mapper: Claude tier → {variant, options} for a provider, or null.
+// `tier` is a NODE_MODEL_TIERS token (opus|sonnet); unknown tier / provider → null.
+function mapTier(tier, providerId) {
+  const rank = TIER_RANK[String(tier || '').toLowerCase()];
+  if (!rank) return null;
+  const profile = effortForProvider(providerId);
+  if (!profile) return null;
+  return profile[rank];
+}
+
+// The opencode dispatch twin of dispatchEffort(): emits the resolved opencode variant for
+// a node's model tier under a provider, so the executor/plan-run surface carries the
+// intended per-node effort. null tier / unknown provider → role_default (the agent's
+// configured variant wins), mirroring dispatchEffort's sonnet/null branch.
+function dispatchEffortOpencode(model, providerId) {
+  const mapped = mapTier(model, providerId);
+  return mapped
+    ? { opencode_variant: mapped.variant, opencode_variant_source: 'planner_model' }
+    : { opencode_variant: null, opencode_variant_source: 'role_default' };
+}
+
 // Caps (verified first-party): FANOUT_CAP default 4 (env KAOLA_FANOUT_CAP);
 // LOOP_CAP static loop bound;
 // TEST_THRASH_LIMIT >= 3 consecutive failing cycles on the same test (fast.md:64).
@@ -584,7 +661,12 @@ module.exports = {
   LEDGER_HEADING,
   LEDGER_STATUSES,
   NODE_MODEL_TIERS,
+  TIER_RANK,
+  PROVIDER_EFFORT_TABLE,
   dispatchEffort,
+  effortForProvider,
+  mapTier,
+  dispatchEffortOpencode,
   DEFAULT_FANOUT_CAP,
   DEFAULT_FANOUT_CAP_READONLY,
   RUNNING_SET_NAME,

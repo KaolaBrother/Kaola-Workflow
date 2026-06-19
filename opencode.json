@@ -1,0 +1,22 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "default_agent": "build"
+
+  // Kaola-Workflow · opencode edition — TWO model tiers:
+  //   普通模型 (standard tier)  → top-level "model".
+  //   推理模型 (reasoning tier) → "agent.<role>.model" overrides for
+  //                               the reasoning roles: planner, synthesizer, workflow-planner.
+  // DEFAULT: nothing is pinned, so BOTH tiers inherit the model you are
+  // already using in opencode. To pin a tier, uncomment & set it below
+  // (any provider/model works, e.g. "anthropic/claude-sonnet-4-5",
+  // "openai/gpt-4o", "google/gemini-2.5-pro"). This file is user-owned:
+  // re-running `node scripts/sync-opencode-edition.js --write` regenerates
+  // agents/commands but preserves your model choices here.
+  // "model": "<inherits your opencode default>",
+  // Pin the reasoning tier only to put it on a different model:
+  // "agent": {
+  //   "planner": { "model": "<inherits your opencode default>" },
+  //   "synthesizer": { "model": "<inherits your opencode default>" },
+  //   "workflow-planner": { "model": "<inherits your opencode default>" }
+  // }
+}

@@ -42,7 +42,7 @@ const taskMirrorPath = path.join(__dirname, TASK_MIRROR);
 
 // #360: the LEDGER-SCOPED durable consent-halt probe (fence-aware). adaptive-schema keeps the
 // same filename across every edition (byte-identical ×4), so this require is NOT forge-renamed.
-const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, resolveFanoutCapReadonly, resolveLaneContainment, refuse, WRITE_SET_OVERFLOW_SUBTYPES, dispatchEffort, parseNodeVerdict, MERGE_CONFLICT_REPAIR_LIMIT } = require('./kaola-workflow-adaptive-schema');
+const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, resolveFanoutCapReadonly, resolveLaneContainment, refuse, WRITE_SET_OVERFLOW_SUBTYPES, dispatchEffort, dispatchEffortOpencode, parseNodeVerdict, MERGE_CONFLICT_REPAIR_LIMIT } = require('./kaola-workflow-adaptive-schema');
 
 // ---------------------------------------------------------------------------
 // OPERATOR_HINT_REGISTRY (#445 / D-445-01 §1-3) — per-aggregator map of typed
@@ -1052,6 +1052,10 @@ function buildDispatch(nodeInfo, context) {
     guards:             deriveGuards(nodeInfo),
     agent_type:         nodeInfo.role,
     ...dispatchEffort(nodeInfo.model),
+    // #382-opencode: the opencode effort twin — resolves the per-node tier to a provider
+    // effort variant (opus→top, sonnet→second) when ctx.opencode_provider is set (opencode
+    // runtime). null/absent provider → role_default (the agent's configured variant wins).
+    ...dispatchEffortOpencode(nodeInfo.model, ctx.opencode_provider),
   };
   if (ctx.goal_line != null && String(ctx.goal_line).trim() !== '') {
     d.goal_line = String(ctx.goal_line);
