@@ -47,6 +47,15 @@ Minimize **synergy** (coupling to systems the workflow does not own); maximize *
 - **Silent by default** — do not mention CI/CD in plans, prose, finalize output, roadmap, or suggestions **unless the user clearly states CI/CD is mandated** for that context. Default posture is CI/CD *absent*, not "optional"; only an explicit mandate flips it on.
 - **Accuracy still comes from inside** — this does not weaken precedence #1. Keep the internal self-contained gates (adversarial verify, fail-closed barriers, gate-role nodes, the four `npm` chains, `simulate-workflow-walkthrough.js`); reject only the *external pipeline as a gate*. Same direction as the consumer finalize gate (push validation inward to agent checks, retire external chain/CI receipts — #475/#464).
 
+### Adaptive Is the Default; Don't Make the Agent Pick a Path (#538)
+
+The orchestrator should not spend tokens or wall-clock deciding between adaptive / fast / full on every run. Adaptive just runs.
+
+- **Adaptive is the unconditional default.** No on/off switch; nothing to deliberate. A default install has no path-selection step.
+- **`fast` and `full` are install-time opt-ins** (`--with-fast` / `--with-full`), not installed by default. Once installed they fire only on an explicit user keyword ("fast path" / "full review").
+- **No automatic fallback between paths.** Adaptive never silently downgrades to fast or full. When it can't proceed: bounded planner repair → discard+restart → stop+ask. The only fallbacks are *inside* adaptive (repair, in-place posture).
+- **Switch axis flips:** retire `enable_adaptive`; the only switch is which extra paths are installed. Re-install preserves what's installed; uninstall→reinstall is the reset to adaptive-only.
+
 ## Key Scripts
 - `scripts/kaola-workflow-claim.js` — claim, release/discard, status, patch-branch, watch-pr, bootstrap/startup, pick-next, resume, finalize, worktree-status, worktree-finalize subcommands; explicit-target validation via `claimExplicitTarget()` helper
 - `scripts/simulate-workflow-walkthrough.js` — integration test suite (hand-rolled assert, no framework)
