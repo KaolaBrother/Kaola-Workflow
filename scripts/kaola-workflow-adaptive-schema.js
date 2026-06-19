@@ -131,12 +131,37 @@ function mapTier(tier, providerId) {
   return profile[rank];
 }
 
+// #537 Surface 2: PURE provider resolver for the opencode dispatch twin. buildDispatch calls
+// dispatchEffortOpencode(model, ctx.opencode_provider), but NO runtime caller ever populates
+// ctx.opencode_provider — so a declared tier silently resolved to role_default. The active
+// opencode provider is supplied here from KAOLA_OPENCODE_INHERIT_MODEL (the established
+// inherited-model env, "provider/model" form — the same value sync-opencode-edition.js's
+// detectInheritModel()/parseModelProvider() consume). Splitting on the first '/' yields the
+// bare provider id mapTier()/effortForProvider() expect. env defaults to process.env so the
+// real runtime 2-arg call resolves; tests pass a controlled env to stay hermetic. null/'' →
+// null (so the UNSET case stays role_default and claude/codex are behavior-inert — they
+// consume dispatchEffort/the codex twin, never this function). No fs / no forge-CLI / no
+// sibling-path: the file's purity contract is intact.
+const OPENCODE_PROVIDER_ENV = 'KAOLA_OPENCODE_INHERIT_MODEL';
+function resolveOpencodeProvider(env) {
+  const src = env || process.env;
+  const raw = String((src && src[OPENCODE_PROVIDER_ENV]) || '').trim();
+  if (!raw) return null;
+  const i = raw.indexOf('/');
+  return i <= 0 ? raw : raw.slice(0, i);
+}
+
 // The opencode dispatch twin of dispatchEffort(): emits the resolved opencode variant for
 // a node's model tier under a provider, so the executor/plan-run surface carries the
 // intended per-node effort. null tier / unknown provider → role_default (the agent's
-// configured variant wins), mirroring dispatchEffort's sonnet/null branch.
-function dispatchEffortOpencode(model, providerId) {
-  const mapped = mapTier(model, providerId);
+// configured variant wins), mirroring dispatchEffort's sonnet/null branch. When no provider
+// is passed, the active provider is PURE-resolved from KAOLA_OPENCODE_INHERIT_MODEL (see
+// resolveOpencodeProvider) — the gap closed by #537 Surface 2: the runtime caller never
+// populated ctx.opencode_provider, so a declared tier now still reaches a concrete variant.
+function dispatchEffortOpencode(model, providerId, env) {
+  let pid = providerId;
+  if (pid == null || String(pid).trim() === '') pid = resolveOpencodeProvider(env);
+  const mapped = mapTier(model, pid);
   return mapped
     ? { opencode_variant: mapped.variant, opencode_variant_source: 'planner_model' }
     : { opencode_variant: null, opencode_variant_source: 'role_default' };

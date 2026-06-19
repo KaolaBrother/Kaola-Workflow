@@ -333,6 +333,63 @@ for (const target of emittedCommandTargets) {
 }
 
 // ---------------------------------------------------------------------------
+// S2 (issue #537): neutral tier labels — no Claude-tier-name leak at the opencode
+// DISPLAYED surface (Surface 1). The leak sources are generator string constants
+// ONLY — OPENCODE_BADGE_BLOCK's `mapTier` line, the three transformCommandBody
+// rewrite strings (the "opus-tier"/"sonnet-tier" labels), and opencodeAgentSuffix.
+// It is NOT the canonical command/agent bodies: their "Opus" MODEL-name mentions
+// (e.g. the workflow-planner "(Opus)" and the "Opus-floor synthesizer") are verbatim
+// canonical prose outside this node's write set, and NOT tier-label leaks. So the
+// no-leak check is SECTION-scoped to the badge block + the unambiguous opus-tier/
+// sonnet-tier rewrite markers (canonical prose never uses those) — the #534
+// no-over-broad-regex discipline. The canonical NODE_MODEL_TIERS {opus,sonnet}
+// stays the cross-edition internal token (untouched).
+// ---------------------------------------------------------------------------
+{
+  // Extract the `## Effort Variant Resolution` badge block (heading line through
+  // the line before the next heading) — the Surface-1 locus. null when absent.
+  const badgeSection = body => {
+    const lines = body.split('\n');
+    let start = -1;
+    for (let i = 0; i < lines.length; i++) {
+      if (/^##\s+Effort Variant Resolution\s*$/.test(lines[i])) { start = i; break; }
+    }
+    if (start < 0) return null;
+    const sec = [];
+    for (let i = start; i < lines.length; i++) {
+      if (i > start && /^#{1,6}\s/.test(lines[i])) break;
+      sec.push(lines[i]);
+    }
+    return sec.join('\n');
+  };
+  for (const file of canonCommands) {
+    const body = read('.opencode/command/' + file);
+    // (a) The Effort Variant Resolution section names tiers by ROLE, never by the
+    //     Claude nouns opus/sonnet (the mapTier-line leak lived here).
+    const sec = badgeSection(body);
+    if (sec !== null) {
+      assert(!/\bopus\b/i.test(sec) && !/\bsonnet\b/i.test(sec),
+        'S2[' + file + ']: Effort Variant Resolution section has no Claude-tier-name (opus/sonnet) leak');
+      assert(/reasoning-tier/.test(sec) && /standard-tier/.test(sec),
+        'S2[' + file + ']: Effort Variant Resolution section uses neutral tier labels (reasoning-tier/standard-tier)');
+    }
+    // (b) The three transformCommandBody rewrites emit tier labels in dispatch prose
+    //     OUTSIDE the section; "opus-tier"/"sonnet-tier" are unambiguous generator
+    //     leak markers (canonical prose never produces them).
+    assert(!/\bopus-tier\b/i.test(body) && !/\bsonnet-tier\b/i.test(body),
+      'S2[' + file + ']: no opus-tier/sonnet-tier leak in rewrite prose');
+  }
+  // (c) The planner agent SUFFIX (opencode-only addition) must be neutral. The
+  //     planner's verbatim canonical body legitimately keeps {opus,sonnet} as the
+  //     cross-edition model-column vocabulary, so assert on the suffix in isolation.
+  const suffix = sync.opencodeAgentSuffix('workflow-planner');
+  assert(!/\bopus\b/i.test(suffix) && !/\bsonnet\b/i.test(suffix),
+    'S2: workflow-planner opencodeAgentSuffix carries no Claude-tier-name (opus/sonnet) leak');
+  assert(/reasoning tier|standard tier/i.test(suffix),
+    'S2: workflow-planner opencodeAgentSuffix names tiers by role (neutral labels)');
+}
+
+// ---------------------------------------------------------------------------
 // A10: hooks — every runtime-neutral hook script is deployed under
 // .opencode/hooks/ byte-identical to canonical hooks/, so the adapter plugin and
 // the canonical edition share ONE source of truth (no logic drift).

@@ -43,7 +43,7 @@ tiers as reasoning-EFFORT VARIANTS of the inherited model): reasoning-tier roles
 model's TOP effort variant, standard-tier roles its SECOND (e.g. max / high on GLM-5.2).
 Dispatch a role with the `task` tool using `subagent_type: "<role>"`; do NOT pass a
 per-call `model=` argument — the role's configured variant already selects the effort.
-`mapTier(tier, provider)` resolves the variant: opus → top, sonnet → second.
+`mapTier(tier, provider)` resolves the variant: the reasoning tier → the TOP effort variant, the standard tier → its SECOND.
 
 ## Front end: claim + author (the `workflow-planner` subagent)
 
@@ -90,7 +90,7 @@ the validator `--json` as a self-check, and RETURNS a structured summary; it nev
 
 **Planner-first control boundary (issue #287).** The main session performs ONLY the allowed non-design preflight above (read repo/session rules, confirm target issue, authoring-allowed switch check, git freshness, non-design target availability), then dispatches `workflow-planner` immediately as the first issue-specific action. The main session MUST NOT pre-author the `## Nodes` DAG, choose role sequence/deps/shapes/write-sets, or pass a mandatory full DAG / `AUTHOR EXACTLY` / `do not redesign` prompt to the planner — the adaptive front-end design is the planner's to own, not the main session's. Doing so earns a typed refusal: `planner_control_boundary_violation`. The ONLY exception is in the bounded unfrozen-plan validator-repair loop (after `handoff_status: plan_invalid` on an UNFROZEN plan): the orchestrator MAY re-dispatch the planner with the verbatim validator errors + the prior plan as repair context, because the planner already owns that unfrozen draft.
 
-Dispatch the role via `subagent_type`; its effort variant resolves centrally from `opencode.json` (opus-tier → the model's TOP effort, sonnet-tier → its SECOND). Never pass a per-call `model=`.
+Dispatch the role via `subagent_type`; its effort variant resolves centrally from `opencode.json` (reasoning-tier → the model's TOP effort, standard-tier → its SECOND). Never pass a per-call `model=`.
 
 ```text
 task(

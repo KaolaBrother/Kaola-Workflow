@@ -241,7 +241,7 @@ tiers as reasoning-EFFORT VARIANTS of the inherited model): reasoning-tier roles
 model's TOP effort variant, standard-tier roles its SECOND (e.g. max / high on GLM-5.2).
 Dispatch a role with the `task` tool using `subagent_type: "<role>"`; do NOT pass a
 per-call `model=` argument — the role's configured variant already selects the effort.
-`mapTier(tier, provider)` resolves the variant: opus → top, sonnet → second.
+`mapTier(tier, provider)` resolves the variant: the reasoning tier → the TOP effort variant, the standard tier → its SECOND.
 
 ## Validation Delegation Policy
 
@@ -426,7 +426,7 @@ kaola-workflow/{project}/.cache/final-validation-fix-{n}.md
 
 Re-run the failed command after each routed fix.
 
-Dispatch each such role via `subagent_type`; its effort variant resolves centrally from `opencode.json` (opus-tier roles use the model's TOP effort, sonnet-tier its SECOND). Never pass a per-call `model=`.
+Dispatch each such role via `subagent_type`; its effort variant resolves centrally from `opencode.json` (reasoning-tier roles use the model's TOP effort, standard-tier its SECOND). Never pass a per-call `model=`.
 
 ## Step 2 - Acceptance Check
 

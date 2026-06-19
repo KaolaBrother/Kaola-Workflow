@@ -28,7 +28,7 @@ tiers as reasoning-EFFORT VARIANTS of the inherited model): reasoning-tier roles
 model's TOP effort variant, standard-tier roles its SECOND (e.g. max / high on GLM-5.2).
 Dispatch a role with the `task` tool using `subagent_type: "<role>"`; do NOT pass a
 per-call `model=` argument — the role's configured variant already selects the effort.
-`mapTier(tier, provider)` resolves the variant: opus → top, sonnet → second.
+`mapTier(tier, provider)` resolves the variant: the reasoning tier → the TOP effort variant, the standard tier → its SECOND.
 
 ## Resume Detection
 

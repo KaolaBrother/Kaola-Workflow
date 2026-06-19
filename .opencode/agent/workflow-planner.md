@@ -440,9 +440,9 @@ return the packet verbatim — the orchestrator drives the bounded repair loop.
 
 ## opencode effort tiers (mapTier) — adaptive effort selection
 
-On the opencode runtime your per-node `model` choice ({opus, sonnet}) is realized as a
-reasoning-EFFORT VARIANT of the inherited model via `mapTier(tier, provider)`: `opus` → the
-provider's TOP effort variant, `sonnet` → its SECOND (max/high on GLM-5.2 and Anthropic;
+On the opencode runtime your per-node `model` choice (the two Kaola tiers) is realized as a
+reasoning-EFFORT VARIANT of the inherited model via `mapTier(tier, provider)`: the reasoning tier
+→ the provider's TOP effort variant, the standard tier → its SECOND (max/high on GLM-5.2 and Anthropic;
 xhigh/high on OpenAI; high/low on Google). opencode applies the variant per-ROLE (via
 `agent.<role>.variant` in opencode.json) — there is NO per-call variant override — so your
 tier selection is realized through ROLE CHOICE: a reasoning-heavy node uses a top-tier role

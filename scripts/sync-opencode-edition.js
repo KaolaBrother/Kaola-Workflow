@@ -122,9 +122,9 @@ function opencodeAgentSuffix(agentName) {
     '',
     '## opencode effort tiers (mapTier) — adaptive effort selection',
     '',
-    'On the opencode runtime your per-node `model` choice ({opus, sonnet}) is realized as a',
-    "reasoning-EFFORT VARIANT of the inherited model via `mapTier(tier, provider)`: `opus` → the",
-    "provider's TOP effort variant, `sonnet` → its SECOND (max/high on GLM-5.2 and Anthropic;",
+    'On the opencode runtime your per-node `model` choice (the two Kaola tiers) is realized as a',
+    'reasoning-EFFORT VARIANT of the inherited model via `mapTier(tier, provider)`: the reasoning tier',
+    "→ the provider's TOP effort variant, the standard tier → its SECOND (max/high on GLM-5.2 and Anthropic;",
     'xhigh/high on OpenAI; high/low on Google). opencode applies the variant per-ROLE (via',
     '`agent.<role>.variant` in opencode.json) — there is NO per-call variant override — so your',
     "tier selection is realized through ROLE CHOICE: a reasoning-heavy node uses a top-tier role",
@@ -177,7 +177,7 @@ const OPENCODE_BADGE_BLOCK = [
   "model's TOP effort variant, standard-tier roles its SECOND (e.g. max / high on GLM-5.2).",
   'Dispatch a role with the `task` tool using `subagent_type: "<role>"`; do NOT pass a',
   "per-call `model=` argument — the role's configured variant already selects the effort.",
-  '`mapTier(tier, provider)` resolves the variant: opus → top, sonnet → second.',
+  '`mapTier(tier, provider)` resolves the variant: the reasoning tier → the TOP effort variant, the standard tier → its SECOND.',
   '',
 ].join('\n');
 
@@ -203,14 +203,14 @@ function transformCommandBody(body) {
   // that the role selects the variant and dispatch.model records the planner's tier intent only.
   text = text.replace(
     /Pass `model=dispatch\.model` \(the `model` field from `dispatch`, e\.g\.\s*`model="\{[A-Z_]+_MODEL\}"`\) and `dispatch\.nonce`/g,
-    "The role's effort variant is applied centrally per opencode.json (opus-tier roles → the model's TOP effort, sonnet-tier → its SECOND); `dispatch.model` records the tier intent only. Pass `dispatch.nonce`"
+    "The role's effort variant is applied centrally per opencode.json (reasoning-tier roles → the model's TOP effort, standard-tier roles → its SECOND); `dispatch.model` records the tier intent only. Pass `dispatch.nonce`"
   );
   // Standalone "You MUST pass model="{ROLE_MODEL}" … do not omit the model= line." dispatch
   // instructions that sit OUTSIDE the badge block (e.g. adapt's planner-dispatch note). The
   // badge-block rewrite handles the in-block ones; this catches the survivors.
   text = text.replace(
     /You MUST pass[^.]*?do not omit\s+the `model=` line\./g,
-    "Dispatch the role via `subagent_type`; its effort variant resolves centrally from `opencode.json` (opus-tier → the model's TOP effort, sonnet-tier → its SECOND). Never pass a per-call `model=`."
+    "Dispatch the role via `subagent_type`; its effort variant resolves centrally from `opencode.json` (reasoning-tier → the model's TOP effort, standard-tier → its SECOND). Never pass a per-call `model=`."
   );
   // review-fix prose (phase4/phase5/finalize): "For every …, include the explicit model=
   // parameter … as documented above — never omit it" references the badge (now replaced to
@@ -218,7 +218,7 @@ function transformCommandBody(body) {
   // Rewrite the whole sentence to the opencode variant guidance.
   text = text.replace(
     /For every[^.]*?include\s+the\s+explicit\s+`model=`\s+parameter\s+in\s+the\s+`Agent\(\.\.\.\)`\s+call\s+exactly\s+as\s+documented\s+above\s+—\s+never\s+omit\s+it\./g,
-    "Dispatch each such role via `subagent_type`; its effort variant resolves centrally from `opencode.json` (opus-tier roles use the model's TOP effort, sonnet-tier its SECOND). Never pass a per-call `model=`."
+    "Dispatch each such role via `subagent_type`; its effort variant resolves centrally from `opencode.json` (reasoning-tier roles use the model's TOP effort, standard-tier its SECOND). Never pass a per-call `model=`."
   );
   // Dispatch-card `Agent(` openings → the opencode `task` form. Scoped to the literal opening
   // (a line that is exactly `Agent(` immediately followed by an indented `subagent_type=` line)

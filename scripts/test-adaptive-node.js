@@ -54,7 +54,7 @@ const {
   // #463 Slice 4/5: synthesizer execution (direct-call tests for the deferred-tier conflict bail)
   synthesizeLevel,
 } = require('./kaola-workflow-adaptive-node');
-const { RUNNING_SET_NAME, MERGE_CONFLICT_REPAIR_LIMIT } = require('./kaola-workflow-adaptive-schema');
+const { RUNNING_SET_NAME, MERGE_CONFLICT_REPAIR_LIMIT, dispatchEffortOpencode } = require('./kaola-workflow-adaptive-schema');
 const { readDurableConsentHalt, locateSection } = require('./kaola-workflow-adaptive-schema');
 
 const {
@@ -7160,6 +7160,48 @@ function rtHarness(initialFiles, opts) {
   const dOai = buildDispatch(sonnetNode, Object.assign({}, sonnetCtx, { opencode_provider: 'openai' }));
   assert(dOai.opencode_variant === 'high' && dOai.opencode_variant_source === 'planner_model',
     'D451-DISPATCH-EFFORT: sonnet + openai provider → opencode_variant high (second), got ' + JSON.stringify(dOai.opencode_variant));
+
+  // #537 Surface 2: the runtime buildDispatch call is dispatchEffortOpencode(model, ctx.opencode_provider)
+  // and NO caller ever populates ctx.opencode_provider — so a declared tier silently resolved to
+  // role_default. The schema now PURE-resolves the active provider from KAOLA_OPENCODE_INHERIT_MODEL
+  // (the established opencode inherited-model env, "provider/model" form) when no provider is passed,
+  // so a declared tier reaches a CONCRETE effort variant. Backward-compat: env UNSET + no provider
+  // stays null/role_default (cases 1-3 above remain valid; claude/codex are behavior-inert).
+
+  // Case 6 (direct, opus): env-resolved provider → concrete TOP variant, source reflects resolution.
+  const rOpusEnv = dispatchEffortOpencode('opus', null, { KAOLA_OPENCODE_INHERIT_MODEL: 'zhipuai-coding-plan/glm-5.2' });
+  assert(rOpusEnv.opencode_variant === 'max',
+    'D451-DISPATCH-EFFORT: opus + env-resolved zhipu provider → opencode_variant max, got ' + JSON.stringify(rOpusEnv.opencode_variant));
+  assert(rOpusEnv.opencode_variant_source !== 'role_default',
+    'D451-DISPATCH-EFFORT: opus + env-resolved provider source is NOT role_default, got ' + JSON.stringify(rOpusEnv.opencode_variant_source));
+
+  // Case 7 (direct, sonnet): env-resolved provider → concrete SECOND variant.
+  const rSonnetEnv = dispatchEffortOpencode('sonnet', null, { KAOLA_OPENCODE_INHERIT_MODEL: 'openai/gpt-5' });
+  assert(rSonnetEnv.opencode_variant === 'high',
+    'D451-DISPATCH-EFFORT: sonnet + env-resolved openai provider → opencode_variant high, got ' + JSON.stringify(rSonnetEnv.opencode_variant));
+  assert(rSonnetEnv.opencode_variant_source !== 'role_default',
+    'D451-DISPATCH-EFFORT: sonnet + env-resolved provider source is NOT role_default, got ' + JSON.stringify(rSonnetEnv.opencode_variant_source));
+
+  // Case 8 (backward-compat): env UNSET + no provider → unchanged null/role_default.
+  const rNone = dispatchEffortOpencode('opus', null, {});
+  assert(rNone.opencode_variant === null && rNone.opencode_variant_source === 'role_default',
+    'D451-DISPATCH-EFFORT: opus + unset env + no provider → null/role_default (backward-compat), got ' + JSON.stringify(rNone));
+
+  // Case 9 (dispatch SURFACE): the runtime 2-arg buildDispatch call picks up the env-resolved
+  // provider, so a declared tier surfaces a concrete variant in the dispatch envelope. Drives the
+  // real process.env (the runtime read path) — saved/restored so the suite stays hermetic.
+  const ENV_KEY = 'KAOLA_OPENCODE_INHERIT_MODEL';
+  const savedEnv = process.env[ENV_KEY];
+  try {
+    process.env[ENV_KEY] = 'zhipuai-coding-plan/glm-5.2';
+    const dEnv = buildDispatch(opusNode, opusCtx); // no opencode_provider in ctx — the real runtime shape
+    assert(dEnv.opencode_variant === 'max',
+      'D451-DISPATCH-EFFORT: buildDispatch opus (no ctx provider) + env-resolved zhipu → opencode_variant max, got ' + JSON.stringify(dEnv.opencode_variant));
+    assert(dEnv.opencode_variant_source !== 'role_default',
+      'D451-DISPATCH-EFFORT: buildDispatch opus env-resolved source is NOT role_default, got ' + JSON.stringify(dEnv.opencode_variant_source));
+  } finally {
+    if (savedEnv === undefined) delete process.env[ENV_KEY]; else process.env[ENV_KEY] = savedEnv;
+  }
 }
 
 // ===========================================================================
