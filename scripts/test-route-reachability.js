@@ -318,6 +318,10 @@ for (const ed of codexEditions) {
 // T11: <!-- PIN: adaptive-default-contract --> must appear in all 12 fast+full-entry surfaces
 // (6 fast + 6 full-entry: fast = 3 Claude commands + 3 Codex SKILLs;
 // full-entry = phase1 commands + research SKILLs, 3 each). Added by n3 (#515).
+// #538: the named-but-not-installed-path refusal literal renamed `path_requires_explicit_opt_in` ->
+// `path_not_installed` (adaptive is the unconditional default; reaching fast/full requires an
+// install opt-in, refused at the claim front door with `path_not_installed`). All 12 surfaces must
+// carry the new literal.
 // Fail-closed: unconditional assert() — do NOT use a non-blocking warn gate.
 // ---------------------------------------------------------------------------
 {
@@ -341,8 +345,8 @@ for (const ed of codexEditions) {
     const content = fs.readFileSync(path.join(REPO, f), 'utf8');
     assert(content.includes('<!-- PIN: adaptive-default-contract -->'),
       `T11: ${f} must contain <!-- PIN: adaptive-default-contract --> comment (n3-adaptive-default-contract, #515)`);
-    assert(content.includes('path_requires_explicit_opt_in'),
-      `T11: ${f} must contain "path_requires_explicit_opt_in" literal (n3-adaptive-default-contract, #515)`);
+    assert(content.includes('path_not_installed'),
+      `T11: ${f} must contain "path_not_installed" literal (n3-adaptive-default-contract, #515/#538)`);
   }
 }
 

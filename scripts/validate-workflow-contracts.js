@@ -245,9 +245,11 @@ assertIncludes(fastFile198, '`code-reviewer` is mandatory');
 assertNotIncludes(fastFile198, 'two closely related files');
 assertNotIncludes(fastFile198, '≤ 2');
 const nextFile198 = 'commands/workflow-next.md';
-assertIncludes(nextFile198, 'mechanical');
-assertIncludes(nextFile198, '≤ 5');
-assertIncludes(nextFile198, 'design choice');
+// #538: the fast-path eligibility rubric (the `mechanical` / `≤ 5` / `design choice` tokens) was
+// Branch-A content of workflow-next.md and is DELETED with Branch A (adaptive is the unconditional
+// default; the router no longer inline-decides fast eligibility). The rubric concept is still
+// machine-enforced on its correct surface — commands/kaola-workflow-fast.md (L238-240 above) — so
+// dropping the workflow-next.md pins loses zero coverage; the negative-assert below stays.
 assertNotIncludes(nextFile198, '≤ 2 closely related files');
 
 // issue #207: fast-overlap parity. The fast-summary.md `## Scope` must declare a
@@ -746,7 +748,13 @@ assertIncludes('agents/implementer.md', 'verification_tier');
 assertIncludes('agents/implementer.md', 'smoke-integration');
 assertIncludes('agents/tdd-guide.md', 'evidence block contains BOTH literal tokens');
 assertManifestScript('kaola-workflow-plan-validator.js');   // #407: was install.sh literal
-assertIncludes('install.sh', '--enable-adaptive');
+// #538: the per-session adaptive switch retired — installer opt-ins are `--with-fast` / `--with-full`
+// (adaptive is the unconditional default, always installed). The legacy `--enable-adaptive` flag is
+// warn-ignored (accepted for back-compat, sets nothing). Pin the two new flags + the deprecation
+// notice so a regression that drops the opt-ins or silently re-honors the retired flag reds the chain.
+assertIncludes('install.sh', '--with-fast');
+assertIncludes('install.sh', '--with-full');
+assertIncludes('install.sh', '--enable-adaptive is retired (#538)');
 // #255: the adaptive-handoff script must be in the install allowlist (now the #407 manifest) for
 // every edition, or a manual (non-plugin) install omits it and the planner's `--project` handoff
 // invocation fails at `$HOME/.claude/.../scripts/`. Guards the 5.4.0 omission. (#407: manifest-sourced.)
@@ -768,10 +776,12 @@ assertManifestScript('kaola-workflow-codex-preflight.js');
 assertManifestScript('kaola-workflow-task-mirror.js');
 assertManifestScript('kaola-gitlab-workflow-task-mirror.js');
 assertManifestScript('kaola-gitea-workflow-task-mirror.js');
-// router 3-way selection: switch chooses branch AND default (adaptive is the default under ON;
-// fast/full are explicit escapes). OFF preserves 2-way fast/full with typed refusal on adaptive.
+// #538: adaptive is the UNCONDITIONAL default — there is no switch. The router honors an explicit
+// `KAOLA_PATH` and the path-name verbal escapes (fast/full), else defaults to adaptive. A named-but-
+// not-installed path is the claim's typed `path_not_installed` refusal (the router does not read
+// installed_paths — the claim front door owns that, per R2). Pin the new model's tokens.
 assertConcept('commands/workflow-next.md', 'adaptive path selection', [
-  'KAOLA_ENABLE_ADAPTIVE', 'adaptive', 'fast|full|adaptive', 'default', 'typed refusal'
+  'KAOLA_PATH', 'adaptive', 'default', 'path_not_installed', 'fast', 'full'
 ]);
 assertIncludes('commands/workflow-next.md', 'workflow-plan.md exists -> /kaola-workflow-plan-run');
 // v5.1.0: the adaptive front-end ROUTING must stay enforced — the router skips its inline claim and
@@ -821,13 +831,15 @@ assertConcept('commands/kaola-workflow-plan-run.md', 'adaptive execution + gover
 assertIncludes('scripts/kaola-workflow-classifier.js', 'module.exports');
 assertIncludes('scripts/kaola-workflow-classifier.js', 'disjointWriteSets');
 assertIncludes('scripts/kaola-workflow-classifier.js', 'readPlanNodes');
-// claim toggle guard (via the schema module) + both resume surfaces emit the adaptive executor
-assertIncludes('scripts/kaola-workflow-claim.js', 'resolveEnableAdaptive');
-assertIncludes('scripts/kaola-workflow-claim.js', 'workflow_path_refused');
+// #538: claim legality guard resolves the installed opt-in paths (legality = {adaptive} ∪
+// installed_paths) and refuses a named-but-not-installed path with the typed `path_not_installed`
+// (renamed from `workflow_path_refused`); both resume surfaces emit the adaptive executor.
+assertIncludes('scripts/kaola-workflow-claim.js', 'resolveInstalledPaths');
+assertIncludes('scripts/kaola-workflow-claim.js', 'path_not_installed');
 assertIncludes('scripts/kaola-workflow-claim.js', 'PLAN_RUN_COMMAND');
-// the adaptive executor command literal + path whitelist live in the shared schema anchor
+// the adaptive executor command literal + path legality resolver live in the shared schema anchor
 assertIncludes('scripts/kaola-workflow-adaptive-schema.js', '/kaola-workflow-plan-run');
-assertIncludes('scripts/kaola-workflow-adaptive-schema.js', 'resolveEnableAdaptive');
+assertIncludes('scripts/kaola-workflow-adaptive-schema.js', 'resolveInstalledPaths');
 // repair-state recognizes + routes adaptive ahead of the phaseN ladder
 assertIncludes('scripts/kaola-workflow-repair-state.js', 'routeAdaptive');
 assertIncludes('scripts/kaola-workflow-repair-state.js', 'isAdaptiveWorkflowState');

@@ -120,7 +120,9 @@ assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, '--projec
 // Issue #190: M1 — Codex fast-path routing parity (RED guard)
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'Startup Step 0a-1');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'Branch: {branch from Sink block');
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'Workflow path: {fast|full');
+// #538: the status-report `Workflow path:` line now leads with adaptive-by-default (fast|full only
+// on an explicit escape) — the old `{fast|full` menu framing retired with the path switch.
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'Workflow path: {adaptive by default');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'Parallel decision: {green|yellow|red');
 // issue #203 (#201 regression lock): Codex reconstruction ladder fast-summary rung (drift-guard)
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'fast-summary.md exists -> kaola-workflow-fast');
@@ -148,9 +150,10 @@ assertIncludes(fastSkill198, 'next_skill: kaola-workflow-research {project}');
 assertIncludes(fastSkill198, 'status `ESCALATED` → escalation already committed');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'fast-summary.md status ESCALATED -> kaola-workflow-research');
 const nextSkill198 = `${pluginRoot}/skills/kaola-workflow-next/SKILL.md`;
-assertIncludes(nextSkill198, 'mechanical');
-assertIncludes(nextSkill198, '≤ 5');
-assertIncludes(nextSkill198, 'design choice');
+// #538: the fast-path eligibility rubric (`mechanical` / `≤ 5` / `design choice`) was Branch-A
+// content of the next SKILL and is DELETED with Branch A (adaptive is the unconditional default).
+// The rubric concept stays machine-enforced on its correct surface — the fast SKILL (L129-131) — so
+// dropping the next-SKILL pins loses zero coverage; the negative-assert below stays.
 assertNotIncludes(nextSkill198, '≤ 2 closely related files');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`, 'Active folder lifecycle');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`, '> **MANDATORY — READ CLAUDE.md BEFORE ANY ACTION THIS SESSION.**');
@@ -480,10 +483,12 @@ assert(giteaCmdTemplate === giteaSkillTemplate,
 // issue #227: adaptive-path contract (Codex skills + byte-synced plugin scripts).
 assert(exists(`${pluginRoot}/scripts/kaola-workflow-plan-validator.js`), 'codex adaptive plan validator missing');
 assert(exists(`${pluginRoot}/scripts/kaola-workflow-adaptive-schema.js`), 'codex adaptive schema module missing');
-// router 3-way selection: switch chooses branch AND default (adaptive is the default under ON;
-// fast/full are explicit escapes). OFF preserves 2-way fast/full with typed refusal on adaptive.
+// #538: adaptive is the UNCONDITIONAL default — there is no switch. The router SKILL honors an
+// explicit `KAOLA_PATH` and the fast/full verbal escapes, else defaults to adaptive; a named-but-not-
+// installed path is the claim's typed `path_not_installed` refusal (the SKILL does not read
+// installed_paths — the claim front door owns that, per R2). Pin the new model's tokens.
 assertConcept(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'adaptive path selection', [
-  'KAOLA_ENABLE_ADAPTIVE', 'adaptive', 'fast|full|adaptive', 'default', 'typed refusal'
+  'KAOLA_PATH', 'adaptive', 'default', 'path_not_installed', 'fast', 'full'
 ]);
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'workflow-plan.md exists -> kaola-workflow-plan-run');
 // v5.1.0: the adaptive front-end routing must stay enforced in the router SKILL mirror too — the
@@ -551,7 +556,8 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '--forbi
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'workflow_path: adaptive');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'disjointWriteSets');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'readPlanNodes');
-assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, 'workflow_path_refused');
+// #538: the named-but-not-installed-path refusal renamed `workflow_path_refused` -> `path_not_installed`.
+assertIncludes(`${pluginRoot}/scripts/kaola-workflow-claim.js`, 'path_not_installed');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-repair-state.js`, 'routeAdaptive');
 assertNotIncludes(`${pluginRoot}/scripts/kaola-workflow-repair-state.js`, 'enable_adaptive');
 assertNotIncludes(`${pluginRoot}/scripts/kaola-workflow-plan-validator.js`, 'enable_adaptive');

@@ -9,7 +9,7 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
 
 - **fast** — single-pass Plan+Execute+Review (`fast-summary.md`); one fixed shape.
 - **full** — the fixed 6-phase ladder (P1→P6); the default and the answer to every doubt.
-- **adaptive** (issue #227, opt-in via the `enable_adaptive` switch) — the agent
+- **adaptive** (issue #227, the unconditional default) — the agent
   **freely composes a task-shaped DAG** of role nodes inside a fixed lifecycle frame:
 
   ```text
@@ -322,18 +322,16 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   accumulated root diff — exists before the port is written). Both refuse at freeze, never on
   `--resume-check` (in-flight frozen plans are never bricked).
 
-  **No mid-run kill-switch once a plan is frozen (accepted, #236).** Flipping the
-  `enable_adaptive` switch OFF stops *new* adaptive selection but does **not** halt an
-  already-frozen, in-flight plan: the switch gates `claimProject` SELECTION (and the
-  `/kaola-workflow-adapt` authoring entry, #235) only, while both resume surfaces —
+  **No mid-run kill-switch once a plan is frozen (accepted, #236).** There is no
+  per-session toggle that halts an already-frozen, in-flight plan: both resume surfaces —
   `routeAdaptive` and `resumeFallbackCommand` — and the resume re-validation
   (`revalidateForResume`, library + structure + `plan_hash` only) are deliberately
-  **toggle-agnostic**. This is correct-by-design: a mid-run path-yank would brick an
-  in-flight plan and break the `plan_hash` author-immutability contract. An explicit
-  opt-in operator halt (`KAOLA_ADAPTIVE_HALT`, distinct from the selection switch) was
-  considered and **deferred** — it adds a new resume-surface read and a brick vector for
-  marginal benefit; the principled containment for a bad frozen plan is the per-tier
-  runtime `--barrier-check` (#231), not a binary kill-switch.
+  **toggle-agnostic** (a frozen plan finishes regardless of any config change). This is
+  correct-by-design: a mid-run path-yank would brick an in-flight plan and break the
+  `plan_hash` author-immutability contract. An explicit opt-in operator halt
+  (`KAOLA_ADAPTIVE_HALT`) was considered and **deferred** — the principled containment for
+  a bad frozen plan is the per-tier runtime `--barrier-check` (#231), not a binary
+  kill-switch.
 
   **`.md` allowband — narrow, not blanket (#424).** `.md` files are no longer blanket-exempt from the `--barrier-check`. The declared allowband is: `docs/**`, `CHANGELOG.md`, `README.md`, `kaola-workflow/{project}/**`. `.md` files outside this band — including `agents/*.md`, `commands/*.md`, `plugins/*/agents/*.toml` — are treated as production surfaces and must appear in a node's `declared_write_set`. Plans frozen before #424 that relied on the blanket exemption will classify non-allowband `.md` writes as `write_set_overflow` at barrier time.
 

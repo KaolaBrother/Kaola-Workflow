@@ -12,22 +12,24 @@ const { spawn, spawnSync } = require('child_process');
 // during the classify-blocked and classify-red tests. Subprocesses that need OFFLINE set
 // do so explicitly via their own env option.
 delete process.env.KAOLA_WORKFLOW_OFFLINE;
-// #515: pin adaptive switch OFF so tests that call claimProject/claimExplicitTarget without
-// an explicit --workflow-path aren't broken by a system config that has enable_adaptive:true.
-// Tests that want ON behaviour must set KAOLA_ENABLE_ADAPTIVE explicitly in their subprocess env.
-process.env.KAOLA_ENABLE_ADAPTIVE = '0';
+// #538: KAOLA_ENABLE_ADAPTIVE is retired — adaptive is the unconditional default (no switch).
+// The module-top KAOLA_ENABLE_ADAPTIVE pin is removed.
 
-// #531: hermetic HOME — classifyIssue (called IN-PROCESS by the classify-blocked/red tests) reads
-// parallel_mode from ~/.config/kaola-workflow/config.json (os.homedir()) and bypasses to
-// verdict:'green' whenever it is not 'auto', with NO env override. Per-spawn HOME sandboxing can't
-// cover an in-process call, so pin a process-wide sandbox HOME seeded with parallel_mode:'auto'
-// (before the classifier require) so a dev-local non-'auto' config can't turn these verdict
-// assertions into spurious "got green" failures (issue #531). os.homedir() honors process.env.HOME.
+// #531 / #538: hermetic HOME — classifyIssue (called IN-PROCESS) reads parallel_mode from
+// ~/.config/kaola-workflow/config.json (os.homedir()), bypassing classifier when not 'auto'.
+// Also resolveInstalledPaths reads installed_paths from this file (#538). Pin a process-wide
+// sandbox HOME seeded with parallel_mode:'auto' + installed_paths:[] (adaptive-only default)
+// so a dev-local config can't affect these tests. os.homedir() honors process.env.HOME.
+// Also seed .gitconfig with init.defaultBranch=main so git init creates 'main'.
 const kwSandboxHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sandbox-home-'));
 fs.mkdirSync(path.join(kwSandboxHome, '.config', 'kaola-workflow'), { recursive: true });
 fs.writeFileSync(
   path.join(kwSandboxHome, '.config', 'kaola-workflow', 'config.json'),
-  JSON.stringify({ parallel_mode: 'auto', enable_adaptive: false }, null, 2) + '\n'
+  JSON.stringify({ parallel_mode: 'auto', installed_paths: [] }, null, 2) + '\n'
+);
+fs.writeFileSync(
+  path.join(kwSandboxHome, '.gitconfig'),
+  '[init]\n\tdefaultBranch = main\n[user]\n\temail = test@example.com\n\tname = Test User\n'
 );
 process.env.HOME = kwSandboxHome;
 process.env.USERPROFILE = kwSandboxHome;
@@ -1838,15 +1840,22 @@ assert.strictEqual(classifier.issueHasRemoteClaimNotes(35), false,
 }
 
 // Issue #101: KAOLA_PATH=fast startup must write fast-path state
+// #538: seed installed_paths:['fast'] in a hermetic HOME so the legality gate passes.
 {
   const root = tempRoot('kw-gt-fast-startup-');
   const binDir = path.join(root, 'bin');
+  const fastHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-fast-home-'));
   writeTeaShimOpen(binDir);
   try {
+    fs.mkdirSync(path.join(fastHome, '.config', 'kaola-workflow'), { recursive: true });
+    fs.writeFileSync(path.join(fastHome, '.config', 'kaola-workflow', 'config.json'),
+      JSON.stringify({ parallel_mode: 'auto', installed_paths: ['fast'] }, null, 2) + '\n');
+    fs.writeFileSync(path.join(fastHome, '.gitconfig'),
+      '[init]\n\tdefaultBranch = main\n[user]\n\temail = test@example.com\n\tname = Test User\n');
     initGitRepo(root);
     const result = spawnSync(process.execPath, [claimScript, 'startup', '--runtime', 'test', '--target-issue', '7'], {
       cwd: root, encoding: 'utf8',
-      env: Object.assign({}, process.env, { KAOLA_PATH: 'fast', ...teaMockEnv(binDir), PATH: binDir + path.delimiter + (process.env.PATH || '') })
+      env: Object.assign({}, process.env, { KAOLA_PATH: 'fast', HOME: fastHome, USERPROFILE: fastHome, ...teaMockEnv(binDir), PATH: binDir + path.delimiter + (process.env.PATH || '') })
     });
     assert.strictEqual(result.status, 0, 'fast startup must exit 0\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
     const out = JSON.parse(result.stdout.trim());
@@ -1861,6 +1870,7 @@ assert.strictEqual(classifier.issueHasRemoteClaimNotes(35), false,
     assert.ok(/^- fast-summary$/m.test(state), 'fast startup must write fast-summary pending gate');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(fastHome, { recursive: true, force: true });
   }
 }
 

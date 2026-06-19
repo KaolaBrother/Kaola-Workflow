@@ -10,16 +10,18 @@ const assert = require('assert');
 
 const root = path.resolve(__dirname, '..', '..', '..');
 
-// #515: hermetic default — pin the adaptive switch OFF for every spawn that inherits
-// process.env (spawnNode + the inline spawnSync sites). claim.js reads the HOME
-// ~/.config/kaola-workflow/config.json, which on a dev box with `install --enable-adaptive`
-// is ON; without this default a DEFAULTED fast/full startup/claim would be refused by the
-// #515 path_requires_explicit_opt_in guard. Set at module top; every per-call env override
-// (e.g. KAOLA_ENABLE_ADAPTIVE:'1' in glSpawnBundle / the toggle sub-tests) spreads AFTER
-// process.env in its Object.assign, so the explicit switch-ON sub-tests still win.
-// UNCONDITIONAL (not guarded on `=== undefined`): an ambient-exported value would reintroduce the
-// non-hermeticity this removes; the harness must be deterministic regardless of the dev shell.
-process.env.KAOLA_ENABLE_ADAPTIVE = '0';
+// #538: KAOLA_ENABLE_ADAPTIVE is retired — adaptive is the unconditional default (no switch).
+// Set a hermetic HOME seeded with installed_paths:[] (the #538 adaptive-only default) so every
+// subprocess inheriting process.env sees the canonical config regardless of the dev machine.
+// Tests that need fast/full installed pass their own HOME in extraEnv.
+const kwSandboxHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-sandbox-home-'));
+fs.mkdirSync(path.join(kwSandboxHome, '.config', 'kaola-workflow'), { recursive: true });
+fs.writeFileSync(
+  path.join(kwSandboxHome, '.config', 'kaola-workflow', 'config.json'),
+  JSON.stringify({ parallel_mode: 'auto', installed_paths: [] }, null, 2) + '\n'
+);
+process.env.HOME = kwSandboxHome;
+process.env.USERPROFILE = kwSandboxHome;
 
 const sinkMr = require(path.join(root, 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-sink-mr'));
 const claimScript = path.join(root, 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js');
@@ -261,12 +263,12 @@ function testGitlabAdaptive() {
   }
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-adaptive-'));
   try {
-    // claim toggle guard: OFF + adaptive -> refusal; ON -> acquired
+    // #538: adaptive is unconditionally legal — claim always acquires (no switch).
     fs.mkdirSync(path.join(tmp, 'kaola-workflow'), { recursive: true });
-    let r = JSON.parse(spawnNode(claimScript, ['claim', '--project', 'issue-901', '--workflowPath', 'adaptive'], tmp, { KAOLA_ENABLE_ADAPTIVE: '0' }).stdout);
-    assert.strictEqual(r.status, 'workflow_path_refused', 'gitlab: OFF + adaptive claim must be a typed refusal');
-    r = JSON.parse(spawnNode(claimScript, ['claim', '--project', 'issue-902', '--workflowPath', 'adaptive'], tmp, { KAOLA_ENABLE_ADAPTIVE: '1' }).stdout);
-    assert.strictEqual(r.status, 'acquired', 'gitlab: ON + adaptive claim must acquire');
+    let r = JSON.parse(spawnNode(claimScript, ['claim', '--project', 'issue-901', '--workflowPath', 'adaptive'], tmp).stdout);
+    assert.strictEqual(r.status, 'acquired', 'gitlab: adaptive claim must acquire (always legal)');
+    r = JSON.parse(spawnNode(claimScript, ['claim', '--project', 'issue-902', '--workflowPath', 'adaptive'], tmp).stdout);
+    assert.strictEqual(r.status, 'acquired', 'gitlab: second adaptive claim must acquire');
     const claimedState = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'issue-902', 'workflow-state.md'), 'utf8');
     assert.ok(/workflow_path: adaptive/.test(claimedState) && /next_command: \/kaola-workflow-plan-run issue-902/.test(claimedState),
       'gitlab: adaptive claim state must route to plan-run');
@@ -423,7 +425,8 @@ function testGitlabAdaptive() {
     const e1dir = path.join(tmp, 'kaola-workflow', 'issue-940');
     fs.mkdirSync(e1dir, { recursive: true });
     fs.writeFileSync(path.join(e1dir, 'workflow-state.md'), ['name: issue-940', 'issue_iid: 940', 'status: active', 'phase: adaptive', 'workflow_path: adaptive', 'next_command: /kaola-workflow-phase4 issue-940', ''].join('\n'));
-    const e1 = JSON.parse(spawnNode(claimScript, ['resume', '--project', 'issue-940'], tmp, { KAOLA_ENABLE_ADAPTIVE: '0' }).stdout);
+    // #538: resume is unconditionally toggle-agnostic (no switch)
+    const e1 = JSON.parse(spawnNode(claimScript, ['resume', '--project', 'issue-940'], tmp).stdout);
     assert.strictEqual(e1.next_command, '/kaola-workflow-plan-run issue-940', 'gitlab E1: stale phaseN on an adaptive project must reconcile to plan-run');
 
     // issue #234 E2: a durable consent_halt in the Node Ledger surfaces on resume even with no state file.
@@ -436,11 +439,9 @@ function testGitlabAdaptive() {
     assert.ok(/consent-halt-surface/.test(fs.readFileSync(path.join(e2dir, 'workflow-state.md'), 'utf8')),
       'gitlab E2: durable Node-Ledger consent must surface on resume with no prior workflow-state.md');
 
-    // issue #235 D8: hard authoring guard — OFF refuses, ON allows (toggle read at the authoring entry).
-    let ar = JSON.parse(spawnNode(claimScript, ['authoring-allowed', '--project', 'issue-960'], tmp, { KAOLA_ENABLE_ADAPTIVE: '0' }).stdout);
-    assert.strictEqual(ar.status, 'authoring_refused', 'gitlab D8: authoring under an OFF switch must refuse');
-    ar = JSON.parse(spawnNode(claimScript, ['authoring-allowed', '--project', 'issue-960'], tmp, { KAOLA_ENABLE_ADAPTIVE: '1' }).stdout);
-    assert.strictEqual(ar.status, 'authoring_allowed', 'gitlab D8: authoring under an ON switch must be allowed');
+    // issue #235 D8 / #538: authoring-allowed is unconditionally allowed (no switch).
+    const ar = JSON.parse(spawnNode(claimScript, ['authoring-allowed', '--project', 'issue-960'], tmp).stdout);
+    assert.strictEqual(ar.status, 'authoring_allowed', 'gitlab #538 D8: authoring must always be allowed (unconditional)');
 
     // v3.20.1 (adversarial-review follow-ups): the fork validator must carry the same fixes.
     // Fix #3 — independent-branch exact-file overlap must refuse (was a #233 regression).
@@ -907,7 +908,6 @@ function glSpawnBundle(args, cwd, binDir, extraEnv) {
     env: Object.assign({}, process.env, {
       KAOLA_WORKFLOW_OFFLINE: '0',
       KAOLA_WORKTREE_NATIVE: '1',
-      KAOLA_ENABLE_ADAPTIVE: '1',
       KAOLA_GLAB_MOCK_SCRIPT: path.join(binDir, 'glab-mock.js'),
     }, extraEnv || {})
   });
@@ -1040,7 +1040,7 @@ function testGitlabBundleDuplicateIssueBlocking() {
       ].join('\n')
     });
 
-    const offlineEnv = { KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_ENABLE_ADAPTIVE: '1' };
+    const offlineEnv = { KAOLA_WORKFLOW_OFFLINE: '1' };
     const r1 = spawnSync(process.execPath, [claimScript, 'startup', '--target-issue', '47'],
       { cwd: tmp, encoding: 'utf8', env: Object.assign({}, process.env, offlineEnv) });
     const o1 = JSON.parse(r1.stdout);

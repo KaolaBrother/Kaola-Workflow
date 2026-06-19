@@ -116,8 +116,8 @@ together"), route through the bundle lane:
 - Project name and active folder: `bundle-42-47-53` (sorted ascending, deduplicated).
 - Branch: `workflow/bundle-42-47-53`.
 - Bundle lane is **adaptive-path only** (`workflow_path: adaptive` is required). A
-  bundle request under switch-OFF or with an explicit `KAOLA_PATH=fast`/`full` is
-  refused with `target_set_not_adaptive`; do not silently downgrade to a single issue.
+  bundle request with an explicit `KAOLA_PATH=fast`/`full` is refused with
+  `bundle_requires_adaptive`; do not silently downgrade to a single issue.
 - In the startup call, pass `--target-issues 42,47,53` (instead of `--target-issue N`)
   and `--workflow-path adaptive`.
 
@@ -145,10 +145,10 @@ issue-scout is read-only: it cannot claim issues, write repository files, author
 `workflow-plan.md`, close issues, or dispatch other agents.
 
 **Ordering — resolve the path BEFORE consuming a bundle (#380):** the bundle lane is
-adaptive-only, so resolve the adaptive switch / path intent (Step 0a-1) *before* acting on
+adaptive-only, so resolve the path intent (Step 0a-1) *before* acting on
 the scout's recommendation. A bundle is pursued ONLY when the resolved path is `adaptive`;
-under switch-OFF (or an explicit `KAOLA_PATH=fast`/`full`) the router takes only the scout's
-`primary_issue` (a bundle there would be refused at startup with `target_set_not_adaptive`).
+with an explicit `KAOLA_PATH=fast`/`full` the router takes only the scout's
+`primary_issue` (a bundle there would be refused at startup with `bundle_requires_adaptive`).
 
 **Output → env wiring (#380):** map the scout's recommendation into the startup env exactly:
 - high-confidence same-scope bundle AND resolved path is adaptive → set
@@ -186,82 +186,40 @@ Keyword matching is agent-level prose detection, not a bash conditional.
 
 ## Startup Step 0a-1 — Path Intent
 
-Before Step 0b, resolve the adaptive switch and pick the workflow path. The agent
-owns this judgment; scripts do not auto-pick. Read the switch first, then follow
-the matching branch — Branch A when OFF, Branch B when ON.
+Before Step 0b, pick the workflow path. The agent owns this judgment; scripts do
+not auto-pick. Adaptive is the unconditional default — it just runs. `fast` and
+`full` fire ONLY on an explicit path-name keyword or an explicit `KAOLA_PATH`;
+nothing to resolve and nothing to deliberate.
 
-**Switch resolution.** Read env `KAOLA_ENABLE_ADAPTIVE` (`1`/`0`); if unset,
-read `enable_adaptive` in `~/.config/kaola-workflow/config.json`; default OFF.
-The schema resolution floor is env > config > OFF — this step does NOT move it.
-
----
-
-### Branch A — switch OFF (adaptive off the menu; unchanged)
-
-`adaptive` is removed from the menu entirely. `adaptive` can never fire when the
-switch is off. Evaluate only fast vs full, exactly as today:
-
-1. **Explicit `KAOLA_PATH`.** If already exported, honor `fast` | `full` verbatim.
-   A `KAOLA_PATH=adaptive` under an OFF switch is a **typed refusal** in
-   `claimProject`, never a silent downgrade to full.
-2. **Prompt keywords** (case-insensitive):
-   - fast triggers: "quick fix", "trivial", "one-line", "one line",
-     "rename", "typo", "small change", "fast path", "fast mode"
-   - full triggers: "thorough", "full review", "full path",
-     "carefully", "all phases", "deep dive"
-   Tie or both match → prefer full.
-3. **Issue rubric.** Fetch the selected issue once:
-   ```bash
-   tea issues view "$KAOLA_TARGET_ISSUE" --output json
-   ```
-   Apply the fast rubric: export `KAOLA_PATH=fast` ONLY if all hold — the
-   approach is unambiguous and mechanical (exactly one sensible way — not ≥ 2
-   materially-different viable approaches), ≤ 5 files in a single area, no new
-   external deps, no public API/schema/migration change, no security/auth/encryption
-   concern, no `depends-on:#N` label. If not fast → `full`.
-4. **Default `full`.** On fetch failure, offline, or any ambiguity → full.
-   When in doubt, full.
-
-Bias toward full when in doubt under Branch A. Fast false positives escalate
-cleanly via the Fast Eligibility and Mid-Flight Escalation sections of
-`plugins/kaola-workflow-gitea/commands/kaola-workflow-fast.md`; false negatives
-only cost ceremony.
-
----
-
-### Branch B — switch ON (adaptive is the default; fast/full are explicit escapes)
-
-Auto-fast is RETIRED under switch-ON: no verbal keyword ⇒ adaptive, even for a
-one-line fix. The automatic trivial-fix rubric and the level-4 structure question
-only apply under Branch A (switch OFF). Adaptive failure ⇒ fall back to full —
-the 6-phase ladder is the safety floor.
-
-1. **Explicit `KAOLA_PATH`.** If already exported, honor `fast` | `full` |
-   `adaptive` verbatim (rubric not re-derived). An explicit `KAOLA_PATH=adaptive`
-   under an OFF switch would be a typed refusal (Branch A), but here the switch is ON.
-2. **Explicit path-naming verbal** (case-insensitive) — the ONLY keyword escapes:
-   - "fast path" / "fast mode" → export `KAOLA_PATH=fast`
-   - "full path" / "full mode" / "full review" / "all phases" → export `KAOLA_PATH=full`
-   Task descriptors ("typo", "one-line", "trivial", "quick fix", "rename", "small
-   change", "thorough", "carefully", "deep dive") are NOT path-name escapes under ON;
-   they hit the default → adaptive (the planner sizes the task).
+1. **Explicit `KAOLA_PATH`.** If already exported, honor it verbatim: `adaptive`
+   always; for `fast` | `full`, simply EXPORT the named value and hand it to the
+   claim — do NOT re-derive a rubric and do NOT check whether the path is
+   installed. The claim's `path_not_installed` typed refusal is the single
+   authority: if the named path isn't installed the run surfaces that refusal (a
+   hard stop), it does NOT silently fall to adaptive.
+2. **Explicit path-name verbal escapes** (case-insensitive) — the ONLY keyword
+   escapes:
+   - "fast path" / "fast mode" → `export KAOLA_PATH=fast`
+   - "full path" / "full mode" / "full review" / "all phases" → `export KAOLA_PATH=full`
+   Just export the named path and hand it to the claim (same as point 1 — no
+   install check here either; the claim's `path_not_installed` refusal is the
+   authority). Task descriptors ("typo", "one-line", "trivial", "quick fix",
+   "rename", "small change", "thorough", "carefully", "deep dive") are NOT
+   path-name escapes; they hit the default → adaptive (the planner sizes the task).
 3. **Default → adaptive.** No matching path-name keyword and no explicit
    `KAOLA_PATH` → `export KAOLA_PATH=adaptive` and proceed to Step 0a-2. The
    export is the action (it makes Step 0b skip and the adaptive front end fire).
-   - **Adaptive fallback → full.** If the adaptive front end cannot fetch the
-     issue, cannot form a valid in-grammar DAG, or the validator returns a typed
-     refusal, re-export `KAOLA_PATH=full` and take the Branch-B full route. Never
-     block on an adaptive-specific failure.
+   Adaptive just runs. There is NO automatic fallback to fast/full — when
+   adaptive cannot proceed the only recourse is inside adaptive (bounded planner
+   repair → discard+restart a fresh adaptive run → stop+ask), per
+   `plugins/kaola-workflow-gitea/commands/kaola-workflow-adapt.md`.
 
 State the chosen path and one-line reason aloud before Step 0b:
 
 ```text
-Path: adaptive (switch ON, no path-name escape — default)
-Path: fast (switch ON, explicit "fast path" escape)
-Path: full (switch ON, explicit "full review" escape)
-Path: full (switch ON, adaptive fallback — validator refused)
-Path: fast (switch OFF, mechanical, single-area, 4 files)
-Path: full (switch OFF, ≥2 viable approaches — design choice)
+Path: adaptive (default)
+Path: fast (explicit "fast path" escape)
+Path: full (explicit "full review" escape)
 ```
 
 ## Startup Step 0a-2 — Adaptive front-end entry (path = adaptive only)
@@ -531,7 +489,7 @@ Current phase: {phase or unknown}
 Current step: {step from workflow-state.md or reconstructed}
 Pending gates: {list or none}
 Branch: {branch from Sink block in workflow-state.md, or TBD if not yet claimed}
-Workflow path: {fast|full when the adaptive switch is OFF; fast|full|adaptive when ON — from KAOLA_PATH or Step 0a-1 judgment}
+Workflow path: {adaptive by default; fast|full only on an explicit path-name keyword or KAOLA_PATH — from KAOLA_PATH or Step 0a-1 judgment}
 Parallel decision: {green|yellow|red|blocked|target_unavailable|target_unverified|skipped — classifier verdict or "skipped" if offline/unavailable}
 Next command: {next_command}
 ```

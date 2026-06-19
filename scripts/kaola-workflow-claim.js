@@ -24,7 +24,8 @@ const { parseGoal } = require('./kaola-workflow-plan-validator');
 
 // Read the shared global config (the same ~/.config/kaola-workflow/config.json the
 // classifiers read). Read-only here — never creates the file. Returns {} on any
-// error so the strict `=== true` on-test in resolveEnableAdaptive falls to OFF.
+// error so resolveInstalledPaths sees an absent/malformed `installed_paths` field
+// and degrades to `[]` (adaptive-only legal — #538).
 function readAdaptiveConfig() {
   try {
     return JSON.parse(fs.readFileSync(path.join(os.homedir(), ...adaptiveSchema.CONFIG_REL_PATH), 'utf8'));
@@ -823,47 +824,27 @@ function claimProject(root, args) {
   const existing = issueNumber != null ? activeByIssue(root, issueNumber) : activeByProject(root, project);
   if (existing) return { status: 'owned', issue: existing.issue_number, project: existing.project, folder: existing };
 
-  // issue #227: the single shared toggle guard for NEW claims (covers cmdClaim and
-  // cmdStartup -> claimExplicitTarget). Whitelist the persisted workflow_path:
-  // {fast, full} when the adaptive switch is OFF, {fast, full, adaptive} when ON.
-  // An adaptive claim under an OFF switch is a TYPED REFUSAL (#44) — never a silent
-  // downgrade to full. Resume of an already-frozen plan does NOT pass here (the
-  // `existing` early-return above handles re-claims), so this gates SELECTION only.
-  const requestedPath = args.workflowPath || process.env.KAOLA_PATH || 'full';
-  const adaptiveEnabled = adaptiveSchema.resolveEnableAdaptive(readAdaptiveConfig(), process.env);
-  if (!adaptiveSchema.isLegalWorkflowPath(requestedPath, adaptiveEnabled)) {
-    const legal = (adaptiveEnabled ? adaptiveSchema.WORKFLOW_PATHS : adaptiveSchema.WORKFLOW_PATHS_NO_ADAPTIVE).join(', ');
+  // issue #538: the single path-legality gate for NEW claims (covers cmdClaim and
+  // cmdStartup -> claimExplicitTarget). Adaptive is the unconditional default and is
+  // ALWAYS legal; fast/full are legal ONLY when installed (install-time opt-in via
+  // --with-fast/--with-full -> `installed_paths` in config). A KAOLA_PATH/--workflow-path
+  // naming a non-installed path is a TYPED `path_not_installed` refusal (#44/#538) — never
+  // a silent substitution to adaptive, never a crash. Resume of an already-frozen plan does
+  // NOT pass here (the `existing` early-return above handles re-claims), so this gates
+  // SELECTION only.
+  const requestedPath = args.workflowPath || process.env.KAOLA_PATH || 'adaptive';
+  const installedPaths = adaptiveSchema.resolveInstalledPaths(readAdaptiveConfig());
+  if (!adaptiveSchema.isLegalWorkflowPath(requestedPath, installedPaths)) {
+    const legal = [adaptiveSchema.ADAPTIVE_PATH, ...installedPaths].join(', ');
     return {
-      status: 'workflow_path_refused',
+      status: 'path_not_installed',
+      result: 'refuse',
       claim: 'none',
       issue: issueNumber,
       project,
-      reasoning: 'workflow_path "' + requestedPath + '" is not permitted (adaptive switch is ' +
-        (adaptiveEnabled ? 'ON' : 'OFF') + '); legal values: ' + legal +
-        '. Refusing to silently downgrade (#44).'
-    };
-  }
-
-  // issue #515: the reciprocal of cmdAuthoringAllowed — under an ON switch, adaptive is the
-  // contract-determined default and fast/full are EXPLICIT user escapes only (#254). A claim that
-  // resolved to fast/full by DEFAULT (no --workflow-path, no KAOLA_PATH) under an ON switch is the
-  // silent bypass: the `|| 'full'` collapse above turns "defaulted" into "explicit full". Refuse it
-  // here with ZERO mutation so the router cannot silently downgrade an ON-switch project to the
-  // phaseN ladder. An EXPLICIT fast/full (either input truthy) is a legitimate escape and passes.
-  // Defaulted ALWAYS resolves to 'full' (the fast branch is unreachable when defaulted), so the
-  // predicate alone is sufficient — no requestedPath membership test. Forge-neutral + byte-identical
-  // across all four editions (mirrors the cmdAuthoringAllowed body).
-  const pathWasDefaulted = !args.workflowPath && !process.env.KAOLA_PATH;
-  if (adaptiveEnabled && pathWasDefaulted) {
-    return {
-      status: 'path_requires_explicit_opt_in',
-      claim: 'none',
-      issue: issueNumber,
-      project,
-      reasoning: 'adaptive switch is ON, so adaptive is the default path; "' + requestedPath +
-        '" was reached by default (no --workflow-path / KAOLA_PATH). fast/full are explicit escapes ' +
-        'only — pass --workflow-path fast|full (or export KAOLA_PATH) to opt in. Refusing to ' +
-        'silently downgrade to a non-adaptive path under an ON switch (#254/#44).'
+      reasoning: 'workflow_path "' + requestedPath + '" is not installed. Installed paths: ' + legal +
+        ' (adaptive is always available). Re-run install with --with-fast / --with-full to add it. ' +
+        'Refusing to silently substitute adaptive (#538/#44).'
     };
   }
 
@@ -954,7 +935,7 @@ function claimProject(root, args) {
     worktree_path: worktreePath,
     worktree_error: worktreeError,
     base_branch: baseBranch,
-    workflow_path: args.workflowPath || process.env.KAOLA_PATH || 'full',
+    workflow_path: args.workflowPath || process.env.KAOLA_PATH || 'adaptive',
     runtime: args.runtime || 'claude',
     status: 'active'
   });
@@ -1281,25 +1262,13 @@ function claimExplicitBundle(root, args) {
     return { status: 'target_set_too_large', claim: 'none', project: null, issue: null,
       reasoning: 'bundle of ' + targets.length + ' exceeds KAOLA_BUNDLE_MAX_ISSUES=' + max };
   }
-  // Step 3: adaptive-path gate
-  const requestedPath = args.workflowPath || process.env.KAOLA_PATH || 'full';
+  // Step 3: bundle lane is adaptive-only (fast/full have no multi-issue lane). #538: this is
+  // a lane constraint, not an installed-path legality question — adaptive is always legal, so the
+  // only refusal here is "this lane only accepts adaptive."
+  const requestedPath = args.workflowPath || process.env.KAOLA_PATH || 'adaptive';
   if (requestedPath !== adaptiveSchema.ADAPTIVE_PATH) {
-    return { status: 'target_set_not_adaptive', claim: 'none', project: null, issue: null,
-      reasoning: 'bundle lane is adaptive-only; got workflow_path "' + requestedPath + '"' };
-  }
-  // Also check the adaptive switch is ON (isLegalWorkflowPath)
-  const adaptiveEnabled = adaptiveSchema.resolveEnableAdaptive(readAdaptiveConfig(), process.env);
-  if (!adaptiveSchema.isLegalWorkflowPath(requestedPath, adaptiveEnabled)) {
-    const legal = (adaptiveEnabled ? adaptiveSchema.WORKFLOW_PATHS : adaptiveSchema.WORKFLOW_PATHS_NO_ADAPTIVE).join(', ');
-    return {
-      status: 'workflow_path_refused',
-      claim: 'none',
-      issue: null,
-      project: null,
-      reasoning: 'workflow_path "' + requestedPath + '" is not permitted (adaptive switch is ' +
-        (adaptiveEnabled ? 'ON' : 'OFF') + '); legal values: ' + legal +
-        '. Refusing to silently downgrade (#44).'
-    };
+    return { status: 'bundle_requires_adaptive', result: 'refuse', claim: 'none', project: null, issue: null,
+      reasoning: 'the bundle lane is adaptive-only; got workflow_path "' + requestedPath + '"' };
   }
   // Step 4: per-issue validation loop (NO mutation yet)
   for (const n of targets) {
@@ -1381,26 +1350,14 @@ function cmdClaim() {
   output(claimProject(root, args));
 }
 
-// issue #235 (audit D8): a HARD guard at the /kaola-workflow-adapt AUTHORING entry. The adapt
-// command calls this BEFORE authoring/freezing a workflow-plan.md, so authoring can no longer
-// proceed via a prose-only gate. It reads the SAME switch as claimProject (the only other
-// switch-reader) and emits a TYPED refusal when OFF, mirroring the claimProject refusal family.
-// Forge-neutral + stateless (no gh/glab, no issue field, no folder requirement) so the body is
-// byte-identical across all four editions. The VALIDATOR stays toggle-agnostic — the switch is
-// read HERE, never in validatePlan / freezePlan / revalidateForResume.
+// issue #235 (audit D8): the /kaola-workflow-adapt AUTHORING entry. The adapt command calls this
+// BEFORE authoring/freezing a workflow-plan.md to keep the mechanical gate's shape. #538: adaptive
+// is the unconditional default — there is no switch to be OFF — so authoring is ALWAYS allowed; the
+// subcommand stays registered and returns the allow envelope, it simply never refuses. Forge-neutral
+// + stateless (no gh/glab, no issue field, no folder requirement) so the body is byte-identical
+// across all four editions. The VALIDATOR stays toggle-agnostic.
 function cmdAuthoringAllowed() {
   const args = parseArgs(process.argv.slice(3));
-  const adaptiveEnabled = adaptiveSchema.resolveEnableAdaptive(readAdaptiveConfig(), process.env);
-  if (!adaptiveEnabled) {
-    output({
-      status: 'authoring_refused',
-      allowed: false,
-      project: args.project || null,
-      reasoning: 'adaptive switch is OFF; refusing to author/freeze a workflow-plan.md. ' +
-        'Refusing to silently author an adaptive plan under an OFF switch (#44).'
-    });
-    return;
-  }
   output({ status: 'authoring_allowed', allowed: true, project: args.project || null });
 }
 
@@ -1519,7 +1476,8 @@ function resumeFallbackCommand(root, folder) {
 // pre-existing contract (trust the persisted command, else reconstruct) — a full/fast next_command
 // legitimately points FORWARD of the `phase:` field (e.g. phase5 complete writes phase: 5 +
 // next_command: /kaola-workflow-phase6), so it must NOT be overridden by phase-derived reconstruction.
-// Toggle-agnostic: never reads resolveEnableAdaptive (resume must work even when the switch is OFF).
+// Path-agnostic: never reads path config (resume keys on the persisted workflow_path / a frozen
+// workflow-plan.md, so resume works for any installed path — #538).
 function reconcileNextCommand(root, folder) {
   let content = '';
   try {

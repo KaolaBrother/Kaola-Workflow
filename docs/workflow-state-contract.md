@@ -161,7 +161,7 @@ here for the full contract.
 The `workflow-state.md` file contains several key blocks:
 
 - `## Current Position` — Active phase, step, workflow path, runtime, and next command or skill. Key fields:
-  - **workflow_path** — Workflow execution path (`full`, `fast`, or `adaptive`). Persisted from the `KAOLA_PATH` environment variable (set `KAOLA_PATH=fast` to request the fast path), or the `--workflow-path` startup flag when supplied; defaults to `full`. `claimProject` whitelists the persisted value: `{fast, full}` when the adaptive switch is OFF, `{fast, full, adaptive}` when ON — any other value (including `adaptive` under an OFF switch) is a **typed refusal**, never a silent downgrade.
+  - **workflow_path** — Workflow execution path (`full`, `fast`, or `adaptive`). Persisted from the `KAOLA_PATH` environment variable (set `KAOLA_PATH=fast` to request the fast path), or the `--workflow-path` startup flag when supplied; defaults to `adaptive`. `claimProject` validates the persisted value: adaptive is always legal; `fast`/`full` require membership in `installed_paths` (`~/.config/kaola-workflow/config.json`) — any other value is a **typed `path_not_installed` refusal**, never a silent downgrade.
   - **runtime** — The runtime that claimed the folder (`claude` or `codex`). Persisted from the `--runtime` startup flag; defaults to `claude`.
 - `## Sink` — Issue number, sink mode (merge or pr), branch name, worktree path, and `run_posture` (`worktree` or `in-place`). `run_posture` is derived from the actual worktree resolution at startup via `deriveRunPosture(worktreePath)` in `kaola-workflow-claim.js`; it is never inherited from an environment variable. Adaptive runs always provision a worktree, so `run_posture: worktree` is the normal adaptive value. An optional `issue_action: close | comment_keep_open` line (default `close` when absent, issue #336) marks a keep-open partial-close terminal: the main session writes `comment_keep_open` at the Closure Decision Gate to keep the issue OPEN — `finalize`/`sink-merge` then preserve the roadmap source, comment instead of closing, and refuse a PR/MR sink (keep-open is merge-sink-only).
 - `## Lease` — (Legacy, deprecated) Coordination metadata; preserved for backward compatibility
@@ -241,33 +241,33 @@ This invariant is enforced at three independent points:
 
 The numbers in the bundle identifier are always in ascending sorted order, matching the order in `issue_numbers`.
 
-## Adaptive Path Switch (`enable_adaptive`)
+## Adaptive Path — `installed_paths` Config Field (#538)
 
-The adaptive path (issue #227) is opt-in at install time, gated by a single
-shared switch.
+The adaptive path (issue #227) is the unconditional default — no switch to flip, nothing to
+configure for a standard install. `fast` and `full` are install-time opt-ins recorded in the shared
+config.
 
-- **Location & default.** A boolean `enable_adaptive` in the existing global store
-  `~/.config/kaola-workflow/config.json` (the same file as `parallel_mode`; one
-  shared path, no per-edition namespace). **Default OFF** — absent reads as OFF.
-- **On-test.** The OFF guarantee rests on the strict `config.enable_adaptive === true`
-  test (never `!== false`), so an absent field is falsy → OFF without any reliance on
-  a defaults object. Precedence: env `KAOLA_ENABLE_ADAPTIVE` (`1`/`0`) > config
-  `enable_adaptive` > default OFF.
-- **install.sh** writes the field only on `--enable-adaptive=yes` (a read-modify-write
-  merge preserving `parallel_mode`); the default path writes nothing, and a reinstall
-  without the flag never revokes an existing `enable_adaptive:true`.
-- **Selection-only semantics.** The switch gates **new selection/claim only**, read in
-  exactly two logical sites: the router prose (`workflow-next.md` Step 0a-1, which omits
-  `adaptive` from the menu when OFF) and `claimProject` (typed refusal on an `adaptive`
-  claim when OFF). It is **not** read by `repair-state.js`/`routeAdaptive`, by
+- **Location & default.** A list-valued `installed_paths` field in the existing global store
+  `~/.config/kaola-workflow/config.json` (the same file as `parallel_mode`; one shared path, no
+  per-edition namespace). **Default `[]`** (absent or malformed reads as `[]` = adaptive-only).
+  Adaptive is implicit-always and never appears in the array.
+- **Resolution.** `resolveInstalledPaths(config)` (exported from
+  `kaola-workflow-adaptive-schema.js`) reads `installed_paths`, drops unknown tokens, and returns a
+  frozen subset of `["fast","full"]`. No env override — "installed" is an on-disk fact, not a
+  per-session toggle. There is no env override for `installed_paths`.
+- **install.sh** opt-ins: `--with-fast` and `--with-full`. The installer performs a read-modify-
+  write UNION — it never removes an already-installed path. A bare `./install.sh` reinstalls what
+  is already installed. `uninstall.sh` removes the config file; reset to adaptive-only = uninstall
+  → reinstall.
+- **Selection semantics.** `isLegalWorkflowPath(value, installedPaths)` (from the schema) is the
+  single legality gate: adaptive is unconditionally legal; `fast`/`full` require membership in
+  `installedPaths`. It is **not** read by `repair-state.js`/`routeAdaptive`, by
   `kaola-workflow-plan-validator.js`, or by the two `claim.js` resume surfaces.
-- **Finish-in-flight.** An already-frozen adaptive project (a `workflow-plan.md`
-  exists) **resumes to completion even after the switch flips OFF** — re-running
-  availability checks on a frozen plan would brick legitimate in-flight work. Both
-  `claim.js` resume surfaces (`writeState` next_command default and
-  `resumeFallbackCommand`) and `routeAdaptive` recognize `workflow_path: adaptive` and
-  emit `/kaola-workflow-plan-run {project}` toggle-agnostically — never
-  `/kaola-workflow-phase{N}`.
+- **Finish-in-flight.** An already-frozen adaptive project (a `workflow-plan.md` exists) resumes
+  to completion regardless of any config change. Both `claim.js` resume surfaces (`writeState`
+  next_command default and `resumeFallbackCommand`) and `routeAdaptive` recognize
+  `workflow_path: adaptive` and emit `/kaola-workflow-plan-run {project}` toggle-agnostically —
+  never `/kaola-workflow-phase{N}`.
 
 ## Codex Task Mirror (issue #266, AC-C + AC-D)
 

@@ -87,6 +87,12 @@ if rm -f "$AGENT_MODEL_MANIFEST" 2>/dev/null; then
   echo "Removed agent model manifest: $AGENT_MODEL_MANIFEST"
 fi
 
+# #538: uninstall clears the shared config so reset = uninstall -> reinstall (back to adaptive-only).
+KAOLA_CONFIG_FILE="$HOME/.config/kaola-workflow/config.json"
+if [[ -f "$KAOLA_CONFIG_FILE" ]]; then
+  rm -f "$KAOLA_CONFIG_FILE" && echo "Removed $KAOLA_CONFIG_FILE"
+fi
+
 COMMANDS=(
   "$HOME/.claude/commands/workflow-next"*.md
   "$HOME/.claude/commands/kaola-workflow.md"

@@ -17,10 +17,11 @@
 // reject cross-edition leaks and parent-dir requires).
 // ---------------------------------------------------------------------------
 
-// The three legal workflow paths. `claimProject` whitelists {fast, full} when the
-// adaptive switch is OFF and this full set when ON.
+// The three legal workflow path NAMES (the closed universe). Adaptive is the
+// unconditional default and is ALWAYS legal; `fast`/`full` are install-time opt-ins
+// (`installed_paths`) — `claimProject` admits a path iff it is `adaptive` or recorded
+// as installed.
 const WORKFLOW_PATHS = Object.freeze(['fast', 'full', 'adaptive']);
-const WORKFLOW_PATHS_NO_ADAPTIVE = Object.freeze(['fast', 'full']);
 const ADAPTIVE_PATH = 'adaptive';
 
 // The adaptive executor command + skill the two resume surfaces emit (never
@@ -384,11 +385,12 @@ function isCuratedRoot(p) { return CURATED_ROOT_LC.has(String(p || '').toLowerCa
 function canonicalCuratedRoot(p) { return CURATED_ROOT_LC.get(String(p || '').toLowerCase()) || null; }
 
 // The single shared global config file (one path, no per-edition namespace) + the
-// switch field and its env mirror. Precedence: env KAOLA_ENABLE_ADAPTIVE > config
-// enable_adaptive > default OFF.
+// list-valued opt-in field. `installed_paths` is the install-time record of which EXTRA
+// paths ({fast, full}) the installer wrote; adaptive is implicit-always and NEVER appears
+// in it. Default `[]` (adaptive-only) when the field is absent/malformed. NO env override —
+// "installed" is an on-disk fact, not a per-run toggle (#538 retired KAOLA_ENABLE_ADAPTIVE).
 const CONFIG_REL_PATH = ['.config', 'kaola-workflow', 'config.json'];
-const ENABLE_ADAPTIVE_FIELD = 'enable_adaptive';
-const ENABLE_ADAPTIVE_ENV = 'KAOLA_ENABLE_ADAPTIVE';
+const INSTALLED_PATHS_FIELD = 'installed_paths';
 const FANOUT_CAP_ENV = 'KAOLA_FANOUT_CAP';
 const FANOUT_CAP_READONLY_ENV = 'KAOLA_FANOUT_CAP_READONLY';
 // #364: KAOLA_BATCH_CWD_ENFORCED + resolveBatchCwdEnforced were RETIRED with the write-role
@@ -403,15 +405,15 @@ const FANOUT_CAP_READONLY_ENV = 'KAOLA_FANOUT_CAP_READONLY';
 // may differ — keep it unset there until proven).
 const LANE_CONTAINMENT_ENV = 'KAOLA_LANE_CONTAINMENT';
 
-// Resolve the adaptive switch with precedence env > config > default OFF.
-// The OFF guarantee rests on the STRICT `config.enable_adaptive === true` on-test
-// (never `!== false`): an absent field is falsy → OFF. The env mirror is `1`/`0`.
-function resolveEnableAdaptive(config, env) {
-  const e = env || {};
-  const raw = e[ENABLE_ADAPTIVE_ENV];
-  if (raw === '1' || raw === 'true' || raw === 'yes') return true;
-  if (raw === '0' || raw === 'false' || raw === 'no') return false;
-  return !!(config && config[ENABLE_ADAPTIVE_FIELD] === true);
+// Resolve the installed opt-in paths from config. Adaptive is implicit-always and is NEVER in this
+// array (legality short-circuits adaptive in isLegalWorkflowPath). No env override: the per-session
+// KAOLA_ENABLE_ADAPTIVE switch is retired (#538) — "installed" is an install-time fact, not a per-run
+// toggle. Returns a frozen, de-duplicated subset of {fast, full}; any unknown token in config is
+// dropped, so a hand-edited junk value cannot make a bogus path legal.
+function resolveInstalledPaths(config) {
+  const raw = (config && Array.isArray(config[INSTALLED_PATHS_FIELD])) ? config[INSTALLED_PATHS_FIELD] : [];
+  const optIn = WORKFLOW_PATHS.filter(p => p !== ADAPTIVE_PATH); // ['fast','full'] — the only opt-ins
+  return Object.freeze(optIn.filter(p => raw.includes(p)));
 }
 
 // Resolve the fan-out cap (env override, else default), clamped to a sane minimum.
@@ -538,8 +540,8 @@ function spliceComplianceSection(content, row) {
   return content.trimEnd() + newSection;
 }
 
-function isLegalWorkflowPath(value, adaptiveEnabled) {
-  return (adaptiveEnabled ? WORKFLOW_PATHS : WORKFLOW_PATHS_NO_ADAPTIVE).includes(value);
+function isLegalWorkflowPath(value, installedPaths) {
+  return value === ADAPTIVE_PATH || (Array.isArray(installedPaths) && installedPaths.includes(value));
 }
 
 // ---------------------------------------------------------------------------
@@ -570,7 +572,6 @@ function refuse(reason, extra) {
 
 module.exports = {
   WORKFLOW_PATHS,
-  WORKFLOW_PATHS_NO_ADAPTIVE,
   ADAPTIVE_PATH,
   PLAN_RUN_COMMAND,
   PLAN_RUN_SKILL,
@@ -618,12 +619,11 @@ module.exports = {
   isCuratedRoot,
   canonicalCuratedRoot,
   CONFIG_REL_PATH,
-  ENABLE_ADAPTIVE_FIELD,
-  ENABLE_ADAPTIVE_ENV,
+  INSTALLED_PATHS_FIELD,
   FANOUT_CAP_ENV,
   FANOUT_CAP_READONLY_ENV,
   LANE_CONTAINMENT_ENV,
-  resolveEnableAdaptive,
+  resolveInstalledPaths,
   resolveFanoutCap,
   resolveFanoutCapReadonly,
   resolveLaneContainment,

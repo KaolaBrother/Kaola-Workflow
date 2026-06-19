@@ -285,19 +285,19 @@ To install the three reviewer agents on Sonnet, request the `common` profile:
 #### Adaptive workflow path
 
 The [adaptive workflow](#adaptive-workflow-the-default-path) — Kaola-Workflow's
-**default path** — is **ON by default**: a bare `./install.sh` writes
-`enable_adaptive:true` to `~/.config/kaola-workflow/config.json`. To opt out:
+**default path** — requires no configuration: a bare `./install.sh` installs the
+adaptive path and nothing else. To also install the fast or full paths:
 
 ```bash
-./install.sh --enable-adaptive=no        # actively writes enable_adaptive:false (survives re-install over a stale :true)
+./install.sh --with-fast                 # adds the fast path (opt-in)
+./install.sh --with-full                 # adds the full six-phase path (opt-in)
+./install.sh --with-fast --with-full     # both opt-ins together
 ```
 
-The flag only flips the `enable_adaptive` switch; the `/kaola-workflow-adapt` and
-`/kaola-workflow-plan-run` commands and the `adversarial-verifier` agent install on every
-run regardless. Under an **ON** switch, adaptive is the **default route** in
-`/workflow-next` Step 0a-1 — `fast` and `full` are reachable only by an explicit
-path-naming request or an explicit `KAOLA_PATH`. You can also override the switch
-per session with `KAOLA_ENABLE_ADAPTIVE=0` to disable (precedence: env > config > OFF).
+Adaptive is the unconditional default in `/workflow-next` — `fast` and `full` are
+explicit path-naming escapes, available only when installed. Re-install unions what is
+already installed with any new `--with-*` flags; it never removes a previously-installed
+path. There is no per-session switch.
 
 Then in Claude Code:
 
@@ -659,7 +659,7 @@ The command is a thin router. It first checks local/remote Git state, safely fas
 
 ### Adaptive workflow (the default path)
 
-This is Kaola-Workflow's primary design. For most issues — from a one-line fix (a degenerate single-node DAG) to work that fans out into disjoint sub-areas, needs parallel research across several subsystems, or calls for a non-standard verification shape — the adaptive path lets the agent **freely compose a task-shaped DAG of role nodes** inside Kaola's locked lifecycle frame (claim → branch/worktree → *free design* → Finalization sink), instead of following a fixed sequence. The install switch is **ON by default** (a bare `./install.sh` writes `enable_adaptive:true`; opt out with `--enable-adaptive=no`). Under an ON switch, adaptive is the **default route** in `/workflow-next` — `fast` and `full` are explicit path-naming escapes (see [Other paths](#other-paths-fast-and-full-optional) below). A per-session override is available: `KAOLA_ENABLE_ADAPTIVE=0` disables (precedence: env > config > OFF). With the switch off, behavior falls back to the legacy picker — `adaptive` is absent from path selection and `KAOLA_PATH=adaptive` is a typed refusal, never a silent downgrade.
+This is Kaola-Workflow's primary design. For most issues — from a one-line fix (a degenerate single-node DAG) to work that fans out into disjoint sub-areas, needs parallel research across several subsystems, or calls for a non-standard verification shape — the adaptive path lets the agent **freely compose a task-shaped DAG of role nodes** inside Kaola's locked lifecycle frame (claim → branch/worktree → *free design* → Finalization sink), instead of following a fixed sequence. Adaptive is the **unconditional default**: a bare `./install.sh` installs it; no switch to flip, nothing to deliberate. `fast` and `full` are install-time opt-ins (`--with-fast` / `--with-full`) and explicit path-naming escapes once installed (see [Other paths](#other-paths-fast-and-full-optional) below).
 
 ```
 /workflow-next                       # adaptive is the default route under the ON switch
@@ -718,7 +718,7 @@ For the full design, see `docs/investigations/2026-06-07-parallel-ready-set-exec
 
 ### Other paths: fast and full (optional)
 
-Two non-default paths remain for cases the adaptive planner does not fit. Both are explicit opt-ins under the ON switch, and they are the available paths when the adaptive switch is OFF.
+Two non-default paths remain for cases the adaptive planner does not fit. Both are install-time opt-ins (`--with-fast` / `--with-full`); once installed they are reachable by an explicit path-naming request or `KAOLA_PATH`. A request for a path that is not installed returns a typed `path_not_installed` refusal — never a silent adaptive substitution.
 
 #### Fast path
 
@@ -732,7 +732,7 @@ Fast path executes Plan, Implement, and Review in a single pass, writing `fast-s
 
 #### Full path — the six phases
 
-The classic fixed sequence, reachable with `KAOLA_PATH=full /workflow-next` (and the default route only when the adaptive switch is OFF). Each phase writes one durable artifact:
+The classic fixed sequence, reachable with `KAOLA_PATH=full /workflow-next` (requires `--with-full` at install time). Each phase writes one durable artifact:
 
 | # | Phase | What happens | Output file |
 |---|-------|-------------|-------------|
@@ -799,8 +799,7 @@ The detailed durable-state map lives in `docs/workflow-state-contract.md`. Keep 
 | `KAOLA_WORKFLOW_DEBUG_CWD` | (unset) | DEV/TEST ONLY — when set, `sink-merge.js` writes its final cwd to this file |
 | `KAOLA_WORKFLOW_FORCE_FF_FAIL` | (unset) | DEV/TEST ONLY — fail first N fast-forward merge attempts (GitHub, GitLab, and Gitea) |
 | `KAOLA_WORKFLOW_FORCE_MERGE_IMPOSSIBLE` | (unset) | DEV/TEST ONLY — force merge-impossible error in sink-merge fallback tests (GitHub, GitLab, and Gitea) |
-| `KAOLA_PATH` | (unset) | Set to `fast` or `full` to force a specific path explicitly. Under an ON adaptive switch the adaptive path is the default route; under an OFF switch the default is the full six-phase flow. Set to `adaptive` to force the adaptive path (no-op when already the default; typed refusal when the switch is off) |
-| `KAOLA_ENABLE_ADAPTIVE` | (unset) | Per-session override of the `enable_adaptive` install switch (`1`/`true`/`yes` on, `0`/`false`/`no` off). Precedence: env > `~/.config/kaola-workflow/config.json` > OFF |
+| `KAOLA_PATH` | (unset) | Set to `fast`, `full`, or `adaptive` to name a specific path explicitly. Adaptive is the unconditional default when unset. Naming a path that is not installed returns a typed `path_not_installed` refusal — never a silent substitution |
 | `KAOLA_FANOUT_CAP` | `4` | Runtime concurrency limit: the executor runs at most this many adaptive fan-out members at once and drains a wider fan-out by rolling bounded dispatch (`top-up`). NOT a planning validity cap — a logical fan-out MAY be wider |
 | `KAOLA_TARGET_ISSUES` | (unset) | Comma-separated list of issue numbers for an explicit bundle claim, e.g. `KAOLA_TARGET_ISSUES=42,47,53`. Equivalent to `--target-issues 42,47,53`. Must not be set together with `KAOLA_TARGET_ISSUE` (sets off the `target_ambiguity` refusal). Adaptive path only |
 | `KAOLA_BUNDLE_MAX_ISSUES` | `4` | Maximum number of issues allowed in a single bundle. Bundles larger than this cap are refused with `target_set_too_large`. Applies to both explicit (`--target-issues`) and scout-recommended bundles |
@@ -1068,7 +1067,7 @@ Setting both `--target-issue` and `--target-issues` (or both env-var equivalents
 | `target_ambiguity` | Both scalar and multi-target provided simultaneously |
 | `target_set_empty` | Resolved issue list is empty after dedup |
 | `target_set_too_large` | Bundle exceeds `KAOLA_BUNDLE_MAX_ISSUES` (default 4) |
-| `target_set_not_adaptive` | Bundle requested but `workflow_path` is not adaptive |
+| `bundle_requires_adaptive` | Bundle requested but `workflow_path` is not adaptive |
 | `target_set_conflicts_active_work` | One or more targets overlap an already-claimed active folder |
 | `target_set_has_closed_issue` | One or more targets are already closed on the forge |
 | `target_set_red` | One or more targets are red (conflict) per the classifier |
@@ -1082,7 +1081,7 @@ Setting both `--target-issue` and `--target-issues` (or both env-var equivalents
 
 ### Adaptive path only
 
-The bundle lane requires `workflow_path: adaptive`. Attempting a bundle claim on any other path returns `target_set_not_adaptive`.
+The bundle lane requires `workflow_path: adaptive`. Attempting a bundle claim on any other path returns `bundle_requires_adaptive`.
 
 ## Parallel active work
 

@@ -29,7 +29,7 @@ const kwSandboxHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sandbox-home-'))
 fs.mkdirSync(path.join(kwSandboxHome, '.config', 'kaola-workflow'), { recursive: true });
 fs.writeFileSync(
   path.join(kwSandboxHome, '.config', 'kaola-workflow', 'config.json'),
-  JSON.stringify({ parallel_mode: 'auto', enable_adaptive: false }, null, 2) + '\n'
+  JSON.stringify({ parallel_mode: 'auto', installed_paths: [] }, null, 2) + '\n'
 );
 process.env.HOME = kwSandboxHome;
 process.env.USERPROFILE = kwSandboxHome;

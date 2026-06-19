@@ -52,7 +52,7 @@ The startup/claim path accepts a multi-issue bundle target alongside the existin
 | `target_ambiguity` | — | Both scalar and multi-target provided simultaneously |
 | `target_set_empty` | — | Resolved issue list is empty after sort+dedup |
 | `target_set_too_large` | — | Bundle size exceeds `KAOLA_BUNDLE_MAX_ISSUES` (default 4) |
-| `target_set_not_adaptive` | — | Bundle requested but `workflow_path` is not `adaptive` |
+| `bundle_requires_adaptive` | `refuse` | Bundle requested but `workflow_path` is not `adaptive` |
 | `target_set_conflicts_active_work` | `refuse` | One or more targets overlap an already-claimed active folder |
 | `target_set_has_closed_issue` | `refuse` | One or more targets are already closed on the forge |
 | `target_set_red` | `refuse` | One or more targets are red per the overlap classifier |
@@ -171,7 +171,7 @@ The Finalization sink is responsible for delivering completed work to the reposi
 
 ### Bundle Lane
 
-- **`KAOLA_TARGET_ISSUES`** — Comma-separated list of issue numbers for an explicit bundle claim (e.g. `KAOLA_TARGET_ISSUES=42,47,53`). Equivalent to `--target-issues 42,47,53`. Must not be set together with `KAOLA_TARGET_ISSUE` (triggers `target_ambiguity` refusal). Refused with `target_set_not_adaptive` on fast/full paths. Numbers are sorted and deduped before validation.
+- **`KAOLA_TARGET_ISSUES`** — Comma-separated list of issue numbers for an explicit bundle claim (e.g. `KAOLA_TARGET_ISSUES=42,47,53`). Equivalent to `--target-issues 42,47,53`. Must not be set together with `KAOLA_TARGET_ISSUE` (triggers `target_ambiguity` refusal). Refused with `bundle_requires_adaptive` on fast/full paths. Numbers are sorted and deduped before validation.
 
 - **`KAOLA_BUNDLE_MAX_ISSUES`** (default `4`) — Maximum number of issues allowed in a single bundle. Bundles whose resolved size exceeds this cap are refused with `target_set_too_large`. Applies to both explicit (`--target-issues`) and scout-recommended bundles.
 
@@ -619,14 +619,14 @@ Configuration files control workflow behavior and issue sorting.
   "parallel_mode": "auto",
   "pr_auto_merge": false,
   "mr_auto_merge": false,
-  "enable_adaptive": false
+  "installed_paths": []
 }
 ```
 
 - `parallel_mode` — Parallel-work classification strategy (`auto` or other); see README § Classifier configuration
 - `pr_auto_merge` — Enable automatic PR merge after creation (GitHub + Gitea editions; squash merge with source branch deletion; non-fatal if merge fails)
 - `mr_auto_merge` — Enable automatic MR merge after creation (GitLab edition; equivalent to `glab mr merge --auto-merge`; non-fatal if merge fails)
-- `enable_adaptive` — Opt-in switch for the adaptive workflow path (issue #227); default OFF. Written by `install.sh --enable-adaptive=yes` (read-modify-write, preserving `parallel_mode`); overridable per session by the `KAOLA_ENABLE_ADAPTIVE` environment variable (precedence: env > config > OFF). See `docs/workflow-state-contract.md` § Adaptive Path Switch
+- `installed_paths` — List of install-time opt-in paths (`"fast"` and/or `"full"`); default `[]` (adaptive-only). Adaptive is implicit-always and never appears in this array. Written by `install.sh --with-fast` / `--with-full` (read-modify-write UNION, preserving other fields; never removes). Resolved by `resolveInstalledPaths(config)` in `kaola-workflow-adaptive-schema.js`. No env override. See `docs/workflow-state-contract.md` § Adaptive Path — `installed_paths` Config Field
 - `KAOLA_LANE_CONTAINMENT` (#376) — fail-closed env flag (default false; only `1`/`true`/`yes` enables) that arms the write-lane containment PreToolUse hook (`hooks/kaola-workflow-write-lane.sh`). When ON and a `kaola-workflow/<project>/.cache/running-set.json` manifest of open write-nodes exists, the hook DENIES (exit 2) an out-of-lane `Write`/`Edit` — inside a member worktree outside its declared lane, or in the parent worktree matching an open node's lane. Fail-open (exit 0) on a missing flag/manifest, malformed stdin, or non-git cwd; dormant until the #377 scheduler produces the manifest. Successor of the retired #320 `KAOLA_BATCH_CWD_ENFORCED`.
 
 ### Agent model manifest (`~/.claude/agents/.kaola-agent-models.json`)
@@ -676,7 +676,7 @@ When an active workflow folder is finalized (`cmdFinalize`) or archived after a 
 
 ### Script: `kaola-workflow-plan-validator.js`
 
-Validates a frozen adaptive `workflow-plan.md` against the closed grammar and computes the auto-run / ask / typed-refusal governance decision (issue #227; see README § Adaptive path). The agent freely authors any in-grammar DAG of role nodes; this script proves the result is in-grammar and classifies its risk. It is **toggle-agnostic** — it never reads the `enable_adaptive` install switch or its `KAOLA_ENABLE_ADAPTIVE` env mirror (the switch gates path *selection* only, never well-formedness or resume). Root and its byte-identical Codex copy share the contract; the GitLab and Gitea editions carry the same contract in a forge-adapted copy.
+Validates a frozen adaptive `workflow-plan.md` against the closed grammar and computes the auto-run / ask / typed-refusal governance decision (issue #227; see README § Adaptive path). The agent freely authors any in-grammar DAG of role nodes; this script proves the result is in-grammar and classifies its risk. It is **toggle-agnostic** — it never reads `installed_paths` or any path-selection config (path selection is gated at `claimProject`, never at well-formedness or resume). Root and its byte-identical Codex copy share the contract; the GitLab and Gitea editions carry the same contract in a forge-adapted copy.
 
 **Usage:**
 
@@ -741,7 +741,7 @@ kaola-workflow-plan-validator.js <workflow-plan.md> [--json] [--freeze [--repair
 
 **`plan_hash`:** SHA-256 over the whitespace-normalized author-immutable `## Meta` (frozen `labels:`) + `## Nodes` sections; the mutable `## Node Ledger` and the hash comment itself are excluded. Stored inside `workflow-plan.md` as `<!-- plan_hash: <64-hex> -->` and re-checked on every load — a mismatch is tampering and yields a typed refusal on `--resume-check`. The full `workflow-plan.md` artifact contract (`## Meta`, the `## Nodes` table schema, and the `## Node Ledger`) is documented in `docs/workflow-state-contract.md`. A barrier consent-halt is durable in BOTH `workflow-state.md` (`escalated_to_full: consent`) and the non-hashed `## Node Ledger` (`consent_halt: pending`, issue #234), so a lost/regenerated `workflow-state.md` cannot silently drop the halt.
 
-**Authoring-entry guard (`kaola-workflow-claim.js authoring-allowed`, issue #235):** the only switch-reading guard besides `claimProject` selection. `/kaola-workflow-adapt` runs `node kaola-workflow-claim.js authoring-allowed --project <p>` BEFORE authoring/freezing a plan; it returns `{ "status": "authoring_allowed", "allowed": true }` when the `enable_adaptive` switch is ON, else a typed `{ "status": "authoring_refused", "allowed": false, "reasoning": "...OFF...#44" }` (exit 0; the caller branches on `status`). The validator stays toggle-agnostic — the switch is read only here and in `claimProject`.
+**Authoring-entry guard (`kaola-workflow-claim.js authoring-allowed`, issue #235):** `/kaola-workflow-adapt` runs `node kaola-workflow-claim.js authoring-allowed --project <p>` BEFORE authoring/freezing a plan; it unconditionally returns `{ "status": "authoring_allowed", "allowed": true }` (exit 0). Adaptive authoring is never refused — there is no on/off switch (#538). The validator stays selection-agnostic — it never reads `installed_paths` or any path-selection state.
 
 ## Forge Contract Validators (issue #341)
 

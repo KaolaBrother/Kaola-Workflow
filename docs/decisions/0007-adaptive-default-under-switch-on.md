@@ -1,7 +1,7 @@
 # 7. Adaptive path is the default route under an ON switch; install switch defaults ON
 
 Date: 2026-06-09
-Status: Accepted
+Status: Superseded by D-538-01
 Issue: #254
 Supersedes: the *selection / "a custom graph must earn itself"* portion of
 `docs/decisions/0003-adaptive-front-end-planner.md` and the #227 structure-question

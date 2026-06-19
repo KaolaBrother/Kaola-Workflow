@@ -17,7 +17,7 @@ function readInstalledCommand(name) {
 try {
   execFileSync(
     'bash',
-    ['install.sh', '--yes', '--forge=github', '--profile=higher', '--no-settings-merge'],
+    ['install.sh', '--yes', '--forge=github', '--profile=higher', '--with-fast', '--with-full', '--no-settings-merge'],
     {
       cwd: root,
       env: { ...process.env, HOME: tmp },
@@ -74,12 +74,14 @@ try {
     assert(installed.includes('kaola-workflow-managed-agent: true'), agent+' installed file must keep managed marker');
   }
 
-  // Default profile is `higher`: a no-flag install renders the three reviewer
-  // agents on Opus (this is what locks the default — not an explicit --profile).
+  // Default profile is `higher`: an install with no `--profile` flag renders the
+  // three reviewer agents on Opus (this is what locks the default — not an explicit
+  // --profile). #538: full-path commands are an opt-in, so pass --with-full to install
+  // the phase[1-5] files this block reads (the profile defaulting under test is unaffected).
   {
     const dtmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-default-'));
     try {
-      execFileSync('bash', ['install.sh', '--yes', '--forge=github', '--no-settings-merge'],
+      execFileSync('bash', ['install.sh', '--yes', '--forge=github', '--with-fast', '--with-full', '--no-settings-merge'],
         { cwd: root, env: { ...process.env, HOME: dtmp }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
       const rd = n => fs.readFileSync(path.join(dtmp, '.claude', 'commands', n), 'utf8');
       assert(rd('kaola-workflow-phase3.md').includes('subagent_type="code-architect",\n  model="opus",'),
@@ -93,7 +95,7 @@ try {
   {
     const ctmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-common-'));
     try {
-      execFileSync('bash', ['install.sh', '--yes', '--forge=github', '--profile=common', '--no-settings-merge'],
+      execFileSync('bash', ['install.sh', '--yes', '--forge=github', '--profile=common', '--with-fast', '--with-full', '--no-settings-merge'],
         { cwd: root, env: { ...process.env, HOME: ctmp }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
       const rd = n => fs.readFileSync(path.join(ctmp, '.claude', 'commands', n), 'utf8');
       assert(rd('kaola-workflow-phase3.md').includes('subagent_type="code-architect",\n  model="sonnet",'),

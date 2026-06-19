@@ -6,29 +6,19 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-// #515: hermetic default — pin the adaptive switch OFF for every spawn that inherits
-// process.env (runClaim / runClaimRaw and any inline spawnSync). claim.js reads the HOME
-// ~/.config/kaola-workflow/config.json, which on a dev box with `install --enable-adaptive`
-// is ON; without this default a DEFAULTED fast/full startup/claim would be refused by the
-// #515 path_requires_explicit_opt_in guard. Set at module top BEFORE any per-call env spread,
-// so a sub-test that explicitly passes KAOLA_ENABLE_ADAPTIVE:'1' (none today) still wins.
-// UNCONDITIONAL (not guarded on `=== undefined`): an ambient-exported value would reintroduce the
-// non-hermeticity this removes; the harness must be deterministic regardless of the dev shell.
-process.env.KAOLA_ENABLE_ADAPTIVE = '0';
+// #538: KAOLA_ENABLE_ADAPTIVE is retired — adaptive is the unconditional default (no switch).
+// The module-top KAOLA_ENABLE_ADAPTIVE pin is removed.
 
-// #531: hermetic HOME — the classifier (cmdClassify) reads parallel_mode from the SAME
-// ~/.config/kaola-workflow/config.json and short-circuits to verdict:'green' ("parallel_mode=<x>;
-// bypassing classifier") whenever it is not 'auto', BEFORE any overlap scan. Unlike enable_adaptive
-// (pinned via the KAOLA_ENABLE_ADAPTIVE env above) parallel_mode has NO env override — read only from
-// the config FILE — so a developer-local parallel_mode != 'auto' would turn the classifier-backed
-// startup assertions (e.g. "no local evidence must exit 1") into spurious passes on that box, never on
-// a default/CI config (issue #531). Point HOME/USERPROFILE at a sandbox seeded with parallel_mode:'auto'
-// so every inheriting claim->classifier subprocess sees the canonical config. Seeded before any spawn.
+// #531 / #538: hermetic HOME — the classifier (cmdClassify) reads parallel_mode from
+// ~/.config/kaola-workflow/config.json and bypasses to verdict:'green' when not 'auto'.
+// Also resolveInstalledPaths reads installed_paths from this file (#538). Pin a process-wide
+// sandbox HOME seeded with parallel_mode:'auto' + installed_paths:[] (adaptive-only default)
+// so a dev-local config can't affect these tests. os.homedir() honors process.env.HOME.
 const kwSandboxHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sandbox-home-'));
 fs.mkdirSync(path.join(kwSandboxHome, '.config', 'kaola-workflow'), { recursive: true });
 fs.writeFileSync(
   path.join(kwSandboxHome, '.config', 'kaola-workflow', 'config.json'),
-  JSON.stringify({ parallel_mode: 'auto', enable_adaptive: false }, null, 2) + '\n'
+  JSON.stringify({ parallel_mode: 'auto', installed_paths: [] }, null, 2) + '\n'
 );
 process.env.HOME = kwSandboxHome;
 process.env.USERPROFILE = kwSandboxHome;

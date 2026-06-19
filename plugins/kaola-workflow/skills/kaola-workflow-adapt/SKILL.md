@@ -10,8 +10,8 @@ issue — which roles, how many, in what shape — into a `workflow-plan.md`. Th
 template library and no knob-binding ceremony. Mirror of `commands/kaola-workflow-adapt.md`
 for the Codex runtime. Reads and updates `kaola-workflow/{project}/workflow-state.md`.
 
-Reachable only when the adaptive switch is ON; adaptive is the default under an ON
-switch and `fast`/`full` are explicit path-naming escapes (see `kaola-workflow-next`
+Adaptive is the unconditional default; `fast`/`full` are explicit path-naming
+escapes, never an automatic fallback (see `kaola-workflow-next`
 Startup Step 0a-1).
 
 ## The grammar (the closed envelope)
@@ -148,10 +148,10 @@ governance refusal / declined ask / abort — no `plan_hash`) routes back here; 
 leaves a **resumable** project; `kaola-workflow-claim.js discard --project
 {project}` abandons it.
 
-**Entry guard (this session, before the delegation).** Confirm the adaptive switch is ON — the
-**hard authoring guard** (#235). It is switch-only and needs no project. If it refuses, STOP; do
-not summon the planner (the planner's `startup` re-checks the switch via `claimProject`, so a plan
-can never be authored under an OFF switch):
+**Entry guard (this session, before the delegation).** Run the **authoring guard** (#235). It
+needs no project. Adaptive authoring is always allowed, so this returns `authoring_allowed: true`;
+the call preserves the mechanical gate shape and the planner's `startup` still routes the claim via
+`claimProject`:
 
 ```bash
 kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
@@ -183,7 +183,7 @@ written. Surface `claim_reasoning` and classify by `result` (#495):
   pick a different target, go offline, or abort. This is NOT an `adaptive-node write-halt`;
   no plan/ledger exists yet at claim time.
 
-**Planner-first control boundary (issue #287).** The main session performs ONLY the allowed non-design preflight above (read repo/session rules, confirm target issue, authoring-allowed switch check, git freshness, non-design target availability), then dispatches `workflow-planner` immediately as the first issue-specific action. The main session MUST NOT pre-author the `## Nodes` DAG, choose role sequence/deps/shapes/write-sets, or pass a mandatory full DAG / `AUTHOR EXACTLY` / `do not redesign` prompt to the planner — the adaptive front-end design is the planner's to own, not the main session's. Doing so earns a typed refusal: `planner_control_boundary_violation`. The ONLY exception is in the bounded unfrozen-plan validator-repair loop (after `handoff_status: plan_invalid` on an UNFROZEN plan): the orchestrator MAY re-dispatch the planner with the verbatim validator errors + the prior plan as repair context, because the planner already owns that unfrozen draft.
+**Planner-first control boundary (issue #287).** The main session performs ONLY the allowed non-design preflight above (read repo/session rules, confirm target issue, authoring-allowed check, git freshness, non-design target availability), then dispatches `workflow-planner` immediately as the first issue-specific action. The main session MUST NOT pre-author the `## Nodes` DAG, choose role sequence/deps/shapes/write-sets, or pass a mandatory full DAG / `AUTHOR EXACTLY` / `do not redesign` prompt to the planner — the adaptive front-end design is the planner's to own, not the main session's. Doing so earns a typed refusal: `planner_control_boundary_violation`. The ONLY exception is in the bounded unfrozen-plan validator-repair loop (after `handoff_status: plan_invalid` on an UNFROZEN plan): the orchestrator MAY re-dispatch the planner with the verbatim validator errors + the prior plan as repair context, because the planner already owns that unfrozen draft.
 
 **Read the durable state, not the planner's prose.** On success take `{project}` from the return,
 re-read `kaola-workflow/{project}/workflow-state.md` (the `## Sink` block, `workflow_path: adaptive`)
@@ -194,7 +194,7 @@ and freeze). The claim (at repo-root — the adaptive claim provisions a worktre
 
 - **`handoff_status: ready_to_run`** (all checklist true) → hand off DIRECTLY to `kaola-workflow-plan-run {project}` (even when `decision:ask`, no approval gate). `kaola-workflow-plan-run` owns the complete node lifecycle — it opens and dispatches every node including the first, via `kaola-workflow-adaptive-node.js`.
 
-- **`handoff_status: plan_invalid`** (validator refused; plan never froze, NOTHING written) → bounded **repair loop**: re-dispatch the `workflow-planner` with the verbatim `errors`/`validator_verdict` so it overwrites the UNFROZEN plan with a corrected DAG and re-runs the handoff. Retry ~2x (counter in the orchestrator, never in the script). After repeated failure → real decision: downgrade to full path / discard+restart (`kaola-workflow-claim.js discard --project {project}` then fresh adaptive start) / STOP + surface concrete blocker with validator evidence. Never silently loop.
+- **`handoff_status: plan_invalid`** (validator refused; plan never froze, NOTHING written) → bounded **repair loop**: re-dispatch the `workflow-planner` with the verbatim `errors`/`validator_verdict` so it overwrites the UNFROZEN plan with a corrected DAG and re-runs the handoff. Retry ~2x (counter in the orchestrator, never in the script). After repeated failure (~2x) → real decision: **discard+restart a fresh adaptive run** (`kaola-workflow-claim.js discard --project {project}` then a fresh adaptive start) / **STOP + surface a concrete blocker** with validator evidence. NEVER downgrade to fast/full — there is no automatic fallback between paths (#538); the only fallbacks are inside adaptive (bounded repair, in-place posture). Never silently loop.
 
 After `handoff_status: ready_to_run` (and ONLY then), re-read `kaola-workflow/{project}/workflow-plan.md` to internalize the frozen `## Nodes` table, then create the orchestrator's task list. **The task list MUST NOT be created before `handoff_status: ready_to_run` is confirmed and the frozen plan has been read** — the planner owns the design; the task list is a mechanical reflection of the frozen result, not a pre-planned outline.
 
@@ -239,7 +239,7 @@ multi-issue startup path. If both are set, the script refuses with
 ### Bundle is adaptive-only
 
 The bundle lane requires `workflow_path: adaptive`. The startup script refuses with
-`target_set_not_adaptive` when the path is `fast` or `full`.
+`bundle_requires_adaptive` when the path is `fast` or `full`.
 
 ### Bundle authoring
 
@@ -265,7 +265,7 @@ A bundle run ends at ONE finalization. The finalization step:
 | `target_ambiguity` | both `--target-issue` and `--target-issues` set |
 | `target_set_empty` | issue list empty or missing |
 | `target_set_too_large` | list exceeds `KAOLA_BUNDLE_MAX_ISSUES` (default 4) |
-| `target_set_not_adaptive` | `workflow_path` is not `adaptive` |
+| `bundle_requires_adaptive` | `workflow_path` is not `adaptive` |
 | `target_set_conflicts_active_work` | any member is already claimed |
 | `target_set_has_closed_issue` | any member is already closed |
 | `target_set_red` | classifier returns `red` for any member |

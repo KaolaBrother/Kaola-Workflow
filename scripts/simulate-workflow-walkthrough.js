@@ -6,33 +6,25 @@ const os = require('os');
 const path = require('path');
 const { spawn, spawnSync, execFileSync } = require('child_process');
 
-// #515: hermetic default — pin the adaptive switch OFF for every spawn helper that inherits
-// process.env (runClaimOnline + the many inline spawnSync sites). claim.js reads the HOME
-// ~/.config/kaola-workflow/config.json, which on a dev box with `install --enable-adaptive`
-// is ON; without this default a DEFAULTED fast/full startup/claim would be refused by the
-// #515 path_requires_explicit_opt_in guard. Set at module top; every per-call extraEnv override
-// (e.g. KAOLA_ENABLE_ADAPTIVE:'1' in the adaptive sub-tests) spreads AFTER process.env, so the
-// explicit switch-ON sub-tests still win. NOTE: runNode SCRUBS all KAOLA_* (lines ~29-31), so
-// this module-top value is stripped there — runNode re-adds KAOLA_ENABLE_ADAPTIVE:'0' post-scrub.
-// UNCONDITIONAL (not guarded on `=== undefined`): an ambient-exported value would reintroduce the
-// non-hermeticity this removes; the harness must be deterministic regardless of the dev shell.
-process.env.KAOLA_ENABLE_ADAPTIVE = '0';
+// #538: KAOLA_ENABLE_ADAPTIVE is retired — adaptive is the unconditional default (no switch).
+// The module-top pin is removed; hermetic HOME (below) seeds installed_paths:[] so claim.js
+// resolveInstalledPaths returns [] (adaptive-only legal), matching the post-#538 install default.
 
 // #531: hermetic HOME — the classifier (cmdClassify) reads parallel_mode from the SAME
 // ~/.config/kaola-workflow/config.json and short-circuits to verdict:'green' ("parallel_mode=<x>;
-// bypassing classifier") whenever it is not 'auto', BEFORE any overlap scan. Unlike enable_adaptive
-// (pinned via the KAOLA_ENABLE_ADAPTIVE env above) there is NO env override for parallel_mode — it is
-// read only from the config FILE — so a developer-local `parallel_mode` != 'auto' would silently turn
-// every classifier verdict test (direct spawns AND the claim→classifier startup path) into a spurious
+// bypassing classifier") whenever it is not 'auto', BEFORE any overlap scan. There is NO env
+// override for parallel_mode — it is read only from the config FILE — so a developer-local
+// `parallel_mode` != 'auto' would silently turn every classifier verdict test into a spurious
 // "got green" failure on that box, never on a default/CI config (issue #531). Point HOME/USERPROFILE
-// (os.homedir() honors whichever the platform uses) at a sandbox seeded with parallel_mode:'auto' so
-// EVERY inheriting subprocess sees the canonical config regardless of the dev machine. Seeded once at
-// module top, before any spawn; the per-mode bypass regression test sets its own HOME and still wins.
+// (os.homedir() honors whichever the platform uses) at a sandbox seeded with parallel_mode:'auto'
+// and installed_paths:[] (the #538 adaptive-only default) so EVERY inheriting subprocess sees
+// the canonical config regardless of the dev machine. Seeded once at module top, before any spawn;
+// the per-mode bypass regression test sets its own HOME and still wins.
 const kwSandboxHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sandbox-home-'));
 fs.mkdirSync(path.join(kwSandboxHome, '.config', 'kaola-workflow'), { recursive: true });
 fs.writeFileSync(
   path.join(kwSandboxHome, '.config', 'kaola-workflow', 'config.json'),
-  JSON.stringify({ parallel_mode: 'auto', enable_adaptive: false }, null, 2) + '\n'
+  JSON.stringify({ parallel_mode: 'auto', installed_paths: [] }, null, 2) + '\n'
 );
 process.env.HOME = kwSandboxHome;
 process.env.USERPROFILE = kwSandboxHome;
@@ -68,7 +60,7 @@ function runNode(script, args, cwd, extraEnv, opts) {
     cwd,
     encoding: 'utf8',
     timeout,
-    env: { ...baseEnv, KAOLA_ENABLE_ADAPTIVE: '0', ...(extraEnv || {}), KAOLA_WORKFLOW_OFFLINE: '1' }
+    env: { ...baseEnv, ...(extraEnv || {}), KAOLA_WORKFLOW_OFFLINE: '1' }
   });
   if (result.error) throw result.error;
   return result;
@@ -1281,10 +1273,10 @@ function plantRoadmapIssue(root, issueNumber, body) {
 }
 
 // ===========================================================================
-// issue #227: adaptive-path cases. Each uses its own temp root and sets
-// KAOLA_ENABLE_ADAPTIVE explicitly so the toggle is deterministic regardless of
-// any local ~/.config/kaola-workflow/config.json. They exercise the committed
-// spine: claim toggle-guard, routeAdaptive resume, validator governance.
+// issue #227: adaptive-path cases. Each uses its own temp root. Under #538
+// adaptive is the unconditional default (no KAOLA_ENABLE_ADAPTIVE switch);
+// legality derives from installed_paths in the hermetic HOME config.
+// They exercise: claim legality gate, routeAdaptive resume, validator governance.
 // ===========================================================================
 
 function adaptiveTmp(slug) {
@@ -1316,58 +1308,58 @@ function plantFrozenPlan(root, project, planText) {
   return planPath;
 }
 
-// (a) OFF + KAOLA_PATH=adaptive startup -> typed refusal in claimProject, no state.
+// (a) #538: KAOLA_PATH=adaptive startup -> always acquired (adaptive is unconditionally legal).
 function testAdaptiveOffStartupRefusal() {
   const tmp = adaptiveTmp('off-startup');
   try {
     plantRoadmapIssue(tmp, 901, '');
     const result = runNode(claimScript, ['startup', '--target-issue', '901'], tmp,
-      { KAOLA_PATH: 'adaptive', KAOLA_ENABLE_ADAPTIVE: '0' });
+      { KAOLA_PATH: 'adaptive' });
     const out = JSON.parse(result.stdout);
-    assert(out.verdict === 'workflow_path_refused',
-      'OFF + KAOLA_PATH=adaptive startup must be a typed refusal, got: ' + result.stdout);
-    assert(out.claim === 'none', 'refusal must not claim');
-    assert(!fs.existsSync(statePath(tmp, 'issue-901')), 'refusal must write no state');
+    assert(out.claim === 'acquired',
+      '#538: KAOLA_PATH=adaptive startup must acquire (adaptive always legal), got: ' + result.stdout);
+    assert(fs.existsSync(statePath(tmp, 'issue-901')), 'acquired claim must write state');
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   console.log('testAdaptiveOffStartupRefusal: PASSED');
 }
 
-// (b) OFF + claim --workflowPath adaptive -> typed refusal (never silent downgrade).
+// (b) #538: claim --workflowPath adaptive -> acquired (adaptive is the unconditional default).
 function testAdaptiveOffClaimRefusal() {
   const tmp = adaptiveTmp('off-claim');
   try {
-    const result = runNode(claimScript, ['claim', '--project', 'issue-902', '--workflowPath', 'adaptive'], tmp,
-      { KAOLA_ENABLE_ADAPTIVE: '0' });
+    const result = runNode(claimScript, ['claim', '--project', 'issue-902', '--workflowPath', 'adaptive'], tmp);
     const out = JSON.parse(result.stdout);
-    assert(out.status === 'workflow_path_refused',
-      'OFF + claim adaptive must refuse, got: ' + result.stdout);
-    assert(!fs.existsSync(statePath(tmp, 'issue-902')), 'refusal must write no state');
+    assert(out.status === 'acquired',
+      '#538: claim adaptive must acquire (always legal), got: ' + result.stdout);
+    assert(fs.existsSync(statePath(tmp, 'issue-902')), 'acquired claim must write state');
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   console.log('testAdaptiveOffClaimRefusal: PASSED');
 }
 
-// (c) OFF preserves the 2-way: fast still claims; a bogus path is also refused.
+// (c) #538: fast is not installed (installed_paths:[]) -> path_not_installed; bogus -> path_not_installed.
+// Under #538 legality = {adaptive} ∪ installed_paths; fast/full are install-time opt-ins.
 function testAdaptiveOffPreservesTwoWay() {
   const tmp = adaptiveTmp('off-twoway');
   try {
-    const ok = JSON.parse(runNode(claimScript, ['claim', '--project', 'issue-903', '--workflowPath', 'fast'], tmp,
-      { KAOLA_ENABLE_ADAPTIVE: '0' }).stdout);
-    assert(ok.status === 'acquired', 'OFF must still allow fast, got: ' + JSON.stringify(ok));
-    const bogus = JSON.parse(runNode(claimScript, ['claim', '--project', 'issue-904', '--workflowPath', 'wizard'], tmp,
-      { KAOLA_ENABLE_ADAPTIVE: '0' }).stdout);
-    assert(bogus.status === 'workflow_path_refused', 'bogus workflow_path must be refused (whitelist), got: ' + JSON.stringify(bogus));
+    // fast is not installed (hermetic HOME has installed_paths:[]) -> typed path_not_installed refusal
+    const fastRefused = JSON.parse(runNode(claimScript, ['claim', '--project', 'issue-903', '--workflowPath', 'fast'], tmp).stdout);
+    assert(fastRefused.status === 'path_not_installed' && fastRefused.result === 'refuse',
+      '#538: fast not installed must refuse with path_not_installed, got: ' + JSON.stringify(fastRefused));
+    const bogus = JSON.parse(runNode(claimScript, ['claim', '--project', 'issue-904', '--workflowPath', 'wizard'], tmp).stdout);
+    assert(bogus.status === 'path_not_installed' && bogus.result === 'refuse',
+      '#538: bogus workflow_path must be refused (path_not_installed), got: ' + JSON.stringify(bogus));
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   console.log('testAdaptiveOffPreservesTwoWay: PASSED');
 }
 
-// (d) ON + KAOLA_PATH=adaptive startup -> acquired, state routes to plan-run.
+// (d) KAOLA_PATH=adaptive startup -> acquired, state routes to plan-run (adaptive always legal).
 function testAdaptiveOnStartupAcquires() {
   const tmp = adaptiveTmp('on-startup');
   try {
     plantRoadmapIssue(tmp, 905, '');
     const out = JSON.parse(runNode(claimScript, ['startup', '--target-issue', '905'], tmp,
-      { KAOLA_PATH: 'adaptive', KAOLA_ENABLE_ADAPTIVE: '1' }).stdout);
-    assert(out.claim === 'acquired', 'ON + adaptive startup must acquire, got: ' + JSON.stringify(out));
+      { KAOLA_PATH: 'adaptive' }).stdout);
+    assert(out.claim === 'acquired', 'adaptive startup must acquire, got: ' + JSON.stringify(out));
     const state = read(statePath(tmp, 'issue-905'));
     assert(state.includes('workflow_path: adaptive'), 'state must record workflow_path: adaptive');
     assert(state.includes('next_command: /kaola-workflow-plan-run issue-905'), 'state must route to plan-run, got:\n' + state);
@@ -1418,9 +1410,9 @@ function testAdaptiveResumeUnparseableTypedRefusal() {
 
 // (h) toggle gates SELECTION only: an in-flight adaptive project resumes via
 // `claim resume` to plan-run even after the switch is flipped OFF (toggle-agnostic).
-// #236 (document-as-designed): this locks the no-kill-switch-once-frozen contract — flipping
-// OFF must NOT brick a frozen plan; pairs with testAdaptiveOffClaimRefusal (selection gated). A
-// future regression that adds a toggle read to a resume surface fails here.
+// #236 (document-as-designed): an in-flight adaptive project resumes to plan-run.
+// Under #538 resume is unconditionally toggle-agnostic (no switch exists) — still exercised
+// to lock the no-toggle-read contract (a future regression adding a toggle read fails here).
 function testAdaptiveResumeAfterFlipOff() {
   const tmp = adaptiveTmp('resume-flipoff');
   try {
@@ -1430,10 +1422,10 @@ function testAdaptiveResumeAfterFlipOff() {
         'phase: adaptive', 'workflow_path: adaptive', 'next_command:', ''
       ].join('\n')
     });
-    const out = JSON.parse(runNode(claimScript, ['resume'], tmp, { KAOLA_ENABLE_ADAPTIVE: '0' }).stdout);
-    assert(out.resumed === true, 'in-flight adaptive must resume after flip OFF');
+    const out = JSON.parse(runNode(claimScript, ['resume'], tmp).stdout);
+    assert(out.resumed === true, 'in-flight adaptive must resume');
     assert(out.next_command === '/kaola-workflow-plan-run issue-909',
-      'adaptive resume must emit plan-run (not phaseN) even with switch OFF, got: ' + out.next_command);
+      'adaptive resume must emit plan-run (not phaseN), got: ' + out.next_command);
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   console.log('testAdaptiveResumeAfterFlipOff: PASSED');
 }
@@ -3149,13 +3141,13 @@ function testBundle424432433NodeSeeding() {
 function testAdaptiveResumeReconcilesNextCommand() {
   const tmp = adaptiveTmp('resume-reconcile');
   try {
-    // GAP: adaptive project carrying a STALE `/kaola-workflow-phase4` next_command. Toggle OFF to
-    // prove reconciliation is toggle-agnostic (resume must work even when the switch is later OFF).
+    // GAP: adaptive project carrying a STALE `/kaola-workflow-phase4` next_command.
+    // Under #538 resume is unconditionally toggle-agnostic (no switch).
     writeProject(tmp, 'issue-940', { 'workflow-state.md': [
       'name: issue-940', 'issue_number: 940', 'status: active',
       'phase: adaptive', 'workflow_path: adaptive',
       'next_command: /kaola-workflow-phase4 issue-940', ''].join('\n') });
-    let out = JSON.parse(runNode(claimScript, ['resume', '--project', 'issue-940'], tmp, { KAOLA_ENABLE_ADAPTIVE: '0' }).stdout);
+    let out = JSON.parse(runNode(claimScript, ['resume', '--project', 'issue-940'], tmp).stdout);
     assert(out.next_command === '/kaola-workflow-plan-run issue-940',
       'E1: stale phaseN on an adaptive project must reconcile to plan-run, got: ' + out.next_command);
 
@@ -3232,29 +3224,25 @@ function testAdaptiveDurableConsentHalt() {
   console.log('testAdaptiveDurableConsentHalt: PASSED');
 }
 
-// issue #235 (audit D8): a HARD script guard at the /kaola-workflow-adapt authoring entry. OFF ->
-// typed refusal; ON -> allowed. The validator stays toggle-agnostic: --freeze must still work under
-// OFF (the guard lives at the authoring entry in claim.js, never in the validator).
+// issue #235 (audit D8) / #538: authoring-allowed is unconditionally allowed (no switch).
+// Under #538 cmdAuthoringAllowed always returns authoring_allowed:true — the old OFF-guard is
+// retired. The validator stays toggle-agnostic: --freeze works regardless (guard was always in
+// claim.js, never in the validator).
 function testAdaptiveAuthoringEntryGuard() {
   const tmp = adaptiveTmp('authoring-guard');
   try {
-    let out = JSON.parse(runNode(claimScript, ['authoring-allowed', '--project', 'issue-960'], tmp, { KAOLA_ENABLE_ADAPTIVE: '0' }).stdout);
-    assert(out.status === 'authoring_refused' && out.allowed === false,
-      'D8: authoring under an OFF switch must be a typed refusal, got: ' + JSON.stringify(out));
-    assert(/OFF/.test(out.reasoning) && /#44/.test(out.reasoning),
-      'D8: the refusal must mirror the claim-guard family message (OFF, #44)');
-    out = JSON.parse(runNode(claimScript, ['authoring-allowed', '--project', 'issue-960'], tmp, { KAOLA_ENABLE_ADAPTIVE: '1' }).stdout);
+    // #538: authoring is always allowed (no switch to be OFF)
+    const out = JSON.parse(runNode(claimScript, ['authoring-allowed', '--project', 'issue-960'], tmp).stdout);
     assert(out.status === 'authoring_allowed' && out.allowed === true,
-      'D8: authoring under an ON switch must be allowed, got: ' + JSON.stringify(out));
-    // toggle-agnostic: the validator --freeze must STILL work under OFF — the guard is the authoring
-    // entry, NOT the validator (putting it in the validator would break the resume/well-formedness contract).
+      '#538: authoring must always be allowed (unconditional), got: ' + JSON.stringify(out));
+    // toggle-agnostic: the validator --freeze must still work (unchanged contract)
     const planPath = path.join(tmp, 'p.md');
     fs.writeFileSync(planPath, ['# Plan', '', '## Meta', 'labels: chore', '', '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |', '|---|---|---|---|---|---|',
       '| done | finalize | — | — | 1 | sequence |', ''].join('\n'));
-    const fr = runNode(planValidatorScript, [planPath, '--freeze', '--json'], tmp, { KAOLA_ENABLE_ADAPTIVE: '0' });
+    const fr = runNode(planValidatorScript, [planPath, '--freeze', '--json'], tmp);
     assert(fr.status === 0 && JSON.parse(fr.stdout).frozen === true,
-      'D8: validator --freeze must stay toggle-agnostic (work under OFF), got status ' + fr.status + ' ' + fr.stdout);
+      'D8: validator --freeze must be toggle-agnostic, got status ' + fr.status + ' ' + fr.stdout);
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   console.log('testAdaptiveAuthoringEntryGuard: PASSED');
 }
@@ -3611,17 +3599,29 @@ function testAdaptiveCheapWinFixes() {
 function testAdaptiveAuditCoverage() {
   const tmp = adaptiveTmp('audit-coverage');
   try {
-    // I4: resolveEnableAdaptive toggle precedence (pure-function calls; OFF-by-default + strict).
+    // I4: resolveInstalledPaths contract (#538 — replaces retired resolveEnableAdaptive).
+    // Returns a frozen subset of {fast, full}; adaptive is implicit-always (never in the array).
     const schema = require(path.join(repoRoot, 'scripts', 'kaola-workflow-adaptive-schema.js'));
-    assert(schema.resolveEnableAdaptive({ enable_adaptive: true }, {}) === true, 'I4: config true (no env) => true');
-    assert(schema.resolveEnableAdaptive({ enable_adaptive: 'true' }, {}) === false, 'I4: STRICT === true — string "true" must NOT enable');
-    assert(schema.resolveEnableAdaptive({ enable_adaptive: 1 }, {}) === false, 'I4: STRICT === true — number 1 must NOT enable');
-    assert(schema.resolveEnableAdaptive({}, {}) === false, 'I4: absent => OFF');
-    assert(schema.resolveEnableAdaptive(null, {}) === false, 'I4: null config => OFF');
-    assert(schema.resolveEnableAdaptive({ enable_adaptive: false }, { KAOLA_ENABLE_ADAPTIVE: '1' }) === true, 'I4: env "1" overrides config false');
-    assert(schema.resolveEnableAdaptive({ enable_adaptive: true }, { KAOLA_ENABLE_ADAPTIVE: '0' }) === false, 'I4: env "0" overrides config true');
-    assert(schema.resolveEnableAdaptive({}, { KAOLA_ENABLE_ADAPTIVE: 'true' }) === true, 'I4: env "true" enables');
-    assert(schema.resolveEnableAdaptive({ enable_adaptive: true }, { KAOLA_ENABLE_ADAPTIVE: 'maybe' }) === true, 'I4: unrecognized env falls through to config');
+    const eql = (a, b) => JSON.stringify([...a].sort()) === JSON.stringify([...b].sort());
+    assert(eql(schema.resolveInstalledPaths({ installed_paths: ['fast'] }), ['fast']),
+      'I4: installed_paths:[fast] => [fast]');
+    assert(eql(schema.resolveInstalledPaths({ installed_paths: ['full'] }), ['full']),
+      'I4: installed_paths:[full] => [full]');
+    assert(eql(schema.resolveInstalledPaths({ installed_paths: ['fast', 'full'] }), ['fast', 'full']),
+      'I4: installed_paths:[fast,full] => [fast,full]');
+    assert(eql(schema.resolveInstalledPaths({ installed_paths: [] }), []),
+      'I4: installed_paths:[] => []');
+    assert(eql(schema.resolveInstalledPaths({}), []),
+      'I4: absent field => []');
+    assert(eql(schema.resolveInstalledPaths(null), []),
+      'I4: null config => []');
+    assert(eql(schema.resolveInstalledPaths({ installed_paths: ['adaptive', 'garbage'] }), []),
+      'I4: junk tokens (adaptive, garbage) must be dropped — adaptive never in array, garbage unknown');
+    // isLegalWorkflowPath: adaptive always legal; fast/full require membership in installed array
+    assert(schema.isLegalWorkflowPath('adaptive', []), 'I4: adaptive always legal even with empty installed');
+    assert(schema.isLegalWorkflowPath('fast', ['fast']), 'I4: fast legal when installed');
+    assert(!schema.isLegalWorkflowPath('fast', []), 'I4: fast illegal when not installed');
+    assert(!schema.isLegalWorkflowPath('wizard', ['fast', 'full']), 'I4: bogus path always illegal');
 
     // I5: the --resume-check CLI flag end-to-end (not just the library).
     const resumePlan = path.join(tmp, 'resume-plan.md');
@@ -3772,7 +3772,7 @@ function testClassifierParallelModeBypass() {
       fs.mkdirSync(path.join(home, '.config', 'kaola-workflow'), { recursive: true });
       fs.writeFileSync(
         path.join(home, '.config', 'kaola-workflow', 'config.json'),
-        JSON.stringify({ parallel_mode: mode, enable_adaptive: true }, null, 2) + '\n'
+        JSON.stringify({ parallel_mode: mode, installed_paths: [] }, null, 2) + '\n'
       );
       try {
         const r = spawnSync(process.execPath, [classifierScript, 'classify', '--issue', '75'], {
@@ -4863,10 +4863,10 @@ function testWorktreeAdaptiveSuppressed() {
     initGitRepo(tmp);
     const binDir = path.join(tmp, 'bin');
     writeGhShimForStartup(binDir);
-    // runClaimOnline hardcodes KAOLA_WORKTREE_NATIVE=1; KAOLA_ENABLE_ADAPTIVE=1 makes the adaptive path legal.
+    // runClaimOnline hardcodes KAOLA_WORKTREE_NATIVE=1; adaptive is always legal (#538).
     const result = runClaimOnlineLastJson(
       ['startup', '--workflow-path', 'adaptive', '--target-issue', '507'],
-      tmp, binDir, { KAOLA_ENABLE_ADAPTIVE: '1' });
+      tmp, binDir);
     assert(result.claim === 'acquired', 'adaptive startup 507 should acquire');
     assert(result.worktree_path === '', 'adaptive path must NOT provision a worktree even with KAOLA_WORKTREE_NATIVE=1, got: ' + JSON.stringify(result.worktree_path));
     assert(result.worktree_error === undefined, 'adaptive worktree suppression must not surface worktree_error (policy suppression, not a failed attempt)');
@@ -4881,9 +4881,18 @@ function testWorktreeAdaptiveSuppressed() {
 
 function testFastStartupState() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-fast-startup-'));
+  // #538: fast is an install-time opt-in; seed installed_paths:['fast'] in a hermetic HOME
+  // so the legality gate (resolveInstalledPaths) considers fast installed for this test.
+  const fastHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-fast-home-'));
   try {
+    fs.mkdirSync(path.join(fastHome, '.config', 'kaola-workflow'), { recursive: true });
+    fs.writeFileSync(
+      path.join(fastHome, '.config', 'kaola-workflow', 'config.json'),
+      JSON.stringify({ parallel_mode: 'auto', installed_paths: ['fast'] }, null, 2) + '\n'
+    );
     plantRoadmapIssue(tmp, 503, '');
-    const result = json(runNode(claimScript, ['startup', '--target-issue', '503'], tmp, { KAOLA_PATH: 'fast' }));
+    const result = json(runNode(claimScript, ['startup', '--target-issue', '503'], tmp,
+      { KAOLA_PATH: 'fast', HOME: fastHome, USERPROFILE: fastHome }));
     assert(result.claim === 'acquired', 'fast startup should acquire explicit issue');
     const state = read(statePath(tmp, 'issue-503'));
     assert(state.includes('workflow_path: fast'), 'fast startup should write workflow_path: fast');
@@ -4892,6 +4901,7 @@ function testFastStartupState() {
     assert(state.includes('next_skill: kaola-workflow-fast issue-503'), 'fast startup should route to fast skill');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(fastHome, { recursive: true, force: true });
   }
 }
 
@@ -6727,13 +6737,22 @@ function testSinkMergeBareRemoteDeleteOrder() {
 function testFastE2EMergeFullChain() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-e2e-fast-')));
   const kwRoot = tmp + '.kw';
+  // #538: seed installed_paths:['fast'] in a hermetic HOME so claim.js sees fast as installed.
+  const fastHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-e2e-fast-home-'));
+  fs.mkdirSync(path.join(fastHome, '.config', 'kaola-workflow'), { recursive: true });
+  fs.writeFileSync(
+    path.join(fastHome, '.config', 'kaola-workflow', 'config.json'),
+    JSON.stringify({ parallel_mode: 'auto', installed_paths: ['fast'] }, null, 2) + '\n'
+  );
+  const fastEnv = { HOME: fastHome, USERPROFILE: fastHome };
   try {
     initGitRepo(tmp);
     const binDir = path.join(tmp, 'bin');
     writeGhShimForStartup(binDir);
 
-    // Step 1: startup with KAOLA_PATH=fast
-    const s851 = runClaimOnline(['startup', '--target-issue', '851'], tmp, binDir, { KAOLA_PATH: 'fast' });
+    // Step 1: startup with KAOLA_PATH=fast (installed_paths:['fast'] in hermetic HOME)
+    const s851 = runClaimOnline(['startup', '--target-issue', '851'], tmp, binDir,
+      { KAOLA_PATH: 'fast', ...fastEnv });
     assert(s851.claim === 'acquired', 'startup 851 should acquire, got: ' + JSON.stringify(s851));
     const wt851 = s851.worktree_path;
     assert(fs.existsSync(wt851), 'worktree dir must exist after startup');
@@ -6817,6 +6836,7 @@ function testFastE2EMergeFullChain() {
     console.log('testFastE2EMergeFullChain: PASSED');
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(fastHome, { recursive: true, force: true });
     try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
   }
 }
@@ -11890,10 +11910,10 @@ function testWorktreeAdaptiveProvisioned() {
     initGitRepo(tmp);
     const binDir = path.join(tmp, 'bin');
     writeGhShimForStartup(binDir);
-    // runClaimOnline hardcodes KAOLA_WORKTREE_NATIVE=1; KAOLA_ENABLE_ADAPTIVE=1 makes adaptive legal.
+    // runClaimOnline hardcodes KAOLA_WORKTREE_NATIVE=1; adaptive is always legal (#538).
     const result = runClaimOnlineLastJson(
       ['startup', '--workflow-path', 'adaptive', '--target-issue', '507'],
-      tmp, binDir, { KAOLA_ENABLE_ADAPTIVE: '1' });
+      tmp, binDir);
     assert(result.claim === 'acquired', 'adaptive startup 507 should acquire');
 
     if (claimSignal()) {
@@ -12052,10 +12072,10 @@ function testAdaptiveWorktreeProvisionedE2E() {
     const binDir = path.join(tmp, 'bin');
     writeGhShimForStartup(binDir);
 
-    // Step 1: adaptive claim with NATIVE=1
+    // Step 1: adaptive claim with NATIVE=1 (adaptive is always legal, #538)
     const sResult = runClaimOnlineLastJson(
       ['startup', '--workflow-path', 'adaptive', '--target-issue', '530'],
-      tmp, binDir, { KAOLA_ENABLE_ADAPTIVE: '1' });
+      tmp, binDir);
     assert(sResult.claim === 'acquired', 'adaptive startup 530 should acquire');
 
     if (!sResult.worktree_path) {
@@ -12155,9 +12175,10 @@ function testAdaptiveWorktreeMirrorNoManualCopy() {
     writeGhShimForStartup(binDir);
 
     // Step 1: adaptive startup provisions a hidden-local worktree at .kw/worktrees/issue-935.
+    // Adaptive is always legal (#538).
     const sResult = runClaimOnlineLastJson(
       ['startup', '--workflow-path', 'adaptive', '--target-issue', '935'],
-      tmp, binDir, { KAOLA_ENABLE_ADAPTIVE: '1' });
+      tmp, binDir);
     assert(sResult.claim === 'acquired', '#335: adaptive startup 935 should acquire');
     if (!sResult.worktree_path) {
       console.log('testAdaptiveWorktreeMirrorNoManualCopy: SKIPPED (worktree_path empty — provisioning suppressed)');
@@ -13690,7 +13711,6 @@ function testBundleClaimCreatesOneFolder() {
       env: Object.assign({}, process.env, {
         KAOLA_WORKFLOW_OFFLINE: '0',
         KAOLA_WORKTREE_NATIVE: '1',
-        KAOLA_ENABLE_ADAPTIVE: '1',
         KAOLA_GH_MOCK_SCRIPT: path.join(binDir, 'gh.js'),
       })
     });
@@ -13765,7 +13785,6 @@ function testBundleRefusalLeavesNoFolder() {
       env: Object.assign({}, process.env, {
         KAOLA_WORKFLOW_OFFLINE: '0',
         KAOLA_WORKTREE_NATIVE: '1',
-        KAOLA_ENABLE_ADAPTIVE: '1',
         KAOLA_GH_MOCK_SCRIPT: path.join(binDir, 'gh.js'),
       })
     });
@@ -13818,8 +13837,7 @@ function testBundleDuplicateIssueBlocking() {
     // The bundle is NOT re-provisioned; the caller gets back the existing bundle project.
     const r1 = runNode(claimScript,
       ['startup', '--target-issue', '47'],
-      tmp,
-      { KAOLA_ENABLE_ADAPTIVE: '1' });
+      tmp);
     const o1 = JSON.parse(r1.stdout);
     // Two acceptable outcomes:
     //   (i)  claim:'owned' — bundle-aware reuse (exit 0): member 47 is in a live bundle
@@ -13836,8 +13854,7 @@ function testBundleDuplicateIssueBlocking() {
     // (b) Overlapping bundle claim [47,77] must also be blocked
     const r2 = runNode(claimScript,
       ['startup', '--target-issues', '47,77', '--workflow-path', 'adaptive'],
-      tmp,
-      { KAOLA_ENABLE_ADAPTIVE: '1' });
+      tmp);
     assert(r2.status === 1,
       '#328 dup-block (b): overlapping bundle [47,77] must exit 1, got ' + r2.status + '\nstdout: ' + r2.stdout);
     const o2 = JSON.parse(r2.stdout);

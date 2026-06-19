@@ -15,8 +15,8 @@ no knob-binding ceremony: the workflow-planner writes the `## Nodes` table direc
 validator proves the result is in-grammar. The main session governs the risk decision and the
 freeze; the contractor stamps the durable bookkeeping.
 
-Reachable only when the adaptive switch is ON; adaptive is the default under an ON
-switch and `fast`/`full` are explicit path-naming escapes (see `workflow-next.md`
+Adaptive is the unconditional default; `fast`/`full` are explicit path-naming
+escapes, never an automatic fallback (see `workflow-next.md`
 Step 0a-1). The middle of the run is free; the lifecycle frame around it
 (claim → branch/worktree → [this plan] → Finalization sink) is fixed.
 
@@ -60,18 +60,18 @@ risk-ask / abort left it unfrozen), re-run the planner+handoff on it (the planne
 exit therefore leaves a **resumable** project, not an orphan; `kaola-gitea-workflow-claim.js discard
 --project {project}` abandons it.
 
-**Entry guard (main session, before the dispatch).** Confirm the adaptive switch is ON — the
-**hard authoring guard** (#235). It is switch-only and needs no project, so it runs before the
-claim. If it refuses, STOP; do not summon the planner. (Defense in depth: the planner's `startup`
-re-checks the switch via `claimProject`, so a plan can never be authored under an OFF switch.)
+**Entry guard (main session, before the dispatch).** Run the **authoring guard** (#235). It needs
+no project, so it runs before the claim. Adaptive authoring is always allowed,
+so this returns `authoring_allowed: true`; the call preserves the mechanical gate shape
+and the planner's `startup` still routes the claim via `claimProject`.
 
 ```bash
 kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./plugins/kaola-workflow-gitea/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitea/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitea/scripts/$_n" "./plugins/kaola-workflow-gitea/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
 node "$(kaola_script kaola-gitea-workflow-claim.js)" authoring-allowed
 ```
 
-If the JSON `status` is `authoring_refused`, surface the typed refusal and STOP — fix the switch or
-the path selection, never clamp around the gate.
+The JSON `status` is `authoring_allowed` (adaptive is always allowed); proceed. The gate is kept
+for mechanical shape — never clamp around it.
 
 **Git freshness (main session, BEFORE the claim).** If `authoring_allowed`, gate on a clean main
 *before* summoning the planner: you are at the repo root and nothing is claimed yet — run the Startup
@@ -85,7 +85,7 @@ freshness-block release no longer guards this path, and gating up front leaves n
 Once main is clean, **summon the `workflow-planner`** — it claims, authors `workflow-plan.md`, runs
 the validator `--json` as a self-check, and RETURNS a structured summary; it never JUDGES risk or asks the user (decision:ask is recorded metadata); it RUNS the handoff, which freezes mechanically, and returns the packet; it never dispatches.
 
-**Planner-first control boundary (issue #287).** The main session performs ONLY the allowed non-design preflight above (read repo/session rules, confirm target issue, authoring-allowed switch check, git freshness, non-design target availability), then dispatches `workflow-planner` immediately as the first issue-specific action. The main session MUST NOT pre-author the `## Nodes` DAG, choose role sequence/deps/shapes/write-sets, or pass a mandatory full DAG / `AUTHOR EXACTLY` / `do not redesign` prompt to the planner — the adaptive front-end design is the planner's to own, not the main session's. Doing so earns a typed refusal: `planner_control_boundary_violation`. The ONLY exception is in the bounded unfrozen-plan validator-repair loop (after `handoff_status: plan_invalid` on an UNFROZEN plan): the orchestrator MAY re-dispatch the planner with the verbatim validator errors + the prior plan as repair context, because the planner already owns that unfrozen draft.
+**Planner-first control boundary (issue #287).** The main session performs ONLY the allowed non-design preflight above (read repo/session rules, confirm target issue, authoring-allowed check, git freshness, non-design target availability), then dispatches `workflow-planner` immediately as the first issue-specific action. The main session MUST NOT pre-author the `## Nodes` DAG, choose role sequence/deps/shapes/write-sets, or pass a mandatory full DAG / `AUTHOR EXACTLY` / `do not redesign` prompt to the planner — the adaptive front-end design is the planner's to own, not the main session's. Doing so earns a typed refusal: `planner_control_boundary_violation`. The ONLY exception is in the bounded unfrozen-plan validator-repair loop (after `handoff_status: plan_invalid` on an UNFROZEN plan): the orchestrator MAY re-dispatch the planner with the verbatim validator errors + the prior plan as repair context, because the planner already owns that unfrozen draft.
 
 You MUST pass `model="{WORKFLOW_PLANNER_MODEL}"` in this Agent call exactly as shown — do not omit
 the `model=` line.
@@ -129,7 +129,7 @@ The planner RAN `kaola-gitea-workflow-adaptive-handoff.js` and returned a checkl
 
 - **`handoff_status: ready_to_run`** (all checklist true) → hand off DIRECTLY to `/kaola-workflow-plan-run {project}` (even when `decision:ask`, no approval gate). `/kaola-workflow-plan-run` owns the complete node lifecycle — it opens and dispatches every node including the first, via `kaola-gitea-workflow-adaptive-node.js`.
 
-- **`handoff_status: plan_invalid`** (validator refused; plan never froze, NOTHING written) → bounded **repair loop**: re-dispatch the `workflow-planner` with the verbatim `errors`/`validator_verdict` so it overwrites the UNFROZEN plan with a corrected DAG and re-runs the handoff. Retry ~2x (the retry counter lives in the ORCHESTRATOR, never in the script). After repeated failure → a REAL decision: downgrade to full path / discard+restart (`kaola-gitea-workflow-claim.js discard --project {project}` then fresh adaptive start) / STOP + surface a concrete blocker with validator evidence. Never silently loop.
+- **`handoff_status: plan_invalid`** (validator refused; plan never froze, NOTHING written) → bounded **repair loop**: re-dispatch the `workflow-planner` with the verbatim `errors`/`validator_verdict` so it overwrites the UNFROZEN plan with a corrected DAG and re-runs the handoff. Retry ~2x (the retry counter lives in the ORCHESTRATOR, never in the script). After repeated failure (~2x) → a REAL decision: **discard+restart a fresh adaptive run** (`kaola-gitea-workflow-claim.js discard --project {project}` then a fresh adaptive start) / **STOP + surface a concrete blocker** with validator evidence. NEVER downgrade to fast/full — there is no automatic fallback between paths (#538); the only fallbacks are inside adaptive (bounded repair, in-place posture). Never silently loop.
 
 ## Establish the task list, then hand off
 
@@ -190,7 +190,7 @@ multi-issue startup path. If both are set, the script refuses with
 ### Bundle is adaptive-only
 
 The bundle lane requires `workflow_path: adaptive`. The startup script refuses with
-`target_set_not_adaptive` when the path is `fast` or `full`.
+`bundle_requires_adaptive` when the path is `fast` or `full`.
 
 ### Bundle authoring
 
@@ -216,7 +216,7 @@ A bundle run ends at ONE finalization. The finalization step:
 | `target_ambiguity` | both `--target-issue` and `--target-issues` set |
 | `target_set_empty` | issue list empty or missing |
 | `target_set_too_large` | list exceeds `KAOLA_BUNDLE_MAX_ISSUES` (default 4) |
-| `target_set_not_adaptive` | `workflow_path` is not `adaptive` |
+| `bundle_requires_adaptive` | `workflow_path` is not `adaptive` |
 | `target_set_conflicts_active_work` | any member is already claimed |
 | `target_set_has_closed_issue` | any member is already closed |
 | `target_set_red` | classifier returns `red` for any member |

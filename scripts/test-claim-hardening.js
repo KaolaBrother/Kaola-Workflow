@@ -21,7 +21,7 @@ const kwSandboxHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sandbox-home-'))
 fs.mkdirSync(path.join(kwSandboxHome, '.config', 'kaola-workflow'), { recursive: true });
 fs.writeFileSync(
   path.join(kwSandboxHome, '.config', 'kaola-workflow', 'config.json'),
-  JSON.stringify({ parallel_mode: 'auto', enable_adaptive: false }, null, 2) + '\n'
+  JSON.stringify({ parallel_mode: 'auto', installed_paths: [] }, null, 2) + '\n'
 );
 process.env.HOME = kwSandboxHome;
 process.env.USERPROFILE = kwSandboxHome;
@@ -339,8 +339,7 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
       KAOLA_WORKFLOW_OFFLINE: '1',
       KAOLA_GH_REMOTE_TIMEOUT_MS: '500',
       KAOLA_CLASSIFIER_TIMEOUT_MS: '500', // so kill/timeout tests don't hang 30s
-      KAOLA_ENABLE_ADAPTIVE: 'true',
-      KAOLA_PATH: 'adaptive',
+      KAOLA_PATH: 'adaptive',             // #538: adaptive is always legal — no switch env needed
       KAOLA_CLASSIFIER_BACKOFF_MS: '0'
     }, extraEnv || {});
     try {
@@ -363,10 +362,9 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
   const g495 = (a) => { try { execFileSync('git', ['-C', repoDir, ...a], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch (_) {} };
   g495(['init']); g495(['config', 'user.email', 't@t']); g495(['config', 'user.name', 't']); g495(['config', 'commit.gpgsign', 'false']);
   fs.writeFileSync(path.join(repoDir, '.gitignore'), '.kw/\n'); g495(['add', '-A']); g495(['commit', '-m', 'init']);
-  // Put an adaptive config so adaptive path is truly enabled
-  const kwCfgDir = path.join(repoDir, '.config', 'kaola-workflow');
-  fs.mkdirSync(kwCfgDir, { recursive: true });
-  fs.writeFileSync(path.join(kwCfgDir, 'config.json'), JSON.stringify({ enable_adaptive: true }));
+  // #538: no per-repo config needed — KAOLA_PATH:'adaptive' (the runClaim default) is always legal,
+  // and the path-legality gate reads installed_paths from the hermetic HOME (the sandbox seeded above),
+  // never the repo dir's .config.
 
   const tmpMockDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-495-mocks-')));
 
@@ -781,34 +779,38 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
   fs.rmSync(repo503, { recursive: true, force: true });
 }
 
-// --- #515: path_requires_explicit_opt_in guard (ON switch + defaulted path) -----
-// Reuses the #495 runClaim helper (defined in the #495 block above).
-// The harness default env sets KAOLA_PATH:'adaptive' and KAOLA_ENABLE_ADAPTIVE:'true';
-// each sub-test OVERRIDES these via extraEnv to isolate the predicate.
+// --- #538: path-legality gate (adaptive default + installed_paths opt-in) -------
+// REPLACES the retired #515 `path_requires_explicit_opt_in` guard. Under #538 there is no on/off
+// switch: adaptive is the unconditional default and is ALWAYS legal; fast/full are legal ONLY when
+// recorded in `installed_paths` in ~/.config/kaola-workflow/config.json. A named-but-not-installed
+// path is a TYPED `path_not_installed` refusal (NEVER a silent adaptive substitution).
 //
-// CORRECTNESS NOTE: the original task included a case "defaulted fast under ON → refuse"
-// but that case is UNCONSTRUCTABLE: requestedPath = args.workflowPath || KAOLA_PATH || 'full'
-// resolves to 'fast' ONLY when a truthy input provides it, which means it is explicit (not
-// defaulted). pathWasDefaulted is true IFF both inputs are falsy → always resolves to 'full'.
-// We test (a') defaulted FULL → refuse instead. Blueprint ref: n1-architect.md CORRECTNESS NOTE.
-//
-// Distinct target-issue numbers are used across (a')-(f) to avoid the `owned` early-return
-// false-green (a 2nd claim of the same issue number returns status:'owned', not the guard verdict).
+// Legality is driven by the HERMETIC HOME config (the sandbox seeded at the top of this file), NOT
+// by env and NOT by any repo-local .config (claimProject reads os.homedir()). Each sub-test rewrites
+// that HOME config via setHomeInstalled(...) before the spawn. KAOLA_ENABLE_ADAPTIVE is retired —
+// no env lever survives. Distinct target-issue numbers avoid the `owned` early-return false-green.
 {
-  const { execFileSync: execFS515 } = require('child_process');
-  const CLAIM515 = path.join(__dirname, 'kaola-workflow-claim.js');
+  const { execFileSync: execFS538 } = require('child_process');
+  const CLAIM538 = path.join(__dirname, 'kaola-workflow-claim.js');
+  const homeCfg538 = path.join(kwSandboxHome, '.config', 'kaola-workflow', 'config.json');
 
-  function runClaim515(argv, extraEnv, cwd) {
+  // Rewrite the hermetic HOME config to record exactly `installedPaths` as installed (adaptive is
+  // implicit-always and never listed). Restored to [] at the end so later blocks see the default.
+  function setHomeInstalled(installedPaths) {
+    fs.writeFileSync(homeCfg538, JSON.stringify({ parallel_mode: 'auto', installed_paths: installedPaths }, null, 2) + '\n');
+  }
+
+  function runClaim538(argv, extraEnv, cwd) {
     const e = Object.assign({}, process.env, {
       KAOLA_WORKFLOW_OFFLINE: '1',
       KAOLA_GH_REMOTE_TIMEOUT_MS: '500',
       KAOLA_CLASSIFIER_TIMEOUT_MS: '500',
-      KAOLA_ENABLE_ADAPTIVE: 'true',
-      KAOLA_PATH: 'adaptive',
       KAOLA_CLASSIFIER_BACKOFF_MS: '0'
     }, extraEnv || {});
+    // KAOLA_PATH defaults to undefined so the claim's `|| 'adaptive'` default fires unless overridden.
+    if (!('KAOLA_PATH' in (extraEnv || {}))) delete e.KAOLA_PATH;
     try {
-      const out = execFS515('node', [CLAIM515, ...argv], { cwd, encoding: 'utf8', env: e });
+      const out = execFS538('node', [CLAIM538, ...argv], { cwd, encoding: 'utf8', env: e });
       const lines = out.trim().split('\n').filter(l => l.trim());
       const last = lines[lines.length - 1];
       return { code: 0, json: last ? JSON.parse(last) : null };
@@ -822,107 +824,120 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
     }
   }
 
-  // Set up a minimal git repo with adaptive config so the switch is truly ON.
-  const repo515 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-515-repo-')));
-  const g515 = (a) => { try { execFS515('git', ['-C', repo515, ...a], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch (_) {} };
-  g515(['init']); g515(['config', 'user.email', 't@t']); g515(['config', 'user.name', 't']); g515(['config', 'commit.gpgsign', 'false']);
-  fs.writeFileSync(path.join(repo515, '.gitignore'), '.kw/\n'); g515(['add', '-A']); g515(['commit', '-m', 'init']);
-  // Repo config has enable_adaptive:true so switch is ON by config (env can override it).
-  const kwCfgDir515 = path.join(repo515, '.config', 'kaola-workflow');
-  fs.mkdirSync(kwCfgDir515, { recursive: true });
-  fs.writeFileSync(path.join(kwCfgDir515, 'config.json'), JSON.stringify({ enable_adaptive: true }));
+  // Minimal git repo so worktree provisioning doesn't error on the legal-path (acquired) cases.
+  const repo538 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-538-repo-')));
+  const g538 = (a) => { try { execFS538('git', ['-C', repo538, ...a], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch (_) {} };
+  g538(['init']); g538(['config', 'user.email', 't@t']); g538(['config', 'user.name', 't']); g538(['config', 'commit.gpgsign', 'false']);
+  fs.writeFileSync(path.join(repo538, '.gitignore'), '.kw/\n'); g538(['add', '-A']); g538(['commit', '-m', 'init']);
 
-  // Write a green mock classifier so the flow reaches claimProject (past classifyIssue).
-  const tmpDir515 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-515-mocks-')));
-  const mockGreen515 = path.join(tmpDir515, 'mock-green.js');
-  fs.writeFileSync(mockGreen515,
+  // Green mock classifier so the flow reaches claimProject (past classifyIssue).
+  const tmpDir538 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-538-mocks-')));
+  const mockGreen538 = path.join(tmpDir538, 'mock-green.js');
+  fs.writeFileSync(mockGreen538,
     'process.stdout.write(JSON.stringify({ verdict: "green", reasoning: "ok" }) + "\\n");\n' +
     'process.exit(0);\n'
   );
 
-  // Helper to clean up a claimed project dir between sub-tests so we never hit the `owned` path.
-  function rmProj515(issueN) {
-    try { fs.rmSync(path.join(repo515, 'kaola-workflow', 'issue-' + issueN), { recursive: true, force: true }); } catch (_) {}
+  function rmProj538(issueN) {
+    try { fs.rmSync(path.join(repo538, 'kaola-workflow', 'issue-' + issueN), { recursive: true, force: true }); } catch (_) {}
   }
 
-  // (a') DEFAULTED full under ON → REFUSE with path_requires_explicit_opt_in
-  // Both KAOLA_PATH and --workflow-path are absent (KAOLA_PATH:'' is falsy = defaulted).
-  // Uses issue 5150 (distinct integer); rmProj after to prevent `owned` false-green in later tests.
+  // (a) DEFAULT (no --workflow-path, no KAOLA_PATH) under installed_paths:[] → ACQUIRED (adaptive default).
   {
-    const r = runClaim515(
-      ['startup', '--target-issue', '5150'],
-      { KAOLA_PATH: '', KAOLA_ENABLE_ADAPTIVE: 'true', KAOLA_CLASSIFIER_MOCK_SCRIPT: mockGreen515 },
-      repo515
+    setHomeInstalled([]);
+    const r = runClaim538(
+      ['startup', '--target-issue', '5380'],
+      { KAOLA_CLASSIFIER_MOCK_SCRIPT: mockGreen538 },
+      repo538
     );
-    rmProj515('5150'); // guard REFUSES so no project dir is created; rmProj is defensive
-    assert(r.json && r.json.status === 'path_requires_explicit_opt_in',
-      '#515(a\'): defaulted full under ON must refuse with path_requires_explicit_opt_in (got ' + JSON.stringify(r.json) + ')');
+    rmProj538('5380');
+    assert(r.json && r.json.status === 'acquired',
+      '#538(a): default (no path) must be acquired via adaptive (got ' + JSON.stringify(r.json) + ')');
+  }
+
+  // (b) KAOLA_PATH=fast under installed_paths:[] → REFUSE path_not_installed (fast not installed).
+  {
+    setHomeInstalled([]);
+    const r = runClaim538(
+      ['startup', '--target-issue', '5381'],
+      { KAOLA_PATH: 'fast', KAOLA_CLASSIFIER_MOCK_SCRIPT: mockGreen538 },
+      repo538
+    );
+    rmProj538('5381'); // guard REFUSES so no project dir is created; rmProj is defensive
+    assert(r.json && r.json.status === 'path_not_installed' && r.json.result === 'refuse',
+      '#538(b): fast under installed_paths:[] must refuse path_not_installed/refuse (got ' + JSON.stringify(r.json) + ')');
     assert(r.json && r.json.claim === 'none',
-      '#515(a\'): defaulted full under ON must have claim:none (got ' + JSON.stringify(r.json) + ')');
+      '#538(b): path_not_installed must have claim:none (got ' + JSON.stringify(r.json) + ')');
   }
 
-  // (b) explicit --workflow-path full under ON → ALLOWED (explicit escape, guard skipped)
+  // (c) KAOLA_PATH=fast under installed_paths:['fast'] → ACQUIRED (installed → legal).
   {
-    const r = runClaim515(
-      ['startup', '--target-issue', '5151', '--workflow-path', 'full'],
-      { KAOLA_PATH: '', KAOLA_ENABLE_ADAPTIVE: 'true', KAOLA_CLASSIFIER_MOCK_SCRIPT: mockGreen515 },
-      repo515
+    setHomeInstalled(['fast']);
+    const r = runClaim538(
+      ['startup', '--target-issue', '5382'],
+      { KAOLA_PATH: 'fast', KAOLA_CLASSIFIER_MOCK_SCRIPT: mockGreen538 },
+      repo538
     );
-    rmProj515('5151');
+    rmProj538('5382');
     assert(r.json && r.json.status === 'acquired',
-      '#515(b): explicit --workflow-path full under ON must be acquired (got ' + JSON.stringify(r.json) + ')');
+      '#538(c): fast under installed_paths:[\'fast\'] must be acquired (got ' + JSON.stringify(r.json) + ')');
   }
 
-  // (c) KAOLA_PATH=fast under ON → ALLOWED (explicit env escape, pathWasDefaulted===false)
+  // (d) --workflow-path full under installed_paths:[] → REFUSE path_not_installed (full not installed).
   {
-    const r = runClaim515(
-      ['startup', '--target-issue', '5152'],
-      { KAOLA_PATH: 'fast', KAOLA_ENABLE_ADAPTIVE: 'true', KAOLA_CLASSIFIER_MOCK_SCRIPT: mockGreen515 },
-      repo515
+    setHomeInstalled([]);
+    const r = runClaim538(
+      ['startup', '--target-issue', '5383', '--workflow-path', 'full'],
+      { KAOLA_CLASSIFIER_MOCK_SCRIPT: mockGreen538 },
+      repo538
     );
-    rmProj515('5152');
-    assert(r.json && r.json.status === 'acquired',
-      '#515(c): KAOLA_PATH=fast under ON must be acquired (explicit escape) (got ' + JSON.stringify(r.json) + ')');
+    rmProj538('5383');
+    assert(r.json && r.json.status === 'path_not_installed' && r.json.result === 'refuse',
+      '#538(d): full under installed_paths:[] must refuse path_not_installed/refuse (got ' + JSON.stringify(r.json) + ')');
   }
 
-  // (d) explicit --workflow-path fast under ON → ALLOWED (the constructible explicit-fast escape)
+  // (e) --workflow-path full under installed_paths:['full'] → ACQUIRED (installed → legal).
   {
-    const r = runClaim515(
-      ['startup', '--target-issue', '5153', '--workflow-path', 'fast'],
-      { KAOLA_PATH: '', KAOLA_ENABLE_ADAPTIVE: 'true', KAOLA_CLASSIFIER_MOCK_SCRIPT: mockGreen515 },
-      repo515
+    setHomeInstalled(['full']);
+    const r = runClaim538(
+      ['startup', '--target-issue', '5384', '--workflow-path', 'full'],
+      { KAOLA_CLASSIFIER_MOCK_SCRIPT: mockGreen538 },
+      repo538
     );
-    rmProj515('5153');
+    rmProj538('5384');
     assert(r.json && r.json.status === 'acquired',
-      '#515(d): explicit --workflow-path fast under ON must be acquired (got ' + JSON.stringify(r.json) + ')');
+      '#538(e): full under installed_paths:[\'full\'] must be acquired (got ' + JSON.stringify(r.json) + ')');
   }
 
-  // (e) DEFAULTED full under OFF switch → ALLOWED (Branch A intact; guard skipped because adaptiveEnabled===false)
+  // (f) explicit KAOLA_PATH=adaptive under installed_paths:[] → ACQUIRED (adaptive ALWAYS legal).
   {
-    const r = runClaim515(
-      ['startup', '--target-issue', '5154'],
-      { KAOLA_PATH: '', KAOLA_ENABLE_ADAPTIVE: 'false', KAOLA_CLASSIFIER_MOCK_SCRIPT: mockGreen515 },
-      repo515
+    setHomeInstalled([]);
+    const r = runClaim538(
+      ['startup', '--target-issue', '5385'],
+      { KAOLA_PATH: 'adaptive', KAOLA_CLASSIFIER_MOCK_SCRIPT: mockGreen538 },
+      repo538
     );
-    rmProj515('5154');
+    rmProj538('5385');
     assert(r.json && r.json.status === 'acquired',
-      '#515(e): defaulted full under OFF switch must be acquired (Branch A; guard skipped) (got ' + JSON.stringify(r.json) + ')');
+      '#538(f): explicit adaptive under installed_paths:[] must be acquired (got ' + JSON.stringify(r.json) + ')');
   }
 
-  // (f) adaptive claim under ON → ALLOWED (pathWasDefaulted===false, KAOLA_PATH='adaptive')
+  // (g) authoring-allowed is UNCONDITIONAL (no switch) — always allowed, even under installed_paths:[].
   {
-    const r = runClaim515(
-      ['startup', '--target-issue', '5155'],
-      { KAOLA_PATH: 'adaptive', KAOLA_ENABLE_ADAPTIVE: 'true', KAOLA_CLASSIFIER_MOCK_SCRIPT: mockGreen515 },
-      repo515
+    setHomeInstalled([]);
+    const r = runClaim538(
+      ['authoring-allowed', '--project', 'issue-5386'],
+      { KAOLA_CLASSIFIER_MOCK_SCRIPT: mockGreen538 },
+      repo538
     );
-    rmProj515('5155');
-    assert(r.json && r.json.status === 'acquired',
-      '#515(f): adaptive claim under ON must be acquired (got ' + JSON.stringify(r.json) + ')');
+    assert(r.json && r.json.status === 'authoring_allowed' && r.json.allowed === true,
+      '#538(g): authoring-allowed must be unconditionally allowed (got ' + JSON.stringify(r.json) + ')');
   }
 
-  fs.rmSync(repo515, { recursive: true, force: true });
-  fs.rmSync(tmpDir515, { recursive: true, force: true });
+  // Restore the hermetic HOME to the default-install shape so subsequent test blocks see adaptive-only.
+  setHomeInstalled([]);
+  fs.rmSync(repo538, { recursive: true, force: true });
+  fs.rmSync(tmpDir538, { recursive: true, force: true });
 }
 
 // --- #522: cmdFinalize gate — adaptive plans must be verified before the archive commit -------

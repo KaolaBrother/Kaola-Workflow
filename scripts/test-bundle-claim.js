@@ -15,7 +15,7 @@
 //   (4) target_set_too_large above the cap (default 4).
 //   (5) Single-issue --target-issue N still works unchanged (AC#1 regression).
 //   (6) target_set_empty when --target-issues is missing/empty.
-//   (7) target_set_not_adaptive when workflow_path is not adaptive.
+//   (7) bundle_requires_adaptive when workflow_path is not adaptive (#538 rename).
 //   (8) Rollback path: when postAdvisoryClaim for a member fails mid-provision, the folder
 //       and previously applied labels are torn down.
 //
@@ -31,6 +31,21 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
+
+// #531/#538: hermetic HOME. The claim's path-legality gate reads installed_paths from
+// ~/.config/kaola-workflow/config.json (os.homedir()), and the classifier reads parallel_mode from
+// the same file. Pin a sandbox HOME seeded with the DEFAULT-install shape (parallel_mode:'auto',
+// installed_paths:[] = adaptive-only) so a dev-local config can't change legality/verdict and turn
+// these assertions spurious. The bundle lane is adaptive-only and adaptive is always legal, so [] is
+// the correct seed (a fast/full claim under [] is a path_not_installed refusal — the intended default).
+const kwSandboxHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sandbox-home-'));
+fs.mkdirSync(path.join(kwSandboxHome, '.config', 'kaola-workflow'), { recursive: true });
+fs.writeFileSync(
+  path.join(kwSandboxHome, '.config', 'kaola-workflow', 'config.json'),
+  JSON.stringify({ parallel_mode: 'auto', installed_paths: [] }, null, 2) + '\n'
+);
+process.env.HOME = kwSandboxHome;
+process.env.USERPROFILE = kwSandboxHome;
 
 const repoRoot = path.resolve(__dirname, '..');
 const claimScript = path.join(repoRoot, 'scripts', 'kaola-workflow-claim.js');
@@ -186,7 +201,9 @@ function runClaim(args, cwd, binDir, extraEnv) {
     env: Object.assign({}, process.env, {
       KAOLA_WORKFLOW_OFFLINE: '0',
       KAOLA_WORKTREE_NATIVE: '1',  // use worktrees (git repos initialised in $TMPDIR)
-      KAOLA_ENABLE_ADAPTIVE: '1',  // adaptive must be ON for bundle lane
+      // #538: adaptive is the unconditional default and always legal — the bundle lane needs no
+      // switch. The lane-only-accepts-adaptive guard fires on workflow_path != adaptive, before any
+      // config read, so no installed_paths/switch env is required here.
     }, mockEnv, extraEnv || {})
   });
   return result;
@@ -401,9 +418,10 @@ function readState(tmpRoot, project) {
     writeGhMockScript(binDir, { openIssues: [99] });
 
     const result = runClaim(
-      ['startup', '--target-issue', '99', '--workflow-path', 'full'],
+      ['startup', '--target-issue', '99'],
       tmpRoot, binDir
-      // KAOLA_ENABLE_ADAPTIVE='1' from runClaim default is fine; full path is always legal
+      // #538: no --workflow-path → defaults to adaptive (always legal). The single-issue regression
+      // is path-incidental; explicit-installed-path coverage lives in test-claim-hardening.js.
     );
 
     const out = parseClaim(result);
@@ -456,28 +474,31 @@ function readState(tmpRoot, project) {
 })();
 
 // ---------------------------------------------------------------------------
-// Test (7): target_set_not_adaptive when workflow_path != adaptive
+// Test (7): bundle_requires_adaptive when workflow_path != adaptive (#538 rename)
 // ---------------------------------------------------------------------------
 
-(function testTargetSetNotAdaptive() {
-  console.log('Test (7): target_set_not_adaptive when --workflow-path is not adaptive');
+(function testBundleRequiresAdaptive() {
+  console.log('Test (7): bundle_requires_adaptive when --workflow-path is not adaptive');
   const tmpRoot = makeTmpRoot();
   const binDir = path.join(tmpRoot, 'bin');
   try {
     initGitRepo(tmpRoot);
     writeGhMockScript(binDir, { openIssues: [42, 47] });
 
+    // #538: the bundle lane is adaptive-only. A non-adaptive workflow_path is refused by the lane
+    // guard BEFORE any config read, so no installed_paths/switch env is needed to exercise it.
     const result = runClaim(
       ['startup', '--target-issues', '42,47', '--workflow-path', 'full'],
-      tmpRoot, binDir,
-      { KAOLA_ENABLE_ADAPTIVE: '1' }
+      tmpRoot, binDir
     );
 
     const out = parseClaim(result);
-    assert(result.status === 1, 'target_set_not_adaptive exits 1, got ' + result.status);
+    assert(result.status === 1, 'bundle_requires_adaptive exits 1, got ' + result.status);
     assert(out !== null, 'emits JSON');
-    assert(out.status === 'target_set_not_adaptive',
-      'status is target_set_not_adaptive, got ' + JSON.stringify(out && out.status));
+    assert(out.status === 'bundle_requires_adaptive',
+      'status is bundle_requires_adaptive, got ' + JSON.stringify(out && out.status));
+    assert(out.result === 'refuse',
+      'result is refuse, got ' + JSON.stringify(out && out.result));
 
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });

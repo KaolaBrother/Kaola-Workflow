@@ -439,7 +439,9 @@ assertBefore(gitlabNextSkill, '### Co-active Folders Advisory', '## Routing');
 // Issue #190: M1 — Codex fast-path routing parity (RED guard)
 assertIncludes(gitlabNextSkill, 'Startup Step 0a-1');
 assertIncludes(gitlabNextSkill, 'Branch: {branch from Sink block');
-assertIncludes(gitlabNextSkill, 'Workflow path: {fast|full');
+// #538: the status-report `Workflow path:` line now leads with adaptive-by-default (fast|full only
+// on an explicit escape) — the old `{fast|full` menu framing retired with the path switch.
+assertIncludes(gitlabNextSkill, 'Workflow path: {adaptive by default');
 assertIncludes(gitlabNextSkill, 'Parallel decision: {green|yellow|red');
 for (const skill of ['kaola-workflow-ideation', 'kaola-workflow-plan', 'kaola-workflow-finalize']) {
   const skillFile = `${gitlabSkillsBase}/${skill}/SKILL.md`;
@@ -612,9 +614,10 @@ assertIncludes(classifier207, "'Scope'");
 const nextCmd198 = pluginRoot + '/commands/workflow-next.md';
 const nextSkill198 = pluginRoot + '/skills/kaola-workflow-next/SKILL.md';
 for (const nextFile198 of [nextCmd198, nextSkill198]) {
-  assertIncludes(nextFile198, 'mechanical');
-  assertIncludes(nextFile198, '≤ 5');
-  assertIncludes(nextFile198, 'design choice');
+  // #538: the fast-path eligibility rubric (`mechanical` / `≤ 5` / `design choice`) was Branch-A
+  // content of the next router and is DELETED with Branch A (adaptive is the unconditional default).
+  // The rubric concept stays machine-enforced on its correct surface — the fast cmd + SKILL (L593-595
+  // above) — so dropping the next-router pins loses zero coverage; the negative-assert stays.
   assertNotIncludes(nextFile198, '≤ 2 closely related files');
 }
 
@@ -638,10 +641,12 @@ assertIncludes(nextSkill198, 'fast-summary.md status ESCALATED -> kaola-workflow
 // issue #227: adaptive-path contract (GitLab fork command prose + renamed scripts).
 assert(exists(pluginRoot + '/scripts/kaola-gitlab-workflow-plan-validator.js'), 'GitLab adaptive plan validator missing');
 assert(exists(pluginRoot + '/scripts/kaola-workflow-adaptive-schema.js'), 'GitLab adaptive schema module missing');
-// router 3-way selection: switch chooses branch AND default (adaptive is the default under ON;
-// fast/full are explicit escapes). OFF preserves 2-way fast/full with typed refusal on adaptive.
+// #538: adaptive is the UNCONDITIONAL default — there is no switch. The router honors an explicit
+// `KAOLA_PATH` and the fast/full verbal escapes, else defaults to adaptive; a named-but-not-installed
+// path is the claim's typed `path_not_installed` refusal (the router does not read installed_paths —
+// the claim front door owns that, per R2). Pin the new model's tokens.
 assertConcept(pluginRoot + '/commands/workflow-next.md', 'adaptive path selection', [
-  'KAOLA_ENABLE_ADAPTIVE', 'adaptive', 'fast|full|adaptive', 'default', 'typed refusal'
+  'KAOLA_PATH', 'adaptive', 'default', 'path_not_installed', 'fast', 'full'
 ]);
 assertIncludes(pluginRoot + '/commands/workflow-next.md', 'workflow-plan.md exists -> /kaola-workflow-plan-run');
 // v5.1.0: the adaptive front-end ROUTING must stay enforced — the router skips its inline claim and
@@ -683,7 +688,8 @@ assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-classifier.js', 'PRO
 // shared logic is verified out-of-band (legitimate forge divergence in areaForPath's own-plugin path).
 assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-classifier.js', 'areaForPath');
 assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-classifier.js', 'SHARED_INFRA');
-assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js', 'workflow_path_refused');
+// #538: the named-but-not-installed-path refusal renamed `workflow_path_refused` -> `path_not_installed`.
+assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-claim.js', 'path_not_installed');
 assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-repair-state.js', 'routeAdaptive');
 assertNotIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-repair-state.js', 'enable_adaptive');
 assertNotIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-plan-validator.js', 'enable_adaptive');

@@ -37,7 +37,7 @@ function readOrCreateConfig() {
     return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
   } catch (err) {
     if (err.code !== 'ENOENT') throw err;
-    const defaults = { parallel_mode: 'auto', enable_adaptive: false };
+    const defaults = { parallel_mode: 'auto', installed_paths: [] };
     fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(defaults, null, 2) + '\n');
     return defaults;
