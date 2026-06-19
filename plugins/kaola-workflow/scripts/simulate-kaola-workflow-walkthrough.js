@@ -16,6 +16,23 @@ const { spawnSync } = require('child_process');
 // non-hermeticity this removes; the harness must be deterministic regardless of the dev shell.
 process.env.KAOLA_ENABLE_ADAPTIVE = '0';
 
+// #531: hermetic HOME — the classifier (cmdClassify) reads parallel_mode from the SAME
+// ~/.config/kaola-workflow/config.json and short-circuits to verdict:'green' ("parallel_mode=<x>;
+// bypassing classifier") whenever it is not 'auto', BEFORE any overlap scan. Unlike enable_adaptive
+// (pinned via the KAOLA_ENABLE_ADAPTIVE env above) parallel_mode has NO env override — read only from
+// the config FILE — so a developer-local parallel_mode != 'auto' would turn the classifier-backed
+// startup assertions (e.g. "no local evidence must exit 1") into spurious passes on that box, never on
+// a default/CI config (issue #531). Point HOME/USERPROFILE at a sandbox seeded with parallel_mode:'auto'
+// so every inheriting claim->classifier subprocess sees the canonical config. Seeded before any spawn.
+const kwSandboxHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sandbox-home-'));
+fs.mkdirSync(path.join(kwSandboxHome, '.config', 'kaola-workflow'), { recursive: true });
+fs.writeFileSync(
+  path.join(kwSandboxHome, '.config', 'kaola-workflow', 'config.json'),
+  JSON.stringify({ parallel_mode: 'auto', enable_adaptive: false }, null, 2) + '\n'
+);
+process.env.HOME = kwSandboxHome;
+process.env.USERPROFILE = kwSandboxHome;
+
 const pluginRoot = path.resolve(__dirname, '..');
 const repoRoot = path.resolve(pluginRoot, '..', '..');
 const claimScript = path.join(pluginRoot, 'scripts', 'kaola-workflow-claim.js');
