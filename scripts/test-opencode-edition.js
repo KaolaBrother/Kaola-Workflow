@@ -323,12 +323,15 @@ for (const target of emittedCommandTargets) {
       'A20[' + name + ']: must contain "fast_compliance_unresolved" literal');
   }
 
-  // A21 (mirror T11): phase1 + fast carry the adaptive-default-contract PIN + path_requires_explicit_opt_in literal (#515).
+  // A21 (mirror T11): phase1 + fast carry the adaptive-default-contract PIN + the named-but-not-installed-path
+  // refusal literal. #538 retired `path_requires_explicit_opt_in` -> `path_not_installed` (adaptive is the
+  // unconditional default; reaching fast/full requires an install opt-in, refused at the claim front door with
+  // `path_not_installed`). The generated opencode commands must carry the new literal (#515/#538).
   for (const name of ['kaola-workflow-phase1', 'kaola-workflow-fast']) {
     assert(has(name, '<!-- PIN: adaptive-default-contract -->'),
       'A21[' + name + ']: must contain <!-- PIN: adaptive-default-contract --> comment');
-    assert(has(name, 'path_requires_explicit_opt_in'),
-      'A21[' + name + ']: must contain "path_requires_explicit_opt_in" literal');
+    assert(has(name, 'path_not_installed'),
+      'A21[' + name + ']: must contain "path_not_installed" literal (n3-adaptive-default-contract, #515/#538)');
   }
 }
 

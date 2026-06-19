@@ -115,8 +115,8 @@ together"), route through the bundle lane:
 - Project name and active folder: `bundle-42-47-53` (sorted ascending, deduplicated).
 - Branch: `workflow/bundle-42-47-53`.
 - Bundle lane is **adaptive-path only** (`workflow_path: adaptive` is required). A
-  bundle request under switch-OFF or with an explicit `KAOLA_PATH=fast`/`full` is
-  refused with `target_set_not_adaptive`; do not silently downgrade to a single issue.
+  bundle request with an explicit `KAOLA_PATH=fast`/`full` is refused with
+  `bundle_requires_adaptive`; do not silently downgrade to a single issue.
 - In the startup call, pass `--target-issues 42,47,53` (instead of `--target-issue N`)
   and `--workflow-path adaptive`.
 
@@ -156,10 +156,10 @@ the closure receipt (see `commands/kaola-workflow-finalize.md` § Goal Attestati
 Export it once before `/workflow-next` and it propagates to both touchpoints.
 
 **Ordering — resolve the path BEFORE consuming a bundle (#380):** the bundle lane is
-adaptive-only, so resolve the adaptive switch / path intent (Step 0a-1) *before* acting on
+adaptive-only, so resolve the path intent (Step 0a-1) *before* acting on
 the scout's recommendation. A bundle is pursued ONLY when the resolved path is `adaptive`;
-under switch-OFF (or an explicit `KAOLA_PATH=fast`/`full`) the router takes only the scout's
-`primary_issue` (a bundle there would be refused at startup with `target_set_not_adaptive`).
+with an explicit `KAOLA_PATH=fast`/`full` the router takes only the scout's
+`primary_issue` (a bundle there would be refused at startup with `bundle_requires_adaptive`).
 
 **Output → env wiring (#380):** map the scout's recommendation into the startup env exactly:
 - high-confidence same-scope bundle AND resolved path is adaptive → set
@@ -461,7 +461,7 @@ Current phase: {phase or unknown}
 Current step: {step from workflow-state.md or reconstructed}
 Pending gates: {list or none}
 Branch: {branch from Sink block in workflow-state.md, or TBD if not yet claimed}
-Workflow path: {fast|full when the adaptive switch is OFF; fast|full|adaptive when ON — from KAOLA_PATH or Step 0a-1 judgment}
+Workflow path: {adaptive by default; fast|full only on an explicit path-name keyword or KAOLA_PATH — from KAOLA_PATH or Step 0a-1 judgment}
 Parallel decision: {green|yellow|red|blocked|target_unavailable|target_unverified|skipped — classifier verdict or "skipped" if offline/unavailable}
 Next command: {next_command}
 ```
