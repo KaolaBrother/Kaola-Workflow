@@ -1,0 +1,16 @@
+evidence-binding: n6-router-prose fa3dc1020bd7
+<!-- non_tdd_reason: paste non_tdd_reason here -->
+non_tdd_reason: Glue / router-prose change across the #400 SIX surfaces + forge command copies (16 files) — collapsing the path-intent step so adaptive is the unconditional default. No failing unit test can be written for prose routing logic; verification is by the downstream n7 route-reachability contract + the retired-vocab grep going to zero and the 6-surface cross-consistency confirmation.
+<!-- regression-green|build-green|smoke-integration -->
+regression-green: Retired-vocabulary grep across all 16 files = ZERO live hits (pattern: KAOLA_ENABLE_ADAPTIVE|enable_adaptive|switch (ON|OFF|on|off)|Branch A|Branch B|downgrade to full|adaptive fallback|target_set_not_adaptive|Adaptive fallback|path_requires_explicit_opt_in). The `switch` supplement grep across all 16 = ZERO. The `Branch A|Branch B` cross-reference grep = ZERO. All 16 files have balanced code-fences (even count). PIN marker `<!-- PIN: adaptive-default-contract -->` preserved verbatim in all 3 fast SKILLs + the Claude fast command. Step 0a-2 anchor intact in all 3 workflow-next copies. New vocabulary present: path_not_installed (10 files), bundle_requires_adaptive (12 files). 6-surface consistency: all 6 routing surfaces (3 Claude commands + 3 Codex next/adapt SKILLs) carry "unconditional default" and the same semantic flow (default→adaptive, keyword escapes hand to claim, no install check, no fallback). NOTE: the §E4 validate-*-contracts.js still pin the OLD vocabulary and remain RED until node n7 updates them — that is by design and NOT my green signal (per task instruction).
+
+## Files changed (the 16 declared write set)
+commands/workflow-next.md (CANONICAL); commands/kaola-workflow-adapt.md; commands/kaola-workflow-fast.md; plugins/kaola-workflow{,-gitlab,-gitea}/skills/kaola-workflow-{next,adapt,fast}/SKILL.md (9); plugins/kaola-workflow-{gitlab,gitea}/commands/{workflow-next,kaola-workflow-adapt}.md (4).
+
+## Semantic change
+- E1/R2: collapsed Step 0a-1 "Path Intent" to ONE unconditional flow. Deleted Switch-resolution, Branch A (OFF menu + auto-fast rubric + level-4 + typed-refusal-under-OFF), Branch B switch-ON framing. New flow: (1) explicit KAOLA_PATH honored verbatim → hand to claim, NO install check; (2) path-name verbal escapes export + hand to claim, NO install check; (3) default → adaptive. R2 enforced: router NEVER reads installed_paths; claim's path_not_installed is the single authority; deleted "Adaptive fallback → full".
+- E2: adapt.md exhaustion floor — removed "downgrade to full path"; new floor = discard+restart fresh adaptive / STOP+ask; "NEVER downgrade to fast/full (#538)".
+- target_set_not_adaptive → bundle_requires_adaptive everywhere.
+- Entry-guard prose: authoring guard described as always-allow (authoring_allowed: true; gate kept for mechanical shape) — no "switch is ON" / authoring_refused STOP.
+- fast.md / fast SKILLs PIN block: "Switch-ON contract" → "Adaptive-default contract (#515, #538)"; dropped path_requires_explicit_opt_in; fast requires --with-fast; claim's path_not_installed is the authority; PIN marker preserved.
+- Out-of-named-range hits (advisor-flagged): bundle-lane prose, #380 ordering prose, output-template "Workflow path:" line — rewritten in every workflow-next + next-SKILL copy.

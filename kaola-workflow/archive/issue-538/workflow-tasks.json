@@ -1,0 +1,78 @@
+{
+  "source_plan_hash": "a05f3b09cef5cefe8de6275ab9298baf17a29c1cc8972a9ea8dafd720bbebdae",
+  "tasks": [
+    {
+      "id": "n1-architect",
+      "role": "code-architect",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n2-schema",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n3-claim",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n4-classifier",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n5-installer",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n6-router-prose",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n7-contracts",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n7b-walkthroughs",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n6b-residual-prose",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n8-review",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n9-docs",
+      "role": "doc-updater",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n10-finalize",
+      "role": "finalize",
+      "status": "completed",
+      "ledger_status": "complete"
+    }
+  ],
+  "last_synced_from_ledger": "2026-06-19T16:23:08.575Z"
+}
