@@ -1,0 +1,48 @@
+{
+  "source_plan_hash": "be5b31219fef1975fc5da4ff37f1767b95a479eb0f1bd338d1171adf7086f0fc",
+  "tasks": [
+    {
+      "id": "n1-rewrite-constructs",
+      "role": "implementer",
+      "status": "pending",
+      "ledger_status": "pending"
+    },
+    {
+      "id": "n2-content-reachability",
+      "role": "implementer",
+      "status": "pending",
+      "ledger_status": "pending"
+    },
+    {
+      "id": "n3-plugin-portability",
+      "role": "implementer",
+      "status": "pending",
+      "ledger_status": "pending"
+    },
+    {
+      "id": "n4-classifier-decouple",
+      "role": "tdd-guide",
+      "status": "pending",
+      "ledger_status": "pending"
+    },
+    {
+      "id": "n5-docs-discoverability",
+      "role": "doc-updater",
+      "status": "pending",
+      "ledger_status": "pending"
+    },
+    {
+      "id": "n6-review",
+      "role": "code-reviewer",
+      "status": "pending",
+      "ledger_status": "pending"
+    },
+    {
+      "id": "n7-finalize",
+      "role": "finalize",
+      "status": "pending",
+      "ledger_status": "pending"
+    }
+  ],
+  "last_synced_from_ledger": "2026-06-19T08:06:25.766Z"
+}
