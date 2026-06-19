@@ -18,6 +18,25 @@ const { spawn, spawnSync, execFileSync } = require('child_process');
 // non-hermeticity this removes; the harness must be deterministic regardless of the dev shell.
 process.env.KAOLA_ENABLE_ADAPTIVE = '0';
 
+// #531: hermetic HOME — the classifier (cmdClassify) reads parallel_mode from the SAME
+// ~/.config/kaola-workflow/config.json and short-circuits to verdict:'green' ("parallel_mode=<x>;
+// bypassing classifier") whenever it is not 'auto', BEFORE any overlap scan. Unlike enable_adaptive
+// (pinned via the KAOLA_ENABLE_ADAPTIVE env above) there is NO env override for parallel_mode — it is
+// read only from the config FILE — so a developer-local `parallel_mode` != 'auto' would silently turn
+// every classifier verdict test (direct spawns AND the claim→classifier startup path) into a spurious
+// "got green" failure on that box, never on a default/CI config (issue #531). Point HOME/USERPROFILE
+// (os.homedir() honors whichever the platform uses) at a sandbox seeded with parallel_mode:'auto' so
+// EVERY inheriting subprocess sees the canonical config regardless of the dev machine. Seeded once at
+// module top, before any spawn; the per-mode bypass regression test sets its own HOME and still wins.
+const kwSandboxHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sandbox-home-'));
+fs.mkdirSync(path.join(kwSandboxHome, '.config', 'kaola-workflow'), { recursive: true });
+fs.writeFileSync(
+  path.join(kwSandboxHome, '.config', 'kaola-workflow', 'config.json'),
+  JSON.stringify({ parallel_mode: 'auto', enable_adaptive: false }, null, 2) + '\n'
+);
+process.env.HOME = kwSandboxHome;
+process.env.USERPROFILE = kwSandboxHome;
+
 const repoRoot = path.resolve(__dirname, '..');
 const claimScript = path.join(repoRoot, 'scripts', 'kaola-workflow-claim.js');
 const repairScript = path.join(repoRoot, 'scripts', 'kaola-workflow-repair-state.js');
@@ -3732,6 +3751,48 @@ function testClassifierFolderOverlapYellow() {
     const result = runClassifierOffline(tmp, 73);
     assert(result.verdict === 'yellow',
       'shared-infra area overlap must yield yellow, got ' + result.verdict);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// #531: the classifier reads parallel_mode from ~/.config/kaola-workflow/config.json and bypasses
+// the overlap scan (verdict:'green') whenever it is not 'auto'. Pin both sides of that contract so a
+// developer-local non-'auto' config can never again silently turn the verdict tests above into a
+// spurious "got green" failure: the SAME exact-overlap fixture yields 'green' under parallel_mode:off
+// (bypass) and the real 'red' under parallel_mode:auto. Parity with the gitlab/gitea edition suites,
+// which already carry this test.
+function testClassifierParallelModeBypass() {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-classifier-pmode-'));
+  try {
+    plantActiveFolder(tmp, 'active-project-pm', 74, '# Phase 3\nFiles: scripts/kaola-workflow-claim.js\n');
+    plantRoadmapIssue(tmp, 75, 'body: also touches scripts/kaola-workflow-claim.js');
+    const runWithParallelMode = (mode) => {
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-pmode-home-'));
+      fs.mkdirSync(path.join(home, '.config', 'kaola-workflow'), { recursive: true });
+      fs.writeFileSync(
+        path.join(home, '.config', 'kaola-workflow', 'config.json'),
+        JSON.stringify({ parallel_mode: mode, enable_adaptive: true }, null, 2) + '\n'
+      );
+      try {
+        const r = spawnSync(process.execPath, [classifierScript, 'classify', '--issue', '75'], {
+          cwd: tmp, encoding: 'utf8',
+          env: Object.assign({}, process.env, { HOME: home, USERPROFILE: home, KAOLA_WORKFLOW_OFFLINE: '1' })
+        });
+        assert(r.status === 0, 'classifier exit 0 expected, got ' + r.status + '\nstderr: ' + r.stderr);
+        return JSON.parse(r.stdout.trim());
+      } finally {
+        fs.rmSync(home, { recursive: true, force: true });
+      }
+    };
+    const bypassed = runWithParallelMode('off');
+    assert(bypassed.verdict === 'green',
+      'parallel_mode:off must bypass the classifier to green, got ' + bypassed.verdict);
+    assert(bypassed.reasoning && bypassed.reasoning.includes('parallel_mode'),
+      'bypass reasoning must name parallel_mode; got: ' + bypassed.reasoning);
+    const scanned = runWithParallelMode('auto');
+    assert(scanned.verdict === 'red',
+      'parallel_mode:auto must run the overlap scan and yield red on exact overlap, got ' + scanned.verdict);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -12774,6 +12835,7 @@ function buildRegistry() {
   add('testSubagentDispatchHookExists',                   testSubagentDispatchHookExists);
   add('testClassifierFolderOverlapRed',                   testClassifierFolderOverlapRed);
   add('testClassifierFolderOverlapYellow',                testClassifierFolderOverlapYellow);
+  add('testClassifierParallelModeBypass',                 testClassifierParallelModeBypass);
   add('testClassifierClosedIssueResidueIgnored',          testClassifierClosedIssueResidueIgnored);
   add('testClassifierReleasedFolderExcluded',             testClassifierReleasedFolderExcluded);
   add('testClassifierFastScopeOverlapRed',                testClassifierFastScopeOverlapRed);
