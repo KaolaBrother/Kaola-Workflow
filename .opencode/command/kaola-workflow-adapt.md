@@ -36,7 +36,7 @@ approval gate — freeze and hand off either way), and hand off to
 `/kaola-workflow-plan-run`. If the plan is out of grammar, the validator returns
 a **typed refusal** — fix the plan, never clamp around the gate.
 
-## Agent Model Badge
+## Effort Variant Resolution
 
 opencode resolves each subagent effort centrally from `opencode.json` (the two Kaola
 tiers as reasoning-EFFORT VARIANTS of the inherited model): reasoning-tier roles run the
@@ -93,7 +93,7 @@ the validator `--json` as a self-check, and RETURNS a structured summary; it nev
 Dispatch the role via `subagent_type`; its effort variant resolves centrally from `opencode.json` (opus-tier → the model's TOP effort, sonnet-tier → its SECOND). Never pass a per-call `model=`.
 
 ```text
-Agent(
+task(
   subagent_type="workflow-planner",
   description="Adaptive front end {issue}",
   prompt="Settle the starting contract and design the adaptive workflow for issue {issue}, per your workflow-planner contract. Follow the Method in your agent profile (agents/workflow-planner.md). The full procedure — startup, Write of ## Nodes, adaptive-handoff.js — lives there as the sole home."

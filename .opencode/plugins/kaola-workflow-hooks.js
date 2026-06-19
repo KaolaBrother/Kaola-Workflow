@@ -131,10 +131,15 @@ export default async function KaolaWorkflowHooks({ directory, worktree }) {
       }
 
       // Subagent dispatch log — fire-and-forget; never blocks the dispatch.
+      // opencode's tool.execute.before input carries { tool, sessionID, callID };
+      // thread whichever is present into agent_id (prefer sessionID, fall back to
+      // callID, then empty). Attestation keys on agent_type+cwd so this is a
+      // non-blocking data-degradation fix, not a correctness change.
       if (tool === "task") {
         try {
           const st = args.subagent_type || args.agent || "";
-          runHook(root, HOOK.dispatchLog, { agent_type: st, agent_id: "", cwd: directory || root });
+          const sid = (input && (input.sessionID || input.callID)) || "";
+          runHook(root, HOOK.dispatchLog, { agent_type: st, agent_id: sid, cwd: directory || root });
         } catch {
           // advisory; ignore
         }

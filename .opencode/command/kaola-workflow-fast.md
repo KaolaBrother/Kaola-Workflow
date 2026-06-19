@@ -30,7 +30,7 @@ emits typed JSON only; it never dispatches a role, asks the user, judges severit
 chooses escalation, or invents write sets. Phase 6 finalization is the only
 transition still owned by `contractor` (handled by `/kaola-workflow-finalize`).
 
-## Agent Model Badge
+## Effort Variant Resolution
 
 opencode resolves each subagent effort centrally from `opencode.json` (the two Kaola
 tiers as reasoning-EFFORT VARIANTS of the inherited model): reasoning-tier roles run the
@@ -148,12 +148,12 @@ phase_name: Fast / step: plan / workflow_path: fast / next_command:
 implementation_owner: planner / inline_emergency_fallback_authorized: no),
 preserving any existing `## Sink` block byte-for-byte. It is idempotent on resume.
 
-Invoke the Claude Code agent `planner` with the linked
+Invoke the subagent `planner` with the linked
 GitHub issue body and `phase1-research.md` / `phase2-ideation.md` excerpts if
 they exist (otherwise issue body alone):
 
 ```text
-Agent(
+task(
   subagent_type="planner",
   description="Fast plan {project}",
   prompt="..."
@@ -216,11 +216,11 @@ implementation_owner: tdd-guide / inline_emergency_fallback_authorized: no),
 preserving any existing `## Sink` block byte-for-byte, and returns a `dispatch`
 descriptor for the implementation role. It is idempotent on resume.
 
-Invoke the Claude Code agent `tdd-guide` with the
+Invoke the subagent `tdd-guide` with the
 planner-produced plan and explicit constraints:
 
 ```text
-Agent(
+task(
   subagent_type="tdd-guide",
   description="Fast execute {project}",
   prompt="..."
@@ -303,11 +303,11 @@ implementation_owner: code-reviewer
 inline_emergency_fallback_authorized: no
 ```
 
-Invoke the Claude Code agent `code-reviewer` on the
+Invoke the subagent `code-reviewer` on the
 modified files from Step 2:
 
 ```text
-Agent(
+task(
   subagent_type="code-reviewer",
   description="Fast review {project}",
   prompt="..."

@@ -690,7 +690,13 @@ function cmdClassify(argv) {
   assert(Number.isFinite(args.issue) && args.issue > 0, '--issue <N> required for classify');
 
   const config = readOrCreateConfig();
-  if (config.parallel_mode !== 'auto') {
+  // #536: KAOLA_FORCE_CLASSIFY lets the test suite force classification regardless of a contributor's
+  // global parallel_mode config. The bypass reads ~/.config/kaola-workflow/config.json (os.homedir()),
+  // which the test cannot own — #531's hermetic HOME masks it only as long as HOME-inheritance holds,
+  // leaving the verdict coupled to a file outside the test's control. This env override is the
+  // test-owned decoupling seam. Real users never set it, so production bypass semantics are preserved
+  // exactly; only tests (or an operator who explicitly wants to force classification) set it.
+  if (config.parallel_mode !== 'auto' && process.env.KAOLA_FORCE_CLASSIFY !== '1') {
     process.stdout.write(JSON.stringify({ verdict: 'green', reasoning: 'parallel_mode=' + config.parallel_mode + '; bypassing classifier' }) + '\n');
     return;
   }

@@ -205,15 +205,16 @@ differs from the agent's frontmatter). **After installing or re-running
 
 ### Choose an edition
 
-Kaola-Workflow has three sibling editions:
+Kaola-Workflow has three sibling forge editions, plus an additive opencode runtime edition:
 
 - **GitHub edition**: default. Uses GitHub issues, pull requests, and `gh`.
 - **GitLab edition**: opt-in. Uses GitLab issues, merge requests, and `glab`.
 - **Gitea edition**: opt-in. Uses Gitea issues, pull requests, and `tea`. Requires `tea` ≥ 0.9.2 and Gitea server ≥ 1.17. **Forgejo note:** Forgejo ≥ 1.18 is expected to work via shared API surface but is not explicitly tested.
+- **opencode edition**: opt-in, **additive**. Runs the workflow from the [opencode](https://opencode.ai) coding-agent runtime (a runtime, like Codex — not a git forge) via a project `opencode.json` + `.opencode/` tree. Installed separately by `./install-opencode.sh` (not `--forge`); touches none of the existing edition machinery. See [docs/opencode-edition.md](docs/opencode-edition.md).
 
 All editions share the same command names, so a manual Claude Code install
 picks one forge at a time. Use the `--forge` flag on `install.sh` to select
-the edition.
+the forge edition.
 
 ### Claude Code
 

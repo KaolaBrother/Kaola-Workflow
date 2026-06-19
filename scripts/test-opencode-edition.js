@@ -222,6 +222,11 @@ const glm = parseRendered({ inheritModel: 'zhipuai-coding-plan/glm-5.2' });
 assert(glm.provider['zhipuai-coding-plan'].models['glm-5.2'].variants.max
   && glm.provider['zhipuai-coding-plan'].models['glm-5.2'].variants.high,
   'A12: glm-5.2 defines top=max + second=high variants');
+// S1: the max variant honors the `reasoningEffort` option key with the `max`
+// value (structural config-shape assertion — confirms the option is emitted,
+// NOT a live provider call which would be non-hermetic). Mirrors the A12 style.
+assert(glm.provider['zhipuai-coding-plan'].models['glm-5.2'].variants.max.reasoningEffort === 'max',
+  'S1: glm-5.2 max variant carries options.reasoningEffort:"max" (config-shape honored)');
 for (const role of topRoles) {
   assert(glm.agent[role].variant === 'max', 'A12[' + role + ']: top-tier role → max variant');
 }
@@ -262,6 +267,72 @@ for (const target of emittedCommandTargets) {
 }
 
 // ---------------------------------------------------------------------------
+// A15–A21: content-reachability — the generated opencode commands must carry
+// the PIN/CARD comments AND their companion wiring literals that a
+// transformCommandBody edit could silently strip. A9 only checks file EXISTENCE
+// and A6 only compares generated↔renderer (both mutate together), so NEITHER
+// catches a present-but-hollow command. This block mirrors test-route-
+// reachability.js T5–T11 (which enforce the same contract on the 3 Claude
+// commands + 3 Codex SKILLs), scoped to the single opencode surface per command
+// under .opencode/command/. Each pair asserts BOTH the PIN/CARD marker AND the
+// wiring literal — fail-closed, unconditional assert() per surface, NO self-
+// disarming anyHasPin gate (the T5 known-bug pattern from #505 ITEM 2 that we
+// explicitly do not replicate). GREEN on arrival — characterization/lock-in.
+// ---------------------------------------------------------------------------
+{
+  const cmdBody = name => read('.opencode/command/' + name + '.md');
+  const has = (name, tok) => cmdBody(name).includes(tok);
+
+  // A15 (mirror T5): plan-run carries the frontier-unit PIN + literal (n9-prose-skeleton).
+  assert(has('kaola-workflow-plan-run', '<!-- PIN: frontier unit -->'),
+    'A15: plan-run must contain <!-- PIN: frontier unit --> comment');
+  assert(has('kaola-workflow-plan-run', 'frontier unit'),
+    'A15: plan-run must contain "frontier unit" literal');
+
+  // A16 (mirror T6): finalize carries the closure-audit PIN + literal (#496/#497).
+  assert(has('kaola-workflow-finalize', '<!-- PIN: closure-audit -->'),
+    'A16: finalize must contain <!-- PIN: closure-audit --> comment');
+  assert(has('kaola-workflow-finalize', 'closure-audit'),
+    'A16: finalize must contain "closure-audit" literal');
+
+  // A17 (mirror T7): adapt + auto carry the claim-escalate PIN + result:escalate literal (#495).
+  for (const name of ['kaola-workflow-adapt', 'kaola-workflow-auto']) {
+    assert(has(name, '<!-- PIN: claim-escalate -->'),
+      'A17[' + name + ']: must contain <!-- PIN: claim-escalate --> comment');
+    assert(has(name, 'result: escalate'),
+      'A17[' + name + ']: must contain "result: escalate" literal');
+  }
+
+  // A18 (mirror T8): plan-run carries the leg-isolation-recipe PIN + --write-overlap-consent literal (#500 L2).
+  assert(has('kaola-workflow-plan-run', '<!-- PIN: leg-isolation-recipe -->'),
+    'A18: plan-run must contain <!-- PIN: leg-isolation-recipe --> comment');
+  assert(has('kaola-workflow-plan-run', '--write-overlap-consent'),
+    'A18: plan-run must contain "--write-overlap-consent" literal');
+
+  // A19 (mirror T9): plan-run carries the speculative-open CARD + --speculative-consent literal (#500 L3).
+  assert(has('kaola-workflow-plan-run', '<!-- CARD: speculative-open -->'),
+    'A19: plan-run must contain <!-- CARD: speculative-open --> comment');
+  assert(has('kaola-workflow-plan-run', '--speculative-consent'),
+    'A19: plan-run must contain "--speculative-consent" literal');
+
+  // A20 (mirror T10): fast + finalize carry the fast-compliance-backstop PIN + fast_compliance_unresolved literal (#504).
+  for (const name of ['kaola-workflow-fast', 'kaola-workflow-finalize']) {
+    assert(has(name, '<!-- PIN: fast-compliance-backstop -->'),
+      'A20[' + name + ']: must contain <!-- PIN: fast-compliance-backstop --> comment');
+    assert(has(name, 'fast_compliance_unresolved'),
+      'A20[' + name + ']: must contain "fast_compliance_unresolved" literal');
+  }
+
+  // A21 (mirror T11): phase1 + fast carry the adaptive-default-contract PIN + path_requires_explicit_opt_in literal (#515).
+  for (const name of ['kaola-workflow-phase1', 'kaola-workflow-fast']) {
+    assert(has(name, '<!-- PIN: adaptive-default-contract -->'),
+      'A21[' + name + ']: must contain <!-- PIN: adaptive-default-contract --> comment');
+    assert(has(name, 'path_requires_explicit_opt_in'),
+      'A21[' + name + ']: must contain "path_requires_explicit_opt_in" literal');
+  }
+}
+
+// ---------------------------------------------------------------------------
 // A10: hooks — every runtime-neutral hook script is deployed under
 // .opencode/hooks/ byte-identical to canonical hooks/, so the adapter plugin and
 // the canonical edition share ONE source of truth (no logic drift).
@@ -283,8 +354,25 @@ const pluginRel = '.opencode/plugins/kaola-workflow-hooks.js';
 assert(exists(pluginRel), 'A11: hooks adapter plugin deployed at ' + pluginRel);
 if (exists(pluginRel)) {
   const { spawnSync } = require('child_process');
-  const r = spawnSync(process.execPath, ['--check', path.join(REPO, pluginRel)], { encoding: 'utf8' });
-  assert(r.status === 0, 'A11: hooks adapter plugin passes node --check' + (r.stderr ? ' — ' + r.stderr.trim() : ''));
+  const { mkdtempSync, writeFileSync, rmSync } = require('fs');
+  const os = require('os');
+  // The plugin is ESM (import/export). `node --check` on a .js file needs a
+  // nearest package.json with `"type":"module"` to recognize ESM on Node <22.12,
+  // and .opencode/package.json is gitignored (production runs under Bun, which
+  // auto-detects ESM). Validate against a transient .mjs copy — .mjs is the
+  // explicit ESM extension, so node --check parses it as a module on every Node
+  // version. Hermetic: no new tracked infra, no .gitignore churn, no execution
+  // (--check is syntax-only, the imports do not resolve).
+  const tmpDir = mkdtempSync(path.join(os.tmpdir(), 'opencode-plugin-check-'));
+  const tmpMjs = path.join(tmpDir, 'plugin.mjs');
+  writeFileSync(tmpMjs, read(pluginRel));
+  let r;
+  try {
+    r = spawnSync(process.execPath, ['--check', tmpMjs], { encoding: 'utf8' });
+  } finally {
+    try { rmSync(tmpDir, { recursive: true, force: true }); } catch (e) { /* tmp leak; non-fatal */ }
+  }
+  assert(r.status === 0, 'A11: hooks adapter plugin parses as ESM (node --check on transient .mjs; Node-version-robust)' + (r.stderr ? ' — ' + r.stderr.trim() : ''));
   const src = read(pluginRel);
   // Couple the plugin to the same hook scripts asserted in A10 (no silent rename drift).
   for (const script of sync.HOOK_SCRIPTS) {

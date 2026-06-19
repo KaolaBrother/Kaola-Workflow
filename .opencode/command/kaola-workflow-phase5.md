@@ -50,7 +50,7 @@ If ambiguous, stop and ask.
   authorization is recorded.
 - CRITICAL and HIGH findings block Finalization.
 
-## Agent Model Badge
+## Effort Variant Resolution
 
 opencode resolves each subagent effort centrally from `opencode.json` (the two Kaola
 tiers as reasoning-EFFORT VARIANTS of the inherited model): reasoning-tier roles run the
@@ -79,21 +79,21 @@ the relevant fix agent (`tdd-guide` for behavior/test findings,
 `build-error-resolver` for build/type/lint/tooling findings). Raw output goes
 to:
 
-Route behavior/test fixes to the Claude Code agent `tdd-guide`:
+Route behavior/test fixes to the subagent `tdd-guide`:
 
 ```text
-Agent(
+task(
   subagent_type="tdd-guide",
   description="Routed fix: task {n}",
   prompt="..."
 )
 ```
 
-Route build/type/lint/tooling fixes to the Claude Code agent
+Route build/type/lint/tooling fixes to the subagent
 `build-error-resolver`:
 
 ```text
-Agent(
+task(
   subagent_type="build-error-resolver",
   description="Routed fix: task {n}",
   prompt="..."
@@ -154,10 +154,10 @@ fix_owner: tdd-guide or build-error-resolver
 inline_emergency_fallback_authorized: no
 ```
 
-Invoke the Claude Code agent `code-reviewer`:
+Invoke the subagent `code-reviewer`:
 
 ```text
-Agent(
+task(
   subagent_type="code-reviewer",
   description="Review {project}",
   prompt="..."
@@ -183,10 +183,10 @@ kaola-workflow/{project}/.cache/code-reviewer.md
 Perform a file-risk scan from Phase 4 modified files.
 
 If security-sensitive files were touched, invoke the
-Claude Code agent `security-reviewer` with:
+subagent `security-reviewer` with:
 
 ```text
-Agent(
+task(
   subagent_type="security-reviewer",
   description="Security review {project}",
   prompt="..."

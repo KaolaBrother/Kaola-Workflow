@@ -80,7 +80,7 @@ fix_owner: tdd-guide or build-error-resolver
 inline_emergency_fallback_authorized: no
 ```
 
-## Agent Model Badge
+## Effort Variant Resolution
 
 opencode resolves each subagent effort centrally from `opencode.json` (the two Kaola
 tiers as reasoning-EFFORT VARIANTS of the inherited model): reasoning-tier roles run the
@@ -112,11 +112,11 @@ Delegated validation should use a fresh validation subagent when available, or
 the relevant fix agent (`tdd-guide` for behavior checks, `build-error-resolver`
 for build/type/lint/tooling checks). Raw output goes to:
 
-Route build/type/lint/tooling fixes to the Claude Code agent
+Route build/type/lint/tooling fixes to the subagent
 `build-error-resolver`:
 
 ```text
-Agent(
+task(
   subagent_type="build-error-resolver",
   description="Routed fix: task {n}",
   prompt="..."
@@ -275,10 +275,10 @@ next_command: /kaola-workflow-phase4 {project}
 inline_emergency_fallback_authorized: no
 ```
 
-Then the main session invokes the Claude Code agent `tdd-guide` for the task:
+Then the main session invokes the subagent `tdd-guide` for the task:
 
 ```text
-Agent(
+task(
   subagent_type="tdd-guide",
   description="Task {n}: {name}",
   prompt="..."

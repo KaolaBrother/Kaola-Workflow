@@ -22,7 +22,7 @@ architecture, or write implementation code.
 - Do not ask the user to confirm generated project/folder names. Routine naming
   is nonessential workflow bookkeeping and is chosen autonomously.
 
-## Agent Model Badge
+## Effort Variant Resolution
 
 opencode resolves each subagent effort centrally from `opencode.json` (the two Kaola
 tiers as reasoning-EFFORT VARIANTS of the inherited model): reasoning-tier roles run the
@@ -102,10 +102,10 @@ inline_emergency_fallback_authorized: no
 
 ## Step 2 - Codebase Exploration
 
-Invoke the Claude Code agent `code-explorer`:
+Invoke the subagent `code-explorer`:
 
 ```text
-Agent(
+task(
   subagent_type="code-explorer",
   description="Research {project-name}",
   prompt="..."
@@ -134,7 +134,7 @@ Update `workflow-state.md` before invoking and after writing the cache file.
 Invoke `knowledge-lookup` only when current external behavior matters. Pass its model explicitly:
 
 ```text
-Agent(
+task(
   subagent_type="knowledge-lookup",
   description="Lookup docs for {project-name}",
   prompt="..."

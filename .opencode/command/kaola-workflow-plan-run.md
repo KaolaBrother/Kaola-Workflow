@@ -13,7 +13,7 @@ Finalization. Stop and surface on any consent-halt or typed refusal.
 Run subcommands with `--summary` for one-line output; drill into `.cache/<op>-envelope.json`
 on `result: refuse` for the full envelope (includes `operator_hint`).
 
-## Agent Model Badge
+## Effort Variant Resolution
 
 opencode resolves each subagent effort centrally from `opencode.json` (the two Kaola
 tiers as reasoning-EFFORT VARIANTS of the inherited model): reasoning-tier roles run the

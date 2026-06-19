@@ -103,7 +103,7 @@ Append equivalent missing sections only. Treat headings with the same meaning as
 - Use `/workflow-next` as the workflow entrypoint and router.
 - Keep phase work scoped, resumable, and recorded under `kaola-workflow/`.
 - Maintain `workflow-state.md` for active work; it records current phase, step, pending gates, and next command.
-- Delegate phase-specific work to the vendored Claude Code agents by default; the main session owns orchestration, review, validation, integration, and final decisions.
+- Delegate phase-specific work to the vendored subagents by default; the main session owns orchestration, review, validation, integration, and final decisions.
 - Phase boundaries: Phase 1 discovers facts, Phase 2 chooses strategy, Phase 3 creates the executable blueprint.
 - In Phase 1, spawn `code-explorer` for codebase research and `knowledge-lookup` when external library/API behavior or open-web/expertise knowledge that cannot be confirmed locally is needed.
 - In Phase 4, spawn `tdd-guide` per task as the executor. `tdd-guide` is the executor agent; `tdd-workflow` is the RED -> GREEN -> REFACTOR playbook it follows.

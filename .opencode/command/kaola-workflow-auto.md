@@ -23,7 +23,7 @@ append-only digest so a crash resume replays from the last committed line.
 Active project state is tracked in `kaola-workflow/{project}/workflow-state.md`; the
 autopilot reads it to determine the current stage and advance the digest correctly.
 
-## Agent Model Badge
+## Effort Variant Resolution
 
 opencode resolves each subagent effort centrally from `opencode.json` (the two Kaola
 tiers as reasoning-EFFORT VARIANTS of the inherited model): reasoning-tier roles run the

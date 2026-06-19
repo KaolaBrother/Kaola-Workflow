@@ -164,12 +164,13 @@ function renderAgent(canonContent, agentName) {
 
 // Rewrite Claude-specific model prose for opencode. Effort is centralized in opencode.json
 // (the two Kaola tiers as reasoning-EFFORT VARIANTS of the inherited model), so: (a) replace
-// the recurring "## Agent Model Badge" block (a Claude Code feature instructing "MUST pass
-// model=") with an opencode-native effort note; (b) rewrite the plan-run "Pass
-// model=dispatch.model" and the review-fix "include the explicit model=" instructions that
-// reference that badge; (c) drop leftover install-time model placeholders from dispatch lines.
+// the recurring canonical "Agent Model Badge" block (a Claude Code feature instructing "MUST
+// pass model=") with an opencode-native "Effort Variant Resolution" note; (b) rewrite the
+// plan-run "Pass model=dispatch.model" and the review-fix "include the explicit model="
+// instructions that reference that badge; (c) drop leftover install-time model placeholders
+// from dispatch lines.
 const OPENCODE_BADGE_BLOCK = [
-  '## Agent Model Badge',
+  '## Effort Variant Resolution',
   '',
   'opencode resolves each subagent effort centrally from `opencode.json` (the two Kaola',
   'tiers as reasoning-EFFORT VARIANTS of the inherited model): reasoning-tier roles run the',
@@ -219,6 +220,13 @@ function transformCommandBody(body) {
     /For every[^.]*?include\s+the\s+explicit\s+`model=`\s+parameter\s+in\s+the\s+`Agent\(\.\.\.\)`\s+call\s+exactly\s+as\s+documented\s+above\s+—\s+never\s+omit\s+it\./g,
     "Dispatch each such role via `subagent_type`; its effort variant resolves centrally from `opencode.json` (opus-tier roles use the model's TOP effort, sonnet-tier its SECOND). Never pass a per-call `model=`."
   );
+  // Dispatch-card `Agent(` openings → the opencode `task` form. Scoped to the literal opening
+  // (a line that is exactly `Agent(` immediately followed by an indented `subagent_type=` line)
+  // so it rewrites ONLY the dispatch invocation and never prose mentions of the word "agent"
+  // or inline `Agent(...)` code spans.
+  text = text.replace(/^Agent\(\n(\s+subagent_type=)/gm, 'task(\n$1');
+  // Prose: opencode-neutral wording for subagent references (was "Claude Code agent(s)").
+  text = text.replace(/\bClaude Code agent(s?)\b/g, 'subagent$1');
   // Parenthesized then bare forms — real placeholders first, then literal ellipsis.
   text = text.replace(/\s*\(\s*model="\{[A-Z_]+_MODEL\}"\s*\)/g, '');
   text = text.replace(/\s*model="\{[A-Z_]+_MODEL\}"/g, '');

@@ -21,7 +21,7 @@ kaola-workflow/{project}/phase2-ideation.md
 kaola-workflow/{project}/.cache/planner.md
 ```
 
-## Agent Model Badge
+## Effort Variant Resolution
 
 opencode resolves each subagent effort centrally from `opencode.json` (the two Kaola
 tiers as reasoning-EFFORT VARIANTS of the inherited model): reasoning-tier roles run the
@@ -71,11 +71,11 @@ fix_owner: code-architect for blueprint revisions
 inline_emergency_fallback_authorized: no
 ```
 
-Invoke the Claude Code agent `code-architect` with
+Invoke the subagent `code-architect` with
 relevant excerpts from Phase 1 and Phase 2:
 
 ```text
-Agent(
+task(
   subagent_type="code-architect",
   description="Plan {project}",
   prompt="..."
