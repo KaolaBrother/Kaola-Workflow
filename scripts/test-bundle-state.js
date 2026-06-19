@@ -20,6 +20,20 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
+// #531: hermetic HOME — the classifier reads parallel_mode from ~/.config/kaola-workflow/config.json
+// (os.homedir()) and short-circuits the spawned `classify` to verdict:'green' ("parallel_mode=<x>;
+// bypassing classifier") whenever it is not 'auto', with NO env override. Pin a sandbox HOME seeded
+// with parallel_mode:'auto' so a dev-local non-'auto' config can't turn these verdict/exit-code
+// assertions into spurious "got green" failures (issue #531). Inherited by the classify subprocess.
+const kwSandboxHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sandbox-home-'));
+fs.mkdirSync(path.join(kwSandboxHome, '.config', 'kaola-workflow'), { recursive: true });
+fs.writeFileSync(
+  path.join(kwSandboxHome, '.config', 'kaola-workflow', 'config.json'),
+  JSON.stringify({ parallel_mode: 'auto', enable_adaptive: false }, null, 2) + '\n'
+);
+process.env.HOME = kwSandboxHome;
+process.env.USERPROFILE = kwSandboxHome;
+
 const repoRoot = path.resolve(__dirname, '..');
 const activeFoldersScript = path.join(repoRoot, 'scripts', 'kaola-workflow-active-folders.js');
 const classifierScript = path.join(repoRoot, 'scripts', 'kaola-workflow-classifier.js');

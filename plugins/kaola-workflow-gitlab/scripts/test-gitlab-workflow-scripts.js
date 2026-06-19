@@ -17,6 +17,21 @@ delete process.env.KAOLA_WORKFLOW_OFFLINE;
 // Tests that want ON behaviour must set KAOLA_ENABLE_ADAPTIVE explicitly in their subprocess env.
 process.env.KAOLA_ENABLE_ADAPTIVE = '0';
 
+// #531: hermetic HOME — classifyIssue (called IN-PROCESS by the classify-blocked/red tests) reads
+// parallel_mode from ~/.config/kaola-workflow/config.json (os.homedir()) and bypasses to
+// verdict:'green' whenever it is not 'auto', with NO env override. Per-spawn HOME sandboxing can't
+// cover an in-process call, so pin a process-wide sandbox HOME seeded with parallel_mode:'auto'
+// (before the classifier require) so a dev-local non-'auto' config can't turn these verdict
+// assertions into spurious "got green" failures (issue #531). os.homedir() honors process.env.HOME.
+const kwSandboxHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sandbox-home-'));
+fs.mkdirSync(path.join(kwSandboxHome, '.config', 'kaola-workflow'), { recursive: true });
+fs.writeFileSync(
+  path.join(kwSandboxHome, '.config', 'kaola-workflow', 'config.json'),
+  JSON.stringify({ parallel_mode: 'auto', enable_adaptive: false }, null, 2) + '\n'
+);
+process.env.HOME = kwSandboxHome;
+process.env.USERPROFILE = kwSandboxHome;
+
 const forge = require('./kaola-gitlab-forge');
 const active = require('./kaola-gitlab-workflow-active-folders');
 const classifier = require('./kaola-gitlab-workflow-classifier');

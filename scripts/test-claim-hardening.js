@@ -12,6 +12,20 @@ const path = require('path');
 process.env.KAOLA_GH_REMOTE_TIMEOUT_MS = '500';   // tiny cap for the hang test (set before require)
 delete process.env.KAOLA_WORKFLOW_OFFLINE;        // ensure ghExec actually shells the mock
 
+// #531: hermetic HOME — the classifier (spawned by the #519 transient-fault tests) reads parallel_mode
+// from ~/.config/kaola-workflow/config.json (os.homedir()) and bypasses to verdict:'green' whenever it
+// is not 'auto', with NO env override — short-circuiting the indeterminate/escalate path under test.
+// Pin a sandbox HOME seeded with parallel_mode:'auto' so a dev-local non-'auto' config can't turn these
+// assertions into spurious "got green" failures (issue #531). Inherited by the classifier subprocess.
+const kwSandboxHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sandbox-home-'));
+fs.mkdirSync(path.join(kwSandboxHome, '.config', 'kaola-workflow'), { recursive: true });
+fs.writeFileSync(
+  path.join(kwSandboxHome, '.config', 'kaola-workflow', 'config.json'),
+  JSON.stringify({ parallel_mode: 'auto', enable_adaptive: false }, null, 2) + '\n'
+);
+process.env.HOME = kwSandboxHome;
+process.env.USERPROFILE = kwSandboxHome;
+
 const { ghExec, isSafeBranchArg, removeBranch, postAdvisoryClaim, defaultBranch } = require('./kaola-workflow-claim.js');
 const { writeFileAtomicReplace } = require('./kaola-workflow-adaptive-schema.js');
 
