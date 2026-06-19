@@ -1,0 +1,41 @@
+{
+  "headSha": "de2722143ee26617e128f98485d75f05e8be4a5b",
+  "workTreeHash": "53555c76610750d7843a56d9fad4d2eb8af69b8c61741fb88e495c9d01486ddd",
+  "startedAt": "2026-06-19T16:23:30.827Z",
+  "completedAt": "2026-06-19T16:36:13.714Z",
+  "source": "npm-default",
+  "chains": [
+    {
+      "name": "claude",
+      "exitCode": 0,
+      "command": "npm run test:kaola-workflow:claude",
+      "duration_ms": 762850,
+      "accepted_red": false,
+      "accepted_red_issue": null
+    },
+    {
+      "name": "codex",
+      "exitCode": 0,
+      "command": "npm run test:kaola-workflow:codex",
+      "duration_ms": 29331,
+      "accepted_red": false,
+      "accepted_red_issue": null
+    },
+    {
+      "name": "gitlab",
+      "exitCode": 0,
+      "command": "npm run test:kaola-workflow:gitlab",
+      "duration_ms": 344820,
+      "accepted_red": false,
+      "accepted_red_issue": null
+    },
+    {
+      "name": "gitea",
+      "exitCode": 0,
+      "command": "npm run test:kaola-workflow:gitea",
+      "duration_ms": 347674,
+      "accepted_red": false,
+      "accepted_red_issue": null
+    }
+  ]
+}

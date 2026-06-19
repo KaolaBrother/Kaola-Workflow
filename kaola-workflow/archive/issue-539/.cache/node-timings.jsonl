@@ -1,0 +1,14 @@
+{"node":"n1-finalize-base","event":"opened","ts":"2026-06-19T14:21:28.415Z"}
+{"node":"n1-finalize-base","event":"opened","ts":"2026-06-19T14:21:36.879Z"}
+{"node":"n1-finalize-base","event":"evidence","ts":"2026-06-19T14:57:31.890Z"}
+{"node":"n1-finalize-base","event":"closed","ts":"2026-06-19T14:57:43.331Z"}
+{"node":"n2-opencode-flip","event":"opened","ts":"2026-06-19T14:57:43.382Z"}
+{"node":"n2-opencode-flip","event":"evidence","ts":"2026-06-19T15:19:24.023Z"}
+{"node":"n2-opencode-flip","event":"closed","ts":"2026-06-19T15:19:24.691Z"}
+{"node":"n3-code-review","event":"opened","ts":"2026-06-19T15:19:24.741Z"}
+{"node":"n3-code-review","event":"evidence","ts":"2026-06-19T15:46:06.161Z"}
+{"node":"n3-code-review","event":"closed","ts":"2026-06-19T15:46:06.602Z"}
+{"node":"n4-doc-update","event":"opened","ts":"2026-06-19T15:46:06.687Z"}
+{"node":"n4-doc-update","event":"evidence","ts":"2026-06-19T15:49:48.729Z"}
+{"node":"n4-doc-update","event":"closed","ts":"2026-06-19T15:49:49.186Z"}
+{"node":"n5-finalize","event":"opened","ts":"2026-06-19T15:49:49.229Z"}

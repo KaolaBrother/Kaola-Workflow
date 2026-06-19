@@ -13069,6 +13069,7 @@ function buildRegistry() {
   add('testFinalizeArchiveVerifiesBeforeDelete',          testFinalizeArchiveVerifiesBeforeDelete);
   add('testFinalizeClosesIssueBundleMembers',             testFinalizeClosesIssueBundleMembers);
   add('testFinalizeRoadmapResidueDetection',              testFinalizeRoadmapResidueDetection);
+  add('testFinalizeBaseFlagScopesAttributionSweep',       testFinalizeBaseFlagScopesAttributionSweep);
   add('testStartupRefusesTargetSetMismatch',              testStartupRefusesTargetSetMismatch);
   add('testHarnessSelfCheck',                             testHarnessSelfCheck);
   // #429 sink transaction tests
@@ -14354,6 +14355,131 @@ function testFinalizeRoadmapResidueDetection() {
 
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   console.log('testFinalizeRoadmapResidueDetection: PASSED');
+}
+
+// ---------------------------------------------------------------------------
+// #539: cmdFinalize forwards --base to the whole-plan --finalize-check so the
+// attribution sweep can be scoped to a project's OWN diff on a SHARED multi-issue
+// branch. On such a branch the default `main` base pulls a sibling issue's production
+// writes into the sweep → unattributed_change; `--base <project-merge-base>` scopes
+// the sweep to only THIS project's changes. The per-node --barrier-check STILL rejects
+// --base (anti-laundering guard) — unchanged. Asserts BOTH directions of cmdFinalize:
+//   (1) WITHOUT --base → refuses finalize_gate_unverified (inner unattributed_change),
+//       pinning today's behavior.
+//   (2) WITH --base <project-merge-base> → the gate passes → status: closed.
+//   (3) KAOLA_FINALIZE_BASE env forwards --base too (the env sourcing path).
+// Fixture built in $TMPDIR (the RED-fixture guard) on a shared two-issue branch.
+// ---------------------------------------------------------------------------
+function testFinalizeBaseFlagScopesAttributionSweep() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-539-base-')));
+  const gitEnv = { ...process.env, ...GIT_ISOLATION_ENV };
+  const project = 'issue-539';
+  // seedProject: (re)writes the live project folder (workflow-state + plan + consumer
+  // final-validation evidence). The finalize gate reads these from the working tree.
+  const seedProject = () => {
+    const dir = path.join(tmp, 'kaola-workflow', project);
+    fs.mkdirSync(path.join(dir, '.cache'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'workflow-state.md'), [
+      '# Kaola-Workflow State', '',
+      '## Project', 'name: ' + project, 'status: active', '',
+      '## Current Position', 'phase: adaptive', 'workflow_path: adaptive',
+      'step: start', 'next_command: /kaola-workflow-plan-run ' + project, '',
+      '## Pending Gates', '- none', '',
+      '## Last Evidence', 'last_command: startup', 'last_result: folder_claimed', '',
+      '## Last Updated', new Date().toISOString(), '',
+      '## Sink', 'branch: workflow/' + project, 'issue_number: 539', 'sink: merge', 'run_posture: in-place', ''
+    ].join('\n'));
+    // impl node is COMPLETE and declares bbb/y.js (issue-2's own production write).
+    fs.writeFileSync(path.join(dir, 'workflow-plan.md'), [
+      '<!-- plan_hash: ' + 'c'.repeat(64) + ' -->', '',
+      '# Workflow Plan — ' + project, '',
+      '## Meta', 'labels: enhancement', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '|---|---|---|---|---|---|',
+      '| impl | implementer | — | bbb/y.js | 1 | sequence |',
+      '| done | finalize | impl | — | 1 | sequence |', '',
+      '## Node Ledger', '', '| id | status |', '|---|---|',
+      '| impl | complete |', '| done | complete |', ''
+    ].join('\n'));
+    // CONSUMER-mode gate (no package.json with test:kaola-workflow:*): final-validation.md.
+    fs.writeFileSync(path.join(dir, '.cache', 'final-validation.md'), 'verdict: pass\nfindings_blocking: 0\n');
+  };
+  try {
+    initGitRepo(tmp);                                  // main: README.md
+    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/shared'], { encoding: 'utf8', env: gitEnv });
+    // Issue-1 work (aaa/x.js) committed on the SHARED branch — NOT in issue-2's node set.
+    fs.mkdirSync(path.join(tmp, 'aaa'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'aaa', 'x.js'), 'issue-1 work\n');
+    spawnSync('git', ['-C', tmp, 'add', '-A'], { encoding: 'utf8', env: gitEnv });
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'issue-1 work'], { encoding: 'utf8', env: gitEnv });
+    // ISSUE2_BASE = the boundary commit where issue-2's own work begins (parent of its first commit).
+    const ISSUE2_BASE = spawnSync('git', ['-C', tmp, 'rev-parse', 'HEAD'], { encoding: 'utf8', env: gitEnv }).stdout.trim();
+    // Issue-2 work (bbb/y.js) committed — declared by issue-2's complete node.
+    fs.mkdirSync(path.join(tmp, 'bbb'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'bbb', 'y.js'), 'issue-2 work\n');
+    spawnSync('git', ['-C', tmp, 'add', '-A'], { encoding: 'utf8', env: gitEnv });
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'issue-2 work'], { encoding: 'utf8', env: gitEnv });
+
+    seedProject();
+    plantRoadmapIssue(tmp, 539, '');
+
+    const parseLastJson = stdout => {
+      const lines = (stdout || '').trim().split('\n').filter(l => l.trim().startsWith('{'));
+      assert(lines.length > 0, '#539: expected JSON output, got: ' + stdout);
+      return JSON.parse(lines[lines.length - 1]);
+    };
+
+    // --- Direction (1): WITHOUT --base → gate refuses finalize_gate_unverified (inner
+    //     unattributed_change naming aaa/x.js). Pinned current behavior; NO archive created. ---
+    {
+      const r = spawnSync(process.execPath, [claimScript, 'finalize', '--project', project], {
+        cwd: tmp, encoding: 'utf8', timeout: 60000,
+        env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
+      });
+      assert(r.status !== 0,
+        '#539 (1): finalize WITHOUT --base on a shared branch must exit non-zero, got ' + r.status + '\nstdout: ' + r.stdout + '\nstderr: ' + r.stderr);
+      const out = parseLastJson(r.stdout);
+      assert(out.result === 'refuse' && out.reason === 'finalize_gate_unverified',
+        '#539 (1): refuse reason must be finalize_gate_unverified, got ' + JSON.stringify(out));
+      assert(/unattributed_change/.test(JSON.stringify(out)),
+        '#539 (1): inner reason must name unattributed_change, got ' + JSON.stringify(out));
+      assert(/aaa\/x\.js/.test(JSON.stringify(out)),
+        '#539 (1): the refuse must name the sibling-issue file aaa/x.js, got ' + JSON.stringify(out));
+      assert(!fs.existsSync(path.join(tmp, 'kaola-workflow', 'archive')),
+        '#539 (1): no archive must be created on gate refusal');
+    }
+
+    // --- Direction (2): WITH --base <ISSUE2_BASE> → sweep scopes to issue-2's own diff → pass →
+    //     status: closed. (RED before the fix: cmdFinalize does not forward --base yet.) ---
+    {
+      const r = spawnSync(process.execPath, [claimScript, 'finalize', '--project', project, '--base', ISSUE2_BASE], {
+        cwd: tmp, encoding: 'utf8', timeout: 60000,
+        env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1' })
+      });
+      assert(r.status === 0,
+        '#539 (2): finalize WITH --base must pass the gate and exit 0, got ' + r.status + '\nstdout: ' + r.stdout + '\nstderr: ' + r.stderr);
+      const out = parseLastJson(r.stdout);
+      assert(out.status === 'closed',
+        '#539 (2): scoped --base finalize must reach status: closed, got ' + JSON.stringify(out.status));
+    }
+
+    // --- Direction (3): KAOLA_FINALIZE_BASE env forwards --base too (env sourcing path). ---
+    {
+      seedProject(); // direction (2) archived the folder; re-seed.
+      plantRoadmapIssue(tmp, 539, '');
+      const r = spawnSync(process.execPath, [claimScript, 'finalize', '--project', project], {
+        cwd: tmp, encoding: 'utf8', timeout: 60000,
+        env: Object.assign({}, process.env, { KAOLA_WORKFLOW_OFFLINE: '1', KAOLA_FINALIZE_BASE: ISSUE2_BASE })
+      });
+      assert(r.status === 0,
+        '#539 (3): KAOLA_FINALIZE_BASE finalize must pass the gate, got ' + r.status + '\nstdout: ' + r.stdout + '\nstderr: ' + r.stderr);
+      const out = parseLastJson(r.stdout);
+      assert(out.status === 'closed',
+        '#539 (3): env-sourced --base finalize must reach status: closed, got ' + JSON.stringify(out.status));
+    }
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  console.log('testFinalizeBaseFlagScopesAttributionSweep: PASSED');
 }
 
 // ---------------------------------------------------------------------------

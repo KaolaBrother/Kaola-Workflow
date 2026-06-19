@@ -194,6 +194,28 @@ function transformCommandBody(body) {
       while (i < lines.length && !/^#{1,6}\s/.test(lines[i])) i++;
       continue;
     }
+    // opencode path-flip (#539, Mechanism B): opencode is adaptive-only-default, so the
+    // canonical "## Startup Step 0a-1 — Path Intent" section (KAOLA_ENABLE_ADAPTIVE switch
+    // resolution + Branch A/B path-selection prose) is DROPPED at generation time. This
+    // transform runs ONLY inside renderCommand (opencode output), so canonical is never
+    // touched — avoiding a guaranteed merge conflict with #538's in-flight canonical edits.
+    // Mirrors the Agent Model Badge strip above: detect the heading, skip its body. UNLIKE
+    // the badge (a flat block), this section nests `### Branch A`/`### Branch B` children,
+    // so the body-skip stops at the next SIBLING `##` heading (`^##\s` rejects `###` — after
+    // two hashes `\s` requires whitespace, and `###` has a third `#` there), not the first
+    // `###` child. The ^## anchor isolates the section heading (surviving "(Step 0a-1)"
+    // prose mentions elsewhere are not headings). Rewind trailing blank line(s) in `out` so
+    // excising the section leaves a single-blank seam, not a double-blank.
+    if (/^##\s+Startup Step 0a-1\b/.test(line)) {
+      // Rewind trailing blank line(s) in `out` then re-insert exactly ONE blank, so
+      // excising the section leaves a clean single-blank seam to the next heading
+      // (the body-skip below also consumes the blank that followed the section).
+      while (out.length && out[out.length - 1].trim() === '') out.pop();
+      if (out.length) out.push('');
+      i++;
+      while (i < lines.length && !/^##\s/.test(lines[i])) i++;
+      continue;
+    }
     out.push(line);
     i++;
   }
@@ -237,6 +259,14 @@ function transformCommandBody(body) {
   text = text.replace(/,{2,}/g, ',');
   // Tidy trailing whitespace left behind on affected lines.
   text = text.replace(/[ \t]+\n/g, '\n');
+  // opencode path-flip (#539, Mechanism B): strip the adapt repair-loop auto-fallback
+  // wording. The canonical "After repeated failure → a REAL decision: downgrade to full
+  // path / discard+restart / STOP" lists three escapes; on adaptive-only-default opencode
+  // the "downgrade to full path" option is dropped (the router's Path Intent section that
+  // would re-set KAOLA_PATH=full is stripped above). Removing the "downgrade to full path / "
+  // prefix leaves the remaining two options (discard+restart / STOP) coherent. "fall back to
+  // full" only lived inside the stripped Path Intent section, so no separate handling here.
+  text = text.replace(/downgrade to full path \/\s*/g, '');
   return text;
 }
 

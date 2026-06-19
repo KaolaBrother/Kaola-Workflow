@@ -390,6 +390,32 @@ for (const target of emittedCommandTargets) {
 }
 
 // ---------------------------------------------------------------------------
+// A22 (issue #539): opencode path-flip. opencode is adaptive-only-default, so the
+// canonical "## Startup Step 0a-1 — Path Intent" section (with its
+// KAOLA_ENABLE_ADAPTIVE switch-resolution and Branch A/B path-selection prose) and
+// the adapt repair-loop "downgrade to full path" / "fall back to full"
+// auto-fallback wording are STRIPPED at generation time by transformCommandBody
+// (opencode-only — the transform runs solely inside renderCommand; canonical
+// commands/*.md are never touched). This locks the strip-transform. Mechanism B
+// (generator-only) avoids colliding with #538's in-flight canonical edits.
+// ---------------------------------------------------------------------------
+{
+  const wfNext = read('.opencode/command/workflow-next.md');
+  assert(!wfNext.includes('## Startup Step 0a-1 — Path Intent'),
+    'A22: workflow-next has NO "## Startup Step 0a-1 — Path Intent" section (stripped at generation; opencode is adaptive-only-default)');
+  assert(!wfNext.includes('KAOLA_ENABLE_ADAPTIVE'),
+    'A22: workflow-next has NO KAOLA_ENABLE_ADAPTIVE switch-resolution prose (Path Intent section stripped)');
+  assert(!/### Branch [AB]\b/.test(wfNext),
+    'A22: workflow-next has NO Branch A/B path-selection prose (Path Intent section stripped)');
+
+  const adapt = read('.opencode/command/kaola-workflow-adapt.md');
+  assert(!adapt.includes('downgrade to full path'),
+    'A22: adapt has NO "downgrade to full path" auto-fallback wording (stripped at generation)');
+  assert(!adapt.includes('fall back to full'),
+    'A22: adapt has NO "fall back to full" auto-fallback wording (stripped at generation)');
+}
+
+// ---------------------------------------------------------------------------
 // A10: hooks — every runtime-neutral hook script is deployed under
 // .opencode/hooks/ byte-identical to canonical hooks/, so the adapter plugin and
 // the canonical edition share ONE source of truth (no logic drift).

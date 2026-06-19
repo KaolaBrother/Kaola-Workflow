@@ -16,7 +16,7 @@ Everything under `.opencode/` is **generated from canonical** by
 | Canonical source        | opencode edition output       | Notes |
 | ----------------------- | ----------------------------- | ----- |
 | `agents/<name>.md`      | `.opencode/agent/<name>.md`   | opencode frontmatter (`description`, `mode: subagent`, read-only `permission`). **No `model:` field** — model-agnostic. |
-| `commands/<file>.md`    | `.opencode/command/<file>.md` | Claude install-time `model="{...}"` placeholders + all "pass `model=`" instructions rewritten to opencode's central effort resolution (`task` tool, no per-call `model=`). |
+| `commands/<file>.md`    | `.opencode/command/<file>.md` | Claude install-time `model="{...}"` placeholders + all "pass `model=`" instructions rewritten to opencode's central effort resolution (`task` tool, no per-call `model=`). The canonical Path Intent / auto-fallback prose is also stripped so adaptive is the unconditional default (see [Path selection](#path-selection--adaptive-is-the-unconditional-default) below). |
 | `hooks/<script>.sh`     | `.opencode/hooks/<script>.sh` | The 3 runtime-neutral hook scripts, byte-copied. |
 
 Two files are **authored** (not generated) and verified present by the test:
@@ -122,6 +122,56 @@ skip `--adapt` and pin via env (or hand-edit `opencode.json`):
 > `opencode.json` is **user-owned**: `--write` regenerates agents/commands but
 > **preserves** this file. Use `--write-config [--adapt]` to reset it from the template.
 
+## Path selection — adaptive is the unconditional default
+
+On the opencode edition, the **adaptive path is the unconditional default**; there
+is no Path Intent / adaptive-switch step at the router. The canonical
+`commands/workflow-next.md` carries a `## Startup Step 0a-1 — Path Intent` section
+(`KAOLA_ENABLE_ADAPTIVE` switch-resolution + Branch A/B path-selection prose) and
+`commands/kaola-workflow-adapt.md` carries a "downgrade to full path" auto-fallback
+in its repair loop. **Both are stripped at generation time** by
+`sync-opencode-edition.js`'s `transformCommandBody` (a section-drop for the Path
+Intent heading, a targeted prose rewrite for the adapt fallback) — so they reach
+`.opencode/command/*` already flipped, and **canonical `commands/*.md` is never
+touched**. This is Mechanism B (opencode-only generator transform): it delivers the
+#538 adaptive-only-default flip on the opencode surface without colliding with
+#538's in-flight canonical edits to those exact files.
+
+What is stripped, opencode-only:
+
+- `.opencode/command/workflow-next.md` — the entire `## Startup Step 0a-1 — Path
+  Intent` section (heading + body, including the `### Branch A` / `### Branch B`
+  subheadings and the `KAOLA_ENABLE_ADAPTIVE` switch-resolution prose) is dropped.
+  `## Startup Step 0a-2` (the adaptive front-end entry) stays — it describes what
+  fires when `KAOLA_PATH=adaptive`, which is now the default.
+- `.opencode/command/kaola-workflow-adapt.md` — the "downgrade to full path / "
+  option in the `plan_invalid` repair-loop escape list is removed (the remaining
+  `discard+restart / STOP` options stay coherent). "fall back to full" only lived
+  inside the stripped Path Intent section, so it is gone with the section.
+
+Locked by `test-opencode-edition.js` assertion **A22**.
+
+> **Surviving back-references.** A few inline parentheticals elsewhere in
+> `workflow-next.md` (Bundle Lane, Goal-Driven Autonomy, the output template) still
+> mention "(Step 0a-1)" or the switch-OFF concept. These are stale but coherent —
+> with adaptive as the unconditional default, "resolve the path intent" resolves
+> trivially to adaptive and the switch-OFF branches simply never fire. Purging them
+> would mean deep surgery on canonical concepts outside this flip's scope, so they
+> are left in place intentionally.
+
+### Installer command-set parity — scoped out
+
+`install-opencode.sh` is a standalone installer (not `install.sh --forge`) and
+deploys the **full** command set (including `kaola-workflow-fast.md` and the
+`phase1`–`phase5` commands). #538's install.sh target is adaptive-only-default
+with `--with-fast` / `--with-full` opt-ins. That parity is **scoped out of this
+flip**: the load-bearing change is the router-prose flip (the transform, above),
+which already makes adaptive the default *behavior* regardless of which commands
+are installed; the install-time command-set partition (which commands exist) is
+orthogonal and is a design call best aligned with #538's canonical install.sh
+work. Full `--with-fast` / `--with-full` parity can ride a later issue without
+colliding. See the rationale comment at the top of `install-opencode.sh`.
+
 ## Hooks
 
 opencode's hook model is **plugin-based** (TS/JS modules), not the shell +
@@ -201,13 +251,14 @@ The validator is self-contained (run directly with `node`; it is intentionally
 
 ## Verification
 
-The edition is covered by `scripts/test-opencode-edition.js` (223 assertions):
+The edition is covered by `scripts/test-opencode-edition.js` (283 assertions):
 agent/command presence and frontmatter, model-agnostic invariant (no `model:` in
 generated agents), byte-for-byte canonical parity, `opencode.json` JSONC validity
 + exact tier coverage, **adaptive effort tiers** (`mapTier` per provider + the
 higher-profile correspondence), the **workflow-planner `mapTier` guidance**,
-**model-prose consistency** (no contradictory "pass `model=`" instructions), and
-route-reachability (every receipt-emitted command target resolves under
-`.opencode/command/`). The existing `test-route-reachability.js` /
+**model-prose consistency** (no contradictory "pass `model=`" instructions),
+**path-flip** (A22: no Path Intent section / auto-fallback prose on the opencode
+surface), and route-reachability (every receipt-emitted command target resolves
+under `.opencode/command/`). The existing `test-route-reachability.js` /
 `validate-vendored-agents.js` / `validate-script-sync.js` / `test-edition-sync.js`
 suites stay green — this edition adds a surface without altering the others.

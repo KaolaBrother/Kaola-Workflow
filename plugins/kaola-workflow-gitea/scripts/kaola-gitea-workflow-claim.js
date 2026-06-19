@@ -103,7 +103,7 @@ function checkDispatchAttestations(logDirCandidates, receipt) {
 // known value flag or unknown. (Keep this in sync with the value flags the subcommands read.)
 const KNOWN_VALUE_FLAGS = new Set([
   'branch', 'issue', 'project', 'reason', 'runtime', 'sink',
-  'targetIssue', 'targetIssues', 'workflowPath', 'prNumber', 'issueNumbers',
+  'targetIssue', 'targetIssues', 'workflowPath', 'prNumber', 'issueNumbers', 'base',
 ]);
 
 function parseArgs(argv) {
@@ -1841,7 +1841,15 @@ function cmdFinalize() {
       let gateResult = null;
       let gateError = null;
       try {
-        const raw = execFileSync(process.execPath, [validatorScript, livePlanPath, '--finalize-check', '--json'],
+        // #539: forward --base to the whole-plan --finalize-check ONLY, so the attribution sweep
+        // can scope to a project's OWN diff on a SHARED multi-issue branch. Sourced from --base <ref>
+        // and/or KAOLA_FINALIZE_BASE env, defaulting to UNSET (→ the validator's `main` default —
+        // byte-equivalent to today for branch-per-issue runs, so existing tests stay green). The
+        // per-node --barrier-check STILL rejects --base (the anti-laundering guard) — unchanged.
+        const finalizeBase = args.base || (process.env.KAOLA_FINALIZE_BASE || '').trim() || null;
+        const validatorArgv = [validatorScript, livePlanPath, '--finalize-check', '--json'];
+        if (finalizeBase) validatorArgv.push('--base', finalizeBase);
+        const raw = execFileSync(process.execPath, validatorArgv,
           { cwd: root, encoding: 'utf8', timeout: 120000 });
         gateResult = JSON.parse(raw.trim());
       } catch (e) {

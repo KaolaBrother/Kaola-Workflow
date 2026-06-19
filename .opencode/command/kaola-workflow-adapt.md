@@ -130,7 +130,7 @@ The planner RAN `kaola-workflow-adaptive-handoff.js` and returned a checklist-ba
 
 - **`handoff_status: ready_to_run`** (all checklist true) → hand off DIRECTLY to `/kaola-workflow-plan-run {project}` (even when `decision:ask`, no approval gate). `/kaola-workflow-plan-run` owns the complete node lifecycle — it opens and dispatches every node including the first, via `kaola-workflow-adaptive-node.js`.
 
-- **`handoff_status: plan_invalid`** (validator refused; plan never froze, NOTHING written) → bounded **repair loop**: re-dispatch the `workflow-planner` with the verbatim `errors`/`validator_verdict` so it overwrites the UNFROZEN plan with a corrected DAG and re-runs the handoff. Retry ~2x (the retry counter lives in the ORCHESTRATOR, never in the script). After repeated failure → a REAL decision: downgrade to full path / discard+restart (`kaola-workflow-claim.js discard --project {project}` then fresh adaptive start) / STOP + surface a concrete blocker with validator evidence. Never silently loop.
+- **`handoff_status: plan_invalid`** (validator refused; plan never froze, NOTHING written) → bounded **repair loop**: re-dispatch the `workflow-planner` with the verbatim `errors`/`validator_verdict` so it overwrites the UNFROZEN plan with a corrected DAG and re-runs the handoff. Retry ~2x (the retry counter lives in the ORCHESTRATOR, never in the script). After repeated failure → a REAL decision: discard+restart (`kaola-workflow-claim.js discard --project {project}` then fresh adaptive start) / STOP + surface a concrete blocker with validator evidence. Never silently loop.
 
 ## Establish the task list, then hand off
 

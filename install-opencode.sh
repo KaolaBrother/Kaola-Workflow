@@ -18,6 +18,23 @@
 # This installer seeds it only if absent, so re-running never clobbers your choices.
 # Override the inherited model via KAOLA_OPENCODE_INHERIT_MODEL, or pin a tier to a
 # different model via KAOLA_OPENCODE_STANDARD_MODEL / _REASONING_MODEL.
+#
+# PATH SELECTION (issue #539): opencode is adaptive-only-default at the ROUTER level
+# — the generated .opencode/command/* flip adaptive to the unconditional default
+# (sync-opencode-edition.js transformCommandBody strips the canonical "## Startup
+# Step 0a-1 — Path Intent" section + the adapt "downgrade to full path" fallback at
+# generation time; see docs/opencode-edition.md § Path selection). This installer
+# does NOT currently offer --with-fast / --with-full command-set opt-ins (the #538
+# install.sh target). DECISION: scoped out for now. Rationale — (1) the load-bearing
+# change here is the router-prose flip (the transform), already delivered; the
+# installer command-set partition is a separate UX concern. (2) This installer
+# deploys the FULL command set (incl. kaola-workflow-fast.md + the phase commands),
+# so a user gets adaptive-by-default ROUTER behavior regardless of which commands
+# are present — the install-time selection (which commands exist) is orthogonal to
+# the router behavior (which path fires). (3) Partitioning the command set into
+# adaptive-core / fast-only / full-only is a design call that belongs with #538's
+# canonical install.sh work; aligning here prematurely would risk divergence.
+# Full --with-fast / --with-full parity can ride a later issue without colliding.
 
 set -euo pipefail
 

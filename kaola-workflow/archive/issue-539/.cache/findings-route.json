@@ -1,0 +1,9 @@
+[
+  {
+    "finding_id": "id=R1 scope=in_scope action=follow_up status=deferred severity=low fix_role=implementer rationale=n2-disclosed leftover \"(Step 0a-1)\"/\"switch-OFF\" inline references in .opencode/command/workflow-next.md (L72,L118,L159-161,L464) are stale-but-coherent dead-prose; router contract intact, switch-OFF unreachable on adaptive-only-default opencode; polish purge is a deferred follow-up, not a finalize gate",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  }
+]
