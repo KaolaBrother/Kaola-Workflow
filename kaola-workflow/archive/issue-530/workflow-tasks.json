@@ -1,0 +1,54 @@
+{
+  "source_plan_hash": "9f24fad8ed19b7e601c076bdfacf7478ba049ad4d2d82b85412f58154f4763ff",
+  "tasks": [
+    {
+      "id": "n1-parity",
+      "role": "code-explorer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n1-runtime",
+      "role": "code-explorer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n1-schema",
+      "role": "knowledge-lookup",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n2-decisions",
+      "role": "planner",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n3-critique",
+      "role": "adversarial-verifier",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n4-e2e",
+      "role": "main-session-gate",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n5-report",
+      "role": "doc-updater",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n6-finalize",
+      "role": "finalize",
+      "status": "completed",
+      "ledger_status": "complete"
+    }
+  ],
+  "last_synced_from_ledger": "2026-06-19T06:57:25.907Z"
+}
