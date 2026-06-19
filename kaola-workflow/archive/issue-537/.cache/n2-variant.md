@@ -1,0 +1,5 @@
+evidence-binding: n2-variant fba45f01da61
+<!-- RED: paste RED here -->
+RED: D451-DISPATCH-EFFORT: opus + env-resolved zhipu provider → opencode_variant max, got null (pre-impl; dispatchEffortOpencode('opus', null, {KAOLA_OPENCODE_INHERIT_MODEL:'zhipuai-coding-plan/glm-5.2'}) returned {opencode_variant:null, opencode_variant_source:"role_default"} — buildDispatch 2-arg runtime call never populated ctx.opencode_provider so mapTier got null). 6/6 new env-resolved assertions failed; 1012 existing passed; backward-compat case (unset env) correctly stayed role_default.
+<!-- GREEN: paste GREEN here -->
+GREEN: D451-DISPATCH-EFFORT env-resolved cases pass; dispatchEffortOpencode('opus', null, {KAOLA_OPENCODE_INHERIT_MODEL:'zhipuai-coding-plan/glm-5.2'}) → {opencode_variant:'max', opencode_variant_source:'planner_model'} (sonnet+openai env → 'high'); buildDispatch opus (no ctx provider) + env → 'max'. 6/6 new assertions + 1012 prior = 1018/1018 adaptive-node assertions green. node scripts/validate-script-sync.js green (25 byte-identical groups); 4× schema byte-identical (cmp claude==codex==gitlab==gitea).
