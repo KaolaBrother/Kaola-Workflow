@@ -101,6 +101,71 @@ KAOLA_OPENCODE_INHERIT_MODEL=openai/gpt-5 \
   node scripts/sync-opencode-edition.js --write-config --adapt       # xhigh/high
 ```
 
+### Computer-wide activation (merge into the global config)
+
+A **project** `opencode.json` (repo-root) applies to that repo only — opencode resolves config
+**global → project** (project wins). The seed above writes a *project* file, so by default each
+Kaola-enabled repo gets its own. To make the two effort tiers effective on **every** repo on a
+machine, the `provider.*` variants + `agent.<role>.variant` map must live in the **global**
+`~/.config/opencode/opencode.json`.
+
+**Why this isn't automatic (the gap).** The installer/script seeds `opencode.json` only **if
+absent** (it preserves your existing file), and the adapted renderer writes a *full* file with
+**no `model` line** (it assumes model inheritance). Consequences:
+
+- a global config that already exists (the typical case — it carries your `model`, and often
+  `mcp` servers with secrets) is **not** upgraded by re-running the installer;
+- a blind overwrite (`--write-config-to ~/.config/opencode/opencode.json --adapt`) would **wipe**
+  your `model` / `mcp` / other keys. Do **not** do that.
+
+**Safe, agent-runnable procedure.** Generate the correct blocks to a **temp** file (the renderer
+is good at this), then **merge** only `provider` + `agent` into the global, preserving everything
+else. Any agent (or human) on opencode can run this — no repo code change required:
+
+```bash
+# 1. Detect the inherited model and render the adapted blocks to a TEMP file (global NOT touched).
+node scripts/sync-opencode-edition.js --write-config-to /tmp/oc-adapted.json --adapt
+#    Override the detected model with KAOLA_OPENCODE_INHERIT_MODEL=<provider>/<model> if needed.
+
+# 2. Merge ONLY `provider` + `agent` from the temp into the global; back up first.
+#    Preserves model / mcp / $schema / any other keys. Validates JSON. Prints no secrets.
+node - <<'NODE'
+const fs=require('fs'),path=require('path');
+const home=process.env.HOME||require('os').homedir();
+const G=path.join(home,'.config','opencode','opencode.json'), T='/tmp/oc-adapted.json';
+const strip=t=>t.replace(/^\s*\/\/.*$/gm,'').replace(/\/\*[\s\S]*?\*\//g,'').trim();
+const g=JSON.parse(strip(fs.readFileSync(G,'utf8'))), a=JSON.parse(strip(fs.readFileSync(T,'utf8')));
+if(!a.provider||!a.agent) throw new Error('adapted temp missing provider/agent');
+fs.writeFileSync(G+'.bak', JSON.stringify(g,null,2)+'\n');            // local backup (has secrets — keep local)
+g.provider=Object.assign({}, g.provider||{}, a.provider);
+g.agent   =Object.assign({}, g.agent||{},    a.agent);
+const out=JSON.stringify(g,null,2)+'\n'; JSON.parse(out);             // validate before write
+fs.writeFileSync(G,out);
+console.log('merged global:',G,'\n keys:',Object.keys(g).join(', '),
+  '\n provider:',Object.keys(g.provider).join(', '),
+  '\n agent roles:',Object.keys(g.agent).length,
+  '\n model kept:',!!g.model,' mcp kept:',!!g.mcp);
+NODE
+
+# 3. Confirm in opencode (next subagent dispatch uses the tiers). Restore on any problem:
+#    mv ~/.config/opencode/opencode.json.bak ~/.config/opencode/opencode.json
+```
+
+**Scope notes.**
+- The `agent.<role>.variant` entries are Kaola role names; they take effect only where those roles
+  are installed — a project `.opencode/agent/` (per-repo) or a global deploy
+  (`./install-opencode.sh --global`). In non-Kaala repos they are inert, so placing them globally
+  is safe.
+- **Idempotent:** re-running overwrites the same `provider`/`agent` blocks with fresh values; your
+  `model`/`mcp` are always preserved.
+- **Opt out** computer-wide by removing the `provider`/`agent` blocks (or restoring the `.bak`);
+  neutral behavior (both tiers inherit, no variant pin) returns.
+
+> Future improvement (not required for the merge above): a `--merge-config --adapt` mode on
+> `sync-opencode-edition.js` would collapse steps 1–2 into one safe command. Today the temp-render
+> + agent merge is the supported path because the renderer's full-file output cannot be written
+> blindly over an existing global.
+
 ### Adaptive effort selection in the workflow
 
 The adaptive planner authors `opus`/`sonnet` per node by reasoning weight (#382);
