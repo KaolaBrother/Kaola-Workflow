@@ -1,0 +1,9 @@
+[
+  {
+    "finding_id": "id=R1 scope=in_scope action=fix status=open severity=high fix_role=implementer rationale=#541 edited canonical commands/kaola-workflow-finalize.md but did NOT regenerate the derived opencode mirror .opencode/command/kaola-workflow-finalize.md; sync-opencode-edition.js --check is RED (stale) and test-opencode-edition.js A6 parity is RED (283 passed / 1 failed); opencode-edition users lack the #541 --base forwarding. Fix: node scripts/sync-opencode-edition.js --write",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  }
+]

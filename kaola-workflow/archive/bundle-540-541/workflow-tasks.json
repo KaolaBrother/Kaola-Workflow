@@ -1,0 +1,36 @@
+{
+  "source_plan_hash": "615660ace70b93c4525f8d4dfc1069cdc99c4daf95c4e5f05f1c3ccfe471e897",
+  "tasks": [
+    {
+      "id": "n1-purge-opencode-refs",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n2-forward-barrier-base",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n3-code-review",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n4-doc-update",
+      "role": "doc-updater",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n5-finalize",
+      "role": "finalize",
+      "status": "completed",
+      "ledger_status": "complete"
+    }
+  ],
+  "last_synced_from_ledger": "2026-06-20T00:24:01.761Z"
+}
