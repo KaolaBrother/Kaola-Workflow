@@ -1223,4 +1223,66 @@ console.log('Gitea #496/#497/#506 fail-closed sink guard tests passed');
 }
 console.log('Gitea #520 journal-exclusion from archive_commit: PASSED');
 
+// #548 forge-port parity: the post-rebase runTestGate is consumer-aware. On a CONSUMER (non-npm)
+// product repo — package.json declares NO `test:kaola-workflow:*` chain script — the gate runs NO
+// suite (a hardcoded `npm test` would error / run an unrelated script on every origin-advance
+// rebase). We advance origin/main BEFORE the sink (alreadyUpToDate false → doRebase → runTestGate)
+// and prove `npm test` is NOT invoked via an `npm` PATH shim. SKIP_TESTGATE is deliberately unset.
+{
+  const sinkScript = path.join(__dirname, 'kaola-gitea-workflow-sink-merge.js');
+  const project = 'issue-9548';
+  const branch = 'workflow/issue-9548';
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-548-consumer-'));
+  const remotePath = root + '-remote';
+  const clone = root + '-clone';
+  const binDir = root + '-bin';
+  const npmSentinel = root + '-npm-invoked';
+  const git = (...a) => execFileSync('git', a, { cwd: root, encoding: 'utf8' });
+  try {
+    fs.mkdirSync(binDir, { recursive: true });
+    fs.writeFileSync(path.join(binDir, 'npm'), '#!/bin/sh\nprintf "%s\\n" "$*" >> "' + npmSentinel + '"\nexit 0\n');
+    fs.chmodSync(path.join(binDir, 'npm'), 0o755);
+    git('init', '-b', 'main'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't');
+    // CONSUMER fixture: package.json with a generic `test` script, NO `test:kaola-workflow:*`.
+    fs.writeFileSync(path.join(root, 'package.json'),
+      JSON.stringify({ name: 'consumer-product', version: '1.0.0', scripts: { test: 'echo unrelated-consumer-suite' } }, null, 2) + '\n');
+    fs.writeFileSync(path.join(root, 'base.txt'), 'base'); git('add', '-A'); git('commit', '-m', 'base + consumer package.json');
+    execFileSync('git', ['init', '--bare', remotePath], { encoding: 'utf8' });
+    git('remote', 'add', 'origin', remotePath); git('push', '-u', 'origin', 'main');
+    git('checkout', '-b', branch);
+    fs.writeFileSync(path.join(root, 'feat.md'), 'feat'); git('add', '-A'); git('commit', '-m', 'feat: impl 9548');
+    git('push', '-u', 'origin', branch);
+    git('checkout', 'main');
+    // Advance origin/main via a clone, then fetch so the local origin/main tracking ref moves ahead
+    // → alreadyUpToDate is false in the --sink transaction (no Step-1 fetch on that path).
+    execFileSync('git', ['clone', remotePath, clone], { encoding: 'utf8' });
+    // The clone is a separate repo and inherits no identity under the hermetic HOME — give it one
+    // (mirrors the `root` config above) so the concurrent-advance commit doesn't fail status 128.
+    execFileSync('git', ['-C', clone, 'config', 'user.email', 't@t'], { encoding: 'utf8' });
+    execFileSync('git', ['-C', clone, 'config', 'user.name', 't'], { encoding: 'utf8' });
+    execFileSync('git', ['-C', clone, 'checkout', '-B', 'main', 'origin/main'], { encoding: 'utf8' });
+    fs.writeFileSync(path.join(clone, 'concurrent.txt'), 'x');
+    execFileSync('git', ['-C', clone, 'add', '-A'], { encoding: 'utf8' });
+    execFileSync('git', ['-C', clone, 'commit', '-m', 'concurrent main advance'], { encoding: 'utf8' });
+    execFileSync('git', ['-C', clone, 'push', 'origin', 'main'], { encoding: 'utf8' });
+    git('fetch', 'origin');
+    const r = spawnSync(process.execPath, [sinkScript, '--branch', branch, '--project', project, '--sink', '--json'], {
+      cwd: root, encoding: 'utf8',
+      env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', PATH: binDir + path.delimiter + (process.env.PATH || '') }
+    });
+    const p = (() => { try { return JSON.parse(String(r.stdout || '').trim().split('\n').pop()); } catch (_) { return {}; } })();
+    assert.strictEqual(p.status, 'sinked', '#548-gitea: consumer-repo --sink must reach status:sinked (no npm-test gate to fail)\nstdout: ' + r.stdout + '\nstderr: ' + r.stderr);
+    assert.ok(!fs.existsSync(npmSentinel),
+      '#548-gitea: a CONSUMER repo (no test:kaola-workflow:* script) must NOT invoke `npm test` in the post-rebase gate; sentinel: ' +
+      (fs.existsSync(npmSentinel) ? fs.readFileSync(npmSentinel, 'utf8') : '(absent)'));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(remotePath, { recursive: true, force: true });
+    try { fs.rmSync(clone, { recursive: true, force: true }); } catch (_) {}
+    try { fs.rmSync(binDir, { recursive: true, force: true }); } catch (_) {}
+    try { fs.rmSync(npmSentinel, { force: true }); } catch (_) {}
+  }
+}
+console.log('Gitea #548 consumer-aware test-gate: PASSED');
+
 console.log('Gitea sink tests passed');

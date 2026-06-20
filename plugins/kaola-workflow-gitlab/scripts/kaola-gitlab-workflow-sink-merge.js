@@ -7,6 +7,9 @@ const os = require('os');
 const { execFileSync } = require('child_process');
 const forge = require('./kaola-gitlab-forge');
 const { getCoordRoot, readActiveFolders, removeWorktree, buildClosureReceipt, checkClosureInvariants, checkDispatchAttestations, defaultBranch } = require('./kaola-gitlab-workflow-claim');
+// #548: the canonical repo-kind discriminator (self-host npm vs consumer). run-chains requires
+// no sink-merge symbol, so this is non-circular.
+const { resolveChains } = require('./kaola-gitlab-workflow-run-chains');
 
 function assert(cond, msg) { if (!cond) throw new Error(msg); }
 
@@ -359,10 +362,22 @@ function classifyMergeError(e) {
 const MAX_AUTOMERGE_RETRIES = 3;
 
 // #350: post-rebase test gate (skipped OFFLINE / under the test-gate-skip hook).
+//
+// #548: consumer-aware. The gate is `npm test` ONLY on the self-host (npm) edition; a consumer
+// (non-npm) product repo has no `test:kaola-workflow:*` chain script, so `npm test` would error or
+// run an unrelated script on every origin-advance rebase. Repo kind is the SAME discriminator the
+// plan validator (#475) and run-chains use: resolveChains() probed at the GIT TOP-LEVEL (not just
+// mainRoot — an intermediate dir could misclassify a real self-host as a consumer, the fail-OPEN
+// #475 fixed). On a consumer repo we run NO suite here: finalize already validated the pre-sink
+// tree (#475), and a clean rebase onto an advanced base is the only delta — a rebase CONFLICT
+// already fails loudly above.
 function runTestGate(mainRoot) {
-  if (!OFFLINE && !SKIP_TESTGATE) {
-    execFileSync('npm', ['test'], { cwd: mainRoot, encoding: 'utf8', stdio: 'inherit' });
-  }
+  if (OFFLINE || SKIP_TESTGATE) return;
+  let pkgRoot = mainRoot;
+  try { pkgRoot = execFileSync('git', ['-C', mainRoot, 'rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim() || mainRoot; } catch (_) { pkgRoot = mainRoot; }
+  const res = resolveChains(pkgRoot);
+  if (res && res.error) return; // consumer repo — no npm edition chains; nothing to run.
+  execFileSync('npm', ['test'], { cwd: mainRoot, encoding: 'utf8', stdio: 'inherit' });
 }
 
 function doRebase(args, alreadyUpToDate, mainRoot, defBranch) {

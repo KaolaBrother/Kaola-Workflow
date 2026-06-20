@@ -6678,6 +6678,77 @@ function testSinkMergeReRebasesOnFfRace() {
   }
 }
 
+// #548: the post-rebase runTestGate is consumer-aware. On a CONSUMER (non-npm) product repo —
+// package.json declares NO `test:kaola-workflow:*` chain script — the gate runs NO suite (a
+// hardcoded `npm test` would error or run an unrelated script on every origin-advance rebase).
+// We force the rebase path by advancing origin/main BEFORE the sink (so alreadyUpToDate is false),
+// then prove `npm test` is NOT invoked via an `npm` PATH shim that records any invocation, and that
+// the sink still completes (exit 0, feature commit on origin/main). SKIP_TESTGATE is deliberately
+// NOT set — the consumer discriminator, not the test-only hook, is the load-bearing skip here.
+function testSinkMergeConsumerRepoSkipsNpmTestGate() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-consumer-gate-')));
+  const remotePath = initGitRepoWithBareRemote(tmp);
+  const clone = tmp + '-clone';
+  const binDir = tmp + '-bin';
+  const npmSentinel = tmp + '-npm-invoked';
+  fs.mkdirSync(binDir, { recursive: true });
+  // An `npm` wrapper that records any invocation to a sentinel file then exits 0. Placed first on
+  // PATH: if the consumer-aware gate is wrong and runs `npm test`, the sentinel appears.
+  const npmShim = path.join(binDir, 'npm');
+  fs.writeFileSync(npmShim, '#!/bin/sh\nprintf "%s\\n" "$*" >> "' + npmSentinel + '"\nexit 0\n');
+  fs.chmodSync(npmShim, 0o755);
+  const env = { ...process.env, ...GIT_ISOLATION_ENV, GIT_AUTHOR_NAME: 'T', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 'T', GIT_COMMITTER_EMAIL: 't@t' };
+  try {
+    // Make the fixture an unambiguous CONSUMER repo: a package.json with a generic `test` script and
+    // NO `test:kaola-workflow:*` chain script (the #475 self-host discriminator). Commit + push it so
+    // origin/main carries it and the rebased feature branch keeps it.
+    fs.writeFileSync(path.join(tmp, 'package.json'),
+      JSON.stringify({ name: 'consumer-product', version: '1.0.0', scripts: { test: 'echo unrelated-consumer-suite' } }, null, 2) + '\n');
+    spawnSync('git', ['-C', tmp, 'add', 'package.json'], { env });
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'chore: consumer package.json (no chain scripts)'], { env });
+    spawnSync('git', ['-C', tmp, 'push', 'origin', 'main'], { env });
+
+    spawnSync('git', ['-C', tmp, 'checkout', '-b', 'workflow/issue-5480'], { env });
+    fs.writeFileSync(path.join(tmp, 'feat.txt'), 'impl');
+    spawnSync('git', ['-C', tmp, 'add', 'feat.txt'], { env });
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'feat: impl 5480'], { env });
+    spawnSync('git', ['-C', tmp, 'push', '-u', 'origin', 'workflow/issue-5480'], { env });
+
+    // Advance origin/main BEFORE the sink so its own `git fetch` sees the drift and alreadyUpToDate
+    // is FALSE — forcing doRebase → runTestGate (the path under test). (The bare remote's symbolic
+    // HEAD is 'master' under GIT_CONFIG_NOSYSTEM, so the clone checks out no branch — explicitly
+    // materialize local 'main' from origin/main before committing to it.)
+    spawnSync('git', ['clone', remotePath, clone], { env });
+    spawnSync('git', ['-C', clone, 'checkout', '-B', 'main', 'origin/main'], { env });
+    fs.writeFileSync(path.join(clone, 'concurrent.txt'), 'x');
+    spawnSync('git', ['-C', clone, 'add', '-A'], { env });
+    spawnSync('git', ['-C', clone, 'commit', '-m', 'concurrent main advance'], { env });
+    spawnSync('git', ['-C', clone, 'push', 'origin', 'main'], { env });
+
+    const result = spawnSync(process.execPath, [sinkMergeScript, '--project', 'issue-5480', '--branch', 'workflow/issue-5480'], {
+      cwd: tmp, encoding: 'utf8',
+      // OFFLINE=0 + NO SKIP_TESTGATE: the gate runs, and the consumer discriminator (not the hook)
+      // is what makes it run no suite. The npm shim leads PATH so any `npm test` is recorded.
+      env: { ...env, KAOLA_WORKFLOW_OFFLINE: '0', PATH: binDir + path.delimiter + (process.env.PATH || '') }
+    });
+    assert(result.status === 0, '#548: consumer-repo sink completes (no npm-test gate to fail), got status ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+    assert(!fs.existsSync(npmSentinel),
+      '#548: a CONSUMER repo (no test:kaola-workflow:* script) must NOT invoke `npm test` in the post-rebase gate; sentinel: ' +
+      (fs.existsSync(npmSentinel) ? fs.readFileSync(npmSentinel, 'utf8') : '(absent)'));
+    spawnSync('git', ['-C', tmp, 'fetch', '-q', 'origin'], { env }); // authoritative remote state
+    const log = spawnSync('git', ['-C', tmp, 'log', '--oneline', 'origin/main'], { encoding: 'utf8', env }).stdout;
+    assert(/impl 5480/.test(log), '#548: feature commit landed on origin/main after the rebase, got log: ' + log);
+    assert(/concurrent main advance/.test(log), '#548: concurrent main advance preserved (feature rebased onto it), got log: ' + log);
+    console.log('testSinkMergeConsumerRepoSkipsNpmTestGate: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+    fs.rmSync(remotePath, { recursive: true, force: true });
+    try { fs.rmSync(clone, { recursive: true, force: true }); } catch (_) {}
+    try { fs.rmSync(binDir, { recursive: true, force: true }); } catch (_) {}
+    try { fs.rmSync(npmSentinel, { force: true }); } catch (_) {}
+  }
+}
+
 // #414: ONLINE bare-remote sink — the #397.1 branch-delete choreography must fire in order
 // (push --delete BEFORE merge-base --is-ancestor BEFORE branch -D) and leave NO local branch and
 // NO spurious branch-worktree-resolved closure violation. We trace git's own order with a wrapper
@@ -12927,6 +12998,7 @@ function buildRegistry() {
   add('testSinkMergeOfflineSkipsPublishGuard',            testSinkMergeOfflineSkipsPublishGuard);
   add('testSinkMergeNonDefaultBranchMaster',              testSinkMergeNonDefaultBranchMaster);
   add('testSinkMergeReRebasesOnFfRace',                   testSinkMergeReRebasesOnFfRace);
+  add('testSinkMergeConsumerRepoSkipsNpmTestGate',        testSinkMergeConsumerRepoSkipsNpmTestGate);
   add('testSinkMergeBareRemoteDeleteOrder',               testSinkMergeBareRemoteDeleteOrder);
   add('testFastE2EMergeFullChain',                        testFastE2EMergeFullChain);
   add('testE2EGitHubPrFullChain',                         testE2EGitHubPrFullChain);
