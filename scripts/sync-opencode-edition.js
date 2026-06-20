@@ -267,6 +267,17 @@ function transformCommandBody(body) {
   // prefix leaves the remaining two options (discard+restart / STOP) coherent. "fall back to
   // full" only lived inside the stripped Path Intent section, so no separate handling here.
   text = text.replace(/downgrade to full path \/\s*/g, '');
+  // opencode path-flip (#540, Mechanism B continuation): the Path Intent SECTION strip above
+  // removed the "## Startup Step 0a-1 — Path Intent" heading + body, but three INLINE "Step 0a-1"
+  // residue mentions survive elsewhere in workflow-next (post-#538 the step no longer exists, so
+  // they are dangling dead prose). Two shapes — a parenthetical " (Step 0a-1)" (e.g.
+  // "Resolve the path intent first (Step 0a-1)," → "Resolve the path intent first,";
+  // "resolve the path intent (Step 0a-1) *before*" → "resolve the path intent *before*") and a
+  // conjunction " or Step 0a-1" ("from KAOLA_PATH or Step 0a-1 judgment" → "from KAOLA_PATH
+  // judgment") — both collapse cleanly to single-space prose. Canonical commands/*.md are never
+  // touched (opencode-only, additive D-530-02). Scoped to the literal "Step 0a-1" — only
+  // workflow-next.md carries it, so no over-strip risk.
+  text = text.replace(/ \(Step 0a-1\)| or Step 0a-1/g, '');
   return text;
 }
 

@@ -31,7 +31,16 @@ fi
 PLAN="kaola-workflow/${KAOLA_PROJECT}/workflow-plan.md"
 node "$validator_script" "$PLAN" --resume-check --json; RC=$?
 node "$validator_script" "$PLAN" --gate-verify   --json; GV=$?
-node "$validator_script" "$PLAN" --barrier-check --json; BC=$?
+# #541: forward --base to the whole-plan --barrier-check ONLY, mirroring #539's
+# --finalize-check forwarding so the attribution sweep can scope to a project's OWN diff
+# on a SHARED multi-issue branch. Sourced from the KAOLA_FINALIZE_BASE env var, defaulting
+# to UNSET (→ the validator's `origin/main` default — byte-equivalent to today for
+# branch-per-issue runs, so the four-chain walkthrough stays green). The per-node
+# --barrier-check STILL rejects --base (the anti-laundering guard) — unchanged.
+BARRIER_BASE="${KAOLA_FINALIZE_BASE:-}"
+BARRIER_BASE_ARG=()
+[ -n "$BARRIER_BASE" ] && BARRIER_BASE_ARG=(--base "$BARRIER_BASE")
+node "$validator_script" "$PLAN" --barrier-check --json "${BARRIER_BASE_ARG[@]}"; BC=$?
 node "$validator_script" "$PLAN" --verdict-check --json; VC=$?
 if [ "$RC" -ne 0 ] || [ "$GV" -ne 0 ] || [ "$BC" -ne 0 ] || [ "$VC" -ne 0 ]; then
   echo "BLOCKED: adaptive barrier failed (resume=$RC gate=$GV barrier=$BC verdict=$VC) — run /kaola-workflow-plan-run first"; exit 1

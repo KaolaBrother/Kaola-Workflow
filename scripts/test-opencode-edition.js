@@ -410,6 +410,11 @@ for (const target of emittedCommandTargets) {
     'A22: workflow-next has NO KAOLA_ENABLE_ADAPTIVE switch-resolution prose (Path Intent section stripped)');
   assert(!/### Branch [AB]\b/.test(wfNext),
     'A22: workflow-next has NO Branch A/B path-selection prose (Path Intent section stripped)');
+  // A22 (#540): the inline "(Step 0a-1)" residue survives the Path Intent SECTION strip —
+  // post-#538 the "Step 0a-1" step no longer exists, so every literal must be purged from the
+  // generated opencode command (3 dangling inline mentions at L72/L159/L464 before #540).
+  assert(!wfNext.includes('Step 0a-1'),
+    'A22: workflow-next has NO stale "Step 0a-1" inline references (post-#538 the step no longer exists; parentheticals stripped at generation, #540)');
 
   const adapt = read('.opencode/command/kaola-workflow-adapt.md');
   assert(!adapt.includes('downgrade to full path'),

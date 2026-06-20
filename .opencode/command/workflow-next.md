@@ -69,7 +69,7 @@ do not auto-pick; the agent owns this decision.
   the prompt names one (e.g. "work on #42") → use the single-issue selection
   (steps 1–8 below), byte-unchanged.
 - **User did NOT name an issue** — the common "work on the next issue" / no-argument
-  case → this is the **auto-bundle entry**. Resolve the path intent first (Step 0a-1),
+  case → this is the **auto-bundle entry**. Resolve the path intent first,
   then dispatch the read-only **`issue-scout`** agent (Step 0c, *Auto-bundle entry*)
   and adopt its recommendation: set `KAOLA_TARGET_ISSUES` for a high-confidence
   same-scope bundle **when the resolved path is adaptive**, otherwise set
@@ -156,7 +156,7 @@ the closure receipt (see `commands/kaola-workflow-finalize.md` § Goal Attestati
 Export it once before `/workflow-next` and it propagates to both touchpoints.
 
 **Ordering — resolve the path BEFORE consuming a bundle (#380):** the bundle lane is
-adaptive-only, so resolve the path intent (Step 0a-1) *before* acting on
+adaptive-only, so resolve the path intent *before* acting on
 the scout's recommendation. A bundle is pursued ONLY when the resolved path is `adaptive`;
 with an explicit `KAOLA_PATH=fast`/`full` the router takes only the scout's
 `primary_issue` (a bundle there would be refused at startup with `bundle_requires_adaptive`).
@@ -461,7 +461,7 @@ Current phase: {phase or unknown}
 Current step: {step from workflow-state.md or reconstructed}
 Pending gates: {list or none}
 Branch: {branch from Sink block in workflow-state.md, or TBD if not yet claimed}
-Workflow path: {adaptive by default; fast|full only on an explicit path-name keyword or KAOLA_PATH — from KAOLA_PATH or Step 0a-1 judgment}
+Workflow path: {adaptive by default; fast|full only on an explicit path-name keyword or KAOLA_PATH — from KAOLA_PATH judgment}
 Parallel decision: {green|yellow|red|blocked|target_unavailable|target_unverified|skipped — classifier verdict or "skipped" if offline/unavailable}
 Next command: {next_command}
 ```
