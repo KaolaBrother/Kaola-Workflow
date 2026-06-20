@@ -65,31 +65,32 @@ function dispatchEffort(model) {
     : { codex_reasoning_effort: null, codex_reasoning_effort_source: 'role_default' };
 }
 
-// #382-opencode: the GENERAL tier→effort mapping for provider-open runtimes (opencode).
-// Claude Code's {opus, sonnet} are reasoning-weight RANKS, not models; opencode is
-// provider-open, so the migration is a two-level compose that never assumes a provider:
+// #382-opencode (#544 contract-keyed): the GENERAL tier→effort mapping for provider-open
+// runtimes (opencode). Claude Code's {opus, sonnet} are reasoning-weight RANKS, not models;
+// opencode is provider-open, so the migration is a two-level compose that never assumes a provider:
 //   Level 1 (fixed):        opus → 'top' rank · sonnet → 'second' rank.
-//   Level 2 (per provider): rank → that provider's effort variant (top = highest,
-//                           second = 2nd-highest), per opencode's built-in variants.
-//   mapTier(tier, provider) = PROVIDER_EFFORT_TABLE[provider][ TIER_RANK[tier] ].
-// This is the provider-open generalization of dispatchEffort() above (the Codex-fixed
-// opus→xhigh translator). NODE_MODEL_TIERS stays the portable plan vocabulary; this
-// table only resolves a tier to a concrete effort at RUNTIME. Adaptive selection: the
-// planner still authors opus/sonnet per node by reasoning weight (#382); the runtime
-// resolves the effort per provider via mapTier.
-//   provider          opus (top)      sonnet (second)
-//   anthropic         max             high
-//   openai            xhigh           high
-//   google            high            low
-//   z.ai / zhipu GLM  max             high        ← GLM-5.2 ships High + Max
-// An unknown provider resolves to null (the runtime degrades to no effort pin). Pure
-// data + pure helpers (no I/O) — qualifies for this ×4 byte-identical drift anchor.
+//   Level 2 (per contract): rank → that contract's effort variant (top = highest,
+//                           second = 2nd-highest), per the provider's API CONTRACT.
+//   mapTier(tier, provider) = CONTRACT_EFFORT_TABLE[ contractForProvider(provider) ][ TIER_RANK[tier] ].
+// #544: the effort KNOB is determined by the provider's API CONTRACT, not its brand name.
+// contractForProvider() maps a provider id to one of four contracts (anthropic|openai|google|
+// default); the table is keyed by CONTRACT, so GLM-5.2 via z.ai (served under the Anthropic API
+// contract) resolves to the `thinking` budget — NOT reasoningEffort. An unknown provider
+// resolves to the safe `default` contract (high/medium) instead of null (NO silent de-tier).
+//   contract          providers                              opus (top)        sonnet (second)
+//   anthropic         anthropic, claude, z.ai/zhipu GLM      max (think 32k)   high (think 16k)
+//   openai            openai, gpt, codex                     xhigh             high
+//   google            google, gemini                         high              low
+//   default           any other (unknown)                    high              medium
+// Variant NAMES are provider-relative and preserved across the contract-keying flip (GLM stays
+// max/high) — only the OPTIONS payload changes. Pure data + pure helpers (no I/O) — qualifies
+// for this ×4 byte-identical drift anchor.
 const TIER_RANK = Object.freeze({ opus: 'top', sonnet: 'second' });
 
 // Each entry: { top: {variant, options}, second: {variant, options} }. `variant` is the
 // opencode variant NAME (referenced by agent.<role>.variant); `options` is the provider
-// model-options payload (passed through to the provider, e.g. reasoningEffort / thinking).
-const PROVIDER_EFFORT_TABLE = Object.freeze({
+// model-options payload (passed through to the provider, e.g. thinking / reasoningEffort).
+const CONTRACT_EFFORT_TABLE = Object.freeze({
   anthropic: Object.freeze({
     top:    { variant: 'max',  options: { thinking: { type: 'enabled', budgetTokens: 32000 } } },
     second: { variant: 'high', options: { thinking: { type: 'enabled', budgetTokens: 16000 } } },
@@ -102,23 +103,32 @@ const PROVIDER_EFFORT_TABLE = Object.freeze({
     top:    { variant: 'high', options: { reasoningEffort: 'high' } },
     second: { variant: 'low',  options: { reasoningEffort: 'low' } },
   }),
-  'zhipuai-coding-plan': Object.freeze({
-    top:    { variant: 'max',  options: { reasoningEffort: 'max' } },
-    second: { variant: 'high', options: { reasoningEffort: 'high' } },
+  default: Object.freeze({
+    top:    { variant: 'high',   options: { reasoningEffort: 'high' } },
+    second: { variant: 'medium', options: { reasoningEffort: 'medium' } },
   }),
 });
 
-// Resolve a provider id to its effort profile. Exact id first, then alias regexes so
-// common variants (zai, zhipu, glm, claude, gpt, gemini…) resolve without an exact key.
+// Resolve a provider id to its API CONTRACT (the effort KNOB depends on the contract, not the
+// brand). GLM-via-z.ai is served under the Anthropic API contract → 'anthropic' (thinking budget).
+// The zhipu/zai/glm test runs FIRST so GLM provider ids never fall through to a generic branch.
+// Unknown id → 'default' (the safe high/medium contract). Pure (no fs).
+function contractForProvider(providerId) {
+  const lo = String(providerId || '').toLowerCase();
+  if (/zhipu|^zai|z-?ai|glm/.test(lo)) return 'anthropic';   // GLM-via-z.ai → Anthropic contract
+  if (/anthropic|claude/.test(lo)) return 'anthropic';
+  if (/openai|gpt|codex/.test(lo)) return 'openai';
+  if (/google|gemini/.test(lo)) return 'google';
+  return 'default';
+}
+
+// Resolve a provider id to its effort profile. Falsy id → null (load-bearing backward-compat: the
+// no-provider dispatch path for claude/codex must stay behavior-inert). A real but unrecognized
+// provider id → CONTRACT_EFFORT_TABLE.default (the safe high/medium contract — NO silent de-tier).
 function effortForProvider(providerId) {
   const id = String(providerId || '');
-  if (PROVIDER_EFFORT_TABLE[id]) return PROVIDER_EFFORT_TABLE[id];
-  const lo = id.toLowerCase();
-  if (/zhipu|^zai|z-?ai|glm/.test(lo)) return PROVIDER_EFFORT_TABLE['zhipuai-coding-plan'];
-  if (/anthropic|claude/.test(lo)) return PROVIDER_EFFORT_TABLE.anthropic;
-  if (/openai|gpt|codex/.test(lo)) return PROVIDER_EFFORT_TABLE.openai;
-  if (/google|gemini/.test(lo)) return PROVIDER_EFFORT_TABLE.google;
-  return null;
+  if (!id) return null;                                       // no provider → null (backward-compat)
+  return CONTRACT_EFFORT_TABLE[contractForProvider(id)];      // unknown → 'default' (never null)
 }
 
 // The general mapper: Claude tier → {variant, options} for a provider, or null.
@@ -705,7 +715,8 @@ module.exports = {
   LEDGER_STATUSES,
   NODE_MODEL_TIERS,
   TIER_RANK,
-  PROVIDER_EFFORT_TABLE,
+  CONTRACT_EFFORT_TABLE,
+  contractForProvider,
   dispatchEffort,
   effortForProvider,
   mapTier,

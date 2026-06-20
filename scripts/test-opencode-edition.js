@@ -15,6 +15,7 @@
 const fs = require('fs');
 const path = require('path');
 const sync = require('./sync-opencode-edition.js');
+const schema = require('./kaola-workflow-adaptive-schema.js');
 
 const REPO = sync.REPO;
 const read = rel => fs.readFileSync(path.join(REPO, rel), 'utf8');
@@ -202,12 +203,13 @@ for (const role of reasoning) {
 
 // ---------------------------------------------------------------------------
 // A12: adaptive effort tiers (the locked-in install default). With an explicit
-// inherited model whose provider is in PROVIDER_EFFORT_TABLE, renderOpencodeJson
-// emits the two-tier EFFORT-VARIANT config: top-tier roles (canonical opus ∪ the
-// Claude Code "higher" profile roles) get the provider's TOP variant; standard
-// roles get its SECOND variant. The per-tier variant names are provider-relative
-// (mapTier). Unknown provider → neutral template (degrade). NODE_MODEL_TIERS
-// {opus,sonnet} stays the portable plan vocabulary; this only resolves a tier.
+// inherited model whose provider resolves under a CONTRACT_EFFORT_TABLE contract,
+// renderOpencodeJson emits the two-tier EFFORT-VARIANT config: top-tier roles
+// (canonical opus ∪ the Claude Code "higher" profile roles) get the provider's
+// TOP variant; standard roles get its SECOND variant. The per-tier variant names
+// are provider-relative (mapTier). Unknown provider → safe DEFAULT contract (NO
+// de-tier). NODE_MODEL_TIERS {opus,sonnet} stays the portable plan vocabulary;
+// this only resolves a tier.
 // ---------------------------------------------------------------------------
 const topRoles = sync.topTierRoles();
 const stdRoles = sync.standardTierRoles();
@@ -222,11 +224,57 @@ const glm = parseRendered({ inheritModel: 'zhipuai-coding-plan/glm-5.2' });
 assert(glm.provider['zhipuai-coding-plan'].models['glm-5.2'].variants.max
   && glm.provider['zhipuai-coding-plan'].models['glm-5.2'].variants.high,
   'A12: glm-5.2 defines top=max + second=high variants');
-// S1: the max variant honors the `reasoningEffort` option key with the `max`
-// value (structural config-shape assertion — confirms the option is emitted,
-// NOT a live provider call which would be non-hermetic). Mirrors the A12 style.
-assert(glm.provider['zhipuai-coding-plan'].models['glm-5.2'].variants.max.reasoningEffort === 'max',
-  'S1: glm-5.2 max variant carries options.reasoningEffort:"max" (config-shape honored)');
+// S1 (FLIPPED #544): GLM-5.2 via z.ai is served under the ANTHROPIC API contract, so its
+// effort options MUST be the `thinking` budget shape — NOT reasoningEffort. Variant NAMES
+// stay max/high (contract-keying flips only the OPTIONS payload, per the #544 invariant).
+const glmMax = glm.provider['zhipuai-coding-plan'].models['glm-5.2'].variants.max;
+assert(glmMax.thinking && glmMax.thinking.type === 'enabled' && glmMax.thinking.budgetTokens === 32000,
+  'S1: glm-5.2 max variant carries thinking {type:"enabled",budgetTokens:32000} (Anthropic contract), got ' + JSON.stringify(glmMax));
+assert(glmMax.reasoningEffort === undefined,
+  'S1: glm-5.2 max variant does NOT carry reasoningEffort (Anthropic contract → thinking budget)');
+const glmHigh = glm.provider['zhipuai-coding-plan'].models['glm-5.2'].variants.high;
+assert(glmHigh.thinking && glmHigh.thinking.budgetTokens === 16000,
+  'S1: glm-5.2 high variant carries thinking budgetTokens:16000');
+
+// ---------------------------------------------------------------------------
+// S1-contract (#544): the contract-keyed resolver. effortForProvider now keys on
+// the provider's API CONTRACT, not its brand name; contractForProvider maps a
+// provider id to {anthropic|openai|google|default}. GLM-via-z.ai → anthropic
+// (thinking budget). Unknown provider → safe default (NO de-tier). Falsy stays
+// null (backward-compat for the no-provider claude/codex dispatch path).
+// ---------------------------------------------------------------------------
+const glmProfile = schema.effortForProvider('zhipuai-coding-plan');
+assert(glmProfile && glmProfile.top.options.thinking && !glmProfile.top.options.reasoningEffort,
+  'S1-contract[glm]: effortForProvider(zhipuai-coding-plan) → anthropic-contract thinking (not reasoningEffort)');
+assert(glmProfile.top.variant === 'max' && glmProfile.second.variant === 'high',
+  'S1-contract[glm]: variant NAMES stay max/high (contract-keying flips OPTIONS, not names)');
+assert(schema.contractForProvider('zhipuai-coding-plan') === 'anthropic'
+  && schema.contractForProvider('zai') === 'anthropic'
+  && schema.contractForProvider('zhipu-glm') === 'anthropic',
+  'S1-contract[glm]: contractForProvider resolves zhipu/zai/zhipu-glm → anthropic');
+
+const oaiProfile = schema.effortForProvider('openai');
+assert(oaiProfile && oaiProfile.top.options.reasoningEffort === 'xhigh' && !oaiProfile.top.options.thinking,
+  'S1-contract[openai]: top → reasoningEffort xhigh (no thinking)');
+assert(schema.contractForProvider('openai') === 'openai' && schema.contractForProvider('gpt-5') === 'openai',
+  'S1-contract[openai]: contractForProvider(openai|gpt-5) → openai');
+
+const googProfile = schema.effortForProvider('google');
+assert(googProfile && googProfile.top.options.reasoningEffort === 'high'
+  && googProfile.second.options.reasoningEffort === 'low',
+  'S1-contract[google]: top reasoningEffort high, second low');
+assert(schema.contractForProvider('google') === 'google' && schema.contractForProvider('gemini-2.5-pro') === 'google',
+  'S1-contract[google]: contractForProvider(google|gemini-2.5-pro) → google');
+
+const unkProfile = schema.effortForProvider('acme-corp');
+assert(unkProfile !== null && unkProfile.top.variant !== unkProfile.second.variant,
+  'S1-contract[unknown]: effortForProvider(acme-corp) non-null + top≠second (safe default, NO de-tier)');
+assert(schema.contractForProvider('acme-corp') === 'default',
+  'S1-contract[unknown]: contractForProvider(acme-corp) === default');
+
+assert(schema.effortForProvider(null) === null && schema.effortForProvider('') === null,
+  'S1-contract[falsy]: effortForProvider(null|<empty>) === null (backward-compat, NOT default)');
+
 for (const role of topRoles) {
   assert(glm.agent[role].variant === 'max', 'A12[' + role + ']: top-tier role → max variant');
 }
@@ -241,17 +289,22 @@ assert(Object.keys(oai.provider.openai.models['gpt-5'].variants).sort().join('/'
 assert(oai.agent.planner.variant === 'xhigh' && oai.agent.contractor.variant === 'high',
   'A12: openai top-tier → xhigh, standard-tier → high');
 
-// Unknown provider degrades to the neutral template (no provider/agent variant blocks).
+// A12 (FLIPPED #544): unknown provider NO LONGER degrades — it gets the safe-DEFAULT
+// contract (high/medium), so a top/second split is preserved instead of collapsing.
 const unk = parseRendered({ inheritModel: 'acme/unknown-model' });
-assert(unk.provider === undefined && unk.agent === undefined,
-  'A12: unknown provider degrades to the neutral template');
+assert(unk.provider !== undefined && unk.agent !== undefined,
+  'A12: unknown provider emits a safe-default provider+agent block (NO de-tier)');
+assert(unk.provider.acme.models['unknown-model'].variants.high
+  && unk.provider.acme.models['unknown-model'].variants.medium,
+  'A12: unknown provider gets default-contract high/medium variants');
+assert(unk.agent.planner.variant === 'high' && unk.agent.contractor.variant === 'medium',
+  'A12: unknown provider → default contract (planner=high, contractor=medium)');
 
 // ---------------------------------------------------------------------------
 // A9: route-reachability — every receipt-emitted command target resolves to an
 // installed opencode command surface (the #400 guarantee, for the opencode
 // edition). Mirrors test-route-reachability.js T2, scoped to .opencode/command.
 // ---------------------------------------------------------------------------
-const schema = require('./kaola-workflow-adaptive-schema.js');
 const stripSlash = c => c.replace(/^\//, '');
 const emittedCommandTargets = [
   stripSlash(schema.PLAN_RUN_COMMAND),

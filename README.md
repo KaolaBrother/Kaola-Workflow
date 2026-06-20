@@ -358,7 +358,7 @@ opencode is an additive runtime — installed by its own script, not `--forge`. 
 ./install-opencode.sh --regenerate    # refresh the in-repo .opencode/ tree from canonical
 ```
 
-The install seeds `opencode.json` with **two model tiers as reasoning-effort variants of your inherited model** — no model is pinned, so both tiers inherit whatever model you already use in opencode. The reasoning tier (the canonical `opus` roles plus the `higher`-profile reviewers) gets the model's **top** effort variant; the standard tier gets the **second** (e.g. `max` / `high` on GLM-5.2 and Anthropic, `xhigh` / `high` on OpenAI, `high` / `low` on Google). The mapping (`mapTier` + `PROVIDER_EFFORT_TABLE`) is provider-portable and lives in `kaola-workflow-adaptive-schema.js`. Adaptive is the unconditional default path on opencode. Full detail: [docs/opencode-edition.md](docs/opencode-edition.md).
+The install seeds `opencode.json` with **two model tiers as reasoning-effort variants of your inherited model** — no model is pinned, so both tiers inherit whatever model you already use in opencode. The reasoning tier (the canonical `opus` roles plus the `higher`-profile reviewers) gets the model's **top** effort variant; the standard tier gets the **second** (e.g. `max` / `high` on GLM-5.2 and Anthropic, `xhigh` / `high` on OpenAI, `high` / `low` on Google). The mapping (`mapTier` + `CONTRACT_EFFORT_TABLE` + `contractForProvider`) is contract-keyed — the effort knob follows the model's API contract, not its brand name — and lives in `kaola-workflow-adaptive-schema.js`. Adaptive is the unconditional default path on opencode. Full detail: [docs/opencode-edition.md](docs/opencode-edition.md).
 
 ## Codex
 

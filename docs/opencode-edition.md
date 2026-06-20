@@ -33,22 +33,28 @@ overwrites a user's model choices — those live only in the user-owned
 Claude Code uses a closed model vocabulary (`opus` / `sonnet`). opencode is
 **provider-open** (Anthropic, OpenAI, Google, Z.ai/GLM, …), each with its own
 reasoning-effort levels. The edition migrates Claude's two tiers to opencode with a
-**general, explicit, provider-portable mapping** — `mapTier(tier, provider)` — that
-never assumes a provider:
+**general, explicit, contract-keyed mapping** — `mapTier(tier, provider)` — that keys
+on the provider's API **contract**, not its brand name:
 
 - **Level 1 (fixed):** `opus` → the "top" rank · `sonnet` → the "second" rank.
   (`opus`/`sonnet` stay the plan's portable per-node vocabulary, `NODE_MODEL_TIERS`.)
-- **Level 2 (per provider):** each rank → that provider's effort variant.
+- **Level 2 (per contract):** each rank → that contract's effort variant **and knob**
+  (Anthropic → `thinking` budget; OpenAI/Google → `reasoningEffort`).
 
-| Provider | `opus` → top | `sonnet` → second |
-| --- | --- | --- |
-| `anthropic` | `max` | `high` |
-| `openai` | `xhigh` | `high` |
-| `google` | `high` | `low` |
-| `zhipu` / `z.ai` (GLM-5.2) | `max` | `high` |
-| _unknown_ | _(degrade: no effort pin)_ | |
+| Contract | Providers | Knob | `opus` → top | `sonnet` → second |
+| --- | --- | --- | --- | --- |
+| `anthropic` | `anthropic`, `claude`, **`zhipu` / `z.ai` / GLM-5.2** (served via the Anthropic API contract) | `thinking` budget | `max` (budget 32000) | `high` (budget 16000) |
+| `openai` | `openai`, `gpt`, `codex` | `reasoningEffort` | `xhigh` | `high` |
+| `google` | `google`, `gemini` | `reasoningEffort` | `high` | `low` |
+| `default` (unknown) | any other | `reasoningEffort` | `high` | `medium` |
 
-`mapTier` + `PROVIDER_EFFORT_TABLE` live in `kaola-workflow-adaptive-schema.js`
+> **Contract callout.** GLM-5.2 via z.ai is served under the **Anthropic API contract**, so its
+> knob is the `thinking` budget (32000 / 16000) — **not** `reasoningEffort`. Variant names stay
+> `max`/`high` (contract-keying flips only the *options* payload, never the variant *names*, so
+> already-seeded `agent.<role>.variant` references keep resolving). Unrecognized providers get the
+> `default` contract (a real `high`/`medium` top/second split — **no de-tier**).
+
+`mapTier` + `CONTRACT_EFFORT_TABLE` + `contractForProvider` live in `kaola-workflow-adaptive-schema.js`
 (the ×4 byte-identical drift anchor), so all editions share one table. It is the
 provider-open generalization of the existing Codex `dispatchEffort(opus→xhigh)`
 translator.
@@ -75,8 +81,8 @@ inherit the model you already use; only the effort differs. Example (GLM-5.2):
   "default_agent": "build",
   "provider": {
     "zhipuai-coding-plan": { "models": { "glm-5.2": { "variants": {
-      "max":  { "reasoningEffort": "max"  },
-      "high": { "reasoningEffort": "high" }
+      "max":  { "thinking": { "type": "enabled", "budgetTokens": 32000 } },
+      "high": { "thinking": { "type": "enabled", "budgetTokens": 16000 } }
     } } } }
   },
   "agent": {
@@ -92,14 +98,47 @@ inherit the model you already use; only the effort differs. Example (GLM-5.2):
 }
 ```
 
-If the inherited model's provider is unknown, the seed degrades to the neutral
-template (both tiers inherit, no variant pin). Regenerate for another model:
+If the inherited model's provider is **unrecognized**, the seed falls back to the safe
+**default contract** (`reasoningEffort` `high`/`medium`) — a real top/second split,
+**no de-tier**. (A falsy/absent model still renders the neutral template: both tiers
+inherit, no variant pin.) Regenerate for another model:
 
 ```bash
 node scripts/sync-opencode-edition.js --write-config --adapt         # re-detect + re-render
 KAOLA_OPENCODE_INHERIT_MODEL=openai/gpt-5 \
   node scripts/sync-opencode-edition.js --write-config --adapt       # xhigh/high
 ```
+
+### Switching models (resilience)
+
+opencode's variant schema is **model-scoped**: variants live at
+`provider.<id>.models.<model>.variants.*`, and opencode applies `agent.<role>.variant` by reading
+them from `opencode.json` — there is **no per-call variant override** on the `task` tool (the
+`opencode_variant` the dispatch envelope carries is a recording of intent for the ledger, not a
+runtime override opencode honors). So when you switch your opencode model, the variant
+*definitions* under the old `provider/<model>` no longer resolve under the new one. Two safety nets
+keep this from silently de-tiering:
+
+1. **Runtime dispatch never de-tiers.** The dispatch path (`dispatchEffortOpencode` →
+   `resolveOpencodeProvider`) re-resolves the provider from `KAOLA_OPENCODE_INHERIT_MODEL` on
+   **every** dispatch, so the dispatch envelope always carries the correct variant for the
+   *currently* inherited model (sourced from `planner_model`, not `role_default`). Tier
+   *selection* is resilient regardless of what the seeded config says.
+2. **Config re-sync is documented.** For the config *side* to match after a model switch,
+   regenerate the variant definitions:
+
+   ```bash
+   KAOLA_OPENCODE_INHERIT_MODEL=<new-provider>/<new-model> \
+     node scripts/sync-opencode-edition.js --write-config --adapt
+   ```
+
+   The seeded `opencode.json` carries a prominent header comment stating the seeded model, its
+   contract, the knob, and this exact command; `install-opencode.sh` echoes the same guidance at
+   seed time.
+
+The **default contract** is the third safety net: even a provider the resolver has never seen gets
+the `high`/`medium` top/second split rather than collapsing to identical effort, so an unrecognized
+provider never silently de-tiers.
 
 ### Computer-wide activation (merge into the global config)
 
@@ -316,7 +355,7 @@ The validator is self-contained (run directly with `node`; it is intentionally
 
 ## Verification
 
-The edition is covered by `scripts/test-opencode-edition.js` (283 assertions):
+The edition is covered by `scripts/test-opencode-edition.js` (300 assertions):
 agent/command presence and frontmatter, model-agnostic invariant (no `model:` in
 generated agents), byte-for-byte canonical parity, `opencode.json` JSONC validity
 + exact tier coverage, **adaptive effort tiers** (`mapTier` per provider + the

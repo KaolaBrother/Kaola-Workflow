@@ -366,8 +366,8 @@ function detectInheritModel() {
 
 function renderOpencodeJson(opts) {
   opts = opts || {};
-  // Adaptive path: an explicit inherited model (provider/model) whose provider is in
-  // PROVIDER_EFFORT_TABLE renders the two-tier EFFORT-VARIANT config (the locked-in
+  // Adaptive path: an explicit inherited model (provider/model) whose provider resolves under a
+  // CONTRACT_EFFORT_TABLE contract renders the two-tier EFFORT-VARIANT config (the locked-in
   // install default). Everything else falls through to the neutral template.
   const inheritModel = String(opts.inheritModel || '').trim();
   const parsed = parseModelProvider(inheritModel);
@@ -379,6 +379,16 @@ function renderOpencodeJson(opts) {
 function renderAdaptiveConfig(parsed, profile) {
   const top = topTierRoles();
   const std = standardTierRoles();
+  // #544: derive the contract label + knob from the provider's API contract (not its brand).
+  // GLM-5.2 via z.ai → anthropic contract → thinking budget; openai/google/default → reasoningEffort.
+  const contract = schema.contractForProvider(parsed.providerId);
+  const contractLabel = ({
+    anthropic: 'Anthropic contract → thinking budget',
+    openai: 'OpenAI contract → reasoningEffort',
+    google: 'Google contract → reasoningEffort',
+    default: 'safe DEFAULT contract → reasoningEffort (no de-tier)',
+  })[contract] || (contract + ' contract');
+  const knobDescription = contract === 'anthropic' ? 'thinking.budgetTokens' : 'reasoningEffort';
   const entries = []
     .concat(top.map(r => [r, profile.top.variant]),
             std.map(r => [r, profile.second.variant]))
@@ -390,14 +400,21 @@ function renderAdaptiveConfig(parsed, profile) {
   lines.push('');
   lines.push('  // Kaola-Workflow · opencode edition — TWO tiers as reasoning-EFFORT variants of your');
   lines.push('  // inherited model ' + parsed.providerId + '/' + parsed.modelId + ' (NO model is pinned — both tiers');
-  lines.push('  // inherit the model you are already using in opencode). mapTier(tier, provider):');
+  lines.push('  // inherit the model you are already using in opencode). The effort KNOB is set by your');
+  lines.push('  // provider\'s API CONTRACT (' + contractLabel + '; knob: ' + knobDescription + '), keyed by');
+  lines.push('  // mapTier(tier, provider). tier → variant:');
   lines.push('  //   推理 (reasoning tier) → TOP effort variant "' + profile.top.variant + '".');
   lines.push('  //   普通 (standard tier)  → SECOND effort variant "' + profile.second.variant + '".');
   lines.push('  // Reasoning tier = canonical opus roles + the Claude Code "higher" profile roles');
   lines.push('  // (' + higherProfileRoles().join(', ') + '); all other roles run standard. Variants are');
   lines.push('  // defined under provider.* and selected per-role via agent.<role>.variant.');
-  lines.push('  // Regenerate for a different inherited model:');
-  lines.push('  //   node scripts/sync-opencode-edition.js --write-config --adapt');
+  lines.push('  // ⚠ SWITCHING YOUR OPENCODE MODEL? Variant definitions are model-scoped');
+  lines.push('  // (provider.<id>.models.<model>.variants.*) — opencode applies them from this file, with');
+  lines.push('  // NO per-call override. To put these tiers on a DIFFERENT inherited model, regenerate:');
+  lines.push('  //   KAOLA_OPENCODE_INHERIT_MODEL=<provider>/<model> node scripts/sync-opencode-edition.js --write-config --adapt');
+  lines.push('  // (the runtime dispatch path re-resolves the provider on every dispatch regardless, so tier');
+  lines.push('  // selection never silently de-tiers — but the variant DEFINITIONS above must be re-synced');
+  lines.push('  // for the config side to match.)');
   lines.push('  "provider": {');
   lines.push('    "' + parsed.providerId + '": {');
   lines.push('      "models": {');

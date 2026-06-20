@@ -136,11 +136,19 @@ seed_config() {
   fi
   # Generate via the sync renderer. With --adapt it emits the two-tier EFFORT-VARIANT
   # config for your inherited model (KAOLA_OPENCODE_INHERIT_MODEL env, else the global
-  # opencode.json "model"): reasoning tier → the model's top effort variant, standard
-  # tier → its second variant (e.g. max/high on GLM-5.2). If no model is detected it
-  # degrades to the neutral template (both tiers inherit your opencode default).
+  # opencode.json "model"): reasoning tier → the contract's TOP variant, standard tier
+  # → its SECOND variant. The effort KNOB is CONTRACT-KEYED (mapTier + CONTRACT_EFFORT_TABLE
+  # + contractForProvider in kaola-workflow-adaptive-schema.js): GLM-5.2/z.ai → Anthropic
+  # contract (thinking budget), OpenAI → reasoningEffort, Google → reasoningEffort. An
+  # UNRECOGNIZED provider gets the safe default contract (reasoningEffort high/medium — a
+  # real top/second split, no de-tier). A falsy/absent model still renders the neutral
+  # template (both tiers inherit your opencode default).
   node "$SCRIPT_DIR/scripts/sync-opencode-edition.js" --write-config-to "$cfg" --adapt
-  echo "Seeded $cfg — effort tiers adapted to your inherited model (neutral if undetected)."
+  echo "Seeded $cfg — effort tiers adapted to your inherited model (contract-keyed)."
+  echo "  GLM-5.2/z.ai → Anthropic contract (thinking budget); OpenAI → reasoningEffort;"
+  echo "  Google → reasoningEffort; unknown → safe default (no de-tier)."
+  echo "  ⚠ Switched your opencode model? Re-run with KAOLA_OPENCODE_INHERIT_MODEL=<provider>/<model>"
+  echo "  to regenerate the variant definitions (the dispatch path re-resolves regardless)."
   echo "  Override the inherited model via KAOLA_OPENCODE_INHERIT_MODEL, or pin a tier via"
   echo "  KAOLA_OPENCODE_STANDARD_MODEL / _REASONING_MODEL env."
 }
