@@ -3449,12 +3449,19 @@ function tryFormLaneGroup(writeNodes, planPath, shell, writeOverlapConsent) {
 // scheduler (ADR-0010: containment, not construction — legs isolate write scope; they do not
 // redirect the dispatched member's working_dir, which stays parent-side (routing into legs landed in Slice 3, #463 AC18)). Legs are
 // PROVISIONED (a real `git worktree add` per co-opened write member) + telemetered +
-// reconcile/teardown-aware. Provisioning is gated by resolveLegIsolation(env) &&
-// opts.writeOverlapConsent && a formed lane group — when any is false NO leg is provisioned, NO
-// lane_group.legs key is written ⇒ flag-OFF byte-identical.
+// reconcile/teardown-aware. Provisioning fires under `groupForm && legCoupled` (the runOpenReady
+// gate at :4015) — i.e. a formed lane group AND legCoupled (= parallelWritesDefaultOn(process.env),
+// default TRUE; #542 / D-542-01). Per #546-G2 a file-disjoint SHARED-INFRA frontier (same
+// SHARED_INFRA area, exact-file-disjoint) co-opens BY DEFAULT under the retained net (a
+// post-dominating code-reviewer gate + no PROTECTED file in either set) — no resolveLegIsolation
+// toggle and no opts.writeOverlapConsent required; consent now gates ONLY a genuine NON-shared
+// coarse-area overlap. When legCoupled is false (KAOLA_PARALLEL_WRITES=0 / a host that cannot
+// provision per-leg worktrees) NO group forms, NO leg is provisioned, NO lane_group.legs key is
+// written ⇒ serial-fallback byte-identical.
 //
-// resolveLegIsolation — boolean toggle mirroring resolveLaneContainment's exact truthiness logic
-// (only an explicit 1/true/yes opts in; fail-closed default FALSE). The new KAOLA_LEG_ISOLATION env.
+// resolveLegIsolation — RETAINED only as the exported boolean toggle / reconcile helper (no longer
+// the provisioning gate post-#542); mirrors resolveLaneContainment's exact truthiness logic (only an
+// explicit 1/true/yes opts in; fail-closed default FALSE). The KAOLA_LEG_ISOLATION env.
 // ---------------------------------------------------------------------------
 const LEG_ISOLATION_ENV = 'KAOLA_LEG_ISOLATION';
 function resolveLegIsolation(env) {
