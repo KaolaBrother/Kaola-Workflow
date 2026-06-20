@@ -67,7 +67,7 @@ do not auto-pick; the agent owns this decision.
 
 - **User named a specific issue** — `$ARGUMENTS` carries an issue number/project, or
   the prompt names one (e.g. "work on #42") → use the single-issue selection
-  (steps 1–8 below), byte-unchanged.
+  (steps 1–4 below), byte-unchanged.
 - **User did NOT name an issue** — the common "work on the next issue" / no-argument
   case → this is the **auto-bundle entry**. Resolve the path intent first,
   then dispatch the read-only **`issue-scout`** agent (Step 0c, *Auto-bundle entry*)
@@ -75,24 +75,26 @@ do not auto-pick; the agent owns this decision.
   same-scope bundle **when the resolved path is adaptive**, otherwise set
   `KAOLA_TARGET_ISSUE` to the scout's `primary_issue` (single-issue, or any
   medium/low-confidence outcome). STATE the selected set aloud, then continue to
-  validation (step 7) and startup. (Dispatching the scout here is explicitly
+  validation (step 3) and startup. (Dispatching the scout here is explicitly
   permitted — see Router Rules; it is a pre-claim read-only survey, not a phase agent.)
 
-1. Read `kaola-workflow/ROADMAP.md` for open unfinished issues.
-2. Fetch GitHub issue list if available (`gh issue list --limit 100 --json number,title,state,labels`).
-3. Check active folders: `node "$CLAIM_JS" status 2>/dev/null` to find already-active issues.
-4. Apply sequencing judgment: prefer foundational or dependency-unblocked issues; avoid issues blocked by open dependencies or already active in another session.
-5. If exactly one active folder is already present, read its issue number from `node "$CLAIM_JS" status` (`active[0].issue_number`) and set `KAOLA_TARGET_ISSUE` to that value before calling startup. The script will return `verdict: owned`; proceed to routing. Do not skip the startup call.
+On the no-issue-named branch, **`issue-scout` is the SOLE backlog reader** — the
+router does NOT re-scan the backlog. The scout already reads `ROADMAP.md`, the forge
+issue list, active folders, and archived summaries (its *Backlog Inventory* / *What You
+May Read*); the router only ADOPTS the scout's recommendation, then validates + claims
+it. Do not duplicate the scan here.
+
+1. If exactly one active folder is already present, read its issue number from `node "$CLAIM_JS" status` (`active[0].issue_number`) and set `KAOLA_TARGET_ISSUE` to that value before calling startup. The script will return `verdict: owned`; proceed to routing. Do not skip the startup call.
 
    ```bash
    STATUS_OUT="$(node "$CLAIM_JS" status 2>/dev/null)"
    KAOLA_TARGET_ISSUE="$(node -e "try{const j=JSON.parse(process.argv[1]);process.stdout.write(j.count===1?String(j.active[0].issue_number):'')}catch(e){}" "$STATUS_OUT")"
    ```
-6. If `$ARGUMENTS` names a specific issue number or project, use that as the explicit target.
-7. Validate the target exists in the active consumer repository before calling startup. The validation context is the cwd's git repo (the project consuming Kaola-Workflow), not `KaolaBrother/Kaola-Workflow` unless that is the active project.
+2. If `$ARGUMENTS` names a specific issue number or project, use that as the explicit target.
+3. Validate the target exists in the active consumer repository before calling startup. The validation context is the cwd's git repo (the project consuming Kaola-Workflow), not `KaolaBrother/Kaola-Workflow` unless that is the active project.
    - Online: `gh issue view "$KAOLA_TARGET_ISSUE" --json number,state` against cwd's `gh` context. If the fetch fails, stop and ask — do not fall back to a different issue.
    - Offline (`KAOLA_WORKFLOW_OFFLINE=1`): require `kaola-workflow/.roadmap/issue-$KAOLA_TARGET_ISSUE.md` to exist in the cwd's repo, OR an active folder whose `issue_number` matches the target. If neither is present, stop and ask the user to confirm the issue or run online.
-8. State the selected issue number aloud before calling startup.
+4. State the selected issue number aloud before calling startup.
 
 If no actionable issue is found (all blocked, red, or occupied), stop and explain.
 
@@ -130,11 +132,9 @@ multi-issue startup path. If BOTH are set, the script refuses with
 This is the **no-issue-named branch of Step 0** (#380): whenever the user does not name
 a specific issue — including the everyday "work on the next issue" entry — dispatch the
 read-only **`issue-scout`** agent to inspect the backlog before claiming anything. The
-issue-scout surveys:
-
-- local roadmap sources (`kaola-workflow/.roadmap/issue-*.md`);
-- remote open issues, labels, and dependency labels (`depends-on:#N`);
-- active folders and recently archived summaries.
+scout is the SOLE backlog reader; it surveys the sources listed in its own *What You May
+Read* (roadmap sources, remote open issues + dependency labels, active folders, archived
+summaries) — the router does not re-list or re-scan them here.
 
 It returns one recommended same-scope bundle **plus a `primary_issue` and a `confidence`**
 (or no bundle). **The main orchestrator STATES the selected issue set aloud before calling
