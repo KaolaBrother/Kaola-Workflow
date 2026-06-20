@@ -601,23 +601,39 @@ function gateUncovered(nodes, isTarget, gateRole, sink) {
   return violations;
 }
 
-// #463 (D-419 write-overlap): the SINGLE relaxation predicate — is an overlapping write pair safe to
-// DOWNGRADE from red/yellow to ok under the active write_overlap_policy? ALL of these must hold:
-//   (1) per-run consent present (the never-persisted carrier) AND a synthesizer/code-reviewer gate
-//       post-dominates the legs (gatePresent — the caller proves it via gateUncovered);
-//   (2) the overlap CLASS is relaxable for the tier: `coarse` (non-shared, exact-file-disjoint) relaxes
-//       at disjoint+ ; `shared-infra` relaxes only at coarse. An `exact` overlap NEVER relaxes here
-//       (real reconciliation is the runtime merge_conflict barrier's job, deferred);
-//   (3) NEITHER set contains a PROTECTED concrete file (lockfiles / CHANGELOG / ROADMAP / manifests /
-//       archive artifacts / the ×4 schema anchor stay blocking at EVERY tier, even when the area relaxes).
-// Default off ⇒ this returns false for every pair ⇒ today's PREVENT verdict stands verbatim.
+// #463 / #546-G2 (D-419 write-overlap): the SINGLE relaxation predicate — is an overlapping write pair
+// safe to DOWNGRADE from red/yellow to ok? Two retained-safety-net invariants gate EVERY relaxation,
+// at EVERY class and tier:
+//   (NET-1) a synthesizer/code-reviewer gate post-dominates the legs (gatePresent — the caller proves
+//           it via gateUncovered over the leg ids), so the review/chain net covers the merged union;
+//   (NET-2) NEITHER set contains a PROTECTED concrete file (lockfiles / CHANGELOG / ROADMAP / manifests /
+//           archive artifacts / the ×4 schema anchor stay blocking at EVERY tier, even when the area
+//           relaxes).
+// The CLASS then decides the rest:
+//   • `shared-infra` (#546-G2, DECISION B accuracy-first): a same-shared-area but EXACT-FILE-DISJOINT
+//     frontier (two scripts/ files, etc.) relaxes BY DEFAULT — no write_overlap_policy:'coarse', no
+//     --write-overlap-consent — PROVIDED the two retained-net invariants hold. The set is disjoint by
+//     construction, the gate covers the union, and the per-leg barrier still catches textual conflict;
+//     so the operator-consent ceremony added nothing the structural net does not already guarantee.
+//   • `coarse` (non-shared, exact-file-disjoint): UNCHANGED — still requires the operator to opt in
+//     (write_overlap_policy ∈ {disjoint,coarse}) AND per-run consent AND the gate. A non-shared coarse
+//     area is a genuinely-overlapping relaxable case, so it stays consent-gated.
+//   • `exact` (or any future class): NEVER relaxes here (real reconciliation is the runtime
+//     merge_conflict barrier's job, deferred).
+// For shared-infra, default-off byte-identity no longer holds (that is the deliberate #546-G2 delta);
+// for coarse + exact, default off/no-consent/no-gate still returns false ⇒ today's PREVENT verdict.
 function writeOverlapRelaxable(dj, setA, setB, policy, consent, gatePresent) {
-  if (policy === 'off' || !consent || !gatePresent) return false;
   if (!dj || !dj.kind) return false;
+  // Retained safety net (both classes): a post-dominating gate over the legs, and no PROTECTED file.
+  if (!gatePresent) return false;
   for (const p of setA) if (classifier.isProtected(p)) return false;
   for (const p of setB) if (classifier.isProtected(p)) return false;
+  // #546-G2: shared-infra (exact-file-disjoint by construction) co-opens BY DEFAULT under the net,
+  // independent of policy + consent.
+  if (dj.kind === 'shared-infra') return true;
+  // coarse: the operator-consent path is unchanged (genuinely-overlapping relaxable case stays opt-in).
+  if (policy === 'off' || !consent) return false;
   if (dj.kind === 'coarse') return policy === 'disjoint' || policy === 'coarse';
-  if (dj.kind === 'shared-infra') return policy === 'coarse';
   return false; // exact (or any future class) never relaxes at this seam
 }
 
@@ -1924,15 +1940,19 @@ function main() {
       process.stdout.write((json ? JSON.stringify(out) : 'typed refusal: ' + out.errors[0]) + '\n');
       process.exitCode = 1; return;
     }
-    // #463 (D-419 write-overlap): the gated PREVENT→DETECT relaxation context. policy = the plan's
-    // write_overlap_policy (default off); consent = the per-run --write-overlap-consent carrier;
-    // gatePresent = a code-reviewer gate post-dominates THE RELAXED LEGS THEMSELVES (each --nodes member
-    // reaches the unique sink ONLY through a code-reviewer). This is LEG-SCOPED on purpose: a WHOLE-PLAN
-    // producesCode check returns vacuously-empty for docs-only legs (no code-producing nodes ⇒ no
-    // gateUncovered targets), which would relax a docs-only frontier with NO reviewer covering it
-    // (adversarial-verifier finding R1). Targeting the leg ids makes the gate cover exactly the nodes
-    // being downgraded, regardless of whether they produce code. At off / no-consent / no-gate, NOTHING
-    // relaxes ⇒ byte-identical to today.
+    // #463 / #546-G2 (D-419 write-overlap): the gated PREVENT→DETECT relaxation context. policy = the
+    // plan's write_overlap_policy (default off, gates ONLY the coarse class); consent = the per-run
+    // --write-overlap-consent carrier (also coarse-only); gatePresent = a code-reviewer gate
+    // post-dominates THE RELAXED LEGS THEMSELVES (each --nodes member reaches the unique sink ONLY
+    // through a code-reviewer). This is LEG-SCOPED on purpose: a WHOLE-PLAN producesCode check returns
+    // vacuously-empty for docs-only legs (no code-producing nodes ⇒ no gateUncovered targets), which
+    // would relax a docs-only frontier with NO reviewer covering it (adversarial-verifier finding R1).
+    // Targeting the leg ids makes the gate cover exactly the nodes being downgraded, regardless of
+    // whether they produce code. #546-G2 (DECISION B): a kind:'shared-infra' (exact-file-disjoint by
+    // construction) frontier relaxes BY DEFAULT once gatePresent holds and no leg touches a PROTECTED
+    // file — NO policy, NO consent needed; the gate + per-leg barrier ARE the net. coarse + exact stay
+    // exactly as before: at off / no-consent / no-gate the coarse class relaxes nothing, and exact
+    // never relaxes.
     const writePolicy = parseWriteOverlapPolicy(content);
     const writeConsent = args.includes('--write-overlap-consent');
     const planSink = uniqueSink(allNodes);

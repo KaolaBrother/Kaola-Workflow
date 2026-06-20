@@ -3418,10 +3418,11 @@ function laneWriteUnion(writeNodes) {
 // (legCoupled = parallelWritesDefaultOn, default TRUE) — disjoint writes co-open in
 // isolated legs BY DEFAULT (#542 / D-542-01); only KAOLA_PARALLEL_WRITES=0 forces serial.
 // writeOverlapConsent (#500 leg-couple): forwarded as opts.writeOverlapConsent INDEPENDENTLY
-// of legCoupled — it relaxes ONLY a genuine OVERLAP (a disjoint frontier short-circuits at
-// validator :1895 before writeOverlapRelaxable, so consent value is irrelevant on the
-// disjoint path / byte-identical). An overlapping frontier forms a group ONLY when consent
-// is present, so a shared-infra co-open is always explicitly authorized.
+// of legCoupled. A green (exact-file-disjoint, non-shared) frontier short-circuits on
+// dj.verdict==='green' before writeOverlapRelaxable, so consent is irrelevant there. Per
+// #546-G2 a shared-infra frontier (same SHARED_INFRA area, exact-file-disjoint) co-opens BY
+// DEFAULT under the retained net (a post-dominating code-reviewer gate + no PROTECTED file in
+// either set) — NO consent needed; consent now gates ONLY a genuine NON-shared coarse OVERLAP.
 //
 // @returns { ok:true, members:string[], group_id, write_union:string[] }
 //        | { ok:false, reason:'overlapping_write_sets', overlapping? }
@@ -3912,9 +3913,11 @@ function runOpenReady(opts) {
     //   groupForm ⟺ legs provisioned ⟺ the safe (parent-clean fence + commit-based barrier) close path;
     //   the attribution-blind legless union barrier (:4429, liveLegs===null) is never reached via
     //   co-open. CRITICAL (guard 5): forward opts.writeOverlapConsent — NOT legCoupled — to
-    //   tryFormLaneGroup: legCoupled is now always-true, so forwarding it would silently relax
-    //   coarse/shared-infra OVERLAP; the explicit consent flag keeps overlap relaxation opt-in only
-    //   (disjoint green needs no consent — the validator short-circuits green before the relax check).
+    //   tryFormLaneGroup: legCoupled is now always-true, so forwarding it as consent would silently
+    //   relax a genuine NON-shared coarse OVERLAP; the explicit consent flag keeps THAT class opt-in
+    //   only. Per #546-G2 a shared-infra (exact-file-disjoint) frontier co-opens by default under the
+    //   retained net (post-dominating code-reviewer gate + no PROTECTED file), and disjoint green needs
+    //   no consent — the validator relaxes/short-circuits both before the consent check.
     if (legCoupled && writeNodes.length >= 2) {
       const grp = tryFormLaneGroup(writeNodes, planPath, shell, opts.writeOverlapConsent);
       if (grp.ok) {

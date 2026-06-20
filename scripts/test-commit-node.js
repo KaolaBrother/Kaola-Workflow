@@ -618,6 +618,55 @@ function assert(condition, message) {
     assert(r.result === 'refuse', 'T463-FLOOR-protected: a PROTECTED file blocks at every tier, got ' + JSON.stringify(r));
     cleanup(repoRoot);
   }
+  // =========================================================================
+  // #546-G2 (D-419 write-overlap, DECISION B accuracy-first): a kind:'shared-infra' frontier
+  // (exact-file-disjoint by construction, same SHARED_INFRA area — two scripts/ files) co-opens BY
+  // DEFAULT — NO write_overlap_policy:'coarse', NO --write-overlap-consent — PROVIDED the retained
+  // structural net holds: a post-dominating code-reviewer/synthesizer gate over the legs AND no
+  // PROTECTED file in either set. The coarse class + exact overlap are UNCHANGED (still consent-gated /
+  // blocking). scripts/sa.js vs scripts/sb.js share the SHARED_INFRA area "scripts" but are exact-file-
+  // disjoint ⇒ classifier verdict {yellow, shared-infra}.
+  // =========================================================================
+  const SHARED_A = 'scripts/sa.js', SHARED_B = 'scripts/sb.js';
+  // (A) T546G2-GREEN-NEW: shared-infra-disjoint + a post-dominating code-reviewer gate + no PROTECTED,
+  //     NO write_overlap_policy, NO --write-overlap-consent → ok (relaxed by default).
+  {
+    const { repoRoot, planPath } = makeGroupRepo({ aSet: SHARED_A, bSet: SHARED_B }); // no policy ⇒ off; gate present (default)
+    const r = runValidator(repoRoot, [planPath, '--parallel-safe', '--nodes', 'A,B', '--json']); // NO --write-overlap-consent
+    assert(r.result === 'ok', 'T546G2-GREEN-NEW: shared-infra-disjoint + gate + no PROTECTED relaxes to ok BY DEFAULT (no policy, no consent), got ' + JSON.stringify(r));
+    assert(Array.isArray(r.relaxed) && r.relaxed.some(x => x.kind === 'shared-infra'), 'T546G2-GREEN-NEW: surfaces relaxed[] with kind shared-infra, got ' + JSON.stringify(r.relaxed));
+    assert(Array.isArray(r.overlapping) && r.overlapping.length === 0, 'T546G2-GREEN-NEW: overlapping empty (downgraded), got ' + JSON.stringify(r.overlapping));
+    cleanup(repoRoot);
+  }
+  // (B) T546G2-RED-NOGATE (retained net): the SAME shared-infra-disjoint frontier but NO post-dominating
+  //     gate (finalize depends directly on A,B) → still REFUSE. The gate net is non-negotiable.
+  {
+    const { repoRoot, planPath } = makeGroupRepo({ aSet: SHARED_A, bSet: SHARED_B, noGate: true });
+    const r = runValidator(repoRoot, [planPath, '--parallel-safe', '--nodes', 'A,B', '--json']);
+    assert(r.result === 'refuse' && r.reason === 'overlapping_write_sets', 'T546G2-RED-NOGATE: shared-infra without a post-dominating gate still REFUSES (net retained), got ' + JSON.stringify(r));
+    assert(!r.relaxed, 'T546G2-RED-NOGATE: nothing relaxed without a gate');
+    cleanup(repoRoot);
+  }
+  // (C) T546G2-RED-PROTECTED (retained net): the SAME shared-infra area + gate, but one leg touches a
+  //     PROTECTED concrete file (the ×4 schema anchor kaola-workflow-adaptive-schema.js, which lives
+  //     under scripts/) → still REFUSE. PROTECTED stays blocking at every tier.
+  {
+    const { repoRoot, planPath } = makeGroupRepo({ aSet: 'scripts/kaola-workflow-adaptive-schema.js', bSet: SHARED_B });
+    const r = runValidator(repoRoot, [planPath, '--parallel-safe', '--nodes', 'A,B', '--json']);
+    assert(r.result === 'refuse', 'T546G2-RED-PROTECTED: a PROTECTED file in a shared-infra-disjoint pair blocks at every tier (net retained), got ' + JSON.stringify(r));
+    assert(!r.relaxed, 'T546G2-RED-PROTECTED: nothing relaxed when a PROTECTED file is present');
+    cleanup(repoRoot);
+  }
+  // (D) T546G2-RED-EXACT (unchanged): an EXACT-file overlap under scripts/ + gate → still REFUSE
+  //     (exact never relaxes — it is a genuine overlap; reconciliation is the merge_conflict barrier).
+  {
+    const { repoRoot, planPath } = makeGroupRepo({ aSet: SHARED_A, bSet: SHARED_A });
+    const r = runValidator(repoRoot, [planPath, '--parallel-safe', '--nodes', 'A,B', '--json']);
+    assert(r.result === 'refuse', 'T546G2-RED-EXACT: an exact-file overlap stays blocking, got ' + JSON.stringify(r));
+    assert((r.overlapping || []).some(o => o.kind === 'exact'), 'T546G2-RED-EXACT: overlapping names the exact kind, got ' + JSON.stringify(r.overlapping));
+    cleanup(repoRoot);
+  }
+
   // T463-FREEZE: write_overlap_policy:exact is refused at freeze (deferred); disjoint/off are legal.
   {
     const { repoRoot, planPath } = makeGroupRepo({ aSet: 'a.js', bSet: 'b.js', policy: 'exact' });

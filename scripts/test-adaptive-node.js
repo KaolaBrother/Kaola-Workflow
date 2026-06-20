@@ -5365,6 +5365,36 @@ function rtHarness(initialFiles, opts) {
   }
 
   // -------------------------------------------------------------------------
+  // #546-G2-OPEN-READY-SHARED-INFRA-DEFAULT-COOPEN (DECISION B, accuracy-first): a ≥2 write frontier
+  //   whose declared sets are EXACT-FILE-DISJOINT but share a SHARED_INFRA area (both under scripts/) is
+  //   classifier-verdict {yellow, shared-infra}. Before #546-G2 this serial-degraded by default (no
+  //   lane_group) because writeOverlapRelaxable required write_overlap_policy:'coarse' + consent. After
+  //   #546-G2 it CO-OPENS BY DEFAULT — the validator's --parallel-safe (called WITHOUT
+  //   --write-overlap-consent by tryFormLaneGroup) now relaxes shared-infra on the retained net
+  //   (post-dominating code-reviewer gate over the legs + no PROTECTED file). The validator verdict
+  //   drives the executor; NO adaptive-node change. This is the direct executor counterpart to the
+  //   validator T546G2-* GREEN-NEW scenario. RED-provable against pre-#546-G2 (serial degrade → no
+  //   lane_group → this block fails).
+  // -------------------------------------------------------------------------
+  {
+    const { repoRoot, cacheDir, planPath } = makeLaneRepo({ aSet: 'scripts/sa.js', bSet: 'scripts/sb.js' });
+    // DEFAULT env (no toggle), NO --write-overlap-consent, NO write_overlap_policy in the plan.
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
+    assert(r.result === 'ok', '#546-G2-OPEN-READY-SHARED-INFRA-DEFAULT-COOPEN: open-ready ok, got ' + JSON.stringify(r));
+    assert(r.laneGroup && Array.isArray(r.laneGroup.members) && r.laneGroup.members.includes('A') && r.laneGroup.members.includes('B'),
+      '#546-G2-OPEN-READY-SHARED-INFRA-DEFAULT-COOPEN: a gated shared-infra-disjoint frontier co-opens [A,B] BY DEFAULT (no consent), got ' + JSON.stringify(r.laneGroup));
+    assert(Array.isArray(r.opened) && r.opened.length === 2,
+      '#546-G2-OPEN-READY-SHARED-INFRA-DEFAULT-COOPEN: both scripts/ writes co-opened, got ' + JSON.stringify(r.opened && r.opened.map(n => n.id)));
+    const rs = readRS(cacheDir);
+    // co-open ⟹ legs (the safe close path); the retained net never lands the legless union barrier.
+    assert(rs && rs.lane_group && rs.lane_group.legs && rs.lane_group.legs.A && rs.lane_group.legs.B,
+      '#546-G2-OPEN-READY-SHARED-INFRA-DEFAULT-COOPEN: co-open ⟹ legs provisioned for every member, got ' + JSON.stringify(rs && rs.lane_group));
+    assert(ledgerStatus(planPath, 'A') === 'in_progress' && ledgerStatus(planPath, 'B') === 'in_progress',
+      '#546-G2-OPEN-READY-SHARED-INFRA-DEFAULT-COOPEN: both A and B in_progress (co-opened)');
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
   // #498-COOPEN-REQUIRES-LEGS (regression guard, open-side — #542 inverted premise): the #498
   //   invariant is "co-open ⟹ legs" — co-open NEVER lands the legless attribution-blind snapshot UNION
   //   barrier (`:4429`, liveLegs===null) that passes a cross-member overwrite. Under #542 (D-542-01)
@@ -6332,50 +6362,67 @@ function rtHarness(initialFiles, opts) {
   }
 
   // =========================================================================
-  // #500-SHARED-INFRA-COARSE (leg-couple wire) — shared-infra/coarse-policy co-open.
+  // #500-SHARED-INFRA-COARSE (leg-couple wire) — shared-infra co-open + the consent-gated coarse class.
   //
-  // The formation gate (tryFormLaneGroup) must forward --write-overlap-consent to the
-  // validator's --parallel-safe so a shared-infra pair can RELAX and co-open. The wire
-  // must be leg-COUPLED: gated on resolveLegIsolation(env) && consent TOGETHER — consent-
-  // alone (toggle OFF) must still serial-degrade (#283/#303 guard). Tests drive the REAL
+  // The formation gate (tryFormLaneGroup) calls the validator's --parallel-safe so a shared-infra pair
+  // can RELAX and co-open. #546-G2 (DECISION B, accuracy-first) shifted the SHARED-INFRA class to relax
+  // BY DEFAULT under the structural net (a post-dominating code-reviewer gate over the legs + no
+  // PROTECTED file) — NO write_overlap_policy, NO --write-overlap-consent. The CONSENT-GATED class is
+  // now the NON-shared coarse area (two different top-level dirs under coarse policy): it still requires
+  // write_overlap_policy ∈ {disjoint,coarse} + --write-overlap-consent + the gate. Tests drive the REAL
   // adaptive-node + plan-validator subprocesses in a REAL git repo.
   // =========================================================================
   {
-    // FIXTURE: scripts/aa.js + scripts/bb.js → both areaForPath === 'scripts' ∈ SHARED_INFRA
-    // → disjointWriteSets verdict:yellow/kind:'shared-infra'. Policy coarse → relaxable.
-    // Note: existing tests' plain makeLaneRepo() calls stay byte-identical (no writeOverlapPolicy).
-    const coarseRepo = () => makeLaneRepo({ writeOverlapPolicy: 'coarse', aSet: 'scripts/aa.js', bSet: 'scripts/bb.js' });
+    // SHARED-INFRA FIXTURE: scripts/aa.js + scripts/bb.js → both areaForPath === 'scripts' ∈
+    // SHARED_INFRA → disjointWriteSets verdict:yellow/kind:'shared-infra'. Under #546-G2 this relaxes
+    // BY DEFAULT (no policy / no consent) once the gate net holds. makeLaneRepo always builds the
+    // post-dominating code-reviewer `review` gate, so gatePresent is true.
+    const sharedInfraRepo = () => makeLaneRepo({ aSet: 'scripts/aa.js', bSet: 'scripts/bb.js' });
+    // CONSENT-GATED COARSE FIXTURE: crates/a/x.rs + crates/b/y.rs share the NON-shared coarse area
+    // "crates" → disjointWriteSets verdict:red/kind:'coarse'. This is the class that STILL requires
+    // write_overlap_policy + --write-overlap-consent to relax (the #546-G2 floor). Policy coarse lets
+    // consent relax it; absent consent it serial-degrades.
+    const coarseRepo = () => makeLaneRepo({ writeOverlapPolicy: 'coarse', aSet: 'crates/a/x.rs', bSet: 'crates/b/y.rs' });
 
     // -----------------------------------------------------------------------
-    // #500-DISCRIMINATOR: direct validator --parallel-safe probe (NOT in production code).
-    // Proves the RELAXATION path (writeOverlapRelaxable) — not the green short-circuit.
-    // Positive (with consent): result==='ok' AND out.relaxed[0].kind==='shared-infra'.
-    // Negative (without consent): result==='refuse' (not relaxed).
+    // #500-DISCRIMINATOR: direct validator --parallel-safe probe (NOT in production code). Proves the
+    // RELAXATION path (writeOverlapRelaxable) — not the green short-circuit — for BOTH classes:
+    //   • shared-infra (#546-G2): relaxes BY DEFAULT — result==='ok' AND relaxed[0].kind==='shared-infra'
+    //     WITHOUT --write-overlap-consent (the DECISION B delta).
+    //   • coarse (consent-gated floor): result==='refuse' WITHOUT consent; result==='ok' WITH consent.
     // -----------------------------------------------------------------------
     {
+      // shared-infra: relaxes by default (NO consent).
+      const { repoRoot, planPath } = sharedInfraRepo();
+      const rDefault = runVal(repoRoot, [planPath, '--parallel-safe', '--nodes', 'A,B', '--json']);
+      assert(rDefault.result === 'ok', '#500-DISCRIMINATOR shared-infra: --parallel-safe ok BY DEFAULT (no consent, #546-G2), got ' + JSON.stringify(rDefault));
+      assert(Array.isArray(rDefault.relaxed) && rDefault.relaxed.length > 0 && rDefault.relaxed[0].kind === 'shared-infra',
+        '#500-DISCRIMINATOR shared-infra: relaxed[0].kind==="shared-infra" by default (relaxation path, not green short-circuit), got ' + JSON.stringify(rDefault.relaxed));
+      cleanup(repoRoot);
+    }
+    {
+      // coarse (non-shared): still consent-gated.
       const { repoRoot, planPath } = coarseRepo();
-      // Positive: with consent → relaxed, not refused.
       const rPos = runVal(repoRoot, [planPath, '--parallel-safe', '--nodes', 'A,B', '--write-overlap-consent', '--json']);
-      assert(rPos.result === 'ok', '#500-DISCRIMINATOR positive: --parallel-safe ok with consent, got ' + JSON.stringify(rPos));
-      assert(Array.isArray(rPos.relaxed) && rPos.relaxed.length > 0 && rPos.relaxed[0].kind === 'shared-infra',
-        '#500-DISCRIMINATOR positive: relaxed[0].kind==="shared-infra" (relaxation path, not green short-circuit), got ' + JSON.stringify(rPos.relaxed));
-      // Negative: without consent → refuse.
+      assert(rPos.result === 'ok', '#500-DISCRIMINATOR coarse positive: --parallel-safe ok with consent, got ' + JSON.stringify(rPos));
+      assert(Array.isArray(rPos.relaxed) && rPos.relaxed.length > 0 && rPos.relaxed[0].kind === 'coarse',
+        '#500-DISCRIMINATOR coarse positive: relaxed[0].kind==="coarse" (relaxation path), got ' + JSON.stringify(rPos.relaxed));
       const rNeg = runVal(repoRoot, [planPath, '--parallel-safe', '--nodes', 'A,B', '--json']);
-      assert(rNeg.result === 'refuse', '#500-DISCRIMINATOR negative: --parallel-safe refuses WITHOUT consent (shared-infra not relaxable), got ' + JSON.stringify(rNeg));
+      assert(rNeg.result === 'refuse', '#500-DISCRIMINATOR coarse negative: --parallel-safe refuses WITHOUT consent (coarse stays consent-gated), got ' + JSON.stringify(rNeg));
       cleanup(repoRoot);
     }
 
     // -----------------------------------------------------------------------
-    // ★ #500-POSITIVE-E2E: toggle ON + consent ON (LEG_ON + --write-overlap-consent) →
-    //   shared-infra group FORMS via relaxation, legs provisioned, disjoint writes synthesized.
+    // ★ #500-POSITIVE-E2E (#546-G2 default-on): a shared-infra pair group FORMS via relaxation BY
+    //   DEFAULT (NO --write-overlap-consent), legs provisioned, disjoint writes synthesized end-to-end.
     //   (Translated from SYNTH-DISJOINT with shared-infra fixture + scripts/ subdir.)
     // -----------------------------------------------------------------------
     {
-      const { repoRoot, cacheDir, planPath } = coarseRepo();
-      // Open: shared-infra pair co-opens with consent.
-      const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON);
+      const { repoRoot, cacheDir, planPath } = sharedInfraRepo();
+      // Open: shared-infra pair co-opens BY DEFAULT (the gate net relaxes it — no consent flag).
+      const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], LEG_ON);
       assert(r.result === 'ok', '#500-POSITIVE-E2E: open-ready ok, got ' + JSON.stringify(r));
-      assert(r.laneGroup && Array.isArray(r.laneGroup.members), '#500-POSITIVE-E2E: laneGroup formed (shared-infra relaxed), got ' + JSON.stringify(r.laneGroup));
+      assert(r.laneGroup && Array.isArray(r.laneGroup.members), '#500-POSITIVE-E2E: laneGroup formed (shared-infra relaxed by default), got ' + JSON.stringify(r.laneGroup));
       assert(r.laneGroup.members.includes('A') && r.laneGroup.members.includes('B'), '#500-POSITIVE-E2E: members [A,B]');
       // Running-set: legs provisioned.
       const rs = readRS(cacheDir);
@@ -6422,9 +6469,11 @@ function rtHarness(initialFiles, opts) {
 
     // -----------------------------------------------------------------------
     // ★ #500-NEGATIVE-A (#542 default-on + the kill-switch guard): the coarseRepo fixture is a GENUINE
-    //   shared-infra (scripts/aa.js + scripts/bb.js share dir "scripts") OVERLAP, so it co-opens ONLY
-    //   with --write-overlap-consent (overlap relaxation stays opt-in — see #500-NEGATIVE-B for the
-    //   no-consent serial-degrade guard). Under #542 (D-542-01) the legacy toggles no longer gate
+    //   NON-shared coarse (crates/a/x.rs + crates/b/y.rs share dir "crates" ∉ SHARED_INFRA) OVERLAP, so
+    //   under #546-G2 it co-opens ONLY with write_overlap_policy:coarse + --write-overlap-consent (the
+    //   coarse class stays consent-gated — see #500-NEGATIVE-B for the no-consent serial-degrade guard;
+    //   the shared-infra class now relaxes by default, covered by #500-DISCRIMINATOR shared-infra +
+    //   #500-POSITIVE-E2E). Under #542 (D-542-01) the legacy toggles no longer gate
     //   co-open: with consent the overlap co-opens regardless of KAOLA_LANE_CONTAINMENT/LEG_ISOLATION.
     //   The ONLY serial path is the explicit kill-switch KAOLA_PARALLEL_WRITES=0 — which forces serial
     //   EVEN with consent. Both halves asserted: (a) consent + no legacy toggle ⇒ co-open (default-on);
@@ -6456,12 +6505,13 @@ function rtHarness(initialFiles, opts) {
     }
 
     // -----------------------------------------------------------------------
-    // ★ #500-NEGATIVE-B (OVERLAP STAYS CONSENT-GATED — preserved under #542 default-on): a frontier with
-    //   genuinely-OVERLAPPING write sets (the coarse shared-infra fixture) + NO --write-overlap-consent
-    //   must STILL serial-degrade, even default-on. Default-on co-opens planner-proven-DISJOINT frontiers
-    //   for free; a real overlap is NEVER relaxed without the explicit consent flag. The legacy toggles
-    //   are no-ops; the consent flag (absent here) is the only thing that could relax the overlap.
-    //   Assert: !r.laneGroup, !rs.lane_group, r.opened.length===1.
+    // ★ #500-NEGATIVE-B (COARSE OVERLAP STAYS CONSENT-GATED — preserved under #542 default-on + #546-G2):
+    //   a frontier with a genuinely-OVERLAPPING NON-shared coarse write set (the crates/ coarse fixture)
+    //   + NO --write-overlap-consent must STILL serial-degrade, even default-on. Default-on co-opens
+    //   planner-proven-DISJOINT frontiers for free; #546-G2 additionally co-opens shared-infra-disjoint
+    //   frontiers under the gate net — but a NON-shared coarse overlap is NEVER relaxed without the
+    //   explicit consent flag. The legacy toggles are no-ops; the consent flag (absent here) is the only
+    //   thing that could relax this coarse overlap. Assert: !r.laneGroup, !rs.lane_group, opened.length===1.
     // -----------------------------------------------------------------------
     {
       const { repoRoot, cacheDir } = coarseRepo();
