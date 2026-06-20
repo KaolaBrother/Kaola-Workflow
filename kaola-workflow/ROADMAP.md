@@ -9,7 +9,6 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 |-------|-------|--------|------------------|-----------|
 | #546 | Adaptive-run parity/gaps register (#543 opencode audit) | open | issue-546 | adaptive |
 | #547 | Adaptive: consumer test de-duplication via validation receipt | open | issue-547 | adaptive |
-| #550 | Finalize chains: offline-deterministic GitHub tests + granular retry (bug) | open | issue-550 | adaptive |
 | #551 | Adaptive run makespan efficiency analysis (#543: ~56% avoidable) | open | issue-551 | adaptive |
 
 ## Rules
