@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Documentation
+
+- **README: restructure to lead with principles/methodology, then runtime + forge support; opencode is now a first-class runtime.** The top-level flow is now Philosophy → Overview → Workflow roles → Installation → Usage → reference → Release versioning (moved out of the mid-document user path to the end). Added a **Runtimes and forges** matrix making the two install axes explicit (Claude Code / Codex / opencode × GitHub / GitLab / Gitea), a dedicated **opencode** install section (`install-opencode.sh` + the two-tier reasoning-effort model mapping `mapTier`/`PROVIDER_EFFORT_TABLE`), and reframed "Vendored Claude Code agents" → "Workflow roles" as a shared cross-runtime role set (Claude vendored agents / Codex `.toml` profiles / opencode `.opencode/agent`). Updated the tagline + "What you get" to name all three runtimes. Tightened the densest implementation-detail blocks (collapsed five `#NNN` paragraphs into one with a `docs/decisions/` pointer) and fixed two stale "under the ON switch" references retired in #538. Docs-only; no asserted README strings changed — `validate-vendored-agents.js` and `validate-workflow-contracts.js` green.
+
 ## [6.7.0] - 2026-06-20
 
 ### Changed

@@ -1,6 +1,6 @@
 # Kaola-Workflow
 
-An **adaptive**, multi-model development workflow for Claude Code and Codex. By default the agent composes a **task-shaped DAG of role nodes** sized to the issue — inside a locked claim → worktree → *free design* → Finalization frame — with durable per-node artifacts and full resumability across sessions and context resets. A fast single-pass path and the classic full phase sequence remain as optional alternatives.
+An **adaptive**, multi-model development workflow that runs on three agent runtimes — **Claude Code, Codex, and [opencode](https://opencode.ai)** — across the **GitHub, GitLab, and Gitea** forges. By default the agent composes a **task-shaped DAG of role nodes** sized to the issue — inside a locked claim → worktree → *free design* → Finalization frame — with durable per-node artifacts and full resumability across sessions and context resets. A fast single-pass path and the classic full phase sequence remain as optional alternatives.
 
 ## Philosophy
 
@@ -27,12 +27,12 @@ A few beliefs follow from that order.
 ### What you get
 
 - **Adaptive, task-shaped planning** sized to each issue — plus optional fast single-pass and full 6-phase paths.
-- **Multi-model** across Claude Code and Codex, right-sizing the model for each step.
+- **Multi-model** across Claude Code, Codex, and opencode, right-sizing the model for each step.
 - **Parallel where it's safe, serial where it isn't** — concurrency only for genuinely independent work. Write frontiers the planner proves **disjoint** co-open as isolated parallel legs **by default** (per-leg worktree isolation + a mandatory synthesizer reconcile are the correctness net); only genuinely-overlapping writes stay serial/consent-gated, and any host without worktree support degrades to serial.
 - **Independent adversarial verification** plus fail-closed quality gates.
 - **Durable per-step artifacts** with full resumability across sessions and context resets.
 - A locked **claim → isolated worktree → free design → finalization** frame.
-- **Editions for GitHub, GitLab, and Gitea.**
+- **Three agent runtimes** (Claude Code, Codex, opencode) across **three forges** (GitHub, GitLab, Gitea).
 - **Goal-driven autonomy** via `/goal` — keep a session working toward one objective across many turns.
 
 ## Overview
@@ -44,7 +44,7 @@ A few beliefs follow from that order.
    /workflow-next       per cycle — resumes from
         │               kaola-workflow/{project}/workflow-state.md
         │
-        ├──► Adaptive path  ★ DEFAULT (under the ON switch)
+        ├──► Adaptive path  ★ DEFAULT
         │      the agent freely composes a task-shaped DAG of role nodes,
         │      sized to the issue — sequence, fan-out, loop, or select —
         │      then runs it node-by-node ──────────────────► Finalization
@@ -122,12 +122,11 @@ explicit user direction — typically stated upfront in `/goal` text (for
 example, "finish all remaining open issues"), which then drives one
 `/workflow-next` run per issue until the scope is met.
 
-## Vendored Claude Code agents
+## Workflow roles
 
-Kaola-Workflow installs the Claude Code agents it needs directly from this
-repository. The agent prompts are derived from Everything Claude Code (ECC) and
-vendored under the MIT License; see [docs/agents-source.md](docs/agents-source.md)
-for the pinned upstream commit, attribution, and refresh procedure.
+Every path is built from a small, shared set of **roles**. All three runtimes provide the same role set — Claude Code installs vendored agents, Codex installs native `.toml` role profiles, and opencode generates `.opencode/agent/` definitions — so the roles, phases, and model tiers below apply across runtimes.
+
+Claude Code's agents are vendored directly from this repository; the prompts are derived from Everything Claude Code (ECC) under the MIT License (see [docs/agents-source.md](docs/agents-source.md) for the pinned upstream commit, attribution, and refresh procedure).
 
 | Agent | Phase | Model | Higher profile |
 |-------|-------|-------|----------------|
@@ -203,18 +202,26 @@ differs from the agent's frontmatter). **After installing or re-running
 
 ## Installation
 
-### Choose an edition
+### Runtimes and forges
 
-Kaola-Workflow has three sibling forge editions, plus an additive opencode runtime edition:
+Kaola-Workflow installs along two independent axes:
 
-- **GitHub edition**: default. Uses GitHub issues, pull requests, and `gh`.
-- **GitLab edition**: opt-in. Uses GitLab issues, merge requests, and `glab`.
-- **Gitea edition**: opt-in. Uses Gitea issues, pull requests, and `tea`. Requires `tea` ≥ 0.9.2 and Gitea server ≥ 1.17. **Forgejo note:** Forgejo ≥ 1.18 is expected to work via shared API surface but is not explicitly tested.
-- **opencode edition**: opt-in, **additive**. Runs the workflow from the [opencode](https://opencode.ai) coding-agent runtime (a runtime, like Codex — not a git forge) via a project `opencode.json` + `.opencode/` tree. Installed separately by `./install-opencode.sh` (not `--forge`); touches none of the existing edition machinery. On the opencode edition **adaptive is the unconditional default path** — the Path Intent / switch-resolution step and the adapt "downgrade to full path" auto-fallback are stripped at generation time by an opencode-only transform (`scripts/sync-opencode-edition.js` `transformCommandBody`), so canonical `commands/*.md` is untouched; the standalone installer deploys the full command set (no `--with-fast`/`--with-full` partition — full parity rides a later issue). See [docs/opencode-edition.md](docs/opencode-edition.md).
+- **Agent runtime** — where the coding agent runs: **Claude Code**, **Codex**, or **opencode**. Each has its own installer.
+- **Git forge** — where issues and PRs/MRs live: **GitHub** (default), **GitLab**, or **Gitea**.
 
-All editions share the same command names, so a manual Claude Code install
-picks one forge at a time. Use the `--forge` flag on `install.sh` to select
-the forge edition.
+| Runtime | Installer | Forge selection |
+|---|---|---|
+| **Claude Code** | `./install.sh [--forge=github\|gitlab\|gitea]` | `--forge` flag |
+| **Codex** | `codex plugin marketplace add` + the matching plugin entry | per-plugin entry (`kaola-workflow`, `-gitlab`, `-gitea`) |
+| **opencode** | `./install-opencode.sh` | — (runtime-only; no forge axis) |
+
+Forge editions:
+
+- **GitHub**: default. GitHub issues, pull requests, `gh`.
+- **GitLab**: opt-in. GitLab issues, merge requests, `glab`.
+- **Gitea**: opt-in. Gitea issues, pull requests, `tea` ≥ 0.9.2, Gitea server ≥ 1.17. **Forgejo** ≥ 1.18 is expected to work via the shared API surface but is not explicitly tested.
+
+Claude Code and Codex share the forge editions — pick one forge at a time; all editions share the same command names. **opencode** is an **additive** runtime (like Codex — not a git forge): it has no separate forge editions, `./install-opencode.sh` touches none of the existing edition machinery, and on opencode **adaptive is the unconditional default path** (the path-selection step is stripped at generation time). See [docs/opencode-edition.md](docs/opencode-edition.md).
 
 ### Claude Code
 
@@ -341,7 +348,19 @@ Before using the Gitea edition in a target project:
 - Keep the workflow labels available: `workflow:queued` and `workflow:in-progress`.
 - Gitea server ≥ 1.17 is required. Forgejo ≥ 1.18 is expected to work but is not explicitly tested.
 
-## Codex packs
+### opencode
+
+opencode is an additive runtime — installed by its own script, not `--forge`. From a local clone:
+
+```bash
+./install-opencode.sh                 # deploy into the current project (.opencode/ + opencode.json)
+./install-opencode.sh --global        # deploy agents + commands into ~/.config/opencode (all projects)
+./install-opencode.sh --regenerate    # refresh the in-repo .opencode/ tree from canonical
+```
+
+The install seeds `opencode.json` with **two model tiers as reasoning-effort variants of your inherited model** — no model is pinned, so both tiers inherit whatever model you already use in opencode. The reasoning tier (the canonical `opus` roles plus the `higher`-profile reviewers) gets the model's **top** effort variant; the standard tier gets the **second** (e.g. `max` / `high` on GLM-5.2 and Anthropic, `xhigh` / `high` on OpenAI, `high` / `low` on Google). The mapping (`mapTier` + `PROVIDER_EFFORT_TABLE`) is provider-portable and lives in `kaola-workflow-adaptive-schema.js`. Adaptive is the unconditional default path on opencode. Full detail: [docs/opencode-edition.md](docs/opencode-edition.md).
+
+## Codex
 
 This repository also includes Codex packs under `plugins/`. They expose the same
 Kaola-Workflow identity through Codex-native skills and `kaola-workflow/` project
@@ -547,99 +566,6 @@ carries `codex_reasoning_effort: "xhigh"`); `sonnet`/absent nodes leave the
 standing session effort untouched. The `<role>-max` xhigh effort-variant profiles
 shipped in #405 are retired — see `docs/decisions/D-451-01.md`.
 
-## Release versioning
-
-Current official release versions:
-
-- Claude Code command install, GitHub edition: `6.7.0`
-- Claude Code command install, GitLab edition: `6.7.0`
-- Claude Code command install, Gitea edition: `6.7.0`
-- Codex `kaola-workflow` plugin manifest: `4.7.0`
-- Codex `kaola-workflow-gitlab` plugin manifest: `4.7.0`
-- Codex `kaola-workflow-gitea` plugin manifest: `4.7.0`
-
-The root `package.json` version is the official repository and Claude Code
-command-install release version. The GitLab Claude command pack follows that
-same version through the root release. Codex plugins have their own manifest
-versions in `plugins/*/.codex-plugin/plugin.json`; bump the affected Codex
-manifest whenever that plugin's install surface, skills, agent profiles, or
-workflow behavior changes.
-
-The root `kaola-workflow--v<X.Y.Z>` tag is the single source of truth for the
-entire release surface, **including** these Codex manifest versions. A Codex
-manifest bump is a release-surface change: it must ride a new root version + tag,
-not land on the default branch after the tag for the current root version. The
-full `npm test` enforces this — it fails when a Codex manifest version differs
-from the value recorded at the `kaola-workflow--v<package.json version>` tag
-(unless `KAOLA_WORKFLOW_OFFLINE=1` is set).
-
-The npm package includes `"plugins/"` in `package.json#files`, so all three
-Codex packs and the GitLab Claude command sources are part of the packaged
-release surface.
-
-Use SemVer for both versions:
-
-- `MAJOR`: breaking command, artifact, plugin, or workflow-contract changes.
-- `MINOR`: backward-compatible workflow phases, agent roles, install features,
-  or new automation.
-- `PATCH`: compatible bug fixes, validation fixes, documentation-only updates,
-  or small install clarifications.
-
-`scripts/kaola-workflow-release.js` scripts this checklist. Run `--verify` first (changelog completeness + chain-receipt greenness check), then `--cut --version X.Y.Z` to rename `[Unreleased]`, bump `package.json` and the three Codex manifests in lockstep, and create the local tag in one crash-resumable transaction. Run `--push` last to receive forge-neutral guidance for pushing the tag and publishing the forge release; no forge CLI is invoked by the script itself. See `docs/conventions.md` § "Release cutting" and `docs/decisions/D-442-01.md` for the full contract.
-
-Official release checklist (run the steps in order). `npm test` requires the
-release tag to exist, so the tag is created **before** the test run:
-
-```bash
-# 1. Sanity-check the working tree (no whitespace errors / conflict markers).
-git diff --check
-
-# 2. Create the tag on the release commit (the commit that bumped package.json
-#    and the release surface), not HEAD.
-git tag kaola-workflow--v<X.Y.Z> <release-commit>
-
-# 3. Validate. The full run verifies the tag exists and that the release surface
-#    (including Codex manifest versions) matches the tag.
-npm test
-
-# 4. Push the new tag by name — BEFORE `gh release create`. An unpushed tag
-#    makes `gh release create` create the REMOTE tag at the default-branch tip
-#    (a different commit than your local tag target). npm test enforces the tag
-#    is an ancestor of HEAD (issue #402), so a rebased-but-not-re-pointed tag reds.
-git push origin kaola-workflow--v<X.Y.Z>
-
-# 5. Only now publish the GitHub Release against the pushed tag.
-gh release create kaola-workflow--v<X.Y.Z> --latest --notes-from-tag
-```
-
-If the release stack is rebased after tagging (origin advanced), the tag is
-orphaned onto the pre-rebase commit. Re-point it onto the new release commit and
-force-push the moved tag before publishing:
-
-```bash
-git tag -f kaola-workflow--v<X.Y.Z> <new-release-commit>
-git push --force origin kaola-workflow--v<X.Y.Z>
-```
-
-**Note:** the full `npm test` requires the release tag to exist **and** to match
-the current release surface, which is why the tag is created before the test run.
-`KAOLA_WORKFLOW_OFFLINE=1` skips the tag-existence and release-surface checks (and
-remote calls) for quick local iteration before the tag exists; it is not the
-canonical release gate — the full online `npm test` after tagging is.
-
-Tag rules:
-- Tag the specific release commit (the commit that bumped `package.json`
-  version and added the CHANGELOG section), not HEAD.
-- GitHub/main tag (`kaola-workflow--v<X.Y.Z>`) is required. GitLab tag
-  (`kaola-workflow-gitlab--v<X.Y.Z>`) is optional (no 3.12.0 GitLab tag
-  was published — intentional). Gitea has no separate release tag.
-- Never use `--tags` or `git push origin main --tags`; push only the
-  single new tag by name.
-
-Create a tag only when publishing a tagged release. For normal development
-pushes, update the versions and changelog, run validation, commit, and push the
-branch.
-
 ## Usage
 
 Initialize each project once:
@@ -663,7 +589,7 @@ The command is a thin router. It first checks local/remote Git state, safely fas
 This is Kaola-Workflow's primary design. For most issues — from a one-line fix (a degenerate single-node DAG) to work that fans out into disjoint sub-areas, needs parallel research across several subsystems, or calls for a non-standard verification shape — the adaptive path lets the agent **freely compose a task-shaped DAG of role nodes** inside Kaola's locked lifecycle frame (claim → branch/worktree → *free design* → Finalization sink), instead of following a fixed sequence. Adaptive is the **unconditional default**: a bare `./install.sh` installs it; no switch to flip, nothing to deliberate. `fast` and `full` are install-time opt-ins (`--with-fast` / `--with-full`) and explicit path-naming escapes once installed (see [Other paths](#other-paths-fast-and-full-optional) below).
 
 ```
-/workflow-next                       # adaptive is the default route under the ON switch
+/workflow-next                       # adaptive is the default route
 KAOLA_PATH=adaptive /workflow-next   # force adaptive explicitly
 ```
 
@@ -671,15 +597,7 @@ KAOLA_PATH=adaptive /workflow-next   # force adaptive explicitly
 
 The adaptive path adds one role — `adversarial-verifier`, a read-only, refute-by-default skeptic used in read-only verification fan-outs. It is never a review gate and touches zero repository files.
 
-**Evidence seeding (#433):** When a node is opened (`open-next` / `open-ready` / fused advance), `kaola-workflow-adaptive-node.js` seeds `.cache/<node-id>.md` with a binding header (`evidence-binding: <node-id> <nonce>`) and role-specific token stubs drawn from `ROLE_TOKEN_REGISTRY` (exported from `kaola-workflow-plan-validator.js`). The `opened` payload carries `evidence_file` and `required_tokens`. The role agent fills the stubs; the close gate verifies the binding header. On `reopen-node`, the file is re-seeded with fresh stubs — stale evidence from a prior open cannot be replayed.
-
-**Operator hints on typed refusals (#445):** Every typed refusal/halt/warn envelope from the four aggregators (`adaptive-node.js`, `commit-node.js`, `plan-validator.js`, `parallel-batch.js`) now carries a top-level `operator_hint: string` — a one-sentence remediation hint generated at emit time from a per-aggregator `OPERATOR_HINT_REGISTRY`. Hints name the #424/#434 sanctioned primitives (`revert-overflow` for write-set overflow, `repair-node` for crash-repair), are forge-neutral, and ship byte-aligned in all four editions. The plan-run command surfaces are reduced to a ~150-line loop skeleton; rare-branch recovery reference cards live under `docs/plan-run-cards/` (resume, governance, repair-routing, reopen-complete-node, frontier-batch). See `docs/decisions/D-445-01.md`.
-
-**Gate findings routing (#446):** A new `route-findings` subcommand on `kaola-workflow-adaptive-node.js` parses a gate node's `finding:` lines into `.cache/findings-route.json` — an array of `{ finding_id, file, owning_node, fix_role, status }` routing objects. `owning_node: null` is the machine-detectable plan-repair signal (no node declared the file). `close-and-open-next` invokes `route-findings` automatically when closing a gate-role node (`code-reviewer`, `security-reviewer`, `adversarial-verifier`, `main-session-gate`), silently and non-blockingly. A new `--summary` flag collapses any subcommand's output to one line (`summary: <result> [| reason: <reason>] [| hint: <operator_hint>]`) and caches the full envelope to `.cache/<op>-envelope.json`; default full-JSON output is unchanged. See `docs/decisions/D-446-01.md`.
-
-**Consent-halt triage payload (#440):** `write-halt` and `barrier_failed` return envelopes now include a `triage: { class, offending paths, proposed_repair?, testDelta? }` payload. Three subtypes narrow `write_set_overflow`: `lockfile_write`, `mirror_write`, and `count_bump`. The classification table lives in `kaola-workflow-adaptive-schema.js` (byte-identical across all four editions). For the overflow family, `proposed_repair` is a structured `{ kind, node, paths }` object using the #434 sanctioned-repair-primitives vocabulary so the orchestrator — or the autopilot — can apply it directly. Both the `barrier_failed` close and the `write-halt` escalation carry the same `triage` shape; callers classify one structure regardless of channel.
-
-**Goal-conditioned bundles (#441):** Plans may include an optional `goal: <text>` prose line in `## Meta`. `parseGoal` reads it using the same decoy-immune `sectionBody('Meta')` scoping as `parseLabels`; the line is hash-covered for free by `computePlanHash` with no code change. The `issue-scout` accepts goal context via `KAOLA_GOAL` and surfaces a `goal_alignment` note in its recommendation. `cmdFinalize` writes `goal_check: satisfied|unsatisfied|absent` into the closure receipt (advisory metadata in v1; does not block claim or finalize).
+**Per-node mechanics.** Several machine-checked contracts underpin the executor: each node's `.cache/<id>.md` evidence is seeded with a binding header + role-specific token stubs and re-seeded on reopen (stale evidence from a prior open cannot be replayed); every typed refusal/halt envelope from the four aggregators carries a one-sentence `operator_hint` and, for halts, a structured `triage` payload (with sanctioned-repair primitives the orchestrator or autopilot can apply directly); gate findings are routed to their owning node — or flagged for plan-repair when no node declared the file; and plans may carry an optional `goal:` line (hash-covered, surfaced to `issue-scout`, recorded as `goal_check` in the closure receipt). See `docs/decisions/` (D-445-01, D-446-01) for the contracts.
 
 #### Supported adaptive patterns
 
@@ -1180,6 +1098,99 @@ linked worktree and commits them. The old visible sibling container
 add `--execute` to perform) to remove any worktrees still registered
 under it. Dirty worktrees are skipped unless `--archive`, `--export`, or
 `--force` is passed; branch refs are preserved.
+
+## Release versioning
+
+Current official release versions:
+
+- Claude Code command install, GitHub edition: `6.7.0`
+- Claude Code command install, GitLab edition: `6.7.0`
+- Claude Code command install, Gitea edition: `6.7.0`
+- Codex `kaola-workflow` plugin manifest: `4.7.0`
+- Codex `kaola-workflow-gitlab` plugin manifest: `4.7.0`
+- Codex `kaola-workflow-gitea` plugin manifest: `4.7.0`
+
+The root `package.json` version is the official repository and Claude Code
+command-install release version. The GitLab Claude command pack follows that
+same version through the root release. Codex plugins have their own manifest
+versions in `plugins/*/.codex-plugin/plugin.json`; bump the affected Codex
+manifest whenever that plugin's install surface, skills, agent profiles, or
+workflow behavior changes.
+
+The root `kaola-workflow--v<X.Y.Z>` tag is the single source of truth for the
+entire release surface, **including** these Codex manifest versions. A Codex
+manifest bump is a release-surface change: it must ride a new root version + tag,
+not land on the default branch after the tag for the current root version. The
+full `npm test` enforces this — it fails when a Codex manifest version differs
+from the value recorded at the `kaola-workflow--v<package.json version>` tag
+(unless `KAOLA_WORKFLOW_OFFLINE=1` is set).
+
+The npm package includes `"plugins/"` in `package.json#files`, so all three
+Codex packs and the GitLab Claude command sources are part of the packaged
+release surface.
+
+Use SemVer for both versions:
+
+- `MAJOR`: breaking command, artifact, plugin, or workflow-contract changes.
+- `MINOR`: backward-compatible workflow phases, agent roles, install features,
+  or new automation.
+- `PATCH`: compatible bug fixes, validation fixes, documentation-only updates,
+  or small install clarifications.
+
+`scripts/kaola-workflow-release.js` scripts this checklist. Run `--verify` first (changelog completeness + chain-receipt greenness check), then `--cut --version X.Y.Z` to rename `[Unreleased]`, bump `package.json` and the three Codex manifests in lockstep, and create the local tag in one crash-resumable transaction. Run `--push` last to receive forge-neutral guidance for pushing the tag and publishing the forge release; no forge CLI is invoked by the script itself. See `docs/conventions.md` § "Release cutting" and `docs/decisions/D-442-01.md` for the full contract.
+
+Official release checklist (run the steps in order). `npm test` requires the
+release tag to exist, so the tag is created **before** the test run:
+
+```bash
+# 1. Sanity-check the working tree (no whitespace errors / conflict markers).
+git diff --check
+
+# 2. Create the tag on the release commit (the commit that bumped package.json
+#    and the release surface), not HEAD.
+git tag kaola-workflow--v<X.Y.Z> <release-commit>
+
+# 3. Validate. The full run verifies the tag exists and that the release surface
+#    (including Codex manifest versions) matches the tag.
+npm test
+
+# 4. Push the new tag by name — BEFORE `gh release create`. An unpushed tag
+#    makes `gh release create` create the REMOTE tag at the default-branch tip
+#    (a different commit than your local tag target). npm test enforces the tag
+#    is an ancestor of HEAD (issue #402), so a rebased-but-not-re-pointed tag reds.
+git push origin kaola-workflow--v<X.Y.Z>
+
+# 5. Only now publish the GitHub Release against the pushed tag.
+gh release create kaola-workflow--v<X.Y.Z> --latest --notes-from-tag
+```
+
+If the release stack is rebased after tagging (origin advanced), the tag is
+orphaned onto the pre-rebase commit. Re-point it onto the new release commit and
+force-push the moved tag before publishing:
+
+```bash
+git tag -f kaola-workflow--v<X.Y.Z> <new-release-commit>
+git push --force origin kaola-workflow--v<X.Y.Z>
+```
+
+**Note:** the full `npm test` requires the release tag to exist **and** to match
+the current release surface, which is why the tag is created before the test run.
+`KAOLA_WORKFLOW_OFFLINE=1` skips the tag-existence and release-surface checks (and
+remote calls) for quick local iteration before the tag exists; it is not the
+canonical release gate — the full online `npm test` after tagging is.
+
+Tag rules:
+- Tag the specific release commit (the commit that bumped `package.json`
+  version and added the CHANGELOG section), not HEAD.
+- GitHub/main tag (`kaola-workflow--v<X.Y.Z>`) is required. GitLab tag
+  (`kaola-workflow-gitlab--v<X.Y.Z>`) is optional (no 3.12.0 GitLab tag
+  was published — intentional). Gitea has no separate release tag.
+- Never use `--tags` or `git push origin main --tags`; push only the
+  single new tag by name.
+
+Create a tag only when publishing a tagged release. For normal development
+pushes, update the versions and changelog, run validation, commit, and push the
+branch.
 
 ## Updating
 
