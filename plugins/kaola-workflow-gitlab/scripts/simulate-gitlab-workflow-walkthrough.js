@@ -1470,6 +1470,7 @@ testGitlabBundle424432433NodeSeeding();
 run('test-gitlab-forge-helpers.js');
 run('test-gitlab-workflow-scripts.js');
 run('test-gitlab-sinks.js');
+run('test-gitlab-run-chains.js');  // #550: forge run-chains failing-path (isTransientFetchStderr export must be callable)
 
 console.log('GitLab workflow walkthrough simulation passed');
 

@@ -752,5 +752,12 @@ module.exports = {
   issueHasRemoteClaimNotes,
   issueHasWorkflowInProgressLabel,
   parseDependsOn,
-  readOrCreateConfig
+  readOrCreateConfig,
+  // #519: stderr-error-class axis — transient-infra signature detection + the combined verdict.
+  // (Required by kaola-gitlab-workflow-run-chains.js's single-source transient-retry surface;
+  // omitting these makes `isTransientFetchStderr` undefined → TypeError on a failing chain — #550.)
+  classifyFetchError,
+  isTransientFetchStderr,
+  isTransientFetchError,
+  TransientFetchError
 };

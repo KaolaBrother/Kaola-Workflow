@@ -365,6 +365,51 @@ function renameNormalize(referenceText, forge) {
     (_m, name) => `kaola-${forge}-workflow-${name}`);
 }
 
+// #550: forge classifier module.exports SUPERSET guard. The gitlab/gitea classifiers are
+// DIVERGENT hand-ports (not rename-normalized, ~757 vs ~873 lines) so they are NOT in the
+// byte / rename families above. But the forge run-chains ports require() named exports from
+// their forge classifier (e.g. isTransientFetchStderr — the single transient-infra surface);
+// if a forge classifier OMITS a canonical-classifier export key, that name resolves to
+// `undefined` and the FIRST failing chain throws `TypeError: <name> is not a function`
+// at the retry gate — no receipt, the crash that hid behind the green-only path (#550).
+// This guard fails CLOSED when a forge classifier's export set is not a superset of canonical's.
+const FORGE_CLASSIFIER_EXPORT_SUPERSET = {
+  label: 'forge classifier module.exports superset',
+  canonical: 'scripts/kaola-workflow-classifier.js',
+  ports: [
+    { forge: 'gitlab', file: 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-classifier.js' },
+    { forge: 'gitea', file: 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-classifier.js' },
+  ],
+};
+
+// Return { missingKeys } per forge port: the canonical export keys ABSENT from that port's
+// module.exports. require()s each module and compares Object.keys (robust to ordering / comments,
+// unlike a brittle export-block parse). A non-empty missingKeys for any port is a fail-closed drift.
+function forgeClassifierExportDrift(rootDir, fam) {
+  const out = { missingModules: [], driftPorts: [] };
+  let canonicalKeys;
+  try {
+    canonicalKeys = Object.keys(require(path.join(rootDir, fam.canonical)));
+  } catch (_) {
+    out.missingModules.push(fam.canonical);
+    return out;
+  }
+  for (const port of fam.ports) {
+    let portKeys;
+    try {
+      portKeys = new Set(Object.keys(require(path.join(rootDir, port.file))));
+    } catch (_) {
+      out.missingModules.push(port.file);
+      continue;
+    }
+    const missingKeys = canonicalKeys.filter((k) => !portKeys.has(k));
+    if (missingKeys.length > 0) {
+      out.driftPorts.push({ file: port.file, forge: port.forge, missingKeys });
+    }
+  }
+  return out;
+}
+
 function readOrNull(p) {
   try { return fs.readFileSync(p); } catch { return null; }
 }
@@ -442,8 +487,18 @@ if (require.main === module) {
     }
   }
 
+  // #550: forge classifier module.exports SUPERSET guard (divergent hand-ports — not byte/rename
+  // families, so checked by require()d Object.keys comparison, not byte/string normalization).
+  {
+    const res = forgeClassifierExportDrift(repoRoot, FORGE_CLASSIFIER_EXPORT_SUPERSET);
+    for (const m of res.missingModules) missing.push(m);
+    for (const p of res.driftPorts) {
+      drift.push(`${FORGE_CLASSIFIER_EXPORT_SUPERSET.label}: ${p.file} omits canonical-classifier export(s) [${p.missingKeys.join(', ')}] — the forge run-chains port require()s these, so an omission TypeErrors on a failing chain (#550)`);
+    }
+  }
+
   if (missing.length === 0 && drift.length === 0) {
-    console.log(`OK: ${COMMON_SCRIPTS.length} common scripts, ${BYTE_IDENTICAL_GROUPS.length} byte-identical groups, ${RENAME_NORMALIZED_FAMILIES.length} rename-normalized families, and 1 config/hooks.json family in sync.`);
+    console.log(`OK: ${COMMON_SCRIPTS.length} common scripts, ${BYTE_IDENTICAL_GROUPS.length} byte-identical groups, ${RENAME_NORMALIZED_FAMILIES.length} rename-normalized families, 1 config/hooks.json family, and ${FORGE_CLASSIFIER_EXPORT_SUPERSET.ports.length} forge-classifier export supersets in sync.`);
     process.exit(0);
   }
 
@@ -463,4 +518,4 @@ if (require.main === module) {
   process.exit(1);
 }
 
-module.exports = { COMMON_SCRIPTS, BYTE_IDENTICAL_GROUPS, RENAME_NORMALIZED_FAMILIES, renameNormalize, CONFIG_HOOKS_FAMILY, normalizeConfigHooks };
+module.exports = { COMMON_SCRIPTS, BYTE_IDENTICAL_GROUPS, RENAME_NORMALIZED_FAMILIES, renameNormalize, CONFIG_HOOKS_FAMILY, normalizeConfigHooks, FORGE_CLASSIFIER_EXPORT_SUPERSET, forgeClassifierExportDrift };

@@ -1543,6 +1543,7 @@ testGiteaBundle424432433NodeSeeding();
 run('test-gitea-forge-helpers.js');
 run('test-gitea-workflow-scripts.js');
 run('test-gitea-sinks.js');
+run('test-gitea-run-chains.js');  // #550: forge run-chains failing-path (isTransientFetchStderr export must be callable)
 
 console.log('Gitea workflow walkthrough simulation passed');
 
