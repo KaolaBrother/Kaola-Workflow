@@ -592,6 +592,77 @@ try {
 }
 
 // ---------------------------------------------------------------------------
+// T23 (#546): resolveOutputPath precedence — --output > --plan > --project > cwd default.
+// Mirrors main()'s `resolveOutputPath(pathOpts, cwd)` call: opts is the parsed
+// { output, plan, project } bag (each null when its flag is absent) and cwd is the
+// process cwd at resolution time. --project shells `git rev-parse --show-toplevel`
+// (getGitTopLevel), so that case uses a real tmp git repo; the rest are pure (no git).
+// ---------------------------------------------------------------------------
+{
+  const { resolveOutputPath, getGitTopLevel } = require('./kaola-workflow-run-chains.js');
+  const none = { output: null, plan: null, project: null };
+  const cwd = '/work/repo';
+
+  // --output: an absolute path is returned as-is (path.resolve of an absolute path is itself).
+  assert(resolveOutputPath(Object.assign({}, none, { output: '/abs/custom/receipt.json' }), cwd)
+    === '/abs/custom/receipt.json', 'T23a: --output absolute path wins verbatim');
+  // --output: a cwd-relative path resolves against cwd.
+  assert(resolveOutputPath(Object.assign({}, none, { output: 'sub/r.json' }), cwd)
+    === path.join(cwd, 'sub', 'r.json'), 'T23b: --output relative path resolves against cwd');
+
+  // --plan: path.dirname(path.resolve(cwd, plan)) + /.cache/chain-receipt.json — the EXACT plan-dir
+  // plan-validator --finalize-check derives. Use a cwd-relative plan path so resolve uses cwd.
+  const planRel = 'kaola-workflow/issue-546/workflow-plan.md';
+  assert(resolveOutputPath(Object.assign({}, none, { plan: planRel }), cwd)
+    === path.join(cwd, 'kaola-workflow', 'issue-546', '.cache', 'chain-receipt.json'),
+    'T23c: --plan -> dirname(resolve(plan))/.cache/chain-receipt.json (the validator plan-dir)');
+  // --plan with an ABSOLUTE plan path ignores cwd for the dir.
+  assert(resolveOutputPath(Object.assign({}, none, { plan: '/elsewhere/plan/workflow-plan.md' }), cwd)
+    === path.join('/elsewhere', 'plan', '.cache', 'chain-receipt.json'),
+    'T23d: --plan absolute path uses its own dir, not cwd');
+
+  // bare default (no flag) -> <cwd>/.cache/chain-receipt.json.
+  assert(resolveOutputPath(none, cwd) === path.join(cwd, '.cache', 'chain-receipt.json'),
+    'T23e: bare default -> <cwd>/.cache/chain-receipt.json');
+
+  // --project issue-N -> <gitTopLevel>/kaola-workflow/issue-N/.cache/chain-receipt.json.
+  // Real tmp git repo so getGitTopLevel resolves deterministically; cwd is the repo root.
+  const projRepo = makeGitRepo();
+  try {
+    const top = getGitTopLevel(projRepo);
+    // getGitTopLevel returns a real toplevel (not the cwd fallback) inside a checkout.
+    // (On macOS tmp may be a /private symlink, so compare against the resolved toplevel.)
+    assert(typeof top === 'string' && top.length > 0, 'T23f: getGitTopLevel resolves a toplevel inside a checkout');
+    assert(resolveOutputPath(Object.assign({}, none, { project: 'issue-546' }), projRepo)
+      === path.join(top, 'kaola-workflow', 'issue-546', '.cache', 'chain-receipt.json'),
+      'T23g: --project issue-N -> <gitTopLevel>/kaola-workflow/issue-N/.cache/chain-receipt.json');
+  } finally {
+    try { fs.rmSync(projRepo, { recursive: true, force: true }); } catch (_) {}
+  }
+
+  // Precedence ordering: when MORE than one flag is set, the higher-precedence one wins.
+  // output > plan: both set -> output path, plan ignored.
+  assert(resolveOutputPath({ output: '/abs/out.json', plan: planRel, project: 'issue-546' }, cwd)
+    === '/abs/out.json', 'T23h: precedence output > plan > project (output wins over both)');
+  // plan > project: plan + project set, no output -> plan-dir, project ignored.
+  assert(resolveOutputPath({ output: null, plan: planRel, project: 'issue-546' }, cwd)
+    === path.join(cwd, 'kaola-workflow', 'issue-546', '.cache', 'chain-receipt.json'),
+    'T23i: precedence plan > project (plan-dir wins, project ignored)');
+  // project > cwd default: project set, no output/plan -> project path (NOT the bare cwd default).
+  const projRepo2 = makeGitRepo();
+  try {
+    const top2 = getGitTopLevel(projRepo2);
+    const projResolved = resolveOutputPath({ output: null, plan: null, project: 'issue-99' }, projRepo2);
+    assert(projResolved === path.join(top2, 'kaola-workflow', 'issue-99', '.cache', 'chain-receipt.json'),
+      'T23j: precedence project > cwd default (project path, not <cwd>/.cache)');
+    assert(projResolved !== path.join(projRepo2, '.cache', 'chain-receipt.json'),
+      'T23k: --project does NOT fall through to the bare cwd default');
+  } finally {
+    try { fs.rmSync(projRepo2, { recursive: true, force: true }); } catch (_) {}
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Final result
 // ---------------------------------------------------------------------------
 if (failed > 0) {

@@ -25,9 +25,22 @@
 // Options:
 //   --chains <name,...>           Comma-separated chain names to run (default: claude,codex,gitlab,gitea)
 //   --accept-known-red <name>:<issue>  Waive a known-failing chain (repeatable)
+//   --project <issue-N>           Write the receipt under kaola-workflow/<issue-N>/.cache/chain-receipt.json
+//                                 (the plan-dir the validator --finalize-check reads). Resolved against
+//                                 the git top-level so it matches whether run from the worktree root or
+//                                 the repo root. See --plan for an explicit plan path.
+//   --plan <plan-path>            Write the receipt under <dir-of-plan>/.cache/chain-receipt.json — the
+//                                 EXACT plan-dir the validator derives from its plan-path argument.
 //   --output <path>               Override the receipt output path (default: .cache/chain-receipt.json)
 //   --mock-chain <name>:<script>  (for testing) Replace a chain's command with a shell script
 //   --json                        Emit a brief summary JSON to stdout after completion
+//
+// RECEIPT PATH (#546): plan-validator --finalize-check reads the chain receipt from
+// <plan-dir>/.cache/chain-receipt.json where plan-dir == path.dirname(<plan-path>). Run from the
+// worktree root (the #466 contract), the producer's bare cwd default (.cache/chain-receipt.json)
+// lands at the WORKTREE ROOT, not under kaola-workflow/<project>/ — so the gate reads nothing and
+// refuses chains_unverified. Pass --project <issue-N> (or --plan <path>) to land the receipt where
+// the gate reads it. Precedence when several are given: --output > --plan > --project > cwd default.
 //
 // Env:
 //   KAOLA_RUN_CHAINS_CONCURRENCY  auto (default) | serial | <N>  — pool size for the chain
@@ -284,6 +297,32 @@ async function runConcurrent(specs, cwd, timeoutMs, concurrency, maxAttempts) {
   return specs.map((s) => results.get(s.name));   // canonical-order re-sort
 }
 
+// #546: resolve the git top-level so a --project receipt lands at the SAME absolute path whether
+// run-chains is invoked from the worktree root (the #466 contract) or the repo root. Mirrors the
+// validator's `git -C <cwd> rev-parse --show-toplevel` discriminator; falls back to cwd when git
+// cannot resolve it (e.g. not a checkout) so the flag still produces a deterministic path.
+function getGitTopLevel(cwd) {
+  const r = spawnSync('git', ['-C', cwd, 'rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8' });
+  if (r.status !== 0 || r.error) return cwd;
+  return r.stdout.trim() || cwd;
+}
+
+// #546: resolve the receipt output path from the parsed flags, honoring precedence
+// --output > --plan > --project > cwd default. --project <issue-N> -> the plan-dir
+// kaola-workflow/<issue-N>/.cache (resolved against the git top-level); --plan <path> -> the EXACT
+// plan-dir the validator derives (path.dirname(<plan-path>))/.cache. The validator reads
+// <plan-dir>/.cache/chain-receipt.json, so both flags land the receipt where the gate looks.
+function resolveOutputPath(opts, cwd) {
+  if (opts.output != null) return path.resolve(cwd, opts.output);
+  if (opts.plan != null) {
+    return path.join(path.dirname(path.resolve(cwd, opts.plan)), '.cache', 'chain-receipt.json');
+  }
+  if (opts.project != null) {
+    return path.join(getGitTopLevel(cwd), 'kaola-workflow', opts.project, '.cache', 'chain-receipt.json');
+  }
+  return path.join(cwd, '.cache', 'chain-receipt.json');
+}
+
 // Resolve the HEAD sha in the current working directory.
 function getHeadSha(cwd) {
   const r = spawnSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' });
@@ -330,7 +369,9 @@ async function main(argv) {
   const args = argv.slice(2);
 
   let requestedChains = null; // null = run all resolved chains (config or npm-default)
-  let outputPath = path.join(process.cwd(), '.cache', 'chain-receipt.json');
+  // #546: collect the receipt-path flags; resolve AFTER parsing so precedence (--output > --plan >
+  // --project > cwd default) holds regardless of argument order.
+  const pathOpts = { output: null, plan: null, project: null };
   const waivers = {};   // name -> issue token
   const mocks = {};     // name -> shell script path (test hook)
   let asJson = false;
@@ -368,7 +409,19 @@ async function main(argv) {
       // edition names + any --mock-chain name), not against a hardcoded list.
       waivers[name] = issue;
     } else if (a === '--output') {
-      outputPath = path.resolve(process.cwd(), args[++i]);
+      const val = args[++i];
+      if (!val) { process.stderr.write('run-chains: --output requires a path\n'); return 1; }
+      pathOpts.output = val;
+    } else if (a === '--project') {
+      // #546: write the receipt under kaola-workflow/<issue-N>/.cache (the validator's plan-dir).
+      const val = args[++i];
+      if (!val) { process.stderr.write('run-chains: --project requires a value (e.g. issue-546)\n'); return 1; }
+      pathOpts.project = val;
+    } else if (a === '--plan') {
+      // #546: write the receipt under <dir-of-plan>/.cache (the EXACT plan-dir the validator derives).
+      const val = args[++i];
+      if (!val) { process.stderr.write('run-chains: --plan requires a plan-file path\n'); return 1; }
+      pathOpts.plan = val;
     } else if (a === '--mock-chain') {
       const val = args[++i];
       if (!val || !val.includes(':')) {
@@ -382,10 +435,16 @@ async function main(argv) {
     } else if (a === '-h' || a === '--help') {
       process.stdout.write(
         'Usage: kaola-gitlab-workflow-run-chains.js [--chains name,...] [--accept-known-red name:issue ...]\n' +
-        '                                    [--output path] [--json]\n' +
+        '                                    [--project issue-N | --plan plan-path | --output path] [--json]\n' +
         '\n' +
         'Runs the four test chains (claude, codex, gitlab, gitea) and writes a chain receipt.\n' +
         'Exit 0 when all non-waived chains pass; non-zero otherwise.\n' +
+        '\n' +
+        'Receipt path (#546): plan-validator --finalize-check reads <plan-dir>/.cache/chain-receipt.json.\n' +
+        '  --project issue-N  -> kaola-workflow/issue-N/.cache/chain-receipt.json (resolved at the git top-level)\n' +
+        '  --plan plan-path   -> <dir-of-plan>/.cache/chain-receipt.json (the exact plan-dir the validator derives)\n' +
+        '  --output path      -> explicit override; default is <cwd>/.cache/chain-receipt.json\n' +
+        'Precedence: --output > --plan > --project > cwd default.\n' +
         '\n' +
         'On a host with core headroom the chains run CONCURRENTLY (max-of-chains makespan);\n' +
         'a constrained host falls back to serial. Override with KAOLA_RUN_CHAINS_CONCURRENCY\n' +
@@ -399,6 +458,8 @@ async function main(argv) {
   }
 
   const cwd = process.cwd();
+  // #546: resolve the receipt path now that cwd is known + all flags are parsed.
+  const outputPath = resolveOutputPath(pathOpts, cwd);
 
   // #475: resolve the npm edition chain set for this repo (npm-default > chains_config_missing refuse).
   // The chains.json repo-config tier is retired (consumer repos gate on final-validation.md).
@@ -573,4 +634,4 @@ if (require.main === module) {
   );
 }
 
-module.exports = { main, KNOWN_CHAINS, CHAIN_COMMANDS, resolveChains, resolveTimeoutMs, resolveConcurrency, resolveChainRetry, runChainWithRetry, runChainSync, runChainAsync };
+module.exports = { main, KNOWN_CHAINS, CHAIN_COMMANDS, resolveChains, resolveTimeoutMs, resolveConcurrency, resolveChainRetry, runChainWithRetry, runChainSync, runChainAsync, resolveOutputPath, getGitTopLevel };

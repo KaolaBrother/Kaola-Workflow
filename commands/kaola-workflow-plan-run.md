@@ -35,6 +35,14 @@ kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "
 KAOLA_SCRIPTS="$(dirname "$(kaola_script kaola-workflow-adaptive-node.js)")"
 ```
 
+**Resolve the scripts path per command, not once (#546 G5).** The Bash tool does NOT persist
+environment variables between calls (true for Claude Code AND opencode) — a `$KAOLA_SCRIPTS` set
+in one Bash call is GONE in the next, so a later lifecycle call crashes with `Cannot find module
+'/…-adaptive-node.js'`. Re-resolve the absolute scripts path in EVERY Bash call that needs it:
+either repeat the resolver block above (or an equivalent absolute-path lookup) at the top of each
+call, or hardcode the absolute path — never rely on a once-set `$KAOLA_SCRIPTS` carrying into a
+subsequent call.
+
 Then mirror the project folder into the worktree (idempotent, `plan_hash`-verified):
 
 ```bash
@@ -172,6 +180,16 @@ consent` in plan `## Meta`): `docs/plan-run-cards/speculative-open.md`
   COMMIT-based union barrier on M, never the counter, is the fail-closed gate, so a resumed run safely
   re-counts from zero. RESUMABLE consent-style halt — resolve, then `clear-halt --reason consent`.
 
+**Evidence-persistence contract per role-kind (#546 G4).** There is ONE contract — no per-agent
+guesswork:
+- **READ-ONLY roles** (`code-explorer`, `knowledge-lookup`, `adversarial-verifier`, and the
+  planner) CANNOT self-write `.cache` evidence — they RETURN their evidence text and the
+  orchestrator persists it via `record-evidence --stdin` (below). `record-evidence` re-injects
+  this node's `evidence-binding:` header, so persisting evidence cannot strip the header (#546 G3) —
+  the read-only role MUST NOT try to add or modify it.
+- **WRITE-role agents** (`implementer`, `tdd-guide`) SELF-WRITE their `.cache` evidence, INCLUDING
+  the seeded `evidence-binding:` header (read it from the seeded file, never alter it).
+
 Record durable evidence after the role returns:
 
 ```bash
@@ -193,6 +211,18 @@ overflow) → close + compliance row → selector routing → fused advance. Ret
 
 On `result: ok` + `opened`: dispatch the next node (step 3) — it is already open.
 On `allDone: true`: run chains then route to Finalization.
+On `opened: null` + `allDone: false` (the typed `reason: 'frontier_blocked'` signal, #546 G6):
+do NOT park silently. Deterministically re-run `orient` then `open-next` / `open-ready` to re-open
+the recomputed frontier, draining toward `allDone` WITHOUT operator prompting. Cap the re-orient at
+a small bound (e.g. 3 consecutive `frontier_blocked` cycles with no progress) before escalating with
+stop+ask — a blocked-but-not-done frontier must never silently stall the run.
+
+**Surface the narrowed barrier reason VERBATIM (#546 G7).** On a `barrier_failed` / `close-node`
+refusal the ACTIONABLE narrowed reason (`write_set_overflow` / `write_set_granularity` /
+`lockfile_write` / …) and the offending paths are now on the top-level `reason` / `outOfAllow`
+fields. Surface them VERBATIM — print the full `reason` / `operator_hint` / `outOfAllow` — never
+route the refusal through a lossy JSON-summary helper that truncates it (the #543 G7 stall, where a
+truncated n6 close-node reason silently parked the run).
 
 <!-- CARD: repair-routing -->
 On barrier refusal / `route-findings` result: `docs/plan-run-cards/repair-routing.md`
@@ -225,8 +255,12 @@ serial-degrade `cwd_unenforceable`; `opening` crash-safe marker; `running-set` s
 When `allDone: true`, run:
 
 ```bash
-node $KAOLA_SCRIPTS/kaola-workflow-run-chains.js
+node "$KAOLA_SCRIPTS/kaola-workflow-run-chains.js" --project {project}
 ```
+
+**Invoke run-chains with `--project {project}` (#546 G11).** Always pass `--project {project}` to the
+run-chains script so its receipt lands at `kaola-workflow/{project}/.cache/chain-receipt.json` where
+Finalization's `--finalize-check` reads it — do NOT rely on cwd to locate the receipt.
 
 Then proceed to `/kaola-workflow-finalize {project}`.
 

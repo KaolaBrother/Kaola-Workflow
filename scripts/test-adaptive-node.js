@@ -687,11 +687,15 @@ function makeState(opts) {
 }
 
 // ---------------------------------------------------------------------------
-// T13: runRecordEvidence — stdin → .cache verbatim
+// T13: runRecordEvidence — stdin → .cache, re-injecting the evidence-binding header
+// (#546 G3, DECISION A): a verbatim write would clobber the seeded line-1 binding header,
+// so record-evidence re-injects `evidence-binding: <nodeId> <nonce>` when the stdin lacks
+// one. With no on-disk barrier-base (the /fake planPath), the nonce reads empty.
 // ---------------------------------------------------------------------------
 {
   let writtenFiles = {};
   const evidenceContent = 'RED: test failed\nGREEN: test passed\n5 assertions\n';
+  const expectedWritten = 'evidence-binding: impl-core \n' + evidenceContent;
 
   const result = runRecordEvidence({
     planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
@@ -705,11 +709,71 @@ function makeState(opts) {
 
   assert(result.result === 'ok', 'T13: record-evidence result===ok');
   assert(result.wrote !== undefined, 'T13: wrote path present');
-  assert(result.bytes === evidenceContent.length, 'T13: bytes matches evidence length');
+  assert(result.bytes === expectedWritten.length, 'T13: bytes matches written (binding-injected) length');
 
   const cacheKey = Object.keys(writtenFiles).find(k => k.includes('.cache/impl-core.md'));
   assert(cacheKey !== undefined, 'T13: .cache/impl-core.md was written');
-  assert(writtenFiles[cacheKey] === evidenceContent, 'T13: evidence written verbatim');
+  assert(writtenFiles[cacheKey] === expectedWritten, 'T13: binding header re-injected ahead of verbatim evidence body');
+}
+
+// ---------------------------------------------------------------------------
+// T13c (#546 G3): when the stdin ALREADY carries an evidence-binding line (even a
+// foreign / copied one), record-evidence writes it UNTOUCHED so checkEvidenceShape can
+// still catch a stale / foreign nonce (anti-replay #392 preserved).
+// ---------------------------------------------------------------------------
+{
+  let writtenFiles = {};
+  const boundContent = 'evidence-binding: other-node deadbeef1234\nRED: x\nGREEN: y\n';
+
+  const result = runRecordEvidence({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project',
+    nodeId: 'impl-core',
+    stdinContent: boundContent,
+    writeFile: (fpath, content) => { writtenFiles[fpath] = content; },
+    mkdirp: (dir) => { /* no-op */ },
+  });
+
+  assert(result.result === 'ok', 'T13c: record-evidence result===ok');
+  const cacheKey = Object.keys(writtenFiles).find(k => k.includes('.cache/impl-core.md'));
+  assert(writtenFiles[cacheKey] === boundContent, 'T13c: existing (foreign) binding written untouched — no re-injection');
+  assert(result.bytes === boundContent.length, 'T13c: bytes matches untouched content');
+
+  // --- T13d (#546 G3 / #392): close the anti-replay LOOP. The untouched foreign binding T13c just
+  // wrote is exactly what the close path re-reads, so feed that SAME written content through
+  // checkEvidenceShape with THIS node's (impl-core) expectedNonce/expectedNodeId and prove it REFUSES.
+  // This makes the untouched-write → close-node-refuse link explicit (T13c only proved the write).
+  const writtenForeign = writtenFiles[cacheKey]; // === boundContent (impl-core), bound to "other-node"
+  const thisNode = 'impl-core';
+  const thisNonce = 'cafef00d5678'; // this open's nonce — neither matches the written deadbeef1234
+
+  // (1) FOREIGN nodeId: written binding names "other-node" but this dispatch is impl-core →
+  //     evidence_unbound (evidence copied from another node).
+  const unbound = checkEvidenceShape('tdd-guide', thisNode, writtenForeign,
+    { expectedNonce: thisNonce, expectedNodeId: thisNode });
+  assert(unbound.ok === false, 'T13d: foreign-node binding → checkEvidenceShape NOT ok (close would refuse)');
+  assert(unbound.evidenceUnbound === true, 'T13d: foreign nodeId → evidenceUnbound === true');
+  assert(unbound.missingTokenClass === 'evidence_unbound', 'T13d: missingTokenClass evidence_unbound');
+  assert(unbound.evidenceStale === undefined, 'T13d: foreign-node is unbound, NOT stale');
+
+  // (2) SAME-node, WRONG nonce: a binding for THIS node but carrying a prior open's nonce →
+  //     evidence_stale (replayed from a prior open of the same node). Build the same-node variant
+  //     the way runRecordEvidence would have written it (line-1 binding header + body untouched).
+  const sameNodeStale = 'evidence-binding: ' + thisNode + ' deadbeef1234\nRED: x\nGREEN: y\n';
+  const stale = checkEvidenceShape('tdd-guide', thisNode, sameNodeStale,
+    { expectedNonce: thisNonce, expectedNodeId: thisNode });
+  assert(stale.ok === false, 'T13d: same-node wrong-nonce binding → checkEvidenceShape NOT ok');
+  assert(stale.evidenceStale === true, 'T13d: same-node wrong nonce → evidenceStale === true');
+  assert(stale.missingTokenClass === 'evidence_stale', 'T13d: missingTokenClass evidence_stale');
+  assert(stale.evidenceUnbound === undefined, 'T13d: same-node wrong-nonce is stale, NOT unbound');
+
+  // (3) Control: the SAME-node binding carrying the MATCHING nonce passes — proves the refusals
+  //     above are the nonce/node binding firing, not a blanket reject of every bound evidence.
+  const matchOk = checkEvidenceShape('tdd-guide', thisNode,
+    'evidence-binding: ' + thisNode + ' ' + thisNonce + '\nRED: x\nGREEN: y\n',
+    { expectedNonce: thisNonce, expectedNodeId: thisNode });
+  assert(matchOk.ok === true, 'T13d: matching node+nonce binding → ok (control: binding check, not blanket reject)');
 }
 
 // ---------------------------------------------------------------------------
@@ -6438,18 +6502,21 @@ function rtHarness(initialFiles, opts) {
     planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
     project: 'test-project',
     nodeId: 'impl',
-    // Shell seam: --barrier-check returns outOfAllow=['scripts/b.js'] first, then passes.
+    // Shell seam: --barrier-check returns the overflow first, then passes after revert.
+    // #546 G10: commit-node's combineResults NESTS outOfAllow under barrierCheck — use that
+    // REALISTIC shape (not a top-level outOfAllow) so the test exercises the production path that
+    // a top-level-only read would mask as a false "barrier already clean".
     shell: (scriptPath, args) => {
       const base = path.basename(scriptPath);
       if (base === 'kaola-workflow-commit-node.js') {
         // Simulate barrier-check: first call overflowed, second call passes after revert.
         barrierCallCount++;
         if (barrierCallCount === 1) {
-          return { exitCode: 1, result: 'refuse', reason: 'write_set_overflow', outOfAllow: ['scripts/b.js'] };
+          return { exitCode: 1, result: 'refuse', barrierCheck: { reason: 'write_set_overflow', outOfAllow: ['scripts/b.js'] } };
         }
-        return { exitCode: 0, result: 'pass', outOfAllow: [] };
+        return { exitCode: 0, result: 'pass', barrierCheck: { reason: null, outOfAllow: [] } };
       }
-      return { exitCode: 0, result: 'pass', outOfAllow: [] };
+      return { exitCode: 0, result: 'pass', barrierCheck: { reason: null, outOfAllow: [] } };
     },
     // gitCheckout seam: records reverted paths.
     gitCheckout: (barrierRoot, sha, filePaths) => {
@@ -6719,9 +6786,13 @@ function rtHarness(initialFiles, opts) {
   });
 
   assert(result440b.result === 'refuse', 'T-440-B: close-and-open-next refuses on barrier failure');
-  assert(result440b.reason === 'barrier_failed', 'T-440-B: reason=barrier_failed, got ' + result440b.reason);
+  // #546 G7: the narrowed barrier reason (nested at barrierCheck.reason) is promoted to the
+  // TOP level so decorateOperatorHint + --summary emit it instead of the generic 'barrier_failed'.
+  assert(result440b.reason === 'write_set_overflow', 'T-440-B: narrowed reason promoted to top level, got ' + result440b.reason);
+  assert(Array.isArray(result440b.outOfAllow) && result440b.outOfAllow[0] === 'scripts/foo.js',
+    'T-440-B: outOfAllow attached at top level, got ' + JSON.stringify(result440b.outOfAllow));
   assert(typeof result440b.triage === 'object' && result440b.triage !== null,
-    'T-440-B: barrier_failed envelope carries triage, got ' + JSON.stringify(result440b.triage));
+    'T-440-B: barrier envelope carries triage, got ' + JSON.stringify(result440b.triage));
   assert(typeof result440b.triage.class === 'string',
     'T-440-B: triage.class is a string, got ' + JSON.stringify(result440b.triage));
 }

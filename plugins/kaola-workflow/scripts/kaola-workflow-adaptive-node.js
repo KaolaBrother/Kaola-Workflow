@@ -1854,7 +1854,20 @@ function runRecordEvidence(opts) {
 
   if (mkdirp) mkdirp(cacheDir);
 
-  writeFile(cachePath, stdinContent);
+  // #546 G3 (DECISION A): a verbatim write of the role agent's stdin overwrites the
+  // line-1 `evidence-binding: <id> <nonce>` header seeded by seedEvidenceFile, so a
+  // subsequent close-node checkEvidenceShape refuses evidence_shape_failed / evidence_unbound.
+  // Re-inject the binding ONLY when the stdin carries NO `evidence-binding:` line at all.
+  // If the stdin ALREADY carries a binding line (even a foreign / copied one), leave it
+  // UNTOUCHED so checkEvidenceShape still catches a stale / foreign nonce — the #392
+  // anti-replay / anti-copy guard must stay able to refuse a replayed binding.
+  let contentToWrite = stdinContent;
+  if (!/^evidence-binding:/m.test(String(stdinContent || ''))) {
+    const nonce = readNonce(planPath, nodeId, opts.readFile || require('fs').readFileSync);
+    contentToWrite = 'evidence-binding: ' + nodeId + ' ' + (nonce || '') + '\n' + String(stdinContent || '');
+  }
+
+  writeFile(cachePath, contentToWrite);
 
   // #373: best-effort telemetry — evidence recorded for the node.
   appendNodeTiming(planPath, nodeId, 'evidence');
@@ -1862,7 +1875,7 @@ function runRecordEvidence(opts) {
   return {
     result: 'ok',
     wrote: cachePath,
-    bytes: stdinContent.length,
+    bytes: contentToWrite.length,
   };
 }
 
@@ -1980,10 +1993,15 @@ function runCloseAndOpenNext(opts) {
 
   if (barrierOut.exitCode !== 0 || barrierOut.result !== 'ok') {
     // #440: attach triage to the barrier_failed envelope so callers can classify + propose repair.
+    // #546 G7: promote the narrowed barrier reason (commit-node nests it at
+    // barrierCheck.reason / barrierCheck.outOfAllow) to the TOP level so decorateOperatorHint
+    // + the --summary line emit the specific reason (write_set_overflow, ...) instead of the
+    // generic 'barrier_failed'. Falls back to 'barrier_failed' when no narrowed reason exists.
     const cacheDir440 = path.join(path.dirname(planPath), '.cache');
     return {
       result: 'refuse',
-      reason: 'barrier_failed',
+      reason: (barrierOut.barrierCheck && barrierOut.barrierCheck.reason) || 'barrier_failed',
+      outOfAllow: barrierOut.barrierCheck && barrierOut.barrierCheck.outOfAllow,
       nodeId,
       barrierOut,
       triage: computeTriage(barrierOut, cacheDir440, nodeId, readFile),
@@ -2196,7 +2214,12 @@ function runCloseAndOpenNext(opts) {
   // Open the next ready node.
   const nextNode = nextNode0;
   if (!nextNode) {
-    return { result: 'ok', closed: nodeId, opened: null, allDone: false, ...(verdictWarn || {}), taskTransitions: transitions, taskMirror: refreshTaskMirror(project, shell) };
+    // #546 G6: the plan is unfinished (not allDone) yet next-action surfaced NO openable node and
+    // NO >=2 frontier — the only remaining nodes are blocked / non-auto-openable (e.g. awaiting a
+    // batch seal, a consent-gated overlap, or an upstream gate). Emit a TYPED `reason` marker so the
+    // orchestrator can distinguish "re-orient and retry the drain" from a genuine stall. Control flow
+    // is unchanged: this is still result:'ok', closed:nodeId, opened:null — only the marker is added.
+    return { result: 'ok', closed: nodeId, opened: null, allDone: false, reason: 'frontier_blocked', ...(verdictWarn || {}), taskTransitions: transitions, taskMirror: refreshTaskMirror(project, shell) };
   }
 
   let planForAdvance = readFile(planPath);
@@ -2812,10 +2835,14 @@ function runRevertOverflow(opts) {
   if (!nodeId) return { result: 'refuse', errors: ['--node-id required for revert-overflow'] };
 
   // (1) Run per-node barrier-check to get outOfAllow list.
+  // #546 G10: commit-node's combineResults NESTS outOfAllow at barrierCheck.outOfAllow, so a
+  // top-level-only read sees undefined → [] → a false "barrier already clean" while the overflow
+  // files are still modified. Read BOTH the top-level and the nested path (mirrors computeTriage's
+  // dual-path read) so a nested overflow is still reverted.
   const barrierResult = shell(commitNodePath, [planPath, '--node-id', nodeId, '--barrier-check', '--json']);
-  const outOfAllow = (barrierResult && Array.isArray(barrierResult.outOfAllow))
-    ? barrierResult.outOfAllow
-    : [];
+  const rawOverflow = (barrierResult && (barrierResult.outOfAllow
+    || (barrierResult.barrierCheck && barrierResult.barrierCheck.outOfAllow))) || [];
+  const outOfAllow = Array.isArray(rawOverflow) ? rawOverflow : [];
 
   if (!outOfAllow.length) {
     // Nothing to revert — barrier already passes (or no overflow detected).
@@ -3094,16 +3121,17 @@ function runRepairNode(opts) {
 // a time. `open-ready` adds ready nodes; `close-node` removes one and recomputes
 // the frontier so a DOWNSTREAM node unblocks PER NODE (not per whole frontier).
 //
-// SAFETY (the #364 reintroduction condition): with KAOLA_LANE_CONTAINMENT off
-// (the default + permanent serial fallback), the ONLY concurrency open-ready
-// creates is among READ-ONLY nodes — they share the parent tree and never write,
-// so they cannot race. A WRITE node always opens ALONE (one at a time, never
-// alongside a read or another write) — byte-identical to today's serial path. A
-// single in_progress write node is the legacy length<=1 single-node case, so the
-// #293 multi-in_progress legality concern only ever arises for safe read-only
-// fan-out. The cross-lane write+read overlap the design envisions is gated on a
-// real cwd-forcing primitive (#376 lane-containment worktrees) and stays DORMANT
-// here — documented, never silently engaged.
+// SAFETY (the #364 reintroduction condition): READ-ONLY nodes always co-open
+// freely — they share the parent tree and never write, so they cannot race.
+// For WRITE nodes the regime is now default-on (#542 / D-542-01): a planner-
+// proven-DISJOINT (`parallel_safe` antichain) write frontier co-opens in ISOLATED
+// per-leg worktrees BY DEFAULT (legCoupled = parallelWritesDefaultOn, default TRUE;
+// KAOLA_PARALLEL_WRITES=0 forces serial). An OVERLAPPING or uncertain write frontier
+// is NOT relaxed: it serial-degrades to opening one write node at a time, or co-opens
+// only under an explicit --write-overlap-consent. A single in_progress write node is
+// the legacy length<=1 single-node case, so the #293 multi-in_progress legality
+// concern only arises for a safe read-only or disjoint-write fan-out — never for an
+// unrelaxed overlap.
 //
 // State shape: { state:'opening'|'open', nodes:[{id,role,kind,baseline,opening?,
 // openedAt?}], updatedAt }. Two-phase write (opening -> flip ledger -> open)
@@ -3115,7 +3143,8 @@ function runRepairNode(opts) {
 // classifier.parseWriteSetCell the batch classifier (classifyBatchKind) and the
 // plan_hash use, so read-only/write classification can never drift between paths
 // (em-dash `—`, `-`, and empty all parse to the empty set → read-only). Write
-// nodes serialize under containment-off (the permanent fallback).
+// nodes co-open in isolated legs by default when planner-proven-disjoint (#542),
+// and serial-degrade (or consent-gate) when their sets overlap or are uncertain.
 function isReadOnlyNode(node) {
   const raw = node && (node.declared_write_set != null ? node.declared_write_set : node.writeSetRaw);
   try {
@@ -3384,13 +3413,14 @@ function laneWriteUnion(writeNodes) {
 // write frontier. The frontier is already a next-action ready antichain; the
 // validator's `--parallel-safe` flag re-checks pairwise disjointness AUTHORITATIVELY
 // (belt-and-suspenders). On overlap (result:'refuse') the caller DEGRADES to opening a
-// single write node serially — exactly the flag-OFF path. Reached only under
-// resolveLaneContainment(env) === true (the caller's guard); never invoked flag-OFF.
-// writeOverlapConsent (#500 leg-couple): forwarded ONLY when the caller's leg-coupled
-// conjunction (resolveLegIsolation && consent) holds — so a shared-infra group can only
-// form when legs WILL be provisioned (formation coupled to provisioning). Disjoint-green
-// pairs short-circuit at validator :1895 before writeOverlapRelaxable, so consent value
-// is irrelevant for them (byte-identical on the disjoint path).
+// single write node serially. Reached under the caller's legCoupled guard
+// (legCoupled = parallelWritesDefaultOn, default TRUE) — disjoint writes co-open in
+// isolated legs BY DEFAULT (#542 / D-542-01); only KAOLA_PARALLEL_WRITES=0 forces serial.
+// writeOverlapConsent (#500 leg-couple): forwarded as opts.writeOverlapConsent INDEPENDENTLY
+// of legCoupled — it relaxes ONLY a genuine OVERLAP (a disjoint frontier short-circuits at
+// validator :1895 before writeOverlapRelaxable, so consent value is irrelevant on the
+// disjoint path / byte-identical). An overlapping frontier forms a group ONLY when consent
+// is present, so a shared-infra co-open is always explicitly authorized.
 //
 // @returns { ok:true, members:string[], group_id, write_union:string[] }
 //        | { ok:false, reason:'overlapping_write_sets', overlapping? }
@@ -4262,8 +4292,18 @@ function runCloseNode(opts) {
   const barrierOut = shell(commitNodePath, [planPath, '--node-id', nodeId, '--json']);
   if (barrierOut.exitCode !== 0 || barrierOut.result !== 'ok') {
     // #440: attach triage to the barrier_failed envelope so callers can classify + propose repair.
+    // #546 G7: promote the narrowed barrier reason (nested at barrierCheck.reason /
+    // barrierCheck.outOfAllow) to the TOP level so decorateOperatorHint + --summary emit the
+    // specific reason instead of the generic 'barrier_failed'. (Mirror of runCloseAndOpenNext.)
     const cacheDir440b = path.join(path.dirname(planPath), '.cache');
-    return { result: 'refuse', reason: 'barrier_failed', nodeId, barrierOut, triage: computeTriage(barrierOut, cacheDir440b, nodeId, readFile) };
+    return {
+      result: 'refuse',
+      reason: (barrierOut.barrierCheck && barrierOut.barrierCheck.reason) || 'barrier_failed',
+      outOfAllow: barrierOut.barrierCheck && barrierOut.barrierCheck.outOfAllow,
+      nodeId,
+      barrierOut,
+      triage: computeTriage(barrierOut, cacheDir440b, nodeId, readFile),
+    };
   }
 
   // -- (c) Close: ledger row in_progress -> complete (same #348 guard as close-and-open-next).

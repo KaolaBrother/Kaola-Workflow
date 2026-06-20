@@ -167,6 +167,12 @@ Author the `## Nodes` table so the validator passes it. Each node is one row:
   ```
   | n1-validator | tdd-guide | — | scripts/kaola-workflow-plan-validator.js, plugins/kaola-workflow/scripts/kaola-workflow-plan-validator.js, plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-plan-validator.js, plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-plan-validator.js | 4 | sequence | opus |
   ```
+- **Write-set under-declaration checklist — enumerate the recurring overflow classes BEFORE you freeze (#546, the #543 G1 pattern).** The recurring mid-run `write_set_overflow` repair is almost always a node that declared its obvious target file but omitted a *co-moving companion* the edit unavoidably touches. This is a PREVENT-checklist, not a new wall — the per-node barrier stays the teeth; the point is to declare these up front so a slip never stalls the run. For each node, walk these classes and add every member the edit will actually write:
+  - **GENERATED forge ports / edition aggregators** that a canonical edit regenerates — the codex twin under `plugins/<edition>/scripts/` and the gitlab/gitea forge ports of any GENERATED_AGGREGATOR (the `generated_port_split` set above), plus any other generated file a canonical source change reproduces.
+  - **CONTRACT-validator pins** — a needle/count/allowlist asserted by `validate-*-contracts.js`, `validate-vendored-agents.js`, `test-route-reachability.js`, or a `simulate-*-walkthrough.js` fixture that the change moves; the assertion file is part of the write set, not collateral.
+  - **`.cache` receipts the node writes** — the node's own evidence receipt under `kaola-workflow/{project}/.cache/` (recorded parent-side); a bare `.cache/<id>.md` resolving to the worktree root is the recurring overflow (declare the path under `kaola-workflow/{project}/.cache/`).
+  - **Byte-identical SYNC-GROUP peers (#301)** that must move together — when one edition file in a byte-mirror group changes, its peers in the same group (the cross-edition mirrors that `edition-sync` keeps identical) move atomically; declare the whole group in the one node.
+  - **Test files the node's RED/GREEN touches** — the unit/walkthrough/contract test a `tdd-guide` node writes or a change forces to update; the test file is in the producing node's write set, never assumed.
 - **Decision-record numbering (#337):** before hardcoding a decision-record id
   (`D-<issue>-NN`) into a write set or `## Plan Notes`, read the target repo's
   existing records (`docs/decisions/`, plus mentions in docs/ and CHANGELOG.md)
