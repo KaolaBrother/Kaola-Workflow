@@ -34,6 +34,16 @@
 //                                 dispatch. "auto" gates on core count; "serial"/"1" forces the
 //                                 serial fallback; "<N>" forces a pool of N (clamped to chainCount).
 //   KAOLA_RUN_CHAINS_TIMEOUT_MS   per-chain timeout in ms (default 900000 / 15 min, #512).
+//   KAOLA_RUN_CHAINS_RETRY        max attempts PER CHAIN on a transient-infra fault (default 2 —
+//                                 i.e. one retry; #550). Clamped to a >=1 integer; invalid -> default.
+//
+// RETRY (#550): a chain that exits non-zero is re-run ONLY when its captured output carries a
+// POSITIVE transient-infra signature (TLS/handshake/ETIMEDOUT/ECONNRESET/429/EAI_AGAIN/5xx — the
+// classifier's exported `isTransientFetchStderr`). A determinate red (non-zero with NO transient
+// signature) is NEVER retried (precedence #1: retry must never flip a determinate red to green); a
+// 900s timeout kill is non-retryable by default (a 12-min hang re-run doubles makespan for little
+// gain). Retry is PER-SPEC inside the concurrent worker, so a transient on one chain never re-runs
+// the other three. The receipt records the FINAL attempt's exit code + the attempt count.
 //
 // Receipt schema (.cache/chain-receipt.json):
 //   {
@@ -48,7 +58,9 @@
 //         "command": "npm run test:kaola-workflow:claude",
 //         "duration_ms": 12345,
 //         "accepted_red": false,
-//         "accepted_red_issue": null
+//         "accepted_red_issue": null,
+//         "attempts": 1,                // #550: how many times this chain ran (>1 == a transient retry)
+//         "retried_transient": false    // #550: true iff a transient signature triggered a re-run
 //       }
 //     ]
 //   }
@@ -69,6 +81,10 @@ const os = require('os');
 const path = require('path');
 const { spawnSync, spawn } = require('child_process');
 const crypto = require('crypto');
+// #550: REUSE the classifier's single transient-infra signature surface (do NOT copy the array — one
+// drift surface). isTransientFetchStderr returns true iff captured stdout/stderr carries a known
+// transient-infra signature (TLS/handshake/ETIMEDOUT/ECONNRESET/429/EAI_AGAIN/5xx, classifier ~:853).
+const { isTransientFetchStderr } = require('./kaola-gitlab-workflow-classifier.js');
 
 const KNOWN_CHAINS = ['claude', 'codex', 'gitlab', 'gitea'];
 
@@ -139,6 +155,10 @@ function buildSpec(name, ctx) {
 }
 
 // Serial chain run — spawnSync, byte-equivalent to the historical dispatch-loop body.
+// #550: capture r.stdout/r.stderr into `_output` (the serial path previously DROPPED them) so the
+// retry layer can classify a non-zero exit by transient signature — mirrors runChainAsync's _output.
+// spawnSync exposes timeout kills via r.signal (SIGTERM) / r.error.code==='ETIMEDOUT'; surface that
+// as `_timedOut` so a timeout stays non-retryable like the concurrent path.
 function runChainSync(spec, cwd, timeoutMs) {
   const t0 = Date.now();
   const r = spawnSync(spec.cmdParts[0], spec.cmdParts.slice(1), {
@@ -150,6 +170,7 @@ function runChainSync(spec, cwd, timeoutMs) {
   });
   const duration_ms = Date.now() - t0;
   const exitCode = (r.status != null) ? r.status : (r.error ? 1 : 0);
+  const timedOut = !!(r.signal === 'SIGTERM' || (r.error && r.error.code === 'ETIMEDOUT'));
   return {
     name: spec.name,
     exitCode,
@@ -157,7 +178,46 @@ function runChainSync(spec, cwd, timeoutMs) {
     duration_ms,
     accepted_red: spec.accepted_red,
     accepted_red_issue: spec.accepted_red_issue,
+    _output: String(r.stdout || '') + String(r.stderr || '') + (r.error ? ('\n' + String((r.error && r.error.message) || r.error)) : ''),
+    _timedOut: timedOut,
   };
+}
+
+// #550: re-run a SINGLE chain ONLY on a POSITIVE transient-infra signature, up to maxAttempts.
+// `runOne(spec, cwd, timeoutMs)` is either runChainSync (sync) or runChainAsync (Promise); `await`
+// handles both uniformly. Returns the LAST attempt's result, augmented with `attempts` and
+// `retried_transient`. PRECEDENCE #1 (accuracy): a determinate red — exitCode!==0 with NO transient
+// signature in _output — is NEVER retried; a timeout kill (_timedOut) is non-retryable by default.
+// Retry therefore can never flip a determinate red to green; a still-red-after-retry chain stays red.
+async function runChainWithRetry(spec, cwd, timeoutMs, runOne, maxAttempts) {
+  const max = Math.max(1, maxAttempts | 0);
+  let attempt = 0;
+  let result;
+  let retried = false;
+  for (;;) {
+    attempt++;
+    result = await runOne(spec, cwd, timeoutMs);
+    if (result.exitCode === 0) break;                       // green — done
+    const retryable = attempt < max
+      && !result._timedOut                                  // a timeout kill is non-retryable
+      && isTransientFetchStderr(result._output);            // POSITIVE transient signature required
+    if (!retryable) break;                                  // determinate red OR budget exhausted
+    retried = true;
+    await delayMs(retryBackoffMs(attempt));                 // small backoff before re-running THIS spec
+  }
+  result.attempts = attempt;
+  result.retried_transient = retried;
+  return result;
+}
+
+// #550: small fixed-ish backoff between transient retries (linear by attempt). Kept tiny so the gate
+// is not slowed materially; bounded so a flapping host doesn't stall. Async (Promise) so it composes
+// inside both the serial map and the concurrent worker (the worker is already async).
+function retryBackoffMs(attempt) {
+  return Math.min(2000, 250 * Math.max(1, attempt));
+}
+function delayMs(ms) {
+  return new Promise((resolve) => { if (ms <= 0) resolve(); else setTimeout(resolve, ms); });
 }
 
 // Concurrent chain run — async spawn with per-child env copy + drained, buffered stdio
@@ -208,13 +268,15 @@ function runChainAsync(spec, cwd, timeoutMs) {
 // Bounded concurrent pool over `specs`. Each of `concurrency` workers drains a shared
 // index; results are collected out-of-order then RE-SORTED to `specs` order (== the
 // canonical KNOWN_CHAINS-filtered order) so the receipt is deterministic.
-async function runConcurrent(specs, cwd, timeoutMs, concurrency) {
+// #550: the worker wraps runChainAsync in runChainWithRetry so a transient retry stays PER-SPEC —
+// a transient on one chain re-runs ONLY that chain, never the other three.
+async function runConcurrent(specs, cwd, timeoutMs, concurrency, maxAttempts) {
   const results = new Map();
   let next = 0;
   async function worker() {
     while (next < specs.length) {
       const spec = specs[next++];
-      results.set(spec.name, await runChainAsync(spec, cwd, timeoutMs));
+      results.set(spec.name, await runChainWithRetry(spec, cwd, timeoutMs, runChainAsync, maxAttempts));
     }
   }
   const pool = Math.max(1, Math.min(concurrency, specs.length));
@@ -410,6 +472,9 @@ async function main(argv) {
   const ctx = { mocks, waivers, resolvedCommands };
   const specs = chains.map((name) => buildSpec(name, ctx));
   const timeoutMs = resolveTimeoutMs(process.env);
+  // #550: per-chain transient-retry budget (default 2 == one retry). Both dispatch paths wrap their
+  // single-run primitive in runChainWithRetry so a transient-infra fault re-runs ONLY that chain.
+  const maxAttempts = resolveChainRetry(process.env);
 
   // #529: core-count-gated serial-vs-concurrent dispatch. concurrency <= 1 -> the
   // byte-equivalent serial fallback; > 1 -> a bounded concurrent pool, results re-sorted
@@ -418,9 +483,14 @@ async function main(argv) {
 
   let dispatchResults;
   if (concurrency <= 1) {
-    dispatchResults = specs.map((spec) => runChainSync(spec, cwd, timeoutMs));
+    // Serial: run each chain in canonical order, retrying only the current spec on a transient fault
+    // before advancing (await keeps the sequential ordering of the byte-equivalent serial path).
+    dispatchResults = [];
+    for (const spec of specs) {
+      dispatchResults.push(await runChainWithRetry(spec, cwd, timeoutMs, runChainSync, maxAttempts));
+    }
   } else {
-    dispatchResults = await runConcurrent(specs, cwd, timeoutMs, concurrency);
+    dispatchResults = await runConcurrent(specs, cwd, timeoutMs, concurrency, maxAttempts);
     // Concurrent runs are not watchable live — surface each FAILED chain's captured output
     // so a failure is debuggable from the run-chains output alone.
     for (const ch of dispatchResults) {
@@ -433,7 +503,10 @@ async function main(argv) {
     }
   }
 
-  // Strip internal (_output/_timedOut) fields — the receipt keeps its stable 6-field schema.
+  // Strip internal (_output/_timedOut) fields. #550: the receipt additively records `attempts`
+  // (the FINAL attempt's exitCode is the chain verdict) and `retried_transient`. Readers index by
+  // name/exitCode/accepted_red (plan-validator --finalize-check, #522 schema test), so the two new
+  // fields are backward-compatible additions.
   const chainResults = dispatchResults.map((ch) => ({
     name: ch.name,
     exitCode: ch.exitCode,
@@ -441,6 +514,8 @@ async function main(argv) {
     duration_ms: ch.duration_ms,
     accepted_red: ch.accepted_red,
     accepted_red_issue: ch.accepted_red_issue,
+    attempts: (typeof ch.attempts === 'number' && ch.attempts >= 1) ? ch.attempts : 1,
+    retried_transient: ch.retried_transient === true,
   }));
 
   const completedAt = new Date().toISOString();
@@ -483,6 +558,14 @@ function resolveTimeoutMs(env) {
   return (Number.isFinite(v) && v > 0) ? v : 900000;
 }
 
+// #550: max attempts PER CHAIN on a transient-infra fault (default 2 == one retry). Mirrors the
+// resolveTimeoutMs/resolveConcurrency env-resolver style. Clamped to a sane >=1 integer; any invalid
+// value (non-numeric / <1) falls back to the default so a typo never disables the gate or loops.
+function resolveChainRetry(env) {
+  const v = parseInt((env && env.KAOLA_RUN_CHAINS_RETRY) || '', 10);
+  return (Number.isFinite(v) && v >= 1) ? v : 2;
+}
+
 if (require.main === module) {
   main(process.argv).then(
     (code) => process.exit(code),
@@ -490,4 +573,4 @@ if (require.main === module) {
   );
 }
 
-module.exports = { main, KNOWN_CHAINS, CHAIN_COMMANDS, resolveChains, resolveTimeoutMs, resolveConcurrency };
+module.exports = { main, KNOWN_CHAINS, CHAIN_COMMANDS, resolveChains, resolveTimeoutMs, resolveConcurrency, resolveChainRetry, runChainWithRetry, runChainSync, runChainAsync };

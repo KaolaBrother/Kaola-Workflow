@@ -934,6 +934,38 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
       '#538(g): authoring-allowed must be unconditionally allowed (got ' + JSON.stringify(r.json) + ')');
   }
 
+  // (h) #550 OFFLINE-DETERMINISM REGRESSION GUARD — the path_not_installed refusal must make ZERO gh
+  // invocations. The path-legality gate (claim.js claimProject ~:851) returns path_not_installed
+  // BEFORE probeIssueState (~:866, the only gh-touching call in this flow), so a non-installed path
+  // never reaches gh. This guard runs the #538(b) scenario WITHOUT KAOLA_WORKFLOW_OFFLINE (so ghExec
+  // would actually shell the mock if the probe were reached) and points KAOLA_GH_MOCK_SCRIPT at a
+  // mock that DROPS A SENTINEL FILE + EXITS NON-ZERO IF INVOKED. We assert (1) the result is still
+  // path_not_installed/refuse and (2) the sentinel was never written — proving zero gh round-trips.
+  // A regression that reorders the gate to probe-before-legality would fire the mock and fail here.
+  {
+    setHomeInstalled([]);
+    const sentinel538 = path.join(tmpDir538, 'gh-invoked.sentinel');
+    try { fs.rmSync(sentinel538, { force: true }); } catch (_) {}
+    const ghBoomMock538 = path.join(tmpDir538, 'gh-boom.js');
+    fs.writeFileSync(ghBoomMock538,
+      'require(\'fs\').writeFileSync(' + JSON.stringify(sentinel538) + ', \'gh was invoked\');\n' +
+      'process.stderr.write(\'gh mock invoked — path-legality gate did NOT short-circuit\\n\');\n' +
+      'process.exit(1);\n'
+    );
+    const r = runClaim538(
+      ['startup', '--target-issue', '5387'],
+      // NOTE: KAOLA_WORKFLOW_OFFLINE explicitly EMPTIED so ghExec would shell the mock if reached.
+      { KAOLA_WORKFLOW_OFFLINE: '', KAOLA_PATH: 'fast', KAOLA_CLASSIFIER_MOCK_SCRIPT: mockGreen538, KAOLA_GH_MOCK_SCRIPT: ghBoomMock538 },
+      repo538
+    );
+    rmProj538('5387'); // guard REFUSES so no project dir is created; rmProj is defensive
+    assert(r.json && r.json.status === 'path_not_installed' && r.json.result === 'refuse',
+      '#550(h): a non-installed path still refuses path_not_installed even with no OFFLINE flag (got ' + JSON.stringify(r.json) + ')');
+    assert(!fs.existsSync(sentinel538),
+      '#550(h): ZERO gh invocations — the gh mock (exits non-zero if called) was never invoked; path-legality short-circuits before probeIssueState');
+    try { fs.rmSync(sentinel538, { force: true }); } catch (_) {}
+  }
+
   // Restore the hermetic HOME to the default-install shape so subsequent test blocks see adaptive-only.
   setHomeInstalled([]);
   fs.rmSync(repo538, { recursive: true, force: true });

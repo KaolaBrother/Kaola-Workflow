@@ -454,6 +454,144 @@ try {
 } finally { try { fs.rmSync(repo17, { recursive: true, force: true }); } catch (_) {} }
 
 // ---------------------------------------------------------------------------
+// T18 (#550): resolveChainRetry unit — env override, default 2, invalid/sub-1 fallback.
+// ---------------------------------------------------------------------------
+{
+  const { resolveChainRetry } = require('./kaola-workflow-run-chains.js');
+  assert(resolveChainRetry({}) === 2, 'T18: unset env returns default 2');
+  assert(resolveChainRetry({ KAOLA_RUN_CHAINS_RETRY: '3' }) === 3, 'T18: valid override 3 respected');
+  assert(resolveChainRetry({ KAOLA_RUN_CHAINS_RETRY: '1' }) === 1, 'T18: "1" (no retry) respected');
+  assert(resolveChainRetry({ KAOLA_RUN_CHAINS_RETRY: 'abc' }) === 2, 'T18: "abc" falls back to 2');
+  assert(resolveChainRetry({ KAOLA_RUN_CHAINS_RETRY: '0' }) === 2, 'T18: "0" (< 1) falls back to 2');
+  assert(resolveChainRetry({ KAOLA_RUN_CHAINS_RETRY: '-4' }) === 2, 'T18: "-4" falls back to 2');
+}
+
+// A counter-file mock: on attempt N it reads/increments a side-file and then behaves per `script`,
+// which is a JS expression body given (attemptNumber) and may call process.stdout/stderr.write +
+// process.exit. The counter persists across spawns so a single chain's retries see distinct N.
+function makeCounterMock(dir, name, bodyByAttempt) {
+  const p = path.join(dir, name);
+  const counterFile = p + '.count';
+  const src =
+    '#!/usr/bin/env node\n\'use strict\';\n' +
+    'const fs = require(\'fs\');\n' +
+    'const cf = ' + JSON.stringify(counterFile) + ';\n' +
+    'let n = 0; try { n = parseInt(fs.readFileSync(cf, \'utf8\'), 10) || 0; } catch (_) {}\n' +
+    'n += 1; fs.writeFileSync(cf, String(n));\n' +
+    '(' + bodyByAttempt + ')(n);\n';
+  fs.writeFileSync(p, src, { mode: 0o755 });
+  return p;
+}
+
+// ---------------------------------------------------------------------------
+// T19 (#550): TRANSIENT -> retry -> pass. A mock that emits a TLS-timeout line to stderr + exit 1 on
+// attempt 1, exit 0 on attempt 2. The chain must RETRY (attempts === 2) and come up GREEN.
+// ---------------------------------------------------------------------------
+const repo19 = makeGitRepo();
+try {
+  // attempt 1: write a known transient signature to stderr + exit 1; attempt 2+: exit 0.
+  const body = 'function(n){ if (n === 1) { process.stderr.write("error: TLS handshake timeout talking to api\\n"); process.exit(1); } process.exit(0); }';
+  const mock19 = makeCounterMock(repo19, 'transient.js', body);
+  const r19 = run(repo19, [
+    '--chains', 'claude',
+    '--mock-chain', 'claude:' + mock19,
+  ], null, { KAOLA_RUN_CHAINS_CONCURRENCY: 'serial', KAOLA_RUN_CHAINS_RETRY: '2' });
+  assert(r19.exitCode === 0, 'T19: transient-then-pass chain comes up GREEN after retry (exit 0)');
+  const rc19 = r19.receipt;
+  assert(rc19 !== null, 'T19: receipt written');
+  if (rc19 !== null) {
+    const ch = rc19.chains[0];
+    assert(ch.exitCode === 0, 'T19: receipt records the FINAL (green) exitCode 0');
+    assert(ch.attempts === 2, 'T19: attempts === 2 (one transient retry); got ' + ch.attempts);
+    assert(ch.retried_transient === true, 'T19: retried_transient === true');
+  }
+} finally {
+  try { fs.rmSync(repo19, { recursive: true, force: true }); } catch (_) {}
+}
+
+// ---------------------------------------------------------------------------
+// T20 (#550): DETERMINATE -> NO retry -> stays RED. A mock that exits 1 with a PLAIN assertion
+// message (NO infra signature) must run EXACTLY ONCE (attempts === 1) and stay red — precedence #1:
+// retry must never flip a determinate red to green.
+// ---------------------------------------------------------------------------
+const repo20 = makeGitRepo();
+try {
+  // Every attempt: a plain test-assertion failure, no transient-infra signature anywhere.
+  const body = 'function(n){ process.stderr.write("AssertionError: expected 1 to equal 2\\n"); process.exit(1); }';
+  const mock20 = makeCounterMock(repo20, 'determinate.js', body);
+  const r20 = run(repo20, [
+    '--chains', 'codex',
+    '--mock-chain', 'codex:' + mock20,
+  ], null, { KAOLA_RUN_CHAINS_CONCURRENCY: 'serial', KAOLA_RUN_CHAINS_RETRY: '2' });
+  assert(r20.exitCode !== 0, 'T20: determinate-red chain stays RED (non-zero exit)');
+  const rc20 = r20.receipt;
+  assert(rc20 !== null, 'T20: receipt written even on determinate red');
+  if (rc20 !== null) {
+    const ch = rc20.chains[0];
+    assert(ch.exitCode === 1, 'T20: receipt records exit 1 (still red)');
+    assert(ch.attempts === 1, 'T20: attempts === 1 — a determinate red is NEVER retried; got ' + ch.attempts);
+    assert(ch.retried_transient === false, 'T20: retried_transient === false (no transient signature)');
+  }
+} finally {
+  try { fs.rmSync(repo20, { recursive: true, force: true }); } catch (_) {}
+}
+
+// ---------------------------------------------------------------------------
+// T21 (#550): TIMEOUT is non-retryable. A mock that HANGS (never exits) is killed by the per-chain
+// timeout (tiny override). The killed result has NO transient stdout signature and _timedOut===true,
+// so it must run EXACTLY ONCE (attempts === 1) and stay red — a 12-min hang re-run is not worth it.
+// ---------------------------------------------------------------------------
+const repo21 = makeGitRepo();
+try {
+  // Hang forever (keep the event loop alive); the per-chain timeout kills it.
+  const hangMock = path.join(repo21, 'hang.js');
+  fs.writeFileSync(hangMock,
+    '#!/usr/bin/env node\n\'use strict\';\nsetInterval(function(){}, 1000);\n',
+    { mode: 0o755 });
+  const r21 = run(repo21, [
+    '--chains', 'gitlab',
+    '--mock-chain', 'gitlab:' + hangMock,
+  ], null, { KAOLA_RUN_CHAINS_CONCURRENCY: 'serial', KAOLA_RUN_CHAINS_RETRY: '2', KAOLA_RUN_CHAINS_TIMEOUT_MS: '600' });
+  assert(r21.exitCode !== 0, 'T21: a timed-out chain stays RED (non-zero exit)');
+  const rc21 = r21.receipt;
+  assert(rc21 !== null, 'T21: receipt written on timeout');
+  if (rc21 !== null) {
+    const ch = rc21.chains[0];
+    assert(ch.attempts === 1, 'T21: a timeout is non-retryable — attempts === 1; got ' + ch.attempts);
+    assert(ch.retried_transient === false, 'T21: retried_transient === false on a timeout');
+  }
+} finally {
+  try { fs.rmSync(repo21, { recursive: true, force: true }); } catch (_) {}
+}
+
+// ---------------------------------------------------------------------------
+// T22 (#550): retry is PER-SPEC under CONCURRENCY — a transient on one chain re-runs ONLY that chain.
+// codex flaps once (transient -> pass); claude passes first try. Both end green; codex attempts===2,
+// claude attempts===1.
+// ---------------------------------------------------------------------------
+const repo22 = makeGitRepo();
+try {
+  const passMock = makeExitScript(repo22, 'pass.js', 0);
+  const flapBody = 'function(n){ if (n === 1) { process.stderr.write("ECONNRESET reading from upstream\\n"); process.exit(1); } process.exit(0); }';
+  const flapMock = makeCounterMock(repo22, 'flap.js', flapBody);
+  const r22 = run(repo22, [
+    '--chains', 'claude,codex',
+    '--mock-chain', 'claude:' + passMock,
+    '--mock-chain', 'codex:' + flapMock,
+  ], null, { KAOLA_RUN_CHAINS_CONCURRENCY: '2', KAOLA_RUN_CHAINS_RETRY: '2' });
+  assert(r22.exitCode === 0, 'T22: both chains green after codex retry (exit 0)');
+  const rc22 = r22.receipt;
+  if (rc22 && rc22.chains) {
+    const claude = rc22.chains.find(x => x.name === 'claude');
+    const codex = rc22.chains.find(x => x.name === 'codex');
+    assert(claude && claude.attempts === 1 && claude.retried_transient === false, 'T22: claude ran once (no retry)');
+    assert(codex && codex.exitCode === 0 && codex.attempts === 2 && codex.retried_transient === true, 'T22: codex retried once under concurrency and went green');
+  }
+} finally {
+  try { fs.rmSync(repo22, { recursive: true, force: true }); } catch (_) {}
+}
+
+// ---------------------------------------------------------------------------
 // Final result
 // ---------------------------------------------------------------------------
 if (failed > 0) {
