@@ -223,3 +223,24 @@ serial-degrade `cwd_unenforceable`; `opening` crash-safe marker; `running-set` s
 ### 5. All done
 
 When `allDone: true`, run chains then proceed to `/kaola-workflow-finalize {project}`.
+
+#### Validation De-Duplication
+
+Avoid redundant validation runs.
+
+- During the run, each node validates only its affected task scope, not the full
+  project, unless the node plan explicitly requires a full command or the touched
+  surface is high risk.
+- If a node's recorded check already passed against the same relevant file set and no
+  relevant files changed afterward, cite the prior node evidence path
+  (`.cache/{node-id}.md`) instead of rerunning it.
+- After any routed fix or Trivial Inline Edit Exception edit, rerun only the affected
+  node command unless the fix changes shared infrastructure.
+- Run the full chains once here at All-done, not per node; that is the single
+  full-suite pass before Finalization.
+- **State the actual reuse boundary, not a false absolute (#324 AC3).** When you cite a
+  prior node run instead of rerunning, record WHICH node/state that run covered and that
+  any later edits are outside it. Do NOT write a terminal absolute like `No files changed
+  after those runs` when a node afterward changes relevant files — say e.g. `validation
+  reuse covers code/test impact through node nN; the later edit is docs-only and outside
+  the rerun trigger`.

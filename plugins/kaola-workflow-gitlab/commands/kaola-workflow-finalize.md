@@ -222,8 +222,8 @@ Avoid redundant validation runs.
 
 - Finalization runs each full relevant final command once against the final candidate
   state.
-- Do not rerun Phase 4 or Phase 5 targeted commands separately when the Finalization
-  full command already covers them.
+- Do not rerun the targeted per-node validation commands recorded in
+  `.cache/{node-id}.md` separately when the Finalization full command already covers them.
 - If a Finalization command already passed after the last relevant file change, cite
   its evidence path instead of rerunning it.
 - After a routed fix or Trivial Inline Edit Exception edit, rerun the failed or
