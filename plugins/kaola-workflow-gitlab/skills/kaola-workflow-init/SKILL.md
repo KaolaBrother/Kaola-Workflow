@@ -133,6 +133,29 @@ upgrade force-refreshes the hooks — you never need to re-init a repo just to u
 Trust the hooks once with `/hooks` in Codex. If an older project-local `.codex/hooks.json`
 exists from a prior version, remove it (or run `uninstall.sh`) to avoid double-firing.
 
+### Install-time path opt-ins (`--with-fast` / `--with-full`)
+
+The adaptive path is the unconditional default and is **always** installed; there
+is no per-session switch. The fast and full six-phase paths are install-time
+opt-ins, passed to the same `install-codex-agent-profiles.js` step above:
+
+```bash
+node "$plugin_root/scripts/install-codex-agent-profiles.js" "$PWD" --with-fast   # also install the fast path
+node "$plugin_root/scripts/install-codex-agent-profiles.js" "$PWD" --with-full   # also install the full six-phase path
+node "$plugin_root/scripts/install-codex-agent-profiles.js" "$PWD" --with-fast --with-full  # both opt-ins
+```
+
+The opt-in is recorded in the shared `~/.config/kaola-workflow/config.json`
+`installed_paths` field via a UNION read-modify-write: a re-install **never
+removes** a previously-installed path (`--with-fast` once, then a bare re-install,
+preserves `fast`). Adaptive is implicit-always and never appears in
+`installed_paths`; only `fast`/`full` can. Uninstall then reinstall is the reset to
+adaptive-only. `--enable-adaptive` is retired and accepted-but-ignored.
+
+At runtime, a `KAOLA_PATH` (or `--workflow-path`) naming a path that is not
+installed returns a typed `path_not_installed` refusal — never a silent adaptive
+substitution.
+
 6. Create only missing scaffold files:
 
 ```text
