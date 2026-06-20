@@ -1,0 +1,36 @@
+{
+  "source_plan_hash": "10519c675c7461516637cadac46e42a636ca1f1342c751085ec83422c28b6c38",
+  "tasks": [
+    {
+      "id": "n1-planner",
+      "role": "planner",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n2-tdd-guide",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n3-implementer",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n4-code-reviewer",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n5-finalize",
+      "role": "finalize",
+      "status": "completed",
+      "ledger_status": "complete"
+    }
+  ],
+  "last_synced_from_ledger": "2026-06-20T07:44:57.679Z"
+}

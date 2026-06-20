@@ -1,0 +1,10 @@
+{"node":"n1-planner","event":"opened","ts":"2026-06-20T06:08:21.696Z"}
+{"node":"n1-planner","event":"closed","ts":"2026-06-20T06:19:12.456Z"}
+{"node":"n2-tdd-guide","event":"opened","ts":"2026-06-20T06:19:12.509Z"}
+{"node":"n2-tdd-guide","event":"closed","ts":"2026-06-20T07:07:23.820Z"}
+{"node":"n3-implementer","event":"opened","ts":"2026-06-20T07:07:23.873Z"}
+{"node":"n3-implementer","event":"closed","ts":"2026-06-20T07:13:32.707Z"}
+{"node":"n4-code-reviewer","event":"opened","ts":"2026-06-20T07:13:32.754Z"}
+{"node":"n4-code-reviewer","event":"closed","ts":"2026-06-20T07:42:50.771Z"}
+{"node":"n5-finalize","event":"opened","ts":"2026-06-20T07:42:50.853Z"}
+{"node":"n5-finalize","event":"closed","ts":"2026-06-20T07:44:57.599Z"}
