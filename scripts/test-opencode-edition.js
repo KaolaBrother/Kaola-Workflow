@@ -415,6 +415,12 @@ for (const target of emittedCommandTargets) {
   // generated opencode command (3 dangling inline mentions at L72/L159/L464 before #540).
   assert(!wfNext.includes('Step 0a-1'),
     'A22: workflow-next has NO stale "Step 0a-1" inline references (post-#538 the step no longer exists; parentheticals stripped at generation, #540)');
+  // A23 (#2): the claim dispatch flag must stamp the opencode runtime into workflow-state.md,
+  // so the canonical "--runtime claude" is rewritten to "--runtime opencode" at generation time.
+  assert(wfNext.includes('--runtime opencode'),
+    'A23: workflow-next emits "--runtime opencode" (claim stamps the opencode runtime label, #2)');
+  assert(!wfNext.includes('--runtime claude'),
+    'A23: workflow-next has NO "--runtime claude" (rewritten to opencode at generation, #2)');
 
   const adapt = read('.opencode/command/kaola-workflow-adapt.md');
   assert(!adapt.includes('downgrade to full path'),

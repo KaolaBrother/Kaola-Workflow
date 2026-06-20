@@ -243,7 +243,7 @@ if [ -f "$CLAIM_JS" ]; then
   KAOLA_TARGET_FLAG=""
   [ -n "${KAOLA_TARGET_ISSUE:-}" ] && KAOLA_TARGET_FLAG="--target-issue $KAOLA_TARGET_ISSUE"
   STARTUP_OUT=$(node "$CLAIM_JS" startup \
-    --runtime claude \
+    --runtime opencode \
     $KAOLA_SINK_FLAG \
     $KAOLA_TARGET_FLAG 2>/dev/null) || true
   KAOLA_WORKTREE_PATH="$(node -e "try{process.stdout.write(JSON.parse(process.argv[1]).worktree_path||'')}catch(e){}" "$STARTUP_OUT" 2>/dev/null)" || true

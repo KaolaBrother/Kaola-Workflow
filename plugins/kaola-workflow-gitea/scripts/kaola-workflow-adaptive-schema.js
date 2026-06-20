@@ -507,6 +507,9 @@ const FANOUT_CAP_READONLY_ENV = 'KAOLA_FANOUT_CAP_READONLY';
 // may differ — keep it unset there until proven).
 const LANE_CONTAINMENT_ENV = 'KAOLA_LANE_CONTAINMENT';
 
+// #542: the env name for the parallel-writes DEFAULT-ON opt-OUT. See parallelWritesDefaultOn.
+const PARALLEL_WRITES_ENV = 'KAOLA_PARALLEL_WRITES';
+
 // Resolve the installed opt-in paths from config. Adaptive is implicit-always and is NEVER in this
 // array (legality short-circuits adaptive in isLegalWorkflowPath). No env override: the per-session
 // KAOLA_ENABLE_ADAPTIVE switch is retired (#538) — "installed" is an install-time fact, not a per-run
@@ -540,6 +543,21 @@ function resolveFanoutCapReadonly(env) {
 function resolveLaneContainment(env) {
   const raw = (env || {})[LANE_CONTAINMENT_ENV];
   return raw === '1' || raw === 'true' || raw === 'yes';
+}
+
+// #542: parallel-writes-default-ON. The workflow's design principle (D-542-01): when the PLANNER
+// proves a write frontier is a disjoint antichain (`parallel_safe`), the executor opens ISOLATED
+// per-leg worktrees and writes them CONCURRENTLY — by DEFAULT, with no operator toggle. The per-leg
+// worktree isolation (containment) + the mandatory post-dominating `synthesizer` reconcile are the
+// correctness net, so the workflow must NOT downgrade a planner-proven-disjoint frontier to serial
+// out of caution. This predicate drives `legCoupled` in the co-open / leg-provisioning gates.
+// Default TRUE; an operator forces serial writes with KAOLA_PARALLEL_WRITES=0|false|no. Genuinely
+// OVERLAPPING (non-disjoint) writes are NOT affected here — they still require an explicit
+// --write-overlap-consent + a leg-scoped code-reviewer gate (the validator's relaxation path).
+function parallelWritesDefaultOn(env) {
+  const raw = (env || {})[PARALLEL_WRITES_ENV];
+  if (raw === '0' || raw === 'false' || raw === 'no') return false;
+  return true;
 }
 
 // #353: crash-safe durable-state write — tmp + fsync + atomic rename, so a crash mid-write can
@@ -730,10 +748,12 @@ module.exports = {
   FANOUT_CAP_ENV,
   FANOUT_CAP_READONLY_ENV,
   LANE_CONTAINMENT_ENV,
+  PARALLEL_WRITES_ENV,
   resolveInstalledPaths,
   resolveFanoutCap,
   resolveFanoutCapReadonly,
   resolveLaneContainment,
+  parallelWritesDefaultOn,
   writeFileAtomicReplace,
   locateSection,
   spliceComplianceSection,

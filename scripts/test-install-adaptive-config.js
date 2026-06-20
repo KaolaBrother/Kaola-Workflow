@@ -27,6 +27,14 @@ function runUninstall(home, extraArgs) {
     cwd: root, env: { ...process.env, HOME: home }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
   });
 }
+// #2: the opencode installer seeds the SAME shared ~/.config/kaola-workflow/config.json the
+// github install writes (parallel_mode default-ON parity). Deploy into a throwaway target dir
+// (--no-scripts skips the manifest-driven support-script copy that needs node round-trips).
+function runOpencodeInstall(home, target) {
+  return execFileSync('bash', ['install-opencode.sh', '--yes', '--no-scripts', '--target', target], {
+    cwd: root, env: { ...process.env, HOME: home }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
+  });
+}
 function configPath(home) { return path.join(home, '.config', 'kaola-workflow', 'config.json'); }
 function readConfig(home) { return JSON.parse(fs.readFileSync(configPath(home), 'utf8')); }
 function commandsDir(home) { return path.join(home, '.claude', 'commands'); }
@@ -163,6 +171,23 @@ try {
     const manifestPath = path.join(h, '.claude', 'agents', '.kaola-agent-models.json');
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
     assert(manifest['contractor'] === 'sonnet', 'install ' + JSON.stringify(args) + ' must map contractor->sonnet; got ' + manifest['contractor']);
+  }
+
+  // #2: opencode install-time parity — install-opencode.sh seeds the shared
+  // ~/.config/kaola-workflow/config.json with parallel_mode:'auto' (default-ON parallelism),
+  // mirroring the github AC1 assertion. opencode is adaptive-only (no fast/full opt-ins), so
+  // installed_paths is []. This locks the opencode seed against drift from the github install.
+  {
+    const home = freshHome('opencode-parallel'); homes.push(home);
+    const target = freshHome('opencode-target'); homes.push(target);
+    runOpencodeInstall(home, target);
+    const cfg = readConfig(home);
+    assert(cfg.parallel_mode === 'auto',
+      'OPENCODE: install-opencode.sh must write parallel_mode:auto, got ' + JSON.stringify(cfg));
+    assert(Array.isArray(cfg.installed_paths) && cfg.installed_paths.length === 0,
+      'OPENCODE: install-opencode.sh must write installed_paths:[] (adaptive-only), got ' + JSON.stringify(cfg));
+    assert(!('enable_adaptive' in cfg),
+      'OPENCODE: install-opencode.sh must NOT write enable_adaptive field, got ' + JSON.stringify(cfg));
   }
 
   console.log('Install adaptive-config tests passed');

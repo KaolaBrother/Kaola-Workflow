@@ -1606,6 +1606,22 @@ function spyMirrorShell(planPath, failMirror) {
 }
 
 // ---------------------------------------------------------------------------
+// #542 parallelWritesDefaultOn resolver unit: DEFAULT-ON opt-OUT (the INVERSE
+// of #376's fail-closed default). Planner-proven-disjoint write frontiers co-open
+// as isolated parallel legs BY DEFAULT (D-542-01); only '0'/'false'/'no' force serial.
+// NOTE: distinct from resolveLaneContainment — that default did NOT move (stays FALSE).
+// ---------------------------------------------------------------------------
+{
+  const { parallelWritesDefaultOn } = require('./kaola-workflow-adaptive-schema');
+  assert(parallelWritesDefaultOn({}) === true, '#542: default TRUE (no env)');
+  assert(parallelWritesDefaultOn({ KAOLA_PARALLEL_WRITES: '0' }) === false, '#542: false on "0"');
+  assert(parallelWritesDefaultOn({ KAOLA_PARALLEL_WRITES: 'false' }) === false, '#542: false on "false"');
+  assert(parallelWritesDefaultOn({ KAOLA_PARALLEL_WRITES: 'no' }) === false, '#542: false on "no"');
+  assert(parallelWritesDefaultOn({ KAOLA_PARALLEL_WRITES: '1' }) === true, '#542: true on "1"');
+  assert(parallelWritesDefaultOn({ KAOLA_PARALLEL_WRITES: 'anything' }) === true, '#542: true on junk (opt-OUT only on explicit off-token)');
+}
+
+// ---------------------------------------------------------------------------
 // #377: crossCheckStatus re-keys to the per-node running-set.json.
 //   - in_progress matches running-set node ids → valid_running_set (not orphan)
 //   - a crashed 'opening' running set → reconcilable (not orphan)

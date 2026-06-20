@@ -39,8 +39,8 @@ Before opening a batch, check the orient output:
 |---|---|
 | `enterBatch: true` | The frontier is batch-eligible |
 | `batchNodes` | The sibling node-ids that form this batch |
-| `degraded: false` | Lane containment is ON; parallel dispatch is safe |
-| `degraded: true` | Lane containment is OFF; use serial fallback (§4) |
+| `degraded: false` | Disjoint co-open in isolated legs — the DEFAULT; parallel dispatch is safe |
+| `degraded: true` | Non-disjoint / host-limited / opt-out (`KAOLA_PARALLEL_WRITES=0`); use serial fallback (§4) |
 
 ---
 
@@ -64,15 +64,19 @@ its node-id and write-set; they run in parallel within their declared lane.
 
 ## 4. Serial fallback when `degraded: true`
 
-When `open-batch` returns `degraded: true`, lane containment is OFF (write-role frontiers always
-degrade per the schema). In this case, fall back to serial execution:
+Disjoint (`parallel_safe`) write co-open in isolated legs is the DEFAULT (#542, D-542-01) — no
+operator toggle. `open-batch` returns `degraded: true` only when isolated parallel legs cannot be
+provisioned: a NON-DISJOINT (overlapping/`write_overlap_policy: coarse` without consent) frontier,
+a host WITHOUT worktree support, or an explicit `KAOLA_PARALLEL_WRITES=0` opt-out. In those cases,
+fall back to serial execution:
 
 1. Do NOT proceed with parallel dispatch.
 2. Use `open-next` to open one sibling at a time (normal per-node lifecycle).
 3. Advance through the frontier sequentially, one node per `close-and-open-next` cycle.
 
-`degraded: true` is not an error — it is the scheduler's intentional safe mode for situations
-where parallel lane isolation cannot be guaranteed.
+`degraded: true` is not an error — it is the scheduler's intentional safe mode for the bounded set
+of cases above where isolated parallel legs cannot be provisioned. The common case (a disjoint write
+frontier on a worktree-capable host) co-opens in parallel legs and never degrades.
 
 ---
 
@@ -166,19 +170,20 @@ to the parent worktree, which must be caught before the join contaminates shared
 
 | Condition | Approach |
 |---|---|
-| Disjoint write sets + lane containment ON | Parallel batch (`open-batch` → dispatch → `seal-member` → `seal`) |
-| Write-role frontier | Serial degrade (`degraded: true` → `open-next` per node) |
-| Overlapping or unknown write sets | Serial (treat as write-role frontier) |
+| Disjoint (`parallel_safe`) write sets, worktree-capable host | Parallel batch in isolated legs — the DEFAULT (`open-batch` → dispatch → `seal-member` → `seal`) |
+| Overlapping / non-disjoint write sets without `--write-overlap-consent` | Serial degrade (`degraded: true` → `open-next` per node) |
+| Host without worktree support, or `KAOLA_PARALLEL_WRITES=0` opt-out | Serial degrade (`degraded: true` → `open-next` per node) |
 | `depends-on-member` relationship | Serial within the dependency chain; parallel across independent chains |
 
 **Dispatch fidelity (#472): run the frontier at its AUTHORED width.** When the planner authored an
 independent ≥2 frontier (`enterBatch: true`), dispatch it concurrently — that is the default, not an
-optional optimization. The serial fallback is for the *degraded* cases only (write-role frontiers
-without lane containment, overlapping/unknown write sets, a dependency chain — the rows above), NOT a
-"when in doubt, serialize" default: silently serializing an authored-parallel read frontier is the
-dispatch-fidelity defect #472 fixes. Width itself stays the planner's scope-driven call (a width-1
-frontier simply never sets `enterBatch`); the executor's job is to run whatever width was authored, no
-wider and no narrower.
+optional optimization, and for a disjoint (`parallel_safe`) write frontier the isolated parallel legs
+ARE the default too (#542, D-542-01). The serial fallback is for the *degraded* cases only (overlapping/
+non-disjoint write sets without consent, a host without worktree support or `KAOLA_PARALLEL_WRITES=0`
+opt-out, a dependency chain — the rows above), NOT a "when in doubt, serialize" default: silently
+serializing an authored-parallel frontier is the dispatch-fidelity defect #472 fixes. Width itself
+stays the planner's scope-driven call (a width-1 frontier simply never sets `enterBatch`); the
+executor's job is to run whatever width was authored, no wider and no narrower.
 
 ---
 
@@ -187,9 +192,9 @@ wider and no narrower.
 ```
 enterBatch: true
   |
-  +-- degraded: true -----> serial fallback: open-next per node
+  +-- degraded: true -----> serial fallback (non-disjoint / host-limited / KAOLA_PARALLEL_WRITES=0): open-next per node
   |
-  +-- degraded: false ----> open-batch
+  +-- degraded: false ----> open-batch  (disjoint co-open in isolated legs — the DEFAULT)
         |
         dispatch siblings concurrently (one per lane)
         |

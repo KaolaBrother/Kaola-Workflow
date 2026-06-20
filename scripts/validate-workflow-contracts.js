@@ -323,6 +323,10 @@ assertIncludes('hooks/hooks.json', 'kaola-workflow:write-lane');
 assertIncludes('hooks/kaola-workflow-write-lane.sh', 'KAOLA_LANE_CONTAINMENT');
 assertIncludes('hooks/kaola-workflow-write-lane.sh', 'running-set.json');
 assertIncludes('scripts/kaola-workflow-adaptive-schema.js', 'function resolveLaneContainment');
+// #542: pin the parallel-writes DEFAULT-ON opt-OUT resolver so a future edit cannot silently drop
+// the seam that lets planner-proven-disjoint write frontiers co-open as isolated legs by default
+// (D-542-01). Distinct from resolveLaneContainment (which stays fail-closed FALSE).
+assertIncludes('scripts/kaola-workflow-adaptive-schema.js', 'function parallelWritesDefaultOn');
 // #463 Slice 6 (AC11): token-pin the three write-overlap governance anchors so a future edit cannot
 // silently drop the synthesizer reasoning floor, the policy field, or the PROTECTED set.
 assertIncludes('scripts/kaola-workflow-resolve-agent-model.js', 'REASONING_FLOOR_ROLES');

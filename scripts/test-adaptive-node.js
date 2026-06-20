@@ -83,6 +83,23 @@ function assert(condition, message) {
   }
 }
 
+// #542 (D-542-01): in-process unit calls (runOpenReady / runCloseNode) read
+// parallelWritesDefaultOn(process.env) directly. Co-open is DEFAULT-ON; the only deterministic
+// serial-single-open path is KAOLA_PARALLEL_WRITES=0. This helper forces that env around an
+// in-process call and always restores the prior value (subprocess runNode tests pass the env
+// through extraEnv instead).
+function withParallelWrites(value, fn) {
+  const saved = process.env.KAOLA_PARALLEL_WRITES;
+  if (value === undefined) delete process.env.KAOLA_PARALLEL_WRITES;
+  else process.env.KAOLA_PARALLEL_WRITES = value;
+  try {
+    return fn();
+  } finally {
+    if (saved === undefined) delete process.env.KAOLA_PARALLEL_WRITES;
+    else process.env.KAOLA_PARALLEL_WRITES = saved;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Helpers: plan builders
 // ---------------------------------------------------------------------------
@@ -3210,7 +3227,10 @@ function rsHarness(initialFiles, shellStub, validatorStub) {
 }
 
 // ---------------------------------------------------------------------------
-// R2: open-ready — a WRITE node opens ALONE (serial fallback, containment off).
+// R2: open-ready — a WRITE node opens ALONE only on the explicit serial path
+//   (#542 default-on: KAOLA_PARALLEL_WRITES=0 forces the serial-degrade fallback;
+//   the mock shell here returns no group descriptor so the co-open branch can't form,
+//   so this asserts the serial single-open shape under the forced-serial env).
 // ---------------------------------------------------------------------------
 {
   const plan = makePlan([
@@ -3230,9 +3250,12 @@ function rsHarness(initialFiles, shellStub, validatorStub) {
     if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok' };
     return { exitCode: 1, result: 'refuse' };
   });
-  const r = runOpenReady({ planPath: RS_PLAN_PATH, project: 'p', max: null, fanoutCapReadonly: 8, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, mkdirp: h.mkdirp });
+  // #542 default-on: the only deterministic serial-single-open path is KAOLA_PARALLEL_WRITES=0.
+  // runOpenReady reads parallelWritesDefaultOn(process.env) directly (in-process unit call), so we
+  // force the serial env around the call and restore it.
+  const r = withParallelWrites('0', () => runOpenReady({ planPath: RS_PLAN_PATH, project: 'p', max: null, fanoutCapReadonly: 8, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, mkdirp: h.mkdirp }));
   assert(r.result === 'ok' && r.kind === 'write', 'R2: ok + kind=write');
-  assert(r.opened.length === 1 && r.opened[0].id === 'w1', 'R2: exactly ONE write node opened (serial), got ' + JSON.stringify(r.opened.map(o=>o.id)));
+  assert(r.opened.length === 1 && r.opened[0].id === 'w1', 'R2: exactly ONE write node opened (serial, KAOLA_PARALLEL_WRITES=0), got ' + JSON.stringify(r.opened.map(o=>o.id)));
   assert(h.files[RS_PLAN_PATH].includes('| w1 | in_progress | |') && h.files[RS_PLAN_PATH].includes('| w2 | pending | |'), 'R2: w2 stays pending');
 }
 
@@ -5206,6 +5229,12 @@ function rtHarness(initialFiles, opts) {
   function cleanup(root) { try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) {} }
   const ON = { KAOLA_LANE_CONTAINMENT: '1' };
   const OFF = { KAOLA_LANE_CONTAINMENT: '0' };
+  // #542 (D-542-01): co-open for planner-proven-disjoint write frontiers is DEFAULT-ON — no operator
+  // toggle. The retired KAOLA_LANE_CONTAINMENT / KAOLA_LEG_ISOLATION toggles no longer suppress co-open.
+  // The ONLY serial-degrade path is the explicit kill-switch KAOLA_PARALLEL_WRITES=0. DEFAULT is the
+  // bare env (co-open). SERIAL forces the single-write serial fallback.
+  const SERIAL = { KAOLA_PARALLEL_WRITES: '0' };
+  const DEFAULT = {}; // bare env ⇒ default-on co-open
 
   // -------------------------------------------------------------------------
   // RETIRED for #498: D437-OPEN-READY-GROUP asserted ON-alone (KAOLA_LANE_CONTAINMENT only) FORMS a lane
@@ -5230,62 +5259,91 @@ function rtHarness(initialFiles, opts) {
   }
 
   // -------------------------------------------------------------------------
-  // D437-OPEN-READY-FLAG-OFF: flag OFF, two write nodes → exact same single-serial write_node path as
-  //   today; NO lane_group, NO laneGroup descriptor. Opens exactly ONE write node.
+  // D437-OPEN-READY-SERIAL (#542 kill-switch): KAOLA_PARALLEL_WRITES=0 forces the single-serial
+  //   write_node path — NO lane_group, NO laneGroup descriptor. Opens exactly ONE write node; the
+  //   other stays pending. (This was the OLD default-OFF behavior; after #542 it is reachable ONLY by
+  //   the explicit kill-switch, since co-open is default-on.)
   // -------------------------------------------------------------------------
   {
     const { repoRoot, cacheDir, planPath } = makeLaneRepo();
-    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], OFF);
-    assert(r.result === 'ok', 'D437-OPEN-READY-FLAG-OFF: open-ready ok, got ' + JSON.stringify(r));
-    assert(!r.laneGroup, 'D437-OPEN-READY-FLAG-OFF: NO laneGroup descriptor flag-OFF');
-    assert(Array.isArray(r.opened) && r.opened.length === 1, 'D437-OPEN-READY-FLAG-OFF: exactly ONE write opened (serial), got ' + JSON.stringify(r.opened && r.opened.map(n => n.id)));
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], SERIAL);
+    assert(r.result === 'ok', 'D437-OPEN-READY-SERIAL: open-ready ok, got ' + JSON.stringify(r));
+    assert(!r.laneGroup, 'D437-OPEN-READY-SERIAL: NO laneGroup descriptor under KAOLA_PARALLEL_WRITES=0');
+    assert(Array.isArray(r.opened) && r.opened.length === 1, 'D437-OPEN-READY-SERIAL: exactly ONE write opened (serial), got ' + JSON.stringify(r.opened && r.opened.map(n => n.id)));
     const rs = readRS(cacheDir);
-    assert(!rs || !rs.lane_group, 'D437-OPEN-READY-FLAG-OFF: running-set has no lane_group key');
+    assert(!rs || !rs.lane_group, 'D437-OPEN-READY-SERIAL: running-set has no lane_group key');
     // The single opened node is in_progress; the other write stays pending (serial).
     const openedId = r.opened[0].id;
-    assert(ledgerStatus(planPath, openedId) === 'in_progress', 'D437-OPEN-READY-FLAG-OFF: the one opened write is in_progress');
+    assert(ledgerStatus(planPath, openedId) === 'in_progress', 'D437-OPEN-READY-SERIAL: the one opened write is in_progress');
     cleanup(repoRoot);
   }
 
   // -------------------------------------------------------------------------
-  // #498-COOPEN-REQUIRES-LEGS (regression guard, open-side): write co-open must engage on the FULL
-  //   leg-coupled conjunction (KAOLA_LANE_CONTAINMENT AND KAOLA_LEG_ISOLATION AND --write-overlap-consent),
-  //   NOT on containment alone. With containment-only (or leg-isolation but NO consent), co-open MUST
-  //   serial-degrade to ONE write node with NO lane_group — otherwise the close path falls to the
-  //   attribution-blind snapshot UNION barrier (`:4429`, liveLegs===null) which passes a cross-member
-  //   overwrite (a path written by the WRONG member is still in the union). Gating co-open on the SAME
-  //   conjunction that provisions legs makes co-open ⟺ legs ⟺ the safe (fence + commit-based) close path,
-  //   so the legless snapshot union barrier is never reached via co-open. Both off-combos are asserted:
-  //   the legIso-only-no-consent case is exactly what a "gate on leg-isolation only" half-fix would miss.
-  //   (RED-provable against the unpatched gate: ON-alone formed a group → these blocks fail.)
+  // D437-OPEN-READY-DEFAULT-COOPEN (#542 default-on): with NO env (bare default), a ≥2 disjoint write
+  //   frontier CO-OPENS as a lane group AND provisions legs — no operator toggle required. This is the
+  //   inversion of the old default-OFF assertion above. Disjoint declared sets (ax.js / by.js) need NO
+  //   --write-overlap-consent (the validator short-circuits green before the overlap-relax check).
   // -------------------------------------------------------------------------
   {
-    const offCombos = [
-      { label: 'containment-only (no leg-isolation, no consent)', env: ON, args: ['open-ready', '--project', 'test-project', '--json'] },
-      { label: 'leg-isolation but NO consent', env: { KAOLA_LANE_CONTAINMENT: '1', KAOLA_LEG_ISOLATION: '1' }, args: ['open-ready', '--project', 'test-project', '--json'] },
+    const { repoRoot, cacheDir, planPath } = makeLaneRepo();
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
+    assert(r.result === 'ok', 'D437-OPEN-READY-DEFAULT-COOPEN: open-ready ok, got ' + JSON.stringify(r));
+    assert(r.laneGroup && Array.isArray(r.laneGroup.members) && r.laneGroup.members.includes('A') && r.laneGroup.members.includes('B'),
+      'D437-OPEN-READY-DEFAULT-COOPEN: bare-default co-opens a lane group [A,B], got ' + JSON.stringify(r.laneGroup));
+    assert(Array.isArray(r.opened) && r.opened.length === 2, 'D437-OPEN-READY-DEFAULT-COOPEN: >=2 writes co-opened, got ' + JSON.stringify(r.opened && r.opened.map(n => n.id)));
+    const rs = readRS(cacheDir);
+    // #498 regression guard (co-open ⟹ legs): a co-opened lane group MUST carry a per-member legs
+    // manifest — never the legless attribution-blind union barrier.
+    assert(rs && rs.lane_group && rs.lane_group.legs && rs.lane_group.legs.A && rs.lane_group.legs.B,
+      'D437-OPEN-READY-DEFAULT-COOPEN: co-open ⟹ legs provisioned for every member (the safe close path), got ' + JSON.stringify(rs && rs.lane_group));
+    assert(ledgerStatus(planPath, 'A') === 'in_progress' && ledgerStatus(planPath, 'B') === 'in_progress', 'D437-OPEN-READY-DEFAULT-COOPEN: both A and B in_progress (co-opened)');
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
+  // #498-COOPEN-REQUIRES-LEGS (regression guard, open-side — #542 inverted premise): the #498
+  //   invariant is "co-open ⟹ legs" — co-open NEVER lands the legless attribution-blind snapshot UNION
+  //   barrier (`:4429`, liveLegs===null) that passes a cross-member overwrite. Under #542 (D-542-01)
+  //   co-open is DEFAULT-ON: gated on legCoupled (parallelWritesDefaultOn, default TRUE), which is the
+  //   SAME local that provisions legs (:3976). So groupForm ⟺ legCoupled ⟺ legs provisioned ⟺ the safe
+  //   (parent-clean fence + commit-based) close path. We assert the invariant DIRECTLY across every
+  //   co-open-eligible env (bare default + the legacy toggles, all of which now co-open): WHENEVER the
+  //   running-set carries a lane_group, it MUST carry lane_group.legs with one leg per member. This is
+  //   the #498 regression guard, now expressed as "co-open ⟹ legs, default-on". (RED-provable against a
+  //   regressed gate that set groupForm with legs=null → the legless union barrier → this block fails.)
+  // -------------------------------------------------------------------------
+  {
+    const coopenEnvs = [
+      { label: 'bare default (no toggle, no consent)', env: DEFAULT, args: ['open-ready', '--project', 'test-project', '--json'] },
+      { label: 'legacy containment toggle (now a no-op for co-open)', env: ON, args: ['open-ready', '--project', 'test-project', '--json'] },
+      { label: 'legacy leg-isolation toggle (now a no-op for co-open)', env: { KAOLA_LANE_CONTAINMENT: '1', KAOLA_LEG_ISOLATION: '1' }, args: ['open-ready', '--project', 'test-project', '--json'] },
     ];
-    for (const c of offCombos) {
+    for (const c of coopenEnvs) {
       const { repoRoot, cacheDir, planPath } = makeLaneRepo();
       const r = runNode(repoRoot, c.args, c.env);
       assert(r.result === 'ok', '#498-COOPEN-REQUIRES-LEGS [' + c.label + ']: open-ready ok, got ' + JSON.stringify(r));
-      assert(!r.laneGroup, '#498-COOPEN-REQUIRES-LEGS [' + c.label + ']: NO co-open without legs (serial-degrade), got ' + JSON.stringify(r.laneGroup));
-      assert(Array.isArray(r.opened) && r.opened.length === 1, '#498-COOPEN-REQUIRES-LEGS [' + c.label + ']: exactly ONE write opened (serial), got ' + JSON.stringify(r.opened && r.opened.map(n => n.id)));
+      // Default-on: a ≥2 disjoint write frontier co-opens regardless of the legacy toggles.
+      assert(r.laneGroup && Array.isArray(r.laneGroup.members) && r.laneGroup.members.includes('A') && r.laneGroup.members.includes('B'),
+        '#498-COOPEN-REQUIRES-LEGS [' + c.label + ']: bare-default co-opens [A,B] (default-on), got ' + JSON.stringify(r.laneGroup));
+      assert(Array.isArray(r.opened) && r.opened.length === 2, '#498-COOPEN-REQUIRES-LEGS [' + c.label + ']: both writes co-opened, got ' + JSON.stringify(r.opened && r.opened.map(n => n.id)));
       const rs = readRS(cacheDir);
-      assert(!rs || !rs.lane_group, '#498-COOPEN-REQUIRES-LEGS [' + c.label + ']: running-set carries NO lane_group key');
-      // The one opened write is in_progress; the other stays pending (serial — never co-opened).
-      const openedId = r.opened[0].id;
-      const otherId = openedId === 'A' ? 'B' : 'A';
-      assert(ledgerStatus(planPath, openedId) === 'in_progress', '#498-COOPEN-REQUIRES-LEGS [' + c.label + ']: the one opened write is in_progress');
-      assert(ledgerStatus(planPath, otherId) === 'pending', '#498-COOPEN-REQUIRES-LEGS [' + c.label + ']: the other write stays pending (no co-open)');
+      // ★ #498 REGRESSION GUARD (co-open ⟹ legs): whenever the running-set has a lane_group it MUST
+      //   have lane_group.legs with one leg per member — co-open is NEVER legless. This is the #498
+      //   invariant, now guarded by "co-open ⟹ legs, default-on".
+      assert(rs && rs.lane_group && rs.lane_group.legs && rs.lane_group.members.every(m => rs.lane_group.legs[m]),
+        '#498-COOPEN-REQUIRES-LEGS [' + c.label + ']: co-open is NEVER legless — lane_group.legs carries one leg per member, got ' + JSON.stringify(rs && rs.lane_group));
+      assert(ledgerStatus(planPath, 'A') === 'in_progress' && ledgerStatus(planPath, 'B') === 'in_progress', '#498-COOPEN-REQUIRES-LEGS [' + c.label + ']: both A and B in_progress (co-opened)');
       cleanup(repoRoot);
     }
   }
 
   // -------------------------------------------------------------------------
-  // #498-COOPEN-FULL-CONJUNCTION (positive): with the FULL conjunction (containment + leg-isolation +
-  //   consent) a ≥2 disjoint write frontier DOES co-open as a lane group AND provisions legs — proving
-  //   the gate is a leg-coupled conjunction, not vacuously off. (The detailed leg manifest assertions
-  //   live in LEG-PROVISION-ON below; here we assert only the co-open ⟺ legs invariant directly.)
+  // #498-COOPEN-FULL-CONJUNCTION (positive — unchanged): with the FULL explicit toggles (containment +
+  //   leg-isolation + consent) a ≥2 disjoint write frontier DOES co-open as a lane group AND provisions
+  //   legs. Under #542 (D-542-01) default-on this is now a SUPERSET case (the bare default already
+  //   co-opens — see D437-OPEN-READY-DEFAULT-COOPEN); the explicit toggles must remain a no-op overlay
+  //   that still co-opens. The positive co-open ⟺ legs invariant is asserted directly here. (The
+  //   detailed leg manifest assertions live in LEG-PROVISION-ON below.)
   // -------------------------------------------------------------------------
   {
     const LEG_ON_LOCAL = { KAOLA_LANE_CONTAINMENT: '1', KAOLA_LEG_ISOLATION: '1' };
@@ -5306,48 +5364,48 @@ function rtHarness(initialFiles, opts) {
   // RETIRED for #498: the legless (containment-only co-open) group close tests — D437-CLOSE-NODE-DEFERRED,
   // D437-CLOSE-NODE-GROUP-PASS, D437-CLOSE-NODE-VACUITY-REFUSE, D437-CLOSE-NODE-CROSS-LANE-STRAY — and the
   // ON-alone positive D437-OPEN-READY-GROUP. PREMISE NOW UNREACHABLE: after #498 co-open ⟺ legs provisioned,
-  // so a legless group is no longer a producible state via open-ready (containment-only / leg-isolation-only
-  // both serial-degrade — see #498-COOPEN-REQUIRES-LEGS). The snapshot union barrier (`:4429`,
-  // liveLegs===null) those tests exercised is now reachable only by manual running-set surgery; pinning it
-  // would test dead code on the out-of-scope plan-validator union barrier. No coverage lost:
-  //   - group OPEN under the full conjunction → LEG-PROVISION-ON / #498-COOPEN-FULL-CONJUNCTION
+  // so a legless group is no longer a producible state via open-ready (every co-open provisions legs —
+  // see #498-COOPEN-REQUIRES-LEGS). The snapshot union barrier (`:4429`, liveLegs===null) those tests
+  // exercised is now reachable only by manual running-set surgery; pinning it would test dead code on the
+  // out-of-scope plan-validator union barrier. No coverage lost:
+  //   - group OPEN (default-on) → D437-OPEN-READY-DEFAULT-COOPEN / LEG-PROVISION-ON / #498-COOPEN-FULL-CONJUNCTION
   //   - group CLOSE (deferred + group_passed via the legs-live synthesizer) → LEG-CLEAN-COMPLETION-NO-LEAK
-  //   - the SERIAL close ON-alone now degrades into → D437-CLOSE-NODE-FLAG-OFF-SERIAL (ON-alone is now
-  //     byte-equivalent to OFF on the write axis).
+  //   - the SERIAL close now lives under the explicit kill-switch → D437-CLOSE-NODE-SERIAL
+  //     (KAOLA_PARALLEL_WRITES=0 forces the single-serial write path).
 
   // -------------------------------------------------------------------------
-  // D437-CLOSE-NODE-FLAG-OFF-SERIAL: flag OFF → close-node runs the normal per-node barrier path
-  //   (no deferred/group). With a serial single open under flag OFF, closing the one node returns the
-  //   serial shape (no `barrier` field set to deferred/group).
+  // D437-CLOSE-NODE-SERIAL (#542 kill-switch): KAOLA_PARALLEL_WRITES=0 forces the single-serial open,
+  //   so close-node runs the normal per-node barrier path (no deferred/group). Closing the one node
+  //   returns the serial shape (no `barrier` field set to deferred/group).
   // -------------------------------------------------------------------------
   {
     const { repoRoot, cacheDir, planPath } = makeLaneRepo();
-    const open = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], OFF);
+    const open = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], SERIAL);
     const openedId = open.opened[0].id;
     writeEvidence(cacheDir, openedId);
     fs.writeFileSync(path.join(repoRoot, openedId === 'A' ? 'ax.js' : 'by.js'), '// serial in-lane\n');
-    const r = runNode(repoRoot, ['close-node', '--node-id', openedId, '--project', 'test-project', '--json'], OFF);
-    assert(r.result === 'ok', 'D437-CLOSE-NODE-FLAG-OFF-SERIAL: serial close ok, got ' + JSON.stringify(r));
+    const r = runNode(repoRoot, ['close-node', '--node-id', openedId, '--project', 'test-project', '--json'], SERIAL);
+    assert(r.result === 'ok', 'D437-CLOSE-NODE-SERIAL: serial close ok, got ' + JSON.stringify(r));
     assert(r.barrier !== 'deferred_to_group' && r.barrier !== 'group_passed',
-      'D437-CLOSE-NODE-FLAG-OFF-SERIAL: NO deferred/group barrier marker on the serial path, got ' + r.barrier);
-    assert(r.closed === openedId, 'D437-CLOSE-NODE-FLAG-OFF-SERIAL: serial close returns closed id');
-    assert(ledgerStatus(planPath, openedId) === 'complete', 'D437-CLOSE-NODE-FLAG-OFF-SERIAL: node complete via serial per-node barrier');
+      'D437-CLOSE-NODE-SERIAL: NO deferred/group barrier marker on the serial path, got ' + r.barrier);
+    assert(r.closed === openedId, 'D437-CLOSE-NODE-SERIAL: serial close returns closed id');
+    assert(ledgerStatus(planPath, openedId) === 'complete', 'D437-CLOSE-NODE-SERIAL: node complete via serial per-node barrier');
     cleanup(repoRoot);
   }
 
   // -------------------------------------------------------------------------
-  // D437-MUTATION-GUARD-NOT-VACUOUS: the SAME group-pass scenario WITHOUT the KAOLA_LANE_CONTAINMENT
-  //   env must NOT take the group path — it falls back to SERIAL behavior (a serial open of one write,
-  //   and a per-node serial close), proving the toggle guard is not vacuous. Concretely: open-ready
-  //   flag-OFF opens exactly ONE write (no co-open), so the second write never enters a group.
+  // D437-MUTATION-GUARD-NOT-VACUOUS (#542 kill-switch): the kill-switch is NOT vacuous —
+  //   KAOLA_PARALLEL_WRITES=0 must SUPPRESS the default-on co-open and fall back to the serial single
+  //   open (one write, no group), so the second write never enters a group. Without an effective
+  //   kill-switch this would co-open (default-on); asserting exactly-one-open proves the switch bites.
   // -------------------------------------------------------------------------
   {
     const { repoRoot, cacheDir } = makeLaneRepo();
-    const open = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], OFF);
-    assert(!open.laneGroup, 'D437-MUTATION-GUARD-NOT-VACUOUS: flag-OFF open-ready does NOT co-open a group');
-    assert(Array.isArray(open.opened) && open.opened.length === 1, 'D437-MUTATION-GUARD-NOT-VACUOUS: flag-OFF opens exactly one write (serial)');
+    const open = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], SERIAL);
+    assert(!open.laneGroup, 'D437-MUTATION-GUARD-NOT-VACUOUS: KAOLA_PARALLEL_WRITES=0 does NOT co-open a group');
+    assert(Array.isArray(open.opened) && open.opened.length === 1, 'D437-MUTATION-GUARD-NOT-VACUOUS: kill-switch opens exactly one write (serial)');
     const rs = readRS(cacheDir);
-    assert(!rs || !rs.lane_group, 'D437-MUTATION-GUARD-NOT-VACUOUS: no lane_group flag-OFF — the group path is guarded, not vacuous');
+    assert(!rs || !rs.lane_group, 'D437-MUTATION-GUARD-NOT-VACUOUS: no lane_group under the kill-switch — co-open is suppressed, not vacuous');
     cleanup(repoRoot);
   }
 
@@ -5422,29 +5480,31 @@ function rtHarness(initialFiles, opts) {
   }
 
   // -------------------------------------------------------------------------
-  // ★ LEG-FLAG-OFF-BYTE-IDENTITY (non-negotiable): legs require BOTH the toggle AND the consent flag.
-  //   Run the same repo/plan twice — (a) containment ONLY (no KAOLA_LEG_ISOLATION, no consent) and
-  //   (b) KAOLA_LEG_ISOLATION but NO --write-overlap-consent — and assert NEITHER provisions any leg:
-  //   no .kw/legs worktree, no lane_group.legs key (raw-string probe), no leg_opened timing.
+  // ★ LEG-SERIAL-NO-LEGS-BYTE-IDENTITY (#542 kill-switch, non-negotiable): the serial path provisions
+  //   NO legs. After #542 (D-542-01) co-open + legs are DEFAULT-ON; the leg-free serial path is reached
+  //   only via the kill-switch KAOLA_PARALLEL_WRITES=0. Run the same repo/plan under the kill-switch with
+  //   the legacy toggles/consent varied — all must serial-degrade with NEITHER any leg: no .kw/legs
+  //   worktree, no lane_group.legs key (raw-string probe), no leg_opened timing. (The legacy toggles are
+  //   no-ops for co-open now; only the kill-switch suppresses it.)
   // -------------------------------------------------------------------------
   {
     const cases = [
-      { label: 'containment-only (no toggle, no consent)', env: ON, args: ['open-ready', '--project', 'test-project', '--json'] },
-      { label: 'toggle but NO consent flag', env: LEG_ON, args: ['open-ready', '--project', 'test-project', '--json'] },
-      // FIX-3: the symmetric off-combo — consent flag present but the KAOLA_LEG_ISOLATION toggle ABSENT.
-      { label: 'consent flag but NO toggle', env: ON, args: ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'] },
+      { label: 'kill-switch, no toggle, no consent', env: SERIAL, args: ['open-ready', '--project', 'test-project', '--json'] },
+      { label: 'kill-switch + legacy leg-isolation toggle (no-op), NO consent', env: { KAOLA_PARALLEL_WRITES: '0', KAOLA_LANE_CONTAINMENT: '1', KAOLA_LEG_ISOLATION: '1' }, args: ['open-ready', '--project', 'test-project', '--json'] },
+      // The symmetric off-combo — kill-switch with the consent flag present (still no legs: serial wins).
+      { label: 'kill-switch + consent flag (still serial)', env: SERIAL, args: ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'] },
     ];
     for (const c of cases) {
       const { repoRoot, cacheDir } = makeLaneRepo();
       const r = runNode(repoRoot, c.args, c.env);
-      assert(r.result === 'ok', 'LEG-FLAG-OFF [' + c.label + ']: open-ready ok, got ' + JSON.stringify(r));
+      assert(r.result === 'ok', 'LEG-SERIAL-NO-LEGS [' + c.label + ']: open-ready ok, got ' + JSON.stringify(r));
       const wts = worktreePaths(repoRoot);
-      assert(!wts.some(p => p.indexOf(path.join('.kw', 'legs')) !== -1), 'LEG-FLAG-OFF [' + c.label + ']: NO .kw/legs worktree provisioned, got ' + JSON.stringify(wts));
+      assert(!wts.some(p => p.indexOf(path.join('.kw', 'legs')) !== -1), 'LEG-SERIAL-NO-LEGS [' + c.label + ']: NO .kw/legs worktree provisioned, got ' + JSON.stringify(wts));
       const rs = readRS(cacheDir);
-      // Raw-string probe: the byte-identity guarantee is "no `legs` key anywhere in running-set.json".
-      assert(JSON.stringify(rs).indexOf('"legs"') === -1, 'LEG-FLAG-OFF [' + c.label + ']: running-set.json carries NO "legs" key');
-      assert(!(rs && rs.lane_group && rs.lane_group.legs), 'LEG-FLAG-OFF [' + c.label + ']: lane_group has no legs manifest');
-      assert(!timingsHas(cacheDir, 'A', 'leg_opened') && !timingsHas(cacheDir, 'B', 'leg_opened'), 'LEG-FLAG-OFF [' + c.label + ']: no leg_opened timing');
+      // Raw-string probe: the serial byte-identity guarantee is "no `legs` key anywhere in running-set.json".
+      assert(JSON.stringify(rs).indexOf('"legs"') === -1, 'LEG-SERIAL-NO-LEGS [' + c.label + ']: running-set.json carries NO "legs" key');
+      assert(!(rs && rs.lane_group && rs.lane_group.legs), 'LEG-SERIAL-NO-LEGS [' + c.label + ']: lane_group has no legs manifest');
+      assert(!timingsHas(cacheDir, 'A', 'leg_opened') && !timingsHas(cacheDir, 'B', 'leg_opened'), 'LEG-SERIAL-NO-LEGS [' + c.label + ']: no leg_opened timing');
       cleanup(repoRoot);
     }
   }
@@ -5584,9 +5644,12 @@ function rtHarness(initialFiles, opts) {
   }
 
   // -------------------------------------------------------------------------
-  // LEG-CRASH-LOST-MANIFEST-FLAG-OFF (FIX-1b byte-identity): the SAME lost-manifest reconcile WITHOUT
-  //   the KAOLA_LEG_ISOLATION toggle must NOT sweep — the hoisted sweep is toggle-gated, so a flag-OFF
-  //   run does zero git worktree calls and the (manually planted) leg survives untouched.
+  // LEG-CRASH-LOST-MANIFEST-SERIAL (#542 kill-switch byte-identity): the SAME lost-manifest reconcile
+  //   under the kill-switch KAOLA_PARALLEL_WRITES=0 must NOT sweep — the hoisted sweep is now gated on
+  //   parallelWritesDefaultOn (DEFAULT-ON), so only the explicit kill-switch suppresses it. Under the
+  //   kill-switch the run does zero git worktree teardown and the (manually planted) leg survives
+  //   untouched. (The DEFAULT/legacy-toggle reclaim path is LEG-CRASH-LOST-MANIFEST-RECLAIM above —
+  //   default-on now sweeps.)
   // -------------------------------------------------------------------------
   {
     const { repoRoot, cacheDir } = makeLaneRepo();
@@ -5594,10 +5657,10 @@ function rtHarness(initialFiles, opts) {
     const legPath = path.join(repoRoot, '.kw', 'legs', 'test-project', 'A');
     execFileSync('git', ['-C', repoRoot, 'worktree', 'add', '-b', 'kw/legs/test-project/A', '--', legPath, 'HEAD'], { stdio: ['ignore', 'ignore', 'ignore'] });
     try { fs.unlinkSync(path.join(cacheDir, 'running-set.json')); } catch (_) {}
-    const rec = runNode(repoRoot, ['reconcile-running-set', '--project', 'test-project', '--json'], ON); // containment only, no leg toggle
-    assert(rec.result === 'ok', 'LEG-CRASH-LOST-MANIFEST-FLAG-OFF: reconcile ok, got ' + JSON.stringify(rec));
-    assert(worktreePaths(repoRoot).some(p => p.endsWith(path.join('.kw', 'legs', 'test-project', 'A'))), 'LEG-CRASH-LOST-MANIFEST-FLAG-OFF: planted leg UNTOUCHED flag-OFF (no sweep), still present');
-    assert(branchExists(repoRoot, 'kw/legs/test-project/A'), 'LEG-CRASH-LOST-MANIFEST-FLAG-OFF: planted leg branch UNTOUCHED flag-OFF');
+    const rec = runNode(repoRoot, ['reconcile-running-set', '--project', 'test-project', '--json'], SERIAL); // kill-switch suppresses the sweep
+    assert(rec.result === 'ok', 'LEG-CRASH-LOST-MANIFEST-SERIAL: reconcile ok, got ' + JSON.stringify(rec));
+    assert(worktreePaths(repoRoot).some(p => p.endsWith(path.join('.kw', 'legs', 'test-project', 'A'))), 'LEG-CRASH-LOST-MANIFEST-SERIAL: planted leg UNTOUCHED under kill-switch (no sweep), still present');
+    assert(branchExists(repoRoot, 'kw/legs/test-project/A'), 'LEG-CRASH-LOST-MANIFEST-SERIAL: planted leg branch UNTOUCHED under kill-switch');
     cleanup(repoRoot);
   }
 
@@ -6294,33 +6357,55 @@ function rtHarness(initialFiles, opts) {
     }
 
     // -----------------------------------------------------------------------
-    // ★ #500-NEGATIVE-A (THE #283/#303 COUPLING GUARD): toggle OFF, consent ON.
-    //   Old un-coupled call would forward consent → shared-infra FORMS → SKIP legs.
-    //   Leg-coupled fix: resolveLegIsolation(env)=false → forward=false → REFUSE → DEGRADE.
-    //   Assert: !r.laneGroup, !rs.lane_group, r.opened.length===1 (serial degrade).
+    // ★ #500-NEGATIVE-A (#542 default-on + the kill-switch guard): the coarseRepo fixture is a GENUINE
+    //   shared-infra (scripts/aa.js + scripts/bb.js share dir "scripts") OVERLAP, so it co-opens ONLY
+    //   with --write-overlap-consent (overlap relaxation stays opt-in — see #500-NEGATIVE-B for the
+    //   no-consent serial-degrade guard). Under #542 (D-542-01) the legacy toggles no longer gate
+    //   co-open: with consent the overlap co-opens regardless of KAOLA_LANE_CONTAINMENT/LEG_ISOLATION.
+    //   The ONLY serial path is the explicit kill-switch KAOLA_PARALLEL_WRITES=0 — which forces serial
+    //   EVEN with consent. Both halves asserted: (a) consent + no legacy toggle ⇒ co-open (default-on);
+    //   (b) consent + kill-switch ⇒ serial-degrade (the switch bites even on a consenting overlap).
     // -----------------------------------------------------------------------
     {
-      const { repoRoot, cacheDir } = coarseRepo();
-      // KAOLA_LANE_CONTAINMENT=1 only (no KAOLA_LEG_ISOLATION) — containment ON, leg toggle OFF.
-      const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], ON);
-      assert(!r.laneGroup, '#500-NEGATIVE-A: toggle OFF + consent ON → NO laneGroup (serial degrade, not co-open), got ' + JSON.stringify(r.laneGroup));
+      // (a) Default-on: consent relaxes the overlap and co-opens WITHOUT any legacy toggle (bare default).
+      const { repoRoot, cacheDir, planPath } = coarseRepo();
+      const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], DEFAULT);
+      assert(r.laneGroup && Array.isArray(r.laneGroup.members) && r.laneGroup.members.includes('A') && r.laneGroup.members.includes('B'),
+        '#500-NEGATIVE-A(a): consent + bare default → co-open [A,B] (default-on, no legacy toggle needed), got ' + JSON.stringify(r.laneGroup));
       const rs = readRS(cacheDir);
-      assert(!rs || !rs.lane_group, '#500-NEGATIVE-A: running-set has no lane_group (toggle-gated)');
-      assert(Array.isArray(r.opened) && r.opened.length === 1, '#500-NEGATIVE-A: exactly ONE write opened (serial degrade), got ' + JSON.stringify(r.opened && r.opened.map(n => n.id)));
+      // #498 regression guard (co-open ⟹ legs): the consenting overlap co-open is NEVER legless.
+      assert(rs && rs.lane_group && rs.lane_group.legs && rs.lane_group.legs.A && rs.lane_group.legs.B,
+        '#500-NEGATIVE-A(a): co-open ⟹ legs provisioned for the consenting overlap, got ' + JSON.stringify(rs && rs.lane_group));
+      assert(Array.isArray(r.opened) && r.opened.length === 2, '#500-NEGATIVE-A(a): both writes co-opened, got ' + JSON.stringify(r.opened && r.opened.map(n => n.id)));
+      assert(ledgerStatus(planPath, 'A') === 'in_progress' && ledgerStatus(planPath, 'B') === 'in_progress', '#500-NEGATIVE-A(a): both A and B in_progress');
+      cleanup(repoRoot);
+    }
+    {
+      // (b) Kill-switch bites even WITH consent: KAOLA_PARALLEL_WRITES=0 → serial-degrade to ONE write.
+      const { repoRoot, cacheDir } = coarseRepo();
+      const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], SERIAL);
+      assert(!r.laneGroup, '#500-NEGATIVE-A(b): kill-switch + consent → NO laneGroup (serial degrade), got ' + JSON.stringify(r.laneGroup));
+      const rs = readRS(cacheDir);
+      assert(!rs || !rs.lane_group, '#500-NEGATIVE-A(b): running-set has no lane_group (kill-switch)');
+      assert(Array.isArray(r.opened) && r.opened.length === 1, '#500-NEGATIVE-A(b): exactly ONE write opened (serial degrade), got ' + JSON.stringify(r.opened && r.opened.map(n => n.id)));
       cleanup(repoRoot);
     }
 
     // -----------------------------------------------------------------------
-    // ★ #500-NEGATIVE-B: toggle ON, consent OFF → no relaxation → DEGRADE.
+    // ★ #500-NEGATIVE-B (OVERLAP STAYS CONSENT-GATED — preserved under #542 default-on): a frontier with
+    //   genuinely-OVERLAPPING write sets (the coarse shared-infra fixture) + NO --write-overlap-consent
+    //   must STILL serial-degrade, even default-on. Default-on co-opens planner-proven-DISJOINT frontiers
+    //   for free; a real overlap is NEVER relaxed without the explicit consent flag. The legacy toggles
+    //   are no-ops; the consent flag (absent here) is the only thing that could relax the overlap.
     //   Assert: !r.laneGroup, !rs.lane_group, r.opened.length===1.
     // -----------------------------------------------------------------------
     {
       const { repoRoot, cacheDir } = coarseRepo();
-      // LEG_ON (KAOLA_LANE_CONTAINMENT=1, KAOLA_LEG_ISOLATION=1), but NO --write-overlap-consent arg.
-      const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], LEG_ON);
-      assert(!r.laneGroup, '#500-NEGATIVE-B: toggle ON + consent OFF → NO laneGroup (no relaxation), got ' + JSON.stringify(r.laneGroup));
+      // Bare default (default-on co-open eligible) but NO --write-overlap-consent → the overlap is not relaxed.
+      const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
+      assert(!r.laneGroup, '#500-NEGATIVE-B: overlap + NO consent → NO laneGroup (overlap stays consent-gated even default-on), got ' + JSON.stringify(r.laneGroup));
       const rs = readRS(cacheDir);
-      assert(!rs || !rs.lane_group, '#500-NEGATIVE-B: running-set has no lane_group (consent-gated)');
+      assert(!rs || !rs.lane_group, '#500-NEGATIVE-B: running-set has no lane_group (consent-gated overlap)');
       assert(Array.isArray(r.opened) && r.opened.length === 1, '#500-NEGATIVE-B: exactly ONE write opened (serial degrade), got ' + JSON.stringify(r.opened && r.opened.map(n => n.id)));
       cleanup(repoRoot);
     }

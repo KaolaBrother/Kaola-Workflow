@@ -41,7 +41,7 @@ const taskMirrorPath = path.join(__dirname, TASK_MIRROR);
 
 // #360: the LEDGER-SCOPED durable consent-halt probe (fence-aware). adaptive-schema keeps the
 // same filename across every edition (byte-identical ×4), so this require is NOT forge-renamed.
-const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, resolveFanoutCapReadonly, resolveLaneContainment, refuse, WRITE_SET_OVERFLOW_SUBTYPES, dispatchEffort, dispatchEffortOpencode, parseNodeVerdict, MERGE_CONFLICT_REPAIR_LIMIT } = require('./kaola-workflow-adaptive-schema');
+const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, resolveFanoutCapReadonly, resolveLaneContainment, parallelWritesDefaultOn, refuse, WRITE_SET_OVERFLOW_SUBTYPES, dispatchEffort, dispatchEffortOpencode, parseNodeVerdict, MERGE_CONFLICT_REPAIR_LIMIT } = require('./kaola-workflow-adaptive-schema');
 
 // ---------------------------------------------------------------------------
 // OPERATOR_HINT_REGISTRY (#445 / D-445-01 §1-3) — per-aggregator map of typed
@@ -3856,32 +3856,36 @@ function runOpenReady(opts) {
   // #437 (D-419 P2): the lane-group descriptor when ≥2 disjoint writes co-open under
   // containment. undefined ⇒ the serial/read path (the running-set writer skips lane_group).
   let groupForm;
-  // #498: the leg-coupled conjunction (leg-isolation toggle AND per-run --write-overlap-consent).
-  // Computed ONCE at function scope and used at BOTH the co-open gate (below) and the leg-provisioning
-  // gate (:3908) so they can never drift. groupForm is set ONLY when legCoupled holds ⇒ groupForm ⟺
-  // legs provisioned ⟺ the safe close path (parent-clean fence + commit-based barrier).
-  const legCoupled = resolveLegIsolation(process.env) && opts.writeOverlapConsent;
+  // #542 (D-542-01): parallel disjoint writes are DEFAULT-ON. legCoupled — the SINGLE local that
+  // gates BOTH co-open (below) and leg-provisioning (:3976) so they can never drift — is now driven by
+  // parallelWritesDefaultOn (default TRUE; KAOLA_PARALLEL_WRITES=0 forces serial). #498 INVARIANT
+  // PRESERVED: groupForm is still set ONLY when legCoupled holds ⇒ groupForm ⟺ legs provisioned ⟺ the
+  // safe close path. We make co-open default-on by defaulting legCoupled TRUE — NOT by dropping the
+  // legCoupled conjunction (that would set groupForm with legs=null → the attribution-blind legless
+  // union barrier of #498). Disjointness itself is re-verified authoritatively by the validator at
+  // co-open (tryFormLaneGroup → --parallel-safe); --write-overlap-consent gates ONLY genuine overlap.
+  const legCoupled = parallelWritesDefaultOn(process.env);
   if (readOnly.length > 0) {
     let slots = Math.max(0, cap - liveNodes.length);
     if (Number.isInteger(max) && max >= 1) slots = Math.min(slots, max);
     toOpen = readOnly.slice(0, slots);
     openKind = 'read';
   } else if (liveNodes.length === 0 && writeNodes.length > 0) {
-    // #437 (D-419 P2 §1.2): under KAOLA_LANE_CONTAINMENT, attempt a co-open lane group from a
-    // ≥2 disjoint write frontier; on overlap (or flag OFF) DEGRADE to a single serial write.
-    // #498: co-open MUST gate on the FULL leg-coupled conjunction — containment AND leg-isolation AND
-    //   --write-overlap-consent — the SAME conjunction that provisions legs below (:3908). The bug it
-    //   fixes: co-open on containment ALONE leaves legs=null (the conjunction at :3908 is unmet), so the
-    //   close path falls to the attribution-blind snapshot UNION barrier (:4429, liveLegs===null) which
-    //   passes a cross-member overwrite (a path written by the WRONG member is still in the union — the
-    //   corruption holds even under serial dispatch). Coupling co-open to leg-provisioning makes the
-    //   invariant groupForm ⟺ legs provisioned ⟺ the safe (parent-clean fence + commit-based barrier)
-    //   close path, so the legless union barrier is never reached via co-open. legCoupled is computed
-    //   ONCE and used at BOTH gates so they can never drift (a half-fix gating on leg-isolation only —
-    //   omitting consent — would still set groupForm while legs stays null).
-    const containment = resolveLaneContainment(process.env);
-    if (containment && legCoupled && writeNodes.length >= 2) {
-      const grp = tryFormLaneGroup(writeNodes, planPath, shell, legCoupled);
+    // #437 (D-419 P2 §1.2) + #542 (D-542-01): attempt a co-open lane group from a ≥2 disjoint write
+    // frontier; on genuine overlap (or explicit serial opt-out) DEGRADE to a single serial write.
+    // #542: co-open is DEFAULT-ON for planner-proven-disjoint frontiers — gated on legCoupled
+    //   (parallelWritesDefaultOn, default TRUE), NOT on KAOLA_LANE_CONTAINMENT. The lane-isolation
+    //   worktree (provisioned at :3976 under the SAME legCoupled) is the containment; the validator
+    //   re-verifies disjointness here authoritatively (tryFormLaneGroup → --parallel-safe).
+    // #498 INVARIANT PRESERVED: legCoupled still gates BOTH this co-open AND leg-provisioning, so
+    //   groupForm ⟺ legs provisioned ⟺ the safe (parent-clean fence + commit-based barrier) close path;
+    //   the attribution-blind legless union barrier (:4429, liveLegs===null) is never reached via
+    //   co-open. CRITICAL (guard 5): forward opts.writeOverlapConsent — NOT legCoupled — to
+    //   tryFormLaneGroup: legCoupled is now always-true, so forwarding it would silently relax
+    //   coarse/shared-infra OVERLAP; the explicit consent flag keeps overlap relaxation opt-in only
+    //   (disjoint green needs no consent — the validator short-circuits green before the relax check).
+    if (legCoupled && writeNodes.length >= 2) {
+      const grp = tryFormLaneGroup(writeNodes, planPath, shell, opts.writeOverlapConsent);
       if (grp.ok) {
         // #437 §1.3 cap: a write lane group respects the WRITE cap (resolveFanoutCap, not the read
         // cap) AND --max as a single unit. The members are already pairwise-disjoint (parallel-safe
@@ -3963,12 +3967,14 @@ function runOpenReady(opts) {
   }
 
   // #463 Slice 2: per-leg `.kw` worktree provisioning (ADR-0010: containment, not construction).
-  // Gated by groupForm AND legCoupled (the leg-isolation toggle AND the per-run --write-overlap-consent
-  // flag — mirrors opts.speculativeConsent). #498: legCoupled is the SAME local the co-open gate uses, so
-  // groupForm is already only set when legCoupled holds (groupForm ⟹ legCoupled); the conjunction is kept
-  // explicit here so the invariant is visible at the provisioning site and the two gates cannot drift.
-  // When either is false ⇒ NO leg is provisioned, `legs` stays empty ⇒ no lane_group.legs key (flag-OFF
-  // byte-identical). Provision a leg per co-opened write member INSIDE Phase 1, BEFORE the ledger flip, so
+  // Gated by groupForm AND legCoupled. #542 (D-542-01): legCoupled is now parallelWritesDefaultOn
+  // (default TRUE), so a disjoint co-opened frontier provisions legs BY DEFAULT — the per-leg worktree
+  // IS the containment for default-on parallel writes. #498 invariant unchanged: legCoupled is the SAME
+  // local the co-open gate uses, so groupForm is only ever set when legCoupled holds (groupForm ⟹
+  // legCoupled); the conjunction is kept explicit here so the invariant is visible at the provisioning
+  // site and the two gates cannot drift. Under the explicit serial opt-out (KAOLA_PARALLEL_WRITES=0)
+  // legCoupled is false ⇒ no co-open, no leg, no lane_group.legs key (serial-fallback byte-identical).
+  // Provision a leg per co-opened write member INSIDE Phase 1, BEFORE the ledger flip, so
   // a refusal here leaves a reconcilable state (no ledger row has flipped yet). working_dir STAYS
   // parent-side (Slice 3 routes into legs). On any provisionLeg failure, teardown every leg already
   // provisioned THIS call (clean rollback — no partial leg set) and refuse.
@@ -4229,10 +4235,12 @@ function runCloseNode(opts) {
   // #403.4: non-blocking near-miss verdict warning (informational, per #328) — see runCloseAndOpenNext.
   const verdictWarn = checkVerdictParse(role, evidenceContent);
 
-  // -- (a.5) #437 (D-419 P2 §2): LANE-GROUP MEMBER close path. Gated on KAOLA_LANE_CONTAINMENT AND
-  //    this node being a live lane_group member. Flag OFF / a serial node (no lane_group) ⇒ lg is null
-  //    ⇒ this whole branch is skipped and the existing serial close runs verbatim (INV-6).
-  const containment = resolveLaneContainment(process.env);
+  // -- (a.5) #437 (D-419 P2 §2): LANE-GROUP MEMBER close path. #542 (D-542-01): keyed PURELY on this
+  //    node being a live lane_group member in the durable manifest — NOT on KAOLA_LANE_CONTAINMENT.
+  //    Co-open is now default-on, so a lane_group can exist without the env toggle; member detection
+  //    MUST follow the manifest (guard 1), else a default-on member would fall to the serial close and
+  //    orphan its committed leg work. A serial node (no lane_group) ⇒ lg is null ⇒ this whole branch is
+  //    skipped and the existing serial close runs verbatim (INV-6 preserved for the serial path).
   const running0 = readRunningSet(runningSetPath, cacheExists, readFile);
 
   // #439 (D-419 Part 4): close-time speculative guard — a speculative member cannot commit to complete
@@ -4241,7 +4249,7 @@ function runCloseNode(opts) {
   const specGuard = speculativeCloseGuard(nodeId, running0, readLedgerStatuses(readFile(planPath)));
   if (specGuard) return specGuard;
 
-  const lg = (containment && running0 && running0.lane_group) ? running0.lane_group : null;
+  const lg = (running0 && running0.lane_group) ? running0.lane_group : null;
   const isMember = !!(lg && Array.isArray(lg.members) && lg.members.includes(nodeId));
   if (isMember) {
     return closeGroupMember({
@@ -4593,15 +4601,18 @@ function runReconcileRunningSet(opts) {
 
   // #463 Slice 2 (FIX-1b): orphan-leg sweep, HOISTED ABOVE the no_running_set early-return below so a
   // crashed run that LOST its running-set.json (no manifest at all) still gets its dangling legs
-  // reclaimed — the clean-completion leak's crash-path sibling. Gated on resolveLegIsolation
-  // (KAOLA_LEG_ISOLATION) ONLY, NOT on a present `legs` manifest: when the manifest is gone we cannot
-  // read keep-paths from it, so the toggle is the gate and keepLegPaths falls back to []. Flag-OFF runs
-  // (toggle absent) short-circuit with ZERO git calls (byte-identical, no behavior change). keepLegPaths
-  // = legs CURRENTLY referenced by the surviving manifest (empty when there is no running set / no legs);
-  // on the drop path below a soon-to-dropped member's leg is still in `keep` here and is torn down by the
+  // reclaimed — the clean-completion leak's crash-path sibling. #542 (D-542-01): gated on
+  // parallelWritesDefaultOn (default TRUE), NOT the retired resolveLegIsolation toggle, because legs are
+  // now provisioned by default — so the sweep must run by default to reclaim them after a manifest-losing
+  // crash. NOT gated on a present `legs` manifest: when the manifest is gone we cannot read keep-paths
+  // from it, so default-on is the gate and keepLegPaths falls back to []. The explicit serial opt-out
+  // (KAOLA_PARALLEL_WRITES=0) short-circuits with ZERO git calls. sweepOrphanLegs only ever tears down
+  // worktrees under <mainRoot>/.kw/legs/<project>/ (never the executor worktree). keepLegPaths = legs
+  // CURRENTLY referenced by the surviving manifest (empty when there is no running set / no legs); on the
+  // drop path below a soon-to-dropped member's leg is still in `keep` here and is torn down by the
   // per-member teardown step instead (disjoint, no double-teardown). Fail-soft (sweepOrphanLegs never
   // throws — reconcile must never throw).
-  if (resolveLegIsolation(process.env)) {
+  if (parallelWritesDefaultOn(process.env)) {
     let mainRoot; try { mainRoot = getMainRoot(getRoot()); } catch (_) { mainRoot = process.cwd(); }
     const keepLegPaths = (running && running.lane_group && running.lane_group.legs)
       ? Object.values(running.lane_group.legs).map(l => l && l.legPath).filter(Boolean)

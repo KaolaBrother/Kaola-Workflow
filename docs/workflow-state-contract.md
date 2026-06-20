@@ -48,17 +48,23 @@ here for the full contract.
     `baseline`, optional `opening` marker and `openedAt`). `max_concurrent` is set at
     `open-ready` time (`min(cap, --max || cap)`) and read by `reconcile-running-set` to
     cap roll-forward re-opens; absence implies 1 (fail-closed). Prevents double-open;
-    a crashed `opening` state routes to `reconcile-running-set`. See the **`lane_group` extension** below.
+    a crashed `opening` state routes to `reconcile-running-set`. Since D-542-01, a planner-proven
+    **disjoint write antichain co-opens by default** (isolated parallel legs + a mandatory
+    synthesizer reconcile), so a multi-node write running set is the normal case rather than the
+    exception; `KAOLA_PARALLEL_WRITES=0` forces a single-node serial running set. See the
+    **`lane_group` extension** below.
 
-    **`lane_group` key (issue #437, `KAOLA_LANE_CONTAINMENT` ON only).**
+    **`lane_group` key (issue #437; default-written for disjoint co-open since D-542-01).**
     When `open-ready` forms a write lane group, an optional top-level `lane_group` key is added to
     `running-set.json`. Its full schema is documented in `docs/api.md` § Lane-group co-open. State
     contract notes:
 
-    - **Absent when flag OFF.** With `KAOLA_LANE_CONTAINMENT` unset (the permanent default),
-      `running-set.json` is never written with a `lane_group` key. A serial or read-only run's
-      `running-set.json` is byte-identical to pre-#437 regardless of the key's presence
-      (absent `lane_group` ⟹ `null` ⟹ `closeGroupMember` is never entered).
+    - **Written by default for disjoint co-open frontiers.** A planner-proven disjoint write
+      frontier co-opens as a lane group by default (D-542-01), so `running-set.json` carries a
+      `lane_group` key whenever such a frontier is live. The key is **absent only** under an
+      explicit serial opt-out (`KAOLA_PARALLEL_WRITES=0`) or for a non-disjoint (overlapping)
+      frontier that did not form a group — in which case `running-set.json` is byte-identical to a
+      serial/read-only run (absent `lane_group` ⟹ `null` ⟹ `closeGroupMember` is never entered).
     - **Absent when no group is live.** The key is cleared (the whole key is deleted, not set to
       `null`) when the last group member passes the group barrier and the group is dissolved.
     - **Outside `plan_hash`.** `lane_group` is a runtime scheduler artifact, not plan structure.
@@ -162,7 +168,7 @@ The `workflow-state.md` file contains several key blocks:
 
 - `## Current Position` — Active phase, step, workflow path, runtime, and next command or skill. Key fields:
   - **workflow_path** — Workflow execution path (`full`, `fast`, or `adaptive`). Persisted from the `KAOLA_PATH` environment variable (set `KAOLA_PATH=fast` to request the fast path), or the `--workflow-path` startup flag when supplied; defaults to `adaptive`. `claimProject` validates the persisted value: adaptive is always legal; `fast`/`full` require membership in `installed_paths` (`~/.config/kaola-workflow/config.json`) — any other value is a **typed `path_not_installed` refusal**, never a silent downgrade.
-  - **runtime** — The runtime that claimed the folder (`claude` or `codex`). Persisted from the `--runtime` startup flag; defaults to `claude`.
+  - **runtime** — The runtime that claimed the folder (`claude`, `codex`, or `opencode`). Persisted from the `--runtime` startup flag; defaults to `claude`.
 - `## Sink` — Issue number, sink mode (merge or pr), branch name, worktree path, and `run_posture` (`worktree` or `in-place`). `run_posture` is derived from the actual worktree resolution at startup via `deriveRunPosture(worktreePath)` in `kaola-workflow-claim.js`; it is never inherited from an environment variable. Adaptive runs always provision a worktree, so `run_posture: worktree` is the normal adaptive value. An optional `issue_action: close | comment_keep_open` line (default `close` when absent, issue #336) marks a keep-open partial-close terminal: the main session writes `comment_keep_open` at the Closure Decision Gate to keep the issue OPEN — `finalize`/`sink-merge` then preserve the roadmap source, comment instead of closing, and refuse a PR/MR sink (keep-open is merge-sink-only).
 - `## Lease` — (Legacy, deprecated) Coordination metadata; preserved for backward compatibility
 - `delegation_policy:` — Delegation mode for Codex workflows. Defaults to

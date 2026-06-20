@@ -801,6 +801,10 @@ echo ""
 echo "Open any Claude Code session and run:  /workflow-init"
 echo "Then run implementation cycles with:  /workflow-next"
 echo ""
+# #2 / D-542-01: planner-proven-disjoint parallel write frontiers are default-ON (no operator
+# toggle). Per-leg worktree isolation + the mandatory synthesizer reconcile are the correctness net.
+echo "Disjoint parallel writes are default-ON (set KAOLA_PARALLEL_WRITES=0 to force serial)."
+echo ""
 if [[ -f "$SUPPORT_HOOKS_DIR/hooks.json" ]]; then
   echo "Hooks installed to: $SUPPORT_HOOKS_DIR/hooks.json"
   case "$SETTINGS_MERGE_RESULT" in

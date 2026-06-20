@@ -145,17 +145,57 @@ seed_config() {
   echo "  KAOLA_OPENCODE_STANDARD_MODEL / _REASONING_MODEL env."
 }
 
+# #2 / #538 D4: seed ~/.config/kaola-workflow/config.json via UNION read-modify-write — the
+# install.sh mirror, so an opencode install reaches install-time parity (parallel_mode:'auto'
+# default-ON + installed_paths). opencode is adaptive-only-default (no fast/full opt-ins), so
+# installed_paths is always [] here. python3-guarded with the same fallback warning. This config
+# is the SHARED global file the classifiers + claim read; it is SEPARATE from opencode.json.
+seed_kaola_config() {
+  local kaola_config_dir="$HOME/.config/kaola-workflow"
+  local kaola_config_file="$kaola_config_dir/config.json"
+  if command -v python3 >/dev/null 2>&1; then
+    mkdir -p "$kaola_config_dir"
+    if python3 - "$kaola_config_file" <<'PY'; then
+import json, os, sys
+path = sys.argv[1]
+config = {}
+if os.path.exists(path):
+    try:
+        with open(path) as f: config = json.load(f)
+    except (json.JSONDecodeError, OSError) as e:
+        print(f"warning: {path} is not valid JSON ({e}); leaving it untouched.", file=sys.stderr); sys.exit(2)
+    if not isinstance(config, dict):
+        print(f"warning: {path} is not a JSON object; leaving it untouched.", file=sys.stderr); sys.exit(2)
+config.setdefault("parallel_mode", "auto")
+existing = config.get("installed_paths")
+paths = set(existing) if isinstance(existing, list) else set()
+config["installed_paths"] = [p for p in ("fast", "full") if p in paths]   # canonical order, {fast,full} only
+config.pop("enable_adaptive", None)   # migrate away the retired field on any touched config
+with open(path, "w") as f: json.dump(config, f, indent=2); f.write("\n")
+print(f"Installed paths (adaptive always; opt-ins: {config['installed_paths']}) in: {path}")
+PY
+      :
+    else
+      echo "warning: failed to write $kaola_config_file; set installed_paths by hand: {\"parallel_mode\":\"auto\",\"installed_paths\":[]}" >&2
+    fi
+  else
+    echo "warning: python3 not found; cannot write $kaola_config_file. Add installed_paths:[] by hand." >&2
+  fi
+}
+
 if [[ "$GLOBAL" -eq 1 ]]; then
   DEST_ROOT="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}"
   echo "Deploying globally → $DEST_ROOT"
   copy_tree "$DEST_ROOT"
   seed_config "$DEST_ROOT"
+  seed_kaola_config
   install_support_scripts
 else
   DEST_ROOT="${TARGET:-$PWD}"
   echo "Deploying into project → $DEST_ROOT"
   copy_tree "$DEST_ROOT"
   seed_config "$DEST_ROOT"
+  seed_kaola_config
   install_support_scripts
 fi
 
@@ -163,3 +203,6 @@ echo ""
 echo "Next: open the project in opencode and run a workflow command, e.g.:"
 echo "  /workflow-init"
 echo "Models resolve from opencode.json; both tiers inherit your opencode default unless you pin them."
+# #2 / D-542-01: planner-proven-disjoint parallel write frontiers are default-ON (no operator
+# toggle). Per-leg worktree isolation + the mandatory synthesizer reconcile are the correctness net.
+echo "Disjoint parallel writes are default-ON (set KAOLA_PARALLEL_WRITES=0 to force serial)."

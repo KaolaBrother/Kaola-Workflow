@@ -278,6 +278,11 @@ function transformCommandBody(body) {
   // touched (opencode-only, additive D-530-02). Scoped to the literal "Step 0a-1" — only
   // workflow-next.md carries it, so no over-strip risk.
   text = text.replace(/ \(Step 0a-1\)| or Step 0a-1/g, '');
+  // #2 (opencode runtime label): the canonical workflow-next dispatch emits a claim invocation
+  // carrying the literal `--runtime claude`. On the opencode edition that flag must stamp the
+  // opencode runtime into workflow-state.md, so rewrite the literal to `--runtime opencode`.
+  // Scoped to the exact flag token (word boundary) so prose mentions of "claude" are untouched.
+  text = text.replace(/--runtime claude\b/g, '--runtime opencode');
   return text;
 }
 

@@ -179,11 +179,12 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   two-phase writes the manifest (`opening` → flip ledger → `open`) exactly like `open-batch`.
   `close-node` runs the same evidence-shape → `commit-node` barrier → ledger-complete → compliance
   → selector-arm contract as the serial close, removes the node, and returns the newly-ready
-  frontier. The scheduler is **additive and opt-in**: the single-node and batch paths are
-  unchanged, and the serial behavior is **byte-identical** when `KAOLA_LANE_CONTAINMENT` is off
-  (the default) — read-only nodes fan out (they share the parent tree and never write) while a
-  write node opens **alone** (the permanent serial fallback). The cross-lane write+read overlap
-  the design envisions stays **dormant**, gated on the #376 lane-containment worktree primitive.
+  frontier. The scheduler is **additive**: the single-node and batch paths are
+  unchanged. Read-only nodes fan out (they share the parent tree and never write); write nodes
+  the planner proves **disjoint** co-open as isolated parallel legs **by default** (D-542-01),
+  while genuinely-overlapping writes open **alone** (the serial fallback). Forcing every write
+  frontier serial — the byte-identical pre-parallel-write behavior — is now the explicit opt-out
+  path (`KAOLA_PARALLEL_WRITES=0`), not the default.
   The **AC#5 / #293 legality re-keys to the running set**: `crossCheckStatus` and `orient` accept
   `in_progress` rows matching the running-set node set (`valid_running_set`) as well as the batch
   member set, and route a crashed `opening` running set to `reconcile-running-set`
@@ -232,13 +233,17 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
 
   **Canonical spec: `docs/decisions/D-419-01.md`** (Part 1).
 
-  **Lane-group co-open and group-scoped close barrier — D-419 Part 2 implementation (issue #437).**
-  `KAOLA_LANE_CONTAINMENT=1` activates lane-attributed disjoint write co-open. When the flag is
-  ON, `runOpenReady` (`adaptive-node.js` L2550) no longer unconditionally enforces
-  `write_node_exclusive`; instead it calls `tryFormLaneGroup` (`adaptive-node.js` L2522) to
-  attempt a co-open of the entire ≥2 disjoint write frontier as a **lane group**. The formation
-  is gated on a `--parallel-safe` disjointness check (plan-validator.js L1627) over the frontier
-  node ids; an overlap result degrades immediately to single serial write. A successful group
+  **Lane-group co-open and group-scoped close barrier — D-419 Part 2 implementation (issue #437),
+  default-on since D-542-01.** Lane-attributed disjoint write co-open is now **on by default**
+  (`parallelWritesDefaultOn(process.env)` true unless `KAOLA_PARALLEL_WRITES=0`); the legacy
+  `KAOLA_LANE_CONTAINMENT` toggle is demoted to advanced/defense-in-depth (its `PreToolUse` hook
+  is fail-open only). When co-open is active, `runOpenReady` (`adaptive-node.js` L2550) no longer
+  unconditionally enforces `write_node_exclusive`; instead it calls `tryFormLaneGroup`
+  (`adaptive-node.js` L2522) to attempt a co-open of the entire ≥2 disjoint write frontier as a
+  **lane group**. The formation is gated on a `--parallel-safe` disjointness check
+  (plan-validator.js L1627) over the frontier node ids; an overlap result degrades immediately to
+  single serial write (only a genuinely-overlapping frontier stays consent-gated via
+  `--write-overlap-consent` + `write_overlap_policy`). A successful group
   open records ONE shared group baseline (keyed by `group_id`, reusing the per-node
   `--record-base` machinery), writes `lane_group` into `running-set.json`, and stamps each
   member's node entry with `group_id`. The running-set schema is additive: `lane_group` is an
@@ -259,22 +264,29 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   (a) the group barrier at the last close, and (b) the `--finalize-check` attribution sweep
   (#424). The `KAOLA_LANE_CONTAINMENT` `PreToolUse` hook (#376) emits warnings but is fail-open.
 
-  **Flag-OFF invariant (INV-6).** With `KAOLA_LANE_CONTAINMENT` unset (the permanent default),
-  `resolveLaneContainment(process.env)` returns `false`. The `if (containment && writeNodes.length >= 2)`
-  guard in `runOpenReady` and the `if (containment && lg && lg.members.includes(nodeId))` guard in
-  `runCloseNode` are both dead. The existing `else { toOpen=[writeNodes[0]]; openKind='write'; }`
-  serial path and the existing `commit-node --node-id` per-node barrier run verbatim. The ×4
-  walkthroughs (which never set the flag) are the flag-OFF byte-identity assertion. Canonical
-  spec: `docs/decisions/D-437-01.md`.
+  **Serial opt-out invariant (INV-6, re-anchored by D-542-01).** The co-open gate is now keyed on
+  `legCoupled = parallelWritesDefaultOn(process.env)` (true by default; `false` only under
+  `KAOLA_PARALLEL_WRITES=0`). The flag-OFF (serial) configuration is now the **opt-out** path, not
+  the default: under `KAOLA_PARALLEL_WRITES=0`, `legCoupled` is `false`, the
+  `if (legCoupled && writeNodes.length >= 2)` co-open guard in `runOpenReady` and the close-side
+  group-member guard in `runCloseNode` are both dead, the existing
+  `else { toOpen=[writeNodes[0]]; openKind='write'; }` serial path and the existing
+  `commit-node --node-id` per-node barrier run verbatim, and the result is byte-identical to
+  pre-parallel-write behavior. (`KAOLA_LANE_CONTAINMENT` is no longer the gating predicate — it
+  survives only as the advanced/defense-in-depth `PreToolUse` hook, fail-open.) The #498 invariant
+  is preserved: co-open ALWAYS provisions legs (`groupForm ⟺ legCoupled ⟺ legs provisioned`) —
+  never the legless attribution-blind union barrier. Canonical specs:
+  `docs/decisions/D-437-01.md` and `docs/decisions/D-542-01.md`.
 
   **Parallelism v3 design (issue #419).** Two decision records define the v3 design built
   on the v2 running-set foundation: `docs/decisions/D-419-01.md` (Part 1: one coordination
   kernel — serial = running-set `max_concurrent=1` by subsumption, not deletion; Part 3:
-  scheduler-default posture — reads fan out by default, writes remain serial unless
-  `KAOLA_LANE_CONTAINMENT` is on) and `docs/decisions/D-419-02.md` (Part 2: lane-attributed
+  scheduler-default posture — reads fan out by default, and since D-542-01 **disjoint writes
+  also co-open by default** [`KAOLA_PARALLEL_WRITES=0` is the serial opt-out], while overlapping
+  writes stay serial/consent-gated) and `docs/decisions/D-419-02.md` (Part 2: lane-attributed
   disjoint write parallelism — the validator stamps `parallel_safe` on disjoint write-node
-  antichains and `open-ready` lifts `write_node_exclusive` for stamped pairs when the lane
-  flag is on; Part 4: consent-gated speculative gate overlap — a `speculative_open_policy:
+  antichains and `open-ready` lifts `write_node_exclusive` for stamped pairs by default [serial
+  opt-out via `KAOLA_PARALLEL_WRITES=0`]; Part 4: consent-gated speculative gate overlap — a `speculative_open_policy:
   consent` plan field allows a descendant to open `in_progress` speculatively while its
   gate runs, with baseline roll-back discard if the gate fails and post-dominance preserved
   by a `gate_not_complete` close-refusal). All 25 invariants [INV-1]..[INV-25] that bind

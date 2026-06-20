@@ -170,7 +170,7 @@ instead of `--target-issue N`:
 
 ```bash
 node "$CLAIM_JS" startup \
-  --runtime claude \
+  --runtime opencode \
   --workflow-path adaptive \
   --target-issues 42,47,53
 ```

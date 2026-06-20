@@ -53,6 +53,20 @@ function deriveRunPosture(worktreePath) {
   return worktreePath ? 'worktree' : 'in-place';
 }
 
+// #2 (opencode runtime label): resolve the runtime stamped into workflow-state.md.
+// Precedence: explicit --runtime (args.runtime) wins; then KAOLA_RUNTIME; then INFER
+// 'opencode' when an opencode model env is present (the opencode edition exports
+// KAOLA_OPENCODE_INHERIT_MODEL / KAOLA_OPENCODE_STANDARD_MODEL); else default 'claude'.
+// Pure (env passed in) — every site that previously hard-defaulted to 'claude' now routes
+// through here so an opencode run is no longer mislabeled 'runtime: claude'.
+function resolveRuntime(args, env) {
+  args = args || {};
+  env = env || {};
+  return args.runtime
+    || env.KAOLA_RUNTIME
+    || ((env.KAOLA_OPENCODE_INHERIT_MODEL || env.KAOLA_OPENCODE_STANDARD_MODEL) ? 'opencode' : 'claude');
+}
+
 // M2 (#277 Phase 2): WARN-FIRST dispatch-log attestation checker.
 // logDirCandidates: ordered array of directory paths that may contain
 // dispatch-log.jsonl; the first existing file wins. Mutates receipt
@@ -558,7 +572,7 @@ function writeState(root, data) {
     'phase: ' + (isFast ? 'fast' : isAdaptive ? 'adaptive' : (data.phase || 1)),
     'phase_name: ' + (isFast ? 'Fast' : isAdaptive ? 'Adaptive' : (data.phase_name || 'Research')),
     'workflow_path: ' + workflowPath,
-    'runtime: ' + (data.runtime || 'claude'),
+    'runtime: ' + (data.runtime || resolveRuntime({}, process.env)),
     'step: ' + (data.step || 'start'),
     'next_command: ' + (data.next_command || (isFast ? '/kaola-workflow-fast ' + data.project : isAdaptive ? adaptiveCommand : '/kaola-workflow-phase1 ' + data.project)),
     'next_skill: ' + (data.next_skill || (isFast ? 'kaola-workflow-fast ' + data.project : isAdaptive ? adaptiveSkill : 'kaola-workflow-research ' + data.project)),
@@ -936,7 +950,7 @@ function claimProject(root, args) {
     worktree_error: worktreeError,
     base_branch: baseBranch,
     workflow_path: args.workflowPath || process.env.KAOLA_PATH || 'adaptive',
-    runtime: args.runtime || 'claude',
+    runtime: resolveRuntime(args, process.env),
     status: 'active'
   });
   const remoteClaim = postAdvisoryClaim(issueNumber, project); // #356: surface the real footprint status
@@ -1133,7 +1147,7 @@ function claimBundle(root, opts) {
       worktree_error: worktreeError,
       base_branch: baseBranch,
       workflow_path: 'adaptive',
-      runtime: opts.runtime || 'claude',
+      runtime: resolveRuntime(opts, process.env),
       status: 'active'
     });
 
@@ -1333,7 +1347,7 @@ function claimExplicitBundle(root, args) {
     project,
     branch,
     sink: args.sink || process.env.KAOLA_SINK || 'merge',
-    runtime: args.runtime || 'claude',
+    runtime: resolveRuntime(args, process.env),
     attestPlannerSpawn: args.attestPlannerSpawn // #370: honor the planner attest back-fill on the bundle path
   });
 }
@@ -3155,7 +3169,7 @@ function cmdLegacyWorktreeCleanup() {
 
 const USAGE = 'usage: kaola-workflow-claim.js <claim|authoring-allowed|release|status|patch-branch|watch-pr|bootstrap|startup|finalize|pick-next|resume|worktree-status|worktree-finalize|sink-fallback|stale-worktree-check|stale-worktree-cleanup|legacy-worktree-cleanup|audit-labels|repair-labels>\n'
   + '  flags: --project P [--json] [--force] [--strict] [--issue N] [--target-issue N] [--target-issues A,B] [--pr-number N]\n'
-  + '         [--branch B] [--reason R] [--runtime claude|codex] [--sink merge|mr|pr] [--workflow-path adaptive|full|fast]\n'
+  + '         [--branch B] [--reason R] [--runtime claude|codex|opencode] [--sink merge|mr|pr] [--workflow-path adaptive|full|fast]\n'
   + '         [--keep-worktree] [--keep-open|--keep-issue-open] [--keep-branch] [--execute] [--archive] [--export]\n'
   + '         [--attest-planner-spawn] [--attest-contractor-spawn]\n'
   + '  --help, -h   print this usage and exit (no side effects).';

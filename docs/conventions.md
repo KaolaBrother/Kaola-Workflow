@@ -151,7 +151,7 @@ The adaptive plan-run command surfaces (×6: 3 Claude commands + 3 Codex SKILL p
   | `governance.md` | Planner freeze/governance-ack handshake, `governance_ack_stale`, risk-assessment |
   | `repair-routing.md` | `route-findings` consumption (D-446-01), `revert-overflow` / `repair-node` choice, plan-repair via `--freeze` |
   | `reopen-complete-node.md` | Reopening a `complete` writer — `repair-node` vs `reopen-node`, baseline-reuse rules, the reopen-needs-allDone trap |
-  | `frontier-batch.md` | Parallel frontier fan-out — `open-batch` / `top-up` / `seal-member` / `seal` / `reconcile`, serial-degrade |
+  | `frontier-batch.md` | Parallel frontier fan-out — `open-batch` / `top-up` / `seal-member` / `seal` / `reconcile`; default-on disjoint co-open (D-542-01), serial-degrade only for non-disjoint/uncertain frontiers or hosts without worktree support |
 
 **Propagation rule:** the skeleton (not the cards) is a six-surface surface and obeys the §Routing / adaptive prose rule above. A change to the skeleton's interactive loop, the `frontier unit` literal, or a `<!-- CARD: -->` or `<!-- PIN: -->` marker is an adaptive-prose change and must propagate to all six surfaces and pass all four chains.
 

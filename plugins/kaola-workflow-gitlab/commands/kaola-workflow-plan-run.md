@@ -1,5 +1,5 @@
 ---
-description: Kaola-Workflow Adaptive Executor. Executes a frozen workflow-plan.md via a running-set scheduler; each frontier unit dispatched concurrently up to the fan-out cap (critical-path-first), with serial as the degraded fallback for write nodes or when the write-parallelism conjunction is not met. Resume-safe.
+description: Kaola-Workflow Adaptive Executor. Executes a frozen workflow-plan.md via a running-set scheduler; each frontier unit dispatched concurrently up to the fan-out cap (critical-path-first); planner-proven-disjoint (parallel_safe) write frontiers co-open in isolated legs BY DEFAULT — no operator toggles — with serial as the fallback for overlapping/uncertain writes or hosts without worktree support. Resume-safe.
 argument-hint: <project name>
 ---
 
@@ -126,21 +126,28 @@ token). Instruct the role to:
   record evidence parent-side, `seal`, `join`.
 - `FANOUT_CAP` (default 4) is a runtime limit, not a planning cap; `top-up` drains wider
   frontiers. `KAOLA_FANOUT_CAP_READONLY` (default 8) applies to read-only batches.
-- Serial (`max_concurrent=1`) is the degraded mode; write parallelism requires the
-  full conjunction — `KAOLA_LANE_CONTAINMENT`, `KAOLA_LEG_ISOLATION`, and
-  `--write-overlap-consent` — see the activation recipe below. `opening` marker +
-  `reconcile` handle batch crash-resume.
+- Planner-proven-disjoint (`parallel_safe`) write frontiers co-open in isolated legs
+  BY DEFAULT — no operator toggles. Serial (`max_concurrent=1`) is the FALLBACK only for
+  OVERLAPPING/uncertain writes, hosts without worktree support, or an explicit
+  `KAOLA_PARALLEL_WRITES=0` opt-out; `--write-overlap-consent` is required ONLY for
+  coarse/shared-infra (non-disjoint) co-open — see the leg-isolation note below. `opening`
+  marker + `reconcile` handle batch crash-resume.
 - `test_thrash` ≥ 3: escalate via `write-halt --reason test_thrash`.
 
 <!-- PIN: leg-isolation-recipe -->
-**Write-parallelism activation recipe (#500 L2).** The per-leg isolation engine is COMPLETE
-and live (not dormant — #463 Closes, AC18 PASS). Three toggles together activate it:
-1. `KAOLA_LANE_CONTAINMENT=true` — enable the lane-containment scheduler.
-2. `KAOLA_LEG_ISOLATION=true` — provision a dedicated worktree leg for each write sibling.
-3. `open-ready --write-overlap-consent` — explicitly consent to the shared-infra co-open for
-   frontiers whose plan `## Meta` sets `write_overlap_policy: coarse`. Absent either `KAOLA_LEG_ISOLATION`
-   or `--write-overlap-consent`, the lane-group formation check short-circuits and the frontier
-   serial-degrades safely — no cross-contamination, no silent loss.
+**Write-parallelism is default-on for disjoint frontiers (#542, D-542-01).** The per-leg
+isolation engine is COMPLETE and live (#463 Closes, AC18 PASS), and planner-proven-disjoint
+(`parallel_safe`) write frontiers co-open as isolated parallel legs **BY DEFAULT — no operator
+toggles**. Per-leg worktree isolation + the mandatory synthesizer reconcile are the correctness
+net; co-open ALWAYS provisions a dedicated leg per write sibling (group-form ⟺ legs provisioned —
+never the legless attribution-blind union barrier).
+- Serial is the FALLBACK only for OVERLAPPING/uncertain writes, hosts without worktree support, or
+  an explicit `KAOLA_PARALLEL_WRITES=0` opt-out (which forces serial).
+- `open-ready --write-overlap-consent` is required ONLY for coarse/shared-infra (non-disjoint)
+  co-open — a frontier whose plan `## Meta` sets `write_overlap_policy: coarse`. Genuinely-overlapping
+  writes stay consent-gated (`--write-overlap-consent` + `write_overlap_policy` != `off`); absent that
+  consent an overlapping frontier serial-degrades safely — no cross-contamination, no silent loss.
+  Disjoint frontiers need NO consent flag.
 
 <!-- CARD: speculative-open -->
 On `open-next` → `gate_not_complete` with a speculative gate (policy `speculative_open_policy:
