@@ -532,6 +532,225 @@ if (exists(pluginRel)) {
     'A11: plugin registers tool.execute.before + compaction hooks');
 }
 
+// ---------------------------------------------------------------------------
+// P1–P5 + A (issue #543): install-time opt-in partition for the opencode edition
+// (--with-fast / --with-full parity with install.sh) AND the folded #544 Claude
+// path-leak fix. Hermetic per sub-case: each provisions its OWN fresh temp HOME
+// + temp --target under os.tmpdir() ($TMPDIR), runs the REAL install-opencode.sh,
+// then inspects the deployed tree + the seeded ~/.config/kaola-workflow/config.json.
+// RED on arrival — the partition is not implemented yet (the installer's header
+// at L22–37 explicitly defers #538 parity: "scoped out for now … This installer
+// deploys the FULL command set") and the leak is pervasive (kaola_script()
+// ships the Claude search path verbatim in every command + contractor +
+// workflow-planner). n5-implementer-opencode owns GREEN.
+//
+// Adaptive-core set per issue #543 (the unconditional default install):
+//   kaola-workflow-adapt, kaola-workflow-auto, kaola-workflow-finalize,
+//   kaola-workflow-plan-run, workflow-init, workflow-next.
+// Opt-in sets: --with-fast ⇒ {kaola-workflow-fast}; --with-full ⇒ {phase1..phase5}.
+// installed_paths canonical order mirrors install.sh L730: [p for p in ("fast","full") if p in paths].
+// ---------------------------------------------------------------------------
+{
+  const { spawnSync } = require('child_process');
+  const { mkdtempSync, existsSync, readFileSync, readdirSync, rmSync } = require('fs');
+  const os = require('os');
+
+  const INSTALLER = path.join(REPO, 'install-opencode.sh');
+  const ADAPTIVE_CORE = [
+    'kaola-workflow-adapt', 'kaola-workflow-auto', 'kaola-workflow-finalize',
+    'kaola-workflow-plan-run', 'workflow-init', 'workflow-next',
+  ];
+  const FAST_ONLY = ['kaola-workflow-fast'];
+  const FULL_ONLY = [
+    'kaola-workflow-phase1', 'kaola-workflow-phase2', 'kaola-workflow-phase3',
+    'kaola-workflow-phase4', 'kaola-workflow-phase5',
+  ];
+
+  // Hermetic single-shot installer run. Each call gets its OWN fresh HOME (so
+  // seed_kaola_config writes only under $TMPDIR) and its OWN --target (so the
+  // .opencode/ tree deploys only under $TMPDIR — never the repo's committed
+  // .opencode/, never the real ~). --no-scripts skips copying support scripts
+  // into the hermetic ~/.claude/ (orthogonal to the partition; keeps fixtures
+  // small and respects the RED-fixture-in-$TMPDIR guard).
+  function runInstaller(extraArgs, opts) {
+    opts = opts || {};
+    const home = opts.home || mkdtempSync(path.join(os.tmpdir(), 'opencode-p-home-'));
+    const dest = opts.dest || mkdtempSync(path.join(os.tmpdir(), 'opencode-p-dest-'));
+    const args = ['--target', dest, '--yes', '--no-scripts'].concat(extraArgs || []);
+    const r = spawnSync('bash', [INSTALLER].concat(args), {
+      env: Object.assign({}, process.env, { HOME: home }),
+      encoding: 'utf8',
+    });
+    return {
+      ok: r.status === 0,
+      status: r.status,
+      stdout: r.stdout || '',
+      stderr: r.stderr || '',
+      home, dest,
+      configPath: path.join(home, '.config', 'kaola-workflow', 'config.json'),
+    };
+  }
+  const cmdDir = dest => path.join(dest, '.opencode', 'command');
+  const hasCmd = (dest, name) => existsSync(path.join(cmdDir(dest), name + '.md'));
+  const readConfig = p => {
+    if (!existsSync(p)) return null;
+    try { return JSON.parse(readFileSync(p, 'utf8')); } catch (_) { return null; }
+  };
+  const clean = r => {
+    try { rmSync(r.home, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+    try { rmSync(r.dest, { recursive: true, force: true }); } catch (_) { /* non-fatal */ }
+  };
+
+  // P1 — default install deploys adaptive-core ONLY (no fast, no phase1-5) and
+  // seeds installed_paths:[]. Today RED: install-opencode.sh always deploys the
+  // FULL command set (12 files incl. fast + phase1-5).
+  {
+    const r = runInstaller([]);
+    assert(r.ok,
+      'P1: default install-opencode.sh exits 0 (got status ' + r.status + (r.stderr ? ' — ' + String(r.stderr).split('\n')[0] : '') + ')');
+    for (const name of ADAPTIVE_CORE) {
+      assert(hasCmd(r.dest, name),
+        'P1[' + name + ']: default install deploys the adaptive-core command');
+    }
+    for (const name of FAST_ONLY) {
+      assert(!hasCmd(r.dest, name),
+        'P1[' + name + ']: default install does NOT deploy the fast-only command (it is the --with-fast opt-in)');
+    }
+    for (const name of FULL_ONLY) {
+      assert(!hasCmd(r.dest, name),
+        'P1[' + name + ']: default install does NOT deploy the full-only phase command (it is the --with-full opt-in)');
+    }
+    const cfg = readConfig(r.configPath);
+    assert(cfg !== null,
+      'P1: default install seeds ~/.config/kaola-workflow/config.json');
+    assert(cfg && Array.isArray(cfg.installed_paths),
+      'P1: default install seeds installed_paths as a list');
+    assert(cfg && JSON.stringify(cfg.installed_paths) === '[]',
+      'P1: default install installed_paths deep-equals [] (adaptive-only, no opt-ins) — got ' + JSON.stringify(cfg && cfg.installed_paths));
+    clean(r);
+  }
+
+  // P2 — --with-fast deploys fast (+ adaptive-core) and writes installed_paths:["fast"].
+  // Today RED: --with-fast is an unknown arg → exit 2, nothing deployed.
+  {
+    const r = runInstaller(['--with-fast']);
+    assert(r.ok,
+      'P2: --with-fast install exits 0 (got status ' + r.status + (r.stderr ? ' — ' + String(r.stderr).split('\n')[0] : '') + ')');
+    for (const name of ADAPTIVE_CORE) {
+      assert(hasCmd(r.dest, name),
+        'P2[' + name + ']: --with-fast install still deploys adaptive-core');
+    }
+    for (const name of FAST_ONLY) {
+      assert(hasCmd(r.dest, name),
+        'P2[' + name + ']: --with-fast install deploys the fast-only command');
+    }
+    for (const name of FULL_ONLY) {
+      assert(!hasCmd(r.dest, name),
+        'P2[' + name + ']: --with-fast does NOT deploy the full-only phase commands');
+    }
+    const cfg = readConfig(r.configPath);
+    assert(cfg && JSON.stringify(cfg.installed_paths) === '["fast"]',
+      'P2: --with-fast installed_paths deep-equals ["fast"] — got ' + JSON.stringify(cfg && cfg.installed_paths));
+    clean(r);
+  }
+
+  // P3 — --with-full deploys phase1-5 (+ adaptive-core) and writes installed_paths:["full"].
+  // Today RED: --with-full is an unknown arg → exit 2.
+  {
+    const r = runInstaller(['--with-full']);
+    assert(r.ok,
+      'P3: --with-full install exits 0 (got status ' + r.status + (r.stderr ? ' — ' + String(r.stderr).split('\n')[0] : '') + ')');
+    for (const name of ADAPTIVE_CORE) {
+      assert(hasCmd(r.dest, name),
+        'P3[' + name + ']: --with-full install still deploys adaptive-core');
+    }
+    for (const name of FULL_ONLY) {
+      assert(hasCmd(r.dest, name),
+        'P3[' + name + ']: --with-full install deploys the full-only phase command');
+    }
+    for (const name of FAST_ONLY) {
+      assert(!hasCmd(r.dest, name),
+        'P3[' + name + ']: --with-full does NOT deploy the fast-only command');
+    }
+    const cfg = readConfig(r.configPath);
+    assert(cfg && JSON.stringify(cfg.installed_paths) === '["full"]',
+      'P3: --with-full installed_paths deep-equals ["full"] — got ' + JSON.stringify(cfg && cfg.installed_paths));
+    clean(r);
+  }
+
+  // P4 — --with-fast --with-full deploys BOTH (adaptive-core ∪ fast ∪ full) and
+  // writes installed_paths:["fast","full"] in that canonical order.
+  {
+    const r = runInstaller(['--with-fast', '--with-full']);
+    assert(r.ok,
+      'P4: --with-fast --with-full install exits 0 (got status ' + r.status + (r.stderr ? ' — ' + String(r.stderr).split('\n')[0] : '') + ')');
+    for (const name of ADAPTIVE_CORE.concat(FAST_ONLY, FULL_ONLY)) {
+      assert(hasCmd(r.dest, name),
+        'P4[' + name + ']: --with-fast --with-full deploys every command (adaptive-core ∪ fast ∪ full)');
+    }
+    const cfg = readConfig(r.configPath);
+    assert(cfg && JSON.stringify(cfg.installed_paths) === '["fast","full"]',
+      'P4: --with-fast --with-full installed_paths deep-equals ["fast","full"] in canonical order — got ' + JSON.stringify(cfg && cfg.installed_paths));
+    clean(r);
+  }
+
+  // P5 — UNION never removes: install --with-fast once, then BARE re-install
+  // (no opt-in flags) into the SAME dest/HOME must PRESERVE installed_paths:["fast"]
+  // and the fast command file. Mirrors install.sh EFFECTIVE_FAST/EFFECTIVE_FULL
+  // (L215–216: existing opt-ins stay effective across re-installs).
+  {
+    const r1 = runInstaller(['--with-fast']);
+    assert(r1.ok, 'P5: first --with-fast install exits 0');
+    // Re-run into the SAME home + dest with NO opt-in flags.
+    const r2 = spawnSync('bash',
+      [INSTALLER, '--target', r1.dest, '--yes', '--no-scripts'],
+      { env: Object.assign({}, process.env, { HOME: r1.home }), encoding: 'utf8' });
+    assert(r2.status === 0,
+      'P5: bare re-install into the same dest/HOME exits 0 (got status ' + r2.status + (r2.stderr ? ' — ' + String(r2.stderr).split('\n')[0] : '') + ')');
+    const cfg = readConfig(r1.configPath);
+    assert(cfg && JSON.stringify(cfg.installed_paths) === '["fast"]',
+      'P5: bare re-install PRESERVES installed_paths:["fast"] (UNION never removes) — got ' + JSON.stringify(cfg && cfg.installed_paths));
+    for (const name of FAST_ONLY) {
+      assert(hasCmd(r1.dest, name),
+        'P5[' + name + ']: fast command still deployed after bare re-install (UNION preserves prior opt-ins)');
+    }
+    clean(r1);
+  }
+
+  // A (folded #544) — ZERO Claude path leaks across the ENTIRE deployed .opencode/
+  // tree. Today kaola_script()'s search path ships the Claude env var
+  // ($CLAUDE_PLUGIN_ROOT) + the Claude home dir ($HOME/.claude/kaola-workflow)
+  // verbatim in EVERY command AND in the contractor + workflow-planner agents.
+  // The opencode edition must resolve scripts via an opencode-native path (no
+  // Claude env vars, no .claude/ dir). This greps command/*.md + agent/*.md +
+  // plugins/*.js + hooks/*.sh on a FRESHLY-installed hermetic tree (the same
+  // surface install-opencode.sh deploys for every consumer) and asserts 0 matches.
+  {
+    const r = runInstaller([]);
+    let leaks = 0;
+    const leakFiles = [];
+    const roots = [
+      ['command', path.join(r.dest, '.opencode', 'command')],
+      ['agent',   path.join(r.dest, '.opencode', 'agent')],
+      ['plugins', path.join(r.dest, '.opencode', 'plugins')],
+      ['hooks',   path.join(r.dest, '.opencode', 'hooks')],
+    ];
+    for (const [label, dir] of roots) {
+      if (!existsSync(dir)) continue;
+      for (const f of readdirSync(dir)) {
+        let txt;
+        try { txt = readFileSync(path.join(dir, f), 'utf8'); } catch (_) { continue; }
+        const m = (txt.match(/CLAUDE_PLUGIN_ROOT/g) || []).length
+                + (txt.match(/\.claude\/kaola-workflow/g) || []).length;
+        if (m > 0) { leaks += m; leakFiles.push(label + '/' + f + ' (' + m + ')'); }
+      }
+    }
+    assert(leaks === 0,
+      'A (#544): ZERO Claude path leaks (CLAUDE_PLUGIN_ROOT / .claude/kaola-workflow) across the deployed .opencode/ tree — found ' + leaks + ' match(es) in: ' + leakFiles.slice(0, 6).join(', ') + (leakFiles.length > 6 ? ', …' : ''));
+    clean(r);
+  }
+}
+
 if (failed) {
   console.error('\nopencode-edition test FAILED: ' + failed + ' failure(s), ' + passed + ' passed.');
   process.exit(1);

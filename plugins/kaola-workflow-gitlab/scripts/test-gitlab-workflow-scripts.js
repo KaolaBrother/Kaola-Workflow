@@ -2010,8 +2010,9 @@ function testStaleWorktreeCheck() {
 const gitlabPluginRoot = path.resolve(__dirname, '..');
 const installProfilesScript = path.join(gitlabPluginRoot, 'scripts', 'install-codex-agent-profiles.js');
 
-function runInstallProfiles(target, extraEnv) {
-  const result = spawnSync(process.execPath, [installProfilesScript, target], {
+function runInstallProfiles(target, extraEnv, extraArgs) {
+  const args = (extraArgs && extraArgs.length) ? extraArgs : [];
+  const result = spawnSync(process.execPath, [installProfilesScript, target, ...args], {
     cwd: gitlabPluginRoot,
     encoding: 'utf8',
     env: extraEnv ? Object.assign({}, process.env, extraEnv) : process.env
@@ -4575,6 +4576,31 @@ testGitlabAdaptiveNodeOperatorHint445();
 testGitlabPlanValidatorRefusalMatrix401();
 testForbiddenOnly341();
 testGitlabBoundary2FetchRetry507();
+
+// #543: forge smoke — the gitlab installer copy records the --with-full opt-in into the shared
+// ~/.config/kaola-workflow/config.json installed_paths (the same UNION writer the codex triplet ships,
+// byte-identical). Default install → []; --with-full → ['full']. Uses a FRESH hermetic HOME (not the
+// shared module-top kwSandboxHome) so installed_paths never leaks across the file's other tests.
+function testGitlabInstalledPathsPartition543Smoke() {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-543-home-'));
+  const target = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-543-target-'));
+  try {
+    const env = { HOME: home, USERPROFILE: home };
+    runInstallProfiles(target, env);
+    const cfg = JSON.parse(fs.readFileSync(path.join(home, '.config', 'kaola-workflow', 'config.json'), 'utf8'));
+    assert.deepStrictEqual(cfg.installed_paths, [], '#543(gl): default install installed_paths must be []');
+
+    runInstallProfiles(target, env, ['--with-full']);
+    const cfg2 = JSON.parse(fs.readFileSync(path.join(home, '.config', 'kaola-workflow', 'config.json'), 'utf8'));
+    assert.deepStrictEqual(cfg2.installed_paths, ['full'], '#543(gl): --with-full → ["full"]');
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(target, { recursive: true, force: true });
+  }
+  console.log('testGitlabInstalledPathsPartition543Smoke: PASSED');
+}
+
+testGitlabInstalledPathsPartition543Smoke();
 
 testGitLabRoadmapInitIssueExclusiveAndUpdate()
   .then(() => {

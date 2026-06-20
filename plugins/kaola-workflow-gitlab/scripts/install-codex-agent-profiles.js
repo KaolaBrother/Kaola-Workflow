@@ -64,6 +64,20 @@ const RETIRED_PROFILE_FILES = [
 const EFFORT_VALUES = ['low', 'medium', 'high', 'xhigh'];
 const MANIFEST_SCHEMA_VERSION = 1;
 
+// issue #543: --with-fast / --with-full opt-in partition. Adaptive is the unconditional default
+// (#538); fast/full are install-time opt-ins recorded in the shared ~/.config/kaola-workflow/config.json
+// installed_paths field (read at runtime by the legality gate in kaola-workflow-claim.js via
+// adaptive-schema's resolveInstalledPaths). process.argv.includes is position-robust, so
+// `node install-... "$PWD" --with-fast` works regardless of arg order. --enable-adaptive is retired
+// (#538) → warn + ignore. Unknown args are IGNORED (never hard-fail): the preflight
+// (kaola-workflow-codex-preflight.js) and the test suites invoke the installer positionally with a
+// project-root argv that must not be rejected.
+const WITH_FAST = process.argv.includes('--with-fast');
+const WITH_FULL = process.argv.includes('--with-full');
+if (process.argv.some(a => a === '--enable-adaptive' || a.startsWith('--enable-adaptive='))) {
+  console.warn('Kaola-Workflow Codex installer: --enable-adaptive is retired (#538); adaptive is the unconditional default. Ignoring.');
+}
+
 // #451 (supersedes #405): the `<role>-max` xhigh effort-variant matrix is retired. Codex 0.139 has
 // no per-spawn reasoning-effort override, so base role profiles now OMIT `model_reasoning_effort`
 // and a spawned agent inherits the parent Codex session effort (agent-config wins over
@@ -570,6 +584,50 @@ function postVerify(templateRoles) {
   return problems;
 }
 
+// issue #543 D4: seedKaolaConfig — pure-JS UNION writer for ~/.config/kaola-workflow/config.json
+// installed_paths. Mirrors install.sh:704-734 + install-opencode.sh seed_kaola_config byte-semantically
+// (node-native port; no python3 dependency — node is guaranteed present for a node installer). The
+// shared config path is edition-agnostic (a Claude/opencode install reads the same file), so the
+// UNION/canonical-order logic MUST stay byte-identical to the other writers or it clobbers a prior
+// install's installed_paths. Adaptive is implicit-always and NEVER appears in installed_paths (only
+// {fast,full} can). Re-install UNIONS existing installed_paths with the newly-requested opt-ins
+// (never removes); uninstall→reinstall resets to []. canonical order = ['fast','full']; unknown tokens
+// dropped. parallel_mode setdefault 'auto' (never overwrites a user value). Migrates away the retired
+// enable_adaptive field. WARN-first: a corrupt/non-object existing config warns and is left UNTOUCHED
+// (never throws, never aborts the success path). Write-temp-then-rename for crash-safety parity with
+// copyAgentProfiles. Pure + exported for unit tests.
+function seedKaolaConfig(homeDir, withFast, withFull) {
+  const configDir = path.join(homeDir, '.config', 'kaola-workflow');
+  const configFile = path.join(configDir, 'config.json');
+  let config = {};
+  if (fs.existsSync(configFile)) {
+    let parsed;
+    try { parsed = JSON.parse(read(configFile)); }
+    catch (e) {
+      console.warn(`Kaola-Workflow Codex installer: ${configFile} is not valid JSON (${e.message}); leaving it untouched.`);
+      return { status: 'skipped_corrupt' };
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      console.warn(`Kaola-Workflow Codex installer: ${configFile} is not a JSON object; leaving it untouched.`);
+      return { status: 'skipped_non_object' };
+    }
+    config = parsed;
+  }
+  if (config.parallel_mode === undefined) config.parallel_mode = 'auto';   // setdefault, never overwrite user value
+  const existing = Array.isArray(config.installed_paths) ? config.installed_paths : [];
+  const paths = new Set(existing);
+  if (withFast) paths.add('fast');
+  if (withFull) paths.add('full');
+  config.installed_paths = ['fast', 'full'].filter(p => paths.has(p));    // canonical order, {fast,full} only
+  delete config.enable_adaptive;                                           // migrate retired field
+  fs.mkdirSync(configDir, { recursive: true });
+  const tmp = configFile + '.tmp-' + process.pid;                          // crash-safety parity w/ copyAgentProfiles
+  fs.writeFileSync(tmp, JSON.stringify(config, null, 2) + '\n');
+  fs.renameSync(tmp, configFile);
+  console.log(`Kaola-Workflow Codex installer: installed_paths (adaptive always; opt-ins: ${JSON.stringify(config.installed_paths)}) in ${configFile}`);
+  return { status: 'updated', installed_paths: config.installed_paths };
+}
+
 function main() {
 
   assert(fs.existsSync(sourceAgentsDir), `missing source agents directory: ${sourceAgentsDir}`);
@@ -601,6 +659,14 @@ function main() {
   const copied = copyAgentProfiles();
   const configStatus = updateConfig();
   const { status: hooksStatus, stableCopy } = updateHooks();
+
+  // #543: seed the shared ~/.config/kaola-workflow/config.json installed_paths opt-in record. Runs
+  // AFTER updateHooks and BEFORE pruneStaleProfiles (mirrors install-opencode.sh seed_kaola_config
+  // ordering, which follows seed_config). WARN-first guarantees it cannot break the success path — a
+  // hooks/profile/postVerify failure short-circuits before reaching it, and a corrupt config is left
+  // untouched rather than aborting. os.homedir() honors process.env.HOME (POSIX), matching the
+  // hermetic-HOME test pattern.
+  seedKaolaConfig(os.homedir(), WITH_FAST, WITH_FULL);
 
   // 7-8. Prune stale/retired profiles, then record the ownership manifest.
   const { removed, extraUnmanaged } = pruneStaleProfiles(targetAgentsDir, copied, prevManifest);
@@ -652,6 +718,7 @@ module.exports = {
   updateHooks,
   hookReferencedRelPaths,
   copyHookScripts,
+  seedKaolaConfig,
   validateProfileText,
   validateSourceProfiles,
   pruneStaleProfiles,

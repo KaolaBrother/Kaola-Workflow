@@ -263,18 +263,37 @@ Locked by `test-opencode-edition.js` assertion **A22**.
 > would mean deep surgery on canonical concepts outside this flip's scope, so they
 > are left in place intentionally.
 
-### Installer command-set parity — scoped out
+### Installer command-set partition (`--with-fast` / `--with-full`)
 
-`install-opencode.sh` is a standalone installer (not `install.sh --forge`) and
-deploys the **full** command set (including `kaola-workflow-fast.md` and the
-`phase1`–`phase5` commands). #538's install.sh target is adaptive-only-default
-with `--with-fast` / `--with-full` opt-ins. That parity is **scoped out of this
-flip**: the load-bearing change is the router-prose flip (the transform, above),
-which already makes adaptive the default *behavior* regardless of which commands
-are installed; the install-time command-set partition (which commands exist) is
-orthogonal and is a design call best aligned with #538's canonical install.sh
-work. Full `--with-fast` / `--with-full` parity can ride a later issue without
-colliding. See the rationale comment at the top of `install-opencode.sh`.
+`install-opencode.sh` is a standalone installer (not `install.sh --forge`) and mirrors
+install.sh's #538 install-time opt-in partition. The **default** install deploys the
+**adaptive-core** command set ONLY (6 files), so adaptive is the unconditional default
+both at the router (the transform above) and at the install surface (which commands
+exist). The fast / full-phase commands are opt-ins:
+
+| Flag | Commands added | Recorded in `installed_paths` |
+| --- | --- | --- |
+| *(default)* | adapt, auto, finalize, plan-run, workflow-init, workflow-next | `[]` |
+| `--with-fast` | `kaola-workflow-fast` | `["fast"]` |
+| `--with-full` | `kaola-workflow-phase1`..`phase5` | `["full"]` |
+| `--with-fast --with-full` | all of the above | `["fast","full"]` |
+
+**Lockstep with install.sh.** The opt-in is recorded in the **shared**
+`~/.config/kaola-workflow/config.json` `installed_paths` field — the *same* file
+`install.sh` reads/writes — via a UNION read-modify-write (D4). A re-install **never
+removes** a prior opt-in: `--with-fast` once, then a *bare* re-install (no flags) into
+the same dest/HOME, preserves the `fast` command **and** `installed_paths:["fast"]`
+(R1: `EFFECTIVE_*` = already-installed ∪ requested-this-run). Uninstall→reinstall is
+the reset to adaptive-only. `--enable-adaptive` is retired (#538) and
+accepted-but-ignored (adaptive is always installed). Canonical order is
+`["fast","full"]`.
+
+**The generator still emits all 12.** `sync-opencode-edition.js writeCommands`
+produces every command file into the committed in-repo `.opencode/command/` (the
+single source the installer copies from); the partition is an **install-time**
+selection of which files to COPY to the user's dest. So the route-reachability +
+content-reachability assertions (which read the committed tree) stay green
+regardless of which opt-ins a given install chose.
 
 ## Hooks
 
@@ -299,14 +318,21 @@ stays dormant unless `KAOLA_LANE_CONTAINMENT` is set, matching canonical behavio
 ## Script resolution coupling
 
 Workflow commands invoke `scripts/kaola-workflow-*.js` through a `kaola_script()`
-locator that searches, in order: `./scripts/`, `$CLAUDE_PLUGIN_ROOT/scripts/`,
-`~/.claude/kaola-workflow/scripts/`.
+locator that searches, in order: `./scripts/`, then
+`${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/kaola-workflow/scripts/` (honoring
+`$OPENCODE_CONFIG_DIR`, default `~/.config/opencode`). This is an **opencode-native**
+path — there is **no** `$CLAUDE_PLUGIN_ROOT` and **no** `~/.claude/kaola-workflow` in
+the generated `.opencode/` tree (the #544 Claude path-leak fix, folded into #543). The
+generator (`sync-opencode-edition.js rewriteClaudeScriptPaths`) rewrites the canonical
+Claude resolver to this opencode form at generation time; canonical `commands/*.md` /
+`agents/*.md` are never touched.
 
 - **Self-dev (this repo)** — `package.json` name is `kaola-workflow`, so
   `./scripts/` resolves first. Nothing else needed; the edition works in place.
 - **Consumer project** — `install-opencode.sh` copies the support scripts to
-  `~/.claude/kaola-workflow/scripts/` (a path `kaola_script()` already searches),
-  so commands resolve without editing them. Skip with `--no-scripts`.
+  `${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/kaola-workflow/scripts/` (a path
+  `kaola_script()` already searches), so commands resolve without editing them.
+  Skip with `--no-scripts`.
 
 ## Install (into a project)
 
@@ -314,11 +340,21 @@ locator that searches, in order: `./scripts/`, `$CLAUDE_PLUGIN_ROOT/scripts/`,
 `install.sh`):
 
 ```bash
-./install-opencode.sh                         # deploy into the current directory
+./install-opencode.sh                         # adaptive-core only (default)
+./install-opencode.sh --with-fast             # also deploy kaola-workflow-fast
+./install-opencode.sh --with-full             # also deploy kaola-workflow-phase1..5
+./install-opencode.sh --with-fast --with-full # deploy everything
 ./install-opencode.sh --target /path/to/repo  # deploy into a specific project
 ./install-opencode.sh --global                # agents+commands → ~/.config/opencode
 ./install-opencode.sh --regenerate            # refresh in-repo .opencode/ from canonical
 ```
+
+The default install deploys the **adaptive-core** command set only (6 files);
+`--with-fast` / `--with-full` add the fast / full-phase commands (see
+[Installer command-set partition](#installer-command-set-partition--with-fast---with-full)).
+The opt-in is recorded in the shared `~/.config/kaola-workflow/config.json`
+`installed_paths` and is preserved across re-installs (UNION, never removes).
+`--enable-adaptive` is retired and accepted-but-ignored.
 
 It seeds `opencode.json` only if absent. With `--adapt` (the default) it adapts the
 two effort tiers to your **inherited** model (detected from
@@ -355,14 +391,19 @@ The validator is self-contained (run directly with `node`; it is intentionally
 
 ## Verification
 
-The edition is covered by `scripts/test-opencode-edition.js` (300 assertions):
+The edition is covered by `scripts/test-opencode-edition.js` (363 assertions):
 agent/command presence and frontmatter, model-agnostic invariant (no `model:` in
 generated agents), byte-for-byte canonical parity, `opencode.json` JSONC validity
 + exact tier coverage, **adaptive effort tiers** (`mapTier` per provider + the
 higher-profile correspondence), the **workflow-planner `mapTier` guidance**,
 **model-prose consistency** (no contradictory "pass `model=`" instructions),
 **path-flip** (A22: no Path Intent section / auto-fallback prose on the opencode
-surface), and route-reachability (every receipt-emitted command target resolves
-under `.opencode/command/`). The existing `test-route-reachability.js` /
-`validate-vendored-agents.js` / `validate-script-sync.js` / `test-edition-sync.js`
-suites stay green — this edition adds a surface without altering the others.
+surface), route-reachability (every receipt-emitted command target resolves
+under `.opencode/command/`), **install-time opt-in partition** (P1–P5:
+`--with-fast` / `--with-full` deploy the fast / full-phase commands + record
+`installed_paths` in the shared config; UNION never removes), and the **folded
+#544 Claude path-leak fix** (A: zero `$CLAUDE_PLUGIN_ROOT` /
+`~/.claude/kaola-workflow` tokens across the deployed `.opencode/` tree). The
+existing `test-route-reachability.js` / `validate-vendored-agents.js` /
+`validate-script-sync.js` / `test-edition-sync.js` suites stay green — this
+edition adds a surface without altering the others.

@@ -270,6 +270,17 @@ try {
       assert(fs.existsSync(projectConfigPath), '#447 AC2: project-local .codex/config.toml must be written');
       const configText = fs.readFileSync(projectConfigPath, 'utf8');
       assert(configText.includes('# BEGIN kaola-workflow agents'), '#447 AC2: project config.toml must contain managed agents block');
+
+      // #543 cross-edition: a default (no-flags) codex installer run must seed the shared
+      // ~/.config/kaola-workflow/config.json with installed_paths:[] (adaptive-only). This is the
+      // claude-chain behavioral-identity assertion that the codex triplet writer (node port) and the
+      // Claude install.sh D4 writer produce the same config shape read by the runtime legality gate.
+      const sharedConfigPath = path.join(chome, '.config', 'kaola-workflow', 'config.json');
+      assert(fs.existsSync(sharedConfigPath), '#543: default install must seed ~/.config/kaola-workflow/config.json');
+      const sharedConfig = JSON.parse(fs.readFileSync(sharedConfigPath, 'utf8'));
+      assert(Array.isArray(sharedConfig.installed_paths) && sharedConfig.installed_paths.length === 0,
+        '#543: default install installed_paths must be [] (adaptive-only), got: ' + JSON.stringify(sharedConfig.installed_paths));
+      assert(sharedConfig.parallel_mode === 'auto', '#543: default install parallel_mode setdefault "auto"');
     } finally {
       fs.rmSync(cproj, { recursive: true, force: true });
       fs.rmSync(chome, { recursive: true, force: true });

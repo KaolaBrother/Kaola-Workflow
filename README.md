@@ -221,7 +221,9 @@ Forge editions:
 - **GitLab**: opt-in. GitLab issues, merge requests, `glab`.
 - **Gitea**: opt-in. Gitea issues, pull requests, `tea` ≥ 0.9.2, Gitea server ≥ 1.17. **Forgejo** ≥ 1.18 is expected to work via the shared API surface but is not explicitly tested.
 
-Claude Code and Codex share the forge editions — pick one forge at a time; all editions share the same command names. **opencode** is an **additive** runtime (like Codex — not a git forge): it has no separate forge editions, `./install-opencode.sh` touches none of the existing edition machinery, and on opencode **adaptive is the unconditional default path** (the path-selection step is stripped at generation time). See [docs/opencode-edition.md](docs/opencode-edition.md).
+Claude Code and Codex share the forge editions — pick one forge at a time; all editions share the same command names. **opencode** is an **additive** runtime (like Codex — not a git forge): it has no separate forge editions, `./install-opencode.sh` touches none of the existing edition machinery, and it is fully **standalone** — it resolves its support scripts under `${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/kaola-workflow/scripts` and never touches `~/.claude/`, so it runs on a machine with no Claude Code installed. See [docs/opencode-edition.md](docs/opencode-edition.md).
+
+**Path selection is identical across all three editions.** Adaptive is the unconditional default everywhere — Claude Code, Codex, and opencode — and `fast` / `full` are install-time opt-ins (`--with-fast` / `--with-full`) on every edition, never installed by default. Each installer records the opt-ins by UNION into the shared `~/.config/kaola-workflow/config.json` `installed_paths` field (canonical order `["fast","full"]`; a re-install never removes a prior opt-in), and the runtime gate refuses a path that is not installed with a typed `path_not_installed` — never a silent fallback. See [docs/decisions/D-543-01.md](docs/decisions/D-543-01.md).
 
 ### Claude Code
 
@@ -356,9 +358,13 @@ opencode is an additive runtime — installed by its own script, not `--forge`. 
 ./install-opencode.sh                 # deploy into the current project (.opencode/ + opencode.json)
 ./install-opencode.sh --global        # deploy agents + commands into ~/.config/opencode (all projects)
 ./install-opencode.sh --regenerate    # refresh the in-repo .opencode/ tree from canonical
+./install-opencode.sh --with-fast     # opt-in: add the fast path (adaptive is the default)
+./install-opencode.sh --with-full     # opt-in: add the full six-phase path
 ```
 
-The install seeds `opencode.json` with **two model tiers as reasoning-effort variants of your inherited model** — no model is pinned, so both tiers inherit whatever model you already use in opencode. The reasoning tier (the canonical `opus` roles plus the `higher`-profile reviewers) gets the model's **top** effort variant; the standard tier gets the **second** (e.g. `max` / `high` on GLM-5.2 and Anthropic, `xhigh` / `high` on OpenAI, `high` / `low` on Google). The mapping (`mapTier` + `CONTRACT_EFFORT_TABLE` + `contractForProvider`) is contract-keyed — the effort knob follows the model's API contract, not its brand name — and lives in `kaola-workflow-adaptive-schema.js`. Adaptive is the unconditional default path on opencode. Full detail: [docs/opencode-edition.md](docs/opencode-edition.md).
+The same `--with-fast` / `--with-full` opt-in semantics that `install.sh` exposes for Claude Code
+apply here, recorded by UNION into the same shared `~/.config/kaola-workflow/config.json`. The
+install seeds `opencode.json` with **two model tiers as reasoning-effort variants of your inherited model** — no model is pinned, so both tiers inherit whatever model you already use in opencode. The reasoning tier (the canonical `opus` roles plus the `higher`-profile reviewers) gets the model's **top** effort variant; the standard tier gets the **second** (e.g. `max` / `high` on GLM-5.2 and Anthropic, `xhigh` / `high` on OpenAI, `high` / `low` on Google). The mapping (`mapTier` + `CONTRACT_EFFORT_TABLE` + `contractForProvider`) is contract-keyed — the effort knob follows the model's API contract, not its brand name — and lives in `kaola-workflow-adaptive-schema.js`. Adaptive is the unconditional default path on opencode. Full detail: [docs/opencode-edition.md](docs/opencode-edition.md).
 
 ## Codex
 

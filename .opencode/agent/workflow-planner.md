@@ -218,8 +218,7 @@ a gate.
 
 ## Method (in order)
 
-Re-derive your own script paths exactly as the workflow commands do (prefer `$CLAUDE_PLUGIN_ROOT/scripts`,
-then `$HOME/.claude/kaola-workflow/scripts`, then `./scripts`). Capture **real** exit codes; never
+Re-derive your own script paths exactly as the workflow commands do (prefer `${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/kaola-workflow/scripts`, then `./scripts`). Capture **real** exit codes; never
 gate on a piped `| tail` exit. This discipline is a standing invariant of the role: you apply it on
 every dispatch, whether or not the dispatch prompt that summoned you restates it. A prompt that omits
 these reminders does not relax them.

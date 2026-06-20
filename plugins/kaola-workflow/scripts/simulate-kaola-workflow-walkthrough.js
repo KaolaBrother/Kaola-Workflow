@@ -60,8 +60,9 @@ function assertNoLegacyCoordDirs(root) {
   }
 }
 
-function runInstallProfiles(target, extraEnv) {
-  const result = spawnSync(process.execPath, [installProfilesScript, target], {
+function runInstallProfiles(target, extraEnv, extraArgs) {
+  const args = (extraArgs && extraArgs.length) ? extraArgs : [];
+  const result = spawnSync(process.execPath, [installProfilesScript, target, ...args], {
     cwd: repoRoot,
     encoding: 'utf8',
     env: extraEnv ? Object.assign({}, process.env, extraEnv) : process.env
@@ -1615,6 +1616,7 @@ function main() {
     testCodexFinalizeRoadmapResidueDetection();       // #428
     testCodexBundleStateIncoherent();                 // #430
     testCodexBundle424432433NodeSeeding();            // #424/#432/#433 n9-walkthrough
+    testCodexInstalledPathsPartition543();            // #543 --with-fast/--with-full opt-in partition
 
     console.log('Kaola-Workflow walkthrough simulation passed');
   } finally {
@@ -2042,6 +2044,168 @@ function testCodexBundle424432433NodeSeeding() {
   }
 
   console.log('testCodexBundle424432433NodeSeeding: PASSED');
+}
+
+// #543: the Codex installer --with-fast/--with-full opt-in partition. Adaptive is the unconditional
+// default; fast/full are install-time opt-ins recorded via UNION into ~/.config/kaola-workflow/config.json
+// installed_paths (the field the runtime legality gate reads via adaptive-schema resolveInstalledPaths).
+// Each sub-case uses a FRESH mkdtempSync HOME (NOT the shared module-top kwSandboxHome, which is seeded
+// once and would leak installed_paths across sub-cases). Mirrors install.sh D4 + install-opencode.sh
+// seed_kaola_config byte-semantically (node-native port).
+function testCodexInstalledPathsPartition543() {
+  const cfgPath = home => path.join(home, '.config', 'kaola-workflow', 'config.json');
+  const readCfg = home => JSON.parse(fs.readFileSync(cfgPath(home), 'utf8'));
+  // This file's assert(cond, msg) is hand-rolled (no node assert module), so compare arrays via
+  // JSON.stringify and include the actual value in the failure message.
+  const eqArr = (actual, expected, msg) =>
+    assert(JSON.stringify(actual) === JSON.stringify(expected),
+      msg + ' (got ' + JSON.stringify(actual) + ', expected ' + JSON.stringify(expected) + ')');
+  const freshHome = () => fs.mkdtempSync(path.join(os.tmpdir(), 'kw-543-home-'));
+  const freshTarget = () => fs.mkdtempSync(path.join(os.tmpdir(), 'kw-543-target-'));
+  const homeEnv = home => ({ HOME: home, USERPROFILE: home });
+  const rm = (...dirs) => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true }); };
+
+  // (a) default install → installed_paths:[] (adaptive-only; fast/full unreachable until opted in).
+  {
+    const home = freshHome(), target = freshTarget();
+    try {
+      const r = runInstallProfiles(target, homeEnv(home));
+      assert(r.status === 0, '#543(a): default install must exit 0');
+      const cfg = readCfg(home);
+      eqArr(cfg.installed_paths, [], '#543(a): default install installed_paths must be []');
+      assert(cfg.parallel_mode === 'auto', '#543(a): parallel_mode setdefault auto');
+    } finally { rm(home, target); }
+  }
+
+  // (b) --with-fast → installed_paths:["fast"].
+  {
+    const home = freshHome(), target = freshTarget();
+    try {
+      runInstallProfiles(target, homeEnv(home), ['--with-fast']);
+      eqArr(readCfg(home).installed_paths, ['fast'], '#543(b): --with-fast → ["fast"]');
+    } finally { rm(home, target); }
+  }
+
+  // (c) --with-full → installed_paths:["full"].
+  {
+    const home = freshHome(), target = freshTarget();
+    try {
+      runInstallProfiles(target, homeEnv(home), ['--with-full']);
+      eqArr(readCfg(home).installed_paths, ['full'], '#543(c): --with-full → ["full"]');
+    } finally { rm(home, target); }
+  }
+
+  // (d) both flags → installed_paths:["fast","full"] in canonical order.
+  {
+    const home = freshHome(), target = freshTarget();
+    try {
+      runInstallProfiles(target, homeEnv(home), ['--with-full', '--with-fast']);
+      eqArr(readCfg(home).installed_paths, ['fast', 'full'],
+        '#543(d): both flags → ["fast","full"] canonical order (regardless of arg order)');
+    } finally { rm(home, target); }
+  }
+
+  // (e) UNION never removes: --with-fast then a bare re-install (no flags) PRESERVES fast.
+  {
+    const home = freshHome(), target = freshTarget();
+    try {
+      runInstallProfiles(target, homeEnv(home), ['--with-fast']);
+      eqArr(readCfg(home).installed_paths, ['fast'], '#543(e) seed: ["fast"]');
+      runInstallProfiles(target, homeEnv(home));  // bare re-install
+      eqArr(readCfg(home).installed_paths, ['fast'],
+        '#543(e): UNION never removes — bare re-install must preserve prior ["fast"]');
+    } finally { rm(home, target); }
+  }
+
+  // (f) reinstall-after-uninstall resets to [] (simulate uninstall by deleting the config dir, then
+  // a bare reinstall → adaptive-only []). Proves reset = uninstall→reinstall (#538).
+  {
+    const home = freshHome(), target = freshTarget();
+    try {
+      runInstallProfiles(target, homeEnv(home), ['--with-fast']);
+      eqArr(readCfg(home).installed_paths, ['fast'], '#543(f) seed: ["fast"]');
+      // uninstall removes the shared config (mirrors uninstall.sh).
+      fs.rmSync(path.dirname(cfgPath(home)), { recursive: true, force: true });
+      runInstallProfiles(target, homeEnv(home));  // bare reinstall after uninstall
+      eqArr(readCfg(home).installed_paths, [],
+        '#543(f): reinstall-after-uninstall must reset installed_paths to []');
+    } finally { rm(home, target); }
+  }
+
+  // (g) enable_adaptive migration: a pre-seeded {enable_adaptive:true} is migrated away + installed_paths [].
+  {
+    const home = freshHome(), target = freshTarget();
+    try {
+      fs.mkdirSync(path.dirname(cfgPath(home)), { recursive: true });
+      fs.writeFileSync(cfgPath(home), JSON.stringify({ enable_adaptive: true, parallel_mode: 'auto' }) + '\n');
+      runInstallProfiles(target, homeEnv(home));
+      const cfg = readCfg(home);
+      assert(cfg.enable_adaptive === undefined, '#543(g): enable_adaptive must be migrated away (absent)');
+      eqArr(cfg.installed_paths, [], '#543(g): installed_paths must be []');
+    } finally { rm(home, target); }
+  }
+
+  // (h) corrupt JSON → WARN-first: exit 0, file left UNTOUCHED (byte-identical).
+  {
+    const home = freshHome(), target = freshTarget();
+    try {
+      const corrupt = 'not valid json {{{\n';
+      fs.mkdirSync(path.dirname(cfgPath(home)), { recursive: true });
+      fs.writeFileSync(cfgPath(home), corrupt);
+      const r = runInstallProfiles(target, homeEnv(home));
+      assert(r.status === 0, '#543(h): corrupt config must NOT abort the install (WARN-first, exit 0)');
+      assert(fs.readFileSync(cfgPath(home), 'utf8') === corrupt,
+        '#543(h): corrupt config file must be left byte-untouched');
+    } finally { rm(home, target); }
+  }
+
+  // (i) non-object "[]" → WARN-first: exit 0, file left UNTOUCHED.
+  {
+    const home = freshHome(), target = freshTarget();
+    try {
+      const nonObj = '[]\n';
+      fs.mkdirSync(path.dirname(cfgPath(home)), { recursive: true });
+      fs.writeFileSync(cfgPath(home), nonObj);
+      const r = runInstallProfiles(target, homeEnv(home));
+      assert(r.status === 0, '#543(i): non-object config must NOT abort the install (WARN-first, exit 0)');
+      assert(fs.readFileSync(cfgPath(home), 'utf8') === nonObj,
+        '#543(i): non-object config file must be left byte-untouched');
+    } finally { rm(home, target); }
+  }
+
+  // (j) parallel_mode setdefault: {} → "auto"; {"parallel_mode":"off"} → stays "off" (never overwrite).
+  {
+    const home = freshHome(), target = freshTarget();
+    try {
+      runInstallProfiles(target, homeEnv(home));
+      assert(readCfg(home).parallel_mode === 'auto', '#543(j): empty config → parallel_mode setdefault "auto"');
+    } finally { rm(home, target); }
+  }
+  {
+    const home = freshHome(), target = freshTarget();
+    try {
+      fs.mkdirSync(path.dirname(cfgPath(home)), { recursive: true });
+      fs.writeFileSync(cfgPath(home), JSON.stringify({ parallel_mode: 'off' }) + '\n');
+      runInstallProfiles(target, homeEnv(home));
+      assert(readCfg(home).parallel_mode === 'off',
+        '#543(j): setdefault must NOT overwrite a user parallel_mode value (stays "off")');
+    } finally { rm(home, target); }
+  }
+
+  // Export-surface lock: seedKaolaConfig is exported + returns a discriminating status (unit-level).
+  {
+    const mod = require(installProfilesScript);
+    assert(typeof mod.seedKaolaConfig === 'function', '#543: seedKaolaConfig must be exported for unit tests');
+    const home = freshHome();
+    try {
+      const res = mod.seedKaolaConfig(home, true, false);
+      assert(res.status === 'updated' && JSON.stringify(res.installed_paths) === JSON.stringify(['fast']),
+        '#543: seedKaolaConfig fast → {status:"updated", installed_paths:["fast"]}, got ' + JSON.stringify(res));
+      eqArr(readCfg(home).installed_paths, ['fast'], '#543: seedKaolaConfig wrote the file');
+    } finally { rm(home); }
+  }
+
+  console.log('testCodexInstalledPathsPartition543 (#543): PASSED');
 }
 
 main();

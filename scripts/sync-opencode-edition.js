@@ -156,7 +156,12 @@ function renderAgent(canonContent, agentName) {
   }
   lines.push('---');
   lines.push('');
-  const bodyText = body.trim().replace(/\s+$/, '');
+  // #544 (folded into #543): apply the Claude→opencode script-path rewrite to the agent body too
+  // (contractor ships 2 `kaola_script()` resolver definitions + the "Re-derive" prose; workflow-
+  // planner ships the "Re-derive" prose only). Other agents are verbatim (rewriteClaudeScriptPaths
+  // is a no-op when the patterns are absent). Applied to the RENDERED body so canonical agents/*.md
+  // are never touched (additive D-530-02); A6 parity holds because both sides go through renderAgent.
+  const bodyText = rewriteClaudeScriptPaths(body).trim().replace(/\s+$/, '');
   const suffix = opencodeAgentSuffix(agentName);
   lines.push(suffix ? bodyText + '\n' + suffix.replace(/\s+$/, '') : bodyText);
   return lines.join('\n') + '\n';
@@ -180,6 +185,43 @@ const OPENCODE_BADGE_BLOCK = [
   '`mapTier(tier, provider)` resolves the variant: the reasoning tier → the TOP effort variant, the standard tier → its SECOND.',
   '',
 ].join('\n');
+
+// opencode-native `kaola_script()` shell resolver (issue #544, folded into #543). The canonical
+// resolver ships a CLAUDE search path verbatim — `$CLAUDE_PLUGIN_ROOT` + `$HOME/.claude/kaola-workflow`
+// (contractor's copy ALSO adds the gitlab/gitea forge dirs). On the opencode edition that is a
+// Claude-path leak: opencode resolves scripts via an opencode-native dir honoring `$OPENCODE_CONFIG_DIR`
+// (default `~/.config/opencode`), which is where install-opencode.sh deploys the support scripts. This
+// constant is the wholesale replacement for every `kaola_script(){ ... return 1; }` definition line
+// (both the 3-path command form and the 5-path contractor form collapse to this single opencode
+// form — opencode is runtime-only, no forge axis). Single-quoted JS literal: inner `'`→`\'`, the
+// shell `printf '%s\n'` backslash-n is `\\n` so the GENERATED .md carries a literal `\n` (not a JS
+// newline that would split the one-line resolver).
+const OPENCODE_KAOLA_SCRIPT =
+  'kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+\'/package.json\').name||\'\')}catch(e){}" 2>/dev/null)"; _oc="${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./scripts/$_n" "$_oc/kaola-workflow/scripts/$_n"; do [ -f "$_p" ] && { printf \'%s\\n\' "$_p"; return; }; done; else for _p in "$_oc/kaola-workflow/scripts/$_n" "./scripts/$_n"; do [ -f "$_p" ] && { printf \'%s\\n\' "$_p"; return; }; done; fi; return 1; }';
+
+// #544 (folded into #543): rewrite the Claude script-path surface to opencode-native. Applied to
+// BOTH command bodies (via transformCommandBody) and agent bodies (via renderAgent) so the committed
+// .opencode/ tree has ZERO `$CLAUDE_PLUGIN_ROOT` / `$HOME/.claude/kaola-workflow` tokens. Canonical
+// sources are NEVER touched (additive D-530-02) — only the generated outputs. Two leak shapes:
+//   (a) a whole `kaola_script(){ ... return 1; }` definition line (commands: 3-path form ×N;
+//       contractor: 5-path form with gitlab/gitea forge dirs ×2) → wholesale replaced by
+//       OPENCODE_KAOLA_SCRIPT (whitespace/indent preserved).
+//   (b) the "Re-derive your own script path(s)" prose parenthetical in contractor + workflow-planner
+//       ("prefer `$CLAUDE_PLUGIN_ROOT/scripts`, then `$HOME/.claude/kaola-workflow/scripts`,
+//        then `./scripts`)") → collapsed to the 2-path opencode list.
+function rewriteClaudeScriptPaths(text) {
+  // (a) Whole resolver definition line (indent-preserving). The resolver is always a single line;
+  // `.*` does not cross newlines (no `s` flag), so each definition is replaced independently.
+  text = text.replace(/^([ \t]*)kaola_script\(\)\{.*\}\s*$/gm, (m, indent) => indent + OPENCODE_KAOLA_SCRIPT);
+  // (b) The path-list parenthetical in agent prose (whitespace-flexible across the two agents' line
+  // breaks). Scoped to the literal "(prefer `$CLAUDE_PLUGIN_ROOT/scripts`, then … then `./scripts`)"
+  // shape — only contractor + workflow-planner carry it, so no over-strip risk.
+  text = text.replace(
+    /\(prefer\s+`\$CLAUDE_PLUGIN_ROOT\/scripts`,\s+then\s+`\$HOME\/\.claude\/kaola-workflow\/scripts`,\s+then\s+`\.\/scripts`\)/g,
+    '(prefer `${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/kaola-workflow/scripts`, then `./scripts`)'
+  );
+  return text;
+}
 
 function transformCommandBody(body) {
   const lines = body.split(/\r?\n/);
@@ -283,6 +325,11 @@ function transformCommandBody(body) {
   // opencode runtime into workflow-state.md, so rewrite the literal to `--runtime opencode`.
   // Scoped to the exact flag token (word boundary) so prose mentions of "claude" are untouched.
   text = text.replace(/--runtime claude\b/g, '--runtime opencode');
+  // #544 (folded into #543): final pass — rewrite the `kaola_script()` resolver + the "Re-derive
+  // your own script path(s)" prose to the opencode-native path (no $CLAUDE_PLUGIN_ROOT, no
+  // ~/.claude/kaola-workflow). Runs LAST so the resolver line (still Claude-shaped above) is
+  // rewritten in full; the earlier transforms do not touch it.
+  text = rewriteClaudeScriptPaths(text);
   return text;
 }
 
@@ -674,7 +721,7 @@ if (require.main === module) main();
 
 module.exports = {
   renderAgent, renderCommand, renderOpencodeJson, renderAdaptiveConfig, renderNeutralConfig,
-  transformCommandBody, opencodeAgentSuffix,
+  transformCommandBody, opencodeAgentSuffix, rewriteClaudeScriptPaths, OPENCODE_KAOLA_SCRIPT,
   parseFrontmatter, parseTools, roleTier, reasoningRoles,
   higherProfileRoles, topTierRoles, standardTierRoles,
   parseModelProvider, detectInheritModel, buildAdaptOpts,
