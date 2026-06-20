@@ -7,7 +7,13 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 
 | Issue | Title | Status | Workflow Project | Next Step |
 |-------|-------|--------|------------------|-----------|
-| none | No active work | — | — | — |
+| #545 | Selection efficiency: one backlog reader per entry point | open | issue-545 | adaptive |
+| #546 | Adaptive-run parity/gaps register (#543 opencode audit) | open | issue-546 | adaptive |
+| #547 | Adaptive: consumer test de-duplication via validation receipt | open | issue-547 | adaptive |
+| #548 | sink-merge post-rebase test gate not consumer-aware (bug) | open | issue-548 | adaptive |
+| #549 | codex: document --with-fast/--with-full opt-in in init SKILL.md (deferred from #543) | open | issue-549 | adaptive |
+| #550 | Finalize chains: offline-deterministic GitHub tests + granular retry (bug) | open | issue-550 | adaptive |
+| #551 | Adaptive run makespan efficiency analysis (#543: ~56% avoidable) | open | issue-551 | adaptive |
 
 ## Rules
 
