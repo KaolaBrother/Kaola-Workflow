@@ -1291,11 +1291,15 @@ function reconcileNextCommand(root, folder) {
 //   { incomplete: false, reason: 'already_finalized' }          — clean, nothing to resume
 //   null                                                         — archive dir absent, not applicable
 function archiveDirDirty(root, project) {
+  // #563: an UNPROBEABLE tree fails CLOSED = treated as DIRTY (mirror #557/#496/#552). A swallowed probe
+  // fault here would mis-report a crashed finalize (archived-but-uncommitted) as already_finalized,
+  // skipping the resume. Treating an unverifiable tree as dirty yields incomplete:true → finalize
+  // --keep-worktree resumes, rather than falsely declaring the work safely committed.
   try {
     const out = execFileSync('git', ['-C', root, 'status', '--porcelain', '--', path.join('kaola-workflow', 'archive', project)],
       { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
     return out.trim().length > 0;
-  } catch (_) { return false; }
+  } catch (_) { return true; }
 }
 function detectFinalizeIncomplete(root, project) {
   if (!project) return null;

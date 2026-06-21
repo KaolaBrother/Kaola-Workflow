@@ -41,7 +41,7 @@ const taskMirrorPath = path.join(__dirname, TASK_MIRROR);
 
 // #360: the LEDGER-SCOPED durable consent-halt probe (fence-aware). adaptive-schema keeps the
 // same filename across every edition (byte-identical ×4), so this require is NOT forge-renamed.
-const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, resolveFanoutCapReadonly, resolveLaneContainment, parallelWritesDefaultOn, refuse, WRITE_SET_OVERFLOW_SUBTYPES, dispatchEffort, dispatchEffortOpencode, parseNodeVerdict, MERGE_CONFLICT_REPAIR_LIMIT } = require('./kaola-workflow-adaptive-schema');
+const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, resolveFanoutCapReadonly, parallelWritesDefaultOn, refuse, WRITE_SET_OVERFLOW_SUBTYPES, dispatchEffort, dispatchEffortOpencode, parseNodeVerdict, MERGE_CONFLICT_REPAIR_LIMIT } = require('./kaola-workflow-adaptive-schema');
 
 // ---------------------------------------------------------------------------
 // OPERATOR_HINT_REGISTRY (#445 / D-445-01 §1-3) — per-aggregator map of typed
@@ -3350,9 +3350,9 @@ function coordinationRefusal(coord, excl) {
 //   Layer 3 LIVE-COORDINATION (#383): probeCoordination → refuse serial_node_live | scheduler_active
 //           | batch_active per the per-command exclusion set.
 //
-// SERIAL FALLBACK BYTE-IDENTITY: with KAOLA_LANE_CONTAINMENT off + no running-set + no active-batch +
-// ≤1 in_progress + no consent_halt marker, EVERY layer is vacuously-pass (integrity ok, no halt, no
-// other-surface live) so the guarded body runs exactly as today.
+// SERIAL FALLBACK BYTE-IDENTITY: with KAOLA_PARALLEL_WRITES=0 (serial mode) + no running-set + no
+// active-batch + ≤1 in_progress + no consent_halt marker, EVERY layer is vacuously-pass (integrity ok,
+// no halt, no other-surface live) so the guarded body runs exactly as today.
 //
 // @param {object} opts  the subcommand opts (planPath, shell, readFile, cacheExists)
 // @param {{integrity?:boolean, halt?:boolean, excl?:string[]}} cfg  which layers apply
@@ -3814,11 +3814,12 @@ function runDiscardSpeculative(opts) {
 // longest-path-to-sink). Read-only nodes fan out up to the read-only cap; a write
 // node opens alone only when the running set is empty. Two-phase crash-safe write.
 //
-// #437 (D-419 P2): under KAOLA_LANE_CONTAINMENT, a ≥2 disjoint write frontier co-opens
-// as a LANE GROUP (a `lane_group` key in running-set.json + a shared group baseline) so
-// the close barrier is GROUP-scoped (deferred per-member, run once at the last close).
-// Flag OFF ⇒ the containment guard is false ⇒ the existing single-write serial open runs
-// byte-identically (INV-6); no `lane_group`, no group baseline, no new code path.
+// #437 (D-419 P2) + #542 (D-542-01): a ≥2 planner-proven-disjoint write frontier co-opens as a
+// LANE GROUP BY DEFAULT (a `lane_group` key in running-set.json + a shared group baseline) so the
+// close barrier is GROUP-scoped (deferred per-member, run once at the last close). Co-open is gated
+// on legCoupled (parallelWritesDefaultOn, default TRUE) — NOT on the retired KAOLA_LANE_CONTAINMENT
+// flag. KAOLA_PARALLEL_WRITES=0 forces the byte-identical single-write serial open (INV-6): no
+// `lane_group`, no group baseline, no new code path. The validator re-verifies disjointness here.
 // ---------------------------------------------------------------------------
 function runOpenReady(opts) {
   const {
@@ -3925,7 +3926,7 @@ function runOpenReady(opts) {
     // frontier; on genuine overlap (or explicit serial opt-out) DEGRADE to a single serial write.
     // #542: co-open is DEFAULT-ON for planner-proven-disjoint frontiers — gated on legCoupled
     //   (parallelWritesDefaultOn, default TRUE), NOT on KAOLA_LANE_CONTAINMENT. The lane-isolation
-    //   worktree (provisioned at :3976 under the SAME legCoupled) is the containment; the validator
+    //   worktree (provisioned at :4034 under the SAME legCoupled) is the containment; the validator
     //   re-verifies disjointness here authoritatively (tryFormLaneGroup → --parallel-safe).
     // #498 INVARIANT PRESERVED: legCoupled still gates BOTH this co-open AND leg-provisioning, so
     //   groupForm ⟺ legs provisioned ⟺ the safe (parent-clean fence + commit-based barrier) close path;

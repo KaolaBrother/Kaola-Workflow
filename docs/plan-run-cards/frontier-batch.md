@@ -17,9 +17,11 @@ A **frontier unit** is the set of nodes that are simultaneously unblocked (all p
 complete) in the DAG. When the frontier unit contains multiple nodes with disjoint write sets,
 they can be dispatched as a parallel batch.
 
-The plan-run's running-set scheduler (`kaola-workflow-parallel-batch.js`) manages the batch
-lifecycle. When `enterBatch: true` is returned, the scheduler has determined the frontier is
-batch-eligible; you open the batch and dispatch the siblings concurrently.
+`kaola-workflow-parallel-batch.js` manages the batch-manifest lifecycle (the crash-safe
+open/seal/join recipes in §3-§8); the running-set scheduler proper is adaptive-node's
+`open-ready` / `close-node` / `reconcile-running-set` (the live `enterBatch: true` route per
+`kaola-workflow-plan-run`). When `enterBatch: true` is returned, the scheduler has determined the
+frontier is batch-eligible; you open the batch and dispatch the siblings concurrently.
 
 ---
 

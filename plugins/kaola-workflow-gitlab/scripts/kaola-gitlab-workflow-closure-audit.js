@@ -148,21 +148,24 @@ function detectStaleLabels() {
 }
 
 // Scoped to the folder subtree (worktree if present, else the active folder).
-// Any git failure (no repo, missing path) reads as not-dirty.
+// #563: an UNPROBEABLE tree (held index.lock, EAGAIN/EMFILE, corrupt repo) fails CLOSED = treated as
+// DIRTY, mirroring #557/#496/#552 — a probe that cannot PROVE the subtree clean must not report clean
+// (that would let a crashed/dirty closure be reported safe). A genuinely-ABSENT path (no worktree, no
+// project dir) still reads not-dirty: absence is provable, not a probe fault.
 function isDirty(folder) {
   if (folder.worktree_path && fs.existsSync(folder.worktree_path)) {
     try {
       const out = execFileSync('git', ['-C', folder.worktree_path, 'status', '--porcelain'],
         { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
       return out.trim().length > 0;
-    } catch (_) { return false; }
+    } catch (_) { return true; } // #563: unprobeable → fail-closed (dirty)
   }
   if (folder.project_dir && fs.existsSync(folder.project_dir)) {
     try {
       const out = execFileSync('git', ['-C', folder.project_dir, 'status', '--porcelain', '--', '.'],
         { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
       return out.trim().length > 0;
-    } catch (_) { return false; }
+    } catch (_) { return true; } // #563: unprobeable → fail-closed (dirty)
   }
   return false;
 }

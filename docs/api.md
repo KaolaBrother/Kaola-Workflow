@@ -2100,6 +2100,32 @@ the last member synthesizes + merges all legs, then re-run `--sink`.
 }
 ```
 
+The same `lingering_lane_group` backstop is ALSO wired into the LEGACY (non-`--sink`)
+main-advance path (`sink-merge.js` `main()`, the in-place merge sink finalize routes
+through by default) as the FIRST precondition — issue #561 closed the asymmetry where
+only the `--sink` transaction carried it, so an in-place adaptive run that left a
+residual `lane_group` could no longer advance main with unmerged legs. The runtime
+`adaptive-node` fixes (ledger-derived `isLast` + reconcile self-heal) still prevent the
+desync upstream regardless of which sink path follows; both paths now carry the backstop.
+
+**`worktree_dirty` refuse envelope (issue #562, fail-closed data-loss guard).**
+`sinkPreflight` (the `--sink` transaction) now also runs `assertWorktreeClean` BEFORE the
+merge step force-removes the linked worktree (`git worktree remove --force`). Previously
+only the LEGACY path carried this guard; the `--sink` path force-removed with no clean
+precondition, so a worktree carrying uncommitted work could be silently destroyed.
+`assertWorktreeClean` throws on a dirty OR unprobeable worktree (fail-closed, #496/#506);
+`sinkPreflight` converts that to a typed refusal (exit 1, ZERO mutation, worktree intact).
+Resume-safe: an already-removed worktree matches no `worktree list` block and passes.
+Remediation: commit or discard the worktree changes, then re-run `--sink`.
+
+```json
+{
+  "result": "refuse",
+  "reason": "worktree_dirty",
+  "detail": "sink-merge refused: the linked worktree for branch ... has uncommitted changes ..."
+}
+```
+
 ### `audit-labels` and `repair-labels` (issue #163; GitLab port #166, Gitea port #167)
 
 Two subcommands find and fix closed issues that still carry `workflow:in-progress`.

@@ -741,6 +741,20 @@ function runDirectMerge(args, opts) {
   // Step 2 — preconditions, ALL before any destructive step (#346). Each is checkout-independent
   // (operates on mainRoot / the branch ref). Any failure throws → exit 1, ZERO mutation, worktree
   // intact. assertWorktreeClean is the data-loss guard.
+  // #561: lane-group backstop on the legacy (non---sink) main-advance path too — mirror the --sink
+  // path's sinkPreflight backstop. A residual lane_group means surviving legs' committed work is NOT on
+  // the feature branch (#552 crash-window); advancing main here would silently lose it. Pure read, zero
+  // mutation, FIRST in the precondition block. Emit the SAME typed refusal the --sink path emits.
+  const laneGroupRefusal = lingeringLaneGroupRefusal(mainRoot, args.project);
+  if (laneGroupRefusal) {
+    process.stdout.write(JSON.stringify({
+      result: 'refuse',
+      reason: laneGroupRefusal.reason || 'lingering_lane_group',
+      detail: laneGroupRefusal.detail,
+    }) + '\n');
+    process.exitCode = 1;
+    return;
+  }
   const status = execFileSync('git', ['-C', mainRoot, 'status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' }).trim();
   assert(!status, 'Worktree must be clean before direct merge sink runs');
   assertNoLiveWorkflowFolder(mainRoot, args.project, args.branch);
@@ -915,6 +929,16 @@ function sinkPreflight(mainRoot, project, branch, issueNumbers) {
   // #552: lane-group backstop FIRST — a pure read, zero mutation, BEFORE the dirty-tree scan/stash.
   const laneGroupRefusal = lingeringLaneGroupRefusal(mainRoot, project);
   if (laneGroupRefusal) return laneGroupRefusal;
+
+  // #562: worktree-clean data-loss guard — the --sink merge step force-removes the linked worktree with
+  // NO clean precondition, so a dirty worktree's uncommitted work would be destroyed. Mirror the legacy
+  // path's assertWorktreeClean. It throws on a dirty OR unprobeable worktree (fail-closed); convert to
+  // the typed refusal sinkPreflight returns. Resume-safe: an already-removed worktree returns cleanly.
+  try {
+    assertWorktreeClean(mainRoot, branch);
+  } catch (err) {
+    return { ok: false, reason: 'worktree_dirty', detail: err.message };
+  }
 
   const porcelain = execFileSync('git', ['-C', mainRoot, 'status', '--porcelain', '-uall'], { encoding: 'utf8' });
   const lines = porcelain.split('\n').filter(Boolean);

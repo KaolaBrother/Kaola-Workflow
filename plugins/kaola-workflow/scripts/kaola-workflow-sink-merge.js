@@ -851,12 +851,26 @@ function lingeringLaneGroupRefusal(mainRoot, project) {
 // #429: preflight — classify the dirty tree into three buckets and handle them.
 // Returns { ok: true, stashRef, removedDuplicates } on success, or
 // { ok: false, reason: 'sink_blocked', foreign_dirt: [...] } on foreign dirt, or
-// { ok: false, reason: 'lingering_lane_group', detail } on the #552 backstop.
+// { ok: false, reason: 'lingering_lane_group', detail } on the #552 backstop, or
+// { ok: false, reason: 'worktree_dirty', detail } on the #562 dirty/unprobeable worktree guard.
 // INVARIANT: if foreign_dirt is non-empty, NO mutation occurs.
 function sinkPreflight(mainRoot, project, branch, issueNumbers) {
   // #552: lane-group backstop FIRST — a pure read, zero mutation, BEFORE the dirty-tree scan/stash.
   const laneGroupRefusal = lingeringLaneGroupRefusal(mainRoot, project);
   if (laneGroupRefusal) return laneGroupRefusal;
+
+  // #562: worktree-clean data-loss guard — mirror the legacy path's assertWorktreeClean (:1461). The
+  // --sink merge step force-removes the linked worktree (removeWorktree → `git worktree remove --force`)
+  // with NO clean precondition, so a dirty worktree's uncommitted work would be silently destroyed — the
+  // exact #496/#506 data-loss hazard the legacy path already guards. assertWorktreeClean throws on a
+  // dirty OR unprobeable worktree (fail-closed); convert that to the typed refusal sinkPreflight returns
+  // so runSinkTransaction's preflight handler surfaces result:'refuse' + exit 1 with ZERO mutation.
+  // Resume-safe: an already-removed worktree matches no `worktree list` block and returns cleanly.
+  try {
+    assertWorktreeClean(mainRoot, branch);
+  } catch (err) {
+    return { ok: false, reason: 'worktree_dirty', detail: err.message };
+  }
 
   const porcelain = execFileSync('git', ['-C', mainRoot, 'status', '--porcelain', '-uall'], { encoding: 'utf8' });
   const lines = porcelain.split('\n').filter(Boolean);
@@ -1454,6 +1468,21 @@ function main() {
   // (operates on mainRoot / the branch ref, not the working tree). Any failure throws → exit 1, ZERO
   // mutation, worktree intact. assertWorktreeClean is the data-loss guard: it refuses if the linked
   // worktree carries uncommitted work, so a refused sink never destroys that work.
+  // #561: lane-group backstop on the legacy (non---sink) main-advance path too — mirror the --sink
+  // path's sinkPreflight backstop (:858). A residual lane_group means surviving legs' committed work
+  // is NOT on the feature branch (#552 crash-window desync); advancing main here would silently lose
+  // it. Pure read, zero mutation, FIRST in the precondition block. Emit the SAME typed refusal the
+  // --sink path emits (:1031-1040) — callers parse the typed JSON, so do NOT bare-throw.
+  const laneGroupRefusal = lingeringLaneGroupRefusal(mainRoot, args.project);
+  if (laneGroupRefusal) {
+    process.stdout.write(JSON.stringify({
+      result: 'refuse',
+      reason: laneGroupRefusal.reason || 'lingering_lane_group',
+      detail: laneGroupRefusal.detail,
+    }) + '\n');
+    process.exitCode = 1;
+    return;
+  }
   assertCleanWorktree(mainRoot);
   assertNoLiveWorkflowFolder(mainRoot, args.project, args.branch);
   if (!OFFLINE) assertBranchPushedToUpstream(mainRoot, args.branch);

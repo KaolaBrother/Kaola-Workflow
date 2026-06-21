@@ -6771,6 +6771,168 @@ function testSinkRefusesLingeringLaneGroup() {
   console.log('testSinkRefusesLingeringLaneGroup: PASSED');
 }
 
+// #561: the lane-group backstop must ALSO guard the LEGACY (non---sink) main-advance path — the in-place
+// merge sink that finalize routes through by DEFAULT (no --sink). Before #561 only the --sink path
+// (sinkPreflight) carried the #552 backstop; the legacy ffMergeLoop path advanced main with ZERO
+// lane_group awareness. RED-provable: drop the legacy backstop ⇒ the legacy path proceeds past the
+// precondition block. Reads BOTH the live project .cache and the post-finalize archive .cache.
+function testSinkLegacyPathRefusesLingeringLaneGroup() {
+  const lingering = {
+    state: 'open',
+    nodes: [{ id: 'B', role: 'tdd-guide' }],
+    lane_group: { group_id: 'lane-9561', members: ['A', 'B'], closed_members: ['A'], legs: { A: { legPath: '.kw/legs/issue-9561/A' }, B: { legPath: '.kw/legs/issue-9561/B' } } },
+  };
+  // NO --sink flag ⇒ routes to the legacy main() ffMergeLoop advance path.
+  function runLegacySink(tmp) {
+    return spawnSync(process.execPath, [sinkMergeScript, '--project', 'issue-9561', '--branch', 'workflow/issue-9561', '--issue', '9561', '--json'],
+      { cwd: tmp, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
+  }
+  function setupRepo(tmp) {
+    initGitRepo(tmp);
+    spawnSync('git', ['checkout', '-b', 'workflow/issue-9561'], { cwd: tmp });
+    fs.writeFileSync(path.join(tmp, 'feature.txt'), 'impl');
+    spawnSync('git', ['add', 'feature.txt'], { cwd: tmp });
+    spawnSync('git', ['commit', '-m', 'feat: issue 9561'], { cwd: tmp });
+    spawnSync('git', ['checkout', 'main'], { cwd: tmp });
+  }
+  // ---- RED-1 (LIVE location): a lingering lane_group in kaola-workflow/<project>/.cache blocks the legacy sink. ----
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-561-legacy-live-')));
+    try {
+      setupRepo(tmp);
+      const cacheDir = path.join(tmp, 'kaola-workflow', 'issue-9561', '.cache');
+      fs.mkdirSync(cacheDir, { recursive: true });
+      fs.writeFileSync(path.join(cacheDir, 'running-set.json'), JSON.stringify(lingering, null, 2));
+      const mainBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+      const result = runLegacySink(tmp);
+      assert(result.status !== 0, '#561 legacy RED-1 (live): must refuse on a lingering lane_group, got status ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+      const parsed = JSON.parse(String(result.stdout || '').trim().split('\n').pop());
+      assert(parsed.result === 'refuse' && parsed.reason === 'lingering_lane_group',
+        '#561 legacy RED-1 (live): typed refusal lingering_lane_group on the non---sink path, got ' + JSON.stringify(parsed));
+      const mainAfter = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+      assert(mainBefore === mainAfter, '#561 legacy RED-1 (live): main must NOT advance, before ' + mainBefore + ' after ' + mainAfter);
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
+  // ---- RED-2 (ARCHIVE location, the realistic post-finalize state): same refusal via the archive read. ----
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-561-legacy-arch-')));
+    try {
+      setupRepo(tmp);
+      const archCache = path.join(tmp, 'kaola-workflow', 'archive', 'issue-9561', '.cache');
+      fs.mkdirSync(archCache, { recursive: true });
+      fs.writeFileSync(path.join(archCache, 'running-set.json'), JSON.stringify(lingering, null, 2));
+      const mainBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+      const result = runLegacySink(tmp);
+      assert(result.status !== 0, '#561 legacy RED-2 (archive): must refuse via the archive read, got status ' + result.status);
+      const parsed = JSON.parse(String(result.stdout || '').trim().split('\n').pop());
+      assert(parsed.result === 'refuse' && parsed.reason === 'lingering_lane_group',
+        '#561 legacy RED-2 (archive): typed refusal via dual-location read, got ' + JSON.stringify(parsed));
+      const mainAfter = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+      assert(mainBefore === mainAfter, '#561 legacy RED-2 (archive): main must NOT advance');
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
+  // ---- GREEN (no false-positive): a cleared running-set (no lane_group key) must NOT trip the legacy backstop. ----
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-561-legacy-green-')));
+    try {
+      setupRepo(tmp);
+      const cacheDir = path.join(tmp, 'kaola-workflow', 'issue-9561', '.cache');
+      fs.mkdirSync(cacheDir, { recursive: true });
+      fs.writeFileSync(path.join(cacheDir, 'running-set.json'), JSON.stringify({ state: 'open', nodes: [] }, null, 2)); // lane_group KEY cleared
+      const result = runLegacySink(tmp);
+      let parsed = {};
+      try { parsed = JSON.parse(String(result.stdout || '').trim().split('\n').pop()); } catch (_) {}
+      assert(parsed.reason !== 'lingering_lane_group',
+        '#561 legacy GREEN: a cleared running-set must NOT trip the backstop, got ' + JSON.stringify(parsed));
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
+  console.log('testSinkLegacyPathRefusesLingeringLaneGroup: PASSED');
+}
+
+// #562: the --sink merge step force-removes the linked worktree (`git worktree remove --force`); before
+// #562 it did so with NO clean precondition (the legacy path had assertWorktreeClean, the --sink path did
+// not), so a worktree carrying uncommitted work was silently destroyed. The fix hoists assertWorktreeClean
+// into sinkPreflight as a typed worktree_dirty refusal. RED-provable: drop the guard ⇒ the --sink run
+// proceeds and removes the dirty worktree. GREEN: a genuinely-CLEAN worktree must NOT trip it.
+function testSinkRefusesDirtyWorktree() {
+  function setup(tmp) {
+    initGitRepo(tmp);
+    spawnSync('git', ['branch', 'workflow/issue-9562'], { cwd: tmp });
+    const wt = path.join(tmp, '.kw', 'wt-9562');
+    spawnSync('git', ['worktree', 'add', wt, 'workflow/issue-9562'], { cwd: tmp });
+    return wt;
+  }
+  function runSink(tmp) {
+    return spawnSync(process.execPath, [sinkMergeScript, '--project', 'issue-9562', '--branch', 'workflow/issue-9562', '--issue', '9562', '--sink', '--json'],
+      { cwd: tmp, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
+  }
+  // ---- RED: a DIRTY linked worktree (uncommitted TRACKED change) must refuse worktree_dirty + survive. ----
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-562-dirty-')));
+    try {
+      const wt = setup(tmp);
+      // assertWorktreeClean uses --untracked-files=no, so dirty a TRACKED file (README.md, committed by initGitRepo).
+      fs.appendFileSync(path.join(wt, 'README.md'), 'uncommitted change\n');
+      const result = runSink(tmp);
+      assert(result.status !== 0, '#562 RED: a dirty linked worktree must refuse (fail closed), got status ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+      const parsed = JSON.parse(String(result.stdout || '').trim().split('\n').pop());
+      assert(parsed.result === 'refuse' && parsed.reason === 'worktree_dirty',
+        '#562 RED: typed refusal worktree_dirty on the --sink path, got ' + JSON.stringify(parsed));
+      assert(fs.existsSync(wt), '#562 RED: a worktree_dirty refusal must NOT remove the worktree');
+    } finally {
+      try { spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', path.join(tmp, '.kw', 'wt-9562')], { encoding: 'utf8' }); } catch (_) {}
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+  // ---- GREEN (not over-broad): a CLEAN linked worktree must NOT refuse with worktree_dirty. ----
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-562-clean-')));
+    try {
+      setup(tmp);
+      const result = runSink(tmp);
+      let parsed = {};
+      try { parsed = JSON.parse(String(result.stdout || '').trim().split('\n').pop()); } catch (_) {}
+      assert(parsed.reason !== 'worktree_dirty',
+        '#562 GREEN: a clean worktree must NOT trip the worktree_dirty guard, got ' + JSON.stringify(parsed));
+    } finally {
+      try { spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', path.join(tmp, '.kw', 'wt-9562')], { encoding: 'utf8' }); } catch (_) {}
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+  console.log('testSinkRefusesDirtyWorktree: PASSED');
+}
+
+// #563: closure-audit isDirty() + claim archiveDirDirty() must fail CLOSED on an unprobeable tree (the
+// same #557 anti-pattern, already RED-proven for treeDirty). A behavioral probe-fault test for these two
+// would need new production seams/exports — over-engineering for a LOW report-only flip (precedence #3).
+// Instead lock the flip against a silent fail-OPEN regression: assert no `catch (_) { return false }` arm
+// survives in either helper and that the expected fail-closed `return true` arms are present, across the
+// canonical + both forge hand-ports (codex is byte-identical, enforced by validate-script-sync). RED-
+// provable: revert any catch arm to `return false` ⇒ this guard fails.
+function testProbeHelpersFailClosed() {
+  const sites = [
+    { file: 'scripts/kaola-workflow-closure-audit.js', fn: 'isDirty', arms: 2 },
+    { file: 'scripts/kaola-workflow-claim.js', fn: 'archiveDirDirty', arms: 1 },
+    { file: 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-closure-audit.js', fn: 'isDirty', arms: 2 },
+    { file: 'plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-claim.js', fn: 'archiveDirDirty', arms: 1 },
+    { file: 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-closure-audit.js', fn: 'isDirty', arms: 2 },
+    { file: 'plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-claim.js', fn: 'archiveDirDirty', arms: 1 },
+  ];
+  for (const s of sites) {
+    const src = fs.readFileSync(path.join(repoRoot, s.file), 'utf8');
+    const start = src.indexOf('function ' + s.fn + '(');
+    assert(start !== -1, '#563 guard: ' + s.fn + '() not found in ' + s.file);
+    const after = src.indexOf('\nfunction ', start + 1);
+    const body = src.slice(start, after === -1 ? start + 1500 : after);
+    assert(!/catch\s*\(_\)\s*\{\s*return false;/.test(body),
+      '#563 guard: ' + s.file + ' ' + s.fn + '() still has a fail-OPEN `catch { return false }` probe arm — must fail CLOSED (return true)');
+    const closed = (body.match(/catch\s*\(_\)\s*\{\s*return true;/g) || []).length;
+    assert(closed >= s.arms,
+      '#563 guard: ' + s.file + ' ' + s.fn + '() must have >=' + s.arms + ' fail-closed `catch { return true }` arm(s), found ' + closed);
+  }
+  console.log('testProbeHelpersFailClosed: PASSED');
+}
+
 function testSinkMergeBlocksUnpushedCommits() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-merge-block-')));
   const remotePath = initGitRepoWithBareRemote(tmp);
@@ -13248,6 +13410,9 @@ function buildRegistry() {
   add('testE2EGitHubMergeFullChain',                      testE2EGitHubMergeFullChain);
   add('testSinkMergeRefusesLiveFolder',                   testSinkMergeRefusesLiveFolder);
   add('testSinkRefusesLingeringLaneGroup',                testSinkRefusesLingeringLaneGroup);
+  add('testSinkLegacyPathRefusesLingeringLaneGroup',      testSinkLegacyPathRefusesLingeringLaneGroup);
+  add('testSinkRefusesDirtyWorktree',                     testSinkRefusesDirtyWorktree);
+  add('testProbeHelpersFailClosed',                       testProbeHelpersFailClosed);
   add('testSinkMergeBlocksUnpushedCommits',               testSinkMergeBlocksUnpushedCommits);
   add('testAssertWorktreeCleanFailsClosedOnProbeFault',   testAssertWorktreeCleanFailsClosedOnProbeFault);
   add('testAssertWorktreeCleanFailsClosedOnListProbeFault', testAssertWorktreeCleanFailsClosedOnListProbeFault);
