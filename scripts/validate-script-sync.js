@@ -382,9 +382,32 @@ const FORGE_CLASSIFIER_EXPORT_SUPERSET = {
   ],
 };
 
-// Return { missingKeys } per forge port: the canonical export keys ABSENT from that port's
-// module.exports. require()s each module and compares Object.keys (robust to ordering / comments,
-// unlike a brittle export-block parse). A non-empty missingKeys for any port is a fail-closed drift.
+// #553: GENERALIZE the #550 single-classifier guard into a FAMILY over every DIVERGENT forge hand-port that
+// participates in a cross-script require (claim / sink-merge / roadmap / repair-state / active-folders /
+// closure-audit) — the same "a cross-required name resolves to undefined → TypeError on a failing path no
+// green chain hits" class (#550) was unguarded for these. Each entry reuses the proven require()+Object.keys
+// superset mechanism. `canonicalOnly` lists canonical exports that are GENUINELY edition-specific — defined
+// ONLY in the GitHub canonical with no forge equivalent (e.g. `ghExec`, which the forges replace with direct
+// glab/tea CLI calls; `projectHasAdaptivePlan`, canonical's consumer-detection helper the forges implement
+// via isAdaptiveWorkflowState/routeAdaptive). Those names are SUBTRACTED from the superset requirement; this
+// is sound because each excluded name is verified NOT cross-required by any forge script, so excluding it
+// cannot re-open the #550 crash class — it only avoids forcing an undefined-symbol export.
+const forgePortRef = (forge, base) => ({ forge, file: 'plugins/kaola-workflow-' + forge + '/scripts/kaola-' + forge + '-workflow-' + base + '.js' });
+const forgeBothPorts = base => [forgePortRef('gitlab', base), forgePortRef('gitea', base)];
+const FORGE_EXPORT_SUPERSET_FAMILY = [
+  FORGE_CLASSIFIER_EXPORT_SUPERSET,
+  { label: 'forge claim module.exports superset', canonical: 'scripts/kaola-workflow-claim.js', ports: forgeBothPorts('claim'), canonicalOnly: ['ghExec'] },
+  { label: 'forge sink-merge module.exports superset', canonical: 'scripts/kaola-workflow-sink-merge.js', ports: forgeBothPorts('sink-merge') },
+  { label: 'forge roadmap module.exports superset', canonical: 'scripts/kaola-workflow-roadmap.js', ports: forgeBothPorts('roadmap') },
+  { label: 'forge repair-state module.exports superset', canonical: 'scripts/kaola-workflow-repair-state.js', ports: forgeBothPorts('repair-state'), canonicalOnly: ['projectHasAdaptivePlan'] },
+  { label: 'forge active-folders module.exports superset', canonical: 'scripts/kaola-workflow-active-folders.js', ports: forgeBothPorts('active-folders') },
+  { label: 'forge closure-audit module.exports superset', canonical: 'scripts/kaola-workflow-closure-audit.js', ports: forgeBothPorts('closure-audit') },
+];
+
+// Return { missingModules, driftPorts } for ONE family entry: the canonical export keys ABSENT from each
+// forge port's module.exports (minus `canonicalOnly` edition-specific names). require()s each module and
+// compares Object.keys (robust to ordering / comments, unlike a brittle export-block parse). A non-empty
+// missingKeys for any port is a fail-closed drift. (Name kept for backward-compat; now family-generic.)
 function forgeClassifierExportDrift(rootDir, fam) {
   const out = { missingModules: [], driftPorts: [] };
   let canonicalKeys;
@@ -394,6 +417,8 @@ function forgeClassifierExportDrift(rootDir, fam) {
     out.missingModules.push(fam.canonical);
     return out;
   }
+  const excluded = new Set(Array.isArray(fam.canonicalOnly) ? fam.canonicalOnly : []);
+  const requiredKeys = canonicalKeys.filter((k) => !excluded.has(k));
   for (const port of fam.ports) {
     let portKeys;
     try {
@@ -402,7 +427,7 @@ function forgeClassifierExportDrift(rootDir, fam) {
       out.missingModules.push(port.file);
       continue;
     }
-    const missingKeys = canonicalKeys.filter((k) => !portKeys.has(k));
+    const missingKeys = requiredKeys.filter((k) => !portKeys.has(k));
     if (missingKeys.length > 0) {
       out.driftPorts.push({ file: port.file, forge: port.forge, missingKeys });
     }
@@ -487,18 +512,20 @@ if (require.main === module) {
     }
   }
 
-  // #550: forge classifier module.exports SUPERSET guard (divergent hand-ports — not byte/rename
-  // families, so checked by require()d Object.keys comparison, not byte/string normalization).
-  {
-    const res = forgeClassifierExportDrift(repoRoot, FORGE_CLASSIFIER_EXPORT_SUPERSET);
+  // #550/#553: forge module.exports SUPERSET guard FAMILY (divergent hand-ports — not byte/rename families,
+  // so checked by require()d Object.keys comparison). Loops every cross-required hand-port, not just the
+  // classifier, so a future cross-required export omission fails CLOSED here instead of TypeError-ing on a
+  // failing path no green chain hits (the #550 crash class).
+  for (const fam of FORGE_EXPORT_SUPERSET_FAMILY) {
+    const res = forgeClassifierExportDrift(repoRoot, fam);
     for (const m of res.missingModules) missing.push(m);
     for (const p of res.driftPorts) {
-      drift.push(`${FORGE_CLASSIFIER_EXPORT_SUPERSET.label}: ${p.file} omits canonical-classifier export(s) [${p.missingKeys.join(', ')}] — the forge run-chains port require()s these, so an omission TypeErrors on a failing chain (#550)`);
+      drift.push(`${fam.label}: ${p.file} omits canonical export(s) [${p.missingKeys.join(', ')}] — a forge script require()s these by name, so an omission TypeErrors on a failing path (#550 class)`);
     }
   }
 
   if (missing.length === 0 && drift.length === 0) {
-    console.log(`OK: ${COMMON_SCRIPTS.length} common scripts, ${BYTE_IDENTICAL_GROUPS.length} byte-identical groups, ${RENAME_NORMALIZED_FAMILIES.length} rename-normalized families, 1 config/hooks.json family, and ${FORGE_CLASSIFIER_EXPORT_SUPERSET.ports.length} forge-classifier export supersets in sync.`);
+    console.log(`OK: ${COMMON_SCRIPTS.length} common scripts, ${BYTE_IDENTICAL_GROUPS.length} byte-identical groups, ${RENAME_NORMALIZED_FAMILIES.length} rename-normalized families, 1 config/hooks.json family, and ${FORGE_EXPORT_SUPERSET_FAMILY.length} forge export-superset families in sync.`);
     process.exit(0);
   }
 
@@ -518,4 +545,4 @@ if (require.main === module) {
   process.exit(1);
 }
 
-module.exports = { COMMON_SCRIPTS, BYTE_IDENTICAL_GROUPS, RENAME_NORMALIZED_FAMILIES, renameNormalize, CONFIG_HOOKS_FAMILY, normalizeConfigHooks, FORGE_CLASSIFIER_EXPORT_SUPERSET, forgeClassifierExportDrift };
+module.exports = { COMMON_SCRIPTS, BYTE_IDENTICAL_GROUPS, RENAME_NORMALIZED_FAMILIES, renameNormalize, CONFIG_HOOKS_FAMILY, normalizeConfigHooks, FORGE_CLASSIFIER_EXPORT_SUPERSET, FORGE_EXPORT_SUPERSET_FAMILY, forgeClassifierExportDrift };

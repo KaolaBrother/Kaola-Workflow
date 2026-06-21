@@ -222,7 +222,11 @@ function regenerateRoadmap(root) {
 
 function cmdGenerate() {
   const root = getRoot();
-  guardAgainstMissingRoadmapSource(roadmapDir(root), roadmapFile(root));
+  // #554: rely on regenerateRoadmap's OWN narrow guard (refuses only when .roadmap/ is MISSING) as the
+  // single source of truth. The redundant guardAgainstMissingRoadmapSource pre-check keyed on source COUNT
+  // (==0 for a present-but-empty .roadmap/), so it WRONGLY refused the legitimate close-last-issue state
+  // (empty-but-present dir) that regenerateRoadmap explicitly sanctions. The function is KEPT (two contract
+  // validators pin its name + message tokens); only this redundant call is dropped.
   process.stdout.write(regenerateRoadmap(root) + '\n');
 }
 

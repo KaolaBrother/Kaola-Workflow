@@ -448,9 +448,16 @@ function inPlaceHead(root) {
 }
 
 function treeDirty(root) {
+  // #557: an UNPROBEABLE tree (held index.lock, EAGAIN/EMFILE, corrupt/detached repo) must fail CLOSED =
+  // treated as DIRTY, mirroring the #496 assertWorktreeClean fix. The consumers (in-place feature-branch
+  // gate, discard branch-delete) then REFUSE on an unverifiable tree rather than proceeding on a false
+  // "clean". (Was catch → return false: the same "unverifiable → assume safe" fail-OPEN inversion #496
+  // removed for the destructive worktree-remove path, left here on the non-destructive branch paths.)
+  // KAOLA_WORKFLOW_FORCE_STATUS_FAIL=1 is a [TEST ONLY] seam to deterministically exercise the probe-fault path.
   try {
+    if (process.env.KAOLA_WORKFLOW_FORCE_STATUS_FAIL === '1') throw new Error('forced git status probe failure [TEST ONLY]');
     return execFileSync('git', ['-C', root, 'status', '--porcelain'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim().length > 0;
-  } catch (_) { return false; }
+  } catch (_) { return true; }
 }
 
 function defaultBranch(root) {

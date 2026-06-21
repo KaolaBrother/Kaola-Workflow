@@ -257,9 +257,12 @@ function inPlaceHead(root) {
 }
 
 function treeDirty(root) {
+  // #557: an UNPROBEABLE tree must fail CLOSED = treated as DIRTY (mirror #496); was catch → return false
+  // (fail-OPEN). KAOLA_WORKFLOW_FORCE_STATUS_FAIL=1 is a [TEST ONLY] probe-fault seam.
   try {
+    if (process.env.KAOLA_WORKFLOW_FORCE_STATUS_FAIL === '1') throw new Error('forced git status probe failure [TEST ONLY]');
     return execFileSync('git', ['-C', root, 'status', '--porcelain'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim().length > 0;
-  } catch (_) { return false; }
+  } catch (_) { return true; }
 }
 
 function defaultBranch(root) {
@@ -2944,6 +2947,12 @@ if (require.main === module) {
 }
 
 module.exports = {
+  isSafeBranchArg,
+  assertSafeBranchArg,
+  assertNoNewline,
+  classifyWorktreeError,
+  removeBranch,
+  postAdvisoryClaim,
   archiveProjectDir,
   buildBranchName,
   buildClosureReceipt,

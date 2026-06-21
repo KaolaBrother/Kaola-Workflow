@@ -621,6 +621,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  repairStateContent: stateContent,
   complianceRows,
   delegationPolicyCompliance,
   repair,

@@ -1046,7 +1046,7 @@ function runSinkTransaction(args, mainRoot, defBranch) {
       stepDone('worktree_sync'); continue;
     }
     if (step === 'finalize') {
-      try { const { archiveProjectDir } = require('./kaola-gitlab-workflow-claim'); archiveProjectDir(mainRoot, args.project, 'closed', undefined, { keepWorktree: false }); } catch (_) {}
+      try { const { archiveProjectDir } = require('./kaola-gitlab-workflow-claim'); archiveProjectDir(mainRoot, args.project, 'closed', undefined, { keepWorktree: false }); } catch (e) { if (e instanceof TypeError || e instanceof ReferenceError) throw e; /* #555: re-throw a missing-export programmer error (the #550 drift class); swallow only archive-already-exists idempotency */ }
       stepDone('finalize'); continue;
     }
     if (step === 'closure') {

@@ -1125,8 +1125,12 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
       try {
         const { archiveProjectDir } = require('./kaola-workflow-claim.js');
         archiveProjectDir(mainRoot, args.project, 'closed', undefined, { keepWorktree: false });
-      } catch (_) {
-        // Archive may already exist (crash-resume idempotency) — swallow
+      } catch (e) {
+        // #555: a missing/renamed export (TypeError) or undefined reference (ReferenceError) is a PROGRAMMER
+        // error (the #550 cross-edition export-drift class — a forge port could omit archiveProjectDir) and
+        // must fail LOUD, not be masked into a silent skip of the project archive. Only the expected
+        // idempotency case (archive may already exist on a crash-resume) is swallowed.
+        if (e instanceof TypeError || e instanceof ReferenceError) throw e;
       }
       stepDone('finalize');
       continue;

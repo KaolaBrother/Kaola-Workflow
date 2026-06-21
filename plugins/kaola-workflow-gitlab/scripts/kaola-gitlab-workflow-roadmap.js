@@ -260,7 +260,9 @@ function regenerateRoadmap(root) {
 }
 function cmdGenerate() {
   const root = getRoot();
-  guardAgainstMissingRoadmapSource(roadmapDir(root), roadmapFile(root));
+  // #554: rely on regenerateRoadmap's OWN narrow guard (single source of truth); drop the redundant
+  // count-keyed pre-check that wrongly refused the close-last-issue empty-but-present state. The function
+  // + its module.exports entry are KEPT (contract-validator token pins).
   process.stdout.write(regenerateRoadmap(root) + '\n');
 }
 
@@ -376,6 +378,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  cmdGenerate,
   buildRoadmapContent,
   createFileExclusive,
   guardAgainstMissingRoadmapSource,
