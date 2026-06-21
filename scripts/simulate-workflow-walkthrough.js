@@ -3108,6 +3108,29 @@ function testBundle424432433ValidatorGates() {
         '#475 (e): a self-host repo with an intermediate kaola-workflow/agents/ dir must STILL be gated as self-host (git-toplevel discriminator), refusing chains_red — not fail-open to the consumer gate; got status ' + r.status + ' ' + r.stdout);
     } finally { cleanup(grepo); } }
 
+  // --- #556 (f) INDETERMINATE repo-kind: a SELF-HOST repo whose package.json is PRESENT but UNPARSEABLE
+  //     must REFUSE repo_kind_undetermined — NOT silently fall through to the weaker consumer final-
+  //     validation gate (the fail-OPEN the prior single outer catch allowed). A pass FV must NOT rescue it.
+  { const { grepo, planPath, proj } = mkRepo({ a: 'complete', rv: 'complete', done: 'complete' });
+    try {
+      fs.writeFileSync(path.join(grepo, 'package.json'), '{ this is not valid json'); // corrupt the working-tree pkg
+      writeFinalValidation(proj, 'verdict: pass\nfindings_blocking: 0\n'); // a pass FV would WRONGLY rescue it under the old fail-open
+      const r = runNode(planValidatorScript, [planPath, '--finalize-check', '--json'], grepo);
+      assert(r.status === 1 && JSON.parse(r.stdout).reason === 'repo_kind_undetermined',
+        '#556 (f): a present-but-unparseable package.json must refuse repo_kind_undetermined (not fall through to the consumer gate), got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- #556 (g) ENOENT STAYS CONSUMER: an ABSENT package.json must NOT trigger repo_kind_undetermined —
+  //     it is the legitimate non-npm consumer path (#475). A consumer with no FV refuses
+  //     final_validation_unverified (the consumer gate), proving ENOENT → consumer, not indeterminate.
+  { const { grepo, planPath } = mkRepo({ a: 'complete', rv: 'complete', done: 'complete' }, { consumer: true });
+    try {
+      const r = runNode(planValidatorScript, [planPath, '--finalize-check', '--json'], grepo);
+      const reason = JSON.parse(r.stdout).reason;
+      assert(reason !== 'repo_kind_undetermined' && reason === 'final_validation_unverified',
+        '#556 (g): ENOENT package.json must stay consumer (final_validation_unverified), NOT repo_kind_undetermined, got ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
   console.log('testBundle424432433ValidatorGates: PASSED');
 }
 

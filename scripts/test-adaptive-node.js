@@ -8004,6 +8004,63 @@ function rtHarness(initialFiles, opts) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// #558: runOrient SURFACES dispatchFidelity (everConcurrent / maxSimultaneousOpen) from the durable
+// node-timings.jsonl on a real run — so a regression to silent serialization auto-alarms (the #472
+// close-criterion), not only via a hand-run probe. Additive field + fail-closed (absent telemetry →
+// zeroed trace, never a refuse — telemetry must never block a lifecycle transition).
+// ---------------------------------------------------------------------------
+{
+  const plan = makePlan([
+    '| impl-core | complete | |',
+    '| impl-other | complete | |',
+    '| review | complete | |',
+    '| finalize | complete | |',
+  ]);
+  const state = makeState();
+  const shellStub = function(scriptPath) {
+    const base = path.basename(scriptPath);
+    if (base === 'kaola-workflow-plan-validator.js') return { exitCode: 0, ok: true };
+    if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', readySet: [], nextNode: null, allDone: true };
+    return { exitCode: 1 };
+  };
+  const orientWithTimings = (timings) => runOrient({
+    planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+    statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+    project: 'test-project',
+    shell: shellStub,
+    readFile: (fpath) => {
+      if (fpath.endsWith('workflow-plan.md')) return plan;
+      if (fpath.endsWith('workflow-state.md')) return state;
+      if (fpath.endsWith('node-timings.jsonl')) { if (timings == null) throw new Error('ENOENT'); return timings; }
+      throw new Error('ENOENT: ' + fpath);
+    },
+    writeFile: () => { throw new Error('orient must not write'); },
+    cacheExists: () => false,
+  });
+  const concurrent = [
+    JSON.stringify({ node: 'a', event: 'opened', ts: '2026-06-14T10:00:00.000Z' }),
+    JSON.stringify({ node: 'b', event: 'opened', ts: '2026-06-14T10:00:01.000Z' }),
+    JSON.stringify({ node: 'a', event: 'closed', ts: '2026-06-14T10:00:05.000Z' }),
+    JSON.stringify({ node: 'b', event: 'closed', ts: '2026-06-14T10:00:06.000Z' }),
+  ].join('\n') + '\n';
+  const rc = orientWithTimings(concurrent);
+  assert(rc.result === 'ok' && rc.dispatchFidelity && rc.dispatchFidelity.everConcurrent === true && rc.dispatchFidelity.maxSimultaneousOpen === 2,
+    '#558: runOrient surfaces dispatchFidelity {everConcurrent:true,max:2} from overlapping node-timings, got ' + JSON.stringify(rc.dispatchFidelity));
+  const serial = [
+    JSON.stringify({ node: 'a', event: 'opened', ts: '2026-06-14T10:00:00.000Z' }),
+    JSON.stringify({ node: 'a', event: 'closed', ts: '2026-06-14T10:00:01.000Z' }),
+    JSON.stringify({ node: 'b', event: 'opened', ts: '2026-06-14T10:00:02.000Z' }),
+    JSON.stringify({ node: 'b', event: 'closed', ts: '2026-06-14T10:00:03.000Z' }),
+  ].join('\n') + '\n';
+  const rs = orientWithTimings(serial);
+  assert(rs.dispatchFidelity && rs.dispatchFidelity.everConcurrent === false && rs.dispatchFidelity.maxSimultaneousOpen === 1,
+    '#558: serial node-timings → dispatchFidelity everConcurrent false / max 1, got ' + JSON.stringify(rs.dispatchFidelity));
+  const ra = orientWithTimings(null);
+  assert(ra.result === 'ok' && ra.dispatchFidelity && ra.dispatchFidelity.everConcurrent === false && ra.dispatchFidelity.maxSimultaneousOpen === 0,
+    '#558: absent node-timings → zeroed dispatchFidelity, orient still ok (telemetry never blocks), got ' + JSON.stringify(ra.dispatchFidelity));
+}
+
 if (failed > 0) {
   console.error('adaptive-node tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;

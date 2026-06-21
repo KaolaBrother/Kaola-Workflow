@@ -36,6 +36,11 @@ const FEATURE_TOKENS = [
   // agents/workflow-planner.md, so this enforces all three .toml twins carry the validation_command /
   // validation_test_consumes ## Meta guidance (md↔toml parity for the Stage-2 record-once discipline).
   'validation_command',
+  // #559 (D-542-01 prose freshness): the co-open-default-on kill-switch token — present in the D-419-01
+  // scheduler-default-posture paragraph of agents/workflow-planner.md, so this enforces all three .toml
+  // twins carry the #542 "disjoint-write antichains co-open BY DEFAULT; serial only on KAOLA_PARALLEL_WRITES=0"
+  // framing (md↔toml parity that locks the stale "co-schedule under lane containment" wording from returning).
+  'KAOLA_PARALLEL_WRITES',
 ];
 
 // codex tree is the canonical agents/ source for the toml triple.

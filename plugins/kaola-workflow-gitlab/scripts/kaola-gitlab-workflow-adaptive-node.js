@@ -1498,6 +1498,17 @@ function runOrient(opts) {
     }
   }
 
+  // #558: surface the dispatch-fidelity trace (everConcurrent / maxSimultaneousOpen) derived from the
+  // durable node-timings.jsonl on every orient — so a regression to silent serialization auto-surfaces on
+  // a REAL run (the #472 close-criterion), instead of only via a hand-run probe. Best-effort + fail-closed
+  // to a zeroed/false trace when the file is absent or unreadable (a no-fan-out serial run legitimately has
+  // no opened/closed pairs); telemetry must NEVER block a lifecycle transition (appendNodeTiming contract).
+  // Purely ADDITIVE (no existing field removed/renamed), so every JSON-parsing caller is byte-unaffected.
+  let dispatchFidelity = { maxSimultaneousOpen: 0, everConcurrent: false };
+  try {
+    dispatchFidelity = deriveMaxSimultaneousOpen(readFile(path.join(path.dirname(planPath), '.cache', 'node-timings.jsonl')));
+  } catch (_) { /* absent/unreadable telemetry → zeroed trace, never a refuse */ }
+
   return {
     result: 'ok',
     resumeCheck,
@@ -1514,6 +1525,7 @@ function runOrient(opts) {
     batch,
     runningSet,
     allDone,
+    dispatchFidelity,
     enterBatch,
     // #434: present only when an in_progress node needs re-dispatch (absent or incomplete evidence).
     ...(requires_redispatch ? { requires_redispatch: true } : {}),
@@ -4218,14 +4230,16 @@ function evidenceDeclaresNoOp(evidenceContent) {
 // runCloseNode — MUTATES ledger + compliance + running-set.json.
 // Closes ONE node (evidence-shape -> barrier -> ledger complete -> compliance ->
 // selector-arm) then removes it from the running set and recomputes the newly-ready
-// frontier. Does NOT auto-open (the loop calls open-ready). No worktree join
-// (containment dormant: read-only members + serial writes are all parent-side).
+// frontier. Does NOT auto-open (the loop calls open-ready). A serial (non-member) close has no worktree
+// join — its writes are parent-side; a live lane_group member joins via the synthesizer at the group close.
 //
-// #437 (D-419 P2 §2): under KAOLA_LANE_CONTAINMENT, a node that is a live lane_group MEMBER takes
-// the GROUP-scoped close path: evidence-shape + per-member in-lane vacuity, then either DEFER the
-// barrier (non-last member ⇒ `barrier: deferred_to_group`) or run the GROUP barrier ONCE (last
-// member ⇒ `barrier: group_passed`, clear lane_group, drop the group baseline). Flag OFF (or a
-// non-member serial node) ⇒ the existing per-node serial close runs byte-identically (INV-6).
+// #437 (D-419 P2 §2) + #542 (D-542-01): a live lane_group MEMBER — formed BY DEFAULT for planner-proven-
+// disjoint write frontiers (legCoupled off parallelWritesDefaultOn, default TRUE; the retired
+// KAOLA_LANE_CONTAINMENT toggle no longer gates it) — takes the GROUP-scoped close path: evidence-shape +
+// per-member in-lane vacuity, then either DEFER the barrier (non-last member ⇒ `barrier: deferred_to_group`)
+// or run the GROUP barrier ONCE (last member ⇒ `barrier: group_passed`, clear lane_group, drop the group
+// baseline). The serial fallback (KAOLA_PARALLEL_WRITES=0 kill-switch, overlapping/uncertain writes, a
+// no-worktree host, or a non-member serial node) ⇒ the per-node serial close runs byte-identically (INV-6).
 // ---------------------------------------------------------------------------
 function runCloseNode(opts) {
   const { planPath, project, nodeId, shell, readFile, writeFile, cacheExists } = opts;
@@ -4401,7 +4415,9 @@ function runCloseNode(opts) {
 
 // ---------------------------------------------------------------------------
 // closeGroupMember (#437 D-419 P2 §2) — the LANE-GROUP member close path. Invoked by runCloseNode
-// ONLY under KAOLA_LANE_CONTAINMENT when the closing node is a live lane_group member. The evidence-
+// when the closing node is a live lane_group member — a group that forms BY DEFAULT for planner-proven-
+// disjoint write frontiers via parallelWritesDefaultOn (KAOLA_PARALLEL_WRITES default TRUE; the legacy
+// KAOLA_LANE_CONTAINMENT toggle no longer gates it, #542/D-542-01). The evidence-
 // shape PRESENCE check already passed in runCloseNode (step a); this performs:
 //   1. PER-MEMBER in-lane vacuity guard (member's declared set must have changes OR evidence declares
 //      a no_op:) — restores the #283 anti-vacuity check in lane form.
@@ -5485,7 +5501,8 @@ module.exports = {
   runRouteFindings,
   parseFindingLine,
   resolveOwningNode,
-  // #463 Slice 2: DORMANT per-leg `.kw` worktree provisioning primitives (exported for direct testing).
+  // #463 Slice 2 (LIVE since #542/D-542-01): per-leg `.kw` worktree provisioning primitives, exercised on
+  // every disjoint-write co-open by default (no longer dormant); exported here for direct testing.
   resolveLegIsolation,
   sanitizeLegId,
   legBranchFor,

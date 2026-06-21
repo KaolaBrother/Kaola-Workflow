@@ -89,6 +89,8 @@ const OPERATOR_HINT_REGISTRY = {
   // #475: consumer (non-npm) finalize gate — the agent's recorded validation IS the gate (no chain receipt).
   final_validation_unverified: () => 'No agent validation evidence at .cache/final-validation.md. In a consumer (non-npm) repo the agent owns verification (#44): record .cache/final-validation.md with the validation result + a column-0 `verdict: pass` before finalize.',
   final_validation_failed: () => '.cache/final-validation.md is present but does not record `verdict: pass` (column 0). The agent\'s own validation did not pass — remediate and re-record, or fix the failing checks before finalize.',
+  // #556: package.json present but unreadable/unparseable — repo kind (self-host npm vs consumer) is INDETERMINATE.
+  repo_kind_undetermined: () => 'package.json is present but UNREADABLE/unparseable, so the repo kind (self-host npm vs consumer) cannot be determined. The finalize gate refuses rather than silently using the weaker consumer gate. Fix the file permissions or the malformed JSON, or remove package.json if this is genuinely a non-npm consumer repo, then re-run.',
   plan_not_frozen: () => 'plan_hash missing — the plan is not frozen. Run --freeze to stamp the hash.',
   plan_hash_mismatch: () => 'plan_hash mismatch — workflow-plan.md was modified after freeze. Re-run --freeze to re-stamp.',
   unknown_role: (ctx) => `Unknown role "${ctx.role || '(unknown)'}" (node ${ctx.nodeId || '?'}) is not in the installed library. Check agents/ and re-freeze.`,
@@ -2629,13 +2631,41 @@ function main() {
     // chain-receipt gate — a fail-OPEN. The git top-level is unambiguous; fall back to `root` if git
     // cannot resolve it.
     let selfHostNpm = false;
-    try {
+    {
       let pkgRoot = root;
       try { pkgRoot = execFileSync('git', ['-C', root, 'rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim() || root; } catch (_) { pkgRoot = root; }
-      const pkg = JSON.parse(fs.readFileSync(path.join(pkgRoot, 'package.json'), 'utf8'));
-      const scripts = (pkg && pkg.scripts && typeof pkg.scripts === 'object') ? pkg.scripts : {};
-      selfHostNpm = ['claude', 'codex', 'gitlab', 'gitea'].some(n => typeof scripts['test:kaola-workflow:' + n] === 'string');
-    } catch (_) { selfHostNpm = false; }
+      // #556: distinguish THREE repo-kind states, not two, so a transient/ambiguous fault never silently
+      // downgrades a genuine self-host to the WEAKER consumer gate (a fail-OPEN). The prior single outer
+      // try set selfHostNpm=false on ANY throw — including a present-but-unreadable/corrupt package.json,
+      // which would skip the chain-receipt gate entirely on a real self-host repo.
+      //   (1) package.json ABSENT (ENOENT) → GENUINE consumer (#475: mkRepo({consumer:true}) omits it).
+      //   (2) PRESENT but UNREADABLE (EACCES/EIO) or UNPARSEABLE JSON → INDETERMINATE: refuse
+      //       repo_kind_undetermined (the dangerous present-but-corrupt case the toplevel-probe gate
+      //       would NOT catch — error-code discrimination is the only sound test).
+      //   (3) readable JSON, no edition chain script → genuine consumer.
+      const pkgPath = path.join(pkgRoot, 'package.json');
+      let pkgRaw = null;
+      try {
+        pkgRaw = fs.readFileSync(pkgPath, 'utf8');
+      } catch (e) {
+        if (!(e && e.code === 'ENOENT')) {
+          process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'repo_kind_undetermined', operator_hint: getOperatorHint('repo_kind_undetermined'), errors: ['package.json at ' + pkgPath + ' is present but UNREADABLE (' + ((e && e.code) || (e && e.message) || 'unknown') + ') — cannot determine repo kind (self-host npm vs consumer); refusing rather than silently using the weaker consumer gate'] }) : 'typed refusal: repo_kind_undetermined (package.json unreadable: ' + ((e && e.code) || 'unknown') + ')') + '\n');
+          process.exitCode = 1; return;
+        }
+        // ENOENT: genuine consumer — selfHostNpm stays false.
+      }
+      if (pkgRaw != null) {
+        let pkg;
+        try {
+          pkg = JSON.parse(pkgRaw);
+        } catch (_) {
+          process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'repo_kind_undetermined', operator_hint: getOperatorHint('repo_kind_undetermined'), errors: ['package.json at ' + pkgPath + ' is present but UNPARSEABLE JSON — cannot determine repo kind (self-host npm vs consumer); refusing rather than silently using the weaker consumer gate'] }) : 'typed refusal: repo_kind_undetermined (package.json unparseable JSON)') + '\n');
+          process.exitCode = 1; return;
+        }
+        const scripts = (pkg && pkg.scripts && typeof pkg.scripts === 'object') ? pkg.scripts : {};
+        selfHostNpm = ['claude', 'codex', 'gitlab', 'gitea'].some(n => typeof scripts['test:kaola-workflow:' + n] === 'string');
+      }
+    }
     let chains = [];
     const validationMode = selfHostNpm ? 'chain-receipt' : 'final-validation';
     if (selfHostNpm) {
