@@ -811,11 +811,53 @@ function sinkCopyDir(src, dest) {
   }
 }
 
+// #552: fail-closed backstop against the lane-group crash-window desync. A clean write-parallel group
+// completion DELETES the running-set lane_group key (adaptive-node closeGroupMember last-member path: it
+// runs the synthesizer + group barrier, merges every leg into the feature branch, then drops the key). So
+// a lane_group key that STILL EXISTS at sink time means a group never cleanly synthesized + merged its legs
+// — the surviving legs' committed work is NOT on the branch. Advancing main here would be the #552 silent
+// loss (a green run merges with code missing). Read running-set.json from BOTH the LIVE project dir AND the
+// post-finalize ARCHIVE dir (sink-merge runs from main root AFTER cmdFinalize archives — mirrors the
+// resolveSinkReceiptPath dual-location), and refuse if either carries a non-empty lane_group. Pure read,
+// zero mutation; returns a typed refusal object or null. Scoped to a NON-EMPTY lane_group key (a cleared
+// run deletes the key, not empties it) so a normal completed run's leftover running-set.json never false-trips.
+function lingeringLaneGroupRefusal(mainRoot, project) {
+  const locations = [
+    path.join(mainRoot, 'kaola-workflow', project, '.cache', 'running-set.json'),
+    path.join(mainRoot, 'kaola-workflow', 'archive', project, '.cache', 'running-set.json'),
+  ];
+  for (const rsPath of locations) {
+    let rs;
+    try { rs = JSON.parse(fs.readFileSync(rsPath, 'utf8')); } catch (_) { continue; } // absent/unreadable: try next
+    const lg = rs && rs.lane_group;
+    const members = (lg && Array.isArray(lg.members)) ? lg.members : [];
+    if (lg && members.length > 0) {
+      const legCount = (lg.legs && typeof lg.legs === 'object') ? Object.keys(lg.legs).length : 0;
+      return {
+        ok: false,
+        reason: 'lingering_lane_group',
+        detail: 'running-set.json (' + rsPath + ') still carries a lane_group "' + (lg.group_id || '(unknown)') +
+          '" with ' + members.length + ' member(s) and ' + legCount + ' leg(s). A clean write-parallel group ' +
+          'completion DELETES the lane_group key; a residual key means the group never ran its synthesizer + ' +
+          'group barrier (the #552 crash-window desync), so surviving legs\' committed work is NOT on the feature ' +
+          'branch. Refusing to sink — main must not advance with code missing. Run reconcile-running-set, resume ' +
+          'the adaptive run so the last member synthesizes + merges all legs, then re-run --sink.',
+      };
+    }
+  }
+  return null;
+}
+
 // #429: preflight — classify the dirty tree into three buckets and handle them.
 // Returns { ok: true, stashRef, removedDuplicates } on success, or
-// { ok: false, reason: 'sink_blocked', foreign_dirt: [...] } on foreign dirt.
+// { ok: false, reason: 'sink_blocked', foreign_dirt: [...] } on foreign dirt, or
+// { ok: false, reason: 'lingering_lane_group', detail } on the #552 backstop.
 // INVARIANT: if foreign_dirt is non-empty, NO mutation occurs.
 function sinkPreflight(mainRoot, project, branch, issueNumbers) {
+  // #552: lane-group backstop FIRST — a pure read, zero mutation, BEFORE the dirty-tree scan/stash.
+  const laneGroupRefusal = lingeringLaneGroupRefusal(mainRoot, project);
+  if (laneGroupRefusal) return laneGroupRefusal;
+
   const porcelain = execFileSync('git', ['-C', mainRoot, 'status', '--porcelain', '-uall'], { encoding: 'utf8' });
   const lines = porcelain.split('\n').filter(Boolean);
 
@@ -986,11 +1028,11 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
 
       const preResult = sinkPreflight(mainRoot, args.project, args.branch, args.issueNumbers);
       if (!preResult.ok) {
-        // sink_blocked: emit structured refusal and exit 1
+        // sink_blocked (foreign dirt) OR lingering_lane_group (#552): emit the TYPED refusal + exit 1.
         const out = {
           result: 'refuse',
-          reason: 'sink_blocked',
-          foreign_dirt: preResult.foreign_dirt,
+          reason: preResult.reason || 'sink_blocked',
+          ...(preResult.foreign_dirt ? { foreign_dirt: preResult.foreign_dirt } : {}),
           detail: preResult.detail
         };
         process.stdout.write(JSON.stringify(out) + '\n');

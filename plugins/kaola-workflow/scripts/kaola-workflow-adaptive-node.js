@@ -4472,7 +4472,17 @@ function closeGroupMember(ctx) {
   const allMemberIds = (Array.isArray(lg.members) ? lg.members : []).map(m => (typeof m === 'string' ? m : (m.nodeId || m.id)));
   const closedBefore = new Set(Array.isArray(lg.closed_members) ? lg.closed_members : []);
   const otherIds = allMemberIds.filter(id => id !== nodeId);
-  const isLast = otherIds.length > 0 && otherIds.every(id => closedBefore.has(id));
+  // #552: derive "last member" from the AUTHORITATIVE LEDGER, not (only) lane_group.closed_members.
+  // closed_members is written in a SECOND, non-atomic running-set write (:2a/:2b below) AFTER the closing
+  // member's ledger row is already flipped to `complete`. A crash in that window leaves a member ledger-
+  // TERMINAL but ABSENT from closed_members; reading only closed_members would then make the genuine last
+  // member mis-compute isLast=false, take the DEFER branch forever, and NEVER run the synthesizer/group
+  // barrier — the other legs' committed work is silently never merged (the #552 fail-open). The ledger is
+  // the crash-consistent source of truth (a deferred member wrote `complete` BEFORE any crash). closed_members
+  // is kept as a union FALLBACK so a transient ledger-read miss never regresses below today's behavior.
+  const groupLedger = readLedgerStatuses(readFile(planPath));
+  const TERMINAL_LEDGER = new Set(['complete', 'n/a', 'n.a', 'na']); // mirror runReconcileRunningSet's set
+  const isLast = otherIds.length > 0 && otherIds.every(id => TERMINAL_LEDGER.has(groupLedger[id]) || closedBefore.has(id));
   const isOnly = allMemberIds.length === 1; // a 1-member group degenerates to last-member immediately.
   const lastMember = isLast || isOnly;
 
@@ -4779,8 +4789,13 @@ function runReconcileRunningSet(opts) {
         }
       } else {
         // Surviving group: teardown each DROPPED member's leg and remove it from the manifest so the
-        // written lane_group.legs reflects only survivors.
-        const departing = new Set([...dropped, ...cappedOut, ...closed, ...stale]);
+        // written lane_group.legs reflects only survivors. #552: EXCLUDE the close-direction `closed`
+        // members — a close-direction terminal member (ledger `complete`, still in the node set because
+        // the closeGroupMember running-set write crashed before removing it) has UNMERGED leg work that
+        // the eventual last-member synthesizer MUST octopus-merge. Tearing its leg down here (worktree
+        // remove --force + branch -D) would PERMANENTLY lose that committed work — the #552 silent loss.
+        // Only open-direction rollbacks (dropped/cappedOut) and stale members get torn down.
+        const departing = new Set([...dropped, ...cappedOut, ...stale]); // NOT ...closed (see #552 above)
         for (const id of departing) {
           const leg = legsManifest[id];
           if (leg && leg.legPath) {
@@ -4788,6 +4803,20 @@ function runReconcileRunningSet(opts) {
             delete legsManifest[id];
           }
         }
+      }
+    }
+    // #552 SELF-HEAL: re-converge closed_members with the AUTHORITATIVE ledger on a SURVIVING group. A
+    // crash in closeGroupMember's two-write window (ledger `complete` written, running-set write not) leaves
+    // a close-direction terminal GROUP member missing from closed_members; re-add it (dedup, matching the
+    // closeGroupMember append shape) so the field never lies. The member's leg is RETAINED above, so the
+    // last-member synthesizer still merges it; this only keeps the optimization field honest. Belt-and-
+    // suspenders with the ledger-derived isLast (closeGroupMember) — neither alone can lose work.
+    if (laneGroupSurvives) {
+      const memberIdSet = new Set(memberIds);
+      const healed = closed.filter(id => memberIdSet.has(id));
+      if (healed.length) {
+        const prevClosed = Array.isArray(running.lane_group.closed_members) ? running.lane_group.closed_members : [];
+        running.lane_group.closed_members = Array.from(new Set([...prevClosed, ...healed]));
       }
     }
     if (!laneGroupSurvives && typeof shell === 'function') {

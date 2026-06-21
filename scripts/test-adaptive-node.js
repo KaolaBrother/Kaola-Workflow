@@ -5716,6 +5716,101 @@ function rtHarness(initialFiles, opts) {
   }
 
   // -------------------------------------------------------------------------
+  // ★ #552-CRASH-WINDOW-LEDGER-ISLAST (RED-provable on the ledger-derived isLast fix): closeGroupMember
+  //   flips the closing member's ledger row to `complete` in ONE write, THEN records closed_members +
+  //   drops the node from the running set in a SECOND, non-atomic write. A crash between them leaves a
+  //   member ledger-TERMINAL but ABSENT from closed_members (and still in running.nodes). Reading isLast
+  //   from closed_members would then make the GENUINE last member mis-compute isLast=false, DEFER forever,
+  //   and NEVER run the synthesizer → the other legs' committed work is silently never merged. The fix
+  //   derives isLast from the LEDGER, so the last member still detects it is last. This scenario resumes
+  //   WITHOUT reconcile (the ledger is the only consistent signal) and asserts B still synthesizes.
+  //   RED-provable: revert the ledger-derived isLast ⇒ rB.barrier === 'deferred_to_group' ⇒ this fails.
+  // -------------------------------------------------------------------------
+  {
+    const { repoRoot, cacheDir, planPath } = makeLaneRepo();
+    const open = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON);
+    assert(open.result === 'ok' && open.laneGroup, '#552-CRASH-WINDOW-LEDGER-ISLAST: setup co-open ok');
+    const rsOpen = readRS(cacheDir);
+    const aNode = (rsOpen.nodes || []).find(n => n.id === 'A');
+    assert(aNode, '#552-CRASH-WINDOW-LEDGER-ISLAST: A present in the open running set');
+    writeEvidence(cacheDir, 'A');
+    writeEvidence(cacheDir, 'B');
+    fs.writeFileSync(path.join(repoRoot, '.kw', 'legs', 'test-project', 'A', 'ax.js'), '// A in-lane (leg) — must survive the crash window\n');
+    fs.writeFileSync(path.join(repoRoot, '.kw', 'legs', 'test-project', 'B', 'by.js'), '// B in-lane (leg)\n');
+    // Close A → deferred (the COMPLETED close: ledger A complete, closed_members=[A], A dropped from nodes).
+    const rA = runNode(repoRoot, ['close-node', '--node-id', 'A', '--project', 'test-project', '--json'], LEG_ON);
+    assert(rA.result === 'ok' && rA.barrier === 'deferred_to_group', '#552-CRASH-WINDOW-LEDGER-ISLAST: A deferred ok, got ' + JSON.stringify(rA));
+    // SIMULATE THE CRASH WINDOW: roll the running-set BACK to the pre-2nd-write state (A still in nodes,
+    // closed_members WITHOUT A) while A's ledger row stays `complete` and A's leg stays in the manifest.
+    const rsCrash = readRS(cacheDir);
+    rsCrash.nodes = [aNode, ...(rsCrash.nodes || []).filter(n => n.id !== 'A')];
+    if (rsCrash.lane_group) rsCrash.lane_group.closed_members = (rsCrash.lane_group.closed_members || []).filter(id => id !== 'A');
+    fs.writeFileSync(path.join(cacheDir, 'running-set.json'), JSON.stringify(rsCrash, null, 2));
+    assert(ledgerStatus(planPath, 'A') === 'complete', '#552-CRASH-WINDOW-LEDGER-ISLAST: A ledger stays complete across the window');
+    assert(!(rsCrash.lane_group.closed_members || []).includes('A'), '#552-CRASH-WINDOW-LEDGER-ISLAST: closed_members is stale (A stripped) for the test');
+    // Close B with the stale closed_members — the ledger-derived isLast must still mark B as LAST.
+    const rB = runNode(repoRoot, ['close-node', '--node-id', 'B', '--project', 'test-project', '--json'], LEG_ON);
+    assert(rB.result === 'ok' && rB.barrier === 'group_passed',
+      '#552-CRASH-WINDOW-LEDGER-ISLAST: B detected LAST via the LEDGER despite stale closed_members ⇒ group_passed (NOT deferred), got ' + JSON.stringify(rB));
+    assert(rB.synthesized === true && typeof rB.mergeCommit === 'string' && rB.mergeCommit.length >= 7,
+      '#552-CRASH-WINDOW-LEDGER-ISLAST: B synthesizes + merges (no silent loss), got ' + JSON.stringify(rB));
+    // The commit-union group barrier (group_passed) already enforces per-leg-head ancestor inclusion for
+    // BOTH legs; cross-check concretely that A's committed leg file reached HEAD (the no-loss invariant).
+    const head1 = execFileSync('git', ['-C', repoRoot, 'ls-tree', '-r', '--name-only', 'HEAD'], { encoding: 'utf8' });
+    assert(head1.includes('ax.js') && head1.includes('by.js'),
+      '#552-CRASH-WINDOW-LEDGER-ISLAST: BOTH legs\' files on HEAD after synthesis (ax.js from the crash-window member), got ' + JSON.stringify(head1.split('\n').filter(Boolean)));
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
+  // ★ #552-CRASH-WINDOW-RECONCILE-HEAL (RED-provable on the reconcile self-heal + leg-retention fix): the
+  //   normal resume path runs reconcile-running-set first. For the SAME crash window, reconcile must (a)
+  //   SELF-HEAL closed_members (re-add the close-direction terminal member) and (b) RETAIN that member's
+  //   leg (NOT tear it down) so the eventual last-member synthesizer can merge it. Pre-fix, reconcile's
+  //   surviving-group teardown loop tore down the close-direction member's leg + dropped it from the
+  //   manifest → the synthesizer omits it → committed work permanently lost. RED-provable: re-add `...closed`
+  //   to the reconcile `departing` set ⇒ A's leg is torn down ⇒ ax.js missing from HEAD ⇒ this fails.
+  // -------------------------------------------------------------------------
+  {
+    const { repoRoot, cacheDir, planPath } = makeLaneRepo();
+    const open = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON);
+    assert(open.result === 'ok' && open.laneGroup, '#552-CRASH-WINDOW-RECONCILE-HEAL: setup co-open ok');
+    const rsOpen = readRS(cacheDir);
+    const aNode = (rsOpen.nodes || []).find(n => n.id === 'A');
+    writeEvidence(cacheDir, 'A');
+    writeEvidence(cacheDir, 'B');
+    fs.writeFileSync(path.join(repoRoot, '.kw', 'legs', 'test-project', 'A', 'ax.js'), '// A in-lane (leg) — must survive reconcile\n');
+    fs.writeFileSync(path.join(repoRoot, '.kw', 'legs', 'test-project', 'B', 'by.js'), '// B in-lane (leg)\n');
+    const rA = runNode(repoRoot, ['close-node', '--node-id', 'A', '--project', 'test-project', '--json'], LEG_ON);
+    assert(rA.result === 'ok' && rA.barrier === 'deferred_to_group', '#552-CRASH-WINDOW-RECONCILE-HEAL: A deferred ok, got ' + JSON.stringify(rA));
+    // Crash window: A back in nodes, A stripped from closed_members, ledger A complete, A leg retained.
+    const rsCrash = readRS(cacheDir);
+    rsCrash.nodes = [aNode, ...(rsCrash.nodes || []).filter(n => n.id !== 'A')];
+    if (rsCrash.lane_group) rsCrash.lane_group.closed_members = (rsCrash.lane_group.closed_members || []).filter(id => id !== 'A');
+    fs.writeFileSync(path.join(cacheDir, 'running-set.json'), JSON.stringify(rsCrash, null, 2));
+    assert(rsCrash.lane_group.legs && rsCrash.lane_group.legs.A, '#552-CRASH-WINDOW-RECONCILE-HEAL: A leg in the manifest pre-reconcile');
+    // RECONCILE: self-heal closed_members + RETAIN A's leg.
+    const rec = runNode(repoRoot, ['reconcile-running-set', '--project', 'test-project', '--json'], LEG_ON);
+    assert(rec.result === 'ok', '#552-CRASH-WINDOW-RECONCILE-HEAL: reconcile ok, got ' + JSON.stringify(rec));
+    const rsHealed = readRS(cacheDir);
+    assert(rsHealed && rsHealed.lane_group && Array.isArray(rsHealed.lane_group.closed_members) && rsHealed.lane_group.closed_members.includes('A'),
+      '#552-CRASH-WINDOW-RECONCILE-HEAL: reconcile SELF-HEALS closed_members (A re-added), got ' + JSON.stringify(rsHealed && rsHealed.lane_group && rsHealed.lane_group.closed_members));
+    assert(rsHealed.lane_group.legs && rsHealed.lane_group.legs.A && rsHealed.lane_group.legs.B,
+      '#552-CRASH-WINDOW-RECONCILE-HEAL: reconcile RETAINS both legs (A NOT torn down), got ' + JSON.stringify(rsHealed.lane_group.legs));
+    assert(worktreePaths(repoRoot).some(p => p.endsWith(path.join('.kw', 'legs', 'test-project', 'A'))), '#552-CRASH-WINDOW-RECONCILE-HEAL: A leg worktree survives reconcile (work not lost)');
+    assert(branchExists(repoRoot, 'kw/legs/test-project/A'), '#552-CRASH-WINDOW-RECONCILE-HEAL: A leg branch survives reconcile');
+    // Close B → group_passed; both legs merged.
+    const rB = runNode(repoRoot, ['close-node', '--node-id', 'B', '--project', 'test-project', '--json'], LEG_ON);
+    assert(rB.result === 'ok' && rB.barrier === 'group_passed' && rB.synthesized === true,
+      '#552-CRASH-WINDOW-RECONCILE-HEAL: B group_passed + synthesized after the healed reconcile, got ' + JSON.stringify(rB));
+    const head2 = execFileSync('git', ['-C', repoRoot, 'ls-tree', '-r', '--name-only', 'HEAD'], { encoding: 'utf8' });
+    assert(head2.includes('ax.js') && head2.includes('by.js'),
+      '#552-CRASH-WINDOW-RECONCILE-HEAL: BOTH legs\' files on HEAD (A leg retained through reconcile), got ' + JSON.stringify(head2.split('\n').filter(Boolean)));
+    assert(ledgerStatus(planPath, 'A') === 'complete' && ledgerStatus(planPath, 'B') === 'complete', '#552-CRASH-WINDOW-RECONCILE-HEAL: both complete');
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
   // LEG-CRASH-LOST-MANIFEST-RECLAIM (FIX-1b): provision legs (ON), then UNLINK running-set.json
   //   entirely (a crash that lost the manifest). Run reconcile-running-set with the toggle ON; the
   //   hoisted sweep — gated on resolveLegIsolation, NOT on a present manifest — reclaims the now-orphan

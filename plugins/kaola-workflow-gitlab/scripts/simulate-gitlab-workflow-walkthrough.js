@@ -116,6 +116,54 @@ function testFallbackGuardsAfterArchive() {
   }
 }
 
+// #552: the FORGE sink-merge lingering-lane_group fail-closed backstop (hand-port parity with canonical).
+// The gitlab sink-merge is a DIVERGENT hand-port with NO byte-parity guard, so this functional test is the
+// only regression lock against the hand-port drifting (the #550 lesson: a forge fail-path that no test
+// exercises is where drift hides). A clean group completion deletes the lane_group key; a residual key at
+// sink time means unmerged leg work, so the sink must refuse and main must NOT advance.
+function testGitlabSinkRefusesLingeringLaneGroup() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-552-sink-')));
+  const sinkScript = path.join(__dirname, 'kaola-gitlab-workflow-sink-merge.js');
+  const lingering = JSON.stringify({ state: 'open', nodes: [{ id: 'B', role: 'tdd-guide' }], lane_group: { group_id: 'lane-9552', members: ['A', 'B'], closed_members: ['A'], legs: { A: { legPath: '.kw/legs/issue-9552/A' }, B: { legPath: '.kw/legs/issue-9552/B' } } } }, null, 2);
+  try {
+    glInitGitRepo(tmp);
+    spawnSync('git', ['checkout', '-b', 'workflow/issue-9552'], { cwd: tmp, encoding: 'utf8' });
+    fs.writeFileSync(path.join(tmp, 'feature.txt'), 'impl');
+    spawnSync('git', ['add', 'feature.txt'], { cwd: tmp, encoding: 'utf8' });
+    spawnSync('git', ['commit', '-m', 'feat: issue 9552'], { cwd: tmp, encoding: 'utf8' });
+    spawnSync('git', ['checkout', 'main'], { cwd: tmp, encoding: 'utf8' });
+    // RED (live location): a lingering lane_group blocks the sink, main unchanged.
+    const liveCache = path.join(tmp, 'kaola-workflow', 'issue-9552', '.cache');
+    fs.mkdirSync(liveCache, { recursive: true });
+    fs.writeFileSync(path.join(liveCache, 'running-set.json'), lingering);
+    const mainBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+    const r1 = spawnSync(process.execPath, [sinkScript, '--branch', 'workflow/issue-9552', '--project', 'issue-9552', '--issue', '9552', '--sink', '--json'], { cwd: tmp, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
+    assert.notStrictEqual(r1.status, 0, 'gitlab #552: sink must refuse (exit non-zero) on a lingering lane_group, got status ' + r1.status);
+    const p1 = JSON.parse(String(r1.stdout || '').trim().split('\n').pop());
+    assert.strictEqual(p1.reason, 'lingering_lane_group', 'gitlab #552: typed refusal lingering_lane_group, got ' + JSON.stringify(p1));
+    assert.strictEqual(spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim(), mainBefore, 'gitlab #552: main must NOT advance');
+    // RED (archive location): dual-location read also fires.
+    fs.rmSync(liveCache, { recursive: true, force: true });
+    const archCache = path.join(tmp, 'kaola-workflow', 'archive', 'issue-9552', '.cache');
+    fs.mkdirSync(archCache, { recursive: true });
+    fs.writeFileSync(path.join(archCache, 'running-set.json'), lingering);
+    const r2 = spawnSync(process.execPath, [sinkScript, '--branch', 'workflow/issue-9552', '--project', 'issue-9552', '--issue', '9552', '--sink', '--json'], { cwd: tmp, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
+    const p2 = JSON.parse(String(r2.stdout || '').trim().split('\n').pop());
+    assert.strictEqual(p2.reason, 'lingering_lane_group', 'gitlab #552: dual-location (archive) refusal, got ' + JSON.stringify(p2));
+    // GREEN (no false-positive): a running-set with NO lane_group key must NOT trip the backstop.
+    fs.rmSync(archCache, { recursive: true, force: true });
+    fs.mkdirSync(liveCache, { recursive: true });
+    fs.writeFileSync(path.join(liveCache, 'running-set.json'), JSON.stringify({ state: 'open', nodes: [] }, null, 2));
+    const r3 = spawnSync(process.execPath, [sinkScript, '--branch', 'workflow/issue-9552', '--project', 'issue-9552', '--issue', '9552', '--sink', '--json'], { cwd: tmp, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
+    let p3 = {};
+    try { p3 = JSON.parse(String(r3.stdout || '').trim().split('\n').pop()); } catch (_) {}
+    assert.notStrictEqual(p3.reason, 'lingering_lane_group', 'gitlab #552 GREEN: a cleared running-set (no lane_group key) must NOT trip the backstop, got ' + JSON.stringify(p3));
+    console.log('testGitlabSinkRefusesLingeringLaneGroup: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 function testAuditAndRepairLabels() {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-audit-labels-'));
   const mockScript = path.join(tmp, 'glab-mock.js');
@@ -1437,6 +1485,7 @@ function testSinkMrUsesFinalizationSummary() {
 }
 
 testFallbackGuardsAfterArchive();
+testGitlabSinkRefusesLingeringLaneGroup();
 testAuditAndRepairLabels();
 testRepairFastEscalation();
 testRepairFinalizationRoute();

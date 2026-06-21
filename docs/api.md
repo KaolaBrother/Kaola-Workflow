@@ -2071,6 +2071,34 @@ envelope — the caller sees exit 1 with a stderr message identifying the
 transient fault. Re-run `sink-merge` after resolving the fault (e.g. removing
 the stale lock file).
 
+**`lingering_lane_group` refuse envelope (issue #552, fail-closed backstop).**
+`sinkPreflight` runs FIRST in the `--sink` transaction (a pure read, zero
+mutation). A clean write-parallel group completion DELETES the running-set
+`lane_group` key (the `adaptive-node` `closeGroupMember` last-member path runs the
+synthesizer + group barrier, merges every leg into the feature branch, then drops
+the key). So a `lane_group` key that STILL EXISTS at sink time means a group never
+cleanly synthesized + merged its legs — the surviving legs' committed work is NOT
+on the branch, and advancing main would silently lose it. `sinkPreflight` reads
+`running-set.json` from BOTH the live `kaola-workflow/<project>/.cache/` and the
+post-finalize `kaola-workflow/archive/<project>/.cache/` locations and, if either
+carries a non-empty `lane_group`, refuses (exit 1, ZERO mutation, main not
+advanced) so the deliverable can never be lost. The runtime fix
+(`closeGroupMember` derives "last member" from the authoritative ledger, and
+`reconcile-running-set` self-heals `closed_members` + retains the close-direction
+member's leg) prevents the desync in the first place; this backstop is the
+defense-in-depth guard at the one irreversible point. `next-action`'s `allDone`
+stays pure-ledger by design (#272) — the teeth live at the sink, not in the
+aggregator. Remediation: run `reconcile-running-set`, resume the adaptive run so
+the last member synthesizes + merges all legs, then re-run `--sink`.
+
+```json
+{
+  "result": "refuse",
+  "reason": "lingering_lane_group",
+  "detail": "running-set.json (...) still carries a lane_group \"...\" with N member(s) and M leg(s) ..."
+}
+```
+
 ### `audit-labels` and `repair-labels` (issue #163; GitLab port #166, Gitea port #167)
 
 Two subcommands find and fix closed issues that still carry `workflow:in-progress`.

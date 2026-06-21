@@ -6603,6 +6603,85 @@ function testSinkMergeRefusesLiveFolder() {
   }
 }
 
+// #552: the sink-merge lingering-lane_group fail-closed backstop. A clean write-parallel group completion
+// DELETES the running-set lane_group key (adaptive-node closeGroupMember last-member path); a residual key
+// at sink time means the group never ran its synthesizer + group barrier (the #552 crash-window desync), so
+// the surviving legs' committed work is NOT on the branch — advancing main here would be the #552 silent
+// loss. sinkPreflight refuses (lingering_lane_group, zero mutation) reading BOTH the live project .cache and
+// the post-finalize archive .cache. RED-provable: drop the backstop ⇒ the sink proceeds past preflight.
+function testSinkRefusesLingeringLaneGroup() {
+  const lingering = {
+    state: 'open',
+    nodes: [{ id: 'B', role: 'tdd-guide' }],
+    lane_group: { group_id: 'lane-9552', members: ['A', 'B'], closed_members: ['A'], legs: { A: { legPath: '.kw/legs/issue-9552/A' }, B: { legPath: '.kw/legs/issue-9552/B' } } },
+  };
+  function runSink(tmp) {
+    return spawnSync(process.execPath, [sinkMergeScript, '--project', 'issue-9552', '--branch', 'workflow/issue-9552', '--issue', '9552', '--sink', '--json'],
+      { cwd: tmp, encoding: 'utf8', env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' } });
+  }
+  function setupRepo(tmp) {
+    initGitRepo(tmp);
+    spawnSync('git', ['checkout', '-b', 'workflow/issue-9552'], { cwd: tmp });
+    fs.writeFileSync(path.join(tmp, 'feature.txt'), 'impl');
+    spawnSync('git', ['add', 'feature.txt'], { cwd: tmp });
+    spawnSync('git', ['commit', '-m', 'feat: issue 9552'], { cwd: tmp });
+    spawnSync('git', ['checkout', 'main'], { cwd: tmp });
+  }
+  // ---- RED-1 (LIVE location): a lingering lane_group in kaola-workflow/<project>/.cache blocks the sink. ----
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-552-sink-live-')));
+    try {
+      setupRepo(tmp);
+      const cacheDir = path.join(tmp, 'kaola-workflow', 'issue-9552', '.cache');
+      fs.mkdirSync(cacheDir, { recursive: true });
+      fs.writeFileSync(path.join(cacheDir, 'running-set.json'), JSON.stringify(lingering, null, 2));
+      const mainBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+      const result = runSink(tmp);
+      assert(result.status !== 0, '#552-sink RED-1 (live): must refuse (exit non-zero) on a lingering lane_group, got status ' + result.status);
+      const parsed = JSON.parse(String(result.stdout || '').trim().split('\n').pop());
+      assert(parsed.result === 'refuse' && parsed.reason === 'lingering_lane_group',
+        '#552-sink RED-1 (live): typed refusal lingering_lane_group, got ' + JSON.stringify(parsed));
+      const mainAfter = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+      assert(mainBefore === mainAfter, '#552-sink RED-1 (live): main must NOT advance, before ' + mainBefore + ' after ' + mainAfter);
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
+  // ---- RED-2 (ARCHIVE location, the realistic post-finalize state): same refusal via the archive read. ----
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-552-sink-arch-')));
+    try {
+      setupRepo(tmp);
+      const archCache = path.join(tmp, 'kaola-workflow', 'archive', 'issue-9552', '.cache');
+      fs.mkdirSync(archCache, { recursive: true });
+      fs.writeFileSync(path.join(archCache, 'running-set.json'), JSON.stringify(lingering, null, 2));
+      const mainBefore = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+      const result = runSink(tmp);
+      assert(result.status !== 0, '#552-sink RED-2 (archive): must refuse on a lingering lane_group in the archive, got status ' + result.status);
+      const parsed = JSON.parse(String(result.stdout || '').trim().split('\n').pop());
+      assert(parsed.result === 'refuse' && parsed.reason === 'lingering_lane_group',
+        '#552-sink RED-2 (archive): typed refusal lingering_lane_group via dual-location read, got ' + JSON.stringify(parsed));
+      const mainAfter = spawnSync('git', ['-C', tmp, 'rev-parse', 'main'], { encoding: 'utf8' }).stdout.trim();
+      assert(mainBefore === mainAfter, '#552-sink RED-2 (archive): main must NOT advance');
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
+  // ---- GREEN (no false-positive): a running-set WITHOUT a lane_group key (a cleanly-completed run) must
+  //      NOT trip the backstop — the sink may still refuse for another reason, but NEVER lingering_lane_group. ----
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-552-sink-green-')));
+    try {
+      setupRepo(tmp);
+      const cacheDir = path.join(tmp, 'kaola-workflow', 'issue-9552', '.cache');
+      fs.mkdirSync(cacheDir, { recursive: true });
+      fs.writeFileSync(path.join(cacheDir, 'running-set.json'), JSON.stringify({ state: 'open', nodes: [] }, null, 2)); // lane_group KEY cleared
+      const result = runSink(tmp);
+      let parsed = {};
+      try { parsed = JSON.parse(String(result.stdout || '').trim().split('\n').pop()); } catch (_) {}
+      assert(parsed.reason !== 'lingering_lane_group',
+        '#552-sink GREEN: a cleared running-set (no lane_group key) must NOT trip the backstop, got ' + JSON.stringify(parsed));
+    } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  }
+  console.log('testSinkRefusesLingeringLaneGroup: PASSED');
+}
+
 function testSinkMergeBlocksUnpushedCommits() {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink-merge-block-')));
   const remotePath = initGitRepoWithBareRemote(tmp);
@@ -13076,6 +13155,7 @@ function buildRegistry() {
   add('testReadPriorityConfig',                           testReadPriorityConfig);
   add('testE2EGitHubMergeFullChain',                      testE2EGitHubMergeFullChain);
   add('testSinkMergeRefusesLiveFolder',                   testSinkMergeRefusesLiveFolder);
+  add('testSinkRefusesLingeringLaneGroup',                testSinkRefusesLingeringLaneGroup);
   add('testSinkMergeBlocksUnpushedCommits',               testSinkMergeBlocksUnpushedCommits);
   add('testAssertWorktreeCleanFailsClosedOnProbeFault',   testAssertWorktreeCleanFailsClosedOnProbeFault);
   add('testAssertWorktreeCleanFailsClosedOnListProbeFault', testAssertWorktreeCleanFailsClosedOnListProbeFault);

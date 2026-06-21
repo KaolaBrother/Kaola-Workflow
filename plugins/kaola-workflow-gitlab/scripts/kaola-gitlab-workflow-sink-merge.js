@@ -879,7 +879,43 @@ function sinkCopyDir(src, dest) {
   }
 }
 
+// #552: fail-closed backstop against the lane-group crash-window desync. A clean write-parallel group
+// completion DELETES the running-set lane_group key (adaptive-node closeGroupMember last-member path); a
+// residual key at sink time means the group never synthesized + merged its legs, so surviving legs' committed
+// work is NOT on the branch and advancing main would be the #552 silent loss. Dual-location read (live +
+// post-finalize archive), pure read, zero mutation; returns a typed refusal or null.
+function lingeringLaneGroupRefusal(mainRoot, project) {
+  const locations = [
+    path.join(mainRoot, 'kaola-workflow', project, '.cache', 'running-set.json'),
+    path.join(mainRoot, 'kaola-workflow', 'archive', project, '.cache', 'running-set.json'),
+  ];
+  for (const rsPath of locations) {
+    let rs;
+    try { rs = JSON.parse(fs.readFileSync(rsPath, 'utf8')); } catch (_) { continue; } // absent/unreadable: try next
+    const lg = rs && rs.lane_group;
+    const members = (lg && Array.isArray(lg.members)) ? lg.members : [];
+    if (lg && members.length > 0) {
+      const legCount = (lg.legs && typeof lg.legs === 'object') ? Object.keys(lg.legs).length : 0;
+      return {
+        ok: false,
+        reason: 'lingering_lane_group',
+        detail: 'running-set.json (' + rsPath + ') still carries a lane_group "' + (lg.group_id || '(unknown)') +
+          '" with ' + members.length + ' member(s) and ' + legCount + ' leg(s). A clean write-parallel group ' +
+          'completion DELETES the lane_group key; a residual key means the group never ran its synthesizer + ' +
+          'group barrier (the #552 crash-window desync), so surviving legs\' committed work is NOT on the feature ' +
+          'branch. Refusing to sink — main must not advance with code missing. Run reconcile-running-set, resume ' +
+          'the adaptive run so the last member synthesizes + merges all legs, then re-run --sink.',
+      };
+    }
+  }
+  return null;
+}
+
 function sinkPreflight(mainRoot, project, branch, issueNumbers) {
+  // #552: lane-group backstop FIRST — a pure read, zero mutation, BEFORE the dirty-tree scan/stash.
+  const laneGroupRefusal = lingeringLaneGroupRefusal(mainRoot, project);
+  if (laneGroupRefusal) return laneGroupRefusal;
+
   const porcelain = execFileSync('git', ['-C', mainRoot, 'status', '--porcelain', '-uall'], { encoding: 'utf8' });
   const lines = porcelain.split('\n').filter(Boolean);
   const worktreePaths = new Set();
@@ -965,7 +1001,7 @@ function runSinkTransaction(args, mainRoot, defBranch) {
       args.issueNumbers = memberSet.members; args.member_source = memberSet.source;
       const preResult = sinkPreflight(mainRoot, args.project, args.branch, args.issueNumbers);
       if (!preResult.ok) {
-        process.stdout.write(JSON.stringify({ result: 'refuse', reason: 'sink_blocked', foreign_dirt: preResult.foreign_dirt, detail: preResult.detail }) + '\n');
+        process.stdout.write(JSON.stringify({ result: 'refuse', reason: preResult.reason || 'sink_blocked', ...(preResult.foreign_dirt ? { foreign_dirt: preResult.foreign_dirt } : {}), detail: preResult.detail }) + '\n');
         process.exitCode = 1; return;
       }
       if (preResult.stashRef) receipt.stash_ref = preResult.stashRef;
