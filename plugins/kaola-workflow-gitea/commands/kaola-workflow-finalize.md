@@ -228,6 +228,9 @@ Avoid redundant validation runs.
 - After a routed fix or Trivial Inline Edit Exception edit, rerun the failed or
   affected command. Rerun broader validation only when shared infrastructure,
   dependencies, build config, or public behavior changed.
+- The self-host four-chain receipt is keyed on a code-relevant-tree hash (#547): a commit
+  touching only inert docs or workflow-state since the chains ran stays fresh (no re-run);
+  a code OR chain-asserted-doc (`README`/`CHANGELOG`/`docs/api.md`) change still invalidates it.
 - **State the actual reuse boundary, not a false absolute (#324 AC3).** When you cite
   a prior run instead of rerunning, record WHICH node/state that run covered and that
   later finalize-step edits (e.g. a `CHANGELOG.md`/docs touch in the finalize node)

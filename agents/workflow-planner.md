@@ -223,6 +223,16 @@ Capture the frozen issue labels into a `## Meta` `labels:` line so the validator
 sensitivity. If the validator refuses, read the typed refusal and fix the plan — never clamp around
 a gate.
 
+Record the consumer's validation command ONCE in a `## Meta` `validation_command: <cmd>` line (e.g.
+`validation_command: npm test`). Each node and Finalization REUSE this recorded command instead of
+re-deriving a full-suite command per node — the #547 "record once, cite don't re-run" discipline that
+closes the per-node re-derivation gap. It is reader-only (no freeze gate): a plan without it is still
+valid. If the project's chain/suite reads prose files a docs-only change must NOT be cited-as-unchanged
+over (a runtime-parsed fixture under `docs/`, a contract doc the tests assert on), list them in a
+`## Meta` `validation_test_consumes: a/b.md, c.md` line so they stay code-relevant for the
+content-addressed validation-receipt freshness hash (fail-closed: an unlisted inert doc is only a
+missed de-dup, never a missed regression).
+
 ## Method (in order)
 
 Re-derive your own script paths exactly as the workflow commands do (prefer `$CLAUDE_PLUGIN_ROOT/scripts`,

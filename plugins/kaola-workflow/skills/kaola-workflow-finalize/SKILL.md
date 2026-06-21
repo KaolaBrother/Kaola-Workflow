@@ -82,9 +82,10 @@ precedence order):
   (resolved the same way as `validator_script` above) after the last commit so the
   receipt is written and `headSha` matches HEAD. Do NOT delegate this to the contractor
   subagent — the contractor only verifies.
-- **`chains_stale`** — the receipt's `headSha` does not equal the current HEAD
-  sha. The tree has advanced since the chains ran (a commit landed, a rebase
-  happened); the receipt no longer describes HEAD.
+- **`chains_stale`** — the receipt's `codeTreeHash` no longer matches the current
+  code-relevant tree (#547): code or a chain-asserted doc changed since the chains ran.
+  A docs-only / workflow-state commit does NOT trigger it; a legacy receipt without
+  `codeTreeHash` falls back to the `headSha`-vs-HEAD pin.
   Remedy: the orchestrator (main session) must re-run `kaola-workflow-run-chains.js`
   to regenerate the receipt against HEAD. Do NOT delegate this to the contractor subagent.
 - **`chains_red`** — at least one chain has a non-zero exit code and

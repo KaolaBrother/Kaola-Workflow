@@ -2802,6 +2802,36 @@ function testBundle424432433ValidatorGates() {
       '#424: a path under the active project tree is invisible');
   }
 
+  // --- #547 (D-547-01) isValidationInvisible / testConsumes / computeCodeTreeHash: the chain-receipt
+  // freshness band. A path is VALIDATION-INVISIBLE (a fresh receipt may be cited over a change to it)
+  // iff a change cannot flip a chain verdict — the #424 allowband + the whole kaola-workflow/ tree,
+  // MINUS the prose the chains actually read (which stays CODE). This is the accuracy core of #547.
+  {
+    assert(typeof pv.isValidationInvisible === 'function', '#547: isValidationInvisible must be exported');
+    assert(typeof pv.computeCodeTreeHash === 'function', '#547: computeCodeTreeHash must be exported');
+    assert(typeof pv.testConsumes === 'function', '#547: testConsumes must be exported');
+    // inert prose / workflow-state → invisible (citing over it is safe → no needless re-run)
+    assert(pv.isValidationInvisible('docs/architecture.md') === true, '#547: an inert doc is validation-invisible');
+    assert(pv.isValidationInvisible('docs/decisions/D-1.md') === true, '#547: an inert ADR is validation-invisible');
+    assert(pv.isValidationInvisible('kaola-workflow/issue-1/.cache/x.md') === true, '#547: workflow state is validation-invisible (project-independent)');
+    assert(pv.isValidationInvisible('kaola-workflow/issue-9/.cache/x.md') === true, '#547: ANY project workflow state is validation-invisible regardless of --project');
+    // test-consumed prose stays CODE (a change CAN flip a chain verdict → must NOT be cited as fresh)
+    assert(pv.isValidationInvisible('docs/api.md') === false, '#547: a test-consumed doc (docs/api.md) is CODE, never cited-fresh');
+    assert(pv.isValidationInvisible('docs/workflow-state-contract.md') === false, '#547: docs/workflow-state-contract.md is CODE');
+    assert(pv.isValidationInvisible('docs/agents-source.md') === false, '#547: docs/agents-source.md is CODE');
+    assert(pv.isValidationInvisible('README.md') === false, '#547: root README.md (test-asserted) is CODE');
+    assert(pv.isValidationInvisible('CHANGELOG.md') === false, '#547: root CHANGELOG.md (version-heading asserted) is CODE');
+    assert(pv.isValidationInvisible('scripts/x.js') === false, '#547: a source file is CODE');
+    // the optional plan widening keeps a fork's extra prose CODE without forking the predicate
+    assert(pv.isValidationInvisible('docs/custom.md') === true, '#547: an undeclared inert doc is invisible by default');
+    assert(pv.isValidationInvisible('docs/custom.md', null, ['docs/custom.md']) === false, '#547: validation_test_consumes widening re-includes a doc as CODE');
+    // the hash is stable + project-independent (so the producer and gate agree regardless of --project)
+    const hA = pv.computeCodeTreeHash(process.cwd(), 'issue-1', []);
+    const hB = pv.computeCodeTreeHash(process.cwd(), null, []);
+    assert(typeof hA === 'string' && hA.length === 64, '#547: computeCodeTreeHash returns a sha256');
+    assert(hA === hB, '#547: computeCodeTreeHash is project-independent (producer/gate agree)');
+  }
+
   // --- #433 (5) ROLE_TOKEN_REGISTRY export + shape.
   {
     const reg = pv.ROLE_TOKEN_REGISTRY;
@@ -2932,6 +2962,63 @@ function testBundle424432433ValidatorGates() {
       const r = runNode(planValidatorScript, [planPath, '--finalize-check', '--json'], grepo);
       assert(r.status === 0 && JSON.parse(r.stdout).result === 'pass',
         '#432 (9): finalize with a WAIVED red chain + clean attribution sweep must pass, got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- #547 (D-547-01, a) FINALIZE freshness re-key: a receipt with codeTreeHash that MATCHES the
+  //     current code-tree hash is FRESH (the --current-code-tree seam drives the comparison).
+  { const { grepo, planPath, proj } = mkRepo({ a: 'complete', rv: 'complete', done: 'complete' });
+    try {
+      writeReceipt(proj, { headSha: headOf(grepo), codeTreeHash: 'abc123', validationTestConsumes: [],
+        chains: [{ name: 'claude', exitCode: 0, accepted_red: false }] });
+      const r = runNode(planValidatorScript, [planPath, '--finalize-check', '--json', '--base', 'HEAD', '--current-code-tree', 'abc123'], grepo);
+      assert(r.status === 0 && JSON.parse(r.stdout).result === 'pass',
+        '#547 (a): a receipt whose codeTreeHash matches the current code tree must pass, got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- #547 (D-547-01, b) FINALIZE freshness re-key: a receipt whose codeTreeHash DIFFERS from the
+  //     current code-tree hash is chains_stale (code or test-consumed prose changed).
+  { const { grepo, planPath, proj } = mkRepo({ a: 'complete', rv: 'complete', done: 'complete' });
+    try {
+      writeReceipt(proj, { headSha: headOf(grepo), codeTreeHash: 'abc123', validationTestConsumes: [],
+        chains: [{ name: 'claude', exitCode: 0, accepted_red: false }] });
+      const r = runNode(planValidatorScript, [planPath, '--finalize-check', '--json', '--base', 'HEAD', '--current-code-tree', 'zzz999'], grepo);
+      assert(r.status === 1 && JSON.parse(r.stdout).reason === 'chains_stale',
+        '#547 (b): a receipt whose codeTreeHash != current code tree must refuse chains_stale, got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- #547 (D-547-01, c) THE HEADLINE FIX (real git): a DOCS-ONLY commit after the chains ran leaves
+  //     the code tree byte-identical, so the receipt stays FRESH — the chains are NOT needlessly re-run.
+  { const { grepo, planPath, proj } = mkRepo({ a: 'complete', rv: 'complete', done: 'complete' });
+    try {
+      fs.mkdirSync(path.join(grepo, 'docs'), { recursive: true });
+      fs.writeFileSync(path.join(grepo, 'docs', 'architecture.md'), 'arch v1\n');
+      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'docs v1'], { cwd: grepo, encoding: 'utf8' });
+      const h0 = pv.computeCodeTreeHash(grepo, 'issue-424', []);
+      writeReceipt(proj, { headSha: headOf(grepo), codeTreeHash: h0, validationTestConsumes: [],
+        chains: [{ name: 'claude', exitCode: 0, accepted_red: false }] });
+      // a docs-only change (inert prose) — code tree unchanged.
+      fs.writeFileSync(path.join(grepo, 'docs', 'architecture.md'), 'arch v2 CHANGED\n');
+      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'docs only'], { cwd: grepo, encoding: 'utf8' });
+      const r = runNode(planValidatorScript, [planPath, '--finalize-check', '--json', '--base', 'HEAD~1'], grepo);
+      assert(r.status === 0 && JSON.parse(r.stdout).result === 'pass',
+        '#547 (c): a docs-only commit after the chains ran must stay FRESH (no re-run), got status ' + r.status + ' ' + r.stdout);
+    } finally { cleanup(grepo); } }
+
+  // --- #547 (D-547-01, d) ACCURACY (real git): a CODE commit after the chains ran flips the code-tree
+  //     hash → chains_stale (early regression detection retained).
+  { const { grepo, planPath, proj } = mkRepo({ a: 'complete', rv: 'complete', done: 'complete' });
+    try {
+      const h0 = pv.computeCodeTreeHash(grepo, 'issue-424', []);
+      writeReceipt(proj, { headSha: headOf(grepo), codeTreeHash: h0, validationTestConsumes: [],
+        chains: [{ name: 'claude', exitCode: 0, accepted_red: false }] });
+      fs.writeFileSync(path.join(grepo, 'newcode.js'), 'module.exports = 1;\n');
+      spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
+      spawnSync('git', ['commit', '-m', 'code change'], { cwd: grepo, encoding: 'utf8' });
+      const r = runNode(planValidatorScript, [planPath, '--finalize-check', '--json', '--base', 'HEAD~1'], grepo);
+      assert(r.status === 1 && JSON.parse(r.stdout).reason === 'chains_stale',
+        '#547 (d): a code commit after the chains ran must refuse chains_stale, got status ' + r.status + ' ' + r.stdout);
     } finally { cleanup(grepo); } }
 
   // --- #424 (3, finalize sweep) UNATTRIBUTED_CHANGE: a branch change owned by NO complete node and

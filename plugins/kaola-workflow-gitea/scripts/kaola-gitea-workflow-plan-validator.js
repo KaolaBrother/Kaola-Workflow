@@ -217,6 +217,47 @@ function isBarrierInvisible(p, project) {
   return /^kaola-workflow\/[^/]+\//.test(rel);
 }
 
+// #547 (D-547-01): the files THIS repo's four chains READ + ASSERT ON inside the #424 narrow allowband —
+// i.e. prose that is barrier-INVISIBLE for attribution (#424) yet VERDICT-AFFECTING for validation (a
+// change to it can flip a chain verdict, so a fresh receipt must NOT be cited over it). Verified by a
+// machine guard (test-validation-allowband.js) that scans the chain validators for prose-literal reads:
+//   - README.md                        — validate-vendored-agents + contract validators (role catalog).
+//   - CHANGELOG.md                     — validate-workflow-contracts (`## [<version>]` heading).
+//   - docs/api.md                      — both contract validators (closure schema, forge-parity tokens).
+//   - docs/workflow-state-contract.md  — both contract validators (durable-sources / closure cross-ref).
+//   - docs/agents-source.md            — validate-vendored-agents (vendored-agent provenance).
+// A self-hosting fork whose tests read OTHER prose extends this at RUNTIME via the `validation_test_
+// consumes` ## Meta field (parseValidationTestConsumes) — no predicate fork. Fail-closed by direction:
+// a path NOT proven inert stays CODE (an over-broad list only costs an extra re-run, never a missed
+// regression). Pure (no fs).
+const SELF_HOST_TEST_CONSUMED = [
+  'README.md',
+  'CHANGELOG.md',
+  'docs/api.md',
+  'docs/workflow-state-contract.md',
+  'docs/agents-source.md',
+];
+function testConsumes(p, extra) {
+  const rel = String(p || '').trim().replace(/^\.\//, '');
+  if (!rel) return false;
+  if (SELF_HOST_TEST_CONSUMED.indexOf(rel) !== -1) return true;
+  return Array.isArray(extra) && extra.indexOf(rel) !== -1;
+}
+// #547 (D-547-01): a path is VALIDATION-INVISIBLE (excluded from the code-tree hash; a fresh receipt may
+// be cited over it) iff a change to it cannot flip a chain verdict. = the #424 narrow allowband (docs/**,
+// root README/CHANGELOG, the active project tree) PLUS the whole `kaola-workflow/` workflow-state tree
+// (never code-under-test; folded in PROJECT-INDEPENDENTLY so the producer and gate agree even if `--project`
+// differs), MINUS any test-consumed prose (which stays CODE). testConsumes is checked FIRST so a
+// verdict-affecting doc is never excluded. Pure. `testConsumedExtra` is the plan's optional widening.
+function isValidationInvisible(p, project, testConsumedExtra) {
+  const rel = String(p || '').trim().replace(/^\.\//, '');
+  if (!rel) return false;
+  if (testConsumes(rel, testConsumedExtra)) return false;   // verdict-affecting prose stays CODE
+  if (isBarrierInvisible(rel, project)) return true;        // #424 narrow allowband
+  if (/^kaola-workflow\//.test(rel)) return true;           // whole workflow-state tree (project-independent)
+  return false;
+}
+
 // #463 Slice 4: the barrier exemption predicates, LIFTED to module scope (they were local consts in
 // barrierCheck) so the parent-clean fence (--parent-clean-check) classifies a dirty path with the
 // EXACT same carve-out the close barrier uses — a single source of truth (the advisor's #1: the fence
@@ -331,6 +372,29 @@ function parseWriteOverlapPolicy(content) {
   const meta = classifier.sectionBody(content, 'Meta');
   const m = String(meta || '').match(/^write_overlap_policy:[ \t]*(\S+)[ \t]*$/m);
   return m ? m[1].trim() : schema.WRITE_OVERLAP_POLICY_DEFAULT;
+}
+// #547 (D-547-01): the consumer's validation command, recorded ONCE at plan freeze in `## Meta` as a
+// single `validation_command: <cmd>` line — additive, hash-covered for free (computePlanHash normalizes
+// the WHOLE `## Meta` body), Meta-SCOPED read (decoy-immune; same scoping as parseGoal/parseSpeculative-
+// Policy). READER-ONLY: there is NO freeze gate on it (a plan without it is valid), so each node reuses
+// the recorded command instead of re-deriving its own (the #547 piece-1 gap the Stage-1 prose promised
+// but omitted). Returns the trimmed command string, or null when absent.
+function parseValidationCommand(content) {
+  const meta = classifier.sectionBody(content, 'Meta');
+  const m = String(meta || '').match(/^validation_command:[ \t]*(.+?)[ \t]*$/m);
+  return m ? m[1].trim() : null;
+}
+// #547 (D-547-01): the OPTIONAL per-plan widening of the validation code-tree-hash "keep-as-code" set,
+// in `## Meta` as `validation_test_consumes: a/b.md, c.md` (comma list). It UNIONS with the built-in
+// SELF_HOST_TEST_CONSUMED default so a self-hosting fork whose chain tests read DIFFERENT prose can keep
+// those files CODE (verdict-affecting) WITHOUT forking isValidationInvisible. Meta-scoped + hash-covered.
+// The producer (run-chains) records the resolved list in the receipt so the gate replays the EXACT band
+// (producer and gate never disagree). Absent => [] (default-only band). Returns a string array.
+function parseValidationTestConsumes(content) {
+  const meta = classifier.sectionBody(content, 'Meta');
+  const m = String(meta || '').match(/^validation_test_consumes:[ \t]*(.*)$/m);
+  if (!m) return [];
+  return m[1].split(',').map(s => s.trim().replace(/^\.\//, '')).filter(Boolean);
 }
 // Parse the plan into validator-shaped nodes. Parity with the executor's reader is
 // load-bearing: section slicing is delegated to classifier.sectionBody (FENCE-AWARE) and
@@ -1828,6 +1892,31 @@ function snapshotWorktree(root, tag) {
     try { fs.unlinkSync(idx + '.lock'); } catch (_) {}
   }
 }
+// #547 (D-547-01): a content address of the CODE-RELEVANT landable tree — the freshness key that
+// REPLACES the chain-receipt's headSha pin (plan-validator --finalize-check). The headSha pin forced a
+// full re-run on ANY new commit, including a docs-only / CHANGELOG-narrative / workflow-state-only commit
+// whose code tree is byte-identical (the #547 / #551 ~30-min waste). This hash flips iff a verdict-
+// affecting path changes: snapshotWorktree() captures the committed+working LANDABLE set (the SAME set
+// the per-node barrier and the merge gate scope to — so a hash match proves the chains validated this
+// exact code), `ls-tree -r` enumerates it as `<mode> <type> <sha>\t<path>`, isValidationInvisible() drops
+// the inert prose / workflow-state, and the surviving lines (path + blob sha, so content changes flip
+// the hash) are sha256'd in sorted order. Returns null on ANY git failure so the caller fails CLOSED
+// (treat as stale → re-run). `testConsumedExtra` is the plan's optional band widening (replayed from the
+// receipt at the gate so producer and gate compute the IDENTICAL band).
+function computeCodeTreeHash(root, project, testConsumedExtra) {
+  let treeSha;
+  try { treeSha = snapshotWorktree(root, 'validation'); } catch (_) { return null; }
+  if (!treeSha) return null;
+  let listing;
+  try { listing = execFileSync('git', ['-C', root, 'ls-tree', '-r', treeSha], { encoding: 'utf8' }); } catch (_) { return null; }
+  const lines = listing.split('\n').map(s => s.replace(/\r$/, '')).filter(Boolean).filter(line => {
+    const tab = line.indexOf('\t');
+    const rel = tab >= 0 ? line.slice(tab + 1) : line;
+    return !isValidationInvisible(rel, project, testConsumedExtra);
+  });
+  lines.sort();
+  return crypto.createHash('sha256').update(lines.join('\n')).digest('hex');
+}
 // #239 (v3.21.0): a per-node baseline must SURVIVE `git gc` between node-start and the barrier (an
 // explicit `gc --prune=now`, or default gc on a >2-week-paused resume — the exact resume case this
 // targets). A bare `write-tree` object is unreachable and therefore prunable, which bricked the node.
@@ -2565,10 +2654,30 @@ function main() {
         process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'chains_unverified', operator_hint: getOperatorHint('chains_unverified'), errors: ['chain receipt at ' + receiptPath + ' is unparseable JSON — regenerate it'] }) : 'typed refusal: chains_unverified (unparseable receipt)') + '\n');
         process.exitCode = 1; return;
       }
-      const currentHead = flagVal('--head') || (() => { try { return execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(); } catch (_) { return ''; } })();
-      if (!currentHead || String(receipt.headSha || '').trim() !== currentHead) {
-        process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'chains_stale', operator_hint: getOperatorHint('chains_stale'), errors: ['chain receipt headSha "' + (receipt.headSha || '(missing)') + '" != current HEAD "' + (currentHead || '(unresolved)') + '" — the tree advanced since the chains ran; regenerate the receipt over HEAD'] }) : 'typed refusal: chains_stale (' + (receipt.headSha || 'missing') + ' != ' + (currentHead || 'unresolved') + ')') + '\n');
-        process.exitCode = 1; return;
+      // #547 (D-547-01): freshness key. PREFER the code-tree hash — a commit touching ONLY inert docs
+      // (narrative docs/ADRs/investigations, NOT the chain-asserted README/CHANGELOG/docs-api set) or
+      // workflow-state leaves it unchanged, so the chains are NOT needlessly re-run (the #547 / #551
+      // ~30-min waste). FALL BACK to the headSha pin for a legacy receipt that predates the field
+      // (fail-closed: a code or test-consumed-prose change still flips the hash → chains_stale).
+      // `--current-code-tree` overrides the recomputed current hash (test seam); `--head` overrides
+      // current HEAD (legacy seam). Compute the hash over the GIT TOP-LEVEL (not findRepoRoot's `root`,
+      // which can stop at an intermediate `agents/` dir) so the gate and the run-chains producer — which
+      // uses getGitTopLevel(cwd) — address the SAME tree and never falsely disagree.
+      if (typeof receipt.codeTreeHash === 'string' && receipt.codeTreeHash) {
+        const extra = Array.isArray(receipt.validationTestConsumes) ? receipt.validationTestConsumes : [];
+        let hashRoot = root;
+        try { hashRoot = execFileSync('git', ['-C', root, 'rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim() || root; } catch (_) { hashRoot = root; }
+        const currentCodeTree = flagVal('--current-code-tree') || computeCodeTreeHash(hashRoot, projTag, extra);
+        if (!currentCodeTree || String(receipt.codeTreeHash).trim() !== currentCodeTree) {
+          process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'chains_stale', operator_hint: getOperatorHint('chains_stale'), errors: ['chain receipt codeTreeHash "' + receipt.codeTreeHash + '" != current code-tree hash "' + (currentCodeTree || '(unresolved)') + '" — code (or test-consumed prose) changed since the chains ran; regenerate the receipt'] }) : 'typed refusal: chains_stale (codeTree ' + receipt.codeTreeHash + ' != ' + (currentCodeTree || 'unresolved') + ')') + '\n');
+          process.exitCode = 1; return;
+        }
+      } else {
+        const currentHead = flagVal('--head') || (() => { try { return execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(); } catch (_) { return ''; } })();
+        if (!currentHead || String(receipt.headSha || '').trim() !== currentHead) {
+          process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'chains_stale', operator_hint: getOperatorHint('chains_stale'), errors: ['chain receipt headSha "' + (receipt.headSha || '(missing)') + '" != current HEAD "' + (currentHead || '(unresolved)') + '" — the tree advanced since the chains ran; regenerate the receipt over HEAD'] }) : 'typed refusal: chains_stale (' + (receipt.headSha || 'missing') + ' != ' + (currentHead || 'unresolved') + ')') + '\n');
+          process.exitCode = 1; return;
+        }
       }
       chains = Array.isArray(receipt.chains) ? receipt.chains : [];
       const redChains = chains.filter(c => c && c.exitCode !== 0 && c.accepted_red !== true);
@@ -2805,6 +2914,11 @@ module.exports = {
   parseLedger,
   parseSpeculativePolicy,
   parseWriteOverlapPolicy,
+  parseValidationCommand,
+  parseValidationTestConsumes,
+  testConsumes,
+  isValidationInvisible,
+  computeCodeTreeHash,
   uniqueSink,
   gateUncovered,
   verifyGateExecution,

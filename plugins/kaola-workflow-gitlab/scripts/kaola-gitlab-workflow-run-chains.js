@@ -62,6 +62,11 @@
 //   {
 //     "headSha": "<git HEAD sha>",
 //     "workTreeHash": "<sha256 of git diff HEAD, or 'clean'>",
+//     "codeTreeHash": "<#547: sha256 of the code-relevant landable tree — the freshness key the",
+//                      // --finalize-check gate recomputes (replaces the headSha pin: a docs-only /
+//                      // workflow-state-only commit no longer forces a re-run). null on git failure.>
+//     "validationTestConsumes": ["<#547: the plan's validation_test_consumes band widening, replayed",
+//                                // by the gate so it computes the identical band; [] when none.>"],
 //     "startedAt": "<ISO timestamp>",
 //     "completedAt": "<ISO timestamp>",
 //     "chains": [
@@ -524,6 +529,22 @@ async function main(argv) {
   const startedAt = new Date().toISOString();
   const headSha = getHeadSha(cwd);
   const workTreeHash = getWorkTreeHash(cwd);
+  // #547 (D-547-01): the code-relevant-tree content hash — the chain-receipt freshness key the
+  // plan-validator --finalize-check gate recomputes. Computed via the SAME exported helper the gate
+  // calls (require, like next-action.js) so producer and gate never disagree. The plan's optional
+  // `validation_test_consumes` band widening is read from the frozen plan and RECORDED in the receipt
+  // so the gate replays the IDENTICAL band. Any failure → null/[] → the gate falls back to the headSha
+  // pin (fail-closed). Self-host-only, so the require is reached only on the Kaola-Workflow repo.
+  const planValidator = require('./kaola-gitlab-workflow-plan-validator.js');
+  const gitTop = getGitTopLevel(cwd);
+  let validationTestConsumes = [];
+  try {
+    let planContent = null;
+    if (pathOpts.plan) planContent = fs.readFileSync(pathOpts.plan, 'utf8');
+    else if (pathOpts.project) planContent = fs.readFileSync(path.join(gitTop, 'kaola-workflow', pathOpts.project, 'workflow-plan.md'), 'utf8');
+    if (planContent) validationTestConsumes = planValidator.parseValidationTestConsumes(planContent);
+  } catch (_) { validationTestConsumes = []; }
+  const codeTreeHash = planValidator.computeCodeTreeHash(gitTop, pathOpts.project || null, validationTestConsumes);
 
   // Ensure .cache directory exists before running chains.
   const outputDir = path.dirname(outputPath);
@@ -584,6 +605,8 @@ async function main(argv) {
   const receipt = {
     headSha,
     workTreeHash,
+    codeTreeHash,
+    validationTestConsumes,
     startedAt,
     completedAt,
     source: chainSource,

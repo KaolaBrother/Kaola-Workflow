@@ -32,6 +32,10 @@ const FEATURE_TOKENS = [
   // node behind a high-probability-pass gate). Present in agents/workflow-planner.md, so this
   // enforces all three .toml twins carry the rubric (md↔toml parity for the #439 authoring lever).
   'unsatisfied predecessor is a high-probability-pass gate',
+  // #547 (D-547-01): the planner's "record the validation command once" authoring lever — present in
+  // agents/workflow-planner.md, so this enforces all three .toml twins carry the validation_command /
+  // validation_test_consumes ## Meta guidance (md↔toml parity for the Stage-2 record-once discipline).
+  'validation_command',
 ];
 
 // codex tree is the canonical agents/ source for the toml triple.

@@ -278,6 +278,8 @@ Avoid redundant validation runs.
   node command unless the fix changes shared infrastructure.
 - Run the full chains once here at All-done, not per node; that is the single
   full-suite pass before Finalization.
+- Use the `validation_command` recorded in the plan `## Meta` for any full-suite
+  validation; do not re-derive a per-node command (the #547 record-once discipline).
 - **State the actual reuse boundary, not a false absolute (#324 AC3).** When you cite a
   prior node run instead of rerunning, record WHICH node/state that run covered and that
   any later edits are outside it. Do NOT write a terminal absolute like `No files changed

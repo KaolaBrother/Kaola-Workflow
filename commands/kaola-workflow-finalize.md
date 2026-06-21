@@ -101,9 +101,10 @@ precedence order):
   Remedy: the orchestrator (main session) must run `node $KAOLA_SCRIPTS/kaola-workflow-run-chains.js`
   after the last commit so the receipt is written and `headSha` matches HEAD.
   Do NOT delegate this to the contractor subagent — the contractor only verifies.
-- **`chains_stale`** — the receipt's `headSha` does not equal the current
-  `git rev-parse HEAD`. The tree has advanced since the chains ran (a commit
-  landed, a rebase happened); the receipt no longer describes HEAD.
+- **`chains_stale`** — the receipt's `codeTreeHash` no longer matches the current
+  code-relevant tree (#547): code or a chain-asserted doc changed since the chains ran
+  (a docs-only / workflow-state commit does NOT trigger it; a legacy receipt without
+  `codeTreeHash` falls back to the `headSha`-vs-HEAD pin).
   Remedy: the orchestrator (main session) must re-run `node $KAOLA_SCRIPTS/kaola-workflow-run-chains.js`
   to regenerate the receipt against HEAD. Do NOT delegate this to the contractor subagent.
 - **`chains_red`** — at least one chain has a non-zero exit code and
@@ -315,6 +316,9 @@ Avoid redundant validation runs.
   `.cache/{node-id}.md` separately when the Finalization full command already covers them.
 - If a Finalization command already passed after the last relevant file change, cite
   its evidence path instead of rerunning it.
+- The self-host four-chain receipt is keyed on a code-relevant-tree hash (#547): a commit
+  touching only inert docs or workflow-state since the chains ran stays fresh (no re-run);
+  a code OR chain-asserted-doc (`README`/`CHANGELOG`/`docs/api.md`) change still invalidates it.
 - After a routed fix or Trivial Inline Edit Exception edit, rerun the failed or
   affected command. Rerun broader validation only when shared infrastructure,
   dependencies, build config, or public behavior changed.

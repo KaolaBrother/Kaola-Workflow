@@ -86,6 +86,9 @@ try {
     assert(typeof rc.headSha === 'string' && rc.headSha.length >= 7, 'T1: headSha is a non-empty string');
     assert(rc.headSha !== 'unknown', 'T1: headSha is a real SHA (not "unknown")');
     assert(typeof rc.workTreeHash === 'string' && rc.workTreeHash.length > 0, 'T1: workTreeHash present');
+    // #547 (D-547-01): the code-tree-hash freshness key + the band-widening replay list.
+    assert(typeof rc.codeTreeHash === 'string' && rc.codeTreeHash.length === 64, 'T1: codeTreeHash is a sha256 (the #547 freshness key)');
+    assert(Array.isArray(rc.validationTestConsumes), 'T1: validationTestConsumes is an array (#547 band replay)');
     assert(typeof rc.startedAt === 'string', 'T1: startedAt present');
     assert(typeof rc.completedAt === 'string', 'T1: completedAt present');
     assert(Array.isArray(rc.chains), 'T1: chains is an array');

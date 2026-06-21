@@ -7,7 +7,7 @@ This file mirrors active unfinished work. GitHub issues are the source of truth 
 
 | Issue | Title | Status | Workflow Project | Next Step |
 |-------|-------|--------|------------------|-----------|
-| #547 | Adaptive: consumer test de-duplication via validation receipt | open | issue-547 | adaptive |
+| none | No active work | — | — | — |
 
 ## Rules
 
