@@ -1,5 +1,20 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **opencode-edition: the `--global` install is no longer dead, reinstall/uninstall actually reset to adaptive-only, and the global hooks plugin can find its scripts — a 9-fix correctness pass (F1–F9) on the opencode edition installer + sync + plugin.** An adversarial audit of the opencode edition surfaced 27 confirmed findings collapsing to 9 distinct fixes; all are opencode-edition-only (no #307 four-chain obligation per D-530-02 — validated by `node scripts/test-opencode-edition.js`, 363 → 489 assertions).
+  - **F1 (critical): `--global` deployed to a NESTED `~/.config/opencode/.opencode/{...}` that opencode never scans — the entire global install was dead.** `copy_tree` now takes a scope-correct `layout_root`: project → `<project>/.opencode/{...}` (unchanged); global → the config root **directly** (`${OPENCODE_CONFIG_DIR:-$HOME/.config/opencode}/{agent,command,plugins,hooks}/`). `opencode.json` still lands at the config root. (Authoritative basis: opencode's docs — the config dir *is* the global ".opencode equivalent".)
+  - **F2 (high): `copy_tree` was additive-only and never pruned** — a narrowed/reset opt-in left orphaned `fast`/`phase1-5` command files on disk. It now PRUNES kaola-owned command files not in the EFFECTIVE set before re-copying, so a bare reinstall converges to adaptive-only (the real "reset" half).
+  - **F3 (high): the global hooks plugin couldn't find its hook scripts** (`findRoot`/`hookPath` walked only the project tree). `hookPath` now also probes the plugin's own sibling `../hooks/` (via `import.meta.url`) and `$OPENCODE_CONFIG_DIR/hooks/`, project candidates still first (fail-open preserved).
+  - **F4 (high): no uninstall path existed.** New `install-opencode.sh --uninstall` (honors `--target`/`--global`) removes only kaola-deployed artifacts by source-tree filename, preserves the user-owned `opencode.json`, and surgically resets `installed_paths:[]` in the shared config (other editions unaffected). (`uninstall.sh` stays forge-scoped; opencode is an additive runtime, not a forge.)
+  - **F5 (low): the command partition was a fail-OPEN denylist** — a future canonical command would silently deploy by default. It is now a fail-CLOSED allowlist (`ADAPTIVE_CORE_COMMANDS`); an unrecognized command is skipped + warned. Tests assert exact-set-equality + partition exhaustiveness.
+  - **F6 (low): a dead `transformCommandBody` strip** (`/downgrade to full path \//`) matched nothing after #538 rewrote canonical to "NEVER downgrade to fast/full"; removed. A22 now POSITIVELY asserts the guard + no un-`NEVER`'d fallback wording.
+  - **F7 (low): the Path Intent section strip was keyed to the volatile step number** (`Startup Step 0a-1`); re-keyed to the stable "Path Intent" title so a canonical renumber cannot silently leak the path-selection switch. New A22 body-literal canaries back it.
+  - **F8 (low): `sync --check` never validated `opencode.json`** despite being billed as the parity gate; it now compares the committed config to the neutral renderer.
+  - **F9 (medium): `seed_kaola_config` was python3-dependent** (a python3-absent host left opt-in files on disk while `installed_paths` went unrecorded); reimplemented in node (already a hard dependency). New tests cover `--global` layout + global-tree leak invariant (G1), support-script deployment (S1), prune-on-reset (P6), uninstall round-trip (U1), idempotent reinstall (I1), direct `hookPath` global-resolution (H1), and non-command surface locations. (`node scripts/test-opencode-edition.js`: 363 → 493 assertions.)
+
 ## [6.8.0] - 2026-06-20
 
 ### Added

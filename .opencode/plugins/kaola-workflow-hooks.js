@@ -20,6 +20,13 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
+import os from "node:os";
+import { fileURLToPath } from "node:url";
+
+// This plugin's own directory (…/<layout_root>/plugins/) — used to find hooks deployed alongside it
+// at GLOBAL scope, where findRoot (which walks the user's PROJECT tree) never reaches the config root.
+const SELF_DIR = path.dirname(fileURLToPath(import.meta.url));
+const OPENCODE_CONFIG_DIR = process.env.OPENCODE_CONFIG_DIR || path.join(os.homedir(), ".config", "opencode");
 
 const HOOK = {
   preCommit: "kaola-workflow-pre-commit.sh",
@@ -40,15 +47,27 @@ function findRoot(start) {
   return path.resolve(start || process.cwd());
 }
 
-// Prefer the deployed .opencode/hooks/ copy; fall back to the canonical ./hooks/.
+// Resolve a hook script across the PROJECT and GLOBAL layouts. Project candidates come FIRST so a
+// project-local install always wins; the trailing candidates handle the GLOBAL install, where the
+// plugin lives at <config>/plugins/ and hooks at <config>/hooks/ (NOT under a nested .opencode/), a
+// location findRoot — which walks the user's project tree — never reaches. SELF_DIR/../hooks works
+// regardless of the config dir name; the explicit config-dir forms (flat + legacy nested) are belt
+// and suspenders. Returns null if none exist (fail-open, matching runHook).
 function hookPath(root, script) {
   const candidates = [
-    path.join(root, ".opencode", "hooks", script),
-    path.join(root, "hooks", script),
+    path.join(root, ".opencode", "hooks", script),          // project: <project>/.opencode/hooks/
+    path.join(root, "hooks", script),                       // project: canonical ./hooks/
+    path.join(SELF_DIR, "..", "hooks", script),             // global: sibling of this plugin's dir
+    path.join(OPENCODE_CONFIG_DIR, "hooks", script),        // global: <config>/hooks/ (post path-fix)
+    path.join(OPENCODE_CONFIG_DIR, ".opencode", "hooks", script), // global: legacy nested layout
   ];
   for (const p of candidates) if (existsSync(p)) return p;
   return null;
 }
+
+// Named exports for the test suite only — opencode loads the default export below; these are inert
+// for the runtime but let test-opencode-edition.js assert hookPath's global-layout resolution (F3).
+export { hookPath, findRoot };
 
 function runHook(root, script, payload) {
   const p = hookPath(root, script);

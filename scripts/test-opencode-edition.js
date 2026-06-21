@@ -468,6 +468,14 @@ for (const target of emittedCommandTargets) {
   // generated opencode command (3 dangling inline mentions at L72/L159/L464 before #540).
   assert(!wfNext.includes('Step 0a-1'),
     'A22: workflow-next has NO stale "Step 0a-1" inline references (post-#538 the step no longer exists; parentheticals stripped at generation, #540)');
+  // A22 (#F7): content-anchored leak canaries. These phrases live ONLY inside the canonical
+  // "Path Intent" section body, so their presence in the generated tree would mean the section
+  // strip missed (e.g. a canonical renumber that broke a number-keyed match). The strip is now
+  // keyed to the "Path Intent" TITLE (sync-opencode-edition.js), and these catch any regression.
+  for (const canary of ['path-name verbal escapes', 'fast path', 'full review']) {
+    assert(!wfNext.includes(canary),
+      'A22 (#F7): workflow-next has NO "' + canary + '" — a Path-Intent-section body literal that would leak only if the title-anchored section strip missed');
+  }
   // A23 (#2): the claim dispatch flag must stamp the opencode runtime into workflow-state.md,
   // so the canonical "--runtime claude" is rewritten to "--runtime opencode" at generation time.
   assert(wfNext.includes('--runtime opencode'),
@@ -475,11 +483,24 @@ for (const target of emittedCommandTargets) {
   assert(!wfNext.includes('--runtime claude'),
     'A23: workflow-next has NO "--runtime claude" (rewritten to opencode at generation, #2)');
 
+  // A22 (#F6): the opencode adapt surface must POSITIVELY carry the #538 adaptive-only guard
+  // ("NEVER downgrade to fast/full"), and must contain NO fast/full fallback wording that is not
+  // immediately NEVER-prefixed. #538 made canonical itself adaptive-only, so this replaces the old
+  // (now vacuous) "no 'downgrade to full path'" strip assertions: it fails loud if a future canonical
+  // edit reintroduces a REAL fallback escape (in any wording) onto the adaptive-only surface.
   const adapt = read('.opencode/command/kaola-workflow-adapt.md');
-  assert(!adapt.includes('downgrade to full path'),
-    'A22: adapt has NO "downgrade to full path" auto-fallback wording (stripped at generation)');
-  assert(!adapt.includes('fall back to full'),
-    'A22: adapt has NO "fall back to full" auto-fallback wording (stripped at generation)');
+  assert(adapt.includes('NEVER downgrade to fast/full'),
+    'A22 (#F6): adapt POSITIVELY carries the "NEVER downgrade to fast/full" adaptive-only guard (#538)');
+  {
+    const fallback = /(?:downgrade to (?:fast\/full|full path)|fall back to (?:fast\/full|full path|full))/g;
+    let m; const unguarded = [];
+    while ((m = fallback.exec(adapt)) !== null) {
+      const pre = adapt.slice(Math.max(0, m.index - 6), m.index);
+      if (!/NEVER $/.test(pre)) unguarded.push(m[0]);
+    }
+    assert(unguarded.length === 0,
+      'A22 (#F6): adapt has NO un-NEVER\'d fast/full fallback wording (an automatic path fallback would violate #538) — found: ' + unguarded.join(', '));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -552,7 +573,7 @@ if (exists(pluginRel)) {
 // ---------------------------------------------------------------------------
 {
   const { spawnSync } = require('child_process');
-  const { mkdtempSync, existsSync, readFileSync, readdirSync, rmSync } = require('fs');
+  const { mkdtempSync, existsSync, readFileSync, writeFileSync, readdirSync, rmSync } = require('fs');
   const os = require('os');
 
   const INSTALLER = path.join(REPO, 'install-opencode.sh');
@@ -565,6 +586,16 @@ if (exists(pluginRel)) {
     'kaola-workflow-phase1', 'kaola-workflow-phase2', 'kaola-workflow-phase3',
     'kaola-workflow-phase4', 'kaola-workflow-phase5',
   ];
+
+  // F5: partition exhaustiveness — the canonical command set must be EXACTLY adaptive-core ∪ fast ∪
+  // full. Adding a 13th canonical command without assigning it to a partition fails HERE (and the
+  // installer now also fails CLOSED on an unrecognized command, so it cannot silently widen the default).
+  {
+    const canon = sync.listCanonCommands().map(f => f.replace(/\.md$/, '')).sort();
+    const partitioned = [...ADAPTIVE_CORE, ...FAST_ONLY, ...FULL_ONLY].sort();
+    assert(JSON.stringify(canon) === JSON.stringify(partitioned),
+      'F5: canonical commands == adaptive-core ∪ fast ∪ full (assign any new command to a partition) — canon=' + JSON.stringify(canon));
+  }
 
   // Hermetic single-shot installer run. Each call gets its OWN fresh HOME (so
   // seed_kaola_config writes only under $TMPDIR) and its OWN --target (so the
@@ -619,6 +650,24 @@ if (exists(pluginRel)) {
     for (const name of FULL_ONLY) {
       assert(!hasCmd(r.dest, name),
         'P1[' + name + ']: default install does NOT deploy the full-only phase command (it is the --with-full opt-in)');
+    }
+    // P1 (#F5): exact-set-equality (over-deploy guard) — the dest command dir holds EXACTLY the 6
+    // adaptive-core commands, nothing else (catches a future stray/unpartitioned command leaking in).
+    const deployed = readdirSync(cmdDir(r.dest)).filter(f => f.endsWith('.md')).map(f => f.slice(0, -3)).sort();
+    assert(JSON.stringify(deployed) === JSON.stringify([...ADAPTIVE_CORE].sort()),
+      'P1 (#F5): default install deploys EXACTLY the adaptive-core set and nothing else — got ' + JSON.stringify(deployed));
+    // P1 (#F9): the NON-command surfaces actually land at the project layout opencode resolves
+    // (<project>/.opencode/{agent,plugins,hooks}) — not just commands. A missing surface fails here
+    // instead of vacuously passing (the leak block below previously `continue`d on a missing dir).
+    for (const a of sync.listCanonAgents()) {
+      assert(existsSync(path.join(r.dest, '.opencode', 'agent', a + '.md')),
+        'P1 (#F9): project install deploys agent ' + a + ' under .opencode/agent/');
+    }
+    assert(existsSync(path.join(r.dest, '.opencode', 'plugins', 'kaola-workflow-hooks.js')),
+      'P1 (#F9): project install deploys the hooks plugin under .opencode/plugins/');
+    for (const h of sync.HOOK_SCRIPTS) {
+      assert(existsSync(path.join(r.dest, '.opencode', 'hooks', h)),
+        'P1 (#F9): project install deploys hook ' + h + ' under .opencode/hooks/');
     }
     const cfg = readConfig(r.configPath);
     assert(cfg !== null,
@@ -715,6 +764,249 @@ if (exists(pluginRel)) {
         'P5[' + name + ']: fast command still deployed after bare re-install (UNION preserves prior opt-ins)');
     }
     clean(r1);
+  }
+
+  // -------------------------------------------------------------------------
+  // G1 (#F1) — the --global install deploys DIRECTLY under the config root
+  // (${OPENCODE_CONFIG_DIR}/{agent,command,plugins,hooks}), NOT a nested
+  // .opencode/. opencode scans the config dir itself as its global ".opencode
+  // equivalent"; the old nested ~/.config/opencode/.opencode/ was never scanned
+  // → the entire global install was dead. Hermetic: own HOME + own
+  // OPENCODE_CONFIG_DIR (so it never touches the real ~/.config/opencode).
+  // -------------------------------------------------------------------------
+  function runGlobalInstaller(extraArgs, opts) {
+    opts = opts || {};
+    const home = opts.home || mkdtempSync(path.join(os.tmpdir(), 'opencode-g-home-'));
+    const cfg = opts.cfg || mkdtempSync(path.join(os.tmpdir(), 'opencode-g-cfg-'));
+    const args = ['--global', '--yes'].concat(opts.withScripts ? [] : ['--no-scripts']).concat(extraArgs || []);
+    const r = spawnSync('bash', [INSTALLER].concat(args), {
+      env: Object.assign({}, process.env, { HOME: home, OPENCODE_CONFIG_DIR: cfg }),
+      encoding: 'utf8',
+    });
+    return {
+      ok: r.status === 0, status: r.status, stdout: r.stdout || '', stderr: r.stderr || '',
+      home, cfg, configPath: path.join(home, '.config', 'kaola-workflow', 'config.json'),
+    };
+  }
+  {
+    const r = runGlobalInstaller([]);
+    assert(r.ok, 'G1: --global install exits 0 (got status ' + r.status + (r.stderr ? ' — ' + String(r.stderr).split('\n')[0] : '') + ')');
+    // Commands/agents/plugin/hooks land DIRECTLY under the config root.
+    for (const name of ADAPTIVE_CORE) {
+      assert(existsSync(path.join(r.cfg, 'command', name + '.md')),
+        'G1[' + name + ']: --global deploys adaptive-core command at <config>/command/ (un-nested)');
+    }
+    for (const name of FAST_ONLY.concat(FULL_ONLY)) {
+      assert(!existsSync(path.join(r.cfg, 'command', name + '.md')),
+        'G1[' + name + ']: --global default does NOT deploy the opt-in command');
+    }
+    for (const a of sync.listCanonAgents()) {
+      assert(existsSync(path.join(r.cfg, 'agent', a + '.md')),
+        'G1: --global deploys agent ' + a + ' at <config>/agent/ (un-nested)');
+    }
+    assert(existsSync(path.join(r.cfg, 'plugins', 'kaola-workflow-hooks.js')),
+      'G1: --global deploys the hooks plugin at <config>/plugins/ (opencode global plugin dir)');
+    for (const h of sync.HOOK_SCRIPTS) {
+      assert(existsSync(path.join(r.cfg, 'hooks', h)),
+        'G1: --global deploys hook ' + h + ' at <config>/hooks/ (sibling of the plugin)');
+    }
+    // The nested ~/.config/opencode/.opencode/ that opencode never scans must NOT exist.
+    assert(!existsSync(path.join(r.cfg, '.opencode')),
+      'G1 (#F1): --global creates NO nested .opencode/ under the config root (opencode never scans it)');
+    // opencode.json lands at the config root.
+    assert(existsSync(path.join(r.cfg, 'opencode.json')),
+      'G1: --global seeds opencode.json at the config root');
+    // G1 (#F1 + #544): the leak invariant must also hold on the GLOBAL layout F1 newly enabled
+    // (the project-layout leak block below greps r.dest/.opencode; the global tree lives un-nested
+    // under r.cfg and was never under any leak test while the global install was dead).
+    {
+      let gleaks = 0; const gfiles = [];
+      for (const [label, dir] of [
+        ['command', path.join(r.cfg, 'command')],
+        ['agent', path.join(r.cfg, 'agent')],
+        ['plugins', path.join(r.cfg, 'plugins')],
+        ['hooks', path.join(r.cfg, 'hooks')],
+      ]) {
+        if (!existsSync(dir)) continue;
+        for (const f of readdirSync(dir)) {
+          let txt; try { txt = readFileSync(path.join(dir, f), 'utf8'); } catch (_) { continue; }
+          const m = (txt.match(/CLAUDE_PLUGIN_ROOT/g) || []).length + (txt.match(/\.claude\/kaola-workflow/g) || []).length;
+          if (m > 0) { gleaks += m; gfiles.push(label + '/' + f + ' (' + m + ')'); }
+        }
+      }
+      assert(gleaks === 0,
+        'G1 (#544): ZERO Claude path leaks across the GLOBAL deployed tree — found ' + gleaks + ' in: ' + gfiles.slice(0, 6).join(', '));
+    }
+    try { rmSync(r.home, { recursive: true, force: true }); } catch (_) {}
+    try { rmSync(r.cfg, { recursive: true, force: true }); } catch (_) {}
+  }
+
+  // -------------------------------------------------------------------------
+  // S1 (#F9) — support scripts land at the opencode-native resolver root
+  // (${OPENCODE_CONFIG_DIR}/kaola-workflow/scripts), the dir kaola_script()
+  // searches in the deployed commands. Runs a global install WITH scripts.
+  // -------------------------------------------------------------------------
+  {
+    const r = runGlobalInstaller([], { withScripts: true });
+    assert(r.ok, 'S1: --global install (with scripts) exits 0 (got status ' + r.status + ')');
+    const scriptsDir = path.join(r.cfg, 'kaola-workflow', 'scripts');
+    assert(existsSync(scriptsDir), 'S1 (#F9): support scripts dir exists at <config>/kaola-workflow/scripts');
+    // Every manifest script for the github forge must be present.
+    const manifest = path.join(REPO, 'scripts', 'kaola-workflow-install-manifest.js');
+    const names = spawnSync('node', [manifest, '--forge=github', '--scripts'], { encoding: 'utf8' })
+      .stdout.split('\n').map(s => s.trim()).filter(Boolean);
+    assert(names.length > 0, 'S1: install manifest lists at least one support script');
+    let missing = [];
+    for (const n of names) if (!existsSync(path.join(scriptsDir, n))) missing.push(n);
+    assert(missing.length === 0, 'S1 (#F9): all manifest support scripts deployed — missing: ' + missing.slice(0, 5).join(', '));
+    try { rmSync(r.home, { recursive: true, force: true }); } catch (_) {}
+    try { rmSync(r.cfg, { recursive: true, force: true }); } catch (_) {}
+  }
+
+  // -------------------------------------------------------------------------
+  // P6 (#F2) — reinstall is SELF-HEALING: after a --with-fast --with-full
+  // install, narrowing installed_paths to [] then a BARE reinstall PRUNES the
+  // orphaned fast/phase command files (copy_tree was additive-only before).
+  // This is the "reset to adaptive-only" half P5 (the UNION-preserve half)
+  // does not cover.
+  // -------------------------------------------------------------------------
+  {
+    const r1 = runInstaller(['--with-fast', '--with-full']);
+    assert(r1.ok, 'P6: --with-fast --with-full install exits 0');
+    for (const name of ADAPTIVE_CORE.concat(FAST_ONLY, FULL_ONLY)) {
+      assert(hasCmd(r1.dest, name), 'P6[' + name + ']: opt-in install deploys every command');
+    }
+    // Narrow the shared config back to adaptive-only (simulates an opt-out / a reset).
+    const cfg = readConfig(r1.configPath);
+    cfg.installed_paths = [];
+    writeFileSync(r1.configPath, JSON.stringify(cfg, null, 2) + '\n');
+    // Bare reinstall (no opt-in flags) into the SAME home + dest.
+    const r2 = runInstaller([], { home: r1.home, dest: r1.dest });
+    assert(r2.ok, 'P6: bare reinstall after narrowing installed_paths exits 0');
+    for (const name of ADAPTIVE_CORE) {
+      assert(hasCmd(r1.dest, name), 'P6[' + name + ']: adaptive-core SURVIVES the reset reinstall');
+    }
+    for (const name of FAST_ONLY.concat(FULL_ONLY)) {
+      assert(!hasCmd(r1.dest, name),
+        'P6[' + name + '] (#F2): orphaned opt-in command PRUNED by the reset reinstall (copy_tree self-heals)');
+    }
+    const after = readdirSync(cmdDir(r1.dest)).filter(f => f.endsWith('.md')).map(f => f.slice(0, -3)).sort();
+    assert(JSON.stringify(after) === JSON.stringify([...ADAPTIVE_CORE].sort()),
+      'P6 (#F2): reset reinstall converges to EXACTLY the 6 adaptive-core commands — got ' + JSON.stringify(after));
+    const cfg2 = readConfig(r1.configPath);
+    assert(cfg2 && JSON.stringify(cfg2.installed_paths) === '[]',
+      'P6: installed_paths stays [] after the reset reinstall');
+    clean(r1);
+  }
+
+  // -------------------------------------------------------------------------
+  // U1 (#F4) — --uninstall removes the kaola-deployed surface, preserves the
+  // user-owned opencode.json, and resets installed_paths:[]; a subsequent bare
+  // install returns EXACTLY the 6 adaptive-core commands (round-trip).
+  // -------------------------------------------------------------------------
+  {
+    const r1 = runInstaller(['--with-fast']);
+    assert(r1.ok, 'U1: seed install (--with-fast) exits 0');
+    assert(hasCmd(r1.dest, 'kaola-workflow-fast'), 'U1: fast command present before uninstall');
+    assert(existsSync(path.join(r1.dest, 'opencode.json')), 'U1: opencode.json present before uninstall');
+    // Uninstall the same scope.
+    const ru = spawnSync('bash', [INSTALLER, '--uninstall', '--target', r1.dest, '--yes'],
+      { env: Object.assign({}, process.env, { HOME: r1.home }), encoding: 'utf8' });
+    assert(ru.status === 0, 'U1: --uninstall exits 0 (got ' + ru.status + (ru.stderr ? ' — ' + String(ru.stderr).split('\n')[0] : '') + ')');
+    for (const name of ADAPTIVE_CORE.concat(FAST_ONLY)) {
+      assert(!hasCmd(r1.dest, name), 'U1[' + name + ']: command removed by --uninstall');
+    }
+    for (const a of sync.listCanonAgents()) {
+      assert(!existsSync(path.join(r1.dest, '.opencode', 'agent', a + '.md')),
+        'U1: agent ' + a + ' removed by --uninstall');
+    }
+    assert(!existsSync(path.join(r1.dest, '.opencode', 'plugins', 'kaola-workflow-hooks.js')),
+      'U1: hooks plugin removed by --uninstall');
+    assert(existsSync(path.join(r1.dest, 'opencode.json')),
+      'U1 (#F4): opencode.json PRESERVED by --uninstall (user-owned model config)');
+    const cfg = readConfig(r1.configPath);
+    assert(cfg && JSON.stringify(cfg.installed_paths) === '[]',
+      'U1 (#F4): --uninstall resets installed_paths:[] — got ' + JSON.stringify(cfg && cfg.installed_paths));
+    // Round-trip: a fresh install returns the adaptive-only default.
+    const r2 = runInstaller([], { home: r1.home, dest: r1.dest });
+    assert(r2.ok, 'U1: reinstall after uninstall exits 0');
+    const back = readdirSync(cmdDir(r1.dest)).filter(f => f.endsWith('.md')).map(f => f.slice(0, -3)).sort();
+    assert(JSON.stringify(back) === JSON.stringify([...ADAPTIVE_CORE].sort()),
+      'U1 (#F4): uninstall→reinstall returns EXACTLY the 6 adaptive-core commands — got ' + JSON.stringify(back));
+    clean(r1);
+  }
+
+  // -------------------------------------------------------------------------
+  // I1 (#F9) — idempotency: a default install run twice into the same dest/HOME
+  // yields a byte-identical .opencode tree + identical opencode.json (proves
+  // seed_config preserve-if-absent across reinstall) + unchanged shared config.
+  // -------------------------------------------------------------------------
+  {
+    const snapshot = dest => {
+      const out = {};
+      const walk = (dir, rel) => {
+        if (!existsSync(dir)) return;
+        for (const e of readdirSync(dir, { withFileTypes: true })) {
+          const r = rel ? rel + '/' + e.name : e.name;
+          if (e.isDirectory()) walk(path.join(dir, e.name), r);
+          else { try { out[r] = readFileSync(path.join(dir, e.name), 'utf8'); } catch (_) { out[r] = '<unreadable>'; } }
+        }
+      };
+      walk(path.join(dest, '.opencode'), '.opencode');
+      try { out['opencode.json'] = readFileSync(path.join(dest, 'opencode.json'), 'utf8'); } catch (_) {}
+      return out;
+    };
+    const r1 = runInstaller([]);
+    assert(r1.ok, 'I1: first default install exits 0');
+    const snap1 = snapshot(r1.dest);
+    const cfg1 = readFileSync(r1.configPath, 'utf8');
+    const r2 = runInstaller([], { home: r1.home, dest: r1.dest });
+    assert(r2.ok, 'I1: second (idempotent) install exits 0');
+    const snap2 = snapshot(r1.dest);
+    assert(JSON.stringify(Object.keys(snap1).sort()) === JSON.stringify(Object.keys(snap2).sort()),
+      'I1 (#F9): reinstall adds/removes NO files in the deployed tree');
+    let drift = [];
+    for (const k of Object.keys(snap1)) if (snap1[k] !== snap2[k]) drift.push(k);
+    assert(drift.length === 0, 'I1 (#F9): reinstall leaves every deployed file byte-identical — drifted: ' + drift.slice(0, 5).join(', '));
+    assert(readFileSync(r1.configPath, 'utf8') === cfg1, 'I1: shared config unchanged across idempotent reinstall');
+    clean(r1);
+  }
+
+  // -------------------------------------------------------------------------
+  // H1 (#F3) — direct unit assertion of hookPath's GLOBAL resolution. The
+  // plugin (an ESM module) exports hookPath for test only; an ESM harness imports
+  // it and proves that, for a project with NO .opencode/hooks and an EMPTY
+  // OPENCODE_CONFIG_DIR, hookPath still resolves a hook via the plugin-sibling
+  // `../hooks` candidate (SELF_DIR from import.meta.url) — the global-layout case
+  // findRoot never reaches — and returns null (fail-open) for a non-existent hook.
+  // -------------------------------------------------------------------------
+  {
+    const pluginPath = path.join(REPO, '.opencode', 'plugins', 'kaola-workflow-hooks.js');
+    const fakeRoot = mkdtempSync(path.join(os.tmpdir(), 'opencode-h1-proj-'));   // exists, no .opencode/hooks
+    const emptyCfg = mkdtempSync(path.join(os.tmpdir(), 'opencode-h1-cfg-'));    // empty: no <cfg>/hooks
+    const harness = [
+      "import { pathToFileURL } from 'node:url';",
+      "const { hookPath } = await import(pathToFileURL(process.env.KW_PLUGIN).href);",
+      "const resolved = hookPath(process.env.KW_FAKEROOT, process.env.KW_SCRIPT);",
+      "const missing = hookPath(process.env.KW_FAKEROOT, 'definitely-not-a-real-hook.sh');",
+      "process.stdout.write(JSON.stringify({ resolved, missing }));",
+    ].join('\n');
+    const h = spawnSync('node', ['--input-type=module', '-e', harness], {
+      env: Object.assign({}, process.env, {
+        OPENCODE_CONFIG_DIR: emptyCfg, KW_PLUGIN: pluginPath,
+        KW_SCRIPT: 'kaola-workflow-pre-commit.sh', KW_FAKEROOT: fakeRoot,
+      }),
+      encoding: 'utf8',
+    });
+    assert(h.status === 0, 'H1: hookPath ESM harness runs (got ' + h.status + (h.stderr ? ' — ' + String(h.stderr).split('\n')[0] : '') + ')');
+    let out; try { out = JSON.parse(h.stdout); } catch (_) { out = {}; }
+    const resolvedNorm = (out.resolved || '').replace(/\\/g, '/');
+    assert(resolvedNorm.includes('.opencode/hooks/kaola-workflow-pre-commit.sh'),
+      'H1 (#F3): hookPath resolves a hook via the plugin-sibling ../hooks candidate when the project + config dir have none — got ' + JSON.stringify(out.resolved));
+    assert(out.missing === null,
+      'H1 (#F3): hookPath returns null (fail-open) for a hook that exists nowhere');
+    try { rmSync(fakeRoot, { recursive: true, force: true }); } catch (_) {}
+    try { rmSync(emptyCfg, { recursive: true, force: true }); } catch (_) {}
   }
 
   // A (folded #544) — ZERO Claude path leaks across the ENTIRE deployed .opencode/

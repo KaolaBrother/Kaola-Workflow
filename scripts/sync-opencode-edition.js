@@ -248,7 +248,11 @@ function transformCommandBody(body) {
     // `###` child. The ^## anchor isolates the section heading (surviving "(Step 0a-1)"
     // prose mentions elsewhere are not headings). Rewind trailing blank line(s) in `out` so
     // excising the section leaves a single-blank seam, not a double-blank.
-    if (/^##\s+Startup Step 0a-1\b/.test(line)) {
+    // #F7: match by the stable "Path Intent" TITLE, not the volatile step number "0a-1" — a
+    // canonical renumber (e.g. "Step 0b") must not silently un-strip the section and leak the
+    // path-selection switch onto the adaptive-only surface. The A22 negative assertions
+    // (no KAOLA_ENABLE_ADAPTIVE, no Branch A/B) are the fail-loud net if this ever misses.
+    if (/^##\s.*\bPath Intent\b/.test(line)) {
       // Rewind trailing blank line(s) in `out` then re-insert exactly ONE blank, so
       // excising the section leaves a clean single-blank seam to the next heading
       // (the body-skip below also consumes the blank that followed the section).
@@ -301,14 +305,12 @@ function transformCommandBody(body) {
   text = text.replace(/,{2,}/g, ',');
   // Tidy trailing whitespace left behind on affected lines.
   text = text.replace(/[ \t]+\n/g, '\n');
-  // opencode path-flip (#539, Mechanism B): strip the adapt repair-loop auto-fallback
-  // wording. The canonical "After repeated failure → a REAL decision: downgrade to full
-  // path / discard+restart / STOP" lists three escapes; on adaptive-only-default opencode
-  // the "downgrade to full path" option is dropped (the router's Path Intent section that
-  // would re-set KAOLA_PATH=full is stripped above). Removing the "downgrade to full path / "
-  // prefix leaves the remaining two options (discard+restart / STOP) coherent. "fall back to
-  // full" only lived inside the stripped Path Intent section, so no separate handling here.
-  text = text.replace(/downgrade to full path \/\s*/g, '');
+  // #F6: the former adapt repair-loop strip (`text.replace(/downgrade to full path \/\s*/g,'')`)
+  // was DEAD after #538 rewrote canonical to "NEVER downgrade to fast/full — there is no automatic
+  // fallback between paths" (it matched nothing). #538 made canonical itself adaptive-only, so the
+  // opencode adapt surface needs NO path-fallback strip; it is defended instead by the POSITIVE A22
+  // assertion that the generated adapt carries the "NEVER downgrade to fast/full" guard plus a
+  // negative guard against any un-NEVER'd fallback wording. The dead replace is removed here.
   // opencode path-flip (#540, Mechanism B continuation): the Path Intent SECTION strip above
   // removed the "## Startup Step 0a-1 — Path Intent" heading + body, but three INLINE "Step 0a-1"
   // residue mentions survive elsewhere in workflow-next (post-#538 the step no longer exists, so
@@ -676,6 +678,13 @@ function runCheck() {
       continue;
     }
     if (read(rel) !== read('hooks/' + script)) mismatches.push({ rel, reason: 'drifted from canonical hooks/' });
+  }
+  // #F8: opencode.json parity — the installer freshness gate (install-opencode.sh) and the docs
+  // bill --check as the "parity assert", yet runCheck never validated the committed config, so a
+  // corrupted opencode.json passed. Compare it to the NEUTRAL renderer output (bare renderOpencodeJson(),
+  // matching test A7) — not an --adapt-derived render, which would false-fail on an inherited-model pin.
+  if (fs.existsSync(OPENCODE_JSON) && read('opencode.json') !== renderOpencodeJson()) {
+    mismatches.push({ rel: 'opencode.json', reason: 'stale — regenerate via --write-config' });
   }
   if (mismatches.length) {
     console.error('sync-opencode-edition: PARITY FAILED (' + mismatches.length + ' file(s)):');
