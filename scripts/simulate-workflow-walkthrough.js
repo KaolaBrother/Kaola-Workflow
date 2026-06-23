@@ -13548,6 +13548,8 @@ function buildRegistry() {
   add('testPlannerAttestFlagPresentInPlannerAgent',       testPlannerAttestFlagPresentInPlannerAgent);
   add('testDispatchLogHookWorktreeAware338',              testDispatchLogHookWorktreeAware338);
   add('testDispatchLogEmitsModelFields566',               testDispatchLogEmitsModelFields566);
+  add('testDispatchLogResolverResolvesUnderOpencodeLayout567', testDispatchLogResolverResolvesUnderOpencodeLayout567);
+  add('testDispatchLogCapturesWorktreeResidentActiveProjectFromMainCwd568', testDispatchLogCapturesWorktreeResidentActiveProjectFromMainCwd568);
   add('testContractorAttestFlagBackfills338',             testContractorAttestFlagBackfills338);
   add('testContractorAttestAbsentWarnsNonBlocking338',    testContractorAttestAbsentWarnsNonBlocking338);
   add('testFinalizeIncompleteResumesCrashState',          testFinalizeIncompleteResumesCrashState);
@@ -13925,6 +13927,96 @@ function testDispatchLogEmitsModelFields566() {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
   console.log('testDispatchLogEmitsModelFields566: PASSED');
+}
+
+// ── #567: model_planned resolves under the opencode install layout (not just the sibling scripts/) ──
+// #566 hard-coded the resolver as dirname(dirname($0))/scripts, assuming scripts/ is a sibling of
+// hooks/. True for the four plugin editions, FALSE for opencode: there the hook lives at <root>/hooks/
+// while support scripts live at <root>/kaola-workflow/scripts/ — so model_planned came back empty on
+// opencode. This stages that exact layout (sibling scripts/ genuinely absent) and asserts the hook's
+// multi-path resolver search finds the resolver under the opencode-native dir. RED before the fix.
+function testDispatchLogResolverResolvesUnderOpencodeLayout567() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-567-oc-')));
+  try {
+    // The dispatched agent's repo — carries the active project the hook appends to.
+    const repo = path.join(tmp, 'repo');
+    fs.mkdirSync(repo, { recursive: true });
+    initGitRepo(repo);
+    const proj = path.join(repo, 'kaola-workflow', 'proj');
+    fs.mkdirSync(proj, { recursive: true });
+    fs.writeFileSync(path.join(proj, 'workflow-state.md'), '# State\nstatus: active\n');
+    // opencode-native layout: hook at <cfg>/hooks/, resolver at <cfg>/kaola-workflow/scripts/
+    // (deliberately NOT <cfg>/scripts/ — the sibling path the old hook looked at).
+    const cfg = path.join(tmp, 'cfg');
+    const ocHooks = path.join(cfg, 'hooks');
+    const ocScripts = path.join(cfg, 'kaola-workflow', 'scripts');
+    fs.mkdirSync(ocHooks, { recursive: true });
+    fs.mkdirSync(ocScripts, { recursive: true });
+    const hookDst = path.join(ocHooks, 'kaola-workflow-subagent-dispatch-log.sh');
+    fs.copyFileSync(path.join(repoRoot, 'hooks', 'kaola-workflow-subagent-dispatch-log.sh'), hookDst);
+    fs.copyFileSync(path.join(repoRoot, 'scripts', 'kaola-workflow-resolve-agent-model.js'),
+      path.join(ocScripts, 'kaola-workflow-resolve-agent-model.js'));
+    // Control: the sibling lookup (<cfg>/scripts) must be genuinely absent, so a pass can only come
+    // from the opencode-native (<cfg>/kaola-workflow/scripts) candidate.
+    assert(!fs.existsSync(path.join(cfg, 'scripts')), '#567: control — sibling scripts/ must be absent');
+    const payload = JSON.stringify({ agent_type: 'contractor', agent_id: 't', cwd: repo });
+    const hr = spawnSync('bash', [hookDst], { cwd: repo, input: payload, encoding: 'utf8' });
+    assert(hr.status === 0, '#567: hook must exit 0 (fail-open), got ' + hr.status);
+    const log = path.join(proj, '.cache', 'dispatch-log.jsonl');
+    assert(fs.existsSync(log), '#567: dispatch-log must be appended');
+    const lines = fs.readFileSync(log, 'utf8').split('\n').filter(Boolean);
+    assert(lines.length === 1, '#567: exactly one JSONL line expected, got ' + lines.length);
+    const parsed = JSON.parse(lines[0]);
+    assert(parsed.model_planned && parsed.model_planned.length > 0,
+      '#567: model_planned must resolve under the opencode layout (resolver at kaola-workflow/scripts/), got: ' + JSON.stringify(parsed.model_planned));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log('testDispatchLogResolverResolvesUnderOpencodeLayout567: PASSED');
+}
+
+// ── #568: dispatch-log captures a role spawn when the active project is WORKTREE-resident but the
+// agent cwd is the MAIN repo (opencode worktree posture) ──
+// #338 covered agent cwd == worktree (AGENT_ROOT resolves to the worktree). #568 is the INVERSE:
+// under opencode worktree posture the role agent runs with cwd == MAIN repo while the active
+// workflow-state.md lives in the linked executor worktree. The old dual-root scan resolves BOTH
+// HOOK_ROOT and AGENT_ROOT to main, where no active project exists → nothing logged (M1/M2 blind to
+// role spawns). The fix enumerates the main repo's linked worktrees and logs under the worktree's
+// active project. This stages that exact layout (active project ONLY in the worktree, agent cwd ==
+// main) and asserts the role spawn IS logged exactly once under the worktree project. RED before fix.
+function testDispatchLogCapturesWorktreeResidentActiveProjectFromMainCwd568() {
+  const hookPath = path.join(repoRoot, 'hooks', 'kaola-workflow-subagent-dispatch-log.sh');
+  const main = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-568-wt-')));
+  try {
+    initGitRepo(main);
+    // Linked worktree holds the ACTIVE project; main has NONE.
+    const wt = main + '-wt';
+    const wtAdd = spawnSync('git', ['worktree', 'add', '-b', 'wt568', wt], { cwd: main, encoding: 'utf8' });
+    assert(wtAdd.status === 0, '#568: git worktree add must succeed: ' + wtAdd.stderr);
+    const wtProj = path.join(wt, 'kaola-workflow', 'issue-568');
+    fs.mkdirSync(wtProj, { recursive: true });
+    fs.writeFileSync(path.join(wtProj, 'workflow-state.md'), '# State\nstatus: active\n');
+    // Control: main has NO active project, so a pass can only come from the worktree scan.
+    assert(!fs.existsSync(path.join(main, 'kaola-workflow')),
+      '#568: control — main must have no active project');
+    // The KEY difference from #338: agent cwd == MAIN repo (NOT the worktree). Under opencode
+    // worktree posture the role agent runs in the main repo while the active state is worktree-resident.
+    const payload = JSON.stringify({ agent_type: 'tdd-guide', agent_id: 'n2', cwd: main });
+    const hr = spawnSync('bash', [hookPath], { cwd: main, input: payload, encoding: 'utf8' });
+    assert(hr.status === 0, '#568: hook must exit 0 (fail-open), got ' + hr.status);
+    const wtLog = path.join(wtProj, '.cache', 'dispatch-log.jsonl');
+    assert(fs.existsSync(wtLog),
+      '#568: a role agent dispatched with cwd=main MUST still be logged under the worktree-resident active project .cache/');
+    const lines = fs.readFileSync(wtLog, 'utf8').split('\n').filter(Boolean);
+    assert(lines.length === 1, '#568: exactly one JSONL line expected (no dup), got ' + lines.length);
+    assert(lines[0].includes('"agent_type":"tdd-guide"'),
+      '#568: worktree dispatch-log must contain the role-agent entry, got: ' + lines[0]);
+    try { spawnSync('git', ['worktree', 'remove', '--force', wt], { cwd: main, encoding: 'utf8' }); } catch (_) {}
+    try { fs.rmSync(wt, { recursive: true, force: true }); } catch (_) {}
+  } finally {
+    fs.rmSync(main, { recursive: true, force: true });
+  }
+  console.log('testDispatchLogCapturesWorktreeResidentActiveProjectFromMainCwd568: PASSED');
 }
 
 // ── #338 T4: cmdFinalize --attest-contractor-spawn → finalize_contractor_attested:attested ──
