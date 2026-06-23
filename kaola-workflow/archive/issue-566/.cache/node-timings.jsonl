@@ -1,0 +1,11 @@
+{"node":"n1-payload-probe","event":"opened","ts":"2026-06-23T08:21:30.233Z"}
+{"node":"n1-payload-probe","event":"evidence","ts":"2026-06-23T11:22:33.841Z"}
+{"node":"n1-payload-probe","event":"closed","ts":"2026-06-23T11:22:38.798Z"}
+{"node":"n2-dispatch-model-field","event":"opened","ts":"2026-06-23T11:22:38.851Z"}
+{"node":"n2-dispatch-model-field","event":"closed","ts":"2026-06-23T11:40:22.552Z"}
+{"node":"n3-review","event":"opened","ts":"2026-06-23T11:40:22.603Z"}
+{"node":"n3-review","event":"evidence","ts":"2026-06-23T11:47:08.681Z"}
+{"node":"n3-review","event":"closed","ts":"2026-06-23T11:47:13.713Z"}
+{"node":"n4-docs","event":"opened","ts":"2026-06-23T11:47:13.795Z"}
+{"node":"n4-docs","event":"closed","ts":"2026-06-23T11:51:36.950Z"}
+{"node":"finalize","event":"opened","ts":"2026-06-23T11:51:36.999Z"}

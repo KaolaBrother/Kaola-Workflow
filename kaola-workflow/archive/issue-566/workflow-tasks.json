@@ -1,0 +1,36 @@
+{
+  "source_plan_hash": "0356a0161fa77be58ba51f88272add6dd6b67429d68a7910b25542a1ae71203a",
+  "tasks": [
+    {
+      "id": "n1-payload-probe",
+      "role": "knowledge-lookup",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n2-dispatch-model-field",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n3-review",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n4-docs",
+      "role": "doc-updater",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "finalize",
+      "role": "finalize",
+      "status": "in_progress",
+      "ledger_status": "in_progress"
+    }
+  ],
+  "last_synced_from_ledger": "2026-06-23T11:51:37.372Z"
+}
