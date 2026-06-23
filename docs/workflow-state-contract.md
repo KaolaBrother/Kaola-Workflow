@@ -41,7 +41,9 @@ here for the full contract.
   phase artifacts or summaries. Key `.cache/` entries:
   - `dispatch-log.jsonl` — written by the `kaola-workflow-subagent-dispatch-log.sh`
     SubagentStart hook; each line is a JSON object recording a subagent spawn
-    (`ts`, `agent_type`, `agent_id`, `cwd`). Used by `checkDispatchAttestations`
+    (`ts`, `agent_type`, `agent_id`, `cwd`, plus `model_planned` always resolved
+    from the agent manifest and `model` the runtime-supplied tier — codex CLI
+    only; empty otherwise). Used by `checkDispatchAttestations`
     at closure time for WARN-FIRST subagent-seam attestation (see `docs/api.md` § Closure Contract).
   - `running-set.json` — tracks which nodes are currently in the running set
     (`{ state: 'opening'|'open', max_concurrent?: number, nodes: [...], updatedAt }`; per-node fields: `id`, `role`, `kind`,

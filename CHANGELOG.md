@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- **observability (LOW, additive, fail-open): the dispatch-log SubagentStart hook now records the dispatched model in `dispatch-log.jsonl` — #566.** Each JSONL line gains `model_planned` (always resolved from the agent manifest via `kaola-workflow-resolve-agent-model.js`) and `model` (the runtime-supplied tier, codex CLI only; empty for Claude Code `SubagentStart` and opencode). `model` is inherently best-effort and may be empty, while `model_planned` is always resolved for a known role. Dual-field and payload-agnostic (no branching on payload shape), fail-open (exit 0 always), backward-compatible (existing readers key on `agent_type`). No new gate, no schema migration. Cross-edition (canonical + codex byte-twin + gitlab/gitea hook copies — four chains green).
+
 ## [6.9.0] - 2026-06-21
 
 ### Fixed

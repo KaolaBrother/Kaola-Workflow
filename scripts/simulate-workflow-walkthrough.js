@@ -13547,6 +13547,7 @@ function buildRegistry() {
   add('testPlannerAttestFlagAbsentStaysMissing',          testPlannerAttestFlagAbsentStaysMissing);
   add('testPlannerAttestFlagPresentInPlannerAgent',       testPlannerAttestFlagPresentInPlannerAgent);
   add('testDispatchLogHookWorktreeAware338',              testDispatchLogHookWorktreeAware338);
+  add('testDispatchLogEmitsModelFields566',               testDispatchLogEmitsModelFields566);
   add('testContractorAttestFlagBackfills338',             testContractorAttestFlagBackfills338);
   add('testContractorAttestAbsentWarnsNonBlocking338',    testContractorAttestAbsentWarnsNonBlocking338);
   add('testFinalizeIncompleteResumesCrashState',          testFinalizeIncompleteResumesCrashState);
@@ -13889,6 +13890,41 @@ function testDispatchLogHookWorktreeAware338() {
     fs.rmSync(inplace, { recursive: true, force: true });
   }
   console.log('testDispatchLogHookWorktreeAware338: PASSED');
+}
+
+// ── #566: dispatch-log hook emits model + model_planned (observability, fail-open, no new gate) ──
+// The per-node `model` column was the only frozen-plan field with no closed loop. The hook now
+// emits BOTH `model_planned` (resolved fail-open via resolve-agent-model.js for a known role) and
+// `model` (opportunistic, parsed from the STDIN payload — supplied by the codex runtime only; empty
+// for Claude Code SubagentStart and opencode). This test crafts a payload that DOES include `model`
+// (simulating the codex runtime) and asserts both fields are populated.
+function testDispatchLogEmitsModelFields566() {
+  const hookPath = path.join(repoRoot, 'hooks', 'kaola-workflow-subagent-dispatch-log.sh');
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-566-model-')));
+  try {
+    initGitRepo(tmp);
+    const proj = path.join(tmp, 'kaola-workflow', 'proj');
+    fs.mkdirSync(proj, { recursive: true });
+    fs.writeFileSync(path.join(proj, 'workflow-state.md'), '# State\nstatus: active\n');
+    // Payload INCLUDES a `model` field (simulating the codex runtime supply); n1 finding: only the
+    // codex CLI runtime exposes model, so the test injects it directly.
+    const payload = JSON.stringify({ agent_type: 'contractor', agent_id: 't', cwd: tmp, model: 'gpt-5.2' });
+    const hr = spawnSync('bash', [hookPath], { cwd: tmp, input: payload, encoding: 'utf8' });
+    assert(hr.status === 0, '#566: hook must exit 0 (fail-open), got ' + hr.status);
+    const log = path.join(proj, '.cache', 'dispatch-log.jsonl');
+    assert(fs.existsSync(log), '#566: dispatch-log must be appended');
+    const lines = fs.readFileSync(log, 'utf8').split('\n').filter(Boolean);
+    assert(lines.length === 1, '#566: exactly one JSONL line expected, got ' + lines.length);
+    const parsed = JSON.parse(lines[0]);
+    assert(parsed.agent_type === 'contractor', '#566: agent_type preserved, got ' + parsed.agent_type);
+    assert(parsed.model_planned && parsed.model_planned.length > 0,
+      '#566: model_planned must be non-empty (resolver returns a tier for contractor), got: ' + JSON.stringify(parsed.model_planned));
+    assert(parsed.model === 'gpt-5.2',
+      '#566: model must equal the payload-supplied value, got: ' + JSON.stringify(parsed.model));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+  console.log('testDispatchLogEmitsModelFields566: PASSED');
 }
 
 // ── #338 T4: cmdFinalize --attest-contractor-spawn → finalize_contractor_attested:attested ──

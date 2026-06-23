@@ -16,6 +16,16 @@ AGENT_ID=$(printf '%s' "$HOOK_INPUT" | node -e \
 AGENT_CWD=$(printf '%s' "$HOOK_INPUT" | node -e \
   "const d=[];process.stdin.on('data',c=>d.push(c));process.stdin.on('end',()=>{try{const p=JSON.parse(d.join(''));process.stdout.write(p.cwd||'')}catch(e){}})" 2>/dev/null || true)
 
+# #566: opportunistic model — the runtime-supplied model (codex CLI only; empty for Claude Code
+# SubagentStart and opencode). Emitted unconditionally; empty when the runtime omits it.
+MODEL=$(printf '%s' "$HOOK_INPUT" | node -e \
+  "const d=[];process.stdin.on('data',c=>d.push(c));process.stdin.on('end',()=>{try{const p=JSON.parse(d.join(''));process.stdout.write(p.model||'')}catch(e){}})" 2>/dev/null || true)
+
+# #566: model_planned — the frozen-plan tier for this role, resolved fail-open. A missing or
+# unresolvable resolver never breaks dispatch logging (empty on failure).
+_KW_ROOT="$(dirname "$(dirname "$0")")"
+MODEL_PLANNED=$(node "$_KW_ROOT/scripts/kaola-workflow-resolve-agent-model.js" "$AGENT_TYPE" --raw 2>/dev/null || printf '')
+
 # Resolve candidate repo roots: the hook's own cwd AND the dispatched agent's cwd.
 # #338: a subagent dispatched into a linked worktree must be logged where the worktree's
 # consumers (cmdFinalize / sink-merge attestation) read .cache/dispatch-log.jsonl. The hook
@@ -32,7 +42,7 @@ fi
 TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 # Export so node -e subshell can read via process.env
-export TS AGENT_TYPE AGENT_ID AGENT_CWD
+export TS AGENT_TYPE AGENT_ID AGENT_CWD MODEL MODEL_PLANNED
 
 # For each active project under a root, append one JSONL line to .cache/dispatch-log.jsonl
 append_for_root() {
@@ -50,7 +60,9 @@ append_for_root() {
       const at = process.env.AGENT_TYPE;
       const ai = process.env.AGENT_ID;
       const cw = process.env.AGENT_CWD;
-      process.stdout.write(JSON.stringify({ts: ts, agent_type: at, agent_id: ai, cwd: cw}));
+      const md = process.env.MODEL;
+      const mp = process.env.MODEL_PLANNED;
+      process.stdout.write(JSON.stringify({ts: ts, agent_type: at, agent_id: ai, cwd: cw, model: md, model_planned: mp}));
     " 2>/dev/null) || continue
     printf '%s\n' "$LINE" >> "$CACHE_DIR/dispatch-log.jsonl"
   done
