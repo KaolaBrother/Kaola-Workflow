@@ -2,6 +2,7 @@
 node_modules/
 .claude/
 .codex/
+.opencode/
 kaola-workflow/.locks/
 kaola-workflow/.sessions/
 kaola-workflow/.tickers/
