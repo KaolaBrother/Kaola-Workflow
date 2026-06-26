@@ -169,7 +169,19 @@ choices, or ambiguity that blocks correctness.
 
    If the check fails, do not stage; split the commit or coordinate manually.
 
-   **Before delegating to the contractor**: run `kaola-workflow-run-chains.js` (main session) to produce `.cache/chain-receipt.json` bound to the current HEAD. The contractor only VERIFIES the receipt — it does not run the chains. `cmdFinalize` (Step 8b) enforces the finalize gate fail-closed before the archive rename; the contractor will return `finalize_gate_unverified` if the receipt is absent, stale, or red.
+   **Before delegating to the contractor**: gate on repo kind (#475):
+
+   - **Self-host (npm)** — the repo's `package.json` declares the `test:kaola-workflow:*`
+     scripts: run `kaola-workflow-run-chains.js` (main session, resolved the same way as
+     `claim_script` above) to produce `.cache/chain-receipt.json` bound to the current HEAD.
+     The contractor only VERIFIES the receipt — it does not run the chains. `cmdFinalize`
+     (Step 8b) enforces the finalize gate fail-closed before the archive rename; the contractor
+     will return `finalize_gate_unverified` if the receipt is absent, stale, or red.
+   - **Consumer (non-npm)** — the repo has no `test:kaola-workflow:*` scripts: do **NOT**
+     invoke `kaola-workflow-run-chains.js` (it would only return `chains_config_missing`). The
+     gate is the agent's own `.cache/final-validation.md` with a column-0 `verdict: pass`,
+     produced by running the plan's `## Meta` `validation_command`; `--finalize-check`
+     auto-detects consumer mode (absence of the npm scripts) and gates on that file (#475).
 
    The mechanical finalization below — the artifact mirror, the `cmdFinalize` archive + status close (with `--keep-worktree`, merge path only), roadmap refresh, and the `chore: finalize ${KAOLA_PROJECT}` commit gate — is deterministic bookkeeping. The `contractor` Codex agent role is the SOLE HOME of this procedure and the session MUST delegate it; the contractor runs the scripts and authors the durable bookkeeping but never dispatches a role, judges, or asks the user. Only if the `contractor` subagent tooling is genuinely unavailable may the session run it inline, and that fallback MUST be logged as `local-fallback-tool-unavailable` in the `## Required Agent Compliance` ledger. The current session keeps the sink dispatch and issue-close decision. Because a subagent runs in its own shell, capture the sink metadata (`SINK_BRANCH`, `SINK_KIND`, `SINK_ISSUE_FLAG`, `ACTIVE_WORKTREE_PATH`) in THIS session before delegating — they are reused at the sink step and do not cross the delegation boundary.
 

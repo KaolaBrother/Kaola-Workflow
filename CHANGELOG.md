@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **routing (prose): consumer repos are no longer pointed at the self-host-only `run-chains.js` at the plan-run→finalize seam — #570.** The plan-run §5 "All done" step and the finalize pre-contractor step previously instructed the agent to run `kaola-workflow-run-chains.js` **unconditionally**. That script only runs the maintainer edition chains (`npm run test:kaola-workflow:*`) and is meaningful solely in the Kaola-Workflow self-host; in a consumer (non-npm) product repo it can only refuse `chains_config_missing`. The runtime guard held, but the prose led a consumer-repo agent to reach for a maintainer-only tool and momentarily conflate it with the project's own `validation_command` (observed in a real downstream run: the agent launched run-chains, got the refusal, then pivoted). Both operational steps now branch explicitly on self-host detection (presence of `test:kaola-workflow:*` scripts in `package.json`): self-host runs `run-chains.js` → `chain-receipt.json` as before; a consumer repo runs the plan's `## Meta` `validation_command` and records `.cache/final-validation.md` with a column-0 `verdict: pass` (the existing `--finalize-check` consumer auto-detection, #475), and does **not** invoke `run-chains.js`. No script-logic change — the `chains_config_missing` refusal stays as the defense-in-depth backstop. Cross-edition (#307): prose propagated to all SIX routing surfaces (#400) for both plan-run and finalize (3 Claude commands + 3 Codex SKILL packs); all four `npm run test:kaola-workflow:{claude,codex,gitlab,gitea}` chains green. Decision record: `docs/decisions/D-570-01.md`.
+
 ## [6.11.0] - 2026-06-26
 
 ### Removed

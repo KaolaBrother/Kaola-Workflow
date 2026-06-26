@@ -252,7 +252,9 @@ serial-degrade `cwd_unenforceable`; `opening` crash-safe marker; `running-set` s
 
 ### 5. All done
 
-When `allDone: true`, run:
+When `allDone: true`, detect the repo type and run the appropriate validation:
+
+**Self-host (npm) — `package.json` declares `test:kaola-workflow:*` scripts:**
 
 ```bash
 node "$KAOLA_SCRIPTS/kaola-workflow-run-chains.js" --project {project}
@@ -261,6 +263,12 @@ node "$KAOLA_SCRIPTS/kaola-workflow-run-chains.js" --project {project}
 **Invoke run-chains with `--project {project}` (#546 G11).** Always pass `--project {project}` to the
 run-chains script so its receipt lands at `kaola-workflow/{project}/.cache/chain-receipt.json` where
 Finalization's `--finalize-check` reads it — do NOT rely on cwd to locate the receipt.
+
+**Consumer (non-npm) repo — no `test:kaola-workflow:*` scripts:** Do NOT invoke `run-chains.js`
+(it can only return `chains_config_missing` in a consumer repo). Instead, run the plan's `## Meta`
+`validation_command` and record the result in `kaola-workflow/{project}/.cache/final-validation.md`
+with a column-0 `verdict: pass`. Finalization's `--finalize-check` auto-detects consumer mode
+(absence of the `test:kaola-workflow:*` scripts) and gates on `final-validation.md` (#475).
 
 Then proceed to `/kaola-workflow-finalize {project}`.
 

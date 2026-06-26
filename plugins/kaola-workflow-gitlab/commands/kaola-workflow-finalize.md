@@ -676,11 +676,19 @@ _WT_PRE="$(node -e "try{const fs=require('fs');const s=fs.readFileSync('kaola-wo
 
 ## Mechanical Finalization (delegated to the contractor)
 
-**Before dispatching the contractor**: run `kaola-workflow-run-chains.js` (main session) to
-produce `.cache/chain-receipt.json` bound to the current HEAD. The contractor only VERIFIES
-the receipt — it does not run the chains. `cmdFinalize` (Step 8b) enforces the finalize gate
-fail-closed before the archive rename; the contractor will return `finalize_gate_unverified`
-if the receipt is absent, stale, or red.
+**Before dispatching the contractor**: gate on repo kind (#475):
+
+- **Self-host (npm)** — the repo's `package.json` declares the `test:kaola-workflow:*`
+  scripts: run `kaola-workflow-run-chains.js` (main session, via the edition's `kaola_script()`
+  resolver) to produce `.cache/chain-receipt.json` bound to the current HEAD. The contractor
+  only VERIFIES the receipt — it does not run the chains. `cmdFinalize` (Step 8b) enforces
+  the finalize gate fail-closed before the archive rename; the contractor will return
+  `finalize_gate_unverified` if the receipt is absent, stale, or red.
+- **Consumer (non-npm)** — the repo has no `test:kaola-workflow:*` scripts: do **NOT**
+  invoke `kaola-workflow-run-chains.js` (it would only return `chains_config_missing`). The
+  gate is the agent's own `.cache/final-validation.md` with a column-0 `verdict: pass`,
+  produced by running the plan's `## Meta` `validation_command`; `--finalize-check`
+  auto-detects consumer mode (absence of the npm scripts) and gates on that file (#475).
 
 Dispatch the contractor to execute the mechanical finalization. The full
 procedure body (Step 8a artifact mirror, Step 8b cmdFinalize archive + status
