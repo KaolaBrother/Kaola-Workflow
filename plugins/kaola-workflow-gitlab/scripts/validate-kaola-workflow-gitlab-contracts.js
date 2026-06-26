@@ -170,10 +170,9 @@ for (const file of [
   assertNoForbidden(file);
 }
 
-assert(commandFiles.length === 12, 'expected 12 GitLab command files');
+assert(commandFiles.length === 11, 'expected 11 GitLab command files');
 // #400: 9 base skills + kaola-workflow-adapt + kaola-workflow-plan-run (adaptive SKILL pack) = 11.
-// #443: + kaola-workflow-auto (autopilot driver) = 12.
-assert(skillFiles.length === 12, 'expected 12 GitLab skill files');
+assert(skillFiles.length === 11, 'expected 11 GitLab skill files');
 assert(exists(pluginRoot + '/hooks/hooks.json'), 'GitLab hooks.json missing');
 assertNotIncludes(pluginRoot + '/hooks/hooks.json', 'subagentStatusLine');
 assertNotIncludes(pluginRoot + '/hooks/hooks.json', 'kaola-workflow-subagent-statusline.js');
@@ -806,7 +805,6 @@ for (const tomlFile of fs.readdirSync(path.join(root, pluginRoot, 'agents')).fil
   const emittedSkillTargets = [
     schema.PLAN_RUN_SKILL,
     schema.ADAPT_SKILL,
-    schema.AUTO_SKILL,
     'kaola-workflow-fast',
     'kaola-workflow-research'
   ];

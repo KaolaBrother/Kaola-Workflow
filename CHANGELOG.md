@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Removed
+
+- **`kaola-workflow-auto` autopilot driver removed in full — supersedes #443 (D-443-01) / D-420-01 Part 1.** The autopilot (`/kaola-workflow-auto` command + `kaola-workflow-auto` SKILL ×6 surfaces; `kaola-workflow-autopilot.js` ×4 script editions; `test-autopilot.js`) is deleted. It overlapped ~90% with `/workflow-next`, which already drives one issue/bundle scout → adaptive-claim → plan-run → finalize to closure. Its only distinguishing capability — a cross-issue *goal loop* over multiple bundles — both (a) contradicted `workflow-next`'s explicit one-issue-per-invocation Completion Contract (which forbids "next issue in line" continuation) and (b) was not even in-process (the driver finalized one bundle, returned `goal_progress`, and relied on operator re-invocation — functionally identical to re-running `/workflow-next`). Worse, its standalone `claim` stage collided with the adaptive path's planner-owns-claim contract (#287/#44): following the skill literally double-claimed the issue, yielding an off-nominal `owned`-on-fresh-claim that `workflow-next` avoids by deferring the claim to the planner. Removed all references: `AUTO_COMMAND`/`AUTO_SKILL` from `kaola-workflow-adaptive-schema.js` (×4 byte-identical), the `COMMON_SCRIPTS` + `RENAME_NORMALIZED_FAMILIES` entries in `validate-script-sync.js`, the `SUPPORT_SCRIPTS` entry in `kaola-workflow-install-manifest.js` (×2), the route/skill pins in `test-route-reachability.js` + all four `validate-*-contracts.js` (GitLab/Gitea command+skill counts 12 → 11), the opencode-edition wiring (`install-opencode.sh` + `test-opencode-edition.js`), and the `## Autopilot Driver` section in `docs/architecture.md`. The `issue-scout` `backlog_empty` output shape is retained (it serves `/workflow-next` too); only its autopilot-specific prose was neutralized. D-443-01 marked Superseded. Cross-edition (#307) — all four `npm run test:kaola-workflow:{claude,codex,gitlab,gitea}` chains green; opencode suite green.
+
 ## [6.10.0] - 2026-06-24
 
 ### Changed

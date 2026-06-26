@@ -169,10 +169,9 @@ for (const file of [
   assertNoForbidden(file);
 }
 
-assert(commandFiles.length === 12, 'expected 12 Gitea command files, got ' + commandFiles.length);
+assert(commandFiles.length === 11, 'expected 11 Gitea command files, got ' + commandFiles.length);
 // #400: 9 base skills + kaola-workflow-adapt + kaola-workflow-plan-run (adaptive SKILL pack) = 11.
-// #443: + kaola-workflow-auto (autopilot driver) = 12.
-assert(skillFiles.length === 12, 'expected 12 Gitea skill files, got ' + skillFiles.length);
+assert(skillFiles.length === 11, 'expected 11 Gitea skill files, got ' + skillFiles.length);
 assert(exists(pluginRoot + '/hooks/hooks.json'), 'Gitea hooks.json missing');
 assertNotIncludes(pluginRoot + '/hooks/hooks.json', 'subagentStatusLine');
 assertNotIncludes(pluginRoot + '/hooks/hooks.json', 'kaola-workflow-subagent-statusline.js');
@@ -811,7 +810,6 @@ for (const tomlFile of fs.readdirSync(path.join(root, pluginRoot, 'agents')).fil
   const emittedSkillTargets = [
     schema.PLAN_RUN_SKILL,
     schema.ADAPT_SKILL,
-    schema.AUTO_SKILL,
     'kaola-workflow-fast',
     'kaola-workflow-research'
   ];

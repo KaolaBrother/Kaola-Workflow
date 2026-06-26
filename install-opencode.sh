@@ -147,7 +147,7 @@ case " $EXISTING_PATHS " in *" full "*) EFFECTIVE_FULL=1 ;; *) EFFECTIVE_FULL=$W
 # OTHER command fails CLOSED (skipped + warned) so a future canonical command cannot silently widen
 # the default install. Single source of truth for the partition (used by copy_tree).
 ADAPTIVE_CORE_COMMANDS=(
-  kaola-workflow-adapt.md kaola-workflow-auto.md kaola-workflow-finalize.md
+  kaola-workflow-adapt.md kaola-workflow-finalize.md
   kaola-workflow-plan-run.md workflow-init.md workflow-next.md
 )
 in_array() { local needle="$1"; shift; local x; for x in "$@"; do [[ "$x" == "$needle" ]] && return 0; done; return 1; }

@@ -170,4 +170,4 @@ When, after completing the full survey, there is no claimable, unblocked, same-s
 { "backlog_empty": true, "recommended_bundle": null }
 ```
 
-`backlog_empty` is `true` and `recommended_bundle` is `null` (not omitted). Do not emit this shape merely because confidence is low or the available bundles are suboptimal; emit it only when no issue can pass all bundle selection rules. The autopilot driver treats this shape as a terminal signal and emits `stop: backlog_empty` without proceeding to claim.
+`backlog_empty` is `true` and `recommended_bundle` is `null` (not omitted). Do not emit this shape merely because confidence is low or the available bundles are suboptimal; emit it only when no issue can pass all bundle selection rules. A consuming driver or router treats this shape as a terminal signal: stop without proceeding to claim.

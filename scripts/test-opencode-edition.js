@@ -309,7 +309,6 @@ const stripSlash = c => c.replace(/^\//, '');
 const emittedCommandTargets = [
   stripSlash(schema.PLAN_RUN_COMMAND),
   stripSlash(schema.ADAPT_COMMAND),
-  stripSlash(schema.AUTO_COMMAND),
   'kaola-workflow-fast',
   'kaola-workflow-phase1'
 ];
@@ -349,7 +348,7 @@ for (const target of emittedCommandTargets) {
     'A16: finalize must contain "closure-audit" literal');
 
   // A17 (mirror T7): adapt + auto carry the claim-escalate PIN + result:escalate literal (#495).
-  for (const name of ['kaola-workflow-adapt', 'kaola-workflow-auto']) {
+  for (const name of ['kaola-workflow-adapt']) {
     assert(has(name, '<!-- PIN: claim-escalate -->'),
       'A17[' + name + ']: must contain <!-- PIN: claim-escalate --> comment');
     assert(has(name, 'result: escalate'),
@@ -566,7 +565,7 @@ if (exists(pluginRel)) {
 // workflow-planner). n5-implementer-opencode owns GREEN.
 //
 // Adaptive-core set per issue #543 (the unconditional default install):
-//   kaola-workflow-adapt, kaola-workflow-auto, kaola-workflow-finalize,
+//   kaola-workflow-adapt, kaola-workflow-finalize,
 //   kaola-workflow-plan-run, workflow-init, workflow-next.
 // Opt-in sets: --with-fast ⇒ {kaola-workflow-fast}; --with-full ⇒ {phase1..phase5}.
 // installed_paths canonical order mirrors install.sh L730: [p for p in ("fast","full") if p in paths].
@@ -578,7 +577,7 @@ if (exists(pluginRel)) {
 
   const INSTALLER = path.join(REPO, 'install-opencode.sh');
   const ADAPTIVE_CORE = [
-    'kaola-workflow-adapt', 'kaola-workflow-auto', 'kaola-workflow-finalize',
+    'kaola-workflow-adapt', 'kaola-workflow-finalize',
     'kaola-workflow-plan-run', 'workflow-init', 'workflow-next',
   ];
   const FAST_ONLY = ['kaola-workflow-fast'];

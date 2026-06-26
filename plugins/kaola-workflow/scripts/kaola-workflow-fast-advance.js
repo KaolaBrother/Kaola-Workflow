@@ -19,7 +19,7 @@
 // validate-script-sync.js (which rewrites every contiguous `kaola-workflow-<n>`
 // token to `kaola-<forge>-workflow-<n>`) cannot mangle them — commands keep
 // their name across editions; only scripts get the forge prefix. The result is
-// that all four edition copies are byte-identical (autopilot.js precedent).
+// that all four edition copies are byte-identical (adaptive-schema.js precedent).
 // (The fast / phase1 / research / finalize command + skill names are all built
 // from KW for exactly this reason.)
 //

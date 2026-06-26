@@ -61,7 +61,7 @@ try {
     }
     // Adaptive commands must be present
     for (const cmd of ['workflow-init.md', 'workflow-next.md', 'kaola-workflow-adapt.md',
-                       'kaola-workflow-plan-run.md', 'kaola-workflow-auto.md', 'kaola-workflow-finalize.md']) {
+                       'kaola-workflow-plan-run.md', 'kaola-workflow-finalize.md']) {
       assert(commandExists(home, cmd), `AC1: bare install must install adaptive command ${cmd}`);
     }
   }

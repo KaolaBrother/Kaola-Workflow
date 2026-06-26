@@ -36,14 +36,12 @@ const stripSlash = c => c.replace(/^\//, '');
 const emittedSkillTargets = [
   schema.PLAN_RUN_SKILL,
   schema.ADAPT_SKILL,
-  schema.AUTO_SKILL,
   'kaola-workflow-fast',
   'kaola-workflow-research'
 ];
 const emittedCommandTargets = [
   stripSlash(schema.PLAN_RUN_COMMAND),
   stripSlash(schema.ADAPT_COMMAND),
-  stripSlash(schema.AUTO_COMMAND),
   'kaola-workflow-fast',
   'kaola-workflow-phase1'
 ];
@@ -200,7 +198,7 @@ for (const ed of codexEditions) {
 
 // ---------------------------------------------------------------------------
 // T7: <!-- PIN: claim-escalate --> comment + the `result: escalate` literal must appear in each of
-// the 18 claim/startup-refusal surfaces: adapt×6 + workflow-next×6 + auto×6.
+// the 12 claim/startup-refusal surfaces: adapt×6 + workflow-next×6.
 // Added by n3-result-routing-prose (#495); unconditional (n3 writes the prose AND this assertion together).
 // ---------------------------------------------------------------------------
 {
@@ -219,13 +217,6 @@ for (const ed of codexEditions) {
     'plugins/kaola-workflow-gitlab/skills/kaola-workflow-next/SKILL.md',
     'plugins/kaola-workflow-gitea/commands/workflow-next.md',
     'plugins/kaola-workflow-gitea/skills/kaola-workflow-next/SKILL.md',
-    // auto — 6 surfaces
-    'commands/kaola-workflow-auto.md',
-    'plugins/kaola-workflow/skills/kaola-workflow-auto/SKILL.md',
-    'plugins/kaola-workflow-gitlab/commands/kaola-workflow-auto.md',
-    'plugins/kaola-workflow-gitlab/skills/kaola-workflow-auto/SKILL.md',
-    'plugins/kaola-workflow-gitea/commands/kaola-workflow-auto.md',
-    'plugins/kaola-workflow-gitea/skills/kaola-workflow-auto/SKILL.md',
   ];
   for (const f of claimEscalateSurfaces) {
     const content = fs.existsSync(path.join(REPO, f)) ? fs.readFileSync(path.join(REPO, f), 'utf8') : '';

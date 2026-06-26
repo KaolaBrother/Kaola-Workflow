@@ -156,8 +156,7 @@ const phaseCommands = [
   'commands/kaola-workflow-finalize.md',
   'commands/kaola-workflow-fast.md',
   'commands/kaola-workflow-adapt.md',
-  'commands/kaola-workflow-plan-run.md',
-  'commands/kaola-workflow-auto.md'
+  'commands/kaola-workflow-plan-run.md'
 ];
 
 for (const file of phaseCommands) {
@@ -944,7 +943,6 @@ assertIncludes('agents/workflow-planner.md', 'main-session-gate');
   const emittedCommandTargets = [
     stripSlash(schema.PLAN_RUN_COMMAND),
     stripSlash(schema.ADAPT_COMMAND),
-    stripSlash(schema.AUTO_COMMAND),
     'kaola-workflow-fast',      // isFast fallback (claim.js next_command)
     'kaola-workflow-phase1'     // full fallback (claim.js next_command)
   ];
