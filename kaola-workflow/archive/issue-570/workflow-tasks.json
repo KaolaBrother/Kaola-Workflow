@@ -1,0 +1,30 @@
+{
+  "source_plan_hash": "f492856401f5b99d49f61d47bbaee391c94b4c4a6b20fd0df92cca0736a9cf06",
+  "tasks": [
+    {
+      "id": "n1-planrun-prose",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n2-finalize-prose",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n3-review",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n4-finalize",
+      "role": "finalize",
+      "status": "completed",
+      "ledger_status": "complete"
+    }
+  ],
+  "last_synced_from_ledger": "2026-06-26T04:35:36.858Z"
+}

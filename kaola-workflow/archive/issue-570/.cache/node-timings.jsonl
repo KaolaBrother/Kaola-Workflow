@@ -1,0 +1,8 @@
+{"node":"n1-planrun-prose","event":"opened","ts":"2026-06-26T03:56:17.054Z"}
+{"node":"n1-planrun-prose","event":"closed","ts":"2026-06-26T04:01:01.700Z"}
+{"node":"n2-finalize-prose","event":"opened","ts":"2026-06-26T04:01:09.954Z"}
+{"node":"n2-finalize-prose","event":"closed","ts":"2026-06-26T04:03:57.906Z"}
+{"node":"n3-review","event":"opened","ts":"2026-06-26T04:04:10.461Z"}
+{"node":"n3-review","event":"closed","ts":"2026-06-26T04:31:25.990Z"}
+{"node":"n4-finalize","event":"opened","ts":"2026-06-26T04:33:27.506Z"}
+{"node":"n4-finalize","event":"closed","ts":"2026-06-26T04:35:36.792Z"}
