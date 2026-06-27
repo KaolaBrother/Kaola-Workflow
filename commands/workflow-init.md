@@ -204,7 +204,7 @@ Worked example of a migrated AGENTS.md (two `---` dividers total):
 
 ---
 
-*All other guidance — workflow phases, scripts, conventions, gotchas — lives in `CLAUDE.md`. This file intentionally contains nothing else.*
+*All other guidance — the workflow, scripts, conventions, gotchas — lives in `CLAUDE.md`. This file intentionally contains nothing else.*
 
 ---
 > Note: content below was the prior AGENTS.md before init unified the contract.
@@ -233,7 +233,7 @@ Canonical `AGENTS.md` redirect block to write:
 
 ---
 
-*All other guidance — workflow phases, scripts, conventions, gotchas — lives in `CLAUDE.md`. This file intentionally contains nothing else.*
+*All other guidance — the workflow, scripts, conventions, gotchas — lives in `CLAUDE.md`. This file intentionally contains nothing else.*
 ```
 
 ---
@@ -353,7 +353,7 @@ CLAIM_JS="$(kaola_script kaola-workflow-claim.js)"
 
 Replace `{project}` with the workflow project folder name (e.g., `multi-session-substrate`) and `{N}` with the GitHub issue number. If the issue number is unknown, omit `--issue`.
 
-If `kaola-workflow-claim.js` is unavailable (manual install without the script), skip this step and proceed with local phase artifacts.
+If `kaola-workflow-claim.js` is unavailable (manual install without the script), skip this step and proceed with local workflow artifacts.
 
 ---
 

@@ -1141,7 +1141,7 @@ release surface.
 Use SemVer for both versions:
 
 - `MAJOR`: breaking command, artifact, plugin, or workflow-contract changes.
-- `MINOR`: backward-compatible workflow phases, agent roles, install features,
+- `MINOR`: backward-compatible workflow capabilities, agent roles, install features,
   or new automation.
 - `PATCH`: compatible bug fixes, validation fixes, documentation-only updates,
   or small install clarifications.

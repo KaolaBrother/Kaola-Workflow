@@ -8,7 +8,7 @@ Kaola-Workflow runs an issue through one of three macro-shapes, selected by agen
 judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — #44):
 
 - **fast** — single-pass Plan+Execute+Review (`fast-summary.md`); one fixed shape.
-- **full** — the fixed 6-phase ladder (P1→P6); the default and the answer to every doubt.
+- **full** — the fixed 6-phase ladder (P1→P6); an install-time opt-in (`--with-full`), not the default.
 - **adaptive** (issue #227, the unconditional default) — the agent
   **freely composes a task-shaped DAG** of role nodes inside a fixed lifecycle frame:
 
