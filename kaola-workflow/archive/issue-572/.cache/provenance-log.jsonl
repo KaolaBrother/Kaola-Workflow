@@ -1,0 +1,6 @@
+{"timestamp":"2026-06-27T10:02:12.397Z","event":"open","nodeId":"n1-init-template-adaptive","nonce":"6672b3bc33ad","by":"adaptive-node"}
+{"timestamp":"2026-06-27T10:20:29.726Z","event":"close","nodeId":"n1-init-template-adaptive","nonce":"6672b3bc33ad","by":"adaptive-node"}
+{"timestamp":"2026-06-27T10:20:29.996Z","event":"open","nodeId":"n2-review","nonce":"4501a5398c8b","by":"adaptive-node"}
+{"timestamp":"2026-06-27T10:26:06.271Z","event":"close","nodeId":"n2-review","nonce":"4501a5398c8b","by":"adaptive-node"}
+{"timestamp":"2026-06-27T10:26:06.562Z","event":"open","nodeId":"n3-finalize","nonce":"78e4fe73631b","by":"adaptive-node"}
+{"timestamp":"2026-06-27T10:33:39.583Z","event":"close","nodeId":"n3-finalize","nonce":"78e4fe73631b","by":"adaptive-node"}
