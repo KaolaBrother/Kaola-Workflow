@@ -206,7 +206,7 @@ Worked example of a migrated AGENTS.md (two `---` dividers total):
 
 ---
 
-*All other guidance — workflow phases, scripts, conventions, gotchas — lives in `CLAUDE.md`. This file intentionally contains nothing else.*
+*All other guidance — the workflow, scripts, conventions, gotchas — lives in `CLAUDE.md`. This file intentionally contains nothing else.*
 
 ---
 > Note: content below was the prior AGENTS.md before init unified the contract.
@@ -235,7 +235,7 @@ Canonical `AGENTS.md` redirect block to write:
 
 ---
 
-*All other guidance — workflow phases, scripts, conventions, gotchas — lives in `CLAUDE.md`. This file intentionally contains nothing else.*
+*All other guidance — the workflow, scripts, conventions, gotchas — lives in `CLAUDE.md`. This file intentionally contains nothing else.*
 ```
 
 ## Initial Roadmap Body

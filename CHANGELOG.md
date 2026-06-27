@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- **docs/terminology: swept three out-of-template stale "phase" mentions left after #572 — #573.** #572 re-grounded the injected `KW-CLAUDE-TEMPLATE` block on the adaptive DAG-of-roles model but deliberately scoped itself to that injected region; three residual stale mentions living **outside** the template (not reached by the `extractClaudeTemplate` phase-ban, and violating no #572 AC) are now corrected: **(NB1)** the `workflow-init` Active-Folder-Init fallback narration "proceed with local **phase artifacts**" → "local **workflow artifacts**" (3 `commands/workflow-init.md` surfaces — claude/gitlab/gitea); **(NB2)** the byte-parity-locked AGENTS.md redirect-block category label "*All other guidance — **workflow phases**, scripts, conventions, gotchas …*" → "**the workflow**, scripts, conventions, gotchas" across all 6 init surfaces (3 `commands/workflow-init.md` + 3 init `SKILL.md`) plus the repo's own dogfooded `AGENTS.md` — every surface changed identically so the redirect-block byte-identity assertion in `validate-kaola-workflow-contracts.js` stays green; **(NB3)** `docs/architecture.md` "**full** — … ; **the default** and the answer to every doubt" → "an install-time opt-in (`--with-full`), **not the default**", correcting framing left stale by #538 (adaptive is the unconditional default; the accurate "6-phase ladder" description is retained); and **(NB4)** the related `README.md` SemVer-policy line "`MINOR`: backward-compatible **workflow phases**, agent roles, …" → "**workflow capabilities**, agent roles, …" (a durable category noun — "agent roles" already follows, so reusing "roles" would be redundant). Terminology-only; no script-logic, schema, or contract change. Cross-edition (#307): all four `npm run test:kaola-workflow:{claude,codex,gitlab,gitea}` chains green (run sequentially).
+
 ## [6.13.0] - 2026-06-27
 
 ### Fixed
