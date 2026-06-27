@@ -213,10 +213,12 @@ try {
     } finally { fs.rmSync(etmp, { recursive: true, force: true }); }
   }
 
-  // #447 AC1/AC5/AC2: codex installer global-hook invariant (claude chain).
-  // Hooks install GLOBALLY into <tempHOME>/.codex/hooks.json; agent profiles stay
-  // project-local. Run the codex installer directly (not install.sh) under a temp HOME
-  // so the test never touches the real ~/.codex.
+  // #447 AC1/AC5/AC2 + #571: codex installer positional-form invariant (claude chain).
+  // #571 default is GLOBAL (--global targets ~/.codex); the POSITIONAL form (pass a path as
+  // argv[2]) is an optional per-repo override that installs to that path's .codex/.
+  // This test exercises the positional-form override to verify the project-local path still
+  // works and hooks still go to the global HOME. Run under a temp HOME so the real ~/.codex
+  // is never touched.
   {
     const codexInstallerPath = path.join(root, 'plugins', 'kaola-workflow', 'scripts', 'install-codex-agent-profiles.js');
     const cproj = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-codex-447-proj-'));
@@ -259,17 +261,19 @@ try {
       const projectHooksPath = path.join(cproj, '.codex', 'hooks.json');
       assert(!fs.existsSync(projectHooksPath), '#447 AC5: no hooks.json must be written to project .codex, found at: ' + projectHooksPath);
 
-      // AC2: agent profiles are still written project-local
+      // AC2: positional-form override installs agent profiles to the given project path.
+      // (#571: --global is the documented default for new installs; passing a path positionally
+      // is an optional per-repo override that installs to that path's .codex/.)
       const projectAgentsDir = path.join(cproj, '.codex', 'agents', 'kaola-workflow');
-      assert(fs.existsSync(projectAgentsDir), '#447 AC2: project-local .codex/agents/kaola-workflow/ must be created');
+      assert(fs.existsSync(projectAgentsDir), '#447 AC2: positional-form override must create .codex/agents/kaola-workflow/ at the given path');
       const tomlFiles = fs.readdirSync(projectAgentsDir).filter(f => f.endsWith('.toml'));
-      assert(tomlFiles.length > 0, '#447 AC2: at least one agent profile .toml must be written project-local');
+      assert(tomlFiles.length > 0, '#447 AC2: positional-form override must write at least one agent profile .toml to the given path');
 
-      // AC2: managed [agents.*] block in project-local .codex/config.toml
+      // AC2: managed [agents.*] block in the positional-form project's .codex/config.toml
       const projectConfigPath = path.join(cproj, '.codex', 'config.toml');
-      assert(fs.existsSync(projectConfigPath), '#447 AC2: project-local .codex/config.toml must be written');
+      assert(fs.existsSync(projectConfigPath), '#447 AC2: positional-form override must write .codex/config.toml to the given path');
       const configText = fs.readFileSync(projectConfigPath, 'utf8');
-      assert(configText.includes('# BEGIN kaola-workflow agents'), '#447 AC2: project config.toml must contain managed agents block');
+      assert(configText.includes('# BEGIN kaola-workflow agents'), '#447 AC2: positional-form config.toml must contain managed agents block');
 
       // #543 cross-edition: a default (no-flags) codex installer run must seed the shared
       // ~/.config/kaola-workflow/config.json with installed_paths:[] (adaptive-only). This is the

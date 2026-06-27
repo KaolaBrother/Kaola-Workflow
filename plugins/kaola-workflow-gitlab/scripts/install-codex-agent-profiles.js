@@ -5,7 +5,14 @@ const path = require('path');
 const crypto = require('crypto');
 
 const pluginRoot = path.resolve(__dirname, '..');
-const projectRoot = path.resolve(process.argv[2] || process.cwd());
+// #571: `--global` targets ~/.codex (install once, all repos) regardless of cwd/arg-order.
+// Position-robust like --with-fast/--with-full. The positional projectRoot form ("$PWD" /
+// "$HOME") still works: take the first non-flag argv, never a leading --flag.
+const GLOBAL = process.argv.includes('--global');
+const firstPositional = process.argv.slice(2).find(a => !a.startsWith('--'));
+const projectRoot = GLOBAL
+  ? os.homedir()
+  : path.resolve(firstPositional || process.cwd());
 const sourceAgentsDir = path.join(pluginRoot, 'agents');
 const sourceTemplate = path.join(pluginRoot, 'config', 'agents.toml');
 const sourceHooksTemplate = path.join(pluginRoot, 'config', 'hooks.json');

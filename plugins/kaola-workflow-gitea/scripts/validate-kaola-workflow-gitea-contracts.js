@@ -534,6 +534,12 @@ assert(
   !/\*\/kaola-workflow\/\*\/scripts\/install-codex-agent-profiles\.js/.test(read(giteaInitSkill)),
   giteaInitSkill + ' must not contain bare */kaola-workflow/* find path (without -gitea suffix)'
 );
+// #571: global-default regression locks — pin primary install is --global; forbid retired per-repo mandate.
+assertIncludes(giteaInitSkill, 'install-codex-agent-profiles.js" --global');
+assert(
+  !/install-codex-agent-profiles\.js"?\s+"\$PWD"/.test(read(giteaInitSkill)),
+  giteaInitSkill + ' must not mandate a per-repo "$PWD" agent install (#571)'
+);
 assertConcept(giteaInitSkill, 'Gitea init durable state contract', [
   'kaola-workflow/.roadmap/issue-*.md',
   'do not purge',

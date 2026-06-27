@@ -398,7 +398,9 @@ function runPreflight(opts) {
     planPath,
     noAutofix,
     scriptDir,
+    home,
   } = opts;
+  const homeDir = home || os.homedir();
 
   const codexDir = path.join(projectRoot, '.codex');
   const agentsDir = path.join(codexDir, 'agents', 'kaola-workflow');
@@ -440,6 +442,27 @@ function runPreflight(opts) {
   const requiredRoles = [...templateRoles];
   for (const r of planRoles) {
     if (!requiredRoles.includes(r)) requiredRoles.push(r);
+  }
+
+  // --- #571: global scope satisfies the gate (install once, all repos — Claude parity).
+  // Plan roles ⊆ template roles (role_not_in_template above guarantees it), so a global
+  // scope fresh for every template role is fresh for every plan role too. Check global
+  // FIRST: a fresh global scope PASSES without inspecting/installing a redundant
+  // project-local copy. A non-fresh global scope falls through to the existing
+  // project-scope inspection + autofix path UNCHANGED (back-compat + fail-closed preserved).
+  const globalCodexDir = path.join(homeDir, '.codex');
+  const globalScope = inspectScope({ codexDir: globalCodexDir, templateRoles });
+  if (scopeIsFresh(globalScope)) {
+    return {
+      exitCode: 0,
+      result: {
+        status: 'ok',
+        scope: 'global',
+        roles_checked: requiredRoles,
+        extra_unmanaged: globalScope.extraUnmanaged,
+        autofixed: false,
+      },
+    };
   }
 
   // --- Inspect the project scope (template roles only; plan roles handled below) ---
@@ -650,6 +673,14 @@ function scopeIsStale(s) {
   );
 }
 
+// #571: a scope is "fresh" iff it exists AND inspectScope finds nothing stale.
+// The `s.exists` guard is LOAD-BEARING: an absent scope reads "not stale" inside
+// scopeIsStale (the `s.exists &&` short-circuits), so without this guard an absent
+// ~/.codex would wrongly count as "fresh" and PASS the gate.
+function scopeIsFresh(s) {
+  return s.exists && !scopeIsStale(s);
+}
+
 function scopeReport(scope, name, codexDir, repair, readOnly) {
   return {
     scope: name,
@@ -805,6 +836,7 @@ if (require.main === module) {
     planPath: planPath ? path.resolve(planPath) : null,
     noAutofix,
     scriptDir,
+    home: resolvedHome,
   });
 
   if (json || exitCode !== 0) {

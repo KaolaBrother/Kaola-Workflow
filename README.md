@@ -438,8 +438,9 @@ Because hooks land in `~/.codex` — not in a project-local `.codex/hooks.json` 
 single install covers all projects on the machine and a plugin upgrade refreshes the
 global copy automatically; no per-repository re-init is needed to pick up hook changes.
 
-Agent profiles and `.codex/config.toml` remain **project-local** (written to
-`<project>/.codex/`); only the hook files are global.
+Agent profiles and the managed `.codex/config.toml` block install **globally** into
+`~/.codex` by default (one install, all repos — parity with Claude global agents).
+Project-local is an optional override: pass the repo path positionally to the installer.
 
 Codex (>= 0.139) will **not execute any command hook until you review and trust it** —
 trust is recorded against each hook's content hash and persisted per machine. So a
@@ -472,11 +473,11 @@ git pull
 # upgrade; fall back to remove+add when upgrade is unavailable or the cache is stale:
 codex plugin marketplace upgrade kaola-workflow
 #   or: codex plugin remove kaola-workflow@<marketplace> && codex plugin add kaola-workflow@<marketplace>
-# Re-run the agent-profile installer against the project (validates each profile
-# schema, prunes retired Kaola files like docs-lookup.toml, writes the managed
-# manifest .codex/agents/kaola-workflow/.kaola-managed-profiles.json, and
-# refreshes the global hooks at ~/.codex/hooks.json + ~/.codex/kaola-workflow/):
-node <plugin-root>/scripts/install-codex-agent-profiles.js <project-root>
+# Re-run the agent-profile installer globally (validates each profile schema, prunes
+# retired Kaola files like docs-lookup.toml, writes the managed manifest
+# ~/.codex/agents/kaola-workflow/.kaola-managed-profiles.json, and refreshes the
+# global hooks at ~/.codex/hooks.json + ~/.codex/kaola-workflow/):
+node <plugin-root>/scripts/install-codex-agent-profiles.js --global
 # Inspect user / project / plugin-cache scope freshness (read-only doctor):
 node <plugin-root>/scripts/kaola-workflow-codex-preflight.js --doctor --project-root <project-root> --json
 ```
@@ -497,12 +498,13 @@ the global hook home `~/.codex/hooks.json` plus `~/.codex/kaola-workflow/{hooks,
 exist — then trust the hooks via `/hooks` (see *Trust the hooks* above).
 
 The read-only `--doctor` report grades three scopes: `user`, `project`, and
-`plugin_cache`. Agent **profiles** are project-local, so the `project` scope
-is the authoritative one for profiles and must read green (managed block present; no
-missing, stale, or malformed roles). The **hooks** are global by design (`~/.codex`)
-and are not graded per-project scope — a `user`-scope row that reflects only profile
-absence is expected. A top-level `status: stale` driven solely by a missing profile
-managed-block in the `user` scope is benign; do not conflate it with a hook problem.
+`plugin_cache`. Agent **profiles** install globally by default, so the `user` scope
+(`~/.codex`) is the authoritative one for profiles and must read green (managed block
+present; no missing, stale, or malformed roles). The `project` scope is an optional
+per-repo override; when present it must also read green. The preflight gate accepts
+EITHER a valid global `~/.codex` scope OR a valid project scope, and **fails closed when
+neither is valid**. The **hooks** are global by design (`~/.codex`) and are reported
+under the `user` scope.
 
 The primary skills are:
 
@@ -549,9 +551,10 @@ bookkeeper, DAG front end, and read-only bundle-lane backlog scout. `synthesizer
 adaptive parallel-write convergence role (#463) — reasoning-class (Opus), dispatched only
 to reconcile concurrent write legs by intent on a real merge conflict.)
 
-The managed setup copies role configs into `.codex/agents/kaola-workflow/` and
-maintains a `# BEGIN kaola-workflow agents` block in `.codex/config.toml` while
-preserving unrelated config. Codex workflows default to delegation
+The managed setup copies role configs into `~/.codex/agents/kaola-workflow/` (global
+default; a project-local override targets `<project>/.codex/agents/kaola-workflow/`
+instead) and maintains a `# BEGIN kaola-workflow agents` block in `~/.codex/config.toml`
+while preserving unrelated config. Codex workflows default to delegation
 (`delegation_policy: delegate`) without prompting: phases invoke those roles for
 delegated research, planning, execution, repair, review, and documentation work.
 When the role profiles are absent the workflow auto-detects this, keeps the

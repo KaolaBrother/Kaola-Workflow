@@ -527,6 +527,12 @@ assert(
   !/\*\/kaola-workflow\/\*\/scripts\/install-codex-agent-profiles\.js/.test(read(gitlabInitSkill)),
   gitlabInitSkill + ' must not contain bare */kaola-workflow/* find path (without -gitlab suffix)'
 );
+// #571: global-default regression locks — pin primary install is --global; forbid retired per-repo mandate.
+assertIncludes(gitlabInitSkill, 'install-codex-agent-profiles.js" --global');
+assert(
+  !/install-codex-agent-profiles\.js"?\s+"\$PWD"/.test(read(gitlabInitSkill)),
+  gitlabInitSkill + ' must not mandate a per-repo "$PWD" agent install (#571)'
+);
 assertConcept(gitlabInitSkill, 'GitLab init durable state contract', [
   'kaola-workflow/.roadmap/issue-*.md',
   'do not purge',

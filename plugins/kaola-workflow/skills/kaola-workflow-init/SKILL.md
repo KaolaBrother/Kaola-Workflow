@@ -113,7 +113,9 @@ find docs -maxdepth 3 -type f 2>/dev/null | sort
 ```
 <!-- KW-CLAUDE-TEMPLATE-END -->
 
-5. Install or refresh the managed Codex agent role profiles:
+5. Agent role profiles are a one-time GLOBAL install — `workflow-init` does NOT install them per repo.
+
+Profiles install once into `~/.codex` and are available in every repo (parity with Claude global agents). `workflow-init` only scaffolds the project. If not yet installed (or after upgrade), run the one-time global install:
 
 ```bash
 plugin_root="plugins/kaola-workflow"
@@ -122,17 +124,11 @@ if [ ! -f "$plugin_root/scripts/install-codex-agent-profiles.js" ]; then
   plugin_root="$(dirname "$(dirname "$script_path")")"
 fi
 test -f "$plugin_root/scripts/install-codex-agent-profiles.js"
-node "$plugin_root/scripts/install-codex-agent-profiles.js" "$PWD"
+node "$plugin_root/scripts/install-codex-agent-profiles.js" --global
 ```
 
-This creates or refreshes `.codex/agents/kaola-workflow/*.toml` and a managed
-`# BEGIN kaola-workflow agents` block in `.codex/config.toml`. Preserve all
-unrelated `.codex/config.toml` content.
+Writes `~/.codex/agents/kaola-workflow/*.toml` + the managed block in `~/.codex/config.toml`, refreshes global hooks — one install, all repos. The preflight gate accepts the global scope. (To pin to one repo instead, pass the repo path positionally — `… "$PWD"` — optional override.)
 
-Codex lifecycle hooks are installed **globally** into `~/.codex` (not the project).
-The same `install-codex-agent-profiles.js "$PWD"` step installs the project-local agent
-profiles AND refreshes the global hooks in one pass, so re-running it on init or after an
-upgrade force-refreshes the hooks — you never need to re-init a repo just to update hooks.
 Trust the hooks once with `/hooks` in Codex. If an older project-local `.codex/hooks.json`
 exists from a prior version, remove it (or run `uninstall.sh`) to avoid double-firing.
 
@@ -143,9 +139,9 @@ is no per-session switch. The fast and full six-phase paths are install-time
 opt-ins, passed to the same `install-codex-agent-profiles.js` step above:
 
 ```bash
-node "$plugin_root/scripts/install-codex-agent-profiles.js" "$PWD" --with-fast   # also install the fast path
-node "$plugin_root/scripts/install-codex-agent-profiles.js" "$PWD" --with-full   # also install the full six-phase path
-node "$plugin_root/scripts/install-codex-agent-profiles.js" "$PWD" --with-fast --with-full  # both opt-ins
+node "$plugin_root/scripts/install-codex-agent-profiles.js" --global --with-fast   # also install the fast path
+node "$plugin_root/scripts/install-codex-agent-profiles.js" --global --with-full   # also install the full six-phase path
+node "$plugin_root/scripts/install-codex-agent-profiles.js" --global --with-fast --with-full  # both opt-ins
 ```
 
 The opt-in is recorded in the shared `~/.config/kaola-workflow/config.json`

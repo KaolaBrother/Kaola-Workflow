@@ -158,6 +158,13 @@ assertNotIncludes(nextSkill198, '≤ 2 closely related files');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`, 'Active folder lifecycle');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`, '> **MANDATORY — READ CLAUDE.md BEFORE ANY ACTION THIS SESSION.**');
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`, 'Do not create or edit CLAUDE.md');
+// #571: global-default regression locks — pin primary install is --global; forbid retired per-repo mandate.
+const initSkill = `${pluginRoot}/skills/kaola-workflow-init/SKILL.md`;
+assertIncludes(initSkill, 'install-codex-agent-profiles.js" --global');
+assert(
+  !/install-codex-agent-profiles\.js"?\s+"\$PWD"/.test(read(initSkill)),
+  initSkill + ' must not mandate a per-repo "$PWD" agent install (#571)'
+);
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-execute/SKILL.md`, 'Required Agent Compliance');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-review/SKILL.md`, 'codex review');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'Documentation Docking');

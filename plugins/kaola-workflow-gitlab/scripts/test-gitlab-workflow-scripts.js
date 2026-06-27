@@ -3590,6 +3590,10 @@ const GITLAB_FIXTURE_PLAN = [
 
 // Case 1 + Case 2 + Case 5: preflight tests (stale config, missing profiles, no-silent-fallback)
 function testGitlabPreflight266() {
+  // #571: hermetic-HOME retrofit — spawn each preflight call with an empty temp HOME so the
+  // new global-first short-circuit finds no ~/.codex and falls through to project-scope assertions.
+  const emptyHomeGl = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-266-hermetic-home-'));
+  const hEnvGl = { ...process.env, HOME: emptyHomeGl, USERPROFILE: emptyHomeGl };
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-266-preflight-'));
   try {
     // Install all 15 profiles into the fixture (14 base + synthesizer #463)
@@ -3602,7 +3606,7 @@ function testGitlabPreflight266() {
     // --- GREEN: fresh fixture must pass preflight ---
     const freshResult = spawnSync(process.execPath,
       [gitlabPreflightScript, '--project-root', root, '--no-autofix', '--json'],
-      { encoding: 'utf8' });
+      { encoding: 'utf8', env: hEnvGl });
     assert.strictEqual(freshResult.status, 0,
       '#266 gl case1 RED-discriminator: fresh fixture must exit 0, got ' + freshResult.status + '\n' + freshResult.stdout);
     const freshJson = JSON.parse(freshResult.stdout);
@@ -3617,7 +3621,7 @@ function testGitlabPreflight266() {
 
     const staleResult = spawnSync(process.execPath,
       [gitlabPreflightScript, '--project-root', root, '--no-autofix', '--json'],
-      { encoding: 'utf8' });
+      { encoding: 'utf8', env: hEnvGl });
     assert.notStrictEqual(staleResult.status, 0,
       '#266 gl case1: stale managed block must cause non-zero exit, got ' + staleResult.status);
     const staleJson = JSON.parse(staleResult.stdout);
@@ -3638,7 +3642,7 @@ function testGitlabPreflight266() {
       }
       const autofixResult = spawnSync(process.execPath,
         [gitlabPreflightScript, '--project-root', autofixRoot, '--json'],
-        { encoding: 'utf8' });
+        { encoding: 'utf8', env: hEnvGl });
       assert.strictEqual(autofixResult.status, 0,
         '#266 gl case1 autofix: must exit 0 after repair, got ' + autofixResult.status + '\n' + autofixResult.stdout);
       const autofixJson = JSON.parse(autofixResult.stdout);
@@ -3658,7 +3662,7 @@ function testGitlabPreflight266() {
 
     const missingResult = spawnSync(process.execPath,
       [gitlabPreflightScript, '--project-root', root, '--no-autofix', '--json'],
-      { encoding: 'utf8' });
+      { encoding: 'utf8', env: hEnvGl });
     assert.notStrictEqual(missingResult.status, 0,
       '#266 gl case2: missing profile toml must cause non-zero exit, got ' + missingResult.status);
     const missingJson = JSON.parse(missingResult.stdout);
@@ -3673,7 +3677,7 @@ function testGitlabPreflight266() {
     // --- Case 2 GREEN: restored → fresh again ---
     const restoredResult = spawnSync(process.execPath,
       [gitlabPreflightScript, '--project-root', root, '--no-autofix', '--json'],
-      { encoding: 'utf8' });
+      { encoding: 'utf8', env: hEnvGl });
     assert.strictEqual(restoredResult.status, 0,
       '#266 gl case2 GREEN: restored fixture must pass, got ' + restoredResult.status);
 
@@ -3681,7 +3685,7 @@ function testGitlabPreflight266() {
     fs.unlinkSync(wpToml);
     const refusalResult = spawnSync(process.execPath,
       [gitlabPreflightScript, '--project-root', root, '--no-autofix', '--json'],
-      { encoding: 'utf8' });
+      { encoding: 'utf8', env: hEnvGl });
     assert.notStrictEqual(refusalResult.status, 0,
       '#266 gl case5 RED: absent profile must cause non-zero exit, got ' + refusalResult.status);
     assert.ok(!refusalResult.stdout.includes('subagent-invoked'),
@@ -3694,7 +3698,104 @@ function testGitlabPreflight266() {
     console.log('testGitlabPreflight266 (#266 cases 1,2,5): PASSED');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(emptyHomeGl, { recursive: true, force: true });
   }
+}
+
+// ---------------------------------------------------------------------------
+// #571: global-first preflight gate — install once to ~/.codex, all repos pass (GitLab edition).
+// ---------------------------------------------------------------------------
+function testGitlabPreflight571() {
+  // --- Test (a): global-only install ⇒ gate PASSES (scope:'global') ---
+  // RED-first discriminator: old gate checks project scope only → exit 1 (RED); GREEN after gate change.
+  const tempHome571a = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-571a-home-'));
+  try {
+    const env571a = { ...process.env, HOME: tempHome571a, USERPROFILE: tempHome571a };
+    const setupInstall = spawnSync(process.execPath, [installProfilesScript, tempHome571a], {
+      cwd: gitlabPluginRoot, encoding: 'utf8', env: env571a
+    });
+    assert.strictEqual(setupInstall.status, 0,
+      '#571 gl test(a): positional-form install to tempHome must exit 0: ' + setupInstall.stderr);
+
+    const emptyProject571a = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-571a-proj-'));
+    try {
+      const r = spawnSync(process.execPath,
+        [gitlabPreflightScript, '--project-root', emptyProject571a, '--no-autofix', '--json'],
+        { encoding: 'utf8', env: env571a });
+      assert.strictEqual(r.status, 0,
+        '#571 gl test(a) RED-discriminator: global-only install must pass preflight, got ' +
+        r.status + '\n' + r.stdout);
+      const j = JSON.parse(r.stdout);
+      assert.strictEqual(j.status, 'ok', '#571 gl test(a): status must be ok, got ' + j.status);
+      assert.strictEqual(j.scope, 'global', '#571 gl test(a): scope must be global, got ' + j.scope);
+      assert.ok(!fs.existsSync(path.join(emptyProject571a, '.codex')),
+        '#571 gl test(a): no project .codex must be created when global scope satisfies the gate');
+    } finally {
+      fs.rmSync(emptyProject571a, { recursive: true, force: true });
+    }
+  } finally {
+    fs.rmSync(tempHome571a, { recursive: true, force: true });
+  }
+
+  // --- Test (b): neither scope valid ⇒ FAILS CLOSED ---
+  const tempHome571b = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-571b-home-'));
+  const emptyProject571b = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-571b-proj-'));
+  try {
+    const r = spawnSync(process.execPath,
+      [gitlabPreflightScript, '--project-root', emptyProject571b, '--no-autofix', '--json'],
+      { encoding: 'utf8', env: { ...process.env, HOME: tempHome571b, USERPROFILE: tempHome571b } });
+    assert.notStrictEqual(r.status, 0,
+      '#571 gl test(b): neither scope valid must fail closed, got exit ' + r.status);
+    const j = JSON.parse(r.stdout);
+    assert.ok(j.status === 'profiles_missing' || j.status === 'config_stale',
+      '#571 gl test(b): fail-closed must return profiles_missing or config_stale, got ' + j.status);
+  } finally {
+    fs.rmSync(tempHome571b, { recursive: true, force: true });
+    fs.rmSync(emptyProject571b, { recursive: true, force: true });
+  }
+
+  // --- Test (c): stale global does NOT short-circuit ---
+  const tempHome571c = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-571c-home-'));
+  try {
+    const env571c = { ...process.env, HOME: tempHome571c, USERPROFILE: tempHome571c };
+    const setupC = spawnSync(process.execPath, [installProfilesScript, tempHome571c], {
+      cwd: gitlabPluginRoot, encoding: 'utf8', env: env571c
+    });
+    assert.strictEqual(setupC.status, 0, '#571 gl test(c): setup install must exit 0');
+    fs.unlinkSync(
+      path.join(tempHome571c, '.codex', 'agents', 'kaola-workflow', 'workflow-planner.toml'));
+
+    const emptyProject571c = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-571c-proj-'));
+    try {
+      const r = spawnSync(process.execPath,
+        [gitlabPreflightScript, '--project-root', emptyProject571c, '--no-autofix', '--json'],
+        { encoding: 'utf8', env: env571c });
+      assert.notStrictEqual(r.status, 0,
+        '#571 gl test(c): stale global must not short-circuit, got exit ' + r.status);
+    } finally {
+      fs.rmSync(emptyProject571c, { recursive: true, force: true });
+    }
+  } finally {
+    fs.rmSync(tempHome571c, { recursive: true, force: true });
+  }
+
+  // --- Test (a2): --global installer flag targets os.homedir() ---
+  const tempHome571flag = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-571flag-home-'));
+  try {
+    const envFlag = { ...process.env, HOME: tempHome571flag, USERPROFILE: tempHome571flag };
+    const globalFlagInstall = spawnSync(process.execPath, [installProfilesScript, '--global'], {
+      cwd: gitlabPluginRoot, encoding: 'utf8', env: envFlag
+    });
+    assert.strictEqual(globalFlagInstall.status, 0,
+      '#571 gl test(a2): --global flag install must exit 0: ' + globalFlagInstall.stderr);
+    assert.ok(
+      fs.existsSync(path.join(tempHome571flag, '.codex', 'agents', 'kaola-workflow', 'workflow-planner.toml')),
+      '#571 gl test(a2): --global flag must write workflow-planner.toml to tempHome/.codex');
+  } finally {
+    fs.rmSync(tempHome571flag, { recursive: true, force: true });
+  }
+
+  console.log('testGitlabPreflight571 (#571 global-scope gate): PASSED');
 }
 
 // ---------------------------------------------------------------------------
@@ -4567,6 +4668,7 @@ function testGitlabBoundary2FetchRetry507() {
 testGitlabFinalizeRowMainDirect338();
 testInstallSchemaPruneManifest332Gitlab();
 testGitlabPreflight266();
+testGitlabPreflight571();
 testGitlabPreflight332();
 testGitlabTaskMirror266();
 testGitlabCompactResume266();

@@ -1166,6 +1166,8 @@ node scripts/kaola-workflow-codex-preflight.js --doctor [--project-root <dir>] [
 
 **Behavior (normal gate):**
 
+**Global-first short-circuit (#571):** Before project inspection, checks `~/.codex` (`os.homedir()/.codex`). If that scope is fresh (exists and all role/block checks pass), returns immediately with exit 0 and `scope: 'global'` — no project-local copy is inspected or written, and autofix is not triggered. Falls through to steps 1–6 only when the global scope is absent or stale. Fail-closed: the short-circuit adds only a PASS case; every existing typed refusal still fires when the global scope is not fresh.
+
 1. Resolves `--project-root` (or `process.cwd()`) and checks `.codex/agents/kaola-workflow/` for per-role `.toml` files, **schema-validating** each required profile (a non-empty top-level `name` matching the role, an optional `model_reasoning_effort` — present⇒must be a legal value, absent⇒valid since #451 — and a non-blank `developer_instructions`).
 2. Reads `.codex/config.toml`, locates the managed block between `# BEGIN kaola-workflow agents` and `# END kaola-workflow agents`, asserts every required role has an `[agents.{role}]` entry inside it, and flags any retired/foreign `[agents.*]` *inside* the markers.
 3. Required-role set: the union of (a) all roles in the bundled `config/agents.toml` template (read dynamically — no hardcoded count) and (b) the roles named in the frozen plan's `## Nodes` table when `--plan <path>` is supplied.
@@ -1190,8 +1192,10 @@ node scripts/kaola-workflow-codex-preflight.js --doctor [--project-root <dir>] [
 
 Success:
 ```json
-{ "status": "ok", "roles_checked": ["code-explorer", "..."], "extra_unmanaged": [], "autofixed": false }
+{ "status": "ok", "scope": "global", "roles_checked": ["code-explorer", "..."], "extra_unmanaged": [], "autofixed": false }
 ```
+
+The `scope` field is additive (#571): `"global"` when the global `~/.codex` scope satisfied the gate; `"project"` when the project scope satisfied it (with or without autofix). Existing callers that assert only `status` and `autofixed` are unaffected.
 
 Typed refusals (non-zero exit) carry `status`, `stale: true`, `safe_autofix`, `repair`, and `extra_unmanaged`, plus a status-specific payload: `malformed: [{role, file, reasons}]` (`profiles_malformed`), `stale_files: [...]` (`profiles_stale`), `stale_roles_in_block: [...]` (`managed_block_stale`), `missing_roles: [...]` (`profiles_missing`/`config_stale`), or `conflicting_roles_outside_markers: [...]` (`autofix_unsafe`).
 
@@ -1207,7 +1211,11 @@ Typed refusals (non-zero exit) carry `status`, `stale: true`, `safe_autofix`, `r
 
 ### Script: `install-codex-agent-profiles.js`
 
-Installs the Codex-native role profiles into a project's `.codex/`. Ships in the **3 plugin trees only** (codex/gitlab/gitea), byte-identical (enforced by `validate-script-sync.js`). Run by the Codex `kaola-workflow-init` skill (NOT by `install.sh`). Default-on validate → install → prune → manifest → post-verify (no install flags):
+Installs the Codex-native role profiles. Ships in the **3 plugin trees only** (codex/gitlab/gitea), byte-identical (enforced by `validate-script-sync.js`). Run by the Codex `kaola-workflow-init` skill (NOT by `install.sh`).
+
+**`--global` flag (#571):** sets `projectRoot = os.homedir()` regardless of `cwd` or argument order (position-robust, like `--with-fast`/`--with-full`). Installs profiles into `~/.codex/agents/kaola-workflow/`, writes the managed block into `~/.codex/config.toml`, and refreshes global hooks — one install, all repos. The preflight gate accepts the global scope. The positional `projectRoot` form (`"$PWD"` / `"$HOME"`) remains a supported project-local override. `--global` composes with `--with-fast`/`--with-full` (independent flags). Use `--global` for the documented default install and upgrade flow.
+
+Default-on validate → install → prune → manifest → post-verify (no install flags):
 
 1. **Source schema wall** — `validateSourceProfiles(pluginRoot)`: every `config_file` resolves, every `agents/*.toml` is referenced by exactly one `[agents.*]` entry, and every profile passes `validateProfileText`. On failure, prints `profile_schema_error: ...` to stderr and exits 1 **before any write**.
 2. **Manifest guard** — if the target manifest declares a `schema_version` newer than supported, prints `manifest_schema_unsupported: ...` and exits 1 (never prunes against a future manifest).
@@ -1319,8 +1327,9 @@ When `workflow-tasks.json` is absent, section 6 reads `task mirror: not generate
 `install-codex-agent-profiles.js` (invoked by the Codex `kaola-workflow-init` skill)
 writes the global `~/.codex/hooks.json` containing the three managed
 Kaola-Workflow hook entries. Agent profiles and the managed `[agents.*]` config block
-remain project-local under `<project>/.codex/`; hook entries and hook scripts are
-machine-global. The Codex plugin manifest (`plugin.json`) has no `hooks` key;
+install **globally** into `~/.codex` by default (#571 — one install, all repos); hook
+entries and hook scripts are also machine-global. Project-local is a supported override:
+pass the repo path positionally to the installer. The Codex plugin manifest (`plugin.json`) has no `hooks` key;
 `~/.codex/hooks.json` is the sole wiring point for Codex lifecycle hooks.
 
 ### Managed-entry identification
