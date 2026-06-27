@@ -262,6 +262,24 @@ function transformCommandBody(body) {
       while (i < lines.length && !/^##\s/.test(lines[i])) i++;
       continue;
     }
+    // opencode strip (workflow-init Codex-note cleanup): the canonical
+    // "> **Codex hooks note:** …" blockquote is Codex-specific install guidance — it points at
+    // `install-codex-agent-profiles.js` (a Codex-only script with no opencode meaning) and rode
+    // along when workflow-init was regenerated from the canonical Claude command. opencode
+    // delivers agents/hooks via `install-opencode.sh`, so the note is dead prose on this surface.
+    // Detect the blockquote opener by its stable "**Codex hooks note:**" marker (only
+    // workflow-init carries it → no over-strip risk), skip the contiguous `>` body, and consume
+    // the trailing blank(s) so the seam to the next paragraph collapses to a single blank
+    // (mirrors the Path Intent strip above). opencode-only: this runs inside renderCommand and
+    // never touches canonical commands/*.md (additive, D-530-02).
+    if (/^>\s*\*\*Codex hooks note:/.test(line)) {
+      while (out.length && out[out.length - 1].trim() === '') out.pop();
+      if (out.length) out.push('');
+      i++;
+      while (i < lines.length && /^>/.test(lines[i])) i++;
+      while (i < lines.length && lines[i].trim() === '') i++;
+      continue;
+    }
     out.push(line);
     i++;
   }
