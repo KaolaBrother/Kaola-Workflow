@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- **`/workflow-init`: three new Non-Negotiable Rules seeded into consumer `CLAUDE.md`.** The init bootstrapper now writes three additional binding rules alongside the existing five: (1) *Verify facts, don't fabricate* — do not guess API/library behavior, interfaces, or signatures; confirm against documentation, source, or a run, and never claim to understand code, errors, or requirements that have not been verified; (2) *Reuse before adding* — search for an existing equivalent before writing a new interface; (3) *Escalate irreversible changes* — do not unilaterally make hard-to-reverse changes or alter a user-owned contract (public API, schema/data migration, dependency or build-tooling swap, deletion of working capability) without stating the decision + evidence and getting confirmation. Rule 3 deliberately gates on the **reversibility / contract-ownership** axis — consistent with "escalate values, not facts" and the consent-halt valve (#44/#287) — rather than the ambiguous "architectural change" label, so it tightens accuracy without eroding agent autonomy or the planner-owns-claim boundary. Cross-edition (#307): propagated to all six init surfaces (3 Claude commands + 3 Codex SKILL packs) and the opencode edition regenerated from canonical; all four `npm run test:kaola-workflow:{claude,codex,gitlab,gitea}` chains green; opencode suite green.
+
 ## [6.11.1] - 2026-06-26
 
 ### Fixed
