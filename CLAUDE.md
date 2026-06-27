@@ -1,14 +1,14 @@
 # Kaola-Workflow — Claude Code Instructions
 
 ## Project Overview
-Kaola-Workflow is a 6-phase workflow system built on top of GitHub issues and Claude Code. The core scripts live in `scripts/`. Workflow state is tracked per-project under `kaola-workflow/{project}/`.
+Kaola-Workflow is an adaptive, GitHub-issue-driven workflow system for Claude Code: the `planner` authors and freezes a task-shaped DAG of role nodes in `workflow-plan.md`, then the executor runs it node-by-node via the running-set scheduler (the `fast` and `full` six-phase paths are install-time opt-ins). The core scripts live in `scripts/`. Workflow state is tracked per-project under `kaola-workflow/{project}/`.
 
 ## Durable State Contract
 
 - `kaola-workflow/ROADMAP.md` is generated from `kaola-workflow/.roadmap/issue-*.md` (plus an optional project-local `.roadmap/_rules.md` appended under `### Project rules`); do not hand-edit the mirror.
 - Do not purge `kaola-workflow/.roadmap/`; closure removes only the closed issue source file.
 - Active work lives in `kaola-workflow/{project}/` until archived or safely discarded.
-- Active artifacts include `workflow-state.md`, phase files, optional `fast-summary.md`, and `.cache/` evidence.
+- Active artifacts include `workflow-state.md`, the frozen `workflow-plan.md` (its `## Node Ledger`), and per-node `.cache/{node-id}.md` evidence; the `fast` path's optional `fast-summary.md` is an install-time opt-in.
 
 ## Workflow Design Principles
 
