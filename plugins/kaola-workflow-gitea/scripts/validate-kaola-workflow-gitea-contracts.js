@@ -545,8 +545,10 @@ assertConcept(giteaInitSkill, 'Gitea init durable state contract', [
   'do not purge',
   'kaola-workflow/{project}/',
   'workflow-state.md',
-  'fast-summary.md',
-  '.cache/'
+  // #572: the injected block now re-grounds durable state on the adaptive plan, not phase files.
+  'workflow-plan.md',
+  '## Node Ledger',
+  '.cache/{node-id}.md'
 ]);
 assertConcept(`${pluginRoot}/scripts/kaola-gitea-workflow-roadmap.js`, 'Gitea missing roadmap source safeguard', [
   'guardAgainstMissingRoadmapSource',

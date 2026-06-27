@@ -158,6 +158,39 @@ for (const file of canonCommands) {
 }
 
 // ---------------------------------------------------------------------------
+// A24 (#572): the generated opencode workflow-init carries the re-grounded adaptive
+// ## Kaola-Workflow template — phase-free (no retired numbered-phase model, no
+// "phase file/artifact" framing) AND in parity with the canonical GitHub template
+// MODULO the runtime-noun transform (Claude Code agents → subagents). .opencode/ is
+// fully gitignored, so the four-chain contract validators must not read it — this is
+// the opencode-edition home for the #572 ban + parity (regenerate via --write).
+// ---------------------------------------------------------------------------
+{
+  const TPL_START = '<!-- KW-CLAUDE-TEMPLATE-START -->';
+  const TPL_END = '<!-- KW-CLAUDE-TEMPLATE-END -->';
+  const extractTemplate = (text, label) => {
+    const s = text.indexOf(TPL_START);
+    const e = text.indexOf(TPL_END);
+    assert(s !== -1 && e !== -1 && e > s,
+      'A24[' + label + ']: KW-CLAUDE-TEMPLATE-START/END markers present');
+    return (s !== -1 && e > s) ? text.slice(s + TPL_START.length, e).trim() : '';
+  };
+  const ocTpl = extractTemplate(read('.opencode/command/workflow-init.md'), 'opencode');
+  // Phase-ban (mirror validate-kaola-workflow-contracts.js #572 AC4).
+  assert(!/Phase\s+\d/.test(ocTpl),
+    'A24 (#572): opencode workflow-init template must not teach a numbered Phase <n> model (adaptive is the unconditional default)');
+  assert(!/phase file|phase artifact/i.test(ocTpl),
+    'A24 (#572): opencode workflow-init template must not use "phase file/artifact" durable-state framing');
+  // Parity modulo the runtime-noun transform: the opencode template equals the canonical
+  // GitHub template with "Claude Code agent(s)" rewritten to "subagent(s)" (the sole template-
+  // region rewrite transformCommandBody applies; see sync-opencode-edition.js).
+  const canonTpl = extractTemplate(read('commands/workflow-init.md'), 'canonical-github');
+  const canonTplRuntime = canonTpl.replace(/\bClaude Code agent(s?)\b/g, 'subagent$1');
+  assert(ocTpl === canonTplRuntime,
+    'A24 (#572): opencode workflow-init template is in parity with the canonical GitHub template modulo the runtime-noun transform (Claude Code agents → subagents)');
+}
+
+// ---------------------------------------------------------------------------
 // A7/A8: opencode.json — valid JSONC, schema-pinned, default_agent "build", and
 // byte-for-byte parity with the generator. The generator DEFAULTS to pinning
 // NOTHING, so on a fresh install BOTH tiers inherit the model the user is

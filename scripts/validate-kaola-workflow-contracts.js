@@ -372,8 +372,10 @@ assertConcept(`${pluginRoot}/skills/kaola-workflow-init/SKILL.md`, 'Codex init d
   'do not purge',
   'kaola-workflow/{project}/',
   'workflow-state.md',
-  'fast-summary.md',
-  '.cache/'
+  // #572: the injected block now re-grounds durable state on the adaptive plan, not phase files.
+  'workflow-plan.md',
+  '## Node Ledger',
+  '.cache/{node-id}.md'
 ]);
 assertConcept('docs/workflow-state-contract.md', 'durable sources and generated mirrors', [
   'durable sources',
@@ -486,6 +488,37 @@ const giteaCmdTemplate = extractClaudeTemplate('plugins/kaola-workflow-gitea/com
 const giteaSkillTemplate = extractClaudeTemplate('plugins/kaola-workflow-gitea/skills/kaola-workflow-init/SKILL.md');
 assert(giteaCmdTemplate === giteaSkillTemplate,
   'CLAUDE.md template must be byte-identical within Gitea forge pair');
+
+// #572 (AC4): the injected ## Kaola-Workflow template must be re-grounded on the adaptive
+// DAG-of-roles model — NO retired 6-phase-as-default vocabulary may survive in the consumer
+// block. #538 made adaptive the unconditional default, so a numbered `Phase <n>` token or the
+// "phase file/artifact" durable-state framing in the injected block teaches a retired model.
+// Ban both across every forge's extracted template (the consumer-facing region only — the
+// surrounding command/skill prose may still say "six-phase opt-in path" etc.).
+const PHASE_NUMBER_BAN = /Phase\s+\d/;                  // "Phase 1" … "Phase 4"
+const PHASE_FILE_BAN = /phase file|phase artifact/i;   // "phase files" / "current phase file"
+for (const file of initFiles) {
+  const tpl = extractClaudeTemplate(file);
+  assert(!PHASE_NUMBER_BAN.test(tpl),
+    file + ': injected ## Kaola-Workflow template must not teach a numbered Phase <n> model (#572 — adaptive is the unconditional default)');
+  assert(!PHASE_FILE_BAN.test(tpl),
+    file + ': injected ## Kaola-Workflow template must not use "phase file/artifact" durable-state framing (#572)');
+}
+
+// #572 (AC5): cross-forge content parity. The three forges' injected templates must be
+// byte-identical MODULO the single forge-noun line (GitHub/GitLab/Gitea issues are the roadmap
+// source of truth …). The within-forge-pair byte checks above already prove cmd==skill per
+// forge, so comparing the three cmd templates (normalizing the forge noun out) covers all six
+// surfaces transitively — the #309 "one semantic change, mirrored verbatim" invariant.
+function normalizeForgeNoun(tpl) {
+  return tpl.replace(/^- (?:GitHub|GitLab|Gitea) issues are the roadmap source of truth/m,
+    '- <FORGE> issues are the roadmap source of truth');
+}
+const githubTemplateNorm = normalizeForgeNoun(githubCmdTemplate);
+assert(normalizeForgeNoun(gitlabCmdTemplate) === githubTemplateNorm,
+  '#572: GitLab injected ## Kaola-Workflow template must match GitHub modulo the forge-noun line (#309)');
+assert(normalizeForgeNoun(giteaCmdTemplate) === githubTemplateNorm,
+  '#572: Gitea injected ## Kaola-Workflow template must match GitHub modulo the forge-noun line (#309)');
 
 // issue #227: adaptive-path contract (Codex skills + byte-synced plugin scripts).
 assert(exists(`${pluginRoot}/scripts/kaola-workflow-plan-validator.js`), 'codex adaptive plan validator missing');
