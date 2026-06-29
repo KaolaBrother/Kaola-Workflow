@@ -73,7 +73,7 @@ The deterministic bookkeeping — authoring `phase2-ideation.md` (the Approaches
 Evaluated, the **Selected Approach**, Out of Scope, and the Required Agent
 Compliance rows, using the Phase File template above) from the orchestrator's
 verbatim content, and the `workflow-state.md` checkpoint write — is owned by the
-full-path transaction script `kaola-gitea-workflow-full-advance.js` (ADR 0004), not
+full-path transaction script `kaola-gitea-workflow-full-advance.js`, not
 a subagent. The main session runs it directly, handing the decided content as a
 JSON packet on stdin; the script renders the phase file (with a RESOLVED
 `## Required Agent Compliance` table) and advances the state pointer in crash-safe

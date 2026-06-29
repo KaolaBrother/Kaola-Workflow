@@ -237,3 +237,54 @@ Decision record: `docs/decisions/D-435-01.md`.
 - **`--push`** — the only remote-mutation path. Emits forge-neutral operator guidance for pushing the local tag and running the forge `release-create --latest` command. No forge CLI binary (`gh`, `glab`, `tea`) is invoked by the script itself; the actual publish step remains a manual or forge-specific invocation.
 
 **Registration surface:** `kaola-workflow-release.js` is registered in `COMMON_SCRIPTS` (so the canonical-to-codex byte-mirror is enforced by `validate-script-sync.js`) and in the rename-normalized forge-ports family, but **NOT** in the install-manifest `SUPPORT_SCRIPT_NAMES` block. It is a maintainer/dev tool on the same operational profile as `release-surface-drift.js` (D-442-01 §6). If a chain goes red demanding manifest registration, stop and surface it rather than silently widening SUPPORT_SCRIPTS.
+
+## Provenance stays out of agent-facing prompts (#575)
+
+Design-rationale provenance — issue refs, decision IDs, invariant tags, ADR citations — must not appear in the agent-facing prompt surfaces. It is dispatch-time noise: it bloats context, ages without visible decay, and conveys no actionable rule to the running agent.
+
+### What counts as a prompt surface
+
+The full set across all four editions (claude / codex / gitlab / gitea) plus the opencode runtime edition:
+
+- **Agent definitions** — `agents/*.md` (root), `plugins/*/agents/*.toml` (all three plugin editions), opencode `agents/*.md` (generated from canonical)
+- **Commands** — `commands/*.md` (github-claude), `plugins/kaola-workflow-gitlab/commands/`, `plugins/kaola-workflow-gitea/commands/`, Codex `skills/kaola-workflow-*/SKILL.md` (including the two forge-codex SKILL packs), opencode generated command mirrors
+- **Skills** — `plugins/*/skills/*/SKILL.md` across all three plugin editions
+
+The six routing surfaces from §Routing / adaptive prose (#400) are a subset of this set.
+
+### Banned token classes
+
+Remove any of the following when they appear in a prompt surface:
+
+| Class | Pattern examples |
+|---|---|
+| Issue refs | `#NNN` (e.g. `#472`, `(#307)`) |
+| Decision IDs | `D-NNN-NN` (e.g. `D-542-01`, `D-430-01`) |
+| Invariant tags | `[INV-NN]` (e.g. `[INV-01]`) |
+| ADR citations | `ADR-NNNN`, `ADR NNNN` (hyphen or space form, e.g. `ADR-0008`, `ADR 0004`) |
+| Defect/pattern clauses | Whole prose clauses whose only function is to record the history of a past defect or anti-pattern, with no operative rule content surviving removal |
+
+Parenthetical issue refs inside an otherwise-operative rule sentence are the most common case: `(#NNN)` can almost always be dropped with no loss of rule meaning.
+
+### Allowlist — these are NOT provenance
+
+The following forms are runtime identifiers or illustrative examples, not design-rationale provenance, and MAY appear in prompt surfaces:
+
+- **Runtime target-issue variables:** `KAOLA_TARGET_ISSUE=N`, `KAOLA_TARGET_ISSUES`, `"work on issue N"`, `"issue N"`, `Closes #<issue>` in commit-message instructions
+- **Illustrative user-command examples** that show what a user would type: e.g. `"work on #42"`, `"fix #100"` — these are instruction examples, not citations of the system's design history
+
+### Where provenance belongs
+
+| Surface | Purpose |
+|---|---|
+| `CHANGELOG.md` | User-visible record of what changed and why, including issue refs |
+| `docs/decisions/D-NNN-NN.md` | Full decision record: context, decision, consequences, alternatives |
+| Git commit messages | Traceability link from code change to issue/decision |
+| `docs/conventions.md` (this file) | Durable policy rules — may cite issues and decision records by number |
+| `CLAUDE.md` | Concise rule stubs — may reference this file by path |
+
+### Enforcement
+
+No contract currently machine-enforces the provenance ban on prompt regions. A durable lint guard — a carefully allowlisted regex scanning the prompt-surface file set — is a deferred follow-up (a future issue). Until then, provenance cleanup is a manual discipline enforced by code review and by this convention.
+
+See `docs/decisions/D-575-01.md` for the decision record and the #575 scope history (including the mid-run plan-repair that added coverage of the `ADR NNNN` space-form).

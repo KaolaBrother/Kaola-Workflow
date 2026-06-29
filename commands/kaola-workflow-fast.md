@@ -22,7 +22,7 @@ substitute. Stop if scope exceeds fast-path bounds.
 
 ## Boundary: main session decides, the script mutates
 
-This command follows the same boundary as the adaptive path (ADR 0004): the main
+This command follows the same boundary as the adaptive path: the main
 session (orchestrator) owns ALL judgment — fast eligibility, approach ambiguity,
 PROCEED vs ESCALATE, acceptance sufficiency, and the review verdict — and the
 deterministic mechanical transitions (cache/state/`fast-summary.md` writes) are

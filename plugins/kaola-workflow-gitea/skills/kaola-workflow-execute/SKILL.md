@@ -39,7 +39,7 @@ KAOLA_SCRIPTS="$(dirname "$(kaola_script kaola-gitea-workflow-phase4-advance.js)
 
 Authoring `kaola-workflow/{project}/phase4-progress.md` is mechanical bookkeeping
 owned by the full-path Phase 4 transaction script
-`kaola-gitea-workflow-phase4-advance.js` (ADR 0004), not a role agent: it stamps
+`kaola-gitea-workflow-phase4-advance.js`, not a role agent: it stamps
 the template from `phase3-plan.md` (one `## Tasks` row and one `## Required Agent
 Compliance` `tdd-guide executor task N` row per Phase 3 task, all status
 `pending`). The session owns no judgment here. Run it once, when the file is
@@ -150,7 +150,7 @@ Evidence / Status into a `## Failure Routing Ledger` row; and, only after the
 current session has judged validation PASSED, marking the task `complete`,
 recording Files Modified, flipping its compliance row to the delegation status the
 session recorded, and advancing `workflow-state.md` — is owned by the full-path
-Phase 4 transaction script `kaola-gitea-workflow-phase4-advance.js` (ADR 0004), not
+Phase 4 transaction script `kaola-gitea-workflow-phase4-advance.js`, not
 a role agent. The transaction runs the scripted state/progress writes and authors
 the durable bookkeeping but never dispatches `tdd-guide`/`build-error-resolver` or
 any role, never classifies a failure, never chooses a route, never judges whether

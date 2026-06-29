@@ -182,7 +182,7 @@ If ambiguous, stop and ask. Do not guess.
 ## Progress File Initialization (script-owned transaction)
 
 Authoring `phase4-progress.md` is mechanical bookkeeping owned by the full-path
-Phase 4 transaction script `kaola-gitea-workflow-phase4-advance.js` (ADR 0004), not
+Phase 4 transaction script `kaola-gitea-workflow-phase4-advance.js`, not
 a subagent: it stamps the template from `phase3-plan.md` (one `## Tasks` row and one
 `## Required Agent Compliance` `tdd-guide executor task N` row per Phase 3
 `### Task N:` block, all status `pending`; Build Status `clean`; empty Failure

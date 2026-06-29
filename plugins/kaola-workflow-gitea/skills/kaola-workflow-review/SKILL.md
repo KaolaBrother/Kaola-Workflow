@@ -53,7 +53,7 @@ resolved CRITICAL/HIGH/MEDIUM/LOW finding lists, and the
 `## Required Agent Compliance` rows), then advancing the `workflow-state.md`
 pointer to `next_skill: kaola-workflow-finalize {project}` (preserving the
 `## Sink` block) — is owned by the full-path transaction script
-`kaola-gitea-workflow-full-advance.js` (ADR 0004), not a subagent. The script
+`kaola-gitea-workflow-full-advance.js`, not a subagent. The script
 authors the durable bookkeeping and transcribes the verdict verbatim but never
 judges severity, never grades the review, never gates Finalization, never
 dispatches code-reviewer/security-reviewer/tdd-guide/build-error-resolver or any

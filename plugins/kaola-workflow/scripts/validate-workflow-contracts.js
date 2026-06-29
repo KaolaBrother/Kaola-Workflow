@@ -186,7 +186,7 @@ const adaptSurfaces486 = [
   'plugins/kaola-workflow-gitea/skills/kaola-workflow-adapt/SKILL.md',
 ];
 for (const file of adaptSurfaces486) {
-  assertIncludes(file, 'Question-shaped & bug-shaped issues (#486)');
+  assertIncludes(file, 'Question-shaped & bug-shaped issues');
   assertIncludes(file, 'root cause or symptom mask'); // the bug-flavor guardrail token
 }
 

@@ -253,7 +253,7 @@ the main session hands it, verbatim. It refuses a `review_status` that is not
 
 The mechanical bookkeeping — authoring `phase5-review.md` from the orchestrator's
 verbatim content and advancing the `workflow-state.md` pointer — is owned by the
-full-path transaction script `kaola-gitlab-workflow-full-advance.js` (ADR 0004), not a
+full-path transaction script `kaola-gitlab-workflow-full-advance.js`, not a
 subagent. The main session runs it directly, handing the decided Review Status and
 the resolved CRITICAL/HIGH/MEDIUM/LOW finding lists as a JSON packet on stdin; the
 script renders the phase file (with a RESOLVED `## Required Agent Compliance` table)

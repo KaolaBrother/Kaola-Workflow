@@ -12,14 +12,14 @@ to `full` when absent). If `workflow_path: fast`, the fast path replaces Phase
 1-5: require `fast-summary.md` with status `PASSED` (stop if it is missing or not
 `PASSED`), and read it as the Phase 1-5 substitute (`## Scope`, `## Plan`,
 `## Implementation Evidence`, `## Review`) wherever the steps below reference
-Phase 1/3/5 artifacts. If `workflow_path: adaptive` (issue #227), the adaptive path
+Phase 1/3/5 artifacts. If `workflow_path: adaptive`, the adaptive path
 replaces Phase 1-5: require a frozen `workflow-plan.md` (re-check `plan_hash`) whose
 `## Node Ledger` rows are all `complete` or `n/a`; on corruption or an incomplete
 ledger, stop with a **typed refusal** (`Adaptive plan is not complete or its plan_hash
 failed. Run /kaola-workflow-plan-run first.`). Read the plan + Node Ledger as the Phase
 1-5 substitute.
 
-The adaptive completion check is **script-enforced** (#231/#285), not prose: run all
+The adaptive completion check is **script-enforced**, not prose: run all
 four gates and capture each exit code DIRECTLY (never gate on a piped `| tail`, which
 reports the tail's exit and masks failure):
 
@@ -31,7 +31,7 @@ fi
 PLAN="kaola-workflow/${KAOLA_PROJECT}/workflow-plan.md"
 node "$validator_script" "$PLAN" --resume-check --json; RC=$?
 node "$validator_script" "$PLAN" --gate-verify   --json; GV=$?
-# #541: forward --base to the whole-plan --barrier-check ONLY, mirroring #539's
+# forward --base to the whole-plan --barrier-check ONLY, mirroring the
 # --finalize-check forwarding so the attribution sweep can scope to a project's OWN diff
 # on a SHARED multi-issue branch. Sourced from the KAOLA_FINALIZE_BASE env var, defaulting
 # to UNSET (→ the validator's `origin/main` default — byte-equivalent to today for
@@ -50,7 +50,7 @@ fi
 - `--resume-check` proves `plan_hash` integrity + structure + closed library.
 - `--gate-verify` proves every completed code/sensitive node is post-dominated by a
   **completed** reviewer in the `## Node Ledger` — closing the G1/H5 leak where a
-  required reviewer node is silently marked `n/a` at runtime. **G3 (#334): a
+  required reviewer node is silently marked `n/a` at runtime. **G3: a
   non-delegable `main-session-gate` must be complete — never `n/a` — and post-dominate
   completed code nodes.**
 - `--barrier-check` re-scans the files actually written (git diff vs the merge-base of
@@ -60,7 +60,7 @@ fi
   `adversarial-verifier`, and `main-session-gate` node's `.cache/{node-id}.md` and requires a machine-readable
   `verdict: pass` with `findings_blocking: 0`. Any nonzero exit **blocks the merge** —
   this proves every gate-role node recorded a passing verdict before the plan closes.
-  **Exception (#509):** an *investigation* `adversarial-verifier` that post-dominates
+  **Exception:** an *investigation* `adversarial-verifier` that post-dominates
   no code-producing or sensitive node is exempt from this check — its refutation is
   analytical output, not a finalize block (applies to both sequence and fanout
   majority-refute shapes). A *change-gate* `adversarial-verifier` (post-dominates a
@@ -71,7 +71,7 @@ the script-enforced barrier. Run /kaola-workflow-plan-run first.`
 
 ### Chain-Receipt Gate
 
-Finalization is **machine-gated** on a fresh, valid chain receipt (#432). Before
+Finalization is **machine-gated** on a fresh, valid chain receipt. Before
 proceeding past the prerequisite check, verify `.cache/chain-receipt.json` and
 stop with a typed refusal if any of the following are true (checked in
 precedence order):
@@ -83,7 +83,7 @@ precedence order):
   receipt is written and `headSha` matches HEAD. Do NOT delegate this to the contractor
   subagent — the contractor only verifies.
 - **`chains_stale`** — the receipt's `codeTreeHash` no longer matches the current
-  code-relevant tree (#547): code or a chain-asserted doc changed since the chains ran.
+  code-relevant tree: code or a chain-asserted doc changed since the chains ran.
   A docs-only / workflow-state commit does NOT trigger it; a legacy receipt without
   `codeTreeHash` falls back to the `headSha`-vs-HEAD pin.
   Remedy: the orchestrator (main session) must re-run `kaola-workflow-run-chains.js`
@@ -99,10 +99,9 @@ precedence order):
 These typed refusals are emitted by `cmdFinalize` / the plan-validator's
 finalize/verdict path and are classified structurally — do not match by string.
 
-**Consumer product repos (#475).** The Chain-Receipt Gate above is the **self-host (npm)** mode.
+**Consumer product repos.** The Chain-Receipt Gate above is the **self-host (npm)** mode.
 A consumer repo whose validation is not npm-based (no `test:kaola-workflow:*` scripts in
-`package.json`) does **NOT** run `kaola-workflow-run-chains.js` — the agent owns verification
-(#44). It records `.cache/final-validation.md` with a column-0 **`verdict: pass`**, and
+`package.json`) does **NOT** run `kaola-workflow-run-chains.js` — the agent owns verification. It records `.cache/final-validation.md` with a column-0 **`verdict: pass`**, and
 `--finalize-check` (consumer mode, auto-detected by the absent npm scripts) gates on that file:
 `final_validation_unverified` if it is absent, `final_validation_failed` if it lacks `verdict: pass`.
 The attribution sweep runs for **both** repo kinds. The v6.2.0 `kaola-workflow/chains.json` opt-in
@@ -110,7 +109,7 @@ is **retired** — there is no middle-ground; a consumer repo finalizes on the a
 
 ### Run-Gap Sweep Gate
 
-Finalization is **machine-gated** on a clean run-gap sweep (#435). Before
+Finalization is **machine-gated** on a clean run-gap sweep. Before
 proceeding past the prerequisite check, verify `.cache/run-gaps.json` and
 `finalization-summary.md`'s `## Run gaps` section and stop with a typed
 refusal if the following is true (checked after the Chain-Receipt Gate above):
@@ -174,9 +173,9 @@ choices, or ambiguity that blocks correctness.
 
 ## Required Steps
 
-1. Final validation: run the full relevant project commands once against the final candidate state. Save output to `.cache/final-validation.md`. **State the actual validation-reuse boundary, not a false absolute (#324 AC3):** when you cite a prior run instead of rerunning, record which node/state it covered and that later finalize-step edits (e.g. a `CHANGELOG.md`/docs touch in the finalize node) are outside it — do NOT write a terminal absolute like `No files changed after those runs` when the finalize node itself changes docs/changelog afterward. (At closure, `archiveProjectDir` also mechanically neutralizes that known false-absolute phrase in the archived `.cache/final-validation.md` as a backstop.)
+1. Final validation: run the full relevant project commands once against the final candidate state. Save output to `.cache/final-validation.md`. **State the actual validation-reuse boundary, not a false absolute:** when you cite a prior run instead of rerunning, record which node/state it covered and that later finalize-step edits (e.g. a `CHANGELOG.md`/docs touch in the finalize node) are outside it — do NOT write a terminal absolute like `No files changed after those runs` when the finalize node itself changes docs/changelog afterward. (At closure, `archiveProjectDir` also mechanically neutralizes that known false-absolute phrase in the archived `.cache/final-validation.md` as a backstop.)
 <!-- PIN: fast-compliance-backstop -->
-2. Acceptance check: verify Phase 1 success criteria, Phase 3 tasks, tests, review status, and absence of debug artifacts. On the fast path (`workflow_path: fast`), source these from `fast-summary.md` and verify fast-path review compliance: the `## Required Agent Compliance` `code-reviewer` row must record a real delegation status (`subagent-invoked`, `local-fallback-explicit`, or `local-fallback-tool-unavailable`) with a real evidence path or skip\_reason — not `pending`, `invoked` without evidence, or bare `N/A` without skip\_reason — whenever `## Scope` lists more than one changed file or any production-path file (outside `docs/`, `*.md`, `tests/`); `N/A` with a documented skip\_reason is allowed only for the trivial band (a single docs/comment/markdown edit). The `fast_compliance_unresolved` script refusal (#504) enforces this fail-closed at `summary-write` time; this step is a second-line gate.
+2. Acceptance check: verify Phase 1 success criteria, Phase 3 tasks, tests, review status, and absence of debug artifacts. On the fast path (`workflow_path: fast`), source these from `fast-summary.md` and verify fast-path review compliance: the `## Required Agent Compliance` `code-reviewer` row must record a real delegation status (`subagent-invoked`, `local-fallback-explicit`, or `local-fallback-tool-unavailable`) with a real evidence path or skip\_reason — not `pending`, `invoked` without evidence, or bare `N/A` without skip\_reason — whenever `## Scope` lists more than one changed file or any production-path file (outside `docs/`, `*.md`, `tests/`); `N/A` with a documented skip\_reason is allowed only for the trivial band (a single docs/comment/markdown edit). The `fast_compliance_unresolved` script refusal enforces this fail-closed at `summary-write` time; this step is a second-line gate.
    ```bash
    ACTIVE_WORKTREE_PATH="$(node -e "try{const fs=require('fs');const s=fs.readFileSync('kaola-workflow/' + process.env.KAOLA_PROJECT + '/workflow-state.md','utf8');const m=s.match(/^worktree_path:\\s*(.+)$/m);process.stdout.write(m?m[1].trim():'');}catch(e){}" 2>/dev/null)" || true
    [ -z "$ACTIVE_WORKTREE_PATH" ] && ACTIVE_WORKTREE_PATH="$(pwd)"
@@ -188,7 +187,7 @@ choices, or ambiguity that blocks correctness.
 6. Refresh `kaola-workflow/ROADMAP.md`.
 7. Archive is performed atomically by `cmdFinalize` in step 8b below. Do not perform a manual copy or git mv here.
 
-   **Keep-open partial-close terminal (#333/#336).** If the Closure Decision Gate keeps the issue
+   **Keep-open partial-close terminal.** If the Closure Decision Gate keeps the issue
    OPEN (partial implementation, residual follow-ups), the durable signal is one optional line in
    the `## Sink` block: `issue_action: comment_keep_open` (default when absent: close), written by
    the main session at the gate with user approval. Still archive through the SAME `finalize`
@@ -223,7 +222,7 @@ choices, or ambiguity that blocks correctness.
 
    If the check fails, do not stage; split the commit or coordinate manually.
 
-   **Before delegating to the contractor**: gate on repo kind (#475):
+   **Before delegating to the contractor**: gate on repo kind:
 
    - **Self-host (npm)** — the repo's `package.json` declares the `test:kaola-workflow:*`
      scripts: run `kaola-workflow-run-chains.js` (main session, resolved the same way as
@@ -235,13 +234,13 @@ choices, or ambiguity that blocks correctness.
      invoke `kaola-workflow-run-chains.js` (it would only return `chains_config_missing`). The
      gate is the agent's own `.cache/final-validation.md` with a column-0 `verdict: pass`,
      produced by running the plan's `## Meta` `validation_command`; `--finalize-check`
-     auto-detects consumer mode (absence of the npm scripts) and gates on that file (#475).
+     auto-detects consumer mode (absence of the npm scripts) and gates on that file.
 
    The mechanical finalization below — the artifact mirror, the `cmdFinalize` archive + status close (with `--keep-worktree`, merge path only), roadmap refresh, and the `chore: finalize ${KAOLA_PROJECT}` commit gate — is deterministic bookkeeping. The `contractor` Codex agent role is the SOLE HOME of this procedure and the session MUST delegate it; the contractor runs the scripts and authors the durable bookkeeping but never dispatches a role, judges, or asks the user. Only if the `contractor` subagent tooling is genuinely unavailable may the session run it inline, and that fallback MUST be logged as `local-fallback-tool-unavailable` in the `## Required Agent Compliance` ledger. The current session keeps the sink dispatch and issue-close decision. Because a subagent runs in its own shell, capture the sink metadata (`SINK_BRANCH`, `SINK_KIND`, `SINK_ISSUE_FLAG`, `ACTIVE_WORKTREE_PATH`) in THIS session before delegating — they are reused at the sink step and do not cross the delegation boundary.
 
-   Attestation boundary (#338): the contractor's Step 8b passes `--attest-contractor-spawn` to `cmdFinalize`, so a genuinely delegated run back-fills its own dispatch marker and the closure receipt reads `finalize_contractor_attested: attested` even where the SubagentStart hook cannot fire (a contractor dispatched into a linked worktree, or a hookless harness) — the main session must never pass that flag on an inline run. The adaptive plan's `finalize (<node>)` Required Agent Compliance row is recorded `main-session-direct` (its in-plan sink bookkeeping is main-session-direct by the plan-run contract); that row neither requires nor replaces the contractor's delegation of mechanical finalization here. When the session legitimately runs the mechanical finalization inline (tooling unavailable), it records `local-fallback-tool-unavailable` with evidence and does NOT pass `--attest-contractor-spawn`; the resulting `finalize_contractor_attested: missing` plus the ATTESTATION WARNING is the truthful, expected, non-blocking outcome.
+   Attestation boundary: the contractor's Step 8b passes `--attest-contractor-spawn` to `cmdFinalize`, so a genuinely delegated run back-fills its own dispatch marker and the closure receipt reads `finalize_contractor_attested: attested` even where the SubagentStart hook cannot fire (a contractor dispatched into a linked worktree, or a hookless harness) — the main session must never pass that flag on an inline run. The adaptive plan's `finalize (<node>)` Required Agent Compliance row is recorded `main-session-direct` (its in-plan sink bookkeeping is main-session-direct by the plan-run contract); that row neither requires nor replaces the contractor's delegation of mechanical finalization here. When the session legitimately runs the mechanical finalization inline (tooling unavailable), it records `local-fallback-tool-unavailable` with evidence and does NOT pass `--attest-contractor-spawn`; the resulting `finalize_contractor_attested: missing` plus the ATTESTATION WARNING is the truthful, expected, non-blocking outcome.
 
-   **Finalization recovery contract (tribal knowledge, #399).** Three recovery rules are binding,
+   **Finalization recovery contract (tribal knowledge).** Three recovery rules are binding,
    not optional lore: (1) **sync order is worktree→main BEFORE the mirror** — the worktree holds the
    *complete* ledger and the main copy is stale, so sync worktree→main first; the mirror only pushes
    Finalization artifacts INTO the worktree and must never overwrite a complete worktree ledger with
@@ -262,7 +261,7 @@ choices, or ambiguity that blocks correctness.
    _WT="$(node -e "try{const fs=require('fs');const s=fs.readFileSync('kaola-workflow/' + process.env.KAOLA_PROJECT + '/workflow-state.md','utf8');const m=s.match(/^worktree_path:\\s*(.+)$/m);process.stdout.write(m?m[1].trim():'');}catch(e){}" 2>/dev/null)" || true
    [ -n "$_WT" ] && [ -d "$_WT" ] && ACTIVE_WORKTREE_PATH="$_WT"
    if [ "$ACTIVE_WORKTREE_PATH" != "$(pwd)" ]; then
-     # #399: ledger-regression guard. Refuse to copy a STALER main plan over a MORE-COMPLETE worktree
+     # ledger-regression guard. Refuse to copy a STALER main plan over a MORE-COMPLETE worktree
      # plan (which would reset a finished run's ledger complete->pending). FAIL-OPEN on the first sync.
      ledger_compare_script="plugins/kaola-workflow/scripts/kaola-workflow-ledger-compare.js"
      if [ ! -f "$ledger_compare_script" ]; then
@@ -307,11 +306,11 @@ choices, or ambiguity that blocks correctness.
    SINK_KIND="${SINK_KIND:-merge}"
    SINK_ISSUE_FLAG=""
    [ -n "$SINK_ISSUE" ] && [ "$SINK_ISSUE" != "unset" ] && SINK_ISSUE_FLAG="--issue $SINK_ISSUE"
-   SINK_ISSUE_NUMBERS=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | grep '^issue_numbers:' | awk '{print $2}')  # #369 bundle members
+   SINK_ISSUE_NUMBERS=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | grep '^issue_numbers:' | awk '{print $2}')  # bundle members
    [ -z "$SINK_ISSUE_NUMBERS" ] && SINK_ISSUE_NUMBERS=$(grep '^issue_numbers:' "$SINK_STATE_FILE" | awk '{print $2}')
    SINK_ISSUE_NUMBERS_FLAG=""
    [ -n "$SINK_ISSUE_NUMBERS" ] && SINK_ISSUE_NUMBERS_FLAG="--issue-numbers $SINK_ISSUE_NUMBERS"
-   # #336: keep-open partial-close terminal — issue_action defaults to close when absent.
+   # keep-open partial-close terminal — issue_action defaults to close when absent.
    SINK_ISSUE_ACTION=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | grep '^issue_action:' | awk '{print $2}')
    SINK_ISSUE_ACTION="${SINK_ISSUE_ACTION:-close}"
    SINK_KEEP_OPEN_FLAG=""
@@ -363,7 +362,7 @@ choices, or ambiguity that blocks correctness.
    : "${SINK_KIND:=merge}"
    : "${SINK_ISSUE_FLAG:=}"
    : "${SINK_KEEP_OPEN_FLAG:=}"
-   # #336: keep-open is merge-sink-only — refuse a PR sink before dispatch.
+   # keep-open is merge-sink-only — refuse a PR sink before dispatch.
    if [ "$SINK_KIND" != "merge" ] && [ -n "$SINK_KEEP_OPEN_FLAG" ]; then
      echo "BLOCKED: issue_action: comment_keep_open is only supported on the merge sink. PR/MR sinks close via the merged PR; switch sink: merge or remove issue_action." >&2
      exit 1
@@ -376,7 +375,7 @@ choices, or ambiguity that blocks correctness.
        node "$scripts_dir/kaola-workflow-sink-merge.js" --branch "$SINK_BRANCH" $SINK_ISSUE_FLAG $SINK_ISSUE_NUMBERS_FLAG $SINK_KEEP_OPEN_FLAG --project "$KAOLA_PROJECT"
        _SINK_MERGE_EXIT=$?
        if [ "$_SINK_MERGE_EXIT" -eq 3 ]; then
-         # #336: keep-open is merge-sink-only — never auto-pivot to a PR sink (its Closes #N body
+         # keep-open is merge-sink-only — never auto-pivot to a PR sink (its Closes #N body
          # would close the kept-open issue; watch-pr would delete the preserved roadmap source).
          if [ -n "$SINK_KEEP_OPEN_FLAG" ]; then
            echo "BLOCKED: sink-merge exited 3 (merge-impossible) on a keep-open run. Keep-open is merge-sink-only: the PR fallback body closes the issue on merge and watch-pr would delete the preserved roadmap source. Remediate the merge blocker (see .cache/sink-fallback.json) and re-run sink-merge; do not pivot to a PR sink." >&2
@@ -392,7 +391,7 @@ choices, or ambiguity that blocks correctness.
    esac
    ```
 
-   ### Script-owned worktree sink (`--sink` mode, #429)
+   ### Script-owned worktree sink (`--sink` mode)
 
    When the branch carries a worktree run (recorded `run_posture: worktree`), use the `--sink` flag to
    replace the manual 8-step choreography:
@@ -421,7 +420,7 @@ choices, or ambiguity that blocks correctness.
    Re-running the command after a crash resumes from the last incomplete step — no double-apply.
 
 <!-- PIN: closure-audit -->
-### Sink result handling and closure-audit reconciliation sweep (#496/#497)
+### Sink result handling and closure-audit reconciliation sweep
 
 **Transactional catch (n1's `sink_incomplete` emit):** when `--sink --json` returns
 `result:"refuse"` with `reason:"sink_incomplete"`, the sink did NOT complete — do NOT treat it as

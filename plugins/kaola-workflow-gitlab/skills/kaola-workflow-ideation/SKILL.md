@@ -49,7 +49,7 @@ The deterministic bookkeeping below — authoring `phase2-ideation.md` from the
 template and advancing the `workflow-state.md` pointer (`next_skill:
 kaola-workflow-plan {project}`, preserving any existing `## Sink` block
 byte-for-byte) — is owned by the full-path transaction script
-`kaola-gitlab-workflow-full-advance.js` (ADR 0004), not a subagent. The current
+`kaola-gitlab-workflow-full-advance.js`, not a subagent. The current
 session keeps the `planner` dispatch and the **Selected Approach** verdict, then
 runs the script directly, handing the decided content as a JSON packet on stdin;
 the script renders the phase file (with a RESOLVED `## Required Agent Compliance`

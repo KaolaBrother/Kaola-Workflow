@@ -11,7 +11,7 @@ for Codex runtime. Reads and updates `kaola-workflow/{project}/workflow-state.md
 throughout.
 
 <!-- PIN: adaptive-default-contract -->
-**Adaptive-default contract (#515, #538).** Adaptive is the unconditional default and path selection is a non-decision — do NOT orient, read sibling path skills, deliberate, advisor-consult, or self-route here on issue size. `fast` is an explicit user escape only (a "fast path"/"fast mode" verbal, or `KAOLA_PATH=fast`/`--workflow-path fast`), and reaching it requires the fast path to be installed (`--with-fast`). When `fast` is named but not installed, the claim front door surfaces the typed `path_not_installed` refusal — it does NOT silently run adaptive. There is no automatic fallback into or out of this path (#538).
+**Adaptive-default contract.** Adaptive is the unconditional default and path selection is a non-decision — do NOT orient, read sibling path skills, deliberate, advisor-consult, or self-route here on issue size. `fast` is an explicit user escape only (a "fast path"/"fast mode" verbal, or `KAOLA_PATH=fast`/`--workflow-path fast`), and reaching it requires the fast path to be installed (`--with-fast`). When `fast` is named but not installed, the claim front door surfaces the typed `path_not_installed` refusal — it does NOT silently run adaptive. There is no automatic fallback into or out of this path.
 
 ## Goal Contract
 
@@ -23,7 +23,7 @@ Fast applies only to mechanical, single-area changes of ≤ 5 files with exactly
 
 ## Boundary: the session decides, the script mutates
 
-This skill follows the same boundary as the adaptive path (ADR 0004): the current
+This skill follows the same boundary as the adaptive path: the current
 session owns ALL judgment — fast eligibility, approach ambiguity, PROCEED vs
 ESCALATE, acceptance sufficiency, and the review verdict — and the deterministic
 mechanical transitions (cache/state/`fast-summary.md` writes) are owned by the
@@ -243,7 +243,7 @@ re-grade it), and routes to `kaola-workflow-finalize {project}`. Pass
 terminal escalation at Review.
 
 <!-- PIN: fast-compliance-backstop -->
-**Fast-lane compliance backstop (#504):** `summary-write --verdict PASSED` runs
+**Fast-lane compliance backstop:** `summary-write --verdict PASSED` runs
 `unresolvedCompliance` on the would-be summary before writing anything. If any
 `## Required Agent Compliance` row is unresolved (status `pending`/`invoked`
 without evidence, or `N/A` without evidence or skip\_reason), the script refuses

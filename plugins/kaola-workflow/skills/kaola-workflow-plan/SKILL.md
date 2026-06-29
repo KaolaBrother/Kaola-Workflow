@@ -70,7 +70,7 @@ blueprint and task write sets (using the Task Template above) plus the
 `## Required Agent Compliance` table, and the `workflow-state.md` checkpoint write
 (`next_skill: kaola-workflow-execute {project}`, preserving any existing `## Sink`
 block byte-for-byte) — is owned by the full-path transaction script
-`kaola-workflow-full-advance.js` (ADR 0004), not a subagent. The script runs the
+`kaola-workflow-full-advance.js`, not a subagent. The script runs the
 durable bookkeeping but never invokes `code-architect`, never designs or re-plans,
 and never judges, asks the user, or changes the selected Phase 2 approach. The
 current session keeps the `code-architect` dispatch, the revision decision, and the

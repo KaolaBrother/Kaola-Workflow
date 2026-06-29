@@ -34,7 +34,7 @@ each task, transcribing a Failure Routing Ledger row, and on a passed task marki
 it `complete`, recording Files Modified / Build Status / Last Updated and advancing
 the pointer to the next task or `next_skill: kaola-workflow-review {project}`
 (preserving any `## Sink` block byte-for-byte) — is owned by the full-path Phase 4
-transaction script `kaola-gitlab-workflow-phase4-advance.js` (ADR 0004), not a
+transaction script `kaola-gitlab-workflow-phase4-advance.js`, not a
 subagent. The script captures real exit codes, never gates on a piped `| tail`,
 and copies the classification, route, and validation verdict exactly as the session
 hands them — it never dispatches `tdd-guide`, `build-error-resolver`, or any role,

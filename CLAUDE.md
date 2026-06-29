@@ -106,6 +106,7 @@ npm run test:kaola-workflow:claude && npm run test:kaola-workflow:codex && \
 - Verify facts, don't fabricate: do not guess API/library behavior, interfaces, or signatures — confirm them against documentation, source, or a run before relying on them. Do not claim to understand code, errors, or requirements you have not verified; name what you do not know and find out.
 - Reuse before adding: before writing a new interface, search for an existing equivalent and extend it rather than duplicate functionality.
 - Escalate irreversible changes: do not unilaterally make hard-to-reverse changes or alter a user-owned contract (public API, schema or data migration, dependency or build-tooling swap, deletion of working capability); state the decision and its evidence, then get confirmation before proceeding.
+- **Keep provenance out of agent-facing prompts.** Agent definitions, commands, and skills carry the *rule*, never its origin — no issue refs (`#NNN`), decision IDs (`D-NNN-NN`), invariant tags (`[INV-NN]`), or ADR citations in those surfaces (dispatch-time noise). Provenance belongs in `CHANGELOG.md`, `docs/decisions/`, and commit messages. Runtime target-issue variables (`KAOLA_TARGET_ISSUE=N`, `"issue N"`) are not provenance. See `docs/conventions.md`.
 
 ## Validation Policy
 

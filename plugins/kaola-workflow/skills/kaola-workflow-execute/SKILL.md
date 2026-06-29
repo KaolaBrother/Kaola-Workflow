@@ -33,7 +33,7 @@ per-task `workflow-state.md` pointer moves (preserving any existing `## Sink`
 block byte-for-byte), the Failure Routing Ledger row transcriptions, and the
 task-completion rows that mark a task complete and advance `workflow-state.md`
 to `next_skill: kaola-workflow-review {project}` — is owned by the full-path
-Phase 4 transaction script `kaola-workflow-phase4-advance.js` (ADR 0004), not a
+Phase 4 transaction script `kaola-workflow-phase4-advance.js`, not a
 subagent. The script writes the durable bookkeeping files but copies the
 classification, route, and validation verdict exactly as the session hands them
 — it never classifies a failure, chooses a route, judges that validation

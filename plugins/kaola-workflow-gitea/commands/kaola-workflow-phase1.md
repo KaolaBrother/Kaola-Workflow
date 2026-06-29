@@ -9,7 +9,7 @@ Phase 1 discovers facts only. It does not choose a solution, design an
 architecture, or write implementation code.
 
 <!-- PIN: adaptive-default-contract -->
-**Adaptive-default contract (#515/#538).** Adaptive is the **unconditional default and path selection is a non-decision** — do NOT orient, read sibling path skills, deliberate, advisor-consult, or self-route here on issue size. `fast`/`full` are **install-time opt-ins** (`--with-fast` / `--with-full`); once installed they fire only on an explicit user escape (a "fast path" / "full path" verbal, or `KAOLA_PATH` / `--workflow-path`). Naming a path that is not installed is refused at the claim front door (`path_not_installed`) — never silently substituted with adaptive. There is no on/off switch and no automatic fallback between paths.
+**Adaptive-default contract.** Adaptive is the **unconditional default and path selection is a non-decision** — do NOT orient, read sibling path skills, deliberate, advisor-consult, or self-route here on issue size. `fast`/`full` are **install-time opt-ins** (`--with-fast` / `--with-full`); once installed they fire only on an explicit user escape (a "fast path" / "full path" verbal, or `KAOLA_PATH` / `--workflow-path`). Naming a path that is not installed is refused at the claim front door (`path_not_installed`) — never silently substituted with adaptive. There is no on/off switch and no automatic fallback between paths.
 
 ## Hard Gates
 
@@ -231,7 +231,7 @@ RESEARCH_ISSUE=$(grep '^issue_number:' "kaola-workflow/{project-name}/workflow-s
 `phase1-research.md` is the orchestrator's research synthesis — already written on
 disk by Step 5 (this script never authors or edits it). The mechanical bookkeeping
 — the `workflow-state.md` checkpoint — is owned by the full-path transaction script
-`kaola-gitea-workflow-full-advance.js` (ADR 0004), not a subagent. The main session
+`kaola-gitea-workflow-full-advance.js`, not a subagent. The main session
 runs it directly; it refuses if `phase1-research.md` is absent (typed refusal, zero
 mutation) and is idempotent on resume.
 

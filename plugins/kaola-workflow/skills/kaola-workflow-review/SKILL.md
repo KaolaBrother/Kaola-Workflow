@@ -55,7 +55,7 @@ CRITICAL/HIGH/MEDIUM/LOW finding lists, the `## Required Agent Compliance` rows,
 fixes-applied, and validation evidence) and advancing the `workflow-state.md`
 pointer to `next_skill: kaola-workflow-finalize {project}` (preserving any
 existing `## Sink` block byte-for-byte) — is owned by the full-path transaction
-script `kaola-workflow-full-advance.js` (ADR 0004), not a subagent. The session
+script `kaola-workflow-full-advance.js`, not a subagent. The session
 runs it directly, handing the decided Review Status and the resolved
 CRITICAL/HIGH/MEDIUM/LOW finding lists as a JSON packet on stdin; the script
 writes the durable bookkeeping files but copies the verdict and finding lists

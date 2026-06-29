@@ -8,7 +8,7 @@ description: Use when beginning Phase 1 of Kaola-Workflow for Codex, also called
 Phase 1 discovers facts only. Do not choose a solution or edit implementation files.
 
 <!-- PIN: adaptive-default-contract -->
-**Adaptive-default contract (#515/#538).** Adaptive is the **unconditional default and path selection is a non-decision** — do NOT orient, read sibling path skills, deliberate, advisor-consult, or self-route here on issue size. `fast`/`full` are **install-time opt-ins** (`--with-fast` / `--with-full`); once installed they fire only on an explicit user escape (a "fast path" / "full path" verbal, or `KAOLA_PATH` / `--workflow-path`). Naming a path that is not installed is refused at the claim front door (`path_not_installed`) — never silently substituted with adaptive. There is no on/off switch and no automatic fallback between paths.
+**Adaptive-default contract.** Adaptive is the **unconditional default and path selection is a non-decision** — do NOT orient, read sibling path skills, deliberate, advisor-consult, or self-route here on issue size. `fast`/`full` are **install-time opt-ins** (`--with-fast` / `--with-full`); once installed they fire only on an explicit user escape (a "fast path" / "full path" verbal, or `KAOLA_PATH` / `--workflow-path`). Naming a path that is not installed is refused at the claim front door (`path_not_installed`) — never silently substituted with adaptive. There is no on/off switch and no automatic fallback between paths.
 
 ## Goal Contract
 
@@ -83,7 +83,7 @@ X/10
 `phase1-research.md` is the orchestrator's research synthesis — already written on
 disk by step 7 (this script never authors or edits it). The deterministic
 `workflow-state.md` checkpoint write is owned by the full-path transaction script
-`kaola-gitlab-workflow-full-advance.js` (ADR 0004), not a subagent. The main session
+`kaola-gitlab-workflow-full-advance.js`, not a subagent. The main session
 runs it directly; it refuses if `phase1-research.md` is absent (typed refusal, zero
 mutation) and is idempotent on resume. The script authors only the durable
 checkpoint — it never authors the `phase1-research.md` synthesis, never invokes

@@ -27,7 +27,7 @@ if [ ! -f "$KAOLA_SCRIPTS/kaola-workflow-adaptive-node.js" ]; then
 fi
 ```
 
-**Resolve the scripts path per command, not once (#546 G5).** The Bash tool does NOT persist
+**Resolve the scripts path per command, not once.** The Bash tool does NOT persist
 environment variables between calls (true for Claude Code AND opencode) — a `$KAOLA_SCRIPTS` set
 in one Bash call is GONE in the next, so a later lifecycle call crashes with `Cannot find module
 '/…-adaptive-node.js'`. Re-resolve the absolute scripts path in EVERY Bash call that needs it:
@@ -50,7 +50,7 @@ Then **enter the worktree** — every adaptive lifecycle call below runs from th
 [ -n "$ACTIVE_WORKTREE_PATH" ] && [ "$ACTIVE_WORKTREE_PATH" != "$(pwd)" ] && cd "$ACTIVE_WORKTREE_PATH"
 ```
 
-**Worktree-cwd contract (#466):** the mutating lifecycle subcommands (`open-next` / `open-ready` /
+**Worktree-cwd contract:** the mutating lifecycle subcommands (`open-next` / `open-ready` /
 `record-evidence --stdin` / `close-and-open-next` / `close-node` / `reconcile-running-set` /
 `write-halt` / `clear-halt` / `reopen-node` / `revert-overflow` / `repair-node` / `route-findings`)
 resolve the project folder — `workflow-plan.md`, the `## Node Ledger`, `.cache/{node-id}.md` evidence,
@@ -62,13 +62,13 @@ and must run from the main root, above.)
 
 ## Dispatch
 
-Reasoning effort (#451, supersedes #405): the xhigh effort-variant profiles are retired — always
+Reasoning effort: the xhigh effort-variant profiles are retired — always
 delegate to the base `dispatch.agent_type` profile (= the node's role). Codex 0.139 has no per-spawn
 reasoning-effort override, so effort rides the parent SESSION: when `dispatch.codex_reasoning_effort`
 is non-null (the planner gave the node `model: opus` → `xhigh`), ensure the Codex session reasoning
 effort equals it BEFORE spawning; when null (`sonnet`/absent → `role_default`), leave the standing
 session effort untouched. Base profiles OMIT `model_reasoning_effort`, so the spawned agent inherits
-the session (agent-config wins over project-profile, PR #14807). Never append a max-effort profile
+the session (agent-config wins over project-profile). Never append a max-effort profile
 suffix and never emit a variant-missing note. Pass `Working directory: ${ACTIVE_WORKTREE_PATH}` to
 every role delegation.
 
@@ -132,8 +132,8 @@ above (session effort = `dispatch.codex_reasoning_effort` when non-null). Pass `
   `test_thrash` ≥ 3: escalate via `write-halt --reason test_thrash`.
 
 <!-- PIN: leg-isolation-recipe -->
-**Write-parallelism is default-on for disjoint frontiers (#542, D-542-01).** The per-leg
-isolation engine is COMPLETE and live (#463 Closes, AC18 PASS), and planner-proven-disjoint
+**Write-parallelism is default-on for disjoint frontiers.** The per-leg
+isolation engine is COMPLETE and live, and planner-proven-disjoint
 (`parallel_safe`) write frontiers co-open as isolated parallel legs **BY DEFAULT — no operator
 toggles**. Per-leg worktree isolation + the mandatory synthesizer reconcile are the correctness
 net; co-open ALWAYS provisions a dedicated leg per write sibling (group-form ⟺ legs provisioned —
@@ -150,16 +150,16 @@ never the legless attribution-blind union barrier).
 On `open-next` → `gate_not_complete` with a speculative gate (policy `speculative_open_policy:
 consent` in plan `## Meta`): `docs/plan-run-cards/speculative-open.md`
 (covers `open-ready --speculative-consent`, `discard-speculative`, gate verdict:fail rollback)
-- **Write-leg dispatch discipline (#463 AC3).** Isolation is **discipline-dependent, not transparent** —
+- **Write-leg dispatch discipline.** Isolation is **discipline-dependent, not transparent** —
   the Agent tool has no cwd parameter and a provisioned `.kw/legs/<project>/<node>` leg does NOT auto-redirect
   a leg agent's edits. Dispatch each leg with its **absolute `legPath`**: every `Edit`/`Write` uses an
   absolute `<legPath>/...` path and every Bash uses `cd "<legPath>" &&` (the load-bearing instruction in the
   leg brief). The failure mode is **fail-closed containment, not construction**: a relative-path own-lane slip
-  lands in the parent (invisible to the per-leg barrier, #386-exempt from the write-lane hook) and is caught by
+  lands in the parent (invisible to the per-leg barrier, exempt from the write-lane hook) and is caught by
   the **parent-clean fence** before the merge → `merge_conflict`/repair, never silent cross-contamination or
   silent loss. **Bounded thrash:** after **K = 2** repair nudges on an agent that keeps writing out-of-lane,
   escalate to a `merge_conflict` halt rather than looping.
-- `merge_conflict` (#463 write-overlap): a write-leg level whose FIRST-detection refusal —
+- `merge_conflict` (write-overlap): a write-leg level whose FIRST-detection refusal —
   `member_vacuity` (a no-op leg), `write_set_overflow` (an overflow), or the synthesizer's octopus
   bail (a real same-file conflict) — survives `MERGE_CONFLICT_REPAIR_LIMIT` (K=3) bounded repairs.
   Repair each first by its own recovery (re-dispatch the leg · `revert-overflow` · a reasoning-class
@@ -169,12 +169,12 @@ consent` in plan `## Meta`): `docs/plan-run-cards/speculative-open.md`
   COMMIT-based union barrier on M, never the counter, is the fail-closed gate, so a resumed run safely
   re-counts from zero. RESUMABLE consent-style halt — resolve, then `clear-halt --reason consent`.
 
-**Evidence-persistence contract per role-kind (#546 G4).** There is ONE contract — no per-agent
+**Evidence-persistence contract per role-kind.** There is ONE contract — no per-agent
 guesswork:
 - **READ-ONLY roles** (`code-explorer`, `knowledge-lookup`, `adversarial-verifier`, and the
   planner) CANNOT self-write `.cache` evidence — they RETURN their evidence text and the
   orchestrator persists it via `record-evidence --stdin` (below). `record-evidence` re-injects
-  this node's `evidence-binding:` header, so persisting evidence cannot strip the header (#546 G3) —
+  this node's `evidence-binding:` header, so persisting evidence cannot strip the header —
   the read-only role MUST NOT try to add or modify it.
 - **WRITE-role agents** (`implementer`, `tdd-guide`) SELF-WRITE their `.cache` evidence, INCLUDING
   the seeded `evidence-binding:` header (read it from the seeded file, never alter it).
@@ -200,18 +200,17 @@ overflow) → close + compliance row → selector routing → fused advance. Ret
 
 On `result: ok` + `opened`: dispatch the next node (step 3).
 On `allDone: true`: run chains then route to Finalization.
-On `opened: null` + `allDone: false` (the typed `reason: 'frontier_blocked'` signal, #546 G6):
+On `opened: null` + `allDone: false` (the typed `reason: 'frontier_blocked'` signal):
 do NOT park silently. Deterministically re-run `orient` then `open-next` / `open-ready` to re-open
 the recomputed frontier, draining toward `allDone` WITHOUT operator prompting. Cap the re-orient at
 a small bound (e.g. 3 consecutive `frontier_blocked` cycles with no progress) before escalating with
 stop+ask — a blocked-but-not-done frontier must never silently stall the run.
 
-**Surface the narrowed barrier reason VERBATIM (#546 G7).** On a `barrier_failed` / `close-node`
+**Surface the narrowed barrier reason VERBATIM.** On a `barrier_failed` / `close-node`
 refusal the ACTIONABLE narrowed reason (`write_set_overflow` / `write_set_granularity` /
 `lockfile_write` / …) and the offending paths are now on the top-level `reason` / `outOfAllow`
 fields. Surface them VERBATIM — print the full `reason` / `operator_hint` / `outOfAllow` — never
-route the refusal through a lossy JSON-summary helper that truncates it (the #543 G7 stall, where a
-truncated n6 close-node reason silently parked the run).
+route the refusal through a lossy JSON-summary helper that truncates it.
 
 <!-- CARD: repair-routing -->
 On barrier refusal / `route-findings` result: `docs/plan-run-cards/repair-routing.md`
@@ -227,7 +226,7 @@ On reopening a complete node: `docs/plan-run-cards/reopen-complete-node.md`
 `test_thrash` escalation; `validateNodeOutput` absent-but-never-script-enforced note)
 
 <!-- CARD: frontier-batch -->
-**Dispatch fidelity (#472) — concurrent dispatch is the DEFAULT, not an option.** `open-next` (and
+**Dispatch fidelity — concurrent dispatch is the DEFAULT, not an option.** `open-next` (and
 `orient` / `close-and-open-next`) return `enterBatch: true` + a `frontier: [...]` whenever the planner
 authored an INDEPENDENT frontier of width ≥2 — that is authored parallelism, and you MUST run it as
 authored. On `enterBatch: true`: run `open-ready` (it marks the whole frontier `in_progress`), then
@@ -259,7 +258,7 @@ When `allDone: true`, detect the repo type and run the appropriate validation, t
 **Self-host (npm) — `package.json` declares `test:kaola-workflow:*` scripts:** Run `run-chains.js`
 with `--project {project}`.
 
-**Invoke run-chains with `--project {project}` (#546 G11).** Always pass `--project {project}` to the
+**Invoke run-chains with `--project {project}`.** Always pass `--project {project}` to the
 run-chains script so its receipt lands at `kaola-workflow/{project}/.cache/chain-receipt.json` where
 Finalization's `--finalize-check` reads it — do NOT rely on cwd to locate the receipt.
 
@@ -267,7 +266,7 @@ Finalization's `--finalize-check` reads it — do NOT rely on cwd to locate the 
 (it can only return `chains_config_missing` in a consumer repo). Instead, run the plan's `## Meta`
 `validation_command` and record the result in `kaola-workflow/{project}/.cache/final-validation.md`
 with a column-0 `verdict: pass`. Finalization's `--finalize-check` auto-detects consumer mode
-(absence of the `test:kaola-workflow:*` scripts) and gates on `final-validation.md` (#475).
+(absence of the `test:kaola-workflow:*` scripts) and gates on `final-validation.md`.
 
 #### Validation De-Duplication
 
@@ -284,8 +283,8 @@ Avoid redundant validation runs.
 - Run the full chains once here at All-done, not per node; that is the single
   full-suite pass before Finalization.
 - Use the `validation_command` recorded in the plan `## Meta` for any full-suite
-  validation; do not re-derive a per-node command (the #547 record-once discipline).
-- **State the actual reuse boundary, not a false absolute (#324 AC3).** When you cite a
+  validation; do not re-derive a per-node command (the record-once discipline).
+- **State the actual reuse boundary, not a false absolute.** When you cite a
   prior node run instead of rerunning, record WHICH node/state that run covered and that
   any later edits are outside it. Do NOT write a terminal absolute like `No files changed
   after those runs` when a node afterward changes relevant files — say e.g. `validation

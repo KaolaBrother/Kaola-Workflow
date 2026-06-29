@@ -231,7 +231,7 @@ RESEARCH_ISSUE=$(grep '^issue_number:' "kaola-workflow/{project-name}/workflow-s
 `phase1-research.md` is the orchestrator's research synthesis — already written on
 disk by Step 5 (this script never authors or edits it). The mechanical bookkeeping
 — the `workflow-state.md` checkpoint — is owned by the full-path transaction script
-`kaola-workflow-full-advance.js` (ADR 0004), not a subagent. The main session runs
+`kaola-workflow-full-advance.js`, not a subagent. The main session runs
 it directly; it refuses if `phase1-research.md` is absent (typed refusal, zero
 mutation) and is idempotent on resume.
 

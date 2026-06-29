@@ -119,7 +119,7 @@ main session hands it, verbatim.
 
 The mechanical bookkeeping — authoring `phase2-ideation.md` from the orchestrator's
 verbatim content and advancing the `workflow-state.md` pointer — is owned by the
-full-path transaction script `kaola-gitlab-workflow-full-advance.js` (ADR 0004), not
+full-path transaction script `kaola-gitlab-workflow-full-advance.js`, not
 a subagent. The main session runs it directly, handing the decided content as a JSON
 packet on stdin; the script renders the phase file (with a RESOLVED
 `## Required Agent Compliance` table) and advances the state pointer in crash-safe

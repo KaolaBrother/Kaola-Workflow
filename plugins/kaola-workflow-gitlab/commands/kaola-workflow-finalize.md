@@ -22,18 +22,18 @@ If `workflow_path: adaptive`:
 - `workflow-plan.md` must exist, be frozen (re-check `plan_hash`), and every
   `## Node Ledger` row must be `complete` or `n/a`. Adaptive runs have no
   `phase5-review.md`; Finalization anchors on the plan's completion state. The barrier is
-  **script-enforced** (#231) by three gates — run all three and capture each exit code
+  **script-enforced** by three gates — run all three and capture each exit code
   DIRECTLY (never gate on a piped `| tail`, which masks failure):
   ```bash
   PLAN=kaola-workflow/{project}/workflow-plan.md
-  # Resolve the validator via the kaola_script() resolver (#345): a bare relative
+  # Resolve the validator via the kaola_script() resolver: a bare relative
   # validator path is MODULE_NOT_FOUND in a consumer plugin install (no local scripts
   # dir), turning the only blocking pre-merge enforcement into a false BLOCK.
   kaola_script(){ _n="$1"; _self=""; [ -f "./package.json" ] && _self="$(node -e "try{process.stdout.write(require(process.cwd()+'/package.json').name||'')}catch(e){}" 2>/dev/null)"; if [ "$_self" = "kaola-workflow" ]; then for _p in "./plugins/kaola-workflow-gitlab/scripts/$_n" "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; else for _p in "${CLAUDE_PLUGIN_ROOT:+$CLAUDE_PLUGIN_ROOT/scripts/$_n}" "$HOME/.claude/kaola-workflow-gitlab/scripts/$_n" "./plugins/kaola-workflow-gitlab/scripts/$_n"; do [ -f "$_p" ] && { printf '%s\n' "$_p"; return; }; done; fi; return 1; }
   VALIDATOR="$(kaola_script kaola-gitlab-workflow-plan-validator.js)"
   node "$VALIDATOR" "$PLAN" --resume-check --json; RC=$?
   node "$VALIDATOR" "$PLAN" --gate-verify --json; GV=$?
-  # #541: forward --base to the whole-plan --barrier-check ONLY, mirroring #539's
+  # Forward --base to the whole-plan --barrier-check ONLY, mirroring
   # --finalize-check forwarding so the attribution sweep can scope to a project's OWN diff
   # on a SHARED multi-issue branch. Sourced from the KAOLA_FINALIZE_BASE env var, defaulting
   # to UNSET (→ the validator's `origin/main` default — byte-equivalent to today for
@@ -49,7 +49,7 @@ If `workflow_path: adaptive`:
   fi
   ```
   - `--gate-verify` proves every completed code/sensitive node is post-dominated by a
-    **completed** reviewer in the `## Node Ledger` (closes G1/H5). **G3 (#334): a
+    **completed** reviewer in the `## Node Ledger` (closes G1/H5). **G3: a
     non-delegable `main-session-gate` must be complete — never `n/a` — and post-dominate
     completed code nodes.**
   - `--barrier-check` re-scans the files actually written (git diff vs the merge-base
@@ -59,7 +59,7 @@ If `workflow_path: adaptive`:
   - `--verdict-check` reads every completed gate-role node's `.cache/{node-id}.md` and
     requires `verdict: pass` with `findings_blocking: 0`. Any nonzero exit **blocks the
     merge** — proves every code-reviewer/security-reviewer/adversarial-verifier/main-session-gate node
-    recorded a passing verdict. **Exception (#509):** an *investigation*
+    recorded a passing verdict. **Exception:** an *investigation*
     `adversarial-verifier` that post-dominates no code-producing or sensitive node is
     exempt from this check — its refutation is analytical output, not a finalize block
     (applies to both sequence and fanout majority-refute shapes). A *change-gate*
@@ -77,7 +77,7 @@ If `workflow_path: full` (or absent):
 
 ### Run-Gap Sweep Gate
 
-Finalization is **machine-gated** on a clean run-gap sweep (#435). Before
+Finalization is **machine-gated** on a clean run-gap sweep. Before
 proceeding past the prerequisite check, verify `.cache/run-gaps.json` and
 `finalization-summary.md`'s `## Run gaps` section and stop with a typed
 refusal if the following is true:
@@ -229,10 +229,10 @@ Avoid redundant validation runs.
 - After a routed fix or Trivial Inline Edit Exception edit, rerun the failed or
   affected command. Rerun broader validation only when shared infrastructure,
   dependencies, build config, or public behavior changed.
-- The self-host four-chain receipt is keyed on a code-relevant-tree hash (#547): a commit
+- The self-host four-chain receipt is keyed on a code-relevant-tree hash: a commit
   touching only inert docs or workflow-state since the chains ran stays fresh (no re-run);
   a code OR chain-asserted-doc (`README`/`CHANGELOG`/`docs/api.md`) change still invalidates it.
-- **State the actual reuse boundary, not a false absolute (#324 AC3).** When you cite
+- **State the actual reuse boundary, not a false absolute.** When you cite
   a prior run instead of rerunning, record WHICH node/state that run covered and that
   later finalize-step edits (e.g. a `CHANGELOG.md`/docs touch in the finalize node)
   are outside it. Do NOT write a terminal absolute like `No files changed after those
@@ -379,7 +379,7 @@ bare `N/A` without a skip\_reason — whenever `## Scope` lists more than one
 changed file or any production-path file (outside `docs/`, `*.md`, `tests/`).
 `N/A` with a documented skip\_reason is acceptable only for the trivial band
 (a single docs/comment/markdown edit). The `fast_compliance_unresolved` script
-refusal (#504) enforces this fail-closed at `summary-write` time; Finalization
+refusal enforces this fail-closed at `summary-write` time; Finalization
 is a second-line gate that verifies the written compliance table is clean before
 proceeding.
 
@@ -556,7 +556,7 @@ Do not reorganize roadmap entries that came from closure decision items until th
 
 Archive is performed atomically by `cmdFinalize` in Step 8b below. Do not perform a manual copy or git mv here.
 
-**Keep-open partial-close runs (#333/#336).** If the Closure Decision Gate keeps the issue OPEN
+**Keep-open partial-close runs.** If the Closure Decision Gate keeps the issue OPEN
 (partial implementation, residual follow-ups), still archive through the SAME `finalize`
 subcommand, adding `--keep-open`. It stamps the archived `workflow-state.md` terminal
 (`last_result: closed_keep_open`, `issue_disposition: kept-open`, no active `next_command`) so a
@@ -586,9 +586,9 @@ Enforce the single-project rule before committing. If more than one
 `kaola-workflow/*/` project is staged at once, split the commit:
 
 ```bash
-# #261/#294: a staged archive/<other>/ that is NOT the finalized project is a swept-in stray.
+# a staged archive/<other>/ that is NOT the finalized project is a swept-in stray.
 # Compare {project} as a fixed string (awk index/equality), never as a regex, so a project
-# name carrying regex metacharacters cannot make this guard fail open (#294).
+# name carrying regex metacharacters cannot make this guard fail open.
 FOREIGN_ARCHIVE=$(git diff --cached --name-only \
   | grep '^kaola-workflow/archive/' \
   | awk -F'/' 'NF>=3 {print $3}' | sort -u \
@@ -659,12 +659,12 @@ SINK_KIND=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | grep '^sink:' | awk '{print 
 SINK_KIND=${SINK_KIND:-merge}
 SINK_ISSUE_FLAG=""
 [ -n "$SINK_ISSUE" ] && [ "$SINK_ISSUE" != "unset" ] && SINK_ISSUE_FLAG="--issue $SINK_ISSUE"
-# #369: bundle member set — sink-merge closes EVERY member (all-or-nothing), not just the primary.
+# bundle member set — sink-merge closes EVERY member (all-or-nothing), not just the primary.
 SINK_ISSUE_NUMBERS=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | grep '^issue_numbers:' | awk '{print $2}')
 [ -z "$SINK_ISSUE_NUMBERS" ] && SINK_ISSUE_NUMBERS=$(grep '^issue_numbers:' "$SINK_STATE_FILE" | awk '{print $2}')
 SINK_ISSUE_NUMBERS_FLAG=""
 [ -n "$SINK_ISSUE_NUMBERS" ] && SINK_ISSUE_NUMBERS_FLAG="--issue-numbers $SINK_ISSUE_NUMBERS"
-# #336: keep-open partial-close terminal — issue_action defaults to close when absent.
+# keep-open partial-close terminal — issue_action defaults to close when absent.
 SINK_ISSUE_ACTION=$(awk '/^## Sink/,0' "$SINK_STATE_FILE" | grep '^issue_action:' | awk '{print $2}')
 SINK_ISSUE_ACTION=${SINK_ISSUE_ACTION:-close}
 SINK_KEEP_OPEN_FLAG=""
@@ -676,7 +676,7 @@ _WT_PRE="$(node -e "try{const fs=require('fs');const s=fs.readFileSync('kaola-wo
 
 ## Mechanical Finalization (delegated to the contractor)
 
-**Before dispatching the contractor**: gate on repo kind (#475):
+**Before dispatching the contractor**: gate on repo kind:
 
 - **Self-host (npm)** — the repo's `package.json` declares the `test:kaola-workflow:*`
   scripts: run `kaola-workflow-run-chains.js` (main session, via the edition's `kaola_script()`
@@ -688,7 +688,7 @@ _WT_PRE="$(node -e "try{const fs=require('fs');const s=fs.readFileSync('kaola-wo
   invoke `kaola-workflow-run-chains.js` (it would only return `chains_config_missing`). The
   gate is the agent's own `.cache/final-validation.md` with a column-0 `verdict: pass`,
   produced by running the plan's `## Meta` `validation_command`; `--finalize-check`
-  auto-detects consumer mode (absence of the npm scripts) and gates on that file (#475).
+  auto-detects consumer mode (absence of the npm scripts) and gates on that file.
 
 Dispatch the contractor to execute the mechanical finalization. The full
 procedure body (Step 8a artifact mirror, Step 8b cmdFinalize archive + status
@@ -745,7 +745,7 @@ Use the sink metadata captured before Step 8b. Do not read the active
 ```bash
 # Capture main repo root before sink dispatch.
 # --git-common-dir always resolves to the shared .git dir (mirrors lines 305-306, 533-534, 565-566).
-# --show-toplevel returns the worktree root sink-merge is about to delete (issue #33).
+# --show-toplevel returns the worktree root sink-merge is about to delete.
 _COORD_ROOT_RAW_SINK="$(git rev-parse --git-common-dir 2>/dev/null || echo ".git")"
 if [[ "$_COORD_ROOT_RAW_SINK" != /* ]]; then _COORD_ROOT_RAW_SINK="$(pwd)/$_COORD_ROOT_RAW_SINK"; fi
 _MAIN_ROOT="$(dirname "$_COORD_ROOT_RAW_SINK")"
@@ -758,7 +758,7 @@ _MAIN_ROOT="$(dirname "$_COORD_ROOT_RAW_SINK")"
 Dispatch based on `SINK_KIND`:
 
 ```bash
-# #336: keep-open is merge-sink-only — refuse an MR/PR sink before dispatch.
+# keep-open is merge-sink-only — refuse an MR/PR sink before dispatch.
 if [ "$SINK_KIND" != "merge" ] && [ -n "$SINK_KEEP_OPEN_FLAG" ]; then
   echo "BLOCKED: issue_action: comment_keep_open is only supported on the merge sink. MR/PR sinks close via the merged MR; switch sink: merge or remove issue_action." >&2
   exit 1
@@ -783,7 +783,7 @@ case "$SINK_KIND" in
       --project {project}
     _SINK_MERGE_EXIT=$?
     if [ "$_SINK_MERGE_EXIT" -eq 3 ]; then
-      # #336: keep-open is merge-sink-only — never auto-pivot to an MR sink (its Closes #N body
+      # keep-open is merge-sink-only — never auto-pivot to an MR sink (its Closes #N body
       # would close the kept-open issue; watch-mr would delete the preserved roadmap source).
       if [ -n "$SINK_KEEP_OPEN_FLAG" ]; then
         echo "BLOCKED: sink-merge exited 3 (merge-impossible) on a keep-open run. Keep-open is merge-sink-only: the MR fallback body closes the issue on merge and watch-mr would delete the preserved roadmap source. Remediate the merge blocker (see .cache/sink-fallback.json) and re-run sink-merge; do not pivot to an MR sink." >&2
@@ -803,11 +803,11 @@ case "$SINK_KIND" in
     [ "$_SINK_MERGE_EXIT" -ne 0 ] && exit "$_SINK_MERGE_EXIT"
     ;;
 esac
-# Restore CWD: sink-merge may have removed the worktree this shell was in (issue #33).
+# Restore CWD: sink-merge may have removed the worktree this shell was in.
 cd "$_MAIN_ROOT" 2>/dev/null || true
 ```
 
-### Script-owned worktree sink (`--sink` mode, #429)
+### Script-owned worktree sink (`--sink` mode)
 
 When the branch carries a worktree run (recorded `run_posture: worktree`), use the `--sink` flag to
 replace the manual 8-step choreography:
@@ -848,7 +848,7 @@ Re-running the command after a crash resumes from the last incomplete step — n
 After `sink-mr.js` exits 0, the active folder remains open. It is archived automatically when `watch-mr` detects the MR is MERGED or CLOSED on the next `/workflow-next` startup.
 
 <!-- PIN: closure-audit -->
-### Sink result handling and closure-audit reconciliation sweep (#496/#497)
+### Sink result handling and closure-audit reconciliation sweep
 
 **Transactional catch (n1's `sink_incomplete` emit):** when `--sink --json` returns
 `result:"refuse"` with `reason:"sink_incomplete"`, the sink did NOT complete — do NOT treat it as

@@ -130,7 +130,7 @@ the completion checkpoint. It does not design, judge, or alter the selected appr
 
 The mechanical bookkeeping — authoring `phase3-plan.md` from the orchestrator's
 verbatim content and advancing the `workflow-state.md` pointer — is owned by the
-full-path transaction script `kaola-gitea-workflow-full-advance.js` (ADR 0004), not a
+full-path transaction script `kaola-gitea-workflow-full-advance.js`, not a
 subagent. The main session runs it directly, handing the blueprint and task list
 (transcribed verbatim from `.cache/architect.md` plus any
 `.cache/architect-revision-*.md`) as a JSON packet on stdin; the script renders the

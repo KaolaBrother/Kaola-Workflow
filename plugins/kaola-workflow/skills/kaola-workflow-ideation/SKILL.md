@@ -73,7 +73,7 @@ verdict, the Approaches Evaluated pros/cons/risk/complexity, the Out of Scope
 list, and the `## Required Agent Compliance` rows) and advancing the
 `workflow-state.md` pointer to `next_skill: kaola-workflow-plan {project}`
 (preserving any existing `## Sink` block byte-for-byte) — is owned by the
-full-path transaction script `kaola-workflow-full-advance.js` (ADR 0004), not a
+full-path transaction script `kaola-workflow-full-advance.js`, not a
 subagent. The main session runs it directly, handing the decided content as a
 JSON packet on stdin; the script renders the phase file (with a RESOLVED
 `## Required Agent Compliance` table) and advances the state pointer in
