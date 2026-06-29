@@ -26,6 +26,25 @@ function assert(cond, msg) {
   failed++; console.error('FAIL: ' + msg);
 }
 
+// ---------------------------------------------------------------------------
+// Self-provision: regenerate .opencode/ from tracked canonical sources before
+// any assertion that reads it. In a clean worktree .opencode/ is fully absent
+// (it is gitignored); sync --write populates agents, commands, hooks, AND the
+// plugin from templates/opencode/plugins/. This makes the suite green from
+// tracked sources alone with no manual seeding.
+// ---------------------------------------------------------------------------
+{
+  const { spawnSync } = require('child_process');
+  const r = spawnSync(process.execPath,
+    [path.join(REPO, 'scripts', 'sync-opencode-edition.js'), '--write'],
+    { encoding: 'utf8' });
+  if (r.status !== 0) {
+    console.error('FATAL: sync-opencode-edition --write failed (test cannot proceed):');
+    console.error(r.stderr || r.stdout || '(no output)');
+    process.exit(1);
+  }
+}
+
 // --- JSONC comment stripper (string-aware) so opencode.json parses despite its
 // // guidance comments AND the "https://" URL inside $schema. ---
 function stripJsonc(text) {
@@ -636,6 +655,21 @@ if (exists(pluginRel)) {
   }
   assert(src.includes('tool.execute.before') && src.includes('experimental.session.compacting'),
     'A11: plugin registers tool.execute.before + compaction hooks');
+}
+
+// ---------------------------------------------------------------------------
+// A11-canon: tracked canonical source for the opencode plugin must exist and the
+// regenerated .opencode/plugins/ copy must be byte-identical to it, so the gap
+// (gitignored plugin with no tracked source) cannot silently reopen.
+// ---------------------------------------------------------------------------
+{
+  const canonPluginRel = 'templates/opencode/plugins/kaola-workflow-hooks.js';
+  assert(exists(canonPluginRel),
+    'A11-canon: tracked canonical source ' + canonPluginRel + ' exists');
+  if (exists(canonPluginRel) && exists('.opencode/plugins/kaola-workflow-hooks.js')) {
+    assert(read(canonPluginRel) === read('.opencode/plugins/kaola-workflow-hooks.js'),
+      'A11-canon: regenerated .opencode/plugins/kaola-workflow-hooks.js is byte-identical to the tracked template');
+  }
 }
 
 // ---------------------------------------------------------------------------

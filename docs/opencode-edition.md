@@ -18,10 +18,10 @@ Everything under `.opencode/` is **generated from canonical** by
 | `agents/<name>.md`      | `.opencode/agent/<name>.md`   | opencode frontmatter (`description`, `mode: subagent`, read-only `permission`). **No `model:` field** — model-agnostic. |
 | `commands/<file>.md`    | `.opencode/command/<file>.md` | Claude install-time `model="{...}"` placeholders + all "pass `model=`" instructions rewritten to opencode's central effort resolution (`task` tool, no per-call `model=`). The canonical Path Intent / auto-fallback prose is also stripped so adaptive is the unconditional default (see [Path selection](#path-selection--adaptive-is-the-unconditional-default) below). |
 | `hooks/<script>.sh`     | `.opencode/hooks/<script>.sh` | The 3 runtime-neutral hook scripts, byte-copied. |
+| `templates/opencode/plugins/*.js` | `.opencode/plugins/kaola-workflow-hooks.js` | Hook adapter plugin; byte-copied from the tracked canonical source by `sync-opencode-edition.js --write` (verified by `--check`; see [Hooks](#hooks)). |
 
-Two files are **authored** (not generated) and verified present by the test:
+One file is **authored** (not generated) and verified present by the test:
 
-- `.opencode/plugins/kaola-workflow-hooks.js` — the hook adapter plugin (see Hooks).
 - `opencode.json` — the user-owned two-tier effort config (seeded once, preserved).
 
 Generated agents are deliberately model-agnostic, so regenerating the tree never
@@ -314,6 +314,13 @@ JSON payloads into the **same runtime-neutral shell scripts** the other editions
 use (single source of truth, byte-copied under `.opencode/hooks/`), and honors
 their exit codes. `throw` = deny (opencode's documented pattern).
 
+The adapter plugin has a tracked canonical source at
+`templates/opencode/plugins/kaola-workflow-hooks.js` (outside the gitignored `.opencode/`
+tree). `sync-opencode-edition.js --write` byte-copies it to `.opencode/plugins/`; `--check`
+asserts parity (missing or drifted plugin = parity failure). `install-opencode.sh` deploys the
+plugin from the tracked canonical source, never from a self-referential `.opencode/` copy — a
+missing plugin is a loud install error (no silent `2>/dev/null || true`).
+
 | Claude/Codex hook | opencode plugin mapping | Script |
 | --- | --- | --- |
 | `PreToolUse` Bash (block multi-project commits) | `tool.execute.before` · `bash` | `kaola-workflow-pre-commit.sh` |
@@ -453,9 +460,12 @@ higher-profile correspondence), the **workflow-planner `mapTier` guidance**,
 surface), route-reachability (every receipt-emitted command target resolves
 under `.opencode/command/`), **install-time opt-in partition** (P1–P5:
 `--with-fast` / `--with-full` deploy the fast / full-phase commands + record
-`installed_paths` in the shared config; UNION never removes), and the **folded
+`installed_paths` in the shared config; UNION never removes), the **folded
 #544 Claude path-leak fix** (A: zero `$CLAUDE_PLUGIN_ROOT` /
-`~/.claude/kaola-workflow` tokens across the deployed `.opencode/` tree). The
+`~/.claude/kaola-workflow` tokens across the deployed `.opencode/` tree), and
+**canonical plugin source** (A11-canon: `templates/opencode/plugins/kaola-workflow-hooks.js`
+exists and the regenerated `.opencode/plugins/kaola-workflow-hooks.js` is byte-identical to
+it — closing the gap where a fresh-clone install silently deployed no hooks plugin). The
 existing `test-route-reachability.js` / `validate-vendored-agents.js` /
 `validate-script-sync.js` / `test-edition-sync.js` suites stay green — this
 edition adds a surface without altering the others.

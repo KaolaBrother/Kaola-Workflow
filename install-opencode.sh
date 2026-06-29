@@ -159,6 +159,12 @@ copy_tree() {
   local layout_root="${2:-$dest_root/.opencode}"
   mkdir -p "$layout_root/agent" "$layout_root/command" \
            "$layout_root/plugins" "$layout_root/hooks"
+  # Deploy the hooks adapter plugin from the TRACKED template source (templates/opencode/plugins/).
+  # This is NOT the self-referential .opencode/plugins/ copy — the tracked template is the canonical
+  # source and is always present. A missing plugin is a LOUD install error (no 2>/dev/null || true).
+  # Run BEFORE the self-dev guard because even in self-dev mode the destination
+  # ($layout_root/plugins/) is distinct from the source (templates/opencode/plugins/).
+  cp "$SCRIPT_DIR/templates/opencode/plugins/"*.js "$layout_root/plugins/"
   # Self-dev guard: deploying the edition into its OWN source repo means the canonical .opencode and
   # the destination layout are the same directory, so `cp` would refuse ("X and X are identical") and
   # trip `set -e`. In that case the generated tree already IS the live one — skip the (no-op) copy.
@@ -167,7 +173,6 @@ copy_tree() {
     return
   fi
   cp "$SCRIPT_DIR/.opencode/agent/"*.md "$layout_root/agent/"
-  cp "$SCRIPT_DIR/.opencode/plugins/"*.js "$layout_root/plugins/" 2>/dev/null || true
   # #538/#543 D2: the COMMAND deploy is PARTITIONED + SELF-HEALING. First PRUNE every kaola-owned
   # command file from the dest (mirror install.sh:218-229 blanket-then-recopy) so a narrowed opt-in set
   # converges to adaptive-only on a bare reinstall — copy_tree was additive-only before, leaving stale
@@ -219,10 +224,10 @@ uninstall_edition() {
     return
   fi
   local f base sub
-  for f in "$SCRIPT_DIR/.opencode/agent/"*.md;    do [[ -f "$f" ]] || continue; rm -f "$layout_root/agent/$(basename "$f")"; done
-  for f in "$SCRIPT_DIR/.opencode/command/"*.md;  do [[ -f "$f" ]] || continue; rm -f "$layout_root/command/$(basename "$f")"; done
-  for f in "$SCRIPT_DIR/.opencode/plugins/"*.js;  do [[ -f "$f" ]] || continue; rm -f "$layout_root/plugins/$(basename "$f")"; done
-  for f in "$SCRIPT_DIR/.opencode/hooks/"*.sh;    do [[ -f "$f" ]] || continue; rm -f "$layout_root/hooks/$(basename "$f")"; done
+  for f in "$SCRIPT_DIR/.opencode/agent/"*.md;               do [[ -f "$f" ]] || continue; rm -f "$layout_root/agent/$(basename "$f")"; done
+  for f in "$SCRIPT_DIR/.opencode/command/"*.md;             do [[ -f "$f" ]] || continue; rm -f "$layout_root/command/$(basename "$f")"; done
+  for f in "$SCRIPT_DIR/templates/opencode/plugins/"*.js;    do [[ -f "$f" ]] || continue; rm -f "$layout_root/plugins/$(basename "$f")"; done
+  for f in "$SCRIPT_DIR/.opencode/hooks/"*.sh;               do [[ -f "$f" ]] || continue; rm -f "$layout_root/hooks/$(basename "$f")"; done
   for sub in command agent plugins hooks; do rmdir "$layout_root/$sub" 2>/dev/null || true; done
   [[ "$GLOBAL" -eq 1 ]] || rmdir "$layout_root" 2>/dev/null || true
   echo "Removed deployed agents/commands/plugin/hooks."

@@ -52,9 +52,11 @@ const REPO = path.resolve(__dirname, '..');
 const CANON_AGENTS_DIR = path.join(REPO, 'agents');
 const CANON_COMMANDS_DIR = path.join(REPO, 'commands');
 const CANON_HOOKS_DIR = path.join(REPO, 'hooks');
+const CANON_PLUGINS_DIR = path.join(REPO, 'templates', 'opencode', 'plugins');
 const OUT_AGENT_DIR = path.join(REPO, '.opencode', 'agent');
 const OUT_COMMAND_DIR = path.join(REPO, '.opencode', 'command');
 const OUT_HOOKS_DIR = path.join(REPO, '.opencode', 'hooks');
+const OUT_PLUGINS_DIR = path.join(REPO, '.opencode', 'plugins');
 const OPENCODE_JSON = path.join(REPO, 'opencode.json');
 
 // Runtime-neutral hook scripts (byte-copied from canonical hooks/ into the
@@ -64,6 +66,13 @@ const HOOK_SCRIPTS = [
   'kaola-workflow-pre-commit.sh',
   'kaola-workflow-write-lane.sh',
   'kaola-workflow-subagent-dispatch-log.sh',
+];
+
+// Opencode plugin scripts (byte-copied from tracked templates/opencode/plugins/ into the
+// opencode edition). The tracked template is the canonical source of truth; .opencode/plugins/
+// is the gitignored generated artifact. byte-copy (no rendering) mirrors writeHooks().
+const PLUGIN_SCRIPTS = [
+  'kaola-workflow-hooks.js',
 ];
 
 // Model pins are OPT-IN. Unset → no pin → both tiers inherit whatever model the
@@ -646,12 +655,29 @@ function writeHooks() {
   return wrote;
 }
 
+function writePlugin() {
+  ensureDir(OUT_PLUGINS_DIR);
+  let wrote = 0;
+  for (const script of PLUGIN_SCRIPTS) {
+    const src = path.join(CANON_PLUGINS_DIR, script);
+    const dest = path.join(OUT_PLUGINS_DIR, script);
+    const content = fs.readFileSync(src, 'utf8');
+    if (!fs.existsSync(dest) || fs.readFileSync(dest, 'utf8') !== content) {
+      fs.writeFileSync(dest, content);
+      console.log('copied     .opencode/plugins/' + script);
+      wrote++;
+    }
+  }
+  return wrote;
+}
+
 function runWrite(configForce, adapt) {
   const a = writeAgents();
   const c = writeCommands();
   const h = writeHooks();
+  const p = writePlugin();
   const j = writeConfig(configForce, adapt);
-  const total = a + c + h + j;
+  const total = a + c + h + p + j;
   console.log('sync-opencode-edition: write complete (' + total + ' file(s) updated'
     + (total === 0 ? ' — tree already in sync' : '') + ').');
 }
@@ -697,6 +723,15 @@ function runCheck() {
     }
     if (read(rel) !== read('hooks/' + script)) mismatches.push({ rel, reason: 'drifted from canonical hooks/' });
   }
+  for (const script of PLUGIN_SCRIPTS) {
+    const rel = '.opencode/plugins/' + script;
+    if (!fs.existsSync(path.join(REPO, rel))) {
+      mismatches.push({ rel, reason: 'missing generated plugin' });
+      continue;
+    }
+    const canonContent = fs.readFileSync(path.join(CANON_PLUGINS_DIR, script), 'utf8');
+    if (read(rel) !== canonContent) mismatches.push({ rel, reason: 'drifted from canonical templates/opencode/plugins/' });
+  }
   // #F8: opencode.json parity — the installer freshness gate (install-opencode.sh) and the docs
   // bill --check as the "parity assert", yet runCheck never validated the committed config, so a
   // corrupted opencode.json passed. Compare it to the NEUTRAL renderer output (bare renderOpencodeJson(),
@@ -713,7 +748,8 @@ function runCheck() {
   }
   const na = listCanonAgents().length;
   const nc = listCanonCommands().length;
-  console.log('sync-opencode-edition: ' + na + ' agent(s) + ' + nc + ' command(s) in parity with canonical.');
+  const np = PLUGIN_SCRIPTS.length;
+  console.log('sync-opencode-edition: ' + na + ' agent(s) + ' + nc + ' command(s) + ' + np + ' plugin(s) in parity with canonical.');
 }
 
 function usage() {
@@ -757,7 +793,8 @@ module.exports = {
   // Legacy aliases (env-derived; empty by default now that pins are opt-in).
   DEFAULT_STANDARD_MODEL: ENV_STANDARD_MODEL,
   DEFAULT_REASONING_MODEL: ENV_REASONING_MODEL,
-  CANON_AGENTS_DIR, CANON_COMMANDS_DIR, CANON_HOOKS_DIR,
-  OUT_AGENT_DIR, OUT_COMMAND_DIR, OUT_HOOKS_DIR, OPENCODE_JSON, REPO,
-  HOOK_SCRIPTS,
+  CANON_AGENTS_DIR, CANON_COMMANDS_DIR, CANON_HOOKS_DIR, CANON_PLUGINS_DIR,
+  OUT_AGENT_DIR, OUT_COMMAND_DIR, OUT_HOOKS_DIR, OUT_PLUGINS_DIR, OPENCODE_JSON, REPO,
+  HOOK_SCRIPTS, PLUGIN_SCRIPTS,
+  writePlugin,
 };
