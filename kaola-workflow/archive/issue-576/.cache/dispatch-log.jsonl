@@ -1,0 +1,9 @@
+{"ts":"2026-06-29T07:59:13Z","agent_type":"workflow-planner","agent_id":"claim-backfill","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow"}
+{"ts":"2026-06-29T08:19:55Z","agent_type":"tdd-guide","agent_id":"a077baee1f81e0fe5","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/issue-576","model":"","model_planned":"sonnet"}
+{"ts":"2026-06-29T08:49:57Z","agent_type":"tdd-guide","agent_id":"a077baee1f81e0fe5","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/issue-576","model":"","model_planned":"sonnet"}
+{"ts":"2026-06-29T08:54:46Z","agent_type":"doc-updater","agent_id":"acb7049d065e60c6d","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/issue-576","model":"","model_planned":"sonnet"}
+{"ts":"2026-06-29T08:56:41Z","agent_type":"tdd-guide","agent_id":"a077baee1f81e0fe5","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/issue-576","model":"","model_planned":"sonnet"}
+{"ts":"2026-06-29T09:00:40Z","agent_type":"adversarial-verifier","agent_id":"a9aadaf4ee4b7b58a","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/issue-576","model":"","model_planned":"sonnet"}
+{"ts":"2026-06-29T09:29:40Z","agent_type":"code-reviewer","agent_id":"a740794bd9c2ccd73","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/issue-576","model":"","model_planned":"opus"}
+{"ts":"2026-06-29T10:38:38Z","agent_type":"contractor","agent_id":"a0a4e6dcf420f5f2d","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/issue-576","model":"","model_planned":"sonnet"}
+{"ts":"2026-06-29T10:40:58Z","agent_type":"contractor","agent_id":"finalize-backfill","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/issue-576"}
