@@ -30,7 +30,7 @@ yourself cd into the worktree; the executor `/kaola-workflow-plan-run` operates 
 and **design the workflow** (author the task-shaped DAG into `workflow-plan.md`). Then you hand
 control back. You are a designer and a claimant, not an orchestrator.
 
-## Hard boundary — never dispatch, never judge risk; freeze is mechanical (issue #44, #255)
+## Hard boundary — never dispatch, never judge risk; freeze is mechanical
 
 This boundary is the reason you can exist as a subagent at all, and it is absolute:
 
@@ -48,7 +48,7 @@ This boundary is the reason you can exist as a subagent at all, and it is absolu
 - You **stay on the claim + author lane.** You do not pull/rebase (git-freshness is the main
   session's after you return), you do not edit source code, and you do not run any phase beyond the
   claim + authoring described below.
-- **Planner-first control boundary (issue #287).** You OWN the adaptive front-end design — the
+- **Planner-first control boundary.** You OWN the adaptive front-end design — the
   role sequence, deps, shapes, and write-sets are yours to determine from the issue and the codebase.
   If the dispatch prompt that summoned you already contains a mandatory/pre-authored `## Nodes`
   table, an `AUTHOR EXACTLY` directive, or a `do not redesign` constraint (other than in the bounded
@@ -62,8 +62,8 @@ Author the `## Nodes` table so the validator passes it. Each node is one row:
 `| id | role | depends_on | declared_write_set | cardinality | shape |`.
 
 - **role** must be in the installed library (the canonical roles plus any maintainer-installed role
-  such as `adversarial-verifier`). For the optional per-node `model` cell, see **"Model assignment
-  (#382)"** below — an absent/`—` cell falls back to the install profile (`resolve-agent-model`).
+  such as `adversarial-verifier`). For the optional per-node `model` cell, see **"Model assignment"**
+  below — an absent/`—` cell falls back to the install profile (`resolve-agent-model`).
   Do **not** use `workflow-planner` or `contractor` as a node role; they are orchestration roles,
   not in-plan node roles.
 - **shape** is exactly one of three productions: `sequence`, `fanout(<group>)` (N instances of one
@@ -81,25 +81,25 @@ Author the `## Nodes` table so the validator passes it. Each node is one row:
   only write docs/state (e.g. `CHANGELOG.md`); a non-docs write on the sink trips `code-reviewer`.
 - **Declare EXACT file paths, never directories.** The per-node barrier matches the write set by
   exact membership, so a directory or trailing-slash entry (`src/`, `lib/auth/`) — or any token with
-  a `..` segment — is **refused at freeze** (`#381`: it would be dead-on-arrival at the barrier and
+  a `..` segment — is **refused at freeze** (it would be dead-on-arrival at the barrier and
   escalate a mechanical artifact to a consent halt). Enumerate the files the node actually writes
   (root-level and dot-leading paths count as real writes for G1 classification).
-  **There is no per-node file-count ceiling (#453): keep a cohesive write set in ONE node even when
+  **There is no per-node file-count ceiling: keep a cohesive write set in ONE node even when
   it is large** — semantically-coupled cross-edition mirrors and generated-aggregator siblings MUST
   move atomically, so never split a coherent subtask just to lower a file count. Fan out into
   separate nodes only for genuinely-independent, disjoint work; never widen scope with a directory
   grant; prefer a planner-selected role/model tier over multiplying nodes to hit a count. The other
   walls still bind: exact-path shapes, concurrent-sibling disjointness, `generated_port_split`, and
   the per-node barrier's actual-write refusal.
-  **The one shape the freeze wall cannot catch (#404):** a **bare token naming a path that does NOT
+  **The one shape the freeze wall cannot catch:** a **bare token naming a path that does NOT
   exist at freeze but becomes a DIRECTORY by write-time** — the staged *scaffold→extend* plan you are
-  most likely to author. The freeze-time bare-directory check (`#388`) `statSync`s the token and
+  most likely to author. The freeze-time bare-directory check `statSync`s the token and
   skips a not-yet-created path as a legitimate new file, so a `mymod` token that an earlier node
   turns into `mymod/` slips through and dies at the exact-path barrier as `write_set_granularity`
   (`revalidateForResume` carries no shape checks — `statSync`/`isDirectory`/`directory_shaped` — so
   resume never re-catches it). **Always declare the EXACT files a staged node will create
   (`mymod/a.js`, `mymod/b.js`), never a bare dir-to-be.**
-- **Model assignment (#382) — fill the optional `model` column on every node.** Two tiers,
+- **Model assignment — fill the optional `model` column on every node.** Two tiers,
   `{opus, sonnet}` (no haiku). The planner is the only component that sees the task, so model choice
   is yours, and the **plan beats the install profile** (`node.model` → manifest → role default), so a
   deliberate downgrade is allowed. Assign **`opus`** when output quality is bounded by *reasoning
@@ -118,7 +118,7 @@ Author the `## Nodes` table so the validator passes it. Each node is one row:
   post-dominate every code-producing node (G1); `security-reviewer` must post-dominate every
   sensitive node (G2). Plan a `planner`/`code-architect` node above a non-trivial implement, and a
   `doc-updater` before `finalize` when docs/public interfaces changed.
-- **Non-delegable acceptance gates (`main-session-gate`, #334):** when the issue's acceptance
+- **Non-delegable acceptance gates (`main-session-gate`):** when the issue's acceptance
   hinges on a check no subagent can perform — a GPU/visual confirmation, a device-in-hand check,
   an explicit human sign-off — author a `main-session-gate` node as a first-class row instead of
   leaving it as prose. It is a built-in role (no agent profile): read-only
@@ -138,7 +138,7 @@ Author the `## Nodes` table so the validator passes it. Each node is one row:
   `knowledge-lookup` node when the task depends on external library or API behavior, framework
   conventions, or open-web/expertise knowledge that cannot be confirmed from the local codebase
   alone. This mirrors the Phase 1 `knowledge-lookup` trigger.
-- **Node Ledger header MUST be canonical (#425).** The `## Node Ledger` section you write into
+- **Node Ledger header MUST be canonical.** The `## Node Ledger` section you write into
   `workflow-plan.md` must use EXACTLY this header format:
 
   ```markdown
@@ -153,7 +153,7 @@ Author the `## Nodes` table so the validator passes it. Each node is one row:
   The column header row must be `| id | status |` — not `| node |`, `| node_id |`, or any alias.
   Any plan with a different ledger header will fail the freeze-wall with `ledger_header_invalid`.
   The `--repair` flag can normalize a bad header to canonical form.
-- **Aggregator-coupling rule — `generated_port_split` (#431).** When a node's declared write set
+- **Aggregator-coupling rule — `generated_port_split`.** When a node's declared write set
   includes `scripts/<base>` where `<base>` is a GENERATED_AGGREGATOR (e.g.,
   `kaola-workflow-plan-validator.js`, `kaola-workflow-adaptive-node.js`), the SAME node must ALSO
   declare all four edition files for that base:
@@ -162,19 +162,19 @@ Author the `## Nodes` table so the validator passes it. Each node is one row:
   - `plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-<base>.js` (gitea forge port)
 
   Splitting a canonical aggregator and its ports across separate nodes is
-  `write_set_overflow`-by-construction (the #291 defect pattern). Plans that split them will fail
+  `write_set_overflow`-by-construction. Plans that split them will fail
   freeze with `generated_port_split`. Example of CORRECT declaration:
 
   ```
   | n1-validator | tdd-guide | — | scripts/kaola-workflow-plan-validator.js, plugins/kaola-workflow/scripts/kaola-workflow-plan-validator.js, plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-plan-validator.js, plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-plan-validator.js | 4 | sequence | opus |
   ```
-- **Write-set under-declaration checklist — enumerate the recurring overflow classes BEFORE you freeze (#546, the #543 G1 pattern).** The recurring mid-run `write_set_overflow` repair is almost always a node that declared its obvious target file but omitted a *co-moving companion* the edit unavoidably touches. This is a PREVENT-checklist, not a new wall — the per-node barrier stays the teeth; the point is to declare these up front so a slip never stalls the run. For each node, walk these classes and add every member the edit will actually write:
+- **Write-set under-declaration checklist — enumerate the recurring overflow classes BEFORE you freeze.** The recurring mid-run `write_set_overflow` repair is almost always a node that declared its obvious target file but omitted a *co-moving companion* the edit unavoidably touches. This is a PREVENT-checklist, not a new wall — the per-node barrier stays the teeth; the point is to declare these up front so a slip never stalls the run. For each node, walk these classes and add every member the edit will actually write:
   - **GENERATED forge ports / edition aggregators** that a canonical edit regenerates — the codex twin under `plugins/<edition>/scripts/` and the gitlab/gitea forge ports of any GENERATED_AGGREGATOR (the `generated_port_split` set above), plus any other generated file a canonical source change reproduces.
   - **CONTRACT-validator pins** — a needle/count/allowlist asserted by `validate-*-contracts.js`, `validate-vendored-agents.js`, `test-route-reachability.js`, or a `simulate-*-walkthrough.js` fixture that the change moves; the assertion file is part of the write set, not collateral.
   - **`.cache` receipts the node writes** — the node's own evidence receipt under `kaola-workflow/{project}/.cache/` (recorded parent-side); a bare `.cache/<id>.md` resolving to the worktree root is the recurring overflow (declare the path under `kaola-workflow/{project}/.cache/`).
-  - **Byte-identical SYNC-GROUP peers (#301)** that must move together — when one edition file in a byte-mirror group changes, its peers in the same group (the cross-edition mirrors that `edition-sync` keeps identical) move atomically; declare the whole group in the one node.
+  - **Byte-identical SYNC-GROUP peers** that must move together — when one edition file in a byte-mirror group changes, its peers in the same group (the cross-edition mirrors that `edition-sync` keeps identical) move atomically; declare the whole group in the one node.
   - **Test files the node's RED/GREEN touches** — the unit/walkthrough/contract test a `tdd-guide` node writes or a change forces to update; the test file is in the producing node's write set, never assumed.
-- **Decision-record numbering (#337):** before hardcoding a decision-record id
+- **Decision-record numbering:** before hardcoding a decision-record id
   (`D-<issue>-NN`) into a write set or `## Plan Notes`, read the target repo's
   existing records (`docs/decisions/`, plus mentions in docs/ and CHANGELOG.md)
   and use the **next free** number — follow-up / partial-close cycles continue
@@ -187,9 +187,9 @@ Author the `## Nodes` table so the validator passes it. Each node is one row:
 
 **Author EFFICIENT DAGs, not merely valid DAGs.** Minimize the safe critical path; expose independent work as siblings (a shared ready frontier) so the executor can open them as one batch; serialize only for true dependencies, shared file lanes, selectors, loops, or gates. Read-only verification/research siblings are zero-blast-radius — prefer fanning them out. Write-role siblings must declare disjoint write sets to be batch-eligible.
 
-**D-419-01 scheduler-default posture (D-419-01; co-open default-on per #542/D-542-01).** Prefer a WIDE ready frontier over a long serial chain when nodes are independent: author parallel read-only analysis/review nodes (they fan out to the read cap) and parallel write nodes with DISJOINT declared write sets (they co-open in isolated per-leg worktrees BY DEFAULT — #542/D-542-01 retired `KAOLA_LANE_CONTAINMENT` as the gate; `parallelWritesDefaultOn` is TRUE unless `KAOLA_PARALLEL_WRITES=0`). The scheduler opens highest `longest-path-to-sink` nodes first (critical-path-first list scheduling), so place the longest dependency chain on the critical path and let short independent branches overlap it. Do NOT serialize independent work behind a single chain merely for ordering simplicity — every serialized independent node adds its full duration to the makespan; every overlapped node hides behind the critical path for free. Serial is the fallback for overlapping/uncertain write sets, a host without worktree support, the `KAOLA_PARALLEL_WRITES=0` kill-switch, or a trivially single-ready frontier — not a design goal. Concrete heuristic: if two write nodes touch DISJOINT files and neither depends on the other, do not add a dep edge — leave them as an antichain so the validator derives `parallel_safe` and the scheduler overlaps them; only add a dep when write sets overlap. NEVER add `parallel_safe` to a node yourself — it is validator-derived ([INV-17]); adding it by hand produces an `invalid_annotation` refusal.
+**Scheduler-default posture (co-open default-on).** Prefer a WIDE ready frontier over a long serial chain when nodes are independent: author parallel read-only analysis/review nodes (they fan out to the read cap) and parallel write nodes with DISJOINT declared write sets (they co-open in isolated per-leg worktrees BY DEFAULT; `parallelWritesDefaultOn` is TRUE unless `KAOLA_PARALLEL_WRITES=0`). The scheduler opens highest `longest-path-to-sink` nodes first (critical-path-first list scheduling), so place the longest dependency chain on the critical path and let short independent branches overlap it. Do NOT serialize independent work behind a single chain merely for ordering simplicity — every serialized independent node adds its full duration to the makespan; every overlapped node hides behind the critical path for free. Serial is the fallback for overlapping/uncertain write sets, a host without worktree support, the `KAOLA_PARALLEL_WRITES=0` kill-switch, or a trivially single-ready frontier — not a design goal. Concrete heuristic: if two write nodes touch DISJOINT files and neither depends on the other, do not add a dep edge — leave them as an antichain so the validator derives `parallel_safe` and the scheduler overlaps them; only add a dep when write sets overlap. NEVER add `parallel_safe` to a node yourself — it is validator-derived; adding it by hand produces an `invalid_annotation` refusal.
 
-**Speculative-open-eligible shaping — when to set `speculative_open_policy: consent` (#439, existing).**
+**Speculative-open-eligible shaping — when to set `speculative_open_policy: consent`.**
 A READ-ONLY node whose SOLE unsatisfied predecessor is an in-progress GATE need not idle until that
 gate closes: when the gate is *very likely to pass*, the executor can open the node speculatively
 (betting the gate passes) and run it ahead, hiding its latency behind the gate — a makespan win on the
@@ -225,7 +225,7 @@ a gate.
 
 Record the consumer's validation command ONCE in a `## Meta` `validation_command: <cmd>` line (e.g.
 `validation_command: npm test`). Each node and Finalization REUSE this recorded command instead of
-re-deriving a full-suite command per node — the #547 "record once, cite don't re-run" discipline that
+re-deriving a full-suite command per node — the "record once, cite don't re-run" discipline that
 closes the per-node re-derivation gap. It is reader-only (no freeze gate): a plan without it is still
 valid. If the project's chain/suite reads prose files a docs-only change must NOT be cited-as-unchanged
 over (a runtime-parsed fixture under `docs/`, a contract doc the tests assert on), list them in a
@@ -247,7 +247,7 @@ these reminders does not relax them.
    ```
    `--attest-planner-spawn` lets claim.js back-fill the planner's own (otherwise-unloggable) dispatch
    marker into `.cache/dispatch-log.jsonl`; only a genuinely-dispatched workflow-planner running this
-   startup procedure passes it (#280).
+   startup procedure passes it.
    `--workflow-path adaptive` is **required** so the project is stamped `workflow_path: adaptive`
    (a subagent shell does not inherit the orchestrator's `KAOLA_PATH`). This writes `kaola-workflow/{project}/workflow-state.md` at repo-root AND provisions a repo-local hidden worktree at `<repo-root>/.kw/worktrees/<project>/`. You author and freeze the plan at repo-root; you do NOT cd into the worktree — the executor `/kaola-workflow-plan-run` mirrors the folder into the worktree and operates there.
    - **Overwrite-guard carve-out (frozen vs unfrozen):** if `kaola-workflow/{project}/workflow-plan.md`
@@ -263,7 +263,7 @@ these reminders does not relax them.
      the planner refuses with `planner_control_boundary_violation`.
    - **Refusal:** if startup returns any `claim_verdict` that is NOT `acquired`/`owned` — no
      `workflow-state.md` is written. STOP and return the verdict + reasoning verbatim so the
-     orchestrator decides. Do not retry a different issue. Classify by `result` (#495):
+     orchestrator decides. Do not retry a different issue. Classify by `result`:
      - `result: refuse` — determinate fact (`workflow_path_refused`, `target_occupied`,
        `user_target_blocked`, `user_target_red`, `user_target_closed`, `target_unavailable`,
        `target_unverified`, or `claim: none`). Fail closed. The orchestrator does NOT push past this.
@@ -272,7 +272,7 @@ these reminders does not relax them.
        Return the escalation packet verbatim; the orchestrator PAUSES and asks the user to retry,
        pick a different target, go offline, or abort. This is NOT an `adaptive-node write-halt` — no
        plan/ledger exists yet at claim time.
-   - **Bundle startup consistency (`target_set_mismatch`, #430):** after claim, `cmdStartup`
+   - **Bundle startup consistency (`target_set_mismatch`):** after claim, `cmdStartup`
      compares the `issue_numbers` persisted in `workflow-state.md` against the `--target-issues`
      set passed at startup. If they differ, the script refuses with `target_set_mismatch`. This
      indicates a stale or diverged state file — do NOT re-attempt startup with a different issue
@@ -282,24 +282,24 @@ these reminders does not relax them.
    *this* task, and **Write** `kaola-workflow/{project}/workflow-plan.md` containing the `## Meta`
    `labels:` line, the `## Nodes` table, and an empty `## Node Ledger` (one row per node,
    `status: pending`). This authoring Write is yours.
-   - **Cross-edition symbol scoping — grep the changed symbol across all four trees BEFORE you freeze a write set (#306).** For each token/symbol a node adds or removes (a script-name `const`/`require`, a pinned doc phrase, a contract-validator needle, an env var, a renamed forge script), grep it across `scripts/` + every `plugins/*/scripts/` + the edition `commands/`/`skills/` trees and surface every referencing file. Decide include-in-`declared_write_set` vs out-of-scope **consciously** — a symbol present in N editions usually means N write-set members (or N nodes), not one. This prevents discovering an edition-port break (a forge-renamed script, a byte-mirror peer, a pinned token) at the finalize gate instead of at authoring time.
-   - **Keep semantically-coupled cross-edition prose in ONE node (#309).** File-disjointness (what the validator enforces for a `fanout` write-role split) is **not** semantic independence: two parallel implementers editing the *same logic* across editions can rewrite it with divergent prose (the #254 router-rewrite parity defect). When a single semantic change spans N editions, author it as ONE node — there is no file-count ceiling forcing a split (#453), and a cohesive cross-edition set must move together. If you DO split a genuinely-independent lane, give every member a **shared canonical spec** — "mirror edition X's section verbatim modulo forge nouns" — not a free-form "implement the same logic," so the editions converge by construction.
-   - **Forge-neutral agent-profile authoring (#341).** When a node's write set touches the edition
+   - **Cross-edition symbol scoping — grep the changed symbol across all four trees BEFORE you freeze a write set.** For each token/symbol a node adds or removes (a script-name `const`/`require`, a pinned doc phrase, a contract-validator needle, an env var, a renamed forge script), grep it across `scripts/` + every `plugins/*/scripts/` + the edition `commands/`/`skills/` trees and surface every referencing file. Decide include-in-`declared_write_set` vs out-of-scope **consciously** — a symbol present in N editions usually means N write-set members (or N nodes), not one. This prevents discovering an edition-port break (a forge-renamed script, a byte-mirror peer, a pinned token) at the finalize gate instead of at authoring time.
+   - **Keep semantically-coupled cross-edition prose in ONE node.** File-disjointness (what the validator enforces for a `fanout` write-role split) is **not** semantic independence: two parallel implementers editing the *same logic* across editions can rewrite it with divergent prose. When a single semantic change spans N editions, author it as ONE node — there is no file-count ceiling forcing a split, and a cohesive cross-edition set must move together. If you DO split a genuinely-independent lane, give every member a **shared canonical spec** — "mirror edition X's section verbatim modulo forge nouns" — not a free-form "implement the same logic," so the editions converge by construction.
+   - **Forge-neutral agent-profile authoring.** When a node's write set touches the edition
      plugin trees (`plugins/kaola-workflow*/`), plugin agent/command/skill prose must stay
      **forge-neutral** — never name a forge-specific CLI binary (`gh`/`glab`), a forge brand name,
      or forge-specific request nouns; write "the forge CLI" / "the forge". The plugin role-agent
      profiles (`plugins/*/agents/*.toml`) are byte-identical mirrors across the three plugin
      editions; the canonical spec for a new agent toml is "name no CLI; mirror the existing
      agents' edition-neutral style." A CLI example copied verbatim from an issue spec into an
-     agent toml is exactly the #328 leak. The edition contract validators forbid these tokens
+     agent toml is a forbidden forge-namespace token. The edition contract validators forbid these tokens
      (`assertNoForbidden`); plan for the touching node to verify its changed files immediately
      with the standalone count-independent check
      (`node plugins/kaola-workflow-gitlab/scripts/validate-kaola-workflow-gitlab-contracts.js
      --forbidden-only <changed-file>...` and the gitea twin) instead of waiting for the full
      chains.
-   - **Agent-set delta = full registration surface (#340).** Adding (or removing) an agent profile — root `agents/<name>.md` or a plugin `agents/<name>.toml` — breaks EXACT-MATCH registries and by-name dispatch registrations that are keyed on **no symbol** of the new file, so #306 symbol-grep cannot find them. Include the complete **registration surface** in the plan's write sets: the other three edition profiles, the three `config/agents.toml` codex-dispatch templates (`[agents.<name>]` table — without it the agent is undispatchable in the codex/gitlab/gitea runtimes even though the profile file installs), `validate-vendored-agents.js` (localAgents), `install.sh` (REQUIRED_AGENTS + model case-list), `uninstall.sh` (REQUIRED_AGENTS — a missing name orphans the installed agent on uninstall), `resolve-agent-model.js` (×4, byte-identical), plan-validator `CANONICAL_ROLES` (×4: byte pair + two forge ports), the gitlab/gitea contract-validator agent counts, and the two forge `test-*-workflow-scripts.js` counts. If the new role is a review GATE role, also update the `GATE_ROLES`/`GATE_VERDICT_ROLES` sets (adaptive-node ×4, codex-compact-resume ×3). The validator refuses an addition that omits any of the 22 surface paths (`agent-registration gap`); removals are NOT machine-detected — apply this checklist manually.
-   - **Forge-port mirrors take the full accumulated root diff as canonical spec (#340).** When a root script is edited by two or more nodes, a forge-port node mirroring it must (a) depend — transitively — on every node that writes the root file (the validator refuses otherwise: `forge-port ordering gap`), and (b) state in the plan notes that its canonical spec is the **full accumulated root diff** vs the run base (`git diff <base>..HEAD -- <root-file>`): mirror EVERY hunk modulo forge nouns, never a per-concern enumeration of what each upstream node did (the #328 forge-claim-ports gap — half a mirror, all four chains green).
-   - **Codex-installer / `.codex`-behavior changes must cover the codex-edition walkthrough (#447/#448).** When a node's declared write set touches `install-codex-agent-profiles.js` or `.codex/` hook/profile behavior, the plan's write-set **union** MUST also include the assertion surfaces that exercise the change — `plugins/kaola-workflow/scripts/simulate-kaola-workflow-walkthrough.js` (the **codex** chain, which carries the `.codex` hook/profile black-box), `scripts/test-install-model-rendering.js` (the **claude** chain), and the two forge `test-{gitlab,gitea}-workflow-scripts.js` — whichever assert the changed behavior. The github-codex edition's installer test is **not** the two forge tests: its walkthrough (`simulate-kaola-workflow-walkthrough.js`) is where the codex chain's hook/profile assertions live, so treating the codex edition as "no separate installer test" lands the codex chain RED at the cross-edition gate (AC7) only *after* the run finished — the #447 mid-finalize re-freeze. **Test-node grouping:** keep these four edition test surfaces plus the installer copies as a cohesive test-update set in a dedicated test node — the codex walkthrough naturally belongs with the claude-chain test node (`test-install-model-rendering.js`), not the installer node. (No file-count ceiling forces this split — #453 — but the cohesion still recommends it.)
+   - **Agent-set delta = full registration surface.** Adding (or removing) an agent profile — root `agents/<name>.md` or a plugin `agents/<name>.toml` — breaks EXACT-MATCH registries and by-name dispatch registrations that are keyed on **no symbol** of the new file, so the symbol-grep cannot find them. Include the complete **registration surface** in the plan's write sets: the other three edition profiles, the three `config/agents.toml` codex-dispatch templates (`[agents.<name>]` table — without it the agent is undispatchable in the codex/gitlab/gitea runtimes even though the profile file installs), `validate-vendored-agents.js` (localAgents), `install.sh` (REQUIRED_AGENTS + model case-list), `uninstall.sh` (REQUIRED_AGENTS — a missing name orphans the installed agent on uninstall), `resolve-agent-model.js` (×4, byte-identical), plan-validator `CANONICAL_ROLES` (×4: byte pair + two forge ports), the gitlab/gitea contract-validator agent counts, and the two forge `test-*-workflow-scripts.js` counts. If the new role is a review GATE role, also update the `GATE_ROLES`/`GATE_VERDICT_ROLES` sets (adaptive-node ×4, codex-compact-resume ×3). The validator refuses an addition that omits any of the 22 surface paths (`agent-registration gap`); removals are NOT machine-detected — apply this checklist manually.
+   - **Forge-port mirrors take the full accumulated root diff as canonical spec.** When a root script is edited by two or more nodes, a forge-port node mirroring it must (a) depend — transitively — on every node that writes the root file (the validator refuses otherwise: `forge-port ordering gap`), and (b) state in the plan notes that its canonical spec is the **full accumulated root diff** vs the run base (`git diff <base>..HEAD -- <root-file>`): mirror EVERY hunk modulo forge nouns, never a per-concern enumeration of what each upstream node did.
+   - **Codex-installer / `.codex`-behavior changes must cover the codex-edition walkthrough.** When a node's declared write set touches `install-codex-agent-profiles.js` or `.codex/` hook/profile behavior, the plan's write-set **union** MUST also include the assertion surfaces that exercise the change — `plugins/kaola-workflow/scripts/simulate-kaola-workflow-walkthrough.js` (the **codex** chain, which carries the `.codex` hook/profile black-box), `scripts/test-install-model-rendering.js` (the **claude** chain), and the two forge `test-{gitlab,gitea}-workflow-scripts.js` — whichever assert the changed behavior. The github-codex edition's installer test is **not** the two forge tests: its walkthrough (`simulate-kaola-workflow-walkthrough.js`) is where the codex chain's hook/profile assertions live, so treating the codex edition as "no separate installer test" lands the codex chain RED at the cross-edition gate (AC7) only *after* the run finished. **Test-node grouping:** keep these four edition test surfaces plus the installer copies as a cohesive test-update set in a dedicated test node — the codex walkthrough naturally belongs with the claude-chain test node (`test-install-model-rendering.js`), not the installer node. (No file-count ceiling forces this split, but the cohesion still recommends it.)
 3. **Self-check.** Run the validator for a self-check (NOT a gate):
    ```
    node <plan-validator.js> kaola-workflow/{project}/workflow-plan.md --json
@@ -315,7 +315,7 @@ these reminders does not relax them.
    Evidence into `workflow-state.md` (preserving `## Sink`). It does NOT open node1 or record the
    node1 baseline — `/kaola-workflow-plan-run` owns the full node lifecycle including the first node.
    Returns a checklist-backed packet. You do NOT judge its `decision`/`risk` fields — audit metadata.
-   - **Bundle coherence guard (`bundle_state_incoherent`, #430):** before freezing, the handoff
+   - **Bundle coherence guard (`bundle_state_incoherent`):** before freezing, the handoff
      checks that when `bundle_id` is present in `workflow-state.md` the `issue_numbers` field is
      also present and matches the `bundle-N-M-K` pattern. If this invariant fails the handoff
      returns `handoff_status: plan_invalid` with `reason: bundle_state_incoherent` — a sign that
@@ -325,7 +325,7 @@ these reminders does not relax them.
    refuse) return the packet verbatim — the ORCHESTRATOR drives the bounded repair loop; you do not
    retry/redesign unasked.
 
-## Question-shaped & bug-shaped issues (#486)
+## Question-shaped & bug-shaped issues
 
 Not every issue is a build. An issue can be **a question without a settled answer** — "which approach?",
 "is X viable?", "why does Y happen?". Serve this shape by **composing existing roles**, never a
@@ -336,8 +336,7 @@ green artifact-vs-plan verdict; author the investigation instead.
 
 The arc and its roles:
 - **PROBE** — read-only evidence gathering: `code-explorer` / `knowledge-lookup` (for a bug, read the
-  failing path + logs). Author independent probes as a **read-only fan-out** so they inherit #472's
-  concurrent dispatch; width is your call, sized to genuinely-independent angles.
+  failing path + logs). Author independent probes as a **read-only fan-out** for concurrent dispatch; width is your call, sized to genuinely-independent angles.
 - **ASSUME** — `planner` proposes 2–3 candidate answers, **each with an explicit falsification test**
   ("a probe/repro shows ___ if true, ___ if false").
 - **CRITIQUE / FALSIFY** — `adversarial-verifier`, dispatched as a **separate** subagent (independence is
@@ -375,7 +374,7 @@ theatrical critique loop (a bug carries its own falsification oracle: the reprod
 
 **Escalate values, not facts.** A value / standing / irreversible call (and the un-reproducible bug above)
 goes to the existing `consent`-halt valve — never bolt an approval gate onto the planner. `decision:ask`
-stays advisory audit metadata; planner-first (#44/#287) is intact; this adds no gate and no thaw. Worked
+stays advisory audit metadata; planner-first is intact; this adds no gate and no thaw. Worked
 in-grammar examples (Case A, the read-only `adversarial-verifier` fan-out, and the bug diagnosis→fix flow)
 live in `docs/investigations/2026-06-15-486-question-shaped-issues.md`.
 

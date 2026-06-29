@@ -107,7 +107,7 @@ The orchestrator may pass a `goal` string in the dispatch prompt (sourced from `
 
 - Treat it as a soft filter: prefer bundles whose scope, area labels, and expected write areas align with the stated goal;
 - Priority/drive-order ranking takes precedence over goal alignment: the goal is a soft *tiebreak/preference within the chosen priority tier*, never a reason to skip the roadmap frontier. If the goal points at lower-priority work while a higher-priority frontier issue is open and actionable, recommend the frontier and note the goal divergence in `goal_alignment.reason` — do not let the goal override the priority rank.
-- Do not exclude issues solely because they do not match the goal — target-set integrity (#430) still applies (all bundle rules must pass independently of goal alignment);
+- Do not exclude issues solely because they do not match the goal — target-set integrity still applies (all bundle rules must pass independently of goal alignment);
 - Add a `goal_alignment` field to your output (see Output Format below).
 
 When no goal is provided, omit `goal_alignment` from the output entirely — the field is optional and backward-compatible.
@@ -125,9 +125,9 @@ Return a single JSON object:
     "confidence": "high",
     "rationale": "same subsystem, shared acceptance surface, compatible write lanes",
     "priority_basis": {
-      "frontier": "#488/#502/#561 epic frontier (per ### Project rules drive-order)",
+      "frontier": "epic frontier (per ### Project rules drive-order)",
       "pick_vs_frontier": "advances frontier — primary_issue 488 is the top-priority open frontier issue",
-      "guardrails_honored": "did not recommend #82/#652 (lower-priority) while the #488 frontier is open and actionable"
+      "guardrails_honored": "did not recommend lower-priority issues while the top-priority frontier is open and actionable"
     },
     "expected_write_areas": ["scripts/", "plugins/kaola-workflow/skills/", "docs/"],
     "risks": ["cross-edition script sync", "finalization contract changes"],

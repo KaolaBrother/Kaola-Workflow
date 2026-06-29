@@ -7,7 +7,7 @@ model: sonnet
 <!--
 kaola-workflow-managed-agent: true
 locally-authored: true
-note: Locally authored for the adaptive path (issue #227). Not vendored — no upstream
+note: Locally authored for the adaptive path. Not vendored — no upstream
 provenance. The dedicated refute-by-default posture cannot be obtained by reusing the
 vendored code-reviewer profile, which is structurally tuned to under-report.
 -->

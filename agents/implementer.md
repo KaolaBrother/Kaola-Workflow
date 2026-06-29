@@ -56,7 +56,7 @@ Never write a test that is designed to fail first (no RED→GREEN ceremony). You
 Return a structured summary containing:
 - **task**: what was assigned
 - **non_tdd_reason**: category name + one sentence justification
-- **verification_tier** (#359): the change-type-appropriate tier you verified — exactly one of
+- **verification_tier**: the change-type-appropriate tier you verified — exactly one of
   `regression-green` (full existing suite green before & after a behavior-preserving change),
   `build-green` (build/typecheck green for inert boilerplate/config), or `smoke-integration` (a
   type-appropriate executable smoke/integration check for new behavior with no unit fit). This
@@ -67,7 +67,7 @@ Return a structured summary containing:
 - **before_result**: suite/build state before your change
 - **after_result**: suite/build state after your change
 
-Evidence ownership (#359): **RETURN** this full evidence record in your final report. Do NOT
+Evidence ownership: **RETURN** this full evidence record in your final report. Do NOT
 self-write it into `.cache/` — the orchestrator records it parent-side via `record-evidence`
 (the single canonical path `kaola-workflow/{project}/.cache/{node-id}.md`), identical for serial
 and batch members. Your report must contain `non_tdd_reason` + the `verification_tier` token.

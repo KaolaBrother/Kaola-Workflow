@@ -17,7 +17,7 @@ freeze; the contractor stamps the durable bookkeeping.
 
 Adaptive is the unconditional default — `fast`/`full` are explicit path-naming
 escapes, never an automatic fallback. The authoring entry is **script-enforced**
-by `kaola-workflow-claim.js authoring-allowed` (#235), not prose alone (adaptive
+by `kaola-workflow-claim.js authoring-allowed`, not prose alone (adaptive
 authoring is always allowed). The middle of the run
 is free; the lifecycle frame around it (claim → branch/worktree → [this plan] →
 Finalization sink) is fixed.
@@ -62,7 +62,7 @@ risk-ask / abort left it unfrozen), re-run the planner+handoff on it (the planne
 exit therefore leaves a **resumable** project, not an orphan; `kaola-workflow-claim.js discard
 --project {project}` abandons it.
 
-**Entry guard (main session, before the dispatch).** Run the **authoring guard** (#235). It needs
+**Entry guard (main session, before the dispatch).** Run the **authoring guard**. It needs
 no project, so it runs before the claim. Adaptive authoring is always allowed,
 so this returns `authoring_allowed: true`; the call preserves the mechanical gate shape
 and the planner's `startup` still routes the claim via `claimProject`.
@@ -87,7 +87,7 @@ freshness-block release no longer guards this path, and gating up front leaves n
 Once main is clean, **summon the `workflow-planner`** — it claims, authors `workflow-plan.md`, runs
 the validator `--json` as a self-check, and RETURNS a structured summary; it never JUDGES risk or asks the user (decision:ask is recorded metadata); it RUNS the handoff, which freezes mechanically, and returns the packet; it never dispatches.
 
-**Planner-first control boundary (issue #287).** The main session performs ONLY the allowed non-design preflight above (read repo/session rules, confirm target issue, authoring-allowed check, git freshness, non-design target availability), then dispatches `workflow-planner` immediately as the first issue-specific action. The main session MUST NOT pre-author the `## Nodes` DAG, choose role sequence/deps/shapes/write-sets, or pass a mandatory full DAG / `AUTHOR EXACTLY` / `do not redesign` prompt to the planner — the adaptive front-end design is the planner's to own, not the main session's. Doing so earns a typed refusal: `planner_control_boundary_violation`. The ONLY exception is in the bounded unfrozen-plan validator-repair loop (after `handoff_status: plan_invalid` on an UNFROZEN plan): the orchestrator MAY re-dispatch the planner with the verbatim validator errors + the prior plan as repair context, because the planner already owns that unfrozen draft.
+**Planner-first control boundary.** The main session performs ONLY the allowed non-design preflight above (read repo/session rules, confirm target issue, authoring-allowed check, git freshness, non-design target availability), then dispatches `workflow-planner` immediately as the first issue-specific action. The main session MUST NOT pre-author the `## Nodes` DAG, choose role sequence/deps/shapes/write-sets, or pass a mandatory full DAG / `AUTHOR EXACTLY` / `do not redesign` prompt to the planner — the adaptive front-end design is the planner's to own, not the main session's. Doing so earns a typed refusal: `planner_control_boundary_violation`. The ONLY exception is in the bounded unfrozen-plan validator-repair loop (after `handoff_status: plan_invalid` on an UNFROZEN plan): the orchestrator MAY re-dispatch the planner with the verbatim validator errors + the prior plan as repair context, because the planner already owns that unfrozen draft.
 
 You MUST pass `model="{WORKFLOW_PLANNER_MODEL}"` in this Agent call exactly as shown — do not omit
 the `model=` line.
@@ -106,7 +106,7 @@ files are authoritative.
 
 <!-- PIN: claim-escalate -->
 - **Refusal — any `claim_verdict` that is NOT `acquired` or `owned`**: NO `workflow-state.md` was
-  written. Surface `claim_reasoning` and classify by `result` (#495):
+  written. Surface `claim_reasoning` and classify by `result`:
   - `result: refuse` (e.g. `workflow_path_refused`, `target_occupied`, `user_target_blocked`,
     `user_target_red`, `user_target_closed`, `target_unavailable`, `target_unverified`, or
     `claim: none`): **HARD STOP** (**fail closed** — do not retry a different issue, do not
@@ -131,7 +131,7 @@ The planner RAN `kaola-workflow-adaptive-handoff.js` and returned a checklist-ba
 
 - **`handoff_status: ready_to_run`** (all checklist true) → hand off DIRECTLY to `/kaola-workflow-plan-run {project}` (even when `decision:ask`, no approval gate). `/kaola-workflow-plan-run` owns the complete node lifecycle — it opens and dispatches every node including the first, via `kaola-workflow-adaptive-node.js`.
 
-- **`handoff_status: plan_invalid`** (validator refused; plan never froze, NOTHING written) → bounded **repair loop**: re-dispatch the `workflow-planner` with the verbatim `errors`/`validator_verdict` so it overwrites the UNFROZEN plan with a corrected DAG and re-runs the handoff. Retry ~2x (the retry counter lives in the ORCHESTRATOR, never in the script). After repeated failure (~2x) → a REAL decision: **discard+restart a fresh adaptive run** (`kaola-workflow-claim.js discard --project {project}` then a fresh adaptive start) / **STOP + surface a concrete blocker** with validator evidence. NEVER downgrade to fast/full — there is no automatic fallback between paths (#538); the only fallbacks are inside adaptive (bounded repair, in-place posture). Never silently loop.
+- **`handoff_status: plan_invalid`** (validator refused; plan never froze, NOTHING written) → bounded **repair loop**: re-dispatch the `workflow-planner` with the verbatim `errors`/`validator_verdict` so it overwrites the UNFROZEN plan with a corrected DAG and re-runs the handoff. Retry ~2x (the retry counter lives in the ORCHESTRATOR, never in the script). After repeated failure (~2x) → a REAL decision: **discard+restart a fresh adaptive run** (`kaola-workflow-claim.js discard --project {project}` then a fresh adaptive start) / **STOP + surface a concrete blocker** with validator evidence. NEVER downgrade to fast/full — there is no automatic fallback between paths; the only fallbacks are inside adaptive (bounded repair, in-place posture). Never silently loop.
 
 ## Establish the task list, then hand off
 
@@ -153,9 +153,9 @@ The full shaping guidance lives in `agents/workflow-planner.md`. One heuristic i
 
 - Author a `knowledge-lookup` node when the task depends on external library or API behavior, framework conventions, or open-web/expertise knowledge that cannot be confirmed from the local codebase alone. This mirrors the Phase 1 `knowledge-lookup` trigger.
 
-### Question-shaped & bug-shaped issues (#486)
+### Question-shaped & bug-shaped issues
 
-When the issue is a **question without a settled answer** ("which approach?", "is X viable?", "why does Y happen?"), the `workflow-planner` authors an **investigation**, not a build DAG around an unvalidated premise (which would launder the guess past the artifact-vs-plan verdict). The arc maps onto existing roles with **zero new grammar**: **probe → assume → adversarially critique → converge** — read-only `code-explorer`/`knowledge-lookup` probes (authored as a read-only fan-out, inheriting #472 concurrency) → `planner` proposes 2–3 candidate answers, each with an explicit falsification test → `adversarial-verifier` (a separate subagent; read-only but has Bash, so for a bug it **runs the existing reproduction**) tries to refute the leading answer → `planner`/`synthesizer` converges. **Freeze-once split:** Case A (shape knowable, answer not) authors the whole DAG up front (or `select(<group>)` for the enumerable version); Case B (shape depends on findings — e.g. a flaky-bug diagnosis) runs a short read-only shaping run, then RE-PLANS as a fresh run (new `plan_hash`, no in-place thaw). For a **bug**, the falsification criterion IS the reproduction ("root cause or symptom mask?"); cannot-reproduce-after-a-bounded-probe → the `consent`-halt valve (`write-halt --reason consent`), never a guess-fix. Escalate values, not facts; `decision:ask` stays advisory (no new gate). Full pattern: the `workflow-planner` profile.
+When the issue is a **question without a settled answer** ("which approach?", "is X viable?", "why does Y happen?"), the `workflow-planner` authors an **investigation**, not a build DAG around an unvalidated premise (which would launder the guess past the artifact-vs-plan verdict). The arc maps onto existing roles with **zero new grammar**: **probe → assume → adversarially critique → converge** — read-only `code-explorer`/`knowledge-lookup` probes (authored as a read-only fan-out, with concurrent dispatch) → `planner` proposes 2–3 candidate answers, each with an explicit falsification test → `adversarial-verifier` (a separate subagent; read-only but has Bash, so for a bug it **runs the existing reproduction**) tries to refute the leading answer → `planner`/`synthesizer` converges. **Freeze-once split:** Case A (shape knowable, answer not) authors the whole DAG up front (or `select(<group>)` for the enumerable version); Case B (shape depends on findings — e.g. a flaky-bug diagnosis) runs a short read-only shaping run, then RE-PLANS as a fresh run (new `plan_hash`, no in-place thaw). For a **bug**, the falsification criterion IS the reproduction ("root cause or symptom mask?"); cannot-reproduce-after-a-bounded-probe → the `consent`-halt valve (`write-halt --reason consent`), never a guess-fix. Escalate values, not facts; `decision:ask` stays advisory (no new gate). Full pattern: the `workflow-planner` profile.
 
 ## Bundle Lane — Multi-Issue Adaptive Claim
 

@@ -7,7 +7,7 @@ model: opus
 <!--
 kaola-workflow-managed-agent: true
 locally-authored: true
-note: Locally authored for the adaptive-path #463 write-overlap mechanism (owner-approved 2026-06-15).
+note: Locally authored for the adaptive-path write-overlap mechanism (owner-approved 2026-06-15).
 Not vendored — no upstream provenance. The synthesizer is the WRITE convergence node of a parallel
 write fan-out: it depends_on every leg, declares the UNION of the legs' write sets, and is
 post-dominated by a real code-reviewer (G1). DISJOINT legs are merged MECHANICALLY by the scheduler

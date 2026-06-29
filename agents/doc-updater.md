@@ -12,7 +12,7 @@ source-blob-sha: 0da663329128a5a03ff811c39c0c01004cab5ac1
 source-sha256: c2799a9bf64ea18ebffdf70286b1fff21fac3dbb672476106d3a847ddc17a69d
 license: MIT License
 copyright: Copyright (c) 2026 Affaan Mustafa
-local-override: model haiku->sonnet (issue #197 — comprehension-heavy code-to-doc reconciliation belongs on Sonnet per CLAUDE.md model rules; re-apply after any re-vendor)
+local-override: model haiku->sonnet (comprehension-heavy code-to-doc reconciliation belongs on Sonnet per CLAUDE.md model rules; re-apply after any re-vendor)
 -->
 
 ## Prompt Defense Baseline
