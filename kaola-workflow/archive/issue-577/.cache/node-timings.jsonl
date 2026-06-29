@@ -1,0 +1,9 @@
+{"node":"n1-opencode-plugin-source","event":"opened","ts":"2026-06-29T16:38:37.880Z"}
+{"node":"n1-opencode-plugin-source","event":"closed","ts":"2026-06-29T16:46:28.798Z"}
+{"node":"n2-docs","event":"opened","ts":"2026-06-29T16:46:28.835Z"}
+{"node":"n2-docs","event":"closed","ts":"2026-06-29T16:49:47.771Z"}
+{"node":"n3-review","event":"opened","ts":"2026-06-29T16:49:47.811Z"}
+{"node":"n3-review","event":"evidence","ts":"2026-06-29T16:54:28.888Z"}
+{"node":"n3-review","event":"closed","ts":"2026-06-29T16:54:33.626Z"}
+{"node":"n4-finalize","event":"opened","ts":"2026-06-29T16:54:33.691Z"}
+{"node":"n4-finalize","event":"closed","ts":"2026-06-29T17:00:29.894Z"}

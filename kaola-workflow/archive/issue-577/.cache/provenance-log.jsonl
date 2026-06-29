@@ -1,0 +1,8 @@
+{"timestamp":"2026-06-29T16:38:37.881Z","event":"open","nodeId":"n1-opencode-plugin-source","nonce":"eeb29e4e9e6f","by":"adaptive-node"}
+{"timestamp":"2026-06-29T16:46:28.798Z","event":"close","nodeId":"n1-opencode-plugin-source","nonce":"eeb29e4e9e6f","by":"adaptive-node"}
+{"timestamp":"2026-06-29T16:46:29.087Z","event":"open","nodeId":"n2-docs","nonce":"f5d06a00c10b","by":"adaptive-node"}
+{"timestamp":"2026-06-29T16:49:47.772Z","event":"close","nodeId":"n2-docs","nonce":"f5d06a00c10b","by":"adaptive-node"}
+{"timestamp":"2026-06-29T16:49:48.065Z","event":"open","nodeId":"n3-review","nonce":"71344f2d050f","by":"adaptive-node"}
+{"timestamp":"2026-06-29T16:54:33.627Z","event":"close","nodeId":"n3-review","nonce":"71344f2d050f","by":"adaptive-node"}
+{"timestamp":"2026-06-29T16:54:33.944Z","event":"open","nodeId":"n4-finalize","nonce":"d485308900b8","by":"adaptive-node"}
+{"timestamp":"2026-06-29T17:00:29.894Z","event":"close","nodeId":"n4-finalize","nonce":"d485308900b8","by":"adaptive-node"}

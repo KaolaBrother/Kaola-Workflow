@@ -1,0 +1,16 @@
+[
+  {
+    "finding_id": "id=R1 scope=out_of_scope action=none status=open severity=low",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  },
+  {
+    "finding_id": "id=R2 scope=out_of_scope action=follow_up status=open severity=low",
+    "file": "install `cp` uses `*.js`",
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  }
+]
