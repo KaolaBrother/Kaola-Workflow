@@ -1,0 +1,9 @@
+{"node":"n1-allowlist-guard","event":"opened","ts":"2026-06-29T23:12:22.715Z"}
+{"node":"n1-allowlist-guard","event":"closed","ts":"2026-06-29T23:17:02.392Z"}
+{"node":"n2-docs","event":"opened","ts":"2026-06-29T23:17:02.428Z"}
+{"node":"n2-docs","event":"closed","ts":"2026-06-29T23:21:40.422Z"}
+{"node":"n3-review","event":"opened","ts":"2026-06-29T23:21:40.459Z"}
+{"node":"n3-review","event":"evidence","ts":"2026-06-29T23:25:36.776Z"}
+{"node":"n3-review","event":"closed","ts":"2026-06-29T23:26:54.888Z"}
+{"node":"n4-finalize","event":"opened","ts":"2026-06-29T23:26:54.952Z"}
+{"node":"n4-finalize","event":"closed","ts":"2026-06-29T23:31:46.095Z"}

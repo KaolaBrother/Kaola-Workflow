@@ -1,0 +1,3 @@
+evidence-binding: n1-allowlist-guard 8c57e74c6954
+RED: A11-allowlist(b): --check must exit NON-ZERO when an unregistered .js is present in templates/opencode/plugins/ (pre-impl: --check exited 0, output was "sync-opencode-edition: 15 agent(s) + 11 command(s) + 1 plugin(s) in parity with canonical."). Two failures — FAIL: A11-allowlist(b): --check must exit NON-ZERO when an unregistered .js is present in templates/opencode/plugins/ / FAIL: A11-allowlist(b): --check output must name the unregistered plugin and reference PLUGIN_SCRIPTS — got: sync-opencode-edition: 15 agent(s) + 11 command(s) + 1 plugin(s) in parity with canonical. / opencode-edition test FAILED: 2 failure(s), 497 passed.
+GREEN: A11-allowlist(b) passes; opencode-edition test passed (499 assertions).
