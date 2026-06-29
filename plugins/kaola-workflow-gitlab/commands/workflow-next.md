@@ -67,7 +67,7 @@ do not auto-pick; the agent owns this decision.
 **Branch first on whether the user named an issue:**
 
 - **User named a specific issue** — `$ARGUMENTS` carries an issue number/project, or
-  the prompt names one (e.g. "work on #42") → use the single-issue selection
+  the prompt names one (e.g. "work on #N") → use the single-issue selection
   (steps 1–4 below), byte-unchanged.
 - **User did NOT name an issue** — the common "work on the next issue" / no-argument
   case → this is the **auto-bundle entry**. Resolve the path intent first (Step 0a-1),
@@ -110,7 +110,7 @@ set (see below).
 
 ### Explicit-bundle entry
 
-When the user names several issues together (e.g., "finish issues #42 #47 #53
+When the user names several issues together (e.g., "finish issues #N #N #N
 together"), route through the bundle lane:
 
 - Set `KAOLA_TARGET_ISSUES=42,47,53` (comma-separated, no spaces) before calling startup.

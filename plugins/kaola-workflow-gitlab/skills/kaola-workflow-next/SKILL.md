@@ -108,7 +108,7 @@ several issues or when auto-bundle mode identifies a high-confidence same-scope 
 
 ### Explicit-bundle entry
 
-When the user names several issues together (e.g., "finish issues #42 #47 #53
+When the user names several issues together (e.g., "finish issues #N #N #N
 together"), route through the bundle lane:
 
 - Set `KAOLA_TARGET_ISSUES=42,47,53` (comma-separated, no spaces) before calling startup.

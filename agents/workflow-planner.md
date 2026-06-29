@@ -206,7 +206,7 @@ critical path. Author this shape only where ALL of these hold:
 is `off`). That makes `next-action` surface the node as speculative-pending and lets the executor run
 `open-ready --speculative-consent` to open it ahead of the gate. **Never hand-add a `speculative: true`
 annotation to a node row** — the Meta key is the ONLY authoring control; eligibility stays
-validator/runtime-derived (same INV-17 discipline as `parallel_safe` above). **When NOT to:** the
+validator/runtime-derived (same validator-derived discipline as `parallel_safe` above). **When NOT to:** the
 speculative node runs while the gate is still `in_progress`, so on a gate `verdict: fail` the operator
 decides whether to keep or discard its output — author it ONLY where the gate is very likely to pass
 AND the rework cost on a fail is low/bounded. Do not set it when the gate is genuinely uncertain, when

@@ -782,4 +782,32 @@ assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'main-session-gate'
     '#422.3: scripts."test:kaola-workflow:claude" must run node scripts/test-agent-profile-parity.js');
 }
 
+// PROVENANCE_BAN: Codex prompt surfaces (agents/*.toml, skills/*/SKILL.md) must not embed
+// issue numbers (#NNN), decision IDs (D-NNN-NN), invariant tags (INV-NN), ADR citations, or
+// PR/MR/AC refs. Only the rule belongs in prompts; provenance belongs in CHANGELOG.md,
+// docs/decisions/, and commit messages. Allowed: #N/#<issue>/#<n> placeholders, runtime vars
+// (KAOLA_TARGET_ISSUE=N, --target-issue <N>), grey-zone audit labels (G1/G3/AC7/M4 — no #).
+// See docs/conventions.md.
+{
+  const PROVENANCE_BAN = /#\d{1,4}|D-\d{3}-\d{2}|\bINV-\d+|ADR[ -]\d{2,4}|\b(?:PR|MR|AC)#\d+/;
+  const codexAgentFiles = fs.readdirSync(path.join(root, pluginRoot, 'agents'))
+    .filter(f => f.endsWith('.toml'))
+    .map(f => pluginRoot + '/agents/' + f);
+  const codexSkillFiles = fs.readdirSync(path.join(root, pluginRoot, 'skills'), { withFileTypes: true })
+    .filter(e => e.isDirectory())
+    .map(e => pluginRoot + '/skills/' + e.name + '/SKILL.md')
+    .filter(f => exists(f));
+  for (const rel of [...codexAgentFiles, ...codexSkillFiles]) {
+    const lines = read(rel).split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const m = lines[i].match(PROVENANCE_BAN);
+      if (m) {
+        assert(false,
+          rel + ':' + (i + 1) + ': PROVENANCE_BAN — provenance token "' + m[0] +
+          '" must not appear in agent-facing prompt surfaces; see docs/conventions.md');
+      }
+    }
+  }
+}
+
 console.log('Kaola-Workflow Codex contract validation passed');

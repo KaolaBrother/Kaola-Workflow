@@ -262,16 +262,19 @@ Remove any of the following when they appear in a prompt surface:
 | Decision IDs | `D-NNN-NN` (e.g. `D-542-01`, `D-430-01`) |
 | Invariant tags | `[INV-NN]` (e.g. `[INV-01]`) |
 | ADR citations | `ADR-NNNN`, `ADR NNNN` (hyphen or space form, e.g. `ADR-0008`, `ADR 0004`) |
+| Forge request refs | `PR#NNN`, `MR#NNN`, `AC#NNN` |
 | Defect/pattern clauses | Whole prose clauses whose only function is to record the history of a past defect or anti-pattern, with no operative rule content surviving removal |
 
 Parenthetical issue refs inside an otherwise-operative rule sentence are the most common case: `(#NNN)` can almost always be dropped with no loss of rule meaning.
 
 ### Allowlist — these are NOT provenance
 
-The following forms are runtime identifiers or illustrative examples, not design-rationale provenance, and MAY appear in prompt surfaces:
+The following forms are runtime identifiers or structural placeholders, not design-rationale provenance, and MAY appear in prompt surfaces:
 
 - **Runtime target-issue variables:** `KAOLA_TARGET_ISSUE=N`, `KAOLA_TARGET_ISSUES`, `"work on issue N"`, `"issue N"`, `Closes #<issue>` in commit-message instructions
-- **Illustrative user-command examples** that show what a user would type: e.g. `"work on #42"`, `"fix #100"` — these are instruction examples, not citations of the system's design history
+- **Numeric placeholders** in angle-bracket or letter-only shorthand: `#N`, `#<issue>`, `#<n>` — placeholder forms that contain no digit-only sequence after `#` and therefore do not match the machine guard
+- **Audit/gate short-labels** used in output schemas or gate tables: `G1`, `G3`, `H5`, `AC7`, `M4` — letter-digit labels that match no banned arm of the guard
+- **Illustrative user-command examples** must use placeholder form (e.g. `"work on #<N>"`, `"fix #<issue>"`) — examples with actual issue numbers (e.g. `"work on #42"`) match the `#\d{1,4}` arm of the machine guard and are not allowed in prompt surfaces
 
 ### Where provenance belongs
 
@@ -285,6 +288,26 @@ The following forms are runtime identifiers or illustrative examples, not design
 
 ### Enforcement
 
-No contract currently machine-enforces the provenance ban on prompt regions. A durable lint guard — a carefully allowlisted regex scanning the prompt-surface file set — is a deferred follow-up (a future issue). Until then, provenance cleanup is a manual discipline enforced by code review and by this convention.
+The provenance ban is **machine-enforced** by a `PROVENANCE_BAN` guard wired into all five contract validators and the additive opencode test suite (#576, `docs/decisions/D-576-01.md`).
 
-See `docs/decisions/D-575-01.md` for the decision record and the #575 scope history (including the mid-run plan-repair that added coverage of the `ADR NNNN` space-form).
+**Banlist regex:**
+
+```
+/#\d{1,4}|D-\d{3}-\d{2}|\bINV-\d+|ADR[ -]\d{2,4}|\b(?:PR|MR|AC)#\d+/
+```
+
+The guard scans agent-facing prompt surfaces — agent definitions, commands, skills, `.toml` profiles, and the regenerated opencode mirrors — and fails with a `file:line` + offending token diagnostic pointing back at `docs/conventions.md`.
+
+**Per-edition surface placement:**
+
+| Validator | Surfaces scanned |
+|---|---|
+| `validate-kaola-workflow-contracts.js` (claude) | `agents/*.md`, `commands/*.md`; byte-mirrored to the codex copy |
+| `validate-kaola-workflow-contracts.js` (codex) | `plugins/kaola-workflow/agents/*.toml`, `plugins/kaola-workflow/skills/` |
+| `validate-kaola-workflow-gitlab-contracts.js` | `plugins/kaola-workflow-gitlab/` agents, commands, skills |
+| `validate-kaola-workflow-gitea-contracts.js` | `plugins/kaola-workflow-gitea/` agents, commands, skills |
+| `scripts/test-opencode-edition.js` (opencode, assertion A25) | Regenerated `.opencode/` agent and command mirrors |
+
+The guard runs in all four `npm run test:kaola-workflow:{claude,codex,gitlab,gitea}` chains and in the additive opencode suite. A violation is a hard chain failure; the error message names the offending `file:line` and token.
+
+See `docs/decisions/D-575-01.md` for the convention adopted in #575 (enforcement then deferred) and `docs/decisions/D-576-01.md` for the #576 guard implementation that supersedes that deferred note.

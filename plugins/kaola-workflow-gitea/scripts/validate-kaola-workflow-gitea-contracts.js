@@ -880,4 +880,25 @@ assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-sink-merge.js', 'deri
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-sink-merge.js', 'readStateIssueNumbers');
 assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-sink-merge.js', 'probeIssueClosed');
 
+// PROVENANCE_BAN: Gitea prompt surfaces (agents/*.toml, commands/*.md, skills/*/SKILL.md) must
+// not embed issue numbers (#NNN), decision IDs (D-NNN-NN), invariant tags (INV-NN), ADR citations,
+// or PR/MR/AC refs. Only the rule belongs in prompts; provenance belongs in CHANGELOG.md,
+// docs/decisions/, and commit messages. Allowed: #N/#<issue>/#<n> placeholders, runtime vars
+// (KAOLA_TARGET_ISSUE=N, --target-issue <N>), grey-zone audit labels (G1/G3/AC7/M4 — no #).
+// See docs/conventions.md.
+{
+  const PROVENANCE_BAN = /#\d{1,4}|D-\d{3}-\d{2}|\bINV-\d+|ADR[ -]\d{2,4}|\b(?:PR|MR|AC)#\d+/;
+  for (const rel of [...agentFiles, ...commandFiles, ...skillFiles]) {
+    const lines = read(rel).split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const m = lines[i].match(PROVENANCE_BAN);
+      if (m) {
+        assert(false,
+          rel + ':' + (i + 1) + ': PROVENANCE_BAN — provenance token "' + m[0] +
+          '" must not appear in agent-facing prompt surfaces; see docs/conventions.md');
+      }
+    }
+  }
+}
+
 console.log('Kaola-Workflow Gitea contract validation passed');

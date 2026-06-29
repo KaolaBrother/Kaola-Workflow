@@ -982,4 +982,33 @@ assertIncludes('commands/kaola-workflow-finalize.md', 'FOREIGN_ARCHIVE=$(git dif
 assertIncludes('commands/kaola-workflow-finalize.md', 'BLOCKED: a foreign project\'s archive band is staged');
 assertIncludes('commands/kaola-workflow-finalize.md', '## Staging Guard');
 
+// PROVENANCE_BAN: agent-facing prompt surfaces (agents/*.md, commands/*.md) must not embed
+// issue numbers (#NNN), decision IDs (D-NNN-NN), invariant tags (INV-NN), ADR citations, or
+// PR/MR/AC refs. Only the rule belongs in prompts; provenance belongs in CHANGELOG.md,
+// docs/decisions/, and commit messages. Allowed: #N/#<issue>/#<n> placeholders, runtime vars
+// (KAOLA_TARGET_ISSUE=N, --target-issue <N>), grey-zone audit labels (G1/G3/AC7/M4 — no #).
+// See docs/conventions.md.
+{
+  const PROVENANCE_BAN = /#\d{1,4}|D-\d{3}-\d{2}|\bINV-\d+|ADR[ -]\d{2,4}|\b(?:PR|MR|AC)#\d+/;
+  const claudePromptSurfaces = [
+    { dir: 'agents', ext: '.md' },
+    { dir: 'commands', ext: '.md' }
+  ];
+  for (const { dir, ext } of claudePromptSurfaces) {
+    const files = fs.readdirSync(path.join(root, dir)).filter(f => f.endsWith(ext));
+    for (const f of files) {
+      const rel = dir + '/' + f;
+      const lines = read(rel).split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        const m = lines[i].match(PROVENANCE_BAN);
+        if (m) {
+          assert(false,
+            rel + ':' + (i + 1) + ': PROVENANCE_BAN — provenance token "' + m[0] +
+            '" must not appear in agent-facing prompt surfaces; see docs/conventions.md');
+        }
+      }
+    }
+  }
+}
+
 console.log('Workflow contract validation passed');

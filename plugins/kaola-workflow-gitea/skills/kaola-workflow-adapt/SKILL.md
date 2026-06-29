@@ -77,7 +77,7 @@ directories**, a `code-reviewer` that post-dominates both, a `doc-updater` for t
 docs, and the unique `finalize` sink. Being a write-role fan-out it routes to **ask**.
 
 ```markdown
-# Workflow Plan — issue #142
+# Workflow Plan — issue #<N>
 
 ## Meta
 labels: enhancement

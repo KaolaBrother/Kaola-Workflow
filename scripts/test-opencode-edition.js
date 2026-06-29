@@ -191,6 +191,59 @@ for (const file of canonCommands) {
 }
 
 // ---------------------------------------------------------------------------
+// A25: PROVENANCE_BAN — opencode prompt mirrors (.opencode/agent/*.md,
+// .opencode/command/*.md) must not embed provenance tokens (#NNN issue refs,
+// D-NNN-NN decision IDs, bare INV-NN invariant tags, ADR citations, PR/MR/AC#
+// refs). Provenance belongs in CHANGELOG.md and docs/decisions/, never in
+// dispatch-time prompt text. Positive-behavior assertions (guard catches the
+// banned forms) and negative-behavior assertions (guard allows placeholders and
+// grey-zone audit labels) are inlined here. See docs/conventions.md.
+// ---------------------------------------------------------------------------
+{
+  const PROVENANCE_BAN = /#\d{1,4}|D-\d{3}-\d{2}|\bINV-\d+|ADR[ -]\d{2,4}|\b(?:PR|MR|AC)#\d+/;
+
+  // Positive: guard MUST match these banned forms.
+  assert(PROVENANCE_BAN.test('#123'),     'A25-pos: PROVENANCE_BAN must catch #123');
+  assert(PROVENANCE_BAN.test('#42'),      'A25-pos: PROVENANCE_BAN must catch #42');
+  assert(PROVENANCE_BAN.test('D-100-01'),'A25-pos: PROVENANCE_BAN must catch D-100-01');
+  assert(PROVENANCE_BAN.test('INV-9'),   'A25-pos: PROVENANCE_BAN must catch INV-9');
+  assert(PROVENANCE_BAN.test('INV-17'),  'A25-pos: PROVENANCE_BAN must catch INV-17');
+  assert(PROVENANCE_BAN.test('ADR 0005'),'A25-pos: PROVENANCE_BAN must catch ADR 0005');
+  assert(PROVENANCE_BAN.test('ADR-0005'),'A25-pos: PROVENANCE_BAN must catch ADR-0005');
+
+  // Negative: guard must NOT match these allowed forms.
+  assert(!PROVENANCE_BAN.test('#N'),           'A25-neg: PROVENANCE_BAN must allow #N placeholder');
+  assert(!PROVENANCE_BAN.test('#<issue>'),     'A25-neg: PROVENANCE_BAN must allow #<issue> placeholder');
+  assert(!PROVENANCE_BAN.test('#<n>'),         'A25-neg: PROVENANCE_BAN must allow #<n> placeholder');
+  assert(!PROVENANCE_BAN.test('KAOLA_TARGET_ISSUE=N'),  'A25-neg: PROVENANCE_BAN must allow KAOLA_TARGET_ISSUE=N');
+  assert(!PROVENANCE_BAN.test('--target-issue <N>'),    'A25-neg: PROVENANCE_BAN must allow --target-issue <N>');
+  assert(!PROVENANCE_BAN.test('Closes #<issue>'),       'A25-neg: PROVENANCE_BAN must allow Closes #<issue>');
+  assert(!PROVENANCE_BAN.test('G1'),  'A25-neg: PROVENANCE_BAN must not flag grey-zone label G1');
+  assert(!PROVENANCE_BAN.test('G3'),  'A25-neg: PROVENANCE_BAN must not flag grey-zone label G3');
+  assert(!PROVENANCE_BAN.test('AC7'), 'A25-neg: PROVENANCE_BAN must not flag grey-zone label AC7');
+  assert(!PROVENANCE_BAN.test('M4'),  'A25-neg: PROVENANCE_BAN must not flag grey-zone label M4');
+
+  // Surface scan: generated opencode agent + command mirrors must be provenance-free.
+  const ocAgentFiles = fs.readdirSync(sync.OUT_AGENT_DIR)
+    .filter(f => f.endsWith('.md'))
+    .map(f => '.opencode/agent/' + f);
+  const ocCommandFiles = fs.readdirSync(sync.OUT_COMMAND_DIR)
+    .filter(f => f.endsWith('.md'))
+    .map(f => '.opencode/command/' + f);
+  for (const rel of [...ocAgentFiles, ...ocCommandFiles]) {
+    const lines = read(rel).split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const m = lines[i].match(PROVENANCE_BAN);
+      if (m) {
+        assert(false,
+          'A25: ' + rel + ':' + (i + 1) + ': PROVENANCE_BAN — provenance token "' + m[0] +
+          '" must not appear in opencode prompt surfaces; see docs/conventions.md');
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // A7/A8: opencode.json — valid JSONC, schema-pinned, default_agent "build", and
 // byte-for-byte parity with the generator. The generator DEFAULTS to pinning
 // NOTHING, so on a fresh install BOTH tiers inherit the model the user is
