@@ -732,6 +732,22 @@ function runCheck() {
     const canonContent = fs.readFileSync(path.join(CANON_PLUGINS_DIR, script), 'utf8');
     if (read(rel) !== canonContent) mismatches.push({ rel, reason: 'drifted from canonical templates/opencode/plugins/' });
   }
+  // Allowlist guard: every *.js present in the canonical plugins dir must be registered in
+  // PLUGIN_SCRIPTS (the unregistered-on-disk direction). The per-script loop above covers the
+  // missing-registered-file direction; this catches the reverse — a future second plugin dropped
+  // into templates/opencode/plugins/ without being added to the allowlist.
+  {
+    const onDiskPlugins = fs.readdirSync(CANON_PLUGINS_DIR).filter(f => f.endsWith('.js'));
+    const registeredSet = new Set(PLUGIN_SCRIPTS);
+    for (const file of onDiskPlugins) {
+      if (!registeredSet.has(file)) {
+        mismatches.push({
+          rel: 'templates/opencode/plugins/' + file,
+          reason: "unregistered plugin '" + file + "' present in templates/opencode/plugins/ but absent from PLUGIN_SCRIPTS — add it to the allowlist",
+        });
+      }
+    }
+  }
   // #F8: opencode.json parity — the installer freshness gate (install-opencode.sh) and the docs
   // bill --check as the "parity assert", yet runCheck never validated the committed config, so a
   // corrupted opencode.json passed. Compare it to the NEUTRAL renderer output (bare renderOpencodeJson(),

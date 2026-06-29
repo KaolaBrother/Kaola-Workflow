@@ -673,6 +673,41 @@ if (exists(pluginRel)) {
 }
 
 // ---------------------------------------------------------------------------
+// A11-allowlist: --check must reject an unregistered *.js present in
+// templates/opencode/plugins/ (set-equality guard, unregistered-on-disk direction).
+// Crash-safe: the transient probe is always removed in a finally block so no stray
+// file survives even if an assertion throws.
+// ---------------------------------------------------------------------------
+{
+  const { spawnSync } = require('child_process');
+  const canonPluginsDir = sync.CANON_PLUGINS_DIR;
+
+  // (a) Positive: the current on-disk set equals PLUGIN_SCRIPTS exactly.
+  const onDiskJs = fs.readdirSync(canonPluginsDir).filter(f => f.endsWith('.js')).sort();
+  const registeredJs = [...sync.PLUGIN_SCRIPTS].sort();
+  assert(JSON.stringify(onDiskJs) === JSON.stringify(registeredJs),
+    'A11-allowlist(a): templates/opencode/plugins/ contains EXACTLY the PLUGIN_SCRIPTS set (' +
+    JSON.stringify(registeredJs) + ') — got ' + JSON.stringify(onDiskJs));
+
+  // (b) Guard fires: inject a transient unregistered plugin, assert --check exits non-zero
+  // and names the offending file and references PLUGIN_SCRIPTS in its output.
+  const probeFile = path.join(canonPluginsDir, '__kw_probe_unregistered.js');
+  try {
+    fs.writeFileSync(probeFile, '// transient probe — must not persist\n');
+    const r = spawnSync(process.execPath,
+      [path.join(REPO, 'scripts', 'sync-opencode-edition.js'), '--check'],
+      { encoding: 'utf8' });
+    assert(r.status !== 0,
+      'A11-allowlist(b): --check must exit NON-ZERO when an unregistered .js is present in templates/opencode/plugins/');
+    const combined = (r.stdout || '') + (r.stderr || '');
+    assert(combined.includes('__kw_probe_unregistered.js') && combined.includes('PLUGIN_SCRIPTS'),
+      'A11-allowlist(b): --check output must name the unregistered plugin and reference PLUGIN_SCRIPTS — got: ' + combined.slice(0, 400));
+  } finally {
+    try { fs.unlinkSync(probeFile); } catch (_) { /* best-effort cleanup */ }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // P1–P5 + A (issue #543): install-time opt-in partition for the opencode edition
 // (--with-fast / --with-full parity with install.sh) AND the folded #544 Claude
 // path-leak fix. Hermetic per sub-case: each provisions its OWN fresh temp HOME

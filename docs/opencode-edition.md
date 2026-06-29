@@ -321,6 +321,16 @@ asserts parity (missing or drifted plugin = parity failure). `install-opencode.s
 plugin from the tracked canonical source, never from a self-referential `.opencode/` copy — a
 missing plugin is a loud install error (no silent `2>/dev/null || true`).
 
+**Plugin allowlist guard.** `sync-opencode-edition.js` maintains a `PLUGIN_SCRIPTS` allowlist
+naming every managed plugin. The installer deploys via a `templates/opencode/plugins/*.js`
+glob; `--check` enforces **set-equality** — every `*.js` present in
+`templates/opencode/plugins/` must be registered in `PLUGIN_SCRIPTS`. A file added to that
+directory without being registered exits `--check` non-zero with:
+`unregistered plugin '<file>' present in templates/opencode/plugins/ but absent from PLUGIN_SCRIPTS — add it to the allowlist`
+This keeps the installer glob and the sync allowlist provably equivalent so they cannot
+silently drift when a future second plugin is added. Enforced by `A11-allowlist` in
+`test-opencode-edition.js`.
+
 | Claude/Codex hook | opencode plugin mapping | Script |
 | --- | --- | --- |
 | `PreToolUse` Bash (block multi-project commits) | `tool.execute.before` · `bash` | `kaola-workflow-pre-commit.sh` |
@@ -465,7 +475,10 @@ under `.opencode/command/`), **install-time opt-in partition** (P1–P5:
 `~/.claude/kaola-workflow` tokens across the deployed `.opencode/` tree), and
 **canonical plugin source** (A11-canon: `templates/opencode/plugins/kaola-workflow-hooks.js`
 exists and the regenerated `.opencode/plugins/kaola-workflow-hooks.js` is byte-identical to
-it — closing the gap where a fresh-clone install silently deployed no hooks plugin). The
+it — closing the gap where a fresh-clone install silently deployed no hooks plugin),
+**plugin allowlist** (A11-allowlist: every `*.js` in `templates/opencode/plugins/` must be
+registered in `PLUGIN_SCRIPTS` — a file present on disk but absent from the allowlist fails
+`--check` loudly, keeping the installer glob and the sync allowlist provably equivalent). The
 existing `test-route-reachability.js` / `validate-vendored-agents.js` /
 `validate-script-sync.js` / `test-edition-sync.js` suites stay green — this
 edition adds a surface without altering the others.
