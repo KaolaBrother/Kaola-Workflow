@@ -42,7 +42,7 @@ const taskMirrorPath = path.join(__dirname, TASK_MIRROR);
 
 // #360: the LEDGER-SCOPED durable consent-halt probe (fence-aware). adaptive-schema keeps the
 // same filename across every edition (byte-identical ×4), so this require is NOT forge-renamed.
-const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, resolveFanoutCapReadonly, parallelWritesDefaultOn, refuse, WRITE_SET_OVERFLOW_SUBTYPES, dispatchEffort, dispatchEffortOpencode, parseNodeVerdict, MERGE_CONFLICT_REPAIR_LIMIT } = require('./kaola-workflow-adaptive-schema');
+const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, resolveFanoutCapReadonly, parallelWritesDefaultOn, refuse, WRITE_SET_OVERFLOW_SUBTYPES, dispatchEffort, dispatchEffortOpencode, parseNodeVerdict, MERGE_CONFLICT_REPAIR_LIMIT, resolveMainRoot } = require('./kaola-workflow-adaptive-schema');
 
 // ---------------------------------------------------------------------------
 // OPERATOR_HINT_REGISTRY (#445 / D-445-01 §1-3) — per-aggregator map of typed
@@ -318,19 +318,11 @@ function getRoot() {
 
 // ---------------------------------------------------------------------------
 // getMainRoot — #335: resolve the MAIN checkout root even when cwd is a linked
-// worktree. Mirrors claim.js getCoordRoot/mainRootFromCoord (local re-impl per
-// repo convention — claim.js does not export them). When `root` IS the main
-// checkout, git-common-dir resolves to <root>/.git and the basename strip
-// returns `root` unchanged.
+// worktree. #579: delegates to resolveMainRoot from adaptive-schema (shared
+// resolver — removes the local re-impl that duplicated claim.js logic).
 // ---------------------------------------------------------------------------
 function getMainRoot(root) {
-  try {
-    const raw = execFileSync('git', ['rev-parse', '--git-common-dir'], {
-      cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-    const coord = path.resolve(root, raw);
-    return path.basename(coord) === '.git' ? path.dirname(coord) : coord;
-  } catch (_) { return root; }
+  return resolveMainRoot(root);
 }
 
 // ---------------------------------------------------------------------------
@@ -5228,9 +5220,19 @@ function main() {
   // #335: resolve the MAIN checkout root even when cwd is a linked worktree.
   // realpath both sides so a macOS /var vs /private/var divergence under
   // os.tmpdir() never false-positives the linked-worktree comparison.
+  // #579: prefer main_root field stamped by writeState at claim-time (avoids re-deriving from cwd,
+  // which can diverge in a multi-linked-worktree layout). Falls back to getMainRoot(repoRoot) when
+  // the field is absent (pre-#579 states) or unreadable.
   let realRepoRoot = repoRoot;
   try { realRepoRoot = fs.realpathSync(repoRoot); } catch (_) {}
-  let mainRoot = getMainRoot(repoRoot);
+  let mainRoot = (() => {
+    try {
+      const stateContent = fs.readFileSync(statePath, 'utf8');
+      const m = stateContent.match(/^main_root:\s*(.+)$/m);
+      if (m && m[1].trim()) return m[1].trim();
+    } catch (_) {}
+    return getMainRoot(repoRoot);
+  })();
   try { mainRoot = fs.realpathSync(mainRoot); } catch (_) {}
 
   // #466 — worktree-authority split guard (fail loud, ZERO mutation; precedes the dispatch). The

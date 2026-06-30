@@ -82,6 +82,8 @@ reset is required), STOP and ask — do **not** summon the planner, so **no fold
 *before* the claim, because the front end claims at repo-root — the router's post-claim
 freshness-block release no longer guards this path, and gating up front leaves nothing to orphan.
 
+**Co-tenant clean-check.** The dirty-worktree check above disregards `kaola-workflow/*` and `.kw/*` paths belonging to OTHER active lanes (lanes this session did not claim), so a second concurrent session starting alongside an already-running first lane does not receive a false "dirty main" refusal. The check STILL fails on any uncommitted code change; this session's OWN in-progress state is still enforced. Only non-owned lane scratch — another session's `kaola-workflow/<project>/` folder and its `.kw/worktrees/<project>/` worktree — is selectively disregarded.
+
 Once main is clean, **summon the `workflow-planner`** — it claims, authors `workflow-plan.md`, runs
 the validator `--json` as a self-check, and RETURNS a structured summary; it never JUDGES risk or asks the user (decision:ask is recorded metadata); it RUNS the handoff, which freezes mechanically, and returns the packet; it never dispatches.
 

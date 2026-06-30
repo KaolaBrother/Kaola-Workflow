@@ -846,6 +846,75 @@ function main() {
   throw new Error('unknown subcommand: ' + sub);
 }
 
+// ---------------------------------------------------------------------------
+// #579: Lane-session helpers — resolveSessionMarker + classifyLane.
+// These are PURE functions (no I/O, no forge CLI), exported for in-process
+// consumption by claim.js cmdStatus + cmdResume. resolveSessionMarker is also
+// imported by claim.js to stamp session_marker at writeState time.
+// ---------------------------------------------------------------------------
+
+// Resolve the session marker for the CURRENT run. If KAOLA_SESSION_MARKER is set
+// in `env` (or process.env), use it verbatim so all lifecycle invocations within one
+// session share a stable identity. Otherwise mint a one-time `s-<pid>-<ts36>` token.
+function resolveSessionMarker(env) {
+  const src = env || process.env;
+  const fixed = src && src.KAOLA_SESSION_MARKER;
+  if (fixed && String(fixed).trim()) return String(fixed).trim();
+  return 's-' + process.pid + '-' + Date.now().toString(36);
+}
+
+// Classify an active-folder lane item into one of four buckets:
+//   'mine'      — this run's own session (operate normally)
+//   'live'      — another active session that must not be stomped
+//   'stale'     — resumable leftover (old/absent marker)
+//   'ambiguous' — fresh foreign marker without an explicit instruction (ask, don't stomp)
+//
+// Per-lane precedence ladder (first match wins):
+//   1. session_marker === ownSession → 'mine'
+//   2. lane.issue_number OR any lane.issue_numbers member ∈ explicitResumeIssues → 'stale'
+//      (explicit "resume N" instruction beats liveness — we know we own it)
+//   3. coTenantSignal → 'live' (blanket "another session is working" signal)
+//   4. Liveness heuristic:
+//      a. claim_ts present AND age < staleMs → 'ambiguous' (fresh → ask)
+//      b. claim_ts absent OR age >= staleMs → 'stale' (old leftover / pre-#579 markerless)
+//
+// ctx: { ownSession, explicitResumeIssues:Set<number>, coTenantSignal:bool,
+//         now:number (Date.now()), staleMs:number }
+function classifyLane(lane, ctx) {
+  const { ownSession, explicitResumeIssues, coTenantSignal, now, staleMs } = ctx;
+  const ms = typeof staleMs === 'number' ? staleMs : adaptiveSchema.LANE_STALENESS_MS;
+  const ts = typeof now === 'number' ? now : Date.now();
+
+  // 1. Mine
+  if (lane.session_marker && lane.session_marker === ownSession) {
+    return { bucket: 'mine', reasoning: 'session_marker matches own session' };
+  }
+
+  // 2. Explicit resume instruction (beats co-tenant + liveness)
+  if (explicitResumeIssues && explicitResumeIssues.size > 0) {
+    const memberSet = new Set([lane.issue_number].concat(lane.issue_numbers || []));
+    for (const n of memberSet) {
+      if (n != null && explicitResumeIssues.has(n)) {
+        return { bucket: 'stale', reasoning: 'explicit resume instruction for issue #' + n };
+      }
+    }
+  }
+
+  // 3. Co-tenant signal
+  if (coTenantSignal) {
+    return { bucket: 'live', reasoning: 'co-tenant signal indicates another active session' };
+  }
+
+  // 4. Liveness heuristic
+  if (lane.claim_ts) {
+    const age = ts - Date.parse(lane.claim_ts);
+    if (Number.isFinite(age) && age < ms) {
+      return { bucket: 'ambiguous', reasoning: 'fresh liveness marker (age ' + Math.round(age / 1000) + 's < ' + Math.round(ms / 1000) + 's threshold) — ask before stomping' };
+    }
+  }
+  return { bucket: 'stale', reasoning: lane.claim_ts ? 'liveness marker is stale (age > threshold)' : 'no liveness marker (pre-#579 or abandoned)' };
+}
+
 if (require.main === module) {
   try { main(); } catch (err) { process.stderr.write(err.message + '\n'); process.exitCode = 1; }
 }
@@ -869,4 +938,7 @@ module.exports = {
   isTransientFetchStderr,
   isTransientFetchError,
   TransientFetchError,
+  // #579: lane session helpers.
+  resolveSessionMarker,
+  classifyLane,
 };

@@ -9,6 +9,10 @@ const forge = require('./kaola-gitea-forge');
 const classifier = require('./kaola-gitea-workflow-classifier');
 // issue #227 (adaptive path): forge-neutral constants + toggle resolution.
 const adaptiveSchema = require('./kaola-workflow-adaptive-schema');
+// #579: shared resolver — single source replacing local re-impls.
+const { getCoordRoot, mainRootFromCoord, resolveMainRoot, parsePorcelainPaths, isParkedLanePath } = adaptiveSchema;
+// #579: lane session helpers from forge classifier (in-process; no subprocess).
+const { resolveSessionMarker, classifyLane } = classifier;
 
 // Read the shared global config (read-only; never creates the file). Returns {} on any
 // error so resolveInstalledPaths sees an absent/malformed `installed_paths` field and
@@ -205,22 +209,8 @@ function closeIssueIdempotent(n, opts) {
   }
 }
 
-function getCoordRoot(root) {
-  try {
-    const raw = execFileSync('git', ['rev-parse', '--git-common-dir'], {
-      cwd: root,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore']
-    }).trim();
-    return path.resolve(root, raw);
-  } catch (_) {
-    return path.join(root, '.git');
-  }
-}
-
-function mainRootFromCoord(coordRoot) {
-  return path.basename(coordRoot) === '.git' ? path.dirname(coordRoot) : coordRoot;
-}
+// getCoordRoot and mainRootFromCoord are now imported from adaptiveSchema (#579 shared resolver).
+// Their call sites below are byte-stable (same function names, same signatures).
 
 function worktreePathFor(root, project) {
   const mainRoot = mainRootFromCoord(getCoordRoot(root));
@@ -256,12 +246,16 @@ function inPlaceHead(root) {
   } catch (_) { return ''; }
 }
 
-function treeDirty(root) {
+function treeDirty(root, ownedProjects) {
   // #557: an UNPROBEABLE tree must fail CLOSED = treated as DIRTY (mirror #496); was catch → return false
   // (fail-OPEN). KAOLA_WORKFLOW_FORCE_STATUS_FAIL=1 is a [TEST ONLY] probe-fault seam.
+  // #579: parked-aware — kaola-workflow/<non-owned>/* and .kw/worktrees/<non-owned>/* are ignored.
   try {
     if (process.env.KAOLA_WORKFLOW_FORCE_STATUS_FAIL === '1') throw new Error('forced git status probe failure [TEST ONLY]');
-    return execFileSync('git', ['-C', root, 'status', '--porcelain'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim().length > 0;
+    const status = execFileSync('git', ['-C', root, 'status', '--porcelain'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    if (!status) return false;
+    const owned = Array.isArray(ownedProjects) ? ownedProjects : [];
+    return parsePorcelainPaths(status).some(p => !isParkedLanePath(p, owned));
   } catch (_) { return true; }
 }
 
@@ -457,6 +451,9 @@ function writeState(root, data) {
   assertNoNewline(data.worktree_path, 'worktree_path');
   assertNoNewline(data.base_branch, 'base_branch');
   assertNoNewline(data.pr_url, 'pr_url');
+  // #579: liveness-marker guards.
+  const computedMainRoot = resolveMainRoot(root);
+  assertNoNewline(computedMainRoot, 'main_root');
   const workflowPath = data.workflow_path || 'full';
   const isFast = workflowPath === 'fast';
   // issue #227: adaptive runs resume via the plan-run executor, not the phaseN ladder.
@@ -505,7 +502,11 @@ function writeState(root, data) {
     'branch: ' + data.branch,
     'issue_number: ' + (data.issue_iid || ''),
     'sink: ' + (data.sink || 'merge'),
-    'run_posture: ' + deriveRunPosture(data.worktree_path)
+    'run_posture: ' + deriveRunPosture(data.worktree_path),
+    // #579 liveness-marker fields.
+    'main_root: ' + computedMainRoot,
+    'session_marker: ' + resolveSessionMarker(process.env),
+    'claim_ts: ' + new Date().toISOString()
   ];
   if (data.worktree_path) lines.push('worktree_path: ' + data.worktree_path);
   if (data.worktree_error) {
@@ -684,7 +685,7 @@ function claimProject(root, args) {
   // Detached HEAD is NOT refused here — it falls to record-only below.
   const headBranch = inPlaceHead(root);
   const wouldInPlace = !OFFLINE && hasGitHistory(root) && !WORKTREE_NATIVE;
-  if (wouldInPlace && headBranch !== 'HEAD' && headBranch !== '' && treeDirty(root)) {
+  if (wouldInPlace && headBranch !== 'HEAD' && headBranch !== '' && treeDirty(root, [project])) {
     return { status: 'dirty_tree_refused', claim: 'none', issue: issueIid, project,
       reasoning: 'working tree has uncommitted changes; refusing to create in-place feature branch (KAOLA_WORKTREE_NATIVE=0). Commit or stash, or use a worktree.' };
   }
@@ -827,7 +828,7 @@ function claimBundle(root, opts) {
   // Dirty-tree gate (NATIVE=0 in-place mode): refuse BEFORE any mutation.
   const headBranch = inPlaceHead(root);
   const wouldInPlace = !OFFLINE && hasGitHistory(root) && !WORKTREE_NATIVE;
-  if (wouldInPlace && headBranch !== 'HEAD' && headBranch !== '' && treeDirty(root)) {
+  if (wouldInPlace && headBranch !== 'HEAD' && headBranch !== '' && treeDirty(root, [project])) {
     return { status: 'dirty_tree_refused', claim: 'none', issue: targets[0], issue_numbers: targets, project,
       reasoning: 'working tree has uncommitted changes; refusing to create the in-place bundle feature branch (KAOLA_WORKTREE_NATIVE=0). Commit or stash, or use a worktree.' };
   }
@@ -1313,11 +1314,24 @@ function cmdResume() {
   const args = parseArgs(process.argv.slice(3));
   // #503: refuse silently picking folder[0] when multiple active folders exist and --project is absent.
   // Scripts validate+claim, never select under ambiguity (#44).
+  // #579: if exactly ONE classifies as 'mine', auto-select it (co-tenant doesn't produce false ambiguity).
   if (!args.project) {
     const active = readActiveFolders(root);
     if (active.length > 1) {
-      output({ resumed: false, reason: 'resume_ambiguous', candidates: active.map(f => f.project) }, 1);
-      return;
+      const ctx = {
+        ownSession: resolveSessionMarker(process.env),
+        explicitResumeIssues: new Set([args.targetIssue, args.issue].filter(n => n != null && Number.isFinite(n))),
+        coTenantSignal: process.env.KAOLA_COTENANT === '1',
+        now: Date.now(),
+        staleMs: adaptiveSchema.LANE_STALENESS_MS
+      };
+      const mine = active.filter(f => classifyLane(f, ctx).bucket === 'mine');
+      if (mine.length === 1) {
+        args.project = mine[0].project;
+      } else {
+        output({ resumed: false, reason: 'resume_ambiguous', candidates: active.map(f => f.project) }, 1);
+        return;
+      }
     }
   }
   const folder = args.project ? activeByProject(root, args.project) : readActiveFolders(root)[0];
@@ -2258,7 +2272,7 @@ function cmdRelease() {
   if (featureBranch && branchExists(root, featureBranch)) {
     try {
       const cur = inPlaceHead(root);
-      const dirty = treeDirty(root);
+      const dirty = treeDirty(root, [folder.project]);
       const target = savedBaseBranch || defaultBranch(root);
       if (cur === featureBranch) {
         if (dirty) {
@@ -2316,7 +2330,23 @@ function partitionActiveAndDrift(root) {
 
 function cmdStatus() {
   const root = getRoot();
-  const { active, drift } = partitionActiveAndDrift(root);
+  // #579: annotate each folder with its lane_bucket.
+  const ctx = {
+    ownSession: resolveSessionMarker(process.env),
+    explicitResumeIssues: new Set(),
+    coTenantSignal: process.env.KAOLA_COTENANT === '1',
+    now: Date.now(),
+    staleMs: adaptiveSchema.LANE_STALENESS_MS
+  };
+  const all = readActiveFolders(root, { excludeClosedIssues: false });
+  const active = [];
+  const drift = [];
+  for (const folder of all) {
+    const classified = classifyLane(folder, ctx);
+    const annotated = Object.assign({}, folder, { lane_bucket: classified.bucket, lane_bucket_reason: classified.reasoning });
+    if (folder.issue_iid != null && issueIsClosed(folder.issue_iid)) drift.push(annotated);
+    else active.push(annotated);
+  }
   output({ active, drift, count: active.length });
 }
 
@@ -2976,6 +3006,9 @@ module.exports = {
   cmdStaleWorktreeCleanup,
   deriveRunPosture,
   getCoordRoot,
+  mainRootFromCoord,
+  resolveMainRoot,
+  resolveSessionMarker,
   isProbeDegraded,
   legacySiblingWorktreePathFor,
   listOpenIssues,

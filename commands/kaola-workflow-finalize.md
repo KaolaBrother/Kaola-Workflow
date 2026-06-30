@@ -932,6 +932,8 @@ node "$SINK_MERGE_JS" \
 8. **Archive** — via `cmdFinalize` internals
 9. **Cleanup** — stash restore, remove worktree
 
+**Co-tenant merge protocol.** Each lane cleans up its own branch, worktree, and `kaola-workflow/<project>/` folder ONLY AFTER its own merge lands — cleanup follows the merge, not the other way around. When two sessions run concurrently: the first finisher merges normally; the later finisher rebases onto the updated main and retries the fast-forward merge. A true content conflict halts and asks a human — it is NEVER auto-resolved. Do not clean up another session's branch, worktree, or project folder.
+
 **Crash-resume**: a step-receipt at `kaola-workflow/{project}/.cache/sink-receipt.json` tracks each step.
 Re-running the command after a crash resumes from the last incomplete step — no double-apply.
 

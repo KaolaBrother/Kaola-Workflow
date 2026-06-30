@@ -3,7 +3,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
-const { getCoordRoot, readActiveFolders, removeWorktree, buildClosureReceipt, checkClosureInvariants, checkDispatchAttestations, defaultBranch } = require('./kaola-workflow-claim.js');
+const { getCoordRoot, mainRootFromCoord, resolveMainRoot, parsePorcelainPaths, isParkedLanePath, readActiveFolders, removeWorktree, buildClosureReceipt, checkClosureInvariants, checkDispatchAttestations, defaultBranch } = require('./kaola-workflow-claim.js');
 // #548: the canonical repo-kind discriminator (self-host npm vs consumer). run-chains.js requires
 // no sink-merge symbol, so this is non-circular.
 const { resolveChains } = require('./kaola-workflow-run-chains.js');
@@ -74,9 +74,7 @@ function getRoot() {
   }
 }
 
-function mainRootFromCoord(coordRoot) {
-  return path.basename(coordRoot) === '.git' ? path.dirname(coordRoot) : coordRoot;
-}
+// mainRootFromCoord is now imported from kaola-workflow-claim.js (#579 shared resolver).
 
 function classifyMergeError(stderr) {
   if (FORCE_MERGE_IMPOSSIBLE) {
@@ -133,11 +131,16 @@ function parseArgs(argv) {
 
 const MAX_AUTOMERGE_RETRIES = 3;
 
-function assertCleanWorktree(mainRoot) {
-  // Use --untracked-files=no to ignore untracked files (e.g. kaola-workflow/ state dirs)
-  // Only staged and unstaged changes to tracked files block the checkout.
-  const status = execFileSync('git', ['-C', mainRoot, 'status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' }).trim();
-  assert(!status, 'Worktree must be clean before sink-merge checks out the requested branch');
+function assertCleanWorktree(mainRoot, ownedProjects) {
+  // Use --untracked-files=no to ignore untracked files (e.g. kaola-workflow/ state dirs already
+  // excluded). #579: ownedProjects param added for API consistency with the parked-aware design;
+  // --untracked-files=no already excludes all untracked lane dirs so the parked filter is a
+  // secondary defense for any tracked modifications outside owned projects.
+  const rawStatus = execFileSync('git', ['-C', mainRoot, 'status', '--porcelain', '--untracked-files=no'], { encoding: 'utf8' }).trim();
+  if (!rawStatus) return;
+  const owned = Array.isArray(ownedProjects) ? ownedProjects : [];
+  const relevant = parsePorcelainPaths(rawStatus).filter(p => !isParkedLanePath(p, owned));
+  assert(!relevant.length, 'Worktree must be clean before sink-merge checks out the requested branch');
 }
 
 function assertNoLiveWorkflowFolder(mainRoot, project, branch) {
@@ -170,7 +173,9 @@ function assertNoLiveWorkflowFolder(mainRoot, project, branch) {
 // sink that was about to refuse (dirty main root / live folder / unpushed) first DESTROYED the
 // worktree, taking any uncommitted work with it. This guard runs before the destructive removal so
 // a refused sink leaves the worktree (and its uncommitted file) intact.
-function assertWorktreeClean(mainRoot, branch) {
+// #579: ownedProjects param added — passed through to the inner status check; ignored for the
+// list probe since --untracked-files=no excludes all untracked lane dirs.
+function assertWorktreeClean(mainRoot, branch, ownedProjects) {
   // #506: the outer `git worktree list` probe is the first gate before the inner status probe.
   // A transient fault here (e.g. corrupt worktree metadata, EAGAIN) must FAIL CLOSED — a probe
   // that cannot enumerate worktrees cannot prove there is nothing to guard. One bounded retry
@@ -867,7 +872,7 @@ function sinkPreflight(mainRoot, project, branch, issueNumbers) {
   // so runSinkTransaction's preflight handler surfaces result:'refuse' + exit 1 with ZERO mutation.
   // Resume-safe: an already-removed worktree matches no `worktree list` block and returns cleanly.
   try {
-    assertWorktreeClean(mainRoot, branch);
+    assertWorktreeClean(mainRoot, branch, [project]);
   } catch (err) {
     return { ok: false, reason: 'worktree_dirty', detail: err.message };
   }
@@ -1483,11 +1488,11 @@ function main() {
     process.exitCode = 1;
     return;
   }
-  assertCleanWorktree(mainRoot);
+  assertCleanWorktree(mainRoot, [args.project]);
   assertNoLiveWorkflowFolder(mainRoot, args.project, args.branch);
   if (!OFFLINE) assertBranchPushedToUpstream(mainRoot, args.branch);
   if (!OFFLINE) assertBranchHasNonWorkflowChanges(mainRoot, args.branch, defBranch);
-  assertWorktreeClean(mainRoot, args.branch);
+  assertWorktreeClean(mainRoot, args.branch, [args.project]);
 
   // Step 3 — Remove the worktree (only now that every precondition passed) so the branch can be
   // checked out in the main root below.

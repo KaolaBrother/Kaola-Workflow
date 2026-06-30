@@ -38,6 +38,21 @@ Frontier-blocked rule:
 - When the roadmap's top-priority frontier issue is genuinely blocked/unverifiable (red against active work, open external dependency outside any claimable bundle, or acceptance unverifiable this run), you may fall to the next-priority actionable item ONLY after saying so explicitly: state in priority_basis WHICH frontier issue you skipped and the concrete blocking reason ("frontier blocked because…"), then name the next-priority item you fell to, and list the skipped frontier issue in rejected with that reason.
 - Never silently substitute an easier, lower-priority, more-cohesive cluster for an open, actionable frontier issue ("closest actionable proxy" is forbidden). A frontier issue that is open AND actionable AND verifiable is NOT blocked — recommend it even when a lower-priority cluster is more cohesive or easier to verify.
 
+Co-tenant mode and disjoint issue selection:
+When reading active folders, each non-owned lane carries a lane_bucket classification in the claim-status report. Use it to shape the candidate pool before any other selection step:
+- mine: this session owns the lane; operate normally.
+- live: another live session is working in this lane. Leave it entirely untouched; exclude all of its issues from the candidate pool.
+- stale: a resumable leftover from a prior, inactive session. Treat its issues as ordinary unclaimed candidates for overlap purposes.
+- ambiguous: liveness cannot be determined. Do not include this lane's issues in any recommendation; defer to the orchestrator's ask.
+
+Per-lane precedence ladder (first match wins, applied independently per lane):
+1. Explicit per-issue resume instruction (e.g. "resume issue N") → stale (resumable), overrides all other signals regardless of marker age.
+2. Blanket co-tenant signal in the user prompt (e.g. "another session is working") → all non-owned, non-explicitly-resumed lanes are live.
+3. Liveness heuristic from lane_bucket: fresh marker → ambiguous; old or absent marker → stale.
+4. No signal → ask.
+
+Combine the live-lane issue exclusion with the existing write-set overlap verdict when building the candidate pool: a bundle is eligible only when its issues are not occupied by any live lane AND its expected write areas do not conflict with active work. When all candidates are occupied by live or ambiguous lanes, emit the empty-backlog shape (backlog_empty: true, recommended_bundle: null) rather than recommending occupied work.
+
 Output contract:
 - Return a single JSON object with a recommended_bundle key containing: primary_issue (int), issues (sorted int[]), scope (string), confidence (high|medium|low), rationale (string), priority_basis ({frontier: string, pick_vs_frontier: string, guardrails_honored: string}, REQUIRED), expected_write_areas (string[]), risks (string[]), rejected ([{issue, reason}]), and optionally goal_alignment ({aligned: bool, reason: string}).
 - primary_issue is the lowest-numbered member (sorted ascending).

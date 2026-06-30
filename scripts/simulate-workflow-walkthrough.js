@@ -13575,6 +13575,7 @@ function buildRegistry() {
   add('testSinkTransactionBlockedByForeignDirt',          testSinkTransactionBlockedByForeignDirt);
   add('testSinkTransactionCrashResume',                   testSinkTransactionCrashResume);
   add('testSinkTransactionCleanEndToEnd',                 testSinkTransactionCleanEndToEnd);
+  add('testTwoLanesInOneCheckout579',                     testTwoLanesInOneCheckout579);
   return reg;
 }
 
@@ -15187,6 +15188,99 @@ function testStartupRefusesTargetSetMismatch() {
 
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
   console.log('testStartupRefusesTargetSetMismatch: PASSED');
+}
+
+// ---------------------------------------------------------------------------
+// #579: two-lanes-in-one-checkout — parked lane selectivity
+// Verifies that parsePorcelainPaths + isParkedLanePath correctly classify
+// co-tenant lane files as parked (ignored by the clean-check) while real
+// uncommitted code and shared durable state remain strict (not ignored).
+//
+// This is the production code path exercised at claim-time (treeDirty) and
+// sink-merge (assertCleanWorktree/assertWorktreeClean). The test uses a real
+// git repo + real git-status output so the filter runs against actual porcelain.
+// ---------------------------------------------------------------------------
+function testTwoLanesInOneCheckout579() {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-579-twolanes-')));
+  const env = { ...process.env, ...GIT_ISOLATION_ENV };
+  try {
+    initGitRepo(tmp);
+
+    // Commit shared repo infrastructure so that partially-tracked directories exist:
+    // 1. .gitignore ignoring .kw/ (mirrors the real repo — .kw/ is never in git status).
+    // 2. A shared kaola-workflow file so kaola-workflow/ is PARTIALLY tracked: this makes
+    //    lane A's untracked sub-dir appear as `?? kaola-workflow/issue-A/` in git status
+    //    (not `?? kaola-workflow/` which would be the whole-dir entry if nothing is tracked).
+    fs.writeFileSync(path.join(tmp, '.gitignore'), '.kw/\n');
+    fs.mkdirSync(path.join(tmp, 'kaola-workflow', '.roadmap'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'kaola-workflow', 'ROADMAP.md'), '# Roadmap\n');
+    spawnSync('git', ['-C', tmp, 'add', '.gitignore', 'kaola-workflow/ROADMAP.md'], { encoding: 'utf8', env });
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'chore: seed shared roadmap + gitignore'], { encoding: 'utf8', env });
+
+    // Set up lane A: untracked kaola-workflow files + .kw/worktrees dir (gitignored)
+    fs.mkdirSync(path.join(tmp, 'kaola-workflow', 'issue-A'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'kaola-workflow', 'issue-A', 'workflow-state.md'), 'status: active\n');
+    fs.mkdirSync(path.join(tmp, '.kw', 'worktrees', 'issue-A'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, '.kw', 'worktrees', 'issue-A', 'DUMMY'), 'dummy\n');
+
+    // Also plant a real uncommitted file (must NOT be filtered)
+    fs.writeFileSync(path.join(tmp, 'src-real.js'), 'real code change\n');
+
+    // Get git status --porcelain (with untracked files, as treeDirty uses)
+    const statusRaw = spawnSync('git', ['-C', tmp, 'status', '--porcelain'], { encoding: 'utf8' }).stdout;
+    assert(statusRaw.length > 0, '#579 two-lanes: git status shows output');
+
+    // Import the parked-lane filter from adaptive-schema (the production code path)
+    const adaptiveSchema = require(path.join(repoRoot, 'scripts', 'kaola-workflow-adaptive-schema.js'));
+    const { parsePorcelainPaths, isParkedLanePath } = adaptiveSchema;
+    assert(typeof parsePorcelainPaths === 'function',
+      '#579 two-lanes: parsePorcelainPaths exported from adaptive-schema');
+    assert(typeof isParkedLanePath === 'function',
+      '#579 two-lanes: isParkedLanePath exported from adaptive-schema');
+
+    // Apply the filter as treeDirty(root, ownedProjects=['issue-B']) would
+    const ownedProjects = ['issue-B'];
+    const allPaths = parsePorcelainPaths(statusRaw);
+    const nonIgnored = allPaths.filter(p => !isParkedLanePath(p, ownedProjects));
+
+    // Lane A's kaola-workflow files are parked — filtered out
+    const laneAKw = allPaths.filter(p => p.includes('issue-A'));
+    assert(laneAKw.length > 0, '#579 two-lanes: lane A kaola-workflow files appear in raw git status');
+    assert(!nonIgnored.some(p => p.includes('issue-A')),
+      '#579 two-lanes: lane A kaola-workflow/* ignored by parked filter, nonIgnored=' + JSON.stringify(nonIgnored));
+
+    // .kw/ is gitignored in the real repo (.gitignore above) → does NOT appear in git status.
+    // Verify: .kw/worktrees/issue-A should NOT be in the raw git status (gitignored).
+    assert(!allPaths.some(p => p.startsWith('.kw/')),
+      '#579 two-lanes: .kw/* is gitignored and must not appear in git status, got ' + JSON.stringify(allPaths));
+
+    // Real uncommitted code is NOT filtered
+    assert(nonIgnored.some(p => p.includes('src-real.js')),
+      '#579 two-lanes: real uncommitted code NOT ignored, nonIgnored=' + JSON.stringify(nonIgnored));
+
+    // Shared durable state (.roadmap issue file) stays strict — NOT filtered
+    // .roadmap/ dir is already tracked (from the seed commit above), so a new issue file
+    // appears as an individual untracked entry `?? kaola-workflow/.roadmap/issue-99.md`.
+    fs.writeFileSync(path.join(tmp, 'kaola-workflow', '.roadmap', 'issue-99.md'), 'test\n');
+    const statusRaw2 = spawnSync('git', ['-C', tmp, 'status', '--porcelain'], { encoding: 'utf8' }).stdout;
+    const allPaths2 = parsePorcelainPaths(statusRaw2);
+    const nonIgnored2 = allPaths2.filter(p => !isParkedLanePath(p, ownedProjects));
+    assert(nonIgnored2.some(p => p.includes('.roadmap')),
+      '#579 two-lanes: shared .roadmap NOT ignored (strict)');
+
+    // Own project (issue-B) NOT filtered — must show up as dirty
+    fs.mkdirSync(path.join(tmp, 'kaola-workflow', 'issue-B'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'kaola-workflow', 'issue-B', 'workflow-state.md'), 'status: active\n');
+    const statusRaw3 = spawnSync('git', ['-C', tmp, 'status', '--porcelain'], { encoding: 'utf8' }).stdout;
+    const allPaths3 = parsePorcelainPaths(statusRaw3);
+    const nonIgnored3 = allPaths3.filter(p => !isParkedLanePath(p, ['issue-B']));
+    assert(nonIgnored3.some(p => p.includes('issue-B')),
+      '#579 two-lanes: own project NOT ignored');
+
+    console.log('testTwoLanesInOneCheckout579: PASSED');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 }
 
 main().catch(err => {

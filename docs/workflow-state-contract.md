@@ -172,6 +172,43 @@ The `workflow-state.md` file contains several key blocks:
   - **workflow_path** — Workflow execution path (`full`, `fast`, or `adaptive`). Persisted from the `KAOLA_PATH` environment variable (set `KAOLA_PATH=fast` to request the fast path), or the `--workflow-path` startup flag when supplied; defaults to `adaptive`. `claimProject` validates the persisted value: adaptive is always legal; `fast`/`full` require membership in `installed_paths` (`~/.config/kaola-workflow/config.json`) — any other value is a **typed `path_not_installed` refusal**, never a silent downgrade.
   - **runtime** — The runtime that claimed the folder (`claude`, `codex`, or `opencode`). Persisted from the `--runtime` startup flag; defaults to `claude`.
 - `## Sink` — Issue number, sink mode (merge or pr), branch name, worktree path, and `run_posture` (`worktree` or `in-place`). `run_posture` is derived from the actual worktree resolution at startup via `deriveRunPosture(worktreePath)` in `kaola-workflow-claim.js`; it is never inherited from an environment variable. Adaptive runs always provision a worktree, so `run_posture: worktree` is the normal adaptive value. An optional `issue_action: close | comment_keep_open` line (default `close` when absent, issue #336) marks a keep-open partial-close terminal: the main session writes `comment_keep_open` at the Closure Decision Gate to keep the issue OPEN — `finalize`/`sink-merge` then preserve the roadmap source, comment instead of closing, and refuse a PR/MR sink (keep-open is merge-sink-only).
+  Three **claim-time session fields** are written by `writeState` (in `kaola-workflow-claim.js`)
+  and are never refreshed — `updateState`/`stampTerminalState` partial-edit paths do not touch
+  them. All three live in the `## Sink` block, immediately after `run_posture`:
+
+  - **`main_root`** — The resolved main-repo root path, computed once by `resolveMainRoot(root)`
+    (exported from `kaola-workflow-adaptive-schema.js`) at claim time. The executor reads this
+    field back from the local `workflow-state.md` instead of re-deriving from cwd, eliminating
+    an authority split when a node runs from a linked or detached worktree. Absent on pre-#579
+    state files; the executor falls back to `getMainRoot(repoRoot)` when absent
+    (backward-compatible). Value is an absolute path with no trailing slash.
+  - **`session_marker`** — The session identity for liveness classification, produced by
+    `resolveSessionMarker(env)` (from `kaola-workflow-classifier.js`): `KAOLA_SESSION_MARKER`
+    from the environment when set (allowing an orchestrator to mint one stable identity for the
+    session), otherwise `s-<pid>-<timestamp-base36>`. Stamped once at claim time; never refreshed.
+    Must not reuse any of the retired `## Lease` field names (`session_id`, `last_heartbeat`,
+    `expires`, `owner_session_id`, `claim_comment_id`) — those are erased by `removeLegacyStateBlocks`.
+  - **`claim_ts`** — The ISO-8601 claim timestamp (`new Date().toISOString()`), the liveness
+    anchor. Together with `LANE_STALENESS_MS = 86400000` (24 hours, exported from
+    `kaola-workflow-adaptive-schema.js`), it drives the lane-freshness test: a `claim_ts` whose
+    age exceeds the threshold is classified `stale` (safe to resume as a leftover); a `claim_ts`
+    within the threshold is `ambiguous` (prompt before overwriting a potential active co-tenant).
+
+  `cmdStatus` annotates each active-folder item with a `lane_bucket` field (output of
+  `classifyLane` from `kaola-workflow-classifier.js`). Four possible values, applied via a
+  top-down precedence ladder (first match wins):
+
+  | Bucket | Meaning | Precedence |
+  |---|---|---|
+  | `mine` | `session_marker` matches own session identity | 1 — highest |
+  | `live` | `KAOLA_COTENANT=1` blanket co-tenant signal active | 3 |
+  | `stale` | Explicit resume instruction names this issue, OR `claim_ts` absent or older than `LANE_STALENESS_MS` | 2 / 4 |
+  | `ambiguous` | `claim_ts` present and younger than `LANE_STALENESS_MS`, no stronger signal | 4 |
+
+  `cmdResume` excludes `live` lanes from the resume candidate set; `stale` and `mine` lanes
+  are resumable. An `ambiguous` lane triggers the existing resume-ambiguity refusal (ask before
+  overwriting).
+
 - `## Lease` — (Legacy, deprecated) Coordination metadata; preserved for backward compatibility
 - `delegation_policy:` — Delegation mode for Codex workflows. Defaults to
   `delegate`, established without prompting the user; `local-authorized` is an

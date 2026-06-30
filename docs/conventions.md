@@ -311,3 +311,67 @@ The guard scans agent-facing prompt surfaces — agent definitions, commands, sk
 The guard runs in all four `npm run test:kaola-workflow:{claude,codex,gitlab,gitea}` chains and in the additive opencode suite. A violation is a hard chain failure; the error message names the offending `file:line` and token.
 
 See `docs/decisions/D-575-01.md` for the convention adopted in #575 (enforcement then deferred) and `docs/decisions/D-576-01.md` for the #576 guard implementation that supersedes that deferred note.
+
+## Co-Tenant Lane Convention and Clean-Check Selectivity (#579)
+
+Multiple sessions can operate on the same repository checkout simultaneously (e.g. an adaptive
+worktree run alongside a manual claim on the main checkout). The lane classification and
+clean-check selectivity rules govern how each session respects the other's in-progress state.
+
+### Lane classification
+
+`classifyLane(lane, ctx)` (exported from `scripts/kaola-workflow-classifier.js`) partitions each
+active-folder lane into one of four buckets. The classifier is a pure function; `ctx.now` and
+`ctx.staleMs` are injectable for testing. Precedence ladder — first match wins:
+
+1. `lane.session_marker === ctx.ownSession` → **`mine`** (this lane belongs to the current session).
+2. `ctx.explicitResumeIssues` intersects this lane's issue(s) → **`stale`** (explicit resume
+   instruction adopts the lane as resumable, overriding a fresh marker).
+3. `ctx.coTenantSignal` (`KAOLA_COTENANT=1`) → **`live`** (blanket signal that another session is
+   active; leave the lane alone).
+4. Liveness heuristic — `claim_ts` present and age < `LANE_STALENESS_MS` → **`ambiguous`** (ask
+   before overwriting); otherwise → **`stale`** (old leftover or pre-#579 markerless folder).
+
+`LANE_STALENESS_MS = 86400000` (24 hours) is the single staleness constant exported from
+`kaola-workflow-adaptive-schema.js`. The value is conservative: a run completes well within a
+day, so a marker newer than 24 hours could be an active co-tenant.
+
+**Resume behavior:** `cmdResume` excludes `live` lanes from the resume candidate set. `stale` and
+`mine` lanes are resumable. An `ambiguous` lane (or more than one resumable candidate) triggers
+the existing `resume_ambiguous` refusal — prompt the user before overwriting.
+
+### Clean-check selectivity
+
+The clean-worktree gates in `sink-merge.js` (`assertCleanWorktree`, `assertWorktreeClean`) and
+`claim.js` (`treeDirty`) apply a parked-lane filter AFTER the existing probe-fault / catch-dirty /
+`--untracked-files` handling. The filter exempts only non-owned co-tenant scratch so real
+uncommitted code and own in-progress state still fail the gate.
+
+**`PARKED_LANE_PREFIXES`** (exported from `kaola-workflow-adaptive-schema.js`):
+
+```
+['kaola-workflow/', '.kw/worktrees/', '.kw/legs/']
+```
+
+**`isParkedLanePath(relPath, ownedProjects)`** returns `true` (exempt) only when all three
+conditions hold:
+
+1. `relPath` starts with one of `PARKED_LANE_PREFIXES`.
+2. The second path segment is project-shaped (not `.roadmap`, not `archive`, not a
+   dot-leading name, not the top-level files `ROADMAP.md` or `config.json`).
+3. That segment is **not** in `ownedProjects` (the current session's own project(s)).
+
+Everything else — real code under `src/`/`scripts/`/`docs/`, shared durable state
+(`kaola-workflow/.roadmap/`, `ROADMAP.md`, `config.json`, `archive/`), and own `<project>/`
+folders — returns `false` and still fails the dirty check.
+
+**Fail-closed invariant.** An unverifiable tree (probe fault, exception, or stderr from the
+`git status` call) is always treated as dirty — the parked filter narrows which KNOWN-CLEAN
+states pass, never relaxes the unverifiable-is-dirty posture.
+
+**Merge protocol unchanged.** `ffMergeLoop` and the true-conflict halt in `sink-merge.js` are
+byte-unchanged. `assertCleanWorktree`/`assertWorktreeClean` run BEFORE `ffMergeLoop`, so the
+looser non-owned exemption cannot affect conflict resolution. Each lane cleans its own branch,
+worktree, and active folder ONLY after its own merge lands; it does not clean other lanes.
+
+See `docs/decisions/D-579-01.md` for the full decision record.

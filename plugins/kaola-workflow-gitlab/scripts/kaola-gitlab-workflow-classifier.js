@@ -730,6 +730,47 @@ function main() {
   throw new Error('unknown subcommand: ' + sub);
 }
 
+// #579: Lane-session helpers — resolveSessionMarker + classifyLane.
+// These are PURE functions (no I/O, no forge CLI), exported for in-process
+// consumption by claim.js cmdStatus + cmdResume. resolveSessionMarker is also
+// imported by claim.js to stamp session_marker at writeState time.
+// (Byte-identical to canonical classifier.js #579 block — no forge renaming needed.)
+// ---------------------------------------------------------------------------
+
+function resolveSessionMarker(env) {
+  const src = env || process.env;
+  const fixed = src && src.KAOLA_SESSION_MARKER;
+  if (fixed && String(fixed).trim()) return String(fixed).trim();
+  return 's-' + process.pid + '-' + Date.now().toString(36);
+}
+
+function classifyLane(lane, ctx) {
+  const { ownSession, explicitResumeIssues, coTenantSignal, now, staleMs } = ctx;
+  const ms = typeof staleMs === 'number' ? staleMs : adaptiveSchema.LANE_STALENESS_MS;
+  const ts = typeof now === 'number' ? now : Date.now();
+  if (lane.session_marker && lane.session_marker === ownSession) {
+    return { bucket: 'mine', reasoning: 'session_marker matches own session' };
+  }
+  if (explicitResumeIssues && explicitResumeIssues.size > 0) {
+    const memberSet = new Set([lane.issue_number].concat(lane.issue_numbers || []));
+    for (const n of memberSet) {
+      if (n != null && explicitResumeIssues.has(n)) {
+        return { bucket: 'stale', reasoning: 'explicit resume instruction for issue #' + n };
+      }
+    }
+  }
+  if (coTenantSignal) {
+    return { bucket: 'live', reasoning: 'co-tenant signal indicates another active session' };
+  }
+  if (lane.claim_ts) {
+    const age = ts - Date.parse(lane.claim_ts);
+    if (Number.isFinite(age) && age < ms) {
+      return { bucket: 'ambiguous', reasoning: 'fresh liveness marker (age ' + Math.round(age / 1000) + 's < ' + Math.round(ms / 1000) + 's threshold) — ask before stomping' };
+    }
+  }
+  return { bucket: 'stale', reasoning: lane.claim_ts ? 'liveness marker is stale (age > threshold)' : 'no liveness marker (pre-#579 or abandoned)' };
+}
+
 if (require.main === module) {
   try { main(); } catch (err) { process.stderr.write(err.message + '\n'); process.exitCode = 1; }
 }
@@ -759,5 +800,8 @@ module.exports = {
   classifyFetchError,
   isTransientFetchStderr,
   isTransientFetchError,
-  TransientFetchError
+  TransientFetchError,
+  // #579: lane session helpers.
+  resolveSessionMarker,
+  classifyLane,
 };

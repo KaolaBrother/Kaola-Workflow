@@ -183,7 +183,12 @@ function parseStateFile(stateFile) {
     mr_iid: field(content, 'mr_iid'),
     project_id: projectId,
     path_with_namespace: field(content, 'path_with_namespace'),
-    project_web_url: field(content, 'project_web_url')
+    project_web_url: field(content, 'project_web_url'),
+    // #579: liveness-marker fields (written by claim.js writeState at claim-time only).
+    // Absent in pre-#579 state files → empty string (backward compat).
+    main_root: field(content, 'main_root') || '',
+    session_marker: field(content, 'session_marker') || '',
+    claim_ts: field(content, 'claim_ts') || ''
   };
 }
 
@@ -243,7 +248,11 @@ function readActiveFolders(root, options) {
       mr_iid: state.mr_iid,
       project_id: state.project_id,
       path_with_namespace: state.path_with_namespace,
-      project_web_url: state.project_web_url
+      project_web_url: state.project_web_url,
+      // #579: liveness-marker fields (empty string when absent — pre-#579 backward compat).
+      main_root: state.main_root || '',
+      session_marker: state.session_marker || '',
+      claim_ts: state.claim_ts || ''
     };
     if (opts.includeContent) item.content = state.content;
     result.push(item);

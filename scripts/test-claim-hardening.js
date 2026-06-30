@@ -1345,6 +1345,327 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
   fs.rmSync(hostileHome, { recursive: true, force: true });
 }
 
+// --- #579: classifyLane four-bucket + precedence ladder (classifier.js) --------
+{
+  const { classifyLane, resolveSessionMarker } = require('./kaola-workflow-classifier');
+  const now = Date.now();
+  const staleMs = 86400000;
+  const ownSession = 'my-session-id';
+
+  // resolveSessionMarker exports and behavior
+  assert(typeof resolveSessionMarker === 'function',
+    '#579: resolveSessionMarker must be exported from classifier');
+  if (typeof resolveSessionMarker === 'function') {
+    assert(resolveSessionMarker({ KAOLA_SESSION_MARKER: 'fixed-marker' }) === 'fixed-marker',
+      '#579: resolveSessionMarker: env override honored');
+    const minted = resolveSessionMarker({});
+    assert(typeof minted === 'string' && minted.startsWith('s-'),
+      '#579: resolveSessionMarker: minted marker starts with s-, got: ' + minted);
+  }
+
+  // classifyLane must be exported
+  assert(typeof classifyLane === 'function',
+    '#579: classifyLane must be exported from classifier');
+
+  if (typeof classifyLane === 'function') {
+    // Bucket 1: session_marker matches own session → 'mine'
+    const r_mine = classifyLane(
+      { session_marker: ownSession, issue_number: 1, issue_numbers: [] },
+      { ownSession, explicitResumeIssues: new Set(), coTenantSignal: false, now, staleMs }
+    );
+    assert(r_mine && r_mine.bucket === 'mine',
+      '#579 classifyLane: session_marker match → mine, got ' + JSON.stringify(r_mine));
+
+    // Bucket 2: explicit resume → 'stale' (beats coTenantSignal AND beats liveness)
+    const r_stale_explicit = classifyLane(
+      { session_marker: 'other', issue_number: 790, issue_numbers: [], claim_ts: new Date().toISOString() },
+      { ownSession, explicitResumeIssues: new Set([790]), coTenantSignal: true, now, staleMs }
+    );
+    assert(r_stale_explicit && r_stale_explicit.bucket === 'stale',
+      '#579 classifyLane: explicit resume beats coTenantSignal → stale, got ' + JSON.stringify(r_stale_explicit));
+
+    // Bucket 3: coTenantSignal → 'live'
+    const r_live = classifyLane(
+      { session_marker: 'other', issue_number: 1, issue_numbers: [] },
+      { ownSession, explicitResumeIssues: new Set(), coTenantSignal: true, now, staleMs }
+    );
+    assert(r_live && r_live.bucket === 'live',
+      '#579 classifyLane: coTenantSignal → live, got ' + JSON.stringify(r_live));
+
+    // Bucket 4a: fresh marker, no co-tenant, no explicit → 'ambiguous'
+    const r_ambig = classifyLane(
+      { session_marker: 'other', claim_ts: new Date().toISOString(), issue_number: 1, issue_numbers: [] },
+      { ownSession, explicitResumeIssues: new Set(), coTenantSignal: false, now, staleMs }
+    );
+    assert(r_ambig && r_ambig.bucket === 'ambiguous',
+      '#579 classifyLane: fresh marker → ambiguous, got ' + JSON.stringify(r_ambig));
+
+    // Bucket 4b: no claim_ts → 'stale' (backward compat for pre-#579 markerless folders)
+    const r_stale_nomark = classifyLane(
+      { issue_number: 1, issue_numbers: [] },
+      { ownSession, explicitResumeIssues: new Set(), coTenantSignal: false, now, staleMs }
+    );
+    assert(r_stale_nomark && r_stale_nomark.bucket === 'stale',
+      '#579 classifyLane: absent claim_ts → stale, got ' + JSON.stringify(r_stale_nomark));
+
+    // Bucket 4b: old claim_ts → 'stale'
+    const oldTs = new Date(now - staleMs - 1000).toISOString();
+    const r_stale_old = classifyLane(
+      { session_marker: 'other', claim_ts: oldTs, issue_number: 1, issue_numbers: [] },
+      { ownSession, explicitResumeIssues: new Set(), coTenantSignal: false, now, staleMs }
+    );
+    assert(r_stale_old && r_stale_old.bucket === 'stale',
+      '#579 classifyLane: old claim_ts → stale, got ' + JSON.stringify(r_stale_old));
+
+    // Precedence: explicit-resume beats liveness (fresh marker + explicit issue match → stale)
+    const r_prec = classifyLane(
+      { session_marker: 'other', claim_ts: new Date().toISOString(), issue_number: 999, issue_numbers: [] },
+      { ownSession, explicitResumeIssues: new Set([999]), coTenantSignal: false, now, staleMs }
+    );
+    assert(r_prec && r_prec.bucket === 'stale',
+      '#579 classifyLane precedence: explicit beats liveness → stale, got ' + JSON.stringify(r_prec));
+
+    // Precedence: issue_numbers membership also triggers explicit resume
+    const r_issno = classifyLane(
+      { session_marker: 'other', issue_number: 100, issue_numbers: [101, 102], claim_ts: new Date().toISOString() },
+      { ownSession, explicitResumeIssues: new Set([102]), coTenantSignal: false, now, staleMs }
+    );
+    assert(r_issno && r_issno.bucket === 'stale',
+      '#579 classifyLane: issue_numbers membership triggers explicit resume → stale, got ' + JSON.stringify(r_issno));
+
+    // All classifyLane results carry a reasoning field
+    assert(r_mine.reasoning && typeof r_mine.reasoning === 'string',
+      '#579 classifyLane: result must carry a reasoning field');
+  }
+}
+
+// --- #579: clean-check selectivity (adaptive-schema.js) ---------
+{
+  const adaptiveSchema579 = require('./kaola-workflow-adaptive-schema.js');
+  const { parsePorcelainPaths, isParkedLanePath, PARKED_LANE_PREFIXES, LANE_STALENESS_MS } = adaptiveSchema579;
+
+  // LANE_STALENESS_MS constant (24h)
+  assert(LANE_STALENESS_MS === 86400000,
+    '#579: LANE_STALENESS_MS must be 86400000 (24h), got ' + LANE_STALENESS_MS);
+
+  // PARKED_LANE_PREFIXES is an array
+  assert(Array.isArray(PARKED_LANE_PREFIXES) && PARKED_LANE_PREFIXES.length >= 3,
+    '#579: PARKED_LANE_PREFIXES must be an array of at least 3 entries, got ' + JSON.stringify(PARKED_LANE_PREFIXES));
+
+  // parsePorcelainPaths
+  assert(typeof parsePorcelainPaths === 'function',
+    '#579: parsePorcelainPaths must be exported from adaptive-schema');
+  if (typeof parsePorcelainPaths === 'function') {
+    const raw = ' M scripts/foo.js\n M kaola-workflow/issue-99/workflow-state.md\n?? untracked.txt\n';
+    const paths = parsePorcelainPaths(raw);
+    assert(paths.includes('scripts/foo.js'),
+      '#579 parsePorcelainPaths: staged file parsed, got ' + JSON.stringify(paths));
+    assert(paths.includes('kaola-workflow/issue-99/workflow-state.md'),
+      '#579 parsePorcelainPaths: kaola-workflow path parsed, got ' + JSON.stringify(paths));
+    assert(paths.includes('untracked.txt'),
+      '#579 parsePorcelainPaths: untracked file parsed, got ' + JSON.stringify(paths));
+    // rename: take destination
+    const renamed = parsePorcelainPaths('R  old-name.txt -> new-name.txt\n');
+    assert(renamed.includes('new-name.txt'),
+      '#579 parsePorcelainPaths: rename → dest, got ' + JSON.stringify(renamed));
+    // empty input
+    assert(parsePorcelainPaths('').length === 0,
+      '#579 parsePorcelainPaths: empty input → empty array');
+  }
+
+  // isParkedLanePath
+  assert(typeof isParkedLanePath === 'function',
+    '#579: isParkedLanePath must be exported from adaptive-schema');
+  if (typeof isParkedLanePath === 'function') {
+    // non-owned kaola-workflow/* is ignored
+    assert(isParkedLanePath('kaola-workflow/issue-99/workflow-state.md', ['issue-42']) === true,
+      '#579: non-owned kaola-workflow/issue-99/* → true (ignore)');
+    assert(isParkedLanePath('kaola-workflow/issue-99/', ['issue-42']) === true,
+      '#579: non-owned kaola-workflow/issue-99/ → true (ignore)');
+    // non-owned .kw/worktrees/* is ignored
+    assert(isParkedLanePath('.kw/worktrees/issue-99/somefile', ['issue-42']) === true,
+      '#579: non-owned .kw/worktrees/issue-99/* → true (ignore)');
+    // non-owned .kw/legs/* is ignored
+    assert(isParkedLanePath('.kw/legs/issue-55/somefile', ['issue-42']) === true,
+      '#579: non-owned .kw/legs/issue-55/* → true (ignore)');
+    // own project NOT exempted
+    assert(isParkedLanePath('kaola-workflow/issue-42/workflow-state.md', ['issue-42']) === false,
+      '#579: own kaola-workflow/issue-42/* → false (NOT exempt)');
+    // shared durable state stays strict (dot-leading segments)
+    assert(isParkedLanePath('kaola-workflow/.roadmap/issue-123.md', ['issue-42']) === false,
+      '#579: .roadmap → false (strict)');
+    // shared ROADMAP.md stays strict
+    assert(isParkedLanePath('kaola-workflow/ROADMAP.md', ['issue-42']) === false,
+      '#579: ROADMAP.md → false (strict)');
+    // config.json stays strict
+    assert(isParkedLanePath('kaola-workflow/config.json', ['issue-42']) === false,
+      '#579: config.json → false (strict)');
+    // real code NOT exempt
+    assert(isParkedLanePath('scripts/kaola-workflow-claim.js', ['issue-42']) === false,
+      '#579: scripts/* → false (not exempt)');
+    // archive stays strict
+    assert(isParkedLanePath('kaola-workflow/archive/issue-99/workflow-state.md', ['issue-42']) === false,
+      '#579: kaola-workflow/archive/* → false (strict — archive is shared)');
+  }
+}
+
+// --- #579: main_root/session_marker/claim_ts exposed via readActiveFolders ----------
+{
+  const { readActiveFolders } = require('./kaola-workflow-active-folders.js');
+  const tmpDir579 = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-579-fields-'));
+  try {
+    const kwDir = path.join(tmpDir579, 'kaola-workflow', 'issue-579test');
+    fs.mkdirSync(kwDir, { recursive: true });
+    const testMainRoot = fs.realpathSync(tmpDir579);
+    const testTs = new Date().toISOString();
+    fs.writeFileSync(path.join(kwDir, 'workflow-state.md'), [
+      '# Kaola-Workflow State', '',
+      '## Project', 'name: issue-579test', 'status: active', '',
+      '## Current Position', 'phase: adaptive', 'phase_name: Adaptive',
+      'workflow_path: adaptive', 'runtime: claude', 'step: start',
+      'next_command: /kaola-workflow-plan-run issue-579test',
+      'next_skill: kaola-workflow-plan-run issue-579test',
+      'main_session_role: orchestrator', 'implementation_owner: N/A',
+      'fix_owner: N/A', 'inline_emergency_fallback_authorized: no', '',
+      '## Pending Gates', '- workflow-plan', '',
+      '## Last Evidence', 'phase_file: N/A', 'cache_file: N/A',
+      'last_command: startup', 'last_result: folder_claimed', '',
+      '## Last Updated', testTs, '',
+      '## Sink', 'branch: workflow/issue-579test', 'issue_number: 579',
+      'sink: merge', 'run_posture: in-place',
+      'main_root: ' + testMainRoot,
+      'session_marker: s-test-abc123',
+      'claim_ts: ' + testTs,
+    ].join('\n') + '\n');
+
+    const folders = readActiveFolders(tmpDir579, { excludeClosedIssues: false });
+    assert(folders.length === 1,
+      '#579: readActiveFolders must see the test project, got ' + folders.length);
+    if (folders.length > 0) {
+      const f = folders[0];
+      assert(f.main_root === testMainRoot,
+        '#579: readActiveFolders must expose main_root, got ' + f.main_root);
+      assert(f.session_marker === 's-test-abc123',
+        '#579: readActiveFolders must expose session_marker, got ' + f.session_marker);
+      assert(f.claim_ts === testTs,
+        '#579: readActiveFolders must expose claim_ts, got ' + f.claim_ts);
+    }
+  } finally {
+    fs.rmSync(tmpDir579, { recursive: true, force: true });
+  }
+}
+
+// --- #579 R1: cmdResume + cmdStatus ctx-shape integration (claim.js call sites) ---
+// These tests drive the ACTUAL subcommand I/O path (subprocess spawn). The defect is that both
+// call sites in claim.js build ctx = { env: process.env } (wrong shape) instead of the shape
+// classifyLane actually reads: { ownSession, explicitResumeIssues, coTenantSignal, now, staleMs }.
+// With the wrong shape: ownSession is undefined, so the 'mine' bucket never fires (resume_ambiguous
+// false-positive) and classified.reason is undefined (the field is .reasoning, not .reason).
+{
+  const { execFileSync: ef579 } = require('child_process');
+  const CLAIM579 = path.join(__dirname, 'kaola-workflow-claim.js');
+
+  // Scratch git repo with two active lanes.
+  const repo579 = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-579-ctx-')));
+  const g579 = (a) => {
+    try { ef579('git', ['-C', repo579, ...a], { stdio: ['ignore', 'ignore', 'ignore'] }); } catch (_) {}
+  };
+  g579(['init']);
+  g579(['config', 'user.email', 't@t']);
+  g579(['config', 'user.name', 't']);
+  g579(['config', 'commit.gpgsign', 'false']);
+  fs.writeFileSync(path.join(repo579, '.gitignore'), '.kw/\n');
+  g579(['add', '-A']);
+  g579(['commit', '-m', 'init']);
+
+  const now579 = new Date().toISOString();
+
+  // Lane A: own session (issue-100, session_marker: s-MINE-session, fresh claim_ts).
+  const proj100 = path.join(repo579, 'kaola-workflow', 'issue-100');
+  fs.mkdirSync(proj100, { recursive: true });
+  fs.writeFileSync(path.join(proj100, 'workflow-state.md'), [
+    '# Kaola-Workflow State', '',
+    '## Project', 'name: issue-100', 'status: active', '',
+    '## Current Position', 'phase: adaptive', 'phase_name: Adaptive',
+    'workflow_path: adaptive', 'runtime: claude', 'step: start',
+    'next_command: /kaola-workflow-plan-run issue-100',
+    'next_skill: kaola-workflow-plan-run issue-100',
+    'main_session_role: orchestrator', 'implementation_owner: N/A',
+    'fix_owner: N/A', 'inline_emergency_fallback_authorized: no', '',
+    '## Pending Gates', '- workflow-plan', '',
+    '## Last Evidence', 'phase_file: N/A', 'cache_file: N/A',
+    'last_command: startup', 'last_result: folder_claimed', '',
+    '## Last Updated', now579, '',
+    '## Sink', 'branch: workflow/issue-100', 'issue_number: 100',
+    'sink: merge', 'run_posture: in-place',
+    'main_root: ' + repo579,
+    'session_marker: s-MINE-session',
+    'claim_ts: ' + now579,
+  ].join('\n') + '\n');
+
+  // Lane B: co-tenant session (issue-200, different session_marker, fresh claim_ts).
+  const proj200 = path.join(repo579, 'kaola-workflow', 'issue-200');
+  fs.mkdirSync(proj200, { recursive: true });
+  fs.writeFileSync(path.join(proj200, 'workflow-state.md'), [
+    '# Kaola-Workflow State', '',
+    '## Project', 'name: issue-200', 'status: active', '',
+    '## Current Position', 'phase: adaptive', 'phase_name: Adaptive',
+    'workflow_path: adaptive', 'runtime: claude', 'step: start',
+    'next_command: /kaola-workflow-plan-run issue-200',
+    'next_skill: kaola-workflow-plan-run issue-200',
+    'main_session_role: orchestrator', 'implementation_owner: N/A',
+    'fix_owner: N/A', 'inline_emergency_fallback_authorized: no', '',
+    '## Pending Gates', '- workflow-plan', '',
+    '## Last Evidence', 'phase_file: N/A', 'cache_file: N/A',
+    'last_command: startup', 'last_result: folder_claimed', '',
+    '## Last Updated', now579, '',
+    '## Sink', 'branch: workflow/issue-200', 'issue_number: 200',
+    'sink: merge', 'run_posture: in-place',
+    'main_root: ' + repo579,
+    'session_marker: s-OTHER-session',
+    'claim_ts: ' + now579,
+  ].join('\n') + '\n');
+
+  const run579 = (argv, extraEnv) => {
+    const env579 = Object.assign({}, process.env, {
+      KAOLA_WORKFLOW_OFFLINE: '1',
+      KAOLA_GH_REMOTE_TIMEOUT_MS: '500',
+    }, extraEnv || {});
+    try {
+      const out = ef579('node', [CLAIM579, ...argv], { cwd: repo579, encoding: 'utf8', env: env579 });
+      return { code: 0, out };
+    } catch (err) {
+      return { code: err.status == null ? 1 : err.status, out: String(err.stdout || '') + String(err.stderr || '') };
+    }
+  };
+
+  // Repro A: cmdResume with two lanes + matching KAOLA_SESSION_MARKER must auto-select issue-100
+  // (not return resume_ambiguous). Bug: wrong ctx shape → ownSession undefined → mine bucket never fires.
+  const rA = run579(['resume', '--json'], { KAOLA_SESSION_MARKER: 's-MINE-session' });
+  let rAj = {}; try { rAj = JSON.parse(rA.out.trim().split('\n').pop()); } catch (_) {}
+  assert(rAj.resumed === true && rAj.project === 'issue-100',
+    '#579 R1 Repro A: cmdResume with matching KAOLA_SESSION_MARKER must auto-select issue-100 (not resume_ambiguous), code=' + rA.code + ' out=' + rA.out.trim());
+
+  // Repro B: cmdStatus must annotate issue-100 as lane_bucket:mine with a defined lane_bucket_reason.
+  // Bug: wrong ctx shape → ownSession undefined → mine bucket never fires; .reason field (vs .reasoning) → undefined reason.
+  const rB = run579(['status', '--json'], { KAOLA_SESSION_MARKER: 's-MINE-session' });
+  let rBj = {}; try { rBj = JSON.parse(rB.out.trim().split('\n').pop()); } catch (_) {}
+  const entry100 = rBj.active && rBj.active.find(f => f.project === 'issue-100');
+  assert(entry100 && entry100.lane_bucket === 'mine',
+    '#579 R1 Repro B: cmdStatus issue-100 must be lane_bucket:mine, got: ' + JSON.stringify(entry100));
+  assert(entry100 && typeof entry100.lane_bucket_reason === 'string' && entry100.lane_bucket_reason.length > 0,
+    '#579 R1 Repro B: cmdStatus issue-100 must have a defined lane_bucket_reason string, got: ' + JSON.stringify(entry100 && entry100.lane_bucket_reason));
+
+  // Repro C (co-tenant): KAOLA_COTENANT=1 → issue-200 (foreign session) must be lane_bucket:live.
+  const rC = run579(['status', '--json'], { KAOLA_SESSION_MARKER: 's-MINE-session', KAOLA_COTENANT: '1' });
+  let rCj = {}; try { rCj = JSON.parse(rC.out.trim().split('\n').pop()); } catch (_) {}
+  const entry200 = rCj.active && rCj.active.find(f => f.project === 'issue-200');
+  assert(entry200 && entry200.lane_bucket === 'live',
+    '#579 R1 Repro C: cmdStatus with KAOLA_COTENANT=1 must annotate issue-200 as lane_bucket:live, got: ' + JSON.stringify(entry200));
+
+  try { fs.rmSync(repo579, { recursive: true, force: true }); } catch (_) {}
+}
+
 if (failed > 0) {
   console.error('claim-hardening tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;

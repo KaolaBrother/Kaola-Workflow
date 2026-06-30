@@ -197,6 +197,13 @@ const TEST_THRASH_LIMIT = 3;
 // loop only wastes work; it can never land an unverified merge). Byte-identical ×4 with TEST_THRASH_LIMIT.
 const MERGE_CONFLICT_REPAIR_LIMIT = 3;
 
+// #579: single staleness constant for the lane liveness marker. A claim_ts newer than
+// this threshold (from the current wall-clock) could be a live co-tenant — classified
+// 'ambiguous' (ask). Older (or absent) → 'stale' (resumable leftover / backward compat).
+// 24h is conservative: a run completes well within a day; an untouched 24h-old claim
+// is very likely abandoned. Byte-identical ×4 (the drift anchor).
+const LANE_STALENESS_MS = 86400000; // 24 hours in milliseconds
+
 // Absolute node-count backstop for the plan grammar (DoS / stack-overflow guard).
 // Real plans are tiny (the walkthrough's largest fixture is 7 nodes; FANOUT_CAP=4,
 // LOOP_CAP=5 bound any single shape). 200 is ~28x the largest realistic plan, so it
@@ -566,6 +573,68 @@ function parallelWritesDefaultOn(env) {
   return true;
 }
 
+// #579: parked-lane selectivity — applied ON TOP of each clean-check site's existing untracked
+// posture (claim.js treeDirty, sink-merge assertCleanWorktree/assertWorktreeClean). Byte-identical
+// ×4 drift anchor; pure string helpers (no I/O, no forge CLI, no sibling require).
+
+// Repo-relative path PREFIXES for per-lane scratch spaces. A path under one of these
+// prefixes is a "parked lane path" when its project segment is NOT owned by this run.
+const PARKED_LANE_PREFIXES = Object.freeze(['kaola-workflow/', '.kw/worktrees/', '.kw/legs/']);
+
+// Parse git porcelain v1 output into an array of repo-relative fwd-slash paths.
+// Strips the 2-char XY status column + leading space; takes the DESTINATION for rename lines.
+// Both untracked (??) and tracked (M/D/A/…) files are included — the caller applies any
+// --untracked-files filtering at the git invocation level.
+function parsePorcelainPaths(statusText) {
+  const result = [];
+  const lines = String(statusText || '').split('\n');
+  for (const line of lines) {
+    if (line.length < 3) continue;
+    let p = line.slice(3); // drop "XY "
+    // Rename: "old -> new" → take destination
+    const arrowIdx = p.indexOf(' -> ');
+    if (arrowIdx >= 0) p = p.slice(arrowIdx + 4);
+    // Strip surrounding quotes (git uses them for special chars)
+    if (p.startsWith('"') && p.endsWith('"')) p = p.slice(1, -1);
+    p = p.trim();
+    if (p) result.push(p);
+  }
+  return result;
+}
+
+// Return true iff `relPath` is a non-owned lane scratch path that the clean-check
+// should IGNORE. A path is parked iff ALL three conditions hold:
+//   1. It starts with one of the PARKED_LANE_PREFIXES.
+//   2. Its second path segment (the project name) is NOT in ownedProjects.
+//   3. The project segment is "normal" — not a dot-prefixed special dir (.roadmap),
+//      not a reserved name (archive, ROADMAP.md, config.json), not empty.
+// Everything else (real code, shared durable state, the run's own project folder) → false.
+// Fail-closed: an unrecognized / empty project segment → false (treat as non-ignored).
+function isParkedLanePath(relPath, ownedProjects) {
+  const p = String(relPath || '').replace(/\\/g, '/');
+  let matchedPrefix = '';
+  for (const prefix of PARKED_LANE_PREFIXES) {
+    if (p.startsWith(prefix)) { matchedPrefix = prefix; break; }
+  }
+  if (!matchedPrefix) return false;
+  // Second segment = project name (e.g. "issue-99" from "kaola-workflow/issue-99/…")
+  const rest = p.slice(matchedPrefix.length);
+  const slashIdx = rest.indexOf('/');
+  const seg = slashIdx >= 0 ? rest.slice(0, slashIdx) : rest;
+  if (!seg) return false;
+  // Reject dot-prefixed specials (.roadmap), reserved bare names (archive), and
+  // files that sit DIRECTLY under the prefix with no project segment (ROADMAP.md, config.json).
+  if (seg.startsWith('.')) return false;
+  if (seg === 'archive') return false;
+  // If the segment looks like a bare file name (no slash follows AND the prefix is kaola-workflow/),
+  // it is a shared root-level file (ROADMAP.md, config.json) — stay strict.
+  if (matchedPrefix === 'kaola-workflow/' && slashIdx < 0) return false;
+  // Own project: NOT exempted.
+  const owned = ownedProjects || [];
+  if (owned.includes(seg)) return false;
+  return true;
+}
+
 // #353: crash-safe durable-state write — tmp + fsync + atomic rename, so a crash mid-write can
 // never leave a TORN workflow-plan.md (plan_hash mismatch → --resume-check bricks the run with no
 // recovery) or workflow-state.md (a torn file is silently skipped by readActiveFolders → the
@@ -594,6 +663,49 @@ function writeFileAtomicReplace(filePath, content) {
     throw err;
   }
   return true;
+}
+
+// #579: shared main-root resolver — single canonical source for getCoordRoot / mainRootFromCoord /
+// resolveMainRoot, previously triplicated across claim.js, adaptive-node.js, and sink-merge.js.
+// Hosted here (the ×4 byte-identical drift anchor) so all editions share ONE copy; the inline
+// require convention keeps module load side-effect-free. claim.js and adaptive-node.js import these
+// and drop their local re-impls; sink-merge.js imports via claim.js re-export.
+
+// Resolve the common-dir of the git repo rooted at `root`. In a linked worktree,
+// `git rev-parse --git-common-dir` returns the shared .git directory in the main checkout
+// (e.g. /main/.git/worktrees/wt-name → path.resolve to /main/.git).
+// Falls back to path.join(root, '.git') on any error (non-git dir / old git version).
+function getCoordRoot(root) {
+  const { execFileSync } = require('child_process');
+  const path = require('path');
+  // Fallback to process.cwd() when root is absent (mirrors claim.js's getRoot() default).
+  const r = root || process.cwd();
+  try {
+    const raw = execFileSync('git', ['rev-parse', '--git-common-dir'], {
+      cwd: r,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore']
+    }).trim();
+    return path.resolve(r, raw);
+  } catch (_) {
+    return require('path').join(r, '.git');
+  }
+}
+
+// Given the coordRoot (output of getCoordRoot), return the main checkout root.
+// A plain repo: coordRoot = /main/.git → basename is '.git' → dirname is /main.
+// A bare-worktrees layout: coordRoot = /main/.git → same.
+// If coordRoot is NOT a path ending in '.git', it is already the main root (rare).
+function mainRootFromCoord(coordRoot) {
+  const path = require('path');
+  return path.basename(coordRoot) === '.git' ? path.dirname(coordRoot) : coordRoot;
+}
+
+// Convenience: resolve the main checkout root directly from a (possibly linked-worktree) root.
+// Returns `root` (or process.cwd() when root is absent) on any error (fail-open: best-effort).
+function resolveMainRoot(root) {
+  const r = root || process.cwd();
+  try { return mainRootFromCoord(getCoordRoot(r)); } catch (_) { return r; }
 }
 
 // #354: the SINGLE fence-aware locator for a `## {heading}` markdown section — the one home for
@@ -697,6 +809,13 @@ function refuse(reason, extra) {
 }
 
 module.exports = {
+  LANE_STALENESS_MS,
+  PARKED_LANE_PREFIXES,
+  parsePorcelainPaths,
+  isParkedLanePath,
+  getCoordRoot,
+  mainRootFromCoord,
+  resolveMainRoot,
   WORKFLOW_PATHS,
   ADAPTIVE_PATH,
   PLAN_RUN_COMMAND,

@@ -183,7 +183,12 @@ function parseStateFile(stateFile) {
     full_name: field(content, 'full_name'),
     project_html_url: field(content, 'project_html_url'),
     pr_url: field(content, 'pr_url'),
-    pr_number: firstPositiveInteger(field(content, 'pr_number'))
+    pr_number: firstPositiveInteger(field(content, 'pr_number')),
+    // #579: liveness-marker fields (written by claim.js writeState at claim-time only).
+    // Absent in pre-#579 state files → empty string (backward compat).
+    main_root: field(content, 'main_root') || '',
+    session_marker: field(content, 'session_marker') || '',
+    claim_ts: field(content, 'claim_ts') || ''
   };
 }
 
@@ -241,7 +246,11 @@ function readActiveFolders(root, options) {
       full_name: state.full_name,
       project_html_url: state.project_html_url,
       pr_url: state.pr_url,
-      pr_number: state.pr_number
+      pr_number: state.pr_number,
+      // #579: liveness-marker fields (empty string when absent — pre-#579 backward compat).
+      main_root: state.main_root || '',
+      session_marker: state.session_marker || '',
+      claim_ts: state.claim_ts || ''
     };
     if (opts.includeContent) item.content = state.content;
     result.push(item);

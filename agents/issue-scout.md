@@ -77,6 +77,23 @@ Exclude from any bundle:
 - Issues classified red against active work;
 - Issues whose dependencies fall outside the bundle and are not already closed.
 
+### Co-Tenant Mode: Disjoint Issue Selection
+
+When reading active folders, each non-owned lane carries a `lane_bucket` classification in the claim-status report. Use it to shape the candidate pool before any other selection step:
+
+- **`mine`** — this session owns the lane; operate normally.
+- **`live`** — another live session is working in this lane. Leave it entirely untouched and exclude all of its issues from the candidate pool.
+- **`stale`** — a resumable leftover from a prior, inactive session. Treat its issues as ordinary unclaimed candidates for overlap purposes.
+- **`ambiguous`** — liveness cannot be determined. Do not include this lane's issues in any recommendation; record the ambiguity and defer to the orchestrator's ask.
+
+**Per-lane precedence ladder (first match wins, applied independently per lane):**
+1. An explicit per-issue resume instruction (e.g. "resume issue N") makes the lane `stale` (resumable) regardless of marker age — this beats all other signals.
+2. A blanket co-tenant signal in the user prompt (e.g. "another session is working") makes all non-owned, non-explicitly-resumed lanes `live`.
+3. The liveness heuristic from `lane_bucket`: a fresh marker → `ambiguous`; an old or absent marker → `stale`.
+4. No signal → ask.
+
+Combine the `live`-lane issue exclusion with the existing write-set overlap verdict when building the candidate pool: a bundle is eligible only when its issues are not occupied by any `live` lane AND its write areas do not conflict with active work. When all candidates are occupied by `live` or `ambiguous` lanes, emit the empty-backlog shape rather than recommending occupied work.
+
 ### 3. Bundle Selection Rules
 
 Auto-bundle mode should only recommend a set when ALL of the following are true:

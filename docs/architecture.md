@@ -500,3 +500,67 @@ The resolver (`resolve-agent-model`) uses this precedence chain:
 **Effect on adaptive nodes:** Dynamically dispatched nodes now resolve to their correct profile-aware model and render the model badge in the dispatch call. Previously, agents with `model: inherit` frontmatter resolved to `''` and silently inherited Opus regardless of the installed profile. Frontmatter remains `inherit` (the install-emitted manifest is the authoritative source); the dispatch carries an explicit `model=` so the badge is always visible.
 
 **Runtime per-node override:** At RUNTIME, the per-node `model` column in `workflow-plan.md` beats install-time profile selection — see the #382 per-node model tier. A node's `model` cell (`opus` or `sonnet`) is sealed at freeze and surfaced by `next-action.js` in every ready-set item; `open-next`/`open-ready` thread it into the running-set manifest for crash/reconcile re-dispatch.
+
+## Concurrent Same-Repo Sessions — Main-Root Authority and Lane Classifier (#579)
+
+Two mechanisms harden concurrent same-repo sessions: a **single main-root authority** that
+eliminates the path-derivation split when running from a linked worktree, and a **four-bucket
+lane classifier** that lets `cmdStatus` and `cmdResume` distinguish own/active/stale/unknown lanes
+without stale-merging or prompt confusion.
+
+### Single main-root authority
+
+`getCoordRoot`, `mainRootFromCoord`, and `resolveMainRoot` are canonically defined **once** in
+`scripts/kaola-workflow-adaptive-schema.js` (the byte-identical cross-edition drift anchor) and
+re-exported by `kaola-workflow-claim.js`. Previously, the same three-line body was triplicated
+across `claim.js`, `adaptive-node.js`, and `sink-merge.js` — any divergence caused an authority
+split when launched from a linked or detached worktree.
+
+`writeState` (claim.js) computes `resolveMainRoot(root)` once at claim time and writes
+`main_root: <path>` into the `## Sink` block. The executor (`adaptive-node.js`) reads this field
+back from the local `workflow-state.md` instead of re-deriving from cwd. Absent on pre-#579 state
+files; the executor falls back to `getMainRoot(repoRoot)` (backward-compatible).
+
+### Four-bucket lane classifier
+
+`classifyLane(lane, ctx)` (`scripts/kaola-workflow-classifier.js`) is a pure function that
+partitions any active-folder lane into one of four buckets, driven by three claim-time fields
+stamped by `writeState` and surfaced by `active-folders.js`:
+
+- `session_marker` — session identity produced by `resolveSessionMarker(env)` (also in
+  `classifier.js`): `KAOLA_SESSION_MARKER` env var when set, otherwise `s-<pid>-<timestamp-base36>`.
+- `claim_ts` — ISO-8601 claim timestamp, the liveness anchor.
+- `LANE_STALENESS_MS = 86400000` (24 hours, exported from `adaptive-schema.js`) — single
+  staleness constant. A claim newer than 24 hours may be an active co-tenant (`ambiguous`);
+  older than 24 hours is a resumable leftover (`stale`).
+
+All three fields are written once at claim time; no heartbeat/refresh path exists.
+
+**Precedence ladder (first match wins):**
+
+| Priority | Condition | Bucket | Meaning |
+|---|---|---|---|
+| 1 | `lane.session_marker === ctx.ownSession` | `mine` | Own lane |
+| 2 | `ctx.explicitResumeIssues` intersects lane's issues | `stale` | Adopt as resumable (explicit instruction beats freshness) |
+| 3 | `ctx.coTenantSignal` (`KAOLA_COTENANT=1`) | `live` | Leave untouched — active co-tenant declared |
+| 4a | `claim_ts` present and age < `LANE_STALENESS_MS` | `ambiguous` | Ask before overwriting |
+| 4b | `claim_ts` absent or age ≥ `LANE_STALENESS_MS` | `stale` | Old leftover or pre-#579 markerless folder |
+
+`cmdStatus` annotates each active-folder item with `lane_bucket` + `lane_bucket_reason` (from
+`classifyLane`). `cmdResume` excludes `live` lanes from the resume candidate set; `stale` and
+`mine` are resumable; `ambiguous` or more than one candidate triggers the existing
+`resume_ambiguous` refusal.
+
+### Clean-check selectivity
+
+The clean-worktree gates (`assertCleanWorktree`/`assertWorktreeClean` in `sink-merge.js`,
+`treeDirty` in `claim.js`) apply `isParkedLanePath(relPath, ownedProjects)` (from
+`adaptive-schema.js`) ON TOP of the existing probe-fault / catch-dirty handling. The predicate
+exempts only non-owned lane scratch under `PARKED_LANE_PREFIXES`
+(`['kaola-workflow/', '.kw/worktrees/', '.kw/legs/']`). Real code, shared durable state
+(`kaola-workflow/.roadmap/`, `ROADMAP.md`, `config.json`, `archive/`), and own in-progress
+state all remain strict — fail-closed posture is preserved (unverifiable → dirty). The
+`ffMergeLoop` conflict handler and the true-conflict halt are byte-unchanged; the clean check
+runs before the merge loop so the loosened non-owned exemption cannot change conflict handling.
+
+See `docs/conventions.md` § Co-Tenant Lane Convention and `docs/decisions/D-579-01.md`.

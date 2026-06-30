@@ -4646,6 +4646,41 @@ function testGiteaInstalledPathsPartition543Smoke() {
 
 testGiteaInstalledPathsPartition543Smoke();
 
+// #579: forge active-folders liveness-marker fields regression — session_marker/claim_ts/main_root
+// must be parsed from workflow-state.md and surfaced in readActiveFolders items so that
+// classifyLane can bucket a live lane as 'mine' (not 'stale') in the gitea edition.
+// RED against the unfixed gitea active-folders (session_marker not parsed → undefined →
+// classifyLane falls through to stale). GREEN after the fix.
+function testGiteaActiveFoldersSessionMarker579() {
+  const root = tempRoot('kw-gt-sm579-');
+  try {
+    const ownSession = 's-MINE-session-579gt';
+    const claimTs = new Date(Date.now() - 10000).toISOString();
+    writeState(root, 'lane-mine-gt', 579,
+      'session_marker: ' + ownSession + '\nmain_root: /repo/root\nclaim_ts: ' + claimTs);
+    const folders = active.readActiveFolders(root, { excludeClosedIssues: false });
+    assert.strictEqual(folders.length, 1, '#579(gt): expected 1 active folder');
+    const item = folders[0];
+    assert.strictEqual(item.session_marker, ownSession,
+      '#579(gt): readActiveFolders item.session_marker must be "' + ownSession + '", got: ' + item.session_marker);
+    const ctx = {
+      ownSession,
+      explicitResumeIssues: new Set(),
+      coTenantSignal: false,
+      now: Date.now(),
+      staleMs: 3600000
+    };
+    const laneResult = classifier.classifyLane(item, ctx);
+    assert.strictEqual(laneResult.bucket, 'mine',
+      '#579(gt): classifyLane must yield mine for own session, got: ' + JSON.stringify(laneResult));
+    console.log('testGiteaActiveFoldersSessionMarker579: PASSED');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+testGiteaActiveFoldersSessionMarker579();
+
 testGiteaRoadmapInitIssueExclusiveAndUpdate()
   .then(() => {
     console.log('Gitea workflow script tests passed');
