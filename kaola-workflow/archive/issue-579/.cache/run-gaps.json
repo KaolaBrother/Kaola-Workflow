@@ -1,0 +1,20 @@
+{
+  "project": "issue-579",
+  "sweptClasses": [
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n2-engine",
+      "count": 2
+    },
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n5-refute",
+      "count": 2
+    },
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n6-review",
+      "count": 2
+    }
+  ]
+}

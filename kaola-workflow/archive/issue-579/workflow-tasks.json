@@ -1,0 +1,48 @@
+{
+  "source_plan_hash": "bdd9a11e15f8900921e3350ca893f112d80266e80f4c51c8c906ccd5bb008f43",
+  "tasks": [
+    {
+      "id": "n1-design",
+      "role": "code-architect",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n2-engine",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n3-prose",
+      "role": "implementer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n4-docs",
+      "role": "doc-updater",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n5-refute",
+      "role": "adversarial-verifier",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n6-review",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n7-finalize",
+      "role": "finalize",
+      "status": "in_progress",
+      "ledger_status": "in_progress"
+    }
+  ],
+  "last_synced_from_ledger": "2026-06-30T08:46:17.447Z"
+}
