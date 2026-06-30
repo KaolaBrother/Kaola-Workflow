@@ -45,6 +45,19 @@ The repo ships four editions (claude / codex / gitlab / gitea), each with its ow
 
 - **Routing / adaptive prose propagates to SIX prose surfaces, not ×4 (issue #400).** Adaptive-path, routing, bundle-lane, or finalize-wiring PROSE lives on **six** surfaces — the three Claude **commands** plus the three Codex **SKILL packs**: (1) `commands/` (github-claude), (2) `plugins/kaola-workflow-gitlab/commands/`, (3) `plugins/kaola-workflow-gitea/commands/`, (4) `plugins/kaola-workflow/skills/` (github-codex), (5) `plugins/kaola-workflow-gitlab/skills/`, (6) `plugins/kaola-workflow-gitea/skills/`. A change landing on only 4 of the 6 (the recurring CHANGELOG **"×4"** wording is the symptom) leaves the two forge-codex SKILL packs as a **propagation dead zone** — exactly how #369 (`--issue-numbers`) and #380 (auto-bundle restructure) shipped reaching the commands + the github-codex SKILL but not the two forge SKILLs. Forge nouns differ per edition (gitlab = MR / `glab` / `kaola-gitlab-workflow-*.js`; gitea = PR / `tea` / `kaola-gitea-workflow-*.js`; the forge contract validators FORBID `plugins/kaola-workflow/scripts`, `\bgh\b`, `/pull request/i` in SKILLs — verify each with `--forbidden-only`). The **route-reachability contract** (`#400`, in all four `validate-*-contracts.js` + `scripts/test-route-reachability.js`) machine-enforces that every schema-emitted route target resolves to an installed surface AND that a mirrored SKILL carries the command's wiring tokens — so a missing-SKILL or hollow-SKILL dead zone reds the chain with the unreachable target named. Adaptive/routing prose changes are a cross-edition diff.
 
+- **Shared engine `workflow-state.md` field parity (#580 / D-580-01).** Fields that every
+  edition's `active-folders` port must parse and surface are declared ONCE in
+  `SHARED_STATE_FIELDS` — an `Object.freeze([...])` exported from
+  `scripts/kaola-workflow-adaptive-schema.js` (byte-identical ×4 via `validate-script-sync.js`).
+  `scripts/test-active-folders-field-parity.js` (wired into all four
+  `test:kaola-workflow:{claude,codex,gitlab,gitea}` chains) calls each edition's
+  `readActiveFolders` against a sentinel-populated `workflow-state.md` and asserts every
+  shared field is surfaced with its sentinel value — a missing field fails the assertion, not
+  silently defaults. Adding a new shared field requires: (1) add to `SHARED_STATE_FIELDS`;
+  (2) update every edition's `active-folders` port; (3) verify the parity gate is green.
+  Per-edition fields (gitlab `mr_*`/`project_id`; gitea `full_name`/`pr_*`) are deliberately
+  NOT in `SHARED_STATE_FIELDS` and are not pinned by this gate.
+
 ## Adaptive is the Default; Fast/Full are Install-Time Opt-ins (issue #538)
 
 Adaptive is the unconditional default path — there is no on/off switch and no path-selection step.

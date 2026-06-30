@@ -204,6 +204,28 @@ const MERGE_CONFLICT_REPAIR_LIMIT = 3;
 // is very likely abandoned. Byte-identical ×4 (the drift anchor).
 const LANE_STALENESS_MS = 86400000; // 24 hours in milliseconds
 
+// The shared, cross-edition intersection of workflow-state.md fields that every
+// active-folders parser (canonical + all forge ports) reads and surfaces on the
+// returned active-folder item. Using this constant as the single source of truth
+// ensures the behavior-parity gate (test-active-folders-field-parity.js) auto-extends
+// when a future field is added, and lets callers enumerate the shared surface without
+// hard-coding the list. Byte-identical ×4 (the drift anchor).
+const SHARED_STATE_FIELDS = Object.freeze([
+  'issue_number',
+  'phase',
+  'issue_numbers',
+  'status',
+  'bundle_id',
+  'closure_policy',
+  'next_command',
+  'branch',
+  'worktree_path',
+  'sink',
+  'main_root',
+  'session_marker',
+  'claim_ts',
+]);
+
 // Absolute node-count backstop for the plan grammar (DoS / stack-overflow guard).
 // Real plans are tiny (the walkthrough's largest fixture is 7 nodes; FANOUT_CAP=4,
 // LOOP_CAP=5 bound any single shape). 200 is ~28x the largest realistic plan, so it
@@ -810,6 +832,7 @@ function refuse(reason, extra) {
 
 module.exports = {
   LANE_STALENESS_MS,
+  SHARED_STATE_FIELDS,
   PARKED_LANE_PREFIXES,
   parsePorcelainPaths,
   isParkedLanePath,
