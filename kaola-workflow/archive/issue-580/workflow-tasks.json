@@ -1,0 +1,30 @@
+{
+  "source_plan_hash": "bdb06f6f82a1c33a1f1ae6bd80a1dfffa3d1d9c489edd097f95d9fb4d1a9eb04",
+  "tasks": [
+    {
+      "id": "n1-shared-field-parity",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n2-docs",
+      "role": "doc-updater",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n3-review",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n4-finalize",
+      "role": "finalize",
+      "status": "completed",
+      "ledger_status": "complete"
+    }
+  ],
+  "last_synced_from_ledger": "2026-06-30T10:38:55.347Z"
+}

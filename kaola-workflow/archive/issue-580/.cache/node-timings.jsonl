@@ -1,0 +1,10 @@
+{"node":"n1-shared-field-parity","event":"opened","ts":"2026-06-30T10:11:01.458Z"}
+{"node":"n1-shared-field-parity","event":"closed","ts":"2026-06-30T10:21:38.083Z"}
+{"node":"n2-docs","event":"opened","ts":"2026-06-30T10:21:38.115Z"}
+{"node":"n2-docs","event":"closed","ts":"2026-06-30T10:25:44.229Z"}
+{"node":"n3-review","event":"opened","ts":"2026-06-30T10:25:44.264Z"}
+{"node":"n3-review","event":"evidence","ts":"2026-06-30T10:34:27.097Z"}
+{"node":"n3-review","event":"closed","ts":"2026-06-30T10:34:33.348Z"}
+{"node":"n4-finalize","event":"opened","ts":"2026-06-30T10:34:33.441Z"}
+{"node":"n4-finalize","event":"evidence","ts":"2026-06-30T10:38:48.923Z"}
+{"node":"n4-finalize","event":"closed","ts":"2026-06-30T10:38:55.285Z"}
