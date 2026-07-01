@@ -306,6 +306,31 @@ try {
       const configText = fs.readFileSync(projectConfigPath, 'utf8');
       assert(configText.includes('# BEGIN kaola-workflow agents'), '#447 AC2: positional-form config.toml must contain managed agents block');
       const codexPreflightPath = path.join(root, 'plugins', 'kaola-workflow', 'scripts', 'kaola-workflow-codex-preflight.js');
+      function configWithFeatureLine(line) {
+        return configText.replace('multi_agent = true', 'multi_agent = true\n' + line);
+      }
+      function assertDispatchModeForConfig(body, expectedMode, label, checkDoctor) {
+        fs.writeFileSync(projectConfigPath, body);
+        const result = spawnSync(process.execPath, [codexPreflightPath, '--project-root', cproj, '--home', chome, '--no-autofix', '--json'], {
+          cwd: path.join(root, 'plugins', 'kaola-workflow'),
+          encoding: 'utf8'
+        });
+        assert.strictEqual(result.status, 0, label + ': preflight must pass: ' + result.stderr + result.stdout);
+        const json = JSON.parse(result.stdout);
+        assert.strictEqual(json.dispatch_mode, expectedMode, label + ': dispatch_mode');
+        assert.strictEqual(json.multi_agent_v2_enabled, expectedMode === 'v2-task-name', label + ': multi_agent_v2_enabled');
+        if (checkDoctor) {
+          const doctorResult = spawnSync(process.execPath, [codexPreflightPath, '--doctor', '--project-root', cproj, '--home', chome, '--json'], {
+            cwd: path.join(root, 'plugins', 'kaola-workflow'),
+            encoding: 'utf8'
+          });
+          const doctorJson = JSON.parse(doctorResult.stdout);
+          const projectScope = doctorJson.scopes.find(s => s.scope === 'project');
+          assert(projectScope && projectScope.dispatch_mode === expectedMode,
+            label + ': doctor project scope reports ' + expectedMode + ', got ' + JSON.stringify(projectScope));
+        }
+      }
+
       let preflight = spawnSync(process.execPath, [codexPreflightPath, '--project-root', cproj, '--home', chome, '--no-autofix', '--json'], {
         cwd: path.join(root, 'plugins', 'kaola-workflow'),
         encoding: 'utf8'
@@ -313,22 +338,16 @@ try {
       assert.strictEqual(preflight.status, 0, '#581: preflight over fresh project profiles must pass: ' + preflight.stderr + preflight.stdout);
       let preflightJson = JSON.parse(preflight.stdout);
       assert.strictEqual(preflightJson.dispatch_mode, 'v1-thread-id', '#581: preflight reports v1-thread-id by default');
-      fs.writeFileSync(projectConfigPath, configText.replace('multi_agent = true', 'multi_agent = true\nmulti_agent_v2 = true'));
-      preflight = spawnSync(process.execPath, [codexPreflightPath, '--project-root', cproj, '--home', chome, '--no-autofix', '--json'], {
-        cwd: path.join(root, 'plugins', 'kaola-workflow'),
-        encoding: 'utf8'
-      });
-      assert.strictEqual(preflight.status, 0, '#581: preflight with multi_agent_v2 must pass: ' + preflight.stderr + preflight.stdout);
-      preflightJson = JSON.parse(preflight.stdout);
-      assert.strictEqual(preflightJson.dispatch_mode, 'v2-task-name', '#581: preflight reports v2-task-name when multi_agent_v2 is enabled');
-      const doctor = spawnSync(process.execPath, [codexPreflightPath, '--doctor', '--project-root', cproj, '--home', chome, '--json'], {
-        cwd: path.join(root, 'plugins', 'kaola-workflow'),
-        encoding: 'utf8'
-      });
-      const doctorJson = JSON.parse(doctor.stdout);
-      const projectScope = doctorJson.scopes.find(s => s.scope === 'project');
-      assert(projectScope && projectScope.dispatch_mode === 'v2-task-name',
-        '#581: doctor project scope reports v2-task-name when multi_agent_v2 is enabled');
+      assertDispatchModeForConfig(configText, 'v1-thread-id', '#584 no multi_agent_v2 key', false);
+      assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = true'), 'v2-task-name', '#584 boolean true', true);
+      assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = false'), 'v1-thread-id', '#584 boolean false', false);
+      assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = { enabled = true, hide_spawn_agent_metadata = false, non_code_mode_only = false }'), 'v2-task-name', '#584 inline object enabled true', true);
+      assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = { enabled = false, hide_spawn_agent_metadata = false, non_code_mode_only = false }'), 'v1-thread-id', '#584 inline object enabled false', false);
+      assertDispatchModeForConfig(configWithFeatureLine('[features.multi_agent_v2]\nenabled = true'), 'v2-task-name', '#584 table enabled true', true);
+      assertDispatchModeForConfig(configWithFeatureLine('[features.multi_agent_v2]\nenabled = false'), 'v1-thread-id', '#584 table enabled false', false);
+      assertDispatchModeForConfig('[notice]\nsuppress_unstable_features_warning = true\n\n' + configText, 'v1-thread-id', '#584 warning suppression only', false);
+      assertDispatchModeForConfig('multi_agent_v2 = true\n\n' + configText, 'v1-thread-id', '#584 top-level key ignored', false);
+      assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = { hide_spawn_agent_metadata = false }'), 'v1-thread-id', '#584 inline object missing enabled fails closed', false);
 
       // #543 cross-edition: a default (no-flags) codex installer run must seed the shared
       // ~/.config/kaola-workflow/config.json with installed_paths:[] (adaptive-only). This is the

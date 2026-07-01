@@ -971,16 +971,50 @@ function testCodexPreflight266() {
       ['--project-root', root266, '--no-autofix', '--json'], h266);
     assert(freshResult.status === 0,
       '#266 case1 RED-discriminator: fresh fixture must exit 0, got ' + freshResult.status + '\n' + freshResult.stdout);
-    const freshJson = JSON.parse(freshResult.stdout);
-    assert(freshJson.status === 'ok',
-      '#266 case1 RED-discriminator: fresh fixture must return status:ok, got ' + freshJson.status);
+        const freshJson = JSON.parse(freshResult.stdout);
+        assert(freshJson.status === 'ok',
+          '#266 case1 RED-discriminator: fresh fixture must return status:ok, got ' + freshJson.status);
 
-    // --- Case 1 RED: corrupt the managed block (remove a role entry) → config_stale ---
-    const configPath = path.join(root266, '.codex', 'config.toml');
-    const origConfig = fs.readFileSync(configPath, 'utf8');
-    // Replace [agents.workflow-planner] inside the block — makes that role missing from block
-    const staleConfig = origConfig.replace('[agents.workflow-planner]', '[agents.STALE-workflow-planner]');
-    fs.writeFileSync(configPath, staleConfig);
+        // --- Case 1 RED: corrupt the managed block (remove a role entry) → config_stale ---
+        const configPath = path.join(root266, '.codex', 'config.toml');
+        const origConfig = fs.readFileSync(configPath, 'utf8');
+        function configWithFeatureLine(line) {
+          return origConfig.replace('multi_agent = true', 'multi_agent = true\n' + line);
+        }
+        function assertDispatchModeForConfig(body, expectedMode, label, checkDoctor) {
+          fs.writeFileSync(configPath, body);
+          const result = runScript(preflightScript,
+            ['--project-root', root266, '--no-autofix', '--json'], h266);
+          assert(result.status === 0,
+            label + ': preflight must pass, got ' + result.status + '\n' + result.stdout);
+          const json = JSON.parse(result.stdout);
+          assert(json.dispatch_mode === expectedMode,
+            label + ': expected dispatch_mode ' + expectedMode + ', got ' + json.dispatch_mode);
+          assert(json.multi_agent_v2_enabled === (expectedMode === 'v2-task-name'),
+            label + ': multi_agent_v2_enabled mismatch, got ' + json.multi_agent_v2_enabled);
+          if (checkDoctor) {
+            const doctorResult = runScript(preflightScript,
+              ['--doctor', '--project-root', root266, '--json'], h266);
+            const doctorJson = JSON.parse(doctorResult.stdout);
+            const projectScope = doctorJson.scopes.find(s => s.scope === 'project');
+            assert(projectScope && projectScope.dispatch_mode === expectedMode,
+              label + ': doctor project scope expected ' + expectedMode + ', got ' + JSON.stringify(projectScope));
+          }
+        }
+        assertDispatchModeForConfig(origConfig, 'v1-thread-id', '#584 no multi_agent_v2 key', false);
+        assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = true'), 'v2-task-name', '#584 boolean true', true);
+        assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = false'), 'v1-thread-id', '#584 boolean false', false);
+        assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = { enabled = true, hide_spawn_agent_metadata = false, non_code_mode_only = false }'), 'v2-task-name', '#584 inline object enabled true', true);
+        assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = { enabled = false, hide_spawn_agent_metadata = false, non_code_mode_only = false }'), 'v1-thread-id', '#584 inline object enabled false', false);
+        assertDispatchModeForConfig(configWithFeatureLine('[features.multi_agent_v2]\nenabled = true'), 'v2-task-name', '#584 table enabled true', true);
+        assertDispatchModeForConfig(configWithFeatureLine('[features.multi_agent_v2]\nenabled = false'), 'v1-thread-id', '#584 table enabled false', false);
+        assertDispatchModeForConfig('[notice]\nsuppress_unstable_features_warning = true\n\n' + origConfig, 'v1-thread-id', '#584 warning suppression only', false);
+        assertDispatchModeForConfig('multi_agent_v2 = true\n\n' + origConfig, 'v1-thread-id', '#584 top-level key ignored', false);
+        assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = { hide_spawn_agent_metadata = false }'), 'v1-thread-id', '#584 inline object missing enabled fails closed', false);
+        fs.writeFileSync(configPath, origConfig);
+        // Replace [agents.workflow-planner] inside the block — makes that role missing from block
+        const staleConfig = origConfig.replace('[agents.workflow-planner]', '[agents.STALE-workflow-planner]');
+        fs.writeFileSync(configPath, staleConfig);
 
     const staleResult = runScript(preflightScript,
       ['--project-root', root266, '--no-autofix', '--json'], h266);

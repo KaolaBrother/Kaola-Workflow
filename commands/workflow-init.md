@@ -165,6 +165,13 @@ Append equivalent missing sections only. Treat headings with the same meaning as
 > agent profiles **globally** into `~/.codex` (one install, all repos) AND refreshes the
 > global hooks. Trust hooks once via `/hooks`. If a project-local `.codex/hooks.json`
 > exists from a prior version, remove it (or run `uninstall.sh`) to avoid double-firing.
+> Audit Codex config before claiming role dispatch readiness: `codex features list`
+> must show `multi_agent` and `multi_agent_v2` enabled, and
+> `kaola-workflow-codex-preflight.js --doctor --json` must agree with the active
+> config form (`multi_agent_v2 = true`, inline `{ enabled = true, ... }`, or
+> `[features.multi_agent_v2] enabled = true`). Warning suppression under `[notice]`
+> is not feature enablement. Never silently edit `~/.codex/config.toml`; show the
+> minimal diff and apply it only with user authorization.
 
 Keep the working-principle bullets concise.
 

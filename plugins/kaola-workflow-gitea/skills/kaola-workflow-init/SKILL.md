@@ -131,6 +131,22 @@ node "$plugin_root/scripts/install-codex-agent-profiles.js" --global
 
 Writes `~/.codex/agents/kaola-workflow/*.toml` + the managed block in `~/.codex/config.toml`, refreshes global hooks — one install, all repos. The preflight gate accepts the global scope. (To pin to one repo instead, pass the repo path positionally — `… "$PWD"` — optional override.)
 
+Run an agent-guided Codex config audit before claiming role dispatch readiness:
+
+```bash
+codex features list | rg 'multi_agent|multi_agent_v2' || true
+node "$plugin_root/scripts/kaola-workflow-codex-preflight.js" --doctor --project-root "$PWD" --json
+```
+
+Classify the result:
+
+- `ok`: `multi_agent` and `multi_agent_v2` are enabled, generated role profiles are fresh, and agent limits are absent or sufficient.
+- `warning_only`: only `[notice].suppress_unstable_features_warning = true` differs; this is optional warning posture, not dispatch proof.
+- `needs_update`: V2/subagent config is missing or too constrained for Kaola's intended behavior.
+- `blocked`: config is malformed, policy-managed, or conflicts with a user/admin constraint.
+
+Supported V2 config forms are `multi_agent_v2 = true`, `multi_agent_v2 = { enabled = true, ... }`, and `[features.multi_agent_v2]` with `enabled = true`. Warning suppression is independent: never treat `[notice].suppress_unstable_features_warning = true` as evidence that V2 is enabled. Do not silently edit `~/.codex/config.toml`; if a required setting is missing, show the minimal diff and apply it only when the user asked the agent to configure this machine or explicitly consents. Do not claim effort-safe dispatch from config text alone; a tiered fallback still needs a child-session effort proof.
+
 Trust the hooks once with `/hooks` in Codex. If an older project-local `.codex/hooks.json`
 exists from a prior version, remove it (or run `uninstall.sh`) to avoid double-firing.
 

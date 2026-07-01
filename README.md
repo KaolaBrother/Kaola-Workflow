@@ -484,6 +484,48 @@ node <plugin-root>/scripts/kaola-workflow-codex-preflight.js --doctor --project-
 
 Restart Codex to pick up the updated plugin files.
 
+#### Config audit for effort-safe subagents
+
+The profile installer refreshes Kaola-owned profiles, hooks, manifests, and the
+managed `[agents.*]` block. It does **not** silently rewrite unrelated global
+Codex feature settings. Treat `~/.codex/config.toml` as user-owned: audit it
+first, then apply a minimal config delta only when the user has asked the agent
+to configure this machine or explicitly approves the change.
+
+The audit must keep these facts separate:
+
+- `codex features list` should report `multi_agent` and `multi_agent_v2` as
+  enabled for V2 task-name dispatch.
+- The active Codex config may express V2 as `multi_agent_v2 = true`,
+  `multi_agent_v2 = { enabled = true, ... }`, or
+  `[features.multi_agent_v2]` with `enabled = true`.
+- `[notice].suppress_unstable_features_warning = true` only suppresses the
+  under-development warning; it is not evidence that V2 is enabled.
+- `[agents].max_threads` and `[agents].max_depth`, when present, must be high
+  enough for Kaola fan-out and root-to-subagent dispatch.
+- The installed plugin cache, generated role profiles, and global hooks must be
+  fresh relative to the plugin source Codex is actually loading.
+- Runtime effort integrity still requires a child-session proof: verify the
+  spawned child session JSONL records `turn_context.effort` as `high` and
+  `xhigh` before trusting tiered fallback behavior.
+
+Recommended posture when the user asks the agent to configure Codex for
+Kaola-Workflow:
+
+```toml
+[notice]
+suppress_unstable_features_warning = true
+
+[features]
+multi_agent = true
+multi_agent_v2 = { enabled = true, hide_spawn_agent_metadata = false, non_code_mode_only = false }
+```
+
+If the audit finds a missing required setting and the user has not authorized
+config changes, stop with the minimal diff and reason. Do not claim Codex is
+ready from repo source alone, from warning suppression alone, or from a stale
+plugin cache.
+
 Updating the Codex CLI itself never repairs Kaola-generated `.codex/` state — the
 runtime and the generated role profiles / managed config block are separate
 surfaces. A schema-invalid profile (one missing a non-empty top-level `name`, which

@@ -98,9 +98,121 @@ function sameStringArray(a, b) {
   return a.every((v, i) => v === b[i]);
 }
 
+function stripTomlComment(line) {
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inDouble && ch === '\\' && !escaped) {
+      escaped = true;
+      continue;
+    }
+    if (ch === '"' && !inSingle && !escaped) inDouble = !inDouble;
+    if (ch === "'" && !inDouble) inSingle = !inSingle;
+    if (ch === '#' && !inSingle && !inDouble) return line.slice(0, i);
+    escaped = false;
+  }
+  return line;
+}
+
+function parseTomlTableName(line) {
+  const m = line.match(/^\s*\[([A-Za-z0-9_.-]+)\]\s*$/);
+  return m ? m[1] : null;
+}
+
+function parseTomlBoolean(value) {
+  const trimmed = String(value || '').trim();
+  if (trimmed === 'true') return true;
+  if (trimmed === 'false') return false;
+  return null;
+}
+
+function splitInlineTomlFields(body) {
+  const fields = [];
+  let start = 0;
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i];
+    if (inDouble && ch === '\\' && !escaped) {
+      escaped = true;
+      continue;
+    }
+    if (ch === '"' && !inSingle && !escaped) inDouble = !inDouble;
+    if (ch === "'" && !inDouble) inSingle = !inSingle;
+    if (ch === ',' && !inSingle && !inDouble) {
+      fields.push(body.slice(start, i).trim());
+      start = i + 1;
+    }
+    escaped = false;
+  }
+  fields.push(body.slice(start).trim());
+  return fields.filter(Boolean);
+}
+
+function parseMultiAgentV2Value(value) {
+  const trimmed = String(value || '').trim();
+  const bool = parseTomlBoolean(trimmed);
+  if (bool !== null) return { valid: true, enabled: bool };
+
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) {
+    return { valid: false, enabled: false };
+  }
+
+  let found = false;
+  let enabled = false;
+  for (const field of splitInlineTomlFields(trimmed.slice(1, -1))) {
+    const m = field.match(/^enabled\s*=\s*(.+)$/);
+    if (!m) continue;
+    if (found) return { valid: false, enabled: false };
+    const fieldBool = parseTomlBoolean(m[1]);
+    if (fieldBool === null) return { valid: false, enabled: false };
+    found = true;
+    enabled = fieldBool;
+  }
+
+  return found ? { valid: true, enabled } : { valid: false, enabled: false };
+}
+
 function detectCodexDispatchMode(configContent) {
-  const text = String(configContent || '');
-  const enabled = /^\s*multi_agent_v2\s*=\s*true\s*$/m.test(text);
+  const lines = String(configContent || '').split(/\r?\n/);
+  let table = '';
+  let seen = false;
+  let enabled = false;
+  let ambiguous = false;
+
+  function record(parsed) {
+    if (!parsed.valid || seen) {
+      ambiguous = true;
+      enabled = false;
+      return;
+    }
+    seen = true;
+    enabled = parsed.enabled;
+  }
+
+  for (const rawLine of lines) {
+    const line = stripTomlComment(rawLine).trim();
+    if (!line) continue;
+
+    const tableName = parseTomlTableName(line);
+    if (tableName !== null) {
+      table = tableName;
+      continue;
+    }
+
+    if (table === 'features') {
+      const m = line.match(/^multi_agent_v2\s*=\s*(.+)$/);
+      if (m) record(parseMultiAgentV2Value(m[1]));
+    } else if (table === 'features.multi_agent_v2') {
+      const m = line.match(/^enabled\s*=\s*(.+)$/);
+      if (m) record({ valid: parseTomlBoolean(m[1]) !== null, enabled: parseTomlBoolean(m[1]) === true });
+    }
+  }
+
+  enabled = seen && !ambiguous && enabled;
   return {
     dispatch_mode: enabled ? 'v2-task-name' : 'v1-thread-id',
     multi_agent_v2_enabled: enabled,
