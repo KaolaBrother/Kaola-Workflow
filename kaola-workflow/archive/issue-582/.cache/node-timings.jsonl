@@ -1,0 +1,12 @@
+{"node":"n1-fail-closed-contract","event":"opened","ts":"2026-07-01T15:34:52.206Z"}
+{"node":"n1-fail-closed-contract","event":"evidence","ts":"2026-07-01T15:39:18.402Z"}
+{"node":"n1-fail-closed-contract","event":"closed","ts":"2026-07-01T15:39:23.731Z"}
+{"node":"n2-doc-runtime-proof","event":"opened","ts":"2026-07-01T15:39:23.763Z"}
+{"node":"n2-doc-runtime-proof","event":"evidence","ts":"2026-07-01T15:40:24.601Z"}
+{"node":"n2-doc-runtime-proof","event":"closed","ts":"2026-07-01T15:40:25.098Z"}
+{"node":"n3-review","event":"opened","ts":"2026-07-01T15:40:25.134Z"}
+{"node":"n3-review","event":"evidence","ts":"2026-07-01T15:40:58.260Z"}
+{"node":"n3-review","event":"closed","ts":"2026-07-01T15:40:58.788Z"}
+{"node":"n4-finalize","event":"opened","ts":"2026-07-01T15:40:58.847Z"}
+{"node":"n4-finalize","event":"evidence","ts":"2026-07-01T15:41:40.353Z"}
+{"node":"n4-finalize","event":"closed","ts":"2026-07-01T15:41:40.844Z"}
