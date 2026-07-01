@@ -726,10 +726,14 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'full ac
     '#451: config/agents.toml must not register any [agents.<role>-max] table: ' + maxTables.join(', '));
 }
 
-// #451: the plan-run SKILL no longer selects a `<role>-max` variant. The per-node tier maps to a
-// session reasoning-effort signal carried on the dispatch descriptor (agent_type = base role; opus
-// asks the session for xhigh before the spawn). The retired `<role>-max` / model_variant_missing
-// pins are gone — n9 owns the rewritten dispatch prose.
+// #451/#582: the plan-run SKILL no longer selects a `<role>-max` variant. The per-node tier maps
+// to per-spawn reasoning-effort on the dispatch descriptor (agent_type = base role; opus -> xhigh,
+// sonnet -> high). Tiered dispatch must use proven override mechanics or refuse.
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '`model: sonnet` -> `high`');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'fork_turns: "none"');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'reasoning_effort: dispatch.codex_reasoning_effort');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'codex_effort_override_unavailable');
+assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '`sonnet`/absent');
 
 // #334: the non-delegable main-session-gate role token + its G3 freeze gate + authoring/dispatch
 // prose, pinned in the codex copies (schema, validator, plan-run SKILL, planner TOML).

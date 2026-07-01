@@ -171,6 +171,40 @@ for (const ed of codexEditions) {
 }
 
 // ---------------------------------------------------------------------------
+// T5b: Codex tiered-effort dispatch prose must stay effective across the same 6
+// plan-run surfaces. A tiered node needs a real per-spawn effort override; v2 uses
+// fork_turns:"none", and unproven v1 refuses instead of silently inheriting.
+// ---------------------------------------------------------------------------
+{
+  const planRunSurfaces = [
+    'commands/kaola-workflow-plan-run.md',
+    'plugins/kaola-workflow/skills/kaola-workflow-plan-run/SKILL.md',
+    'plugins/kaola-workflow-gitlab/commands/kaola-workflow-plan-run.md',
+    'plugins/kaola-workflow-gitlab/skills/kaola-workflow-plan-run/SKILL.md',
+    'plugins/kaola-workflow-gitea/commands/kaola-workflow-plan-run.md',
+    'plugins/kaola-workflow-gitea/skills/kaola-workflow-plan-run/SKILL.md'
+  ];
+  for (const f of planRunSurfaces) {
+    const content = fs.readFileSync(path.join(REPO, f), 'utf8');
+    assert(content.includes('fork_turns: "none"'),
+      `T5b: ${f} must require fork_turns:"none" for tiered Codex v2 dispatch`);
+    assert(content.includes('reasoning_effort: dispatch.codex_reasoning_effort'),
+      `T5b: ${f} must pass the descriptor effort directly`);
+    assert(content.includes('codex_effort_override_unavailable'),
+      `T5b: ${f} must fail closed when v1 cannot prove effort override`);
+    assert(!content.includes('`sonnet`/absent') && !content.includes('sonnet`/absent') && !content.includes('sonnet/absent'),
+      `T5b: ${f} must not describe sonnet as an inherited role_default tier`);
+  }
+
+  const codexSkillSurfaces = planRunSurfaces.filter(f => f.includes('/skills/'));
+  for (const f of codexSkillSurfaces) {
+    const content = fs.readFileSync(path.join(REPO, f), 'utf8');
+    assert(content.includes('`model: sonnet` -> `high`'),
+      `T5b: ${f} must explicitly document sonnet -> high`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // T6: closure-audit pin — all 6 finalize-route surfaces (3 Claude commands + 3 Codex SKILLs)
 // must carry the <!-- PIN: closure-audit --> comment and the 'closure-audit' literal (#496/#497).
 // This is the machine-enforced contract that n2-wire-closure-audit wired the sink-result handling

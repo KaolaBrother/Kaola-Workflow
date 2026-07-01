@@ -569,17 +569,20 @@ same `description` and `nickname_candidates` metadata as the managed
 
 The adaptive planner's per-node `model` tier drives any per-spawn effort override.
 When a node's resolved `model` is `opus`, the dispatch descriptor carries
-`codex_reasoning_effort: "xhigh"` and the plan-run executor passes that value
-directly as `reasoning_effort`; `sonnet`/absent nodes omit the override and use the
-base profile/session default. The retired `<role>-max` xhigh effort-variant
-profiles are not used.
+`codex_reasoning_effort: "xhigh"`; when it is `sonnet`, it carries
+`codex_reasoning_effort: "high"`. Plan-run passes that value directly as
+per-spawn `reasoning_effort`; only absent/blank model tiers omit the override and
+use the base profile/session default. The retired `<role>-max` xhigh
+effort-variant profiles are not used.
 
 Codex preflight and doctor output report the dispatch identity mode. The stable
 default is `v1-thread-id`, where wait/close rows may still show runtime thread IDs
 and the prompt/evidence carry the node mapping. When the operator explicitly enables
 Codex v2 multi-agent support, the descriptor reports `v2-task-name` and plan-run
 passes `task_name: dispatch.codex_task_name`, a sanitized value derived from the
-workflow node id and role.
+workflow node id and role. Tiered Codex nodes require a dispatch path proven to honor
+the requested effort; v2 uses `fork_turns: "none"` with the direct effort override,
+and unproven v1 tiered dispatch fails closed.
 
 ## Usage
 

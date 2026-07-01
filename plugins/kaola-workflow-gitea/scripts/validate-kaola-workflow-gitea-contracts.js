@@ -754,6 +754,11 @@ assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'full accumu
 assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'codex_task_name');
 assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'codex_dispatch_mode');
 assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'reasoning_effort');
+assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', '`model: sonnet` -> `high`');
+assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'fork_turns: "none"');
+assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'reasoning_effort: dispatch.codex_reasoning_effort');
+assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'codex_effort_override_unavailable');
+assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', '`sonnet`/absent');
 
 // #334: the non-delegable main-session-gate role token + its G3 freeze gate + authoring/dispatch
 // prose, pinned in the Gitea edition surfaces (port validator, plan-run command, planner TOML).
@@ -845,9 +850,9 @@ for (const tomlFile of fs.readdirSync(path.join(root, pluginRoot, 'agents')).fil
   // #463 (AC11): pin the synthesizer role in the forge-codex SKILL too (the #400 dead-zone surface).
   assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'synthesizer');
   assertIncludes(pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md', 'kaola-workflow-plan-run');
-  // #451: the forge-codex plan-run SKILL no longer selects a `<role>-max` variant — the per-node
-  // tier maps to a session reasoning-effort signal on the dispatch descriptor. The retired
-  // `<role>-max` / model_variant_missing pins are gone (n9 owns the rewritten dispatch prose).
+  // #451/#582: the forge-codex plan-run SKILL no longer selects a `<role>-max` variant — the
+  // per-node tier maps to per-spawn reasoning-effort on the dispatch descriptor, and unproven
+  // tiered v1 dispatch fails closed.
 }
 
 // #422.3: the agent-profile md↔toml token-pin test must be wired into the claude chain.

@@ -7435,7 +7435,7 @@ function rtHarness(initialFiles, opts) {
   assert(dOpus.codex_reasoning_effort_source === 'planner_model', 'D451-DISPATCH-EFFORT: opus codex_reasoning_effort_source is planner_model');
   assert(dOpus.codex_task_name === 'n1_planner_code_reviewer', 'D451-DISPATCH-EFFORT: opus dispatch carries task-name identity for per-spawn calls');
 
-  // Case 2: sonnet model → role_default
+  // Case 2: sonnet model → high effort
   const sonnetNode = { id: 'n2-impl', role: 'code-reviewer', model: 'sonnet', declared_write_set: 'scripts/bar.js' };
   const sonnetCtx = {
     nonce: 'def456abc123',
@@ -7446,8 +7446,8 @@ function rtHarness(initialFiles, opts) {
   };
   const dSonnet = buildDispatch(sonnetNode, sonnetCtx);
   assert(dSonnet.agent_type === 'code-reviewer', 'D451-DISPATCH-EFFORT: sonnet agent_type equals base role');
-  assert(dSonnet.codex_reasoning_effort === null, 'D451-DISPATCH-EFFORT: sonnet codex_reasoning_effort is null');
-  assert(dSonnet.codex_reasoning_effort_source === 'role_default', 'D451-DISPATCH-EFFORT: sonnet codex_reasoning_effort_source is role_default');
+  assert(dSonnet.codex_reasoning_effort === 'high', 'D451-DISPATCH-EFFORT: sonnet codex_reasoning_effort is high');
+  assert(dSonnet.codex_reasoning_effort_source === 'planner_model', 'D451-DISPATCH-EFFORT: sonnet codex_reasoning_effort_source is planner_model');
 
   // Case 3: null model → role_default
   const nullModelNode = { id: 'n3-review', role: 'code-reviewer', model: null, declared_write_set: '—' };
