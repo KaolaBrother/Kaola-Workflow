@@ -63,20 +63,22 @@ and must run from the main root, above.)
 ## Dispatch
 
 Reasoning effort and identity: the xhigh effort-variant profiles are retired — always
-delegate to the base `dispatch.agent_type` profile (= the node's role). When
-`dispatch.codex_reasoning_effort` is non-null (the planner gave the node `model: opus` → `xhigh`),
-pass it directly as the per-spawn `reasoning_effort`; when null (`sonnet`/absent →
-`role_default`), omit the override and let the base profile/session default stand. Never append a
-max-effort profile suffix and never emit a variant-missing note.
+delegate to the base `dispatch.agent_type` profile (= the node's role). The descriptor maps explicit
+planner tiers to per-spawn effort: `model: opus` -> `xhigh`, `model: sonnet` -> `high`; only an
+absent/blank model tier leaves `dispatch.codex_reasoning_effort` null and inherits the base
+profile/session default. Never append a max-effort profile suffix and never emit a variant-missing
+note.
 
 For Codex v2 task-name mode (`dispatch.codex_dispatch_mode: "v2-task-name"`), call `spawn_agent`
-with `task_name: dispatch.codex_task_name`, `agent_type: dispatch.agent_type`, `fork_turns: "none"`
-unless the workflow explicitly needs inherited history, and the direct `reasoning_effort` override
-when present. For v1 fallback (`"v1-thread-id"`), omit `task_name`, keep `agent_type:
-dispatch.agent_type`, pass direct `reasoning_effort` when present, and prefix the prompt with
-`Node: <id> | Role: <role> | Effort: <dispatch.codex_reasoning_effort or default>`. v1 wait/close
-rows may still show thread IDs; the prompt and evidence carry the node mapping. Pass
-`Working directory: ${ACTIVE_WORKTREE_PATH}` to every role delegation.
+with `task_name: dispatch.codex_task_name` and `agent_type: dispatch.agent_type`. When
+`dispatch.codex_reasoning_effort` is non-null, also pass `fork_turns: "none"` and
+`reasoning_effort: dispatch.codex_reasoning_effort`; inherited-history forks are not a valid path
+for tiered nodes. For v1 fallback (`"v1-thread-id"`), omit `task_name`, keep `agent_type:
+dispatch.agent_type`, and prefix the prompt with `Node: <id> | Role: <role> | Effort:
+<dispatch.codex_reasoning_effort or default>`. If `dispatch.codex_reasoning_effort` is non-null,
+use v1 only when the installed runtime has been proved to honor per-spawn effort; otherwise refuse
+before dispatch with `codex_effort_override_unavailable`. Pass `Working directory:
+${ACTIVE_WORKTREE_PATH}` to every role delegation.
 
 ## Loop Skeleton
 

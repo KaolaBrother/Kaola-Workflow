@@ -49,16 +49,21 @@ const NODE_MODEL_TIERS = Object.freeze(['opus', 'sonnet']);
 // dedicated Codex `<role>-max` xhigh effort-variant profile. Derived from the #382 planner rubric
 // (agents/workflow-planner.md: assign opus when output quality is bounded by *reasoning depth* —
 // architecture/design, adversarial gates, security review, root-cause of non-obvious bugs) ∩ the
-// Codex per-node reasoning effort (#451, supersedes #405): Codex 0.139 has no per-spawn
-// reasoning_effort override, so base role profiles OMIT `model_reasoning_effort` and inherit the
-// parent session's effort (agent-config wins over project-profile, PR #14807). The planner's per-node
-// tier maps to a portable dispatch signal here — `opus` asks the codex session for `xhigh` before the
-// spawn; `sonnet`/absent leaves the standing session effort. No `<role>-max` variant profiles exist
-// anymore (the matrix was retired); `agent_type` is always the base role.
+// Codex per-node reasoning effort (#451/#582, supersedes #405): base role profiles OMIT
+// `model_reasoning_effort`, and explicit planner tiers travel as per-spawn `reasoning_effort`
+// overrides. The planner's per-node tier maps to a portable dispatch signal here — `opus` asks for
+// `xhigh`, `sonnet` asks for `high`, and only absent/blank model tiers inherit the standing session
+// effort. No `<role>-max` variant profiles exist anymore (the matrix was retired); `agent_type` is
+// always the base role.
 function dispatchEffort(model) {
-  return model === 'opus'
-    ? { codex_reasoning_effort: 'xhigh', codex_reasoning_effort_source: 'planner_model' }
-    : { codex_reasoning_effort: null, codex_reasoning_effort_source: 'role_default' };
+  const tier = String(model || '').trim().toLowerCase();
+  if (tier === 'opus') {
+    return { codex_reasoning_effort: 'xhigh', codex_reasoning_effort_source: 'planner_model' };
+  }
+  if (tier === 'sonnet') {
+    return { codex_reasoning_effort: 'high', codex_reasoning_effort_source: 'planner_model' };
+  }
+  return { codex_reasoning_effort: null, codex_reasoning_effort_source: 'role_default' };
 }
 
 // #382-opencode (#544 contract-keyed): the GENERAL tier→effort mapping for provider-open
@@ -160,7 +165,7 @@ function resolveOpencodeProvider(env) {
 // The opencode dispatch twin of dispatchEffort(): emits the resolved opencode variant for
 // a node's model tier under a provider, so the executor/plan-run surface carries the
 // intended per-node effort. null tier / unknown provider → role_default (the agent's
-// configured variant wins), mirroring dispatchEffort's sonnet/null branch. When no provider
+// configured variant wins), mirroring dispatchEffort's absent-tier branch. When no provider
 // is passed, the active provider is PURE-resolved from KAOLA_OPENCODE_INHERIT_MODEL (see
 // resolveOpencodeProvider) — the gap closed by #537 Surface 2: the runtime caller never
 // populated ctx.opencode_provider, so a declared tier now still reaches a concrete variant.

@@ -933,6 +933,13 @@ assertIncludes('scripts/kaola-workflow-plan-validator.js', 'G3: main-session-gat
 assertIncludes('commands/kaola-workflow-plan-run.md', 'main-session-gate');
 assertIncludes('agents/workflow-planner.md', 'main-session-gate');
 
+// #582: tiered Codex effort dispatch must be effective in plan-run prose. The command surface
+// must require the v2 fork discipline and fail closed for unproven v1 tiered dispatch.
+assertIncludes('commands/kaola-workflow-plan-run.md', 'fork_turns: "none"');
+assertIncludes('commands/kaola-workflow-plan-run.md', 'reasoning_effort: dispatch.codex_reasoning_effort');
+assertIncludes('commands/kaola-workflow-plan-run.md', 'codex_effort_override_unavailable');
+assertNotIncludes('commands/kaola-workflow-plan-run.md', '`sonnet`/absent');
+
 // #400: registry-driven route-reachability contract for the Claude command surface. Every
 // route/command target a claim/startup/resume receipt emits MUST resolve to an installed command
 // file in EACH Claude edition. require() the schema route constants (no hand-listed drift) + the

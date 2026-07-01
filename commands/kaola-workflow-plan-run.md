@@ -124,16 +124,19 @@ Dispatch the base role profile in `dispatch.agent_type` (legacy `dispatch.role` 
 descriptive). Set `Working directory: ${ACTIVE_WORKTREE_PATH}` on every Agent call.
 
 For Codex v2 task-name mode (`dispatch.codex_dispatch_mode: "v2-task-name"`), pass
-`task_name: dispatch.codex_task_name`, `agent_type: dispatch.agent_type`, and `fork_turns: "none"`
-unless the workflow explicitly needs inherited history. For Codex v1 fallback
-(`"v1-thread-id"`), omit `task_name` and prefix the prompt with a compact identity header:
-`Node: <id> | Role: <role> | Effort: <dispatch.codex_reasoning_effort or default>`. v1 wait/close
-rows may still show thread IDs; the prompt and evidence carry the node mapping.
+`task_name: dispatch.codex_task_name` and `agent_type: dispatch.agent_type`. When
+`dispatch.codex_reasoning_effort` is non-null, also pass `fork_turns: "none"` and
+`reasoning_effort: dispatch.codex_reasoning_effort`; inherited-history forks are not a valid path
+for tiered nodes. When the effort is null, omit `reasoning_effort` and let the base
+profile/session default stand.
 
-When `dispatch.codex_reasoning_effort` is non-null, pass it directly as the per-spawn
-`reasoning_effort`. When it is null, omit the override and let the base profile/session default
-stand. Never append a max-effort profile suffix and never emit a variant-missing note. Pass
-`dispatch.nonce` (evidence-binding token). Instruct the role to:
+For Codex v1 fallback (`"v1-thread-id"`), omit `task_name` and prefix the prompt with a compact
+identity header: `Node: <id> | Role: <role> | Effort: <dispatch.codex_reasoning_effort or default>`.
+If `dispatch.codex_reasoning_effort` is non-null, use v1 only when the installed runtime has been
+proved to honor per-spawn effort; otherwise refuse before dispatch with
+`codex_effort_override_unavailable`. v1 wait/close rows may still show thread IDs; the prompt and
+evidence carry the node mapping. Never append a max-effort profile suffix and never emit a
+variant-missing note. Pass `dispatch.nonce` (evidence-binding token). Instruct the role to:
 - Read the seeded `.cache/{node-id}.md` (`dispatch.evidence_file`) for required tokens.
 - Fill in token stubs from its work; NEVER modify the `evidence-binding:` header line.
 - `finalize` sink and `main-session-gate` are non-delegable — run `main-session-direct`.
