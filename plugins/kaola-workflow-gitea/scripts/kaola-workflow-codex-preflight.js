@@ -8,8 +8,9 @@
 // is claimed. Verifies:
 //   (a) .codex/agents/kaola-workflow/<role>.toml exists for every REQUIRED role
 //       AND is schema-valid (top-level non-empty `name` matching the role, an OPTIONAL
-//       model_reasoning_effort (#451), a non-blank developer_instructions block) - codex
-//       >=0.138 silently ignores a profile without a non-empty `name` (#332).
+//       model_reasoning_effort, non-empty `description`, valid `nickname_candidates`,
+//       and a non-blank developer_instructions block) - codex >=0.138 silently ignores
+//       a profile without a non-empty `name`.
 //   (b) .codex/config.toml contains the managed block with an [agents.{role}] entry
 //       for every REQUIRED role, and NO retired/foreign [agents.*] inside the block.
 //   (c) no stale/retired Kaola profile files survive in the target dir (#332).
@@ -66,6 +67,46 @@ const RETIRED_PROFILE_FILES = [
 const EFFORT_VALUES = ['low', 'medium', 'high', 'xhigh'];
 const MANIFEST_SCHEMA_VERSION = 1;
 
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function parseTopLevelString(top, key) {
+  const re = new RegExp('^' + escapeRegExp(key) + '\\s*=\\s*"([^"]*)"\\s*$', 'm');
+  const m = top.match(re);
+  return m ? m[1] : null;
+}
+
+function parseStringArrayLine(top, key) {
+  const re = new RegExp('^' + escapeRegExp(key) + '\\s*=\\s*\\[([^\\]]*)\\]\\s*$', 'm');
+  const m = top.match(re);
+  if (!m) return { present: false, values: [], valid: true };
+  const body = m[1].trim();
+  if (!body) return { present: true, values: [], valid: true };
+  const values = [];
+  const parts = body.split(',').map(s => s.trim()).filter(Boolean);
+  for (const part of parts) {
+    const pm = part.match(/^"([^"]+)"$/);
+    if (!pm) return { present: true, values: [], valid: false };
+    values.push(pm[1]);
+  }
+  return { present: true, values, valid: true };
+}
+
+function sameStringArray(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+  return a.every((v, i) => v === b[i]);
+}
+
+function detectCodexDispatchMode(configContent) {
+  const text = String(configContent || '');
+  const enabled = /^\s*multi_agent_v2\s*=\s*true\s*$/m.test(text);
+  return {
+    dispatch_mode: enabled ? 'v2-task-name' : 'v1-thread-id',
+    multi_agent_v2_enabled: enabled,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Arg parsing
 // ---------------------------------------------------------------------------
@@ -101,7 +142,7 @@ function parseArgs(argv) {
 // #332 schema check — inline regex, no TOML lib. MIRROR of the installer's
 // validateProfileText. Returns [] when valid, or a list of human-readable reasons.
 // ---------------------------------------------------------------------------
-function validateProfileText(text, role) {
+function validateProfileText(text, role, expectedMeta = null) {
   const reasons = [];
   const firstTableIdx = text.search(/^\[/m);
   const top = firstTableIdx === -1 ? text : text.slice(0, firstTableIdx);
@@ -115,10 +156,33 @@ function validateProfileText(text, role) {
     reasons.push(`top-level 'name' is "${nameMatch[1]}" but must equal the role "${role}"`);
   }
 
+  const desc = parseTopLevelString(top, 'description');
+  if (desc === null) {
+    reasons.push("missing top-level 'description'");
+  } else if (desc.trim() === '') {
+    reasons.push("top-level 'description' is empty");
+  } else if (expectedMeta && expectedMeta.description && desc !== expectedMeta.description) {
+    reasons.push("top-level 'description' does not match config/agents.toml");
+  }
+
+  const nick = parseStringArrayLine(top, 'nickname_candidates');
+  if (nick.present && !nick.valid) {
+    reasons.push("top-level 'nickname_candidates' must be a TOML string array");
+  } else if (nick.present && nick.values.length === 0) {
+    reasons.push("top-level 'nickname_candidates' must not be empty when present");
+  }
+  if (expectedMeta && expectedMeta.nicknameCandidates && expectedMeta.nicknameCandidates.length > 0) {
+    if (!nick.present) {
+      reasons.push("missing top-level 'nickname_candidates'");
+    } else if (!sameStringArray(nick.values, expectedMeta.nicknameCandidates)) {
+      reasons.push("top-level 'nickname_candidates' does not match config/agents.toml");
+    }
+  }
+
   const effortMatch = top.match(/^model_reasoning_effort\s*=\s*"([^"]*)"\s*$/m);
-  // #451: model_reasoning_effort is OPTIONAL - base profiles OMIT it (the spawned agent inherits the
-  // parent Codex session effort; agent-config wins over project-profile, PR #14807). A pinned value
-  // (user override) must still be legal; an absent one is fine.
+  // #451/#581: model_reasoning_effort is OPTIONAL - base profiles OMIT it so dispatch can supply
+  // per-spawn `reasoning_effort` from the node descriptor. A pinned value (user override) must still
+  // be legal; an absent one is fine.
   if (effortMatch && !EFFORT_VALUES.includes(effortMatch[1])) {
     reasons.push(`model_reasoning_effort "${effortMatch[1]}" is not one of ${EFFORT_VALUES.join('/')}`);
   }
@@ -144,19 +208,36 @@ function readTemplateRoles(scriptDir) {
   try {
     content = fs.readFileSync(templatePath, 'utf8');
   } catch (e) {
-    return { roles: [], error: `template_missing: cannot read ${templatePath}: ${e.message}` };
+    return { roles: [], entries: [], error: `template_missing: cannot read ${templatePath}: ${e.message}` };
   }
-  // Match [agents.{role}] top-level table headers
   const roles = [];
-  const re = /^\[agents\.([a-z0-9-]+)\]/gm;
-  let m;
-  while ((m = re.exec(content)) !== null) {
-    roles.push(m[1]);
+  const entries = [];
+  const lines = content.split(/\r?\n/);
+  let current = null;
+  for (const line of lines) {
+    const head = line.match(/^\[agents\.([a-z0-9-]+)\]\s*$/);
+    if (head) {
+      current = { role: head[1], description: null, nicknameCandidates: [] };
+      roles.push(current.role);
+      entries.push(current);
+      continue;
+    }
+    if (!current) continue;
+    const desc = line.match(/^description\s*=\s*"([^"]*)"\s*$/);
+    if (desc) {
+      current.description = desc[1];
+      continue;
+    }
+    const nick = line.match(/^nickname_candidates\s*=\s*\[([^\]]*)\]\s*$/);
+    if (nick) {
+      const parsed = parseStringArrayLine(line, 'nickname_candidates');
+      current.nicknameCandidates = parsed.valid ? parsed.values : [];
+    }
   }
   if (roles.length === 0) {
-    return { roles: [], error: `template_missing: no [agents.*] entries found in ${templatePath}` };
+    return { roles: [], entries: [], error: `template_missing: no [agents.*] entries found in ${templatePath}` };
   }
-  return { roles, error: null };
+  return { roles, entries, error: null };
 }
 
 // ---------------------------------------------------------------------------
@@ -283,10 +364,11 @@ function readManifest(agentsDir) {
 // doctor mode. Inspects a target .codex dir against the current template roles.
 // Pure read-only.
 // ---------------------------------------------------------------------------
-function inspectScope({ codexDir, templateRoles }) {
+function inspectScope({ codexDir, templateRoles, templateEntries }) {
   const agentsDir = path.join(codexDir, 'agents', 'kaola-workflow');
   const configPath = path.join(codexDir, 'config.toml');
   const roleSet = new Set(templateRoles);
+  const metaByRole = new Map((templateEntries || []).map(e => [e.role, e]));
 
   const exists = fs.existsSync(codexDir);
 
@@ -294,6 +376,7 @@ function inspectScope({ codexDir, templateRoles }) {
   if (fs.existsSync(configPath)) {
     try { configContent = fs.readFileSync(configPath, 'utf8'); } catch { configContent = ''; }
   }
+  const dispatchMode = detectCodexDispatchMode(configContent);
   const { blockFound, rolesInBlock, conflictingRolesOutside } = checkManagedBlock(configContent);
 
   const missingFromBlock = templateRoles.filter(r => !rolesInBlock.includes(r));
@@ -327,7 +410,7 @@ function inspectScope({ codexDir, templateRoles }) {
         // Required role: schema-check it.
         let txt = '';
         try { txt = fs.readFileSync(path.join(agentsDir, name), 'utf8'); } catch { txt = ''; }
-        const reasons = validateProfileText(txt, role);
+        const reasons = validateProfileText(txt, role, metaByRole.get(role));
         if (reasons.length > 0) malformed.push({ role, file: name, reasons });
       } else if (manifestFiles.has(name) || RETIRED_PROFILE_FILES.includes(name)) {
         staleFiles.push(name);
@@ -353,6 +436,8 @@ function inspectScope({ codexDir, templateRoles }) {
     staleFiles,
     extraUnmanaged,
     manifest: manifestStatus,
+    dispatch_mode: dispatchMode.dispatch_mode,
+    multi_agent_v2_enabled: dispatchMode.multi_agent_v2_enabled,
   };
 }
 
@@ -406,7 +491,7 @@ function runPreflight(opts) {
   const agentsDir = path.join(codexDir, 'agents', 'kaola-workflow');
 
   // --- Read template roles (may fail gracefully) ---
-  const { roles: templateRoles, error: templateError } = readTemplateRoles(scriptDir);
+  const { roles: templateRoles, entries: templateEntries, error: templateError } = readTemplateRoles(scriptDir);
   if (templateError) {
     return {
       exitCode: 2,
@@ -451,7 +536,7 @@ function runPreflight(opts) {
   // project-local copy. A non-fresh global scope falls through to the existing
   // project-scope inspection + autofix path UNCHANGED (back-compat + fail-closed preserved).
   const globalCodexDir = path.join(homeDir, '.codex');
-  const globalScope = inspectScope({ codexDir: globalCodexDir, templateRoles });
+  const globalScope = inspectScope({ codexDir: globalCodexDir, templateRoles, templateEntries });
   if (scopeIsFresh(globalScope)) {
     return {
       exitCode: 0,
@@ -461,12 +546,14 @@ function runPreflight(opts) {
         roles_checked: requiredRoles,
         extra_unmanaged: globalScope.extraUnmanaged,
         autofixed: false,
+        dispatch_mode: globalScope.dispatch_mode,
+        multi_agent_v2_enabled: globalScope.multi_agent_v2_enabled,
       },
     };
   }
 
   // --- Inspect the project scope (template roles only; plan roles handled below) ---
-  const scope = inspectScope({ codexDir, templateRoles });
+  const scope = inspectScope({ codexDir, templateRoles, templateEntries });
 
   // --- Conflicting [agents.*] outside managed block is UNSAFE to autofix ---
   if (scope.conflictingRolesOutside.length > 0) {
@@ -479,6 +566,8 @@ function runPreflight(opts) {
         extra_unmanaged: scope.extraUnmanaged,
         repair: `Remove or migrate the hand-authored [agents.*] entries outside the managed block markers in ${path.join(codexDir, 'config.toml')}, then re-run install-codex-agent-profiles.js.`,
         safe_autofix: false,
+        dispatch_mode: scope.dispatch_mode,
+        multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
       },
     };
   }
@@ -493,6 +582,8 @@ function runPreflight(opts) {
         extra_unmanaged: scope.extraUnmanaged,
         repair: `The local profile manifest (${path.join(agentsDir, MANIFEST_BASENAME)}) declares an unsupported schema_version — upgrade kaola-workflow, then re-run install-codex-agent-profiles.js --project-root ${projectRoot}`,
         safe_autofix: false,
+        dispatch_mode: scope.dispatch_mode,
+        multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
       },
     };
   }
@@ -524,6 +615,8 @@ function runPreflight(opts) {
         roles_checked: requiredRoles,
         extra_unmanaged: scope.extraUnmanaged,
         autofixed: false,
+        dispatch_mode: scope.dispatch_mode,
+        multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
       },
     };
   }
@@ -537,6 +630,8 @@ function runPreflight(opts) {
         stale: true,
         repair: repairCmd,
         safe_autofix: true,
+        dispatch_mode: scope.dispatch_mode,
+        multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
       };
     }
     if (staleFilesPresent) {
@@ -547,6 +642,8 @@ function runPreflight(opts) {
         stale: true,
         repair: repairCmd,
         safe_autofix: true,
+        dispatch_mode: scope.dispatch_mode,
+        multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
       };
     }
     if (profilesMissing) {
@@ -557,6 +654,8 @@ function runPreflight(opts) {
         stale: true,
         repair: repairCmd,
         safe_autofix: true,
+        dispatch_mode: scope.dispatch_mode,
+        multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
       };
     }
     if (configStale) {
@@ -567,6 +666,8 @@ function runPreflight(opts) {
         stale: true,
         repair: repairCmd,
         safe_autofix: true,
+        dispatch_mode: scope.dispatch_mode,
+        multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
       };
     }
     // onlyBlockRolesStale: full current set present, retired [agents.*] inside markers.
@@ -577,6 +678,8 @@ function runPreflight(opts) {
       stale: true,
       repair: repairCmd,
       safe_autofix: true,
+      dispatch_mode: scope.dispatch_mode,
+      multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
     };
   }
 
@@ -598,6 +701,8 @@ function runPreflight(opts) {
         stale: true,
         repair: 'install-codex-agent-profiles.js not found alongside this script.',
         safe_autofix: false,
+        dispatch_mode: scope.dispatch_mode,
+        multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
       },
     };
   }
@@ -612,12 +717,14 @@ function runPreflight(opts) {
         stale: true,
         repair: `Installer error: ${stderr}`,
         safe_autofix: false,
+        dispatch_mode: scope.dispatch_mode,
+        multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
       },
     };
   }
 
   // --- Re-verify after autofix: re-run ALL checks (#332). ---
-  const after = inspectScope({ codexDir, templateRoles });
+  const after = inspectScope({ codexDir, templateRoles, templateEntries });
   const { missingRoles: afterMissingPlan } = checkProfiles(agentsDir, planRoles);
   const afterMissingProfiles = [...new Set([...after.missingProfiles, ...afterMissingPlan])];
   const afterMissingFromBlock = requiredRoles.filter(r => !after.rolesInBlock.includes(r));
@@ -640,6 +747,8 @@ function runPreflight(opts) {
         stale: true,
         repair: 'Installer ran but profiles/block are still stale after re-verify.',
         safe_autofix: false,
+        dispatch_mode: after.dispatch_mode,
+        multi_agent_v2_enabled: after.multi_agent_v2_enabled,
       },
     };
   }
@@ -651,6 +760,8 @@ function runPreflight(opts) {
       roles_checked: requiredRoles,
       extra_unmanaged: after.extraUnmanaged,
       autofixed: true,
+      dispatch_mode: after.dispatch_mode,
+      multi_agent_v2_enabled: after.multi_agent_v2_enabled,
     },
   };
 }
@@ -696,6 +807,8 @@ function scopeReport(scope, name, codexDir, repair, readOnly) {
     conflicting_roles_outside: scope.conflictingRolesOutside,
     extra_unmanaged: scope.extraUnmanaged,
     manifest: scope.manifest,
+    dispatch_mode: scope.dispatch_mode,
+    multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
     read_only: !!readOnly,
     repair,
   };
@@ -730,7 +843,7 @@ function findPluginCacheAgentDirs(home) {
 
 function runDoctor(opts) {
   const { projectRoot, home, scriptDir } = opts;
-  const { roles: templateRoles, error: templateError } = readTemplateRoles(scriptDir);
+  const { roles: templateRoles, entries: templateEntries, error: templateError } = readTemplateRoles(scriptDir);
 
   if (templateError) {
     return {
@@ -743,7 +856,7 @@ function runDoctor(opts) {
 
   // user scope
   const userCodex = path.join(home, '.codex');
-  const userScope = inspectScope({ codexDir: userCodex, templateRoles });
+  const userScope = inspectScope({ codexDir: userCodex, templateRoles, templateEntries });
   scopes.push(scopeReport(
     userScope, 'user', userCodex,
     `node ${path.join(scriptDir, 'install-codex-agent-profiles.js')} ${home}`,
@@ -752,7 +865,7 @@ function runDoctor(opts) {
 
   // project scope
   const projectCodex = path.join(projectRoot, '.codex');
-  const projectScope = inspectScope({ codexDir: projectCodex, templateRoles });
+  const projectScope = inspectScope({ codexDir: projectCodex, templateRoles, templateEntries });
   scopes.push(scopeReport(
     projectScope, 'project', projectCodex,
     `node ${path.join(scriptDir, 'install-codex-agent-profiles.js')} ${projectRoot}`,
@@ -769,7 +882,8 @@ function runDoctor(opts) {
       const role = name.replace(/\.toml$/, '');
       let txt = '';
       try { txt = fs.readFileSync(path.join(c.dir, name), 'utf8'); } catch { txt = ''; }
-      const reasons = validateProfileText(txt, role);
+      const expected = (templateEntries || []).find(e => e.role === role) || null;
+      const reasons = validateProfileText(txt, role, expected);
       if (reasons.length > 0) malformed.push({ role, file: name, reasons });
     }
     malformed.sort((a, b) => a.role.localeCompare(b.role));
@@ -787,6 +901,8 @@ function runDoctor(opts) {
       conflicting_roles_outside: [],
       extra_unmanaged: [],
       manifest: 'n/a',
+      dispatch_mode: 'n/a',
+      multi_agent_v2_enabled: false,
       read_only: true,
       repair: `codex plugin remove ${c.plugin}@${c.marketplace} && codex plugin add ${c.plugin}@${c.marketplace}  # refresh plugin cache`,
     });

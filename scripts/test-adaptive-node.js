@@ -34,6 +34,9 @@ const {
   readNonce,
   // D-444: new exports
   buildDispatch,
+  sanitizeCodexTaskName,
+  codexTaskNameForNode,
+  resolveCodexDispatchMode,
   deriveGuards,
   runVerifyEvidence,
   // #434: repair primitives
@@ -4729,6 +4732,18 @@ function rtHarness(initialFiles, opts) {
   assert(Array.isArray(d.required_tokens), 'D444-DISPATCH-PARITY: dispatch.required_tokens is array');
   assert(d.forge_rider === null, 'D444-DISPATCH-PARITY: dispatch.forge_rider is null');
   assert(Array.isArray(d.guards), 'D444-DISPATCH-PARITY: dispatch.guards is array');
+  assert(d.codex_dispatch_mode === 'v1-thread-id', 'D444-DISPATCH-PARITY: dispatch defaults to v1 thread-id mode');
+  assert(d.codex_task_name === 'n1_impl_tdd_guide', 'D444-DISPATCH-PARITY: dispatch.codex_task_name is sanitized from node id + role');
+  assert(typeof sanitizeCodexTaskName === 'function', 'D444-DISPATCH-PARITY: sanitizeCodexTaskName exported');
+  assert(sanitizeCodexTaskName('Probe/D50203 Scope') === 'probe_d50203_scope', 'D444-DISPATCH-PARITY: task-name sanitizer handles slash/uppercase/space');
+  assert(sanitizeCodexTaskName('---') === 'node', 'D444-DISPATCH-PARITY: task-name sanitizer falls back to node');
+  assert(codexTaskNameForNode({ id: 'Probe/D50203 Scope', role: 'code-explorer' }) === 'probe_d50203_scope_code_explorer',
+    'D444-DISPATCH-PARITY: codexTaskNameForNode includes role identity');
+  assert(resolveCodexDispatchMode({}, { KAOLA_CODEX_MULTI_AGENT_V2: '1' }) === 'v2-task-name',
+    'D444-DISPATCH-PARITY: v2 env flag resolves to task-name mode');
+  const dV2 = buildDispatch(nodeInfo, Object.assign({}, context, { codex_dispatch_mode: 'v2-task-name' }));
+  assert(dV2.codex_dispatch_mode === 'v2-task-name', 'D444-DISPATCH-PARITY: context can select v2 task-name mode');
+  assert(dV2.codex_task_name === 'n1_impl_tdd_guide', 'D444-DISPATCH-PARITY: v2 dispatch still carries stable task name');
 }
 
 // D444-DISPATCH-PARITY: serial open and fused advance produce field-identical dispatch for same node
@@ -7418,6 +7433,7 @@ function rtHarness(initialFiles, opts) {
   assert(dOpus.agent_type === 'code-reviewer', 'D451-DISPATCH-EFFORT: opus agent_type equals base role');
   assert(dOpus.codex_reasoning_effort === 'xhigh', 'D451-DISPATCH-EFFORT: opus codex_reasoning_effort is xhigh');
   assert(dOpus.codex_reasoning_effort_source === 'planner_model', 'D451-DISPATCH-EFFORT: opus codex_reasoning_effort_source is planner_model');
+  assert(dOpus.codex_task_name === 'n1_planner_code_reviewer', 'D451-DISPATCH-EFFORT: opus dispatch carries task-name identity for per-spawn calls');
 
   // Case 2: sonnet model → role_default
   const sonnetNode = { id: 'n2-impl', role: 'code-reviewer', model: 'sonnet', declared_write_set: 'scripts/bar.js' };

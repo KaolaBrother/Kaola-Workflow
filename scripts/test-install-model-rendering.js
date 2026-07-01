@@ -2,7 +2,7 @@
 'use strict';
 
 const assert = require('assert');
-const { execFileSync } = require('child_process');
+const { execFileSync, spawnSync } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -12,6 +12,26 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-install-models-'));
 
 function readInstalledCommand(name) {
   return fs.readFileSync(path.join(tmp, '.claude', 'commands', name), 'utf8');
+}
+
+function parseCodexAgentMetadata(pluginRoot) {
+  const config = fs.readFileSync(path.join(pluginRoot, 'config', 'agents.toml'), 'utf8');
+  const out = new Map();
+  let current = null;
+  for (const line of config.split(/\r?\n/)) {
+    const head = line.match(/^\[agents\.([a-z0-9-]+)\]\s*$/);
+    if (head) {
+      current = { description: null, nicknameLine: null };
+      out.set(head[1], current);
+      continue;
+    }
+    if (!current) continue;
+    const desc = line.match(/^description\s*=\s*("[^"]*")\s*$/);
+    if (desc) current.description = desc[1];
+    const nick = line.match(/^nickname_candidates\s*=\s*(\[[^\]]*\])\s*$/);
+    if (nick) current.nicknameLine = nick[1];
+  }
+  return out;
 }
 
 try {
@@ -268,12 +288,47 @@ try {
       assert(fs.existsSync(projectAgentsDir), '#447 AC2: positional-form override must create .codex/agents/kaola-workflow/ at the given path');
       const tomlFiles = fs.readdirSync(projectAgentsDir).filter(f => f.endsWith('.toml'));
       assert(tomlFiles.length > 0, '#447 AC2: positional-form override must write at least one agent profile .toml to the given path');
+      const metadata = parseCodexAgentMetadata(path.join(root, 'plugins', 'kaola-workflow'));
+      for (const file of tomlFiles) {
+        const role = file.replace(/\.toml$/, '');
+        const expected = metadata.get(role);
+        assert(expected, '#581: installed profile role must exist in config/agents.toml: ' + role);
+        const body = fs.readFileSync(path.join(projectAgentsDir, file), 'utf8');
+        assert(body.includes('description = ' + expected.description + '\n'),
+          '#581: installed ' + file + ' must carry config description metadata');
+        assert(body.includes('nickname_candidates = ' + expected.nicknameLine + '\n'),
+          '#581: installed ' + file + ' must carry config nickname_candidates metadata');
+      }
 
       // AC2: managed [agents.*] block in the positional-form project's .codex/config.toml
       const projectConfigPath = path.join(cproj, '.codex', 'config.toml');
       assert(fs.existsSync(projectConfigPath), '#447 AC2: positional-form override must write .codex/config.toml to the given path');
       const configText = fs.readFileSync(projectConfigPath, 'utf8');
       assert(configText.includes('# BEGIN kaola-workflow agents'), '#447 AC2: positional-form config.toml must contain managed agents block');
+      const codexPreflightPath = path.join(root, 'plugins', 'kaola-workflow', 'scripts', 'kaola-workflow-codex-preflight.js');
+      let preflight = spawnSync(process.execPath, [codexPreflightPath, '--project-root', cproj, '--home', chome, '--no-autofix', '--json'], {
+        cwd: path.join(root, 'plugins', 'kaola-workflow'),
+        encoding: 'utf8'
+      });
+      assert.strictEqual(preflight.status, 0, '#581: preflight over fresh project profiles must pass: ' + preflight.stderr + preflight.stdout);
+      let preflightJson = JSON.parse(preflight.stdout);
+      assert.strictEqual(preflightJson.dispatch_mode, 'v1-thread-id', '#581: preflight reports v1-thread-id by default');
+      fs.writeFileSync(projectConfigPath, configText.replace('multi_agent = true', 'multi_agent = true\nmulti_agent_v2 = true'));
+      preflight = spawnSync(process.execPath, [codexPreflightPath, '--project-root', cproj, '--home', chome, '--no-autofix', '--json'], {
+        cwd: path.join(root, 'plugins', 'kaola-workflow'),
+        encoding: 'utf8'
+      });
+      assert.strictEqual(preflight.status, 0, '#581: preflight with multi_agent_v2 must pass: ' + preflight.stderr + preflight.stdout);
+      preflightJson = JSON.parse(preflight.stdout);
+      assert.strictEqual(preflightJson.dispatch_mode, 'v2-task-name', '#581: preflight reports v2-task-name when multi_agent_v2 is enabled');
+      const doctor = spawnSync(process.execPath, [codexPreflightPath, '--doctor', '--project-root', cproj, '--home', chome, '--json'], {
+        cwd: path.join(root, 'plugins', 'kaola-workflow'),
+        encoding: 'utf8'
+      });
+      const doctorJson = JSON.parse(doctor.stdout);
+      const projectScope = doctorJson.scopes.find(s => s.scope === 'project');
+      assert(projectScope && projectScope.dispatch_mode === 'v2-task-name',
+        '#581: doctor project scope reports v2-task-name when multi_agent_v2 is enabled');
 
       // #543 cross-edition: a default (no-flags) codex installer run must seed the shared
       // ~/.config/kaola-workflow/config.json with installed_paths:[] (adaptive-only). This is the

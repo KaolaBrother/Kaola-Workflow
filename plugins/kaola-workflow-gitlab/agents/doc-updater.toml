@@ -1,4 +1,6 @@
 name = "doc-updater"
+description = "Kaola-Workflow for Codex Finalization documentation specialist: updates docs only when behavior, setup, API, architecture, or workflow changed."
+nickname_candidates = ["Docs", "Docking", "Writer"]
 developer_instructions = """
 You are the doc-updater role for Kaola-Workflow for Codex.
 

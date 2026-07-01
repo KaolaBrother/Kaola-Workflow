@@ -1003,7 +1003,7 @@ The contractor is registered in all four editions identically:
 - **`install.sh`** — listed in `REQUIRED_AGENTS`; `default_agent_model` entry maps to sonnet; `model_for_placeholder` maps to `CONTRACTOR_MODEL`; `render_command_file` emits the model placeholder.
 - **`uninstall.sh`** — listed in `REQUIRED_AGENTS` for clean removal.
 - **`kaola-workflow-resolve-agent-model.js`** — `DEFAULT_AGENT_MODELS` includes `contractor: 'sonnet'`; four byte-identical copies (canonical `scripts/` + Codex + GitLab + Gitea plugins).
-- **Codex `.toml` agent profile** — `agents/contractor.toml` (three byte-identical copies across the Codex, GitLab, and Gitea plugin editions; Claude uses `agents/contractor.md`). Base profiles omit `model_reasoning_effort` (#451 — the spawned agent inherits the parent Codex session's effort). Per-edition `config/agents.toml` also carries a `[agents.contractor]` block (three byte-identical copies across all Codex editions).
+- **Codex `.toml` agent profile** — `agents/contractor.toml` (three byte-identical copies across the Codex, GitLab, and Gitea plugin editions; Claude uses `agents/contractor.md`). Base profiles omit `model_reasoning_effort`; planner-selected effort flows through `codex_reasoning_effort` and per-spawn `reasoning_effort` instead of a profile pin. Standalone TOMLs carry `description` and `nickname_candidates` metadata matching `config/agents.toml`. Per-edition `config/agents.toml` also carries a `[agents.contractor]` block (three byte-identical copies across all Codex editions).
 
 ---
 

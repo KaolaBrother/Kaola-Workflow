@@ -746,6 +746,9 @@ assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-plan-validator.js', 
 assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'full accumulated root diff');
 assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'registration surface');
 assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'full accumulated root diff');
+assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'codex_task_name');
+assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'codex_dispatch_mode');
+assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'reasoning_effort');
 
 // #334: the non-delegable main-session-gate role token + its G3 freeze gate + authoring/dispatch
 // prose, pinned in the GitLab edition surfaces (port validator, plan-run command, planner TOML).
@@ -778,8 +781,8 @@ assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', '--forbidden
 // issue #332: source agent-profile schema wall (AC2). require() THIS tree's own
 // installer copy (require.main guard means require() never runs main()) and assert its
 // source-tree validator passes for the GitLab plugin tree — every agents/*.toml has a
-// matching non-empty top-level `name`, an optional model_reasoning_effort, a non-blank
-// developer_instructions, every config_file resolves, and every toml is referenced by
+// matching non-empty top-level `name`, a description, valid nickname_candidates, an optional
+// model_reasoning_effort, a non-blank developer_instructions, every config_file resolves, and every toml is referenced by
 // exactly one [agents.*] entry (catches the issue-scout class of omission forever).
 const gitlabInstaller = require('./install-codex-agent-profiles.js');
 const gitlabProfiles = gitlabInstaller.validateSourceProfiles(path.join(root, pluginRoot));

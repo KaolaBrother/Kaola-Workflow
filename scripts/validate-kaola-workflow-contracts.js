@@ -593,6 +593,9 @@ assertConcept(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'adaptive
 // #341: forge-neutral agent-profile authoring guidance pinned (planner toml + plan-run SKILL).
 assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'forge-neutral');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '--forbidden-only');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'codex_task_name');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'codex_dispatch_mode');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'reasoning_effort');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'workflow_path: adaptive');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'disjointWriteSets');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'readPlanNodes');
@@ -621,7 +624,7 @@ for (const reviewerBody of [
 // issue #332: source agent-profile schema wall. require() the installer (the #325
 // require.main guard means require() never runs main()) and assert its source-tree
 // validator passes — every agents/*.toml has a matching non-empty top-level `name`,
-// an optional model_reasoning_effort, a non-blank developer_instructions, every
+// a description, valid nickname_candidates, an optional model_reasoning_effort, a non-blank developer_instructions, every
 // config_file resolves, and every toml is referenced by exactly one [agents.*] entry.
 // This is the AC2 wall: it FAILS on a tree that drifts a profile schema or leaves a
 // new role file (the issue-scout class) unregistered.
@@ -633,15 +636,16 @@ assert(codexProfiles.ok,
 // issue #332 (OWNER comment): README Codex role-catalog contract. Derive the role set from
 // config/agents.toml, then pin README to it: the role-list block must equal the derived role set,
 // and the retired `docs-lookup` must appear nowhere in that block. #451 retired the per-role
-// reasoning-effort table (effort is session-inherited now), so there is no effort row to pin.
+// reasoning-effort table, and #581 routes planner effort through per-spawn dispatch metadata instead
+// of a profile matrix, so there is no effort row to pin.
 function deriveCodexRoleCatalog() {
   const templateText = read(`${pluginRoot}/config/agents.toml`);
   const roles = [];
   const re = /^\[agents\.([a-z0-9-]+)\]/gm;
   let m;
-  // #451: the <role>-max effort variants are retired (no -max tables remain). Base profiles no
-  // longer carry model_reasoning_effort (it is OPTIONAL — a Codex-spawned agent inherits the parent
-  // session effort), so the catalog derives the role SET only; the README effort table is gone.
+  // #451/#581: the <role>-max effort variants are retired (no -max tables remain). Base profiles no
+  // longer carry model_reasoning_effort (it is OPTIONAL — per-node effort is a dispatch override),
+  // so the catalog derives the role SET only; the README effort table is gone.
   while ((m = re.exec(templateText)) !== null) {
     roles.push(m[1]);
   }
@@ -666,9 +670,9 @@ assert(missingFromReadme.length === 0,
 assert(extraInReadme.length === 0,
   'README role list has roles not in config/agents.toml: ' + extraInReadme.join(', '));
 
-// #451: the per-role reasoning-effort table is retired (effort is session-inherited now, not a
-// per-role pin), so the README no longer carries a `| Role | Reasoning effort |` table — there is
-// nothing to pin here anymore.
+// #451/#581: the per-role reasoning-effort table is retired (effort is per-node dispatch metadata,
+// not a per-role pin), so the README no longer carries a `| Role | Reasoning effort |` table —
+// there is nothing to pin here anymore.
 
 // Retired role guard: the retired `docs-lookup` role must not be presented as an installable/active
 // role inside the role-list catalog block. Documentation of docs-lookup as a *pruned/retired* file

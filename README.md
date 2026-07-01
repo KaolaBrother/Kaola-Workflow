@@ -563,17 +563,23 @@ When the role profiles are absent the workflow auto-detects this, keeps the
 locally under `local-authorized` only when you explicitly disable delegation.
 
 Codex profiles intentionally do not pin model names, so model upgrades can flow
-through the user's active Codex configuration. As of #451 the base role profiles
-also omit `model_reasoning_effort` entirely: a spawned role agent **inherits the
-parent Codex session's reasoning effort** (Codex 0.139 has no per-spawn effort
-override, and agent-config wins over the project profile — PR #14807).
+through the user's active Codex configuration. Standalone role TOMLs include the
+same `description` and `nickname_candidates` metadata as the managed
+`config.toml` block, but the base role profiles omit `model_reasoning_effort`.
 
-The adaptive planner's per-node `model` tier drives that effort. When a node's
-resolved `model` is `opus`, the plan-run executor raises the Codex session
-reasoning effort to `xhigh` before dispatching that node (the dispatch descriptor
-carries `codex_reasoning_effort: "xhigh"`); `sonnet`/absent nodes leave the
-standing session effort untouched. The `<role>-max` xhigh effort-variant profiles
-shipped in #405 are retired — see `docs/decisions/D-451-01.md`.
+The adaptive planner's per-node `model` tier drives any per-spawn effort override.
+When a node's resolved `model` is `opus`, the dispatch descriptor carries
+`codex_reasoning_effort: "xhigh"` and the plan-run executor passes that value
+directly as `reasoning_effort`; `sonnet`/absent nodes omit the override and use the
+base profile/session default. The retired `<role>-max` xhigh effort-variant
+profiles are not used.
+
+Codex preflight and doctor output report the dispatch identity mode. The stable
+default is `v1-thread-id`, where wait/close rows may still show runtime thread IDs
+and the prompt/evidence carry the node mapping. When the operator explicitly enables
+Codex v2 multi-agent support, the descriptor reports `v2-task-name` and plan-run
+passes `task_name: dispatch.codex_task_name`, a sanitized value derived from the
+workflow node id and role.
 
 ## Usage
 

@@ -120,9 +120,18 @@ NO `enterBatch` and runs serially (the normal single-dispatch path) — never fo
 
 ### 3. Dispatch the role agent
 
-Dispatch the agent whose `role` matches `dispatch.role`. Pass `model=dispatch.model` (the `model`
-field from `dispatch`, e.g. `model="{TDD_GUIDE_MODEL}"`) and `dispatch.nonce` (evidence-binding
-token). Instruct the role to:
+Dispatch the base role profile in `dispatch.agent_type` (legacy `dispatch.role` is only
+descriptive). For Codex v2 task-name mode (`dispatch.codex_dispatch_mode: "v2-task-name"`), pass
+`task_name: dispatch.codex_task_name`, `agent_type: dispatch.agent_type`, and `fork_turns: "none"`
+unless the workflow explicitly needs inherited history. For Codex v1 fallback
+(`"v1-thread-id"`), omit `task_name` and prefix the prompt with a compact identity header:
+`Node: <id> | Role: <role> | Effort: <dispatch.codex_reasoning_effort or default>`. v1 wait/close
+rows may still show thread IDs; the prompt and evidence carry the node mapping.
+
+When `dispatch.codex_reasoning_effort` is non-null, pass it directly as the per-spawn
+`reasoning_effort`. When it is null, omit the override and let the base profile/session default
+stand. Never append a max-effort profile suffix and never emit a variant-missing note. Pass
+`dispatch.nonce` (evidence-binding token). Instruct the role to:
 - Read the seeded `.cache/{node-id}.md` (`dispatch.evidence_file`) for required tokens.
 - Fill in token stubs from its work; NEVER modify the `evidence-binding:` header line.
 - `finalize` sink and `main-session-gate` are non-delegable — run `main-session-direct`.

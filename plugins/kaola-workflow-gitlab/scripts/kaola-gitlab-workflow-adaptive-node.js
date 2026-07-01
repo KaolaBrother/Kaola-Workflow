@@ -1029,8 +1029,38 @@ function deriveRequiredTokens(role) {
 // context fields:  nonce, evidence_file, required_tokens, working_dir, forge_rider,
 //                  goal_line (optional)
 // ---------------------------------------------------------------------------
+function sanitizeCodexTaskName(value) {
+  const cleaned = String(value == null ? '' : value)
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return cleaned || 'node';
+}
+
+function codexTaskNameForNode(nodeInfo) {
+  const id = nodeInfo && nodeInfo.id ? String(nodeInfo.id) : 'node';
+  const role = nodeInfo && nodeInfo.role ? String(nodeInfo.role) : '';
+  return sanitizeCodexTaskName(role ? id + '__' + role : id);
+}
+
+function resolveCodexDispatchMode(context, env) {
+  const ctx = context || {};
+  const explicit = String(ctx.codex_dispatch_mode || '').trim();
+  if (explicit === 'v2-task-name' || explicit === 'v1-thread-id') return explicit;
+  const e = env || process.env || {};
+  const flag = String(e.KAOLA_CODEX_DISPATCH_MODE || e.CODEX_DISPATCH_MODE || '').trim();
+  if (flag === 'v2-task-name' || flag === 'v1-thread-id') return flag;
+  if (String(e.KAOLA_CODEX_MULTI_AGENT_V2 || e.CODEX_MULTI_AGENT_V2 || '').trim() === '1') {
+    return 'v2-task-name';
+  }
+  return 'v1-thread-id';
+}
+
 function buildDispatch(nodeInfo, context) {
   const ctx = context || {};
+  const codexDispatchMode = resolveCodexDispatchMode(ctx, process.env);
+  const codexTaskName = codexTaskNameForNode(nodeInfo);
   const d = {
     node_id:            nodeInfo.id,
     role:               nodeInfo.role,
@@ -1043,6 +1073,8 @@ function buildDispatch(nodeInfo, context) {
     forge_rider:        (ctx.forge_rider != null ? ctx.forge_rider : null),
     guards:             deriveGuards(nodeInfo),
     agent_type:         nodeInfo.role,
+    codex_dispatch_mode: codexDispatchMode,
+    codex_task_name:    codexTaskName,
     ...dispatchEffort(nodeInfo.model),
     // #382-opencode: the opencode effort twin — resolves the per-node tier to a provider
     // effort variant (opus→top, sonnet→second) when ctx.opencode_provider is set (opencode
@@ -5492,6 +5524,9 @@ module.exports = {
   shellNode,
   // #444 (D-444-01): dispatch descriptor builder + guards + verify subcommand.
   buildDispatch,
+  sanitizeCodexTaskName,
+  codexTaskNameForNode,
+  resolveCodexDispatchMode,
   deriveGuards,
   runVerifyEvidence,
   // #440: triage classifier exported for direct testing.

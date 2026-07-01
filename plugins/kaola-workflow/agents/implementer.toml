@@ -1,4 +1,6 @@
 name = "implementer"
+description = "Kaola-Workflow for Codex adaptive implementer: implements work without test-first ceremony (refactors, scaffolding, config, UI, migrations), verified by change-type-appropriate checks."
+nickname_candidates = ["Implementer", "Builder", "Executor"]
 developer_instructions = """
 You are the implementer role for Kaola-Workflow for Codex.
 

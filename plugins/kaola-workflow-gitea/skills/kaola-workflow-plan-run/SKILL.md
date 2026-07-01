@@ -62,15 +62,21 @@ and must run from the main root, above.)
 
 ## Dispatch
 
-Reasoning effort: the xhigh effort-variant profiles are retired — always
-delegate to the base `dispatch.agent_type` profile (= the node's role). Codex 0.139 has no per-spawn
-reasoning-effort override, so effort rides the parent SESSION: when `dispatch.codex_reasoning_effort`
-is non-null (the planner gave the node `model: opus` → `xhigh`), ensure the Codex session reasoning
-effort equals it BEFORE spawning; when null (`sonnet`/absent → `role_default`), leave the standing
-session effort untouched. Base profiles OMIT `model_reasoning_effort`, so the spawned agent inherits
-the session (agent-config wins over project-profile). Never append a max-effort profile
-suffix and never emit a variant-missing note. Pass `Working directory: ${ACTIVE_WORKTREE_PATH}` to
-every role delegation.
+Reasoning effort and identity: the xhigh effort-variant profiles are retired — always
+delegate to the base `dispatch.agent_type` profile (= the node's role). When
+`dispatch.codex_reasoning_effort` is non-null (the planner gave the node `model: opus` → `xhigh`),
+pass it directly as the per-spawn `reasoning_effort`; when null (`sonnet`/absent →
+`role_default`), omit the override and let the base profile/session default stand. Never append a
+max-effort profile suffix and never emit a variant-missing note.
+
+For Codex v2 task-name mode (`dispatch.codex_dispatch_mode: "v2-task-name"`), call `spawn_agent`
+with `task_name: dispatch.codex_task_name`, `agent_type: dispatch.agent_type`, `fork_turns: "none"`
+unless the workflow explicitly needs inherited history, and the direct `reasoning_effort` override
+when present. For v1 fallback (`"v1-thread-id"`), omit `task_name`, keep `agent_type:
+dispatch.agent_type`, pass direct `reasoning_effort` when present, and prefix the prompt with
+`Node: <id> | Role: <role> | Effort: <dispatch.codex_reasoning_effort or default>`. v1 wait/close
+rows may still show thread IDs; the prompt and evidence carry the node mapping. Pass
+`Working directory: ${ACTIVE_WORKTREE_PATH}` to every role delegation.
 
 ## Loop Skeleton
 
@@ -109,9 +115,8 @@ when no node is `in_progress`.
 
 ### 3. Dispatch the role agent
 
-Delegate to the base role profile matching `dispatch.agent_type`. Apply the reasoning-effort rule
-above (session effort = `dispatch.codex_reasoning_effort` when non-null). Pass `dispatch.nonce`
-(evidence-binding token). Instruct the role to:
+Delegate to the base role profile matching `dispatch.agent_type`. Apply the task-name and
+reasoning-effort rule above. Pass `dispatch.nonce` (evidence-binding token). Instruct the role to:
 - Read the seeded `.cache/{node-id}.md` (`dispatch.evidence_file`) for required tokens.
 - Fill in token stubs; NEVER modify the `evidence-binding:` header line.
 - `finalize` sink and `main-session-gate` are non-delegable — run `main-session-direct`.

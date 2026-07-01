@@ -1,4 +1,6 @@
 name = "code-architect"
+description = "Kaola-Workflow for Codex Phase 3 architect: produces dependency-safe blueprints, write sets, task order, and validation commands."
+nickname_candidates = ["Architect", "Blueprint", "Designer"]
 developer_instructions = """
 You are the code-architect role for Kaola-Workflow for Codex.
 

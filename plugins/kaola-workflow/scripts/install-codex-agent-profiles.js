@@ -51,6 +51,9 @@ const MANAGED_HOOK_ID_PREFIX = 'kaola-workflow:';
 //   effort variants were retired in #451. Append here whenever a role file is removed/renamed.
 // EFFORT_VALUES — the only legal model_reasoning_effort values; the source schema
 //   validator (validateProfileText) and the preflight's mirror both pin this set.
+// Agent profile TOMLs also carry the user-facing role `description` and
+// `nickname_candidates` from config/agents.toml so standalone Codex profiles expose
+// the same identity metadata as the managed config block.
 // NOTE: kaola-workflow-codex-preflight.js DUPLICATES validateProfileText + these
 //   constants (the root scripts/ tree has no installer to require, and the preflight
 //   is a true 4-tree byte-identical script that may not require() edition code). Keep
@@ -85,10 +88,10 @@ if (process.argv.some(a => a === '--enable-adaptive' || a.startsWith('--enable-a
   console.warn('Kaola-Workflow Codex installer: --enable-adaptive is retired (#538); adaptive is the unconditional default. Ignoring.');
 }
 
-// #451 (supersedes #405): the `<role>-max` xhigh effort-variant matrix is retired. Codex 0.139 has
-// no per-spawn reasoning-effort override, so base role profiles now OMIT `model_reasoning_effort`
-// and a spawned agent inherits the parent Codex session effort (agent-config wins over
-// project-profile, PR #14807). No install-time variant generation; no adaptive-schema require here.
+// The `<role>-max` xhigh effort-variant matrix is retired. Base role profiles now OMIT
+// `model_reasoning_effort`; the adaptive dispatch descriptor carries any per-spawn
+// `reasoning_effort` override for current Codex runtimes. No install-time variant
+// generation; no adaptive-schema require here.
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
@@ -100,6 +103,33 @@ function read(file) {
 
 function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function parseTopLevelString(top, key) {
+  const re = new RegExp('^' + escapeRegExp(key) + '\\s*=\\s*"([^"]*)"\\s*$', 'm');
+  const m = top.match(re);
+  return m ? m[1] : null;
+}
+
+function parseStringArrayLine(top, key) {
+  const re = new RegExp('^' + escapeRegExp(key) + '\\s*=\\s*\\[([^\\]]*)\\]\\s*$', 'm');
+  const m = top.match(re);
+  if (!m) return { present: false, values: [], valid: true };
+  const body = m[1].trim();
+  if (!body) return { present: true, values: [], valid: true };
+  const values = [];
+  const parts = body.split(',').map(s => s.trim()).filter(Boolean);
+  for (const part of parts) {
+    const pm = part.match(/^"([^"]+)"$/);
+    if (!pm) return { present: true, values: [], valid: false };
+    values.push(pm[1]);
+  }
+  return { present: true, values, valid: true };
+}
+
+function sameStringArray(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+  return a.every((v, i) => v === b[i]);
 }
 
 function managedBlockPattern(flags = 'm') {
@@ -161,7 +191,7 @@ function upsertBlock(existing, block) {
 // model_reasoning_effort (#451). The top-level region is the text before the first ^[ table.
 // Returns [] when valid, or a list of human-readable reasons.
 // ---------------------------------------------------------------------------
-function validateProfileText(text, role) {
+function validateProfileText(text, role, expectedMeta = null) {
   const reasons = [];
   const firstTableIdx = text.search(/^\[/m);
   const top = firstTableIdx === -1 ? text : text.slice(0, firstTableIdx);
@@ -175,10 +205,33 @@ function validateProfileText(text, role) {
     reasons.push(`top-level 'name' is "${nameMatch[1]}" but must equal the role "${role}"`);
   }
 
+  const desc = parseTopLevelString(top, 'description');
+  if (desc === null) {
+    reasons.push("missing top-level 'description'");
+  } else if (desc.trim() === '') {
+    reasons.push("top-level 'description' is empty");
+  } else if (expectedMeta && expectedMeta.description && desc !== expectedMeta.description) {
+    reasons.push("top-level 'description' does not match config/agents.toml");
+  }
+
+  const nick = parseStringArrayLine(top, 'nickname_candidates');
+  if (nick.present && !nick.valid) {
+    reasons.push("top-level 'nickname_candidates' must be a TOML string array");
+  } else if (nick.present && nick.values.length === 0) {
+    reasons.push("top-level 'nickname_candidates' must not be empty when present");
+  }
+  if (expectedMeta && expectedMeta.nicknameCandidates && expectedMeta.nicknameCandidates.length > 0) {
+    if (!nick.present) {
+      reasons.push("missing top-level 'nickname_candidates'");
+    } else if (!sameStringArray(nick.values, expectedMeta.nicknameCandidates)) {
+      reasons.push("top-level 'nickname_candidates' does not match config/agents.toml");
+    }
+  }
+
   const effortMatch = top.match(/^model_reasoning_effort\s*=\s*"([^"]*)"\s*$/m);
-  // #451: model_reasoning_effort is OPTIONAL - base profiles OMIT it (the spawned agent inherits the
-  // parent Codex session effort; agent-config wins over project-profile, PR #14807). A pinned value
-  // (user override) must still be legal; an absent one is fine.
+  // #451/#581: model_reasoning_effort is OPTIONAL - base profiles OMIT it so dispatch can supply
+  // per-spawn `reasoning_effort` from the node descriptor. A pinned value (user override) must still
+  // be legal; an absent one is fine.
   if (effortMatch && !EFFORT_VALUES.includes(effortMatch[1])) {
     reasons.push(`model_reasoning_effort "${effortMatch[1]}" is not one of ${EFFORT_VALUES.join('/')}`);
   }
@@ -193,8 +246,8 @@ function validateProfileText(text, role) {
   return reasons;
 }
 
-// Parse config/agents.toml for [agents.<role>] + its config_file line.
-// Returns [{ role, configFile, basename }].
+// Parse config/agents.toml for [agents.<role>] metadata.
+// Returns [{ role, description, nicknameCandidates, configFile, basename }].
 function parseTemplateEntries(templateText) {
   const entries = [];
   const lines = templateText.split(/\r?\n/);
@@ -202,11 +255,22 @@ function parseTemplateEntries(templateText) {
   for (const line of lines) {
     const head = line.match(/^\[agents\.([a-z0-9-]+)\]\s*$/);
     if (head) {
-      current = { role: head[1], configFile: null, basename: null };
+      current = { role: head[1], description: null, nicknameCandidates: [], configFile: null, basename: null };
       entries.push(current);
       continue;
     }
     if (current) {
+      const desc = line.match(/^description\s*=\s*"([^"]*)"\s*$/);
+      if (desc) {
+        current.description = desc[1];
+        continue;
+      }
+      const nick = line.match(/^nickname_candidates\s*=\s*\[([^\]]*)\]\s*$/);
+      if (nick) {
+        const parsed = parseStringArrayLine(line, 'nickname_candidates');
+        current.nicknameCandidates = parsed.valid ? parsed.values : [];
+        continue;
+      }
       const cf = line.match(/^config_file\s*=\s*"([^"]*)"\s*$/);
       if (cf) {
         current.configFile = cf[1];
@@ -252,7 +316,7 @@ function validateSourceProfiles(rootDir) {
       errors.push(`agents/${entry.basename}: referenced by [agents.${entry.role}] but file is missing`);
       continue;
     }
-    const reasons = validateProfileText(read(file), entry.role);
+    const reasons = validateProfileText(read(file), entry.role, entry);
     for (const r of reasons) errors.push(`agents/${entry.basename}: ${r}`);
   }
 
@@ -263,7 +327,7 @@ function validateSourceProfiles(rootDir) {
     }
   }
 
-  return { ok: errors.length === 0, errors, roles };
+  return { ok: errors.length === 0, errors, roles, entries };
 }
 
 // ---------------------------------------------------------------------------
@@ -560,15 +624,17 @@ function updateHooks() {
 // Post-verify (AC8 parity): re-read every installed profile + assert the managed
 // block carries an [agents.<role>] entry for every template role. Returns [] when
 // the install is sound, or a list of reasons.
-function postVerify(templateRoles) {
+function postVerify(templateEntries) {
   const problems = [];
+  const templateRoles = templateEntries.map(e => e.role);
+  const metaByRole = new Map(templateEntries.map(e => [e.role, e]));
   for (const role of templateRoles) {
     const file = path.join(targetAgentsDir, `${role}.toml`);
     if (!fs.existsSync(file)) {
       problems.push(`installed agents/kaola-workflow/${role}.toml is missing`);
       continue;
     }
-    const reasons = validateProfileText(read(file), role);
+    const reasons = validateProfileText(read(file), role, metaByRole.get(role));
     for (const r of reasons) problems.push(`installed ${role}.toml: ${r}`);
   }
 
@@ -650,6 +716,7 @@ function main() {
     process.exit(1);
   }
   const templateRoles = sourceCheck.roles;
+  const templateEntries = sourceCheck.entries;
 
   // 2. Refuse to prune against a future manifest schema.
   const prevManifest = readManifest(targetAgentsDir);
@@ -680,7 +747,7 @@ function main() {
   writeManifest(targetAgentsDir, { pluginRoot, copiedFiles: copied, removed });
 
   // 9. Post-verify before printing success.
-  const problems = postVerify(templateRoles);
+  const problems = postVerify(templateEntries);
   if (problems.length > 0) {
     for (const p of problems) process.stderr.write(`post_verify_failed: ${p}\n`);
     process.exit(1);
