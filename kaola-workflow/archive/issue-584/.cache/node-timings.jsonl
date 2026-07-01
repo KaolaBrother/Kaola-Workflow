@@ -1,0 +1,11 @@
+{"node":"n1-preflight-detector","event":"opened","ts":"2026-07-01T14:55:03.147Z"}
+{"node":"n1-preflight-detector","event":"closed","ts":"2026-07-01T15:00:15.004Z"}
+{"node":"n2-review","event":"opened","ts":"2026-07-01T15:00:15.035Z"}
+{"node":"n2-review","event":"closed","ts":"2026-07-01T15:01:22.421Z"}
+{"node":"n3-install-guidance","event":"opened","ts":"2026-07-01T15:01:22.492Z"}
+{"node":"n3-install-guidance","event":"closed","ts":"2026-07-01T15:04:49.422Z"}
+{"node":"n4-finalize","event":"opened","ts":"2026-07-01T15:04:49.455Z"}
+{"node":"n4-finalize","event":"closed","ts":"2026-07-01T15:05:57.418Z"}
+{"node":"n1-preflight-detector","event":"closed","ts":"2026-07-01T15:06:55.855Z"}
+{"node":"n2-review","event":"opened","ts":"2026-07-01T15:06:55.888Z"}
+{"node":"n2-review","event":"closed","ts":"2026-07-01T15:07:35.612Z"}

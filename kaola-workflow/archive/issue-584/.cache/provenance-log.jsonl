@@ -1,0 +1,12 @@
+{"timestamp":"2026-07-01T14:55:03.148Z","event":"open","nodeId":"n1-preflight-detector","nonce":"e37a4f2538e0","by":"adaptive-node"}
+{"timestamp":"2026-07-01T15:00:15.004Z","event":"close","nodeId":"n1-preflight-detector","nonce":"e37a4f2538e0","by":"adaptive-node"}
+{"timestamp":"2026-07-01T15:00:15.445Z","event":"open","nodeId":"n2-review","nonce":"0f094d089cc7","by":"adaptive-node"}
+{"timestamp":"2026-07-01T15:01:22.421Z","event":"close","nodeId":"n2-review","nonce":"0f094d089cc7","by":"adaptive-node"}
+{"timestamp":"2026-07-01T15:01:22.889Z","event":"open","nodeId":"n3-install-guidance","nonce":"7ebac628acc9","by":"adaptive-node"}
+{"timestamp":"2026-07-01T15:04:49.424Z","event":"close","nodeId":"n3-install-guidance","nonce":"7ebac628acc9","by":"adaptive-node"}
+{"timestamp":"2026-07-01T15:04:49.830Z","event":"open","nodeId":"n4-finalize","nonce":"87a9b18673df","by":"adaptive-node"}
+{"timestamp":"2026-07-01T15:05:57.419Z","event":"close","nodeId":"n4-finalize","nonce":"87a9b18673df","by":"adaptive-node"}
+{"timestamp":"2026-07-01T15:06:12.720Z","event":"open","nodeId":"n1-preflight-detector","nonce":"362f93163b4c","by":"adaptive-node"}
+{"timestamp":"2026-07-01T15:06:55.856Z","event":"close","nodeId":"n1-preflight-detector","nonce":"362f93163b4c","by":"adaptive-node"}
+{"timestamp":"2026-07-01T15:06:56.283Z","event":"open","nodeId":"n2-review","nonce":"823e59b5a20f","by":"adaptive-node"}
+{"timestamp":"2026-07-01T15:07:35.612Z","event":"close","nodeId":"n2-review","nonce":"823e59b5a20f","by":"adaptive-node"}

@@ -1,0 +1,15 @@
+{
+  "project": "issue-584",
+  "sweptClasses": [
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n1-preflight-detector",
+      "count": 1
+    },
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n2-review",
+      "count": 1
+    }
+  ]
+}

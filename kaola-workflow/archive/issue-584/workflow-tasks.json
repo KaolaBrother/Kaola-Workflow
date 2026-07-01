@@ -1,0 +1,30 @@
+{
+  "source_plan_hash": "e8d66677dcc7b5f403afbaceb77fbb3e55fd86f352aa87ff9b149e78f5198fda",
+  "tasks": [
+    {
+      "id": "n1-preflight-detector",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n2-review",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n3-install-guidance",
+      "role": "doc-updater",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n4-finalize",
+      "role": "finalize",
+      "status": "completed",
+      "ledger_status": "complete"
+    }
+  ],
+  "last_synced_from_ledger": "2026-07-01T15:07:35.724Z"
+}
