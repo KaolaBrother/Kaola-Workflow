@@ -1,0 +1,30 @@
+{
+  "source_plan_hash": "9f4c974139aa140e05e5e047f983edf151a0c27427bce825261701d5f7249bdc",
+  "tasks": [
+    {
+      "id": "n1-codex-dispatch-contract",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n2-review",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n3-docs",
+      "role": "doc-updater",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n4-finalize",
+      "role": "finalize",
+      "status": "completed",
+      "ledger_status": "complete"
+    }
+  ],
+  "last_synced_from_ledger": "2026-07-01T09:09:01.122Z"
+}
