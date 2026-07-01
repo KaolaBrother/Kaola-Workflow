@@ -190,6 +190,8 @@ for (const ed of codexEditions) {
       `T5b: ${f} must require fork_turns:"none" for tiered Codex v2 dispatch`);
     assert(content.includes('reasoning_effort: dispatch.codex_reasoning_effort'),
       `T5b: ${f} must pass the descriptor effort directly`);
+    assert(content.includes('fresh child-session effort proof'),
+      `T5b: ${f} must require fresh child-session effort proof for tiered Codex dispatch`);
     assert(content.includes('codex_effort_override_unavailable'),
       `T5b: ${f} must fail closed when v1 cannot prove effort override`);
     assert(!content.includes('`sonnet`/absent') && !content.includes('sonnet`/absent') && !content.includes('sonnet/absent'),

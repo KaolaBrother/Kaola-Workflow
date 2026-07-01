@@ -752,6 +752,7 @@ assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'reasoni
 assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', '`model: sonnet` -> `high`');
 assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'fork_turns: "none"');
 assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'reasoning_effort: dispatch.codex_reasoning_effort');
+assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'fresh child-session effort proof');
 assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'codex_effort_override_unavailable');
 assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', '`sonnet`/absent');
 

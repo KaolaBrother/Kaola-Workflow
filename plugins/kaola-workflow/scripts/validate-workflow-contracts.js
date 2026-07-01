@@ -937,6 +937,7 @@ assertIncludes('agents/workflow-planner.md', 'main-session-gate');
 // must require the v2 fork discipline and fail closed for unproven v1 tiered dispatch.
 assertIncludes('commands/kaola-workflow-plan-run.md', 'fork_turns: "none"');
 assertIncludes('commands/kaola-workflow-plan-run.md', 'reasoning_effort: dispatch.codex_reasoning_effort');
+assertIncludes('commands/kaola-workflow-plan-run.md', 'fresh child-session effort proof');
 assertIncludes('commands/kaola-workflow-plan-run.md', 'codex_effort_override_unavailable');
 assertNotIncludes('commands/kaola-workflow-plan-run.md', '`sonnet`/absent');
 

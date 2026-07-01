@@ -123,8 +123,14 @@ NO `enterBatch` and runs serially (the normal single-dispatch path) — never fo
 Dispatch the base role profile in `dispatch.agent_type` (legacy `dispatch.role` is only
 descriptive). Set `Working directory: ${ACTIVE_WORKTREE_PATH}` on every Agent call.
 
-For Codex v2 task-name mode (`dispatch.codex_dispatch_mode: "v2-task-name"`), pass
-`task_name: dispatch.codex_task_name` and `agent_type: dispatch.agent_type`. When
+For any non-null `dispatch.codex_reasoning_effort`, require a fresh child-session effort proof
+for that exact requested effort before dispatch. The proof must inspect the spawned child's session
+JSONL `turn_context.effort`; config text, `codex features list`, spawn arguments, and parent-side
+descriptors are not proof. This applies to both V2 and V1 tiered Codex dispatch. If proof is absent,
+stale, or failing, refuse before dispatch with `codex_effort_override_unavailable`.
+
+For Codex v2 task-name mode (`dispatch.codex_dispatch_mode: "v2-task-name"`), after the proof gate
+passes, pass `task_name: dispatch.codex_task_name` and `agent_type: dispatch.agent_type`. When
 `dispatch.codex_reasoning_effort` is non-null, also pass `fork_turns: "none"` and
 `reasoning_effort: dispatch.codex_reasoning_effort`; inherited-history forks are not a valid path
 for tiered nodes. When the effort is null, omit `reasoning_effort` and let the base
@@ -132,10 +138,8 @@ profile/session default stand.
 
 For Codex v1 fallback (`"v1-thread-id"`), omit `task_name` and prefix the prompt with a compact
 identity header: `Node: <id> | Role: <role> | Effort: <dispatch.codex_reasoning_effort or default>`.
-If `dispatch.codex_reasoning_effort` is non-null, use v1 only when the installed runtime has been
-proved to honor per-spawn effort; otherwise refuse before dispatch with
-`codex_effort_override_unavailable`. v1 wait/close rows may still show thread IDs; the prompt and
-evidence carry the node mapping. Never append a max-effort profile suffix and never emit a
+V1 wait/close rows may still show thread IDs; the prompt and evidence carry the node mapping.
+Never append a max-effort profile suffix and never emit a
 variant-missing note. Pass `dispatch.nonce` (evidence-binding token). Instruct the role to:
 - Read the seeded `.cache/{node-id}.md` (`dispatch.evidence_file`) for required tokens.
 - Fill in token stubs from its work; NEVER modify the `evidence-binding:` header line.
