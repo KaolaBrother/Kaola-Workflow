@@ -1,0 +1,28 @@
+{
+  "project": "issue-596",
+  "branch": "workflow/issue-596",
+  "issue_number": 596,
+  "issue_numbers": [
+    596
+  ],
+  "resolved_default_branch": "main",
+  "branch_head": "8f30f334fb22565c35902e1fe466ee5ffd54f9f3",
+  "started_at": "2026-07-02T19:02:46.847Z",
+  "updated_at": "2026-07-02T19:03:01.319Z",
+  "stash_ref": null,
+  "removed_duplicates": [],
+  "steps": {
+    "preflight": "done",
+    "push_upstream": "done",
+    "merge": "done",
+    "worktree_sync": "done",
+    "finalize": "done",
+    "closure": "done",
+    "stash_restore": "done",
+    "archive_commit": "done",
+    "push_main": "done"
+  },
+  "closed_issues": [
+    596
+  ]
+}
