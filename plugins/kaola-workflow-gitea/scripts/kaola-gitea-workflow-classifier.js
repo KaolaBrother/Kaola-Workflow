@@ -126,15 +126,19 @@ function disjointWriteSets(nodeWriteSets) {
     for (let j = i + 1; j < sets.length; j++) {
       const a = sets[i], b = sets[j];
       if (a.size === 0 || b.size === 0) continue;
+      // #587: case-fold the cross-node exact-path + coarse-area compare so `Src/x.js` vs `src/x.js`
+      // (the SAME physical file on a case-insensitive FS) is not falsely proven disjoint.
+      const bLower = new Map();
+      for (const p of b) bLower.set(p.toLowerCase(), p);
       for (const p of a) {
-        if (b.has(p)) return { verdict: 'red', kind: 'exact', reasoning: 'exact file path overlap at "' + p + '" between nodes ' + i + ' and ' + j };
+        if (bLower.has(p.toLowerCase())) return { verdict: 'red', kind: 'exact', reasoning: 'exact file path overlap at "' + p + '" between nodes ' + i + ' and ' + j };
       }
       const areasB = new Set();
-      for (const p of b) areasB.add(areaForPath(p));
+      for (const p of b) areasB.add(areaForPath(p).toLowerCase());
       let sharedHit = '';
       for (const p of a) {
         const area = areaForPath(p);
-        if (areasB.has(area)) {
+        if (areasB.has(area.toLowerCase())) {
           if (!SHARED_INFRA.has(area)) return { verdict: 'red', kind: 'coarse', reasoning: 'coarse-area overlap at "' + area + '" between nodes ' + i + ' and ' + j };
           if (!sharedHit) sharedHit = area;
         }

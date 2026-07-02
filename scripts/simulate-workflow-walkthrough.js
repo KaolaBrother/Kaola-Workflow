@@ -1932,6 +1932,97 @@ function testAdaptiveValidatorGovernance() {
     assert(v.result === 'refuse' && /absolute_path/.test((v.errors||[]).join(';')),
       '#415: a Windows drive-letter path (C:src/app.js) must refuse at freeze, got: ' + JSON.stringify(v));
 
+    // #587 (part 3): a glob token (`*`, `?`, `[`, `{`) never matches at the exact-path barrier.
+    // `**/*.md` gets areaForPath '**' and froze GREEN-disjoint, then died late at runtime as
+    // write_set_overflow — a confusing late refusal for an authoring error knowable at freeze.
+    v = validatePlanFixture(tmp, [
+      '| impl | tdd-guide | — | **/*.md | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /glob_in_path/.test((v.errors||[]).join(';')),
+      '#587: a glob token (**/*.md) must refuse at freeze (glob_in_path), got: ' + JSON.stringify(v));
+    // the other glob metacharacters refuse too (single control: a `?` token).
+    v = validatePlanFixture(tmp, [
+      '| impl | tdd-guide | — | src/app?.js | 1 | sequence |',
+      '| review | code-reviewer | impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /glob_in_path/.test((v.errors||[]).join(';')),
+      '#587: a `?` glob token (src/app?.js) must refuse at freeze (glob_in_path), got: ' + JSON.stringify(v));
+
+    // #587 (part 2): CROSS-NODE case collision on a case-insensitive FS. The single-node sibling
+    // guard (#388 case_collision above) is sibling-scoped only; two PARALLEL legs declaring
+    // `Src/x.js` vs `src/x.js` are the SAME physical file on macOS/Windows but froze GREEN-disjoint
+    // (the disjointness compare was case-sensitive). disjointWriteSets now case-folds the cross-node
+    // compare → RED exact overlap.
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| a | tdd-guide | explore | Src/x.js | 1 | fanout(impl) |',
+      '| b | tdd-guide | explore | src/x.js | 1 | fanout(impl) |',
+      '| review | code-reviewer | a,b | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /not pairwise disjoint|exact file path overlap/.test((v.errors||[]).join(';')),
+      '#587: cross-node case collision (Src/x.js vs src/x.js) in a parallel fan-out must refuse at freeze, got: ' + JSON.stringify(v));
+    // and as INDEPENDENT antichain siblings (not a declared fan-out group): the antichain exact
+    // clobber check is also case-folded now.
+    v = validatePlanFixture(tmp, [
+      '| a | tdd-guide | — | Lib/App.js | 1 | sequence |',
+      '| b | tdd-guide | — | lib/app.js | 1 | sequence |',
+      '| review | code-reviewer | a,b | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /both write/.test((v.errors||[]).join(';')),
+      '#587: cross-node case collision as antichain siblings (Lib/App.js vs lib/app.js) must refuse at freeze, got: ' + JSON.stringify(v));
+    // CONTROL: two parallel legs writing genuinely distinct files in distinct areas still freeze
+    // GREEN — the case-fold must not over-block a real disjoint parallel plan.
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| a | tdd-guide | explore | api/x.js | 1 | fanout(impl) |',
+      '| b | tdd-guide | explore | cli/y.js | 1 | fanout(impl) |',
+      '| review | code-reviewer | a,b | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'in-grammar',
+      '#587 CONTROL: a genuinely-disjoint parallel fan-out must still freeze GREEN, got: ' + JSON.stringify(v));
+
+    // #587 (part 1): barrier-INVISIBLE allowband collision. CHANGELOG.md/README.md/docs/** are never
+    // flagged by the per-node barrier, so two parallel legs both touching them are invisible to BOTH
+    // the freeze proof (different surfaces / non-shared areas look disjoint) AND the barrier; git-merge
+    // silently both-applies. Require the allowband on exactly ONE leg. Two fan-out legs, one declaring
+    // CHANGELOG.md + the other README.md (distinct files, distinct areas), froze GREEN pre-fix.
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| a | tdd-guide | explore | api/a.js, CHANGELOG.md | 1 | fanout(impl) |',
+      '| b | tdd-guide | explore | cli/b.js, README.md | 1 | fanout(impl) |',
+      '| review | code-reviewer | a,b | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /parallel_allowband_collision/.test((v.errors||[]).join(';')),
+      '#587: two parallel fan-out legs both declaring a barrier-invisible allowband surface must refuse at freeze (parallel_allowband_collision), got: ' + JSON.stringify(v));
+    // and INDEPENDENT antichain branches both touching docs/** (the coarse-area arm deliberately
+    // skips no-shared-ancestor pairs, so the allowband arm must catch it regardless).
+    v = validatePlanFixture(tmp, [
+      '| a | doc-updater | — | docs/a.md | 1 | sequence |',
+      '| b | doc-updater | — | docs/b.md | 1 | sequence |',
+      '| impl | tdd-guide | — | lib/z.js | 1 | sequence |',
+      '| review | code-reviewer | a,b,impl | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'refuse' && /parallel_allowband_collision/.test((v.errors||[]).join(';')),
+      '#587: independent antichain branches both touching docs/** must refuse at freeze (parallel_allowband_collision), got: ' + JSON.stringify(v));
+    // CONTROL: the allowband declared on exactly ONE leg of a parallel group is allowed (in-grammar).
+    v = validatePlanFixture(tmp, [
+      '| explore | code-explorer | — | — | 1 | sequence |',
+      '| a | tdd-guide | explore | api/a.js | 1 | fanout(impl) |',
+      '| b | tdd-guide | explore | cli/b.js, docs/b.md | 1 | fanout(impl) |',
+      '| review | code-reviewer | a,b | — | 1 | sequence |',
+      '| done | finalize | review | — | 1 | sequence |',
+    ], []);
+    assert(v.result === 'in-grammar',
+      '#587 CONTROL: an allowband surface on exactly ONE leg of a parallel group must freeze GREEN, got: ' + JSON.stringify(v));
+
     // #388 (FREEZE-ONLY / no-brick): a plan FROZEN by a pre-#388 validator carrying a dup id OR a
     // backslash token must still PASS --resume-check (revalidateForResume is untouched) — only
     // --freeze refuses. Mirrors the #381 freeze-only landmine.
@@ -10874,6 +10965,51 @@ function testAdaptiveVerdictCheck() {
     );
     assert(r.ok === false && /majority-refute/.test(r.reason || ''),
       'verifyVerdictBlock: fanout 2/3 refute is majority -> ok:false + majority-refute reason, got ' + JSON.stringify(r));
+
+    // #589: EVEN-WIDTH TIE. A 2-instance fan-out with verdicts [refuted, pass] is 1/2 refute. The
+    // pre-fix arithmetic `refutes*2 > n` = `2 > 2` = false → PASSED, outvoting a lone genuine
+    // refuter. Ties now break toward REFUTED (`refutes*2 >= n` = `2 >= 2` = true) → refute, matching
+    // the subsystem's refuted-if-uncertain burden inversion (a 1-1 split IS the uncertain case).
+    const evenNodes = [
+      '| impl | tdd-guide | — | lib/foo.js | 1 | sequence |',
+      '| sk1 | adversarial-verifier | impl | — | 1 | fanout(skeptics) |',
+      '| sk2 | adversarial-verifier | impl | — | 1 | fanout(skeptics) |',
+      '| done | finalize | sk1,sk2 | — | 1 | sequence |',
+    ];
+    const evenLedger = ['| impl | complete |', '| sk1 | complete |', '| sk2 | complete |', '| done | complete |'];
+    const evenGlob = (prefix) => prefix === 'adversarial-verifier-'
+      ? ['adversarial-verifier-sk1.md', 'adversarial-verifier-sk2.md']
+      : [];
+    r = planValidator.verifyVerdictBlock(
+      mkVerdictPlan(evenNodes, evenLedger),
+      {
+        readCache: (f) => {
+          if (f === 'adversarial-verifier-sk1.md') return 'verdict: fail\nfindings_blocking: 1\n';
+          if (f === 'adversarial-verifier-sk2.md') return 'verdict: pass\nfindings_blocking: 0\n';
+          return null;
+        },
+        globCache: evenGlob,
+        nodeId: 'sk1',
+      }
+    );
+    assert(r.ok === false && /majority-refute/.test(r.reason || ''),
+      '#589: fanout 1/2 refute (even tie) must break toward refuted -> ok:false + majority-refute reason, got ' + JSON.stringify(r));
+    // CONTROL: an even fan-out with NO refuters (0/2) still PASSES — the tie-break only fires at a
+    // genuine tie, not when the pass side is a strict majority.
+    r = planValidator.verifyVerdictBlock(
+      mkVerdictPlan(evenNodes, evenLedger),
+      {
+        readCache: (f) => {
+          if (f === 'adversarial-verifier-sk1.md') return 'verdict: pass\nfindings_blocking: 0\n';
+          if (f === 'adversarial-verifier-sk2.md') return 'verdict: pass\nfindings_blocking: 0\n';
+          return null;
+        },
+        globCache: evenGlob,
+        nodeId: 'sk1',
+      }
+    );
+    assert(r.ok === true,
+      '#589 CONTROL: even fanout 0/2 refute (pass majority) must still pass, got ' + JSON.stringify(r));
 
     // -------------------------------------------------------------------
     // (3) --verdict-check CLI via runNode on a temp .cache dir

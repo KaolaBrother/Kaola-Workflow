@@ -502,15 +502,24 @@ function disjointWriteSets(nodeWriteSets) {
     for (let j = i + 1; j < sets.length; j++) {
       const a = sets[i], b = sets[j];
       if (a.size === 0 || b.size === 0) continue; // read-only carve-out: PASS on empty
+      // #587: case-fold the CROSS-NODE exact-path + coarse-area comparison. normalizeRepoPath does
+      // NOT case-fold (a global fold would corrupt display/error strings and the case-exact per-node
+      // barrier), so the fold lives ONLY here at the cross-node compare. macOS/Windows are
+      // case-insensitive, so two parallel legs declaring `Src/x.js` vs `src/x.js` are the SAME
+      // physical file and would clobber; over-blocking on a case-sensitive Linux FS is the safe
+      // direction per the existing over-blocks hygiene philosophy. The reasoning strings keep the
+      // ORIGINAL-case path/area so the operator sees what they declared.
+      const bLower = new Map();
+      for (const p of b) bLower.set(p.toLowerCase(), p);
       for (const p of a) {
-        if (b.has(p)) return { verdict: 'red', kind: 'exact', reasoning: 'exact file path overlap at "' + p + '" between nodes ' + i + ' and ' + j };
+        if (bLower.has(p.toLowerCase())) return { verdict: 'red', kind: 'exact', reasoning: 'exact file path overlap at "' + p + '" between nodes ' + i + ' and ' + j };
       }
       const areasB = new Set();
-      for (const p of b) areasB.add(areaForPath(p));
+      for (const p of b) areasB.add(areaForPath(p).toLowerCase());
       let sharedHit = '';
       for (const p of a) {
         const area = areaForPath(p);
-        if (areasB.has(area)) {
+        if (areasB.has(area.toLowerCase())) {
           if (!SHARED_INFRA.has(area)) return { verdict: 'red', kind: 'coarse', reasoning: 'coarse-area overlap at "' + area + '" between nodes ' + i + ' and ' + j };
           if (!sharedHit) sharedHit = area;
         }

@@ -218,6 +218,24 @@ function isBarrierInvisible(p, project) {
   return /^kaola-workflow\/[^/]+\//.test(rel);
 }
 
+// #587: the barrier-INVISIBLE DOCS allowband surfaces — the CHANGELOG.md/README.md/docs/** subset of
+// isBarrierInvisible that the per-node barrier never flags AND git-merge silently both-applies across
+// legs. Deliberately EXCLUDES the `kaola-workflow/{project}/**` workflow-state band (per-node .cache
+// evidence legitimately differs per leg — folding it in would false-refuse every parallel plan). Used
+// ONLY by the freeze-time parallel-group disjointness proof to require these shared surfaces be
+// declared on exactly ONE leg of any parallel group. Pure (no fs, no project context needed).
+function isAllowbandDocsSurface(p) {
+  const rel = String(p || '').trim().replace(/^\.\//, '');
+  if (!rel) return false;
+  return rel === 'CHANGELOG.md' || rel === 'README.md' || /^docs\//.test(rel);
+}
+// Return the FIRST allowband docs surface a write set declares (for the operator-facing message), or
+// null. Accepts a Set or array of paths.
+function declaresAllowbandSurface(writeSet) {
+  for (const p of (writeSet || [])) if (isAllowbandDocsSurface(p)) return p;
+  return null;
+}
+
 // #547 (D-547-01): the files THIS repo's four chains READ + ASSERT ON inside the #424 narrow allowband —
 // i.e. prose that is barrier-INVISIBLE for attribution (#424) yet VERDICT-AFFECTING for validation (a
 // change to it can flip a chain verdict, so a fresh receipt must NOT be cited over it). Verified by a
@@ -873,7 +891,11 @@ function verifyVerdictBlock(content, opts) {
           reason: 'fanout adversarial-verifier: no per-instance .cache/adversarial-verifier-*.md found' };
       }
       const refutes = verdicts.filter(x => x === 'fail').length;
-      const majorityRefute = refutes * 2 > verdicts.length;
+      // #589: break ties toward REFUTED (require a strict majority to PASS, not to refute). An
+      // even-width fan-out with a 1-1 split (`[refuted, pass]`) is exactly the uncertain case and
+      // the subsystem's burden inversion is "refuted-if-uncertain", so `refutes*2 >= n` resolves the
+      // tie to refute. Odd width is UNCHANGED (2/3 still refutes at 4>=3; 1/3 still passes at 2<3).
+      const majorityRefute = refutes * 2 >= verdicts.length;
       return majorityRefute
         ? { ok: false, nodeId: node.id, role, verdict: 'fail', findings_blocking: null, found: true,
             reason: `fanout majority-refute: ${refutes}/${verdicts.length} skeptics refuted` }
@@ -1254,6 +1276,12 @@ function validatePlan(content, opts) {
       // barrier. Checked BEFORE the trailing-`/` check so a Windows-ism is reported as such.
       if (tok.includes('\\')) {
         errors.push(`node ${n.id} declared_write_set token "${tok}" contains a backslash (backslash_in_path) — declare POSIX in-repo file paths (a backslash never matches at the exact-path barrier)`);
+      } else if (/[*?[\]{}]/.test(tok)) {
+        // #587: a glob token (`*`, `?`, `[`, `{` and their closers) never matches at the exact-path
+        // barrier — `**/*.md` gets areaForPath '**' and froze GREEN-disjoint, then died late at
+        // runtime as write_set_overflow. Refuse at FREEZE, the authoring gate, like the sibling
+        // shape checks. Checked before the trailing-`/` / `..` arms so a glob is reported as such.
+        errors.push(`node ${n.id} declared_write_set token "${tok}" contains a glob metacharacter (glob_in_path) — declare exact file paths (a glob never matches at the exact-path barrier; expand it to the concrete files)`);
       } else if (tok.endsWith('/')) {
         errors.push(`node ${n.id} declared_write_set entry "${tok}" is directory-shaped — declare exact file paths (the barrier matches files exactly; a directory grant is dead at the per-node barrier)`);
       } else if (tok.split('/').indexOf('..') !== -1) {
@@ -1406,6 +1434,18 @@ function validatePlan(content, opts) {
       const dj = classifier.disjointWriteSets(members.map(m => m.writeSet));
       if (dj.verdict === 'red') errors.push(`fan-out group "${g}" write sets not pairwise disjoint (${dj.reasoning})`);
       if (dj.verdict === 'yellow') errors.push(`fan-out group "${g}" touches shared infra (${dj.reasoning}) — must serialize, not fan out`);
+      // #587: the CHANGELOG.md/README.md/docs/** allowband is barrier-INVISIBLE — the per-node
+      // barrier never flags these files, so two concurrent legs both touching them are invisible to
+      // BOTH the freeze proof (different exact paths / non-shared areas can look disjoint) AND the
+      // barrier, and git-merge silently both-applies disjoint-region edits. Require the allowband be
+      // declared on exactly ONE leg of a parallel group. (Same-file overlap is already RED above; this
+      // additionally catches DIFFERENT allowband surfaces, e.g. CHANGELOG.md on one leg + README.md on
+      // another.) Serial-run barrier invisibility is unchanged — this is freeze-time, parallel-only.
+      const allowbandLegs = members.filter(m => declaresAllowbandSurface(m.writeSet));
+      if (allowbandLegs.length >= 2) {
+        const surfaces = allowbandLegs.map(m => `${m.id}:"${declaresAllowbandSurface(m.writeSet)}"`).join(', ');
+        errors.push(`fan-out group "${g}" declares a barrier-invisible allowband surface on ${allowbandLegs.length} legs (${surfaces}) (parallel_allowband_collision) — CHANGELOG.md/README.md/docs/** are never flagged by the per-node barrier; declare shared docs/changelog writes on exactly one leg of a parallel group`);
+      }
     }
     // read-only fan-out: any width is in-grammar (empty write sets are trivially disjoint);
     // the executor concurrency-limits dispatch to FANOUT_CAP at runtime (#303).
@@ -1512,15 +1552,27 @@ function validatePlan(content, opts) {
         const A = writeBearing[i], B = writeBearing[j];
         if (groupKeyOf.has(A.id) && groupKeyOf.get(A.id) === groupKeyOf.get(B.id)) continue; // same declared group
         if (descOf.get(A.id).has(B.id) || descOf.get(B.id).has(A.id)) continue;              // not an antichain
+        // #587: barrier-invisible allowband collision — both legs declare a CHANGELOG.md/README.md/
+        // docs/** surface. The per-node barrier never flags these, so even INDEPENDENT branches (no
+        // shared ancestor) silently both-apply at the synthesis merge. Checked FIRST so a
+        // non-shared-ancestor pair (which the coarse arm below deliberately skips) is still caught.
+        const aAllow = declaresAllowbandSurface(A.writeSet);
+        const bAllow = declaresAllowbandSurface(B.writeSet);
+        if (aAllow && bAllow) {
+          errors.push(`concurrent siblings ${A.id} and ${B.id} both declare a barrier-invisible allowband surface ("${aAllow}", "${bAllow}") (parallel_allowband_collision) — CHANGELOG.md/README.md/docs/** are never flagged by the per-node barrier; declare shared docs/changelog writes on exactly one leg`);
+        }
         // EXACT-file overlap => RED/refuse for ANY antichain pair, REGARDLESS of a common ancestor
         // (v3.20.1): two unordered nodes writing the same exact file both land in the ready-set and
         // both write the shared worktree — a guaranteed clobber. There is no safe authoring of it
         // (the fix is a dep edge serializing them), so refusing is not a false refusal. This also
         // closes the #233-introduced regression where two same-label fan-out members on independent
         // branches (split into separate origin-scoped groups) lost the disjointness coverage the
-        // old merged-label group used to provide.
+        // old merged-label group used to provide. #587: the exact compare is case-folded so
+        // `Src/x.js` vs `src/x.js` (the SAME physical file on a case-insensitive FS) is caught.
         let exact = null;
-        for (const p of A.writeSet) if (B.writeSet.has(p)) { exact = p; break; }
+        const bLower = new Map();
+        for (const p of B.writeSet) bLower.set(p.toLowerCase(), p);
+        for (const p of A.writeSet) if (bLower.has(p.toLowerCase())) { exact = p; break; }
         if (exact) {
           errors.push(`concurrent siblings ${A.id} and ${B.id} both write "${exact}" (parallel non-fanout write overlap)`);
           continue;

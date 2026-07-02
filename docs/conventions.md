@@ -172,6 +172,39 @@ The adaptive plan-run command surfaces (×6: 3 Claude commands + 3 Codex SKILL p
 
 `.md` files in the allowband — `docs/**`, `CHANGELOG.md`, `README.md`, `kaola-workflow/{project}/**` — may be declared in a node's `declared_write_set` and pass the `--barrier-check` without requiring explicit declaration beyond the node's write set. `.md` files **outside** this allowband are production surfaces: `agents/*.md`, `commands/*.md`, `plugins/*/agents/*.toml`, and any other `.md` outside the four allowband roots must appear explicitly in the node's write set. The blanket `.md` exemption that existed before #424 is removed; a non-allowband `.md` write not in any node's declared set fails the barrier with `write_set_overflow`.
 
+## Freeze-time write-set hygiene and disjointness (#587)
+
+Three freeze-time authoring checks close blind spots in the write-set grammar and the
+cross-node / parallel-group disjointness proof:
+
+- **Glob-token refusal.** A declared write-set token containing a glob metacharacter (`* ? [ ] { }`)
+  refuses at freeze (`glob_in_path`), joining the existing directory-shaped / `..` / backslash
+  shape refusals. A glob never matches at the exact-path barrier — `**/*.md` used to freeze
+  GREEN-disjoint (its `areaForPath` degenerates to a bogus area like `**`) and then died late at
+  runtime as `write_set_overflow`; the fix is to expand the glob to the concrete files it stands
+  for.
+- **Cross-node case-fold.** The exact-path and coarse-area comparisons the freeze-time
+  disjointness proof runs across nodes — `classifier.disjointWriteSets` (declared
+  `fanout(<group>)` members) and the inferred antichain-sibling exact-clobber check (#232) — now
+  case-fold the path/area before comparing. Two parallel legs declaring `Src/x.js` and `src/x.js`
+  are the same physical file on a case-insensitive filesystem (macOS, Windows) and now refuse at
+  freeze instead of silently clobbering each other's write at runtime. The fold is
+  **unconditional** (no policy or consent flag gates it) and cross-node only — it leaves
+  `classifier.normalizeRepoPath` case-exact (a global fold would corrupt display/error strings and
+  break the case-exact per-node barrier match) and does not change the existing same-node sibling
+  `case_collision` check (#388).
+- **Parallel-group allowband rule.** The `.md` allowband (`docs/**`, `CHANGELOG.md`, `README.md`
+  — see "`.md` files as production surfaces" above) is barrier-invisible: the per-node barrier
+  never flags a write inside it, and `git merge` silently both-applies two legs' edits. Freeze now
+  requires that allowband be declared on **exactly one leg** of any parallel group — a declared
+  fan-out group or an inferred antichain-sibling pair — refusing with `parallel_allowband_collision`
+  when 2 or more legs each declare an allowband surface, even different ones (e.g. `CHANGELOG.md`
+  on one leg, `README.md` on another). The `kaola-workflow/{project}/**` workflow-state band is
+  deliberately excluded (per-node `.cache` evidence legitimately differs per leg). Serial runs are
+  unaffected — this is a parallel-group-only freeze check.
+
+See `docs/decisions/D-587-01.md`.
+
 ## Barrier and write-halt triage payload (#440)
 
 When a `write_set_overflow` barrier failure is raised — either at close time (`barrier_failed`) or via a `write-halt` escalation — the return envelope carries a structured `triage` payload: `{ class, offending paths, proposed_repair?, testDelta? }`. Three mechanical subtypes narrow `write_set_overflow`:
