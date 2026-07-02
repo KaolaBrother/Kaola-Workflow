@@ -312,14 +312,47 @@ const VERDICT_VOCABULARY = Object.freeze([VERDICT_PASS, VERDICT_FAIL]);
 // shared, byte-identical-×4 role vocabulary so next-action and adaptive-node classify gates identically.
 const GATE_VERDICT_ROLES = Object.freeze(['code-reviewer', 'security-reviewer', 'adversarial-verifier', MAIN_SESSION_GATE_ROLE]);
 
-// #439 (D-419 Part 4): the per-plan `## Meta` field `speculative_open_policy`. `off` (default,
-// permanent fallback) and `consent` are LEGAL at freeze; `auto` is DESIGNED-but-refused at freeze
-// (write-overlap auto-eligibility is deferred). The field is hash-covered (eligibility, not a runtime
-// cap — the deliberate asymmetry vs. max_concurrent). Activation also requires per-run
-// `open-ready --speculative-consent` (never persisted in the frozen plan).
-const SPECULATIVE_OPEN_POLICY_DEFAULT = 'off';
-const SPECULATIVE_OPEN_POLICY_LEGAL = Object.freeze(['off', 'consent']);
-const SPECULATIVE_OPEN_POLICY_REFUSED_AT_FREEZE = Object.freeze(['auto']);
+// #439 (D-419 Part 4): the per-plan `## Meta` field `speculative_open_policy`. All three tiers are LEGAL
+// at freeze: `off` (no speculation; the permanent serial fallback), `consent` (speculation gated on a
+// per-run `open-ready --speculative-consent`), and `auto` (speculation auto-granted under the structural
+// net — no per-run ceremony). `auto` is the FREEZE-TIME DEFAULT: a fresh freeze that omits the field
+// materializes an explicit `speculative_open_policy: auto` line into `## Meta` (see
+// materializeSpeculativePolicy). The field is hash-covered (eligibility, not a runtime cap — the
+// deliberate asymmetry vs. max_concurrent). The ABSENCE fallback is DECOUPLED from this default and stays
+// `off` (parseSpeculativePolicy), so an in-flight plan frozen before the flip resumes with exactly its
+// frozen posture — the flip applies at freeze, never retroactively. Nothing is refused at freeze anymore
+// (SPECULATIVE_OPEN_POLICY_REFUSED_AT_FREEZE is empty); an UNKNOWN value still refuses via the LEGAL
+// membership check.
+const SPECULATIVE_OPEN_POLICY_DEFAULT = 'auto';
+const SPECULATIVE_OPEN_POLICY_LEGAL = Object.freeze(['off', 'consent', 'auto']);
+const SPECULATIVE_OPEN_POLICY_REFUSED_AT_FREEZE = Object.freeze([]);
+
+// Freeze-time materialization of the resolved speculative_open_policy into `## Meta`. hasSpeculative-
+// PolicyField detects an EXPLICIT `speculative_open_policy:` line in the ## Meta section (decoy-safe via
+// locateSection — the SAME Meta-scoping the validator's parseSpeculativePolicy uses). materializeSpec-
+// ulativePolicy injects a single `speculative_open_policy: <policy>` line into ## Meta when the field is
+// ABSENT so a fresh freeze is self-describing + hash-covered (computePlanHash normalizes the whole ## Meta
+// body); it returns content UNCHANGED when the field is already present (author's explicit choice is
+// preserved — never re-materialized) or when there is no ## Meta section to inject into. PURE string ops
+// (no fs, no forge CLI, no sibling require) — qualifies for this ×4 byte-identical drift anchor.
+function hasSpeculativePolicyField(content) {
+  const text = String(content == null ? '' : content);
+  const { start, next } = locateSection(text, 'Meta');
+  if (start < 0) return false;
+  const body = next < 0 ? text.slice(start) : text.slice(start, next);
+  return /^speculative_open_policy:[ \t]*\S/m.test(body);
+}
+function materializeSpeculativePolicy(content, policy) {
+  const text = String(content == null ? '' : content);
+  if (hasSpeculativePolicyField(text)) return text;
+  const { start } = locateSection(text, 'Meta');
+  if (start < 0) return text;                         // no ## Meta section — nothing to materialize into
+  const line = 'speculative_open_policy: ' + policy;
+  const headingStart = start + 1;                     // first char of the '## Meta' heading line
+  const nl = text.indexOf('\n', headingStart);
+  if (nl < 0) return text.replace(/\s*$/, '') + '\n' + line + '\n';  // degenerate: heading at EOF
+  return text.slice(0, nl + 1) + line + '\n' + text.slice(nl + 1);
+}
 
 // #463 (D-419 write-overlap): the per-plan `## Meta` field `write_overlap_policy` — the WRITE-side knob,
 // DISTINCT from #439's read-side speculative_open_policy (writes clobber where reads do not, so they are
@@ -1020,6 +1053,8 @@ module.exports = {
   SPECULATIVE_OPEN_POLICY_DEFAULT,
   SPECULATIVE_OPEN_POLICY_LEGAL,
   SPECULATIVE_OPEN_POLICY_REFUSED_AT_FREEZE,
+  hasSpeculativePolicyField,
+  materializeSpeculativePolicy,
   WRITE_OVERLAP_POLICY_DEFAULT,
   WRITE_OVERLAP_POLICY_LEGAL,
   WRITE_OVERLAP_POLICY_REFUSED_AT_FREEZE,

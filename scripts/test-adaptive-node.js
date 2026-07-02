@@ -8252,6 +8252,53 @@ function rtHarness(initialFiles, opts) {
       'T439-10: after the guard held docs, the gate verdict:fail surfaces speculative_review_required naming docs, got ' + JSON.stringify(r.speculative_review_required));
     rm439(repoRoot);
   }
+
+  // -------------------------------------------------------------------------
+  // #597 — the `auto` tier + default flip (READ-side pieces; the WRITE-side AC4/AC2/O1 tests live in the
+  // #596 block). At policy:auto, open-ready acts on the speculative READ set with NO --speculative-consent
+  // (the flag is a no-op); a discard records role/gate telemetry.
+  // -------------------------------------------------------------------------
+
+  // T597-1 (AC2 — auto opens speculatively WITHOUT the flag): policy:auto + gate open → open-ready opens
+  // the read node docs with NO --speculative-consent (mirror of T439-1 but flagless).
+  {
+    const { repoRoot, cacheDir } = make439Repo('auto');
+    openGate439(repoRoot, cacheDir);
+    const r = run439(repoRoot, ['open-ready', '--project', 'issue-439', '--json']); // NO --speculative-consent
+    assert(r.result === 'ok' && (r.opened || []).some(n => n.id === 'docs'),
+      'T597-1 (AC2): open-ready at policy:auto opens docs with NO consent flag, got ' + JSON.stringify((r.opened || []).map(n => n.id)));
+    const rs = readRS439(cacheDir);
+    const docsEntry = rs && (rs.nodes || []).find(n => n.id === 'docs');
+    assert(docsEntry && docsEntry.speculative === true, 'T597-1 (AC2): docs running-set entry is marked speculative:true at auto');
+    rm439(repoRoot);
+  }
+
+  // T597-2 (AC2 — the flag is a NO-OP at auto, never an error): the SAME policy:auto plan, but the run
+  // ALSO passes --speculative-consent — it must be accepted (back-compat) and still open docs.
+  {
+    const { repoRoot, cacheDir } = make439Repo('auto');
+    openGate439(repoRoot, cacheDir);
+    const r = run439(repoRoot, ['open-ready', '--project', 'issue-439', '--speculative-consent', '--json']);
+    assert(r.result === 'ok' && (r.opened || []).some(n => n.id === 'docs'),
+      'T597-2 (AC2): --speculative-consent at auto is accepted as a no-op and still opens docs, got ' + JSON.stringify(r));
+    rm439(repoRoot);
+  }
+
+  // T597-4 (AC5 — discard telemetry): a speculative discard at auto records node id / role / gate in the
+  // durable provenance log, so the economics of `auto` are observable per run (no silent cost).
+  {
+    const { repoRoot, cacheDir } = make439Repo('auto');
+    openGate439(repoRoot, cacheDir);
+    run439(repoRoot, ['open-ready', '--project', 'issue-439', '--json']); // opens docs speculatively (auto)
+    const r = run439(repoRoot, ['discard-speculative', '--project', 'issue-439', '--node-id', 'docs', '--json']);
+    assert(r.result === 'ok', 'T597-4 (AC5): discard-speculative ok, got ' + JSON.stringify(r));
+    const logPath = path.join(cacheDir, 'provenance-log.jsonl');
+    const lines = fs.readFileSync(logPath, 'utf8').trim().split('\n').map(l => { try { return JSON.parse(l); } catch (_) { return {}; } });
+    const discardEntry = lines.reverse().find(e => e.event === 'discard-speculative' && e.nodeId === 'docs');
+    assert(discardEntry && discardEntry.role === 'doc-updater' && discardEntry.gate === 'gate',
+      'T597-4 (AC5): the discard provenance entry records role + gate, got ' + JSON.stringify(discardEntry));
+    rm439(repoRoot);
+  }
 }
 
 // ===========================================================================
@@ -8277,7 +8324,8 @@ function rtHarness(initialFiles, opts) {
   const PROJECT_596 = 'issue-596';
 
   // writerA(write) -> gate1(reviewer, the bet) -> writerW(write) -> gate2(reviewer, writerW's own) -> sink.
-  function make596Repo() {
+  // policy defaults to 'consent' (existing callers unchanged); pass 'auto' for the #597 default-tier tests.
+  function make596Repo(policy) {
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-596-'));
     const projDir = path.join(repoRoot, 'kaola-workflow', PROJECT_596);
     const cacheDir = path.join(projDir, '.cache');
@@ -8285,7 +8333,7 @@ function rtHarness(initialFiles, opts) {
     const planPath = path.join(projDir, 'workflow-plan.md');
     const plan = [
       '# Workflow Plan — issue-596', '',
-      '## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md', 'speculative_open_policy: consent', '',
+      '## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md', 'speculative_open_policy: ' + (policy || 'consent'), '',
       '## Nodes', '',
       '| id | role | depends_on | declared_write_set | cardinality | shape |',
       '| --- | --- | --- | --- | --- | --- |',
@@ -8695,6 +8743,69 @@ function rtHarness(initialFiles, opts) {
     );
     assert(wellFormed.chosen.length === 1 && wellFormed.chosen[0].id === 'writerW1' && wellFormed.excluded.length === 0,
       'T599-1c: a well-formed non-ok result with an EMPTY overlapping array keeps the existing per-pair posture (nothing excluded), got ' + JSON.stringify(wellFormed));
+  }
+
+  // =========================================================================
+  // #597 — the `auto` tier + default flip (WRITE-side pieces; the READ-side AC2/AC5 tests live in the
+  // #439 block where the read fixtures are). open-ready acts on the speculative set at `auto`; every #596
+  // safety condition holds identically at auto; the O1 relabel separates a crash/garbled non-open from a
+  // genuine live-writer overlap.
+  // =========================================================================
+
+  // T597-3 (AC4 — a #596 safety condition holds IDENTICALLY at auto): the leg-capability precondition
+  // (KAOLA_PARALLEL_WRITES=0) excludes the speculative WRITE member at auto EXACTLY as at consent (T596-6)
+  // — auto relaxes the ceremony, never a safety condition. Asserted at BOTH policies for parity.
+  {
+    for (const policy of ['auto', 'consent']) {
+      const { repoRoot, planPath, project } = make596Repo(policy);
+      openGate1_596(repoRoot);
+      const flag = policy === 'consent' ? ['--speculative-consent'] : [];
+      const r = run596(repoRoot, ['open-ready', '--project', project, ...flag, '--json'], { KAOLA_PARALLEL_WRITES: '0' });
+      assert(r.result === 'ok' && (r.opened || []).length === 0,
+        'T597-3 (AC4, ' + policy + '): no write opens without leg capability, got ' + JSON.stringify(r.opened));
+      assert(r.speculativeWriteExcluded && r.speculativeWriteExcluded.reason === 'no_leg_capability' && (r.speculativeWriteExcluded.nodeIds || []).includes('writerW'),
+        'T597-3 (AC4, ' + policy + '): speculativeWriteExcluded names no_leg_capability — identical at auto and consent, got ' + JSON.stringify(r.speculativeWriteExcluded));
+      assert(ledgerStatus596(planPath, 'writerW') === 'pending', 'T597-3 (AC4, ' + policy + '): writerW ledger row untouched');
+      rm596(repoRoot);
+    }
+  }
+
+  // T597-3b (AC2 — WRITE speculation at auto opens WITH NO flag): the SAME #596 write fixture at policy
+  // auto opens writerW in a provisioned leg with NO --speculative-consent (mirror of T596-1 flagless).
+  {
+    const { repoRoot, cacheDir, project } = make596Repo('auto');
+    openGate1_596(repoRoot);
+    const r = run596(repoRoot, ['open-ready', '--project', project, '--json']); // NO --speculative-consent
+    assert(r.result === 'ok' && (r.opened || []).some(n => n.id === 'writerW'),
+      'T597-3b (AC2 write): open-ready at policy:auto opens writerW with NO consent flag, got ' + JSON.stringify((r.opened || []).map(n => n.id)));
+    const rs = readRS596(cacheDir);
+    const wEntry = rs && (rs.nodes || []).find(n => n.id === 'writerW');
+    assert(wEntry && wEntry.speculative === true && wEntry.kind === 'write', 'T597-3b (AC2 write): writerW entry is speculative:true kind:write at auto');
+    rm596(repoRoot);
+  }
+
+  // T597-5 (O1 — the fail-closed exclude-all branch gets a DISTINCT reason): selectSpeculativeWriteGroup
+  // labels a crash/garbled non-open `parallel_safe_indeterminate` (the disjointness verdict is unknown),
+  // while a genuine per-pair overlap keeps `overlaps_live_writer`. Direct unit test via the injectable
+  // shell seam (mirrors T599-1).
+  {
+    const { planPath } = make596PairRepo('shared.js', 'shared.js');
+    const twoCand = [{ id: 'writerW1', declared_write_set: 'shared.js' }];
+    const liveWriter = [{ id: 'writerW2', kind: 'write' }];
+
+    const crashed = node596.selectSpeculativeWriteGroup(twoCand, liveWriter, planPath, () => ({ exitCode: 1 }), false, null);
+    assert(crashed.excluded.length > 0 && crashed.excludedReason === 'parallel_safe_indeterminate',
+      'T597-5 (O1): a validator crash yields excludedReason parallel_safe_indeterminate, got ' + JSON.stringify(crashed));
+
+    const garbled = node596.selectSpeculativeWriteGroup(twoCand, liveWriter, planPath, () => ({ exitCode: 0 }), false, null);
+    assert(garbled.excludedReason === 'parallel_safe_indeterminate',
+      'T597-5 (O1): a garbled/unparseable validator result is also parallel_safe_indeterminate, got ' + JSON.stringify(garbled));
+
+    // Genuine per-pair overlap (well-formed non-ok naming the pair) keeps the overlaps_live_writer reason.
+    const overlapShell = () => ({ exitCode: 1, result: 'refuse', overlapping: [{ a: 'writerW1', b: 'writerW2' }] });
+    const overlap = node596.selectSpeculativeWriteGroup(twoCand, liveWriter, planPath, overlapShell, false, null);
+    assert(overlap.excluded.join(',') === 'writerW1' && overlap.excludedReason === 'overlaps_live_writer',
+      'T597-5 (O1): a genuine per-pair overlap keeps overlaps_live_writer, got ' + JSON.stringify(overlap));
   }
 }
 

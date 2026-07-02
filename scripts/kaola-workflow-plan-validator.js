@@ -59,7 +59,7 @@ try { editionSync = require('./edition-sync'); } catch (_) { /* forge/codex/user
 const OPERATOR_HINT_REGISTRY = {
   nodes_unparseable: () => 'Plan has no parseable ## Nodes table. Check the Markdown table syntax and re-freeze.',
   no_unique_sink: () => 'Plan has no unique finalize sink node. Add exactly one `finalize` role node and re-freeze.',
-  speculative_policy_unsupported: (ctx) => `speculative_open_policy: "${ctx.value || '(value)'}" is not supported at freeze. Use off (default) or consent — auto (speculative WRITE overlap) is designed-but-deferred. Edit ## Meta and re-freeze.`,
+  speculative_policy_unsupported: (ctx) => `speculative_open_policy: "${ctx.value || '(value)'}" is not a legal tier. Use off, consent, or auto (the freeze-time default). Edit ## Meta and re-freeze.`,
   write_overlap_policy_unsupported: (ctx) => `write_overlap_policy: "${ctx.value || '(value)'}" is not supported at freeze. Use off (default), disjoint, or coarse — exact (exact-file optimism) is designed-but-deferred. Edit ## Meta and re-freeze.`,
   gate_unsatisfied: (ctx) => `Gate check failed: ${ctx.reason || 'a required reviewer did not complete'}. Ensure all code nodes are post-dominated by a completed reviewer.`,
   verdict_not_pass: (ctx) => `Verdict check failed for node ${ctx.nodeId || '(unknown)'}. Check .cache/${ctx.nodeId || '<node-id>'}.md for verdict: pass and findings_blocking: 0.`,
@@ -374,13 +374,18 @@ function parseGoal(content) {
   return { goal: m ? m[1].trim() : null };
 }
 // #439 (D-419 Part 4): the per-plan `speculative_open_policy` lives in `## Meta` as a single
-// `speculative_open_policy: off | consent` line — hash-covered for free (computePlanHash normalizes
-// the WHOLE `## Meta` body), Meta-SCOPED read (decoy-immune; same scoping as parseGoal/parseLabels).
-// Absent => default 'off' (the permanent fallback). `auto` is refused at freeze (validatePlan).
+// `speculative_open_policy: off | consent | auto` line — hash-covered for free (computePlanHash
+// normalizes the WHOLE `## Meta` body), Meta-SCOPED read (decoy-immune; same scoping as parseGoal/
+// parseLabels). ABSENT => 'off', a FIXED fallback DECOUPLED from SPECULATIVE_OPEN_POLICY_DEFAULT (now
+// 'auto'): the default flip applies only at FREEZE (the freeze transaction materializes the resolved
+// default into ## Meta — materializeSpeculativePolicy), never RETROACTIVELY to an in-flight plan frozen
+// before the flip with no field. A naive `return DEFAULT` would silently flip such a legacy plan to
+// 'auto' on resume; the fixed 'off' keeps its frozen posture. All three tiers are accepted at freeze;
+// an UNKNOWN value refuses (validatePlan).
 function parseSpeculativePolicy(content) {
   const meta = classifier.sectionBody(content, 'Meta');
   const m = String(meta || '').match(/^speculative_open_policy:[ \t]*(\S+)[ \t]*$/m);
-  return m ? m[1].trim() : schema.SPECULATIVE_OPEN_POLICY_DEFAULT;
+  return m ? m[1].trim() : 'off';
 }
 // #463 (D-419 write-overlap): the per-plan `write_overlap_policy` lives in `## Meta` as a single
 // `write_overlap_policy: off | disjoint | coarse` line — hash-covered + Meta-scoped (same discipline as
@@ -1178,12 +1183,13 @@ function validatePlan(content, opts) {
   // plan_hash does not cover) could override the real labels and silently drop the G2 gate,
   // undetectable to --resume-check. Reader and hash now agree on where labels live.
   const labels = parseLabels(classifier.sectionBody(content, 'Meta'));
-  // #439 (D-419 Part 4): speculative_open_policy is off|consent (default off). `auto`
-  // (speculative WRITE overlap auto-eligibility) is DESIGNED-but-refused at freeze; any
-  // other value is out of grammar. Checked before the graph algorithms (cheap Meta read).
+  // #439 (D-419 Part 4): speculative_open_policy is off|consent|auto (`auto` = the freeze-time default).
+  // All three tiers freeze green; the membership check now narrows to UNKNOWN values only — an
+  // out-of-grammar token still refuses speculative_policy_unsupported. Cheap Meta read, before the graph
+  // algorithms.
   const specPolicy = parseSpeculativePolicy(content);
   if (!schema.SPECULATIVE_OPEN_POLICY_LEGAL.includes(specPolicy)) {
-    return { result: 'refuse', reason: 'speculative_policy_unsupported', operator_hint: getOperatorHint('speculative_policy_unsupported', { value: specPolicy }), errors: ['speculative_open_policy: "' + specPolicy + '" is not supported at freeze (legal: ' + schema.SPECULATIVE_OPEN_POLICY_LEGAL.join('|') + '; auto is deferred with speculative write-overlap)'], planHash: computePlanHash(content) };
+    return { result: 'refuse', reason: 'speculative_policy_unsupported', operator_hint: getOperatorHint('speculative_policy_unsupported', { value: specPolicy }), errors: ['speculative_open_policy: "' + specPolicy + '" is not a legal tier (legal: ' + schema.SPECULATIVE_OPEN_POLICY_LEGAL.join('|') + ')'], planHash: computePlanHash(content) };
   }
   // #463 (D-419 write-overlap): write_overlap_policy is off|disjoint|coarse (default off). `exact`
   // (exact-file optimism) is DESIGNED-but-refused at freeze; any other value is out of grammar. Distinct

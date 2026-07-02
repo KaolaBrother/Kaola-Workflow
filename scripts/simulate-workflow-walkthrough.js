@@ -1801,6 +1801,28 @@ function testAdaptiveValidatorGovernance() {
     assert(v.result === 'refuse' && /finalize sink and must not declare a model/.test((v.errors||[]).join(';')),
       '#390(c): the finalize sink carrying a model must refuse at freeze, got: ' + JSON.stringify(v));
 
+    // #597: speculative_open_policy tier acceptance at freeze. off / consent / auto (the new default
+    // tier) ALL freeze green, and an ABSENT field is back-compat (freezes green, resumes off); an
+    // UNKNOWN value STILL refuses with the typed speculative_policy_unsupported reason (AC6 — the
+    // LEGAL-membership check narrows to unknown-only, it does not vanish).
+    const vSpec = (policyLine) => {
+      const pth = path.join(tmp, 'plan-spec.md');
+      fs.writeFileSync(pth, ['# Plan', '', '## Meta', 'labels: area:scripts', ...(policyLine ? [policyLine] : []), '', '## Nodes', '',
+        '| id | role | depends_on | declared_write_set | cardinality | shape |',
+        '|---|---|---|---|---|---|',
+        '| impl | tdd-guide | — | lib/foo.js | 1 | sequence |',
+        '| review | code-reviewer | impl | — | 1 | sequence |',
+        '| done | finalize | review | — | 1 | sequence |', ''].join('\n'));
+      return JSON.parse(runNode(planValidatorScript, [pth, '--json'], tmp).stdout);
+    };
+    for (const pol of ['speculative_open_policy: off', 'speculative_open_policy: consent', 'speculative_open_policy: auto', null]) {
+      const vv = vSpec(pol);
+      assert(vv.result === 'in-grammar', '#597: speculative_open_policy ' + (pol || 'absent') + ' must freeze green, got: ' + JSON.stringify(vv));
+    }
+    const vBogus = vSpec('speculative_open_policy: bogus');
+    assert(vBogus.result === 'refuse' && vBogus.reason === 'speculative_policy_unsupported',
+      '#597 (AC6): an unknown speculative_open_policy value refuses speculative_policy_unsupported, got: ' + JSON.stringify(vBogus));
+
     // #388: freeze-wall round 2 — residual write-set shapes that froze in-grammar yet die at the
     // exact-path barrier. Each refused at the AUTHORING gate (freeze), never deferred to a halt.
 
@@ -11908,6 +11930,11 @@ function testAdaptiveHandoffInGrammarReady() {
     assert(/<!-- plan_hash: [0-9a-f]{64} -->/.test(frozenPlan),
       'plan must contain <!-- plan_hash: --> after handoff');
 
+    // #597: a FRESH handoff freeze that omits speculative_open_policy MATERIALIZES the resolved default
+    // (auto) into ## Meta — the frozen plan is self-describing + hash-covered (resume-check still passes).
+    assert(/^speculative_open_policy:[ \t]*auto[ \t]*$/m.test(frozenPlan),
+      'handoff must materialize speculative_open_policy: auto into the frozen plan (self-describing)');
+
     // Node1 ledger row must still be pending (handoff no longer opens it — adaptive-node.js does).
     assert(/\|\s*explore\s*\|\s*pending\s*\|/.test(frozenPlan),
       'explore ledger row must remain pending after handoff (adaptive-node.js opens it)');
@@ -12148,6 +12175,7 @@ function testAdaptiveHandoffIdempotentReRun() {
 function testAdaptiveHandoffFreezeChainTwoSpawns() {
   const handoff = require(path.join(repoRoot, 'scripts', 'kaola-workflow-adaptive-handoff.js'));
   const planValidator = require(planValidatorScript);
+  const schema = require(path.join(repoRoot, 'scripts', 'kaola-workflow-adaptive-schema.js'));
   const tmp = adaptiveTmp('handoff-2spawn');
   try {
     const projectName = 'issue-408-2spawn';
@@ -12166,6 +12194,11 @@ function testAdaptiveHandoffFreezeChainTwoSpawns() {
     plantHandoffState(projectDir, projectName);
     const statePath = path.join(projectDir, 'workflow-state.md');
     const realHash = planValidator.computePlanHash(planText);
+    // #597: this fresh plan omits speculative_open_policy, so the handoff MATERIALIZES the default (auto)
+    // into ## Meta between SPAWN 1 and SPAWN 2 and hands SPAWN 2 the RECOMPUTED hash over the materialized
+    // content — the freeze ack the mock must accept is that materialized hash, not the original.
+    const materializedHash = planValidator.computePlanHash(
+      schema.materializeSpeculativePolicy(planText, schema.SPECULATIVE_OPEN_POLICY_DEFAULT));
 
     // Count ONLY validator spawns (by the validator basename); other seams (task-mirror, roadmap,
     // git add, mirror-project) are mocked to harmless successes so the chain reaches ready_to_run.
@@ -12178,11 +12211,12 @@ function testAdaptiveHandoffFreezeChainTwoSpawns() {
           return { result: 'in-grammar', decision: 'auto-run', risk: { sensitivity: false, blastRadius: false, uncertain: false, reasons: [] }, planHash: realHash, frozen: false, governance: { decision: 'auto-run', risk: {} }, exitCode: 0 };
         }
         if (scriptArgs.includes('--freeze')) {
-          // assert the ack hash matches what --freeze-checked returned (governance not stale).
+          // assert the ack hash matches the MATERIALIZED plan hash (#597: the handoff recomputes it after
+          // injecting speculative_open_policy: auto; governance is not stale when the ack is that hash).
           const ai = scriptArgs.indexOf('--governance-ack');
           const ack = ai >= 0 ? scriptArgs[ai + 1] : null;
-          if (ack !== realHash) return { result: 'refuse', reason: 'governance_ack_stale', frozen: false, errors: ['stale'], exitCode: 1 };
-          return { result: 'in-grammar', decision: 'auto-run', planHash: realHash, frozen: true, risk: {}, resumeOk: true, exitCode: 0 };
+          if (ack !== materializedHash) return { result: 'refuse', reason: 'governance_ack_stale', frozen: false, errors: ['stale'], exitCode: 1 };
+          return { result: 'in-grammar', decision: 'auto-run', planHash: materializedHash, frozen: true, risk: {}, resumeOk: true, exitCode: 0 };
         }
         // ANY standalone --resume-check spawn would be the un-fused legacy 3rd spawn → fail.
         return { ok: false, exitCode: 1, _unexpected: scriptArgs.join(' ') };
@@ -12207,8 +12241,8 @@ function testAdaptiveHandoffFreezeChainTwoSpawns() {
     assert(validatorCalls[1].includes('--freeze') && validatorCalls[1].includes('--governance-ack'),
       '#408: SPAWN 2 must be --freeze --governance-ack (write + folded resume-check), got: ' + JSON.stringify(validatorCalls[1]));
     const ackArg = validatorCalls[1][validatorCalls[1].indexOf('--governance-ack') + 1];
-    assert(ackArg === realHash,
-      '#408: SPAWN 2 must pass back the planHash from SPAWN 1 as the governance ack, got ' + ackArg);
+    assert(ackArg === materializedHash,
+      '#597: SPAWN 2 must pass the RECOMPUTED hash over the materialized plan as the governance ack, got ' + ackArg);
     assert(!validatorCalls.some(c => c.includes('--resume-check')),
       '#408: NO standalone --resume-check spawn (folded into the freeze emission), got: ' + JSON.stringify(validatorCalls));
     assert(result.checklist.resume_check_ok === true,

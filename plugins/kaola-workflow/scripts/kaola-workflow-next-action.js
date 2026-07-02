@@ -207,14 +207,16 @@ function computeNextAction(content, opts) {
   // unsatisfied direct dep == that gate" implies the full unsatisfied closure is exactly the gate.
   // Descriptor shape mirrors readyPending, plus `speculativeGate:<gate-id>`.
   //
-  // EMITTED ONLY WHEN the plan's speculative_open_policy authorizes it (`consent`). At the default `off`
-  // the `speculativePending` key is OMITTED ENTIRELY, so next-action's output is byte-identical to
-  // pre-#439 (the flag-off invariant) and the open-next gate_not_complete branch — which keys on this
-  // set — never fires off-policy. The per-run consent flag is still additionally required to ACT on it
-  // (open-ready --speculative-consent). The eligibility rule itself stays mechanical; only its emission
-  // is policy-keyed, so a non-speculative plan sees zero behavioral or output-shape change.
+  // EMITTED WHEN the plan's speculative_open_policy authorizes speculation — `auto` (the default) OR
+  // `consent`. At `off` the `speculativePending` key is OMITTED ENTIRELY, so next-action's output stays
+  // byte-identical to the off-policy shape (the flag-off invariant) and the open-next gate_not_complete
+  // branch — which keys on this set — never fires off-policy. At `consent` the per-run flag is still
+  // additionally required to ACT on the set (open-ready --speculative-consent); at `auto` open-ready acts
+  // with no flag. The eligibility rule itself stays mechanical; only its emission is policy-keyed, so an
+  // off-policy plan sees zero behavioral or output-shape change.
   let speculativePending;
-  if (parseSpeculativePolicy(content) === 'consent') {
+  const specPolicy = parseSpeculativePolicy(content);
+  if (specPolicy === 'auto' || specPolicy === 'consent') {
     // #596: lift the read-only exclusion — a WRITE-bearing node is ALSO speculative-eligible, PROVIDED
     // its declared set is well-formed enough for the RUNTIME disjointness re-check (open-ready
     // --speculative-consent, the validator's --parallel-safe path) to be authoritative: every entry is
@@ -264,7 +266,7 @@ function computeNextAction(content, opts) {
     allDone,
     readyPending,
     active,
-    // #439: present ONLY at speculative_open_policy:consent (omitted at off ⇒ byte-identical pre-#439).
+    // #439/#597: present at speculative_open_policy:consent AND auto (omitted at off ⇒ byte-identical pre-#439).
     ...(speculativePending ? { speculativePending } : {}),
   };
 }

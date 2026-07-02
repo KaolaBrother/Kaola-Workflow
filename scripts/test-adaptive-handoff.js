@@ -1248,6 +1248,84 @@ function runMirrorHandoffCase(mirrorResponse) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// T597 (AC1): freeze-time speculative_open_policy materialization. A FRESH freeze that OMITS the field
+// materializes `speculative_open_policy: auto` into ## Meta (self-describing + hash-covered — the
+// recomputed hash is handed to SPAWN 2 as the governance-ack). An EXPLICIT field is preserved (never
+// re-materialized); an already-frozen plan is left untouched (no retroactive posture flip).
+// ---------------------------------------------------------------------------
+{
+  const { computePlanHash } = require('./kaola-workflow-plan-validator');
+  const schemaMod = require('./kaola-workflow-adaptive-schema');
+  const PLAN_KEY = '/fake/kaola-workflow/test-project/workflow-plan.md';
+
+  function runMaterializeCase(planContent) {
+    const stateContent = makeStateContent({ issueNumber: null });
+    const writtenFiles = {};
+    const freezeAcks = [];
+    let onDisk = planContent; // readFile reflects the materialization write, mirroring the real seam
+    const baseStub = makeShellStub({
+      'kaola-workflow-plan-validator.js:--json': { exitCode: 0, result: 'in-grammar', decision: 'auto-run', planHash: PLAN_HASH_64, risk: { reasons: [] } },
+      'kaola-workflow-plan-validator.js:--freeze': { exitCode: 0, result: 'in-grammar', decision: 'auto-run', planHash: PLAN_HASH_64, frozen: true, resumeOk: true, risk: { reasons: [] } },
+      'kaola-workflow-roadmap.js:init-issue': { exitCode: 0, created: true },
+      'git:add': { exitCode: 0 },
+      'kaola-workflow-adaptive-node.js': { exitCode: 0, status: 'mirrored' },
+    });
+    const shell = (scriptPath, args) => {
+      if (String(scriptPath).endsWith('kaola-workflow-plan-validator.js') && args.includes('--freeze') && args.includes('--governance-ack')) {
+        freezeAcks.push(args[args.indexOf('--governance-ack') + 1]);
+      }
+      return baseStub(scriptPath, args);
+    };
+    const result = runHandoff({
+      planPath: PLAN_KEY,
+      statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+      project: 'test-project', json: true, shell,
+      computeNextAction: require('./kaola-workflow-next-action').computeNextAction,
+      resolveModel: () => 'sonnet',
+      readFile: (fpath) => {
+        if (fpath.endsWith('workflow-plan.md')) return onDisk;
+        if (fpath.endsWith('workflow-state.md')) return stateContent;
+        return '';
+      },
+      writeFile: (fpath, content) => { writtenFiles[fpath] = content; if (fpath.endsWith('workflow-plan.md')) onDisk = content; },
+      stateMtime: undefined,
+    });
+    return { result, writtenFiles, freezeAcks };
+  }
+
+  // (a) fresh + field ABSENT → materialize `speculative_open_policy: auto`, hash-covered.
+  {
+    const plan = makeUnfrozenPlan('auto-run'); // ## Meta present, NO speculative_open_policy
+    const { result, writtenFiles, freezeAcks } = runMaterializeCase(plan);
+    assert(result.handoff_status === 'ready_to_run', 'T597-AC1a: still ready_to_run after materialization, got ' + JSON.stringify(result.handoff_status));
+    const written = writtenFiles[PLAN_KEY];
+    assert(typeof written === 'string' && /^speculative_open_policy:[ \t]*auto[ \t]*$/m.test(written),
+      'T597-AC1a: a fresh freeze materializes speculative_open_policy: auto into the plan, got ' + JSON.stringify(written));
+    const expectMaterialized = schemaMod.materializeSpeculativePolicy(plan, 'auto');
+    assert(written === expectMaterialized, 'T597-AC1a: the written plan equals the materialized content');
+    assert(freezeAcks.length === 1 && freezeAcks[0] === computePlanHash(expectMaterialized),
+      'T597-AC1a: SPAWN 2 governance-ack is the RECOMPUTED hash over the materialized plan (hash-covered), got ' + JSON.stringify(freezeAcks));
+  }
+
+  // (b) fresh + field EXPLICIT (consent) → preserved, NEVER re-materialized; ack is the SPAWN-1 hash.
+  {
+    const plan = makeUnfrozenPlan('auto-run').replace('labels: area:scripts', 'labels: area:scripts\nspeculative_open_policy: consent');
+    const { result, writtenFiles, freezeAcks } = runMaterializeCase(plan);
+    assert(result.handoff_status === 'ready_to_run', 'T597-AC1b: ready_to_run with an explicit field');
+    assert(writtenFiles[PLAN_KEY] === undefined, 'T597-AC1b: an explicit speculative_open_policy is never re-materialized (no plan write), got ' + JSON.stringify(writtenFiles[PLAN_KEY]));
+    assert(freezeAcks.length === 1 && freezeAcks[0] === PLAN_HASH_64, 'T597-AC1b: SPAWN 2 ack is the unchanged SPAWN-1 hash when nothing is materialized');
+  }
+
+  // (c) ALREADY-FROZEN plan + field ABSENT → left untouched (no retroactive flip to auto).
+  {
+    const frozen = '<!-- plan_hash: ' + PLAN_HASH_64 + ' -->\n' + makeUnfrozenPlan('auto-run');
+    const { result, writtenFiles } = runMaterializeCase(frozen);
+    assert(result.handoff_status === 'ready_to_run', 'T597-AC1c: ready_to_run on a re-run of a frozen plan');
+    assert(writtenFiles[PLAN_KEY] === undefined, 'T597-AC1c: an already-frozen plan with an absent field is NOT materialized (no retroactive flip), got ' + JSON.stringify(writtenFiles[PLAN_KEY]));
+  }
+}
+
 // Summary
 // ---------------------------------------------------------------------------
 if (failed > 0) {

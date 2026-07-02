@@ -353,13 +353,39 @@ function runHandoff(opts) {
   const risk     = validateResult.risk     || {};
 
   // -------------------------------------------------------------------------
-  // Step 2 (#408): SPAWN 2 — --freeze --governance-ack <planHash> (FIRST mutation). Re-validates,
-  // asserts the planHash from SPAWN 1 still matches (the plan was not edited between governance and
-  // freeze — else refuse governance_ack_stale, NO write), writes plan_hash atomically, AND folds
-  // --resume-check into its emission (freezeResult.resumeOk). Idempotent: re-freeze returns the same
-  // hash + frozen:true. This collapses the former Step-2 (--freeze) + Step-3 (--resume-check) spawns.
+  // Step 1.75: freeze-time speculative_open_policy materialization. The off→auto default flip applies
+  // ONLY at a FRESH freeze — the author OMITTED the field AND the plan is not already frozen — so the
+  // frozen plan is self-describing + hash-covered and posture can never drift across an upgrade/resume.
+  // Runs AFTER the refuse-gates (SPAWN 1 in-grammar + the decision-id preflight) so the
+  // no-mutation-on-refuse contract holds; an ABSENT field on an already-frozen (legacy) plan is left
+  // untouched (parseSpeculativePolicy keeps 'off' — never a retroactive flip). The recomputed hash is
+  // handed to SPAWN 2 as the governance-ack (the deterministic materialization is part of the freeze
+  // transaction, not tampering); when nothing is materialized the SPAWN-1 hash carries through unchanged.
+  // Fail-safe: any error leaves the plan on disk untouched and falls back to the SPAWN-1 hash.
+  const schemaMod = require('./kaola-workflow-adaptive-schema');
+  let ackHash = validateResult.planHash;
+  try {
+    const preFreeze = readFile(planPath);
+    const alreadyFrozen = /<!--\s*plan_hash:\s*[0-9a-f]{64}\s*-->/.test(preFreeze || '');
+    if (preFreeze && !alreadyFrozen && !schemaMod.hasSpeculativePolicyField(preFreeze)) {
+      const materialized = schemaMod.materializeSpeculativePolicy(preFreeze, schemaMod.SPECULATIVE_OPEN_POLICY_DEFAULT);
+      if (materialized !== preFreeze) {
+        const newHash = require(validatorPath).computePlanHash(materialized); // compute BEFORE writing
+        writeFile(planPath, materialized);
+        ackHash = newHash;
+      }
+    }
+  } catch (_) { /* best-effort: leave the plan untouched + keep the SPAWN-1 hash */ }
+
   // -------------------------------------------------------------------------
-  const freezeResult = shell(validatorPath, [planPath, '--freeze', '--governance-ack', validateResult.planHash, '--json']);
+  // Step 2 (#408): SPAWN 2 — --freeze --governance-ack <ackHash> (FIRST validator-written mutation).
+  // Re-validates, asserts the ackHash still matches the plan's current hash (the plan was not edited
+  // between governance and freeze — else refuse governance_ack_stale, NO write; the Step-1.75
+  // materialization above is a deterministic, hash-recomputed part of the transaction, so its ackHash is
+  // the freeze target), writes plan_hash atomically, AND folds --resume-check into its emission
+  // (freezeResult.resumeOk). Idempotent: re-freeze returns the same hash + frozen:true.
+  // -------------------------------------------------------------------------
+  const freezeResult = shell(validatorPath, [planPath, '--freeze', '--governance-ack', ackHash, '--json']);
   if (!freezeResult.frozen) {
     return {
       handoff_status: 'plan_invalid',

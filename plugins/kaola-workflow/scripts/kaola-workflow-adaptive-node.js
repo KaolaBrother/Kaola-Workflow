@@ -538,20 +538,26 @@ function deriveMaxSimultaneousOpen(timingsContent) {
 // line, never corrupts prior entries. NEVER throws — a log write failure must NOT fail the
 // command. .cache/ is barrier-exempt (D-424-01 allowband), so this adds no validator surface.
 // ---------------------------------------------------------------------------
-function appendProvenanceLog(planPath, event, nodeId, nonce) {
+// AC5 (#597): `extra` is an OPTIONAL object of additional structured fields merged into the entry — the
+// discard-speculative path passes { role, gate } so every speculative discard (read or write) records
+// WHAT was discarded (node id + role + the gate it bet on), making the economics of `auto` observable
+// per run. Absent/non-object `extra` ⇒ byte-identical to the pre-#597 entry shape.
+function appendProvenanceLog(planPath, event, nodeId, nonce, extra) {
   try {
     const fs = require('fs');
     const cacheDir = path.join(path.dirname(planPath), '.cache');
     fs.mkdirSync(cacheDir, { recursive: true });
+    const entry = {
+      timestamp: new Date().toISOString(),
+      event: event,
+      nodeId: nodeId,
+      nonce: nonce || null,
+      by: 'adaptive-node',
+    };
+    if (extra && typeof extra === 'object') Object.assign(entry, extra);
     fs.appendFileSync(
       path.join(cacheDir, 'provenance-log.jsonl'),
-      JSON.stringify({
-        timestamp: new Date().toISOString(),
-        event: event,
-        nodeId: nodeId,
-        nonce: nonce || null,
-        by: 'adaptive-node',
-      }) + '\n'
+      JSON.stringify(entry) + '\n'
     );
   } catch (_) { /* best-effort: provenance log never blocks a lifecycle transition */ }
 }
@@ -3845,7 +3851,10 @@ function runDiscardSpeculative(opts) {
   }
   writeFile(runningSetPath, JSON.stringify(nextTop, null, 2));
 
-  appendProvenanceLog(planPath, 'discard-speculative', nodeId, baseSha ? String(baseSha).slice(0, 12) : null);
+  // AC5 (#597): discard telemetry — record the role + the gate this speculative member bet on, so the
+  // cost of an `auto` gate-fail discard is observable in the durable provenance log (no silent cost).
+  appendProvenanceLog(planPath, 'discard-speculative', nodeId, baseSha ? String(baseSha).slice(0, 12) : null,
+    { role: member.role || null, gate: member.speculativeGate || null });
 
   return {
     result: 'ok',
@@ -3926,16 +3935,23 @@ function runOpenReady(opts) {
     .filter(n => n.role !== 'main-session-gate')
     .filter(n => !liveIds.has(n.id));
 
-  // #439 (D-419 Part 4): SPECULATIVE-read fallback. When the NORMAL frontier is empty — the only thing
-  // blocking forward progress is an open gate — AND the per-run consent flag is present AND the frozen
-  // plan's speculative_open_policy authorizes it, fan out the speculative-eligible read nodes
-  // (next-action's speculativePending): read-only nodes betting that the open gate will pass. They open
-  // exactly like a read frontier, but each running-set entry is stamped `speculative: true` ([INV-25])
-  // so orient / reconcile / close treat them as the optimistic set. Default policy:off (or no consent
-  // flag) ⇒ this branch is inert ⇒ byte-identical to today. Never co-runs with a live write
-  // (liveHasWrite already returned above). Consent is per-run (the flag), never persisted in the plan.
+  // #439 (D-419 Part 4): SPECULATIVE fallback. When the NORMAL frontier is empty — the only thing
+  // blocking forward progress is an open gate — AND the frozen plan's speculative_open_policy AUTHORIZES
+  // speculation, fan out the speculative-eligible nodes (next-action's speculativePending): read (and,
+  // per #596, leg-contained write) nodes betting that the open gate will pass. They open exactly like a
+  // read/write frontier, but each running-set entry is stamped `speculative: true` ([INV-25]) so orient /
+  // reconcile / close treat them as the optimistic set.
+  //   auto (the default): authorized with NO per-run flag — the structural net (close fence + discard
+  //     path + blast-radius conditions) is the whole guarantee, so the consent ceremony is retired.
+  //     `--speculative-consent` is accepted as a NO-OP here (it is simply not consulted at auto).
+  //   consent: authorized ONLY WITH the per-run `--speculative-consent` flag (the operator still opts in).
+  //   off: this branch is inert ⇒ byte-identical to the off-policy shape.
+  // Never co-runs with a live write (liveHasWrite already returned above). Consent, where required, is
+  // per-run (the flag), never persisted in the plan.
+  const specPolicy = resolveSpeculativePolicy(readFile(planPath));
+  const speculativeAuthorized = specPolicy === 'auto' || (specPolicy === 'consent' && opts.speculativeConsent);
   let openingSpeculative = false;
-  if (frontier.length === 0 && opts.speculativeConsent && resolveSpeculativePolicy(readFile(planPath)) === 'consent') {
+  if (frontier.length === 0 && speculativeAuthorized) {
     const specFrontier = (nextAction.speculativePending || [])
       .filter(n => n.role !== 'main-session-gate')
       .filter(n => !liveIds.has(n.id));
@@ -4009,7 +4025,9 @@ function runOpenReady(opts) {
         };
       }
       if (sel.excluded.length) {
-        speculativeWriteExcluded = { reason: 'overlaps_live_writer', nodeIds: sel.excluded };
+        // O1: carry the PRECISE cause from selectSpeculativeWriteGroup — `overlaps_live_writer` for a
+        // genuine per-pair overlap, `parallel_safe_indeterminate` for the fail-closed exclude-all branch.
+        speculativeWriteExcluded = { reason: sel.excludedReason, nodeIds: sel.excluded };
       }
     }
   } else if (liveNodes.length === 0 && writeNodes.length > 0) {
@@ -4308,6 +4326,12 @@ function selectSpeculativeWriteGroup(candidates, liveNodes, planPath, shell, wri
   const candIds = candidates.map(n => n.id);
   const allIds = liveWriteIds.concat(candIds);
   const excluded = new Set();
+  // O1 (telemetry accuracy): DISTINGUISH the two exclusion causes so the open-ready caller can label
+  // speculativeWriteExcluded.reason precisely — now that `auto` fires speculative writes routinely, a
+  // mislabel is misleading. A GENUINE per-pair overlap keeps `overlaps_live_writer`; the fail-CLOSED
+  // exclude-ALL branch (a validator crash / garbled result with no overlap report to act on) is a
+  // `parallel_safe_indeterminate` — the disjointness verdict is unknown, not a known overlap.
+  let indeterminate = false;
   if (allIds.length >= 2) {
     const vArgs = [planPath, '--parallel-safe', '--nodes', allIds.join(','), '--json'];
     if (writeOverlapConsent) vArgs.push('--write-overlap-consent');
@@ -4324,6 +4348,7 @@ function selectSpeculativeWriteGroup(candidates, liveNodes, planPath, shell, wri
           if (candIds.includes(o.b)) excluded.add(o.b);
         }
       } else {
+        indeterminate = true;
         for (const id of candIds) excluded.add(id);
       }
     }
@@ -4335,7 +4360,7 @@ function selectSpeculativeWriteGroup(candidates, liveNodes, planPath, shell, wri
   if (Number.isInteger(max) && max >= 1) ceiling = Math.min(ceiling, max);
   const room = Math.max(0, ceiling - liveWriteIds.length);
   const chosen = eligible.slice(0, room);
-  return { chosen, excluded: Array.from(excluded), ceiling };
+  return { chosen, excluded: Array.from(excluded), ceiling, excludedReason: indeterminate ? 'parallel_safe_indeterminate' : 'overlaps_live_writer' };
 }
 
 // ---------------------------------------------------------------------------

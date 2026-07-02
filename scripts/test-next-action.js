@@ -665,6 +665,81 @@ const specPlan = (nodes, ledger) => '## Meta\nspeculative_open_policy: consent\n
     'SPEC-6: the SAME plan at policy:consent DOES emit speculativePending (the only delta is the policy field)');
 }
 
+// specPlanAuto prepends a ## Meta carrying speculative_open_policy:auto (the new default tier).
+const specPlanAuto = (nodes, ledger) => '## Meta\nspeculative_open_policy: auto\n\n' + makePlan(nodes, ledger);
+
+// SPEC-7 (#597 auto emission): at policy `auto`, speculativePending is emitted with the SAME shape as at
+// consent (auto is on by default under the structural net); `off` still OMITS it (byte-identity preserved).
+{
+  const nodes = [
+    '| impl | tdd-guide     | —    | a.js | 1 | sequence |',
+    '| gate | code-reviewer | impl | —    | 1 | sequence |',
+    '| docs | doc-updater   | gate | —    | 1 | sequence |',
+  ];
+  const ledger = ['| impl | complete |', '| gate | in_progress |', '| docs | pending |'];
+  const autoR = computeNextAction(specPlanAuto(nodes, ledger), { resolveModel: stub });
+  assert(Array.isArray(autoR.speculativePending) && autoR.speculativePending.length === 1 && autoR.speculativePending[0].id === 'docs',
+    'SPEC-7 (#597): policy:auto EMITS speculativePending (docs), got ' + JSON.stringify((autoR.speculativePending || []).map(n => n.id)));
+  assert(autoR.speculativePending[0].speculativeGate === 'gate', 'SPEC-7 (#597): speculativeGate names the open gate at auto');
+  const consentR = computeNextAction(specPlan(nodes, ledger), { resolveModel: stub });
+  assert(JSON.stringify(autoR.speculativePending) === JSON.stringify(consentR.speculativePending),
+    'SPEC-7 (#597): auto emits the SAME speculativePending set as consent (the delta is only the policy field)');
+  const offR = computeNextAction(makePlan(nodes, ledger), { resolveModel: stub });
+  assert(!('speculativePending' in offR), 'SPEC-7 (#597): policy:off still OMITS the key (byte-identity)');
+}
+
+// SPEC-8 (#597 AC4 — the #596 safety conditions hold IDENTICALLY at auto): a condition-violating write
+// member is excluded from speculativePending at auto EXACTLY as at consent — auto relaxes the ceremony,
+// never a safety condition. PROTECTED file, unresolvable set, and the unique sink are each checked at BOTH
+// policies; a well-formed write member is emitted at BOTH.
+{
+  const protectedNodes = [
+    '| impl | tdd-guide     | —    | a.js | 1 | sequence |',
+    '| gate | code-reviewer | impl | —    | 1 | sequence |',
+    '| more | doc-updater   | gate | CHANGELOG.md | 1 | sequence |',
+    '| sink | finalize      | more | —    | 1 | sequence |',
+  ];
+  const protectedLedger = ['| impl | complete |', '| gate | in_progress |', '| more | pending |', '| sink | pending |'];
+  assert((computeNextAction(specPlanAuto(protectedNodes, protectedLedger), { resolveModel: stub }).speculativePending || []).length === 0,
+    'SPEC-8 (#597 AC4): a PROTECTED declared file excludes the write member at auto (same as consent)');
+  assert((computeNextAction(specPlan(protectedNodes, protectedLedger), { resolveModel: stub }).speculativePending || []).length === 0,
+    'SPEC-8 (#597 AC4): ...and identically at consent (parity)');
+
+  const unresolvableNodes = [
+    '| impl | tdd-guide     | —    | a.js | 1 | sequence |',
+    '| gate | code-reviewer | impl | —    | 1 | sequence |',
+    '| more | tdd-guide     | gate | scripts/ | 1 | sequence |',
+    '| sink | finalize      | more | —    | 1 | sequence |',
+  ];
+  const unresolvableLedger = ['| impl | complete |', '| gate | in_progress |', '| more | pending |', '| sink | pending |'];
+  assert((computeNextAction(specPlanAuto(unresolvableNodes, unresolvableLedger), { resolveModel: stub }).speculativePending || []).length === 0,
+    'SPEC-8 (#597 AC4): a directory-shaped (unresolvable) declared entry excludes the write member at auto');
+
+  const sinkNodes = [
+    '| impl | tdd-guide     | —    | a.js | 1 | sequence |',
+    '| gate | code-reviewer | impl | —    | 1 | sequence |',
+    '| sink | finalize      | gate | CHANGELOG.md | 1 | sequence |',
+  ];
+  const sinkLedger = ['| impl | complete |', '| gate | in_progress |', '| sink | pending |'];
+  assert((computeNextAction(specPlanAuto(sinkNodes, sinkLedger), { resolveModel: stub }).speculativePending || []).length === 0,
+    'SPEC-8 (#597 AC4): the unique sink is NEVER speculative-eligible at auto (same as consent)');
+
+  // Control: a well-formed write member IS emitted at BOTH policies (the conditions gate only violators).
+  const okNodes = [
+    '| impl | tdd-guide     | —    | a.js | 1 | sequence |',
+    '| gate | code-reviewer | impl | —    | 1 | sequence |',
+    '| more | tdd-guide     | gate | b.js | 1 | sequence |',
+    '| sink | finalize      | more | CHANGELOG.md | 1 | sequence |',
+  ];
+  const okLedger = ['| impl | complete |', '| gate | in_progress |', '| more | pending |', '| sink | pending |'];
+  const okAuto = computeNextAction(specPlanAuto(okNodes, okLedger), { resolveModel: stub });
+  const okConsent = computeNextAction(specPlan(okNodes, okLedger), { resolveModel: stub });
+  assert((okAuto.speculativePending || []).length === 1 && okAuto.speculativePending[0].id === 'more',
+    'SPEC-8 (#597 AC4 control): a well-formed write member IS emitted at auto');
+  assert(JSON.stringify(okAuto.speculativePending) === JSON.stringify(okConsent.speculativePending),
+    'SPEC-8 (#597 AC4 control): the well-formed member set is identical at auto and consent');
+}
+
 // -----------------------------------------------------------------------
 // FLOOR-1..4 (#463 Slice 1 / AC14): the reasoning-class floor is ENFORCED on the dispatchable frontier.
 // A ready `synthesizer` (a REASONING_FLOOR_ROLES role) whose EFFECTIVE model is not reasoning-class is a
