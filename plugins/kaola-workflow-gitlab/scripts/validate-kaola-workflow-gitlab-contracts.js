@@ -421,6 +421,9 @@ assert(read(gitlabNext210).includes('Codex subagent delegation is the default.')
 assert(read(gitlabNext210).includes('The default `delegation_policy` is `delegate`'), gitlabNext210 + ' must default delegation_policy to delegate');
 assert(read(gitlabNext210).includes('KAOLA_DELEGATION_POLICY=delegate'), gitlabNext210 + ' must set KAOLA_DELEGATION_POLICY=delegate');
 assert(read(gitlabNext210).includes('.codex/agents/kaola-workflow/'), gitlabNext210 + ' must name the role-profile detection path');
+// #598 AC3: the delegation probe must also accept a global profile install — keep the
+// project-local needle above GREEN (add, never remove) and pin the global path alongside it.
+assert(read(gitlabNext210).includes('~/.codex/agents/kaola-workflow/'), gitlabNext210 + ' must name the global role-profile detection path');
 assert(read(gitlabNext210).includes('record `local-fallback-tool-unavailable` with a non-empty Evidence value'), gitlabNext210 + ' must record auto-detected tool-unavailable as evidence');
 assert(read(gitlabNext210).includes('only when the user explicitly'), gitlabNext210 + ' must gate local-authorized behind explicit user request');
 assert(read(gitlabNext210).includes('default `delegation_policy` to `delegate` without prompting'), gitlabNext210 + ' must default delegate on resume without prompting');
@@ -843,6 +846,21 @@ for (const tomlFile of fs.readdirSync(path.join(root, pluginRoot, 'agents')).fil
   // #463 (AC11): pin the synthesizer role in the forge-codex SKILL too (the #400 dead-zone surface).
   assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'synthesizer');
   assertIncludes(pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md', 'kaola-workflow-plan-run');
+  // #598 AC3: the adapt SKILL's delegation probe must accept a global profile install too — keep
+  // the project-local needle GREEN (add, never remove) and pin the global path alongside it.
+  assertIncludes(pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md', '.codex/agents/kaola-workflow/');
+  assertIncludes(pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md', '~/.codex/agents/kaola-workflow/');
+  // #598 AC4: gate-role degradation must surface loudly when dispatch is unavailable — pin the
+  // run-start notice + the consent-halt escalation on both the GitLab command and SKILL mirror.
+  for (const planRunSurface of [
+    pluginRoot + '/commands/kaola-workflow-plan-run.md',
+    pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md'
+  ]) {
+    assertIncludes(planRunSurface, '## Gate-Role Degradation Notice');
+    assertIncludes(planRunSurface, 'an inline gate reviewing its own writer-context is no gate');
+    assertIncludes(planRunSurface, 'self-issued `verdict: pass`');
+    assertIncludes(planRunSurface, 'write-halt --reason consent');
+  }
   // #451/#582: the forge-codex plan-run SKILL no longer selects a `<role>-max` variant — the
   // per-node tier maps to per-spawn reasoning-effort on the dispatch descriptor, and unproven
   // tiered v1 dispatch fails closed.
