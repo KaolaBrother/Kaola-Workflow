@@ -41,7 +41,7 @@ const taskMirrorPath = path.join(__dirname, TASK_MIRROR);
 
 // #360: the LEDGER-SCOPED durable consent-halt probe (fence-aware). adaptive-schema keeps the
 // same filename across every edition (byte-identical ×4), so this require is NOT forge-renamed.
-const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, resolveFanoutCapReadonly, parallelWritesDefaultOn, refuse, WRITE_SET_OVERFLOW_SUBTYPES, dispatchEffort, dispatchEffortOpencode, parseNodeVerdict, MERGE_CONFLICT_REPAIR_LIMIT, resolveMainRoot } = require('./kaola-workflow-adaptive-schema');
+const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, SCHEDULER_LOCK_NAME, acquireProjectLock, resolveFanoutCapReadonly, parallelWritesDefaultOn, refuse, WRITE_SET_OVERFLOW_SUBTYPES, dispatchEffort, dispatchEffortOpencode, parseNodeVerdict, MERGE_CONFLICT_REPAIR_LIMIT, resolveMainRoot } = require('./kaola-workflow-adaptive-schema');
 
 // ---------------------------------------------------------------------------
 // OPERATOR_HINT_REGISTRY (#445 / D-445-01 §1-3) — per-aggregator map of typed
@@ -103,6 +103,28 @@ const OPERATOR_HINT_REGISTRY = {
     'A running-set fan-out is live (' + ((ctx.runningSet || []).join(', ') || 'see runningSet') + '). Close its nodes (close-node) or run ' + ADAPTIVE_NODE_SCRIPT + ' reconcile-running-set --project <P> --json before this command.',
   batch_active: () =>
     'An active parallel batch is live. Seal + join it (or reconcile --abort) before running this serial command.',
+  // #585: another scheduler invocation holds the project-scoped O_EXCL lock. Only ONE orchestrator may
+  // drive a project's scheduler at a time — contention is a non-blocking refuse (no spin-wait/queue).
+  scheduler_locked: (ctx) =>
+    'Another scheduler command holds this project\'s lock'
+    + (ctx.holder && ctx.holder.subcommand ? ' (' + ctx.holder.subcommand + (ctx.holder.pid ? ' pid ' + ctx.holder.pid : '') + ')' : '')
+    + '. Only one orchestrator may drive a project\'s scheduler at a time — wait for the in-flight command to finish, then retry. (A dead/crashed holder refuses separately as scheduler_lock_stale with the manual recovery step.)',
+  // #585 (repair): the lock's holder is DEAD/crashed (dead same-host PID, or an old cross-host/corrupt
+  // payload). The lock is NEVER auto-removed — an unlink-based takeover double-acquires under
+  // concurrency — so recovery is one explicit operator removal, from ONE session only.
+  scheduler_lock_stale: (ctx) => {
+    const h = (ctx.holder && typeof ctx.holder === 'object') ? ctx.holder : {};
+    let since = 'unknown time';
+    try {
+      const t = (typeof h.ts === 'number') ? h.ts : Date.parse(h.ts);
+      if (Number.isFinite(t)) since = new Date(t).toISOString();
+    } catch (_) {}
+    return 'This project\'s scheduler lock is held by a DEAD/crashed holder ('
+      + (h.subcommand || 'unknown subcommand') + ', pid ' + (h.pid != null ? h.pid : '?')
+      + ' on ' + (h.host || 'unknown host') + ', since ' + since
+      + '). It is never removed automatically. Verify no other orchestrator session is recovering this project, then remove the lock by hand from ONE session only: rm "'
+      + (ctx.lockPath || '.cache/scheduler.lock') + '" — then re-run the command.';
+  },
   // #466: worktree-authority split — a mutating lifecycle call ran from the MAIN root while a linked
   // worktree is recorded; the ledger/evidence/baselines would diverge from where the role agents write.
   worktree_authority_split: (ctx) =>
@@ -177,6 +199,10 @@ const OPERATOR_HINT_REGISTRY = {
   // --- close paths (#272/#303/#348/#437) ---
   barrier_failed: (ctx) =>
     'The per-node barrier rejected ' + (ctx.nodeId || '<id>') + ' (writes outside its declared set). Review the offending paths, then ' + ADAPTIVE_NODE_SCRIPT + ' revert-overflow --node-id ' + (ctx.nodeId || '<id>') + ' --project <P> --json, or repair-node the writer.',
+  // #590: a close dead-ended because no barrier baseline was recorded for the node (a crash may have
+  // interrupted a serial open before the baseline landed). Re-opening the node is idempotent and heals it.
+  no_barrier_base: (ctx) =>
+    'No barrier baseline recorded for ' + (ctx.nodeId || '<id>') + ' (a crash may have interrupted its open before the baseline landed). Re-run ' + ADAPTIVE_NODE_SCRIPT + ' open-next --project <P> --node-id ' + (ctx.nodeId || '<id>') + ' --json — it is idempotent and re-records the baseline — then retry the close.',
   close_node_not_in_ledger: (ctx) =>
     'Node ' + (ctx.nodeId || '<id>') + ' has no ## Node Ledger row to close. Confirm the node id matches the frozen plan.',
   close_transition_disallowed: (ctx) =>
@@ -1763,7 +1789,27 @@ function runOpenNext(opts) {
     }
   }
 
-  // spliceLedgerNode: pending → in_progress.
+  // #590: record the per-node baseline BEFORE flipping the ledger row (mirrors runOpenReady Phase 2
+  // baseline-on-disk → Phase 3 single plan write). The prior write-first order left a crash window where
+  // the ledger said in_progress but no baseline existed on disk — and since reconcile-running-set does
+  // NOT cover the serial path (there is no running set), a later close dead-ended baseline_missing.
+  // Baseline-first inverts the hazard: if the flip then fails, the orphaned baseline is harmless
+  // (recordBase is idempotent / overwriting on the next open), and a baseline failure leaves the ledger
+  // PENDING — a clean re-open, never an in_progress-without-baseline strand.
+  // Shell COMMIT_NODE --node-id <id> --start --json (record baseline).
+  const baselineResult = shell(commitNodePath, [planPath, '--node-id', targetNode.id, '--start', '--json']);
+  const baselineOk = baselineResult.exitCode === 0 && baselineResult.result === 'ok';
+
+  if (!baselineOk) {
+    return {
+      result: 'refuse',
+      reason: 'baseline_failed',
+      nodeId: targetNode.id,
+      baselineResult,
+    };
+  }
+
+  // spliceLedgerNode: pending → in_progress (AFTER the baseline is on disk).
   let planContent = readFile(planPath);
   const spliceResult = spliceLedgerNode(planContent, targetNode.id, 'in_progress', { allowFrom: ['pending'] });
 
@@ -1781,19 +1827,6 @@ function runOpenNext(opts) {
     planContent = spliceResult.content;
   }
   // If alreadyAtTarget (already in_progress), skip the write — idempotent.
-
-  // Shell COMMIT_NODE --node-id <id> --start --json (record baseline).
-  const baselineResult = shell(commitNodePath, [planPath, '--node-id', targetNode.id, '--start', '--json']);
-  const baselineOk = baselineResult.exitCode === 0 && baselineResult.result === 'ok';
-
-  if (!baselineOk) {
-    return {
-      result: 'refuse',
-      reason: 'baseline_failed',
-      nodeId: targetNode.id,
-      baselineResult,
-    };
-  }
 
   // #373: best-effort telemetry — the node opened.
   appendNodeTiming(planPath, targetNode.id, 'opened');
@@ -5300,7 +5333,36 @@ function main() {
     }
   }
 
+  // #585: scheduler mutual-exclusion lock. Acquire a project-scoped O_EXCL lockfile before any mutating
+  // scheduler subcommand body (exactly the worktree-split-guarded set), released in the finally below.
+  // Two concurrent scheduler invocations on ONE project would otherwise both pass the advisory-only
+  // in-memory coordination guard and lose updates via lockless whole-file read-modify-write (open-ready
+  // double-open; close-node whole-plan-rewrite clobber). Contention is a typed non-blocking refusal — one
+  // serial orchestrator is the designed model. A DEAD/crashed holder is NEVER auto-reclaimed (an
+  // unlink-based takeover double-acquires under concurrency — two takers holding the same stale decision
+  // each remove the other's fresh claim); it refuses with the DISTINCT scheduler_lock_stale reason whose
+  // operator hint names the single manual recovery (remove the lockfile from ONE session, then re-run) —
+  // so the lock never silently wedges the project while never risking a double-acquire. The read-only
+  // subcommands (orient / mirror-project / record-evidence --verify) are NOT in the guarded set →
+  // lock-free (byte-identical to pre-lock behavior; the serial single-orchestrator path acquires with
+  // zero contention).
+  let schedulerLock = null;
+  if (SPLIT_GUARDED_SUBCOMMANDS.has(subcommand)) {
+    const lockPath = path.join(cacheDir, SCHEDULER_LOCK_NAME);
+    schedulerLock = acquireProjectLock(lockPath, { subcommand });
+    if (!schedulerLock.ok) {
+      const out = decorateOperatorHint(refuse(schedulerLock.stale ? 'scheduler_lock_stale' : 'scheduler_locked', {
+        holder: schedulerLock.holder || null,
+        lockPath,
+      }));
+      process.stdout.write(JSON.stringify(out) + '\n');
+      process.exitCode = 1;
+      return;
+    }
+  }
+
   let result;
+  try {
 
   if (subcommand === 'orient') {
     const mainPlanPath = path.join(mainRoot, 'kaola-workflow', project, 'workflow-plan.md');
@@ -5474,6 +5536,12 @@ function main() {
   }
   if (result.result === 'refuse') {
     process.exitCode = 1;
+  }
+
+  } finally {
+    // #585: always release the scheduler lock — on success, on a refuse, or on a thrown error (the
+    // module-level exit hook is the belt-and-suspenders backstop for a crash that skips this finally).
+    if (schedulerLock && schedulerLock.release) schedulerLock.release();
   }
 }
 

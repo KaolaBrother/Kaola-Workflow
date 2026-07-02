@@ -191,6 +191,14 @@ const DEFAULT_FANOUT_CAP_READONLY = 8;
 // per-batch state) — `kaola-workflow/{project}/.cache/running-set.json`. Producer: adaptive-node
 // open-ready/close-node; consumer: the #376 write-lane containment hook + the #293 legality check.
 const RUNNING_SET_NAME = 'running-set.json';
+// #585: the project-scoped scheduler mutual-exclusion lockfile —
+// `kaola-workflow/{project}/.cache/scheduler.lock`. Acquired O_EXCL by adaptive-node main() before any
+// mutating scheduler subcommand body (the worktree-split-guarded set) and released in a finally, so two
+// concurrent scheduler invocations on ONE project can never both enter a mutating body. Lives next to
+// RUNNING_SET_NAME (the other per-project .cache scheduler artifact). It is barrier-exempt via the
+// kaola-workflow/ prefix, so a held lock can never trip the per-node write-set barrier. Byte-identical
+// ×4 (the drift anchor).
+const SCHEDULER_LOCK_NAME = 'scheduler.lock';
 const LOOP_CAP = 5;
 const TEST_THRASH_LIMIT = 3;
 // #463 Slice 5 (write-overlap): the bounded-repair cap for a `merge_conflict`. A write-leg level that
@@ -692,6 +700,124 @@ function writeFileAtomicReplace(filePath, content) {
   return true;
 }
 
+// #585: scheduler mutual-exclusion lock — a project-scoped O_EXCL lockfile so two concurrent scheduler
+// invocations on ONE project can never both pass into a mutating body. The pre-#585 coordination guard
+// was ADVISORY-ONLY (a pure read of state files + an in-memory refusal decision, no OS-level exclusion),
+// so every durable-state mutation was a lockless whole-file read-modify-write: concurrent open-ready
+// double-opened a frontier and concurrent close-node clobbered a sibling's complete flip. The lock wraps
+// the WHOLE guarded subcommand (incl. the layered guard prologue) at the adaptive-node CLI boundary; the
+// run* bodies stay lock-free (the in-memory test harness never enters main()). Placed here beside
+// writeFileAtomicReplace (the ×4 byte-anchor + a COMMON_SCRIPT) to avoid a new-file registration.
+//
+// Contract: one serial orchestrator is the designed model, so contention is a typed NON-blocking refuse
+// (never a spin-wait / queue). A crashed holder must never permanently wedge the project — a stale lock
+// (a dead same-host PID, or an old/corrupt cross-host payload) is CLASSIFIED stale:true and refused;
+// recovery is ONE explicit operator removal of the lockfile (from one session only), then re-run.
+// Auto-takeover is deliberately ABSENT: an unlink executes a stale decision made BEFORE the unlink, so
+// two concurrent takers holding the same stale decision both acquire (each unlinks the other's fresh
+// claim and re-claims) — and POSIX/Node-core has no atomic compare-and-delete to close that window.
+// Fail-closed refusal is the only safe recovery; the worst case is one manual rm (cheap), never a
+// double-acquire (which would silently reopen the lost-update races this lock exists to close).
+
+// Module-level: the lock path THIS process currently holds, cleaned by a one-time process exit hook so a
+// crash that skips the caller's finally still drops the lock (belt-and-suspenders around the CLI's
+// try/finally). Installed lazily on first acquire so scripts that only require() the schema add no hook.
+let _heldSchedulerLock = null;
+let _schedulerExitHookInstalled = false;
+function _installSchedulerExitHook() {
+  if (_schedulerExitHookInstalled) return;
+  _schedulerExitHookInstalled = true;
+  process.on('exit', () => {
+    if (_heldSchedulerLock) {
+      try { require('fs').unlinkSync(_heldSchedulerLock); } catch (_) {}
+      _heldSchedulerLock = null;
+    }
+  });
+}
+
+// isStaleLock(holder) — decide whether a lock's parsed payload belongs to a dead holder.
+//   same-host + valid pid: probe process.kill(pid, 0) — ESRCH → dead → stale; alive / EPERM → live.
+//   cross-host or missing/invalid pid: age fallback — ts older than LANE_STALENESS_MS → stale.
+//   null / non-object / no usable ts → stale (a corrupt payload).
+// PURE REFUSAL CLASSIFIER: its verdict only selects the typed refusal reason (a stale holder refuses
+// distinctly from a live one so the operator hint can name the manual recovery). It can never affect an
+// acquire OUTCOME — no acquire path unlinks or takes over another process's lock on a stale verdict.
+function isStaleLock(holder) {
+  const os = require('os');
+  if (!holder || typeof holder !== 'object') return true;
+  const sameHost = holder.host && holder.host === os.hostname();
+  if (sameHost && Number.isInteger(holder.pid) && holder.pid > 0) {
+    try {
+      process.kill(holder.pid, 0);
+      return false; // signal 0 delivered → the process is alive → live holder
+    } catch (err) {
+      if (err && err.code === 'ESRCH') return true;  // no such process → dead → stale
+      return false; // EPERM (exists, owned by another user) or any other error → conservatively live
+    }
+  }
+  // Cross-host or missing/invalid pid → age-based.
+  const ts = (typeof holder.ts === 'number') ? holder.ts : Date.parse(holder.ts);
+  if (!Number.isFinite(ts)) return true;
+  return (Date.now() - ts) > LANE_STALENESS_MS;
+}
+
+// acquireProjectLock(lockPath, { subcommand }) — O_EXCL claim; NEVER unlinks another process's lock.
+//   → { ok:true, release } (clean claim) | { ok:false, stale:<boolean>, holder }.
+// On EEXIST the holder is only CLASSIFIED (isStaleLock — the pure refusal classifier): a dead/aged
+// holder is returned as stale:true and REFUSED — recovery is one explicit operator removal of the
+// lockfile, then a re-run. holder is null for a corrupt/unparseable payload. The returned release()
+// unlinks OUR OWN lock (idempotent) and clears the held-lock marker.
+function acquireProjectLock(lockPath, opts) {
+  const fs = require('fs');
+  const path = require('path');
+  const os = require('os');
+  _installSchedulerExitHook();
+  const payload = JSON.stringify({
+    pid: process.pid,
+    host: os.hostname(),
+    ts: Date.now(),
+    subcommand: (opts && opts.subcommand) || null,
+  });
+  let fd;
+  try {
+    fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+    fd = fs.openSync(lockPath, 'wx'); // O_EXCL | O_CREAT — fails EEXIST if a holder exists
+    fs.writeFileSync(fd, payload, 'utf8');
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = undefined;
+    _heldSchedulerLock = lockPath;
+    return { ok: true, release: () => releaseProjectLock(lockPath) };
+  } catch (err) {
+    if (fd !== undefined) { try { fs.closeSync(fd); } catch (_) {} }
+    if (!(err && err.code === 'EEXIST')) throw err;
+  }
+
+  // EEXIST — classify the holder for the typed refusal. NEVER unlink here: an unlink executes a stale
+  // decision made before it, so two concurrent takers holding the same stale decision would BOTH
+  // acquire (each removes the other's fresh claim and re-claims). Recovery is operator-explicit.
+  let raw = '';
+  try { raw = fs.readFileSync(lockPath, 'utf8'); } catch (_) { raw = ''; }
+  let holder = null;
+  try { holder = JSON.parse(raw); } catch (_) { holder = null; }
+  if (holder && typeof holder === 'object') {
+    return { ok: false, stale: isStaleLock(holder), holder };
+  }
+  // Corrupt/empty payload — possibly a fresh lock caught between O_EXCL and its payload write. Classify
+  // by the lockfile's mtime (this only SETS the refusal flavor, never a takeover): a just-created file
+  // is NOT stale (protect the fresh holder mid-write); a truly old corrupt leftover IS stale.
+  let mtimeMs = Date.now();
+  try { mtimeMs = fs.statSync(lockPath).mtimeMs; } catch (_) {}
+  return { ok: false, stale: (Date.now() - mtimeMs) > LANE_STALENESS_MS, holder: null };
+}
+
+// releaseProjectLock(lockPath) — unlink (swallow ENOENT) + clear the held-lock marker. Idempotent.
+function releaseProjectLock(lockPath) {
+  const fs = require('fs');
+  try { fs.unlinkSync(lockPath); } catch (_) {}
+  if (_heldSchedulerLock === lockPath) _heldSchedulerLock = null;
+}
+
 // #579: shared main-root resolver — single canonical source for getCoordRoot / mainRootFromCoord /
 // resolveMainRoot, previously triplicated across claim.js, adaptive-node.js, and sink-merge.js.
 // Hosted here (the ×4 byte-identical drift anchor) so all editions share ONE copy; the inline
@@ -865,6 +991,10 @@ module.exports = {
   DEFAULT_FANOUT_CAP,
   DEFAULT_FANOUT_CAP_READONLY,
   RUNNING_SET_NAME,
+  SCHEDULER_LOCK_NAME,
+  acquireProjectLock,
+  releaseProjectLock,
+  isStaleLock,
   LOOP_CAP,
   TEST_THRASH_LIMIT,
   MERGE_CONFLICT_REPAIR_LIMIT,

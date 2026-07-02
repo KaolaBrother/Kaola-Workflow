@@ -163,6 +163,27 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   manifest on every resume. Wall-clock overlap is claimed only via `node-timings.jsonl` (#373) on
   a real run — the scripts never spawn agents, so they never overclaim concurrency.
 
+  **Scheduler mutual-exclusion lock (issue #585).** The guard prologue described above
+  (`probeCoordination`/`coordinationRefusal`) was advisory-only — a pure read of state files
+  followed by an in-memory decision, with no OS-level lock anywhere in the mutation path — so two
+  concurrent scheduler invocations on ONE project could both pass it and race a lockless
+  whole-file read-modify-write (a double-open on `open-ready`×2; a lost `complete` flip on
+  `close-node`×2). `adaptive-node.js`'s `main()` now wraps every mutating subcommand body (the
+  `SPLIT_GUARDED_SUBCOMMANDS` set — the same boundary the worktree-authority-split guard runs at)
+  in a project-scoped O_EXCL lock (`kaola-workflow/{project}/.cache/scheduler.lock`), acquired
+  before the layered guard prologue and released in a `finally`. Contention is a typed,
+  non-blocking refusal (`scheduler_locked` for a live holder, `scheduler_lock_stale` for a
+  dead/aged one — CLASSIFIED, never auto-removed); the read-only subcommands (`orient`,
+  `mirror-project`, `record-evidence --verify`) stay lock-free. See `docs/decisions/D-585-01.md`
+  and `docs/api.md` § Scheduler mutual-exclusion lock.
+
+  **Serial `open-next` baseline-first ordering (issue #590).** `runOpenNext` (the `max=1` serial
+  opener) now records the per-node barrier baseline BEFORE flipping the ledger row to
+  `in_progress` — mirroring `open-ready`'s Phase 2 → Phase 3 order — so a crash between the two
+  writes leaves the row `pending` (an idempotent re-open) rather than `in_progress` with no
+  baseline on disk (a dead end the serial path's crash coverage could not recover, since there is
+  no running set for `reconcile-running-set` to repair). See `docs/decisions/D-590-01.md`.
+
   **Coordination kernel — serial = running-set `max_concurrent = 1` (D-419-01 Part 1).**
   The serial loop and the running-set scheduler are two surfaces of ONE coordination kernel.
   Serial is not a separate code path — it is the scheduler operating with `max_concurrent = 1`.

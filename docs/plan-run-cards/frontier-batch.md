@@ -93,6 +93,20 @@ nothing carries a `reason`: `write_node_exclusive` (a write node is already live
 `running-set.json` mid-transaction (`state: 'opening'` or any member `opening: true`) — run
 `reconcile-running-set` first.
 
+**Scheduler lock contention (issue #585).** `open-ready`, `close-node`, and
+`reconcile-running-set` (every subcommand on this card) each acquire a project-scoped O_EXCL lock
+(`.cache/scheduler.lock`) before running — only one scheduler invocation may drive a project at a
+time. Two typed refusals cover contention:
+
+| reason | condition | repair |
+|---|---|---|
+| `scheduler_locked` | another invocation holds the lock and its holder is LIVE | wait for the in-flight command to finish, then retry |
+| `scheduler_lock_stale` | the holder is DEAD/crashed (a dead same-host PID, or an old/corrupt cross-host payload) | verify no other orchestrator session is recovering this project, then `rm` the lockfile from ONE session only (the `operator_hint` names the exact path), and re-run |
+
+The lock is never auto-removed on either arm — see `docs/decisions/D-585-01.md` for why an
+earlier auto-takeover design was rejected. Zero-contention serial invocation (the normal
+single-orchestrator loop) is unaffected.
+
 ---
 
 ## 4. `close-node` — close one member

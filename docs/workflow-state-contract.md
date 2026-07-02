@@ -95,6 +95,17 @@ here for the full contract.
     responsibilities. `kaola-workflow-adaptive-node.js`'s guard prologue still detects a residual
     file on disk (a `batch_active` refusal) purely as backward-compat crash detection for a
     pre-retirement checkout.
+  - `scheduler.lock` (issue #585) — a **transient coordination artifact**, not durable workflow
+    state. A project-scoped O_EXCL lockfile (`fs.openSync(path, 'wx')`) that `adaptive-node.js`
+    `main()` acquires before every mutating scheduler subcommand body and releases in a `finally`;
+    its holder payload is `{ pid, host, ts, subcommand }`. Barrier-exempt (the `kaola-workflow/`
+    prefix allowband) — a held lock can never trip the per-node write-set barrier — and it is never
+    archived as live state (its absence on disk is the normal, unlocked state between
+    invocations, and `archiveProjectDir` does not special-case it because a project should never
+    be finalized while it is held). A dead holder's lock is classified stale (`isStaleLock`) but
+    NEVER auto-removed; safe manual removal (`rm`) is ONLY appropriate for a confirmed-dead holder,
+    from ONE operator session at a time. See `docs/api.md` § Scheduler mutual-exclusion lock and
+    `docs/decisions/D-585-01.md`.
   - `barrier-base-<id>` — per-node baseline commit tree SHA recorded by `--record-base`
     at node-open time. Used by `--barrier-check --node-id <id>` to tree-diff exactly
     that node's own writes. Idempotent (reused on re-entry, never re-snapshotting a

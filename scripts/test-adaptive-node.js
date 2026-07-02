@@ -59,6 +59,8 @@ const {
 } = require('./kaola-workflow-adaptive-node');
 const { RUNNING_SET_NAME, MERGE_CONFLICT_REPAIR_LIMIT, dispatchEffortOpencode } = require('./kaola-workflow-adaptive-schema');
 const { readDurableConsentHalt, locateSection } = require('./kaola-workflow-adaptive-schema');
+// #585: scheduler mutual-exclusion lock helpers (byte-identical ×4 in adaptive-schema).
+const { acquireProjectLock, isStaleLock, SCHEDULER_LOCK_NAME, LANE_STALENESS_MS } = require('./kaola-workflow-adaptive-schema');
 
 const {
   ORPHAN_LEGALITY_MANIFEST,
@@ -8040,6 +8042,435 @@ function rtHarness(initialFiles, opts) {
   const ra = orientWithTimings(null);
   assert(ra.result === 'ok' && ra.dispatchFidelity && ra.dispatchFidelity.everConcurrent === false && ra.dispatchFidelity.maxSimultaneousOpen === 0,
     '#558: absent node-timings → zeroed dispatchFidelity, orient still ok (telemetry never blocks), got ' + JSON.stringify(ra.dispatchFidelity));
+}
+
+// ===========================================================================
+// #590 — serial open-next records the per-node baseline BEFORE flipping the ledger
+// row (mirroring runOpenReady Phase 2 baseline-on-disk → Phase 3 single plan write).
+// Direct-call tests over runOpenNext's injected seams. RED (pre-#590 write-first order):
+// a baseline failure strands the row in_progress with no baseline on disk (a later close
+// dead-ends baseline_missing). GREEN (baseline-first): a baseline failure leaves the ledger
+// PENDING — a clean idempotent re-open, no in_progress-without-baseline state.
+// ===========================================================================
+{
+  // -- T-590-order-fail: baseline FAILS → NO ledger flip write; refuse baseline_failed; row pending. --
+  {
+    const plan = makePlan([
+      '| impl-core | pending | |',
+      '| impl-other | pending | |',
+      '| review | pending | |',
+      '| finalize | pending | |',
+    ]);
+    let planContent = plan;
+    let sawPlanWrite = false;
+    let baselineInvoked = false;
+    let baselineSawWriteAtInvoke = null;
+    const shellStub = function (scriptPath, args) {
+      const base = path.basename(scriptPath);
+      const a = args || [];
+      if (base === 'kaola-workflow-plan-validator.js' && a.includes('--resume-check')) return { exitCode: 0, ok: true };
+      if (base === 'kaola-workflow-next-action.js') {
+        return {
+          exitCode: 0, result: 'ok', allDone: false,
+          readySet: [{ id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js', dependsOn: [] }],
+          nextNode: { id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js' },
+        };
+      }
+      if (base === 'kaola-workflow-commit-node.js' && a.includes('--start')) {
+        baselineInvoked = true;
+        baselineSawWriteAtInvoke = sawPlanWrite; // ordering probe: was the plan already written when baseline ran?
+        return { exitCode: 1, result: 'refuse', reason: 'baseline_missing', errors: ['stub baseline failure'] };
+      }
+      return { exitCode: 1, result: 'refuse' };
+    };
+    const result = runOpenNext({
+      planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+      statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+      project: 'test-project', nodeId: null, shell: shellStub,
+      readFile: (fp) => { if (fp.endsWith('workflow-plan.md')) return planContent; return makeState(); },
+      writeFile: (fp, content) => { if (fp.endsWith('workflow-plan.md')) { sawPlanWrite = true; planContent = content; } },
+    });
+    assert(result.result === 'refuse' && result.reason === 'baseline_failed',
+      'T-590-order-fail: baseline failure → refuse baseline_failed, got ' + JSON.stringify({ result: result.result, reason: result.reason }));
+    assert(baselineInvoked === true, 'T-590-order-fail: commit-node --start was invoked');
+    assert(baselineSawWriteAtInvoke === false,
+      'T-590-order-fail: baseline recorded BEFORE any ledger flip write (baseline-first ordering)');
+    assert(sawPlanWrite === false,
+      'T-590-order-fail: NO ledger flip write on baseline failure — row never stranded in_progress-without-baseline');
+    assert(!/\|\s*impl-core\s*\|\s*in_progress\s*\|/.test(planContent),
+      'T-590-order-fail: ledger row still pending after the refuse');
+  }
+
+  // -- T-590-order-ok: baseline SUCCEEDS → baseline recorded BEFORE the ledger flip; row ends in_progress. --
+  {
+    const plan = makePlan([
+      '| impl-core | pending | |',
+      '| impl-other | pending | |',
+      '| review | pending | |',
+      '| finalize | pending | |',
+    ]);
+    let planContent = plan;
+    let sawPlanWrite = false;
+    let baselineSawWriteAtInvoke = null;
+    const shellStub = function (scriptPath, args) {
+      const base = path.basename(scriptPath);
+      const a = args || [];
+      if (base === 'kaola-workflow-plan-validator.js' && a.includes('--resume-check')) return { exitCode: 0, ok: true };
+      if (base === 'kaola-workflow-next-action.js') {
+        return {
+          exitCode: 0, result: 'ok', allDone: false,
+          readySet: [{ id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js', dependsOn: [] }],
+          nextNode: { id: 'impl-core', role: 'tdd-guide', model: 'sonnet', declared_write_set: 'scripts/adaptive-node.js' },
+        };
+      }
+      if (base === 'kaola-workflow-commit-node.js' && a.includes('--start')) {
+        baselineSawWriteAtInvoke = sawPlanWrite;
+        return { exitCode: 0, result: 'ok', mode: 'per-node-start', nodeId: 'impl-core', overallOk: true, recordBase: { base: 'deadbeefcafe0000', reused: false } };
+      }
+      return { exitCode: 1, result: 'refuse' };
+    };
+    const result = runOpenNext({
+      planPath: '/fake/kaola-workflow/test-project/workflow-plan.md',
+      statePath: '/fake/kaola-workflow/test-project/workflow-state.md',
+      project: 'test-project', nodeId: null, shell: shellStub,
+      readFile: (fp) => { if (fp.endsWith('workflow-plan.md')) return planContent; return makeState(); },
+      writeFile: (fp, content) => { if (fp.endsWith('workflow-plan.md')) { sawPlanWrite = true; planContent = content; } },
+    });
+    assert(result.result === 'ok' && result.baselineRecorded === true,
+      'T-590-order-ok: baseline success → open ok, got ' + JSON.stringify({ result: result.result, baselineRecorded: result.baselineRecorded }));
+    assert(baselineSawWriteAtInvoke === false,
+      'T-590-order-ok: baseline recorded BEFORE the ledger flip write (baseline-first)');
+    assert(sawPlanWrite === true && /\|\s*impl-core\s*\|\s*in_progress\s*\|/.test(planContent),
+      'T-590-order-ok: ledger flipped in_progress AFTER the baseline');
+  }
+}
+
+// ===========================================================================
+// #585 — scheduler mutual-exclusion lock. A project-scoped O_EXCL lockfile
+// (kaola-workflow/{project}/.cache/scheduler.lock) is acquired at the CLI (main())
+// boundary before any mutating scheduler subcommand body, released in a finally. A held
+// lock is NEVER taken over: a dead/aged holder refuses scheduler_lock_stale with a
+// one-session manual-removal hint (fail-closed — no unlink of another process's lock),
+// so a crashed holder never wedges the project. The run*
+// bodies stay lock-free (the in-memory rsHarness above never enters main() — so the 1078
+// assertions above ARE the serial-path-unchanged regression proof).
+// ===========================================================================
+
+// -- T-585-stale (unit): isStaleLock — same-host dead pid → stale; same-host live pid → not stale;
+//    cross-host old ts → stale (age fallback); cross-host fresh ts → not stale; corrupt → stale. --
+{
+  const DEAD_PID = 2147483646; // above any real pid on this box → process.kill(pid,0) throws ESRCH
+  assert(isStaleLock({ pid: DEAD_PID, host: os.hostname(), ts: Date.now(), subcommand: 'open-ready' }) === true,
+    'T-585-stale: same-host DEAD pid → stale');
+  assert(isStaleLock({ pid: process.pid, host: os.hostname(), ts: Date.now(), subcommand: 'open-ready' }) === false,
+    'T-585-stale: same-host LIVE pid (this process) → not stale');
+  assert(isStaleLock({ pid: 1234, host: 'ghost-host-' + Math.random().toString(16).slice(2), ts: Date.now() - LANE_STALENESS_MS - 60000 }) === true,
+    'T-585-stale: cross-host OLD ts → stale (age fallback)');
+  assert(isStaleLock({ pid: 1234, host: 'ghost-host-' + Math.random().toString(16).slice(2), ts: Date.now() }) === false,
+    'T-585-stale: cross-host FRESH ts → not stale (age fallback)');
+  assert(isStaleLock(null) === true, 'T-585-stale: null/corrupt holder → stale');
+}
+
+// -- T-585-acquire / T-585-release (unit): O_EXCL claim, live-holder refuse, idempotent release,
+//    dead-holder typed STALE refusal — driven directly against a real lockfile under $TMPDIR.
+//    NOTE: acquireProjectLock NEVER unlinks another process's lock (an unlink-based takeover
+//    double-acquires under concurrency — two takers holding the same stale decision both claim
+//    after the other's unlink); a dead holder is CLASSIFIED stale:true and refused. --
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lock585-unit-'));
+  const lockPath = path.join(tmp, '.cache', SCHEDULER_LOCK_NAME);
+  // (a) clean acquire → ok + file present carrying our payload.
+  const a1 = acquireProjectLock(lockPath, { subcommand: 'open-ready' });
+  assert(a1.ok === true && typeof a1.release === 'function', 'T-585-acquire: clean O_EXCL claim ok + release closure');
+  assert(fs.existsSync(lockPath), 'T-585-acquire: lock file present after acquire');
+  const held = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+  assert(held.pid === process.pid && held.subcommand === 'open-ready' && typeof held.host === 'string',
+    'T-585-acquire: payload carries pid + subcommand + host');
+  // (b) a SECOND acquire while held by a LIVE holder → refuse stale:false with the holder (never double-acquire).
+  const a2 = acquireProjectLock(lockPath, { subcommand: 'close-node' });
+  assert(a2.ok === false && a2.stale === false && a2.holder && a2.holder.pid === process.pid,
+    'T-585-acquire: second acquire refused stale:false by the live holder (no double-acquire)');
+  // (c) release removes the file.
+  a1.release();
+  assert(!fs.existsSync(lockPath), 'T-585-release: release removes the lock file');
+  // (d) release is idempotent (no throw when the file is already gone).
+  a1.release();
+  assert(!fs.existsSync(lockPath), 'T-585-release: second release is a no-op (idempotent)');
+  // (e) stale REFUSAL (no auto-takeover): plant a DEAD-pid holder → acquire refuses ok:false + stale:true
+  //     and the lockfile payload is byte-untouched (this function never unlinks another process's lock).
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  const deadPayload = JSON.stringify({ pid: 2147483646, host: os.hostname(), ts: Date.now(), subcommand: 'open-ready' });
+  fs.writeFileSync(lockPath, deadPayload);
+  const a3 = acquireProjectLock(lockPath, { subcommand: 'open-ready' });
+  assert(a3.ok === false && a3.stale === true, 'T-585-stale-refuse(unit): dead-pid holder → ok:false + stale:true (no auto-takeover)');
+  assert(a3.holder && a3.holder.pid === 2147483646, 'T-585-stale-refuse(unit): refusal carries the dead holder payload');
+  assert(fs.readFileSync(lockPath, 'utf8') === deadPayload, 'T-585-stale-refuse(unit): the stale lockfile is byte-untouched (never a non-holder unlink)');
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+// -- Real-subprocess #585 tests: the lock is enforced in main() (the CLI boundary), so these drive the
+//    real adaptive-node CLI in a real $TMPDIR git repo. The read-frontier fixture (ra code-explorer +
+//    rb knowledge-lookup → finalize) co-opens as a read fan-out (no legs), giving two closeable
+//    in_progress members for the close-node race and a clean pending frontier for the open-ready race. --
+{
+  const { execFileSync, spawnSync } = require('child_process');
+  const NODE_CLI = path.join(__dirname, 'kaola-workflow-adaptive-node.js');
+  const VALIDATOR = path.join(__dirname, 'kaola-workflow-plan-validator.js');
+
+  function makeReadFrontierRepo() {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'lock585-repo-'));
+    const project = 'test-project';
+    const projDir = path.join(repoRoot, 'kaola-workflow', project);
+    const cacheDir = path.join(projDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const planPath = path.join(projDir, 'workflow-plan.md');
+    const plan = [
+      '# Workflow Plan — test-project', '',
+      '## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| ra | code-explorer | — | — | 1 | sequence |',
+      '| rb | knowledge-lookup | — | — | 1 | sequence |',
+      '| finalize | finalize | ra,rb | — | 1 | sequence |', '',
+      '## Node Ledger', '',
+      '| id | status |', '| --- | --- |',
+      '| ra | pending |', '| rb | pending |', '| finalize | pending |', '',
+    ].join('\n') + '\n';
+    fs.writeFileSync(planPath, plan);
+    fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n');
+    const g = (args) => execFileSync('git', ['-C', repoRoot, ...args], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+    g(['init']); g(['config', 'user.email', 'kw@test']); g(['config', 'user.name', 'kw']); g(['config', 'commit.gpgsign', 'false']);
+    try { execFileSync('node', [VALIDATOR, planPath, '--freeze', '--repair', '--json'], { cwd: repoRoot, encoding: 'utf8' }); } catch (_) {}
+    fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
+    g(['add', '-A']); g(['commit', '-m', 'init']);
+    return { repoRoot, project, planPath, cacheDir };
+  }
+  function runNode(repoRoot, subArgs, extraEnv) {
+    const env = Object.assign({}, process.env, extraEnv || {});
+    try {
+      const stdout = execFileSync('node', [NODE_CLI, ...subArgs], { cwd: repoRoot, encoding: 'utf8', env });
+      let parsed = {}; try { parsed = JSON.parse(stdout.trim().split('\n').pop()); } catch (_) {}
+      return { exitCode: 0, ...parsed };
+    } catch (err) {
+      const status = (err.status == null) ? 1 : err.status;
+      let parsed = {}; try { parsed = JSON.parse(String(err.stdout || '').trim().split('\n').pop()); } catch (_) {}
+      return { exitCode: status, ...parsed };
+    }
+  }
+  function writeEvidence(cacheDir, id) {
+    const baseFile = path.join(cacheDir, 'barrier-base-' + String(id).replace(/[^A-Za-z0-9_-]/g, '_'));
+    let nonce = ''; try { nonce = fs.readFileSync(baseFile, 'utf8').trim().slice(0, 12); } catch (_) { nonce = ''; }
+    fs.writeFileSync(path.join(cacheDir, id + '.md'),
+      ['evidence-binding: ' + id + ' ' + nonce, id + ' read-frontier probe complete', 'findings: none'].join('\n') + '\n');
+  }
+  function readRS(cacheDir) { try { return JSON.parse(fs.readFileSync(path.join(cacheDir, 'running-set.json'), 'utf8')); } catch (_) { return null; } }
+  function ledgerStatuses(planPath) {
+    const txt = fs.readFileSync(planPath, 'utf8');
+    const start = txt.indexOf('## Node Ledger');
+    const body = start >= 0 ? txt.slice(start) : txt;
+    const out = {};
+    const re = /^\|\s*([A-Za-z0-9_-]+)\s*\|\s*(\S+)\s*\|/gm;
+    let m; while ((m = re.exec(body)) !== null) { if (m[1] !== 'id') out[m[1]] = m[2]; }
+    return out;
+  }
+  function inProgressSet(planPath) {
+    const st = ledgerStatuses(planPath);
+    return new Set(Object.keys(st).filter((k) => st[k] === 'in_progress'));
+  }
+  function rsNodeSet(cacheDir) {
+    const rs = readRS(cacheDir);
+    return new Set(rs && Array.isArray(rs.nodes) ? rs.nodes.map((n) => n.id) : []);
+  }
+  function setsEqual(a, b) { if (a.size !== b.size) return false; for (const x of a) if (!b.has(x)) return false; return true; }
+  function cleanup(root) { try { fs.rmSync(root, { recursive: true, force: true }); } catch (_) {} }
+
+  // raceN — a GENUINE N-process interleave. An orchestrator (node -e) spawns ALL N real adaptive-node
+  // CLIs via child_process.spawn + Promise.all (concurrency INSIDE the orchestrator), then prints all
+  // {code,out} as one JSON line; the parent sync-joins by spawnSync and parses each subprocess's last
+  // JSON line. This is the suite's first genuine scheduler race (prior crash-window tests hand-built
+  // states between sequential calls). raceTwo is the 2-caller convenience wrapper.
+  function raceN(repoRoot, argvs) {
+    const orch =
+      'const { spawn } = require("child_process");' +
+      'function run(a){return new Promise(function(res){var p=spawn(process.execPath,[' + JSON.stringify(NODE_CLI) + '].concat(a),{cwd:' + JSON.stringify(repoRoot) + ',env:process.env});var o="";var e="";p.stdout.on("data",function(d){o+=d});p.stderr.on("data",function(d){e+=d});p.on("close",function(c){res({code:c,out:o})});});}' +
+      'Promise.all(' + JSON.stringify(argvs) + '.map(run)).then(function(rs){process.stdout.write("RACE:"+JSON.stringify(rs)+"\\n");});';
+    const res = spawnSync(process.execPath, ['-e', orch], { cwd: repoRoot, encoding: 'utf8', env: process.env });
+    const line = String(res.stdout || '').split('\n').filter((l) => l.indexOf('RACE:') === 0).pop() || 'RACE:[]';
+    let arr = []; try { arr = JSON.parse(line.slice('RACE:'.length)); } catch (_) { arr = []; }
+    return arr.map((r) => { let parsed = {}; try { parsed = JSON.parse(String(r.out || '').trim().split('\n').pop()); } catch (_) {} return { code: r.code, ...parsed }; });
+  }
+  function raceTwo(repoRoot, argv1, argv2) { return raceN(repoRoot, [argv1, argv2]); }
+
+  // -- T-585-live-refuse: a LIVE holder's lock makes a guarded subcommand refuse scheduler_locked with
+  //    ZERO mutation. RED: the advisory-only pre-fix CLI ignores the inert lock and co-opens the frontier. --
+  {
+    const { repoRoot, project, planPath, cacheDir } = makeReadFrontierRepo();
+    fs.writeFileSync(path.join(cacheDir, SCHEDULER_LOCK_NAME),
+      JSON.stringify({ pid: process.pid, host: os.hostname(), ts: Date.now(), subcommand: 'open-ready' }));
+    const r = runNode(repoRoot, ['open-ready', '--project', project, '--json']);
+    assert(r.result === 'refuse' && r.reason === 'scheduler_locked',
+      'T-585-live-refuse: open-ready refuses scheduler_locked under a live holder, got ' + JSON.stringify({ result: r.result, reason: r.reason }));
+    assert(r.exitCode === 1, 'T-585-live-refuse: non-zero exit on contention');
+    assert(typeof r.operator_hint === 'string' && r.operator_hint.length > 0, 'T-585-live-refuse: typed operator_hint present');
+    assert(fs.existsSync(path.join(cacheDir, SCHEDULER_LOCK_NAME)), 'T-585-live-refuse: the live holder lock is NOT removed by the refused caller');
+    const st = ledgerStatuses(planPath);
+    assert(st.ra === 'pending' && st.rb === 'pending', 'T-585-live-refuse: ledger unchanged (no in_progress) — zero mutation');
+    assert(readRS(cacheDir) === null, 'T-585-live-refuse: no running set written');
+    cleanup(repoRoot);
+  }
+
+  // -- T-585-stale-refuse: a DEAD-pid holder is NEVER auto-taken-over (an unlink-based takeover
+  //    double-acquires under concurrency). The CLI refuses with the DISTINCT typed reason
+  //    scheduler_lock_stale, zero mutation, lock byte-intact; the operator_hint names the manual
+  //    recovery (rm the literal lockPath from ONE session). The recovery narrative then pins the
+  //    "never wedges" AC via the hint path: unlink by hand → re-run → proceeds. --
+  {
+    const { repoRoot, project, planPath, cacheDir } = makeReadFrontierRepo();
+    const lockFile = path.join(cacheDir, SCHEDULER_LOCK_NAME);
+    const stalePayload = JSON.stringify({ pid: 2147483646, host: os.hostname(), ts: Date.now(), subcommand: 'open-ready' });
+    fs.writeFileSync(lockFile, stalePayload);
+    const r = runNode(repoRoot, ['open-ready', '--project', project, '--json']);
+    assert(r.result === 'refuse' && r.reason === 'scheduler_lock_stale',
+      'T-585-stale-refuse: dead-holder lock → typed scheduler_lock_stale refusal (no auto-takeover), got ' + JSON.stringify({ result: r.result, reason: r.reason }));
+    assert(r.exitCode === 1, 'T-585-stale-refuse: non-zero exit on the stale refusal');
+    assert(typeof r.operator_hint === 'string' && /rm "[^"]*scheduler\.lock"/.test(r.operator_hint),
+      'T-585-stale-refuse: operator_hint names the literal lockPath in an rm "<lockPath>" form, got ' + JSON.stringify(r.operator_hint));
+    let lockNow = null; try { lockNow = fs.readFileSync(lockFile, 'utf8'); } catch (_) { lockNow = null; }
+    assert(lockNow === stalePayload, 'T-585-stale-refuse: the stale lockfile is byte-intact (never auto-removed)');
+    const st = ledgerStatuses(planPath);
+    assert(st.ra === 'pending' && st.rb === 'pending', 'T-585-stale-refuse: ledger unchanged — zero mutation');
+    assert(readRS(cacheDir) === null, 'T-585-stale-refuse: no running set written');
+    // Recovery narrative (the hinted step): the operator removes the lock by hand from ONE session, then
+    // re-runs → the frontier opens (a dead holder never permanently wedges the project).
+    try { fs.unlinkSync(lockFile); } catch (_) {}
+    const r2 = runNode(repoRoot, ['open-ready', '--project', project, '--json']);
+    assert(r2.result === 'ok' && Array.isArray(r2.opened) && r2.opened.length === 2,
+      'T-585-stale-refuse: after the operator removes the lock, open-ready proceeds (never wedges), got ' + JSON.stringify({ result: r2.result, opened: r2.opened && r2.opened.map((n) => n.id), reason: r2.reason }));
+    assert(!fs.existsSync(lockFile), 'T-585-stale-refuse: lock released after the recovered serial call');
+    cleanup(repoRoot);
+  }
+  // -- age-based cross-host twin: an OLD-ts cross-host holder is ALSO a typed stale refusal (age fallback). --
+  {
+    const { repoRoot, project, cacheDir } = makeReadFrontierRepo();
+    fs.writeFileSync(path.join(cacheDir, SCHEDULER_LOCK_NAME),
+      JSON.stringify({ pid: 4242, host: 'ghost-host-' + Math.random().toString(16).slice(2), ts: Date.now() - LANE_STALENESS_MS - 3600000, subcommand: 'open-ready' }));
+    const r = runNode(repoRoot, ['open-ready', '--project', project, '--json']);
+    assert(r.result === 'refuse' && r.reason === 'scheduler_lock_stale',
+      'T-585-stale-refuse(age): old cross-host holder → scheduler_lock_stale refusal, got ' + JSON.stringify({ result: r.result, reason: r.reason }));
+    cleanup(repoRoot);
+  }
+
+  // -- T-585-release: a normal serial open-ready leaves NO scheduler.lock behind (finally-release). --
+  {
+    const { repoRoot, project, cacheDir } = makeReadFrontierRepo();
+    const r = runNode(repoRoot, ['open-ready', '--project', project, '--json']);
+    assert(r.result === 'ok', 'T-585-release: serial open-ready ok');
+    assert(!fs.existsSync(path.join(cacheDir, SCHEDULER_LOCK_NAME)), 'T-585-release: no scheduler.lock left after a clean serial call');
+    cleanup(repoRoot);
+  }
+
+  // -- T-585-open-ready×2 (genuine race): two concurrent open-ready on ONE project must NOT double-open.
+  //    RED: advisory-only → both read running-set=null → both open the frontier (double-dispatch). GREEN:
+  //    exactly one opens; the other refuses scheduler_locked (or, if fully serialized, sees the set already
+  //    open and opens nothing). Durable invariant EVERY trial: set(ledger in_progress) === set(running-set). --
+  {
+    const TRIALS = 5;
+    let everDoubleOpen = false;
+    let everInvariantViolated = false;
+    for (let t = 0; t < TRIALS; t++) {
+      const { repoRoot, project, planPath, cacheDir } = makeReadFrontierRepo();
+      const rs = raceTwo(repoRoot, ['open-ready', '--project', project, '--json'], ['open-ready', '--project', project, '--json']);
+      const nonEmptyOpens = rs.filter((r) => r && r.result === 'ok' && Array.isArray(r.opened) && r.opened.length > 0).length;
+      if (nonEmptyOpens > 1) everDoubleOpen = true;
+      if (!setsEqual(inProgressSet(planPath), rsNodeSet(cacheDir))) everInvariantViolated = true;
+      cleanup(repoRoot);
+    }
+    assert(everDoubleOpen === false,
+      'T-585-open-ready×2: no trial double-opened the frontier (the lock serializes concurrent open-ready)');
+    assert(everInvariantViolated === false,
+      'T-585-open-ready×2: set(ledger in_progress) === set(running-set) held in every trial');
+  }
+
+  // -- T-585-close-node×2 (genuine race): two concurrent close-node for two co-open read-frontier members
+  //    must not lose a complete flip. RED: each whole-plan rewrite clobbers the other → 1 complete for 2
+  //    result:ok (lost update). GREEN: at most one close is result:ok per race (the other refuses
+  //    scheduler_locked), so completeMembers >= #(ok); a serial retry then completes both (no wedge). --
+  {
+    const TRIALS = 5;
+    let everLostUpdate = false;
+    let everWedged = false;
+    let racesRun = 0;
+    for (let t = 0; t < TRIALS; t++) {
+      const { repoRoot, project, planPath, cacheDir } = makeReadFrontierRepo();
+      const open = runNode(repoRoot, ['open-ready', '--project', project, '--json']);
+      if (!(open.result === 'ok' && Array.isArray(open.opened) && open.opened.length === 2)) { cleanup(repoRoot); continue; }
+      writeEvidence(cacheDir, 'ra'); writeEvidence(cacheDir, 'rb');
+      racesRun++;
+      const rs = raceTwo(repoRoot,
+        ['close-node', '--node-id', 'ra', '--project', project, '--json'],
+        ['close-node', '--node-id', 'rb', '--project', project, '--json']);
+      const oks = rs.filter((r) => r && r.result === 'ok').length;
+      const st = ledgerStatuses(planPath);
+      const completeMembers = ['ra', 'rb'].filter((id) => st[id] === 'complete').length;
+      if (completeMembers < oks) everLostUpdate = true;
+      // GREEN recovery: serially retry any member still not complete → both must reach complete (no wedge).
+      for (const id of ['ra', 'rb']) {
+        if (ledgerStatuses(planPath)[id] !== 'complete') runNode(repoRoot, ['close-node', '--node-id', id, '--project', project, '--json']);
+      }
+      const stFinal = ledgerStatuses(planPath);
+      if (!(stFinal.ra === 'complete' && stFinal.rb === 'complete')) everWedged = true;
+      cleanup(repoRoot);
+    }
+    assert(racesRun > 0, 'T-585-close-node×2: at least one race trial ran (co-open setup succeeded)');
+    assert(everLostUpdate === false,
+      'T-585-close-node×2: no trial lost a complete flip (completeMembers >= #result:ok in every race)');
+    assert(everWedged === false,
+      'T-585-close-node×2: a serial retry completes both members after every race (the lock never wedges the project)');
+  }
+
+  // -- T-585-stale-race (repair proof): N=6 concurrent open-ready against a PLANTED dead-PID stale lock.
+  //    An unlink-based auto-takeover double-acquires here (two takers holding the same stale decision
+  //    both claim after the other's unlink — the first taker ALWAYS succeeds, so ANY result:ok fails the
+  //    zero-acquisition assertion deterministically). With takeover removed, NO code path succeeds
+  //    against an existing lockfile: all N refuse scheduler_lock_stale, the planted lockfile survives
+  //    byte-identical (no non-holder unlink EVER), and durable state is untouched. --
+  {
+    const TRIALS = 3;
+    const N = 6;
+    let everAcquired = false;
+    let everWrongShape = false;
+    let everLockMutated = false;
+    let everLedgerMutated = false;
+    let everRunningSet = false;
+    for (let t = 0; t < TRIALS; t++) {
+      const { repoRoot, project, planPath, cacheDir } = makeReadFrontierRepo();
+      const lockFile = path.join(cacheDir, SCHEDULER_LOCK_NAME);
+      const stalePayload = JSON.stringify({ pid: 2147483646, host: os.hostname(), ts: Date.now(), subcommand: 'open-ready' });
+      fs.writeFileSync(lockFile, stalePayload);
+      const argvs = [];
+      for (let i = 0; i < N; i++) argvs.push(['open-ready', '--project', project, '--json']);
+      const rs = raceN(repoRoot, argvs);
+      if (rs.length !== N || rs.some((r) => r && r.result === 'ok')) everAcquired = true;
+      if (!(rs.length === N && rs.every((r) => r && r.result === 'refuse' && r.reason === 'scheduler_lock_stale' && r.code === 1))) everWrongShape = true;
+      let lockNow = null; try { lockNow = fs.readFileSync(lockFile, 'utf8'); } catch (_) { lockNow = null; }
+      if (lockNow !== stalePayload) everLockMutated = true;
+      const st = ledgerStatuses(planPath);
+      if (!(st.ra === 'pending' && st.rb === 'pending' && st.finalize === 'pending')) everLedgerMutated = true;
+      if (readRS(cacheDir) !== null) everRunningSet = true;
+      cleanup(repoRoot);
+    }
+    assert(everAcquired === false,
+      'T-585-stale-race: ZERO acquisitions across ' + N + ' concurrent callers vs a stale lock in every trial (no code path succeeds against an existing lockfile)');
+    assert(everWrongShape === false,
+      'T-585-stale-race: ALL ' + N + ' concurrent callers refuse scheduler_lock_stale (exit 1) in every trial');
+    assert(everLockMutated === false,
+      'T-585-stale-race: the planted stale lockfile survives byte-identical in every trial (no non-holder unlink ever)');
+    assert(everLedgerMutated === false,
+      'T-585-stale-race: ledger stays all-pending in every trial (zero mutation)');
+    assert(everRunningSet === false,
+      'T-585-stale-race: no running-set.json written in any trial');
+  }
 }
 
 if (failed > 0) {
