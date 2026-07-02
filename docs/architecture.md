@@ -296,9 +296,19 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   opt-out via `KAOLA_PARALLEL_WRITES=0`]; Part 4: consent-gated speculative gate overlap — a `speculative_open_policy:
   consent` plan field allows a descendant to open `in_progress` speculatively while its
   gate runs, with baseline roll-back discard if the gate fails and post-dominance preserved
-  by a `gate_not_complete` close-refusal). All 25 invariants [INV-1]..[INV-25] that bind
-  downstream implementation are enumerated in those records. See also
-  `docs/investigations/2026-06-12-parallelism-v3-design.md` for the runtime-grounded analysis.
+  by a `gate_not_complete` close-refusal). Since D-596-01, `consent` also admits WRITE-bearing
+  descendants onto the identical single-open-gate bet — its declared set must be exactly
+  resolvable, carry no PROTECTED file, and it must not be the plan's unique sink — and a
+  write member opens WITH a provisioned per-member leg (the #463/D-542-01 leg machinery; even
+  a lone speculative writer forms a size-1 lane group) rather than the parent worktree. On a
+  gate `verdict: fail` a speculative write member is DISCARD-ONLY (leg torn down + evidence
+  purged, no KEEP option — an asymmetry with the read half's KEEP-or-discard operator review).
+  The original D-419-02 write-overlap deferral rationale (rollback complexity against the
+  PARENT worktree) is moot once the speculative write lands in an isolated leg instead: there
+  is nothing to revert at the parent, only a leg to tear down. All 25 invariants
+  [INV-1]..[INV-25] that bind downstream implementation are enumerated in those records. See
+  also `docs/investigations/2026-06-12-parallelism-v3-design.md` for the runtime-grounded
+  analysis, and `docs/decisions/D-596-01.md` for the write-graduation decision record.
 
   **Enforcement boundary (script-enforced, #231).** The validator enforces gate
   *presence* statically at freeze: post-dominance proves a `code-reviewer` sits on

@@ -25,8 +25,8 @@
 // ---------------------------------------------------------------------------
 
 const fs = require('fs');
-const { parseNodes, parseLedger, parseSpeculativePolicy } = require('./kaola-gitlab-workflow-plan-validator');
-const { parseWriteSetCell } = require('./kaola-gitlab-workflow-classifier');
+const { parseNodes, parseLedger, parseSpeculativePolicy, uniqueSink, hasUnresolvableEntry } = require('./kaola-gitlab-workflow-plan-validator');
+const { parseWriteSetCell, isProtected } = require('./kaola-gitlab-workflow-classifier');
 const { LEDGER_STATUSES, NODE_MODEL_TIERS, GATE_VERDICT_ROLES } = require('./kaola-workflow-adaptive-schema');
 const { enforceReasoningFloor } = require('./kaola-workflow-resolve-agent-model');
 
@@ -198,13 +198,15 @@ function computeNextAction(content, opts) {
       shape: node.shape.kind,
     }));
 
-  // #439 (D-419 Part 4): SPECULATIVE-read eligibility (additive; mechanical, never authored). A node is
-  // speculative-eligible iff (a) it is read-only (declared write set empty), (b) its OWN status is still
-  // pending, (c) it is NOT already a normal ready node (it has ≥1 non-terminal ancestor), and (d) its
-  // ONLY unsatisfied DIRECT dependency is a currently-OPEN gate (a GATE_VERDICT_ROLES node whose ledger
-  // status is in_progress). The bet: the gate will pass. Because an in_progress gate's own ancestors are
-  // already terminal, "single unsatisfied direct dep == that gate" implies the full unsatisfied closure
-  // is exactly the gate. Descriptor shape mirrors readyPending, plus `speculativeGate:<gate-id>`.
+  // #439 (D-419 Part 4) + #596: SPECULATIVE eligibility, read OR write (additive; mechanical, never
+  // authored). A node is speculative-eligible iff (a) its OWN status is still pending, (b) it is NOT
+  // already a normal ready node (it has ≥1 non-terminal ancestor), (c) its ONLY unsatisfied DIRECT
+  // dependency is a currently-OPEN gate (a GATE_VERDICT_ROLES node whose ledger status is in_progress),
+  // and (d) — #596 — a non-empty declared write set is EXACTLY resolvable, carries no PROTECTED file, and
+  // the node is not the plan's unique sink (isWriteEligible; vacuously true for a read-only node). The
+  // bet: the gate will pass. Because an in_progress gate's own ancestors are already terminal, "single
+  // unsatisfied direct dep == that gate" implies the full unsatisfied closure is exactly the gate.
+  // Descriptor shape mirrors readyPending, plus `speculativeGate:<gate-id>`.
   //
   // EMITTED ONLY WHEN the plan's speculative_open_policy authorizes it (`consent`). At the default `off`
   // the `speculativePending` key is OMITTED ENTIRELY, so next-action's output is byte-identical to
@@ -214,16 +216,30 @@ function computeNextAction(content, opts) {
   // is policy-keyed, so a non-speculative plan sees zero behavioral or output-shape change.
   let speculativePending;
   if (parseSpeculativePolicy(content) === 'consent') {
-    const isReadOnly = node => {
-      try { return parseWriteSetCell(node.writeSetRaw).size === 0; }
-      catch (_) { const s = String(node.writeSetRaw == null ? '' : node.writeSetRaw).trim(); return !s || s === '—' || s === '-'; }
+    // #596: lift the read-only exclusion — a WRITE-bearing node is ALSO speculative-eligible, PROVIDED
+    // its declared set is well-formed enough for the RUNTIME disjointness re-check (open-ready
+    // --speculative-consent, the validator's --parallel-safe path) to be authoritative: every entry is
+    // EXACTLY resolvable (no directory-shaped/glob token — hasUnresolvableEntry mirrors the validator's
+    // own coarse-relaxation resolvability guard), no entry is PROTECTED (isProtected — the SAME retained-
+    // net invariant normal write co-open never bypasses), and the node is NOT the plan's unique sink (a
+    // speculative sink would let a bet-on-a-gate write skip the sink's own terminal position). A read-
+    // only node (empty declared set) trivially satisfies all three write-axis conditions.
+    const sink = uniqueSink(nodes);
+    const isWriteEligible = node => {
+      let set;
+      try { set = parseWriteSetCell(node.writeSetRaw); } catch (_) { set = new Set(); }
+      if (set.size === 0) return true; // read-only: unaffected by the write-axis conditions
+      if (node.id === sink) return false;
+      if (hasUnresolvableEntry(set)) return false;
+      for (const p of set) if (isProtected(p)) return false;
+      return true;
     };
     const gateRoleSet = new Set(GATE_VERDICT_ROLES);
     speculativePending = nodes
       .filter(node => {
         if (st(node.id) !== 'pending') return false;        // only a not-yet-opened node is speculatively openable
         if (allAncestorsTerminal(node.id)) return false;    // already a NORMAL ready node — not speculative
-        if (!isReadOnly(node)) return false;                // read-overlap ONLY (write-overlap is #463)
+        if (!isWriteEligible(node)) return false;           // #596: read OR write, subject to the write-axis conditions
         const unsatisfied = node.dependsOn.filter(d => !TERMINAL.has(st(d)));
         if (unsatisfied.length !== 1) return false;         // exactly ONE unsatisfied dependency
         const gate = byId.get(unsatisfied[0]);

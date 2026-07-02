@@ -8255,6 +8255,403 @@ function rtHarness(initialFiles, opts) {
 }
 
 // ===========================================================================
+// #596 (D-596-01) — speculative-WRITE kernel runtime. Extends the #439 speculative-READ kernel to
+// write-bearing nodes: open-ready --speculative-consent opens a WRITE node behind an OPEN gate WITH a
+// provisioned leg (marked speculative:true + kind:'write'); the close fence, gate-fail review surfacing,
+// and per-leg-barrier→merge machinery are ALL REUSED verbatim (a size-1 lane_group); discard-speculative
+// is DISCARD-ONLY for writes (leg teardown + evidence purge, no KEEP option); reconcile-running-set gains
+// a crashed-speculative-write arm (roll-forward only on a confirmed gate verdict:pass). Driven as REAL
+// subprocesses in a REAL git repo (the lifecycle reads git + fs).
+//
+// Two code-reviewer gates are load-bearing in the fixture: gate1 is the ANCESTOR gate writerW bets on
+// (writerA -> gate1 -> writerW); gate2 is writerW's OWN downstream reviewer (writerW -> gate2 -> sink) —
+// the G1 freeze grammar requires EVERY code-producing node to be post-dominated by a code-reviewer, and
+// gate1 (upstream of writerW) does not satisfy that for writerW itself (design: "the gate it speculates
+// past is its ancestor; its own reviewer is downstream and unaffected").
+// ===========================================================================
+{
+  const { execFileSync } = require('child_process');
+  const NODE_CLI_596 = path.join(__dirname, 'kaola-workflow-adaptive-node.js');
+  const VALIDATOR_596 = path.join(__dirname, 'kaola-workflow-plan-validator.js');
+  const node596 = require(path.join(__dirname, 'kaola-workflow-adaptive-node.js'));
+  const PROJECT_596 = 'issue-596';
+
+  // writerA(write) -> gate1(reviewer, the bet) -> writerW(write) -> gate2(reviewer, writerW's own) -> sink.
+  function make596Repo() {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-596-'));
+    const projDir = path.join(repoRoot, 'kaola-workflow', PROJECT_596);
+    const cacheDir = path.join(projDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const planPath = path.join(projDir, 'workflow-plan.md');
+    const plan = [
+      '# Workflow Plan — issue-596', '',
+      '## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md', 'speculative_open_policy: consent', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| writerA | tdd-guide     | —       | a.js         | 1 | sequence |',
+      '| gate1   | code-reviewer | writerA | —            | 1 | sequence |',
+      '| writerW | tdd-guide     | gate1   | w.js         | 1 | sequence |',
+      '| gate2   | code-reviewer | writerW | —            | 1 | sequence |',
+      '| sink    | finalize      | gate2   | CHANGELOG.md | 1 | sequence |', '',
+      '## Node Ledger', '',
+      '| id | status |', '| --- | --- |',
+      '| writerA | complete |', '| gate1 | pending |', '| writerW | pending |', '| gate2 | pending |', '| sink | pending |', '',
+    ].join('\n') + '\n';
+    fs.writeFileSync(planPath, plan);
+    fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n');
+    fs.writeFileSync(path.join(repoRoot, 'a.js'), '// writerA\n');
+    const g = (a) => execFileSync('git', ['-C', repoRoot, ...a], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+    g(['init']); g(['config', 'user.email', 'kw@test']); g(['config', 'user.name', 'kw']); g(['config', 'commit.gpgsign', 'false']);
+    try { execFileSync('node', [VALIDATOR_596, planPath, '--freeze', '--repair', '--json'], { cwd: repoRoot, encoding: 'utf8' }); } catch (_) {}
+    fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
+    g(['add', '-A']); g(['commit', '-m', 'init']);
+    return { repoRoot, project: PROJECT_596, projDir, cacheDir, planPath, g };
+  }
+
+  // Sibling variant: writerA -> gate1 -> {writerW1(set1), writerW2(set2)} -> gate2 -> sink. Both siblings'
+  // ONLY unsatisfied dep is gate1, so BOTH are speculative-eligible simultaneously.
+  function make596PairRepo(set1, set2) {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-596p-'));
+    const projDir = path.join(repoRoot, 'kaola-workflow', PROJECT_596);
+    const cacheDir = path.join(projDir, '.cache');
+    fs.mkdirSync(cacheDir, { recursive: true });
+    const planPath = path.join(projDir, 'workflow-plan.md');
+    const plan = [
+      '# Workflow Plan — issue-596 (pair)', '',
+      '## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md', 'speculative_open_policy: consent', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| writerA | tdd-guide     | —              | a.js         | 1 | sequence |',
+      '| gate1   | code-reviewer | writerA        | —            | 1 | sequence |',
+      '| writerW1 | tdd-guide    | gate1          | ' + set1 + ' | 1 | sequence |',
+      '| writerW2 | tdd-guide    | gate1          | ' + set2 + ' | 1 | sequence |',
+      '| gate2   | code-reviewer | writerW1,writerW2 | —         | 1 | sequence |',
+      '| sink    | finalize      | gate2          | CHANGELOG.md | 1 | sequence |', '',
+      '## Node Ledger', '',
+      '| id | status |', '| --- | --- |',
+      '| writerA | complete |', '| gate1 | pending |', '| writerW1 | pending |', '| writerW2 | pending |', '| gate2 | pending |', '| sink | pending |', '',
+    ].join('\n') + '\n';
+    fs.writeFileSync(planPath, plan);
+    fs.writeFileSync(path.join(projDir, 'workflow-state.md'), '# State\n');
+    fs.writeFileSync(path.join(repoRoot, 'a.js'), '// writerA\n');
+    const g = (a) => execFileSync('git', ['-C', repoRoot, ...a], { encoding: 'utf8', stdio: ['ignore', 'ignore', 'ignore'] });
+    g(['init']); g(['config', 'user.email', 'kw@test']); g(['config', 'user.name', 'kw']); g(['config', 'commit.gpgsign', 'false']);
+    try { execFileSync('node', [VALIDATOR_596, planPath, '--freeze', '--repair', '--json'], { cwd: repoRoot, encoding: 'utf8' }); } catch (_) {}
+    fs.writeFileSync(path.join(repoRoot, '.gitignore'), '.kw/\n');
+    g(['add', '-A']); g(['commit', '-m', 'init']);
+    return { repoRoot, project: PROJECT_596, projDir, cacheDir, planPath, g };
+  }
+
+  function run596(repoRoot, subArgs, extraEnv) {
+    try {
+      const stdout = execFileSync('node', [NODE_CLI_596, ...subArgs], { cwd: repoRoot, encoding: 'utf8', env: { ...process.env, ...(extraEnv || {}) } });
+      let p = {}; try { p = JSON.parse(stdout.trim().split('\n').pop()); } catch (_) {}
+      return { exitCode: 0, ...p };
+    } catch (err) {
+      const status = (err.status == null) ? 1 : err.status;
+      let p = {}; try { p = JSON.parse(String(err.stdout || '').trim().split('\n').pop()); } catch (_) {}
+      return { exitCode: status, ...p };
+    }
+  }
+  function readRS596(cacheDir) { try { return JSON.parse(fs.readFileSync(path.join(cacheDir, 'running-set.json'), 'utf8')); } catch (_) { return null; } }
+  function ledgerStatus596(planPath, id) {
+    const txt = fs.readFileSync(planPath, 'utf8');
+    const body = txt.slice(txt.indexOf('## Node Ledger'));
+    const m = body.match(new RegExp('^\\|\\s*' + id + '\\s*\\|\\s*(\\S+)\\s*\\|', 'm'));
+    return m ? m[1] : null;
+  }
+  function worktreePaths596(repoRoot) {
+    let out = '';
+    try { out = execFileSync('git', ['-C', repoRoot, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' }); } catch (_) { return []; }
+    return String(out).split('\n').filter(l => l.indexOf('worktree ') === 0).map(l => l.slice('worktree '.length).trim());
+  }
+  function branchExists596(repoRoot, branch) {
+    try { execFileSync('git', ['-C', repoRoot, 'rev-parse', '--verify', '--quiet', 'refs/heads/' + branch], { stdio: ['ignore', 'ignore', 'ignore'] }); return true; }
+    catch (_) { return false; }
+  }
+  function legBaseRefExists596(repoRoot, project, id) {
+    try { execFileSync('git', ['-C', repoRoot, 'show-ref', '--verify', '--quiet', 'refs/kaola-workflow/leg-base/' + project + '/' + id], { stdio: ['ignore', 'ignore', 'ignore'] }); return true; }
+    catch (_) { return false; }
+  }
+  // Open gate1 via the REAL scheduler (a normal read-only ready node) and return its nonce.
+  function openGate1_596(repoRoot, project) {
+    const r = run596(repoRoot, ['open-ready', '--project', project || PROJECT_596, '--json']);
+    const gateEntry = (r.opened || []).find(n => n.id === 'gate1');
+    return gateEntry ? gateEntry.nonce : null;
+  }
+  // tdd-guide requires evidence-binding + RED + GREEN tokens (ROLE_TOKEN_REGISTRY); writerW/writerW1/
+  // writerW2 are all tdd-guide in these fixtures.
+  function writeValidEvidence596(cacheDir, id) {
+    let nonce = '';
+    try { nonce = fs.readFileSync(path.join(cacheDir, 'barrier-base-' + id), 'utf8').trim().slice(0, 12); } catch (_) {}
+    fs.writeFileSync(path.join(cacheDir, id + '.md'),
+      'evidence-binding: ' + id + ' ' + nonce + '\nRED: pre-impl failing assertion\nGREEN: assertion now passes\n');
+  }
+  function rm596(p) { try { fs.rmSync(p, { recursive: true, force: true }); } catch (_) {} }
+
+  // T596-1 (AC1 happy path): plan writerA -> gate1 -> writerW; writerW's set is exact-disjoint from all
+  // live writers (there are none live). With policy consent + --speculative-consent and gate1 in_progress,
+  // open-ready opens writerW in a provisioned leg (a size-1 lane_group).
+  {
+    const { repoRoot, cacheDir, project } = make596Repo();
+    openGate1_596(repoRoot);
+    const r = run596(repoRoot, ['open-ready', '--project', project, '--speculative-consent', '--json']);
+    assert(r.result === 'ok' && (r.opened || []).some(n => n.id === 'writerW'),
+      'T596-1: open-ready --speculative-consent opens writerW, got ' + JSON.stringify((r.opened || []).map(n => n.id)));
+    assert(r.laneGroup && r.laneGroup.group_id === 'lg-writerW' && JSON.stringify(r.laneGroup.members) === JSON.stringify(['writerW']),
+      'T596-1: a size-1 lane_group forms for the lone speculative writer, got ' + JSON.stringify(r.laneGroup));
+    assert(r.laneGroup.legs && r.laneGroup.legs.writerW && r.laneGroup.legs.writerW.legPath,
+      'T596-1: the lane_group carries a provisioned leg for writerW, got ' + JSON.stringify(r.laneGroup.legs));
+    const rs = readRS596(cacheDir);
+    const w = rs && (rs.nodes || []).find(n => n.id === 'writerW');
+    assert(w && w.speculative === true && w.speculativeGate === 'gate1' && w.kind === 'write' && w.group_id === 'lg-writerW',
+      'T596-1: running-set entry marked speculative:true, kind:write, speculativeGate:gate1, got ' + JSON.stringify(w));
+    const wts = worktreePaths596(repoRoot);
+    assert(wts.some(p => p.endsWith(path.join('.kw', 'legs', project, 'writerW'))), 'T596-1: leg worktree provisioned, got ' + JSON.stringify(wts));
+    assert(branchExists596(repoRoot, 'kw/legs/' + project + '/writerW'), 'T596-1: leg branch provisioned');
+    assert(ledgerStatus596(r && r.planPath || path.join(repoRoot, 'kaola-workflow', project, 'workflow-plan.md'), 'writerW') === 'in_progress',
+      'T596-1: writerW ledger flipped to in_progress');
+    rm596(repoRoot);
+  }
+
+  // T596-2 (AC2 close fence): writerW's close while gate1 is open refuses gate_not_complete — the SAME
+  // speculativeCloseGuard the read half uses, unchanged, exercised here by a WRITE member.
+  {
+    const { repoRoot, cacheDir, planPath, project } = make596Repo();
+    openGate1_596(repoRoot);
+    run596(repoRoot, ['open-ready', '--project', project, '--speculative-consent', '--json']);
+    writeValidEvidence596(cacheDir, 'writerW');
+    const r = run596(repoRoot, ['close-node', '--project', project, '--node-id', 'writerW', '--json']);
+    assert(r.result === 'refuse' && r.reason === 'gate_not_complete',
+      'T596-2: closing a speculative WRITE node while its gate is open refuses gate_not_complete, got ' + JSON.stringify(r));
+    assert(r.speculativeGate === 'gate1', 'T596-2: gate_not_complete names the open gate');
+    assert(ledgerStatus596(planPath, 'writerW') === 'in_progress', 'T596-2: writerW stays in_progress (held, not completed)');
+    rm596(repoRoot);
+  }
+
+  // T596-3 (AC3 pass path): gate1 closes verdict:pass -> writerW closes normally; the leg merges through
+  // the EXISTING per-leg barrier -> octopus/merge path (no new merge code); union barrier green.
+  {
+    const { repoRoot, cacheDir, planPath, project } = make596Repo();
+    const gate1Nonce = openGate1_596(repoRoot);
+    const open = run596(repoRoot, ['open-ready', '--project', project, '--speculative-consent', '--json']);
+    assert(open.result === 'ok' && open.laneGroup, 'T596-3: setup speculative open ok');
+    const legPath = open.laneGroup.legs.writerW.legPath;
+    fs.writeFileSync(path.join(legPath, 'w.js'), '// writerW in-lane (leg)\n');
+    writeValidEvidence596(cacheDir, 'writerW');
+    fs.writeFileSync(path.join(cacheDir, 'gate1.md'), 'evidence-binding: gate1 ' + (gate1Nonce || '') + '\nverdict: pass\nfindings_blocking: 0\n');
+    const rGate = run596(repoRoot, ['close-node', '--project', project, '--node-id', 'gate1', '--json']);
+    assert(rGate.result === 'ok' && !rGate.speculative_review_required, 'T596-3: gate1 closes verdict:pass with NO speculative_review_required, got ' + JSON.stringify(rGate));
+    const rW = run596(repoRoot, ['close-node', '--project', project, '--node-id', 'writerW', '--json']);
+    assert(rW.result === 'ok' && rW.barrier === 'group_passed' && rW.synthesized === true && typeof rW.mergeCommit === 'string' && rW.mergeCommit.length >= 7,
+      'T596-3: writerW closes via the group (octopus-merge) union barrier ⇒ group_passed + synthesized, got ' + JSON.stringify(rW));
+    const head = execFileSync('git', ['-C', repoRoot, 'ls-tree', '-r', '--name-only', 'HEAD'], { encoding: 'utf8' });
+    assert(head.includes('w.js'), 'T596-3: w.js reaches HEAD after the union barrier merge, got ' + JSON.stringify(head.split('\n').filter(Boolean)));
+    assert(ledgerStatus596(planPath, 'writerW') === 'complete', 'T596-3: writerW ledger complete');
+    const wts = worktreePaths596(repoRoot);
+    assert(!wts.some(p => p.indexOf(path.join('.kw', 'legs')) !== -1), 'T596-3: leg worktree torn down on clean completion, got ' + JSON.stringify(wts));
+    rm596(repoRoot);
+  }
+
+  // T596-4 (AC4 fail path): gate1 closes verdict:fail -> discard-speculative on writerW removes the leg
+  // worktree + branch + leg-base ref; ledger row back to pending; baseline dropped; evidence discarded;
+  // the PARENT worktree is byte-identical to pre-speculation (w.js never existed at the parent root).
+  {
+    const { repoRoot, cacheDir, planPath, project } = make596Repo();
+    const gate1Nonce = openGate1_596(repoRoot);
+    const open = run596(repoRoot, ['open-ready', '--project', project, '--speculative-consent', '--json']);
+    assert(open.result === 'ok' && open.laneGroup, 'T596-4: setup speculative open ok');
+    assert(fs.existsSync(path.join(cacheDir, 'writerW.md')), 'T596-4: writerW evidence auto-seeded at open');
+    assert(fs.existsSync(path.join(cacheDir, 'barrier-base-writerW')), 'T596-4: writerW baseline recorded at open');
+    fs.writeFileSync(path.join(cacheDir, 'gate1.md'), 'evidence-binding: gate1 ' + (gate1Nonce || '') + '\nverdict: fail\nfindings_blocking: 1\nfinding: id=x scope=in-scope severity=high status=open desc=bad\n');
+    const rGate = run596(repoRoot, ['close-node', '--project', project, '--node-id', 'gate1', '--json']);
+    assert(rGate.result === 'ok' && rGate.speculative_review_required && rGate.speculative_review_required.gate === 'gate1'
+      && (rGate.speculative_review_required.speculative || []).includes('writerW'),
+      'T596-4: gate1 verdict:fail surfaces speculative_review_required naming writerW, got ' + JSON.stringify(rGate.speculative_review_required));
+    const r = run596(repoRoot, ['discard-speculative', '--project', project, '--node-id', 'writerW', '--json']);
+    assert(r.result === 'ok' && r.discarded === true && r.legTornDown === true && r.evidenceDiscarded === true && r.groupCleared === true,
+      'T596-4: discard-speculative tears down the leg + purges evidence + clears the (sole-member) group, got ' + JSON.stringify(r));
+    assert(ledgerStatus596(planPath, 'writerW') === 'pending', 'T596-4: writerW ledger row back to pending');
+    const wts = worktreePaths596(repoRoot);
+    assert(!wts.some(p => p.indexOf(path.join('.kw', 'legs')) !== -1), 'T596-4: leg worktree removed, got ' + JSON.stringify(wts));
+    assert(!branchExists596(repoRoot, 'kw/legs/' + project + '/writerW'), 'T596-4: leg branch removed');
+    assert(!legBaseRefExists596(repoRoot, project, 'writerW'), 'T596-4: leg-base ref removed');
+    assert(!fs.existsSync(path.join(cacheDir, 'barrier-base-writerW')), 'T596-4: baseline dropped');
+    assert(!fs.existsSync(path.join(cacheDir, 'writerW.md')), 'T596-4: evidence discarded (file purged)');
+    const rs = readRS596(cacheDir);
+    assert(!(rs && (rs.nodes || []).some(n => n.id === 'writerW')), 'T596-4: writerW removed from the running set');
+    assert(!(rs && rs.lane_group), 'T596-4: lane_group entirely cleared (sole member discarded)');
+    assert(!fs.existsSync(path.join(repoRoot, 'w.js')), 'T596-4: parent worktree byte-identical to pre-speculation — w.js never existed at the parent root');
+    const porcelainW = execFileSync('git', ['-C', repoRoot, 'status', '--porcelain', '--', 'w.js'], { encoding: 'utf8' });
+    assert(porcelainW.trim() === '', 'T596-4: git sees no trace of w.js at the parent');
+    rm596(repoRoot);
+  }
+
+  // T596-5 (AC5 refusal — direct unit test of the runtime exact-overlap re-check). NOTE on why this is a
+  // direct unit test rather than a full open-ready lifecycle test: the FREEZE WALL already refuses two
+  // concurrent (antichain) sibling nodes declaring the SAME exact file at freeze time — "concurrent
+  // siblings X and Y both write ... (parallel non-fanout write overlap)" (plan-validator.js's freeze-grammar
+  // check; exact overlap NEVER relaxes anywhere in this codebase) — so writerW1/writerW2 sharing an exact
+  // path can never reach a FROZEN plan in the first place, and the running-set's write-node-runs-strictly-
+  // alone invariant means a genuinely LIVE writer is unreachable alongside an open gate through open-ready
+  // alone. The runtime re-verification (selectSpeculativeWriteGroup → validator --parallel-safe, the SAME
+  // predicate normal co-open uses) is therefore intentional belt-and-suspenders defense-in-depth, proven
+  // directly here with a real validator subprocess (--parallel-safe reads the plan's Node rows directly —
+  // it does not require the plan to be frozen, so make596PairRepo's fixture, which the freeze grammar
+  // rejects for these declared sets, is still a valid --parallel-safe input).
+  {
+    const { planPath } = make596PairRepo('shared.js', 'shared.js');
+    const realShell = (sp, args) => node596.shellNode(sp, args);
+    const excludedVsLive = node596.selectSpeculativeWriteGroup(
+      [{ id: 'writerW1', declared_write_set: 'shared.js' }],
+      [{ id: 'writerW2', kind: 'write' }], // stand-in for a genuinely live writer
+      planPath, realShell, false, null
+    );
+    assert(excludedVsLive.chosen.length === 0 && excludedVsLive.excluded.join(',') === 'writerW1',
+      'T596-5: a candidate overlapping an already-open write node is excluded, got ' + JSON.stringify(excludedVsLive));
+    const disjointVsLive = node596.selectSpeculativeWriteGroup(
+      [{ id: 'writerW1', declared_write_set: 'shared.js' }],
+      [], planPath, realShell, false, null
+    );
+    assert(disjointVsLive.chosen.length === 1 && disjointVsLive.chosen[0].id === 'writerW1' && disjointVsLive.excluded.length === 0,
+      'T596-5: a lone candidate with NO live writers is trivially eligible, got ' + JSON.stringify(disjointVsLive));
+  }
+
+  // T596-6 (AC5 refusal — no leg capability): KAOLA_PARALLEL_WRITES=0 (the SAME worktree-capable
+  // condition normal co-open requires) excludes writerW from THIS open; read speculation is unaffected
+  // (there is none in this fixture, but the exclusion is scoped to write candidates only, never a refuse).
+  {
+    const { repoRoot, cacheDir, planPath, project } = make596Repo();
+    openGate1_596(repoRoot);
+    const r = run596(repoRoot, ['open-ready', '--project', project, '--speculative-consent', '--json'], { KAOLA_PARALLEL_WRITES: '0' });
+    assert(r.result === 'ok' && (r.opened || []).length === 0, 'T596-6: no write opens on a host without leg capability, got ' + JSON.stringify(r.opened));
+    assert(r.speculativeWriteExcluded && r.speculativeWriteExcluded.reason === 'no_leg_capability' && (r.speculativeWriteExcluded.nodeIds || []).includes('writerW'),
+      'T596-6: speculativeWriteExcluded names the no_leg_capability reason, got ' + JSON.stringify(r.speculativeWriteExcluded));
+    assert(ledgerStatus596(planPath, 'writerW') === 'pending', 'T596-6: writerW ledger row untouched');
+    rm596(repoRoot);
+  }
+
+  // T596-7 (AC6 cap accounting): two DISJOINT speculative write siblings under a write fan-out ceiling of
+  // 1 (KAOLA_FANOUT_CAP=1) — only ONE opens this call; the frontier never exceeds the cap.
+  {
+    const { repoRoot, cacheDir, planPath, project } = make596PairRepo('w1.js', 'w2.js');
+    openGate1_596(repoRoot);
+    const r = run596(repoRoot, ['open-ready', '--project', project, '--speculative-consent', '--json'], { KAOLA_FANOUT_CAP: '1' });
+    assert(r.result === 'ok' && (r.opened || []).length === 1, 'T596-7: exactly ONE speculative write opens under the cap, got ' + JSON.stringify((r.opened || []).map(n => n.id)));
+    assert(r.laneGroup && r.laneGroup.members.length === 1, 'T596-7: the formed group has exactly one member, got ' + JSON.stringify(r.laneGroup));
+    const openedId = r.opened[0].id;
+    const otherId = openedId === 'writerW1' ? 'writerW2' : 'writerW1';
+    assert(ledgerStatus596(planPath, otherId) === 'pending', 'T596-7: the capped-out sibling stays pending, got ' + ledgerStatus596(planPath, otherId));
+    const rs = readRS596(cacheDir);
+    assert(!(rs && (rs.nodes || []).some(n => n.id === otherId)), 'T596-7: the capped-out sibling never entered the running set');
+    rm596(repoRoot);
+  }
+
+  // T596-8 (AC7 crash repair — kill BETWEEN leg provision and ledger flip): the leg is already
+  // provisioned on disk but writerW's ledger row is manually reverted to pending (simulating the crash
+  // window) and running-set.json is flagged mid-open — reconcile-running-set rolls it back cleanly:
+  // no orphan leg survives, idempotent (the EXISTING #463 lane-group crash-repair machinery, reused
+  // verbatim — the speculative write leg is an ordinary lane_group leg to that machinery).
+  {
+    const { repoRoot, cacheDir, planPath, project } = make596Repo();
+    openGate1_596(repoRoot);
+    const open = run596(repoRoot, ['open-ready', '--project', project, '--speculative-consent', '--json']);
+    assert(open.result === 'ok' && open.laneGroup, 'T596-8: setup speculative open ok');
+    // Simulate the crash: writerW's ledger row reverts to pending; running-set flags it mid-open.
+    let plan = fs.readFileSync(planPath, 'utf8');
+    const ledgerStart = plan.indexOf('## Node Ledger');
+    const head = plan.slice(0, ledgerStart), tail = plan.slice(ledgerStart);
+    plan = head + tail.replace(/^\|\s*writerW\s*\|\s*in_progress\s*\|/m, '| writerW | pending |');
+    fs.writeFileSync(planPath, plan);
+    const rs0 = readRS596(cacheDir);
+    rs0.state = 'opening';
+    rs0.nodes = rs0.nodes.map(n => (n.id === 'writerW' ? { ...n, opening: true } : n));
+    fs.writeFileSync(path.join(cacheDir, 'running-set.json'), JSON.stringify(rs0, null, 2));
+    const rec = run596(repoRoot, ['reconcile-running-set', '--project', project, '--json']);
+    assert(rec.result === 'ok', 'T596-8: reconcile ok, got ' + JSON.stringify(rec));
+    const wts = worktreePaths596(repoRoot);
+    assert(!wts.some(p => p.indexOf(path.join('.kw', 'legs')) !== -1), 'T596-8: no orphan leg survives, got ' + JSON.stringify(wts));
+    assert(!branchExists596(repoRoot, 'kw/legs/' + project + '/writerW'), 'T596-8: leg branch torn down');
+    assert(!fs.existsSync(path.join(cacheDir, 'writerW.md')), 'T596-8: evidence purged on rollback');
+    // Idempotent: a second reconcile is a clean no-op.
+    const rec2 = run596(repoRoot, ['reconcile-running-set', '--project', project, '--json']);
+    assert(rec2.result === 'ok', 'T596-8: second reconcile is idempotent (ok, no throw), got ' + JSON.stringify(rec2));
+    rm596(repoRoot);
+  }
+
+  // T596-9 (AC7 crash repair — the crashed-speculative-write ARM, gate resolved FAIL): writerW's ledger
+  // row DID flip to in_progress (the general roll-forward candidate) but running-set.json is stuck
+  // 'opening' (Phase 3 never completed) AND gate1 has since resolved verdict:FAIL — reconcile rolls
+  // writerW BACK despite its in_progress ledger row (the conservative override: roll-forward only on a
+  // CONFIRMED gate verdict:pass).
+  {
+    const { repoRoot, cacheDir, planPath, project } = make596Repo();
+    const gate1Nonce = openGate1_596(repoRoot);
+    const open = run596(repoRoot, ['open-ready', '--project', project, '--speculative-consent', '--json']);
+    assert(open.result === 'ok' && open.laneGroup, 'T596-9: setup speculative open ok');
+    fs.writeFileSync(path.join(cacheDir, 'gate1.md'), 'evidence-binding: gate1 ' + (gate1Nonce || '') + '\nverdict: fail\nfindings_blocking: 1\nfinding: id=x scope=in-scope severity=high status=open desc=bad\n');
+    // Close gate1 directly at the plan/ledger level (bypass the close-time guard's running-set removal —
+    // we want gate1 TERMINAL while writerW's running-set entry stays exactly as open-ready left it, to
+    // isolate the reconcile-time gate check from the close-node speculative-review machinery).
+    const rGate = run596(repoRoot, ['close-node', '--project', project, '--node-id', 'gate1', '--json']);
+    assert(rGate.result === 'ok', 'T596-9: gate1 closes verdict:fail, got ' + JSON.stringify(rGate));
+    assert(ledgerStatus596(planPath, 'writerW') === 'in_progress', 'T596-9: writerW ledger row is STILL in_progress (the roll-forward candidate)');
+    // Flag running-set.json mid-open (the Phase-3-never-ran crash window); writerW's ledger row is
+    // deliberately left in_progress (unlike T596-9).
+    const rs0 = readRS596(cacheDir);
+    rs0.state = 'opening';
+    rs0.nodes = rs0.nodes.map(n => (n.id === 'writerW' ? { ...n, opening: true } : n));
+    fs.writeFileSync(path.join(cacheDir, 'running-set.json'), JSON.stringify(rs0, null, 2));
+    const rec = run596(repoRoot, ['reconcile-running-set', '--project', project, '--json']);
+    assert(rec.result === 'ok', 'T596-9: reconcile ok, got ' + JSON.stringify(rec));
+    assert((rec.rolledBack || []).includes('writerW'), 'T596-9: writerW is rolled BACK despite in_progress ledger (gate resolved fail), got ' + JSON.stringify(rec.rolledBack));
+    assert(ledgerStatus596(planPath, 'writerW') === 'pending', 'T596-9: writerW ledger reset to pending');
+    const wts = worktreePaths596(repoRoot);
+    assert(!wts.some(p => p.indexOf(path.join('.kw', 'legs')) !== -1), 'T596-9: writerW leg torn down (gate-fail override), got ' + JSON.stringify(wts));
+    assert(!fs.existsSync(path.join(cacheDir, 'writerW.md')), 'T596-9: writerW evidence purged (gate-fail override)');
+    rm596(repoRoot);
+  }
+
+  // T596-10 (AC7 crash repair — the crashed-speculative-write ARM, gate resolved PASS): the SAME
+  // running-set-stuck-opening window as T596-9, but gate1 resolves verdict:PASS — reconcile rolls
+  // writerW FORWARD (keeps it live; its leg survives; running-set.json promotes to 'open').
+  {
+    const { repoRoot, cacheDir, planPath, project } = make596Repo();
+    const gate1Nonce = openGate1_596(repoRoot);
+    const open = run596(repoRoot, ['open-ready', '--project', project, '--speculative-consent', '--json']);
+    assert(open.result === 'ok' && open.laneGroup, 'T596-10: setup speculative open ok');
+    fs.writeFileSync(path.join(cacheDir, 'gate1.md'), 'evidence-binding: gate1 ' + (gate1Nonce || '') + '\nverdict: pass\nfindings_blocking: 0\n');
+    const rGate = run596(repoRoot, ['close-node', '--project', project, '--node-id', 'gate1', '--json']);
+    assert(rGate.result === 'ok' && !rGate.speculative_review_required, 'T596-10: gate1 closes verdict:pass, got ' + JSON.stringify(rGate));
+    const rs0 = readRS596(cacheDir);
+    rs0.state = 'opening';
+    rs0.nodes = rs0.nodes.map(n => (n.id === 'writerW' ? { ...n, opening: true } : n));
+    fs.writeFileSync(path.join(cacheDir, 'running-set.json'), JSON.stringify(rs0, null, 2));
+    const rec = run596(repoRoot, ['reconcile-running-set', '--project', project, '--json']);
+    assert(rec.result === 'ok', 'T596-10: reconcile ok, got ' + JSON.stringify(rec));
+    assert((rec.rolledForward || []).includes('writerW'), 'T596-10: writerW rolls FORWARD (gate confirmed pass), got ' + JSON.stringify(rec.rolledForward));
+    assert(ledgerStatus596(planPath, 'writerW') === 'in_progress', 'T596-10: writerW ledger stays in_progress');
+    const wts = worktreePaths596(repoRoot);
+    assert(wts.some(p => p.endsWith(path.join('.kw', 'legs', project, 'writerW'))), 'T596-10: writerW leg SURVIVES the roll-forward, got ' + JSON.stringify(wts));
+    const rsAfter = readRS596(cacheDir);
+    assert(rsAfter && rsAfter.state === 'open', 'T596-10: running-set promoted back to open');
+    rm596(repoRoot);
+  }
+
+  // T596-11 (AC8 inertness — consent flag absent): policy:consent is authored, but --speculative-consent
+  // is NOT passed this call — writerW does not open (mirrors T439-2 for a write member).
+  {
+    const { repoRoot, project } = make596Repo();
+    openGate1_596(repoRoot);
+    const r = run596(repoRoot, ['open-ready', '--project', project, '--json']);
+    assert((r.opened || []).every(n => n.id !== 'writerW'), 'T596-11: no speculative write open without the consent flag, got ' + JSON.stringify((r.opened || []).map(n => n.id)));
+    rm596(repoRoot);
+  }
+}
+
+// ===========================================================================
 // #472 (dispatch fidelity): open-next does NOT silently single-open an INDEPENDENT ≥2 frontier — it
 // signals enterBatch so the skeleton routes to a concurrent ONE-MESSAGE dispatch; a width-1 frontier
 // stays serial (width is the planner's call — no forced minimum). deriveMaxSimultaneousOpen proves

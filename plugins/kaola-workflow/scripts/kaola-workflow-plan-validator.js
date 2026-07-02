@@ -3038,4 +3038,7 @@ module.exports = {
   installedRoles,
   ROLE_TOKEN_REGISTRY,
   isBarrierInvisible,
+  // #596: exported so next-action.js's static write-eligibility check reuses the SAME resolvability
+  // predicate the --parallel-safe coarse relaxation already applies (no new logic, no new entry point).
+  hasUnresolvableEntry,
 };

@@ -3740,7 +3740,7 @@ function speculativeReviewOnGateClose(role, nodeId, evidenceContent, running, pl
 // @param opts { planPath, project, nodeId, shell, readFile, writeFile, cacheExists, gitCheckout? }
 // ---------------------------------------------------------------------------
 function runDiscardSpeculative(opts) {
-  const { planPath, nodeId, shell, readFile, writeFile, cacheExists } = opts;
+  const { planPath, nodeId, shell, readFile, writeFile, cacheExists, unlink } = opts;
   const gitCheckoutSeam = opts.gitCheckout || null;
   if (!nodeId) return { result: 'refuse', errors: ['--node-id required for discard-speculative'] };
 
@@ -3753,6 +3753,7 @@ function runDiscardSpeculative(opts) {
   if (!member.speculative) {
     return { result: 'refuse', reason: 'not_speculative', nodeId, detail: 'only a speculative: true member may be discarded via discard-speculative' };
   }
+  const isWriteMember = member.kind === 'write';
 
   // Read the anchored baseline SHA BEFORE any drop (the revert target).
   const cacheDir = path.join(path.dirname(planPath), '.cache');
@@ -3766,33 +3767,83 @@ function runDiscardSpeculative(opts) {
   if (!reset.found) return { result: 'refuse', reason: 'node_not_in_ledger', nodeId };
   if (reset.changed) { planContent = reset.content; writeFile(planPath, planContent); }
 
-  // (b) Revert the node's in-lane DECLARED writes to the anchored baseline (read nodes: empty ⇒ no-op).
+  // (b) Revert the node's in-lane DECLARED writes to the anchored baseline. #596: a WRITE member's
+  // declared writes land in its LEG (never the parent) — the parent's copy was never touched, so there
+  // is nothing to revert there (D-596-01: the premise that made this step necessary is obsolete for a
+  // leg-resident writer). Skip it for a write member: (1) it is a pure no-op at best, and (2) a NEW file
+  // the leg was going to create does not exist at baseSha yet, so `git checkout baseSha -- <path>` would
+  // hard-FAIL (pathspec did not match) — a live bug this skip avoids. Read members are unaffected (their
+  // declared set is always empty, so this was already a no-op for them).
   let revertedPaths = [];
-  let declared = [];
-  try {
-    const { parseWriteSetCell } = require('./kaola-workflow-classifier');
-    declared = Array.from(parseWriteSetCell(member.declared_write_set));
-  } catch (_) { declared = []; }
-  if (declared.length && baseSha) {
-    let root; try { root = getRoot(); } catch (_) { root = process.cwd(); }
-    if (gitCheckoutSeam) {
-      const r = gitCheckoutSeam(root, baseSha, declared);
-      if (r && r.exitCode !== 0) return { result: 'refuse', reason: 'git_checkout_failed', nodeId, declared };
-      revertedPaths = declared.slice();
-    } else {
-      try {
-        execFileSync('git', ['checkout', baseSha, '--', ...declared], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  if (!isWriteMember) {
+    let declared = [];
+    try {
+      const { parseWriteSetCell } = require('./kaola-workflow-classifier');
+      declared = Array.from(parseWriteSetCell(member.declared_write_set));
+    } catch (_) { declared = []; }
+    if (declared.length && baseSha) {
+      let root; try { root = getRoot(); } catch (_) { root = process.cwd(); }
+      if (gitCheckoutSeam) {
+        const r = gitCheckoutSeam(root, baseSha, declared);
+        if (r && r.exitCode !== 0) return { result: 'refuse', reason: 'git_checkout_failed', nodeId, declared };
         revertedPaths = declared.slice();
-      } catch (e) { return { result: 'refuse', reason: 'git_checkout_failed', nodeId, declared, detail: String(e.message || e) }; }
+      } else {
+        try {
+          execFileSync('git', ['checkout', baseSha, '--', ...declared], { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+          revertedPaths = declared.slice();
+        } catch (e) { return { result: 'refuse', reason: 'git_checkout_failed', nodeId, declared, detail: String(e.message || e) }; }
+      }
     }
   }
 
   // (c) Drop the anchored baseline (ref + file together; idempotent).
   shell(validatorPath, [planPath, '--drop-base', '--node-id', nodeId, '--json']);
 
-  // (d) Remove the node from running-set.json.
+  // (c.5) #596: WRITE members are DISCARD-ONLY (asymmetry with reads, on purpose — a read's evidence may
+  // remain valid for the operator's KEEP-or-discard review; a write built on a refuted premise is rework
+  // risk, so it is torn down unconditionally):
+  //   - tear down the leg (worktree + branch + leg-base ref, via the SAME teardownLeg every other leg-
+  //     lifecycle site uses; sweepOrphanLegs is the crash backstop for anything this misses);
+  //   - purge the stale evidence file so a future re-open reseeds cleanly (seedEvidenceFile's forceRotate
+  //     is false on a normal open, so a survived stale file with the OLD nonce would otherwise wedge the
+  //     #392 binding check on re-open);
+  //   - if this was the LAST live member of its lane_group, clear the group entry + drop its group
+  //     baseline (mirrors closeGroupMember's clean-completion teardown); otherwise just drop this member
+  //     from the group's legs/members so a surviving sibling's eventual group barrier scopes correctly.
+  let legTornDown = false;
+  let evidenceDiscarded = false;
+  let groupCleared = false;
+  if (isWriteMember) {
+    const lg = running.lane_group;
+    const legEntry = lg && lg.legs && lg.legs[nodeId];
+    if (legEntry && legEntry.legPath) {
+      let mainRoot; try { mainRoot = getMainRoot(getRoot()); } catch (_) { mainRoot = process.cwd(); }
+      teardownLeg(mainRoot, legEntry.legPath, legEntry.legBranch);
+      legTornDown = true;
+    }
+    const evPath = path.join(cacheDir, nodeId + '.md');
+    if ((cacheExists ? cacheExists(evPath) : false) && typeof unlink === 'function') {
+      unlink(evPath);
+      evidenceDiscarded = true;
+    }
+  }
+
+  // (d) Remove the node from running-set.json — folding the write-member group cleanup (c.5's last leg).
   const remaining = (running.nodes || []).filter(n => n.id !== nodeId);
-  writeFile(runningSetPath, JSON.stringify({ ...running, nodes: remaining }, null, 2));
+  let nextTop = { ...running, nodes: remaining };
+  if (isWriteMember && running.lane_group && Array.isArray(running.lane_group.members) && running.lane_group.members.includes(nodeId)) {
+    const stillLive = remaining.some(n => n.group_id === running.lane_group.group_id);
+    if (!stillLive) {
+      delete nextTop.lane_group;
+      groupCleared = true;
+      shell(validatorPath, [planPath, '--drop-base', '--node-id', running.lane_group.group_id, '--json']);
+    } else {
+      const legs2 = { ...(running.lane_group.legs || {}) };
+      delete legs2[nodeId];
+      nextTop = { ...nextTop, lane_group: { ...running.lane_group, members: running.lane_group.members.filter(m => m !== nodeId), legs: legs2 } };
+    }
+  }
+  writeFile(runningSetPath, JSON.stringify(nextTop, null, 2));
 
   appendProvenanceLog(planPath, 'discard-speculative', nodeId, baseSha ? String(baseSha).slice(0, 12) : null);
 
@@ -3804,6 +3855,7 @@ function runDiscardSpeculative(opts) {
     revertedPaths,
     baseDropped: true,
     runningSet: remaining.map(n => n.id),
+    ...(isWriteMember ? { legTornDown, evidenceDiscarded, ...(groupCleared ? { groupCleared } : {}) } : {}),
     taskTransitions: [buildTransition(nodeId, 'pending', 'discard-speculative')],
   };
 }
@@ -3922,11 +3974,44 @@ function runOpenReady(opts) {
   // union barrier of #498). Disjointness itself is re-verified authoritatively by the validator at
   // co-open (tryFormLaneGroup → --parallel-safe); --write-overlap-consent is vestigial there (#593).
   const legCoupled = parallelWritesDefaultOn(process.env);
+  // #596 (D-596-01): the speculative WRITE fallback. When THIS frontier is the speculative fan-out
+  // (openingSpeculative), the running set is emphatically NOT empty — the open gate (or a sibling
+  // speculative read) is live — so the normal `liveNodes.length === 0` write-exclusivity precondition
+  // would starve a speculative writer forever; `!liveHasWrite` (already asserted above, before the
+  // speculative fallback even fires) is the ONLY exclusivity invariant that still applies. Named ONLY
+  // as an explanatory field on the response (never a hard refuse) so read speculation stays unaffected.
+  let speculativeWriteExcluded = null;
   if (readOnly.length > 0) {
     let slots = Math.max(0, cap - liveNodes.length);
     if (Number.isInteger(max) && max >= 1) slots = Math.min(slots, max);
     toOpen = readOnly.slice(0, slots);
     openKind = 'read';
+  } else if (writeNodes.length > 0 && openingSpeculative) {
+    // A speculative write ALWAYS opens WITH a provisioned leg (design: "opens WITH a provisioned leg" is
+    // unconditional) — even a lone candidate forms a size-1 lane_group, reusing the EXISTING #463/#437
+    // group machinery verbatim (closeGroupMember already degenerates a 1-member group to "last member"
+    // at close — no new merge code). Requires leg capability (legCoupled, the SAME worktree-capable
+    // condition normal co-open requires); a host that cannot provision legs excludes ALL write candidates
+    // from THIS open (read speculation, handled above via the readOnly branch, is unaffected).
+    if (!legCoupled) {
+      toOpen = [];
+      speculativeWriteExcluded = { reason: 'no_leg_capability', nodeIds: writeNodes.map(n => n.id) };
+    } else {
+      const sel = selectSpeculativeWriteGroup(writeNodes, liveNodes, planPath, shell, opts.writeOverlapConsent, max);
+      toOpen = sel.chosen;
+      if (sel.chosen.length > 0) {
+        openKind = 'write';
+        laneGroupCeiling = sel.ceiling;
+        groupForm = {
+          group_id: laneGroupId(sel.chosen.map(n => n.id)),
+          members: sel.chosen.map(n => n.id).slice().sort(),
+          write_union: laneWriteUnion(sel.chosen),
+        };
+      }
+      if (sel.excluded.length) {
+        speculativeWriteExcluded = { reason: 'overlaps_live_writer', nodeIds: sel.excluded };
+      }
+    }
   } else if (liveNodes.length === 0 && writeNodes.length > 0) {
     // #437 (D-419 P2 §1.2) + #542 (D-542-01): attempt a co-open lane group from a ≥2 disjoint write
     // frontier; on genuine overlap (or explicit serial opt-out) DEGRADE to a single serial write.
@@ -3988,7 +4073,12 @@ function runOpenReady(opts) {
   }
 
   if (toOpen.length === 0) {
-    return { result: 'ok', allDone: false, opened: [], reason: 'cap_reached', taskTransitions: [] };
+    return {
+      result: 'ok', allDone: false, opened: [],
+      reason: speculativeWriteExcluded ? 'speculative_write_excluded' : 'cap_reached',
+      ...(speculativeWriteExcluded ? { speculativeWriteExcluded } : {}),
+      taskTransitions: [],
+    };
   }
 
   const openedAt = (typeof now === 'function') ? now() : null;
@@ -4190,9 +4280,53 @@ function runOpenReady(opts) {
     // #437 (D-419 P2 §1.2): surface the formed lane group descriptor so the orchestrator/tests can
     // observe a co-open. Absent (undefined) on the serial/read path — the flag-OFF byte-identical shape.
     ...(laneGroupEntry ? { laneGroup: laneGroupEntry } : {}),
+    // #596: some speculative write candidates opened (toOpen.length > 0) while ONE OR MORE siblings were
+    // excluded this call (overlap with a live writer) — surface the explanatory field alongside the
+    // success envelope so the operator sees the partial exclusion, not just the members that opened.
+    ...(speculativeWriteExcluded ? { speculativeWriteExcluded } : {}),
     taskTransitions: transitions,
     taskMirror: refreshTaskMirror(project, shell),
   };
+}
+
+// ---------------------------------------------------------------------------
+// selectSpeculativeWriteGroup (#596 D-596-01) — the speculative WRITE-open selection. RE-VERIFIES exact-
+// path disjointness (case-folded) of each write candidate against every currently-open write node via the
+// SAME authoritative predicate normal co-open uses (the validator's `--parallel-safe` path — no new
+// validator entry point). UNLIKE tryFormLaneGroup (which refuses the WHOLE batch on any overlap and
+// requires >=2 members to even attempt a group), an overlapping candidate here is simply EXCLUDED from
+// this open (AC5: "W is NOT speculatively opened" — never a hard refusal of its disjoint siblings), and a
+// LONE eligible candidate still forms a size-1 group: a speculative write ALWAYS gets a leg (unlike the
+// normal path's >=2-member-only lane group, which serial-degrades a lone write to the legless path).
+// liveNodes is defensive — the running-set "write node runs strictly alone" invariant (:3868) means no
+// OTHER write can be live while a speculative fan-out is even reachable, so liveWriteIds is normally
+// empty; the check is still applied generically so a future relaxation of that invariant stays safe.
+// @returns { chosen: Node[], excluded: string[], ceiling: number }
+// ---------------------------------------------------------------------------
+function selectSpeculativeWriteGroup(candidates, liveNodes, planPath, shell, writeOverlapConsent, max) {
+  const liveWriteIds = (liveNodes || []).filter(n => n.kind === 'write').map(n => n.id);
+  const candIds = candidates.map(n => n.id);
+  const allIds = liveWriteIds.concat(candIds);
+  const excluded = new Set();
+  if (allIds.length >= 2) {
+    const vArgs = [planPath, '--parallel-safe', '--nodes', allIds.join(','), '--json'];
+    if (writeOverlapConsent) vArgs.push('--write-overlap-consent');
+    const ps = shell(validatorPath, vArgs);
+    if (!(ps.exitCode === 0 && ps.result === 'ok')) {
+      for (const o of (ps.overlapping || [])) {
+        if (candIds.includes(o.a)) excluded.add(o.a);
+        if (candIds.includes(o.b)) excluded.add(o.b);
+      }
+    }
+  }
+  const eligible = candidates.filter(n => !excluded.has(n.id));
+  let writeCap;
+  try { ({ resolveFanoutCap: writeCap } = require('./kaola-workflow-adaptive-schema')); } catch (_) { writeCap = null; }
+  let ceiling = writeCap ? writeCap(process.env) : eligible.length;
+  if (Number.isInteger(max) && max >= 1) ceiling = Math.min(ceiling, max);
+  const room = Math.max(0, ceiling - liveWriteIds.length);
+  const chosen = eligible.slice(0, room);
+  return { chosen, excluded: Array.from(excluded), ceiling };
 }
 
 // ---------------------------------------------------------------------------
@@ -4692,7 +4826,7 @@ function closeGroupMember(ctx) {
 // with no opening transaction is a no-op. Mirrors parallel-batch runReconcile.
 // ---------------------------------------------------------------------------
 function runReconcileRunningSet(opts) {
-  const { planPath, project, shell, readFile, writeFile, cacheExists } = opts;
+  const { planPath, project, shell, readFile, writeFile, cacheExists, unlink } = opts;
   const runningSetPath = path.join(path.dirname(planPath), '.cache', RUNNING_SET_NAME);
 
   const running = readRunningSet(runningSetPath, cacheExists, readFile);
@@ -4759,9 +4893,47 @@ function runReconcileRunningSet(opts) {
   const target = wholeOpening ? (running.nodes || []) : openingNodes;
   const keptAll = [];
   const dropped = [];
+  // #596 (D-596-01): ids demoted by the crashed-speculative-WRITE gate-check override BELOW — their
+  // ledger row is genuinely 'in_progress' (unlike the rest of `dropped`, which was already 'pending' and
+  // needs no ledger write). Tracked separately so they get an EXPLICIT in_progress -> pending reset
+  // (mirrors discard-speculative's step (a)) once the classification loop finishes.
+  const specWriteGateRollback = [];
   for (const n of target) {
-    if (ledger[n.id] === 'in_progress') keptAll.push(n.id);
-    else dropped.push(n.id);
+    if (ledger[n.id] !== 'in_progress') { dropped.push(n.id); continue; }
+    // #596 (D-596-01): the crashed-speculative-WRITE arm. A crashed speculative write member whose
+    // ledger row DID flip to in_progress (the general roll-forward candidate) rolls forward ONLY if its
+    // gate is CONFIRMED complete with verdict:pass AT RECONCILE TIME — a conservative posture, since the
+    // crash window may have let the gate resolve (or fail) before this reconcile ran, and a speculative
+    // write's leg base can be voided by a repaired upstream. Any other gate state (still open, complete
+    // with a fail/unparseable verdict, or unreadable) rolls it back via the SAME drop path — idempotent,
+    // and the drop-direction loops below already own its leg teardown + baseline drop. Read speculative
+    // members and every NON-speculative member are UNCHANGED (kind !== 'write' skips this override).
+    // SCOPED to n.opening (mirrors openingNodes): a `wholeOpening` sweep walks EVERY member of `running.
+    // nodes`, including ones from a PRIOR, already-settled open that merely coexist in this transaction —
+    // only a member ACTUALLY mid-open (opening:true) is a genuine crash-repair candidate for this override.
+    if (n.opening && n.speculative && n.kind === 'write') {
+      const gateId = n.speculativeGate;
+      let gatePass = false;
+      if (gateId && ledger[gateId] === 'complete') {
+        let gateEv = '';
+        try { gateEv = readFile(path.join(path.dirname(planPath), '.cache', gateId + '.md')); } catch (_) { gateEv = ''; }
+        const v = parseNodeVerdict(gateEv);
+        gatePass = !!(v && v.verdict === 'pass');
+      }
+      if (!gatePass) { dropped.push(n.id); specWriteGateRollback.push(n.id); continue; }
+    }
+    keptAll.push(n.id);
+  }
+  // Reset the ledger row for each gate-check rollback BEFORE the survivors/leg-teardown logic runs below
+  // (mirrors discard-speculative's ordering: ledger reset first, --drop-base is not #424 window-locked).
+  if (specWriteGateRollback.length) {
+    let planContentForReset = readFile(planPath);
+    let changedAny = false;
+    for (const id of specWriteGateRollback) {
+      const reset = spliceLedgerNode(planContentForReset, id, 'pending', { allowFrom: ['in_progress'] });
+      if (reset.changed) { planContentForReset = reset.content; changedAny = true; }
+    }
+    if (changedAny) writeFile(planPath, planContentForReset);
   }
 
   // #436 D-419-01: cap roll-forward re-opens at (max_concurrent - live) so a crashed
@@ -4790,6 +4962,22 @@ function runReconcileRunningSet(opts) {
   if (typeof shell === 'function') {
     for (const id of new Set([...dropped, ...cappedOut, ...closed, ...stale])) {
       shell(validatorPath, [planPath, '--drop-base', '--node-id', id, '--json']);
+    }
+  }
+
+  // #596: purge stale evidence for a rolled-back (or capped-out) speculative WRITE member — mirrors
+  // discard-speculative's evidence-discard step, so a future re-open reseeds cleanly instead of a stale
+  // file with the OLD nonce silently surviving (seedEvidenceFile's forceRotate is false on a normal
+  // open). Read speculative members and every non-speculative member are UNCHANGED (kind:'write' only).
+  if (typeof unlink === 'function') {
+    const byId596 = new Map((running.nodes || []).map(n => [n.id, n]));
+    const cacheDir596 = path.join(path.dirname(planPath), '.cache');
+    for (const id of new Set([...dropped, ...cappedOut])) {
+      const n = byId596.get(id);
+      if (n && n.speculative && n.kind === 'write') {
+        const evPath = path.join(cacheDir596, id + '.md');
+        if (cacheExists ? cacheExists(evPath) : true) unlink(evPath);
+      }
     }
   }
 
@@ -5384,7 +5572,10 @@ function main() {
       });
     }
   } else if (subcommand === 'reconcile-running-set') {
-    result = runReconcileRunningSet({ planPath, project, shell, readFile, writeFile, cacheExists });
+    result = runReconcileRunningSet({
+      planPath, project, shell, readFile, writeFile, cacheExists,
+      unlink: (f) => { try { fs.unlinkSync(f); } catch (_) {} },
+    });
   } else if (subcommand === 'record-evidence') {
     if (!nodeId) {
       result = { result: 'refuse', errors: ['--node-id required for record-evidence'] };
@@ -5462,11 +5653,15 @@ function main() {
       });
     }
   } else if (subcommand === 'discard-speculative') {
-    // #439 (D-419 Part 4, settlement 4): roll back a speculatively-opened read node whose gate bet failed.
+    // #439 (D-419 Part 4, settlement 4) + #596: roll back a speculatively-opened node whose gate bet
+    // failed (a write member additionally tears down its leg + purges stale evidence — DISCARD-ONLY).
     if (!nodeId) {
       result = { result: 'refuse', errors: ['--node-id required for discard-speculative'] };
     } else {
-      result = runDiscardSpeculative({ planPath, project, nodeId, shell, readFile, writeFile, cacheExists });
+      result = runDiscardSpeculative({
+        planPath, project, nodeId, shell, readFile, writeFile, cacheExists,
+        unlink: (f) => { try { fs.unlinkSync(f); } catch (_) {} },
+      });
     }
   } else if (subcommand === 'route-findings') {
     // #446 (D-446-01 Decision 1): route-findings is a SUBCOMMAND (no new install-manifest entry).
@@ -5583,4 +5778,9 @@ module.exports = {
   sweepOrphanLegs,
   synthesizeLevel,
   memberInLaneChanges,
+  // #596 (D-596-01): the speculative WRITE-open selection primitive, exported for direct testing (the
+  // "vs a live writer" axis is otherwise unreachable through open-ready alone — the running-set's
+  // write-node-runs-strictly-alone invariant means no OTHER write is ever live while a speculative
+  // fan-out is reachable).
+  selectSpeculativeWriteGroup,
 };

@@ -5,7 +5,9 @@ that is blocked only by a gate that is still running — and the plan `## Meta` 
 `speculative_open_policy: consent`. This card covers the speculative open flow, the consent
 command, and the verdict:fail rollback.
 
-**Related:** #439, D-419 Part 4 (speculative-read kernel), D-445-01 (skeleton/card split)
+**Related:** the speculative-open kernel design (gate-bet activation, now covering both
+read-only and write-bearing nodes); the plan-run skeleton's card-split mechanism (this file is
+one of several rare-branch cards linked from the skeleton).
 
 ---
 
@@ -15,9 +17,13 @@ A node is **speculative-eligible** when:
 
 - Its only unsatisfied predecessor is an **open gate** (a node still `in_progress`, not yet
   `complete` or `n/a`).
-- The node's own declared write set is **read-only** (empty) — speculative open is never
-  permitted for write nodes.
 - The plan `## Meta` block contains `speculative_open_policy: consent`.
+- If the node is **read-only** (empty declared write set), it is eligible unconditionally.
+- If the node **writes**, it is eligible only when its declared write set is exactly
+  resolvable (no directory-shaped or glob entry), declares no protected file, and the node is
+  not the plan's unique sink. `open-ready` additionally re-checks the declared set against
+  every currently-live writer at open time — a write candidate that collides is excluded from
+  that call, even if it stays eligible in principle.
 
 When these conditions hold, `open-next` refuses with `reason: gate_not_complete` AND the
 `operator_hint` names the speculative gate. The node is NOT opened serially — it is waiting
@@ -29,19 +35,29 @@ for your explicit consent.
 
 The operator flow below only fires when the **plan** already carries
 `speculative_open_policy: consent`. That key is the planner's call at authoring time, not the
-operator's — see the **"Speculative-open-eligible shaping"** rubric in `agents/workflow-planner.md`
-(adjacent to the D-419-01 scheduler posture) for the full authoring criteria. In short, the planner
-sets the Meta key only when a READ-ONLY node's sole unsatisfied predecessor is a single in-progress
-gate that is high-probability-pass (a review over a small mechanical diff, a verification very likely
-to confirm) and the rework cost on a `verdict: fail` is low/bounded. It is NEVER set for a write
-node, and the planner never hand-adds a `speculative: true` annotation — the Meta key is the only
-authoring control; eligibility stays validator/runtime-derived.
+operator's — see the "Speculative-open-eligible shaping" rubric in the workflow-planner agent
+definition for the full authoring criteria. The planner sets the Meta key when a node's sole
+unsatisfied predecessor is a single in-progress gate that is high-probability-pass (a review
+over a small mechanical diff, a verification very likely to confirm) and the rework cost on a
+`verdict: fail` is low/bounded. The planner never hand-adds a `speculative: true` annotation —
+the Meta key is the only authoring control; eligibility itself stays validator/runtime-derived
+(§1) for both read-only and write-bearing nodes.
 
-**Worked-example topology:** a read-only `adversarial-verifier` (or `code-explorer`) node that
-depends ONLY on a `code-reviewer` gate over a small mechanical change. With
-`## Meta` `speculative_open_policy: consent` set, that read node opens speculatively and overlaps the
-review (the operator flow below) instead of idling until the gate closes. Without the key the node
-just waits — §2 covers the absent/`off` case.
+**Worked-example topology (read-only):** a read-only `adversarial-verifier` (or
+`code-explorer`) node that depends ONLY on a `code-reviewer` gate over a small mechanical
+change. With `## Meta` `speculative_open_policy: consent` set, that read node opens
+speculatively and overlaps the review (the operator flow below) instead of idling until the
+gate closes.
+
+**Worked-example topology (write-bearing):** a `tdd-guide` node that depends ONLY on an
+upstream `code-reviewer` gate reviewing an earlier, unrelated change, with a declared write
+set that is exactly resolvable and disjoint from that gate's own review surface. With the SAME
+Meta key set, that write node opens speculatively WITH a provisioned leg (its own isolated
+worktree) instead of idling — a size-1 lane group forms even for a lone speculative writer. If
+the gate later fails, this write member is discard-only (§6); it never offers the keep option
+a read-only member does (§5).
+
+Without the key, either topology just waits — §2 covers the absent/`off` case.
 
 ---
 
@@ -72,12 +88,20 @@ node "$KAOLA_SCRIPTS/kaola-workflow-adaptive-node.js" open-ready \
 ```
 
 `open-ready --speculative-consent` opens all speculative-eligible nodes in the running-set
-scheduler as `speculative: true` members. Dispatch their role agents and record evidence
-as usual.
+scheduler as `speculative: true` members. A read-only member opens against the shared parent
+tree, exactly as before. A write-bearing member ALSO opens WITH a provisioned leg — its own
+isolated worktree, surfaced in that member's own `dispatch.leg_path` / `dispatch.leg_branch`
+— and is re-checked against every currently-live writer before it opens; a write candidate
+that collides is excluded from this call (surfaced as `speculativeWriteExcluded`) while its
+disjoint siblings still open, and a host with no leg capability excludes every write candidate.
+Dispatch each member's role agent (into its own leg path when one is present) and record
+evidence as usual.
 
 **Important:** the speculative node(s) run while the gate is still `in_progress`. Their work
-is valid work — if the gate passes, the results stand; if the gate fails, the operator decides
-whether to keep or discard each speculative node's output.
+is valid work — if the gate passes, the results stand. If the gate fails: a read-only member's
+evidence may still be valid (the operator decides whether to keep or discard it, §5); a
+write-bearing member is ALWAYS discarded (§6) — there is no keep option for a write built on a
+refuted premise.
 
 ---
 
@@ -87,7 +111,9 @@ When the gate closes successfully (`close-and-open-next` or `close-node` with `v
 in the gate's evidence), speculative members that bet on it are unblocked. Close each
 speculative node normally via `close-and-open-next` once its evidence is recorded. The
 `speculativeCloseGuard` ensures a speculative node cannot commit to `complete` until its gate
-is `complete` — this is enforced automatically; no manual check needed.
+is `complete` — this is enforced automatically; no manual check needed. A write-bearing
+member closes through the SAME per-leg barrier → (for a size-1 group) group barrier → merge
+path any co-opened write member uses — no separate procedure.
 
 ---
 
@@ -106,12 +132,14 @@ When the gate closes with `verdict: fail`, `close-and-open-next` returns a
 }
 ```
 
-For each named speculative node, the operator decides:
+For each named speculative node, first check whether it is read-only or write-bearing (its
+`kind` in the running set / `laneGroup.members`) — the two branches are NOT symmetric:
 
-| Decision | Action |
-|---|---|
-| Evidence still valid (gate failure unrelated to this node's scope) | Close the node normally via `close-and-open-next` |
-| Evidence invalid (the bet did not pay off) | Discard via `discard-speculative` (§6) |
+| Node kind | Decision | Action |
+|---|---|---|
+| read-only | Evidence still valid (gate failure unrelated to this node's scope) | Close the node normally via `close-and-open-next` |
+| read-only | Evidence invalid (the bet did not pay off) | Discard via `discard-speculative` (§6) |
+| write-bearing | (always — no keep option) | Discard via `discard-speculative` (§6) |
 
 ---
 
@@ -128,6 +156,16 @@ node "$KAOLA_SCRIPTS/kaola-workflow-adaptive-node.js" discard-speculative \
 - Resets the node's ledger status from `in_progress` back to `pending`.
 - Drops its baseline so the node re-opens cleanly when it is next scheduled.
 - Removes it from the running-set.
+
+For a **write-bearing** speculative member it additionally (mandatory — a write member is
+ALWAYS discarded on gate failure, never kept):
+- Tears down its leg — worktree, branch, and leg-base ref — leaving the parent worktree
+  byte-identical to before the speculative open; the leg's uncommitted work is gone. This is
+  the discard-only asymmetry: there is no keep path for a leg built on a refuted bet, since the
+  work never touched the parent tree in the first place.
+- Purges its stale evidence file so a future re-open reseeds cleanly.
+- If it was the last live member of its lane group, clears the group entry and its group
+  baseline too.
 
 After discarding, re-run `orient` — the node will appear in the ready set once a replacement
 gate (or the same gate rerun) completes.
@@ -155,14 +193,18 @@ open-next → gate_not_complete
   |
   +-- speculative_open_policy: consent -----> open-ready --speculative-consent
         |
-        dispatch speculative role agents; record evidence
+        dispatch speculative role agents (write members: into their own leg); record evidence
         |
         gate closes: verdict:pass -----> close speculative node normally (close-and-open-next)
+        |                                 (write member: same per-leg barrier -> merge path)
         |
         gate closes: verdict:fail -----> speculative_review_required returned
               |
-              +-- evidence still valid -----> close normally (close-and-open-next)
+              +-- read-only member, evidence still valid ---> close normally (close-and-open-next)
               |
-              +-- evidence invalid ---------> discard-speculative --node-id {id}
-                                              -> orient -> re-enter loop
+              +-- read-only member, evidence invalid --------> discard-speculative --node-id {id}
+              |                                                 -> orient -> re-enter loop
+              |
+              +-- write-bearing member (always) --------------> discard-speculative --node-id {id}
+                                                                  -> orient -> re-enter loop
 ```

@@ -542,18 +542,82 @@ const specPlan = (nodes, ledger) => '## Meta\nspeculative_open_policy: consent\n
   assert((r.readyPending || []).some(n => n.id === 'docs'), 'SPEC-2: docs is a normal ready node when the gate is complete');
 }
 
-// SPEC-3: a WRITE node behind an open gate is NOT speculative-eligible (read-overlap only).
+// SPEC-3 (#596): a WRITE node behind an open gate IS NOW speculative-eligible (the read-only exclusion
+// is lifted) PROVIDED its declared set is exact-resolvable, non-PROTECTED, and it is not the sink.
 {
   const content = specPlan(
     [
       '| impl | tdd-guide     | —    | a.js | 1 | sequence |',
       '| gate | code-reviewer | impl | —    | 1 | sequence |',
       '| more | tdd-guide     | gate | b.js | 1 | sequence |',
+      '| sink | finalize      | more | CHANGELOG.md | 1 | sequence |',
     ],
-    ['| impl | complete |', '| gate | in_progress |', '| more | pending |']
+    ['| impl | complete |', '| gate | in_progress |', '| more | pending |', '| sink | pending |']
   );
   const r = computeNextAction(content, { resolveModel: stub });
-  assert((r.speculativePending || []).length === 0, 'SPEC-3: a write node behind an open gate is NOT speculative-eligible');
+  assert(Array.isArray(r.speculativePending) && r.speculativePending.length === 1 && r.speculativePending[0].id === 'more',
+    'SPEC-3 (#596): a well-formed write node behind an open gate IS speculative-eligible, got ' + JSON.stringify((r.speculativePending || []).map(n => n.id)));
+  assert(r.speculativePending[0].speculativeGate === 'gate', 'SPEC-3 (#596): speculativeGate names the open gate');
+  assert(r.speculativePending[0].declared_write_set === 'b.js', 'SPEC-3 (#596): declared_write_set carried through for the write candidate');
+}
+
+// SPEC-3b (#596): a write node whose declared set contains a PROTECTED file is NOT speculative-eligible.
+// (A downstream sink hangs off `more` so the exclusion is isolated to the PROTECTED condition, not the
+// sink condition — `more` would otherwise be the plan's unique sink too.)
+{
+  const content = specPlan(
+    [
+      '| impl | tdd-guide     | —    | a.js | 1 | sequence |',
+      '| gate | code-reviewer | impl | —    | 1 | sequence |',
+      '| more | doc-updater   | gate | CHANGELOG.md | 1 | sequence |',
+      '| sink | finalize      | more | —    | 1 | sequence |',
+    ],
+    ['| impl | complete |', '| gate | in_progress |', '| more | pending |', '| sink | pending |']
+  );
+  const r = computeNextAction(content, { resolveModel: stub });
+  assert((r.speculativePending || []).length === 0, 'SPEC-3b (#596): a PROTECTED declared file excludes the write node from speculative eligibility');
+}
+
+// SPEC-3c (#596): a directory-shaped or glob declared entry is NOT exactly resolvable → NOT eligible.
+// (Same downstream-sink isolation as SPEC-3b.)
+{
+  const dirShaped = specPlan(
+    [
+      '| impl | tdd-guide     | —    | a.js | 1 | sequence |',
+      '| gate | code-reviewer | impl | —    | 1 | sequence |',
+      '| more | tdd-guide     | gate | scripts/ | 1 | sequence |',
+      '| sink | finalize      | more | —    | 1 | sequence |',
+    ],
+    ['| impl | complete |', '| gate | in_progress |', '| more | pending |', '| sink | pending |']
+  );
+  assert((computeNextAction(dirShaped, { resolveModel: stub }).speculativePending || []).length === 0,
+    'SPEC-3c (#596): a directory-shaped declared entry excludes the write node (unresolvable)');
+
+  const globShaped = specPlan(
+    [
+      '| impl | tdd-guide     | —    | a.js | 1 | sequence |',
+      '| gate | code-reviewer | impl | —    | 1 | sequence |',
+      '| more | tdd-guide     | gate | scripts/*.js | 1 | sequence |',
+      '| sink | finalize      | more | —    | 1 | sequence |',
+    ],
+    ['| impl | complete |', '| gate | in_progress |', '| more | pending |', '| sink | pending |']
+  );
+  assert((computeNextAction(globShaped, { resolveModel: stub }).speculativePending || []).length === 0,
+    'SPEC-3c (#596): a glob declared entry excludes the write node (unresolvable)');
+}
+
+// SPEC-3d (#596): the plan's unique SINK is never speculative-eligible even if it is otherwise well-formed.
+{
+  const content = specPlan(
+    [
+      '| impl | tdd-guide     | —    | a.js | 1 | sequence |',
+      '| gate | code-reviewer | impl | —    | 1 | sequence |',
+      '| sink | finalize      | gate | CHANGELOG.md | 1 | sequence |',
+    ],
+    ['| impl | complete |', '| gate | in_progress |', '| sink | pending |']
+  );
+  assert((computeNextAction(content, { resolveModel: stub }).speculativePending || []).length === 0,
+    'SPEC-3d (#596): the unique sink is NEVER speculative-eligible');
 }
 
 // SPEC-4: a read node with a SECOND unsatisfied (non-gate) dep is NOT speculative-eligible.
