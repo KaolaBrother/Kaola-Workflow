@@ -1,0 +1,11 @@
+{"ts":"2026-07-02T04:50:24Z","agent_type":"workflow-planner","agent_id":"claim-backfill","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow"}
+{"ts":"2026-07-02T05:02:08Z","agent_type":"code-architect","agent_id":"a0fd4ac61297d3b16","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/bundle-585-590","model":"","model_planned":"opus"}
+{"ts":"2026-07-02T05:21:25Z","agent_type":"tdd-guide","agent_id":"a67fa1fee07fb1e50","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/bundle-585-590","model":"","model_planned":"sonnet"}
+{"ts":"2026-07-02T06:00:27Z","agent_type":"adversarial-verifier","agent_id":"ab78e4b80056814a6","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/bundle-585-590","model":"","model_planned":"sonnet"}
+{"ts":"2026-07-02T06:17:05Z","agent_type":"code-architect","agent_id":"a0fd4ac61297d3b16","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/bundle-585-590","model":"","model_planned":"opus"}
+{"ts":"2026-07-02T06:20:44Z","agent_type":"tdd-guide","agent_id":"a67fa1fee07fb1e50","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/bundle-585-590","model":"","model_planned":"sonnet"}
+{"ts":"2026-07-02T06:39:07Z","agent_type":"adversarial-verifier","agent_id":"ab78e4b80056814a6","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/bundle-585-590","model":"","model_planned":"sonnet"}
+{"ts":"2026-07-02T06:49:53Z","agent_type":"doc-updater","agent_id":"a6cbb2891ca687697","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/bundle-585-590","model":"","model_planned":"sonnet"}
+{"ts":"2026-07-02T06:59:54Z","agent_type":"code-reviewer","agent_id":"a58cda3a6be018d0d","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/bundle-585-590","model":"","model_planned":"opus"}
+{"ts":"2026-07-02T07:38:20Z","agent_type":"contractor","agent_id":"a48ee19343730947b","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/bundle-585-590","model":"","model_planned":"sonnet"}
+{"ts":"2026-07-02T07:42:07Z","agent_type":"contractor","agent_id":"finalize-backfill","cwd":"/Users/ylpromax5/Workspace/Kaola-Workflow/.kw/worktrees/bundle-585-590"}
