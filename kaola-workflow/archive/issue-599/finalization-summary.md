@@ -41,16 +41,16 @@ DOCKED — .cache/doc-docking.md
 None needed — no partial implementation; ACs verified by the opus gate (verdict: pass, findings_blocking: 0). Close on sink.
 
 ## Commit And Push
-Commits 67464e62 + 23d4df98 (merge) + 0152abb2 on workflow/issue-599. Final git gate (archive + sink) pending; final hash reported after push.
+Commits 67464e62 + 23d4df98 (merge) + 0152abb2 on workflow/issue-599, plus archive commit ee38bb0b (chore: archive issue-599). Sink push/merge still pending — owned by the orchestrator's sink-merge dispatch, not run by this contractor pass.
 
 ## GitHub Issue
-#599 — to be closed by sink-merge --sink --issue 599 (probe-before-close).
+#599 — to be closed by sink-merge --sink --issue 599 (probe-before-close); closure_receipt at archive time recorded remote_issue_closed: close_pending.
 
 ## Roadmap
-Claim staged issue source reconciled by cmdFinalize; ROADMAP.md regenerated at closure.
+Claim staged issue source reconciled by cmdFinalize (roadmap_staged_reconciled: ["issue-599.md"], roadmap_source_removed: absent at the worktree root); ROADMAP.md regenerated at closure.
 
 ## Archive
-Pending — kaola-workflow/archive/issue-599/ via cmdFinalize (contractor Step 8b).
+Archived — kaola-workflow/archive/issue-599/ via cmdFinalize (contractor Step 8b), commit ee38bb0b.
 
 ## Required Agent Compliance
 | Requirement | Status | Evidence | Skip Reason |
@@ -61,8 +61,8 @@ Pending — kaola-workflow/archive/issue-599/ via cmdFinalize (contractor Step 8
 | documentation docking | invoked | .cache/doc-docking.md | |
 | final-validation fix executors | N/A | | no final-validation failure |
 | roadmap refresh | invoked | kaola-workflow/ROADMAP.md (regen at cmdFinalize) | |
-| archive completed folder | pending | | |
-| final commit and push | ready | git status clean of unrelated changes; push via sink-merge --sink | final gate runs after this file is committed |
+| archive completed folder | complete | commit ee38bb0b (chore: archive issue-599) | |
+| final commit and push | ready | git status clean of unrelated changes; push via sink-merge --sink | sink (push/merge/close) not run by contractor per dispatch scope |
 | finalize (n4-finalize) | main-session-direct | .cache/n4-finalize.md | |
 
 ## Status
