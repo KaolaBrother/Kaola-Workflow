@@ -414,8 +414,16 @@ dispatch: {
   forge_rider:        string|null,      // null until a concrete rider is supplied
   guards:             string[],         // computed by deriveGuards (see below)
   goal_line?:         string,           // optional; key absent when no goal_line was supplied
+  leg_path?:          string,           // optional (issue #591); this member's OWN provisioned
+                                         //   `.kw/legs/<project>/<node-id>` worktree — present only
+                                         //   when a write lane group co-opens this member; absent/null
+                                         //   on the serial or read-only path
+  leg_branch?:        string,           // optional (issue #591); this member's leg branch name
+                                         //   (`kw/legs/<project>/<node-id>`); absent alongside leg_path
 }
 ```
+
+**`leg_path` / `leg_branch` (issue #591 / D-591-01).** Conditionally attached exactly like `goal_line` — `buildDispatch()` sets them only when the caller supplies non-null, non-blank values. `runOpenReady()`'s `opened[]` map is the only caller that ever supplies them, and only for a member co-opened into a write lane group (`legs[n.id]` from the Phase-1 leg provisioning); `open-next`, `close-and-open-next`'s fused advance, and every serial/read-only `open-ready` call pass neither, so `dispatch` there is byte-identical to pre-#591 (no `leg_path`/`leg_branch` key at all). Dispatch each co-opened write leg directly from its own `dispatch.leg_path`/`dispatch.leg_branch` — no need to cross-reference the separate top-level `laneGroup` descriptor (which remains present for group-level observability only; see "`open-ready` response — `laneGroup` field" below).
 
 **`deriveGuards(nodeInfo)`** computes the `guards[]` array deterministically from the node's role and declared write set. Guard vocabulary (stable order):
 
@@ -499,7 +507,7 @@ group clears (last member close + barrier pass).
 ```json
 {
   "state": "open",
-  "max_concurrent": 8,
+  "max_concurrent": 4,
   "lane_group": {
     "group_id": "lg-n2a-n2b",
     "members": ["n2a", "n2b"],
@@ -528,6 +536,15 @@ Field contract:
 
 Each node entry inside `nodes` gains an optional `group_id` string field (the lane group it
 belongs to). Serial / read-only nodes have no `group_id` field.
+
+**Top-level `max_concurrent` when `lane_group` is present (issue #588 / D-588-01).** For a
+write lane group, `max_concurrent` is pinned to the WRITE-cap ceiling the group actually
+co-opened under (`resolveFanoutCap` folded with `--max`; default 4) — **not** the read-only
+cap (`resolveFanoutCapReadonly`, default 8) used on a pure-read frontier. This lets
+`reconcile-running-set` use `max_concurrent` as a single crash-resume roll-forward ceiling
+correctly for both frontier kinds; recording the read cap for a write group previously let a
+crash-resume reconcile roll a write group forward to more members than co-open could ever
+legally open (fixed by #588 — see the CHANGELOG and decision record for the pre-fix defect).
 
 #### `--parallel-safe --nodes A,B[,C] --json` (plan-validator.js)
 
@@ -620,6 +637,13 @@ field (absent on the serial/read path):
 ```
 
 On the serial/read path (`laneGroup` absent) the response shape is byte-identical to pre-#437.
+
+**Per-member leg routing lives on `dispatch`, not `laneGroup` (issue #591 / D-591-01).** Each
+`opened[]` entry's own `dispatch` sub-object carries that member's `leg_path`/`leg_branch`
+(see the `dispatch` sub-object stable field set above) — dispatch each leg directly from its
+own member's `dispatch.leg_path`/`dispatch.leg_branch`, with no need to cross-reference
+`laneGroup` for routing. `laneGroup` (and its convenience `write_union`/`baseline`) is
+retained for group-level observability only.
 
 #### `close-node` response — `barrier` field extension
 

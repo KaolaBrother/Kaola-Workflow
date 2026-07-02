@@ -70,9 +70,10 @@ crash-safe transaction:
 - **Write frontier, ≥2 planner-proven-disjoint (`parallel_safe`) siblings**: co-opens as a **lane
   group** BY DEFAULT — no operator toggle — up to `KAOLA_FANOUT_CAP` (default 4), further capped
   by `--max`. Each member is provisioned an isolated `.kw/legs/<project>/<node-id>` worktree
-  (containment, not construction — the Agent tool has no cwd parameter, so dispatch each leg
-  member with its absolute `legPath`, `cd "<legPath>" &&` on every Bash call). `KAOLA_PARALLEL_WRITES=0`
-  forces the byte-identical single-write serial open — no lane group, no legs.
+  (containment, not construction — the Agent tool has no cwd parameter, so dispatch each member
+  with its OWN `dispatch.leg_path` / `dispatch.leg_branch` (below), `cd "<dispatch.leg_path>" &&`
+  on every Bash call). `KAOLA_PARALLEL_WRITES=0` forces the byte-identical single-write serial
+  open — no lane group, no legs, and `dispatch.leg_path`/`dispatch.leg_branch` stay absent.
 - **A single write node** (no lane group formed — an overlapping/uncertain frontier, the
   `KAOLA_PARALLEL_WRITES=0` opt-out, or a host without worktree support): opens alone; the running
   set must be empty first — a write node never runs concurrently with anything else.
@@ -86,7 +87,16 @@ crash-safe transaction:
 
 `open-ready` returns
 `{result:'ok', kind:'read'|'write', opened:[{id,role,model,declared_write_set,nonce,evidence_file,required_tokens,dispatch}], runningSet:[ids], laneGroup?:{group_id,members,write_union,legs?}}`
-— dispatch every entry in `opened` **in one assistant message**. A non-error `ok` that opens
+— dispatch every entry in `opened` **in one assistant message**.
+
+**Per-member leg fields on `dispatch`.** When a write lane group co-opens, each opened member's
+own `dispatch` object carries `dispatch.leg_path` (the absolute path to that member's provisioned
+`.kw/legs/<project>/<node-id>` worktree) and `dispatch.leg_branch` (that leg's branch). Dispatch
+each leg directly from its own member's `dispatch.leg_path`/`dispatch.leg_branch` — no need to
+cross-reference the separate top-level `laneGroup.legs` descriptor, which remains present for
+observability only. Both keys are conditionally attached (like `dispatch.goal_line`): absent/`null`
+on the serial or read-only path, so `dispatch` there stays byte-identical to before this field
+existed. A non-error `ok` that opens
 nothing carries a `reason`: `write_node_exclusive` (a write node is already live),
 `write_awaits_drain` (only writes are ready but read-only members are still live), or
 `cap_reached`. A crash-safe precondition refuses `reconcile_first` when a prior `open-ready` left

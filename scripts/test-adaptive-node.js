@@ -5184,6 +5184,14 @@ function rtHarness(initialFiles, opts) {
     opts = opts || {};
     const aSet = opts.aSet || 'ax.js';
     const bSet = opts.bSet || 'by.js';
+    // #588: optional EXTRA frontier members appended after A,B (each { id, role?, set? }; role defaults to
+    //   tdd-guide, set defaults to '—' for a read member). review depends on A,B + every extra id. Absent /
+    //   empty ⇒ the plan bytes are IDENTICAL to the original A,B-only fixture (all existing tests unaffected).
+    const extra = Array.isArray(opts.extraMembers) ? opts.extraMembers : [];
+    const extraIds = extra.map(m => m.id);
+    const reviewRow = extra.length
+      ? '| review   | code-reviewer | ' + ['A', 'B'].concat(extraIds).join(',') + ' | — | 1 | sequence |'
+      : '| review   | code-reviewer | A,B   | —     | 1 | sequence |';
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'd437-lane-'));
     const project = 'test-project';
     const projDir = path.join(repoRoot, 'kaola-workflow', project);
@@ -5201,13 +5209,15 @@ function rtHarness(initialFiles, opts) {
       '| seed     | code-explorer | —     | —     | 1 | sequence |',
       '| A        | tdd-guide     | seed  | ' + aSet + ' | 1 | sequence |',
       '| B        | tdd-guide     | seed  | ' + bSet + ' | 1 | sequence |',
-      '| review   | code-reviewer | A,B   | —     | 1 | sequence |',
+      ...extra.map(m => '| ' + m.id + ' | ' + (m.role || 'tdd-guide') + ' | seed | ' + (m.set || '—') + ' | 1 | sequence |'),
+      reviewRow,
       '| finalize | finalize      | review| —     | 1 | sequence |', '',
       '## Node Ledger', '',
       '| id | status |', '| --- | --- |',
       '| seed | complete |',
       '| A | pending |',
       '| B | pending |',
+      ...extra.map(m => '| ' + m.id + ' | pending |'),
       '| review | pending |',
       '| finalize | pending |', '',
     ].join('\n') + '\n';
@@ -5552,6 +5562,38 @@ function rtHarness(initialFiles, opts) {
       const wd = n.dispatch && n.dispatch.working_dir;
       assert(!(wd && provisionedLegPaths.has(wd)), 'LEG-PROVISION-ON: ' + n.id + ' dispatch working_dir is NOT its provisioned leg path (S2 dormant), got ' + JSON.stringify(wd));
     }
+    // #591: each opened co-open member's dispatch card carries ITS OWN leg_path + leg_branch (the routing
+    //   fact lives in the per-member payload, not only the top-level laneGroup descriptor). Assert equal to
+    //   the provisioned worktree/branch from the running-set legs manifest. (RED-provable: pre-#591 the
+    //   dispatch was built with only the shared working_dir, so leg_path/leg_branch are absent.)
+    assert((r.opened || []).length === 2, '#591: two co-open members opened');
+    for (const n of (r.opened || [])) {
+      const leg = rs.lane_group.legs[n.id];
+      assert(leg && typeof leg.legPath === 'string', '#591: leg manifest present for ' + n.id);
+      assert(n.dispatch && n.dispatch.leg_path === leg.legPath,
+        '#591: ' + n.id + ' dispatch.leg_path == provisioned legPath, got ' + JSON.stringify(n.dispatch && n.dispatch.leg_path) + ' vs ' + JSON.stringify(leg.legPath));
+      assert(n.dispatch && n.dispatch.leg_branch === leg.legBranch,
+        '#591: ' + n.id + ' dispatch.leg_branch == provisioned legBranch, got ' + JSON.stringify(n.dispatch && n.dispatch.leg_branch) + ' vs ' + JSON.stringify(leg.legBranch));
+      assert(n.dispatch.leg_branch === 'kw/legs/test-project/' + n.id, '#591: ' + n.id + ' dispatch.leg_branch canonical form');
+    }
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
+  // #591-SERIAL-READ-NO-LEG-FIELDS (byte-identity guard): on the serial/read path (no lane group) an
+  //   opened member's dispatch card carries NEITHER leg_path NOR leg_branch — conditionally attached like
+  //   laneGroup, so serial/read open-ready output stays byte-identical to pre-#591. Raw-string probe on the
+  //   opened array (no leg field ANYWHERE) plus a key-presence check on the dispatch object.
+  // -------------------------------------------------------------------------
+  {
+    const { repoRoot } = makeLaneRepo();
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], SERIAL);
+    assert(r.result === 'ok' && Array.isArray(r.opened) && r.opened.length === 1, '#591-SERIAL-READ-NO-LEG-FIELDS: serial open ok (single write), got ' + JSON.stringify(r.opened && r.opened.map(n => n.id)));
+    const d = r.opened[0].dispatch;
+    assert(d && !('leg_path' in d), '#591-SERIAL-READ-NO-LEG-FIELDS: serial dispatch has NO leg_path key, got ' + JSON.stringify(Object.keys(d)));
+    assert(d && !('leg_branch' in d), '#591-SERIAL-READ-NO-LEG-FIELDS: serial dispatch has NO leg_branch key, got ' + JSON.stringify(Object.keys(d)));
+    assert(JSON.stringify(r.opened).indexOf('"leg_path"') === -1 && JSON.stringify(r.opened).indexOf('"leg_branch"') === -1,
+      '#591-SERIAL-READ-NO-LEG-FIELDS: no leg_path/leg_branch anywhere in the serial opened payload');
     cleanup(repoRoot);
   }
 
@@ -6600,6 +6642,199 @@ function rtHarness(initialFiles, opts) {
       assert(Array.isArray(r.opened) && r.opened.length === 1, '#500-NEGATIVE-B: exactly ONE write opened (serial degrade), got ' + JSON.stringify(r.opened && r.opened.map(n => n.id)));
       cleanup(repoRoot);
     }
+  }
+
+  // =========================================================================
+  // #588 — write co-open WIDTH/MIX coverage (the width-2-only gap). Real-git cases at the LEG-*/SYNTH-*
+  // quality bar: durable artifacts (ledger rows, running-set.json, worktree/branch existence, octopus
+  // parent count, diff-tree vs union of declared sets) — never stdout sentinels. Reuses the D-437 harness
+  // (makeLaneRepo now takes extraMembers) + runNode/readRS/ledgerStatus/worktreePaths/branchExists/gitOut.
+  // =========================================================================
+
+  // -------------------------------------------------------------------------
+  // #588-3LEG-OCTOPUS-END-TO-END (case a): a 3-leg DISJOINT write co-open → provision 3 legs → per-leg
+  //   barriers (A,B deferred; C last) → octopus merge (feature + 3 legs = EXACTLY 4 parents) → commit-union
+  //   barrier → group close. Extends SYNTH-DISJOINT (width 2) to width 3. Behavior PINNED as correct.
+  // -------------------------------------------------------------------------
+  {
+    const setOf = { A: 'ax.js', B: 'by.js', C: 'cz.js' };
+    const { repoRoot, cacheDir, planPath } = makeLaneRepo({ extraMembers: [{ id: 'C', set: 'cz.js' }] });
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON);
+    assert(r.result === 'ok', '#588-3LEG: open-ready ok, got ' + JSON.stringify(r));
+    assert(r.laneGroup && r.laneGroup.members.slice().sort().join(',') === 'A,B,C', '#588-3LEG: 3-member lane group [A,B,C], got ' + JSON.stringify(r.laneGroup && r.laneGroup.members));
+    assert(Array.isArray(r.opened) && r.opened.length === 3, '#588-3LEG: all 3 writes co-opened, got ' + JSON.stringify(r.opened && r.opened.map(n => n.id)));
+    const rs = readRS(cacheDir);
+    for (const id of ['A', 'B', 'C']) {
+      assert(rs.lane_group.legs[id], '#588-3LEG: leg manifest for ' + id);
+      assert(worktreePaths(repoRoot).some(p => p.endsWith(path.join('.kw', 'legs', 'test-project', id))), '#588-3LEG: leg worktree provisioned for ' + id);
+      assert(branchExists(repoRoot, 'kw/legs/test-project/' + id), '#588-3LEG: leg branch for ' + id);
+      assert(ledgerStatus(planPath, id) === 'in_progress', '#588-3LEG: ' + id + ' in_progress');
+      const on = r.opened.find(n => n.id === id);
+      assert(on.dispatch.leg_path === rs.lane_group.legs[id].legPath && on.dispatch.leg_branch === 'kw/legs/test-project/' + id, '#588-3LEG: ' + id + ' dispatch carries its own leg routing (#591 at width 3)');
+    }
+    const base = rs.lane_group.legs.A.baseline;
+    for (const id of ['A', 'B', 'C']) {
+      writeEvidence(cacheDir, id);
+      fs.writeFileSync(path.join(repoRoot, '.kw', 'legs', 'test-project', id, setOf[id]), '// ' + id + ' leg work\n');
+    }
+    const rA = runNode(repoRoot, ['close-node', '--node-id', 'A', '--project', 'test-project', '--json'], LEG_ON);
+    assert(rA.result === 'ok' && rA.barrier === 'deferred_to_group', '#588-3LEG: A deferred, got ' + JSON.stringify(rA));
+    const rB = runNode(repoRoot, ['close-node', '--node-id', 'B', '--project', 'test-project', '--json'], LEG_ON);
+    assert(rB.result === 'ok' && rB.barrier === 'deferred_to_group', '#588-3LEG: B deferred, got ' + JSON.stringify(rB));
+    const rC = runNode(repoRoot, ['close-node', '--node-id', 'C', '--project', 'test-project', '--json'], LEG_ON);
+    assert(rC.result === 'ok' && rC.barrier === 'group_passed' && rC.synthesized === true, '#588-3LEG: C (last) group_passed + synthesized, got ' + JSON.stringify(rC));
+    const M = rC.mergeCommit;
+    assert(gitOut(repoRoot, ['rev-parse', 'HEAD']) === M, '#588-3LEG: HEAD advanced to M');
+    const parents = gitOut(repoRoot, ['rev-list', '--parents', '-n', '1', M]).split(/\s+/).slice(1);
+    assert(parents.length === 4, '#588-3LEG: octopus merge has EXACTLY 4 parents (feature + 3 legs), got ' + parents.length);
+    const mDiff = gitOut(repoRoot, ['diff-tree', '-r', '--name-only', base, M]).split('\n').map(s => s.trim()).filter(Boolean).sort();
+    assert(JSON.stringify(mDiff) === JSON.stringify(['ax.js', 'by.js', 'cz.js']), '#588-3LEG: diff base→M == union(declared) {ax,by,cz}, got ' + JSON.stringify(mDiff));
+    for (const id of ['A', 'B', 'C']) assert(gitOut(repoRoot, ['rev-parse', M + ':' + setOf[id]]) !== '', '#588-3LEG: M contains ' + setOf[id]);
+    assert(ledgerStatus(planPath, 'A') === 'complete' && ledgerStatus(planPath, 'B') === 'complete' && ledgerStatus(planPath, 'C') === 'complete', '#588-3LEG: all 3 members complete');
+    assert(worktreePaths(repoRoot).filter(p => p.indexOf(path.join('.kw', 'legs')) !== -1).length === 0, '#588-3LEG: all legs torn down after the merge');
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
+  // #588-WIDE-CAP (case b, part 1): a 5-wide DISJOINT write antichain vs the default write FANOUT_CAP (4).
+  //   Documented cap behavior PINNED: co-open EXACTLY 4, queue the 5th (still pending, no leg); running-set
+  //   max_concurrent == the write cap (4). Then reconcile of a crashed-open honors that ceiling at width 4
+  //   (rolls all 4 forward — ceiling==width admits the full set — and preserves max_concurrent==4).
+  // -------------------------------------------------------------------------
+  {
+    const { repoRoot, cacheDir, planPath } = makeLaneRepo({ extraMembers: [{ id: 'C', set: 'cz.js' }, { id: 'D', set: 'dz.js' }, { id: 'E', set: 'ez.js' }] });
+    const allIds = ['A', 'B', 'C', 'D', 'E'];
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON);
+    assert(r.result === 'ok', '#588-WIDE-CAP: open-ready ok, got ' + JSON.stringify(r));
+    assert(Array.isArray(r.opened) && r.opened.length === 4, '#588-WIDE-CAP: FANOUT_CAP=4 co-opens EXACTLY 4 of 5, got ' + JSON.stringify(r.opened && r.opened.map(n => n.id)));
+    const openedIds = r.opened.map(n => n.id);
+    const pendingId = allIds.find(id => !openedIds.includes(id));
+    assert(pendingId && ledgerStatus(planPath, pendingId) === 'pending', '#588-WIDE-CAP: the 5th (' + pendingId + ') stays pending (queued past the cap)');
+    for (const id of openedIds) assert(ledgerStatus(planPath, id) === 'in_progress', '#588-WIDE-CAP: opened ' + id + ' in_progress');
+    const rs = readRS(cacheDir);
+    assert(rs.max_concurrent === 4, '#588-WIDE-CAP: running-set max_concurrent == write cap (4), got ' + rs.max_concurrent);
+    assert(rs.lane_group && Object.keys(rs.lane_group.legs).sort().join(',') === openedIds.slice().sort().join(','), '#588-WIDE-CAP: legs manifest covers EXACTLY the 4 opened, got ' + JSON.stringify(Object.keys(rs.lane_group.legs)));
+    assert(!rs.lane_group.legs[pendingId], '#588-WIDE-CAP: no leg manifest entry for the queued 5th');
+    assert(!worktreePaths(repoRoot).some(p => p.endsWith(path.join('.kw', 'legs', 'test-project', pendingId))), '#588-WIDE-CAP: no leg worktree for the queued 5th');
+    // Reconcile ceiling at width 4: craft a crashed-open (state:opening, all 4 opening:true).
+    const rs0 = readRS(cacheDir);
+    rs0.state = 'opening';
+    rs0.nodes = rs0.nodes.map(n => ({ ...n, opening: true }));
+    fs.writeFileSync(path.join(cacheDir, 'running-set.json'), JSON.stringify(rs0, null, 2));
+    const rec = runNode(repoRoot, ['reconcile-running-set', '--project', 'test-project', '--json'], LEG_ON);
+    assert(rec.result === 'ok' && rec.reconciled === true, '#588-WIDE-CAP: reconcile ok, got ' + JSON.stringify(rec));
+    const rs1 = readRS(cacheDir);
+    assert(rs1.state === 'open', '#588-WIDE-CAP: reconcile promotes to open');
+    assert(rs1.max_concurrent === 4, '#588-WIDE-CAP: max_concurrent==4 survives reconcile at width 4, got ' + rs1.max_concurrent);
+    assert(rs1.nodes.length === 4, '#588-WIDE-CAP: reconcile rolls ALL 4 forward (ceiling==width==4), got ' + rs1.nodes.length);
+    assert(rs1.lane_group && Object.keys(rs1.lane_group.legs).length === 4, '#588-WIDE-CAP: all 4 legs retained through reconcile, got ' + JSON.stringify(rs1.lane_group && Object.keys(rs1.lane_group.legs)));
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
+  // #588-WIDE-DRAIN (case b, part 2): after the width-4 group closes (octopus, feature + 4 legs = 5 parents),
+  //   a subsequent open-ready DRAINS the queued 5th — a single remaining write opens serially (no group, no
+  //   leg). Pins the top-up-drain half of the documented cap behavior.
+  // -------------------------------------------------------------------------
+  {
+    const setOf = { A: 'ax.js', B: 'by.js', C: 'cz.js', D: 'dz.js', E: 'ez.js' };
+    const allIds = ['A', 'B', 'C', 'D', 'E'];
+    const { repoRoot, cacheDir, planPath } = makeLaneRepo({ extraMembers: [{ id: 'C', set: 'cz.js' }, { id: 'D', set: 'dz.js' }, { id: 'E', set: 'ez.js' }] });
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON);
+    assert(r.result === 'ok' && r.opened.length === 4, '#588-WIDE-DRAIN: co-open 4, got ' + JSON.stringify(r.opened && r.opened.map(n => n.id)));
+    const openedIds = r.opened.map(n => n.id);
+    const pendingId = allIds.find(id => !openedIds.includes(id));
+    const rs = readRS(cacheDir);
+    const base = rs.lane_group.legs[openedIds[0]].baseline;
+    for (const id of openedIds) {
+      writeEvidence(cacheDir, id);
+      fs.writeFileSync(path.join(repoRoot, '.kw', 'legs', 'test-project', id, setOf[id]), '// ' + id + ' leg work\n');
+    }
+    let last;
+    for (let i = 0; i < openedIds.length; i++) {
+      last = runNode(repoRoot, ['close-node', '--node-id', openedIds[i], '--project', 'test-project', '--json'], LEG_ON);
+      if (i < openedIds.length - 1) assert(last.result === 'ok' && last.barrier === 'deferred_to_group', '#588-WIDE-DRAIN: ' + openedIds[i] + ' deferred, got ' + JSON.stringify(last));
+    }
+    assert(last.result === 'ok' && last.barrier === 'group_passed' && last.synthesized === true, '#588-WIDE-DRAIN: last member synthesizes, got ' + JSON.stringify(last));
+    const M = last.mergeCommit;
+    const parents = gitOut(repoRoot, ['rev-list', '--parents', '-n', '1', M]).split(/\s+/).slice(1);
+    assert(parents.length === 5, '#588-WIDE-DRAIN: octopus has EXACTLY 5 parents (feature + 4 legs), got ' + parents.length);
+    const mDiff = gitOut(repoRoot, ['diff-tree', '-r', '--name-only', base, M]).split('\n').map(s => s.trim()).filter(Boolean).sort();
+    assert(JSON.stringify(mDiff) === JSON.stringify(openedIds.map(id => setOf[id]).sort()), '#588-WIDE-DRAIN: diff base→M == union of the 4 opened declared sets, got ' + JSON.stringify(mDiff));
+    for (const id of openedIds) assert(ledgerStatus(planPath, id) === 'complete', '#588-WIDE-DRAIN: ' + id + ' complete');
+    assert(worktreePaths(repoRoot).filter(p => p.indexOf(path.join('.kw', 'legs')) !== -1).length === 0, '#588-WIDE-DRAIN: legs torn down after the width-4 merge');
+    const r2 = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON);
+    assert(r2.result === 'ok', '#588-WIDE-DRAIN: drain open-ready ok, got ' + JSON.stringify(r2));
+    assert(Array.isArray(r2.opened) && r2.opened.length === 1 && r2.opened[0].id === pendingId, '#588-WIDE-DRAIN: the queued 5th (' + pendingId + ') drains, got ' + JSON.stringify(r2.opened && r2.opened.map(n => n.id)));
+    assert(!r2.laneGroup, '#588-WIDE-DRAIN: single remaining write opens serially (no lane group)');
+    const rs2 = readRS(cacheDir);
+    assert(!rs2.lane_group, '#588-WIDE-DRAIN: running-set has no lane_group for the serial drain');
+    assert(ledgerStatus(planPath, pendingId) === 'in_progress', '#588-WIDE-DRAIN: the drained 5th is in_progress');
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
+  // #588-MIXED-FRONTIER (case c): a ready frontier with BOTH read members (v1,v2) AND a disjoint write pair
+  //   (A,B). open-ready opens ONLY the reads (a write runs strictly alone — reads-first is DELIBERATE); the
+  //   write group DEFERS until the reads drain (write_awaits_drain). Pins exactly which members open + that
+  //   running-set reflects the opened set, with NO lane group / NO legs while reads are live. Behavior PINNED
+  //   as correct (matches the "a write node runs strictly alone" invariant; co-open-by-default is write||write).
+  // -------------------------------------------------------------------------
+  {
+    const { repoRoot, cacheDir, planPath } = makeLaneRepo({ extraMembers: [{ id: 'v1', role: 'code-explorer', set: '—' }, { id: 'v2', role: 'knowledge-lookup', set: '—' }] });
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON);
+    assert(r.result === 'ok', '#588-MIXED: open-ready ok, got ' + JSON.stringify(r));
+    const openedIds = (r.opened || []).map(n => n.id).sort();
+    assert(openedIds.join(',') === 'v1,v2', '#588-MIXED: open-ready opens ONLY the read members [v1,v2] (writes defer), got ' + JSON.stringify(openedIds));
+    assert(!r.laneGroup, '#588-MIXED: no lane group while opening reads');
+    assert(ledgerStatus(planPath, 'v1') === 'in_progress' && ledgerStatus(planPath, 'v2') === 'in_progress', '#588-MIXED: both reads in_progress');
+    assert(ledgerStatus(planPath, 'A') === 'pending' && ledgerStatus(planPath, 'B') === 'pending', '#588-MIXED: writes A,B DEFERRED (still pending)');
+    const rs = readRS(cacheDir);
+    assert(rs.nodes.map(n => n.id).sort().join(',') === 'v1,v2', '#588-MIXED: running-set reflects EXACTLY the opened read set, got ' + JSON.stringify(rs.nodes.map(n => n.id)));
+    assert(!rs.lane_group, '#588-MIXED: running-set has no lane_group (reads only)');
+    assert(!worktreePaths(repoRoot).some(p => p.indexOf(path.join('.kw', 'legs')) !== -1), '#588-MIXED: no legs provisioned for a read frontier');
+    // While the reads are live, a second open-ready DEFERS the writes (a write cannot co-run with live reads).
+    const r2 = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON);
+    assert(r2.result === 'ok' && Array.isArray(r2.opened) && r2.opened.length === 0 && r2.reason === 'write_awaits_drain',
+      '#588-MIXED: writes wait for the reads to drain (write_awaits_drain), got ' + JSON.stringify({ opened: r2.opened, reason: r2.reason }));
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
+  // #588-TASKMIRROR-FAILOPEN (case d): the durable task-mirror refresh is FAIL-OPEN on the running-set
+  //   scheduler path — a mirror write failure must NEVER roll back a correct ledger transition (the #317
+  //   fail-open contract, tested for the batch path, now pinned for open-ready + close-node). Force the
+  //   mirror write to fail (workflow-tasks.json is a DIRECTORY ⇒ EISDIR ⇒ non-zero task-mirror exit) and
+  //   assert the ledger STILL advances with taskMirror.status === 'failed'. Behavior PINNED as correct.
+  // -------------------------------------------------------------------------
+  {
+    // OPEN path: co-open with the mirror-write forced to fail.
+    const { repoRoot, cacheDir, projDir, planPath } = makeLaneRepo();
+    fs.mkdirSync(path.join(projDir, 'workflow-tasks.json'), { recursive: true });
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], LEG_ON);
+    assert(r.result === 'ok', '#588-TASKMIRROR-OPEN: open-ready still ok despite mirror failure, got ' + JSON.stringify(r));
+    assert(r.taskMirror && r.taskMirror.status === 'failed', '#588-TASKMIRROR-OPEN: taskMirror reports failed (fail-open), got ' + JSON.stringify(r.taskMirror));
+    assert(ledgerStatus(planPath, 'A') === 'in_progress' && ledgerStatus(planPath, 'B') === 'in_progress', '#588-TASKMIRROR-OPEN: ledger STILL advanced despite mirror failure');
+    const rs = readRS(cacheDir);
+    assert(rs && rs.lane_group && rs.lane_group.legs.A && rs.lane_group.legs.B, '#588-TASKMIRROR-OPEN: running-set + legs written despite mirror failure');
+    cleanup(repoRoot);
+  }
+  {
+    // CLOSE path: serial open (writes the mirror as a file), then force the mirror to fail at close-node.
+    const { repoRoot, cacheDir, projDir, planPath } = makeLaneRepo();
+    const open = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], SERIAL);
+    assert(open.result === 'ok' && open.opened.length === 1, '#588-TASKMIRROR-CLOSE: serial open ok, got ' + JSON.stringify(open));
+    const openedId = open.opened[0].id;
+    writeEvidence(cacheDir, openedId);
+    fs.writeFileSync(path.join(repoRoot, openedId === 'A' ? 'ax.js' : 'by.js'), '// serial in-lane\n');
+    const tasksPath = path.join(projDir, 'workflow-tasks.json');
+    try { fs.rmSync(tasksPath, { force: true }); } catch (_) {}
+    fs.mkdirSync(tasksPath, { recursive: true });
+    const r = runNode(repoRoot, ['close-node', '--node-id', openedId, '--project', 'test-project', '--json'], SERIAL);
+    assert(r.result === 'ok', '#588-TASKMIRROR-CLOSE: close-node still ok despite mirror failure, got ' + JSON.stringify(r));
+    assert(r.taskMirror && r.taskMirror.status === 'failed', '#588-TASKMIRROR-CLOSE: taskMirror reports failed (fail-open), got ' + JSON.stringify(r.taskMirror));
+    assert(ledgerStatus(planPath, openedId) === 'complete', '#588-TASKMIRROR-CLOSE: ledger advanced to complete despite mirror failure');
+    cleanup(repoRoot);
   }
 }
 

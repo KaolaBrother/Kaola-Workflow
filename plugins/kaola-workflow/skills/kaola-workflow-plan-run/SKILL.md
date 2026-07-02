@@ -164,9 +164,11 @@ consent` in plan `## Meta`): `docs/plan-run-cards/speculative-open.md`
 (covers `open-ready --speculative-consent`, `discard-speculative`, gate verdict:fail rollback)
 - **Write-leg dispatch discipline.** Isolation is **discipline-dependent, not transparent** —
   the Agent tool has no cwd parameter and a provisioned `.kw/legs/<project>/<node>` leg does NOT auto-redirect
-  a leg agent's edits. Dispatch each leg with its **absolute `legPath`**: every `Edit`/`Write` uses an
-  absolute `<legPath>/...` path and every Bash uses `cd "<legPath>" &&` (the load-bearing instruction in the
-  leg brief). The failure mode is **fail-closed containment, not construction**: a relative-path own-lane slip
+  a leg agent's edits. Dispatch each leg with its member's **`dispatch.leg_path`** (and `dispatch.leg_branch`)
+  from the `open-ready` payload — every `Edit`/`Write` uses an absolute `<dispatch.leg_path>/...` path and
+  every Bash uses `cd "<dispatch.leg_path>" &&` (the load-bearing instruction in the leg brief), removing the
+  need for a laneGroup cross-reference (the laneGroup descriptor remains for observability). The failure mode
+  is **fail-closed containment, not construction**: a relative-path own-lane slip
   lands in the parent (invisible to the per-leg barrier, exempt from the write-lane hook) and is caught by
   the **parent-clean fence** before the merge → `merge_conflict`/repair, never silent cross-contamination or
   silent loss. **Bounded thrash:** after **K = 2** repair nudges on an agent that keeps writing out-of-lane,

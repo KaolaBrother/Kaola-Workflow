@@ -1110,6 +1110,17 @@ function buildDispatch(nodeInfo, context) {
   if (ctx.goal_line != null && String(ctx.goal_line).trim() !== '') {
     d.goal_line = String(ctx.goal_line);
   }
+  // #591: per-member leg routing. On a co-open write frontier each member runs in its own provisioned
+  // `.kw` leg worktree; thread the member's leg_path + leg_branch DIRECTLY into its dispatch card so the
+  // orchestrator routes each leg from the per-member payload — not by cross-referencing the separate
+  // top-level laneGroup descriptor against member ids. Conditionally attached (like goal_line): absent on
+  // the serial/read path (ctx.leg_path/leg_branch null) ⇒ the dispatch shape is byte-identical to pre-#591.
+  if (ctx.leg_path != null && String(ctx.leg_path).trim() !== '') {
+    d.leg_path = String(ctx.leg_path);
+  }
+  if (ctx.leg_branch != null && String(ctx.leg_branch).trim() !== '') {
+    d.leg_branch = String(ctx.leg_branch);
+  }
   return d;
 }
 
@@ -3965,6 +3976,11 @@ function runOpenReady(opts) {
   // #437 (D-419 P2): the lane-group descriptor when ≥2 disjoint writes co-open under
   // containment. undefined ⇒ the serial/read path (the running-set writer skips lane_group).
   let groupForm;
+  // #588: the WRITE-cap ceiling a formed lane group co-opened under (resolveFanoutCap folded with --max).
+  // Recorded as running-set max_concurrent for a write group so reconcile-running-set honors the WRITE cap
+  // on crash-resume — NOT the read cap (`cap`), which would let reconcile roll forward more write members
+  // than co-open ever permits. null ⇒ the serial/read path (max_concurrent stays the read-cap ceiling).
+  let laneGroupCeiling = null;
   // #542 (D-542-01): parallel disjoint writes are DEFAULT-ON. legCoupled — the SINGLE local that
   // gates BOTH co-open (below) and leg-provisioning (:3976) so they can never drift — is now driven by
   // parallelWritesDefaultOn (default TRUE; KAOLA_PARALLEL_WRITES=0 forces serial). #498 INVARIANT
@@ -4016,6 +4032,9 @@ function runOpenReady(opts) {
           const chosen = writeNodes.filter(n => grp.members.includes(n.id)).slice(0, groupCeiling);
           toOpen = chosen;
           openKind = 'write';
+          // #588: record the WRITE-cap ceiling this group co-opened under so max_concurrent (below) reflects
+          // the write cap, not the read cap. groupCeiling is >= 2 here (the <2 branch degraded to serial).
+          laneGroupCeiling = groupCeiling;
           groupForm = {
             group_id: laneGroupId(chosen.map(n => n.id)),
             members: chosen.map(n => n.id).slice().sort(),
@@ -4134,7 +4153,12 @@ function runOpenReady(opts) {
   // #436 D-419-01: record max_concurrent at open time as min(cap, --max || cap) so
   // reconcile-running-set can honor the ceiling on crash-resume. NEVER written at freeze
   // time or into plan_hash. Absent --max falls back to cap (the full fanout ceiling).
-  const maxConcurrent = Number.isInteger(max) && max >= 1 ? Math.min(cap, max) : cap;
+  // #588: for a WRITE lane group, the ceiling is the WRITE cap (laneGroupCeiling, already folded with
+  // --max) — NOT the read `cap`. Recording the read cap (8) for a write group let reconcile roll forward
+  // more write members than co-open ever opens (the write cap is 4); pin it to the group's actual ceiling.
+  const maxConcurrent = groupForm
+    ? laneGroupCeiling
+    : (Number.isInteger(max) && max >= 1 ? Math.min(cap, max) : cap);
   // #437 (D-419 P2 §1.2): the lane_group descriptor, written into running-set.json BEFORE any ledger
   // flip (so a crash mid-open is reconcilable). Carries the shared baseline SHA + the write_union
   // (convenience snapshot; the group barrier re-reads the plan rows for attribution). Absent when no
@@ -4217,9 +4241,16 @@ function runOpenReady(opts) {
       const dispatchEvidenceFile = qualifiedEvidenceFile(project, n.id);
       const evidence_file = '.cache/' + n.id + '.md';
       const nonce = nonceById[n.id] || null;
+      // #591: on a co-open write frontier this member has a provisioned leg (legs[n.id] from Phase 1);
+      // thread its leg_path/leg_branch into the dispatch card. null on the serial/read path (no legs) ⇒
+      // buildDispatch omits the keys ⇒ byte-identical to pre-#591 (mirrors the conditional laneGroup attach).
+      const legInfo = (legs && legs[n.id]) ? legs[n.id] : null;
       const dispatch = buildDispatch(
         { id: n.id, role: n.role, model: n.model || null, declared_write_set: n.declared_write_set },
-        { nonce, evidence_file: dispatchEvidenceFile, required_tokens, working_dir: working_dir || null, forge_rider: null }
+        {
+          nonce, evidence_file: dispatchEvidenceFile, required_tokens, working_dir: working_dir || null, forge_rider: null,
+          leg_path: legInfo ? legInfo.legPath : null, leg_branch: legInfo ? legInfo.legBranch : null,
+        }
       );
       return { id: n.id, role: n.role, model: n.model || null, kind: n.kind, declared_write_set: n.declared_write_set, nonce, evidence_file, required_tokens, dispatch };
     }),
