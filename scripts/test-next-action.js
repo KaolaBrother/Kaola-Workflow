@@ -502,8 +502,8 @@ function makeModelPlan(nodesRows, ledgerRows) {
 
 // -----------------------------------------------------------------------
 // -----------------------------------------------------------------------
-// #439 speculative-read eligibility (additive `speculativePending`, emitted ONLY at
-// speculative_open_policy:consent — omitted entirely at the default off).
+// #439/#597 speculative eligibility (additive `speculativePending`, emitted at
+// speculative_open_policy:consent AND auto — omitted entirely at off / absent-field plans).
 // -----------------------------------------------------------------------
 // specPlan prepends a ## Meta carrying speculative_open_policy:consent so eligibility is EMITTED.
 const specPlan = (nodes, ledger) => '## Meta\nspeculative_open_policy: consent\n\n' + makePlan(nodes, ledger);

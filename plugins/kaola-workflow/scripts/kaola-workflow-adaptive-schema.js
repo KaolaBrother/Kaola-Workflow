@@ -364,7 +364,7 @@ function materializeSpeculativePolicy(content, policy) {
 // refused at freeze (deferred). Relaxation beyond `off` ALSO requires the per-run, never-persisted
 // write-side consent carrier (the `--write-overlap-consent` flag — the write analogue of #439's
 // `--speculative-consent`) AND a code-reviewer gate post-dominating the relaxed legs (validator-confirmed,
-// leg-scoped). Mirrors speculative_open_policy's shape (Meta, hash-covered, default off, a
+// leg-scoped). Mirrors speculative_open_policy's shape (Meta, hash-covered, absence parses off, a
 // parseSpeculativePolicy-style freeze check).
 const WRITE_OVERLAP_POLICY_DEFAULT = 'off';
 const WRITE_OVERLAP_POLICY_LEGAL = Object.freeze(['off', 'disjoint', 'coarse']);
