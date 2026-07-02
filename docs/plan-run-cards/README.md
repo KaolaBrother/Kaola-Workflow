@@ -13,7 +13,7 @@ that situation.
 | [governance.md](governance.md) | Plan freeze / governance-ack handshake |
 | [repair-routing.md](repair-routing.md) | Barrier refusal / route-findings / repair dispatch |
 | [reopen-complete-node.md](reopen-complete-node.md) | Reopening a complete writer node |
-| [frontier-batch.md](frontier-batch.md) | Parallel frontier fan-out (open-batch / top-up / seal) |
+| [frontier-batch.md](frontier-batch.md) | Parallel frontier fan-out — running-set scheduler (open-ready / close-node / reconcile-running-set) |
 | [speculative-open.md](speculative-open.md) | Speculative open (policy consent → open-ready --speculative-consent / discard-speculative) |
 
 ## How to use these cards
@@ -36,3 +36,4 @@ apply to them). They live once under `docs/plan-run-cards/` and are pointed at b
 - **D-446-01** — `--summary` mode + `route-findings` companion record
 - **D-434-01** — sanctioned repair primitives (`revert-overflow` / `repair-node`)
 - **D-424-01** — `--drop-base` window-lock / anti-laundering model
+- **D-586-01** — retirement of the standalone `parallel-batch` aggregator; `frontier-batch.md` now documents the running-set scheduler

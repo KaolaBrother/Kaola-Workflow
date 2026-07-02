@@ -1,10 +1,11 @@
-# Card: Parallel Frontier Fan-Out (open-batch / top-up / seal)
+# Card: Parallel Frontier Fan-Out (running-set scheduler)
 
-**When to read:** `orient` or `close-and-open-next` returns `enterBatch: true`, indicating the
-next frontier is a parallel batch of disjoint-write siblings that should be dispatched
-concurrently.
+**When to read:** `orient` / `open-next` / `close-and-open-next` returns `enterBatch: true` with a
+`frontier: [...]` of ≥2 nodes, indicating the next frontier is a set of disjoint-write (or
+read-only) siblings that should be dispatched concurrently.
 
-**Related:** D-445-01 (skeleton/card split), D-434-01 (repair primitives)
+**Related:** the running-set scheduler — `open-ready` / `close-node` / `reconcile-running-set` in
+`kaola-workflow-adaptive-node.js`.
 
 <!-- PIN: frontier unit -->
 frontier unit
@@ -14,200 +15,210 @@ frontier unit
 ## 1. The frontier unit concept
 
 A **frontier unit** is the set of nodes that are simultaneously unblocked (all predecessors
-complete) in the DAG. When the frontier unit contains multiple nodes with disjoint write sets,
-they can be dispatched as a parallel batch.
+complete) in the DAG. The running-set scheduler owns BOTH the state and the crash-safe manifest
+(`kaola-workflow/{project}/.cache/running-set.json`) for a frontier unit; the plan-run skeleton
+(main session) owns concurrent DISPATCH — the multiple `Agent()` calls in one message. When
+`enterBatch: true` is returned, the frontier is fan-out eligible: run `open-ready`, then dispatch
+the returned nodes' role agents concurrently.
 
-`kaola-workflow-parallel-batch.js` manages the batch-manifest lifecycle (the crash-safe
-open/seal/join recipes in §3-§8); the running-set scheduler proper is adaptive-node's
-`open-ready` / `close-node` / `reconcile-running-set` (the live `enterBatch: true` route per
-`kaola-workflow-plan-run`). When `enterBatch: true` is returned, the scheduler has determined the
-frontier is batch-eligible; you open the batch and dispatch the siblings concurrently.
+There is no separate "batch" subsystem. Serial execution is simply the running-set scheduler
+operating with a concurrency ceiling of one — `open-next` / `close-and-open-next` are the
+`max_concurrent = 1` aliases that never write `running-set.json`; its absence on disk is itself
+the serial witness.
 
 ---
 
-## 2. Confirming batch eligibility
+## 2. Confirming fan-out eligibility
 
-Before opening a batch, check the orient output:
+`orient` (and `open-next` / `close-and-open-next`) return:
 
 ```json
 {
   "enterBatch": true,
-  "batchNodes": ["n4", "n5", "n6"],
-  "degraded": false
+  "frontier": [
+    { "id": "n4", "role": "tdd-guide", "model": "sonnet", "declared_write_set": "api/" },
+    { "id": "n5", "role": "tdd-guide", "model": "sonnet", "declared_write_set": "cli/" }
+  ]
 }
 ```
 
 | Field | Meaning |
 |---|---|
-| `enterBatch: true` | The frontier is batch-eligible |
-| `batchNodes` | The sibling node-ids that form this batch |
-| `degraded: false` | Disjoint co-open in isolated legs — the DEFAULT; parallel dispatch is safe |
-| `degraded: true` | Non-disjoint / host-limited / opt-out (`KAOLA_PARALLEL_WRITES=0`); use serial fallback (§4) |
+| `enterBatch: true` | The frontier is fan-out eligible — ≥2 delegable ready-pending siblings, nothing else `in_progress` |
+| `frontier` | The sibling node descriptors that form this frontier |
+
+`enterBatch` / `frontier` are advisory signals — `open-ready` (below) is the transaction that
+actually opens the set and is authoritative on which nodes it selects (priority-ordered by
+`next-action`'s longest-path-to-sink, bounded by the fan-out cap).
 
 ---
 
-## 3. `open-batch` — open the parallel batch
+## 3. `open-ready` — open the frontier
 
 ```bash
-node scripts/kaola-workflow-parallel-batch.js open-batch \
-  --batch-id {batchId} \
-  --nodes n4,n5,n6 \
-  --plan kaola-workflow/{project}/workflow-plan.md \
-  --ledger kaola-workflow/{project}/workflow-ledger.md
+node kaola-workflow-adaptive-node.js open-ready \
+  --project {project} --json \
+  [--max N] [--speculative-consent] [--write-overlap-consent]
 ```
 
-`open-batch` creates the crash-safe two-phase manifest and records the `opening` marker for each
-member. It returns the batch manifest, including each member's `write_set` and assigned lane.
+Opens as many ready-pending nodes as the cap and running-set state allow, in ONE two-phase
+crash-safe transaction:
 
-After `open-batch`, dispatch the role agents for each sibling concurrently. Each agent receives
-its node-id and write-set; they run in parallel within their declared lane.
+- **Read-only frontier** (`code-explorer`, `knowledge-lookup`, `adversarial-verifier`, …): fans
+  out up to `KAOLA_FANOUT_CAP_READONLY` (default 8) minus the count already live, further capped
+  by `--max`.
+- **Write frontier, ≥2 planner-proven-disjoint (`parallel_safe`) siblings**: co-opens as a **lane
+  group** BY DEFAULT — no operator toggle — up to `KAOLA_FANOUT_CAP` (default 4), further capped
+  by `--max`. Each member is provisioned an isolated `.kw/legs/<project>/<node-id>` worktree
+  (containment, not construction — the Agent tool has no cwd parameter, so dispatch each leg
+  member with its absolute `legPath`, `cd "<legPath>" &&` on every Bash call). `KAOLA_PARALLEL_WRITES=0`
+  forces the byte-identical single-write serial open — no lane group, no legs.
+- **A single write node** (no lane group formed — an overlapping/uncertain frontier, the
+  `KAOLA_PARALLEL_WRITES=0` opt-out, or a host without worktree support): opens alone; the running
+  set must be empty first — a write node never runs concurrently with anything else.
+- **Overlapping (non-disjoint, `write_overlap_policy: coarse`) writes**: require
+  `--write-overlap-consent` to co-open at all; without it the frontier serial-degrades to one
+  write node at a time.
+- **Speculative read fallback** (`speculative_open_policy: consent` in `## Meta`): when the normal
+  frontier is empty because only an open gate blocks progress, `--speculative-consent` fans out
+  the gate's speculative-eligible descendants, each stamped `speculative: true` in
+  `running-set.json` — see `docs/plan-run-cards/speculative-open.md`.
+
+`open-ready` returns
+`{result:'ok', kind:'read'|'write', opened:[{id,role,model,declared_write_set,nonce,evidence_file,required_tokens,dispatch}], runningSet:[ids], laneGroup?:{group_id,members,write_union,legs?}}`
+— dispatch every entry in `opened` **in one assistant message**. A non-error `ok` that opens
+nothing carries a `reason`: `write_node_exclusive` (a write node is already live),
+`write_awaits_drain` (only writes are ready but read-only members are still live), or
+`cap_reached`. A crash-safe precondition refuses `reconcile_first` when a prior `open-ready` left
+`running-set.json` mid-transaction (`state: 'opening'` or any member `opening: true`) — run
+`reconcile-running-set` first.
 
 ---
 
-## 4. Serial fallback when `degraded: true`
-
-Disjoint (`parallel_safe`) write co-open in isolated legs is the DEFAULT (#542, D-542-01) — no
-operator toggle. `open-batch` returns `degraded: true` only when isolated parallel legs cannot be
-provisioned: a NON-DISJOINT (overlapping/`write_overlap_policy: coarse` without consent) frontier,
-a host WITHOUT worktree support, or an explicit `KAOLA_PARALLEL_WRITES=0` opt-out. In those cases,
-fall back to serial execution:
-
-1. Do NOT proceed with parallel dispatch.
-2. Use `open-next` to open one sibling at a time (normal per-node lifecycle).
-3. Advance through the frontier sequentially, one node per `close-and-open-next` cycle.
-
-`degraded: true` is not an error — it is the scheduler's intentional safe mode for the bounded set
-of cases above where isolated parallel legs cannot be provisioned. The common case (a disjoint write
-frontier on a worktree-capable host) co-opens in parallel legs and never degrades.
-
----
-
-## 5. `top-up` — rolling drain as members complete
-
-`top-up` starts the next queued sibling as one finishes, maintaining concurrency up to the
-fan-out cap:
+## 4. `close-node` — close one member
 
 ```bash
-node scripts/kaola-workflow-parallel-batch.js top-up \
-  --batch-id {batchId} \
-  --plan kaola-workflow/{project}/workflow-plan.md \
-  --ledger kaola-workflow/{project}/workflow-ledger.md
+node kaola-workflow-adaptive-node.js close-node \
+  --project {project} --node-id {node-id} --json
 ```
 
-Use `top-up` when the batch has more members than the concurrency limit allows to run at once.
-The `top-up` command respects the `depends-on-member` guard — it will not start a sibling that
-depends on another sibling that is still running.
+Runs the same evidence-shape check → barrier → ledger-complete → compliance → selector-arm
+contract as the serial `close-and-open-next`, then removes the node from `running-set.json` and
+returns the newly-ready frontier (`{closed, allDone, newlyReady, taskTransitions}`). It does
+**not** auto-open the next frontier — the loop calls `open-ready` again.
+
+**Lane-group members close differently.** A node stamped with a live `group_id` in
+`running-set.json` takes the GROUP-scoped close path instead of the plain per-node barrier:
+
+- **Non-last member**: runs only the per-member in-lane vacuity check (its declared write set must
+  show changes, or the evidence must declare `no_op: <reason>`), closes its ledger row, and
+  DEFERS the diff barrier — the response carries `barrier: 'deferred_to_group'` and the compliance
+  row records the same literal marker.
+- **Last member**: the `synthesizer` step runs first — a parent-clean fence, then a mechanical
+  octopus-merge of the disjoint legs into the feature branch (commit `M`, no agent) — then the
+  plan-validator's `--group-barrier --group-id <id> --merge-commit M --project P` diffs the group
+  baseline against the UNION of every member's declared write set. Pass closes the row, records
+  `barrier: 'group_passed'`, clears `lane_group`, tears down every leg, and drops the group
+  baseline. A real same-file conflict the octopus merge cannot resolve bails with
+  `reason: 'merge_conflict'` — legs and the group baseline are retained (durable, recoverable); see
+  the plan-run skeleton's `merge_conflict` repair note (bounded `MERGE_CONFLICT_REPAIR_LIMIT`
+  repairs, then `write-halt --reason merge_conflict`).
+
+A speculative member cannot close to `complete` until the gate it bet on resolves; a gate that
+closes `verdict: fail` surfaces its speculative dependents (`speculative_review_required`) for
+`discard-speculative`.
 
 ---
 
-## 6. `seal-member` — close one batch member's evidence
-
-When a single batch member's role agent completes and its evidence is recorded:
+## 5. `reconcile-running-set` — crash repair
 
 ```bash
-node scripts/kaola-workflow-parallel-batch.js seal-member \
-  --batch-id {batchId} \
-  --node-id n4 \
-  --evidence-file kaola-workflow/{project}/.cache/n4.md \
-  --plan kaola-workflow/{project}/workflow-plan.md \
-  --ledger kaola-workflow/{project}/workflow-ledger.md
+node kaola-workflow-adaptive-node.js reconcile-running-set \
+  --project {project} --json
 ```
 
-`seal-member` verifies the evidence is non-empty and that the member's writes are contained
-within its declared lane (vacuity guard — an empty member worktree does NOT pass seal). After
-sealing, the member's status transitions to `sealed` in the manifest.
+`running-set.json` is written in `state: 'opening'` with the FULL intended node set, each member
+stamped `opening: true`, BEFORE any ledger row flips — a crash between the manifest write and the
+ledger flip is always reconcilable, never an orphan. `reconcile-running-set` repairs every anomaly
+class in one call:
+
+- **Interrupted open** (`state: 'opening'`, or any `opening: true` member): a member whose ledger
+  row DID flip to `in_progress` is kept (rolled forward, `opening` flag cleared, capped at the
+  recorded `max_concurrent`); a member still `pending` did not open and is rolled back — dropped
+  from the set, its baseline removed.
+- **Interrupted close** (a ledger-terminal `complete`/`n/a` node still listed in an already-`open`
+  set — the ledger write landed but the running-set removal crashed): dropped
+  (`closedDropped`).
+- **Stale member** (a non-opening member of an `open` set whose ledger row is neither `in_progress`
+  nor terminal — a different serial node is the real live one): dropped (`staleDropped`).
+- **Lane-group survival**: a `lane_group` survives iff ≥1 of its members survives; a fully-dropped
+  group tears down every leg and drops the group baseline. A surviving group tears down only the
+  departing members' legs — a departing member's own leg is retained if it already closed (its
+  committed work still needs the eventual synthesizer merge) — and self-heals `closed_members`
+  against the authoritative ledger.
+- **Orphan legs**: `.kw/legs/<project>/*` worktrees with no matching live manifest entry are swept
+  on every reconcile call (gated on `KAOLA_PARALLEL_WRITES` staying default-on).
+
+Promotes the manifest to `state: 'open'` (or deletes it once the surviving set is empty) and
+returns `{reconciled, rolledForward, rolledBack, closedDropped, staleDropped, state:'open'}`. A
+set with no opening transaction, no closed member, and no stale member is a no-op
+(`reconciled: false, reason: 'not_opening'`). After reconciling, re-run `orient` to resume.
 
 ---
 
-## 7. `seal` — close the entire batch
+## 6. Fan-out caps
 
-Once all members are `sealed`:
+| Cap | Env | Default | Applies to |
+|---|---|---|---|
+| `FANOUT_CAP` | `KAOLA_FANOUT_CAP` | 4 | Write-role co-open (lane groups) and single serial writes |
+| `FANOUT_CAP_READONLY` | `KAOLA_FANOUT_CAP_READONLY` | 8 | Read-only fan-out |
 
-```bash
-node scripts/kaola-workflow-parallel-batch.js seal \
-  --batch-id {batchId} \
-  --plan kaola-workflow/{project}/workflow-plan.md \
-  --ledger kaola-workflow/{project}/workflow-ledger.md
-```
-
-`seal` runs the tree-aware join (handling deletes and renames across lanes) and updates the
-ledger to mark all batch members `complete`. After a successful `seal`, the scheduler returns
-to the per-node lifecycle for the next frontier.
+`--max N` further bounds either cap for a single `open-ready` call; a logical frontier MAY be
+wider than the cap — the cap bounds runtime concurrency, not plan validity. `open-ready` opens the
+remainder on the next call as members close.
 
 ---
 
-## 8. `reconcile` — crash repair for running-set
-
-If the batch crashes mid-flight (e.g., a member agent dies, the manifest is partially written):
-
-```bash
-node scripts/kaola-workflow-parallel-batch.js reconcile \
-  --batch-id {batchId} \
-  --plan kaola-workflow/{project}/workflow-plan.md \
-  --ledger kaola-workflow/{project}/workflow-ledger.md
-```
-
-`reconcile` inspects the manifest, removes stale `opening` markers, and returns each member to
-a consistent state. After reconciliation, re-run `orient` to determine whether to re-dispatch
-crashed members or proceed to `seal` if all members are already `sealed`.
-
----
-
-## 9. In-lane write validation before `seal-member`
-
-Before sealing a member, confirm the member's writes are contained within its lane:
-
-```bash
-git -C <member-worktree> status --porcelain
-```
-
-The output must be non-empty (the member made writes) AND all paths must be within the member's
-declared `write_set`. An empty status means the member made no writes — seal would pass
-vacuously, which is invalid. A path outside the declared set means the member leaked a write
-to the parent worktree, which must be caught before the join contaminates shared state.
-
----
-
-## 10. Parallel vs serial — when to use each
+## 7. Parallel vs serial — when each applies
 
 | Condition | Approach |
 |---|---|
-| Disjoint (`parallel_safe`) write sets, worktree-capable host | Parallel batch in isolated legs — the DEFAULT (`open-batch` → dispatch → `seal-member` → `seal`) |
-| Overlapping / non-disjoint write sets without `--write-overlap-consent` | Serial degrade (`degraded: true` → `open-next` per node) |
-| Host without worktree support, or `KAOLA_PARALLEL_WRITES=0` opt-out | Serial degrade (`degraded: true` → `open-next` per node) |
-| `depends-on-member` relationship | Serial within the dependency chain; parallel across independent chains |
+| Read-only frontier | Fan out up to `FANOUT_CAP_READONLY` — the default, no toggle |
+| Disjoint (`parallel_safe`) write frontier, worktree-capable host | Co-open as an isolated-leg lane group — the DEFAULT (`open-ready`, no consent flag needed) |
+| Overlapping / non-disjoint write frontier | Serial degrade, UNLESS `--write-overlap-consent` + `write_overlap_policy: coarse` |
+| Host without worktree support, or `KAOLA_PARALLEL_WRITES=0` opt-out | Serial degrade — one write node at a time via `open-ready` |
+| Speculative read fallback | Only with `--speculative-consent` AND `speculative_open_policy: consent` in `## Meta` |
 
-**Dispatch fidelity (#472): run the frontier at its AUTHORED width.** When the planner authored an
-independent ≥2 frontier (`enterBatch: true`), dispatch it concurrently — that is the default, not an
-optional optimization, and for a disjoint (`parallel_safe`) write frontier the isolated parallel legs
-ARE the default too (#542, D-542-01). The serial fallback is for the *degraded* cases only (overlapping/
-non-disjoint write sets without consent, a host without worktree support or `KAOLA_PARALLEL_WRITES=0`
-opt-out, a dependency chain — the rows above), NOT a "when in doubt, serialize" default: silently
-serializing an authored-parallel frontier is the dispatch-fidelity defect #472 fixes. Width itself
-stays the planner's scope-driven call (a width-1 frontier simply never sets `enterBatch`); the
-executor's job is to run whatever width was authored, no wider and no narrower.
+**Dispatch fidelity: run the frontier at its AUTHORED width.** When the planner authored an
+independent ≥2 frontier (`enterBatch: true`), dispatch it concurrently — that is the default, not
+an optional optimization, and for a disjoint write frontier the isolated legs ARE the default too.
+The serial fallback is for the *degraded* cases only (the rows above), never a "when in doubt,
+serialize" default — silently serializing an authored-parallel frontier is the dispatch-fidelity
+defect this contract fixes. Width itself stays the planner's scope-driven call: a width-1 frontier
+simply never sets `enterBatch`.
 
 ---
 
-## Quick reference — batch lifecycle
+## Quick reference — frontier lifecycle
 
 ```
-enterBatch: true
+enterBatch: true (orient / open-next / close-and-open-next)
   |
-  +-- degraded: true -----> serial fallback (non-disjoint / host-limited / KAOLA_PARALLEL_WRITES=0): open-next per node
+  open-ready --project P --json [--max N] [--write-overlap-consent] [--speculative-consent]
   |
-  +-- degraded: false ----> open-batch  (disjoint co-open in isolated legs — the DEFAULT)
+  +-- reconcile_first (refuse) -> reconcile-running-set first, then retry
+  |
+  +-- ok, reason: write_node_exclusive / write_awaits_drain / cap_reached -> nothing opened this call
+  |
+  +-- ok, opened: [...] -> dispatch every entry in ONE assistant message
         |
-        dispatch siblings concurrently (one per lane)
+        for each member as its role agent returns:
+          record-evidence --stdin  ->  close-node --node-id <id>
         |
-        for each member as it completes:
-          record-evidence -> seal-member (verify non-empty in-lane writes)
+        write-role lane-group member: close-node defers the barrier (non-last member) or
+        runs the synthesizer + group barrier once (last member)
         |
-        +-- top-up (if more members queued) -> dispatch next sibling
+        newlyReady frontier -> open-ready again
         |
-        all members sealed -> seal (tree-aware join)
-        |
-        back to per-node lifecycle for next frontier
-        |
-        crash at any point -> reconcile -> orient -> resume
+        crash at any point -> reconcile-running-set -> orient -> resume
 ```

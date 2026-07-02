@@ -254,7 +254,6 @@ const scriptFiles = [
   'kaola-workflow-codex-preflight.js',
   'kaola-gitea-workflow-task-mirror.js',
   'kaola-gitea-workflow-codex-compact-resume.js',
-  'kaola-gitea-workflow-parallel-batch.js',
   'kaola-gitea-workflow-run-chains.js',
   'kaola-gitea-workflow-gap-sweep.js'
 ];
@@ -282,7 +281,6 @@ const installSupportScripts = [
   'kaola-workflow-codex-preflight.js',
   'kaola-gitea-workflow-task-mirror.js',
   'kaola-gitea-workflow-codex-compact-resume.js',
-  'kaola-gitea-workflow-parallel-batch.js',
   'kaola-gitea-workflow-run-chains.js',
   'kaola-gitea-workflow-gap-sweep.js'
 ];
@@ -730,11 +728,10 @@ assertIncludes(pluginRoot + '/agents/contractor.toml', '--attest-contractor-spaw
 
 // #445/#446: operator_hint + route-findings + --summary pins (Gitea forge ports).
 // OPERATOR_HINT_REGISTRY must exist in each aggregator (plan-validator, commit-node,
-// parallel-batch, adaptive-node). route-findings and --summary are adaptive-node-only (#446).
+// adaptive-node). route-findings and --summary are adaptive-node-only (#446).
 for (const aggregatorScript of [
   pluginRoot + '/scripts/kaola-gitea-workflow-plan-validator.js',
   pluginRoot + '/scripts/kaola-gitea-workflow-commit-node.js',
-  pluginRoot + '/scripts/kaola-gitea-workflow-parallel-batch.js',
   pluginRoot + '/scripts/kaola-gitea-workflow-adaptive-node.js'
 ]) {
   assertIncludes(aggregatorScript, 'OPERATOR_HINT_REGISTRY');

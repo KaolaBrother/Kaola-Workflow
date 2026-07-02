@@ -21,6 +21,6 @@
   - [governance.md](plan-run-cards/governance.md) — Planner freeze/governance-ack handshake
   - [repair-routing.md](plan-run-cards/repair-routing.md) — `route-findings` consumption, `revert-overflow` / `repair-node` choice, plan-repair
   - [reopen-complete-node.md](plan-run-cards/reopen-complete-node.md) — Reopening a `complete` writer
-  - [frontier-batch.md](plan-run-cards/frontier-batch.md) — Parallel frontier fan-out / batch subcommands
+  - [frontier-batch.md](plan-run-cards/frontier-batch.md) — Parallel frontier fan-out / running-set scheduler subcommands
 - [Investigations](investigations/) — Investigation notes and analysis documents
 - [Changelog](../CHANGELOG.md)

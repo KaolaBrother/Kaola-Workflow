@@ -565,7 +565,6 @@ assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`, "subcomm
 // findings-route.json output + VERDICT_ROLES table must be present in the Codex aggregators.
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-plan-validator.js`, 'OPERATOR_HINT_REGISTRY');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-commit-node.js`, 'OPERATOR_HINT_REGISTRY');
-assertIncludes(`${pluginRoot}/scripts/kaola-workflow-parallel-batch.js`, 'OPERATOR_HINT_REGISTRY');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`, 'OPERATOR_HINT_REGISTRY');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`, "'route-findings'");
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-node.js`, "'--summary'");
@@ -579,8 +578,6 @@ assertIncludes(`${pluginRoot}/agents/contractor.toml`, '--attest-contractor-spaw
 // #359: producer-attested evidence-token vocabulary in the codex agent profiles.
 assertIncludes(`${pluginRoot}/agents/implementer.toml`, 'verification_tier');
 assertIncludes(`${pluginRoot}/agents/tdd-guide.toml`, 'literal tokens RED');
-// #281: parallel-batch aggregator claude-plugin copy presence
-assert(exists(`${pluginRoot}/scripts/kaola-workflow-parallel-batch.js`), '#281 parallel-batch aggregator missing from Codex plugin');
 assertConcept(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'adaptive execution + governance', [
   '## Node Ledger', 'plan_hash', 'post-dominate', 'auto-run', 'provisional', 'halt for consent',
   'escalated_to_full: consent', 'typed refusal', 'quorum', 'tally-fn', 'validateNodeOutput', 'test_thrash',

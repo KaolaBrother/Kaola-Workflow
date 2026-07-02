@@ -254,7 +254,6 @@ const scriptFiles = [
   'kaola-workflow-codex-preflight.js',
   'kaola-gitlab-workflow-task-mirror.js',
   'kaola-gitlab-workflow-codex-compact-resume.js',
-  'kaola-gitlab-workflow-parallel-batch.js',
   'kaola-gitlab-workflow-run-chains.js',
   'kaola-gitlab-workflow-gap-sweep.js'
 ];
@@ -281,7 +280,6 @@ const installSupportScripts = [
   'kaola-workflow-codex-preflight.js',
   'kaola-gitlab-workflow-task-mirror.js',
   'kaola-gitlab-workflow-codex-compact-resume.js',
-  'kaola-gitlab-workflow-parallel-batch.js',
   'kaola-gitlab-workflow-run-chains.js',
   'kaola-gitlab-workflow-gap-sweep.js'
 ];
@@ -725,11 +723,10 @@ assertIncludes(pluginRoot + '/agents/contractor.toml', '--attest-contractor-spaw
 
 // #445/#446: operator_hint + route-findings + --summary pins (GitLab forge ports).
 // OPERATOR_HINT_REGISTRY must exist in each aggregator (plan-validator, commit-node,
-// parallel-batch, adaptive-node). route-findings and --summary are adaptive-node-only (#446).
+// adaptive-node). route-findings and --summary are adaptive-node-only (#446).
 for (const aggregatorScript of [
   pluginRoot + '/scripts/kaola-gitlab-workflow-plan-validator.js',
   pluginRoot + '/scripts/kaola-gitlab-workflow-commit-node.js',
-  pluginRoot + '/scripts/kaola-gitlab-workflow-parallel-batch.js',
   pluginRoot + '/scripts/kaola-gitlab-workflow-adaptive-node.js'
 ]) {
   assertIncludes(aggregatorScript, 'OPERATOR_HINT_REGISTRY');

@@ -89,9 +89,12 @@ here for the full contract.
     - **Reconcile-running-set.** The `#437` block in `reconcile-running-set` carries forward group
       survival logic: `lane_group` survives if ≥1 member id is in `survivorIds`; if all members roll
       back, `lane_group` is deleted and the group baseline is dropped.
-  - `active-batch.json` — parallel-batch manifest with `state: 'opening'|'open'|'sealed'|'joined'`
-    (crash-safe two-phase: written with `opening` before any ledger row flips, then
-    promoted to `open`). Reconcilable via the `reconcile` subcommand.
+  - `active-batch.json` — retired parallel-batch manifest (`state: 'opening'|'open'|'sealed'|'joined'`).
+    No live component writes this file anymore — its sole writer, `kaola-workflow-parallel-batch.js`,
+    was retired (D-586-01) once the per-node running-set scheduler fully absorbed its
+    responsibilities. `kaola-workflow-adaptive-node.js`'s guard prologue still detects a residual
+    file on disk (a `batch_active` refusal) purely as backward-compat crash detection for a
+    pre-retirement checkout.
   - `barrier-base-<id>` — per-node baseline commit tree SHA recorded by `--record-base`
     at node-open time. Used by `--barrier-check --node-id <id>` to tree-diff exactly
     that node's own writes. Idempotent (reused on re-entry, never re-snapshotting a

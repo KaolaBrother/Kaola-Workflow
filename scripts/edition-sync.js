@@ -47,7 +47,6 @@ const GENERATED_AGGREGATORS = [
   'kaola-workflow-adaptive-node.js',
   'kaola-workflow-next-action.js',
   'kaola-workflow-commit-node.js',
-  'kaola-workflow-parallel-batch.js',
   'kaola-workflow-adaptive-handoff.js',
   // #401 Part 2: the hand-ported plan-validator joins the generated class. Its 2 self-referential
   // agentRegistrationSurface entries are segment-joined in source (the `pv` indirection) so the

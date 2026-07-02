@@ -60,8 +60,6 @@ const COMMON_SCRIPTS = [
   'kaola-workflow-adaptive-handoff.js',
   // #272 adaptive node: plan-run owns the per-node lifecycle
   'kaola-workflow-adaptive-node.js',
-  // #281 parallel-batch: concurrent node dispatch aggregator
-  'kaola-workflow-parallel-batch.js',
   // #266 AC-B: Codex agent-profile freshness preflight (true 4-tree byte-identical)
   'kaola-workflow-codex-preflight.js',
   // #266 AC-C: workflow-tasks.json generator (base-named claude↔codex pair; gitlab/gitea

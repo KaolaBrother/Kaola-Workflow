@@ -123,8 +123,8 @@ full repair-vs-reopen decision tree.
 
 ## 7. The `operator_hint` field — exact command pointer
 
-Every typed envelope from the four aggregators (`adaptive-node.js`, `commit-node.js`,
-`plan-validator.js`, `parallel-batch.js`) carries an `operator_hint` string. It is:
+Every typed envelope from the three aggregators (`adaptive-node.js`, `commit-node.js`,
+`plan-validator.js`) carries an `operator_hint` string. It is:
 
 - **Top-level** — sibling of `result`/`reason`, not nested inside `triage` or `proposed_repair`
 - **Present on `refuse`/`halt`/`warn`** — the three actionable outcomes

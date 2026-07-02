@@ -3863,13 +3863,6 @@ function rtHarness(initialFiles, opts) {
   // running set is state:'open' (NOT opening), holding member B whose ledger row is pending.
   const staleSet = JSON.stringify({ state: 'open', nodes: [{ id: 'node-b', role: 'code-reviewer', kind: 'read', baseline: 'recorded' }] });
 
-  // (cc) crossCheckStatus is UNCHANGED — the #293 read-side legacy verdict stays single_in_progress.
-  {
-    const { crossCheckStatus } = require('./kaola-workflow-parallel-batch');
-    const cc = crossCheckStatus(null, ['node-a'], { state: 'open', nodes: [{ id: 'node-b' }] });
-    assert(cc.valid === true && cc.reason === 'single_in_progress', 'S-293cc: crossCheckStatus UNCHANGED (single_in_progress), got ' + JSON.stringify(cc));
-  }
-
   // (a) orient NAMES reconcile-running-set (no dead-end bare ok).
   {
     const files = { [RS_PLAN_PATH]: plan, '/p/workflow-state.md': makeState(), [RS_SET_PATH]: staleSet };
@@ -4007,34 +4000,6 @@ function rtHarness(initialFiles, opts) {
   const manifest = { state: 'open', kind: 'read', members: [{ id: 'b', sealed: false }] };
   const co = readCoordinationState(plan, { runningSet, manifest });
   assert(co.collisions.includes('running_set') && co.collisions.includes('batch'), 'S-CO6: union state collisions = [running_set, batch], got ' + JSON.stringify(co.collisions));
-}
-
-// ---------------------------------------------------------------------------
-// S-CC (#293 CROSS-CONSISTENCY): readCoordinationState.serialLive ⟺ crossCheckStatus
-// single_in_progress for the SAME fixture (preserve the orphan-legality agreement).
-// ---------------------------------------------------------------------------
-{
-  const { crossCheckStatus } = require('./kaola-workflow-parallel-batch');
-  // Fixture 1: exactly one in_progress, no manifests → serialLive AND single_in_progress.
-  const plan1 = makePlan(['| n1 | in_progress | |', '| n2 | pending | |']);
-  const co1 = readCoordinationState(plan1, {});
-  const cc1 = crossCheckStatus(null, ['n1'], null);
-  assert(co1.serialLive === true && cc1.reason === 'single_in_progress',
-    'S-CC: 1 in_progress → serialLive ⟺ single_in_progress, got ' + JSON.stringify({ serialLive: co1.serialLive, cc: cc1.reason }));
-  // Fixture 2: zero in_progress → NOT serialLive AND 'idle'.
-  const plan2 = makePlan(['| n1 | pending | |']);
-  const co2 = readCoordinationState(plan2, {});
-  const cc2 = crossCheckStatus(null, [], null);
-  assert(co2.serialLive === false && cc2.reason === 'idle',
-    'S-CC: 0 in_progress → !serialLive ⟺ idle, got ' + JSON.stringify({ serialLive: co2.serialLive, cc: cc2.reason }));
-  // Fixture 3: a valid running-set fan-out (2 in_progress matching the set) → NOT serialLive AND
-  // crossCheckStatus valid_running_set (not single_in_progress, not orphan).
-  const plan3 = makePlan(['| a | in_progress | |', '| b | in_progress | |']);
-  const rs3 = { state: 'open', nodes: [{ id: 'a' }, { id: 'b' }] };
-  const co3 = readCoordinationState(plan3, { runningSet: rs3 });
-  const cc3 = crossCheckStatus(null, ['a', 'b'], rs3);
-  assert(co3.serialLive === false && co3.runningSetLive === true && cc3.reason === 'valid_running_set',
-    'S-CC: running-set fan-out → !serialLive + runningSetLive ⟺ valid_running_set, got ' + JSON.stringify({ co: co3, cc: cc3.reason }));
 }
 
 // ---------------------------------------------------------------------------

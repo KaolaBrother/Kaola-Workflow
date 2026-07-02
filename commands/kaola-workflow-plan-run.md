@@ -149,15 +149,16 @@ variant-missing note. Pass `dispatch.nonce` (evidence-binding token). Instruct t
   `verdict: pass|fail` + `findings_blocking: N`. Run `--forbidden-only` for forge-touching
   nodes. Forge-port mirror nodes: instruct with the `full accumulated root diff` diff spec.
 - For read-only fan-out (`quorum`/`tally-fn`/`validateNodeOutput`): dispatch concurrently,
-  record evidence parent-side, `seal`, `join`.
-- `FANOUT_CAP` (default 4) is a runtime limit, not a planning cap; `top-up` drains wider
-  frontiers. `KAOLA_FANOUT_CAP_READONLY` (default 8) applies to read-only batches.
+  record evidence parent-side, `close-node` per member.
+- `FANOUT_CAP` (default 4) is a runtime limit, not a planning cap; a top-up re-run of `open-ready`
+  drains wider frontiers as members close. `KAOLA_FANOUT_CAP_READONLY` (default 8) applies to
+  read-only fan-out.
 - Planner-proven-disjoint (`parallel_safe`) write frontiers co-open in isolated legs
   BY DEFAULT — no operator toggles. Serial (`max_concurrent=1`) is the FALLBACK only for
   OVERLAPPING/uncertain writes, hosts without worktree support, or an explicit
   `KAOLA_PARALLEL_WRITES=0` opt-out; `--write-overlap-consent` is required ONLY for
   coarse/shared-infra (non-disjoint) co-open — see the leg-isolation note below. `opening`
-  marker + `reconcile` handle batch crash-resume.
+  marker + `reconcile-running-set` handle crash-resume.
 - `test_thrash` ≥ 3: escalate via `write-halt --reason test_thrash`.
 
 <!-- PIN: leg-isolation-recipe -->
@@ -256,16 +257,17 @@ On reopening a complete node: `docs/plan-run-cards/reopen-complete-node.md`
 
 <!-- CARD: frontier-batch -->
 On `enterBatch: true` the concurrent one-message dispatch above is the DEFAULT (not optional); this card
-covers only the batch MECHANICS (crash-safe open/seal/join, write-role serial-degrade) for each frontier
+covers only the running-set MECHANICS (`open-ready` / `close-node` / `reconcile-running-set`;
+write-role lane-group co-open in isolated legs; crash repair) for each frontier
 unit:
 
 <!-- PIN: frontier unit -->
 frontier unit
 
 `docs/plan-run-cards/frontier-batch.md`
-(covers `open-batch` / `top-up` / `seal-member` / `seal` / `join` / `reconcile`; write-role
-serial-degrade `cwd_unenforceable`; `opening` crash-safe marker; `running-set` scheduler;
-`open-ready` / `close-node`; `reconcile-running-set`; `FANOUT_CAP` vs `KAOLA_FANOUT_CAP_READONLY`)
+(covers `open-ready` / `close-node` / `reconcile-running-set`; write-role lane-group co-open in
+isolated legs, the synthesizer + group barrier close; the `opening` crash-safe marker; `FANOUT_CAP`
+vs `KAOLA_FANOUT_CAP_READONLY`)
 
 ### 5. All done
 

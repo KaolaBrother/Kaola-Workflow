@@ -114,80 +114,51 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   registered in `validate-script-sync.js` COMMON_SCRIPTS and the three `install.sh`
   SUPPORT_SCRIPT_NAMES blocks.
 
-  **Parallel ready-set execution — fourth aggregator (issue #281).** The executor advances
-  **one FRONTIER UNIT at a time** (a single node or a batch of eligible siblings) instead of
-  strictly one node at a time. `kaola-workflow-parallel-batch.js` is the fourth aggregator and
-  owns the batch lifecycle STATE; the plan-run SKILL (main session) owns concurrent DISPATCH via
-  multiple `Agent()` calls in one message. Like `adaptive-node.js`, `parallel-batch.js` is
-  pure composition over `next-action.js`, `commit-node.js`, and `plan-validator.js`; it never
-  imports-and-mutates them and never spawns an agent.
+  **Parallel ready-set execution (issue #281) — retired, superseded by the running-set
+  scheduler.** The executor advances **one FRONTIER UNIT at a time** (a single node or a fan-out
+  of eligible siblings) instead of strictly one node at a time — that frontier-unit model is
+  still current; see the running-set scheduler below. The original #281 design added a fourth
+  aggregator, `kaola-workflow-parallel-batch.js`, that owned a whole-frontier
+  `active-batch.json` manifest (`opening → open → sealed → joined`) via `open-batch` / `top-up` /
+  `seal-member` / `seal` / `join` / `reconcile` subcommands, gated on `next-action.js`'s additive
+  `readyPending` (members of `readySet` whose own ledger status is `pending`, i.e. the openable
+  frontier) and `active` (all currently `in_progress` nodes) fields.
 
-  `next-action.js` gains two additive fields — `readyPending` (members of `readySet` whose own
-  ledger status is `pending`, i.e. the openable frontier) and `active` (all currently
-  `in_progress` nodes). Existing `readySet`, `nextNode`, and `allDone` are byte-unchanged. The
-  distinction lets the plan-run SKILL decide: `readyPending.length >= 2` → batch path;
-  `readyPending.length == 1` → legacy single-node path; `readyPending.length == 0` with active
-  members → resume an in-progress batch.
+  The aggregator was retired (D-586-01): nothing on the live executor path ever shelled it — the
+  plan-run skeleton's own dispatch instructions already routed `enterBatch: true` to the per-node
+  running-set scheduler's `open-ready` (documented next), which had fully absorbed the
+  whole-frontier batch's responsibilities, including default-on disjoint write co-open
+  (D-542-01), well before the retirement. `next-action.js` still carries `readyPending`/`active`;
+  `readyPending.length >= 2` is the signal the plan-run skeleton uses to route to `open-ready`
+  instead of the single-node `open-next` path. `kaola-workflow-adaptive-node.js`'s guard
+  prologue still recognizes a residual `active-batch.json` on disk (a `batch_active` refusal)
+  purely as backward-compat crash detection for a pre-retirement checkout — nothing writes that
+  file anymore. History at `docs/investigations/2026-06-07-parallel-ready-set-execution-design.md`.
 
-  The batch manifest lives at `kaola-workflow/{project}/.cache/active-batch.json` — a
-  non-hashed runtime artifact (the `plan_hash` covers only `## Meta` and `## Nodes`) that
-  tracks the four lifecycle states:
-
-  | State | Meaning |
-  |-------|---------|
-  | `opening` | Crash-safe transaction marker: the manifest is written with the intended member set **before** any ledger row flips. Reconcilable via the `reconcile` subcommand (roll-forward to `open`, or `--abort` roll-back) — never left an orphan |
-  | `open` | N ledger rows flipped to `in_progress`; N baselines recorded; members not yet evidence-complete |
-  | `sealed` | All members passed their per-node barrier; all rows `complete` or `n/a` |
-  | `joined` | Transient terminal state; `join` transitions a fully-sealed manifest here (batches are read-only since #364 — nothing to merge parent-side); manifest deleted; orchestrator re-enters `next-action` |
-
-  The executor does **rolling bounded dispatch**: it opens up to `KAOLA_FANOUT_CAP`
-  members at once, queues the rest, and a `top-up` subcommand drains the queue as
-  earlier members seal. A logical fan-out MAY therefore be wider than the cap — the cap
-  bounds runtime concurrency, not plan validity.
-
-  **AC#5 invariant.** Multiple `in_progress` ledger rows are **legal only** when a valid
-  `active-batch.json` exists whose currently-opened members exactly match the `in_progress`
-  set (under rolling dispatch the manifest's full `members` set may name queued members not
-  yet opened, and the transient `opening` window is reconciled by `reconcile`). Any
-  other configuration is a typed refusal (`orphan_multi_in_progress`). The `orient` subcommand
-  of `adaptive-node.js` enforces this gate: it enumerates all `in_progress` rows, reads the
-  manifest via `parallel-batch status`, and either confirms the batch is valid, routes to the
-  legacy single-node path, or refuses. A manifest that stays whole-batch `open` but carries a
-  member with `opening:true` is an **interrupted rolling top-up** (the in-flight member was
-  appended before its ledger row flipped); both `crossCheckStatus` and `orient` route it to
-  `reconcile` with the typed reason `batch_topup_incomplete` — consistently before and after the
-  in-flight row flips — and every mutating batch command refuses `reconcile_first` while the
-  marker exists, so a crash mid-top-up is never mis-classified as orphan/valid (#305).
-
-  Crash/resume is a pure function of durable artifacts: each state has a deterministic
-  reconstruction path (run `reconcile` on `opening` to repair an interrupted open or
-  `top-up` — roll-forward to `open`, or `--abort` roll-back; re-dispatch on `open`; run `join`
-  on `sealed`; delete manifest on `joined`). `seal-member` calls the unchanged
-  `commit-node --node-id N` barrier; no new gate surface is introduced. Finalization
-  `--barrier-check` sees normal `complete` rows after `join`. Full design at
-  `docs/investigations/2026-06-07-parallel-ready-set-execution-design.md`.
-
-  **Per-node running-set scheduler — parallelism v2 (issue #377).** The batch machine above
-  advances **one whole frontier at a time** (`top-up` opens only same-frontier siblings). The
-  running-set scheduler is the post-#364 **per-node** successor: `adaptive-node.js` gains
+  **Per-node running-set scheduler — parallelism v2 (issue #377).** The now-retired #281 batch
+  machine advanced **one whole frontier at a time** (`top-up` opened only same-frontier
+  siblings). The running-set scheduler is the post-#364 **per-node** successor — and, since the
+  #281 aggregator's retirement, the sole fan-out mechanism: `adaptive-node.js` carries
   `open-ready [--max N]`, `close-node --node-id`, and `reconcile-running-set` subcommands that
   open and close **individual** nodes against a `kaola-workflow/{project}/.cache/running-set.json`
   manifest (`{state:'opening'|'open', nodes:[{id,role,kind,baseline,opening?,openedAt?}]}`), so a
   downstream node unblocks the moment ITS dependencies close — even while a disjoint sibling is
   still `in_progress`. `open-ready` flips ready nodes priority-ordered by `next-action`'s additive
   `longestPathToSink` field (critical-path list scheduling), records per-node baselines, and
-  two-phase writes the manifest (`opening` → flip ledger → `open`) exactly like `open-batch`.
+  two-phase writes the manifest (`opening` → flip ledger → `open`).
   `close-node` runs the same evidence-shape → `commit-node` barrier → ledger-complete → compliance
   → selector-arm contract as the serial close, removes the node, and returns the newly-ready
-  frontier. The scheduler is **additive**: the single-node and batch paths are
-  unchanged. Read-only nodes fan out (they share the parent tree and never write); write nodes
-  the planner proves **disjoint** co-open as isolated parallel legs **by default** (D-542-01),
-  while genuinely-overlapping writes open **alone** (the serial fallback). Forcing every write
-  frontier serial — the byte-identical pre-parallel-write behavior — is now the explicit opt-out
-  path (`KAOLA_PARALLEL_WRITES=0`), not the default.
+  frontier. The scheduler is **additive** to the single-node path (`open-next` /
+  `close-and-open-next` stay the `max_concurrent = 1` aliases, unchanged). Read-only nodes fan out
+  (they share the parent tree and never write); write nodes the planner proves **disjoint**
+  co-open as isolated parallel legs **by default** (D-542-01), while genuinely-overlapping writes
+  open **alone** (the serial fallback). Forcing every write frontier serial — the byte-identical
+  pre-parallel-write behavior — is now the explicit opt-out path (`KAOLA_PARALLEL_WRITES=0`), not
+  the default.
   The **AC#5 / #293 legality re-keys to the running set**: `crossCheckStatus` and `orient` accept
-  `in_progress` rows matching the running-set node set (`valid_running_set`) as well as the batch
-  member set, and route a crashed `opening` running set to `reconcile-running-set`
+  `in_progress` rows matching the running-set node set (`valid_running_set`) — the residual
+  `active-batch.json` check is the backward-compat detection noted above, not a live alternate
+  path — and route a crashed `opening` running set to `reconcile-running-set`
   (`running_set_opening_incomplete`, never an orphan); `orient` reconstructs the live set from the
   manifest on every resume. Wall-clock overlap is claimed only via `node-timings.jsonl` (#373) on
   a real run — the scripts never spawn agents, so they never overclaim concurrency.

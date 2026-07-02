@@ -75,7 +75,6 @@ const SUPPORT_SCRIPTS = Object.freeze([
   'kaola-workflow-commit-node.js',
   'kaola-workflow-adaptive-handoff.js',
   'kaola-workflow-adaptive-node.js',
-  'kaola-workflow-parallel-batch.js',
   'kaola-workflow-adaptive-schema.js',
   'kaola-workflow-resolve-agent-model.js',
   'kaola-workflow-codex-preflight.js',

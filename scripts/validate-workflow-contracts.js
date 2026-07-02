@@ -698,7 +698,6 @@ assertIncludes('scripts/kaola-workflow-adaptive-node.js', 'baselineReused');
 // findings-route.json output + VERDICT_ROLES table must be present in the aggregators.
 assertIncludes('scripts/kaola-workflow-plan-validator.js', 'OPERATOR_HINT_REGISTRY');
 assertIncludes('scripts/kaola-workflow-commit-node.js', 'OPERATOR_HINT_REGISTRY');
-assertIncludes('scripts/kaola-workflow-parallel-batch.js', 'OPERATOR_HINT_REGISTRY');
 assertIncludes('scripts/kaola-workflow-adaptive-node.js', 'OPERATOR_HINT_REGISTRY');
 assertIncludes('scripts/kaola-workflow-adaptive-node.js', "'route-findings'");
 assertIncludes('scripts/kaola-workflow-adaptive-node.js', "'--summary'");
@@ -722,7 +721,6 @@ assertIncludes('agents/contractor.md', 'sync worktree->main FIRST');
 // workflow-plan.md/workflow-state.md/active-batch.json). Pin the helper + its adoption.
 assertIncludes('scripts/kaola-workflow-adaptive-schema.js', 'function writeFileAtomicReplace');
 assertIncludes('scripts/kaola-workflow-adaptive-node.js', 'writeFileAtomicReplace');
-assertIncludes('scripts/kaola-workflow-parallel-batch.js', 'writeFileAtomicReplace');
 assertIncludes('scripts/kaola-workflow-claim.js', 'writeFileAtomicReplace');
 // #354 (#353-rest): the two remaining workflow-state writers route through the atomic replace too.
 assertIncludes('scripts/kaola-workflow-repair-state.js', 'writeFileAtomicReplace');
@@ -746,7 +744,6 @@ assertIncludes('scripts/kaola-workflow-sink-merge.js', 'sink_blocked');
 assertIncludes('scripts/kaola-workflow-adaptive-schema.js', 'function locateSection');
 assertIncludes('scripts/kaola-workflow-adaptive-schema.js', 'function spliceComplianceSection');
 assertIncludes('scripts/kaola-workflow-adaptive-node.js', 'locateSection');
-assertIncludes('scripts/kaola-workflow-parallel-batch.js', 'spliceComplianceSection');
 // #359: the shape-gate evidence vocabulary must ORIGINATE in the producing agents' contracts
 // (emission-side pin, the #290 pattern) — so the orchestrator transcribes verbatim, not synthesizes.
 assertIncludes('agents/implementer.md', 'verification_tier');
@@ -868,10 +865,6 @@ for (const reviewerBody of [
 ]) {
   assertIncludes(reviewerBody, 'finding: id=');
 }
-// #281: parallel-batch aggregator presence + install allowlist registration (#407 manifest)
-assert(exists('scripts/kaola-workflow-parallel-batch.js'), '#281 parallel-batch aggregator missing from scripts/');
-assert(exists('plugins/kaola-workflow/scripts/kaola-workflow-parallel-batch.js'), '#281 parallel-batch aggregator missing from claude plugin');
-assertManifestScript('kaola-workflow-parallel-batch.js');   // #407: was install.sh literal
 // #407 surface-undercount cross-check: every name the install manifest emits for a forge MUST be a
 // real file in that forge's source scripts dir — so the manifest can never list a phantom (which the
 // installer's fail-closed missing-source check would then abort on), and a renamed forge port that

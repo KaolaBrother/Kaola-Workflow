@@ -3,7 +3,7 @@
 
 // Unit tests for bundle state parsing + active-folder overlap detection (issue #328)
 // Hand-rolled assert + counter; repo style (no framework) — mirrors
-// test-adaptive-node.js / test-parallel-batch.js.
+// test-adaptive-node.js.
 //
 // SCOPE: state-foundation node (tdd-guide) — Phase-1 foundation:
 //   (a) parseStateFile reads issue_numbers into an array
