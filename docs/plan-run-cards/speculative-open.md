@@ -1,13 +1,14 @@
-# Card: Speculative Open (speculative_open_policy: consent)
+# Card: Speculative Open (speculative_open_policy: auto | consent)
 
 **When to read:** `open-next` returns `result: refuse, reason: gate_not_complete` for a node
 that is blocked only by a gate that is still running — and the plan `## Meta` sets
-`speculative_open_policy: consent`. This card covers the speculative open flow, the consent
-command, and the verdict:fail rollback.
+`speculative_open_policy: auto` (the freeze-time default) or `speculative_open_policy:
+consent`. This card covers the two tiers' activation semantics, the speculative open flow, the
+consent command, the verdict:fail rollback, and two operational gotchas surfaced by live use.
 
-**Related:** the speculative-open kernel design (gate-bet activation, now covering both
-read-only and write-bearing nodes); the plan-run skeleton's card-split mechanism (this file is
-one of several rare-branch cards linked from the skeleton).
+**Related:** the speculative-open kernel design (gate-bet activation, covering both read-only
+and write-bearing nodes, at both the `auto` and `consent` tiers); the plan-run skeleton's
+card-split mechanism (this file is one of several rare-branch cards linked from the skeleton).
 
 ---
 
@@ -17,7 +18,12 @@ A node is **speculative-eligible** when:
 
 - Its only unsatisfied predecessor is an **open gate** (a node still `in_progress`, not yet
   `complete` or `n/a`).
-- The plan `## Meta` block contains `speculative_open_policy: consent`.
+- The plan `## Meta` block sets `speculative_open_policy: auto` or `speculative_open_policy:
+  consent`. `auto` is the freeze-time DEFAULT — a fresh freeze that omits the field
+  materializes an explicit `speculative_open_policy: auto` line into `## Meta`, hash-covered,
+  so a frozen plan is always self-describing. A plan frozen BEFORE this default existed (an
+  absent field parses as `off`) resumes with `off` semantics — the default flip never applies
+  retroactively to an already-frozen plan.
 - If the node is **read-only** (empty declared write set), it is eligible unconditionally.
 - If the node **writes**, it is eligible only when its declared write set is exactly
   resolvable (no directory-shaped or glob entry), declares no protected file, and the node is
@@ -25,77 +31,106 @@ A node is **speculative-eligible** when:
   every currently-live writer at open time — a write candidate that collides is excluded from
   that call, even if it stays eligible in principle.
 
-When these conditions hold, `open-next` refuses with `reason: gate_not_complete` AND the
-`operator_hint` names the speculative gate. The node is NOT opened serially — it is waiting
-for your explicit consent.
+When these conditions hold, `open-next` refuses with `reason: gate_not_complete` (naming the
+speculative gate). The node is NOT opened serially via `open-next` at either tier — it is
+admitted only through `open-ready`, the running-set scheduler's open path (see §8.1 for what
+happens if the gate itself was opened outside that path).
+
+**The two tiers differ ONLY in ceremony, never in eligibility or safety:**
+
+| Tier | Activation | Per-run consent |
+|---|---|---|
+| `auto` (default) | `open-ready` opens every speculative-eligible member automatically | none — `--speculative-consent` is accepted as a no-op |
+| `consent` | `open-ready` opens the speculative-eligible set ONLY when the operator passes `--speculative-consent` | required, captured at the existing `decision:ask` checkpoint |
+| `off` | no speculation (`speculativePending` omitted from `next-action` output) | n/a — wait for the gate to close |
+
+Every eligibility and safety condition above — disjointness, PROTECTED, resolvability,
+non-sink, leg capability, fan-out caps, and the close fence (§4) — holds IDENTICALLY at `auto`
+and `consent`. `auto` relaxes the operator ceremony only; it never relaxes a safety condition.
 
 ---
 
 ## Authoring (planner)
 
-The operator flow below only fires when the **plan** already carries
-`speculative_open_policy: consent`. That key is the planner's call at authoring time, not the
-operator's — see the "Speculative-open-eligible shaping" rubric in the workflow-planner agent
-definition for the full authoring criteria. The planner sets the Meta key when a node's sole
-unsatisfied predecessor is a single in-progress gate that is high-probability-pass (a review
-over a small mechanical diff, a verification very likely to confirm) and the rework cost on a
-`verdict: fail` is low/bounded. The planner never hand-adds a `speculative: true` annotation —
-the Meta key is the only authoring control; eligibility itself stays validator/runtime-derived
-(§1) for both read-only and write-bearing nodes.
+`speculative_open_policy` is a Meta-level plan posture, not a per-edge annotation — the planner
+never hand-adds a `speculative: true` marker on a node; eligibility itself stays
+validator/runtime-derived (§1) for both read-only and write-bearing nodes, at every tier. Since
+`auto` is the freeze-time default, a plan speculates on every eligible gate unless the planner
+explicitly authors an override: `speculative_open_policy: off` (suppress speculation entirely)
+or `speculative_open_policy: consent` (require a per-run operator grant instead of automatic
+activation). See the "Speculative-open-eligible shaping" rubric in the workflow-planner agent
+definition for when an override is warranted (e.g. `consent` for a bet the planner wants a
+human sanity check on; `off` when no eligible gate exists in the topology).
 
 **Worked-example topology (read-only):** a read-only `adversarial-verifier` (or
 `code-explorer`) node that depends ONLY on a `code-reviewer` gate over a small mechanical
-change. With `## Meta` `speculative_open_policy: consent` set, that read node opens
-speculatively and overlaps the review (the operator flow below) instead of idling until the
-gate closes.
+change. Under the default `speculative_open_policy: auto`, that read node opens speculatively
+the moment `open-ready` runs and overlaps the review — no operator action needed.
 
 **Worked-example topology (write-bearing):** a `tdd-guide` node that depends ONLY on an
 upstream `code-reviewer` gate reviewing an earlier, unrelated change, with a declared write
-set that is exactly resolvable and disjoint from that gate's own review surface. With the SAME
-Meta key set, that write node opens speculatively WITH a provisioned leg (its own isolated
-worktree) instead of idling — a size-1 lane group forms even for a lone speculative writer. If
-the gate later fails, this write member is discard-only (§6); it never offers the keep option
-a read-only member does (§5).
+set that is exactly resolvable and disjoint from that gate's own review surface. Under the SAME
+default, that write node opens speculatively WITH a provisioned leg (its own isolated
+worktree) — a size-1 lane group forms even for a lone speculative writer. If the gate later
+fails, this write member is discard-only (§6); it never offers the keep option a read-only
+member does (§5).
 
-Without the key, either topology just waits — §2 covers the absent/`off` case.
+The rest of this card describes what `open-ready` does when it admits a speculative frontier,
+and how to review/roll back a bet that did not pay off — mechanically identical whichever tier
+authorized the open.
 
 ---
 
-## 2. Confirming the policy is set
+## 2. Confirming the policy in effect
 
-Before using `open-ready --speculative-consent`, verify the plan `## Meta` carries the key:
+Check the plan `## Meta`:
 
 ```markdown
 ## Meta
 
 ...
-speculative_open_policy: consent
+speculative_open_policy: auto
 ```
 
-If the key is absent or set to `off` (the default), the `speculativePending` set is omitted
-from `next-action` output and `open-next` returns a plain `node_not_ready` refusal. There is
-nothing to consent to — wait for the gate to close.
+- **`auto`** (the default — always explicit on a plan frozen under this posture) — speculation
+  activates automatically the next time `open-ready` runs; no operator action needed. Skip to
+  §3 (the open happens without the `--speculative-consent` flag).
+- **`consent`** — speculation requires the operator to pass `--speculative-consent` to
+  `open-ready`; without it, `open-next` still returns `gate_not_complete` and the caller waits.
+- **`off`**, or the field is absent on a plan frozen before this default existed — the
+  `speculativePending` set is omitted from `next-action` output entirely and `open-next`
+  returns a plain `node_not_ready` refusal. There is nothing to consent to — wait for the gate
+  to close.
 
 ---
 
-## 3. `open-ready --speculative-consent` — consent to the speculative open
+## 3. `open-ready` — activating the speculative open
 
-When the policy authorizes it and the operator decides the bet is worth placing:
+At `auto`, simply run `open-ready` as usual — nothing extra to pass:
+
+```bash
+node "$KAOLA_SCRIPTS/kaola-workflow-adaptive-node.js" open-ready \
+  --project {project} --json
+```
+
+At `consent`, the operator must additionally decide the bet is worth placing and pass the flag:
 
 ```bash
 node "$KAOLA_SCRIPTS/kaola-workflow-adaptive-node.js" open-ready \
   --project {project} --speculative-consent --json
 ```
 
-`open-ready --speculative-consent` opens all speculative-eligible nodes in the running-set
-scheduler as `speculative: true` members. A read-only member opens against the shared parent
-tree, exactly as before. A write-bearing member ALSO opens WITH a provisioned leg — its own
-isolated worktree, surfaced in that member's own `dispatch.leg_path` / `dispatch.leg_branch`
-— and is re-checked against every currently-live writer before it opens; a write candidate
-that collides is excluded from this call (surfaced as `speculativeWriteExcluded`) while its
-disjoint siblings still open, and a host with no leg capability excludes every write candidate.
-Dispatch each member's role agent (into its own leg path when one is present) and record
-evidence as usual.
+(`--speculative-consent` is also accepted at `auto`, as a documented no-op — a caller that
+always passes it does not need tier-branching logic.)
+
+Either way, `open-ready` opens all speculative-eligible nodes in the running-set scheduler as
+`speculative: true` members. A read-only member opens against the shared parent tree, exactly as
+before. A write-bearing member ALSO opens WITH a provisioned leg — its own isolated worktree,
+surfaced in that member's own `dispatch.leg_path` / `dispatch.leg_branch` — and is re-checked
+against every currently-live writer before it opens; a write candidate that collides is excluded
+from this call (surfaced as `speculativeWriteExcluded`) while its disjoint siblings still open,
+and a host with no leg capability excludes every write candidate. Dispatch each member's role
+agent (into its own leg path when one is present) and record evidence as usual.
 
 **Important:** the speculative node(s) run while the gate is still `in_progress`. Their work
 is valid work — if the gate passes, the results stand. If the gate fails: a read-only member's
@@ -111,9 +146,9 @@ When the gate closes successfully (`close-and-open-next` or `close-node` with `v
 in the gate's evidence), speculative members that bet on it are unblocked. Close each
 speculative node normally via `close-and-open-next` once its evidence is recorded. The
 `speculativeCloseGuard` ensures a speculative node cannot commit to `complete` until its gate
-is `complete` — this is enforced automatically; no manual check needed. A write-bearing
-member closes through the SAME per-leg barrier → (for a size-1 group) group barrier → merge
-path any co-opened write member uses — no separate procedure.
+is `complete` — this is enforced automatically at either tier; no manual check needed. A
+write-bearing member closes through the SAME per-leg barrier → (for a size-1 group) group
+barrier → merge path any co-opened write member uses — no separate procedure.
 
 ---
 
@@ -156,6 +191,10 @@ node "$KAOLA_SCRIPTS/kaola-workflow-adaptive-node.js" discard-speculative \
 - Resets the node's ledger status from `in_progress` back to `pending`.
 - Drops its baseline so the node re-opens cleanly when it is next scheduled.
 - Removes it from the running-set.
+- Records discard telemetry — the node id, its role, and the gate it bet on — into the run's
+  durable provenance log, for BOTH a read and a write discard. This is what makes the economics
+  of `auto` observable per run: even though no operator had to grant the bet in the first
+  place, nothing about a lost bet is silent.
 
 For a **write-bearing** speculative member it additionally (mandatory — a write member is
 ALWAYS discarded on gate failure, never kept):
@@ -184,16 +223,56 @@ gate (or the same gate rerun) completes.
 
 ---
 
+## 8. Operational gotchas (learned from live use)
+
+### 8.1 A gate opened via the fused serial advance cannot admit speculation
+
+An authored speculative topology needs its gate node to be opened through the running-set
+**scheduler**'s open path (`open-ready`), not the plain serial path (`open-next`, including the
+fused serial advance `close-and-open-next` auto-continues into). If the gate is currently
+`in_progress` as a bare serial node (exactly one `in_progress` row, no live running set),
+calling `open-ready` to fan out its speculative descendants refuses with
+`reason: serial_node_live` — the guard prologue's live-coordination layer treats a
+serial-opened node and the scheduler as mutually exclusive, precisely so the two openers never
+race the same ledger row.
+
+**Recovery:** route the gate's own open through `open-ready` instead of the serial path (rather
+than `open-next`), then re-run `open-ready` to admit the speculative frontier — a gate that is
+itself scheduler-tracked does not trip this exclusion. Plan topology that intends to exercise a
+speculative frontier should route its gate's own open through `open-ready` from the start.
+
+### 8.2 Do not land parent-branch commits while a speculative leg is open
+
+A speculative WRITE member's leg is anchored to a specific parent commit at provision time
+(the leg-base). If a commit lands on the parent branch between provisioning the leg and closing
+it — e.g. an unrelated node finishing and committing — the anchored leg-base is no longer an
+ancestor of the leg's own history, and the close-time barrier refuses `leg_base_unreachable`
+(surfacing as a union-barrier overflow on merge). This is correctly fail-closed: the barrier
+will not merge a leg whose base it cannot verify sits in that leg's own ancestry.
+
+**Recovery:** reset the parent branch back to the interim commit, rebase the speculative leg
+onto it, then re-run the close (per-leg barrier → merge). Once the leg's base is re-anchored to
+an ancestor of its own HEAD, the close proceeds normally.
+
+**Practical guidance:** while a speculative leg is open, avoid landing further commits on the
+parent branch until the speculative member either closes (pass-merge) or is discarded (leg torn
+down).
+
+---
+
 ## Quick decision tree
 
 ```
-open-next → gate_not_complete
+open-next -> gate_not_complete
   |
   +-- speculative_open_policy absent/off ---> wait for gate to close, then re-run open-next
   |
-  +-- speculative_open_policy: consent -----> open-ready --speculative-consent
+  +-- speculative_open_policy: auto (default) --> open-ready   (no flag; activates automatically)
+  |
+  +-- speculative_open_policy: consent ---------> open-ready --speculative-consent
         |
-        dispatch speculative role agents (write members: into their own leg); record evidence
+        (either tier) dispatch speculative role agents (write members: into their own leg);
+        record evidence
         |
         gate closes: verdict:pass -----> close speculative node normally (close-and-open-next)
         |                                 (write member: same per-leg barrier -> merge path)
@@ -207,4 +286,7 @@ open-next → gate_not_complete
               |
               +-- write-bearing member (always) --------------> discard-speculative --node-id {id}
                                                                   -> orient -> re-enter loop
+
+Gotchas: gate opened via the fused serial advance -> open-ready refuses serial_node_live (§8.1).
+         parent commit lands while a leg is open   -> close refuses leg_base_unreachable (§8.2).
 ```
