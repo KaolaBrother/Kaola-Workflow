@@ -1,0 +1,9 @@
+evidence-binding: n5-review f889f7743413
+verdict: pass
+findings_blocking: 0
+
+Final change-gate review (post-dominates n1-impl, n2-prose, n3-adversarial, n4-docs). Code correctness verified: buildDispatch conditional attach (:1117-1122, goal_line pattern; serial call sites :1859/:2331 pass no leg fields); runOpenReady opened[] map reads legs[n.id] (null outside the groupForm && legCoupled write branch) — no branch leaks leg fields into serial/read output (byte-identity guard :5583-5596). laneGroupCeiling assigned atomically with groupForm (>=2 integer, never null when used); read/serial max_concurrent branch byte-unchanged.
+ACs met both issues. The (c) mixed-frontier pin independently judged LEGITIMATE (not a dodge): behavior is well-defined (reads open, writes defer typed write_awaits_drain :4054), consistent with the "a write runs strictly alone" invariant and the card's documented reason; read||write co-scheduling would be new capability with real correctness questions. Test quality: durable artifacts only; (b) asserts rs.max_concurrent===4 (reintroduced cap bug yields 8, deterministic fail); reconcile at width honors the ceiling (:6728-6730).
+Cross-edition #307: validate-script-sync exit 0 (24 scripts); edition-sync --check exit 0 (10 ports); prose surfaces byte-identical to canonical. Suites: test-adaptive-node REAL_EXIT=0 1219 assertions (trailing Node stderr line is case (d)'s deliberate EISDIR child); test-next-action 97; walkthrough exit 0; route-reachability exit 0 (185).
+Write-set discipline clean: n1 5 ⊆ 10 (next-action x4 + test declared, correctly untouched); n2 7/7; n4 4/4; no strays. Docs accurate (api.md dispatch fields + lane_group example 8→4 + ceiling doc; CHANGELOG/ADRs match code); provenance only in sanctioned homes.
+Non-blocking note: stale max_concurrent:8 cross-version reconcile not directly unit-tested — D-588-01 reasoning sound (keptAll bounded by <=4 present members); no test/migration warranted.

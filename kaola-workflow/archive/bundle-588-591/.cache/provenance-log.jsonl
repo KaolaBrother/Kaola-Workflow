@@ -1,0 +1,12 @@
+{"timestamp":"2026-07-02T07:54:21.563Z","event":"open","nodeId":"n1-impl","nonce":"8f1ffe45f655","by":"adaptive-node"}
+{"timestamp":"2026-07-02T08:32:16.459Z","event":"close","nodeId":"n1-impl","nonce":"8f1ffe45f655","by":"adaptive-node"}
+{"timestamp":"2026-07-02T08:32:16.971Z","event":"open","nodeId":"n2-prose","nonce":"fb74ac35a6ba","by":"adaptive-node"}
+{"timestamp":"2026-07-02T08:39:18.877Z","event":"close","nodeId":"n2-prose","nonce":"fb74ac35a6ba","by":"adaptive-node"}
+{"timestamp":"2026-07-02T08:39:19.399Z","event":"open","nodeId":"n3-adversarial","nonce":"cedd99611aaf","by":"adaptive-node"}
+{"timestamp":"2026-07-02T08:53:21.911Z","event":"close","nodeId":"n3-adversarial","nonce":"cedd99611aaf","by":"adaptive-node"}
+{"timestamp":"2026-07-02T08:53:22.410Z","event":"open","nodeId":"n4-docs","nonce":"c7df06888125","by":"adaptive-node"}
+{"timestamp":"2026-07-02T08:59:33.601Z","event":"close","nodeId":"n4-docs","nonce":"c7df06888125","by":"adaptive-node"}
+{"timestamp":"2026-07-02T08:59:34.073Z","event":"open","nodeId":"n5-review","nonce":"f889f7743413","by":"adaptive-node"}
+{"timestamp":"2026-07-02T09:16:07.766Z","event":"close","nodeId":"n5-review","nonce":"f889f7743413","by":"adaptive-node"}
+{"timestamp":"2026-07-02T09:16:08.272Z","event":"open","nodeId":"n6-finalize","nonce":"81bb18cfd6e2","by":"adaptive-node"}
+{"timestamp":"2026-07-02T09:16:22.491Z","event":"close","nodeId":"n6-finalize","nonce":"81bb18cfd6e2","by":"adaptive-node"}
