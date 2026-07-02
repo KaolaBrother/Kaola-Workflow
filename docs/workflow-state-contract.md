@@ -178,6 +178,16 @@ here for the full contract.
     `"partial"` (mixed bundle outcome), `"close_pending"` (deferred to sink-merge),
     `"failed"` (close attempted and failed).
 
+  - **`closed_issues`** (closure gate + verify-then-retry resume, #592) — the sorted array of
+    issue numbers closed by the `closure` step is now recorded on the sink-receipt on BOTH the
+    success and failure paths; previously it was written only alongside a `"partial"` failure,
+    so a successful closure left the field absent. The `closure` step's own gate was also
+    widened to run whenever a primary issue (`--issue`) OR at least one bundle member
+    (`--issue-numbers`) is present, rather than requiring a primary issue — a bundle sink
+    invoked with only `--issue-numbers` (no `--issue`) now closes every member instead of
+    skipping the close loop while still recording the step `"done"`. See `docs/api.md` §
+    Closure Contract for the full gate condition and JSON shape.
+
 ## Workflow State Fields
 
 The `workflow-state.md` file contains several key blocks:

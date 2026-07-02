@@ -1163,7 +1163,12 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
       // bare catch), then ran stepDone('closure') unconditionally. Instead: bucket each member into
       // closed/failed (mirroring postMergeCleanup), record remote_issue_closed in the receipt, and on
       // ANY genuine failure do NOT stepDone — emit a non-sinked refusal so the caller can retry.
-      if (!OFFLINE && args.issue != null) {
+      // #592: the gate used to be `args.issue != null` only — a bundle sink invoked with ONLY
+      // `--issue-numbers A,B` (no primary `--issue`) tripped this gate false, skipping the ENTIRE
+      // close loop, yet execution still fell through to stepDone('closure') below — the receipt
+      // reported closure:done having closed zero issues. Run the loop whenever a primary OR any
+      // bundle member is present.
+      if (!OFFLINE && (args.issue != null || (Array.isArray(args.issueNumbers) && args.issueNumbers.length > 0))) {
         const forgeOpts = { cwd: mainRoot };
         const keepIssueOpen = !!args.keepIssueOpen;
         if (!keepIssueOpen) {
@@ -1178,18 +1183,27 @@ function runSinkTransaction(rawArgs, mainRoot, defBranch) {
               else { failed.push(n); process.stderr.write('sink-merge --sink: WARNING: issue close failed for ' + n + '\n'); }
             }
           };
-          closeOne(args.issue, 'Merged via sink-merge --sink.');
-          try { ghExec(['issue', 'edit', String(args.issue), '--remove-label', 'workflow:in-progress'], forgeOpts); } catch (_) {}
-          // Bundle members
-          if (Array.isArray(args.issueNumbers) && args.issueNumbers.length > 1) {
+          if (args.issue != null) {
+            closeOne(args.issue, 'Merged via sink-merge --sink.');
+            try { ghExec(['issue', 'edit', String(args.issue), '--remove-label', 'workflow:in-progress'], forgeOpts); } catch (_) {}
+          }
+          // Bundle members — includes the no-primary bundle shape (#592): when args.issue is
+          // absent, every member in args.issueNumbers is closed (none is "the primary" to skip).
+          if (Array.isArray(args.issueNumbers) && args.issueNumbers.length > (args.issue != null ? 1 : 0)) {
             for (const n of args.issueNumbers) {
               if (n === args.issue) continue;
-              closeOne(n, 'Merged via sink-merge --sink (bundle member).');
+              const comment = args.issue != null
+                ? 'Merged via sink-merge --sink (bundle member).'
+                : 'Merged via sink-merge --sink.';
+              closeOne(n, comment);
               try { ghExec(['issue', 'edit', String(n), '--remove-label', 'workflow:in-progress'], forgeOpts); } catch (_) {}
             }
           }
-          // #497: only the FAILURE path records into the receipt + refuses — SUCCESS stays
-          // byte-equivalent (it falls straight through to stepDone('closure'), no extra field).
+          // #592: record the actually-closed set on the receipt (both the success and failure
+          // paths) so a resume can VERIFY-then-retry against it rather than silently skip.
+          if (closed.length > 0) receipt.closed_issues = closed.slice().sort((a, b) => a - b);
+          // #497: only the FAILURE path refuses — SUCCESS still falls straight through to
+          // stepDone('closure') below (now carrying receipt.closed_issues per #592).
           if (failed.length > 0) {
             receipt.remote_issue_closed = 'partial';
             receipt.updated_at = new Date().toISOString();

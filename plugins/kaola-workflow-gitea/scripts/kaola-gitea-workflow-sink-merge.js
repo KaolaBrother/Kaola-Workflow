@@ -1073,7 +1073,12 @@ function runSinkTransaction(args, mainRoot, defBranch) {
       // must NOT report status:sinked. Bucket each member into closed/failed, record
       // remote_issue_closed in the receipt, and on ANY genuine failure do NOT stepDone — emit a
       // non-sinked refusal so the caller can retry.
-      if (!OFFLINE && args.issue != null && !args.keepIssueOpen) {
+      // #592: the gate used to be `args.issue != null` only — a bundle sink invoked with ONLY
+      // `--issue-numbers A,B` (no primary `--issue`) tripped this gate false, skipping the ENTIRE
+      // close loop, yet execution still fell through to stepDone('closure') below — the receipt
+      // reported closure:done having closed zero issues. Run the loop whenever a primary OR any
+      // bundle member is present.
+      if (!OFFLINE && (args.issue != null || (Array.isArray(args.issueNumbers) && args.issueNumbers.length > 0)) && !args.keepIssueOpen) {
         const closed = [];
         const failed = [];
         const closeOne = (n) => {
@@ -1084,16 +1089,24 @@ function runSinkTransaction(args, mainRoot, defBranch) {
             else { failed.push(n); process.stderr.write('sink-merge --sink: WARNING: PR/issue close failed for ' + n + '; manually run: tea issues close ' + n + '\n'); }
           }
         };
-        closeOne(args.issue);
-        try { forge.updateIssueLabels(null, args.issue, { remove: [forge.CLAIM_LABEL] }); } catch (_) {}
-        if (Array.isArray(args.issueNumbers) && args.issueNumbers.length > 1) {
+        if (args.issue != null) {
+          closeOne(args.issue);
+          try { forge.updateIssueLabels(null, args.issue, { remove: [forge.CLAIM_LABEL] }); } catch (_) {}
+        }
+        // Bundle members — includes the no-primary bundle shape (#592): when args.issue is
+        // absent, every member in args.issueNumbers is closed (none is "the primary" to skip).
+        if (Array.isArray(args.issueNumbers) && args.issueNumbers.length > (args.issue != null ? 1 : 0)) {
           for (const n of args.issueNumbers) {
             if (n === args.issue) continue;
             closeOne(n);
             try { forge.updateIssueLabels(null, n, { remove: [forge.CLAIM_LABEL] }); } catch (_) {}
           }
         }
-        // #497: only the FAILURE path records into the receipt + refuses — SUCCESS stays byte-equivalent.
+        // #592: record the actually-closed set on the receipt (both the success and failure
+        // paths) so a resume can VERIFY-then-retry against it rather than silently skip.
+        if (closed.length > 0) receipt.closed_issues = closed.slice().sort((a, b) => a - b);
+        // #497: only the FAILURE path refuses — SUCCESS still falls straight through to
+        // stepDone('closure') below (now carrying receipt.closed_issues per #592).
         if (failed.length > 0) {
           receipt.remote_issue_closed = 'partial'; receipt.updated_at = new Date().toISOString(); writeSinkReceipt(receiptPath, receipt);
           process.stdout.write(JSON.stringify({ result: 'refuse', reason: 'sink_incomplete', step: 'closure', remote_issue_closed: 'partial', closed_issues: closed.sort((a, b) => a - b), failed_issue_closures: failed.sort((a, b) => a - b), branch: args.branch, detail: 'the merge landed but ' + failed.length + ' issue(s) could not be closed on the forge (' + failed.join(', ') + '). Refusing to report status:sinked. The closure step is left NOT done so a re-run retries it. Manually close the issue(s) or resolve the forge fault, then re-run --sink.' }) + '\n');

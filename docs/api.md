@@ -2105,6 +2105,18 @@ The `closure` step is left NOT done so a re-run retries it.
 }
 ```
 
+**Closure gate covers the no-primary bundle shape (issue #592).** The close
+loop that produces the outcomes above runs whenever a primary issue
+(`--issue`) OR at least one bundle member (`--issue-numbers`) is present —
+`!OFFLINE && (args.issue != null || issueNumbers.length > 0)`. A bundle sink
+invoked with only `--issue-numbers A,B,C` (no `--issue`) closes every member;
+the loop no longer requires a primary issue to run at all. The gate previously
+keyed on `args.issue != null` alone, so a no-primary bundle sink skipped the
+entire close loop yet still fell through to `stepDone("closure")`, reporting
+`status: "sinked"` with zero issues closed — and because `resume` treats a
+`"done"` step as already satisfied, the miss was permanent until manually
+repaired.
+
 In both cases the **sink-receipt** (`.cache/sink-receipt.json`) is updated
 before the refuse emit:
 
@@ -2116,6 +2128,14 @@ before the refuse emit:
   previously only held `"closed"` / `"failed"` / `"kept_open"` — `"partial"` is
   a new value, used exclusively when at least one member of a bundle could not
   be closed while others succeeded.
+- `closed_issues: [N, ...]` (sorted ascending) is written to the sink-receipt
+  whenever the closure step closes at least one issue, on BOTH the success and
+  failure paths (issue #592). Previously it was recorded only alongside the
+  `partial` failure — a successful closure fell straight through to
+  `stepDone("closure")` with no `closed_issues` field, byte-equivalent to a
+  closure that closed nothing. A resumed `--sink` can now read the field to
+  verify what already closed rather than silently treat a `"done"` step as
+  proof nothing is left to do.
 
 `assertWorktreeClean` and transient probe faults (#496): `assertWorktreeClean`
 runs BEFORE any destructive sink mutation. On a transient `git status` probe

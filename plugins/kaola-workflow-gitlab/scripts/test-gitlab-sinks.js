@@ -1333,4 +1333,72 @@ console.log('GitLab #520 journal-exclusion from archive_commit: PASSED');
 }
 console.log('GitLab #548 consumer-aware test-gate: PASSED');
 
+// #592: `--sink --issue-numbers A,B` (no `--issue`) must actually run the closure loop, not
+// silently skip it. Pre-fix, the closure gate was `args.issue != null` only — a bundle sink
+// invoked with ONLY `--issue-numbers` (no primary `--issue`) tripped it false, so the ENTIRE
+// close loop was skipped, yet execution still fell through to stepDone('closure') below — the
+// receipt reported closure:done having closed zero issues, and status:sinked, while both members
+// stayed open on the forge (observed live on bundle-587-589).
+{
+  const sinkScript = path.join(__dirname, 'kaola-gitlab-workflow-sink-merge.js');
+  const project = 'gl-592-9601-9602';
+  const branch = 'workflow/' + project;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gl-592-'));
+  const remote = root + '-remote';
+  const logFile = root + '-glab-calls.log';
+  const mockScript = root + '-glab-mock.js';
+  fs.writeFileSync(mockScript, [
+    "const fs = require('fs');",
+    "const a = process.argv.slice(2).join(' ');",
+    "function log(m) { try { fs.appendFileSync(" + JSON.stringify(logFile) + ", m + '\\n'); } catch (_) {} }",
+    "// issue view N -> always open (never pre-closed)",
+    "if (a.startsWith('issue view')) { process.stdout.write('{\"state\":\"opened\",\"labels\":[]}\\n'); process.exit(0); }",
+    "// issue close N -> succeeds, logged as close:N (so the test can assert it was ATTEMPTED)",
+    "if (a.startsWith('issue close')) { const m = a.match(/issue close (\\d+)/); log('close:' + (m ? m[1] : '?')); process.stdout.write('{}\\n'); process.exit(0); }",
+    "if (a.startsWith('issue update')) { process.stdout.write('{}\\n'); process.exit(0); }",
+    "if (a.startsWith('api')) { process.stdout.write('{\"id\":1}\\n'); process.exit(0); }",
+    "process.stdout.write('{}\\n'); process.exit(0);",
+  ].join('\n'));
+  try {
+    const git = (...a) => execFileSync('git', a, { cwd: root, encoding: 'utf8' });
+    git('init', '-b', 'main'); git('config', 'user.email', 't@t'); git('config', 'user.name', 't');
+    fs.writeFileSync(path.join(root, 'base.txt'), 'base'); git('add', '-A'); git('commit', '-m', 'base');
+    execFileSync('git', ['init', '--bare', remote], { encoding: 'utf8' });
+    git('remote', 'add', 'origin', remote); git('push', '-u', 'origin', 'main');
+    git('branch', branch); git('checkout', branch);
+    fs.writeFileSync(path.join(root, 'DELIVERABLE.txt'), 'deliverable'); git('add', '-A'); git('commit', '-m', 'feat: deliverable');
+    git('push', '-u', 'origin', branch); git('checkout', 'main');
+    // The bundle sink shape from the issue: --issue-numbers only, NO --issue.
+    const r = spawnSync(process.execPath, [
+      sinkScript, '--branch', branch, '--project', project, '--issue-numbers', '9601,9602', '--sink', '--json',
+    ], { cwd: root, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '0', KAOLA_GLAB_MOCK_SCRIPT: mockScript }, encoding: 'utf8' });
+    const p = (() => { try { return JSON.parse(String(r.stdout || '').trim().split('\n').pop()); } catch (_) { return {}; } })();
+    assert.strictEqual(r.status, 0, '#592-gitlab: --issue-numbers-only sink should exit 0 once closure genuinely runs; got ' + r.status + '\nstdout: ' + r.stdout + '\nstderr: ' + r.stderr);
+
+    // THE BUG: pre-fix, the close loop is gated on args.issue != null, so with only
+    // --issue-numbers neither issue's close is ever invoked.
+    const calls = fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8').split('\n').filter(Boolean) : [];
+    assert.ok(calls.includes('close:9601'), '#592-gitlab: issue 9601 close must be ATTEMPTED (bug: closure loop skipped entirely when --issue is absent); calls=' + JSON.stringify(calls));
+    assert.ok(calls.includes('close:9602'), '#592-gitlab: issue 9602 close must be ATTEMPTED; calls=' + JSON.stringify(calls));
+
+    // The receipt must record the actually-closed set (not report closure:done having closed
+    // zero issues) so a resume can verify rather than skip.
+    const rp = [path.join(root, 'kaola-workflow', 'archive', project, '.cache', 'sink-receipt.json'), path.join(root, 'kaola-workflow', project, '.cache', 'sink-receipt.json')].find(x => fs.existsSync(x));
+    assert.ok(rp, '#592-gitlab: a sink-receipt must exist after the transaction');
+    const receipt = JSON.parse(fs.readFileSync(rp, 'utf8'));
+    assert.strictEqual(receipt.steps.closure, 'done', '#592-gitlab: closure step reports done once it genuinely ran; got ' + JSON.stringify(receipt.steps));
+    assert.ok(Array.isArray(receipt.closed_issues) && receipt.closed_issues.length === 2,
+      '#592-gitlab: receipt.closed_issues must record both actually-closed members, got ' + JSON.stringify(receipt.closed_issues));
+    assert.ok(receipt.closed_issues.includes(9601) && receipt.closed_issues.includes(9602),
+      '#592-gitlab: receipt.closed_issues must include 9601 and 9602, got ' + JSON.stringify(receipt.closed_issues));
+    assert.strictEqual(p.status, 'sinked', '#592-gitlab: expected status:sinked once closure genuinely succeeds, got ' + JSON.stringify(p));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    fs.rmSync(remote, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    try { fs.rmSync(mockScript, { force: true }); } catch (_) {}
+    try { fs.rmSync(logFile, { force: true }); } catch (_) {}
+  }
+}
+console.log('GitLab #592 --issue-numbers-only sink closure test: PASSED');
+
 console.log('GitLab sink tests passed');

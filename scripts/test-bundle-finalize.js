@@ -35,6 +35,7 @@ const { spawnSync } = require('child_process');
 
 const repoRoot = path.resolve(__dirname, '..');
 const claimScript = path.join(repoRoot, 'scripts', 'kaola-workflow-claim.js');
+const sinkMergeScript = path.join(repoRoot, 'scripts', 'kaola-workflow-sink-merge.js');
 
 let passed = 0;
 let failed = 0;
@@ -63,6 +64,19 @@ function initGitRepo(tmp) {
   fs.writeFileSync(path.join(tmp, 'README.md'), 'fixture\n');
   spawnSync('git', ['add', 'README.md'], { cwd: tmp, encoding: 'utf8' });
   spawnSync('git', ['commit', '-m', 'init'], { cwd: tmp, encoding: 'utf8' });
+}
+
+// #592: a git repo with a bare remote — needed to drive the real `--sink` transaction
+// (kaola-workflow-sink-merge.js --sink) end to end (push_upstream/merge/push_main all
+// operate against a real origin). Mirrors simulate-workflow-walkthrough.js's
+// initGitRepoWithBareRemote.
+function initGitRepoWithBareRemote(tmp) {
+  initGitRepo(tmp);
+  const remotePath = tmp + '-remote';
+  spawnSync('git', ['init', '--bare', remotePath], { encoding: 'utf8' });
+  spawnSync('git', ['-C', tmp, 'remote', 'add', 'origin', remotePath], { encoding: 'utf8' });
+  spawnSync('git', ['-C', tmp, 'push', '-u', 'origin', 'main'], { encoding: 'utf8' });
+  return remotePath;
 }
 
 // Write a roadmap source file for an issue.
@@ -1068,6 +1082,122 @@ const { checkClosureInvariants } = require('./kaola-workflow-claim');
 
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true });
+  }
+})();
+
+// ---------------------------------------------------------------------------
+// Test (#592): `--sink --issue-numbers A,B` (no `--issue`) must actually run the
+// closure loop — not skip it. Pre-fix, the closure step's gate was
+// `!OFFLINE && args.issue != null`; with only `--issue-numbers` (no `--issue`), the
+// gate is false, the entire close loop is skipped, yet execution falls through to
+// stepDone('closure') unconditionally — the receipt reports closure:done having
+// closed zero issues, and status:sinked, while both issues remain open on the forge.
+// Drives the real `--sink` transaction end to end (kaola-workflow-sink-merge.js) with
+// a bare remote — the exact shape reported live on bundle-587-589.
+// ---------------------------------------------------------------------------
+
+(function testSinkIssueNumbersOnlyRunsClosureLoop() {
+  console.log('Test (#592): --sink --issue-numbers A,B (no --issue) must close every member, not skip closure');
+  const tmpRoot = makeTmpRoot();
+  // The gh mock lives OUTSIDE the repo root — a mock file inside the repo would be
+  // classified as foreign-dirt by the sink preflight and refuse before closure ever runs.
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-sink592-mock-'));
+  const logFile = path.join(binDir, 'gh-calls.log');
+  const project = 'bundle-9601-9602';
+  const branch = 'workflow/' + project;
+  let remotePath = null;
+  try {
+    remotePath = initGitRepoWithBareRemote(tmpRoot);
+
+    // A dedicated gh mock (mirrors simulate-workflow-walkthrough.js's #497-close style):
+    // both issues start OPEN, `issue close N` is logged so the test can assert it was
+    // actually ATTEMPTED (the pre-fix bug never calls it at all).
+    fs.mkdirSync(binDir, { recursive: true });
+    fs.writeFileSync(path.join(binDir, 'gh.js'), [
+      "'use strict';",
+      'const fs = require("fs");',
+      'const argv = process.argv.slice(2);',
+      'const a = argv.join(" ");',
+      'const logFile = ' + JSON.stringify(logFile) + ';',
+      'function log(msg) { try { fs.appendFileSync(logFile, msg + "\\n"); } catch(_) {} }',
+      'if (a.includes("repo view")) {',
+      '  process.stdout.write(JSON.stringify({owner:{login:"test"},name:"repo"}) + "\\n");',
+      '  process.exit(0);',
+      '}',
+      '// issue view N --json state -> always open (never pre-closed)',
+      'const viewM = a.match(/issue view (\\d+)/);',
+      'if (viewM) {',
+      '  process.stdout.write(JSON.stringify({state:"open"}) + "\\n");',
+      '  process.exit(0);',
+      '}',
+      '// issue close N --comment ... -> succeeds, logged as close:N',
+      'const closeM = a.match(/^issue close (\\d+)/);',
+      'if (closeM) {',
+      '  log("close:" + closeM[1]);',
+      '  process.stdout.write("\\n");',
+      '  process.exit(0);',
+      '}',
+      '// issue edit N --remove-label -> logged as label-removed:N',
+      'if (a.includes("issue edit") && a.includes("--remove-label")) {',
+      '  const em = a.match(/issue edit (\\d+)/);',
+      '  log("label-removed:" + (em ? em[1] : "?"));',
+      '  process.exit(0);',
+      '}',
+      'process.stdout.write("\\n");',
+      'process.exit(0);',
+    ].join('\n'));
+
+    // Feature branch carrying a deliverable — pushed upstream, mirrors the real sink shape.
+    spawnSync('git', ['-C', tmpRoot, 'checkout', '-b', branch], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmpRoot, 'push', '-u', 'origin', branch], { encoding: 'utf8' });
+    fs.writeFileSync(path.join(tmpRoot, 'DELIVERABLE.txt'), 'deliverable\n');
+    spawnSync('git', ['-C', tmpRoot, 'add', 'DELIVERABLE.txt'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmpRoot, 'commit', '-m', 'feat: deliverable'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmpRoot, 'push', 'origin', branch], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmpRoot, 'checkout', 'main'], { encoding: 'utf8' });
+
+    // The bundle sink shape from the issue: --issue-numbers only, NO --issue.
+    const result = spawnSync(process.execPath, [
+      sinkMergeScript, '--branch', branch, '--project', project,
+      '--issue-numbers', '9601,9602', '--sink', '--json',
+    ], {
+      cwd: tmpRoot,
+      encoding: 'utf8',
+      timeout: 60000,
+      env: Object.assign({}, process.env, {
+        KAOLA_WORKFLOW_OFFLINE: '0',
+        KAOLA_GH_MOCK_SCRIPT: path.join(binDir, 'gh.js'),
+      }),
+    });
+    const out = parseOutput(result);
+
+    assert(result.status === 0, '#592: --issue-numbers-only sink should exit 0 once closure genuinely runs and succeeds; got ' + result.status + '\nstdout: ' + result.stdout + '\nstderr: ' + result.stderr);
+
+    // THE BUG: pre-fix, the close loop is gated on args.issue != null, so with only
+    // --issue-numbers neither issue's `gh issue close` is ever invoked.
+    const calls = readLog(logFile);
+    const closeCalls = calls.filter(c => c.startsWith('close:'));
+    assert(closeCalls.includes('close:9601'), '#592: issue 9601 close must be ATTEMPTED (bug: closure loop is skipped entirely when --issue is absent); calls=' + JSON.stringify(calls));
+    assert(closeCalls.includes('close:9602'), '#592: issue 9602 close must be ATTEMPTED; calls=' + JSON.stringify(calls));
+
+    // The receipt must record the actually-closed set (not report closure:done having
+    // closed zero issues) so a resume can verify rather than skip.
+    assert(out !== null, '#592: sink transaction emits JSON');
+    const receipt = out && out.receipt;
+    assert(receipt != null, '#592: output has an embedded receipt');
+    if (receipt) {
+      assert(receipt.steps && receipt.steps.closure === 'done', '#592: closure step reports done once it genuinely ran; got ' + JSON.stringify(receipt.steps));
+      assert(Array.isArray(receipt.closed_issues) && receipt.closed_issues.length === 2,
+        '#592: receipt.closed_issues must record both actually-closed members, got ' + JSON.stringify(receipt.closed_issues));
+      if (Array.isArray(receipt.closed_issues)) {
+        assert(receipt.closed_issues.includes(9601) && receipt.closed_issues.includes(9602),
+          '#592: receipt.closed_issues must include 9601 and 9602, got ' + JSON.stringify(receipt.closed_issues));
+      }
+    }
+  } finally {
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+    fs.rmSync(binDir, { recursive: true, force: true });
+    if (remotePath) fs.rmSync(remotePath, { recursive: true, force: true });
   }
 })();
 
