@@ -1,0 +1,10 @@
+{
+  "project": "issue-599",
+  "sweptClasses": [
+    {
+      "reasonClass": "in_run_repair",
+      "sample": "n2-review",
+      "count": 1
+    }
+  ]
+}
