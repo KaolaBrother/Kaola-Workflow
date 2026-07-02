@@ -33,16 +33,16 @@ None outstanding. Three Trivial Inline Edit Exception fixes applied and verified
 None needed — no partial implementation; ACs 1-8 verified by two independent opus gates (adversarial parity repros + holistic review, both verdict: pass / findings_blocking: 0). Close on sink.
 
 ## Commit And Push
-Commits 5ba860b2 / 6213bc4a / bdb77adb / 7cad328a / e7fe9510 on workflow/issue-597. Final git gate (archive + sink) pending; final hash reported after push.
+Commits 5ba860b2 / 6213bc4a / bdb77adb / 7cad328a / e7fe9510 / a5581c3a (chore: archive issue-597, via cmdFinalize) on workflow/issue-597. Working tree clean after archive; no residual diff for a separate finalize commit — sink-merge push/PR pending (contractor does not run Step 9).
 
 ## GitHub Issue
-#597 — to be closed by sink-merge --sink --issue 597 (probe-before-close).
+#597 — close_disposition: close_pending (closure_receipt), to be closed by sink-merge --sink --issue 597 (probe-before-close). Not closed by the contractor.
 
 ## Roadmap
-Claim staged issue source reconciled by cmdFinalize; ROADMAP.md regenerated at closure.
+cmdFinalize closure_receipt: roadmap_source_removed=absent (no committed `.roadmap/issue-597.md` existed on workflow/issue-597 — the roadmap-source addition was only ever a stray uncommitted `A` in the main-root index, which cmdFinalize reconciled: roadmap_staged_reconciled=["issue-597.md"], roadmap_removed_by_root={"597":{"worktree":true,"main":true}}); roadmap_regenerated=regenerated; roadmap_residue=[].
 
 ## Archive
-Pending — kaola-workflow/archive/issue-597/ via cmdFinalize (contractor Step 8b).
+Done — kaola-workflow/archive/issue-597/ via cmdFinalize (contractor Step 8b), commit a5581c3a "chore: archive issue-597" on workflow/issue-597 (28 files, 763 insertions). closure_invariants: ok, violations: [].
 
 ## Required Agent Compliance
 | Requirement | Status | Evidence | Skip Reason |
@@ -55,8 +55,8 @@ Pending — kaola-workflow/archive/issue-597/ via cmdFinalize (contractor Step 8
 | documentation docking | invoked | .cache/doc-docking.md | |
 | final-validation fix executors | N/A | | no final-validation failure |
 | roadmap refresh | invoked | kaola-workflow/ROADMAP.md (regen at cmdFinalize) | |
-| archive completed folder | pending | | |
-| final commit and push | ready | git status clean of unrelated changes; push via sink-merge --sink | final gate runs after this file is committed |
+| archive completed folder | done | commit a5581c3a "chore: archive issue-597" | |
+| final commit and push | done (archive); push pending | working tree clean post-archive; push/merge/close via sink-merge --sink (contractor does not run Step 9) | |
 | finalize (n6-finalize) | main-session-direct | .cache/n6-finalize.md | |
 
 ## Status
