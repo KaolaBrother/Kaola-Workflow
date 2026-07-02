@@ -349,6 +349,82 @@ try {
       assertDispatchModeForConfig('multi_agent_v2 = true\n\n' + configText, 'v1-thread-id', '#584 top-level key ignored', false);
       assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = { hide_spawn_agent_metadata = false }'), 'v1-thread-id', '#584 inline object missing enabled fails closed', false);
 
+      // #598 AC2: effort-gated MultiAgentMode dispatch-POSTURE E2E coverage (distinct from
+      // dispatch_mode above — posture reflects whether the runtime will REFUSE a spawn, not
+      // just whether the tools are exposed). ATTESTATION-STYLE / NON-FATAL: every case below
+      // must still exit 0 — a non-proactive posture is a WARN, never a preflight failure.
+      function assertDispatchPostureForConfig(body, expectedPosture, label) {
+        fs.writeFileSync(projectConfigPath, body);
+        const result = spawnSync(process.execPath, [codexPreflightPath, '--project-root', cproj, '--home', chome, '--no-autofix', '--json'], {
+          cwd: path.join(root, 'plugins', 'kaola-workflow'),
+          encoding: 'utf8'
+        });
+        assert.strictEqual(result.status, 0, label + ': dispatch-posture WARN must never fail preflight: ' + result.stderr + result.stdout);
+        const json = JSON.parse(result.stdout);
+        assert.strictEqual(json.dispatch_posture, expectedPosture,
+          label + ': expected dispatch_posture ' + expectedPosture + ', got ' + JSON.stringify(json.dispatch_posture));
+        assert.strictEqual(json.dispatch_posture_warning === null, expectedPosture === 'proactive',
+          label + ': dispatch_posture_warning must be null iff proactive, got ' + JSON.stringify(json.dispatch_posture_warning));
+      }
+      assertDispatchPostureForConfig(configText, 'explicitRequestOnly', '#598 base fixture (multi_agent=true, no effort)');
+      assertDispatchPostureForConfig(configText.replace('multi_agent = true', 'multi_agent = false'), 'none',
+        '#598 multi_agent=false, no multi_agent_v2 -> none');
+      assertDispatchPostureForConfig('model_reasoning_effort = "ultra"\n\n' + configText, 'proactive',
+        '#598 effort=ultra with multi_agent=true -> proactive');
+      assertDispatchPostureForConfig('model_reasoning_effort = "xhigh"\n\n' + configText, 'explicitRequestOnly',
+        '#598 effort=xhigh (below ultra) stays explicitRequestOnly');
+      assertDispatchPostureForConfig(
+        'model_reasoning_effort = "ultra"\n\n' + configText.replace('multi_agent = true', 'multi_agent = false'),
+        'none', '#598 effort=ultra but features disabled -> none (features gate outranks effort)');
+      assertDispatchPostureForConfig(configWithFeatureLine('multi_agent_v2 = true'), 'explicitRequestOnly',
+        '#598 multi_agent_v2=true, no effort -> explicitRequestOnly');
+      assertDispatchPostureForConfig(
+        'model_reasoning_effort = "ultra"\n\n' + configWithFeatureLine('multi_agent_v2 = true').replace('multi_agent = true', 'multi_agent = false'),
+        'proactive', '#598 multi_agent=false + multi_agent_v2=true + effort=ultra -> proactive (either feature gates)');
+      assertDispatchPostureForConfig(configText.replace('multi_agent = true', 'multi_agent = true\nmodel_reasoning_effort = "ultra"'),
+        'explicitRequestOnly', '#598 effort AFTER the first [table] is not a valid TOML root key -> ignored');
+
+      // AC1: installer REPORT step — a fresh install must print the effective dispatch posture and
+      // (non-proactive) the exact remediation, and this must NEVER change the installer's own exit code.
+      const codexInstallerPathForPosture = path.join(root, 'plugins', 'kaola-workflow', 'scripts', 'install-codex-agent-profiles.js');
+      const postureProj = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-codex-598-proj-'));
+      const postureHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kaola-codex-598-home-'));
+      try {
+        const freshInstall = spawnSync(process.execPath, [codexInstallerPathForPosture, postureProj], {
+          cwd: path.join(root, 'plugins', 'kaola-workflow'),
+          env: { ...process.env, HOME: postureHome },
+          encoding: 'utf8'
+        });
+        assert.strictEqual(freshInstall.status, 0, '#598 AC1: dispatch-posture report must never fail an otherwise-good install: ' + freshInstall.stderr);
+        assert(/status: ok/.test(freshInstall.stdout), '#598 AC1: existing "status: ok" output must be unchanged');
+        assert(/Kaola-Workflow Codex dispatch posture: explicitRequestOnly/.test(freshInstall.stdout),
+          '#598 AC1: fresh install (multi_agent=true, no effort configured) must report explicitRequestOnly posture: ' + freshInstall.stdout);
+        assert(/model_reasoning_effort = "ultra"/.test(freshInstall.stdout),
+          '#598 AC1: non-proactive posture must print the exact remediation naming model_reasoning_effort="ultra": ' + freshInstall.stdout);
+        assert(/codex -c model_reasoning_effort=ultra/.test(freshInstall.stdout),
+          '#598 AC1: remediation must also name the per-session codex -c override: ' + freshInstall.stdout);
+        assert(/0\.142\.5/.test(freshInstall.stdout), '#598 AC1/AC2: report must carry the version-guard note (0.142.5): ' + freshInstall.stdout);
+
+        // Set model_reasoning_effort="ultra" ahead of the managed block, then re-run (idempotent
+        // update) — the posture must flip to 'proactive' and the remediation line must disappear.
+        const postureConfigPath = path.join(postureProj, '.codex', 'config.toml');
+        const beforeUltra = fs.readFileSync(postureConfigPath, 'utf8');
+        fs.writeFileSync(postureConfigPath, 'model_reasoning_effort = "ultra"\n\n' + beforeUltra);
+        const reinstall = spawnSync(process.execPath, [codexInstallerPathForPosture, postureProj], {
+          cwd: path.join(root, 'plugins', 'kaola-workflow'),
+          env: { ...process.env, HOME: postureHome },
+          encoding: 'utf8'
+        });
+        assert.strictEqual(reinstall.status, 0, '#598 AC1: re-install with effort=ultra must still exit 0: ' + reinstall.stderr);
+        assert(/Kaola-Workflow Codex dispatch posture: proactive/.test(reinstall.stdout),
+          '#598 AC1: effort=ultra must report proactive posture: ' + reinstall.stdout);
+        assert(!/refuse sub-agent spawns/.test(reinstall.stdout),
+          '#598 AC1: a proactive posture must NOT print the non-proactive remediation: ' + reinstall.stdout);
+      } finally {
+        fs.rmSync(postureProj, { recursive: true, force: true });
+        fs.rmSync(postureHome, { recursive: true, force: true });
+      }
+
       // #543 cross-edition: a default (no-flags) codex installer run must seed the shared
       // ~/.config/kaola-workflow/config.json with installed_paths:[] (adaptive-only). This is the
       // claude-chain behavioral-identity assertion that the codex triplet writer (node port) and the
@@ -363,6 +439,50 @@ try {
       fs.rmSync(cproj, { recursive: true, force: true });
       fs.rmSync(chome, { recursive: true, force: true });
     }
+  }
+
+  // #598: effort-gated MultiAgentMode dispatch-posture — pure-function unit coverage
+  // (no subprocess). VERSION-GUARD: derivation verified on codex-tui 0.142.5 —
+  //   [features] multi_agent / multi_agent_v2 absent-or-false -> 'none'
+  //   otherwise: root-level model_reasoning_effort = "ultra" -> 'proactive', else 'explicitRequestOnly'.
+  // Exercises BOTH the installer's and the preflight's copy of deriveDispatchPosture — they are
+  // duplicated (not shared) by design, so this is the semantic-parity check the whole-file
+  // byte-identity validator (validate-script-sync.js) cannot itself express.
+  {
+    const preflightModulePath = path.join(root, 'plugins', 'kaola-workflow', 'scripts', 'kaola-workflow-codex-preflight.js');
+    const installerModulePath = path.join(root, 'plugins', 'kaola-workflow', 'scripts', 'install-codex-agent-profiles.js');
+    const preflightMod = require(preflightModulePath);
+    const installerMod = require(installerModulePath);
+
+    const postureFixtures = [
+      { label: 'no features table at all', cfg: '', expected: 'none' },
+      { label: 'multi_agent=true, no effort', cfg: '[features]\nmulti_agent = true\n', expected: 'explicitRequestOnly' },
+      { label: 'multi_agent=false, no effort', cfg: '[features]\nmulti_agent = false\n', expected: 'none' },
+      { label: 'multi_agent=true, effort=ultra', cfg: 'model_reasoning_effort = "ultra"\n\n[features]\nmulti_agent = true\n', expected: 'proactive' },
+      { label: 'multi_agent=true, effort=xhigh (below ultra)', cfg: 'model_reasoning_effort = "xhigh"\n\n[features]\nmulti_agent = true\n', expected: 'explicitRequestOnly' },
+      { label: 'multi_agent=false + effort=ultra (features gate wins)', cfg: 'model_reasoning_effort = "ultra"\n\n[features]\nmulti_agent = false\n', expected: 'none' },
+      { label: 'multi_agent_v2=true only (no multi_agent key)', cfg: '[features]\nmulti_agent_v2 = true\n', expected: 'explicitRequestOnly' },
+      { label: 'multi_agent=false + multi_agent_v2=true, effort=ultra', cfg: 'model_reasoning_effort = "ultra"\n\n[features]\nmulti_agent = false\nmulti_agent_v2 = true\n', expected: 'proactive' },
+      // TOML root-key rule: model_reasoning_effort placed AFTER the first [table] header is NOT
+      // a root key (it would belong to that table), so it must not gate the posture.
+      { label: 'effort after first table is not a root key (ignored)', cfg: '[features]\nmulti_agent = true\nmodel_reasoning_effort = "ultra"\n', expected: 'explicitRequestOnly' },
+    ];
+    for (const mod of [preflightMod, installerMod]) {
+      for (const f of postureFixtures) {
+        const result = mod.deriveDispatchPosture(f.cfg);
+        assert.strictEqual(result.dispatch_posture, f.expected,
+          '#598 ' + f.label + ': expected dispatch_posture ' + f.expected + ', got ' + JSON.stringify(result));
+        assert.strictEqual(result.dispatch_posture_warning === null, f.expected === 'proactive',
+          '#598 ' + f.label + ': dispatch_posture_warning must be null iff proactive, got ' + JSON.stringify(result));
+      }
+    }
+
+    // The installer and preflight must ship the identical version-guard note (semantic
+    // lock-step check, distinct from the whole-file byte-identity the sync validator enforces).
+    assert.strictEqual(installerMod.DISPATCH_POSTURE_VERSION_NOTE, preflightMod.DISPATCH_POSTURE_VERSION_NOTE,
+      '#598: installer and preflight version-guard notes must match verbatim');
+    assert(/0\.142\.5/.test(installerMod.DISPATCH_POSTURE_VERSION_NOTE),
+      '#598: version-guard note must name the verified Codex CLI version');
   }
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });

@@ -3603,6 +3603,36 @@ function testGiteaPreflight266() {
         assertDispatchModeForConfig('[notice]\nsuppress_unstable_features_warning = true\n\n' + origConfig, 'v1-thread-id', '#584 gt warning suppression only', false);
         assertDispatchModeForConfig('multi_agent_v2 = true\n\n' + origConfig, 'v1-thread-id', '#584 gt top-level key ignored', false);
         assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = { hide_spawn_agent_metadata = false }'), 'v1-thread-id', '#584 gt inline object missing enabled fails closed', false);
+
+        // #598 AC2 gt: effort-gated MultiAgentMode dispatch-POSTURE (distinct from dispatch_mode
+        // above — posture reflects whether the runtime will REFUSE a spawn, not just whether the
+        // tools are exposed). ATTESTATION-STYLE / NON-FATAL: every case must still exit 0.
+        function assertDispatchPostureForConfig(body, expectedPosture, label) {
+          fs.writeFileSync(configPath, body);
+          const result = spawnSync(process.execPath,
+            [giteaPreflightScript, '--project-root', root, '--no-autofix', '--json'],
+            { encoding: 'utf8', env: hEnvGt });
+          assert.strictEqual(result.status, 0,
+            label + ': dispatch-posture WARN must never fail preflight, got ' + result.status + '\n' + result.stdout);
+          const json = JSON.parse(result.stdout);
+          assert.strictEqual(json.dispatch_posture, expectedPosture,
+            label + ': expected dispatch_posture ' + expectedPosture + ', got ' + json.dispatch_posture);
+          assert.strictEqual(json.dispatch_posture_warning === null, expectedPosture === 'proactive',
+            label + ': dispatch_posture_warning must be null iff proactive, got ' + JSON.stringify(json.dispatch_posture_warning));
+        }
+        assertDispatchPostureForConfig(origConfig, 'explicitRequestOnly', '#598 gt base fixture (multi_agent=true, no effort)');
+        assertDispatchPostureForConfig(origConfig.replace('multi_agent = true', 'multi_agent = false'), 'none',
+          '#598 gt multi_agent=false, no multi_agent_v2 -> none');
+        assertDispatchPostureForConfig('model_reasoning_effort = "ultra"\n\n' + origConfig, 'proactive',
+          '#598 gt effort=ultra with multi_agent=true -> proactive');
+        assertDispatchPostureForConfig('model_reasoning_effort = "xhigh"\n\n' + origConfig, 'explicitRequestOnly',
+          '#598 gt effort=xhigh (below ultra) stays explicitRequestOnly');
+        assertDispatchPostureForConfig(configWithFeatureLine('multi_agent_v2 = true'), 'explicitRequestOnly',
+          '#598 gt multi_agent_v2=true, no effort -> explicitRequestOnly');
+        assertDispatchPostureForConfig(
+          origConfig.replace('multi_agent = true', 'multi_agent = true\nmodel_reasoning_effort = "ultra"'),
+          'explicitRequestOnly', '#598 gt effort AFTER the first [table] is not a valid TOML root key -> ignored');
+
         fs.writeFileSync(configPath, origConfig);
         const staleConfig = origConfig.replace('[agents.workflow-planner]', '[agents.STALE-workflow-planner]');
         fs.writeFileSync(configPath, staleConfig);
@@ -3687,6 +3717,46 @@ function testGiteaPreflight266() {
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
     fs.rmSync(emptyHomeGt, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// #598 AC1 gt: installer dispatch-posture REPORT. ATTESTATION-STYLE / NON-FATAL — the
+// installer must REPORT the effective effort-gated MultiAgentMode posture and, when
+// non-proactive, the exact remediation, and this must NEVER change the install's own
+// exit code. Also asserts stdout still ENDS with `status: ok` (#332 AC3 invariant).
+// ---------------------------------------------------------------------------
+function testGiteaDispatchPosture598() {
+  const postureHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-598-posture-home-'));
+  const postureProj = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gt-598-posture-proj-'));
+  try {
+    const freshEnv = { ...process.env, HOME: postureHome };
+    const fresh = spawnSync(process.execPath, [installProfilesScript, postureProj],
+      { cwd: giteaPluginRoot, encoding: 'utf8', env: freshEnv });
+    assert.strictEqual(fresh.status, 0, '#598 gt AC1: fresh install must exit 0: ' + fresh.stderr);
+    assert.strictEqual(fresh.stdout.trim().split('\n').pop(), 'status: ok',
+      '#598 gt AC1: existing #332 AC3 "stdout ends with status: ok" invariant must be preserved: ' + fresh.stdout);
+    assert.ok(/Kaola-Workflow Codex dispatch posture: explicitRequestOnly/.test(fresh.stdout),
+      '#598 gt AC1: fresh install (multi_agent=true, no effort) must report explicitRequestOnly: ' + fresh.stdout);
+    assert.ok(/model_reasoning_effort = "ultra"/.test(fresh.stdout),
+      '#598 gt AC1: non-proactive posture must print the exact remediation: ' + fresh.stdout);
+    assert.ok(/0\.142\.5/.test(fresh.stdout), '#598 gt AC1/AC2: report must carry the version-guard note: ' + fresh.stdout);
+
+    const postureConfigPath = path.join(postureProj, '.codex', 'config.toml');
+    const beforeUltra = fs.readFileSync(postureConfigPath, 'utf8');
+    fs.writeFileSync(postureConfigPath, 'model_reasoning_effort = "ultra"\n\n' + beforeUltra);
+    const reinstalled = spawnSync(process.execPath, [installProfilesScript, postureProj],
+      { cwd: giteaPluginRoot, encoding: 'utf8', env: freshEnv });
+    assert.strictEqual(reinstalled.status, 0, '#598 gt AC1: re-install with effort=ultra must still exit 0: ' + reinstalled.stderr);
+    assert.ok(/Kaola-Workflow Codex dispatch posture: proactive/.test(reinstalled.stdout),
+      '#598 gt AC1: effort=ultra must report proactive posture: ' + reinstalled.stdout);
+    assert.ok(!/refuse sub-agent spawns/.test(reinstalled.stdout),
+      '#598 gt AC1: a proactive posture must NOT print the non-proactive remediation: ' + reinstalled.stdout);
+
+    console.log('testGiteaDispatchPosture598 (#598 AC1 installer report): PASSED');
+  } finally {
+    fs.rmSync(postureProj, { recursive: true, force: true });
+    fs.rmSync(postureHome, { recursive: true, force: true });
   }
 }
 
@@ -4646,6 +4716,7 @@ function testGiteaBoundary2FetchRetry507() {
 testGiteaFinalizeRowMainDirect338();
 testInstallSchemaPruneManifest332Gitea();
 testGiteaPreflight266();
+testGiteaDispatchPosture598();
 testGiteaPreflight571();
 testGiteaPreflight332();
 testGiteaTaskMirror266();

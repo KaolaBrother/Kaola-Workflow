@@ -68,6 +68,23 @@ with `worktree_authority_split` (zero mutation) — `cd "$ACTIVE_WORKTREE_PATH"`
 and `record-evidence --verify` are read-only and exempt; `mirror-project` is the main→worktree copy
 and must run from the main root, above.)
 
+## Gate-Role Degradation Notice
+
+Determine dispatch availability BEFORE opening the first node, and re-check if it changes mid-run:
+subagent role profiles are absent at BOTH the project-local `.codex/agents/kaola-workflow/` path
+and the global `~/.codex/agents/kaola-workflow/` path, OR the runtime dispatch mode model-refuses
+spawns. When dispatch is unavailable, post a PROMINENT run-start notice — before dispatching any
+node — naming every gate role the plan will run inline as self-review: `adversarial-verifier`,
+`code-reviewer`, `security-reviewer`.
+
+For `adversarial-verifier` and `code-reviewer`, an inline gate reviewing its own writer-context is
+no gate: do NOT dispatch the gate node inline and silently record a self-issued `verdict: pass`.
+Instead route through the consent-halt valve (`write-halt --reason consent`) and await operator
+resolution before the gate node is considered satisfied. Forward roles — `code-explorer`,
+`knowledge-lookup`, `implementer`, `tdd-guide`, `doc-updater`, and `security-reviewer` when it runs
+as a forward check — may still record the documented local fallback
+(`local-fallback-tool-unavailable`) and proceed inline.
+
 ## Loop Skeleton
 
 ### 1. Orient (on entry / resume)

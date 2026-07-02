@@ -220,6 +220,105 @@ function detectCodexDispatchMode(configContent) {
 }
 
 // ---------------------------------------------------------------------------
+// #598: MultiAgentMode dispatch-POSTURE derivation. This is DIFFERENT from
+// dispatch_mode above (which only reports whether the spawn TOOLS are exposed):
+// the Codex runtime injects a developer message that model-refuses spawns
+// unless the effective posture is 'proactive', regardless of tool exposure.
+//
+// VERSION-GUARD (verified on codex-tui 0.142.5; may change in a future Codex
+// release): MultiAgentMode = none | explicitRequestOnly | proactive.
+//   - [features] multi_agent / multi_agent_v2 both absent-or-false -> 'none'
+//     (spawn tools are not exposed at all; nothing to gate).
+//   - otherwise, effort-gated: a root-level model_reasoning_effort = "ultra"
+//     -> 'proactive'; any other value or absent -> 'explicitRequestOnly'.
+//
+// ATTESTATION-STYLE / NON-FATAL by construction: pure, never throws, and the
+// caller must never let this change an install/preflight exit code — it only
+// informs a REPORT/WARN. Duplicated byte-identically alongside the #332 schema
+// helpers above (installer <-> preflight, x7 files total); keep in lock-step.
+// ---------------------------------------------------------------------------
+const DISPATCH_POSTURE_VERSION_NOTE = 'effort-gated multi-agent dispatch posture is Codex CLI runtime behavior verified on codex-tui 0.142.5; it may change in a future Codex release.';
+
+// `[features] multi_agent = <bool>` — the base (v1) tool-exposure flag, distinct from
+// multi_agent_v2 (already parsed by detectCodexDispatchMode above). Same strict
+// first-match/ambiguous-fails-closed strategy: a repeated key or malformed boolean
+// short-circuits to false rather than guessing.
+function parseFeaturesMultiAgentEnabled(configContent) {
+  const lines = String(configContent || '').split(/\r?\n/);
+  let table = '';
+  let seen = false;
+  let enabled = false;
+  let ambiguous = false;
+
+  for (const rawLine of lines) {
+    const line = stripTomlComment(rawLine).trim();
+    if (!line) continue;
+
+    const tableName = parseTomlTableName(line);
+    if (tableName !== null) {
+      table = tableName;
+      continue;
+    }
+
+    if (table === 'features') {
+      const m = line.match(/^multi_agent\s*=\s*(.+)$/);
+      if (m) {
+        const b = parseTomlBoolean(m[1]);
+        if (b === null || seen) {
+          ambiguous = true;
+          enabled = false;
+        } else {
+          seen = true;
+          enabled = b;
+        }
+      }
+    }
+  }
+
+  return seen && !ambiguous && enabled;
+}
+
+// Root-level `model_reasoning_effort` (NOT the per-profile agents/*.toml field of the
+// same name) — the effort setting that gates MultiAgentMode. TOML root keys must
+// precede the first [table] header, so scanning the text up to the first top-level
+// table line is the correct (and only valid) place a user- or installer-owned root
+// key can live — the same `top` convention used by validateProfileText.
+function parseTopLevelModelReasoningEffort(configContent) {
+  const text = String(configContent || '');
+  const firstTableIdx = text.search(/^\[/m);
+  const top = firstTableIdx === -1 ? text : text.slice(0, firstTableIdx);
+  const m = top.match(/^model_reasoning_effort\s*=\s*"([^"]*)"\s*$/m);
+  return m ? m[1] : null;
+}
+
+// Exact remediation text for a non-proactive posture; null when nothing to remediate.
+function dispatchPostureRemediation(posture) {
+  if (posture === 'proactive') return null;
+  if (posture === 'none') {
+    return 'Codex sub-agent spawn tools are not exposed ([features] multi_agent / multi_agent_v2 absent-or-false). '
+      + 'Enable them, then set model_reasoning_effort = "ultra" in ~/.codex/config.toml (or per-session: '
+      + 'codex -c model_reasoning_effort=ultra), or explicitly ask for sub-agents/delegation/parallel work in-session.';
+  }
+  return 'Codex will refuse sub-agent spawns unless explicitly requested this session (multi_agent_mode: explicitRequestOnly). '
+    + 'Set model_reasoning_effort = "ultra" in ~/.codex/config.toml (or per-session: codex -c model_reasoning_effort=ultra) '
+    + 'for proactive delegation, or explicitly ask for sub-agents/delegation/parallel work in-session.';
+}
+
+function deriveDispatchPosture(configContent) {
+  const dispatchMode = detectCodexDispatchMode(configContent);
+  const multiAgentEnabled = parseFeaturesMultiAgentEnabled(configContent);
+  const featuresEnabled = multiAgentEnabled || dispatchMode.multi_agent_v2_enabled;
+  const effort = parseTopLevelModelReasoningEffort(configContent);
+  const posture = !featuresEnabled ? 'none' : (effort === 'ultra' ? 'proactive' : 'explicitRequestOnly');
+  return {
+    dispatch_posture: posture,
+    model_reasoning_effort: effort,
+    multi_agent_enabled: multiAgentEnabled,
+    dispatch_posture_warning: dispatchPostureRemediation(posture),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Arg parsing
 // ---------------------------------------------------------------------------
 function parseArgs(argv) {
@@ -489,6 +588,7 @@ function inspectScope({ codexDir, templateRoles, templateEntries }) {
     try { configContent = fs.readFileSync(configPath, 'utf8'); } catch { configContent = ''; }
   }
   const dispatchMode = detectCodexDispatchMode(configContent);
+  const posture = deriveDispatchPosture(configContent);
   const { blockFound, rolesInBlock, conflictingRolesOutside } = checkManagedBlock(configContent);
 
   const missingFromBlock = templateRoles.filter(r => !rolesInBlock.includes(r));
@@ -550,6 +650,10 @@ function inspectScope({ codexDir, templateRoles, templateEntries }) {
     manifest: manifestStatus,
     dispatch_mode: dispatchMode.dispatch_mode,
     multi_agent_v2_enabled: dispatchMode.multi_agent_v2_enabled,
+    dispatch_posture: posture.dispatch_posture,
+    model_reasoning_effort: posture.model_reasoning_effort,
+    multi_agent_enabled: posture.multi_agent_enabled,
+    dispatch_posture_warning: posture.dispatch_posture_warning,
   };
 }
 
@@ -660,6 +764,10 @@ function runPreflight(opts) {
         autofixed: false,
         dispatch_mode: globalScope.dispatch_mode,
         multi_agent_v2_enabled: globalScope.multi_agent_v2_enabled,
+        dispatch_posture: globalScope.dispatch_posture,
+        model_reasoning_effort: globalScope.model_reasoning_effort,
+        multi_agent_enabled: globalScope.multi_agent_enabled,
+        dispatch_posture_warning: globalScope.dispatch_posture_warning,
       },
     };
   }
@@ -680,6 +788,10 @@ function runPreflight(opts) {
         safe_autofix: false,
         dispatch_mode: scope.dispatch_mode,
         multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
+        dispatch_posture: scope.dispatch_posture,
+        model_reasoning_effort: scope.model_reasoning_effort,
+        multi_agent_enabled: scope.multi_agent_enabled,
+        dispatch_posture_warning: scope.dispatch_posture_warning,
       },
     };
   }
@@ -696,6 +808,10 @@ function runPreflight(opts) {
         safe_autofix: false,
         dispatch_mode: scope.dispatch_mode,
         multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
+        dispatch_posture: scope.dispatch_posture,
+        model_reasoning_effort: scope.model_reasoning_effort,
+        multi_agent_enabled: scope.multi_agent_enabled,
+        dispatch_posture_warning: scope.dispatch_posture_warning,
       },
     };
   }
@@ -729,6 +845,10 @@ function runPreflight(opts) {
         autofixed: false,
         dispatch_mode: scope.dispatch_mode,
         multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
+        dispatch_posture: scope.dispatch_posture,
+        model_reasoning_effort: scope.model_reasoning_effort,
+        multi_agent_enabled: scope.multi_agent_enabled,
+        dispatch_posture_warning: scope.dispatch_posture_warning,
       },
     };
   }
@@ -744,6 +864,10 @@ function runPreflight(opts) {
         safe_autofix: true,
         dispatch_mode: scope.dispatch_mode,
         multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
+        dispatch_posture: scope.dispatch_posture,
+        model_reasoning_effort: scope.model_reasoning_effort,
+        multi_agent_enabled: scope.multi_agent_enabled,
+        dispatch_posture_warning: scope.dispatch_posture_warning,
       };
     }
     if (staleFilesPresent) {
@@ -756,6 +880,10 @@ function runPreflight(opts) {
         safe_autofix: true,
         dispatch_mode: scope.dispatch_mode,
         multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
+        dispatch_posture: scope.dispatch_posture,
+        model_reasoning_effort: scope.model_reasoning_effort,
+        multi_agent_enabled: scope.multi_agent_enabled,
+        dispatch_posture_warning: scope.dispatch_posture_warning,
       };
     }
     if (profilesMissing) {
@@ -768,6 +896,10 @@ function runPreflight(opts) {
         safe_autofix: true,
         dispatch_mode: scope.dispatch_mode,
         multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
+        dispatch_posture: scope.dispatch_posture,
+        model_reasoning_effort: scope.model_reasoning_effort,
+        multi_agent_enabled: scope.multi_agent_enabled,
+        dispatch_posture_warning: scope.dispatch_posture_warning,
       };
     }
     if (configStale) {
@@ -780,6 +912,10 @@ function runPreflight(opts) {
         safe_autofix: true,
         dispatch_mode: scope.dispatch_mode,
         multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
+        dispatch_posture: scope.dispatch_posture,
+        model_reasoning_effort: scope.model_reasoning_effort,
+        multi_agent_enabled: scope.multi_agent_enabled,
+        dispatch_posture_warning: scope.dispatch_posture_warning,
       };
     }
     // onlyBlockRolesStale: full current set present, retired [agents.*] inside markers.
@@ -792,6 +928,10 @@ function runPreflight(opts) {
       safe_autofix: true,
       dispatch_mode: scope.dispatch_mode,
       multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
+      dispatch_posture: scope.dispatch_posture,
+      model_reasoning_effort: scope.model_reasoning_effort,
+      multi_agent_enabled: scope.multi_agent_enabled,
+      dispatch_posture_warning: scope.dispatch_posture_warning,
     };
   }
 
@@ -815,6 +955,10 @@ function runPreflight(opts) {
         safe_autofix: false,
         dispatch_mode: scope.dispatch_mode,
         multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
+        dispatch_posture: scope.dispatch_posture,
+        model_reasoning_effort: scope.model_reasoning_effort,
+        multi_agent_enabled: scope.multi_agent_enabled,
+        dispatch_posture_warning: scope.dispatch_posture_warning,
       },
     };
   }
@@ -831,6 +975,10 @@ function runPreflight(opts) {
         safe_autofix: false,
         dispatch_mode: scope.dispatch_mode,
         multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
+        dispatch_posture: scope.dispatch_posture,
+        model_reasoning_effort: scope.model_reasoning_effort,
+        multi_agent_enabled: scope.multi_agent_enabled,
+        dispatch_posture_warning: scope.dispatch_posture_warning,
       },
     };
   }
@@ -861,6 +1009,10 @@ function runPreflight(opts) {
         safe_autofix: false,
         dispatch_mode: after.dispatch_mode,
         multi_agent_v2_enabled: after.multi_agent_v2_enabled,
+        dispatch_posture: after.dispatch_posture,
+        model_reasoning_effort: after.model_reasoning_effort,
+        multi_agent_enabled: after.multi_agent_enabled,
+        dispatch_posture_warning: after.dispatch_posture_warning,
       },
     };
   }
@@ -874,6 +1026,10 @@ function runPreflight(opts) {
       autofixed: true,
       dispatch_mode: after.dispatch_mode,
       multi_agent_v2_enabled: after.multi_agent_v2_enabled,
+      dispatch_posture: after.dispatch_posture,
+      model_reasoning_effort: after.model_reasoning_effort,
+      multi_agent_enabled: after.multi_agent_enabled,
+      dispatch_posture_warning: after.dispatch_posture_warning,
     },
   };
 }
@@ -921,6 +1077,10 @@ function scopeReport(scope, name, codexDir, repair, readOnly) {
     manifest: scope.manifest,
     dispatch_mode: scope.dispatch_mode,
     multi_agent_v2_enabled: scope.multi_agent_v2_enabled,
+    dispatch_posture: scope.dispatch_posture,
+    model_reasoning_effort: scope.model_reasoning_effort,
+    multi_agent_enabled: scope.multi_agent_enabled,
+    dispatch_posture_warning: scope.dispatch_posture_warning,
     read_only: !!readOnly,
     repair,
   };
@@ -1015,6 +1175,10 @@ function runDoctor(opts) {
       manifest: 'n/a',
       dispatch_mode: 'n/a',
       multi_agent_v2_enabled: false,
+      dispatch_posture: 'n/a',
+      model_reasoning_effort: null,
+      multi_agent_enabled: false,
+      dispatch_posture_warning: null,
       read_only: true,
       repair: `codex plugin remove ${c.plugin}@${c.marketplace} && codex plugin add ${c.plugin}@${c.marketplace}  # refresh plugin cache`,
     });
@@ -1054,6 +1218,8 @@ if (require.main === module) {
         const state = !s.exists ? 'absent' : (stale ? 'stale' : 'ok');
         process.stdout.write(`${s.scope}: ${state} (${s.codex_dir})\n`);
         if (stale) process.stdout.write(`  repair: ${s.repair}\n`);
+        // #598: ATTESTATION-STYLE / NON-FATAL — dispatch-posture WARN never affects exitCode.
+        if (s.dispatch_posture_warning) process.stdout.write(`  warn: ${s.dispatch_posture_warning}\n`);
       }
     }
     process.exit(exitCode);
@@ -1075,6 +1241,11 @@ if (require.main === module) {
     process.stdout.write(
       `ok: ${result.roles_checked.length} roles verified${autofixNote}\n`
     );
+    // #598: ATTESTATION-STYLE / NON-FATAL — dispatch-posture WARN never affects exitCode
+    // (an otherwise-fresh preflight must never be reddened by this report).
+    if (result.dispatch_posture_warning) {
+      process.stdout.write(`warn: ${result.dispatch_posture_warning}\n`);
+    }
   }
 
   process.exit(exitCode);
@@ -1093,4 +1264,11 @@ module.exports = {
   RETIRED_PROFILE_FILES,
   MANIFEST_BASENAME,
   EFFORT_VALUES,
+  // #598: effort-gated dispatch-posture derivation (pure; exported for unit tests).
+  detectCodexDispatchMode,
+  deriveDispatchPosture,
+  parseFeaturesMultiAgentEnabled,
+  parseTopLevelModelReasoningEffort,
+  dispatchPostureRemediation,
+  DISPATCH_POSTURE_VERSION_NOTE,
 };

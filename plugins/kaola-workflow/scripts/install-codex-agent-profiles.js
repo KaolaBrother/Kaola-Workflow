@@ -701,6 +701,228 @@ function seedKaolaConfig(homeDir, withFast, withFull) {
   return { status: 'updated', installed_paths: config.installed_paths };
 }
 
+// ---------------------------------------------------------------------------
+// #598: effort-gated MultiAgentMode dispatch-POSTURE derivation (report-only; NEVER
+// gates the install). AC1: after a successful install, derive and REPORT the
+// effective dispatch posture, printing the exact remediation whenever the runtime
+// would refuse spawns — an install that prints "status: ok" while dispatch is
+// model-refused is a failed install for the workflow's purposes, so this closes
+// that gap WITHOUT ever failing the install itself.
+//
+// VERSION-GUARD (verified on codex-tui 0.142.5; may change in a future Codex
+// release): MultiAgentMode = none | explicitRequestOnly | proactive.
+//   - [features] multi_agent / multi_agent_v2 both absent-or-false -> 'none'
+//     (spawn tools are not exposed at all; nothing to gate).
+//   - otherwise, effort-gated: a root-level model_reasoning_effort = "ultra"
+//     -> 'proactive'; any other value or absent -> 'explicitRequestOnly'.
+//
+// ATTESTATION-STYLE / NON-FATAL by construction: pure, never throws. Duplicated
+// byte-identically alongside the #332 schema helpers above (installer <-> preflight,
+// x7 files total, this installer being the reference copy per validate-script-sync.js's
+// "codex agent-profile installer copies" group); keep the two copies in lock-step.
+// ---------------------------------------------------------------------------
+const DISPATCH_POSTURE_VERSION_NOTE = 'effort-gated multi-agent dispatch posture is Codex CLI runtime behavior verified on codex-tui 0.142.5; it may change in a future Codex release.';
+
+function stripTomlComment(line) {
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inDouble && ch === '\\' && !escaped) {
+      escaped = true;
+      continue;
+    }
+    if (ch === '"' && !inSingle && !escaped) inDouble = !inDouble;
+    if (ch === "'" && !inDouble) inSingle = !inSingle;
+    if (ch === '#' && !inSingle && !inDouble) return line.slice(0, i);
+    escaped = false;
+  }
+  return line;
+}
+
+function parseTomlTableName(line) {
+  const m = line.match(/^\s*\[([A-Za-z0-9_.-]+)\]\s*$/);
+  return m ? m[1] : null;
+}
+
+function parseTomlBoolean(value) {
+  const trimmed = String(value || '').trim();
+  if (trimmed === 'true') return true;
+  if (trimmed === 'false') return false;
+  return null;
+}
+
+function splitInlineTomlFields(body) {
+  const fields = [];
+  let start = 0;
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i];
+    if (inDouble && ch === '\\' && !escaped) {
+      escaped = true;
+      continue;
+    }
+    if (ch === '"' && !inSingle && !escaped) inDouble = !inDouble;
+    if (ch === "'" && !inDouble) inSingle = !inSingle;
+    if (ch === ',' && !inSingle && !inDouble) {
+      fields.push(body.slice(start, i).trim());
+      start = i + 1;
+    }
+    escaped = false;
+  }
+  fields.push(body.slice(start).trim());
+  return fields.filter(Boolean);
+}
+
+function parseMultiAgentV2Value(value) {
+  const trimmed = String(value || '').trim();
+  const bool = parseTomlBoolean(trimmed);
+  if (bool !== null) return { valid: true, enabled: bool };
+
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) {
+    return { valid: false, enabled: false };
+  }
+
+  let found = false;
+  let enabled = false;
+  for (const field of splitInlineTomlFields(trimmed.slice(1, -1))) {
+    const m = field.match(/^enabled\s*=\s*(.+)$/);
+    if (!m) continue;
+    if (found) return { valid: false, enabled: false };
+    const fieldBool = parseTomlBoolean(m[1]);
+    if (fieldBool === null) return { valid: false, enabled: false };
+    found = true;
+    enabled = fieldBool;
+  }
+
+  return found ? { valid: true, enabled } : { valid: false, enabled: false };
+}
+
+function detectCodexDispatchMode(configContent) {
+  const lines = String(configContent || '').split(/\r?\n/);
+  let table = '';
+  let seen = false;
+  let enabled = false;
+  let ambiguous = false;
+
+  function record(parsed) {
+    if (!parsed.valid || seen) {
+      ambiguous = true;
+      enabled = false;
+      return;
+    }
+    seen = true;
+    enabled = parsed.enabled;
+  }
+
+  for (const rawLine of lines) {
+    const line = stripTomlComment(rawLine).trim();
+    if (!line) continue;
+
+    const tableName = parseTomlTableName(line);
+    if (tableName !== null) {
+      table = tableName;
+      continue;
+    }
+
+    if (table === 'features') {
+      const m = line.match(/^multi_agent_v2\s*=\s*(.+)$/);
+      if (m) record(parseMultiAgentV2Value(m[1]));
+    } else if (table === 'features.multi_agent_v2') {
+      const m = line.match(/^enabled\s*=\s*(.+)$/);
+      if (m) record({ valid: parseTomlBoolean(m[1]) !== null, enabled: parseTomlBoolean(m[1]) === true });
+    }
+  }
+
+  enabled = seen && !ambiguous && enabled;
+  return {
+    dispatch_mode: enabled ? 'v2-task-name' : 'v1-thread-id',
+    multi_agent_v2_enabled: enabled,
+  };
+}
+
+// `[features] multi_agent = <bool>` — the base (v1) tool-exposure flag, distinct from
+// multi_agent_v2 (already parsed by detectCodexDispatchMode above). Same strict
+// first-match/ambiguous-fails-closed strategy: a repeated key or malformed boolean
+// short-circuits to false rather than guessing.
+function parseFeaturesMultiAgentEnabled(configContent) {
+  const lines = String(configContent || '').split(/\r?\n/);
+  let table = '';
+  let seen = false;
+  let enabled = false;
+  let ambiguous = false;
+
+  for (const rawLine of lines) {
+    const line = stripTomlComment(rawLine).trim();
+    if (!line) continue;
+
+    const tableName = parseTomlTableName(line);
+    if (tableName !== null) {
+      table = tableName;
+      continue;
+    }
+
+    if (table === 'features') {
+      const m = line.match(/^multi_agent\s*=\s*(.+)$/);
+      if (m) {
+        const b = parseTomlBoolean(m[1]);
+        if (b === null || seen) {
+          ambiguous = true;
+          enabled = false;
+        } else {
+          seen = true;
+          enabled = b;
+        }
+      }
+    }
+  }
+
+  return seen && !ambiguous && enabled;
+}
+
+// Root-level `model_reasoning_effort` (NOT the per-profile agents/*.toml field of the
+// same name) — the effort setting that gates MultiAgentMode. TOML root keys must
+// precede the first [table] header, so scanning the text up to the first top-level
+// table line is the correct (and only valid) place a user- or installer-owned root
+// key can live — the same `top` convention used by validateProfileText.
+function parseTopLevelModelReasoningEffort(configContent) {
+  const text = String(configContent || '');
+  const firstTableIdx = text.search(/^\[/m);
+  const top = firstTableIdx === -1 ? text : text.slice(0, firstTableIdx);
+  const m = top.match(/^model_reasoning_effort\s*=\s*"([^"]*)"\s*$/m);
+  return m ? m[1] : null;
+}
+
+// Exact remediation text for a non-proactive posture; null when nothing to remediate.
+function dispatchPostureRemediation(posture) {
+  if (posture === 'proactive') return null;
+  if (posture === 'none') {
+    return 'Codex sub-agent spawn tools are not exposed ([features] multi_agent / multi_agent_v2 absent-or-false). '
+      + 'Enable them, then set model_reasoning_effort = "ultra" in ~/.codex/config.toml (or per-session: '
+      + 'codex -c model_reasoning_effort=ultra), or explicitly ask for sub-agents/delegation/parallel work in-session.';
+  }
+  return 'Codex will refuse sub-agent spawns unless explicitly requested this session (multi_agent_mode: explicitRequestOnly). '
+    + 'Set model_reasoning_effort = "ultra" in ~/.codex/config.toml (or per-session: codex -c model_reasoning_effort=ultra) '
+    + 'for proactive delegation, or explicitly ask for sub-agents/delegation/parallel work in-session.';
+}
+
+function deriveDispatchPosture(configContent) {
+  const dispatchMode = detectCodexDispatchMode(configContent);
+  const multiAgentEnabled = parseFeaturesMultiAgentEnabled(configContent);
+  const featuresEnabled = multiAgentEnabled || dispatchMode.multi_agent_v2_enabled;
+  const effort = parseTopLevelModelReasoningEffort(configContent);
+  const posture = !featuresEnabled ? 'none' : (effort === 'ultra' ? 'proactive' : 'explicitRequestOnly');
+  return {
+    dispatch_posture: posture,
+    model_reasoning_effort: effort,
+    multi_agent_enabled: multiAgentEnabled,
+    dispatch_posture_warning: dispatchPostureRemediation(posture),
+  };
+}
+
 function main() {
 
   assert(fs.existsSync(sourceAgentsDir), `missing source agents directory: ${sourceAgentsDir}`);
@@ -776,6 +998,24 @@ function main() {
     console.log(`Kaola-Workflow agent profiles: unmanaged extra profiles left in place: ${extraUnmanaged.join(', ')}`);
   }
   console.log(`Kaola-Workflow agent profiles: manifest written at ${path.relative(projectRoot, manifestPath(targetAgentsDir))}`);
+
+  // #598 AC1: REPORT the effective dispatch posture. ATTESTATION-STYLE / NON-FATAL — this NEVER
+  // changes the exit code (an otherwise-good install must never be reddened by this report). Read
+  // back the config.toml we just wrote/updated so the reported posture reflects post-install reality;
+  // the installer never WRITES model_reasoning_effort (a user-owned cost/latency choice) — it only
+  // reports the resulting posture and, when non-proactive, the exact remediation. Printed BEFORE
+  // the final `status: ok` sentinel — an existing invariant (#332 AC3) is that installer stdout
+  // ENDS with `status: ok`; posture is additive, never appended after that final line.
+  const dispatchPosture = deriveDispatchPosture(fs.existsSync(targetConfig) ? read(targetConfig) : '');
+  const effortDisplay = dispatchPosture.model_reasoning_effort
+    ? ` (model_reasoning_effort="${dispatchPosture.model_reasoning_effort}")`
+    : ' (model_reasoning_effort unset)';
+  console.log(`Kaola-Workflow Codex dispatch posture: ${dispatchPosture.dispatch_posture}${effortDisplay}`);
+  if (dispatchPosture.dispatch_posture_warning) {
+    console.log(`Kaola-Workflow Codex dispatch posture: ${dispatchPosture.dispatch_posture_warning}`);
+  }
+  console.log(`Kaola-Workflow Codex dispatch posture: ${DISPATCH_POSTURE_VERSION_NOTE}`);
+
   console.log('status: ok');
 }
 
@@ -801,4 +1041,11 @@ module.exports = {
   RETIRED_PROFILE_FILES,
   MANIFEST_BASENAME,
   EFFORT_VALUES,
+  // #598: effort-gated dispatch-posture derivation (pure; exported for unit tests).
+  detectCodexDispatchMode,
+  deriveDispatchPosture,
+  parseFeaturesMultiAgentEnabled,
+  parseTopLevelModelReasoningEffort,
+  dispatchPostureRemediation,
+  DISPATCH_POSTURE_VERSION_NOTE,
 };

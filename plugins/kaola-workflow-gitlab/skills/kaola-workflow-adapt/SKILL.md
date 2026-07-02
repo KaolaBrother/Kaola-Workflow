@@ -137,8 +137,10 @@ When the issue is a **question without a settled answer** ("which approach?", "i
 The adaptive path opens by delegating to ONE subagent. **You MUST delegate the starting contract
 and the DAG authoring to the `workflow-planner` agent role** (Opus) — do NOT run the claim or author
 the `## Nodes` table inline in this session. In Codex, delegate to the `workflow-planner` agent role when its
-profile is present at `.codex/agents/kaola-workflow/`. Only if the agent tool is genuinely
-unavailable (`local-fallback-tool-unavailable`) may this session run the claim + author inline, and that fallback MUST be recorded as `local-fallback-tool-unavailable` in the compliance ledger. The
+profile is present at EITHER the project-local `.codex/agents/kaola-workflow/` path OR the global
+`~/.codex/agents/kaola-workflow/` path (the `--global` install target) — a global install satisfies
+delegation exactly as a project-local one does. Only if the agent tool is genuinely
+unavailable at BOTH paths (`local-fallback-tool-unavailable`) may this session run the claim + author inline, and that fallback MUST be recorded as `local-fallback-tool-unavailable` in the compliance ledger. The
 planner never freezes, judges risk, asks the user, or dispatches further — it returns control here.
 
 The router enters with the agent-selected target issue for fresh adaptive work; the planner RETURNS

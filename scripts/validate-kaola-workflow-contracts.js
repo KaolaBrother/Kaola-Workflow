@@ -110,6 +110,9 @@ assertIncludes(nextSkill210, 'Codex subagent delegation is the default.');
 assertIncludes(nextSkill210, 'The default `delegation_policy` is `delegate`');
 assertIncludes(nextSkill210, 'KAOLA_DELEGATION_POLICY=delegate');
 assertIncludes(nextSkill210, '.codex/agents/kaola-workflow/');
+// #598 AC3: the delegation probe must also accept a global profile install — keep the
+// project-local needle above GREEN (add, never remove) and pin the global path alongside it.
+assertIncludes(nextSkill210, '~/.codex/agents/kaola-workflow/');
 assertIncludes(nextSkill210, 'record `local-fallback-tool-unavailable` with a non-empty Evidence value');
 assertIncludes(nextSkill210, 'only when the user explicitly');
 assertIncludes(nextSkill210, 'default `delegation_policy` to `delegate` without prompting');
@@ -541,6 +544,10 @@ assertConcept(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'adaptive au
 // advisory-prose skill is the exact bug that ran claim + authoring inline in the main session.
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'workflow-planner');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, 'MUST delegate');
+// #598 AC3: the adapt SKILL's delegation probe must accept a global profile install too — keep
+// the project-local needle above GREEN (add, never remove) and pin the global path alongside it.
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, '.codex/agents/kaola-workflow/');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, '~/.codex/agents/kaola-workflow/');
 // #255: the checklist-backed handoff contract must stay enforced — the orchestrator reads the
 // planner's handoff packet (it no longer runs a contractor classify/freeze chain). Lock the two
 // terminal handoff statuses so the design cannot silently drift back to a pre-handoff approval gate.
@@ -732,6 +739,20 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'reasoni
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'fresh child-session effort proof');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'codex_effort_override_unavailable');
 assertNotIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '`sonnet`/absent');
+
+// #598 AC4: gate-role degradation must surface loudly when dispatch is unavailable — pin the
+// run-start notice + the consent-halt escalation on both the codex SKILL and the root Claude
+// command mirror (this validator also owns the root commands/ surface for the github edition;
+// see the AGENTS.md redirect + CLAUDE.md template checks above for precedent).
+for (const planRunSurface of [
+  `${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`,
+  'commands/kaola-workflow-plan-run.md'
+]) {
+  assertIncludes(planRunSurface, '## Gate-Role Degradation Notice');
+  assertIncludes(planRunSurface, 'an inline gate reviewing its own writer-context is no gate');
+  assertIncludes(planRunSurface, 'self-issued `verdict: pass`');
+  assertIncludes(planRunSurface, 'write-halt --reason consent');
+}
 
 // #334: the non-delegable main-session-gate role token + its G3 freeze gate + authoring/dispatch
 // prose, pinned in the codex copies (schema, validator, plan-run SKILL, planner TOML).
