@@ -185,9 +185,25 @@ attribution-blind union barrier).
   shared-infra, or coarse frontier.
 
 <!-- CARD: speculative-open -->
-On `open-next` → `gate_not_complete` with a speculative gate (policy `speculative_open_policy:
-consent` in plan `## Meta`): `docs/plan-run-cards/speculative-open.md`
-(covers `open-ready --speculative-consent`, `discard-speculative`, gate verdict:fail rollback)
+On `open-next` → `gate_not_complete` with a speculative gate (`speculative_open_policy: auto` — the
+freeze-time default — or `consent`, in plan `## Meta`): `docs/plan-run-cards/speculative-open.md`
+(covers `open-ready`'s speculative activation — automatic at `auto`, `--speculative-consent` at
+`consent` — `discard-speculative`, gate verdict:fail rollback)
+
+**Speculative gate-overlap is default-on (`speculative_open_policy: auto`) under the same structural
+net as the consent tier.** A node whose only unsatisfied predecessor is a still-open gate opens the
+moment `open-ready` runs — no per-run consent, no `decision:ask` capture, `--speculative-consent`
+accepted as a no-op. Every write-speculation safety condition holds IDENTICALLY at `auto`: exact-path
+disjointness against every live writer, no PROTECTED file, exact resolvability, not the plan's unique
+sink, leg capability, fan-out caps, and the close fence (`speculativeCloseGuard` — a speculative node
+can never reach `complete` before its gate does). A failing gate still discards the bet (read:
+KEEP-or-discard operator review; write: unconditional leg teardown, parent untouched), and every
+discard now records telemetry (node id, role, gate) in the run's provenance log — the cost of a bet
+that did not pay off is observable, never silent. **Serial waiting for the gate to close is now the
+DEGRADED path** — run `open-ready` to admit the speculative frontier rather than idling on
+`open-next`; plain serial waiting is the ONLY behavior at `speculative_open_policy: off`. The per-run
+consent ceremony REMAINS authorable: set `speculative_open_policy: consent` to require the explicit
+`--speculative-consent` grant before a speculative node opens.
 - **Write-leg dispatch discipline.** Isolation is **discipline-dependent, not transparent** —
   the Agent tool has no cwd parameter and a provisioned `.kw/legs/<project>/<node>` leg does NOT auto-redirect
   a leg agent's edits. Dispatch each leg with its member's **`dispatch.leg_path`** (and `dispatch.leg_branch`)

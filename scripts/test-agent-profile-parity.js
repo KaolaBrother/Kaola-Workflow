@@ -28,10 +28,17 @@ const FEATURE_TOKENS = [
   // agents/workflow-planner.md escalate-routing paragraph, enforces all three .toml twins carry it.
   'target_set_indeterminate',
   // #513 (n1-impl-513-planner-heuristic): speculative-open-eligible shaping rubric — distinctive
-  // substring of the new authoring paragraph (set speculative_open_policy: consent for a read-only
-  // node behind a high-probability-pass gate). Present in agents/workflow-planner.md, so this
-  // enforces all three .toml twins carry the rubric (md↔toml parity for the #439 authoring lever).
+  // substring of the authoring paragraph (shape a node whose sole unsatisfied predecessor is a
+  // high-probability-pass gate — now read OR write, #596/#597). Present in
+  // agents/workflow-planner.md, so this enforces all three .toml twins carry the rubric (md↔toml
+  // parity for the #439 authoring lever).
   'unsatisfied predecessor is a high-probability-pass gate',
+  // #596/#597 (n3-rubric): write-speculation eligibility — a leg-contained write node whose declared
+  // set is exactly resolvable, PROTECTED-free, and not the sink can now speculate too; on a gate
+  // fail its leg/evidence are torn down unconditionally (the keep-or-discard asymmetry vs. reads).
+  // Present in agents/workflow-planner.md, so this enforces all three .toml twins carry the
+  // write-eligibility discipline (md↔toml parity for the #596-class authoring lever).
+  'DISCARD-ONLY',
   // #547 (D-547-01): the planner's "record the validation command once" authoring lever — present in
   // agents/workflow-planner.md, so this enforces all three .toml twins carry the validation_command /
   // validation_test_consumes ## Meta guidance (md↔toml parity for the Stage-2 record-once discipline).
