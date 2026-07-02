@@ -1011,6 +1011,35 @@ function testCodexPreflight266() {
         assertDispatchModeForConfig('[notice]\nsuppress_unstable_features_warning = true\n\n' + origConfig, 'v1-thread-id', '#584 warning suppression only', false);
         assertDispatchModeForConfig('multi_agent_v2 = true\n\n' + origConfig, 'v1-thread-id', '#584 top-level key ignored', false);
         assertDispatchModeForConfig(configWithFeatureLine('multi_agent_v2 = { hide_spawn_agent_metadata = false }'), 'v1-thread-id', '#584 inline object missing enabled fails closed', false);
+
+        // #598 AC2: effort-gated MultiAgentMode dispatch-POSTURE (distinct from dispatch_mode
+        // above — posture reflects whether the runtime will REFUSE a spawn, not just whether the
+        // tools are exposed). ATTESTATION-STYLE / NON-FATAL: every case must still exit 0.
+        function assertDispatchPostureForConfig(body, expectedPosture, label) {
+          fs.writeFileSync(configPath, body);
+          const result = runScript(preflightScript,
+            ['--project-root', root266, '--no-autofix', '--json'], h266);
+          assert(result.status === 0,
+            label + ': dispatch-posture WARN must never fail preflight, got ' + result.status + '\n' + result.stdout);
+          const json = JSON.parse(result.stdout);
+          assert(json.dispatch_posture === expectedPosture,
+            label + ': expected dispatch_posture ' + expectedPosture + ', got ' + json.dispatch_posture);
+          assert((json.dispatch_posture_warning === null) === (expectedPosture === 'proactive'),
+            label + ': dispatch_posture_warning must be null iff proactive, got ' + JSON.stringify(json.dispatch_posture_warning));
+        }
+        assertDispatchPostureForConfig(origConfig, 'explicitRequestOnly', '#598 base fixture (multi_agent=true, no effort)');
+        assertDispatchPostureForConfig(origConfig.replace('multi_agent = true', 'multi_agent = false'), 'none',
+          '#598 multi_agent=false, no multi_agent_v2 -> none');
+        assertDispatchPostureForConfig('model_reasoning_effort = "ultra"\n\n' + origConfig, 'proactive',
+          '#598 effort=ultra with multi_agent=true -> proactive');
+        assertDispatchPostureForConfig('model_reasoning_effort = "xhigh"\n\n' + origConfig, 'explicitRequestOnly',
+          '#598 effort=xhigh (below ultra) stays explicitRequestOnly');
+        assertDispatchPostureForConfig(configWithFeatureLine('multi_agent_v2 = true'), 'explicitRequestOnly',
+          '#598 multi_agent_v2=true, no effort -> explicitRequestOnly');
+        assertDispatchPostureForConfig(
+          origConfig.replace('multi_agent = true', 'multi_agent = true\nmodel_reasoning_effort = "ultra"'),
+          'explicitRequestOnly', '#598 effort AFTER the first [table] is not a valid TOML root key -> ignored');
+
         fs.writeFileSync(configPath, origConfig);
         // Replace [agents.workflow-planner] inside the block — makes that role missing from block
         const staleConfig = origConfig.replace('[agents.workflow-planner]', '[agents.STALE-workflow-planner]');
@@ -1092,6 +1121,54 @@ function testCodexPreflight266() {
   } finally {
     fs.rmSync(root266, { recursive: true, force: true });
     fs.rmSync(emptyHome266, { recursive: true, force: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// #598 AC1: installer dispatch-posture REPORT. ATTESTATION-STYLE / NON-FATAL — the
+// installer must REPORT the effective effort-gated MultiAgentMode posture and, when
+// non-proactive, the exact remediation, and this must NEVER change the install's own
+// exit code (an otherwise-good install must never be reddened by this report).
+// ---------------------------------------------------------------------------
+function testCodexDispatchPosture598() {
+  const postureHome = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-598-posture-home-'));
+  const postureProj = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-598-posture-proj-'));
+  try {
+    const fresh = runInstallProfiles(postureProj, { HOME: postureHome });
+    assert(/status: ok/.test(fresh.stdout), '#598 AC1: existing "status: ok" output must be unchanged: ' + fresh.stdout);
+    assert(/Kaola-Workflow Codex dispatch posture: explicitRequestOnly/.test(fresh.stdout),
+      '#598 AC1: fresh install (multi_agent=true, no effort configured) must report explicitRequestOnly: ' + fresh.stdout);
+    assert(/model_reasoning_effort = "ultra"/.test(fresh.stdout),
+      '#598 AC1: non-proactive posture must print the exact remediation naming model_reasoning_effort="ultra": ' + fresh.stdout);
+    assert(/codex -c model_reasoning_effort=ultra/.test(fresh.stdout),
+      '#598 AC1: remediation must also name the per-session codex -c override: ' + fresh.stdout);
+    assert(/0\.142\.5/.test(fresh.stdout), '#598 AC1/AC2: report must carry the version-guard note (0.142.5): ' + fresh.stdout);
+
+    // Flip to effort="ultra" ahead of the managed block, re-install (idempotent update) —
+    // the posture must flip to proactive and the non-proactive remediation must disappear.
+    const postureConfigPath = path.join(postureProj, '.codex', 'config.toml');
+    const beforeUltra = fs.readFileSync(postureConfigPath, 'utf8');
+    fs.writeFileSync(postureConfigPath, 'model_reasoning_effort = "ultra"\n\n' + beforeUltra);
+    const reinstalled = runInstallProfiles(postureProj, { HOME: postureHome });
+    assert(/Kaola-Workflow Codex dispatch posture: proactive/.test(reinstalled.stdout),
+      '#598 AC1: effort=ultra must report proactive posture: ' + reinstalled.stdout);
+    assert(!/refuse sub-agent spawns/.test(reinstalled.stdout),
+      '#598 AC1: a proactive posture must NOT print the non-proactive remediation: ' + reinstalled.stdout);
+
+    // Pure-function unit coverage on the exported deriveDispatchPosture (same module the
+    // installer's REPORT step calls).
+    const mod = require(installProfilesScript);
+    const none = mod.deriveDispatchPosture('[features]\nmulti_agent = false\n');
+    assert(none.dispatch_posture === 'none', '#598: multi_agent=false with no v2 must derive none, got ' + JSON.stringify(none));
+    assert(none.dispatch_posture_warning !== null, '#598: a non-proactive posture must carry a remediation string');
+    const proactive = mod.deriveDispatchPosture('model_reasoning_effort = "ultra"\n\n[features]\nmulti_agent = true\n');
+    assert(proactive.dispatch_posture === 'proactive', '#598: effort=ultra + multi_agent=true must derive proactive, got ' + JSON.stringify(proactive));
+    assert(proactive.dispatch_posture_warning === null, '#598: a proactive posture must carry NO remediation');
+
+    console.log('testCodexDispatchPosture598 (#598 AC1 installer report): PASSED');
+  } finally {
+    fs.rmSync(postureProj, { recursive: true, force: true });
+    fs.rmSync(postureHome, { recursive: true, force: true });
   }
 }
 
@@ -1749,6 +1826,7 @@ function main() {
     testCodexLedgerHeaderInvalid425();
     testCodexGeneratedPortSplit431();
     testCodexPreflight266();
+    testCodexDispatchPosture598();
     testCodexPreflight571();
     testCodexPreflight332();
     testCodexTaskMirror266();
