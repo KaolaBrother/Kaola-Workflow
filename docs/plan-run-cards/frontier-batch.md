@@ -67,19 +67,25 @@ crash-safe transaction:
 - **Read-only frontier** (`code-explorer`, `knowledge-lookup`, `adversarial-verifier`, …): fans
   out up to `KAOLA_FANOUT_CAP_READONLY` (default 8) minus the count already live, further capped
   by `--max`.
-- **Write frontier, ≥2 planner-proven-disjoint (`parallel_safe`) siblings**: co-opens as a **lane
-  group** BY DEFAULT — no operator toggle — up to `KAOLA_FANOUT_CAP` (default 4), further capped
-  by `--max`. Each member is provisioned an isolated `.kw/legs/<project>/<node-id>` worktree
-  (containment, not construction — the Agent tool has no cwd parameter, so dispatch each member
-  with its OWN `dispatch.leg_path` / `dispatch.leg_branch` (below), `cd "<dispatch.leg_path>" &&`
-  on every Bash call). `KAOLA_PARALLEL_WRITES=0` forces the byte-identical single-write serial
-  open — no lane group, no legs, and `dispatch.leg_path`/`dispatch.leg_branch` stay absent.
-- **A single write node** (no lane group formed — an overlapping/uncertain frontier, the
+- **Write frontier, ≥2 exact-file-disjoint siblings** — planner-proven-disjoint (`parallel_safe`)
+  in different top-level areas, a `shared-infra` frontier in the same infra area, or a `coarse`
+  frontier in the same non-shared top-level area (e.g. two cross-edition antichains both under
+  `plugins/`) — co-opens as a **lane group** BY DEFAULT — no operator toggle — under the retained
+  net (a post-dominating `code-reviewer` gate over the legs, no PROTECTED file in either set), up
+  to `KAOLA_FANOUT_CAP` (default 4), further capped by `--max`. Each member is provisioned an
+  isolated `.kw/legs/<project>/<node-id>` worktree (containment, not construction — the Agent tool
+  has no cwd parameter, so dispatch each member with its OWN `dispatch.leg_path` /
+  `dispatch.leg_branch` (below), `cd "<dispatch.leg_path>" &&` on every Bash call).
+  `KAOLA_PARALLEL_WRITES=0` forces the byte-identical single-write serial open — no lane group, no
+  legs, and `dispatch.leg_path`/`dispatch.leg_branch` stay absent.
+- **A single write node** (no lane group formed — a genuine exact-path overlap, a `coarse` pair
+  carrying a non-exactly-resolvable directory/glob entry, the retained net not holding, the
   `KAOLA_PARALLEL_WRITES=0` opt-out, or a host without worktree support): opens alone; the running
   set must be empty first — a write node never runs concurrently with anything else.
-- **Overlapping (non-disjoint, `write_overlap_policy: coarse`) writes**: require
-  `--write-overlap-consent` to co-open at all; without it the frontier serial-degrades to one
-  write node at a time.
+- **Genuinely-overlapping (`exact` — same path, or a case-collision) writes**: NEVER co-open at
+  this seam — the frontier serial-degrades to one write node at a time regardless of any flag.
+  `--write-overlap-consent` / `write_overlap_policy` are parsed for frozen-plan back-compat but are
+  VESTIGIAL — they neither enable nor block any co-open decision here.
 - **Speculative read fallback** (`speculative_open_policy: consent` in `## Meta`): when the normal
   frontier is empty because only an open gate blocks progress, `--speculative-consent` fans out
   the gate's speculative-eligible descendants, each stamped `speculative: true` in
@@ -208,8 +214,8 @@ remainder on the next call as members close.
 | Condition | Approach |
 |---|---|
 | Read-only frontier | Fan out up to `FANOUT_CAP_READONLY` — the default, no toggle |
-| Disjoint (`parallel_safe`) write frontier, worktree-capable host | Co-open as an isolated-leg lane group — the DEFAULT (`open-ready`, no consent flag needed) |
-| Overlapping / non-disjoint write frontier | Serial degrade, UNLESS `--write-overlap-consent` + `write_overlap_policy: coarse` |
+| Disjoint (`parallel_safe`), shared-infra, or coarse (same non-shared top-level area) write frontier, worktree-capable host | Co-open as an isolated-leg lane group — the DEFAULT (`open-ready`, no consent flag needed) under the retained net (post-dominating gate + no PROTECTED file) |
+| Genuinely-overlapping (`exact` — same path or a case-collision) write frontier, or a coarse pair with a non-exactly-resolvable directory/glob entry | Serial degrade — no flag or consent bypasses it |
 | Host without worktree support, or `KAOLA_PARALLEL_WRITES=0` opt-out | Serial degrade — one write node at a time via `open-ready` |
 | Speculative read fallback | Only with `--speculative-consent` AND `speculative_open_policy: consent` in `## Meta` |
 

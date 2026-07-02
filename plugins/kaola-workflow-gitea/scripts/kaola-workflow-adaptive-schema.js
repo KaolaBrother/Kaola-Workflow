@@ -789,7 +789,17 @@ function acquireProjectLock(lockPath, opts) {
     _heldSchedulerLock = lockPath;
     return { ok: true, release: () => releaseProjectLock(lockPath) };
   } catch (err) {
-    if (fd !== undefined) { try { fs.closeSync(fd); } catch (_) {} }
+    if (fd !== undefined) {
+      // openSync('wx') already claimed the file (fd is only reset to undefined after the full
+      // write+fsync+close sequence succeeds) — we provably own it. A failure anywhere in between
+      // (payload write, fsync, or close) would otherwise orphan an empty/partial lockfile: the
+      // held-lock marker is never set, so neither release() nor the exit hook would ever clean it up.
+      // Best-effort unlink OUR OWN just-created file before rethrowing — this can only ever remove
+      // the file THIS call just created via 'wx', never another process's lock.
+      try { fs.closeSync(fd); } catch (_) {}
+      try { fs.unlinkSync(lockPath); } catch (_) {}
+      throw err;
+    }
     if (!(err && err.code === 'EEXIST')) throw err;
   }
 

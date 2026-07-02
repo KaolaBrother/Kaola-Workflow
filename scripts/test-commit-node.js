@@ -556,10 +556,12 @@ function assert(condition, message) {
   }
 
   // =========================================================================
-  // #463 (D-419 write-overlap): the gated PREVENT→DETECT relaxation at --parallel-safe (the original
-  // #463 AC: a coarse-area-overlapping but EXACT-FILE-DISJOINT write frontier is no longer refused when
-  // write_overlap_policy authorizes it + per-run consent + a post-dominating code-reviewer gate). The
-  // safety FLOOR holds at every off/no-consent/no-gate/exact/PROTECTED case (byte-identical to today).
+  // #463 / #593 (D-419 write-overlap): the PREVENT→DETECT relaxation at --parallel-safe. #463 landed it
+  // policy+consent-gated; #593 made the coarse class (coarse-area-overlapping but EXACT-FILE-DISJOINT)
+  // relax BY DEFAULT under the retained net (a post-dominating code-reviewer gate + no PROTECTED file),
+  // with write_overlap_policy / --write-overlap-consent kept parsed but vestigial. The safety FLOOR
+  // holds at every no-gate/exact/PROTECTED case (and coarse pairs with a non-resolvable directory/glob
+  // entry keep the refusal — pinned in test-adaptive-node.js #593-V-AC4).
   // crates/a/x.rs vs crates/b/y.rs share the coarse area "crates" but are exact-file-disjoint.
   // =========================================================================
   const COARSE_A = 'crates/a/x.rs', COARSE_B = 'crates/b/y.rs';
@@ -571,19 +573,36 @@ function assert(condition, message) {
     assert(Array.isArray(r.relaxed) && r.relaxed.some(x => x.kind === 'coarse'), 'T463-AC: surfaces relaxed[] with kind coarse, got ' + JSON.stringify(r.relaxed));
     cleanup(repoRoot);
   }
-  // T463-FLOOR-consent: SAME plan, NO --write-overlap-consent → refuse (consent is mandatory).
+  // T463-FLOOR-consent (re-pinned for the coarse default-relax): SAME plan, NO --write-overlap-consent →
+  // ok. Coarse (exact-file-disjoint, non-shared) now relaxes BY DEFAULT under the retained net (the
+  // post-dominating gate + no PROTECTED file) — consent is VESTIGIAL, not mandatory. This pins the NEW
+  // floor: the downgrade is the RELAXATION path (relaxed[kind:'coarse'] present, overlapping empty), not
+  // a green short-circuit and not a silent verdict change. The NON-relaxable floors stay pinned by the
+  // sibling tests (-gate / -docsgate / -exact / -protected).
   {
     const { repoRoot, planPath } = makeGroupRepo({ aSet: COARSE_A, bSet: COARSE_B, policy: 'disjoint' });
     const r = runValidator(repoRoot, [planPath, '--parallel-safe', '--nodes', 'A,B', '--json']);
-    assert(r.result === 'refuse' && r.reason === 'overlapping_write_sets', 'T463-FLOOR-consent: no consent → refuse, got ' + JSON.stringify(r));
+    assert(r.result === 'ok', 'T463-FLOOR-consent: coarse-disjoint relaxes WITHOUT consent (consent vestigial under the net), got ' + JSON.stringify(r));
+    assert(Array.isArray(r.relaxed) && r.relaxed.some(x => x.kind === 'coarse'), 'T463-FLOOR-consent: relaxed[] carries kind coarse (the relaxation path, not a short-circuit), got ' + JSON.stringify(r.relaxed));
+    assert(Array.isArray(r.overlapping) && r.overlapping.length === 0, 'T463-FLOOR-consent: overlapping empty (downgraded), got ' + JSON.stringify(r.overlapping));
     cleanup(repoRoot);
   }
-  // T463-FLOOR-off (default-off byte-identity): SAME plan WITHOUT write_overlap_policy + consent → refuse.
+  // T463-FLOOR-off (re-pinned for the coarse default-relax): SAME plan WITHOUT write_overlap_policy →
+  // ok, with AND without consent, and IDENTICAL emissions across no-policy × consent/no-consent
+  // (write_overlap_policy + --write-overlap-consent are jointly vestigial at this seam — neither enables
+  // nor blocks the coarse relaxation). Pins that the policy/consent knobs stay PARSED (frozen-plan
+  // back-compat: no refuse, no emission change) while carrying zero decision weight.
   {
     const { repoRoot, planPath } = makeGroupRepo({ aSet: COARSE_A, bSet: COARSE_B }); // no policy ⇒ off
-    const r = runValidator(repoRoot, [planPath, '--parallel-safe', '--nodes', 'A,B', '--write-overlap-consent', '--json']);
-    assert(r.result === 'refuse' && r.reason === 'overlapping_write_sets', 'T463-FLOOR-off: policy:off refuses even with consent (byte-identity), got ' + JSON.stringify(r));
-    assert(!r.relaxed, 'T463-FLOOR-off: nothing relaxed at off');
+    const rConsent = runValidator(repoRoot, [planPath, '--parallel-safe', '--nodes', 'A,B', '--write-overlap-consent', '--json']);
+    assert(rConsent.result === 'ok', 'T463-FLOOR-off: no-policy + consent relaxes (default-relax under the net), got ' + JSON.stringify(rConsent));
+    assert(Array.isArray(rConsent.relaxed) && rConsent.relaxed.some(x => x.kind === 'coarse'), 'T463-FLOOR-off: relaxed[] carries kind coarse, got ' + JSON.stringify(rConsent.relaxed));
+    const rBare = runValidator(repoRoot, [planPath, '--parallel-safe', '--nodes', 'A,B', '--json']);
+    assert(rBare.result === 'ok' && Array.isArray(rBare.relaxed) && rBare.relaxed.some(x => x.kind === 'coarse'),
+      'T463-FLOOR-off: no-policy + NO consent relaxes identically (consent vestigial), got ' + JSON.stringify(rBare));
+    // Vestigial invariant: identical decision payload with/without consent (drop exitCode, compare emission).
+    const strip = (o) => { const c = { ...o }; delete c.exitCode; return JSON.stringify(c); };
+    assert(strip(rConsent) === strip(rBare), 'T463-FLOOR-off: consent flips NOTHING in the emission (vestigial), got with=' + strip(rConsent) + ' without=' + strip(rBare));
     cleanup(repoRoot);
   }
   // T463-FLOOR-gate: coarse-disjoint + policy + consent but NO code-reviewer gate → refuse.

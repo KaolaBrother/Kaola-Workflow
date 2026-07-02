@@ -130,10 +130,14 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   whole-frontier batch's responsibilities, including default-on disjoint write co-open
   (D-542-01), well before the retirement. `next-action.js` still carries `readyPending`/`active`;
   `readyPending.length >= 2` is the signal the plan-run skeleton uses to route to `open-ready`
-  instead of the single-node `open-next` path. `kaola-workflow-adaptive-node.js`'s guard
-  prologue still recognizes a residual `active-batch.json` on disk (a `batch_active` refusal)
-  purely as backward-compat crash detection for a pre-retirement checkout — nothing writes that
-  file anymore. History at `docs/investigations/2026-06-07-parallel-ready-set-execution-design.md`.
+  instead of the single-node `open-next` path. D-586-01 deliberately kept a `batch_active`
+  backward-compat crash detection over a residual `active-batch.json` on disk (a leftover from a
+  pre-retirement checkout), flagging its removal as a future call once the diagnostic's value no
+  longer outweighed its maintenance cost. `kaola-workflow-adaptive-node.js`'s guard prologue no
+  longer carries that detection: it was removed in full (D-594-01), along with the sibling
+  `active_batch_exists` plan-repair-reopen arm — nothing writes `active-batch.json` anymore, so a
+  stray pre-retirement file is now silently inert rather than refused. History at
+  `docs/investigations/2026-06-07-parallel-ready-set-execution-design.md`.
 
   **Per-node running-set scheduler — parallelism v2 (issue #377).** The now-retired #281 batch
   machine advanced **one whole frontier at a time** (`top-up` opened only same-frontier
@@ -155,10 +159,12 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   open **alone** (the serial fallback). Forcing every write frontier serial — the byte-identical
   pre-parallel-write behavior — is now the explicit opt-out path (`KAOLA_PARALLEL_WRITES=0`), not
   the default.
-  The **AC#5 / #293 legality re-keys to the running set**: `crossCheckStatus` and `orient` accept
-  `in_progress` rows matching the running-set node set (`valid_running_set`) — the residual
-  `active-batch.json` check is the backward-compat detection noted above, not a live alternate
-  path — and route a crashed `opening` running set to `reconcile-running-set`
+  The **AC#5 / #293 legality re-keys to the running set**: `orient` accepts `in_progress` rows
+  matching the running-set node set (`valid_running_set`) — the residual `active-batch.json` read
+  is `orient`'s own read-only legality reconstruction (deliberately KEPT at #594 as a scope
+  boundary distinct from the removed `batch_active` guard above; always `null` now that nothing
+  produces the file), not a live alternate coordination path — and route a crashed `opening`
+  running set to `reconcile-running-set`
   (`running_set_opening_incomplete`, never an orphan); `orient` reconstructs the live set from the
   manifest on every resume. Wall-clock overlap is claimed only via `node-timings.jsonl` (#373) on
   a real run — the scripts never spawn agents, so they never overclaim concurrency.
@@ -200,9 +206,11 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   The unification is **by SUBSUMPTION, not deletion**. The runtime code paths are preserved
   byte-for-byte; what changes is the conceptual model and documentation. The hard
   byte-identity invariant ([INV-2]) is: with `KAOLA_LANE_CONTAINMENT` off + no
-  `running-set.json` + no active-batch + ≤ 1 `in_progress` row, every guard-prologue layer
-  is vacuously-pass and the serial path is byte-identical to pre-#383 behavior. Any refactor
-  that makes `open-next` begin writing a `running-set.json` violates [INV-2] and is rejected.
+  `running-set.json` + ≤ 1 `in_progress` row, every guard-prologue layer is vacuously-pass and
+  the serial path is byte-identical to pre-#383 behavior. (The prior condition also named "no
+  active-batch"; #594 removed the `batch_active` mutual-exclusion arm entirely, so it is no
+  longer a coordination surface any guard-prologue layer checks.) Any refactor that makes
+  `open-next` begin writing a `running-set.json` violates [INV-2] and is rejected.
 
   **`max_concurrent` in `running-set.json`.** `open-ready` writes an optional `max_concurrent`
   integer into the manifest at open time:
@@ -217,11 +225,12 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   (`min(KAOLA_FANOUT_CAP_READONLY, --max)`) is always re-derived at the next `open-ready`
   call and overwrites the manifest ([INV-3]).
 
-  **Guard refusal taxonomy is three-armed (not collapsed).** The emit-envelope reason
+  **Guard refusal taxonomy is two-armed (not collapsed).** The emit-envelope reason
   contract (#406) requires callers to classify failures structurally by stable `reason` code.
-  `serial_node_live`, `scheduler_active`, and `batch_active` carry different repair pointers
-  and MUST NOT be merged into fewer arms, even though the kernel model unifies serial and
-  scheduler conceptually.
+  `serial_node_live` and `scheduler_active` carry different repair pointers and MUST NOT be
+  merged into one arm, even though the kernel model unifies serial and scheduler conceptually.
+  (A third arm, `batch_active`, existed for the retired parallel-batch mutual-exclusion surface;
+  #594 removed it in full once nothing could produce the `active-batch.json` it guarded.)
 
   **Canonical spec: `docs/decisions/D-419-01.md`** (Part 1).
 
@@ -233,9 +242,13 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   unconditionally enforces `write_node_exclusive`; instead it calls `tryFormLaneGroup`
   (`adaptive-node.js` L2522) to attempt a co-open of the entire ≥2 disjoint write frontier as a
   **lane group**. The formation is gated on a `--parallel-safe` disjointness check
-  (plan-validator.js L1627) over the frontier node ids; an overlap result degrades immediately to
-  single serial write (only a genuinely-overlapping frontier stays consent-gated via
-  `--write-overlap-consent` + `write_overlap_policy`). A successful group
+  (plan-validator.js L1627) over the frontier node ids; a raw overlap result is not necessarily
+  final — the `writeOverlapRelaxable` predicate downgrades a `shared-infra` OR `coarse`
+  (exact-file-disjoint) overlap to a co-open under the retained net (a post-dominating
+  `code-reviewer` gate + no PROTECTED file in either set), with `write_overlap_policy` /
+  `--write-overlap-consent` parsed for frozen-plan back-compat but vestigial at this seam. Only a
+  genuine `exact` overlap (same path or a case-collision), or a `coarse` pair carrying a
+  non-exactly-resolvable directory/glob entry, degrades to single serial write. A successful group
   open records ONE shared group baseline (keyed by `group_id`, reusing the per-node
   `--record-base` machinery), writes `lane_group` into `running-set.json`, and stamps each
   member's node entry with `group_id`. The running-set schema is additive: `lane_group` is an
@@ -274,8 +287,10 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   on the v2 running-set foundation: `docs/decisions/D-419-01.md` (Part 1: one coordination
   kernel — serial = running-set `max_concurrent=1` by subsumption, not deletion; Part 3:
   scheduler-default posture — reads fan out by default, and since D-542-01 **disjoint writes
-  also co-open by default** [`KAOLA_PARALLEL_WRITES=0` is the serial opt-out], while overlapping
-  writes stay serial/consent-gated) and `docs/decisions/D-419-02.md` (Part 2: lane-attributed
+  also co-open by default** [`KAOLA_PARALLEL_WRITES=0` is the serial opt-out]; since D-593-01 a
+  `coarse` (same non-shared top-level area, exact-file-disjoint) write frontier co-opens by
+  default too, under the same retained net — only a genuine exact-path overlap, or a coarse pair
+  with an unresolvable directory/glob entry, stays serial) and `docs/decisions/D-419-02.md` (Part 2: lane-attributed
   disjoint write parallelism — the validator stamps `parallel_safe` on disjoint write-node
   antichains and `open-ready` lifts `write_node_exclusive` for stamped pairs by default [serial
   opt-out via `KAOLA_PARALLEL_WRITES=0`]; Part 4: consent-gated speculative gate overlap — a `speculative_open_policy:

@@ -135,28 +135,38 @@ reasoning-effort rule above. Pass `dispatch.nonce` (evidence-binding token). Ins
 - `FANOUT_CAP` (default 4) is a runtime limit, not a planning cap; a top-up re-run of `open-ready`
   drains wider frontiers as members close. `KAOLA_FANOUT_CAP_READONLY` (default 8) applies to
   read-only fan-out.
-- Planner-proven-disjoint (`parallel_safe`) write frontiers co-open in isolated legs
-  BY DEFAULT — no operator toggles. Serial (`max_concurrent=1`) is the FALLBACK only for
-  OVERLAPPING/uncertain writes, hosts without worktree support, or an explicit
-  `KAOLA_PARALLEL_WRITES=0` opt-out; `--write-overlap-consent` is required ONLY for
-  coarse/shared-infra (non-disjoint) co-open — see the leg-isolation note below. `opening`
-  marker + `reconcile-running-set` handle crash-resume.
+- Planner-proven-disjoint (`parallel_safe`), shared-infra, and coarse (same non-shared
+  top-level area, exact-file-disjoint — e.g. two cross-edition antichains both under
+  `plugins/`) write frontiers ALL co-open in isolated legs BY DEFAULT — no operator toggles —
+  under the retained net (a post-dominating `code-reviewer` gate over the legs, no PROTECTED
+  file in either set). Serial (`max_concurrent=1`) is the FALLBACK only for a genuine
+  exact-path overlap (same file or a case-collision), a directory/glob-shaped entry that
+  cannot prove exact-path disjointness, the retained net not holding, hosts without worktree
+  support, or an explicit `KAOLA_PARALLEL_WRITES=0` opt-out; `--write-overlap-consent` is
+  parsed for frozen-plan back-compat but is VESTIGIAL at this seam — see the leg-isolation
+  note below. `opening` marker + `reconcile-running-set` handle crash-resume.
   `test_thrash` ≥ 3: escalate via `write-halt --reason test_thrash`.
 
 <!-- PIN: leg-isolation-recipe -->
-**Write-parallelism is default-on for disjoint frontiers.** The per-leg
-isolation engine is COMPLETE and live, and planner-proven-disjoint
-(`parallel_safe`) write frontiers co-open as isolated parallel legs **BY DEFAULT — no operator
-toggles**. Per-leg worktree isolation + the mandatory synthesizer reconcile are the correctness
-net; co-open ALWAYS provisions a dedicated leg per write sibling (group-form ⟺ legs provisioned —
-never the legless attribution-blind union barrier).
-- Serial is the FALLBACK only for OVERLAPPING/uncertain writes, hosts without worktree support, or
-  an explicit `KAOLA_PARALLEL_WRITES=0` opt-out (which forces serial).
-- `open-ready --write-overlap-consent` is required ONLY for coarse/shared-infra (non-disjoint)
-  co-open — a frontier whose plan `## Meta` sets `write_overlap_policy: coarse`. Genuinely-overlapping
-  writes stay consent-gated (`--write-overlap-consent` + `write_overlap_policy` != `off`); absent that
-  consent an overlapping frontier serial-degrades safely — no cross-contamination, no silent loss.
-  Disjoint frontiers need NO consent flag.
+**Write-parallelism is default-on for disjoint AND same-area (coarse) frontiers.** The per-leg
+isolation engine is COMPLETE and live, and every exact-file-disjoint write frontier —
+planner-proven-disjoint (`parallel_safe`) siblings in different top-level areas, a shared-infra
+frontier in the same infra area, or a coarse frontier in the same non-shared top-level area
+(e.g. two cross-edition antichains both under `plugins/`) — co-opens as isolated parallel legs
+**BY DEFAULT — no operator toggles**, gated only on the retained net: a post-dominating
+`code-reviewer` gate over the legs, and no PROTECTED file in either set. Per-leg worktree
+isolation + the mandatory synthesizer reconcile are the correctness net; co-open ALWAYS
+provisions a dedicated leg per write sibling (group-form ⟺ legs provisioned — never the legless
+attribution-blind union barrier).
+- Serial is the FALLBACK only for a genuine exact-path overlap (same file or a case-collision), a
+  directory/glob-shaped entry that cannot prove exact-path disjointness, the retained net not
+  holding (no post-dominating gate, or a PROTECTED file in either set), hosts without worktree
+  support, or an explicit `KAOLA_PARALLEL_WRITES=0` opt-out (which forces serial).
+- `--write-overlap-consent` and `write_overlap_policy` are parsed for frozen-plan back-compat but
+  are VESTIGIAL at this seam — they neither enable nor block any co-open decision here. A
+  genuinely-overlapping (exact-path or case-collision) frontier serial-degrades regardless of
+  consent — no cross-contamination, no silent loss. No consent flag is needed for any disjoint,
+  shared-infra, or coarse frontier.
 
 <!-- CARD: speculative-open -->
 On `open-next` → `gate_not_complete` with a speculative gate (policy `speculative_open_policy:

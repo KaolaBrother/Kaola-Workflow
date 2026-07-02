@@ -102,8 +102,6 @@ const OPERATOR_HINT_REGISTRY = {
     'A serial node is still in_progress (' + ((ctx.inProgress || []).join(', ') || 'see inProgress') + '). Close it (close-and-open-next) before fanning out.',
   scheduler_active: (ctx) =>
     'A running-set fan-out is live (' + ((ctx.runningSet || []).join(', ') || 'see runningSet') + '). Close its nodes (close-node) or run ' + ADAPTIVE_NODE_SCRIPT + ' reconcile-running-set --project <P> --json before this command.',
-  batch_active: () =>
-    'An active parallel batch is live. Seal + join it (or reconcile --abort) before running this serial command.',
   // #585: another scheduler invocation holds the project-scoped O_EXCL lock. Only ONE orchestrator may
   // drive a project's scheduler at a time — contention is a non-blocking refuse (no spin-wait/queue).
   scheduler_locked: (ctx) =>
@@ -248,8 +246,6 @@ const OPERATOR_HINT_REGISTRY = {
     'Invalid write-halt --reason. Use one of: ' + ((ctx.validReasons || []).join(', ') || 'consent, security, test_thrash, merge_conflict') + '.',
 
   // --- reopen / repair primitives (#434 / D-434-01) ---
-  active_batch_exists: () =>
-    'An active batch blocks a plan-repair reopen. Reconcile/clear the active batch first.',
   no_parseable_nodes: () =>
     'The plan has no parseable ## Nodes. Restore / re-freeze a valid workflow-plan.md before reopening.',
   node_not_found: (ctx) =>
@@ -1731,9 +1727,9 @@ function runOpenNext(opts) {
   //   an open-next reached without orient). The plan_hash freeze guarantee must hold on the resume path
   //   too — accuracy is non-negotiable. Layer 1 shells validator --resume-check; a mismatch refuses
   //   plan_integrity_failed with zero mutation, BEFORE next-action / baseline / ledger flip.
-  // #383: never open a serial node while the #377 scheduler (running-set) or a batch is live (those
-  //   surfaces co-scheduling against a serial node is the #383(a)/(b) wedge). #391b: fence a halt.
-  const guard = mutationGuardPrologue(opts, { integrity: true, halt: true, excl: ['scheduler', 'batch'] });
+  // #383: never open a serial node while the #377 scheduler (running-set) is live (a scheduler
+  //   co-scheduling against a serial node is the #383(a)/(b) wedge). #391b: fence a halt.
+  const guard = mutationGuardPrologue(opts, { integrity: true, halt: true, excl: ['scheduler'] });
   if (guard) return guard;
 
   // Shell NEXT_ACTION.
@@ -1977,15 +1973,13 @@ function runCloseAndOpenNext(opts) {
   //    halt fence is vacuously-pass when no consent_halt is durable, so a normal linear-chain close is
   //    unchanged. (#391b: without the fence, close-and-advance survives a halt and the marker becomes a
   //    phantom against a now-complete node.)
-  //    #411 BUG B (excl-batch): a LIVE batch (≥1 unsealed member) must fence this SERIAL close — the
-  //    serial path cannot close a node owned by a live parallel batch out-of-band (that is close-node's
-  //    job after seal/join). Without it, close-and-open-next would flip a still-running batch member to
-  //    complete + append its compliance row + fuse-advance, racing the batch scheduler.
   //    #463 Slice 4: a live lane_group member needs a SYMMETRIC fence (it must not close out-of-band here,
   //    skipping the synthesizer), but a BROAD excl-scheduler is WRONG: close-and-open-next legitimately closes a #411
   //    per-node running set, so runningSetLive must NOT fence it. That fence is therefore the NARROW
-  //    lane-group-member guard in the BODY below (keyed on lane_group membership), not an excl layer. ==
-  const guard = mutationGuardPrologue(opts, { halt: true, excl: ['batch'] });
+  //    lane-group-member guard in the BODY below (keyed on lane_group membership), not an excl layer.
+  //    (#594: the former excl-batch fence — a live parallel batch fencing this serial close — is gone;
+  //    active-batch.json has no producer left, so no coordination surface is excluded here.) ==
+  const guard = mutationGuardPrologue(opts, { halt: true });
   if (guard) return guard;
 
   // #463 Slice 4 — LANE-GROUP MEMBER FENCE (silent-loss catch). close-and-open-next has NO isMember
@@ -2660,8 +2654,7 @@ function runClearHalt(opts) {
 //
 // Reopens an already-`complete` node N for an in-place repair (a review-finding fix or
 // a finalize-surfaced scope fix) WITHOUT hand-editing workflow-plan.md. Steps:
-//   (1) Refuse over a live parallel batch / interrupted top-up (member.opening:true) so
-//       this never fights the #305 reconcile guards.
+//   (1) Refuse over a live #377 running-set fan-out so this never fights the reconcile guards.
 //   (2) Require N to be a `complete` ledger row (only a finished node is repairable).
 //   (3) Reset N's POST-DOMINATING gate(s) — code-reviewer / security-reviewer /
 //       adversarial-verifier nodes that every path from N to the unique sink passes
@@ -2684,26 +2677,10 @@ function runReopenNode(opts) {
   // complete|in_progress → pending; the orphan guard at (3b) tolerates it for the same reason).
   // #444: GATE_ROLES promoted to module-level const — no redefinition needed here.
 
-  // (1) Refuse over a live batch / interrupted top-up — mirror the #305 guards.
-  const manifestPath = path.join(path.dirname(planPath), '.cache', 'active-batch.json');
-  const manifestPresent = cacheExists ? cacheExists(manifestPath) : false;
-  if (manifestPresent) {
-    let raw = null;
-    try { raw = readFile(manifestPath); } catch (_) { raw = null; }
-    const m = raw != null ? safeJsonParse(raw) : null;
-    if (m && Array.isArray(m.members)) {
-      const live = m.state && m.state !== 'joined' && m.state !== 'aborted';
-      const opening = m.members.some(x => x.opening);
-      if (live || opening) {
-        return { result: 'refuse', reason: 'active_batch_exists', state: m.state || null, detail: 'reconcile/clear the active batch before a plan-repair reopen' };
-      }
-    }
-  }
-
-  // (1b) #383: reopen-node refused over a live BATCH but not over a live RUNNING SET — the guard
-  // asymmetry the issue names. A plan-repair reopen must never fight a #377 scheduler fan-out either
-  // (it would create an orphan multi-in_progress ledger the same way a batch would). Add the missing
-  // arm: refuse scheduler_active over a live / opening running set. Mirrors the batch arm above.
+  // (1) #383: a plan-repair reopen must never fight a live #377 scheduler fan-out (it would create an
+  // orphan multi-in_progress ledger). Refuse scheduler_active over a live / opening running set.
+  // (#594: the former sibling arm — refuse active_batch_exists over a live active-batch.json — is gone;
+  // that manifest has no producer left.)
   const runningSetPath = path.join(path.dirname(planPath), '.cache', RUNNING_SET_NAME);
   const runningSet = readRunningSet(runningSetPath, cacheExists, readFile);
   if (runningSet) {
@@ -3002,7 +2979,7 @@ function runRevertOverflow(opts) {
 //     Result always carries baselineReused:true (the anti-laundering signal).
 //
 // Steps:
-//   (1) Refuse over a live batch or running set.
+//   (1) Refuse over a live running set.
 //   (2) Require the writer node to be a COMPLETE ledger row (the reviewer is in_progress).
 //   (3) Reset the post-dominating gate(s) of the writer to pending (same logic as reopen-node).
 //   (4) Delete their stale barrier-base files (downstream baselines; NOT the writer's own).
@@ -3017,22 +2994,8 @@ function runRepairNode(opts) {
 
   if (!nodeId) return { result: 'refuse', errors: ['--node-id required for repair-node'] };
 
-  // (1) Refuse over a live batch / interrupted top-up.
-  const manifestPath = path.join(path.dirname(planPath), '.cache', 'active-batch.json');
-  const manifestPresent = cacheExists ? cacheExists(manifestPath) : false;
-  if (manifestPresent) {
-    let raw = null;
-    try { raw = readFile(manifestPath); } catch (_) { raw = null; }
-    const m = raw != null ? safeJsonParse(raw) : null;
-    if (m && Array.isArray(m.members)) {
-      const live = m.state && m.state !== 'joined' && m.state !== 'aborted';
-      const opening = m.members.some(x => x.opening);
-      if (live || opening) {
-        return { result: 'refuse', reason: 'active_batch_exists', state: m.state || null, detail: 'reconcile/clear the active batch before a plan-repair reopen' };
-      }
-    }
-  }
-
+  // (1) Refuse over a live running set. (#594: the former sibling arm — refuse active_batch_exists over
+  // a live active-batch.json — is gone; that manifest has no producer left.)
   const runningSetPath = path.join(path.dirname(planPath), '.cache', RUNNING_SET_NAME);
   const runningSet = readRunningSet(runningSetPath, cacheExists, readFile);
   if (runningSet) {
@@ -3270,17 +3233,17 @@ function readRunningSet(runningSetPath, cacheExists, readFile) {
 // ===========================================================================
 // #383 CROSS-SURFACE MUTUAL EXCLUSION — the shared "live coordination state" probe.
 //
-// The three coordination surfaces (serial open-next/close-and-open-next, the batch manifest
-// active-batch.json, and the #377 running-set running-set.json) each enforced only their own
-// invariant. A mixed sequence — the documented resume path (open-next on resume) followed by the
-// scheduler (open-ready / open-batch) — could co-schedule a serial write node against a read fan-out
-// (a), make the batch + running-set manifests coexist and brick each other (b), or double-dispatch
-// an already-running node (d). readCoordinationState is the SINGLE pure probe every mutating
-// subcommand consults; probeCoordination is its fs wrapper.
+// The live coordination surfaces (serial open-next/close-and-open-next and the #377 running-set
+// running-set.json) each enforced only their own invariant. A mixed sequence — the documented resume
+// path (open-next on resume) followed by the scheduler (open-ready) — could co-schedule a serial write
+// node against a read fan-out (a) or double-dispatch an already-running node (d). readCoordinationState
+// is the SINGLE pure probe every mutating subcommand consults; probeCoordination is its fs wrapper.
+// (#594: the retired parallel-batch surface — active-batch.json / the batch_active guard — has no
+// producer left, so it is no longer a coordination surface here.)
 //
-// SERIAL FALLBACK BYTE-IDENTITY (the hard invariant): with no running-set, no active-batch, and
-// ≤1 in_progress row, serialLive is the only live-coordination signal and the scheduler/batch arms
-// are all FALSE — so each guard is vacuously-pass and the legacy serial path is byte-identical.
+// SERIAL FALLBACK BYTE-IDENTITY (the hard invariant): with no running-set and ≤1 in_progress row,
+// serialLive is the only live-coordination signal and the scheduler arm is FALSE — so each guard is
+// vacuously-pass and the legacy serial path is byte-identical.
 // ===========================================================================
 
 // readCoordinationState (#383) — PURE derivation of the live coordination surfaces from already-read
@@ -3288,21 +3251,17 @@ function readRunningSet(runningSetPath, cacheExists, readFile) {
 // legality agreement holds: serialLive ⟺ crossCheckStatus single_in_progress for the same fixture.
 //
 // @param {string} planContent  the frozen plan (## Node Ledger source)
-// @param {{runningSet:object|null, manifest:object|null}} surfaces  the two parsed manifests
-// @returns {{serialLive, inProgressIds, runningSetLive, runningSetOpening, batchLive, batchOpening,
-//            collisions}}
-//   serialLive        exactly one in_progress row AND no live running set AND no live batch — the
-//                     legacy single-node case (a serial write/read node is live).
+// @param {{runningSet:object|null}} surfaces  the parsed running-set manifest
+// @returns {{serialLive, inProgressIds, runningSetLive, runningSetOpening, collisions}}
+//   serialLive        exactly one in_progress row AND no live running set — the legacy single-node case
+//                     (a serial write/read node is live).
 //   runningSetLive    a non-opening running set with ≥1 node is live.
 //   runningSetOpening  the running set is mid-transaction (state:'opening' or any node opening:true).
-//   batchLive         an active (non-joined/aborted) batch manifest with ≥1 unsealed member.
-//   batchOpening      the batch is mid-transaction (state:'opening' or any member opening:true).
-//   collisions        the surfaces that COEXIST (≥2 of {serial,runningSet,batch}) — the union state
+//   collisions        the surfaces that COEXIST (≥2 of {serial,runningSet}) — the union state
 //                     #383(b) must refuse at creation.
 function readCoordinationState(planContent, surfaces) {
   surfaces = surfaces || {};
   const runningSet = surfaces.runningSet || null;
-  const manifest = surfaces.manifest || null;
 
   const ledger = readLedgerStatuses(planContent || '');
   const inProgressIds = Object.keys(ledger).filter(id => ledger[id] === 'in_progress');
@@ -3310,22 +3269,17 @@ function readCoordinationState(planContent, surfaces) {
   const runningSetOpening = !!(runningSet && (runningSet.state === 'opening' || (runningSet.nodes || []).some(n => n.opening)));
   const runningSetLive = !!(runningSet && (runningSet.nodes || []).length > 0 && !runningSetOpening);
 
-  const batchOpening = !!(manifest && (manifest.state === 'opening' || (manifest.members || []).some(m => m.opening)));
-  const batchActiveState = !!(manifest && manifest.state && manifest.state !== 'joined' && manifest.state !== 'aborted');
-  const batchLive = !!(batchActiveState && (manifest.members || []).some(m => !m.sealed) && !batchOpening);
-
-  // serialLive = the legacy single-node case: exactly one in_progress row, no running set fan-out,
-  // no live batch. This MUST equal crossCheckStatus's single_in_progress verdict for the same fixture
-  // (the #293 cross-consistency invariant tested explicitly).
-  const serialLive = inProgressIds.length === 1 && !runningSetLive && !batchLive && !runningSetOpening && !batchOpening;
+  // serialLive = the legacy single-node case: exactly one in_progress row, no running set fan-out.
+  // This MUST equal crossCheckStatus's single_in_progress verdict for the same fixture (the #293
+  // cross-consistency invariant tested explicitly).
+  const serialLive = inProgressIds.length === 1 && !runningSetLive && !runningSetOpening;
 
   // collisions: which live surfaces coexist (a union state that none of the per-surface gates can
   // represent). Used only for diagnostics in the refusal payload; the per-command guards refuse on
   // the specific other-surface signal per the matrix.
   const collisions = [];
-  const liveCount = [runningSetLive || runningSetOpening, batchLive || batchOpening, serialLive].filter(Boolean).length;
+  const liveCount = [runningSetLive || runningSetOpening, serialLive].filter(Boolean).length;
   if (runningSetLive || runningSetOpening) collisions.push('running_set');
-  if (batchLive || batchOpening) collisions.push('batch');
   if (serialLive) collisions.push('serial');
 
   return {
@@ -3333,18 +3287,16 @@ function readCoordinationState(planContent, surfaces) {
     inProgressIds,
     runningSetLive,
     runningSetOpening,
-    batchLive,
-    batchOpening,
     collisions: liveCount >= 2 ? collisions : [],
   };
 }
 
-// probeCoordination (#383) — the fs wrapper around readCoordinationState. Reads the plan, the batch
-// manifest, and the running set (all READ-ONLY, fail-closed to null) and returns the pure state plus
-// the raw surfaces (for the refusal payload's {inProgress,runningSet,batchState} context).
+// probeCoordination (#383) — the fs wrapper around readCoordinationState. Reads the plan and the
+// running set (all READ-ONLY, fail-closed to null) and returns the pure state plus the raw running set
+// (for the refusal payload's {inProgress,runningSet} context).
 //
 // @param {{planPath, readFile, cacheExists}} opts
-// @returns the readCoordinationState shape, augmented with { manifest, runningSet }.
+// @returns the readCoordinationState shape, augmented with { runningSet }.
 function probeCoordination(opts) {
   const { planPath, readFile, cacheExists } = opts;
   const dir = path.dirname(planPath);
@@ -3352,29 +3304,19 @@ function probeCoordination(opts) {
   let planContent = '';
   try { planContent = readFile(planPath); } catch (_) {}
 
-  const manifestPath = path.join(dir, '.cache', 'active-batch.json');
-  let manifest = null;
-  if (!cacheExists || cacheExists(manifestPath)) {
-    let raw = null;
-    try { raw = readFile(manifestPath); } catch (_) { raw = null; }
-    if (raw != null) {
-      const parsed = safeJsonParse(raw);
-      if (parsed && Array.isArray(parsed.members)) manifest = parsed;
-    }
-  }
-
   const runningSetPath = path.join(dir, '.cache', RUNNING_SET_NAME);
   const runningSet = readRunningSet(runningSetPath, cacheExists, readFile);
 
-  const state = readCoordinationState(planContent, { runningSet, manifest });
-  return { ...state, manifest, runningSet };
+  const state = readCoordinationState(planContent, { runningSet });
+  return { ...state, runningSet };
 }
 
 // coordinationRefusal (#383) — build a typed mutual-exclusion refusal for a given guard layer. Returns
 // null when the relevant other-surface is not live (the guard is vacuously-pass). `excl` names which
-// surfaces THIS subcommand is mutually exclusive with: any subset of {serial, scheduler, batch}.
-// Reason codes: serial_node_live / scheduler_active / batch_active, each carrying the live-state
-// context + the concrete reconcile/close repair the operator should run.
+// surfaces THIS subcommand is mutually exclusive with: any subset of {serial, scheduler}.
+// Reason codes: serial_node_live / scheduler_active, each carrying the live-state context + the
+// concrete reconcile/close repair the operator should run. (#594: the retired batch surface / the
+// batch_active reason are gone — active-batch.json has no producer left.)
 function coordinationRefusal(coord, excl) {
   const want = new Set(excl || []);
   // Order matters only for which single reason surfaces first; the matrix never lets two of these be
@@ -3383,27 +3325,15 @@ function coordinationRefusal(coord, excl) {
     return refuse('scheduler_active', {
       inProgress: coord.inProgressIds,
       runningSet: (coord.runningSet && (coord.runningSet.nodes || []).map(n => n.id)) || [],
-      batchState: (coord.manifest && coord.manifest.state) || null,
       repair: coord.runningSetOpening
         ? 'reconcile-running-set (a crashed open-ready) then retry'
         : 'close the live running-set nodes (close-node) or reconcile-running-set before this command',
-    });
-  }
-  if (want.has('batch') && (coord.batchLive || coord.batchOpening)) {
-    return refuse('batch_active', {
-      inProgress: coord.inProgressIds,
-      runningSet: (coord.runningSet && (coord.runningSet.nodes || []).map(n => n.id)) || [],
-      batchState: (coord.manifest && coord.manifest.state) || null,
-      repair: coord.batchOpening
-        ? 'reconcile (a crashed open-batch/top-up) then retry'
-        : 'seal + join the active batch (or reconcile --abort) before this command',
     });
   }
   if (want.has('serial') && coord.serialLive) {
     return refuse('serial_node_live', {
       inProgress: coord.inProgressIds,
       runningSet: (coord.runningSet && (coord.runningSet.nodes || []).map(n => n.id)) || [],
-      batchState: (coord.manifest && coord.manifest.state) || null,
       repair: 'close the live serial node (close-and-open-next) before fanning out',
     });
   }
@@ -3417,10 +3347,10 @@ function coordinationRefusal(coord, excl) {
 //           refuse plan_integrity_failed.
 //   Layer 2 HALT FENCE (#391b): a durable consent_halt in the ledger → refuse halt_pending.
 //   Layer 3 LIVE-COORDINATION (#383): probeCoordination → refuse serial_node_live | scheduler_active
-//           | batch_active per the per-command exclusion set.
+//           per the per-command exclusion set.
 //
-// SERIAL FALLBACK BYTE-IDENTITY: with KAOLA_PARALLEL_WRITES=0 (serial mode) + no running-set + no
-// active-batch + ≤1 in_progress + no consent_halt marker, EVERY layer is vacuously-pass (integrity ok,
+// SERIAL FALLBACK BYTE-IDENTITY: with KAOLA_PARALLEL_WRITES=0 (serial mode) + no running-set +
+// ≤1 in_progress + no consent_halt marker, EVERY layer is vacuously-pass (integrity ok,
 // no halt, no other-surface live) so the guarded body runs exactly as today.
 //
 // @param {object} opts  the subcommand opts (planPath, shell, readFile, cacheExists)
@@ -3497,12 +3427,13 @@ function laneWriteUnion(writeNodes) {
 // single write node serially. Reached under the caller's legCoupled guard
 // (legCoupled = parallelWritesDefaultOn, default TRUE) — disjoint writes co-open in
 // isolated legs BY DEFAULT (#542 / D-542-01); only KAOLA_PARALLEL_WRITES=0 forces serial.
-// writeOverlapConsent (#500 leg-couple): forwarded as opts.writeOverlapConsent INDEPENDENTLY
-// of legCoupled. A green (exact-file-disjoint, non-shared) frontier short-circuits on
-// dj.verdict==='green' before writeOverlapRelaxable, so consent is irrelevant there. Per
-// #546-G2 a shared-infra frontier (same SHARED_INFRA area, exact-file-disjoint) co-opens BY
-// DEFAULT under the retained net (a post-dominating code-reviewer gate + no PROTECTED file in
-// either set) — NO consent needed; consent now gates ONLY a genuine NON-shared coarse OVERLAP.
+// writeOverlapConsent (#500 leg-couple): still forwarded as opts.writeOverlapConsent for frozen-plan
+// back-compat, but it is now VESTIGIAL at this seam. A green (exact-file-disjoint, non-shared) frontier
+// short-circuits on dj.verdict==='green' before writeOverlapRelaxable. Per #546-G2 a shared-infra
+// frontier, and per #593 a COARSE (non-shared, exact-file-disjoint) frontier, BOTH co-open BY DEFAULT
+// under the retained net (a post-dominating code-reviewer gate + no PROTECTED file in either set) — NO
+// consent needed. Only a genuine overlap (same exact path / case-collision) or a coarse pair carrying a
+// non-exactly-resolvable directory/glob entry still serial-degrades, and no consent flag overrides that.
 //
 // @returns { ok:true, members:string[], group_id, write_union:string[] }
 //        | { ok:false, reason:'overlapping_write_sets', overlapping? }
@@ -3532,11 +3463,12 @@ function tryFormLaneGroup(writeNodes, planPath, shell, writeOverlapConsent) {
 // PROVISIONED (a real `git worktree add` per co-opened write member) + telemetered +
 // reconcile/teardown-aware. Provisioning fires under `groupForm && legCoupled` (the runOpenReady
 // gate at :4015) — i.e. a formed lane group AND legCoupled (= parallelWritesDefaultOn(process.env),
-// default TRUE; #542 / D-542-01). Per #546-G2 a file-disjoint SHARED-INFRA frontier (same
-// SHARED_INFRA area, exact-file-disjoint) co-opens BY DEFAULT under the retained net (a
+// default TRUE; #542 / D-542-01). Per #546-G2 a file-disjoint SHARED-INFRA frontier, and per #593 a
+// file-disjoint COARSE (non-shared) frontier, BOTH co-open BY DEFAULT under the retained net (a
 // post-dominating code-reviewer gate + no PROTECTED file in either set) — no resolveLegIsolation
-// toggle and no opts.writeOverlapConsent required; consent now gates ONLY a genuine NON-shared
-// coarse-area overlap. When legCoupled is false (KAOLA_PARALLEL_WRITES=0 / a host that cannot
+// toggle and no opts.writeOverlapConsent required (consent is vestigial at this seam). Only a genuine
+// overlap (exact / case-collision) or an unresolvable directory/glob coarse pair serial-degrades. When
+// legCoupled is false (KAOLA_PARALLEL_WRITES=0 / a host that cannot
 // provision per-leg worktrees) NO group forms, NO leg is provisioned, NO lane_group.legs key is
 // written ⇒ serial-fallback byte-identical.
 //
@@ -3897,14 +3829,15 @@ function runOpenReady(opts) {
   } = opts;
   const runningSetPath = path.join(path.dirname(planPath), '.cache', RUNNING_SET_NAME);
 
-  // == UNIFIED GUARD PROLOGUE (D1) — matrix: integrity:yes / excl-serial:yes / excl-batch:yes /
-  //    halt-fence:yes (NO excl-scheduler — open-ready OWNS the running set). ==
-  // Layer 1 INTEGRITY (#387): mirror open-batch/top-up — a tampered/structurally-invalid frozen plan
+  // == UNIFIED GUARD PROLOGUE (D1) — matrix: integrity:yes / excl-serial:yes /
+  //    halt-fence:yes (NO excl-scheduler — open-ready OWNS the running set). (#594: excl-batch dropped —
+  //    active-batch.json has no producer left.) ==
+  // Layer 1 INTEGRITY (#387): mirror open-ready/top-up — a tampered/structurally-invalid frozen plan
   // must not be partially executed by the scheduler. --resume-check covers hash-freeze + post-freeze
   // tamper + cycle + unique-sink + role-library + depends_on resolvability. Any non-ok refuses with
   // zero mutation. (Without this, an emptied write node's declared_write_set is reclassified read-only
   // by isReadOnlyNode and fans out concurrently — the #387 repro.)
-  const guard = mutationGuardPrologue(opts, { integrity: true, halt: true, excl: ['serial', 'batch'] });
+  const guard = mutationGuardPrologue(opts, { integrity: true, halt: true, excl: ['serial'] });
   if (guard) return guard;
 
   // Crash-safe precondition: an 'opening' running set (or any opening:true node) is an
@@ -3988,7 +3921,7 @@ function runOpenReady(opts) {
   // safe close path. We make co-open default-on by defaulting legCoupled TRUE — NOT by dropping the
   // legCoupled conjunction (that would set groupForm with legs=null → the attribution-blind legless
   // union barrier of #498). Disjointness itself is re-verified authoritatively by the validator at
-  // co-open (tryFormLaneGroup → --parallel-safe); --write-overlap-consent gates ONLY genuine overlap.
+  // co-open (tryFormLaneGroup → --parallel-safe); --write-overlap-consent is vestigial there (#593).
   const legCoupled = parallelWritesDefaultOn(process.env);
   if (readOnly.length > 0) {
     let slots = Math.max(0, cap - liveNodes.length);
@@ -4005,12 +3938,12 @@ function runOpenReady(opts) {
     // #498 INVARIANT PRESERVED: legCoupled still gates BOTH this co-open AND leg-provisioning, so
     //   groupForm ⟺ legs provisioned ⟺ the safe (parent-clean fence + commit-based barrier) close path;
     //   the attribution-blind legless union barrier (:4429, liveLegs===null) is never reached via
-    //   co-open. CRITICAL (guard 5): forward opts.writeOverlapConsent — NOT legCoupled — to
-    //   tryFormLaneGroup: legCoupled is now always-true, so forwarding it as consent would silently
-    //   relax a genuine NON-shared coarse OVERLAP; the explicit consent flag keeps THAT class opt-in
-    //   only. Per #546-G2 a shared-infra (exact-file-disjoint) frontier co-opens by default under the
-    //   retained net (post-dominating code-reviewer gate + no PROTECTED file), and disjoint green needs
-    //   no consent — the validator relaxes/short-circuits both before the consent check.
+    //   co-open. opts.writeOverlapConsent is still forwarded (NOT legCoupled) for frozen-plan
+    //   back-compat, but per #593 it is VESTIGIAL: a shared-infra OR coarse (non-shared) exact-file-
+    //   disjoint frontier co-opens BY DEFAULT under the retained net (post-dominating code-reviewer gate
+    //   + no PROTECTED file), and disjoint green short-circuits — the validator relaxes/short-circuits
+    //   all three before any consent check. Only a genuine overlap (exact / case-collision) or a
+    //   coarse pair with a non-resolvable directory/glob entry serial-degrades, and no consent overrides.
     if (legCoupled && writeNodes.length >= 2) {
       const grp = tryFormLaneGroup(writeNodes, planPath, shell, opts.writeOverlapConsent);
       if (grp.ok) {

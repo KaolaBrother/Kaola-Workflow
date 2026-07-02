@@ -205,6 +205,40 @@ cross-node / parallel-group disjointness proof:
 
 See `docs/decisions/D-587-01.md`.
 
+## Write co-open eligibility: exact-path is the granularity of truth (#593)
+
+Write co-open eligibility (the `--parallel-safe` check, `writeOverlapRelaxable` in
+`kaola-workflow-plan-validator.js`) now relaxes BOTH `shared-infra` (same infra area) AND
+`coarse` (same non-shared top-level area — e.g. two cross-edition antichains both under
+`plugins/`) frontiers BY DEFAULT, provided the retained net holds (NET-1: a post-dominating
+`code-reviewer` gate over the legs; NET-2: no PROTECTED concrete file in either set) and every
+declared entry is EXACTLY-RESOLVABLE (no directory-shaped or glob token — those keep today's
+coarse-area refusal, since exact-path disjointness against them is unprovable). Only a genuine
+`exact` overlap (the same path, or a case-collision) still serial-degrades, at every tier, with
+no flag or policy able to bypass it. `write_overlap_policy` / `--write-overlap-consent` stay
+parsed for frozen-plan back-compat but are VESTIGIAL at this seam.
+
+**Consequence for planner surface maps: exact-path is the only granularity that matters.**
+Because a shared top-level area no longer forces serialization on its own, a planner's
+disjointness proof is only as good as its declared write sets — an area comparison can no
+longer paper over an undeclared overlap the way consent-gating implicitly did. A surface map
+that omits a **hidden shared surface** two "disjoint" legs both actually touch turns a would-be
+`exact` collision into an invisible clobber instead of a correctly-serialized pair. Common
+hidden shared surfaces in this repo:
+
+- `package.json` script/chain entries a change must also update (e.g. adding a test file to a
+  `test:kaola-workflow:*` chain).
+- `scripts/simulate-workflow-walkthrough.js` scenario/needle additions two legs might both touch.
+- `install.sh` / `install-*.sh` registration blocks (`SUPPORT_SCRIPT_NAMES`, manifest entries).
+- Contract-validator prompt-needle pins (`assertIncludes`/`assertConcept` calls in the
+  `validate-*-contracts.js` family) that two legs might both need to add or move.
+
+A planner authoring a parallel-write frontier MUST declare every file each leg actually touches,
+including these hidden shared surfaces — not just the "obvious" feature files — so a genuine
+overlap on one of them classifies as `exact` (correctly serialized) rather than silently
+escaping the disjointness proof because the area-level comparison alone made the pair look
+`coarse`-or-better. See `docs/decisions/D-593-01.md`.
+
 ## Barrier and write-halt triage payload (#440)
 
 When a `write_set_overflow` barrier failure is raised — either at close time (`barrier_failed`) or via a `write-halt` escalation — the return envelope carries a structured `triage` payload: `{ class, offending paths, proposed_repair?, testDelta? }`. Three mechanical subtypes narrow `write_set_overflow`:

@@ -92,9 +92,11 @@ here for the full contract.
   - `active-batch.json` — retired parallel-batch manifest (`state: 'opening'|'open'|'sealed'|'joined'`).
     No live component writes this file anymore — its sole writer, `kaola-workflow-parallel-batch.js`,
     was retired (D-586-01) once the per-node running-set scheduler fully absorbed its
-    responsibilities. `kaola-workflow-adaptive-node.js`'s guard prologue still detects a residual
-    file on disk (a `batch_active` refusal) purely as backward-compat crash detection for a
-    pre-retirement checkout.
+    responsibilities. The `batch_active` backward-compat detection that
+    `kaola-workflow-adaptive-node.js`'s guard prologue kept after that retirement was itself
+    removed (D-594-01), along with the sibling `active_batch_exists` plan-repair-reopen refusals —
+    a residual file on disk is now silently inert to every mutation guard. Only `orient`'s
+    read-only manifest legality reconstruction still reads it (always `null` in producible state).
   - `scheduler.lock` (issue #585) — a **transient coordination artifact**, not durable workflow
     state. A project-scoped O_EXCL lockfile (`fs.openSync(path, 'wx')`) that `adaptive-node.js`
     `main()` acquires before every mutating scheduler subcommand body and releases in a `finally`;

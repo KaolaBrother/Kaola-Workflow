@@ -684,8 +684,8 @@ function gateUncovered(nodes, isTarget, gateRole, sink) {
   return violations;
 }
 
-// #463 / #546-G2 (D-419 write-overlap): the SINGLE relaxation predicate — is an overlapping write pair
-// safe to DOWNGRADE from red/yellow to ok? Two retained-safety-net invariants gate EVERY relaxation,
+// #463 / #546-G2 / #593 (D-419 write-overlap): the SINGLE relaxation predicate — is an overlapping write
+// pair safe to DOWNGRADE from red/yellow to ok? Two retained-safety-net invariants gate EVERY relaxation,
 // at EVERY class and tier:
 //   (NET-1) a synthesizer/code-reviewer gate post-dominates the legs (gatePresent — the caller proves
 //           it via gateUncovered over the leg ids), so the review/chain net covers the merged union;
@@ -698,26 +698,53 @@ function gateUncovered(nodes, isTarget, gateRole, sink) {
 //     --write-overlap-consent — PROVIDED the two retained-net invariants hold. The set is disjoint by
 //     construction, the gate covers the union, and the per-leg barrier still catches textual conflict;
 //     so the operator-consent ceremony added nothing the structural net does not already guarantee.
-//   • `coarse` (non-shared, exact-file-disjoint): UNCHANGED — still requires the operator to opt in
-//     (write_overlap_policy ∈ {disjoint,coarse}) AND per-run consent AND the gate. A non-shared coarse
-//     area is a genuinely-overlapping relaxable case, so it stays consent-gated.
-//   • `exact` (or any future class): NEVER relaxes here (real reconciliation is the runtime
-//     merge_conflict barrier's job, deferred).
-// For shared-infra, default-off byte-identity no longer holds (that is the deliberate #546-G2 delta);
-// for coarse + exact, default off/no-consent/no-gate still returns false ⇒ today's PREVENT verdict.
+//   • `coarse` (non-shared, exact-file-disjoint): #593 — now relaxes BY DEFAULT under the SAME retained
+//     net (NET-1 + NET-2), exactly like shared-infra. A non-shared coarse area (e.g. two cross-edition
+//     legs both under plugins/) that is exact-file-disjoint is as safe to co-open as a shared-infra one:
+//     the sets are disjoint by construction, the gate covers the union, the per-leg barrier catches
+//     textual conflict. write_overlap_policy / --write-overlap-consent are VESTIGIAL here (still parsed
+//     for frozen-plan back-compat) — they neither enable nor block the coarse relaxation. The one
+//     added guard is RESOLVABILITY: if either set carries a non-exactly-resolvable entry (a
+//     directory-shaped `path/` or a glob), exact-path disjointness is UNPROVABLE — the tokens could
+//     physically overlap despite comparing string-distinct — so coarse keeps today's PREVENT verdict
+//     for that pair.
+//   • `exact` (or any future class): NEVER relaxes here — same exact path or a case-collision
+//     (Src/x.js vs src/x.js) stays blocking at EVERY tier, and no flag / policy / consent bypasses it
+//     (real reconciliation is the runtime merge_conflict barrier's job, deferred).
+// For shared-infra + coarse, default-off byte-identity no longer holds (the deliberate #546-G2 / #593
+// delta); exact + a non-resolvable coarse pair still return false ⇒ today's PREVENT verdict.
 function writeOverlapRelaxable(dj, setA, setB, policy, consent, gatePresent) {
   if (!dj || !dj.kind) return false;
-  // Retained safety net (both classes): a post-dominating gate over the legs, and no PROTECTED file.
+  // Retained safety net (every class): a post-dominating gate over the legs (NET-1), and no PROTECTED
+  // file in either set (NET-2). PROTECTED + the missing gate stay blocking at EVERY tier.
   if (!gatePresent) return false;
   for (const p of setA) if (classifier.isProtected(p)) return false;
   for (const p of setB) if (classifier.isProtected(p)) return false;
-  // #546-G2: shared-infra (exact-file-disjoint by construction) co-opens BY DEFAULT under the net,
-  // independent of policy + consent.
+  // #546-G2: shared-infra (exact-file-disjoint by construction) co-opens BY DEFAULT under the net.
   if (dj.kind === 'shared-infra') return true;
-  // coarse: the operator-consent path is unchanged (genuinely-overlapping relaxable case stays opt-in).
-  if (policy === 'off' || !consent) return false;
-  if (dj.kind === 'coarse') return policy === 'disjoint' || policy === 'coarse';
+  // #593: coarse (non-shared, exact-file-disjoint) ALSO co-opens BY DEFAULT under the SAME net —
+  // policy/consent are vestigial here — PROVIDED exact-path disjointness is PROVABLE. A directory-shaped
+  // or glob entry in either set makes disjointness unprovable ⇒ keep the coarse-area refusal.
+  if (dj.kind === 'coarse') {
+    if (hasUnresolvableEntry(setA) || hasUnresolvableEntry(setB)) return false;
+    return true;
+  }
   return false; // exact (or any future class) never relaxes at this seam
+}
+
+// #593: an entry is EXACTLY-RESOLVABLE iff it names ONE concrete file the per-node exact-path barrier
+// can match. A directory-shaped token (trailing `/`) or a glob (`* ? [ ] { }`) is NOT: it can cover
+// files a sibling leg also writes, so two "string-distinct" coarse sets could still physically clobber.
+// When either set carries such an entry, exact-path disjointness is unprovable and the coarse relaxation
+// must NOT fire. Mirrors the freeze-wall glob / directory-shape detection (the same shapes freeze refuses,
+// so this only bites a legacy in-flight plan frozen by a pre-freeze-wall validator). PURE string logic.
+function hasUnresolvableEntry(set) {
+  for (const p of set) {
+    const t = String(p || '');
+    if (t.endsWith('/')) return true;      // directory-shaped (#381 shape)
+    if (/[*?[\]{}]/.test(t)) return true;  // glob metacharacter (#587 shape)
+  }
+  return false;
 }
 
 // --- sensitivity ------------------------------------------------------------
@@ -2090,11 +2117,13 @@ function main() {
     // vacuously-empty for docs-only legs (no code-producing nodes ⇒ no gateUncovered targets), which
     // would relax a docs-only frontier with NO reviewer covering it (adversarial-verifier finding R1).
     // Targeting the leg ids makes the gate cover exactly the nodes being downgraded, regardless of
-    // whether they produce code. #546-G2 (DECISION B): a kind:'shared-infra' (exact-file-disjoint by
-    // construction) frontier relaxes BY DEFAULT once gatePresent holds and no leg touches a PROTECTED
-    // file — NO policy, NO consent needed; the gate + per-leg barrier ARE the net. coarse + exact stay
-    // exactly as before: at off / no-consent / no-gate the coarse class relaxes nothing, and exact
-    // never relaxes.
+    // whether they produce code. #546-G2 (DECISION B) + #593: a kind:'shared-infra' OR kind:'coarse'
+    // (exact-file-disjoint) frontier relaxes BY DEFAULT once gatePresent holds and no leg touches a
+    // PROTECTED file — NO policy, NO consent needed; the gate + per-leg barrier ARE the net. writePolicy
+    // + writeConsent below are parsed for frozen-plan back-compat but are VESTIGIAL at this seam. coarse
+    // additionally keeps the refusal when either set carries a non-exactly-resolvable (directory-shaped /
+    // glob) entry (disjointness unprovable). exact never relaxes (same path / case-collision stays
+    // blocking at every tier).
     const writePolicy = parseWriteOverlapPolicy(content);
     const writeConsent = args.includes('--write-overlap-consent');
     const planSink = uniqueSink(allNodes);
@@ -2102,8 +2131,9 @@ function main() {
     const gatePresent = !!planSink && gateUncovered(allNodes, n => legIdSet.has(n.id), 'code-reviewer', planSink).length === 0;
     // Pair-loop: exact-file overlap (the antichain RED rule) OR coarse/shared-infra non-green
     // (classifier.disjointWriteSets — the antichain ASK rule). Either ⇒ NOT parallel-safe — UNLESS the
-    // #463 relaxation predicate downgrades a coarse/shared-infra (exact-file-disjoint, non-PROTECTED)
-    // overlap under the active policy + consent + a post-dominating gate. An EXACT overlap never relaxes.
+    // #463 / #546-G2 / #593 relaxation predicate downgrades a coarse/shared-infra (exact-file-disjoint,
+    // non-PROTECTED, exactly-resolvable) overlap under the retained net (a post-dominating gate + no
+    // PROTECTED file). An EXACT overlap never relaxes.
     const overlapping = [];
     const relaxed = [];
     for (let i = 0; i < sel.length; i++) {

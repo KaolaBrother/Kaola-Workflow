@@ -2362,7 +2362,9 @@ function makeState(opts) {
     '#308 reopen: refuses a non-complete node, got ' + JSON.stringify(result));
 }
 
-// #308: runReopenNode refuses over a live parallel batch / interrupted top-up (#305 guard parity).
+// #308/#383: runReopenNode refuses over a live #377 running-set fan-out (scheduler_active). (#594: the
+// former sibling arm — refuse active_batch_exists over a live active-batch.json — was removed; the
+// batch manifest has no producer left. The running-set arm is the surviving live-coordination guard.)
 {
   const planNodes = [
     '| a | tdd-guide | — | scripts/a.js | 1 | sequence |',
@@ -2373,16 +2375,16 @@ function makeState(opts) {
   const planContent = makePlan([
     '| a | complete | |', '| impl | complete | |', '| review | complete | |', '| finalize | complete | |',
   ], planNodes);
-  const manifestJson = JSON.stringify({ batchId: 'b', state: 'open', members: [{ id: 'x', opening: true }] });
+  const runningSetJson = JSON.stringify({ state: 'open', nodes: [{ id: 'x' }, { id: 'y' }] });
   const result = runReopenNode({
     planPath: '/fake/kaola-workflow/test-project/workflow-plan.md', project: 'test-project', nodeId: 'impl',
     shell: () => ({ exitCode: 0, result: 'ok' }),
-    readFile: (f) => { if (f.endsWith('active-batch.json')) return manifestJson; if (f.endsWith('workflow-plan.md')) return planContent; throw new Error('ENOENT ' + f); },
+    readFile: (f) => { if (f.endsWith('running-set.json')) return runningSetJson; if (f.endsWith('workflow-plan.md')) return planContent; throw new Error('ENOENT ' + f); },
     writeFile: () => { throw new Error('must not write on refusal'); },
-    cacheExists: (f) => f.endsWith('active-batch.json'), unlink: () => {},
+    cacheExists: (f) => f.endsWith('running-set.json'), unlink: () => {},
   });
-  assert(result.result === 'refuse' && result.reason === 'active_batch_exists',
-    '#308 reopen: refuses over a live batch / opening member, got ' + JSON.stringify(result));
+  assert(result.result === 'refuse' && result.reason === 'scheduler_active',
+    '#308 reopen: refuses over a live running-set fan-out, got ' + JSON.stringify(result));
 }
 
 // ---------------------------------------------------------------------------
@@ -3811,39 +3813,11 @@ function rtHarness(initialFiles, opts) {
   assert(!stillThere, 'S-RT8: closed node REMOVED from running-set.json by close-and-open-next (BUG B), running set after = ' + JSON.stringify(setAfter));
 }
 
-// S-RT9 (#411 BUG B sibling — excl-batch guard on the serial close path): close-and-open-next
-// must REFUSE to close an unsealed parallel-batch member (the serial path cannot close a node
-// owned by a live batch — that is close-node's job after seal/join). RED on current code
-// (close-and-open-next has no excl-batch layer → it would close the member out-of-band).
-{
-  const plan = makePlan([
-    '| m-a | in_progress | |',
-    '| m-b | in_progress | |',
-    '| finalize | pending | |',
-  ], [
-    '| m-a | implementer | — | scripts/a.js | 1 | sequence |',
-    '| m-b | implementer | — | scripts/b.js | 1 | sequence |',
-    '| finalize | finalize | m-a m-b | CHANGELOG.md | 1 | sequence |',
-  ]);
-  const MANIFEST = '/p/.cache/active-batch.json';
-  const manifest = JSON.stringify({
-    state: 'open',
-    members: [
-      { id: 'm-a', sealed: false },
-      { id: 'm-b', sealed: false },
-    ],
-  }, null, 2);
-  const h = rtHarness({
-    '/p/workflow-plan.md': plan,
-    '/p/workflow-state.md': makeState(),
-    [MANIFEST]: manifest,
-    '/p/.cache/barrier-base-m-a': 'deadbeefm-acafef00d1234\n',
-  }, {});
-  h.files['/p/.cache/m-a.md'] = 'evidence-binding: m-a ' + readNonce('/p/workflow-plan.md', 'm-a', h.readFile) + '\nbuild-green: ok\n';
-  const close = runCloseAndOpenNext({ planPath: '/p/workflow-plan.md', statePath: '/p/workflow-state.md', project: 'p', nodeId: 'm-a', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, unlink: h.unlink });
-  assert(close.result === 'refuse' && close.reason === 'batch_active',
-    'S-RT9: close-and-open-next REFUSES an unsealed batch member (excl-batch guard, BUG B sibling), got ' + JSON.stringify({ result: close.result, reason: close.reason }));
-}
+// S-RT9 RETIRED (#594): the excl-batch fence on the serial close path (close-and-open-next refusing an
+// unsealed parallel-batch member) is gone — active-batch.json has no producer left, so the guarded
+// state is unproducible. The NARROW lane-group-member fence in the close-and-open-next body (keyed on
+// lane_group membership, the #463 Slice 4 silent-loss catch) is unaffected and remains covered by the
+// leg-group close tests.
 
 // ===========================================================================
 // S-293 (#293/S-fix RECONCILE DEAD-END): 1 in_progress (serial node A) + an 'open'
@@ -3937,15 +3911,15 @@ function rtHarness(initialFiles, opts) {
 // ===========================================================================
 
 // ---------------------------------------------------------------------------
-// S-CO1: readCoordinationState — serial fallback. One in_progress row, NO running set,
-// NO batch → serialLive=true, all scheduler/batch arms false (vacuous-pass guards).
+// S-CO1: readCoordinationState — serial fallback. One in_progress row, NO running set →
+// serialLive=true, all scheduler arms false (vacuous-pass guards). (#594: no batch surface.)
 // ---------------------------------------------------------------------------
 {
   const plan = makePlan(['| impl-core | in_progress | |', '| review | pending | |']);
-  const co = readCoordinationState(plan, { runningSet: null, manifest: null });
-  assert(co.serialLive === true, 'S-CO1: single in_progress + no manifests → serialLive');
+  const co = readCoordinationState(plan, { runningSet: null });
+  assert(co.serialLive === true, 'S-CO1: single in_progress + no running set → serialLive');
   assert(co.runningSetLive === false && co.runningSetOpening === false, 'S-CO1: no running set live');
-  assert(co.batchLive === false && co.batchOpening === false, 'S-CO1: no batch live');
+  assert(!('batchLive' in co) && !('batchOpening' in co), 'S-CO1: no batch fields surfaced (#594 batch surface retired)');
   assert(co.inProgressIds.length === 1 && co.inProgressIds[0] === 'impl-core', 'S-CO1: inProgressIds=[impl-core]');
   assert(co.collisions.length === 0, 'S-CO1: no collisions in the serial case');
 }
@@ -3983,29 +3957,17 @@ function rtHarness(initialFiles, opts) {
 }
 
 // ---------------------------------------------------------------------------
-// S-CO5: readCoordinationState — a live batch manifest → batchLive.
+// S-CO5 / S-CO6 RETIRED (#594): the parallel-batch coordination surface (active-batch.json →
+// batchLive/batchOpening + the batch/running-set UNION collision state) has no producer left, so
+// readCoordinationState no longer derives it. The surviving surfaces — serial + running-set — are
+// mutually exclusive (serialLive requires no live/opening running set), so no union collision state is
+// producible. Serial and running-set liveness are covered by S-CO1..S-CO4.
 // ---------------------------------------------------------------------------
-{
-  const plan = makePlan(['| a | in_progress | |', '| b | in_progress | |']);
-  const manifest = { state: 'open', kind: 'read', members: [{ id: 'a', sealed: false }, { id: 'b', sealed: false }] };
-  const co = readCoordinationState(plan, { manifest });
-  assert(co.batchLive === true && co.batchOpening === false, 'S-CO5: open batch → batchLive');
-  assert(co.serialLive === false, 'S-CO5: serialLive false when a batch is live');
-}
 
 // ---------------------------------------------------------------------------
-// S-CO6 (#383b): UNION state — batch + running set coexist → collisions captures both.
-// ---------------------------------------------------------------------------
-{
-  const plan = makePlan(['| a | in_progress | |', '| b | in_progress | |']);
-  const runningSet = { state: 'open', nodes: [{ id: 'a', kind: 'read' }] };
-  const manifest = { state: 'open', kind: 'read', members: [{ id: 'b', sealed: false }] };
-  const co = readCoordinationState(plan, { runningSet, manifest });
-  assert(co.collisions.includes('running_set') && co.collisions.includes('batch'), 'S-CO6: union state collisions = [running_set, batch], got ' + JSON.stringify(co.collisions));
-}
-
-// ---------------------------------------------------------------------------
-// S-PC (#383): probeCoordination — fs wrapper reads plan + both manifests and surfaces them.
+// S-PC (#383): probeCoordination — fs wrapper reads plan + the running set and surfaces them.
+// (#594: the batch manifest is no longer a coordination surface — probeCoordination no longer reads
+// active-batch.json and no longer returns a `manifest` field.)
 // ---------------------------------------------------------------------------
 {
   const plan = makePlan(['| a | in_progress | |', '| b | in_progress | |']);
@@ -4019,7 +3981,7 @@ function rtHarness(initialFiles, opts) {
     cacheExists: (fp) => fp in files,
   });
   assert(probe.runningSetLive === true && probe.runningSet && probe.runningSet.nodes.length === 2, 'S-PC: probe reads running set');
-  assert(probe.manifest === null, 'S-PC: probe returns null manifest when active-batch.json absent');
+  assert(!('manifest' in probe), 'S-PC: probe no longer surfaces a batch manifest field (#594 batch surface retired)');
 }
 
 // ---------------------------------------------------------------------------
@@ -4289,8 +4251,9 @@ function rtHarness(initialFiles, opts) {
 }
 
 // ---------------------------------------------------------------------------
-// S383-excl (#383): open-ready refuses serial_node_live over a live serial node, and
-// batch_active over a live batch manifest.
+// S383-excl (#383): open-ready refuses serial_node_live over a live serial node. (#594: the batch_active
+// sub-case — open-ready refusing over a live active-batch.json manifest — was removed; that manifest has
+// no producer left, so the guarded state is unproducible.)
 // ---------------------------------------------------------------------------
 {
   // serial_node_live: one in_progress row, NO running-set file (serial node live).
@@ -4302,17 +4265,6 @@ function rtHarness(initialFiles, opts) {
     const h = rsHarness({ [RS_PLAN_PATH]: plan }, (base) => { if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readyPending: [{ id: 'rev', role: 'code-reviewer', declared_write_set: '—' }] }; return { exitCode: 0, result: 'ok' }; });
     const r = runOpenReady({ planPath: RS_PLAN_PATH, project: 'p', max: null, fanoutCapReadonly: 8, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, mkdirp: h.mkdirp });
     assert(r.result === 'refuse' && r.reason === 'serial_node_live', 'S383-excl: open-ready refuses serial_node_live over a live serial node, got ' + JSON.stringify(r.reason));
-  }
-  // batch_active: a live active-batch.json manifest.
-  {
-    const plan = makePlan(['| a | in_progress | |', '| rev | pending | |'], [
-      '| a | code-reviewer | — | — | 1 | sequence |',
-      '| rev | security-reviewer | a | — | 1 | sequence |',
-    ]);
-    const manifest = JSON.stringify({ batchId: 'batch-a', state: 'open', kind: 'read', members: [{ id: 'a', sealed: false }] });
-    const h = rsHarness({ [RS_PLAN_PATH]: plan, '/p/.cache/active-batch.json': manifest }, (base) => { if (base === 'kaola-workflow-next-action.js') return { exitCode: 0, result: 'ok', allDone: false, readyPending: [{ id: 'rev', role: 'security-reviewer', declared_write_set: '—' }] }; return { exitCode: 0, result: 'ok' }; });
-    const r = runOpenReady({ planPath: RS_PLAN_PATH, project: 'p', max: null, fanoutCapReadonly: 8, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, mkdirp: h.mkdirp });
-    assert(r.result === 'refuse' && r.reason === 'batch_active', 'S383-excl: open-ready refuses batch_active over a live batch, got ' + JSON.stringify(r.reason));
   }
 }
 
@@ -5740,6 +5692,81 @@ function rtHarness(initialFiles, opts) {
   }
 
   // -------------------------------------------------------------------------
+  // #593-AC1 (RED→GREEN, real-git co-open lifecycle): a two-node write antichain whose sets are
+  //   exact-file-DISJOINT but share a NON-shared coarse area (both under plugins/, area 'plugins' ∉
+  //   SHARED_INFRA ⇒ classifier {red, coarse}). Pre-#593 writeOverlapRelaxable required policy+consent
+  //   for coarse, so open-ready SERIAL-DEGRADED (no lane_group). Post-#593 coarse co-opens BY DEFAULT
+  //   under the SAME retained net as shared-infra (post-dominating code-reviewer gate + no PROTECTED
+  //   file), with NO --write-overlap-consent. Full lifecycle: co-open → per-leg work → close A
+  //   (deferred) → close B (last ⇒ octopus-merge union barrier / group_passed) → BOTH legs on HEAD.
+  //   RED-provable: on pre-#593 code the setup co-open assert fails (open.laneGroup is falsy).
+  // -------------------------------------------------------------------------
+  {
+    const COARSE_A = 'plugins/kaola-workflow-gitlab/scripts/pa.js';
+    const COARSE_B = 'plugins/kaola-workflow-gitea/scripts/pb.js';
+    const { repoRoot, cacheDir, planPath } = makeLaneRepo({ aSet: COARSE_A, bSet: COARSE_B });
+    // DEFAULT env (no toggle), NO --write-overlap-consent, NO write_overlap_policy in the plan.
+    const open = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
+    assert(open.result === 'ok' && open.laneGroup && Array.isArray(open.laneGroup.members) && open.laneGroup.members.includes('A') && open.laneGroup.members.includes('B'),
+      '#593-AC1: coarse exact-disjoint (both plugins/) co-opens [A,B] BY DEFAULT (no consent) under the net, got ' + JSON.stringify(open.laneGroup || open));
+    assert(Array.isArray(open.opened) && open.opened.length === 2, '#593-AC1: both writes co-opened, got ' + JSON.stringify(open.opened && open.opened.map(n => n.id)));
+    const rsOpen = readRS(cacheDir);
+    assert(rsOpen && rsOpen.lane_group && rsOpen.lane_group.legs && rsOpen.lane_group.legs.A && rsOpen.lane_group.legs.B,
+      '#593-AC1: co-open ⟹ legs provisioned for every member, got ' + JSON.stringify(rsOpen && rsOpen.lane_group));
+    // Per-leg work → close A (deferred) → close B (octopus-merge union barrier at the last close).
+    writeEvidence(cacheDir, 'A');
+    writeEvidence(cacheDir, 'B');
+    for (const [id, rel] of [['A', COARSE_A], ['B', COARSE_B]]) {
+      const legFile = path.join(repoRoot, '.kw', 'legs', 'test-project', id, rel);
+      fs.mkdirSync(path.dirname(legFile), { recursive: true });
+      fs.writeFileSync(legFile, '// ' + id + ' in-lane (leg)\n');
+    }
+    const rA = runNode(repoRoot, ['close-node', '--node-id', 'A', '--project', 'test-project', '--json'], DEFAULT);
+    assert(rA.result === 'ok' && rA.barrier === 'deferred_to_group', '#593-AC1: A deferred to the group barrier, got ' + JSON.stringify(rA));
+    const rB = runNode(repoRoot, ['close-node', '--node-id', 'B', '--project', 'test-project', '--json'], DEFAULT);
+    assert(rB.result === 'ok' && rB.barrier === 'group_passed' && rB.synthesized === true,
+      '#593-AC1: B closes via the group (octopus-merge) union barrier ⇒ group_passed + synthesized, got ' + JSON.stringify(rB));
+    const head = execFileSync('git', ['-C', repoRoot, 'ls-tree', '-r', '--name-only', 'HEAD'], { encoding: 'utf8' });
+    assert(head.includes(COARSE_A) && head.includes(COARSE_B),
+      '#593-AC1: BOTH legs\' files reach HEAD after the union barrier merge, got ' + JSON.stringify(head.split('\n').filter(Boolean)));
+    assert(ledgerStatus(planPath, 'A') === 'complete' && ledgerStatus(planPath, 'B') === 'complete', '#593-AC1: both members complete');
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
+  // #593-AC6 (serial byte-identity): the SAME coarse frontier under KAOLA_PARALLEL_WRITES=0 forces the
+  //   serial single-write path — NO lane_group, exactly ONE write opened, the other stays pending. The
+  //   #593 default-relax is fully suppressed by the explicit kill-switch (byte-identical serial shape).
+  // -------------------------------------------------------------------------
+  {
+    const { repoRoot, cacheDir, planPath } = makeLaneRepo({ aSet: 'plugins/kaola-workflow-gitlab/scripts/qa.js', bSet: 'plugins/kaola-workflow-gitea/scripts/qb.js' });
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], SERIAL);
+    assert(r.result === 'ok', '#593-AC6: open-ready ok under KAOLA_PARALLEL_WRITES=0, got ' + JSON.stringify(r));
+    assert(!r.laneGroup, '#593-AC6: NO laneGroup for a coarse frontier under KAOLA_PARALLEL_WRITES=0 (serial kill-switch)');
+    assert(Array.isArray(r.opened) && r.opened.length === 1, '#593-AC6: exactly ONE write opened (serial), got ' + JSON.stringify(r.opened && r.opened.map(n => n.id)));
+    const rs = readRS(cacheDir);
+    assert(!rs || !rs.lane_group, '#593-AC6: running-set has no lane_group key (serial byte-identity)');
+    assert(ledgerStatus(planPath, r.opened[0].id) === 'in_progress', '#593-AC6: the one opened write is in_progress');
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
+  // #593-AC2-NET2 (runtime net): a coarse frontier with a PROTECTED concrete file in one set does NOT
+  //   co-open even BY DEFAULT — NET-2 blocks at every tier — so open-ready SERIAL-DEGRADES (no
+  //   lane_group, exactly one write opened). PROTECTED stays blocking; no default-relax bypasses it.
+  // -------------------------------------------------------------------------
+  {
+    const { repoRoot, cacheDir } = makeLaneRepo({ aSet: 'plugins/kaola-workflow-gitlab/package-lock.json', bSet: 'plugins/kaola-workflow-gitea/scripts/rb.js' });
+    const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
+    assert(r.result === 'ok', '#593-AC2-NET2: open-ready ok (serial-degrade), got ' + JSON.stringify(r));
+    assert(!r.laneGroup, '#593-AC2-NET2: a PROTECTED file in the coarse pair blocks co-open (NET-2) ⇒ NO laneGroup, got ' + JSON.stringify(r.laneGroup));
+    assert(Array.isArray(r.opened) && r.opened.length === 1, '#593-AC2-NET2: serial-degrade opens exactly ONE write, got ' + JSON.stringify(r.opened && r.opened.map(n => n.id)));
+    const rs = readRS(cacheDir);
+    assert(!rs || !rs.lane_group, '#593-AC2-NET2: running-set has no lane_group (serial-degrade)');
+    cleanup(repoRoot);
+  }
+
+  // -------------------------------------------------------------------------
   // ★ #552-CRASH-WINDOW-LEDGER-ISLAST (RED-provable on the ledger-derived isLast fix): closeGroupMember
   //   flips the closing member's ledger row to `complete` in ONE write, THEN records closed_members +
   //   drops the node from the running set in a SECOND, non-atomic write. A crash between them leaves a
@@ -6481,14 +6508,15 @@ function rtHarness(initialFiles, opts) {
   }
 
   // =========================================================================
-  // #500-SHARED-INFRA-COARSE (leg-couple wire) — shared-infra co-open + the consent-gated coarse class.
+  // #500-SHARED-INFRA-COARSE (leg-couple wire) — shared-infra + coarse co-open under the retained net.
   //
-  // The formation gate (tryFormLaneGroup) calls the validator's --parallel-safe so a shared-infra pair
-  // can RELAX and co-open. #546-G2 (DECISION B, accuracy-first) shifted the SHARED-INFRA class to relax
-  // BY DEFAULT under the structural net (a post-dominating code-reviewer gate over the legs + no
-  // PROTECTED file) — NO write_overlap_policy, NO --write-overlap-consent. The CONSENT-GATED class is
-  // now the NON-shared coarse area (two different top-level dirs under coarse policy): it still requires
-  // write_overlap_policy ∈ {disjoint,coarse} + --write-overlap-consent + the gate. Tests drive the REAL
+  // The formation gate (tryFormLaneGroup) calls the validator's --parallel-safe so an overlapping pair
+  // can RELAX and co-open. #546-G2 (DECISION B) shifted the SHARED-INFRA class to relax BY DEFAULT under
+  // the structural net (a post-dominating code-reviewer gate over the legs + no PROTECTED file); #593
+  // extends the SAME default-relax to the NON-shared COARSE class (two different top-level dirs,
+  // exact-file-disjoint) — NO write_overlap_policy, NO --write-overlap-consent (both vestigial). What
+  // STILL serial-degrades: a genuine overlap (exact / case-collision), a PROTECTED file (NET-2), a
+  // missing gate (NET-1), or a non-resolvable directory/glob coarse entry. Tests drive the REAL
   // adaptive-node + plan-validator subprocesses in a REAL git repo.
   // =========================================================================
   {
@@ -6497,18 +6525,18 @@ function rtHarness(initialFiles, opts) {
     // BY DEFAULT (no policy / no consent) once the gate net holds. makeLaneRepo always builds the
     // post-dominating code-reviewer `review` gate, so gatePresent is true.
     const sharedInfraRepo = () => makeLaneRepo({ aSet: 'scripts/aa.js', bSet: 'scripts/bb.js' });
-    // CONSENT-GATED COARSE FIXTURE: crates/a/x.rs + crates/b/y.rs share the NON-shared coarse area
-    // "crates" → disjointWriteSets verdict:red/kind:'coarse'. This is the class that STILL requires
-    // write_overlap_policy + --write-overlap-consent to relax (the #546-G2 floor). Policy coarse lets
-    // consent relax it; absent consent it serial-degrades.
+    // COARSE FIXTURE (#593 default-relax): crates/a/x.rs + crates/b/y.rs share the NON-shared coarse
+    // area "crates" → disjointWriteSets verdict:red/kind:'coarse'. Under #593 this relaxes BY DEFAULT
+    // under the SAME net as shared-infra (no policy / no consent) — write_overlap_policy is vestigial.
     const coarseRepo = () => makeLaneRepo({ writeOverlapPolicy: 'coarse', aSet: 'crates/a/x.rs', bSet: 'crates/b/y.rs' });
 
     // -----------------------------------------------------------------------
     // #500-DISCRIMINATOR: direct validator --parallel-safe probe (NOT in production code). Proves the
-    // RELAXATION path (writeOverlapRelaxable) — not the green short-circuit — for BOTH classes:
-    //   • shared-infra (#546-G2): relaxes BY DEFAULT — result==='ok' AND relaxed[0].kind==='shared-infra'
-    //     WITHOUT --write-overlap-consent (the DECISION B delta).
-    //   • coarse (consent-gated floor): result==='refuse' WITHOUT consent; result==='ok' WITH consent.
+    // RELAXATION path (writeOverlapRelaxable) — not the green short-circuit — for BOTH classes, both of
+    // which now relax BY DEFAULT under the retained net (#546-G2 shared-infra + #593 coarse):
+    //   • shared-infra: result==='ok' AND relaxed[0].kind==='shared-infra' WITHOUT consent.
+    //   • coarse: result==='ok' AND relaxed[0].kind==='coarse' WITHOUT consent (the #593 delta) — and
+    //     identically WITH consent (policy/consent vestigial).
     // -----------------------------------------------------------------------
     {
       // shared-infra: relaxes by default (NO consent).
@@ -6520,14 +6548,16 @@ function rtHarness(initialFiles, opts) {
       cleanup(repoRoot);
     }
     {
-      // coarse (non-shared): still consent-gated.
+      // coarse (non-shared): relaxes BY DEFAULT under the net (#593), identically with/without consent.
       const { repoRoot, planPath } = coarseRepo();
       const rPos = runVal(repoRoot, [planPath, '--parallel-safe', '--nodes', 'A,B', '--write-overlap-consent', '--json']);
-      assert(rPos.result === 'ok', '#500-DISCRIMINATOR coarse positive: --parallel-safe ok with consent, got ' + JSON.stringify(rPos));
+      assert(rPos.result === 'ok', '#500-DISCRIMINATOR coarse (with consent): --parallel-safe ok, got ' + JSON.stringify(rPos));
       assert(Array.isArray(rPos.relaxed) && rPos.relaxed.length > 0 && rPos.relaxed[0].kind === 'coarse',
-        '#500-DISCRIMINATOR coarse positive: relaxed[0].kind==="coarse" (relaxation path), got ' + JSON.stringify(rPos.relaxed));
+        '#500-DISCRIMINATOR coarse (with consent): relaxed[0].kind==="coarse" (relaxation path), got ' + JSON.stringify(rPos.relaxed));
       const rNeg = runVal(repoRoot, [planPath, '--parallel-safe', '--nodes', 'A,B', '--json']);
-      assert(rNeg.result === 'refuse', '#500-DISCRIMINATOR coarse negative: --parallel-safe refuses WITHOUT consent (coarse stays consent-gated), got ' + JSON.stringify(rNeg));
+      assert(rNeg.result === 'ok', '#500-DISCRIMINATOR coarse (NO consent, #593): --parallel-safe relaxes BY DEFAULT under the net, got ' + JSON.stringify(rNeg));
+      assert(Array.isArray(rNeg.relaxed) && rNeg.relaxed.some(x => x.kind === 'coarse'),
+        '#500-DISCRIMINATOR coarse (NO consent, #593): relaxed[] carries kind coarse (default-relax, consent vestigial), got ' + JSON.stringify(rNeg.relaxed));
       cleanup(repoRoot);
     }
 
@@ -6587,19 +6617,17 @@ function rtHarness(initialFiles, opts) {
     }
 
     // -----------------------------------------------------------------------
-    // ★ #500-NEGATIVE-A (#542 default-on + the kill-switch guard): the coarseRepo fixture is a GENUINE
-    //   NON-shared coarse (crates/a/x.rs + crates/b/y.rs share dir "crates" ∉ SHARED_INFRA) OVERLAP, so
-    //   under #546-G2 it co-opens ONLY with write_overlap_policy:coarse + --write-overlap-consent (the
-    //   coarse class stays consent-gated — see #500-NEGATIVE-B for the no-consent serial-degrade guard;
-    //   the shared-infra class now relaxes by default, covered by #500-DISCRIMINATOR shared-infra +
-    //   #500-POSITIVE-E2E). Under #542 (D-542-01) the legacy toggles no longer gate
-    //   co-open: with consent the overlap co-opens regardless of KAOLA_LANE_CONTAINMENT/LEG_ISOLATION.
-    //   The ONLY serial path is the explicit kill-switch KAOLA_PARALLEL_WRITES=0 — which forces serial
-    //   EVEN with consent. Both halves asserted: (a) consent + no legacy toggle ⇒ co-open (default-on);
-    //   (b) consent + kill-switch ⇒ serial-degrade (the switch bites even on a consenting overlap).
+    // ★ #500-NEGATIVE-A (#542 default-on + the kill-switch guard): the coarseRepo fixture is a NON-shared
+    //   coarse (crates/a/x.rs + crates/b/y.rs share dir "crates" ∉ SHARED_INFRA), exact-file-disjoint
+    //   pair. Under #593 it co-opens BY DEFAULT under the net (with OR without consent — consent is
+    //   vestigial); the shared-infra class likewise (see #500-DISCRIMINATOR + #500-POSITIVE-E2E). Under
+    //   #542 (D-542-01) the legacy toggles no longer gate co-open. The ONLY serial path is the explicit
+    //   kill-switch KAOLA_PARALLEL_WRITES=0 — which forces serial EVEN with consent. Both halves
+    //   asserted: (a) bare default ⇒ co-open (default-on); (b) kill-switch ⇒ serial-degrade.
     // -----------------------------------------------------------------------
     {
-      // (a) Default-on: consent relaxes the overlap and co-opens WITHOUT any legacy toggle (bare default).
+      // (a) Default-on: the coarse pair co-opens WITHOUT any legacy toggle (bare default; consent kept
+      //     here for back-compat but vestigial post-#593).
       const { repoRoot, cacheDir, planPath } = coarseRepo();
       const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], DEFAULT);
       assert(r.laneGroup && Array.isArray(r.laneGroup.members) && r.laneGroup.members.includes('A') && r.laneGroup.members.includes('B'),
@@ -6624,21 +6652,19 @@ function rtHarness(initialFiles, opts) {
     }
 
     // -----------------------------------------------------------------------
-    // ★ #500-NEGATIVE-B (COARSE OVERLAP STAYS CONSENT-GATED — preserved under #542 default-on + #546-G2):
-    //   a frontier with a genuinely-OVERLAPPING NON-shared coarse write set (the crates/ coarse fixture)
-    //   + NO --write-overlap-consent must STILL serial-degrade, even default-on. Default-on co-opens
-    //   planner-proven-DISJOINT frontiers for free; #546-G2 additionally co-opens shared-infra-disjoint
-    //   frontiers under the gate net — but a NON-shared coarse overlap is NEVER relaxed without the
-    //   explicit consent flag. The legacy toggles are no-ops; the consent flag (absent here) is the only
-    //   thing that could relax this coarse overlap. Assert: !r.laneGroup, !rs.lane_group, opened.length===1.
+    // ★ #500-NEGATIVE-B (a genuine blocker STILL serial-degrades under #593 default-relax): the coarse
+    //   default-relax (#593) is gated on the retained net — a coarse pair carrying a PROTECTED concrete
+    //   file (NET-2) is NEVER relaxed, even by default, even with consent. So it must STILL serial-degrade
+    //   to ONE write. (Pre-#593 this class serial-degraded for lack of consent; post-#593 it serial-
+    //   degrades because NET-2 blocks — the "not everything relaxes" guard survives the default-relax.)
     // -----------------------------------------------------------------------
     {
-      const { repoRoot, cacheDir } = coarseRepo();
-      // Bare default (default-on co-open eligible) but NO --write-overlap-consent → the overlap is not relaxed.
-      const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--json'], DEFAULT);
-      assert(!r.laneGroup, '#500-NEGATIVE-B: overlap + NO consent → NO laneGroup (overlap stays consent-gated even default-on), got ' + JSON.stringify(r.laneGroup));
+      // Coarse pair (both under "crates") but one leg writes a PROTECTED lockfile → NET-2 blocks co-open.
+      const { repoRoot, cacheDir } = makeLaneRepo({ aSet: 'crates/a/package-lock.json', bSet: 'crates/b/y.rs' });
+      const r = runNode(repoRoot, ['open-ready', '--project', 'test-project', '--write-overlap-consent', '--json'], DEFAULT);
+      assert(!r.laneGroup, '#500-NEGATIVE-B: a PROTECTED file in a coarse pair (NET-2) blocks co-open ⇒ NO laneGroup, even with consent, got ' + JSON.stringify(r.laneGroup));
       const rs = readRS(cacheDir);
-      assert(!rs || !rs.lane_group, '#500-NEGATIVE-B: running-set has no lane_group (consent-gated overlap)');
+      assert(!rs || !rs.lane_group, '#500-NEGATIVE-B: running-set has no lane_group (NET-2 blocked)');
       assert(Array.isArray(r.opened) && r.opened.length === 1, '#500-NEGATIVE-B: exactly ONE write opened (serial degrade), got ' + JSON.stringify(r.opened && r.opened.map(n => n.id)));
       cleanup(repoRoot);
     }
@@ -7294,6 +7320,112 @@ function rtHarness(initialFiles, opts) {
   assert(out.operator_hint === 'custom-hint-do-not-overwrite', 'T-445-C: existing operator_hint must not be overwritten');
 }
 
+// ===========================================================================
+// #593-V: validator --parallel-safe coarse relaxation net — pins writeOverlapRelaxable's coarse arm
+//   directly at the CLI seam tryFormLaneGroup shells. PURE over the plan file (no git / freeze /
+//   plan_hash — --parallel-safe reads parseNodes directly). Covers AC1 (coarse default-relax),
+//   AC2 (NET-1/NET-2 retained), AC3 (exact/case never relaxes), AC4 (resolvability fallback), and the
+//   policy/consent-vestigial invariant. (The shared-infra + OLD-coarse validator net lives in
+//   test-commit-node.js; #593's coarse-default-relax + resolvability fallback are pinned HERE.)
+// ===========================================================================
+{
+  const { execFileSync } = require('child_process');
+  const VALIDATOR = path.join(__dirname, 'kaola-workflow-plan-validator.js');
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-593-ps-'));
+  // Build a --parallel-safe plan (A,B write antichain; a code-reviewer gate unless noGate; a finalize
+  // sink). --parallel-safe reads parseNodes directly — NO freeze / plan_hash / git required.
+  function writePSPlan(name, opts) {
+    opts = opts || {};
+    const dir = path.join(tmpRoot, name);
+    fs.mkdirSync(dir, { recursive: true });
+    const planPath = path.join(dir, 'workflow-plan.md');
+    const meta = ['## Meta', 'labels: area:scripts', 'sink: CHANGELOG.md'];
+    if (opts.policy) meta.push('write_overlap_policy: ' + opts.policy);
+    const reviewRow = opts.noGate ? null : '| review | code-reviewer | A,B | — | 1 | sequence |';
+    const finalizeDep = opts.noGate ? 'A,B' : 'review';
+    const rows = [
+      '# P', '', ...meta, '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | cardinality | shape |',
+      '| --- | --- | --- | --- | --- | --- |',
+      '| seed | code-explorer | — | — | 1 | sequence |',
+      '| A | tdd-guide | seed | ' + opts.aSet + ' | 1 | sequence |',
+      '| B | tdd-guide | seed | ' + opts.bSet + ' | 1 | sequence |',
+      ...(reviewRow ? [reviewRow] : []),
+      '| finalize | finalize | ' + finalizeDep + ' | — | 1 | sequence |', '',
+      '## Node Ledger', '', '| id | status |', '| --- | --- |',
+      '| seed | complete |', '| A | in_progress |', '| B | in_progress |',
+      ...(opts.noGate ? [] : ['| review | pending |']), '| finalize | pending |', '',
+    ].join('\n') + '\n';
+    fs.writeFileSync(planPath, rows);
+    return planPath;
+  }
+  function ps(planPath, extraArgs) {
+    try {
+      const out = execFileSync('node', [VALIDATOR, planPath, '--parallel-safe', '--nodes', 'A,B', ...(extraArgs || []), '--json'], { encoding: 'utf8' });
+      return { exitCode: 0, ...JSON.parse(out.trim().split('\n').pop()) };
+    } catch (err) {
+      let parsed = {};
+      try { parsed = JSON.parse(String(err.stdout || '').trim().split('\n').pop()); } catch (_) {}
+      return { exitCode: err.status == null ? 1 : err.status, ...parsed };
+    }
+  }
+  const PA = 'plugins/kaola-workflow-gitlab/scripts/pa.js';
+  const PB = 'plugins/kaola-workflow-gitea/scripts/pb.js';
+
+  // #593-V-AC1 (RED→GREEN): coarse exact-disjoint + gate + NO consent, NO policy → ok, relaxed coarse.
+  {
+    const r = ps(writePSPlan('v-ac1', { aSet: PA, bSet: PB }));
+    assert(r.result === 'ok', '#593-V-AC1: coarse exact-disjoint + gate relaxes to ok BY DEFAULT (no policy/consent), got ' + JSON.stringify(r));
+    assert(Array.isArray(r.relaxed) && r.relaxed.some(x => x.kind === 'coarse'), '#593-V-AC1: surfaces relaxed[] with kind coarse, got ' + JSON.stringify(r.relaxed));
+    assert(Array.isArray(r.overlapping) && r.overlapping.length === 0, '#593-V-AC1: overlapping empty (downgraded), got ' + JSON.stringify(r.overlapping));
+  }
+  // #593-V-AC2a (NET-1): coarse exact-disjoint but NO post-dominating code-reviewer gate → refuse,
+  //   even WITH --write-overlap-consent (the gate net is non-negotiable, and consent is vestigial).
+  {
+    const r = ps(writePSPlan('v-ac2a', { aSet: PA, bSet: PB, noGate: true }), ['--write-overlap-consent']);
+    assert(r.result === 'refuse' && r.reason === 'overlapping_write_sets', '#593-V-AC2a: coarse without a post-dominating gate REFUSES (NET-1), got ' + JSON.stringify(r));
+    assert(!r.relaxed, '#593-V-AC2a: nothing relaxed without a gate');
+  }
+  // #593-V-AC2b (NET-2): coarse + gate + a PROTECTED concrete file in one set → refuse; consent/policy
+  //   do NOT override (PROTECTED stays blocking at every tier).
+  {
+    const r = ps(writePSPlan('v-ac2b', { aSet: 'plugins/kaola-workflow-gitlab/package-lock.json', bSet: PB, policy: 'disjoint' }), ['--write-overlap-consent']);
+    assert(r.result === 'refuse', '#593-V-AC2b: a PROTECTED file blocks at every tier (NET-2), consent/policy do not override, got ' + JSON.stringify(r));
+    assert(!r.relaxed, '#593-V-AC2b: nothing relaxed when a PROTECTED file is present');
+  }
+  // #593-V-AC3-exact (unchanged): same exact path → refuse (exact never relaxes; no override).
+  {
+    const r = ps(writePSPlan('v-ac3e', { aSet: PA, bSet: PA, policy: 'disjoint' }), ['--write-overlap-consent']);
+    assert(r.result === 'refuse' && (r.overlapping || []).some(o => o.kind === 'exact'), '#593-V-AC3-exact: same exact path stays blocking (exact kind), got ' + JSON.stringify(r));
+  }
+  // #593-V-AC3-case (unchanged): case-collision (Foo.js vs foo.js) → refuse (same physical file).
+  {
+    const r = ps(writePSPlan('v-ac3c', { aSet: 'plugins/kaola-workflow-gitlab/scripts/Foo.js', bSet: 'plugins/kaola-workflow-gitlab/scripts/foo.js', policy: 'disjoint' }), ['--write-overlap-consent']);
+    assert(r.result === 'refuse', '#593-V-AC3-case: a case-collision stays blocking, got ' + JSON.stringify(r));
+  }
+  // #593-V-AC4-dir (resolvability fallback): coarse + gate + a directory-shaped entry → refuse.
+  {
+    const r = ps(writePSPlan('v-ac4d', { aSet: 'plugins/kaola-workflow-gitlab/scripts/', bSet: PB }));
+    assert(r.result === 'refuse', '#593-V-AC4-dir: a directory-shaped entry makes exact-path disjointness unprovable ⇒ coarse refusal preserved, got ' + JSON.stringify(r));
+    assert(!r.relaxed, '#593-V-AC4-dir: nothing relaxed when disjointness is unprovable');
+  }
+  // #593-V-AC4-glob (resolvability fallback): coarse + gate + a glob entry → refuse.
+  {
+    const r = ps(writePSPlan('v-ac4g', { aSet: 'plugins/kaola-workflow-gitlab/scripts/*.js', bSet: PB }));
+    assert(r.result === 'refuse', '#593-V-AC4-glob: a glob entry makes exact-path disjointness unprovable ⇒ coarse refusal preserved, got ' + JSON.stringify(r));
+  }
+  // #593-V-VESTIGIAL: write_overlap_policy / --write-overlap-consent are redundant at this seam — coarse
+  //   relaxes at policy:off with NO consent, and identically with policy:coarse + consent.
+  {
+    const rOff = ps(writePSPlan('v-vest1', { aSet: PA, bSet: PB, policy: 'off' }));
+    assert(rOff.result === 'ok' && (rOff.relaxed || []).some(x => x.kind === 'coarse'), '#593-V-VESTIGIAL: coarse relaxes at policy:off with NO consent (policy/consent vestigial), got ' + JSON.stringify(rOff));
+    const rConsent = ps(writePSPlan('v-vest2', { aSet: PA, bSet: PB, policy: 'coarse' }), ['--write-overlap-consent']);
+    assert(rConsent.result === 'ok' && (rConsent.relaxed || []).some(x => x.kind === 'coarse'), '#593-V-VESTIGIAL: coarse relaxes identically with policy:coarse + consent, got ' + JSON.stringify(rConsent));
+  }
+  try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch (_) {}
+}
+
 // ---------------------------------------------------------------------------
 // T-445-D: getOperatorHint — unknown reason falls back to a non-empty generic string
 // ---------------------------------------------------------------------------
@@ -7312,7 +7444,7 @@ function rtHarness(initialFiles, opts) {
 {
   const knownReasons = [
     'plan_missing', 'plan_not_mirrored', 'plan_integrity_failed', 'halt_pending',
-    'serial_node_live', 'scheduler_active', 'batch_active',
+    'serial_node_live', 'scheduler_active',
     'next_action_failed', 'node_not_ready', 'no_ready_node',
     'barrier_failed', 'evidence_absent', 'evidence_shape_failed',
     'write_set_overflow', 'lockfile_write', 'mirror_write', 'count_bump',
@@ -8440,6 +8572,44 @@ function rtHarness(initialFiles, opts) {
   assert(a3.ok === false && a3.stale === true, 'T-585-stale-refuse(unit): dead-pid holder → ok:false + stale:true (no auto-takeover)');
   assert(a3.holder && a3.holder.pid === 2147483646, 'T-585-stale-refuse(unit): refusal carries the dead holder payload');
   assert(fs.readFileSync(lockPath, 'utf8') === deadPayload, 'T-585-stale-refuse(unit): the stale lockfile is byte-untouched (never a non-holder unlink)');
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
+
+// -- T-595-orphan (unit, fault-injection): a payload write that throws right after the O_EXCL create
+//    must NOT orphan an empty lockfile. Monkey-patches fs.writeFileSync to fail exactly once (after the
+//    real openSync('wx') has already claimed the file) so acquireProjectLock's catch runs with a
+//    non-EEXIST error. No-takeover invariant: the unlink this exercises can only ever run inside the
+//    SAME call that just created the file via 'wx' (the fault is injected on our own write, not a
+//    foreign holder's) — it can never remove another process's lock. --
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lock595-unit-'));
+  const lockPath = path.join(tmp, '.cache', SCHEDULER_LOCK_NAME);
+  const origWriteFileSync = fs.writeFileSync;
+  let injected = false;
+  fs.writeFileSync = function (...args) {
+    if (!injected) {
+      injected = true;
+      const err = new Error('T-595 injected fault: simulated disk-full on payload write');
+      err.code = 'EFAULTINJECT';
+      throw err;
+    }
+    return origWriteFileSync.apply(fs, args);
+  };
+  let threw = null;
+  try {
+    acquireProjectLock(lockPath, { subcommand: 'open-ready' });
+  } catch (err) {
+    threw = err;
+  } finally {
+    fs.writeFileSync = origWriteFileSync;
+  }
+  assert(threw && threw.code === 'EFAULTINJECT', 'T-595-orphan: the injected write failure propagates (non-EEXIST → rethrow)');
+  assert(!fs.existsSync(lockPath), 'T-595-orphan: the just-created lockfile is NOT orphaned after a payload-write failure');
+  // Follow-up acquire in the SAME process must succeed cleanly — no lingering wrong-flavor scheduler_locked refusal.
+  const follow = acquireProjectLock(lockPath, { subcommand: 'open-ready' });
+  assert(follow.ok === true, 'T-595-orphan: a follow-up acquireProjectLock succeeds (no orphaned-lockfile refusal)');
+  follow.release();
+  assert(!fs.existsSync(lockPath), 'T-595-orphan: follow-up release cleans up');
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
