@@ -173,7 +173,7 @@ const OPERATOR_HINT_REGISTRY = {
 
   // --- speculative-read kernel (#439 D-419 Part 4) ---
   gate_not_complete: (ctx) =>
-    'Node ' + (ctx.nodeId || '<id>') + ' is blocked only by an open gate' + (ctx.speculativeGate ? ' (' + ctx.speculativeGate + ')' : '') + '. It is speculative-eligible: it is NOT opened serially via open-next. To run it ahead of the gate (betting the gate passes), set speculative_open_policy: consent in the plan ## Meta and run ' + ADAPTIVE_NODE_SCRIPT + ' open-ready --project <P> --speculative-consent --json; otherwise wait for the gate to complete.',
+    'Node ' + (ctx.nodeId || '<id>') + ' is blocked only by an open gate' + (ctx.speculativeGate ? ' (' + ctx.speculativeGate + ')' : '') + '. It is speculative-eligible: it is NOT opened serially via open-next. To run it ahead of the gate (betting the gate passes), run ' + ADAPTIVE_NODE_SCRIPT + ' open-ready --project <P> --json (speculation is auto-granted at the default speculative_open_policy: auto; at consent add --speculative-consent); otherwise wait for the gate to complete.',
   speculative_review_required: (ctx) =>
     'Gate ' + (ctx.gate || '<gate>') + ' closed with a FAILING verdict, so the speculative read node(s) that bet on it (' + ((ctx.speculative || []).join(', ') || 'see speculative') + ') ran on an unproven assumption. Review their evidence: KEEP if still valid, or discard each via ' + ADAPTIVE_NODE_SCRIPT + ' discard-speculative --project <P> --node-id <id> --json (resets it to pending + drops its baseline so it re-opens cleanly).',
   not_speculative: (ctx) =>
