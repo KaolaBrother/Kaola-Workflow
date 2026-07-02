@@ -1,0 +1,9 @@
+[
+  {
+    "finding_id": "id=R1 scope=in_scope action=follow_up status=open severity=low fix_role=none rationale=selectSpeculativeWriteGroup fail-open on validator subprocess error vs tryFormLaneGroup fail-closed; bounded by grammar+leg-isolation+merge-fail-closed",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  }
+]
