@@ -4314,9 +4314,18 @@ function selectSpeculativeWriteGroup(candidates, liveNodes, planPath, shell, wri
     if (writeOverlapConsent) vArgs.push('--write-overlap-consent');
     const ps = shell(validatorPath, vArgs);
     if (!(ps.exitCode === 0 && ps.result === 'ok')) {
-      for (const o of (ps.overlapping || [])) {
-        if (candIds.includes(o.a)) excluded.add(o.a);
-        if (candIds.includes(o.b)) excluded.add(o.b);
+      // #599: mirror tryFormLaneGroup's fail-CLOSED posture. A non-ok result carrying a WELL-FORMED
+      // `overlapping` array (even empty) is a real overlap report — keep the existing per-pair
+      // exclusion. A non-ok result WITHOUT one (subprocess crash, unparseable JSON, or an unreachable
+      // non-ok shape that omits the field) carries no overlap report to act on — exclude EVERY
+      // candidate (no speculative open) rather than fail-open by excluding nothing.
+      if (Array.isArray(ps.overlapping)) {
+        for (const o of ps.overlapping) {
+          if (candIds.includes(o.a)) excluded.add(o.a);
+          if (candIds.includes(o.b)) excluded.add(o.b);
+        }
+      } else {
+        for (const id of candIds) excluded.add(id);
       }
     }
   }

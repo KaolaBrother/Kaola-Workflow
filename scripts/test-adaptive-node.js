@@ -8649,6 +8649,53 @@ function rtHarness(initialFiles, opts) {
     assert((r.opened || []).every(n => n.id !== 'writerW'), 'T596-11: no speculative write open without the consent flag, got ' + JSON.stringify((r.opened || []).map(n => n.id)));
     rm596(repoRoot);
   }
+
+  // T599-1 (issue #599 — fail-open bug): selectSpeculativeWriteGroup's --parallel-safe re-check must
+  // mirror tryFormLaneGroup's fail-CLOSED posture on a validator SUBPROCESS FAILURE (crash / unparseable
+  // JSON / any non-ok result carrying no `overlapping` array) — it must NOT proceed with every candidate
+  // just because "for (const o of (ps.overlapping || []))" finds nothing to iterate. Direct unit test via
+  // the SAME injectable seam T596-5 uses (selectSpeculativeWriteGroup takes `shell` as a parameter) — a
+  // fault-injecting shell mock (the M3/M4 idiom above) is the cleanest seam; no real subprocess crash is
+  // needed to prove the selection logic.
+  {
+    const { planPath } = make596PairRepo('shared.js', 'shared.js');
+
+    // (a) validator subprocess CRASH: shellNode's documented fail-closed shape on "throw with no
+    // stdout" is `{ exitCode: status }` — no `result`, no `overlapping` field at all.
+    const crashedShell = () => ({ exitCode: 1 });
+    const crashed = node596.selectSpeculativeWriteGroup(
+      [{ id: 'writerW1', declared_write_set: 'shared.js' }],
+      [{ id: 'writerW2', kind: 'write' }], // a live writer forces the >=2-id --parallel-safe call
+      planPath, crashedShell, false, null
+    );
+    assert(crashed.chosen.length === 0,
+      'T599-1a: a validator subprocess crash excludes EVERY candidate (no speculative open), got ' + JSON.stringify(crashed));
+    assert(crashed.excluded.join(',') === 'writerW1',
+      'T599-1a: the crash-excluded candidate is named in excluded, got ' + JSON.stringify(crashed.excluded));
+
+    // (b) unparseable-JSON shape: exitCode 0 but no `result`/`overlapping` field survived parsing
+    // (shellNode's safeJsonParse returns {} when no line parses as an object).
+    const garbledShell = () => ({ exitCode: 0 });
+    const garbled = node596.selectSpeculativeWriteGroup(
+      [{ id: 'writerW1', declared_write_set: 'shared.js' }],
+      [{ id: 'writerW2', kind: 'write' }],
+      planPath, garbledShell, false, null
+    );
+    assert(garbled.chosen.length === 0,
+      'T599-1b: an unparseable-JSON validator result excludes EVERY candidate too, got ' + JSON.stringify(garbled));
+
+    // (c) well-formed non-ok WITH an `overlapping` array (even empty) keeps the EXISTING per-pair
+    // exclusion behavior — this is NOT a malformed result, so it must not be swept into the new
+    // exclude-everything branch.
+    const wellFormedShell = () => ({ exitCode: 1, result: 'refuse', overlapping: [] });
+    const wellFormed = node596.selectSpeculativeWriteGroup(
+      [{ id: 'writerW1', declared_write_set: 'shared.js' }],
+      [{ id: 'writerW2', kind: 'write' }],
+      planPath, wellFormedShell, false, null
+    );
+    assert(wellFormed.chosen.length === 1 && wellFormed.chosen[0].id === 'writerW1' && wellFormed.excluded.length === 0,
+      'T599-1c: a well-formed non-ok result with an EMPTY overlapping array keeps the existing per-pair posture (nothing excluded), got ' + JSON.stringify(wellFormed));
+  }
 }
 
 // ===========================================================================
