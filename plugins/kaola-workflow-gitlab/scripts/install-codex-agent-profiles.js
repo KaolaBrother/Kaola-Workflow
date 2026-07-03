@@ -896,17 +896,24 @@ function parseTopLevelModelReasoningEffort(configContent) {
   return m ? m[1] : null;
 }
 
-// Exact remediation text for a non-proactive posture; null when nothing to remediate.
+// Exact remediation text for a non-proactive posture; null when nothing to remediate. Leads with
+// the always-available, always-documented in-session ask; the ultra reasoning-effort route is
+// offered second and qualified as undocumented/plan-gated (many Codex plans currently top out
+// at xhigh, so the config.toml / per-session route is not always actionable).
 function dispatchPostureRemediation(posture) {
   if (posture === 'proactive') return null;
   if (posture === 'none') {
     return 'Codex sub-agent spawn tools are not exposed ([features] multi_agent / multi_agent_v2 absent-or-false). '
-      + 'Enable them, then set model_reasoning_effort = "ultra" in ~/.codex/config.toml (or per-session: '
-      + 'codex -c model_reasoning_effort=ultra), or explicitly ask for sub-agents/delegation/parallel work in-session.';
+      + 'Enable them, then explicitly ask for sub-agents/delegation/parallel work in-session; or, if your Codex '
+      + 'exposes an ultra reasoning effort for your model/plan (undocumented as of codex-tui 0.142.5 — check the '
+      + '/model picker), set model_reasoning_effort = "ultra" in ~/.codex/config.toml (or per-session: codex -c '
+      + 'model_reasoning_effort=ultra) for proactive delegation.';
   }
   return 'Codex will refuse sub-agent spawns unless explicitly requested this session (multi_agent_mode: explicitRequestOnly). '
-    + 'Set model_reasoning_effort = "ultra" in ~/.codex/config.toml (or per-session: codex -c model_reasoning_effort=ultra) '
-    + 'for proactive delegation, or explicitly ask for sub-agents/delegation/parallel work in-session.';
+    + 'To dispatch now, explicitly ask for sub-agents/delegation/parallel work in-session; or, if your Codex exposes '
+    + 'an ultra reasoning effort for your model/plan (undocumented as of codex-tui 0.142.5 — check the /model picker), '
+    + 'set model_reasoning_effort = "ultra" in ~/.codex/config.toml (or per-session: codex -c model_reasoning_effort=ultra) '
+    + 'for proactive delegation.';
 }
 
 function deriveDispatchPosture(configContent) {
