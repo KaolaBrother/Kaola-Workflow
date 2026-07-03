@@ -1,0 +1,71 @@
+{
+  "headSha": "5abd169226ed205fe29d50a37686586ad48a699a",
+  "workTreeHash": "clean",
+  "codeTreeHash": "531a90367d278ac53f64d9eec61be15f77f559f4aaa9a37d2b66f88af35bdb12",
+  "validationTestConsumes": [
+    "commands/kaola-workflow-adapt.md",
+    "plugins/kaola-workflow-gitlab/commands/kaola-workflow-adapt.md",
+    "plugins/kaola-workflow-gitea/commands/kaola-workflow-adapt.md",
+    "plugins/kaola-workflow/skills/kaola-workflow-adapt/SKILL.md",
+    "plugins/kaola-workflow-gitlab/skills/kaola-workflow-adapt/SKILL.md",
+    "plugins/kaola-workflow-gitea/skills/kaola-workflow-adapt/SKILL.md",
+    "commands/kaola-workflow-plan-run.md",
+    "plugins/kaola-workflow-gitlab/commands/kaola-workflow-plan-run.md",
+    "plugins/kaola-workflow-gitea/commands/kaola-workflow-plan-run.md",
+    "plugins/kaola-workflow/skills/kaola-workflow-plan-run/SKILL.md",
+    "plugins/kaola-workflow-gitlab/skills/kaola-workflow-plan-run/SKILL.md",
+    "plugins/kaola-workflow-gitea/skills/kaola-workflow-plan-run/SKILL.md",
+    "docs/opencode-edition.md",
+    "docs/api.md",
+    "docs/architecture.md"
+  ],
+  "startedAt": "2026-07-03T16:05:17.122Z",
+  "completedAt": "2026-07-03T16:27:01.018Z",
+  "source": "npm-default",
+  "chains": [
+    {
+      "name": "claude",
+      "exitCode": 0,
+      "command": "npm run test:kaola-workflow:claude",
+      "duration_ms": 838456,
+      "accepted_red": false,
+      "accepted_red_issue": null,
+      "attempts": 1,
+      "retried_transient": false,
+      "timed_out": false
+    },
+    {
+      "name": "codex",
+      "exitCode": 0,
+      "command": "npm run test:kaola-workflow:codex",
+      "duration_ms": 18225,
+      "accepted_red": false,
+      "accepted_red_issue": null,
+      "attempts": 1,
+      "retried_transient": false,
+      "timed_out": false
+    },
+    {
+      "name": "gitlab",
+      "exitCode": 0,
+      "command": "npm run test:kaola-workflow:gitlab",
+      "duration_ms": 222105,
+      "accepted_red": false,
+      "accepted_red_issue": null,
+      "attempts": 1,
+      "retried_transient": false,
+      "timed_out": false
+    },
+    {
+      "name": "gitea",
+      "exitCode": 0,
+      "command": "npm run test:kaola-workflow:gitea",
+      "duration_ms": 224847,
+      "accepted_red": false,
+      "accepted_red_issue": null,
+      "attempts": 1,
+      "retried_transient": false,
+      "timed_out": false
+    }
+  ]
+}
