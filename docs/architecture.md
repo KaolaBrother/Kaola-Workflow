@@ -340,6 +340,11 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   a lone speculative writer forms a size-1 lane group) rather than the parent worktree. On a
   gate `verdict: fail` a speculative write member is DISCARD-ONLY (leg torn down + evidence
   purged, no KEEP option — an asymmetry with the read half's KEEP-or-discard operator review).
+  Since D-597-01 the D-419-02 consent CEREMONY is superseded as the default posture: the
+  freeze-legal set is `off`/`consent`/`auto`, and `auto` — fully-automatic speculative
+  activation with no per-run consent, under the identical structural safety net — is the
+  freeze-time DEFAULT materialized when the field is absent (`consent` remains authorable;
+  `off` is the explicit serial opt-out).
   The original D-419-02 write-overlap deferral rationale (rollback complexity against the
   PARENT worktree) is moot once the speculative write lands in an isolated leg instead: there
   is nothing to revert at the parent, only a leg to tear down. All 25 invariants
