@@ -180,6 +180,29 @@ Immediately before every spawn, announce the dispatch:
 `{task_name}` is `dispatch.codex_task_name` on Codex, the agent name/description on Claude, the
 child task label on opencode.
 
+#### Teammate-Mode Dispatch
+
+When agent teams is enabled (Claude runtime; `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` in the
+session env or settings env block — experimental): spawn each node's role agent as a NAMED
+teammate, name = node id, so the announcement lines and mailbox traffic are self-documenting;
+expect spawns to return immediately and results to arrive as teammate messages; use
+`SendMessage` for the bounded repair nudges these surfaces already define (the out-of-lane
+repair nudge, mid-run write-set widening addressed to the SAME agent) instead of re-dispatching
+fresh agents; use a synchronous spawn only when a blocking result is genuinely required before
+the next decision.
+
+Idle-race discipline: an idle notification is not a deliverable and carries no ordering
+guarantee relative to the agent's final message; on idle-without-deliverable send EXACTLY ONE
+request for the deliverable, then wait — a second ask before the first answer produces
+duplicate deliveries.
+
+When classic (flag off / other runtimes): the existing synchronous dispatch flow stays the
+documented default path, unchanged.
+
+All existing contracts — evidence-persistence per role-kind, the announcement formats, the
+close-echo line, gate non-delegability — hold IDENTICALLY in both modes; teammate mode changes
+the transport, never the contract.
+
 Dispatch the base role profile in `dispatch.agent_type` (legacy `dispatch.role` is only
 descriptive). For any non-null `dispatch.codex_reasoning_effort`, require a
 fresh child-session effort proof for that exact requested effort before dispatch. The proof must inspect the spawned

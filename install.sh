@@ -759,6 +759,40 @@ verify_executable_file() {
   fi
 }
 
+# Report-only Claude dispatch-posture detection (agent teams vs. classic subagents). Mirrors the
+# Codex installer's dispatch-posture report: NEVER fatal (always exits 0 into the caller), and
+# NEVER writes any settings file — it only reads. A live session's CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
+# is itself often sourced from a settings "env" block, so an explicit env var is authoritative
+# when present; only when it is absent do we fall back to scanning the settings files' "env"
+# blocks for the same flag (user settings, then project settings, then project-local settings).
+detect_claude_dispatch_posture() {
+  if [[ "${CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS:-}" == "1" ]]; then
+    echo "teams"
+    return 0
+  fi
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$HOME/.claude/settings.json" "$PWD/.claude/settings.json" "$PWD/.claude/settings.local.json" <<'PY'
+import json, sys
+
+for settings_path in sys.argv[1:]:
+    try:
+        with open(settings_path) as f:
+            settings = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        continue
+    if not isinstance(settings, dict):
+        continue
+    env = settings.get("env")
+    if isinstance(env, dict) and str(env.get("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", "")) == "1":
+        print("teams")
+        sys.exit(0)
+print("classic")
+PY
+    return 0
+  fi
+  echo "classic"
+}
+
 verification_failed=0
 for command_file in "$SOURCE_COMMANDS_DIR"/*.md; do
   [[ -f "$command_file" ]] || continue
@@ -804,6 +838,20 @@ echo ""
 # #2 / D-542-01: planner-proven-disjoint parallel write frontiers are default-ON (no operator
 # toggle). Per-leg worktree isolation + the mandatory synthesizer reconcile are the correctness net.
 echo "Disjoint parallel writes are default-ON (set KAOLA_PARALLEL_WRITES=0 to force serial)."
+echo ""
+
+CLAUDE_DISPATCH_POSTURE="$(detect_claude_dispatch_posture)"
+echo "Kaola-Workflow Claude dispatch posture:"
+echo "  claude_dispatch_posture: $CLAUDE_DISPATCH_POSTURE"
+if [[ "$CLAUDE_DISPATCH_POSTURE" = "teams" ]]; then
+  echo "  Agent teams (experimental) is enabled — teammate-mode orchestration is available."
+else
+  echo "  Classic subagents (the Task tool) are always available — this needs no setup."
+  echo "  Agent teams is an experimental Claude Code capability; to enable teammate-mode"
+  echo "  orchestration, set CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 in your shell environment,"
+  echo "  or in a settings \"env\" block (~/.claude/settings.json, project .claude/settings.json,"
+  echo "  or .claude/settings.local.json)."
+fi
 echo ""
 if [[ -f "$SUPPORT_HOOKS_DIR/hooks.json" ]]; then
   echo "Hooks installed to: $SUPPORT_HOOKS_DIR/hooks.json"

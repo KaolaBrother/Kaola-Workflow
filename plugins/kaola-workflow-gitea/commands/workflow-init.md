@@ -183,6 +183,15 @@ Append equivalent missing sections only. Treat headings with the same meaning as
 > feature flags alone. Never silently edit `~/.codex/config.toml`; show the
 > minimal diff and apply it only with user authorization.
 
+> **Claude dispatch posture note:** Audit dispatch posture for this session before claiming
+> role-dispatch readiness: probe the `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` environment variable
+> first; if unset, fall back to the session settings env block. Report
+> `claude_dispatch_posture: teams | classic` — `teams` when the flag resolves truthy, `classic`
+> otherwise. This audit is report-only: never write or edit user settings/config to flip the
+> flag. Remediation leads with the classic path — the synchronous dispatch flow is always
+> available and requires no flag — and only then notes that agent teams is an experimental,
+> flag-gated alternative for a session that has explicitly opted in.
+
 Keep the working-principle bullets concise.
 
 If an existing `CLAUDE.md` is bloated or duplicates the sections above, do not silently replace it. Add a short `## Maintenance Note` with the proposed consolidation and ask before destructive rewriting.

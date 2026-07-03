@@ -455,6 +455,10 @@ assert(exists('AGENTS.md'), 'AGENTS.md must exist at repo root (dogfood redirect
 assertIncludes('AGENTS.md', '> **MANDATORY — READ CLAUDE.md BEFORE ANY ACTION THIS SESSION.**');
 assertIncludes('commands/workflow-init.md', '> **MANDATORY — READ CLAUDE.md BEFORE ANY ACTION THIS SESSION.**');
 
+// #606: the Claude dispatch-posture config-audit line must be present in the root workflow-init
+// command, outside the KW-CLAUDE-TEMPLATE region (in the Codex-hooks-note area).
+assertIncludes('commands/workflow-init.md', 'claude_dispatch_posture: teams | classic');
+
 // issue #283: kaola-workflow-phase6.md hard-removed; kaola-workflow-finalize.md is the
 // route-agnostic terminal routine. Assert canonical present + legacy absent.
 assert(!exists('commands/kaola-workflow-phase6.md'),
@@ -950,6 +954,22 @@ assertIncludes('commands/kaola-workflow-plan-run.md', '→ running {node_id} · 
 
 // #605: required progress-echo line printed after every close-and-open-next.
 assertIncludes('commands/kaola-workflow-plan-run.md', '{node-id} → complete; opened: {next-id|—}');
+
+// #606: teammate-mode dispatch subsection must propagate to ALL SIX plan-run surfaces (#400) — the
+// 3 edition commands + the 3 Codex SKILL packs. Pin the sentinel sentence + the one-nudge idle-race
+// rule so a drop on any surface fails here (mirrors the #486 adaptSurfaces486 pattern).
+const planRunSurfaces606 = [
+  'commands/kaola-workflow-plan-run.md',
+  'plugins/kaola-workflow-gitlab/commands/kaola-workflow-plan-run.md',
+  'plugins/kaola-workflow-gitea/commands/kaola-workflow-plan-run.md',
+  'plugins/kaola-workflow/skills/kaola-workflow-plan-run/SKILL.md',
+  'plugins/kaola-workflow-gitlab/skills/kaola-workflow-plan-run/SKILL.md',
+  'plugins/kaola-workflow-gitea/skills/kaola-workflow-plan-run/SKILL.md',
+];
+for (const file of planRunSurfaces606) {
+  assertIncludes(file, "spawn each node's role agent as a NAMED teammate");
+  assertIncludes(file, 'send EXACTLY ONE request for the deliverable, then wait');
+}
 
 // #400: registry-driven route-reachability contract for the Claude command surface. Every
 // route/command target a claim/startup/resume receipt emits MUST resolve to an installed command

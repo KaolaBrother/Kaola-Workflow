@@ -572,6 +572,10 @@ const gitlabSkillTemplate = extractClaudeTemplate(gitlabInitSkill);
 assert(gitlabCmdTemplate === gitlabSkillTemplate,
   'CLAUDE.md template must be byte-identical within GitLab forge pair');
 
+// #606: the Claude dispatch-posture config-audit line must be present in the GitLab workflow-init
+// command, outside the KW-CLAUDE-TEMPLATE region.
+assertIncludes(`${pluginRoot}/commands/workflow-init.md`, 'claude_dispatch_posture: teams | classic');
+
 for (const file of listFiles(pluginRoot + '/scripts', file =>
   file.endsWith('.js') && !file.endsWith('validate-kaola-workflow-gitlab-contracts.js')
 )) {
@@ -770,6 +774,10 @@ for (const planRunSurface of [
 
   // #605: required progress-echo line printed after every close-and-open-next.
   assertIncludes(planRunSurface, '{node-id} → complete; opened: {next-id|—}');
+
+  // #606: teammate-mode dispatch subsection + the one-nudge idle-race rule.
+  assertIncludes(planRunSurface, "spawn each node's role agent as a NAMED teammate");
+  assertIncludes(planRunSurface, 'send EXACTLY ONE request for the deliverable, then wait');
 }
 
 // #603: the Codex startup surfaces (kaola-workflow-next / kaola-workflow-adapt) must detect the

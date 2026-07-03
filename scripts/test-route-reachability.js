@@ -436,6 +436,29 @@ for (const ed of codexEditions) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// T14: teammate-mode dispatch subsection must appear in each of the 6 plan-run surfaces (3
+// Claude commands + 3 Codex SKILLs): the NAMED-teammate sentinel sentence and the one-nudge
+// idle-race rule. Fail-closed: unconditional assert() per surface.
+// ---------------------------------------------------------------------------
+{
+  const planRunSurfaces = [
+    'commands/kaola-workflow-plan-run.md',
+    'plugins/kaola-workflow/skills/kaola-workflow-plan-run/SKILL.md',
+    'plugins/kaola-workflow-gitlab/commands/kaola-workflow-plan-run.md',
+    'plugins/kaola-workflow-gitlab/skills/kaola-workflow-plan-run/SKILL.md',
+    'plugins/kaola-workflow-gitea/commands/kaola-workflow-plan-run.md',
+    'plugins/kaola-workflow-gitea/skills/kaola-workflow-plan-run/SKILL.md',
+  ];
+  for (const f of planRunSurfaces) {
+    const content = norm(fs.readFileSync(path.join(REPO, f), 'utf8'));
+    assert(content.includes(norm("spawn each node's role agent as a NAMED teammate")),
+      `T14: ${f} must carry the teammate-mode dispatch sentinel sentence`);
+    assert(content.includes(norm('send EXACTLY ONE request for the deliverable, then wait')),
+      `T14: ${f} must carry the one-nudge idle-race rule`);
+  }
+}
+
 if (failed) {
   console.error(`\nRoute-reachability test FAILED: ${failed} failure(s), ${passed} passed.`);
   process.exit(1);
