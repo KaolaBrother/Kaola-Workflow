@@ -18,6 +18,10 @@ const REPO = path.resolve(__dirname, '..');
 let passed = 0, failed = 0;
 function assert(cond, msg) { if (cond) passed++; else { failed++; console.error('FAIL: ' + msg); } }
 const exists = rel => fs.existsSync(path.join(REPO, rel));
+// whitespace-normalize multi-word needles for reflow tolerance (same convention as the
+// validate-*-contracts.js norm() helper) — a prose sentence line-wrapped in the source markdown
+// must still match a needle written as one continuous string.
+const norm = s => String(s).replace(/\s+/g, ' ');
 
 // The byte-identical adaptive schema is the single source of the adaptive route constants — every
 // edition's schema (the forge files keep the canonical name) re-exports the same values, so requiring
@@ -374,6 +378,61 @@ for (const ed of codexEditions) {
       `T11: ${f} must contain <!-- PIN: adaptive-default-contract --> comment (n3-adaptive-default-contract, #515)`);
     assert(content.includes('path_not_installed'),
       `T11: ${f} must contain "path_not_installed" literal (n3-adaptive-default-contract, #515/#538)`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// T12: #602/#604/#605 dispatch-card visibility contract must appear in each of the 6 plan-run
+// surfaces (3 Claude commands + 3 Codex SKILLs): the pre-dispatch card-acquisition rule + the
+// no-improvise prohibition (#602), the three announcement formats + inline fallback (#604), and
+// the required close-echo progress line (#605). Fail-closed: unconditional assert() per surface.
+// ---------------------------------------------------------------------------
+{
+  const planRunSurfaces = [
+    'commands/kaola-workflow-plan-run.md',
+    'plugins/kaola-workflow/skills/kaola-workflow-plan-run/SKILL.md',
+    'plugins/kaola-workflow-gitlab/commands/kaola-workflow-plan-run.md',
+    'plugins/kaola-workflow-gitlab/skills/kaola-workflow-plan-run/SKILL.md',
+    'plugins/kaola-workflow-gitea/commands/kaola-workflow-plan-run.md',
+    'plugins/kaola-workflow-gitea/skills/kaola-workflow-plan-run/SKILL.md',
+  ];
+  for (const f of planRunSurfaces) {
+    const content = norm(fs.readFileSync(path.join(REPO, f), 'utf8'));
+    assert(content.includes(norm("take the dispatch card from the summary line's `opened=` segment or from `.cache/<op>-envelope.json`. Never dispatch without the card in view.")),
+      `T12: ${f} must document the pre-dispatch card-acquisition rule (#602)`);
+    assert(content.includes('Every spawn parameter comes from the dispatch card.'),
+      `T12: ${f} must document the no-improvise prohibition (#602)`);
+    assert(content.includes('plan-run orchestrator: driving {project} — {N} nodes; each role subagent will be announced at dispatch.'),
+      `T12: ${f} must carry the run-start announcement format (#604)`);
+    assert(content.includes('→ dispatching {node_id} · {role} as subagent task "{task_name}" (model {model|default}, effort {effort|inherit})'),
+      `T12: ${f} must carry the pre-spawn announcement format (#604)`);
+    assert(content.includes('← {node_id} · {role} returned: {verdict or one-line outcome}'),
+      `T12: ${f} must carry the on-return announcement format (#604)`);
+    assert(content.includes('→ running {node_id} · {role} inline (…reason token…)'),
+      `T12: ${f} must carry the inline-fallback announcement format (#604)`);
+    assert(content.includes('{node-id} → complete; opened: {next-id|—}'),
+      `T12: ${f} must carry the required close-echo progress line (#605)`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// T13: #603 Codex Dispatch Mode Detection must appear in the 6 Codex startup SKILL surfaces
+// (kaola-workflow-next + kaola-workflow-adapt, 3 editions each) — Codex-only, no Claude command
+// counterpart (Claude dispatch has no task-name/dispatch-mode distinction). Fail-closed.
+// ---------------------------------------------------------------------------
+{
+  const codexDispatchModeSurfaces = [
+    'plugins/kaola-workflow/skills/kaola-workflow-next/SKILL.md',
+    'plugins/kaola-workflow-gitlab/skills/kaola-workflow-next/SKILL.md',
+    'plugins/kaola-workflow-gitea/skills/kaola-workflow-next/SKILL.md',
+    'plugins/kaola-workflow/skills/kaola-workflow-adapt/SKILL.md',
+    'plugins/kaola-workflow-gitlab/skills/kaola-workflow-adapt/SKILL.md',
+    'plugins/kaola-workflow-gitea/skills/kaola-workflow-adapt/SKILL.md',
+  ];
+  for (const f of codexDispatchModeSurfaces) {
+    const content = fs.readFileSync(path.join(REPO, f), 'utf8');
+    assert(content.includes('--codex-dispatch-mode'),
+      `T13: ${f} must thread the detected dispatch mode into the claim via --codex-dispatch-mode (#603)`);
   }
 }
 

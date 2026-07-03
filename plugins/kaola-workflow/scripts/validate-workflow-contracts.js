@@ -934,6 +934,23 @@ assertIncludes('commands/kaola-workflow-plan-run.md', 'fresh child-session effor
 assertIncludes('commands/kaola-workflow-plan-run.md', 'codex_effort_override_unavailable');
 assertNotIncludes('commands/kaola-workflow-plan-run.md', '`sonnet`/absent');
 
+// #602: the canonical --summary invocation must document the dispatch-essentials one-liner it
+// actually prints, the extended pre-dispatch card-acquisition rule, and the explicit
+// no-improvise prohibition on every plan-run spawn.
+assertIncludes('commands/kaola-workflow-plan-run.md', 'opened=<node-id> role=<role> task=<codex_task_name>');
+assertIncludes('commands/kaola-workflow-plan-run.md', "take the dispatch card from the summary line's `opened=` segment or from `.cache/<op>-envelope.json`. Never dispatch without the card in view.");
+assertIncludes('commands/kaola-workflow-plan-run.md', 'Every spawn parameter comes from the dispatch card.');
+
+// #604: dispatch visibility announcement contract — run-start, pre-spawn, on-return, and the
+// inline-fallback format, verbatim.
+assertIncludes('commands/kaola-workflow-plan-run.md', 'plan-run orchestrator: driving {project} — {N} nodes; each role subagent will be announced at dispatch.');
+assertIncludes('commands/kaola-workflow-plan-run.md', '→ dispatching {node_id} · {role} as subagent task "{task_name}" (model {model|default}, effort {effort|inherit})');
+assertIncludes('commands/kaola-workflow-plan-run.md', '← {node_id} · {role} returned: {verdict or one-line outcome}');
+assertIncludes('commands/kaola-workflow-plan-run.md', '→ running {node_id} · {role} inline (…reason token…)');
+
+// #605: required progress-echo line printed after every close-and-open-next.
+assertIncludes('commands/kaola-workflow-plan-run.md', '{node-id} → complete; opened: {next-id|—}');
+
 // #400: registry-driven route-reachability contract for the Claude command surface. Every
 // route/command target a claim/startup/resume receipt emits MUST resolve to an installed command
 // file in EACH Claude edition. require() the schema route constants (no hand-listed drift) + the

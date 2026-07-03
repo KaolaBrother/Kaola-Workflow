@@ -262,6 +262,29 @@ branch, which claims and writes nothing):
 
 Non-adaptive paths (`fast` | `full`) fall through to the Startup transaction unchanged.
 
+## Codex Dispatch Mode Detection
+
+Before the Startup transaction, detect the Codex spawn-tooling shape so the claim can persist
+it for later dispatch cards. Reuse the preflight doctor (the same script the Delegation
+Contract's tool-availability check above already relies on) rather than re-deriving the config
+parse:
+
+```bash
+preflight_script="plugins/kaola-workflow-gitlab/scripts/kaola-workflow-codex-preflight.js"
+if [ ! -f "$preflight_script" ]; then
+  preflight_script="$(find "$HOME/.codex/plugins/cache" -path '*/kaola-workflow-gitlab/*/scripts/kaola-workflow-codex-preflight.js' -print -quit 2>/dev/null)"
+fi
+KAOLA_CODEX_DISPATCH_MODE=""
+if [ -f "$preflight_script" ]; then
+  DOCTOR_OUT="$(node "$preflight_script" --doctor --project-root "$PWD" --json 2>/dev/null)" || true
+  KAOLA_CODEX_DISPATCH_MODE="$(node -e "try{const j=JSON.parse(process.argv[1]);const byScope=(j.scopes||[]).reduce((m,s)=>{m[s.scope]=s;return m;},{});const s=(byScope.project&&byScope.project.exists)?byScope.project:byScope.user;process.stdout.write(s&&s.dispatch_mode&&s.dispatch_mode!=='n/a'?s.dispatch_mode:'')}catch(e){}" "$DOCTOR_OUT" 2>/dev/null)" || true
+fi
+```
+
+An absent or failed detection leaves `KAOLA_CODEX_DISPATCH_MODE` empty — the Startup call below
+omits `--codex-dispatch-mode` and the claim keeps its fail-closed `v1-thread-id` default. Never
+fabricate a mode; only pass a value the doctor actually reported.
+
 ## Startup
 
 **Skip this transaction when `KAOLA_PATH=adaptive`** — the adaptive front end (above) claims via the
@@ -283,10 +306,13 @@ if [ -f "$claim_script" ]; then
   [ -n "${KAOLA_SINK:-}" ] && KAOLA_SINK_FLAG="--sink $KAOLA_SINK"
   KAOLA_TARGET_FLAG=""
   [ -n "${KAOLA_TARGET_ISSUE:-}" ] && KAOLA_TARGET_FLAG="--target-issue $KAOLA_TARGET_ISSUE"
+  KAOLA_DISPATCH_MODE_FLAG=""
+  [ -n "${KAOLA_CODEX_DISPATCH_MODE:-}" ] && KAOLA_DISPATCH_MODE_FLAG="--codex-dispatch-mode $KAOLA_CODEX_DISPATCH_MODE"
   STARTUP_OUT=$(node "$claim_script" startup \
     --runtime codex \
     $KAOLA_SINK_FLAG \
-    $KAOLA_TARGET_FLAG 2>/dev/null) || true
+    $KAOLA_TARGET_FLAG \
+    $KAOLA_DISPATCH_MODE_FLAG 2>/dev/null) || true
   KAOLA_PROJECT="$(node -e "try{process.stdout.write(JSON.parse(process.argv[1]).project||'')}catch(e){}" "$STARTUP_OUT" 2>/dev/null)" || true
   KAOLA_CLAIM="$(node -e "try{process.stdout.write(JSON.parse(process.argv[1]).claim||'')}catch(e){}" "$STARTUP_OUT" 2>/dev/null)" || true
   KAOLA_WORKTREE_PATH="$(node -e "try{process.stdout.write(JSON.parse(process.argv[1]).worktree_path||'')}catch(e){}" "$STARTUP_OUT" 2>/dev/null)" || true
