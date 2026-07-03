@@ -170,7 +170,14 @@ Append equivalent missing sections only. Treat headings with the same meaning as
 > `kaola-workflow-codex-preflight.js --doctor --json` must agree with the active
 > config form (`multi_agent_v2 = true`, inline `{ enabled = true, ... }`, or
 > `[features.multi_agent_v2] enabled = true`). Warning suppression under `[notice]`
-> is not feature enablement. Never silently edit `~/.codex/config.toml`; show the
+> is not feature enablement. Features enabled is NOT the same as dispatch-ready:
+> read the doctor JSON's additive `dispatch_posture` field too — `proactive`
+> (`model_reasoning_effort = "ultra"`) accepts a spawn with no per-session ask;
+> `explicitRequestOnly` (effort below `ultra`, or unset) model-refuses spawns
+> unless this session explicitly asks for sub-agents/delegation/parallel work,
+> or the operator sets `model_reasoning_effort = "ultra"`. Report the doctor's
+> `dispatch_posture_warning` remediation verbatim; do not claim readiness from
+> feature flags alone. Never silently edit `~/.codex/config.toml`; show the
 > minimal diff and apply it only with user authorization.
 
 Keep the working-principle bullets concise.
