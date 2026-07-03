@@ -488,8 +488,8 @@ one finalization  →  close N issues  →  remove N .roadmap/issue-N.md files
 for the Claude edition) and a `.toml` triple across the three plugin editions:
 `plugins/kaola-workflow/agents/<name>.toml` (codex),
 `plugins/kaola-workflow-gitlab/agents/<name>.toml`, and
-`plugins/kaola-workflow-gitea/agents/<name>.toml`. The current roster is 14 base-role
-profiles (14 files, 14 triples); the 6 `-max` xhigh effort-variant profiles were retired
+`plugins/kaola-workflow-gitea/agents/<name>.toml`. The current roster is 15 base-role
+profiles (15 files, 15 triples); the 6 `-max` xhigh effort-variant profiles were retired
 in #451 and planner-selected effort now flows through per-spawn dispatch metadata (`opus → xhigh`,
 `sonnet → high`) rather than a per-role profile pin. All three `.toml` twins for a given profile are byte-identical
 (forge-neutral by the §341 contract — no CLI binaries, no forge brands) and carry the same

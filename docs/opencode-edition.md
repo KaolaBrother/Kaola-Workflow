@@ -271,13 +271,13 @@ carries the "NEVER downgrade to fast/full" guard with no un-`NEVER`'d fallback w
 
 `install-opencode.sh` is a standalone installer (not `install.sh --forge`) and mirrors
 install.sh's #538 install-time opt-in partition. The **default** install deploys the
-**adaptive-core** command set ONLY (6 files), so adaptive is the unconditional default
+**adaptive-core** command set ONLY (5 files), so adaptive is the unconditional default
 both at the router (the transform above) and at the install surface (which commands
 exist). The fast / full-phase commands are opt-ins:
 
 | Flag | Commands added | Recorded in `installed_paths` |
 | --- | --- | --- |
-| *(default)* | adapt, auto, finalize, plan-run, workflow-init, workflow-next | `[]` |
+| *(default)* | adapt, finalize, plan-run, workflow-init, workflow-next | `[]` |
 | `--with-fast` | `kaola-workflow-fast` | `["fast"]` |
 | `--with-full` | `kaola-workflow-phase1`..`phase5` | `["full"]` |
 | `--with-fast --with-full` | all of the above | `["fast","full"]` |
@@ -377,7 +377,7 @@ Claude resolver to this opencode form at generation time; canonical `commands/*.
 ./install-opencode.sh --uninstall             # remove the kaola-deployed edition (see Uninstall)
 ```
 
-The default install deploys the **adaptive-core** command set only (6 files);
+The default install deploys the **adaptive-core** command set only (5 files);
 `--with-fast` / `--with-full` add the fast / full-phase commands (see
 [Installer command-set partition](#installer-command-set-partition--with-fast---with-full)).
 The opt-in is recorded in the shared `~/.config/kaola-workflow/config.json`

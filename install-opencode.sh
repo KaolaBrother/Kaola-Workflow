@@ -81,7 +81,7 @@ Usage: ./install-opencode.sh [--target DIR] [--global] [--regenerate] [--uninsta
   --with-full      also deploy kaola-workflow-phase1..5.md (recorded in installed_paths)
 
 PATH SELECTION: the default install deploys the ADAPTIVE-CORE commands only (adapt,
-auto, finalize, plan-run, workflow-init, workflow-next). --with-fast / --with-full add
+finalize, plan-run, workflow-init, workflow-next). --with-fast / --with-full add
 the fast / full-phase commands. Re-install is a UNION: a prior opt-in is never removed
 (--with-fast once, then bare re-install, preserves the fast command + installed_paths).
 The opt-in is recorded in the SHARED ~/.config/kaola-workflow/config.json (the same file
