@@ -503,8 +503,9 @@ for the Claude edition) and a `.toml` triple across the three plugin editions:
 `plugins/kaola-workflow-gitlab/agents/<name>.toml`, and
 `plugins/kaola-workflow-gitea/agents/<name>.toml`. The current roster is 15 base-role
 profiles (15 files, 15 triples); the 6 `-max` xhigh effort-variant profiles were retired
-in #451 and planner-selected effort now flows through per-spawn dispatch metadata (`opus → xhigh`,
-`sonnet → high`) rather than a per-role profile pin. All three `.toml` twins for a given profile are byte-identical
+in #451 and planner-selected effort now flows through per-spawn dispatch metadata (`reasoning → xhigh`,
+`standard → high`; legacy plan-tier tokens `opus`/`sonnet` normalize to the same effort, #610) rather
+than a per-role profile pin. All three `.toml` twins for a given profile are byte-identical
 (forge-neutral by the §341 contract — no CLI binaries, no forge brands) and carry the same
 `description` / `nickname_candidates` metadata as the managed `config/agents.toml` block.
 
@@ -530,7 +531,7 @@ The resolver (`resolve-agent-model`) uses this precedence chain:
 
 **Effect on adaptive nodes:** Dynamically dispatched nodes now resolve to their correct profile-aware model and render the model badge in the dispatch call. Previously, agents with `model: inherit` frontmatter resolved to `''` and silently inherited Opus regardless of the installed profile. Frontmatter remains `inherit` (the install-emitted manifest is the authoritative source); the dispatch carries an explicit `model=` so the badge is always visible.
 
-**Runtime per-node override:** At RUNTIME, the per-node `model` column in `workflow-plan.md` beats install-time profile selection — see the #382 per-node model tier. A node's `model` cell (`opus` or `sonnet`) is sealed at freeze and surfaced by `next-action.js` in every ready-set item; `open-next`/`open-ready` thread it into the running-set manifest for crash/reconcile re-dispatch.
+**Runtime per-node override:** At RUNTIME, the per-node `model` column in `workflow-plan.md` beats install-time profile selection — see the #382/#610 per-node model tier. A node's `model` cell (the neutral `NODE_MODEL_TIERS` tokens `reasoning`/`standard`, or a legacy `opus`/`sonnet` alias that `normalizeTier()` resolves to the same tier) is sealed at freeze and surfaced by `next-action.js` in every ready-set item; `open-next`/`open-ready` thread it into the running-set manifest for crash/reconcile re-dispatch. Every dispatch/handoff emission carrying a non-null `model` additionally attaches a `model_display` object (`{ claude, codex, opencode }`, via `modelDisplay(tier)`) so a narrative echo of the tier reads natively per runtime instead of surfacing a foreign vendor noun — see `docs/api.md` § "`opened` payload — `dispatch` sub-object" for the field shape.
 
 ## Concurrent Same-Repo Sessions — Main-Root Authority and Lane Classifier (#579)
 
