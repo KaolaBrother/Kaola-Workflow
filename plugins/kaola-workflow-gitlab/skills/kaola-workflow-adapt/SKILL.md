@@ -127,6 +127,14 @@ the example above models both.
 - Author a `knowledge-lookup` node when the task depends on external library or API
   behavior, framework conventions, or open-web/expertise knowledge that cannot be confirmed
   from the local codebase alone. This mirrors the Phase 1 `knowledge-lookup` trigger.
+- **Provision gate instrumentation upstream, never in the gate.** When a `main-session-gate`
+  needs instrumentation to execute (a probe scene/test/fixture, INCLUDING build wiring), author an
+  upstream writer node (`tdd-guide`/`implementer`) to produce it inside ITS OWN declared write
+  set; the gate never authors or deletes files, it only RUNS what was provisioned. State the
+  durability decision in the plan: durable (committed, env-gated — preferred; the probe becomes a
+  regression asset) or ephemeral (the deletion is likewise owned by a downstream writer/finalize
+  node, with the path in THAT node's declared write set). Out-of-repo scratch stays legal for a
+  gate whose harness can probe from an external path.
 
 ### Question-shaped & bug-shaped issues
 

@@ -930,6 +930,22 @@ assertIncludes('scripts/kaola-workflow-plan-validator.js', 'G3: main-session-gat
 assertIncludes('commands/kaola-workflow-plan-run.md', 'main-session-gate');
 assertIncludes('agents/workflow-planner.md', 'main-session-gate');
 
+// #607: gate instrumentation is provisioned upstream, never authored by the gate itself — the
+// main-session-gate role stays read-only by construction; a probe/fixture the gate needs is
+// authored inside an upstream writer node's declared write set, and the plan states whether the
+// artifact is durable or ephemeral. Pinned on the planner's own authoring surfaces so the rule
+// cannot silently drop from all of them at once (md↔toml parity for the toml twins is separately
+// enforced by test-agent-profile-parity.js FEATURE_TOKENS).
+assertIncludes('agents/workflow-planner.md', 'the gate never authors or deletes files');
+const adaptSkillSurfacesGateProvisioning607 = [
+  'plugins/kaola-workflow/skills/kaola-workflow-adapt/SKILL.md',
+  'plugins/kaola-workflow-gitlab/skills/kaola-workflow-adapt/SKILL.md',
+  'plugins/kaola-workflow-gitea/skills/kaola-workflow-adapt/SKILL.md',
+];
+for (const file of adaptSkillSurfacesGateProvisioning607) {
+  assertIncludes(file, 'the gate never authors or deletes files');
+}
+
 // #582: tiered Codex effort dispatch must be effective in plan-run prose. The command surface
 // must require the v2 fork discipline and fail closed for unproven v1 tiered dispatch.
 assertIncludes('commands/kaola-workflow-plan-run.md', 'fork_turns: "none"');
@@ -969,6 +985,23 @@ const planRunSurfaces606 = [
 for (const file of planRunSurfaces606) {
   assertIncludes(file, "spawn each node's role agent as a NAMED teammate");
   assertIncludes(file, 'send EXACTLY ONE request for the deliverable, then wait');
+}
+
+// #607: the gate-instrumentation-provisioning block (a main-session-gate node body never
+// instructs authoring files; instrumentation is provisioned upstream; the runtime gate-window
+// fence backs it) must propagate to ALL SIX plan-run surfaces (#400) — a drop on any surface
+// fails here.
+const planRunSurfacesGateFence607 = [
+  'commands/kaola-workflow-plan-run.md',
+  'plugins/kaola-workflow-gitlab/commands/kaola-workflow-plan-run.md',
+  'plugins/kaola-workflow-gitea/commands/kaola-workflow-plan-run.md',
+  'plugins/kaola-workflow/skills/kaola-workflow-plan-run/SKILL.md',
+  'plugins/kaola-workflow-gitlab/skills/kaola-workflow-plan-run/SKILL.md',
+  'plugins/kaola-workflow-gitea/skills/kaola-workflow-plan-run/SKILL.md',
+];
+for (const file of planRunSurfacesGateFence607) {
+  assertIncludes(file, '<!-- PIN: gate-instrumentation-provisioning -->');
+  assertIncludes(file, 'KAOLA_GATE_WINDOW_FENCE=0');
 }
 
 // #400: registry-driven route-reachability contract for the Claude command surface. Every

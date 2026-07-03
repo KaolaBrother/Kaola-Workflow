@@ -48,6 +48,10 @@ const FEATURE_TOKENS = [
   // twins carry the #542 "disjoint-write antichains co-open BY DEFAULT; serial only on KAOLA_PARALLEL_WRITES=0"
   // framing (md↔toml parity that locks the stale "co-schedule under lane containment" wording from returning).
   'KAOLA_PARALLEL_WRITES',
+  // #607 (n3-planner-prose): gate instrumentation is provisioned upstream, never authored by the
+  // gate itself — present in agents/workflow-planner.md's main-session-gate authoring paragraph, so
+  // this enforces all three .toml twins carry the rule (md↔toml parity for the #607 authoring lever).
+  'the gate never authors or deletes files',
 ];
 
 // codex tree is the canonical agents/ source for the toml triple.

@@ -126,6 +126,16 @@ Author the `## Nodes` table so the validator passes it. Each node is one row:
   and it must post-dominate every code-producing node (**G3** — the validator refuses otherwise),
   so finalization is provably impossible until the main session records its `verdict: pass`
   evidence. Put WHAT must be verified in the node id/notes so the executor knows the procedure.
+- **Gate instrumentation is provisioned upstream, never authored by the gate.** When a
+  `main-session-gate` needs instrumentation to execute — a probe scene/test/fixture, INCLUDING
+  build wiring (e.g. a manifest dev-dependency edit) — an upstream writer node (`tdd-guide`/
+  `implementer`) authors it inside ITS OWN declared write set; the gate never authors or deletes
+  files, it only RUNS what was provisioned. State the durability decision in the plan: durable
+  (committed, env-gated — preferred; the probe becomes a regression asset) or ephemeral (the
+  deletion is likewise owned by a downstream writer/finalize node, with the path in THAT node's
+  declared write set). Out-of-repo scratch (a session scratchpad path) stays legal for a gate
+  whose harness can probe from an external path; a runtime gate-window fence separately denies an
+  in-worktree out-of-band write while the gate is open.
 - **Choose the right implement role:** Use `tdd-guide` for test-first work (behavioral logic, bug
   fixes — failing test first). Use `implementer` for implementation with NO natural failing-unit-test:
   behavior-preserving refactors, scaffolding/boilerplate/wiring, config/IaC/scripts, UI/markup,
