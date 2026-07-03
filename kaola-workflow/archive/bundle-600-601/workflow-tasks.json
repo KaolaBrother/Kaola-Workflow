@@ -1,0 +1,36 @@
+{
+  "source_plan_hash": "2f9bb73780561d874a0bf98fa3df80e7d53f721406c7dbc63ba9f496ac431cf1",
+  "tasks": [
+    {
+      "id": "n1-synth-install",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n2-synth-review",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n3-remediation-reorder",
+      "role": "tdd-guide",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n4-remediation-review",
+      "role": "code-reviewer",
+      "status": "completed",
+      "ledger_status": "complete"
+    },
+    {
+      "id": "n5-finalize",
+      "role": "finalize",
+      "status": "completed",
+      "ledger_status": "complete"
+    }
+  ],
+  "last_synced_from_ledger": "2026-07-03T03:05:16.251Z"
+}
