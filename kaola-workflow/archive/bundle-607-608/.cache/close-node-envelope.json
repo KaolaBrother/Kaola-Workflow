@@ -1,0 +1,1 @@
+{"result":"ok","closed":"n6-review","allDone":false,"newlyReady":[{"id":"n7-finalize","role":"finalize","model":"","declared_write_set":"—"}],"taskTransitions":[{"id":"n6-review","status":"completed","ledger_status":"complete","reason":"close-node"}],"taskMirror":{"status":"updated","path":"kaola-workflow/bundle-607-608/workflow-tasks.json"}}
