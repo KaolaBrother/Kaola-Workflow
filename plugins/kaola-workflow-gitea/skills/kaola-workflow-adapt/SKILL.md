@@ -21,9 +21,11 @@ Each node is one row of the `## Nodes` table:
 - **role** must be in the installed library (the nine canonical roles + any
   maintainer-installed role such as `adversarial-verifier`). The validator hard-rejects
   an unknown role.
-- **model** (optional) — the planner-assigned tier token from the closed set `{opus|sonnet}` — the
+- **model** (optional) — the planner-assigned tier token from the closed set `{reasoning|standard}` — the
   two portable rank tokens translated to a per-spawn reasoning effort at dispatch (on Codex the
-  reasoning tier -> `xhigh`, the standard tier -> `high` on the configured model). Assign the reasoning tier
+  reasoning tier -> `xhigh`, the standard tier -> `high` on the configured model); the legacy `opus`/`sonnet`
+  aliases remain accepted (mapping to `reasoning`/`standard` respectively) — new plans should author the
+  neutral tokens. Assign the reasoning tier
   to reasoning-bound nodes (architecture/design that constrains downstream work, adversarial gates on
   high-risk changes, security review, root-cause of non-obvious bugs); the standard tier to carry-out nodes
   (implementation against a spec, mechanical ports, docs, sweeps, evidence). When unsure, prefer

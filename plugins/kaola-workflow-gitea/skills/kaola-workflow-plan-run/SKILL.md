@@ -73,7 +73,7 @@ and must run from the main root, above.)
 
 Reasoning effort and identity: the xhigh effort-variant profiles are retired — always
 delegate to the base `dispatch.agent_type` profile (= the node's role). The descriptor maps the explicit
-planner tier RANK tokens (cross-edition ranks, not runtime model names) to per-spawn effort on this Codex runtime: `model: opus` -> `xhigh`, `model: sonnet` -> `high`; only an
+planner tier RANK tokens (cross-edition ranks, not runtime model names) to per-spawn effort on this Codex runtime: `model: reasoning` -> `xhigh`, `model: standard` -> `high` (the legacy `model: opus` -> `xhigh` / `model: sonnet` -> `high` aliases resolve identically); only an
 absent/blank model tier leaves `dispatch.codex_reasoning_effort` null and inherits the base
 profile/session default. Never append a max-effort profile suffix and never emit a variant-missing
 note.

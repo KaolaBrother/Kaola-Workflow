@@ -100,20 +100,25 @@ Author the `## Nodes` table so the validator passes it. Each node is one row:
   resume never re-catches it). **Always declare the EXACT files a staged node will create
   (`mymod/a.js`, `mymod/b.js`), never a bare dir-to-be.**
 - **Model assignment — fill the optional `model` column on every node.** Two tiers,
-  `{opus, sonnet}` (no haiku). The planner is the only component that sees the task, so model choice
+  `{reasoning, standard}` (no third tier). The legacy `opus`/`sonnet` aliases remain accepted — a
+  frozen plan's `opus`/`sonnet` cell resolves to the same dispatch as `reasoning`/`standard` — but
+  new plans should author the neutral tokens. On this Claude runtime, `reasoning` dispatches via
+  `Agent(model="opus")` and `standard` via `Agent(model="sonnet")`. The planner is the only
+  component that sees the task, so model choice
   is yours, and the **plan beats the install profile** (`node.model` → manifest → role default), so a
-  deliberate downgrade is allowed. Assign **`opus`** when output quality is bounded by *reasoning
+  deliberate downgrade is allowed. Assign **`reasoning`** when output quality is bounded by *reasoning
   depth*: architecture/design nodes whose decisions constrain downstream work, adversarial gates on
   high-risk/subtle changes, security review on security-labeled plans, root-cause analysis of
-  non-obvious bugs. Assign **`sonnet`** when the node *carries out an already-made decision*:
+  non-obvious bugs. Assign **`standard`** when the node *carries out an already-made decision*:
   implementation against a written spec, mechanical ports/mirrors, doc updates, exploration sweeps,
-  evidence collection. When unsure, prefer `sonnet` and strengthen the **gate** to `opus` — a strong
-  reviewer over a cheap implementer beats the reverse. **Fan-out economics:** read-only sweep members
-  (cap 8 concurrent) default `sonnet`; concentrate `opus` at the join/gate node, not across the fan.
-  Cost intuition: opus ≈ 5× sonnet — an opus node must earn it by constraining downstream work or
-  catching what sonnet would miss. A `model` cell outside `{opus, sonnet}` is a freeze refusal
-  (`model_invalid`); a `main-session-gate` must NOT carry a model (it is never dispatched as a
-  subagent). Absent/`—` falls back to the role-static model (back-compat).
+  evidence collection. When unsure, prefer `standard` and strengthen the **gate** to `reasoning` — a
+  strong reviewer over a cheap implementer beats the reverse. **Fan-out economics:** read-only sweep
+  members (cap 8 concurrent) default `standard`; concentrate `reasoning` at the join/gate node, not
+  across the fan. Cost intuition: the reasoning tier ≈ 5× the standard tier — a reasoning-tier node
+  must earn it by constraining downstream work or catching what the standard tier would miss. A
+  `model` cell outside `{reasoning, standard}` (or the legacy `opus`/`sonnet` aliases) is a freeze
+  refusal (`model_invalid`); a `main-session-gate` must NOT carry a model (it is never dispatched as
+  a subagent). Absent/`—` falls back to the role-static model (back-compat).
 - **Gates are walls the validator finds in the graph, not flags:** `code-reviewer` must
   post-dominate every code-producing node (G1); `security-reviewer` must post-dominate every
   sensitive node (G2). Plan a `planner`/`code-architect` node above a non-trivial implement, and a
@@ -176,7 +181,7 @@ Author the `## Nodes` table so the validator passes it. Each node is one row:
   freeze with `generated_port_split`. Example of CORRECT declaration:
 
   ```
-  | n1-validator | tdd-guide | — | scripts/kaola-workflow-plan-validator.js, plugins/kaola-workflow/scripts/kaola-workflow-plan-validator.js, plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-plan-validator.js, plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-plan-validator.js | 4 | sequence | opus |
+  | n1-validator | tdd-guide | — | scripts/kaola-workflow-plan-validator.js, plugins/kaola-workflow/scripts/kaola-workflow-plan-validator.js, plugins/kaola-workflow-gitlab/scripts/kaola-gitlab-workflow-plan-validator.js, plugins/kaola-workflow-gitea/scripts/kaola-gitea-workflow-plan-validator.js | 4 | sequence | reasoning |
   ```
 - **Write-set under-declaration checklist — enumerate the recurring overflow classes BEFORE you freeze.** The recurring mid-run `write_set_overflow` repair is almost always a node that declared its obvious target file but omitted a *co-moving companion* the edit unavoidably touches. This is a PREVENT-checklist, not a new wall — the per-node barrier stays the teeth; the point is to declare these up front so a slip never stalls the run. For each node, walk these classes and add every member the edit will actually write:
   - **GENERATED forge ports / edition aggregators** that a canonical edit regenerates — the codex twin under `plugins/<edition>/scripts/` and the gitlab/gitea forge ports of any GENERATED_AGGREGATOR (the `generated_port_split` set above), plus any other generated file a canonical source change reproduces.

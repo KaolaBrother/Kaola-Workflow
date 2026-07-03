@@ -36,12 +36,13 @@ reasoning-effort levels. The edition migrates Claude's two tiers to opencode wit
 **general, explicit, contract-keyed mapping** — `mapTier(tier, provider)` — that keys
 on the provider's API **contract**, not its brand name:
 
-- **Level 1 (fixed):** `opus` → the "top" rank · `sonnet` → the "second" rank.
-  (`opus`/`sonnet` stay the plan's portable per-node vocabulary, `NODE_MODEL_TIERS`.)
+- **Level 1 (fixed):** `reasoning` → the "top" rank · `standard` → the "second" rank.
+  (`reasoning`/`standard` are the plan's portable per-node vocabulary, `NODE_MODEL_TIERS`; the
+  legacy `opus`/`sonnet` aliases remain accepted and resolve to the same rank — see D-610-01.)
 - **Level 2 (per contract):** each rank → that contract's effort variant **and knob**
   (Anthropic → `thinking` budget; OpenAI/Google → `reasoningEffort`).
 
-| Contract | Providers | Knob | `opus` → top | `sonnet` → second |
+| Contract | Providers | Knob | `reasoning` → top | `standard` → second |
 | --- | --- | --- | --- | --- |
 | `anthropic` | `anthropic`, `claude`, **`zhipu` / `z.ai` / GLM-5.2** (served via the Anthropic API contract) | `thinking` budget | `max` (budget 32000) | `high` (budget 16000) |
 | `openai` | `openai`, `gpt`, `codex` | `reasoningEffort` | `xhigh` | `high` |
@@ -56,7 +57,7 @@ on the provider's API **contract**, not its brand name:
 
 `mapTier` + `CONTRACT_EFFORT_TABLE` + `contractForProvider` live in `kaola-workflow-adaptive-schema.js`
 (the ×4 byte-identical drift anchor), so all editions share one table. It is the
-provider-open generalization of the existing Codex `dispatchEffort(opus→xhigh)`
+provider-open generalization of the existing Codex `dispatchEffort(reasoning→xhigh)`
 translator.
 
 ### Tier membership (the "higher" profile correspondence)
@@ -207,8 +208,9 @@ NODE
 
 ### Adaptive effort selection in the workflow
 
-The adaptive planner authors `opus`/`sonnet` per node by reasoning weight (#382);
-opencode resolves that to an effort variant via `mapTier`. Because opencode applies
+The adaptive planner authors `reasoning`/`standard` (or a legacy `opus`/`sonnet` alias) per node by
+reasoning weight (#382, renamed #610); opencode resolves that to an effort variant via `mapTier`.
+Because opencode applies
 the variant **per role** (the `task` tool has no per-call variant override), the
 planner realizes its tier choice through **role choice** — a reasoning-heavy node
 uses a top-tier role (→ top effort), an execution node a standard role (→ second).

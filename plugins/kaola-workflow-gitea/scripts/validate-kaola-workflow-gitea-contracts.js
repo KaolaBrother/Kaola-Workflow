@@ -796,7 +796,10 @@ for (const planRunSurface of [
 assertIncludes(pluginRoot + '/skills/kaola-workflow-next/SKILL.md', 'Codex Dispatch Mode Detection');
 assertIncludes(pluginRoot + '/skills/kaola-workflow-next/SKILL.md', '--codex-dispatch-mode');
 assertIncludes(pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md', '--codex-dispatch-mode');
-assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', '`model: sonnet` -> `high`');
+// #610: the primary mapping is neutral-token-first; the legacy `opus`/`sonnet` aliases must still
+// be documented resolving to the same efforts (alias-aware, not just neutral-token-aware).
+assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', '`model: standard` -> `high`');
+assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'legacy `model: opus` -> `xhigh` / `model: sonnet` -> `high` aliases resolve identically');
 assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'fork_turns: "none"');
 assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'reasoning_effort: dispatch.codex_reasoning_effort');
 assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'fresh child-session effort proof');
@@ -973,19 +976,22 @@ assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-sink-merge.js', 'prob
   }
 }
 
-// B2 model-noun purge (#609, the forge-codex twin of #537): forge-codex prompt surfaces
-// (agents/*.toml, config/agents.toml, skills/*/SKILL.md) must not use Claude model NOUNS
-// (Opus/Sonnet/haiku) as runtime-model prose ("the Opus orchestrator", "reasoning-class (Opus)",
-// "no haiku"). The plan tier tokens translate to a per-spawn reasoning_effort at dispatch, so a
-// Claude model name reads as nonsense here. The ONLY permitted opus/sonnet are the B1 plan
-// model-column rank tokens: the closed `{opus|sonnet}` set literal and the `model: opus`/`model:
-// sonnet` -> effort mapping tokens. Strip those, then any surviving noun is a B2 leak. commands/*.md
-// are Claude-edition ports that legitimately name models and are deliberately NOT scanned.
+// B2 model-noun purge (#609, the forge-codex twin of #537; #610 renamed the plan vocabulary to
+// neutral tier tokens with legacy aliases): forge-codex prompt surfaces (agents/*.toml,
+// config/agents.toml, skills/*/SKILL.md) must not use Claude model NOUNS (Opus/Sonnet/haiku) as
+// runtime-model prose ("the Opus orchestrator", "reasoning-class (Opus)", "no haiku"). The plan
+// tier tokens translate to a per-spawn reasoning_effort at dispatch, so a Claude model name reads
+// as nonsense here. The ONLY permitted opus/sonnet are the B1 LEGACY-ALIAS mentions: the closed
+// `{opus|sonnet}` set literal (pre-#610 frozen plans), the `model: opus`/`model: sonnet` -> effort
+// mapping tokens, and the `opus`/`sonnet` legacy-alias-pair notation the #610 rename introduced.
+// Strip those, then any surviving noun is a B2 leak. commands/*.md are Claude-edition ports that
+// legitimately name models and are deliberately NOT scanned.
 {
   const B2_MODEL_NOUN = /\b(?:opus|sonnet|haiku)\b/i;
   const scrubB1TierTokens = line => line
     .replace(/\{opus\|sonnet\}/g, '')
-    .replace(/model:\s*(?:opus|sonnet)\b/g, '');
+    .replace(/model:\s*(?:opus|sonnet)\b/g, '')
+    .replace(/`opus`\/`sonnet`/g, ''); // #610: the legacy-alias-pair mention
   const b2Surfaces = [
     ...agentFiles,
     ...(exists(pluginRoot + '/config/agents.toml') ? [pluginRoot + '/config/agents.toml'] : []),
@@ -999,7 +1005,8 @@ assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-sink-merge.js', 'prob
         assert(false,
           rel + ':' + (i + 1) + ': B2 model-noun "' + m[0] + '" — a Claude model name must not appear ' +
           'as runtime-model prose on a forge-codex surface; use tier/effort vocabulary (only the B1 ' +
-          '`{opus|sonnet}` set and the `model: opus`/`model: sonnet` mapping are allowed).');
+          '`{opus|sonnet}` set, the `model: opus`/`model: sonnet` mapping, and the `opus`/`sonnet` ' +
+          'legacy-alias-pair mention are allowed).');
       }
     }
   }

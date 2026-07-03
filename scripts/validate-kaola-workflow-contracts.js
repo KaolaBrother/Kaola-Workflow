@@ -779,9 +779,12 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'full ac
 }
 
 // #451/#582: the plan-run SKILL no longer selects a `<role>-max` variant. The per-node tier maps
-// to per-spawn reasoning-effort on the dispatch descriptor (agent_type = base role; opus -> xhigh,
-// sonnet -> high). Tiered dispatch must use proven override mechanics or refuse.
-assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '`model: sonnet` -> `high`');
+// to per-spawn reasoning-effort on the dispatch descriptor (agent_type = base role; reasoning ->
+// xhigh, standard -> high). Tiered dispatch must use proven override mechanics or refuse.
+// #610: the primary mapping is neutral-token-first; the legacy `opus`/`sonnet` aliases must still
+// be documented resolving to the same efforts (alias-aware, not just neutral-token-aware).
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '`model: standard` -> `high`');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'legacy `model: opus` -> `xhigh` / `model: sonnet` -> `high` aliases resolve identically');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'fork_turns: "none"');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'reasoning_effort: dispatch.codex_reasoning_effort');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'fresh child-session effort proof');
@@ -885,20 +888,23 @@ assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'main-session-gate'
   }
 }
 
-// B2 model-noun purge (#609, the codex twin of #537): Codex prompt surfaces (agents/*.toml,
-// config/agents.toml, skills/*/SKILL.md) must not use Claude model NOUNS (Opus/Sonnet/haiku) as if
-// they were this runtime's models ("the Opus orchestrator", "reasoning-class (Opus)", "no haiku",
-// "opus ~= 5x sonnet"). Those read as nonsense on the Codex runtime, where the plan tier tokens
-// translate at dispatch to a per-spawn reasoning_effort. The ONLY permitted opus/sonnet are the B1
-// plan model-column tier tokens phrased as ranks: the closed `{opus|sonnet}` set literal and the
-// `model: opus`/`model: sonnet` -> effort mapping tokens. Strip those, then any surviving
-// opus/sonnet/haiku is a B2 leak. (Claude-edition commands/*.md legitimately name models and are
-// out of scope — this validator does not scan them.)
+// B2 model-noun purge (#609, the codex twin of #537; #610 renamed the plan vocabulary to neutral
+// tier tokens with legacy aliases): Codex prompt surfaces (agents/*.toml, config/agents.toml,
+// skills/*/SKILL.md) must not use Claude model NOUNS (Opus/Sonnet/haiku) as if they were this
+// runtime's models ("the Opus orchestrator", "reasoning-class (Opus)", "no haiku", "opus ~= 5x
+// sonnet"). Those read as nonsense on the Codex runtime, where the plan tier tokens translate at
+// dispatch to a per-spawn reasoning_effort. The ONLY permitted opus/sonnet are the B1 LEGACY-ALIAS
+// mentions: the closed `{opus|sonnet}` set literal (pre-#610 frozen plans), the `model: opus`/
+// `model: sonnet` -> effort mapping tokens, and the `opus`/`sonnet` legacy-alias-pair notation the
+// #610 rename introduced (e.g. "the legacy `opus`/`sonnet` aliases remain accepted"). Strip those,
+// then any surviving opus/sonnet/haiku is a B2 leak. (Claude-edition commands/*.md legitimately
+// name models and are out of scope — this validator does not scan them.)
 {
   const B2_MODEL_NOUN = /\b(?:opus|sonnet|haiku)\b/i;
   const scrubB1TierTokens = line => line
     .replace(/\{opus\|sonnet\}/g, '')            // the closed model-column set literal (rank tokens)
-    .replace(/model:\s*(?:opus|sonnet)\b/g, ''); // the `model: opus`/`model: sonnet` effort-map tokens
+    .replace(/model:\s*(?:opus|sonnet)\b/g, '')  // the `model: opus`/`model: sonnet` effort-map tokens
+    .replace(/`opus`\/`sonnet`/g, '');            // #610: the legacy-alias-pair mention
   const b2AgentFiles = fs.readdirSync(path.join(root, pluginRoot, 'agents'))
     .filter(f => f.endsWith('.toml'))
     .map(f => pluginRoot + '/agents/' + f);
@@ -919,8 +925,8 @@ assertIncludes(`${pluginRoot}/agents/workflow-planner.toml`, 'main-session-gate'
         assert(false,
           rel + ':' + (i + 1) + ': B2 model-noun "' + m[0] + '" — a Claude model name must not appear ' +
           'as runtime-model prose on a Codex surface; use tier/effort vocabulary (only the B1 ' +
-          '`{opus|sonnet}` column-token set and the `model: opus`/`model: sonnet` effort mapping are ' +
-          'allowed). See docs/conventions.md.');
+          '`{opus|sonnet}` column-token set, the `model: opus`/`model: sonnet` effort mapping, and the ' +
+          '`opus`/`sonnet` legacy-alias-pair mention are allowed). See docs/conventions.md.');
       }
     }
   }

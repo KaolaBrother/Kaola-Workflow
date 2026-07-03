@@ -202,11 +202,17 @@ for (const ed of codexEditions) {
       `T5b: ${f} must not describe sonnet as an inherited role_default tier`);
   }
 
+  // #610: the plan model-column vocabulary is now the neutral `{reasoning,standard}` tokens with
+  // legacy `opus`/`sonnet` aliases accepted — the pin is now neutral-token-and-alias-aware: the
+  // primary mapping must use the neutral tokens, AND the legacy alias mapping must still be
+  // documented explicitly (a frozen pre-#610 plan's `sonnet` cell dispatches identically).
   const codexSkillSurfaces = planRunSurfaces.filter(f => f.includes('/skills/'));
   for (const f of codexSkillSurfaces) {
     const content = fs.readFileSync(path.join(REPO, f), 'utf8');
-    assert(content.includes('`model: sonnet` -> `high`'),
-      `T5b: ${f} must explicitly document sonnet -> high`);
+    assert(content.includes('`model: standard` -> `high`'),
+      `T5b: ${f} must explicitly document the neutral standard -> high mapping`);
+    assert(content.includes('legacy `model: opus` -> `xhigh` / `model: sonnet` -> `high` aliases resolve identically'),
+      `T5b: ${f} must explicitly document the legacy opus/sonnet alias mapping resolving identically`);
   }
 }
 
