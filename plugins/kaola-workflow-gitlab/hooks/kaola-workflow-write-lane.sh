@@ -8,19 +8,30 @@ set -uo pipefail
 # a missing/malformed .cache/running-set.json manifest, unparseable stdin, or a non-git cwd all
 # exit 0 — so non-adaptive sessions and serial runs are never interfered with.
 #
-# Enforcement is gated on KAOLA_LANE_CONTAINMENT (fail-closed default OFF) AND the presence of a
-# running-set.json manifest of OPEN write-nodes (written by the #377 per-node scheduler). Until that
-# manifest exists the hook is DORMANT-BUT-CORRECT (always exits 0). Forge-neutral (no forge-CLI names).
+# TWO independent enforcement switches, composed in the node block below:
+#   (a)/(b) LANE CONTAINMENT — gated on KAOLA_LANE_CONTAINMENT (fail-closed default OFF) AND the
+#           presence of a running-set.json manifest of OPEN write-nodes (written by the #377 per-node
+#           scheduler). Until that manifest exists this arm is DORMANT-BUT-CORRECT (always exits 0).
+#   (c)     GATE-WINDOW FENCE (#607) — DEFAULT-ON, opt-out via KAOLA_GATE_WINDOW_FENCE=0. Fires ONLY
+#           while a main-session-gate is open (a manifest node with kind:'gate'), denying an in-worktree
+#           out-of-band Write/Edit during the gate window. Safe by construction: it can only trigger
+#           mid-adaptive-run with an open gate recorded in a manifest — non-adaptive sessions and serial
+#           runs keep every existing fail-open exit (missing manifest / unparseable stdin / non-git cwd).
+# Forge-neutral (no forge-CLI names).
 #
 # Honest layering (AC8): this hook intercepts Write|Edit ONLY. Bash-mediated writes remain covered by
-# the existing fail-closed accounting (per-node --barrier-check own-lane allowlist + seal vacuity).
-# Hook = fast-fail containment; barrier = ground truth.
+# the existing fail-closed accounting (per-node --barrier-check own-lane allowlist + seal vacuity) for
+# the lane arm; for the gate window the close barrier is net-zero-blind (write-then-delete), so layers 1
+# (upstream provisioning) and 3 (close-time evidence token) are the backstop, not this hook.
 
-# Fail-closed flag gate: only an explicit 1/true/yes enforces (resolveLaneContainment shape).
-case "${KAOLA_LANE_CONTAINMENT:-}" in
-  1|true|yes) ;;
-  *) exit 0 ;;
-esac
+# Resolve the two enforcement switches. Lane containment is fail-closed default-OFF; the gate-window
+# fence is default-ON with an explicit KAOLA_GATE_WINDOW_FENCE=0 opt-out.
+WL_LANE_ON=0
+case "${KAOLA_LANE_CONTAINMENT:-}" in 1|true|yes) WL_LANE_ON=1 ;; esac
+WL_GATE_FENCE_ON=1
+case "${KAOLA_GATE_WINDOW_FENCE:-}" in 0|false|no) WL_GATE_FENCE_ON=0 ;; esac
+# Fully dormant only when BOTH arms are off (byte-identical to the pre-#607 flag-off exit).
+if [ "$WL_LANE_ON" = 0 ] && [ "$WL_GATE_FENCE_ON" = 0 ]; then exit 0; fi
 
 GIT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
 export HOOK_INPUT
@@ -31,11 +42,13 @@ HOOK_INPUT="$(cat)"
 WL_FILE_PATH="$(node -e "try{const d=JSON.parse(process.env.HOOK_INPUT);process.stdout.write((d.tool_input&&d.tool_input.file_path)||'');}catch(e){process.stdout.write('');}" 2>/dev/null)" || exit 0
 [ -z "$WL_FILE_PATH" ] && exit 0
 
-export WL_FILE_PATH WL_GIT_ROOT="$GIT_ROOT"
+export WL_FILE_PATH WL_GIT_ROOT="$GIT_ROOT" WL_LANE_ON WL_GATE_FENCE_ON
 node -e '
   var fs = require("fs"), path = require("path");
   var root = process.env.WL_GIT_ROOT;
   var fp = process.env.WL_FILE_PATH;
+  var laneOn = process.env.WL_LANE_ON === "1";
+  var gateFenceOn = process.env.WL_GATE_FENCE_ON === "1";
   if (!root || !fp) process.exit(0);
   // Normalize through symlinks (git --show-toplevel returns a realpath; a tool file_path may carry an
   // unresolved ancestor symlink, e.g. macOS /var -> /private/var). Realpath the deepest EXISTING
@@ -67,7 +80,7 @@ node -e '
       } catch (e) {}
     });
   } catch (e) {}
-  if (!nodes.length) process.exit(0); // dormant: no open write-nodes -> never interfere
+  if (!nodes.length) process.exit(0); // dormant: no open nodes -> never interfere
 
   function declSet(n) {
     var d = n.declared_write_set;
@@ -79,9 +92,45 @@ node -e '
   function inWorkflowBand(rel) {
     return /^kaola-workflow\//.test(rel) || /(^|\/)\.cache\//.test(rel) || /^\.cache\//.test(rel);
   }
+  // A path under the gitignored `.kw/` band (member worktrees + per-leg worktrees + legs live here) is a
+  // worktree-internal write, never a parent product-tree write — always allowed by the gate fence (#607).
+  function inKwBand(rel) { return /^\.kw\//.test(rel) || /(^|\/)\.kw\//.test(rel); }
   function underDeclared(rel, set) {
     return set.some(function (p) { return rel === p || rel.indexOf(p + "/") === 0; });
   }
+  // Is `abs` inside ANY manifest node worktreePath (a member worktree — governed by rule (a))?
+  function inAnyMemberWorktree() {
+    for (var k = 0; k < nodes.length; k++) {
+      if (!nodes[k].worktreePath) continue;
+      var wt = path.resolve(root, nodes[k].worktreePath);
+      if (abs === wt || abs.indexOf(wt + path.sep) === 0) return true;
+    }
+    return false;
+  }
+
+  var relRoot = path.relative(root, abs);
+  var insideRoot = (abs === root || abs.indexOf(root + path.sep) === 0);
+
+  // -- Rule (c) #607 GATE-WINDOW FENCE (default-ON) — evaluated FIRST so it holds even when lane
+  //    containment is off. When any open node is a main-session-gate (kind:'gate'), a Write/Edit landing
+  //    INSIDE the active (parent) worktree, OUTSIDE the workflow bands, is DENIED unless it is:
+  //      - under the `.kw/` band (member worktrees / legs / co-open speculative work) — allowed;
+  //      - inside a member worktree (rule (a) governs it) — allowed;
+  //      - under a co-open node`s declared lane (co-open writer lanes stay allowed — #596 speculative
+  //        writes are eligible behind a gate; only writers carry a non-empty declared set) — allowed.
+  //    Out-of-repo paths (scratchpad, /tmp) fall outside `insideRoot` -> allowed. There is no
+  //    main-session-vs-subagent signal, so caller identity is approximated by WHERE the write lands.
+  var gateOpen = nodes.some(function (n) { return n && n.kind === "gate"; });
+  if (gateFenceOn && gateOpen && insideRoot && !inWorkflowBand(relRoot) && !inKwBand(relRoot) && !inAnyMemberWorktree()) {
+    var underCoOpenLane = nodes.some(function (n) { return underDeclared(relRoot, declSet(n)); });
+    if (!underCoOpenLane) {
+      process.stderr.write("BLOCKED (write-lane #607 gate-window fence): " + relRoot + " is an in-worktree write during an open main-session-gate window. A gate is read-only by construction — it may only RUN instrumentation, never author it. Legal exits: provision the probe via an upstream writer node (tdd-guide/implementer, declared write set) / route-findings / repair-node / write-halt --reason consent. (opt out with KAOLA_GATE_WINDOW_FENCE=0)\n");
+      process.exit(2);
+    }
+  }
+
+  // Rules (a)/(b) are the #376 LANE CONTAINMENT arm — gated on KAOLA_LANE_CONTAINMENT (default OFF).
+  if (!laneOn) process.exit(0);
 
   // Deny rule (a): a write INSIDE a member worktree (.kw/node/<projTag>/<id>) outside that member
   // declared_write_set UNION the workflow bands.
@@ -100,7 +149,6 @@ node -e '
   }
 
   // Deny rule (b): a write in the PARENT worktree matching ANY open node declared lane (#320 leak).
-  var relRoot = path.relative(root, abs);
   if (inWorkflowBand(relRoot)) process.exit(0); // workflow bands always allowed in the parent
   for (var j = 0; j < nodes.length; j++) {
     var set2 = declSet(nodes[j]);

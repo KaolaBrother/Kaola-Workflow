@@ -965,6 +965,41 @@ function checkEvidenceShape(role, nodeId, evidence, opts) {
         reason: 'main-session-gate ' + nodeId + ' evidence missing column-0 verdict: pass|fail line (an n/a skip is refused for a non-delegable gate)',
         expected: ['verdict: pass|fail'] };
     }
+    // #607 Layer 3 — the edition-neutral tripwire. A main-session-gate must ATTEST how any probe
+    // instrumentation it ran was provisioned: a column-0 `instrumentation: none | <node-id>` token.
+    // `none` declares the gate ran no in-worktree instrumentation; `<node-id>` names the UPSTREAM
+    // WRITER node that authored the probe inside its declared write set (so the probe is covered by the
+    // post-dominating code-reviewer instead of being self-reviewed by the verdict-bearing gate). Absence
+    // is refused alongside the missing-verdict refusal — it converts silent gate-authored drift into an
+    // affirmative false statement, the same posture as every other evidence token. Works where the hook
+    // is inert (Codex trust-gated hooks; opencode has no hook parity).
+    const im = content.match(/^instrumentation:[ \t]*(\S+)[ \t]*$/m);
+    if (!im) {
+      return { ok: false, kind: 'shape', missingTokenClass: 'instrumentation',
+        reason: 'main-session-gate ' + nodeId + ' evidence missing column-0 `instrumentation: none | <node-id>` token (attest how any probe was provisioned — `none`, or the upstream writer node that authored it)',
+        expected: ['instrumentation: none|<node-id>'] };
+    }
+    const instr = im[1];
+    // When the token NAMES a node (not `none`) AND the ledger is available (opts.ledgerNodes — passed by
+    // the close paths), the named node must exist in the ledger as a WRITER whose declared write set
+    // covers the instrumentation. The `instrumentation: <node-id>` token carries only a node id (not the
+    // probe paths), so "covers the instrumentation" cannot be mechanically resolved to specific paths;
+    // the enforced interpretation is therefore: named node EXISTS in the ledger AND is a writer
+    // (non-empty declared write set). Skipped when ledgerNodes is absent (the --verify preflight /
+    // legacy 3-arg callers) — the presence gate above still fires.
+    if (instr !== 'none' && Array.isArray(opts.ledgerNodes)) {
+      const named = opts.ledgerNodes.find(n => n.id === instr);
+      if (!named) {
+        return { ok: false, kind: 'shape', missingTokenClass: 'instrumentation_node',
+          reason: 'main-session-gate ' + nodeId + ' names instrumentation node "' + instr + '" not present in the ledger',
+          expected: ['instrumentation: none', 'or an existing ledger writer node id'] };
+      }
+      if (isReadOnlyNode(named)) {
+        return { ok: false, kind: 'shape', missingTokenClass: 'instrumentation_node',
+          reason: 'main-session-gate ' + nodeId + ' instrumentation node "' + instr + '" is not a writer (empty declared write set) — the probe must be authored inside an upstream writer\'s declared write set',
+          expected: ['instrumentation: <writer-node-id>'] };
+      }
+    }
     return { ok: true };
   }
 
@@ -1244,10 +1279,11 @@ function runVerifyEvidence(opts) {
 
   // Resolve role from the plan's ## Nodes table (mirrors close-and-open-next L1341-1343).
   let role = 'unknown';
+  let verifyNodes = null;
   try {
     const planContent = readFile(planPath);
-    const nodes = parseNodesFromContent(planContent);
-    const nodeInfo = nodes.find(n => n.id === nodeId);
+    verifyNodes = parseNodesFromContent(planContent);
+    const nodeInfo = verifyNodes.find(n => n.id === nodeId);
     if (nodeInfo) role = nodeInfo.role;
   } catch (_) {}
 
@@ -1262,7 +1298,9 @@ function runVerifyEvidence(opts) {
   const expectedNonce = readNonce(planPath, nodeId, readFile);
 
   // Run the same checker the close path uses (#392 binding + role token checks).
-  const shapeCheck = checkEvidenceShape(role, nodeId, content, { expectedNonce, expectedNodeId: nodeId });
+  // #607: pass the ledger nodes so a main-session-gate instrumentation token naming a node is validated
+  // consistently with the close path (verifyNodes is null only if the plan could not be parsed above).
+  const shapeCheck = checkEvidenceShape(role, nodeId, content, { expectedNonce, expectedNodeId: nodeId, ledgerNodes: verifyNodes });
 
   if (shapeCheck.ok) {
     return { result: 'ok', nodeId, role, evidence_file };
@@ -1920,6 +1958,14 @@ function runOpenNext(opts) {
   }
   // If alreadyAtTarget (already in_progress), skip the write — idempotent.
 
+  // #607 Layer 2: record an opened main-session-gate into the running set as kind:'gate' so the
+  // write-lane hook fences out-of-band writes during the gate window. AFTER the ledger flip (crash-safe
+  // ordering) and a no-op for every non-gate role (byte-identical serial open).
+  recordGateInRunningSet(
+    path.join(path.dirname(planPath), '.cache', RUNNING_SET_NAME),
+    targetNode,
+    { readFile, writeFile, cacheExists: opts.cacheExists, mkdirp: opts.mkdirp, now: opts.now });
+
   // #373: best-effort telemetry — the node opened.
   appendNodeTiming(planPath, targetNode.id, 'opened');
 
@@ -2116,8 +2162,10 @@ function runCloseAndOpenNext(opts) {
 
   // #392: pass the per-open nonce (barrier-base SHA prefix on disk) so the evidence-binding header is
   // verified. Absent on disk (no recorded baseline, e.g. a legacy path) → null → binding check skipped.
+  // #607: pass the parsed ledger nodes so a main-session-gate `instrumentation: <node-id>` token can be
+  // validated against the ledger (the named node must be a writer).
   const expectedNonce = readNonce(planPath, nodeId, readFile);
-  const shapeCheck = checkEvidenceShape(role, nodeId, evidenceContent, { expectedNonce, expectedNodeId: nodeId });
+  const shapeCheck = checkEvidenceShape(role, nodeId, evidenceContent, { expectedNonce, expectedNodeId: nodeId, ledgerNodes: nodes });
 
   if (!evidencePresent || !shapeCheck.ok) {
     // #319: distinguish absent evidence from malformed (shape) evidence so the
@@ -2390,6 +2438,13 @@ function runCloseAndOpenNext(opts) {
     planForAdvance = advanceSplice.content;
     writeFile(planPath, planForAdvance);
   }
+
+  // #607 Layer 2: the fused advance opens the next node INLINE (not via runOpenNext), so a
+  // main-session-gate reached this way must ALSO be recorded into the running set as kind:'gate'. The
+  // closing node was already removed from the set above (BUG B removal), so this leaves the set holding
+  // exactly the new gate. No-op for every non-gate next node.
+  recordGateInRunningSet(runningSetPath, nextNode,
+    { readFile, writeFile, cacheExists, mkdirp: opts.mkdirp, now: opts.now });
 
   // #373: best-effort telemetry — the fused advance opened the next node.
   appendNodeTiming(planPath, nextNode.id, 'opened');
@@ -3318,6 +3373,47 @@ function readRunningSet(runningSetPath, cacheExists, readFile) {
   return (parsed && Array.isArray(parsed.nodes)) ? parsed : null;
 }
 
+// recordGateInRunningSet (#607 Layer 2) — the state channel that makes an open main-session-gate
+// VISIBLE to the write-lane hook (kind:'gate') so it can fence out-of-band writes during the gate
+// window. A main-session-gate is the ONLY node opened serially (open-next / the fused advance) that is
+// excluded from every open-ready batch frontier (#334), so today it never lands in the running set and
+// the hook is blind to it. Called AFTER the ledger flip to in_progress (a crash BEFORE the flip leaves
+// no phantom; a crash AFTER leaves an in_progress gate that reconcile-running-set treats as a live
+// member and no-ops on — never a droppable stale entry). SCOPED strictly to role 'main-session-gate'
+// (a serially-opened code-reviewer gate stays OUT of the set → byte-identical to today). Id-keyed
+// idempotent: replaces any prior entry for the same id, preserves every other member + top-level field
+// (a co-open speculative frontier already in the set survives). The gate carries NO write set, is NOT a
+// write (kind:'gate' ≠ 'write') and is NOT speculative, so it is invisible to every write-oriented
+// scheduler count (liveHasWrite / selectSpeculativeWriteGroup / the slot math + reconcile budget both
+// exclude kind:'gate' explicitly). Best-effort: never throws — a lifecycle open must not fail on a
+// telemetry-adjacent write (mirrors appendNodeTiming's contract).
+function recordGateInRunningSet(runningSetPath, node, io) {
+  if (!node || node.role !== 'main-session-gate') return;
+  const { readFile, writeFile, cacheExists, mkdirp, now } = io || {};
+  if (typeof writeFile !== 'function') return;
+  try {
+    const existing = readRunningSet(runningSetPath, cacheExists, readFile);
+    const base = existing || { state: 'open', nodes: [] };
+    const openedAt = (typeof now === 'function') ? now() : null;
+    const rest = (base.nodes || []).filter(n => n.id !== node.id);
+    const entry = {
+      id: node.id,
+      role: node.role,
+      kind: 'gate',
+      declared_write_set: node.declared_write_set,
+      model: node.model || null,
+      baseline: 'recorded',
+      ...(openedAt ? { openedAt } : {}),
+    };
+    if (mkdirp) mkdirp(path.dirname(runningSetPath));
+    writeFile(runningSetPath, JSON.stringify({
+      ...base,
+      state: base.state || 'open',
+      nodes: rest.concat([entry]),
+    }, null, 2));
+  } catch (_) { /* fail-open: never brick a lifecycle open on the state-channel write */ }
+}
+
 // ===========================================================================
 // #383 CROSS-SURFACE MUTUAL EXCLUSION — the shared "live coordination state" probe.
 //
@@ -4081,7 +4177,10 @@ function runOpenReady(opts) {
   // as an explanatory field on the response (never a hard refuse) so read speculation stays unaffected.
   let speculativeWriteExcluded = null;
   if (readOnly.length > 0) {
-    let slots = Math.max(0, cap - liveNodes.length);
+    // #607: a live main-session-gate (kind:'gate') is a MAIN-SESSION-run marker, NOT a subagent fan-out
+    // slot occupant — exclude it from the read-slot base so speculative reads behind a gate get the full
+    // cap (no under-count). Every other live member (read/write) still consumes a slot as before.
+    let slots = Math.max(0, cap - liveNodes.filter(n => n.kind !== 'gate').length);
     if (Number.isInteger(max) && max >= 1) slots = Math.min(slots, max);
     toOpen = readOnly.slice(0, slots);
     openKind = 'read';
@@ -4544,8 +4643,9 @@ function runCloseNode(opts) {
     try { evidenceContent = readFile(cachePath); } catch (_) { evidenceContent = ''; }
   }
   // #392: verify the evidence-binding header against this open's nonce (skipped when none on disk).
+  // #607: pass the ledger nodes so a main-session-gate instrumentation token naming a node is validated.
   const expectedNonce = readNonce(planPath, nodeId, readFile);
-  const shapeCheck = checkEvidenceShape(role, nodeId, evidenceContent, { expectedNonce, expectedNodeId: nodeId });
+  const shapeCheck = checkEvidenceShape(role, nodeId, evidenceContent, { expectedNonce, expectedNodeId: nodeId, ledgerNodes: nodes });
   if (!evidencePresent || !shapeCheck.ok) {
     const absent = !evidencePresent || shapeCheck.kind === 'absent';
     const reason = shapeCheck.evidenceStale ? 'evidence_stale'
@@ -5062,8 +5162,11 @@ function runReconcileRunningSet(opts) {
   // (fail-closed, legacy open-next default).
   const closedSet = new Set(closed);
   const staleSet = new Set(stale);
+  // #607: a live main-session-gate (kind:'gate') is not a fan-out slot occupant, so it must not consume
+  // roll-forward budget — a crashed speculative-write open behind a gate would otherwise roll forward one
+  // fewer member than the write cap permits. Excluded here (same rationale as the open-ready slot base).
   const liveStable = (running.nodes || []).filter(
-    n => !n.opening && !closedSet.has(n.id) && !staleSet.has(n.id) && ledger[n.id] === 'in_progress'
+    n => !n.opening && n.kind !== 'gate' && !closedSet.has(n.id) && !staleSet.has(n.id) && ledger[n.id] === 'in_progress'
   );
   const ceiling = (Number.isInteger(running.max_concurrent) && running.max_concurrent >= 1)
     ? running.max_concurrent : 1;
@@ -5673,7 +5776,13 @@ function main() {
       },
     });
   } else if (subcommand === 'open-next') {
-    result = runOpenNext({ planPath, statePath, project, nodeId, shell, readFile, writeFile, cacheExists, codexDispatchMode });
+    // #607: mkdirp + now let runOpenNext's gate state-channel write (recordGateInRunningSet) create the
+    // .cache dir if needed and stamp openedAt — matching the open-ready dispatch seams.
+    result = runOpenNext({
+      planPath, statePath, project, nodeId, shell, readFile, writeFile, cacheExists, codexDispatchMode,
+      mkdirp: (dir) => { try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {} },
+      now: () => new Date().toISOString(),
+    });
   } else if (subcommand === 'open-ready') {
     result = runOpenReady({
       planPath, project, codexDispatchMode,
@@ -5729,7 +5838,12 @@ function main() {
     if (!nodeId) {
       result = { result: 'refuse', errors: ['--node-id required for close-and-open-next'] };
     } else {
-      result = runCloseAndOpenNext({ planPath, statePath, project, nodeId, shell, readFile, writeFile, cacheExists, codexDispatchMode });
+      // #607: mkdirp + now let the fused-advance gate state-channel write stamp openedAt / ensure .cache.
+      result = runCloseAndOpenNext({
+        planPath, statePath, project, nodeId, shell, readFile, writeFile, cacheExists, codexDispatchMode,
+        mkdirp: (dir) => { try { fs.mkdirSync(dir, { recursive: true }); } catch (_) {} },
+        now: () => new Date().toISOString(),
+      });
     }
   } else if (subcommand === 'write-halt') {
     if (!nodeId) {
