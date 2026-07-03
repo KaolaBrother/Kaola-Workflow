@@ -9717,6 +9717,138 @@ function rtHarness(initialFiles, opts) {
   assert(setKC && (setKC.nodes || []).filter(n => n.speculative).length === 2, 'T607-KC1: both speculative reads recorded');
 }
 
+// ---------------------------------------------------------------------------
+// T611-AC2: Codex join protocol — per-node wait budget on every dispatch card.
+// The budget is derived from the node's effort tier (reasoning=40m, standard=20m) with a
+// concrete role-default (20m) when no tier resolves — NEVER null, so a running agent's
+// non-interrupt-before-budget rule always has a number. Planner override rides the tier.
+// ---------------------------------------------------------------------------
+{
+  const schema = require('./kaola-workflow-adaptive-schema');
+  assert(schema.waitBudgetMinutes('reasoning').wait_budget_minutes === 40
+    && schema.waitBudgetMinutes('reasoning').wait_budget_source === 'planner_model',
+    'T611-AC2: reasoning tier → 40m budget (planner_model), got ' + JSON.stringify(schema.waitBudgetMinutes('reasoning')));
+  assert(schema.waitBudgetMinutes('standard').wait_budget_minutes === 20,
+    'T611-AC2: standard tier → 20m budget, got ' + JSON.stringify(schema.waitBudgetMinutes('standard')));
+  // Legacy {opus,sonnet} cells normalize to the SAME budget as their neutral tokens (byte-parity).
+  assert(schema.waitBudgetMinutes('opus').wait_budget_minutes === 40, 'T611-AC2: legacy opus alias → 40m (== reasoning)');
+  assert(schema.waitBudgetMinutes('sonnet').wait_budget_minutes === 20, 'T611-AC2: legacy sonnet alias → 20m (== standard)');
+  // No tier resolves → a CONCRETE role-default budget (never null), tagged role_default.
+  assert(schema.waitBudgetMinutes(null).wait_budget_minutes === 20
+    && schema.waitBudgetMinutes(null).wait_budget_source === 'role_default',
+    'T611-AC2: no tier → concrete role_default budget (never null), got ' + JSON.stringify(schema.waitBudgetMinutes(null)));
+  assert(schema.waitBudgetMinutes('').wait_budget_minutes === 20, 'T611-AC2: blank tier → role_default budget');
+  assert(schema.waitBudgetMinutes('nonsense').wait_budget_source === 'role_default', 'T611-AC2: out-of-vocab tier → role_default');
+  // buildDispatch emits wait_budget_minutes on EVERY card (orient/open-next/open-ready share this builder).
+  const dReasoning = buildDispatch({ id: 'x', role: 'code-architect', model: 'reasoning', declared_write_set: 'a.js' }, { nonce: 'n', evidence_file: '.cache/x.md' });
+  assert(dReasoning.wait_budget_minutes === 40 && dReasoning.wait_budget_source === 'planner_model',
+    'T611-AC2: buildDispatch card carries the tier-derived budget, got ' + JSON.stringify({ b: dReasoning.wait_budget_minutes, s: dReasoning.wait_budget_source }));
+  const dNone = buildDispatch({ id: 'y', role: 'finalize', model: null, declared_write_set: '—' }, { nonce: 'n', evidence_file: '.cache/y.md' });
+  assert(dNone.wait_budget_minutes === 20 && dNone.wait_budget_source === 'role_default',
+    'T611-AC2: an untiered card still carries a concrete role-default budget, got ' + JSON.stringify({ b: dNone.wait_budget_minutes, s: dNone.wait_budget_source }));
+}
+
+// ---------------------------------------------------------------------------
+// T611-AC5: typed delegation outcomes in the node evidence contract. An OPTIONAL column-0
+// `delegation_outcome: <token>` line, closed vocabulary {completed, returned_partial,
+// interrupted_unresponsive, interrupted_obsolete}. ABSENT ⇒ completed (back-compat: existing
+// evidence has no such line and must not red). A PRESENT unknown value is a typed refusal.
+// ---------------------------------------------------------------------------
+{
+  const schema = require('./kaola-workflow-adaptive-schema');
+  // parse helper: absent ⇒ completed default (found=false); present known ⇒ parsed; unknown ⇒ valid:false.
+  assert(schema.parseDelegationOutcome('some evidence\nno token').outcome === 'completed'
+    && schema.parseDelegationOutcome('some evidence').found === false,
+    'T611-AC5: absent token ⇒ completed default, found=false');
+  assert(schema.parseDelegationOutcome('delegation_outcome: interrupted_unresponsive').outcome === 'interrupted_unresponsive'
+    && schema.parseDelegationOutcome('delegation_outcome: interrupted_unresponsive').valid === true,
+    'T611-AC5: a present known token parses + is valid');
+  assert(schema.parseDelegationOutcome('delegation_outcome: bogus').valid === false,
+    'T611-AC5: an unknown token → valid:false');
+  assert(schema.DELEGATION_OUTCOME_VOCABULARY.length === 4 && schema.DELEGATION_OUTCOME_DEFAULT === 'completed',
+    'T611-AC5: vocabulary is the 4 tokens with completed default');
+  // checkEvidenceShape: absent token is inert (existing tdd-guide evidence still passes).
+  assert(checkEvidenceShape('tdd-guide', 'n1', 'RED: fail\nGREEN: pass').ok === true,
+    'T611-AC5: evidence without the token is unaffected (completed default)');
+  // a valid `completed` token passes.
+  assert(checkEvidenceShape('tdd-guide', 'n1', 'delegation_outcome: completed\nRED: fail\nGREEN: pass').ok === true,
+    'T611-AC5: delegation_outcome: completed passes');
+  // an interrupted-path token passes when the role tokens are present.
+  assert(checkEvidenceShape('implementer', 'n2', 'delegation_outcome: returned_partial\nnon_tdd_reason: x\nregression-green').ok === true,
+    'T611-AC5: an interrupted-path token (returned_partial) passes with the role tokens present');
+  // an unknown token is a typed refusal, independent of role (checked before the role branches).
+  const bad = checkEvidenceShape('tdd-guide', 'n1', 'delegation_outcome: exploded\nRED\nGREEN');
+  assert(bad.ok === false && bad.missingTokenClass === 'delegation_outcome',
+    'T611-AC5: unknown delegation_outcome → typed refusal (delegation_outcome), got ' + JSON.stringify(bad));
+}
+
+// ---------------------------------------------------------------------------
+// T611-AC3: reconcile writer kill-safety. A departing (rolled-back / capped-out) WRITER member is a
+// potentially-interrupted in-place writer whose worktree may hold PARTIAL edits. reconcile-running-set
+// diffs its actual changes vs its declared write set (via --barrier-check) and emits a typed, FAIL-CLOSED
+// per-writer verdict: `adopt` (changes ⊆ set) or `halt` (stray writes OUTSIDE the set) + the offending
+// paths. Non-destructive: reconcile NEVER auto-deletes; it hands the halt to the orchestrator/consent valve.
+// ---------------------------------------------------------------------------
+{
+  // A live stable read member 'a' consumes the single ceiling slot; the opening WRITER 'w' is capped out
+  // (budget = ceiling(1) - live(1) = 0) → 'w' is a departing writer that gets reconciled.
+  const mkWriterReconcilePlan = () => makePlan(['| a | in_progress | |', '| w | in_progress | |'], [
+    '| a | code-reviewer | — | — | 1 | sequence |',
+    '| w | implementer | — | scripts/a.js | 1 | sequence |',
+  ]);
+  const mkWriterReconcileSet = () => JSON.stringify({ state: 'open', max_concurrent: 1, nodes: [
+    { id: 'a', role: 'code-reviewer', kind: 'read' },
+    { id: 'w', role: 'implementer', kind: 'write', opening: true },
+  ] });
+
+  // (i) adopt — barrier-check passes (all changes ⊆ declared set).
+  {
+    const h = rsHarness({ [RS_PLAN_PATH]: mkWriterReconcilePlan(), [RS_SET_PATH]: mkWriterReconcileSet() },
+      () => ({ exitCode: 0, result: 'ok' }),
+      (base, a) => { if (a.includes('--barrier-check')) return { exitCode: 0, result: 'pass', outOfAllow: [] }; return null; });
+    const r = runReconcileRunningSet({ planPath: RS_PLAN_PATH, project: 'p', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, unlink: h.unlink });
+    assert(r.result === 'ok' && Array.isArray(r.writerReconciliation) && r.writerReconciliation.length === 1,
+      'T611-AC3(i): exactly one writer reconciled, got ' + JSON.stringify(r.writerReconciliation));
+    assert(r.writerReconciliation[0].node_id === 'w' && r.writerReconciliation[0].verdict === 'adopt',
+      'T611-AC3(i): contained writer → adopt, got ' + JSON.stringify(r.writerReconciliation[0]));
+    assert(r.writerReconciliation[0].outOfWriteSet.length === 0, 'T611-AC3(i): adopt carries no out-of-set paths');
+  }
+
+  // (ii) halt — barrier-check refuses with out-of-write-set paths (the stray-edit hazard). Fail-closed,
+  //      NON-DESTRUCTIVE: verdict halt + the offending paths; reconcile never unlinks a production file.
+  {
+    const h = rsHarness({ [RS_PLAN_PATH]: mkWriterReconcilePlan(), [RS_SET_PATH]: mkWriterReconcileSet() },
+      () => ({ exitCode: 0, result: 'ok' }),
+      (base, a) => { if (a.includes('--barrier-check')) return { exitCode: 1, result: 'refuse', reason: 'write_set_overflow', outOfAllow: ['setup_daily_quant.sh', 'tests/x.js'] }; return null; });
+    const r = runReconcileRunningSet({ planPath: RS_PLAN_PATH, project: 'p', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, unlink: h.unlink });
+    assert(r.writerReconciliation.length === 1 && r.writerReconciliation[0].verdict === 'halt',
+      'T611-AC3(ii): stray-write writer → halt, got ' + JSON.stringify(r.writerReconciliation[0]));
+    assert(r.writerReconciliation[0].outOfWriteSet.includes('setup_daily_quant.sh')
+      && r.writerReconciliation[0].outOfWriteSet.includes('tests/x.js'),
+      'T611-AC3(ii): halt lists the offending out-of-write-set paths, got ' + JSON.stringify(r.writerReconciliation[0].outOfWriteSet));
+    assert(r.writerReconciliation[0].reason === 'write_set_overflow', 'T611-AC3(ii): halt carries the barrier reason');
+    // Non-destructive: the reconcile emits an overall halt hint so the orchestrator/consent valve decides.
+    assert(r.writerHalt === true, 'T611-AC3(ii): a halt verdict surfaces writerHalt:true on the envelope');
+  }
+
+  // (iii) a READ member being rolled back is NOT a writer → no reconciliation entry (writers only).
+  {
+    const plan = makePlan(['| a | in_progress | |', '| b | pending | |'], [
+      '| a | code-reviewer | — | — | 1 | sequence |',
+      '| b | security-reviewer | — | — | 1 | sequence |',
+    ]);
+    const crashed = JSON.stringify({ state: 'opening', nodes: [
+      { id: 'a', role: 'code-reviewer', kind: 'read', opening: true },
+      { id: 'b', role: 'security-reviewer', kind: 'read', opening: true },
+    ] });
+    const h = rsHarness({ [RS_PLAN_PATH]: plan, [RS_SET_PATH]: crashed }, () => ({ exitCode: 0, result: 'ok' }));
+    const r = runReconcileRunningSet({ planPath: RS_PLAN_PATH, project: 'p', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, unlink: h.unlink });
+    assert(Array.isArray(r.writerReconciliation) && r.writerReconciliation.length === 0,
+      'T611-AC3(iii): a rolled-back READ member yields no writer reconciliation entry, got ' + JSON.stringify(r.writerReconciliation));
+    assert(r.writerHalt !== true, 'T611-AC3(iii): no writer halt when no writer departs');
+  }
+}
+
 if (failed > 0) {
   console.error('adaptive-node tests FAILED (' + failed + ' failures, ' + passed + ' passed)');
   process.exitCode = 1;

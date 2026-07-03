@@ -96,6 +96,28 @@ function dispatchEffort(model) {
   return { codex_reasoning_effort: null, codex_reasoning_effort_source: 'role_default' };
 }
 
+// The Codex join protocol's per-node WAIT BUDGET (minutes) — the floor a `running` delegated agent is
+// never interrupted before. Derived from the node's effort tier, the SAME normalized tier `dispatchEffort`
+// reads, so a legacy `opus`/`sonnet` cell resolves to the same budget as its neutral token. Reasoning-tier
+// nodes get the larger budget (deeper work runs longer), standard the smaller; an absent/blank/out-of-vocab
+// tier resolves to a CONCRETE role-default (never null) so every dispatch card carries a number — the
+// non-interrupt rule always has a floor. Values sit ABOVE the observed 10–30-minute runtime of substantive
+// role nodes so the budget replaces the improvised 2–7-minute impatience ceiling. Planner override rides the
+// tier: the planner sets a node's model tier, which sets its budget (no separate per-node plan column —
+// the node grammar carries no per-node extras field, and the tier default is the reuse-before-adding choice).
+const WAIT_BUDGET_MINUTES = Object.freeze({ reasoning: 40, standard: 20 });
+const WAIT_BUDGET_MINUTES_DEFAULT = 20; // no tier resolves → concrete role-default (never null)
+function waitBudgetMinutes(model) {
+  const tier = normalizeTier(model);
+  if (tier === 'reasoning') {
+    return { wait_budget_minutes: WAIT_BUDGET_MINUTES.reasoning, wait_budget_source: 'planner_model' };
+  }
+  if (tier === 'standard') {
+    return { wait_budget_minutes: WAIT_BUDGET_MINUTES.standard, wait_budget_source: 'planner_model' };
+  }
+  return { wait_budget_minutes: WAIT_BUDGET_MINUTES_DEFAULT, wait_budget_source: 'role_default' };
+}
+
 // #382-opencode (#544 contract-keyed): the GENERAL tier→effort mapping for provider-open
 // runtimes (opencode). The {reasoning, standard} tokens are reasoning-weight RANKS, not models;
 // opencode is provider-open, so the migration is a two-level compose that never assumes a provider:
@@ -507,6 +529,28 @@ function unresolvedInScopeFixes(findings) {
   return (Array.isArray(findings) ? findings : []).filter(f =>
     f && f.scope === 'in_scope' && f.action === 'fix' &&
     f.status !== 'resolved' && f.status !== 'deferred');
+}
+
+// The Codex join protocol's typed DELEGATION OUTCOME — an OPTIONAL column-0 `delegation_outcome: <token>`
+// line a node's evidence may carry to record how its delegation resolved, replacing a free-text "it stalled
+// so I did it myself". Closed vocabulary; ABSENT ⇒ `completed` (back-compat: existing evidence has no such
+// line and must not red). Same PURE regex discipline as parseNodeVerdict/parseNodeFindings (native multiline,
+// no classifier — cross-edition byte-identity; FENCE-BLIND BY ANCHOR at column 0; last-match-wins; value
+// lowercased). Returns { found, outcome, valid } — `outcome` is the parsed token or the `completed` default;
+// `valid` is true when absent OR the present token is in the vocabulary (a caller enforces on false).
+const DELEGATION_OUTCOME_DEFAULT = 'completed';
+const DELEGATION_OUTCOME_VOCABULARY = Object.freeze(['completed', 'returned_partial', 'interrupted_unresponsive', 'interrupted_obsolete']);
+function parseDelegationOutcome(cacheText) {
+  const text = String(cacheText || '');
+  const re = /^delegation_outcome:[ \t]*([A-Za-z_]+)[ \t]*$/gm;
+  let m, last = null;
+  while ((m = re.exec(text)) !== null) { last = m[1].toLowerCase(); }
+  const found = last !== null;
+  return {
+    found,
+    outcome: found ? last : DELEGATION_OUTCOME_DEFAULT,
+    valid: !found || DELEGATION_OUTCOME_VOCABULARY.includes(last),
+  };
 }
 
 // #440: classification table for write_set_overflow SUBTYPES — narrowed structural families that
@@ -1085,6 +1129,9 @@ module.exports = {
   CONTRACT_EFFORT_TABLE,
   contractForProvider,
   dispatchEffort,
+  WAIT_BUDGET_MINUTES,
+  WAIT_BUDGET_MINUTES_DEFAULT,
+  waitBudgetMinutes,
   effortForProvider,
   mapTier,
   dispatchEffortOpencode,
@@ -1122,6 +1169,9 @@ module.exports = {
   FINDING_STATUS_VOCABULARY,
   parseNodeFindings,
   unresolvedInScopeFixes,
+  DELEGATION_OUTCOME_DEFAULT,
+  DELEGATION_OUTCOME_VOCABULARY,
+  parseDelegationOutcome,
   WRITE_SET_OVERFLOW_SUBTYPES,
   CURATED_ROOT_PATHS,
   extractCuratedRootPaths,

@@ -42,7 +42,7 @@ const taskMirrorPath = path.join(__dirname, TASK_MIRROR);
 
 // #360: the LEDGER-SCOPED durable consent-halt probe (fence-aware). adaptive-schema keeps the
 // same filename across every edition (byte-identical ×4), so this require is NOT forge-renamed.
-const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, SCHEDULER_LOCK_NAME, acquireProjectLock, resolveFanoutCapReadonly, parallelWritesDefaultOn, refuse, WRITE_SET_OVERFLOW_SUBTYPES, dispatchEffort, dispatchEffortOpencode, modelDisplay, parseNodeVerdict, MERGE_CONFLICT_REPAIR_LIMIT, resolveMainRoot } = require('./kaola-workflow-adaptive-schema');
+const { readDurableConsentHalt, writeFileAtomicReplace, LEDGER_HEADING, locateSection, spliceComplianceSection, RUNNING_SET_NAME, SCHEDULER_LOCK_NAME, acquireProjectLock, resolveFanoutCapReadonly, parallelWritesDefaultOn, refuse, WRITE_SET_OVERFLOW_SUBTYPES, dispatchEffort, waitBudgetMinutes, dispatchEffortOpencode, modelDisplay, parseNodeVerdict, DELEGATION_OUTCOME_VOCABULARY, MERGE_CONFLICT_REPAIR_LIMIT, resolveMainRoot } = require('./kaola-workflow-adaptive-schema');
 
 // ---------------------------------------------------------------------------
 // OPERATOR_HINT_REGISTRY (#445 / D-445-01 §1-3) — per-aggregator map of typed
@@ -950,6 +950,21 @@ function checkEvidenceShape(role, nodeId, evidence, opts) {
     }
   }
 
+  // Codex join protocol: the OPTIONAL typed delegation outcome. When the evidence carries a column-0
+  // `delegation_outcome: <token>` line, the token MUST be in the closed vocabulary (completed |
+  // returned_partial | interrupted_unresponsive | interrupted_obsolete); an unknown value is a typed
+  // refusal. ABSENT ⇒ `completed` (back-compat: existing evidence has no such line and stays green).
+  // Placed BEFORE the role branches AND the universal n/a carve-out so the vocabulary governs every role
+  // uniformly — a malformed token fails closed regardless of how the node otherwise resolves.
+  {
+    const dm = content.match(/^delegation_outcome:[ \t]*(\S+)[ \t]*$/m);
+    if (dm && !DELEGATION_OUTCOME_VOCABULARY.includes(dm[1].toLowerCase())) {
+      return { ok: false, kind: 'shape', missingTokenClass: 'delegation_outcome',
+        reason: role + ' ' + nodeId + ' evidence has unknown delegation_outcome "' + dm[1] + '" (allowed: ' + DELEGATION_OUTCOME_VOCABULARY.join(' | ') + ')',
+        expected: ['delegation_outcome: ' + DELEGATION_OUTCOME_VOCABULARY.join('|')] };
+    }
+  }
+
   // #334: a non-delegable main-session gate can never self-skip ('n/a') and must record a
   // machine verdict (column-0, last-match-wins, lowercase — mirrors schema.parseNodeVerdict).
   // Placed BEFORE the universal n/a carve-out on purpose.
@@ -1191,6 +1206,10 @@ function buildDispatch(nodeInfo, context) {
     codex_dispatch_mode: codexDispatchMode,
     codex_task_name:    codexTaskName,
     ...dispatchEffort(nodeInfo.model),
+    // Codex join protocol: the per-node wait budget (minutes) the join loop honors before it may
+    // escalate a still-`running` agent. Tier-derived (reasoning→40 / standard→20 / role-default→20),
+    // present on EVERY dispatch card so no timeout is left to model improvisation.
+    ...waitBudgetMinutes(nodeInfo.model),
     // #382-opencode: the opencode effort twin — resolves the per-node tier to a provider
     // effort variant (reasoning→top, standard→second) when ctx.opencode_provider is set (opencode
     // runtime). null/absent provider → role_default (the agent's configured variant wins).
@@ -5066,6 +5085,37 @@ function closeGroupMember(ctx) {
 }
 
 // ---------------------------------------------------------------------------
+// classifyWriterReconcile(nodeId, bc) — the Codex join protocol's writer kill-safety verdict. PURE over
+// the plan-validator --barrier-check result `bc` (the parsed JSON, or null on shell/parse failure):
+//   adopt — barrier passes (all worktree changes ⊆ the declared write set), OR the writer never recorded
+//           a baseline (`no_barrier_base`: it crashed before writing under tracking → nothing to reconcile).
+//   halt  — the barrier refuses with out-of-write-set paths (the leaked-stray-edit hazard) OR any other
+//           refusal / an unavailable result (fail-closed). NON-DESTRUCTIVE: reconcile never deletes; the
+//           halt + offending paths route to the orchestrator/consent valve.
+// Shape: { node_id, verdict:'adopt'|'halt', reason, outOfWriteSet:[...] }.
+// ---------------------------------------------------------------------------
+function classifyWriterReconcile(nodeId, bc) {
+  if (!bc || typeof bc !== 'object') {
+    return { node_id: nodeId, verdict: 'halt', reason: 'barrier_unavailable', outOfWriteSet: [] };
+  }
+  const outOfAllow = Array.isArray(bc.outOfAllow) ? bc.outOfAllow.slice() : [];
+  if (bc.result === 'refuse') {
+    if (outOfAllow.length) {
+      return { node_id: nodeId, verdict: 'halt', reason: bc.reason || 'write_set_overflow', outOfWriteSet: outOfAllow };
+    }
+    // No baseline recorded → the writer never wrote under tracking (crashed before it flipped/wrote);
+    // there is nothing to reconcile, so adopt (vacuous) rather than wedge the common pending-crash path.
+    if (bc.reason === 'no_barrier_base') {
+      return { node_id: nodeId, verdict: 'adopt', reason: 'no_baseline', outOfWriteSet: [] };
+    }
+    // Any other refusal (root/base integrity anomaly) is unresolvable here → fail-closed halt.
+    return { node_id: nodeId, verdict: 'halt', reason: bc.reason || 'barrier_refused', outOfWriteSet: [] };
+  }
+  // pass / ok → all changes are contained in the declared write set.
+  return { node_id: nodeId, verdict: 'adopt', reason: 'in_write_set', outOfWriteSet: [] };
+}
+
+// ---------------------------------------------------------------------------
 // runReconcileRunningSet — MUTATES running-set.json + (roll-back) ledger.
 // Repairs a crashed 'opening' running set: a node whose ledger row DID flip to
 // in_progress is kept (roll-forward, opening flag cleared); a node still 'pending'
@@ -5203,6 +5253,35 @@ function runReconcileRunningSet(opts) {
   // Nodes in keptAll that exceed the budget are also dropped (capped out).
   const cappedOut = keptAll.slice(budget);
 
+  // Codex join protocol — WRITER KILL-SAFETY reconciliation. Every WRITER member LEAVING the live set on
+  // this reconcile (rolled back / capped out / stale) is a potentially-interrupted in-place writer whose
+  // worktree may hold PARTIAL edits — this run's stray-write hazard, turned into a scripted, fail-closed
+  // step. Diff its actual worktree changes against its declared write set via the plan-validator
+  // --barrier-check (the SAME baseline+diff the per-node barrier uses) and emit a typed verdict per writer:
+  //   adopt — all changes ⊆ the declared write set (barrier passes) OR no baseline was ever recorded
+  //           (the writer crashed before it wrote under tracking) — safe to keep / re-dispatch cleanly.
+  //   halt  — changes touch paths OUTSIDE the declared set (the leaked-stray-edit hazard) OR the barrier is
+  //           otherwise unresolvable (integrity anomaly / unavailable). NON-DESTRUCTIVE by design: reconcile
+  //           NEVER auto-deletes a production file (revert-overflow is destructive + consent-gated), so it
+  //           emits `halt` + the offending paths and hands the decision to the orchestrator/consent valve.
+  // `revert` stays in the typed vocabulary as the token the orchestrator MAY act on (via revert-overflow);
+  // reconcile itself only ever emits adopt|halt. Runs BEFORE the --drop-base loop below (which removes the
+  // baseline the diff needs). A read/gate member is never a writer → skipped. Fail-soft: a shell/parse error
+  // yields a `halt` (fail-closed) verdict, never a throw.
+  const writerReconciliation = [];
+  if (typeof shell === 'function') {
+    const byIdWriter = new Map((running.nodes || []).map(n => [n.id, n]));
+    const departingWriters = new Set([...dropped, ...cappedOut, ...stale]);
+    for (const id of departingWriters) {
+      const n = byIdWriter.get(id);
+      if (!n || n.kind !== 'write') continue;
+      let bc = null;
+      try { bc = shell(validatorPath, [planPath, '--barrier-check', '--node-id', id, '--json']); } catch (_) { bc = null; }
+      writerReconciliation.push(classifyWriterReconcile(id, bc));
+    }
+  }
+  const writerHalt = writerReconciliation.some(w => w.verdict === 'halt');
+
   // #385 drop-side: every rolled-back (open-direction) / closed-out (close-direction) / stale
   // (#293-direction) / capped-out member is leaving the live set, so drop its per-node baseline
   // (.cache/barrier-base-<id> + the gc-anchored ref) — the documented #281/#296 stale-baseline trap
@@ -5325,6 +5404,11 @@ function runReconcileRunningSet(opts) {
     // the #293 dead-end is observably broken (was a not_opening no-op).
     ...(!wholeOpening && openingNodes.length === 0 && closed.length === 0 && stale.length > 0 ? { reason: 'stale_member_dropped' }
       : (!wholeOpening && openingNodes.length === 0 && closed.length > 0 ? { reason: 'closed_member_dropped' } : {})),
+    // Codex join protocol: the per-writer kill-safety verdicts (adopt|halt) for every WRITER member that
+    // left the live set on this reconcile, plus a top-level `writerHalt` hint when ANY writer's changes
+    // spilled outside its declared set — the orchestrator/consent valve owns the non-destructive follow-up.
+    writerReconciliation,
+    writerHalt,
     state: 'open',
     taskTransitions: [],
     taskMirror: refreshTaskMirror(project, shell),

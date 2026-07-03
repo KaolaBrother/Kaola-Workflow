@@ -1936,6 +1936,27 @@ function testAdaptiveValidatorGovernance() {
       assert(schema.dispatchEffort('sonnet').codex_reasoning_effort === schema.dispatchEffort('standard').codex_reasoning_effort
         && schema.dispatchEffort('sonnet').codex_reasoning_effort === 'high',
         '#610: legacy sonnet dispatches with the SAME high effort as neutral standard');
+
+      // #611 AC2/AC5: the Codex join protocol's tier→wait-budget derivation and the typed
+      // delegation-outcome evidence contract. Budgets: reasoning=40m, standard=20m, untiered=role-default
+      // 20m (never null — every dispatch card carries a number). Delegation outcomes: `completed` (default
+      // when the token is absent) and the interrupted paths pass; an unknown token is a typed refusal.
+      const an611 = require('./kaola-workflow-adaptive-node');
+      assert(schema.waitBudgetMinutes('reasoning').wait_budget_minutes === 40
+        && schema.waitBudgetMinutes('standard').wait_budget_minutes === 20
+        && schema.waitBudgetMinutes(null).wait_budget_minutes === 20
+        && schema.waitBudgetMinutes(null).wait_budget_source === 'role_default',
+        '#611 AC2: waitBudgetMinutes reasoning=40 / standard=20 / untiered=role-default 20');
+      // `completed` (absent-default and explicit) + at least one interrupted path pass evidence-shape.
+      assert(an611.checkEvidenceShape('tdd-guide', 'jn', 'RED: r\nGREEN: g').ok === true,
+        '#611 AC5: evidence with NO delegation_outcome token defaults to completed (unaffected)');
+      assert(an611.checkEvidenceShape('tdd-guide', 'jn', 'delegation_outcome: completed\nRED: r\nGREEN: g').ok === true,
+        '#611 AC5: delegation_outcome: completed passes');
+      assert(an611.checkEvidenceShape('implementer', 'jn', 'delegation_outcome: interrupted_unresponsive\nnon_tdd_reason: x\nbuild-green').ok === true,
+        '#611 AC5: an interrupted-path outcome (interrupted_unresponsive) passes with role tokens present');
+      const jnBad = an611.checkEvidenceShape('tdd-guide', 'jn', 'delegation_outcome: made_up\nRED\nGREEN');
+      assert(jnBad.ok === false && jnBad.missingTokenClass === 'delegation_outcome',
+        '#611 AC5: an unknown delegation_outcome token is a typed refusal, got ' + JSON.stringify(jnBad));
     }
 
     // #597: speculative_open_policy tier acceptance at freeze. off / consent / auto (the new default
@@ -3505,6 +3526,19 @@ function testBundle424432433NodeSeeding() {
         '#433 (6d): opened.evidence_file must be .cache/n1.md, got ' + JSON.stringify(onOut.opened.evidence_file));
       assert(Array.isArray(onOut.opened.required_tokens) && onOut.opened.required_tokens.includes('RED'),
         '#433 (6d): opened.required_tokens must include RED for tdd-guide, got ' + JSON.stringify(onOut.opened.required_tokens));
+
+      // (6f) #611 AC2: the dispatch card carries a concrete per-node wait budget (the Codex join
+      // protocol's non-interrupt floor) — never left to model improvisation. n1's untiered cell resolves
+      // to the default standard tier via next-action, so the card shows a concrete 20m budget with a
+      // valid source token (the tier resolution makes it planner_model; a truly tierless card would be
+      // role_default — the unit tests cover both). The load-bearing guarantee: EVERY card carries a
+      // positive-integer budget and a valid source.
+      assert(onOut.opened.dispatch && Number.isInteger(onOut.opened.dispatch.wait_budget_minutes)
+        && onOut.opened.dispatch.wait_budget_minutes > 0,
+        '#611 AC2: open-next dispatch card must carry a positive integer wait_budget_minutes, got ' + JSON.stringify(onOut.opened.dispatch && onOut.opened.dispatch.wait_budget_minutes));
+      assert(onOut.opened.dispatch.wait_budget_minutes === 20
+        && (onOut.opened.dispatch.wait_budget_source === 'planner_model' || onOut.opened.dispatch.wait_budget_source === 'role_default'),
+        '#611 AC2: n1 dispatches with the standard-tier 20m budget + a valid source, got ' + JSON.stringify({ b: onOut.opened.dispatch.wait_budget_minutes, s: onOut.opened.dispatch.wait_budget_source }));
 
       // (6e) Idempotency: a second open-next (the node is now in_progress, should refuse node_not_ready
       //      or node_not_in_ledger) — the evidence file must NOT be overwritten by a crash re-dispatch
