@@ -85,7 +85,7 @@ try {
   assert(!/model="\{[A-Z_]+_MODEL\}"/.test(allCommands), 'installed commands must not keep model placeholders');
 
   const requiredAgents = ['code-explorer','knowledge-lookup','planner','code-architect','tdd-guide',
-    'build-error-resolver','code-reviewer','security-reviewer','doc-updater','adversarial-verifier','contractor','workflow-planner'];
+    'build-error-resolver','code-reviewer','security-reviewer','doc-updater','adversarial-verifier','contractor','workflow-planner','synthesizer'];
   for (const agent of requiredAgents) {
     const installed = fs.readFileSync(path.join(tmp,'.claude','agents',agent+'.md'),'utf8');
     const fmEnd = installed.indexOf('\n---', 3);
@@ -146,6 +146,7 @@ try {
       assert(manifest['code-explorer'] === 'sonnet', 'manifest must map code-explorer→sonnet; got ' + manifest['code-explorer']);
       assert(manifest['contractor'] === 'sonnet', 'higher manifest must map contractor→sonnet');
       assert(manifest['workflow-planner'] === 'opus', 'higher manifest must map workflow-planner→opus; got ' + manifest['workflow-planner']);
+      assert(manifest['synthesizer'] === 'opus', 'higher manifest must map synthesizer→opus; got ' + manifest['synthesizer']);
       // All keys must be non-empty and in {opus,sonnet}
       for (const [k, v] of Object.entries(manifest)) {
         assert(v === 'opus' || v === 'sonnet', 'manifest value for ' + k + ' must be opus or sonnet; got ' + v);
