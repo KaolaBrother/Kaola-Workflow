@@ -85,13 +85,71 @@ descriptors are not proof. This applies to both V2 and V1 tiered Codex dispatch.
 stale, or failing, refuse before dispatch with `codex_effort_override_unavailable`.
 
 For Codex v2 task-name mode (`dispatch.codex_dispatch_mode: "v2-task-name"`), after the proof gate
-passes, call `spawn_agent` with `task_name: dispatch.codex_task_name` and `agent_type:
-dispatch.agent_type`. When `dispatch.codex_reasoning_effort` is non-null, also pass
-`fork_turns: "none"` and `reasoning_effort: dispatch.codex_reasoning_effort`;
-inherited-history forks are not a valid path for tiered nodes. For v1 fallback (`"v1-thread-id"`),
-omit `task_name`, keep `agent_type: dispatch.agent_type`, and prefix the prompt with
+passes, call `spawn_agent` with `task_name: dispatch.codex_task_name`, `agent_type:
+dispatch.agent_type`, and `fork_turns: "none"` on EVERY dispatch, tiered or not — the dispatch card
+is self-contained by contract, so no role spawn ever forks the parent's history. When
+`dispatch.codex_reasoning_effort` is non-null, also pass
+`reasoning_effort: dispatch.codex_reasoning_effort`. For v1 fallback (`"v1-thread-id"`), omit `task_name`, keep
+`agent_type: dispatch.agent_type` and `fork_turns: "none"` — the unconditional mandate applies
+identically to this dispatch mode — and prefix the prompt with
 `Node: <id> | Role: <role> | Effort: <dispatch.codex_reasoning_effort or default>`. Pass
 `Working directory: ${ACTIVE_WORKTREE_PATH}` to every role delegation.
+
+## Codex Join Protocol
+
+<!-- PIN: join-protocol -->
+Spawning a frontier is only half the delegation lifecycle — this protocol governs everything after
+`spawn_agent` returns: how long to wait, when (and how) to nudge a slow agent, and how to reclaim a
+node safely if it truly stalls. No timeout or patience value here is left to model improvisation —
+every number traces to the dispatch card (`dispatch.wait_budget_minutes`) or a named config bound.
+Detailed mechanics: `docs/plan-run-cards/join-protocol.md`.
+
+**A. Wait budget.** Every dispatch card carries `dispatch.wait_budget_minutes` — tier-derived (e.g.
+40 minutes for a reasoning-tier node, 20 for standard; an unresolved tier still resolves to a
+concrete role-default, never null). **A `running` agent is NEVER interrupted before its wait
+budget expires.** Read the budget off the card at dispatch time; never substitute an improvised
+patience ceiling.
+
+**B. Long-poll join loop — one wait per iteration, drain every completed member, no status
+probes.** After dispatching a frontier, loop: call `wait_agent` ONCE per iteration with a LONG
+timeout (minutes — at or near the host's `max_wait_timeout_ms`), passing every outstanding agent id
+where the tool supports multi-id wait. On wake, call `list_agents` ONCE, then drain EVERY completed
+member before re-waiting — integrate its result, `record-evidence`, `close-node`, and, where the
+tool surface exposes it, `close_agent` (best-effort hygiene: some sessions never expose it and the
+harness auto-reaps completed agents, so its absence is not an error). `send_message` status-probe
+requests to a still-running agent are PROHIBITED as a liveness check — a busy agent answers at its
+own turn boundary, not on demand, and a probe is structurally unanswerable evidence of nothing.
+
+**C. Escalation ladder — replaces impatience-kill.** Applied ONLY after the wait budget (A) has
+expired, each rung gated on the previous:
+1. Budget expired → send a `followup_task` demanding the bounded deliverable now (evidence +
+   changed-file list); this reaches a running agent at its next message boundary.
+2. Grace window (~5 minutes) passes with no response → `interrupt_agent`, then a further
+   `followup_task` asking the still-available agent for partial evidence and its changed-file list.
+3. Only then: reclaim the node. Inline redo by the orchestrator is the documented LAST resort.
+
+Record a typed `delegation_outcome` in the node's evidence for every delegation: `completed |
+returned_partial | interrupted_unresponsive | interrupted_obsolete` — never a free-text "it
+stalled so I did it myself".
+
+**Writer kill-safety.** An in-place writer (shared worktree) is non-interruptible before the wait
+budget and the full escalation ladder above — no exception. A writer that must be interruptible
+belongs in an isolated `parallel_safe` leg instead (the existing per-leg mechanism); interrupting an
+isolated-leg writer discards the leg atomically, never partially. After reclaiming ANY writer
+(ladder step 2 or the reclaim itself), run `reconcile-running-set` and HONOR its verdict before
+re-opening the node: a `writerHalt: true` result means at least one departing writer's changes
+could not be positively confirmed inside its declared write set — do NOT re-open that node until the
+out-of-set paths are resolved (`revert-overflow`, `repair-node`, or a consent halt). Re-opening on a
+`halt` verdict without resolving it first is the exact halt-then-reopen laundering hole this
+protocol closes.
+
+**F. Frontier dispatch discipline + slot awareness.** On `enterBatch: true`, issue every
+`spawn_agent` call for the frontier back-to-back in ONE turn, then run exactly ONE join loop (B) for
+the whole frontier — never one spawn-then-wait cycle per member. Width counts only RUNNING members:
+a finished-but-unclosed agent does not hold a concurrency seat, so do not subtract it from available
+width. On a spawn refusal (a thread-limit / concurrency-limit error), wait for or close a finished
+agent, then retry the SAME spawn ONCE — this reactive fallback is the capacity remedy, never
+proactive closure.
 
 ## Gate-Role Degradation Notice
 

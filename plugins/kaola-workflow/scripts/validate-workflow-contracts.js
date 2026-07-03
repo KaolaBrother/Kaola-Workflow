@@ -1010,6 +1010,56 @@ for (const file of planRunSurfacesGateFence607) {
   assertIncludes(file, 'KAOLA_GATE_WINDOW_FENCE=0');
 }
 
+// #611: the Codex dispatch prose mandates fork_turns:"none" for EVERY role dispatch (not only
+// tiered nodes) — the "only for tiered nodes" qualifier is retired. Pin the unconditional mandate
+// (both v2 and v1 dispatch modes) and ban the retired qualifier phrasing across ALL SIX plan-run
+// surfaces so a partial drop reds this chain.
+const planRunSurfaces611ForkTurns = [
+  'commands/kaola-workflow-plan-run.md',
+  'plugins/kaola-workflow-gitlab/commands/kaola-workflow-plan-run.md',
+  'plugins/kaola-workflow-gitea/commands/kaola-workflow-plan-run.md',
+  'plugins/kaola-workflow/skills/kaola-workflow-plan-run/SKILL.md',
+  'plugins/kaola-workflow-gitlab/skills/kaola-workflow-plan-run/SKILL.md',
+  'plugins/kaola-workflow-gitea/skills/kaola-workflow-plan-run/SKILL.md',
+];
+for (const file of planRunSurfaces611ForkTurns) {
+  assertIncludes(file, 'on EVERY dispatch, tiered or not');
+  assertIncludes(file, 'the unconditional mandate applies identically to this dispatch mode');
+  assertNotIncludes(file, 'not a valid path for tiered nodes');
+}
+
+// #611: the Codex Join Protocol — full A-F encoding (wait budget, drain-all join loop, escalation
+// ladder, writer kill-safety, frontier slot awareness) lives in the three Codex SKILL packs
+// (spawn_agent/wait_agent/close_agent lifecycle). Pin the anchor + the load-bearing tokens so a
+// drop on any Codex SKILL pack reds this chain.
+const codexJoinProtocolSurfaces611 = [
+  'plugins/kaola-workflow/skills/kaola-workflow-plan-run/SKILL.md',
+  'plugins/kaola-workflow-gitlab/skills/kaola-workflow-plan-run/SKILL.md',
+  'plugins/kaola-workflow-gitea/skills/kaola-workflow-plan-run/SKILL.md',
+];
+for (const file of codexJoinProtocolSurfaces611) {
+  assertIncludes(file, '<!-- PIN: join-protocol -->');
+  assertIncludes(file, 'dispatch.wait_budget_minutes');
+  assertIncludes(file, 'NEVER interrupted before its wait budget expires');
+  assertIncludes(file, 'delegation_outcome');
+  assertIncludes(file, 'writerHalt');
+}
+
+// #611: the three Claude/forge plan-run COMMAND surfaces carry the runtime-appropriate equivalent
+// of the Codex Join Protocol (SendMessage vocabulary instead of spawn_agent/wait_agent), still
+// referencing the same dispatch-card wait_budget_minutes and writer-kill-safety verdict fields.
+const claudeJoinProtocolSurfaces611 = [
+  'commands/kaola-workflow-plan-run.md',
+  'plugins/kaola-workflow-gitlab/commands/kaola-workflow-plan-run.md',
+  'plugins/kaola-workflow-gitea/commands/kaola-workflow-plan-run.md',
+];
+for (const file of claudeJoinProtocolSurfaces611) {
+  assertIncludes(file, 'dispatch.wait_budget_minutes');
+  assertIncludes(file, 'Writer kill-safety');
+  assertIncludes(file, 'writerHalt');
+  assertIncludes(file, 'delegation_outcome');
+}
+
 // #400: registry-driven route-reachability contract for the Claude command surface. Every
 // route/command target a claim/startup/resume receipt emits MUST resolve to an installed command
 // file in EACH Claude edition. require() the schema route constants (no hand-listed drift) + the
