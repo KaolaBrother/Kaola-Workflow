@@ -15,6 +15,7 @@ that situation.
 | [reopen-complete-node.md](reopen-complete-node.md) | Reopening a complete writer node |
 | [frontier-batch.md](frontier-batch.md) | Parallel frontier fan-out — running-set scheduler (open-ready / close-node / reconcile-running-set) |
 | [speculative-open.md](speculative-open.md) | Speculative open (policy consent → open-ready --speculative-consent / discard-speculative) |
+| [join-protocol.md](join-protocol.md) | Codex Join Protocol — wait budgets, long-poll join loop, escalation ladder, writer kill-safety (reconcile-running-set), typed delegation_outcome, frontier dispatch + slot awareness |
 
 ## How to use these cards
 
@@ -37,3 +38,4 @@ apply to them). They live once under `docs/plan-run-cards/` and are pointed at b
 - **D-434-01** — sanctioned repair primitives (`revert-overflow` / `repair-node`)
 - **D-424-01** — `--drop-base` window-lock / anti-laundering model
 - **D-586-01** — retirement of the standalone `parallel-batch` aggregator; `frontier-batch.md` now documents the running-set scheduler
+- **D-611-01** — the Codex Join Protocol (wait budgets, writer kill-safety reconciliation, typed delegation outcomes); `join-protocol.md` documents the full mechanics

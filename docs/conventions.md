@@ -31,6 +31,34 @@ Do not present Claude `Agent(...)` call-syntax as the Codex runtime contract.
 
 See `docs/api.md` § Codex Harness Scripts for the preflight CLI and typed-refusal shapes.
 
+## Codex Join Protocol — wait budgets, escalation, and writer kill-safety (issue #611)
+
+Dispatching a subagent (Codex `spawn_agent`, or a Claude/forge teammate) does not end at the spawn
+call — the orchestrator owns a join/lifecycle discipline for what happens after, so the same
+timeout/nudge/reclaim decision is never left to model improvisation:
+
+- **Wait budget.** Every dispatch card carries `dispatch.wait_budget_minutes` (tier-derived —
+  `reasoning`→40, `standard`→20, role-default→20 — always a concrete number, never absent). **A
+  `running` agent is never interrupted before its wait budget elapses.**
+- **Escalation ladder, not impatience-kill.** Only after the wait budget expires: (1) demand the
+  bounded deliverable now (`followup_task` / an equivalent nudge); (2) after a grace window with no
+  response, interrupt (recoverable, not a kill) and ask once more for partial evidence; (3) reclaim
+  the node — the documented LAST resort, never the first move.
+- **Typed delegation outcomes.** Every delegation records a closed-vocabulary `delegation_outcome`
+  in the node's evidence (`completed | returned_partial | interrupted_unresponsive |
+  interrupted_obsolete`, absent ⇒ `completed`) — never a free-text "it stalled so I did it myself".
+- **Writer kill-safety.** An in-place writer (sharing the parent worktree) is non-interruptible
+  before the wait budget and the full escalation ladder — a writer that must be interruptible
+  belongs in an isolated `parallel_safe` leg instead. After reclaiming any in-place writer,
+  `reconcile-running-set` MUST run and its per-writer verdict (`adopt`/`halt`) MUST be honored
+  BEFORE the node is re-opened: a `halt` verdict means the writer's changes could not be confirmed
+  clean, and re-opening straight past it is the halt-then-reopen laundering hole this protocol
+  closes.
+
+See `docs/plan-run-cards/join-protocol.md` for the full mechanics (long-poll join loop, the exact
+`reconcile-running-set` JSON verdict shape, frontier dispatch discipline, and slot awareness) and
+`docs/decisions/D-611-01.md` for the design record.
+
 ## Testing — Cross-Edition Validation (issue #307)
 
 The repo ships four editions (claude / codex / gitlab / gitea), each with its own validators and walkthroughs wired as a separate `npm` chain: `test:kaola-workflow:claude`, `:codex`, `:gitlab`, `:gitea`. `npm test` runs all four — but **chained with `&&`, so it short-circuits on the first failure**. A red codex/gitlab/gitea chain sitting *behind* a green claude chain is therefore never reached, and a Finalization gate that records only `npm test` (or only the claude walkthrough) can ship a change that broke an edition validator or walkthrough undetected.
@@ -156,7 +184,7 @@ The human channel (`operator_hint`) and the machine channel (`proposed_repair`, 
 The adaptive plan-run command surfaces (×6: 3 Claude commands + 3 Codex SKILL packs, per the #400 six-surface rule) are reduced to a ~150-line LOOP SKELETON. Rare-branch prose (resume, governance, repair-routing, reopen-complete-node, frontier-batch) lives ONCE under `docs/plan-run-cards/` and is NOT replicated across the six surfaces.
 
 - **What the skeleton retains resident:** the common path (orient → open → dispatch → record evidence → close-and-advance), the `<!-- PIN: frontier unit -->` anchor followed immediately by the `frontier unit` literal (required by `scripts/test-route-reachability.js` and all four `validate-*-contracts.js`), `--summary` mode consumption (D-446-01), and `<!-- CARD: <name> -->` markers before each rare-branch stub.
-- **The five cards** live under `docs/plan-run-cards/` and are NOT six-surface-replicated; they are reference material pointed at by the skeleton's card markers:
+- **The cards** live under `docs/plan-run-cards/` and are NOT six-surface-replicated; they are reference material pointed at by the skeleton's card markers:
 
   | Card | Covers |
   |---|---|
@@ -165,6 +193,8 @@ The adaptive plan-run command surfaces (×6: 3 Claude commands + 3 Codex SKILL p
   | `repair-routing.md` | `route-findings` consumption (D-446-01), `revert-overflow` / `repair-node` choice, plan-repair via `--freeze` |
   | `reopen-complete-node.md` | Reopening a `complete` writer — `repair-node` vs `reopen-node`, baseline-reuse rules, the reopen-needs-allDone trap |
   | `frontier-batch.md` | Parallel frontier fan-out — the running-set scheduler (`open-ready` / `close-node` / `reconcile-running-set`); default-on disjoint write co-open in isolated legs (D-542-01), serial-degrade only for non-disjoint/uncertain frontiers or hosts without worktree support |
+  | `speculative-open.md` | Speculative open (`speculative_open_policy: consent`) — `open-ready --speculative-consent` / `discard-speculative`, read and write graduation |
+  | `join-protocol.md` | Wait budgets, long-poll join loop, escalation ladder, writer kill-safety (`reconcile-running-set`), typed `delegation_outcome`, frontier dispatch + slot awareness (#611) |
 
 **Propagation rule:** the skeleton (not the cards) is a six-surface surface and obeys the §Routing / adaptive prose rule above. A change to the skeleton's interactive loop, the `frontier unit` literal, or a `<!-- CARD: -->` or `<!-- PIN: -->` marker is an adaptive-prose change and must propagate to all six surfaces and pass all four chains.
 

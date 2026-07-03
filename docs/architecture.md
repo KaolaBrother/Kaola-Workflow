@@ -225,6 +225,30 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   a non-write state channel riding the same file, is scoped to the non-gate case. See
   `docs/decisions/D-607-01.md`.
 
+  **Writer kill-safety reconciliation — the Codex Join Protocol (issue #611, D-611-01).** A crash
+  or a deliberate reclaim (an interrupted-agent escalation, or an ordinary crash-repair roll-back)
+  can leave an in-place WRITER's worktree carrying partial, possibly out-of-declared-set edits — the
+  same stray-write hazard `reconcile-running-set`'s existing roll-forward/roll-back machinery
+  already navigates for the ledger, but previously blind to the writer's ACTUAL file changes.
+  `reconcile-running-set` now diffs every writer member LEAVING the live set on that call (rolled
+  back / capped out / stale) against its declared write set via `--barrier-check` — the SAME
+  baseline+diff the per-node barrier uses — run BEFORE the existing `--drop-base` loop (which would
+  otherwise remove the baseline the diff needs). Read/gate members are never writers and are skipped.
+  The classifier (`classifyWriterReconcile`) is POSITIVE-CONFIRMATION and fail-closed: `adopt` is
+  emitted only on an EXPLICIT barrier `result: 'pass'|'ok'`, or the vacuous `no_barrier_base` case (a
+  writer that crashed before it ever wrote under tracking — nothing to reconcile); every other
+  shape — a confirmed out-of-set overflow, an unshellable/non-object result, or a RESULTLESS result
+  from a crashed/killed/non-JSON/missing-validator subprocess — halts, because `shellNode` never
+  throws and a swallowed subprocess failure otherwise looks like an innocuous empty object. This
+  positive-confirmation posture shipped only after an adversarial-verifier gate reproduced the
+  opposite (fail-open) behavior of the first implementation end-to-end and it was repaired before
+  merge. Reconcile stays non-destructive — it never auto-deletes; a `halt` verdict (surfaced per
+  writer in `writerReconciliation[]`, plus a top-level `writerHalt` boolean) hands the named
+  out-of-set paths to the orchestrator, which resolves them (`revert-overflow` / `repair-node` /
+  a consent halt) before re-opening the node — never re-opening directly on a `halt`, which would
+  be the halt-then-reopen laundering hole this mechanism closes. See `docs/api.md` §
+  `reconcile-running-set` — writer kill-safety verdicts and `docs/decisions/D-611-01.md`.
+
   **`max_concurrent` in `running-set.json`.** `open-ready` writes an optional `max_concurrent`
   integer into the manifest at open time:
   `{ state: 'opening'|'open', max_concurrent?: number, nodes: [...], updatedAt }`.

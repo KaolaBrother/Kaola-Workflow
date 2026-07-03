@@ -280,6 +280,8 @@ Every mutating `adaptive-node.js` subcommand runs a layered guard prologue **bef
 - **`scheduler_lock_stale`** (#585) — the same lock, but the holder is CLASSIFIED dead/aged (a dead same-host PID, or an old/corrupt cross-host payload). The lock is NEVER auto-removed; the `operator_hint` names the holder (subcommand/pid/host/since) and the one-session manual recovery (`rm "<lockPath>"`, then re-run). See § Scheduler mutual-exclusion lock below and `docs/decisions/D-585-01.md` for the rejected auto-takeover design.
 - **`evidence_unbound` / `evidence_stale`** (#392) — the close gate (`close-node` / `close-and-open-next`) verifies the evidence's `evidence-binding: <node-id> <nonce>` header against the per-open nonce (the barrier-base SHA prefix surfaced by `open-next`/`open-ready`). A header naming a different node → `evidence_unbound` (copied across nodes); a stale nonce → `evidence_stale` (replayed/copied from a prior open). Absent on disk (no recorded baseline) → the binding check is skipped (backward-compatible).
 - **`closed_member_dropped`** (#384) — `reconcile-running-set` gained a CLOSE direction: a ledger-terminal (`complete`/`n.a`) member still in an `open` running set (a crash between `close-node`'s plan write and its set removal) is dropped; `orient` routes that wedge there (`running_set_close_incomplete` + `repair: 'reconcile-running-set'`) instead of looping. Every rollback / close-direction drop also shells `--drop-base` per affected node (#385) so a stale baseline never absorbs foreign writes on re-open.
+- **`barrier_unavailable` / `barrier_unverifiable` — writer kill-safety reconciliation (issue #611, D-611-01).** `reconcile-running-set` gained a writer-kill-safety pass: every WRITER member leaving the live set on that call (rolled back / capped out / stale) is diffed against its declared write set via `--barrier-check` BEFORE the `--drop-base` loop, producing a per-writer verdict in the response's `writerReconciliation` array (`adopt` on an explicit `result: 'pass'|'ok'`, or the vacuous `no_barrier_base` case; `halt` on a confirmed `write_set_overflow`/`barrier_refused`, an unshellable/non-object barrier result (`barrier_unavailable`), or a resultless/unrecognized barrier result (`barrier_unverifiable` — a crashed/killed/non-JSON/missing-validator subprocess is UNVERIFIED, never silently adopted)); a top-level `writerHalt` is `true` when any writer halted. See § `reconcile-running-set` — writer kill-safety verdicts below for the full JSON shape and classifier truth table.
+- **`delegation_outcome` — typed evidence shape (issue #611).** An evidence file MAY carry a column-0 `delegation_outcome: <token>` line recording how a delegated node's dispatch resolved. The vocabulary (`DELEGATION_OUTCOME_VOCABULARY`) is closed: `completed | returned_partial | interrupted_unresponsive | interrupted_obsolete`; absent ⇒ `completed` (back-compat — existing evidence with no such line stays green). An unrecognized token is a typed `checkEvidenceShape` refusal (`missingTokenClass: 'delegation_outcome'`), enforced BEFORE the per-role branches and the universal `n/a` carve-out, so the vocabulary governs every role uniformly.
 - **`node_not_in_ledger` — additive `diagnostic` field (issue #425).** When `open-next` (via `spliceLedgerNode` / `readLedgerStatuses`) cannot find an `id` column in the `## Node Ledger` — because the section is present but uses a non-canonical header (e.g. `| node | status |`) — the `node_not_in_ledger` refusal payload now carries an additive `diagnostic` field:
   ```json
   { "result": "refuse", "reason": "node_not_in_ledger", "nodeId": "<id>",
@@ -427,8 +429,22 @@ dispatch: {
   model_display?:     { claude: string, codex: string, opencode: string }, // optional (issue #610);
                                          //   present only when `model` resolves to a non-null tier
                                          //   (absent for a model-less / role-static node)
+  wait_budget_minutes: number,          // issue #611; tier-derived (reasoning=40 / standard=20 /
+                                         //   role-default=20); ALWAYS present, never null
+  wait_budget_source:  'planner_model' | 'role_default', // issue #611; which branch produced the budget
 }
 ```
+
+**`wait_budget_minutes` / `wait_budget_source` (issue #611 / D-611-01).** Unconditional, unlike the
+optional `goal_line`/`leg_path`/`model_display` fields above — every dispatch card carries a wait
+budget, never a bare absence, so no join loop is left to guess a timeout. `waitBudgetMinutes(model)`
+first runs the raw `model` cell through `normalizeTier()` (a legacy `opus`/`sonnet` cell resolves to
+the same budget as its neutral counterpart), then returns `{ wait_budget_minutes,
+wait_budget_source }`: tier `reasoning` → `{40, 'planner_model'}`, `standard` → `{20,
+'planner_model'}`, any absent/blank/unrecognized tier → `{20, 'role_default'}` (a concrete
+role-default, never `null`). The Codex Join Protocol rule this backs: a `running` agent is never
+interrupted before its `wait_budget_minutes` elapses. See `docs/plan-run-cards/join-protocol.md` for
+the full join-loop/escalation-ladder mechanics that consume this field.
 
 **`model_display` (issue #610).** Conditionally attached exactly like `goal_line`/`leg_path` — `buildDispatch()` (and every other `dispatch`/`opened`/`first_node` emitter) calls `modelDisplay(model)` and attaches the key only when the node's resolved tier is non-null; a model-less node's descriptor stays byte-identical to before this field existed. `modelDisplay(tier)` first runs the value through `normalizeTier()` (so a legacy `opus`/`sonnet` cell displays identically to its `reasoning`/`standard` counterpart), then returns a runtime-native display string per key so a narrative echo of the raw tier reads naturally on the runtime that receives it: `claude` is the `Agent(model=…)` alias (`dispatchModelClaude`: `reasoning`→`"opus"`, `standard`→`"sonnet"`); `codex` is `"<effort> reasoning effort"` (`dispatchEffort`: `reasoning`→`"xhigh reasoning effort"`, `standard`→`"high reasoning effort"`); `opencode` is `"<rank> effort variant"` (`TIER_RANK`: `reasoning`→`"top effort variant"`, `standard`→`"second effort variant"`). Additive only — the raw `model` field is unchanged; this is a sibling display, not a replacement.
 
@@ -670,6 +686,59 @@ gained for group members:
 |---|---|
 | `member_vacuity` | in-lane `git status --porcelain` returned no changes and evidence has no `no_op: <reason>` line |
 | `group_barrier_failed` | the group barrier refused (passthrough of the validator's reason) |
+
+### `reconcile-running-set` — writer kill-safety verdicts (issue #611, D-611-01)
+
+The Codex Join Protocol's writer kill-safety mechanism, layered onto the existing
+`reconcile-running-set` crash-repair subcommand (no new subcommand — reuse before adding). After
+classifying which members roll forward, roll back, or are stale/capped-out (the pre-existing
+mechanics), every WRITER member (`kind === 'write'`) that is LEAVING the live set on this call is
+diffed against its declared write set via `--barrier-check` — the SAME baseline+diff the per-node
+barrier uses — BEFORE the existing `--drop-base` loop (which removes the baseline the diff needs). A
+read/gate member is never a writer and is skipped.
+
+**Response fields (additive to the pre-existing `rolledForward`/`rolledBack`/`closedDropped`/`staleDropped`):**
+
+```json
+{
+  "result": "ok",
+  "reconciled": true,
+  "rolledForward": ["n3-impl"],
+  "rolledBack": ["n4-impl"],
+  "writerReconciliation": [
+    { "node_id": "n4-impl", "verdict": "adopt", "reason": "in_write_set", "outOfWriteSet": [] },
+    { "node_id": "n5-impl", "verdict": "halt", "reason": "write_set_overflow", "outOfWriteSet": ["scripts/unrelated.js"] }
+  ],
+  "writerHalt": true,
+  "state": "open"
+}
+```
+
+`classifyWriterReconcile(nodeId, bc)` truth table — POSITIVE CONFIRMATION, fail-closed (`adopt`
+requires an EXPLICIT clean result; every other shape halts):
+
+| `bc` (the `--barrier-check` result) | `verdict` | `reason` | `outOfWriteSet` |
+|---|---|---|---|
+| `null` / non-object (shell threw, or unparseable) | `halt` | `barrier_unavailable` | `[]` |
+| `{result:'refuse', outOfAllow:[…non-empty]}` | `halt` | `write_set_overflow` (or `bc.reason` if present) | the named paths |
+| `{result:'refuse', reason:'no_barrier_base'}` | `adopt` | `no_baseline` (vacuous — writer never wrote under tracking) | `[]` |
+| `{result:'refuse', …other}` | `halt` | `barrier_refused` (or `bc.reason` if present) | `[]` |
+| `{result:'pass'}` / `{result:'ok'}` | `adopt` | `in_write_set` | `[]` |
+| resultless (e.g. `{exitCode:N}` from a crashed/killed/non-JSON subprocess) or an unrecognized `result` token | `halt` | `barrier_unverifiable` | `[]` |
+
+`verdict: adopt` needs no further action. `verdict: halt` means the writer's changes could not be
+confirmed clean — do **not** re-open the node directly; resolve the named `outOfWriteSet` paths
+first (`revert-overflow` to discard them, `repair-node` to fold them into a re-freeze, or a consent
+halt if the resolution is a judgment call), THEN re-open. Skipping straight to `open-next`/`open-ready`
+on a `halt` verdict is the halt-then-reopen laundering hole this mechanism closes.
+
+Reconcile itself is **non-destructive** — it never auto-deletes a file. The design issue's own AC3
+asked for a typed `adopt | revert | halt` output; the shipped classifier emits only `adopt|halt`
+from `reconcile-running-set`, with `revert` retained as the vocabulary token the ORCHESTRATOR may
+act on via the pre-existing `revert-overflow` subcommand — see `docs/decisions/D-611-01.md` §
+Alternatives considered for why the revert is a separate, explicit step rather than something
+reconcile performs inline. See `docs/plan-run-cards/join-protocol.md` § 4 for the full
+orchestrator-facing procedure.
 
 ## Configuration
 
@@ -1249,6 +1318,37 @@ effort→mode coupling is Codex CLI runtime behavior verified on codex-tui 0.142
 change in a future release; the installer prints this caveat verbatim as its final
 dispatch-posture line.
 
+**MultiAgentV2 bounds report (additive, non-fatal — issue #611, D-611-01):** every result envelope
+(the same success/refusal branches the `dispatch_posture*` fields ride on) additionally carries six
+fields reporting the effective v2 concurrency slot budget and wait-timeout bounds:
+
+```
+max_concurrent_threads_per_session:        number | null,
+max_concurrent_threads_per_session_source: 'config' | 'observed_default' | 'not_applicable' | 'n/a',
+effective_subagent_width:                  number | null,
+min_wait_timeout_ms:                       number | null,
+max_wait_timeout_ms:                       number | null,
+default_wait_timeout_ms:                   number | null,
+```
+
+All six are gated on `multi_agent_v2_enabled` (the same boolean `dispatch_mode`/`multi_agent_v2_enabled`
+detection already derives, #332/#571): when v2 is not active, every field reports `null` (source
+`'not_applicable'`), mirroring how `dispatch_posture` itself collapses to `"none"` when the features
+are off. When v2 IS active: `max_concurrent_threads_per_session` reports the configured
+`[features.multi_agent_v2] max_concurrent_threads_per_session` verbatim (`source: 'config'`) when it
+is a positive integer; when absent or non-positive/non-integer, it falls back to the OBSERVED default
+of **4** (`source: 'observed_default'`) — this number comes from the issue's own controlled probe on
+codex-tui 0.142.5 ("4 available concurrency slots, including you"), NOT from published Codex
+documentation, so it is labeled observed rather than a guaranteed default. `effective_subagent_width`
+is `max(threads - 1, 0)` — the budget INCLUDES the orchestrator thread. `min_wait_timeout_ms` /
+`max_wait_timeout_ms` / `default_wait_timeout_ms` are read ONLY when explicitly present in
+`[features.multi_agent_v2]` (either the inline-object or dotted-table TOML syntax); there is
+deliberately NO fabricated numeric fallback for these three, so they report `null` when absent. On
+the `--doctor` `plugin_cache` scope (a cached source tree, no live runtime config to derive bounds
+from) all six fields mirror the `dispatch_posture: 'n/a'` convention: every numeric field is `null`
+and `max_concurrent_threads_per_session_source` reads `'n/a'`. See
+`docs/decisions/D-611-01.md` and `docs/plan-run-cards/join-protocol.md` § 5.
+
 **Exit codes:**
 
 | Exit code | `status` | Meaning |
@@ -1265,12 +1365,12 @@ dispatch-posture line.
 
 Success:
 ```json
-{ "status": "ok", "scope": "global", "roles_checked": ["code-explorer", "..."], "extra_unmanaged": [], "autofixed": false, "dispatch_posture": "explicitRequestOnly", "model_reasoning_effort": null, "multi_agent_enabled": false, "dispatch_posture_warning": "Codex will refuse sub-agent spawns unless explicitly requested this session (multi_agent_mode: explicitRequestOnly). To dispatch now, explicitly ask for sub-agents/delegation/parallel work in-session; or, if your Codex exposes an ultra reasoning effort for your model/plan (undocumented as of codex-tui 0.142.5 — check the /model picker), set model_reasoning_effort = \"ultra\" in ~/.codex/config.toml (or per-session: codex -c model_reasoning_effort=ultra) for proactive delegation." }
+{ "status": "ok", "scope": "global", "roles_checked": ["code-explorer", "..."], "extra_unmanaged": [], "autofixed": false, "dispatch_posture": "explicitRequestOnly", "model_reasoning_effort": null, "multi_agent_enabled": false, "dispatch_posture_warning": "Codex will refuse sub-agent spawns unless explicitly requested this session (multi_agent_mode: explicitRequestOnly). To dispatch now, explicitly ask for sub-agents/delegation/parallel work in-session; or, if your Codex exposes an ultra reasoning effort for your model/plan (undocumented as of codex-tui 0.142.5 — check the /model picker), set model_reasoning_effort = \"ultra\" in ~/.codex/config.toml (or per-session: codex -c model_reasoning_effort=ultra) for proactive delegation.", "max_concurrent_threads_per_session": null, "max_concurrent_threads_per_session_source": "not_applicable", "effective_subagent_width": null, "min_wait_timeout_ms": null, "max_wait_timeout_ms": null, "default_wait_timeout_ms": null }
 ```
 
-The `scope` field is additive (#571): `"global"` when the global `~/.codex` scope satisfied the gate; `"project"` when the project scope satisfied it (with or without autofix). Existing callers that assert only `status` and `autofixed` are unaffected. The four `dispatch_posture*` fields are additive (#598, see above) and present on every result the same way.
+The `scope` field is additive (#571): `"global"` when the global `~/.codex` scope satisfied the gate; `"project"` when the project scope satisfied it (with or without autofix). Existing callers that assert only `status` and `autofixed` are unaffected. The four `dispatch_posture*` fields are additive (#598, see above) and the six `multi_agent_v2` bounds fields are additive (#611, see above), both present on every result the same way.
 
-Typed refusals (non-zero exit) carry `status`, `stale: true`, `safe_autofix`, `repair`, `extra_unmanaged`, and the same four `dispatch_posture*` fields, plus a status-specific payload: `malformed: [{role, file, reasons}]` (`profiles_malformed`), `stale_files: [...]` (`profiles_stale`), `stale_roles_in_block: [...]` (`managed_block_stale`), `missing_roles: [...]` (`profiles_missing`/`config_stale`), or `conflicting_roles_outside_markers: [...]` (`autofix_unsafe`).
+Typed refusals (non-zero exit) carry `status`, `stale: true`, `safe_autofix`, `repair`, `extra_unmanaged`, the same four `dispatch_posture*` fields, and the same six `multi_agent_v2` bounds fields, plus a status-specific payload: `malformed: [{role, file, reasons}]` (`profiles_malformed`), `stale_files: [...]` (`profiles_stale`), `stale_roles_in_block: [...]` (`managed_block_stale`), `missing_roles: [...]` (`profiles_missing`/`config_stale`), or `conflicting_roles_outside_markers: [...]` (`autofix_unsafe`).
 
 **Doctor mode (`--doctor`)** — READ-ONLY, never runs the installer (even without `--no-autofix`). Reports freshness for three scopes:
 
@@ -1278,7 +1378,7 @@ Typed refusals (non-zero exit) carry `status`, `stale: true`, `safe_autofix`, `r
 - `project` — `<project-root>/.codex`;
 - `plugin_cache` — cached source profiles under `<home>/.codex/plugins/cache/<marketplace>/<plugin>/<version>/agents`, schema-checked, `read_only: true`.
 
-`--json` emits `{ status: 'ok'|'stale', scopes: [{scope, codex_dir, exists, managed_block, profiles, missing_roles, malformed, stale_files, stale_roles_in_block, extra_unmanaged, manifest, dispatch_posture, model_reasoning_effort, multi_agent_enabled, dispatch_posture_warning, read_only, repair}, ...] }`. Exit code is 0 when the `user` and `project` scopes are clean-or-absent and 1 when either is stale; `plugin_cache` findings are evidence-only and never set the exit code (they distinguish runtime/plugin-cache freshness from generated `.codex/` state). Each stale scope carries a concrete `repair` command. The four `dispatch_posture*` fields (#598, non-fatal — see above) are present on every scope, including `plugin_cache`, where they read `dispatch_posture: 'n/a'`, `model_reasoning_effort: null`, `multi_agent_enabled: false`, `dispatch_posture_warning: null` (a cached source tree has no live runtime config to derive a posture from). Without `--json`, each scope line is followed by a `  warn: <dispatch_posture_warning>` line whenever that scope's posture is non-`proactive` — the warning is printed independent of, and never affects, that scope's `ok`/`stale`/`absent` state.
+`--json` emits `{ status: 'ok'|'stale', scopes: [{scope, codex_dir, exists, managed_block, profiles, missing_roles, malformed, stale_files, stale_roles_in_block, extra_unmanaged, manifest, dispatch_posture, model_reasoning_effort, multi_agent_enabled, dispatch_posture_warning, max_concurrent_threads_per_session, max_concurrent_threads_per_session_source, effective_subagent_width, min_wait_timeout_ms, max_wait_timeout_ms, default_wait_timeout_ms, read_only, repair}, ...] }`. Exit code is 0 when the `user` and `project` scopes are clean-or-absent and 1 when either is stale; `plugin_cache` findings are evidence-only and never set the exit code (they distinguish runtime/plugin-cache freshness from generated `.codex/` state). Each stale scope carries a concrete `repair` command. The four `dispatch_posture*` fields (#598, non-fatal — see above) are present on every scope, including `plugin_cache`, where they read `dispatch_posture: 'n/a'`, `model_reasoning_effort: null`, `multi_agent_enabled: false`, `dispatch_posture_warning: null` (a cached source tree has no live runtime config to derive a posture from). The six `multi_agent_v2` bounds fields (#611, non-fatal — see above) are likewise present on every scope, including `plugin_cache`, where every numeric field reads `null` and `max_concurrent_threads_per_session_source` reads `'n/a'`. Without `--json`, each scope line is followed by a `  warn: <dispatch_posture_warning>` line whenever that scope's posture is non-`proactive` — the warning is printed independent of, and never affects, that scope's `ok`/`stale`/`absent` state.
 
 ---
 
