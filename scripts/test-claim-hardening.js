@@ -26,7 +26,7 @@ fs.writeFileSync(
 process.env.HOME = kwSandboxHome;
 process.env.USERPROFILE = kwSandboxHome;
 
-const { ghExec, isSafeBranchArg, removeBranch, postAdvisoryClaim, defaultBranch } = require('./kaola-workflow-claim.js');
+const { ghExec, isSafeBranchArg, removeBranch, postAdvisoryClaim, defaultBranch, resolveCodexDispatchModeFlag } = require('./kaola-workflow-claim.js');
 const { writeFileAtomicReplace } = require('./kaola-workflow-adaptive-schema.js');
 
 let passed = 0, failed = 0;
@@ -1665,6 +1665,23 @@ assert(removeBranch(os.tmpdir(), '-D') === false, '#356: removeBranch refuses a 
 
   try { fs.rmSync(repo579, { recursive: true, force: true }); } catch (_) {}
 }
+
+// --- #603: --codex-dispatch-mode value validation (literal + newline-injection guard) --------------
+// Absent flag → { present:false } (byte-identical claim behavior); the two literals pass; anything else
+// — including a case-variant or a newline-carrying value (durable-state field injection) — is invalid,
+// so cmdStartup refuses the claim with zero mutation.
+assert(resolveCodexDispatchModeFlag({}).present === false,
+  '#603: an absent --codex-dispatch-mode flag resolves present:false (no field written)');
+assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'v2-task-name' }).mode === 'v2-task-name',
+  '#603: the v2-task-name literal resolves to its mode');
+assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'v1-thread-id' }).mode === 'v1-thread-id',
+  '#603: the v1-thread-id literal resolves to its mode');
+assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'v3-bogus' }).invalid === true,
+  '#603: a non-literal value is rejected (invalid:true)');
+assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'V2-TASK-NAME' }).invalid === true,
+  '#603: mode validation is case-sensitive (upper-case variant is rejected)');
+assert(resolveCodexDispatchModeFlag({ codexDispatchMode: 'v2-task-name\nforged: x' }).invalid === true,
+  '#603: a newline-carrying value is rejected (durable-state field-injection guard, the assertNoNewline class)');
 
 if (failed > 0) {
   console.error('claim-hardening tests FAILED (' + failed + ' failures, ' + passed + ' passed)');

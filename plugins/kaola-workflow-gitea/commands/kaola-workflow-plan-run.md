@@ -11,8 +11,17 @@ guarded by `plan_hash`; tampering is a **typed refusal**. Drive every node in th
 `## Node Ledger` to `complete` or `n/a`, honoring the computed gates, then hand off to
 Finalization. Stop and surface on any consent-halt or typed refusal.
 
-Run subcommands with `--summary` for one-line output; drill into `.cache/<op>-envelope.json`
-on `result: refuse` for the full envelope (includes `operator_hint`).
+Run subcommands with `--summary` for one-line output. For an opening call (`open-next` /
+`open-ready` / `close-and-open-next`), the summary line already carries the dispatch
+essentials: `summary: ok | opened=<node-id> role=<role> task=<codex_task_name>
+mode=<codex_dispatch_mode> effort=<effort|inherit>` (one `opened=` segment per member on a
+batch open; `effort=inherit` when no explicit tier was set; the leg path is NOT in the
+summary line). The full envelope — every field, including `dispatch.leg_path` and the
+complete `dispatch:{...}` object — needs `--json` without `--summary`, or the cached
+`.cache/<op>-envelope.json`. Drill into the full envelope on `result: refuse` (includes
+`operator_hint`), AND — whenever running with `--summary` — before every dispatch: take the
+dispatch card from the summary line's `opened=` segment or from `.cache/<op>-envelope.json`.
+Never dispatch without the card in view.
 
 ## Agent Model Badge
 
@@ -85,6 +94,13 @@ resolution before the gate node is considered satisfied. Forward roles — `code
 as a forward check — may still record the documented local fallback
 (`local-fallback-tool-unavailable`) and proceed inline.
 
+When a node runs inline under this degradation notice, announce it instead of the pre-spawn
+format above:
+
+```text
+→ running {node_id} · {role} inline (…reason token…)
+```
+
 ## Loop Skeleton
 
 ### 1. Orient (on entry / resume)
@@ -107,6 +123,14 @@ On `plan_not_frozen` / governance: `docs/plan-run-cards/governance.md`
 (covers `decision:auto-run`/`decision:ask` audit metadata; `provisional` run authorization;
 `auto-run` vs `ask` — a frozen in-grammar plan RUNS either way; `typed refusal` on out-of-grammar)
 
+Announce the run once, right after this orient succeeds and before opening the first node:
+
+```text
+plan-run orchestrator: driving {project} — {N} nodes; each role subagent will be announced at dispatch.
+```
+
+Substitute `{project}` for the project name and `{N}` for the total row count of `## Nodes`.
+
 ### 2. Open next node
 
 ```bash
@@ -114,9 +138,15 @@ node "$KAOLA_SCRIPTS/kaola-gitea-workflow-adaptive-node.js" open-next \
   --project {project} --json --summary
 ```
 
-Returns `{opened:{id,role,model,declared_write_set}, nonce, evidence_file, required_tokens,
-dispatch:{...}}` or `{allDone:true}`. The `dispatch` sub-object supersedes per-field assembly.
-On `allDone`, run chains then route to `/kaola-workflow-finalize {project}`.
+Under `--summary` (the canonical invocation above), the printed line is `summary: ok |
+opened=<node-id> role=<role> task=<codex_task_name> mode=<codex_dispatch_mode>
+effort=<effort|inherit>` or `summary: ok | allDone: true` — read the dispatch card straight
+off the `opened=` segment. The full envelope needs `--json` without `--summary` (or the
+cached `.cache/open-next-envelope.json`): `{opened:{id,role,model,declared_write_set}, nonce,
+evidence_file, required_tokens, dispatch:{...}}` or `{allDone:true}`; the `dispatch`
+sub-object there supersedes per-field assembly and is the only source for
+`dispatch.leg_path`. On `allDone`, run chains then route to `/kaola-workflow-finalize
+{project}`.
 
 The fused `close-and-open-next` (step 4) opens every subsequent node. Re-run `open-next` only
 when no node is `in_progress` (first node, or orphan from a crash between commit and fused advance).
@@ -136,6 +166,19 @@ NO `enterBatch` and runs serially (the normal single-dispatch path) — never fo
 "default to ≥2," or a "prefer wide" posture.
 
 ### 3. Dispatch the role agent
+
+**Every spawn parameter comes from the dispatch card.** NEVER improvise a task name, omit
+`agent_type`, or drop the effort tier because the card was not in view — go get the card
+first (the summary line's `opened=` segment, or `.cache/<op>-envelope.json`).
+
+Immediately before every spawn, announce the dispatch:
+
+```text
+→ dispatching {node_id} · {role} as subagent task "{task_name}" (model {model|default}, effort {effort|inherit})
+```
+
+`{task_name}` is `dispatch.codex_task_name` on Codex, the agent name/description on Claude, the
+child task label on opencode.
 
 Dispatch the base role profile in `dispatch.agent_type` (legacy `dispatch.role` is only
 descriptive). For any non-null `dispatch.codex_reasoning_effort`, require a
@@ -252,6 +295,12 @@ guesswork:
 - **WRITE-role agents** (`implementer`, `tdd-guide`) SELF-WRITE their `.cache` evidence, INCLUDING
   the seeded `evidence-binding:` header (read it from the seeded file, never alter it).
 
+On every return, before evidence/close bookkeeping, announce the outcome:
+
+```text
+← {node_id} · {role} returned: {verdict or one-line outcome}
+```
+
 Record durable evidence after the role returns:
 
 ```bash
@@ -270,6 +319,12 @@ Enforces (in order): evidence-shape check → barrier (`plan_hash` re-verified, 
 baseline, `post-dominate` gate check, `escalated_to_full: consent` / `typed refusal` on lane
 overflow) → close + compliance row → selector routing → fused advance. Returns
 `{closed:{...}, opened:{...}|null, allDone}` or `result: refuse`.
+
+After every close, print the required progress line:
+
+```text
+{node-id} → complete; opened: {next-id|—}
+```
 
 On `result: ok` + `opened`: dispatch the next node (step 3) — it is already open.
 On `allDone: true`: run chains then route to Finalization.

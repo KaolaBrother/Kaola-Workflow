@@ -172,7 +172,10 @@ label is created until git is clean** (the front end claims here at repo-root �
 
 Once main is clean, **delegate to the `workflow-planner`**: it runs `kaola-gitlab-workflow-claim.js startup --runtime <runtime> --workflow-path adaptive
 --target-issue <issue>` (`--workflow-path adaptive` is REQUIRED — a subagent shell does not inherit
-KAOLA_PATH; add `--sink mr` only for a requested MR sink), authors the `## Meta` + `## Nodes` DAG +
+KAOLA_PATH; add `--sink mr` only for a requested MR sink; on Codex, first run the same preflight
+doctor detection as `kaola-workflow-next`'s Codex Dispatch Mode Detection step and append
+`--codex-dispatch-mode <detected>` when a mode was found — absent detection leaves the claim on
+its fail-closed `v1-thread-id` default), authors the `## Meta` + `## Nodes` DAG +
 empty `## Node Ledger` into the project's `workflow-plan.md` via Write, runs the validator `--json`
 as a self-check (NOT `--freeze`, NOT `authoring-allowed`), then RUNS `kaola-gitlab-workflow-adaptive-handoff.js --project {project} --json` (freezes, resume-checks, stages roadmap, writes Planning Evidence; does NOT open node1 or record the node1 baseline — `kaola-workflow-plan-run` owns the full node lifecycle including the first node; decision:ask is recorded metadata, not a gate), and RETURNS the handoff packet. It never JUDGES risk or asks the user (decision:ask is recorded metadata); it RUNS the handoff, which freezes mechanically, and returns the packet; it never dispatches. If the project already has a
 `workflow-plan.md` it refuses-and-returns (never overwrite a frozen plan). <!-- PIN: claim-escalate -->
@@ -218,13 +221,17 @@ stated by the main orchestrator; the planner validates and claims it.
 ### Bundle startup call
 
 The planner passes `--target-issues A,B,C` (sorted ascending, comma-separated)
-instead of `--target-issue N`:
+instead of `--target-issue N`. On Codex, detect `KAOLA_CODEX_DISPATCH_MODE` first (the same
+preflight doctor detection as the single-issue claim above), then pass it through:
 
 ```bash
+KAOLA_DISPATCH_MODE_FLAG=""
+[ -n "${KAOLA_CODEX_DISPATCH_MODE:-}" ] && KAOLA_DISPATCH_MODE_FLAG="--codex-dispatch-mode $KAOLA_CODEX_DISPATCH_MODE"
 node "$claim_script" startup \
   --runtime codex \
   --workflow-path adaptive \
-  --target-issues 42,47,53
+  --target-issues 42,47,53 \
+  $KAOLA_DISPATCH_MODE_FLAG
 ```
 
 Compatibility rule: `--target-issue` / `KAOLA_TARGET_ISSUE` keep current one-issue

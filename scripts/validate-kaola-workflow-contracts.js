@@ -600,6 +600,29 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '--forbi
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'codex_task_name');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'codex_dispatch_mode');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'reasoning_effort');
+
+// #602: the canonical --summary invocation must document the dispatch-essentials one-liner it
+// actually prints, the extended pre-dispatch card-acquisition rule, and the explicit
+// no-improvise prohibition on every plan-run spawn.
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'opened=<node-id> role=<role> task=<codex_task_name>');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, "take the dispatch card from the summary line's `opened=` segment or from `.cache/<op>-envelope.json`. Never dispatch without the card in view.");
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'Every spawn parameter comes from the dispatch card.');
+
+// #604: dispatch visibility announcement contract — run-start, pre-spawn, on-return, and the
+// inline-fallback format, verbatim.
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'plan-run orchestrator: driving {project} — {N} nodes; each role subagent will be announced at dispatch.');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '→ dispatching {node_id} · {role} as subagent task "{task_name}" (model {model|default}, effort {effort|inherit})');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '← {node_id} · {role} returned: {verdict or one-line outcome}');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '→ running {node_id} · {role} inline (…reason token…)');
+
+// #605: required progress-echo line printed after every close-and-open-next.
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '{node-id} → complete; opened: {next-id|—}');
+
+// #603: the Codex startup surfaces (kaola-workflow-next / kaola-workflow-adapt) must detect the
+// dispatch mode via the preflight doctor and thread it into the claim as an explicit flag.
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, 'Codex Dispatch Mode Detection');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-next/SKILL.md`, '--codex-dispatch-mode');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-adapt/SKILL.md`, '--codex-dispatch-mode');
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-finalize/SKILL.md`, 'workflow_path: adaptive');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'disjointWriteSets');
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-classifier.js`, 'readPlanNodes');

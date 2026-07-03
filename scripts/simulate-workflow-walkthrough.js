@@ -13746,6 +13746,9 @@ function buildRegistry() {
   add('testSinkTransactionCrashResume',                   testSinkTransactionCrashResume);
   add('testSinkTransactionCleanEndToEnd',                 testSinkTransactionCleanEndToEnd);
   add('testTwoLanesInOneCheckout579',                     testTwoLanesInOneCheckout579);
+  add('testSummaryDispatchSegments602',                   testSummaryDispatchSegments602);
+  add('testCodexDispatchModeThreading603',                testCodexDispatchModeThreading603);
+  add('testRunProgressMirror605',                         testRunProgressMirror605);
   return reg;
 }
 
@@ -15451,6 +15454,343 @@ function testTwoLanesInOneCheckout579() {
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
+}
+
+// #602: --summary on the open-bearing subcommands must surface the dispatch card essentials inline
+// (opened=/role=/task=/mode=/effort=) so an orchestrator using the SKILL-canonical --summary can
+// dispatch without drilling the cached envelope. Covers the single open (open-next), the batch open
+// (open-ready, one segment per member), and a byte-guard that the default --json path is untouched.
+function testSummaryDispatchSegments602() {
+  const SUMMARY_SEG = /opened=\S+ role=\S+ task=\S+ mode=\S+ effort=\S+/;
+  const freezeCommit = (grepo, planPath) => {
+    const fz = runNode(planValidatorScript, [planPath, '--freeze'], grepo);
+    assert(fz.status === 0, '#602: freeze should exit 0, got ' + fz.status + ' ' + fz.stderr);
+    spawnSync('git', ['add', '-A'], { cwd: grepo, encoding: 'utf8' });
+    spawnSync('git', ['commit', '-m', 'frozen'], { cwd: grepo, encoding: 'utf8' });
+  };
+
+  // (a) open-next --summary — single opened node; model: sonnet -> effort=high.
+  {
+    const grepo = adaptiveTmp('summary-602-open-next');
+    initGitRepoWithBareRemote(grepo);
+    spawnSync('git', ['-C', grepo, 'checkout', '-b', 'workflow/issue-602a'], { encoding: 'utf8' });
+    const proj = path.join(grepo, 'kaola-workflow', 'issue-602a');
+    fs.mkdirSync(proj, { recursive: true });
+    const planPath = path.join(proj, 'workflow-plan.md');
+    fs.writeFileSync(planPath, [
+      '# Workflow Plan — issue #602a', '', '## Meta', 'labels: enhancement', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | model | cardinality | shape |',
+      '|---|---|---|---|---|---|---|',
+      '| n1 | tdd-guide | — | lib/impl.js | sonnet | 1 | sequence |',
+      '| rv | code-reviewer | n1 | — | — | 1 | sequence |',
+      '| done | finalize | rv | — | — | 1 | sequence |', '',
+      '## Node Ledger', '', '| id | status |', '|---|---|',
+      '| n1 | pending |', '| rv | pending |', '| done | pending |', ''].join('\n'));
+    freezeCommit(grepo, planPath);
+    try {
+      const r = runNode(adaptiveNodeScript, ['open-next', '--project', 'issue-602a', '--json', '--summary'], grepo);
+      assert(r.status === 0, '#602 (a): open-next --summary should exit 0, got ' + r.status + '\nstderr: ' + r.stderr + '\nstdout: ' + r.stdout);
+      const line = r.stdout.trim();
+      assert(/^summary: ok/.test(line), '#602 (a): summary must start with "summary: ok", got: ' + JSON.stringify(line));
+      assert(SUMMARY_SEG.test(line), '#602 (a): summary must carry a dispatch segment opened=/role=/task=/mode=/effort=, got: ' + JSON.stringify(line));
+      assert(/opened=n1 role=tdd-guide task=n1_tdd_guide mode=v1-thread-id effort=high/.test(line),
+        '#602 (a): summary segment must reflect the dispatch card (n1/tdd-guide/high), got: ' + JSON.stringify(line));
+    } finally {
+      fs.rmSync(grepo, { recursive: true, force: true });
+      try { fs.rmSync(grepo + '-remote', { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  // (b) open-ready --summary — batch open of two independent read roots -> one segment per member.
+  {
+    const grepo = adaptiveTmp('summary-602-open-ready');
+    initGitRepoWithBareRemote(grepo);
+    spawnSync('git', ['-C', grepo, 'checkout', '-b', 'workflow/issue-602b'], { encoding: 'utf8' });
+    const proj = path.join(grepo, 'kaola-workflow', 'issue-602b');
+    fs.mkdirSync(proj, { recursive: true });
+    const planPath = path.join(proj, 'workflow-plan.md');
+    fs.writeFileSync(planPath, [
+      '# Workflow Plan — issue #602b', '', '## Meta', 'labels: enhancement', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | model | cardinality | shape |',
+      '|---|---|---|---|---|---|---|',
+      '| a | code-explorer | — | — | — | 1 | sequence |',
+      '| b | knowledge-lookup | — | — | — | 1 | sequence |',
+      '| impl | tdd-guide | a,b | lib/impl.js | — | 1 | sequence |',
+      '| rv | code-reviewer | impl | — | — | 1 | sequence |',
+      '| done | finalize | rv | — | — | 1 | sequence |', '',
+      '## Node Ledger', '', '| id | status |', '|---|---|',
+      '| a | pending |', '| b | pending |', '| impl | pending |', '| rv | pending |', '| done | pending |', ''].join('\n'));
+    freezeCommit(grepo, planPath);
+    try {
+      const r = runNode(adaptiveNodeScript, ['open-ready', '--project', 'issue-602b', '--json', '--summary'], grepo);
+      assert(r.status === 0, '#602 (b): open-ready --summary should exit 0, got ' + r.status + '\nstderr: ' + r.stderr + '\nstdout: ' + r.stdout);
+      const line = r.stdout.trim();
+      const opened = line.match(/opened=/g) || [];
+      assert(opened.length === 2, '#602 (b): open-ready batch of 2 must emit one opened= segment per member, got ' + opened.length + ': ' + JSON.stringify(line));
+      const segs = line.match(/opened=\S+ role=\S+ task=\S+ mode=\S+ effort=\S+/g) || [];
+      assert(segs.length === 2, '#602 (b): each opened member must carry a full dispatch segment, got ' + segs.length + ': ' + JSON.stringify(line));
+    } finally {
+      fs.rmSync(grepo, { recursive: true, force: true });
+      try { fs.rmSync(grepo + '-remote', { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  // (c) default --json (no --summary) output is byte-unchanged by the feature: stdout is EXACTLY the
+  //     JSON serialization with nothing appended (the feature must touch ONLY the --summary line).
+  {
+    const grepo = adaptiveTmp('summary-602-json-bytes');
+    initGitRepoWithBareRemote(grepo);
+    spawnSync('git', ['-C', grepo, 'checkout', '-b', 'workflow/issue-602c'], { encoding: 'utf8' });
+    const proj = path.join(grepo, 'kaola-workflow', 'issue-602c');
+    fs.mkdirSync(proj, { recursive: true });
+    const planPath = path.join(proj, 'workflow-plan.md');
+    fs.writeFileSync(planPath, [
+      '# Workflow Plan — issue #602c', '', '## Meta', 'labels: enhancement', '',
+      '## Nodes', '',
+      '| id | role | depends_on | declared_write_set | model | cardinality | shape |',
+      '|---|---|---|---|---|---|---|',
+      '| n1 | tdd-guide | — | lib/impl.js | sonnet | 1 | sequence |',
+      '| rv | code-reviewer | n1 | — | — | 1 | sequence |',
+      '| done | finalize | rv | — | — | 1 | sequence |', '',
+      '## Node Ledger', '', '| id | status |', '|---|---|',
+      '| n1 | pending |', '| rv | pending |', '| done | pending |', ''].join('\n'));
+    freezeCommit(grepo, planPath);
+    try {
+      const r = runNode(adaptiveNodeScript, ['open-next', '--project', 'issue-602c', '--json'], grepo);
+      assert(r.status === 0, '#602 (c): open-next --json should exit 0, got ' + r.status + '\nstderr: ' + r.stderr);
+      const parsed = JSON.parse(r.stdout);
+      assert(r.stdout === JSON.stringify(parsed) + '\n',
+        '#602 (c): default --json stdout must be byte-identical to its JSON serialization (feature must not touch the --json path)');
+      assert(parsed.opened && parsed.opened.dispatch && parsed.opened.dispatch.codex_task_name,
+        '#602 (c): --json envelope must still carry opened.dispatch, got: ' + JSON.stringify(parsed.opened));
+    } finally {
+      fs.rmSync(grepo, { recursive: true, force: true });
+      try { fs.rmSync(grepo + '-remote', { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  console.log('testSummaryDispatchSegments602: PASSED');
+}
+
+// #603: the Codex dispatch mode detected at startup must thread into the runtime dispatch cards.
+// cmdStartup persists `codex_dispatch_mode: <mode>` (value-validated + anti-injection) in
+// workflow-state.md; open-next reads it and threads it into the dispatch card. Absent flag -> field
+// absent -> v1-thread-id fail-closed default. An invalid or newline-carrying value refuses at claim
+// with a typed verdict and ZERO state mutation.
+function testCodexDispatchModeThreading603() {
+  const NODE_PLAN = (n) => [
+    '# Workflow Plan — issue #' + n, '', '## Meta', 'labels: enhancement', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+    '| n1 | tdd-guide | — | lib/impl.js | 1 | sequence |',
+    '| rv | code-reviewer | n1 | — | 1 | sequence |',
+    '| done | finalize | rv | — | 1 | sequence |', '',
+    '## Node Ledger', '', '| id | status |', '|---|---|',
+    '| n1 | pending |', '| rv | pending |', '| done | pending |', ''].join('\n');
+
+  // (a) startup --codex-dispatch-mode v2-task-name -> state persists the field AND open-next's
+  //     dispatch card reads it (mode v2-task-name + the role-bearing codex_task_name).
+  {
+    const grepo = adaptiveTmp('dispatch-mode-603-v2');
+    initGitRepo(grepo);
+    plantRoadmapIssue(grepo, 6031, '');
+    const s = runNode(claimScript, ['startup', '--target-issue', '6031', '--runtime', 'codex', '--codex-dispatch-mode', 'v2-task-name'], grepo);
+    assert(s.status === 0, '#603 (a): startup should exit 0, got ' + s.status + '\nstderr: ' + s.stderr + '\nstdout: ' + s.stdout);
+    assert(JSON.parse(s.stdout).claim === 'acquired', '#603 (a): startup should acquire, got ' + s.stdout);
+    const state = read(statePath(grepo, 'issue-6031'));
+    assert(/^codex_dispatch_mode: v2-task-name$/m.test(state),
+      '#603 (a): state must persist codex_dispatch_mode: v2-task-name, got:\n' + state);
+    const planPath = path.join(grepo, 'kaola-workflow', 'issue-6031', 'workflow-plan.md');
+    fs.writeFileSync(planPath, NODE_PLAN('6031'));
+    runNode(planValidatorScript, [planPath, '--freeze'], grepo);
+    spawnSync('git', ['-C', grepo, 'add', '-A'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', grepo, 'commit', '-m', 'frozen'], { encoding: 'utf8' });
+    try {
+      const on = runNode(adaptiveNodeScript, ['open-next', '--project', 'issue-6031', '--json'], grepo);
+      assert(on.status === 0, '#603 (a): open-next should exit 0, got ' + on.status + '\nstderr: ' + on.stderr);
+      const d = JSON.parse(on.stdout).opened.dispatch;
+      assert(d.codex_dispatch_mode === 'v2-task-name',
+        '#603 (a): dispatch card must read the state field (v2-task-name), got: ' + JSON.stringify(d.codex_dispatch_mode));
+      assert(d.codex_task_name === 'n1_tdd_guide',
+        '#603 (a): dispatch card must carry the role-bearing codex_task_name, got: ' + JSON.stringify(d.codex_task_name));
+    } finally { fs.rmSync(grepo, { recursive: true, force: true }); }
+  }
+
+  // (b) startup WITHOUT the flag -> no state field -> open-next dispatch defaults to v1-thread-id.
+  {
+    const grepo = adaptiveTmp('dispatch-mode-603-absent');
+    initGitRepo(grepo);
+    plantRoadmapIssue(grepo, 6032, '');
+    const s = runNode(claimScript, ['startup', '--target-issue', '6032', '--runtime', 'codex'], grepo);
+    assert(s.status === 0, '#603 (b): startup should exit 0, got ' + s.stderr);
+    const state = read(statePath(grepo, 'issue-6032'));
+    assert(!/codex_dispatch_mode:/.test(state),
+      '#603 (b): absent flag -> state must NOT carry a codex_dispatch_mode field, got:\n' + state);
+    const planPath = path.join(grepo, 'kaola-workflow', 'issue-6032', 'workflow-plan.md');
+    fs.writeFileSync(planPath, NODE_PLAN('6032'));
+    runNode(planValidatorScript, [planPath, '--freeze'], grepo);
+    spawnSync('git', ['-C', grepo, 'add', '-A'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', grepo, 'commit', '-m', 'frozen'], { encoding: 'utf8' });
+    try {
+      const on = runNode(adaptiveNodeScript, ['open-next', '--project', 'issue-6032', '--json'], grepo);
+      assert(on.status === 0, '#603 (b): open-next should exit 0, got ' + on.stderr);
+      const d = JSON.parse(on.stdout).opened.dispatch;
+      assert(d.codex_dispatch_mode === 'v1-thread-id',
+        '#603 (b): absent field -> dispatch must default to v1-thread-id, got: ' + JSON.stringify(d.codex_dispatch_mode));
+    } finally { fs.rmSync(grepo, { recursive: true, force: true }); }
+  }
+
+  // (c) invalid + newline-carrying values refuse at claim with the typed verdict and ZERO mutation.
+  for (const bad of ['v3-bogus', 'V2-TASK-NAME', 'v2-task-name\nforged_field: x']) {
+    const grepo = adaptiveTmp('dispatch-mode-603-refuse');
+    initGitRepo(grepo);
+    plantRoadmapIssue(grepo, 6033, '');
+    try {
+      const s = runNode(claimScript, ['startup', '--target-issue', '6033', '--runtime', 'codex', '--codex-dispatch-mode', bad], grepo);
+      assert(s.status !== 0, '#603 (c): invalid --codex-dispatch-mode must refuse (nonzero) for ' + JSON.stringify(bad) + ', got ' + s.status + '\n' + s.stdout);
+      assert(JSON.parse(s.stdout).verdict === 'invalid_codex_dispatch_mode',
+        '#603 (c): refusal verdict must be invalid_codex_dispatch_mode for ' + JSON.stringify(bad) + ', got: ' + s.stdout);
+      assert(!fs.existsSync(statePath(grepo, 'issue-6033')),
+        '#603 (c): a refused claim must leave ZERO state mutation for ' + JSON.stringify(bad));
+    } finally { fs.rmSync(grepo, { recursive: true, force: true }); }
+  }
+
+  console.log('testCodexDispatchModeThreading603: PASSED');
+}
+
+// #605: a derived, fail-open run-progress.json mirror at the MAIN root, refreshed on every ledger
+// mutation WHEN a worktree is linked (the live ledger otherwise advances only in the worktree until
+// sink). Never authoritative: a write failure degrades to a warn field (op still exits 0); no mirror
+// when no worktree is linked (serial in-repo runs are already root-visible).
+function testRunProgressMirror605() {
+  const PLAN = (n) => [
+    '# Workflow Plan — issue #' + n, '', '## Meta', 'labels: enhancement', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '|---|---|---|---|---|---|',
+    '| n1 | tdd-guide | — | lib/impl.js | 1 | sequence |',
+    '| rv | code-reviewer | n1 | — | 1 | sequence |',
+    '| done | finalize | rv | — | 1 | sequence |', '',
+    '## Node Ledger', '', '| id | status |', '|---|---|',
+    '| n1 | pending |', '| rv | pending |', '| done | pending |', ''].join('\n');
+  const seedFrozenMain = (tmp, proj) => {
+    const mainProj = path.join(tmp, 'kaola-workflow', proj);
+    fs.mkdirSync(mainProj, { recursive: true });
+    fs.writeFileSync(path.join(mainProj, 'workflow-plan.md'), PLAN(proj.replace('issue-', '')));
+    runNode(planValidatorScript, [path.join(mainProj, 'workflow-plan.md'), '--freeze'], tmp);
+    spawnSync('git', ['-C', tmp, 'add', '-A'], { encoding: 'utf8' });
+    spawnSync('git', ['-C', tmp, 'commit', '-m', 'frozen'], { encoding: 'utf8' });
+  };
+
+  // (a) after a ledger mutation (open-next) in a LINKED worktree, the mirror exists at the MAIN root
+  //     and its node_ledger matches the worktree ledger; the root workflow-plan.md stays byte-frozen.
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-605-mirror-')));
+    const kwRoot = tmp + '.kw';
+    try {
+      initGitRepo(tmp);
+      seedFrozenMain(tmp, 'issue-605a');
+      const wtPath = path.join(kwRoot, 'issue-605a');
+      fs.mkdirSync(kwRoot, { recursive: true });
+      spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-605a', '--', wtPath, 'HEAD'], { cwd: tmp, encoding: 'utf8' });
+      const on = runNode(adaptiveNodeScript, ['open-next', '--project', 'issue-605a', '--json'], wtPath);
+      assert(on.status === 0, '#605 (a): open-next from worktree should exit 0, got ' + on.status + '\nstderr: ' + on.stderr + '\nstdout: ' + on.stdout);
+      const mirrorPath = path.join(tmp, 'kaola-workflow', 'issue-605a', '.cache', 'run-progress.json');
+      assert(fs.existsSync(mirrorPath), '#605 (a): run-progress.json must exist at the MAIN root after a worktree ledger mutation');
+      const mirror = JSON.parse(fs.readFileSync(mirrorPath, 'utf8'));
+      assert(Array.isArray(mirror.node_ledger) && mirror.node_ledger.length === 3,
+        '#605 (a): mirror.node_ledger must carry all three nodes, got: ' + JSON.stringify(mirror.node_ledger));
+      const n1row = mirror.node_ledger.find(r => r.id === 'n1');
+      assert(n1row && n1row.status === 'in_progress' && n1row.role === 'tdd-guide',
+        '#605 (a): mirror must reflect n1 in_progress with role, got: ' + JSON.stringify(n1row));
+      assert(Array.isArray(mirror.in_progress) && mirror.in_progress.includes('n1'),
+        '#605 (a): mirror.in_progress must include n1, got: ' + JSON.stringify(mirror.in_progress));
+      assert(typeof mirror.plan_hash === 'string' && mirror.plan_hash.length > 0, '#605 (a): mirror must carry plan_hash');
+      assert(typeof mirror.updated_at === 'string' && mirror.op === 'open-next', '#605 (a): mirror must carry updated_at + op=open-next, got: ' + JSON.stringify({ updated_at: mirror.updated_at, op: mirror.op }));
+      assert(mirror.all_done === false, '#605 (a): mirror.all_done must be false mid-run');
+      const mainPlan = fs.readFileSync(path.join(tmp, 'kaola-workflow', 'issue-605a', 'workflow-plan.md'), 'utf8');
+      assert(/\|\s*n1\s*\|\s*pending\s*\|/.test(mainPlan), '#605 (a): root workflow-plan.md ledger must stay frozen (n1 still pending in MAIN)');
+    } finally {
+      try { spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', path.join(kwRoot, 'issue-605a')], { encoding: 'utf8' }); } catch (_) {}
+      fs.rmSync(tmp, { recursive: true, force: true });
+      try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  // (b) fail-open: an UNWRITABLE main-root .cache must NOT fail the op — it exits 0 with a warn field.
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-605-failopen-')));
+    const kwRoot = tmp + '.kw';
+    const mainCache = path.join(tmp, 'kaola-workflow', 'issue-605b', '.cache');
+    try {
+      initGitRepo(tmp);
+      seedFrozenMain(tmp, 'issue-605b');
+      const wtPath = path.join(kwRoot, 'issue-605b');
+      fs.mkdirSync(kwRoot, { recursive: true });
+      spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-605b', '--', wtPath, 'HEAD'], { cwd: tmp, encoding: 'utf8' });
+      fs.mkdirSync(mainCache, { recursive: true });
+      fs.chmodSync(mainCache, 0o500);
+      const on = runNode(adaptiveNodeScript, ['open-next', '--project', 'issue-605b', '--json'], wtPath);
+      assert(on.status === 0, '#605 (b): op must still exit 0 when the mirror write fails, got ' + on.status + '\nstderr: ' + on.stderr);
+      const env = JSON.parse(on.stdout);
+      assert(env.result === 'ok', '#605 (b): op result must stay ok, got ' + JSON.stringify(env.result));
+      assert(env.run_progress_mirror === 'failed',
+        '#605 (b): a failed mirror write must surface run_progress_mirror: "failed", got: ' + JSON.stringify(env.run_progress_mirror));
+    } finally {
+      try { fs.chmodSync(mainCache, 0o700); } catch (_) {}
+      try { spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', path.join(kwRoot, 'issue-605b')], { encoding: 'utf8' }); } catch (_) {}
+      fs.rmSync(tmp, { recursive: true, force: true });
+      try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  // (c) lifecycle: the mirror lives inside the project .cache/, so finalize/archive removes it with
+  //     the rest of the project folder. Seed a mirror in the main copy, finalize from the linked
+  //     worktree, assert the main-root mirror is gone.
+  {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kw-605-finalize-')));
+    const kwRoot = tmp + '.kw';
+    try {
+      initGitRepo(tmp);
+      plantActiveFolder(tmp, 'issue-605c', 605, null);
+      const mainCache = path.join(tmp, 'kaola-workflow', 'issue-605c', '.cache');
+      fs.mkdirSync(mainCache, { recursive: true });
+      fs.writeFileSync(path.join(mainCache, 'run-progress.json'), JSON.stringify({ plan_hash: 'x', op: 'close-node', node_ledger: [], in_progress: [], all_done: false }) + '\n');
+      const wtPath = path.join(kwRoot, 'issue-605c');
+      fs.mkdirSync(kwRoot, { recursive: true });
+      spawnSync('git', ['worktree', 'add', '-b', 'workflow/issue-605c', '--', wtPath, 'HEAD'], { cwd: tmp, encoding: 'utf8' });
+      plantActiveFolder(wtPath, 'issue-605c', 605, null);
+      const fin = spawnSync(process.execPath, [claimScript, 'finalize', '--project', 'issue-605c', '--keep-worktree'], {
+        cwd: wtPath, env: { ...process.env, KAOLA_WORKFLOW_OFFLINE: '1' }, encoding: 'utf8' });
+      assert(fin.status === 0, '#605 (c): finalize from linked worktree should exit 0\nstderr: ' + fin.stderr);
+      assert(!fs.existsSync(path.join(tmp, 'kaola-workflow', 'issue-605c', '.cache', 'run-progress.json')),
+        '#605 (c): finalize must remove the main-root run-progress.json with the rest of the project .cache/');
+    } finally {
+      try { spawnSync('git', ['-C', tmp, 'worktree', 'remove', '--force', path.join(kwRoot, 'issue-605c')], { encoding: 'utf8' }); } catch (_) {}
+      fs.rmSync(tmp, { recursive: true, force: true });
+      try { fs.rmSync(kwRoot, { recursive: true, force: true }); } catch (_) {}
+    }
+  }
+
+  // (d) NO mirror when no worktree is linked: open-next from the MAIN root writes no run-progress.json.
+  {
+    const grepo = adaptiveTmp('mirror-605-noworktree');
+    initGitRepo(grepo);
+    seedFrozenMain(grepo, 'issue-605d');
+    try {
+      const on = runNode(adaptiveNodeScript, ['open-next', '--project', 'issue-605d', '--json'], grepo);
+      assert(on.status === 0, '#605 (d): open-next should exit 0, got ' + on.stderr);
+      assert(!fs.existsSync(path.join(grepo, 'kaola-workflow', 'issue-605d', '.cache', 'run-progress.json')),
+        '#605 (d): no worktree linked -> no run-progress.json mirror at the (main) root');
+      assert(JSON.parse(on.stdout).run_progress_mirror === undefined,
+        '#605 (d): no mirror attempt -> no warn field');
+    } finally { fs.rmSync(grepo, { recursive: true, force: true }); }
+  }
+
+  console.log('testRunProgressMirror605: PASSED');
 }
 
 main().catch(err => {
