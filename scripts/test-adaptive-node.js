@@ -457,13 +457,14 @@ function makeState(opts) {
   assert(checkEvidenceShape('code-reviewer', 'review', 'n/a — not a visual issue\n').ok === true,
     'T8g-d: same n/a content is a legal skip for code-reviewer');
 
-  // verdict: pass / verdict: fail → ok (a fail verdict still CLOSES the node, parity with reviewers)
-  const rPass = checkEvidenceShape('main-session-gate', 'vgate', 'verdict: pass\nfindings_blocking: 0\nGPU true-black confirmed\n');
-  assert(rPass.ok === true, 'T8g-e: verdict: pass → ok');
-  const rFail = checkEvidenceShape('main-session-gate', 'vgate', 'verdict: fail\nfindings_blocking: 1\nblacks looked grey\n');
+  // verdict: pass / verdict: fail → ok (a fail verdict still CLOSES the node, parity with reviewers).
+  // #607: a main-session-gate now ALSO requires the column-0 `instrumentation:` attestation token.
+  const rPass = checkEvidenceShape('main-session-gate', 'vgate', 'verdict: pass\ninstrumentation: none\nfindings_blocking: 0\nGPU true-black confirmed\n');
+  assert(rPass.ok === true, 'T8g-e: verdict: pass + instrumentation: none → ok');
+  const rFail = checkEvidenceShape('main-session-gate', 'vgate', 'verdict: fail\ninstrumentation: none\nfindings_blocking: 1\nblacks looked grey\n');
   assert(rFail.ok === true, 'T8g-f: verdict: fail → ok (closes the node; blocking is at Finalization)');
   // last-match-wins + case-insensitive
-  const rLast = checkEvidenceShape('main-session-gate', 'vgate', 'verdict: fail\nre-checked\nverdict: PASS\n');
+  const rLast = checkEvidenceShape('main-session-gate', 'vgate', 'verdict: fail\ninstrumentation: none\nre-checked\nverdict: PASS\n');
   assert(rLast.ok === true, 'T8g-g: last-match-wins + case-insensitive verdict → ok');
 }
 
@@ -9431,6 +9432,246 @@ function rtHarness(initialFiles, opts) {
     assert(everRunningSet === false,
       'T-585-stale-race: no running-set.json written in any trial');
   }
+}
+
+// ===========================================================================
+// CLUSTER T607 — main-session-gate runtime write fence (layers 2+3).
+//   Layer 2: open-next / fused-advance record an opened main-session-gate into
+//            running-set.json as kind:'gate'; close + reconcile remove it; the
+//            kind-consumer audit (slot math / liveHasWrite / selectSpeculative /
+//            reconcile budget) shows no false-fence or miscount from a live gate.
+//   Layer 3: gate evidence requires a column-0 `instrumentation: none | <node-id>`
+//            token; a named node must be a ledger WRITER.
+// ===========================================================================
+{
+  // -- Layer 3: evidence-token presence ------------------------------------
+  // T607-L3a: verdict present but NO instrumentation token → refuse (shape/instrumentation).
+  const rNoInstr = checkEvidenceShape('main-session-gate', 'vgate',
+    'verdict: pass\nfindings_blocking: 0\nGPU true-black confirmed\n');
+  assert(rNoInstr.ok === false, 'T607-L3a: gate evidence missing instrumentation token → not ok');
+  assert(rNoInstr.kind === 'shape' && rNoInstr.missingTokenClass === 'instrumentation',
+    'T607-L3a: missing instrumentation → shape/instrumentation, got ' + JSON.stringify({ k: rNoInstr.kind, m: rNoInstr.missingTokenClass }));
+
+  // T607-L3b: verdict + `instrumentation: none` → ok (no upstream provisioning declared).
+  const rNone = checkEvidenceShape('main-session-gate', 'vgate',
+    'verdict: pass\ninstrumentation: none\nfindings_blocking: 0\n');
+  assert(rNone.ok === true, 'T607-L3b: verdict + instrumentation: none → ok, got ' + JSON.stringify(rNone));
+
+  // T607-L3c: verdict + `instrumentation: none` but verdict absent still refuses on verdict FIRST.
+  const rNoneNoVerdict = checkEvidenceShape('main-session-gate', 'vgate',
+    'instrumentation: none\nfindings_blocking: 0\n');
+  assert(rNoneNoVerdict.ok === false && rNoneNoVerdict.missingTokenClass === 'verdict',
+    'T607-L3c: verdict precedence — missing verdict refuses verdict even with instrumentation, got ' + JSON.stringify(rNoneNoVerdict));
+
+  // T607-L3d: `instrumentation: <node-id>` naming a ledger WRITER → ok (covers-instrumentation
+  // interpretation: named node exists in the ledger and is a writer with a non-empty declared set).
+  const ledgerNodes = [
+    { id: 'probe', role: 'tdd-guide', declared_write_set: 'crates/x/tests/probe.rs' },
+    { id: 'reader', role: 'code-explorer', declared_write_set: '—' },
+    { id: 'vgate', role: 'main-session-gate', declared_write_set: '—' },
+  ];
+  const rNamedWriter = checkEvidenceShape('main-session-gate', 'vgate',
+    'verdict: pass\ninstrumentation: probe\n', { ledgerNodes });
+  assert(rNamedWriter.ok === true, 'T607-L3d: instrumentation names a ledger writer → ok, got ' + JSON.stringify(rNamedWriter));
+
+  // T607-L3e: named node ABSENT from the ledger → refuse.
+  const rNamedAbsent = checkEvidenceShape('main-session-gate', 'vgate',
+    'verdict: pass\ninstrumentation: ghost\n', { ledgerNodes });
+  assert(rNamedAbsent.ok === false && rNamedAbsent.missingTokenClass === 'instrumentation_node',
+    'T607-L3e: instrumentation names a non-ledger node → refuse instrumentation_node, got ' + JSON.stringify(rNamedAbsent));
+
+  // T607-L3f: named node is a READ-ONLY node (empty declared set) → refuse (not a writer).
+  const rNamedReader = checkEvidenceShape('main-session-gate', 'vgate',
+    'verdict: pass\ninstrumentation: reader\n', { ledgerNodes });
+  assert(rNamedReader.ok === false && rNamedReader.missingTokenClass === 'instrumentation_node',
+    'T607-L3f: instrumentation names a read-only node → refuse instrumentation_node, got ' + JSON.stringify(rNamedReader));
+
+  // T607-L3g: with NO ledgerNodes opt, the named-node check is SKIPPED (token presence still enforced) —
+  // the --verify preflight / legacy 3-arg callers keep the presence gate but not the deeper ledger check.
+  const rNamedNoLedger = checkEvidenceShape('main-session-gate', 'vgate',
+    'verdict: pass\ninstrumentation: probe\n');
+  assert(rNamedNoLedger.ok === true, 'T607-L3g: named token without ledgerNodes opt → presence-only pass, got ' + JSON.stringify(rNamedNoLedger));
+}
+
+{
+  // -- Layer 2: open-next records a main-session-gate as kind:'gate' --------
+  // T607-L2a: open-next of a ready main-session-gate writes running-set.json with a kind:'gate' entry.
+  const gatePlan = makePlan([
+    '| impl | complete | |',
+    '| vgate | pending | |',
+    '| done | pending | |',
+  ], [
+    '| impl | implementer | — | lib/a.js | 1 | sequence |',
+    '| vgate | main-session-gate | impl | — | 1 | sequence |',
+    '| done | finalize | vgate | CHANGELOG.md | 1 | sequence |',
+  ]);
+  const gate = { id: 'vgate', role: 'main-session-gate', declared_write_set: '—' };
+  const h = rsHarness({ [RS_PLAN_PATH]: gatePlan }, (base) => {
+    if (base === 'kaola-workflow-next-action.js') {
+      return { exitCode: 0, result: 'ok', allDone: false, readySet: [gate], readyPending: [gate], nextNode: gate };
+    }
+    if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok', recordBase: { base: 'abcdef012345aaaa' } };
+    return { exitCode: 0, result: 'ok' };
+  });
+  const r = runOpenNext({ planPath: RS_PLAN_PATH, project: 'p', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, mkdirp: h.mkdirp });
+  assert(r.result === 'ok' && r.opened && r.opened.id === 'vgate', 'T607-L2a: open-next opens the gate, got ' + JSON.stringify(r.reason || r));
+  const set2a = h.files[RS_SET_PATH] ? JSON.parse(h.files[RS_SET_PATH]) : null;
+  assert(set2a && (set2a.nodes || []).some(n => n.id === 'vgate' && n.kind === 'gate'),
+    'T607-L2a: gate recorded as kind:gate in running-set.json, got ' + JSON.stringify(set2a));
+
+  // T607-L2b: open-next of a NON-gate serial node writes NO gate entry (byte-identical: serial
+  // non-gate opens never touch the running set).
+  const serialPlan = makePlan([
+    '| impl | pending | |',
+    '| done | pending | |',
+  ], [
+    '| impl | implementer | — | lib/a.js | 1 | sequence |',
+    '| done | finalize | impl | CHANGELOG.md | 1 | sequence |',
+  ]);
+  const implNode = { id: 'impl', role: 'implementer', declared_write_set: 'lib/a.js' };
+  const h2 = rsHarness({ [RS_PLAN_PATH]: serialPlan }, (base) => {
+    if (base === 'kaola-workflow-next-action.js') {
+      return { exitCode: 0, result: 'ok', allDone: false, readySet: [implNode], readyPending: [implNode], nextNode: implNode };
+    }
+    if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok', recordBase: { base: 'abcdef012345bbbb' } };
+    return { exitCode: 0, result: 'ok' };
+  });
+  const r2 = runOpenNext({ planPath: RS_PLAN_PATH, project: 'p', shell: h2.shell, readFile: h2.readFile, writeFile: h2.writeFile, cacheExists: h2.cacheExists, mkdirp: h2.mkdirp });
+  assert(r2.result === 'ok' && r2.opened && r2.opened.id === 'impl', 'T607-L2b: open-next opens the serial node');
+  const set2b = h2.files[RS_SET_PATH] ? JSON.parse(h2.files[RS_SET_PATH]) : null;
+  assert(!set2b || !(set2b.nodes || []).some(n => n.kind === 'gate'), 'T607-L2b: a non-gate serial open records NO gate entry');
+}
+
+{
+  // -- Layer 2: fused-advance records a gate ------------------------------
+  // T607-L2c: close-and-open-next closing a node whose NEXT node is a main-session-gate records the
+  // gate as kind:'gate' during the fused advance (the inline open path, not runOpenNext).
+  const plan = makePlan([
+    '| impl | in_progress | |',
+    '| vgate | pending | |',
+    '| done | pending | |',
+  ], [
+    '| impl | implementer | — | lib/a.js | 1 | sequence |',
+    '| vgate | main-session-gate | impl | — | 1 | sequence |',
+    '| done | finalize | vgate | CHANGELOG.md | 1 | sequence |',
+  ]);
+  const gate = { id: 'vgate', role: 'main-session-gate', declared_write_set: '—' };
+  // Seed evidence for impl (a tdd-guide-less implementer close needs its tokens; use implementer role).
+  const cachePath = '/p/.cache/impl.md';
+  const h = rsHarness({
+    [RS_PLAN_PATH]: plan,
+    [cachePath]: 'evidence-binding: impl implbase0000\nnon_tdd_reason: config\nbuild-green\n',
+    ['/p/.cache/barrier-base-impl']: 'implbase0000zzzz',
+  }, (base) => {
+    if (base === 'kaola-workflow-next-action.js') {
+      return { exitCode: 0, result: 'ok', allDone: false, readyPending: [gate], nextNode: gate };
+    }
+    if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok', recordBase: { base: 'fusedbase012345' }, selectorCheck: {} };
+    return { exitCode: 0, result: 'ok' };
+  });
+  const r = runCloseAndOpenNext({ planPath: RS_PLAN_PATH, project: 'p', nodeId: 'impl', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, mkdirp: h.mkdirp });
+  assert(r.result === 'ok' && r.closed === 'impl' && r.opened && r.opened.id === 'vgate',
+    'T607-L2c: close-and-open-next fused-advances to the gate, got ' + JSON.stringify(r.reason || { closed: r.closed, opened: r.opened && r.opened.id }));
+  const set2c = h.files[RS_SET_PATH] ? JSON.parse(h.files[RS_SET_PATH]) : null;
+  assert(set2c && (set2c.nodes || []).some(n => n.id === 'vgate' && n.kind === 'gate'),
+    'T607-L2c: fused-advance records the gate as kind:gate, got ' + JSON.stringify(set2c));
+}
+
+{
+  // -- Layer 2: close removes the gate; reconcile no-ops on a lone live gate --
+  // T607-L2d: close-and-open-next closing the gate removes its running-set entry.
+  const plan = makePlan([
+    '| impl | complete | |',
+    '| vgate | in_progress | |',
+    '| done | pending | |',
+  ], [
+    '| impl | implementer | — | lib/a.js | 1 | sequence |',
+    '| vgate | main-session-gate | impl | — | 1 | sequence |',
+    '| done | finalize | vgate | CHANGELOG.md | 1 | sequence |',
+  ]);
+  const doneNode = { id: 'done', role: 'finalize', declared_write_set: 'CHANGELOG.md' };
+  const h = rsHarness({
+    [RS_PLAN_PATH]: plan,
+    [RS_SET_PATH]: JSON.stringify({ state: 'open', nodes: [{ id: 'vgate', role: 'main-session-gate', kind: 'gate', declared_write_set: '—' }] }),
+    ['/p/.cache/vgate.md']: 'evidence-binding: vgate gatebase0000\nverdict: pass\ninstrumentation: none\nfindings_blocking: 0\n',
+    ['/p/.cache/barrier-base-vgate']: 'gatebase0000zzzz',
+  }, (base) => {
+    if (base === 'kaola-workflow-next-action.js') {
+      return { exitCode: 0, result: 'ok', allDone: false, readyPending: [doneNode], nextNode: doneNode };
+    }
+    if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok', recordBase: { base: 'donebase0123456' }, selectorCheck: {} };
+    return { exitCode: 0, result: 'ok' };
+  });
+  const r = runCloseAndOpenNext({ planPath: RS_PLAN_PATH, project: 'p', nodeId: 'vgate', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, mkdirp: h.mkdirp });
+  assert(r.result === 'ok' && r.closed === 'vgate', 'T607-L2d: gate closes, got ' + JSON.stringify(r.reason || r));
+  const set2d = h.files[RS_SET_PATH] ? JSON.parse(h.files[RS_SET_PATH]) : null;
+  assert(!set2d || !(set2d.nodes || []).some(n => n.id === 'vgate'),
+    'T607-L2d: closing the gate removes it from the running set, got ' + JSON.stringify(set2d));
+
+  // T607-L2e: reconcile-running-set NO-OPs on a lone live gate (in_progress, non-opening) — nothing to
+  // reconcile, the gate stays a legitimately-live member.
+  const planE = makePlan([
+    '| impl | complete | |',
+    '| vgate | in_progress | |',
+    '| done | pending | |',
+  ], [
+    '| impl | implementer | — | lib/a.js | 1 | sequence |',
+    '| vgate | main-session-gate | impl | — | 1 | sequence |',
+    '| done | finalize | vgate | CHANGELOG.md | 1 | sequence |',
+  ]);
+  const hE = rsHarness({
+    [RS_PLAN_PATH]: planE,
+    [RS_SET_PATH]: JSON.stringify({ state: 'open', max_concurrent: 8, nodes: [{ id: 'vgate', role: 'main-session-gate', kind: 'gate', declared_write_set: '—' }] }),
+  }, () => ({ exitCode: 0, result: 'ok' }));
+  const rE = runReconcileRunningSet({ planPath: RS_PLAN_PATH, project: 'p', shell: hE.shell, readFile: hE.readFile, writeFile: hE.writeFile, cacheExists: hE.cacheExists, unlink: hE.unlink });
+  assert(rE.result === 'ok' && rE.reconciled === false && rE.reason === 'not_opening',
+    'T607-L2e: reconcile no-ops (not_opening) on a lone live gate, got ' + JSON.stringify(rE));
+  const setE = hE.files[RS_SET_PATH] ? JSON.parse(hE.files[RS_SET_PATH]) : null;
+  assert(setE && (setE.nodes || []).some(n => n.id === 'vgate' && n.kind === 'gate'),
+    'T607-L2e: the live gate is preserved by reconcile');
+}
+
+{
+  // -- Kind-consumer audit: a live gate does not miscount slot math / write-exclusivity ----
+  // T607-KC1: open-ready speculative-read fan-out behind a live gate gets the FULL read cap (the gate
+  // does NOT consume a read slot) and liveHasWrite stays false (a gate is not a write).
+  const plan = [
+    '# Workflow Plan — test-project', '',
+    '## Meta', 'labels: area:scripts', 'speculative_open_policy: auto', '',
+    '## Nodes', '',
+    '| id | role | depends_on | declared_write_set | cardinality | shape |',
+    '| --- | --- | --- | --- | --- | --- |',
+    '| impl | implementer | — | lib/a.js | 1 | sequence |',
+    '| vgate | main-session-gate | impl | — | 1 | sequence |',
+    '| ra | code-reviewer | vgate | — | 1 | sequence |',
+    '| rb | security-reviewer | vgate | — | 1 | sequence |',
+    '| done | finalize | ra rb | CHANGELOG.md | 1 | sequence |', '',
+    '## Node Ledger', '',
+    '| id | status | notes |', '| --- | --- | --- |',
+    '| impl | complete | |',
+    '| vgate | in_progress | |',
+    '| ra | pending | |',
+    '| rb | pending | |',
+    '| done | pending | |', '',
+  ].join('\n') + '\n';
+  const specRa = { id: 'ra', role: 'code-reviewer', declared_write_set: '—', speculativeGate: 'vgate' };
+  const specRb = { id: 'rb', role: 'security-reviewer', declared_write_set: '—', speculativeGate: 'vgate' };
+  const h = rsHarness({
+    [RS_PLAN_PATH]: plan,
+    [RS_SET_PATH]: JSON.stringify({ state: 'open', max_concurrent: 8, nodes: [{ id: 'vgate', role: 'main-session-gate', kind: 'gate', declared_write_set: '—' }] }),
+  }, (base) => {
+    if (base === 'kaola-workflow-next-action.js') {
+      return { exitCode: 0, result: 'ok', allDone: false, readyPending: [], speculativePending: [specRa, specRb] };
+    }
+    if (base === 'kaola-workflow-commit-node.js') return { exitCode: 0, result: 'ok', recordBase: { base: 'specbase0123456' } };
+    return { exitCode: 0, result: 'ok' };
+  });
+  const r = runOpenReady({ planPath: RS_PLAN_PATH, project: 'p', max: null, fanoutCapReadonly: 8, shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, mkdirp: h.mkdirp });
+  assert(r.result === 'ok' && r.kind === 'read', 'T607-KC1: speculative reads open behind a live gate (kind read), got ' + JSON.stringify({ res: r.result, kind: r.kind, reason: r.reason }));
+  assert((r.opened || []).length === 2, 'T607-KC1: BOTH speculative reads open (gate did not eat a read slot), got ' + (r.opened || []).length);
+  const setKC = h.files[RS_SET_PATH] ? JSON.parse(h.files[RS_SET_PATH]) : null;
+  assert(setKC && (setKC.nodes || []).some(n => n.id === 'vgate' && n.kind === 'gate'), 'T607-KC1: the live gate survives the open-ready write (concat, not replace)');
+  assert(setKC && (setKC.nodes || []).filter(n => n.speculative).length === 2, 'T607-KC1: both speculative reads recorded');
 }
 
 if (failed > 0) {

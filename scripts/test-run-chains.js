@@ -315,20 +315,23 @@ try {
 }
 
 // ---------------------------------------------------------------------------
-// T12 (#512): resolveTimeoutMs unit — env override, default 900000, invalid fallback.
+// T12 (#512/#608): resolveTimeoutMs unit — env override, default 1800000, invalid fallback.
+// Default recalibrated 900000 (15 min) -> 1800000 (30 min, #608): live runs on a constrained
+// host exceeded the old 900s bound (a red receipt at exactly the old bound with no distinction
+// from a genuine test failure) — see the `timed_out` receipt field below.
 // ---------------------------------------------------------------------------
 {
   const { resolveTimeoutMs } = require('./kaola-workflow-run-chains.js');
-  // unset env → default 900000
-  assert(resolveTimeoutMs({}) === 900000, 'T12: unset env returns default 900000');
+  // unset env → default 1800000
+  assert(resolveTimeoutMs({}) === 1800000, 'T12: unset env returns default 1800000');
   // valid override
   assert(resolveTimeoutMs({ KAOLA_RUN_CHAINS_TIMEOUT_MS: '1200000' }) === 1200000, 'T12: valid override 1200000 is respected');
   // invalid string → fallback
-  assert(resolveTimeoutMs({ KAOLA_RUN_CHAINS_TIMEOUT_MS: 'abc' }) === 900000, 'T12: "abc" falls back to 900000');
+  assert(resolveTimeoutMs({ KAOLA_RUN_CHAINS_TIMEOUT_MS: 'abc' }) === 1800000, 'T12: "abc" falls back to 1800000');
   // zero → fallback (not > 0)
-  assert(resolveTimeoutMs({ KAOLA_RUN_CHAINS_TIMEOUT_MS: '0' }) === 900000, 'T12: "0" falls back to 900000');
+  assert(resolveTimeoutMs({ KAOLA_RUN_CHAINS_TIMEOUT_MS: '0' }) === 1800000, 'T12: "0" falls back to 1800000');
   // negative → fallback
-  assert(resolveTimeoutMs({ KAOLA_RUN_CHAINS_TIMEOUT_MS: '-5' }) === 900000, 'T12: "-5" falls back to 900000');
+  assert(resolveTimeoutMs({ KAOLA_RUN_CHAINS_TIMEOUT_MS: '-5' }) === 1800000, 'T12: "-5" falls back to 1800000');
 }
 
 // ---------------------------------------------------------------------------
@@ -663,6 +666,58 @@ try {
   } finally {
     try { fs.rmSync(projRepo2, { recursive: true, force: true }); } catch (_) {}
   }
+}
+
+// ---------------------------------------------------------------------------
+// T24 (#608): a synthetic per-chain timeout persists `timed_out: true` + `exitCode: 1` in the
+// receipt's per-chain entry, AND the non-json failure summary (stderr) carries a TIMEOUT-labelled
+// line naming KAOLA_RUN_CHAINS_TIMEOUT_MS — an operator scanning the failure line (not the JSON
+// receipt) can tell "raise the timeout" from "fix the test" at a glance.
+// ---------------------------------------------------------------------------
+const repo24 = makeGitRepo();
+try {
+  const hangMock = path.join(repo24, 'hang.js');
+  fs.writeFileSync(hangMock,
+    '#!/usr/bin/env node\n\'use strict\';\nsetInterval(function(){}, 1000);\n',
+    { mode: 0o755 });
+  const r24 = run(repo24, [
+    '--chains', 'claude',
+    '--mock-chain', 'claude:' + hangMock,
+  ], null, { KAOLA_RUN_CHAINS_CONCURRENCY: 'serial', KAOLA_RUN_CHAINS_RETRY: '1', KAOLA_RUN_CHAINS_TIMEOUT_MS: '600' });
+  assert(r24.exitCode !== 0, 'T24: a timed-out chain stays RED (non-zero exit)');
+  const rc24 = r24.receipt;
+  assert(rc24 !== null, 'T24: receipt written on timeout');
+  if (rc24 !== null) {
+    const ch = rc24.chains[0];
+    assert(ch.timed_out === true, 'T24: receipt records timed_out: true; got ' + JSON.stringify(ch));
+    assert(ch.exitCode === 1, 'T24: receipt records exitCode 1 on timeout');
+  }
+  assert((r24.stderr || '').includes('TIMEOUT'), 'T24: failure summary labels a TIMEOUT; stderr: ' + r24.stderr);
+  assert((r24.stderr || '').includes('KAOLA_RUN_CHAINS_TIMEOUT_MS'), 'T24: failure summary names KAOLA_RUN_CHAINS_TIMEOUT_MS; stderr: ' + r24.stderr);
+} finally {
+  try { fs.rmSync(repo24, { recursive: true, force: true }); } catch (_) {}
+}
+
+// ---------------------------------------------------------------------------
+// T25 (#608): a green (non-timed-out) chain records `timed_out: false` in the receipt — the
+// additive field is always explicit on a freshly-produced receipt (a legacy receipt predating
+// the field is treated as false by the reader, not by the producer).
+// ---------------------------------------------------------------------------
+const repo25 = makeGitRepo();
+try {
+  const passMock = makeExitScript(repo25, 'pass.js', 0);
+  const r25 = run(repo25, [
+    '--chains', 'claude',
+    '--mock-chain', 'claude:' + passMock,
+  ]);
+  assert(r25.exitCode === 0, 'T25: exit 0 on a green chain');
+  const rc25 = r25.receipt;
+  assert(rc25 !== null, 'T25: receipt written');
+  if (rc25 !== null) {
+    assert(rc25.chains[0].timed_out === false, 'T25: green chain records timed_out: false; got ' + JSON.stringify(rc25.chains[0]));
+  }
+} finally {
+  try { fs.rmSync(repo25, { recursive: true, force: true }); } catch (_) {}
 }
 
 // ---------------------------------------------------------------------------

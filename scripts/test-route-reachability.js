@@ -459,6 +459,30 @@ for (const ed of codexEditions) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// T15: gate-instrumentation-provisioning block must appear in each of the 6 plan-run surfaces (3
+// Claude commands + 3 Codex SKILLs): a main-session-gate node body never instructs authoring
+// files, and the runtime gate-window fence (KAOLA_GATE_WINDOW_FENCE) backs it. Fail-closed:
+// unconditional assert() per surface.
+// ---------------------------------------------------------------------------
+{
+  const planRunSurfaces = [
+    'commands/kaola-workflow-plan-run.md',
+    'plugins/kaola-workflow/skills/kaola-workflow-plan-run/SKILL.md',
+    'plugins/kaola-workflow-gitlab/commands/kaola-workflow-plan-run.md',
+    'plugins/kaola-workflow-gitlab/skills/kaola-workflow-plan-run/SKILL.md',
+    'plugins/kaola-workflow-gitea/commands/kaola-workflow-plan-run.md',
+    'plugins/kaola-workflow-gitea/skills/kaola-workflow-plan-run/SKILL.md',
+  ];
+  for (const f of planRunSurfaces) {
+    const content = fs.readFileSync(path.join(REPO, f), 'utf8');
+    assert(content.includes('<!-- PIN: gate-instrumentation-provisioning -->'),
+      `T15: ${f} must contain <!-- PIN: gate-instrumentation-provisioning --> comment (n3-planner-prose)`);
+    assert(content.includes('KAOLA_GATE_WINDOW_FENCE=0'),
+      `T15: ${f} must contain "KAOLA_GATE_WINDOW_FENCE=0" literal (n3-planner-prose)`);
+  }
+}
+
 if (failed) {
   console.error(`\nRoute-reachability test FAILED: ${failed} failure(s), ${passed} passed.`);
   process.exit(1);

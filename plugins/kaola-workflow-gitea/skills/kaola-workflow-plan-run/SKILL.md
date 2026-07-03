@@ -229,6 +229,15 @@ reasoning-effort rule above. Pass `dispatch.nonce` (evidence-binding token). Ins
   note below. `opening` marker + `reconcile-running-set` handle crash-resume.
   `test_thrash` ≥ 3: escalate via `write-halt --reason test_thrash`.
 
+<!-- PIN: gate-instrumentation-provisioning -->
+**A `main-session-gate` node body never instructs authoring files — it verifies.** When gate
+instrumentation is needed to run the check (a probe scene/test/fixture, including build wiring),
+an UPSTREAM writer node provisions it inside that node's own declared write set; the gate only
+runs what was provisioned. A gate-window fence backs this at runtime: an in-worktree out-of-band
+Write/Edit while a `main-session-gate` is open is denied by default (`KAOLA_GATE_WINDOW_FENCE=0`
+opt-out); legal exits are provisioning via an upstream writer node, `route-findings`/`repair-node`,
+or `write-halt --reason consent`.
+
 <!-- PIN: leg-isolation-recipe -->
 **Write-parallelism is default-on for disjoint AND same-area (coarse) frontiers.** The per-leg
 isolation engine is COMPLETE and live, and every exact-file-disjoint write frontier —

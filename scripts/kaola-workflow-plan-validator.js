@@ -85,7 +85,13 @@ const OPERATOR_HINT_REGISTRY = {
   group_not_found: (ctx) => `No live lane_group "${ctx.nodeId || '(unknown)'}" in running-set.json. Ensure the group was opened before running the group barrier.`,
   chains_unverified: () => 'No chain receipt found. Run kaola-workflow-run-chains.js after the last commit so HEAD is covered.',
   chains_stale: () => 'Chain receipt is stale — the tree advanced since the chains ran. Regenerate the receipt over HEAD.',
-  chains_red: () => 'One or more chains are RED with no waiver. Fix the failing chain or waive it explicitly (--accept-known-red <name>:<open-issue>).',
+  chains_red: (ctx) => {
+    const timedOut = (ctx && Array.isArray(ctx.timedOutChains)) ? ctx.timedOutChains.filter(Boolean) : [];
+    if (timedOut.length) {
+      return `One or more chains are RED with no waiver — ${timedOut.join(', ')} hit the per-chain TIMEOUT (not necessarily a real test failure). Raise KAOLA_RUN_CHAINS_TIMEOUT_MS and re-run, or investigate a hang; any other (non-timeout) red chain still needs a fix or an explicit waiver (--accept-known-red <name>:<open-issue>).`;
+    }
+    return 'One or more chains are RED with no waiver. Fix the failing chain or waive it explicitly (--accept-known-red <name>:<open-issue>).';
+  },
   // #475: consumer (non-npm) finalize gate — the agent's recorded validation IS the gate (no chain receipt).
   final_validation_unverified: () => 'No agent validation evidence at .cache/final-validation.md. In a consumer (non-npm) repo the agent owns verification (#44): record .cache/final-validation.md with the validation result + a column-0 `verdict: pass` before finalize.',
   final_validation_failed: () => '.cache/final-validation.md is present but does not record `verdict: pass` (column 0). The agent\'s own validation did not pass — remediate and re-record, or fix the failing checks before finalize.',
@@ -2800,7 +2806,10 @@ function main() {
       const redChains = chains.filter(c => c && c.exitCode !== 0 && c.accepted_red !== true);
       if (redChains.length) {
         const names = redChains.map(c => c.name || '(unnamed)').join(', ');
-        process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'chains_red', operator_hint: getOperatorHint('chains_red'), redChains: redChains.map(c => ({ name: c.name || null, exitCode: c.exitCode })), errors: ['chain(s) RED with no waiver: ' + names + ' — fix the chain or waive it explicitly (--accept-known-red <name>:<open-issue>)'] }) : 'typed refusal: chains_red (' + names + ')') + '\n');
+        // #608: surface the timeout-vs-red distinction in the hint (hint text only — the refuse
+        // decision itself is unchanged: ANY unwaived red, timed-out or not, still refuses chains_red).
+        const timedOutChains = redChains.filter(c => c && c.timed_out === true).map(c => c.name || '(unnamed)');
+        process.stdout.write((json ? JSON.stringify({ result: 'refuse', reason: 'chains_red', operator_hint: getOperatorHint('chains_red', { timedOutChains }), redChains: redChains.map(c => ({ name: c.name || null, exitCode: c.exitCode, timed_out: c.timed_out === true })), errors: ['chain(s) RED with no waiver: ' + names + ' — fix the chain or waive it explicitly (--accept-known-red <name>:<open-issue>)'] }) : 'typed refusal: chains_red (' + names + ')') + '\n');
         process.exitCode = 1; return;
       }
     } else {

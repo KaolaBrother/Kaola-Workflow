@@ -860,6 +860,83 @@ function testWriteLaneHookGuard() {
       JSON.stringify({ nodes: [{ id: 'r1', kind: 'read', declared_write_set: ['scripts/r1.js'] }] }));
     assert(run(path.join(RR, 'scripts/r1.js'), true).status === 2,
       '#386: a READ node lane match in the parent stays DENIED (only write self-exempts)');
+
+    // === #607 GATE-WINDOW FENCE (rule c) — DEFAULT-ON, KAOLA_GATE_WINDOW_FENCE=0 opt-out ==========
+    // A main-session-gate open (a manifest node with kind:'gate') denies an in-worktree out-of-band
+    // Write/Edit during the gate window (the write-then-delete probe shape refused at WRITE time), while
+    // co-open writer lanes / member worktrees / the `.kw/` band / workflow bands / out-of-repo paths stay
+    // allowed. runEnv drives the hook with an explicit env map so the two switches are set independently.
+    const runEnv = (fp, extraEnv) => spawnSync('bash', [writeLaneHook], {
+      cwd: RR, encoding: 'utf8',
+      input: JSON.stringify({ tool_input: { file_path: fp } }),
+      env: Object.assign({}, process.env, extraEnv || {}),
+    });
+    fs.mkdirSync(path.join(RR, 'crates', 'cadcore-verify', 'tests'), { recursive: true });
+    fs.mkdirSync(path.join(RR, '.kw', 'legs', 'proj', 'w1', 'scripts'), { recursive: true });
+    const outOfRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'kw-gate-scratch-'));
+    try {
+      // Manifest: a lone open main-session-gate (kind:'gate', no declared set) — the pure gate window.
+      const gateOnly = JSON.stringify({ state: 'open', nodes: [{ id: 'vgate', role: 'main-session-gate', kind: 'gate', declared_write_set: '—' }] });
+      // Manifest: the gate co-open with a speculative WRITE node (its lane must stay allowed).
+      const gatePlusWriter = JSON.stringify({ state: 'open', nodes: [
+        { id: 'vgate', role: 'main-session-gate', kind: 'gate', declared_write_set: '—' },
+        { id: 'w1', role: 'implementer', kind: 'write', declared_write_set: ['scripts/w1.js'] },
+      ] });
+      const probe = path.join(RR, 'crates/cadcore-verify/tests/probe_gpu_gate.rs');
+
+      // (c1) DEFAULT-ON: gate window + in-worktree out-of-band write -> DENY (exit 2) with NO env flags.
+      fs.writeFileSync(path.join(cacheDir, 'running-set.json'), gateOnly);
+      assert(runEnv(probe, {}).status === 2,
+        '#607 (c1): default-ON gate fence denies an in-worktree out-of-band probe write (exit 2) with no env flags');
+      // (c1b) the refusal message names the legal exits (provision upstream / route-findings / repair / write-halt).
+      assert(/route-findings|upstream writer|write-halt/.test(runEnv(probe, {}).stderr || ''),
+        '#607 (c1b): the gate-fence refusal names the legal exits');
+
+      // (c2) opt-out: KAOLA_GATE_WINDOW_FENCE=0 -> the SAME write is ALLOWED (exit 0).
+      assert(runEnv(probe, { KAOLA_GATE_WINDOW_FENCE: '0' }).status === 0,
+        '#607 (c2): KAOLA_GATE_WINDOW_FENCE=0 opts out — the probe write is allowed (exit 0)');
+
+      // (c3) co-open writer lane stays ALLOWED (a speculative writer`s declared lane in the parent).
+      fs.writeFileSync(path.join(cacheDir, 'running-set.json'), gatePlusWriter);
+      assert(runEnv(path.join(RR, 'scripts/w1.js'), {}).status === 0,
+        '#607 (c3): a write under a co-open writer declared lane is allowed during a gate window (exit 0)');
+      // (c3b) an out-of-band write STILL denies even with a co-open writer present.
+      assert(runEnv(probe, {}).status === 2,
+        '#607 (c3b): an out-of-band write is still denied when a co-open writer is present (exit 2)');
+
+      // (c4) the `.kw/` band (member worktrees / legs / co-open speculative work) stays ALLOWED.
+      fs.writeFileSync(path.join(cacheDir, 'running-set.json'), gateOnly);
+      assert(runEnv(path.join(RR, '.kw/legs/proj/w1/scripts/leg.rs'), {}).status === 0,
+        '#607 (c4): a write under the .kw/ band is allowed during a gate window (exit 0)');
+
+      // (c5) workflow bands (kaola-workflow/ and .cache/) stay ALLOWED.
+      assert(runEnv(path.join(RR, 'kaola-workflow/proj/.cache/vgate.md'), {}).status === 0,
+        '#607 (c5): a workflow-band write (evidence) is allowed during a gate window (exit 0)');
+
+      // (c6) out-of-repo paths (scratchpad, /tmp) stay ALLOWED (deny scopes to inside the worktree).
+      assert(runEnv(path.join(outOfRepo, 'probe.rs'), {}).status === 0,
+        '#607 (c6): an out-of-repo write is allowed during a gate window (exit 0)');
+
+      // (c7) NO gate open (manifest of writers only) -> the fence is inert, the out-of-band write is
+      //      ALLOWED even with the fence default-on (all #376 fail-open exits preserved when no gate).
+      fs.writeFileSync(path.join(cacheDir, 'running-set.json'),
+        JSON.stringify({ state: 'open', nodes: [{ id: 'w1', kind: 'write', declared_write_set: ['scripts/w1.js'] }] }));
+      assert(runEnv(probe, {}).status === 0,
+        '#607 (c7): no gate open -> the fence is inert; the out-of-band write is allowed (exit 0)');
+
+      // (c8) gate open but manifest ABSENT (removed) -> dormant fail-open (exit 0), fence default-on.
+      fs.rmSync(path.join(cacheDir, 'running-set.json'), { force: true });
+      assert(runEnv(probe, {}).status === 0,
+        '#607 (c8): no manifest -> dormant fail-open (exit 0) even with the fence default-on');
+      // (c8b) malformed stdin during a gate window -> fail-open (exit 0).
+      fs.writeFileSync(path.join(cacheDir, 'running-set.json'), gateOnly);
+      const badGate = spawnSync('bash', [writeLaneHook], { cwd: RR, encoding: 'utf8', input: 'not json', env: Object.assign({}, process.env) });
+      assert(badGate.status === 0, '#607 (c8b): malformed stdin during a gate window -> exit 0 (fail-open)');
+
+      // MUTATION: with rule (c) removed the hook would exit 0 on (c1)/(c3b), so those cases pin the fence.
+    } finally {
+      fs.rmSync(outOfRepo, { recursive: true, force: true });
+    }
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }

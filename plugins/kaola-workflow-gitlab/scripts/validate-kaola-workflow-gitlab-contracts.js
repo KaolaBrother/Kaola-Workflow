@@ -778,6 +778,12 @@ for (const planRunSurface of [
   // #606: teammate-mode dispatch subsection + the one-nudge idle-race rule.
   assertIncludes(planRunSurface, "spawn each node's role agent as a NAMED teammate");
   assertIncludes(planRunSurface, 'send EXACTLY ONE request for the deliverable, then wait');
+
+  // #607: gate-instrumentation-provisioning block — a main-session-gate node body never
+  // instructs authoring files; instrumentation is provisioned upstream; the runtime
+  // gate-window fence backs it. Pinned on BOTH the command and SKILL surfaces.
+  assertIncludes(planRunSurface, '<!-- PIN: gate-instrumentation-provisioning -->');
+  assertIncludes(planRunSurface, 'KAOLA_GATE_WINDOW_FENCE=0');
 }
 
 // #603: the Codex startup surfaces (kaola-workflow-next / kaola-workflow-adapt) must detect the
@@ -797,6 +803,12 @@ assertNotIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', '`son
 assertIncludes(pluginRoot + '/scripts/kaola-gitlab-workflow-plan-validator.js', 'G3: main-session-gate');
 assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'main-session-gate');
 assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'main-session-gate');
+
+// #607: gate instrumentation is provisioned upstream, never authored by the gate itself — pinned
+// on the GitLab edition planner TOML and its kaola-workflow-adapt SKILL (md↔toml parity for the
+// TOML twin is separately enforced by the shared test-agent-profile-parity.js FEATURE_TOKENS).
+assertIncludes(pluginRoot + '/agents/workflow-planner.toml', 'the gate never authors or deletes files');
+assertIncludes(pluginRoot + '/skills/kaola-workflow-adapt/SKILL.md', 'the gate never authors or deletes files');
 
 // issue #290 / #288: pin the machine-readable findings-emission contract presence in all
 // reviewer agent bodies (GitLab edition — .toml bodies). Removing the emission section from

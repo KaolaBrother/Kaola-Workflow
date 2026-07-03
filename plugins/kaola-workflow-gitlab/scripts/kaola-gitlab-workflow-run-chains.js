@@ -46,7 +46,9 @@
 //   KAOLA_RUN_CHAINS_CONCURRENCY  auto (default) | serial | <N>  — pool size for the chain
 //                                 dispatch. "auto" gates on core count; "serial"/"1" forces the
 //                                 serial fallback; "<N>" forces a pool of N (clamped to chainCount).
-//   KAOLA_RUN_CHAINS_TIMEOUT_MS   per-chain timeout in ms (default 900000 / 15 min, #512).
+//   KAOLA_RUN_CHAINS_TIMEOUT_MS   per-chain timeout in ms (default 1800000 / 30 min, #608 —
+//                                 raised from the prior 900000/15min default, #512; a killed
+//                                 chain's receipt entry carries `timed_out: true`, see below).
 //   KAOLA_RUN_CHAINS_RETRY        max attempts PER CHAIN on a transient-infra fault (default 2 —
 //                                 i.e. one retry; #550). Clamped to a >=1 integer; invalid -> default.
 //
@@ -78,7 +80,10 @@
 //         "accepted_red": false,
 //         "accepted_red_issue": null,
 //         "attempts": 1,                // #550: how many times this chain ran (>1 == a transient retry)
-//         "retried_transient": false    // #550: true iff a transient signature triggered a re-run
+//         "retried_transient": false,   // #550: true iff a transient signature triggered a re-run
+//         "timed_out": false            // #608: true iff the FINAL attempt was killed by the per-chain
+//                                        // timeout (KAOLA_RUN_CHAINS_TIMEOUT_MS); absent on a legacy
+//                                        // receipt predating this field ⇒ treated as false by readers.
 //       }
 //     ]
 //   }
@@ -585,10 +590,12 @@ async function main(argv) {
     }
   }
 
-  // Strip internal (_output/_timedOut) fields. #550: the receipt additively records `attempts`
-  // (the FINAL attempt's exitCode is the chain verdict) and `retried_transient`. Readers index by
-  // name/exitCode/accepted_red (plan-validator --finalize-check, #522 schema test), so the two new
-  // fields are backward-compatible additions.
+  // Strip the internal _output field (kept as _timedOut is PROMOTED below). #550: the receipt
+  // additively records `attempts` (the FINAL attempt's exitCode is the chain verdict) and
+  // `retried_transient`. #608: `timed_out` promotes the internal _timedOut marker so a receipt
+  // reader (the plan-validator finalize gate, an operator) can distinguish a timeout kill from a
+  // genuine test failure without re-running anything. Readers index by name/exitCode/accepted_red
+  // (plan-validator --finalize-check, #522 schema test), so these are backward-compatible additions.
   const chainResults = dispatchResults.map((ch) => ({
     name: ch.name,
     exitCode: ch.exitCode,
@@ -598,6 +605,7 @@ async function main(argv) {
     accepted_red_issue: ch.accepted_red_issue,
     attempts: (typeof ch.attempts === 'number' && ch.attempts >= 1) ? ch.attempts : 1,
     retried_transient: ch.retried_transient === true,
+    timed_out: ch._timedOut === true,
   }));
 
   const completedAt = new Date().toISOString();
@@ -627,19 +635,29 @@ async function main(argv) {
       receipt: outputPath,
     }) + '\n');
   } else if (overallExitCode !== 0) {
+    // #608: label a TIMED-OUT chain distinctly from a determinate red in the failure summary line
+    // itself, naming the remedy env var — an operator scanning stderr (not the JSON receipt) can
+    // tell "raise the timeout" from "fix the test" at a glance.
+    const label = (ch) => ch.name + (ch.timed_out
+      ? ' (TIMEOUT at ' + Math.round(timeoutMs / 1000) + 's — raise KAOLA_RUN_CHAINS_TIMEOUT_MS or investigate a hang)'
+      : '');
     process.stderr.write(
-      'run-chains: ' + failed.length + ' chain(s) failed: ' + failed.map(ch => ch.name).join(', ') + '\n'
+      'run-chains: ' + failed.length + ' chain(s) failed: ' + failed.map(label).join(', ') + '\n'
     );
   }
 
   return overallExitCode;
 }
 
-// #512: per-chain spawnSync timeout — overridable so a passing-but-slow chain (claude ~574s)
-// is captured, not killed. Default raised to 900000 (15 min) from the prior hardcoded 600000.
+// #512/#608: per-chain spawnSync/spawn timeout — overridable so a passing-but-slow chain is
+// captured, not killed. Default raised to 1800000 (30 min) from the prior 900000 (15 min, #512),
+// which was itself raised from a hardcoded 600000: live runs on a constrained host exceeded 900s
+// (a red receipt at exactly the old bound, indistinguishable from a genuine failure without
+// re-reading the run) — the receipt's `timed_out` field (see the schema comment above) now
+// surfaces that distinction directly, and the failure summary names this env var as the remedy.
 function resolveTimeoutMs(env) {
   const v = parseInt((env && env.KAOLA_RUN_CHAINS_TIMEOUT_MS) || '', 10);
-  return (Number.isFinite(v) && v > 0) ? v : 900000;
+  return (Number.isFinite(v) && v > 0) ? v : 1800000;
 }
 
 // #550: max attempts PER CHAIN on a transient-infra fault (default 2 == one retry). Mirrors the
