@@ -9847,6 +9847,46 @@ function rtHarness(initialFiles, opts) {
       'T611-AC3(iii): a rolled-back READ member yields no writer reconciliation entry, got ' + JSON.stringify(r.writerReconciliation));
     assert(r.writerHalt !== true, 'T611-AC3(iii): no writer halt when no writer departs');
   }
+
+  // (iv) FAIL-CLOSED on an UNVERIFIABLE barrier — the shellNode-swallowed-failure hazard. shellNode never
+  //      throws: a SIGKILL'd / jetsam-killed / crashed / non-JSON / missing-validator --barrier-check yields
+  //      a RESULTLESS truthy object `{exitCode:N}` (safeJsonParse('') === {}). That MUST halt (positive
+  //      confirmation), never silently adopt a writer whose diff could not be verified.
+  {
+    const h = rsHarness({ [RS_PLAN_PATH]: mkWriterReconcilePlan(), [RS_SET_PATH]: mkWriterReconcileSet() },
+      () => ({ exitCode: 0, result: 'ok' }),
+      (base, a) => { if (a.includes('--barrier-check')) return { exitCode: 1 }; return null; });
+    const r = runReconcileRunningSet({ planPath: RS_PLAN_PATH, project: 'p', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, unlink: h.unlink });
+    assert(r.writerReconciliation.length === 1 && r.writerReconciliation[0].verdict === 'halt'
+      && r.writerReconciliation[0].reason === 'barrier_unverifiable',
+      'T611-AC3(iv): a resultless {exitCode:N} barrier (killed/crashed) → fail-closed halt(barrier_unverifiable), got ' + JSON.stringify(r.writerReconciliation[0]));
+    assert(r.writerHalt === true, 'T611-AC3(iv): an unverifiable barrier surfaces writerHalt:true (never a silent adopt)');
+  }
+
+  // (v) FAIL-CLOSED on an UNRECOGNIZED result token — a garbage `{result:'banana'}` is not the explicit
+  //     pass/ok confirmation, so it must halt too (never fall through to adopt).
+  {
+    const h = rsHarness({ [RS_PLAN_PATH]: mkWriterReconcilePlan(), [RS_SET_PATH]: mkWriterReconcileSet() },
+      () => ({ exitCode: 0, result: 'ok' }),
+      (base, a) => { if (a.includes('--barrier-check')) return { exitCode: 0, result: 'banana' }; return null; });
+    const r = runReconcileRunningSet({ planPath: RS_PLAN_PATH, project: 'p', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, unlink: h.unlink });
+    assert(r.writerReconciliation[0].verdict === 'halt' && r.writerReconciliation[0].reason === 'barrier_unverifiable',
+      'T611-AC3(v): an unrecognized barrier result token → fail-closed halt(barrier_unverifiable), got ' + JSON.stringify(r.writerReconciliation[0]));
+    assert(r.writerHalt === true, 'T611-AC3(v): unrecognized result surfaces writerHalt:true');
+  }
+
+  // (vi) the explicit clean confirmations still adopt — positive confirmation accepts BOTH the real barrier
+  //      `result:'pass'` AND the harness/CLI `result:'ok'` (no regression on the happy path).
+  {
+    for (const okResult of ['pass', 'ok']) {
+      const h = rsHarness({ [RS_PLAN_PATH]: mkWriterReconcilePlan(), [RS_SET_PATH]: mkWriterReconcileSet() },
+        () => ({ exitCode: 0, result: 'ok' }),
+        (base, a) => { if (a.includes('--barrier-check')) return { exitCode: 0, result: okResult, outOfAllow: [] }; return null; });
+      const r = runReconcileRunningSet({ planPath: RS_PLAN_PATH, project: 'p', shell: h.shell, readFile: h.readFile, writeFile: h.writeFile, cacheExists: h.cacheExists, unlink: h.unlink });
+      assert(r.writerReconciliation[0].verdict === 'adopt' && r.writerHalt === false,
+        'T611-AC3(vi): an explicit clean barrier result:' + okResult + ' → adopt, writerHalt false, got ' + JSON.stringify(r.writerReconciliation[0]));
+    }
+  }
 }
 
 if (failed > 0) {

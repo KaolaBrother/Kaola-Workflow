@@ -5085,12 +5085,20 @@ function closeGroupMember(ctx) {
 
 // ---------------------------------------------------------------------------
 // classifyWriterReconcile(nodeId, bc) — the Codex join protocol's writer kill-safety verdict. PURE over
-// the plan-validator --barrier-check result `bc` (the parsed JSON, or null on shell/parse failure):
-//   adopt — barrier passes (all worktree changes ⊆ the declared write set), OR the writer never recorded
-//           a baseline (`no_barrier_base`: it crashed before writing under tracking → nothing to reconcile).
-//   halt  — the barrier refuses with out-of-write-set paths (the leaked-stray-edit hazard) OR any other
-//           refusal / an unavailable result (fail-closed). NON-DESTRUCTIVE: reconcile never deletes; the
-//           halt + offending paths route to the orchestrator/consent valve.
+// the plan-validator --barrier-check result `bc` (the parsed JSON, or null on shell/parse failure).
+// POSITIVE-CONFIRMATION / fail-closed: `adopt` is emitted ONLY when the barrier EXPLICITLY confirms the
+// writer is safe; every other shape — including an UNVERIFIABLE result — halts.
+//   adopt — barrier EXPLICITLY passes (result pass|ok: all changes ⊆ the declared write set), OR the writer
+//           never recorded a baseline (`no_barrier_base`: it crashed before writing under tracking →
+//           nothing to reconcile, vacuous-safe).
+//   halt  — the barrier refuses with out-of-write-set paths (the leaked-stray-edit hazard), any other
+//           refusal (root/base integrity anomaly), OR an UNVERIFIABLE result. The last case is the critical
+//           one: `shellNode` NEVER throws — a SIGKILL'd / jetsam-killed / crashed / non-JSON / missing-
+//           validator barrier-check returns a RESULTLESS truthy object `{exitCode:N}` (safeJsonParse('')
+//           === {}), and an unrecognized `result` token is equally unconfirmed. Neither is proof the writer
+//           is clean, so both fail closed (`barrier_unverifiable`) rather than silently adopting a writer
+//           whose diff we could not verify. NON-DESTRUCTIVE: reconcile never deletes; the halt + any paths
+//           route to the orchestrator/consent valve.
 // Shape: { node_id, verdict:'adopt'|'halt', reason, outOfWriteSet:[...] }.
 // ---------------------------------------------------------------------------
 function classifyWriterReconcile(nodeId, bc) {
@@ -5110,8 +5118,13 @@ function classifyWriterReconcile(nodeId, bc) {
     // Any other refusal (root/base integrity anomaly) is unresolvable here → fail-closed halt.
     return { node_id: nodeId, verdict: 'halt', reason: bc.reason || 'barrier_refused', outOfWriteSet: [] };
   }
-  // pass / ok → all changes are contained in the declared write set.
-  return { node_id: nodeId, verdict: 'adopt', reason: 'in_write_set', outOfWriteSet: [] };
+  // POSITIVE CONFIRMATION: adopt ONLY on an EXPLICIT clean result (pass|ok). Any other shape — a resultless
+  // {exitCode:N} from a swallowed subprocess failure, or an unrecognized result token — is UNVERIFIED, so
+  // fail closed to halt (never silently adopt a writer whose diff the barrier did not confirm).
+  if (bc.result === 'pass' || bc.result === 'ok') {
+    return { node_id: nodeId, verdict: 'adopt', reason: 'in_write_set', outOfWriteSet: [] };
+  }
+  return { node_id: nodeId, verdict: 'halt', reason: 'barrier_unverifiable', outOfWriteSet: outOfAllow };
 }
 
 // ---------------------------------------------------------------------------
