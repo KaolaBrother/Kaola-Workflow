@@ -526,6 +526,29 @@ config changes, stop with the minimal diff and reason. Do not claim Codex is
 ready from repo source alone, from warning suppression alone, or from a stale
 plugin cache.
 
+Every install/upgrade also prints the effective dispatch **posture** automatically
+(no separate command needed). After writing/refreshing the managed config block, the
+installer re-reads the config it just wrote and reports the effort-gated MultiAgentMode
+the Codex runtime will actually enforce — features enabled is not the same as
+dispatch-ready:
+
+```text
+Kaola-Workflow Codex dispatch posture: explicitRequestOnly (model_reasoning_effort unset)
+Kaola-Workflow Codex dispatch posture: Codex will refuse sub-agent spawns unless explicitly requested this session (multi_agent_mode: explicitRequestOnly). Set model_reasoning_effort = "ultra" in ~/.codex/config.toml (or per-session: codex -c model_reasoning_effort=ultra) for proactive delegation, or explicitly ask for sub-agents/delegation/parallel work in-session.
+Kaola-Workflow Codex dispatch posture: effort-gated multi-agent dispatch posture is Codex CLI runtime behavior verified on codex-tui 0.142.5; it may change in a future Codex release.
+status: ok
+```
+
+This report is REPORT-ONLY and never fails the install: `model_reasoning_effort` is a
+user-owned cost/latency choice, so the installer never writes it. An install that prints
+`status: ok` while the posture reads `explicitRequestOnly` or `none` still needs one of
+the remediations above before a role agent can actually be dispatched: set
+`model_reasoning_effort = "ultra"` in `~/.codex/config.toml`, pass it per-session
+(`codex -c model_reasoning_effort=ultra`), or explicitly ask for sub-agents / delegation /
+parallel work in that session. `kaola-workflow-codex-preflight.js` (both the normal gate
+and `--doctor`) reports the same posture non-fatally — a `warn:` line, never a red
+preflight. See `docs/api.md` § Codex Harness Scripts for the JSON field names.
+
 Updating the Codex CLI itself never repairs Kaola-generated `.codex/` state — the
 runtime and the generated role profiles / managed config block are separate
 surfaces. A schema-invalid profile (one missing a non-empty top-level `name`, which

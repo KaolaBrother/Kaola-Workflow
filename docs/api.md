@@ -1221,6 +1221,25 @@ node scripts/kaola-workflow-codex-preflight.js --doctor [--project-root <dir>] [
 6. **Typed refusal when unsafe**: if a conflicting `[agents.*]` table exists OUTSIDE the managed markers, the local manifest declares an unsupported (future) `schema_version`, the installer is unavailable/errors, or the plan names a role absent from the template, exits non-zero with a typed-refusal JSON. `--no-autofix` forces the refusal path (useful in tests).
 7. **Never a silent `subagent-invoked`**: any non-`ok` status is a STOP for the caller.
 
+**Dispatch-posture report (additive, non-fatal — issue #598):** every result envelope,
+success AND every typed refusal, additionally carries `dispatch_posture`
+(`"none"|"explicitRequestOnly"|"proactive"`), `model_reasoning_effort` (the raw root-level
+TOML value, or `null` when unset), `multi_agent_enabled` (the base `[features] multi_agent`
+boolean), and `dispatch_posture_warning` (the exact remediation string, or `null` when the
+posture is already `proactive`). This is the effort-gated Codex runtime MultiAgentMode —
+distinct from the pre-existing `dispatch_mode`/`multi_agent_v2_enabled` fields (#332/#571),
+which only report whether the spawn *tools* are exposed, not whether the runtime will
+actually accept a spawn: `[features] multi_agent`/`multi_agent_v2` both absent-or-false →
+`"none"`; otherwise a root-level `model_reasoning_effort = "ultra"` → `"proactive"`, any
+other value or absent → `"explicitRequestOnly"`. **ATTESTATION-STYLE / NON-FATAL by
+construction** — these four fields never change `status` or the exit code, on either the
+normal gate or `--doctor`. On the normal gate's plain-text (non-`--json`) success output,
+a `warn: <dispatch_posture_warning>` line follows the `ok: N roles verified` line whenever
+the posture is non-`proactive`; the exit code stays `0`. **Version-guarded:** the
+effort→mode coupling is Codex CLI runtime behavior verified on codex-tui 0.142.5 and may
+change in a future release; the installer prints this caveat verbatim as its final
+dispatch-posture line.
+
 **Exit codes:**
 
 | Exit code | `status` | Meaning |
@@ -1237,12 +1256,12 @@ node scripts/kaola-workflow-codex-preflight.js --doctor [--project-root <dir>] [
 
 Success:
 ```json
-{ "status": "ok", "scope": "global", "roles_checked": ["code-explorer", "..."], "extra_unmanaged": [], "autofixed": false }
+{ "status": "ok", "scope": "global", "roles_checked": ["code-explorer", "..."], "extra_unmanaged": [], "autofixed": false, "dispatch_posture": "explicitRequestOnly", "model_reasoning_effort": null, "multi_agent_enabled": false, "dispatch_posture_warning": "Codex will refuse sub-agent spawns unless explicitly requested this session (multi_agent_mode: explicitRequestOnly). Set model_reasoning_effort = \"ultra\" in ~/.codex/config.toml (or per-session: codex -c model_reasoning_effort=ultra) for proactive delegation, or explicitly ask for sub-agents/delegation/parallel work in-session." }
 ```
 
-The `scope` field is additive (#571): `"global"` when the global `~/.codex` scope satisfied the gate; `"project"` when the project scope satisfied it (with or without autofix). Existing callers that assert only `status` and `autofixed` are unaffected.
+The `scope` field is additive (#571): `"global"` when the global `~/.codex` scope satisfied the gate; `"project"` when the project scope satisfied it (with or without autofix). Existing callers that assert only `status` and `autofixed` are unaffected. The four `dispatch_posture*` fields are additive (#598, see above) and present on every result the same way.
 
-Typed refusals (non-zero exit) carry `status`, `stale: true`, `safe_autofix`, `repair`, and `extra_unmanaged`, plus a status-specific payload: `malformed: [{role, file, reasons}]` (`profiles_malformed`), `stale_files: [...]` (`profiles_stale`), `stale_roles_in_block: [...]` (`managed_block_stale`), `missing_roles: [...]` (`profiles_missing`/`config_stale`), or `conflicting_roles_outside_markers: [...]` (`autofix_unsafe`).
+Typed refusals (non-zero exit) carry `status`, `stale: true`, `safe_autofix`, `repair`, `extra_unmanaged`, and the same four `dispatch_posture*` fields, plus a status-specific payload: `malformed: [{role, file, reasons}]` (`profiles_malformed`), `stale_files: [...]` (`profiles_stale`), `stale_roles_in_block: [...]` (`managed_block_stale`), `missing_roles: [...]` (`profiles_missing`/`config_stale`), or `conflicting_roles_outside_markers: [...]` (`autofix_unsafe`).
 
 **Doctor mode (`--doctor`)** — READ-ONLY, never runs the installer (even without `--no-autofix`). Reports freshness for three scopes:
 
@@ -1250,7 +1269,7 @@ Typed refusals (non-zero exit) carry `status`, `stale: true`, `safe_autofix`, `r
 - `project` — `<project-root>/.codex`;
 - `plugin_cache` — cached source profiles under `<home>/.codex/plugins/cache/<marketplace>/<plugin>/<version>/agents`, schema-checked, `read_only: true`.
 
-`--json` emits `{ status: 'ok'|'stale', scopes: [{scope, codex_dir, exists, managed_block, profiles, missing_roles, malformed, stale_files, stale_roles_in_block, extra_unmanaged, manifest, read_only, repair}, ...] }`. Exit code is 0 when the `user` and `project` scopes are clean-or-absent and 1 when either is stale; `plugin_cache` findings are evidence-only and never set the exit code (they distinguish runtime/plugin-cache freshness from generated `.codex/` state). Each stale scope carries a concrete `repair` command.
+`--json` emits `{ status: 'ok'|'stale', scopes: [{scope, codex_dir, exists, managed_block, profiles, missing_roles, malformed, stale_files, stale_roles_in_block, extra_unmanaged, manifest, dispatch_posture, model_reasoning_effort, multi_agent_enabled, dispatch_posture_warning, read_only, repair}, ...] }`. Exit code is 0 when the `user` and `project` scopes are clean-or-absent and 1 when either is stale; `plugin_cache` findings are evidence-only and never set the exit code (they distinguish runtime/plugin-cache freshness from generated `.codex/` state). Each stale scope carries a concrete `repair` command. The four `dispatch_posture*` fields (#598, non-fatal — see above) are present on every scope, including `plugin_cache`, where they read `dispatch_posture: 'n/a'`, `model_reasoning_effort: null`, `multi_agent_enabled: false`, `dispatch_posture_warning: null` (a cached source tree has no live runtime config to derive a posture from). Without `--json`, each scope line is followed by a `  warn: <dispatch_posture_warning>` line whenever that scope's posture is non-`proactive` — the warning is printed independent of, and never affects, that scope's `ok`/`stale`/`absent` state.
 
 ---
 

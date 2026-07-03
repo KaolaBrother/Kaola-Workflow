@@ -138,14 +138,21 @@ codex features list | rg 'multi_agent|multi_agent_v2' || true
 node "$plugin_root/scripts/kaola-workflow-codex-preflight.js" --doctor --project-root "$PWD" --json
 ```
 
-Classify the result:
+Read the doctor JSON's additive per-scope `dispatch_posture` field alongside the
+existing checks — it is the effort-gated runtime dispatch MODE (version-guarded on
+codex-tui 0.142.5; may change in a future Codex release), distinct from feature
+enablement: `none` (spawn tools not exposed), `explicitRequestOnly` (tools exposed,
+but the runtime model-refuses a spawn unless the session explicitly asks), or
+`proactive` (`model_reasoning_effort = "ultra"` — the runtime accepts a spawn with
+no per-session ask). Classify the result:
 
-- `ok`: `multi_agent` and `multi_agent_v2` are enabled, generated role profiles are fresh, and agent limits are absent or sufficient.
+- `ok`: `multi_agent` and `multi_agent_v2` are enabled, generated role profiles are fresh, agent limits are absent or sufficient, AND `dispatch_posture` reads `proactive`.
+- `explicit_request_only`: features are enabled and profiles are fresh, but `dispatch_posture` reads `explicitRequestOnly` — report the doctor's `dispatch_posture_warning` remediation verbatim (`model_reasoning_effort = "ultra"` in `~/.codex/config.toml`, per-session `codex -c model_reasoning_effort=ultra`, or an explicit in-session ask). NEVER report this state as `ok` — features enabled alone is not dispatch-ready.
 - `warning_only`: only `[notice].suppress_unstable_features_warning = true` differs; this is optional warning posture, not dispatch proof.
-- `needs_update`: V2/subagent config is missing or too constrained for Kaola's intended behavior.
+- `needs_update`: V2/subagent config is missing or too constrained for Kaola's intended behavior, or `dispatch_posture` reads `none`.
 - `blocked`: config is malformed, policy-managed, or conflicts with a user/admin constraint.
 
-Supported V2 config forms are `multi_agent_v2 = true`, `multi_agent_v2 = { enabled = true, ... }`, and `[features.multi_agent_v2]` with `enabled = true`. Warning suppression is independent: never treat `[notice].suppress_unstable_features_warning = true` as evidence that V2 is enabled. Do not silently edit `~/.codex/config.toml`; if a required setting is missing, show the minimal diff and apply it only when the user asked the agent to configure this machine or explicitly consents. Do not claim effort-safe dispatch from config text alone; a tiered fallback still needs a child-session effort proof.
+Supported V2 config forms are `multi_agent_v2 = true`, `multi_agent_v2 = { enabled = true, ... }`, and `[features.multi_agent_v2]` with `enabled = true`. Warning suppression is independent: never treat `[notice].suppress_unstable_features_warning = true` as evidence that V2 is enabled. Do not silently edit `~/.codex/config.toml`; if a required setting is missing, show the minimal diff and apply it only when the user asked the agent to configure this machine or explicitly consents. Do not claim effort-safe dispatch from config text alone; a tiered fallback still needs a child-session effort proof — for Codex, that proof is the doctor's `dispatch_posture` field, not the feature flags alone.
 
 Trust the hooks once with `/hooks` in Codex. If an older project-local `.codex/hooks.json`
 exists from a prior version, remove it (or run `uninstall.sh`) to avoid double-firing.
