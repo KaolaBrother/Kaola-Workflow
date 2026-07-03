@@ -1,0 +1,9 @@
+[
+  {
+    "finding_id": "id=R1 scope=in_scope action=fix status=resolved severity=medium fix_role=none rationale=n3-docs edit to docs/workflow-state-contract.md was correct but uncommitted (stranded in the working tree; branch HEAD fdc2441f lacked it, so the sink would have dropped it) resolution=committed to the branch as 33768cc9 (docs: state-contract coverage for the run-progress mirror and codex dispatch mode field) by the orchestrator between windows; working tree verified clean afterward",
+    "file": null,
+    "owning_node": null,
+    "fix_role": "code-reviewer",
+    "status": "open"
+  }
+]

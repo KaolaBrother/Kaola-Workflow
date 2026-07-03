@@ -1,0 +1,16 @@
+{"node":"n1-engine","event":"leg_opened","ts":"2026-07-03T03:50:02.343Z"}
+{"node":"n2-contracts","event":"leg_opened","ts":"2026-07-03T03:50:02.811Z"}
+{"node":"n1-engine","event":"opened","ts":"2026-07-03T03:50:03.138Z"}
+{"node":"n2-contracts","event":"opened","ts":"2026-07-03T03:50:03.497Z"}
+{"node":"n2-contracts","event":"closed","ts":"2026-07-03T04:12:01.420Z"}
+{"node":"n1-engine","event":"leg_committed","ts":"2026-07-03T04:37:58.111Z"}
+{"node":"n2-contracts","event":"leg_committed","ts":"2026-07-03T04:37:58.208Z"}
+{"node":"lg-n1-engine-n2-contracts","event":"level_merged","ts":"2026-07-03T04:37:58.443Z"}
+{"node":"n1-engine","event":"closed","ts":"2026-07-03T04:37:58.646Z"}
+{"node":"n3-docs","event":"opened","ts":"2026-07-03T04:38:13.481Z"}
+{"node":"n3-docs","event":"closed","ts":"2026-07-03T04:43:05.795Z"}
+{"node":"n4-review","event":"opened","ts":"2026-07-03T04:43:05.837Z"}
+{"node":"n4-review","event":"evidence","ts":"2026-07-03T05:19:56.589Z"}
+{"node":"n4-review","event":"closed","ts":"2026-07-03T05:19:57.073Z"}
+{"node":"n5-finalize","event":"opened","ts":"2026-07-03T05:19:57.166Z"}
+{"node":"n5-finalize","event":"closed","ts":"2026-07-03T05:44:13.385Z"}
