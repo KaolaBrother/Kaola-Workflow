@@ -930,6 +930,125 @@ function deriveDispatchPosture(configContent) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// MultiAgentV2 concurrency + wait-timeout bounds — extends the dispatch-posture report
+// above with the effective v2 slot budget and wait-timeout knobs, version-guarded the
+// same way. `max_concurrent_threads_per_session` INCLUDES the root/orchestrator thread,
+// so effective subagent width = threads - 1. A controlled probe on codex-tui 0.142.5
+// observed a default budget of 4 (width 3) when the key is absent; that default is NOT
+// published in official Codex docs, so it is surfaced as an OBSERVED fallback (source:
+// 'observed_default'), never asserted as guaranteed Codex behavior. The three
+// *_wait_timeout_ms bounds have no independently verified default — read ONLY when
+// explicitly present in config; null when absent (no fabricated fallback for those three).
+//
+// Bounds are only meaningful when v2 dispatch is actually active (dispatch_mode ===
+// 'v2-task-name'); when v2 is not enabled, every field reports not_applicable/null —
+// mirrors how dispatch_posture itself collapses to 'none' when features are off.
+//
+// ATTESTATION-STYLE / NON-FATAL by construction: pure, never throws. Duplicated
+// byte-identically alongside the dispatch-posture helpers above (installer <-> preflight,
+// x7 files total); keep the two copies in lock-step.
+// ---------------------------------------------------------------------------
+const OBSERVED_DEFAULT_MAX_CONCURRENT_THREADS_PER_SESSION = 4;
+
+const MULTI_AGENT_V2_BOUNDS_NOTE = 'Recommended [features.multi_agent_v2] config for Kaola-Workflow dispatch: set '
+  + 'max_concurrent_threads_per_session high enough for the intended fan-out width plus 1 (the budget INCLUDES '
+  + 'the orchestrator thread) and max_wait_timeout_ms near the longest expected node runtime so long-poll joins '
+  + 'are not capped short. Example:\n[features.multi_agent_v2]\nmax_concurrent_threads_per_session = 5\n'
+  + 'max_wait_timeout_ms = 1800000\nNote: [agents].max_threads (the v1 concurrency knob) cannot be set once '
+  + 'features.multi_agent_v2 is enabled — codex-tui 0.142.5 rejects it. Effective subagent width, the observed '
+  + 'default budget of 4 (width 3) when max_concurrent_threads_per_session is absent, and the wait-timeout bounds '
+  + 'are Codex CLI runtime behavior verified on codex-tui 0.142.5; they may change in a future Codex release.';
+
+const MULTI_AGENT_V2_NUMERIC_FIELDS = [
+  'max_concurrent_threads_per_session',
+  'min_wait_timeout_ms',
+  'max_wait_timeout_ms',
+  'default_wait_timeout_ms',
+];
+
+// Parses the four MultiAgentV2ConfigToml numeric fields from either syntax: the
+// inline-object form (`multi_agent_v2 = { max_concurrent_threads_per_session = N, ... }`)
+// or the dotted-table form (`[features.multi_agent_v2]` with the fields as separate
+// lines) — the same two representations detectCodexDispatchMode already parses for
+// `enabled`. Same first-match/fail-to-absent discipline as the rest of this file: a
+// non-integer or repeated value is treated as not-configured rather than guessed at.
+function parseMultiAgentV2NumericFields(configContent) {
+  const fields = {
+    max_concurrent_threads_per_session: null,
+    min_wait_timeout_ms: null,
+    max_wait_timeout_ms: null,
+    default_wait_timeout_ms: null,
+  };
+
+  function recordField(key, rawValue) {
+    if (!MULTI_AGENT_V2_NUMERIC_FIELDS.includes(key) || fields[key] !== null) return;
+    const m = String(rawValue).trim().match(/^-?\d+$/);
+    if (!m) return;
+    fields[key] = parseInt(m[0], 10);
+  }
+
+  function recordFromInlineObject(body) {
+    for (const field of splitInlineTomlFields(body)) {
+      const m = field.match(/^([A-Za-z0-9_]+)\s*=\s*(.+)$/);
+      if (m) recordField(m[1], m[2]);
+    }
+  }
+
+  const lines = String(configContent || '').split(/\r?\n/);
+  let table = '';
+  for (const rawLine of lines) {
+    const line = stripTomlComment(rawLine).trim();
+    if (!line) continue;
+
+    const tableName = parseTomlTableName(line);
+    if (tableName !== null) {
+      table = tableName;
+      continue;
+    }
+
+    if (table === 'features') {
+      const m = line.match(/^multi_agent_v2\s*=\s*(.+)$/);
+      if (m) {
+        const v = m[1].trim();
+        if (v.startsWith('{') && v.endsWith('}')) recordFromInlineObject(v.slice(1, -1));
+      }
+    } else if (table === 'features.multi_agent_v2') {
+      const m = line.match(/^([A-Za-z0-9_]+)\s*=\s*(.+)$/);
+      if (m) recordField(m[1], m[2]);
+    }
+  }
+
+  return fields;
+}
+
+function deriveMultiAgentV2Bounds(configContent, v2Enabled) {
+  if (!v2Enabled) {
+    return {
+      max_concurrent_threads_per_session: null,
+      max_concurrent_threads_per_session_source: 'not_applicable',
+      effective_subagent_width: null,
+      min_wait_timeout_ms: null,
+      max_wait_timeout_ms: null,
+      default_wait_timeout_ms: null,
+    };
+  }
+
+  const raw = parseMultiAgentV2NumericFields(configContent);
+  const configuredThreads = raw.max_concurrent_threads_per_session;
+  const usingDefault = !(Number.isInteger(configuredThreads) && configuredThreads >= 1);
+  const threads = usingDefault ? OBSERVED_DEFAULT_MAX_CONCURRENT_THREADS_PER_SESSION : configuredThreads;
+
+  return {
+    max_concurrent_threads_per_session: threads,
+    max_concurrent_threads_per_session_source: usingDefault ? 'observed_default' : 'config',
+    effective_subagent_width: Math.max(threads - 1, 0),
+    min_wait_timeout_ms: raw.min_wait_timeout_ms,
+    max_wait_timeout_ms: raw.max_wait_timeout_ms,
+    default_wait_timeout_ms: raw.default_wait_timeout_ms,
+  };
+}
+
 function main() {
 
   assert(fs.existsSync(sourceAgentsDir), `missing source agents directory: ${sourceAgentsDir}`);
@@ -1013,7 +1132,8 @@ function main() {
   // reports the resulting posture and, when non-proactive, the exact remediation. Printed BEFORE
   // the final `status: ok` sentinel — an existing invariant (#332 AC3) is that installer stdout
   // ENDS with `status: ok`; posture is additive, never appended after that final line.
-  const dispatchPosture = deriveDispatchPosture(fs.existsSync(targetConfig) ? read(targetConfig) : '');
+  const postInstallConfigContent = fs.existsSync(targetConfig) ? read(targetConfig) : '';
+  const dispatchPosture = deriveDispatchPosture(postInstallConfigContent);
   const effortDisplay = dispatchPosture.model_reasoning_effort
     ? ` (model_reasoning_effort="${dispatchPosture.model_reasoning_effort}")`
     : ' (model_reasoning_effort unset)';
@@ -1022,6 +1142,29 @@ function main() {
     console.log(`Kaola-Workflow Codex dispatch posture: ${dispatchPosture.dispatch_posture_warning}`);
   }
   console.log(`Kaola-Workflow Codex dispatch posture: ${DISPATCH_POSTURE_VERSION_NOTE}`);
+
+  // REPORT the effective MultiAgentV2 concurrency + wait-timeout bounds — same
+  // ATTESTATION-STYLE / NON-FATAL treatment as the dispatch posture above (never
+  // changes the exit code). Read back the same post-install config.toml content.
+  const v2DispatchMode = detectCodexDispatchMode(postInstallConfigContent);
+  const v2Bounds = deriveMultiAgentV2Bounds(postInstallConfigContent, v2DispatchMode.multi_agent_v2_enabled);
+  if (v2Bounds.max_concurrent_threads_per_session !== null) {
+    console.log(
+      `Kaola-Workflow Codex multi_agent_v2: effective subagent width ${v2Bounds.effective_subagent_width} `
+      + `(max_concurrent_threads_per_session=${v2Bounds.max_concurrent_threads_per_session} `
+      + `[${v2Bounds.max_concurrent_threads_per_session_source}])`
+    );
+    if (v2Bounds.min_wait_timeout_ms !== null) {
+      console.log(`Kaola-Workflow Codex multi_agent_v2: min_wait_timeout_ms=${v2Bounds.min_wait_timeout_ms}`);
+    }
+    if (v2Bounds.max_wait_timeout_ms !== null) {
+      console.log(`Kaola-Workflow Codex multi_agent_v2: max_wait_timeout_ms=${v2Bounds.max_wait_timeout_ms}`);
+    }
+    if (v2Bounds.default_wait_timeout_ms !== null) {
+      console.log(`Kaola-Workflow Codex multi_agent_v2: default_wait_timeout_ms=${v2Bounds.default_wait_timeout_ms}`);
+    }
+  }
+  console.log(`Kaola-Workflow Codex multi_agent_v2: ${MULTI_AGENT_V2_BOUNDS_NOTE}`);
 
   console.log('status: ok');
 }
@@ -1055,4 +1198,9 @@ module.exports = {
   parseTopLevelModelReasoningEffort,
   dispatchPostureRemediation,
   DISPATCH_POSTURE_VERSION_NOTE,
+  // #611: MultiAgentV2 concurrency + wait-timeout bounds derivation (pure; exported for unit tests).
+  parseMultiAgentV2NumericFields,
+  deriveMultiAgentV2Bounds,
+  OBSERVED_DEFAULT_MAX_CONCURRENT_THREADS_PER_SESSION,
+  MULTI_AGENT_V2_BOUNDS_NOTE,
 };

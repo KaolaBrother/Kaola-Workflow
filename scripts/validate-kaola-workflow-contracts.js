@@ -805,6 +805,30 @@ for (const planRunSurface of [
   assertIncludes(planRunSurface, 'write-halt --reason consent');
 }
 
+// #611: fork_turns:"none" is now mandated for EVERY role dispatch (not only tiered nodes) — pin
+// the unconditional mandate and ban the retired tiered-only qualifier on both surfaces this
+// validator owns.
+for (const planRunSurface of [
+  `${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`,
+  'commands/kaola-workflow-plan-run.md'
+]) {
+  assertIncludes(planRunSurface, 'on EVERY dispatch, tiered or not');
+  assertIncludes(planRunSurface, 'the unconditional mandate applies identically to this dispatch mode');
+  assertNotIncludes(planRunSurface, 'not a valid path for tiered nodes');
+}
+
+// #611: the Codex Join Protocol — full A-F encoding lives in the Codex SKILL pack; the root
+// Claude command mirror carries the runtime-appropriate equivalent (SendMessage vocabulary).
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '<!-- PIN: join-protocol -->');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'dispatch.wait_budget_minutes');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'NEVER interrupted before its wait budget expires');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'delegation_outcome');
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'writerHalt');
+assertIncludes('commands/kaola-workflow-plan-run.md', 'dispatch.wait_budget_minutes');
+assertIncludes('commands/kaola-workflow-plan-run.md', 'Writer kill-safety');
+assertIncludes('commands/kaola-workflow-plan-run.md', 'writerHalt');
+assertIncludes('commands/kaola-workflow-plan-run.md', 'delegation_outcome');
+
 // #334: the non-delegable main-session-gate role token + its G3 freeze gate + authoring/dispatch
 // prose, pinned in the codex copies (schema, validator, plan-run SKILL, planner TOML).
 assertIncludes(`${pluginRoot}/scripts/kaola-workflow-adaptive-schema.js`, 'MAIN_SESSION_GATE_ROLE');

@@ -199,6 +199,36 @@ guarantee relative to the agent's final message; on idle-without-deliverable sen
 request for the deliverable, then wait — a second ask before the first answer produces
 duplicate deliveries.
 
+**Wait budget, escalation, and writer kill-safety.** Every dispatch card carries
+`dispatch.wait_budget_minutes` (tier-derived, e.g. 40 minutes for a reasoning-tier node, 20 for
+standard; an unresolved tier still resolves to a concrete role-default, never null) — a teammate
+that is still working is NEVER interrupted or re-nudged before that budget expires. Read the
+budget off the card at dispatch time; never substitute an improvised patience ceiling. Once the
+budget expires, escalate in order, each rung gated on the previous:
+1. Send ONE `SendMessage` demanding the bounded deliverable now (evidence + changed-file list) —
+   the SAME one-nudge discipline as the idle-race rule above, just triggered by budget expiry
+   instead of an idle notification.
+2. A grace window (~5 minutes) with no reply → treat the teammate as unresponsive: send one
+   further `SendMessage` asking for partial evidence and its changed-file list.
+3. Only then reclaim the node. Inline redo by the orchestrator is the documented LAST resort.
+
+Record a typed `delegation_outcome` in the node's evidence for every delegation: `completed |
+returned_partial | interrupted_unresponsive | interrupted_obsolete` — never a free-text "it
+stalled so I did it myself".
+
+**Writer kill-safety.** An in-place writer (shared worktree) is non-interruptible before the wait
+budget and the full escalation ladder above — no exception. A writer that must be interruptible
+belongs in an isolated `parallel_safe` leg instead (the existing per-leg mechanism); reclaiming an
+isolated-leg writer discards the leg atomically, never partially. After reclaiming ANY writer, run
+`reconcile-running-set` and HONOR its verdict before re-opening the node: a `writerHalt: true`
+result means at least one departing writer's changes could not be positively confirmed inside its
+declared write set — do NOT re-open that node until the out-of-set paths are resolved
+(`revert-overflow`, `repair-node`, or a consent halt).
+
+<!-- CARD: join-protocol -->
+The Codex-runtime version of this same protocol (`spawn_agent`/`wait_agent`/`close_agent`
+lifecycle, frontier slot semantics): `docs/plan-run-cards/join-protocol.md`.
+
 When classic (flag off / other runtimes): the existing synchronous dispatch flow stays the
 documented default path, unchanged.
 
@@ -213,14 +243,17 @@ descriptors are not proof. This applies to both V2 and V1 tiered Codex dispatch.
 stale, or failing, refuse before dispatch with `codex_effort_override_unavailable`.
 
 For Codex v2 task-name mode (`dispatch.codex_dispatch_mode: "v2-task-name"`), after the proof gate
-passes, pass `task_name: dispatch.codex_task_name` and `agent_type: dispatch.agent_type`. When
-`dispatch.codex_reasoning_effort` is non-null, also pass `fork_turns: "none"` and
-`reasoning_effort: dispatch.codex_reasoning_effort`; inherited-history forks are not a valid path
-for tiered nodes. When the effort is null, omit `reasoning_effort` and let the base
+passes, pass `task_name: dispatch.codex_task_name`, `agent_type: dispatch.agent_type`, and
+`fork_turns: "none"` on EVERY dispatch, tiered or not — the dispatch card is self-contained by
+contract, so no role spawn ever forks the parent's history. When
+`dispatch.codex_reasoning_effort` is non-null, also pass
+`reasoning_effort: dispatch.codex_reasoning_effort`. When the effort is null, omit `reasoning_effort` and let the base
 profile/session default stand.
 
-For Codex v1 fallback (`"v1-thread-id"`), omit `task_name` and prefix the prompt with a compact
-identity header: `Node: <id> | Role: <role> | Effort: <dispatch.codex_reasoning_effort or default>`.
+For Codex v1 fallback (`"v1-thread-id"`), omit `task_name` and pass `fork_turns: "none"` — the
+unconditional mandate applies identically to this dispatch mode — then prefix the prompt with a
+compact identity header: `Node: <id> | Role: <role> | Effort: <dispatch.codex_reasoning_effort or
+default>`.
 V1 wait/close rows may still show thread IDs; the prompt and evidence carry the node mapping.
 Never append a max-effort profile suffix and never emit a
 variant-missing note. Pass `dispatch.nonce` (evidence-binding token). Instruct the role to:

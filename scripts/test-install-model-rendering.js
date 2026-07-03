@@ -390,6 +390,76 @@ try {
       assertDispatchPostureForConfig(configText.replace('multi_agent = true', 'multi_agent = true\nmodel_reasoning_effort = "ultra"'),
         'explicitRequestOnly', '#598 effort AFTER the first [table] is not a valid TOML root key -> ignored');
 
+      // #611 AC6: MultiAgentV2 concurrency + wait-timeout bounds E2E coverage — extends the
+      // dispatch-posture report above with the effective v2 slot budget and wait-timeout knobs.
+      // ATTESTATION-STYLE / NON-FATAL: every case below must still exit 0.
+      function assertMultiAgentV2BoundsForConfig(body, expected, label) {
+        fs.writeFileSync(projectConfigPath, body);
+        const result = spawnSync(process.execPath, [codexPreflightPath, '--project-root', cproj, '--home', chome, '--no-autofix', '--json'], {
+          cwd: path.join(root, 'plugins', 'kaola-workflow'),
+          encoding: 'utf8'
+        });
+        assert.strictEqual(result.status, 0, label + ': multi_agent_v2 bounds report must never fail preflight: ' + result.stderr + result.stdout);
+        const json = JSON.parse(result.stdout);
+        for (const key of Object.keys(expected)) {
+          assert.strictEqual(json[key], expected[key],
+            label + ': expected ' + key + ' ' + JSON.stringify(expected[key]) + ', got ' + JSON.stringify(json[key]));
+        }
+      }
+      assertMultiAgentV2BoundsForConfig(configText, {
+        max_concurrent_threads_per_session: null,
+        max_concurrent_threads_per_session_source: 'not_applicable',
+        effective_subagent_width: null,
+        min_wait_timeout_ms: null,
+        max_wait_timeout_ms: null,
+        default_wait_timeout_ms: null,
+      }, '#611 v2 not enabled -> not_applicable, all null');
+      assertMultiAgentV2BoundsForConfig(configWithFeatureLine('multi_agent_v2 = true'), {
+        max_concurrent_threads_per_session: 4,
+        max_concurrent_threads_per_session_source: 'observed_default',
+        effective_subagent_width: 3,
+        min_wait_timeout_ms: null,
+        max_wait_timeout_ms: null,
+        default_wait_timeout_ms: null,
+      }, '#611 v2 enabled, no bounds configured -> observed default 4 / width 3');
+      assertMultiAgentV2BoundsForConfig(
+        configWithFeatureLine('multi_agent_v2 = { enabled = true, max_concurrent_threads_per_session = 6 }'),
+        {
+          max_concurrent_threads_per_session: 6,
+          max_concurrent_threads_per_session_source: 'config',
+          effective_subagent_width: 5,
+          min_wait_timeout_ms: null,
+          max_wait_timeout_ms: null,
+          default_wait_timeout_ms: null,
+        }, '#611 v2 enabled via inline object, threads configured -> config source, width = threads-1');
+      assertMultiAgentV2BoundsForConfig(
+        configWithFeatureLine('[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 2\nmin_wait_timeout_ms = 1000\nmax_wait_timeout_ms = 1800000\ndefault_wait_timeout_ms = 60000'),
+        {
+          max_concurrent_threads_per_session: 2,
+          max_concurrent_threads_per_session_source: 'config',
+          effective_subagent_width: 1,
+          min_wait_timeout_ms: 1000,
+          max_wait_timeout_ms: 1800000,
+          default_wait_timeout_ms: 60000,
+        }, '#611 v2 enabled via dotted table form, all four numeric fields configured');
+      assertMultiAgentV2BoundsForConfig(
+        configWithFeatureLine('multi_agent_v2 = { enabled = false, max_concurrent_threads_per_session = 8 }'),
+        {
+          max_concurrent_threads_per_session: null,
+          max_concurrent_threads_per_session_source: 'not_applicable',
+          effective_subagent_width: null,
+          min_wait_timeout_ms: null,
+          max_wait_timeout_ms: null,
+          default_wait_timeout_ms: null,
+        }, '#611 enabled=false wins over a configured threads value -> not_applicable');
+      assertMultiAgentV2BoundsForConfig(
+        configWithFeatureLine('multi_agent_v2 = { enabled = true, max_concurrent_threads_per_session = 0 }'),
+        {
+          max_concurrent_threads_per_session: 4,
+          max_concurrent_threads_per_session_source: 'observed_default',
+          effective_subagent_width: 3,
+        }, '#611 non-positive configured threads value falls back to the observed default (Codex itself rejects < 1)');
+
       // AC1: installer REPORT step — a fresh install must print the effective dispatch posture and
       // (non-proactive) the exact remediation, and this must NEVER change the installer's own exit code.
       const codexInstallerPathForPosture = path.join(root, 'plugins', 'kaola-workflow', 'scripts', 'install-codex-agent-profiles.js');
@@ -426,6 +496,36 @@ try {
           '#598 AC1: effort=ultra must report proactive posture: ' + reinstall.stdout);
         assert(!/refuse sub-agent spawns/.test(reinstall.stdout),
           '#598 AC1: a proactive posture must NOT print the non-proactive remediation: ' + reinstall.stdout);
+
+        // #611 AC6: a fresh install (no multi_agent_v2 configured) must print the recommended
+        // config note + version-guard, and must NEVER report a concrete width (v2 not active).
+        assert(/multi_agent_v2:.*Recommended \[features\.multi_agent_v2\] config/.test(freshInstall.stdout),
+          '#611 AC6: fresh install must document the recommended [features.multi_agent_v2] config: ' + freshInstall.stdout);
+        assert(/max_concurrent_threads_per_session/.test(freshInstall.stdout) && /max_wait_timeout_ms/.test(freshInstall.stdout),
+          '#611 AC6: recommended config note must name both knobs: ' + freshInstall.stdout);
+        assert(/\[agents\]\.max_threads.*cannot be set/.test(freshInstall.stdout),
+          '#611 AC6: note must state agents.max_threads is invalid under v2: ' + freshInstall.stdout);
+        assert(!/effective subagent width/.test(freshInstall.stdout),
+          '#611 AC6: v2 not enabled -> must NOT print a concrete effective-width line: ' + freshInstall.stdout);
+        assert(/0\.142\.5/.test(freshInstall.stdout), '#611 AC6: multi_agent_v2 report must carry the version-guard note (0.142.5): ' + freshInstall.stdout);
+
+        // Enable v2 with explicit bounds ahead of the managed block, re-install (idempotent
+        // update) — the report must now print the concrete width + every configured bound.
+        const beforeV2 = fs.readFileSync(postureConfigPath, 'utf8');
+        fs.writeFileSync(postureConfigPath, beforeV2 + '\n[features.multi_agent_v2]\nenabled = true\n'
+          + 'max_concurrent_threads_per_session = 3\nmin_wait_timeout_ms = 1000\nmax_wait_timeout_ms = 1800000\n'
+          + 'default_wait_timeout_ms = 60000\n');
+        const v2Install = spawnSync(process.execPath, [codexInstallerPathForPosture, postureProj], {
+          cwd: path.join(root, 'plugins', 'kaola-workflow'),
+          env: { ...process.env, HOME: postureHome },
+          encoding: 'utf8'
+        });
+        assert.strictEqual(v2Install.status, 0, '#611 AC6: re-install with v2 bounds configured must still exit 0: ' + v2Install.stderr);
+        assert(/effective subagent width 2 \(max_concurrent_threads_per_session=3 \[config\]\)/.test(v2Install.stdout),
+          '#611 AC6: configured threads=3 must report width=2 (threads-1) and source=config: ' + v2Install.stdout);
+        assert(/min_wait_timeout_ms=1000/.test(v2Install.stdout), '#611 AC6: must report configured min_wait_timeout_ms: ' + v2Install.stdout);
+        assert(/max_wait_timeout_ms=1800000/.test(v2Install.stdout), '#611 AC6: must report configured max_wait_timeout_ms: ' + v2Install.stdout);
+        assert(/default_wait_timeout_ms=60000/.test(v2Install.stdout), '#611 AC6: must report configured default_wait_timeout_ms: ' + v2Install.stdout);
       } finally {
         fs.rmSync(postureProj, { recursive: true, force: true });
         fs.rmSync(postureHome, { recursive: true, force: true });
@@ -489,6 +589,49 @@ try {
       '#598: installer and preflight version-guard notes must match verbatim');
     assert(/0\.142\.5/.test(installerMod.DISPATCH_POSTURE_VERSION_NOTE),
       '#598: version-guard note must name the verified Codex CLI version');
+
+    // #611 AC6: MultiAgentV2 concurrency + wait-timeout bounds — pure-function unit coverage
+    // (no subprocess). VERSION-GUARD: derivation verified on codex-tui 0.142.5 —
+    //   v2 not enabled -> not_applicable, every field null.
+    //   v2 enabled, max_concurrent_threads_per_session absent/non-positive -> OBSERVED default 4
+    //     (effective subagent width 3); configured -> reported verbatim, width = threads - 1.
+    //   min/max/default_wait_timeout_ms have no independently verified default -> read ONLY
+    //     when explicitly present; null when absent (no fabricated fallback).
+    // Exercises BOTH the installer's and the preflight's copy of deriveMultiAgentV2Bounds — they
+    // are duplicated (not shared) by design, so this is the semantic-parity check the whole-file
+    // byte-identity validator (validate-script-sync.js) cannot itself express.
+    const boundsFixtures = [
+      { label: 'no features table at all', cfg: '', v2Enabled: false,
+        expected: { max_concurrent_threads_per_session: null, max_concurrent_threads_per_session_source: 'not_applicable', effective_subagent_width: null, min_wait_timeout_ms: null, max_wait_timeout_ms: null, default_wait_timeout_ms: null } },
+      { label: 'v2 enabled, no bounds configured', cfg: '[features]\nmulti_agent_v2 = true\n', v2Enabled: true,
+        expected: { max_concurrent_threads_per_session: 4, max_concurrent_threads_per_session_source: 'observed_default', effective_subagent_width: 3, min_wait_timeout_ms: null, max_wait_timeout_ms: null, default_wait_timeout_ms: null } },
+      { label: 'v2 enabled via inline object, threads configured', cfg: '[features]\nmulti_agent_v2 = { enabled = true, max_concurrent_threads_per_session = 6 }\n', v2Enabled: true,
+        expected: { max_concurrent_threads_per_session: 6, max_concurrent_threads_per_session_source: 'config', effective_subagent_width: 5, min_wait_timeout_ms: null, max_wait_timeout_ms: null, default_wait_timeout_ms: null } },
+      { label: 'v2 enabled via dotted table form, all four numeric fields configured', cfg: '[features.multi_agent_v2]\nenabled = true\nmax_concurrent_threads_per_session = 2\nmin_wait_timeout_ms = 1000\nmax_wait_timeout_ms = 1800000\ndefault_wait_timeout_ms = 60000\n', v2Enabled: true,
+        expected: { max_concurrent_threads_per_session: 2, max_concurrent_threads_per_session_source: 'config', effective_subagent_width: 1, min_wait_timeout_ms: 1000, max_wait_timeout_ms: 1800000, default_wait_timeout_ms: 60000 } },
+      { label: 'non-integer configured threads value falls back to observed default', cfg: '[features]\nmulti_agent_v2 = { enabled = true, max_concurrent_threads_per_session = "six" }\n', v2Enabled: true,
+        expected: { max_concurrent_threads_per_session: 4, max_concurrent_threads_per_session_source: 'observed_default', effective_subagent_width: 3, min_wait_timeout_ms: null, max_wait_timeout_ms: null, default_wait_timeout_ms: null } },
+      { label: 'zero configured threads value falls back to observed default (Codex itself rejects < 1)', cfg: '[features]\nmulti_agent_v2 = { enabled = true, max_concurrent_threads_per_session = 0 }\n', v2Enabled: true,
+        expected: { max_concurrent_threads_per_session: 4, max_concurrent_threads_per_session_source: 'observed_default', effective_subagent_width: 3, min_wait_timeout_ms: null, max_wait_timeout_ms: null, default_wait_timeout_ms: null } },
+    ];
+    for (const mod of [preflightMod, installerMod]) {
+      for (const f of boundsFixtures) {
+        const result = mod.deriveMultiAgentV2Bounds(f.cfg, f.v2Enabled);
+        for (const key of Object.keys(f.expected)) {
+          assert.strictEqual(result[key], f.expected[key],
+            '#611 ' + f.label + ': expected ' + key + ' ' + JSON.stringify(f.expected[key]) + ', got ' + JSON.stringify(result));
+        }
+      }
+    }
+
+    assert.strictEqual(installerMod.OBSERVED_DEFAULT_MAX_CONCURRENT_THREADS_PER_SESSION, 4,
+      '#611: the observed default concurrency budget must be 4 (width 3)');
+    assert.strictEqual(installerMod.MULTI_AGENT_V2_BOUNDS_NOTE, preflightMod.MULTI_AGENT_V2_BOUNDS_NOTE,
+      '#611: installer and preflight multi_agent_v2 bounds notes must match verbatim');
+    assert(/0\.142\.5/.test(installerMod.MULTI_AGENT_V2_BOUNDS_NOTE),
+      '#611: multi_agent_v2 bounds note must name the verified Codex CLI version');
+    assert(/\[agents\]\.max_threads.*cannot be set/.test(installerMod.MULTI_AGENT_V2_BOUNDS_NOTE),
+      '#611: bounds note must state agents.max_threads is invalid under v2');
   }
 
   // #606: report-only Claude dispatch-posture detection (agent teams, gated by

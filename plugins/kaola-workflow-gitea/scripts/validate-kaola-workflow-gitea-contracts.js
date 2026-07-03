@@ -789,7 +789,28 @@ for (const planRunSurface of [
   // gate-window fence backs it. Pinned on BOTH the command and SKILL surfaces.
   assertIncludes(planRunSurface, '<!-- PIN: gate-instrumentation-provisioning -->');
   assertIncludes(planRunSurface, 'KAOLA_GATE_WINDOW_FENCE=0');
+
+  // #611: fork_turns:"none" is mandated for EVERY role dispatch now (not only tiered nodes) — the
+  // retired tiered-only qualifier must not survive. Pinned on BOTH the command and SKILL surfaces.
+  assertIncludes(planRunSurface, 'on EVERY dispatch, tiered or not');
+  assertIncludes(planRunSurface, 'the unconditional mandate applies identically to this dispatch mode');
+  assertNotIncludes(planRunSurface, 'not a valid path for tiered nodes');
+
+  // #611: the Codex Join Protocol reference — dispatch-card wait budget, delegation outcome, and
+  // writer-kill-safety verdict, present on BOTH the command (runtime-appropriate equivalent) and
+  // SKILL (full A-F encoding) surfaces.
+  assertIncludes(planRunSurface, 'dispatch.wait_budget_minutes');
+  assertIncludes(planRunSurface, 'delegation_outcome');
+  assertIncludes(planRunSurface, 'writerHalt');
 }
+
+// #611: the Codex Join Protocol's full A-F encoding is Codex-SKILL-specific (spawn_agent /
+// wait_agent / close_agent lifecycle) — pin the anchor + the wait-budget floor rule there only.
+assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', '<!-- PIN: join-protocol -->');
+assertIncludes(pluginRoot + '/skills/kaola-workflow-plan-run/SKILL.md', 'NEVER interrupted before its wait budget expires');
+// #611: the command surface's runtime-appropriate equivalent uses SendMessage vocabulary and the
+// "Writer kill-safety" heading instead of the Codex A-F lettering.
+assertIncludes(pluginRoot + '/commands/kaola-workflow-plan-run.md', 'Writer kill-safety');
 
 // #603: the Codex startup surfaces (kaola-workflow-next / kaola-workflow-adapt) must detect the
 // dispatch mode via the preflight doctor and thread it into the claim as an explicit flag.
