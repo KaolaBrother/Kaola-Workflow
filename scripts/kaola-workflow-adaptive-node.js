@@ -80,6 +80,15 @@ const SPLIT_GUARDED_SUBCOMMANDS = new Set([
   'discard-speculative',
 ]);
 
+// #605: the subcommands that flip ## Node Ledger ROW STATUS — exactly the set that refreshes the
+// derived run-progress mirror after a successful ledger write. A strict subset of the split-guarded
+// set (route-findings / revert-overflow / discard-speculative mutate .cache or file writes, not the
+// forward-progress ledger status, so they are excluded).
+const LEDGER_MUTATING_SUBCOMMANDS = new Set([
+  'open-next', 'open-ready', 'close-node', 'close-and-open-next',
+  'reconcile-running-set', 'reopen-node', 'repair-node', 'write-halt', 'clear-halt',
+]);
+
 // #439 (D-419 Part 4): resolve the per-plan `speculative_open_policy` from the frozen plan content.
 // Lazily requires the same-edition plan-validator's `parseSpeculativePolicy` (the Meta-scoped, hash-
 // covered parser the freeze check uses) so adaptive-node and the validator never drift. Fails safe to
@@ -849,6 +858,49 @@ function parseNodesFromContent(content) {
 }
 
 // ---------------------------------------------------------------------------
+// run-progress mirror (#605) — a DERIVED, non-authoritative snapshot of the ## Node Ledger written at
+// the MAIN root during a worktree run. The live ledger advances only in the worktree copy of
+// workflow-plan.md until sink, so a watcher (editor / file-watcher / other session / tool) at the main
+// root would otherwise see no progress for the whole run. buildRunProgress derives the snapshot from
+// the (worktree) plan content; writeRunProgressMirror persists it. Strictly derived: never read back
+// for a decision (the embedded plan_hash lets a consumer detect staleness). FAIL-OPEN — any write
+// failure returns false so the caller can surface a warn field; it NEVER refuses or alters the exit.
+// ---------------------------------------------------------------------------
+const RUN_PROGRESS_MIRROR_NAME = 'run-progress.json';
+
+function buildRunProgress(planContent, op) {
+  const statuses = readLedgerStatuses(planContent);   // id -> status (ledger row order preserved)
+  const roleById = {};
+  for (const n of parseNodesFromContent(planContent)) roleById[n.id] = n.role;
+  const node_ledger = Object.keys(statuses).map(id => ({ id, role: roleById[id] || null, status: statuses[id] }));
+  const in_progress = node_ledger.filter(r => r.status === 'in_progress').map(r => r.id);
+  const all_done = node_ledger.length > 0 && node_ledger.every(r => r.status === 'complete' || r.status === 'n/a');
+  const hm = String(planContent || '').match(/<!--\s*plan_hash:\s*([0-9a-f]{64})\s*-->/);
+  return {
+    plan_hash: hm ? hm[1] : null,
+    updated_at: new Date().toISOString(),
+    op: op,
+    node_ledger,
+    in_progress,
+    all_done,
+  };
+}
+
+function writeRunProgressMirror(mainRoot, project, planPath, readFile, op) {
+  try {
+    const fs = require('fs');
+    let planContent = '';
+    try { planContent = readFile(planPath); } catch (_) { planContent = ''; }
+    const dir = path.join(mainRoot, 'kaola-workflow', project, '.cache');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, RUN_PROGRESS_MIRROR_NAME), JSON.stringify(buildRunProgress(planContent, op), null, 2) + '\n');
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // checkEvidenceShape — presence-only check for role-specific evidence tokens.
 //
 // tdd-guide:   needs BOTH 'RED' AND 'GREEN' (or 'n/a' reason).
@@ -1123,6 +1175,32 @@ function buildDispatch(nodeInfo, context) {
     d.leg_branch = String(ctx.leg_branch);
   }
   return d;
+}
+
+// ---------------------------------------------------------------------------
+// dispatchSummarySegments(result) (#602) — the machine-parsable dispatch segments for the --summary
+// line. One segment per opened node:
+//   opened=<node-id> role=<role> task=<codex_task_name> mode=<codex_dispatch_mode> effort=<E>
+// where E is codex_reasoning_effort, or the literal "inherit" when it is null (no planner tier). Handles
+// BOTH envelope shapes: the single-open object (result.opened.dispatch — open-next / close-and-open-next
+// fused advance) and the batch array (result.opened[].dispatch — open-ready). Leg paths are deliberately
+// omitted (legs stay in the full cached envelope). Returns [] when there is no opened dispatch
+// (close-only / allDone / refuse) so the summary line is unchanged in those cases.
+// ---------------------------------------------------------------------------
+function dispatchSummarySegments(result) {
+  const segs = [];
+  if (!result || typeof result !== 'object') return segs;
+  const opened = result.opened;
+  const members = Array.isArray(opened) ? opened : (opened ? [opened] : []);
+  for (const m of members) {
+    const d = m && m.dispatch;
+    if (!d || d.node_id == null) continue;
+    const effort = (d.codex_reasoning_effort != null && String(d.codex_reasoning_effort).trim() !== '')
+      ? d.codex_reasoning_effort : 'inherit';
+    segs.push('opened=' + d.node_id + ' role=' + d.role + ' task=' + d.codex_task_name
+      + ' mode=' + d.codex_dispatch_mode + ' effort=' + effort);
+  }
+  return segs;
 }
 
 // ---------------------------------------------------------------------------
@@ -1719,7 +1797,7 @@ function runMirrorProject(opts) {
 // records its per-node baseline.
 // ---------------------------------------------------------------------------
 function runOpenNext(opts) {
-  const { planPath, statePath, project, nodeId: requestedId, shell, readFile, writeFile, working_dir } = opts;
+  const { planPath, statePath, project, nodeId: requestedId, shell, readFile, writeFile, working_dir, codexDispatchMode } = opts;
 
   // == UNIFIED GUARD PROLOGUE (D1) — matrix: integrity:yes / excl-scheduler:yes / excl-batch:yes /
   //    halt-fence:yes. NO serial-excl (open-next IS the serial path — it cannot be mutually exclusive
@@ -1864,6 +1942,8 @@ function runOpenNext(opts) {
     required_tokens: seedResult.required_tokens,
     working_dir:    working_dir || null,
     forge_rider:    null,
+    // #603: thread the state-persisted Codex dispatch mode (null when absent → fail-closed default).
+    codex_dispatch_mode: codexDispatchMode || null,
   });
 
   // #317: ledger row flipped pending → in_progress; refresh the durable mirror and
@@ -1966,7 +2046,7 @@ function runRecordEvidence(opts) {
 // Order: (a) evidence-shape → (b) barrier → (c) close+compliance → (e) selector → (d) fused-advance
 // ---------------------------------------------------------------------------
 function runCloseAndOpenNext(opts) {
-  const { planPath, statePath, project, nodeId, shell, readFile, writeFile, cacheExists, working_dir } = opts;
+  const { planPath, statePath, project, nodeId, shell, readFile, writeFile, cacheExists, working_dir, codexDispatchMode } = opts;
   // #411 BUG B: the per-node running-set path (mirror runCloseNode). The closing node is removed
   // from it after the close write so the next orient does not see an orphan multi-in_progress
   // mismatch (a serial close left the node in the set → reconcile-running-set no-ops `not_opening`).
@@ -2334,6 +2414,8 @@ function runCloseAndOpenNext(opts) {
     required_tokens: fusedSeed.required_tokens,
     working_dir:    working_dir || null,
     forge_rider:    null,
+    // #603: thread the state-persisted Codex dispatch mode (null when absent → fail-closed default).
+    codex_dispatch_mode: codexDispatchMode || null,
   });
 
   // #317: fused advance opened the next node → in_progress (in addition to the closed node).
@@ -3885,7 +3967,7 @@ function runDiscardSpeculative(opts) {
 function runOpenReady(opts) {
   const {
     planPath, project, max, fanoutCapReadonly, shell, readFile, writeFile, cacheExists, mkdirp, now,
-    working_dir,
+    working_dir, codexDispatchMode,
   } = opts;
   const runningSetPath = path.join(path.dirname(planPath), '.cache', RUNNING_SET_NAME);
 
@@ -4290,6 +4372,8 @@ function runOpenReady(opts) {
         {
           nonce, evidence_file: dispatchEvidenceFile, required_tokens, working_dir: working_dir || null, forge_rider: null,
           leg_path: legInfo ? legInfo.legPath : null, leg_branch: legInfo ? legInfo.legBranch : null,
+          // #603: thread the state-persisted Codex dispatch mode (null when absent → fail-closed default).
+          codex_dispatch_mode: codexDispatchMode || null,
         }
       );
       return { id: n.id, role: n.role, model: n.model || null, kind: n.kind, declared_write_set: n.declared_write_set, nonce, evidence_file, required_tokens, dispatch };
@@ -5485,6 +5569,16 @@ function main() {
   })();
   try { mainRoot = fs.realpathSync(mainRoot); } catch (_) {}
 
+  // #603: the Codex dispatch mode persisted at claim (v2-task-name|v1-thread-id), read ONCE here and
+  // threaded into every dispatch-card builder below. Absent field → null → resolveCodexDispatchMode
+  // falls back to the env override / v1-thread-id fail-closed default (byte-identical to pre-#603).
+  let codexDispatchMode = null;
+  try {
+    const stateContent = fs.readFileSync(statePath, 'utf8');
+    const m = stateContent.match(/^codex_dispatch_mode:\s*(.+)$/m);
+    if (m && m[1].trim()) codexDispatchMode = m[1].trim();
+  } catch (_) {}
+
   // #466 — worktree-authority split guard (fail loud, ZERO mutation; precedes the dispatch). The
   // adaptive lifecycle resolves the project folder cwd-relative via getRoot(); when a linked worktree
   // is recorded for this project but a MUTATING lifecycle command is invoked from the MAIN root
@@ -5578,10 +5672,10 @@ function main() {
       },
     });
   } else if (subcommand === 'open-next') {
-    result = runOpenNext({ planPath, statePath, project, nodeId, shell, readFile, writeFile, cacheExists });
+    result = runOpenNext({ planPath, statePath, project, nodeId, shell, readFile, writeFile, cacheExists, codexDispatchMode });
   } else if (subcommand === 'open-ready') {
     result = runOpenReady({
-      planPath, project,
+      planPath, project, codexDispatchMode,
       max: Number.isInteger(maxArg) && maxArg >= 1 ? maxArg : null,
       fanoutCapReadonly: resolveFanoutCapReadonly(process.env),
       // #439 (D-419 Part 4): the per-run speculative-read consent carrier — NEVER persisted in the
@@ -5634,7 +5728,7 @@ function main() {
     if (!nodeId) {
       result = { result: 'refuse', errors: ['--node-id required for close-and-open-next'] };
     } else {
-      result = runCloseAndOpenNext({ planPath, statePath, project, nodeId, shell, readFile, writeFile, cacheExists });
+      result = runCloseAndOpenNext({ planPath, statePath, project, nodeId, shell, readFile, writeFile, cacheExists, codexDispatchMode });
     }
   } else if (subcommand === 'write-halt') {
     if (!nodeId) {
@@ -5713,9 +5807,26 @@ function main() {
   // reason. Success envelopes (no reason) are untouched.
   result = decorateOperatorHint(result);
 
+  // #605: refresh the derived run-progress mirror at the MAIN root after a ledger mutation, but ONLY on
+  // a linked-worktree run (mainRoot differs from the worktree cwd; a serial in-repo run's ledger is
+  // already root-visible) and only when the op did not refuse (no ledger write to mirror). FAIL-OPEN:
+  // a write failure surfaces a `run_progress_mirror: "failed"` warn field — never a refusal, never a
+  // nonzero exit; the barrier/close semantics are byte-unchanged.
+  if (LEDGER_MUTATING_SUBCOMMANDS.has(subcommand)
+      && result && result.result !== 'refuse'
+      && realRepoRoot !== mainRoot) {
+    const mirrored = writeRunProgressMirror(mainRoot, project, planPath, readFile, subcommand);
+    if (!mirrored) result.run_progress_mirror = 'failed';
+  }
+
   if (summaryMode) {
     // #446 (D-446-01 Decision 4): ONE-line summary + cached full envelope at .cache/<op>-envelope.json.
     let line = 'summary: ' + (result.result != null ? result.result : 'unknown');
+    // #602: surface the dispatch card essentials inline (one segment per opened node) so an
+    // orchestrator using the SKILL-canonical --summary can dispatch without drilling the cached
+    // envelope. Additive to the summary LINE only — the default (no --summary) --json envelope stays
+    // byte-identical (this branch is gated on summaryMode).
+    for (const seg of dispatchSummarySegments(result)) line += ' | ' + seg;
     if (result.reason) line += ' | reason: ' + result.reason;
     if (result.operator_hint) line += ' | hint: ' + result.operator_hint;
     // Cache the FULL envelope (named by the subcommand) for drill-in on refuse.
@@ -5784,6 +5895,11 @@ module.exports = {
   shellNode,
   // #444 (D-444-01): dispatch descriptor builder + guards + verify subcommand.
   buildDispatch,
+  // #602: --summary dispatch-segment extractor.
+  dispatchSummarySegments,
+  // #605: derived run-progress mirror primitives.
+  buildRunProgress,
+  writeRunProgressMirror,
   sanitizeCodexTaskName,
   codexTaskNameForNode,
   resolveCodexDispatchMode,

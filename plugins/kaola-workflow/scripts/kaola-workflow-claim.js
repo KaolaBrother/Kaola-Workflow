@@ -129,7 +129,25 @@ function checkDispatchAttestations(logDirCandidates, receipt) {
 const KNOWN_VALUE_FLAGS = new Set([
   'branch', 'issue', 'project', 'reason', 'runtime', 'sink',
   'targetIssue', 'targetIssues', 'workflowPath', 'prNumber', 'issueNumbers', 'base',
+  // #603: the Codex dispatch mode the startup surface passes from preflight detection.
+  'codexDispatchMode',
 ]);
+
+// #603: the closed set of Codex dispatch-mode literals. The startup surface (preflight detection)
+// passes exactly one of these via --codex-dispatch-mode; any other value — or a newline-carrying one
+// (durable-state field injection, the assertNoNewline class) — refuses at claim with zero mutation.
+const CODEX_DISPATCH_MODES = ['v2-task-name', 'v1-thread-id'];
+
+// Validate the optional --codex-dispatch-mode flag. Returns { present:false } when absent (byte-
+// identical behavior), { present:true, mode } when a valid literal, or { present:true, invalid:true,
+// value } for a non-literal / newline-carrying value (the caller emits a typed refusal, no mutation).
+function resolveCodexDispatchModeFlag(args) {
+  const raw = args.codexDispatchMode;
+  if (raw == null) return { present: false };
+  const v = String(raw);
+  if (/[\n\r]/.test(v) || CODEX_DISPATCH_MODES.indexOf(v) < 0) return { present: true, invalid: true, value: v };
+  return { present: true, mode: v };
+}
 
 function parseArgs(argv) {
   const args = {};
@@ -555,6 +573,9 @@ function writeState(root, data) {
   assertNoNewline(data.worktree_path, 'worktree_path');
   assertNoNewline(data.base_branch, 'base_branch');
   assertNoNewline(data.pr_url, 'pr_url');
+  // #603: same anti-injection guard as worktree_path for the persisted Codex dispatch mode (the
+  // literal-value validation happens upstream at cmdStartup; this is the durable-field newline fence).
+  assertNoNewline(data.codex_dispatch_mode, 'codex_dispatch_mode');
   // #579: liveness-marker guard — main_root is resolved here (not passed in); refuse before
   // serialization if the resolved path contains a newline (malicious cwd injection).
   const computedMainRoot = resolveMainRoot(root);
@@ -614,6 +635,10 @@ function writeState(root, data) {
     'claim_ts: ' + new Date().toISOString()
   ];
   if (data.worktree_path) lines.push('worktree_path: ' + data.worktree_path);
+  // #603: persist the Codex dispatch mode so the adaptive dispatch cards read it at open time. Written
+  // ONLY when present (flag absent → field absent → dispatch keeps the v1-thread-id fail-closed default,
+  // so non-codex editions and un-flagged runs are byte-identical to today).
+  if (data.codex_dispatch_mode) lines.push('codex_dispatch_mode: ' + data.codex_dispatch_mode);
   if (data.worktree_error) {
     // #403.8: a raw git worktree error is multi-line — collapsing it to a single line keeps it a
     // safe single durable field (a newline would otherwise inject a forged field, the #398.2 class).
@@ -965,6 +990,9 @@ function claimProject(root, args) {
     base_branch: baseBranch,
     workflow_path: args.workflowPath || process.env.KAOLA_PATH || 'adaptive',
     runtime: resolveRuntime(args, process.env),
+    // #603: thread the pre-validated Codex dispatch mode into durable state (undefined when the flag
+    // was absent → writeState omits the field).
+    codex_dispatch_mode: args.codexDispatchMode,
     status: 'active'
   });
   const remoteClaim = postAdvisoryClaim(issueNumber, project); // #356: surface the real footprint status
@@ -1162,6 +1190,8 @@ function claimBundle(root, opts) {
       base_branch: baseBranch,
       workflow_path: 'adaptive',
       runtime: resolveRuntime(opts, process.env),
+      // #603: thread the pre-validated Codex dispatch mode (bundle path mirrors the scalar claim).
+      codex_dispatch_mode: opts.codexDispatchMode,
       status: 'active'
     });
 
@@ -1400,6 +1430,17 @@ function cmdStartup() {
     output({ verdict: 'target_ambiguity', claim: 'none', project: null, issue: null,
       status: 'target_ambiguity',
       reasoning: 'both --target-issue and --target-issues set; choose one' }, 1);
+    return;
+  }
+
+  // #603: value-validate --codex-dispatch-mode BEFORE any claim mutation (both the scalar and bundle
+  // paths below persist it via writeState). A non-literal or newline-carrying value refuses here with
+  // ZERO state mutation — the claim never reaches claimExplicitTarget/claimExplicitBundle.
+  const cdm = resolveCodexDispatchModeFlag(args);
+  if (cdm.invalid) {
+    output({ verdict: 'invalid_codex_dispatch_mode', claim: 'none', project: null, issue: null,
+      reasoning: '--codex-dispatch-mode must be exactly one of ' + CODEX_DISPATCH_MODES.join(' | ') +
+        ' (single line); got ' + JSON.stringify(cdm.value) }, 1);
     return;
   }
 
@@ -3277,6 +3318,9 @@ module.exports = {
   assertSafeBranchArg,
   assertNoNewline,
   classifyWorktreeError,
+  // #603: Codex dispatch-mode flag validation (value-literal + newline-injection guard).
+  resolveCodexDispatchModeFlag,
+  CODEX_DISPATCH_MODES,
   computeClosePendingFinalize,
   isProbeDegraded,
   removeBranch,
