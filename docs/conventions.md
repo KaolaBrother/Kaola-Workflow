@@ -269,6 +269,18 @@ Prose assertions ("chains passed", "npm test is green") are insufficient evidenc
 2. Cite the receipt path as evidence in the contractor summary.
 3. Never record a `chains_passed: true` prose attestation without the receipt artifact.
 
+**Per-chain kill ceiling and timeout observability (#608).** The `spawnSync`/`spawn` kill ceiling
+per chain defaults to 1800000ms (30 min, raised from 900000ms — see `docs/decisions/D-608-01.md`
+for the recalibration rationale); `KAOLA_RUN_CHAINS_TIMEOUT_MS` overrides it (invalid/zero/negative
+values fall back to the default; no upper clamp). A chain killed by this ceiling now carries
+`timed_out: true` in its receipt entry (absent on a receipt written before this field existed ⇒
+read as `false`, no reader change required) — the field distinguishes a genuine test failure from
+a process still running when the clock ran out, without re-running anything. The plain-text
+failure summary labels a timed-out chain inline (`name (TIMEOUT at <N>s — raise
+KAOLA_RUN_CHAINS_TIMEOUT_MS or investigate a hang)`), and the `chains_red` operator hint names the
+same remedy only when a red chain actually timed out. This is observability text only — the
+refuse/pass decision (`redChains.length` check) is unchanged.
+
 The gate enforces this: `chains_unverified` (no receipt), `chains_stale` (receipt headSha mismatch), and `chains_red` (any non-zero exit) are all typed blocking refusals. A known-red chain may be waived with `--accept-known-red name:open-issue-N`; the waiver must reference a real open tracking issue.
 
 **Consumer (non-npm) repos (#475).** A product repo whose validation is not npm-based does NOT run `run-chains.js` (it refuses `chains_config_missing` — self-host-only). The agent **owns verification** (#44) and records `.cache/final-validation.md` with a column-0 `verdict: pass`; `--finalize-check` (consumer mode) gates on it — `final_validation_unverified` (absent) / `final_validation_failed` (no `verdict: pass`). The v6.2.0 `kaola-workflow/chains.json` opt-in is retired (Pure option A — no middle-ground). The attribution sweep runs for both modes (an un-attributed code change is still caught).
@@ -455,3 +467,31 @@ looser non-owned exemption cannot affect conflict resolution. Each lane cleans i
 worktree, and active folder ONLY after its own merge lands; it does not clean other lanes.
 
 See `docs/decisions/D-579-01.md` for the full decision record.
+
+## Main-session-gate write fence and upstream instrumentation provisioning (#607)
+
+A `main-session-gate` is read-only by grammar and non-delegable — it never authors or deletes
+files. Two conventions enforce and preserve that boundary at runtime:
+
+**Gate-window fence.** While a `main-session-gate` node is open, an in-worktree, out-of-band
+`Write`/`Edit` is denied by default (`hooks/kaola-workflow-write-lane.sh` rule (c), exit 2) — the
+workflow bands, the `.kw/` band, member worktrees, and a co-open writer's own declared lane stay
+legal. The opt-out is `KAOLA_GATE_WINDOW_FENCE=0` (or `false`/`no`); any other value keeps the
+fence ON. **A crash mid-gate intentionally leaves the fence active** until the run resumes and
+closes the gate: `reconcile-running-set` preserves a lone, non-`opening` gate entry rather than
+clearing it, so every in-worktree product write stays fenced repo-wide across the crash window.
+This is a deliberate fail-closed tripwire, not a bug — recovery is resuming the run (which closes
+the gate normally) or, for a genuinely abandoned run, the manual `KAOLA_GATE_WINDOW_FENCE=0`
+opt-out. See `docs/decisions/D-607-01.md`.
+
+**Upstream instrumentation provisioning.** Any instrumentation a gate's acceptance check needs (a
+probe script, build wiring to make a probe runnable) is authored by an UPSTREAM WRITER node,
+inside that node's own declared write set — never by the gate. The plan states the durability
+decision for that instrumentation explicitly: durable (committed and kept), env-gated (kept but
+inert without a flag), or ephemeral (a named downstream node owns its deletion). Out-of-repo
+scratch (a temp dir, the scratchpad) remains legal for the gate's own transient use and is not
+"instrumentation" in this sense. The gate's `.cache` evidence must attest this with a column-0
+`instrumentation: none | <node-id>` token — `none` when the gate ran no in-worktree
+instrumentation, or the id of the upstream writer node that authored what it did run; the named
+node must exist in the ledger as a writer (non-empty declared write set). Absence of the token is
+refused alongside the existing missing-verdict shape check.

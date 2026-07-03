@@ -212,6 +212,19 @@ judgment in `workflow-next.md` Step 0a-1 (scripts validate, never auto-pick — 
   longer a coordination surface any guard-prologue layer checks.) Any refactor that makes
   `open-next` begin writing a `running-set.json` violates [INV-2] and is rejected.
 
+  **Narrow #607 exception to [INV-2].** `open-next` and the `close-and-open-next` fused advance
+  now write a minimal `running-set.json` when — and only when — the node being opened is a
+  `main-session-gate`: a single `kind:'gate'` entry recording that a gate window is open, consumed
+  solely by the write-lane hook's gate-window fence and excluded from every write-oriented
+  scheduler count (`liveHasWrite`, `selectSpeculativeWriteGroup`, the `open-ready` slot math, and
+  the `reconcile-running-set` roll-forward budget all explicitly filter out `kind:'gate'`). This is
+  a disclosed narrowing of [INV-2], not a silent violation of it: the invariant's purpose — write-
+  frontier concurrency accounting stays byte-identical when nothing is co-opening — is preserved (a
+  gate carries no write set and never contributes to write concurrency); only the invariant's
+  literal "`open-next` MUST NOT begin writing a `running-set.json`" text, which did not anticipate
+  a non-write state channel riding the same file, is scoped to the non-gate case. See
+  `docs/decisions/D-607-01.md`.
+
   **`max_concurrent` in `running-set.json`.** `open-ready` writes an optional `max_concurrent`
   integer into the manifest at open time:
   `{ state: 'opening'|'open', max_concurrent?: number, nodes: [...], updatedAt }`.

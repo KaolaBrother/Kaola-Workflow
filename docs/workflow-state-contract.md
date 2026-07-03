@@ -56,6 +56,22 @@ here for the full contract.
     exception; `KAOLA_PARALLEL_WRITES=0` forces a single-node serial running set. See the
     **`lane_group` extension** below.
 
+    **`kind: 'gate'` member (issue #607).** `open-next` and the `close-and-open-next` fused
+    advance record an opened `main-session-gate` into `running-set.json` as a minimal entry
+    (`{ id, role, kind: 'gate', declared_write_set, model, baseline: 'recorded', openedAt? }`) —
+    the ONLY state channel that makes an open gate window visible to the write-lane hook's
+    gate-window fence (rule (c); default-ON, `KAOLA_GATE_WINDOW_FENCE=0` opt-out), since a
+    `main-session-gate` is opened serially and never lands in an `open-ready` batch frontier.
+    Written AFTER the ledger flip to `in_progress`; removed by the same close paths that remove
+    any other member (id-keyed). A crashed, non-`opening` lone gate is PRESERVED (not rolled back)
+    by `reconcile-running-set` — an intended fail-closed tripwire, since clearing it would silently
+    reopen the fenced window. A gate entry is excluded from every write-oriented scheduler count —
+    `liveHasWrite`, `selectSpeculativeWriteGroup`, the `open-ready` read-slot base
+    (`cap - liveNodes.filter(n => n.kind !== 'gate').length`), and the `reconcile-running-set`
+    roll-forward budget all explicitly filter it out — so it never affects write co-open, slot
+    accounting, or crash-resume ceilings. See `docs/decisions/D-607-01.md` and the narrow
+    exception to `[INV-2]` this recording introduces, noted in `docs/architecture.md`.
+
     **`lane_group` key (issue #437; default-written for disjoint co-open since D-542-01).**
     When `open-ready` forms a write lane group, an optional top-level `lane_group` key is added to
     `running-set.json`. Its full schema is documented in `docs/api.md` § Lane-group co-open. State
