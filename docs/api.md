@@ -235,10 +235,12 @@ The adaptive scripts share a framed-output + refusal contract so a caller can al
   **`--summary` mode (issue #446 / D-446-01 §4).** When `--summary` is passed to `adaptive-node.js`, the subcommand prints ONE line instead of full JSON:
 
   ```
-  summary: <result> [| reason: <reason>] [| hint: <operator_hint>]
+  summary: <result> [| opened=<node-id> role=<role> task=<codex_task_name> mode=<codex_dispatch_mode> effort=<E>]... [| reason: <reason>] [| hint: <operator_hint>]
   ```
 
   `result` is always present; `| reason: <reason>` appears only when a `reason` is set; `| hint: <operator_hint>` appears only when an `operator_hint` is present. The full envelope JSON is simultaneously written to `.cache/<op>-envelope.json`, where `<op>` is the subcommand name (e.g. `.cache/close-and-open-next-envelope.json`). On `result: refuse` the interactive loop reads `.cache/<op>-envelope.json` for full detail; on success the one-line summary is sufficient. **Default output (no `--summary`) is byte-unchanged full JSON** — `--summary` is purely additive and opt-in. All orchestration scripts and tests that parse full-JSON stdout are unaffected.
+
+  **Dispatch segments (issue #602).** `open-next`, `open-ready`, and the fused advance in `close-and-open-next` insert one machine-parsable `| opened=...` segment per opened node, positioned right after the leading `summary: <result>` token and before `| reason:` / `| hint:`. Each segment reads `opened=<node-id> role=<role> task=<codex_task_name> mode=<codex_dispatch_mode> effort=<E>`, drawn from that node's `opened[].dispatch` (or `opened.dispatch` on a single open): `task` is `dispatch.codex_task_name`, `mode` is `dispatch.codex_dispatch_mode`, and `effort` is `dispatch.codex_reasoning_effort`, or the literal `inherit` when that field is null (no planner tier). A batch `open-ready` open emits one segment per member, in member order. Close-only outcomes, `allDone`, and `result: refuse` carry no `opened=` segments, so the line is unchanged in those cases. This is additive to the summary **line** only — the full `--json` envelope (no `--summary`) is byte-identical to pre-#602 output.
 
 ### Validator subcommand emit/refuse (issue #406 — the #355 follow-up)
 
