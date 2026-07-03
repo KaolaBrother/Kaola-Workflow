@@ -508,6 +508,18 @@ for (const file of initFiles) {
     file + ': injected ## Kaola-Workflow template must not use "phase file/artifact" durable-state framing (#572)');
 }
 
+// #606: the Claude dispatch-posture config-audit line must be present in all three workflow-init
+// COMMAND surfaces (root + gitlab + gitea) — outside the KW-CLAUDE-TEMPLATE region, so this check
+// does not touch the initFiles SKILL entries (they stay byte-identical to their template blocks).
+const workflowInitCommands606 = [
+  'commands/workflow-init.md',
+  'plugins/kaola-workflow-gitlab/commands/workflow-init.md',
+  'plugins/kaola-workflow-gitea/commands/workflow-init.md',
+];
+for (const file of workflowInitCommands606) {
+  assertIncludes(file, 'claude_dispatch_posture: teams | classic');
+}
+
 // #572 (AC5): cross-forge content parity. The three forges' injected templates must be
 // byte-identical MODULO the single forge-noun line (GitHub/GitLab/Gitea issues are the roadmap
 // source of truth …). The within-forge-pair byte checks above already prove cmd==skill per
@@ -617,6 +629,10 @@ assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '→ run
 
 // #605: required progress-echo line printed after every close-and-open-next.
 assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, '{node-id} → complete; opened: {next-id|—}');
+
+// #606: teammate-mode dispatch subsection + the one-nudge idle-race rule (github codex SKILL).
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, "spawn each node's role agent as a NAMED teammate");
+assertIncludes(`${pluginRoot}/skills/kaola-workflow-plan-run/SKILL.md`, 'send EXACTLY ONE request for the deliverable, then wait');
 
 // #603: the Codex startup surfaces (kaola-workflow-next / kaola-workflow-adapt) must detect the
 // dispatch mode via the preflight doctor and thread it into the claim as an explicit flag.
