@@ -1,0 +1,30 @@
+{
+  "project": "bundle-600-601",
+  "branch": "workflow/bundle-600-601",
+  "issue_number": 600,
+  "issue_numbers": [
+    600,
+    601
+  ],
+  "resolved_default_branch": "main",
+  "branch_head": "84ef573064eea1dd4da268488349f493be9e7472",
+  "started_at": "2026-07-03T03:23:43.655Z",
+  "updated_at": "2026-07-03T03:24:05.691Z",
+  "stash_ref": null,
+  "removed_duplicates": [],
+  "steps": {
+    "preflight": "done",
+    "push_upstream": "done",
+    "merge": "done",
+    "worktree_sync": "done",
+    "finalize": "done",
+    "closure": "done",
+    "stash_restore": "done",
+    "archive_commit": "done",
+    "push_main": "done"
+  },
+  "closed_issues": [
+    600,
+    601
+  ]
+}
