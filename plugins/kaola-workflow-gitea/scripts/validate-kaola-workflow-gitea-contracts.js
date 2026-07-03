@@ -973,4 +973,36 @@ assertIncludes(pluginRoot + '/scripts/kaola-gitea-workflow-sink-merge.js', 'prob
   }
 }
 
+// B2 model-noun purge (#609, the forge-codex twin of #537): forge-codex prompt surfaces
+// (agents/*.toml, config/agents.toml, skills/*/SKILL.md) must not use Claude model NOUNS
+// (Opus/Sonnet/haiku) as runtime-model prose ("the Opus orchestrator", "reasoning-class (Opus)",
+// "no haiku"). The plan tier tokens translate to a per-spawn reasoning_effort at dispatch, so a
+// Claude model name reads as nonsense here. The ONLY permitted opus/sonnet are the B1 plan
+// model-column rank tokens: the closed `{opus|sonnet}` set literal and the `model: opus`/`model:
+// sonnet` -> effort mapping tokens. Strip those, then any surviving noun is a B2 leak. commands/*.md
+// are Claude-edition ports that legitimately name models and are deliberately NOT scanned.
+{
+  const B2_MODEL_NOUN = /\b(?:opus|sonnet|haiku)\b/i;
+  const scrubB1TierTokens = line => line
+    .replace(/\{opus\|sonnet\}/g, '')
+    .replace(/model:\s*(?:opus|sonnet)\b/g, '');
+  const b2Surfaces = [
+    ...agentFiles,
+    ...(exists(pluginRoot + '/config/agents.toml') ? [pluginRoot + '/config/agents.toml'] : []),
+    ...skillFiles
+  ];
+  for (const rel of b2Surfaces) {
+    const lines = read(rel).split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const m = scrubB1TierTokens(lines[i]).match(B2_MODEL_NOUN);
+      if (m) {
+        assert(false,
+          rel + ':' + (i + 1) + ': B2 model-noun "' + m[0] + '" — a Claude model name must not appear ' +
+          'as runtime-model prose on a forge-codex surface; use tier/effort vocabulary (only the B1 ' +
+          '`{opus|sonnet}` set and the `model: opus`/`model: sonnet` mapping are allowed).');
+      }
+    }
+  }
+}
+
 console.log('Kaola-Workflow Gitea contract validation passed');

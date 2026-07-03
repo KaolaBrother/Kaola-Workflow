@@ -459,6 +459,12 @@ assertIncludes('commands/workflow-init.md', '> **MANDATORY — READ CLAUDE.md BE
 // command, outside the KW-CLAUDE-TEMPLATE region (in the Codex-hooks-note area).
 assertIncludes('commands/workflow-init.md', 'claude_dispatch_posture: teams | classic');
 
+// #609: the injected ## Kaola-Workflow template must forbid vendor-model embellishment of the
+// role-routing bullets. Live sessions were authoring "planner (Opus)" into consumer CLAUDE.md; the
+// generated section must stay runtime-neutral (tier vocabulary), never a Claude model noun. Pin the
+// constraint sentence on the root Claude workflow-init surface (the codex validator pins all six).
+assertIncludes('commands/workflow-init.md', 'never by a vendor model name');
+
 // issue #283: kaola-workflow-phase6.md hard-removed; kaola-workflow-finalize.md is the
 // route-agnostic terminal routine. Assert canonical present + legacy absent.
 assert(!exists('commands/kaola-workflow-phase6.md'),

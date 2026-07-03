@@ -64,6 +64,7 @@ find docs -maxdepth 3 -type f 2>/dev/null | sort
 - The workflow runs an adaptive, task-shaped DAG of role nodes: the `planner` authors and freezes `workflow-plan.md`, then the executor runs it node-by-node via the running-set scheduler.
 - Delegate node work to the vendored Claude Code agents by default; the main session owns orchestration, review, validation, integration, and final decisions.
 - Name nodes by function: read/research → `code-explorer`/`knowledge-lookup`; strategy/blueprint → `planner`/`code-architect`; execution → `tdd-guide` (test-first) or `implementer` (refactors, scaffolding, or config with no natural failing test); gates → `code-reviewer`/`adversarial-verifier`; docs → `doc-updater`.
+- Name roles by function and reasoning tier, never by a vendor model name — write `planner (reasoning tier)`, not `planner (<model>)`. Keep this section runtime-neutral so it reads correctly on every runtime that reads this repo.
 - For read/research nodes, spawn `code-explorer` for codebase research and `knowledge-lookup` when external library/API behavior or open-web/expertise knowledge that cannot be confirmed locally is needed.
 - `tdd-guide` runs a node test-first; `tdd-workflow` is the RED -> GREEN -> REFACTOR playbook it follows.
 - Route build/type/lint validation failures to `build-error-resolver`; route behavior or coverage failures back to `tdd-guide`.
